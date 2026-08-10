@@ -144,7 +144,7 @@ import {
   type TuiTranscriptWidth,
 } from '../../lib/tui/service'
 import type { MessageBookmark } from '../../lib/messageBookmarks'
-import type { PlaybookSummary, ProtocolAgent, ProtocolRun, ProtocolRunSnapshot } from '../../lib/agentProtocol'
+import type { PlaybookSummary, ProtocolAgent, ProtocolAutonomy, ProtocolRun, ProtocolRunSnapshot } from '../../lib/agentProtocol'
 import {
   extractClaudeStreamToolInputDelta,
   extractClaudeStreamToolResults,
@@ -4362,7 +4362,11 @@ const PROVIDER_SELECT_OPTIONS: SelectOption[] = PROVIDERS.map((provider) => ({
 }))
 
 const COORD_RUN_PROVIDERS: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi']
-const COORD_MODAL_FOCUS_ORDER = ['prompt', 'playbook', 'playbookArgs', 'provider', 'pool', 'agents', 'worktrees', 'gate', 'plans', 'launch'] as const
+const COORD_MODAL_FOCUS_ORDER = [
+  'prompt', 'acceptance', 'nonGoals', 'manualQa', 'escalation',
+  'playbook', 'playbookArgs', 'provider', 'pool', 'agents', 'tokenBudget',
+  'durationBudget', 'worktrees', 'gate', 'autonomy', 'plans', 'review', 'launch',
+] as const
 type CoordModalFocus = (typeof COORD_MODAL_FOCUS_ORDER)[number]
 
 function moveCoordModalFocus(current: CoordModalFocus, direction: 1 | -1): CoordModalFocus {
@@ -4373,6 +4377,17 @@ function moveCoordModalFocus(current: CoordModalFocus, direction: 1 | -1): Coord
 function cycleCoordProvider(current: AgentProvider, direction: 1 | -1): AgentProvider {
   const index = COORD_RUN_PROVIDERS.indexOf(current)
   return COORD_RUN_PROVIDERS[(Math.max(index, 0) + direction + COORD_RUN_PROVIDERS.length) % COORD_RUN_PROVIDERS.length]
+}
+
+const COORD_AUTONOMY_LEVELS: ProtocolAutonomy[] = ['low', 'medium', 'high']
+
+function cycleCoordAutonomy(current: ProtocolAutonomy, direction: 1 | -1): ProtocolAutonomy {
+  const index = COORD_AUTONOMY_LEVELS.indexOf(current)
+  return COORD_AUTONOMY_LEVELS[(Math.max(index, 0) + direction + COORD_AUTONOMY_LEVELS.length) % COORD_AUTONOMY_LEVELS.length]
+}
+
+function parseCoordContractLines(value: string): string[] {
+  return value.split(/\r?\n|;/).map((line) => line.trim()).filter(Boolean)
 }
 
 type TuiEffort = 'auto' | ReasoningEffortLevel
@@ -7004,6 +7019,10 @@ export default function OpenTuiApp() {
   const [coordModalOpen, setCoordModalOpen] = useState(false)
   const [coordBoardOpen, setCoordBoardOpen] = useState(false)
   const [coordDraft, setCoordDraft] = useState('')
+  const [coordAcceptanceDraft, setCoordAcceptanceDraft] = useState('')
+  const [coordNonGoalsDraft, setCoordNonGoalsDraft] = useState('')
+  const [coordManualQaDraft, setCoordManualQaDraft] = useState('')
+  const [coordEscalationDraft, setCoordEscalationDraft] = useState('')
   const [coordPlaybooks, setCoordPlaybooks] = useState<PlaybookSummary[]>([])
   const [coordPlaybookName, setCoordPlaybookName] = useState<string | null>(null)
   const [coordPlaybookArgsDraft, setCoordPlaybookArgsDraft] = useState('')
@@ -7015,6 +7034,10 @@ export default function OpenTuiApp() {
   const [coordGateDraft, setCoordGateDraft] = useState('')
   // Plan-approval guard: teammates must plan first and wait for lead approval.
   const [coordRequirePlanApproval, setCoordRequirePlanApproval] = useState(true)
+  const [coordAutonomy, setCoordAutonomy] = useState<ProtocolAutonomy>('medium')
+  const [coordRequireReview, setCoordRequireReview] = useState(true)
+  const [coordMaxTokens, setCoordMaxTokens] = useState('')
+  const [coordMaxDurationMinutes, setCoordMaxDurationMinutes] = useState('')
   // Isolate teammate edits by default, with an explicit shared-checkout mode.
   const [coordUseWorktrees, setCoordUseWorktrees] = useState(true)
   const [coordProviderOverride, setCoordProviderOverride] = useState<AgentProvider | null>(null)
@@ -11568,6 +11591,10 @@ export default function OpenTuiApp() {
     if (selected.maxAgents) setCoordMaxAgents(Math.min(6, Math.max(2, selected.maxAgents)))
     if (selected.gateCommand !== undefined) setCoordGateDraft(selected.gateCommand)
     if (selected.requirePlanApproval !== undefined) setCoordRequirePlanApproval(selected.requirePlanApproval)
+    if (selected.autonomy) setCoordAutonomy(selected.autonomy)
+    if (selected.requireReview !== undefined) setCoordRequireReview(selected.requireReview)
+    if (selected.budget?.maxTokens !== undefined) setCoordMaxTokens(String(selected.budget.maxTokens))
+    if (selected.budget?.maxDurationMinutes !== undefined) setCoordMaxDurationMinutes(String(selected.budget.maxDurationMinutes))
   })
 
   const loadCoordPlaybooks = useEffectEvent(async (cwd: string, preferredName?: string) => {
@@ -11597,6 +11624,12 @@ export default function OpenTuiApp() {
   const openNewWorkflowModal = useEffectEvent(() => {
     const baseCwd = selectedSession?.cwd ?? sessionDetail?.info?.cwd ?? process.cwd()
     setCoordDraft(composerDraft.trim() || selectedSession?.firstPrompt || '')
+    setCoordAcceptanceDraft('')
+    setCoordNonGoalsDraft('')
+    setCoordManualQaDraft('')
+    setCoordEscalationDraft('')
+    setCoordMaxTokens('')
+    setCoordMaxDurationMinutes('')
     setCoordError(null)
     setCoordPlaybookName(null)
     setCoordPlaybookArgsDraft('')
@@ -11743,6 +11776,20 @@ export default function OpenTuiApp() {
         effort: tuiEffort === 'auto' ? undefined : tuiEffort,
         gateCommand: coordGateDraft.trim() || undefined,
         requirePlanApproval: coordRequirePlanApproval,
+        autonomy: coordAutonomy,
+        requireReview: coordRequireReview,
+        acceptanceContract: {
+          goal: prompt || selectedPlaybook?.name || 'Complete the coordinated workflow',
+          userVisibleAcceptance: parseCoordContractLines(coordAcceptanceDraft),
+          nonGoals: parseCoordContractLines(coordNonGoalsDraft),
+          verificationCommands: [coordGateDraft.trim()].filter(Boolean),
+          manualQa: parseCoordContractLines(coordManualQaDraft),
+          escalationTriggers: parseCoordContractLines(coordEscalationDraft),
+        },
+        budget: coordMaxTokens.trim() || coordMaxDurationMinutes.trim() ? {
+          maxTokens: coordMaxTokens.trim() ? Number(coordMaxTokens) : undefined,
+          maxDurationMinutes: coordMaxDurationMinutes.trim() ? Number(coordMaxDurationMinutes) : undefined,
+        } : undefined,
         useWorktrees: coordUseWorktrees,
       })
       const drafts: Session[] = result.sessions.map((session) => ({
@@ -11768,9 +11815,15 @@ export default function OpenTuiApp() {
       setCoordBoardRunId(result.snapshot.run.id)
       setCoordBoardOpen(true)
       setCoordDraft('')
+      setCoordAcceptanceDraft('')
+      setCoordNonGoalsDraft('')
+      setCoordManualQaDraft('')
+      setCoordEscalationDraft('')
       setCoordPlaybookName(null)
       setCoordPlaybookArgsDraft('')
       setCoordGateDraft('')
+      setCoordMaxTokens('')
+      setCoordMaxDurationMinutes('')
       setCoordProviderOverride(null)
       setCoordTeammateProviderOverride(null)
       setCoordProviderPoolIndex(0)
@@ -15493,9 +15546,15 @@ export default function OpenTuiApp() {
         handled(() => {
           setCoordModalOpen(false)
           setCoordDraft('')
+          setCoordAcceptanceDraft('')
+          setCoordNonGoalsDraft('')
+          setCoordManualQaDraft('')
+          setCoordEscalationDraft('')
           setCoordPlaybookName(null)
           setCoordPlaybookArgsDraft('')
           setCoordGateDraft('')
+          setCoordMaxTokens('')
+          setCoordMaxDurationMinutes('')
           setCoordProviderOverride(null)
           setCoordTeammateProviderOverride(null)
           setCoordProviderPoolIndex(0)
@@ -15551,10 +15610,19 @@ export default function OpenTuiApp() {
           showToggleOutcome('Coordinator worktrees', next)
           return next
         }))
+      } else if ((key.name === 'left' || key.name === 'right' || key.name === 'up' || key.name === 'down') && coordModalFocus === 'autonomy') {
+        const direction = key.name === 'left' || key.name === 'up' ? -1 : 1
+        handled(() => setCoordAutonomy((current) => cycleCoordAutonomy(current, direction)))
       } else if ((key.name === 'return' || key.name === 'space' || key.sequence === ' ') && coordModalFocus === 'plans') {
         handled(() => setCoordRequirePlanApproval((current) => {
           const next = !current
           showToggleOutcome('Plan approval', next)
+          return next
+        }))
+      } else if ((key.name === 'return' || key.name === 'space' || key.sequence === ' ') && coordModalFocus === 'review') {
+        handled(() => setCoordRequireReview((current) => {
+          const next = !current
+          showToggleOutcome('Judgment review', next)
           return next
         }))
       } else if (key.name === 'return' && coordModalFocus === 'launch') {
@@ -19553,10 +19621,10 @@ export default function OpenTuiApp() {
         const runtimePaneWidth = splitLayout ? Math.max(52, Math.floor(contentWidth * 0.58)) : contentWidth
         const sidePaneWidth = splitLayout ? Math.max(contentWidth - runtimePaneWidth - 1, 34) : contentWidth
         const briefHeight = splitLayout
-          ? Math.max(10, Math.floor(bodyHeight * 0.48))
+          ? Math.max(14, Math.floor(bodyHeight * 0.48))
           : Math.max(compact ? 5 : 7, bodyHeight - 12 - (compact ? 4 : 5))
         const lowerHeight = Math.max(bodyHeight - briefHeight, 12)
-        const runtimeHeight = splitLayout ? lowerHeight : 15
+        const runtimeHeight = splitLayout ? lowerHeight : 17
         const summaryHeight = splitLayout ? lowerHeight : (compact ? 4 : 5)
         const suggestedProvider = provider === 'all' ? (selectedSession?.provider ?? 'claude') : provider
         const targetProvider = coordProviderOverride ?? suggestedProvider
@@ -19577,6 +19645,7 @@ export default function OpenTuiApp() {
         const promptLineCount = coordDraft.length === 0 ? 1 : coordDraft.split('\n').length
         const briefPreview = coordDraft.trim().split('\n')[0]
           || (selectedPlaybook ? `Playbook: ${selectedPlaybook.name}` : 'Add a workflow brief to continue')
+        const briefTextareaHeight = Math.max(3, briefHeight - (compact ? 7 : 8))
         const focusColor = (focus: CoordModalFocus) => coordModalFocus === focus ? theme.cyan : theme.border
         const focusBackground = (focus: CoordModalFocus) => coordModalFocus === focus ? theme.surface3 : theme.surface2
         return (
@@ -19630,7 +19699,7 @@ export default function OpenTuiApp() {
                 ref={coordTextareaRef}
                 focused={coordModalFocus === 'prompt'}
                 width={contentWidth}
-                height={Math.max(briefHeight - (compact ? 1 : 2), 3)}
+                height={briefTextareaHeight}
                 placeholder="Describe the outcome, constraints, paths in scope, and acceptance checks."
                 initialValue={coordDraft}
                 keyBindings={composerKeyBindings}
@@ -19638,7 +19707,31 @@ export default function OpenTuiApp() {
                 onSubmit={() => { void submitCoordinatedRun() }}
                 style={composerBaseTextareaStyle}
               />
-              {!compact ? <text fg={theme.dim} wrapMode="none">Include a concrete definition of done. Shift+Enter adds a line.</text> : null}
+              <text fg={theme.violet} wrapMode="none">CONTRACT  ·  one line or semicolon separated</text>
+              <box height={1} flexDirection="row" backgroundColor={focusBackground('acceptance')}>
+                <box width={20} flexShrink={0}><text fg={coordModalFocus === 'acceptance' ? theme.text : theme.dim} wrapMode="none">Acceptance checks</text></box>
+                <box flexGrow={1} backgroundColor={coordModalFocus === 'acceptance' ? theme.surface3 : theme.surface2}>
+                  <input width="100%" focused={coordModalFocus === 'acceptance'} value={coordAcceptanceDraft} placeholder="checks the team must satisfy" maxLength={300} onInput={(value: string) => setCoordAcceptanceDraft(value)} />
+                </box>
+              </box>
+              <box height={1} flexDirection="row" backgroundColor={focusBackground('nonGoals')}>
+                <box width={20} flexShrink={0}><text fg={coordModalFocus === 'nonGoals' ? theme.text : theme.dim} wrapMode="none">Non-goals</text></box>
+                <box flexGrow={1} backgroundColor={coordModalFocus === 'nonGoals' ? theme.surface3 : theme.surface2}>
+                  <input width="100%" focused={coordModalFocus === 'nonGoals'} value={coordNonGoalsDraft} placeholder="areas to leave unchanged" maxLength={240} onInput={(value: string) => setCoordNonGoalsDraft(value)} />
+                </box>
+              </box>
+              <box height={1} flexDirection="row" backgroundColor={focusBackground('manualQa')}>
+                <box width={20} flexShrink={0}><text fg={coordModalFocus === 'manualQa' ? theme.text : theme.dim} wrapMode="none">Manual QA</text></box>
+                <box flexGrow={1} backgroundColor={coordModalFocus === 'manualQa' ? theme.surface3 : theme.surface2}>
+                  <input width="100%" focused={coordModalFocus === 'manualQa'} value={coordManualQaDraft} placeholder="manual checks before completion" maxLength={240} onInput={(value: string) => setCoordManualQaDraft(value)} />
+                </box>
+              </box>
+              <box height={1} flexDirection="row" backgroundColor={focusBackground('escalation')}>
+                <box width={20} flexShrink={0}><text fg={coordModalFocus === 'escalation' ? theme.text : theme.dim} wrapMode="none">Escalation</text></box>
+                <box flexGrow={1} backgroundColor={coordModalFocus === 'escalation' ? theme.surface3 : theme.surface2}>
+                  <input width="100%" focused={coordModalFocus === 'escalation'} value={coordEscalationDraft} placeholder="security, data loss, API risk" maxLength={240} onInput={(value: string) => setCoordEscalationDraft(value)} />
+                </box>
+              </box>
             </box>
 
             <box height={splitLayout ? lowerHeight : undefined} flexGrow={splitLayout ? 0 : 1} flexDirection={splitLayout ? 'row' : 'column'} overflow="hidden">
@@ -19648,11 +19741,13 @@ export default function OpenTuiApp() {
               paddingX={1}
               backgroundColor={theme.surface}
               flexDirection="column"
+              overflow="hidden"
               border={splitLayout ? ['right'] : ['bottom']}
               borderStyle="single"
               borderColor={theme.border}
             >
               <text fg={theme.cyan} wrapMode="none">02  RUNTIME AND CONTROLS</text>
+              <box flexShrink={0} flexDirection="column">
               <text fg={theme.violet} wrapMode="none">WORKFLOW</text>
               <box height={1} flexDirection="row" backgroundColor={focusBackground('playbook')}>
                 <text fg={coordModalFocus === 'playbook' ? theme.text : theme.dim} wrapMode="none">{'Playbook      '}</text>
@@ -19722,6 +19817,18 @@ export default function OpenTuiApp() {
                 <box flexGrow={1} />
                 <text fg={coordModalFocus === 'agents' ? theme.cyan : theme.dim} wrapMode="none">{coordModalFocus === 'agents' ? '←/→ adjust' : 'includes the lead'}</text>
               </box>
+              <box height={1} flexDirection="row" backgroundColor={focusBackground(coordModalFocus === 'durationBudget' ? 'durationBudget' : 'tokenBudget')}>
+                <text fg={coordModalFocus === 'tokenBudget' ? theme.text : theme.dim} wrapMode="none">Tokens </text>
+                {coordModalFocus === 'tokenBudget'
+                  ? <input width={Math.max(10, Math.floor(runtimePaneWidth * 0.2))} focused value={coordMaxTokens} placeholder="optional" maxLength={12} onInput={(value: string) => setCoordMaxTokens(value.replace(/[^0-9]/g, ''))} />
+                  : <text fg={coordMaxTokens ? theme.text : theme.dim} wrapMode="none">{coordMaxTokens || '—'}</text>}
+                <text fg={theme.dim} wrapMode="none">  ·  Minutes </text>
+                {coordModalFocus === 'durationBudget'
+                  ? <input width={Math.max(8, Math.floor(runtimePaneWidth * 0.16))} focused value={coordMaxDurationMinutes} placeholder="optional" maxLength={8} onInput={(value: string) => setCoordMaxDurationMinutes(value.replace(/[^0-9]/g, ''))} />
+                  : <text fg={coordMaxDurationMinutes ? theme.text : theme.dim} wrapMode="none">{coordMaxDurationMinutes || '—'}</text>}
+                <box flexGrow={1} />
+                <text fg={coordModalFocus === 'tokenBudget' || coordModalFocus === 'durationBudget' ? theme.cyan : theme.dim} wrapMode="none">{coordModalFocus === 'tokenBudget' || coordModalFocus === 'durationBudget' ? 'Enter next' : 'optional'}</text>
+              </box>
               <text fg={theme.violet} wrapMode="none">EXECUTION</text>
               <box height={1} flexDirection="row" backgroundColor={focusBackground('worktrees')}>
                 <text fg={coordUseWorktrees ? theme.green : theme.amber} wrapMode="none">{coordUseWorktrees ? '[x]' : '[ ]'}</text>
@@ -19747,7 +19854,7 @@ export default function OpenTuiApp() {
                           placeholder="Example: npx tsc --noEmit"
                           maxLength={200}
                           onInput={(value: string) => setCoordGateDraft(value)}
-                          onSubmit={() => setCoordModalFocus('plans')}
+                          onSubmit={() => setCoordModalFocus('autonomy')}
                         />
                       : <text fg={coordGateDraft ? theme.text : theme.dim} wrapMode="none">{fitText(coordGateDraft || 'Example: npx tsc --noEmit', Math.max(12, runtimePaneWidth - 4))}</text>}
                   </box>
@@ -19758,6 +19865,19 @@ export default function OpenTuiApp() {
                 <text fg={coordModalFocus === 'plans' ? theme.text : theme.dim} wrapMode="none">{' Review the lead plan before implementation'}</text>
                 <box flexGrow={1} />
                 <text fg={coordModalFocus === 'plans' ? theme.cyan : theme.dim} wrapMode="none">{coordRequirePlanApproval ? 'required' : 'automatic'}</text>
+              </box>
+              <box height={1} flexDirection="row" backgroundColor={focusBackground('autonomy')}>
+                <text fg={coordModalFocus === 'autonomy' ? theme.text : theme.dim} wrapMode="none">Autonomy      </text>
+                <text fg={coordAutonomy === 'high' ? theme.amber : theme.cyan} wrapMode="none">{`‹ ${coordAutonomy.toUpperCase()} ›`}</text>
+                <box flexGrow={1} />
+                <text fg={coordModalFocus === 'autonomy' ? theme.cyan : theme.dim} wrapMode="none">{coordModalFocus === 'autonomy' ? '←/→ choose' : 'decision threshold'}</text>
+              </box>
+              <box height={1} flexDirection="row" backgroundColor={focusBackground('review')}>
+                <text fg={coordRequireReview ? theme.amber : theme.dim} wrapMode="none">{coordRequireReview ? '[x]' : '[ ]'}</text>
+                <text fg={coordModalFocus === 'review' ? theme.text : theme.dim} wrapMode="none"> Judgment review before synthesis</text>
+                <box flexGrow={1} />
+                <text fg={coordModalFocus === 'review' ? theme.cyan : theme.dim} wrapMode="none">{coordRequireReview ? 'required' : 'automatic'}</text>
+              </box>
               </box>
             </box>
 
@@ -19775,6 +19895,10 @@ export default function OpenTuiApp() {
                   {lowerHeight >= 18 ? <text fg={theme.violet} wrapMode="none">EXECUTION</text> : null}
                   <box height={1} flexDirection="row"><text fg={theme.dim}>Checkout mode</text><box flexGrow={1} /><text fg={coordUseWorktrees ? theme.green : theme.amber}>{coordUseWorktrees ? 'Isolated checkouts' : 'Shared checkout'}</text></box>
                   <box height={1} flexDirection="row"><text fg={theme.dim}>Plan review</text><box flexGrow={1} /><text fg={coordRequirePlanApproval ? theme.amber : theme.green}>{coordRequirePlanApproval ? 'Required' : 'Automatic'}</text></box>
+                  <box height={1} flexDirection="row"><text fg={theme.dim}>Autonomy</text><box flexGrow={1} /><text fg={coordAutonomy === 'high' ? theme.amber : theme.cyan}>{coordAutonomy.toUpperCase()}</text></box>
+                  <box height={1} flexDirection="row"><text fg={theme.dim}>Judgment review</text><box flexGrow={1} /><text fg={coordRequireReview ? theme.amber : theme.green}>{coordRequireReview ? 'Required' : 'Automatic'}</text></box>
+                  <box height={1} flexDirection="row"><text fg={theme.dim}>Acceptance checks</text><box flexGrow={1} /><text fg={coordAcceptanceDraft.trim() ? theme.cyan : theme.dim}>{coordAcceptanceDraft.trim() ? `${parseCoordContractLines(coordAcceptanceDraft).length} configured` : 'Not configured'}</text></box>
+                  <box height={1} flexDirection="row"><text fg={theme.dim}>Budgets</text><box flexGrow={1} /><text fg={coordMaxTokens || coordMaxDurationMinutes ? theme.amber : theme.dim}>{coordMaxTokens || coordMaxDurationMinutes ? `${coordMaxTokens || '—'} tokens · ${coordMaxDurationMinutes || '—'} min` : 'Unbounded'}</text></box>
                   <box height={1} flexDirection="row"><text fg={theme.dim}>Completion gate</text><box flexGrow={1} /><text fg={coordGateDraft.trim() ? theme.amber : theme.dim}>{fitText(coordGateDraft.trim() || 'Not configured', Math.max(sidePaneWidth - 23, 12))}</text></box>
                   <box height={2} marginTop={1} flexDirection="column"><text fg={theme.dim}>BRIEF PREVIEW</text><text fg={theme.text}>{fitText(briefPreview, sidePaneWidth - 2)}</text></box>
                 </>
@@ -19793,6 +19917,8 @@ export default function OpenTuiApp() {
                       { text: `${coordMaxAgents} agents`, fg: theme.cyan },
                       { text: '  ·  ', fg: theme.dim },
                       { text: coordUseWorktrees ? 'isolated' : 'shared checkout', fg: coordUseWorktrees ? theme.green : theme.amber },
+                      { text: '  ·  ', fg: theme.dim },
+                      { text: `${parseCoordContractLines(coordAcceptanceDraft).length} acceptance checks`, fg: coordAcceptanceDraft.trim() ? theme.cyan : theme.dim },
                     ], sidePaneWidth - 2, theme.dim)}
                   </text>
                   {!compact ? <text fg={theme.dim} wrapMode="none">{fitText(`Brief: ${briefPreview}`, sidePaneWidth - 2)}</text> : null}

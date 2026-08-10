@@ -842,6 +842,10 @@ server.registerTool('coord_create_run', {
     cwd: z.string().min(1).optional().describe('Working checkout; defaults to this CLI project directory'),
     gate_command: z.string().max(1000).optional(),
     require_plan_approval: z.boolean().optional(),
+    autonomy: z.enum(['low', 'medium', 'high']).optional(),
+    acceptance_contract: z.record(z.string(), z.unknown()).optional(),
+    require_review: z.boolean().optional(),
+    budget: z.object({ maxTokens: z.number().int().positive().optional(), maxDurationMinutes: z.number().positive().optional() }).optional(),
     playbook_name: z.string().min(1).max(64).optional().describe('Saved playbook in <cwd>/.agent-viewer/playbooks/ to seed the board from'),
     playbook: z.record(z.string(), z.unknown()).optional().describe('Inline playbook object: { name, description?, phases: [{ title, tasks: [{ key?, title, detail, paths?, dependsOn? }] }] }'),
     args: z.unknown().optional().describe('Interpolated into {{args}} / {{args.<key>}} in playbook task text'),
@@ -849,7 +853,7 @@ server.registerTool('coord_create_run', {
       .describe('Which senders\' mailbox messages reach this CLI. Defaults to anyone (today\'s behavior). owner-only/allowlist always implicitly include the lead.'),
     respond_to_allowlist: z.array(z.string()).optional().describe('Participant names or ids to accept messages from — required when respond_to_mode is allowlist'),
   },
-}, async ({ prompt, name, provider, max_agents, cwd, gate_command, require_plan_approval, playbook_name, playbook, args, respond_to_mode, respond_to_allowlist }) => {
+}, async ({ prompt, name, provider, max_agents, cwd, gate_command, require_plan_approval, autonomy, acceptance_contract, require_review, budget, playbook_name, playbook, args, respond_to_mode, respond_to_allowlist }) => {
   await requireUnboundBridge('coord_create_run')
   const result = await bindCoordinatorParticipant(await coordinatorRequest('create_run', {
     prompt,
@@ -859,6 +863,10 @@ server.registerTool('coord_create_run', {
     cwd: cwd ?? bridgeCwd,
     gateCommand: gate_command,
     requirePlanApproval: require_plan_approval,
+    autonomy,
+    acceptanceContract: acceptance_contract,
+    requireReview: require_review,
+    budget,
     playbookName: playbook_name,
     playbook,
     args,
@@ -1034,9 +1042,14 @@ server.registerTool('coord_create_task', {
     role: z.enum(['lead', 'teammate', 'any']).optional().describe('Participant role responsible for this task; defaults to teammate'),
     role_name: z.string().min(1).max(80).optional().describe('Specialization label the claiming teammate should adopt for this task, e.g. "Explorer" or "Refactorer" — your own invented persona, not a fixed enum'),
     role_description: z.string().min(1).max(1000).optional().describe('What this specialization means: scope, approach, constraints. Shown to the teammate when it works this task.'),
+    seat: z.enum(['director', 'executor', 'validator', 'watcher']).optional(),
+    requested_provider: z.enum(PROVIDERS).optional(),
+    requested_model: z.string().min(1).max(200).optional(),
+    requested_effort: z.string().min(1).max(80).optional(),
+    verify_commands: z.array(z.string().min(1)).max(20).optional(),
     request_id: requestIdField,
   },
-}, async ({ title, detail, paths, depends_on, phase, role, role_name, role_description, request_id }) => textResult(await coordinatorRequest('create_task', {
+}, async ({ title, detail, paths, depends_on, phase, role, role_name, role_description, seat, requested_provider, requested_model, requested_effort, verify_commands, request_id }) => textResult(await coordinatorRequest('create_task', {
   title,
   detail,
   paths,
@@ -1045,6 +1058,11 @@ server.registerTool('coord_create_task', {
   targetRole: role,
   roleName: role_name,
   roleDescription: role_description,
+  seat,
+  requestedProvider: requested_provider,
+  requestedModel: requested_model,
+  requestedEffort: requested_effort,
+  verifyCommands: verify_commands,
   requestId: request_id,
 })))
 
@@ -1269,6 +1287,55 @@ server.registerTool('coord_review_plan', {
   requestId: request_id,
 })))
 
+server.registerTool('coord_review_phase', {
+  description: 'Lead-only: approve or reject a completed phase gate in a low/medium autonomy run.',
+  inputSchema: {
+    phase: z.string().min(1).max(120),
+    approved: z.boolean(),
+    summary: z.string().max(2000).optional(),
+    detail: z.string().max(8000).optional(),
+    request_id: requestIdField,
+  },
+}, async ({ phase, approved, summary, detail, request_id }) => textResult(await coordinatorRequest('review_phase', {
+  phase, approved, summary, detail, requestId: request_id,
+})))
+
+server.registerTool('coord_review_run', {
+  description: 'Lead-only: submit the terminal judgment review after mechanical validation and before synthesis.',
+  inputSchema: {
+    approved: z.boolean(),
+    summary: z.string().min(1).max(2000),
+    detail: z.string().max(16000).optional(),
+    request_id: requestIdField,
+  },
+}, async ({ approved, summary, detail, request_id }) => textResult(await coordinatorRequest('review_run', {
+  approved, summary, detail, requestId: request_id,
+})))
+
+server.registerTool('coord_resolve_decision', {
+  description: 'Lead-only: answer or explicitly defer a structured open decision from a task receipt.',
+  inputSchema: {
+    task_id: z.string().min(1),
+    decision_id: z.string().min(1),
+    answer: z.string().min(1).max(4000),
+    deferred: z.boolean().optional(),
+    request_id: requestIdField,
+  },
+}, async ({ task_id, decision_id, answer, deferred, request_id }) => textResult(await coordinatorRequest('resolve_decision', {
+  taskId: task_id, decisionId: decision_id, answer, deferred, requestId: request_id,
+})))
+
+server.registerTool('coord_promote_learning', {
+  description: 'Lead-only: record a recurring learning candidate for promotion into a playbook, role, or project memory.',
+  inputSchema: {
+    candidate_id: z.string().min(1),
+    target: z.enum(['playbook', 'role', 'project_memory']),
+    request_id: requestIdField,
+  },
+}, async ({ candidate_id, target, request_id }) => textResult(await coordinatorRequest('promote_learning', {
+  candidateId: candidate_id, target, requestId: request_id,
+})))
+
 server.registerTool('coord_cancel_turn', {
   description: 'Lead-only: interrupt a teammate\'s in-flight turn without releasing its owned task. The teammate\'s worker supervisor kills the current turn and starts a fresh one; task ownership and status are untouched. Use this instead of coord_handoff_task when you just want a stuck or looping turn restarted, not the work handed back to the board.',
   inputSchema: {
@@ -1281,17 +1348,38 @@ server.registerTool('coord_cancel_turn', {
 })))
 
 server.registerTool('coord_complete_task', {
-  description: 'Complete an owned task through plan approval, path-lock, and quality-gate validation.',
+  description: 'Complete an owned task with a structured receipt through plan, path, provenance, decision, budget, and verification gates.',
   inputSchema: {
     task_id: z.string().min(1),
     summary: z.string().min(1).max(1000),
     detail: z.string().max(8000).optional(),
+    actual_model: z.string().min(1).max(200).optional(),
+    files_changed: z.array(z.string()).max(200).optional(),
+    commands_run: z.array(z.string()).max(100).optional(),
+    usage: z.object({
+      inputTokens: z.number().int().nonnegative().optional(),
+      outputTokens: z.number().int().nonnegative().optional(),
+      cacheReadTokens: z.number().int().nonnegative().optional(),
+      cacheWriteTokens: z.number().int().nonnegative().optional(),
+      totalTokens: z.number().int().nonnegative().optional(),
+      costUsd: z.number().nonnegative().optional(),
+      durationMs: z.number().int().nonnegative().optional(),
+    }).optional(),
+    needs_decision: z.array(z.object({
+      id: z.string(), question: z.string(), options: z.array(z.string()), assumed: z.string().optional(),
+      impactIfWrong: z.string(), status: z.enum(['open', 'answered', 'deferred']).optional(), answer: z.string().optional(),
+    })).max(20).optional(),
     request_id: requestIdField,
   },
-}, async ({ task_id, summary, detail, request_id }) => textResult(await coordinatorRequest('complete_task', {
+}, async ({ task_id, summary, detail, actual_model, files_changed, commands_run, usage, needs_decision, request_id }) => textResult(await coordinatorRequest('complete_task', {
   taskId: task_id,
   summary,
   detail,
+  actualModel: actual_model,
+  filesChanged: files_changed,
+  commandsRun: commands_run,
+  usage,
+  needsDecision: needs_decision,
   requestId: request_id,
 })))
 

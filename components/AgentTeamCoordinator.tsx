@@ -48,7 +48,7 @@ import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 import { AGENT_PROTOCOL_VERSION } from '@/lib/agentProtocol'
-import type { AgentProtocolEvent, PlaybookPhase, PlaybookSummary, PlaybookTask, ProtocolAgent, ProtocolRun, ProtocolRunSnapshot, ProtocolTask, RunPlaybook } from '@/lib/agentProtocol'
+import type { AgentProtocolEvent, PlaybookPhase, PlaybookSummary, PlaybookTask, ProtocolAgent, ProtocolAutonomy, ProtocolRun, ProtocolRunSnapshot, ProtocolTask, RunPlaybook } from '@/lib/agentProtocol'
 import type { AgentProvider, ProviderSelection, Session } from '@/lib/types'
 import type { WorktreeTask } from '@/lib/worktreeTasks'
 
@@ -84,11 +84,22 @@ const TASK_ROW_GAP = 7
 const TASK_GROUP_BOTTOM = 12
 const TASK_BOARD_PADDING_TOP = 8
 
+function nonEmptyLines(value: string): string[] {
+  return value.split('\n').map((line) => line.trim()).filter(Boolean)
+}
+
 const NEW_PLAYBOOK_TEMPLATE: RunPlaybook = {
   name: 'new-playbook',
   description: 'Describe when this workflow should be used',
   argsHint: 'Describe the target or outcome',
   maxAgents: 3,
+  autonomy: 'medium',
+  requireReview: true,
+  acceptanceContract: {
+    goal: 'Complete the playbook outcome',
+    userVisibleAcceptance: [],
+    verificationCommands: [],
+  },
   phases: [
     {
       title: 'Execute',
@@ -282,8 +293,9 @@ function StructuredPlaybookEditor({
         <Button type="button" size="sm" disabled={busy} onClick={onSave}><Save data-icon="inline-start" aria-hidden="true" /> {busy ? 'Saving…' : 'Save playbook'}</Button>
       </div>
       <div className="av-coord-playbook-settings-grid">
-        <div className="av-coord-field"><Label htmlFor="playbook-name">Name</Label><Input id="playbook-name" value={value.name} onChange={(event) => update({ name: event.target.value })} placeholder="lowercase-slug" /></div>
-        <div className="av-coord-field"><Label htmlFor="playbook-agents">Agent limit</Label><Input id="playbook-agents" type="number" min={2} max={6} value={value.maxAgents ?? 3} onChange={(event) => update({ maxAgents: Math.min(6, Math.max(2, Number(event.target.value) || 2)) })} /></div>
+        <div className="av-coord-field av-coord-third"><Label htmlFor="playbook-name">Name</Label><Input id="playbook-name" value={value.name} onChange={(event) => update({ name: event.target.value })} placeholder="lowercase-slug" /></div>
+        <div className="av-coord-field av-coord-third"><Label htmlFor="playbook-agents">Agent limit</Label><Input id="playbook-agents" type="number" min={2} max={6} value={value.maxAgents ?? 3} onChange={(event) => update({ maxAgents: Math.min(6, Math.max(2, Number(event.target.value) || 2)) })} /></div>
+        <div className="av-coord-field av-coord-third"><Label htmlFor="playbook-autonomy">Autonomy</Label><NativeSelect id="playbook-autonomy" value={value.autonomy ?? 'medium'} onChange={(event) => update({ autonomy: event.target.value as ProtocolAutonomy })}><NativeSelectOption value="low">Low · approve phase changes</NativeSelectOption><NativeSelectOption value="medium">Medium · bounded decisions</NativeSelectOption><NativeSelectOption value="high">High · continue automatically</NativeSelectOption></NativeSelect></div>
         <div className="av-coord-field av-coord-wide"><Label htmlFor="playbook-description">Description</Label><Textarea id="playbook-description" rows={3} value={value.description ?? ''} onChange={(event) => update({ description: event.target.value || undefined })} placeholder="When should this workflow be used?" /></div>
         <div className="av-coord-field"><Label htmlFor="playbook-args-hint">Argument guidance <em>optional</em></Label><Textarea id="playbook-args-hint" rows={2} value={value.argsHint ?? ''} onChange={(event) => update({ argsHint: event.target.value || undefined })} placeholder="Example: target path or objective" /></div>
         <div className="av-coord-field"><Label htmlFor="playbook-gate">Completion gate <em>optional</em></Label><Input id="playbook-gate" value={value.gateCommand ?? ''} onChange={(event) => update({ gateCommand: event.target.value || undefined })} placeholder="npx tsc --noEmit" /></div>
@@ -291,6 +303,13 @@ function StructuredPlaybookEditor({
           <Checkbox id="playbook-plan-approval" checked={value.requirePlanApproval === true} onCheckedChange={(checked) => update({ requirePlanApproval: checked === true })} />
           <div><Label htmlFor="playbook-plan-approval">Require teammate plan approval</Label><small>Workers submit a plan before implementation; explicit lead tasks execute directly.</small></div>
         </div>
+        <div className="av-coord-plan-control av-coord-wide">
+          <Checkbox id="playbook-judgment-review" checked={value.requireReview === true} onCheckedChange={(checked) => update({ requireReview: checked === true })} />
+          <div><Label htmlFor="playbook-judgment-review">Require judgment review</Label><small>Mechanical verification must be followed by an intent, scope, and risk review.</small></div>
+        </div>
+        <div className="av-coord-field av-coord-wide"><Label htmlFor="playbook-acceptance-goal">Acceptance goal</Label><Input id="playbook-acceptance-goal" value={value.acceptanceContract?.goal ?? ''} onChange={(event) => update({ acceptanceContract: { ...value.acceptanceContract, goal: event.target.value } })} placeholder="Observable workflow outcome" /></div>
+        <div className="av-coord-field"><Label htmlFor="playbook-acceptance-criteria">Acceptance criteria <em>one per line</em></Label><Textarea id="playbook-acceptance-criteria" rows={3} value={value.acceptanceContract?.userVisibleAcceptance?.join('\n') ?? ''} onChange={(event) => update({ acceptanceContract: { ...value.acceptanceContract, userVisibleAcceptance: nonEmptyLines(event.target.value) } })} /></div>
+        <div className="av-coord-field"><Label htmlFor="playbook-verification">Verification commands <em>one per line</em></Label><Textarea id="playbook-verification" rows={3} value={value.acceptanceContract?.verificationCommands?.join('\n') ?? ''} onChange={(event) => update({ acceptanceContract: { ...value.acceptanceContract, verificationCommands: nonEmptyLines(event.target.value) } })} /></div>
       </div>
 
       <div className="av-coord-playbook-phases">
@@ -311,10 +330,15 @@ function StructuredPlaybookEditor({
                   <div className="av-coord-playbook-task-grid">
                     <div className="av-coord-field"><Label>Key <em>optional</em></Label><Input value={task.key ?? ''} onChange={(event) => updateTask(phaseIndex, taskIndex, { key: event.target.value || undefined })} placeholder="stable-key" /></div>
                     <div className="av-coord-field"><Label>Assigned role</Label><NativeSelect value={task.role ?? 'teammate'} onChange={(event) => updateTask(phaseIndex, taskIndex, { role: event.target.value as PlaybookTask['role'] })}><NativeSelectOption value="teammate">Teammate</NativeSelectOption><NativeSelectOption value="lead">Lead</NativeSelectOption><NativeSelectOption value="any">Any available agent</NativeSelectOption></NativeSelect></div>
+                    <div className="av-coord-field"><Label>Seat</Label><NativeSelect value={task.seat ?? (task.role === 'lead' ? 'director' : 'executor')} onChange={(event) => updateTask(phaseIndex, taskIndex, { seat: event.target.value as PlaybookTask['seat'] })}><NativeSelectOption value="director">Director</NativeSelectOption><NativeSelectOption value="executor">Executor</NativeSelectOption><NativeSelectOption value="validator">Validator</NativeSelectOption><NativeSelectOption value="watcher">Watcher</NativeSelectOption></NativeSelect></div>
+                    <div className="av-coord-field"><Label>Requested provider <em>optional</em></Label><NativeSelect value={task.provider ?? ''} onChange={(event) => updateTask(phaseIndex, taskIndex, { provider: (event.target.value || undefined) as PlaybookTask['provider'] })}><NativeSelectOption value="">Any provider</NativeSelectOption>{PROVIDER_ORDER.map((entry) => <NativeSelectOption key={entry} value={entry}>{entry.toUpperCase()}</NativeSelectOption>)}</NativeSelect></div>
+                    <div className="av-coord-field"><Label>Requested model <em>optional</em></Label><Input value={task.model ?? ''} onChange={(event) => updateTask(phaseIndex, taskIndex, { model: event.target.value || undefined })} placeholder="Provider-native model id" /></div>
+                    <div className="av-coord-field"><Label>Effort <em>optional</em></Label><Input value={task.effort ?? ''} onChange={(event) => updateTask(phaseIndex, taskIndex, { effort: event.target.value || undefined })} placeholder="high" /></div>
                     <div className="av-coord-field av-coord-wide"><Label>Title</Label><Input value={task.title} onChange={(event) => updateTask(phaseIndex, taskIndex, { title: event.target.value })} placeholder="Task outcome" /></div>
                     <div className="av-coord-field av-coord-wide"><Label>Instructions</Label><Textarea value={task.detail} rows={4} onChange={(event) => updateTask(phaseIndex, taskIndex, { detail: event.target.value })} placeholder="Full task instructions and acceptance checks" /></div>
                     <div className="av-coord-field"><Label>Write paths <em>comma-separated</em></Label><Input value={task.paths?.join(', ') ?? ''} onChange={(event) => updateTask(phaseIndex, taskIndex, { paths: splitPlaybookList(event.target.value) })} placeholder="lib/example.ts, app/api" /></div>
                     <div className="av-coord-field"><Label>Dependencies <em>task keys</em></Label><Input value={task.dependsOn?.join(', ') ?? ''} onChange={(event) => updateTask(phaseIndex, taskIndex, { dependsOn: splitPlaybookList(event.target.value) })} placeholder="survey, implement" /></div>
+                    <div className="av-coord-field av-coord-wide"><Label>Task verification <em>one command per line</em></Label><Textarea value={task.verifyCommands?.join('\n') ?? ''} rows={2} onChange={(event) => updateTask(phaseIndex, taskIndex, { verifyCommands: nonEmptyLines(event.target.value) })} placeholder="npx tsc --noEmit" /></div>
                   </div>
                   <Button type="button" variant="ghost" size="sm" disabled={phase.tasks.length <= 1} onClick={() => removeTask(phaseIndex, taskIndex)}><Trash2 data-icon="inline-start" aria-hidden="true" /> Delete task</Button>
                 </fieldset>
@@ -494,6 +518,8 @@ function PlaybookManager({
                 <div><dt>Arguments</dt><dd>{selected.expectsArgs ? selected.argsHint ?? 'Required' : 'Not required'}</dd></div>
                 <div><dt>Agents</dt><dd>{selected.maxAgents ?? 'Launcher default'}</dd></div>
                 <div><dt>Completion gate</dt><dd>{selected.gateCommand ?? 'Not configured'}</dd></div>
+                <div><dt>Autonomy</dt><dd>{selected.autonomy ?? 'medium'}</dd></div>
+                <div><dt>Judgment review</dt><dd>{selected.requireReview ? 'Required' : 'Automatic'}</dd></div>
               </dl>
               {deleteName === selected.name ? (
                 <div className="av-coord-playbook-delete" role="alert">
@@ -542,6 +568,14 @@ export default function AgentTeamCoordinator({
   const [teammateProviderOverride, setTeammateProviderOverride] = useState<AgentProvider[] | null>(null)
   const [gateCommand, setGateCommand] = useState('')
   const [requirePlanApproval, setRequirePlanApproval] = useState(true)
+  const [autonomy, setAutonomy] = useState<ProtocolAutonomy>('medium')
+  const [requireReview, setRequireReview] = useState(true)
+  const [acceptanceCriteria, setAcceptanceCriteria] = useState('')
+  const [nonGoals, setNonGoals] = useState('')
+  const [manualQa, setManualQa] = useState('')
+  const [escalationTriggers, setEscalationTriggers] = useState('')
+  const [maxTokens, setMaxTokens] = useState('')
+  const [maxDurationMinutes, setMaxDurationMinutes] = useState('')
   const [useWorktrees, setUseWorktrees] = useState(true)
   const [runQuery, setRunQuery] = useState('')
   const [providerFilter, setProviderFilter] = useState<string | null>(null)
@@ -575,6 +609,12 @@ export default function AgentTeamCoordinator({
   const terminalRun = run ? ['completed', 'failed', 'stopped'].includes(run.status) : false
   const actionableMail = terminalRun ? 0 : undeliveredMail
   const completedTasks = tasks.filter((task) => task.status === 'completed').length
+  const phaseGate = run?.phaseReports.find((report) => report.status === 'awaiting_approval') ?? null
+  const openDecisions = tasks.flatMap((task) => (task.receipt?.needsDecision ?? [])
+    .filter((decision) => decision.status === 'open').map((decision) => ({ task, decision })))
+  const reviewPending = run?.requireReview === true && run.review.status === 'pending'
+    && tasks.length > 0 && tasks.every((task) => TERMINAL_TASK_STATUSES.has(task.status))
+  const recurringLearnings = run?.learningCandidates.filter((candidate) => candidate.status === 'recurring') ?? []
   const suggestedProvider = provider === 'all' ? (selectedSession?.provider ?? 'claude') : provider
   const targetProvider = runProviderOverride ?? suggestedProvider
   const teammateProviders = teammateProviderOverride ?? [targetProvider]
@@ -624,7 +664,7 @@ export default function AgentTeamCoordinator({
   const displayedTask = filteredTasks.find((task) => task.id === selectedTaskId) ?? filteredTasks[0] ?? null
   const filteredEvents = useMemo(() => events.flatMap((event, index) => {
     const include = eventFilter === 'all'
-      || (eventFilter === 'attention' && ['agent.blocked', 'task.failed', 'lock.denied', 'plan.rejected', 'review.requested'].includes(event.type))
+      || (eventFilter === 'attention' && ['agent.blocked', 'task.failed', 'lock.denied', 'plan.rejected', 'review.requested', 'phase.reported', 'phase.rejected', 'decision.raised', 'model.drift'].includes(event.type))
       || (eventFilter === 'messages' && ['message', 'finding', 'learning', 'handoff'].includes(event.type))
       || (eventFilter === 'tasks' && (event.type.startsWith('task.') || event.type.startsWith('plan.')))
     return include ? [{ event, index }] : []
@@ -634,6 +674,7 @@ export default function AgentTeamCoordinator({
     : filteredEvents.find((entry) => entry.index === selectedEventIndex)?.event ?? filteredEvents.at(-1)?.event ?? null
   const attentionTaskCount = tasks.filter((task) => task.status === 'blocked' || task.status === 'failed').length
   const attentionCount = terminalRun ? 0 : attentionTaskCount + pendingPlanTasks.length + actionableMail
+    + (phaseGate ? 1 : 0) + (reviewPending ? 1 : 0) + openDecisions.length + recurringLearnings.length
   const workingAgents = agents.filter((agent) => agent.status === 'working' || agent.turnActive).length
   const queuedTasks = tasks.filter((task) => task.status === 'pending').length
   const providerCounts = useMemo(() => {
@@ -736,6 +777,8 @@ export default function AgentTeamCoordinator({
     if (selected.maxAgents) setMaxAgents(Math.min(6, Math.max(2, selected.maxAgents)))
     if (selected.gateCommand !== undefined) setGateCommand(selected.gateCommand)
     if (selected.requirePlanApproval !== undefined) setRequirePlanApproval(selected.requirePlanApproval)
+    if (selected.autonomy) setAutonomy(selected.autonomy)
+    if (selected.requireReview !== undefined) setRequireReview(selected.requireReview)
   }, [playbooks])
 
   const handlePlaybooksChanged = useCallback((next: PlaybookSummary[], preferredName?: string) => {
@@ -749,6 +792,8 @@ export default function AgentTeamCoordinator({
       if (selected?.maxAgents) setMaxAgents(Math.min(6, Math.max(2, selected.maxAgents)))
       if (selected?.gateCommand !== undefined) setGateCommand(selected.gateCommand)
       if (selected?.requirePlanApproval !== undefined) setRequirePlanApproval(selected.requirePlanApproval)
+      if (selected?.autonomy) setAutonomy(selected.autonomy)
+      if (selected?.requireReview !== undefined) setRequireReview(selected.requireReview)
     }
   }, [])
 
@@ -895,6 +940,78 @@ export default function AgentTeamCoordinator({
     }
   }, [appendEvent, busyAction, runId, showNotice])
 
+  const reviewControlGate = useCallback(async (
+    action: 'review-phase' | 'review-run',
+    approved: boolean,
+    phase?: string,
+  ) => {
+    if (!runId || busyAction) return
+    const key = `${action}:${phase ?? 'run'}`
+    setBusyAction(key)
+    try {
+      const next = await jsonFetch<ProtocolRunSnapshot>(`/api/agent-protocol/runs/${encodeURIComponent(runId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action,
+          approved,
+          phase,
+          summary: action === 'review-phase'
+            ? `${phase} ${approved ? 'approved' : 'rejected'} by the operator`
+            : `Judgment review ${approved ? 'approved' : 'rejected'} by the operator`,
+        }),
+      })
+      setSnapshot(next)
+      showNotice(action === 'review-phase'
+        ? `${phase} ${approved ? 'approved' : 'rejected'}`
+        : `Judgment review ${approved ? 'approved' : 'rejected'}`)
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : 'Failed to review workflow gate')
+    } finally {
+      setBusyAction(null)
+    }
+  }, [busyAction, runId, showNotice])
+
+  const resolveDecision = useCallback(async (taskId: string, decisionId: string, suggested?: string) => {
+    if (!runId || busyAction) return
+    const answer = window.prompt('Decision answer', suggested ?? '')?.trim()
+    if (!answer) return
+    const key = `decision:${taskId}:${decisionId}`
+    setBusyAction(key)
+    try {
+      await jsonFetch(`/api/agent-protocol/runs/${encodeURIComponent(runId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'resolve-decision', taskId, decisionId, answer }),
+      })
+      await loadSnapshot(runId)
+      showNotice(`Decision ${decisionId} resolved`)
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : 'Failed to resolve decision')
+    } finally {
+      setBusyAction(null)
+    }
+  }, [busyAction, loadSnapshot, runId, showNotice])
+
+  const promoteLearning = useCallback(async (candidateId: string, target: 'playbook' | 'role' | 'project_memory') => {
+    if (!runId || busyAction) return
+    const key = `learning:${candidateId}`
+    setBusyAction(key)
+    try {
+      await jsonFetch(`/api/agent-protocol/runs/${encodeURIComponent(runId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'promote-learning', candidateId, target }),
+      })
+      await loadSnapshot(runId)
+      showNotice('Learning candidate marked for promotion')
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : 'Failed to promote learning')
+    } finally {
+      setBusyAction(null)
+    }
+  }, [busyAction, loadSnapshot, runId, showNotice])
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null
@@ -948,6 +1065,20 @@ export default function AgentTeamCoordinator({
           gateCommand: gateCommand.trim() || undefined,
           requirePlanApproval,
           useWorktrees,
+          autonomy,
+          requireReview,
+          acceptanceContract: {
+            goal: prompt,
+            nonGoals: nonEmptyLines(nonGoals),
+            userVisibleAcceptance: nonEmptyLines(acceptanceCriteria),
+            verificationCommands: gateCommand.trim() ? [gateCommand.trim()] : [],
+            manualQa: nonEmptyLines(manualQa),
+            escalationTriggers: nonEmptyLines(escalationTriggers),
+          },
+          budget: maxTokens.trim() || maxDurationMinutes.trim() ? {
+            maxTokens: maxTokens.trim() ? Number(maxTokens) : undefined,
+            maxDurationMinutes: maxDurationMinutes.trim() ? Number(maxDurationMinutes) : undefined,
+          } : undefined,
         }),
       })
       setSnapshot(result.snapshot)
@@ -958,6 +1089,12 @@ export default function AgentTeamCoordinator({
       setPlaybookName('')
       setPlaybookArgs('')
       setGateCommand('')
+      setAcceptanceCriteria('')
+      setNonGoals('')
+      setManualQa('')
+      setEscalationTriggers('')
+      setMaxTokens('')
+      setMaxDurationMinutes('')
       setRunProviderOverride(null)
       setTeammateProviderOverride(null)
       const lead = result.sessions[0]
@@ -981,7 +1118,7 @@ export default function AgentTeamCoordinator({
     } finally {
       setBusyAction(null)
     }
-  }, [baseCwd, busyAction, gateCommand, maxAgents, onOpenSession, onSessionsChanged, playbookArgs, playbookArgsReady, promptDraft, requirePlanApproval, selectedPlaybook, showNotice, targetProvider, teammateProviders, useWorktrees])
+  }, [acceptanceCriteria, autonomy, baseCwd, busyAction, escalationTriggers, gateCommand, manualQa, maxAgents, maxDurationMinutes, maxTokens, nonGoals, onOpenSession, onSessionsChanged, playbookArgs, playbookArgsReady, promptDraft, requirePlanApproval, requireReview, selectedPlaybook, showNotice, targetProvider, teammateProviders, useWorktrees])
 
   const sendMessage = useCallback(async () => {
     const body = messageDraft.trim()
@@ -1237,7 +1374,7 @@ export default function AgentTeamCoordinator({
             </div>
           </aside>
 
-          <main className="av-coord-main">
+          <div className="av-coord-main">
             {startOpen || !run ? (
               <section className="av-coord-start">
                 {playbookManagerOpen ? (
@@ -1277,7 +1414,7 @@ export default function AgentTeamCoordinator({
                         <CardHeader>
                           <div className="av-coord-start-card-heading"><span>01</span><div><CardTitle>Workflow brief</CardTitle><CardDescription>{selectedPlaybook ? 'Add run-specific context, or rely on the selected playbook and its arguments.' : 'Give the lead enough context to build and assign a useful task board.'}</CardDescription></div></div>
                         </CardHeader>
-                        <CardContent>
+                        <CardContent className="av-coord-contract-fields">
                           <div className="av-coord-field">
                             <Label htmlFor="coord-run-prompt">Outcome and acceptance criteria</Label>
                             <Textarea
@@ -1292,6 +1429,22 @@ export default function AgentTeamCoordinator({
                               className="av-coord-textarea"
                               rows={8}
                             />
+                          </div>
+                          <div className="av-coord-field">
+                            <Label htmlFor="coord-run-acceptance">Acceptance checks <em>one per line</em></Label>
+                            <Textarea id="coord-run-acceptance" className="av-coord-textarea av-coord-contract-textarea" value={acceptanceCriteria} onChange={(event) => setAcceptanceCriteria(event.target.value)} placeholder={'Web and OpenTUI type-checks pass\nThe new behavior is visible in both dashboards'} rows={4} />
+                          </div>
+                          <div className="av-coord-field">
+                            <Label htmlFor="coord-run-non-goals">Non-goals <em>one per line</em></Label>
+                            <Textarea id="coord-run-non-goals" className="av-coord-textarea av-coord-contract-textarea" value={nonGoals} onChange={(event) => setNonGoals(event.target.value)} placeholder="Areas the team must leave unchanged" rows={3} />
+                          </div>
+                          <div className="av-coord-field">
+                            <Label htmlFor="coord-run-manual-qa">Manual QA <em>one per line</em></Label>
+                            <Textarea id="coord-run-manual-qa" className="av-coord-textarea av-coord-contract-textarea" value={manualQa} onChange={(event) => setManualQa(event.target.value)} placeholder="Open Agent Operations and verify the completed state" rows={3} />
+                          </div>
+                          <div className="av-coord-field">
+                            <Label htmlFor="coord-run-escalation">Escalation triggers <em>one per line</em></Label>
+                            <Textarea id="coord-run-escalation" className="av-coord-textarea av-coord-contract-textarea" value={escalationTriggers} onChange={(event) => setEscalationTriggers(event.target.value)} placeholder="Security, data loss, or public API compatibility risk" rows={3} />
                           </div>
                         </CardContent>
                         <CardFooter className="av-coord-start-card-meta">
@@ -1374,6 +1527,28 @@ export default function AgentTeamCoordinator({
                             <small>Includes the lead; increase for independent parallel lanes.</small>
                           </div>
 
+                          <div className="av-coord-policy-grid av-coord-wide">
+                            <div className="av-coord-field">
+                              <Label htmlFor="coord-run-autonomy">Autonomy</Label>
+                              <NativeSelect id="coord-run-autonomy" value={autonomy} onChange={(event) => setAutonomy(event.target.value as ProtocolAutonomy)} className="av-coord-start-select">
+                                <NativeSelectOption value="low">Low · approve every phase</NativeSelectOption>
+                                <NativeSelectOption value="medium">Medium · gated phases</NativeSelectOption>
+                                <NativeSelectOption value="high">High · escalation only</NativeSelectOption>
+                              </NativeSelect>
+                              <small>Model drift and budget exhaustion always surface.</small>
+                            </div>
+
+                            <div className="av-coord-field">
+                              <Label htmlFor="coord-run-token-budget">Token budget <em>optional</em></Label>
+                              <Input id="coord-run-token-budget" className="av-coord-input" type="number" min={1} value={maxTokens} onChange={(event) => setMaxTokens(event.target.value)} placeholder="250000" />
+                            </div>
+
+                            <div className="av-coord-field">
+                              <Label htmlFor="coord-run-time-budget">Duration budget <em>minutes</em></Label>
+                              <Input id="coord-run-time-budget" className="av-coord-input" type="number" min={1} value={maxDurationMinutes} onChange={(event) => setMaxDurationMinutes(event.target.value)} placeholder="240" />
+                            </div>
+                          </div>
+
                           <div className="av-coord-field av-coord-wide">
                             <Label>Teammate provider pool</Label>
                             <ToggleGroupPrimitive.Root
@@ -1430,6 +1605,11 @@ export default function AgentTeamCoordinator({
                           </div>
 
                           <div className="av-coord-plan-control av-coord-wide">
+                            <Checkbox id="coord-judgment-review" className="av-coord-checkbox" checked={requireReview} onCheckedChange={(checked) => setRequireReview(checked === true)} />
+                            <div><Label htmlFor="coord-judgment-review">Require judgment review after validation</Label><small>The run cannot synthesize until receipts pass and the reviewer approves intent, scope, and risk.</small></div>
+                          </div>
+
+                          <div className="av-coord-plan-control av-coord-wide">
                             <Checkbox id="coord-use-worktrees" className="av-coord-checkbox" checked={useWorktrees} onCheckedChange={(checked) => setUseWorktrees(checked === true)} />
                             <div><Label htmlFor="coord-use-worktrees">Use separate teammate checkouts</Label><small>Recommended for parallel edits. Turn this off when every agent should deliberately share the current checkout.</small></div>
                           </div>
@@ -1447,8 +1627,11 @@ export default function AgentTeamCoordinator({
                         <div><span>Lead provider</span><strong className={`av-provider-${targetProvider}`}>{String(targetProvider).toUpperCase()}</strong></div>
                         <div><span>Teammate providers</span><strong>{teammateProviders.map((entry) => entry.toUpperCase()).join(' · ')}</strong></div>
                         <div><span>Agent limit</span><strong>{maxAgents} total</strong></div>
+                        <div><span>Autonomy</span><strong>{autonomy}</strong></div>
                         <div><span>Checkout mode</span><strong>{useWorktrees ? 'Isolated checkouts' : 'Shared checkout'}</strong></div>
                         <div><span>Plan review</span><strong>{requirePlanApproval ? 'Required' : 'Automatic'}</strong></div>
+                        <div><span>Judgment review</span><strong>{requireReview ? 'Required' : 'Optional'}</strong></div>
+                        <div><span>Budget</span><strong>{maxTokens || maxDurationMinutes ? `${maxTokens || '∞'} tokens · ${maxDurationMinutes || '∞'} min` : 'Unbounded'}</strong></div>
                         <div><span>Completion gate</span><strong title={gateCommand}>{gateCommand.trim() || 'Not configured'}</strong></div>
                         <div className="av-coord-launch-preview">
                           <span>Brief preview</span>
@@ -1615,6 +1798,36 @@ export default function AgentTeamCoordinator({
                       <span><AlertTriangle aria-hidden="true" /> Attention <b>{attentionCount}</b></span>
                     </div>
                     <div className="av-coord-right-attention-list">
+                      {phaseGate ? (
+                        <div className="av-coord-attention-gate">
+                          <AlertTriangle aria-hidden="true" />
+                          <span><strong>{phaseGate.phase} phase gate</strong><small>Review receipts before the next phase starts</small></span>
+                          <Button type="button" size="sm" onClick={() => void reviewControlGate('review-phase', true, phaseGate.phase)} disabled={busyAction === `review-phase:${phaseGate.phase}`}>Approve</Button>
+                          <Button type="button" size="sm" variant="outline" className="av-danger" onClick={() => void reviewControlGate('review-phase', false, phaseGate.phase)} disabled={busyAction === `review-phase:${phaseGate.phase}`}>Reject</Button>
+                        </div>
+                      ) : null}
+                      {reviewPending ? (
+                        <div className="av-coord-attention-gate">
+                          <ShieldCheck aria-hidden="true" />
+                          <span><strong>Judgment review</strong><small>Mechanical checks passed; review intent, scope, and risk</small></span>
+                          <Button type="button" size="sm" onClick={() => void reviewControlGate('review-run', true)} disabled={busyAction === 'review-run:run'}>Approve</Button>
+                          <Button type="button" size="sm" variant="outline" className="av-danger" onClick={() => void reviewControlGate('review-run', false)} disabled={busyAction === 'review-run:run'}>Reject</Button>
+                        </div>
+                      ) : null}
+                      {openDecisions.map(({ task, decision }) => (
+                        <div className="av-coord-attention-gate" key={`decision:${task.id}:${decision.id}`}>
+                          <AlertTriangle aria-hidden="true" /><span><strong>{decision.question}</strong><small>{task.id} · assumed {decision.assumed ?? 'none'}</small></span>
+                          <Button type="button" size="sm" onClick={() => void resolveDecision(task.id, decision.id, decision.assumed ?? decision.options[0])} disabled={busyAction === `decision:${task.id}:${decision.id}`}>Resolve</Button>
+                          <Button type="button" size="sm" variant="outline" onClick={() => selectTask(task)}>Inspect</Button>
+                        </div>
+                      ))}
+                      {recurringLearnings.map((candidate) => (
+                        <div className="av-coord-attention-gate" key={`learning:${candidate.id}`}>
+                          <Sparkles aria-hidden="true" /><span><strong>{candidate.summary}</strong><small>{candidate.occurrences} occurrences · proposed {candidate.suggestedTarget.replace('_', ' ')}</small></span>
+                          <Button type="button" size="sm" onClick={() => void promoteLearning(candidate.id, candidate.suggestedTarget)} disabled={busyAction === `learning:${candidate.id}`}>Promote</Button>
+                          <Button type="button" size="sm" variant="outline" onClick={() => setEventFilter('attention')}>Inspect</Button>
+                        </div>
+                      ))}
                       {pendingPlanTasks.map((task) => (
                         <button key={`plan:${task.id}`} type="button" onClick={() => { selectTask(task); setTaskFilter('attention') }}>
                           <AlertTriangle aria-hidden="true" /><span><strong>{task.title}</strong><small>Plan is waiting for approval</small></span><b>Open</b>
@@ -1709,6 +1922,16 @@ export default function AgentTeamCoordinator({
                         </Button>
                       </div>
                     ) : null}
+                    {displayedTask?.receipt ? (
+                      <div className="av-coord-receipt" aria-label={`Completion receipt for ${displayedTask.title}`}>
+                        <span><b>{displayedTask.seat}</b> · {displayedTask.receipt.provenance}</span>
+                        <span>Model <b>{displayedTask.receipt.actualProvider}/{displayedTask.receipt.actualModel ?? 'default'}</b></span>
+                        <span>Verify <b>{displayedTask.receipt.verification.filter((entry) => entry.passed).length}/{displayedTask.receipt.verification.length}</b></span>
+                        <span>Tokens <b>{displayedTask.receipt.usage?.totalTokens?.toLocaleString() ?? '—'}</b></span>
+                        <span>Files <b>{displayedTask.receipt.filesChanged.length}</b></span>
+                        <span>Decisions <b>{displayedTask.receipt.needsDecision.filter((entry) => entry.status === 'open').length} open</b></span>
+                      </div>
+                    ) : null}
                     <div className="av-coord-throughput" aria-label="Workflow throughput">
                       <div className="av-coord-throughput-chart">
                         <span>Event throughput</span>
@@ -1772,14 +1995,22 @@ export default function AgentTeamCoordinator({
                             <p>{run.summary}</p>
                           </div>
                         ) : null}
-                        {!selectedEvent && !run.summary ? <div className="av-coord-empty-state">Select an event to inspect it.</div> : null}
+                        {!selectedEvent ? (
+                          <div className="av-coord-control-summary">
+                            <span>Control plane</span>
+                            <p><b>{run.autonomy}</b> autonomy · review {run.review.status} · {run.acceptanceContract.userVisibleAcceptance.length} acceptance checks</p>
+                            {run.phaseReports.map((report) => <small key={report.phase}>{report.phase}: {report.status} · {report.completedTaskIds.length} done · {report.usage.totalTokens?.toLocaleString() ?? 0} tok</small>)}
+                            {run.resumeCapsule ? <small>Next: {run.resumeCapsule.nextAction}</small> : null}
+                          </div>
+                        ) : null}
+                        {!selectedEvent && !run.summary && run.phaseReports.length === 0 ? <div className="av-coord-empty-state">Select an event to inspect it.</div> : null}
                       </aside>
                     </div>
                   </div>
                 </section>
               </>
             )}
-          </main>
+          </div>
         </div>
 
         <footer className="av-coord-global-footer" aria-label="Keyboard shortcuts">

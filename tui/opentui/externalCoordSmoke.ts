@@ -820,7 +820,10 @@ const playbook = parseRunPlaybook({
     {
       title: 'Survey',
       tasks: [
-        { key: 'survey', title: 'Survey {{args.target}}', detail: 'Survey the checkout for {{args.target}}.' },
+        {
+          key: 'survey', title: 'Survey {{args.target}}', detail: 'Survey the checkout for {{args.target}}.',
+          provider: 'codex', model: 'gpt-smoke', effort: 'high', verifyCommands: ['test -f README.md'],
+        },
       ],
     },
     {
@@ -837,6 +840,13 @@ const playbookRun = await coordination.createExternalProtocolRun({
   provider: 'codex',
   baseCwd: testCwd,
   participantName: 'Playbook lead',
+  autonomy: 'medium',
+  requireReview: true,
+  acceptanceContract: {
+    goal: 'Survey and fix third.txt',
+    userVisibleAcceptance: ['third.txt contains the fix'],
+    verificationCommands: ['test -f README.md'],
+  },
   playbook,
   playbookArgs: { target: 'third.txt' },
 })
@@ -852,6 +862,10 @@ assert.equal(seeded[1].targetRole, 'lead')
 // Phase barrier: the Fix task depends on the Survey task.
 assert.deepEqual(seeded[1].blockedBy, [seeded[0].id])
 assert.equal(playbookRun.snapshot.run.maxAgents, 3)
+assert.equal(playbookRun.snapshot.run.autonomy, 'medium')
+assert.equal(playbookRun.snapshot.run.requireReview, true)
+assert.equal(seeded[0].requestedModel, 'gpt-smoke')
+assert.deepEqual(seeded[0].verifyCommands, ['test -f README.md'])
 
 // Barrier is enforced at claim time, and phases roll up in status.
 await assert.rejects(
@@ -866,11 +880,69 @@ assert.deepEqual(
 
 // Complete both phases, then save the board as a reusable playbook.
 await coordination.claimExternalProtocolTask(playbookLead, seeded[0].id)
-await coordination.completeExternalProtocolTask(playbookLead, { taskId: seeded[0].id, summary: 'Surveyed.' })
+for (let attempt = 0; attempt < 2; attempt += 1) {
+  const drifted = await coordination.completeExternalProtocolTask(playbookLead, {
+    taskId: seeded[0].id,
+    summary: 'Surveyed with an unverified model.',
+    actualModel: 'gpt-unexpected',
+  })
+  assert.equal(drifted.accepted, false)
+  assert.match(drifted.reason ?? '', /provenance/i)
+}
+const surveyDone = await coordination.completeExternalProtocolTask(playbookLead, {
+  taskId: seeded[0].id,
+  summary: 'Surveyed.',
+  actualModel: 'gpt-smoke',
+  usage: { inputTokens: 120, outputTokens: 30, totalTokens: 150, durationMs: 500 },
+  commandsRun: ['test -f README.md'],
+})
+assert.equal(surveyDone.accepted, true)
+const phaseGated = await coordination.readExternalProtocolRun(playbookLead)
+assert.equal(phaseGated.run.status, 'blocked')
+assert.equal(phaseGated.run.phaseReports.find((report) => report.phase === 'Survey')?.status, 'awaiting_approval')
+assert.equal(phaseGated.tasks.find((entry) => entry.id === seeded[0].id)?.receipt?.provenance, 'ok')
+const recurringProvenance = phaseGated.run.learningCandidates.find((candidate) => candidate.kind === 'provenance' && candidate.status === 'recurring')
+assert.ok(recurringProvenance)
+await coordination.promoteExternalLearningCandidate(playbookLead, {
+  candidateId: recurringProvenance!.id,
+  target: 'playbook',
+})
+await coordination.reviewExternalProtocolPhase(playbookLead, {
+  phase: 'Survey', approved: true, summary: 'Survey receipt reviewed.',
+})
 await coordination.claimExternalProtocolTask(playbookLead, seeded[1].id)
 writeFileSync(path.join(testCwd, 'third.txt'), 'fixed\n')
-const playbookDone = await coordination.completeExternalProtocolTask(playbookLead, { taskId: seeded[1].id, summary: 'Fixed.' })
+const openDecision = {
+  id: 'ship-mode', question: 'Use the normal release path?', options: ['yes'], assumed: 'yes',
+  impactIfWrong: 'Release timing changes.', status: 'open' as const,
+}
+const decisionBlocked = await coordination.completeExternalProtocolTask(playbookLead, {
+  taskId: seeded[1].id,
+  summary: 'Fixed.',
+  filesChanged: ['third.txt'],
+  needsDecision: [openDecision],
+})
+assert.equal(decisionBlocked.accepted, false)
+assert.match(decisionBlocked.reason ?? '', /Open decisions/)
+assert.equal((await coordination.readExternalProtocolRun(playbookLead)).tasks.find((entry) => entry.id === seeded[1].id)?.receipt?.stopReason, 'needs_decision')
+await coordination.resolveExternalProtocolDecision(playbookLead, {
+  taskId: seeded[1].id, decisionId: openDecision.id, answer: 'yes',
+})
+const playbookDone = await coordination.completeExternalProtocolTask(playbookLead, {
+  taskId: seeded[1].id,
+  summary: 'Fixed after decision resolution.',
+  filesChanged: ['third.txt'],
+  needsDecision: [{ ...openDecision, status: 'answered', answer: 'yes' }],
+})
 assert.equal(playbookDone.accepted, true)
+const reviewGated = await coordination.readExternalProtocolRun(playbookLead)
+assert.equal(reviewGated.run.status, 'blocked')
+assert.equal(reviewGated.run.review.status, 'pending')
+assert.match(reviewGated.run.resumeCapsule?.nextAction ?? '', /judgment review/i)
+await coordination.reviewExternalProtocolRun(playbookLead, {
+  approved: true,
+  summary: 'Mechanical checks, scope, intent, and receipt provenance reviewed.',
+})
 
 const saved = await coordination.saveExternalProtocolPlaybook(playbookLead, {
   name: 'smoke-audit-saved',
@@ -920,6 +992,11 @@ assert.equal(
 const reloaded = await coordination.loadRunPlaybook(testCwd, 'smoke-audit-saved')
 assert.equal(reloaded.phases.length, 2)
 assert.equal(reloaded.phases[1].tasks[0].dependsOn, undefined)
+assert.equal(reloaded.autonomy, 'medium')
+assert.equal(reloaded.requireReview, true)
+assert.equal(reloaded.acceptanceContract?.goal, 'Survey and fix third.txt')
+assert.equal(reloaded.phases[0].tasks[0].model, 'gpt-smoke')
+assert.deepEqual(reloaded.phases[0].tasks[0].verifyCommands, ['test -f README.md'])
 await coordination.finalizeExternalProtocolRun(playbookLead, 'Playbook smoke complete.')
 const replay = await coordination.createExternalProtocolRun({
   prompt: 'Replay from saved playbook',

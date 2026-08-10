@@ -117,6 +117,12 @@ Options:
   --args <value>       With --playbook: args interpolated into task text (JSON or string)
   --max-agents <n>     With --start: participant limit from 2 to 16 (default 6 or playbook value)
   --gate-command <cmd> With --start: command every task must pass before completion
+  --autonomy <level>   With --start: low, medium, or high (default medium)
+  --acceptance <json>  With --start: structured acceptance contract JSON
+  --token-budget <n>  With --start: maximum aggregate reported tokens
+  --duration-budget <minutes>
+                       With --start: maximum run duration in minutes
+  --require-review     With --start: require judgment review before synthesis
   --require-plan-approval
                        With --start: require lead approval before teammate edits
 
@@ -134,6 +140,7 @@ function parseArgs(args) {
   const booleanOptions = new Map([
     ['--shared', 'shared'],
     ['--once', 'once'],
+    ['--require-review', 'requireReview'],
     ['--require-plan-approval', 'requirePlanApproval'],
   ])
   const valueOptions = new Map([
@@ -150,6 +157,10 @@ function parseArgs(args) {
     ['--args', 'args'],
     ['--max-agents', 'maxAgents'],
     ['--gate-command', 'gateCommand'],
+    ['--autonomy', 'autonomy'],
+    ['--acceptance', 'acceptance'],
+    ['--token-budget', 'tokenBudget'],
+    ['--duration-budget', 'durationBudget'],
   ])
   for (let index = 0; index < args.length; index += 1) {
     const key = args[index]
@@ -850,8 +861,25 @@ if (options.maxAgents !== undefined) {
   if (!Number.isInteger(maxAgents) || maxAgents < 2 || maxAgents > 16) usage('--max-agents must be an integer from 2 to 16')
   options.maxAgents = maxAgents
 }
-if (!options.start && (options.playbook || options.args !== undefined || options.maxAgents !== undefined || options.gateCommand || options.requirePlanApproval)) {
-  usage('--playbook, --args, --max-agents, --gate-command, and --require-plan-approval require --start')
+if (options.autonomy !== undefined && !['low', 'medium', 'high'].includes(options.autonomy)) {
+  usage('--autonomy must be low, medium, or high')
+}
+if (options.tokenBudget !== undefined) {
+  const tokenBudget = Number(options.tokenBudget)
+  if (!Number.isInteger(tokenBudget) || tokenBudget <= 0) usage('--token-budget must be a positive integer')
+  options.tokenBudget = tokenBudget
+}
+if (options.durationBudget !== undefined) {
+  const durationBudget = Number(options.durationBudget)
+  if (!Number.isFinite(durationBudget) || durationBudget <= 0) usage('--duration-budget must be a positive number of minutes')
+  options.durationBudget = durationBudget
+}
+if (options.acceptance !== undefined) {
+  try { options.acceptance = JSON.parse(options.acceptance) } catch { usage('--acceptance must be valid JSON') }
+  if (!options.acceptance || typeof options.acceptance !== 'object' || Array.isArray(options.acceptance)) usage('--acceptance must be a JSON object')
+}
+if (!options.start && (options.playbook || options.args !== undefined || options.maxAgents !== undefined || options.gateCommand || options.requirePlanApproval || options.requireReview || options.autonomy || options.acceptance || options.tokenBudget || options.durationBudget)) {
+  usage('run policy options require --start')
 }
 if (options.args !== undefined && !options.playbook) usage('--args requires --playbook')
 if (options.shared && !options.join) usage('--shared requires --join; the lead always starts in its current checkout')
@@ -919,6 +947,15 @@ if (options.identity && !options.start && !options.join) {
             maxAgents: options.maxAgents,
             gateCommand: options.gateCommand,
             requirePlanApproval: options.requirePlanApproval,
+            autonomy: options.autonomy,
+            acceptanceContract: options.acceptance,
+            requireReview: options.requireReview,
+            budget: options.tokenBudget || options.durationBudget
+              ? {
+                  maxTokens: options.tokenBudget,
+                  maxDurationMinutes: options.durationBudget,
+                }
+              : undefined,
           }
         : { runId: joinRunId }),
       name: options.name,

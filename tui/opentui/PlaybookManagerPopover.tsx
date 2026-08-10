@@ -12,8 +12,8 @@ import type { TuiThemePalette } from '../theme'
 
 type ManagerKey = { name: string; ctrl: boolean; shift: boolean; sequence: string }
 type ManagerMode = 'list' | 'edit' | 'delete'
-type EditorFocus = 'name' | 'description' | 'argsHint' | 'maxAgents' | 'gateCommand' | 'approval'
-  | 'phaseNav' | 'phaseTitle' | 'taskNav' | 'taskKey' | 'taskTitle' | 'taskDetail' | 'taskRole' | 'taskPaths' | 'taskDeps'
+type EditorFocus = 'name' | 'description' | 'argsHint' | 'maxAgents' | 'gateCommand' | 'approval' | 'autonomy' | 'review'
+  | 'phaseNav' | 'phaseTitle' | 'taskNav' | 'taskKey' | 'taskTitle' | 'taskDetail' | 'taskRole' | 'taskSeat' | 'taskProvider' | 'taskModel' | 'taskPaths' | 'taskDeps' | 'taskVerify'
 
 export type PlaybookManagerPopoverProps = {
   theme: TuiThemePalette
@@ -31,6 +31,8 @@ const NEW_PLAYBOOK: RunPlaybook = {
   description: 'Describe when this workflow should be used',
   argsHint: 'Describe the target or outcome',
   maxAgents: 3,
+  autonomy: 'medium',
+  requireReview: true,
   phases: [
     {
       title: 'Execute',
@@ -55,10 +57,11 @@ const NEW_PLAYBOOK: RunPlaybook = {
 }
 
 const EDITOR_FOCUS_ORDER: EditorFocus[] = [
-  'name', 'description', 'argsHint', 'maxAgents', 'gateCommand', 'approval',
-  'phaseNav', 'phaseTitle', 'taskNav', 'taskKey', 'taskTitle', 'taskDetail', 'taskRole', 'taskPaths', 'taskDeps',
+  'name', 'description', 'argsHint', 'maxAgents', 'gateCommand', 'approval', 'autonomy', 'review',
+  'phaseNav', 'phaseTitle', 'taskNav', 'taskKey', 'taskTitle', 'taskDetail', 'taskRole', 'taskSeat', 'taskProvider', 'taskModel', 'taskPaths', 'taskDeps', 'taskVerify',
 ]
-const MULTILINE_EDITOR_FIELDS = new Set<EditorFocus>(['description', 'argsHint', 'taskDetail'])
+const MULTILINE_EDITOR_FIELDS = new Set<EditorFocus>(['description', 'argsHint', 'taskDetail', 'taskVerify'])
+const PLAYBOOK_PROVIDERS: NonNullable<PlaybookTask['provider']>[] = ['codex', 'claude', 'copilot', 'opencode', 'pi']
 const MULTILINE_KEY_BINDINGS: Array<{ name: string; action: TextareaAction }> = [
   { name: 'return', action: 'newline' },
   { name: 'kpenter', action: 'newline' },
@@ -273,10 +276,24 @@ export function PlaybookManagerPopover({
       updateDraft({ maxAgents: Math.min(6, Math.max(2, (draft.maxAgents ?? 3) + direction)) })
     } else if (editorFocus === 'approval') {
       updateDraft({ requirePlanApproval: !draft.requirePlanApproval })
+    } else if (editorFocus === 'autonomy') {
+      const levels: NonNullable<RunPlaybook['autonomy']>[] = ['low', 'medium', 'high']
+      const index = levels.indexOf(draft.autonomy ?? 'medium')
+      updateDraft({ autonomy: levels[(index + (direction || 1) + levels.length) % levels.length] })
+    } else if (editorFocus === 'review') {
+      updateDraft({ requireReview: !draft.requireReview })
     } else if (editorFocus === 'taskRole') {
       const roles: PlaybookTask['role'][] = ['teammate', 'lead', 'any']
       const index = roles.indexOf(draft.phases[phaseIndex]?.tasks[taskIndex]?.role ?? 'teammate')
       updateTask({ role: roles[(index + (direction || 1) + roles.length) % roles.length] })
+    } else if (editorFocus === 'taskSeat') {
+      const seats: NonNullable<PlaybookTask['seat']>[] = ['director', 'executor', 'validator', 'watcher']
+      const index = seats.indexOf(draft.phases[phaseIndex]?.tasks[taskIndex]?.seat ?? 'executor')
+      updateTask({ seat: seats[(index + (direction || 1) + seats.length) % seats.length] })
+    } else if (editorFocus === 'taskProvider') {
+      const providers: Array<PlaybookTask['provider']> = [undefined, ...PLAYBOOK_PROVIDERS]
+      const index = providers.indexOf(draft.phases[phaseIndex]?.tasks[taskIndex]?.provider)
+      updateTask({ provider: providers[(Math.max(index, 0) + (direction || 1) + providers.length) % providers.length] })
     } else return false
     return true
   })
@@ -300,7 +317,7 @@ export function PlaybookManagerPopover({
   useEffect(() => {
     onKeyHandlerReady?.(handleKey)
     return () => onKeyHandlerReady?.(() => true)
-  }, [handleKey, onKeyHandlerReady])
+  }, [onKeyHandlerReady])
 
   const overlayWidth = Math.max(54, Math.min(width - 4, 140))
   const overlayHeight = Math.max(22, Math.min(height - 4, 42))
@@ -389,6 +406,14 @@ export function PlaybookManagerPopover({
                 <text fg={focusFg('approval')}>Plan approval</text>
                 <text fg={draft.requirePlanApproval ? theme.amber : theme.green}>{draft.requirePlanApproval ? '[x] Required' : '[ ] Automatic'}{editorFocus === 'approval' ? '  Space toggles' : ''}</text>
               </box>
+              <box height={2} flexDirection="column" backgroundColor={focusBg('autonomy')}>
+                <text fg={focusFg('autonomy')}>Autonomy</text>
+                <text fg={theme.cyan}>{`‹ ${(draft.autonomy ?? 'medium').toUpperCase()} ›${editorFocus === 'autonomy' ? '  ←/→ choose' : ''}`}</text>
+              </box>
+              <box height={2} flexDirection="column" backgroundColor={focusBg('review')}>
+                <text fg={focusFg('review')}>Judgment review</text>
+                <text fg={draft.requireReview ? theme.amber : theme.green}>{draft.requireReview ? '[x] Required' : '[ ] Automatic'}{editorFocus === 'review' ? '  Space toggles' : ''}</text>
+              </box>
             </box>
             <box width={editorRightWidth} flexDirection="column" border={['left']} borderStyle="single" borderColor={theme.border} paddingLeft={1}>
               <box height={2} flexDirection="column" backgroundColor={focusBg('phaseNav')}>
@@ -415,8 +440,18 @@ export function PlaybookManagerPopover({
                 <text fg={focusFg('taskRole')}>Assigned role</text>
                 <text fg={theme.text}>{`‹ ${task?.role ?? 'teammate'} ›${editorFocus === 'taskRole' ? '  ←/→ change' : ''}`}</text>
               </box>
+              <box height={2} flexDirection="column" backgroundColor={focusBg('taskSeat')}>
+                <text fg={focusFg('taskSeat')}>Seat</text>
+                <text fg={theme.text}>{`‹ ${(task?.seat ?? (task?.role === 'lead' ? 'director' : 'executor')).toUpperCase()} ›`}</text>
+              </box>
+              <box height={2} flexDirection="column" backgroundColor={focusBg('taskProvider')}>
+                <text fg={focusFg('taskProvider')}>Requested provider</text>
+                <text fg={theme.text}>{`‹ ${task?.provider?.toUpperCase() ?? 'ANY'} ›`}</text>
+              </box>
+              {field('Requested model', 'taskModel', task?.model ?? '', (value) => updateTask({ model: value || undefined }), 'Provider-native model id')}
               {field('Paths', 'taskPaths', csv(task?.paths), (value) => updateTask({ paths: parseCsv(value) }), 'comma-separated paths')}
               {field('Dependencies', 'taskDeps', csv(task?.dependsOn), (value) => updateTask({ dependsOn: parseCsv(value) }), 'comma-separated task keys')}
+              {field('Verification commands', 'taskVerify', task?.verifyCommands?.join('\n') ?? '', (value) => updateTask({ verifyCommands: value.split('\n').map((entry) => entry.trim()).filter(Boolean) }), 'one command per line')}
             </box>
           </box>
         </box>
@@ -445,6 +480,8 @@ export function PlaybookManagerPopover({
                 <box marginTop={1} flexDirection="column">
                   <text fg={theme.dim}>{`Agent limit     ${selected.maxAgents ?? 'launcher default'}`}</text>
                   <text fg={theme.dim}>{`Plan approval   ${selected.requirePlanApproval ? 'required' : 'automatic'}`}</text>
+                  <text fg={theme.dim}>{`Autonomy        ${(selected.autonomy ?? 'medium').toUpperCase()}`}</text>
+                  <text fg={theme.dim}>{`Judgment review ${selected.requireReview ? 'required' : 'automatic'}`}</text>
                   <text fg={theme.dim} wrapMode="word">{`Gate            ${selected.gateCommand ?? 'not configured'}`}</text>
                 </box>
                 {mode === 'delete' ? (

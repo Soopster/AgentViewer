@@ -6309,6 +6309,12 @@ button.av-session-viz-graph-node:disabled {
 .av-coord-right-attention-list button strong { overflow: hidden; color: var(--text-2); font: 600 11px "IBM Plex Mono", monospace; text-overflow: ellipsis; white-space: nowrap; }
 .av-coord-right-attention-list button small { color: var(--text-3); font: 9px "IBM Plex Mono", monospace; }
 .av-coord-right-attention-list button > b { border: 1px solid color-mix(in srgb, var(--amber) 55%, var(--border)); border-radius: 4px; font: 9px "IBM Plex Mono", monospace; padding: 6px 9px; }
+.av-coord-attention-gate { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto auto; align-items: center; gap: 8px; border: 1px solid color-mix(in srgb, var(--amber) 42%, var(--av-coord-line)); border-radius: 6px; background: color-mix(in srgb, var(--amber) 9%, var(--surface-2)); padding: 9px 10px; }
+.av-coord-attention-gate > svg { width: 15px; height: 15px; color: var(--amber); }
+.av-coord-attention-gate > span { display: grid; min-width: 0; gap: 2px; }
+.av-coord-attention-gate > span strong { overflow: hidden; color: var(--text-2); font: 600 11px "IBM Plex Mono", monospace; text-overflow: ellipsis; white-space: nowrap; }
+.av-coord-attention-gate > span small { color: var(--text-3); font: 9px "IBM Plex Mono", monospace; }
+.av-coord-right-attention-list .av-coord-attention-gate .av-coord-btn { display: inline-flex; grid-template-columns: none; height: 28px; padding: 0 9px; text-align: center; }
 .av-coord-no-attention { display: flex; align-items: center; gap: 8px; color: var(--green); font: 10px "IBM Plex Mono", monospace; padding: 12px; }
 .av-coord-no-attention svg { width: 15px; height: 15px; }
 
@@ -6336,6 +6342,11 @@ button.av-session-viz-graph-node:disabled {
 .av-coord-task-row > span:last-child { overflow: hidden; color: var(--text-3); text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .av-coord-task-actions { position: absolute; top: 8px; right: 72px; display: flex; min-height: 0; align-items: center; justify-content: flex-end; gap: 6px; border-top: 0; padding: 0; }
 .av-coord-task-actions .av-coord-btn { height: 28px; font-size: 9px; padding-inline: 9px; }
+.av-coord-receipt { display: flex; flex-wrap: wrap; gap: 6px 14px; border-top: 1px solid var(--av-coord-line); background: color-mix(in srgb, var(--surface-2) 88%, transparent); padding: 8px 12px; color: var(--text-3); font: 9px "IBM Plex Mono", monospace; }
+.av-coord-receipt b { color: var(--text-2); font-weight: 600; }
+.av-coord-control-summary { display: grid; gap: 5px; border-top: 1px solid var(--av-coord-line); padding-top: 10px; }
+.av-coord-control-summary > span { color: var(--text-3); font: 600 9px "IBM Plex Mono", monospace; text-transform: uppercase; }
+.av-coord-control-summary p, .av-coord-control-summary small { margin: 0; color: var(--text-2); font: 9px/1.45 "IBM Plex Mono", monospace; }
 .av-coord-throughput { display: grid; min-height: 142px; flex: 0 0 142px; grid-template-columns: minmax(280px, 1.5fr) repeat(3, minmax(110px, .55fr)); align-items: stretch; border-top: 1px solid var(--av-coord-line); background: color-mix(in srgb, var(--surface-2) 50%, transparent); }
 .av-coord-throughput-chart { display: grid; grid-template-rows: auto 1fr; gap: 5px; padding: 14px; }
 .av-coord-throughput-chart > span { color: var(--text-3); font: 10px "IBM Plex Mono", monospace; letter-spacing: .08em; text-transform: uppercase; }
@@ -6395,10 +6406,13 @@ button.av-session-viz-graph-node:disabled {
 .av-coord-start-card .av-coord-field > label em { color: var(--text-3); font-style: normal; font-weight: 400; }
 .av-coord-start-card .av-coord-field > small { color: var(--text-3); font: 9px/1.45 "IBM Plex Mono", monospace; }
 .av-coord-start-brief .av-coord-textarea { min-height: 184px; border-color: color-mix(in srgb, var(--cyan) 24%, var(--av-coord-line)); background: color-mix(in srgb, var(--surface) 72%, transparent); font-size: 12px; line-height: 1.6; padding: 14px; }
+.av-coord-contract-fields { display: grid; gap: 18px; }
+.av-coord-start-brief .av-coord-contract-textarea { field-sizing: fixed; min-height: 104px; }
 .av-coord-start-card-meta { justify-content: space-between; gap: 16px; border-top: 1px solid var(--av-coord-line); color: var(--text-3); font: 9px/1.4 "IBM Plex Mono", monospace; }
 .av-coord-start-card-meta b { flex: 0 0 auto; color: var(--text-2); font-weight: 500; }
 
 .av-coord-runtime-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.av-coord-policy-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; gap: 18px; }
 .av-coord-start-select { height: 40px; border-color: var(--av-coord-line); background: color-mix(in srgb, var(--surface) 72%, transparent); color: var(--text); }
 .av-coord-playbook-picker { display: grid; grid-template-columns: minmax(0, 1fr) max-content; align-items: center; gap: 12px; }
 .av-coord-playbook-picker button { min-width: 148px; height: 40px; justify-content: center; padding-inline: 15px; white-space: nowrap; }
@@ -6473,7 +6487,18 @@ button.av-session-viz-graph-node:disabled {
 .av-coord-playbook-editor-head strong { color: var(--text); font: 700 12px "IBM Plex Mono", monospace; }
 .av-coord-playbook-editor-head small { color: var(--text-3); font: 9px "IBM Plex Mono", monospace; }
 .av-coord-structured-editor { display: grid; gap: 24px; }
-.av-coord-playbook-settings-grid, .av-coord-playbook-task-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 18px; row-gap: 16px; }
+.av-coord-playbook-settings-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); column-gap: 18px; row-gap: 18px; }
+.av-coord-playbook-settings-grid > .av-coord-field { grid-column: span 3; }
+.av-coord-playbook-settings-grid > .av-coord-third { grid-column: span 2; }
+.av-coord-playbook-settings-grid > .av-coord-wide { grid-column: 1 / -1; }
+.av-coord-playbook-task-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 18px; row-gap: 18px; }
+.av-coord-playbook-task-grid > .av-coord-wide { grid-column: 1 / -1; }
+.av-coord-playbook-settings-grid [data-slot="input"],
+.av-coord-playbook-settings-grid [data-slot="native-select"],
+.av-coord-playbook-task-grid [data-slot="input"],
+.av-coord-playbook-task-grid [data-slot="native-select"] { height: 40px; border-color: var(--av-coord-line); background: color-mix(in srgb, var(--surface) 72%, transparent); font-family: "IBM Plex Mono", monospace; }
+.av-coord-playbook-settings-grid [data-slot="textarea"],
+.av-coord-playbook-task-grid [data-slot="textarea"] { field-sizing: fixed; min-height: 104px; border-color: var(--av-coord-line); background: color-mix(in srgb, var(--surface) 72%, transparent); font-family: "IBM Plex Mono", monospace; line-height: 1.55; padding: 12px 14px; resize: vertical; }
 .av-coord-playbook-phases { display: grid; gap: 16px; border-top: 1px solid var(--av-coord-line); padding-top: 20px; }
 .av-coord-playbook-section-head, .av-coord-playbook-phase-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .av-coord-playbook-section-head > div { display: grid; gap: 3px; }
@@ -6520,7 +6545,14 @@ button.av-session-viz-graph-node:disabled {
   .av-coord-playbook-manager-head > button { width: 100%; justify-content: flex-start; }
   .av-coord-playbook-manager-layout { grid-template-columns: 1fr; }
   .av-coord-playbook-list { border-right: 0; border-bottom: 1px solid var(--av-coord-line); }
-  .av-coord-playbook-settings-grid, .av-coord-playbook-task-grid { grid-template-columns: 1fr; }
+  .av-coord-policy-grid,
+  .av-coord-playbook-settings-grid,
+  .av-coord-playbook-task-grid { grid-template-columns: 1fr; }
+  .av-coord-playbook-settings-grid > .av-coord-field,
+  .av-coord-playbook-settings-grid > .av-coord-third,
+  .av-coord-playbook-settings-grid > .av-coord-wide,
+  .av-coord-playbook-task-grid > .av-coord-field,
+  .av-coord-playbook-task-grid > .av-coord-wide { grid-column: 1; }
   .av-coord-playbook-editor { padding: 18px 16px 22px; }
   .av-coord-playbook-editor-head { align-items: stretch; flex-direction: column; }
   .av-coord-playbook-editor-head > button { width: 100%; }

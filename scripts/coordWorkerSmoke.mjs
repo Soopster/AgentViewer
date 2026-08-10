@@ -341,7 +341,9 @@ await new Promise((resolve, reject) => {
     worker, '--start', 'seeded smoke', '--name', 'start-worker', '--provider=codex',
     '--attach', String(address.port), '--cwd', testDir, '--once', '--identity', startIdentityFile,
     '--playbook', 'release-smoke', '--args', '{"release":"next"}', '--max-agents', '8',
-    '--gate-command', 'npm run verify', '--require-plan-approval',
+    '--gate-command', 'npm run verify', '--require-plan-approval', '--require-review',
+    '--autonomy', 'low', '--token-budget', '24000', '--duration-budget', '2.5',
+    '--acceptance', '{"goal":"Ship the worker","userVisibleAcceptance":["receipt visible"]}',
   ], {
     env: { ...process.env, AGENT_VIEWER_COORD_HOME: coordHome, CODEX_PATH: fakeCodex, CODEX_ARGS_FILE: codexArgsFile },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -355,6 +357,11 @@ const createRequest = requests.find((request) => request.action === 'create_run'
 if (createRequest?.maxAgents !== 8
   || createRequest?.gateCommand !== 'npm run verify'
   || createRequest?.requirePlanApproval !== true
+  || createRequest?.requireReview !== true
+  || createRequest?.autonomy !== 'low'
+  || createRequest?.budget?.maxTokens !== 24000
+  || createRequest?.budget?.maxDurationMinutes !== 2.5
+  || createRequest?.acceptanceContract?.goal !== 'Ship the worker'
   || createRequest?.playbookName !== 'release-smoke'
   || createRequest?.args?.release !== 'next') {
   throw new Error('worker start controls were not forwarded to Coordinator run creation')

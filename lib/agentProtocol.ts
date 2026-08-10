@@ -174,6 +174,125 @@ export type ProtocolAgentStatus = 'ready' | 'idle' | 'working' | 'blocked' | 'do
 export type ProtocolAgentRole = 'lead' | 'teammate'
 export type ProtocolTaskStatus = 'pending' | 'claimed' | 'planning' | 'planned' | 'in_progress' | 'blocked' | 'completed' | 'failed' | 'cancelled'
 export type ProtocolTaskTargetRole = 'lead' | 'teammate' | 'any'
+export type ProtocolAutonomy = 'low' | 'medium' | 'high'
+export type ProtocolSeat = 'director' | 'executor' | 'validator' | 'watcher'
+export type ProtocolReviewStatus = 'not_required' | 'pending' | 'approved' | 'rejected'
+
+export type ProtocolAssumption = {
+  id: string
+  text: string
+  impactIfWrong: string
+  status: 'unconfirmed' | 'confirmed' | 'deferred'
+  source?: string
+}
+
+export type ProtocolAcceptanceContract = {
+  goal: string
+  nonGoals: string[]
+  userVisibleAcceptance: string[]
+  filesLikelyTouched: string[]
+  verificationCommands: string[]
+  manualQa: string[]
+  escalationTriggers: string[]
+  assumptions: ProtocolAssumption[]
+  lockedDecisions: Array<{ decision: string; source: string }>
+}
+
+export type ProtocolNeedsDecision = {
+  id: string
+  question: string
+  options: string[]
+  assumed?: string
+  impactIfWrong: string
+  status: 'open' | 'answered' | 'deferred'
+  answer?: string
+}
+
+export type ProtocolUsageReceipt = {
+  inputTokens?: number
+  outputTokens?: number
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
+  totalTokens?: number
+  costUsd?: number
+  durationMs?: number
+}
+
+export type ProtocolVerificationReceipt = {
+  command: string
+  passed: boolean
+  exitCode?: number
+  summary?: string
+}
+
+export type ProtocolTaskReceipt = {
+  requestedProvider?: AgentProvider
+  requestedModel?: string
+  actualProvider: AgentProvider
+  actualModel?: string
+  provenance: 'ok' | 'drift' | 'unverifiable'
+  stopReason: 'completed' | 'failed' | 'blocked' | 'cancelled' | 'needs_decision'
+  usage?: ProtocolUsageReceipt
+  filesChanged: string[]
+  commandsRun: string[]
+  verification: ProtocolVerificationReceipt[]
+  needsDecision: ProtocolNeedsDecision[]
+  recordedAt: string
+}
+
+export type ProtocolReviewReport = {
+  status: ProtocolReviewStatus
+  reviewerAgentId?: string
+  summary?: string
+  detail?: string
+  reviewedAt?: string
+}
+
+export type ProtocolProgressEvidence = {
+  sequence: number
+  signal: 'heartbeat' | 'turn' | 'transcript' | 'process' | 'artifact' | 'task_event'
+  detail?: string
+  observedAt: string
+}
+
+export type ProtocolPhaseReport = {
+  phase: string
+  status: 'active' | 'passed' | 'failed' | 'blocked' | 'awaiting_approval'
+  requestedModels: string[]
+  actualModels: string[]
+  usage: ProtocolUsageReceipt
+  driftTaskIds: string[]
+  openDecisionIds: string[]
+  completedTaskIds: string[]
+  failedTaskIds: string[]
+  updatedAt: string
+}
+
+export type ProtocolRunBudget = {
+  maxTokens?: number
+  maxDurationMinutes?: number
+}
+
+export type ProtocolResumeCapsule = {
+  runId: string
+  status: ProtocolRunStatus
+  currentPhase?: string
+  completedTasks: Array<{ id: string; summary?: string }>
+  activeTasks: Array<{ id: string; title: string; ownerAgentId?: string; status: ProtocolTaskStatus }>
+  openDecisions: ProtocolNeedsDecision[]
+  assumptions: ProtocolAssumption[]
+  nextAction: string
+  createdAt: string
+}
+
+export type ProtocolLearningCandidate = {
+  id: string
+  kind: 'validation' | 'provenance' | 'liveness' | 'provider' | 'decision' | 'review'
+  summary: string
+  occurrences: number
+  status: 'observed' | 'recurring' | 'promoted'
+  suggestedTarget: 'playbook' | 'role' | 'project_memory'
+}
 
 /**
  * Maps the Coordinator's task-board status onto the A2A task-state enum.
@@ -258,6 +377,16 @@ export type ProtocolEventType =
   | 'plan.completed'
   | 'plan.approved'
   | 'plan.rejected'
+  | 'decision.raised'
+  | 'decision.resolved'
+  | 'review.requested'
+  | 'review.completed'
+  | 'phase.reported'
+  | 'phase.approved'
+  | 'phase.rejected'
+  | 'checkpoint.created'
+  | 'model.drift'
+  | 'learning.promoted'
   // path locks
   | 'lock.requested'
   | 'lock.granted'
@@ -305,6 +434,15 @@ export type ProtocolRun = {
   summary?: string
   gateCommand?: string
   requirePlanApproval?: boolean
+  autonomy: ProtocolAutonomy
+  acceptanceContract: ProtocolAcceptanceContract
+  requireReview: boolean
+  requireReceipts: boolean
+  review: ProtocolReviewReport
+  budget?: ProtocolRunBudget
+  phaseReports: ProtocolPhaseReport[]
+  resumeCapsule?: ProtocolResumeCapsule
+  learningCandidates: ProtocolLearningCandidate[]
   /** Whether locally managed teammates receive isolated git worktrees. */
   useWorktrees?: boolean
   createdAt: string
@@ -357,6 +495,7 @@ export type ProtocolAgent = {
   cancelRequestedAt?: string
   /** Which senders' mailbox messages actually reach this participant — see ProtocolAgentRespondToMode. */
   respondTo?: { mode: ProtocolAgentRespondToMode; allowlist: string[] }
+  progressEvidence?: ProtocolProgressEvidence
   createdAt: string
   updatedAt: string
 }
@@ -393,6 +532,12 @@ export type ProtocolTask = {
   blockedBy: string[]
   /** Playbook phase this task belongs to (display + barrier grouping). */
   phase?: string
+  seat: ProtocolSeat
+  requestedProvider?: AgentProvider
+  requestedModel?: string
+  requestedEffort?: string
+  verifyCommands: string[]
+  receipt?: ProtocolTaskReceipt
   /** Durable terminal report supplied by the task owner. */
   resultSummary?: string
   resultDetail?: string
@@ -486,6 +631,10 @@ export type StartProtocolRunParams = {
    * true; disable only when the user explicitly chooses a shared checkout.
    */
   useWorktrees?: boolean
+  autonomy?: ProtocolAutonomy
+  acceptanceContract?: Partial<ProtocolAcceptanceContract>
+  requireReview?: boolean
+  budget?: ProtocolRunBudget
 }
 
 export type StartProtocolRunResult = {
@@ -528,6 +677,10 @@ export type CreateExternalProtocolRunParams = {
   maxAgents?: number
   gateCommand?: string
   requirePlanApproval?: boolean
+  autonomy?: ProtocolAutonomy
+  acceptanceContract?: Partial<ProtocolAcceptanceContract>
+  requireReview?: boolean
+  budget?: ProtocolRunBudget
   /** Seed the entire task board from this playbook (no lead planning turn). */
   playbook?: RunPlaybook
   /** Interpolated into {{args}} / {{args.<key>}} in playbook task text. */
@@ -698,6 +851,11 @@ export type PlaybookTask = {
   paths?: string[]
   /** Keys (same or earlier phase) this task depends on, beyond the phase barrier. */
   dependsOn?: string[]
+  seat?: ProtocolSeat
+  provider?: AgentProvider
+  model?: string
+  effort?: string
+  verifyCommands?: string[]
 }
 
 export type PlaybookPhase = {
@@ -714,6 +872,10 @@ export type RunPlaybook = {
   maxAgents?: number
   gateCommand?: string
   requirePlanApproval?: boolean
+  autonomy?: ProtocolAutonomy
+  requireReview?: boolean
+  acceptanceContract?: Partial<ProtocolAcceptanceContract>
+  budget?: ProtocolRunBudget
   phases: PlaybookPhase[]
 }
 
@@ -728,6 +890,9 @@ export type PlaybookSummary = {
   maxAgents?: number
   gateCommand?: string
   requirePlanApproval?: boolean
+  autonomy?: ProtocolAutonomy
+  requireReview?: boolean
+  budget?: ProtocolRunBudget
 }
 
 export type ProtocolPhaseRollup = {
@@ -743,6 +908,47 @@ const PLAYBOOK_NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/
 
 export function isValidPlaybookName(value: unknown): value is string {
   return typeof value === 'string' && PLAYBOOK_NAME_RE.test(value)
+}
+
+export function isProtocolAutonomy(value: unknown): value is ProtocolAutonomy {
+  return value === 'low' || value === 'medium' || value === 'high'
+}
+
+function protocolStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim())
+    : []
+}
+
+export function normalizeAcceptanceContract(
+  goal: string,
+  value?: Partial<ProtocolAcceptanceContract>,
+): ProtocolAcceptanceContract {
+  const source = value && typeof value === 'object' ? value : {}
+  return {
+    goal: typeof source.goal === 'string' && source.goal.trim() ? source.goal.trim() : goal.trim(),
+    nonGoals: protocolStringArray(source.nonGoals),
+    userVisibleAcceptance: protocolStringArray(source.userVisibleAcceptance),
+    filesLikelyTouched: protocolStringArray(source.filesLikelyTouched),
+    verificationCommands: protocolStringArray(source.verificationCommands),
+    manualQa: protocolStringArray(source.manualQa),
+    escalationTriggers: protocolStringArray(source.escalationTriggers),
+    assumptions: Array.isArray(source.assumptions) ? source.assumptions.flatMap((entry, index) => {
+      if (!entry || typeof entry !== 'object' || typeof entry.text !== 'string' || !entry.text.trim()) return []
+      return [{
+        id: typeof entry.id === 'string' && entry.id.trim() ? entry.id.trim() : `A${index + 1}`,
+        text: entry.text.trim(),
+        impactIfWrong: typeof entry.impactIfWrong === 'string' ? entry.impactIfWrong.trim() : '',
+        status: entry.status === 'confirmed' || entry.status === 'deferred' ? entry.status : 'unconfirmed',
+        source: typeof entry.source === 'string' && entry.source.trim() ? entry.source.trim() : undefined,
+      } satisfies ProtocolAssumption]
+    }) : [],
+    lockedDecisions: Array.isArray(source.lockedDecisions) ? source.lockedDecisions.flatMap((entry) => (
+      entry && typeof entry === 'object' && typeof entry.decision === 'string' && entry.decision.trim()
+        ? [{ decision: entry.decision.trim(), source: typeof entry.source === 'string' ? entry.source.trim() : 'run contract' }]
+        : []
+    )) : [],
+  }
 }
 
 /** Replace {{args}} / {{args.key}} placeholders; non-string args are JSON-encoded. */
@@ -796,6 +1002,12 @@ export function parseRunPlaybook(value: unknown): RunPlaybook {
       if (task.role !== undefined && task.role !== 'lead' && task.role !== 'teammate' && task.role !== 'any') {
         throw new Error(`task ${taskIndex + 1} in phase "${title}" has invalid role; expected lead, teammate, or any`)
       }
+      if (task.seat !== undefined && !['director', 'executor', 'validator', 'watcher'].includes(String(task.seat))) {
+        throw new Error(`task ${taskIndex + 1} in phase "${title}" has invalid seat`)
+      }
+      if (task.provider !== undefined && !['claude', 'codex', 'opencode', 'copilot', 'pi'].includes(String(task.provider))) {
+        throw new Error(`task ${taskIndex + 1} in phase "${title}" has invalid provider`)
+      }
       const key = typeof task.key === 'string' && task.key.trim() ? task.key.trim() : undefined
       if (key) {
         if (keyPhase.has(key)) throw new Error(`duplicate playbook task key: ${key}`)
@@ -812,6 +1024,11 @@ export function parseRunPlaybook(value: unknown): RunPlaybook {
         dependsOn: Array.isArray(task.dependsOn)
           ? task.dependsOn.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
           : undefined,
+        seat: ['director', 'executor', 'validator', 'watcher'].includes(String(task.seat)) ? task.seat as ProtocolSeat : undefined,
+        provider: typeof task.provider === 'string' ? task.provider as AgentProvider : undefined,
+        model: typeof task.model === 'string' && task.model.trim() ? task.model.trim() : undefined,
+        effort: typeof task.effort === 'string' && task.effort.trim() ? task.effort.trim() : undefined,
+        verifyCommands: protocolStringArray(task.verifyCommands),
       }
     })
     return { title, tasks }
@@ -836,6 +1053,17 @@ export function parseRunPlaybook(value: unknown): RunPlaybook {
     maxAgents: Number.isFinite(Number(record.maxAgents)) && Number(record.maxAgents) > 0 ? Number(record.maxAgents) : undefined,
     gateCommand: typeof record.gateCommand === 'string' && record.gateCommand.trim() ? record.gateCommand.trim() : undefined,
     requirePlanApproval: record.requirePlanApproval === true ? true : undefined,
+    autonomy: isProtocolAutonomy(record.autonomy) ? record.autonomy : undefined,
+    requireReview: record.requireReview === true ? true : undefined,
+    acceptanceContract: record.acceptanceContract && typeof record.acceptanceContract === 'object'
+      ? record.acceptanceContract as Partial<ProtocolAcceptanceContract>
+      : undefined,
+    budget: record.budget && typeof record.budget === 'object' ? {
+      maxTokens: Number.isFinite(Number((record.budget as Record<string, unknown>).maxTokens))
+        ? Math.max(1, Number((record.budget as Record<string, unknown>).maxTokens)) : undefined,
+      maxDurationMinutes: Number.isFinite(Number((record.budget as Record<string, unknown>).maxDurationMinutes))
+        ? Math.max(1, Number((record.budget as Record<string, unknown>).maxDurationMinutes)) : undefined,
+    } : undefined,
     phases,
   }
 }
@@ -854,6 +1082,9 @@ const EVENT_TYPES: ReadonlySet<string> = new Set<ProtocolEventType>([
   'task.created', 'task.planned', 'task.claim', 'task.claimed',
   'task.released', 'task.completed', 'task.failed', 'plan.completed',
   'plan.approved', 'plan.rejected',
+  'decision.raised', 'decision.resolved', 'review.completed', 'phase.reported',
+  'phase.approved', 'phase.rejected',
+  'checkpoint.created', 'model.drift', 'learning.promoted',
   'lock.requested', 'lock.granted', 'lock.denied', 'lock.released',
   'finding', 'learning', 'message', 'handoff', 'review.requested',
   'shutdown.requested', 'run.status',
@@ -1321,7 +1552,7 @@ function protocolGrammar(runId: string, agentId: string): string {
     '- `task.created` (taskId, title, detail, paths, dependsOn) — add newly discovered work as an A2A Task in SUBMITTED state.',
     '- `task.planned` (taskId, summary, detail) — submit an implementation plan for your claimed task before editing when plan approval is required.',
     '- `plan.approved` / `plan.rejected` (taskId, summary/detail) — lead-only approval decision for a teammate plan.',
-    '- `task.completed` / `task.failed` (taskId, summary/detail) — complete with an A2A Task result Artifact or fail with a TaskStatusUpdateEvent. Completion is gated: changes outside your locked paths are rejected with feedback.',
+    '- `task.completed` / `task.failed` (taskId, summary/detail) — complete with an A2A Task result Artifact or fail with a TaskStatusUpdateEvent. For completion, include payload fields `actualModel`, `usage`, `filesChanged`, `commandsRun`, and `needsDecision`; these form the durable receipt. Completion is gated: changes outside your locked paths, failed verification, unresolved low/medium-autonomy decisions, or model drift are rejected with feedback.',
     '- `lock.requested` (paths) — ask for write access before touching paths you do not hold.',
     '- `finding` — a fact other agents need (summary + detail). `learning` — reusable implementation context. When task-scoped, emit these as Artifact updates.',
     '- `message` (to, summary/detail) — an A2A Message to one teammate by name, "lead", or "all". Delivered live when the recipient is mid-turn, else on their next turn.',
@@ -1615,8 +1846,10 @@ export function buildSdkToolsTickPrompt(params: {
     skillGroundingLine(params.cwd),
     roleGuidance,
     'Drain the inbox with coord_read_inbox, then perform every immediately actionable step, including implementation and verification.',
+    'When completing a task, submit an honest structured receipt with the actual model, token usage when available, changed files, commands run, and any unresolved decision. Never claim a requested model was used unless the provider confirms it.',
     'Coordinate actively — teammates cannot see your terminal: answer reply-required mail first, publish reusable discoveries with coord_publish_finding, and message teammates your progress affects with coord_send_message.',
     'If blocked, report it with coord_progress(status="blocked") and the exact obstacle, then message whoever can unblock you.',
+    params.agent.role === 'lead' ? 'At phase or judgment gates, use coord_review_phase and coord_review_run; resolve explicit questions with coord_resolve_decision. Promote recurring learning only through coord_promote_learning so proposed policy changes remain reviewable.' : '',
     'If nothing is immediately actionable, end your turn rather than waiting — the coordinator re-dispatches you when the board changes.',
     ...(params.note ? [`Coordinator note: ${params.note}`] : []),
   ].join(' ')

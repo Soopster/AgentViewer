@@ -125,16 +125,23 @@ if (!coordinationFrame.includes('Use separate teammate checkouts')) {
 if (!coordinationFrame.includes('2 available')) {
   throw new Error(`New Workflow did not expose the saved playbook selector:\n${coordinationFrame}`)
 }
+if (!coordinationFrame.includes('Autonomy') || !coordinationFrame.includes('Judgment review')) {
+  throw new Error(`New Workflow did not expose autonomy and judgment review controls:\n${coordinationFrame}`)
+}
+if (!coordinationFrame.includes('Acceptance checks') || !coordinationFrame.includes('Non-goals') || !coordinationFrame.includes('Manual QA') || !coordinationFrame.includes('Escalation')) {
+  throw new Error(`New Workflow did not expose the acceptance contract controls:\n${coordinationFrame}`)
+}
+if (!coordinationFrame.includes('Tokens') || !coordinationFrame.includes('Minutes')) {
+  throw new Error(`New Workflow did not expose token and duration budgets:\n${coordinationFrame}`)
+}
 
-// Prompt -> playbook is one Tab. Select the first playbook, then move into its
+// Prompt -> contract fields -> playbook. Select the first playbook, then move into its
 // argument field and assert spaces remain spaces (a one-row bottom border once
 // rendered through them as hyphens).
-act(() => {
-  setup.mockInput.pressTab()
-})
-await act(async () => {
-  await setup.flush()
-})
+for (let index = 0; index < 5; index += 1) {
+  act(() => { setup.mockInput.pressTab() })
+  await act(async () => { await setup.flush() })
+}
 act(() => {
   setup.mockInput.pressArrow('right')
 })

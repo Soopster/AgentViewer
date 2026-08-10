@@ -113,6 +113,16 @@ function coordinatorMessage(args: Record<string, any>): string {
   return [summary, detail].filter(Boolean).join('\n\n')
 }
 
+function parsedJsonArray(value: unknown): unknown[] | undefined {
+  if (typeof value !== 'string' || !value.trim()) return undefined
+  try {
+    const parsed = JSON.parse(value)
+    return Array.isArray(parsed) ? parsed : undefined
+  } catch {
+    return undefined
+  }
+}
+
 const COORD_TOOL_SPECS: ToolSpec[] = [
   {
     name: 'coord_wait',
@@ -177,6 +187,11 @@ const COORD_TOOL_SPECS: ToolSpec[] = [
       role: { t: 'enum', values: ['lead', 'teammate', 'any'], optional: true },
       role_name: { t: 'string', min: 1, max: 80, optional: true },
       role_description: { t: 'string', min: 1, max: 1000, optional: true },
+      seat: { t: 'enum', values: ['director', 'executor', 'validator', 'watcher'], optional: true },
+      requested_provider: { t: 'enum', values: ['codex', 'claude', 'copilot', 'opencode', 'pi'], optional: true },
+      requested_model: { t: 'string', min: 1, max: 200, optional: true },
+      requested_effort: { t: 'string', min: 1, max: 80, optional: true },
+      verify_commands: { t: 'stringArray', max: 20, optional: true },
     },
     action: 'create_task',
     mapArgs: (a) => ({
@@ -188,6 +203,11 @@ const COORD_TOOL_SPECS: ToolSpec[] = [
       targetRole: a.role,
       roleName: a.role_name,
       roleDescription: a.role_description,
+      seat: a.seat,
+      requestedProvider: a.requested_provider,
+      requestedModel: a.requested_model,
+      requestedEffort: a.requested_effort,
+      verifyCommands: a.verify_commands,
     }),
   },
   {
@@ -299,15 +319,84 @@ const COORD_TOOL_SPECS: ToolSpec[] = [
     mapArgs: (a) => ({ taskId: a.task_id, approved: a.approved, summary: a.summary, detail: a.detail }),
   },
   {
+    name: 'coord_review_phase',
+    description: 'Lead-only: approve or reject a completed phase gate. Low/medium autonomy runs cannot enter the next phase until this is approved.',
+    fields: {
+      phase: { t: 'string', min: 1, max: 120 },
+      approved: { t: 'boolean' },
+      summary: { t: 'string', max: 2000, optional: true },
+      detail: { t: 'string', max: 8000, optional: true },
+    },
+    action: 'review_phase',
+    mapArgs: (a) => ({ phase: a.phase, approved: a.approved, summary: a.summary, detail: a.detail }),
+  },
+  {
+    name: 'coord_review_run',
+    description: 'Lead-only judgment gate after mechanical validation. Review the acceptance contract, task receipts, scope, risks, and unresolved decisions before approving synthesis.',
+    fields: {
+      approved: { t: 'boolean' },
+      summary: { t: 'string', min: 1, max: 2000 },
+      detail: { t: 'string', max: 16000, optional: true },
+    },
+    action: 'review_run',
+    mapArgs: (a) => ({ approved: a.approved, summary: a.summary, detail: a.detail }),
+  },
+  {
+    name: 'coord_resolve_decision',
+    description: 'Lead-only: answer or explicitly defer a structured open decision raised by a worker receipt.',
+    fields: {
+      task_id: { t: 'string', min: 1 },
+      decision_id: { t: 'string', min: 1 },
+      answer: { t: 'string', min: 1, max: 4000 },
+      deferred: { t: 'boolean', optional: true },
+    },
+    action: 'resolve_decision',
+    mapArgs: (a) => ({ taskId: a.task_id, decisionId: a.decision_id, answer: a.answer, deferred: a.deferred }),
+  },
+  {
+    name: 'coord_promote_learning',
+    description: 'Lead-only: mark a recurring learning candidate for promotion into a playbook, saved role, or project memory. This records intent; it does not silently rewrite artifacts.',
+    fields: {
+      candidate_id: { t: 'string', min: 1 },
+      target: { t: 'enum', values: ['playbook', 'role', 'project_memory'] },
+    },
+    action: 'promote_learning',
+    mapArgs: (a) => ({ candidateId: a.candidate_id, target: a.target }),
+  },
+  {
     name: 'coord_complete_task',
     description: 'Complete your claimed task. Rejected (with feedback) if changes fall outside your granted paths, the quality gate fails, or plan approval is outstanding.',
     fields: {
       task_id: { t: 'string', min: 1 },
       summary: { t: 'string', min: 1, max: 2000 },
       detail: { t: 'string', max: 8000, optional: true },
+      actual_model: { t: 'string', min: 1, max: 200, optional: true },
+      files_changed: { t: 'stringArray', max: 200, optional: true },
+      commands_run: { t: 'stringArray', max: 100, optional: true },
+      input_tokens: { t: 'number', int: true, min: 0, optional: true },
+      output_tokens: { t: 'number', int: true, min: 0, optional: true },
+      total_tokens: { t: 'number', int: true, min: 0, optional: true },
+      cost_usd: { t: 'number', min: 0, optional: true },
+      duration_ms: { t: 'number', int: true, min: 0, optional: true },
+      needs_decision_json: { t: 'string', max: 16000, optional: true },
     },
     action: 'complete_task',
-    mapArgs: (a) => ({ taskId: a.task_id, summary: a.summary, detail: a.detail }),
+    mapArgs: (a) => ({
+      taskId: a.task_id,
+      summary: a.summary,
+      detail: a.detail,
+      actualModel: a.actual_model,
+      filesChanged: a.files_changed,
+      commandsRun: a.commands_run,
+      usage: {
+        inputTokens: a.input_tokens,
+        outputTokens: a.output_tokens,
+        totalTokens: a.total_tokens,
+        costUsd: a.cost_usd,
+        durationMs: a.duration_ms,
+      },
+      needsDecision: parsedJsonArray(a.needs_decision_json),
+    }),
   },
   {
     name: 'coord_fail_task',

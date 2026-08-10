@@ -33,6 +33,7 @@ import {
   parseAgentProtocolEvents,
   parseRunPlaybook,
   playbookExpectsArgs,
+  normalizeAcceptanceContract,
   taskStateFromStatus,
   type AgentProtocolEvent,
   type CreateExternalProtocolRunParams,
@@ -74,6 +75,18 @@ import {
   type ProtocolTask,
   type ProtocolTaskStatus,
   type ProtocolTaskTargetRole,
+  type ProtocolAcceptanceContract,
+  type ProtocolAutonomy,
+  type ProtocolNeedsDecision,
+  type ProtocolLearningCandidate,
+  type ProtocolPhaseReport,
+  type ProtocolReviewReport,
+  type ProtocolResumeCapsule,
+  type ProtocolRunBudget,
+  type ProtocolSeat,
+  type ProtocolTaskReceipt,
+  type ProtocolUsageReceipt,
+  type ProtocolVerificationReceipt,
   type ProtocolWorktreeCleanupResult,
   type RunPlaybook,
   type StartProtocolRunParams,
@@ -158,7 +171,7 @@ const LOCK_LEASE_MS = 20 * 60_000
 // can cancel a teammate's in-flight turn without releasing the task), and
 // respond_to_mode/respond_to_allowlist_json (per-participant mailbox sender
 // gating, mirroring buzz-acp's respond-to modes).
-const SCHEMA_VERSION = 16
+const SCHEMA_VERSION = 17
 const EVENT_WINDOW = 300
 const LOCK_HISTORY_WINDOW = 200
 // Non-terminal tasks (pending/claimed/blocked) are always returned in full —
@@ -271,6 +284,10 @@ type RunController = {
   effort?: string
   gateCommand?: string
   requirePlanApproval: boolean
+  autonomy: ProtocolAutonomy
+  requireReview: boolean
+  acceptanceContract: ProtocolAcceptanceContract
+  budget?: ProtocolRunBudget
   useWorktrees: boolean
   stopped: boolean
   synthesisStarted: boolean
@@ -412,6 +429,15 @@ function initializeSchema(db: SqliteDatabase): void {
       gate_command TEXT,
       require_plan_approval INTEGER NOT NULL DEFAULT 0,
       use_worktrees INTEGER NOT NULL DEFAULT 1,
+      autonomy TEXT NOT NULL DEFAULT 'medium',
+      acceptance_contract_json TEXT NOT NULL DEFAULT '{}',
+      require_review INTEGER NOT NULL DEFAULT 0,
+      require_receipts INTEGER NOT NULL DEFAULT 0,
+      review_json TEXT NOT NULL DEFAULT '{"status":"not_required"}',
+      budget_json TEXT,
+      phase_reports_json TEXT NOT NULL DEFAULT '[]',
+      resume_capsule_json TEXT,
+      learning_candidates_json TEXT NOT NULL DEFAULT '[]',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -432,6 +458,7 @@ function initializeSchema(db: SqliteDatabase): void {
       client_version TEXT,
       protocol_version INTEGER NOT NULL DEFAULT 1,
       capabilities_json TEXT NOT NULL DEFAULT '{}',
+      progress_json TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       PRIMARY KEY (run_id, id)
@@ -455,6 +482,12 @@ function initializeSchema(db: SqliteDatabase): void {
       phase TEXT,
       result_summary TEXT,
       result_detail TEXT,
+      seat TEXT NOT NULL DEFAULT 'executor',
+      requested_provider TEXT,
+      requested_model TEXT,
+      requested_effort TEXT,
+      verify_commands_json TEXT NOT NULL DEFAULT '[]',
+      receipt_json TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       PRIMARY KEY (run_id, id)
@@ -589,6 +622,8 @@ function initializeSchema(db: SqliteDatabase): void {
 // authentication scheme/credentials.
 // v14 → v15: remember the task revision last delivered to each webhook so
 // every observed status change can be pushed, not only terminal completion.
+// v16 → v17: structured contracts, autonomy/review policy, task receipts,
+// seat/model routing, progress evidence, phase reports, and resume capsules.
 function migrateSchema(db: SqliteDatabase): void {
   const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version') as Row | undefined
   const version = row ? Number(row.value) || 0 : 0
@@ -678,6 +713,30 @@ function migrateSchema(db: SqliteDatabase): void {
     'ALTER TABLE protocol_agents ADD COLUMN cancel_requested_at TEXT',
     'ALTER TABLE protocol_agents ADD COLUMN respond_to_mode TEXT',
     'ALTER TABLE protocol_agents ADD COLUMN respond_to_allowlist_json TEXT',
+    'ALTER TABLE protocol_agents ADD COLUMN progress_json TEXT',
+  ]) {
+    try {
+      db.exec(statement)
+    } catch {
+      // column already exists
+    }
+  }
+  for (const statement of [
+    "ALTER TABLE protocol_runs ADD COLUMN autonomy TEXT NOT NULL DEFAULT 'medium'",
+    "ALTER TABLE protocol_runs ADD COLUMN acceptance_contract_json TEXT NOT NULL DEFAULT '{}'",
+    'ALTER TABLE protocol_runs ADD COLUMN require_review INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE protocol_runs ADD COLUMN require_receipts INTEGER NOT NULL DEFAULT 0',
+    `ALTER TABLE protocol_runs ADD COLUMN review_json TEXT NOT NULL DEFAULT '{"status":"not_required"}'`,
+    'ALTER TABLE protocol_runs ADD COLUMN budget_json TEXT',
+    "ALTER TABLE protocol_runs ADD COLUMN phase_reports_json TEXT NOT NULL DEFAULT '[]'",
+    'ALTER TABLE protocol_runs ADD COLUMN resume_capsule_json TEXT',
+    "ALTER TABLE protocol_runs ADD COLUMN learning_candidates_json TEXT NOT NULL DEFAULT '[]'",
+    "ALTER TABLE protocol_tasks ADD COLUMN seat TEXT NOT NULL DEFAULT 'executor'",
+    'ALTER TABLE protocol_tasks ADD COLUMN requested_provider TEXT',
+    'ALTER TABLE protocol_tasks ADD COLUMN requested_model TEXT',
+    'ALTER TABLE protocol_tasks ADD COLUMN requested_effort TEXT',
+    "ALTER TABLE protocol_tasks ADD COLUMN verify_commands_json TEXT NOT NULL DEFAULT '[]'",
+    'ALTER TABLE protocol_tasks ADD COLUMN receipt_json TEXT',
   ]) {
     try {
       db.exec(statement)
@@ -854,10 +913,23 @@ function parseJsonObject<T>(value: unknown): T | undefined {
   }
 }
 
+function parseJsonList<T>(value: unknown): T[] {
+  if (typeof value !== 'string' || !value) return []
+  try {
+    const parsed = JSON.parse(value)
+    return Array.isArray(parsed) ? parsed as T[] : []
+  } catch {
+    return []
+  }
+}
+
 function rowToRun(row: Row): ProtocolRun {
+  const prompt = String(row.prompt)
+  const autonomy: ProtocolAutonomy = row.autonomy === 'low' || row.autonomy === 'high' ? row.autonomy : 'medium'
+  const requireReview = Boolean(Number(row.require_review ?? 0))
   return {
     id: String(row.id),
-    prompt: String(row.prompt),
+    prompt,
     status: String(row.status) as ProtocolRunStatus,
     provider: String(row.provider) as ProtocolRun['provider'],
     baseCwd: String(row.base_cwd),
@@ -866,6 +938,18 @@ function rowToRun(row: Row): ProtocolRun {
     summary: typeof row.summary === 'string' ? row.summary : undefined,
     gateCommand: typeof row.gate_command === 'string' && row.gate_command ? row.gate_command : undefined,
     requirePlanApproval: Boolean(Number(row.require_plan_approval ?? 0)),
+    autonomy,
+    acceptanceContract: normalizeAcceptanceContract(
+      prompt,
+      parseJsonObject<Partial<ProtocolAcceptanceContract>>(row.acceptance_contract_json),
+    ),
+    requireReview,
+    requireReceipts: Boolean(Number(row.require_receipts ?? 0)),
+    review: parseJsonObject<ProtocolReviewReport>(row.review_json) ?? { status: requireReview ? 'pending' : 'not_required' },
+    budget: parseJsonObject<ProtocolRunBudget>(row.budget_json),
+    phaseReports: parseJsonList<ProtocolPhaseReport>(row.phase_reports_json),
+    resumeCapsule: parseJsonObject<ProtocolResumeCapsule>(row.resume_capsule_json),
+    learningCandidates: parseJsonList<ProtocolLearningCandidate>(row.learning_candidates_json),
     useWorktrees: row.use_worktrees == null ? true : Boolean(Number(row.use_worktrees)),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
@@ -895,6 +979,7 @@ function rowToAgent(row: Row): ProtocolAgent {
         }
       : undefined,
     capabilities,
+    progressEvidence: parseJsonObject(row.progress_json),
     lastReportAt: typeof row.last_report_at === 'string' ? row.last_report_at : undefined,
     cancelRequestedAt: typeof row.cancel_requested_at === 'string' ? row.cancel_requested_at : undefined,
     respondTo: isRespondToMode(row.respond_to_mode)
@@ -972,6 +1057,12 @@ function rowToTask(row: Row): ProtocolTask {
     paths: parseJsonArray(row.paths_json),
     blockedBy: parseJsonArray(row.blocked_by_json),
     phase: typeof row.phase === 'string' && row.phase ? row.phase : undefined,
+    seat: row.seat === 'director' || row.seat === 'validator' || row.seat === 'watcher' ? row.seat : 'executor',
+    requestedProvider: typeof row.requested_provider === 'string' && row.requested_provider ? row.requested_provider as ProtocolTask['requestedProvider'] : undefined,
+    requestedModel: typeof row.requested_model === 'string' && row.requested_model ? row.requested_model : undefined,
+    requestedEffort: typeof row.requested_effort === 'string' && row.requested_effort ? row.requested_effort : undefined,
+    verifyCommands: parseJsonArray(row.verify_commands_json),
+    receipt: parseJsonObject<ProtocolTaskReceipt>(row.receipt_json),
     resultSummary: typeof row.result_summary === 'string' && row.result_summary ? row.result_summary : undefined,
     resultDetail: typeof row.result_detail === 'string' && row.result_detail ? row.result_detail : undefined,
     createdAt: String(row.created_at),
@@ -1046,7 +1137,18 @@ function annotateLiveTurns(runId: string, agents: ProtocolAgent[]): ProtocolAgen
     const sessionId = controller?.sessionIds.get(agent.id) ?? agent.sessionId
     const turnActive = controller?.turnInFlight.has(agent.id) === true
       || getRunningSessionInfo(sessionId).running
-    const withTurn = turnActive ? { ...agent, turnActive } : agent
+    const withTurn = turnActive
+      ? {
+          ...agent,
+          turnActive,
+          progressEvidence: {
+            sequence: (agent.progressEvidence?.sequence ?? 0) + 1,
+            signal: 'turn' as const,
+            detail: 'Provider turn is actively streaming',
+            observedAt: nowIso(),
+          },
+        }
+      : agent
     return { ...withTurn, liveness: classifyAgentLiveness(withTurn) }
   })
 }
@@ -1387,6 +1489,7 @@ function externalParticipantInstructions(participant: ExternalProtocolParticipan
     'Read the board before acting.',
     ...roleInstructions,
     'Use Coordinator tools for plans, messages, findings, blocking, completion, and heartbeats. Read your inbox between work steps.',
+    'Complete tasks with an honest receipt: report the actual model, token usage when available, changed files, commands run, verification, and any decision still needed. Never claim the requested model was used unless the provider confirms it.',
     'Reply to any reply-required inbox message before other work — silence reads as dropped, not busy — and call coord_progress(status="heartbeat") every ~2 minutes on tasks that run long.',
     'Narrate every mailbox exchange to your own terminal: "<- <sender>: <message>" on receipt, "-> <recipient>: <message>" after sending — your human is watching this terminal, not the board.',
     'If a Coordinator tool call throws (network error, timeout, daemon unreachable), wait ~2s and retry the same call — never give up after one failure, and keep this same identity rather than re-joining.',
@@ -1512,6 +1615,11 @@ type PlaybookTaskPlan = {
   blockedBy: string[]
   phase: string
   targetRole: ProtocolTaskTargetRole
+  seat: ProtocolSeat
+  requestedProvider?: ProtocolRun['provider']
+  requestedModel?: string
+  requestedEffort?: string
+  verifyCommands: string[]
 }
 
 /**
@@ -1561,6 +1669,11 @@ function planPlaybookTasks(playbook: RunPlaybook, args: unknown, startCount: num
         blockedBy: [...new Set([...previousPhaseIds, ...explicitDeps])],
         phase: phase.title,
         targetRole: entry.role ?? 'teammate',
+        seat: entry.seat ?? (entry.role === 'lead' ? 'director' : 'executor'),
+        requestedProvider: entry.provider,
+        requestedModel: entry.model,
+        requestedEffort: entry.effort,
+        verifyCommands: entry.verifyCommands ?? [],
       })
       phaseIds.push(id)
     }
@@ -1611,6 +1724,11 @@ function seedPlaybookTasksSync(
       blockedBy: plan.blockedBy.map((depId) => keyToId.get(depId) ?? depId),
       phase: plan.phase,
       targetRole: plan.targetRole,
+      seat: plan.seat,
+      requestedProvider: plan.requestedProvider,
+      requestedModel: plan.requestedModel,
+      requestedEffort: plan.requestedEffort,
+      verifyCommands: plan.verifyCommands,
     })
     if (plan.key) keyToId.set(plan.key, task.id)
     keyToId.set(plan.id, task.id)
@@ -1624,7 +1742,15 @@ function seedPlaybookTasksSync(
       detail: task.prompt,
       paths: task.paths,
       dependsOn: task.blockedBy,
-      payload: { phase: task.phase, playbook: playbook.name, targetRole: task.targetRole },
+      payload: {
+        phase: task.phase,
+        playbook: playbook.name,
+        targetRole: task.targetRole,
+        seat: task.seat,
+        requestedProvider: task.requestedProvider,
+        requestedModel: task.requestedModel,
+        verifyCommands: task.verifyCommands,
+      },
     })
   }
 }
@@ -1647,6 +1773,10 @@ export async function createExternalProtocolRun(
     throw new Error('run id must be a URI-safe identifier of 200 characters or fewer')
   }
   const ts = nowIso()
+  const autonomy = params.autonomy ?? playbook?.autonomy ?? 'medium'
+  const acceptanceContract = normalizeAcceptanceContract(prompt, params.acceptanceContract ?? playbook?.acceptanceContract)
+  const requireReview = (params.requireReview ?? playbook?.requireReview) === true
+  const budget = params.budget ?? playbook?.budget
   const result = await enqueueWrite((db) => {
     db.exec('BEGIN IMMEDIATE')
     try {
@@ -1654,8 +1784,9 @@ export async function createExternalProtocolRun(
       db.prepare(`
         INSERT INTO protocol_runs (
           id, prompt, status, provider, base_cwd, max_agents, lead_agent_id, summary,
-          gate_command, require_plan_approval, created_at, updated_at
-        ) VALUES (?, ?, 'running', ?, ?, ?, ?, NULL, ?, ?, ?, ?)
+          gate_command, require_plan_approval, autonomy, acceptance_contract_json,
+          require_review, require_receipts, review_json, budget_json, created_at, updated_at
+        ) VALUES (?, ?, 'running', ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         runId,
         prompt,
@@ -1665,6 +1796,12 @@ export async function createExternalProtocolRun(
         agentId,
         (params.gateCommand ?? playbook?.gateCommand)?.trim() || null,
         (params.requirePlanApproval ?? playbook?.requirePlanApproval) === true ? 1 : 0,
+        autonomy,
+        JSON.stringify(acceptanceContract),
+        requireReview ? 1 : 0,
+        1,
+        JSON.stringify({ status: requireReview ? 'pending' : 'not_required' }),
+        budget ? JSON.stringify(budget) : null,
         ts,
         ts,
       )
@@ -2207,6 +2344,11 @@ export async function createExternalProtocolTask(
     targetRole?: ProtocolTaskTargetRole
     roleName?: string
     roleDescription?: string
+    seat?: ProtocolSeat
+    requestedProvider?: ProtocolRun['provider']
+    requestedModel?: string
+    requestedEffort?: string
+    verifyCommands?: string[]
   },
 ): Promise<ExternalProtocolTaskCreateResult> {
   const result = await enqueueWrite(async (db) => {
@@ -2253,6 +2395,11 @@ export async function createExternalProtocolTask(
         targetRole: params.targetRole ?? (reopening ? 'lead' : 'teammate'),
         roleName,
         roleDescription,
+        seat: params.seat,
+        requestedProvider: params.requestedProvider,
+        requestedModel: params.requestedModel?.trim() || undefined,
+        requestedEffort: params.requestedEffort?.trim() || undefined,
+        verifyCommands: [...new Set((params.verifyCommands ?? []).map((command) => command.trim()).filter(Boolean))],
       })
       insertEventSync(db, {
         version: AGENT_PROTOCOL_VERSION,
@@ -2268,6 +2415,11 @@ export async function createExternalProtocolTask(
           ...(task.phase ? { phase: task.phase } : {}),
           targetRole: task.targetRole,
           ...(task.roleName ? { roleName: task.roleName, roleDescription: task.roleDescription } : {}),
+          seat: task.seat,
+          requestedProvider: task.requestedProvider,
+          requestedModel: task.requestedModel,
+          requestedEffort: task.requestedEffort,
+          verifyCommands: task.verifyCommands,
         },
       })
       if (reopening || planning) {
@@ -2885,8 +3037,63 @@ async function rejectExternalCompletion(
   return { accepted: false, reason, ...await externalMutationResult(identity) }
 }
 
+async function maybePauseAtPhaseGate(runId: string): Promise<boolean> {
+  const paused = await enqueueWrite((db) => {
+    const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(runId) as Row | undefined
+    if (!runRow) return false
+    const run = rowToRun(runRow)
+    if (run.autonomy === 'high' || run.status !== 'running') return false
+    refreshRunArtifactsSync(db, runId)
+    const freshRun = rowToRun(db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(runId) as Row)
+    const reports = freshRun.phaseReports
+    if (reports.length < 2) return false
+    const gateIndex = reports.findIndex((report, index) => {
+      if (index >= reports.length - 1 || report.status !== 'passed') return false
+      if ((reports[index + 1]?.completedTaskIds.length ?? 0) > 0 || (reports[index + 1]?.failedTaskIds.length ?? 0) > 0) return false
+      return !db.prepare(`
+        SELECT 1 FROM protocol_events
+        WHERE run_id = ? AND type = 'phase.approved' AND summary = ?
+        ORDER BY created_at DESC LIMIT 1
+      `).get(runId, report.phase)
+    })
+    if (gateIndex < 0) return false
+    const gate = reports[gateIndex]!
+    const nextReports = reports.map((report, index) => index === gateIndex
+      ? { ...report, status: 'awaiting_approval' as const, updatedAt: nowIso() }
+      : report)
+    const ts = nowIso()
+    db.prepare("UPDATE protocol_runs SET status = 'blocked', phase_reports_json = ?, updated_at = ? WHERE id = ?")
+      .run(JSON.stringify(nextReports), ts, runId)
+    insertEventSync(db, {
+      version: AGENT_PROTOCOL_VERSION,
+      runId,
+      agentId: run.leadAgentId ?? 'coordinator',
+      type: 'phase.reported',
+      summary: gate.phase,
+      detail: `Phase ${gate.phase} completed and is awaiting operator approval before ${reports[gateIndex + 1]?.phase}.`,
+      payload: { report: nextReports[gateIndex], autonomy: run.autonomy },
+      timestamp: ts,
+    })
+    if (run.leadAgentId) {
+      insertMessageSync(db, {
+        runId,
+        fromAgentId: 'coordinator',
+        toAgentId: run.leadAgentId,
+        body: `Phase gate: ${gate.phase} is complete. Review its receipts and approve or reject the phase before the next phase starts.`,
+        ts,
+        kind: 'review_request',
+        priority: 'urgent',
+      })
+    }
+    return true
+  })
+  if (paused) notifyRunChanged(runId)
+  return paused
+}
+
 async function maybeStartExternalSynthesis(runId: string): Promise<void> {
   if (controllers.has(runId)) return
+  if (await maybePauseAtPhaseGate(runId)) return
   await enqueueWrite((db) => {
     const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(runId) as Row | undefined
     if (!runRow) return
@@ -2895,6 +3102,21 @@ async function maybeStartExternalSynthesis(runId: string): Promise<void> {
     const tasks = listTasksSync(db, runId)
     if (tasks.length === 0 || tasks.some((task) => !['completed', 'failed', 'cancelled'].includes(task.status))) return
     const ts = nowIso()
+    if (run.requireReview && run.review.status !== 'approved') {
+      const review: ProtocolReviewReport = { status: 'pending' }
+      db.prepare("UPDATE protocol_runs SET status = 'blocked', review_json = ?, updated_at = ? WHERE id = ?")
+        .run(JSON.stringify(review), ts, runId)
+      insertEventSync(db, {
+        version: AGENT_PROTOCOL_VERSION,
+        runId,
+        agentId: run.leadAgentId ?? 'coordinator',
+        type: 'review.requested',
+        summary: 'Mechanical validation is complete; judgment review is required',
+        payload: { review },
+        timestamp: ts,
+      })
+      return
+    }
     db.prepare("UPDATE protocol_runs SET status = 'synthesizing', updated_at = ? WHERE id = ?").run(ts, runId)
     // Status transitions must land in the event log — waiters wake on events,
     // and a run that goes synthesizing silently strands every long-poll until
@@ -2923,7 +3145,16 @@ async function maybeStartExternalSynthesis(runId: string): Promise<void> {
 
 export async function completeExternalProtocolTask(
   identity: ExternalProtocolIdentity,
-  params: { taskId: string; summary: string; detail?: string },
+  params: {
+    taskId: string
+    summary: string
+    detail?: string
+    actualModel?: string
+    usage?: ProtocolUsageReceipt
+    filesChanged?: string[]
+    commandsRun?: string[]
+    needsDecision?: ProtocolNeedsDecision[]
+  },
 ): Promise<ExternalProtocolCompletionResult> {
   const db = await getDatabase()
   const agent = requireExternalParticipantSync(db, identity)
@@ -2946,9 +3177,68 @@ export async function completeExternalProtocolTask(
       `Changes outside granted paths: ${uncovered.slice(0, 12).join(', ')}`,
     )
   }
-  if (run.gateCommand) {
-    const failure = await runGateCommand(run.gateCommand, agent.worktreePath)
-    if (failure) return rejectExternalCompletion(identity, task.id, `Quality gate failed:\n${failure}`)
+  const commands = [...new Set([...task.verifyCommands, ...run.acceptanceContract.verificationCommands, ...(run.gateCommand ? [run.gateCommand] : [])])]
+  const verification: ProtocolVerificationReceipt[] = []
+  for (const command of commands) verification.push(await runVerificationCommand(command, agent.worktreePath))
+  const needsDecision = normalizeNeedsDecisions(params.needsDecision)
+  const receipt: ProtocolTaskReceipt = {
+    requestedProvider: task.requestedProvider,
+    requestedModel: task.requestedModel,
+    actualProvider: agent.provider,
+    actualModel: params.actualModel?.trim() || undefined,
+    provenance: receiptProvenance(task, agent, params.actualModel?.trim() || undefined),
+    stopReason: needsDecision.some((decision) => decision.status === 'open') ? 'needs_decision' : 'completed',
+    usage: params.usage,
+    filesChanged: [...new Set((params.filesChanged ?? []).map((file) => file.trim()).filter(Boolean))],
+    commandsRun: [...new Set([...(params.commandsRun ?? []), ...commands].map((command) => command.trim()).filter(Boolean))],
+    verification,
+    needsDecision,
+    recordedAt: nowIso(),
+  }
+  await enqueueWrite((tx) => {
+    tx.prepare('UPDATE protocol_tasks SET receipt_json = ?, updated_at = ? WHERE run_id = ? AND id = ?')
+      .run(JSON.stringify(receipt), nowIso(), identity.runId, task.id)
+    refreshRunArtifactsSync(tx, identity.runId)
+  })
+  if (receipt.provenance !== 'ok') {
+    await appendProtocolEvent({
+      version: AGENT_PROTOCOL_VERSION,
+      runId: identity.runId,
+      agentId: identity.agentId,
+      type: 'model.drift',
+      taskId: task.id,
+      summary: receipt.provenance === 'drift'
+        ? `${task.id} model drift: requested ${task.requestedProvider ?? agent.provider}/${task.requestedModel ?? 'default'}, actual ${agent.provider}/${receipt.actualModel ?? 'unknown'}`
+        : `${task.id} model provenance is unverifiable`,
+      payload: { receipt },
+    })
+    return rejectExternalCompletion(identity, task.id, 'Model provenance must be verified before this task can complete.')
+  }
+  const openDecisions = needsDecision.filter((decision) => decision.status === 'open')
+  if (openDecisions.length > 0) {
+    await appendProtocolEvent({
+      version: AGENT_PROTOCOL_VERSION,
+      runId: identity.runId,
+      agentId: identity.agentId,
+      type: 'decision.raised',
+      taskId: task.id,
+      summary: `${task.id} raised ${openDecisions.length} open decision${openDecisions.length === 1 ? '' : 's'}`,
+      payload: { decisions: openDecisions },
+    })
+    if (run.autonomy !== 'high') {
+      return rejectExternalCompletion(identity, task.id, 'Open decisions must be answered or explicitly deferred before completion at this autonomy level.')
+    }
+  }
+  const failedVerification = verification.find((entry) => !entry.passed)
+  if (failedVerification) {
+    return rejectExternalCompletion(identity, task.id, `Quality gate failed (${failedVerification.command}):\n${failedVerification.summary ?? 'command failed'}`)
+  }
+  const usedTokens = listTasksSync(db, identity.runId).reduce((total, entry) => total + (entry.receipt?.usage?.totalTokens ?? 0), 0)
+  if (run.budget?.maxTokens && usedTokens > run.budget.maxTokens) {
+    return rejectExternalCompletion(identity, task.id, `Run token budget exceeded (${usedTokens}/${run.budget.maxTokens}).`)
+  }
+  if (run.budget?.maxDurationMinutes && Date.now() - Date.parse(run.createdAt) > run.budget.maxDurationMinutes * 60_000) {
+    return rejectExternalCompletion(identity, task.id, `Run duration budget exceeded (${run.budget.maxDurationMinutes} minutes).`)
   }
   await appendProtocolEvent({
     version: AGENT_PROTOCOL_VERSION,
@@ -2958,6 +3248,7 @@ export async function completeExternalProtocolTask(
     taskId: task.id,
     summary: params.summary.trim() || `${task.id} completed`,
     detail: params.detail?.trim() || undefined,
+    payload: { receipt },
   })
   await maybeStartExternalSynthesis(identity.runId)
   return { accepted: true, ...await externalMutationResult(identity) }
@@ -3360,6 +3651,244 @@ export async function failExternalProtocolTask(
   return externalMutationResult(identity)
 }
 
+async function setProtocolPhaseDecision(
+  runId: string,
+  actorId: string,
+  params: { phase: string; approved: boolean; summary?: string; detail?: string },
+): Promise<ProtocolRunSnapshot> {
+  const result = await enqueueWrite((db) => {
+    const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(runId) as Row | undefined
+    if (!runRow) throw new Error('Coordinator run not found')
+    const run = rowToRun(runRow)
+    const index = run.phaseReports.findIndex((report) => report.phase === params.phase && report.status === 'awaiting_approval')
+    if (index < 0) throw new Error(`Phase is not awaiting approval: ${params.phase}`)
+    const ts = nowIso()
+    const phaseReports = run.phaseReports.map((report, reportIndex) => reportIndex === index
+      ? { ...report, status: params.approved ? 'passed' as const : 'blocked' as const, updatedAt: ts }
+      : report)
+    db.prepare('UPDATE protocol_runs SET status = ?, phase_reports_json = ?, updated_at = ? WHERE id = ?')
+      .run(params.approved ? 'running' : 'blocked', JSON.stringify(phaseReports), ts, runId)
+    insertEventSync(db, {
+      version: AGENT_PROTOCOL_VERSION,
+      runId,
+      agentId: actorId,
+      type: params.approved ? 'phase.approved' : 'phase.rejected',
+      summary: params.phase,
+      detail: [params.summary, params.detail].filter(Boolean).join('\n\n') || undefined,
+      payload: { approved: params.approved },
+      timestamp: ts,
+    })
+    refreshRunArtifactsSync(db, runId)
+    const snapshot = readSnapshotSync(db, runId)
+    if (!snapshot) throw new Error('Coordinator run not found')
+    return snapshot
+  })
+  notifyRunChanged(runId)
+  if (params.approved) void sweepIdleTeammates(runId).catch(() => {})
+  return result
+}
+
+export async function reviewExternalProtocolPhase(
+  identity: ExternalProtocolIdentity,
+  params: { phase: string; approved: boolean; summary?: string; detail?: string },
+): Promise<ProtocolRunSnapshot> {
+  const db = await getDatabase()
+  const agent = requireExternalParticipantSync(db, identity)
+  if (agent.role !== 'lead') throw new Error('Only the Coordinator lead can review a phase gate')
+  return setProtocolPhaseDecision(identity.runId, identity.agentId, params)
+}
+
+export async function reviewProtocolPhaseAdmin(
+  runId: string,
+  params: { phase: string; approved: boolean; summary?: string; detail?: string },
+): Promise<ProtocolRunSnapshot> {
+  return setProtocolPhaseDecision(runId, 'operator', params)
+}
+
+async function setProtocolRunReview(
+  runId: string,
+  actorId: string,
+  params: { approved: boolean; summary: string; detail?: string },
+): Promise<ProtocolRunSnapshot> {
+  const result = await enqueueWrite((db) => {
+    const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(runId) as Row | undefined
+    if (!runRow) throw new Error('Coordinator run not found')
+    const run = rowToRun(runRow)
+    if (!run.requireReview) throw new Error('This run does not require judgment review')
+    const tasks = listTasksSync(db, runId)
+    if (tasks.some((task) => !['completed', 'failed', 'cancelled'].includes(task.status))) {
+      throw new Error('Judgment review requires every task to be terminal')
+    }
+    const invalid = run.requireReceipts ? tasks.filter((task) => task.status === 'completed' && (!task.receipt || task.receipt.provenance !== 'ok' || task.receipt.verification.some((entry) => !entry.passed))) : []
+    if (params.approved && invalid.length > 0) {
+      throw new Error(`Cannot approve review: ${invalid.map((task) => task.id).join(', ')} lack valid receipts`)
+    }
+    const ts = nowIso()
+    const review: ProtocolReviewReport = {
+      status: params.approved ? 'approved' : 'rejected',
+      reviewerAgentId: actorId,
+      summary: params.summary.trim(),
+      detail: params.detail?.trim() || undefined,
+      reviewedAt: ts,
+    }
+    db.prepare('UPDATE protocol_runs SET status = ?, review_json = ?, updated_at = ? WHERE id = ?')
+      .run(params.approved ? 'synthesizing' : 'blocked', JSON.stringify(review), ts, runId)
+    insertEventSync(db, {
+      version: AGENT_PROTOCOL_VERSION,
+      runId,
+      agentId: actorId,
+      type: 'review.completed',
+      summary: params.summary.trim() || (params.approved ? 'Judgment review approved' : 'Judgment review rejected'),
+      detail: params.detail?.trim() || undefined,
+      payload: { review },
+      timestamp: ts,
+    })
+    refreshRunArtifactsSync(db, runId)
+    const snapshot = readSnapshotSync(db, runId)
+    if (!snapshot) throw new Error('Coordinator run not found')
+    return snapshot
+  })
+  notifyRunChanged(runId)
+  if (params.approved) {
+    const controller = controllers.get(runId)
+    if (controller) void maybeStartSynthesis(controller).catch(() => {})
+  }
+  return result
+}
+
+export async function reviewExternalProtocolRun(
+  identity: ExternalProtocolIdentity,
+  params: { approved: boolean; summary: string; detail?: string },
+): Promise<ProtocolRunSnapshot> {
+  const db = await getDatabase()
+  const agent = requireExternalParticipantSync(db, identity)
+  if (agent.role !== 'lead') throw new Error('Only the Coordinator lead can submit judgment review')
+  return setProtocolRunReview(identity.runId, identity.agentId, params)
+}
+
+export async function reviewProtocolRunAdmin(
+  runId: string,
+  params: { approved: boolean; summary: string; detail?: string },
+): Promise<ProtocolRunSnapshot> {
+  return setProtocolRunReview(runId, 'operator', params)
+}
+
+async function setProtocolDecision(
+  runId: string,
+  actorId: string,
+  params: { taskId: string; decisionId: string; answer: string; deferred?: boolean },
+): Promise<ExternalProtocolMutationResult> {
+  const result = await enqueueWrite((db) => {
+    const taskRow = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?').get(runId, params.taskId) as Row | undefined
+    if (!taskRow) throw new Error('Coordinator task not found')
+    const task = rowToTask(taskRow)
+    if (!task.receipt) throw new Error('Task has no receipt decisions')
+    let found = false
+    const decisions = task.receipt.needsDecision.map((decision) => {
+      if (decision.id !== params.decisionId) return decision
+      found = true
+      return { ...decision, status: params.deferred ? 'deferred' as const : 'answered' as const, answer: params.answer.trim() }
+    })
+    if (!found) throw new Error(`Decision not found: ${params.decisionId}`)
+    const receipt = { ...task.receipt, needsDecision: decisions }
+    const ts = nowIso()
+    db.prepare('UPDATE protocol_tasks SET receipt_json = ?, updated_at = ? WHERE run_id = ? AND id = ?')
+      .run(JSON.stringify(receipt), ts, runId, task.id)
+    if (params.deferred) {
+      const run = rowToRun(db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(runId) as Row)
+      const decision = decisions.find((entry) => entry.id === params.decisionId)!
+      const contract = {
+        ...run.acceptanceContract,
+        assumptions: [...run.acceptanceContract.assumptions, {
+          id: decision.id,
+          text: decision.assumed || params.answer.trim(),
+          impactIfWrong: decision.impactIfWrong,
+          status: 'deferred' as const,
+          source: `decision ${decision.id}`,
+        }],
+      }
+      db.prepare('UPDATE protocol_runs SET acceptance_contract_json = ? WHERE id = ?')
+        .run(JSON.stringify(contract), runId)
+    }
+    insertEventSync(db, {
+      version: AGENT_PROTOCOL_VERSION,
+      runId,
+      agentId: actorId,
+      type: 'decision.resolved',
+      taskId: task.id,
+      summary: `${params.decisionId}: ${params.deferred ? 'deferred' : 'answered'}`,
+      detail: params.answer.trim(),
+      timestamp: ts,
+    })
+    refreshRunArtifactsSync(db, runId)
+    return externalMutationResultSync(db, runId, actorId, rowToTask(db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?').get(runId, task.id) as Row))
+  })
+  notifyRunChanged(runId)
+  return result
+}
+
+export async function resolveExternalProtocolDecision(
+  identity: ExternalProtocolIdentity,
+  params: { taskId: string; decisionId: string; answer: string; deferred?: boolean },
+): Promise<ExternalProtocolMutationResult> {
+  const db = await getDatabase()
+  const agent = requireExternalParticipantSync(db, identity)
+  if (agent.role !== 'lead') throw new Error('Only the Coordinator lead can resolve open decisions')
+  return setProtocolDecision(identity.runId, identity.agentId, params)
+}
+
+export async function resolveProtocolDecisionAdmin(
+  runId: string,
+  params: { taskId: string; decisionId: string; answer: string; deferred?: boolean },
+): Promise<ExternalProtocolMutationResult> {
+  return setProtocolDecision(runId, 'operator', params)
+}
+
+async function setLearningCandidatePromotion(
+  runId: string,
+  actorId: string,
+  params: { candidateId: string; target: 'playbook' | 'role' | 'project_memory' },
+): Promise<ExternalProtocolMutationResult> {
+  const result = await enqueueWrite((db) => {
+    const run = rowToRun(db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(runId) as Row)
+    const candidate = run.learningCandidates.find((entry) => entry.id === params.candidateId)
+    if (!candidate) throw new Error(`Learning candidate not found: ${params.candidateId}`)
+    const next = run.learningCandidates.map((entry) => entry.id === candidate.id ? { ...entry, status: 'promoted' as const, suggestedTarget: params.target } : entry)
+    const ts = nowIso()
+    db.prepare('UPDATE protocol_runs SET learning_candidates_json = ?, updated_at = ? WHERE id = ?')
+      .run(JSON.stringify(next), ts, runId)
+    insertEventSync(db, {
+      version: AGENT_PROTOCOL_VERSION,
+      runId,
+      agentId: actorId,
+      type: 'learning.promoted',
+      summary: candidate.summary,
+      payload: { candidateId: candidate.id, target: params.target },
+      timestamp: ts,
+    })
+    return externalMutationResultSync(db, runId, actorId)
+  })
+  notifyRunChanged(runId)
+  return result
+}
+
+export async function promoteExternalLearningCandidate(
+  identity: ExternalProtocolIdentity,
+  params: { candidateId: string; target: 'playbook' | 'role' | 'project_memory' },
+): Promise<ExternalProtocolMutationResult> {
+  const db = await getDatabase()
+  const agent = requireExternalParticipantSync(db, identity)
+  if (agent.role !== 'lead') throw new Error('Only the Coordinator lead can promote learning candidates')
+  return setLearningCandidatePromotion(identity.runId, identity.agentId, params)
+}
+
+export async function promoteLearningCandidateAdmin(
+  runId: string,
+  params: { candidateId: string; target: 'playbook' | 'role' | 'project_memory' },
+): Promise<ExternalProtocolMutationResult> {
+  return setLearningCandidatePromotion(runId, 'operator', params)
+}
+
 export async function finalizeExternalProtocolRun(
   identity: ExternalProtocolIdentity,
   summary: string,
@@ -3373,6 +3902,12 @@ export async function finalizeExternalProtocolRun(
       !['completed', 'failed', 'cancelled'].includes(task.status)
     ))
     if (unfinished.length > 0) throw new Error(`Coordinator run still has ${unfinished.length} unfinished task(s)`)
+    const run = rowToRun(db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(identity.runId) as Row)
+    if (run.requireReview && run.review.status !== 'approved') throw new Error('Coordinator run requires an approved judgment review before finalization')
+    const invalidReceipts = run.requireReceipts ? listTasksSync(db, identity.runId).filter((task) => task.status === 'completed' && (
+      !task.receipt || task.receipt.provenance !== 'ok' || task.receipt.verification.some((entry) => !entry.passed)
+    )) : []
+    if (invalidReceipts.length > 0) throw new Error(`Completed tasks lack valid receipts: ${invalidReceipts.map((task) => task.id).join(', ')}`)
     const ts = nowIso()
     db.prepare("UPDATE protocol_runs SET status = 'completed', summary = ?, updated_at = ? WHERE id = ?")
       .run(finalSummary, ts, identity.runId)
@@ -3712,6 +4247,9 @@ export async function listRunPlaybooks(cwd: string): Promise<RunPlaybookListing>
         maxAgents: playbook.maxAgents,
         gateCommand: playbook.gateCommand,
         requirePlanApproval: playbook.requirePlanApproval,
+        autonomy: playbook.autonomy,
+        requireReview: playbook.requireReview,
+        budget: playbook.budget,
       })
     } catch (error) {
       invalid.push({ file, error: error instanceof Error ? error.message : 'invalid playbook' })
@@ -3802,13 +4340,19 @@ export async function saveExternalProtocolPlaybook(
     maxAgents: run.maxAgents,
     gateCommand: run.gateCommand,
     requirePlanApproval: run.requirePlanApproval || undefined,
+    autonomy: run.autonomy,
+    requireReview: run.requireReview || undefined,
+    acceptanceContract: run.acceptanceContract,
+    budget: run.budget,
     phases: phaseOrder.map((title, phaseIndex) => {
-      const previousPhaseIds = new Set(
-        phaseIndex > 0 ? grouped.get(phaseOrder[phaseIndex - 1])!.map((task) => task.id) : [],
-      )
+      const previousPhaseTasks = phaseIndex > 0
+        ? grouped.get(phaseOrder[phaseIndex - 1]) ?? []
+        : []
+      const phaseTasks = grouped.get(title) ?? []
+      const previousPhaseIds = new Set(previousPhaseTasks.map((task) => task.id))
       return {
         title,
-        tasks: grouped.get(title)!.map((task) => {
+        tasks: phaseTasks.map((task) => {
           // blockedBy contains both model-authored edges and the implicit
           // previous-phase barrier. Export only the former: replay derives the
           // barrier again, so serializing it as explicit dependsOn data makes
@@ -3821,6 +4365,11 @@ export async function saveExternalProtocolPlaybook(
             paths: task.paths.length > 0 ? task.paths : undefined,
             role: task.targetRole,
             dependsOn: explicitDependencies.length > 0 ? explicitDependencies : undefined,
+            seat: task.seat,
+            provider: task.requestedProvider,
+            model: task.requestedModel,
+            effort: task.requestedEffort,
+            verifyCommands: task.verifyCommands.length > 0 ? task.verifyCommands : undefined,
           }
         }),
       }
@@ -3982,6 +4531,112 @@ function listTasksSync(db: SqliteDatabase, runId: string): ProtocolTask[] {
   return (db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? ORDER BY created_at ASC').all(runId) as Row[]).map(rowToTask)
 }
 
+function addUsage(target: ProtocolUsageReceipt, usage?: ProtocolUsageReceipt): ProtocolUsageReceipt {
+  if (!usage) return target
+  for (const key of ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'totalTokens', 'costUsd', 'durationMs'] as const) {
+    const value = usage[key]
+    if (typeof value === 'number' && Number.isFinite(value)) target[key] = (target[key] ?? 0) + value
+  }
+  return target
+}
+
+function buildPhaseReportsSync(tasks: ProtocolTask[], prior: ProtocolPhaseReport[]): ProtocolPhaseReport[] {
+  const priorByPhase = new Map(prior.map((report) => [report.phase, report]))
+  const grouped = new Map<string, ProtocolTask[]>()
+  for (const task of tasks) {
+    const phase = task.phase ?? 'Unphased'
+    grouped.set(phase, [...(grouped.get(phase) ?? []), task])
+  }
+  return [...grouped.entries()].map(([phase, phaseTasks]) => {
+    const usage = phaseTasks.reduce((total, task) => addUsage(total, task.receipt?.usage), {} as ProtocolUsageReceipt)
+    const failedTaskIds = phaseTasks.filter((task) => task.status === 'failed').map((task) => task.id)
+    const completedTaskIds = phaseTasks.filter((task) => task.status === 'completed').map((task) => task.id)
+    const openDecisionIds = phaseTasks.flatMap((task) => task.receipt?.needsDecision ?? [])
+      .filter((decision) => decision.status === 'open').map((decision) => decision.id)
+    const priorStatus = priorByPhase.get(phase)?.status
+    const allTerminal = phaseTasks.every((task) => ['completed', 'failed', 'cancelled'].includes(task.status))
+    const status: ProtocolPhaseReport['status'] = priorStatus === 'awaiting_approval' || priorStatus === 'blocked'
+      ? priorStatus
+      : !allTerminal ? 'active' : failedTaskIds.length > 0 ? 'failed' : openDecisionIds.length > 0 ? 'blocked' : 'passed'
+    return {
+      phase,
+      status,
+      requestedModels: [...new Set(phaseTasks.map((task) => task.requestedModel).filter((value): value is string => Boolean(value)))],
+      actualModels: [...new Set(phaseTasks.map((task) => task.receipt?.actualModel).filter((value): value is string => Boolean(value)))],
+      usage,
+      driftTaskIds: phaseTasks.filter((task) => task.receipt?.provenance !== undefined && task.receipt.provenance !== 'ok').map((task) => task.id),
+      openDecisionIds,
+      completedTaskIds,
+      failedTaskIds,
+      updatedAt: phaseTasks.map((task) => task.updatedAt).toSorted().at(-1) ?? nowIso(),
+    }
+  })
+}
+
+function buildLearningCandidatesSync(db: SqliteDatabase, runId: string, prior: ProtocolLearningCandidate[]): ProtocolLearningCandidate[] {
+  const rows = db.prepare(`
+    SELECT type, summary, COUNT(*) AS occurrences
+    FROM protocol_events
+    WHERE run_id = ? AND type IN ('task.failed', 'model.drift', 'agent.blocked', 'decision.raised', 'review.completed')
+    GROUP BY type, summary
+    ORDER BY occurrences DESC, MAX(created_at) DESC
+    LIMIT 40
+  `).all(runId) as Row[]
+  const promoted = new Set(prior.filter((candidate) => candidate.status === 'promoted').map((candidate) => candidate.id))
+  return rows.map((row) => {
+    const summary = String(row.summary ?? row.type)
+    const id = createHash('sha256').update(`${row.type}\0${summary}`).digest('hex').slice(0, 16)
+    const occurrences = Number(row.occurrences) || 1
+    const kind: ProtocolLearningCandidate['kind'] = row.type === 'model.drift' ? 'provenance'
+      : row.type === 'decision.raised' ? 'decision'
+        : row.type === 'review.completed' ? 'review'
+          : row.type === 'agent.blocked' ? 'liveness' : 'validation'
+    return {
+      id,
+      kind,
+      summary,
+      occurrences,
+      status: promoted.has(id) ? 'promoted' : occurrences >= 2 ? 'recurring' : 'observed',
+      suggestedTarget: kind === 'liveness' || kind === 'provenance' ? 'project_memory' : kind === 'review' ? 'role' : 'playbook',
+    }
+  })
+}
+
+function refreshRunArtifactsSync(db: SqliteDatabase, runId: string): void {
+  const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(runId) as Row | undefined
+  if (!runRow) return
+  const run = rowToRun(runRow)
+  const tasks = listTasksSync(db, runId)
+  const phaseReports = buildPhaseReportsSync(tasks, run.phaseReports)
+  const completedTasks = tasks.filter((task) => task.status === 'completed').map((task) => ({ id: task.id, summary: task.resultSummary }))
+  const activeTasks = tasks.filter((task) => !['completed', 'failed', 'cancelled'].includes(task.status))
+    .map((task) => ({ id: task.id, title: task.title, ownerAgentId: task.ownerAgentId, status: task.status }))
+  const openDecisions = tasks.flatMap((task) => task.receipt?.needsDecision ?? []).filter((decision) => decision.status === 'open')
+  const currentPhase = phaseReports.find((report) => report.status !== 'passed')?.phase ?? phaseReports.at(-1)?.phase
+  const nextAction = run.status === 'blocked'
+    ? openDecisions.length > 0 ? 'Resolve open decisions or approve the current phase.' : 'Review the blocked run and approve, revise, or add follow-up work.'
+    : activeTasks.length > 0 ? `Continue ${activeTasks[0]?.id ?? 'the next active task'}.`
+      : run.requireReview && run.review.status !== 'approved' ? 'Submit the terminal run for judgment review.'
+        : run.status === 'synthesizing' ? 'Finalize the run synthesis.' : 'No action required.'
+  const capsule: ProtocolResumeCapsule = {
+    runId,
+    status: run.status,
+    currentPhase,
+    completedTasks,
+    activeTasks,
+    openDecisions,
+    assumptions: run.acceptanceContract.assumptions,
+    nextAction,
+    createdAt: nowIso(),
+  }
+  const learningCandidates = buildLearningCandidatesSync(db, runId, run.learningCandidates)
+  db.prepare(`
+    UPDATE protocol_runs
+    SET phase_reports_json = ?, resume_capsule_json = ?, learning_candidates_json = ?
+    WHERE id = ?
+  `).run(JSON.stringify(phaseReports), JSON.stringify(capsule), JSON.stringify(learningCandidates), runId)
+}
+
 function taskDepsCompleted(task: ProtocolTask, tasksById: Map<string, ProtocolTask>): boolean {
   return task.blockedBy.every((dep) => tasksById.get(dep)?.status === 'completed')
 }
@@ -4012,6 +4667,8 @@ function shouldPlanTaskSync(db: SqliteDatabase, run: RunController, task: Protoc
 }
 
 function taskClaimableByAgent(task: ProtocolTask, agent: ProtocolAgent, agents: ProtocolAgent[]): boolean {
+  if (task.requestedProvider && task.requestedProvider !== agent.provider) return false
+  if (task.seat === 'director' && agent.role !== 'lead') return false
   if (task.targetRole === 'any' || task.targetRole === agent.role) return true
   if (agent.role !== 'lead' || task.targetRole !== 'teammate') return false
   // A lone lead can still execute a saved playbook end to end. Once a live
@@ -4039,7 +4696,7 @@ function claimTaskSync(db: SqliteDatabase, runId: string, agentId: string, taskI
   if (!agentRow) return null
   const agent = rowToAgent(agentRow)
   const runRow = db.prepare('SELECT status FROM protocol_runs WHERE id = ?').get(runId) as Row | undefined
-  if (!runRow || ['completed', 'failed', 'stopped'].includes(String(runRow.status))) return null
+  if (!runRow || !['planning', 'running'].includes(String(runRow.status))) return null
   if (['done', 'failed', 'stopped'].includes(agent.status)) return null
   const agents = listAgentsSync(db, runId)
   const tasks = listTasksSync(db, runId)
@@ -4091,6 +4748,11 @@ function insertTaskSync(db: SqliteDatabase, runId: string, params: {
   targetRole?: ProtocolTaskTargetRole
   roleName?: string
   roleDescription?: string
+  seat?: ProtocolSeat
+  requestedProvider?: ProtocolRun['provider']
+  requestedModel?: string
+  requestedEffort?: string
+  verifyCommands?: string[]
 }): ProtocolTask {
   const ts = nowIso()
   const task: ProtocolTask = {
@@ -4105,17 +4767,26 @@ function insertTaskSync(db: SqliteDatabase, runId: string, params: {
     paths: params.paths.map(normalizeLockPath).filter((entry) => entry !== '**' || params.paths.length === 1),
     blockedBy: params.blockedBy,
     phase: params.phase,
+    seat: params.seat ?? (params.targetRole === 'lead' ? 'director' : 'executor'),
+    requestedProvider: params.requestedProvider,
+    requestedModel: params.requestedModel,
+    requestedEffort: params.requestedEffort,
+    verifyCommands: params.verifyCommands ?? [],
     createdAt: ts,
     updatedAt: ts,
   }
   db.prepare(`
     INSERT INTO protocol_tasks (
-      id, run_id, title, prompt, status, owner_agent_id, target_role, role_name, role_description, paths_json, blocked_by_json, phase, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      id, run_id, title, prompt, status, owner_agent_id, target_role, role_name, role_description,
+      paths_json, blocked_by_json, phase, seat, requested_provider, requested_model, requested_effort,
+      verify_commands_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     task.id, runId, task.title, task.prompt, 'pending', null, task.targetRole,
     task.roleName ?? null, task.roleDescription ?? null,
-    JSON.stringify(task.paths), JSON.stringify(task.blockedBy), task.phase ?? null, ts, ts,
+    JSON.stringify(task.paths), JSON.stringify(task.blockedBy), task.phase ?? null,
+    task.seat, task.requestedProvider ?? null, task.requestedModel ?? null, task.requestedEffort ?? null,
+    JSON.stringify(task.verifyCommands), ts, ts,
   )
   return task
 }
@@ -4368,8 +5039,16 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
       // actively running a turn again, so a pending cancel_requested_at from
       // before that turn started has definitionally been observed and acted
       // on — clear it here rather than requiring a dedicated ack call.
-      db.prepare('UPDATE protocol_agents SET last_seen_at = ?, updated_at = ?, cancel_requested_at = NULL WHERE id = ? AND run_id = ?')
-        .run(ts, ts, event.agentId, event.runId)
+      const priorProgress = parseJsonObject<{ sequence?: number }>((db.prepare(
+        'SELECT progress_json FROM protocol_agents WHERE id = ? AND run_id = ?',
+      ).get(event.agentId, event.runId) as Row | undefined)?.progress_json)
+      db.prepare('UPDATE protocol_agents SET last_seen_at = ?, updated_at = ?, cancel_requested_at = NULL, progress_json = ? WHERE id = ? AND run_id = ?')
+        .run(ts, ts, JSON.stringify({
+          sequence: (priorProgress?.sequence ?? 0) + 1,
+          signal: event.type === 'agent.heartbeat' ? 'heartbeat' : 'task_event',
+          detail: event.summary?.slice(0, 500),
+          observedAt: ts,
+        }), event.agentId, event.runId)
       if (event.type === 'agent.heartbeat') {
         db.prepare(`
           UPDATE protocol_locks SET lease_expires_at = ?, updated_at = ?
@@ -4532,8 +5211,9 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
         if (event.taskId) {
           const resultSummary = event.summary?.trim() || `${event.taskId} completed`
           const resultDetail = event.detail?.trim() || null
-          db.prepare("UPDATE protocol_tasks SET status = 'completed', result_summary = ?, result_detail = ?, updated_at = ? WHERE id = ? AND run_id = ?")
-            .run(resultSummary, resultDetail, ts, event.taskId, event.runId)
+          const receipt = event.payload?.receipt && typeof event.payload.receipt === 'object' ? event.payload.receipt : undefined
+          db.prepare("UPDATE protocol_tasks SET status = 'completed', result_summary = ?, result_detail = ?, receipt_json = COALESCE(?, receipt_json), updated_at = ? WHERE id = ? AND run_id = ?")
+            .run(resultSummary, resultDetail, receipt ? JSON.stringify(receipt) : null, ts, event.taskId, event.runId)
           db.prepare('UPDATE protocol_agents SET task_id = NULL, updated_at = ? WHERE id = ? AND run_id = ? AND task_id = ?')
             .run(ts, event.agentId, event.runId, event.taskId)
           db.prepare("UPDATE protocol_locks SET status = 'released', updated_at = ? WHERE run_id = ? AND agent_id = ? AND task_id = ? AND status = 'active'")
@@ -4571,8 +5251,9 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
         if (event.taskId) {
           const resultSummary = event.summary?.trim() || `${event.taskId} failed`
           const resultDetail = event.detail?.trim() || null
-          db.prepare("UPDATE protocol_tasks SET status = 'failed', result_summary = ?, result_detail = ?, updated_at = ? WHERE id = ? AND run_id = ?")
-            .run(resultSummary, resultDetail, ts, event.taskId, event.runId)
+          const receipt = event.payload?.receipt && typeof event.payload.receipt === 'object' ? event.payload.receipt : undefined
+          db.prepare("UPDATE protocol_tasks SET status = 'failed', result_summary = ?, result_detail = ?, receipt_json = COALESCE(?, receipt_json), updated_at = ? WHERE id = ? AND run_id = ?")
+            .run(resultSummary, resultDetail, receipt ? JSON.stringify(receipt) : null, ts, event.taskId, event.runId)
           db.prepare("UPDATE protocol_locks SET status = 'released', updated_at = ? WHERE run_id = ? AND agent_id = ? AND task_id = ? AND status = 'active'")
             .run(ts, event.runId, event.agentId, event.taskId)
           db.prepare('UPDATE protocol_agents SET task_id = NULL, updated_at = ? WHERE id = ? AND run_id = ? AND task_id = ?')
@@ -4715,6 +5396,7 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
 
       pruneLiveNoiseSync(db, event.runId)
       db.prepare('UPDATE protocol_runs SET updated_at = ? WHERE id = ?').run(ts, event.runId)
+      refreshRunArtifactsSync(db, event.runId)
       db.exec('COMMIT')
       return { snapshot: readSnapshotSync(db, event.runId), newMessageIds }
     } catch (err) {
@@ -5768,6 +6450,7 @@ async function drainAgentStream(controller: RunController, agent: ProtocolAgent,
 
 /** Event application with coordinator-side gating (doc: TaskCompleted hook semantics). */
 async function applyAgentEvent(controller: RunController, agent: ProtocolAgent, event: AgentProtocolEvent): Promise<void> {
+  let appliedEvent = event
   if (event.type === 'task.completed' && event.taskId) {
     if (agent.role === 'teammate' && controller.requirePlanApproval) {
       const db = await getDatabase()
@@ -5804,14 +6487,48 @@ async function applyAgentEvent(controller: RunController, agent: ProtocolAgent, 
       })
       return
     }
-    // Run-level quality gate (the doc's TaskCompleted hook): the configured
-    // command must pass in the assigned agent's checkout or completion bounces
-    // back with the failure output. Explicit lead integration tasks run this
-    // in the main checkout after teammate work has landed.
-    if (controller.gateCommand) {
-      const failure = await runGateCommand(controller.gateCommand, agent.worktreePath)
-      if (failure) {
-        const note = `Completion of ${event.taskId} was REJECTED by the quality gate \`${controller.gateCommand}\` in your checkout:\n${failure}\nFix the failures, re-run the gate yourself, then complete again.`
+    const db = await getDatabase()
+    const taskRow = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?').get(controller.runId, event.taskId) as Row | undefined
+    const task = taskRow ? rowToTask(taskRow) : undefined
+    if (task) {
+      const actualModel = typeof event.payload?.actualModel === 'string' ? event.payload.actualModel.trim() : undefined
+      const needsDecision = normalizeNeedsDecisions(Array.isArray(event.payload?.needsDecision) ? event.payload.needsDecision as ProtocolNeedsDecision[] : undefined)
+      const provenance = receiptProvenance(task, agent, actualModel)
+      if (provenance !== 'ok') {
+        const note = `Completion of ${event.taskId} was REJECTED: model provenance is ${provenance}; requested ${task.requestedProvider ?? agent.provider}/${task.requestedModel ?? 'default'}, actual ${agent.provider}/${actualModel ?? 'unknown'}.`
+        controller.dispatchNotes.set(agent.id, note)
+        await appendProtocolEvent({
+          version: AGENT_PROTOCOL_VERSION,
+          runId: controller.runId,
+          agentId: agent.id,
+          type: 'model.drift',
+          taskId: event.taskId,
+          summary: `task.completed rejected — ${provenance} model provenance`,
+          detail: note,
+        })
+        return
+      }
+      const openDecisions = needsDecision.filter((decision) => decision.status === 'open')
+      if (openDecisions.length > 0 && controller.autonomy !== 'high') {
+        const note = `Completion of ${event.taskId} was REJECTED: ${openDecisions.length} open decision${openDecisions.length === 1 ? '' : 's'} must be answered or deferred.`
+        controller.dispatchNotes.set(agent.id, note)
+        await appendProtocolEvent({
+          version: AGENT_PROTOCOL_VERSION,
+          runId: controller.runId,
+          agentId: agent.id,
+          type: 'decision.raised',
+          taskId: event.taskId,
+          summary: note,
+          payload: { decisions: openDecisions },
+        })
+        return
+      }
+      const commands = [...new Set([...task.verifyCommands, ...controller.acceptanceContract.verificationCommands, ...(controller.gateCommand ? [controller.gateCommand] : [])])]
+      const verification: ProtocolVerificationReceipt[] = []
+      for (const command of commands) verification.push(await runVerificationCommand(command, agent.worktreePath))
+      const failed = verification.find((entry) => !entry.passed)
+      if (failed) {
+        const note = `Completion of ${event.taskId} was REJECTED by the quality gate \`${failed.command}\` in your checkout:\n${failed.summary ?? 'command failed'}\nFix the failures, re-run the gate yourself, then complete again.`
         controller.dispatchNotes.set(agent.id, note)
         await appendProtocolEvent({
           version: AGENT_PROTOCOL_VERSION,
@@ -5819,14 +6536,29 @@ async function applyAgentEvent(controller: RunController, agent: ProtocolAgent, 
           agentId: agent.id,
           type: 'agent.blocked',
           taskId: event.taskId,
-          summary: `task.completed rejected — quality gate failed`,
+          summary: 'task.completed rejected — quality gate failed',
           detail: note,
         })
         return
       }
+      const receipt: ProtocolTaskReceipt = {
+        requestedProvider: task.requestedProvider,
+        requestedModel: task.requestedModel,
+        actualProvider: agent.provider,
+        actualModel,
+        provenance,
+        stopReason: openDecisions.length > 0 ? 'needs_decision' : 'completed',
+        usage: event.payload?.usage && typeof event.payload.usage === 'object' ? event.payload.usage as ProtocolUsageReceipt : undefined,
+        filesChanged: Array.isArray(event.payload?.filesChanged) ? event.payload.filesChanged.filter((value): value is string => typeof value === 'string') : [],
+        commandsRun: commands,
+        verification,
+        needsDecision,
+        recordedAt: nowIso(),
+      }
+      appliedEvent = { ...event, payload: { ...event.payload, receipt } }
     }
   }
-  await appendProtocolEvent(event)
+  await appendProtocolEvent(appliedEvent)
 }
 
 /** Run the gate in a worktree; null = pass, otherwise the failure output tail. */
@@ -5845,6 +6577,49 @@ function runGateCommand(command: string, cwd: string): Promise<string | null> {
       const output = `${String(stdout ?? '')}\n${String(stderr ?? '')}`.trim()
       resolve(output.slice(-1500) || (err instanceof Error ? err.message : 'gate command failed'))
     })
+  })
+}
+
+function runVerificationCommand(command: string, cwd: string): Promise<ProtocolVerificationReceipt> {
+  return new Promise((resolve) => {
+    execFile('/bin/sh', ['-c', command], {
+      cwd,
+      encoding: 'utf8',
+      timeout: 5 * 60_000,
+      maxBuffer: 4 * 1024 * 1024,
+    }, (err, stdout, stderr) => {
+      const output = `${String(stdout ?? '')}\n${String(stderr ?? '')}`.trim()
+      const code = err && typeof err === 'object' && 'code' in err && typeof err.code === 'number' ? err.code : err ? 1 : 0
+      resolve({
+        command,
+        passed: !err,
+        exitCode: code,
+        summary: output.slice(-1500) || (!err ? 'passed' : err instanceof Error ? err.message : 'command failed'),
+      })
+    })
+  })
+}
+
+function receiptProvenance(task: ProtocolTask, agent: ProtocolAgent, actualModel?: string): ProtocolTaskReceipt['provenance'] {
+  if (task.requestedProvider && task.requestedProvider !== agent.provider) return 'drift'
+  if (!task.requestedModel) return 'ok'
+  if (!actualModel) return 'unverifiable'
+  return task.requestedModel === actualModel ? 'ok' : 'drift'
+}
+
+function normalizeNeedsDecisions(value: ProtocolNeedsDecision[] | undefined): ProtocolNeedsDecision[] {
+  if (!Array.isArray(value)) return []
+  return value.slice(0, 20).flatMap((entry, index) => {
+    if (!entry || typeof entry.question !== 'string' || !entry.question.trim()) return []
+    return [{
+      id: typeof entry.id === 'string' && entry.id.trim() ? entry.id.trim() : `Q-${index + 1}`,
+      question: entry.question.trim(),
+      options: Array.isArray(entry.options) ? entry.options.filter((option) => typeof option === 'string' && option.trim()).slice(0, 6) : [],
+      assumed: typeof entry.assumed === 'string' && entry.assumed.trim() ? entry.assumed.trim() : undefined,
+      impactIfWrong: typeof entry.impactIfWrong === 'string' ? entry.impactIfWrong.trim() : '',
+      status: entry.status === 'answered' || entry.status === 'deferred' ? entry.status : 'open',
+      answer: typeof entry.answer === 'string' && entry.answer.trim() ? entry.answer.trim() : undefined,
+    } satisfies ProtocolNeedsDecision]
   })
 }
 
@@ -6012,6 +6787,10 @@ async function dispatchAgentTurn(
     if (!agentRow) return
     const agent = rowToAgent(agentRow)
     activeAgent = agent
+    const activeTaskRow = agent.taskId
+      ? db.prepare('SELECT * FROM protocol_tasks WHERE id = ? AND run_id = ?').get(agent.taskId, controller.runId) as Row | undefined
+      : undefined
+    const task = activeTaskRow ? rowToTask(activeTaskRow) : null
     const sessionId = controller.sessionIds.get(agent.id) ?? agent.sessionId
     const isPending = controller.pendingSessions.has(agent.id)
     controller.pendingSessions.delete(agent.id)
@@ -6024,8 +6803,8 @@ async function dispatchAgentTurn(
         provider: agent.provider,
         cwd: agent.worktreePath,
         isPendingSession: isPending ? true : undefined,
-        model: controller.model,
-        effort: controller.effort,
+        model: task?.requestedModel ?? controller.model,
+        effort: task?.requestedEffort ?? controller.effort,
         detachOnClientAbort: true,
         ...(opts.permissionMode && agent.provider === 'claude' ? { permissionMode: opts.permissionMode } : {}),
       },
@@ -6274,11 +7053,37 @@ async function maybeStartSynthesis(controller: RunController): Promise<void> {
   // and turns the intervention itself into a bogus final synthesis turn.
   if (controller.turnInFlight.has(lead.id)) return
   const tasks = listTasksSync(db, controller.runId)
+  if (await maybePauseAtPhaseGate(controller.runId)) return
   const unfinished = tasks.some((task) => task.status !== 'completed' && task.status !== 'failed' && task.status !== 'cancelled')
   if (tasks.length === 0 || unfinished) return
   const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(controller.runId) as Row | undefined
   if (!runRow) return
   const run = rowToRun(runRow)
+  if (run.requireReview && run.review.status !== 'approved') {
+    const ts = nowIso()
+    await enqueueWrite((tx) => {
+      const review: ProtocolReviewReport = { status: 'pending' }
+      tx.prepare("UPDATE protocol_runs SET status = 'blocked', review_json = ?, updated_at = ? WHERE id = ?")
+        .run(JSON.stringify(review), ts, controller.runId)
+      insertEventSync(tx, {
+        version: AGENT_PROTOCOL_VERSION,
+        runId: controller.runId,
+        agentId: lead.id,
+        type: 'review.requested',
+        summary: 'Mechanical validation is complete; judgment review is required',
+        timestamp: ts,
+      })
+      refreshRunArtifactsSync(tx, controller.runId)
+    })
+    const reviewPrompt = buildSdkToolsTickPrompt({
+      runId: controller.runId,
+      agent: lead,
+      cwd: lead.worktreePath,
+      note: 'All tasks are terminal and mechanically validated. Perform judgment review against the acceptance contract and receipts, then call coord_review_run with approved=true or approved=false and concrete findings.',
+    })
+    void dispatchAgentTurn(controller, lead.id, reviewPrompt)
+    return
+  }
   const findingFloor = Number((db.prepare(
     "SELECT COALESCE(MAX(rowid), 0) AS rowid FROM protocol_events WHERE run_id = ? AND agent_id = ? AND type = 'finding'",
   ).get(controller.runId, lead.id) as Row | undefined)?.rowid) || 0
@@ -6534,6 +7339,10 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
   const maxAgents = Math.max(2, Math.min(params.maxAgents ?? playbook?.maxAgents ?? 3, 6))
   const teammateProviders = [...new Set(params.teammateProviders?.filter(Boolean) ?? [])]
   if (teammateProviders.length === 0) teammateProviders.push(params.provider)
+  const autonomy = params.autonomy ?? playbook?.autonomy ?? 'medium'
+  const acceptanceContract = normalizeAcceptanceContract(prompt, params.acceptanceContract ?? playbook?.acceptanceContract)
+  const requireReview = (params.requireReview ?? playbook?.requireReview) === true
+  const budget = params.budget ?? playbook?.budget
 
   const leadSession = await createNewViewSession({
     provider: params.provider,
@@ -6554,6 +7363,10 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
     effort: params.effort,
     gateCommand: (params.gateCommand ?? playbook?.gateCommand)?.trim() || undefined,
     requirePlanApproval: (params.requirePlanApproval ?? playbook?.requirePlanApproval) === true,
+    autonomy,
+    requireReview,
+    acceptanceContract,
+    budget,
     useWorktrees: params.useWorktrees !== false,
     stopped: false,
     synthesisStarted: false,
@@ -6582,9 +7395,10 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
       db.prepare(`
         INSERT INTO protocol_runs (
           id, prompt, status, provider, base_cwd, max_agents, lead_agent_id, summary,
-          gate_command, require_plan_approval, use_worktrees, created_at, updated_at
+          gate_command, require_plan_approval, use_worktrees, autonomy, acceptance_contract_json,
+          require_review, require_receipts, review_json, budget_json, created_at, updated_at
         )
-        VALUES (?, ?, 'planning', ?, ?, ?, 'lead', NULL, ?, ?, ?, ?, ?)
+        VALUES (?, ?, 'planning', ?, ?, ?, 'lead', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         runId,
         prompt,
@@ -6594,6 +7408,12 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
         controller.gateCommand ?? null,
         controller.requirePlanApproval ? 1 : 0,
         controller.useWorktrees ? 1 : 0,
+        autonomy,
+        JSON.stringify(acceptanceContract),
+        requireReview ? 1 : 0,
+        1,
+        JSON.stringify({ status: requireReview ? 'pending' : 'not_required' }),
+        budget ? JSON.stringify(budget) : null,
         ts,
         ts,
       )

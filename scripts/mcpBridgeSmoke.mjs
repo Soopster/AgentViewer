@@ -197,7 +197,8 @@ try {
     'coord_list_runs', 'coord_create_run', 'coord_join_run', 'coord_resume', 'coord_status', 'coord_wait', 'coord_await_run', 'coord_create_task',
     'coord_claim_task', 'coord_read_inbox', 'coord_send_message', 'coord_request_locks',
     'coord_progress', 'coord_publish_finding', 'coord_submit_plan', 'coord_review_plan',
-    'coord_complete_task', 'coord_handoff_task', 'coord_fail_task', 'coord_finalize_run',
+    'coord_complete_task', 'coord_handoff_task', 'coord_fail_task', 'coord_review_phase',
+    'coord_review_run', 'coord_resolve_decision', 'coord_promote_learning', 'coord_finalize_run',
   ]
   const missingTools = requiredTools.filter((name) => !names.has(name))
   if (missingTools.length > 0) {
@@ -296,7 +297,14 @@ try {
 
   const created = await client.callTool({
     name: 'coord_create_run',
-    arguments: { prompt: 'ship together', name: 'codex-cli', provider: 'codex', cwd: '/tmp/codex' },
+    arguments: {
+      prompt: 'ship together', name: 'codex-cli', provider: 'codex', cwd: '/tmp/codex',
+      autonomy: 'medium', require_review: true, budget: { maxTokens: 12000, maxDurationMinutes: 10 },
+      acceptance_contract: {
+        goal: 'Ship the bridge', userVisibleAcceptance: ['CLI receipt is visible'],
+        verificationCommands: ['npm run smoke'], escalationTriggers: ['model drift'],
+      },
+    },
   })
   const createdPayload = JSON.parse(created.content?.[0]?.text ?? '{}')
   if (createdPayload.participant?.agentId !== 'external-codex') throw new Error('Codex CLI did not bind as Coordinator lead')
@@ -311,6 +319,12 @@ try {
   const createRequest = seen.find((entry) => entry.url === '/api/agent-protocol/external' && entry.body?.action === 'create_run')
   if (createRequest?.body?.client?.protocolVersion !== 2 || !Array.isArray(createRequest?.body?.capabilities?.tools)) {
     throw new Error('MCP bridge did not advertise its protocol version and capabilities')
+  }
+  if (createRequest?.body?.autonomy !== 'medium'
+    || createRequest?.body?.requireReview !== true
+    || createRequest?.body?.budget?.maxTokens !== 12000
+    || createRequest?.body?.acceptanceContract?.goal !== 'Ship the bridge') {
+    throw new Error('Coordinator run policy did not cross the MCP bridge')
   }
   const runs = await client.callTool({ name: 'coord_list_runs', arguments: { limit: 5 } })
   const runsPayload = JSON.parse(runs.content?.[0]?.text ?? '{}')
@@ -350,7 +364,11 @@ try {
 
     await client.callTool({
       name: 'coord_create_task',
-      arguments: { title: 'Implement bridge', detail: 'Add the shared workflow', paths: ['lib/bridge.ts'] },
+      arguments: {
+        title: 'Implement bridge', detail: 'Add the shared workflow', paths: ['lib/bridge.ts'],
+        seat: 'executor', requested_provider: 'claude', requested_model: 'claude-opus-4-1',
+        requested_effort: 'high', verify_commands: ['npm run smoke'],
+      },
     })
     const generatedIdempotencyKey = seen.find((entry) => (
       entry.url === '/api/agent-protocol/external'
@@ -358,6 +376,12 @@ try {
     ))?.body?.requestId
     if (typeof generatedIdempotencyKey !== 'string' || !generatedIdempotencyKey.startsWith('mcp-')) {
       throw new Error('MCP bridge did not supply an idempotency key for an omitted mutation request_id')
+    }
+    const createTaskRequest = seen.find((entry) => entry.url === '/api/agent-protocol/external' && entry.body?.action === 'create_task')
+    if (createTaskRequest?.body?.seat !== 'executor'
+      || createTaskRequest?.body?.requestedModel !== 'claude-opus-4-1'
+      || createTaskRequest?.body?.verifyCommands?.[0] !== 'npm run smoke') {
+      throw new Error('Coordinator seat, model provenance, or verification policy did not cross the MCP bridge')
     }
     const claimed = await secondClient.callTool({ name: 'coord_claim_task', arguments: { task_id: 'task-1' } })
     const claimedPayload = JSON.parse(claimed.content?.[0]?.text ?? '{}')
@@ -410,10 +434,21 @@ try {
 
     const completed = await secondClient.callTool({
       name: 'coord_complete_task',
-      arguments: { task_id: 'task-1', summary: 'Bridge implemented' },
+      arguments: {
+        task_id: 'task-1', summary: 'Bridge implemented', actual_model: 'claude-opus-4-1',
+        usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150, durationMs: 1200 },
+        files_changed: ['lib/bridge.ts'], commands_run: ['npm run smoke'],
+        needs_decision: [{ id: 'decision-1', question: 'Ship now?', options: ['yes'], assumed: 'yes', impactIfWrong: 'Delayed release', status: 'open' }],
+      },
     })
     const completedPayload = JSON.parse(completed.content?.[0]?.text ?? '{}')
     if (completedPayload.accepted !== true) throw new Error('External teammate completion did not round-trip')
+    const completionRequest = seen.find((entry) => entry.url === '/api/agent-protocol/external' && entry.body?.action === 'complete_task')
+    if (completionRequest?.body?.actualModel !== 'claude-opus-4-1'
+      || completionRequest?.body?.usage?.totalTokens !== 150
+      || completionRequest?.body?.needsDecision?.[0]?.id !== 'decision-1') {
+      throw new Error('Coordinator task receipt did not cross the MCP bridge')
+    }
 
     if (!seen.some((entry) => (
       entry.url === '/api/agent-protocol/external'
@@ -425,6 +460,16 @@ try {
     }
   } finally {
     await secondClient.close().catch(() => {})
+  }
+
+  await client.callTool({ name: 'coord_review_phase', arguments: { phase: 'implementation', approved: true, summary: 'Receipts reviewed' } })
+  await client.callTool({ name: 'coord_review_run', arguments: { approved: true, summary: 'Intent and scope reviewed' } })
+  await client.callTool({ name: 'coord_resolve_decision', arguments: { task_id: 'task-1', decision_id: 'decision-1', answer: 'yes' } })
+  await client.callTool({ name: 'coord_promote_learning', arguments: { candidate_id: 'learning-1', target: 'playbook' } })
+  for (const action of ['review_phase', 'review_run', 'resolve_decision', 'promote_learning']) {
+    if (!seen.some((entry) => entry.url === '/api/agent-protocol/external' && entry.body?.action === action)) {
+      throw new Error(`Coordinator ${action} did not cross the MCP bridge`)
+    }
   }
 
   const legacyTransport = new StdioClientTransport({

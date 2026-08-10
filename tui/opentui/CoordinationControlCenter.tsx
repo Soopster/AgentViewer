@@ -59,7 +59,7 @@ type Props = {
 const PROVIDERS = ['codex', 'claude', 'copilot', 'opencode', 'pi'] as const
 const ACTIVE_TASKS = new Set(['claimed', 'planning', 'planned', 'in_progress'])
 const TERMINAL_TASKS = new Set(['completed', 'failed', 'cancelled'])
-const ATTENTION_EVENTS = new Set(['agent.blocked', 'task.failed', 'lock.denied', 'plan.rejected', 'review.requested'])
+const ATTENTION_EVENTS = new Set(['agent.blocked', 'task.failed', 'lock.denied', 'plan.rejected', 'review.requested', 'phase.reported', 'phase.rejected', 'decision.raised', 'model.drift'])
 const STUCK_AGENT_STATUSES = new Set(['blocked', 'failed', 'stopped'])
 const ERROR_EVENT_TYPES = new Set(['task.failed', 'agent.blocked'])
 const LIVE_AGENT_STATUSES = new Set(['ready', 'idle', 'working', 'blocked'])
@@ -448,7 +448,10 @@ export function CoordinationControlCenter({
   const staleAgents = agents.filter((agent) => LIVE_AGENT_STATUSES.has(agent.status) && agentLiveness(agent, now) !== 'fresh')
   const deniedLocks = locks.filter((lock) => lock.status === 'denied')
   const failedTasks = tasks.filter((task) => task.status === 'failed')
-  const hasRunAttention = unansweredReplies.length > 0 || staleAgents.length > 0 || deniedLocks.length > 0 || failedTasks.length > 0
+  const openDecisions = tasks.flatMap((task) => task.receipt?.needsDecision ?? []).filter((decision) => decision.status === 'open')
+  const pendingControlGates = (run?.phaseReports.filter((report) => report.status === 'awaiting_approval').length ?? 0)
+    + (run?.requireReview && run.review.status === 'pending' && tasks.length > 0 && tasks.every((task) => TERMINAL_TASKS.has(task.status)) ? 1 : 0)
+  const hasRunAttention = unansweredReplies.length > 0 || staleAgents.length > 0 || deniedLocks.length > 0 || failedTasks.length > 0 || openDecisions.length > 0 || pendingControlGates > 0
   const providerSummary = PROVIDERS.map((provider) => ({ provider, count: fleet.providers.get(provider) ?? 0 }))
   const inspectedAgentIndex = inspectedAgent ? agents.findIndex((agent) => agent.id === inspectedAgent.id) : -1
   const topologyAgentIndex = inspectedAgent ? topologyAgents.findIndex((agent) => agent.id === inspectedAgent.id) : -1
@@ -538,7 +541,9 @@ export function CoordinationControlCenter({
     ? `1-4 focus · tab next · click/wheel · G agent changes · n new · M broadcast · s stop · D delete${run?.useWorktrees === false ? '' : ' · c cleanup'}${canCopyJoinCommand ? ' · i join cmd' : ''} · r refresh · q close`
     : '1-4 focus · tab next · click/wheel · G changes · n new · M all · s stop · r refresh · q close'
   const footerText = `${contextualKeys}  │  ${globalKeys}`
-  const promptHint = canRerunTask
+  const promptHint = run?.status === 'blocked' && run.resumeCapsule?.nextAction
+    ? fit(`NEXT · ${run.resumeCapsule.nextAction}`, innerW - 2)
+    : canRerunTask
     ? '[R] rerun failed/blocked  [M] broadcast  [m] message focused agent'
     : 'Message the current context…  [M] broadcast  [m] message focused agent'
   const activityFooterText = rightW >= 40 ? '4 focus  ·  g tail  ·  / filter  ·  m message' : '4 focus  ·  g tail'
@@ -595,6 +600,7 @@ export function CoordinationControlCenter({
           <text flexShrink={0} fg={staleAgents.length > 0 ? theme.amber : theme.dim} wrapMode="none">{`  · stale ${staleAgents.length}`}</text>
           <text flexShrink={0} fg={deniedLocks.length > 0 ? theme.amber : theme.dim} wrapMode="none">{`  · denied locks ${deniedLocks.length}`}</text>
           <text flexShrink={0} fg={failedTasks.length > 0 ? theme.red : theme.dim} wrapMode="none">{`  · failed ${failedTasks.length}`}</text>
+          <text flexShrink={0} fg={pendingControlGates > 0 || openDecisions.length > 0 ? theme.amber : theme.dim} wrapMode="none">{`  · gates ${pendingControlGates} · decisions ${openDecisions.length}`}</text>
           <box flexGrow={1} minWidth={2} />
           {run ? <text flexShrink={1} fg={checkoutIsShared ? theme.amber : theme.green} wrapMode="none">{checkoutIsShared ? 'shared checkout' : 'isolated checkouts'}</text> : null}
           {busy ? <text fg={theme.amber} wrapMode="none">{'  ·  refreshing'}</text> : null}
@@ -695,6 +701,10 @@ export function CoordinationControlCenter({
                 const taskDetail = [
                   task.id,
                   task.roleName ? `role: ${task.roleName}` : '',
+                  `seat: ${task.seat}`,
+                  task.requestedModel ? `requested: ${task.requestedProvider ?? owner?.provider ?? 'provider'}/${task.requestedModel}` : '',
+                  task.receipt?.actualModel ? `actual: ${task.receipt.actualProvider}/${task.receipt.actualModel}` : '',
+                  task.receipt ? `receipt: ${task.receipt.provenance}${task.receipt.usage?.totalTokens !== undefined ? ` · ${task.receipt.usage.totalTokens} tok` : ''}` : '',
                   task.paths[0] ?? task.status,
                   dependencies.length > 0 ? `← ${dependencies.join(',')}` : '',
                   dependents.length > 0 ? `→ ${dependents.join(',')}` : '',
@@ -775,7 +785,7 @@ export function CoordinationControlCenter({
                 <box height={1} flexShrink={0} flexDirection="row" overflow="hidden">
                   <box width={10} flexShrink={0}><text fg={theme.dim} wrapMode="none">State:</text></box>
                   <box flexGrow={1} minWidth={0} overflow="hidden"><text fg={inspectedLiveness === 'dead' ? theme.red : inspectedLiveness === 'stale' ? theme.amber : inspectedAgent.turnActive ? theme.green : theme.cyan} wrapMode="none">
-                    {fit(`${inspectedAgent.status}${inspectedAgent.turnActive ? ' · streaming' : ''} · heartbeat ${age(inspectedAgent.lastSeenAt, now)} ago · ${inspectedLiveness}`, rightW - 14)}
+                    {fit(`${inspectedAgent.status}${inspectedAgent.turnActive ? ' · streaming' : ''} · ${inspectedAgent.progressEvidence?.signal ?? 'heartbeat'} ${age(inspectedAgent.progressEvidence?.observedAt ?? inspectedAgent.lastSeenAt, now)} ago · ${inspectedLiveness}`, rightW - 14)}
                   </text></box>
                 </box>
                 <box height={1} flexShrink={0} flexDirection="row" overflow="hidden"><box width={10} flexShrink={0}><text fg={theme.dim} wrapMode="none">Tasks:</text></box><box flexGrow={1} minWidth={0} overflow="hidden"><text fg={theme.text} wrapMode="none">{fit(`claimed ${inspectedActiveTasks.map((task) => task.id).join(',') || '—'} · completed ${inspectedCompletedTasks.map((task) => task.id).join(',') || '—'}`, rightW - 14)}</text></box></box>

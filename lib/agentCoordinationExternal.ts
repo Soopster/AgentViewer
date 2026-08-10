@@ -24,6 +24,10 @@ import {
   requestExternalProtocolLocks,
   resumeExternalProtocolParticipant,
   reviewExternalProtocolPlan,
+  reviewExternalProtocolPhase,
+  reviewExternalProtocolRun,
+  resolveExternalProtocolDecision,
+  promoteExternalLearningCandidate,
   runExternalProtocolIdempotent,
   saveExternalProtocolPlaybook,
   saveExternalProtocolRole,
@@ -33,6 +37,7 @@ import {
 } from './agentCoordination'
 import {
   PROTOCOL_FAILURE_CLASSES,
+  isProtocolAutonomy,
   parseRunPlaybook,
   type ExternalProtocolCapabilities,
   type ExternalProtocolClient,
@@ -42,6 +47,9 @@ import {
   type ProtocolMessageKind,
   type ProtocolMessagePriority,
   type ProtocolTaskTargetRole,
+  type ProtocolNeedsDecision,
+  type ProtocolSeat,
+  type ProtocolUsageReceipt,
 } from './agentProtocol'
 import { isAgentProvider } from './provider'
 import type { AgentProvider } from './types'
@@ -67,6 +75,10 @@ function strings(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0).map((entry) => entry.trim())
     : []
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
 }
 
 const RESPOND_TO_MODES = ['owner-only', 'allowlist', 'anyone', 'nobody']
@@ -159,6 +171,10 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
       maxAgents: Number(body.maxAgents) || undefined,
       gateCommand: optionalText(body.gateCommand),
       requirePlanApproval: body.requirePlanApproval === true ? true : undefined,
+      autonomy: isProtocolAutonomy(body.autonomy) ? body.autonomy : undefined,
+      acceptanceContract: record(body.acceptanceContract),
+      requireReview: body.requireReview === true ? true : undefined,
+      budget: record(body.budget),
       playbook,
       playbookArgs: body.args,
       respondTo: respondTo(body),
@@ -189,6 +205,10 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
   if (action === 'create_task') {
     const targetRole = text(body.targetRole) || 'teammate'
     if (!['lead', 'teammate', 'any'].includes(targetRole)) throw new Error('Invalid task target role')
+    const seat = optionalText(body.seat) ?? 'executor'
+    if (!['director', 'executor', 'validator', 'watcher'].includes(seat)) throw new Error('Invalid task seat')
+    const requestedProvider = optionalText(body.requestedProvider)
+    if (requestedProvider && !isAgentProvider(requestedProvider)) throw new Error('Invalid requested provider')
     return mutate(() => createExternalProtocolTask(participantIdentity!, {
       title: text(body.title),
       detail: text(body.detail),
@@ -198,6 +218,11 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
       targetRole: targetRole as ProtocolTaskTargetRole,
       roleName: optionalText(body.roleName),
       roleDescription: optionalText(body.roleDescription),
+      seat: seat as ProtocolSeat,
+      requestedProvider: requestedProvider as AgentProvider | undefined,
+      requestedModel: optionalText(body.requestedModel),
+      requestedEffort: optionalText(body.requestedEffort),
+      verifyCommands: strings(body.verifyCommands),
     }))
   }
   if (action === 'claim_task') return mutate(() => claimExternalProtocolTask(participantIdentity!, optionalText(body.taskId)))
@@ -308,11 +333,49 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
       detail: optionalText(body.detail),
     }))
   }
+  if (action === 'review_phase') {
+    return mutate(() => reviewExternalProtocolPhase(participantIdentity!, {
+      phase: text(body.phase),
+      approved: body.approved === true,
+      summary: optionalText(body.summary),
+      detail: optionalText(body.detail),
+    }))
+  }
+  if (action === 'review_run') {
+    return mutate(() => reviewExternalProtocolRun(participantIdentity!, {
+      approved: body.approved === true,
+      summary: text(body.summary),
+      detail: optionalText(body.detail),
+    }))
+  }
+  if (action === 'resolve_decision') {
+    return mutate(() => resolveExternalProtocolDecision(participantIdentity!, {
+      taskId: text(body.taskId),
+      decisionId: text(body.decisionId),
+      answer: text(body.answer),
+      deferred: body.deferred === true,
+    }))
+  }
+  if (action === 'promote_learning') {
+    const target = text(body.target)
+    if (!['playbook', 'role', 'project_memory'].includes(target)) throw new Error('Invalid learning promotion target')
+    return mutate(() => promoteExternalLearningCandidate(participantIdentity!, {
+      candidateId: text(body.candidateId),
+      target: target as 'playbook' | 'role' | 'project_memory',
+    }))
+  }
   if (action === 'complete_task') {
+    const usage = record(body.usage)
+    const decisions = Array.isArray(body.needsDecision) ? body.needsDecision.filter((entry): entry is ProtocolNeedsDecision => Boolean(record(entry))) : undefined
     return mutate(() => completeExternalProtocolTask(participantIdentity!, {
       taskId: text(body.taskId),
       summary: text(body.summary),
       detail: optionalText(body.detail),
+      actualModel: optionalText(body.actualModel),
+      usage: usage as ProtocolUsageReceipt | undefined,
+      filesChanged: strings(body.filesChanged),
+      commandsRun: strings(body.commandsRun),
+      needsDecision: decisions,
     }))
   }
   if (action === 'fail_task') {

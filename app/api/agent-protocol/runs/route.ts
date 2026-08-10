@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { isAgentProvider } from '@/lib/provider'
 import { listProtocolRuns, startProtocolRun } from '@/lib/agentCoordination'
+import { isProtocolAutonomy } from '@/lib/agentProtocol'
+import type { ProtocolAcceptanceContract, ProtocolRunBudget } from '@/lib/agentProtocol'
 
 export async function GET(request: NextRequest) {
   const limitParam = new URL(request.url).searchParams.get('limit')
@@ -33,9 +35,21 @@ export async function POST(request: NextRequest) {
   const useWorktrees = body.useWorktrees !== false
   const playbookName = typeof body.playbookName === 'string' && body.playbookName.trim() ? body.playbookName.trim() : undefined
   const playbookArgs = body.playbookArgs
+  const autonomy = isProtocolAutonomy(body.autonomy) ? body.autonomy : undefined
+  const acceptanceContract = body.acceptanceContract && typeof body.acceptanceContract === 'object' && !Array.isArray(body.acceptanceContract)
+    ? body.acceptanceContract as Partial<ProtocolAcceptanceContract>
+    : undefined
+  const requireReview = typeof body.requireReview === 'boolean' ? body.requireReview : undefined
+  const budget = body.budget && typeof body.budget === 'object' && !Array.isArray(body.budget)
+    ? body.budget as ProtocolRunBudget
+    : undefined
 
   try {
-    const result = await startProtocolRun({ prompt, baseCwd, provider, teammateProviders, maxAgents, title, model, effort, gateCommand, requirePlanApproval, useWorktrees, playbookName, playbookArgs })
+    const result = await startProtocolRun({
+      prompt, baseCwd, provider, teammateProviders, maxAgents, title, model, effort,
+      gateCommand, requirePlanApproval, useWorktrees, playbookName, playbookArgs,
+      autonomy, acceptanceContract, requireReview, budget,
+    })
     return NextResponse.json(result, { headers: { 'Cache-Control': 'no-store' } })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'

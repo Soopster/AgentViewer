@@ -1,6 +1,6 @@
 ---
 name: coordinate-agents
-description: Start, join, and operate an Agent Viewer Coordinator run through the agent-viewer MCP. Use when any agent CLI session (Claude, Codex, OpenCode, Copilot, or Pi) should coordinate with other external CLIs, fan a goal into parallel tasks, claim work, exchange inbox messages, manage path locks or plan approval, monitor teammates autonomously, synthesize results, or finalize a multi-agent run.
+description: Start, join, and operate an Agent Viewer Coordinator run through the agent-viewer MCP, including seeded playbooks, provider/model routing, acceptance contracts, budgets, plan/phase/judgment gates, decisions, receipts, resumable checkpoints, and learning promotion. Use when any Claude, Codex, OpenCode, Copilot, or Pi session should coordinate with other CLIs, claim work, exchange mailbox messages, manage locks, monitor workers, review evidence, synthesize, or finalize a run.
 ---
 
 # Coordinate Agents
@@ -29,6 +29,31 @@ Every `coord_*` tool has one implementation and one JSON Schema — there is no 
 - If a tool call is rejected, trust the error message over any assumption about your provider — every rejection (invalid enum, ownership check, gate failure, capability mismatch) is a specific, actionable string, not a generic failure, and holds regardless of which CLI you are.
 - The MCP Tasks extension (`coord_wait`/`coord_await_run` durable handles) only activates when your MCP client declares `io.modelcontextprotocol/tasks`; clients that don't simply get the blocking result instead — this is a capability check, not a provider allowlist, so don't infer anything about provider support from whether you receive a task handle.
 - If your provider's MCP client behaves unexpectedly on a specific tool (schema rejected, structured content ignored, elicitation not surfaced) where another provider handles the same call fine, that is a client-side MCP implementation gap in that CLI, not a Coordinator-side special case to work around — report it via `coord_publish_finding` so the lead and other lanes know, rather than silently avoiding the tool.
+
+## Current Coordinator capability surface
+
+Treat `lib/agentProtocol.ts` and the registered MCP schemas as authoritative. The current run contract supports:
+
+- **Run controls:** `autonomy` (`low|medium|high`), `requirePlanApproval`, `requireReview`, `acceptanceContract` (goal, non-goals, user-visible acceptance, verification commands, manual QA, escalation triggers), and `budget` (`maxTokens`, `maxDurationMinutes`).
+- **Routing:** task `seat` (`director|executor|validator|watcher`), target role, requested provider/model/effort, verification commands, explicit dependencies, and phase barriers. A requested provider/model is routing intent, not proof of what ran.
+- **Evidence:** task completion requires a structured receipt with requested/actual provider and model, provenance (`ok|drift|unknown`), stop reason, usage, changed files, verification results, summary/detail, and open decisions. Model drift or unverifiable provenance remains attention-blocking.
+- **Gates:** teammate plan approval, phase reports with approve/reject, completion gates, open decision resolution, and post-mechanical judgment review before synthesis. Board state—not approval prose inside a rejection—is authoritative.
+- **Recovery and learning:** turn cancellation, provider handoff with failure classification, resume capsules/checkpoints, durable progress evidence, recurring learning candidates, and explicit promotion to playbook, role, or project memory. Promotion is a reviewable decision, not an implicit write.
+
+The unbound MCP bridge currently registers these run/playbook tools: `coord_list_runs`, `coord_create_run`, `coord_preview_playbook`, `coord_list_playbooks`, `coord_save_playbook`, `coord_join_run`, `coord_resume`, `coord_status`, `coord_wait`, and `coord_await_run`. Board and evidence tools are `coord_create_task`, `coord_claim_task`, `coord_release_task`, `coord_leave_run`, `coord_read_inbox`, `coord_send_message`, `coord_handoff_task`, `coord_request_locks`, `coord_progress`, `coord_publish_finding`, `coord_query_context`, `coord_remember`, `coord_save_role`, `coord_list_roles`, `coord_submit_plan`, `coord_review_plan`, `coord_review_phase`, `coord_review_run`, `coord_resolve_decision`, `coord_promote_learning`, `coord_cancel_turn`, `coord_complete_task`, `coord_fail_task`, and `coord_finalize_run`.
+
+Use `coord_preview_playbook` before launching a saved or inline playbook when interpolation, phase barriers, or requested routing needs checking. Use `coord_review_phase` and `coord_review_run` for explicit operator gates; use `coord_resolve_decision` for task-level open decisions; use `coord_promote_learning` only after inspecting the candidate and intended target.
+
+## Surface parity
+
+The same controls are exposed through:
+
+- `POST /api/agent-protocol/runs` for creation and `PATCH /api/agent-protocol/runs/:runId` for plan, phase, judgment, decision, learning, and run-control mutations.
+- The OpenTUI **New Workflow** launcher: outcome brief, acceptance checks, non-goals, manual QA, escalation triggers, playbook/args, provider pool, agent limit, checkout isolation, completion gate, autonomy, plan approval, judgment review, token budget, and duration budget. Tab/Shift+Tab traverses these controls; the launch summary mirrors the submitted contract.
+- Web Agent Operations and Playbook Manager with the same acceptance, review, routing, verification, and budget fields.
+- `agent-viewer coord worker` and the CLI coordinator tools, which preserve the same protocol fields when starting or joining unattended workers.
+
+When changing one surface, update the protocol type/schema, external/MCP adapter, web launcher, OpenTUI launcher, worker CLI, and the relevant smoke assertion together. Verify that a saved playbook round-trips requested provider/model/effort/seat and verification commands; do not validate only the visual roster or an idle board.
 
 ## A2A and MCP boundary
 
