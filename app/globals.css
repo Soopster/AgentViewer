@@ -6294,7 +6294,17 @@ button.av-session-viz-graph-node:disabled {
 .av-coord-agent-picker { min-width: 0; height: 30px; border-color: transparent; background: transparent; box-shadow: none; color: var(--text); font-weight: 700; padding: 0 24px 0 4px; }
 .av-coord-agent-picker:focus-visible { border-color: var(--cyan); }
 .av-coord-agent-detail > div:not(.av-coord-action-row):not(.av-coord-inspector-title) { grid-template-columns: 112px minmax(0, 1fr); min-height: 24px; align-items: center; }
-.av-coord-agent-detail .av-coord-action-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.av-coord-agent-detail .av-coord-action-row {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-inline: -16px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--av-coord-line);
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+}
 .av-coord-agent-detail .av-coord-action-row .av-coord-btn:last-child { grid-column: auto; }
 .av-coord-agent-detail .av-coord-action-row .av-coord-btn { height: 29px; font-size: 9px; }
 .av-coord-chevron-expanded { transform: rotate(180deg); }
