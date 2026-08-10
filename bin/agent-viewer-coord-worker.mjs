@@ -15,6 +15,11 @@ import {
   CoordinatorAhpClient,
   coordinatorTransport,
 } from './agent-viewer-ahp-client.mjs'
+import {
+  ACP_TRANSPORT_PROVIDERS,
+  resolveAcpAgentCommand,
+  runAcpProviderTick,
+} from './agent-viewer-acp-client.mjs'
 
 const ahpClients = new Map()
 const shutdownController = new AbortController()
@@ -106,6 +111,8 @@ Options:
   --once               Run one CLI tick and exit
   --identity <file>    Durable 0600 participant and provider-session state
   --model <id>         Provider model override (e.g. sonnet, gpt-5.2-codex, openai-codex/gpt-5.2-codex)
+  --transport <cli|acp> Provider transport (default cli). acp drives claude-agent-acp/codex-acp
+                       over ACP instead of the raw CLI; only supported for --provider claude or codex.
   --playbook <name>    With --start: seed the board from a saved playbook
   --args <value>       With --playbook: args interpolated into task text (JSON or string)
   --max-agents <n>     With --start: participant limit from 2 to 16 (default 6 or playbook value)
@@ -123,7 +130,7 @@ Lifecycle environment (milliseconds):
 }
 
 function parseArgs(args) {
-  const options = { provider: 'codex', providerExplicit: false, cwd: process.cwd(), shared: false, once: false }
+  const options = { provider: 'codex', providerExplicit: false, transport: 'cli', transportExplicit: false, cwd: process.cwd(), shared: false, once: false }
   const booleanOptions = new Map([
     ['--shared', 'shared'],
     ['--once', 'once'],
@@ -138,6 +145,7 @@ function parseArgs(args) {
     ['--join', 'join'],
     ['--provider', 'provider'],
     ['--model', 'model'],
+    ['--transport', 'transport'],
     ['--playbook', 'playbook'],
     ['--args', 'args'],
     ['--max-agents', 'maxAgents'],
@@ -163,6 +171,7 @@ function parseArgs(args) {
     if (!value || (equals < 0 && value.startsWith('--'))) throw new Error(`${optionKey} requires a value`)
     options[optionName] = value
     if (optionName === 'provider') options.providerExplicit = true
+    if (optionName === 'transport') options.transportExplicit = true
     if (equals < 0) index += 1
   }
   return options
@@ -398,6 +407,9 @@ async function providerTick(state, baseUrl) {
   // at .git/worktrees/<name>/index.lock and accepted tasks remain unmergeable.
   const isolatedGitDir = state.checkoutMode === 'isolated' ? gitCommonDir(state.cwd) : null
   const gitDirectoryArgs = isolatedGitDir ? ['--add-dir', isolatedGitDir] : []
+  if (state.transport === 'acp') {
+    return acpProviderTick(state, baseUrl, config, prompt, isolatedGitDir ? [isolatedGitDir] : [])
+  }
   let command
   let args
   const extraEnv = {}
@@ -651,10 +663,136 @@ async function providerTick(state, baseUrl) {
   })
 }
 
+/**
+ * ACP-transport counterpart to providerTick's raw-CLI spawn body — drives
+ * claude-agent-acp/codex-acp via agent-viewer-acp-client.mjs instead of the
+ * provider's native CLI, declaring the coord_* MCP server through ACP's
+ * `session/new.mcpServers` instead of that CLI's own bespoke MCP flag. See
+ * agent-viewer-acp-client.mjs's module doc comment for the full rationale.
+ *
+ * Mirrors providerTick's timeout/heartbeat/run-check scaffold as closely as
+ * the two transports' shapes allow: turn-timeout and inactivity-timeout both
+ * abort the ACP subprocess (runAcpProviderTick kills it on abort), a
+ * heartbeat progress ping keeps the board's liveness view current, and a
+ * run-check poll shuts the worker down promptly if another participant
+ * finishes the run mid-turn. `additionalDirectories` is ACP's standard
+ * equivalent of the raw transport's `--add-dir` for isolated-worktree git
+ * access.
+ */
+async function acpProviderTick(state, baseUrl, config, prompt, additionalDirectories) {
+  const abortController = new AbortController()
+  const forwardShutdown = () => abortController.abort(supervisorStoppedError())
+  if (shutdownController.signal.aborted) forwardShutdown()
+  else shutdownController.signal.addEventListener('abort', forwardShutdown, { once: true })
+
+  let lastActivityAt = Date.now()
+  let turnTimedOut = false
+  let providerTimeoutDetail = null
+  const beginProviderTimeout = (detail) => {
+    if (turnTimedOut) return
+    turnTimedOut = true
+    providerTimeoutDetail = detail
+    abortController.abort(new Error(detail))
+  }
+  const turnTimeoutTimer = setTimeout(() => {
+    beginProviderTimeout(`exceeded the ${PROVIDER_TURN_TIMEOUT_MS}ms Coordinator provider-turn deadline`)
+  }, PROVIDER_TURN_TIMEOUT_MS)
+  turnTimeoutTimer.unref?.()
+  const inactivityTimer = setInterval(() => {
+    if (Date.now() - lastActivityAt < PROVIDER_INACTIVITY_TIMEOUT_MS || turnTimedOut) return
+    beginProviderTimeout(`produced no output for ${PROVIDER_INACTIVITY_TIMEOUT_MS}ms`)
+  }, Math.min(5_000, Math.max(50, Math.floor(PROVIDER_INACTIVITY_TIMEOUT_MS / 2))))
+  inactivityTimer.unref?.()
+  let runCheckInFlight = false
+  const runCheckTimer = setInterval(async () => {
+    if (runCheckInFlight || shutdownRequested) return
+    runCheckInFlight = true
+    try {
+      const current = await api(baseUrl, 'wait', { ...state, cursor: null, timeoutMs: 0 }, 10_000)
+      if (isTerminal(current)) requestShutdown('terminal Coordinator run', 'SIGTERM')
+    } catch (error) {
+      if (isTerminalCoordinatorError(error)) requestShutdown('deleted Coordinator run', 'SIGTERM')
+    } finally {
+      runCheckInFlight = false
+    }
+  }, RUN_CHECK_INTERVAL_MS)
+  runCheckTimer.unref?.()
+  const heartbeat = setInterval(() => {
+    void api(baseUrl, 'progress', {
+      runId: state.runId,
+      agentId: state.agentId,
+      token: state.token,
+      status: 'heartbeat',
+      requestId: `heartbeat-${Date.now()}`,
+    }, 10_000).catch(() => {})
+  }, 45_000)
+  heartbeat.unref()
+  const clearTimers = () => {
+    clearTimeout(turnTimeoutTimer)
+    clearInterval(inactivityTimer)
+    clearInterval(runCheckTimer)
+    clearInterval(heartbeat)
+    shutdownController.signal.removeEventListener('abort', forwardShutdown)
+  }
+
+  let providerOutput = ''
+  try {
+    const result = await runAcpProviderTick({
+      providerId: state.provider,
+      cwd: state.cwd,
+      prompt,
+      mcpServer: { name: 'agent-viewer', command: config.command, args: config.args },
+      env: {
+        AGENT_VIEWER_ATTACH: baseUrl,
+        AGENT_VIEWER_COORD_IDENTITY_FILE: state.identityFile,
+        AGENT_VIEWER_COORD_WORKER: '1',
+      },
+      additionalDirectories,
+      signal: abortController.signal,
+      onOutput: (chunk, stream) => {
+        lastActivityAt = Date.now()
+        process[stream].write(chunk)
+        void appendWorkerLog(state, chunk).catch(() => {})
+        providerOutput = `${providerOutput}${chunk.toString()}`.slice(-16_000)
+      },
+    })
+    if (result.sessionId && result.sessionId !== state.providerSessionId) {
+      state.providerSessionId = result.sessionId
+      await saveState(state.identityFile, state)
+    }
+    if (result.stopReason === 'refusal') {
+      const error = new Error(`${resolveAcpAgentCommand(state.provider)} refused the turn`)
+      error.providerOutput = providerOutput
+      throw error
+    }
+  } catch (error) {
+    if (turnTimedOut) {
+      const timeoutError = new Error(`${resolveAcpAgentCommand(state.provider)} ${providerTimeoutDetail}`)
+      timeoutError.code = 'COORDINATOR_PROVIDER_TURN_TIMEOUT'
+      timeoutError.providerOutput = providerOutput
+      throw timeoutError
+    }
+    error.providerOutput ??= providerOutput
+    throw error
+  } finally {
+    clearTimers()
+  }
+}
+
 let options
 try { options = parseArgs(process.argv.slice(2)) } catch (error) { usage(error.message) }
 if (!options || options.help) usage()
 if (!['codex', 'claude', 'opencode', 'copilot', 'pi'].includes(options.provider)) usage('--provider must be codex, claude, opencode, copilot, or pi')
+if (!['cli', 'acp'].includes(options.transport)) usage('--transport must be cli or acp')
+// A fresh --start/--join with an explicit bad combination is a user mistake —
+// reject it up front. A resumed --identity worker is unattended and may not
+// have --transport re-passed at all (see the loadedIdentity branch below,
+// which only overrides state.transport when --transport was explicit this
+// invocation), so this check only fires for the combination actually given
+// on this command line, not the persisted state.
+if (options.transportExplicit && options.transport === 'acp' && !ACP_TRANSPORT_PROVIDERS.has(options.provider)) {
+  usage(`--transport acp is only supported for --provider ${[...ACP_TRANSPORT_PROVIDERS].join(' or ')}`)
+}
 if (options.maxAgents !== undefined) {
   const maxAgents = Number(options.maxAgents)
   if (!Number.isInteger(maxAgents) || maxAgents < 2 || maxAgents > 16) usage('--max-agents must be an integer from 2 to 16')
@@ -688,6 +826,18 @@ if (options.identity && !options.start && !options.join) {
   state.cwd ||= options.cwd
   state.checkoutMode ||= state.cwd.includes(`${path.sep}coord-worktrees${path.sep}`) ? 'isolated' : 'shared'
   if (options.model) state.model = options.model
+  // Only touch a resumed worker's transport when --transport was explicitly
+  // re-passed this invocation — a bare `--identity <file>` resume (the
+  // common restart path, see agent-viewer-coord-admin.mjs) must keep
+  // whatever transport the file already records.
+  if (options.transportExplicit) {
+    state.transport = ACP_TRANSPORT_PROVIDERS.has(state.provider) && options.transport === 'acp' ? 'acp' : undefined
+  } else if (state.transport === 'acp' && !ACP_TRANSPORT_PROVIDERS.has(state.provider)) {
+    // A --provider failover switched this worker onto a CLI with no ACP
+    // adapter. Fall back to the raw-CLI transport rather than crash-looping
+    // an unattended supervisor over a now-invalid persisted combination.
+    state.transport = undefined
+  }
   if (!options.attach && state.attach) baseUrl = normalizeUrl(state.attach)
 } else {
   if (!options.name || (!options.start && !options.join) || (options.start && options.join)) {
@@ -735,6 +885,7 @@ if (options.identity && !options.start && !options.join) {
     checkoutMode: options.join && !options.shared ? 'isolated' : 'shared',
   }
   if (options.model) state.model = options.model
+  if (options.transport === 'acp') state.transport = 'acp'
   state.identityFile = path.resolve(options.identity || identityFileFor(state))
 }
 state.attach = baseUrl
