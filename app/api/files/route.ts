@@ -3,6 +3,7 @@ import { dirname, extname, isAbsolute, join, resolve } from 'node:path'
 import type { NextRequest } from 'next/server'
 import { runGitCommand } from '@/lib/gitNodeProvider'
 import { listProjectFiles, type ProjectFileEntry } from '@/lib/projectFiles'
+import { runViewSessionAction } from '@/lib/sessionBackend'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -66,7 +67,30 @@ export async function GET(request: NextRequest) {
   try {
     const path = requestedPath(request)
     const showHidden = request.nextUrl.searchParams.get('hidden') === '1'
-    const info = await stat(path)
+    const sessionId = request.nextUrl.searchParams.get('sessionId')?.trim()
+    const provider = request.nextUrl.searchParams.get('provider')
+    const info = await stat(path).catch(() => null)
+
+    if (sessionId && provider === 'claude' && !info?.isDirectory()) {
+      const result = await runViewSessionAction({
+        sessionId,
+        provider: 'claude',
+        body: { action: 'readFile', path, maxBytes: MAX_PREVIEW_BYTES, encoding: 'utf-8' },
+      })
+      const file = result.file && typeof result.file === 'object' ? result.file as Record<string, unknown> : null
+      if (file && typeof file.contents === 'string') {
+        return Response.json({
+          kind: 'text',
+          path: typeof file.absPath === 'string' ? file.absPath : path,
+          size: Buffer.byteLength(file.contents, 'utf8'),
+          content: file.contents,
+          truncated: file.truncated === true,
+          remote: true,
+        })
+      }
+    }
+
+    if (!info) throw new Error('Path was not found locally or in the Claude session filesystem')
 
     if (info.isDirectory()) {
       const [{ entries, truncated }, parentResult] = await Promise.all([

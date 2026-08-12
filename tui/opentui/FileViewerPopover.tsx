@@ -23,6 +23,7 @@ type Props = {
   onClose: () => void
   onKeyHandlerReady: (handler: (key: FileViewerKeyEvent) => void) => void
   onInsertPath?: (path: string) => void
+  readRemoteFile?: (path: string) => Promise<{ contents: string; truncated?: boolean } | null>
   // When provided the popover acts as a folder picker: Enter (or `o`) chooses a
   // directory and closes instead of previewing files. Files stay browsable but
   // are not selectable.
@@ -188,13 +189,25 @@ async function readDirectory(path: string, showHidden: boolean, sortMode: SortMo
   })
 }
 
-async function loadPreview(entry: FileEntry | null, showHidden: boolean, sortMode: SortMode): Promise<Preview> {
+async function loadPreview(
+  entry: FileEntry | null,
+  showHidden: boolean,
+  sortMode: SortMode,
+  readRemoteFile?: Props['readRemoteFile'],
+): Promise<Preview> {
   if (!entry) return { kind: 'empty', message: 'Empty directory' }
   try {
     if (entry.kind === 'directory') {
       return { kind: 'directory', entries: await readDirectory(entry.path, showHidden, sortMode) }
     }
     if (entry.kind !== 'file') return { kind: 'binary', size: entry.size, extension: 'special file' }
+    if (readRemoteFile) {
+      const remote = await readRemoteFile(entry.path)
+      if (remote) {
+        const allLines = remote.contents.replace(/\r\n/g, '\n').split('\n')
+        return { kind: 'text', lines: allLines.slice(0, MAX_PREVIEW_LINES), truncated: remote.truncated === true || allLines.length > MAX_PREVIEW_LINES }
+      }
+    }
     const handle = await open(entry.path, 'r')
     const sample = Buffer.alloc(Math.min(entry.size, MAX_PREVIEW_BYTES))
     const { bytesRead } = await handle.read(sample, 0, sample.length, 0).finally(() => handle.close())
@@ -223,6 +236,7 @@ export function FileViewerPopover({
   onClose,
   onKeyHandlerReady,
   onInsertPath,
+  readRemoteFile,
   onSelectDirectory,
   onToggleVelocityScroll,
 }: Props) {
@@ -286,7 +300,7 @@ export function FileViewerPopover({
     const request = ++requestRef.current
     setPreviewLoading(true)
     const timer = setTimeout(() => {
-      void loadPreview(selectedEntry, showHidden, sortMode).then((next) => {
+      void loadPreview(selectedEntry, showHidden, sortMode, readRemoteFile).then((next) => {
         if (requestRef.current !== request) return
         setPreview(next)
         setPreviewLoading(false)
@@ -294,7 +308,7 @@ export function FileViewerPopover({
       })
     }, 80)
     return () => clearTimeout(timer)
-  }, [selectedEntry, showHidden, sortMode])
+  }, [readRemoteFile, selectedEntry, showHidden, sortMode])
 
   useEffect(() => {
     listScrollRef.current?.scrollTo(Math.max(0, cursor - 2))

@@ -1,4 +1,5 @@
 import { query, startup, type Query, type SDKUserMessage, type WarmQuery } from '@anthropic-ai/claude-agent-sdk'
+import { claudeProcessSpawnOptions } from './claudeProcessSpawner'
 
 // Keep the streaming-input iterator open for the lifetime of the query so
 // the SDK doesn't tear down the subprocess while we're still issuing control
@@ -34,6 +35,7 @@ export function createSessionControlQuery(sessionId: string, model?: string): Qu
       ...(model ? { model } : {}),
       maxTurns: 0,
       enableFileCheckpointing: true,
+      ...claudeProcessSpawnOptions(),
       // Read-only control queries (context usage, supported commands, MCP
       // toggles, dry-run rewinds — all maxTurns:0, never sending a turn). Without
       // this, resuming rewrites the session JSONL and bumps its mtime, so merely
@@ -70,7 +72,12 @@ const READ_MODELS_WARM_OPTIONS = {
 let readModelsWarmSlot: Promise<WarmQuery | null> | null = null
 
 function spawnReadModelsWarm(): Promise<WarmQuery | null> {
-  return startup({ options: { ...READ_MODELS_WARM_OPTIONS } })
+  return startup({
+    options: {
+      ...READ_MODELS_WARM_OPTIONS,
+      ...claudeProcessSpawnOptions(),
+    },
+  })
     .catch((err: unknown) => {
       console.warn('[sdk] startup() warmup failed:', err instanceof Error ? err.message : err)
       return null

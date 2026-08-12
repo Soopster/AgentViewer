@@ -101,6 +101,39 @@ const compactNativeSelectClassName = cn(
   'h-[30px] min-w-0 rounded-[5px] border-[var(--border)] bg-[var(--surface-2)] px-[10px] text-[11px] text-[var(--text)]'
 )
 
+const CLAUDE_DIAGNOSTIC_ACTIONS = [
+  ['reloadPlugins', 'reload-plugins', 'RELOAD PLUGINS', 'Plugins reloaded.', 'Reload plugins from disk'],
+  ['reloadSkills', 'reload-skills', 'RELOAD SKILLS', 'Skills reloaded.', 'Reload skills from disk'],
+  ['resolveSettings', 'resolve-settings', 'RESOLVE SETTINGS', 'Settings resolved.', 'Resolve effective Claude settings'],
+] as const
+
+function claudeDiagnosticActionNotice(
+  action: string,
+  fallback: string,
+  result: Record<string, unknown>,
+): string {
+  if (action === 'setMcpServers') {
+    const authRequired = Array.isArray(result.authRequired)
+      ? result.authRequired.filter((name): name is string => typeof name === 'string')
+      : []
+    const errors = result.errors && typeof result.errors === 'object' && !Array.isArray(result.errors)
+      ? Object.keys(result.errors)
+      : []
+    if (authRequired.length > 0) return `${fallback} Authentication required: ${authRequired.join(', ')}.`
+    if (errors.length > 0) return `${fallback} Connection failed: ${errors.join(', ')}.`
+    return fallback
+  }
+  if (action !== 'resolveSettings') return fallback
+  const sources = typeof result.sourceCount === 'number'
+    ? result.sourceCount
+    : Array.isArray(result.sources) ? result.sources.length : null
+  const effective = typeof result.effectiveKeyCount === 'number'
+    ? result.effectiveKeyCount
+    : Array.isArray(result.effectiveKeys) ? result.effectiveKeys.length : null
+  if (sources == null && effective == null) return fallback
+  return `Settings resolved${sources == null ? '' : ` · ${sources} source${sources === 1 ? '' : 's'}`}${effective == null ? '' : ` · ${effective} effective key${effective === 1 ? '' : 's'}`}`
+}
+
 type Props = {
   messages: SessionMessage[]
   loading: boolean
@@ -5926,7 +5959,7 @@ export default function MessageView({
     draftBeforeHistoryRef.current = { text: '', cursorPos: 0 }
     if (sessionCapabilities?.resumeAtMessage) {
       setResumeFromMessageId(messageId)
-      setSessionActionNotice('Editing — next send will replace from this point in a forked session.')
+      setSessionActionNotice('Editing — safe resume armed; the next send will replace from this point in a guarded fork.')
     }
     focusComposer()
   }, [focusComposer, sessionCapabilities?.resumeAtMessage])
@@ -5949,8 +5982,13 @@ export default function MessageView({
   }, [selectedModelValue, session])
 
   const [claudeMcpBusy, setClaudeMcpBusy] = useState<string | null>(null)
+  const [claudeHookQuery, setClaudeHookQuery] = useState('')
+  const [claudeHookSearching, setClaudeHookSearching] = useState(false)
+  // Tracks only policies applied in this viewer. Absence is deliberately shown
+  // as unknown rather than guessing the SDK's current per-server override.
+  const [claudeMcpPermissionModes, setClaudeMcpPermissionModes] = useState<Record<string, 'default' | 'auto'>>({})
   const runClaudeSessionAction = useCallback(async (action: string, extra: Record<string, unknown>, busyKey: string, successNotice: string) => {
-    if (!session) return
+    if (!session) return null
     setClaudeMcpBusy(busyKey)
     setSessionActionError(null)
     setSessionActionNotice(null)
@@ -5962,14 +6000,98 @@ export default function MessageView({
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
-      setSessionActionNotice(successNotice)
+      const result = data.result && typeof data.result === 'object' && !Array.isArray(data.result)
+        ? data.result as Record<string, unknown>
+        : data as Record<string, unknown>
+      setSessionActionNotice(claudeDiagnosticActionNotice(action, successNotice, result))
       await refreshDiagnostics()
+      return result
     } catch (err) {
       setSessionActionError(err instanceof Error ? err.message : 'Action failed')
+      return null
     } finally {
       setClaudeMcpBusy(null)
     }
   }, [refreshDiagnostics, session])
+
+  const applyClaudeMcpPermissionMode = useCallback(async (
+    serverName: string,
+    permissionModeKey: string,
+    mode: 'default' | 'auto' | null,
+    previous: 'default' | 'auto' | undefined,
+  ) => {
+    setClaudeMcpPermissionModes((current) => {
+      const next = { ...current }
+      if (mode === null) delete next[permissionModeKey]
+      else next[permissionModeKey] = mode
+      return next
+    })
+    const result = await runClaudeSessionAction(
+      'setMcpPermissionModeOverride',
+      { serverName, mode },
+      `mcp:permission:${serverName}`,
+      mode === null ? `${serverName} MCP policy cleared.` : `${serverName} MCP policy set to ${mode}.`,
+    )
+    if (!result) {
+      setClaudeMcpPermissionModes((current) => {
+        const next = { ...current }
+        if (previous) next[permissionModeKey] = previous
+        else delete next[permissionModeKey]
+        return next
+      })
+    }
+  }, [runClaudeSessionAction])
+
+  const addClaudeMcpServer = useCallback(async () => {
+    const serverName = window.prompt('MCP server name')?.trim()
+    if (!serverName) return
+    const rawConfig = window.prompt(
+      'MCP configuration JSON',
+      '{"type":"http","url":"https://example.com/mcp"}',
+    )
+    if (!rawConfig) return
+    try {
+      const config = JSON.parse(rawConfig) as unknown
+      await runClaudeSessionAction(
+        'setMcpServers',
+        { operation: 'add', serverName, config },
+        `mcp:add:${serverName}`,
+        `Added dynamic MCP server ${serverName}.`,
+      )
+    } catch (err) {
+      setSessionActionError(err instanceof Error ? err.message : 'Invalid MCP configuration JSON')
+    }
+  }, [runClaudeSessionAction])
+
+  const searchClaudeHookEvents = useCallback(async () => {
+    if (!session || session.provider !== 'claude') return
+    setClaudeHookSearching(true)
+    setSessionActionError(null)
+    try {
+      const res = await fetch(`/api/sessions/${session.sessionId}/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'listHookEvents', provider: 'claude', query: claudeHookQuery, limit: 100 }),
+      })
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}))
+        throw new Error(errorData.error ?? `HTTP ${res.status}`)
+      }
+      const data = await res.json().catch(() => ({}))
+      if (data.error) throw new Error(data.error)
+      const result = data.result && typeof data.result === 'object' ? data.result as Record<string, unknown> : data
+      const events = Array.isArray(result.events) ? result.events as Array<Record<string, unknown>> : []
+      const items = events.map((event) => `${String(event.timestamp ?? '')} · ${String(event.summary ?? event.event ?? 'Hook')}`)
+      setDiagnosticSections((sections) => sections.map((section) => section.id === 'hooks'
+        ? { ...section, items: items.length > 0 ? items : ['None'] }
+        : section))
+      setSessionActionNotice(`Hook timeline · ${events.length} match${events.length === 1 ? '' : 'es'}`)
+    } catch (err) {
+      setSessionActionError(err instanceof Error ? err.message : 'Failed to search hook timeline')
+    } finally {
+      setClaudeHookSearching(false)
+    }
+  }, [claudeHookQuery, session])
 
   const toggleDiagnostics = useCallback(async () => {
     if (!session) return
@@ -7992,31 +8114,36 @@ export default function MessageView({
               background: 'var(--surface-2)',
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 10 }}>
               <div style={{ fontFamily: "'Oxanium', monospace", fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>
                 Session Diagnostics
               </div>
               {session?.provider === 'claude' && (
-                <button
-                  type="button"
-                  onClick={() => runClaudeSessionAction('reloadPlugins', {}, 'reload-plugins', 'Plugins reloaded.')}
-                  disabled={claudeMcpBusy === 'reload-plugins'}
-                  title="Reload plugins from disk"
-                  style={{
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 10,
-                    color: 'var(--cyan)',
-                    background: 'var(--surface)',
-                    border: '1px solid rgba(56,217,245,0.3)',
-                    borderRadius: 5,
-                    padding: '3px 9px',
-                    cursor: claudeMcpBusy === 'reload-plugins' ? 'not-allowed' : 'pointer',
-                    letterSpacing: '0.08em',
-                    opacity: claudeMcpBusy === 'reload-plugins' ? 0.6 : 1,
-                  }}
-                >
-                  {claudeMcpBusy === 'reload-plugins' ? 'RELOADING…' : 'RELOAD PLUGINS'}
-                </button>
+                <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 5 }}>
+                  {CLAUDE_DIAGNOSTIC_ACTIONS.map(([action, busyKey, label, notice, title]) => (
+                    <button
+                      key={action}
+                      type="button"
+                      onClick={() => { void runClaudeSessionAction(action, {}, busyKey, notice) }}
+                      disabled={claudeMcpBusy !== null}
+                      title={title}
+                      style={{
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 9,
+                        color: 'var(--cyan)',
+                        background: 'var(--surface)',
+                        border: '1px solid rgba(56,217,245,0.3)',
+                        borderRadius: 5,
+                        padding: '3px 8px',
+                        cursor: claudeMcpBusy !== null ? 'not-allowed' : 'pointer',
+                        letterSpacing: '0.06em',
+                        opacity: claudeMcpBusy !== null && claudeMcpBusy !== busyKey ? 0.45 : 1,
+                      }}
+                    >
+                      {claudeMcpBusy === busyKey ? 'WORKING…' : label}
+                    </button>
+                  ))}
+                </div>
               )}
               </div>
             {diagnosticsLoading ? (
@@ -8027,8 +8154,41 @@ export default function MessageView({
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14 }}>
                 {diagnosticSections.map((section) => (
                   <div key={section.id}>
-                    <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em', marginBottom: 6 }}>
-                      {section.title}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, marginBottom: 6 }}>
+                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>
+                        {section.title}
+                      </span>
+                      {section.id === 'mcp' && session?.provider === 'claude' && (
+                        <button
+                          type="button"
+                          onClick={() => { void addClaudeMcpServer() }}
+                          disabled={claudeMcpBusy !== null}
+                          title="Add a session-scoped MCP server"
+                          style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: 'var(--green)', background: 'transparent', border: '1px solid rgba(74,222,128,0.3)', borderRadius: 4, height: 18, padding: '0 5px', cursor: claudeMcpBusy ? 'not-allowed' : 'pointer' }}
+                        >
+                          + ADD
+                        </button>
+                      )}
+                      {section.id === 'hooks' && session?.provider === 'claude' && (
+                        <span style={{ display: 'flex', gap: 4, minWidth: 0 }}>
+                          <input
+                            aria-label="Search Claude hook timeline"
+                            value={claudeHookQuery}
+                            onChange={(event) => setClaudeHookQuery(event.target.value)}
+                            onKeyDown={(event) => { if (event.key === 'Enter') void searchClaudeHookEvents() }}
+                            placeholder="filter hooks"
+                            style={{ width: 110, height: 18, padding: '0 5px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: 'var(--text)', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4 }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => { void searchClaudeHookEvents() }}
+                            disabled={claudeHookSearching}
+                            style={{ height: 18, padding: '0 5px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: 'var(--cyan)', background: 'transparent', border: '1px solid rgba(56,217,245,0.3)', borderRadius: 4, cursor: claudeHookSearching ? 'wait' : 'pointer' }}
+                          >
+                            {claudeHookSearching ? '…' : 'SEARCH'}
+                          </button>
+                        </span>
+                      )}
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                       {section.id === 'mcp' && session?.provider === 'claude' ? (
@@ -8039,9 +8199,12 @@ export default function MessageView({
                           const [rawName, rawStatus] = item.split(' · ')
                           const name = rawName?.trim() ?? ''
                           const status = rawStatus?.trim() ?? ''
+                          const dynamic = item.endsWith(' · dynamic')
                           const enabled = status !== 'disabled'
+                          const permissionModeKey = `${session.sessionId}:${name}`
+                          const appliedPermissionMode = claudeMcpPermissionModes[permissionModeKey]
                           const busyKey = `mcp:${name}`
-                          const busy = claudeMcpBusy === busyKey || claudeMcpBusy === `mcp:toggle:${name}`
+                          const busy = claudeMcpBusy !== null
                           return (
                             <div
                               key={`${section.id}-${index}`}
@@ -8059,6 +8222,33 @@ export default function MessageView({
                                 {name} <span style={{ color: enabled ? 'var(--green)' : 'var(--text-3)' }}>· {status}</span>
                               </span>
                               <span style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                                <select
+                                  aria-label={`Permission policy for MCP server ${name}`}
+                                  title={`Claude permission policy for ${name}`}
+                                  value={appliedPermissionMode ?? ''}
+                                  disabled={busy}
+                                  onChange={(event) => {
+                                    const selected = event.target.value
+                                    const mode = selected === 'clear' ? null : selected === 'auto' ? 'auto' : 'default'
+                                    const previous = appliedPermissionMode
+                                    void applyClaudeMcpPermissionMode(name, permissionModeKey, mode, previous)
+                                  }}
+                                  style={{
+                                    height: 18,
+                                    maxWidth: 82,
+                                    fontFamily: "'IBM Plex Mono', monospace",
+                                    fontSize: 9,
+                                    color: 'var(--text-2)',
+                                    background: 'var(--surface)',
+                                    border: '1px solid var(--border)',
+                                    borderRadius: 4,
+                                  }}
+                                >
+                                  <option value="" disabled>POLICY…</option>
+                                  <option value="default">DEFAULT</option>
+                                  <option value="auto">AUTO</option>
+                                  <option value="clear">CLEAR</option>
+                                </select>
                                 <button
                                   type="button"
                                   onClick={() => runClaudeSessionAction('reconnectMcpServer', { serverName: name }, busyKey, `Reconnected ${name}.`)}
@@ -8101,6 +8291,17 @@ export default function MessageView({
                                 >
                                   {enabled ? 'DISABLE' : 'ENABLE'}
                                 </button>
+                                {dynamic && (
+                                  <button
+                                    type="button"
+                                    onClick={() => runClaudeSessionAction('setMcpServers', { operation: 'remove', serverName: name }, `mcp:remove:${name}`, `Removed dynamic MCP server ${name}.`)}
+                                    disabled={busy}
+                                    title={`Remove dynamic MCP server ${name}`}
+                                    style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: 'var(--red)', background: 'transparent', border: '1px solid rgba(248,113,113,0.3)', borderRadius: 4, padding: '0 5px', height: 18, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}
+                                  >
+                                    REMOVE
+                                  </button>
+                                )}
                               </span>
                             </div>
                           )
@@ -8823,7 +9024,7 @@ export default function MessageView({
                 color: 'var(--cyan)',
                 letterSpacing: '0.03em',
               }}>
-                <span>Next send will resume from the selected timeline point in a forked session.</span>
+                <span>Safe resume armed — next send forks at the selected timeline point and guards the discarded turn.</span>
                 <Button
                   onClick={() => setResumeFromMessageId(null)}
                   variant="outline"

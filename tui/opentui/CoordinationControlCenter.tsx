@@ -659,7 +659,7 @@ export function CoordinationControlCenter({
           ))}
           <box flexGrow={1} />
           <box height={3} border={['top']} borderStyle="single" borderColor={theme.border} flexDirection="column">
-            <text fg={theme.dim} wrapMode="none">{fit(`Totals: ${runs.length} workflows  ${fleet.agents} agents`, leftW - 2)}</text>
+            <text fg={theme.dim} wrapMode="none">{fit(`${runs.length} workflows · ${fleet.agents} agents`, leftW - 2)}</text>
             <text fg={section === 'overview' ? theme.cyan : theme.dim} wrapMode="none">{'1 focus · j/k select · [/] switch'}</text>
           </box>
         </box>

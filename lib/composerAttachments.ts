@@ -1,4 +1,3 @@
-import { basename, isAbsolute, resolve } from 'node:path'
 import type { AgentProvider, SendAttachment } from './types'
 
 export type ComposerAttachmentPlan = {
@@ -95,13 +94,43 @@ function attachmentPath(attachment: SendAttachment): string | undefined {
   return attachment.path || attachment.filePath
 }
 
+function portableBasename(value: string): string {
+  const trimmed = value.replace(/[\\/]+$/, '')
+  return trimmed.slice(Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\')) + 1)
+}
+
+function portableIsAbsolute(value: string): boolean {
+  return value.startsWith('/') || value.startsWith('\\\\') || /^[A-Za-z]:[\\/]/.test(value)
+}
+
+function portableResolve(base: string, value: string): string {
+  const source = portableIsAbsolute(value) ? value : `${base.replace(/[\\/]+$/, '')}/${value}`
+  const windows = /^[A-Za-z]:/.test(source) || source.includes('\\')
+  const separator = windows ? '\\' : '/'
+  const drive = /^[A-Za-z]:/.exec(source)?.[0] ?? ''
+  const unc = source.startsWith('\\\\')
+  const rooted = source.startsWith('/') || unc || Boolean(drive)
+  const parts = source.replace(/^[A-Za-z]:/, '').split(/[\\/]+/)
+  const resolved: string[] = []
+  for (const part of parts) {
+    if (!part || part === '.') continue
+    if (part === '..') {
+      if (resolved.length > 0) resolved.pop()
+      continue
+    }
+    resolved.push(part)
+  }
+  const prefix = drive ? `${drive}${separator}` : unc ? '\\\\' : rooted ? separator : ''
+  return `${prefix}${resolved.join(separator)}`
+}
+
 function attachmentName(attachment: SendAttachment): string {
   const path = attachmentPath(attachment)
   if (attachment.type === 'agent') {
     const textName = attachment.text?.trim().replace(/^@/, '')
     return attachment.displayName || textName || path || 'agent'
   }
-  return attachment.displayName || (path ? basename(path) : attachment.type)
+  return attachment.displayName || (path ? portableBasename(path) : attachment.type)
 }
 
 function isHttpUrl(value: string): boolean {
@@ -109,7 +138,8 @@ function isHttpUrl(value: string): boolean {
 }
 
 export function resolveLocalComposerAttachmentPath(value: string, cwd?: string): string {
-  return isAbsolute(value) ? value : resolve(cwd ?? process.cwd(), value)
+  const runtimeCwd = cwd ?? (typeof process !== 'undefined' && typeof process.cwd === 'function' ? process.cwd() : '')
+  return portableIsAbsolute(value) ? portableResolve('', value) : portableResolve(runtimeCwd, value)
 }
 
 function hasLocalImage(attachment: SendAttachment): boolean {

@@ -103,6 +103,24 @@ Claude sessions are read through `@anthropic-ai/claude-agent-sdk`.
 
 Supported viewer operations include listing, reading messages, sending, renaming, tagging, deleting, forking, resuming from a message, file rewind, diagnostics, models, context usage, and subagent messages where the SDK exposes them.
 
+Coordinator-dispatched Claude tasks carry native Agent SDK role policy (tools, skills, model/effort, permission mode, sandbox, per-agent MCP servers, initial prompt, turn cap, memory, background/observer configuration, and critical reminders) plus remaining token and USD budgets. The USD remainder is enforced by the SDK's `maxBudgetUsd`, while observed SDK usage remains the durable run-level accounting source.
+
+Claude diagnostics can add or remove dynamic session MCP servers, surface connection and authentication-required states, reload plugins/skills, and search the durable hook timeline. Lifecycle, tool, permission, compaction, subagent, configuration, worktree, and file hooks are redacted, size-rotated, and removed with the session. File previews use the SDK control channel's `readFile()` when a Claude session is selected, so hosted workers do not require a shared local filesystem for file contents.
+
+Claude transcript mirroring can optionally use Agent Viewer's durable SQLite-backed Agent SDK `SessionStore`:
+
+```bash
+AGENT_VIEWER_CLAUDE_SESSION_STORE=sqlite \
+AGENT_VIEWER_CLAUDE_SESSION_STORE_PATH=/path/to/claude-sessions.sqlite \
+npm run dev
+```
+
+The path defaults to `.agent-viewer-data/claude-session-store/index.sqlite`. The SDK requires local transcript persistence alongside the mirror and currently rejects file checkpointing with a `SessionStore`, so store-backed sessions retain durable transcript resume but not file rewind. Cross-project session listing continues to use the SDK's local index because the alpha store API can list only one project key at a time.
+
+Custom Claude process transports can register a `spawnClaudeCodeProcess` adapter with `registerClaudeProcessSpawner` from `lib/claudeProcessSpawner.ts` before creating or pre-warming queries. The adapter must return the complete SDK `SpawnedProcess` interface (live stdin/stdout streams and exit/error lifecycle methods) and forward `SpawnOptions.signal`. Explicit registration overrides the built-in opt-in SSH transport.
+
+For a concrete hosted worker, set `AGENT_VIEWER_CLAUDE_SSH_HOST` and `AGENT_VIEWER_CLAUDE_SSH_COMMAND`. The SSH adapter uses batch authentication, strict host-key verification (the default known-hosts file unless `AGENT_VIEWER_CLAUDE_SSH_KNOWN_HOSTS_FILE` is supplied), keepalives, abort propagation, and transport health reporting. Optional settings are `AGENT_VIEWER_CLAUDE_SSH_USER`, `AGENT_VIEWER_CLAUDE_SSH_PORT`, `AGENT_VIEWER_CLAUDE_SSH_IDENTITY_FILE`, and local/remote root mapping via `AGENT_VIEWER_CLAUDE_SSH_LOCAL_ROOT` plus `AGENT_VIEWER_CLAUDE_SSH_REMOTE_ROOT`. Claude/Anthropic secret environment variables are not forwarded in the SSH command by default; provision credentials on the worker, or explicitly opt in with `AGENT_VIEWER_CLAUDE_SSH_FORWARD_SECRETS=1` after accepting process-list exposure on the remote host.
+
 #### Claude and Codex CLI MCP bridge
 
 Agent Viewer can expose cross-provider session search and transcripts, message bookmarks, and the human-attention inbox to standalone Claude and Codex CLIs over stdio. Start the web daemon first so the bridge and any attached TUI share one runtime:

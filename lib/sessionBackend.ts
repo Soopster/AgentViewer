@@ -25,9 +25,11 @@ import {
   listSessions,
   query,
   renameSession,
+  resolveSettings,
   tagSession,
   type CanUseTool,
   type ElicitationResult as ClaudeElicitationResult,
+  type OnUserDialog,
   type PermissionResult,
   type PermissionUpdate,
   type Query,
@@ -42,7 +44,8 @@ import {
   type ClaudePoolEntry,
   claudePoolSize,
   CLAUDE_QUERY_ENV,
-  coordinatorClaudeMcpOptions,
+  claudeIntegratedQueryExtensions,
+  claudeIntegratedMcpServers,
   createInputStream,
   effortToSdk,
   interruptClaudeQuery,
@@ -52,13 +55,23 @@ import {
   recycleClaudeSession,
 } from './claudePool'
 import {
+  claudeDynamicMcpServerNames,
+  clearClaudeDynamicMcpServers,
+  getClaudeDynamicMcpServers,
+  parseClaudeDynamicMcpServers,
+  setClaudeDynamicMcpServers,
+} from './claudeDynamicMcp'
+import { deleteClaudeHookEvents, listClaudeHookEvents } from './claudeHookEvents'
+import {
   broadcastClaudeMessage,
   broadcastClaudeRecycled,
   broadcastClaudeTurnEnd,
   broadcastClaudeTurnStart,
 } from './claudeHarness'
 import { getClaudeCommandsOverride, noteClaudeCommandsChanged } from './claudeCommandsStore'
-import { createClaudeViewerQueryExtensions } from './claudeViewerIntegration'
+import { claudeAgentPolicyOptions, claudeQueryBudgetOptions, parseClaudeAgentPolicy, type ClaudeAgentPolicy } from './claudeRuntimePolicy'
+import { claudeSessionPersistenceQueryOptions, claudeSessionStoreOptions } from './claudeSessionStore'
+import { claudeProcessSpawnOptions, claudeProcessTransportStatus } from './claudeProcessSpawner'
 import { dispatchCoordinatorCodexToolCall } from './agentCoordinationSdkTools'
 import {
   broadcastLiveSessionActivity,
@@ -288,7 +301,10 @@ async function getCachedSessionInfo(sessionId: string, dir: string | undefined):
     touchSessionInfoCache(sessionId, cached)
     return cached.result
   }
-  const result = await getSessionInfo(sessionId, dir ? { dir } : undefined)
+  const result = await getSessionInfo(sessionId, {
+    ...(dir ? { dir } : {}),
+    ...claudeSessionStoreOptions(),
+  })
   touchSessionInfoCache(sessionId, { result, ts: Date.now() })
   return result
 }
@@ -542,8 +558,11 @@ function formatClaudeSubagentTree(agentIds: string[], parentByAgent: Map<string,
 
 async function readClaudeSessionMessages(sessionId: string): Promise<SessionMessage[]> {
   const [mainRaw, subagentIds] = await Promise.all([
-    getSessionMessages(sessionId, { includeSystemMessages: true }),
-    listSubagents(sessionId).catch(() => [] as string[]),
+    getSessionMessages(sessionId, {
+      includeSystemMessages: true,
+      ...claudeSessionStoreOptions(),
+    }),
+    listSubagents(sessionId, claudeSessionStoreOptions()).catch(() => [] as string[]),
   ])
 
   const lastMain = mainRaw.at(-1) as { uuid?: string } | undefined
@@ -554,7 +573,8 @@ async function readClaudeSessionMessages(sessionId: string): Promise<SessionMess
   const subagentRaw = await Promise.all(
     subagentIds.map(async (agentId) => ({
       agentId,
-      messages: await getSubagentMessages(sessionId, agentId).catch(() => [] as SessionMessage[]),
+      messages: await getSubagentMessages(sessionId, agentId, claudeSessionStoreOptions())
+        .catch(() => [] as SessionMessage[]),
     })),
   )
 
@@ -1903,6 +1923,18 @@ declare global {
 const pendingClaudeElicitations = globalThis.__agentViewerPendingClaudeElicitations
   ?? (globalThis.__agentViewerPendingClaudeElicitations = new Map<string, PendingClaudeElicitation>())
 
+type PendingClaudeDialog = {
+  resolve: (result: { behavior: 'completed'; result: unknown } | { behavior: 'cancelled' }) => void
+  requestData: Record<string, unknown>
+}
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __agentViewerPendingClaudeDialogs: Map<string, PendingClaudeDialog> | undefined
+}
+const pendingClaudeDialogs = globalThis.__agentViewerPendingClaudeDialogs
+  ?? (globalThis.__agentViewerPendingClaudeDialogs = new Map<string, PendingClaudeDialog>())
+
 // Pending Claude prompts (tool permissions + AskUserQuestion) still awaiting a
 // response for this session, as permission.requested `data` payloads. Lets a
 // reconnecting client re-arm in-flight prompts instead of leaving the turn
@@ -1918,9 +1950,14 @@ function listPendingClaudePrompts(sessionId: string): Record<string, unknown>[] 
 
 function listPendingClaudeElicitations(sessionId: string): Record<string, unknown>[] {
   const prefix = `${sessionId}:`
-  return Array.from(pendingClaudeElicitations)
+  return [
+    ...Array.from(pendingClaudeElicitations)
     .filter(([key]) => key.startsWith(prefix))
-    .map(([, pending]) => pending.requestData)
+    .map(([, pending]) => pending.requestData),
+    ...Array.from(pendingClaudeDialogs)
+      .filter(([key]) => key.startsWith(prefix))
+      .map(([, pending]) => pending.requestData),
+  ]
 }
 
 function pendingClaudePermissionKey(sessionId: string, permissionId: string): string {
@@ -2106,6 +2143,72 @@ function createClaudeElicitationBridge(
   }
 }
 
+// Native SDK dialogs are distinct from MCP elicitation, but Agent Viewer can
+// render them through the same durable prompt surface. Only dialog kinds the
+// UI explicitly supports are declared on query startup; unknown kinds fail
+// closed rather than being guessed at.
+export function createClaudeUserDialogBridge(
+  sessionId: string,
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  encoder: TextEncoder,
+): OnUserDialog {
+  const enqueue = (payload: Record<string, unknown>) => {
+    try { controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`)) } catch { /* detached client */ }
+  }
+  return async (request, options) => {
+    if (options.signal.aborted || request.dialogKind !== 'refusal_fallback_prompt') {
+      return { behavior: 'cancelled' }
+    }
+    const requestId = options.requestId
+    const payloadMessage = typeof request.payload.message === 'string'
+      ? request.payload.message
+      : 'Claude declined this request. Continue with the configured fallback model?'
+    const requestData: Record<string, unknown> = {
+      requestId,
+      sessionId,
+      message: payloadMessage,
+      mode: 'form',
+      dialogKind: request.dialogKind,
+      dialogPayload: request.payload,
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          continue: {
+            type: 'boolean',
+            title: 'Continue with fallback model',
+            default: true,
+          },
+        },
+        required: ['continue'],
+      },
+      title: 'Model fallback',
+      description: payloadMessage,
+    }
+    enqueue({
+      type: 'claude_elicitation',
+      event: { type: 'elicitation.requested', data: requestData },
+    })
+    return new Promise((resolve) => {
+      const key = pendingClaudePermissionKey(sessionId, requestId)
+      const cleanup = () => {
+        pendingClaudeDialogs.delete(key)
+        options.signal.removeEventListener('abort', onAbort)
+      }
+      const finish: PendingClaudeDialog['resolve'] = (result) => {
+        cleanup()
+        enqueue({
+          type: 'claude_elicitation',
+          event: { type: 'elicitation.completed', data: { requestId, action: result.behavior } },
+        })
+        resolve(result)
+      }
+      const onAbort = () => finish({ behavior: 'cancelled' })
+      options.signal.addEventListener('abort', onAbort, { once: true })
+      pendingClaudeDialogs.set(key, { resolve: finish, requestData })
+    })
+  }
+}
+
 function resolvePendingClaudePermissions(sessionId: string, ids: Set<string>, message: string): void {
   for (const id of Array.from(ids)) {
     const key = pendingClaudePermissionKey(sessionId, id)
@@ -2244,6 +2347,11 @@ async function listClaudeSessions({ limit, offset, dir, includeWorktrees }: List
     offset,
     dir,
     includeWorktrees: dir ? includeWorktrees : undefined,
+    // SessionStore.listSessions is project-scoped: the SDK has no API for
+    // enumerating project keys. Preserve its true cross-project filesystem
+    // behavior when no directory filter is present. Store mirroring requires
+    // local persistence, so those sessions remain visible in this fallback.
+    ...(dir ? claudeSessionStoreOptions() : {}),
   }))
   const normalized = await timeAsync('claude.sessionInfo', () => mapConcurrent(sessions, 20, async (session) => {
     try {
@@ -2644,7 +2752,7 @@ export async function readViewSessionInfo(sessionId: string, providerOverride?: 
     return mapPiSessionToInfo(info, stored, messages)
   }
 
-  const info = await getSessionInfo(sessionId)
+  const info = await getSessionInfo(sessionId, claudeSessionStoreOptions())
   if (!info) return null
   return {
     ...info,
@@ -2711,14 +2819,14 @@ export async function patchViewSession(sessionId: string, body: Record<string, u
 
   if ('title' in body) {
     if (typeof body.title !== 'string') throw new Error('title must be a string')
-    await renameSession(sessionId, body.title)
+    await renameSession(sessionId, body.title, claudeSessionStoreOptions())
     return
   }
   if ('tag' in body) {
     const tag = body.tag === null || body.tag === undefined ? null
       : typeof body.tag === 'string' ? body.tag
       : (() => { throw new Error('tag must be a string or null') })()
-    await tagSession(sessionId, tag)
+    await tagSession(sessionId, tag, claudeSessionStoreOptions())
     return
   }
   throw new Error('title or tag required')
@@ -2745,7 +2853,9 @@ export async function deleteViewSession(sessionId: string, providerOverride?: Ag
     return
   }
   if (provider === 'claude') {
-    await deleteClaudeSession(sessionId)
+    await deleteClaudeSession(sessionId, claudeSessionStoreOptions())
+    clearClaudeDynamicMcpServers(sessionId)
+    await deleteClaudeHookEvents(sessionId)
     clearWaitingSession(sessionId)
     await removePersistedSessionBestEffort(provider, sessionId)
     return
@@ -2756,6 +2866,25 @@ export async function deleteViewSession(sessionId: string, providerOverride?: Ag
     return
   }
   throw new Error(`Delete is not supported for ${provider} sessions`)
+}
+
+function summarizeResolvedClaudeSettings(resolved: Awaited<ReturnType<typeof resolveSettings>>): Record<string, unknown> {
+  const effectiveKeys = Object.keys(resolved.effective)
+  return {
+    effectiveKeys,
+    effectiveKeyCount: effectiveKeys.length,
+    sources: resolved.sources.map((source) => ({
+      source: source.source,
+      path: source.path,
+      policyOrigin: source.policyOrigin,
+      keys: Object.keys(source.settings),
+    })),
+    sourceCount: resolved.sources.length,
+    provenance: Object.fromEntries(Object.entries(resolved.provenance).map(([key, entry]) => [
+      key,
+      entry ? { source: entry.source, path: entry.path, policyOrigin: entry.policyOrigin } : null,
+    ])),
+  }
 }
 
 export async function runViewSessionAction({ sessionId, body, provider }: SessionActionParams): Promise<Record<string, unknown>> {
@@ -3008,6 +3137,20 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
         }
       }
       if (!pending) {
+        let dialog = pendingClaudeDialogs.get(key)
+        if (!dialog) {
+          for (const [pendingKey, candidate] of pendingClaudeDialogs) {
+            if (!pendingKey.endsWith(`:${permissionId}`)) continue
+            dialog = candidate
+            break
+          }
+        }
+        if (dialog) {
+          dialog.resolve(response === 'reject'
+            ? { behavior: 'cancelled' }
+            : { behavior: 'completed', result: { continue: true } })
+          return { ok: true }
+        }
         let elicitation = pendingClaudeElicitations.get(key)
         if (!elicitation) {
           for (const [pendingKey, candidate] of pendingClaudeElicitations) {
@@ -3047,6 +3190,21 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
         }
       }
       if (!pending) {
+        let dialog = pendingClaudeDialogs.get(key)
+        if (!dialog) {
+          for (const [pendingKey, candidate] of pendingClaudeDialogs) {
+            if (!pendingKey.endsWith(`:${permissionId}`)) continue
+            dialog = candidate
+            break
+          }
+        }
+        if (dialog) {
+          const continueValue = answers.continue?.[0]
+          dialog.resolve(continueValue === 'false'
+            ? { behavior: 'cancelled' }
+            : { behavior: 'completed', result: { continue: true, answers, response, annotations } })
+          return { ok: true }
+        }
         let elicitation = pendingClaudeElicitations.get(key)
         if (!elicitation) {
           for (const [pendingKey, candidate] of pendingClaudeElicitations) {
@@ -3082,6 +3240,22 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
       }
       // No warm entry — the next send will apply it via body.model on /messages/events.
       return { ok: true, applied: 'next-send' }
+    }
+    if (action === 'setMcpPermissionModeOverride') {
+      const serverName = typeof body.serverName === 'string' ? body.serverName.trim() : ''
+      const mode = body.mode === null || body.mode === 'default' || body.mode === 'auto'
+        ? body.mode
+        : undefined
+      if (!serverName) throw new Error('serverName is required')
+      if (mode === undefined) throw new Error("mode must be 'default', 'auto', or null")
+      const warm = peekClaudeSession(sessionId)
+      const q = warm?.query ?? createSessionControlQuery(sessionId)
+      try {
+        const result = await q.setMcpPermissionModeOverride(serverName, mode)
+        return { ok: true, applied: warm ? 'live' : 'cold', ...result }
+      } finally {
+        if (!warm) q.close()
+      }
     }
     if (action === 'setPermissionMode') {
       const mode = parseClaudePermissionMode(body)
@@ -3153,6 +3327,43 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
         q.close()
       }
     }
+    if (action === 'setMcpServers') {
+      const previousServers = getClaudeDynamicMcpServers(sessionId)
+      let servers
+      if (body.operation === 'add') {
+        const serverName = typeof body.serverName === 'string' ? body.serverName.trim() : ''
+        if (!serverName) throw new Error('serverName is required')
+        const parsed = parseClaudeDynamicMcpServers({ [serverName]: body.config })
+        servers = { ...getClaudeDynamicMcpServers(sessionId), ...parsed }
+      } else if (body.operation === 'remove') {
+        const serverName = typeof body.serverName === 'string' ? body.serverName.trim() : ''
+        if (!serverName) throw new Error('serverName is required')
+        servers = getClaudeDynamicMcpServers(sessionId)
+        delete servers[serverName]
+      } else {
+        servers = parseClaudeDynamicMcpServers(body.servers)
+      }
+      setClaudeDynamicMcpServers(sessionId, servers)
+      const warm = peekClaudeSession(sessionId)
+      if (!warm) {
+        return { ok: true, applied: 'next-send', dynamicServers: Object.keys(servers).sort(), added: [], removed: [], errors: {} }
+      }
+      const info = await getSessionInfo(sessionId, claudeSessionStoreOptions()).catch(() => undefined)
+      const context = { getSessionId: () => sessionId, getCwd: () => info?.cwd }
+      try {
+        const result = await warm.query.setMcpServers(claudeIntegratedMcpServers(context, sessionId))
+        const statuses = await warm.query.mcpServerStatus()
+        const authRequired = statuses.filter((status) => status.status === 'needs-auth').map((status) => status.name)
+        return { ok: true, applied: 'live', dynamicServers: Object.keys(servers).sort(), statuses, authRequired, ...result }
+      } catch (error) {
+        // Keep the next spawn/recycle compatible with the live query when the
+        // SDK rejects the replacement atomically. Connection/auth errors are
+        // returned in McpSetServersResult.errors and intentionally remain
+        // configured so the user can authenticate or reconnect them.
+        setClaudeDynamicMcpServers(sessionId, previousServers)
+        throw error
+      }
+    }
     if (action === 'reloadPlugins') {
       const warm = peekClaudeSession(sessionId)
       if (warm) {
@@ -3177,6 +3388,67 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
         }
       } finally {
         q.close()
+      }
+    }
+    if (action === 'reloadSkills') {
+      const warm = peekClaudeSession(sessionId)
+      const q = warm?.query ?? createSessionControlQuery(sessionId)
+      try {
+        const result = await q.reloadSkills()
+        return { ok: true, applied: warm ? 'live' : 'cold', ...result }
+      } finally {
+        if (!warm) q.close()
+      }
+    }
+    if (action === 'resolveSettings') {
+      const info = await getSessionInfo(sessionId, claudeSessionStoreOptions()).catch(() => undefined)
+      return { ok: true, ...summarizeResolvedClaudeSettings(await resolveSettings({ cwd: info?.cwd })) }
+    }
+    if (action === 'inspectClaudeRuntime') {
+      const warm = peekClaudeSession(sessionId)
+      const q = warm?.query ?? createSessionControlQuery(sessionId)
+      try {
+        const info = await getSessionInfo(sessionId, claudeSessionStoreOptions()).catch(() => undefined)
+        const [settings, commands, agents, mcpServers] = await Promise.all([
+          resolveSettings({ cwd: info?.cwd }),
+          q.supportedCommands(),
+          q.supportedAgents(),
+          q.mcpServerStatus(),
+        ])
+        return {
+          ok: true,
+          applied: warm ? 'live' : 'cold',
+          settings: summarizeResolvedClaudeSettings(settings),
+          commands,
+          agents,
+          mcpServers,
+          dynamicMcpServers: claudeDynamicMcpServerNames(sessionId),
+          processTransport: claudeProcessTransportStatus(),
+        }
+      } finally {
+        if (!warm) q.close()
+      }
+    }
+    if (action === 'listHookEvents') {
+      const query = typeof body.query === 'string' ? body.query : undefined
+      const limit = typeof body.limit === 'number' ? body.limit : undefined
+      const events = await listClaudeHookEvents(sessionId, { query, limit })
+      return { ok: true, events, query: query ?? '', count: events.length }
+    }
+    if (action === 'readFile') {
+      const path = typeof body.path === 'string' ? body.path.trim() : ''
+      const encoding = body.encoding === 'base64' ? 'base64' as const : 'utf-8' as const
+      const maxBytes = typeof body.maxBytes === 'number' && Number.isFinite(body.maxBytes)
+        ? Math.max(1, Math.min(10 * 1024 * 1024, Math.floor(body.maxBytes)))
+        : 512 * 1024
+      if (!path || path.includes('\0')) throw new Error('path is required')
+      const warm = peekClaudeSession(sessionId)
+      const q = warm?.query ?? createSessionControlQuery(sessionId)
+      try {
+        const file = await q.readFile(path, { maxBytes, encoding })
+        return { ok: file !== null, applied: warm ? 'live' : 'cold', file }
+      } finally {
+        if (!warm) q.close()
       }
     }
   }
@@ -3339,7 +3611,8 @@ export async function getViewSubagentMessages(
     return withOriginKind(mapped, `subagent:${agentId}`)
   }
   if (provider !== 'claude') return []
-  const raw = await getSubagentMessages(sessionId, agentId).catch(() => [] as SessionMessage[])
+  const raw = await getSubagentMessages(sessionId, agentId, claudeSessionStoreOptions())
+    .catch(() => [] as SessionMessage[])
   return withOriginKind(normalizeClaudeHistoryMessages(raw as unknown[]), `subagent:${agentId}`)
 }
 
@@ -3514,7 +3787,7 @@ export async function listProjectSessionMessageBatches(params: ProjectMessageBat
   }
 }
 
-const CLAUDE_PERMISSION_MODES = ['default', 'acceptEdits', 'plan', 'bypassPermissions'] as const
+const CLAUDE_PERMISSION_MODES = ['default', 'acceptEdits', 'plan', 'bypassPermissions', 'dontAsk'] as const
 type ClaudePermissionMode = typeof CLAUDE_PERMISSION_MODES[number]
 
 function parseClaudePermissionMode(body: Record<string, unknown>): ClaudePermissionMode | undefined {
@@ -3531,11 +3804,11 @@ function parseClaudePermissionMode(body: Record<string, unknown>): ClaudePermiss
 // human-readable error string plus the raw HTTP status when the SDK reported
 // one, so callers can classify retryability structurally instead of parsing
 // the message text; null when the result is a clean success.
-function claudeResultErrorMessage(msg: Record<string, unknown>): { message: string; apiErrorStatus?: number } | null {
+export function claudeResultErrorMessage(msg: Record<string, unknown>): { message: string; apiErrorStatus?: number } | null {
   if (msg.type !== 'result') return null
   const subtype = typeof msg.subtype === 'string' ? msg.subtype : ''
   if (subtype === 'error_max_turns') return { message: 'Claude reached the maximum number of turns before finishing.' }
-  if (subtype === 'error_max_budget_usd') return { message: 'Claude reached the task budget before finishing.' }
+  if (subtype === 'error_max_budget_usd') return { message: 'Claude reached the maximum cost budget before finishing.' }
   if (subtype === 'error_max_structured_output_retries') return { message: 'Claude could not produce a valid structured response.' }
   if (subtype === 'error_during_execution') {
     const errors = Array.isArray(msg.errors) ? msg.errors.filter((entry): entry is string => typeof entry === 'string') : []
@@ -3595,20 +3868,21 @@ const CLAUDE_WARM_MAX_RESPAWN = 1
 async function createClaudeStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
   const turnRequestId = parseTurnRequestId(body)
+  const agentPolicy = parseClaudeAgentPolicy(body.claudeAgentPolicy)
   const explicitModel = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : undefined
   const isPendingSession = Boolean(body.isPendingSession)
   const manualPermissions = body.manualPermissions === true
   const detachOnClientAbort = body.detachOnClientAbort === true
-  const permissionMode = parseClaudePermissionMode(body)
+  const permissionMode = agentPolicy?.permissionMode ?? parseClaudePermissionMode(body)
   // Leave model unset when the composer hasn't picked one yet — for both
   // pending and resumed sessions. The SDK/CLI already falls back to its own
   // configured default (respecting ANTHROPIC_MODEL, settings.json, or a
   // custom base URL/Bedrock/Vertex deployment) when `model` is omitted; a
   // hardcoded literal here would override that and throw "invalid model" on
   // machines where that literal isn't a recognized model id.
-  const model = explicitModel
+  const model = agentPolicy?.model ?? explicitModel
   const fallbackModel = claudeFallbackModelChain()
-  const effort = parseEffort(body)
+  const effort = agentPolicy?.effort ?? parseEffort(body)
   const attachments = parseAttachments(body)
   // Input-box bash mode (`!command`) — runs locally then persists in the CLI's
   // native transcript shape. With attachments it falls back to a normal send.
@@ -3624,6 +3898,9 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
   const cwdOverride = typeof body.cwd === 'string' && body.cwd.trim() ? body.cwd.trim() : undefined
   const taskBudgetTotal = typeof body.taskBudgetTokens === 'number' && body.taskBudgetTokens > 0
     ? Math.floor(body.taskBudgetTokens)
+    : undefined
+  const maxBudgetUsd = typeof body.maxBudgetUsd === 'number' && Number.isFinite(body.maxBudgetUsd) && body.maxBudgetUsd > 0
+    ? body.maxBudgetUsd
     : undefined
 
   // Cold-path conditions: brand-new session (no id yet), fork (creates a new
@@ -3663,8 +3940,10 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
       forkSessionOnSend,
       cwdOverride,
       taskBudgetTotal,
+      maxBudgetUsd,
       turnRequestId,
       fallbackModel,
+      agentPolicy,
     })
   }
 
@@ -3680,8 +3959,10 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
     effort,
     cwdOverride,
     taskBudgetTotal,
+    maxBudgetUsd,
     turnRequestId,
     fallbackModel,
+    agentPolicy,
     // Threaded through even though the common case (prewarm already spawned
     // a compatible entry) never uses it — if the warm entry turns out
     // incompatible (cwd/effort/taskBudget changed since prewarm) or died,
@@ -3710,8 +3991,10 @@ type ClaudeStreamColdArgs = {
   forkSessionOnSend: boolean
   cwdOverride: string | undefined
   taskBudgetTotal: number | undefined
+  maxBudgetUsd: number | undefined
   turnRequestId: string | undefined
   fallbackModel: string | undefined
+  agentPolicy: ClaudeAgentPolicy | undefined
 }
 
 async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Response> {
@@ -3732,8 +4015,10 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
     forkSessionOnSend,
     cwdOverride,
     taskBudgetTotal,
+    maxBudgetUsd,
     turnRequestId,
     fallbackModel,
+    agentPolicy,
   } = args
 
   // Build the user message in the same SDKUserMessage shape the pool uses,
@@ -3763,6 +4048,8 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
     resumeSessionAt,
     forkSession: forkSessionOnSend,
     taskBudgetTokens: taskBudgetTotal,
+    maxBudgetUsd,
+    agentPolicy,
   }
 
   // Bridge is only needed for interactive approval modes; bypass and plan
@@ -3809,7 +4096,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
       // the delegation closure survives pool adoption. The bridge is set below
       // (after q is created) and cleared in the finally block so future pool
       // turns can swap in a fresh bridge without recycling the subprocess.
-      const bridgeBox: ClaudeBridgeBox = { fn: null, elicit: null }
+      const bridgeBox: ClaudeBridgeBox = { fn: null, elicit: null, dialog: null }
       const viewerContext = {
         sessionId,
         getSessionId: () => viewerContext.sessionId,
@@ -3839,10 +4126,16 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
             bridgeBox.elicit
               ? bridgeBox.elicit(request, elicitOpts)
               : Promise.resolve({ action: 'decline' as const }),
-          ...createClaudeViewerQueryExtensions(viewerContext),
+          onUserDialog: (request, dialogOpts) => bridgeBox.dialog
+            ? bridgeBox.dialog(request, dialogOpts)
+            : Promise.resolve({ behavior: 'cancelled' as const }),
+          supportedDialogKinds: ['refusal_fallback_prompt'],
+          ...claudeIntegratedQueryExtensions(viewerContext, sessionId),
+          ...claudeAgentPolicyOptions(agentPolicy),
           ...effortToSdk(effort),
           abortController,
-          enableFileCheckpointing: true,
+          ...claudeSessionPersistenceQueryOptions(),
+          ...claudeProcessSpawnOptions(),
           resumeSessionAt,
           ...(resumeDropsTurn ? { resumeDropsTurn } : {}),
           forkSession: forkSessionOnSend,
@@ -3852,11 +4145,10 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           promptSuggestions: true,
           forwardSubagentText: true,
           systemPrompt: { type: 'preset', preset: 'claude_code', excludeDynamicSections: true },
-          taskBudget: taskBudgetTotal ? { total: taskBudgetTotal } : undefined,
+          ...claudeQueryBudgetOptions(taskBudgetTotal, maxBudgetUsd),
           // See lib/claudePool.ts's spawn() for why this needs no compat-check
           // entry: a Coordinator-owned session's tools are bound once here, on
           // its first (cold) turn, and never change for its lifetime.
-          ...coordinatorClaudeMcpOptions(sessionId),
         },
       })
 
@@ -3869,6 +4161,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
       // Elicitation isn't gated on manual permissions — an MCP server can elicit
       // in any mode, so always install the handler.
       bridgeBox.elicit = createClaudeElicitationBridge(sessionId, controller, encoder)
+      bridgeBox.dialog = createClaudeUserDialogBridge(sessionId, controller, encoder)
 
       // While a bash-mode command runs locally, interrupt kills the child
       // process instead of poking the (idle) query.
@@ -3998,6 +4291,8 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
         if (realizedSessionId && !abortController.signal.aborted) {
           // Clear the turn-1 bridge so the pool entry starts idle.
           bridgeBox.fn = null
+          bridgeBox.elicit = null
+          bridgeBox.dialog = null
           signal.removeEventListener('abort', propagateAbort)
           adoptClaudeSession({
             sessionId: realizedSessionId,
@@ -4018,6 +4313,8 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
         // Clear the bridge in case adoption didn't happen (error, abort) so the
         // box isn't left pointing at a dead stream controller.
         bridgeBox.fn = null
+        bridgeBox.elicit = null
+        bridgeBox.dialog = null
         clearRunningSession(sessionId, turnRequestId)
         if (realizedSessionId && realizedSessionId !== sessionId) clearRunningSession(realizedSessionId, turnRequestId)
         resolvePendingClaudePermissions(sessionId, bridgedPermissionIds, 'Permission request ended before a response was received')
@@ -4060,8 +4357,10 @@ type ClaudeStreamPooledArgs = {
   effort: ReasoningEffortLevel | undefined
   cwdOverride: string | undefined
   taskBudgetTotal: number | undefined
+  maxBudgetUsd: number | undefined
   turnRequestId: string | undefined
   fallbackModel: string | undefined
+  agentPolicy: ClaudeAgentPolicy | undefined
   /** See ClaudePoolAcquireOptions.isPendingSession. Only relevant if the entry needs a fresh spawn. */
   isPendingSession?: boolean
 }
@@ -4079,9 +4378,11 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
     effort,
     cwdOverride,
     taskBudgetTotal,
+    maxBudgetUsd,
     isPendingSession,
     turnRequestId,
     fallbackModel,
+    agentPolicy,
   } = args
 
   // Bash mode builds its own transcript-shaped messages after the command runs.
@@ -4114,6 +4415,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
         : undefined
       // Elicitation isn't gated on manual permissions — install it every turn.
       const elicit = createClaudeElicitationBridge(sessionId, controller, encoder)
+      const dialog = createClaudeUserDialogBridge(sessionId, controller, encoder)
 
       // Decouple the turn lifecycle from this HTTP request. A client disconnect
       // (tab closed, navigation, network blip) must NOT interrupt an in-flight
@@ -4184,6 +4486,8 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
               permissionMode,
               effort,
               taskBudgetTokens: taskBudgetTotal,
+              maxBudgetUsd,
+              agentPolicy,
               isPendingSession,
             })
           } catch (err) {
@@ -4307,6 +4611,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
                 signal: turnAbort.signal,
                 bridge,
                 elicit,
+                dialog,
                 onMessage: onTurnMessage,
                 onError: onTurnError,
               })
@@ -4315,6 +4620,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
                 signal: turnAbort.signal,
                 bridge,
                 elicit,
+                dialog,
                 onMessage: onTurnMessage,
                 onError: onTurnError,
               })
@@ -4400,6 +4706,7 @@ async function readClaudeSupportedModelsOnce(): Promise<SessionModelInfo[]> {
           persistSession: false,
           maxTurns: 0,
           enableFileCheckpointing: true,
+          ...claudeProcessSpawnOptions(),
         },
       })
 
@@ -6619,6 +6926,7 @@ export async function forkViewSession({ sessionId, body, provider }: ForkParams)
   const result = await forkSession(sessionId, {
     title: typeof body.title === 'string' ? body.title : undefined,
     upToMessageId: typeof body.upToMessageId === 'string' ? body.upToMessageId : undefined,
+    ...claudeSessionStoreOptions(),
   })
   return { sessionId: result.sessionId }
 }
@@ -7217,13 +7525,20 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
   const q = createSessionControlQuery(sessionId)
   try {
     const init = await q.initializationResult()
-    const [commands, agents, mcpServers, contextUsage, subagents, rawMessages] = await Promise.all([
+    const [commands, agents, mcpServers, contextUsage, subagents, rawMessages, resolvedSettings, hookEvents] = await Promise.all([
       q.supportedCommands(),
       q.supportedAgents(),
       q.mcpServerStatus(),
       q.getContextUsage().catch(() => null),
-      listSubagents(sessionId).catch(() => [] as string[]),
-      getSessionMessages(sessionId, { includeSystemMessages: true }).catch(() => [] as unknown[]),
+      listSubagents(sessionId, claudeSessionStoreOptions()).catch(() => [] as string[]),
+      getSessionMessages(sessionId, {
+        includeSystemMessages: true,
+        ...claudeSessionStoreOptions(),
+      }).catch(() => [] as unknown[]),
+      getSessionInfo(sessionId, claudeSessionStoreOptions())
+        .then((info) => resolveSettings({ cwd: info?.cwd }))
+        .catch(() => null),
+      listClaudeHookEvents(sessionId, { limit: 20 }).catch(() => []),
     ])
     const accountItems: string[] = []
     if (init.account?.email) accountItems.push(init.account.email)
@@ -7232,26 +7547,59 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
     const subagentParents = new Map<string, string | null>()
     if (subagents.length > 0) {
       await Promise.all(subagents.map(async (agentId) => {
-        const messages = await getSubagentMessages(sessionId, agentId).catch(() => [] as SessionMessage[])
+        const messages = await getSubagentMessages(sessionId, agentId, claudeSessionStoreOptions())
+          .catch(() => [] as SessionMessage[])
         subagentParents.set(agentId, claudeSubagentParentId(messages as unknown[]))
       }))
     }
+    const settingItems = resolvedSettings
+      ? [
+          `effective keys · ${Object.keys(resolvedSettings.effective).sort().join(', ') || 'none'}`,
+          `sources · ${resolvedSettings.sources.map((source) => source.source).join(', ') || 'managed/default only'}`,
+        ]
+      : ['Unavailable']
+    const sandboxSettings = resolvedSettings?.effective.sandbox
+    const sandboxItems = sandboxSettings && typeof sandboxSettings === 'object'
+      ? [
+          `enabled · ${sandboxSettings.enabled === false ? 'no' : 'yes'}`,
+          `bash auto-allow · ${sandboxSettings.autoAllowBashIfSandboxed === false ? 'no' : 'yes'}`,
+          `unsandboxed commands · ${sandboxSettings.allowUnsandboxedCommands === true ? 'allowed' : 'blocked'}`,
+        ]
+      : ['Not configured']
     return {
       currentModel: contextUsage?.model ?? null,
       sections: [
         { id: 'commands', title: 'COMMANDS', items: commands.length > 0 ? commands.slice(0, 20).map((command) => command.name) : ['None'] },
         { id: 'agents', title: 'AGENTS', items: agents.length > 0 ? agents.slice(0, 20).map((agent) => agent.name) : ['None'] },
+        { id: 'settings', title: 'SETTINGS', items: settingItems },
+        { id: 'sandbox', title: 'SANDBOX', items: sandboxItems },
+        {
+          id: 'transport',
+          title: 'PROCESS TRANSPORT',
+          items: [
+            `${claudeProcessTransportStatus().kind} · ${claudeProcessTransportStatus().healthy ? 'healthy' : 'unhealthy'}`,
+            ...(claudeProcessTransportStatus().target ? [`target · ${claudeProcessTransportStatus().target}`] : []),
+            ...(claudeProcessTransportStatus().lastError ? [`last error · ${claudeProcessTransportStatus().lastError}`] : []),
+          ],
+        },
         {
           id: 'mcp',
           title: 'MCP',
           items: mcpServers.length > 0
-            ? mcpServers.map((server) => `${server.name} · ${server.status}`)
+            ? mcpServers.map((server) => `${server.name} · ${server.status}${claudeDynamicMcpServerNames(sessionId).includes(server.name) ? ' · dynamic' : ''}`)
             : ['None'],
         },
         {
           id: 'subagents',
           title: 'SUBAGENTS',
           items: subagents.length > 0 ? formatClaudeSubagentTree(subagents, subagentParents).slice(0, 20) : ['None'],
+        },
+        {
+          id: 'hooks',
+          title: 'HOOK TIMELINE',
+          items: hookEvents.length > 0
+            ? hookEvents.map((event) => `${event.timestamp} · ${event.summary}`)
+            : ['None'],
         },
         {
           id: 'output-style',
@@ -7370,13 +7718,16 @@ export async function rewindOrRollbackViewSession({ sessionId, body, provider }:
   if (!userMessageId) {
     throw new Error('userMessageId is required')
   }
+  if (claudeSessionStoreOptions().sessionStore) {
+    throw new Error('File rewind is unavailable while the Claude SQLite session store is enabled; the Agent SDK does not mirror checkpoint blobs')
+  }
 
   const q = createSessionControlQuery(sessionId, model)
   try {
     await q.initializationResult()
     const result = await q.rewindFiles(userMessageId, { dryRun: Boolean(body.dryRun) })
     if (!body.dryRun && result.canRewind && result.filesChanged?.length) {
-      const info = await getSessionInfo(sessionId).catch(() => undefined)
+      const info = await getSessionInfo(sessionId, claudeSessionStoreOptions()).catch(() => undefined)
       if (info?.cwd) {
         const observedPaths = await readClaudeObservedFilePaths(sessionId, info.cwd).catch(() => [])
         await queueClaudeReadStateSeeds(sessionId, info.cwd, observedPaths)
@@ -7412,6 +7763,7 @@ export function getServerMemoryDiagnostics(): Record<string, number> {
     piLiveTranscripts: piLiveTranscripts.size,
     pendingClaudePermissions: pendingClaudePermissions.size,
     pendingClaudeElicitations: pendingClaudeElicitations.size,
+    pendingClaudeDialogs: pendingClaudeDialogs.size,
     pendingCopilotPermissions: pendingCopilotPermissions.size,
     pendingCopilotElicitations: pendingCopilotElicitations.size,
     pendingPiUiRequests: pendingPiUiRequestCount(),

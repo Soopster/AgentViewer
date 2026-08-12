@@ -7070,8 +7070,10 @@ export default function OpenTuiApp() {
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
   const [diagnosticsSections, setDiagnosticsSections] = useState<import('../../lib/types').SessionDiagnosticSection[]>([])
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null)
+  const [diagnosticsNotice, setDiagnosticsNotice] = useState<string | null>(null)
   const [diagnosticsBusy, setDiagnosticsBusy] = useState<string | null>(null)
   const [diagnosticsMcpIndex, setDiagnosticsMcpIndex] = useState(0)
+  const [diagnosticsMcpPermissionModes, setDiagnosticsMcpPermissionModes] = useState<Record<string, 'default' | 'auto'>>({})
   const [searchMode, setSearchMode] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMatchIndex, setSearchMatchIndex] = useState(0)
@@ -11021,18 +11023,60 @@ export default function OpenTuiApp() {
   const closeDiagnostics = useCallback(() => {
     setDiagnosticsOpen(false)
     setDiagnosticsError(null)
+    setDiagnosticsNotice(null)
     setDiagnosticsBusy(null)
   }, [])
 
   const runDiagnosticsAction = useEffectEvent(async (action: string, extra: Record<string, unknown>, busyKey: string) => {
-    if (!selectedSession || selectedSession.provider !== 'claude') return
+    if (!selectedSession || selectedSession.provider !== 'claude') return null
     setDiagnosticsBusy(busyKey)
     setDiagnosticsError(null)
+    setDiagnosticsNotice(null)
     try {
-      await runTuiSessionAction(selectedSession, { action, ...extra })
-      await refreshDiagnostics()
+      const result = await runTuiSessionAction(selectedSession, { action, ...extra })
+      if (action === 'resolveSettings') {
+        const sources = typeof result.sourceCount === 'number'
+          ? result.sourceCount
+          : Array.isArray(result.sources) ? result.sources.length : null
+        const effective = typeof result.effectiveKeyCount === 'number'
+          ? result.effectiveKeyCount
+          : Array.isArray(result.effectiveKeys) ? result.effectiveKeys.length : null
+        setDiagnosticsNotice(`Settings resolved${sources == null ? '' : ` · ${sources} source${sources === 1 ? '' : 's'}`}${effective == null ? '' : ` · ${effective} effective key${effective === 1 ? '' : 's'}`}`)
+      } else if (action === 'reloadSkills') {
+        setDiagnosticsNotice('Skills reloaded')
+      } else if (action === 'reloadPlugins') {
+        setDiagnosticsNotice('Plugins reloaded')
+      } else if (action === 'setMcpPermissionModeOverride') {
+        const mode = extra.mode == null ? 'cleared' : `set to ${String(extra.mode)}`
+        setDiagnosticsNotice(`MCP policy ${mode}`)
+      } else if (action === 'setMcpServers') {
+        const dynamicServers = Array.isArray(result.dynamicServers) ? result.dynamicServers.length : 0
+        const authRequired = Array.isArray(result.authRequired)
+          ? result.authRequired.filter((name): name is string => typeof name === 'string')
+          : []
+        const errors = result.errors && typeof result.errors === 'object' && !Array.isArray(result.errors)
+          ? Object.keys(result.errors)
+          : []
+        setDiagnosticsNotice(
+          authRequired.length > 0
+            ? `Dynamic MCP updated · authentication required: ${authRequired.join(', ')}`
+            : errors.length > 0
+              ? `Dynamic MCP updated · connection failed: ${errors.join(', ')}`
+              : `Dynamic MCP updated · ${dynamicServers} server${dynamicServers === 1 ? '' : 's'}`,
+        )
+      } else if (action === 'listHookEvents') {
+        const events = Array.isArray(result.events) ? result.events as Array<Record<string, unknown>> : []
+        const items = events.map((event) => `${String(event.timestamp ?? '')} · ${String(event.summary ?? event.event ?? 'Hook')}`)
+        setDiagnosticsSections((sections) => sections.map((section) => section.id === 'hooks'
+          ? { ...section, items: items.length > 0 ? items : ['None'] }
+          : section))
+        setDiagnosticsNotice(`Hook timeline · ${events.length} match${events.length === 1 ? '' : 'es'}`)
+      }
+      if (action !== 'listHookEvents') await refreshDiagnostics()
+      return result
     } catch (err) {
       setDiagnosticsError(err instanceof Error ? err.message : 'Action failed')
+      return null
     } finally {
       setDiagnosticsBusy(null)
     }
@@ -15762,7 +15806,7 @@ export default function OpenTuiApp() {
         if (selectedSession?.provider !== 'claude') return
         const mcpSection = diagnosticsSections.find((s) => s.id === 'mcp')
         const mcpRows = mcpSection?.items.filter((i) => i !== 'None') ?? []
-        if (mcpRows.length === 0 && key.name !== 'p') return
+        if (mcpRows.length === 0 && key.name !== 'p' && key.name !== 's' && key.name !== 'g') return
         if (key.name === 'up' || key.name === 'k') {
           setDiagnosticsMcpIndex((i) => Math.max(0, i - 1))
           return
@@ -15785,8 +15829,71 @@ export default function OpenTuiApp() {
           if (name) void runDiagnosticsAction('toggleMcpServer', { serverName: name, enabled: status === 'disabled' }, `mcp:toggle:${name}`)
           return
         }
+        if (key.name === 'o' && mcpRows[diagnosticsMcpIndex]) {
+          const item = mcpRows[diagnosticsMcpIndex]
+          const name = item.split(' · ')[0]?.trim() ?? ''
+          if (name) {
+            const policyKey = `${selectedSession.sessionId}:${name}`
+            const previous: 'default' | 'auto' | undefined = diagnosticsMcpPermissionModes[policyKey]
+            const mode: 'default' | 'auto' | null = previous == null
+              ? 'default'
+              : previous === 'default' ? 'auto' : null
+            setDiagnosticsMcpPermissionModes((current) => {
+              const next = { ...current }
+              if (mode === null) delete next[policyKey]
+              else next[policyKey] = mode
+              return next
+            })
+            void runDiagnosticsAction(
+              'setMcpPermissionModeOverride',
+              { serverName: name, mode },
+              `mcp:permission:${name}`,
+            ).then((result) => {
+              if (!result) {
+                setDiagnosticsMcpPermissionModes((current) => {
+                  const next = { ...current }
+                  if (previous) next[policyKey] = previous
+                  else delete next[policyKey]
+                  return next
+                })
+              }
+            })
+          }
+          return
+        }
+        if (key.name === 'd' && mcpRows[diagnosticsMcpIndex]?.endsWith(' · dynamic')) {
+          const name = mcpRows[diagnosticsMcpIndex]!.split(' · ')[0]?.trim() ?? ''
+          if (name) void runDiagnosticsAction('setMcpServers', { operation: 'remove', serverName: name }, `mcp:remove:${name}`)
+          return
+        }
+        if (key.name === 'a') {
+          const source = composerDraftRef.current.trim()
+          if (!source) {
+            setDiagnosticsError('Put a JSON object of MCP servers in the composer first')
+            return
+          }
+          try {
+            const servers = JSON.parse(source) as unknown
+            void runDiagnosticsAction('setMcpServers', { servers }, 'mcp:set')
+          } catch (err) {
+            setDiagnosticsError(err instanceof Error ? err.message : 'Invalid MCP JSON')
+          }
+          return
+        }
+        if (key.name === 'f') {
+          void runDiagnosticsAction('listHookEvents', { query: composerDraftRef.current.trim(), limit: 100 }, 'hooks:search')
+          return
+        }
         if (key.name === 'p') {
           void runDiagnosticsAction('reloadPlugins', {}, 'reload-plugins')
+          return
+        }
+        if (key.name === 's') {
+          void runDiagnosticsAction('reloadSkills', {}, 'reload-skills')
+          return
+        }
+        if (key.name === 'g') {
+          void runDiagnosticsAction('resolveSettings', {}, 'resolve-settings')
           return
         }
       })
@@ -19071,6 +19178,15 @@ export default function OpenTuiApp() {
             setFolderPickerForNewSession(false)
           }}
           onKeyHandlerReady={(handler) => { fileViewerKeyHandlerRef.current = handler }}
+          readRemoteFile={selectedSession?.provider === 'claude' && !selectedSession.isPending
+            ? async (path) => {
+                const result = await runTuiSessionAction(selectedSession, { action: 'readFile', path, maxBytes: 512 * 1024, encoding: 'utf-8' })
+                const file = result.file && typeof result.file === 'object' ? result.file as Record<string, unknown> : null
+                return file && typeof file.contents === 'string'
+                  ? { contents: file.contents, truncated: file.truncated === true }
+                  : null
+              }
+            : undefined}
           onToggleVelocityScroll={() => {
             setVelocityScrollEnabled((current) => {
               const next = !current
@@ -19467,6 +19583,11 @@ export default function OpenTuiApp() {
                 <text fg={theme.red} wrapMode="none">{fitText(diagnosticsError, overlayWidth - 4)}</text>
               </box>
             ) : null}
+            {diagnosticsNotice ? (
+              <box paddingX={1}>
+                <text fg={theme.green} wrapMode="none">{fitText(diagnosticsNotice, overlayWidth - 4)}</text>
+              </box>
+            ) : null}
             <box flexGrow={1} paddingX={1} paddingBottom={1} flexDirection="column" overflow="hidden">
               {diagnosticsSections.map((section) => (
                 <box key={section.id} flexDirection="column" marginTop={1} flexShrink={0}>
@@ -19479,13 +19600,15 @@ export default function OpenTuiApp() {
                       const [, rawStatus] = item.split(' · ')
                       const status = rawStatus?.trim() ?? ''
                       const selected = idx === diagnosticsMcpIndex
+                      const serverName = item.split(' · ')[0]?.trim() ?? ''
+                      const policy = diagnosticsMcpPermissionModes[`${selectedSession?.sessionId ?? ''}:${serverName}`]
                       return (
                         <box key={idx} flexShrink={0} height={1}>
                           <text
                             fg={selected ? theme.cyan : (status === 'disabled' ? theme.dim : theme.text)}
                             wrapMode="none"
                           >
-                            {fitText(`  ${selected ? '▶' : ' '} ${item}`, overlayWidth - 4)}
+                            {fitText(`  ${selected ? '▶' : ' '} ${item} · ${policy ? `applied ${policy}` : 'policy —'}`, overlayWidth - 4)}
                           </text>
                         </box>
                       )
@@ -19506,7 +19629,7 @@ export default function OpenTuiApp() {
               <text fg={theme.dim} wrapMode="none">
                 {fitText(
                   isClaude
-                    ? `${mcpRows.length > 0 ? '↑↓ select MCP · r reconnect · t toggle · ' : ''}p reload plugins · Esc close`
+                    ? `${mcpRows.length > 0 ? '↑↓ MCP · r reconnect · t toggle · o policy · d remove · ' : ''}a set MCP JSON · f filter hooks · p/s/g reload · Esc close`
                     : 'Esc close',
                   overlayWidth - 4,
                 )}

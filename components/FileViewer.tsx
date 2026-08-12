@@ -68,6 +68,8 @@ type Props = {
   open: boolean
   cwd: string
   canInsert: boolean
+  sessionId?: string
+  provider?: string
   onOpenChange: (open: boolean) => void
   onInsertPath?: (path: string) => void
 }
@@ -162,9 +164,11 @@ function sortEntries(entries: FileEntry[], sortMode: SortMode): FileEntry[] {
   })
 }
 
-async function fetchPath(path: string, showHidden: boolean, signal?: AbortSignal): Promise<PreviewResponse> {
+async function fetchPath(path: string, showHidden: boolean, sessionId?: string, provider?: string, signal?: AbortSignal): Promise<PreviewResponse> {
   const params = new URLSearchParams({ path })
   if (showHidden) params.set('hidden', '1')
+  if (sessionId) params.set('sessionId', sessionId)
+  if (provider) params.set('provider', provider)
   const response = await fetch(`/api/files?${params.toString()}`, { signal })
   const body = await response.json() as PreviewResponse | { error?: string }
   if (!response.ok || 'error' in body) throw new Error('error' in body ? body.error || 'Unable to read path' : `HTTP ${response.status}`)
@@ -197,7 +201,7 @@ function FileRow({ entry, selected, onClick, onDoubleClick }: {
   )
 }
 
-export default function FileViewer({ open, cwd, canInsert, onOpenChange, onInsertPath }: Props) {
+export default function FileViewer({ open, cwd, canInsert, sessionId, provider, onOpenChange, onInsertPath }: Props) {
   const [directory, setDirectory] = useState(cwd)
   const [directoryData, setDirectoryData] = useState<DirectoryResponse | null>(null)
   const [preview, setPreview] = useState<PreviewResponse | null>(null)
@@ -232,7 +236,7 @@ export default function FileViewer({ open, cwd, canInsert, onOpenChange, onInser
     const controller = new AbortController()
     setLoading(true)
     setError(null)
-    void fetchPath(directory, showHidden, controller.signal)
+    void fetchPath(directory, showHidden, sessionId, provider, controller.signal)
       .then((result) => {
         if (result.kind !== 'directory') throw new Error('The selected path is not a directory')
         setDirectoryData(result)
@@ -244,7 +248,7 @@ export default function FileViewer({ open, cwd, canInsert, onOpenChange, onInser
       })
       .finally(() => setLoading(false))
     return () => controller.abort()
-  }, [directory, open, refreshVersion, showHidden])
+  }, [directory, open, provider, refreshVersion, sessionId, showHidden])
 
   const entries = useMemo(() => {
     const sorted = sortEntries(directoryData?.entries ?? [], sortMode)
@@ -265,7 +269,7 @@ export default function FileViewer({ open, cwd, canInsert, onOpenChange, onInser
     const controller = new AbortController()
     setPreviewLoading(true)
     const timer = window.setTimeout(() => {
-      void fetchPath(selectedEntry.path, showHidden, controller.signal)
+      void fetchPath(selectedEntry.path, showHidden, sessionId, provider, controller.signal)
         .then((result) => {
           setPreview(result)
           setPreviewCursor(0)
@@ -281,7 +285,7 @@ export default function FileViewer({ open, cwd, canInsert, onOpenChange, onInser
       window.clearTimeout(timer)
       controller.abort()
     }
-  }, [open, selectedEntry, showHidden])
+  }, [open, provider, selectedEntry, sessionId, showHidden])
 
   useEffect(() => {
     listRef.current?.querySelector<HTMLElement>(`[data-file-index="${cursor}"]`)?.scrollIntoView({ block: 'nearest' })

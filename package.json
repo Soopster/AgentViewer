@@ -28,7 +28,7 @@
   ],
   "scripts": {
     "dev": "node ./bin/agent-viewer.mjs web",
-    "build": "tsc --noEmit && next build",
+    "build": "tsc --noEmit && next build --webpack",
     "start": "node ./bin/agent-viewer.mjs web --production",
     "tui": "bun run ./tui/opentui/main.tsx",
     "tui:dev": "bun --watch ./tui/opentui/main.tsx",
@@ -48,6 +48,9 @@
     "tui:ink:dev": "node --watch --import tsx ./tui/main.tsx",
     "regen-codex-schema": "rm -rf lib/codex-schema && codex app-server generate-ts --experimental --out lib/codex-schema",
     "codex:schema:smoke": "bun run ./scripts/codexSchemaAlignmentSmoke.ts",
+    "claude:storage:smoke": "node --import tsx ./scripts/claudeSessionStoreSmoke.ts",
+    "claude:runtime:smoke": "node --import tsx ./scripts/claude-runtime-policy-smoke.ts && node --import tsx ./scripts/claudeIntegrationSmoke.ts && node --import tsx ./scripts/claudeDialogBridgeSmoke.ts",
+    "claude:live:smoke": "node --import tsx ./scripts/claudeLiveParitySmoke.ts",
     "seed-prompts": "node ./scripts/seed-prompts.mjs",
     "doctor": "npx react-doctor@latest"
   },

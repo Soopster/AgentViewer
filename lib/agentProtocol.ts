@@ -218,6 +218,42 @@ export type ProtocolUsageReceipt = {
   durationMs?: number
 }
 
+/**
+ * Coordinator-owned subset of Claude's AgentDefinition plus the parent
+ * query's sandbox settings. Keeping this provider-specific policy on the
+ * dispatch contract lets Claude enforce a task role mechanically while every
+ * other provider continues to receive the ordinary model/effort fields.
+ */
+export type ProtocolClaudeAgentPolicy = {
+  name: string
+  description: string
+  prompt: string
+  tools?: string[]
+  disallowedTools?: string[]
+  skills?: string[]
+  model?: string
+  mcpServers?: Array<string | Record<string, unknown>>
+  criticalSystemReminder?: string
+  initialPrompt?: string
+  maxTurns?: number
+  background?: boolean
+  memory?: 'user' | 'project' | 'local'
+  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  permissionMode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'dontAsk'
+  observer?: string
+  observerMessage?: string
+  sandbox?: {
+    enabled?: boolean
+    failIfUnavailable?: boolean
+    autoAllowBashIfSandboxed?: boolean
+    allowUnsandboxedCommands?: boolean
+    filesystem?: {
+      allowWrite?: string[]
+      denyWrite?: string[]
+    }
+  }
+}
+
 export type ProtocolVerificationReceipt = {
   command: string
   passed: boolean
@@ -270,6 +306,7 @@ export type ProtocolPhaseReport = {
 
 export type ProtocolRunBudget = {
   maxTokens?: number
+  maxCostUsd?: number
   maxDurationMinutes?: number
 }
 
@@ -374,6 +411,13 @@ export type ProtocolEventType =
   | 'task.completed'
   | 'task.failed'
   | 'task.cancelled'
+  // provider-native task/workflow evidence (does not mutate board ownership)
+  | 'task.child.started'
+  | 'task.child.progress'
+  | 'task.child.completed'
+  | 'task.child.failed'
+  | 'task.child.cancelled'
+  | 'usage.observed'
   | 'plan.completed'
   | 'plan.approved'
   | 'plan.rejected'
@@ -536,6 +580,8 @@ export type ProtocolTask = {
   requestedProvider?: AgentProvider
   requestedModel?: string
   requestedEffort?: string
+  /** Explicit/derived native policy used only for Claude SDK dispatches. */
+  claudeAgentPolicy?: ProtocolClaudeAgentPolicy
   verifyCommands: string[]
   receipt?: ProtocolTaskReceipt
   /** Durable terminal report supplied by the task owner. */
@@ -855,6 +901,12 @@ export type PlaybookTask = {
   provider?: AgentProvider
   model?: string
   effort?: string
+  /** Optional Claude-native overrides; role/task defaults are derived when omitted. */
+  claude?: Partial<Omit<ProtocolClaudeAgentPolicy, 'name' | 'description' | 'prompt'>> & {
+    name?: string
+    description?: string
+    prompt?: string
+  }
   verifyCommands?: string[]
 }
 
@@ -918,6 +970,63 @@ function protocolStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim())
     : []
+}
+
+function parseClaudeAgentPolicy(value: unknown): PlaybookTask['claude'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  const sandboxRecord = record.sandbox && typeof record.sandbox === 'object' && !Array.isArray(record.sandbox)
+    ? record.sandbox as Record<string, unknown>
+    : undefined
+  const filesystemRecord = sandboxRecord?.filesystem && typeof sandboxRecord.filesystem === 'object' && !Array.isArray(sandboxRecord.filesystem)
+    ? sandboxRecord.filesystem as Record<string, unknown>
+    : undefined
+  const permissionMode = ['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk'].includes(String(record.permissionMode))
+    ? record.permissionMode as ProtocolClaudeAgentPolicy['permissionMode']
+    : undefined
+  const effort = ['low', 'medium', 'high', 'xhigh', 'max'].includes(String(record.effort))
+    ? record.effort as ProtocolClaudeAgentPolicy['effort']
+    : undefined
+  return {
+    name: typeof record.name === 'string' && record.name.trim() ? record.name.trim() : undefined,
+    description: typeof record.description === 'string' && record.description.trim() ? record.description.trim() : undefined,
+    prompt: typeof record.prompt === 'string' && record.prompt.trim() ? record.prompt.trim() : undefined,
+    tools: record.tools === undefined ? undefined : protocolStringArray(record.tools),
+    disallowedTools: record.disallowedTools === undefined ? undefined : protocolStringArray(record.disallowedTools),
+    skills: record.skills === undefined ? undefined : protocolStringArray(record.skills),
+    model: typeof record.model === 'string' && record.model.trim() ? record.model.trim() : undefined,
+    mcpServers: Array.isArray(record.mcpServers)
+      ? record.mcpServers.filter((entry): entry is string | Record<string, unknown> => (
+        (typeof entry === 'string' && entry.trim().length > 0)
+        || Boolean(entry && typeof entry === 'object' && !Array.isArray(entry))
+      ))
+      : undefined,
+    criticalSystemReminder: typeof record.criticalSystemReminder === 'string' && record.criticalSystemReminder.trim()
+      ? record.criticalSystemReminder.trim()
+      : undefined,
+    initialPrompt: typeof record.initialPrompt === 'string' && record.initialPrompt.trim() ? record.initialPrompt.trim() : undefined,
+    maxTurns: typeof record.maxTurns === 'number' && Number.isInteger(record.maxTurns) && record.maxTurns > 0
+      ? record.maxTurns
+      : undefined,
+    background: typeof record.background === 'boolean' ? record.background : undefined,
+    memory: ['user', 'project', 'local'].includes(String(record.memory))
+      ? record.memory as ProtocolClaudeAgentPolicy['memory']
+      : undefined,
+    effort,
+    permissionMode,
+    observer: typeof record.observer === 'string' && record.observer.trim() ? record.observer.trim() : undefined,
+    observerMessage: typeof record.observerMessage === 'string' && record.observerMessage.trim() ? record.observerMessage.trim() : undefined,
+    sandbox: sandboxRecord ? {
+      enabled: typeof sandboxRecord.enabled === 'boolean' ? sandboxRecord.enabled : undefined,
+      failIfUnavailable: typeof sandboxRecord.failIfUnavailable === 'boolean' ? sandboxRecord.failIfUnavailable : undefined,
+      autoAllowBashIfSandboxed: typeof sandboxRecord.autoAllowBashIfSandboxed === 'boolean' ? sandboxRecord.autoAllowBashIfSandboxed : undefined,
+      allowUnsandboxedCommands: typeof sandboxRecord.allowUnsandboxedCommands === 'boolean' ? sandboxRecord.allowUnsandboxedCommands : undefined,
+      filesystem: filesystemRecord ? {
+        allowWrite: filesystemRecord.allowWrite === undefined ? undefined : protocolStringArray(filesystemRecord.allowWrite),
+        denyWrite: filesystemRecord.denyWrite === undefined ? undefined : protocolStringArray(filesystemRecord.denyWrite),
+      } : undefined,
+    } : undefined,
+  }
 }
 
 export function normalizeAcceptanceContract(
@@ -1028,6 +1137,7 @@ export function parseRunPlaybook(value: unknown): RunPlaybook {
         provider: typeof task.provider === 'string' ? task.provider as AgentProvider : undefined,
         model: typeof task.model === 'string' && task.model.trim() ? task.model.trim() : undefined,
         effort: typeof task.effort === 'string' && task.effort.trim() ? task.effort.trim() : undefined,
+        claude: parseClaudeAgentPolicy(task.claude),
         verifyCommands: protocolStringArray(task.verifyCommands),
       }
     })
@@ -1061,6 +1171,8 @@ export function parseRunPlaybook(value: unknown): RunPlaybook {
     budget: record.budget && typeof record.budget === 'object' ? {
       maxTokens: Number.isFinite(Number((record.budget as Record<string, unknown>).maxTokens))
         ? Math.max(1, Number((record.budget as Record<string, unknown>).maxTokens)) : undefined,
+      maxCostUsd: Number.isFinite(Number((record.budget as Record<string, unknown>).maxCostUsd))
+        ? Math.max(0.01, Number((record.budget as Record<string, unknown>).maxCostUsd)) : undefined,
       maxDurationMinutes: Number.isFinite(Number((record.budget as Record<string, unknown>).maxDurationMinutes))
         ? Math.max(1, Number((record.budget as Record<string, unknown>).maxDurationMinutes)) : undefined,
     } : undefined,
@@ -1081,6 +1193,8 @@ const EVENT_TYPES: ReadonlySet<string> = new Set<ProtocolEventType>([
   'agent.blocked', 'agent.unblocked',
   'task.created', 'task.planned', 'task.claim', 'task.claimed',
   'task.released', 'task.completed', 'task.failed', 'plan.completed',
+  'task.child.started', 'task.child.progress', 'task.child.completed',
+  'task.child.failed', 'task.child.cancelled', 'usage.observed',
   'plan.approved', 'plan.rejected',
   'decision.raised', 'decision.resolved', 'review.completed', 'phase.reported',
   'phase.approved', 'phase.rejected',

@@ -77,6 +77,7 @@ import {
   type ProtocolTaskTargetRole,
   type ProtocolAcceptanceContract,
   type ProtocolAutonomy,
+  type ProtocolClaudeAgentPolicy,
   type ProtocolNeedsDecision,
   type ProtocolLearningCandidate,
   type ProtocolPhaseReport,
@@ -171,7 +172,7 @@ const LOCK_LEASE_MS = 20 * 60_000
 // can cancel a teammate's in-flight turn without releasing the task), and
 // respond_to_mode/respond_to_allowlist_json (per-participant mailbox sender
 // gating, mirroring buzz-acp's respond-to modes).
-const SCHEMA_VERSION = 17
+const SCHEMA_VERSION = 18
 const EVENT_WINDOW = 300
 const LOCK_HISTORY_WINDOW = 200
 // Non-terminal tasks (pending/claimed/blocked) are always returned in full —
@@ -330,6 +331,8 @@ type RunController = {
   executionStarted: boolean
   /** agentId → same-provider retries used since its last successful turn or failover. Reset on either. */
   sameProviderRetries: Map<string, number>
+  /** Latest cumulative Claude SDK result usage, used to derive per-turn deltas. */
+  claudeUsageCumulative: Map<string, ProtocolUsageReceipt>
 }
 
 declare global {
@@ -486,6 +489,7 @@ function initializeSchema(db: SqliteDatabase): void {
       requested_provider TEXT,
       requested_model TEXT,
       requested_effort TEXT,
+      claude_agent_policy_json TEXT,
       verify_commands_json TEXT NOT NULL DEFAULT '[]',
       receipt_json TEXT,
       created_at TEXT NOT NULL,
@@ -735,6 +739,7 @@ function migrateSchema(db: SqliteDatabase): void {
     'ALTER TABLE protocol_tasks ADD COLUMN requested_provider TEXT',
     'ALTER TABLE protocol_tasks ADD COLUMN requested_model TEXT',
     'ALTER TABLE protocol_tasks ADD COLUMN requested_effort TEXT',
+    'ALTER TABLE protocol_tasks ADD COLUMN claude_agent_policy_json TEXT',
     "ALTER TABLE protocol_tasks ADD COLUMN verify_commands_json TEXT NOT NULL DEFAULT '[]'",
     'ALTER TABLE protocol_tasks ADD COLUMN receipt_json TEXT',
   ]) {
@@ -1061,6 +1066,7 @@ function rowToTask(row: Row): ProtocolTask {
     requestedProvider: typeof row.requested_provider === 'string' && row.requested_provider ? row.requested_provider as ProtocolTask['requestedProvider'] : undefined,
     requestedModel: typeof row.requested_model === 'string' && row.requested_model ? row.requested_model : undefined,
     requestedEffort: typeof row.requested_effort === 'string' && row.requested_effort ? row.requested_effort : undefined,
+    claudeAgentPolicy: parseJsonObject<ProtocolClaudeAgentPolicy>(row.claude_agent_policy_json),
     verifyCommands: parseJsonArray(row.verify_commands_json),
     receipt: parseJsonObject<ProtocolTaskReceipt>(row.receipt_json),
     resultSummary: typeof row.result_summary === 'string' && row.result_summary ? row.result_summary : undefined,
@@ -1619,7 +1625,74 @@ type PlaybookTaskPlan = {
   requestedProvider?: ProtocolRun['provider']
   requestedModel?: string
   requestedEffort?: string
+  claudeAgentPolicy?: ProtocolClaudeAgentPolicy
   verifyCommands: string[]
+}
+
+type ClaudePolicyTaskContext = Pick<ProtocolTask,
+  'title' | 'prompt' | 'roleName' | 'roleDescription' | 'seat' | 'paths' | 'requestedModel' | 'requestedEffort'
+>
+
+function claudePolicyName(value: string): string {
+  const slug = value.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '')
+  return slug.slice(0, 64) || 'coordinator-task'
+}
+
+/** Derive a native Claude AgentDefinition-shaped policy from board semantics. */
+export function deriveProtocolClaudeAgentPolicy(
+  task: ClaudePolicyTaskContext,
+  overrides?: Partial<ProtocolClaudeAgentPolicy>,
+): ProtocolClaudeAgentPolicy {
+  const readOnly = task.seat === 'watcher' || task.seat === 'validator'
+  const defaultDescription = task.roleDescription
+    ?? `${task.roleName ?? task.seat} assigned to ${task.title}`
+  const defaultPrompt = [
+    `You are the ${task.roleName ?? task.seat} for this Coordinator task.`,
+    task.roleDescription,
+    `Task: ${task.title}`,
+    task.prompt,
+    task.paths.length > 0 ? `Authorized paths: ${task.paths.join(', ')}` : undefined,
+    readOnly ? 'This is a read-only role. Do not modify files.' : 'Stay within the task and its authorized paths.',
+  ].filter(Boolean).join('\n\n')
+  const effort = ['low', 'medium', 'high', 'xhigh', 'max'].includes(task.requestedEffort ?? '')
+    ? task.requestedEffort as ProtocolClaudeAgentPolicy['effort']
+    : undefined
+  const base: ProtocolClaudeAgentPolicy = {
+    name: claudePolicyName(task.roleName ?? `${task.seat}-${task.title}`),
+    description: defaultDescription,
+    prompt: defaultPrompt,
+    ...(readOnly ? {
+      tools: task.seat === 'validator'
+        ? ['Read', 'Grep', 'Glob', 'Bash', 'WebSearch', 'WebFetch']
+        : ['Read', 'Grep', 'Glob', 'WebSearch', 'WebFetch'],
+      disallowedTools: task.seat === 'validator'
+        ? ['Write', 'Edit', 'NotebookEdit']
+        : ['Write', 'Edit', 'NotebookEdit', 'Bash'],
+      permissionMode: 'plan' as const,
+    } : {}),
+    model: task.requestedModel,
+    effort,
+    sandbox: {
+      enabled: true,
+      failIfUnavailable: false,
+      autoAllowBashIfSandboxed: true,
+      allowUnsandboxedCommands: false,
+      ...(readOnly
+        ? { filesystem: { denyWrite: ['**'] } }
+        : task.paths.length > 0 ? { filesystem: { allowWrite: task.paths } } : {}),
+    },
+  }
+  return {
+    ...base,
+    ...overrides,
+    sandbox: overrides?.sandbox ? {
+      ...base.sandbox,
+      ...overrides.sandbox,
+      filesystem: overrides.sandbox.filesystem
+        ? { ...base.sandbox?.filesystem, ...overrides.sandbox.filesystem }
+        : base.sandbox?.filesystem,
+    } : base.sandbox,
+  }
 }
 
 /**
@@ -1660,11 +1733,15 @@ function planPlaybookTasks(playbook: RunPlaybook, args: unknown, startCount: num
         if (!depId) throw new Error(`playbook task "${entry.title}" depends on unknown key: ${key}`)
         return depId
       })
+      const taskContext = {
+        title: interpolatePlaybookText(entry.title, args),
+        prompt: `${interpolatePlaybookText(entry.detail, args)}${argumentContext}`,
+      }
       plans.push({
         id,
         key: entry.key,
-        title: interpolatePlaybookText(entry.title, args),
-        prompt: `${interpolatePlaybookText(entry.detail, args)}${argumentContext}`,
+        title: taskContext.title,
+        prompt: taskContext.prompt,
         paths: (entry.paths ?? []).map((lockPath) => interpolatePlaybookText(lockPath, args)),
         blockedBy: [...new Set([...previousPhaseIds, ...explicitDeps])],
         phase: phase.title,
@@ -1673,6 +1750,15 @@ function planPlaybookTasks(playbook: RunPlaybook, args: unknown, startCount: num
         requestedProvider: entry.provider,
         requestedModel: entry.model,
         requestedEffort: entry.effort,
+        claudeAgentPolicy: deriveProtocolClaudeAgentPolicy({
+          ...taskContext,
+          roleName: undefined,
+          roleDescription: undefined,
+          seat: entry.seat ?? (entry.role === 'lead' ? 'director' : 'executor'),
+          paths: entry.paths ?? [],
+          requestedModel: entry.model,
+          requestedEffort: entry.effort,
+        }, entry.claude),
         verifyCommands: entry.verifyCommands ?? [],
       })
       phaseIds.push(id)
@@ -1728,6 +1814,7 @@ function seedPlaybookTasksSync(
       requestedProvider: plan.requestedProvider,
       requestedModel: plan.requestedModel,
       requestedEffort: plan.requestedEffort,
+      claudeAgentPolicy: plan.claudeAgentPolicy,
       verifyCommands: plan.verifyCommands,
     })
     if (plan.key) keyToId.set(plan.key, task.id)
@@ -1749,6 +1836,7 @@ function seedPlaybookTasksSync(
         seat: task.seat,
         requestedProvider: task.requestedProvider,
         requestedModel: task.requestedModel,
+        claudeAgentPolicy: task.claudeAgentPolicy,
         verifyCommands: task.verifyCommands,
       },
     })
@@ -2348,6 +2436,7 @@ export async function createExternalProtocolTask(
     requestedProvider?: ProtocolRun['provider']
     requestedModel?: string
     requestedEffort?: string
+    claudeAgentPolicy?: Partial<ProtocolClaudeAgentPolicy>
     verifyCommands?: string[]
   },
 ): Promise<ExternalProtocolTaskCreateResult> {
@@ -2386,6 +2475,19 @@ export async function createExternalProtocolTask(
       const blockedBy = [...new Set((params.dependsOn ?? []).map((entry) => entry.trim()).filter(Boolean))]
       validateTaskDependenciesSync(db, identity.runId, nextTaskIdSync(db, identity.runId), blockedBy)
       const similarTasks = findSimilarTasksSync(db, identity.runId, title, detail)
+      const requestedModel = params.requestedModel?.trim() || undefined
+      const requestedEffort = params.requestedEffort?.trim() || undefined
+      const seat = params.seat ?? (params.targetRole === 'lead' ? 'director' : 'executor')
+      const taskContext: ClaudePolicyTaskContext = {
+        title,
+        prompt: detail,
+        roleName,
+        roleDescription,
+        seat,
+        paths: params.paths ?? [],
+        requestedModel,
+        requestedEffort,
+      }
       const task = insertTaskSync(db, identity.runId, {
         title,
         prompt: detail,
@@ -2395,10 +2497,11 @@ export async function createExternalProtocolTask(
         targetRole: params.targetRole ?? (reopening ? 'lead' : 'teammate'),
         roleName,
         roleDescription,
-        seat: params.seat,
+        seat,
         requestedProvider: params.requestedProvider,
-        requestedModel: params.requestedModel?.trim() || undefined,
-        requestedEffort: params.requestedEffort?.trim() || undefined,
+        requestedModel,
+        requestedEffort,
+        claudeAgentPolicy: deriveProtocolClaudeAgentPolicy(taskContext, params.claudeAgentPolicy),
         verifyCommands: [...new Set((params.verifyCommands ?? []).map((command) => command.trim()).filter(Boolean))],
       })
       insertEventSync(db, {
@@ -2419,6 +2522,7 @@ export async function createExternalProtocolTask(
           requestedProvider: task.requestedProvider,
           requestedModel: task.requestedModel,
           requestedEffort: task.requestedEffort,
+          claudeAgentPolicy: task.claudeAgentPolicy,
           verifyCommands: task.verifyCommands,
         },
       })
@@ -2508,6 +2612,10 @@ export async function claimExternalProtocolTask(
 ): Promise<ExternalProtocolClaimResult> {
   const initialDb = await getDatabase()
   const agent = requireExternalParticipantSync(initialDb, identity)
+  const runRow = initialDb.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(identity.runId) as Row | undefined
+  if (!runRow) throw new Error('Coordinator run not found')
+  const budgetReason = budgetExceededReasonSync(initialDb, rowToRun(runRow))
+  if (budgetReason) throw new Error(`Cannot claim more work: ${budgetReason}`)
   // A failed snapshot must not silently degrade into an empty baseline —
   // that would make every pre-existing dirty file look like task work and
   // reject the eventual completion far from the real cause. Mark it so the
@@ -3233,13 +3341,8 @@ export async function completeExternalProtocolTask(
   if (failedVerification) {
     return rejectExternalCompletion(identity, task.id, `Quality gate failed (${failedVerification.command}):\n${failedVerification.summary ?? 'command failed'}`)
   }
-  const usedTokens = listTasksSync(db, identity.runId).reduce((total, entry) => total + (entry.receipt?.usage?.totalTokens ?? 0), 0)
-  if (run.budget?.maxTokens && usedTokens > run.budget.maxTokens) {
-    return rejectExternalCompletion(identity, task.id, `Run token budget exceeded (${usedTokens}/${run.budget.maxTokens}).`)
-  }
-  if (run.budget?.maxDurationMinutes && Date.now() - Date.parse(run.createdAt) > run.budget.maxDurationMinutes * 60_000) {
-    return rejectExternalCompletion(identity, task.id, `Run duration budget exceeded (${run.budget.maxDurationMinutes} minutes).`)
-  }
+  const budgetReason = budgetExceededReasonSync(db, run)
+  if (budgetReason) return rejectExternalCompletion(identity, task.id, budgetReason)
   await appendProtocolEvent({
     version: AGENT_PROTOCOL_VERSION,
     runId: identity.runId,
@@ -4369,6 +4472,7 @@ export async function saveExternalProtocolPlaybook(
             provider: task.requestedProvider,
             model: task.requestedModel,
             effort: task.requestedEffort,
+            claude: task.claudeAgentPolicy,
             verifyCommands: task.verifyCommands.length > 0 ? task.verifyCommands : undefined,
           }
         }),
@@ -4538,6 +4642,83 @@ function addUsage(target: ProtocolUsageReceipt, usage?: ProtocolUsageReceipt): P
     if (typeof value === 'number' && Number.isFinite(value)) target[key] = (target[key] ?? 0) + value
   }
   return target
+}
+
+function subtractUsage(current: ProtocolUsageReceipt, prior?: ProtocolUsageReceipt): ProtocolUsageReceipt {
+  const reset = prior && (
+    (current.totalTokens ?? 0) < (prior.totalTokens ?? 0)
+    || (current.costUsd ?? 0) < (prior.costUsd ?? 0)
+  )
+  if (reset) prior = undefined
+  const delta: ProtocolUsageReceipt = {}
+  for (const key of ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'totalTokens', 'costUsd'] as const) {
+    const value = current[key]
+    if (typeof value === 'number' && Number.isFinite(value)) delta[key] = Math.max(0, value - (prior?.[key] ?? 0))
+  }
+  if (typeof current.durationMs === 'number' && Number.isFinite(current.durationMs)) delta.durationMs = current.durationMs
+  return delta
+}
+
+function budgetUsageSync(db: SqliteDatabase, runId: string): ProtocolUsageReceipt {
+  const nativeByTask = new Map<string, ProtocolUsageReceipt>()
+  const nativeTotal: ProtocolUsageReceipt = {}
+  const rows = db.prepare("SELECT task_id, payload_json FROM protocol_events WHERE run_id = ? AND type = 'usage.observed'")
+    .all(runId) as Row[]
+  for (const row of rows) {
+    const payload = parseJsonObject<{ delta?: ProtocolUsageReceipt }>(row.payload_json)
+    addUsage(nativeTotal, payload?.delta)
+    if (typeof row.task_id === 'string') {
+      const taskUsage = nativeByTask.get(row.task_id) ?? {}
+      addUsage(taskUsage, payload?.delta)
+      nativeByTask.set(row.task_id, taskUsage)
+    }
+  }
+  // External participants do not have an observed SDK stream. Count their
+  // submitted receipts, while avoiding double-counting internal tasks whose
+  // receipts were automatically enriched from usage.observed events.
+  for (const task of listTasksSync(db, runId)) {
+    if (!nativeByTask.has(task.id)) addUsage(nativeTotal, task.receipt?.usage)
+  }
+  return nativeTotal
+}
+
+function nativeTaskUsageSync(db: SqliteDatabase, runId: string, taskId: string): ProtocolUsageReceipt | undefined {
+  const usage: ProtocolUsageReceipt = {}
+  let observed = false
+  const rows = db.prepare("SELECT payload_json FROM protocol_events WHERE run_id = ? AND task_id = ? AND type = 'usage.observed'")
+    .all(runId, taskId) as Row[]
+  for (const row of rows) {
+    const delta = parseJsonObject<{ delta?: ProtocolUsageReceipt }>(row.payload_json)?.delta
+    if (delta) {
+      observed = true
+      addUsage(usage, delta)
+    }
+  }
+  return observed ? usage : undefined
+}
+
+function budgetExceededReasonSync(db: SqliteDatabase, run: ProtocolRun): string | null {
+  const usage = budgetUsageSync(db, run.id)
+  if (run.budget?.maxTokens && (usage.totalTokens ?? 0) >= run.budget.maxTokens) {
+    return `Run token budget exhausted (${usage.totalTokens ?? 0}/${run.budget.maxTokens}).`
+  }
+  if (run.budget?.maxCostUsd && (usage.costUsd ?? 0) >= run.budget.maxCostUsd) {
+    return `Run cost budget exhausted ($${(usage.costUsd ?? 0).toFixed(4)}/$${run.budget.maxCostUsd.toFixed(4)}).`
+  }
+  if (run.budget?.maxDurationMinutes && Date.now() - Date.parse(run.createdAt) >= run.budget.maxDurationMinutes * 60_000) {
+    return `Run duration budget exhausted (${run.budget.maxDurationMinutes} minutes).`
+  }
+  return null
+}
+
+function remainingTokenBudgetSync(db: SqliteDatabase, run: ProtocolRun): number | undefined {
+  if (!run.budget?.maxTokens) return undefined
+  return Math.max(0, Math.floor(run.budget.maxTokens - (budgetUsageSync(db, run.id).totalTokens ?? 0)))
+}
+
+function remainingCostBudgetSync(db: SqliteDatabase, run: ProtocolRun): number | undefined {
+  if (!run.budget?.maxCostUsd) return undefined
+  return Math.max(0, run.budget.maxCostUsd - (budgetUsageSync(db, run.id).costUsd ?? 0))
 }
 
 function buildPhaseReportsSync(tasks: ProtocolTask[], prior: ProtocolPhaseReport[]): ProtocolPhaseReport[] {
@@ -4752,9 +4933,21 @@ function insertTaskSync(db: SqliteDatabase, runId: string, params: {
   requestedProvider?: ProtocolRun['provider']
   requestedModel?: string
   requestedEffort?: string
+  claudeAgentPolicy?: ProtocolClaudeAgentPolicy
   verifyCommands?: string[]
 }): ProtocolTask {
   const ts = nowIso()
+  const seat = params.seat ?? (params.targetRole === 'lead' ? 'director' : 'executor')
+  const claudeAgentPolicy = params.claudeAgentPolicy ?? deriveProtocolClaudeAgentPolicy({
+    title: params.title,
+    prompt: params.prompt,
+    roleName: params.roleName,
+    roleDescription: params.roleDescription,
+    seat,
+    paths: params.paths,
+    requestedModel: params.requestedModel,
+    requestedEffort: params.requestedEffort,
+  })
   const task: ProtocolTask = {
     id: nextTaskIdSync(db, runId),
     runId,
@@ -4767,10 +4960,11 @@ function insertTaskSync(db: SqliteDatabase, runId: string, params: {
     paths: params.paths.map(normalizeLockPath).filter((entry) => entry !== '**' || params.paths.length === 1),
     blockedBy: params.blockedBy,
     phase: params.phase,
-    seat: params.seat ?? (params.targetRole === 'lead' ? 'director' : 'executor'),
+    seat,
     requestedProvider: params.requestedProvider,
     requestedModel: params.requestedModel,
     requestedEffort: params.requestedEffort,
+    claudeAgentPolicy,
     verifyCommands: params.verifyCommands ?? [],
     createdAt: ts,
     updatedAt: ts,
@@ -4779,13 +4973,14 @@ function insertTaskSync(db: SqliteDatabase, runId: string, params: {
     INSERT INTO protocol_tasks (
       id, run_id, title, prompt, status, owner_agent_id, target_role, role_name, role_description,
       paths_json, blocked_by_json, phase, seat, requested_provider, requested_model, requested_effort,
-      verify_commands_json, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      claude_agent_policy_json, verify_commands_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     task.id, runId, task.title, task.prompt, 'pending', null, task.targetRole,
     task.roleName ?? null, task.roleDescription ?? null,
     JSON.stringify(task.paths), JSON.stringify(task.blockedBy), task.phase ?? null,
     task.seat, task.requestedProvider ?? null, task.requestedModel ?? null, task.requestedEffort ?? null,
+    task.claudeAgentPolicy ? JSON.stringify(task.claudeAgentPolicy) : null,
     JSON.stringify(task.verifyCommands), ts, ts,
   )
   return task
@@ -5924,14 +6119,16 @@ const SESSION_EVENT_RE = /event: session\s*\ndata: (\{[^\n]*\})/
 // retry (transient_transport, plain provider_failure) versus which never are
 // (rate/auth/context exhaustion — retrying the identical provider/session
 // cannot fix any of those).
-type ProviderTurnFailure = {
-  kind: 'rate_limited' | 'authentication_failed' | 'context_exhausted' | 'transient_transport' | 'provider_failure'
+export type ProviderTurnFailure = {
+  kind: 'budget_exhausted' | 'rate_limited' | 'authentication_failed' | 'context_exhausted' | 'transient_transport' | 'provider_failure'
   detail: string
 }
 
-function classifyProviderTurnFailure(detail: string): ProviderTurnFailure {
+export function classifyProviderTurnFailure(detail: string): ProviderTurnFailure {
   const normalized = detail.toLowerCase()
-  const kind = /session limit|usage limit|rate.?limit|quota|insufficient (?:credits|balance)|too many requests|\b429\b/.test(normalized)
+  const kind = /maximum cost budget|max(?:imum)? budget usd|error_max_budget_usd/.test(normalized)
+    ? 'budget_exhausted'
+    : /session limit|usage limit|rate.?limit|quota|insufficient (?:credits|balance)|too many requests|\b429\b/.test(normalized)
     ? 'rate_limited'
     : /authentication|not authenticated|unauthorized|invalid api key|expired (?:token|credential)|\b401\b|\b403\b/.test(normalized)
       ? 'authentication_failed'
@@ -6317,6 +6514,129 @@ function sharesCheckoutWithAnotherAgentSync(
   return rows.some((row) => normalize(String(row.worktree_path ?? '')) === mine)
 }
 
+type ClaudeSdkEvidence =
+  | { key: string; kind: 'usage'; usage: ProtocolUsageReceipt; models: string[] }
+  | { key: string; kind: 'child'; subtype: 'task_started' | 'task_progress' | 'task_notification'; record: Record<string, unknown> }
+
+function claudeUsageFromResult(record: Record<string, unknown>): { usage: ProtocolUsageReceipt; models: string[] } | null {
+  if (record.type !== 'result') return null
+  const modelUsage = record.modelUsage && typeof record.modelUsage === 'object'
+    ? record.modelUsage as Record<string, unknown>
+    : null
+  if (!modelUsage) return null
+  const usage: ProtocolUsageReceipt = { durationMs: typeof record.duration_ms === 'number' ? record.duration_ms : undefined }
+  const models: string[] = []
+  for (const [model, raw] of Object.entries(modelUsage)) {
+    if (!raw || typeof raw !== 'object') continue
+    const item = raw as Record<string, unknown>
+    models.push(typeof item.canonicalModel === 'string' ? item.canonicalModel : model)
+    usage.inputTokens = (usage.inputTokens ?? 0) + (Number(item.inputTokens) || 0)
+    usage.outputTokens = (usage.outputTokens ?? 0) + (Number(item.outputTokens) || 0)
+    usage.cacheReadTokens = (usage.cacheReadTokens ?? 0) + (Number(item.cacheReadInputTokens) || 0)
+    usage.cacheWriteTokens = (usage.cacheWriteTokens ?? 0) + (Number(item.cacheCreationInputTokens) || 0)
+    usage.costUsd = (usage.costUsd ?? 0) + (Number(item.costUSD) || 0)
+  }
+  usage.totalTokens = (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)
+    + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0)
+  return { usage, models: [...new Set(models)] }
+}
+
+function parseClaudeSdkEvidence(text: string): ClaudeSdkEvidence[] {
+  const evidence: ClaudeSdkEvidence[] = []
+  for (const line of text.split('\n')) {
+    if (!line.startsWith('data:')) continue
+    const raw = line.slice('data:'.length).trim()
+    if (!raw || raw === '[DONE]') continue
+    try {
+      const record = JSON.parse(raw) as Record<string, unknown>
+      const uuid = typeof record.uuid === 'string' ? record.uuid : raw.slice(0, 120)
+      const resultUsage = claudeUsageFromResult(record)
+      if (resultUsage) evidence.push({ key: `usage:${uuid}`, kind: 'usage', ...resultUsage })
+      const subtype = record.subtype
+      if (record.type === 'system' && (subtype === 'task_started' || subtype === 'task_progress' || subtype === 'task_notification')) {
+        evidence.push({ key: `child:${uuid}:${subtype}`, kind: 'child', subtype, record })
+      }
+    } catch {
+      // Incomplete SSE frames are retried from the accumulated buffer.
+    }
+  }
+  return evidence
+}
+
+async function recordClaudeSdkEvidence(
+  controller: RunController,
+  agent: ProtocolAgent,
+  coordinatorTaskId: string | undefined,
+  evidence: ClaudeSdkEvidence,
+): Promise<void> {
+  if (evidence.kind === 'child') {
+    const status = evidence.record.status
+    const type: AgentProtocolEvent['type'] = evidence.subtype === 'task_started'
+      ? 'task.child.started'
+      : evidence.subtype === 'task_progress'
+        ? 'task.child.progress'
+        : status === 'failed'
+          ? 'task.child.failed'
+          : status === 'stopped'
+            ? 'task.child.cancelled'
+            : 'task.child.completed'
+    const childTaskId = typeof evidence.record.task_id === 'string' ? evidence.record.task_id : 'unknown'
+    await appendProtocolEvent({
+      version: AGENT_PROTOCOL_VERSION,
+      runId: controller.runId,
+      agentId: agent.id,
+      type,
+      taskId: coordinatorTaskId,
+      summary: typeof evidence.record.summary === 'string'
+        ? evidence.record.summary
+        : typeof evidence.record.description === 'string'
+          ? evidence.record.description
+          : `Claude child task ${childTaskId} ${type.slice('task.child.'.length)}`,
+      payload: {
+        childTaskId,
+        toolUseId: evidence.record.tool_use_id,
+        workflowName: evidence.record.workflow_name,
+        subagentType: evidence.record.subagent_type,
+        lastToolName: evidence.record.last_tool_name,
+        outputFile: evidence.record.output_file,
+        usage: evidence.record.usage,
+        nativeStatus: status,
+      },
+    })
+    return
+  }
+  const prior = controller.claudeUsageCumulative.get(agent.id)
+  const delta = subtractUsage(evidence.usage, prior)
+  controller.claudeUsageCumulative.set(agent.id, evidence.usage)
+  await appendProtocolEvent({
+    version: AGENT_PROTOCOL_VERSION,
+    runId: controller.runId,
+    agentId: agent.id,
+    type: 'usage.observed',
+    taskId: coordinatorTaskId,
+    summary: `Claude SDK usage observed: ${delta.totalTokens ?? 0} tokens, $${(delta.costUsd ?? 0).toFixed(4)}`,
+    payload: { delta, cumulative: evidence.usage, models: evidence.models, source: 'claude-sdk-result' },
+  })
+  if (coordinatorTaskId) {
+    await enqueueWrite((db) => {
+      const row = db.prepare('SELECT receipt_json FROM protocol_tasks WHERE run_id = ? AND id = ?')
+        .get(controller.runId, coordinatorTaskId) as Row | undefined
+      const receipt = parseJsonObject<ProtocolTaskReceipt>(row?.receipt_json)
+      if (!receipt) return
+      receipt.usage = addUsage({ ...(receipt.usage ?? {}) }, delta)
+      db.prepare('UPDATE protocol_tasks SET receipt_json = ?, updated_at = ? WHERE run_id = ? AND id = ?')
+        .run(JSON.stringify(receipt), nowIso(), controller.runId, coordinatorTaskId)
+      refreshRunArtifactsSync(db, controller.runId)
+    })
+  }
+  const db = await getDatabase()
+  const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(controller.runId) as Row | undefined
+  if (runRow) {
+    const reason = budgetExceededReasonSync(db, rowToRun(runRow))
+    if (reason) await stopProtocolRunForBudget(controller, reason)
+  }
+}
+
 async function drainAgentStream(controller: RunController, agent: ProtocolAgent, response: Response): Promise<ProviderTurnFailure | null> {
   const reader = response.body?.getReader()
   if (!reader) return classifyProviderTurnFailure('Provider response had no stream body')
@@ -6326,6 +6646,8 @@ async function drainAgentStream(controller: RunController, agent: ProtocolAgent,
   let failure: ProviderTurnFailure | null = null
   let terminalEventObserved = false
   const seen = new Set<string>()
+  const seenSdkEvidence = new Set<string>()
+  const coordinatorTaskId = agent.taskId
   const turnStartedAt = Date.now()
   let lastActivityAt = turnStartedAt
   // External participants heartbeat via their own coord_progress('heartbeat')
@@ -6422,6 +6744,13 @@ async function drainAgentStream(controller: RunController, agent: ProtocolAgent,
         }
         if (event.type === 'task.completed' || event.type === 'task.failed' || event.type === 'finding') {
           terminalEventObserved = true
+        }
+      }
+      if (agent.provider === 'claude') {
+        for (const evidence of parseClaudeSdkEvidence(buffer)) {
+          if (seenSdkEvidence.has(evidence.key)) continue
+          seenSdkEvidence.add(evidence.key)
+          await recordClaudeSdkEvidence(controller, agent, coordinatorTaskId, evidence)
         }
       }
       failure ??= providerTurnFailureFromWire(buffer, agent.provider)
@@ -6548,7 +6877,8 @@ async function applyAgentEvent(controller: RunController, agent: ProtocolAgent, 
         actualModel,
         provenance,
         stopReason: openDecisions.length > 0 ? 'needs_decision' : 'completed',
-        usage: event.payload?.usage && typeof event.payload.usage === 'object' ? event.payload.usage as ProtocolUsageReceipt : undefined,
+        usage: nativeTaskUsageSync(db, controller.runId, task.id)
+          ?? (event.payload?.usage && typeof event.payload.usage === 'object' ? event.payload.usage as ProtocolUsageReceipt : undefined),
         filesChanged: Array.isArray(event.payload?.filesChanged) ? event.payload.filesChanged.filter((value): value is string => typeof value === 'string') : [],
         commandsRun: commands,
         verification,
@@ -6629,6 +6959,10 @@ async function handleProviderTurnFailure(
   failure: ProviderTurnFailure,
   opts: { allowSameProviderRetry?: boolean } = {},
 ): Promise<'retry' | 'terminal'> {
+  if (failure.kind === 'budget_exhausted') {
+    await stopProtocolRunForBudget(controller, failure.detail)
+    return 'terminal'
+  }
   // Same-provider retry resends the identical message text to the SAME
   // session — safe only when the turn never produced any output, since a
   // coord_* tool call already executes (mutates the board) the moment the
@@ -6791,6 +7125,16 @@ async function dispatchAgentTurn(
       ? db.prepare('SELECT * FROM protocol_tasks WHERE id = ? AND run_id = ?').get(agent.taskId, controller.runId) as Row | undefined
       : undefined
     const task = activeTaskRow ? rowToTask(activeTaskRow) : null
+    const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(controller.runId) as Row | undefined
+    if (!runRow) return
+    const run = rowToRun(runRow)
+    const budgetReason = budgetExceededReasonSync(db, run)
+    if (budgetReason) {
+      await stopProtocolRunForBudget(controller, budgetReason)
+      return
+    }
+    const taskBudgetTokens = remainingTokenBudgetSync(db, run)
+    const maxBudgetUsd = remainingCostBudgetSync(db, run)
     const sessionId = controller.sessionIds.get(agent.id) ?? agent.sessionId
     const isPending = controller.pendingSessions.has(agent.id)
     controller.pendingSessions.delete(agent.id)
@@ -6805,6 +7149,11 @@ async function dispatchAgentTurn(
         isPendingSession: isPending ? true : undefined,
         model: task?.requestedModel ?? controller.model,
         effort: task?.requestedEffort ?? controller.effort,
+        taskBudgetTokens,
+        maxBudgetUsd,
+        ...(agent.provider === 'claude' && task?.claudeAgentPolicy
+          ? { claudeAgentPolicy: task.claudeAgentPolicy }
+          : {}),
         detachOnClientAbort: true,
         ...(opts.permissionMode && agent.provider === 'claude' ? { permissionMode: opts.permissionMode } : {}),
       },
@@ -6864,6 +7213,19 @@ async function dispatchAgentTurn(
       await handleAgentTurnEnd(controller, agentId).catch(() => {})
     }
   }
+}
+
+async function stopProtocolRunForBudget(controller: RunController, reason: string): Promise<void> {
+  if (controller.stopped) return
+  await appendProtocolEvent({
+    version: AGENT_PROTOCOL_VERSION,
+    runId: controller.runId,
+    agentId: 'coordinator',
+    type: 'run.status',
+    summary: `Coordinator stopped further provider spend: ${reason}`,
+    payload: { status: 'stopped', budgetExceeded: true },
+  }).catch(() => {})
+  await stopProtocolRun(controller.runId)
 }
 
 /** Compose and dispatch an assigned work turn (teammate or explicit lead task). */
@@ -7382,6 +7744,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
     sdkIdentities: new Map(),
     executionStarted: false,
     sameProviderRetries: new Map(),
+    claudeUsageCumulative: new Map(),
   }
   controllers.set(runId, controller)
 

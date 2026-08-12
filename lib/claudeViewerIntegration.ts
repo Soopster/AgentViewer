@@ -2,14 +2,16 @@ import {
   createSdkMcpServer,
   tool,
   type HookCallback,
+  type HookEvent,
   type StopHookInput,
 } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
 import { setMessageBookmark } from './messageBookmarks'
 import { searchPersistedSessions } from './sessionPersistence'
-import { setWaitingSession } from './sessionRuntime'
+import { clearWaitingSession, setWaitingSession } from './sessionRuntime'
 import type { AgentProvider } from './types'
 import { postViewerAttention } from './viewerAttention'
+import { appendClaudeHookEvent } from './claudeHookEvents'
 
 export type ClaudeViewerContext = {
   getSessionId(): string
@@ -163,13 +165,75 @@ function createStopHook(context: ClaudeViewerContext): HookCallback {
   }
 }
 
+function createLifecycleHook(context: ClaudeViewerContext): HookCallback {
+  return async (input) => {
+    const record = input as unknown as Record<string, unknown>
+    const sessionId = typeof record.session_id === 'string' && record.session_id
+      ? record.session_id
+      : context.getSessionId()
+    if (!sessionId) return { continue: true }
+
+    // Stop is the only hook that marks a session waiting. Any new session/task
+    // activity clears that stale marker; SessionEnd also cannot remain waiting.
+    if (input.hook_event_name === 'SessionStart'
+      || input.hook_event_name === 'SessionEnd'
+      || input.hook_event_name === 'TaskCreated'
+      || input.hook_event_name === 'TaskCompleted'
+      || input.hook_event_name === 'SubagentStart'
+      || input.hook_event_name === 'SubagentStop') {
+      clearWaitingSession(sessionId)
+    }
+    if (input.hook_event_name === 'StopFailure') {
+      postViewerAttention({
+        sessionId,
+        provider: 'claude',
+        title: 'Claude could not finish cleanly',
+        detail: typeof record.error === 'string' ? record.error : 'The Claude runtime emitted a StopFailure lifecycle event.',
+      })
+    }
+    return { continue: true }
+  }
+}
+
+function createObservabilityHook(context: ClaudeViewerContext): HookCallback {
+  return async (input, toolUseId) => {
+    const record = input as unknown as Record<string, unknown>
+    const sessionId = typeof record.session_id === 'string' && record.session_id
+      ? record.session_id
+      : context.getSessionId()
+    if (sessionId) await appendClaudeHookEvent(sessionId, input, toolUseId)
+    return { continue: true }
+  }
+}
+
+const OBSERVED_HOOK_EVENTS: HookEvent[] = [
+  'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PostToolBatch',
+  'Notification', 'UserPromptSubmit', 'UserPromptExpansion', 'SessionStart',
+  'SessionEnd', 'Stop', 'StopFailure', 'SubagentStart', 'SubagentStop',
+  'PreCompact', 'PostCompact', 'PermissionRequest', 'PermissionDenied', 'Setup',
+  'TeammateIdle', 'TaskCreated', 'TaskCompleted', 'Elicitation', 'ElicitationResult',
+  'ConfigChange', 'WorktreeCreate', 'WorktreeRemove', 'InstructionsLoaded',
+  'CwdChanged', 'FileChanged', 'DirectoryAdded',
+]
+
 export function createClaudeViewerQueryExtensions(context: ClaudeViewerContext) {
+  const lifecycle = createLifecycleHook(context)
+  const observability = createObservabilityHook(context)
+  const hooks = Object.fromEntries(OBSERVED_HOOK_EVENTS.map((event) => [event, [{ hooks: [observability] }]]))
   return {
     mcpServers: {
       'agent-viewer': createViewerMcpServer(context),
     },
     hooks: {
-      Stop: [{ hooks: [createStopHook(context)] }],
+      ...hooks,
+      Stop: [{ hooks: [observability, createStopHook(context)] }],
+      SessionStart: [{ hooks: [observability, lifecycle] }],
+      SessionEnd: [{ hooks: [observability, lifecycle] }],
+      StopFailure: [{ hooks: [observability, lifecycle] }],
+      TaskCreated: [{ hooks: [observability, lifecycle] }],
+      TaskCompleted: [{ hooks: [observability, lifecycle] }],
+      SubagentStart: [{ hooks: [observability, lifecycle] }],
+      SubagentStop: [{ hooks: [observability, lifecycle] }],
     },
   }
 }

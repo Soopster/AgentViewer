@@ -3,6 +3,7 @@ import {
   type CanUseTool,
   type ElicitationRequest,
   type ElicitationResult,
+  type OnUserDialog,
   type PermissionMode,
   type Query,
   type SDKMessage,
@@ -38,8 +39,13 @@ export type ClaudeElicitationHandler = (
 
 // Mutable per-turn bridge box shared between the cold-path query and the pooled
 // entry (so an adopted cold Query keeps routing through it). `fn` handles tool
-// permissions; `elicit` handles MCP elicitation. Both are swapped per turn.
-export type ClaudeBridgeBox = { fn: CanUseTool | null; elicit: ClaudeElicitationHandler | null }
+// permissions; `elicit` handles MCP elicitation; `dialog` handles native SDK
+// dialogs. All three are swapped per turn.
+export type ClaudeBridgeBox = {
+  fn: CanUseTool | null
+  elicit: ClaudeElicitationHandler | null
+  dialog: OnUserDialog | null
+}
 
 /**
  * Interrupt a Claude query, cancelling queued async user messages when the
@@ -72,6 +78,42 @@ import {
 } from './claudeHarness'
 import { noteClaudeCommandsChanged } from './claudeCommandsStore'
 import { createClaudeViewerQueryExtensions } from './claudeViewerIntegration'
+import {
+  claudeAgentPolicyKey,
+  claudeAgentPolicyOptions,
+  claudeQueryBudgetOptions,
+  type ClaudeAgentPolicy,
+} from './claudeRuntimePolicy'
+import { claudeSessionPersistenceQueryOptions } from './claudeSessionStore'
+import { claudeProcessSpawnOptions } from './claudeProcessSpawner'
+import { getClaudeDynamicMcpServers } from './claudeDynamicMcp'
+
+export function claudeIntegratedMcpServers(context: {
+  getSessionId(): string
+  getCwd(): string | undefined
+}, sessionId: string) {
+  const viewer = createClaudeViewerQueryExtensions(context)
+  const coordinator = coordinatorClaudeMcpOptions(sessionId)
+  return {
+    ...(viewer.mcpServers ?? {}),
+    ...(coordinator.mcpServers ?? {}),
+    ...getClaudeDynamicMcpServers(sessionId),
+  }
+}
+
+/** Keep Agent Viewer's SDK MCP tools and run-bound Coordinator tools together. */
+export function claudeIntegratedQueryExtensions(context: {
+  getSessionId(): string
+  getCwd(): string | undefined
+}, sessionId: string) {
+  const viewer = createClaudeViewerQueryExtensions(context)
+  const coordinator = coordinatorClaudeMcpOptions(sessionId)
+  return {
+    ...viewer,
+    ...coordinator,
+    mcpServers: claudeIntegratedMcpServers(context, sessionId),
+  }
+}
 
 // Phase 1 of the claudeSessionPool migration. Mirrors lib/codexHarness.ts in
 // shape: a process-wide singleton (kept on globalThis to survive Next.js HMR)
@@ -177,6 +219,10 @@ export type ClaudePoolAcquireOptions = {
   forkSession?: boolean
   /** Task budget in total tokens. Recycles on change. */
   taskBudgetTokens?: number
+  /** Hard SDK-native cost ceiling for this query. Recycles on change. */
+  maxBudgetUsd?: number
+  /** Immutable role-scoped SDK policy. Recycles on change. */
+  agentPolicy?: ClaudeAgentPolicy
   /**
    * Brand-new conversation: spawn with `sessionId: opts.sessionId` (forcing
    * the CLI to adopt this exact id) instead of `resume: opts.sessionId`.
@@ -229,6 +275,8 @@ export type ClaudePoolRunOptions = {
   bridge?: CanUseTool
   /** Per-turn MCP elicitation handler, installed/cleared alongside `bridge`. */
   elicit?: ClaudeElicitationHandler
+  /** Per-turn native Claude dialog handler. */
+  dialog?: OnUserDialog
 }
 
 type Subscriber = {
@@ -244,6 +292,8 @@ type EntryState = {
   resumeSessionAt: string | undefined
   forkSession: boolean | undefined
   taskBudgetTokens: number | undefined
+  maxBudgetUsd: number | undefined
+  agentPolicyKey: string
 }
 
 type InternalEntry = {
@@ -325,7 +375,7 @@ class ClaudePool {
     // Mutable per-turn bridge. The canUseTool delegation below routes through
     // this so permission requests reach the correct SSE stream controller for
     // each turn while the underlying subprocess stays warm.
-    const bridgeBox: ClaudeBridgeBox = { fn: null, elicit: null }
+    const bridgeBox: ClaudeBridgeBox = { fn: null, elicit: null, dialog: null }
     const viewerContext = {
       getSessionId: () => opts.sessionId,
       getCwd: () => opts.cwd,
@@ -355,9 +405,15 @@ class ClaudePool {
           bridgeBox.elicit
             ? bridgeBox.elicit(request, elicitOpts)
             : Promise.resolve({ action: 'decline' as const }),
-        ...createClaudeViewerQueryExtensions(viewerContext),
+        onUserDialog: (request, dialogOpts) => bridgeBox.dialog
+          ? bridgeBox.dialog(request, dialogOpts)
+          : Promise.resolve({ behavior: 'cancelled' as const }),
+        supportedDialogKinds: ['refusal_fallback_prompt'],
+        ...claudeIntegratedQueryExtensions(viewerContext, opts.sessionId),
+        ...claudeAgentPolicyOptions(opts.agentPolicy),
         ...effortOptions,
-        enableFileCheckpointing: true,
+        ...claudeSessionPersistenceQueryOptions(),
+        ...claudeProcessSpawnOptions(),
         resumeSessionAt: opts.resumeSessionAt,
         forkSession: opts.forkSession,
         includePartialMessages: true,
@@ -366,13 +422,12 @@ class ClaudePool {
         promptSuggestions: true,
         forwardSubagentText: true,
         systemPrompt: { type: 'preset', preset: 'claude_code', excludeDynamicSections: true },
-        taskBudget: opts.taskBudgetTokens ? { total: opts.taskBudgetTokens } : undefined,
+        ...claudeQueryBudgetOptions(opts.taskBudgetTokens, opts.maxBudgetUsd),
         // Coordinator-owned sessions get their coord_* tools bound in-process at
         // spawn time (see lib/agentCoordinationSdkTools.ts) — immutable for the
         // session's lifetime, so this needs no entry in compatible()/EntryState;
         // a pool entry only ever exists for a session id that was already
         // spawned with this same lookup.
-        ...coordinatorClaudeMcpOptions(opts.sessionId),
       },
     })
 
@@ -388,6 +443,8 @@ class ClaudePool {
         resumeSessionAt: opts.resumeSessionAt,
         forkSession: opts.forkSession,
         taskBudgetTokens: opts.taskBudgetTokens,
+        maxBudgetUsd: opts.maxBudgetUsd,
+        agentPolicyKey: claudeAgentPolicyKey(opts.agentPolicy),
       },
       buffer: [],
       subscriber: null,
@@ -478,6 +535,8 @@ class ClaudePool {
     if (state.fallbackModel !== opts.fallbackModel) return false
     if (state.effort !== opts.effort) return false
     if (state.taskBudgetTokens !== opts.taskBudgetTokens) return false
+    if (state.maxBudgetUsd !== opts.maxBudgetUsd) return false
+    if (state.agentPolicyKey !== claudeAgentPolicyKey(opts.agentPolicy)) return false
     // resumeSessionAt / forkSession affect the conversation root; never reuse.
     if (opts.resumeSessionAt) return false
     if (opts.forkSession) return false
@@ -653,6 +712,8 @@ class ClaudePool {
         resumeSessionAt: undefined,
         forkSession: undefined,
         taskBudgetTokens: options.taskBudgetTokens,
+        maxBudgetUsd: options.maxBudgetUsd,
+        agentPolicyKey: claudeAgentPolicyKey(options.agentPolicy),
       },
       buffer: [],
       subscriber: null,
@@ -664,7 +725,7 @@ class ClaudePool {
       alive: true,
       // Reuse the bridgeBox from the cold-path spawn so its delegation closure
       // (already frozen into the Query) routes through the same object.
-      bridgeBox: args.bridgeBox ?? { fn: null, elicit: null },
+      bridgeBox: args.bridgeBox ?? { fn: null, elicit: null, dialog: null },
     }
 
     this.entries.set(sessionId, entry)
@@ -795,6 +856,7 @@ class ClaudePool {
     // delegation is live by the time any tool call arrives.
     entry.bridgeBox.fn = options.bridge ?? null
     entry.bridgeBox.elicit = options.elicit ?? null
+    entry.bridgeBox.dialog = options.dialog ?? null
     try {
       await this.applyReadSeeds(entry)
       entry.pushUserMessage(message)
@@ -802,6 +864,7 @@ class ClaudePool {
     } catch (err) {
       entry.bridgeBox.fn = null
       entry.bridgeBox.elicit = null
+      entry.bridgeBox.dialog = null
       entry.subscriber = null
       entry.inTurn = false
       if (interruptFallbackTimer) clearTimeout(interruptFallbackTimer)
@@ -822,6 +885,7 @@ class ClaudePool {
       // with a clean slate even if the current turn's onError never fired.
       entry.bridgeBox.fn = null
       entry.bridgeBox.elicit = null
+      entry.bridgeBox.dialog = null
       if (tailTimer) clearTimeout(tailTimer)
       if (interruptFallbackTimer) clearTimeout(interruptFallbackTimer)
       clearTimeout(hardTimer)

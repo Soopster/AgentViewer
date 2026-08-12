@@ -1416,6 +1416,8 @@ export default function Home() {
             open={fileViewerOpen}
             cwd={activeProjectDir}
             canInsert={!selectedProject && !!selectedSession}
+            sessionId={selectedSession && !selectedSession.isPending ? selectedSession.sessionId : undefined}
+            provider={selectedSession && !selectedSession.isPending ? selectedSession.provider : undefined}
             onOpenChange={setFileViewerOpen}
             onInsertPath={insertFilePathToComposer}
           />

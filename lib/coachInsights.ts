@@ -208,6 +208,31 @@ export type CoachInsight = {
   recommendations: string[]
 }
 
+/**
+ * Native Claude Agent SDK structured-output contract for the coaching turn.
+ * Keep this beside the parser so the schema and runtime validation cannot
+ * silently drift apart.
+ */
+export const COACH_INSIGHTS_OUTPUT_SCHEMA: Record<string, unknown> = {
+  type: 'array',
+  minItems: COACH_TEMPLATES.length,
+  maxItems: COACH_TEMPLATES.length,
+  items: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['kind', 'summary', 'recommendations'],
+    properties: {
+      kind: { type: 'string', enum: COACH_TEMPLATES.map((template) => template.kind) },
+      summary: { type: 'string', minLength: 1 },
+      recommendations: {
+        type: 'array',
+        maxItems: 4,
+        items: { type: 'string', minLength: 1 },
+      },
+    },
+  },
+}
+
 const KIND_TITLES: Record<CoachKind, string> = Object.fromEntries(
   COACH_TEMPLATES.map((t) => [t.kind, t.title]),
 ) as Record<CoachKind, string>
@@ -235,7 +260,11 @@ function extractJsonArray(raw: string): unknown {
 }
 
 export function parseCoachInsights(raw: string): CoachInsight[] {
-  const parsed = extractJsonArray(raw)
+  return parseCoachInsightValue(extractJsonArray(raw))
+}
+
+/** Validate either SDK-native structured output or the legacy text fallback. */
+export function parseCoachInsightValue(parsed: unknown): CoachInsight[] {
   if (!Array.isArray(parsed)) return []
   const out: CoachInsight[] = []
   for (const item of parsed) {
