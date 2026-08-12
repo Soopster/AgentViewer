@@ -1787,7 +1787,11 @@ function formatBlock(block: ThreadedBlock, activeForms?: TaskActiveForms, taskRe
         const to = typeof block.payload.fallback_model === 'string' ? block.payload.fallback_model : '?'
         const category = typeof block.payload.api_refusal_category === 'string' ? block.payload.api_refusal_category : ''
         const verb = block.payload.direction === 'revert' ? 'reverted' : 'fell back'
-        return [line(`refusal: ${verb} ${from} → ${to}${category ? ` (${category})` : ''}`, 'result_error')]
+        // scope 'local' (subagent/side-question/background fork) leaves the
+        // session model unchanged — say so, or this reads as a session-wide
+        // swap. Absent on older CLIs; treat as session-wide.
+        const scopeNote = block.payload.scope === 'local' ? ' (this response only)' : ''
+        return [line(`refusal: ${verb} ${from} → ${to}${scopeNote}${category ? ` (${category})` : ''}`, 'result_error')]
       }
       if (block.subtype === 'informational') {
         const text = typeof block.payload.content === 'string' && block.payload.content.trim()

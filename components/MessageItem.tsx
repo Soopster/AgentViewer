@@ -4540,7 +4540,11 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
       const to = typeof payload.fallback_model === 'string' ? payload.fallback_model : '?'
       const category = typeof payload.api_refusal_category === 'string' ? payload.api_refusal_category : ''
       const verb = payload.direction === 'revert' ? 'Reverted' : 'Fell back'
-      return withRuntime(`${verb} ${from} → ${to}${category ? ` · refusal: ${category}` : ' · refusal'}`)
+      // scope 'local' (subagent/side-question/background fork) doesn't touch
+      // the session model — say so, or "fell back" reads as a session-wide
+      // swap that didn't happen. Absent on older CLIs; treat as session-wide.
+      const scopeNote = payload.scope === 'local' ? ' (this response only)' : ''
+      return withRuntime(`${verb} ${from} → ${to}${scopeNote}${category ? ` · refusal: ${category}` : ' · refusal'}`)
     }
     if (subtype === 'informational' && content.trim()) {
       const stopped = payload.prevent_continuation === true ? ' · stopped' : ''
@@ -4741,6 +4745,7 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
       if (typeof payload.fallback_model === 'string') nextBadges.push(`→ ${payload.fallback_model}`)
       if (typeof payload.api_refusal_category === 'string') nextBadges.push(payload.api_refusal_category)
       if (typeof payload.direction === 'string') nextBadges.push(payload.direction)
+      if (payload.scope === 'local') nextBadges.push('local')
     }
     if (subtype === 'informational') {
       if (typeof payload.level === 'string' && payload.level !== 'info') nextBadges.push(payload.level)

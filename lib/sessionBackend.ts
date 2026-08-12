@@ -3619,6 +3619,7 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
     return NextResponse.json({ error: 'Enter a shell command after !' }, { status: 400 })
   }
   const resumeSessionAt = typeof body.resumeSessionAt === 'string' ? body.resumeSessionAt : undefined
+  const resumeDropsTurn = typeof body.resumeDropsTurn === 'string' ? body.resumeDropsTurn : undefined
   const forkSessionOnSend = Boolean(body.forkSession)
   const cwdOverride = typeof body.cwd === 'string' && body.cwd.trim() ? body.cwd.trim() : undefined
   const taskBudgetTotal = typeof body.taskBudgetTokens === 'number' && body.taskBudgetTokens > 0
@@ -3658,6 +3659,7 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
       model,
       effort,
       resumeSessionAt,
+      resumeDropsTurn,
       forkSessionOnSend,
       cwdOverride,
       taskBudgetTotal,
@@ -3704,6 +3706,7 @@ type ClaudeStreamColdArgs = {
   model: string | undefined
   effort: ReasoningEffortLevel | undefined
   resumeSessionAt: string | undefined
+  resumeDropsTurn: string | undefined
   forkSessionOnSend: boolean
   cwdOverride: string | undefined
   taskBudgetTotal: number | undefined
@@ -3725,6 +3728,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
     model,
     effort,
     resumeSessionAt,
+    resumeDropsTurn,
     forkSessionOnSend,
     cwdOverride,
     taskBudgetTotal,
@@ -3840,6 +3844,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           abortController,
           enableFileCheckpointing: true,
           resumeSessionAt,
+          ...(resumeDropsTurn ? { resumeDropsTurn } : {}),
           forkSession: forkSessionOnSend,
           includePartialMessages: true,
           agentProgressSummaries: true,

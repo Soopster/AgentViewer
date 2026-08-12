@@ -61,6 +61,16 @@ export function isTransientSendError(message: string | null | undefined, apiErro
   return false
 }
 
+// Claude's `resumeDropsTurn` guard refuses a truncating resume/fork when the
+// discarded range would strand the kept turn's own payload (its tool_result
+// carrier or structured_output attachment). Unlike a transient error, retrying
+// the identical request fails forever — the fix is to drop the fork point and
+// resume plainly. Matched on the CLI's fixed message prefix per the SDK's
+// documented contract for `resumeDropsTurn`.
+export function isResumeDropsTurnRefusal(message: string | null | undefined): boolean {
+  return typeof message === 'string' && message.includes('Resume rejected by --resume-drops-turn:')
+}
+
 // How many automatic retries to attempt before surfacing a terminal error, and
 // the backoff before each. Deliberately small: each retry only fires after a
 // full failed turn, so this is "ride out a blip," not a heavy retry loop.

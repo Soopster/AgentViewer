@@ -34,7 +34,7 @@ import { getProviderComposer, pickProviderExample } from '@/lib/providerComposer
 import { extractCopilotPushedAttachments, extractPendingPermission, extractPendingPermissions, extractPermissionReply, type PendingPermission, type PendingQuestionAnswers } from '@/lib/permissions'
 import { extractClaudeReadFileSummary } from '@/lib/claudeSdkFeatures'
 import { parseClaudeCommandLifecycle, type ClaudeCommandLifecycleState } from '@/lib/claudeCommandLifecycle'
-import { isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs, TransientAwareSendError } from '@/lib/transientError'
+import { isResumeDropsTurnRefusal, isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs, TransientAwareSendError } from '@/lib/transientError'
 import { respondToChannelPermission, readBridgeConfigFromEnv, type ChannelPermissionRequestEvent } from '@/lib/channelBridge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
@@ -4541,6 +4541,11 @@ export default function MessageView({
           effort,
           attachments: sendAttachments,
           resumeSessionAt: resumeFromMessageId ?? undefined,
+          // Same message: it's both the fork point and the prompt UUID of the
+          // turn being discarded from the UI's perspective (see resumeDropsTurn
+          // usage doc). The CLI refuses the fork if that turn's own tool_result
+          // or structured_output would be left in the discarded range.
+          resumeDropsTurn: resumeFromMessageId ?? undefined,
           forkSession: Boolean(resumeFromMessageId),
           provider: session.provider,
           agent: session.provider === 'opencode' && selectedAgent ? selectedAgent : undefined,
@@ -5008,6 +5013,15 @@ export default function MessageView({
       }
       const errorMessage = err instanceof Error ? err.message : 'Failed to send message'
       const apiErrorStatus = err instanceof TransientAwareSendError ? err.apiErrorStatus : undefined
+      // The fork point straddled the discarded turn's own payload (a
+      // tool_result carrier or structured_output attachment) — the CLI
+      // refuses deterministically, so retrying the same fork target would
+      // fail forever. Drop it now so the restored draft resends as a plain
+      // follow-up instead of repeating the same refused truncation.
+      if (isResumeDropsTurnRefusal(errorMessage) && resumeFromMessageId) {
+        setResumeFromMessageId(null)
+        setSessionActionNotice('Could not edit cleanly from that point — resend below as a normal message instead.')
+      }
       // Visible auto-retry: native CLIs quietly ride out transient API/network
       // blips. Mirror that — but only when the error is transient AND the turn
       // streamed no output (so a retry can't duplicate a tool call or partial
