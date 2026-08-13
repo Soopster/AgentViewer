@@ -7,7 +7,7 @@ import MessageView from '@/components/MessageView'
 import { CodeThemeProvider } from '@/components/CodeThemeContext'
 import { Sidebar, SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { LayoutDashboard, UsersRound } from 'lucide-react'
+import { LayoutDashboard, MessageSquare, UsersRound } from 'lucide-react'
 import { isProviderSelection } from '@/lib/provider'
 import { pathBasename, sameProjectPath } from '@/lib/projectPaths'
 import { compactStableFingerprint } from '@/lib/compactFingerprint'
@@ -24,6 +24,7 @@ const BookmarksPanel = dynamic(() => import('@/components/BookmarksPanel'), { ss
 const ProvenancePopover = dynamic(() => import('@/components/ProvenancePopover'), { ssr: false })
 const RunDashboard = dynamic(() => import('@/components/RunDashboard'), { ssr: false })
 const AgentTeamCoordinator = dynamic(() => import('@/components/AgentTeamCoordinator'), { ssr: false })
+const CrossSessionMessaging = dynamic(() => import('@/app/agents/page'), { ssr: false })
 
 type SessionScopeMode = 'all' | 'project'
 type ProjectSelection = {
@@ -81,7 +82,7 @@ const MESSAGE_STREAM_RETRY_MAX_MS = 30000
 const PROJECT_MESSAGE_TOTAL_MEMORY_LIMIT = 2500
 const PROJECT_MESSAGE_PER_SESSION_MEMORY_LIMIT = 200
 const RUN_DASHBOARD_KEY = '__run-dashboard__'
-type DashboardTab = 'sessions' | 'agents'
+type DashboardTab = 'sessions' | 'agents' | 'messaging'
 
 type MessageStreamPayload = {
   sessionId?: string
@@ -305,9 +306,10 @@ function useDocumentVisible(): boolean {
 }
 
 export default function Home() {
-  const [messagePaneCollapsed, setMessagePaneCollapsed] = useState(
-    () => typeof document !== 'undefined' && document.documentElement.dataset.msgPane === 'collapsed'
-  )
+  // The server and the browser must hydrate the same tree. Restore this
+  // browser-only preference after hydration instead of branching in the state
+  // initializer (which rendered different pane structures on server/client).
+  const [messagePaneCollapsed, setMessagePaneCollapsed] = useState(false)
   const [sessions, setSessions] = useState<Session[]>([])
   const [openTabSessions, setOpenTabSessions] = useState<Session[]>([])
   const [selectedTabKey, setSelectedTabKey] = useState<string | null>(null)
@@ -452,6 +454,13 @@ export default function Home() {
   const openCoordinator = useCallback(() => {
     setDashboardContextSession(selectedSession)
     setDashboardTab('agents')
+    setSelectedProject(null)
+    setTargetMessage(null)
+    setSelectedTabKey(RUN_DASHBOARD_KEY)
+  }, [selectedSession])
+  const openCrossSessionMessaging = useCallback(() => {
+    setDashboardContextSession(selectedSession)
+    setDashboardTab('messaging')
     setSelectedProject(null)
     setTargetMessage(null)
     setSelectedTabKey(RUN_DASHBOARD_KEY)
@@ -611,6 +620,15 @@ export default function Home() {
       pollInFlightRef.current = false
     }
   }, [applySessionMessagePayload])
+
+  useEffect(() => {
+    try {
+      setMessagePaneCollapsed(window.localStorage.getItem('agentViewer:messagePaneCollapsed') === '1')
+    } catch {
+      // Storage can be unavailable in restricted browser contexts; keep the
+      // server-rendered expanded default in that case.
+    }
+  }, [])
 
   // Opt-in client perf monitor (?perf=1 or localStorage 'agentviewer:perf'=1).
   // No-op unless enabled. See lib/clientPerf.ts.
@@ -1200,6 +1218,7 @@ export default function Home() {
             selectedProject={selectedProject?.dir ?? null}
             dashboardSelected={dashboardSelected && dashboardTab === 'sessions'}
             agentOperationsSelected={dashboardSelected && dashboardTab === 'agents'}
+            messagingSelected={dashboardSelected && dashboardTab === 'messaging'}
             scrollToSessionRequest={sessionListScrollRequest}
             onSelect={selectSession}
             onSelectProject={selectProject}
@@ -1215,6 +1234,7 @@ export default function Home() {
             onToggleWorktrees={setIncludeWorktrees}
             onOpenCommandPalette={openCommandPalette}
             onOpenCoordinator={openCoordinator}
+            onOpenCrossSessionMessaging={openCrossSessionMessaging}
             canOpenGit={!!activeProjectDir}
             onOpenGit={openGitPopover}
             onNewSession={handleNewSession}
@@ -1295,6 +1315,9 @@ export default function Home() {
                         <TabsTrigger value="agents" className="av-dashboard-tab">
                           <UsersRound aria-hidden="true" /> Agent Operations
                         </TabsTrigger>
+                        <TabsTrigger value="messaging" className="av-dashboard-tab">
+                          <MessageSquare aria-hidden="true" /> Messaging
+                        </TabsTrigger>
                       </TabsList>
                     </nav>
                     <TabsContent value="sessions" className="av-dashboard-tab-content">
@@ -1319,6 +1342,9 @@ export default function Home() {
                           })
                         }}
                       />
+                    </TabsContent>
+                    <TabsContent value="messaging" className="av-dashboard-tab-content">
+                      <CrossSessionMessaging />
                     </TabsContent>
                   </Tabs>
                 ) : (
@@ -1380,6 +1406,7 @@ export default function Home() {
                   onOpenPullRequests={openPullRequestView}
                   onOpenFiles={openFileViewer}
                   onOpenCoordinator={openCoordinator}
+                  onOpenCrossSessionMessaging={openCrossSessionMessaging}
                   onOpenTasks={openTaskPanel}
                   onOpenPromptLibrary={openPromptLibrary}
                   onOpenChannelBridge={openChannelBridge}

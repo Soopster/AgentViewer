@@ -52,9 +52,9 @@ export const metadata: Metadata = {
   description: 'Browse Claude Code sessions and messages',
 }
 
-// Runs synchronously before first paint — prevents a flash of the wrong theme and layout.
+// Runs synchronously before first paint — prevents a flash of the wrong theme or render font.
 // Safe: this is a static literal, not user-supplied content.
-const themeScript = `(function(){try{var v=${JSON.stringify(THEMES)};var t=localStorage.getItem('theme');if(t&&v.indexOf(t)>=0){document.documentElement.dataset.theme=t;}var f=${JSON.stringify(RENDER_FONT_IDS)};var rf=localStorage.getItem(${JSON.stringify(RENDER_FONT_STORAGE_KEY)});if(rf&&f.indexOf(rf)>=0){document.documentElement.dataset.renderFont=rf;}if(localStorage.getItem('agentViewer:messagePaneCollapsed')==='1'){document.documentElement.dataset.msgPane='collapsed';}}catch(e){}})()`
+const themeScript = `(function(){try{var v=${JSON.stringify(THEMES)};var t=localStorage.getItem('theme');if(t&&v.indexOf(t)>=0){document.documentElement.dataset.theme=t;}var f=${JSON.stringify(RENDER_FONT_IDS)};var rf=localStorage.getItem(${JSON.stringify(RENDER_FONT_STORAGE_KEY)});if(rf&&f.indexOf(rf)>=0){document.documentElement.dataset.renderFont=rf;}}catch(e){}})()`
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -62,7 +62,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         {/* Intentional blocking inline script: must run synchronously before first paint to prevent theme FOUC. Content is a static literal, not user input. */}
         {/* eslint-disable-next-line react-doctor/no-danger, react-doctor/nextjs-no-native-script */}
-        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+        <script suppressHydrationWarning dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
       <body><RouteTransition>{children}</RouteTransition></body>
     </html>

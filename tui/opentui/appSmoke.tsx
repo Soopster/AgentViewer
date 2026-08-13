@@ -66,6 +66,31 @@ if (afterCloseFrame.includes('New agent session')) {
   throw new Error(`Esc did not close the New agent session modal:\n${afterCloseFrame}`)
 }
 
+// Cross-session messaging has its own global popover. It must open from the
+// root shortcut even when no session exists in this hermetic workspace, and
+// keep the empty state actionable rather than falling through to the reader.
+act(() => {
+  setup.mockInput.pressKey('M', { shift: true })
+})
+await act(async () => {
+  await setup.flush()
+  await new Promise((resolve) => setTimeout(resolve, 250))
+})
+const messagingFrame = captureCharFrame()
+if (!messagingFrame.includes('Cross-session messaging')) {
+  throw new Error(`Shift+M did not open cross-session messaging:\n${messagingFrame}`)
+}
+if (!messagingFrame.includes('reachable') || !messagingFrame.includes('message')) {
+  throw new Error(`Cross-session messaging popover is missing discovery/composer UI:\n${messagingFrame}`)
+}
+act(() => {
+  setup.mockInput.pressEscape()
+})
+await act(async () => {
+  await setup.flush()
+  await new Promise((resolve) => setTimeout(resolve, 100))
+})
+
 // Split transcript panes ride a tmux-style prefix: ⌃B arms the chord (the
 // status bar becomes the chord legend), then `%` runs the split — which must
 // refuse here rather than mount an empty pane, since no second tab is open.

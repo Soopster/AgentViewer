@@ -126,6 +126,12 @@ import type { AgentProtocolEvent, PlaybookSummary, ProtocolRun, ProtocolRunSnaps
 import type { AgentProvider, ContextUsage, ProviderSelection, Session, SessionDiagnosticSection, SessionInfo, SessionMessage, SessionModelInfo } from '../types'
 import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../../tui/theme'
 import { queueClaudeReadStateSeeds } from '../claudePool'
+import {
+  listAddressableSessions,
+  sendCrossSessionMessage,
+  type AddressableSession,
+  type SendCrossSessionMessageResult,
+} from '../crossSessionMessaging'
 
 const DEFAULT_SESSION_LIMIT = 200
 const CLAUDE_MESSAGE_LIMIT = 2000
@@ -158,6 +164,35 @@ export async function writeTuiProvider(provider: ProviderSelection): Promise<voi
     return
   }
   await setConfiguredProvider(provider)
+}
+
+export async function listTuiAddressableSessions(excludeSessionId?: string): Promise<AddressableSession[]> {
+  if (isRemoteAttached()) {
+    const query = excludeSessionId ? `?exclude=${encodeURIComponent(excludeSessionId)}` : ''
+    const result = await remoteJson<{ sessions: AddressableSession[] }>(`/api/agents${query}`)
+    return result.sessions
+  }
+  return listAddressableSessions(excludeSessionId)
+}
+
+export async function sendTuiCrossSessionMessage(params: {
+  fromSessionId?: string
+  fromName: string
+  toName: string
+  text: string
+}): Promise<SendCrossSessionMessageResult> {
+  if (isRemoteAttached()) {
+    return remoteJson<SendCrossSessionMessageResult>('/api/agents/message', {
+      method: 'POST',
+      body: JSON.stringify({
+        fromSessionId: params.fromSessionId,
+        fromName: params.fromName,
+        to: params.toName,
+        text: params.text,
+      }),
+    })
+  }
+  return sendCrossSessionMessage(params)
 }
 
 export async function readTuiTheme(): Promise<TuiThemeMode> {

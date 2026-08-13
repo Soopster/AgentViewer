@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { BarChart3, Bookmark, BookOpen, Bot, Database, FileSearch, FolderOpen, GitBranch, GitPullRequest, Layers3, ListTodo, PanelLeftOpen, PanelRightOpen, Plug, Radio, RefreshCw, Search, SlidersHorizontal, UsersRound } from 'lucide-react'
+import { BarChart3, Bookmark, BookOpen, Bot, Database, FileSearch, FolderOpen, GitBranch, GitPullRequest, Layers3, ListTodo, MessageSquare, PanelLeftOpen, PanelRightOpen, Plug, Radio, RefreshCw, Search, SlidersHorizontal, UsersRound } from 'lucide-react'
 
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
 import { SidebarGlyph, useSidebar } from '@/components/ui/sidebar'
@@ -45,6 +45,7 @@ type CommandPaletteProps = {
   onOpenPullRequests: () => void
   onOpenFiles: () => void
   onOpenCoordinator: () => void
+  onOpenCrossSessionMessaging: () => void
   onOpenTasks: () => void
   onOpenPromptLibrary: () => void
   onOpenChannelBridge: () => void
@@ -332,6 +333,7 @@ export default function CommandPalette({
   onOpenPullRequests,
   onOpenFiles,
   onOpenCoordinator,
+  onOpenCrossSessionMessaging,
   onOpenTasks,
   onOpenPromptLibrary,
   onOpenChannelBridge,
@@ -625,6 +627,17 @@ export default function CommandPalette({
         },
       },
       {
+        id: 'open-cross-session-messaging',
+        label: 'Cross-session messaging',
+        description: 'Discover running agents and send a direct message',
+        icon: <MessageSquare size={16} />,
+        shortcut: 'Agents',
+        group: 'actions',
+        keywords: ['message', 'send', 'cross-session', 'agents', 'sessions'],
+        score: 0,
+        run: onOpenCrossSessionMessaging,
+      },
+      {
         id: 'open-bookmarks',
         label: 'View all bookmarks',
         description: 'Browse every bookmarked message across all sessions and providers',
@@ -715,7 +728,7 @@ export default function CommandPalette({
       }
 
     return items
-  }, [canOpenFiles, canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenFiles, onOpenGit, onOpenPullRequests, onOpenCoordinator, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onOpenProvenance, onToggleMessagePane, onToggleWorktrees, provider, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
+  }, [canOpenFiles, canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenFiles, onOpenGit, onOpenPullRequests, onOpenCoordinator, onOpenCrossSessionMessaging, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onOpenProvenance, onToggleMessagePane, onToggleWorktrees, provider, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
 
   const projectItems = useMemo(() => {
     const groups = new Map<string, {

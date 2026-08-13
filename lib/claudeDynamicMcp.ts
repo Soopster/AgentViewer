@@ -2,7 +2,7 @@ import type { McpServerConfigForProcessTransport, McpServerToolPolicy } from '@a
 
 type DynamicMcpServers = Record<string, McpServerConfigForProcessTransport>
 
-const RESERVED_SERVER_NAMES = new Set(['agent-viewer'])
+const RESERVED_SERVER_NAMES = new Set(['agent-viewer', 'agent-viewer-messaging'])
 
 declare global {
   // eslint-disable-next-line no-var

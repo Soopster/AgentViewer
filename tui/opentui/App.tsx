@@ -102,8 +102,10 @@ import {
   toggleTuiSessionBookmark,
   runTuiSessionAction,
   streamTuiSessionTurn,
+  sendTuiCrossSessionMessage,
   interruptTuiSessionTurn,
   listTuiRunningSessions,
+  listTuiAddressableSessions,
   readTuiRuntimeActivity,
   dismissTuiViewerAttention,
   createTuiSession,
@@ -163,6 +165,7 @@ import {
 import type { TuiSessionReaderState } from '../../lib/tuiState'
 import type { AgentProvider, ContextUsage, ProviderSelection, ReasoningEffortLevel, RunningSessionRef, SendAttachment, SendState, Session, SessionComposerAgentOption, SessionModelInfo, ToolResultBlock } from '../../lib/types'
 import { AttentionInboxPopover, attentionItemNeedsInput, type AttentionItem } from './AttentionInboxPopover'
+import { CrossSessionMessagingPopover } from './CrossSessionMessagingPopover'
 import { CheckpointPopover } from './CheckpointPopover'
 import { CoordinationPopover } from './CoordinationPopover'
 import { PlaybookManagerPopover } from './PlaybookManagerPopover'
@@ -174,6 +177,7 @@ import { isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoff
 import { listProjectFiles } from '../../lib/projectFiles'
 import { runGitCommand } from '../../lib/gitNodeProvider'
 import { getSlashCommandSuggestions, filterSlashCommands, normalizeSlashCommandSuggestions, type SlashCommandSuggestion } from '../../lib/slashCommands'
+import { parseCrossSessionComposerCommand } from '../../lib/crossSessionCommands'
 import { getProviderComposer, pickProviderExample } from '../../lib/providerComposer'
 import { extractPendingPermission, extractPendingPermissions, extractPermissionReply, type PendingPermission, type PendingQuestionAnswers, type PermissionResponse } from '../../lib/permissions'
 import type { readViewSessionComposerOptions } from '../../lib/sessionBackend'
@@ -1523,11 +1527,11 @@ const CODEX_LIVE_ASSISTANT_UUID = 'live-codex-assistant'
 const CLAUDE_LIVE_ASSISTANT_UUID_PREFIX = 'live-claude-assistant:'
 type ComposerKeyBinding = { name: string; action: TextareaAction; shift?: boolean; alt?: boolean; meta?: boolean; ctrl?: boolean }
 const TUI_SLASH_HINTS: Record<string, string[]> = {
-  claude: ['/clear', '/compact', '/help', '/model', '/cost', '/review'],
-  codex: ['/clear', '/diff', '/status', '/compact'],
-  opencode: ['/clear', '/summarize', '/help'],
-  copilot: ['/help', '/clear'],
-  pi: ['/help', '/model', '/thinking', '/compact', '/name', '/session'],
+  claude: ['/sessions', '/message', '/clear', '/compact', '/help', '/model'],
+  codex: ['/sessions', '/message', '/clear', '/diff', '/status', '/compact'],
+  opencode: ['/sessions', '/message', '/clear', '/summarize', '/help'],
+  copilot: ['/sessions', '/message', '/help', '/clear'],
+  pi: ['/sessions', '/message', '/help', '/model', '/thinking', '/compact'],
 }
 
 function detectMentionAtCursor(text: string, cursor: number): { start: number; query: string } | null {
@@ -4699,6 +4703,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'files',      label: 'Browse project files',   key: '^F', category: 'Session'    },
   { id: 'analytics',  label: 'Session analytics',      key: '^A', category: 'Session'    },
   { id: 'attention',  label: 'Attention inbox',        key: '!',  category: 'Session'    },
+  { id: 'messaging',  label: 'Cross-session messaging', key: '⇧M', category: 'Session'   },
   { id: 'worktree-new',     label: 'New worktree task',              key: '⇧F', category: 'Worktree' },
   { id: 'worktree-merge',   label: 'Merge worktree task into main',  key: '',   category: 'Worktree' },
   { id: 'worktree-discard', label: 'Discard worktree task',          key: '',   category: 'Worktree' },
@@ -6989,6 +6994,8 @@ export default function OpenTuiApp() {
   // background turns that finished while the user was elsewhere.
   const [attentionOpen, setAttentionOpen] = useState(false)
   const attentionKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  const [crossSessionMessagingOpen, setCrossSessionMessagingOpen] = useState(false)
+  const crossSessionMessagingKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean) | null>(null)
   // Pending Claude prompts from running sessions OTHER than the selected one
   // (the selected session's prompts live in pendingPermissions). Fed by the
   // registry poll.
@@ -7370,6 +7377,7 @@ export default function OpenTuiApp() {
     || gitOpen
     || pullRequestOpen
     || analyticsOpen
+    || crossSessionMessagingOpen
     || handoffBriefOpen
     || promptLibraryOpen
     || channelBridgeOpen
@@ -12272,6 +12280,52 @@ export default function OpenTuiApp() {
     if ((!trimmed && submission.attachments.length === 0) || !composerTargetSession) return
     const submissionTargetKey = sessionKey(composerTargetSession)
 
+    const crossSessionCommand = !isRetry && submission.attachments.length === 0
+      ? parseCrossSessionComposerCommand(trimmed)
+      : null
+    if (crossSessionCommand) {
+      composerTextareaRef.current?.setText('')
+      setComposerDraft('')
+      setComposerMentionAttachments([])
+      setComposerPromptParts([])
+      composerTextareaRef.current?.extmarks.clear()
+      setComposerHistoryOpen(false)
+      setComposerHistoryIndex(0)
+      try {
+        if (crossSessionCommand.kind === 'list') {
+          const targets = await listTuiAddressableSessions(composerTargetSession.sessionId)
+          const summary = targets.length === 0
+            ? 'No other running or recently active sessions are reachable'
+            : targets.map((target) => `${target.name} (${target.provider}${target.running ? ', running' : ''})`).join(' · ')
+          showNotice('info', summary, 12_000)
+          return
+        }
+        if (!crossSessionCommand.target || !crossSessionCommand.text) {
+          showNotice('error', 'Usage: /message <session-name> <message>')
+          return
+        }
+        const fromName = composerTargetSession.customTitle?.trim()
+          || composerTargetSession.summary?.trim()
+          || `session-${composerTargetSession.sessionId.slice(0, 6)}`
+        const result = await sendTuiCrossSessionMessage({
+          fromSessionId: composerTargetSession.sessionId,
+          fromName,
+          toName: crossSessionCommand.target,
+          text: crossSessionCommand.text,
+        })
+        if (!result.delivered) {
+          showNotice('error', result.error || 'The cross-session message was not delivered')
+          return
+        }
+        showNotice('info', result.mode === 'steered'
+          ? `Delivered to ${result.targetName ?? crossSessionCommand.target}`
+          : `Started a turn for ${result.targetName ?? crossSessionCommand.target}`)
+      } catch (error) {
+        showNotice('error', error instanceof Error ? error.message : 'Cross-session messaging failed')
+      }
+      return
+    }
+
     // Global Channel Bridge binding: divert the send to the live `claude` CLI
     // session instead of the active provider. Fire-and-forget — replies and
     // permission prompts surface in the bridge popover (⇧C). Never diverts an
@@ -15163,6 +15217,9 @@ export default function OpenTuiApp() {
       case 'attention':
         setAttentionOpen(true)
         break
+      case 'messaging':
+        setCrossSessionMessagingOpen(true)
+        break
       case 'next-attention':
         jumpToNextAttention()
         break
@@ -15803,6 +15860,12 @@ export default function OpenTuiApp() {
 
     if (attentionOpen) {
       handled(() => { attentionKeyHandlerRef.current?.(key) })
+      return
+    }
+
+    if (crossSessionMessagingOpen) {
+      const consumed = crossSessionMessagingKeyHandlerRef.current?.(key) ?? true
+      if (consumed) handled(() => {})
       return
     }
 
@@ -16681,6 +16744,12 @@ export default function OpenTuiApp() {
     // Global attention inbox — everything blocked on a human, across sessions
     if (sequence === '!') {
       handled(() => setAttentionOpen(true))
+      return
+    }
+
+    // Cross-session messaging popover — discovery + direct handoff composer.
+    if (isShifted('M') || sequence === 'M') {
+      handled(() => setCrossSessionMessagingOpen(true))
       return
     }
 
@@ -19306,6 +19375,30 @@ export default function OpenTuiApp() {
           onDismiss={dismissAttentionItem}
           onClose={() => setAttentionOpen(false)}
           onKeyHandlerReady={(handler) => { attentionKeyHandlerRef.current = handler }}
+        />
+      ) : null}
+
+      {crossSessionMessagingOpen ? (
+        <box
+          position="absolute"
+          top={0}
+          left={0}
+          width={width}
+          height={height}
+          backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
+          zIndex={49}
+        />
+      ) : null}
+
+      {crossSessionMessagingOpen ? (
+        <CrossSessionMessagingPopover
+          currentSession={composerTargetSession ?? selectedSession}
+          theme={theme}
+          width={width}
+          height={height}
+          onClose={() => setCrossSessionMessagingOpen(false)}
+          onNotice={showNotice}
+          onKeyHandlerReady={(handler) => { crossSessionMessagingKeyHandlerRef.current = handler }}
         />
       ) : null}
 

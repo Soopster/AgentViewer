@@ -87,6 +87,7 @@ import {
 import { claudeSessionPersistenceQueryOptions } from './claudeSessionStore'
 import { claudeProcessSpawnOptions } from './claudeProcessSpawner'
 import { getClaudeDynamicMcpServers } from './claudeDynamicMcp'
+import { createMessagingMcpServer } from './claudeMessagingMcp'
 
 export function claudeIntegratedMcpServers(context: {
   getSessionId(): string
@@ -97,6 +98,7 @@ export function claudeIntegratedMcpServers(context: {
   return {
     ...(viewer.mcpServers ?? {}),
     ...(coordinator.mcpServers ?? {}),
+    'agent-viewer-messaging': createMessagingMcpServer(sessionId),
     ...getClaudeDynamicMcpServers(sessionId),
   }
 }

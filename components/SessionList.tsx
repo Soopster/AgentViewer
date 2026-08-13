@@ -27,6 +27,7 @@ import {
   GitBranch,
   LayoutDashboard,
   ListTree,
+  MessageSquare,
   PanelLeftOpen,
   Search,
   SlidersHorizontal,
@@ -136,6 +137,7 @@ type Props = {
   selectedProject: string | null
   dashboardSelected?: boolean
   agentOperationsSelected?: boolean
+  messagingSelected?: boolean
   scrollToSessionRequest?: { sessionKey: string; requestId: number } | null
   onSelect: (session: Session) => void
   onSelectProject: (projectDir: string, projectName: string, sessions: Session[]) => void
@@ -151,6 +153,7 @@ type Props = {
   onToggleWorktrees: (include: boolean) => void
   onOpenCommandPalette: () => void
   onOpenCoordinator: () => void
+  onOpenCrossSessionMessaging: () => void
   canOpenGit: boolean
   onOpenGit: () => void
   onNewSession?: () => void
@@ -734,6 +737,7 @@ function SessionListInner({
   selectedProject,
   dashboardSelected = false,
   agentOperationsSelected = false,
+  messagingSelected = false,
   scrollToSessionRequest,
   onSelect,
   onSelectProject,
@@ -749,6 +753,7 @@ function SessionListInner({
   onToggleWorktrees,
   onOpenCommandPalette,
   onOpenCoordinator,
+  onOpenCrossSessionMessaging,
   canOpenGit,
   onOpenGit,
   onNewSession,
@@ -1779,6 +1784,16 @@ function SessionListInner({
                       style={sidebarHeaderIconActionStyle({ active: agentOperationsSelected, accent: 'cyan' })}
                     >
                       <UsersRound size={16} strokeWidth={2.2} />
+                    </Button>
+                    <Button
+                      onClick={onOpenCrossSessionMessaging}
+                      variant="outline"
+                      size="sm"
+                      aria-label="Open cross-session messaging"
+                      className="av-hover-control"
+                      style={sidebarHeaderIconActionStyle({ active: messagingSelected, accent: 'cyan' })}
+                    >
+                      <MessageSquare size={15} strokeWidth={2.2} />
                     </Button>
                     <Button
                       onClick={onOpenCommandPalette}

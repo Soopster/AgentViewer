@@ -114,9 +114,22 @@ const SLASH_COMMANDS_BY_PROVIDER: Record<AgentProvider, SlashCommandSuggestion[]
   ],
 }
 
+const AGENT_VIEWER_SESSION_COMMANDS: SlashCommandSuggestion[] = [
+  { command: '/sessions', description: 'List sessions available for direct messaging' },
+  { command: '/message', description: 'Send a message to another agent session', argumentHint: '<session-name> <message>' },
+]
+
+const SLASH_COMMANDS_WITH_SESSION_MESSAGING: Record<AgentProvider, SlashCommandSuggestion[]> = {
+  claude: [...AGENT_VIEWER_SESSION_COMMANDS, ...SLASH_COMMANDS_BY_PROVIDER.claude],
+  codex: [...AGENT_VIEWER_SESSION_COMMANDS, ...SLASH_COMMANDS_BY_PROVIDER.codex],
+  opencode: [...AGENT_VIEWER_SESSION_COMMANDS, ...SLASH_COMMANDS_BY_PROVIDER.opencode],
+  copilot: [...AGENT_VIEWER_SESSION_COMMANDS, ...SLASH_COMMANDS_BY_PROVIDER.copilot],
+  pi: [...AGENT_VIEWER_SESSION_COMMANDS, ...SLASH_COMMANDS_BY_PROVIDER.pi],
+}
+
 export function getSlashCommandSuggestions(provider: AgentProvider | undefined | null): SlashCommandSuggestion[] {
-  if (!provider) return SLASH_COMMANDS_BY_PROVIDER.claude
-  return SLASH_COMMANDS_BY_PROVIDER[provider] ?? SLASH_COMMANDS_BY_PROVIDER.claude
+  if (!provider) return SLASH_COMMANDS_WITH_SESSION_MESSAGING.claude
+  return SLASH_COMMANDS_WITH_SESSION_MESSAGING[provider] ?? SLASH_COMMANDS_WITH_SESSION_MESSAGING.claude
 }
 
 export function filterSlashCommands(entries: SlashCommandSuggestion[], rawQuery: string): SlashCommandSuggestion[] {
