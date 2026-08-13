@@ -2861,6 +2861,7 @@ export default function MessageView({
   const [livePromptSuggestion, setLivePromptSuggestion] = useState<string | null>(null)
   const [liveStatus, setLiveStatus] = useState<'requesting' | 'compacting' | 'retrying' | null>(null)
   const [taskBudgetTokens, setTaskBudgetTokens] = useState<number | null>(null)
+  const [enableWorkflow, setEnableWorkflow] = useState(false)
   const [liveSubagentText, setLiveSubagentText] = useState<Record<string, string>>({})
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null)
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null)
@@ -4593,6 +4594,7 @@ export default function MessageView({
           detachOnClientAbort: true,
           turnRequestId,
           taskBudgetTokens: taskBudgetTokens ?? undefined,
+          enableWorkflow: session.provider === 'claude' && enableWorkflow ? true : undefined,
           isPendingSession: session.isPending === true ? true : undefined,
           cwd: session.cwd ?? undefined,
           permissionMode: session.provider === 'claude' && selectedPermissionMode !== 'default'
@@ -5121,7 +5123,7 @@ export default function MessageView({
       activeTurnRequestIdRef.current = null
       sendInFlightRef.current = false
     }
-  }, [attachments, canUseChannelBridge, canUseIdeBridge, clearLiveAssistantText, clearLiveSubagentText, commitQueuedSends, composerQueueTargetKey, flushLiveAssistantTextNow, messages, onFork, queueLiveAssistantText, queueLiveReasoningText, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedAgent, selectedCopilotContextTier, selectedCopilotMode, selectedCodexApproval, selectedEffort, selectedModel, selectedPermissionMode, session, taskBudgetTokens])
+  }, [attachments, canUseChannelBridge, canUseIdeBridge, clearLiveAssistantText, clearLiveSubagentText, commitQueuedSends, composerQueueTargetKey, enableWorkflow, flushLiveAssistantTextNow, messages, onFork, queueLiveAssistantText, queueLiveReasoningText, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedAgent, selectedCopilotContextTier, selectedCopilotMode, selectedCodexApproval, selectedEffort, selectedModel, selectedPermissionMode, session, taskBudgetTokens])
 
   // Flush queued sends once the active turn finishes. Restores the queued
   // text into the composer so sendMessage picks it up and fires naturally.
@@ -8933,6 +8935,26 @@ export default function MessageView({
                       letterSpacing: '0.04em',
                     }}
                   />
+                </label>
+              )}
+              {session?.provider === 'claude' && (
+                <label
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 0 auto', cursor: 'pointer' }}
+                  title="Opt this turn into the Workflow tool (settings.enableWorkflows) — Claude can orchestrate multiple subagents via a generated script. Requires plan support."
+                >
+                  <input
+                    type="checkbox"
+                    checked={enableWorkflow}
+                    onChange={(event) => setEnableWorkflow(event.target.checked)}
+                  />
+                  <Label style={{
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 10,
+                    color: 'var(--text-3)',
+                    letterSpacing: '0.05em',
+                  }}>
+                    WORKFLOW
+                  </Label>
                 </label>
               )}
               {sessionCapabilities?.fileRewind && rewindCandidates.length > 0 && (

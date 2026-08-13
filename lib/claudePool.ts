@@ -221,6 +221,8 @@ export type ClaudePoolAcquireOptions = {
   taskBudgetTokens?: number
   /** Hard SDK-native cost ceiling for this query. Recycles on change. */
   maxBudgetUsd?: number
+  /** Opt this session into the Workflow tool (settings.enableWorkflows). Recycles on change. */
+  enableWorkflow?: boolean
   /** Immutable role-scoped SDK policy. Recycles on change. */
   agentPolicy?: ClaudeAgentPolicy
   /**
@@ -293,6 +295,7 @@ type EntryState = {
   forkSession: boolean | undefined
   taskBudgetTokens: number | undefined
   maxBudgetUsd: number | undefined
+  enableWorkflow: boolean | undefined
   agentPolicyKey: string
 }
 
@@ -423,6 +426,7 @@ class ClaudePool {
         forwardSubagentText: true,
         systemPrompt: { type: 'preset', preset: 'claude_code', excludeDynamicSections: true },
         ...claudeQueryBudgetOptions(opts.taskBudgetTokens, opts.maxBudgetUsd),
+        ...(opts.enableWorkflow ? { settings: { enableWorkflows: true } } : {}),
         // Coordinator-owned sessions get their coord_* tools bound in-process at
         // spawn time (see lib/agentCoordinationSdkTools.ts) — immutable for the
         // session's lifetime, so this needs no entry in compatible()/EntryState;
@@ -444,6 +448,7 @@ class ClaudePool {
         forkSession: opts.forkSession,
         taskBudgetTokens: opts.taskBudgetTokens,
         maxBudgetUsd: opts.maxBudgetUsd,
+        enableWorkflow: opts.enableWorkflow,
         agentPolicyKey: claudeAgentPolicyKey(opts.agentPolicy),
       },
       buffer: [],
@@ -536,6 +541,7 @@ class ClaudePool {
     if (state.effort !== opts.effort) return false
     if (state.taskBudgetTokens !== opts.taskBudgetTokens) return false
     if (state.maxBudgetUsd !== opts.maxBudgetUsd) return false
+    if (Boolean(state.enableWorkflow) !== Boolean(opts.enableWorkflow)) return false
     if (state.agentPolicyKey !== claudeAgentPolicyKey(opts.agentPolicy)) return false
     // resumeSessionAt / forkSession affect the conversation root; never reuse.
     if (opts.resumeSessionAt) return false
@@ -713,6 +719,7 @@ class ClaudePool {
         forkSession: undefined,
         taskBudgetTokens: options.taskBudgetTokens,
         maxBudgetUsd: options.maxBudgetUsd,
+        enableWorkflow: options.enableWorkflow,
         agentPolicyKey: claudeAgentPolicyKey(options.agentPolicy),
       },
       buffer: [],

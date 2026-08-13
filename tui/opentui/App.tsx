@@ -4738,6 +4738,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'velocity-scroll', label: 'Toggle velocity scroll', key: '⇧V', category: 'View'  },
   { id: 'mode',       label: 'Cycle provider mode',    key: 'M',  category: 'Session'    },
   { id: 'model',      label: 'Composer settings',      key: '⌥M', category: 'Session'    },
+  { id: 'workflow',   label: 'Toggle workflow tool',   key: '',   category: 'Session'    },
   // App
   { id: 'refresh',    label: 'Refresh sessions',       key: 'r',  category: 'App'        },
   { id: 'quit',       label: 'Quit',                   key: 'q',  category: 'App'        },
@@ -7217,6 +7218,7 @@ export default function OpenTuiApp() {
   const [liveOutputTokens, setLiveOutputTokens] = useState(0)
   const [liveToolActivities, setLiveToolActivities] = useState<TuiLiveToolActivity[]>([])
   const [taskBudgetTokens, setTaskBudgetTokens] = useState<number | null>(null)
+  const [composerEnableWorkflow, setComposerEnableWorkflow] = useState(false)
   // Provider-agnostic send knobs. Forwarded into the streamTuiSessionTurn
   // body so the TUI composer matches the web composer's send-time controls
   // (model / reasoning effort / provider permission mode). Defaults of `auto`
@@ -8719,8 +8721,11 @@ export default function OpenTuiApp() {
     if (composerTargetSession?.provider === 'copilot' && composerCopilotPermissionMode !== 'off') {
       parts.push({ text: `permissions:${composerCopilotPermissionMode}`, fg: composerCopilotPermissionMode === 'on' ? theme.red : theme.amber })
     }
+    if (composerTargetSession?.provider === 'claude' && composerEnableWorkflow) {
+      parts.push({ text: 'workflow:on', fg: theme.cyan })
+    }
     return parts
-  }, [composerAccentColor, composerCodexApproval, composerContextUsage, composerCopilotPermissionMode, composerCurrentModel, composerPermissionMode, composerTargetSession?.provider, theme.amber, theme.cyan, theme.green, theme.red, theme.violet, tuiCopilotMode, tuiEffort, tuiOpenCodeAgent])
+  }, [composerAccentColor, composerCodexApproval, composerContextUsage, composerCopilotPermissionMode, composerCurrentModel, composerEnableWorkflow, composerPermissionMode, composerTargetSession?.provider, theme.amber, theme.cyan, theme.green, theme.red, theme.violet, tuiCopilotMode, tuiEffort, tuiOpenCodeAgent])
   const composerKnobsChip = useMemo(
     () => composerKnobSegments.length > 0
       ? `· ${composerKnobSegments.map((part) => part.text).join(' · ')}`
@@ -12487,6 +12492,7 @@ export default function OpenTuiApp() {
           message: trimmed,
           provider: targetSession.provider,
           taskBudgetTokens: taskBudgetTokens ?? undefined,
+          enableWorkflow: targetSession.provider === 'claude' && composerEnableWorkflow ? true : undefined,
           isPendingSession: targetSession.isPending === true ? true : undefined,
           cwd: targetSession.cwd ?? undefined,
           attachments: sendAttachments.length > 0 ? sendAttachments : undefined,
@@ -13271,6 +13277,7 @@ export default function OpenTuiApp() {
     clearSessionRunning,
     renderer,
     taskBudgetTokens,
+    composerEnableWorkflow,
     tuiEffort,
     tuiCopilotMode,
     composerCopilotPermissionMode,
@@ -15417,6 +15424,13 @@ export default function OpenTuiApp() {
           return next
         })
         break
+      case 'workflow':
+        setComposerEnableWorkflow((current) => {
+          const next = !current
+          showToggleOutcome('Workflow tool (next send)', next)
+          return next
+        })
+        break
       case 'git':
         setGitOpen(true)
         break
@@ -16327,6 +16341,18 @@ export default function OpenTuiApp() {
       // whether or not the panel is open.
       if (isCtrl('r') && canUseChannelBridge) {
         handled(toggleComposerBridgeRoute)
+        return
+      }
+      // Opt this turn into the Workflow tool (settings.enableWorkflows) —
+      // Claude-only, mirrors the ⌃R bridge toggle right above.
+      if (isCtrl('w') && composerTargetSession?.provider === 'claude') {
+        handled(() => {
+          setComposerEnableWorkflow((current) => {
+            const next = !current
+            showToggleOutcome('Workflow tool (next send)', next)
+            return next
+          })
+        })
         return
       }
       if (composerHistoryOpen) {
@@ -17541,6 +17567,7 @@ export default function OpenTuiApp() {
     : composerTargetSession?.provider === 'claude' && activeRunningToolCount > 0
     ? `${composerConfig.footerHintSending} · ⌃B background`
     : composerConfig.footerHintSending
+  const composerWorkflowFooterHint = composerTargetSession?.provider === 'claude' ? ' · ⌃W workflow' : ''
   const composerDockFooterHint = canUseChannelBridge && routeComposerToBridge
     ? '● → live CLI bridge · ⌃R off · ⇧C panel'
     : canUseIdeBridge && routeComposerToIde
@@ -17548,8 +17575,8 @@ export default function OpenTuiApp() {
     : composerSendState === 'sending' || reattachedRunning
     ? sendingHintBase
     : canUseChannelBridge
-    ? `${composerIdleFooterHint} · ⌃R bridge · ⌃O expand`
-    : `${composerIdleFooterHint} · ⌃O expand`
+    ? `${composerIdleFooterHint}${composerWorkflowFooterHint} · ⌃R bridge · ⌃O expand`
+    : `${composerIdleFooterHint}${composerWorkflowFooterHint} · ⌃O expand`
   const composerDockSendingHintSegments = composerSendState === 'sending' || reattachedRunning
     ? composerSendingHintSegments(composerDockFooterHint, theme)
     : null
@@ -17563,7 +17590,7 @@ export default function OpenTuiApp() {
   const composerDockFooterStatsWidth = Math.max(composerDockTextareaWidth - composerDockFooterHintWidth - 1, 8)
   const composerWindowFooterHint = composerSendState === 'sending' || reattachedRunning
     ? `${sendingHintBase} · ⌃O dock`
-    : '⏎ send · ⌥M settings · ⇧⏎ newline · ⌃O dock · Esc close'
+    : `⏎ send · ⌥M settings · ⇧⏎ newline${composerWorkflowFooterHint} · ⌃O dock · Esc close`
   const composerWindowSendingHintSegments = composerSendState === 'sending' || reattachedRunning
     ? composerSendingHintSegments(composerWindowFooterHint, theme)
     : null

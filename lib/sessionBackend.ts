@@ -3902,6 +3902,7 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
   const maxBudgetUsd = typeof body.maxBudgetUsd === 'number' && Number.isFinite(body.maxBudgetUsd) && body.maxBudgetUsd > 0
     ? body.maxBudgetUsd
     : undefined
+  const enableWorkflow = body.enableWorkflow === true
 
   // Cold-path conditions: brand-new session (no id yet), fork (creates a new
   // conversation root), or rewind (changes the resume point). These mutate
@@ -3941,6 +3942,7 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
       cwdOverride,
       taskBudgetTotal,
       maxBudgetUsd,
+      enableWorkflow,
       turnRequestId,
       fallbackModel,
       agentPolicy,
@@ -3960,6 +3962,7 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
     cwdOverride,
     taskBudgetTotal,
     maxBudgetUsd,
+    enableWorkflow,
     turnRequestId,
     fallbackModel,
     agentPolicy,
@@ -3992,6 +3995,7 @@ type ClaudeStreamColdArgs = {
   cwdOverride: string | undefined
   taskBudgetTotal: number | undefined
   maxBudgetUsd: number | undefined
+  enableWorkflow: boolean
   turnRequestId: string | undefined
   fallbackModel: string | undefined
   agentPolicy: ClaudeAgentPolicy | undefined
@@ -4016,6 +4020,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
     cwdOverride,
     taskBudgetTotal,
     maxBudgetUsd,
+    enableWorkflow,
     turnRequestId,
     fallbackModel,
     agentPolicy,
@@ -4049,6 +4054,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
     forkSession: forkSessionOnSend,
     taskBudgetTokens: taskBudgetTotal,
     maxBudgetUsd,
+    enableWorkflow,
     agentPolicy,
   }
 
@@ -4146,6 +4152,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           forwardSubagentText: true,
           systemPrompt: { type: 'preset', preset: 'claude_code', excludeDynamicSections: true },
           ...claudeQueryBudgetOptions(taskBudgetTotal, maxBudgetUsd),
+          ...(enableWorkflow ? { settings: { enableWorkflows: true } } : {}),
           // See lib/claudePool.ts's spawn() for why this needs no compat-check
           // entry: a Coordinator-owned session's tools are bound once here, on
           // its first (cold) turn, and never change for its lifetime.
@@ -4358,6 +4365,7 @@ type ClaudeStreamPooledArgs = {
   cwdOverride: string | undefined
   taskBudgetTotal: number | undefined
   maxBudgetUsd: number | undefined
+  enableWorkflow: boolean
   turnRequestId: string | undefined
   fallbackModel: string | undefined
   agentPolicy: ClaudeAgentPolicy | undefined
@@ -4379,6 +4387,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
     cwdOverride,
     taskBudgetTotal,
     maxBudgetUsd,
+    enableWorkflow,
     isPendingSession,
     turnRequestId,
     fallbackModel,
@@ -4487,6 +4496,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
               effort,
               taskBudgetTokens: taskBudgetTotal,
               maxBudgetUsd,
+              enableWorkflow,
               agentPolicy,
               isPendingSession,
             })
