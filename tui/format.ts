@@ -249,6 +249,7 @@ function coordinatorActionLabel(toolName: string): string {
     coord_complete_task: 'complete task',
     coord_fail_task: 'fail task',
     coord_finalize_run: 'finalize run',
+    coord_spawn_teammate: 'spawn teammate',
   }
   return labels[toolName] ?? toolName.slice('coord_'.length).replace(/_/g, ' ')
 }

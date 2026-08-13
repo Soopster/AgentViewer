@@ -1953,7 +1953,7 @@ export function buildSdkToolsTickPrompt(params: {
   cwd: string
 }): string {
   const roleGuidance = params.agent.role === 'lead'
-    ? 'You are the lead: supervise and delegate before implementing. Never claim a teammate lane merely because it is claimable; claim only an explicit lead integration/review task, decompose the board with coord_create_task when it is empty, and finalize the run with coord_finalize_run once every task is terminal.'
+    ? 'You are the lead: supervise and delegate before implementing. Never claim a teammate lane merely because it is claimable; claim only an explicit lead integration/review task, decompose the board with coord_create_task when it is empty, and finalize the run with coord_finalize_run once every task is terminal. If the board has more unblocked parallel work than idle teammates can absorb, call coord_spawn_teammate to grow the team instead of queueing it all onto the current roster.'
     : 'You are a teammate: answer reply-required mail first, then continue your owned task or claim one unblocked lane with coord_claim_task. Complete, release, or hand off owned work before ending your turn.'
   return [
     `Continue Coordinator run ${params.runId} as ${params.agent.name} (${params.agent.role}). You are ALREADY bound to this run — start with coord_status and act on the board and your inbox.`,

@@ -4032,6 +4032,24 @@ export async function finalizeExternalProtocolRun(
     return externalSnapshotSync(db, identity.runId, identity.agentId)
   })
   notifyRunChanged(identity.runId)
+  // Finalize is still a terminal transition — mirror stopProtocolRun/
+  // deleteProtocolRun's guaranteed teardown instead of trusting every
+  // external CLI to notice run.status and self-exit. Any in-app-spawned
+  // teammate session must not be left registered/running just because the
+  // run ended cooperatively rather than via /stop or /delete.
+  const controller = controllers.get(identity.runId)
+  if (controller) controller.stopped = true
+  controllers.delete(identity.runId)
+  if (controller) for (const sessionId of controller.sessionIds.values()) unregisterCoordinatorToolsForSession(sessionId)
+  const db = await getDatabase()
+  const agents = listAgentsSync(db, identity.runId)
+  await Promise.allSettled(agents.flatMap((agent) => {
+    const ids = new Set([agent.sessionId, controller?.sessionIds.get(agent.id)].filter((id): id is string => Boolean(id)))
+    return [...ids].map((id) => Promise.race([
+      interruptRunningSession(id).catch(() => {}),
+      new Promise<void>((resolve) => setTimeout(resolve, SESSION_INTERRUPT_TIMEOUT_MS)),
+    ]))
+  }))
   return result
 }
 
@@ -7595,6 +7613,70 @@ async function handleLeadTurnEnd(controller: RunController): Promise<void> {
 // ---------------------------------------------------------------------------
 // Run lifecycle
 
+/**
+ * Spawn one teammate session, register its board row + coordinator tools,
+ * and track it on the controller. Shared by beginExecutionPhase's initial
+ * roster loop and spawnAdditionalTeammate's on-demand mid-run path — the two
+ * differ only in how they pick `name`/`agentId`/`teammateProvider`.
+ */
+async function spawnTeammateSession(
+  controller: RunController,
+  name: string,
+  agentId: string,
+  teammateProvider: ProtocolRun['provider'],
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const ts = nowIso()
+  let workspace: WorktreeTask | { path: string; branch: string } | null = null
+  let session: Awaited<ReturnType<typeof createNewViewSession>>
+  try {
+    workspace = controller.useWorktrees
+      ? await createWorktreeTask(controller.baseCwd, `${controller.title ?? 'coord'}-${name}`)
+      : { path: controller.baseCwd, branch: '' }
+    session = await createNewViewSession({
+      provider: teammateProvider,
+      cwd: workspace.path,
+      title: `${controller.title ?? 'Coordinated run'} · ${name}`,
+      codexDynamicTools: teammateProvider === 'codex' ? buildCoordinatorCodexDynamicTools() : undefined,
+    })
+  } catch (err) {
+    // Session creation happens after the isolated checkout is registered.
+    // If the provider cannot create a session, tear that checkout back down
+    // here because no protocol_agents row exists for the normal run cleanup
+    // sweep to discover later.
+    if (workspace && 'repoRoot' in workspace) {
+      await removeWorktreeTask(workspace, { force: true }).catch(() => {})
+    }
+    const error = err instanceof Error ? err.message : String(err)
+    await appendProtocolEvent({
+      version: AGENT_PROTOCOL_VERSION,
+      runId: controller.runId,
+      agentId: 'lead',
+      type: 'agent.blocked',
+      summary: `Failed to spawn teammate ${name}: ${error}`,
+    }).catch(() => {})
+    return { ok: false, error }
+  }
+  if (!workspace) return { ok: false, error: 'No workspace available' }
+  const canUseInProcessTools = await inProcessToolsAvailable(session.provider)
+  const token = await enqueueWrite((tx) => {
+    tx.prepare(`
+      INSERT INTO protocol_agents (
+        id, run_id, name, role, provider, session_id, worktree_path, worktree_branch, task_id, status, last_seen_at, created_at, updated_at
+      ) VALUES (?, ?, ?, 'teammate', ?, ?, ?, ?, NULL, 'idle', NULL, ?, ?)
+    `).run(agentId, controller.runId, name, session.provider, session.sessionId, workspace.path, workspace.branch, ts, ts)
+    claimTaskSync(tx, controller.runId, agentId)
+    return canUseInProcessTools ? issueParticipantTokenSync(tx, controller.runId, agentId, undefined, ts) : undefined
+  })
+  if (token) {
+    const identity: ExternalProtocolIdentity = { runId: controller.runId, agentId, token }
+    registerCoordinatorToolsForProvider(session.provider, session.sessionId, identity)
+    controller.sdkIdentities.set(agentId, identity)
+  }
+  if (session.isPending) controller.pendingSessions.add(agentId)
+  controller.sessionIds.set(agentId, session.sessionId)
+  return { ok: true }
+}
+
 /** Spawn teammates against the (lead-authored or fallback) task board and start the loop. */
 async function beginExecutionPhase(controller: RunController): Promise<void> {
   if (controller.stopped || controller.executionStarted) return
@@ -7612,59 +7694,12 @@ async function beginExecutionPhase(controller: RunController): Promise<void> {
   }
 
   const teammateCount = Math.max(1, Math.min(controller.maxAgents - 1, tasks.length))
-  const ts = nowIso()
   for (let index = 0; index < teammateCount; index += 1) {
     if (controller.stopped) return
     const name = TEAMMATE_NAMES[index % TEAMMATE_NAMES.length]!
-    let workspace: WorktreeTask | { path: string; branch: string } | null = null
-    let session: Awaited<ReturnType<typeof createNewViewSession>>
-    try {
-      workspace = controller.useWorktrees
-        ? await createWorktreeTask(controller.baseCwd, `${controller.title ?? 'coord'}-${name}`)
-        : { path: controller.baseCwd, branch: '' }
-      const teammateProvider = controller.teammateProviders[index % controller.teammateProviders.length] ?? controller.provider
-      session = await createNewViewSession({
-        provider: teammateProvider,
-        cwd: workspace.path,
-        title: `${controller.title ?? 'Coordinated run'} · ${name}`,
-        codexDynamicTools: teammateProvider === 'codex' ? buildCoordinatorCodexDynamicTools() : undefined,
-      })
-    } catch (err) {
-      // Session creation happens after the isolated checkout is registered.
-      // If the provider cannot create a session, tear that checkout back down
-      // here because no protocol_agents row exists for the normal run cleanup
-      // sweep to discover later.
-      if (workspace && 'repoRoot' in workspace) {
-        await removeWorktreeTask(workspace, { force: true }).catch(() => {})
-      }
-      await appendProtocolEvent({
-        version: AGENT_PROTOCOL_VERSION,
-        runId: controller.runId,
-        agentId: 'lead',
-        type: 'agent.blocked',
-        summary: `Failed to spawn teammate ${name}: ${err instanceof Error ? err.message : String(err)}`,
-      }).catch(() => {})
-      continue
-    }
-    if (!workspace) continue
+    const teammateProvider = controller.teammateProviders[index % controller.teammateProviders.length] ?? controller.provider
     const agentId = `agent-${index + 1}`
-    const canUseInProcessTools = await inProcessToolsAvailable(session.provider)
-    const token = await enqueueWrite((tx) => {
-      tx.prepare(`
-        INSERT INTO protocol_agents (
-          id, run_id, name, role, provider, session_id, worktree_path, worktree_branch, task_id, status, last_seen_at, created_at, updated_at
-        ) VALUES (?, ?, ?, 'teammate', ?, ?, ?, ?, NULL, 'idle', NULL, ?, ?)
-      `).run(agentId, controller.runId, name, session.provider, session.sessionId, workspace.path, workspace.branch, ts, ts)
-      claimTaskSync(tx, controller.runId, agentId)
-      return canUseInProcessTools ? issueParticipantTokenSync(tx, controller.runId, agentId, undefined, ts) : undefined
-    })
-    if (token) {
-      const identity: ExternalProtocolIdentity = { runId: controller.runId, agentId, token }
-      registerCoordinatorToolsForProvider(session.provider, session.sessionId, identity)
-      controller.sdkIdentities.set(agentId, identity)
-    }
-    if (session.isPending) controller.pendingSessions.add(agentId)
-    controller.sessionIds.set(agentId, session.sessionId)
+    await spawnTeammateSession(controller, name, agentId, teammateProvider)
   }
 
   await enqueueWrite((tx) => {
@@ -7679,6 +7714,56 @@ async function beginExecutionPhase(controller: RunController): Promise<void> {
     await dispatchTeammateWork(controller, agent.id)
   }
   await dispatchClaimableLeadTask(controller)
+}
+
+/**
+ * On-demand mid-run teammate spawn — the coord_spawn_teammate tool's
+ * implementation. Lets the lead scale the team up when it discovers more
+ * parallelizable work than the run's initial `maxAgents` was sized for,
+ * instead of only ever getting the fixed roster beginExecutionPhase spawned
+ * once at the start of the run.
+ *
+ * Only meaningful for runs with a live in-process controller — a run driven
+ * entirely by external CLIs that joined via coord_join_run has no process
+ * this server can spawn on their behalf; those teammates must be started by
+ * a human running another CLI and joining.
+ */
+export async function spawnAdditionalTeammate(
+  identity: ExternalProtocolIdentity,
+  params: { provider?: ProtocolRun['provider'] } = {},
+): Promise<{ agentId: string; name: string }> {
+  const controller = controllers.get(identity.runId)
+  if (!controller) {
+    throw new Error('No in-process controller for this run — externally-run Coordinator sessions must add teammates by starting another CLI and calling coord_join_run')
+  }
+  if (controller.stopped) throw new Error('Run is stopped')
+  const db = await getDatabase()
+  const agent = requireExternalParticipantSync(db, identity)
+  if (agent.role !== 'lead') throw new Error('Only the Coordinator lead can spawn teammates')
+  const existing = listAgentsSync(db, controller.runId)
+  const usedNames = new Set(existing.map((a) => a.name))
+  const name = TEAMMATE_NAMES.find((candidate) => !usedNames.has(candidate))
+  if (!name) throw new Error(`Teammate name pool exhausted — a run supports at most ${TEAMMATE_NAMES.length} teammates`)
+  const teammateNumbers = existing
+    .map((a) => /^agent-(\d+)$/.exec(a.id)?.[1])
+    .filter((value): value is string => Boolean(value))
+    .map(Number)
+  const agentId = `agent-${(teammateNumbers.length > 0 ? Math.max(...teammateNumbers) : 0) + 1}`
+  const teammateProvider = (params.provider && controller.teammateProviders.includes(params.provider))
+    ? params.provider
+    : controller.teammateProviders[existing.length % controller.teammateProviders.length] ?? controller.provider
+  const result = await spawnTeammateSession(controller, name, agentId, teammateProvider)
+  if (!result.ok) throw new Error(`Failed to spawn teammate: ${result.error}`)
+  await appendProtocolEvent({
+    version: AGENT_PROTOCOL_VERSION,
+    runId: controller.runId,
+    agentId: name,
+    type: 'agent.ready',
+    summary: `Lead spawned additional teammate ${name} (${agentId}, ${teammateProvider})`,
+  }).catch(() => {})
+  notifyRunChanged(controller.runId)
+  void dispatchTeammateWork(controller, agentId)
+  return { agentId, name }
 }
 
 /**

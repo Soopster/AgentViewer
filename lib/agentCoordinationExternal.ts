@@ -6,6 +6,7 @@ import {
   createExternalProtocolTask,
   failExternalProtocolTask,
   finalizeExternalProtocolRun,
+  spawnAdditionalTeammate,
   handoffExternalProtocolTask,
   joinExternalProtocolRun,
   leaveExternalProtocolRun,
@@ -386,6 +387,11 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
     }))
   }
   if (action === 'finalize_run') return mutate(() => finalizeExternalProtocolRun(participantIdentity!, text(body.summary)))
+  if (action === 'spawn_teammate') {
+    const provider = optionalText(body.provider)
+    if (provider && !isAgentProvider(provider)) throw new Error('Invalid teammate provider')
+    return mutate(() => spawnAdditionalTeammate(participantIdentity!, { provider: provider as AgentProvider | undefined }))
+  }
   if (action === 'save_playbook') {
     return mutate(() => saveExternalProtocolPlaybook(participantIdentity!, {
       name: text(body.playbookName),

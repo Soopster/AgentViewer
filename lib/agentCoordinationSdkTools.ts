@@ -416,6 +416,15 @@ const COORD_TOOL_SPECS: ToolSpec[] = [
     action: 'finalize_run',
     mapArgs: (a) => ({ summary: a.summary }),
   },
+  {
+    name: 'coord_spawn_teammate',
+    description: 'Lead-only: spawn one additional teammate mid-run when you discover more parallelizable work than the team was originally sized for. Only works for runs this server started (in-app runs); externally-run Coordinator sessions must add teammates by starting another CLI and calling coord_join_run instead.',
+    fields: {
+      provider: { t: 'enum', values: ['codex', 'claude', 'copilot', 'opencode', 'pi'], optional: true },
+    },
+    action: 'spawn_teammate',
+    mapArgs: (a) => ({ provider: a.provider }),
+  },
 ]
 
 function zodField(f: FieldSpec): z.ZodTypeAny {
