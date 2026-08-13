@@ -12609,6 +12609,8 @@ export default function OpenTuiApp() {
       const handleFrame = (frame: SseFrame) => {
         // Liveness pulse only — receiving it already reset the stall race.
         if (frame.event === 'heartbeat') return
+        // Transport-only receipt consumed by cross-session senders.
+        if (frame.event === 'turn-accepted') return
         let parsed: unknown = null
         try {
           parsed = JSON.parse(frame.data)

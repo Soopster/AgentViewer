@@ -30,6 +30,29 @@ const daemon = createServer(async (request, response) => {
     }))
     return
   }
+  if (request.url === '/api/agents?exclude=sender-session') {
+    response.end(JSON.stringify({
+      sessions: [{
+        sessionId: 'recipient-session',
+        name: 'recipient-c0ffee42',
+        provider: 'codex',
+        running: false,
+        cwd: '/tmp/project',
+        title: 'Recipient',
+      }],
+    }))
+    return
+  }
+  if (request.url === '/api/agents/message') {
+    response.end(JSON.stringify({
+      delivered: true,
+      mode: 'queued',
+      targetSessionId: body.to,
+      targetProvider: 'codex',
+      targetName: 'recipient-c0ffee42',
+    }))
+    return
+  }
   if (request.url?.startsWith('/api/sessions/session-1/messages?')) {
     response.end(JSON.stringify({
       sessionId: 'session-1',
@@ -193,7 +216,7 @@ try {
   const listed = await client.listTools()
   const names = new Set(listed.tools.map((tool) => tool.name))
   const requiredTools = [
-    'get_session_transcript', 'post_attention', 'search_sessions', 'set_bookmark',
+    'get_session_transcript', 'list_sessions', 'message_session', 'post_attention', 'search_sessions', 'set_bookmark',
     'coord_list_runs', 'coord_create_run', 'coord_join_run', 'coord_resume', 'coord_status', 'coord_wait', 'coord_await_run', 'coord_create_task',
     'coord_claim_task', 'coord_read_inbox', 'coord_send_message', 'coord_request_locks',
     'coord_progress', 'coord_publish_finding', 'coord_submit_plan', 'coord_review_plan',
@@ -257,6 +280,33 @@ try {
   const searchPayload = JSON.parse(search.content?.[0]?.text ?? '{}')
   if (searchPayload.results?.[0]?.session_id !== 'session-1') {
     throw new Error('Search result was not mapped through the bridge')
+  }
+
+  const sessions = await client.callTool({
+    name: 'list_sessions',
+    arguments: { exclude_session_id: 'sender-session' },
+  })
+  const sessionsPayload = JSON.parse(sessions.content?.[0]?.text ?? '{}')
+  if (sessionsPayload.sessions?.[0]?.session_id !== 'recipient-session') {
+    throw new Error('Cross-session discovery was not mapped through the MCP bridge')
+  }
+  const message = await client.callTool({
+    name: 'message_session',
+    arguments: {
+      to: 'recipient-session',
+      text: 'Please respond to this handoff',
+      from_session_id: 'sender-session',
+      from_name: 'Sender',
+    },
+  })
+  const messagePayload = JSON.parse(message.content?.[0]?.text ?? '{}')
+  if (messagePayload.delivered !== true || messagePayload.targetSessionId !== 'recipient-session') {
+    throw new Error('Cross-session message was not accepted through the MCP bridge')
+  }
+  if (!seen.some((entry) => entry.url === '/api/agents/message'
+    && entry.body?.to === 'recipient-session'
+    && entry.body?.fromSessionId === 'sender-session')) {
+    throw new Error('MCP bridge did not send the cross-session message with exact session identities')
   }
 
   const transcript = await client.callTool({

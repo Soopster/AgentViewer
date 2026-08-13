@@ -33,7 +33,7 @@ function deliveryCopy(result: DeliveryResult): string {
 
 export default function AgentsPage() {
   const [sessions, setSessions] = useState<AddressableSessionSummary[]>([])
-  const [selectedName, setSelectedName] = useState('')
+  const [selectedSessionId, setSelectedSessionId] = useState('')
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
@@ -47,10 +47,12 @@ export default function AgentsPage() {
       const next = data.sessions ?? []
       const requested = new URLSearchParams(window.location.search).get('to')
       setSessions(next)
-      setSelectedName((current) => {
-        if (next.some((session) => session.name === current)) return current
-        if (requested && next.some((session) => session.name === requested)) return requested
-        return next[0]?.name ?? ''
+      setSelectedSessionId((current) => {
+        if (next.some((session) => session.sessionId === current)) return current
+        const requestedSession = requested
+          ? next.find((session) => session.sessionId === requested || session.name === requested)
+          : undefined
+        return requestedSession?.sessionId ?? next[0]?.sessionId ?? ''
       })
     } catch (error) {
       setFeedback({ kind: 'error', text: error instanceof Error ? error.message : 'Session discovery failed.' })
@@ -72,24 +74,24 @@ export default function AgentsPage() {
     return () => window.removeEventListener('beforeunload', warnBeforeUnload)
   }, [message])
 
-  const selectSession = useCallback((name: string) => {
-    setSelectedName(name)
+  const selectSession = useCallback((sessionId: string) => {
+    setSelectedSessionId(sessionId)
     setFeedback(null)
     const url = new URL(window.location.href)
-    url.searchParams.set('to', name)
+    url.searchParams.set('to', sessionId)
     window.history.replaceState(null, '', url)
   }, [])
 
   const sendMessage = useCallback(async () => {
     const text = message.trim()
-    if (!selectedName || !text || sending) return
+    if (!selectedSessionId || !text || sending) return
     setSending(true)
     setFeedback(null)
     try {
       const response = await fetch('/api/agents/message', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to: selectedName, text, fromName: 'Agent Viewer' }),
+        body: JSON.stringify({ to: selectedSessionId, text, fromName: 'Agent Viewer' }),
       })
       const result = await response.json() as DeliveryResult
       if (!response.ok || !result.delivered) throw new Error(result.error || `Delivery failed with HTTP ${response.status}`)
@@ -101,9 +103,9 @@ export default function AgentsPage() {
     } finally {
       setSending(false)
     }
-  }, [message, refreshSessions, selectedName, sending])
+  }, [message, refreshSessions, selectedSessionId, sending])
 
-  const selected = sessions.find((session) => session.name === selectedName)
+  const selected = sessions.find((session) => session.sessionId === selectedSessionId)
   const runningCount = sessions.reduce((count, session) => count + Number(session.running), 0)
 
   return (
@@ -174,9 +176,9 @@ export default function AgentsPage() {
                 <div key={`${session.provider}:${session.sessionId}`} role="listitem">
                   <button
                     type="button"
-                    className={cn('av-messaging-session', selectedName === session.name && 'av-selected')}
-                    onClick={() => selectSession(session.name)}
-                    aria-pressed={selectedName === session.name}
+                    className={cn('av-messaging-session', selectedSessionId === session.sessionId && 'av-selected')}
+                    onClick={() => selectSession(session.sessionId)}
+                    aria-pressed={selectedSessionId === session.sessionId}
                   >
                     <span className="av-messaging-session-icon"><Bot aria-hidden="true" /></span>
                     <span className="av-messaging-session-copy">

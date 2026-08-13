@@ -4208,6 +4208,12 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
       let emittedSessionEvent = false
       let realizedSessionId: string | undefined
       let adopted = false
+      let turnAccepted = false
+      const acceptTurn = (acceptedSessionId: string) => {
+        if (turnAccepted) return
+        turnAccepted = true
+        safeEnqueue(`event: turn-accepted\ndata: ${JSON.stringify({ sessionId: acceptedSessionId, provider: 'claude' })}\n\n`)
+      }
       let broadcastSessionId: string | undefined
       let broadcastTurnStarted = false
       const fallbackBroadcastSessionId = isPendingSession || forkSessionOnSend ? undefined : sessionId
@@ -4277,13 +4283,16 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
             try { broadcastClaudeMessage(eventSessionId, msg.type) } catch { /* observer-only signal */ }
           }
           noteClaudeCommandsChanged(messageSessionId ?? sessionId, msg)
+          const resultError = msg.type === 'result'
+            ? claudeResultErrorMessage(msg as unknown as Record<string, unknown>)
+            : null
+          if (!resultError) acceptTurn(messageSessionId ?? realizedSessionId ?? sessionId)
           safeEnqueue(`data: ${JSON.stringify(msg)}\n\n`)
           // Break after the result so we can adopt the Query into the pool.
           // The pool's pump loop takes over consuming for any tail messages
           // (notably prompt_suggestion, which the SDK emits after `result`)
           // and for future turns.
           if (msg.type === 'result') {
-            const resultError = claudeResultErrorMessage(msg as unknown as Record<string, unknown>)
             if (resultError) {
               safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: resultError.message, apiErrorStatus: resultError.apiErrorStatus })}\n\n`)
             }
@@ -4482,6 +4491,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
       }
 
       let attempt = 0
+      let turnAccepted = false
       try {
         while (true) {
           attempt += 1
@@ -4576,8 +4586,12 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
             // dead verdict so a slow-but-healthy turn is never respawned.
             sawActivity = true
             try {
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify(msg)}\n\n`))
               const resultError = claudeResultErrorMessage(msg as unknown as Record<string, unknown>)
+              if (!turnAccepted && !resultError) {
+                turnAccepted = true
+                controller.enqueue(encoder.encode(`event: turn-accepted\ndata: ${JSON.stringify({ sessionId, provider: 'claude' })}\n\n`))
+              }
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(msg)}\n\n`))
               if (resultError) {
                 controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: resultError.message, apiErrorStatus: resultError.apiErrorStatus })}\n\n`))
               }
@@ -5228,6 +5242,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
             input: buildCodexComposerInput(text, []),
           }),
         })
+        safeEnqueue(`event: turn-accepted\ndata: ${JSON.stringify({ sessionId, provider: 'codex', turnId })}\n\n`)
 
         // Backstop a dropped turn/completed: if the notification stream goes
         // silent, ask the app-server for the turn's actual status. A legit
@@ -5850,6 +5865,7 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
             parts: buildOpenCodeParts(userMessage, attachments, sessionDirectory),
             },
           })
+          safeEnqueue(`event: turn-accepted\ndata: ${JSON.stringify({ sessionId: targetSessionId, provider: 'opencode' })}\n\n`)
         }
 
         // Backstop a dropped session.idle: if the event subscription goes
@@ -6296,6 +6312,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         }
         if (turnAgentMode) messageOptions.agentMode = turnAgentMode
         await session.send(messageOptions as CopilotMessageOptions)
+        safeEnqueue(`event: turn-accepted\ndata: ${JSON.stringify({ sessionId, provider: 'copilot' })}\n\n`)
         // The initial send has now been accepted, so follow-up text can safely
         // use Copilot's immediate delivery mode to interject in this same run.
         // Registering this only after the first send avoids a rapid second tab
@@ -6657,6 +6674,9 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
         // sees. Native Pi instead shows a quiet "retrying…" and recovers.
         unsubscribePi = agentSession.subscribe((event) => {
           if (cleanedUp) return
+          if (event.type === 'agent_start') {
+            safeEnqueue(`event: turn-accepted\ndata: ${JSON.stringify({ sessionId: targetSessionId, provider: 'pi' })}\n\n`)
+          }
 
           // Session-level progress is not part of the transcript. Surface it as
           // non-fatal status frames so the composer can show "Retrying…" /

@@ -735,6 +735,52 @@ server.registerTool('search_sessions', {
   })
 })
 
+server.registerTool('list_sessions', {
+  description: 'List running and recently active Agent Viewer sessions that can receive a direct cross-session message. Use session_id with message_session; names are display labels only.',
+  inputSchema: {
+    exclude_session_id: z.string().min(1).optional().describe('Session to omit; defaults to AGENT_VIEWER_SESSION_ID when configured'),
+  },
+  annotations: { readOnlyHint: true },
+}, async ({ exclude_session_id }) => {
+  const exclude = exclude_session_id?.trim() || process.env.AGENT_VIEWER_SESSION_ID?.trim()
+  const params = exclude ? `?exclude=${encodeURIComponent(exclude)}` : ''
+  const result = await requestJson(`/api/agents${params}`)
+  return textResult({
+    sessions: Array.isArray(result.sessions)
+      ? result.sessions.map((session) => ({
+          session_id: session.sessionId,
+          name: session.name,
+          provider: session.provider,
+          running: session.running === true,
+          cwd: session.cwd,
+          title: session.title,
+        }))
+      : [],
+  })
+})
+
+server.registerTool('message_session', {
+  description: 'Send a plain-text prompt to another Agent Viewer session. The call succeeds only after the destination provider accepts the turn; startup failures are returned as MCP errors. Prefer a full session_id from list_sessions.',
+  inputSchema: {
+    to: z.string().min(1).describe('Target session_id from list_sessions; an exact unique display name is also accepted'),
+    text: z.string().min(1).max(20_000).describe('Message for the destination agent'),
+    from_session_id: z.string().min(1).optional().describe('Sender session; defaults to AGENT_VIEWER_SESSION_ID when configured'),
+    from_name: z.string().min(1).max(120).optional().describe('Human-readable sender label'),
+  },
+}, async ({ to, text, from_session_id, from_name }) => {
+  const fromSessionId = from_session_id?.trim() || process.env.AGENT_VIEWER_SESSION_ID?.trim()
+  const result = await requestJson('/api/agents/message', {
+    method: 'POST',
+    body: JSON.stringify({
+      to,
+      text,
+      ...(fromSessionId ? { fromSessionId } : {}),
+      fromName: from_name?.trim() || (fromSessionId ? `session-${fromSessionId.replace(/[^a-zA-Z0-9]/g, '').slice(-8)}` : 'Agent Viewer MCP'),
+    }),
+  }, 65_000)
+  return textResult(result)
+})
+
 server.registerTool('get_session_transcript', {
   description: 'Read a session transcript from any Agent Viewer provider. Returns full-fidelity canonical messages, including text, reasoning, tool calls, tool results, and system events.',
   inputSchema: {

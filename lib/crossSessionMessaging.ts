@@ -10,7 +10,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import type { AgentProvider, Session } from './types'
-import { getRunningSessionInfo, listRunningSessionRefs, steerRunningSessionIdempotent } from './sessionRuntime'
+import { getRunningSessionInfo, interruptRunningSession, listRunningSessionRefs, steerRunningSessionIdempotent } from './sessionRuntime'
 
 export type AddressableSession = {
   sessionId: string
@@ -38,13 +38,17 @@ const MAX_MESSAGE_CHARS = 20_000
 const RATE_WINDOW_MS = 60_000
 const RATE_LIMIT = 10
 const REPEAT_SUPPRESS_MS = 5_000
+const TURN_ACCEPT_TIMEOUT_MS = 60_000
 
 const rateBySender = new Map<string, { windowStart: number; count: number }>()
 const lastMessageBySender = new Map<string, { key: string; at: number }>()
 
 function shortId(sessionId: string): string {
   const compact = sessionId.replace(/[^a-zA-Z0-9]/g, '')
-  return (compact || sessionId).slice(0, 6)
+  const value = compact || sessionId
+  // UUIDv7 prefixes encode time, so nearby sessions commonly share them.
+  // Its random tail is the useful human-facing discriminator.
+  return value.slice(-8)
 }
 
 function folderName(cwd?: string): string | undefined {
@@ -134,7 +138,7 @@ export function resolveAddressableSession(sessions: AddressableSession[], query:
   const normalized = query.trim().toLowerCase()
   if (!normalized) return undefined
   return sessions.find((session) => session.sessionId === query)
-    ?? sessions.find((session) => session.name.toLowerCase() === normalized)
+    ?? uniqueMatch(sessions, (session) => session.name.toLowerCase() === normalized)
     ?? uniqueMatch(sessions, (session) => session.name.toLowerCase().startsWith(normalized))
     ?? uniqueMatch(sessions, (session) => session.title?.toLowerCase().includes(normalized) === true)
 }
@@ -155,17 +159,74 @@ function isThrottled(senderKey: string, toName: string, text: string): boolean {
   return rate.count > RATE_LIMIT
 }
 
-async function drainDetachedTurn(response: Response): Promise<void> {
-  const reader = response.body?.getReader()
-  if (!reader) return
+function sseError(data: string): string {
   try {
-    while (!(await reader.read()).done) {
+    const parsed = JSON.parse(data) as { error?: unknown }
+    return typeof parsed.error === 'string' && parsed.error ? parsed.error : 'The destination turn failed during startup'
+  } catch {
+    return data.trim() || 'The destination turn failed during startup'
+  }
+}
+
+async function drainDetachedTurn(response: Response, onAccepted: () => void, onStartupError: (error: Error) => void): Promise<void> {
+  const reader = response.body?.getReader()
+  if (!reader) {
+    onStartupError(new Error('The destination returned no response stream'))
+    return
+  }
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let accepted = false
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const frames = buffer.split(/\r?\n\r?\n/)
+      buffer = frames.pop() ?? ''
+      for (const frame of frames) {
+        const event = frame.match(/^event:\s*([^\r\n]+)/m)?.[1]?.trim() ?? 'message'
+        const data = [...frame.matchAll(/^data:\s?(.*)$/gm)].map((match) => match[1]).join('\n')
+        if (event === 'turn-accepted') {
+          accepted = true
+          onAccepted()
+        } else if (event === 'error' && !accepted) {
+          onStartupError(new Error(sseError(data)))
+        }
+      }
       // Draining keeps provider resources and session persistence alive. The
       // destination transcript remains the canonical place to read the reply.
     }
+    if (!accepted) onStartupError(new Error('The destination stream ended before accepting the message'))
+  } catch (error) {
+    if (!accepted) onStartupError(error instanceof Error ? error : new Error(String(error)))
   } finally {
     reader.releaseLock()
   }
+}
+
+export function beginDetachedTurnDrain(response: Response): { accepted: Promise<void>; completion: Promise<void> } {
+  let settled = false
+  let resolveAccepted!: () => void
+  let rejectAccepted!: (error: Error) => void
+  const accepted = new Promise<void>((resolve, reject) => {
+    resolveAccepted = resolve
+    rejectAccepted = reject
+  })
+  const completion = drainDetachedTurn(
+    response,
+    () => {
+      if (settled) return
+      settled = true
+      resolveAccepted()
+    },
+    (error) => {
+      if (settled) return
+      settled = true
+      rejectAccepted(error)
+    },
+  )
+  return { accepted, completion }
 }
 
 export async function sendCrossSessionMessage(params: {
@@ -216,6 +277,7 @@ export async function sendCrossSessionMessage(params: {
 
   try {
     const { streamViewSessionTurn } = await import('./sessionBackend')
+    const turnRequestId = randomUUID()
     const response = await streamViewSessionTurn({
       sessionId: target.sessionId,
       signal: new AbortController().signal,
@@ -225,12 +287,29 @@ export async function sendCrossSessionMessage(params: {
         provider: target.provider,
         cwd: target.cwd,
         detachOnClientAbort: true,
+        turnRequestId,
       },
     })
     if (!response.ok) {
       return { delivered: false, mode: 'error', error: `Failed to start turn: HTTP ${response.status}` }
     }
-    void drainDetachedTurn(response).catch(() => {})
+    const drain = beginDetachedTurnDrain(response)
+    void drain.completion.catch(() => {})
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        drain.accepted,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => reject(new Error(`The destination did not accept the message within ${TURN_ACCEPT_TIMEOUT_MS / 1000} seconds`)), TURN_ACCEPT_TIMEOUT_MS)
+          if (typeof timeout === 'object' && timeout && 'unref' in timeout) timeout.unref()
+        }),
+      ])
+    } catch (error) {
+      await interruptRunningSession(target.sessionId, turnRequestId).catch(() => {})
+      return { delivered: false, mode: 'error', error: error instanceof Error ? error.message : String(error) }
+    } finally {
+      if (timeout) clearTimeout(timeout)
+    }
     return {
       delivered: true,
       mode: 'queued',

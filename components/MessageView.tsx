@@ -4665,6 +4665,10 @@ export default function MessageView({
             continue
           }
 
+          // Transport-only receipt consumed by cross-session senders. The
+          // normal composer already owns this stream, so it has nothing to do.
+          if (frame.event === 'turn-accepted') continue
+
           if (frame.event === 'context-usage') {
             try { setContextUsage(JSON.parse(frame.data)) } catch { /* ignore */ }
             continue
