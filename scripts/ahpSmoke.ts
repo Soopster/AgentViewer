@@ -71,6 +71,7 @@ assert.equal(unsupportedFrames.find((frame) => frame.id === 20)?.error.code, -32
 unsupportedConnection.close()
 
 const workspaceUri = pathToFileURL(`${process.cwd()}${path.sep}`).href
+const sessionWorkingDirectoryUri = pathToFileURL(process.cwd()).href
 const readmeUri = new URL('README.md', workspaceUri).href
 const resourcesUri = new URL('ahp-resources/', workspaceUri).href
 const resourceFileUri = new URL('ahp-resources/value.txt', workspaceUri).href
@@ -267,7 +268,7 @@ const beforeCreate = frames.length
 const created = await request(3, 'createSession', {
   channel: sessionChannel,
   provider: 'codex',
-  workingDirectory: `file://${testCwd}`,
+  workingDirectories: [workspaceUri],
   config: { objective: 'Verify AHP Coordinator interoperability', maxAgents: 3 },
 })
 assert.equal(created.result, null)
@@ -282,13 +283,16 @@ const listed = await request(4, 'listSessions', {
 })
 assert.equal(listed.result.items.length, 1)
 assert.equal(listed.result.items[0].resource, sessionChannel)
-assert.equal(listed.result.items[0].workingDirectory, `file://${testCwd}`)
+assert.deepEqual(listed.result.items[0].workingDirectories, [sessionWorkingDirectoryUri])
+assert.equal(listed.result.items[0].workingDirectory, undefined)
 
 const subscribed = await request(5, 'subscribe', { channel: sessionChannel })
 assert.equal(subscribed.result.snapshot.resource, sessionChannel)
 assert.equal(subscribed.result.snapshot.state.lifecycle, 'ready')
 assert.equal(subscribed.result.snapshot.state.chats.length, 1)
 assert.equal(subscribed.result.snapshot.state.activeClients[0].clientId, 'smoke-client')
+assert.deepEqual(subscribed.result.snapshot.state.workingDirectories, [sessionWorkingDirectoryUri])
+assert.equal(subscribed.result.snapshot.state.workingDirectory, undefined)
 assert.ok(subscribed.result.snapshot.state._meta['dev.agent-viewer.coordinator'])
 const chatChannel = subscribed.result.snapshot.state.defaultChat
 
@@ -306,6 +310,19 @@ await legacyConnection.handle({
   },
 })
 assert.equal(legacyFrames.find((frame) => frame.id === 219)?.result.protocolVersion, '0.5.1')
+const legacyChatSnapshot = legacyFrames.find((frame) => frame.id === 219)
+  ?.result.snapshots.find((snapshot: Frame) => snapshot.resource === chatChannel)
+assert.equal(legacyChatSnapshot?.state.workingDirectory, sessionWorkingDirectoryUri)
+assert.equal(legacyChatSnapshot?.state.workingDirectories, undefined)
+await legacyConnection.handle({
+  jsonrpc: '2.0',
+  id: 221,
+  method: 'listSessions',
+  params: { channel: 'ahp-root://', limit: 1 },
+})
+const legacyListed = legacyFrames.find((frame) => frame.id === 221)
+assert.equal(legacyListed?.result.items[0].workingDirectory, sessionWorkingDirectoryUri)
+assert.equal(legacyListed?.result.items[0].workingDirectories, undefined)
 host.emitAction(chatChannel, {
   type: 'chat/toolCallAuthRequired',
   turnId: 'version-filter-turn',
@@ -464,8 +481,8 @@ assert.equal(
 reconnect.close()
 restartedConnection.close()
 
-// Exercise the host through Microsoft's published TypeScript client, not just
-// hand-authored JSON-RPC frames. The published package currently speaks 0.6.
+// Exercise the 0.7 host shape through Microsoft's published TypeScript client,
+// not just hand-authored JSON-RPC frames.
 const [referenceClientTransport, referenceServerTransport] = InMemoryTransport.pair()
 const referenceHost = new CoordinatorAhpHost()
 const referenceConnection = referenceHost.createConnection((message) => referenceServerTransport.send(message))
@@ -483,13 +500,17 @@ const referenceClient = new AhpClient(referenceClientTransport)
 referenceClient.connect()
 const referenceInitialized = await referenceClient.initialize({
   clientId: 'official-typescript-client',
-  protocolVersions: ['0.6.0'],
+  protocolVersions: ['0.7.0'],
   initialSubscriptions: ['ahp-root://'],
 })
-assert.equal(referenceInitialized.protocolVersion, '0.6.0')
+assert.equal(referenceInitialized.protocolVersion, '0.7.0')
 assert.equal(referenceInitialized.snapshots[0]?.resource, 'ahp-root://')
 const referenceSession = await referenceClient.subscribe(sessionChannel)
 assert.equal(referenceSession.result.snapshot?.resource, sessionChannel)
+assert.deepEqual(
+  (referenceSession.result.snapshot as Frame).state.workingDirectories,
+  [sessionWorkingDirectoryUri],
+)
 await referenceClient.resourceRequest({ uri: workspaceUri, read: true })
 const referenceRead = await referenceClient.resourceRead({ uri: readmeUri, encoding: 'utf-8' as never })
 assert.equal(referenceRead.data, 'AHP smoke\n')
@@ -584,6 +605,23 @@ await websocketClient.shutdown()
 // default for Coordinator commands. Exercise their shared client against the
 // real WebSocket host, including participant capability binding.
 const { CoordinatorAhpClient } = await import('../bin/agent-viewer-ahp-client.mjs')
+const sequenceClient = new CoordinatorAhpClient({
+  attachUrl: 'http://127.0.0.1:1',
+  clientId: 'sequence-smoke',
+})
+sequenceClient.acceptConnectionResult({
+  type: 'snapshot',
+  snapshots: [
+    { resource: 'ahp-root://', state: {}, fromSeq: 41 },
+    { resource: sessionChannel, state: {}, fromSeq: 47 },
+  ],
+})
+assert.equal(sequenceClient.lastSeenServerSeq, 47)
+sequenceClient.acceptConnectionResult({
+  type: 'snapshot',
+  snapshots: [{ resource: sessionChannel, state: {}, fromSeq: 59 }],
+})
+assert.equal(sequenceClient.lastSeenServerSeq, 59)
 const coordinatorClient = new CoordinatorAhpClient({
   attachUrl: `http://127.0.0.1:${websocketPort - 1}`,
   clientId: 'default-coordinator-transport',

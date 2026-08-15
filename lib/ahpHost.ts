@@ -1,5 +1,6 @@
 import {
   AhpErrorCodes,
+  compareProtocolVersions,
   JsonRpcErrorCodes,
   SUPPORTED_PROTOCOL_VERSIONS,
   isActionKnownToVersion,
@@ -110,6 +111,29 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === 'string')
     : []
+}
+
+function usesWorkingDirectoryArrays(protocolVersion: string): boolean {
+  return compareProtocolVersions(protocolVersion, '0.7.0') >= 0
+}
+
+function adaptWorkingDirectoriesForVersion<T>(value: T, protocolVersion: string): T {
+  if (value === null || typeof value !== 'object' || usesWorkingDirectoryArrays(protocolVersion)) {
+    return value
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => adaptWorkingDirectoriesForVersion(item, protocolVersion)) as T
+  }
+  const adapted: Record<string, unknown> = {}
+  for (const [key, item] of Object.entries(value)) {
+    if (key === 'workingDirectories' && Array.isArray(item)) {
+      const first = item.find((candidate): candidate is string => typeof candidate === 'string')
+      if (first) adapted.workingDirectory = first
+      continue
+    }
+    adapted[key] = adaptWorkingDirectoriesForVersion(item, protocolVersion)
+  }
+  return adapted as T
 }
 
 function activeClientTools(value: unknown): string[] {
@@ -564,7 +588,7 @@ export class CoordinatorAhpConnection {
     this.send({
       jsonrpc: '2.0',
       method: 'action',
-      params: envelope,
+      params: adaptWorkingDirectoriesForVersion(envelope, this.protocolVersion),
     })
   }
 
@@ -575,7 +599,11 @@ export class CoordinatorAhpConnection {
       method as Parameters<typeof isNotificationKnownToVersion>[0],
       this.protocolVersion,
     )) return
-    this.send({ jsonrpc: '2.0', method, params })
+    this.send({
+      jsonrpc: '2.0',
+      method,
+      params: adaptWorkingDirectoriesForVersion(params, this.protocolVersion),
+    })
   }
 
   async handle(message: JsonRpcMessage): Promise<void> {
@@ -590,7 +618,12 @@ export class CoordinatorAhpConnection {
     }
     try {
       const result = await this.handleRequest(message.method, message.params)
-      if (!this.closed) this.send({ jsonrpc: '2.0', id: message.id, result })
+      if (!this.closed) {
+        const wireResult = message.method === AHP_COORDINATOR_REQUEST_METHOD
+          ? result
+          : adaptWorkingDirectoriesForVersion(result, this.protocolVersion)
+        this.send({ jsonrpc: '2.0', id: message.id, result: wireResult })
+      }
     } catch (error) {
       if (this.closed) return
       if (error instanceof AhpRpcError || error instanceof AhpResourceError || error instanceof AhpTerminalError) {
@@ -971,7 +1004,10 @@ export class CoordinatorAhpConnection {
     if (activeClient && text(activeClient.clientId) !== this.clientId) {
       throw new AhpRpcError(JsonRpcErrorCodes.InvalidParams, 'activeClient.clientId must match initialize.clientId')
     }
-    const cwd = filePathFromUri(text(params.workingDirectory)) || process.cwd()
+    const workingDirectory = usesWorkingDirectoryArrays(this.protocolVersion)
+      ? stringArray(params.workingDirectories)[0]
+      : text(params.workingDirectory)
+    const cwd = filePathFromUri(workingDirectory) || process.cwd()
     const maxAgentsValue = Number(config.maxAgents)
     const result = await createExternalProtocolRun({
       runId,

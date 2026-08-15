@@ -279,7 +279,7 @@ function coordinatorMeta(snapshot: ProtocolRunSnapshot): Record<string, unknown>
 }
 
 export function coordinatorSessionSummary(run: ProtocolRun): SessionSummary {
-  const workingDirectory = fileUri(run.baseCwd)
+  const workingDirectories = [fileUri(run.baseCwd)]
   return {
     resource: coordinatorSessionUri(run.id),
     provider: run.provider,
@@ -290,7 +290,7 @@ export function coordinatorSessionSummary(run: ProtocolRun): SessionSummary {
       displayName: run.baseCwd.split(/[\\/]/).filter(Boolean).at(-1) || run.baseCwd,
       uri: fileUri(run.baseCwd),
     },
-    workingDirectory,
+    workingDirectories,
     createdAt: run.createdAt,
     modifiedAt: run.updatedAt,
     _meta: {
@@ -316,7 +316,7 @@ export function coordinatorSessionState(snapshot: ProtocolRunSnapshot): SessionS
       inputSchema: { type: 'object' },
     })),
   }] : [])
-  const workingDirectory = fileUri(snapshot.run.baseCwd)
+  const workingDirectories = [fileUri(snapshot.run.baseCwd)]
   return {
     provider: snapshot.run.provider,
     title: snapshot.run.prompt.split('\n')[0]?.trim().slice(0, 120) || 'Coordinator run',
@@ -326,7 +326,7 @@ export function coordinatorSessionState(snapshot: ProtocolRunSnapshot): SessionS
       displayName: snapshot.run.baseCwd.split(/[\\/]/).filter(Boolean).at(-1) || snapshot.run.baseCwd,
       uri: fileUri(snapshot.run.baseCwd),
     },
-    workingDirectory,
+    workingDirectories,
     lifecycle: AHP_SESSION_LIFECYCLE_READY,
     activeClients,
     chats,

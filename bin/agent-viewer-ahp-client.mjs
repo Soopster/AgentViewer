@@ -247,8 +247,8 @@ export class CoordinatorAhpClient {
     if (!value || typeof value !== 'object') return
     const candidates = [
       value.serverSeq,
-      value.snapshot?.serverSeq,
-      ...(Array.isArray(value.snapshots) ? value.snapshots.map((snapshot) => snapshot?.serverSeq) : []),
+      value.snapshot?.fromSeq,
+      ...(Array.isArray(value.snapshots) ? value.snapshots.map((snapshot) => snapshot?.fromSeq) : []),
       ...(Array.isArray(value.actions) ? value.actions.map((action) => action?.serverSeq) : []),
     ]
     for (const candidate of candidates) {
@@ -269,8 +269,8 @@ export class CoordinatorAhpClient {
         }
       }
       this.lastSeenServerSeq = result.snapshots.reduce(
-        (maximum, snapshot) => Math.max(maximum, Number(snapshot?.serverSeq) || 0),
-        0,
+        (maximum, snapshot) => Math.max(maximum, Number(snapshot?.fromSeq) || 0),
+        this.lastSeenServerSeq,
       )
       return
     }
