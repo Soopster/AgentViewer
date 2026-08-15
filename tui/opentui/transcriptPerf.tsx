@@ -13,6 +13,8 @@ type Scenario = {
 
 type Sample = {
   durationMs: number
+  threadingDurationMs: number
+  formattingDurationMs: number
   peakHeapTotalDeltaBytes: number
   peakHeapUsedDeltaBytes: number
   peakRssDeltaBytes: number
@@ -150,11 +152,14 @@ function percentile(values: number[], quantile: number): number {
 
 function executeScenario(rawMessages: SessionMessage[], splitPanes: number): {
   durationMs: number
+  threadingDurationMs: number
+  formattingDurationMs: number
   peak: MemorySnapshot
   checksum: number
 } {
   const startedAt = performance.now()
   const threaded = buildThreadedMessages(rawMessages)
+  const threadedAt = performance.now()
   let checksum = threaded.length
   const renderedViews = []
 
@@ -173,20 +178,24 @@ function executeScenario(rawMessages: SessionMessage[], splitPanes: number): {
   }
 
   const durationMs = performance.now() - startedAt
+  const threadingDurationMs = threadedAt - startedAt
+  const formattingDurationMs = durationMs - threadingDurationMs
   // Keep all mounted-view card arrays reachable until the memory snapshot.
   // This distinguishes peak live allocations from the post-GC retained sample.
   checksum += renderedViews.length
-  return { durationMs, peak: process.memoryUsage(), checksum }
+  return { durationMs, threadingDurationMs, formattingDurationMs, peak: process.memoryUsage(), checksum }
 }
 
 function runSample(rawMessages: SessionMessage[], splitPanes: number): Sample {
   forceGc()
   const before = process.memoryUsage()
-  const { durationMs, peak, checksum } = executeScenario(rawMessages, splitPanes)
+  const { durationMs, threadingDurationMs, formattingDurationMs, peak, checksum } = executeScenario(rawMessages, splitPanes)
   forceGc()
   const retained = process.memoryUsage()
   return {
     durationMs,
+    threadingDurationMs,
+    formattingDurationMs,
     peakHeapTotalDeltaBytes: delta(peak.heapTotal, before.heapTotal),
     peakHeapUsedDeltaBytes: delta(peak.heapUsed, before.heapUsed),
     peakRssDeltaBytes: delta(peak.rss, before.rss),
@@ -229,6 +238,8 @@ function summarize(scenario: Scenario, samples: Sample[]) {
     views: scenario.splitPanes + 1,
     runs: samples.length,
     durationMs: metric('durationMs'),
+    threadingDurationMs: metric('threadingDurationMs'),
+    formattingDurationMs: metric('formattingDurationMs'),
     peakHeapTotalDeltaBytes: metric('peakHeapTotalDeltaBytes'),
     peakHeapUsedDeltaBytes: metric('peakHeapUsedDeltaBytes'),
     peakRssDeltaBytes: metric('peakRssDeltaBytes'),

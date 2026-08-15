@@ -5,8 +5,7 @@ import {
   type IncrementalThreadingCache,
   type ThreadedMessage,
 } from '../../lib/threading'
-import { buildTaskRegistry } from '../../lib/taskRegistry'
-import { buildTaskActiveForms, formatTranscriptCard, type TuiTranscriptCard } from '../format'
+import { buildTranscriptTaskContext, formatTranscriptCard, type TuiTranscriptCard } from '../format'
 import type { TuiDensity } from '../theme'
 import type { ProviderSelection, Session, SessionInfo, SessionMessage } from '../../lib/types'
 import { readTuiSessionDetailSource, readTuiSessions } from '../../lib/tui/service'
@@ -27,7 +26,10 @@ type FormatRequest = {
   kind: 'format'
   id: number
   session: Session
-  threaded: ThreadedMessage[]
+  threaded?: ThreadedMessage[]
+  threadedPrefix?: number
+  threadedSuffix?: ThreadedMessage[]
+  previousFormatToken?: number
   density: TuiDensity
   showToolCalls: boolean
 }
@@ -64,7 +66,15 @@ type WorkerResponse =
       unchanged: true
       deliveryToken: number
     }
-  | { id: number; ok: true; transcriptCards: TuiTranscriptCard[] }
+  | { id: number; ok: true; transcriptCards: TuiTranscriptCard[]; formatToken: number }
+  | {
+      id: number
+      ok: true
+      cardsSuffix: TuiTranscriptCard[]
+      cardsPrefix: number
+      formatToken: number
+      baseFormatToken: number
+    }
   | { id: number; ok: true; sessions: Session[] }
   | { id: number; ok: false; error: string }
 
@@ -105,6 +115,24 @@ function sharedIdentityPrefix<T>(next: readonly T[], prev: readonly T[]): number
 // every previously-seen density resident for large transcripts.
 type CardCache = Map<string, Map<TuiDensity, TuiTranscriptCard>>
 const cardCacheByKey = new Map<string, CardCache>()
+
+type LastFormatted = {
+  threaded: ThreadedMessage[]
+  cards: TuiTranscriptCard[]
+  formatToken: number
+  hasTaskList: boolean
+}
+const lastFormattedByKey = new Map<string, LastFormatted>()
+
+function touchLastFormatted(key: string, value: LastFormatted): void {
+  if (lastFormattedByKey.has(key)) lastFormattedByKey.delete(key)
+  lastFormattedByKey.set(key, value)
+  while (lastFormattedByKey.size > THREADING_CACHE_LIMIT * 4) {
+    const oldestKey = lastFormattedByKey.keys().next().value
+    if (oldestKey === undefined) break
+    lastFormattedByKey.delete(oldestKey)
+  }
+}
 
 function cacheKey(session: Session): string {
   return `${session.provider ?? 'claude'}:${session.sessionId}`
@@ -188,6 +216,7 @@ function formatCards(
   threaded: ThreadedMessage[],
   density: TuiDensity,
   showToolCalls: boolean,
+  pruneCache = true,
 ): TuiTranscriptCard[] {
   const messages = showToolCalls ? threaded : stripToolCallBlocks(threaded)
   let perSession = cardCacheByKey.get(sessionCacheKey)
@@ -195,8 +224,7 @@ function formatCards(
     perSession = new Map()
     cardCacheByKey.set(sessionCacheKey, perSession)
   }
-  const activeForms = buildTaskActiveForms(messages)
-  const taskRegistry = buildTaskRegistry(messages)
+  const { activeForms, taskRegistry } = buildTranscriptTaskContext(messages)
 
   const cards: TuiTranscriptCard[] = new Array(messages.length)
   const seenMessageKeys = new Set<string>()
@@ -253,7 +281,7 @@ function formatCards(
   // Prune entries that no longer exist in the active threaded set. The key
   // includes content, so in-place Codex item updates cannot reuse stale cards.
   // Bounded by message count and only runs in the worker thread.
-  if (perSession.size > seenMessageKeys.size) {
+  if (pruneCache && perSession.size > seenMessageKeys.size) {
     for (const messageKey of perSession.keys()) {
       if (!seenMessageKeys.has(messageKey)) perSession.delete(messageKey)
     }
@@ -272,16 +300,87 @@ self.onmessage = async (event) => {
     }
     if (data.kind === 'format') {
       const sessionCacheKey = cacheKey(data.session)
-      const transcriptCards = formatCards(sessionCacheKey, data.threaded, data.density, data.showToolCalls)
-      self.postMessage({ id: data.id, ok: true, transcriptCards })
+      const cardsVariant = `${data.density}|${data.showToolCalls ? 1 : 0}`
+      const formatKey = `${sessionCacheKey}|${cardsVariant}`
+      const prev = lastFormattedByKey.get(formatKey)
+      const canApplyAppend = Boolean(
+        prev
+        && data.previousFormatToken === prev.formatToken
+        && data.threadedPrefix === prev.threaded.length
+        && Array.isArray(data.threadedSuffix),
+      )
+      const threaded = canApplyAppend && prev
+        ? prev.threaded.concat(data.threadedSuffix ?? [])
+        : data.threaded
+      if (!threaded) throw new Error('threading worker format delta baseline unavailable')
+
+      const suffix = canApplyAppend && prev ? data.threadedSuffix ?? [] : null
+      const suffixHasTaskList = suffix?.some(hasTaskListBlock) ?? false
+      if (canApplyAppend && prev && suffix && !prev.hasTaskList && !suffixHasTaskList) {
+        const cardsSuffix = formatCards(
+          sessionCacheKey,
+          suffix,
+          data.density,
+          data.showToolCalls,
+          false,
+        )
+        const transcriptCards = prev.cards.concat(cardsSuffix)
+        touchLastFormatted(formatKey, {
+          threaded,
+          cards: transcriptCards,
+          formatToken: data.id,
+          hasTaskList: false,
+        })
+        self.postMessage({
+          id: data.id,
+          ok: true,
+          cardsSuffix,
+          cardsPrefix: prev.cards.length,
+          formatToken: data.id,
+          baseFormatToken: prev.formatToken,
+        })
+        return
+      }
+
+      const transcriptCards = formatCards(sessionCacheKey, threaded, data.density, data.showToolCalls)
+      touchLastFormatted(formatKey, {
+        threaded,
+        cards: transcriptCards,
+        formatToken: data.id,
+        hasTaskList: threaded.some(hasTaskListBlock),
+      })
+      self.postMessage({ id: data.id, ok: true, transcriptCards, formatToken: data.id })
       return
     }
     const { info, rawMessages } = await readTuiSessionDetailSource(data.session)
     const { threaded: threadedMessages, messages: alignedMessages } = threadMessages(data.session, rawMessages)
     const sessionCacheKey = cacheKey(data.session)
-    const transcriptCards = formatCards(sessionCacheKey, threadedMessages, data.density, data.showToolCalls)
     const cardsVariant = `${data.density}|${data.showToolCalls ? 1 : 0}`
     const prev = lastSentByKey.get(sessionCacheKey)
+
+    // threadMessages only returns the prior arrays when every freshly-read
+    // message is content-identical. If the client still owns that exact
+    // delivery and the card variant is unchanged, there is no formatting or
+    // identity-prefix work left to do. This is the common idle-poll path for
+    // providers whose source mtime cannot be gated reliably.
+    if (
+      prev
+      && data.previousDeliveryToken === prev.deliveryToken
+      && prev.cardsVariant === cardsVariant
+      && alignedMessages === prev.raw
+      && threadedMessages === prev.threaded
+    ) {
+      self.postMessage({
+        id: data.id,
+        ok: true,
+        info,
+        unchanged: true,
+        deliveryToken: prev.deliveryToken,
+      })
+      return
+    }
+
+    const transcriptCards = formatCards(sessionCacheKey, threadedMessages, data.density, data.showToolCalls)
     const rawPrefix = prev ? sharedIdentityPrefix(alignedMessages, prev.raw) : 0
     const threadedPrefix = prev ? sharedIdentityPrefix(threadedMessages, prev.threaded) : 0
     const cardsPrefix = prev && prev.cardsVariant === cardsVariant
