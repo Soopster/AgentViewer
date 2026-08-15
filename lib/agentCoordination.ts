@@ -4043,9 +4043,23 @@ export async function finalizeExternalProtocolRun(
   if (controller) for (const sessionId of controller.sessionIds.values()) unregisterCoordinatorToolsForSession(sessionId)
   const db = await getDatabase()
   const agents = listAgentsSync(db, identity.runId)
+  // Never interrupt the caller's own session. The lead (or teammate) that
+  // invoked coord_finalize_run is executing this very call from its live
+  // in-process session; interrupting it aborts the in-flight tool call
+  // ("opencode provider_failure: Aborted"), which the supervision loop then
+  // misreads as a lead provider failure and flips the just-committed
+  // 'completed' run to 'failed'. Teammates and every other live session are
+  // still interrupted so no in-app agent is left registered/running.
+  const callerSessionIds = new Set<string>()
+  if (controller) {
+    const callerSessionId = controller.sessionIds.get(identity.agentId)
+    if (callerSessionId) callerSessionIds.add(callerSessionId)
+  }
+  const callerAgent = agents.find((agent) => agent.id === identity.agentId)
+  if (callerAgent?.sessionId) callerSessionIds.add(callerAgent.sessionId)
   await Promise.allSettled(agents.flatMap((agent) => {
     const ids = new Set([agent.sessionId, controller?.sessionIds.get(agent.id)].filter((id): id is string => Boolean(id)))
-    return [...ids].map((id) => Promise.race([
+    return [...ids].filter((id) => !callerSessionIds.has(id)).map((id) => Promise.race([
       interruptRunningSession(id).catch(() => {}),
       new Promise<void>((resolve) => setTimeout(resolve, SESSION_INTERRUPT_TIMEOUT_MS)),
     ]))

@@ -1,0 +1,1 @@
+Both variants are procedurally identical (content was preserved verbatim during the refactor). The new-skill response is ~30% shorter (41 vs 58 lines) for the same call sequence, because the reorganized SKILL.md states the startup-invariant rule once instead of it being interleaved with capability-surface prose the old single-file version also had to read past.

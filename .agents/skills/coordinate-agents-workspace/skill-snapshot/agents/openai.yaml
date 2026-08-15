@@ -1,0 +1,10 @@
+interface:
+  display_name: "Coordinate Agents"
+  short_description: "Start or join an Agent Viewer Coordinator run"
+  default_prompt: "Use $coordinate-agents to start or join a Coordinator run and fan out the work."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "agent-viewer"
+      description: "Agent Viewer Coordinator task board, mailbox, locks, and run lifecycle"
