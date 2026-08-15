@@ -32,6 +32,7 @@ const COORDINATOR_APP_URI = 'ui://agent-viewer/coordinator-dashboard.html'
 const COORDINATOR_SKILL_INDEX_URI = 'skill://index.json'
 const COORDINATOR_SKILL_URI = 'skill://coordinate-agents/SKILL.md'
 const COORDINATOR_A2A_CARD_URI = 'a2a://agent-viewer/coordinator/agent-card.json'
+const COORDINATOR_CURRENT_RUN_URI = 'coord://agent-viewer/current-run'
 const coordinatorAppHtml = await readFile(new URL('./agent-viewer-coordinator-app.html', import.meta.url), 'utf8')
 const coordinatorSkillMarkdown = await readFile(new URL('../.agents/skills/coordinate-agents/SKILL.md', import.meta.url), 'utf8')
 const coordinatorSkillDescription = coordinatorSkillMarkdown.match(/^description:\s*(.+)$/m)?.[1]?.trim()
@@ -43,6 +44,8 @@ const MISSING_REQUIRED_TASK_CAPABILITY = -32003
 const MCP_TASK_METHODS = new Set(['tasks/get', 'tasks/update', 'tasks/cancel'])
 const taskStores = new Map()
 const taskRunners = new Map()
+const pushTimers = new Map()
+const pushMetaFingerprints = new Map()
 const IDEMPOTENT_COORDINATOR_ACTIONS = new Set([
   'claim_task',
   'complete_task',
@@ -118,6 +121,35 @@ function textResult(value) {
       ? { structuredContent: value }
       : {}),
   }
+}
+
+function shouldPushCoordinatorAction(runId, action) {
+  if (action?.type !== 'session/metaChanged') return true
+  // AHP includes a derived liveness.ageSeconds value in session metadata, so
+  // the same durable board can otherwise look different on every 500ms host
+  // refresh. Keep meaningful agent/task timestamps, but ignore that clock-only
+  // field before deciding whether MCP subscribers need another invalidation.
+  const fingerprint = JSON.stringify(action._meta, (key, value) => key === 'liveness' ? undefined : value)
+  if (pushMetaFingerprints.get(runId) === fingerprint) return false
+  pushMetaFingerprints.set(runId, fingerprint)
+  return true
+}
+
+function scheduleCoordinatorPush(server, runId) {
+  if (pushTimers.has(runId)) return
+  const timer = setTimeout(() => {
+    pushTimers.delete(runId)
+    void server.server.sendResourceUpdated({ uri: COORDINATOR_CURRENT_RUN_URI }).catch(() => {})
+  }, 25)
+  timer.unref?.()
+  pushTimers.set(runId, timer)
+}
+
+function clearCoordinatorPush(runId) {
+  const timer = pushTimers.get(runId)
+  if (timer) clearTimeout(timer)
+  pushTimers.delete(runId)
+  pushMetaFingerprints.delete(runId)
 }
 
 function taskStorePath() {
@@ -513,6 +545,7 @@ async function bindCoordinatorParticipant(result) {
       } : {}),
       participant: { ...participant, token: undefined },
       identityFile: coordinatorIdentityFile,
+      pushResource: coordinatorTransport() === 'ahp' ? COORDINATOR_CURRENT_RUN_URI : undefined,
       autonomy: `Run agent-viewer coord worker --identity ${JSON.stringify(coordinatorIdentityFile)} --attach ${JSON.stringify(baseUrl)} for unattended operation.`,
     }
   }
@@ -537,6 +570,7 @@ async function requireUnboundBridge(tool) {
     if (/unknown|not found|no such/i.test(String(error?.message ?? ''))) runStatus = 'stopped'
   }
   if (['completed', 'failed', 'stopped'].includes(runStatus)) {
+    clearCoordinatorPush(coordinatorIdentity.runId)
     coordinatorIdentity = null
     coordinatorCursor = null
     if (!process.env.AGENT_VIEWER_COORD_IDENTITY_FILE?.trim()) coordinatorIdentityFile = null
@@ -584,6 +618,7 @@ const server = new McpServer(
   },
   {
     capabilities: {
+      resources: { subscribe: coordinatorTransport() === 'ahp' },
       extensions: {
         [MCP_UI_EXTENSION]: { mimeTypes: ['text/html;profile=mcp-app'] },
         [MCP_SKILLS_EXTENSION]: {},
@@ -602,6 +637,7 @@ const server = new McpServer(
       'Create or join a run, then read status and inbox; claim one task, lock paths before editing, report progress, and complete it or release unfinished work.',
       'Teammates run in other CLI processes and see only the board and mailbox — communicate deliberately: answer reply_required mail promptly, publish reusable discoveries with coord_publish_finding, and message teammates whose lanes your work affects.',
       'Use coord_wait instead of polling while idle, prefer coord worker for unattended runs, and never disclose participant capabilities or bypass completion gates.',
+      `On the default AHP transport, use push-based supervision: subscribe once to ${COORDINATOR_CURRENT_RUN_URI}; every AHP board action emits a resources/updated notification, then read that resource for the authoritative board and actionable digest.`,
       'Coordinator calls use a persistent AHP connection by default. The bridge restores run subscriptions after disconnects and safely retries reads or idempotent mutations once.',
       'Narrate every mailbox exchange to your own terminal, one line each: "<- <sender>: <message>" on receipt, "-> <recipient>: <message>" after sending. '
         + 'Your human is watching this terminal, not the board — silence reads as dead, even mid-task.',
@@ -612,6 +648,41 @@ const server = new McpServer(
 )
 
 installMcpTasksHandlers(server)
+ahpClient.onAction((envelope) => {
+  const channel = typeof envelope?.channel === 'string' ? envelope.channel : ''
+  const encodedRunId = /^ahp-session:\/([^/?#]+)$/.exec(channel)?.[1]
+  let runId = ''
+  try { runId = encodedRunId ? decodeURIComponent(encodedRunId) : '' } catch {}
+  if (!runId || runId !== coordinatorIdentity?.runId) return
+  if (!shouldPushCoordinatorAction(runId, envelope.action)) return
+  // Resource notifications are the 2026 MCP push primitive. The AHP action
+  // is deliberately only an invalidation signal: readers reconcile against
+  // the authoritative Coordinator ledger through the resource callback.
+  scheduleCoordinatorPush(server, runId)
+})
+
+server.registerResource('Current Coordinator run', COORDINATOR_CURRENT_RUN_URI, {
+  title: 'Current Coordinator run',
+  description: 'Private live projection of this MCP bridge participant’s Coordinator board. Subscribe once for push-based board invalidations, then re-read after each resources/updated notification.',
+  mimeType: 'application/json',
+  cacheHint: { ttlMs: 0, cacheScope: 'private' },
+}, async (uri) => {
+  if (!coordinatorIdentity) {
+    throw new Error('Join, create, or resume a Coordinator run before reading the live run resource')
+  }
+  const status = await coordinatorRequest('status')
+  return {
+    contents: [{
+      uri: uri.href,
+      mimeType: 'application/json',
+      text: JSON.stringify(status),
+      _meta: {
+        runId: coordinatorIdentity.runId,
+        agentId: coordinatorIdentity.agentId,
+      },
+    }],
+  }
+})
 
 server.registerResource('Agent Viewer Coordinator skill index', COORDINATOR_SKILL_INDEX_URI, {
   title: 'Agent Viewer Coordinator skills',

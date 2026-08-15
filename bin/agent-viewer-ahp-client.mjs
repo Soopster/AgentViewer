@@ -66,6 +66,17 @@ export class CoordinatorAhpClient {
     this.connectedOnce = false
     this.lastSeenServerSeq = 0
     this.subscriptions = new Set([ROOT_CHANNEL])
+    this.actionListeners = new Set()
+  }
+
+  /**
+   * Observe pushed AHP state actions for subscribed Coordinator runs.
+   * The durable ledger remains authoritative; listeners should use an action
+   * only as an invalidation signal and re-read the current projection.
+   */
+  onAction(listener) {
+    this.actionListeners.add(listener)
+    return () => this.actionListeners.delete(listener)
   }
 
   async request(action, payload = {}, timeoutMs = 10_000, signal) {
@@ -205,6 +216,10 @@ export class CoordinatorAhpClient {
     }
     if (!message) return
     this.observeServerSequence(message.params)
+    if (message.method === 'action') {
+      this.emitAction(message.params)
+      return
+    }
     if (typeof message.id !== 'number') return
     const pending = this.pending.get(message.id)
     if (!pending) return
@@ -244,7 +259,15 @@ export class CoordinatorAhpClient {
   }
 
   acceptConnectionResult(result) {
+    if (Array.isArray(result?.actions)) {
+      for (const action of result.actions) this.emitAction(action)
+    }
     if (result?.type === 'snapshot' && Array.isArray(result.snapshots)) {
+      for (const snapshot of result.snapshots) {
+        if (typeof snapshot?.resource === 'string') {
+          this.emitAction({ channel: snapshot.resource, action: { type: 'snapshot' } })
+        }
+      }
       this.lastSeenServerSeq = result.snapshots.reduce(
         (maximum, snapshot) => Math.max(maximum, Number(snapshot?.serverSeq) || 0),
         0,
@@ -256,6 +279,13 @@ export class CoordinatorAhpClient {
       return
     }
     this.observeServerSequence(result)
+  }
+
+  emitAction(action) {
+    if (!action || typeof action !== 'object') return
+    for (const listener of this.actionListeners) {
+      try { listener(action) } catch {}
+    }
   }
 
   async rememberRunSubscription(result) {

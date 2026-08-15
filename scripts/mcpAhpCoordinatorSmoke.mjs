@@ -17,6 +17,7 @@ const testCwd = await mkdtemp(path.join(tmpdir(), 'agent-viewer-mcp-ahp-'))
 const launcher = fileURLToPath(new URL('../bin/agent-viewer.mjs', import.meta.url))
 const ahpEntrypoint = fileURLToPath(new URL('../bin/agent-viewer-ahp.ts', import.meta.url))
 const workerEntrypoint = fileURLToPath(new URL('../bin/agent-viewer-coord-worker.mjs', import.meta.url))
+const currentRunResource = 'coord://agent-viewer/current-run'
 const bun = process.env.BUN_PATH || 'bun'
 const fakeCodex = path.join(testCwd, 'fake-codex.mjs')
 
@@ -139,8 +140,28 @@ try {
   })
   const runId = created.participant?.runId
   assert.ok(runId)
+  assert.equal(created.pushResource, currentRunResource)
   assert.equal(created.participant.capabilities?.ahpClientId?.length > 0, true)
   assert.equal((await stat(leadIdentity)).mode & 0o077, 0)
+
+  let resolvePush
+  let pushCount = 0
+  const pushed = new Promise((resolve) => { resolvePush = resolve })
+  lead.client.setNotificationHandler('notifications/resources/updated', (notification) => {
+    if (notification.params.uri !== currentRunResource) return
+    pushCount += 1
+    resolvePush(notification)
+  })
+  const pushSubscription = await lead.client.listen({
+    resourceSubscriptions: [currentRunResource],
+  })
+  assert.deepEqual(pushSubscription.honoredFilter.resourceSubscriptions, [currentRunResource])
+  const initialProjection = await lead.client.readResource({ uri: currentRunResource })
+  assert.equal(
+    JSON.parse(initialProjection.contents[0].text).snapshot.run.id,
+    runId,
+    'the subscribed MCP resource must project the authoritative current run',
+  )
 
   const listed = await call(lead.client, 'coord_list_runs', { limit: 5 })
   assert.equal(listed.runs.some((run) => run.id === runId), true)
@@ -154,6 +175,21 @@ try {
   assert.equal(joined.participant.role, 'teammate')
   assert.equal(joined.participant.capabilities?.ahpClientId?.length > 0, true)
   assert.equal((await stat(teammateIdentity)).mode & 0o077, 0)
+  await Promise.race([
+    pushed,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('Coordinator MCP push notification timed out')), 3_000)),
+  ])
+  const pushedProjection = await lead.client.readResource(
+    { uri: currentRunResource },
+    { cacheMode: 'reload' },
+  )
+  assert.equal(
+    JSON.parse(pushedProjection.contents[0].text).snapshot.agents.length,
+    2,
+    'a pushed invalidation must lead to the latest authoritative board without coord_wait polling',
+  )
+  await new Promise((resolve) => setTimeout(resolve, 750))
+  assert.ok(pushCount <= 2, `one board change produced a push notification flood (${pushCount})`)
 
   await assert.rejects(
     call(lead.client, 'coord_create_task', {
@@ -253,6 +289,7 @@ try {
   // preserve the AHP client ID/subscription, and wake on the lead's next event.
   await call(teammate.client, 'coord_wait', { timeout_ms: 0 })
   const interruptedWait = call(teammate.client, 'coord_wait', { timeout_ms: 55_000 })
+  const pushCountBeforeRestart = pushCount
   await new Promise((resolve) => setTimeout(resolve, 100))
   await stopAhpHost(ahpHost)
   ahpHost = await startAhpHost()
@@ -265,6 +302,15 @@ try {
   const resumedWait = await interruptedWait
   assert.equal(resumedWait.changed, true)
   assert.equal(resumedWait.actionable?.inboxCount > 0, true)
+  await new Promise((resolve, reject) => {
+    const deadline = Date.now() + 3_000
+    const check = () => {
+      if (pushCount > pushCountBeforeRestart) return resolve()
+      if (Date.now() >= deadline) return reject(new Error('MCP push subscription did not recover after AHP restart'))
+      setTimeout(check, 25)
+    }
+    check()
+  })
   const recoveryInbox = await call(teammate.client, 'coord_read_inbox')
   assert.equal(recoveryInbox.messages?.some((message) => (
     message.body === 'AHP host restarted; continue the lane'
@@ -396,6 +442,7 @@ try {
   assert.equal(savedLead.runId, runId)
   assert.equal(savedTeammate.runId, runId)
   await chmod(leadIdentity, 0o600)
+  await pushSubscription.close()
 } finally {
   await lead.client.close().catch(() => {})
   await teammate.client.close().catch(() => {})
