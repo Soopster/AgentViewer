@@ -2,6 +2,7 @@ import type { ThreadedMessage } from '../../lib/threading'
 import type { TuiTranscriptCard } from '../format'
 import type { TuiDensity } from '../theme'
 import type { ProviderSelection, Session, SessionInfo, SessionMessage } from '../../lib/types'
+import { threadedMessageFingerprint } from './messageFingerprint'
 
 export type SessionDetailPayload = {
   info: SessionInfo | null
@@ -28,6 +29,9 @@ type Pending =
     }
   | {
       kind: 'format'
+      formatKey: string
+      threaded: ThreadedMessage[]
+      previousDelivery?: LastFormattedDelivery
       resolve: (cards: TuiTranscriptCard[]) => void
       reject: (error: Error) => void
     }
@@ -58,7 +62,15 @@ type WorkerResponse =
       unchanged: true
       deliveryToken: number
     }
-  | { id: number; ok: true; transcriptCards: TuiTranscriptCard[] }
+  | { id: number; ok: true; transcriptCards: TuiTranscriptCard[]; formatToken: number }
+  | {
+      id: number
+      ok: true
+      cardsSuffix: TuiTranscriptCard[]
+      cardsPrefix: number
+      formatToken: number
+      baseFormatToken: number
+    }
   | { id: number; ok: true; sessions: Session[] }
   | { id: number; ok: false; error: string }
 
@@ -70,6 +82,7 @@ const pending = new Map<number, Pending>()
 // third switch, forcing full main-thread card rebuilds on revisit.
 const THREADING_CACHE_LIMIT = 10
 const CARD_VARIANT_CACHE_LIMIT = 4
+const FORMAT_DELIVERY_CACHE_LIMIT = 12
 const threadingCacheByKey = new Map<string, ThreadingClientCache>()
 
 // What the previous detail response for each session delivered to callers.
@@ -87,6 +100,23 @@ type LastDeliveredDetail = {
   deliveryToken: number
 }
 const lastDeliveredByKey = new Map<string, LastDeliveredDetail>()
+
+type LastFormattedDelivery = {
+  threaded: ThreadedMessage[]
+  cards: TuiTranscriptCard[]
+  formatToken: number
+}
+const lastFormattedByKey = new Map<string, LastFormattedDelivery>()
+
+function touchLastFormatted(key: string, value: LastFormattedDelivery): void {
+  if (lastFormattedByKey.has(key)) lastFormattedByKey.delete(key)
+  lastFormattedByKey.set(key, value)
+  while (lastFormattedByKey.size > FORMAT_DELIVERY_CACHE_LIMIT) {
+    const oldestKey = lastFormattedByKey.keys().next().value
+    if (oldestKey === undefined) break
+    lastFormattedByKey.delete(oldestKey)
+  }
+}
 
 function touchLastDelivered(key: string, value: LastDeliveredDetail): void {
   if (lastDeliveredByKey.has(key)) lastDeliveredByKey.delete(key)
@@ -197,8 +227,26 @@ function ensureWorker(): Worker {
         threadedMessages,
         transcriptCards,
       })
-    } else if (entry.kind === 'format' && 'transcriptCards' in data) {
+    } else if (entry.kind === 'format' && 'transcriptCards' in data && 'formatToken' in data) {
+      touchLastFormatted(entry.formatKey, {
+        threaded: entry.threaded,
+        cards: data.transcriptCards,
+        formatToken: data.formatToken,
+      })
       entry.resolve(data.transcriptCards)
+    } else if (entry.kind === 'format' && 'cardsSuffix' in data) {
+      const prev = entry.previousDelivery
+      if (!prev || prev.formatToken !== data.baseFormatToken || data.cardsPrefix > prev.cards.length) {
+        entry.reject(new Error('threading worker returned an unknown format delta baseline'))
+        return
+      }
+      const transcriptCards = prev.cards.slice(0, data.cardsPrefix).concat(data.cardsSuffix)
+      touchLastFormatted(entry.formatKey, {
+        threaded: entry.threaded,
+        cards: transcriptCards,
+        formatToken: data.formatToken,
+      })
+      entry.resolve(transcriptCards)
     } else if (entry.kind === 'sessions' && 'sessions' in data) {
       entry.resolve(data.sessions)
     }
@@ -293,6 +341,8 @@ export function formatTranscriptCardsAsync(
   showToolCalls: boolean,
 ): Promise<TuiTranscriptCard[]> {
   const key = cacheKey(session)
+  const cardsVariant = variantKey(density, showToolCalls)
+  const formatKey = `${key}|${cardsVariant}`
   const cached = threadingCacheByKey.get(key)
   if (cached && cached.threadedMessages === threaded) {
     const variant = cached.cardsByVariant.get(variantKey(density, showToolCalls))
@@ -304,9 +354,21 @@ export function formatTranscriptCardsAsync(
 
   const id = ++requestCounter
   const w = ensureWorker()
+  const previousDelivery = lastFormattedByKey.get(formatKey)
+  const canSendAppend = Boolean(
+    previousDelivery
+    && threaded.length > previousDelivery.threaded.length
+    && previousDelivery.threaded.every((message, index) => (
+      message === threaded[index]
+      || threadedMessageFingerprint(message) === threadedMessageFingerprint(threaded[index])
+    )),
+  )
   return new Promise<TuiTranscriptCard[]>((resolve, reject) => {
     pending.set(id, {
       kind: 'format',
+      formatKey,
+      threaded,
+      previousDelivery: canSendAppend ? previousDelivery : undefined,
       resolve: (transcriptCards) => {
         // (Re)create the entry when it was evicted or holds a different
         // threaded identity — getTranscriptCardsSync compares identity against
@@ -323,7 +385,18 @@ export function formatTranscriptCardsAsync(
       },
       reject,
     })
-    w.postMessage({ kind: 'format', id, session, threaded, density, showToolCalls })
+    w.postMessage(canSendAppend && previousDelivery
+      ? {
+          kind: 'format',
+          id,
+          session,
+          threadedPrefix: previousDelivery.threaded.length,
+          threadedSuffix: threaded.slice(previousDelivery.threaded.length),
+          previousFormatToken: previousDelivery.formatToken,
+          density,
+          showToolCalls,
+        }
+      : { kind: 'format', id, session, threaded, density, showToolCalls })
   })
 }
 

@@ -793,6 +793,11 @@ function parseTaskResultJson(raw: string | null | undefined): unknown {
 
 export type TaskActiveForms = Map<string, string>
 
+export type TranscriptTaskContext = {
+  activeForms?: TaskActiveForms
+  taskRegistry?: TaskRegistry
+}
+
 /**
  * Scan a thread of messages for TaskCreate/TaskUpdate calls and build a map of
  * taskId → activeForm reflecting the most recent activeForm set for each task.
@@ -823,6 +828,22 @@ export function buildTaskActiveForms(messages: ThreadedMessage[]): TaskActiveFor
     }
   }
   return map
+}
+
+/**
+ * Task-wide state is only consumed by TaskList cards. Avoid rebuilding both
+ * full-transcript registries for the overwhelmingly common case where a
+ * transcript has no TaskList result to enrich.
+ */
+export function buildTranscriptTaskContext(messages: ThreadedMessage[]): TranscriptTaskContext {
+  const hasTaskList = messages.some((message) => message.blocks.some((block) => (
+    block.type === 'tool_thread' && block.toolUse.name === 'TaskList'
+  )))
+  if (!hasTaskList) return {}
+  return {
+    activeForms: buildTaskActiveForms(messages),
+    taskRegistry: buildTaskRegistry(messages),
+  }
 }
 
 function parseTaskListPayload(raw: string | null | undefined): TaskItem[] | null {
@@ -2110,8 +2131,7 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
 }
 
 export function formatTranscriptCards(messages: ThreadedMessage[], density: TuiDensity = 'balanced'): TuiTranscriptCard[] {
-  const activeForms = buildTaskActiveForms(messages)
-  const taskRegistry = buildTaskRegistry(messages)
+  const { activeForms, taskRegistry } = buildTranscriptTaskContext(messages)
   return messages.map((message) => formatTranscriptCard(message, density, activeForms, taskRegistry))
 }
 
