@@ -356,7 +356,7 @@ export class CoordinatorAhpHost {
       if (!previousRuns.has(run.id)) {
         this.broadcastProtocolNotification('root/sessionAdded', {
           channel: AHP_ROOT_CHANNEL,
-          summary: coordinatorSessionSummary(run),
+          summary: coordinatorSessionSummary(run, next.snapshots.get(run.id)?.agents),
         })
       }
     }
@@ -455,7 +455,7 @@ export class CoordinatorAhpHost {
       this.broadcastProtocolNotification('root/sessionSummaryChanged', {
         channel: AHP_ROOT_CHANNEL,
         session: channel,
-        changes: withoutResource(coordinatorSessionSummary(run)),
+        changes: withoutResource(coordinatorSessionSummary(run, afterSnapshot.agents)),
       })
     }
   }
@@ -922,9 +922,10 @@ export class CoordinatorAhpConnection {
         throw new AhpRpcError(JsonRpcErrorCodes.InvalidParams, 'Unrecognized listSessions cursor')
       }
     }
-    const items = this.host.currentState().runs
+    const { runs, snapshots } = this.host.currentState()
+    const items = runs
       .slice(offset, offset + limit)
-      .map(coordinatorSessionSummary)
+      .map((run) => coordinatorSessionSummary(run, snapshots.get(run.id)?.agents))
     const nextOffset = offset + items.length
     return {
       items,
@@ -1168,6 +1169,27 @@ export class CoordinatorAhpConnection {
         }
       }
       this.host.emitAction(channel, stateAction(action), { clientId: this.clientId, clientSeq })
+      return
+    }
+
+    if (
+      action.type === 'session/workingDirectorySet'
+      || action.type === 'session/workingDirectoryRemoved'
+      || action.type === 'chat/workingDirectorySet'
+      || action.type === 'chat/workingDirectoryRemoved'
+    ) {
+      // A session's/chat's working directories mirror run.baseCwd and each
+      // agent's assigned git worktree (see sessionWorkingDirectories /
+      // chatSummary in ahpCoordinator.ts) — both server-derived, not a set a
+      // client can grant or revoke membership in directly. Declining leaves
+      // the set unchanged, which the spec allows for the remove actions and
+      // this host extends to the set actions for the same reason.
+      this.host.emitAction(
+        channel,
+        stateAction(action),
+        { clientId: this.clientId, clientSeq },
+        'Working directories on the Coordinator projection are derived from run/agent worktree assignment and cannot be changed by clients',
+      )
       return
     }
 
