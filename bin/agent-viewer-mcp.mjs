@@ -639,10 +639,11 @@ const server = new McpServer(
     },
     instructions: [
       'Agent Viewer Coordinator is a shared multi-CLI task board and mailbox for agents from any provider (Claude, Codex, OpenCode, Copilot, Pi).',
+      `If a coord worker supervisor launched this turn or your prompt says to return control when idle, never call coord_wait: end the turn so the supervisor can receive board changes and re-dispatch you. Otherwise prefer a host subscription to ${COORDINATOR_CURRENT_RUN_URI}; use coord_wait only when the interactive host cannot subscribe.`,
       'Create or join a run, then read status and inbox; claim one task, lock paths before editing, report progress, and complete it or release unfinished work.',
       'Teammates run in other CLI processes and see only the board and mailbox — communicate deliberately: answer reply_required mail promptly, publish reusable discoveries with coord_publish_finding, and message teammates whose lanes your work affects.',
-      'Use coord_wait instead of polling while idle, prefer coord worker for unattended runs, and never disclose participant capabilities or bypass completion gates.',
-      `On the default AHP transport, use push-based supervision: subscribe once to ${COORDINATOR_CURRENT_RUN_URI}; every AHP board action emits a resources/updated notification, then read that resource for the authoritative board and actionable digest.`,
+      `On the default AHP transport, a subscribed host receives resources/updated after board actions; re-read ${COORDINATOR_CURRENT_RUN_URI} for the authoritative board and actionable digest.`,
+      'Prefer coord worker for unattended runs, and never disclose participant capabilities or bypass completion gates.',
       'Coordinator calls use a persistent AHP connection by default. The bridge restores run subscriptions after disconnects and safely retries reads or idempotent mutations once.',
       'Narrate every mailbox exchange to your own terminal, one line each: "<- <sender>: <message>" on receipt, "-> <recipient>: <message>" after sending. '
         + 'Your human is watching this terminal, not the board — silence reads as dead, even mid-task.',
@@ -1106,8 +1107,8 @@ server.registerTool('coord_status', {
 }, async () => textResult(await coordinatorRequest('status')))
 
 server.registerTool('coord_wait', {
-  description: 'Block until another participant changes the run (your own writes do not wake you). Returns the events that occurred plus an `actionable` digest saying what you can do now. Prefer this over repeated status polling. '
-    + 'Tasks-capable MCP clients receive a durable asynchronous handle for non-zero waits; other clients retain the blocking result. An empty/timed-out result is normal — call it again. If it THROWS instead (network error, timeout), that is a real disconnect: wait ~2s and retry the same call rather than giving up or re-joining.',
+  description: 'Compatibility wait for an interactive MCP host that cannot subscribe to the current-run resource. Never call this from a managed `coord worker` turn: return control so its supervisor can wait and re-dispatch without spending a model turn. For an unsupervised interactive client, block until another participant changes the run (your own writes do not wake you), then act on the returned events and `actionable` digest instead of polling status. '
+    + 'Tasks-capable MCP clients receive a durable asynchronous handle for non-zero waits; other clients retain the blocking result. An empty/timed-out result is normal for an unsupervised fallback client. If it THROWS instead (network error, timeout), that is a real disconnect: wait ~2s and retry the same call rather than giving up or re-joining.',
   inputSchema: {
     cursor: z.string().min(1).optional().describe('Opaque cursor from the previous coord_wait; normally omit because this bridge remembers it'),
     timeout_ms: z.number().int().min(0).max(55_000).optional().describe('Defaults to 25000 milliseconds'),
@@ -1139,7 +1140,7 @@ server.registerTool('coord_wait', {
 
 server.registerTool('coord_await_run', {
   description: 'Create a durable MCP Task that monitors this participant\'s Coordinator run until it reaches completed, failed, or stopped. '
-    + 'Pending lead plan reviews surface as input_required elicitations and tasks/update applies the user\'s response. Use this for an unattended run or an external supervisor that continues working independently; interactive leads should keep acting on coord_status/coord_wait instead of passively awaiting their own work. Requires io.modelcontextprotocol/tasks.',
+    + 'Pending lead plan reviews surface as input_required elicitations and tasks/update applies the user\'s response. Use this for an unattended run or an external supervisor that continues working independently; interactive leads should keep acting on pushed current-run state, or coord_status/coord_wait only as a non-subscribing fallback, instead of passively awaiting their own work. Requires io.modelcontextprotocol/tasks.',
   inputSchema: {
     ttl_ms: z.number().int().min(60_000).max(30 * 24 * 60 * 60 * 1000).optional()
       .describe('How long the durable task handle is retained; defaults to seven days'),

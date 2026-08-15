@@ -395,6 +395,11 @@ const codexArgs = JSON.parse(await readFile(codexArgsFile, 'utf8'))
 if (!codexArgs.some((arg) => typeof arg === 'string' && arg.includes(path.join(state.cwd, '.agents', 'skills', 'coordinate-agents', 'SKILL.md')))) {
   throw new Error('worker prompt did not provide the checkout-local coordination skill path')
 }
+if (!codexArgs.some((arg) => typeof arg === 'string'
+  && arg.includes('never call coord_wait')
+  && arg.includes('supervisor receives board changes'))) {
+  throw new Error('worker prompt did not forbid model-turn coord_wait when the supervisor owns idle wakeups')
+}
 const approvalConfigIndex = codexArgs.indexOf('mcp_servers.agent-viewer.default_tools_approval_mode="approve"')
 if (approvalConfigIndex < 1 || codexArgs[approvalConfigIndex - 1] !== '-c') {
   throw new Error('worker did not pre-approve Agent Viewer MCP tools for unattended Codex ticks')

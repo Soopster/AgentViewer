@@ -409,7 +409,7 @@ function tickPrompt(state, actionable) {
     'If you are the lead, maintain an explicit status view for every teammate from coord_status: active task, working/blocked/idle state, latest update, and terminal task result. Do not interrupt healthy work; unblock, reassign, or add work when the board shows a real need.',
     'If blocked, report blocked with coord_progress and include the exact obstacle; the Coordinator will alert the lead. Also message the teammate best placed to help, check the inbox for guidance, and report working again as soon as you can resume.',
     'If your task work will take several steps, call coord_read_inbox again partway through rather than only at the start — a reply_required message from the lead can arrive mid-task and change your plan; you will not be woken for it until you check.',
-    'Use stable request_id values before retrying mutations. If no action is ready, return control to the supervisor; do not poll or sleep.',
+    'Use stable request_id values before retrying mutations. If no action is ready, return control to the supervisor; never call coord_wait, poll, or sleep inside this model turn. The supervisor receives board changes and will re-dispatch you.',
     'If all tasks are terminal and you are lead, review every durable task result, synthesize the run, and finalize it. Never print participant credentials.',
     ...(actionable?.replyGuardReminder ? [actionable.replyGuardReminder] : []),
   ].join(' ')
