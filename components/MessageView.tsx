@@ -17,6 +17,7 @@ import type {
   SendAttachment,
   ReasoningEffortLevel,
 } from '@/lib/types'
+import { readJsonResponse, readOptionalJsonResponse } from '@/lib/httpResponse'
 import { buildThreadedMessages, buildThreadedMessagesIncremental, stripToolCallBlocks, type IncrementalThreadingCache, type ThreadedMessage, type ThreadedBlock } from '@/lib/threading'
 import { measureSync, recordClientPerf } from '@/lib/clientPerf'
 import { exportSessionToHtml, downloadHtml } from '@/lib/export'
@@ -270,18 +271,35 @@ function formatLiveThinkingTokens(tokens: number): string {
 }
 
 function useLazyRef<T>(create: () => T): { current: T } {
-  const ref = useRef<T | null>(null)
-  if (ref.current === null) ref.current = create()
-  return ref as { current: T }
+  const [ref] = useState(() => ({ current: create() }))
+  return ref
 }
 
 const SENT_HISTORY_MAX = 200
 const SENT_HISTORY_STORAGE_KEY = 'agent-viewer:composer-sent-history'
 
+function readLocalStorageValue(key: string): string | null {
+  if (typeof window === 'undefined') return null
+  try {
+    return window.localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+function writeLocalStorageValue(key: string, value: string): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(key, value)
+  } catch {
+    // Best-effort preference persistence (privacy mode/quota can reject it).
+  }
+}
+
 function readPersistedSentHistory(): string[] {
   if (typeof window === 'undefined') return []
   try {
-    const raw = window.localStorage.getItem(SENT_HISTORY_STORAGE_KEY)
+    const raw = readLocalStorageValue(SENT_HISTORY_STORAGE_KEY)
     if (!raw) return []
     const parsed = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
@@ -294,7 +312,7 @@ function readPersistedSentHistory(): string[] {
 function writePersistedSentHistory(entries: string[]): void {
   if (typeof window === 'undefined') return
   try {
-    window.localStorage.setItem(SENT_HISTORY_STORAGE_KEY, JSON.stringify(entries))
+    writeLocalStorageValue(SENT_HISTORY_STORAGE_KEY, JSON.stringify(entries))
   } catch {
     // best-effort; quota or privacy mode
   }
@@ -2673,12 +2691,13 @@ function AskUserQuestionPicker({
                 const previewOpen = openPreview === previewKey
                 return (
                   <div key={oi}>
+                    <div style={{ display: 'flex', alignItems: 'stretch', gap: 4 }}>
                     <button
                       type="button"
                       onClick={() => toggle(qi, q.multiSelect === true, optionValue)}
                       disabled={busy}
                       style={{
-                        width: '100%',
+                        flex: 1,
                         textAlign: 'left',
                         display: 'flex', alignItems: 'flex-start', gap: 8,
                         padding: '6px 10px',
@@ -2710,23 +2729,6 @@ function AskUserQuestionPicker({
                           color: isSelected ? 'var(--text)' : 'var(--text-2)',
                         }}>
                           {opt.label}
-                          {opt.preview && (
-                            <span
-                              role="button"
-                              tabIndex={0}
-                              onClick={(e) => { e.stopPropagation(); setOpenPreview(previewOpen ? null : previewKey) }}
-                              style={{
-                                fontFamily: "'IBM Plex Mono', monospace",
-                                fontSize: 10, color: 'var(--text-3)',
-                                border: '1px solid var(--border)',
-                                borderRadius: 3,
-                                padding: '0 4px',
-                                cursor: 'pointer',
-                              }}
-                            >
-                              {previewOpen ? '▲ preview' : '▼ preview'}
-                            </span>
-                          )}
                         </span>
                         {opt.description && (
                           <span style={{
@@ -2740,6 +2742,28 @@ function AskUserQuestionPicker({
                         )}
                       </span>
                     </button>
+                    {opt.preview && (
+                      <button
+                        type="button"
+                        aria-label={`${previewOpen ? 'Hide' : 'Show'} preview for ${opt.label}`}
+                        aria-expanded={previewOpen}
+                        onClick={() => setOpenPreview(previewOpen ? null : previewKey)}
+                        disabled={busy}
+                        style={{
+                          fontFamily: "'IBM Plex Mono', monospace",
+                          fontSize: 10,
+                          color: 'var(--text-3)',
+                          background: 'var(--surface)',
+                          border: '1px solid var(--border)',
+                          borderRadius: 4,
+                          padding: '0 8px',
+                          cursor: busy ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        {previewOpen ? '▲ preview' : '▼ preview'}
+                      </button>
+                    )}
+                    </div>
                     {opt.preview && previewOpen && (
                       <pre style={{
                         margin: '2px 0 0',
@@ -2931,7 +2955,9 @@ export default function MessageView({
     ? `${session.provider ?? 'claude'}:${session.sessionId}`
     : null
   const composerQueueTargetKeyRef = useRef(composerQueueTargetKey)
-  composerQueueTargetKeyRef.current = composerQueueTargetKey
+  useLayoutEffect(() => {
+    composerQueueTargetKeyRef.current = composerQueueTargetKey
+  }, [composerQueueTargetKey])
   const activeQueuedSends = useMemo(
     () => selectComposerQueueTarget(queuedSends, composerQueueTargetKey),
     [composerQueueTargetKey, queuedSends],
@@ -2953,22 +2979,17 @@ export default function MessageView({
   const [forking, setForking] = useState(false)
   const [forkingMessageId, setForkingMessageId] = useState<string | null>(null)
   const [showDiagnostics, setShowDiagnostics] = useState(false)
-  const [showVisualizer, setShowVisualizer] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false
-    return window.localStorage.getItem('agentViewer:messageVisualizer') === 'true'
-  })
+  const [preferencesHydrated, setPreferencesHydrated] = useState(false)
+  const [showVisualizer, setShowVisualizer] = useState(false)
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    window.localStorage.setItem('agentViewer:messageVisualizer', showVisualizer ? 'true' : 'false')
-  }, [showVisualizer])
-  const [showReviewMode, setShowReviewMode] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false
-    return window.localStorage.getItem('agentViewer:diffReviewMode') === 'true'
-  })
+    if (!preferencesHydrated) return
+    writeLocalStorageValue('agentViewer:messageVisualizer', showVisualizer ? 'true' : 'false')
+  }, [preferencesHydrated, showVisualizer])
+  const [showReviewMode, setShowReviewMode] = useState(false)
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    window.localStorage.setItem('agentViewer:diffReviewMode', showReviewMode ? 'true' : 'false')
-  }, [showReviewMode])
+    if (!preferencesHydrated) return
+    writeLocalStorageValue('agentViewer:diffReviewMode', showReviewMode ? 'true' : 'false')
+  }, [preferencesHydrated, showReviewMode])
   const [transcriptFilters, setTranscriptFilters] = useState<ActiveTranscriptFilter[]>([])
   const [transcriptSearch, setTranscriptSearch] = useState('')
   const deferredTranscriptSearch = useDeferredValue(transcriptSearch)
@@ -2981,47 +3002,33 @@ export default function MessageView({
     bookmarkIdsRef.current = bookmarkIds
   }, [bookmarkIds])
   const [bookmarksOnly, setBookmarksOnly] = useState(false)
-  const [viewMode, setViewMode] = useState<WebViewMode>(() => {
-    if (typeof window === 'undefined') return 'conversation'
-    const stored = window.localStorage.getItem('agentViewer:viewMode')
-    if (stored === 'full' || stored === 'continue' || stored === 'stream' || stored === 'agents') return stored
-    // Migrate legacy showTools=false → continue
-    if (window.localStorage.getItem('agentViewer:showTools') === 'false') return 'continue'
-    return 'conversation'
-  })
+  const [viewMode, setViewMode] = useState<WebViewMode>('conversation')
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    window.localStorage.setItem('agentViewer:viewMode', viewMode)
+    if (!preferencesHydrated) return
+    writeLocalStorageValue('agentViewer:viewMode', viewMode)
     rowHeightsRef.current.clear()
     timelineEstimateCalibrationRef.current.clear()
     timelineEstimateSamplesRef.current.clear()
     timelineEstimateCalibrationFrozenRef.current = false
     setRowMeasurementVersion((version) => version + 1)
     setPersistedMeasurementVersion((version) => version + 1)
-  }, [viewMode])
+  }, [preferencesHydrated, viewMode])
   const showTools = viewMode === 'conversation' || viewMode === 'full' || viewMode === 'stream' || viewMode === 'agents'
-  const [density, setDensity] = useState<MessageDensity>(() => {
-    if (typeof window === 'undefined') return 'balanced'
-    const stored = window.localStorage.getItem('agentViewer:density')
-    return (stored === 'comfortable' || stored === 'dense') ? stored : 'balanced'
-  })
+  const [density, setDensity] = useState<MessageDensity>('balanced')
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    window.localStorage.setItem('agentViewer:density', density)
+    if (!preferencesHydrated) return
+    writeLocalStorageValue('agentViewer:density', density)
     rowHeightsRef.current.clear()
     timelineEstimateCalibrationRef.current.clear()
     timelineEstimateSamplesRef.current.clear()
     timelineEstimateCalibrationFrozenRef.current = false
     setRowMeasurementVersion((version) => version + 1)
     setPersistedMeasurementVersion((version) => version + 1)
-  }, [density])
-  const [timelineWidth, setTimelineWidth] = useState<'centered' | 'full'>(() => {
-    if (typeof window === 'undefined') return 'centered'
-    return window.localStorage.getItem('agentViewer:timelineWidth') === 'full' ? 'full' : 'centered'
-  })
+  }, [density, preferencesHydrated])
+  const [timelineWidth, setTimelineWidth] = useState<'centered' | 'full'>('centered')
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    window.localStorage.setItem('agentViewer:timelineWidth', timelineWidth)
+    if (!preferencesHydrated) return
+    writeLocalStorageValue('agentViewer:timelineWidth', timelineWidth)
     // Width changes rewrap every row: measured heights are stale.
     rowHeightsRef.current.clear()
     timelineEstimateCalibrationRef.current.clear()
@@ -3029,50 +3036,57 @@ export default function MessageView({
     timelineEstimateCalibrationFrozenRef.current = false
     setRowMeasurementVersion((version) => version + 1)
     setPersistedMeasurementVersion((version) => version + 1)
-  }, [timelineWidth])
-  const [diffStyle, setDiffStyle] = useState<PierreDiffStyle>(() => {
-    if (typeof window === 'undefined') return 'stacked'
-    const stored = window.localStorage.getItem('agentViewer:diffStyle')
-    return stored === 'split' ? 'split' : 'stacked'
-  })
+  }, [preferencesHydrated, timelineWidth])
+  const [diffStyle, setDiffStyle] = useState<PierreDiffStyle>('stacked')
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    window.localStorage.setItem('agentViewer:diffStyle', diffStyle)
-  }, [diffStyle])
-  const [diffOptions, setDiffOptions] = useState<DiffOptions>(() => {
-    if (typeof window === 'undefined') return DEFAULT_DIFF_OPTIONS
-    const changeStyle = window.localStorage.getItem('agentViewer:diffChangeStyle')
-    const inlineDiffStyle = window.localStorage.getItem('agentViewer:diffInlineStyle')
-    const showBackgrounds = window.localStorage.getItem('agentViewer:diffShowBackgrounds')
-    const wrap = window.localStorage.getItem('agentViewer:diffWrap')
-    const showLineNumbers = window.localStorage.getItem('agentViewer:diffShowLineNumbers')
-    const showHunkHeaders = window.localStorage.getItem('agentViewer:diffShowHunkHeaders')
-    return {
+    if (!preferencesHydrated) return
+    writeLocalStorageValue('agentViewer:diffStyle', diffStyle)
+  }, [diffStyle, preferencesHydrated])
+  const [diffOptions, setDiffOptions] = useState<DiffOptions>(DEFAULT_DIFF_OPTIONS)
+  useEffect(() => {
+    if (!preferencesHydrated) return
+    writeLocalStorageValue('agentViewer:diffChangeStyle', diffOptions.changeStyle)
+    writeLocalStorageValue('agentViewer:diffInlineStyle', diffOptions.inlineDiffStyle)
+    writeLocalStorageValue('agentViewer:diffShowBackgrounds', String(diffOptions.showBackgrounds))
+    writeLocalStorageValue('agentViewer:diffWrap', String(diffOptions.wrap))
+    writeLocalStorageValue('agentViewer:diffShowLineNumbers', String(diffOptions.showLineNumbers))
+    writeLocalStorageValue('agentViewer:diffShowHunkHeaders', String(diffOptions.showHunkHeaders))
+  }, [diffOptions, preferencesHydrated])
+  const [composerCollapsed, setComposerCollapsed] = useState(false)
+  useEffect(() => {
+    const storedViewMode = readLocalStorageValue('agentViewer:viewMode')
+    setShowVisualizer(readLocalStorageValue('agentViewer:messageVisualizer') === 'true')
+    setShowReviewMode(readLocalStorageValue('agentViewer:diffReviewMode') === 'true')
+    if (storedViewMode === 'full' || storedViewMode === 'continue' || storedViewMode === 'stream' || storedViewMode === 'agents') {
+      setViewMode(storedViewMode)
+    } else if (readLocalStorageValue('agentViewer:showTools') === 'false') {
+      setViewMode('continue')
+    }
+    const storedDensity = readLocalStorageValue('agentViewer:density')
+    if (storedDensity === 'comfortable' || storedDensity === 'dense') setDensity(storedDensity)
+    setTimelineWidth(readLocalStorageValue('agentViewer:timelineWidth') === 'full' ? 'full' : 'centered')
+    setDiffStyle(readLocalStorageValue('agentViewer:diffStyle') === 'split' ? 'split' : 'stacked')
+    const changeStyle = readLocalStorageValue('agentViewer:diffChangeStyle')
+    const inlineDiffStyle = readLocalStorageValue('agentViewer:diffInlineStyle')
+    const showBackgrounds = readLocalStorageValue('agentViewer:diffShowBackgrounds')
+    const wrap = readLocalStorageValue('agentViewer:diffWrap')
+    const showLineNumbers = readLocalStorageValue('agentViewer:diffShowLineNumbers')
+    const showHunkHeaders = readLocalStorageValue('agentViewer:diffShowHunkHeaders')
+    setDiffOptions({
       changeStyle: changeStyle === 'bars' || changeStyle === 'classic' || changeStyle === 'none' ? changeStyle : DEFAULT_DIFF_OPTIONS.changeStyle,
       inlineDiffStyle: inlineDiffStyle === 'word-alt' || inlineDiffStyle === 'word' || inlineDiffStyle === 'char' || inlineDiffStyle === 'none' ? inlineDiffStyle : DEFAULT_DIFF_OPTIONS.inlineDiffStyle,
       showBackgrounds: showBackgrounds === null ? DEFAULT_DIFF_OPTIONS.showBackgrounds : showBackgrounds === 'true',
       wrap: wrap === null ? DEFAULT_DIFF_OPTIONS.wrap : wrap === 'true',
       showLineNumbers: showLineNumbers === null ? DEFAULT_DIFF_OPTIONS.showLineNumbers : showLineNumbers === 'true',
       showHunkHeaders: showHunkHeaders === null ? DEFAULT_DIFF_OPTIONS.showHunkHeaders : showHunkHeaders === 'true',
-    }
-  })
+    })
+    setComposerCollapsed(readLocalStorageValue('agentViewer:composerCollapsed') === 'true')
+    setPreferencesHydrated(true)
+  }, [])
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    window.localStorage.setItem('agentViewer:diffChangeStyle', diffOptions.changeStyle)
-    window.localStorage.setItem('agentViewer:diffInlineStyle', diffOptions.inlineDiffStyle)
-    window.localStorage.setItem('agentViewer:diffShowBackgrounds', String(diffOptions.showBackgrounds))
-    window.localStorage.setItem('agentViewer:diffWrap', String(diffOptions.wrap))
-    window.localStorage.setItem('agentViewer:diffShowLineNumbers', String(diffOptions.showLineNumbers))
-    window.localStorage.setItem('agentViewer:diffShowHunkHeaders', String(diffOptions.showHunkHeaders))
-  }, [diffOptions])
-  const [composerCollapsed, setComposerCollapsed] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false
-    return window.localStorage.getItem('agentViewer:composerCollapsed') === 'true'
-  })
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    window.localStorage.setItem('agentViewer:composerCollapsed', composerCollapsed ? 'true' : 'false')
-  }, [composerCollapsed])
+    if (!preferencesHydrated) return
+    writeLocalStorageValue('agentViewer:composerCollapsed', composerCollapsed ? 'true' : 'false')
+  }, [composerCollapsed, preferencesHydrated])
   const [analyticsOpen, setAnalyticsOpen] = useState(false)
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
   const [diagnosticSections, setDiagnosticSections] = useState<SessionDiagnosticSection[]>([])
@@ -3164,6 +3178,10 @@ export default function MessageView({
   const [persistedMeasurementVersion, setPersistedMeasurementVersion] = useState(0)
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null)
   const [sentHistory, setSentHistory] = useState<string[]>(readPersistedSentHistory)
+  const sentHistoryRef = useRef(sentHistory)
+  useLayoutEffect(() => {
+    sentHistoryRef.current = sentHistory
+  }, [sentHistory])
   const [historyIndex, setHistoryIndex] = useState(-1)
   const draftBeforeHistoryRef = useRef<{ text: string; cursorPos: number }>({ text: '', cursorPos: 0 })
   const [mentionQuery, setMentionQuery] = useState<{ start: number; query: string } | null>(null)
@@ -3515,7 +3533,7 @@ export default function MessageView({
   useEffect(() => {
     if (!session) { setSessionInfo(null); return }
     fetch(withProviderQuery(`/api/sessions/${session.sessionId}`, session.provider))
-      .then(r => r.json())
+      .then(readJsonResponse)
       .then(data => { if (!data.error) setSessionInfo(data.info) })
       .catch(() => {})
   }, [session?.provider, session?.sessionId])
@@ -3569,7 +3587,7 @@ export default function MessageView({
     if (!session || session.isPending) { setBookmarkIds(new Set()); return }
     let cancelled = false
     fetch(withProviderQuery(`/api/sessions/${session.sessionId}/bookmarks`, session.provider))
-      .then(r => r.json())
+      .then(readJsonResponse)
       .then(data => {
         if (cancelled || !Array.isArray(data?.ids)) return
         setBookmarkIds(new Set(data.ids as string[]))
@@ -3608,7 +3626,7 @@ export default function MessageView({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ provider: session.provider, uuid, bookmarked: next, meta }),
     })
-      .then((r) => r.json())
+      .then(readJsonResponse)
       .then((data) => {
         if (Array.isArray(data?.ids)) setBookmarkIds(new Set(data.ids as string[]))
       })
@@ -3631,7 +3649,7 @@ export default function MessageView({
   const refreshSessionModels = useCallback(({ preserveSelection }: { preserveSelection: boolean }) => {
     if (!modelSessionId) return
     fetch(withProviderQuery(`/api/sessions/${modelSessionId}/models`, modelSessionProvider))
-      .then(r => r.json())
+      .then(readJsonResponse)
       .then(data => {
         if (data.error) return
         const nextModels = Array.isArray(data.models) ? data.models.filter((model: SessionModelInfo) => normalizeSelectValue(model.value)) : []
@@ -4252,7 +4270,7 @@ export default function MessageView({
         // interrupt_receipt_v1: uuids of queued async messages that survive
         // the interrupt and WILL still run. Warn instead of letting the next
         // turn look like a ghost send.
-        const json = await res.json().catch(() => null) as { stillQueued?: unknown } | null
+        const json = await readOptionalJsonResponse<{ stillQueued?: unknown } | null>(res, null)
         const stillQueuedUuids = Array.isArray(json?.stillQueued)
           ? json.stillQueued.filter((uuid): uuid is string => typeof uuid === 'string')
           : null
@@ -4359,8 +4377,8 @@ export default function MessageView({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider: 'claude', action: 'backgroundTasks' }),
       })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+      const data = await readOptionalJsonResponse(res, {})
+      if (data.error) throw new Error(data.error)
       const backgrounded = data.result?.backgrounded === true
       setSessionActionNotice(backgrounded ? 'Claude task moved to background.' : 'No foreground Claude task to background.')
     } catch (err) {
@@ -4384,8 +4402,8 @@ export default function MessageView({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider: 'claude', action: 'stopTask', taskId }),
       })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+      const data = await readOptionalJsonResponse(res, {})
+      if (data.error) throw new Error(data.error)
       const stopped = data.result?.stopped === true
       setSessionActionNotice(stopped ? `Stopped task #${taskId}.` : 'No running task to stop (session not warm).')
     } catch (err) {
@@ -4395,6 +4413,7 @@ export default function MessageView({
 
   const sendMessage = useCallback(async (retryOverride?: { text: string; attachments: SendAttachment[] }) => {
     if (!session) return
+    setSendError(null)
 
     // Global Channel Bridge binding: when the user has toggled "route composer
     // through bridge", a normal composer send (never an auto-retry) is diverted
@@ -4523,14 +4542,13 @@ export default function MessageView({
     // newer draft attachments untouched and reuse the captured payload.
     if (!retryOverride) setAttachments([])
     const effort = selectedEffort === 'auto' ? undefined : selectedEffort
-    if (text) {
-      setSentHistory((prev) => {
-        if (prev.length > 0 && prev[prev.length - 1] === text) return prev
-        const next = [...prev, text]
-        const capped = next.length > SENT_HISTORY_MAX ? next.slice(next.length - SENT_HISTORY_MAX) : next
-        writePersistedSentHistory(capped)
-        return capped
-      })
+    const currentSentHistory = sentHistoryRef.current
+    if (text && currentSentHistory[currentSentHistory.length - 1] !== text) {
+      const next = [...currentSentHistory, text]
+      const capped = next.length > SENT_HISTORY_MAX ? next.slice(next.length - SENT_HISTORY_MAX) : next
+      sentHistoryRef.current = capped
+      setSentHistory(capped)
+      writePersistedSentHistory(capped)
     }
     setHistoryIndex(-1)
     draftBeforeHistoryRef.current = { text: '', cursorPos: 0 }
@@ -4538,7 +4556,6 @@ export default function MessageView({
     inputTextRef.current = ''
     setSendState('sending')
     setSteeredNotice(null)
-    setSendError(null)
     setFailedSend(null)
     setInterrupting(false)
     setOptimisticUserText(text)
@@ -5722,8 +5739,8 @@ export default function MessageView({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider: session.provider }),
       })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+      const data = await readOptionalJsonResponse(res, {})
+      if (data.error) throw new Error(data.error)
       onDelete?.(session.sessionId, session.provider)
       setSessionActionNotice('Session deleted.')
     } catch (err) {
@@ -5744,8 +5761,8 @@ export default function MessageView({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action, provider: session.provider }),
       })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+      const data = await readOptionalJsonResponse(res, {})
+      if (data.error) throw new Error(data.error)
       const shareUrl = data.result?.session?.share?.url
       setSessionActionNotice(
         action === 'share' && shareUrl
@@ -5796,8 +5813,8 @@ export default function MessageView({
           provider: session.provider,
         }),
       })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+      const data = await readOptionalJsonResponse(res, {})
+      if (data.error) throw new Error(data.error)
       setPendingPermissions((prev) => prev.filter((entry) =>
         entry.id !== permission.id || (permission.sessionId !== undefined && entry.sessionId !== permission.sessionId)
       ))
@@ -5830,8 +5847,8 @@ export default function MessageView({
           provider: session.provider,
         }),
       })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+      const data = await readOptionalJsonResponse(res, {})
+      if (data.error) throw new Error(data.error)
       setPendingPermissions((prev) => prev.filter((entry) =>
         entry.id !== permission.id || (permission.sessionId !== undefined && entry.sessionId !== permission.sessionId)
       ))
@@ -5866,7 +5883,7 @@ export default function MessageView({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider: session.provider }),
       })
-      const data = await res.json()
+      const data = await readJsonResponse(res)
       if (data.error) throw new Error(data.error)
       onFork?.(data.sessionId)
     } catch (err) {
@@ -6004,8 +6021,8 @@ export default function MessageView({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action, provider: session.provider, ...extra }),
       })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+      const data = await readOptionalJsonResponse(res, {})
+      if (data.error) throw new Error(data.error)
       const result = data.result && typeof data.result === 'object' && !Array.isArray(data.result)
         ? data.result as Record<string, unknown>
         : data as Record<string, unknown>
@@ -7992,6 +8009,7 @@ export default function MessageView({
               <div className="av-transcript-filter-panel">
                 <label className="av-session-viz-search">
                   <Search aria-hidden="true" />
+                  <span>Search</span>
                   <input
                     value={transcriptSearch}
                     onChange={(event) => setTranscriptSearch(event.target.value)}

@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, ExternalLink, FileSearch, GitCommitHorizontal, RefreshCw, X } from 'lucide-react'
 import type { AgentProvider } from '@/lib/types'
 import type { ProvenanceBlameResult, ProvenanceSegment, SessionProvenanceResult } from '@/lib/provenance'
+import { readJsonResponse } from '@/lib/httpResponse'
 
 type Props = {
   open: boolean
@@ -124,7 +125,7 @@ export default function ProvenancePopover({ open, onClose, session, cwd, onOpenS
     setError(null)
     const provider = session.provider ?? 'claude'
     fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/provenance?provider=${provider}`)
-      .then((r) => r.json())
+      .then(readJsonResponse)
       .then((data) => {
         if (data?.error) setError(String(data.error))
         else setSessionData(data as SessionProvenanceResult)
@@ -143,7 +144,7 @@ export default function ProvenancePopover({ open, onClose, session, cwd, onOpenS
     const params = new URLSearchParams({ file: trimmed })
     if (cwd) params.set('cwd', cwd)
     fetch(`/api/provenance/blame?${params.toString()}`)
-      .then((r) => r.json())
+      .then(readJsonResponse)
       .then((data) => {
         if (data?.error) {
           setError(String(data.error))

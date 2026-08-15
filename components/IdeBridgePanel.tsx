@@ -532,7 +532,9 @@ export default function IdeBridgePanel({
       )}
 
       <div style={{ display: 'flex', gap: 6, padding: '8px 10px', borderTop: '1px solid var(--border)', background: 'var(--surface-2)' }}>
+        <label htmlFor="ide-bridge-message" style={{ alignSelf: 'center', fontSize: 10, color: 'var(--text-3)' }}>Mention</label>
         <textarea
+          id="ide-bridge-message"
           ref={draftRef}
           value={draft}
           onChange={(event) => setDraft(event.target.value)}

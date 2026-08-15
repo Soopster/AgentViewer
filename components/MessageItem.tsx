@@ -31,6 +31,7 @@ import { getAssistantLabel } from '@/lib/provider'
 import { buildDiffCommentComposerPrompt } from '@/lib/diffCommentComposer'
 import { Separator } from '@/components/ui/separator'
 import { sanitizeProtocolEvent, type AgentProtocolEvent } from '@/lib/agentProtocol'
+import { readJsonResponse } from '@/lib/httpResponse'
 import type { SelectedLineRange } from '@pierre/diffs'
 import type { PierreAnnotationMetadata, PierreDiffAnnotation, PierreDiffPresentation, PierreDiffStyle } from './PierreDiffView'
 import { useDiffComments, type DiffComment } from './diffComments'
@@ -2051,7 +2052,7 @@ function AgentCard({ thread }: { thread: ToolThread }) {
     setTranscriptLoading(true)
     try {
       const res = await fetch(`/api/sessions/${sessionId}/subagents/${agentId}/messages`)
-      const data = await res.json() as { messages?: SubagentMessage[] }
+      const data = await readJsonResponse<{ messages?: SubagentMessage[] }>(res)
       setTranscriptMessages(data.messages ?? [])
     } catch {
       setTranscriptMessages([])
@@ -2352,7 +2353,7 @@ function OpenCodeTaskCard({ thread }: { thread: ToolThread }) {
     setTranscriptLoading(true)
     try {
       const res = await fetch(`/api/sessions/${sessionId}/subagents/${taskId}/messages?provider=opencode`)
-      const data = await res.json() as { messages?: SubagentMessage[] }
+      const data = await readJsonResponse<{ messages?: SubagentMessage[] }>(res)
       setTranscriptMessages(data.messages ?? [])
     } catch {
       setTranscriptMessages([])

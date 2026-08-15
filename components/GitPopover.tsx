@@ -10,6 +10,7 @@ import type { GitData, GitStatusEntry } from '@/lib/gitProvider'
 import type { GitStatusEntry as TreeGitStatusEntry } from '@pierre/trees'
 import { getCurrentTheme, subscribeTheme, THEME_META, type Theme } from '@/lib/themes'
 import { PierrePatchDiffView, type PierreAnnotationMetadata, type PierreChangeStyle, type PierreDiffAnnotation, type PierreDiffPresentation, type PierreDiffStyle, type PierreInlineDiffStyle } from './PierreDiffView'
+import { readJsonResponse } from '@/lib/httpResponse'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -151,7 +152,7 @@ async function fetchGitContent({
         commitIndex,
       }),
     })
-    const body = await res.json() as { content?: string }
+    const body = await readJsonResponse<{ content?: string }>(res)
     return body.content ?? ''
   } catch {
     return ''
@@ -762,7 +763,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
           background: 'color-mix(in srgb, var(--cyan) 8%, var(--surface-2))',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, minWidth: 0 }}>
-            <div style={{
+            <label htmlFor="git-diff-comment" style={{
               color: 'var(--cyan)',
               fontSize: 12,
               fontWeight: 700,
@@ -771,7 +772,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
               whiteSpace: 'nowrap',
             }}>
               Draft comment
-            </div>
+            </label>
             <div style={{
               color: 'var(--text-3)',
               fontFamily: "'IBM Plex Mono', monospace",
@@ -782,6 +783,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
             </div>
           </div>
           <textarea
+            id="git-diff-comment"
             value={draftNote?.text ?? metadata.text}
             onChange={(event) => {
               if (!draftNote) return
@@ -963,10 +965,11 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
             border: '1px solid color-mix(in srgb, var(--cyan) 28%, var(--border))',
             background: 'color-mix(in srgb, var(--cyan) 7%, var(--surface))',
           }}>
-            <div style={{ color: 'var(--cyan)', fontSize: 12, fontWeight: 700 }}>
+            <label htmlFor="git-diff-reply" style={{ color: 'var(--cyan)', fontSize: 12, fontWeight: 700 }}>
               Add reply
-            </div>
+            </label>
             <textarea
+              id="git-diff-reply"
               value={draftNote?.text ?? ''}
               onChange={(event) => setDraftNote((current) => current ? { ...current, text: event.target.value } : current)}
               placeholder="Write a reply..."
@@ -1329,6 +1332,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
               setLoading(true)
               void fetchGitData(cwd)
                 .then((next) => setData(next))
+                .catch(() => {})
                 .finally(() => setLoading(false))
             }}
             title="Refresh git status"

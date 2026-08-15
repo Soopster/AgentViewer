@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/react */
-import React, { useEffect, useEffectEvent, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { TextareaAction, TextareaRenderable } from '@opentui/core'
 import type { PlaybookPhase, PlaybookSummary, PlaybookTask, RunPlaybook } from '../../lib/agentProtocol'
 import {
@@ -109,7 +109,7 @@ export function PlaybookManagerPopover({
   const [error, setError] = useState<string | null>(null)
   const multilineEditorRef = useRef<TextareaRenderable | null>(null)
 
-  const reload = useEffectEvent(async (preferredName?: string) => {
+  const reload = useCallback(async (preferredName?: string) => {
     const listing = await listTuiRunPlaybooks(cwd)
     setPlaybooks(listing.playbooks)
     setInvalidCount(listing.invalid.length)
@@ -118,7 +118,7 @@ export function PlaybookManagerPopover({
       : Math.min(selectedIndex, Math.max(0, listing.playbooks.length - 1))
     setSelectedIndex(nextIndex)
     onChanged(listing.playbooks, preferredName)
-  })
+  }, [cwd, onChanged, selectedIndex])
 
   useEffect(() => {
     let cancelled = false
@@ -133,7 +133,7 @@ export function PlaybookManagerPopover({
     return () => { cancelled = true }
   }, [cwd, onChanged])
 
-  const resetEditor = useEffectEvent((playbook: RunPlaybook, previousName: string | null) => {
+  const resetEditor = useCallback((playbook: RunPlaybook, previousName: string | null) => {
     setDraft(clonePlaybook(playbook))
     setEditingName(previousName)
     setPhaseIndex(0)
@@ -141,9 +141,9 @@ export function PlaybookManagerPopover({
     setEditorFocus('name')
     setError(null)
     setMode('edit')
-  })
+  }, [])
 
-  const beginEdit = useEffectEvent(async () => {
+  const beginEdit = useCallback(async () => {
     const selected = playbooks[selectedIndex]
     if (!selected || busy) return
     setBusy(true)
@@ -155,44 +155,44 @@ export function PlaybookManagerPopover({
     } finally {
       setBusy(false)
     }
-  })
+  }, [busy, cwd, playbooks, resetEditor, selectedIndex])
 
-  const updateDraft = useEffectEvent((patch: Partial<RunPlaybook>) => {
+  const updateDraft = useCallback((patch: Partial<RunPlaybook>) => {
     setDraft((current) => ({ ...current, ...patch }))
-  })
+  }, [])
 
-  const updatePhase = useEffectEvent((patch: Partial<PlaybookPhase>) => {
+  const updatePhase = useCallback((patch: Partial<PlaybookPhase>) => {
     setDraft((current) => ({
       ...current,
       phases: current.phases.map((phase, index) => index === phaseIndex ? { ...phase, ...patch } : phase),
     }))
-  })
+  }, [phaseIndex])
 
-  const updateTask = useEffectEvent((patch: Partial<PlaybookTask>) => {
+  const updateTask = useCallback((patch: Partial<PlaybookTask>) => {
     setDraft((current) => ({
       ...current,
       phases: current.phases.map((phase, index) => index === phaseIndex
         ? { ...phase, tasks: phase.tasks.map((task, taskOffset) => taskOffset === taskIndex ? { ...task, ...patch } : task) }
         : phase),
     }))
-  })
+  }, [phaseIndex, taskIndex])
 
-  const addPhase = useEffectEvent(() => {
+  const addPhase = useCallback(() => {
     const nextIndex = draft.phases.length
     setDraft((current) => ({ ...current, phases: [...current.phases, { title: `Phase ${nextIndex + 1}`, tasks: [{ key: `task-${nextIndex + 1}`, title: 'New task', detail: 'Describe the task outcome.', role: 'teammate' }] }] }))
     setPhaseIndex(nextIndex)
     setTaskIndex(0)
     setEditorFocus('phaseTitle')
-  })
+  }, [draft.phases.length])
 
-  const addTask = useEffectEvent(() => {
+  const addTask = useCallback(() => {
     const nextIndex = draft.phases[phaseIndex]?.tasks.length ?? 0
     updatePhase({ tasks: [...(draft.phases[phaseIndex]?.tasks ?? []), { key: `task-${phaseIndex + 1}-${nextIndex + 1}`, title: 'New task', detail: 'Describe the task outcome.', role: 'teammate' }] })
     setTaskIndex(nextIndex)
     setEditorFocus('taskTitle')
-  })
+  }, [draft.phases, phaseIndex, updatePhase])
 
-  const deleteTask = useEffectEvent(() => {
+  const deleteTask = useCallback(() => {
     const phase = draft.phases[phaseIndex]
     if (!phase || phase.tasks.length <= 1) {
       setError('Every phase needs at least one task')
@@ -200,9 +200,9 @@ export function PlaybookManagerPopover({
     }
     updatePhase({ tasks: phase.tasks.filter((_, index) => index !== taskIndex) })
     setTaskIndex(Math.max(0, taskIndex - 1))
-  })
+  }, [draft.phases, phaseIndex, taskIndex, updatePhase])
 
-  const deletePhase = useEffectEvent(() => {
+  const deletePhase = useCallback(() => {
     if (draft.phases.length <= 1) {
       setError('A playbook needs at least one phase')
       return
@@ -210,9 +210,9 @@ export function PlaybookManagerPopover({
     setDraft((current) => ({ ...current, phases: current.phases.filter((_, index) => index !== phaseIndex) }))
     setPhaseIndex(Math.max(0, phaseIndex - 1))
     setTaskIndex(0)
-  })
+  }, [draft.phases.length, phaseIndex])
 
-  const saveDraft = useEffectEvent(async () => {
+  const saveDraft = useCallback(async () => {
     if (busy) return
     setBusy(true)
     setError(null)
@@ -226,9 +226,9 @@ export function PlaybookManagerPopover({
     } finally {
       setBusy(false)
     }
-  })
+  }, [busy, cwd, draft, editingName, onNotice, reload])
 
-  const deleteSelected = useEffectEvent(async () => {
+  const deleteSelected = useCallback(async () => {
     const selected = playbooks[selectedIndex]
     if (!selected || busy) return
     setBusy(true)
@@ -243,9 +243,9 @@ export function PlaybookManagerPopover({
     } finally {
       setBusy(false)
     }
-  })
+  }, [busy, cwd, onNotice, playbooks, reload, selectedIndex])
 
-  const handleEditorKey = useEffectEvent((key: ManagerKey) => {
+  const handleEditorKey = useCallback((key: ManagerKey) => {
     if (key.name === 'escape') {
       setMode('list')
       setError(null)
@@ -296,9 +296,21 @@ export function PlaybookManagerPopover({
       updateTask({ provider: providers[(Math.max(index, 0) + (direction || 1) + providers.length) % providers.length] })
     } else return false
     return true
-  })
+  }, [
+    addPhase,
+    addTask,
+    deletePhase,
+    deleteTask,
+    draft,
+    editorFocus,
+    phaseIndex,
+    saveDraft,
+    taskIndex,
+    updateDraft,
+    updateTask,
+  ])
 
-  const handleKey = useEffectEvent((key: ManagerKey) => {
+  const handleKey = useCallback((key: ManagerKey) => {
     if (mode === 'edit') return handleEditorKey(key)
     if (mode === 'delete') {
       if (key.name === 'escape' || key.name === 'n') setMode('list')
@@ -312,12 +324,12 @@ export function PlaybookManagerPopover({
     else if (key.name === 'return' || key.name === 'e') void beginEdit()
     else if (key.name === 'd' && playbooks[selectedIndex]) setMode('delete')
     return true
-  })
+  }, [beginEdit, deleteSelected, handleEditorKey, mode, onClose, playbooks, selectedIndex])
 
   useEffect(() => {
     onKeyHandlerReady?.(handleKey)
     return () => onKeyHandlerReady?.(() => true)
-  }, [onKeyHandlerReady])
+  }, [handleKey, onKeyHandlerReady])
 
   const overlayWidth = Math.max(54, Math.min(width - 4, 140))
   const overlayHeight = Math.max(22, Math.min(height - 4, 42))

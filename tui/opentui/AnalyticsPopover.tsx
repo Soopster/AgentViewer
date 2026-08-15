@@ -40,6 +40,25 @@ const PANE_TITLES: Record<PaneId, string> = {
   6: 'Profile',
 }
 const PANE_COUNT = 7
+const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const LATENCY_HISTOGRAM_BUCKETS = [
+  { label: '<1s', max: 1_000 },
+  { label: '1-3s', max: 3_000 },
+  { label: '3-10s', max: 10_000 },
+  { label: '10-30s', max: 30_000 },
+  { label: '30s-1m', max: 60_000 },
+  { label: '1-5m', max: 300_000 },
+  { label: '>5m', max: Infinity },
+]
+const SIZE_HISTOGRAM_BUCKETS = [
+  { label: '<100', max: 100 },
+  { label: '100-500', max: 500 },
+  { label: '500-2k', max: 2_000 },
+  { label: '2k-10k', max: 10_000 },
+  { label: '10k-50k', max: 50_000 },
+  { label: '50k-200k', max: 200_000 },
+  { label: '>200k', max: Infinity },
+]
 
 type AnalyticsKeyEvent = { name: string; ctrl: boolean; shift: boolean; sequence: string }
 
@@ -756,15 +775,7 @@ function LatencyHistogram({
 }: {
   latencies: number[]; theme: TuiThemePalette; width: number
 }) {
-  const buckets: { label: string; max: number; count: number }[] = [
-    { label: '<1s',    max: 1_000,    count: 0 },
-    { label: '1-3s',   max: 3_000,    count: 0 },
-    { label: '3-10s',  max: 10_000,   count: 0 },
-    { label: '10-30s', max: 30_000,   count: 0 },
-    { label: '30s-1m', max: 60_000,   count: 0 },
-    { label: '1-5m',   max: 300_000,  count: 0 },
-    { label: '>5m',    max: Infinity, count: 0 },
-  ]
+  const buckets = LATENCY_HISTOGRAM_BUCKETS.map((bucket) => ({ ...bucket, count: 0 }))
   for (const l of latencies) {
     for (const b of buckets) {
       if (l < b.max) { b.count += 1; break }
@@ -1051,7 +1062,6 @@ function DayOfWeekBar({
 }: {
   counts: number[]; theme: TuiThemePalette; width: number
 }) {
-  const labels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
   const max = Math.max(1, ...counts)
   const cellW = Math.max(1, Math.floor((width - 6) / 7))
   const rows: React.ReactNode[] = []
@@ -1072,7 +1082,7 @@ function DayOfWeekBar({
     }
     rows.push(<box key={r} flexDirection="row">{cells}</box>)
   }
-  const axis: React.ReactNode[] = labels.map((label, i) => (
+  const axis: React.ReactNode[] = DAY_LABELS.map((label, i) => (
     <box key={label} width={cellW} marginRight={i < 6 ? 0 : 0}>
       <text fg={theme.dim} wrapMode="none">{label.slice(0, cellW)}</text>
     </box>
@@ -1093,15 +1103,7 @@ function SizeHistogram({
   if (values.length === 0) {
     return <box width={width}><text fg={theme.dim}>(no data)</text></box>
   }
-  const buckets: { label: string; max: number; count: number }[] = [
-    { label: '<100', max: 100, count: 0 },
-    { label: '100-500', max: 500, count: 0 },
-    { label: '500-2k', max: 2_000, count: 0 },
-    { label: '2k-10k', max: 10_000, count: 0 },
-    { label: '10k-50k', max: 50_000, count: 0 },
-    { label: '50k-200k', max: 200_000, count: 0 },
-    { label: '>200k', max: Infinity, count: 0 },
-  ]
+  const buckets = SIZE_HISTOGRAM_BUCKETS.map((bucket) => ({ ...bucket, count: 0 }))
   for (const v of values) {
     for (const b of buckets) {
       if (v < b.max) { b.count += 1; break }

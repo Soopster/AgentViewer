@@ -357,13 +357,16 @@ export default function PromptLibrary({
           <Search size={13} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
         )}
         {mode === 'browse' && (
-          <input
-            ref={searchRef}
-            value={query}
-            onChange={(e) => { setQuery(e.target.value); setActiveIndex(0) }}
-            placeholder="Search prompts by title, tag, description…"
-            style={{ ...inputStyle, border: 'none', background: 'transparent', padding: '4px 0' }}
-          />
+          <label style={{ display: 'flex', flex: 1, alignItems: 'center', gap: 6, fontSize: 10, color: 'var(--text-3)' }}>
+            Search
+            <input
+              ref={searchRef}
+              value={query}
+              onChange={(e) => { setQuery(e.target.value); setActiveIndex(0) }}
+              placeholder="Search prompts by title, tag, description…"
+              style={{ ...inputStyle, flex: 1, border: 'none', background: 'transparent', padding: '4px 0' }}
+            />
+          </label>
         )}
         {mode === 'editor' && (
           <span style={{ fontSize: 11, color: 'var(--text-2)', letterSpacing: '0.04em' }}>
@@ -504,7 +507,7 @@ export default function PromptLibrary({
 
       {mode === 'editor' && (
         <div style={{ overflowY: 'auto', padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div>
+          <label>
             <div style={fieldLabelStyle}>Title</div>
             <input
               value={draft.title}
@@ -513,8 +516,8 @@ export default function PromptLibrary({
               style={inputStyle}
               autoFocus
             />
-          </div>
-          <div>
+          </label>
+          <label>
             <div style={fieldLabelStyle}>Description</div>
             <input
               value={draft.description}
@@ -522,8 +525,8 @@ export default function PromptLibrary({
               placeholder="One line shown in the library list"
               style={inputStyle}
             />
-          </div>
-          <div>
+          </label>
+          <label>
             <div style={fieldLabelStyle}>Tags (comma separated)</div>
             <input
               value={draft.tags}
@@ -531,7 +534,7 @@ export default function PromptLibrary({
               placeholder="review, testing"
               style={inputStyle}
             />
-          </div>
+          </label>
           <div>
             <div style={fieldLabelStyle}>Providers (blank = any)</div>
             <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
@@ -558,7 +561,7 @@ export default function PromptLibrary({
               })}
             </div>
           </div>
-          <div>
+          <label>
             <div style={fieldLabelStyle}>Prompt body · use {'{{name}}'} for fill-in placeholders</div>
             <textarea
               value={draft.body}
@@ -567,7 +570,7 @@ export default function PromptLibrary({
               rows={8}
               style={{ ...inputStyle, resize: 'vertical', fontFamily: "'IBM Plex Mono', monospace", lineHeight: 1.5 }}
             />
-          </div>
+          </label>
           {formError && <div style={{ fontSize: 11, color: 'rgba(248,113,113,0.85)' }}>{formError}</div>}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
             <button

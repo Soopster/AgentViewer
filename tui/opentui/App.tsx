@@ -6470,7 +6470,6 @@ function SplitTranscriptPaneInner({
     [cards, windowSize],
   )
   const cardCountRef = useRef(0)
-  cardCountRef.current = cards.length
 
   // Live overlay: the pane polls persisted state every few seconds, but a
   // running turn streams through the app-wide live list — formatting that here
@@ -6497,9 +6496,7 @@ function SplitTranscriptPaneInner({
   const [cursorKey, setCursorKey] = useState<string | null>(null)
   const [expandedKeys, setExpandedKeys] = useState<ReadonlySet<string>>(EMPTY_EXPANDED_KEYS)
   const tailCardsRef = useRef<TuiTranscriptCard[]>(tailCards)
-  tailCardsRef.current = tailCards
   const cursorKeyRef = useRef<string | null>(cursorKey)
-  cursorKeyRef.current = cursorKey
 
   // Display data mirrors the reader's, minus search/landmarks: expansion is
   // per-pane, so an expanded card in a pane costs only that pane's body.
@@ -6529,13 +6526,18 @@ function SplitTranscriptPaneInner({
   }), [tailCards, expandedKeys, densityState.bodyLines, session.provider])
 
   const sessionRef = useRef(session)
-  sessionRef.current = session
 
   // Bookmarks are per session, so a pane loads its own set rather than
   // borrowing the reader's — and owns the toggle so the state stays local.
   const [bookmarkedKeys, setBookmarkedKeys] = useState<ReadonlySet<string>>(EMPTY_EXPANDED_KEYS)
   const bookmarkedKeysRef = useRef<ReadonlySet<string>>(bookmarkedKeys)
-  bookmarkedKeysRef.current = bookmarkedKeys
+  useLayoutEffect(() => {
+    cardCountRef.current = cards.length
+    tailCardsRef.current = tailCards
+    cursorKeyRef.current = cursorKey
+    sessionRef.current = session
+    bookmarkedKeysRef.current = bookmarkedKeys
+  }, [bookmarkedKeys, cards.length, cursorKey, session, tailCards])
   useEffect(() => {
     let cancelled = false
     void readTuiSessionBookmarkIds({ sessionId: session.sessionId, provider: session.provider } as Session)
@@ -6858,11 +6860,10 @@ export default function OpenTuiApp() {
 
   // Frame-timing canary (no-op unless AGENT_VIEWER_PERF=1). Stamp at the top of
   // every render; the effect below reads it after commit.
-  const renderStartRef = useRef(0)
-  if (FRAME_TIMING_NEEDED) renderStartRef.current = performance.now()
+  const renderStartedAt = FRAME_TIMING_NEEDED ? performance.now() : 0
   useEffect(() => {
     if (!FRAME_TIMING_NEEDED) return
-    const durationMs = performance.now() - renderStartRef.current
+    const durationMs = performance.now() - renderStartedAt
     if (PERF_LOG) recordFramePerf(durationMs)
     noteRenderFrame(durationMs)
   })
@@ -6932,6 +6933,10 @@ export default function OpenTuiApp() {
   const [viewerAttentionNotes, setViewerAttentionNotes] = useState<Awaited<ReturnType<typeof readTuiRuntimeActivity>>['attention']>([])
   const [selectedSessionKey, setSelectedSessionKey] = useState<string | null>(null)
   const [sessionDetail, setSessionDetail] = useState<TuiSessionDetail | null>(null)
+  const sessionDetailRef = useRef<TuiSessionDetail | null>(sessionDetail)
+  useLayoutEffect(() => {
+    sessionDetailRef.current = sessionDetail
+  }, [sessionDetail])
   const [loadingSessions, setLoadingSessions] = useState(true)
   const [refreshingSessions, setRefreshingSessions] = useState(false)
   const [loadingDetail, setLoadingDetail] = useState(false)
@@ -6977,7 +6982,6 @@ export default function OpenTuiApp() {
   // web "route composer through bridge" toggle).
   const [routeComposerToBridge, setRouteComposerToBridge] = useState(false)
   const routeComposerToBridgeRef = useRef(false)
-  routeComposerToBridgeRef.current = routeComposerToBridge
   // IDE bridge — third Claude composer flow (agentViewer hosts a Claude Code IDE
   // endpoint a `claude` CLI connects to; see channels/agentviewer-ide.ts).
   const [ideBridgeOpen, setIdeBridgeOpen] = useState(false)
@@ -6986,7 +6990,10 @@ export default function OpenTuiApp() {
   // connected `claude` session instead of sending a provider turn.
   const [routeComposerToIde, setRouteComposerToIde] = useState(false)
   const routeComposerToIdeRef = useRef(false)
-  routeComposerToIdeRef.current = routeComposerToIde
+  useLayoutEffect(() => {
+    routeComposerToBridgeRef.current = routeComposerToBridge
+    routeComposerToIdeRef.current = routeComposerToIde
+  }, [routeComposerToBridge, routeComposerToIde])
   const lastBridgeChatIdRef = useRef<string | undefined>(undefined)
   // Track bridge sent/reply entries for inline display in the transcript
   const [bridgeTranscriptEntries, setBridgeTranscriptEntries] = useState<
@@ -7100,7 +7107,9 @@ export default function OpenTuiApp() {
   // keeps the toggle handler stable across renders.
   const [bookmarkKeys, setBookmarkKeys] = useState<Set<string>>(() => new Set())
   const bookmarkKeysRef = useRef<Set<string>>(bookmarkKeys)
-  bookmarkKeysRef.current = bookmarkKeys
+  useLayoutEffect(() => {
+    bookmarkKeysRef.current = bookmarkKeys
+  }, [bookmarkKeys])
   // Global bookmarks overlay (cross-session/provider browser).
   const [bookmarksOverlayOpen, setBookmarksOverlayOpen] = useState(false)
   const [bookmarksOverlay, setBookmarksOverlay] = useState<MessageBookmark[]>([])
@@ -7323,6 +7332,9 @@ export default function OpenTuiApp() {
   const composerTurnProducedOutputRef = useRef(false)
   const composerRetryCountRef = useRef(0)
   const composerRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => {
+    if (composerRetryTimerRef.current) clearTimeout(composerRetryTimerRef.current)
+  }, [])
   // Set by cancelComposerSend so the send's AbortError handler transitions into
   // the awaitingPersistedTurn 'Syncing…' reconcile (confirmed interrupt) rather
   // than discarding the interrupted turn's partial output outright.
@@ -8065,9 +8077,11 @@ export default function OpenTuiApp() {
     if (prev && prev.length === filtered.length && prev.every((m, i) => m === filtered[i])) {
       return prev
     }
-    liveTranscriptMessagesCacheRef.current = filtered
     return filtered
   }, [liveTranscriptMessages, selectedSessionTarget])
+  useLayoutEffect(() => {
+    liveTranscriptMessagesCacheRef.current = liveTranscriptMessagesForSession
+  }, [liveTranscriptMessagesForSession])
 
   const taskPanelMessages = useMemo(() => {
     const persisted = sessionDetail?.threadedMessages ?? []
@@ -9356,12 +9370,15 @@ export default function OpenTuiApp() {
     if (!mention || (dismissedStart !== null && mention.start !== dismissedStart)) {
       if (dismissedStart !== null) setComposerMentionDismissedStart(null)
     }
-    setComposerMention((prev) => {
-      if (!mention) return prev ? null : prev
-      if (dismissedStart !== null && mention.start === dismissedStart) return prev ? null : prev
-      if (prev && prev.start === mention.start && prev.query === mention.query) return prev
+    const nextMention = !mention || (dismissedStart !== null && mention.start === dismissedStart)
+      ? null
+      : mention
+    if (nextMention && (!composerMention || composerMention.start !== nextMention.start || composerMention.query !== nextMention.query)) {
       setComposerMentionIndex(0)
-      return mention
+    }
+    setComposerMention((current) => {
+      if (!nextMention) return current ? null : current
+      return current && current.start === nextMention.start && current.query === nextMention.query ? current : nextMention
     })
     const firstLine = text.split('\n')[0] ?? ''
     if (!firstLine.startsWith('/')) {
@@ -9723,7 +9740,9 @@ export default function OpenTuiApp() {
       : visibleTranscriptCards.slice(transcriptRenderStart, transcriptRenderEnd),
     [transcriptRenderStart, transcriptRenderEnd, visibleTranscriptCards],
   )
-  readerWindowGaugeRef.current = { start: transcriptRenderStart, end: transcriptRenderEnd, total: totalTranscriptCards }
+  useLayoutEffect(() => {
+    readerWindowGaugeRef.current = { start: transcriptRenderStart, end: transcriptRenderEnd, total: totalTranscriptCards }
+  }, [totalTranscriptCards, transcriptRenderEnd, transcriptRenderStart])
   // Browse-mode preview renders every card COLLAPSED. Text cards are expanded
   // by default in conversation view, and an expanded card mounts its entire
   // body — for prompt-heavy sessions that means feeding 100KB+ of markdown to
@@ -9818,9 +9837,11 @@ export default function OpenTuiApp() {
       allLandmarksRef.current,
       transcriptView === 'stream',
     )
-    allLandmarksRef.current = next
     return next
   }, [renderedTranscriptCards, transcriptRenderStart, resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount, transcriptView])
+  useLayoutEffect(() => {
+    allLandmarksRef.current = allLandmarks
+  }, [allLandmarks])
 
   const cardDisplayCacheRef = useRef(new WeakMap<TuiTranscriptCard, {
     inputs: {
@@ -10426,25 +10447,20 @@ export default function OpenTuiApp() {
         }
       }
       startTransition(() => {
-        setSessionDetail((prev) => {
-          if (
-            prev !== null &&
-            prev.rawMessages.length === detail.rawMessages.length &&
-            sessionMessageFingerprint(prev.rawMessages.at(-1)) === sessionMessageFingerprint(detail.rawMessages.at(-1)) &&
-            sessionMessageSequenceFingerprint(prev.rawMessages) === sessionMessageSequenceFingerprint(detail.rawMessages) &&
-            prev.info?.currentModel === detail.info?.currentModel &&
-            prev.info?.customTitle === detail.info?.customTitle
-          ) {
-            // Content unchanged → keep the displayed object, and put IT back
-            // in the cache (the fresh-read `detail` was cached above) so the
-            // cached and displayed identities stay the same — a later
-            // cache-first display of a different object would force a full
-            // downstream reformat for content that didn't change.
-            touchMapEntry(sessionDetailCacheRef.current, cacheKey, prev)
-            return prev
-          }
-          return detail
-        })
+        const displayedDetail = sessionDetailRef.current
+        const unchanged = displayedDetail !== null
+          && displayedDetail.rawMessages.length === detail.rawMessages.length
+          && sessionMessageFingerprint(displayedDetail.rawMessages.at(-1)) === sessionMessageFingerprint(detail.rawMessages.at(-1))
+          && sessionMessageSequenceFingerprint(displayedDetail.rawMessages) === sessionMessageSequenceFingerprint(detail.rawMessages)
+          && displayedDetail.info?.currentModel === detail.info?.currentModel
+          && displayedDetail.info?.customTitle === detail.info?.customTitle
+        if (unchanged) {
+          // Keep the displayed and cached identities aligned so cache-first
+          // revisits do not trigger a full transcript reformat on idle polls.
+          touchMapEntry(sessionDetailCacheRef.current, cacheKey, displayedDetail)
+        } else {
+          setSessionDetail(detail)
+        }
         if (detail.contextUsage && cacheKey === selectedSessionKeyRef.current) {
           setContextUsage(detail.contextUsage)
           setContextUsageStatus('ready')
@@ -11139,11 +11155,10 @@ export default function OpenTuiApp() {
   const setClaudeComposerPermissionMode = useEffectEvent((target: Session | null | undefined, nextMode: TuiPermissionMode) => {
     if (!target || target.provider !== 'claude') return
     const targetKey = sessionKey(target)
-    setTuiPermissionModeByKey((prev) => {
-      const next = prev[targetKey] === nextMode ? prev : { ...prev, [targetKey]: nextMode }
-      tuiPermissionModeByKeyRef.current = next
-      return next
-    })
+    const current = tuiPermissionModeByKeyRef.current
+    const next = current[targetKey] === nextMode ? current : { ...current, [targetKey]: nextMode }
+    tuiPermissionModeByKeyRef.current = next
+    setTuiPermissionModeByKey(next)
     pushClaudeControl(target, { action: 'setPermissionMode', permissionMode: nextMode })
   })
 
@@ -12048,7 +12063,9 @@ export default function OpenTuiApp() {
 
   // Keep the ref in sync on every render so commitRename always reads the latest draft,
   // regardless of which version of the callback is held by onSubmit or the keyboard handler.
-  renameDraftRef.current = renameDraft
+  useLayoutEffect(() => {
+    renameDraftRef.current = renameDraft
+  }, [renameDraft])
 
   const commitRename = useEffectEvent(async () => {
     if (!renameSessionKey || !selectedSession) return
@@ -12693,15 +12710,15 @@ export default function OpenTuiApp() {
                 ? { ...message, sessionId: realId }
                 : message
             ))
-            setTuiPermissionModeByKey((prev) => {
-              const pendingMode = prev[oldKey]
-              if (!pendingMode) return prev
-              const next = { ...prev }
+            const currentPermissionModes = tuiPermissionModeByKeyRef.current
+            const pendingMode = currentPermissionModes[oldKey]
+            if (pendingMode) {
+              const next = { ...currentPermissionModes }
               delete next[oldKey]
               next[newKey] = pendingMode
               tuiPermissionModeByKeyRef.current = next
-              return next
-            })
+              setTuiPermissionModeByKey(next)
+            }
             setOpenTabSessions((prev) => prev.map((s) => sessionKey(s) === oldKey ? updated : s))
             setSessions((prev) => prev.map((s) => sessionKey(s) === oldKey ? { ...s, sessionId: realId, isPending: false } : s))
             if (selectedSessionKeyRef.current === oldKey) setSelectedSessionKey(newKey)
@@ -12740,11 +12757,8 @@ export default function OpenTuiApp() {
             composerTurnProducedOutputRef.current = true
             setLiveTranscriptMessages((prev) => upsertThreadedMessage(prev, codexQuestionMessage))
           }
-          setPendingPermissions((prev) => {
-            const next = [...prev.filter((entry) => entry.id !== pendingPermission.id), pendingPermission]
-            setPermissionOptionIndex(0)
-            return next
-          })
+          setPermissionOptionIndex(0)
+          setPendingPermissions((prev) => [...prev.filter((entry) => entry.id !== pendingPermission.id), pendingPermission])
         }
         const repliedPermissionId = extractPermissionReply(parsed)
         if (repliedPermissionId) {
@@ -13845,10 +13859,9 @@ export default function OpenTuiApp() {
     // case on a freshly loaded session — otherwise every poll rebuilds an
     // O(n) Set from the transcript for nothing. We also build the allowed
     // Set at most once and share it between both state updates.
-    let allowed: Set<string> | null = null
+    const allowed = new Set(transcriptCards.map((card) => card.key))
     setExpandedCardKeys((current) => {
       if (current.size === 0) return current
-      if (!allowed) allowed = new Set(transcriptCards.map((card) => card.key))
       let changed = false
       const next = new Set<string>()
       for (const key of current) {
@@ -13859,7 +13872,6 @@ export default function OpenTuiApp() {
     })
     setCollapsedCardKeys((current) => {
       if (current.size === 0) return current
-      if (!allowed) allowed = new Set(transcriptCards.map((card) => card.key))
       let changed = false
       const next = new Set<string>()
       for (const key of current) {

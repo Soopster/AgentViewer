@@ -254,7 +254,7 @@ export function useDiffComments(
           background: 'color-mix(in srgb, var(--cyan) 8%, var(--surface-2))',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, minWidth: 0 }}>
-            <div style={{
+            <label htmlFor="diff-comment-draft" style={{
               color: 'var(--cyan)',
               fontSize: 12,
               fontWeight: 700,
@@ -263,7 +263,7 @@ export function useDiffComments(
               whiteSpace: 'nowrap',
             }}>
               Draft comment
-            </div>
+            </label>
             <div style={{
               color: 'var(--text-3)',
               fontFamily: "'IBM Plex Mono', monospace",
@@ -274,6 +274,7 @@ export function useDiffComments(
             </div>
           </div>
           <textarea
+            id="diff-comment-draft"
             value={draft?.text ?? metadata.text}
             onChange={(event) => {
               setDraft((current) => current ? { ...current, text: event.target.value } : current)
@@ -409,10 +410,11 @@ export function useDiffComments(
             border: '1px solid color-mix(in srgb, var(--cyan) 28%, var(--border))',
             background: 'color-mix(in srgb, var(--cyan) 7%, var(--surface))',
           }}>
-            <div style={{ color: 'var(--cyan)', fontSize: 12, fontWeight: 700 }}>
+            <label htmlFor="diff-comment-reply" style={{ color: 'var(--cyan)', fontSize: 12, fontWeight: 700 }}>
               Add reply
-            </div>
+            </label>
             <textarea
+              id="diff-comment-reply"
               value={draft?.text ?? ''}
               onChange={(event) => setDraft((current) => current ? { ...current, text: event.target.value } : current)}
               placeholder="Write a reply..."

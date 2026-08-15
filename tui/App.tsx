@@ -564,8 +564,8 @@ export default function App() {
   const [searchMode, setSearchMode] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMatchIndex, setSearchMatchIndex] = useState(0)
-  const [terminalRows, setTerminalRows] = useState(stdout.rows ?? process.stdout.rows ?? 40)
-  const [terminalColumns, setTerminalColumns] = useState(stdout.columns ?? process.stdout.columns ?? 120)
+  const [terminalRows, setTerminalRows] = useState(stdout.rows ?? 40)
+  const [terminalColumns, setTerminalColumns] = useState(stdout.columns ?? 120)
   const [restoredReaderState, setRestoredReaderState] = useState<{
     sessionKey: string | null
     loaded: boolean

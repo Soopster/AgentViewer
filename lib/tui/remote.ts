@@ -96,8 +96,11 @@ export async function remoteJson<T>(path: string, init?: RequestInit): Promise<T
     ...init,
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
   })
+  if (!response.ok) {
+    const errorPayload = await response.json().catch(() => null)
+    throw new Error(extractError(errorPayload, response.status))
+  }
   const payload = await response.json().catch(() => null)
-  if (!response.ok) throw new Error(extractError(payload, response.status))
   return payload as T
 }
 

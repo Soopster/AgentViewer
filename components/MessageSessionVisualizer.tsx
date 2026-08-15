@@ -1814,6 +1814,7 @@ function MessageSessionVisualizer({
           <div className="av-session-viz-controls">
             <label className="av-session-viz-search">
               <Search aria-hidden="true" />
+              <span>Search</span>
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}

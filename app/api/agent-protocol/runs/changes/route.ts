@@ -2,10 +2,11 @@ import { NextRequest } from 'next/server'
 import { subscribeProtocolRunChanges } from '@/lib/agentCoordination'
 
 export const dynamic = 'force-dynamic'
+const NOOP = () => {}
 
 export async function GET(request: NextRequest) {
   const encoder = new TextEncoder()
-  let cleanup = () => {}
+  let cleanup = NOOP
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       let closed = false

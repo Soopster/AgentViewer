@@ -1,12 +1,13 @@
 'use client'
 
-import { useEffect, useId, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { AreaChart, Area, Line, ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, ReferenceLine, Cell, LabelList, Legend, Brush } from 'recharts'
 import type { Analytics, AnalyticsInput, FileOps, TimelinePoint } from '@/lib/analytics'
 import { computeAnalytics, fmtCost, fmtDuration, fmtNum } from '@/lib/analytics'
 import { type Insight, type InsightSeverity, buildInsights, median, percentile, sortInsights, summarizeActivity, summarizeCache, summarizePace, summarizeRisk } from '@/lib/analyticsInsights'
 import { type HealthGrade, type HealthReport, archetypeLabel, computeHealthReport, penaltyLabel } from '@/lib/healthScore'
 import type { CoachInsight } from '@/lib/coachInsights'
+import { readJsonResponse } from '@/lib/httpResponse'
 
 type PaneId = 0 | 1 | 2 | 3 | 4 | 5 | 6
 
@@ -20,6 +21,33 @@ const PANE_TITLES: Record<PaneId, string> = {
   6: 'Profile',
 }
 const PANE_COUNT = 7
+const DATE_TIME_FORMAT = new Intl.DateTimeFormat('en-AU', {
+  dateStyle: 'medium',
+  timeStyle: 'medium',
+  timeZone: 'UTC',
+})
+const TIME_FORMAT = new Intl.DateTimeFormat('en-AU', {
+  timeStyle: 'medium',
+  timeZone: 'UTC',
+})
+const SIZE_HISTOGRAM_BUCKETS = [
+  { label: '<100', max: 100 },
+  { label: '100-500', max: 500 },
+  { label: '500-2k', max: 2_000 },
+  { label: '2k-10k', max: 10_000 },
+  { label: '10k-50k', max: 50_000 },
+  { label: '50k-200k', max: 200_000 },
+  { label: '>200k', max: Infinity },
+]
+const LATENCY_HISTOGRAM_BUCKETS = [
+  { label: '<1s', max: 1_000 },
+  { label: '1-3s', max: 3_000 },
+  { label: '3-10s', max: 10_000 },
+  { label: '10-30s', max: 30_000 },
+  { label: '30s-1m', max: 60_000 },
+  { label: '1-5m', max: 300_000 },
+  { label: '>5m', max: Infinity },
+]
 
 type Props = {
   open: boolean
@@ -433,7 +461,7 @@ function SummaryPane({ a, health }: { a: Analytics; health: HealthReport }) {
         <Kpi label="Cost (est.)" value={fmtCost(a.cost)} accent="var(--green, #4ade80)"
           sub={a.cost === 0 ? 'no usage reported' : `@ ${a.model}`} />
         <Kpi label="Duration" value={fmtDuration(a.durationMs)} accent="var(--amber, #fbbf24)"
-          sub={a.startTs && a.endTs ? new Date(a.startTs).toLocaleString() : '—'} />
+          sub={a.startTs && a.endTs ? DATE_TIME_FORMAT.format(new Date(a.startTs)) : '—'} />
       </KpiRow>
 
       <KpiRow>
@@ -566,7 +594,7 @@ function TokensPane({ a }: { a: Analytics }) {
   const topTurnsData = a.timeline
     .toSorted((x, y) => y.outputTokens - x.outputTokens)
     .slice(0, 10)
-    .map((p) => ({ label: p.ts ? new Date(p.ts).toLocaleTimeString() : `#${p.index + 1}`, tokens: p.outputTokens }))
+    .map((p) => ({ label: p.ts ? TIME_FORMAT.format(new Date(p.ts)) : `#${p.index + 1}`, tokens: p.outputTokens }))
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -789,15 +817,7 @@ function RankedBars({ entries, color }: { entries: [string, number][]; color: st
 
 function SizeHistogram({ values }: { values: number[] }) {
   if (values.length === 0) return <div style={{ color: 'var(--text-3)', fontSize: 11 }}>(no data)</div>
-  const buckets = [
-    { label: '<100',     max: 100,      count: 0 },
-    { label: '100-500',  max: 500,      count: 0 },
-    { label: '500-2k',   max: 2_000,    count: 0 },
-    { label: '2k-10k',   max: 10_000,   count: 0 },
-    { label: '10k-50k',  max: 50_000,   count: 0 },
-    { label: '50k-200k', max: 200_000,  count: 0 },
-    { label: '>200k',    max: Infinity, count: 0 },
-  ]
+  const buckets = SIZE_HISTOGRAM_BUCKETS.map((bucket) => ({ ...bucket, count: 0 }))
   for (const v of values) {
     for (const b of buckets) {
       if (v < b.max) { b.count += 1; break }
@@ -817,15 +837,7 @@ function SizeHistogram({ values }: { values: number[] }) {
 }
 
 function LatencyHistogram({ latencies }: { latencies: number[] }) {
-  const buckets = [
-    { label: '<1s',    max: 1_000,    count: 0 },
-    { label: '1-3s',   max: 3_000,    count: 0 },
-    { label: '3-10s',  max: 10_000,   count: 0 },
-    { label: '10-30s', max: 30_000,   count: 0 },
-    { label: '30s-1m', max: 60_000,   count: 0 },
-    { label: '1-5m',   max: 300_000,  count: 0 },
-    { label: '>5m',    max: Infinity, count: 0 },
-  ]
+  const buckets = LATENCY_HISTOGRAM_BUCKETS.map((bucket) => ({ ...bucket, count: 0 }))
   for (const l of latencies) {
     for (const b of buckets) {
       if (l < b.max) { b.count += 1; break }
@@ -867,7 +879,7 @@ function TimelinePane({ a }: { a: Analytics }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
-        {new Date(a.startTs).toLocaleString()} → {new Date(a.endTs).toLocaleString()}
+        {DATE_TIME_FORMAT.format(new Date(a.startTs))} → {DATE_TIME_FORMAT.format(new Date(a.endTs))}
       </div>
       <div style={{ fontSize: 10, color: 'var(--text-3)' }}>
         {buckets} buckets · ~{fmtDuration(bucketSize)} per bucket
@@ -1061,9 +1073,11 @@ function AICoachSection({ input }: { input: AnalyticsInput | null }) {
   const [state, setState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
   const [insights, setInsights] = useState<CoachInsight[]>([])
   const [error, setError] = useState<string>('')
+  const generatingRef = useRef(false)
 
   async function generate() {
-    if (!sessionId) return
+    if (!sessionId || generatingRef.current) return
+    generatingRef.current = true
     setState('loading')
     setError('')
     try {
@@ -1072,17 +1086,14 @@ function AICoachSection({ input }: { input: AnalyticsInput | null }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider }),
       })
-      const data = await res.json()
-      if (!res.ok) {
-        setError(typeof data?.error === 'string' ? data.error : `Request failed (${res.status})`)
-        setState('error')
-        return
-      }
+      const data = await readJsonResponse(res)
       setInsights(Array.isArray(data?.insights) ? data.insights : [])
       setState('done')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Network error')
       setState('error')
+    } finally {
+      generatingRef.current = false
     }
   }
 

@@ -537,7 +537,7 @@ export function PullRequestPopover({
   const prListRef = useRef<ScrollBoxRenderable>(null)
   const pendingCommentJumpRef = useRef<string | null>(null)
   const selectedPrNumberRef = useRef<number | null>(null)
-  const scrollVelocityRef = useRef(createScrollVelocityState())
+  const [scrollVelocityRef] = useState(() => ({ current: createScrollVelocityState() }))
 
   const load = useCallback(async (number?: number) => {
     setLoading(true); setError(null)
@@ -847,11 +847,9 @@ export function PullRequestPopover({
 
     if (key.sequence === '[' || key.sequence === ']') {
       if (leftPaneHidden) setLeftPaneMode('normal')
-      setLeftPaneWidth((current) => {
-        const nextWidth = clampLeftPaneWidth(current + (key.sequence === ']' ? LEFT_PANE_RESIZE_STEP : -LEFT_PANE_RESIZE_STEP))
-        setLeftPaneMode(nextWidth >= maxLeftW - 1 ? 'expanded' : 'normal')
-        return nextWidth
-      })
+      const nextWidth = clampLeftPaneWidth(leftPaneWidth + (key.sequence === ']' ? LEFT_PANE_RESIZE_STEP : -LEFT_PANE_RESIZE_STEP))
+      setLeftPaneWidth(nextWidth)
+      setLeftPaneMode(nextWidth >= maxLeftW - 1 ? 'expanded' : 'normal')
       return
     }
     if (key.sequence === 'w') {

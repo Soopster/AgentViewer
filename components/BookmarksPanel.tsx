@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Bookmark, RefreshCw, Trash2, X } from 'lucide-react'
 import type { AgentProvider } from '@/lib/types'
 import type { MessageBookmark } from '@/lib/messageBookmarks'
+import { readJsonResponse } from '@/lib/httpResponse'
 
 type Props = {
   open: boolean
@@ -45,7 +46,7 @@ export default function BookmarksPanel({ open, onClose, onSelect }: Props) {
     setLoading(true)
     setError(null)
     fetch('/api/bookmarks')
-      .then((r) => r.json())
+      .then(readJsonResponse)
       .then((data) => {
         if (Array.isArray(data?.bookmarks)) setBookmarks(data.bookmarks as MessageBookmark[])
         else setError(data?.error ?? 'Failed to load bookmarks')

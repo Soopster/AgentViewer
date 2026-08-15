@@ -565,7 +565,7 @@ export function GitPopover({ cwd, scopeLabel, zIndex = 50, theme, width, height,
   // Mouse hover state for the diff badge ([+] affordance)
   const [hoveredDiffRowKey, setHoveredDiffRowKey] = useState<string | null>(null)
   const hoverIdleTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const scrollVelocityRef = useRef(createScrollVelocityState())
+  const [scrollVelocityRef] = useState(() => ({ current: createScrollVelocityState() }))
   const renderer = useRenderer()
 
   // Refresh on mount
@@ -807,11 +807,9 @@ export function GitPopover({ cwd, scopeLabel, zIndex = 50, theme, width, height,
 
     if (key.sequence === '[' || key.sequence === ']') {
       if (leftPaneMode === 'hidden') setLeftPaneMode('normal')
-      setLeftPaneWidth((current) => {
-        const nextWidth = clampLeftPaneWidth(current + (key.sequence === ']' ? LEFT_PANE_RESIZE_STEP : -LEFT_PANE_RESIZE_STEP))
-        setLeftPaneMode(nextWidth >= maxLeftW - 1 ? 'expanded' : 'normal')
-        return nextWidth
-      })
+      const nextWidth = clampLeftPaneWidth(leftPaneWidth + (key.sequence === ']' ? LEFT_PANE_RESIZE_STEP : -LEFT_PANE_RESIZE_STEP))
+      setLeftPaneWidth(nextWidth)
+      setLeftPaneMode(nextWidth >= maxLeftW - 1 ? 'expanded' : 'normal')
       return
     }
 
@@ -1107,15 +1105,16 @@ export function GitPopover({ cwd, scopeLabel, zIndex = 50, theme, width, height,
   const diffLines = diffTruncated ? allDiffLines.slice(0, MAX_DIFF_LINES) : allDiffLines
   const rightDiffView = useMemo(
     () => {
-      selectedFilePathRef.current = selectedFilePath
-      const v = pane === 2 && fileDiffMode === 'viewer'
+      return pane === 2 && fileDiffMode === 'viewer'
         ? buildPierreDiffView(rightContent, selectedFilePath ?? 'git-diff', diffHighlights, pierreAppearance)
         : null
-      rightDiffViewRef.current = v
-      return v
     },
     [diffHighlights, fileDiffMode, pane, pierreAppearance, rightContent, selectedFilePath],
   )
+  useEffect(() => {
+    selectedFilePathRef.current = selectedFilePath
+    rightDiffViewRef.current = rightDiffView
+  }, [rightDiffView, selectedFilePath])
   const rightDiffRows = rightDiffView ? rightDiffView.rows.slice(0, MAX_DIFF_LINES) : []
   const rightDiffTruncated = rightDiffView ? rightDiffView.rows.length > MAX_DIFF_LINES : false
   const rightSplitRows = rightDiffView ? rightDiffView.splitRows.slice(0, MAX_DIFF_LINES) : []

@@ -445,7 +445,9 @@ export default function ChannelBridgePanel({
       )}
 
       <div style={{ display: 'flex', gap: 6, padding: '8px 10px', borderTop: '1px solid var(--border)', background: 'var(--surface-2)' }}>
+        <label htmlFor="channel-bridge-message" style={{ alignSelf: 'center', fontSize: 10, color: 'var(--text-3)' }}>Message</label>
         <textarea
+          id="channel-bridge-message"
           ref={draftRef}
           value={draft}
           onChange={(event) => setDraft(event.target.value)}

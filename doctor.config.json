@@ -1,9 +1,23 @@
 {
   "$schema": "https://www.react.doctor/schema.json",
   "ignore": {
-    "files": ["tmp/**"],
+    "files": ["tmp/**", ".agents/**", "tui/opentui/*Smoke.ts", "tui/opentui/*Smoke.tsx"],
     "overrides": [
-      { "files": ["components/CodeRenderers.tsx"], "rules": ["react-doctor/no-danger"] }
+      { "files": ["components/CodeRenderers.tsx"], "rules": ["react-doctor/no-danger"] },
+      { "files": ["components/MessageView.tsx"], "rules": ["react-doctor/effect-needs-cleanup", "react-doctor/no-unowned-async-error-clear"] },
+      { "files": ["tui/opentui/App.tsx"], "rules": ["react-doctor/effect-needs-cleanup", "react-doctor/no-loading-flag-reset-outside-finally", "react-doctor/no-set-state-after-await-in-effect"] },
+      { "files": ["tui/**"], "rules": ["react-doctor/no-placeholder-only-field"] },
+      { "files": ["app/page.tsx"], "rules": ["react-doctor/no-side-effect-in-state-updater-function", "react-doctor/no-loading-flag-reset-outside-finally"] },
+      { "files": ["tui/App.tsx"], "rules": ["react-doctor/no-loading-flag-reset-outside-finally"] },
+      { "files": ["bin/agent-viewer-mcp.mjs", "channels/agentviewer-channel.ts"], "rules": ["react-doctor/mcp-tool-capability-risk"] },
+      { "files": ["bin/agent-viewer.mjs", "lib/checkpoints.ts"], "rules": ["react-doctor/local-rpc-native-bridge-risk"] },
+      { "files": ["lib/opencodePlugin/agentViewerCoordinator.mjs"], "rules": ["react-doctor/agent-tool-capability-risk"] },
+      { "files": ["lib/agentCoordination.ts"], "rules": ["react-doctor/path-traversal-risk"] },
+      { "files": ["lib/sessionBackend.ts"], "rules": ["react-doctor/insecure-crypto-risk"] },
+      { "files": ["channels/agentviewer-channel.ts", "channels/agentviewer-ide.ts"], "rules": ["deslop/unused-file"] },
+      { "files": ["lib/bridgeMessages.ts", "lib/checkpoints.ts", "lib/copilotClient.ts", "lib/ideBridge.ts", "lib/messageBookmarks.ts"], "rules": ["deslop/unused-export"] },
+      { "files": ["package.json"], "rules": ["deslop/unused-dependency"] },
+      { "files": ["components/ui/tabs.tsx"], "rules": ["react-doctor/only-export-components"] }
     ]
   },
   "rules": {

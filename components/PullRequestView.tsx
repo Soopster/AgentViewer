@@ -1128,7 +1128,9 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent }: Prop
                     style={{ position: 'absolute', top: 0, right: -4, bottom: 0, width: 8, zIndex: 3, border: 'none', padding: 0, background: 'transparent', cursor: 'col-resize' }}
                   />
                   <div style={{ padding: '10px 10px 8px', borderBottom: '1px solid var(--border)', flexShrink: 0, display: 'grid', gap: 8 }}>
+                    <label htmlFor="pull-request-file-filter" style={{ fontSize: 10, color: 'var(--text-3)' }}>Filter files</label>
                     <input
+                      id="pull-request-file-filter"
                       type="search"
                       value={fileFilter}
                       onChange={(event) => setFileFilter(event.target.value)}
@@ -1601,7 +1603,9 @@ function DraftCommentCard({ busy, reviewStarted, onCancel, onSubmitSingle, onSub
   const trimmed = message.trim()
   return (
     <div style={{ margin: '6px 10px', padding: 10, border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface-2)', maxWidth: 720, fontFamily: "'IBM Plex Sans', system-ui, sans-serif" }}>
+      <label htmlFor="pull-request-review-comment" style={{ display: 'block', marginBottom: 4, fontSize: 11, color: 'var(--text-3)' }}>Review comment</label>
       <textarea
+        id="pull-request-review-comment"
         ref={textareaRef}
         value={message}
         rows={2}

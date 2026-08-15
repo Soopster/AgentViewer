@@ -355,6 +355,7 @@ export default function RunDashboard({
       <section className="av-run-toolbar">
         <label>
           <Search aria-hidden="true" />
+          <span>Search</span>
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search runs, tools, branches, worktrees..." />
         </label>
         <span>{loading ? 'refreshing...' : `${filteredRows.length} shown`}</span>

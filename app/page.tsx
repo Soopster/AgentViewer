@@ -12,6 +12,7 @@ import { isProviderSelection } from '@/lib/provider'
 import { pathBasename, sameProjectPath } from '@/lib/projectPaths'
 import { compactStableFingerprint } from '@/lib/compactFingerprint'
 import { startClientPerf, measureAsync } from '@/lib/clientPerf'
+import { readJsonResponse } from '@/lib/httpResponse'
 import type { AgentProvider, ProviderSelection, Session, SessionMessage } from '@/lib/types'
 import type { Todo as OpenCodeTodo } from '@opencode-ai/sdk'
 import type { CodexPlanStep } from '@/lib/taskRegistry'
@@ -524,7 +525,7 @@ export default function Home() {
     const suffix = params.toString() ? `?${params.toString()}` : ''
     const data = await measureAsync('fetch.sessions', async () => {
       const r = await fetch(`/api/sessions${suffix}`)
-      return r.json()
+      return readJsonResponse(r)
     })
     if (data.error) throw new Error(data.error)
     const loaded = (data.sessions ?? []) as Session[]
@@ -558,8 +559,8 @@ export default function Home() {
         incrementalLimit: 200,
       }),
     })
-    const data = await response.json()
-    if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`)
+    const data = await readJsonResponse(response)
+    if (data.error) throw new Error(data.error)
     return {
       sessions: (data.sessions ?? []) as Session[],
       batches: (data.batches ?? []) as ProjectMessageBatch[],
@@ -568,7 +569,7 @@ export default function Home() {
 
   const fetchProvider = useCallback(async () => {
     const r = await fetch('/api/provider')
-    const data = await r.json()
+    const data = await readJsonResponse(r)
     if (data.error) throw new Error(data.error)
     const nextProvider = isProviderSelection(data.provider) ? data.provider : 'claude'
     setProvider(nextProvider)
@@ -614,7 +615,7 @@ export default function Home() {
     const offset = Math.max(0, msgCountRef.current - MESSAGE_POLL_BACKFILL)
     try {
       const r = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}/messages?offset=${offset}&limit=${MESSAGE_STREAM_LIMIT}`, session.provider))
-      const data = await r.json()
+      const data = await readJsonResponse(r)
       if (!data.error) applySessionMessagePayload(data as MessageStreamPayload, session)
     } catch { /* ignore transient errors */ } finally {
       pollInFlightRef.current = false
