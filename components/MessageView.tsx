@@ -6958,6 +6958,7 @@ export default function MessageView({
   rowLayoutRef.current = rowLayout
 
   const streamHistoryMetadata = useMemo<Array<Omit<StreamHistoryItem, 'position' | 'top' | 'height'>>>(() => {
+    if (viewMode !== 'stream') return []
     return renderedTimelineRows.map((row, index) => {
       const normalized = messageToCopyText(row.message).replace(/\s+/g, ' ').trim()
       const title = normalized.slice(0, 92) || row.previewBadge || `${row.message.role} message`
@@ -6973,9 +6974,10 @@ export default function MessageView({
         meta: firstTool?.type === 'tool_thread' ? firstTool.toolUse.name : `Turn ${index + 1} · ${row.message.role}`,
       }
     })
-  }, [renderedTimelineRows])
+  }, [renderedTimelineRows, viewMode])
 
   const streamHistoryItems = useMemo<StreamHistoryItem[]>(() => {
+    if (streamHistoryMetadata.length === 0) return []
     const denominator = Math.max(rowLayout.totalHeight, 1)
     return streamHistoryMetadata.map((item, index) => ({
       ...item,
@@ -7112,41 +7114,32 @@ export default function MessageView({
   }, [highlightedMessageId])
 
   const virtualTimeline = useMemo(() => {
-    const { tops, heights } = rowLayout
-    const n = renderedTimelineRows.length
-    const window = getVirtualTimelineWindow({
+    return getVirtualTimelineWindow({
       layout: rowLayout,
-      rowCount: n,
+      rowCount: renderedTimelineRows.length,
       scrollTop: timelineScrollTop,
       viewportHeight: timelineViewportHeight || 800,
       overscanPx: TIMELINE_OVERSCAN_PX,
     })
-
-    const visibleRows: Array<{ row: TimelineRow; top: number; height: number }> = []
-    for (let i = window.startIndex; i < window.endIndex; i++) {
-      visibleRows.push({ row: renderedTimelineRows[i], top: tops[i], height: heights[i] })
-    }
-
-    return { totalHeight: window.totalHeight, visibleRows }
   }, [renderedTimelineRows, rowLayout, timelineScrollTop, timelineViewportHeight])
 
   useLayoutEffect(() => {
     if (!pendingMountedAnchorCaptureRef.current) return
     pendingMountedAnchorCaptureRef.current = false
     activeTimelineScrollAnchorRef.current = captureTimelineScrollAnchor()
-  }, [captureTimelineScrollAnchor, timelineScrollTop, virtualTimeline.visibleRows])
+  }, [captureTimelineScrollAnchor, timelineScrollTop, virtualTimeline.endIndex, virtualTimeline.startIndex])
 
   const timelineRenderedHeight = useMemo(() => {
-    const lastVisibleRow = virtualTimeline.visibleRows.at(-1)
-    const visibleBottom = lastVisibleRow
-      ? lastVisibleRow.top + lastVisibleRow.height + TIMELINE_BOTTOM_GUTTER_PX
+    const lastVisibleIndex = virtualTimeline.endIndex - 1
+    const visibleBottom = lastVisibleIndex >= virtualTimeline.startIndex
+      ? rowLayout.tops[lastVisibleIndex] + rowLayout.heights[lastVisibleIndex] + TIMELINE_BOTTOM_GUTTER_PX
       : 0
     return resolveTimelineRenderedHeight({
       measuredTotalHeight: virtualTimeline.totalHeight,
       activeScrollHeight: timelineHeightOverride,
       visibleBottom,
     })
-  }, [timelineHeightOverride, virtualTimeline.totalHeight, virtualTimeline.visibleRows])
+  }, [rowLayout, timelineHeightOverride, virtualTimeline.endIndex, virtualTimeline.startIndex, virtualTimeline.totalHeight])
 
   // Memoized element array for the mounted window. JSX elements are plain
   // data — reusing the SAME array reference lets React bail out of the whole
@@ -7165,10 +7158,14 @@ export default function MessageView({
     // "currently mounted with content", not "ever seen".
     const prevFullKeys = fullRenderedRowKeysRef.current
     const nextFullKeys = new Set<string>()
-    const elements = virtualTimeline.visibleRows.map(({ row, top, height }) => {
+    const elements = []
+    for (let index = virtualTimeline.startIndex; index < virtualTimeline.endIndex; index += 1) {
+      const row = renderedTimelineRows[index]
+      const top = rowLayout.tops[index]
+      const height = rowLayout.heights[index]
       const placeholder = fastScrolling && !prevFullKeys.has(row.key)
       if (!placeholder) nextFullKeys.add(row.key)
-      return (
+      elements.push(
         <VirtualTimelineRow
           key={row.key}
           row={row}
@@ -7192,7 +7189,7 @@ export default function MessageView({
           onEditFromMessage={handleEditFromMessage}
         />
       )
-    })
+    }
     fullRenderedRowKeysRef.current = nextFullKeys
     return elements
   }, [
@@ -7210,8 +7207,10 @@ export default function MessageView({
     toggleBookmark,
     toggleResumeFromMessage,
     renderedTimelineRows,
+    rowLayout,
     viewMode,
-    virtualTimeline.visibleRows,
+    virtualTimeline.endIndex,
+    virtualTimeline.startIndex,
   ])
 
   useLayoutEffect(() => {
@@ -7224,7 +7223,8 @@ export default function MessageView({
     scrollMountedTimelineRowIntoView,
     timelineScrollTop,
     timelineTargetMessageId,
-    virtualTimeline.visibleRows.length,
+    virtualTimeline.endIndex,
+    virtualTimeline.startIndex,
   ])
 
   useEffect(() => {

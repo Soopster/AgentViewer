@@ -241,15 +241,25 @@ function mergeMessages(existing: SessionMessage[], incoming: SessionMessage[]): 
   const appended: SessionMessage[] = []
   const matchedKeys = new Set<string>()
 
-  const mergedExisting = existing.map((message) => {
+  // Most stream/poll payloads are an unchanged backfill window. Avoid mapping
+  // the entire retained transcript into a throwaway array on those ticks;
+  // allocate a replacement array lazily only after the first real update.
+  let mergedExisting: SessionMessage[] | null = null
+  for (let index = 0; index < existing.length; index += 1) {
+    const message = existing[index]
     const key = sessionMessageKey(message)
     const replacement = latestIncomingByKey.get(key)
-    if (!replacement) return message
-    matchedKeys.add(key)
-    if (apiMessageSignature(message) === apiMessageSignature(replacement)) return message
-    changed = true
-    return replacement
-  })
+    let nextMessage = message
+    if (replacement) {
+      matchedKeys.add(key)
+      if (apiMessageSignature(message) !== apiMessageSignature(replacement)) {
+        changed = true
+        nextMessage = replacement
+        if (!mergedExisting) mergedExisting = existing.slice(0, index)
+      }
+    }
+    if (mergedExisting) mergedExisting.push(nextMessage)
+  }
 
   for (const [key, message] of latestIncomingByKey) {
     if (matchedKeys.has(key)) continue
@@ -258,10 +268,10 @@ function mergeMessages(existing: SessionMessage[], incoming: SessionMessage[]): 
   }
 
   if (!changed) return existing
-  if (appended.length === 0) return mergedExisting
+  if (appended.length === 0) return mergedExisting ?? existing
 
   const additions = appended.sort((a, b) => messageTimestampMs(a) - messageTimestampMs(b))
-  return mergeSortedMessages(mergedExisting, additions)
+  return mergeSortedMessages(mergedExisting ?? existing, additions)
 }
 
 function trimProjectMessagesForMemory(messages: SessionMessage[]): SessionMessage[] {

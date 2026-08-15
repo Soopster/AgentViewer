@@ -6164,6 +6164,7 @@ function densityConfig(d: MessageDensity): DensityConfig {
 }
 
 const MessageDensityContext = createContext<DensityConfig>(densityConfig('balanced'))
+const HydrationContext = createContext(false)
 const SessionContext = createContext<string | undefined>(undefined)
 const ViewModeContext = createContext<WebViewMode>('conversation')
 const DiffStyleContext = createContext<PierreDiffStyle>('stacked')
@@ -6171,10 +6172,18 @@ const DiffStyleContext = createContext<PierreDiffStyle>('stacked')
 const DiffOptionsContext = createContext<DiffOptions>(DEFAULT_DIFF_OPTIONS)
 
 export function MessageDensityProvider({ density, children }: { density: MessageDensity; children: React.ReactNode }) {
+  const [hydrated, setHydrated] = useState(false)
   const value = useMemo(() => densityConfig(density), [density])
+
+  useEffect(() => {
+    setHydrated(true)
+  }, [])
+
   return (
     <MessageDensityContext.Provider value={value}>
-      {children}
+      <HydrationContext.Provider value={hydrated}>
+        {children}
+      </HydrationContext.Provider>
     </MessageDensityContext.Provider>
   )
 }
@@ -6218,7 +6227,7 @@ function useDiffPresentation(): [PierreDiffPresentation, PierreDiffStyle, () => 
 }
 
 function MessageItemInner({ message, showSession }: { message: ThreadedMessage; showSession?: boolean }) {
-  const [hydrated, setHydrated] = useState(false)
+  const hydrated = use(HydrationContext)
   const dc = use(MessageDensityContext)
   const viewMode = use(ViewModeContext)
   const isBridgeMessage = message.origin?.kind === 'bridge'
@@ -6226,10 +6235,6 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
   const roleLabel = message.role === 'assistant'
     ? getAssistantLabel(message.provider)
     : ROLE_STYLE[message.role].label
-
-  useEffect(() => {
-    setHydrated(true)
-  }, [])
 
   if (viewMode === 'agents' && !isBridgeMessage) {
     return (
