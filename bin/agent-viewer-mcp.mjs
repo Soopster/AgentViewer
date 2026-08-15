@@ -31,10 +31,14 @@ const MCP_TASKS_EXTENSION = 'io.modelcontextprotocol/tasks'
 const COORDINATOR_APP_URI = 'ui://agent-viewer/coordinator-dashboard.html'
 const COORDINATOR_SKILL_INDEX_URI = 'skill://index.json'
 const COORDINATOR_SKILL_URI = 'skill://coordinate-agents/SKILL.md'
+const COORDINATOR_PROTOCOL_REFERENCE_URI = 'skill://coordinate-agents/references/protocol-and-hosts.md'
+const COORDINATOR_PLAYBOOK_REFERENCE_URI = 'skill://coordinate-agents/references/playbooks-and-memory.md'
 const COORDINATOR_A2A_CARD_URI = 'a2a://agent-viewer/coordinator/agent-card.json'
 const COORDINATOR_CURRENT_RUN_URI = 'coord://agent-viewer/current-run'
 const coordinatorAppHtml = await readFile(new URL('./agent-viewer-coordinator-app.html', import.meta.url), 'utf8')
 const coordinatorSkillMarkdown = await readFile(new URL('../.agents/skills/coordinate-agents/SKILL.md', import.meta.url), 'utf8')
+const coordinatorProtocolReferenceMarkdown = await readFile(new URL('../.agents/skills/coordinate-agents/references/protocol-and-hosts.md', import.meta.url), 'utf8')
+const coordinatorPlaybookReferenceMarkdown = await readFile(new URL('../.agents/skills/coordinate-agents/references/playbooks-and-memory.md', import.meta.url), 'utf8')
 const coordinatorSkillDescription = coordinatorSkillMarkdown.match(/^description:\s*(.+)$/m)?.[1]?.trim()
   ?? 'Operate an Agent Viewer Coordinator run through the agent-viewer MCP.'
 const DEFAULT_MCP_TASK_TTL_MS = 7 * 24 * 60 * 60 * 1000
@@ -64,6 +68,7 @@ const IDEMPOTENT_COORDINATOR_ACTIONS = new Set([
   'save_playbook',
   'save_role',
   'send_message',
+  'spawn_teammate',
   'submit_plan',
 ])
 const requestIdField = z.string().min(1).max(160).optional().describe('Stable idempotency key; the bridge generates one when omitted, or reuse your explicit value across separate retries')
@@ -715,6 +720,24 @@ server.registerResource('Coordinate agents skill', COORDINATOR_SKILL_URI, {
   },
 }, async (uri) => ({
   contents: [{ uri: uri.href, mimeType: 'text/markdown', text: coordinatorSkillMarkdown }],
+}))
+
+server.registerResource('Coordinate agents protocol and hosts reference', COORDINATOR_PROTOCOL_REFERENCE_URI, {
+  title: 'Coordinate agents protocol and hosts reference',
+  description: 'Progressively disclosed MCP host, capability, protocol, and A2A guidance referenced by the coordinate-agents skill.',
+  mimeType: 'text/markdown',
+  cacheHint: { ttlMs: 60_000, cacheScope: 'public' },
+}, async (uri) => ({
+  contents: [{ uri: uri.href, mimeType: 'text/markdown', text: coordinatorProtocolReferenceMarkdown }],
+}))
+
+server.registerResource('Coordinate agents playbooks and memory reference', COORDINATOR_PLAYBOOK_REFERENCE_URI, {
+  title: 'Coordinate agents playbooks and memory reference',
+  description: 'Progressively disclosed playbook, durable memory, context-search, and reusable-role guidance referenced by the coordinate-agents skill.',
+  mimeType: 'text/markdown',
+  cacheHint: { ttlMs: 60_000, cacheScope: 'public' },
+}, async (uri) => ({
+  contents: [{ uri: uri.href, mimeType: 'text/markdown', text: coordinatorPlaybookReferenceMarkdown }],
 }))
 
 server.registerResource('Agent Viewer Coordinator A2A Agent Card', COORDINATOR_A2A_CARD_URI, {
@@ -1461,6 +1484,17 @@ server.registerTool('coord_cancel_turn', {
   },
 }, async ({ agent_id, request_id }) => textResult(await coordinatorRequest('cancel_turn', {
   agentId: agent_id,
+  requestId: request_id,
+})))
+
+server.registerTool('coord_spawn_teammate', {
+  description: 'Lead-only: spawn one additional teammate mid-run when the board has more parallel work than the current roster can absorb. This requires a run with a live in-process Agent Viewer controller; externally-run Coordinator sessions must start another CLI and use coord_join_run instead.',
+  inputSchema: {
+    provider: z.enum(PROVIDERS).optional().describe('Preferred provider for the new teammate; the run provider pool remains authoritative.'),
+    request_id: requestIdField,
+  },
+}, async ({ provider, request_id }) => textResult(await coordinatorRequest('spawn_teammate', {
+  provider,
   requestId: request_id,
 })))
 

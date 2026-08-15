@@ -33,6 +33,7 @@ export const COORDINATOR_MCP_TOOL_NAMES = Object.freeze([
   'coord_resolve_decision',
   'coord_promote_learning',
   'coord_cancel_turn',
+  'coord_spawn_teammate',
   'coord_complete_task',
   'coord_fail_task',
   'coord_finalize_run',

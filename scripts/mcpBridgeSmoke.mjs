@@ -6,6 +6,16 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Client } from '@modelcontextprotocol/client'
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
+import { COORDINATOR_MCP_TOOL_NAMES } from '../bin/agent-viewer-coordinator-tools.mjs'
+
+const SESSION_MCP_TOOL_NAMES = Object.freeze([
+  'search_sessions',
+  'list_sessions',
+  'message_session',
+  'get_session_transcript',
+  'set_bookmark',
+  'post_attention',
+])
 
 const seen = []
 let coordinatorTask = null
@@ -214,19 +224,16 @@ try {
     throw new Error('Bridge did not advertise the MCP Apps, Skills, and Tasks extensions through server/discover')
   }
   const listed = await client.listTools()
-  const names = new Set(listed.tools.map((tool) => tool.name))
-  const requiredTools = [
-    'get_session_transcript', 'list_sessions', 'message_session', 'post_attention', 'search_sessions', 'set_bookmark',
-    'coord_list_runs', 'coord_create_run', 'coord_join_run', 'coord_resume', 'coord_status', 'coord_wait', 'coord_await_run', 'coord_create_task',
-    'coord_claim_task', 'coord_read_inbox', 'coord_send_message', 'coord_request_locks',
-    'coord_progress', 'coord_publish_finding', 'coord_submit_plan', 'coord_review_plan',
-    'coord_complete_task', 'coord_handoff_task', 'coord_fail_task', 'coord_review_phase',
-    'coord_review_run', 'coord_resolve_decision', 'coord_promote_learning', 'coord_finalize_run',
-  ]
-  const missingTools = requiredTools.filter((name) => !names.has(name))
-  if (missingTools.length > 0) {
-    throw new Error(`Bridge tools missing: ${missingTools.join(',')}`)
+  const actualToolNames = listed.tools.map((tool) => tool.name).sort()
+  const expectedToolNames = [...SESSION_MCP_TOOL_NAMES, ...COORDINATOR_MCP_TOOL_NAMES].sort()
+  if (JSON.stringify(actualToolNames) !== JSON.stringify(expectedToolNames)) {
+    const actual = new Set(actualToolNames)
+    const expected = new Set(expectedToolNames)
+    const missing = expectedToolNames.filter((name) => !actual.has(name))
+    const unexpected = actualToolNames.filter((name) => !expected.has(name))
+    throw new Error(`Bridge tool inventory drifted (missing: ${missing.join(',') || 'none'}; unexpected: ${unexpected.join(',') || 'none'})`)
   }
+  const names = new Set(actualToolNames)
   for (const a2aMethod of ['SendMessage', 'SendStreamingMessage', 'GetTask', 'ListTasks', 'CancelTask']) {
     if (names.has(a2aMethod)) throw new Error(`A2A peer operation leaked into MCP tools: ${a2aMethod}`)
   }
@@ -240,6 +247,8 @@ try {
   for (const uri of [
     'skill://index.json',
     'skill://coordinate-agents/SKILL.md',
+    'skill://coordinate-agents/references/protocol-and-hosts.md',
+    'skill://coordinate-agents/references/playbooks-and-memory.md',
     'a2a://agent-viewer/coordinator/agent-card.json',
     'ui://agent-viewer/coordinator-dashboard.html',
   ]) {
@@ -250,13 +259,28 @@ try {
     entry.text?.includes('## Multi-agent startup invariant')
     && entry.text?.includes('## Shared-checkout guardrails')
     && entry.text?.includes('## Autonomous coordination loop')
-    && entry.text?.includes('## MCP discovery and host features')
+    && entry.text?.includes('references/protocol-and-hosts.md')
+    && entry.text?.includes('references/playbooks-and-memory.md')
+  ))) {
+    throw new Error('Coordinator skill resource did not expose the canonical Agent Viewer workflow')
+  }
+  const protocolReference = await client.readResource({ uri: 'skill://coordinate-agents/references/protocol-and-hosts.md' })
+  if (!protocolReference.contents.some((entry) => (
+    entry.text?.includes('## MCP discovery and host features')
     && entry.text?.includes('## A2A and MCP boundary')
     && entry.text?.includes('structuredContent')
     && entry.text?.includes('ui://agent-viewer/coordinator-dashboard.html')
     && entry.text?.includes('tasks/get')
   ))) {
-    throw new Error('Coordinator skill resource did not expose the canonical Agent Viewer workflow')
+    throw new Error('Coordinator protocol reference did not expose the canonical MCP host workflow')
+  }
+  const playbookReference = await client.readResource({ uri: 'skill://coordinate-agents/references/playbooks-and-memory.md' })
+  if (!playbookReference.contents.some((entry) => (
+    entry.text?.includes('coord_save_playbook')
+    && entry.text?.includes('coord_remember')
+    && entry.text?.includes('coord_save_role')
+  ))) {
+    throw new Error('Coordinator playbook reference did not expose the canonical reusable-workflow guidance')
   }
   const a2aCard = await client.readResource({ uri: 'a2a://agent-viewer/coordinator/agent-card.json' })
   const a2aCardPayload = JSON.parse(a2aCard.contents.find((entry) => entry.mimeType === 'application/json')?.text ?? '{}')
@@ -516,7 +540,8 @@ try {
   await client.callTool({ name: 'coord_review_run', arguments: { approved: true, summary: 'Intent and scope reviewed' } })
   await client.callTool({ name: 'coord_resolve_decision', arguments: { task_id: 'task-1', decision_id: 'decision-1', answer: 'yes' } })
   await client.callTool({ name: 'coord_promote_learning', arguments: { candidate_id: 'learning-1', target: 'playbook' } })
-  for (const action of ['review_phase', 'review_run', 'resolve_decision', 'promote_learning']) {
+  await client.callTool({ name: 'coord_spawn_teammate', arguments: { provider: 'claude' } })
+  for (const action of ['review_phase', 'review_run', 'resolve_decision', 'promote_learning', 'spawn_teammate']) {
     if (!seen.some((entry) => entry.url === '/api/agent-protocol/external' && entry.body?.action === action)) {
       throw new Error(`Coordinator ${action} did not cross the MCP bridge`)
     }
