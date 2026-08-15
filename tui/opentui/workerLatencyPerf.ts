@@ -65,6 +65,41 @@ function makeTaskListMessages(index: number): SessionMessage[] {
   }]
 }
 
+function makeTaskUpdateMessages(index: number): SessionMessage[] {
+  const toolId = `worker-perf-task-update-${index}`
+  const common = {
+    session_id: SESSION_ID,
+    parent_tool_use_id: null,
+    provider: 'codex' as const,
+  }
+  return [{
+    ...common,
+    uuid: `${toolId}-use`,
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      content: [{
+        type: 'tool_use',
+        id: toolId,
+        name: 'TaskUpdate',
+        input: { taskId: '1', activeForm: `Verifying fallback ${index}` },
+      }],
+    },
+  }, {
+    ...common,
+    uuid: `${toolId}-result`,
+    type: 'user',
+    message: {
+      role: 'user',
+      content: [{
+        type: 'tool_result',
+        tool_use_id: toolId,
+        content: JSON.stringify({ success: true, taskId: '1', updatedFields: ['activeForm'] }),
+      }],
+    },
+  }]
+}
+
 function percentile(values: number[], quantile: number): number {
   const sorted = [...values].sort((a, b) => a - b)
   const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * quantile) - 1))
@@ -77,6 +112,15 @@ function summarize(values: number[]) {
     p95: percentile(values, 0.95),
     max: Math.max(...values),
   }
+}
+
+function checksum(value: unknown): string {
+  const serialized = JSON.stringify(value)
+  let hash = 0x811c9dc5
+  for (let i = 0; i < serialized.length; i++) {
+    hash = Math.imul(hash ^ serialized.charCodeAt(i), 0x01000193)
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0')
 }
 
 async function timed<T>(run: () => Promise<T>): Promise<{ durationMs: number; value: T }> {
@@ -146,36 +190,65 @@ async function main(): Promise<void> {
   const initialExpected = formatTranscriptCards(threaded)
   const streamingExpected = formatTranscriptCards(finalStreamingThreaded)
 
-  const mutatedRaw = [...streamingRaw]
-  mutatedRaw[10] = {
-    ...mutatedRaw[10],
-    message: { role: 'user', content: 'Mutated content must force a full-format fallback.' },
+  const mutationSession = session('mutation')
+  let mutatedRaw = [...streamingRaw]
+  let mutatedThreaded = buildThreadedMessages(mutatedRaw)
+  let mutatedCards = await formatTranscriptCardsAsync(mutationSession, mutatedThreaded, 'balanced', true)
+  const mutationRoundTrips: number[] = []
+  for (let run = 0; run < RUNS; run += 1) {
+    mutatedRaw = [...mutatedRaw]
+    const index = 10 + run * 2
+    mutatedRaw[index] = {
+      ...mutatedRaw[index],
+      message: { role: 'user', content: `Mutated content ${run} must preserve byte-identical output.` },
+    }
+    mutatedThreaded = buildThreadedMessages(mutatedRaw)
+    const sample = await timed(() => formatTranscriptCardsAsync(
+      mutationSession,
+      mutatedThreaded,
+      'balanced',
+      true,
+    ))
+    mutationRoundTrips.push(sample.durationMs)
+    mutatedCards = sample.value
   }
-  const mutatedThreaded = buildThreadedMessages(mutatedRaw)
-  const mutatedCards = await formatTranscriptCardsAsync(
-    streamingSession,
-    mutatedThreaded,
-    'balanced',
-    true,
-  )
-  const truncatedRaw = mutatedRaw.slice(0, -3)
-  const truncatedThreaded = buildThreadedMessages(truncatedRaw)
-  const truncatedCards = await formatTranscriptCardsAsync(
-    streamingSession,
-    truncatedThreaded,
-    'balanced',
-    true,
-  )
-  const taskListThreaded = buildThreadedMessages([
-    ...truncatedRaw,
-    ...makeTaskListMessages(MESSAGE_COUNT + RUNS),
-  ])
-  const taskListCards = await formatTranscriptCardsAsync(
-    streamingSession,
-    taskListThreaded,
-    'balanced',
-    true,
-  )
+
+  const truncationSession = session('truncation')
+  await formatTranscriptCardsAsync(truncationSession, threaded, 'balanced', true)
+  const truncationRoundTrips: number[] = []
+  let truncatedRaw = rawMessages
+  let truncatedThreaded = threaded
+  let truncatedCards = firstWorkerCards!
+  for (let run = 0; run < RUNS; run += 1) {
+    truncatedRaw = rawMessages.slice(0, -(run + 1))
+    truncatedThreaded = buildThreadedMessages(truncatedRaw)
+    const sample = await timed(() => formatTranscriptCardsAsync(
+      truncationSession,
+      truncatedThreaded,
+      'balanced',
+      true,
+    ))
+    truncationRoundTrips.push(sample.durationMs)
+    truncatedCards = sample.value
+  }
+
+  const taskListSession = session('task-list')
+  let taskListRaw = [...rawMessages, ...makeTaskListMessages(MESSAGE_COUNT)]
+  let taskListThreaded = buildThreadedMessages(taskListRaw)
+  let taskListCards = await formatTranscriptCardsAsync(taskListSession, taskListThreaded, 'balanced', true)
+  const taskListRoundTrips: number[] = []
+  for (let run = 0; run < RUNS; run += 1) {
+    taskListRaw = [...taskListRaw, ...makeTaskUpdateMessages(MESSAGE_COUNT + run)]
+    taskListThreaded = buildThreadedMessages(taskListRaw)
+    const sample = await timed(() => formatTranscriptCardsAsync(
+      taskListSession,
+      taskListThreaded,
+      'balanced',
+      true,
+    ))
+    taskListRoundTrips.push(sample.durationMs)
+    taskListCards = sample.value
+  }
   const output = {
     schemaVersion: 1,
     benchmark: 'opentui-threading-worker-latency',
@@ -183,6 +256,9 @@ async function main(): Promise<void> {
     latencyMs: {
       fullRoundTrip: summarize(fullRoundTrips),
       streamingAppendRoundTrip: summarize(streamingRoundTrips),
+      mutationRoundTrip: summarize(mutationRoundTrips),
+      truncationRoundTrip: summarize(truncationRoundTrips),
+      taskListDependentRoundTrip: summarize(taskListRoundTrips),
       mainThreadCacheHit: summarize(cachedRoundTrips),
     },
     correctness: {
@@ -191,6 +267,14 @@ async function main(): Promise<void> {
       mutationFallbackByteIdentical: JSON.stringify(mutatedCards) === JSON.stringify(formatTranscriptCards(mutatedThreaded)),
       truncationFallbackByteIdentical: JSON.stringify(truncatedCards) === JSON.stringify(formatTranscriptCards(truncatedThreaded)),
       taskListFallbackByteIdentical: JSON.stringify(taskListCards) === JSON.stringify(formatTranscriptCards(taskListThreaded)),
+      checksums: {
+        mutation: checksum(mutatedCards),
+        mutationExpected: checksum(formatTranscriptCards(mutatedThreaded)),
+        truncation: checksum(truncatedCards),
+        truncationExpected: checksum(formatTranscriptCards(truncatedThreaded)),
+        taskListDependent: checksum(taskListCards),
+        taskListDependentExpected: checksum(formatTranscriptCards(taskListThreaded)),
+      },
       initialCardCount: firstWorkerCards!.length,
       streamingCardCount: finalStreamingCards.length,
     },

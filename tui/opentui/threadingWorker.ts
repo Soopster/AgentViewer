@@ -5,7 +5,12 @@ import {
   type IncrementalThreadingCache,
   type ThreadedMessage,
 } from '../../lib/threading'
-import { buildTranscriptTaskContext, formatTranscriptCard, type TuiTranscriptCard } from '../format'
+import {
+  buildTranscriptTaskContext,
+  formatTranscriptCard,
+  type TranscriptTaskContext,
+  type TuiTranscriptCard,
+} from '../format'
 import type { TuiDensity } from '../theme'
 import type { ProviderSelection, Session, SessionInfo, SessionMessage } from '../../lib/types'
 import { readTuiSessionDetailSource, readTuiSessions } from '../../lib/tui/service'
@@ -28,7 +33,8 @@ type FormatRequest = {
   session: Session
   threaded?: ThreadedMessage[]
   threadedPrefix?: number
-  threadedSuffix?: ThreadedMessage[]
+  threadedDeleteCount?: number
+  threadedPatch?: ThreadedMessage[]
   previousFormatToken?: number
   density: TuiDensity
   showToolCalls: boolean
@@ -70,8 +76,9 @@ type WorkerResponse =
   | {
       id: number
       ok: true
-      cardsSuffix: TuiTranscriptCard[]
+      cardsPatch: TuiTranscriptCard[]
       cardsPrefix: number
+      cardsDeleteCount: number
       formatToken: number
       baseFormatToken: number
     }
@@ -107,6 +114,13 @@ function sharedIdentityPrefix<T>(next: readonly T[], prev: readonly T[]): number
   const limit = Math.min(next.length, prev.length)
   let i = 0
   while (i < limit && next[i] === prev[i]) i++
+  return i
+}
+
+function sharedIdentitySuffix<T>(next: readonly T[], prev: readonly T[], prefix: number): number {
+  const limit = Math.min(next.length, prev.length) - prefix
+  let i = 0
+  while (i < limit && next[next.length - 1 - i] === prev[prev.length - 1 - i]) i++
   return i
 }
 
@@ -217,6 +231,7 @@ function formatCards(
   density: TuiDensity,
   showToolCalls: boolean,
   pruneCache = true,
+  taskContext?: TranscriptTaskContext,
 ): TuiTranscriptCard[] {
   const messages = showToolCalls ? threaded : stripToolCallBlocks(threaded)
   let perSession = cardCacheByKey.get(sessionCacheKey)
@@ -224,7 +239,7 @@ function formatCards(
     perSession = new Map()
     cardCacheByKey.set(sessionCacheKey, perSession)
   }
-  const { activeForms, taskRegistry } = buildTranscriptTaskContext(messages)
+  const { activeForms, taskRegistry } = taskContext ?? buildTranscriptTaskContext(messages)
 
   const cards: TuiTranscriptCard[] = new Array(messages.length)
   const seenMessageKeys = new Set<string>()
@@ -290,6 +305,12 @@ function formatCards(
   return cards
 }
 
+function pruneCardCacheMessages(sessionCacheKey: string, messages: ThreadedMessage[]): void {
+  const perSession = cardCacheByKey.get(sessionCacheKey)
+  if (!perSession) return
+  for (const message of messages) perSession.delete(threadedMessageFingerprint(message))
+}
+
 self.onmessage = async (event) => {
   const data = event.data
   try {
@@ -303,39 +324,82 @@ self.onmessage = async (event) => {
       const cardsVariant = `${data.density}|${data.showToolCalls ? 1 : 0}`
       const formatKey = `${sessionCacheKey}|${cardsVariant}`
       const prev = lastFormattedByKey.get(formatKey)
-      const canApplyAppend = Boolean(
+      const canApplyPatch = Boolean(
         prev
         && data.previousFormatToken === prev.formatToken
-        && data.threadedPrefix === prev.threaded.length
-        && Array.isArray(data.threadedSuffix),
+        && Number.isInteger(data.threadedPrefix)
+        && Number.isInteger(data.threadedDeleteCount)
+        && (data.threadedPrefix ?? -1) >= 0
+        && (data.threadedDeleteCount ?? -1) >= 0
+        && (data.threadedPrefix ?? 0) + (data.threadedDeleteCount ?? 0) <= prev.threaded.length
+        && Array.isArray(data.threadedPatch),
       )
-      const threaded = canApplyAppend && prev
-        ? prev.threaded.concat(data.threadedSuffix ?? [])
+      const threaded = canApplyPatch && prev
+        ? prev.threaded.slice(0, data.threadedPrefix).concat(
+            data.threadedPatch ?? [],
+            prev.threaded.slice((data.threadedPrefix ?? 0) + (data.threadedDeleteCount ?? 0)),
+          )
         : data.threaded
       if (!threaded) throw new Error('threading worker format delta baseline unavailable')
 
-      const suffix = canApplyAppend && prev ? data.threadedSuffix ?? [] : null
-      const suffixHasTaskList = suffix?.some(hasTaskListBlock) ?? false
-      if (canApplyAppend && prev && suffix && !prev.hasTaskList && !suffixHasTaskList) {
-        const cardsSuffix = formatCards(
+      const patch = canApplyPatch && prev ? data.threadedPatch ?? [] : null
+      const patchHasTaskList = patch?.some(hasTaskListBlock) ?? false
+      // With visible tool calls, cards map 1:1 to threaded messages. Format
+      // only the inserted/replaced middle and retain both unchanged ends.
+      // TaskList is the sole global dependency: build its context once and
+      // selectively refresh only TaskList cards outside the changed middle.
+      if (canApplyPatch && prev && patch && data.showToolCalls) {
+        const threadedPrefix = data.threadedPrefix ?? 0
+        const threadedDeleteCount = data.threadedDeleteCount ?? 0
+        pruneCardCacheMessages(
           sessionCacheKey,
-          suffix,
+          prev.threaded.slice(threadedPrefix, threadedPrefix + threadedDeleteCount),
+        )
+        const hasTaskList = prev.hasTaskList || patchHasTaskList
+          ? threaded.some(hasTaskListBlock)
+          : false
+        const taskContext = hasTaskList ? buildTranscriptTaskContext(threaded) : undefined
+        const cardsPatch = formatCards(
+          sessionCacheKey,
+          patch,
           data.density,
           data.showToolCalls,
           false,
+          taskContext,
         )
-        const transcriptCards = prev.cards.concat(cardsSuffix)
+        const transcriptCards = prev.cards.slice(0, threadedPrefix).concat(
+          cardsPatch,
+          prev.cards.slice(threadedPrefix + threadedDeleteCount),
+        )
+        if (hasTaskList && taskContext) {
+          const patchEnd = threadedPrefix + patch.length
+          for (let i = 0; i < threaded.length; i++) {
+            if (i >= threadedPrefix && i < patchEnd) continue
+            if (!hasTaskListBlock(threaded[i])) continue
+            transcriptCards[i] = formatCards(
+              sessionCacheKey,
+              [threaded[i]],
+              data.density,
+              data.showToolCalls,
+              false,
+              taskContext,
+            )[0]
+          }
+        }
         touchLastFormatted(formatKey, {
           threaded,
           cards: transcriptCards,
           formatToken: data.id,
-          hasTaskList: false,
+          hasTaskList,
         })
+        const cardsPrefix = sharedIdentityPrefix(transcriptCards, prev.cards)
+        const cardsSuffix = sharedIdentitySuffix(transcriptCards, prev.cards, cardsPrefix)
         self.postMessage({
           id: data.id,
           ok: true,
-          cardsSuffix,
-          cardsPrefix: prev.cards.length,
+          cardsPatch: transcriptCards.slice(cardsPrefix, transcriptCards.length - cardsSuffix),
+          cardsPrefix,
+          cardsDeleteCount: prev.cards.length - cardsPrefix - cardsSuffix,
           formatToken: data.id,
           baseFormatToken: prev.formatToken,
         })
@@ -349,6 +413,20 @@ self.onmessage = async (event) => {
         formatToken: data.id,
         hasTaskList: threaded.some(hasTaskListBlock),
       })
+      if (canApplyPatch && prev) {
+        const cardsPrefix = sharedIdentityPrefix(transcriptCards, prev.cards)
+        const cardsSuffix = sharedIdentitySuffix(transcriptCards, prev.cards, cardsPrefix)
+        self.postMessage({
+          id: data.id,
+          ok: true,
+          cardsPatch: transcriptCards.slice(cardsPrefix, transcriptCards.length - cardsSuffix),
+          cardsPrefix,
+          cardsDeleteCount: prev.cards.length - cardsPrefix - cardsSuffix,
+          formatToken: data.id,
+          baseFormatToken: prev.formatToken,
+        })
+        return
+      }
       self.postMessage({ id: data.id, ok: true, transcriptCards, formatToken: data.id })
       return
     }
