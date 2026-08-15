@@ -16803,8 +16803,11 @@ export default function OpenTuiApp() {
       })
       return
     }
-    if (fleetStripVisible && /^[1-9]$/.test(sequence) && !key.ctrl && !key.meta && !key.option) {
-      handled(() => jumpToFleetEntry(Number(sequence) - 1))
+    const fleetDigit = /^[1-9]$/.test(sequence)
+      ? sequence
+      : /^[1-9]$/.test(key.name) ? key.name : null
+    if (fleetStripVisible && fleetDigit && !key.ctrl && !key.meta && !key.option) {
+      handled(() => jumpToFleetEntry(Number(fleetDigit) - 1))
       return
     }
     if (

@@ -60,9 +60,9 @@ const waitForFrame = async (
 }
 
 const fleetLine = (frame: string) => frame.split('\n').find((line) => line.includes('FLEET')) ?? ''
-const fleetNumberColor = (number: number): string | null => {
+const fleetEntryColor = (title: string): string | null => {
   const line = captureSpans().lines.find((candidate) => candidate.spans.some((span) => span.text.includes('FLEET')))
-  return line?.spans.find((span) => span.text === `${number} `)?.fg.toString() ?? null
+  return line?.spans.find((span) => span.text === title)?.fg.toString() ?? null
 }
 
 // A running turn on a session the user is NOT viewing.
@@ -112,14 +112,19 @@ frame = await waitForFrame(
 const overflowSessionIds = Array.from({ length: 10 }, (_, index) => `p${String(index + 1).padStart(2, '0')}`)
 act(() => {
   for (const sessionId of overflowSessionIds) {
-    setRunningSession(sessionId, { provider: 'claude', interrupt: async () => {} })
+    setWaitingSession({
+      sessionId,
+      provider: 'claude',
+      backgroundTasks: [{ id: `task-${sessionId}`, type: 'local', status: 'running', description: 'indexing' }],
+      sessionCrons: [],
+    })
   }
 })
 frame = await waitForFrame(
   'Fleet overflow did not render the first page contract',
   (candidate) => {
     const line = fleetLine(candidate)
-    return line.includes('FLEET 1/2') && line.includes('{ } pages') && line.includes('9 ●')
+    return line.includes('FLEET 1/2') && line.includes('{ } pages') && line.includes('9 ◌')
   },
 )
 
@@ -129,16 +134,16 @@ frame = await waitForFrame(
   'Shift+[ did not wrap to the final fleet page',
   (candidate) => {
     const line = fleetLine(candidate)
-    return line.includes('FLEET 2/2') && line.includes('1 ● p09') && line.includes('2 ● p10')
+    return line.includes('FLEET 2/2') && line.includes('1 ◌ p09') && line.includes('2 ◌ p10')
   },
 )
 
 // Digits select the visible page, not the absolute first nine entries. The
-// selected cell's number changes from the dim color to the provider accent.
-const unselectedPageTwoColor = fleetNumberColor(1)
+// selected cell's title changes from muted to the active text color.
+const unselectedPageTwoColor = fleetEntryColor('p09')
 act(() => { setup.mockInput.pressKey('1') })
 await settle(150)
-const selectedPageTwoColor = fleetNumberColor(1)
+const selectedPageTwoColor = fleetEntryColor('p09')
 if (!unselectedPageTwoColor || !selectedPageTwoColor || unselectedPageTwoColor === selectedPageTwoColor) {
   fail(`Fleet page-local digit selection did not highlight entry 10:\n${captureCharFrame()}`)
 }
@@ -151,7 +156,7 @@ frame = await waitForFrame(
 )
 
 act(() => {
-  for (const sessionId of overflowSessionIds) clearRunningSession(sessionId)
+  for (const sessionId of overflowSessionIds) clearWaitingSession(sessionId)
 })
 frame = await waitForFrame(
   'Fleet page did not clamp after the registry shrank below ten entries',
