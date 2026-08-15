@@ -1,6 +1,16 @@
 import type { NextConfig } from 'next'
 
 const nextConfig: NextConfig = {
+  // Traces a pruned production node_modules for packaging (e.g. the Tauri
+  // desktop sidecar); keep serverExternalPackages/node:sqlite indirection
+  // working under standalone tracing — see CLAUDE.md's node:sqlite note.
+  output: 'standalone',
+  // .agent-viewer-data is gitignored runtime state (search index, coord
+  // worktrees, tags) — never packaging input. Without this, the tracer
+  // sweeps up nested worktree symlinks under it and fails to copy them.
+  outputFileTracingExcludes: {
+    '*': ['.agent-viewer-data/**'],
+  },
   experimental: {
     optimizePackageImports: ['lucide-react', 'recharts'],
   },

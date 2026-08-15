@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process'
-import { accessSync, constants as fsConstants, statSync } from 'node:fs'
+import { accessSync, constants as fsConstants, existsSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -407,16 +407,26 @@ Run \`agent-viewer coord <subcommand> --help\` for subcommand-specific options.`
     forwardSignals(child)
     trackExit(child)
   } else {
-    const nextBin = fileURLToPath(new URL('../node_modules/next/dist/bin/next', import.meta.url))
-    const nextArgs = [production ? 'start' : 'dev', '--hostname', '127.0.0.1']
-    if (port) {
-      nextArgs.push('--port', port)
-    }
-    nextArgs.push(...forwarded)
+    // A packaged app (e.g. the Tauri desktop shell) ships `next build`'s
+    // pruned `output: 'standalone'` tree instead of a full node_modules/next
+    // install — run its self-contained server.js directly rather than
+    // through the `next` CLI, which standalone builds don't include.
+    const standaloneServer = fileURLToPath(new URL('../.next/standalone/server.js', import.meta.url))
+    const webPort = String(port || process.env.PORT || 3000)
+    let child
 
-    const child = spawn(process.execPath, [nextBin, ...nextArgs], {
-      stdio: 'inherit',
-    })
+    if (production && existsSync(standaloneServer)) {
+      child = spawn(process.execPath, [standaloneServer, ...forwarded], {
+        stdio: 'inherit',
+        env: { ...process.env, PORT: webPort, HOSTNAME: '127.0.0.1' },
+      })
+    } else {
+      const nextBin = fileURLToPath(new URL('../node_modules/next/dist/bin/next', import.meta.url))
+      const nextArgs = [production ? 'start' : 'dev', '--hostname', '127.0.0.1', '--port', webPort, ...forwarded]
+      child = spawn(process.execPath, [nextBin, ...nextArgs], {
+        stdio: 'inherit',
+      })
+    }
 
     child.on('error', (error) => {
       throw error
@@ -431,8 +441,7 @@ Run \`agent-viewer coord <subcommand> --help\` for subcommand-specific options.`
         child.kill('SIGTERM')
         failMissingBun()
       } else {
-        const webPort = Number(port || process.env.PORT || 3000)
-        const resolvedAhpPort = Number(ahpPort || process.env.AGENT_VIEWER_AHP_PORT || webPort + 1)
+        const resolvedAhpPort = Number(ahpPort || process.env.AGENT_VIEWER_AHP_PORT || Number(webPort) + 1)
         if (!Number.isSafeInteger(resolvedAhpPort) || resolvedAhpPort < 1 || resolvedAhpPort > 65535) {
           child.kill('SIGTERM')
           throw new Error(`Invalid AHP port: ${ahpPort || process.env.AGENT_VIEWER_AHP_PORT}`)
