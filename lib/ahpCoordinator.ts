@@ -169,6 +169,20 @@ function fileUri(filePath: string): URI {
   return pathToFileURL(filePath).href
 }
 
+// The run's baseCwd is always workingDirectories[0] — a fixed process root
+// that predates every agent and can't be reassigned once the run starts, so
+// it satisfies MultipleWorkingDirectoriesCapability.immutablePrimary. Any
+// distinct git-worktree paths teammates were spawned into are additional
+// equal-peer directories the session grants tool access to.
+function sessionWorkingDirectories(run: ProtocolRun, agents: ProtocolAgent[]): URI[] {
+  const primary = fileUri(run.baseCwd)
+  const extra = agents
+    .map((agent) => agent.worktreePath)
+    .filter((worktreePath): worktreePath is string => Boolean(worktreePath) && worktreePath !== run.baseCwd)
+    .map(fileUri)
+  return [primary, ...new Set(extra)]
+}
+
 function chatSummary(run: ProtocolRun, agent: ProtocolAgent, leadAgent: ProtocolAgent | undefined): ChatSummary {
   const workingDirectories = agent.worktreePath ? [fileUri(agent.worktreePath)] : undefined
   // Non-lead chats report themselves as spawned by the lead's synthetic
@@ -278,8 +292,8 @@ function coordinatorMeta(snapshot: ProtocolRunSnapshot): Record<string, unknown>
   }
 }
 
-export function coordinatorSessionSummary(run: ProtocolRun): SessionSummary {
-  const workingDirectories = [fileUri(run.baseCwd)]
+export function coordinatorSessionSummary(run: ProtocolRun, agents: ProtocolAgent[] = []): SessionSummary {
+  const workingDirectories = sessionWorkingDirectories(run, agents)
   return {
     resource: coordinatorSessionUri(run.id),
     provider: run.provider,
@@ -316,7 +330,7 @@ export function coordinatorSessionState(snapshot: ProtocolRunSnapshot): SessionS
       inputSchema: { type: 'object' },
     })),
   }] : [])
-  const workingDirectories = [fileUri(snapshot.run.baseCwd)]
+  const workingDirectories = sessionWorkingDirectories(snapshot.run, snapshot.agents)
   return {
     provider: snapshot.run.provider,
     title: snapshot.run.prompt.split('\n')[0]?.trim().slice(0, 120) || 'Coordinator run',
@@ -377,7 +391,10 @@ export function coordinatorRootState(activeSessions: number): RootState {
     displayName,
     description: `Run ${displayName} in an Agent Viewer multi-agent Coordinator session.`,
     models: [],
-    capabilities: {},
+    // The run's baseCwd (workingDirectories[0]) is fixed for the run's
+    // lifetime — teammates get additional worktree directories, never a
+    // replacement for the primary — so immutablePrimary applies.
+    capabilities: { multipleWorkingDirectories: { immutablePrimary: true } },
   } as AgentInfo))
   return {
     agents,
