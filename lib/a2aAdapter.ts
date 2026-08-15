@@ -18,6 +18,7 @@ import { A2A_COORDINATION_EXTENSION_URI, taskStateFromStatus } from './agentProt
 import type {
   A2AAgentCard,
   A2AArtifact,
+  A2AMessage,
   A2ATask,
   A2ATaskState,
   A2ATaskStatus,
@@ -59,7 +60,33 @@ function taskAddress(id: unknown, pathRunId?: string): { runId: string; taskId: 
   return pathRunId ? { runId: pathRunId, taskId: value } : null
 }
 
-export function protocolTaskToA2A(task: ProtocolTask, includeArtifacts = true): A2ATask {
+function taskHistory(task: ProtocolTask, historyLength?: number): A2AMessage[] | undefined {
+  if (historyLength !== undefined && historyLength <= 0) return undefined
+  const history: A2AMessage[] = []
+  if (task.prompt) {
+    history.push({
+      messageId: `${externalTaskId(task)}-request`,
+      contextId: task.runId,
+      taskId: externalTaskId(task),
+      role: 'ROLE_USER',
+      parts: [{ text: task.prompt }],
+    })
+  }
+  const resultText = [task.resultSummary, task.resultDetail].filter(Boolean).join('\n\n')
+  if (resultText) {
+    history.push({
+      messageId: `${externalTaskId(task)}-result`,
+      contextId: task.runId,
+      taskId: externalTaskId(task),
+      role: 'ROLE_AGENT',
+      parts: [{ text: resultText }],
+    })
+  }
+  if (!history.length) return undefined
+  return historyLength !== undefined ? history.slice(-historyLength) : history
+}
+
+export function protocolTaskToA2A(task: ProtocolTask, includeArtifacts = true, includeExtensionMetadata = true, historyLength?: number): A2ATask {
   const status: A2ATaskStatus = {
     state: taskStateFromStatus(task.status),
     timestamp: task.updatedAt,
@@ -70,7 +97,8 @@ export function protocolTaskToA2A(task: ProtocolTask, includeArtifacts = true): 
     contextId: task.runId,
     status,
     artifacts: artifact ? [artifact] : undefined,
-    metadata: {
+    history: taskHistory(task, historyLength),
+    metadata: includeExtensionMetadata ? {
       coordinatorTaskId: task.id,
       title: task.title,
       prompt: task.prompt,
@@ -78,7 +106,7 @@ export function protocolTaskToA2A(task: ProtocolTask, includeArtifacts = true): 
       blockedBy: task.blockedBy,
       phase: task.phase,
       ownerAgentId: task.ownerAgentId,
-    },
+    } : undefined,
   }
 }
 
@@ -125,6 +153,13 @@ function statusesForState(state: string | undefined): ProtocolTaskStatus[] | und
   return matches.length ? matches : []
 }
 
+function parseHistoryLength(value: unknown): number | undefined {
+  if (value === undefined) return undefined
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed < 0) throw new Error('historyLength must be a non-negative integer')
+  return parsed
+}
+
 function encodePageToken(offset: number): string {
   return Buffer.from(JSON.stringify({ offset }), 'utf8').toString('base64url')
 }
@@ -165,11 +200,13 @@ export function streamA2ATaskUpdates(
   rpcId: unknown,
   address: { runId: string; taskId: string },
   initial: ProtocolTask,
+  includeExtensionMetadata = true,
+  historyLength?: number,
 ): Response {
   const stream = new ReadableStream({
     async start(controller) {
       let lastState = taskStateFromStatus(initial.status)
-      controller.enqueue(sseChunk({ jsonrpc: '2.0', id: rpcId, result: { task: protocolTaskToA2A(initial) } }))
+      controller.enqueue(sseChunk({ jsonrpc: '2.0', id: rpcId, result: { task: protocolTaskToA2A(initial, true, includeExtensionMetadata, historyLength) } }))
       if (A2A_TERMINAL_STATES.has(lastState)) {
         controller.close()
         return
@@ -181,6 +218,10 @@ export function streamA2ATaskUpdates(
         const state = taskStateFromStatus(task.status)
         if (state === lastState) continue
         lastState = state
+        if (A2A_TERMINAL_STATES.has(state)) {
+          controller.enqueue(sseChunk({ jsonrpc: '2.0', id: rpcId, result: { task: protocolTaskToA2A(task, true, includeExtensionMetadata, historyLength) } }))
+          break
+        }
         controller.enqueue(sseChunk({
           jsonrpc: '2.0',
           id: rpcId,
@@ -192,7 +233,6 @@ export function streamA2ATaskUpdates(
             },
           },
         }))
-        if (A2A_TERMINAL_STATES.has(state)) break
       }
       controller.close()
     },
@@ -276,6 +316,7 @@ export async function handleA2AJsonRpc(
   body: A2AJsonRpcRequest | null,
   pathRunId?: string,
   signal?: AbortSignal,
+  includeExtensionMetadata = true,
 ): Promise<Response> {
   if (!body || body.jsonrpc !== '2.0' || typeof body.method !== 'string') {
     return rpcError(body?.id, -32600, 'Invalid Request: expected a JSON-RPC 2.0 envelope', 400)
@@ -295,14 +336,15 @@ export async function handleA2AJsonRpc(
       }
       const task = await submitA2AMessageAsTask(runId, params.message)
       const address = { runId, taskId: task.id }
-      if (method === 'SendStreamingMessage') return streamA2ATaskUpdates(id, address, task)
       const configuration = params.configuration && typeof params.configuration === 'object'
         ? params.configuration as Record<string, unknown>
         : {}
+      const historyLength = parseHistoryLength(configuration.historyLength)
+      if (method === 'SendStreamingMessage') return streamA2ATaskUpdates(id, address, task, includeExtensionMetadata, historyLength)
       const result = configuration.returnImmediately === true
         ? task
         : await waitForTerminalTask(address, task, signal)
-      return rpcResult(id, { task: protocolTaskToA2A(result) })
+      return rpcResult(id, { task: protocolTaskToA2A(result, true, includeExtensionMetadata, historyLength) })
     }
 
     if (method === 'ListTasks') {
@@ -317,6 +359,7 @@ export async function handleA2AJsonRpc(
       if (updatedAfter && Number.isNaN(Date.parse(updatedAfter))) {
         return rpcError(id, -32602, 'statusTimestampAfter must be an ISO 8601 timestamp', 400)
       }
+      const historyLength = parseHistoryLength(params.historyLength)
       const result = await listProtocolTasksForFacade({
         runId: pathRunId ?? (typeof params.contextId === 'string' ? params.contextId : undefined),
         statuses,
@@ -326,7 +369,7 @@ export async function handleA2AJsonRpc(
       })
       const nextOffset = offset + result.tasks.length
       return rpcResult(id, {
-        tasks: result.tasks.map((task) => protocolTaskToA2A(task, params.includeArtifacts === true)),
+        tasks: result.tasks.map((task) => protocolTaskToA2A(task, params.includeArtifacts === true, includeExtensionMetadata, historyLength)),
         nextPageToken: nextOffset < result.total ? encodePageToken(nextOffset) : '',
         pageSize: pageSizeValue,
         totalSize: result.total,
@@ -338,16 +381,25 @@ export async function handleA2AJsonRpc(
       if (!address) return rpcError(id, -32602, 'A globally scoped task id is required', 400)
       if (method === 'GetTask') {
       const task = await getTask(address)
-      return task ? rpcResult(id, protocolTaskToA2A(task)) : rpcError(id, -32001, 'Task not found')
+      const historyLength = parseHistoryLength(params.historyLength)
+      return task ? rpcResult(id, protocolTaskToA2A(task, true, includeExtensionMetadata, historyLength)) : rpcError(id, -32001, 'Task not found')
       }
       if (method === 'CancelTask') {
-        const task = await cancelProtocolTask(address.runId, address.taskId, 'Cancelled through A2A 1.0')
-        return rpcResult(id, protocolTaskToA2A(task))
+        const metadata = params.metadata && typeof params.metadata === 'object'
+          ? params.metadata as Record<string, unknown>
+          : undefined
+        const reason = typeof metadata?.reason === 'string'
+          ? metadata.reason
+          : typeof metadata?.note === 'string'
+            ? metadata.note
+            : 'Cancelled through A2A 1.0'
+        const task = await cancelProtocolTask(address.runId, address.taskId, reason)
+        return rpcResult(id, protocolTaskToA2A(task, true, includeExtensionMetadata))
       }
       const task = await getTask(address)
       if (!task) return rpcError(id, -32001, 'Task not found')
       if (A2A_TERMINAL_STATES.has(taskStateFromStatus(task.status))) return rpcError(id, -32004, 'Cannot subscribe to a terminal task')
-      return streamA2ATaskUpdates(id, address, task)
+      return streamA2ATaskUpdates(id, address, task, includeExtensionMetadata)
     }
 
     if (method === 'CreateTaskPushNotificationConfig') {
@@ -413,7 +465,7 @@ export async function handleA2AJsonRpc(
       return rpcResult(id, {})
     }
 
-    if (method === 'GetExtendedAgentCard') return rpcError(id, -32004, 'Extended Agent Card is not supported')
+    if (method === 'GetExtendedAgentCard') return rpcError(id, -32007, 'Extended Agent Card is not configured')
     return rpcError(id, -32601, `Method not found: ${method}`)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Coordinator error'
@@ -455,7 +507,10 @@ export async function handleA2AHttpRequest(request: Request, pathRunId?: string)
   if (request.headers.get('a2a-version') !== A2A_PROTOCOL_VERSION) {
     return rpcError(body.id, -32009, `A2A-Version ${A2A_PROTOCOL_VERSION} is required`, 400)
   }
-  return handleA2AJsonRpc(body, pathRunId, request.signal)
+  const extensionsHeader = request.headers.get('a2a-extensions')
+  const includeExtensionMetadata = extensionsHeader === null
+    || extensionsHeader.split(',').map((uri) => uri.trim()).includes(A2A_COORDINATION_EXTENSION_URI)
+  return handleA2AJsonRpc(body, pathRunId, request.signal, includeExtensionMetadata)
 }
 
 export function buildCoordinatorAgentCard(baseUrl: string): A2AAgentCard {

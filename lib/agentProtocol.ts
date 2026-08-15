@@ -82,8 +82,6 @@ export type A2ATaskStatusUpdateEvent = {
   taskId: string
   contextId: string
   status: A2ATaskStatus
-  /** True once the task has reached a terminal state — signals stream end. */
-  final?: boolean
   metadata?: Record<string, unknown>
 }
 
@@ -142,15 +140,39 @@ export type A2AAgentInterface = {
 }
 
 export type A2ASecurityScheme = {
+  apiKeySecurityScheme?: {
+    location: string
+    name: string
+    description?: string
+  }
   httpAuthSecurityScheme?: {
     scheme: string
     bearerFormat?: string
+    description?: string
+  }
+  oauth2SecurityScheme?: {
+    flows: Record<string, unknown>
+    oauth2MetadataUrl?: string
+    description?: string
+  }
+  openIdConnectSecurityScheme?: {
+    openIdConnectUrl: string
+    description?: string
+  }
+  mtlsSecurityScheme?: {
     description?: string
   }
 }
 
 export type A2ASecurityRequirement = {
   schemes: Record<string, { list: string[] }>
+}
+
+/** A JWS signature over an `AgentCard` (RFC 7515). agentViewer never signs its own card today. */
+export type A2AAgentCardSignature = {
+  protected: string
+  signature: string
+  header?: Record<string, unknown>
 }
 
 export type A2AAgentCard = {
@@ -166,6 +188,7 @@ export type A2AAgentCard = {
   defaultInputModes: string[]
   defaultOutputModes: string[]
   skills: A2AAgentSkill[]
+  signatures?: A2AAgentCardSignature[]
   iconUrl?: string
 }
 
