@@ -1,6 +1,6 @@
 ---
 name: coordinate-agents
-description: Start, join, and operate an Agent Viewer Coordinator run through the agent-viewer MCP. Use when Claude should coordinate with other external CLIs, fan a goal into parallel tasks, claim work, exchange inbox messages, manage locks or plans, monitor teammates autonomously, synthesize results, or finalize a multi-agent run.
+description: Start, join, and operate an Agent Viewer Coordinator run through the agent-viewer MCP, including seeded playbooks, provider/model routing, acceptance contracts, budgets, plan/phase/judgment gates, decisions, receipts, resumable checkpoints, and learning promotion. Use when any Claude, Codex, OpenCode, Copilot, or Pi session should coordinate with other CLIs, fan a goal into parallel tasks, claim work, exchange mailbox messages, manage locks, monitor workers, review evidence, synthesize, or finalize a run.
 allowed-tools: Read, Grep, Glob, Edit, Write, Bash, mcp__agent-viewer__coord_*
 ---
 

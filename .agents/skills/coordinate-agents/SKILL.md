@@ -1,6 +1,6 @@
 ---
 name: coordinate-agents
-description: Start, join, and operate an Agent Viewer Coordinator run through the agent-viewer MCP, including seeded playbooks, provider/model routing, acceptance contracts, budgets, plan/phase/judgment gates, decisions, receipts, resumable checkpoints, and learning promotion. Use when any Claude, Codex, OpenCode, Copilot, or Pi session should coordinate with other CLIs, claim work, exchange mailbox messages, manage locks, monitor workers, review evidence, synthesize, or finalize a run.
+description: Start, join, and operate an Agent Viewer Coordinator run through the agent-viewer MCP, including seeded playbooks, provider/model routing, acceptance contracts, budgets, plan/phase/judgment gates, decisions, receipts, resumable checkpoints, and learning promotion. Use when any Claude, Codex, OpenCode, Copilot, or Pi session should coordinate with other CLIs, fan a goal into parallel tasks, claim work, exchange mailbox messages, manage locks, monitor workers, review evidence, synthesize, or finalize a run.
 ---
 
 # Coordinate Agents
@@ -9,60 +9,12 @@ Use the `agent-viewer` MCP Coordinator tools as the source of truth. Keep workin
 
 Communication is part of the work, not overhead. Every other participant runs in a separate CLI process — possibly a different provider entirely — and sees nothing you do not put on the board or in the mailbox. A finished edit that no teammate knows about is unfinished coordination: report it, publish what you learned, and check what others reported before duplicating effort — `coord_query_context` before assuming something hasn't been tried, `coord_publish_finding` after you learn it. When in doubt, over-communicate through `coord_send_message` and `coord_publish_finding` rather than working silently.
 
-## MCP discovery and host features
+## Reference files
 
-The bridge exposes this workflow through ordinary MCP primitives as well as `coord_*` tools. Use the richest representation the host supports, but keep the same Coordinator semantics everywhere.
+This file covers the turn-by-turn loop: entering a run, seeding a multi-agent board, and the lead/teammate workflows. Two topics are split out because they're consulted situationally, not every turn — read them when the situation calls for it, not up front:
 
-- On a modern MCP client, the bridge negotiates protocol revision `2026-07-28` through `server/discover`. Legacy initialize-based clients remain supported, so never treat modern negotiation as a prerequisite for joining or operating a run.
-- If this skill was not installed locally, discover it through `skill://index.json` and read `skill://coordinate-agents/SKILL.md`. The `io.modelcontextprotocol/skills` capability and resource frontmatter identify the canonical `coordinate-agents` skill; do not maintain or follow a second copied workflow.
-- Hosts with MCP Prompts can invoke `coordinate_agents` with an objective and optional `lead` or `teammate` role. The prompt is a bootstrap: read this skill resource before acting, then use the normal entry, task, mailbox, lock, progress, and completion rules below.
-- Tool calls return `structuredContent` plus a JSON text fallback. Prefer `structuredContent` when the client exposes it; parse the text content only when structured data is unavailable. They represent the same result and must not be treated as two events or two mutations.
-- `coord_status` links to the `ui://agent-viewer/coordinator-dashboard.html` MCP App. Apps-capable hosts can inspect and refresh run, task, inbox, lock, and agent state there. The dashboard is a view over `coord_status`, not a substitute for claiming tasks, answering mail, requesting locks, reporting progress, or finalizing through tools.
-- The experimental MCP Tasks extension is available to clients that declare `io.modelcontextprotocol/tasks` on each request. A non-zero `coord_wait` may return a durable task handle; persist its `taskId`, honor `pollIntervalMs`, and call `tasks/get` until it is terminal. The completed task's `result` is the same tool result a blocking client would have received. When a task enters `input_required`, present each `inputRequest` under the host's normal trust rules and return the keyed response through `tasks/update`; never invent responses for the user.
-- `coord_await_run` creates a whole-run monitor for work that an unattended worker or external supervisor is already driving. It can surface pending lead plan reviews as `input_required` elicitations and apply the user's approve/reject response. Do not call it as an interactive lead's next action—the monitor does not claim tasks, answer mail, perform implementation, or synthesize. `tasks/cancel` cancels only the wait/monitor and never stops the Coordinator run or changes board-task state.
-- MCP task handles wrap protocol operations; Coordinator board tasks remain the source of truth for ownership, dependencies, locks, progress, completion, and synthesis. Never create a one-to-one shadow MCP task for every Coordinator task.
-
-## Provider compatibility
-
-Every `coord_*` tool has one implementation and one JSON Schema — there is no provider-specific tool subset, and the `provider` field on `coord_create_run`/`coord_join_run` only labels which CLI is driving that participant for the roster and for provider-level failure handling (`coord_handoff_task`'s `failure_class`); it never gates which tools that participant can call.
-
-- If a tool call is rejected, trust the error message over any assumption about your provider — every rejection (invalid enum, ownership check, gate failure, capability mismatch) is a specific, actionable string, not a generic failure, and holds regardless of which CLI you are.
-- The MCP Tasks extension (`coord_wait`/`coord_await_run` durable handles) only activates when your MCP client declares `io.modelcontextprotocol/tasks`; clients that don't simply get the blocking result instead — this is a capability check, not a provider allowlist, so don't infer anything about provider support from whether you receive a task handle.
-- If your provider's MCP client behaves unexpectedly on a specific tool (schema rejected, structured content ignored, elicitation not surfaced) where another provider handles the same call fine, that is a client-side MCP implementation gap in that CLI, not a Coordinator-side special case to work around — report it via `coord_publish_finding` so the lead and other lanes know, rather than silently avoiding the tool.
-
-## Current Coordinator capability surface
-
-Treat `lib/agentProtocol.ts` and the registered MCP schemas as authoritative. The current run contract supports:
-
-- **Run controls:** `autonomy` (`low|medium|high`), `requirePlanApproval`, `requireReview`, `acceptanceContract` (goal, non-goals, user-visible acceptance, verification commands, manual QA, escalation triggers), and `budget` (`maxTokens`, `maxDurationMinutes`).
-- **Routing:** task `seat` (`director|executor|validator|watcher`), target role, requested provider/model/effort, verification commands, explicit dependencies, and phase barriers. A requested provider/model is routing intent, not proof of what ran.
-- **Evidence:** task completion requires a structured receipt with requested/actual provider and model, provenance (`ok|drift|unknown`), stop reason, usage, changed files, verification results, summary/detail, and open decisions. Model drift or unverifiable provenance remains attention-blocking.
-- **Gates:** teammate plan approval, phase reports with approve/reject, completion gates, open decision resolution, and post-mechanical judgment review before synthesis. Board state—not approval prose inside a rejection—is authoritative.
-- **Recovery and learning:** turn cancellation, provider handoff with failure classification, resume capsules/checkpoints, durable progress evidence, recurring learning candidates, and explicit promotion to playbook, role, or project memory. Promotion is a reviewable decision, not an implicit write.
-
-The unbound MCP bridge currently registers these run/playbook tools: `coord_list_runs`, `coord_create_run`, `coord_preview_playbook`, `coord_list_playbooks`, `coord_save_playbook`, `coord_join_run`, `coord_resume`, `coord_status`, `coord_wait`, and `coord_await_run`. Board and evidence tools are `coord_create_task`, `coord_claim_task`, `coord_release_task`, `coord_leave_run`, `coord_read_inbox`, `coord_send_message`, `coord_handoff_task`, `coord_request_locks`, `coord_progress`, `coord_publish_finding`, `coord_query_context`, `coord_remember`, `coord_save_role`, `coord_list_roles`, `coord_submit_plan`, `coord_review_plan`, `coord_review_phase`, `coord_review_run`, `coord_resolve_decision`, `coord_promote_learning`, `coord_cancel_turn`, `coord_complete_task`, `coord_fail_task`, and `coord_finalize_run`.
-
-Use `coord_preview_playbook` before launching a saved or inline playbook when interpolation, phase barriers, or requested routing needs checking. Use `coord_review_phase` and `coord_review_run` for explicit operator gates; use `coord_resolve_decision` for task-level open decisions; use `coord_promote_learning` only after inspecting the candidate and intended target.
-
-## Surface parity
-
-The same controls are exposed through:
-
-- `POST /api/agent-protocol/runs` for creation and `PATCH /api/agent-protocol/runs/:runId` for plan, phase, judgment, decision, learning, and run-control mutations.
-- The OpenTUI **New Workflow** launcher: outcome brief, acceptance checks, non-goals, manual QA, escalation triggers, playbook/args, provider pool, agent limit, checkout isolation, completion gate, autonomy, plan approval, judgment review, token budget, and duration budget. Tab/Shift+Tab traverses these controls; the launch summary mirrors the submitted contract.
-- Web Agent Operations and Playbook Manager with the same acceptance, review, routing, verification, and budget fields.
-- `agent-viewer coord worker` and the CLI coordinator tools, which preserve the same protocol fields when starting or joining unattended workers.
-
-When changing one surface, update the protocol type/schema, external/MCP adapter, web launcher, OpenTUI launcher, worker CLI, and the relevant smoke assertion together. Verify that a saved playbook round-trips requested provider/model/effort/seat and verification commands; do not validate only the visual roster or an idle board.
-
-## A2A and MCP boundary
-
-Use the two protocols as complementary layers, not interchangeable transports:
-
-- `coord_*` MCP calls are this CLI agent’s structured tools for operating the Coordinator core: board reads and mutations, mailbox delivery, locks, findings, progress, and completion. Keep these operations on MCP over the default persistent AHP connection.
-- The gated A2A 1.0 facade is for a separate autonomous peer or client agent to submit and monitor a higher-level, stateful task. An A2A-created task lands on the same durable Coordinator board and is then claimed and completed through the normal `coord_*` MCP workflow; do not create a shadow MCP task for it.
-- MCP Resources expose `a2a://agent-viewer/coordinator/agent-card.json`, a live projection of the daemon’s public Agent Card. Read it when an MCP host needs to discover the Coordinator’s A2A skills or preferred interface. If the facade is disabled, the resource read fails closed; do not infer that A2A is available merely because the resource URI is listed.
-- Do not wrap `SendMessage` or other conversational A2A operations as ordinary MCP tools. A2A retains task identity, context, streaming, and push semantics across peer-agent turns; reducing it to a stateless tool call loses the distinction the protocols are designed to preserve.
+- **`references/protocol-and-hosts.md`** — MCP host features (Tasks extension, Apps dashboard, prompts, `structuredContent`), provider compatibility rules, the current run/task/gate contract, where the same controls surface outside MCP (web, OpenTUI, HTTP API), and the A2A boundary. Read it when a tool call is rejected for an unfamiliar reason, a client behaves unexpectedly, or you need to know exactly what a run contract supports.
+- **`references/playbooks-and-memory.md`** — saved run definitions (playbooks), durable project memory (`coord_remember`), context search (`coord_query_context`), and reusable role personas. Read it when seeding a run from a saved plan, recording something durable, or defining a persona to reuse across tasks.
 
 ## Enter the run
 
@@ -84,8 +36,7 @@ Use the two protocols as complementary layers, not interchangeable transports:
 6. Read `coord_status` and `coord_read_inbox` immediately after entering.
 7. If setup or recovery is unclear, run `agent-viewer coord doctor --json`; inspect persistent supervisors with `coord workers`, `coord logs`, and `coord restart` rather than creating a duplicate participant.
 8. Narrate every mailbox exchange to your own terminal, one line each: `← <sender>: <message>` on receipt, `→ <recipient>: <message>` after sending. Your user is watching this terminal, not the board — a silent stretch reads as dead even mid-task.
-9. If any `coord_*` call throws (network error, timeout, daemon unreachable), wait ~2s and retry the SAME call with the SAME identity — do not re-create or re-join, and do not ask the user whether to retry; the answer is always yes. An empty or timed-out `coord_wait` result is normal and not a failure; only a thrown error means the connection actually dropped.
-10. Use the default persistent AHP transport through the `coord_*` tools. The bridge reconnects with the same client identity and run subscriptions, and safely retries reads or idempotent mutations once. Do not bypass it with raw Coordinator HTTP calls or set `AGENT_VIEWER_COORD_TRANSPORT=http` during a normal multi-agent run; HTTP exists only as an explicit compatibility/diagnostic fallback.
+9. **Retry rule for every `coord_*` call in this run:** if a call throws (network error, timeout, daemon unreachable), wait ~2s and retry the SAME call with the SAME identity — do not re-create or re-join, and do not ask the user whether to retry; the answer is always yes. An empty or timed-out result (e.g. from `coord_wait`) is normal and not a failure; only a thrown error means the connection actually dropped. Use the default persistent AHP transport through the `coord_*` tools — the bridge reconnects with the same client identity and run subscriptions and safely retries reads or idempotent mutations once. Do not bypass it with raw Coordinator HTTP calls or set `AGENT_VIEWER_COORD_TRANSPORT=http` during a normal multi-agent run; HTTP exists only as an explicit compatibility/diagnostic fallback.
 
 ## Multi-agent startup invariant
 
@@ -95,7 +46,7 @@ When the user requests multiple participating agents, seed the board before star
 2. Do not let the lead claim an umbrella task that contains the work intended for teammates. The lead coordinates while teammate lanes run, then claims the dependent integration task.
 3. Choose a startup path that makes board seeding happen before autonomous claiming:
    - With an unbound interactive MCP bridge, call `coord_create_run`, create the complete task graph, verify it with `coord_status`, and only then start or join teammate workers.
-   - With unattended workers, start from a saved playbook using `coord worker --start ... --playbook <name>`. The playbook must contain the parallel lanes and dependent integration task.
+   - With unattended workers, start from a saved playbook using `coord worker --start ... --playbook <name>` (see `references/playbooks-and-memory.md`). The playbook must contain the parallel lanes and dependent integration task.
    - Never use an unseeded `coord worker --start "<goal>"` for a multi-agent request. Its lead may create and claim the only broad task before teammates arrive. If no suitable playbook exists and the bridge cannot create a seeded run, stop and establish the task graph first instead of launching idle workers.
 4. After workers join, inspect `coord_status` before considering kickoff complete. Confirm the requested roster count, distinct task owners, and a claimed or `working` task for every teammate. Each `snapshot.agents[]` entry carries a `liveness` classification (`fresh`/`stale`/`dead` + `ageSeconds`) — check it before messaging or reassigning, rather than sending a message just to find out via its `delivery` field whether anyone is even listening. If a teammate is idle, create or release/re-scope tasks immediately and send the assignment with `coord_send_message`; do not rely on terminal stdin, local logs, or a worker process being alive as assignment delivery.
 5. Keep write lanes disjoint. Use read-only profiling, audit, or verification lanes without write paths when implementation paths must remain locked by another task.
@@ -104,36 +55,16 @@ When the user requests multiple participating agents, seed the board before star
 
 Before finalization, audit substantive participation. Count an agent only when Coordinator evidence shows at least one of: a claimed and worked task, a completed task, a published finding, or a substantive task-related mailbox response. `agent.ready`, heartbeats, idle status, and checkout setup do not count. If the user requested N participating agents, do not finalize until N agents meet this gate; create follow-up review or verification tasks when useful, or report the shortfall honestly if meaningful work no longer remains.
 
-## Playbooks (reusable runs)
-
-A playbook is a saved run definition — the plan held in an artifact instead of a planning turn, like Claude Code dynamic workflows. Playbooks live in `<checkout>/.agent-viewer/playbooks/<name>.json` and are shared with everyone who clones the repo.
-
-- Discover them with `coord_list_playbooks`; each entry shows a description and an `argsHint` for what to pass.
-- Before committing to a playbook + args combination, sanity-check it with `coord_preview_playbook` (same `playbook_name`/`playbook`/`args`/`cwd` inputs as `coord_create_run`) — it returns the exact task ids, titles, prompts, and dependency graph that would be seeded, without creating a run or touching the database. Useful when `args` interpolation or a dependency key might not resolve the way you expect.
-- Run one with `coord_create_run` using `playbook_name` and `args` — the whole task board is seeded instantly with phases as dependency barriers (phase N+1 waits for all of phase N), and `{{args}}` / `{{args.<key>}}` placeholders in task text are filled from `args`. No lead planning turn is needed; teammates can claim immediately.
-- When a run's board is worth repeating, the lead saves it with `coord_save_playbook` (a name slug, description, and args hint). Prefer running a saved playbook over re-deriving the same plan.
-- Status responses include a `phases` rollup (per-phase task counts) — use it to report progress phase by phase.
-- A single CLI can kick off a playbook run alone and then staff it either way: spawn unattended workers with `agent-viewer coord worker --join latest --name <name> --provider codex|claude|opencode|copilot|pi` (one per lane, via the shell) and supervise as lead, or — when no teammates are expected — claim and work teammate tasks itself phase by phase. Once a live teammate exists, role affinity is enforced: teammates claim `teammate`/`any` lanes and leads claim `lead`/`any` lanes. Phase barriers still enforce order.
-
-## Project memory, context search, and reusable roles
-
-Some Coordinator state lives at the repo root under `<checkout>/.agent-viewer/` and outlives a single run — unlike the task board, mailbox, and findings, which are scoped to one run and gone once it finalizes.
-
-- `coord_remember(summary, detail?)` records a durable fact into `.agent-viewer/memory.md` — an architecture decision, a gotcha, an established pattern. Every future Coordinator run in this project starts with a tail of it already in the initial instructions. Use it sparingly for genuinely durable context; routine progress still belongs in `coord_publish_finding`, which is run-scoped and does not persist.
-- `coord_query_context(query, limit?)` is a lexical search over this run's findings, learnings, task outcomes, and the project's durable memory. Reach for it instead of re-reading all of `coord_status` when you only need context on one topic — after rejoining a long-running run, or picking up a task another lane already touched.
-- `coord_save_role(name, description)` / `coord_list_roles()` save and list reusable `role_name`/`role_description` personas at `.agent-viewer/roles/`. Invent a persona once and save it; later `coord_create_task` calls only need to pass `role_name` — the saved `role_description` fills in automatically whenever the inline description is omitted, this run or a future one.
-- `coord_save_role` also accepts optional `default_provider`/`default_model` — a persona-pack-style suggestion for which provider/model tasks in that role are best worked by. It cannot mechanically switch an external CLI worker's provider mid-run, so it is surfaced as a line appended to the task's `role_description` (e.g. "Suggested provider/model for this role: claude / claude-opus-4"); the claiming participant decides whether to act on it. Omitting `default_provider`/`default_model` on a later `coord_save_role` call for the same name keeps whatever was set before — only an explicit new value replaces it.
-
 ## Lead workflow
 
 When the participant role is `lead`:
 
-1. Before decomposing, call `coord_query_context` on the objective — a past run may have already recorded a relevant `coord_remember` fact, gotcha, or pattern in this project's durable memory, and replanning around it beats rediscovering it mid-run. Then decompose the objective into small independently claimable tasks before editing (or seed the board from a playbook and skip planning).
+1. Before decomposing, call `coord_query_context` on the objective — a past run may have already recorded a relevant `coord_remember` fact, gotcha, or pattern in this project's durable memory, and replanning around it beats rediscovering it mid-run. Then decompose the objective into small independently claimable tasks before editing (or seed the board from a playbook and skip planning — see `references/playbooks-and-memory.md`).
 2. Create tasks with `coord_create_task`. Give each task:
    - a concrete outcome and acceptance check;
    - the narrowest expected write paths;
-   - explicit dependencies when another task must finish first.
-   - an explicit role: `teammate` for execution lanes, `lead` for integration/synthesis, or `any` only for intentional fallback work.
+   - explicit dependencies when another task must finish first;
+   - an explicit role: `teammate` for execution lanes, `lead` for integration/synthesis, or `any` only for intentional fallback work;
    - optionally, a `role_name`/`role_description` specialization — a persona you invent per task as you see how the work splits (e.g. "Explorer" for read-only research, "Refactorer" for a scoped rewrite, "Reviewer" for an integration pass). This is not a fixed set: define whatever specializations fit the current run, one task at a time, and reuse a name across tasks when the same persona should keep claiming that kind of work. Save a persona worth reusing with `coord_save_role` so later tasks — this run or a future one — need only pass `role_name`.
    - Check the response's `similarTasks` field. A non-empty list is a heads-up that this task may duplicate existing work, not a block — read the listed task(s) before assuming this one is new.
 3. Match the configured checkout mode. In isolated mode, keep each external CLI in its assigned clean checkout. In shared mode, keep every write lane disjoint and make ownership explicit before editing.
@@ -167,7 +98,7 @@ Repeat while the run is `planning`, `running`, or `synthesizing`:
 2. Read status and react to the `actionable` digest — it lists claimable tasks, actionable inbox batches, urgent/status counts, unresolved reply-required requests, plans awaiting review (lead), and your own task's state, so you rarely need to diff snapshots.
 3. Perform the next role-appropriate action.
 4. Report a heartbeat (`coord_progress(status="heartbeat")`) at least every ~2 minutes during long work, not just at milestones. This matters most for an interactive CLI participant, which only reaches the board between its own turns: a single long tool call (a full typecheck, a test suite, a build) can span many minutes of board silence. Send a heartbeat before starting one and again when it returns, or run it in the background and heartbeat between polls. An interactive participant now gets a longer stale window than an unattended worker, but it is not unlimited — if your claim lapses, the board releases your task and a teammate may pick it up mid-flight.
-5. When no immediate action exists, call `coord_wait` with the previous cursor. Do not shell-sleep or repeatedly poll status. Your own writes do not wake your wait; it returns when another participant changes the run, with the new `events` and a fresh `actionable` digest. On a Tasks-capable client, poll a returned task handle with `tasks/get` instead of issuing another `coord_wait`; after it completes, act on its final result. A timed-out (empty) result is normal — call it again. If the tool call or task retrieval throws instead, that is a real disconnect: wait ~2s and retry with the same identity and task ID.
+5. When no immediate action exists, call `coord_wait` with the previous cursor. Do not shell-sleep or repeatedly poll status. Your own writes do not wake your wait; it returns when another participant changes the run, with the new `events` and a fresh `actionable` digest. On a Tasks-capable client, poll a returned task handle with `tasks/get` instead of issuing another `coord_wait`; after it completes, act on its final result. A timed-out (empty) result is normal — call it again; a thrown error is the real-disconnect case covered by the retry rule in "Enter the run" above.
 6. After any wait, act on `actionable` and the returned events; the snapshot is authoritative if anything is unclear.
 
 Do not end merely because the board is temporarily idle. End when the run becomes `completed`, `failed`, or `stopped`; the user interrupts; or an external prerequisite cannot be resolved after notifying the lead.
