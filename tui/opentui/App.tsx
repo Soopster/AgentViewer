@@ -186,7 +186,7 @@ import {
   sessionMessageSequenceFingerprint,
   summarizeDurableSessionMessages,
 } from './messageFingerprint'
-import { appendFileSync, mkdirSync } from 'node:fs'
+import { appendFile, mkdirSync } from 'node:fs'
 import { readFile, rm, stat } from 'node:fs/promises'
 import { release, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
@@ -304,7 +304,10 @@ function recordFramePerf(durationMs: number): void {
   if (durationMs > perfWindow.maxDur) perfWindow.maxDur = durationMs
   if (now - perfWindow.startedAt >= 1000) {
     const line = `${new Date().toISOString()} commits=${perfWindow.frames} over-budget=${perfWindow.slow} max=${perfWindow.maxDur.toFixed(2)}ms\n`
-    try { appendFileSync(PERF_LOG_PATH, line) } catch { /* never break the UI for logging */ }
+    // Keep the canary out of the frame it measures. A synchronous append here
+    // created its own once-per-second outlier, especially on slower disks and
+    // Windows antivirus-scanned worktrees.
+    appendFile(PERF_LOG_PATH, line, () => { /* logging is best-effort */ })
     perfWindow.frames = 0
     perfWindow.slow = 0
     perfWindow.maxDur = 0
@@ -7302,9 +7305,10 @@ export default function OpenTuiApp() {
   const readerStatePersistSignatureRef = useRef<string | null>(null)
   const expandedKeysRevisionRef = useRef(0)
   const collapsedKeysRevisionRef = useRef(0)
-  const previousTranscriptRef = useRef<{ sessionKey: string | null; keys: string[] }>({
+  const previousTranscriptRef = useRef<{ sessionKey: string | null; length: number; lastKey: string | null }>({
     sessionKey: null,
-    keys: [],
+    length: 0,
+    lastKey: null,
   })
   const sessionDetailCacheRef = useRef(new Map<string, TuiSessionDetail>())
   const sessionContextUsageCacheRef = useRef(new Map<string, ContextUsage | null>())
@@ -8356,11 +8360,22 @@ export default function OpenTuiApp() {
     }
   }, [density, sessionDetail, transcriptSession, showToolCalls])
   const transcriptIndexByKey = useMemo(() => {
-    const indexByKey = new Map<string, number>()
-    visibleTranscriptCards.forEach((card, index) => {
-      indexByKey.set(card.key, index)
-    })
-    return indexByKey
+    // Most live-stream frames are tail-following and never ask for an arbitrary
+    // key. Defer the O(full transcript) index until a detached cursor, bookmark,
+    // or search jump actually needs it; this keeps 10k-card streams from
+    // rebuilding a 10k-entry Map for every token delta.
+    let indexByKey: Map<string, number> | null = null
+    return {
+      get(key: string): number | undefined {
+        if (!indexByKey) {
+          indexByKey = new Map<string, number>()
+          visibleTranscriptCards.forEach((card, index) => {
+            indexByKey!.set(card.key, index)
+          })
+        }
+        return indexByKey.get(key)
+      },
+    }
   }, [visibleTranscriptCards])
 
   const jumpToTranscriptIndex = useCallback((index: number) => {
@@ -8436,9 +8451,10 @@ export default function OpenTuiApp() {
 
   const cursorIndex = useMemo(() => {
     if (visibleTranscriptCards.length === 0) return -1
+    if (followTail) return visibleTranscriptCards.length - 1
     const index = transcriptCursorKey ? transcriptIndexByKey.get(transcriptCursorKey) ?? -1 : -1
     if (index >= 0) return index
-    return followTail ? visibleTranscriptCards.length - 1 : 0
+    return 0
   }, [followTail, visibleTranscriptCards.length, transcriptCursorKey, transcriptIndexByKey])
 
   const unreadBoundaryIndex = useMemo(
@@ -13843,15 +13859,16 @@ export default function OpenTuiApp() {
   }, [transcriptCards])
 
   useEffect(() => {
-    const currentKeys = transcriptCards.map((card) => card.key)
+    const currentLength = transcriptCards.length
+    const currentLastKey = transcriptCards.at(-1)?.key ?? null
     const previous = previousTranscriptRef.current
     const sameSession = previous.sessionKey === committedSessionKey
 
-    if (currentKeys.length === 0) {
+    if (currentLength === 0) {
       setTranscriptCursorKey(null)
       setPendingNewCount(0)
       setUnreadBoundaryKey(null)
-      previousTranscriptRef.current = { sessionKey: committedSessionKey, keys: currentKeys }
+      previousTranscriptRef.current = { sessionKey: committedSessionKey, length: 0, lastKey: null }
       return
     }
 
@@ -13874,7 +13891,7 @@ export default function OpenTuiApp() {
     setUnreadBoundaryKey(null)
         setResumeMarkerKey(null)
       }
-      previousTranscriptRef.current = { sessionKey: committedSessionKey, keys: currentKeys }
+      previousTranscriptRef.current = { sessionKey: committedSessionKey, length: currentLength, lastKey: currentLastKey }
       return
     }
 
@@ -13882,29 +13899,33 @@ export default function OpenTuiApp() {
       setTranscriptCursorKey(visibleTranscriptCards[visibleTranscriptCards.length - 1].key)
       setPendingNewCount(0)
       setUnreadBoundaryKey(null)
-      previousTranscriptRef.current = { sessionKey: committedSessionKey, keys: currentKeys }
+      previousTranscriptRef.current = { sessionKey: committedSessionKey, length: currentLength, lastKey: currentLastKey }
       return
     }
 
-    const previousLastKey = previous.keys.at(-1) ?? null
-    const previousLastIndex = previousLastKey ? currentKeys.indexOf(previousLastKey) : -1
+    // Detached readers need append accounting, but do not allocate a second
+    // full key array. The scan is limited to this paused-reader path; the
+    // common tail-following live stream above remains O(1).
+    const previousLastIndex = previous.lastKey
+      ? transcriptCards.findIndex((card) => card.key === previous.lastKey)
+      : -1
     const appendedCount = previousLastIndex >= 0
-      ? currentKeys.length - previousLastIndex - 1
+      ? currentLength - previousLastIndex - 1
       : 0
 
     if (appendedCount > 0) {
       setPendingNewCount(appendedCount)
       setUnreadBoundaryKey((current) => {
-        if (current && currentKeys.includes(current)) return current
-        return currentKeys[previousLastIndex + 1] ?? null
+        if (current && transcriptCards.some((card) => card.key === current)) return current
+        return transcriptCards[previousLastIndex + 1]?.key ?? null
       })
     }
 
     setTranscriptCursorKey((current) => {
-      if (current && currentKeys.includes(current)) return current
+      if (current && transcriptCards.some((card) => card.key === current)) return current
       return visibleTranscriptCards[Math.max(cursorIndex, 0)]?.key ?? visibleTranscriptCards[0].key
     })
-    previousTranscriptRef.current = { sessionKey: committedSessionKey, keys: currentKeys }
+    previousTranscriptRef.current = { sessionKey: committedSessionKey, length: currentLength, lastKey: currentLastKey }
     // cursorIndex is intentionally omitted from deps: the effect reconciles
     // cursor/pending state when transcriptCards changes, and the cursorIndex
     // fallback only fires when the current cursor key is missing from the new
