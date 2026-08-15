@@ -6300,6 +6300,35 @@ export function selectTranscriptCardVariants<T extends TranscriptCardSelectionVa
     : variant.idle)
 }
 
+type TranscriptIndexLookup = {
+  get: (key: string) => number | undefined
+}
+
+// Build an index only if a detached reader actually asks for one. When the
+// visible list is a stable persisted prefix plus a tiny live suffix, reuse the
+// prefix lookup across streamed-token arrays and index only that suffix. The
+// suffix is checked first to preserve Map's last-key-wins behavior.
+export function createLazyTranscriptIndexLookup(
+  cards: readonly TuiTranscriptCard[],
+  stablePrefix?: { length: number; lookup: TranscriptIndexLookup },
+): TranscriptIndexLookup {
+  let indexByKey: Map<string, number> | null = null
+  return {
+    get(key: string): number | undefined {
+      if (!indexByKey) {
+        const start = stablePrefix?.length ?? 0
+        indexByKey = new Map<string, number>()
+        for (let index = start; index < cards.length; index += 1) {
+          indexByKey.set(cards[index].key, index)
+        }
+      }
+      const suffixIndex = indexByKey.get(key)
+      if (suffixIndex !== undefined) return suffixIndex
+      return stablePrefix?.lookup.get(key)
+    },
+  }
+}
+
 // ── Split transcript panes ───────────────────────────────────────────────────
 // A split pane is a read-only tail view of another open tab, mounted beside the
 // primary reader so two (or three) sessions can be watched at once. It owns its
@@ -6500,12 +6529,30 @@ function SplitTranscriptPaneInner({
 
   // Display data mirrors the reader's, minus search/landmarks: expansion is
   // per-pane, so an expanded card in a pane costs only that pane's body.
+  const displayDataCacheRef = useRef(new WeakMap<TuiTranscriptCard, {
+    isExpanded: boolean
+    bodyLineLimit: number
+    providerKey: ProviderSelection | undefined
+    isLatest: boolean
+    value: CardDisplayData
+  }>())
   const displayData = useMemo((): CardDisplayData[] => tailCards.map((card, index) => {
     const isExpanded = expandedKeys.has(card.key)
-    const bodyLines = renderedBodyLines(card, isExpanded, densityState.bodyLines, false, false, false)
     const providerKey = card.provider ?? session.provider ?? undefined
+    const isLatest = index === tailCards.length - 1
+    const previous = displayDataCacheRef.current.get(card)
+    if (
+      previous
+      && previous.isExpanded === isExpanded
+      && previous.bodyLineLimit === densityState.bodyLines
+      && previous.providerKey === providerKey
+      && previous.isLatest === isLatest
+    ) {
+      return previous.value
+    }
+    const bodyLines = renderedBodyLines(card, isExpanded, densityState.bodyLines, false, false, false)
     const isInsight = card.category === 'insight'
-    return {
+    const value: CardDisplayData = {
       landmarks: EMPTY_LANDMARKS,
       bodyLines,
       diffView: cardDiffView(card, isExpanded),
@@ -6514,7 +6561,7 @@ function SplitTranscriptPaneInner({
         : [],
       headerMeta: joinMeta([
         card.timestamp ?? null,
-        index === tailCards.length - 1 ? 'latest' : null,
+        isLatest ? 'latest' : null,
         isExpanded ? 'e collapse' : null,
       ]),
       accent: transcriptAccent(card.role, providerKey),
@@ -6523,6 +6570,14 @@ function SplitTranscriptPaneInner({
       isInsight,
       markdownFallbackLines: null,
     }
+    displayDataCacheRef.current.set(card, {
+      isExpanded,
+      bodyLineLimit: densityState.bodyLines,
+      providerKey,
+      isLatest,
+      value,
+    })
+    return value
   }), [tailCards, expandedKeys, densityState.bodyLines, session.provider])
 
   const sessionRef = useRef(session)
@@ -8385,24 +8440,31 @@ export default function OpenTuiApp() {
       cancelled = true
     }
   }, [density, sessionDetail, transcriptSession, showToolCalls])
-  const transcriptIndexByKey = useMemo(() => {
-    // Most live-stream frames are tail-following and never ask for an arbitrary
-    // key. Defer the O(full transcript) index until a detached cursor, bookmark,
-    // or search jump actually needs it; this keeps 10k-card streams from
-    // rebuilding a 10k-entry Map for every token delta.
-    let indexByKey: Map<string, number> | null = null
-    return {
-      get(key: string): number | undefined {
-        if (!indexByKey) {
-          indexByKey = new Map<string, number>()
-          visibleTranscriptCards.forEach((card, index) => {
-            indexByKey!.set(card.key, index)
-          })
-        }
-        return indexByKey.get(key)
-      },
-    }
-  }, [visibleTranscriptCards])
+  const baseTranscriptIndexByKey = useMemo(
+    () => createLazyTranscriptIndexLookup(baseAndBridgeTranscriptCards),
+    [baseAndBridgeTranscriptCards],
+  )
+  const stableVisiblePrefixLength = (
+    visibleTranscriptCards === transcriptCards
+    && baseAndBridgeTranscriptCards.length <= visibleTranscriptCards.length
+    && (
+      baseAndBridgeTranscriptCards.length === 0
+      || (
+        visibleTranscriptCards[0] === baseAndBridgeTranscriptCards[0]
+        && visibleTranscriptCards[baseAndBridgeTranscriptCards.length - 1]
+          === baseAndBridgeTranscriptCards[baseAndBridgeTranscriptCards.length - 1]
+      )
+    )
+  ) ? baseAndBridgeTranscriptCards.length : null
+  const transcriptIndexByKey = useMemo(
+    () => createLazyTranscriptIndexLookup(
+      visibleTranscriptCards,
+      stableVisiblePrefixLength == null
+        ? undefined
+        : { length: stableVisiblePrefixLength, lookup: baseTranscriptIndexByKey },
+    ),
+    [baseTranscriptIndexByKey, stableVisiblePrefixLength, visibleTranscriptCards],
+  )
 
   const jumpToTranscriptIndex = useCallback((index: number) => {
     if (visibleTranscriptCards.length === 0) return

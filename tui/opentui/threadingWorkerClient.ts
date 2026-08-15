@@ -66,8 +66,9 @@ type WorkerResponse =
   | {
       id: number
       ok: true
-      cardsSuffix: TuiTranscriptCard[]
+      cardsPatch: TuiTranscriptCard[]
       cardsPrefix: number
+      cardsDeleteCount: number
       formatToken: number
       baseFormatToken: number
     }
@@ -140,6 +141,33 @@ function spliceDelivered<T>(prev: T[] | undefined, fresh: T[], prefix: number): 
   const out = fresh.slice()
   for (let i = 0; i < n; i++) out[i] = prev[i]
   return out
+}
+
+function sameThreadedMessage(next: ThreadedMessage, prev: ThreadedMessage): boolean {
+  return next === prev || threadedMessageFingerprint(next) === threadedMessageFingerprint(prev)
+}
+
+function threadedPatchBounds(next: ThreadedMessage[], prev: ThreadedMessage[]): {
+  prefix: number
+  deleteCount: number
+  patch: ThreadedMessage[]
+} {
+  const limit = Math.min(next.length, prev.length)
+  let prefix = 0
+  while (prefix < limit && sameThreadedMessage(next[prefix], prev[prefix])) prefix++
+
+  let suffix = 0
+  const suffixLimit = limit - prefix
+  while (
+    suffix < suffixLimit
+    && sameThreadedMessage(next[next.length - 1 - suffix], prev[prev.length - 1 - suffix])
+  ) suffix++
+
+  return {
+    prefix,
+    deleteCount: prev.length - prefix - suffix,
+    patch: next.slice(prefix, next.length - suffix),
+  }
 }
 
 function cacheKey(session: Session): string {
@@ -234,13 +262,22 @@ function ensureWorker(): Worker {
         formatToken: data.formatToken,
       })
       entry.resolve(data.transcriptCards)
-    } else if (entry.kind === 'format' && 'cardsSuffix' in data) {
+    } else if (entry.kind === 'format' && 'cardsPatch' in data) {
       const prev = entry.previousDelivery
-      if (!prev || prev.formatToken !== data.baseFormatToken || data.cardsPrefix > prev.cards.length) {
+      if (
+        !prev
+        || prev.formatToken !== data.baseFormatToken
+        || data.cardsPrefix < 0
+        || data.cardsDeleteCount < 0
+        || data.cardsPrefix + data.cardsDeleteCount > prev.cards.length
+      ) {
         entry.reject(new Error('threading worker returned an unknown format delta baseline'))
         return
       }
-      const transcriptCards = prev.cards.slice(0, data.cardsPrefix).concat(data.cardsSuffix)
+      const transcriptCards = prev.cards.slice(0, data.cardsPrefix).concat(
+        data.cardsPatch,
+        prev.cards.slice(data.cardsPrefix + data.cardsDeleteCount),
+      )
       touchLastFormatted(entry.formatKey, {
         threaded: entry.threaded,
         cards: transcriptCards,
@@ -355,20 +392,15 @@ export function formatTranscriptCardsAsync(
   const id = ++requestCounter
   const w = ensureWorker()
   const previousDelivery = lastFormattedByKey.get(formatKey)
-  const canSendAppend = Boolean(
-    previousDelivery
-    && threaded.length > previousDelivery.threaded.length
-    && previousDelivery.threaded.every((message, index) => (
-      message === threaded[index]
-      || threadedMessageFingerprint(message) === threadedMessageFingerprint(threaded[index])
-    )),
-  )
+  const patch = previousDelivery
+    ? threadedPatchBounds(threaded, previousDelivery.threaded)
+    : null
   return new Promise<TuiTranscriptCard[]>((resolve, reject) => {
     pending.set(id, {
       kind: 'format',
       formatKey,
       threaded,
-      previousDelivery: canSendAppend ? previousDelivery : undefined,
+      previousDelivery,
       resolve: (transcriptCards) => {
         // (Re)create the entry when it was evicted or holds a different
         // threaded identity — getTranscriptCardsSync compares identity against
@@ -385,13 +417,14 @@ export function formatTranscriptCardsAsync(
       },
       reject,
     })
-    w.postMessage(canSendAppend && previousDelivery
+    w.postMessage(patch && previousDelivery
       ? {
           kind: 'format',
           id,
           session,
-          threadedPrefix: previousDelivery.threaded.length,
-          threadedSuffix: threaded.slice(previousDelivery.threaded.length),
+          threadedPrefix: patch.prefix,
+          threadedDeleteCount: patch.deleteCount,
+          threadedPatch: patch.patch,
           previousFormatToken: previousDelivery.formatToken,
           density,
           showToolCalls,
