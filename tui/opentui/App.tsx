@@ -4669,6 +4669,7 @@ type PaletteRow =
   | { kind: 'cmd'; cmd: PaletteCommand; cmdIndex: number }
 
 const RUNNING_INSIDE_TMUX = Boolean(process.env.TMUX)
+const FLEET_PAGE_SIZE = 9
 
 const COMMANDS: PaletteCommand[] = [
   // Navigation
@@ -7069,6 +7070,7 @@ export default function OpenTuiApp() {
   // Fleet strip visibility preference (the strip only renders when it has
   // cells: running sessions or fresh background completions).
   const [fleetStripEnabled, setFleetStripEnabled] = useState(true)
+  const [fleetPage, setFleetPage] = useState(0)
   // Checkpoints & review popover (⇧U): turn snapshots + per-hunk review.
   const [checkpointOpen, setCheckpointOpen] = useState(false)
   const checkpointKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
@@ -7908,10 +7910,20 @@ export default function OpenTuiApp() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runningSessions, waitingSessions, viewerAttentionNotes, attentionItems, attentionDone, sessions])
   const fleetStripVisible = fleetStripEnabled && !focusMode && fleetEntries.length > 0
+  const fleetPageCount = Math.max(Math.ceil(fleetEntries.length / FLEET_PAGE_SIZE), 1)
+  const activeFleetPage = Math.min(fleetPage, fleetPageCount - 1)
+  const visibleFleetEntries = useMemo(
+    () => fleetEntries.slice(activeFleetPage * FLEET_PAGE_SIZE, (activeFleetPage + 1) * FLEET_PAGE_SIZE),
+    [activeFleetPage, fleetEntries],
+  )
+  useEffect(() => {
+    if (fleetPage !== activeFleetPage) setFleetPage(activeFleetPage)
+  }, [activeFleetPage, fleetPage])
   const fleetStripSegments = useMemo<InlineTextSegment[]>(() => {
     if (!fleetStripVisible) return []
-    const segs: InlineTextSegment[] = [{ text: 'FLEET  ', fg: theme.dim }]
-    fleetEntries.slice(0, 9).forEach((entry, index) => {
+    const pageLabel = fleetPageCount > 1 ? ` ${activeFleetPage + 1}/${fleetPageCount}` : ''
+    const segs: InlineTextSegment[] = [{ text: `FLEET${pageLabel}  `, fg: theme.dim }]
+    visibleFleetEntries.forEach((entry, index) => {
       const selected = entry.key === selectedSessionKey
       const accent = getProviderAccent(entry.provider)
       const glyph = entry.status === 'needs-input' ? '⚠' : entry.status === 'running' ? '●' : entry.status === 'waiting' ? '◌' : '✓'
@@ -7924,9 +7936,9 @@ export default function OpenTuiApp() {
         fg: selected ? theme.text : theme.muted,
       })
     })
-    if (fleetEntries.length > 9) segs.push({ text: `  +${fleetEntries.length - 9} more`, fg: theme.dim })
+    if (fleetPageCount > 1) segs.push({ text: '  { } pages', fg: theme.dim })
     return segs
-  }, [fleetStripVisible, fleetEntries, selectedSessionKey, theme])
+  }, [activeFleetPage, fleetPageCount, fleetStripVisible, selectedSessionKey, theme, visibleFleetEntries])
 
   // Viewing a session resolves its "turn finished" notice.
   useEffect(() => {
@@ -11534,9 +11546,9 @@ export default function OpenTuiApp() {
     setComposerDraft(lastUserText)
   })
 
-  // Digits 1-9 jump straight to a fleet cell while the strip is visible.
+  // Digits 1-9 jump straight to a fleet cell on the visible page.
   const jumpToFleetEntry = useEffectEvent((index: number) => {
-    const entry = fleetEntries[index]
+    const entry = visibleFleetEntries[index]
     if (!entry || entry.key === selectedSessionKeyRef.current) return
     const session = sessionsByKeyRef.current.get(entry.key)
       ?? ({ sessionId: entry.sessionId, provider: entry.provider } as Session)
@@ -15274,13 +15286,12 @@ export default function OpenTuiApp() {
       case 'coord-stop':
         void stopActiveCoordinatedRun()
         break
-      case 'fleet':
-        setFleetStripEnabled((prev) => {
-          const next = !prev
-          showToggleOutcome('Fleet strip', next)
-          return next
-        })
+      case 'fleet': {
+        const next = !fleetStripEnabled
+        setFleetStripEnabled(next)
+        showToggleOutcome('Fleet strip', next)
         break
+      }
       case 'checkpoints':
         if (gitRepoCwd) setCheckpointOpen(true)
         else showNotice('info', 'Selected session has no working directory', 3000)
@@ -16782,17 +16793,29 @@ export default function OpenTuiApp() {
       return
     }
 
-    // Fleet strip: ⇧A toggles, digits 1-9 jump to a cell
+    // Fleet strip: ⇧A toggles, digits 1-9 jump to a cell, and shifted
+    // brackets page through overflow without changing the one-row budget.
     if (isShifted('A')) {
-      handled(() => setFleetStripEnabled((prev) => {
-        const next = !prev
+      handled(() => {
+        const next = !fleetStripEnabled
+        setFleetStripEnabled(next)
         showToggleOutcome('Fleet strip', next)
-        return next
-      }))
+      })
       return
     }
     if (fleetStripVisible && /^[1-9]$/.test(sequence) && !key.ctrl && !key.meta && !key.option) {
       handled(() => jumpToFleetEntry(Number(sequence) - 1))
+      return
+    }
+    if (
+      fleetStripVisible
+      && fleetPageCount > 1
+      && (sequence === '{' || sequence === '}' || isShifted('[') || isShifted(']'))
+    ) {
+      handled(() => setFleetPage((current) => {
+        const delta = sequence === '{' || isShifted('[') ? -1 : 1
+        return (current + delta + fleetPageCount) % fleetPageCount
+      }))
       return
     }
 
