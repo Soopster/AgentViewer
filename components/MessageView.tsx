@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { memo, useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo, useDeferredValue } from 'react'
+import { memo, useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo, useDeferredValue, useSyncExternalStore } from 'react'
 import type {
   SessionMessage,
   Session,
@@ -69,6 +69,13 @@ import {
 } from '@/lib/composerAttachments'
 import CodeThemeToggle from './CodeThemeToggle'
 import RenderFontToggle from './RenderFontToggle'
+import {
+  applyColorTreatment,
+  DEFAULT_COLOR_TREATMENT,
+  getCurrentColorTreatment,
+  subscribeColorTreatment,
+  type ColorTreatment,
+} from '@/lib/colorTreatment'
 import TabBar from './TabBar'
 import { compactStableFingerprint } from '@/lib/compactFingerprint'
 import {
@@ -2604,6 +2611,7 @@ function AskUserQuestionPicker({
   const [selections, setSelections] = useState<Record<number, string[]>>({})
   const [freeformAnswers, setFreeformAnswers] = useState<Record<number, string>>({})
   const [openPreview, setOpenPreview] = useState<string | null>(null)
+  const flat = useSyncExternalStore<ColorTreatment>(subscribeColorTreatment, getCurrentColorTreatment, () => DEFAULT_COLOR_TREATMENT) === 'flat'
 
   const toggle = (qi: number, multiSelect: boolean, label: string) => {
     if (!multiSelect) {
@@ -2704,7 +2712,9 @@ function AskUserQuestionPicker({
                         borderRadius: 4,
                         border: `1px solid ${isSelected ? 'rgba(139,128,240,0.55)' : 'var(--border)'}`,
                         background: isSelected
-                          ? 'linear-gradient(to right, rgba(139,128,240,0.16), rgba(139,128,240,0.05))'
+                          ? flat
+                            ? 'rgba(139,128,240,0.16)'
+                            : 'linear-gradient(to right, rgba(139,128,240,0.16), rgba(139,128,240,0.05))'
                           : 'var(--surface)',
                         cursor: busy ? 'not-allowed' : 'pointer',
                         transition: 'border-color 0.14s ease, background 0.14s ease',
@@ -3025,6 +3035,14 @@ function MessageViewInner({
     setRowMeasurementVersion((version) => version + 1)
     setPersistedMeasurementVersion((version) => version + 1)
   }, [density, preferencesHydrated])
+  // Document-level preference (applies via [data-color-treatment] CSS in
+  // globals.css, not component state) — same external-store pattern as
+  // RenderFontToggle, just read inline here instead of a separate popover.
+  const colorTreatment = useSyncExternalStore<ColorTreatment>(
+    subscribeColorTreatment,
+    getCurrentColorTreatment,
+    () => DEFAULT_COLOR_TREATMENT,
+  )
   const [timelineWidth, setTimelineWidth] = useState<'centered' | 'full'>('centered')
   useEffect(() => {
     if (!preferencesHydrated) return
@@ -7435,7 +7453,7 @@ function MessageViewInner({
             borderRadius: '50%',
             border: '1px solid var(--border-2)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: 'linear-gradient(135deg, var(--surface-2), var(--surface))',
+            background: colorTreatment === 'flat' ? 'var(--surface)' : 'linear-gradient(135deg, var(--surface-2), var(--surface))',
             boxShadow: '0 0 40px 8px rgba(139,128,240,0.04) inset',
           }}>
             <div style={{
@@ -7493,7 +7511,7 @@ function MessageViewInner({
           display: 'flex',
           alignItems: 'center',
           gap: 14,
-          background: 'linear-gradient(to right, rgba(139,128,240,0.05) 0%, var(--surface) 40%)',
+          background: colorTreatment === 'flat' ? 'var(--surface)' : 'linear-gradient(to right, rgba(139,128,240,0.05) 0%, var(--surface) 40%)',
         }}
       >
         {/* Project / session name */}
@@ -7777,6 +7795,19 @@ function MessageViewInner({
                   {w.toUpperCase()}
                   <span style={{ color: 'var(--text-3)', marginLeft: 8, fontSize: 10 }}>
                     {w === 'centered' ? 'readable column' : 'whole window'}
+                  </span>
+                </button>
+              ))}
+              <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
+              {/* Color treatment */}
+              <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>COLOR</div>
+              {(['gradient', 'flat'] as const).map((c) => (
+                <button key={c} type="button"
+                  onClick={() => { applyColorTreatment(c); setViewDropdownOpen(false) }}
+                  style={{ padding: '6px 14px', background: colorTreatment === c ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: colorTreatment === c ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', whiteSpace: 'nowrap' }}>
+                  {c.toUpperCase()}
+                  <span style={{ color: 'var(--text-3)', marginLeft: 8, fontSize: 10 }}>
+                    {c === 'gradient' ? 'themed washes & glows' : 'flat surfaces'}
                   </span>
                 </button>
               ))}
@@ -8403,7 +8434,9 @@ function MessageViewInner({
                 padding: '20px 18px',
                 borderRadius: 10,
                 border: `1px solid rgba(${composerConfig.cssAccentRgb},0.28)`,
-                background: `linear-gradient(180deg, rgba(${composerConfig.cssAccentRgb},0.08), transparent 70%)`,
+                background: colorTreatment === 'flat'
+                  ? `rgba(${composerConfig.cssAccentRgb},0.06)`
+                  : `linear-gradient(180deg, rgba(${composerConfig.cssAccentRgb},0.08), transparent 70%)`,
               }}
             >
               <div style={{
@@ -8539,7 +8572,9 @@ function MessageViewInner({
                   padding: '6px 10px',
                   borderRadius: 999,
                   border: '1px solid color-mix(in srgb, var(--cyan) 35%, var(--border))',
-                  background: 'linear-gradient(110deg, color-mix(in srgb, var(--cyan) 10%, var(--surface)), color-mix(in srgb, var(--violet) 10%, var(--surface)))',
+                  background: colorTreatment === 'flat'
+                    ? 'color-mix(in srgb, var(--cyan) 10%, var(--surface))'
+                    : 'linear-gradient(110deg, color-mix(in srgb, var(--cyan) 10%, var(--surface)), color-mix(in srgb, var(--violet) 10%, var(--surface)))',
                   boxShadow: '0 10px 30px var(--cyan-glow), inset 0 0 14px var(--violet-glow)',
                 }}
               >
@@ -8775,7 +8810,7 @@ function MessageViewInner({
           style={{
             borderRadius: 10,
             border: '1px solid var(--border)',
-            background: 'linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%)',
+            background: colorTreatment === 'flat' ? 'var(--surface)' : 'linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%)',
             boxShadow: '0 10px 24px var(--violet-glow)',
           }}
         >

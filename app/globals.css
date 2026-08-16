@@ -23,6 +23,43 @@
 [data-render-font="merriweather"] { --render-font: var(--font-merriweather), Georgia, serif; }
 [data-render-font="mono"] { --render-font: 'IBM Plex Mono', ui-monospace, monospace; }
 
+/* ── Flat color treatment ───────────────────────────────
+   Consumed via [data-color-treatment="flat"] on <html>.
+   Flattens base-surface gradient washes and glows back to
+   flat surfaces, leaving tool-card identity tints intact. */
+[data-color-treatment="flat"] .av-session-row.av-selected {
+  background: color-mix(in srgb, var(--violet) 14%, var(--surface-2));
+}
+[data-color-treatment="flat"] .av-project-header.av-selected {
+  background: color-mix(in srgb, var(--violet) 12%, var(--surface-2));
+}
+[data-color-treatment="flat"] .av-messaging-panel {
+  background: var(--surface);
+}
+[data-color-treatment="flat"] .av-messaging-session.av-selected {
+  background: color-mix(in srgb, var(--violet) 12%, transparent);
+}
+[data-color-treatment="flat"] .av-session-viz-sparkline {
+  background: var(--surface-2);
+}
+[data-color-treatment="flat"] .av-session-visualizer,
+[data-color-treatment="flat"] .av-session-viz-exec {
+  background: var(--surface);
+}
+[data-color-treatment="flat"] .av-session-viz-fixed-header {
+  background: color-mix(in srgb, var(--surface) 97%, var(--bg));
+}
+[data-color-treatment="flat"] .av-session-viz-phase {
+  background: color-mix(in srgb, var(--av-phase-color) 16%, var(--surface));
+}
+[data-color-treatment="flat"] .av-session-viz-phase:hover,
+[data-color-treatment="flat"] .av-session-viz-phase.av-active {
+  background: color-mix(in srgb, var(--av-phase-color) 26%, var(--surface));
+}
+[data-color-treatment="flat"] .av-coord-header {
+  background: var(--surface-2);
+}
+
 @theme inline {
   --color-background: var(--bg);
   --color-foreground: var(--text);

@@ -1,6 +1,12 @@
 'use client'
 
-import { lazy, memo, Suspense, use, useEffect, useMemo, useState, createContext } from 'react'
+import { lazy, memo, Suspense, use, useEffect, useMemo, useSyncExternalStore, useState, createContext } from 'react'
+import {
+  DEFAULT_COLOR_TREATMENT,
+  getCurrentColorTreatment,
+  subscribeColorTreatment,
+  type ColorTreatment,
+} from '@/lib/colorTreatment'
 import { pathBasename as basename } from '@/lib/projectPaths'
 import { DEFAULT_DIFF_OPTIONS, DiffCommentComposerContext, LiveSubagentTextContext, TaskActiveFormsContext, type DiffOptions } from './messageItemShared'
 import ReactMarkdown from 'react-markdown'
@@ -78,6 +84,23 @@ function canonicalToolName(name: string): string {
 
 function toolColor(name: string) {
   return TOOL_COLORS[canonicalToolName(name)] ?? 'var(--t-other)'
+}
+
+// Flat-vs-gradient color treatment, document-level. Same external-store pattern
+// as MessageView/SessionList — reads [data-color-treatment="flat"] on <html>.
+function useColorTreatment(): ColorTreatment {
+  return useSyncExternalStore<ColorTreatment>(
+    subscribeColorTreatment,
+    getCurrentColorTreatment,
+    () => DEFAULT_COLOR_TREATMENT,
+  )
+}
+
+// Tool-card header background. In gradient treatment this is the soft
+// tool-colored wash that fades into the surface; in flat treatment a plain
+// surface so the tool left-border + label carry the identity instead.
+function washBg(flat: boolean, gradient: string, flatBg = 'var(--surface-2)'): string {
+  return flat ? flatBg : gradient
 }
 
 type McpToolId = { server: string; tool: string }
@@ -220,6 +243,7 @@ function agentProtocolTitle(event: AgentProtocolEvent): string {
 
 function AgentProtocolCard({ codeString }: { codeString: string }) {
   const [open, setOpen] = useState(false)
+  const flat  = useColorTreatment() === 'flat'
   const event = useMemo(() => parseAgentProtocolCode(codeString), [codeString])
   if (!event) return <FencedCodeBlock language="a2a" codeString={codeString} />
 
@@ -252,7 +276,7 @@ function AgentProtocolCard({ codeString }: { codeString: string }) {
           gap: 9,
           border: 0,
           borderBottom: open ? '1px solid var(--border)' : 0,
-          background: `linear-gradient(to right, ${tone}18, var(--surface-2))`,
+          background: washBg(flat, `linear-gradient(to right, ${tone}18, var(--surface-2))`),
           color: 'var(--text)',
           cursor: 'pointer',
           padding: '8px 12px',
@@ -827,6 +851,7 @@ function EditToolCard({ thread }: { thread: ToolThread }) {
   const delta    = countLines(newStr) - countLines(oldStr)
   const sign     = delta > 0 ? `+${delta}` : String(delta)
   const c        = toolColor(toolUse.name)
+  const flat     = useColorTreatment() === 'flat'
 
   return (
     <CardShell color={c} result={result} toolName={toolUse.name}
@@ -839,7 +864,7 @@ function EditToolCard({ thread }: { thread: ToolThread }) {
           style={{
             display: 'flex', alignItems: 'center', gap: 8,
             padding: '8px 14px',
-            background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+            background: washBg(flat, `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`),
             userSelect: 'none',
           }}
         >
@@ -901,6 +926,7 @@ function WriteToolCard({ thread }: { thread: ToolThread }) {
   const content  = input.content ?? ''
   const lines    = content.split('\n').length
   const c        = toolColor(toolUse.name)
+  const flat     = useColorTreatment() === 'flat'
 
   return (
     <CardShell color={c} result={result} toolName={toolUse.name}
@@ -913,7 +939,7 @@ function WriteToolCard({ thread }: { thread: ToolThread }) {
           style={{
             display: 'flex', alignItems: 'center', gap: 8,
             padding: '8px 14px',
-            background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+            background: washBg(flat, `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`),
             userSelect: 'none',
           }}
         >
@@ -953,6 +979,7 @@ function FileChangeCard({ thread }: { thread: ToolThread }) {
   const [presentation, diffStyle, toggleDiffStyleOverride] = useDiffPresentation()
   const [hovered, setHovered] = useState(false)
   const c = toolColor('FileChange')
+  const flat = useColorTreatment() === 'flat'
   const preview = changes.length === 1
     ? basename(changes[0]?.path ?? '')
     : `${changes.length} files`
@@ -971,7 +998,7 @@ function FileChangeCard({ thread }: { thread: ToolThread }) {
           style={{
             display: 'flex', alignItems: 'center', gap: 8,
             padding: '8px 14px',
-            background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+            background: washBg(flat, `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`),
             userSelect: 'none',
           }}
         >
@@ -1112,6 +1139,7 @@ function GenericToolCard({ thread }: { thread: ToolThread }) {
   const [hovered, setHovered] = useState(false)
   const { toolUse, result } = thread
   const c = toolColor(toolUse.name)
+  const flat = useColorTreatment() === 'flat'
   const firstVal = Object.values(toolUse.input)[0]
   const preview  = firstVal !== undefined ? String(firstVal).slice(0, 90) : null
   const inputJson = useMemo(
@@ -1130,7 +1158,7 @@ function GenericToolCard({ thread }: { thread: ToolThread }) {
           style={{
             display: 'flex', alignItems: 'center', gap: 8,
             padding: '8px 14px',
-            background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+            background: washBg(flat, `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`),
             userSelect: 'none',
           }}
         >
@@ -1211,6 +1239,7 @@ function McpToolCard({ thread }: { thread: ToolThread }) {
   const { toolUse, result } = thread
   const id = parseMcpToolName(toolUse.name)!
   const c = toolColor(toolUse.name)
+  const flat = useColorTreatment() === 'flat'
   const input = (toolUse.input ?? {}) as Record<string, unknown>
   const inputKeys = Object.keys(input)
   const preview = useMemo(() => mcpPreviewText(input), [input])
@@ -1234,7 +1263,7 @@ function McpToolCard({ thread }: { thread: ToolThread }) {
         style={{
           display: 'flex', alignItems: 'center', gap: 8,
           padding: '8px 14px',
-          background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+          background: washBg(flat, `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`),
           userSelect: 'none',
           cursor: 'pointer',
         }}
@@ -1470,6 +1499,7 @@ function AskUserQuestionCard({ thread }: { thread: ToolThread }) {
   const questions = (input.questions ?? []).filter((q): q is AUQQuestion => !!q && typeof q === 'object')
   const resultStr = thread.result ? resultToString(thread.result.content) : ''
   const answered  = !!resultStr
+  const flat      = useColorTreatment() === 'flat'
 
   return (
     <div style={{
@@ -1483,7 +1513,7 @@ function AskUserQuestionCard({ thread }: { thread: ToolThread }) {
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8,
         padding: '8px 14px',
-        background: 'linear-gradient(to right, var(--violet-glow), transparent)',
+        background: washBg(flat, 'linear-gradient(to right, var(--violet-glow), transparent)'),
       }}>
         <span style={{
           fontFamily: "'IBM Plex Mono', monospace",
@@ -1519,6 +1549,7 @@ function AskUserQuestionCard({ thread }: { thread: ToolThread }) {
 
 function AUQQuestionBlock({ q, resultStr }: { q: AUQQuestion; resultStr: string }) {
   const [expandedPreview, setExpandedPreview] = useState<number | null>(null)
+  const flat = useColorTreatment() === 'flat'
 
   return (
     <div>
@@ -1563,7 +1594,7 @@ function AUQQuestionBlock({ q, resultStr }: { q: AUQQuestion; resultStr: string 
                   borderRadius: 4,
                   border: `1px solid ${selected ? 'rgba(139,128,240,0.35)' : 'var(--border)'}`,
                   background: selected
-                    ? 'linear-gradient(to right, rgba(139,128,240,0.10), rgba(139,128,240,0.04))'
+                    ? washBg(flat, 'linear-gradient(to right, rgba(139,128,240,0.10), rgba(139,128,240,0.04))', 'rgba(139,128,240,0.10)')
                     : 'var(--surface)',
                   cursor: opt.preview ? 'pointer' : 'default',
                   transition: 'border-color 0.14s ease, background 0.14s ease',
@@ -1690,6 +1721,7 @@ function ToolSearchCard({ thread }: { thread: ToolThread }) {
   const input    = thread.toolUse.input as { query?: string; max_results?: number }
   const query    = input.query ?? ''
   const c        = 'var(--cyan)'
+  const flat     = useColorTreatment() === 'flat'
   const raw      = thread.result ? resultToString(thread.result.content) : ''
   const toolRefs = parseToolRefs(raw)
   const isError  = thread.result?.is_error ?? false
@@ -1711,7 +1743,7 @@ function ToolSearchCard({ thread }: { thread: ToolThread }) {
         style={{
           display: 'flex', alignItems: 'center', gap: 8,
           padding: '8px 14px',
-          background: `linear-gradient(to right, rgba(56,217,245,${hovered ? '0.14' : '0.08'}) 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+          background: washBg(flat, `linear-gradient(to right, rgba(56,217,245,${hovered ? '0.14' : '0.08'}) 0%, var(--surface) ${hovered ? '65%' : '50%'})`),
           cursor: 'pointer', userSelect: 'none',
           transition: 'background 0.15s ease',
         }}
@@ -1751,6 +1783,7 @@ function BashCard({ thread }: { thread: ToolThread }) {
   const input = thread.toolUse.input as { command?: string; description?: string }
   const command = input.command ?? ''
   const c = toolColor('Bash')
+  const flat = useColorTreatment() === 'flat'
   return (
     <CardShell color={c} result={thread.result} toolName="Bash"
       header={
@@ -1759,7 +1792,7 @@ function BashCard({ thread }: { thread: ToolThread }) {
           onMouseLeave={() => setHovered(false)}
           style={{
             display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 14px',
-            background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+            background: washBg(flat, `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`),
             transition: 'background 0.15s ease',
           }}
         >
@@ -1785,6 +1818,7 @@ function ReadCard({ thread }: { thread: ToolThread }) {
   const input = thread.toolUse.input as { file_path?: string; offset?: number; limit?: number; pages?: string }
   const filePath = input.file_path ?? ''
   const c = toolColor('Read')
+  const flat = useColorTreatment() === 'flat'
   const readSummary = useMemo(
     () => extractClaudeReadFileSummary(thread.result, filePath),
     [thread.result, filePath],
@@ -1804,7 +1838,7 @@ function ReadCard({ thread }: { thread: ToolThread }) {
           onMouseLeave={() => setHovered(false)}
           style={{
             display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px',
-            background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+            background: washBg(flat, `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`),
             transition: 'background 0.15s ease',
           }}
         >
@@ -1841,6 +1875,7 @@ function GrepCard({ thread }: { thread: ToolThread }) {
   const pattern  = input.pattern ?? ''
   const location = input.glob ?? input.path ?? ''
   const c        = toolColor('Grep')
+  const flat     = useColorTreatment() === 'flat'
   const raw      = useMemo(
     () => (thread.result && !thread.result.is_error ? resultToString(thread.result.content) : ''),
     [thread.result],
@@ -1859,7 +1894,7 @@ function GrepCard({ thread }: { thread: ToolThread }) {
           onMouseLeave={() => setHovered(false)}
           style={{
             display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px',
-            background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+            background: washBg(flat, `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`),
             transition: 'background 0.15s ease',
           }}
         >
@@ -1891,6 +1926,7 @@ function GlobCard({ thread }: { thread: ToolThread }) {
   const pattern = input.pattern ?? ''
   const path    = input.path ?? ''
   const c       = toolColor('Glob')
+  const flat    = useColorTreatment() === 'flat'
   const raw     = useMemo(
     () => (thread.result && !thread.result.is_error ? resultToString(thread.result.content) : ''),
     [thread.result],
@@ -1904,7 +1940,7 @@ function GlobCard({ thread }: { thread: ToolThread }) {
           onMouseLeave={() => setHovered(false)}
           style={{
             display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px',
-            background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+            background: washBg(flat, `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`),
             transition: 'background 0.15s ease',
           }}
         >
@@ -1940,10 +1976,11 @@ function TodoWriteCard({ thread }: { thread: ToolThread }) {
   const todos = input.todos ?? []
   const counts = { completed: 0, in_progress: 0, pending: 0 }
   for (const t of todos) counts[t.status] = (counts[t.status] ?? 0) + 1
+  const flat = useColorTreatment() === 'flat'
 
   return (
     <div style={{ border: '1px solid var(--border)', borderLeft: '2px solid var(--violet)', borderRadius: 6, overflow: 'hidden', fontSize: 13, marginTop: 4 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', background: 'linear-gradient(to right, var(--violet-glow), transparent)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', background: washBg(flat, 'linear-gradient(to right, var(--violet-glow), transparent)') }}>
         <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--violet)', fontWeight: 500, letterSpacing: '0.06em' }}>TODOWRITE</span>
         <span style={{ flex: 1 }} />
         {counts.completed > 0  && <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--green)'  }}>{counts.completed} done</span>}
@@ -2016,6 +2053,7 @@ function AgentCard({ thread }: { thread: ToolThread }) {
     model?: string; run_in_background?: boolean; max_turns?: number
   }
   const c   = toolColor('Agent')
+  const flat = useColorTreatment() === 'flat'
 
   // resultToString + JSON.parse over a completed subagent's (potentially
   // multi-KB) result is expensive; memoize on the result identity so the
@@ -2090,7 +2128,7 @@ function AgentCard({ thread }: { thread: ToolThread }) {
         onMouseLeave={() => setHovered(false)}
         style={{
           display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px',
-          background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+          background: washBg(flat, `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`),
           cursor: resultText ? 'pointer' : 'default', userSelect: 'none',
           transition: 'background 0.15s ease',
         }}
@@ -2323,6 +2361,7 @@ function OpenCodeTaskCard({ thread }: { thread: ToolThread }) {
   const name = thread.toolUse.name
   const input = thread.toolUse.input as OpenCodeTaskInput
   const c = toolColor(name)
+  const flat = useColorTreatment() === 'flat'
   const raw = thread.result ? resultToString(thread.result.content) : ''
   const isStatus = name === 'task_status'
   const isResultError = thread.result?.is_error === true
@@ -2380,7 +2419,7 @@ function OpenCodeTaskCard({ thread }: { thread: ToolThread }) {
         onMouseLeave={() => setHovered(false)}
         style={{
           display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px',
-          background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+          background: washBg(flat, `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`),
           cursor: parsed.bodyText ? 'pointer' : 'default', userSelect: 'none',
           transition: 'background 0.15s ease',
         }}
@@ -2503,6 +2542,7 @@ function SkillCard({ thread }: { thread: ToolThread }) {
   const skillName = input.skill ?? input.name ?? (Object.values(input)[0] as string) ?? ''
   const args      = input.args ?? ''
   const c         = 'var(--violet)'
+  const flat      = useColorTreatment() === 'flat'
 
   return (
     <CardShell color={c} result={thread.result} toolName="Skill"
@@ -2512,7 +2552,7 @@ function SkillCard({ thread }: { thread: ToolThread }) {
           onMouseLeave={() => setHovered(false)}
           style={{
             display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px',
-            background: `linear-gradient(to right, rgba(139,128,240,${hovered ? '0.14' : '0.08'}) 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+            background: washBg(flat, `linear-gradient(to right, rgba(139,128,240,${hovered ? '0.14' : '0.08'}) 0%, var(--surface) ${hovered ? '65%' : '50%'})`),
             transition: 'background 0.15s ease',
           }}
         >
@@ -2535,6 +2575,7 @@ function SkillCard({ thread }: { thread: ToolThread }) {
 
 function MultiEditCard({ thread }: { thread: ToolThread }) {
   const { toolUse, result } = thread
+  const flat  = useColorTreatment() === 'flat'
   const input = toolUse.input as {
     file_path?: string
     edits?: { old_string?: string; new_string?: string; replace_all?: boolean }[]
@@ -2566,7 +2607,7 @@ function MultiEditCard({ thread }: { thread: ToolThread }) {
           style={{
             display: 'flex', alignItems: 'center', gap: 8,
             padding: '8px 14px',
-            background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+            background: washBg(flat, `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`),
             userSelect: 'none',
           }}
         >
@@ -2712,6 +2753,7 @@ function WebSearchCard({ thread }: { thread: ToolThread }) {
   const input = thread.toolUse.input as { query?: string; max_uses?: number }
   const query = input.query ?? ''
   const c = 'var(--cyan)'
+  const flat = useColorTreatment() === 'flat'
   const raw = thread.result ? resultToString(thread.result.content) : ''
   const isError = thread.result?.is_error ?? false
   const results = raw ? parseWebSearchResults(raw) : null
@@ -2734,7 +2776,7 @@ function WebSearchCard({ thread }: { thread: ToolThread }) {
         style={{
           display: 'flex', alignItems: 'center', gap: 8,
           padding: '8px 14px',
-          background: `linear-gradient(to right, rgba(56,217,245,${hovered ? '0.14' : '0.08'}) 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+          background: washBg(flat, `linear-gradient(to right, rgba(56,217,245,${hovered ? '0.14' : '0.08'}) 0%, var(--surface) ${hovered ? '65%' : '50%'})`),
           cursor: 'pointer', userSelect: 'none',
           transition: 'background 0.15s ease',
         }}
@@ -2807,6 +2849,7 @@ function WebFetchCard({ thread }: { thread: ToolThread }) {
   const input = thread.toolUse.input as { url?: string; max_content_tokens?: number }
   const url = input.url ?? ''
   const c = toolColor('WebFetch')
+  const flat = useColorTreatment() === 'flat'
 
   let hostname = url
   try { hostname = new URL(url).hostname } catch { /* use full url as fallback */ }
@@ -2820,7 +2863,7 @@ function WebFetchCard({ thread }: { thread: ToolThread }) {
           style={{
             display: 'flex', alignItems: 'center', gap: 8,
             padding: '8px 14px',
-            background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+            background: washBg(flat, `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`),
             transition: 'background 0.15s ease',
           }}
         >
@@ -2857,6 +2900,7 @@ function NotebookEditCard({ thread }: { thread: ToolThread }) {
   const newSource    = input.new_source
   const editMode     = input.edit_mode ?? 'replace'
   const c            = toolColor('NotebookEdit')
+  const flat         = useColorTreatment() === 'flat'
   const hasBody      = !!newSource
 
   const chipColor = NOTEBOOK_EDIT_MODE_COLOR[editMode] ?? 'var(--text-3)'
@@ -2871,7 +2915,7 @@ function NotebookEditCard({ thread }: { thread: ToolThread }) {
           style={{
             display: 'flex', alignItems: 'center', gap: 8,
             padding: '8px 14px',
-            background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+            background: washBg(flat, `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`),
             cursor: hasBody ? 'pointer' : 'default',
             userSelect: 'none',
             transition: 'background 0.15s ease',
@@ -3081,6 +3125,7 @@ function TaskCard({ thread }: { thread: ToolThread }) {
   const { toolUse, result } = thread
   const name  = toolUse.name
   const c     = 'var(--amber)'
+  const flat  = useColorTreatment() === 'flat'
   const input = toolUse.input as TaskInput
   const raw = result ? resultToString(result.content) : ''
   const isError = result?.is_error === true
@@ -3127,7 +3172,7 @@ function TaskCard({ thread }: { thread: ToolThread }) {
       onMouseLeave={() => setHovered(false)}
       style={{
         display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', flexWrap: 'wrap',
-        background: `linear-gradient(to right, rgba(245,158,11,${hovered ? '0.14' : '0.08'}) 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+        background: washBg(flat, `linear-gradient(to right, rgba(245,158,11,${hovered ? '0.14' : '0.08'}) 0%, var(--surface) ${hovered ? '65%' : '50%'})`),
         transition: 'background 0.15s ease',
       }}
     >
@@ -3383,6 +3428,7 @@ function CronCard({ thread }: { thread: ToolThread }) {
   const { toolUse, result } = thread
   const name  = toolUse.name
   const c     = 'var(--t-glob)'
+  const flat  = useColorTreatment() === 'flat'
   const input = toolUse.input as { cron_expression?: string; prompt?: string; task_id?: string }
   const raw   = result ? resultToString(result.content) : ''
 
@@ -3399,7 +3445,7 @@ function CronCard({ thread }: { thread: ToolThread }) {
       onMouseLeave={() => setHovered(false)}
       style={{
         display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px',
-        background: `linear-gradient(to right, var(--t-glob)${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+        background: washBg(flat, `linear-gradient(to right, var(--t-glob)${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`),
         transition: 'background 0.15s ease',
       }}
     >
@@ -3477,6 +3523,7 @@ function McpCard({ thread }: { thread: ToolThread }) {
   const { toolUse, result } = thread
   const name  = toolUse.name
   const c     = 'var(--t-other)'
+  const flat  = useColorTreatment() === 'flat'
   const input = toolUse.input as { server?: string; uri?: string }
   const raw   = result ? resultToString(result.content) : ''
 
@@ -3495,7 +3542,7 @@ function McpCard({ thread }: { thread: ToolThread }) {
       onMouseLeave={() => setHovered(false)}
       style={{
         display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px',
-        background: `linear-gradient(to right, var(--t-other)${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+        background: washBg(flat, `linear-gradient(to right, var(--t-other)${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`),
         cursor: 'pointer', userSelect: 'none', transition: 'background 0.15s ease',
       }}
     >
@@ -4081,6 +4128,7 @@ function RenderText({ block }: { block: TextBlock }) {
 function RenderThinking({ block }: { block: ThinkingBlock }) {
   const [open, setOpen] = useState(false)
   const [hovered, setHovered] = useState(false)
+  const flat = useColorTreatment() === 'flat'
   const text      = block.thinking
   const firstLine = text.split('\n')[0].slice(0, 110)
   const teaser    = firstLine.length < text.length ? firstLine + '…' : firstLine
@@ -4101,9 +4149,9 @@ function RenderThinking({ block }: { block: ThinkingBlock }) {
         style={{
           display: 'flex', alignItems: 'flex-start', gap: 8,
           padding: '7px 12px',
-          background: hovered
+          background: washBg(flat, hovered
             ? 'linear-gradient(to right, rgba(139,128,240,0.14), rgba(139,128,240,0.04))'
-            : 'linear-gradient(to right, var(--violet-glow), transparent)',
+            : 'linear-gradient(to right, var(--violet-glow), transparent)'),
           cursor: 'pointer', userSelect: 'none',
           transition: 'background 0.15s ease',
         }}
@@ -4150,7 +4198,7 @@ function RenderThinking({ block }: { block: ThinkingBlock }) {
       {open && (
         <div style={{
           padding: '12px 14px',
-          background: 'linear-gradient(180deg, rgba(139,128,240,0.04) 0%, var(--surface) 40px)',
+          background: washBg(flat, 'linear-gradient(180deg, rgba(139,128,240,0.04) 0%, var(--surface) 40px)'),
           borderTop: '1px solid rgba(139,128,240,0.15)',
           maxHeight: 420,
           overflowY: 'auto',
@@ -4233,6 +4281,7 @@ function TaskNotificationCard({ block }: { block: TaskNotificationBlock }) {
   const [open, setOpen] = useState(false)
   const [hovered, setHovered] = useState(false)
   const c = 'var(--violet)'
+  const flat = useColorTreatment() === 'flat'
   const { summary, result, usage, status } = block
   const hasResult = result.trim().length > 0
 
@@ -4252,7 +4301,7 @@ function TaskNotificationCard({ block }: { block: TaskNotificationBlock }) {
         onMouseLeave={() => setHovered(false)}
         style={{
           display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px',
-          background: `linear-gradient(to right, var(--violet)${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+          background: washBg(flat, `linear-gradient(to right, var(--violet)${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`),
           cursor: hasResult ? 'pointer' : 'default',
           userSelect: 'none', transition: 'background 0.15s ease',
         }}
@@ -4291,7 +4340,8 @@ function TaskNotificationCard({ block }: { block: TaskNotificationBlock }) {
 // ── Slash command card ────────────────────────────────────────────────────────
 
 function SlashCommandCard({ block }: { block: SlashCommandBlock }) {
-  const c = 'var(--cyan)'
+  const c    = 'var(--cyan)'
+  const flat = useColorTreatment() === 'flat'
   return (
     <div style={{
       border: '1px solid var(--border)',
@@ -4304,7 +4354,7 @@ function SlashCommandCard({ block }: { block: SlashCommandBlock }) {
       <div style={{
         display: 'flex', alignItems: 'center', gap: 10,
         padding: '7px 14px',
-        background: 'linear-gradient(to right, rgba(34,211,238,0.10), var(--surface))',
+        background: washBg(flat, 'linear-gradient(to right, rgba(34,211,238,0.10), var(--surface))'),
       }}>
         <span style={{
           fontFamily: "'IBM Plex Mono', monospace",
@@ -4503,6 +4553,7 @@ function formatClaudeTimestamp(value: unknown): string | null {
 function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
   const [open, setOpen] = useState(false)
   const [hovered, setHovered] = useState(false)
+  const flat = useColorTreatment() === 'flat'
   const { subtype, payload } = block
   const content = typeof payload.content === 'string' ? payload.content : ''
   const stopReason = typeof payload.stop_reason === 'string' ? payload.stop_reason : ''
@@ -4904,9 +4955,9 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
           alignItems: 'center',
           gap: 8,
           padding: '8px 12px',
-          background: hovered
+          background: washBg(flat, hovered
             ? `linear-gradient(to right, ${tone}22, var(--surface))`
-            : `linear-gradient(to right, ${tone}14, var(--surface))`,
+            : `linear-gradient(to right, ${tone}14, var(--surface))`),
           cursor: 'pointer',
           userSelect: 'none',
           transition: 'background 0.12s ease',

@@ -4,6 +4,7 @@ import './globals.css'
 import { THEMES } from '@/lib/themes'
 import { RouteTransition } from '@/components/RouteTransition'
 import { RENDER_FONT_IDS, RENDER_FONT_STORAGE_KEY } from '@/lib/renderFonts'
+import { COLOR_TREATMENTS, COLOR_TREATMENT_STORAGE_KEY } from '@/lib/colorTreatment'
 
 const atkinson = Atkinson_Hyperlegible({
   weight: ['400', '700'],
@@ -54,7 +55,7 @@ export const metadata: Metadata = {
 
 // Runs synchronously before first paint — prevents a flash of the wrong theme or render font.
 // Safe: this is a static literal, not user-supplied content.
-const themeScript = `(function(){try{var v=${JSON.stringify(THEMES)};var t=localStorage.getItem('theme');if(t&&v.indexOf(t)>=0){document.documentElement.dataset.theme=t;}var f=${JSON.stringify(RENDER_FONT_IDS)};var rf=localStorage.getItem(${JSON.stringify(RENDER_FONT_STORAGE_KEY)});if(rf&&f.indexOf(rf)>=0){document.documentElement.dataset.renderFont=rf;}}catch(e){}})()`
+const themeScript = `(function(){try{var v=${JSON.stringify(THEMES)};var t=localStorage.getItem('theme');if(t&&v.indexOf(t)>=0){document.documentElement.dataset.theme=t;}var f=${JSON.stringify(RENDER_FONT_IDS)};var rf=localStorage.getItem(${JSON.stringify(RENDER_FONT_STORAGE_KEY)});if(rf&&f.indexOf(rf)>=0){document.documentElement.dataset.renderFont=rf;}var c=${JSON.stringify(COLOR_TREATMENTS)};var ct=localStorage.getItem(${JSON.stringify(COLOR_TREATMENT_STORAGE_KEY)});if(ct&&c.indexOf(ct)>=0){document.documentElement.dataset.colorTreatment=ct;}}catch(e){}})()`
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

@@ -1,6 +1,12 @@
 'use client'
 
-import { memo, useState, useRef, useCallback, useDeferredValue, useEffect, useMemo } from 'react'
+import { memo, useState, useRef, useCallback, useDeferredValue, useEffect, useMemo, useSyncExternalStore } from 'react'
+import {
+  DEFAULT_COLOR_TREATMENT,
+  getCurrentColorTreatment,
+  subscribeColorTreatment,
+  type ColorTreatment,
+} from '@/lib/colorTreatment'
 import { normalizeProjectPath, pathBasename, pickCanonicalProjectPath, sameProjectPath } from '@/lib/projectPaths'
 import type { AgentProvider, ProviderSelection, Session } from '@/lib/types'
 import { parseSessionTagInput, parseStoredSessionTags, serializeSessionTags } from '@/lib/sessionTags'
@@ -761,8 +767,17 @@ function SessionListInner({
 }: Props) {
   const { state: sidebarState, width: sidebarWidth, setWidth: setSidebarWidth, applyWidth, setOpen } = useSidebar()
   const collapsed = sidebarState === 'collapsed'
+  const colorTreatment = useSyncExternalStore<ColorTreatment>(
+    subscribeColorTreatment,
+    getCurrentColorTreatment,
+    () => DEFAULT_COLOR_TREATMENT,
+  )
   const [resizing, setResizing] = useState(false)
   const [collapsedPanel, setCollapsedPanel] = useState<CollapsedPanel | null>(null)
+  const providerSelectClassName = colorTreatment === 'flat'
+    ? cn(nativeSelectBaseClassName,
+      'av-hover-control h-9 rounded-[9px] border-[var(--border)] bg-[var(--surface-2)] bg-none px-3 text-[11px] font-medium tracking-[0.04em] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]')
+    : providerNativeSelectClassName
   const resizeFrameRef = useRef<number | null>(null)
   const resizeWidthRef = useRef(sidebarWidth)
   const providerSelectRef = useRef<HTMLSelectElement>(null)
@@ -1021,7 +1036,7 @@ function SessionListInner({
             display: 'flex',
             flex: 1,
             minHeight: 0,
-            background: 'linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%)',
+            background: colorTreatment === 'flat' ? 'var(--surface)' : 'linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%)',
           }}
         >
           <div
@@ -1173,7 +1188,7 @@ function SessionListInner({
                 maxHeight: 'calc(100vh - 104px)',
                 borderRadius: 16,
                 border: '1px solid var(--border)',
-                background: 'linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%)',
+                background: colorTreatment === 'flat' ? 'var(--surface)' : 'linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%)',
                 boxShadow: '0 24px 60px var(--shadow, rgba(0,0,0,0.22))',
                 overflow: 'hidden',
                 display: 'flex',
@@ -1370,7 +1385,7 @@ function SessionListInner({
                         value={provider}
                         onChange={(event) => onChangeProvider(event.target.value as ProviderSelection)}
                         disabled={switchingProvider}
-                        className={cn(providerNativeSelectClassName, switchingProvider ? 'cursor-not-allowed opacity-60' : 'cursor-pointer')}
+className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed opacity-60' : 'cursor-pointer')}
                       >
                         <NativeSelectOption value="claude">CLAUDE</NativeSelectOption>
                         <NativeSelectOption value="codex">CODEX</NativeSelectOption>
@@ -1676,7 +1691,7 @@ function SessionListInner({
             padding: '12px 14px 10px',
             borderBottom: '1px solid var(--border)',
             flexShrink: 0,
-            background: 'linear-gradient(160deg, rgba(139,128,240,0.07) 0%, transparent 60%)',
+            background: colorTreatment === 'flat' ? 'var(--surface)' : 'linear-gradient(160deg, rgba(139,128,240,0.07) 0%, transparent 60%)',
           }}
         >
           <div
@@ -1829,7 +1844,7 @@ function SessionListInner({
               margin: '10px 14px 8px',
               borderRadius: 10,
               border: '1px solid var(--border)',
-              background: 'linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%)',
+              background: colorTreatment === 'flat' ? 'var(--surface)' : 'linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%)',
               boxShadow: '0 10px 24px var(--violet-glow)',
             }}
           >
@@ -1854,7 +1869,7 @@ function SessionListInner({
                     value={provider}
                     onChange={(event) => onChangeProvider(event.target.value as ProviderSelection)}
                     disabled={switchingProvider}
-                    className={cn(providerNativeSelectClassName, switchingProvider ? 'cursor-not-allowed opacity-60' : 'cursor-pointer')}
+                    className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed opacity-60' : 'cursor-pointer')}
                   >
                     <NativeSelectOption value="claude">CLAUDE</NativeSelectOption>
                     <NativeSelectOption value="codex">CODEX</NativeSelectOption>
