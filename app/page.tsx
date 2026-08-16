@@ -1374,6 +1374,7 @@ export default function Home() {
                     selectedTabId={selectedTabKey}
                     onSelectTab={selectOpenTab}
                     onCloseTab={closeTab}
+                    onOpenSession={selectCommandPaletteSession}
                     taskPanelOpenRequest={taskPanelOpenRequest}
                     promptLibraryOpenRequest={promptLibraryOpenRequest}
                     channelBridgeOpenRequest={channelBridgeOpenRequest}

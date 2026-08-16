@@ -517,3 +517,42 @@ export function stripToolCallBlocks(messages: ThreadedMessage[]): ThreadedMessag
   }
   return out
 }
+
+/** Minimal shape computeTurnDurationsMs needs — satisfied by both
+ * ThreadedMessage and a raw subagent transcript message. */
+export type TurnDurationInput = { role: string; uuid: string; timestamp?: string }
+
+/**
+ * Elapsed wall-clock ms per turn, keyed by every message uuid in that turn
+ * (a turn = one user message plus every message up to the next user
+ * message). Shared by web (components/MessageItem.tsx, including nested
+ * subagent transcripts) and both TUIs (tui/format.ts) so "turn duration"
+ * means the same thing everywhere — renderers format the ms value with
+ * their own local duration formatter.
+ */
+export function computeTurnDurationsMs(messages: TurnDurationInput[]): Map<string, number> {
+  const durations = new Map<string, number>()
+  let turnUuids: string[] = []
+  let turnStart: number | null = null
+  let turnEnd: number | null = null
+  const flush = () => {
+    if (turnStart !== null && turnEnd !== null && turnEnd > turnStart) {
+      const ms = turnEnd - turnStart
+      for (const uuid of turnUuids) durations.set(uuid, ms)
+    }
+    turnUuids = []
+    turnStart = null
+    turnEnd = null
+  }
+  for (const msg of messages) {
+    if (msg.role === 'user') flush()
+    turnUuids.push(msg.uuid)
+    const ts = msg.timestamp ? Date.parse(msg.timestamp) : NaN
+    if (!Number.isNaN(ts)) {
+      if (turnStart === null) turnStart = ts
+      turnEnd = ts
+    }
+  }
+  flush()
+  return durations
+}

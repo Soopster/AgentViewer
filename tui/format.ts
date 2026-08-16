@@ -10,7 +10,7 @@ import {
 import { pathBasename } from '../lib/projectPaths'
 import { renderMermaidASCII } from 'beautiful-mermaid'
 import { detectTuiCodeFiletypeFromPath, normalizeTuiCodeFiletype } from './codeFiletypes'
-import type { ThreadedBlock, ThreadedMessage, ToolThread } from '../lib/threading'
+import { computeTurnDurationsMs, type ThreadedBlock, type ThreadedMessage, type ToolThread } from '../lib/threading'
 import { buildTaskRegistry, parseCreatedTaskId, type TaskRegistry } from '../lib/taskRegistry'
 import type { ContentBlock, Session, SessionInfo, SystemMessagePayload } from '../lib/types'
 import type { TuiDensity } from './theme'
@@ -1425,7 +1425,7 @@ function compactOneLine(value: string, maxChars = MAX_PREVIEW_CHARS): string {
   return truncateLine(value.replace(/\s+/g, ' ').trim(), maxChars)
 }
 
-function formatDurationMs(value: number): string {
+export function formatDurationMs(value: number): string {
   if (value < 1000) return `${Math.round(value)}ms`
   if (value < 10_000) return `${(value / 1000).toFixed(1)}s`
   return `${Math.round(value / 1000)}s`
@@ -1857,6 +1857,8 @@ export type TuiTranscriptCard = {
   autoFold: boolean
   compactSummary: string
   usageSummary?: string
+  /** Elapsed wall-clock ms for this message's turn (see computeTurnDurationsMs), already formatted for display. */
+  durationLabel?: string
   timestamp?: string
   timestampMs?: number
   dayKey?: string
@@ -2066,7 +2068,7 @@ function synthesizeEditDiff(message: ThreadedMessage): string | undefined {
   return hunks.length > 0 ? hunks.join('\n') : undefined
 }
 
-export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensity = 'balanced', activeForms?: TaskActiveForms, taskRegistry?: TaskRegistry): TuiTranscriptCard {
+export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensity = 'balanced', activeForms?: TaskActiveForms, taskRegistry?: TaskRegistry, durationMs?: number): TuiTranscriptCard {
   const baseLabel = message.role === 'assistant'
     ? getAssistantLabel(message.provider)
     : message.role.toUpperCase()
@@ -2111,6 +2113,7 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
     autoFold,
     compactSummary,
     usageSummary: formatUsageSummary(message),
+    durationLabel: durationMs != null && durationMs > 0 ? formatDurationMs(durationMs) : undefined,
     timestamp: message.timestamp ? formatTimestamp(message.timestamp) : undefined,
     timestampMs: parsedTimestamp && !Number.isNaN(parsedTimestamp.getTime()) ? parsedTimestamp.getTime() : undefined,
     dayKey: parsedTimestamp && !Number.isNaN(parsedTimestamp.getTime()) ? parsedTimestamp.toISOString().slice(0, 10) : undefined,
@@ -2132,7 +2135,8 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
 
 export function formatTranscriptCards(messages: ThreadedMessage[], density: TuiDensity = 'balanced'): TuiTranscriptCard[] {
   const { activeForms, taskRegistry } = buildTranscriptTaskContext(messages)
-  return messages.map((message) => formatTranscriptCard(message, density, activeForms, taskRegistry))
+  const durations = computeTurnDurationsMs(messages)
+  return messages.map((message) => formatTranscriptCard(message, density, activeForms, taskRegistry, durations.get(message.uuid)))
 }
 
 export function formatSessionLabel(session: Session): string {

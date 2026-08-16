@@ -8,7 +8,7 @@ import {
   type ColorTreatment,
 } from '@/lib/colorTreatment'
 import { normalizeProjectPath, pathBasename, pickCanonicalProjectPath, sameProjectPath } from '@/lib/projectPaths'
-import type { AgentProvider, ProviderSelection, Session } from '@/lib/types'
+import type { AgentProvider, ProviderSelection, Session, SubagentSummary } from '@/lib/types'
 import { parseSessionTagInput, parseStoredSessionTags, serializeSessionTags } from '@/lib/sessionTags'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -252,13 +252,32 @@ function matchesIndexedSessionSearch(session: IndexedSession, search: string, ac
   return session.searchText.includes(search)
 }
 
-function groupByProject(sessions: IndexedSession[]): ProjectGroupEntry[] {
+/**
+ * Sessions with a known `parentSessionId` (today: OpenCode subagent child
+ * sessions — Claude subagents aren't real sessions at all, see
+ * getClaudeSubagentSummaries) are pulled out of the flat/grouped list and
+ * returned separately so the sidebar can nest them under their parent row
+ * instead of showing them as unrelated top-level sessions.
+ */
+function groupByProject(sessions: IndexedSession[]): { groups: ProjectGroupEntry[]; childrenByParentId: Map<string, Session[]> } {
   const groups: ProjectGroupEntry[] = []
   const groupsByPath = new Map<string, ProjectGroupEntry>()
   const groupsByBaseName = new Map<string, ProjectGroupEntry>()
+  const childrenByParentId = new Map<string, Session[]>()
+  // Only nest a child under its parent if the parent is actually present in
+  // this list — otherwise (parent filtered out by search/tags, or deleted)
+  // fall through to the flat "↪ child of …" badge so the row isn't hidden.
+  const presentIds = new Set(sessions.map((s) => s.session.sessionId))
 
   for (const indexed of sessions) {
     const { session, normalizedProjectDir, projectName } = indexed
+    if (session.parentSessionId && presentIds.has(session.parentSessionId)) {
+      const siblings = childrenByParentId.get(session.parentSessionId)
+      if (siblings) siblings.push(session)
+      else childrenByParentId.set(session.parentSessionId, [session])
+      continue
+    }
+
     const byPath = groupsByPath.get(normalizedProjectDir)
     if (byPath) {
       byPath.sessions.push(session)
@@ -285,7 +304,7 @@ function groupByProject(sessions: IndexedSession[]): ProjectGroupEntry[] {
     groupsByBaseName.set(projectName, group)
   }
 
-  return groups
+  return { groups, childrenByParentId }
 }
 
 function providerChipStyle(provider: AgentProvider): { color: string; background: string; border: string } {
@@ -619,6 +638,174 @@ const SessionRow = memo(function SessionRow({
   )
 })
 
+const EMPTY_SESSIONS: Session[] = []
+
+function formatCompactTokens(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
+  return `${n}`
+}
+
+const SubagentSidebarRow = memo(function SubagentSidebarRow({
+  summary,
+  onSelect,
+}: {
+  summary: SubagentSummary
+  onSelect: () => void
+}) {
+  const label = summary.taskDescription?.trim() || summary.agentId
+  return (
+    <div
+      onClick={onSelect}
+      className="av-session-row av-hover-control"
+      title={summary.taskDescription || summary.agentId}
+      style={{
+        padding: '7px 16px 7px 44px',
+        borderBottom: '1px solid var(--border)',
+        cursor: 'pointer',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 2,
+      }}
+    >
+      <div
+        style={{
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 11,
+          color: 'var(--text-2)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {label}
+      </div>
+      <div style={{ display: 'flex', gap: 8, fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>
+        <span>{summary.agentId.slice(-8)}</span>
+        <span>{summary.messageCount} msgs</span>
+        <span>{formatCompactTokens(summary.usage.inputTokens)} ctx / {formatCompactTokens(summary.usage.outputTokens)} out</span>
+      </div>
+    </div>
+  )
+})
+
+const SessionRowGroup = memo(function SessionRowGroup({
+  session,
+  selected,
+  selectedId,
+  hydrated,
+  knownChildren,
+  onSelect,
+  onRename,
+  onTag,
+}: {
+  session: Session
+  selected: boolean
+  selectedId: string | null
+  hydrated: boolean
+  knownChildren: Session[]
+  onSelect: (session: Session) => void
+  onRename: (sessionId: string, title: string) => void
+  onTag: (sessionId: string, tag: string | null) => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const [claudeSubagents, setClaudeSubagents] = useState<SubagentSummary[] | null>(null)
+  const [loadingSubagents, setLoadingSubagents] = useState(false)
+  const canHaveClaudeSubagents = !session.provider || session.provider === 'claude'
+  const hasKnownChildren = knownChildren.length > 0
+  const showDisclosure = hasKnownChildren || canHaveClaudeSubagents
+
+  useEffect(() => {
+    if (!expanded || !canHaveClaudeSubagents || claudeSubagents !== null || loadingSubagents) return
+    let cancelled = false
+    setLoadingSubagents(true)
+    fetch(`/api/sessions/${session.sessionId}/subagents${session.provider ? `?provider=${session.provider}` : ''}`)
+      .then((res) => (res.ok ? res.json() : { subagents: [] }))
+      .then((data: { subagents?: SubagentSummary[] }) => {
+        if (!cancelled) setClaudeSubagents(data.subagents ?? [])
+      })
+      .catch(() => {
+        if (!cancelled) setClaudeSubagents([])
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingSubagents(false)
+      })
+    return () => { cancelled = true }
+  }, [expanded, canHaveClaudeSubagents, claudeSubagents, loadingSubagents, session.sessionId, session.provider])
+
+  const subagentCount = (claudeSubagents?.length ?? 0) + knownChildren.length
+
+  return (
+    <div>
+      <div style={{ position: 'relative' }}>
+        {showDisclosure && (
+          <span
+            onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v) }}
+            title={expanded ? 'Collapse subagents' : 'Expand subagents'}
+            style={{
+              position: 'absolute',
+              left: 8,
+              top: 12,
+              fontSize: 9,
+              color: 'var(--text-3)',
+              cursor: 'pointer',
+              zIndex: 1,
+              padding: 4,
+            }}
+          >
+            {expanded ? '▾' : '▸'}
+          </span>
+        )}
+        <SessionRow
+          session={session}
+          selected={selected}
+          hydrated={hydrated}
+          onSelect={onSelect}
+          onRename={onRename}
+          onTag={onTag}
+        />
+      </div>
+      {expanded && (
+        <div>
+          {(hasKnownChildren || subagentCount > 0) && (
+            <div
+              style={{
+                padding: '4px 16px 4px 32px',
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 9,
+                letterSpacing: '0.08em',
+                color: 'var(--text-3)',
+                textTransform: 'uppercase',
+              }}
+            >
+              Subagents {subagentCount > 0 ? `(${subagentCount})` : ''}
+            </div>
+          )}
+          {knownChildren.map((child) => (
+            <div key={sessionTabKey(child)} style={{ paddingLeft: 20 }}>
+              <SessionRow
+                session={child}
+                selected={sessionTabKey(child) === selectedId}
+                hydrated={hydrated}
+                onSelect={onSelect}
+                onRename={onRename}
+                onTag={onTag}
+              />
+            </div>
+          ))}
+          {loadingSubagents && (
+            <div style={{ padding: '6px 16px 6px 44px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>
+              Loading…
+            </div>
+          )}
+          {claudeSubagents?.map((summary) => (
+            <SubagentSidebarRow key={summary.agentId} summary={summary} onSelect={() => onSelect(session)} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+})
+
 const ProjectGroup = memo(function ProjectGroup({
   name,
   projectKey,
@@ -627,6 +814,7 @@ const ProjectGroup = memo(function ProjectGroup({
   selectedProject,
   hydrated,
   scrollToSessionKey,
+  childrenByParentId,
   onSelect,
   onSelectProject,
   onRename,
@@ -639,6 +827,7 @@ const ProjectGroup = memo(function ProjectGroup({
   selectedProject: string | null
   hydrated: boolean
   scrollToSessionKey?: string | null
+  childrenByParentId?: Map<string, Session[]>
   onSelect: (session: Session) => void
   onSelectProject: (projectDir: string, projectName: string, sessions: Session[]) => void
   onRename: (sessionId: string, title: string) => void
@@ -719,11 +908,13 @@ const ProjectGroup = memo(function ProjectGroup({
 
       {/* Sessions */}
       {!collapsed && sessions.map((session) => (
-        <SessionRow
+        <SessionRowGroup
           key={sessionTabKey(session)}
           session={session}
           selected={sessionTabKey(session) === selectedId}
+          selectedId={selectedId}
           hydrated={hydrated}
+          knownChildren={childrenByParentId?.get(session.sessionId) ?? EMPTY_SESSIONS}
           onSelect={onSelect}
           onRename={onRename}
           onTag={onTag}
@@ -881,7 +1072,7 @@ function SessionListInner({
     () => indexedSessions.filter((session) => matchesIndexedSessionSearch(session, normalizedSearch, activeTag)),
     [indexedSessions, normalizedSearch, activeTag],
   )
-  const groups = useMemo(() => groupByProject(filteredSessions), [filteredSessions])
+  const { groups, childrenByParentId } = useMemo(() => groupByProject(filteredSessions), [filteredSessions])
   const sessionActivityMs = useCallback((session: Session): number => {
     const value = session.lastModified ?? session.createdAt
     if (value == null) return 0
@@ -1294,6 +1485,7 @@ function SessionListInner({
                           selectedId={selectedId}
                           selectedProject={selectedProject}
                           hydrated={hydrated}
+                          childrenByParentId={childrenByParentId}
                           onSelect={onSelect}
                           onSelectProject={onSelectProject}
                           onRename={onRename}
@@ -2112,6 +2304,7 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                 selectedProject={selectedProject}
                 hydrated={hydrated}
                 scrollToSessionKey={scrollToSessionRequest?.sessionKey ?? null}
+                childrenByParentId={childrenByParentId}
                 onSelect={onSelect}
                 onSelectProject={onSelectProject}
                 onRename={onRename}

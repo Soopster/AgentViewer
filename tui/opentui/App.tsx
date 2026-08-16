@@ -51,7 +51,7 @@ import {
   type TuiTranscriptCardLine,
 } from '../format'
 import { detectTuiCodeFiletypeFromPath } from '../codeFiletypes'
-import { stripToolCallBlocks, type ThreadedMessage } from '../../lib/threading'
+import { computeTurnDurationsMs, stripToolCallBlocks, type ThreadedMessage } from '../../lib/threading'
 import { buildTaskRegistry } from '../../lib/taskRegistry'
 import { buildDiffCommentComposerPrompt } from '../../lib/diffCommentComposer'
 import {
@@ -163,7 +163,7 @@ import {
   getTranscriptCardsSync,
 } from './sessionDetailWorkerClient'
 import type { TuiSessionReaderState } from '../../lib/tuiState'
-import type { AgentProvider, ContextUsage, ProviderSelection, ReasoningEffortLevel, RunningSessionRef, SendAttachment, SendState, Session, SessionComposerAgentOption, SessionModelInfo, ToolResultBlock } from '../../lib/types'
+import type { AgentProvider, ContextUsage, ProviderSelection, ReasoningEffortLevel, RunningSessionRef, SendAttachment, SendState, Session, SessionComposerAgentOption, SessionModelInfo, SubagentSummary, ToolResultBlock } from '../../lib/types'
 import { AttentionInboxPopover, attentionItemNeedsInput, type AttentionItem } from './AttentionInboxPopover'
 import { CrossSessionMessagingPopover } from './CrossSessionMessagingPopover'
 import { CheckpointPopover } from './CheckpointPopover'
@@ -2682,14 +2682,45 @@ function isDurableSessionMessage(message: import('../../lib/types').SessionMessa
   return message.ephemeral !== true
 }
 
+/** A nested sidebar row under a parent session: either a real child session
+ * (OpenCode `task` subagents — already in the sessions list, keyed by
+ * parentSessionId) or a synthesized Claude subagent summary (Claude
+ * subagents aren't real sessions at all — see getClaudeSubagentSummaries). */
+type SidebarSubagentEntry =
+  | { kind: 'session'; session: Session }
+  | { kind: 'summary'; summary: SubagentSummary }
+
 type SidebarEntry =
   | { type: 'project'; key: string; projectName: string; count: number }
   | { type: 'session'; key: string; session: Session; absoluteIndex: number }
+  | { type: 'subagent'; key: string; parentSession: Session; entry: SidebarSubagentEntry }
 
-function buildSidebarEntries(sessions: Session[], sort: TuiSidebarSort): SidebarEntry[] {
+function buildSidebarEntries(
+  sessions: Session[],
+  sort: TuiSidebarSort,
+  childrenByParentId?: Map<string, SidebarSubagentEntry[]>,
+): SidebarEntry[] {
   const entries: SidebarEntry[] = []
-  const orderedSessions = sessions
-    .map((session, absoluteIndex) => ({ session, absoluteIndex }))
+  // Real child sessions (OpenCode) are nested under their parent instead of
+  // appearing as unrelated top-level rows — but only when the parent is
+  // actually present in this list (search/filter can exclude it).
+  const presentIds = new Set(sessions.map((s) => s.sessionId))
+  const isNestedChild = (session: Session) =>
+    !!session.parentSessionId && presentIds.has(session.parentSessionId)
+  const pushSubagents = (parentSession: Session, parentKey: string) => {
+    const children = childrenByParentId?.get(parentSession.sessionId)
+    if (!children || children.length === 0) return
+    for (const child of children) {
+      const key = child.kind === 'session'
+        ? `subagent:${parentKey}:${sessionKey(child.session)}`
+        : `subagent:${parentKey}:${child.summary.agentId}`
+      entries.push({ type: 'subagent', key, parentSession, entry: child })
+    }
+  }
+
+  const visibleSessions = sessions.filter((session) => !isNestedChild(session))
+  const orderedSessions = visibleSessions
+    .map((session) => ({ session, absoluteIndex: sessions.indexOf(session) }))
     .sort((a, b) => compareSessionsByActivityDesc(a.session, b.session))
 
   if (sort === 'time') {
@@ -2711,12 +2742,14 @@ function buildSidebarEntries(sessions: Session[], sort: TuiSidebarSort): Sidebar
         entries.push({ type: 'project', key: `project:${projectName}:${i}`, projectName, count: run })
         prevProject = projectName
       }
+      const sessionEntryKey = `session:${session.provider ?? 'claude'}:${session.sessionId}`
       entries.push({
         type: 'session',
-        key: `session:${session.provider ?? 'claude'}:${session.sessionId}`,
+        key: sessionEntryKey,
         session,
         absoluteIndex,
       })
+      pushSubagents(session, sessionEntryKey)
     }
     return entries
   }
@@ -2738,12 +2771,14 @@ function buildSidebarEntries(sessions: Session[], sort: TuiSidebarSort): Sidebar
     const members = groups.get(projectName)!
     entries.push({ type: 'project', key: `project:${projectName}`, projectName, count: members.length })
     for (const { session, absoluteIndex } of members) {
+      const sessionEntryKey = `session:${session.provider ?? 'claude'}:${session.sessionId}`
       entries.push({
         type: 'session',
-        key: `session:${session.provider ?? 'claude'}:${session.sessionId}`,
+        key: sessionEntryKey,
         session,
         absoluteIndex,
       })
+      pushSubagents(session, sessionEntryKey)
     }
   }
   return entries
@@ -5042,7 +5077,8 @@ function TranscriptCardInner({
     headerMeta,
     card.category === 'diff' ? `s ${diffLayout}` : null,
     isSearchHit ? 'match' : null,
-    isSelected ? card.usageSummary ?? null : null,
+    card.usageSummary ?? null,
+    card.durationLabel ? `⏱ ${card.durationLabel}` : null,
     hasCursor ? 'y copy  b bookmark  Q reply' : null,
   ])
   const bookmarkGlyph = bookmarked ? '★ ' : ''
@@ -5245,6 +5281,7 @@ function TranscriptCardInner({
       isSearchHit ? 'match' : null,
       bookmarked ? 'bookmarked' : null,
       card.usageSummary ?? null,
+      card.durationLabel ? `⏱ ${card.durationLabel}` : null,
       hasCursor ? 'y copy  b bookmark  Q reply' : null,
     ])
     const agentsMaxTitleWidth = Math.max(agentWidth - 4, 20)
@@ -8190,7 +8227,8 @@ export default function OpenTuiApp() {
         : stripToolCallBlocks(sessionDetail.threadedMessages)
       const activeForms = buildTaskActiveForms(filtered)
       const taskRegistry = buildTaskRegistry(filtered)
-      cards = filtered.map((msg) => formatTranscriptCard(msg, density, activeForms, taskRegistry))
+      const durations = computeTurnDurationsMs(filtered)
+      cards = filtered.map((msg) => formatTranscriptCard(msg, density, activeForms, taskRegistry, durations.get(msg.uuid)))
       recomputed = cards.length
     }
     if (CARD_PROFILE) {
@@ -8610,8 +8648,54 @@ export default function OpenTuiApp() {
       )
     })
   }, [sessions, normalizedSessionQuery])
+  // Claude subagents aren't real sessions (see getClaudeSubagentSummaries), so
+  // the sidebar can't learn about them from the sessions list at all. Fetch
+  // lazily for whichever session is currently open in the reader — cheap (one
+  // request per selection change) and avoids a new expand/collapse keybinding.
+  // Cache is additive across selection changes so revisiting a session is free.
+  const [claudeSubagentSummaries, setClaudeSubagentSummaries] = useState<Map<string, SubagentSummary[]>>(new Map())
+  useEffect(() => {
+    const target = selectedSessionTarget
+    if (!target || (target.provider ?? 'claude') !== 'claude') return
+    if (claudeSubagentSummaries.has(target.sessionId)) return
+    let cancelled = false
+    fetch(`/api/sessions/${target.sessionId}/subagents`)
+      .then((res) => (res.ok ? res.json() : { subagents: [] }))
+      .then((data: { subagents?: SubagentSummary[] }) => {
+        if (cancelled) return
+        setClaudeSubagentSummaries((prev) => {
+          const next = new Map(prev)
+          next.set(target.sessionId, data.subagents ?? [])
+          return next
+        })
+      })
+      .catch(() => {
+        if (!cancelled) setClaudeSubagentSummaries((prev) => new Map(prev).set(target.sessionId, []))
+      })
+    return () => { cancelled = true }
+  }, [selectedSessionTarget, claudeSubagentSummaries])
+
+  const childrenByParentId = useMemo(() => {
+    const map = new Map<string, SidebarSubagentEntry[]>()
+    for (const session of filteredSessionsForSidebar) {
+      if (!session.parentSessionId) continue
+      const siblings = map.get(session.parentSessionId)
+      const entry: SidebarSubagentEntry = { kind: 'session', session }
+      if (siblings) siblings.push(entry)
+      else map.set(session.parentSessionId, [entry])
+    }
+    for (const [parentSessionId, summaries] of claudeSubagentSummaries) {
+      if (summaries.length === 0) continue
+      const entries: SidebarSubagentEntry[] = summaries.map((summary) => ({ kind: 'summary', summary }))
+      const existing = map.get(parentSessionId)
+      if (existing) existing.push(...entries)
+      else map.set(parentSessionId, entries)
+    }
+    return map
+  }, [filteredSessionsForSidebar, claudeSubagentSummaries])
+
   const sidebarEntries = useMemo(() => {
-    const entries = buildSidebarEntries(filteredSessionsForSidebar, sidebarSort)
+    const entries = buildSidebarEntries(filteredSessionsForSidebar, sidebarSort, childrenByParentId)
     if (filteredSessionsForSidebar === sessions) return entries
     const originalIndex = new Map<string, number>()
     sessions.forEach((s, i) => { originalIndex.set(sessionKey(s), i) })
@@ -8620,7 +8704,7 @@ export default function OpenTuiApp() {
       const idx = originalIndex.get(sessionKey(entry.session))
       return idx === undefined ? entry : { ...entry, absoluteIndex: idx }
     })
-  }, [filteredSessionsForSidebar, sessions, sidebarSort])
+  }, [filteredSessionsForSidebar, sessions, sidebarSort, childrenByParentId])
   // Ref mirror for the neighbour-prefetch effect: it needs the current sidebar
   // order at fire time without re-triggering on every 5s sessions poll (the
   // entries array gets a fresh identity each refresh).
@@ -12203,6 +12287,42 @@ export default function OpenTuiApp() {
       )
     }
 
+    if (entry.type === 'subagent') {
+      const subagentEntry = entry.entry
+      const label = subagentEntry.kind === 'session'
+        ? formatSessionTitle(subagentEntry.session) || subagentEntry.session.sessionId.slice(-8)
+        : (subagentEntry.summary.taskDescription?.trim() || subagentEntry.summary.agentId.slice(-8))
+      const detail = subagentEntry.kind === 'session'
+        ? joinMeta([formatProviderLabel(subagentEntry.session.provider), timeAgo(subagentEntry.session.lastModified ?? subagentEntry.session.createdAt)])
+        : joinMeta([
+            `${subagentEntry.summary.messageCount} msgs`,
+            `${fmtTokens(subagentEntry.summary.usage.inputTokens)} ctx / ${fmtTokens(subagentEntry.summary.usage.outputTokens)} out`,
+          ])
+      return (
+        <box
+          key={entry.key}
+          id={`sidebar:${entry.key}`}
+          flexDirection="column"
+          paddingLeft={2}
+          backgroundColor={theme.surface}
+          onMouseDown={(event) => {
+            if (event.button !== 0) return
+            event.stopPropagation()
+            selectSidebarSession(subagentEntry.kind === 'session' ? subagentEntry.session : entry.parentSession)
+          }}
+        >
+          <text fg={theme.muted} wrapMode="none">
+            {fitText(`  ↪ ${label}`, sidebarInnerWidth - 2)}
+          </text>
+          {detail && (
+            <text fg={theme.muted} wrapMode="none">
+              {fitText(`    ${detail}`, sidebarInnerWidth - 2)}
+            </text>
+          )}
+        </box>
+      )
+    }
+
     const sessionAccent = getProviderAccent(entry.session.provider ?? 'claude')
     const activityTime = entry.session.lastModified ?? entry.session.createdAt
     const ago = timeAgo(activityTime)
@@ -12326,7 +12446,7 @@ export default function OpenTuiApp() {
     const live = new Set<string>()
     const rows = sidebarEntries.map((entry) => {
       live.add(entry.key)
-      const selected = entry.type !== 'project' && entry.absoluteIndex === selectedIndex
+      const selected = entry.type === 'session' && entry.absoluteIndex === selectedIndex
       const prev = cache.get(entry.key)
       // `entry` identity changes only when the session list polls (new array),
       // and `build` carries theme/density/width/rename state via its deps — so a

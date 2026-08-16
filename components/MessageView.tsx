@@ -18,7 +18,7 @@ import type {
   ReasoningEffortLevel,
 } from '@/lib/types'
 import { readJsonResponse, readOptionalJsonResponse } from '@/lib/httpResponse'
-import { buildThreadedMessages, buildThreadedMessagesIncremental, stripToolCallBlocks, type IncrementalThreadingCache, type ThreadedMessage, type ThreadedBlock } from '@/lib/threading'
+import { buildThreadedMessages, buildThreadedMessagesIncremental, computeTurnDurationsMs, stripToolCallBlocks, type IncrementalThreadingCache, type ThreadedMessage, type ThreadedBlock } from '@/lib/threading'
 import { measureSync, recordClientPerf } from '@/lib/clientPerf'
 import { exportSessionToHtml, downloadHtml } from '@/lib/export'
 import { pathBasename } from '@/lib/projectPaths'
@@ -155,6 +155,8 @@ type Props = {
   selectedTabId?: string | null
   onSelectTab?: (session: Session) => void
   onCloseTab?: (sessionKey: string) => void
+  /** Opens a session that isn't necessarily in the current sidebar/tab list — e.g. an OpenCode subagent's own real child session, deep-linked from an inline AgentCard's "Open session" action. */
+  onOpenSession?: (session: Session) => void
   taskPanelOpenRequest?: number
   promptLibraryOpenRequest?: number
   channelBridgeOpenRequest?: number
@@ -2892,6 +2894,7 @@ function MessageViewInner({
   selectedTabId,
   onSelectTab,
   onCloseTab,
+  onOpenSession,
   taskPanelOpenRequest = 0,
   promptLibraryOpenRequest = 0,
   channelBridgeOpenRequest = 0,
@@ -6190,6 +6193,7 @@ function MessageViewInner({
     () => (showTools ? threadedFull : stripToolCallBlocks(threadedFull)),
     [threadedFull, showTools],
   )
+  const turnDurations = useMemo(() => computeTurnDurationsMs(threadedFull), [threadedFull])
 
   // Merge bridge transcript messages into the main threaded view
   const threadedWithBridge = useMemo(() => {
@@ -8566,7 +8570,7 @@ function MessageViewInner({
                 marginInline: timelineWidth === 'centered' ? 'auto' : undefined,
               }}
             >
-              <MessageDensityProvider density={density}>
+              <MessageDensityProvider density={density} onOpenSession={onOpenSession} turnDurations={turnDurations}>
               <ViewModeProvider mode={viewMode}>
               <DiffStyleProvider diffStyle={diffStyle}>
               <DiffOptionsProvider options={diffOptions}>

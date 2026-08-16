@@ -119,6 +119,7 @@ import type {
   SessionModelInfo,
   SendAttachment,
   ReasoningEffortLevel,
+  SubagentSummary,
 } from './types'
 
 type CopilotReasoningEffort = Extract<ReasoningEffortLevel, 'low' | 'medium' | 'high' | 'xhigh'>
@@ -3614,6 +3615,55 @@ export async function getViewSubagentMessages(
   const raw = await getSubagentMessages(sessionId, agentId, claudeSessionStoreOptions())
     .catch(() => [] as SessionMessage[])
   return withOriginKind(normalizeClaudeHistoryMessages(raw as unknown[]), `subagent:${agentId}`)
+}
+
+/**
+ * Lightweight per-subagent summary (message count + aggregate token usage,
+ * not full content) for sidebar nesting. Claude subagents aren't real
+ * top-level sessions, so this is how the sidebar learns they exist at all.
+ */
+export async function getClaudeSubagentSummaries(sessionId: string, providerOverride?: AgentProvider): Promise<SubagentSummary[]> {
+  const provider = await resolveProvider(providerOverride)
+  if (provider !== 'claude') return []
+  const subagentIds = await listSubagents(sessionId, claudeSessionStoreOptions()).catch(() => [] as string[])
+  if (subagentIds.length === 0) return []
+
+  const summaries = await mapConcurrent(subagentIds, 4, async (agentId): Promise<SubagentSummary | null> => {
+    const raw = await getSubagentMessages(sessionId, agentId, claudeSessionStoreOptions())
+      .catch(() => [] as SessionMessage[])
+    if (raw.length === 0) return null
+    const messages = normalizeClaudeHistoryMessages(raw as unknown[])
+    let inputTokens = 0
+    let outputTokens = 0
+    let cacheReadTokens = 0
+    let taskDescription: string | undefined
+    let startedAt: string | undefined
+    let endedAt: string | undefined
+    for (const msg of messages) {
+      if (msg.timestamp) {
+        if (!startedAt) startedAt = msg.timestamp
+        endedAt = msg.timestamp
+      }
+      if (!taskDescription && msg.taskDescription) taskDescription = msg.taskDescription
+      const apiMessage = msg.message as { usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number | null } } | undefined
+      const usage = apiMessage?.usage
+      if (usage) {
+        inputTokens += usage.input_tokens ?? 0
+        outputTokens += usage.output_tokens ?? 0
+        cacheReadTokens += usage.cache_read_input_tokens ?? 0
+      }
+    }
+    return {
+      agentId,
+      taskDescription,
+      messageCount: messages.length,
+      usage: { inputTokens, outputTokens, cacheReadTokens },
+      startedAt,
+      endedAt,
+      provider: 'claude',
+    }
+  })
+  return summaries.filter((s): s is SubagentSummary => s !== null)
 }
 
 async function listProviderSessionsForIndex(params: {

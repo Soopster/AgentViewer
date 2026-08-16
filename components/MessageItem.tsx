@@ -14,7 +14,8 @@ import remarkGfm from 'remark-gfm'
 import type { Components } from 'react-markdown'
 import { CircleHelp, PencilLine } from 'lucide-react'
 import type { ThreadedMessage, ThreadedBlock, ToolThread, TaskNotificationBlock, SystemReminderBlock, SlashCommandBlock, LocalCommandStdoutBlock, BashInputBlock, BashOutputBlock, ClaudeSystemBlock } from '@/lib/threading'
-import type { TextBlock, ThinkingBlock, ToolResultBlock, ImageBlock } from '@/lib/types'
+import { computeTurnDurationsMs } from '@/lib/threading'
+import type { TextBlock, ThinkingBlock, ToolResultBlock, ImageBlock, Session } from '@/lib/types'
 import {
   extractClaudeReadFileSummary,
   formatClaudeReadKind,
@@ -2011,7 +2012,11 @@ function TodoWriteCard({ thread }: { thread: ToolThread }) {
 type SubagentMessage = {
   type: string
   uuid: string
-  message: { role: string; content: string | Array<{ type: string; text?: string; name?: string }> }
+  message: {
+    role: string
+    content: string | Array<{ type: string; text?: string; name?: string }>
+    usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number | null }
+  }
   timestamp?: string
 }
 
@@ -2040,6 +2045,7 @@ const AGENT_STATUS_LABELS: Record<string, string> = {
 
 function AgentCard({ thread }: { thread: ToolThread }) {
   const sessionId = use(SessionContext)
+  const hydrated = use(HydrationContext)
   // Read live text straight from context (changes every streamed token); keep
   // it OUT of the parse memo below so a sibling subagent's token doesn't
   // re-parse this card's completed-result JSON.
@@ -2119,7 +2125,28 @@ function AgentCard({ thread }: { thread: ToolThread }) {
     if (lastTs)  { const t = new Date(lastTs).getTime();  if (Number.isFinite(t)) endedAtMs = t }
     const lastAssistant = [...transcriptMessages].reverse().find((m) => m.message.role === 'assistant')
     const lastAssistantText = lastAssistant ? extractTextContent(lastAssistant.message.content) : ''
-    return { startedAtMs, endedAtMs, lastAssistantText }
+    let contextInTokens = 0
+    let contextOutTokens = 0
+    for (const msg of transcriptMessages) {
+      const usage = msg.message.usage
+      if (usage) {
+        contextInTokens += usage.input_tokens ?? 0
+        contextOutTokens += usage.output_tokens ?? 0
+      }
+    }
+    return { startedAtMs, endedAtMs, lastAssistantText, contextInTokens, contextOutTokens }
+  }, [transcriptMessages])
+
+  // Elapsed wall-clock per exchange within the subagent's own transcript —
+  // same "turn = user message through the next user message" definition
+  // used for top-level messages, so nested rows read consistently.
+  const turnDurations = useMemo(() => {
+    if (!transcriptMessages) return null
+    return computeTurnDurationsMs(transcriptMessages.map((m) => ({
+      role: m.message.role,
+      uuid: m.uuid,
+      timestamp: m.timestamp,
+    })))
   }, [transcriptMessages])
 
   return (
@@ -2224,7 +2251,7 @@ function AgentCard({ thread }: { thread: ToolThread }) {
           <button
             type="button"
             className="av-hover-control"
-            onClick={() => setOpen((value) => !value)}
+            onClick={handleTranscriptToggle}
             style={{
               display: 'flex', alignItems: 'center', gap: 6,
               width: '100%', padding: '4px 12px',
@@ -2237,7 +2264,15 @@ function AgentCard({ thread }: { thread: ToolThread }) {
             <span style={{ opacity: 0.7 }}>↪</span>
             <span>{transcriptOpen ? 'HIDE TRANSCRIPT' : 'VIEW TRANSCRIPT'}</span>
             {transcriptLoading && <span style={{ opacity: 0.5 }}>…</span>}
-            {!transcriptLoading && transcriptMessages && <span style={{ opacity: 0.5 }}>({transcriptMessages.length} msgs)</span>}
+            {!transcriptLoading && transcriptMessages && (
+              <span style={{ opacity: 0.5 }}>
+                ({transcriptMessages.length} msgs
+                {lifecycle && (lifecycle.contextInTokens > 0 || lifecycle.contextOutTokens > 0) && (
+                  <> · {fmtTokens(lifecycle.contextInTokens)} ctx / {fmtTokens(lifecycle.contextOutTokens)} out</>
+                )}
+                {input.model && <> · {input.model}</>})
+              </span>
+            )}
             {lifecycle && lifecycle.startedAtMs && lifecycle.endedAtMs && lifecycle.endedAtMs > lifecycle.startedAtMs && (
               <span style={{ opacity: 0.5 }}>
                 · {formatClockShort(lifecycle.startedAtMs)} → {formatClockShort(lifecycle.endedAtMs)} ({formatDurationShort(lifecycle.endedAtMs - lifecycle.startedAtMs)})
@@ -2270,15 +2305,33 @@ function AgentCard({ thread }: { thread: ToolThread }) {
                     const tools = extractToolNames(msg.message.content)
                     const isAssistant = msg.message.role === 'assistant'
                     if (!text && tools.length === 0) return null
+                    const rowUsage = msg.message.usage
+                    const rowDurationMs = turnDurations?.get(msg.uuid)
                     return (
                       <div key={msg.uuid} style={{ borderBottom: '1px solid var(--border)', padding: '6px 14px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3, flexWrap: 'wrap' }}>
                           <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, fontWeight: 600, color: isAssistant ? c : 'var(--text-3)', letterSpacing: '0.06em' }}>
                             {isAssistant ? 'CLAUDE' : 'USER'}
                           </span>
                           {tools.length > 0 && (
                             <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>
                               {tools.join(', ')}
+                            </span>
+                          )}
+                          <span style={{ flex: 1 }} />
+                          {msg.timestamp && (
+                            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>
+                              {hydrated ? formatLocalMessageTime(msg.timestamp) : formatStableMessageTime(msg.timestamp)}
+                            </span>
+                          )}
+                          {rowDurationMs != null && rowDurationMs > 0 && (
+                            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>
+                              ⏱ {formatDurationShort(rowDurationMs)}
+                            </span>
+                          )}
+                          {rowUsage && (
+                            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>
+                              {fmtTokens(rowUsage.input_tokens)}↑ {fmtTokens(rowUsage.output_tokens)}↓
                             </span>
                           )}
                         </div>
@@ -2356,6 +2409,8 @@ const OPENCODE_TASK_STATE_COLOR: Record<NonNullable<OpenCodeTaskParsed['state']>
 
 function OpenCodeTaskCard({ thread }: { thread: ToolThread }) {
   const sessionId = use(SessionContext)
+  const hydrated = use(HydrationContext)
+  const onOpenSession = use(NavigateSessionContext)
   const [open, setOpen] = useState(false)
   const [hovered, setHovered] = useState(false)
   const [transcriptOpen, setTranscriptOpen] = useState(false)
@@ -2415,6 +2470,33 @@ function OpenCodeTaskCard({ thread }: { thread: ToolThread }) {
     ? (isBackground ? 'TASK_STATUS ⟳' : 'TASK_STATUS')
     : (isBackground ? 'TASK ⟳' : 'TASK')
 
+  const transcriptStats = useMemo(() => {
+    if (!transcriptMessages) return null
+    let inputTokens = 0
+    let outputTokens = 0
+    for (const msg of transcriptMessages) {
+      const usage = msg.message.usage
+      if (usage) {
+        inputTokens += usage.input_tokens ?? 0
+        outputTokens += usage.output_tokens ?? 0
+      }
+    }
+    return { inputTokens, outputTokens }
+  }, [transcriptMessages])
+
+  const turnDurations = useMemo(() => {
+    if (!transcriptMessages) return null
+    return computeTurnDurationsMs(transcriptMessages.map((m) => ({
+      role: m.message.role,
+      uuid: m.uuid,
+      timestamp: m.timestamp,
+    })))
+  }, [transcriptMessages])
+
+  const openChildSession = taskId
+    ? () => onOpenSession?.({ sessionId: taskId, provider: 'opencode' })
+    : undefined
+
   return (
     <div style={{ border: '1px solid var(--border)', borderLeft: `2px solid ${c}`, borderRadius: 6, overflow: 'hidden', fontSize: 13, marginTop: 4 }}>
       <div
@@ -2455,7 +2537,7 @@ function OpenCodeTaskCard({ thread }: { thread: ToolThread }) {
           <button
             type="button"
             className="av-hover-control"
-            onClick={() => setOpen((value) => !value)}
+            onClick={handleTranscriptToggle}
             style={{
               display: 'flex', alignItems: 'center', gap: 6,
               width: '100%', padding: '4px 12px',
@@ -2468,7 +2550,24 @@ function OpenCodeTaskCard({ thread }: { thread: ToolThread }) {
             <span style={{ opacity: 0.7 }}>↪</span>
             <span>{transcriptOpen ? 'HIDE TRANSCRIPT' : 'VIEW TRANSCRIPT'}</span>
             {transcriptLoading && <span style={{ opacity: 0.5 }}>…</span>}
-            {!transcriptLoading && transcriptMessages && <span style={{ opacity: 0.5 }}>({transcriptMessages.length} msgs)</span>}
+            {!transcriptLoading && transcriptMessages && (
+              <span style={{ opacity: 0.5 }}>
+                ({transcriptMessages.length} msgs
+                {transcriptStats && (transcriptStats.inputTokens > 0 || transcriptStats.outputTokens > 0) && (
+                  <> · {fmtTokens(transcriptStats.inputTokens)} ctx / {fmtTokens(transcriptStats.outputTokens)} out</>
+                )})
+              </span>
+            )}
+            {openChildSession && (
+              <span
+                role="button"
+                onClick={(e) => { e.stopPropagation(); openChildSession() }}
+                title="Open this subagent's own session"
+                style={{ marginLeft: 'auto', opacity: 0.75 }}
+              >
+                Open session ⤢
+              </span>
+            )}
           </button>
           {transcriptOpen && transcriptMessages && (
             <div style={{ borderTop: '1px solid var(--border)', maxHeight: 420, overflowY: 'auto', background: 'var(--bg)' }}>
@@ -2479,15 +2578,33 @@ function OpenCodeTaskCard({ thread }: { thread: ToolThread }) {
                     const tools = extractToolNames(msg.message.content)
                     const isAssistant = msg.message.role === 'assistant'
                     if (!text && tools.length === 0) return null
+                    const rowUsage = msg.message.usage
+                    const rowDurationMs = turnDurations?.get(msg.uuid)
                     return (
                       <div key={msg.uuid} style={{ borderBottom: '1px solid var(--border)', padding: '6px 14px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3, flexWrap: 'wrap' }}>
                           <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, fontWeight: 600, color: isAssistant ? c : 'var(--text-3)', letterSpacing: '0.06em' }}>
                             {isAssistant ? 'AGENT' : 'USER'}
                           </span>
                           {tools.length > 0 && (
                             <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>
                               {tools.join(', ')}
+                            </span>
+                          )}
+                          <span style={{ flex: 1 }} />
+                          {msg.timestamp && (
+                            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>
+                              {hydrated ? formatLocalMessageTime(msg.timestamp) : formatStableMessageTime(msg.timestamp)}
+                            </span>
+                          )}
+                          {rowDurationMs != null && rowDurationMs > 0 && (
+                            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>
+                              ⏱ {formatDurationShort(rowDurationMs)}
+                            </span>
+                          )}
+                          {rowUsage && (
+                            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>
+                              {fmtTokens(rowUsage.input_tokens)}↑ {fmtTokens(rowUsage.output_tokens)}↓
                             </span>
                           )}
                         </div>
@@ -6228,7 +6345,16 @@ const DiffStyleContext = createContext<PierreDiffStyle>('stacked')
 
 const DiffOptionsContext = createContext<DiffOptions>(DEFAULT_DIFF_OPTIONS)
 
-export function MessageDensityProvider({ density, children }: { density: MessageDensity; children: React.ReactNode }) {
+/** Opens a session that may not be in the current sidebar/tab list — used by
+ * inline subagent cards' "Open session" action (real child sessions only,
+ * e.g. OpenCode task subagents). No-op when the host view didn't wire one up. */
+const NavigateSessionContext = createContext<((session: Session) => void) | undefined>(undefined)
+
+/** Elapsed wall-clock ms per turn (see computeTurnDurationsMs), keyed by
+ * message uuid, computed once over the full transcript by the host view. */
+const TurnDurationContext = createContext<Map<string, number> | undefined>(undefined)
+
+export function MessageDensityProvider({ density, children, onOpenSession, turnDurations }: { density: MessageDensity; children: React.ReactNode; onOpenSession?: (session: Session) => void; turnDurations?: Map<string, number> }) {
   const [hydrated, setHydrated] = useState(false)
   const value = useMemo(() => densityConfig(density), [density])
 
@@ -6239,7 +6365,11 @@ export function MessageDensityProvider({ density, children }: { density: Message
   return (
     <MessageDensityContext.Provider value={value}>
       <HydrationContext.Provider value={hydrated}>
-        {children}
+        <NavigateSessionContext.Provider value={onOpenSession}>
+          <TurnDurationContext.Provider value={turnDurations}>
+            {children}
+          </TurnDurationContext.Provider>
+        </NavigateSessionContext.Provider>
       </HydrationContext.Provider>
     </MessageDensityContext.Provider>
   )
@@ -6285,6 +6415,8 @@ function useDiffPresentation(): [PierreDiffPresentation, PierreDiffStyle, () => 
 
 function MessageItemInner({ message, showSession }: { message: ThreadedMessage; showSession?: boolean }) {
   const hydrated = use(HydrationContext)
+  const turnDurations = use(TurnDurationContext)
+  const turnDurationMs = turnDurations?.get(message.uuid)
   const dc = use(MessageDensityContext)
   const viewMode = use(ViewModeContext)
   const isBridgeMessage = message.origin?.kind === 'bridge'
@@ -6409,6 +6541,18 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
                   ⚡{fmtTokens(message.usage.cache_read_input_tokens!)}
                 </span>
               )}
+            </span>
+          )}
+          {turnDurationMs != null && turnDurationMs > 0 && (
+            <span
+              title="Elapsed time for this turn"
+              style={{
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 11,
+                color: 'var(--text-3)',
+              }}
+            >
+              ⏱ {formatDurationShort(turnDurationMs)}
             </span>
           )}
           {message.origin?.kind && message.origin.kind !== 'task-notification' && (() => {

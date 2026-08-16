@@ -123,6 +123,17 @@ export type Session = {
   [key: string]: unknown
 }
 
+/** Lightweight per-subagent summary for sidebar nesting — no message content. */
+export type SubagentSummary = {
+  agentId: string
+  taskDescription?: string
+  messageCount: number
+  usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number }
+  startedAt?: string
+  endedAt?: string
+  provider: AgentProvider
+}
+
 export type SendState = 'idle' | 'sending' | 'error'
 
 export type ContextUsage = {
