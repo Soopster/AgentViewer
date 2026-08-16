@@ -66,6 +66,11 @@ html[data-color-treatment="flat"] {
   --violet-glow: transparent;
   --cyan-glow: transparent;
 }
+/* Flat button hover: keep the lift/brightness affordance but drop the violet
+   glow ring + drop-shadow, in favor of a neutral containment ring. */
+html[data-color-treatment="flat"] .av-hover-control:not(:disabled):hover {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--border-2) 58%, transparent);
+}
 
 @theme inline {
   --color-background: var(--bg);

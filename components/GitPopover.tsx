@@ -339,6 +339,7 @@ function ToolbarSegmentButton({
   return (
     <button
       type="button"
+      className="av-hover-control"
       title={title}
       aria-pressed={active}
       onClick={onClick}
@@ -439,6 +440,7 @@ function CompactToggle({
   return (
     <button
       type="button"
+      className="av-hover-control"
       title={title}
       aria-pressed={active}
       onClick={onClick}
@@ -809,6 +811,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
             <button
               type="button"
+              className="av-hover-control"
               onClick={() => setDraftNote(null)}
               style={{
                 height: 28,
@@ -826,6 +829,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
             </button>
             <button
               type="button"
+              className="av-hover-control"
               onClick={saveDraftNote}
               style={{
                 height: 28,
@@ -901,6 +905,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
           </div>
           <button
             type="button"
+            className="av-hover-control"
             onClick={() => toggleResolved(threadKey)}
             style={{
               height: 28,
@@ -989,9 +994,10 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
                 outline: 'none',
               }}
             />
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'flex_end', gap: 8 }}>
               <button
                 type="button"
+                className="av-hover-control"
                 onClick={() => setDraftNote(null)}
                 style={{
                   height: 28,
@@ -1009,6 +1015,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
               </button>
               <button
                 type="button"
+                className="av-hover-control"
                 onClick={saveDraftNote}
                 style={{
                   height: 28,
@@ -1030,6 +1037,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
           <button
             type="button"
+            className="av-hover-control"
             onClick={() => openReplyDraft(thread)}
             style={{
               border: 'none',
@@ -1328,6 +1336,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
           </div>
           <button
             type="button"
+            className="av-hover-control"
             onClick={() => {
               setLoading(true)
               void fetchGitData(cwd)
@@ -1353,6 +1362,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
           </button>
           <button
             type="button"
+            className="av-hover-control"
             onClick={onClose}
             title="Close"
             style={{
@@ -1387,6 +1397,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
             <button
               key={p}
               type="button"
+              className="av-hover-control"
               onClick={() => setPane(p)}
               style={{
                 height: 34,
@@ -1424,6 +1435,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
           {leftPaneHidden ? (
             <button
               type="button"
+              className="av-hover-control"
               onClick={() => {
                 setPresetLeftPaneWidth('normal')
                 setFocusSide('left')
@@ -1451,6 +1463,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
             <>
               <button
                 type="button"
+                className="av-hover-control"
                 onClick={() => setPresetLeftPaneWidth(leftPaneExpanded ? 'normal' : 'expanded')}
                 title={leftPaneExpanded ? 'Restore file pane width' : 'Expand file pane'}
                 style={{
@@ -1470,6 +1483,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
               </button>
               <button
                 type="button"
+                className="av-hover-control"
                 onClick={() => setLeftPaneMode('hidden')}
                 title="Hide file pane"
                 style={{
@@ -1511,6 +1525,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
             >
               <button
                 type="button"
+                className="av-hover-control"
                 aria-label="Resize file pane"
                 title="Drag to resize file pane"
                 onPointerDown={startLeftPaneResize}
@@ -1576,6 +1591,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
                     <button
                       key={branch}
                       type="button"
+                      className="av-hover-control"
                       data-cursor={isSel ? '' : undefined}
                       onMouseEnter={() => setHoveredRow(rowId)}
                       onMouseLeave={() => setHoveredRow(null)}
@@ -1702,6 +1718,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
                   {selectedLines ? (
                     <button
                       type="button"
+                      className="av-hover-control"
                       onClick={openDraftNote}
                       title={currentSelectionNote ? 'Edit comment for selected lines' : 'Add comment for selected lines'}
                       style={{
@@ -1727,6 +1744,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
                   ) : null}
                   <button
                     type="button"
+                    className="av-hover-control"
                     aria-expanded={viewOptionsOpen}
                     aria-haspopup="dialog"
                     onClick={() => setViewOptionsOpen((current) => !current)}

@@ -929,7 +929,7 @@ function ToolMix({
             <button
               key={tool.name}
               type="button"
-              className={cn('av-session-viz-toolmix-row', activeTool === tool.name && 'av-active')}
+              className={cn('av-session-viz-toolmix-row', activeTool === tool.name && 'av-active', 'av-hover-control')}
               onClick={() => onSelectTool(tool.name)}
               title={`Focus turns using ${tool.name}`}
             >
@@ -1043,7 +1043,7 @@ function PhaseStrip({
           <button
             key={`${phase.key}-${phase.startIndex}-${index}`}
             type="button"
-            className={cn('av-session-viz-phase', activePhaseId === phaseFocusId(phase) && 'av-active')}
+            className={cn('av-session-viz-phase', activePhaseId === phaseFocusId(phase) && 'av-active', 'av-hover-control')}
             onClick={() => onSelectPhase(phase)}
             style={{
               '--av-phase-color': phase.color,
@@ -1083,7 +1083,7 @@ function HotTurns({
             <button
               key={entry.key}
               type="button"
-              className={cn(selectedEntryId === entry.id && 'av-active')}
+              className={cn(selectedEntryId === entry.id && 'av-active', 'av-hover-control')}
               onClick={() => onInspectEntry(entry.id)}
               style={{ '--av-hot-color': ROLE_META[entry.role].color } as CSSProperties}
             >
@@ -1150,7 +1150,7 @@ function FlowEntry({
   return (
     <button
       type="button"
-      className={cn('av-session-viz-entry', entry.dimmed && 'av-dimmed', entry.errorCount > 0 && 'av-has-error', selected && 'av-selected')}
+      className={cn('av-session-viz-entry', entry.dimmed && 'av-dimmed', entry.errorCount > 0 && 'av-has-error', selected && 'av-selected', 'av-hover-control')}
       onClick={() => onInspectEntry(entry.id)}
       aria-label={`Inspect ${entry.roleLabel} message ${entry.index + 1}`}
       style={{
@@ -1250,7 +1250,7 @@ function GraphEntry({
     <div className="av-session-viz-graph-unit">
       <button
         type="button"
-        className={cn('av-session-viz-graph-node av-message-node', entry.errorCount > 0 && 'av-error', selected && 'av-selected')}
+        className={cn('av-session-viz-graph-node av-message-node', entry.errorCount > 0 && 'av-error', selected && 'av-selected', 'av-hover-control')}
         onClick={() => onInspectEntry(entry.id)}
         style={{
           '--av-node-color': meta.color,
@@ -1332,6 +1332,7 @@ function NodeGraphView({
         <div className="av-session-viz-nodegraph-actions">
           <button
             type="button"
+            className="av-hover-control"
             onClick={onToggleTools}
             title={showTools ? 'Hide tool nodes' : 'Show tool nodes'}
           >
@@ -1340,6 +1341,7 @@ function NodeGraphView({
           </button>
           <button
             type="button"
+            className="av-hover-control"
             onClick={onToggleDensity}
             title={density === 'compact' ? 'Use comfortable graph spacing' : 'Use compact graph spacing'}
           >
@@ -1358,6 +1360,7 @@ function NodeGraphView({
         <div>
           <button
             type="button"
+            className="av-hover-control"
             disabled={selectedIndex <= 0}
             onClick={() => {
               if (selectedIndex > 0) onInspectEntry(entries[selectedIndex - 1]!.id)
@@ -1368,6 +1371,7 @@ function NodeGraphView({
           </button>
           <button
             type="button"
+            className="av-hover-control"
             disabled={selectedIndex < 0 || selectedIndex >= entries.length - 1}
             onClick={() => {
               if (selectedIndex >= 0 && selectedIndex < entries.length - 1) onInspectEntry(entries[selectedIndex + 1]!.id)
@@ -1408,7 +1412,7 @@ function ExecutionNodeButton({
   return (
     <button
       type="button"
-      className={cn('av-session-viz-exec-node', node.error && 'av-error', node.pending && 'av-pending', selected && 'av-selected')}
+      className={cn('av-session-viz-exec-node', node.error && 'av-error', node.pending && 'av-pending', selected && 'av-selected', 'av-hover-control')}
       onClick={() => onInspectEntry(node.entryId)}
       style={{
         '--av-exec-node-color': node.tone,
@@ -1584,7 +1588,7 @@ function ActiveFocusBar({
         <button
           key={filter}
           type="button"
-          className="av-session-viz-focus-chip"
+          className="av-session-viz-focus-chip av-hover-control"
           onClick={() => onClearFilter(filter)}
         >
           Filter: {FILTER_LABELS.get(filter) ?? filter}
@@ -1592,24 +1596,24 @@ function ActiveFocusBar({
         </button>
       ))}
       {phaseFocus && (
-        <button type="button" className="av-session-viz-focus-chip" onClick={onClearPhase}>
+        <button type="button" className="av-session-viz-focus-chip av-hover-control" onClick={onClearPhase}>
           Phase: {phaseFocus.label} {phaseFocus.startIndex + 1}-{phaseFocus.endIndex + 1}
           <X aria-hidden="true" />
         </button>
       )}
       {activeTool && (
-        <button type="button" className="av-session-viz-focus-chip" onClick={onClearTool}>
+        <button type="button" className="av-session-viz-focus-chip av-hover-control" onClick={onClearTool}>
           Tool: {activeTool}
           <X aria-hidden="true" />
         </button>
       )}
       {query.trim() && (
-        <button type="button" className="av-session-viz-focus-chip" onClick={onClearQuery}>
+        <button type="button" className="av-session-viz-focus-chip av-hover-control" onClick={onClearQuery}>
           Search: {query.trim()}
           <X aria-hidden="true" />
         </button>
       )}
-      <button type="button" className="av-session-viz-clear-focus" onClick={onClearAll}>
+      <button type="button" className="av-session-viz-clear-focus av-hover-control" onClick={onClearAll}>
         Clear all
       </button>
     </div>
@@ -1655,7 +1659,7 @@ function TurnInspector({
       <div className="av-session-viz-panel-title av-session-viz-inspector-title">
         <span>{isPinned ? 'TURN INSPECTOR' : 'MOST ACTIVE TURN'}</span>
         {isPinned && (
-          <button type="button" onClick={onClearSelection} title="Clear selected turn">
+          <button type="button" className="av-hover-control" onClick={onClearSelection} title="Clear selected turn">
             <X aria-hidden="true" />
           </button>
         )}
@@ -1695,6 +1699,7 @@ function TurnInspector({
       <div className="av-session-viz-inspector-actions">
         <button
           type="button"
+          className="av-hover-control"
           disabled={!onOpenMessage}
           onClick={() => onOpenMessage?.(entry.id)}
         >
@@ -1833,7 +1838,7 @@ function MessageSessionVisualizer({
                   key={filter.key}
                   type="button"
                   aria-pressed={filter.key === 'all' ? activeFilters.length === 0 : activeFilters.includes(filter.key)}
-                  className={cn((filter.key === 'all' ? activeFilters.length === 0 : activeFilters.includes(filter.key)) && 'av-active')}
+                  className={cn((filter.key === 'all' ? activeFilters.length === 0 : activeFilters.includes(filter.key)) && 'av-active', 'av-hover-control')}
                   onClick={() => {
                     if (filter.key === 'all') {
                       setActiveFilters([])
@@ -1854,7 +1859,7 @@ function MessageSessionVisualizer({
             <div className="av-session-viz-view-toggle" aria-label="Visualiser view">
               <button
                 type="button"
-                className={cn(activeView === 'rows' && 'av-active')}
+                className={cn(activeView === 'rows' && 'av-active', 'av-hover-control')}
                 onClick={() => setActiveView('rows')}
               >
                 <MessageSquareText aria-hidden="true" />
@@ -1862,7 +1867,7 @@ function MessageSessionVisualizer({
               </button>
               <button
                 type="button"
-                className={cn(activeView === 'graph' && 'av-active')}
+                className={cn(activeView === 'graph' && 'av-active', 'av-hover-control')}
                 onClick={() => setActiveView('graph')}
               >
                 <Network aria-hidden="true" />
@@ -1870,7 +1875,7 @@ function MessageSessionVisualizer({
               </button>
               <button
                 type="button"
-                className={cn(activeView === 'execution' && 'av-active')}
+                className={cn(activeView === 'execution' && 'av-active', 'av-hover-control')}
                 onClick={() => setActiveView('execution')}
               >
                 <Target aria-hidden="true" />
@@ -1878,7 +1883,7 @@ function MessageSessionVisualizer({
               </button>
               <button
                 type="button"
-                className={cn(timelineMaximized && 'av-active')}
+                className={cn(timelineMaximized && 'av-active', 'av-hover-control')}
                 onClick={() => setTimelineMaximized((value) => !value)}
                 title={timelineMaximized ? 'Restore side readout' : 'Maximise timeline'}
               >

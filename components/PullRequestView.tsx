@@ -21,6 +21,7 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
+import { cn } from '@/lib/utils'
 import { PierreBuiltInIconSprite, PierreFileTypeIcon } from '@/components/PierreDiffView'
 import type {
   PullRequestComment, PullRequestDetail, PullRequestFile, PullRequestMutation,
@@ -314,7 +315,7 @@ function HeaderIconButton({ title, onClick, disabled, children, href }: {
   if (href) {
     return <a href={href} target="_blank" rel="noreferrer" title={title} style={style}>{children}</a>
   }
-  return <button type="button" title={title} onClick={onClick} disabled={disabled} style={style}>{children}</button>
+  return <button type="button" className="av-hover-control" title={title} onClick={onClick} disabled={disabled} style={style}>{children}</button>
 }
 
 function Chip({ color, children, mono }: { color: string; children: ReactNode; mono?: boolean }) {
@@ -792,6 +793,7 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent }: Prop
     return (
       <button
         type="button"
+        className="av-hover-control"
         disabled={empty}
         aria-expanded={!empty && item.collapsed !== true}
         aria-label={item.collapsed ? 'Expand diff' : 'Collapse diff'}
@@ -873,6 +875,7 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent }: Prop
     <button
       key={id}
       type="button"
+      className="av-hover-control"
       onClick={() => setTab(id)}
       style={{
         height: 34, display: 'inline-flex', alignItems: 'center', gap: 7, padding: '0 12px', borderRadius: 8,
@@ -920,6 +923,7 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent }: Prop
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
               <button
                 type="button"
+                className="av-hover-control"
                 id="pr-view-title"
                 onClick={() => setPrPickerOpen((value) => !value)}
                 aria-expanded={prPickerOpen}
@@ -985,6 +989,7 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent }: Prop
               <div style={{ position: 'relative' }}>
                 <button
                   type="button"
+                  className="av-hover-control"
                   onClick={() => setViewOptionsOpen((value) => !value)}
                   aria-expanded={viewOptionsOpen}
                   style={{
@@ -1004,6 +1009,7 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent }: Prop
                         <button
                           key={style}
                           type="button"
+                          className="av-hover-control"
                           aria-pressed={viewOptions.diffStyle === style}
                           onClick={() => setViewOptions((options) => ({ ...options, diffStyle: style }))}
                           style={{ flex: 1, padding: '6px 10px', border: 0, background: viewOptions.diffStyle === style ? 'var(--surface-3)' : 'transparent', color: viewOptions.diffStyle === style ? 'var(--text)' : 'var(--text-3)', fontSize: 11, fontWeight: 650, cursor: 'pointer' }}
@@ -1026,6 +1032,7 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent }: Prop
               {leftPaneHidden ? (
                 <button
                   type="button"
+                  className="av-hover-control"
                   onClick={() => setPresetLeftPaneWidth('normal')}
                   title="Show file tree"
                   style={{ height: 34, display: 'inline-flex', alignItems: 'center', gap: 7, padding: '0 11px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text-2)', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
@@ -1088,7 +1095,7 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent }: Prop
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
                     {pending.length > 0 ? (
-                      <button type="button" onClick={discardPending} style={{ border: 'none', background: 'transparent', color: 'var(--red)', cursor: 'pointer', padding: 0, fontSize: 11, fontWeight: 600 }}>
+                      <button type="button" className="av-hover-control" onClick={discardPending} style={{ border: 'none', background: 'transparent', color: 'var(--red)', cursor: 'pointer', padding: 0, fontSize: 11, fontWeight: 600 }}>
                         Discard pending
                       </button>
                     ) : <span />}
@@ -1122,6 +1129,7 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent }: Prop
                 <div style={{ width: leftPaneWidth, flexShrink: 0, borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--surface)', position: 'relative' }}>
                   <button
                     type="button"
+                    className="av-hover-control"
                     aria-label="Resize file tree"
                     title="Drag to resize file tree"
                     onPointerDown={startLeftPaneResize}
@@ -1321,22 +1329,21 @@ function ConversationTab({
             <section className="av-pr-timeline-card">
               <button
                 type="button"
+                className={cn('av-pr-inline-thread-header', 'av-hover-control')}
                 onClick={() => onJumpToFile(thread.path)}
                 title="Open in Files changed"
-                className="av-pr-inline-thread-header"
               >
                 <PierreFileTypeIcon filePath={thread.path} />
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{thread.path}</span>
                 <span style={{ marginLeft: 'auto', color: 'var(--text-3)', flexShrink: 0 }}>{thread.comments.length} comment{thread.comments.length === 1 ? '' : 's'}</span>
               </button>
               {thread.comments.map((item) => (
-                <button
+<button
                   key={item.id}
                   type="button"
+                  className={cn('av-pr-inline-thread-comment', 'av-hover-control')}
                   onClick={() => onJumpToComment(thread.path, item)}
                   title={item.line != null ? 'Jump to line in Files changed' : 'Comment on an outdated diff'}
-                  className="av-pr-inline-thread-comment"
-                  style={{ cursor: item.line != null ? 'pointer' : 'default' }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, color: 'var(--text-3)', fontSize: 10 }}>
                     <strong style={{ color: 'var(--text-2)', fontSize: 11 }}>{item.author}</strong>
@@ -1418,7 +1425,7 @@ function ConversationTab({
         <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
           <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-3)', letterSpacing: '0.06em', marginBottom: 6 }}>Checks</div>
           {pr.checks.length === 0 ? <div style={{ color: 'var(--text-3)' }}>No checks reported.</div> : (
-            <button type="button" onClick={onOpenChecks} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 0, background: 'transparent', color: 'var(--text-2)', cursor: 'pointer', padding: 0, font: 'inherit' }}>
+            <button type="button" className="av-hover-control" onClick={onOpenChecks} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 0, background: 'transparent', color: 'var(--text-2)', cursor: 'pointer', padding: 0, font: 'inherit' }}>
               {checkSummary && checkSummary.failure > 0
                 ? <>{checkStateIcon('failure')} <span>{checkSummary.failure} failing · {checkSummary.success} passing</span></>
                 : checkSummary && checkSummary.pending > 0
@@ -1637,7 +1644,7 @@ function PendingCommentCard({ message, onDelete }: { message: string; onDelete: 
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '1px 8px', borderRadius: 999, background: 'color-mix(in srgb, var(--amber) 20%, var(--surface-3))', color: 'var(--amber)', fontSize: 10, fontWeight: 700 }}>
           Pending
         </span>
-        <button type="button" onClick={onDelete} style={{ border: 'none', background: 'transparent', color: 'var(--text-3)', cursor: 'pointer', padding: 0, fontSize: 11 }}>
+        <button type="button" className="av-hover-control" onClick={onDelete} style={{ border: 'none', background: 'transparent', color: 'var(--text-3)', cursor: 'pointer', padding: 0, fontSize: 11 }}>
           Delete
         </button>
       </div>

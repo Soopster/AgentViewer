@@ -268,6 +268,7 @@ function AgentProtocolCard({ codeString }: { codeString: string }) {
     }}>
       <button
         type="button"
+        className="av-hover-control"
         onClick={() => setOpen((value) => !value)}
         style={{
           display: 'flex',
@@ -689,6 +690,7 @@ function DiffStyleToggle({ diffStyle, onToggle }: { diffStyle: PierreDiffStyle; 
   return (
     <button
       type="button"
+      className="av-hover-control"
       onClick={(event) => {
         event.stopPropagation()
         onToggle()
@@ -726,6 +728,7 @@ function DiffCommentButton({
   return (
     <button
       type="button"
+      className="av-hover-control"
       onClick={(event) => {
         event.stopPropagation()
         onOpenComment()
@@ -2220,7 +2223,7 @@ function AgentCard({ thread }: { thread: ToolThread }) {
         <div style={{ borderTop: '1px solid var(--border)', background: 'var(--surface)' }}>
           <button
             type="button"
-            onClick={handleTranscriptToggle}
+            onClick={() => setOpen((value) => !value)}
             style={{
               display: 'flex', alignItems: 'center', gap: 6,
               width: '100%', padding: '4px 12px',
@@ -2450,7 +2453,7 @@ function OpenCodeTaskCard({ thread }: { thread: ToolThread }) {
         <div style={{ borderTop: '1px solid var(--border)', background: 'var(--surface)' }}>
           <button
             type="button"
-            onClick={handleTranscriptToggle}
+            onClick={() => setOpen((value) => !value)}
             style={{
               display: 'flex', alignItems: 'center', gap: 6,
               width: '100%', padding: '4px 12px',
@@ -5577,10 +5580,11 @@ function AgentsToolRow({ thread }: { thread: ToolThread }) {
       borderRadius: '0 4px 4px 0',
       margin: 0,
     }}>
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        style={{
+<button
+            type="button"
+            className="av-hover-control"
+            onClick={() => setOpen((value) => !value)}
+            style={{
           width: '100%',
           display: 'flex',
           alignItems: 'center',

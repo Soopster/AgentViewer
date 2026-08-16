@@ -347,6 +347,7 @@ export default function PromptLibrary({
         {mode !== 'browse' ? (
           <button
             type="button"
+            className="av-hover-control"
             onClick={() => { setMode('browse'); setPendingInsert(null); setFormError(null) }}
             style={iconButtonStyle}
             title="Back to library"
@@ -380,11 +381,11 @@ export default function PromptLibrary({
         )}
         <div style={{ flex: 1 }} />
         {mode === 'browse' && (
-          <button type="button" onClick={openCreate} style={{ ...iconButtonStyle, color: accentColor }} title="New prompt">
+          <button type="button" className="av-hover-control" onClick={openCreate} style={{ ...iconButtonStyle, color: accentColor }} title="New prompt">
             <Plus size={15} />
           </button>
         )}
-        <button type="button" onClick={onClose} style={iconButtonStyle} title="Close (esc)">
+        <button type="button" className="av-hover-control" onClick={onClose} style={iconButtonStyle} title="Close (esc)">
           <X size={14} />
         </button>
       </div>
@@ -428,6 +429,7 @@ export default function PromptLibrary({
               >
                 <button
                   type="button"
+                  className="av-hover-control"
                   ref={(node) => { itemRefs.current[index] = node }}
                   onMouseEnter={() => setActiveIndex(index)}
                   onMouseDown={(event) => { event.preventDefault(); void beginInsert(prompt) }}
@@ -475,12 +477,13 @@ export default function PromptLibrary({
                   )}
                 </button>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2, paddingTop: 4, paddingRight: 4 }}>
-                  <button type="button" onClick={() => void openEdit(prompt)} style={iconButtonStyle} title="Edit prompt">
+                  <button type="button" className="av-hover-control" onClick={() => void openEdit(prompt)} style={iconButtonStyle} title="Edit prompt">
                     <Pencil size={12} />
                   </button>
                   {confirmDeleteSlug === prompt.slug ? (
                     <button
                       type="button"
+                      className="av-hover-control"
                       onClick={() => void confirmDelete(prompt.slug)}
                       style={{ ...iconButtonStyle, color: 'rgba(248,113,113,0.9)', borderColor: 'rgba(248,113,113,0.4)' }}
                       title="Confirm delete"
@@ -490,6 +493,7 @@ export default function PromptLibrary({
                   ) : (
                     <button
                       type="button"
+                      className="av-hover-control"
                       onClick={() => setConfirmDeleteSlug(prompt.slug)}
                       onBlur={() => setConfirmDeleteSlug((s) => (s === prompt.slug ? null : s))}
                       style={iconButtonStyle}
@@ -544,6 +548,7 @@ export default function PromptLibrary({
                   <button
                     key={opt.value}
                     type="button"
+                    className="av-hover-control"
                     onClick={() => toggleProvider(opt.value)}
                     style={{
                       fontSize: 10.5,
@@ -575,6 +580,7 @@ export default function PromptLibrary({
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
             <button
               type="button"
+              className="av-hover-control"
               onClick={() => setMode('browse')}
               style={{ ...inputStyle, width: 'auto', cursor: 'pointer', color: 'var(--text-2)' }}
             >
@@ -582,6 +588,7 @@ export default function PromptLibrary({
             </button>
             <button
               type="button"
+              className="av-hover-control"
               onClick={() => void saveDraft()}
               disabled={saving}
               style={{

@@ -2171,7 +2171,7 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
           {canBookmark && (
             <button
               type="button"
-              className={`timeline-row-action timeline-row-action--bookmark${bookmarked ? ' timeline-row-action--bookmark-active' : ''}`}
+              className={`timeline-row-action av-hover-control timeline-row-action--bookmark${bookmarked ? ' timeline-row-action--bookmark-active' : ''}`}
               onClick={handleBookmark}
               title={bookmarked ? 'Remove bookmark' : 'Bookmark this message'}
             >
@@ -2181,7 +2181,7 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
           {row.showForkControls && row.allowFork && (
             <button
               type="button"
-              className="timeline-row-action timeline-row-action--fork"
+              className="timeline-row-action av-hover-control timeline-row-action--fork"
               onClick={() => onForkFromMessage(row.message.uuid)}
               disabled={forking}
             >
@@ -2191,7 +2191,7 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
           {row.showForkControls && row.allowResume && (
             <button
               type="button"
-              className={`timeline-row-action timeline-row-action--resume${resumeTarget ? ' timeline-row-action--resume-active' : ''}`}
+              className={`timeline-row-action av-hover-control timeline-row-action--resume${resumeTarget ? ' timeline-row-action--resume-active' : ''}`}
               onClick={() => onToggleResume(row.message.uuid)}
             >
               {resumeTarget ? 'RESUME TARGET' : 'RESUME HERE'}
@@ -2200,7 +2200,7 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
           {canEdit && (
             <button
               type="button"
-              className="timeline-row-action timeline-row-action--resume"
+              className="timeline-row-action av-hover-control timeline-row-action--resume"
               onClick={handleEdit}
               title="Edit this prompt and resend — replaces from this point"
             >
@@ -2210,7 +2210,7 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
           {canReuse && (
             <button
               type="button"
-              className="timeline-row-action timeline-row-action--copy"
+              className="timeline-row-action av-hover-control timeline-row-action--copy"
               onClick={handleReuse}
               title="Load this prompt into the composer"
             >
@@ -2220,7 +2220,7 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
           {canQuote && (
             <button
               type="button"
-              className="timeline-row-action timeline-row-action--copy"
+              className="timeline-row-action av-hover-control timeline-row-action--copy"
               onClick={handleQuote}
               title="Quote selection (or this message) in the composer"
             >
@@ -2230,7 +2230,7 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
           {canReply && (
             <button
               type="button"
-              className="timeline-row-action timeline-row-action--copy"
+              className="timeline-row-action av-hover-control timeline-row-action--copy"
               onClick={handleReply}
               title="Reply to this message in the composer"
             >
@@ -2240,7 +2240,7 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
           {canCopy && (
             <button
               type="button"
-              className={`timeline-row-action timeline-row-action--copy${copied ? ' timeline-row-action--copy-active' : ''}`}
+              className={`timeline-row-action av-hover-control timeline-row-action--copy${copied ? ' timeline-row-action--copy-active' : ''}`}
               onClick={handleCopy}
               title="Copy message text"
             >
@@ -2278,6 +2278,7 @@ const OpenCodeTodosBanner = memo(function OpenCodeTodosBanner({ todos }: { todos
     >
       <button
         type="button"
+        className="av-hover-control"
         onClick={() => setCollapsed((value) => !value)}
         style={{
           display: 'flex',
@@ -2715,6 +2716,7 @@ function AskUserQuestionPicker({
                     <div style={{ display: 'flex', alignItems: 'stretch', gap: 4 }}>
                     <button
                       type="button"
+                      className="av-hover-control"
                       onClick={() => toggle(qi, q.multiSelect === true, optionValue)}
                       disabled={busy}
                       style={{
@@ -2768,6 +2770,7 @@ function AskUserQuestionPicker({
                     {opt.preview && (
                       <button
                         type="button"
+                        className="av-hover-control"
                         aria-label={`${previewOpen ? 'Hide' : 'Show'} preview for ${opt.label}`}
                         aria-expanded={previewOpen}
                         onClick={() => setOpenPreview(previewOpen ? null : previewKey)}
@@ -7756,13 +7759,13 @@ function MessageViewInner({
               display: 'flex', flexDirection: 'column', gap: 0,
             }}>
               {/* Visualiser toggle */}
-              <button type="button" onClick={() => { setShowVisualizer(v => !v); setShowReviewMode(false); setViewDropdownOpen(false) }}
+              <button type="button" className="av-hover-control" onClick={() => { setShowVisualizer(v => !v); setShowReviewMode(false); setViewDropdownOpen(false) }}
                 style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: showVisualizer ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
                 <ChartNetwork style={{ width: 13, height: 13, flexShrink: 0 }} />
                 {showVisualizer ? 'TRANSCRIPT' : 'VISUALISER'}
               </button>
               {!isProject && session?.cwd && (
-                <button type="button" onClick={() => { setShowReviewMode(v => !v); setShowVisualizer(false); setViewDropdownOpen(false) }}
+                <button type="button" className="av-hover-control" onClick={() => { setShowReviewMode(v => !v); setShowVisualizer(false); setViewDropdownOpen(false) }}
                   style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: showReviewMode ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
                   <FileCode2 style={{ width: 13, height: 13, flexShrink: 0 }} />
                   {showReviewMode ? 'TRANSCRIPT' : 'REVIEW'}
@@ -7770,7 +7773,7 @@ function MessageViewInner({
               )}
               {/* Tasks toggle */}
               {!isProject && taskRegistry.size > 0 && (
-                <button type="button" onClick={() => { setTaskRailOpen(v => !v); setViewDropdownOpen(false) }}
+                <button type="button" className="av-hover-control" onClick={() => { setTaskRailOpen(v => !v); setViewDropdownOpen(false) }}
                   style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: taskRailOpen ? 'var(--amber)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
                   ☐ TASKS · {taskRegistry.size}
                 </button>
@@ -7779,7 +7782,7 @@ function MessageViewInner({
               {/* View mode */}
               <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>MESSAGES</div>
               {(['conversation', 'continue', 'stream', 'agents'] as const).map((mode) => (
-                <button key={mode} type="button"
+                <button key={mode} type="button" className="av-hover-control"
                   onClick={() => { setViewMode(mode); setViewDropdownOpen(false) }}
                   style={{ padding: '6px 14px', background: viewMode === mode || (mode === 'conversation' && viewMode === 'full') ? 'rgba(139,92,246,0.1)' : 'transparent', border: 0, cursor: 'pointer', color: viewMode === mode || (mode === 'conversation' && viewMode === 'full') ? 'var(--violet)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
                   {mode === 'conversation' ? 'FULL' : mode === 'continue' ? 'CONT' : mode === 'stream' ? 'STREAM' : 'AGENTS'}
@@ -7792,7 +7795,7 @@ function MessageViewInner({
               {/* Density */}
               <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>DENSITY</div>
               {(['comfortable', 'balanced', 'dense'] as const).map((d) => (
-                <button key={d} type="button"
+                <button key={d} type="button" className="av-hover-control"
                   onClick={() => { setDensity(d); setViewDropdownOpen(false) }}
                   style={{ padding: '6px 14px', background: density === d ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: density === d ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
                   {d === 'comfortable' ? 'COMFY' : d.toUpperCase()}
@@ -7802,7 +7805,7 @@ function MessageViewInner({
               {/* Timeline width */}
               <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>WIDTH</div>
               {(['centered', 'full'] as const).map((w) => (
-                <button key={w} type="button"
+                <button key={w} type="button" className="av-hover-control"
                   onClick={() => { setTimelineWidth(w); setViewDropdownOpen(false) }}
                   style={{ padding: '6px 14px', background: timelineWidth === w ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: timelineWidth === w ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', whiteSpace: 'nowrap' }}>
                   {w.toUpperCase()}
@@ -7815,7 +7818,7 @@ function MessageViewInner({
               {/* Color treatment */}
               <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>COLOR</div>
               {(['gradient', 'flat'] as const).map((c) => (
-                <button key={c} type="button"
+                <button key={c} type="button" className="av-hover-control"
                   onClick={() => { applyColorTreatment(c); setViewDropdownOpen(false) }}
                   style={{ padding: '6px 14px', background: colorTreatment === c ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: colorTreatment === c ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', whiteSpace: 'nowrap' }}>
                   {c.toUpperCase()}
@@ -7828,7 +7831,7 @@ function MessageViewInner({
               {/* Diff style */}
               <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>DIFF STYLE</div>
               {(['stacked', 'split'] as const).map((style) => (
-                <button key={style} type="button"
+                <button key={style} type="button" className="av-hover-control"
                   onClick={() => { setDiffStyle(style); setViewDropdownOpen(false) }}
                   style={{ padding: '6px 14px', background: diffStyle === style ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: diffStyle === style ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', whiteSpace: 'nowrap' }}>
                   {style.toUpperCase()}
@@ -7842,7 +7845,7 @@ function MessageViewInner({
               <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>CHANGE INDICATORS</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: '2px 14px 3px' }}>
                 {(['classic', 'bars', 'none'] as const).map((style) => (
-                  <button key={style} type="button"
+                  <button key={style} type="button" className="av-hover-control"
                     onClick={() => { setDiffOptions((prev) => ({ ...prev, changeStyle: style })); setViewDropdownOpen(false) }}
                     style={{ padding: '4px 8px', borderRadius: 4, background: diffOptions.changeStyle === style ? 'rgba(56,217,245,0.12)' : 'var(--surface)', border: '1px solid var(--border)', cursor: 'pointer', color: diffOptions.changeStyle === style ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: '0.06em' }}>
                     {style.toUpperCase()}
@@ -7854,7 +7857,7 @@ function MessageViewInner({
               <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>INLINE DIFF</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: '2px 14px 3px' }}>
                 {(['word-alt', 'word', 'char', 'none'] as const).map((style) => (
-                  <button key={style} type="button"
+                  <button key={style} type="button" className="av-hover-control"
                     onClick={() => { setDiffOptions((prev) => ({ ...prev, inlineDiffStyle: style })); setViewDropdownOpen(false) }}
                     style={{ padding: '4px 8px', borderRadius: 4, background: diffOptions.inlineDiffStyle === style ? 'rgba(56,217,245,0.12)' : 'var(--surface)', border: '1px solid var(--border)', cursor: 'pointer', color: diffOptions.inlineDiffStyle === style ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: '0.06em' }}>
                     {style === 'word-alt' ? 'WORD-ALT' : style.toUpperCase()}
@@ -7871,7 +7874,7 @@ function MessageViewInner({
                   { key: 'lineNumbers', label: 'LINE #S', active: diffOptions.showLineNumbers, toggle: () => setDiffOptions((prev) => ({ ...prev, showLineNumbers: !prev.showLineNumbers })) },
                   { key: 'hunkHeaders', label: 'HUNKS', active: diffOptions.showHunkHeaders, toggle: () => setDiffOptions((prev) => ({ ...prev, showHunkHeaders: !prev.showHunkHeaders })) },
                 ] as const).map((opt) => (
-                  <button key={opt.key} type="button"
+                  <button key={opt.key} type="button" className="av-hover-control"
                     onClick={opt.toggle}
                     style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px', background: 'transparent', border: 0, cursor: 'pointer', color: opt.active ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: '0.06em', textAlign: 'left', whiteSpace: 'nowrap' }}>
                     {opt.active ? '☑' : '☐'} {opt.label}
@@ -7912,46 +7915,46 @@ function MessageViewInner({
                 display: 'flex', flexDirection: 'column', gap: 0,
               }}>
                 {session?.provider !== 'copilot' && (
-                  <button type="button" onClick={() => { handleFork(); setActionsDropdownOpen(false) }} disabled={forking}
+                  <button type="button" className="av-hover-control" onClick={() => { handleFork(); setActionsDropdownOpen(false) }} disabled={forking}
                     style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: forking ? 'not-allowed' : 'pointer', color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', opacity: forking ? 0.5 : 1 }}>
                     {forking ? 'FORKING…' : 'FORK'}
                   </button>
                 )}
                 {cliCommand && (
                   <div ref={cliPopoverRef} style={{ position: 'relative' }}>
-                    <button type="button" onClick={() => setCliPopoverOpen(v => !v)}
+                    <button type="button" className="av-hover-control" onClick={() => setCliPopoverOpen(v => !v)}
                       style={{ width: '100%', padding: '7px 14px', background: cliPopoverOpen ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: cliPopoverOpen ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
                       CLI
                     </button>
                     {cliPopoverOpen && (
                       <div style={{ position: 'absolute', top: 0, right: 170, zIndex: 70, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 8, minWidth: 320, boxShadow: '0 4px 24px rgba(0,0,0,0.35)' }}>
                         <code style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--cyan)', wordBreak: 'break-all', userSelect: 'all' }}>{cliCommand}</code>
-                        <button type="button" style={{ alignSelf: 'flex-end', height: 24, fontSize: 11, padding: '0 10px', cursor: 'pointer', background: 'rgba(56,217,245,0.07)', border: '1px solid rgba(56,217,245,0.25)', borderRadius: 4, color: 'var(--cyan)', fontFamily: "'IBM Plex Mono', monospace", letterSpacing: '0.08em' }}
+                        <button type="button" className="av-hover-control" style={{ alignSelf: 'flex-end', height: 24, fontSize: 11, padding: '0 10px', cursor: 'pointer', background: 'rgba(56,217,245,0.07)', border: '1px solid rgba(56,217,245,0.25)', borderRadius: 4, color: 'var(--cyan)', fontFamily: "'IBM Plex Mono', monospace", letterSpacing: '0.08em' }}
                           onClick={() => { void navigator.clipboard.writeText(cliCommand); setCliPopoverOpen(false); setActionsDropdownOpen(false) }}>COPY</button>
                       </div>
                     )}
                   </div>
                 )}
-                <button type="button" onClick={() => { handleExport(); setActionsDropdownOpen(false) }} disabled={exporting}
+                <button type="button" className="av-hover-control" onClick={() => { handleExport(); setActionsDropdownOpen(false) }} disabled={exporting}
                   style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: exporting ? 'not-allowed' : 'pointer', color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', opacity: exporting ? 0.6 : 1 }}>
                   {exporting ? 'EXPORTING…' : 'EXPORT'}
                 </button>
-                <button type="button" onClick={() => { toggleDiagnostics(); setActionsDropdownOpen(false) }}
+                <button type="button" className="av-hover-control" onClick={() => { toggleDiagnostics(); setActionsDropdownOpen(false) }}
                   style={{ padding: '7px 14px', background: showDiagnostics ? 'rgba(234,170,64,0.1)' : 'transparent', border: 0, cursor: 'pointer', color: showDiagnostics ? 'var(--amber)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
                   DIAG
                 </button>
                 {activeProvider === 'opencode' && (
                   <>
-                    {sessionCapabilities?.shareSession && <button type="button" onClick={() => { runSessionAction('share'); setActionsDropdownOpen(false) }} disabled={!!sessionActionLoading} style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', opacity: sessionActionLoading ? 0.55 : 1 }}>SHARE</button>}
-                    {sessionCapabilities?.unshareSession && <button type="button" onClick={() => { runSessionAction('unshare'); setActionsDropdownOpen(false) }} disabled={!!sessionActionLoading} style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', opacity: sessionActionLoading ? 0.55 : 1 }}>UNSHARE</button>}
-                    {sessionCapabilities?.summarizeSession && <button type="button" onClick={() => { runSessionAction('summarize'); setActionsDropdownOpen(false) }} disabled={!!sessionActionLoading} style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', opacity: sessionActionLoading ? 0.55 : 1 }}>SUMMARY</button>}
-                    {sessionCapabilities?.unrevertSession && <button type="button" onClick={() => { runSessionAction('unrevert'); setActionsDropdownOpen(false) }} disabled={!!sessionActionLoading} style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', opacity: sessionActionLoading ? 0.55 : 1 }}>UNREVERT</button>}
+                    {sessionCapabilities?.shareSession && <button type="button" className="av-hover-control" onClick={() => { runSessionAction('share'); setActionsDropdownOpen(false) }} disabled={!!sessionActionLoading} style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', opacity: sessionActionLoading ? 0.55 : 1 }}>SHARE</button>}
+                    {sessionCapabilities?.unshareSession && <button type="button" className="av-hover-control" onClick={() => { runSessionAction('unshare'); setActionsDropdownOpen(false) }} disabled={!!sessionActionLoading} style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', opacity: sessionActionLoading ? 0.55 : 1 }}>UNSHARE</button>}
+                    {sessionCapabilities?.summarizeSession && <button type="button" className="av-hover-control" onClick={() => { runSessionAction('summarize'); setActionsDropdownOpen(false) }} disabled={!!sessionActionLoading} style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', opacity: sessionActionLoading ? 0.55 : 1 }}>SUMMARY</button>}
+                    {sessionCapabilities?.unrevertSession && <button type="button" className="av-hover-control" onClick={() => { runSessionAction('unrevert'); setActionsDropdownOpen(false) }} disabled={!!sessionActionLoading} style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', opacity: sessionActionLoading ? 0.55 : 1 }}>UNREVERT</button>}
                   </>
                 )}
                 {sessionCapabilities?.deleteSession && (
                   <>
                     <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
-                    <button type="button" onClick={() => { handleDeleteSession(); setActionsDropdownOpen(false) }} disabled={deleting}
+                    <button type="button" className="av-hover-control" onClick={() => { handleDeleteSession(); setActionsDropdownOpen(false) }} disabled={deleting}
                       style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: deleting ? 'not-allowed' : 'pointer', color: deleting ? 'var(--red, #f87171)' : 'rgba(248,113,113,0.8)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', opacity: deleting ? 0.55 : 1 }}>
                       {deleting ? 'DELETING…' : 'DELETE'}
                     </button>
@@ -8103,7 +8106,7 @@ function MessageViewInner({
                       key={filter.key}
                       type="button"
                       aria-pressed={filter.key === 'all' ? transcriptFilters.length === 0 : transcriptFilters.includes(filter.key)}
-                      className={cn((filter.key === 'all' ? transcriptFilters.length === 0 : transcriptFilters.includes(filter.key)) && 'av-active')}
+                      className={cn('av-hover-control', (filter.key === 'all' ? transcriptFilters.length === 0 : transcriptFilters.includes(filter.key)) && 'av-active')}
                       onClick={() => {
                         if (filter.key === 'all') {
                           setTranscriptFilters([])
@@ -8124,7 +8127,7 @@ function MessageViewInner({
                     type="button"
                     aria-pressed={bookmarksOnly}
                     disabled={bookmarkIds.size === 0 && !bookmarksOnly}
-                    className={cn('av-session-viz-bookmark-filter', bookmarksOnly && 'av-active')}
+                    className={cn('av-hover-control', 'av-session-viz-bookmark-filter', bookmarksOnly && 'av-active')}
                     title={bookmarkIds.size === 0 ? 'No bookmarks in this session yet' : 'Show only bookmarked messages'}
                     onClick={() => setBookmarksOnly((value) => !value)}
                   >
@@ -8143,7 +8146,7 @@ function MessageViewInner({
                       <button
                         key={filter}
                         type="button"
-                        className="av-session-viz-focus-chip"
+                        className="av-session-viz-focus-chip av-hover-control"
                         onClick={() => {
                           setTranscriptFilters((current) => current.filter((activeFilter) => activeFilter !== filter))
                         }}
@@ -8155,7 +8158,7 @@ function MessageViewInner({
                     {transcriptSearch.trim() && (
                       <button
                         type="button"
-                        className="av-session-viz-focus-chip"
+                        className="av-session-viz-focus-chip av-hover-control"
                         onClick={() => setTranscriptSearch('')}
                       >
                         Search: {transcriptSearch.trim()}
@@ -8165,7 +8168,7 @@ function MessageViewInner({
                     {bookmarksOnly && (
                       <button
                         type="button"
-                        className="av-session-viz-focus-chip"
+                        className="av-session-viz-focus-chip av-hover-control"
                         onClick={() => setBookmarksOnly(false)}
                       >
                         ★ Bookmarks only
@@ -8174,7 +8177,7 @@ function MessageViewInner({
                     )}
                     <button
                       type="button"
-                      className="av-session-viz-clear-focus"
+                      className="av-session-viz-clear-focus av-hover-control"
                       onClick={() => {
                         setTranscriptFilters([])
                         setTranscriptSearch('')
@@ -8228,6 +8231,7 @@ function MessageViewInner({
                     <button
                       key={action}
                       type="button"
+                      className="av-hover-control"
                       onClick={() => { void runClaudeSessionAction(action, {}, busyKey, notice) }}
                       disabled={claudeMcpBusy !== null}
                       title={title}
@@ -8265,6 +8269,7 @@ function MessageViewInner({
                       {section.id === 'mcp' && session?.provider === 'claude' && (
                         <button
                           type="button"
+                          className="av-hover-control"
                           onClick={() => { void addClaudeMcpServer() }}
                           disabled={claudeMcpBusy !== null}
                           title="Add a session-scoped MCP server"
@@ -8285,6 +8290,7 @@ function MessageViewInner({
                           />
                           <button
                             type="button"
+                            className="av-hover-control"
                             onClick={() => { void searchClaudeHookEvents() }}
                             disabled={claudeHookSearching}
                             style={{ height: 18, padding: '0 5px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: 'var(--cyan)', background: 'transparent', border: '1px solid rgba(56,217,245,0.3)', borderRadius: 4, cursor: claudeHookSearching ? 'wait' : 'pointer' }}
@@ -8355,6 +8361,7 @@ function MessageViewInner({
                                 </select>
                                 <button
                                   type="button"
+                                  className="av-hover-control"
                                   onClick={() => runClaudeSessionAction('reconnectMcpServer', { serverName: name }, busyKey, `Reconnected ${name}.`)}
                                   disabled={busy}
                                   title={`Reconnect ${name}`}
@@ -8376,6 +8383,7 @@ function MessageViewInner({
                                 </button>
                                 <button
                                   type="button"
+                                  className="av-hover-control"
                                   onClick={() => runClaudeSessionAction('toggleMcpServer', { serverName: name, enabled: !enabled }, `mcp:toggle:${name}`, `${enabled ? 'Disabled' : 'Enabled'} ${name}.`)}
                                   disabled={busy}
                                   title={`${enabled ? 'Disable' : 'Enable'} ${name}`}
@@ -8398,6 +8406,7 @@ function MessageViewInner({
                                 {dynamic && (
                                   <button
                                     type="button"
+                                    className="av-hover-control"
                                     onClick={() => runClaudeSessionAction('setMcpServers', { operation: 'remove', serverName: name }, `mcp:remove:${name}`, `Removed dynamic MCP server ${name}.`)}
                                     disabled={busy}
                                     title={`Remove dynamic MCP server ${name}`}
@@ -8484,6 +8493,7 @@ function MessageViewInner({
                   <button
                     key={bullet}
                     type="button"
+                    className="av-hover-control"
                     onClick={() => handleReusePrompt(bullet)}
                     style={{
                       display: 'flex',
@@ -8648,6 +8658,7 @@ function MessageViewInner({
         >
           <button
             type="button"
+            className="av-hover-control"
             onClick={() => setComposerCollapsed(false)}
             title="Expand composer"
             style={{
@@ -8685,6 +8696,7 @@ function MessageViewInner({
       >
         <button
           type="button"
+          className="av-hover-control"
           onClick={() => setComposerCollapsed(true)}
           title="Collapse composer"
           style={{
@@ -8773,6 +8785,7 @@ function MessageViewInner({
             </span>
             <button
               type="button"
+              className="av-hover-control"
               onClick={() => {
                 setInputText(livePromptSuggestion)
                 inputTextRef.current = livePromptSuggestion
@@ -8803,6 +8816,7 @@ function MessageViewInner({
             </button>
             <button
               type="button"
+              className="av-hover-control"
               onClick={() => setLivePromptSuggestion(null)}
               title="Dismiss suggestion"
               style={{
@@ -9347,6 +9361,7 @@ function MessageViewInner({
                   <button
                     key={attachment.id ?? `${attachment.type}-${index}`}
                     type="button"
+                    className="av-hover-control"
                     onClick={() => removeAttachment(attachment.id, index)}
                     disabled={sendBusy}
                     title={`Click to remove · ${attachment.path ?? attachment.filePath ?? attachmentDisplayName(attachment)}`}
@@ -9458,6 +9473,7 @@ function MessageViewInner({
                       <span style={{ color: 'var(--text-3)', fontSize: 9 }}>{index + 1}.</span>
                       <button
                         type="button"
+                        className="av-hover-control"
                         onClick={() => editQueuedSend(entry.id)}
                         title="Click to edit this queued message"
                         style={{
@@ -9478,6 +9494,7 @@ function MessageViewInner({
                       </button>
                       <button
                         type="button"
+                        className="av-hover-control"
                         onClick={() => removeQueuedSend(entry.id)}
                         title="Remove from queue"
                         style={{
@@ -9513,6 +9530,7 @@ function MessageViewInner({
                       <button
                         key={entry.kind === 'agent' ? `agent:${entry.name}` : `file:${entry.path}`}
                         type="button"
+                        className="av-hover-control"
                         ref={(node) => { mentionItemRefs.current[index] = node }}
                         onMouseDown={(event) => {
                           event.preventDefault()
@@ -9543,6 +9561,7 @@ function MessageViewInner({
                       <button
                         key={entry.command}
                         type="button"
+                        className="av-hover-control"
                         ref={(node) => { slashItemRefs.current[index] = node }}
                         onMouseDown={(event) => {
                           event.preventDefault()

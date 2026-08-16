@@ -488,7 +488,7 @@ function PlaybookManager({
             <button
               key={entry.name}
               type="button"
-              className={cn('av-coord-playbook-row', entry.name === selectedName && 'av-selected')}
+              className={cn('av-coord-playbook-row', 'av-hover-control', entry.name === selectedName && 'av-selected')}
               onClick={() => setSelectedName(entry.name)}
             >
               <strong>{entry.name}</strong>
@@ -1256,13 +1256,13 @@ export default function AgentTeamCoordinator({
             <UsersRound aria-hidden="true" />
             <div>
               <h2 id="agent-operations-title">Agent Control Center</h2>
-              <button type="button" className="av-coord-workspace" onClick={() => setWorkspaceMenuOpen((open) => !open)} aria-expanded={workspaceMenuOpen} aria-haspopup="menu">
+              <button type="button" className={cn('av-coord-workspace', 'av-hover-control')} onClick={() => setWorkspaceMenuOpen((open) => !open)} aria-expanded={workspaceMenuOpen} aria-haspopup="menu">
                 {run?.baseCwd.split('/').at(-1) || 'agentViewer'} <ChevronDown size={12} aria-hidden="true" />
               </button>
               {workspaceMenuOpen ? (
                 <div className="av-coord-workspace-menu" role="menu" aria-label="Workspaces">
                   {workspaceOptions.map((option) => (
-                    <button key={option.cwd} type="button" role="menuitem" onClick={() => {
+                    <button key={option.cwd} type="button" role="menuitem" className="av-hover-control" onClick={() => {
                       setRunId(option.runId)
                       setSelectedEventIndex(-1)
                       setWorkspaceMenuOpen(false)
@@ -1281,7 +1281,7 @@ export default function AgentTeamCoordinator({
               <button
                 key={name}
                 type="button"
-                className={cn('av-coord-provider-chip', `av-provider-${name}`, providerFilter === name ? 'av-active' : '')}
+                className={cn('av-coord-provider-chip', `av-provider-${name}`, providerFilter === name ? 'av-active' : '', 'av-hover-control')}
                 aria-pressed={providerFilter === name}
                 aria-label={`${count} workflows use ${name}${count > 0 ? '; filter by this provider' : ''}`}
                 title={`${count} workflow${count === 1 ? '' : 's'} use ${name}`}
@@ -1318,7 +1318,7 @@ export default function AgentTeamCoordinator({
           <div className={cn('av-coord-notice', loadError ? 'av-coord-notice-error' : '')} aria-live="polite">
             {loadError ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />}
             <span>{loadError ?? notice}</span>
-            <button type="button" onClick={() => { setLoadError(null); setNotice(null) }} aria-label="Dismiss notice">
+            <button type="button" className="av-hover-control" onClick={() => { setLoadError(null); setNotice(null) }} aria-label="Dismiss notice">
               <X size={13} />
             </button>
           </div>
@@ -1330,6 +1330,7 @@ export default function AgentTeamCoordinator({
               <span>Workflows <b>{runs.length}</b></span>
               <button
                 type="button"
+                className="av-hover-control"
                 onClick={() => {
                   if (providerFilter || runQuery) {
                     setProviderFilter(null)
@@ -1346,7 +1347,7 @@ export default function AgentTeamCoordinator({
             </div>
             <div className="av-coord-run-list" onKeyDown={handleListNavigation}>
               {runs.length === 0 ? (
-                <button type="button" className="av-coord-empty-run" onClick={() => setStartOpen(true)}>
+                <button type="button" className={cn('av-coord-empty-run', 'av-hover-control')} onClick={() => setStartOpen(true)}>
                   <Plus size={15} /> New run
                 </button>
               ) : filteredRuns.length === 0 ? (
@@ -1358,7 +1359,7 @@ export default function AgentTeamCoordinator({
                     <button
                       key={entry.id}
                       type="button"
-                      className={cn('av-coord-run-row', entry.id === runId ? 'av-selected' : '')}
+                      className={cn('av-coord-run-row', entry.id === runId ? 'av-selected' : '', 'av-hover-control')}
                       onClick={() => { setRunId(entry.id); setSelectedEventIndex(-1) }}
                     >
                       <strong>{firstLine(entry.prompt)}</strong>
@@ -1370,7 +1371,7 @@ export default function AgentTeamCoordinator({
               ) : null)}
             </div>
             <div className="av-coord-rail-footer">
-              <button type="button" onClick={() => { setRunQuery(''); setProviderFilter(null); setTaskFilter('all') }}>View all workflows <span aria-hidden="true">→</span></button>
+              <button type="button" className="av-hover-control" onClick={() => { setRunQuery(''); setProviderFilter(null); setTaskFilter('all') }}>View all workflows <span aria-hidden="true">→</span></button>
             </div>
           </aside>
 
@@ -1680,19 +1681,19 @@ export default function AgentTeamCoordinator({
                     {runMenuOpen ? (
                       <div className="av-coord-run-menu">
                         {displayedTask?.ownerAgentId ? (
-                          <button type="button" onClick={() => {
+                          <button type="button" className="av-hover-control" onClick={() => {
                             setRunMenuOpen(false)
                             setMessageTarget(agentsById.get(displayedTask.ownerAgentId!)?.name ?? displayedTask.ownerAgentId!)
                             setMessageDraft('')
                           }}><MessageSquare aria-hidden="true" /> Message task owner</button>
                         ) : null}
                         {displayedTask && !TERMINAL_TASK_STATUSES.has(displayedTask.status) ? (
-                          <button type="button" className="av-danger" onClick={() => { setRunMenuOpen(false); setPendingAction({ kind: 'fail-task', task: displayedTask }) }}><AlertTriangle aria-hidden="true" /> Mark task failed</button>
+                          <button type="button" className={cn('av-danger', 'av-hover-control')} onClick={() => { setRunMenuOpen(false); setPendingAction({ kind: 'fail-task', task: displayedTask }) }}><AlertTriangle aria-hidden="true" /> Mark task failed</button>
                         ) : null}
                         {run.useWorktrees !== false ? (
-                          <button type="button" onClick={() => { setRunMenuOpen(false); void cleanupRun() }} disabled={busyAction === 'cleanup'}><ShieldCheck aria-hidden="true" /> Clean worktrees</button>
+                          <button type="button" className="av-hover-control" onClick={() => { setRunMenuOpen(false); void cleanupRun() }} disabled={busyAction === 'cleanup'}><ShieldCheck aria-hidden="true" /> Clean worktrees</button>
                         ) : null}
-                        <button type="button" className="av-danger" onClick={() => { setRunMenuOpen(false); setPendingAction({ kind: 'delete-run' }) }}><Trash2 aria-hidden="true" /> Delete workflow</button>
+                        <button type="button" className={cn('av-danger', 'av-hover-control')} onClick={() => { setRunMenuOpen(false); setPendingAction({ kind: 'delete-run' }) }}><Trash2 aria-hidden="true" /> Delete workflow</button>
                       </div>
                     ) : null}
                   </div>
@@ -1732,7 +1733,7 @@ export default function AgentTeamCoordinator({
                   <div className={cn('av-coord-panel av-coord-team-panel', inspectorCollapsed ? 'av-collapsed' : '')}>
                     <div className="av-coord-panel-head">
                       <span>Agent Inspector</span>
-                      <button type="button" onClick={() => setInspectorCollapsed((collapsed) => !collapsed)} aria-label={inspectorCollapsed ? 'Expand agent inspector' : 'Collapse agent inspector'} aria-expanded={!inspectorCollapsed}>
+                      <button type="button" className="av-hover-control" onClick={() => setInspectorCollapsed((collapsed) => !collapsed)} aria-label={inspectorCollapsed ? 'Expand agent inspector' : 'Collapse agent inspector'} aria-expanded={!inspectorCollapsed}>
                         <ChevronDown size={13} className={inspectorCollapsed ? undefined : 'av-coord-chevron-expanded'} />
                       </button>
                     </div>
@@ -1829,17 +1830,17 @@ export default function AgentTeamCoordinator({
                         </div>
                       ))}
                       {pendingPlanTasks.map((task) => (
-                        <button key={`plan:${task.id}`} type="button" onClick={() => { selectTask(task); setTaskFilter('attention') }}>
+                        <button key={`plan:${task.id}`} type="button" className="av-hover-control" onClick={() => { selectTask(task); setTaskFilter('attention') }}>
                           <AlertTriangle aria-hidden="true" /><span><strong>{task.title}</strong><small>Plan is waiting for approval</small></span><b>Open</b>
                         </button>
                       ))}
                       {tasks.filter((task) => task.status === 'blocked' || task.status === 'failed').map((task) => (
-                        <button key={`task:${task.id}`} type="button" onClick={() => { selectTask(task); setTaskFilter('attention') }}>
+                        <button key={`task:${task.id}`} type="button" className="av-hover-control" onClick={() => { selectTask(task); setTaskFilter('attention') }}>
                           <AlertTriangle aria-hidden="true" /><span><strong>{task.title}</strong><small>{task.blockedBy.length > 0 ? `Waiting on ${task.blockedBy.join(', ')}` : task.status}</small></span><b>Open</b>
                         </button>
                       ))}
                       {actionableMail > 0 ? (
-                        <button type="button" onClick={() => {
+<button type="button" className="av-hover-control" onClick={() => {
                           setEventFilter('messages')
                           setSelectedEventIndex(-1)
                           window.requestAnimationFrame(() => eventsListRef.current?.querySelector<HTMLButtonElement>('button')?.focus())
@@ -1855,7 +1856,7 @@ export default function AgentTeamCoordinator({
                     <div className="av-coord-panel-head">
                       <span>Work Board</span>
                       <div className="av-coord-board-filters">
-                        {taskFilter !== 'all' ? <button type="button" onClick={() => setTaskFilter('all')}>{taskFilter} ×</button> : null}
+                        {taskFilter !== 'all' ? <button type="button" className="av-hover-control" onClick={() => setTaskFilter('all')}>{taskFilter} ×</button> : null}
                         <span>{completedTasks}/{tasks.length}</span>
                       </div>
                     </div>
@@ -1895,7 +1896,7 @@ export default function AgentTeamCoordinator({
                           {groupedTasks[group].map((task, taskIndex) => {
                             const owner = task.ownerAgentId ? agentsById.get(task.ownerAgentId) : null
                             return (
-                              <button key={task.id} type="button" className={cn('av-coord-task-row', taskIndex === groupedTasks[group].length - 1 ? 'av-last' : '', displayedTask?.id === task.id ? 'av-selected' : '')} onClick={() => selectTask(task)}>
+                              <button key={task.id} type="button" className={cn('av-coord-task-row', taskIndex === groupedTasks[group].length - 1 ? 'av-last' : '', displayedTask?.id === task.id ? 'av-selected' : '', 'av-hover-control')} onClick={() => selectTask(task)}>
                                 <span className="av-coord-task-branch" aria-hidden="true" />
                                 <span className={cn('av-coord-status', `av-tone-${statusTone(task.status)}`)}>{task.status}</span>
                                 <span className="av-coord-task-title" title={task.roleDescription}>
@@ -1949,7 +1950,7 @@ export default function AgentTeamCoordinator({
                   <div className="av-coord-panel av-coord-events-panel">
                     <div className="av-coord-panel-head">
                       <span>Activity{followingEvents ? ' · live' : ' · paused'}</span>
-                      <button type="button" onClick={() => setSelectedEventIndex(-1)} aria-label="Follow latest event" title={followingEvents ? 'Following latest event' : 'Resume following latest event'}>
+                      <button type="button" className="av-hover-control" onClick={() => setSelectedEventIndex(-1)} aria-label="Follow latest event" title={followingEvents ? 'Following latest event' : 'Resume following latest event'}>
                         <Radio size={13} className={followingEvents ? 'av-coord-follow-on' : undefined} />
                       </button>
                     </div>
@@ -1969,7 +1970,7 @@ export default function AgentTeamCoordinator({
                             <button
                               key={`${event.timestamp ?? index}:${index}`}
                               type="button"
-                              className={cn('av-coord-event-row', selected ? 'av-selected' : '')}
+                              className={cn('av-coord-event-row', selected ? 'av-selected' : '', 'av-hover-control')}
                               onClick={() => setSelectedEventIndex(index)}
                             >
                               <span className={cn('av-coord-dot', `av-tone-${eventTone(event)}`)} />
@@ -2026,7 +2027,7 @@ export default function AgentTeamCoordinator({
           <div className="av-coord-drawer">
             <div>
               <strong>Message {messageTarget}</strong>
-              <button type="button" onClick={() => { setMessageTarget(null); setMessageDraft('') }} aria-label="Cancel message">
+              <button type="button" className="av-hover-control" onClick={() => { setMessageTarget(null); setMessageDraft('') }} aria-label="Cancel message">
                 <X size={14} />
               </button>
             </div>
