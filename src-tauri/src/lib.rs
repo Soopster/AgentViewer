@@ -126,23 +126,48 @@ fn runtime_present(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Replaces the splash contents with an install-instructions message. Used
-/// when a required runtime is missing, a spawn fails, or the backend never
-/// becomes healthy, so the user sees an actionable message instead of an
-/// indefinitely spinning splash.
-fn show_splash_message(app: &tauri::AppHandle, heading: &str, body: &str) {
+/// Escapes a string for embedding inside a single-quoted JS string literal in
+/// the splash webview (see the `__setSplash*` helpers in `src-tauri-ui/
+/// index.html`).
+fn escape_js(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('\'', "\\'")
+        .replace('\n', "<br/>")
+}
+
+/// Runs a JS expression in the splash webview ("main") window, if it exists.
+fn eval_splash(app: &tauri::AppHandle, script: String) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
-    let escape = |s: &str| s.replace('\\', "\\\\").replace('\'', "\\'").replace('\n', "<br/>");
-    let script = format!(
-        "document.body.innerHTML = '<div style=\"text-align:center;font-family:-apple-system,BlinkMacSystemFont,\\'Segoe UI\\',sans-serif;color:#e6e6e6;padding:32px;max-width:440px;margin:0 auto\">' + \
-         '<div style=\"font-size:15px;font-weight:600;margin-bottom:10px\">{}</div>' + \
-         '<div style=\"font-size:13px;opacity:0.75;line-height:1.6\">{}</div></div>';",
-        escape(heading),
-        escape(body),
-    );
     let _ = window.eval(&script);
+}
+
+/// Updates the live status line on the branded splash while the backend boots.
+fn show_splash_status(app: &tauri::AppHandle, message: &str) {
+    eval_splash(app, format!("window.__setSplashStatus('{}');", escape_js(message)));
+}
+
+/// Drives the determinate progress bar (0-100) on the branded splash. The bar
+/// runs an indeterminate shimmer until the first progress value arrives.
+fn show_splash_progress(app: &tauri::AppHandle, percent: f32) {
+    let p = percent.clamp(0.0, 100.0);
+    eval_splash(app, format!("window.__setSplashProgress({p});"));
+}
+
+/// Switches the branded splash to its error state with an actionable message.
+/// Used when a required runtime is missing, a spawn fails, or the backend
+/// never becomes healthy, so the user sees why instead of an indefinitely
+/// spinning splash.
+fn show_splash_message(app: &tauri::AppHandle, heading: &str, body: &str) {
+    eval_splash(
+        app,
+        format!(
+            "window.__setSplashError('{}', '{}');",
+            escape_js(heading),
+            escape_js(body),
+        ),
+    );
 }
 
 /// Prefer `preferred`; fall back to an OS-assigned free port if it's taken.
@@ -325,6 +350,9 @@ pub fn run() {
             let resources = packaged_resources(&app_handle);
             let is_packaged = resources.is_some();
 
+            show_splash_status(&app_handle, "Checking runtime dependencies…");
+            show_splash_progress(&app_handle, 10.0);
+
             let mut missing_runtimes = Vec::new();
             if !runtime_present("node") {
                 missing_runtimes.push("Node.js (>=22.5) — https://nodejs.org");
@@ -351,6 +379,9 @@ pub fn run() {
             let port = find_free_port(3000);
             let ahp_port = port + 1;
 
+            show_splash_status(&app_handle, "Starting backend server…");
+            show_splash_progress(&app_handle, 40.0);
+
             let spawn_result = match &resources {
                 Some(resources) => spawn_packaged_backend(&app_handle, resources, port, ahp_port),
                 None => spawn_dev_backend(&app_handle, port, ahp_port),
@@ -373,6 +404,8 @@ pub fn run() {
             app.manage(BackendState {
                 children: Mutex::new(children),
             });
+            show_splash_status(&app_handle, &format!("Waiting for server on port {port}…"));
+            show_splash_progress(&app_handle, 75.0);
 
             // Health-check the backend off the main thread, then navigate the
             // splash window to the live app once it responds. A stalled
