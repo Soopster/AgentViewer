@@ -1006,7 +1006,7 @@ export default function Home() {
     void selectSession(session, nextTargetMessageId)
   }, [scrollSessionListToSession, selectSession])
 
-  function closeTab(sessionKey: string) {
+  const closeTab = useCallback((sessionKey: string) => {
     const idx = openTabSessions.findIndex((s) => projectSessionKey(s) === sessionKey)
     const next = openTabSessions.filter((s) => projectSessionKey(s) !== sessionKey)
     startTransition(() => { setOpenTabSessions(next) })
@@ -1023,7 +1023,7 @@ export default function Home() {
         })
       }
     }
-  }
+  }, [openTabSessions, selectSession, selectedTabKey])
 
   const selectProject = useCallback(async (projectDir: string, projectName: string, projectSessions: Session[]) => {
     startTransition(() => {

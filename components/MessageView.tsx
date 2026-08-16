@@ -2853,7 +2853,7 @@ function AskUserQuestionPicker({
   )
 }
 
-export default function MessageView({
+function MessageViewInner({
   messages,
   loading,
   session,
@@ -7113,15 +7113,24 @@ export default function MessageView({
     return () => window.clearTimeout(timeout)
   }, [highlightedMessageId])
 
+  // Scroll commits flow through the drift-gated commitTimelineScrollTop (see
+  // TIMELINE_SCROLL_COMMIT_PX). Feed the virtual WINDOW from a deferred copy so
+  // a commit never forces a synchronous window recompute that blocks the paint
+  // of the scrolled frame — the browser paints the overscanned window first and
+  // React reconciles rows entering/leaving at transition priority. The urgent
+  // committed value still drives anchor capture/restores. Safe under load
+  // because the 2400px overscan far exceeds the ≤600px stale-window lag.
+  const deferredTimelineScrollTop = useDeferredValue(timelineScrollTop)
+
   const virtualTimeline = useMemo(() => {
     return getVirtualTimelineWindow({
       layout: rowLayout,
       rowCount: renderedTimelineRows.length,
-      scrollTop: timelineScrollTop,
+      scrollTop: deferredTimelineScrollTop,
       viewportHeight: timelineViewportHeight || 800,
       overscanPx: TIMELINE_OVERSCAN_PX,
     })
-  }, [renderedTimelineRows, rowLayout, timelineScrollTop, timelineViewportHeight])
+  }, [renderedTimelineRows, rowLayout, deferredTimelineScrollTop, timelineViewportHeight])
 
   useLayoutEffect(() => {
     if (!pendingMountedAnchorCaptureRef.current) return
@@ -9997,3 +10006,14 @@ export default function MessageView({
     </div>
   )
 }
+
+// Default comparison keeps parent (page) re-renders that don't touch any
+// transcript-related prop from re-executing this ~10k-line tree. The page
+// re-renders every 5s session list poll (openTabSessions map + selectedProject
+// rebind) and on unrelated dashboard state; without memo that re-executed the
+// entire component (threading, row layout, all hooks, the whole JSX tree) for
+// nothing. Props are referentially stable across idle polls (see
+// mergeMessages' identity bail-out in page.tsx and the threaded cache below),
+// so a stable-compare memo succeeds on every idle tick.
+const MessageView = memo(MessageViewInner)
+export default MessageView

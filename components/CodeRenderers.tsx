@@ -1,8 +1,11 @@
 'use client'
 
-import { useMemo } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 import { renderMermaidSVG } from 'beautiful-mermaid'
 import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter'
+import highlightFactory from 'react-syntax-highlighter/dist/esm/highlight'
+import { refractor } from 'refractor/core'
+import type { ReactElement, ReactNode } from 'react'
 import bash from 'react-syntax-highlighter/dist/esm/languages/prism/bash'
 import c from 'react-syntax-highlighter/dist/esm/languages/prism/c'
 import cpp from 'react-syntax-highlighter/dist/esm/languages/prism/cpp'
@@ -34,7 +37,6 @@ import yaml from 'react-syntax-highlighter/dist/esm/languages/prism/yaml'
 import { pathBasename as basename } from '@/lib/projectPaths'
 import { getCodeThemeStyle } from '@/lib/codeThemeStyles'
 import { useCodeTheme } from './CodeThemeContext'
-import type { ReactNode } from 'react'
 import type { SelectedLineRange } from '@pierre/diffs'
 import { PierreFileDiffView, type PierreAnnotationMetadata, type PierreDiffAnnotation, type PierreDiffPresentation } from './PierreDiffView'
 
@@ -83,6 +85,125 @@ SyntaxHighlighter.registerLanguage('typescript', typescript)
 SyntaxHighlighter.registerLanguage('ts', typescript)
 SyntaxHighlighter.registerLanguage('yaml', yaml)
 SyntaxHighlighter.registerLanguage('yml', yaml)
+
+// ── Cached / deferred syntax highlighting ────────────────────────────────────
+// react-syntax-highlighter re-tokenizes the whole code string on every mount
+// (its SyntaxHighlighter is a plain function component — see
+// node_modules/react-syntax-highlighter/dist/esm/highlight.js). Virtualized
+// rows unmount/remount as they leave/re-enter the scroll window, so scrolling
+// a code-heavy transcript re-ran Prism over every visible diff/fence each
+// pass. Mirror the factory react-syntax-highlighter uses internally
+// (highlight(refractor, {})) and cache its rendered element by
+// theme|language|code, so a remount is a Map hit instead of a re-tokenize.
+const renderSyntaxHighlight = highlightFactory(refractor, {}) as (
+  props: Record<string, unknown>,
+) => ReactElement
+
+const CODE_ELEMENT_CACHE_MAX = 800
+const codeElementCache = new Map<string, ReactElement | null>()
+
+// Small fences highlight synchronously (cheap, cache-warm). Larger blocks
+// render unhighlighted first and hydrate one rAF later so a cold Prism pass
+// never blocks the frame that mounted the row. Above these guards we skip
+// highlighting entirely (plain block) — mirrors agentsview's HIGHLIGHT_MAX_BYTES.
+const SYNTAX_SYNC_MAX_CHARS = 6000
+const HIGHLIGHT_MAX_BYTES = 50_000
+const HIGHLIGHT_MAX_LINES = 800
+
+function shouldHighlightSyntax(code: string): boolean {
+  if (code.length > HIGHLIGHT_MAX_BYTES) return false
+  let lines = 1
+  for (let index = 0; index < code.length; index += 1) {
+    if (code.charCodeAt(index) === 10) lines += 1
+    if (lines > HIGHLIGHT_MAX_LINES) return false
+  }
+  return true
+}
+
+function buildCachedCodeElement(key: string, build: () => ReactElement | null): ReactElement | null {
+  const cached = codeElementCache.get(key)
+  if (cached !== undefined) return cached
+  let element: ReactElement | null = null
+  try {
+    element = build()
+  } catch {
+    element = null
+  }
+  if (codeElementCache.size >= CODE_ELEMENT_CACHE_MAX) {
+    const oldestKey = codeElementCache.keys().next().value as string | undefined
+    if (oldestKey !== undefined) codeElementCache.delete(oldestKey)
+  }
+  codeElementCache.set(key, element)
+  return element
+}
+
+/**
+ * Returns a cached highlighted element for `cachedKey`. Cold-cache digs larger
+ * than `SYNTAX_SYNC_MAX_CHARS` are deferred one animation frame; `eligible`
+ * false (over the size guards) always yields null so callers render a plain
+ * block. Returns null while a deferred build is pending.
+ *
+ * Callers pass `key={cachedKey}` on the leaf component so a code change
+ * remounts the leaf and this state resets — no stale element lingers across
+ * prop updates.
+ */
+function useCachedCodeElement(
+  cachedKey: string,
+  code: string,
+  eligible: boolean,
+  build: () => ReactElement | null,
+): ReactElement | null {
+  const needsDefer = code.length > SYNTAX_SYNC_MAX_CHARS
+
+  const [element, setElement] = useState<ReactElement | null>(() => {
+    if (!eligible) return null
+    const cached = codeElementCache.get(cachedKey)
+    if (cached !== undefined) return cached
+    return needsDefer ? null : buildCachedCodeElement(cachedKey, build)
+  })
+
+  useEffect(() => {
+    let cancelled = false
+    if (!eligible) {
+      setElement(null)
+      return
+    }
+    const cached = codeElementCache.get(cachedKey)
+    if (cached !== undefined) {
+      setElement(cached)
+      return
+    }
+    if (!needsDefer) {
+      setElement(buildCachedCodeElement(cachedKey, build))
+      return
+    }
+    const frame = requestAnimationFrame(() => {
+      if (cancelled) return
+      setElement(buildCachedCodeElement(cachedKey, build))
+    })
+    return () => { cancelled = true; cancelAnimationFrame(frame) }
+  }, [build, cachedKey, eligible, needsDefer])
+
+  return element
+}
+
+function CachedSyntaxElement({
+  eligible,
+  code,
+  cachedKey,
+  build,
+  fallback,
+}: {
+  eligible: boolean
+  code: string
+  cachedKey: string
+  build: () => ReactElement | null
+  fallback: ReactNode
+}) {
+  const element = useCachedCodeElement(cachedKey, code, eligible, build)
+  if (element === null) return <>{fallback}</>
+  return element
+}
 
 const LANGUAGE_BY_BASENAME: Record<string, string> = {
   dockerfile: 'docker',
@@ -157,7 +278,29 @@ function useCodeHighlighterStyle() {
   return getCodeThemeStyle(themeId)
 }
 
-export function FencedCodeBlock({
+// Shared wrapper styling for the highlighted fence/viewer so the cache key
+// stays stable (the SyntaxHighlighter <pre> output is identical for equal
+// language|code|style|customStyle).
+const FENCE_PRE_STYLE = { margin: 0, padding: '12px 16px', fontSize: 13, lineHeight: 1.65, overflowX: 'auto' } as const
+
+function PlainFence({ language, code }: { language?: string; code: string }) {
+  return (
+    <div style={FENCE_PRE_STYLE}>
+      <pre style={{
+        margin: 0,
+        fontFamily: "'IBM Plex Mono', monospace",
+        fontSize: 13,
+        lineHeight: 1.6,
+        color: 'var(--text-2)',
+        whiteSpace: 'pre',
+      }}>
+        {code}
+      </pre>
+    </div>
+  )
+}
+
+export const FencedCodeBlock = memo(function FencedCodeBlock({
   language,
   codeString,
   margin = '10px 0',
@@ -167,6 +310,10 @@ export function FencedCodeBlock({
   margin?: string | number
 }) {
   const codeStyle = useCodeHighlighterStyle()
+  const { themeId } = useCodeTheme()
+  const normalized = normalizeCode(codeString)
+  const cacheKey = `fence|${themeId}|${language ?? ''}|${codeString}`
+  const eligible = shouldHighlightSyntax(codeString)
 
   return (
     <div style={{ margin, borderRadius: 6, overflow: 'hidden', border: '1px solid var(--border)' }}>
@@ -183,24 +330,24 @@ export function FencedCodeBlock({
           {language}
         </div>
       )}
-      <SyntaxHighlighter
-        language={language || undefined}
-        style={codeStyle}
-        customStyle={{
-          margin: 0,
-          padding: '12px 16px',
-          fontSize: 13,
-          lineHeight: 1.65,
-          overflowX: 'auto',
-        }}
-      >
-        {codeString}
-      </SyntaxHighlighter>
+      <CachedSyntaxElement
+        key={cacheKey}
+        eligible={eligible}
+        code={codeString}
+        cachedKey={cacheKey}
+        build={() => renderSyntaxHighlight({
+          language: language || undefined,
+          style: codeStyle,
+          customStyle: FENCE_PRE_STYLE,
+          children: normalized,
+        })}
+        fallback={<PlainFence language={language} code={normalized} />}
+      />
     </div>
   )
-}
+})
 
-export function MermaidDiagram({ codeString }: { codeString: string }) {
+export const MermaidDiagram = memo(function MermaidDiagram({ codeString }: { codeString: string }) {
   const rendered = useMemo(() => {
     try {
       return {
@@ -286,9 +433,18 @@ export function MermaidDiagram({ codeString }: { codeString: string }) {
       </details>
     </div>
   )
+})
+
+const VIEWER_PRE_STYLE = { margin: 0, padding: '10px 14px', fontSize: 13, lineHeight: 1.6 }
+const VIEWER_CODE_TAG_STYLE = { fontFamily: "'IBM Plex Mono', monospace" }
+const VIEWER_LINE_NUMBER_STYLE = {
+  minWidth: '2.6em',
+  paddingRight: '0.9em',
+  color: 'var(--text-3)',
+  userSelect: 'none',
 }
 
-export function CodeViewer({
+export const CodeViewer = memo(function CodeViewer({
   code,
   filePath,
   language,
@@ -306,40 +462,68 @@ export function CodeViewer({
   expandToContentWidth?: boolean
 }) {
   const codeStyle = useCodeHighlighterStyle()
+  const { themeId } = useCodeTheme()
   const resolvedLanguage = language ?? detectLanguageFromPath(filePath)
+  const normalized = normalizeCode(code)
+  // Include every prop that changes the produced <pre> tree in the cache key.
+  const inlineOpts = [
+    showLineNumbers ? 1 : 0,
+    startingLineNumber ?? 0,
+    maxHeight ?? 0,
+    expandToContentWidth ? 1 : 0,
+  ].join(',')
+  const cacheKey = `viewer|${themeId}|${resolvedLanguage ?? ''}|${inlineOpts}|${code}`
+  const eligible = shouldHighlightSyntax(code)
+
+  const customStyle = {
+    ...VIEWER_PRE_STYLE,
+    width: expandToContentWidth ? 'max-content' : undefined,
+    minWidth: expandToContentWidth ? '100%' : undefined,
+    overflowX: expandToContentWidth ? 'visible' : 'auto',
+    overflowY: maxHeight ? 'auto' : undefined,
+    maxHeight,
+  }
+
+  const fallback = (
+    <pre style={{
+      margin: 0,
+      padding: '10px 14px',
+      fontFamily: "'IBM Plex Mono', monospace",
+      fontSize: 13,
+      lineHeight: 1.6,
+      color: 'var(--text-2)',
+      whiteSpace: 'pre',
+      overflowX: expandToContentWidth ? 'visible' : 'auto',
+      overflowY: maxHeight ? 'auto' : undefined,
+      maxHeight,
+    }}>
+      {normalized}
+    </pre>
+  )
 
   return (
-    <SyntaxHighlighter
-      language={resolvedLanguage || undefined}
-      style={codeStyle}
-      showLineNumbers={showLineNumbers}
-      startingLineNumber={startingLineNumber}
-      wrapLongLines={false}
-      customStyle={{
-        margin: 0,
-        padding: '10px 14px',
-        fontSize: 13,
-        lineHeight: 1.6,
-        width: expandToContentWidth ? 'max-content' : undefined,
-        minWidth: expandToContentWidth ? '100%' : undefined,
-        overflowX: expandToContentWidth ? 'visible' : 'auto',
-        overflowY: maxHeight ? 'auto' : undefined,
-        maxHeight,
-      }}
-      codeTagProps={{ style: { fontFamily: "'IBM Plex Mono', monospace" } }}
-      lineNumberStyle={{
-        minWidth: '2.6em',
-        paddingRight: '0.9em',
-        color: 'var(--text-3)',
-        userSelect: 'none',
-      }}
-    >
-      {normalizeCode(code)}
-    </SyntaxHighlighter>
+    <CachedSyntaxElement
+      key={cacheKey}
+      eligible={eligible}
+      code={code}
+      cachedKey={cacheKey}
+      build={() => renderSyntaxHighlight({
+        language: resolvedLanguage || undefined,
+        style: codeStyle,
+        showLineNumbers,
+        startingLineNumber,
+        wrapLongLines: false,
+        customStyle,
+        codeTagProps: { style: VIEWER_CODE_TAG_STYLE },
+        lineNumberStyle: VIEWER_LINE_NUMBER_STYLE,
+        children: normalized,
+      })}
+      fallback={fallback}
+    />
   )
-}
+})
 
-export function DiffView({
+export const DiffView = memo(function DiffView({
   oldStr,
   newStr,
   filePath,
@@ -374,4 +558,4 @@ export function DiffView({
       onGutterUtilityClick={onGutterUtilityClick}
     />
   )
-}
+})
