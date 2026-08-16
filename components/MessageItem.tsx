@@ -2183,7 +2183,7 @@ function AgentCard({ thread }: { thread: ToolThread }) {
             <span style={{
               width: 5, height: 5, borderRadius: '50%',
               background: c,
-              boxShadow: `0 0 6px ${c}`,
+              boxShadow: flat ? 'none' : `0 0 6px ${c}`,
               animation: 'pulse 1.2s ease-in-out infinite',
             }} />
             LIVE
@@ -6283,6 +6283,7 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
   const viewMode = use(ViewModeContext)
   const isBridgeMessage = message.origin?.kind === 'bridge'
   const style = ROLE_STYLE[message.role]
+  const flatItem = useColorTreatment() === 'flat'
   const roleLabel = message.role === 'assistant'
     ? getAssistantLabel(message.provider)
     : ROLE_STYLE[message.role].label
@@ -6336,7 +6337,7 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
             height: 13,
             borderRadius: '50%',
             background: style.dot,
-            boxShadow: `0 0 0 2px var(--bg), 0 0 10px 3px ${style.glow}`,
+            boxShadow: flatItem ? `0 0 0 2px var(--bg)` : `0 0 0 2px var(--bg), 0 0 10px 3px ${style.glow}`,
             margin: '0 auto',
           }}
         />

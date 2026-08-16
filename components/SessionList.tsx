@@ -1682,7 +1682,7 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
         }}
         title="Drag to resize · double-click to reset"
         style={{
-          background: resizing ? 'var(--violet-glow)' : 'transparent',
+          background: resizing ? (colorTreatment === 'flat' ? 'color-mix(in srgb, var(--violet) 30%, transparent)' : 'var(--violet-glow)') : 'transparent',
         }}
       />
       <SidebarHeader>

@@ -1996,6 +1996,7 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
 }) {
   const [copied, setCopied] = useState(false)
   const copyText = useMemo(() => messageToCopyText(row.message), [row.message])
+  const flatTimeline = useSyncExternalStore<ColorTreatment>(subscribeColorTreatment, getCurrentColorTreatment, () => DEFAULT_COLOR_TREATMENT) === 'flat'
   const canCopy = copyText.length > 0
   const isUserMessage = row.message.role === 'user'
   const canReuse = isUserMessage && copyText.length > 0
@@ -2044,16 +2045,28 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
         // is the persistent bookmark accent. Both use theme-aware colours so
         // bookmarks read correctly on every theme. Highlight wins when both.
         boxShadow: streamMode
-          ? highlighted
-            ? '0 0 0 1.5px rgba(56,217,245,0.55)'
-            : bookmarked
-              ? '0 0 0 1.5px color-mix(in srgb, var(--t-bookmark) 60%, transparent)'
-              : 'none'
-          : highlighted
-            ? '0 0 0 2px rgba(56,217,245,0.55), 0 0 36px rgba(56,217,245,0.18)'
-            : bookmarked
-              ? '0 0 0 1.5px color-mix(in srgb, var(--t-bookmark) 60%, transparent), 0 0 22px color-mix(in srgb, var(--t-bookmark) 14%, transparent)'
-              : 'none',
+          ? flatTimeline
+            ? highlighted
+              ? '0 0 0 1.5px rgba(56,217,245,0.55)'
+              : bookmarked
+                ? '0 0 0 1.5px color-mix(in srgb, var(--t-bookmark) 60%, transparent)'
+                : 'none'
+            : highlighted
+              ? '0 0 0 1.5px rgba(56,217,245,0.55)'
+              : bookmarked
+                ? '0 0 0 1.5px color-mix(in srgb, var(--t-bookmark) 60%, transparent)'
+                : 'none'
+          : flatTimeline
+            ? highlighted
+              ? '0 0 0 2px rgba(56,217,245,0.55)'
+              : bookmarked
+                ? '0 0 0 1.5px color-mix(in srgb, var(--t-bookmark) 60%, transparent)'
+                : 'none'
+            : highlighted
+              ? '0 0 0 2px rgba(56,217,245,0.55), 0 0 36px rgba(56,217,245,0.18)'
+              : bookmarked
+                ? '0 0 0 1.5px color-mix(in srgb, var(--t-bookmark) 60%, transparent), 0 0 22px color-mix(in srgb, var(--t-bookmark) 14%, transparent)'
+                : 'none',
         background: streamMode ? 'transparent' : highlighted
           ? 'rgba(56,217,245,0.06)'
           : bookmarked
@@ -2114,7 +2127,7 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
               height: 6,
               borderRadius: '50%',
               background: row.activityTone === 'syncing' ? 'var(--amber, #eaaa40)' : 'var(--cyan)',
-              boxShadow: row.activityTone === 'syncing' ? '0 0 6px rgba(234,170,64,0.45)' : '0 0 6px var(--cyan-glow)',
+              boxShadow: flatTimeline ? 'none' : row.activityTone === 'syncing' ? '0 0 6px rgba(234,170,64,0.45)' : '0 0 6px var(--cyan-glow)',
               animation: row.activityTone === 'syncing' ? undefined : 'pulse 1.2s ease-in-out infinite',
             }} />
             {row.previewBadge}
@@ -7454,14 +7467,14 @@ function MessageViewInner({
             border: '1px solid var(--border-2)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             background: colorTreatment === 'flat' ? 'var(--surface)' : 'linear-gradient(135deg, var(--surface-2), var(--surface))',
-            boxShadow: '0 0 40px 8px rgba(139,128,240,0.04) inset',
+            boxShadow: colorTreatment === 'flat' ? 'none' : '0 0 40px 8px rgba(139,128,240,0.04) inset',
           }}>
             <div style={{
               width: 18, height: 18,
               borderRadius: '50%',
               background: 'var(--surface-3)',
               border: '1px solid var(--border-2)',
-              boxShadow: '0 0 8px 2px rgba(139,128,240,0.06)',
+              boxShadow: colorTreatment === 'flat' ? 'none' : '0 0 8px 2px rgba(139,128,240,0.06)',
             }} />
           </div>
         </div>

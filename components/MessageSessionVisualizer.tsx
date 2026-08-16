@@ -1,6 +1,6 @@
 'use client'
 
-import { memo, useDeferredValue, useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { memo, useDeferredValue, useEffect, useMemo, useState, useSyncExternalStore, type CSSProperties } from 'react'
 import {
   AlertTriangle,
   Bot,
@@ -32,6 +32,7 @@ import type { ThreadedBlock, ThreadedMessage } from '@/lib/threading'
 import type { AgentProvider, ApiMessage } from '@/lib/types'
 import { getAssistantLabel } from '@/lib/provider'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { DEFAULT_COLOR_TREATMENT, getCurrentColorTreatment, subscribeColorTreatment, type ColorTreatment } from '@/lib/colorTreatment'
 import { cn } from '@/lib/utils'
 
 export type MessageVisualizerRow = {
@@ -1137,6 +1138,7 @@ function FlowEntry({
   onInspectEntry: (entryId: string) => void
   showSession?: boolean
 }) {
+  const flat = useSyncExternalStore<ColorTreatment>(subscribeColorTreatment, getCurrentColorTreatment, () => DEFAULT_COLOR_TREATMENT) === 'flat'
   const meta = ROLE_META[entry.role]
   const phaseKey = phaseForEntry(entry, total)
   const phaseMeta = PHASE_META[phaseKey]
@@ -1153,7 +1155,7 @@ function FlowEntry({
       aria-label={`Inspect ${entry.roleLabel} message ${entry.index + 1}`}
       style={{
         '--av-entry-color': meta.color,
-        '--av-entry-glow': meta.glow,
+        '--av-entry-glow': flat ? 'transparent' : meta.glow,
         '--av-entry-bg': meta.background,
         '--av-phase-color': phaseMeta.color,
         '--av-phase-bg': phaseMeta.background,
@@ -1199,6 +1201,7 @@ function GraphToolNode({
   entryId: string
   index: number
 }) {
+  const flat = useSyncExternalStore<ColorTreatment>(subscribeColorTreatment, getCurrentColorTreatment, () => DEFAULT_COLOR_TREATMENT) === 'flat'
   const status = tool.error ? 'ERROR' : tool.pending ? 'PENDING' : 'SUCCESS'
   const nodeColor = tool.error ? 'var(--red)' : tool.pending ? 'var(--amber)' : toolColor(tool.name)
 
@@ -1207,7 +1210,7 @@ function GraphToolNode({
       className={cn('av-session-viz-graph-node av-tool-node', tool.error && 'av-error', tool.pending && 'av-pending')}
       style={{
         '--av-node-color': nodeColor,
-        '--av-node-glow': `color-mix(in srgb, ${nodeColor} 18%, transparent)`,
+        '--av-node-glow': flat ? 'transparent' : `color-mix(in srgb, ${nodeColor} 18%, transparent)`,
       } as CSSProperties}
       title={[tool.name, tool.target].filter(Boolean).join(': ')}
     >
@@ -1235,6 +1238,7 @@ function GraphEntry({
   showTools: boolean
   onInspectEntry: (entryId: string) => void
 }) {
+  const flat = useSyncExternalStore<ColorTreatment>(subscribeColorTreatment, getCurrentColorTreatment, () => DEFAULT_COLOR_TREATMENT) === 'flat'
   const meta = ROLE_META[entry.role]
   const phaseKey = phaseForEntry(entry, total)
   const phaseMeta = PHASE_META[phaseKey]
@@ -1250,7 +1254,7 @@ function GraphEntry({
         onClick={() => onInspectEntry(entry.id)}
         style={{
           '--av-node-color': meta.color,
-          '--av-node-glow': meta.glow,
+          '--av-node-glow': flat ? 'transparent' : meta.glow,
           '--av-phase-color': phaseMeta.color,
         } as CSSProperties}
       >
@@ -1634,6 +1638,7 @@ function TurnInspector({
     )
   }
 
+  const flat = useSyncExternalStore<ColorTreatment>(subscribeColorTreatment, getCurrentColorTreatment, () => DEFAULT_COLOR_TREATMENT) === 'flat'
   const roleMeta = ROLE_META[entry.role]
   const phaseMeta = PHASE_META[phaseForEntry(entry, total)]
   const tokenLabel = entry.inputTokens > 0 || entry.outputTokens > 0
@@ -1658,7 +1663,7 @@ function TurnInspector({
       <div className="av-session-viz-inspector-head">
         <span
           aria-hidden="true"
-          style={{ background: roleMeta.color, boxShadow: `0 0 14px ${roleMeta.glow}` }}
+          style={{ background: roleMeta.color, boxShadow: flat ? 'none' : `0 0 14px ${roleMeta.glow}` }}
         />
         <div>
           <strong>Turn {entry.index + 1}</strong>

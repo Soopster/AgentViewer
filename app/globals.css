@@ -59,6 +59,13 @@
 [data-color-treatment="flat"] .av-coord-header {
   background: var(--surface-2);
 }
+/* Higher specificity than the per-theme [data-theme="…"] blocks, so it wins
+   regardless of source order: in flat mode the violet/cyan halo glows and the
+   colored drop-shadows built from them are removed. */
+html[data-color-treatment="flat"] {
+  --violet-glow: transparent;
+  --cyan-glow: transparent;
+}
 
 @theme inline {
   --color-background: var(--bg);
