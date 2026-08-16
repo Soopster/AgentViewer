@@ -71,6 +71,9 @@ function pickAutoApproveOption(options) {
 
 function buildCoordClientApp() {
   return client({ name: 'agent-viewer-coord-worker' })
+    // Coordinator ticks consume activity through the raw-output tap, but ACP
+    // still requires the Client side to accept the Agent's session updates.
+    .onNotification('session/update', async () => {})
     .onRequest('session/request_permission', async (ctx) => pickAutoApproveOption(ctx.params.options))
     // Coord ticks never need the agent to touch the client's own filesystem
     // (the agent already has full shell/file tools of its own via coord_*
@@ -157,6 +160,7 @@ export async function runAcpProviderTick(options) {
         await ctx.request('initialize', {
           protocolVersion: PROTOCOL_VERSION,
           clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
+          clientInfo: { name: 'agent-viewer-coord-worker', title: 'Agent Viewer Coordinator Worker', version: '0.1.0' },
         })
         return ctx
           .buildSession({

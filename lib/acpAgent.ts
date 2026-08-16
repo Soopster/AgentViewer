@@ -48,21 +48,29 @@
  */
 import {
   agent,
+  PROTOCOL_VERSION,
+  RequestError,
   type AgentApp,
   type AgentContext,
   type ContentBlock as AcpContentBlock,
   type CreateElicitationResponse,
   type ElicitationPropertySchema,
+  type McpServer,
   type PermissionOption,
   type RequestPermissionResponse,
   type StopReason,
   type ToolCallContent,
   type ToolKind,
 } from '@agentclientprotocol/sdk'
+import { isAbsolute, resolve as resolvePath } from 'node:path'
 import {
+  closeViewSession,
   createNewViewSession,
+  deleteViewSession,
   interruptViewSession,
+  listViewSessions,
   listViewSessionMessageWindow,
+  readViewSessionInfo,
   readViewSessionRunning,
   runViewSessionAction,
   streamViewSessionTurn,
@@ -76,6 +84,7 @@ const POLL_INTERVAL_MS = 700
 // Effectively "the whole session" — sessions are bounded by real usage, and a
 // hard cap here just protects against a truly pathological transcript.
 const HISTORY_FETCH_LIMIT = 20_000
+const SESSION_LIST_PAGE_SIZE = 100
 
 type AcpSessionState = {
   sessionId: string
@@ -150,20 +159,24 @@ function toolCallTitleFor(thread: ToolThread): string {
   return command ?? filePath ?? thread.toolUse.name
 }
 
-function toolCallLocationsFor(thread: ToolThread): Array<{ path: string }> | undefined {
-  const input = thread.toolUse.input as Record<string, unknown>
-  const filePath = typeof input.file_path === 'string' ? input.file_path : undefined
-  return filePath ? [{ path: filePath }] : undefined
+function absolutePath(cwd: string, path: string): string {
+  return isAbsolute(path) ? path : resolvePath(cwd, path)
 }
 
-function toolCallContentFor(thread: ToolThread): ToolCallContent[] {
+function toolCallLocationsFor(thread: ToolThread, cwd: string): Array<{ path: string }> | undefined {
+  const input = thread.toolUse.input as Record<string, unknown>
+  const filePath = typeof input.file_path === 'string' ? input.file_path : undefined
+  return filePath ? [{ path: absolutePath(cwd, filePath) }] : undefined
+}
+
+function toolCallContentFor(thread: ToolThread, cwd: string): ToolCallContent[] {
   const input = thread.toolUse.input as Record<string, unknown>
   const content: ToolCallContent[] = []
   const filePath = typeof input.file_path === 'string' ? input.file_path : undefined
   if (filePath && typeof input.old_string === 'string' && typeof input.new_string === 'string') {
-    content.push({ type: 'diff', path: filePath, oldText: input.old_string, newText: input.new_string })
+    content.push({ type: 'diff', path: absolutePath(cwd, filePath), oldText: input.old_string, newText: input.new_string })
   } else if (filePath && typeof input.content === 'string' && thread.toolUse.name.toLowerCase().includes('write')) {
-    content.push({ type: 'diff', path: filePath, oldText: null, newText: input.content })
+    content.push({ type: 'diff', path: absolutePath(cwd, filePath), oldText: null, newText: input.content })
   }
   if (thread.result) {
     const text = textContentOf(thread.result.content)
@@ -178,9 +191,28 @@ function toolCallStatusFor(thread: ToolThread): 'pending' | 'in_progress' | 'com
 }
 
 /** Diff newly-threaded blocks against what this session has already streamed, emitting session/update for each new one. */
-async function pollAndEmit(state: AcpSessionState, client: AgentContext, allMessages: SessionMessage[]): Promise<void> {
+async function pollAndEmit(
+  state: AcpSessionState,
+  client: AgentContext,
+  allMessages: SessionMessage[],
+  options: { replayUserMessages?: boolean } = {},
+): Promise<void> {
   const threaded = buildThreadedMessages(allMessages)
   for (const msg of threaded) {
+    if (msg.role === 'user') {
+      if (!options.replayUserMessages) continue
+      for (const block of msg.blocks) {
+        if (block.type !== 'text' || !block.text.trim()) continue
+        const key = `${msg.uuid}:user:text`
+        if (state.emittedBlocks.has(key)) continue
+        state.emittedBlocks.add(key)
+        await client.notify('session/update', {
+          sessionId: state.sessionId,
+          update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: block.text }, messageId: msg.uuid },
+        })
+      }
+      continue
+    }
     if (msg.role !== 'assistant') continue
     for (const block of msg.blocks) {
       if (block.type === 'text') {
@@ -215,8 +247,8 @@ async function pollAndEmit(state: AcpSessionState, client: AgentContext, allMess
               title: toolCallTitleFor(block),
               kind: toolKindOf(block.toolUse.name),
               status,
-              content: toolCallContentFor(block),
-              locations: toolCallLocationsFor(block),
+              content: toolCallContentFor(block, state.cwd),
+              locations: toolCallLocationsFor(block, state.cwd),
               rawInput: block.toolUse.input,
             },
           })
@@ -224,7 +256,7 @@ async function pollAndEmit(state: AcpSessionState, client: AgentContext, allMess
           state.toolCallStatus.set(id, status)
           await client.notify('session/update', {
             sessionId: state.sessionId,
-            update: { sessionUpdate: 'tool_call_update', toolCallId: id, status, content: toolCallContentFor(block) },
+            update: { sessionUpdate: 'tool_call_update', toolCallId: id, status, content: toolCallContentFor(block, state.cwd) },
           })
         }
       }
@@ -395,6 +427,93 @@ async function fetchAllMessages(sessionId: string, provider: AgentProvider): Pro
   return window.messages
 }
 
+function newSessionState(input: {
+  sessionId: string
+  provider: AgentProvider
+  cwd: string
+  offset?: number
+  isPending?: boolean
+}): AcpSessionState {
+  return {
+    sessionId: input.sessionId,
+    provider: input.provider,
+    cwd: input.cwd,
+    offset: input.offset ?? 0,
+    emittedBlocks: new Set(),
+    toolCallStatus: new Map(),
+    answeredPermissionIds: new Set(),
+    isPending: input.isPending ?? false,
+    providerSessionId: input.sessionId,
+  }
+}
+
+function assertAbsoluteSessionPaths(cwd: string, additionalDirectories: string[]): void {
+  if (!isAbsolute(cwd)) throw RequestError.invalidParams('ACP session cwd must be an absolute path')
+  const relativeDirectory = additionalDirectories.find((directory) => !isAbsolute(directory))
+  if (relativeDirectory) throw RequestError.invalidParams(`ACP additionalDirectories path must be absolute: ${relativeDirectory}`)
+  if (additionalDirectories.length) {
+    throw RequestError.invalidParams('Agent Viewer does not advertise the ACP additionalDirectories capability')
+  }
+}
+
+function claudeMcpServers(servers: McpServer[]): Record<string, unknown> {
+  return Object.fromEntries(servers.map((server) => {
+    if ('type' in server && server.type === 'acp') {
+      throw RequestError.invalidParams('The unstable ACP-over-ACP MCP transport is not supported')
+    }
+    if ('type' in server && (server.type === 'http' || server.type === 'sse')) {
+      return [server.name, {
+        type: server.type,
+        url: server.url,
+        headers: Object.fromEntries(server.headers.map((header) => [header.name, header.value])),
+      }]
+    }
+    if (!isAbsolute(server.command)) {
+      throw RequestError.invalidParams(`ACP MCP stdio command must be an absolute path: ${server.command}`)
+    }
+    return [server.name, {
+      type: 'stdio',
+      command: server.command,
+      args: server.args,
+      env: Object.fromEntries(server.env.map((entry) => [entry.name, entry.value])),
+    }]
+  }))
+}
+
+async function applySessionSetup(
+  state: AcpSessionState,
+  additionalDirectories: string[],
+  mcpServers: McpServer[],
+): Promise<void> {
+  assertAbsoluteSessionPaths(state.cwd, additionalDirectories)
+  if (!mcpServers.length) return
+  if (state.provider !== 'claude') {
+    throw RequestError.invalidParams(`ACP-provided MCP servers are not supported by the ${state.provider} backend`)
+  }
+  await runViewSessionAction({
+    sessionId: state.providerSessionId,
+    provider: state.provider,
+    body: { action: 'setMcpServers', servers: claudeMcpServers(mcpServers) },
+  })
+}
+
+function parseSessionCursor(cursor: string | null | undefined): number {
+  if (cursor == null) return 0
+  if (!/^\d+$/.test(cursor)) throw RequestError.invalidParams('Invalid ACP session/list cursor')
+  const offset = Number(cursor)
+  if (!Number.isSafeInteger(offset)) throw RequestError.invalidParams('Invalid ACP session/list cursor')
+  return offset
+}
+
+function isoTimestamp(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined
+  const numeric = typeof value === 'number' ? value : Number(value)
+  const date = Number.isFinite(numeric)
+    ? new Date(numeric < 10_000_000_000 ? numeric * 1000 : numeric)
+    : new Date(String(value))
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString()
+}
+
 /** Builds the ACP Agent app for one provider. Call `.connect(stream)` to serve a transport. */
 export function createAcpAgentApp(provider: AgentProvider): AgentApp {
   const sessions = new Map<string, AcpSessionState>()
@@ -408,12 +527,19 @@ export function createAcpAgentApp(provider: AgentProvider): AgentApp {
     .onRequest('initialize', async (ctx) => {
       supportsFormElicitation = Boolean(ctx.params.clientCapabilities?.elicitation?.form)
       return {
-        protocolVersion: 1,
+        protocolVersion: PROTOCOL_VERSION,
         agentCapabilities: {
           loadSession: true,
           // Baseline only (text + resource_link) — see the module doc comment
           // for why image/audio/embeddedContext aren't wired up in v1.
           promptCapabilities: { image: false, audio: false, embeddedContext: false },
+          ...(provider === 'claude' ? { mcpCapabilities: { http: true, sse: true } } : {}),
+          sessionCapabilities: {
+            list: {},
+            ...(provider === 'codex' ? {} : { delete: {} }),
+            resume: {},
+            close: {},
+          },
         },
         authMethods: [],
         agentInfo: { name: 'agent-viewer', title: `Agent Viewer (${provider})`, version: '0.1.0' },
@@ -421,139 +547,201 @@ export function createAcpAgentApp(provider: AgentProvider): AgentApp {
     })
     .onRequest('authenticate', async () => ({}))
     .onRequest('session/new', async (ctx) => {
+      assertAbsoluteSessionPaths(ctx.params.cwd, ctx.params.additionalDirectories ?? [])
+      if (ctx.params.mcpServers.length && provider !== 'claude') {
+        throw RequestError.invalidParams(`ACP-provided MCP servers are not supported by the ${provider} backend`)
+      }
       const created = await createNewViewSession({ provider, cwd: ctx.params.cwd })
-      sessions.set(created.sessionId, {
+      const state = newSessionState({
         sessionId: created.sessionId,
         provider: created.provider,
         cwd: created.cwd,
-        offset: 0,
-        emittedBlocks: new Set(),
-        toolCallStatus: new Map(),
-        answeredPermissionIds: new Set(),
         isPending: created.isPending,
-        providerSessionId: created.sessionId,
       })
+      await applySessionSetup(state, ctx.params.additionalDirectories ?? [], ctx.params.mcpServers ?? [])
+      sessions.set(created.sessionId, state)
       return { sessionId: created.sessionId }
     })
     .onRequest('session/load', async (ctx) => {
       const sessionId = ctx.params.sessionId
+      assertAbsoluteSessionPaths(ctx.params.cwd, ctx.params.additionalDirectories ?? [])
+      const info = await readViewSessionInfo(sessionId, provider)
+      if (!info) throw RequestError.invalidParams(`Unknown ACP session: ${sessionId}`)
+      if (info.cwd && resolvePath(info.cwd) !== resolvePath(ctx.params.cwd)) {
+        throw RequestError.invalidParams(`ACP session ${sessionId} belongs to ${info.cwd}`)
+      }
       const messages = await fetchAllMessages(sessionId, provider)
-      const state: AcpSessionState = {
+      const state = newSessionState({
         sessionId,
         provider,
         cwd: ctx.params.cwd,
         offset: messages.length,
-        emittedBlocks: new Set(),
-        toolCallStatus: new Map(),
-        answeredPermissionIds: new Set(),
-        // A loaded session already exists (that's what session/load means).
-        isPending: false,
-        providerSessionId: sessionId,
-      }
+      })
+      await applySessionSetup(state, ctx.params.additionalDirectories ?? [], ctx.params.mcpServers ?? [])
       sessions.set(sessionId, state)
       // Per spec, loadSession replays the whole conversation as session/update
       // notifications before returning.
-      await pollAndEmit(state, ctx.client, messages)
+      await pollAndEmit(state, ctx.client, messages, { replayUserMessages: true })
+    })
+    .onRequest('session/list', async (ctx) => {
+      const offset = parseSessionCursor(ctx.params.cursor)
+      if (ctx.params.cwd && !isAbsolute(ctx.params.cwd)) {
+        throw RequestError.invalidParams('ACP session/list cwd must be an absolute path')
+      }
+      const listed = await listViewSessions({
+        provider,
+        dir: ctx.params.cwd ?? undefined,
+        offset,
+        limit: SESSION_LIST_PAGE_SIZE,
+      })
+      return {
+        sessions: listed.map((session) => ({
+          sessionId: session.sessionId,
+          cwd: absolutePath(process.cwd(), session.cwd ?? ctx.params.cwd ?? process.cwd()),
+          title: session.customTitle ?? session.summary ?? session.firstPrompt,
+          updatedAt: isoTimestamp(session.lastModified ?? session.createdAt),
+        })),
+        ...(listed.length === SESSION_LIST_PAGE_SIZE ? { nextCursor: String(offset + listed.length) } : {}),
+      }
+    })
+    .onRequest('session/delete', async (ctx) => {
+      if (provider === 'codex') throw RequestError.invalidRequest('The Codex backend does not support deleting sessions')
+      const active = sessions.get(ctx.params.sessionId)
+      if (active) {
+        active.cancel?.abort()
+        await closeViewSession(active.providerSessionId, provider)
+        sessions.delete(ctx.params.sessionId)
+      }
+      await deleteViewSession(active?.providerSessionId ?? ctx.params.sessionId, provider)
+    })
+    .onRequest('session/resume', async (ctx) => {
+      assertAbsoluteSessionPaths(ctx.params.cwd, ctx.params.additionalDirectories ?? [])
+      const info = await readViewSessionInfo(ctx.params.sessionId, provider)
+      if (!info) throw RequestError.invalidParams(`Unknown ACP session: ${ctx.params.sessionId}`)
+      if (info.cwd && resolvePath(info.cwd) !== resolvePath(ctx.params.cwd)) {
+        throw RequestError.invalidParams(`ACP session ${ctx.params.sessionId} belongs to ${info.cwd}`)
+      }
+      const state = newSessionState({ sessionId: ctx.params.sessionId, provider, cwd: ctx.params.cwd })
+      await applySessionSetup(state, ctx.params.additionalDirectories ?? [], ctx.params.mcpServers ?? [])
+      sessions.set(ctx.params.sessionId, state)
+      return {}
+    })
+    .onRequest('session/close', async (ctx) => {
+      const state = sessions.get(ctx.params.sessionId)
+      if (!state) throw RequestError.invalidParams(`Unknown active ACP session: ${ctx.params.sessionId}`)
+      state.cancel?.abort()
+      await closeViewSession(state.providerSessionId, provider)
+      sessions.delete(ctx.params.sessionId)
     })
     .onRequest('session/prompt', async (ctx) => {
       const state = sessions.get(ctx.params.sessionId)
-      if (!state) throw new Error(`Unknown ACP session: ${ctx.params.sessionId}`)
+      if (!state) throw RequestError.invalidParams(`Unknown active ACP session: ${ctx.params.sessionId}`)
+      if (state.cancel) throw RequestError.invalidRequest(`ACP session ${ctx.params.sessionId} is already processing a prompt`)
       const message = promptTextOf(ctx.params.prompt)
       if (!message.trim()) return { stopReason: 'end_turn' as StopReason }
 
       const abort = new AbortController()
       state.cancel = abort
-
-      let allMessages = await fetchAllMessages(state.providerSessionId, state.provider)
-      state.offset = allMessages.length
-
-      const response = await streamViewSessionTurn({
-        sessionId: state.providerSessionId,
-        signal: abort.signal,
-        provider: state.provider,
-        body: { message, cwd: state.cwd, isPendingSession: state.isPending || undefined },
-      })
-      state.isPending = false
-      if (!response.ok) {
-        state.cancel = undefined
-        throw new Error(`Failed to start turn: HTTP ${response.status} ${response.statusText}`)
+      const cancelRequest = () => {
+        abort.abort(ctx.signal.reason)
+        void interruptViewSession(state.providerSessionId, undefined, true).catch(() => {})
       }
+      if (ctx.signal.aborted) cancelRequest()
+      else ctx.signal.addEventListener('abort', cancelRequest, { once: true })
 
-      let turnEnded = false
-      const drain = (async () => {
-        const reader = response.body?.getReader()
-        if (!reader) return
-        const decoder = new TextDecoder()
-        let buffer = ''
-        let pendingEventName: string | null = null
-        try {
-          for (;;) {
-            const { done, value } = await reader.read()
-            if (done) break
-            buffer += decoder.decode(value, { stream: true })
-            const lines = buffer.split('\n')
-            buffer = lines.pop() ?? ''
-            for (const line of lines) {
-              // A pending session's real id isn't known until the provider's
-              // first message names it — see AcpSessionState.providerSessionId.
-              if (line.startsWith('event: ')) {
-                pendingEventName = line.slice('event: '.length).trim()
-              } else if (line.startsWith('data: ') && pendingEventName === 'session') {
-                pendingEventName = null
-                try {
-                  const payload = JSON.parse(line.slice('data: '.length)) as { sessionId?: unknown }
-                  if (typeof payload.sessionId === 'string' && payload.sessionId && payload.sessionId !== state.providerSessionId) {
-                    state.providerSessionId = payload.sessionId
-                    state.offset = 0
-                    allMessages = []
+      try {
+        let allMessages = await fetchAllMessages(state.providerSessionId, state.provider)
+        state.offset = allMessages.length
+
+        const response = await streamViewSessionTurn({
+          sessionId: state.providerSessionId,
+          signal: abort.signal,
+          provider: state.provider,
+          body: { message, cwd: state.cwd, isPendingSession: state.isPending || undefined },
+        })
+        state.isPending = false
+        if (!response.ok) {
+          throw new Error(`Failed to start turn: HTTP ${response.status} ${response.statusText}`)
+        }
+
+        let turnEnded = false
+        const drain = (async () => {
+          const reader = response.body?.getReader()
+          if (!reader) return
+          const decoder = new TextDecoder()
+          let buffer = ''
+          let pendingEventName: string | null = null
+          try {
+            for (;;) {
+              const { done, value } = await reader.read()
+              if (done) break
+              buffer += decoder.decode(value, { stream: true })
+              const lines = buffer.split('\n')
+              buffer = lines.pop() ?? ''
+              for (const line of lines) {
+                // A pending session's real id isn't known until the provider's
+                // first message names it — see AcpSessionState.providerSessionId.
+                if (line.startsWith('event: ')) {
+                  pendingEventName = line.slice('event: '.length).trim()
+                } else if (line.startsWith('data: ') && pendingEventName === 'session') {
+                  pendingEventName = null
+                  try {
+                    const payload = JSON.parse(line.slice('data: '.length)) as { sessionId?: unknown }
+                    if (typeof payload.sessionId === 'string' && payload.sessionId && payload.sessionId !== state.providerSessionId) {
+                      state.providerSessionId = payload.sessionId
+                      state.offset = 0
+                      allMessages = []
+                    }
+                  } catch {
+                    // malformed frame — ignore
                   }
-                } catch {
-                  // malformed frame — ignore
+                } else if (line.trim() === '') {
+                  pendingEventName = null
                 }
-              } else if (line.trim() === '') {
-                pendingEventName = null
               }
             }
+          } catch {
+            // Aborted or the underlying connection died mid-stream — the
+            // polling loop below has already surfaced everything persisted.
+          } finally {
+            turnEnded = true
           }
-        } catch {
-          // Aborted or the underlying connection died mid-stream — the
-          // polling loop below has already surfaced everything persisted.
-        } finally {
-          turnEnded = true
-        }
-      })()
+        })()
 
-      const poll = (async () => {
-        while (!turnEnded) {
-          await sleep(POLL_INTERVAL_MS)
-          // The realized-id swap above can land between this fetch's start and
-          // end; discard a window fetched under an id we've since moved past
-          // rather than risk appending it to the wrong (reset) allMessages.
-          const fetchedForId = state.providerSessionId
-          const window = await listViewSessionMessageWindow(fetchedForId, { offset: state.offset, limit: 500 }, state.provider).catch(() => null)
-          if (window?.messages.length && fetchedForId === state.providerSessionId) {
-            allMessages = allMessages.concat(window.messages)
-            state.offset = allMessages.length
+        const poll = (async () => {
+          while (!turnEnded) {
+            await sleep(POLL_INTERVAL_MS)
+            // The realized-id swap above can land between this fetch's start and
+            // end; discard a window fetched under an id we've since moved past
+            // rather than risk appending it to the wrong (reset) allMessages.
+            const fetchedForId = state.providerSessionId
+            const window = await listViewSessionMessageWindow(fetchedForId, { offset: state.offset, limit: 500 }, state.provider).catch(() => null)
+            if (window?.messages.length && fetchedForId === state.providerSessionId) {
+              allMessages = allMessages.concat(window.messages)
+              state.offset = allMessages.length
+            }
+            await pollAndEmit(state, ctx.client, allMessages).catch(() => {})
+            await checkPendingPermissions(state, ctx.client, supportsFormElicitation).catch(() => {})
           }
-          await pollAndEmit(state, ctx.client, allMessages).catch(() => {})
-          await checkPendingPermissions(state, ctx.client, supportsFormElicitation).catch(() => {})
+        })()
+
+        await Promise.all([drain, poll])
+
+        // The drain loop can observe stream completion a tick before the last
+        // messages are actually persisted — one more catch-up read.
+        const finalWindow = await listViewSessionMessageWindow(state.providerSessionId, { offset: state.offset, limit: 500 }, state.provider).catch(() => null)
+        if (finalWindow?.messages.length) {
+          allMessages = allMessages.concat(finalWindow.messages)
+          state.offset = allMessages.length
         }
-      })()
+        await pollAndEmit(state, ctx.client, allMessages).catch(() => {})
 
-      await Promise.all([drain, poll])
-
-      // The drain loop can observe stream completion a tick before the last
-      // messages are actually persisted — one more catch-up read.
-      const finalWindow = await listViewSessionMessageWindow(state.providerSessionId, { offset: state.offset, limit: 500 }, state.provider).catch(() => null)
-      if (finalWindow?.messages.length) {
-        allMessages = allMessages.concat(finalWindow.messages)
-        state.offset = allMessages.length
+        const cancelled = abort.signal.aborted
+        return { stopReason: (cancelled ? 'cancelled' : 'end_turn') as StopReason }
+      } finally {
+        if (state.cancel === abort) state.cancel = undefined
+        ctx.signal.removeEventListener('abort', cancelRequest)
       }
-      await pollAndEmit(state, ctx.client, allMessages).catch(() => {})
-
-      const cancelled = abort.signal.aborted
-      state.cancel = undefined
-      return { stopReason: (cancelled ? 'cancelled' : 'end_turn') as StopReason }
     })
     .onNotification('session/cancel', async (ctx) => {
       const state = sessions.get(ctx.params.sessionId)
