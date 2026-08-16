@@ -9,17 +9,17 @@ use tauri::{Manager, WindowEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
-/// Holds the spawned `bin/agent-viewer.mjs web` child so it can be torn down
-/// from the tray "Quit" item and on app exit.
+/// Holds every spawned backend child (the web server, and — in dev mode
+/// only — nothing else directly, since `bin/agent-viewer.mjs` self-manages
+/// its own AHP grandchild there) so they can be torn down from the tray
+/// "Quit" item and on app exit.
 struct BackendState {
-    child: Mutex<Option<CommandChild>>,
+    children: Mutex<Vec<CommandChild>>,
 }
 
 /// `src-tauri/Cargo.toml`'s directory, one level up = the repo root that
-/// holds `bin/agent-viewer.mjs`. This resolves correctly for `cargo tauri
-/// dev` against a live checkout; a bundled production build should instead
-/// resolve this from `app.path().resource_dir()` once packaging ships
-/// pruned resources alongside the binary (tracked as a follow-up).
+/// holds `bin/agent-viewer.mjs`. Only used in dev mode, against a live
+/// checkout — a packaged build uses `packaged_resources` instead.
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -27,11 +27,97 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
+/// The bundled `next-standalone` resource tree, if this is a packaged build
+/// with `scripts/prepareDesktopResources.mjs`'s output actually bundled
+/// (via `tauri.conf.json`'s `bundle.resources`). `tauri dev` never
+/// populates `resource_dir()` with our custom resources — only `tauri
+/// build` copies them in — so this naturally distinguishes dev vs packaged
+/// without any separate flag.
+fn packaged_resources(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let resource_dir = app.path().resource_dir().ok()?;
+    let standalone_dir = resource_dir.join("next-standalone");
+    standalone_dir.join("server.js").exists().then_some(standalone_dir)
+}
+
+/// macOS (and Linux desktop) GUI apps launched via Finder/`open`/a dock icon
+/// do NOT inherit the PATH a login shell would have — no nvm, no Homebrew
+/// `/opt/homebrew/bin`, nothing beyond a minimal system default. Every test
+/// of this app from a terminal masked that, since the terminal's shell had
+/// already sourced the user's rc files; opening the real bundled .app hits
+/// this immediately and can't find `node`.
+///
+/// The standard fix (Electron's `fix-path`, VS Code's `resolve-path`) is to
+/// ask `$SHELL -ilc 'echo $PATH'`. That does NOT work here: it requires a
+/// controlling TTY for the `-i` (interactive) flag zsh needs to actually
+/// source `.zshrc` (where this machine's nvm init lives) — without one, zsh
+/// aborts early with "can't change option: zle" and PATH comes back empty.
+/// Confirmed by reproducing it with a full, unstripped environment, so a
+/// launchd-launched GUI app (which also has no TTY) hits the same failure.
+/// Instead, augment PATH directly with the install locations the common
+/// macOS/Linux version managers actually use — no subprocess, no TTY
+/// dependency, and it's what most desktop Node-wrapping apps converge on
+/// for exactly this reason.
+#[cfg(unix)]
+fn common_runtime_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/opt/homebrew/sbin"),
+        PathBuf::from("/usr/local/bin"),
+    ];
+    if let Ok(home) = std::env::var("HOME") {
+        let home = PathBuf::from(home);
+        // nvm doesn't symlink a stable "current" path; use the lexically
+        // highest installed version (good enough — any modern Node works).
+        if let Ok(entries) = std::fs::read_dir(home.join(".nvm/versions/node")) {
+            let mut versions: Vec<_> = entries.filter_map(|e| e.ok()).map(|e| e.path()).collect();
+            versions.sort();
+            if let Some(latest) = versions.last() {
+                dirs.push(latest.join("bin"));
+            }
+        }
+        dirs.push(home.join(".volta/bin"));
+        dirs.push(home.join(".bun/bin"));
+        dirs.push(home.join(".local/bin"));
+        dirs.push(home.join(".cargo/bin"));
+    }
+    dirs
+}
+
+/// Prepends `common_runtime_dirs()` (that actually exist) to our own
+/// process's PATH, so both the `runtime_present` checks below and every
+/// spawned child (which inherits `std::env::vars()`) can find `node`/`bun`
+/// even when launched with no shell environment at all.
+#[cfg(unix)]
+fn fix_path_env() {
+    let current = std::env::var("PATH").unwrap_or_default();
+    let existing: std::collections::HashSet<&str> = current.split(':').collect();
+    let mut prepend = Vec::new();
+    for dir in common_runtime_dirs() {
+        if !dir.is_dir() {
+            continue;
+        }
+        let dir_str = dir.to_string_lossy().into_owned();
+        if !existing.contains(dir_str.as_str()) {
+            prepend.push(dir_str);
+        }
+    }
+    if prepend.is_empty() {
+        return;
+    }
+    prepend.push(current);
+    // SAFETY: called once, synchronously, before any other thread is
+    // spawned (start of `setup()`), so no concurrent env access races.
+    unsafe {
+        std::env::set_var("PATH", prepend.join(":"));
+    }
+}
+
+#[cfg(not(unix))]
+fn fix_path_env() {}
+
 /// Whether `name --version` runs successfully, i.e. `name` resolves on PATH.
 /// Mirrors the presence check `bin/agent-viewer.mjs`'s `resolveBunLauncher`/
-/// `failMissingBun` already do for the CLI — the desktop app has the same
-/// system Node + Bun requirement (see the plan's "require system Node/Bun"
-/// decision), so it needs the same guard before spawning.
+/// `failMissingBun` already do for the CLI.
 fn runtime_present(name: &str) -> bool {
     std::process::Command::new(name)
         .arg("--version")
@@ -41,8 +127,8 @@ fn runtime_present(name: &str) -> bool {
 }
 
 /// Replaces the splash contents with an install-instructions message. Used
-/// when a required runtime is missing, and when the backend never becomes
-/// healthy, so the user sees an actionable message instead of an
+/// when a required runtime is missing, a spawn fails, or the backend never
+/// becomes healthy, so the user sees an actionable message instead of an
 /// indefinitely spinning splash.
 fn show_splash_message(app: &tauri::AppHandle, heading: &str, body: &str) {
     let Some(window) = app.get_webview_window("main") else {
@@ -70,11 +156,38 @@ fn find_free_port(preferred: u16) -> u16 {
         .unwrap_or(preferred)
 }
 
+/// Streams a spawned command's stdout/stderr into the Rust log, tagged with
+/// `label`, so `cargo tauri dev` output shows real backend errors instead of
+/// a blank window.
+fn forward_events(label: &'static str, mut rx: tauri::async_runtime::Receiver<CommandEvent>) {
+    tauri::async_runtime::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            match event {
+                CommandEvent::Stdout(line) => {
+                    log::info!("[{label}] {}", String::from_utf8_lossy(&line).trim_end());
+                }
+                CommandEvent::Stderr(line) => {
+                    log::warn!("[{label}] {}", String::from_utf8_lossy(&line).trim_end());
+                }
+                CommandEvent::Error(err) => {
+                    log::error!("[{label}] error: {err}");
+                }
+                CommandEvent::Terminated(payload) => {
+                    log::error!("[{label}] exited: {payload:?}");
+                    break;
+                }
+                _ => {}
+            }
+        }
+    });
+}
+
 /// PIDs of `pid`'s direct and indirect children, via `pgrep -P` (present on
-/// macOS/Linux). The backend's own process (`bin/agent-viewer.mjs`) spawns
-/// the AHP Coordinator as a grandchild, so `CommandChild::kill()` alone
-/// (which only signals the direct child) leaves it orphaned — confirmed by
-/// testing an external SIGTERM against a running dev instance.
+/// macOS/Linux). In dev mode, `bin/agent-viewer.mjs` spawns the AHP
+/// Coordinator as a grandchild, so `CommandChild::kill()` alone (which only
+/// signals the direct child) leaves it orphaned — confirmed by testing an
+/// external SIGTERM against a running dev instance. In packaged mode this
+/// is a defensive no-op: both children are already direct, leaf processes.
 #[cfg(unix)]
 fn descendant_pids(pid: u32) -> Vec<u32> {
     let mut descendants = Vec::new();
@@ -111,21 +224,85 @@ fn kill_pid(pid: u32) {
 }
 
 fn kill_backend(app: &tauri::AppHandle) {
-    if let Some(state) = app.try_state::<BackendState>() {
-        if let Some(child) = state.child.lock().expect("backend state poisoned").take() {
-            #[cfg(unix)]
-            {
-                let pid = child.pid();
-                // Signal grandchildren (the AHP sidecar) before the direct
-                // child, otherwise agent-viewer.mjs's own SIGTERM handler
-                // may already be mid-exit by the time we look up its tree.
-                for descendant in descendant_pids(pid) {
-                    kill_pid(descendant);
-                }
+    let Some(state) = app.try_state::<BackendState>() else {
+        return;
+    };
+    for child in state.children.lock().expect("backend state poisoned").drain(..) {
+        #[cfg(unix)]
+        {
+            let pid = child.pid();
+            for descendant in descendant_pids(pid) {
+                kill_pid(descendant);
             }
-            let _ = child.kill();
         }
+        let _ = child.kill();
     }
+}
+
+/// Spawns the backend against a bundled packaged build: the traced
+/// `next-standalone/server.js` run directly with system Node, and the AHP
+/// Coordinator as a real Tauri sidecar (`bun build --compile`'d ahead of
+/// time by `scripts/prepareDesktopResources.mjs`, so packaged installs need
+/// only Node on PATH, not Bun).
+fn spawn_packaged_backend(
+    app_handle: &tauri::AppHandle,
+    resources: &std::path::Path,
+    port: u16,
+    ahp_port: u16,
+) -> Result<Vec<CommandChild>, String> {
+    let server_js = resources.join("server.js");
+    let (web_rx, web_child) = app_handle
+        .shell()
+        .command("node")
+        .arg(&server_js)
+        .current_dir(resources)
+        .envs(std::env::vars())
+        .env("PORT", port.to_string())
+        .env("HOSTNAME", "127.0.0.1")
+        .spawn()
+        .map_err(|err| format!("failed to spawn packaged web server: {err}"))?;
+    forward_events("web", web_rx);
+
+    let (ahp_rx, ahp_child) = app_handle
+        .shell()
+        .sidecar("agent-viewer-ahp")
+        .map_err(|err| format!("failed to resolve AHP sidecar: {err}"))?
+        .args(["--ws", &format!("127.0.0.1:{ahp_port}")])
+        .spawn()
+        .map_err(|err| format!("failed to spawn AHP sidecar: {err}"))?;
+    forward_events("ahp", ahp_rx);
+
+    Ok(vec![web_child, ahp_child])
+}
+
+/// Spawns the backend against a live dev checkout: `bin/agent-viewer.mjs
+/// web`, which self-manages its own `next dev` + Bun AHP child exactly as
+/// the CLI does.
+fn spawn_dev_backend(app_handle: &tauri::AppHandle, port: u16, ahp_port: u16) -> Result<Vec<CommandChild>, String> {
+    let entrypoint = repo_root().join("bin").join("agent-viewer.mjs");
+    let args = vec![
+        entrypoint.to_string_lossy().to_string(),
+        "web".to_string(),
+        "--port".to_string(),
+        port.to_string(),
+        "--ahp-port".to_string(),
+        ahp_port.to_string(),
+    ];
+
+    let (rx, child) = app_handle
+        .shell()
+        .command("node")
+        .args(args)
+        .current_dir(repo_root())
+        // GUI-launched processes don't reliably inherit a login shell's PATH
+        // (e.g. nvm-managed node); pass it through explicitly so the "node"
+        // lookup succeeds.
+        .envs(std::env::vars())
+        .spawn()
+        .map_err(|err| format!("failed to spawn dev backend: {err}"))?;
+    forward_events("backend", rx);
+
+    Ok(vec![child])
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -141,13 +318,21 @@ pub fn run() {
                 )?;
             }
 
+            // Must run before any runtime_present()/spawn call below.
+            fix_path_env();
+
             let app_handle = app.handle().clone();
+            let resources = packaged_resources(&app_handle);
+            let is_packaged = resources.is_some();
 
             let mut missing_runtimes = Vec::new();
             if !runtime_present("node") {
                 missing_runtimes.push("Node.js (>=22.5) — https://nodejs.org");
             }
-            if !runtime_present("bun") {
+            // Packaged installs run the AHP Coordinator as a precompiled
+            // sidecar binary (see spawn_packaged_backend) — only dev mode
+            // still needs Bun on PATH to run bin/agent-viewer-ahp.ts directly.
+            if !is_packaged && !runtime_present("bun") {
                 missing_runtimes.push("Bun — https://bun.sh");
             }
             if !missing_runtimes.is_empty() {
@@ -165,80 +350,34 @@ pub fn run() {
 
             let port = find_free_port(3000);
             let ahp_port = port + 1;
-            let entrypoint = repo_root().join("bin").join("agent-viewer.mjs");
-            let entrypoint_str = entrypoint.to_string_lossy().to_string();
 
-            let debug = cfg!(debug_assertions);
-            let mut args = vec![
-                entrypoint_str,
-                "web".to_string(),
-                "--port".to_string(),
-                port.to_string(),
-                "--ahp-port".to_string(),
-                ahp_port.to_string(),
-            ];
-            if !debug {
-                args.push("--production".to_string());
-            }
-
-            let shell = app_handle.shell();
-            let spawn_result = shell
-                .command("node")
-                .args(args)
-                .current_dir(repo_root())
-                // GUI-launched processes don't reliably inherit a login
-                // shell's PATH (e.g. nvm-managed node); pass it through
-                // explicitly so the "node" lookup succeeds.
-                .envs(std::env::vars())
-                .spawn();
-            let (mut rx, child) = match spawn_result {
-                Ok(pair) => pair,
-                Err(err) => {
+            let spawn_result = match &resources {
+                Some(resources) => spawn_packaged_backend(&app_handle, resources, port, ahp_port),
+                None => spawn_dev_backend(&app_handle, port, ahp_port),
+            };
+            let children = match spawn_result {
+                Ok(children) => children,
+                Err(message) => {
                     // A panic here would abort the whole app (this closure
                     // runs inside a macOS callback that can't unwind) —
                     // log and leave the splash visible instead of crashing.
-                    log::error!("failed to spawn agent-viewer backend: {err}");
-                    show_splash_message(
-                        &app_handle,
-                        "Failed to start backend",
-                        &format!("{err}\n\nSee the app log for details."),
-                    );
+                    log::error!("{message}");
+                    show_splash_message(&app_handle, "Failed to start backend", &format!("{message}\n\nSee the app log for details."));
                     return Ok(());
                 }
             };
 
-            log::info!("spawned agent-viewer backend on port {port} (ahp {ahp_port})");
+            log::info!(
+                "spawned agent-viewer backend on port {port} (ahp {ahp_port}, packaged={is_packaged})"
+            );
             app.manage(BackendState {
-                child: Mutex::new(Some(child)),
-            });
-
-            // Stream backend stdout/stderr into the Rust log so `cargo tauri
-            // dev` output shows real backend errors, not just a blank window.
-            tauri::async_runtime::spawn(async move {
-                while let Some(event) = rx.recv().await {
-                    match event {
-                        CommandEvent::Stdout(line) => {
-                            log::info!("[backend] {}", String::from_utf8_lossy(&line).trim_end());
-                        }
-                        CommandEvent::Stderr(line) => {
-                            log::warn!("[backend] {}", String::from_utf8_lossy(&line).trim_end());
-                        }
-                        CommandEvent::Error(err) => {
-                            log::error!("[backend] error: {err}");
-                        }
-                        CommandEvent::Terminated(payload) => {
-                            log::error!("[backend] exited: {payload:?}");
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
+                children: Mutex::new(children),
             });
 
             // Health-check the backend off the main thread, then navigate the
             // splash window to the live app once it responds. A stalled
-            // backend times out into a native error dialog rather than
-            // leaving the splash spinning forever.
+            // backend surfaces an actionable message rather than leaving the
+            // splash spinning forever.
             let health_handle = app_handle.clone();
             std::thread::spawn(move || {
                 let addr = format!("127.0.0.1:{port}");

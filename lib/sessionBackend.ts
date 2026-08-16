@@ -7046,6 +7046,28 @@ export async function interruptViewSession(sessionId: string, turnRequestId?: st
     : undefined
 }
 
+/** Release provider-side resources for an active session without deleting its durable history. */
+export async function closeViewSession(sessionId: string, providerOverride?: AgentProvider): Promise<void> {
+  const provider = await resolveProvider(providerOverride)
+  await interruptViewSession(sessionId, undefined, true).catch(() => {})
+  if (provider === 'claude') {
+    recycleClaudeSession(sessionId)
+    return
+  }
+  if (provider === 'codex') {
+    await getCodexClient().request('thread/unsubscribe', { threadId: sessionId }).catch(() => {})
+    codexResumedThreads.delete(sessionId)
+    return
+  }
+  if (provider === 'copilot') {
+    await evictCopilotSession(sessionId).catch(() => {})
+    return
+  }
+  if (provider === 'pi') {
+    evictPiAgentSession(sessionId)
+  }
+}
+
 function listPendingProviderPermissionPayloads(
   sessionId: string,
   provider?: AgentProvider,

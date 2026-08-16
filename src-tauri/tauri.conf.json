@@ -33,6 +33,12 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": {
+      "resources/next-standalone": "next-standalone"
+    },
+    "externalBin": [
+      "binaries/agent-viewer-ahp"
+    ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
     }

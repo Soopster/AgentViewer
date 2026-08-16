@@ -5,11 +5,17 @@ const nextConfig: NextConfig = {
   // desktop sidecar); keep serverExternalPackages/node:sqlite indirection
   // working under standalone tracing — see CLAUDE.md's node:sqlite note.
   output: 'standalone',
-  // .agent-viewer-data is gitignored runtime state (search index, coord
-  // worktrees, tags) — never packaging input. Without this, the tracer
-  // sweeps up nested worktree symlinks under it and fails to copy them.
+  // Non-packaging directories the tracer otherwise sweeps into the
+  // standalone output: .agent-viewer-data is gitignored runtime state
+  // (search index, coord worktrees, tags) whose nested worktree symlinks
+  // fail to copy; .git and src-tauri/** are source-control/build-tool
+  // metadata, and src-tauri/resources + src-tauri/target/release are this
+  // same standalone output from a *previous* build, so leaving them
+  // unexcluded lets each rebuild sweep up the last one's artifacts —
+  // confirmed by finding a stray .git/info/exclude nested three levels
+  // deep inside a rebuilt src-tauri/resources/next-standalone/.
   outputFileTracingExcludes: {
-    '*': ['.agent-viewer-data/**'],
+    '*': ['.agent-viewer-data/**', '.git/**', 'src-tauri/**'],
   },
   experimental: {
     optimizePackageImports: ['lucide-react', 'recharts'],
