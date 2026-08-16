@@ -3,6 +3,7 @@ import type { TuiTranscriptCard } from '../format'
 import type { TuiDensity } from '../theme'
 import type { ProviderSelection, Session, SessionInfo, SessionMessage } from '../../lib/types'
 import { threadedMessageFingerprint } from './messageFingerprint'
+import { tuiWorkerUrl } from './workerUrl'
 
 export type SessionDetailPayload = {
   info: SessionInfo | null
@@ -206,8 +207,7 @@ function touchThreadingCache(key: string, cache: ThreadingClientCache): void {
 
 function ensureWorker(): Worker {
   if (worker) return worker
-  const url = new URL('./threadingWorker.ts', import.meta.url)
-  const w = new Worker(url.href, { type: 'module' })
+  const w = new Worker(tuiWorkerUrl('threadingWorker', import.meta.url), { type: 'module' })
   w.onmessage = (event: MessageEvent<WorkerResponse>) => {
     const data = event.data
     const entry = pending.get(data.id)

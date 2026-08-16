@@ -1,5 +1,6 @@
 import type { ContextUsage } from '../../lib/types'
 import type { Session } from '../../lib/types'
+import { tuiWorkerUrl } from './workerUrl'
 
 type Pending = {
   resolve: (metadata: { currentModel: string | null; contextUsage: ContextUsage | null }) => void
@@ -16,8 +17,7 @@ const pending = new Map<number, Pending>()
 
 function ensureWorker(): Worker {
   if (worker) return worker
-  const url = new URL('./metadataWorker.ts', import.meta.url)
-  const w = new Worker(url.href, { type: 'module' })
+  const w = new Worker(tuiWorkerUrl('metadataWorker', import.meta.url), { type: 'module' })
   w.onmessage = (event: MessageEvent<WorkerResponse>) => {
     const data = event.data
     const entry = pending.get(data.id)

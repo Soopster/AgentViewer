@@ -37,7 +37,8 @@
       "resources/next-standalone": "next-standalone"
     },
     "externalBin": [
-      "binaries/agent-viewer-ahp"
+      "binaries/agent-viewer-ahp",
+      "binaries/agent-viewer-tui"
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"

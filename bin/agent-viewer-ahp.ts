@@ -2,6 +2,9 @@
 
 import { createServer, type Socket } from 'node:net'
 import { CoordinatorAhpHost, type CoordinatorAhpConnection } from '../lib/ahpHost'
+import { startParentWatchdog } from '../lib/parentWatchdog'
+
+startParentWatchdog('ahp')
 
 const MAX_FRAME_BYTES = 16 * 1024 * 1024
 const host = new CoordinatorAhpHost()

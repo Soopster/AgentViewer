@@ -1,6 +1,12 @@
 export async function register() {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return
   try {
+    const { startParentWatchdog } = await import('./lib/parentWatchdog')
+    startParentWatchdog('web')
+  } catch (err) {
+    console.warn('[instrumentation] parent watchdog failed to start:', err)
+  }
+  try {
     // Opt-in RSS/heap + cache-size logger (AGENT_VIEWER_MEM_LOG=1). No-op otherwise.
     const { startMemoryLogger } = await import('./lib/memoryLogger')
     startMemoryLogger()

@@ -3,9 +3,10 @@
 //   - a pruned Next.js standalone server (from `next build`'s
 //     `output: 'standalone'`, plus the static/public assets it doesn't
 //     trace but still needs to serve)
-//   - the AHP Coordinator sidecar, compiled to a single native binary via
-//     `bun build --compile` so packaged installs don't need Bun at all,
-//     only the Node.js already required for the web server
+//   - the AHP Coordinator sidecar and the OpenTUI binary, each compiled to a
+//     single native binary via `bun build --compile` so packaged installs
+//     don't need Bun at all, only the Node.js already required for the web
+//     server. The TUI binary is what the app's embedded-terminal page runs.
 //
 // Run via `npm run desktop:prepare` (also wired into `desktop:build`).
 // Idempotent: safe to re-run, always rebuilds from the current .next output.
@@ -62,17 +63,44 @@ function main() {
   console.log('[prepare-desktop] compiling AHP sidecar with bun build --compile...')
   mkdirSync(binariesDir, { recursive: true })
   const triple = rustcHostTriple()
-  const outfile = path.join(binariesDir, `agent-viewer-ahp-${triple}`)
+  const ahpOutfile = path.join(binariesDir, `agent-viewer-ahp-${triple}`)
   run('bun', [
     'build',
     path.join(repoRoot, 'bin', 'agent-viewer-ahp.ts'),
     '--compile',
     '--outfile',
-    outfile,
+    ahpOutfile,
   ])
 
+  console.log('[prepare-desktop] compiling TUI with bun build --compile...')
+  const tuiOutfile = path.join(binariesDir, `agent-viewer-tui-${triple}`)
+  // The three workers are passed as extra entrypoints so `bun build --compile`
+  // embeds them in the binary under `$bunfs`. The worker clients resolve their
+  // runtime URL via tui/opentui/workerUrl.ts. Entrypoint paths must be RELATIVE
+  // (with cwd at the repo root): bun keys $bunfs entries by the path string
+  // given on the command line, and the worker clients match the resulting
+  // basename (`root/threadingWorker.js`). Absolute paths produce long
+  // `root/Users/...` keys the clients can't resolve, and until bun 1.3.x lands
+  // its absolute-$bunfs worker remap those fail at runtime with
+  // `ModuleNotFound resolving ".../threadingWorker.js"`.
+  run(
+    'bun',
+    [
+      'build',
+      'tui/opentui/main.tsx',
+      'tui/opentui/threadingWorker.ts',
+      'tui/opentui/metadataWorker.ts',
+      'tui/opentui/analyticsWorker.ts',
+      '--compile',
+      '--outfile',
+      tuiOutfile,
+    ],
+    { cwd: repoRoot },
+  )
+
   console.log(`[prepare-desktop] done. resources: ${resourcesDir}`)
-  console.log(`[prepare-desktop] done. sidecar:   ${outfile}`)
+  console.log(`[prepare-desktop] done. sidecar:   ${ahpOutfile}`)
+  console.log(`[prepare-desktop] done. tui binary: ${tuiOutfile}`)
 }
 
 main()

@@ -45,7 +45,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import dynamic from 'next/dynamic'
-import { BookOpen, ChartNetwork, FileCode2, Filter, Minimize2, Plug, Radio, RotateCcw, Search, SendHorizontal, Square, X } from 'lucide-react'
+import { BookOpen, ChartNetwork, FileCode2, Filter, Minimize2, Plug, Radio, RotateCcw, Search, SendHorizontal, Square, Terminal, X } from 'lucide-react'
 import MessageItem, { MessageDensityProvider, ViewModeProvider, DiffStyleProvider, DiffOptionsProvider, type MessageDensity, type WebViewMode } from './MessageItem'
 import { useChannelBridge } from './useChannelBridge'
 import { useIdeBridge } from './useIdeBridge'
@@ -7636,6 +7636,33 @@ function MessageViewInner({
           }}
         >
           📈 ALL SESSIONS
+        </Link>
+
+        {/* Embedded TUI terminal */}
+        <Link
+          href="/terminal"
+          transitionTypes={['route']}
+          title="Embedded TUI terminal"
+          className="av-hover-control"
+          style={{
+            flexShrink: 0,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            height: 26,
+            padding: '0 10px',
+            background: 'transparent',
+            border: '1px solid var(--border)',
+            borderRadius: 5,
+            color: 'var(--text-2)',
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 11,
+            letterSpacing: '0.08em',
+            textDecoration: 'none',
+          }}
+        >
+          <Terminal size={13} strokeWidth={2.2} />
+          TERMINAL
         </Link>
 
         {/* Analytics */}

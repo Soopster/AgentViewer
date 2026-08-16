@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process'
-import { accessSync, constants as fsConstants, existsSync, statSync } from 'node:fs'
+import { accessSync, constants as fsConstants, existsSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -101,6 +101,22 @@ function parseArgs(rawArgs) {
   }
 
   return { forwarded, port, legacy, attach, identity, ahpPort, noAhp, production }
+}
+
+// The bind address is fixed for the process's lifetime (you can't rebind a
+// listening socket), so this reads the same state file lib/remoteAuth.ts's
+// enableRemoteAccess()/disableRemoteAccess() writes, once, at startup —
+// toggling remote access in the running app's UI updates the *auth* check
+// immediately, but only takes effect on the network bind after a restart.
+function resolveWebHostname() {
+  try {
+    const stateFile = fileURLToPath(new URL('../.agent-viewer-data/remote-access.json', import.meta.url))
+    const state = JSON.parse(readFileSync(stateFile, 'utf8'))
+    if (state?.enabled === true) return '0.0.0.0'
+  } catch {
+    // No state file yet, or unreadable — default to the safe loopback-only bind.
+  }
+  return '127.0.0.1'
 }
 
 function normalizeAttachUrl(attach) {
@@ -413,16 +429,17 @@ Run \`agent-viewer coord <subcommand> --help\` for subcommand-specific options.`
     // through the `next` CLI, which standalone builds don't include.
     const standaloneServer = fileURLToPath(new URL('../.next/standalone/server.js', import.meta.url))
     const webPort = String(port || process.env.PORT || 3000)
+    const hostname = resolveWebHostname()
     let child
 
     if (production && existsSync(standaloneServer)) {
       child = spawn(process.execPath, [standaloneServer, ...forwarded], {
         stdio: 'inherit',
-        env: { ...process.env, PORT: webPort, HOSTNAME: '127.0.0.1' },
+        env: { ...process.env, PORT: webPort, HOSTNAME: hostname },
       })
     } else {
       const nextBin = fileURLToPath(new URL('../node_modules/next/dist/bin/next', import.meta.url))
-      const nextArgs = [production ? 'start' : 'dev', '--hostname', '127.0.0.1', '--port', webPort, ...forwarded]
+      const nextArgs = [production ? 'start' : 'dev', '--hostname', hostname, '--port', webPort, ...forwarded]
       child = spawn(process.execPath, [nextBin, ...nextArgs], {
         stdio: 'inherit',
       })

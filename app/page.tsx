@@ -23,6 +23,7 @@ const PullRequestView = dynamic(() => import('@/components/PullRequestView'), { 
 const FileViewer = dynamic(() => import('@/components/FileViewer'), { ssr: false })
 const BookmarksPanel = dynamic(() => import('@/components/BookmarksPanel'), { ssr: false })
 const ProvenancePopover = dynamic(() => import('@/components/ProvenancePopover'), { ssr: false })
+const RemoteAccessPopover = dynamic(() => import('@/components/RemoteAccessPopover'), { ssr: false })
 const RunDashboard = dynamic(() => import('@/components/RunDashboard'), { ssr: false })
 const AgentTeamCoordinator = dynamic(() => import('@/components/AgentTeamCoordinator'), { ssr: false })
 const CrossSessionMessaging = dynamic(() => import('@/app/agents/page'), { ssr: false })
@@ -352,6 +353,7 @@ export default function Home() {
   const composerInsertRequestRef = useRef(0)
   const [bookmarksPanelOpen, setBookmarksPanelOpen] = useState(false)
   const [provenanceOpen, setProvenanceOpen] = useState(false)
+  const [remoteAccessOpen, setRemoteAccessOpen] = useState(false)
   const [dashboardTab, setDashboardTab] = useState<DashboardTab>('sessions')
   const [taskPanelOpenRequest, setTaskPanelOpenRequest] = useState(0)
   const [promptLibraryOpenRequest, setPromptLibraryOpenRequest] = useState(0)
@@ -1426,6 +1428,7 @@ export default function Home() {
                   onToggleIdeBridgeRoute={toggleIdeBridgeRoute}
                   onOpenBookmarks={() => setBookmarksPanelOpen(true)}
                   onOpenProvenance={() => setProvenanceOpen(true)}
+                  onOpenRemoteAccess={() => setRemoteAccessOpen(true)}
                 />
               ) : null}
             </div>
@@ -1470,6 +1473,9 @@ export default function Home() {
               selectCommandPaletteSession({ sessionId, provider: editProvider } as Session, uuid)
             }}
           />
+        ) : null}
+        {remoteAccessOpen ? (
+          <RemoteAccessPopover open={remoteAccessOpen} onClose={() => setRemoteAccessOpen(false)} />
         ) : null}
         {bookmarksPanelOpen ? (
           <BookmarksPanel

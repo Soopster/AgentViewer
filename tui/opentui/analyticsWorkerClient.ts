@@ -1,4 +1,5 @@
 import type { Analytics, AnalyticsInput } from '../../lib/analytics'
+import { tuiWorkerUrl } from './workerUrl'
 
 type Pending = {
   resolve: (analytics: Analytics) => void
@@ -15,8 +16,7 @@ const pending = new Map<number, Pending>()
 
 function ensureWorker(): Worker {
   if (worker) return worker
-  const url = new URL('./analyticsWorker.ts', import.meta.url)
-  const w = new Worker(url.href, { type: 'module' })
+  const w = new Worker(tuiWorkerUrl('analyticsWorker', import.meta.url), { type: 'module' })
   w.onmessage = (event: MessageEvent<WorkerResponse>) => {
     const data = event.data
     const entry = pending.get(data.id)

@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { BarChart3, Bookmark, BookOpen, Bot, Database, FileSearch, FolderOpen, GitBranch, GitPullRequest, Layers3, ListTodo, MessageSquare, PanelLeftOpen, PanelRightOpen, Plug, Radio, RefreshCw, Search, SlidersHorizontal, UsersRound } from 'lucide-react'
+import { BarChart3, Bookmark, BookOpen, Bot, Database, FileSearch, FolderOpen, GitBranch, GitPullRequest, Layers3, ListTodo, MessageSquare, PanelLeftOpen, PanelRightOpen, Plug, Radio, RefreshCw, Search, SlidersHorizontal, Smartphone, SquareTerminal, UsersRound } from 'lucide-react'
 
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
 import { SidebarGlyph, useSidebar } from '@/components/ui/sidebar'
@@ -54,6 +54,7 @@ type CommandPaletteProps = {
   onToggleIdeBridgeRoute: () => void
   onOpenBookmarks: () => void
   onOpenProvenance: () => void
+  onOpenRemoteAccess: () => void
 }
 
 type PaletteItem = {
@@ -342,6 +343,7 @@ export default function CommandPalette({
   onToggleIdeBridgeRoute,
   onOpenBookmarks,
   onOpenProvenance,
+  onOpenRemoteAccess,
 }: CommandPaletteProps) {
   const { state: sidebarState, toggleSidebar } = useSidebar()
   const [query, setQuery] = useState('')
@@ -473,6 +475,18 @@ export default function CommandPalette({
         score: 0,
         run: () => {
           if (typeof window !== 'undefined') window.location.href = '/analytics'
+        },
+      },
+      {
+        id: 'open-terminal',
+        label: 'Open embedded terminal',
+        description: 'Run the Agent Viewer TUI inside the app',
+        icon: <SquareTerminal size={16} />,
+        group: 'actions',
+        keywords: ['terminal', 'tui', 'shell', 'console', 'cli', 'claude'],
+        score: 0,
+        run: () => {
+          if (typeof window !== 'undefined') window.location.href = '/terminal'
         },
       },
       {
@@ -660,6 +674,16 @@ export default function CommandPalette({
         run: onOpenProvenance,
       },
       {
+        id: 'open-remote-access',
+        label: 'Remote access',
+        description: 'Pair a phone on your network to view and drive sessions',
+        icon: <Smartphone size={16} />,
+        group: 'actions',
+        keywords: ['remote', 'mobile', 'phone', 'pair', 'pairing', 'qr', 'lan', 'network', 'settings'],
+        score: 0,
+        run: onOpenRemoteAccess,
+      },
+      {
         id: 'scope-all',
         label: 'Show all projects',
         description: 'Clear the project scope filter',
@@ -728,7 +752,7 @@ export default function CommandPalette({
       }
 
     return items
-  }, [canOpenFiles, canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenFiles, onOpenGit, onOpenPullRequests, onOpenCoordinator, onOpenCrossSessionMessaging, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onOpenProvenance, onToggleMessagePane, onToggleWorktrees, provider, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
+  }, [canOpenFiles, canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenFiles, onOpenGit, onOpenPullRequests, onOpenCoordinator, onOpenCrossSessionMessaging, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onOpenProvenance, onOpenRemoteAccess, onToggleMessagePane, onToggleWorktrees, provider, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
 
   const projectItems = useMemo(() => {
     const groups = new Map<string, {

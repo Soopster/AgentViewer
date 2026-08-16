@@ -264,6 +264,27 @@ fn kill_backend(app: &tauri::AppHandle) {
     }
 }
 
+/// Mirrors `bin/agent-viewer.mjs`'s `resolveWebHostname()`: the bind address
+/// is fixed for the process's lifetime, so this reads the same
+/// `.agent-viewer-data/remote-access.json` (relative to `cwd`, matching
+/// `lib/remoteAuth.ts`) once at spawn time. Toggling remote access in the
+/// running app updates the *auth* check immediately; the network bind only
+/// picks it up on the next launch.
+fn resolve_web_hostname(cwd: &std::path::Path) -> &'static str {
+    let state_file = cwd.join(".agent-viewer-data").join("remote-access.json");
+    let Ok(contents) = std::fs::read_to_string(state_file) else {
+        return "127.0.0.1";
+    };
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&contents) else {
+        return "127.0.0.1";
+    };
+    if parsed.get("enabled").and_then(|v| v.as_bool()) == Some(true) {
+        "0.0.0.0"
+    } else {
+        "127.0.0.1"
+    }
+}
+
 /// Spawns the backend against a bundled packaged build: the traced
 /// `next-standalone/server.js` run directly with system Node, and the AHP
 /// Coordinator as a real Tauri sidecar (`bun build --compile`'d ahead of
@@ -276,14 +297,39 @@ fn spawn_packaged_backend(
     ahp_port: u16,
 ) -> Result<Vec<CommandChild>, String> {
     let server_js = resources.join("server.js");
+    let own_pid = std::process::id().to_string();
+
+    // Everything the child spawns inherits these, so build the env once.
+    let mut envs: Vec<(String, String)> = std::env::vars().collect();
+    // Lets both children self-terminate if this app dies without running
+    // kill_backend() first (a crash or SIGKILL bypasses RunEvent::
+    // ExitRequested and the signal-hook handler entirely) — see
+    // lib/parentWatchdog.ts. Confirmed happening in practice: an app
+    // instance died unexpectedly and left both children reparented under
+    // launchd with nothing left to signal them.
+    envs.push(("AGENT_VIEWER_PARENT_PID".to_string(), own_pid.clone()));
+    // Point the embedded-terminal route (lib/terminalSession.ts) at the TUI
+    // binary bundled as a sidecar, so packaged installs need only Node (no
+    // Bun) to run the OpenTUI terminal inside the app.
+    if let Ok(tui_cmd) = app_handle.shell().sidecar("agent-viewer-tui") {
+        // Extract the resolved sidecar path without spawning it — the web
+        // server (not Rust) owns the terminal process lifecycle. The std
+        // Command -> OsStr conversion is the plugin's only public path to it.
+        let program: std::process::Command = tui_cmd.into();
+        let program = program.get_program().to_string_lossy().to_string();
+        envs.push(("AGENT_VIEWER_TUI_BIN".to_string(), program));
+    } else {
+        log::warn!("embedded-terminal TUI sidecar not found; terminal page will fall back to Bun");
+    }
+
     let (web_rx, web_child) = app_handle
         .shell()
         .command("node")
         .arg(&server_js)
         .current_dir(resources)
-        .envs(std::env::vars())
+        .envs(envs)
         .env("PORT", port.to_string())
-        .env("HOSTNAME", "127.0.0.1")
+        .env("HOSTNAME", resolve_web_hostname(resources))
         .spawn()
         .map_err(|err| format!("failed to spawn packaged web server: {err}"))?;
     forward_events("web", web_rx);
@@ -293,6 +339,7 @@ fn spawn_packaged_backend(
         .sidecar("agent-viewer-ahp")
         .map_err(|err| format!("failed to resolve AHP sidecar: {err}"))?
         .args(["--ws", &format!("127.0.0.1:{ahp_port}")])
+        .env("AGENT_VIEWER_PARENT_PID", &own_pid)
         .spawn()
         .map_err(|err| format!("failed to spawn AHP sidecar: {err}"))?;
     forward_events("ahp", ahp_rx);
@@ -323,6 +370,11 @@ fn spawn_dev_backend(app_handle: &tauri::AppHandle, port: u16, ahp_port: u16) ->
         // (e.g. nvm-managed node); pass it through explicitly so the "node"
         // lookup succeeds.
         .envs(std::env::vars())
+        // bin/agent-viewer.mjs doesn't strip env when it spawns `next dev`
+        // and the Bun AHP child, so this reaches both of them too — each
+        // self-terminates via lib/parentWatchdog.ts if this app dies
+        // without running kill_backend() first (crash, SIGKILL, etc.).
+        .env("AGENT_VIEWER_PARENT_PID", std::process::id().to_string())
         .spawn()
         .map_err(|err| format!("failed to spawn dev backend: {err}"))?;
     forward_events("backend", rx);
