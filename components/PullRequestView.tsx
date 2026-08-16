@@ -957,6 +957,7 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent }: Prop
                   <button
                     key={item.number}
                     type="button"
+                    className="av-hover-control"
                     onClick={() => { setPrPickerOpen(false); if (item.number !== pr?.number) void refresh(item.number) }}
                     style={{ display: 'block', width: '100%', padding: '9px 12px', border: 0, borderLeft: item.number === pr?.number ? '3px solid var(--violet)' : '3px solid transparent', background: item.number === pr?.number ? 'var(--surface-3)' : 'transparent', color: 'var(--text)', textAlign: 'left', cursor: 'pointer' }}
                   >
@@ -1052,6 +1053,7 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent }: Prop
             <div style={{ position: 'relative' }}>
               <button
                 type="button"
+                className="av-hover-control"
                 onClick={() => setReviewPanelOpen((value) => !value)}
                 aria-expanded={reviewPanelOpen}
                 style={{
@@ -1555,6 +1557,7 @@ function FileTreeLevel({ entries, depth, activePath, collapsedDirs, viewedFiles,
             <div key={`dir-${entry.path}`}>
               <button
                 type="button"
+                className="av-hover-control"
                 onClick={() => onToggleDir(entry.path)}
                 aria-expanded={!collapsed}
                 style={{ display: 'flex', alignItems: 'center', gap: 4, width: '100%', padding: `3px 6px 3px ${8 + depth * 14}px`, border: 0, background: 'transparent', color: 'var(--text-3)', fontSize: 12, cursor: 'pointer', textAlign: 'left' }}
@@ -1575,6 +1578,7 @@ function FileTreeLevel({ entries, depth, activePath, collapsedDirs, viewedFiles,
           <button
             key={`file-${entry.file.filename}`}
             type="button"
+            className="av-hover-control"
             onClick={() => onSelectFile(entry.file.filename)}
             aria-current={active}
             title={entry.file.filename}

@@ -187,7 +187,7 @@ function FileRow({ entry, selected, onClick, onDoubleClick }: {
     <button
       type="button"
       className={cn(
-        'flex h-9 w-full min-w-0 items-center gap-2.5 rounded-md px-3 text-left font-mono text-[13px] hover:bg-[var(--surface-2)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--cyan)]',
+        'av-hover-control flex h-9 w-full min-w-0 items-center gap-2.5 rounded-md px-3 text-left font-mono text-[13px] hover:bg-[var(--surface-2)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--cyan)]',
         selected && 'bg-[var(--surface-3)] text-[var(--text)] shadow-[inset_2px_0_0_var(--cyan)]',
       )}
       style={{ paddingLeft: 10, paddingRight: 10 }}
@@ -472,7 +472,7 @@ export default function FileViewer({ open, cwd, canInsert, sessionId, provider, 
                   aria-current={index === breadcrumbs.length - 1 ? 'page' : undefined}
                   title={`Open ${breadcrumb.path}`}
                   className={cn(
-                    'min-w-0 truncate rounded-sm px-0.5 hover:bg-[var(--surface-2)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--cyan)]',
+                    'av-hover-control min-w-0 truncate rounded-sm px-0.5 hover:bg-[var(--surface-2)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--cyan)]',
                     index === breadcrumbs.length - 1 && 'text-[var(--cyan)]',
                   )}
                 >

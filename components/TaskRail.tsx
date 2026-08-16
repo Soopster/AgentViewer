@@ -182,6 +182,7 @@ export function TaskRail({
         </span>
         <button
           type="button"
+          className="av-hover-control"
           onClick={onClose}
           aria-label="Close task panel"
           style={{
@@ -299,6 +300,7 @@ function WorkflowRunRow({
       {onStop && (
         <button
           type="button"
+          className="av-hover-control"
           onClick={(e) => { e.stopPropagation(); onStop() }}
           title={`Stop workflow ${run.name}`}
           aria-label={`Stop workflow ${run.name}`}
@@ -327,6 +329,7 @@ function WorkflowRunRow({
       )}
       <button
         type="button"
+        className="av-hover-control"
         onClick={onJump}
         title={[run.name, detail, meta.join(' · ')].filter(Boolean).join('\n')}
         style={{
@@ -449,6 +452,7 @@ function TaskRailRow({
       {onStop && (
         <button
           type="button"
+          className="av-hover-control"
           onClick={(e) => { e.stopPropagation(); onStop() }}
           title={`Stop task #${task.id}`}
           aria-label={`Stop task #${task.id}`}
@@ -476,10 +480,11 @@ function TaskRailRow({
         </button>
       )}
       <button
-      type="button"
-      onClick={onJump}
-      title={taskTooltip(task, title, detail, meta)}
-      style={{
+        type="button"
+        className="av-hover-control"
+        onClick={onJump}
+        title={taskTooltip(task, title, detail, meta)}
+        style={{
         display: 'block',
         width: '100%',
         textAlign: 'left',

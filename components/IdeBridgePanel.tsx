@@ -253,6 +253,7 @@ export default function IdeBridgePanel({
         <div style={{ flex: 1 }} />
         <button
           type="button"
+          className="av-hover-control"
           onClick={() => setConfigOpen((o) => !o)}
           style={{ ...iconButtonStyle, color: configOpen ? accentColor : 'var(--text-3)' }}
           title="Connection settings"
@@ -260,13 +261,14 @@ export default function IdeBridgePanel({
         >
           <Settings2 size={14} />
         </button>
-        <button type="button" onClick={onClose} style={iconButtonStyle} title="Close (esc)" aria-label="Close">
+        <button type="button" className="av-hover-control" onClick={onClose} style={iconButtonStyle} title="Close (esc)" aria-label="Close">
           <X size={14} />
         </button>
       </div>
 
       <button
         type="button"
+        className="av-hover-control"
         onClick={() => setRouteComposer(!routeComposer)}
         title="When on, lines typed in the main composer are pushed as at-mentions into the connected `claude` session instead of going to the active provider."
         aria-pressed={routeComposer}
@@ -457,6 +459,7 @@ export default function IdeBridgePanel({
                   <>
                   <button
                     type="button"
+                    className="av-hover-control"
                     onClick={() => setReviewingId(entry.id)}
                     style={{
                       display: 'flex',
@@ -478,6 +481,7 @@ export default function IdeBridgePanel({
                   <div style={{ display: 'flex', gap: 6 }}>
                     <button
                       type="button"
+                      className="av-hover-control"
                       onClick={() => handleVerdict(entry, 'accept')}
                       style={{
                         flex: 1,
@@ -495,6 +499,7 @@ export default function IdeBridgePanel({
                     </button>
                     <button
                       type="button"
+                      className="av-hover-control"
                       onClick={() => handleVerdict(entry, 'reject')}
                       style={{
                         flex: 1,
@@ -525,7 +530,7 @@ export default function IdeBridgePanel({
       {sendError && (
         <div style={{ padding: '6px 10px', fontSize: 11, color: 'rgba(248,113,113,0.85)', borderTop: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ flex: 1 }}>{sendError}</span>
-          <button type="button" onClick={() => setSendError(null)} style={{ ...iconButtonStyle, width: 18, height: 18 }} aria-label="Dismiss error">
+          <button type="button" className="av-hover-control" onClick={() => setSendError(null)} style={{ ...iconButtonStyle, width: 18, height: 18 }} aria-label="Dismiss error">
             <X size={12} />
           </button>
         </div>
@@ -557,6 +562,7 @@ export default function IdeBridgePanel({
         />
         <button
           type="button"
+          className="av-hover-control"
           onClick={() => {
             void handleSend()
           }}

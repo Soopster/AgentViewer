@@ -280,6 +280,7 @@ const EvidenceList = memo(function EvidenceList({
             <button
               key={item.id}
               type="button"
+              className="av-hover-control"
               onClick={() => onJumpToMessage(item.messageId)}
               style={{
                 display: 'grid',
@@ -457,10 +458,10 @@ export default function DiffReviewMode({ session, messages, diffStyle, diffOptio
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <button type="button" onClick={loadReview} disabled={loading} title="Refresh review" style={{ height: 30, width: 30, display: 'grid', placeItems: 'center', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--surface)', color: 'var(--text-2)', cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.6 : 1 }}>
+          <button type="button" className="av-hover-control" onClick={loadReview} disabled={loading} title="Refresh review" style={{ height: 30, width: 30, display: 'grid', placeItems: 'center', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--surface)', color: 'var(--text-2)', cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.6 : 1 }}>
             <RefreshCw size={15} className={loading ? 'av-spin' : undefined} />
           </button>
-          <button type="button" onClick={onClose} style={{ height: 30, padding: '0 11px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--surface)', color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.06em', cursor: 'pointer' }}>
+          <button type="button" className="av-hover-control" onClick={onClose} style={{ height: 30, padding: '0 11px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--surface)', color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.06em', cursor: 'pointer' }}>
             TRANSCRIPT
           </button>
         </div>
@@ -518,7 +519,7 @@ export default function DiffReviewMode({ session, messages, diffStyle, diffOptio
                   type="button"
                   aria-pressed={selectedFile?.path === file.path}
                   onClick={() => setSelectedPath(file.path)}
-                  className={cn(selectedFile?.path === file.path && 'av-active')}
+                  className={cn('av-hover-control', selectedFile?.path === file.path && 'av-active')}
                   style={{
                     display: 'grid',
                     gridTemplateColumns: '1fr auto',
@@ -579,6 +580,7 @@ export default function DiffReviewMode({ session, messages, diffStyle, diffOptio
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <button
                         type="button"
+                        className="av-hover-control"
                         onClick={saveEditor}
                         disabled={!dirty || editBusy}
                         title={dirty ? 'Write changes to disk' : 'No changes to save'}
@@ -587,7 +589,7 @@ export default function DiffReviewMode({ session, messages, diffStyle, diffOptio
                         <Save size={12} />
                         SAVE
                       </button>
-                      <button type="button" onClick={closeEditor} disabled={editBusy} style={editActionStyle(null)}>
+                      <button type="button" className="av-hover-control" onClick={closeEditor} disabled={editBusy} style={editActionStyle(null)}>
                         <X size={12} />
                         DONE
                       </button>
@@ -595,6 +597,7 @@ export default function DiffReviewMode({ session, messages, diffStyle, diffOptio
                   ) : (
                     <button
                       type="button"
+                      className="av-hover-control"
                       onClick={openEditor}
                       disabled={editBusy || selectedFile.untracked}
                       title={selectedFile.untracked ? 'Untracked files have no committed side to diff against' : 'Edit this file inline'}

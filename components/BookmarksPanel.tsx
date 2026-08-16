@@ -169,13 +169,14 @@ export default function BookmarksPanel({ open, onClose, onSelect }: Props) {
           </div>
           <button
             type="button"
+            className="av-hover-control"
             onClick={load}
             title="Refresh"
             style={iconButtonStyle}
           >
             <RefreshCw size={15} className={loading ? 'av-spin' : undefined} />
           </button>
-          <button type="button" onClick={onClose} title="Close" style={iconButtonStyle}>
+          <button type="button" className="av-hover-control" onClick={onClose} title="Close" style={iconButtonStyle}>
             <X size={16} />
           </button>
         </div>
@@ -281,7 +282,7 @@ export default function BookmarksPanel({ open, onClose, onSelect }: Props) {
                   type="button"
                   title="Remove bookmark"
                   onClick={(event) => { event.stopPropagation(); handleRemove(bookmark) }}
-                  className="av-bookmark-remove"
+                  className="av-bookmark-remove av-hover-control"
                   style={{ ...iconButtonStyle, width: 26, height: 26, alignSelf: 'center' }}
                 >
                   <Trash2 size={13} />

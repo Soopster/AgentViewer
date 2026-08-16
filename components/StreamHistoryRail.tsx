@@ -163,7 +163,7 @@ const StreamHistoryRail = memo(function StreamHistoryRail({ items, scrollRef, an
           <button
             key={item.key}
             type="button"
-            className={cn('av-stream-history-tick', `av-stream-history-tick--${item.role}`, active && 'av-active')}
+            className={cn('av-hover-control av-stream-history-tick', `av-stream-history-tick--${item.role}`, active && 'av-active')}
             style={{ top: `${item.position * 100}%` }}
             aria-label={`${item.role}: ${item.title}`}
             aria-current={active ? 'step' : undefined}

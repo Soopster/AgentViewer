@@ -90,6 +90,7 @@ export default function RenderFontToggle() {
               <button
                 key={font.id}
                 type="button"
+                className="av-hover-control"
                 role="option"
                 aria-selected={isActive}
                 onClick={() => {

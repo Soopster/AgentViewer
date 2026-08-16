@@ -1053,6 +1053,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
           </button>
           <button
             type="button"
+            className="av-hover-control"
             onClick={() => deleteNote(threadKey)}
             style={{
               border: 'none',
@@ -1635,6 +1636,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
                     <button
                       key={commit}
                       type="button"
+                      className="av-hover-control"
                       data-cursor={isSel ? '' : undefined}
                       onMouseEnter={() => setHoveredRow(rowId)}
                       onMouseLeave={() => setHoveredRow(null)}

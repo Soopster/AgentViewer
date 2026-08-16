@@ -132,6 +132,7 @@ export default function AnalyticsPopover({ open, onClose, input }: Props) {
             <button
               key={p}
               type="button"
+              className="av-hover-control"
               onClick={() => setPane(p)}
               onMouseEnter={() => setHoveredPane(p)}
               onMouseLeave={() => setHoveredPane(null)}
@@ -157,6 +158,7 @@ export default function AnalyticsPopover({ open, onClose, input }: Props) {
           </span>
           <button
             type="button"
+            className="av-hover-control"
             onClick={onClose}
             onMouseEnter={(e) => {
               e.currentTarget.style.background = 'var(--surface-3)'
@@ -1107,6 +1109,7 @@ function AICoachSection({ input }: { input: AnalyticsInput | null }) {
         <span style={{ flex: 1 }} />
         <button
           type="button"
+          className="av-hover-control"
           onClick={generate}
           disabled={!sessionId || state === 'loading'}
           style={{

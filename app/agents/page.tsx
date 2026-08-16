@@ -176,7 +176,7 @@ export default function AgentsPage() {
                 <div key={`${session.provider}:${session.sessionId}`} role="listitem">
                   <button
                     type="button"
-                    className={cn('av-messaging-session', selectedSessionId === session.sessionId && 'av-selected')}
+                    className={cn('av-hover-control av-messaging-session', selectedSessionId === session.sessionId && 'av-selected')}
                     onClick={() => selectSession(session.sessionId)}
                     aria-pressed={selectedSessionId === session.sessionId}
                   >

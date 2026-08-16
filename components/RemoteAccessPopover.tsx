@@ -160,7 +160,7 @@ export default function RemoteAccessPopover({ open, onClose }: Props) {
               Pair a phone on your LAN — off by default
             </div>
           </div>
-          <button type="button" onClick={onClose} title="Close" style={iconButtonStyle}>
+          <button type="button" className="av-hover-control" onClick={onClose} title="Close" style={iconButtonStyle}>
             <X size={15} />
           </button>
         </div>
@@ -187,6 +187,7 @@ export default function RemoteAccessPopover({ open, onClose }: Props) {
                 </div>
                 <button
                   type="button"
+                  className="av-hover-control"
                   role="switch"
                   aria-checked={state.enabled}
                   disabled={busy}
@@ -258,6 +259,7 @@ export default function RemoteAccessPopover({ open, onClose }: Props) {
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button
                     type="button"
+                    className="av-hover-control"
                     disabled={busy}
                     onClick={() => runAction('rotate')}
                     style={{ ...secondaryButtonStyle, opacity: busy ? 0.6 : 1 }}
@@ -267,6 +269,7 @@ export default function RemoteAccessPopover({ open, onClose }: Props) {
                   </button>
                   <button
                     type="button"
+                    className="av-hover-control"
                     disabled={busy}
                     onClick={() => runAction('disable')}
                     style={{ ...secondaryButtonStyle, opacity: busy ? 0.6 : 1, color: 'var(--red)' }}

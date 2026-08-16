@@ -157,6 +157,7 @@ export default function IdeDiffReviewOverlay({
           {onSendComment && comments.selectedLines ? (
             <button
               type="button"
+              className="av-hover-control"
               onClick={() => comments.selectedLines && comments.onGutterUtilityClick(comments.selectedLines)}
               title={comments.currentSelectionNote ? 'Edit comment for selected lines' : 'Add comment for selected lines'}
               style={{
@@ -180,6 +181,7 @@ export default function IdeDiffReviewOverlay({
           ) : null}
           <button
             type="button"
+            className="av-hover-control"
             onClick={onClose}
             title="Back to panel (esc) — leaves the change pending"
             aria-label="Close"
@@ -221,6 +223,7 @@ export default function IdeDiffReviewOverlay({
           <span style={{ flex: 1, alignSelf: 'center', fontSize: 11, color: 'var(--text-3)' }}>{request.diff_id}</span>
           <button
             type="button"
+            className="av-hover-control"
             onClick={() => onResolve('reject')}
             style={{ padding: '7px 16px', borderRadius: 7, border: '1px solid var(--border-2)', background: 'var(--surface)', color: 'var(--text-2)', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
           >
@@ -228,6 +231,7 @@ export default function IdeDiffReviewOverlay({
           </button>
           <button
             type="button"
+            className="av-hover-control"
             onClick={() => onResolve('accept')}
             style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 16px', borderRadius: 7, border: `1px solid ${accentBorder}`, background: accentBg, color: accentColor, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
           >

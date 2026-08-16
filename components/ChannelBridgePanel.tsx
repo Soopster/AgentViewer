@@ -211,6 +211,7 @@ export default function ChannelBridgePanel({
         <div style={{ flex: 1 }} />
         <button
           type="button"
+          className="av-hover-control"
           onClick={() => setConfigOpen((o) => !o)}
           style={{ ...iconButtonStyle, color: configOpen ? accentColor : 'var(--text-3)' }}
           title="Connection settings"
@@ -218,13 +219,14 @@ export default function ChannelBridgePanel({
         >
           <Settings2 size={14} />
         </button>
-        <button type="button" onClick={onClose} style={iconButtonStyle} title="Close (esc)" aria-label="Close">
+        <button type="button" className="av-hover-control" onClick={onClose} style={iconButtonStyle} title="Close (esc)" aria-label="Close">
           <X size={14} />
         </button>
       </div>
 
       <button
         type="button"
+        className="av-hover-control"
         onClick={() => setRouteComposer(!routeComposer)}
         title="When on, messages typed in the main composer send to this live CLI session instead of the active provider."
         aria-pressed={routeComposer}
@@ -387,6 +389,7 @@ export default function ChannelBridgePanel({
                   <div style={{ display: 'flex', gap: 6 }}>
                     <button
                       type="button"
+                      className="av-hover-control"
                       onClick={() => handleVerdict(entry, 'allow')}
                       style={{
                         flex: 1,
@@ -404,6 +407,7 @@ export default function ChannelBridgePanel({
                     </button>
                     <button
                       type="button"
+                      className="av-hover-control"
                       onClick={() => handleVerdict(entry, 'deny')}
                       style={{
                         flex: 1,
@@ -435,6 +439,7 @@ export default function ChannelBridgePanel({
           <span style={{ flex: 1 }}>{sendError}</span>
           <button
             type="button"
+            className="av-hover-control"
             onClick={() => setSendError(null)}
             style={{ ...iconButtonStyle, width: 18, height: 18 }}
             aria-label="Dismiss error"
@@ -470,6 +475,7 @@ export default function ChannelBridgePanel({
         />
         <button
           type="button"
+          className="av-hover-control"
           onClick={() => { void handleSend() }}
           disabled={sending || !draft.trim()}
           style={{

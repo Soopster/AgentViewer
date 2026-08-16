@@ -1596,7 +1596,7 @@ export default function AgentTeamCoordinator({
                               />
                             </div>
                             <div className="av-coord-gate-presets" aria-label="Suggested completion gates">
-                              {['npx tsc --noEmit', 'npm run tui:check', 'npm run build'].map((command) => <button key={command} type="button" onClick={() => setGateCommand(command)}>{command}</button>)}
+                              {['npx tsc --noEmit', 'npm run tui:check', 'npm run build'].map((command) => <button key={command} type="button" className="av-hover-control" onClick={() => setGateCommand(command)}>{command}</button>)}
                             </div>
                           </div>
 

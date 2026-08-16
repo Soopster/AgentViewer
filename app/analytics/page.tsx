@@ -878,6 +878,7 @@ export default function AnalyticsPage() {
               <button
                 key={p.id}
                 type="button"
+                className="av-hover-control"
                 onClick={() => setPreset(p.id)}
                 style={presetButtonStyle(preset === p.id)}
               >
@@ -886,6 +887,7 @@ export default function AnalyticsPage() {
             ))}
             <button
               type="button"
+              className="av-hover-control"
               onClick={() => setPreset('custom')}
               style={presetButtonStyle(preset === 'custom')}
             >

@@ -252,6 +252,7 @@ export default function ProvenancePopover({ open, onClose, session, cwd, onOpenS
           {showBack ? (
             <button
               type="button"
+              className="av-hover-control"
               onClick={() => { setView('session'); setError(null) }}
               title="Back to session files"
               style={iconButtonStyle}
@@ -287,13 +288,14 @@ export default function ProvenancePopover({ open, onClose, session, cwd, onOpenS
           </div>
           <button
             type="button"
+            className="av-hover-control"
             onClick={() => (view === 'session' ? loadSession() : blameData && loadBlame(blameData.file))}
             title="Refresh"
             style={iconButtonStyle}
           >
             <RefreshCw size={15} className={loading ? 'av-spin' : undefined} />
           </button>
-          <button type="button" onClick={onClose} title="Close" style={iconButtonStyle}>
+          <button type="button" className="av-hover-control" onClick={onClose} title="Close" style={iconButtonStyle}>
             <X size={16} />
           </button>
         </div>
@@ -325,6 +327,7 @@ export default function ProvenancePopover({ open, onClose, session, cwd, onOpenS
             />
             <button
               type="submit"
+              className="av-hover-control"
               style={{
                 fontFamily: SANS,
                 fontSize: 12,
@@ -464,6 +467,7 @@ export default function ProvenancePopover({ open, onClose, session, cwd, onOpenS
                       </span>
                       <button
                         type="button"
+                        className="av-hover-control"
                         onClick={() => handleOpenTurn(segment)}
                         title="Open this turn in the transcript"
                         style={{
@@ -548,6 +552,7 @@ export default function ProvenancePopover({ open, onClose, session, cwd, onOpenS
                       {lineCount > SEGMENT_PREVIEW_LINES && (
                         <button
                           type="button"
+                          className="av-hover-control"
                           onClick={() => setExpandedSegments((prev) => {
                             const next = new Set(prev)
                             if (next.has(index)) next.delete(index)

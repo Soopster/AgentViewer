@@ -261,7 +261,7 @@ const RunRow = memo(function RunRow({
   return (
     <button
       type="button"
-      className={cn('av-run-row', selected && 'av-selected', row.status === 'failed' && 'av-failed')}
+      className={cn('av-run-row av-hover-control', selected && 'av-selected', row.status === 'failed' && 'av-failed')}
       onClick={() => onSelectSession(row.session)}
     >
       <span className="av-run-main">

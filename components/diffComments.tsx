@@ -284,8 +284,8 @@ export function useDiffComments(
             style={{ ...TEXTAREA_STYLE, minHeight: 84 }}
           />
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-            <button type="button" onClick={cancelDraft} style={GHOST_BUTTON_STYLE}>Cancel</button>
-            <button type="button" onClick={saveDraft} style={SAVE_BUTTON_STYLE}>Save comment</button>
+            <button type="button" className="av-hover-control" onClick={cancelDraft} style={GHOST_BUTTON_STYLE}>Cancel</button>
+            <button type="button" className="av-hover-control" onClick={saveDraft} style={SAVE_BUTTON_STYLE}>Save comment</button>
           </div>
         </div>
       )
@@ -346,6 +346,7 @@ export function useDiffComments(
           </div>
           <button
             type="button"
+            className="av-hover-control"
             onClick={() => toggleResolved(threadKey)}
             style={{
               height: 28,
@@ -422,8 +423,8 @@ export function useDiffComments(
               style={TEXTAREA_STYLE}
             />
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <button type="button" onClick={cancelDraft} style={GHOST_BUTTON_STYLE}>Cancel</button>
-              <button type="button" onClick={saveDraft} style={SAVE_BUTTON_STYLE}>Save reply</button>
+              <button type="button" className="av-hover-control" onClick={cancelDraft} style={GHOST_BUTTON_STYLE}>Cancel</button>
+              <button type="button" className="av-hover-control" onClick={saveDraft} style={SAVE_BUTTON_STYLE}>Save reply</button>
             </div>
           </div>
         ) : null}
@@ -431,6 +432,7 @@ export function useDiffComments(
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <button
               type="button"
+              className="av-hover-control"
               onClick={() => openReplyDraft(thread)}
               style={{
                 border: 'none',
@@ -447,6 +449,7 @@ export function useDiffComments(
             {onSendToComposer ? (
               <button
                 type="button"
+                className="av-hover-control"
                 onClick={() => onSendToComposer(thread)}
                 style={{
                   border: 'none',
@@ -464,6 +467,7 @@ export function useDiffComments(
           </div>
           <button
             type="button"
+            className="av-hover-control"
             onClick={() => deleteComment(threadKey)}
             style={{
               border: 'none',

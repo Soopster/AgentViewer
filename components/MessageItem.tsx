@@ -1467,7 +1467,7 @@ function McpResultSection({ result }: { result: ToolResultBlock }) {
         </ReactMarkdown>
       </div>
       {collapsible && (
-        <button type="button" onClick={() => setExpanded(v => !v)} style={EXPAND_BTN}>
+        <button type="button" className="av-hover-control" onClick={() => setExpanded(v => !v)} style={EXPAND_BTN}>
           {expanded ? '▲ collapse' : `▼ ${lineCount - APPROX_LINE_LIMIT} more lines`}
         </button>
       )}
@@ -2223,6 +2223,7 @@ function AgentCard({ thread }: { thread: ToolThread }) {
         <div style={{ borderTop: '1px solid var(--border)', background: 'var(--surface)' }}>
           <button
             type="button"
+            className="av-hover-control"
             onClick={() => setOpen((value) => !value)}
             style={{
               display: 'flex', alignItems: 'center', gap: 6,
@@ -2453,6 +2454,7 @@ function OpenCodeTaskCard({ thread }: { thread: ToolThread }) {
         <div style={{ borderTop: '1px solid var(--border)', background: 'var(--surface)' }}>
           <button
             type="button"
+            className="av-hover-control"
             onClick={() => setOpen((value) => !value)}
             style={{
               display: 'flex', alignItems: 'center', gap: 6,
@@ -2832,7 +2834,7 @@ function WebSearchCard({ thread }: { thread: ToolThread }) {
               ))}
             </div>
             {results.length > PREVIEW && (
-              <button type="button" onClick={() => setExpanded(v => !v)} style={EXPAND_BTN}>
+              <button type="button" className="av-hover-control" onClick={() => setExpanded(v => !v)} style={EXPAND_BTN}>
                 {expanded ? '▲ collapse' : `▼ ${results.length - PREVIEW} more result${results.length - PREVIEW !== 1 ? 's' : ''}`}
               </button>
             )}
@@ -3501,7 +3503,7 @@ function CronCard({ thread }: { thread: ToolThread }) {
               </div>
             ))}
             {(hidden > 0 || expanded) && (
-              <button type="button" onClick={() => setExpanded(v => !v)} style={EXPAND_BTN}>
+              <button type="button" className="av-hover-control" onClick={() => setExpanded(v => !v)} style={EXPAND_BTN}>
                 {expanded ? '▲ collapse' : `▼ ${hidden} more`}
               </button>
             )}
@@ -3824,7 +3826,7 @@ function ReadResultSection({ raw, filePath, summary }: { raw: string; filePath?:
             : null
       )}
       {totalLines > LIMIT && (
-        <button type="button" onClick={() => setExpanded(v => !v)} style={EXPAND_BTN}>
+        <button type="button" className="av-hover-control" onClick={() => setExpanded(v => !v)} style={EXPAND_BTN}>
           {expanded ? '▲ collapse' : `▼ ${hidden} more lines`}
         </button>
       )}
@@ -3904,7 +3906,7 @@ function GenericResultSection({ raw, isError = false, note }: { raw: string; isE
       )}
 
       {totalTextLines > LIMIT && (
-        <button type="button" onClick={() => setExpanded(v => !v)} style={EXPAND_BTN}>
+        <button type="button" className="av-hover-control" onClick={() => setExpanded(v => !v)} style={EXPAND_BTN}>
           {expanded ? '▲ collapse' : `▼ ${hidden} more lines`}
         </button>
       )}
@@ -5872,7 +5874,7 @@ function StreamToolRow({
   if (open) {
     return (
       <div className="av-stream-expanded-tool">
-        <button type="button" className="av-stream-collapse" onClick={() => setOpen(false)}>‹ collapse details</button>
+        <button type="button" className="av-stream-collapse av-hover-control" onClick={() => setOpen(false)}>‹ collapse details</button>
         <ToolThreadCard thread={thread} />
       </div>
     )
@@ -5881,7 +5883,7 @@ function StreamToolRow({
     <div>
       <button
         type="button"
-        className={`av-stream-tool-row${treePosition ? ` av-stream-tool-row--nested av-stream-tool-row--${treePosition}` : ''}`}
+        className={`av-stream-tool-row av-hover-control${treePosition ? ` av-stream-tool-row--nested av-stream-tool-row--${treePosition}` : ''}`}
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
         style={{
@@ -5947,7 +5949,7 @@ function StreamFileUpdateRow({ thread }: { thread: ToolThread }) {
   if (open) {
     return (
       <div className="av-stream-expanded-tool">
-        <button type="button" className="av-stream-collapse" onClick={() => setOpen(false)}>‹ collapse diff</button>
+        <button type="button" className="av-stream-collapse av-hover-control" onClick={() => setOpen(false)}>‹ collapse diff</button>
         <ToolThreadCard thread={thread} />
       </div>
     )
@@ -5957,7 +5959,7 @@ function StreamFileUpdateRow({ thread }: { thread: ToolThread }) {
     data.deletions > 0 ? `${data.additions > 0 ? 'removed' : 'Removed'} ${data.deletions} ${data.deletions === 1 ? 'line' : 'lines'}` : '',
   ].filter(Boolean).join(', ')
   return (
-    <button type="button" className="av-stream-file-update" onClick={() => setOpen(true)} aria-expanded={false}>
+    <button type="button" className="av-stream-file-update av-hover-control" onClick={() => setOpen(true)} aria-expanded={false}>
       <span className="av-stream-file-heading">
         <span aria-hidden="true" style={{ color: status.color }}>{status.marker}</span>
         <strong>{data.operation}({data.path})</strong>

@@ -641,6 +641,7 @@ export default function PromptLibrary({
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
             <button
               type="button"
+              className="av-hover-control"
               onClick={() => { setPendingInsert(null); setMode('browse') }}
               style={{ ...inputStyle, width: 'auto', cursor: 'pointer', color: 'var(--text-2)' }}
             >
@@ -648,6 +649,7 @@ export default function PromptLibrary({
             </button>
             <button
               type="button"
+              className="av-hover-control"
               onClick={finishInsert}
               style={{
                 ...inputStyle,
