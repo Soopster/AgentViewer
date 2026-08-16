@@ -110,6 +110,7 @@ const PROVIDER_ITEMS: Array<{ provider: ProviderSelection; label: string; descri
   { provider: 'opencode', label: 'OpenCode', description: 'Use the OpenCode provider' },
   { provider: 'copilot', label: 'Copilot', description: 'Use the GitHub Copilot provider' },
   { provider: 'pi', label: 'Pi', description: 'Use the Pi provider' },
+  { provider: 'lmstudio', label: 'LM Studio', description: 'Use local models via LM Studio' },
   { provider: 'all', label: 'All providers', description: 'Show sessions from every provider' },
 ]
 
@@ -195,6 +196,9 @@ function providerStyle(provider: AgentProvider): { color: string; background: st
   if (provider === 'pi') {
     return { color: 'var(--red)', background: 'rgba(240,80,80,0.10)', border: 'rgba(240,80,80,0.22)' }
   }
+  if (provider === 'lmstudio') {
+    return { color: 'var(--teal, #2dd4a7)', background: 'rgba(45,212,167,0.10)', border: 'rgba(45,212,167,0.22)' }
+  }
   return { color: 'var(--violet)', background: 'rgba(139,128,240,0.10)', border: 'rgba(139,128,240,0.22)' }
 }
 
@@ -210,6 +214,8 @@ function providerIconLabel(provider: AgentProvider): string {
       return 'Cp'
     case 'pi':
       return 'Pi'
+    case 'lmstudio':
+      return 'Lm'
     default:
       return 'Ai'
   }

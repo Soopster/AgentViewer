@@ -2324,6 +2324,7 @@ function providerAccents(theme: TuiThemePalette): Record<ProviderSelection, stri
     opencode: theme.green,
     copilot: theme.violet,
     pi: theme.pink,
+    lmstudio: theme.red,
     all: theme.green,
   }
 }

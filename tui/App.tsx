@@ -46,7 +46,7 @@ import { stripToolCallBlocks } from '../lib/threading'
 import type { ProviderSelection, Session } from '../lib/types'
 import type { TuiTranscriptView } from './theme'
 
-const PROVIDERS: ProviderSelection[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'all']
+const PROVIDERS: ProviderSelection[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'lmstudio', 'all']
 const HEADER_HEIGHT = 2
 const FOOTER_HEIGHT = 1
 const FOOTER_MARGIN_TOP = 1

@@ -732,6 +732,10 @@ function extractStreamingAssistantText(payload: unknown): string | null {
       : null
   }
 
+  if (record.type === 'lmstudio_delta') {
+    return typeof record.delta === 'string' ? record.delta : null
+  }
+
   if (record.type === 'opencode_event') {
     const event = record.event
     if (!event || typeof event !== 'object') return null

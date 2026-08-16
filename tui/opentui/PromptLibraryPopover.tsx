@@ -43,16 +43,17 @@ const EDITOR_FIELD_LABEL: Record<EditorField, string> = {
   title: 'Title',
   description: 'Description',
   tags: 'Tags (comma-separated)',
-  providers: 'Providers (1-5 toggle, blank = any)',
+  providers: 'Providers (1-6 toggle, blank = any)',
   body: 'Body  ({{placeholder}} tokens become fill-in fields)',
 }
-const PROVIDER_ORDER: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi']
+const PROVIDER_ORDER: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'lmstudio']
 const PROVIDER_LABEL: Record<AgentProvider, string> = {
   claude: 'Claude',
   codex: 'Codex',
   opencode: 'OpenCode',
   copilot: 'Copilot',
   pi: 'Pi',
+  lmstudio: 'LM Studio',
 }
 
 function emptyDraft(): Draft {
@@ -296,7 +297,7 @@ export function PromptLibraryPopover({
         return
       }
       if (field === 'providers') {
-        const idx = '12345'.indexOf(key.sequence)
+        const idx = '123456'.indexOf(key.sequence)
         if (idx >= 0 && idx < PROVIDER_ORDER.length) {
           const provider = PROVIDER_ORDER[idx]
           setDraft((d) => {

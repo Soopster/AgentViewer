@@ -65,11 +65,25 @@ export const PI_CAPABILITIES: SessionCapabilities = {
   respondToPermission: true,
 }
 
+export const LMSTUDIO_CAPABILITIES: SessionCapabilities = {
+  messageFork: false,
+  resumeAtMessage: false,
+  fileRewind: false,
+  rollback: false,
+  deleteSession: true,
+  shareSession: false,
+  unshareSession: false,
+  summarizeSession: false,
+  unrevertSession: false,
+  respondToPermission: false,
+}
+
 export function getProviderCapabilities(provider: AgentProvider): SessionCapabilities {
   if (provider === 'codex') return CODEX_CAPABILITIES
   if (provider === 'opencode') return OPENCODE_CAPABILITIES
   if (provider === 'copilot') return COPILOT_CAPABILITIES
   if (provider === 'pi') return PI_CAPABILITIES
+  if (provider === 'lmstudio') return LMSTUDIO_CAPABILITIES
   return CLAUDE_CAPABILITIES
 }
 
@@ -78,11 +92,12 @@ export function getAssistantLabel(provider: AgentProvider | undefined): string {
   if (provider === 'opencode') return 'OPENCODE'
   if (provider === 'copilot') return 'COPILOT'
   if (provider === 'pi') return 'PI'
+  if (provider === 'lmstudio') return 'LM STUDIO'
   return 'CLAUDE'
 }
 
 export function isAgentProvider(value: unknown): value is AgentProvider {
-  return value === 'claude' || value === 'codex' || value === 'opencode' || value === 'copilot' || value === 'pi'
+  return value === 'claude' || value === 'codex' || value === 'opencode' || value === 'copilot' || value === 'pi' || value === 'lmstudio'
 }
 
 export function isProviderSelection(value: unknown): value is ProviderSelection {

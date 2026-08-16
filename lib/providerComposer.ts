@@ -174,12 +174,39 @@ const PI: ProviderComposerConfig = {
   ],
 }
 
+const LMSTUDIO: ProviderComposerConfig = {
+  label: 'LM Studio',
+  glyph: '$',
+  cssAccentVar: '--red',
+  cssAccentRgb: '244,114,182',
+  placeholderIdle: 'Ask your local model anything — served by LM Studio.',
+  placeholderStreaming: 'Type a follow-up — Enter steers this turn or queues it safely',
+  placeholderNoSession: 'Pick an LM Studio session to send a message',
+  footerHintIdle: '⏎ send · ⇧⏎ newline · ↑↓ history',
+  footerHintSending: 'Esc view transcript · ⌃C cancel',
+  sendVerb: 'Send',
+  examples: [
+    'Try "summarise this file"',
+    'Try "explain this error message"',
+    'Try "write a haiku about debugging"',
+  ],
+  tuiAccentKey: 'red',
+  welcomeTitle: '$ LM Studio',
+  welcomeSubtitle: 'Local models via LM Studio\'s server · set LMSTUDIO_BASE_URL to change host',
+  welcomeBullets: [
+    'summarise this file',
+    'explain this error message',
+    'write a haiku about debugging',
+  ],
+}
+
 const PROVIDER_COMPOSER: Record<AgentProvider, ProviderComposerConfig> = {
   claude: CLAUDE,
   codex: CODEX,
   opencode: OPENCODE,
   copilot: COPILOT,
   pi: PI,
+  lmstudio: LMSTUDIO,
 }
 
 export function getProviderComposer(provider: AgentProvider | undefined | null): ProviderComposerConfig {

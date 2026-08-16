@@ -171,6 +171,11 @@ function canEncodeNatively(provider: AgentProvider, attachment: SendAttachment):
     return (attachment.type === 'file' || attachment.type === 'image' || attachment.type === 'mention')
       && Boolean(path)
   }
+  if (provider === 'lmstudio') {
+    // LM Studio's chat completions endpoint is text-only for now — no
+    // attachment type encodes natively.
+    return false
+  }
   if (attachment.type === 'blob') {
     return Boolean(attachment.data && attachment.mimeType)
   }

@@ -10,6 +10,7 @@ function getDefaultProvider(): ProviderSelection {
   if (process.env.AGENT_VIEWER_PROVIDER === 'opencode') return 'opencode'
   if (process.env.AGENT_VIEWER_PROVIDER === 'copilot') return 'copilot'
   if (process.env.AGENT_VIEWER_PROVIDER === 'pi') return 'pi'
+  if (process.env.AGENT_VIEWER_PROVIDER === 'lmstudio') return 'lmstudio'
   return 'claude'
 }
 
@@ -22,6 +23,7 @@ export async function getConfiguredProvider(): Promise<ProviderSelection> {
     if (parsed.provider === 'opencode') return 'opencode'
     if (parsed.provider === 'copilot') return 'copilot'
     if (parsed.provider === 'pi') return 'pi'
+    if (parsed.provider === 'lmstudio') return 'lmstudio'
     return 'claude'
   } catch {
     return getDefaultProvider()

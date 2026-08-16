@@ -72,6 +72,8 @@ function commandFor(target: Target): { command: string; args: string[] } {
         command: 'pi',
         args: ['--session', target.sessionId, '--mode', 'json', '--no-approve', '-p', prompt],
       }
+    case 'lmstudio':
+      throw new Error('LM Studio has no native CLI to benchmark against — it is a local server only.')
   }
 }
 

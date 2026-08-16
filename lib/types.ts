@@ -53,7 +53,7 @@ export type SystemMessagePayload = {
   [key: string]: unknown
 }
 
-export type AgentProvider = 'claude' | 'codex' | 'opencode' | 'copilot' | 'pi'
+export type AgentProvider = 'claude' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'lmstudio'
 export type ProviderSelection = AgentProvider | 'all'
 export type ReasoningEffortLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh'
 

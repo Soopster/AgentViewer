@@ -248,6 +248,22 @@ import {
   setPiStoredTag,
   setPiStoredTitle,
 } from './piMetadata'
+import {
+  appendLmstudioTurn,
+  createLmstudioSession,
+  deleteLmstudioSession,
+  getLmstudioSession,
+  listLmstudioModels,
+  listLmstudioSessions,
+  lmstudioBaseUrl,
+  patchLmstudioSession,
+  streamLmstudioChatCompletion,
+} from './lmstudioClient'
+import {
+  mapLmstudioSessionToInfo,
+  mapLmstudioSessionToMessages,
+  mapLmstudioSessionToSession,
+} from './lmstudioMapper'
 import { normalizeClaudeHistoryMessages } from './claudeMapper'
 import {
   clearPersistedSessionIndex,
@@ -485,7 +501,7 @@ const PI_SLASH_COMMANDS = [
   { command: '/name', description: 'Set the session display name', argumentHint: '<name>' },
   { command: '/session', description: 'Show session usage and cost' },
 ] as const
-const INDEX_REBUILD_PROVIDERS: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi']
+const INDEX_REBUILD_PROVIDERS: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'lmstudio']
 const INDEX_REBUILD_PAGE_SIZE = 500
 const INDEX_REBUILD_MESSAGE_LIMIT = 100_000
 const INDEX_REBUILD_MESSAGE_CONCURRENCY = 4
@@ -2645,6 +2661,12 @@ async function listPiSessionsForView({ limit, offset, dir }: ListParams): Promis
   return page.map((s) => mapPiSessionToSession(s, stored[s.id] ?? { title: null, tag: null }))
 }
 
+async function listLmstudioSessionsForView({ limit, offset, dir }: ListParams): Promise<Session[]> {
+  const sessions = await listLmstudioSessions()
+  const filtered = dir ? sessions.filter((s) => s.cwd === dir) : sessions
+  return filtered.slice(offset, offset + limit).map(mapLmstudioSessionToSession)
+}
+
 export function listViewSessions(params: ListParams): Promise<Session[]> {
   return timeAsync('listViewSessions', () => listViewSessionsImpl(params))
 }
@@ -2654,14 +2676,15 @@ async function listViewSessionsImpl(params: ListParams): Promise<Session[]> {
   let sessions: Session[]
   if (provider === 'all') {
     const combinedLimit = params.limit + params.offset
-    const [claude, codex, opencode, copilot, pi] = await Promise.all([
+    const [claude, codex, opencode, copilot, pi, lmstudio] = await Promise.all([
       listClaudeSessions({ ...params, provider: 'claude', limit: combinedLimit, offset: 0 }),
       listCodexSessions({ ...params, provider: 'codex', limit: combinedLimit, offset: 0 }),
       listOpenCodeSessions({ ...params, provider: 'opencode', limit: combinedLimit, offset: 0 }),
       listCopilotSessions({ ...params, provider: 'copilot', limit: combinedLimit, offset: 0 }),
       listPiSessionsForView({ ...params, provider: 'pi', limit: combinedLimit, offset: 0 }),
+      listLmstudioSessionsForView({ ...params, provider: 'lmstudio', limit: combinedLimit, offset: 0 }),
     ])
-    sessions = [...claude, ...codex, ...opencode, ...copilot, ...pi]
+    sessions = [...claude, ...codex, ...opencode, ...copilot, ...pi, ...lmstudio]
       .sort((a, b) => {
         const aTime = Number(a.lastModified ?? a.createdAt ?? 0)
         const bTime = Number(b.lastModified ?? b.createdAt ?? 0)
@@ -2688,6 +2711,11 @@ async function listViewSessionsImpl(params: ListParams): Promise<Session[]> {
   }
   if (provider === 'pi') {
     sessions = await listPiSessionsForView(params)
+    await syncSessionsBestEffort(sessions)
+    return sessions
+  }
+  if (provider === 'lmstudio') {
+    sessions = await listLmstudioSessionsForView(params)
     await syncSessionsBestEffort(sessions)
     return sessions
   }
@@ -2751,6 +2779,11 @@ export async function readViewSessionInfo(sessionId: string, providerOverride?: 
     if (!info) return null
     const messages = await getPiSessionMessages(sessionId)
     return mapPiSessionToInfo(info, stored, messages)
+  }
+  if (provider === 'lmstudio') {
+    const record = await getLmstudioSession(sessionId)
+    if (!record) return null
+    return mapLmstudioSessionToInfo(record)
   }
 
   const info = await getSessionInfo(sessionId, claudeSessionStoreOptions())
@@ -2817,6 +2850,17 @@ export async function patchViewSession(sessionId: string, body: Record<string, u
     }
     throw new Error('title or tag required')
   }
+  if (provider === 'lmstudio') {
+    if ('title' in body) {
+      await patchLmstudioSession(sessionId, { title: typeof body.title === 'string' ? body.title : null })
+      return
+    }
+    if ('tag' in body) {
+      await patchLmstudioSession(sessionId, { tag: typeof body.tag === 'string' ? body.tag : null })
+      return
+    }
+    throw new Error('title or tag required')
+  }
 
   if ('title' in body) {
     if (typeof body.title !== 'string') throw new Error('title must be a string')
@@ -2863,6 +2907,11 @@ export async function deleteViewSession(sessionId: string, providerOverride?: Ag
   }
   if (provider === 'pi') {
     await deletePiSession(sessionId)
+    await removePersistedSessionBestEffort(provider, sessionId)
+    return
+  }
+  if (provider === 'lmstudio') {
+    await deleteLmstudioSession(sessionId)
     await removePersistedSessionBestEffort(provider, sessionId)
     return
   }
@@ -3583,6 +3632,12 @@ async function listViewSessionMessageWindowImpl(sessionId: string, params: Messa
   }
   if (provider === 'pi') {
     messages = await readPiMessagesAll(sessionId)
+    await syncMessagesBestEffort(provider, sessionId, messages)
+    return windowForParams(messages, params)
+  }
+  if (provider === 'lmstudio') {
+    const record = await getLmstudioSession(sessionId)
+    messages = record ? mapLmstudioSessionToMessages(record) : []
     await syncMessagesBestEffort(provider, sessionId, messages)
     return windowForParams(messages, params)
   }
@@ -6911,6 +6966,76 @@ export async function prewarmViewSession(params: {
   // opencode connects through a long-lived local server — no spawn to hide.
 }
 
+async function createLmstudioStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>): Promise<Response> {
+  const userMessage = String(body.message ?? '').trim()
+  const selectedModel = typeof body.model === 'string' ? body.model : undefined
+  const encoder = new TextEncoder()
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      let downstreamClosed = false
+      const safeEnqueue = (chunk: string) => {
+        if (downstreamClosed) return
+        try {
+          controller.enqueue(encoder.encode(chunk))
+        } catch {
+          downstreamClosed = true
+        }
+      }
+      const close = () => {
+        if (downstreamClosed) return
+        downstreamClosed = true
+        try {
+          controller.close()
+        } catch {
+          /* downstream already closed */
+        }
+      }
+
+      const record = await getLmstudioSession(sessionId)
+      if (!record) {
+        safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: `LM Studio session not found: ${sessionId}` })}\n\n`)
+        close()
+        return
+      }
+
+      setRunningSession(sessionId, {
+        provider: 'lmstudio',
+        interrupt: async () => undefined,
+      })
+      broadcastLiveSessionTurnStart('lmstudio', sessionId)
+      safeEnqueue(`event: turn-accepted\ndata: ${JSON.stringify({ sessionId, provider: 'lmstudio' })}\n\n`)
+
+      try {
+        const model = selectedModel || record.model
+        const result = await streamLmstudioChatCompletion(record.messages, userMessage, model, signal, (delta) => {
+          if (delta.content) {
+            broadcastLiveSessionActivity('lmstudio', sessionId)
+            safeEnqueue(`data: ${JSON.stringify({ type: 'lmstudio_delta', delta: delta.content })}\n\n`)
+          }
+        })
+        await appendLmstudioTurn(sessionId, userMessage, result.text, result.model, result.usage)
+      } catch (err) {
+        if (!signal.aborted) {
+          safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown LM Studio error' })}\n\n`)
+        }
+      } finally {
+        clearRunningSession(sessionId)
+        broadcastLiveSessionTurnEnd('lmstudio', sessionId)
+        close()
+      }
+    },
+  })
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      'X-Accel-Buffering': 'no',
+    },
+  })
+}
+
 export async function streamViewSessionTurn(params: SendMessageParams): Promise<Response> {
   const userMessage = String(params.body.message ?? '').trim()
   if (!userMessage) {
@@ -6944,6 +7069,9 @@ export async function streamViewSessionTurn(params: SendMessageParams): Promise<
   }
   if (provider === 'pi') {
     return createPiStream(params.sessionId, params.signal, params.body)
+  }
+  if (provider === 'lmstudio') {
+    return createLmstudioStream(params.sessionId, params.signal, params.body)
   }
 
   return createClaudeStream(params.sessionId, params.signal, params.body)
@@ -7001,6 +7129,11 @@ export async function forkViewSession({ sessionId, body, provider }: ForkParams)
     // operation — drop any warm AgentSession so the next send re-opens it.
     evictPiAgentSession(sessionId)
     return { sessionId: newId }
+  }
+  if (resolvedProvider === 'lmstudio') {
+    void sessionId
+    void body
+    throw new Error('Fork is not supported for LM Studio sessions')
   }
 
   const result = await forkSession(sessionId, {
@@ -7078,6 +7211,11 @@ export async function createNewViewSession({
   if (provider === 'pi') {
     const { randomUUID } = await import('node:crypto')
     return { sessionId: randomUUID(), provider, cwd: resolvedCwd, isPending: true }
+  }
+
+  if (provider === 'lmstudio') {
+    const record = await createLmstudioSession(resolvedCwd, title)
+    return { sessionId: record.id, provider, cwd: resolvedCwd, isPending: false }
   }
 
   throw new Error(`Create is not supported for ${provider} sessions`)
@@ -7291,6 +7429,15 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
             ],
           }
         : null,
+    }
+  }
+  if (provider === 'lmstudio') {
+    const record = await getLmstudioSession(sessionId)
+    const models = await listLmstudioModels().catch(() => [])
+    return {
+      models: models.map((m) => ({ value: m.id, displayName: m.id, description: 'LM Studio local model' })),
+      currentModel: record?.model ?? null,
+      contextUsage: null,
     }
   }
 
@@ -7623,6 +7770,16 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
       }),
     }
   }
+  if (provider === 'lmstudio') {
+    const record = await getLmstudioSession(sessionId)
+    return {
+      currentModel: record?.model ?? null,
+      sections: [
+        { id: 'server', title: 'LM STUDIO SERVER', items: [lmstudioBaseUrl()] },
+        { id: 'messages', title: 'MESSAGES', items: [String(record?.messages.length ?? 0)] },
+      ],
+    }
+  }
 
   const q = createSessionControlQuery(sessionId)
   try {
@@ -7813,6 +7970,11 @@ export async function rewindOrRollbackViewSession({ sessionId, body, provider }:
     void sessionId
     void body
     throw new Error('Rewind is not supported for Pi sessions')
+  }
+  if (resolvedProvider === 'lmstudio') {
+    void sessionId
+    void body
+    throw new Error('Rewind is not supported for LM Studio sessions')
   }
 
   const userMessageId = typeof body.userMessageId === 'string' ? body.userMessageId : undefined

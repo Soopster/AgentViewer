@@ -112,6 +112,7 @@ const SLASH_COMMANDS_BY_PROVIDER: Record<AgentProvider, SlashCommandSuggestion[]
     { command: '/name', description: 'Set the session display name', argumentHint: '<name>' },
     { command: '/session', description: 'Show session usage and cost' },
   ],
+  lmstudio: [],
 }
 
 const AGENT_VIEWER_SESSION_COMMANDS: SlashCommandSuggestion[] = [
@@ -125,6 +126,7 @@ const SLASH_COMMANDS_WITH_SESSION_MESSAGING: Record<AgentProvider, SlashCommandS
   opencode: [...AGENT_VIEWER_SESSION_COMMANDS, ...SLASH_COMMANDS_BY_PROVIDER.opencode],
   copilot: [...AGENT_VIEWER_SESSION_COMMANDS, ...SLASH_COMMANDS_BY_PROVIDER.copilot],
   pi: [...AGENT_VIEWER_SESSION_COMMANDS, ...SLASH_COMMANDS_BY_PROVIDER.pi],
+  lmstudio: [...AGENT_VIEWER_SESSION_COMMANDS, ...SLASH_COMMANDS_BY_PROVIDER.lmstudio],
 }
 
 export function getSlashCommandSuggestions(provider: AgentProvider | undefined | null): SlashCommandSuggestion[] {

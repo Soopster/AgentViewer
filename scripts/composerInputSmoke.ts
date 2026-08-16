@@ -30,7 +30,7 @@ import {
 import { runViewSessionAction, startTurnWatchdog } from '../lib/sessionBackend'
 import type { AgentProvider, SendAttachment } from '../lib/types'
 
-const providers: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi']
+const providers: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'lmstudio']
 const queueItemIds = new Set(Array.from({ length: 100 }, () => createComposerQueueItemId('codex:shared')))
 assert.equal(queueItemIds.size, 100, 'queue item ids must remain unique across independent producers')
 for (const provider of providers) {
@@ -316,6 +316,7 @@ const expectedNative: Record<AgentProvider, SendAttachment['type'][]> = {
   opencode: ['file', 'image', 'mention', 'blob', 'agent'],
   copilot: ['file', 'directory', 'selection', 'image', 'mention', 'blob', 'extension_context'],
   pi: ['image', 'blob'],
+  lmstudio: [],
 }
 
 for (const provider of providers) {

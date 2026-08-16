@@ -443,7 +443,7 @@ function ComposerWaitingStatus({
   return <text wrapMode="none">{renderInlineTextSegments(segs, width, theme.dim)}</text>
 }
 
-const PROVIDERS: ProviderSelection[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'all']
+const PROVIDERS: ProviderSelection[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'lmstudio', 'all']
 const TUI_PROVIDER_TAG: Record<string, string> = {
   claude: 'claude',
   codex: 'codex',
@@ -1923,6 +1923,10 @@ function extractStreamingAssistantText(payload: unknown): string | null {
     return deltaRecord.type === 'text_delta' && typeof deltaRecord.text === 'string'
       ? deltaRecord.text
       : null
+  }
+
+  if (record.type === 'lmstudio_delta') {
+    return typeof record.delta === 'string' ? record.delta : null
   }
 
   if (record.type === 'opencode_event') {

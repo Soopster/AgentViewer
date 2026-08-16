@@ -30,6 +30,7 @@ const PROVIDER_META: Record<AgentProvider, { label: string; color: string }> = {
   opencode: { label: 'OpenCode', color: '#f59e0b' },
   copilot: { label: 'Copilot', color: '#8b5cf6' },
   pi: { label: 'Pi', color: '#ec4899' },
+  lmstudio: { label: 'LM Studio', color: '#2dd4a7' },
 }
 
 // Distinguishes sessions within the same provider in the blame gutter.
