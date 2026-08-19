@@ -1,10 +1,12 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { PROCEDURAL_THEME_NAMES } from '../tui/theme'
 import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../tui/theme'
 
 const TUI_STATE_FILE = path.join(process.cwd(), '.agent-viewer-data', 'tui.json')
 const VALID_TUI_THEMES: readonly TuiThemeMode[] = [
+  ...PROCEDURAL_THEME_NAMES,
   'light',
   'paper',
   'solarized-light',
@@ -100,6 +102,30 @@ const VALID_TUI_THEMES: readonly TuiThemeMode[] = [
   'cyber',
   'cyber-wave',
   'willow-dream',
+  'agnoster',
+  'robbyrussell',
+  'af-magic',
+  'bira',
+  'avit',
+  'gentoo',
+  'candy',
+  'eastwood',
+  'fishy',
+  'frisk',
+  'gnzh',
+  'kennethreitz',
+  'arrow',
+  'bureau',
+  'dogenpunk',
+  'dst',
+  'fox',
+  'funky',
+  'juanghurtado',
+  'kolo',
+  'lambda',
+  'muse',
+  'nanotech',
+  'pygmalion',
 ]
 
 type TuiState = {

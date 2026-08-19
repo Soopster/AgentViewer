@@ -64,6 +64,7 @@ import {
   selectComposerQueueTarget,
 } from '../../lib/composerAttachments'
 import {
+  PROCEDURAL_THEME_NAMES,
   THEME,
   getProviderAccent,
   getThemePalette,
@@ -550,10 +551,39 @@ const DARK_MODES: TuiThemeMode[] = [
   'vitesse-dark',
   'zenburn',
 ]
-const THEMES: TuiThemeMode[] = [...LIGHT_MODES, ...DARK_MODES]
-const THEME_GROUPS: Array<{ label: string; themes: TuiThemeMode[] }> = [
-  { label: 'LIGHT', themes: LIGHT_MODES },
-  { label: 'DARK', themes: DARK_MODES },
+const OMZ_MODES: TuiThemeMode[] = [
+  'agnoster',
+  'robbyrussell',
+  'af-magic',
+  'bira',
+  'avit',
+  'gentoo',
+  'candy',
+  'eastwood',
+  'fishy',
+  'frisk',
+  'gnzh',
+  'kennethreitz',
+  'arrow',
+  'bureau',
+  'dogenpunk',
+  'dst',
+  'fox',
+  'funky',
+  'juanghurtado',
+  'kolo',
+  'lambda',
+  'muse',
+  'nanotech',
+  'pygmalion',
+  ...PROCEDURAL_THEME_NAMES,
+]
+const THEMES: TuiThemeMode[] = [...LIGHT_MODES, ...DARK_MODES, ...OMZ_MODES]
+type ThemeMenuGroup = 'light' | 'dark' | 'omz'
+const THEME_GROUPS: Array<{ key: ThemeMenuGroup; label: string; themes: TuiThemeMode[] }> = [
+  { key: 'light', label: 'LIGHT', themes: LIGHT_MODES },
+  { key: 'dark', label: 'DARK', themes: DARK_MODES },
+  { key: 'omz', label: 'OMZ', themes: OMZ_MODES },
 ]
 const SEARCH_MAX_CHARS = 80
 const SESSION_REFRESH_MS = 5000
@@ -4506,7 +4536,19 @@ const PERMISSION_MODE_LABEL: Partial<Record<string, string>> = {
   bypassPermissions: 'bypass permissions',
 }
 
-const THEME_DESCRIPTIONS: Record<TuiThemeMode, string> = {
+function proceduralThemeLabel(name: string): string {
+  return name.replace(/[-_+]/g, ' ').trim().toUpperCase()
+}
+
+const PROCEDURAL_THEME_DESCRIPTIONS: Record<string, string> = Object.fromEntries(
+  PROCEDURAL_THEME_NAMES.map((name) => [name, `Generated palette · ${proceduralThemeLabel(name)}`]),
+)
+
+const PROCEDURAL_THEME_LABELS: Record<string, string> = Object.fromEntries(
+  PROCEDURAL_THEME_NAMES.map((name) => [name, proceduralThemeLabel(name)]),
+)
+
+const THEME_DESCRIPTIONS_BASE: Record<Exclude<TuiThemeMode, (typeof PROCEDURAL_THEME_NAMES)[number]>, string> = {
   light: 'Crisp white background',
   alabaster: 'Minimal white with sparse color',
   paper: 'Warm off-white',
@@ -4602,9 +4644,38 @@ const THEME_DESCRIPTIONS: Record<TuiThemeMode, string> = {
   cyber: 'Neon accents',
   'cyber-wave': 'Deep teal with electric accents',
   'willow-dream': 'Soft willow teal with lavender',
+  agnoster: 'Powerline blue-black segments',
+  robbyrussell: 'Classic oh-my-zsh green arrow',
+  'af-magic': 'Matrix-style terminal green',
+  bira: 'Two-line blue and pink prompt',
+  avit: 'Purple and magenta git-aware',
+  gentoo: 'Gentoo purple and white',
+  candy: 'Playful pink and violet candy',
+  eastwood: 'Western tan and brown',
+  fishy: 'Aqua blue fish scale',
+  frisk: 'Minimal grey-green',
+  gnzh: 'Bold red and black',
+  kennethreitz: 'Clean cyan and slate',
+  arrow: 'Minimal red arrow accent',
+  bureau: 'Professional blue-grey',
+  dogenpunk: 'Neon punk purple and pink',
+  dst: 'Subdued dark teal',
+  fox: 'Warm orange and rust',
+  funky: 'Bright playful magenta and lime',
+  juanghurtado: 'Minimalist slate blue',
+  kolo: 'Cool teal grid',
+  lambda: 'Minimal lambda-calculus violet',
+  muse: 'Soft creative pastel',
+  nanotech: 'Futuristic cyan-green tech',
+  pygmalion: 'Elegant magenta and gold',
 }
 
-const THEME_LABELS: Record<TuiThemeMode, string> = {
+const THEME_DESCRIPTIONS: Record<TuiThemeMode, string> = {
+  ...THEME_DESCRIPTIONS_BASE,
+  ...PROCEDURAL_THEME_DESCRIPTIONS,
+} as Record<TuiThemeMode, string>
+
+const THEME_LABELS_BASE: Record<Exclude<TuiThemeMode, (typeof PROCEDURAL_THEME_NAMES)[number]>, string> = {
   light: 'LIGHT',
   alabaster: 'ALABASTER',
   paper: 'PAPER',
@@ -4700,7 +4771,36 @@ const THEME_LABELS: Record<TuiThemeMode, string> = {
   cyber: 'CYBER',
   'cyber-wave': 'CYBER WAVE',
   'willow-dream': 'WILLOW DREAM',
+  agnoster: 'AGNOSTER',
+  robbyrussell: 'ROBBYRUSSELL',
+  'af-magic': 'AF-MAGIC',
+  bira: 'BIRA',
+  avit: 'AVIT',
+  gentoo: 'GENTOO',
+  candy: 'CANDY',
+  eastwood: 'EASTWOOD',
+  fishy: 'FISHY',
+  frisk: 'FRISK',
+  gnzh: 'GNZH',
+  kennethreitz: 'KENNETHREITZ',
+  arrow: 'ARROW',
+  bureau: 'BUREAU',
+  dogenpunk: 'DOGENPUNK',
+  dst: 'DST',
+  fox: 'FOX',
+  funky: 'FUNKY',
+  juanghurtado: 'JUANGHURTADO',
+  kolo: 'KOLO',
+  lambda: 'LAMBDA',
+  muse: 'MUSE',
+  nanotech: 'NANOTECH',
+  pygmalion: 'PYGMALION',
 }
+
+const THEME_LABELS: Record<TuiThemeMode, string> = {
+  ...THEME_LABELS_BASE,
+  ...PROCEDURAL_THEME_LABELS,
+} as Record<TuiThemeMode, string>
 
 type PaletteCommand = { id: string; label: string; key: string; category: string }
 type PaletteRow =
@@ -7043,7 +7143,7 @@ export default function OpenTuiApp() {
   const [providerMenuIndex, setProviderMenuIndex] = useState(0)
   const [themeMenuOpen, setThemeMenuOpen] = useState(false)
   const [themeMenuIndex, setThemeMenuIndex] = useState(0)
-  const [themeMenuGroup, setThemeMenuGroup] = useState<'light' | 'dark'>('dark')
+  const [themeMenuGroup, setThemeMenuGroup] = useState<ThemeMenuGroup>('dark')
   const [transcriptViewMenuOpen, setTranscriptViewMenuOpen] = useState(false)
   const [transcriptViewMenuIndex, setTranscriptViewMenuIndex] = useState(0)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
@@ -10877,7 +10977,9 @@ export default function OpenTuiApp() {
   const openThemeMenu = useEffectEvent(() => {
     themeMenuOriginRef.current = themeMode
     setThemeMenuIndex(Math.max(THEMES.indexOf(themeMode), 0))
-    setThemeMenuGroup(LIGHT_MODES.includes(themeMode) ? 'light' : 'dark')
+    setThemeMenuGroup(
+      LIGHT_MODES.includes(themeMode) ? 'light' : OMZ_MODES.includes(themeMode) ? 'omz' : 'dark',
+    )
     setThemeMenuOpen(true)
   })
 
@@ -16268,9 +16370,13 @@ export default function OpenTuiApp() {
     if (themeMenuOpen) {
       if (key.name === 'left' || key.name === 'right') {
         handled(() => {
-          const newGroup = key.name === 'left' ? 'light' : 'dark'
+          const currentGroupIndex = THEME_GROUPS.findIndex((g) => g.key === themeMenuGroup)
+          const nextGroupIndex = key.name === 'left'
+            ? Math.max(currentGroupIndex - 1, 0)
+            : Math.min(currentGroupIndex + 1, THEME_GROUPS.length - 1)
+          const newGroup = THEME_GROUPS[nextGroupIndex].key
           setThemeMenuGroup(newGroup)
-          const groupThemes = newGroup === 'light' ? LIGHT_MODES : DARK_MODES
+          const groupThemes = THEME_GROUPS[nextGroupIndex].themes
           const origin = themeMenuOriginRef.current
           const target = (origin && groupThemes.includes(origin)) ? origin : groupThemes[0]
           if (target) {
@@ -18756,7 +18862,7 @@ export default function OpenTuiApp() {
             ? getThemePalette(originTheme)
             : getThemePalette('dark')
           const menuHeight = Math.max(14, Math.min(height - 4, 32))
-          const groupThemes = themeMenuGroup === 'light' ? LIGHT_MODES : DARK_MODES
+          const groupThemes = THEME_GROUPS.find((g) => g.key === themeMenuGroup)?.themes ?? DARK_MODES
           const currentTheme = THEMES[themeMenuIndex]
           const localIndex = Math.max(
             currentTheme && groupThemes.includes(currentTheme) ? groupThemes.indexOf(currentTheme) : 0,
@@ -18782,9 +18888,12 @@ export default function OpenTuiApp() {
               flexDirection="column"
             >
               <box paddingX={2} paddingBottom={1} flexDirection="row">
-                <text fg={themeMenuGroup === 'light' ? overlayTheme.cyan : overlayTheme.muted} wrapMode="none">LIGHT</text>
-                <text fg={overlayTheme.dim} wrapMode="none">  |  </text>
-                <text fg={themeMenuGroup === 'dark' ? overlayTheme.cyan : overlayTheme.muted} wrapMode="none">DARK</text>
+                {THEME_GROUPS.map((group, i) => (
+                  <React.Fragment key={group.key}>
+                    {i > 0 ? <text fg={overlayTheme.dim} wrapMode="none">  |  </text> : null}
+                    <text fg={themeMenuGroup === group.key ? overlayTheme.cyan : overlayTheme.muted} wrapMode="none">{group.label}</text>
+                  </React.Fragment>
+                ))}
                 <text fg={overlayTheme.dim} wrapMode="none">   ← →</text>
               </box>
               <box flexGrow={1} paddingX={1} paddingBottom={1}>
