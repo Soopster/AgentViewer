@@ -45,6 +45,19 @@ export type CodexPlanSnapshot = {
   explanation: string | null
 }
 
+export type CodexThreadWarning = {
+  kind: 'error' | 'warning' | 'guardianWarning' | 'configWarning' | 'deprecationNotice'
+  message: string
+  receivedAt: number
+}
+
+export type CodexHookActivity = {
+  hookId?: string
+  name?: string
+  status: 'started' | 'completed'
+  receivedAt: number
+}
+
 export type CodexThreadSnapshot = {
   status?: string
   latestTurnId?: string
@@ -52,6 +65,20 @@ export type CodexThreadSnapshot = {
   tokenUsage?: CodexThreadTokenUsage
   model?: string
   plan?: CodexPlanSnapshot
+  // Most-recent-first; capped so a noisy thread can't grow this unbounded.
+  warnings?: CodexThreadWarning[]
+  lastHookActivity?: CodexHookActivity
+}
+
+const MAX_SNAPSHOT_WARNINGS = 10
+
+function extractWarningMessage(params: unknown): string {
+  if (params && typeof params === 'object') {
+    const record = params as Record<string, unknown>
+    if (typeof record.message === 'string') return record.message
+    if (typeof record.reason === 'string') return record.reason
+  }
+  return 'Codex reported an issue with no message.'
 }
 
 function normalizePlanSteps(value: unknown): CodexPlanStep[] {
@@ -281,6 +308,39 @@ class CodexHarness {
         existing.plan = {
           plan: steps,
           explanation: params.explanation ?? existing.plan?.explanation ?? null,
+        }
+        break
+      }
+      case 'thread/compacted': {
+        existing.status = 'compacted'
+        break
+      }
+      case 'thread/deleted': {
+        existing.status = 'deleted'
+        break
+      }
+      case 'error':
+      case 'warning':
+      case 'guardianWarning':
+      case 'configWarning':
+      case 'deprecationNotice': {
+        const warnings = existing.warnings ?? []
+        warnings.unshift({
+          kind: notification.method,
+          message: extractWarningMessage(notification.params),
+          receivedAt: Date.now(),
+        })
+        existing.warnings = warnings.slice(0, MAX_SNAPSHOT_WARNINGS)
+        break
+      }
+      case 'hook/started':
+      case 'hook/completed': {
+        const params = notification.params as Record<string, unknown>
+        existing.lastHookActivity = {
+          hookId: typeof params.hookId === 'string' ? params.hookId : undefined,
+          name: typeof params.name === 'string' ? params.name : undefined,
+          status: notification.method === 'hook/started' ? 'started' : 'completed',
+          receivedAt: Date.now(),
         }
         break
       }

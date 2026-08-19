@@ -340,7 +340,7 @@ export function mapCodexThreadToSession(thread: CodexThread, tag: string | null)
     createdAt: thread.createdAt * 1000,
     provider: 'codex',
     capabilities: CODEX_CAPABILITIES,
-    isPinned: thread.isPinned,
+    isPinned: false,
     isPending: isPendingCodexThread(thread) ? true : undefined,
   }
 }
@@ -358,7 +358,7 @@ export function mapCodexThreadToSessionInfo(thread: CodexThread, tag: string | n
     createdAt: thread.createdAt * 1000,
     provider: 'codex',
     capabilities: CODEX_CAPABILITIES,
-    isPinned: thread.isPinned,
+    isPinned: false,
     currentModel: currentModel ?? undefined,
   }
 }

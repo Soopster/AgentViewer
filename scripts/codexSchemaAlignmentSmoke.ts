@@ -21,8 +21,8 @@ const newRequests = [
   },
   {
     method: 'thread/metadata/update',
-    id: 'pin-thread',
-    params: { threadId: 'thread-1', isPinned: true },
+    id: 'assign-project',
+    params: { threadId: 'thread-1', projectId: 'project-1' },
   },
   {
     method: 'thread/realtime/start',
@@ -75,7 +75,9 @@ const thread = {
   parentThreadId: null,
   preview: 'Schema alignment smoke',
   ephemeral: false,
-  isPinned: true,
+  section: null,
+  sectionEnteredAt: null,
+  projectId: null,
   historyMode: 'paginated',
   modelProvider: 'openai',
   createdAt: 1_700_000_000,
@@ -91,14 +93,14 @@ const thread = {
   agentNickname: null,
   agentRole: null,
   gitInfo: null,
-  name: 'Pinned schema thread',
+  name: 'Schema alignment thread',
   turns: [],
 } satisfies Thread
 
 const session = mapCodexThreadToSession(thread, null)
 const info = mapCodexThreadToSessionInfo(thread, null, 'gpt-5.6-codex')
-if (session.isPinned !== true || info.isPinned !== true) {
-  throw new Error('Codex thread pin state was not preserved by the session mapper')
+if (session.isPinned !== false || info.isPinned !== false) {
+  throw new Error('Codex session mapper unexpectedly reported a pin state (isPinned was removed from the app-server protocol)')
 }
 
 const message = normalizeCodexStreamThreadedMessage({
