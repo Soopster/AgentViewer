@@ -585,6 +585,11 @@ const THEME_GROUPS: Array<{ key: ThemeMenuGroup; label: string; themes: TuiTheme
   { key: 'dark', label: 'DARK', themes: DARK_MODES },
   { key: 'omz', label: 'OMZ', themes: OMZ_MODES },
 ]
+function filterThemeModes(modes: TuiThemeMode[], query: string): TuiThemeMode[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return modes
+  return modes.filter((mode) => THEME_LABELS[mode].toLowerCase().includes(q) || mode.toLowerCase().includes(q))
+}
 const SEARCH_MAX_CHARS = 80
 const SESSION_REFRESH_MS = 5000
 const DETAIL_REFRESH_MS = 2000
@@ -7144,6 +7149,7 @@ export default function OpenTuiApp() {
   const [themeMenuOpen, setThemeMenuOpen] = useState(false)
   const [themeMenuIndex, setThemeMenuIndex] = useState(0)
   const [themeMenuGroup, setThemeMenuGroup] = useState<ThemeMenuGroup>('dark')
+  const [themeMenuQuery, setThemeMenuQuery] = useState('')
   const [transcriptViewMenuOpen, setTranscriptViewMenuOpen] = useState(false)
   const [transcriptViewMenuIndex, setTranscriptViewMenuIndex] = useState(0)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
@@ -10980,12 +10986,14 @@ export default function OpenTuiApp() {
     setThemeMenuGroup(
       LIGHT_MODES.includes(themeMode) ? 'light' : OMZ_MODES.includes(themeMode) ? 'omz' : 'dark',
     )
+    setThemeMenuQuery('')
     setThemeMenuOpen(true)
   })
 
   const closeThemeMenu = useEffectEvent(() => {
     const originTheme = themeMenuOriginRef.current
     setThemeMenuOpen(false)
+    setThemeMenuQuery('')
     if (originTheme) {
       setThemeMode(originTheme)
       setThemeMenuIndex(Math.max(THEMES.indexOf(originTheme), 0))
@@ -16376,7 +16384,7 @@ export default function OpenTuiApp() {
             : Math.min(currentGroupIndex + 1, THEME_GROUPS.length - 1)
           const newGroup = THEME_GROUPS[nextGroupIndex].key
           setThemeMenuGroup(newGroup)
-          const groupThemes = THEME_GROUPS[nextGroupIndex].themes
+          const groupThemes = filterThemeModes(THEME_GROUPS[nextGroupIndex].themes, themeMenuQuery)
           const origin = themeMenuOriginRef.current
           const target = (origin && groupThemes.includes(origin)) ? origin : groupThemes[0]
           if (target) {
@@ -16386,11 +16394,43 @@ export default function OpenTuiApp() {
         })
         return
       }
-      if (key.name === 'escape' || key.name === 't') {
+      if (key.name === 'up' || key.name === 'down') {
+        handled(() => {
+          const groupThemes = filterThemeModes(
+            THEME_GROUPS.find((g) => g.key === themeMenuGroup)?.themes ?? DARK_MODES,
+            themeMenuQuery,
+          )
+          if (groupThemes.length === 0) return
+          const currentTheme = THEMES[themeMenuIndex]
+          const currentLocalIndex = currentTheme ? groupThemes.indexOf(currentTheme) : -1
+          const nextLocalIndex = key.name === 'up'
+            ? Math.max((currentLocalIndex < 0 ? 0 : currentLocalIndex) - 1, 0)
+            : Math.min((currentLocalIndex < 0 ? -1 : currentLocalIndex) + 1, groupThemes.length - 1)
+          const target = groupThemes[nextLocalIndex]
+          if (target) {
+            setThemeMenuIndex(THEMES.indexOf(target))
+            setThemeMode(target)
+          }
+        })
+        return
+      }
+      if (key.name === 'return') {
+        handled(() => {
+          const groupThemes = filterThemeModes(
+            THEME_GROUPS.find((g) => g.key === themeMenuGroup)?.themes ?? DARK_MODES,
+            themeMenuQuery,
+          )
+          const currentTheme = THEMES[themeMenuIndex]
+          const target = currentTheme && groupThemes.includes(currentTheme) ? currentTheme : groupThemes[0]
+          if (target) chooseTheme(target)
+        })
+        return
+      }
+      if (key.name === 'escape') {
         handled(closeThemeMenu)
         return
       }
-      if (key.name === 'q' || isCtrl('c')) {
+      if (isCtrl('c')) {
         handled(requestExit)
       }
       return
@@ -18861,8 +18901,9 @@ export default function OpenTuiApp() {
           const overlayTheme = originTheme && !LIGHT_MODES.includes(originTheme)
             ? getThemePalette(originTheme)
             : getThemePalette('dark')
-          const menuHeight = Math.max(14, Math.min(height - 4, 32))
-          const groupThemes = THEME_GROUPS.find((g) => g.key === themeMenuGroup)?.themes ?? DARK_MODES
+          const menuHeight = Math.max(15, Math.min(height - 4, 33))
+          const allGroupThemes = THEME_GROUPS.find((g) => g.key === themeMenuGroup)?.themes ?? DARK_MODES
+          const groupThemes = filterThemeModes(allGroupThemes, themeMenuQuery)
           const currentTheme = THEMES[themeMenuIndex]
           const localIndex = Math.max(
             currentTheme && groupThemes.includes(currentTheme) ? groupThemes.indexOf(currentTheme) : 0,
@@ -18896,34 +18937,61 @@ export default function OpenTuiApp() {
                 ))}
                 <text fg={overlayTheme.dim} wrapMode="none">   ← →</text>
               </box>
-              <box flexGrow={1} paddingX={1} paddingBottom={1}>
-                <select
-                  style={{ height: menuHeight - 6 }}
+              <box height={1} paddingX={2} paddingBottom={1} flexDirection="row">
+                <text fg={overlayTheme.cyan} wrapMode="none">/ </text>
+                <input
+                  style={{ flexGrow: 1 }}
                   focused
-                  options={groupOptions}
-                  selectedIndex={localIndex}
-                  selectedBackgroundColor={overlayTheme.surface3}
-                  selectedTextColor={overlayTheme.text}
-                  textColor={overlayTheme.muted}
-                  descriptionColor={overlayTheme.dim}
-                  selectedDescriptionColor={overlayTheme.cyan}
-                  backgroundColor={overlayTheme.surface}
-                  focusedBackgroundColor={overlayTheme.surface}
-                  showScrollIndicator={false}
-                  showDescription={false}
-                  itemSpacing={0}
-                  onChange={(index) => {
-                    const next = groupThemes[index]
-                    if (next) {
-                      setThemeMenuIndex(THEMES.indexOf(next))
-                      setThemeMode(next)
+                  value={themeMenuQuery}
+                  placeholder="Search themes..."
+                  maxLength={60}
+                  onInput={(value) => {
+                    setThemeMenuQuery(value)
+                    const nextGroupThemes = filterThemeModes(allGroupThemes, value)
+                    const target = nextGroupThemes[0]
+                    if (target) {
+                      setThemeMenuIndex(THEMES.indexOf(target))
+                      setThemeMode(target)
                     }
                   }}
-                  onSelect={(_, option) => {
-                    const next = option?.value as TuiThemeMode | undefined
-                    if (next) chooseTheme(next)
+                  onSubmit={() => {
+                    const target = groupThemes[localIndex] ?? groupThemes[0]
+                    if (target) chooseTheme(target)
                   }}
                 />
+              </box>
+              <box flexGrow={1} paddingX={1} paddingBottom={1}>
+                {groupThemes.length === 0 ? (
+                  <text fg={overlayTheme.dim} wrapMode="none">No matching themes</text>
+                ) : (
+                  <select
+                    style={{ height: menuHeight - 8 }}
+                    focused={false}
+                    options={groupOptions}
+                    selectedIndex={localIndex}
+                    selectedBackgroundColor={overlayTheme.surface3}
+                    selectedTextColor={overlayTheme.text}
+                    textColor={overlayTheme.muted}
+                    descriptionColor={overlayTheme.dim}
+                    selectedDescriptionColor={overlayTheme.cyan}
+                    backgroundColor={overlayTheme.surface}
+                    focusedBackgroundColor={overlayTheme.surface}
+                    showScrollIndicator={false}
+                    showDescription={false}
+                    itemSpacing={0}
+                    onChange={(index) => {
+                      const next = groupThemes[index]
+                      if (next) {
+                        setThemeMenuIndex(THEMES.indexOf(next))
+                        setThemeMode(next)
+                      }
+                    }}
+                    onSelect={(_, option) => {
+                      const next = option?.value as TuiThemeMode | undefined
+                      if (next) chooseTheme(next)
+                    }}
+                  />
+                )}
               </box>
             </box>
           )
