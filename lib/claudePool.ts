@@ -363,7 +363,15 @@ class ClaudePool {
   acquire(opts: ClaudePoolAcquireOptions): ClaudePoolEntry {
     const existing = this.entries.get(opts.sessionId)
     if (existing && existing.alive && this.compatible(existing.state, opts)) {
-      void this.applyLiveChanges(existing, opts)
+      // Fire-and-forget: the caller doesn't wait on live settings sync. If
+      // this rejects unhandled, Node 15+ terminates the whole process by
+      // default — one bad setModel/setPermissionMode call would take down
+      // every session in the pool, not just this one. .catch() is the
+      // backstop; applyLiveChanges itself already swallows the expected SDK
+      // rejections, so this only guards against the unexpected.
+      this.applyLiveChanges(existing, opts).catch((err) => {
+        console.error(`[claude pool ${opts.sessionId}] applyLiveChanges failed unexpectedly:`, err)
+      })
       existing.lastActivityAt = Date.now()
       this.ensureSweep()
       return { ...this.toPublic(existing), reused: true }
@@ -472,7 +480,14 @@ class ClaudePool {
       bridgeBox,
     }
 
-    void this.pumpQueryToSubscriber(entry)
+    // Same unhandled-rejection backstop as applyLiveChanges above:
+    // pumpQueryToSubscriber already wraps its whole body in try/finally, so
+    // this should never reject in practice — but if it ever did, an
+    // unhandled rejection here would crash the process rather than just
+    // this session's entry.
+    this.pumpQueryToSubscriber(entry).catch((err) => {
+      console.error(`[claude pool ${entry.sessionId}] pumpQueryToSubscriber failed unexpectedly:`, err)
+    })
     return entry
   }
 
@@ -526,7 +541,7 @@ class ClaudePool {
         // Completed assistant/user/result/system messages are what move the log.
         if (message.type !== 'stream_event') {
           try { broadcastClaudeMessage(entry.sessionId, message.type) } catch { /* never let a subscriber stall the pump */ }
-          noteClaudeCommandsChanged(entry.sessionId, message)
+          try { noteClaudeCommandsChanged(entry.sessionId, message) } catch { /* commands-cache bookkeeping must never kill a healthy live turn */ }
         }
         const sub = entry.subscriber
         if (sub) {
