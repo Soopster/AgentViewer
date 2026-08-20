@@ -6422,6 +6422,41 @@ export async function leaveCoordinatorSession(sessionId: string): Promise<{ left
   return { left: true, runId: agent.runId }
 }
 
+// Every composer send (any provider, coordinator or not) calls
+// drainCooperativeInbox, but the overwhelming majority of sessions were never
+// joined to a coordinator run. findActiveCoordinatorAgentBySessionSync is
+// already an indexed, in-process SQLite lookup — cheap on its own — but it's
+// still unconditional per-send overhead. A TTL cache on "does any active
+// coordinator agent exist at all, anywhere" lets that common case skip the
+// DB entirely. Deliberately NOT keyed on the in-process `controllers` map:
+// controllers are only ever populated at run-creation time (see the comment
+// on that Map) with no rehydration on restart, so after a restart a
+// DB-persisted active run would have zero live controllers even though its
+// session can still have real pending inbox messages — using `controllers`
+// as the guard would silently drop them forever. A short TTL here instead
+// bounds staleness to a few seconds, which is fine for this best-effort
+// "fold in messages since last turn" convenience: worst case a message that
+// arrived in the last couple seconds waits for the next send to fold in.
+const ANY_ACTIVE_COORDINATOR_AGENT_TTL_MS = 3000
+let anyActiveCoordinatorAgentCache: { value: boolean; expiresAt: number } | null = null
+
+function anyActiveCoordinatorAgentExistsSync(db: SqliteDatabase): boolean {
+  const now = Date.now()
+  if (anyActiveCoordinatorAgentCache && anyActiveCoordinatorAgentCache.expiresAt > now) {
+    return anyActiveCoordinatorAgentCache.value
+  }
+  const row = db.prepare(`
+    SELECT 1 FROM protocol_agents a
+    JOIN protocol_runs r ON r.id = a.run_id
+    WHERE a.session_id NOT LIKE 'external:%'
+      AND r.status IN ('planning', 'running', 'synthesizing', 'blocked')
+    LIMIT 1
+  `).get() as unknown
+  const value = row !== undefined
+  anyActiveCoordinatorAgentCache = { value, expiresAt: now + ANY_ACTIVE_COORDINATOR_AGENT_TTL_MS }
+  return value
+}
+
 /**
  * Non-blocking mailbox drain for a cooperatively-joined session: returns a
  * compact text block to prepend to the user's next outgoing message, or ''
@@ -6431,6 +6466,7 @@ export async function leaveCoordinatorSession(sessionId: string): Promise<{ left
  */
 export async function drainCooperativeInbox(sessionId: string): Promise<string> {
   const db = await getDatabase()
+  if (!anyActiveCoordinatorAgentExistsSync(db)) return ''
   const row = findActiveCoordinatorAgentBySessionSync(db, sessionId)
   if (!row) return ''
   const agent = rowToAgent(row)
