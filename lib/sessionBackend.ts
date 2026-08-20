@@ -1149,7 +1149,13 @@ function turnUsageToEventData(outputTokens: number): string {
   return `event: turn-usage\ndata: ${JSON.stringify({ outputTokens })}\n\n`
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+// Exported for reliabilityTimeoutSmoke.ts, which verifies (without needing
+// real Claude/Codex credentials or a custom-model deployment) that a hung
+// composer RPC actually times out at its bound and that the resulting error
+// message is classified as auto-retryable by isTransientSendError — the two
+// properties every withTimeout call site added for composer reliability
+// depends on.
+export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | null = null
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
@@ -4355,7 +4361,18 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           safeEnqueue(codexContextUsageToEventData(usage))
         } catch {}
 
-        for await (const msg of q) {
+        // This is the CLI's cold spawn — no pool watchdog covers it yet (that
+        // only guards turns already adopted into claudePool). On a machine
+        // where the subprocess hangs during startup (custom ANTHROPIC_MODEL
+        // resolution, proxied base URL auth, Bedrock/Vertex discovery), the
+        // stream would otherwise sit silent forever with no way for the
+        // client to recover. Bound each message wait so a stuck first turn
+        // fails into the existing isTransientSendError retry instead.
+        const coldIterator = q[Symbol.asyncIterator]()
+        while (true) {
+          const step = await withTimeout(coldIterator.next(), 60000, 'Claude cold-start turn')
+          if (step.done) break
+          const msg = step.value
           const messageSessionId = typeof msg.session_id === 'string' && msg.session_id ? msg.session_id : undefined
           if (!emittedSessionEvent && messageSessionId) {
             emittedSessionEvent = true
@@ -5646,16 +5663,22 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
           ...(approvalPolicy ? { approvalPolicy } : {}),
           input: buildCodexComposerInput(userMessage, attachments, cwdOverride),
         } satisfies CodexRequestParams<'turn/start'>
+        // No watchdog covers this call yet — it runs before activateTargetTurn
+        // sets up startTurnWatchdog above, so a hang here (e.g. the app-server
+        // blocked on a custom model provider's auth/discovery) would otherwise
+        // wedge the composer in "sending" forever. Bound it and let the failure
+        // surface as a timeout message, which isTransientSendError already
+        // classifies as retryable on the client.
         let started: CodexResponseFor<'turn/start'>
         try {
-          started = await client.request('turn/start', turnStartParams)
+          started = await withTimeout(client.request('turn/start', turnStartParams), 20000, 'Codex turn/start')
         } catch (err) {
           // The resume cache said this thread was live but the server lost it
           // (e.g. a restart raced the disconnect listener). Re-resume once.
           if (!isCodexMissingRolloutError(err)) throw err
           codexResumedThreads.delete(sessionId)
-          await ensureCodexThreadResumed(sessionId)
-          started = await client.request('turn/start', turnStartParams)
+          await withTimeout(ensureCodexThreadResumed(sessionId), 8000, 'Codex thread re-resume')
+          started = await withTimeout(client.request('turn/start', turnStartParams), 20000, 'Codex turn/start retry')
         }
 
         activateTargetTurn(started.turn.id)
@@ -7363,8 +7386,15 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
   const provider = await resolveProvider(providerOverride)
   if (provider === 'codex') {
     const client = getCodexClient()
-    const modelsResponse = await client.request('model/list', {})
-    const resume = await ensureCodexThreadResumed(sessionId).catch(() => null)
+    // Custom model providers (proxied base URLs, non-default profiles) can
+    // leave the app-server slow to answer model/list on a cold connection —
+    // without a timeout the composer's model picker hangs indefinitely
+    // instead of falling back to an empty list the UI can recover from.
+    const [modelsResponse, resume] = await Promise.all([
+      withTimeout(client.request('model/list', {}), 8000, 'Codex model list')
+        .catch(() => ({ data: [] as Parameters<typeof mapCodexModelsToSessionModels>[0] })),
+      withTimeout(ensureCodexThreadResumed(sessionId), 8000, 'Codex thread resume').catch(() => null),
+    ])
     return {
       models: mapCodexModelsToSessionModels(modelsResponse.data),
       currentModel: resume?.model ?? null,

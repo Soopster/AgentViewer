@@ -322,6 +322,13 @@ type InternalEntry = {
   inTurn: boolean
   alive: boolean
   /**
+   * Set when applyLiveChanges wants to recycle this entry (a live setModel/
+   * setPermissionMode failed) but it's mid-turn. Applied the moment inTurn
+   * flips back to false instead of recycling immediately — see the comment
+   * on applyLiveChanges' recycle call for why immediate recycling is unsafe.
+   */
+  pendingRecycleReason: string | null
+  /**
    * Mutable per-turn bridge. The query's canUseTool / onElicitation delegate to
    * this so the warm subprocess can be reused across turns while routing each
    * turn's permission + elicitation requests through the correct SSE controller.
@@ -460,6 +467,7 @@ class ClaudePool {
       turnTail: Promise.resolve(),
       lastActivityAt: Date.now(),
       inTurn: false,
+      pendingRecycleReason: null,
       alive: true,
       bridgeBox,
     }
@@ -583,7 +591,22 @@ class ClaudePool {
       : Promise.resolve(null)
     const [modelResult, permissionResult] = await Promise.all([modelChange, permissionChange])
     const failure = modelResult ?? permissionResult
-    if (failure) this.recycleInternal(entry, failure)
+    if (!failure) return
+    // acquire() fires this without awaiting it, so by the time a live
+    // setModel/setPermissionMode rejects, the caller may already be mid-turn
+    // on this exact entry (runTurn() started right after acquire() returned).
+    // Recycling unconditionally here — as this used to — pushes null to the
+    // turn's subscriber and kills that live turn out from under its SSE
+    // stream, surfacing as "Lost connection to Claude mid-turn" even though
+    // the turn itself was healthy. Defer to the same inTurn=false transition
+    // ensureCapacity/sweep already respect; the entry's stale model/
+    // permission state just gets retried on the next acquire() in the
+    // meantime, same as when compatible() rejects it for other reasons.
+    if (entry.inTurn) {
+      entry.pendingRecycleReason = failure
+      return
+    }
+    this.recycleInternal(entry, failure)
   }
 
   private recycleInternal(entry: InternalEntry, _reason: string): void {
@@ -731,6 +754,7 @@ class ClaudePool {
       turnTail: Promise.resolve(),
       lastActivityAt: Date.now(),
       inTurn: false,
+      pendingRecycleReason: null,
       alive: true,
       // Reuse the bridgeBox from the cold-path spawn so its delegation closure
       // (already frozen into the Query) routes through the same object.
@@ -904,6 +928,14 @@ class ClaudePool {
       entry.lastActivityAt = Date.now()
       try { broadcastClaudeTurnEnd(entry.sessionId) } catch { /* swallow */ }
       releaseMutex()
+      // Apply a live-settings failure deferred during this turn (see
+      // applyLiveChanges) now that it's safe — the turn is fully done and the
+      // mutex is free for whatever comes next.
+      if (entry.pendingRecycleReason) {
+        const reason = entry.pendingRecycleReason
+        entry.pendingRecycleReason = null
+        this.recycleInternal(entry, reason)
+      }
     }
   }
 }
