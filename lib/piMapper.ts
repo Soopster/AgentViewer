@@ -1,6 +1,9 @@
 import type { AgentMessage } from '@earendil-works/pi-agent-core'
 import type { Model } from '@earendil-works/pi-ai'
 import type {
+  SessionEntry,
+} from '@earendil-works/pi-coding-agent'
+import type {
   ContentBlock,
   Session,
   SessionDiagnosticSection,
@@ -93,27 +96,83 @@ function assistantContentToBlocks(content: AnyContent[]): ContentBlock[] {
   return blocks
 }
 
-function toolResultContentToString(content: AnyContent[]): string {
-  return content
-    .filter((item: AnyContent) => item.type === 'text')
-    .map((item: AnyContent) => String(item.text ?? ''))
-    .join('\n')
+function toolResultContentToBlocks(content: AnyContent[]): string | ContentBlock[] {
+  const hasImages = content.some((item: AnyContent) => item.type === 'image')
+  if (!hasImages) {
+    return content
+      .filter((item: AnyContent) => item.type === 'text')
+      .map((item: AnyContent) => String(item.text ?? ''))
+      .join('\n')
+  }
+  const blocks: ContentBlock[] = []
+  for (const item of content) {
+    if (item.type === 'text') {
+      blocks.push({ type: 'text', text: String(item.text ?? '') })
+    } else if (item.type === 'image') {
+      blocks.push({
+        type: 'image',
+        source: { type: 'base64', media_type: String(item.mimeType ?? ''), data: String(item.data ?? '') },
+      })
+    }
+  }
+  return blocks
 }
 
-function mapSingleMessage(sessionId: string, msg: AgentMessage, index: number): SessionMessage[] {
+export function piAgentMessageFingerprint(message: AgentMessage): string {
+  try {
+    return JSON.stringify(message)
+  } catch {
+    const role = (message as { role?: unknown }).role
+    const timestamp = (message as { timestamp?: unknown }).timestamp
+    return `${String(role ?? '')}:${String(timestamp ?? '')}`
+  }
+}
+
+export function piAgentMessageDuplicateKey(message: AgentMessage): string {
+  const record = message as unknown as Record<string, unknown>
+  const role = typeof record.role === 'string' ? record.role : ''
+  if (role === 'bashExecution') {
+    // The command alone is not unique: running the same command twice must
+    // continue to render live. Ignore only timestamp so the live final result
+    // converges with Pi's separately timestamped persisted BashExecutionMessage.
+    return `bashExecution:${JSON.stringify([
+      record.command,
+      record.output,
+      record.exitCode,
+      record.cancelled,
+      record.truncated,
+      record.fullOutputPath,
+      record.excludeFromContext,
+    ])}`
+  }
+  if (role === 'toolResult') {
+    const toolCallId = typeof record.toolCallId === 'string' ? record.toolCallId : ''
+    return toolCallId ? `toolResult:${toolCallId}` : piAgentMessageFingerprint(message)
+  }
+  return piAgentMessageFingerprint(message)
+}
+
+function mapSingleMessage(
+  sessionId: string,
+  msg: AgentMessage,
+  index: number,
+  providerMessageId?: string,
+): SessionMessage[] {
   const role = (msg as { role: string }).role
   const ts = messageTimestamp(msg)
+  const uuid = providerMessageId ? `pi-${sessionId}-${providerMessageId}` : `pi-${sessionId}-live-${index}`
 
   switch (role) {
     case 'user': {
       const um = msg as { content: string | AnyContent[]; timestamp: number }
       return [{
         type: 'user',
-        uuid: `pi-${sessionId}-${index}`,
+        uuid,
         session_id: sessionId,
         parent_tool_use_id: null,
         provider: 'pi',
         timestamp: ts,
+        providerMessageId,
         message: {
           role: 'user',
           content: userContentToBlocks(um.content),
@@ -130,11 +189,12 @@ function mapSingleMessage(sessionId: string, msg: AgentMessage, index: number): 
       const content = assistantContentToBlocks(am.content)
       return [{
         type: 'assistant',
-        uuid: `pi-${sessionId}-${index}`,
+        uuid,
         session_id: sessionId,
         parent_tool_use_id: null,
         provider: 'pi',
         timestamp: ts,
+        providerMessageId,
         message: {
           role: 'assistant',
           content: content.length > 0
@@ -160,17 +220,18 @@ function mapSingleMessage(sessionId: string, msg: AgentMessage, index: number): 
       }
       return [{
         type: 'user',
-        uuid: `pi-${sessionId}-${index}-tool-result`,
+        uuid: `${uuid}-tool-result`,
         session_id: sessionId,
         parent_tool_use_id: null,
         provider: 'pi',
         timestamp: ts,
+        providerMessageId,
         message: {
           role: 'user',
           content: [{
             type: 'tool_result',
             tool_use_id: tr.toolCallId,
-            content: toolResultContentToString(tr.content),
+            content: toolResultContentToBlocks(tr.content),
             is_error: tr.isError || undefined,
           }],
         },
@@ -178,6 +239,7 @@ function mapSingleMessage(sessionId: string, msg: AgentMessage, index: number): 
     }
     case 'bashExecution': {
       const be = msg as { role: 'bashExecution'; command: string; output: string; exitCode: number | undefined; cancelled: boolean; truncated: boolean; fullOutputPath?: string; timestamp: number; excludeFromContext?: boolean }
+      const bashToolId = `bash-${providerMessageId ?? index}`
       const output = be.output ? `\n${be.output}` : ''
       const exitLabel = be.cancelled ? ' (cancelled)' : be.exitCode !== undefined ? ` (exit ${be.exitCode})` : ''
       const contextLabel = be.excludeFromContext ? ' [excluded from context]' : ''
@@ -186,32 +248,34 @@ function mapSingleMessage(sessionId: string, msg: AgentMessage, index: number): 
         : ''
       return [{
         type: 'assistant',
-        uuid: `pi-${sessionId}-${index}-bash`,
+        uuid: `${uuid}-bash`,
         session_id: sessionId,
         parent_tool_use_id: null,
         provider: 'pi',
         timestamp: ts,
+        providerMessageId,
         message: {
           role: 'assistant',
           content: [{
             type: 'tool_use',
-            id: `bash-${index}`,
+            id: bashToolId,
             name: 'bash',
             input: { command: be.command, excludeFromContext: be.excludeFromContext || undefined },
           }],
         },
       }, {
         type: 'user',
-        uuid: `pi-${sessionId}-${index}-bash-result`,
+        uuid: `${uuid}-bash-result`,
         session_id: sessionId,
         parent_tool_use_id: null,
         provider: 'pi',
         timestamp: ts,
+        providerMessageId,
         message: {
           role: 'user',
           content: [{
             type: 'tool_result',
-            tool_use_id: `bash-${index}`,
+            tool_use_id: bashToolId,
             content: `$ ${be.command}${contextLabel}${output}${truncatedNote}${exitLabel}`,
             is_error: be.cancelled || (be.exitCode !== undefined && be.exitCode !== 0) || undefined,
           }],
@@ -222,11 +286,12 @@ function mapSingleMessage(sessionId: string, msg: AgentMessage, index: number): 
       const bs = msg as { role: 'branchSummary'; summary: string; fromId: string; timestamp: number }
       return [{
         type: 'assistant',
-        uuid: `pi-${sessionId}-${index}-branch`,
+        uuid: `${uuid}-branch`,
         session_id: sessionId,
         parent_tool_use_id: null,
         provider: 'pi',
         timestamp: ts,
+        providerMessageId,
         message: {
           role: 'assistant',
           content: `[Branch summary] ${bs.summary}`,
@@ -237,11 +302,12 @@ function mapSingleMessage(sessionId: string, msg: AgentMessage, index: number): 
       const cs = msg as { role: 'compactionSummary'; summary: string; tokensBefore: number; timestamp: number }
       return [{
         type: 'assistant',
-        uuid: `pi-${sessionId}-${index}-compaction`,
+        uuid: `${uuid}-compaction`,
         session_id: sessionId,
         parent_tool_use_id: null,
         provider: 'pi',
         timestamp: ts,
+        providerMessageId,
         message: {
           role: 'assistant',
           content: `[Compaction summary — ${cs.tokensBefore.toLocaleString()} tokens before] ${cs.summary}`,
@@ -251,19 +317,18 @@ function mapSingleMessage(sessionId: string, msg: AgentMessage, index: number): 
     case 'custom': {
       const cm = msg as { role: 'custom'; customType: string; content: string | AnyContent[]; display: boolean; timestamp: number }
       if (!cm.display) return []
-      const text = typeof cm.content === 'string'
-        ? cm.content
-        : cm.content.filter((c: AnyContent) => c.type === 'text').map((c: AnyContent) => String(c.text)).join('\n')
+      const content = userContentToBlocks(cm.content)
       return [{
         type: 'assistant',
-        uuid: `pi-${sessionId}-${index}-custom`,
+        uuid: `${uuid}-custom`,
         session_id: sessionId,
         parent_tool_use_id: null,
         provider: 'pi',
         timestamp: ts,
+        providerMessageId,
         message: {
           role: 'assistant',
-          content: text || `[${cm.customType}]`,
+          content: typeof content === 'string' && !content ? `[${cm.customType}]` : content,
         },
       }]
     }
@@ -276,6 +341,17 @@ export function mapPiMessagesToSessionMessages(sessionId: string, messages: Agen
   const result: SessionMessage[] = []
   for (let i = 0; i < messages.length; i++) {
     result.push(...mapSingleMessage(sessionId, messages[i], i))
+  }
+  return result
+}
+
+export function mapPiEntriesToSessionMessages(sessionId: string, entries: readonly SessionEntry[]): SessionMessage[] {
+  const result: SessionMessage[] = []
+  let messageIndex = 0
+  for (const entry of entries) {
+    if (entry.type !== 'message') continue
+    result.push(...mapSingleMessage(sessionId, entry.message, messageIndex, entry.id))
+    messageIndex += 1
   }
   return result
 }

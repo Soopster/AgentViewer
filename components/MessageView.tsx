@@ -2188,7 +2188,7 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
             <button
               type="button"
               className="timeline-row-action av-hover-control timeline-row-action--fork"
-              onClick={() => onForkFromMessage(row.message.uuid)}
+              onClick={() => onForkFromMessage(row.message.providerMessageId ?? row.message.uuid)}
               disabled={forking}
             >
               {forking ? 'FORKING…' : 'FORK HERE'}

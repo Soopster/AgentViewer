@@ -79,6 +79,7 @@ export type ThreadedMessage = {
   provider?: AgentProvider
   taskDescription?: string
   requestId?: string
+  providerMessageId?: string
   aborted?: boolean
   subagentType?: string
   subagentRetry?: Record<string, unknown>
@@ -342,6 +343,7 @@ export function buildThreadedMessages(messages: SessionMessage[]): ThreadedMessa
   // `retracted_message_uuids` so consumers evict that stale content. Eviction is
   // idempotent — unknown/already-removed uuids are a no-op.
   const resultMap = new Map<string, ToolResultBlock>()
+  const resultProviderMessageIdMap = new Map<string, string>()
   const plumbingUuids = new Set<string>()
   const retractedUuids = new Set<string>()
 
@@ -357,6 +359,7 @@ export function buildThreadedMessages(messages: SessionMessage[]): ThreadedMessa
     for (const b of toBlocks(msg)) {
       const r = b as ToolResultBlock
       resultMap.set(r.tool_use_id, r)
+      if (msg.providerMessageId) resultProviderMessageIdMap.set(r.tool_use_id, msg.providerMessageId)
     }
   }
 
@@ -377,6 +380,7 @@ export function buildThreadedMessages(messages: SessionMessage[]): ThreadedMessa
         timestamp: msg.timestamp,
         origin: msg.origin,
         provider: msg.provider,
+        providerMessageId: msg.providerMessageId,
         blocks: [{
           type: 'claude_system',
           subtype: systemPayload.subtype,
@@ -390,12 +394,13 @@ export function buildThreadedMessages(messages: SessionMessage[]): ThreadedMessa
     if (msg.type === 'user' && typeof msg.message.content === 'string') {
       const notif = parseTaskNotification(msg.message.content)
       if (notif) {
-        out.push({ role: 'user', uuid: msg.uuid, sessionId: msg.session_id, timestamp: msg.timestamp, origin: msg.origin, provider: msg.provider, blocks: [notif] })
+        out.push({ role: 'user', uuid: msg.uuid, sessionId: msg.session_id, timestamp: msg.timestamp, origin: msg.origin, provider: msg.provider, providerMessageId: msg.providerMessageId, blocks: [notif] })
         continue
       }
     }
 
     const threadedBlocks: ThreadedBlock[] = []
+    let providerMessageId = msg.providerMessageId
 
     for (const b of toBlocks(msg)) {
       switch (b.type) {
@@ -406,6 +411,7 @@ export function buildThreadedMessages(messages: SessionMessage[]): ThreadedMessa
             toolUse: tu,
             result: resultMap.get(tu.id) ?? null,
           })
+          providerMessageId = resultProviderMessageIdMap.get(tu.id) ?? providerMessageId
           break
         }
         case 'text': {
@@ -435,6 +441,7 @@ export function buildThreadedMessages(messages: SessionMessage[]): ThreadedMessa
         provider: msg.provider,
         taskDescription: msg.taskDescription,
         requestId: msg.requestId,
+        providerMessageId,
         ...messageTranscriptMetadata(msg),
         blocks: threadedBlocks,
       })
