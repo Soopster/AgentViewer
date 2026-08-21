@@ -8074,6 +8074,29 @@ export default function OpenTuiApp() {
     [attentionItems],
   )
 
+  // Keep the sidebar's activity marker aligned with the fleet strip. Running
+  // sessions are actively receiving transcript events; attention takes
+  // precedence so a blocked turn is visible even while its runtime is live.
+  const sidebarSessionActivity = useMemo(() => {
+    const needsInputKeys = new Set(
+      attentionItems.filter(attentionItemNeedsInput).map((item) => item.sessionKey),
+    )
+    const activity = new Map<string, 'needs-input' | 'running' | 'waiting'>()
+    for (const running of runningSessions) {
+      const key = sessionKey(running)
+      activity.set(key, needsInputKeys.has(key) ? 'needs-input' : 'running')
+    }
+    for (const waiting of waitingSessions) {
+      const key = sessionKey(waiting)
+      if (!activity.has(key)) activity.set(key, needsInputKeys.has(key) ? 'needs-input' : 'waiting')
+    }
+    for (const note of viewerAttentionNotes) {
+      const key = sessionKey(note)
+      if (!activity.has(key)) activity.set(key, 'needs-input')
+    }
+    return activity
+  }, [attentionItems, runningSessions, waitingSessions, viewerAttentionNotes])
+
   // Fleet strip: one cell per live session (running or blocked on input) plus
   // recent background completions — mission-control ambient awareness while
   // reading any single transcript. Digits 1-9 jump to a cell; ⇧A toggles.
@@ -12535,10 +12558,18 @@ export default function OpenTuiApp() {
           ?? (subagentEntry.summary.usage.inputTokens + subagentEntry.summary.usage.outputTokens)
         : 0
       const detail = subagentEntry.kind === 'session'
-        ? joinMeta([
-            showProviderInSessionRows ? formatProviderLabel(subagentEntry.session.provider) : null,
-            `${timeAgo(subagentEntry.session.lastModified ?? subagentEntry.session.createdAt)}${isSessionRecentlyTouched(subagentEntry.session) ? ' ●' : ''}`,
-          ])
+        ? (() => {
+            const activity = sidebarSessionActivity.get(sessionKey(subagentEntry.session))
+            const marker = activity === 'needs-input' ? '⚠'
+              : activity === 'running' ? '●'
+              : activity === 'waiting' ? '◌'
+              : isSessionRecentlyTouched(subagentEntry.session) ? '·'
+              : null
+            return joinMeta([
+              showProviderInSessionRows ? formatProviderLabel(subagentEntry.session.provider) : null,
+              `${timeAgo(subagentEntry.session.lastModified ?? subagentEntry.session.createdAt)}${marker ? ` ${marker}` : ''}`,
+            ])
+          })()
         : joinMeta([
             showProviderInSessionRows
               ? formatProviderLabel(subagentEntry.summary.provider ?? entry.parentSession.provider)
@@ -12575,6 +12606,16 @@ export default function OpenTuiApp() {
     const activityTime = entry.session.lastModified ?? entry.session.createdAt
     const ago = timeAgo(activityTime)
     const recentlyTouched = isSessionRecentlyTouched(entry.session)
+    const activity = sidebarSessionActivity.get(sessionKey(entry.session))
+    const activityGlyph = activity === 'needs-input' ? '⚠'
+      : activity === 'running' ? '●'
+      : activity === 'waiting' ? '◌'
+      : recentlyTouched ? '·'
+      : null
+    const activityColor = activity === 'needs-input' ? theme.amber
+      : activity === 'running' ? sessionAccent
+      : activity === 'waiting' ? theme.cyan
+      : theme.dim
 
     const metaLine = joinMeta([
       showProviderInSessionRows ? formatProviderLabel(entry.session.provider) : null,
@@ -12619,13 +12660,13 @@ export default function OpenTuiApp() {
         <box paddingX={1} flexDirection="row" backgroundColor={selected ? theme.surface3 : theme.surface}>
           <text fg={sessionAccent} wrapMode="none">{selected ? '▎' : ' '}</text>
           <text fg={selected ? sessionAccent : theme.dim} wrapMode="none">
-            {fitText(metaLine, sidebarInnerWidth - 3 - (recentlyTouched ? 2 : 0))}
+            {fitText(metaLine, sidebarInnerWidth - 3 - (activityGlyph ? 2 : 0))}
           </text>
-          {recentlyTouched ? <text fg={sessionAccent} wrapMode="none">{' ●'}</text> : null}
+          {activityGlyph ? <text fg={activityColor} wrapMode="none">{` ${activityGlyph}`}</text> : null}
         </box>
       </box>
     )
-  }, [theme, density, sidebarInnerWidth, renameSessionKey, renameDraft, commitRename, selectSidebarSession, showProviderInSessionRows])
+  }, [theme, density, sidebarInnerWidth, renameSessionKey, renameDraft, commitRename, selectSidebarSession, showProviderInSessionRows, sidebarSessionActivity])
 
   const buildCoordinatorRow = useCallback((entry: CoordinatorSidebarEntry, selected: boolean) => {
     if (entry.type === 'run') {
