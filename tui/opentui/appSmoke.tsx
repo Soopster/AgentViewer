@@ -22,7 +22,7 @@ const setup = await testRender(<OpenTuiApp />, {
   // Agent Operations shortcuts as a modern terminal.
   kittyKeyboard: true,
 })
-const { captureCharFrame } = setup
+const { captureCharFrame, captureSpans } = setup
 
 await act(async () => {
   await new Promise((resolve) => setTimeout(resolve, 2500))
@@ -34,6 +34,23 @@ if (!frame || frame.trim().length === 0) {
 }
 if (!frame.includes('COMPOSER')) {
   throw new Error('Full app frame missing the composer dock')
+}
+const initialSpans = captureSpans().lines.flatMap((line) => line.spans)
+const sessionHeaderSpan = initialSpans.find((span) => span.text.includes('SESSION'))
+const configuredProvider = ['all', 'codex', 'opencode', 'copilot', 'pi', 'lmstudio'].includes(process.env.AGENT_VIEWER_PROVIDER ?? '')
+  ? process.env.AGENT_VIEWER_PROVIDER!
+  : 'claude'
+const providerBadgeLabel = configuredProvider.toUpperCase()
+const providerBadgeSpan = initialSpans.find((span) => span.text.trim() === providerBadgeLabel)
+const providerBadgeRenderable = setup.renderer.root.findDescendantById('sidebar-provider-badge')
+if (
+  !sessionHeaderSpan
+  || !providerBadgeSpan
+  || providerBadgeRenderable?.width !== providerBadgeLabel.length + 2
+  || providerBadgeSpan.text.length !== providerBadgeLabel.length + 2
+  || sessionHeaderSpan.bg.toString() === providerBadgeSpan.bg.toString()
+) {
+  throw new Error('Session header provider badge is missing its compact distinctive background')
 }
 
 // New agent session: Shift+N opens the folder/provider picker modal (rather

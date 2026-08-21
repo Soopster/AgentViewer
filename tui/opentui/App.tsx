@@ -7537,7 +7537,6 @@ export default function OpenTuiApp() {
   // read by the gauge timer).
   const readerWindowGaugeRef = useRef({ start: 0, end: 0, total: 0 })
   const sidebarScrollRef = useRef<ScrollBoxRenderable>(null)
-  const sidebarBoxRef = useRef<BoxRenderable>(null)
   // The reader box is flex-sized (flexGrow inside a stretched row), so its real
   // height is a few rows more than the mainContentHeight arithmetic implies.
   // Split panes must match the frame the reader actually gets, so measure it
@@ -10019,21 +10018,30 @@ export default function OpenTuiApp() {
   const sidebarRowBudget = Math.max(mainContentHeight - 2, 4)
   const sidebarInnerWidth = Math.max(sidebarWidth - 5, 17)
   const showProviderInSessionRows = provider === 'all'
-  const sidebarSortHeader = useMemo(
-    () => fitText(
-      joinMeta([
-        normalizedSessionQuery
-          ? `SESSIONS ${filteredSessionsForSidebar.length}/${Math.max(sessions.length, 0)}`
-          : `SESSIONS ${Math.max(sessions.length, 0)}`,
-        provider === 'all' ? 'ALL PROVIDERS' : formatProviderLabel(provider),
-        `sort ${sidebarSortLabel}`,
-        normalizedSessionQuery ? `/${sessionSearchQuery}` : '/ search',
-        'a agents',
-      ]),
-      Math.max(sidebarInnerWidth - 2, 12),
-    ),
-    [sidebarInnerWidth, sidebarSortLabel, sessions.length, filteredSessionsForSidebar.length, normalizedSessionQuery, sessionSearchQuery, provider],
+  const sidebarSessionCountLabel = normalizedSessionQuery
+    ? `SESSIONS ${filteredSessionsForSidebar.length}/${Math.max(sessions.length, 0)}`
+    : `SESSIONS ${Math.max(sessions.length, 0)}`
+  const sidebarProviderLabel = provider === 'all' ? 'ALL' : formatProviderLabel(provider)
+  const sidebarHeaderWidth = Math.max(sidebarInnerWidth, 12)
+  const sidebarProviderBadgeText = ` ${fitText(sidebarProviderLabel, Math.max(sidebarHeaderWidth - 11, 3)).trimEnd()} `
+  const sidebarHeaderPrefix = `${sidebarSessionCountLabel} · `
+  const sidebarHeaderPrefixWidth = Math.min(
+    sidebarHeaderPrefix.length,
+    Math.max(sidebarHeaderWidth - sidebarProviderBadgeText.length - 1, 8),
   )
+  const sidebarHeaderSuffix = ` · ${joinMeta([
+    `sort ${sidebarSortLabel}`,
+    normalizedSessionQuery ? `/${sessionSearchQuery}` : '/ search',
+    'a agents',
+  ])}`
+  const sidebarHeaderSuffixWidth = Math.max(
+    sidebarHeaderWidth - sidebarHeaderPrefixWidth - sidebarProviderBadgeText.length,
+    0,
+  )
+  const sidebarHeaderBaseText = `${fitText(sidebarHeaderPrefix, sidebarHeaderPrefixWidth)}${sidebarProviderBadgeText}${
+    sidebarHeaderSuffixWidth > 1 ? fitText(sidebarHeaderSuffix, sidebarHeaderSuffixWidth) : '·'
+  }`
+  const sidebarProviderAccent = getProviderAccent(provider)
   const coordinatorSidebarHeader = useMemo(
     () => fitText(
       joinMeta([`COORDINATOR ${coordinatorAgentEntries.length}`, `${coordinatorRuns.length} run${coordinatorRuns.length === 1 ? '' : 's'}`, 'a sessions']),
@@ -10041,8 +10049,6 @@ export default function OpenTuiApp() {
     ),
     [sidebarInnerWidth, coordinatorAgentEntries.length, coordinatorRuns.length],
   )
-  const sidebarHeaderText = sidebarView === 'coordinator' ? coordinatorSidebarHeader : sidebarSortHeader
-
   // Mounted-card window. Browsing (sidebar focused) caps to the most-recent
   // PREVIEW_CARD_CAP cards so scrubbing never pays for a giant session; the
   // focused reader mounts a READER_CARD_WINDOW slice that follows the tail
@@ -18477,26 +18483,59 @@ export default function OpenTuiApp() {
       <box flexGrow={1} padding={1} gap={1} height={mainContentHeight} flexDirection="row" backgroundColor={theme.bg}>
         {showRail ? (
           <box
-            ref={sidebarBoxRef}
             width={sidebarWidth}
-            border
+            border={sidebarView === 'sessions' ? ['left', 'right', 'bottom'] : true}
             borderStyle="single"
             borderColor={effectiveFocus === 'sessions' ? theme.cyan : theme.border}
             backgroundColor={theme.surface}
             flexDirection="column"
-            title={sidebarHeaderText}
+            title={sidebarView === 'coordinator' ? coordinatorSidebarHeader : undefined}
             titleColor={theme.cyan}
-            onMouseDown={(event) => {
-              if (event.button !== 0) return
-              const box = sidebarBoxRef.current
-              // Only the top border row (where the title is drawn) toggles sort —
-              // a click on this box itself (not a child row) means the border/title.
-              if (box && event.target === box && event.y === box.y && sidebarView === 'sessions') {
-                toggleSidebarSort()
-                showToggleOutcome('Sidebar sort:', sidebarSort === 'project' ? 'time' : 'project')
-              }
-            }}
           >
+            {sidebarView === 'sessions' ? (
+              <box
+                height={1}
+                paddingX={1}
+                flexDirection="row"
+                backgroundColor={theme.surface2}
+                overflow="hidden"
+                onMouseDown={(event) => {
+                  if (event.button !== 0) return
+                  event.stopPropagation()
+                  toggleSidebarSort()
+                  showToggleOutcome('Sidebar sort:', sidebarSort === 'project' ? 'time' : 'project')
+                }}
+              >
+                <text width={sidebarHeaderWidth} fg={theme.cyan} bg={theme.surface2} wrapMode="none">
+                  {sidebarHeaderBaseText}
+                </text>
+                <box
+                  id="sidebar-provider-badge"
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: sidebarHeaderPrefixWidth + 1,
+                    width: sidebarProviderBadgeText.length,
+                    minWidth: sidebarProviderBadgeText.length,
+                    maxWidth: sidebarProviderBadgeText.length,
+                    height: 1,
+                    overflow: 'hidden',
+                  }}
+                  backgroundColor={sidebarProviderAccent}
+                >
+                  <text
+                    width={sidebarProviderBadgeText.length}
+                    minWidth={sidebarProviderBadgeText.length}
+                    maxWidth={sidebarProviderBadgeText.length}
+                    fg={theme.bg}
+                    attributes={TextAttributes.BOLD}
+                    wrapMode="none"
+                  >
+                    {sidebarProviderBadgeText}
+                  </text>
+                </box>
+              </box>
+            ) : null}
             <box flexGrow={1} paddingX={1}>
               {sidebarView === 'coordinator' ? (
                 coordinatorEntries.length === 0 ? (
