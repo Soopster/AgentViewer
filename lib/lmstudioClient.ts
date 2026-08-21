@@ -128,7 +128,9 @@ export async function appendLmstudioTurn(
 export type LmstudioModel = { id: string }
 
 export async function listLmstudioModels(): Promise<LmstudioModel[]> {
-  const res = await fetch(`${lmstudioBaseUrl()}/models`)
+  // Bounded so a down/unreachable LM Studio server can't hang the composer's
+  // "models still loading" gate indefinitely (mirrors the Codex model/list timeout).
+  const res = await fetch(`${lmstudioBaseUrl()}/models`, { signal: AbortSignal.timeout(8000) })
   if (!res.ok) {
     throw new Error(`LM Studio server error (${res.status}). Is LM Studio running with the local server enabled?`)
   }

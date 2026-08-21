@@ -27,6 +27,7 @@ const RemoteAccessPopover = dynamic(() => import('@/components/RemoteAccessPopov
 const RunDashboard = dynamic(() => import('@/components/RunDashboard'), { ssr: false })
 const AgentTeamCoordinator = dynamic(() => import('@/components/AgentTeamCoordinator'), { ssr: false })
 const CrossSessionMessaging = dynamic(() => import('@/app/agents/page'), { ssr: false })
+const PiActivityPopover = dynamic(() => import('@/components/PiActivityPopover'), { ssr: false })
 
 type SessionScopeMode = 'all' | 'project'
 type ProjectSelection = {
@@ -1487,6 +1488,7 @@ export default function Home() {
             }}
           />
         ) : null}
+        <PiActivityPopover />
       </div>
     </SidebarProvider>
     </CodeThemeProvider>

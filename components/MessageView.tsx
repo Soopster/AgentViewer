@@ -78,6 +78,7 @@ import {
 } from '@/lib/colorTreatment'
 import TabBar from './TabBar'
 import { compactStableFingerprint } from '@/lib/compactFingerprint'
+import { isOpenCodeAssistantStreamEnvelope } from '@/lib/opencodeStreamEvents'
 import {
   appendTimelineRowLayout,
   buildTimelineRowLayout,
@@ -737,6 +738,7 @@ function extractStreamingAssistantText(payload: unknown): string | null {
   }
 
   if (record.type === 'opencode_event') {
+    if (!isOpenCodeAssistantStreamEnvelope(record)) return null
     const event = record.event
     if (!event || typeof event !== 'object') return null
     const eventRecord = event as Record<string, unknown>
@@ -874,6 +876,7 @@ function extractStreamingReasoningText(payload: unknown): string | null {
   }
 
   if (record.type === 'opencode_event') {
+    if (!isOpenCodeAssistantStreamEnvelope(record)) return null
     const event = record.event
     if (!event || typeof event !== 'object') return null
     const eventRecord = event as Record<string, unknown>
@@ -1037,6 +1040,7 @@ function extractLiveToolStart(payload: unknown): { index: number; key: string; l
   }
 
   if (record.type === 'opencode_event') {
+    if (!isOpenCodeAssistantStreamEnvelope(record)) return null
     const event = record.event
     if (!event || typeof event !== 'object') return null
     const eventRecord = event as Record<string, unknown>
@@ -1165,6 +1169,7 @@ function extractCompletedToolKey(payload: unknown): string | null {
   }
 
   if (record.type === 'opencode_event') {
+    if (!isOpenCodeAssistantStreamEnvelope(record)) return false
     const event = record.event
     if (!event || typeof event !== 'object') return null
     const eventRecord = event as Record<string, unknown>
@@ -2923,6 +2928,7 @@ function MessageViewInner({
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null)
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null)
   const [availableModels, setAvailableModels] = useState<SessionModelInfo[]>([])
+  const [modelsLoading, setModelsLoading] = useState(false)
   const [selectedModel, setSelectedModel] = useState('')
   const [selectedEffort, setSelectedEffort] = useState<'auto' | ReasoningEffortLevel>('auto')
   const [selectedCopilotContextTier, setSelectedCopilotContextTier] = useState<CopilotContextTier>('default')
@@ -3689,6 +3695,7 @@ function MessageViewInner({
   const modelSessionProvider = session?.provider
   const refreshSessionModels = useCallback(({ preserveSelection }: { preserveSelection: boolean }) => {
     if (!modelSessionId) return
+    setModelsLoading(true)
     fetch(withProviderQuery(`/api/sessions/${modelSessionId}/models`, modelSessionProvider))
       .then(readJsonResponse)
       .then(data => {
@@ -3708,11 +3715,13 @@ function MessageViewInner({
         })
       })
       .catch(() => {})
+      .finally(() => setModelsLoading(false))
   }, [modelSessionId, modelSessionProvider])
 
   useEffect(() => {
     if (!session) {
       setAvailableModels([])
+      setModelsLoading(false)
       setSelectedModel('')
       setSelectedEffort('auto')
       setSelectedCopilotContextTier('default')
@@ -4456,6 +4465,17 @@ function MessageViewInner({
     if (!session) return
     setSendError(null)
 
+    // Custom-model providers (LM Studio, opencode/copilot custom endpoints) can
+    // take a moment to enumerate their model list on a cold connection. Sending
+    // before that resolves means `selectedModel` is still '' and the request
+    // falls back to whatever the backend guesses as a default — which may not
+    // actually be available yet. Block until the fetch settles (success or
+    // failure) rather than gamble on an unresolved model.
+    if (!retryOverride && modelsLoading && !selectedModel) {
+      setSendError('Waiting for model list to load…')
+      return
+    }
+
     // Global Channel Bridge binding: when the user has toggled "route composer
     // through bridge", a normal composer send (never an auto-retry) is diverted
     // to the live `claude` CLI session instead of the active provider. The send
@@ -5185,7 +5205,7 @@ function MessageViewInner({
       activeTurnRequestIdRef.current = null
       sendInFlightRef.current = false
     }
-  }, [attachments, canUseChannelBridge, canUseIdeBridge, clearLiveAssistantText, clearLiveSubagentText, commitQueuedSends, composerQueueTargetKey, enableWorkflow, flushLiveAssistantTextNow, messages, onFork, queueLiveAssistantText, queueLiveReasoningText, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedAgent, selectedCopilotContextTier, selectedCopilotMode, selectedCodexApproval, selectedEffort, selectedModel, selectedPermissionMode, session, taskBudgetTokens])
+  }, [attachments, canUseChannelBridge, canUseIdeBridge, clearLiveAssistantText, clearLiveSubagentText, commitQueuedSends, composerQueueTargetKey, enableWorkflow, flushLiveAssistantTextNow, messages, modelsLoading, onFork, queueLiveAssistantText, queueLiveReasoningText, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedAgent, selectedCopilotContextTier, selectedCopilotMode, selectedCodexApproval, selectedEffort, selectedModel, selectedPermissionMode, session, taskBudgetTokens])
 
   // Flush queued sends once the active turn finishes. Restores the queued
   // text into the composer so sendMessage picks it up and fires naturally.
@@ -6445,7 +6465,8 @@ function MessageViewInner({
     })
   }, [isProject, session])
   const activeToolCount = liveToolActivities.filter((activity) => activity.status === 'running').length
-  const sendBusy = sendState === 'sending' || awaitingPersistedTurn
+  const modelsPending = modelsLoading && !selectedModel
+  const sendBusy = sendState === 'sending' || awaitingPersistedTurn || modelsPending
   // A turn is live (whether we own its stream or reattached to it) — drives the
   // stop button and the "busy" composer presentation.
   const turnRunning = sendBusy || reattachedRunning
@@ -8726,6 +8747,21 @@ function MessageViewInner({
         >
           ▼
         </button>
+        {modelsPending && !sendError && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 11,
+            color: 'var(--text-3)',
+            marginBottom: 8,
+            letterSpacing: '0.03em',
+          }}>
+            <span className="av-spin" style={{ display: 'inline-block' }}>⟳</span>
+            <span>Loading models…</span>
+          </div>
+        )}
         {sendError && (
           <div style={{
             display: 'flex',

@@ -207,7 +207,7 @@ function GitFileTreePane({
     gitStatus: statusByPath,
     initialExpandedPaths: [...expandedPaths],
     initialSelectedPaths: selectedFilePath ? [selectedFilePath] : undefined,
-    search: false,
+    search: true,
     stickyFolders: true,
     density: 'compact',
     overscan: 6,

@@ -2,10 +2,19 @@
 
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type { ReactNode } from 'react'
-import { EditProvider, FileDiff, MultiFileDiff } from '@pierre/diffs/react'
+import { EditProvider, FileDiff, MultiFileDiff, WorkerPoolContextProvider } from '@pierre/diffs/react'
 import { Editor } from '@pierre/diffs/edit'
 import { parsePatchFiles, type DiffLineAnnotation, type FileDiffContentsLoader, type FileDiffMetadata, type FileDiffOptions, type SelectedLineRange } from '@pierre/diffs'
 import { createFileTreeIconResolver, getBuiltInSpriteSheet, prepareFileTreeInput } from '@pierre/trees'
+
+export const DIFF_WORKER_POOL_OPTIONS = {
+  poolSize: 2,
+  workerFactory: () =>
+    new Worker(new URL('@pierre/diffs/worker/worker.js', import.meta.url), { type: 'module' }),
+}
+// Editable surfaces need token-level (not line-level) highlight patching so the
+// worker can re-highlight around the cursor without discarding editor state.
+const DIFF_WORKER_HIGHLIGHTER_OPTIONS = { useTokenTransformer: true }
 
 export type PierreDiffStyle = 'stacked' | 'split'
 export type PierreChangeStyle = 'classic' | 'bars' | 'none'
@@ -103,21 +112,27 @@ function getDiffOptions(presentation?: PierreDiffPresentation): FileDiffOptions<
 type PierreDiffFrameProps = {
   children: React.ReactNode
   maxHeight?: number | null
+  editable?: boolean
 }
 
-function PierreDiffFrame({ children, maxHeight }: PierreDiffFrameProps) {
+function PierreDiffFrame({ children, maxHeight, editable }: PierreDiffFrameProps) {
   return (
-    <div
-      style={{
-        maxHeight: maxHeight ?? undefined,
-        overflow: maxHeight != null ? 'auto' : undefined,
-        borderTop: '1px solid var(--border)',
-        background: 'var(--surface)',
-      }}
+    <WorkerPoolContextProvider
+      poolOptions={DIFF_WORKER_POOL_OPTIONS}
+      highlighterOptions={editable ? DIFF_WORKER_HIGHLIGHTER_OPTIONS : {}}
     >
-      <PierreBuiltInIconSprite />
-      {children}
-    </div>
+      <div
+        style={{
+          maxHeight: maxHeight ?? undefined,
+          overflow: maxHeight != null ? 'auto' : undefined,
+          borderTop: '1px solid var(--border)',
+          background: 'var(--surface)',
+        }}
+      >
+        <PierreBuiltInIconSprite />
+        {children}
+      </div>
+    </WorkerPoolContextProvider>
   )
 }
 
@@ -169,7 +184,6 @@ export function PierreFileDiffView({
         lineAnnotations={lineAnnotations}
         selectedLines={selectedLines}
         renderAnnotation={renderAnnotation}
-        disableWorkerPool
       />
     </PierreDiffFrame>
   )
@@ -223,13 +237,12 @@ export function PierreEditableFileDiffView({
   }), [presentation])
 
   return (
-    <PierreDiffFrame maxHeight={maxHeight}>
+    <PierreDiffFrame maxHeight={maxHeight} editable>
       <EditProvider createEditor={createEditor}>
         <MultiFileDiffEditable
           oldFile={oldFile}
           newFile={newFile}
           options={options}
-          disableWorkerPool
           edit
         />
       </EditProvider>
@@ -297,7 +310,6 @@ export function PierrePatchDiffView({
             }}
             selectedLines={selectedLines}
             renderAnnotation={renderAnnotation}
-            disableWorkerPool
           />
         ))}
       </div>

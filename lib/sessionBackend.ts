@@ -211,6 +211,7 @@ import {
   updateOpenCodeTurnOutputUsage,
 } from './opencodeMapper'
 import { getOpenCodeStoredTag, getOpenCodeStoredTagsForSessions, setOpenCodeStoredTag } from './opencodeTags'
+import { openCodeStreamEnvelope, type OpenCodeMessageRole } from './opencodeStreamEvents'
 import type {
   Agent as OpenCodeAgent,
   Command as OpenCodeCommand,
@@ -1313,8 +1314,8 @@ export function startTurnWatchdog(opts: {
   }
 }
 
-function formatOpenCodeEvent(event: OpenCodeEvent): string {
-  return JSON.stringify({ type: 'opencode_event', event })
+function formatOpenCodeEvent(event: OpenCodeEvent, messageRoles?: Map<string, OpenCodeMessageRole>): string {
+  return JSON.stringify(openCodeStreamEnvelope(event, messageRoles))
 }
 
 function parseOpenCodeSlashCommand(message: string): { command: string; arguments: string } | null {
@@ -5841,6 +5842,7 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
       let lastActivityAt = Date.now()
       let cancelWatchdog: (() => void) | null = null
       const outputTokensByMessageId = new Map<string, number>()
+      const messageRoles = new Map<string, OpenCodeMessageRole>()
       let turnOutputTokens = 0
       // Subscribe to the shared event harness — one upstream connection per
       // directory (opencode ≥1.17 only delivers session/message events on the
@@ -6023,7 +6025,7 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
               break
             }
 
-            safeEnqueue(`data: ${formatOpenCodeEvent(event)}\n\n`)
+            safeEnqueue(`data: ${formatOpenCodeEvent(event, messageRoles)}\n\n`)
 
             if (event.type === 'session.idle' && event.properties.sessionID === targetSessionId) {
               break

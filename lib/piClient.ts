@@ -7,6 +7,7 @@ import type {
 } from '@earendil-works/pi-coding-agent'
 import type { AgentMessage } from '@earendil-works/pi-agent-core'
 import { getCoordinatorPiTools } from './agentCoordinationSdkTools'
+import { beginPiActivity, completePiActivity, failPiActivity, updatePiActivity } from './piActivity'
 
 // The Pi SDK is ~86MB resident once loaded (measured) — by far the heaviest
 // provider SDK. Import it lazily and cache the module so a Claude/Codex/etc.
@@ -397,6 +398,7 @@ export async function createPiAgentSession(cwd: string, options: { id?: string }
     if (inflight) return inflight
   }
   const build = (async () => {
+    const activityToken = beginPiActivity(options.id, 'Loading Pi provider')
     try {
       const { SessionManager, SettingsManager, createAgentSession } = await loadPiSdk()
       const sessionManager = options.id
@@ -404,6 +406,7 @@ export async function createPiAgentSession(cwd: string, options: { id?: string }
         : undefined
       const settingsManager = piSessionScopedSettings(SettingsManager.create(cwd))
       const customTools = options.id ? getCoordinatorPiTools(options.id) : undefined
+      updatePiActivity(activityToken, 'resolving-packages', 'Checking Pi extensions and packages')
       const result = await createAgentSession(
         sessionManager
           ? { sessionManager, settingsManager, ...(customTools ? { customTools } : {}) }
@@ -427,8 +430,10 @@ export async function createPiAgentSession(cwd: string, options: { id?: string }
       clearPiSessionListCache()
       schedulePiEviction(id)
       enforcePiPoolLimit(id)
+      completePiActivity(activityToken)
       return result.session
     } catch (error) {
+      failPiActivity(activityToken, error)
       throw wrapPiError(error)
     }
   })()
@@ -545,10 +550,12 @@ export async function openPiAgentSession(sessionId: string): Promise<AgentSessio
   if (inflight) return inflight
   const build = (async () => {
     const sm = await openPiSessionManager(sessionId)
+    const activityToken = beginPiActivity(sessionId, 'Loading Pi provider')
     try {
       const { SettingsManager, createAgentSession } = await loadPiSdk()
       const customTools = getCoordinatorPiTools(sessionId)
       const settingsManager = piSessionScopedSettings(SettingsManager.create(sm.getCwd()))
+      updatePiActivity(activityToken, 'resolving-packages', 'Checking Pi extensions and packages')
       const result = await createAgentSession({
         sessionManager: sm,
         settingsManager,
@@ -563,8 +570,10 @@ export async function openPiAgentSession(sessionId: string): Promise<AgentSessio
       piSessionEntryCache.delete(sessionId)
       schedulePiEviction(sessionId)
       enforcePiPoolLimit(sessionId)
+      completePiActivity(activityToken)
       return result.session
     } catch (error) {
+      failPiActivity(activityToken, error)
       throw wrapPiError(error)
     }
   })()

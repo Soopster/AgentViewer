@@ -23,7 +23,7 @@ const GENERIC_REFETCH_DEBOUNCE_MS = 80
 // OpenCode opens a persistent event subscription via the harness, so we
 // drive message refreshes off the live event stream instead of timed
 // polling. The fallback ms backstop catches anything the SDK might miss.
-const OPENCODE_FALLBACK_POLL_MS = 30_000
+const OPENCODE_FALLBACK_POLL_MS = 2_000
 // Coalesce bursts of message.part.updated into one refetch per ~80ms so a
 // fast-streaming reply doesn't trigger one DB read per token. This matches
 // the cadence at which opencode-web batches its store updates.

@@ -13,6 +13,7 @@ import { readBridgeConfigFromEnv, sendChannelMessage, subscribeToChannelEvents, 
 import { IdeBridgePopover } from './IdeBridgePopover'
 import { readIdeBridgeConfigFromEnv, sendIdeAtMention } from '../../lib/ideBridge'
 import { ToastOverlay, useToasts } from './ToastOverlay'
+import { PiActivityPopover } from './PiActivityPopover'
 import { toast } from './toastStore'
 import { toBmpSafe } from './bmp'
 import { loadBridgeMessagesForSession, addBridgeMessage } from '../../lib/bridgeMessages'
@@ -9001,7 +9002,16 @@ export default function OpenTuiApp() {
   // provider-specific send knobs.
   const composerKnobSegments = useMemo<InlineTextSegment[]>(() => {
     const parts: InlineTextSegment[] = []
-    if (composerCurrentModel) parts.push({ text: `model:${composerCurrentModel}`, fg: composerAccentColor })
+    if (composerCurrentModel) {
+      parts.push({ text: `model:${composerCurrentModel}`, fg: composerAccentColor })
+    } else if (composerTargetSession?.provider && composerTargetSession.provider !== 'claude-acp' && composerTargetSession.provider !== 'codex-acp') {
+      // Custom-model providers (LM Studio, opencode/copilot custom endpoints,
+      // Claude on a non-default deployment) can take a moment to report their
+      // current model on a cold session — surface that instead of silently
+      // omitting the chip, so it's clear a send won't yet know which model
+      // it's hitting.
+      parts.push({ text: 'model:loading…', fg: theme.dim })
+    }
     if (composerContextUsage) parts.push({ text: `ctx:${composerContextUsage}`, fg: theme.green })
     parts.push({ text: `effort:${tuiEffort}`, fg: theme.amber })
     if (composerTargetSession?.provider === 'opencode' && tuiOpenCodeAgent) {
@@ -9023,7 +9033,7 @@ export default function OpenTuiApp() {
       parts.push({ text: 'workflow:on', fg: theme.cyan })
     }
     return parts
-  }, [composerAccentColor, composerCodexApproval, composerContextUsage, composerCopilotPermissionMode, composerCurrentModel, composerEnableWorkflow, composerPermissionMode, composerTargetSession?.provider, theme.amber, theme.cyan, theme.green, theme.red, theme.violet, tuiCopilotMode, tuiEffort, tuiOpenCodeAgent])
+  }, [composerAccentColor, composerCodexApproval, composerContextUsage, composerCopilotPermissionMode, composerCurrentModel, composerEnableWorkflow, composerPermissionMode, composerTargetSession?.provider, theme.amber, theme.cyan, theme.dim, theme.green, theme.red, theme.violet, tuiCopilotMode, tuiEffort, tuiOpenCodeAgent])
   const composerKnobsChip = useMemo(
     () => composerKnobSegments.length > 0
       ? `· ${composerKnobSegments.map((part) => part.text).join(' · ')}`
@@ -20724,6 +20734,8 @@ export default function OpenTuiApp() {
           onKeyHandlerReady={(handler) => { coordBoardKeyHandlerRef.current = handler }}
         />
       ) : null}
+
+      <PiActivityPopover theme={theme} width={width} height={height} />
 
       {exitConfirmOpen ? (
         <box

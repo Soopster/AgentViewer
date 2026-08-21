@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react'
-import { CodeView, type CodeViewHandle } from '@pierre/diffs/react'
+import { CodeView, type CodeViewHandle, WorkerPoolContextProvider } from '@pierre/diffs/react'
 import {
   parsePatchFiles,
   type CodeViewDiffItem,
@@ -22,7 +22,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
-import { PierreBuiltInIconSprite, PierreFileTypeIcon } from '@/components/PierreDiffView'
+import { DIFF_WORKER_POOL_OPTIONS, PierreBuiltInIconSprite, PierreFileTypeIcon } from '@/components/PierreDiffView'
 import type {
   PullRequestComment, PullRequestDetail, PullRequestFile, PullRequestMutation,
   PullRequestReviewComment, PullRequestWorkspace,
@@ -1186,20 +1186,21 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent }: Prop
               )}
               <main style={{ display: 'flex', minWidth: 0, minHeight: 0, flex: 1, flexDirection: 'column', background: 'var(--surface)' }}>
                 {pr && items.length > 0 ? (
-                  <CodeView<ReviewMeta>
-                    key={mountKey}
-                    ref={viewerRef}
-                    initialItems={items}
-                    options={codeViewOptions}
-                    selectedLines={selectedLines}
-                    onSelectedLinesChange={setSelectedLines}
-                    onScroll={handleViewerScroll}
-                    renderAnnotation={renderAnnotation}
-                    renderHeaderPrefix={renderHeaderPrefix}
-                    renderHeaderMetadata={renderHeaderMetadata}
-                    disableWorkerPool
-                    style={{ position: 'relative', height: '100%', minHeight: 0, flex: 1, overflowY: 'auto', overflowX: 'clip', overscrollBehavior: 'contain' }}
-                  />
+                  <WorkerPoolContextProvider poolOptions={DIFF_WORKER_POOL_OPTIONS} highlighterOptions={{}}>
+                    <CodeView<ReviewMeta>
+                      key={mountKey}
+                      ref={viewerRef}
+                      initialItems={items}
+                      options={codeViewOptions}
+                      selectedLines={selectedLines}
+                      onSelectedLinesChange={setSelectedLines}
+                      onScroll={handleViewerScroll}
+                      renderAnnotation={renderAnnotation}
+                      renderHeaderPrefix={renderHeaderPrefix}
+                      renderHeaderMetadata={renderHeaderMetadata}
+                      style={{ position: 'relative', height: '100%', minHeight: 0, flex: 1, overflowY: 'auto', overflowX: 'clip', overscrollBehavior: 'contain' }}
+                    />
+                  </WorkerPoolContextProvider>
                 ) : (
                   <div style={{ margin: 'auto', color: 'var(--text-3)' }}>{loading ? 'Loading pull requests…' : pr ? 'No textual diff available.' : 'Select an open pull request.'}</div>
                 )}
