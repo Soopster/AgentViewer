@@ -10548,6 +10548,7 @@ export default function OpenTuiApp() {
     foreground = false,
     detailSnapshot?: TuiSessionDetail,
     cachedDetailSnapshot?: TuiSessionDetail | null,
+    includeContextUsage = true,
   ) => {
     const cacheKey = sessionKey(session)
     const isSelectedTab = cacheKey === selectedSessionKeyRef.current
@@ -10560,27 +10561,35 @@ export default function OpenTuiApp() {
         && !openTabSessionsRef.current.some((openSession) => sessionKey(openSession) === cacheKey)
       if (isPreviewingSession) return
 
-      if (!isRunningSession && sessionContextUsageCacheRef.current.get(cacheKey)) return
+      if (
+        includeContextUsage
+        && !isRunningSession
+        && sessionContextUsageCacheRef.current.get(cacheKey)
+      ) return
     }
 
     const metadataTtl = isSelectedTab
       ? (session.provider === 'claude' ? CLAUDE_METADATA_REFRESH_MS : DEFAULT_METADATA_REFRESH_MS)
       : (session.provider === 'claude' ? CLAUDE_BACKGROUND_METADATA_REFRESH_MS : DEFAULT_BACKGROUND_METADATA_REFRESH_MS)
     const lastMetadataFetch = sessionMetadataFetchedAtRef.current.get(cacheKey) ?? 0
-    const hasCachedMetadata = Boolean(
-      sessionContextUsageCacheRef.current.get(cacheKey)
-      || cachedDetailSnapshot?.info?.currentModel
+    const hasCachedModel = Boolean(
+      cachedDetailSnapshot?.info?.currentModel
       || detailSnapshot?.info?.currentModel
-      || sessionDetailCacheRef.current.get(cacheKey)?.info?.currentModel,
+      || sessionDetailCacheRef.current.get(cacheKey)?.info?.currentModel
     )
+    const hasCachedMetadata = hasCachedModel || (
+      includeContextUsage && Boolean(sessionContextUsageCacheRef.current.get(cacheKey))
+    )
+    const metadataIsFresh = lastMetadataFetch > 0 && Date.now() - lastMetadataFetch < metadataTtl
     const shouldFetchMetadata = !sessionMetadataInFlightRef.current.has(cacheKey) && (
-      !hasCachedMetadata || Date.now() - lastMetadataFetch >= metadataTtl
+      !hasCachedMetadata && !metadataIsFresh
+      || hasCachedMetadata && Date.now() - lastMetadataFetch >= metadataTtl
     )
     if (!shouldFetchMetadata) return
 
     const metadataRequestId = ++metadataRequestRef.current
     sessionMetadataInFlightRef.current.add(cacheKey)
-    if (foreground && isSelectedTab) {
+    if (includeContextUsage && foreground && isSelectedTab) {
       setContextUsageStatus('loading')
     }
     void Promise.race([
@@ -10603,13 +10612,13 @@ export default function OpenTuiApp() {
             sessionMetadataFetchedAtRef.current,
             pinnedKeys,
           )
-          if (foreground && isSelectedTab) {
+          if (includeContextUsage && foreground && isSelectedTab) {
             startTransition(() => setContextUsageStatus('unavailable'))
           }
           return
         }
         startTransition(() => {
-          if (metadata.contextUsage) {
+          if (includeContextUsage && metadata.contextUsage) {
             touchMapEntry(sessionContextUsageCacheRef.current, cacheKey, metadata.contextUsage)
             if (isSelectedTab) {
               setContextUsage(metadata.contextUsage)
@@ -10653,13 +10662,13 @@ export default function OpenTuiApp() {
             sessionMetadataFetchedAtRef.current,
             pinnedKeys,
           )
-          if (!metadata.contextUsage && isSelectedTab) {
+          if (includeContextUsage && !metadata.contextUsage && isSelectedTab) {
             setContextUsageStatus('unavailable')
           }
         })
       })
       .catch(() => {
-        if (foreground && isSelectedTab) {
+        if (includeContextUsage && foreground && isSelectedTab) {
           startTransition(() => setContextUsageStatus('unavailable'))
         }
       })
@@ -10718,6 +10727,11 @@ export default function OpenTuiApp() {
       if (cached) {
         setSessionDetail(cached)
         setLoadingDetail(false)
+        if (!cached.info?.currentModel) {
+          setTimeout(() => {
+            refreshSessionMetadata(session, false, cached, cached, false)
+          }, 0)
+        }
         // Session file unchanged since the cached detail was read → the worker
         // re-read would return identical content. Skip it entirely so settling
         // on a recently-visited session costs nothing (the same guard the
@@ -10830,10 +10844,14 @@ export default function OpenTuiApp() {
         }
       })
 
-      // Context usage metadata is disabled for open tabs.
-      // setTimeout(() => {
-      //   refreshSessionMetadata(session, foreground, detail, cachedDetail)
-      // }, 0)
+      // Session detail is the transcript-critical path. If it could not report
+      // a model, fill only that composer metadata in the background; context
+      // usage remains disabled for open tabs.
+      if (!detail.info?.currentModel) {
+        setTimeout(() => {
+          refreshSessionMetadata(session, false, detail, null, false)
+        }, 0)
+      }
     } catch (err) {
       if (requestId !== detailRequestRef.current) return
       // Only clear the view if we have nothing cached to fall back on — keeps
@@ -10855,7 +10873,7 @@ export default function OpenTuiApp() {
         }
       }
     }
-  }, [])
+  }, [refreshSessionMetadata])
 
   // Cache-only warm read for a sidebar neighbour. Never touches display state,
   // detailRequestRef, or loading/error flags — its only output is a filled
@@ -12793,6 +12811,7 @@ export default function OpenTuiApp() {
     attachmentsOverride?: SendAttachment[],
     isRetry?: boolean,
     promptPartsOverride?: ComposerPromptPart[],
+    retryTurnRequestId?: string,
   ) => {
     const visibleText = draftOverride ?? composerDraft
     const submission = attachmentsOverride
@@ -13015,7 +13034,10 @@ export default function OpenTuiApp() {
     const controller = new AbortController()
     const sendStartedAt = Date.now()
     const sendPerfStartedAt = performance.now()
-    const turnRequestId = globalThis.crypto?.randomUUID?.()
+    // Stable across automatic transport retries so Codex queue/add can
+    // de-duplicate a prompt whose acknowledgement was lost in transit.
+    const turnRequestId = retryTurnRequestId
+      ?? globalThis.crypto?.randomUUID?.()
       ?? `${sendStartedAt}-${Math.random().toString(36).slice(2)}`
     let resolveTurnCleanup: () => void = () => {}
     const turnCleanupPromise = new Promise<void>((resolve) => {
@@ -13767,7 +13789,7 @@ export default function OpenTuiApp() {
         if (composerRetryTimerRef.current) clearTimeout(composerRetryTimerRef.current)
         composerRetryTimerRef.current = setTimeout(() => {
           composerRetryTimerRef.current = null
-          void sendComposerMessage(retryDraft, retryAttachments, true, submission.promptParts)
+          void sendComposerMessage(retryDraft, retryAttachments, true, submission.promptParts, turnRequestId)
         }, transientRetryBackoffMs(attempt))
         return
       }

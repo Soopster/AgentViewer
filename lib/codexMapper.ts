@@ -24,6 +24,13 @@ function isPendingCodexThread(thread: CodexThread): boolean {
   return !thread.path && !thread.preview && (thread.turns?.length ?? 0) === 0
 }
 
+function getCodexSpawnParentThreadId(thread: CodexThread): string | undefined {
+  if (typeof thread.source !== 'object' || !('subAgent' in thread.source)) return undefined
+  const source = thread.source.subAgent
+  if (typeof source !== 'object' || !('thread_spawn' in source)) return undefined
+  return source.thread_spawn.parent_thread_id
+}
+
 function asObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -341,7 +348,7 @@ export function mapCodexThreadToSession(thread: CodexThread, tag: string | null)
     provider: 'codex',
     capabilities: CODEX_CAPABILITIES,
     isPinned: false,
-    parentSessionId: thread.parentThreadId ?? undefined,
+    parentSessionId: getCodexSpawnParentThreadId(thread),
     isPending: isPendingCodexThread(thread) ? true : undefined,
   }
 }
@@ -361,7 +368,7 @@ export function mapCodexThreadToSessionInfo(thread: CodexThread, tag: string | n
     capabilities: CODEX_CAPABILITIES,
     isPinned: false,
     currentModel: currentModel ?? undefined,
-    parentSessionId: thread.parentThreadId ?? undefined,
+    parentSessionId: getCodexSpawnParentThreadId(thread),
   }
 }
 
@@ -475,6 +482,13 @@ export function mapCodexModelsToSessionModels(models: Array<{
     supportsEffort: reasoningEfforts(model.supportedReasoningEfforts).length > 0,
     supportedEffortLevels: reasoningEfforts(model.supportedReasoningEfforts),
   }))
+}
+
+export function currentCodexModelValue(
+  models: Array<{ model: string; isDefault?: boolean }>,
+  resumedModel: string | null | undefined,
+): string | null {
+  return resumedModel ?? models.find((model) => model.isDefault)?.model ?? null
 }
 
 export function mapCodexDiagnosticsToSections(params: {

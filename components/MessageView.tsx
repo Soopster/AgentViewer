@@ -4466,7 +4466,11 @@ function MessageViewInner({
     }
   }, [session])
 
-  const sendMessage = useCallback(async (retryOverride?: { text: string; attachments: SendAttachment[] }) => {
+  const sendMessage = useCallback(async (retryOverride?: {
+    text: string
+    attachments: SendAttachment[]
+    turnRequestId?: string
+  }) => {
     if (!session) return
     setSendError(null)
 
@@ -4643,7 +4647,11 @@ function MessageViewInner({
 
     const controller = new AbortController()
     const sendPerfStartedAt = performance.now()
-    const turnRequestId = globalThis.crypto?.randomUUID?.()
+    // Keep the request id stable across an automatic transport retry. Codex's
+    // persistent queue uses it as clientUserMessageId, so a response lost after
+    // queue/add cannot manufacture a duplicate queued prompt on retry.
+    const turnRequestId = retryOverride?.turnRequestId
+      ?? globalThis.crypto?.randomUUID?.()
       ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
     abortControllerRef.current = controller
     activeTurnRequestIdRef.current = turnRequestId
@@ -5167,7 +5175,7 @@ function MessageViewInner({
         if (transientRetryTimerRef.current) clearTimeout(transientRetryTimerRef.current)
         transientRetryTimerRef.current = setTimeout(() => {
           transientRetryTimerRef.current = null
-          void sendMessage({ text, attachments: sendAttachments })
+          void sendMessage({ text, attachments: sendAttachments, turnRequestId })
         }, transientRetryBackoffMs(attempt))
         return
       }

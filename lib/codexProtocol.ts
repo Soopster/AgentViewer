@@ -24,6 +24,7 @@ import type {
   ThreadGoalClearResponse,
   ThreadGoalSetResponse,
   ThreadListResponse,
+  ThreadQueueAddResponse,
   ThreadReadResponse,
   ThreadResumeResponse,
   ThreadRollbackResponse,
@@ -67,6 +68,7 @@ export type CodexResponseFor<M extends CodexClientMethod> =
   : M extends 'skills/list' ? SkillsListResponse
   : M extends 'app/list' ? AppsListResponse
   : M extends 'thread/list' ? ThreadListResponse
+  : M extends 'thread/queue/add' ? ThreadQueueAddResponse
   : M extends 'thread/read' ? ThreadReadResponse
   : M extends 'thread/turns/list' ? ThreadTurnsListResponse
   : M extends 'thread/resume' ? ThreadResumeResponse

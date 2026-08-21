@@ -13,6 +13,7 @@ import { pathBasename, sameProjectPath } from '@/lib/projectPaths'
 import { compactStableFingerprint } from '@/lib/compactFingerprint'
 import { startClientPerf, measureAsync } from '@/lib/clientPerf'
 import { readJsonResponse } from '@/lib/httpResponse'
+import { mergeOrderedSessionMessageWindow } from '@/lib/sessionMessageWindow'
 import type { AgentProvider, ProviderSelection, Session, SessionMessage } from '@/lib/types'
 import type { Todo as OpenCodeTodo } from '@opencode-ai/sdk'
 import type { CodexPlanStep } from '@/lib/taskRegistry'
@@ -595,6 +596,7 @@ export default function Home() {
     if (payload.provider && payload.provider !== (expectedSession.provider ?? 'claude')) return
 
     const incoming = Array.isArray(payload.messages) ? payload.messages : []
+    const previousTotal = msgCountRef.current
     const offset = numericOffset(payload.offset, Math.max(0, msgCountRef.current - incoming.length))
     const nextOffset = offset + incoming.length
     const total = numericOffset(payload.total, nextOffset)
@@ -613,8 +615,9 @@ export default function Home() {
     msgCountRef.current = replaceWindow ? nextOffset : Math.max(msgCountRef.current, nextOffset)
     setMessages((prev) => {
       if (replaceWindow) return incoming
-      const merged = mergeMessages(prev, incoming)
-      // Preserve mergeMessages' identity bail-out (unchanged → same array) so
+      const merged = mergeOrderedSessionMessageWindow(prev, incoming, { offset, previousTotal })
+        ?? mergeMessages(prev, incoming)
+      // Preserve the merge helpers' identity bail-out (unchanged → same array) so
       // React skips the re-render; only allocate a slice when we actually trim.
       if (merged === prev) return prev
       if (fullTranscriptLoadedRef.current || merged.length <= SINGLE_SESSION_MESSAGE_MEMORY_LIMIT) return merged

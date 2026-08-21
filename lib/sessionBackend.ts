@@ -180,6 +180,7 @@ import type {
 } from './codex-schema/v2'
 import {
   advanceCodexTurnOutputUsage,
+  currentCodexModelValue,
   mapCodexDiagnosticsToSections,
   mapCodexModelsToSessionModels,
   mapCodexThreadToMessages,
@@ -461,11 +462,7 @@ const CODEX_SESSION_LIST_SOURCE_KINDS: ThreadSourceKind[] = [
   'vscode',
   'exec',
   'appServer',
-  'subAgent',
-  'subAgentReview',
-  'subAgentCompact',
   'subAgentThreadSpawn',
-  'subAgentOther',
   'unknown',
 ]
 const COPILOT_TURN_INACTIVITY_MS = 300_000
@@ -2595,10 +2592,11 @@ async function readCodexThreadWithFullTurns(sessionId: string): Promise<CodexThr
   }
 }
 
-function isCodexMissingRolloutError(err: unknown): boolean {
+export function isCodexMissingRolloutError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err)
   return (
     /no rollout found for thread id/i.test(message) ||
+    /thread not found:/i.test(message) ||
     /thread .+ is not materialized yet/i.test(message) ||
     /includeTurns is unavailable before first user message/i.test(message)
   )
@@ -3652,7 +3650,11 @@ async function readCodexMessagesAll(sessionId: string): Promise<SessionMessage[]
   ].join(':')
   const cached = readMappedMessagesCache(`codex:${sessionId}`, signature)
   if (cached) return cached
-  const messages = sortMessagesChronologically(mapCodexThreadToMessages(thread))
+  // thread/turns/list(sortDirection: 'asc') plus each Turn.items array is the
+  // Codex archive's authoritative order. Do not timestamp-sort it: many items
+  // only have the turn-level fallback timestamp while user items can have a
+  // later UUID-derived timestamp, which moved the prompt behind its reply.
+  const messages = mapCodexThreadToMessages(thread)
   return writeMappedMessagesCache(`codex:${sessionId}`, signature, messages)
 }
 
@@ -5764,7 +5766,43 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
         // Resume is cached per app-server process — consecutive turns in the
         // same thread skip the round-trip entirely (it sat serially ahead of
         // turn/start, adding to first-token latency on every send).
-        const resume = await ensureCodexThreadResumed(sessionId).catch(() => null)
+        let resume: { model: string | null }
+        try {
+          resume = await ensureCodexThreadResumed(sessionId)
+        } catch (err) {
+          if (!isCodexActiveWriterError(err)) throw err
+          if (bangShell !== null || codexSlash) {
+            throw new Error(
+              'This Codex session is open in another Codex client. Send a normal prompt to queue it, or run this command in the client that owns the session.',
+            )
+          }
+
+          // A different Codex process owns the rollout writer, so this
+          // app-server cannot resume the thread or call turn/start. The
+          // persistent thread queue is specifically addressable while the
+          // thread is not loaded here; the owning client can consume the
+          // submission without Agent Viewer manufacturing a duplicate turn.
+          const queued = await client.request('thread/queue/add', {
+            threadId: sessionId,
+            input: buildCodexComposerInput(userMessage, attachments, cwdOverride),
+            clientUserMessageId: turnRequestId,
+          })
+          safeEnqueue(`event: session\ndata: ${JSON.stringify({ sessionId })}\n\n`)
+          safeEnqueue(`event: turn-accepted\ndata: ${JSON.stringify({
+            sessionId,
+            provider: 'codex',
+            queuedSubmissionId: queued.queuedSubmission.id,
+            queued: true,
+          })}\n\n`)
+          safeEnqueue(commandResultEvent('codex', {
+            message: 'Queued for the Codex client that currently owns this session.',
+            // The owning CLI persists this queued prompt. Keep the clients'
+            // optimistic user row mounted until that durable row reconciles.
+            transcriptExpected: true,
+          }))
+          scheduleCompletionClose(unsubscribe)
+          return
+        }
         currentModel = model ?? resume?.model ?? currentModel
         safeEnqueue(`event: session\ndata: ${JSON.stringify({ sessionId })}\n\n`)
 
@@ -7771,7 +7809,7 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
     ])
     return {
       models: mapCodexModelsToSessionModels(modelsResponse.data),
-      currentModel: resume?.model ?? null,
+      currentModel: currentCodexModelValue(modelsResponse.data, resume?.model),
       contextUsage: null,
     }
   }
