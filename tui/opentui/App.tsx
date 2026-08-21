@@ -54,6 +54,7 @@ import {
 import { detectTuiCodeFiletypeFromPath } from '../codeFiletypes'
 import { computeTurnDurationsMs, stripToolCallBlocks, type ThreadedMessage } from '../../lib/threading'
 import { buildTaskRegistry } from '../../lib/taskRegistry'
+import { isOpenCodeAssistantStreamEnvelope } from '../../lib/opencodeStreamEvents'
 import { buildDiffCommentComposerPrompt } from '../../lib/diffCommentComposer'
 import {
   clearComposerQueueTarget,
@@ -1852,6 +1853,7 @@ function extractStreamingReasoningText(payload: unknown): string | null {
   }
 
   if (record.type === 'opencode_event') {
+    if (!isOpenCodeAssistantStreamEnvelope(record)) return null
     const event = record.event
     if (!event || typeof event !== 'object') return null
     const eventRecord = event as Record<string, unknown>
@@ -1969,6 +1971,7 @@ function extractStreamingAssistantText(payload: unknown): string | null {
   }
 
   if (record.type === 'opencode_event') {
+    if (!isOpenCodeAssistantStreamEnvelope(record)) return null
     const event = record.event
     if (!event || typeof event !== 'object') return null
     const eventRecord = event as Record<string, unknown>
@@ -2081,6 +2084,7 @@ function shouldReplaceLiveAssistantText(payload: unknown): boolean {
     return !!((item as Record<string, unknown>).type === 'agentMessage' || (item as Record<string, unknown>).type === 'plan')
   }
   if (record.type === 'opencode_event') {
+    if (!isOpenCodeAssistantStreamEnvelope(record)) return false
     const event = record.event
     if (!event || typeof event !== 'object') return false
     const eventRecord = event as Record<string, unknown>

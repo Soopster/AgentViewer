@@ -7,7 +7,7 @@ import type {
 } from '@earendil-works/pi-coding-agent'
 import type { AgentMessage } from '@earendil-works/pi-agent-core'
 import { getCoordinatorPiTools } from './agentCoordinationSdkTools'
-import { beginPiActivity, completePiActivity, failPiActivity, updatePiActivity } from './piActivity'
+import { appendPiActivity, beginPiActivity, completePiActivity, failPiActivity, updatePiActivity } from './piActivity'
 
 // The Pi SDK is ~86MB resident once loaded (measured) — by far the heaviest
 // provider SDK. Import it lazily and cache the module so a Claude/Codex/etc.
@@ -400,13 +400,19 @@ export async function createPiAgentSession(cwd: string, options: { id?: string }
   const build = (async () => {
     const activityToken = beginPiActivity(options.id, 'Loading Pi provider')
     try {
-      const { SessionManager, SettingsManager, createAgentSession } = await loadPiSdk()
+      const { DefaultPackageManager, SessionManager, SettingsManager, createAgentSession, getAgentDir } = await loadPiSdk()
       const sessionManager = options.id
         ? SessionManager.create(cwd, process.env.PI_SESSION_DIR, { id: options.id })
         : undefined
       const settingsManager = piSessionScopedSettings(SettingsManager.create(cwd))
       const customTools = options.id ? getCoordinatorPiTools(options.id) : undefined
       updatePiActivity(activityToken, 'resolving-packages', 'Checking Pi extensions and packages')
+      const missingPackages = new DefaultPackageManager({ cwd, agentDir: getAgentDir(), settingsManager })
+        .listConfiguredPackages()
+        .filter((entry) => !entry.installedPath)
+      for (const entry of missingPackages) {
+        appendPiActivity(activityToken, `Missing ${entry.source}; Pi will install it`)
+      }
       const result = await createAgentSession(
         sessionManager
           ? { sessionManager, settingsManager, ...(customTools ? { customTools } : {}) }
@@ -549,13 +555,19 @@ export async function openPiAgentSession(sessionId: string): Promise<AgentSessio
   const inflight = piSessionInflight.get(sessionId)
   if (inflight) return inflight
   const build = (async () => {
-    const sm = await openPiSessionManager(sessionId)
     const activityToken = beginPiActivity(sessionId, 'Loading Pi provider')
     try {
-      const { SettingsManager, createAgentSession } = await loadPiSdk()
+      const sm = await openPiSessionManager(sessionId)
+      const { DefaultPackageManager, SettingsManager, createAgentSession, getAgentDir } = await loadPiSdk()
       const customTools = getCoordinatorPiTools(sessionId)
       const settingsManager = piSessionScopedSettings(SettingsManager.create(sm.getCwd()))
       updatePiActivity(activityToken, 'resolving-packages', 'Checking Pi extensions and packages')
+      const missingPackages = new DefaultPackageManager({ cwd: sm.getCwd(), agentDir: getAgentDir(), settingsManager })
+        .listConfiguredPackages()
+        .filter((entry) => !entry.installedPath)
+      for (const entry of missingPackages) {
+        appendPiActivity(activityToken, `Missing ${entry.source}; Pi will install it`)
+      }
       const result = await createAgentSession({
         sessionManager: sm,
         settingsManager,

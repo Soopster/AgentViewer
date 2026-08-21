@@ -6,6 +6,11 @@ import {
   type OpenCodeHarnessQueuedEvent,
 } from '../lib/opencodeHarness'
 import { openCodeMessagesSignature } from '../lib/opencodeMapper'
+import {
+  isOpenCodeAssistantStreamEnvelope,
+  openCodeStreamEnvelope,
+  type OpenCodeMessageRole,
+} from '../lib/opencodeStreamEvents'
 
 function partUpdated(text: string, partID = 'part'): OpenCodeEvent {
   return {
@@ -41,6 +46,49 @@ function partDelta(delta: string, field = 'text'): OpenCodeEvent {
       delta,
     },
   } as unknown as OpenCodeEvent
+}
+
+{
+  const roles = new Map<string, OpenCodeMessageRole>()
+  openCodeStreamEnvelope({
+    type: 'message.updated',
+    properties: {
+      info: { id: 'user-message', sessionID: 'session', role: 'user' },
+    },
+  } as OpenCodeEvent, roles)
+  const userPart = openCodeStreamEnvelope({
+    type: 'message.part.updated',
+    properties: {
+      part: {
+        id: 'user-part',
+        sessionID: 'session',
+        messageID: 'user-message',
+        type: 'text',
+        text: 'Any commits outstanding?',
+      },
+    },
+  } as OpenCodeEvent, roles)
+  assert.equal(userPart.messageRole, 'user')
+  assert.equal(isOpenCodeAssistantStreamEnvelope(userPart), false, 'submitted user text must not become live assistant output')
+
+  openCodeStreamEnvelope({
+    type: 'message.updated',
+    properties: {
+      info: { id: 'assistant-message', sessionID: 'session', role: 'assistant' },
+    },
+  } as OpenCodeEvent, roles)
+  const assistantDelta = openCodeStreamEnvelope({
+    type: 'message.part.delta',
+    properties: {
+      sessionID: 'session',
+      messageID: 'assistant-message',
+      partID: 'assistant-part',
+      field: 'text',
+      delta: 'No outstanding commits.',
+    },
+  } as unknown as OpenCodeEvent, roles)
+  assert.equal(assistantDelta.messageRole, 'assistant')
+  assert.equal(isOpenCodeAssistantStreamEnvelope(assistantDelta), true)
 }
 
 {

@@ -100,6 +100,17 @@ export function updatePiActivity(token: string, stage: PiActivityStage, headline
   )
 }
 
+export function appendPiActivity(token: string, message: string, tone: PiActivityTone = 'info'): void {
+  const operation = state.operations.get(token)
+  if (!operation) return
+  publish({
+    active: true,
+    stage: operation.stage,
+    headline: operation.headline,
+    sessionId: operation.sessionId,
+  }, { tone, message })
+}
+
 export function completePiActivity(token: string): void {
   const operation = state.operations.get(token)
   if (!operation) return

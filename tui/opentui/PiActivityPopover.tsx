@@ -7,7 +7,7 @@ export function PiActivityPopover({ theme, width, height }: { theme: TuiThemePal
   const snapshot = useSyncExternalStore(subscribeToPiActivity, getPiActivitySnapshot, getPiActivitySnapshot)
   if (!snapshot.active && snapshot.stage !== 'error') return null
 
-  const popW = Math.min(Math.max(42, width - 4), 76)
+  const popW = Math.max(20, Math.min(width - 4, 76))
   const events = snapshot.events.slice(-5)
   const popH = Math.min(events.length + 5, Math.max(6, height - 2))
 
@@ -22,7 +22,7 @@ export function PiActivityPopover({ theme, width, height }: { theme: TuiThemePal
       borderStyle="single"
       borderColor={snapshot.stage === 'error' ? theme.red : theme.cyan}
       backgroundColor={theme.surface}
-      zIndex={60}
+      zIndex={48}
       flexDirection="column"
       paddingX={1}
       title=" Pi activity "

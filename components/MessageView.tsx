@@ -1169,7 +1169,7 @@ function extractCompletedToolKey(payload: unknown): string | null {
   }
 
   if (record.type === 'opencode_event') {
-    if (!isOpenCodeAssistantStreamEnvelope(record)) return false
+    if (!isOpenCodeAssistantStreamEnvelope(record)) return null
     const event = record.event
     if (!event || typeof event !== 'object') return null
     const eventRecord = event as Record<string, unknown>
@@ -1240,6 +1240,7 @@ function shouldReplaceLiveAssistantText(payload: unknown): boolean {
     )
   }
   if (record.type === 'opencode_event') {
+    if (!isOpenCodeAssistantStreamEnvelope(record)) return false
     const event = record.event
     if (!event || typeof event !== 'object') return false
     const eventRecord = event as Record<string, unknown>
