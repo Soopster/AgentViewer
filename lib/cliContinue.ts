@@ -13,7 +13,12 @@ function shellQuote(s: string): string {
 //   copilot  --resume=<id>            (copilot --help)
 // LM Studio has no CLI — it's a GUI app with a local REST server, not
 // resumable from a terminal the way the other providers' native CLIs are.
-const RESUME_COMMAND: Record<Exclude<AgentProvider, 'lmstudio'>, (sessionId: string) => string> = {
+// ACP-transport sessions (claude-acp/codex-acp) are transient, in-memory
+// only (see lib/acpClientPool.ts) — no native CLI resume path either.
+const RESUME_COMMAND: Record<
+  Exclude<AgentProvider, 'lmstudio' | 'claude-acp' | 'codex-acp'>,
+  (sessionId: string) => string
+> = {
   claude: (id) => `claude --resume ${id}`,
   codex: (id) => `codex resume ${id}`,
   opencode: (id) => `opencode --session ${id}`,
@@ -26,7 +31,7 @@ export function getContinueInCliCommand(
   sessionId: string,
   cwd?: string | null,
 ): string | null {
-  if (provider === 'lmstudio') return null
+  if (provider === 'lmstudio' || provider === 'claude-acp' || provider === 'codex-acp') return null
   const build = RESUME_COMMAND[provider]
   if (!build) return null
   const resume = build(sessionId)

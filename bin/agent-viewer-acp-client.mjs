@@ -39,6 +39,11 @@ import { spawn } from 'node:child_process'
 import { Readable, Writable } from 'node:stream'
 import { client, ndJsonStream, PROTOCOL_VERSION } from '@agentclientprotocol/sdk'
 
+// This runs under vanilla `node` (see module doc above) so it can't import
+// lib/acpAgentSpawn.ts directly — re-declared here in plain ESM, kept in
+// sync by hand. Any change to the provider set or env var names must be
+// mirrored in lib/acpAgentSpawn.ts (used by lib/acpClientPool.ts).
+
 /** Providers with a real upstream ACP agent adapter. */
 export const ACP_TRANSPORT_PROVIDERS = new Set(['claude', 'codex'])
 

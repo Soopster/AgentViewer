@@ -95,6 +95,20 @@ import {
   type SessionMetadata as CopilotSessionMetadata,
 } from '@github/copilot-sdk'
 import { backgroundRunningSession, clearRunningSession, clearWaitingSession, getRunningSession, getRunningSessionInfo, getSessionRuntimeDiagnostics, interruptRunningSession, listRunningSessionRefs, listWaitingSessions, setRunningSession, steerRunningSessionIdempotent } from './sessionRuntime'
+import {
+  acpPendingRequests,
+  acquireAcpSession,
+  closeAcpSession,
+  declineAcpElicitation,
+  interruptAcpSession,
+  isAcpSessionAlive,
+  peekAcpSession,
+  readAcpMessagesSince,
+  resolveAcpElicitation,
+  respondAcpPermissionDecision,
+  sendAcpPrompt,
+} from './acpClientPool'
+import { mapAcpBufferedMessages } from './acpMapper'
 import { listViewerAttention } from './viewerAttention'
 import { createTurnCheckpoint } from './checkpoints'
 import { isNativeComposerCommandText } from './composerCommands'
@@ -210,6 +224,8 @@ import type { QuestionRequest as OpenCodeQuestionRequest } from '@opencode-ai/sd
 import type { AgentEvent as PiAgentEvent, AgentMessage as PiAgentMessage } from '@earendil-works/pi-agent-core'
 import { normalizeProjectPath, sameProjectPath } from './projectPaths'
 import {
+  beginPiSessionOperation,
+  compactPiSession,
   createPiAgentSession,
   deletePiSession,
   evictPiAgentSession,
@@ -218,9 +234,11 @@ import {
   getPiSessionMessages,
   listPiSessions,
   openPiAgentSession,
-  openPiSessionManager,
   piPoolSize,
+  piSessionEntryCacheDiagnostics,
+  piSessionOperationCount,
   refreshPiSessionCache,
+  setPiSessionName,
 } from './piClient'
 import {
   cancelPendingPiUiRequests,
@@ -235,13 +253,17 @@ import {
 } from './piExtensionUi'
 import {
   mapPiDiagnosticsToSections,
+  mapPiEntriesToSessionMessages,
   mapPiMessagesToSessionMessages,
   mapPiModelsToSessionModels,
+  piAgentMessageDuplicateKey,
+  piAgentMessageFingerprint,
   mapPiSessionToInfo,
   mapPiSessionToSession,
   currentPiModelValue,
   decodePiModelValue,
 } from './piMapper'
+import { reducePiTurnLifecycle } from './piTurnLifecycle'
 import {
   getPiStoredMetadata,
   getPiStoredMetadataForSessions,
@@ -500,6 +522,7 @@ const PI_SLASH_COMMANDS = [
   { command: '/compact', description: 'Compact conversation history', argumentHint: '[instructions]' },
   { command: '/name', description: 'Set the session display name', argumentHint: '<name>' },
   { command: '/session', description: 'Show session usage and cost' },
+  { command: '/reload', description: 'Reload Pi extensions, skills, prompts, settings, and context files' },
 ] as const
 const INDEX_REBUILD_PROVIDERS: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'lmstudio']
 const INDEX_REBUILD_PAGE_SIZE = 500
@@ -1774,30 +1797,6 @@ function schedulePiLiveTranscriptCleanup(sessionId: string): void {
   }
 }
 
-function piAgentMessageFingerprint(message: PiAgentMessage): string {
-  try {
-    return JSON.stringify(message)
-  } catch {
-    const role = (message as { role?: unknown }).role
-    const timestamp = (message as { timestamp?: unknown }).timestamp
-    return `${String(role ?? '')}:${String(timestamp ?? '')}`
-  }
-}
-
-function piAgentMessageDuplicateKey(message: PiAgentMessage): string {
-  const record = message as unknown as Record<string, unknown>
-  const role = typeof record.role === 'string' ? record.role : ''
-  if (role === 'bashExecution') {
-    const command = typeof record.command === 'string' ? record.command : ''
-    return command ? `bashExecution:${command}` : piAgentMessageFingerprint(message)
-  }
-  if (role === 'toolResult') {
-    const toolCallId = typeof record.toolCallId === 'string' ? record.toolCallId : ''
-    return toolCallId ? `toolResult:${toolCallId}` : piAgentMessageFingerprint(message)
-  }
-  return piAgentMessageFingerprint(message)
-}
-
 function piLiveMessageKey(message: PiAgentMessage, fallback: string): string {
   const record = message as unknown as Record<string, unknown>
   const role = typeof record.role === 'string' ? record.role : 'message'
@@ -1878,9 +1877,6 @@ function recordPiLiveTranscriptEvent(sessionId: string, event: PiAgentEvent): vo
       for (const result of event.toolResults) {
         recordPiLiveMessage(sessionId, result, `turn_end:${result.toolCallId}`)
       }
-      break
-    case 'agent_end':
-      schedulePiLiveTranscriptCleanup(sessionId)
       break
     default:
       break
@@ -2400,6 +2396,10 @@ async function listClaudeSessions({ limit, offset, dir, includeWorktrees }: List
   }))
 }
 
+function acpAgentKindOf(provider: 'claude-acp' | 'codex-acp'): 'claude' | 'codex' {
+  return provider === 'codex-acp' ? 'codex' : 'claude'
+}
+
 async function resolveProvider(provider?: AgentProvider): Promise<AgentProvider> {
   const resolved = provider ?? await getConfiguredProvider()
   if (resolved === 'all') {
@@ -2725,6 +2725,12 @@ async function listViewSessionsImpl(params: ListParams): Promise<Session[]> {
     await syncSessionsBestEffort(sessions)
     return sessions
   }
+  if (provider === 'claude-acp' || provider === 'codex-acp') {
+    // ACP has no session-listing RPC — these sessions are transient/in-memory
+    // only, tracked from creation via the running-session registry, never
+    // backed by persisted history.
+    return []
+  }
   sessions = await listClaudeSessions(params)
   await syncSessionsBestEffort(sessions)
   return sessions
@@ -2791,6 +2797,18 @@ export async function readViewSessionInfo(sessionId: string, providerOverride?: 
     if (!record) return null
     return mapLmstudioSessionToInfo(record)
   }
+  if (provider === 'claude-acp' || provider === 'codex-acp') {
+    // ACP has no session-read RPC — only reflect state for a live pooled
+    // session; there is no persisted history to fall back to.
+    if (!isAcpSessionAlive(sessionId)) return null
+    return {
+      sessionId,
+      summary: `${provider} session`,
+      lastModified: Date.now(),
+      provider,
+      capabilities: getProviderCapabilities(provider),
+    }
+  }
 
   const info = await getSessionInfo(sessionId, claudeSessionStoreOptions())
   if (!info) return null
@@ -2847,7 +2865,9 @@ export async function patchViewSession(sessionId: string, body: Record<string, u
   }
   if (provider === 'pi') {
     if ('title' in body) {
-      await setPiStoredTitle(sessionId, typeof body.title === 'string' ? body.title : null)
+      const title = typeof body.title === 'string' ? body.title : null
+      await setPiSessionName(sessionId, title ?? '')
+      await setPiStoredTitle(sessionId, title)
       return
     }
     if ('tag' in body) {
@@ -3082,8 +3102,7 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
       return { ok: true }
     }
     if (action === 'summarize') {
-      const session = await openPiAgentSession(sessionId)
-      await session.compact()
+      await compactPiSession(sessionId)
       return { ok: true }
     }
   }
@@ -3528,6 +3547,33 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
     }
   }
 
+  if (resolvedProvider === 'claude-acp' || resolvedProvider === 'codex-acp') {
+    if (action === 'respondPermission') {
+      const permissionId = typeof body.permissionId === 'string' ? body.permissionId : ''
+      const response = typeof body.response === 'string' ? body.response : ''
+      if (!permissionId) throw new Error('permissionId is required')
+      if (response !== 'once' && response !== 'always' && response !== 'reject') {
+        throw new Error('response must be once, always, or reject')
+      }
+      respondAcpPermissionDecision(sessionId, permissionId, response)
+      return { ok: true }
+    }
+    if (action === 'respondQuestion') {
+      const permissionId = typeof body.permissionId === 'string' ? body.permissionId : ''
+      const answers = parseQuestionAnswers(body.answers)
+      if (!permissionId) throw new Error('permissionId is required')
+      if (!answers) throw new Error('answers is required')
+      // Elicitation content is one primitive value per schema property (the
+      // AskUserQuestion picker's PendingQuestion.id === the schema property
+      // name — see parseMcpElicitationQuestions). Multi-select answers join;
+      // this transport doesn't support multi-value elicitation content.
+      const content: Record<string, string> = {}
+      for (const [key, values] of Object.entries(answers)) content[key] = values.join(', ')
+      resolveAcpElicitation(sessionId, permissionId, { action: 'accept', content })
+      return { ok: true }
+    }
+  }
+
   throw new Error(`Action ${action || '(missing)'} is not supported for ${resolvedProvider} sessions`)
 }
 
@@ -3592,26 +3638,29 @@ async function readCopilotMessagesAll(sessionId: string): Promise<SessionMessage
 }
 
 async function readPiMessagesAll(sessionId: string): Promise<SessionMessage[]> {
-  const raw = await getPiSessionMessages(sessionId)
+  const entries = await getPiSessionEntries(sessionId)
+  const persistedEntries = entries.filter((entry): entry is Extract<typeof entry, { type: 'message' }> => entry.type === 'message')
+  const raw = persistedEntries.map((entry) => entry.message)
   const live = getPiLiveTranscriptMessages(sessionId, raw)
-  const mergedRaw = live.length > 0 ? [...raw, ...live] : raw
-  const last = raw.at(-1) as { id?: string; role?: string } | undefined
-  const signature = `${raw.length}:${last?.id ?? ''}:${last?.role ?? ''}:${piLiveTranscriptSignature(live)}`
+  // Pi AgentMessages do not carry SessionEntry ids. Length + role therefore
+  // misses a native branch switch that replaces the active leaf with another
+  // message of the same role and depth. Fingerprint the leaf so the mapped
+  // transcript cache follows Pi's append-only branch graph correctly.
+  const last = persistedEntries.at(-1)
+  const signature = `${raw.length}:${last?.id ?? ''}:${last ? piAgentMessageFingerprint(last.message) : ''}:${piLiveTranscriptSignature(live)}`
   const cached = readMappedMessagesCache(`pi:${sessionId}`, signature)
   if (cached) return cached
-  const livePrefixes = new Set(live.map((_, index) => `pi-${sessionId}-${raw.length + index}`))
-  const liveKeys = new Set<string>()
-  const messages = sortMessagesChronologically(mapPiMessagesToSessionMessages(sessionId, mergedRaw))
-  for (const message of messages) {
-    for (const prefix of livePrefixes) {
-      if (message.uuid === prefix || message.uuid.startsWith(`${prefix}-`)) {
-        liveKeys.add(sessionMessageIdentity(message))
-        break
-      }
-    }
-  }
+  const persistedMessages = mapPiEntriesToSessionMessages(sessionId, entries)
+  const mappedLiveMessages = mapPiMessagesToSessionMessages(sessionId, live)
+  const liveKeys = new Set(mappedLiveMessages.map(sessionMessageIdentity))
+  const messages = sortMessagesChronologically([...persistedMessages, ...mappedLiveMessages])
   const markedMessages = markLiveSessionMessages(messages, liveKeys)
   return writeMappedMessagesCache(`pi:${sessionId}`, signature, markedMessages)
+}
+
+function readAcpMessagesAll(sessionId: string, provider: 'claude-acp' | 'codex-acp'): SessionMessage[] {
+  const { messages } = readAcpMessagesSince(sessionId, -1)
+  return mapAcpBufferedMessages(sessionId, provider, messages)
 }
 
 export function listViewSessionMessageWindow(sessionId: string, params: MessageListParams, providerOverride?: AgentProvider): Promise<SessionMessageWindow> {
@@ -3644,6 +3693,11 @@ async function listViewSessionMessageWindowImpl(sessionId: string, params: Messa
   if (provider === 'lmstudio') {
     const record = await getLmstudioSession(sessionId)
     messages = record ? mapLmstudioSessionToMessages(record) : []
+    await syncMessagesBestEffort(provider, sessionId, messages)
+    return windowForParams(messages, params)
+  }
+  if (provider === 'claude-acp' || provider === 'codex-acp') {
+    messages = readAcpMessagesAll(sessionId, provider)
     await syncMessagesBestEffort(provider, sessionId, messages)
     return windowForParams(messages, params)
   }
@@ -6549,6 +6603,20 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
       const activePiUiIds = new Set<string>()
       let piUiHandler: PiUiHandler | undefined
       let clearPiUiHandler: (() => void) | undefined
+      let piTurnTerminalError: string | undefined
+      let releasePiOperation: (() => void) | undefined
+      let interruptOnAbort: (() => void) | undefined
+
+      const onAbort = () => {
+        requestAborted = true
+        if (detachOnClientAbort) {
+          downstreamClosed = true
+          return
+        }
+        interruptOnAbort?.()
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+      if (signal.aborted) onAbort()
 
       const safeEnqueue = (chunk: string) => {
         if (downstreamClosed) return
@@ -6566,6 +6634,8 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
         cleanedUp = true
         cancelPendingPiUiRequests(targetSessionId, activePiUiIds)
         clearPiUiHandler?.()
+        releasePiOperation?.()
+        signal.removeEventListener('abort', onAbort)
         if (downstreamClosed) return
         downstreamClosed = true
         try {
@@ -6576,6 +6646,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
       }
 
       try {
+        releasePiOperation = beginPiSessionOperation(sessionId, 'turn')
         const agentSession = isPendingSession
           ? await createPiAgentSession(cwdOverride ?? process.cwd(), { id: sessionId })
           : await openPiAgentSession(sessionId)
@@ -6601,6 +6672,10 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
           interrupt: () => agentSession.abort(),
           steer: (text) => agentSession.steer(text),
         })
+        interruptOnAbort = () => { void interruptRunningSession(sessionId, turnRequestId).catch(() => {}) }
+        if (requestAborted && !detachOnClientAbort) {
+          throw new Error('Pi request aborted before the turn started.')
+        }
         if (selectedModel) {
           const model = agentSession.modelRuntime.getModel(selectedModel.providerID, selectedModel.modelID)
           if (!model) {
@@ -6629,7 +6704,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
           close()
         }
         if (piSlash && piSlash.command.toLowerCase() === 'help') {
-          finishPiCommand('Pi commands: /model [provider/model], /thinking [off|minimal|low|medium|high|xhigh|max], /compact [instructions], /name <name>, /session.')
+          finishPiCommand('Pi commands: /model [provider/model], /thinking [off|minimal|low|medium|high|xhigh|max], /compact [instructions], /name <name>, /session, /reload.')
           return
         }
         if (piSlash && piSlash.command.toLowerCase() === 'model') {
@@ -6699,7 +6774,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
               : 'This Pi session has no display name.')
             return
           }
-          agentSession.setSessionName(name)
+          await setPiSessionName(sessionId, name)
           finishPiCommand(`Pi session named "${name}".`)
           return
         }
@@ -6718,6 +6793,14 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
           )
           return
         }
+        if (piSlash && piSlash.command.toLowerCase() === 'reload') {
+          piUiHandler = createPiUiBridge(targetSessionId, safeEnqueue, activePiUiIds)
+          clearPiUiHandler = installPiUiHandler(targetSessionId, piUiHandler)
+          await ensurePiExtensionUiBound(agentSession, targetSessionId)
+          await agentSession.reload()
+          finishPiCommand('Reloaded Pi extensions, skills, prompts, settings, and context files.')
+          return
+        }
 
         if (directShell) {
           if (!directShell.command) {
@@ -6730,14 +6813,6 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
             provider: 'pi',
             requestId: turnRequestId,
             interrupt: async () => { agentSession.abortBash() },
-          })
-          signal.addEventListener('abort', () => {
-            requestAborted = true
-            if (detachOnClientAbort) {
-              downstreamClosed = true
-              return
-            }
-            void interruptRunningSession(sessionId, turnRequestId).catch(() => {})
           })
           let directShellOutput = ''
           const bashResult = await agentSession.executeBash(directShell.command, (chunk) => {
@@ -6774,16 +6849,6 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
           return
         }
 
-        signal.addEventListener('abort', () => {
-          requestAborted = true
-          if (detachOnClientAbort) {
-            downstreamClosed = true
-            return
-          }
-          cancelPendingPiUiRequests(targetSessionId, activePiUiIds)
-          void interruptRunningSession(sessionId, turnRequestId).catch(() => {})
-        })
-
         // Pi extensions use an RPC-style UI contract for select/confirm/input
         // dialogs. Bind a stable dispatcher once per warm AgentSession and aim
         // its current handler at this turn so extension prompts become the same
@@ -6799,7 +6864,8 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
         // queue progress. Subscribing to the raw Agent makes transient,
         // auto-retried errors look fatal (false "Pi turn failed" toast) and closes
         // the stream on the first agent_end — cutting off the retry the user never
-        // sees. Native Pi instead shows a quiet "retrying…" and recovers.
+        // sees. Native Pi instead shows a quiet "retrying…" and recovers; the
+        // later agent_settled event is the only terminal boundary.
         unsubscribePi = agentSession.subscribe((event) => {
           if (cleanedUp) return
           if (event.type === 'agent_start') {
@@ -6843,13 +6909,25 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
               return
             case 'thinking_level_changed':
               return
+            case 'agent_settled': {
+              const lifecycle = reducePiTurnLifecycle(piTurnTerminalError, event)
+              if (lifecycle.terminalError) {
+                safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: lifecycle.terminalError })}\n\n`)
+              }
+              clearRunningSession(sessionId, turnRequestId)
+              unsubscribePi?.()
+              broadcastLiveSessionTurnEnd('pi', targetSessionId)
+              schedulePiLiveTranscriptCleanup(targetSessionId)
+              close()
+              return
+            }
             default:
               break
           }
 
           // A will-retry agent_end is interim — an auto-retry or auto-compaction
-          // will re-run the agent on the same prompt() call. Suppress it so the
-          // client keeps the turn live and waits for the terminal agent_end.
+          // will re-run the agent on the same prompt() call. Suppress it while
+          // the client waits for the authoritative agent_settled event.
           if (event.type === 'agent_end' && event.willRetry) return
 
           // From here on `event` is a core transcript AgentEvent.
@@ -6864,27 +6942,17 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
           }
 
           if (event.type === 'agent_end') {
-            // Terminal turn end. Only a genuine 'error' stopReason (rate limit /
-            // network / refusal, retries exhausted) is a failure. A user abort
-            // surfaces as stopReason 'aborted' — a clean stop, not an error toast.
-            const lastAssistant = [...event.messages].reverse().find(
-              (message): message is Extract<PiAgentMessage, { role: 'assistant' }> => message.role === 'assistant',
-            )
-            if (lastAssistant?.stopReason === 'error') {
-              safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: lastAssistant.errorMessage || 'Pi turn failed' })}\n\n`)
-            }
-            clearRunningSession(sessionId, turnRequestId)
-            unsubscribePi?.()
-            broadcastLiveSessionTurnEnd('pi', targetSessionId)
-            schedulePiLiveTranscriptCleanup(targetSessionId)
-            close()
+            // agent_end is not terminal for AgentSession: extension agent_end
+            // hooks can queue another continuation. Defer close/error delivery
+            // until the authoritative agent_settled event.
+            piTurnTerminalError = reducePiTurnLifecycle(piTurnTerminalError, event).terminalError
           }
         })
 
         const text = appendPortableComposerContext(userMessage, attachmentPlan.portableText)
         await agentSession.prompt(text, images.length > 0 ? { images } : undefined)
         // prompt() resolving means the turn is genuinely over. Normally the
-        // terminal agent_end handler above already ran cleanup + close (and set
+        // agent_settled handler above already ran cleanup + close (and set
         // cleanedUp). But if that event was never delivered to our subscriber,
         // without this backstop the AgentSession subscription would leak and the
         // stream would hang open forever. Guard on cleanedUp so it's a no-op on
@@ -7059,6 +7127,96 @@ async function createLmstudioStream(sessionId: string, signal: AbortSignal, body
   })
 }
 
+const ACP_POLL_INTERVAL_MS = 200
+
+async function createAcpStream(
+  provider: 'claude-acp' | 'codex-acp',
+  sessionId: string,
+  signal: AbortSignal,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  const userMessage = String(body.message ?? '').trim()
+  const cwd = typeof body.cwd === 'string' && body.cwd.trim() ? body.cwd.trim() : process.cwd()
+  const encoder = new TextEncoder()
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      let downstreamClosed = false
+      const safeEnqueue = (chunk: string) => {
+        if (downstreamClosed) return
+        try {
+          controller.enqueue(encoder.encode(chunk))
+        } catch {
+          downstreamClosed = true
+        }
+      }
+      const close = () => {
+        if (downstreamClosed) return
+        downstreamClosed = true
+        try {
+          controller.close()
+        } catch {
+          /* downstream already closed */
+        }
+      }
+
+      try {
+        await acquireAcpSession(sessionId, acpAgentKindOf(provider), cwd)
+      } catch (err) {
+        safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Failed to start ACP session' })}\n\n`)
+        close()
+        return
+      }
+
+      setRunningSession(sessionId, {
+        provider,
+        interrupt: async () => {
+          await interruptAcpSession(sessionId)
+        },
+      })
+      broadcastLiveSessionTurnStart(provider, sessionId)
+      safeEnqueue(`event: turn-accepted\ndata: ${JSON.stringify({ sessionId, provider })}\n\n`)
+
+      let lastIndex = -1
+      try {
+        sendAcpPrompt(sessionId, userMessage)
+        // sendAcpPrompt sets inTurn synchronously before returning, so this
+        // poll loop's very first iteration always observes a running turn.
+        while (!signal.aborted) {
+          const { messages, latestIndex } = readAcpMessagesSince(sessionId, lastIndex)
+          if (messages.length > 0) {
+            lastIndex = latestIndex
+            broadcastLiveSessionActivity(provider, sessionId)
+            const mapped = mapAcpBufferedMessages(sessionId, provider, messages)
+            for (const msg of mapped) {
+              safeEnqueue(`data: ${JSON.stringify({ type: 'acp_message', message: msg })}\n\n`)
+            }
+          }
+          const entry = peekAcpSession(sessionId)
+          if (!entry || !entry.alive || !entry.inTurn) break
+          await new Promise((resolve) => setTimeout(resolve, ACP_POLL_INTERVAL_MS))
+        }
+      } catch (err) {
+        if (!signal.aborted) {
+          safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown ACP error' })}\n\n`)
+        }
+      } finally {
+        clearRunningSession(sessionId)
+        broadcastLiveSessionTurnEnd(provider, sessionId)
+        close()
+      }
+    },
+  })
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      'X-Accel-Buffering': 'no',
+    },
+  })
+}
+
 export async function streamViewSessionTurn(params: SendMessageParams): Promise<Response> {
   const userMessage = String(params.body.message ?? '').trim()
   if (!userMessage) {
@@ -7095,6 +7253,9 @@ export async function streamViewSessionTurn(params: SendMessageParams): Promise<
   }
   if (provider === 'lmstudio') {
     return createLmstudioStream(params.sessionId, params.signal, params.body)
+  }
+  if (provider === 'claude-acp' || provider === 'codex-acp') {
+    return createAcpStream(provider, params.sessionId, params.signal, params.body)
   }
 
   return createClaudeStream(params.sessionId, params.signal, params.body)
@@ -7141,22 +7302,21 @@ export async function forkViewSession({ sessionId, body, provider }: ForkParams)
   }
   if (resolvedProvider === 'pi') {
     const entryId = typeof body.upToMessageId === 'string' ? body.upToMessageId : undefined
-    if (!entryId) {
-      throw new Error('upToMessageId is required for Pi fork')
-    }
     const newId = await forkPiSession(sessionId, entryId)
     if (!newId) {
       throw new Error('Failed to fork Pi session')
     }
-    // The source session's on-disk state has been rewritten by the branch
-    // operation — drop any warm AgentSession so the next send re-opens it.
-    evictPiAgentSession(sessionId)
     return { sessionId: newId }
   }
   if (resolvedProvider === 'lmstudio') {
     void sessionId
     void body
     throw new Error('Fork is not supported for LM Studio sessions')
+  }
+  if (resolvedProvider === 'claude-acp' || resolvedProvider === 'codex-acp') {
+    void sessionId
+    void body
+    throw new Error(`Fork is not supported for ${resolvedProvider} sessions`)
   }
 
   const result = await forkSession(sessionId, {
@@ -7241,6 +7401,14 @@ export async function createNewViewSession({
     return { sessionId: record.id, provider, cwd: resolvedCwd, isPending: false }
   }
 
+  if (provider === 'claude-acp' || provider === 'codex-acp') {
+    // ACP has no listing RPC, so the session is created lazily on first
+    // prompt (createAcpStream's acquireAcpSession) — mirrors Claude/Pi's
+    // pending-id pattern, just with no durable history behind it.
+    const { randomUUID } = await import('node:crypto')
+    return { sessionId: randomUUID(), provider, cwd: resolvedCwd, isPending: true }
+  }
+
   throw new Error(`Create is not supported for ${provider} sessions`)
 }
 
@@ -7276,6 +7444,10 @@ export async function closeViewSession(sessionId: string, providerOverride?: Age
   }
   if (provider === 'pi') {
     evictPiAgentSession(sessionId)
+    return
+  }
+  if (provider === 'claude-acp' || provider === 'codex-acp') {
+    closeAcpSession(sessionId)
   }
 }
 
@@ -7331,6 +7503,14 @@ function listPendingProviderPermissionPayloads(
   }
   if (provider === 'pi') {
     return listPendingPiUiPayloads(sessionId)
+  }
+  if (provider === 'claude-acp' || provider === 'codex-acp') {
+    return acpPendingRequests(sessionId).map((pending) => {
+      const data = { requestId: pending.id, sessionId, provider, ...(pending.params as Record<string, unknown>) }
+      return pending.method === 'elicitation/create'
+        ? { type: 'acp_elicitation', event: { type: 'elicitation.requested', data } }
+        : { type: 'acp_permission', event: { type: 'permission.requested', data } }
+    })
   }
   return []
 }
@@ -7469,6 +7649,10 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
       currentModel: record?.model ?? null,
       contextUsage: null,
     }
+  }
+  if (provider === 'claude-acp' || provider === 'codex-acp') {
+    // ACP's session/new has no model-listing RPC to query against.
+    return { models: [], currentModel: null, contextUsage: null }
   }
 
   const models = await readClaudeSupportedModels().catch(() => [] as SessionModelInfo[])
@@ -7781,10 +7965,9 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
       if (currentModel && thinkingLevel !== undefined) break
     }
 
-    const sm = await openPiSessionManager(sessionId)
-    const sessionFile = sm.getSessionFile()
-    const cwd = sm.getCwd()
     const agentSession = await openPiAgentSession(sessionId)
+    const sessionFile = agentSession.sessionManager.getSessionFile()
+    const cwd = agentSession.sessionManager.getCwd()
     const stats = agentSession.getSessionStats()
 
     return {
@@ -7807,6 +7990,15 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
       sections: [
         { id: 'server', title: 'LM STUDIO SERVER', items: [lmstudioBaseUrl()] },
         { id: 'messages', title: 'MESSAGES', items: [String(record?.messages.length ?? 0)] },
+      ],
+    }
+  }
+  if (provider === 'claude-acp' || provider === 'codex-acp') {
+    const alive = isAcpSessionAlive(sessionId)
+    return {
+      currentModel: null,
+      sections: [
+        { id: 'acp', title: 'ACP TRANSPORT', items: [alive ? 'session alive' : 'no active subprocess'] },
       ],
     }
   }
@@ -8006,6 +8198,11 @@ export async function rewindOrRollbackViewSession({ sessionId, body, provider }:
     void body
     throw new Error('Rewind is not supported for LM Studio sessions')
   }
+  if (resolvedProvider === 'claude-acp' || resolvedProvider === 'codex-acp') {
+    void sessionId
+    void body
+    throw new Error(`Rewind is not supported for ${resolvedProvider} sessions`)
+  }
 
   const userMessageId = typeof body.userMessageId === 'string' ? body.userMessageId : undefined
   const model = typeof body.model === 'string' ? body.model : undefined
@@ -8044,6 +8241,7 @@ registerDiagnosticsReporter(() => getServerMemoryDiagnostics())
 export function getServerMemoryDiagnostics(): Record<string, number> {
   let codexApprovals = 0
   try { codexApprovals = pendingCodexApprovals.size } catch { /* defined later in module; ignore during init */ }
+  const piEntryCache = piSessionEntryCacheDiagnostics()
   return {
     sessionInfoCache: sessionInfoCache.size,
     mappedMessageCache: mappedMessageCache.size,
@@ -8065,6 +8263,9 @@ export function getServerMemoryDiagnostics(): Record<string, number> {
     ...getSessionRuntimeDiagnostics(),
     claudePool: claudePoolSize(),
     piPool: piPoolSize(),
+    piOperations: piSessionOperationCount(),
+    piEntryCacheSessions: piEntryCache.sessions,
+    piEntryCacheEntries: piEntryCache.entries,
     copilotPool: copilotPoolSize(),
   }
 }

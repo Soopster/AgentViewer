@@ -111,6 +111,8 @@ const PROVIDER_ITEMS: Array<{ provider: ProviderSelection; label: string; descri
   { provider: 'copilot', label: 'Copilot', description: 'Use the GitHub Copilot provider' },
   { provider: 'pi', label: 'Pi', description: 'Use the Pi provider' },
   { provider: 'lmstudio', label: 'LM Studio', description: 'Use local models via LM Studio' },
+  { provider: 'claude-acp', label: 'Claude (ACP)', description: 'Drive Claude via the claude-agent-acp subprocess' },
+  { provider: 'codex-acp', label: 'Codex (ACP)', description: 'Drive Codex via the codex-acp subprocess' },
   { provider: 'all', label: 'All providers', description: 'Show sessions from every provider' },
 ]
 
@@ -216,6 +218,10 @@ function providerIconLabel(provider: AgentProvider): string {
       return 'Pi'
     case 'lmstudio':
       return 'Lm'
+    case 'claude-acp':
+      return 'Cl'
+    case 'codex-acp':
+      return 'Cx'
     default:
       return 'Ai'
   }

@@ -737,6 +737,87 @@ export function extractCodexApproval(payload: unknown): PendingPermission | null
   }
 }
 
+// ACP session/request_permission: envelope shape mirrors the other
+// providers' `{type, event: {type, data}}` frames — see
+// listPendingProviderPermissionPayloads in lib/sessionBackend.ts, which
+// builds these from lib/acpClientPool.ts's pending-request queue.
+export function extractAcpPermission(payload: unknown): PendingPermission | null {
+  const record = asRecord(payload)
+  if (!record || record.type !== 'acp_permission') return null
+  const eventRecord = asRecord(record.event)
+  if (!eventRecord || eventRecord.type !== 'permission.requested') return null
+  const data = asRecord(eventRecord.data)
+  if (!data) return null
+  const id = stringField(data, 'requestId')
+  if (!id) return null
+  const provider = data.provider === 'codex-acp' ? 'codex-acp' : data.provider === 'claude-acp' ? 'claude-acp' : undefined
+  const toolCall = asRecord(data.toolCall)
+  const toolName = toolCall ? (stringField(toolCall, 'title') ?? stringField(toolCall, 'name')) : undefined
+  const rawInput = toolCall ? asRecord(toolCall.rawInput) : null
+  const command = rawInput ? stringField(rawInput, 'command') : undefined
+  const path = rawInput ? (stringField(rawInput, 'path') ?? stringField(rawInput, 'file_path')) : undefined
+  const options = Array.isArray(data.options) ? data.options : []
+  const canApproveAlways = options.some((option) => asRecord(option)?.kind === 'allow_always')
+  return {
+    id,
+    sessionId: stringField(data, 'sessionId'),
+    provider,
+    toolName,
+    title: toolName ? `${provider === 'codex-acp' ? 'Codex' : 'Claude'} wants to use ${toolName}` : 'Approve tool use',
+    command,
+    paths: path ? [path] : undefined,
+    canApproveAlways,
+  }
+}
+
+export function extractAcpPermissionCompletion(payload: unknown): string | null {
+  const record = asRecord(payload)
+  if (!record || record.type !== 'acp_permission') return null
+  const eventRecord = asRecord(record.event)
+  if (!eventRecord || eventRecord.type !== 'permission.completed') return null
+  const data = asRecord(eventRecord.data)
+  return data ? stringField(data, 'requestId') ?? null : null
+}
+
+// ACP elicitation/create — same envelope convention as extractAcpPermission.
+export function extractAcpElicitation(payload: unknown): PendingPermission | null {
+  const record = asRecord(payload)
+  if (!record || record.type !== 'acp_elicitation') return null
+  const eventRecord = asRecord(record.event)
+  if (!eventRecord || eventRecord.type !== 'elicitation.requested') return null
+  const data = asRecord(eventRecord.data)
+  if (!data) return null
+  const id = stringField(data, 'requestId')
+  if (!id) return null
+  const provider = data.provider === 'codex-acp' ? 'codex-acp' : data.provider === 'claude-acp' ? 'claude-acp' : undefined
+  const mode = data.mode === 'url' ? 'url' : 'form'
+  const questions = mode === 'form' ? parseMcpElicitationQuestions(data.requestedSchema) : undefined
+  const message = stringField(data, 'message')
+  return {
+    id,
+    sessionId: stringField(data, 'sessionId'),
+    provider,
+    toolName: 'elicitation/create',
+    title: message ?? 'The agent requests input',
+    url: mode === 'url' ? stringField(data, 'url') : undefined,
+    canApproveAlways: false,
+    questions,
+    elicitation: {
+      mode,
+      schema: asRecord(data.requestedSchema) ?? undefined,
+    },
+  }
+}
+
+export function extractAcpElicitationCompletion(payload: unknown): string | null {
+  const record = asRecord(payload)
+  if (!record || record.type !== 'acp_elicitation') return null
+  const eventRecord = asRecord(record.event)
+  if (!eventRecord || eventRecord.type !== 'elicitation.completed') return null
+  const data = asRecord(eventRecord.data)
+  return data ? stringField(data, 'requestId') ?? null : null
+}
+
 // Convenience: try every provider's extractor in turn. Returns the pending
 // permission a frame describes, or null.
 export function extractPendingPermission(payload: unknown): PendingPermission | null {
@@ -748,6 +829,8 @@ export function extractPendingPermission(payload: unknown): PendingPermission | 
     ?? extractClaudeElicitation(payload)
     ?? extractClaudePermission(payload)
     ?? extractCodexApproval(payload)
+    ?? extractAcpElicitation(payload)
+    ?? extractAcpPermission(payload)
 }
 
 export function extractPendingPermissions(
@@ -774,4 +857,6 @@ export function extractPermissionReply(payload: unknown): string | null {
     ?? extractCopilotPermissionCompletion(payload)
     ?? extractClaudeElicitationCompletion(payload)
     ?? extractClaudePermissionCompletion(payload)
+    ?? extractAcpElicitationCompletion(payload)
+    ?? extractAcpPermissionCompletion(payload)
 }

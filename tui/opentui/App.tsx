@@ -444,7 +444,7 @@ function ComposerWaitingStatus({
   return <text wrapMode="none">{renderInlineTextSegments(segs, width, theme.dim)}</text>
 }
 
-const PROVIDERS: ProviderSelection[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'lmstudio', 'all']
+const PROVIDERS: ProviderSelection[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'lmstudio', 'claude-acp', 'codex-acp', 'all']
 const TUI_PROVIDER_TAG: Record<string, string> = {
   claude: 'claude',
   codex: 'codex',

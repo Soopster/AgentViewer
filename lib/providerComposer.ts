@@ -207,6 +207,8 @@ const PROVIDER_COMPOSER: Record<AgentProvider, ProviderComposerConfig> = {
   copilot: COPILOT,
   pi: PI,
   lmstudio: LMSTUDIO,
+  'claude-acp': CLAUDE,
+  'codex-acp': CODEX,
 }
 
 export function getProviderComposer(provider: AgentProvider | undefined | null): ProviderComposerConfig {

@@ -25,6 +25,7 @@ Supported providers today are:
 - OpenCode
 - GitHub Copilot
 - Pi
+- Claude (ACP) and Codex (ACP), alternate transports that drive `claude-agent-acp`/`codex-acp` over the Agent Client Protocol instead of the native SDK/app-server
 - `all`, which merges sessions across providers
 
 ## Quick Start
@@ -95,7 +96,7 @@ You can choose the startup provider with:
 AGENT_VIEWER_PROVIDER=claude npm run dev
 ```
 
-Valid values are `claude`, `codex`, `opencode`, `copilot`, `pi`, and `all`. The in-app provider picker persists the choice to `.agent-viewer-data/provider.json`.
+Valid values are `claude`, `codex`, `opencode`, `copilot`, `pi`, `claude-acp`, `codex-acp`, and `all`. The in-app provider picker persists the choice to `.agent-viewer-data/provider.json`.
 
 ### Claude
 
@@ -270,6 +271,14 @@ PI_SESSION_DIR=/path/to/pi/sessions
 ```
 
 Pi title and tag overrides are stored locally. Forking uses Pi session branches.
+
+### ACP transport (Claude, Codex)
+
+`claude-acp` and `codex-acp` are alternate transports for the same two SDK-backed providers: instead of the native `@anthropic-ai/claude-agent-sdk` or Codex app-server integration, they drive `claude-agent-acp` / `codex-acp` as a subprocess over the [Agent Client Protocol](https://agentclientprotocol.com) (`session/new` → `session/prompt` → `session/update`). They are separate provider ids, not a flag on the native providers, and appear as their own entries in the provider picker.
+
+These are **optional peer tools**, not npm dependencies — install them separately and make sure they resolve on `PATH`, or point directly at a binary with `CLAUDE_AGENT_ACP_PATH` / `CODEX_ACP_PATH`. A missing binary fails clearly at session-create time.
+
+ACP-transport sessions are process-local and transient: the protocol has no session-listing, fork, rewind/rollback, delete, or model-listing RPC, so those operations are unsupported and the session list only ever shows sessions created and still pooled in this process (nothing persists across a server restart). Sending messages, permission/elicitation approval, and interrupt all work the same as the native providers.
 
 ## Local Data
 

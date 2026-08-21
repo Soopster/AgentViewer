@@ -54,6 +54,8 @@ const PROVIDER_LABEL: Record<AgentProvider, string> = {
   copilot: 'Copilot',
   pi: 'Pi',
   lmstudio: 'LM Studio',
+  'claude-acp': 'Claude (ACP)',
+  'codex-acp': 'Codex (ACP)',
 }
 
 function emptyDraft(): Draft {

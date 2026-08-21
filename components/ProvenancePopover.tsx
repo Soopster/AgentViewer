@@ -31,6 +31,8 @@ const PROVIDER_META: Record<AgentProvider, { label: string; color: string }> = {
   copilot: { label: 'Copilot', color: '#8b5cf6' },
   pi: { label: 'Pi', color: '#ec4899' },
   lmstudio: { label: 'LM Studio', color: '#2dd4a7' },
+  'claude-acp': { label: 'Claude (ACP)', color: '#d97757' },
+  'codex-acp': { label: 'Codex (ACP)', color: '#10a37f' },
 }
 
 // Distinguishes sessions within the same provider in the blame gutter.

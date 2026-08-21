@@ -317,6 +317,8 @@ const expectedNative: Record<AgentProvider, SendAttachment['type'][]> = {
   copilot: ['file', 'directory', 'selection', 'image', 'mention', 'blob', 'extension_context'],
   pi: ['image', 'blob'],
   lmstudio: [],
+  'claude-acp': [],
+  'codex-acp': [],
 }
 
 for (const provider of providers) {

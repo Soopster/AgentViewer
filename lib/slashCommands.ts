@@ -113,6 +113,11 @@ const SLASH_COMMANDS_BY_PROVIDER: Record<AgentProvider, SlashCommandSuggestion[]
     { command: '/session', description: 'Show session usage and cost' },
   ],
   lmstudio: [],
+  // ACP-transport sessions go through claude-agent-acp/codex-acp's own
+  // session/prompt handling, not agentViewer's native slash-command
+  // dispatch — leave empty until that subprocess's own command set is known.
+  'claude-acp': [],
+  'codex-acp': [],
 }
 
 const AGENT_VIEWER_SESSION_COMMANDS: SlashCommandSuggestion[] = [
@@ -127,6 +132,8 @@ const SLASH_COMMANDS_WITH_SESSION_MESSAGING: Record<AgentProvider, SlashCommandS
   copilot: [...AGENT_VIEWER_SESSION_COMMANDS, ...SLASH_COMMANDS_BY_PROVIDER.copilot],
   pi: [...AGENT_VIEWER_SESSION_COMMANDS, ...SLASH_COMMANDS_BY_PROVIDER.pi],
   lmstudio: [...AGENT_VIEWER_SESSION_COMMANDS, ...SLASH_COMMANDS_BY_PROVIDER.lmstudio],
+  'claude-acp': [...AGENT_VIEWER_SESSION_COMMANDS, ...SLASH_COMMANDS_BY_PROVIDER['claude-acp']],
+  'codex-acp': [...AGENT_VIEWER_SESSION_COMMANDS, ...SLASH_COMMANDS_BY_PROVIDER['codex-acp']],
 }
 
 export function getSlashCommandSuggestions(provider: AgentProvider | undefined | null): SlashCommandSuggestion[] {

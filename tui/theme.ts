@@ -2975,6 +2975,8 @@ function providerAccents(theme: TuiThemePalette): Record<ProviderSelection, stri
     copilot: theme.violet,
     pi: theme.pink,
     lmstudio: theme.red,
+    'claude-acp': theme.amber,
+    'codex-acp': theme.cyan,
     all: theme.green,
   }
 }

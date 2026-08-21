@@ -53,7 +53,7 @@ export type SystemMessagePayload = {
   [key: string]: unknown
 }
 
-export type AgentProvider = 'claude' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'lmstudio'
+export type AgentProvider = 'claude' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'lmstudio' | 'claude-acp' | 'codex-acp'
 export type ProviderSelection = AgentProvider | 'all'
 export type ReasoningEffortLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh'
 
@@ -87,6 +87,8 @@ export type SessionMessage = {
   turnId?: string
   taskDescription?: string
   requestId?: string
+  /** Provider-native durable message/entry id for actions such as message fork. */
+  providerMessageId?: string
   /**
    * True when Agent Viewer is surfacing an in-memory live overlay before the
    * provider has flushed the message into its durable session history.
