@@ -9,14 +9,19 @@ import { AnalyticsPopover } from './AnalyticsPopover'
 import { HandoffBriefPopover } from './HandoffBriefPopover'
 import { PromptLibraryPopover } from './PromptLibraryPopover'
 import { ChannelBridgePopover } from './ChannelBridgePopover'
-import { readBridgeConfigFromEnv, sendChannelMessage, subscribeToChannelEvents, type ChannelEvent } from '../../lib/channelBridge'
+import { readBridgeConfigFromEnv, subscribeToChannelEvents, type ChannelEvent } from '../../lib/channelBridge'
+import {
+  createChannelBridgeMessageId,
+  flushChannelBridgeOutbox,
+  sendDurableChannelMessage,
+} from '../../lib/channelBridgeOutbox'
 import { IdeBridgePopover } from './IdeBridgePopover'
 import { readIdeBridgeConfigFromEnv, sendIdeAtMention } from '../../lib/ideBridge'
 import { ToastOverlay, useToasts } from './ToastOverlay'
 import { PiActivityPopover } from './PiActivityPopover'
 import { toast } from './toastStore'
 import { toBmpSafe } from './bmp'
-import { loadBridgeMessagesForSession, addBridgeMessage } from '../../lib/bridgeMessages'
+import { loadBridgeMessagesForSession, addBridgeMessage, channelBridgeFileOutboxStorage } from '../../lib/bridgeMessages'
 import { TaskSidePanel } from './TaskSidePanel'
 import { TaskPanelPopover } from './TaskPanelPopover'
 import {
@@ -8241,10 +8246,19 @@ export default function OpenTuiApp() {
           entrySeq += 1
         }
       },
-      () => {},
+      (status) => {
+        if (status !== 'connected' || !selectedSessionTarget) return
+        void flushChannelBridgeOutbox(
+          channelBridgeFileOutboxStorage,
+          config,
+          selectedSessionTarget.sessionId,
+        ).then((result) => {
+          if (result.error) showNotice('error', `Channel message remains queued: ${result.error.message}`)
+        })
+      },
     )
     return unsubscribe
-  }, [canUseChannelBridge, channelBridgeOpen, routeComposerToBridge])
+  }, [canUseChannelBridge, channelBridgeOpen, routeComposerToBridge, selectedSessionTarget?.sessionId])
 
   // Load persisted bridge messages when selected session changes
   useEffect(() => {
@@ -12801,10 +12815,10 @@ export default function OpenTuiApp() {
     }
 
     // Global Channel Bridge binding: divert the send to the live `claude` CLI
-    // session instead of the active provider. Fire-and-forget — replies and
-    // permission prompts surface in the bridge popover (⇧C). Never diverts an
-    // auto-retry, and requires actual text (the bridge has no attachment path).
-    if (!isRetry && canUseChannelBridge && routeComposerToBridgeRef.current && trimmed) {
+    // session instead of the active provider. The durable outbox retains failed
+    // sends for reconnect replay; replies and permission prompts surface in the
+    // bridge popover (⇧C). Never diverts an auto-retry and requires actual text.
+    if (!isRetry && canUseChannelBridge && selectedSessionTarget && routeComposerToBridgeRef.current && trimmed) {
       composerTextareaRef.current?.setText('')
       setComposerDraft('')
       setComposerMentionAttachments([])
@@ -12814,10 +12828,19 @@ export default function OpenTuiApp() {
       setComposerHistoryIndex(0)
       try {
         const timestamp = new Date().toISOString()
-        const result = await sendChannelMessage(readBridgeConfigFromEnv(), trimmed, lastBridgeChatIdRef.current)
-        lastBridgeChatIdRef.current = result.chat_id
+        const config = readBridgeConfigFromEnv()
+        const chatId = lastBridgeChatIdRef.current ?? createChannelBridgeMessageId()
+        lastBridgeChatIdRef.current = chatId
+        const result = await sendDurableChannelMessage(channelBridgeFileOutboxStorage, config, {
+          targetSessionId: selectedSessionTarget.sessionId,
+          text: trimmed,
+          chatId,
+        })
+        lastBridgeChatIdRef.current = result.response?.chat_id ?? chatId
         setBridgeTranscriptEntries((prev) => [...prev, { kind: 'sent', text: trimmed, timestamp }])
-        showNotice('info', 'Sent to the live CLI bridge')
+        showNotice('info', result.queued
+          ? 'Queued for the live CLI bridge to reconnect'
+          : 'Accepted by the live CLI bridge')
       } catch (err) {
         showNotice('error', err instanceof Error ? err.message : 'Failed to reach the channel bridge')
       }
@@ -20063,7 +20086,7 @@ export default function OpenTuiApp() {
         />
       ) : null}
 
-      {canUseChannelBridge && channelBridgeOpen ? (
+      {canUseChannelBridge && selectedSessionTarget && channelBridgeOpen ? (
         <box
           position="absolute"
           top={0}
@@ -20075,13 +20098,14 @@ export default function OpenTuiApp() {
         />
       ) : null}
 
-      {canUseChannelBridge && channelBridgeOpen ? (
+      {canUseChannelBridge && selectedSessionTarget && channelBridgeOpen ? (
         <ChannelBridgePopover
           theme={theme}
           accentColor={composerAccentColor}
           width={width}
           height={height}
           routeComposer={routeComposerToBridge}
+          targetSessionId={selectedSessionTarget.sessionId}
           onToggleRoute={toggleComposerBridgeRoute}
           onClose={() => setChannelBridgeOpen(false)}
           onNotice={showNotice}

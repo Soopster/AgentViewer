@@ -1,11 +1,18 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import path from 'node:path'
+import {
+  sanitizeChannelBridgeOutbox,
+  type ChannelBridgeOutboxEntry,
+  type ChannelBridgeOutboxStorage,
+} from './channelBridgeOutbox'
 import type { AgentProvider } from './types'
 
 // Bridge messages are local-only, read-only history of sent/reply messages.
 // Stored one flat JSON file under .agent-viewer-data/, keyed by `${provider}::${sessionId}`.
 const DATA_DIR = path.join(process.cwd(), '.agent-viewer-data')
 const BRIDGE_MESSAGES_FILE = path.join(DATA_DIR, 'bridge-messages.json')
+const CHANNEL_OUTBOX_FILE = path.join(DATA_DIR, 'channel-bridge-outbox.json')
 
 export type BridgeMessage = {
   provider: AgentProvider
@@ -18,6 +25,7 @@ export type BridgeMessage = {
 type BridgeMessageStore = Record<string, BridgeMessage[]>
 
 let storeCache: BridgeMessageStore | null = null
+let outboxCache: ChannelBridgeOutboxEntry[] | null = null
 
 function storeKey(provider: AgentProvider | undefined, sessionId: string): string {
   return `${provider ?? 'claude'}::${sessionId}`
@@ -103,4 +111,28 @@ export async function clearBridgeMessagesForSession(provider: AgentProvider | un
   const key = storeKey(provider, sessionId)
   delete store[key]
   await saveStore(store)
+}
+
+async function loadChannelBridgeFileOutbox(): Promise<ChannelBridgeOutboxEntry[]> {
+  if (outboxCache) return outboxCache
+  try {
+    outboxCache = sanitizeChannelBridgeOutbox(JSON.parse(await readFile(CHANNEL_OUTBOX_FILE, 'utf8')))
+  } catch {
+    outboxCache = []
+  }
+  return outboxCache
+}
+
+async function saveChannelBridgeFileOutbox(entries: ChannelBridgeOutboxEntry[]): Promise<void> {
+  const next = sanitizeChannelBridgeOutbox(entries)
+  await mkdir(DATA_DIR, { recursive: true })
+  const temporaryPath = path.join(DATA_DIR, `.channel-bridge-outbox.${process.pid}.${randomUUID()}.tmp`)
+  await writeFile(temporaryPath, JSON.stringify(next, null, 2), { encoding: 'utf8', mode: 0o600 })
+  await rename(temporaryPath, CHANNEL_OUTBOX_FILE)
+  outboxCache = next
+}
+
+export const channelBridgeFileOutboxStorage: ChannelBridgeOutboxStorage = {
+  load: loadChannelBridgeFileOutbox,
+  save: saveChannelBridgeFileOutbox,
 }

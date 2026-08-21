@@ -3,20 +3,27 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
 import type { TuiThemePalette } from '../theme'
 import {
+  advanceChannelDeliveryState,
   channelPermissionToPending,
   readBridgeConfigFromEnv,
   respondToChannelPermission,
-  sendChannelMessage,
   subscribeToChannelEvents,
   type ChannelBridgeStatus,
+  type ChannelDeliveryState,
   type ChannelEvent,
   type ChannelPermissionRequestEvent,
 } from '../../lib/channelBridge'
+import {
+  createChannelBridgeMessageId,
+  flushChannelBridgeOutbox,
+  sendDurableChannelMessage,
+} from '../../lib/channelBridgeOutbox'
+import { channelBridgeFileOutboxStorage } from '../../lib/bridgeMessages'
 
 type ChannelBridgeKeyEvent = { name: string; ctrl: boolean; shift: boolean; meta: boolean; sequence: string }
 
 type LogEntry =
-  | { kind: 'sent'; id: string; text: string }
+  | { kind: 'sent'; id: string; text: string; messageId: string; delivery: ChannelDeliveryState }
   | { kind: 'reply'; id: string; text: string }
   | { kind: 'permission'; id: string; request: ChannelPermissionRequestEvent; resolved?: 'allow' | 'deny' }
 
@@ -26,6 +33,7 @@ type Props = {
   width: number
   height: number
   routeComposer: boolean
+  targetSessionId: string
   onToggleRoute: () => void
   onClose: () => void
   onNotice: (tone: 'info' | 'error', text: string) => void
@@ -69,6 +77,7 @@ export function ChannelBridgePopover({
   width,
   height,
   routeComposer,
+  targetSessionId,
   onToggleRoute,
   onClose,
   onNotice,
@@ -81,6 +90,7 @@ export function ChannelBridgePopover({
   const [sending, setSending] = useState(false)
   const scrollRef = useRef<ScrollBoxRenderable>(null)
   const lastChatIdRef = useRef<string | undefined>(undefined)
+  const deliveryStatusRef = useRef(new Map<string, ChannelDeliveryState>())
 
   useEffect(() => {
     const unsubscribe = subscribeToChannelEvents(
@@ -89,14 +99,40 @@ export function ChannelBridgePopover({
         if (event.type === 'reply') {
           lastChatIdRef.current = event.chat_id
           setEntries((prev) => [...prev, { kind: 'reply', id: nextEntryId('reply'), text: event.text }])
-        } else {
+        } else if (event.type === 'permission_request') {
           setEntries((prev) => [...prev, { kind: 'permission', id: nextEntryId('perm'), request: event }])
+        } else {
+          const delivery = event.status === 'processed' ? 'processed' : 'accepted'
+          const advanced = advanceChannelDeliveryState(deliveryStatusRef.current.get(event.message_id), delivery)
+          deliveryStatusRef.current.set(event.message_id, advanced)
+          setEntries((prev) => prev.map((entry) => (
+            entry.kind === 'sent' && entry.messageId === event.message_id
+              ? { ...entry, delivery: advanceChannelDeliveryState(entry.delivery, advanced) }
+              : entry
+          )))
         }
       },
-      (next) => setStatus(next),
+      (next) => {
+        setStatus(next)
+        if (next !== 'connected') return
+        void flushChannelBridgeOutbox(channelBridgeFileOutboxStorage, config, targetSessionId, {
+          onDelivered: ({ entry, response }) => {
+            const delivery = response.status === 'processed' ? 'processed' : 'accepted'
+            const advanced = advanceChannelDeliveryState(deliveryStatusRef.current.get(entry.messageId), delivery)
+            deliveryStatusRef.current.set(entry.messageId, advanced)
+            setEntries((prev) => prev.map((item) => (
+              item.kind === 'sent' && item.messageId === entry.messageId
+                ? { ...item, delivery: advanceChannelDeliveryState(item.delivery, advanced) }
+                : item
+            )))
+          },
+        }).then((result) => {
+          if (result.error) onNotice('error', `Channel message remains queued: ${result.error.message}`)
+        })
+      },
     )
     return unsubscribe
-  }, [config])
+  }, [config, onNotice, targetSessionId])
 
   useEffect(() => {
     scrollRef.current?.scrollTo(scrollRef.current?.scrollHeight ?? Number.MAX_SAFE_INTEGER)
@@ -107,16 +143,32 @@ export function ChannelBridgePopover({
     if (!text || sending) return
     setSending(true)
     try {
-      const result = await sendChannelMessage(config, text, lastChatIdRef.current)
-      lastChatIdRef.current = result.chat_id
-      setEntries((prev) => [...prev, { kind: 'sent', id: nextEntryId('sent'), text }])
+      const chatId = lastChatIdRef.current ?? createChannelBridgeMessageId()
+      lastChatIdRef.current = chatId
+      const result = await sendDurableChannelMessage(channelBridgeFileOutboxStorage, config, {
+        targetSessionId,
+        text,
+        chatId,
+      })
+      lastChatIdRef.current = result.response?.chat_id ?? chatId
+      const delivery = result.response?.status === 'processed' ? 'processed' : result.queued ? 'queued' : 'accepted'
+      const advanced = advanceChannelDeliveryState(deliveryStatusRef.current.get(result.entry.messageId), delivery)
+      deliveryStatusRef.current.set(result.entry.messageId, advanced)
+      setEntries((prev) => [...prev, {
+        kind: 'sent',
+        id: nextEntryId('sent'),
+        text,
+        messageId: result.entry.messageId,
+        delivery: advanced,
+      }])
       setDraft('')
+      if (result.queued) onNotice('info', 'Queued for the live CLI bridge to reconnect')
     } catch (err) {
       onNotice('error', err instanceof Error ? err.message : 'Failed to reach the channel bridge')
     } finally {
       setSending(false)
     }
-  }, [config, draft, onNotice, sending])
+  }, [config, draft, onNotice, sending, targetSessionId])
 
   const answerLatestPermission = useCallback(
     async (behavior: 'allow' | 'deny') => {
@@ -220,6 +272,11 @@ export function ChannelBridgePopover({
                       {isSent ? 'you  ' : 'cli  '}
                     </text>
                     <text fg={theme.text} wrapMode="word" width={innerW - 5}>{entry.text}</text>
+                    {isSent ? (
+                      <text fg={theme.dim} wrapMode="none">
+                        {entry.delivery === 'processed' ? '  processed' : entry.delivery === 'accepted' ? '  accepted' : '  queued'}
+                      </text>
+                    ) : null}
                   </box>
                 )
               }

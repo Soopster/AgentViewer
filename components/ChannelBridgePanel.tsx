@@ -336,6 +336,15 @@ export default function ChannelBridgePanel({
                     }}
                   >
                     {entry.text}
+                    {isSent ? (
+                      <div style={{ marginTop: 3, fontFamily: "'IBM Plex Mono', monospace", fontSize: 8.5, color: 'var(--text-3)' }}>
+                        {entry.delivery === 'processed'
+                          ? 'processed by Claude'
+                          : entry.delivery === 'accepted'
+                            ? 'accepted by channel'
+                            : 'queued for reconnect'}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               )

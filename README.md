@@ -122,6 +122,23 @@ Custom Claude process transports can register a `spawnClaudeCodeProcess` adapter
 
 For a concrete hosted worker, set `AGENT_VIEWER_CLAUDE_SSH_HOST` and `AGENT_VIEWER_CLAUDE_SSH_COMMAND`. The SSH adapter uses batch authentication, strict host-key verification (the default known-hosts file unless `AGENT_VIEWER_CLAUDE_SSH_KNOWN_HOSTS_FILE` is supplied), keepalives, abort propagation, and transport health reporting. Optional settings are `AGENT_VIEWER_CLAUDE_SSH_USER`, `AGENT_VIEWER_CLAUDE_SSH_PORT`, `AGENT_VIEWER_CLAUDE_SSH_IDENTITY_FILE`, and local/remote root mapping via `AGENT_VIEWER_CLAUDE_SSH_LOCAL_ROOT` plus `AGENT_VIEWER_CLAUDE_SSH_REMOTE_ROOT`. Claude/Anthropic secret environment variables are not forwarded in the SSH command by default; provision credentials on the worker, or explicitly opt in with `AGENT_VIEWER_CLAUDE_SSH_FORWARD_SECRETS=1` after accepting process-list exposure on the remote host.
 
+#### Durable Claude CLI channel bridge
+
+Agent Viewer can route its Claude composer into a Claude Code session that is already open in another terminal. Start the CLI from the packaged `channels/` directory so its `.mcp.json` loads the bridge, and bind the bridge to the same session ID:
+
+```bash
+cd channels
+AGENTVIEWER_CHANNEL_SESSION_ID=<claude-session-id> \
+  claude --resume <claude-session-id> \
+  --dangerously-load-development-channels server:agentviewer
+```
+
+Open the Channel Bridge in the web or OpenTUI composer and enable **Route composer through bridge**. Messages carry a stable ID and the selected Agent Viewer session ID. Both frontends persist unsent messages locally and replay them in FIFO order after reconnect; the bridge persists accepted-but-unprocessed deliveries, rejects a mismatched configured session, suppresses duplicate message IDs, and asks Claude to acknowledge each delivery through `ack_delivery`. Delivery state is visible as queued, accepted, or processed.
+
+The bridge defaults to `http://127.0.0.1:8790`. Use `AGENTVIEWER_CHANNEL_PORT` on the Claude process and the matching `AGENTVIEWER_CHANNEL_URL` in OpenTUI, or the bridge settings in the web UI, to run multiple session-bound bridges. `AGENTVIEWER_CHANNEL_TOKEN` enables the existing loopback authentication check. `AGENTVIEWER_CHANNEL_STATE_DIR` relocates the bridge-side durable state; otherwise it is stored below `.agent-viewer-data/channel-bridge/` in the Claude process working directory.
+
+Claude Channels acknowledge only that an event was written to their transport, not that the model processed it. The explicit `ack_delivery` tool supplies the stronger processed receipt, but a model that never calls the tool leaves the message pending and it will be replayed after the bridge restarts. This is intentionally at-least-once delivery with duplicate suppression at the bridge boundary, not a guarantee that arbitrary model-side effects are exactly once.
+
 #### Claude and Codex CLI MCP bridge
 
 Agent Viewer can expose cross-provider session search and transcripts, message bookmarks, and the human-attention inbox to standalone Claude and Codex CLIs over stdio. Start the web daemon first so the bridge and any attached TUI share one runtime:

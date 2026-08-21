@@ -20,6 +20,14 @@ export type ChannelReplyEvent = {
   text: string
 }
 
+export type ChannelDeliveryAckEvent = {
+  type: 'delivery_ack'
+  message_id: string
+  chat_id: string
+  status: 'accepted' | 'duplicate' | 'processed'
+  target_session_id?: string
+}
+
 export type ChannelPermissionRequestEvent = {
   type: 'permission_request'
   request_id: string
@@ -28,9 +36,27 @@ export type ChannelPermissionRequestEvent = {
   input_preview: string
 }
 
-export type ChannelEvent = ChannelReplyEvent | ChannelPermissionRequestEvent
+export type ChannelEvent = ChannelReplyEvent | ChannelPermissionRequestEvent | ChannelDeliveryAckEvent
+
+export type ChannelMessageResponse = {
+  message_id: string
+  chat_id: string
+  status: 'accepted' | 'duplicate' | 'processed'
+  target_session_id?: string
+  bridge_session_id?: string
+}
 
 export type ChannelBridgeStatus = 'idle' | 'connecting' | 'connected' | 'error'
+export type ChannelDeliveryState = 'queued' | 'accepted' | 'processed'
+
+export function advanceChannelDeliveryState(
+  current: ChannelDeliveryState | undefined,
+  next: ChannelDeliveryState,
+): ChannelDeliveryState {
+  if (current === 'processed' || next === 'processed') return 'processed'
+  if (current === 'accepted' || next === 'accepted') return 'accepted'
+  return 'queued'
+}
 
 // Reads bridge connection settings from the environment. TUI-only — the web
 // UI persists its config in localStorage instead (see useChannelBridge). Safe
@@ -57,15 +83,27 @@ function withToken(url: string, config: ChannelBridgeConfig): string {
 export async function sendChannelMessage(
   config: ChannelBridgeConfig,
   text: string,
-  chatId?: string,
-): Promise<{ chat_id: string }> {
+  options: {
+    chatId?: string
+    messageId?: string
+    targetSessionId?: string
+  } = {},
+): Promise<ChannelMessageResponse> {
   const res = await fetch(`${config.baseUrl}/message`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...authHeaders(config) },
-    body: JSON.stringify({ text, chat_id: chatId }),
+    body: JSON.stringify({
+      text,
+      chat_id: options.chatId,
+      message_id: options.messageId,
+      target_session_id: options.targetSessionId,
+    }),
   })
-  if (!res.ok) throw new Error(`channel bridge send failed: ${res.status}`)
-  return res.json() as Promise<{ chat_id: string }>
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '')
+    throw new Error(`channel bridge send failed: ${res.status}${detail ? ` ${detail}` : ''}`)
+  }
+  return res.json() as Promise<ChannelMessageResponse>
 }
 
 export async function respondToChannelPermission(
@@ -86,6 +124,20 @@ function parseChannelEvent(raw: unknown): ChannelEvent | null {
   const value = raw as Record<string, unknown>
   if (value.type === 'reply' && typeof value.chat_id === 'string' && typeof value.text === 'string') {
     return { type: 'reply', chat_id: value.chat_id, text: value.text }
+  }
+  if (
+    value.type === 'delivery_ack'
+    && typeof value.message_id === 'string'
+    && typeof value.chat_id === 'string'
+    && (value.status === 'accepted' || value.status === 'duplicate' || value.status === 'processed')
+  ) {
+    return {
+      type: 'delivery_ack',
+      message_id: value.message_id,
+      chat_id: value.chat_id,
+      status: value.status,
+      ...(typeof value.target_session_id === 'string' ? { target_session_id: value.target_session_id } : {}),
+    }
   }
   if (
     value.type === 'permission_request' &&

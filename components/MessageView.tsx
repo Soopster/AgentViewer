@@ -3240,7 +3240,11 @@ function MessageViewInner({
   const [promptLibraryOpen, setPromptLibraryOpen] = useState(false)
   const [channelBridgeOpen, setChannelBridgeOpen] = useState(false)
   const canUseChannelBridge = !projectView && !!session && (session.provider ?? 'claude') === 'claude'
-  const channelBridge = useChannelBridge({ open: channelBridgeOpen, available: canUseChannelBridge })
+  const channelBridge = useChannelBridge({
+    open: channelBridgeOpen,
+    available: canUseChannelBridge,
+    sessionId: session?.sessionId,
+  })
   const handledChannelBridgeOpenRequestRef = useRef(channelBridgeOpenRequest)
   const handledChannelBridgeRouteRequestRef = useRef(channelBridgeRouteToggleRequest)
   // Read the latest bridge controller from inside sendMessage without widening
