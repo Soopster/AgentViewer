@@ -58,11 +58,11 @@ importers:
         specifier: ^2.0.0
         version: 2.0.0
       '@opencode-ai/plugin':
-        specifier: ^1.18.18
-        version: 1.18.18(@opentui/core@0.5.4(typescript@7.0.2)(web-tree-sitter@0.25.10))
+        specifier: ^1.18.20
+        version: 1.18.20(@opentui/core@0.5.4(typescript@7.0.2)(web-tree-sitter@0.25.10))
       '@opencode-ai/sdk':
-        specifier: ^1.18.18
-        version: 1.18.18
+        specifier: ^1.18.20
+        version: 1.18.20
       '@opentui/core':
         specifier: ^0.5.4
         version: 0.5.4(typescript@7.0.2)(web-tree-sitter@0.25.10)
@@ -1344,8 +1344,8 @@ packages:
     resolution: {integrity: sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg==}
     engines: {node: '>= 8'}
 
-  '@opencode-ai/plugin@1.18.18':
-    resolution: {integrity: sha512-vqQeqJtn9c+J+tIQDzYk88xip/NVNN1hym1ATmckxo6zINHAoXoul4Sw/jgnvL00rLsfAvhja28qax4h3g/5Jg==}
+  '@opencode-ai/plugin@1.18.20':
+    resolution: {integrity: sha512-Gf0hlP1SY4XnSY3EgOwyLngjllnnJhAcdBooB6M/NBkqHJc6T3ORrIJ55RnWsWhpFR4C/0wN0PehHNxvTj0a7Q==}
     peerDependencies:
       '@opentui/core': '>=0.4.5'
       '@opentui/keymap': '>=0.4.5'
@@ -1358,8 +1358,8 @@ packages:
       '@opentui/solid':
         optional: true
 
-  '@opencode-ai/sdk@1.18.18':
-    resolution: {integrity: sha512-zJlwXskIR47V1dkPJqeKBgq7nejG1uU8lJaGIGqbX3MWRCT8vKn0fEotbxuPCKnTdmWsDyNGNg9q1qIliDSMDA==}
+  '@opencode-ai/sdk@1.18.20':
+    resolution: {integrity: sha512-07PeB/aHS//CaByGXbeHqQXuuIaKCUnZt7zUf1lbobR34fURtmAH9Wzks37vqnbZo0RUUJx3JsfIWT9hUH1EgA==}
 
   '@opentelemetry/api-logs@0.214.0':
     resolution: {integrity: sha512-40lSJeqYO8Uz2Yj7u94/SJWE/wONa7rmMKjI1ZcIjgf3MHNHv1OZUCrCETGuaRF62d5pQD1wKIW+L4lmSMTzZA==}
@@ -6969,16 +6969,16 @@ snapshots:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.20.1
 
-  '@opencode-ai/plugin@1.18.18(@opentui/core@0.5.4(typescript@7.0.2)(web-tree-sitter@0.25.10))':
+  '@opencode-ai/plugin@1.18.20(@opentui/core@0.5.4(typescript@7.0.2)(web-tree-sitter@0.25.10))':
     dependencies:
       '@ai-sdk/provider': 3.0.8
-      '@opencode-ai/sdk': 1.18.18
+      '@opencode-ai/sdk': 1.18.20
       effect: 4.0.0-beta.83
       zod: 4.1.8
     optionalDependencies:
       '@opentui/core': 0.5.4(typescript@7.0.2)(web-tree-sitter@0.25.10)
 
-  '@opencode-ai/sdk@1.18.18':
+  '@opencode-ai/sdk@1.18.20':
     dependencies:
       cross-spawn: 7.0.6
 

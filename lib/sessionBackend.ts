@@ -188,7 +188,13 @@ import {
 } from './codexMapper'
 import { getCodexStoredTag, getCodexStoredTagsForSessions, setCodexStoredTag } from './codexTags'
 import { getOpenCodeClient, getOpenCodeV2Client } from './opencodeClient'
-import { getOpenCodeProjectDiagnostics, getOpenCodeSessionSnapshot, subscribeToOpenCodeEvents } from './opencodeHarness'
+import {
+  ensureOpenCodeEventsStarted,
+  getOpenCodeProjectDiagnostics,
+  getOpenCodeSessionSnapshot,
+  getOpenCodeTranscriptCacheVersion,
+  subscribeToOpenCodeEvents,
+} from './opencodeHarness'
 import { getCodexProjectDiagnostics, subscribeToCodexEvents } from './codexHarness'
 import {
   currentOpenCodeModelValue,
@@ -200,6 +206,7 @@ import {
   mapOpenCodeModelsToSessionModels,
   mapOpenCodeSessionToInfo,
   mapOpenCodeSessionToSession,
+  openCodeMessagesSignature,
   summarizeOpenCodeDiffs,
   updateOpenCodeTurnOutputUsage,
 } from './opencodeMapper'
@@ -359,12 +366,32 @@ async function getCachedSessionInfo(sessionId: string, dir: string | undefined):
 // beyond that re-maps once on revisit instead of pinning MBs indefinitely.
 const MAPPED_MESSAGE_TTL = 60_000
 const MAPPED_MESSAGE_CACHE_MAX = 4
+// OpenCode events invalidate transcript mappings immediately, but the event
+// stream is only an optimization: a startup/reconnect race must not leave an
+// empty or partial transcript authoritative forever. Revalidate against the
+// SDK often enough that the active transcript's fallback poll is meaningful.
+const OPENCODE_TRANSCRIPT_EVENT_CACHE_MAX_AGE_MS = 1_000
 type MappedMessageCacheEntry = {
   signature: string
   messages: SessionMessage[]
   ts: number
 }
 const mappedMessageCache = new Map<string, MappedMessageCacheEntry>()
+const openCodeTranscriptVerifications = new Map<string, {
+  version: string
+  signature: string
+  at: number
+}>()
+
+function touchOpenCodeTranscriptVerification(sessionId: string, version: string, signature: string): void {
+  openCodeTranscriptVerifications.delete(sessionId)
+  openCodeTranscriptVerifications.set(sessionId, { version, signature, at: Date.now() })
+  while (openCodeTranscriptVerifications.size > MAPPED_MESSAGE_CACHE_MAX) {
+    const oldest = openCodeTranscriptVerifications.keys().next().value
+    if (oldest === undefined) break
+    openCodeTranscriptVerifications.delete(oldest)
+  }
+}
 
 function pruneMappedMessageCache() {
   const deadline = Date.now() - MAPPED_MESSAGE_TTL * 3
@@ -2625,13 +2652,18 @@ async function ensureCodexThreadResumed(sessionId: string): Promise<{ model: str
   return resume
 }
 
-async function listOpenCodeSessions({ dir }: ListParams): Promise<Session[]> {
-  const client = await getOpenCodeClient()
+async function listOpenCodeSessions({ dir, limit, offset }: ListParams): Promise<Session[]> {
+  const client = await getOpenCodeV2Client()
+  // The compatibility client bundled at the package root still omits the
+  // server's `limit` field from its generated type and silently leaves us at
+  // OpenCode's 100-session default. The v2 client describes the current
+  // endpoint accurately, so request exactly the prefix needed for local
+  // pagination instead of fetching too little or an unbounded history.
   const response = await client.session.list({
-    ...OPENCODE_OPTIONS,
-    query: dir ? { directory: dir } : undefined,
-  })
-  const sessions = openCodeData<OpenCodeSession[]>(response)
+    ...(dir ? { directory: dir } : {}),
+    limit: Math.max(1, limit + offset),
+  }, OPENCODE_OPTIONS)
+  const sessions = openCodeData<OpenCodeSession[]>(response as unknown as { data: OpenCodeSession[] })
   const tags = await getOpenCodeStoredTagsForSessions(sessions.map((session) => session.id))
   return sessions.map((session) => mapOpenCodeSessionToSession(session, tags[session.id] ?? null))
 }
@@ -3610,14 +3642,37 @@ async function readCodexMessagesAll(sessionId: string): Promise<SessionMessage[]
 }
 
 async function readOpenCodeMessagesAll(sessionId: string): Promise<SessionMessage[]> {
+  ensureOpenCodeEventsStarted()
+  const cacheKey = `opencode:${sessionId}`
+  const versionBeforeFetch = getOpenCodeTranscriptCacheVersion(sessionId)
+  const verified = openCodeTranscriptVerifications.get(sessionId)
+  if (
+    versionBeforeFetch
+    && verified?.version === versionBeforeFetch
+    && Date.now() - verified.at < OPENCODE_TRANSCRIPT_EVENT_CACHE_MAX_AGE_MS
+  ) {
+    const cached = readMappedMessagesCache(cacheKey, verified.signature)
+    if (cached) return cached
+  }
   const raw = await getOpenCodeSessionMessages(sessionId)
-  const last = raw.at(-1)
-  const lastPart = last?.parts.at(-1) as { id?: string } | undefined
-  const signature = `${raw.length}:${last?.info.id ?? ''}:${last?.parts.length ?? 0}:${lastPart?.id ?? ''}`
-  const cached = readMappedMessagesCache(`opencode:${sessionId}`, signature)
-  if (cached) return cached
-  const messages = sortMessagesChronologically(mapOpenCodeMessagesToSessionMessages(raw))
-  return writeMappedMessagesCache(`opencode:${sessionId}`, signature, messages)
+  // OpenCode mutates the current assistant bundle in place while streaming:
+  // IDs and array lengths stay constant as text grows and tool states advance.
+  // Fingerprint that mutable tail so polling cannot return a stale mapped
+  // transcript, while avoiding a full-history hash for large sessions.
+  const signature = openCodeMessagesSignature(raw)
+  const cached = readMappedMessagesCache(cacheKey, signature)
+  const messages = cached
+    ?? writeMappedMessagesCache(cacheKey, signature, sortMessagesChronologically(mapOpenCodeMessagesToSessionMessages(raw)))
+  const versionAfterFetch = getOpenCodeTranscriptCacheVersion(sessionId)
+  // Only trust an event version that stayed stable across the SDK read. If an
+  // event raced the fetch, leave the verification absent so the next read
+  // checks OpenCode again instead of blessing a potentially older snapshot.
+  if (versionBeforeFetch && versionAfterFetch === versionBeforeFetch) {
+    touchOpenCodeTranscriptVerification(sessionId, versionAfterFetch, signature)
+  } else {
+    openCodeTranscriptVerifications.delete(sessionId)
+  }
+  return messages
 }
 
 async function readCopilotMessagesAll(sessionId: string): Promise<SessionMessage[]> {
@@ -5916,6 +5971,25 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
 
         consumeEvents = (async () => {
           for await (const harnessEvent of activeSubscription.events) {
+            if (harnessEvent.type === 'snapshot') {
+              const snapshot = harnessEvent.snapshot
+              if (snapshot.status) {
+                safeEnqueue(`event: opencode-status\ndata: ${JSON.stringify(snapshot.status)}\n\n`)
+              }
+              if (snapshot.todos && snapshot.todos.length > 0) {
+                safeEnqueue(`event: opencode-todos\ndata: ${JSON.stringify(snapshot.todos)}\n\n`)
+              }
+              for (const permission of snapshot.permissions) {
+                safeEnqueue(`data: ${formatOpenCodeEvent({ type: 'permission.updated', properties: permission } as OpenCodeEvent)}\n\n`)
+              }
+              for (const question of snapshot.questions) {
+                safeEnqueue(`data: ${formatOpenCodeEvent({
+                  type: 'question.asked',
+                  properties: question,
+                } as unknown as OpenCodeEvent)}\n\n`)
+              }
+              continue
+            }
             if (harnessEvent.type !== 'event') continue
 
             const event = harnessEvent.event
@@ -6989,9 +7063,9 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
 }
 
 /**
- * Warm the send path for a session before the user hits Enter. Fired by the
- * composer UI when it gains focus, so the expensive per-session setup overlaps
- * with the user typing instead of sitting in front of the first token:
+ * Warm the send path for a session before the user hits Enter. Fresh-session
+ * creation awaits this before enabling the composer; existing sessions call it
+ * on focus so expensive setup can overlap with typing:
  * - claude: spawn the warm pool Query the send will attach to (the CLI boot is
  *   ~1-3s — the dominant first-send cost). Skipped when an entry already
  *   exists so a prewarm can never recycle a live or in-turn entry.
@@ -7000,7 +7074,8 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
  *   + package resolution on a cold open; the pool makes this idempotent).
  * - copilot: resume the SDK session (cached by the copilot client).
  * Opencode connects through a long-lived local server — cheap per-send.
- * Best-effort: failures just mean the send pays the usual cold cost.
+ * Existing-session focus treats failures as best-effort. Fresh-session loading
+ * surfaces them and keeps sending disabled rather than racing a cold runtime.
  */
 export async function prewarmViewSession(params: {
   sessionId: string
@@ -7012,7 +7087,11 @@ export async function prewarmViewSession(params: {
 }): Promise<void> {
   const provider = await resolveProvider(params.provider)
   if (provider === 'claude') {
-    if (peekClaudeSession(params.sessionId)) return
+    const warm = peekClaudeSession(params.sessionId)
+    if (warm) {
+      await warm.query.initializationResult()
+      return
+    }
     // The SDK's `sessionId` create-time option forces the CLI to adopt the
     // client's own pending UUID as its real session id — spawning now (while
     // the user is still typing their first message) runs the CLI's
@@ -7021,7 +7100,7 @@ export async function prewarmViewSession(params: {
     // this warm entry up via the pooled path once a message actually arrives
     // (see the pendingWarm check there); if it isn't ready in time, the cold
     // path spawns fresh exactly as before — no regression either way.
-    acquireClaudeSession({
+    const entry = acquireClaudeSession({
       sessionId: params.sessionId,
       cwd: params.cwd,
       // Leave model unset when not provided — see createClaudeStream for why
@@ -7031,6 +7110,7 @@ export async function prewarmViewSession(params: {
       effort: params.effort,
       isPendingSession: params.isPending,
     })
+    await entry.query.initializationResult()
     return
   }
   if (provider === 'codex') {

@@ -16,6 +16,7 @@ export const NEW_SESSION_PROVIDERS: AgentProvider[] = ['claude', 'codex', 'openc
 
 type Row = 'folder' | 'provider'
 const ROWS: Row[] = ['folder', 'provider']
+export const NEW_SESSION_LOADING_FRAMES = ['◐', '◓', '◑', '◒'] as const
 
 type Props = {
   theme: TuiThemePalette
@@ -53,6 +54,15 @@ export function NewSessionModal({
   onKeyHandlerReady,
 }: Props) {
   const [row, setRow] = useState<Row>('folder')
+  const [loadingFrame, setLoadingFrame] = useState(0)
+
+  useEffect(() => {
+    if (!busy) return undefined
+    const timer = setInterval(() => {
+      setLoadingFrame((current) => (current + 1) % NEW_SESSION_LOADING_FRAMES.length)
+    }, 90)
+    return () => clearInterval(timer)
+  }, [busy])
 
   const handleKey = useCallback((key: NewSessionKeyEvent) => {
     if (busy) return
@@ -123,7 +133,7 @@ export function NewSessionModal({
       <box height={1} paddingX={1} backgroundColor={theme.surface2}>
         <text wrapMode="none">
           {busy
-            ? <span fg={theme.amber}>Creating session…</span>
+            ? <span fg={theme.amber}>{`${NEW_SESSION_LOADING_FRAMES[loadingFrame]} Creating and loading session…`}</span>
             : <span fg={theme.muted}>{'↑↓ move · enter create · esc cancel'}</span>}
         </text>
       </box>

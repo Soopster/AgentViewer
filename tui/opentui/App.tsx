@@ -196,11 +196,14 @@ import {
   calculateSplitPaneBodyRows,
   calculateSplitPaneLayout,
   groupItemsBySplitPaneKey,
+  isComposerTargetReady,
   preserveArrayIdentity,
   removeSplitPaneKey,
+  resolveComposerTargetSession,
   resolveCoordinationTranscriptTarget,
   resolveSelectedSession,
   resolveSelectedSessionIndex,
+  runComposerSessionPreparation,
   splitCommandKey,
 } from './splitPaneState'
 
@@ -7114,6 +7117,13 @@ export default function OpenTuiApp() {
   // Declared here (not derived from splitPaneSessions, which the layout
   // computes much later) so the composer target memo can read it.
   const [composerPaneTargetKey, setComposerPaneTargetKey] = useState<string | null>(null)
+  // Creating a session is an explicit routing choice. Keep that target pinned
+  // while its composer is open so the sole-running-session convenience fallback
+  // cannot redirect the first prompt into an older OpenCode (or other provider)
+  // turn.
+  const [composerPreferredTargetKey, setComposerPreferredTargetKey] = useState<string | null>(null)
+  const [composerPreparingTargetKey, setComposerPreparingTargetKey] = useState<string | null>(null)
+  const composerPreparingTargetKeyRef = useRef<string | null>(null)
   const splitPaneHandlesRef = useRef(new Map<number, SplitPaneHandle>())
   const registerSplitPaneHandle = useEffectEvent((paneIndex: number, handle: SplitPaneHandle | null) => {
     if (handle) splitPaneHandlesRef.current.set(paneIndex, handle)
@@ -7903,33 +7913,15 @@ export default function OpenTuiApp() {
     return openTabSessions.find((tab) => sessionKey(tab) === pinnedKey) ?? null
   }, [splitFocusIndex, splitPinnedKeys, openTabSessions])
 
-  const composerTargetSession = useMemo<Session | null>(() => {
-    // An explicit pane target wins over both the selection and running-session
-    // auto-targeting — the user aimed it at a specific pane.
-    if (composerPaneTargetKey) {
-      const pinned = openTabSessions.find((tab) => sessionKey(tab) === composerPaneTargetKey)
-      if (pinned) return pinned
-    }
-    if (selectedSession) {
-      const selectedIsRunning = providerRunningSessions.some((running) =>
-        running.sessionId === selectedSession.sessionId && running.provider === selectedSession.provider,
-      )
-      if (selectedIsRunning) return selectedSession
-    }
-
-    if (providerRunningSessions.length === 1) {
-      const onlyRunning = providerRunningSessions[0]
-      const matchedSession = sessions.find((session) =>
-        session.sessionId === onlyRunning.sessionId && session.provider === onlyRunning.provider,
-      )
-      return matchedSession ?? {
-        sessionId: onlyRunning.sessionId,
-        provider: onlyRunning.provider,
-      }
-    }
-
-    return selectedSession
-  }, [providerRunningSessions, selectedSession, sessions, composerPaneTargetKey, openTabSessions])
+  const composerTargetSession = useMemo<Session | null>(() => resolveComposerTargetSession({
+    paneTargetKey: composerPaneTargetKey,
+    preferredTargetKey: composerPreferredTargetKey,
+    selectedSession,
+    runningSessions: providerRunningSessions,
+    sessions,
+    openTabSessions,
+    keyOf: sessionKey,
+  }), [composerPaneTargetKey, composerPreferredTargetKey, openTabSessions, providerRunningSessions, selectedSession, sessions])
   const composerTargetSessionIdentity = composerTargetSession
     ? sessionKey(composerTargetSession)
     : null
@@ -11882,7 +11874,8 @@ export default function OpenTuiApp() {
       }
       setOpenTabSessions((prev) => prev.some((s) => sessionKey(s) === sessionKey(draft)) ? prev : [...prev, draft])
       setSelectedSessionKey(sessionKey(draft))
-      await refreshSessions(provider, true, false)
+      setComposerPreferredTargetKey(sessionKey(draft))
+      await prepareCreatedSessionForComposer(draft)
       setWorktreeModalOpen(false)
       setWorktreeDraft('')
       setComposerActive(true)
@@ -12032,6 +12025,33 @@ export default function OpenTuiApp() {
     setFolderPickerForNewSession(false)
   })
 
+  const prepareCreatedSessionForComposer = useEffectEvent(async (draft: Session) => {
+    const key = sessionKey(draft)
+    composerPreparingTargetKeyRef.current = key
+    setComposerPreparingTargetKey(key)
+    try {
+      await runComposerSessionPreparation({
+        refreshSessions: () => refreshSessions(provider, true, false),
+        prewarmRuntime: () => prewarmTuiSession(draft, {
+          model: tuiModelOverride[key] || undefined,
+          effort: tuiEffort === 'auto' ? undefined : tuiEffort,
+          isPending: draft.isPending === true,
+        }),
+        loadDetail: () => draft.isPending
+          ? Promise.resolve()
+          : refreshSelectedSessionDetail(draft, true),
+        // Provider commands, agents, modes, and permission controls can depend
+        // on the warmed runtime (notably Claude), so load them after prewarm.
+        loadAffordances: () => fetchComposerAffordances(draft, key),
+      })
+    } finally {
+      if (composerPreparingTargetKeyRef.current === key) {
+        composerPreparingTargetKeyRef.current = null
+        setComposerPreparingTargetKey(null)
+      }
+    }
+  })
+
   const submitNewSession = useEffectEvent(() => {
     if (newSessionBusy) return
     const targetProvider = newSessionProvider
@@ -12051,7 +12071,8 @@ export default function OpenTuiApp() {
         }
         setOpenTabSessions((prev) => prev.some((s) => sessionKey(s) === sessionKey(draft)) ? prev : [...prev, draft])
         setSelectedSessionKey(sessionKey(draft))
-        await refreshSessions(provider, true, false)
+        setComposerPreferredTargetKey(sessionKey(draft))
+        await prepareCreatedSessionForComposer(draft)
         setNewSessionModalOpen(false)
         setComposerActive(true)
         showNotice('info', result.isPending
@@ -12620,6 +12641,14 @@ export default function OpenTuiApp() {
     const trimmed = submission.messageText
     if ((!trimmed && submission.attachments.length === 0) || !composerTargetSession) return
     const submissionTargetKey = sessionKey(composerTargetSession)
+    if (!isRetry && !isComposerTargetReady({
+      preparingTargetKey: composerPreparingTargetKeyRef.current,
+      targetSession: composerTargetSession,
+      keyOf: sessionKey,
+    })) {
+      showNotice('info', 'Session is still loading — send will be available when it is ready')
+      return
+    }
 
     const crossSessionCommand = !isRetry && submission.attachments.length === 0
       ? parseCrossSessionComposerCommand(trimmed)
@@ -14390,6 +14419,23 @@ export default function OpenTuiApp() {
   useEffect(() => {
     if (!composerActive && composerPaneTargetKey !== null) setComposerPaneTargetKey(null)
   }, [composerActive, composerPaneTargetKey])
+
+  useEffect(() => {
+    if (
+      composerPreferredTargetKey !== null
+      && (
+        selectedSessionKey !== composerPreferredTargetKey
+        || (
+          !composerActive
+          && composerPreparingTargetKey !== composerPreferredTargetKey
+          && !newSessionModalOpen
+          && !worktreeModalOpen
+        )
+      )
+    ) {
+      setComposerPreferredTargetKey(null)
+    }
+  }, [composerActive, composerPreferredTargetKey, composerPreparingTargetKey, newSessionModalOpen, selectedSessionKey, worktreeModalOpen])
 
   // Reconcile split-pane pins against the open tabs. This is the ONLY writer of
   // splitPinnedKeys besides the explicit \ and | commands, and it holds three

@@ -182,3 +182,85 @@ export function resolveSelectedSession<S>(
   }
   return sessions[0] ?? null
 }
+
+/**
+ * Resolve where the composer should send. A freshly-created session is an
+ * explicit user target, so it must outrank the convenience fallback that
+ * steers a composer toward the provider's sole running turn.
+ */
+export function resolveComposerTargetSession({
+  paneTargetKey,
+  preferredTargetKey,
+  selectedSession,
+  runningSessions,
+  sessions,
+  openTabSessions,
+  keyOf,
+}: {
+  paneTargetKey: string | null
+  preferredTargetKey: string | null
+  selectedSession: Session | null
+  runningSessions: readonly Pick<Session, 'sessionId' | 'provider'>[]
+  sessions: readonly Session[]
+  openTabSessions: readonly Session[]
+  keyOf: (session: Pick<Session, 'sessionId' | 'provider'>) => string
+}): Session | null {
+  if (paneTargetKey) {
+    const pinned = openTabSessions.find((tab) => keyOf(tab) === paneTargetKey)
+    if (pinned) return pinned
+  }
+
+  if (selectedSession && preferredTargetKey === keyOf(selectedSession)) {
+    return selectedSession
+  }
+
+  if (selectedSession) {
+    const selectedKey = keyOf(selectedSession)
+    if (runningSessions.some((running) => keyOf(running) === selectedKey)) {
+      return selectedSession
+    }
+  }
+
+  if (runningSessions.length === 1) {
+    const onlyRunning = runningSessions[0]!
+    const runningKey = keyOf(onlyRunning)
+    return sessions.find((session) => keyOf(session) === runningKey) ?? {
+      sessionId: onlyRunning.sessionId,
+      provider: onlyRunning.provider,
+    }
+  }
+
+  return selectedSession
+}
+
+export function isComposerTargetReady({
+  preparingTargetKey,
+  targetSession,
+  keyOf,
+}: {
+  preparingTargetKey: string | null
+  targetSession: Pick<Session, 'sessionId' | 'provider'> | null
+  keyOf: (session: Pick<Session, 'sessionId' | 'provider'>) => string
+}): boolean {
+  if (!targetSession) return false
+  return preparingTargetKey !== keyOf(targetSession)
+}
+
+export async function runComposerSessionPreparation({
+  refreshSessions,
+  prewarmRuntime,
+  loadDetail,
+  loadAffordances,
+}: {
+  refreshSessions: () => Promise<unknown>
+  prewarmRuntime: () => Promise<unknown>
+  loadDetail: () => Promise<unknown>
+  loadAffordances: () => Promise<unknown>
+}): Promise<void> {
+  await Promise.all([
+    refreshSessions(),
+    prewarmRuntime(),
+    loadDetail(),
+  ])
+  await loadAffordances()
+}

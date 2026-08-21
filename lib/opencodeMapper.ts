@@ -19,11 +19,17 @@ import type {
   SessionMessage,
   SessionModelInfo,
 } from './types'
+import { compactStableFingerprint } from './compactFingerprint'
 import { OPENCODE_CAPABILITIES } from './provider'
 
 type OpenCodeMessageBundle = {
   info: Message
   parts: Part[]
+}
+
+export function openCodeMessagesSignature(messages: OpenCodeMessageBundle[]): string {
+  const last = messages.at(-1)
+  return `${messages.length}:${last?.info.id ?? ''}:${last ? compactStableFingerprint(last) : ''}`
 }
 
 type OpenCodeModelRef = {
