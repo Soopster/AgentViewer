@@ -599,6 +599,7 @@ function filterThemeModes(modes: TuiThemeMode[], query: string): TuiThemeMode[] 
 const SEARCH_MAX_CHARS = 80
 const SESSION_REFRESH_MS = 5000
 const DETAIL_REFRESH_MS = 2000
+const RECENT_SESSION_ACTIVITY_MS = 60 * 60_000
 // Cadence for reconciling against the in-process running-turn registry (a
 // cheap synchronous read — the TUI and its backend share one process).
 const REATTACH_POLL_MS = 1500
@@ -2690,6 +2691,11 @@ function sessionActivityMs(session: Session): number {
     return Number.isNaN(ms) ? 0 : ms
   }
   return 0
+}
+
+function isSessionRecentlyTouched(session: Session, now = Date.now()): boolean {
+  const activityMs = sessionActivityMs(session)
+  return activityMs > 0 && activityMs >= now - RECENT_SESSION_ACTIVITY_MS
 }
 
 function compareSessionsByActivityDesc(a: Session, b: Session): number {
@@ -9998,19 +10004,21 @@ export default function OpenTuiApp() {
   }, [readerAreaWidth, visibleTabSessions.length])
   const sidebarRowBudget = Math.max(mainContentHeight - 2, 4)
   const sidebarInnerWidth = Math.max(sidebarWidth - 5, 17)
+  const showProviderInSessionRows = provider === 'all'
   const sidebarSortHeader = useMemo(
     () => fitText(
       joinMeta([
         normalizedSessionQuery
           ? `SESSIONS ${filteredSessionsForSidebar.length}/${Math.max(sessions.length, 0)}`
           : `SESSIONS ${Math.max(sessions.length, 0)}`,
+        provider === 'all' ? 'ALL PROVIDERS' : formatProviderLabel(provider),
         `sort ${sidebarSortLabel}`,
         normalizedSessionQuery ? `/${sessionSearchQuery}` : '/ search',
         'a agents',
       ]),
       Math.max(sidebarInnerWidth - 2, 12),
     ),
-    [sidebarInnerWidth, sidebarSortLabel, sessions.length, filteredSessionsForSidebar.length, normalizedSessionQuery, sessionSearchQuery],
+    [sidebarInnerWidth, sidebarSortLabel, sessions.length, filteredSessionsForSidebar.length, normalizedSessionQuery, sessionSearchQuery, provider],
   )
   const coordinatorSidebarHeader = useMemo(
     () => fitText(
@@ -12507,9 +12515,14 @@ export default function OpenTuiApp() {
           ?? (subagentEntry.summary.usage.inputTokens + subagentEntry.summary.usage.outputTokens)
         : 0
       const detail = subagentEntry.kind === 'session'
-        ? joinMeta([formatProviderLabel(subagentEntry.session.provider), timeAgo(subagentEntry.session.lastModified ?? subagentEntry.session.createdAt)])
+        ? joinMeta([
+            showProviderInSessionRows ? formatProviderLabel(subagentEntry.session.provider) : null,
+            `${timeAgo(subagentEntry.session.lastModified ?? subagentEntry.session.createdAt)}${isSessionRecentlyTouched(subagentEntry.session) ? ' ●' : ''}`,
+          ])
         : joinMeta([
-            formatProviderLabel(subagentEntry.summary.provider ?? entry.parentSession.provider),
+            showProviderInSessionRows
+              ? formatProviderLabel(subagentEntry.summary.provider ?? entry.parentSession.provider)
+              : null,
             `${subagentEntry.summary.messageCount} msgs`,
             summaryTokens > 0 ? `${fmtTokens(summaryTokens)} tokens` : null,
           ])
@@ -12541,8 +12554,12 @@ export default function OpenTuiApp() {
     const sessionAccent = getProviderAccent(entry.session.provider ?? 'claude')
     const activityTime = entry.session.lastModified ?? entry.session.createdAt
     const ago = timeAgo(activityTime)
+    const recentlyTouched = isSessionRecentlyTouched(entry.session)
 
-    const metaLine = joinMeta([formatProviderLabel(entry.session.provider), ago])
+    const metaLine = joinMeta([
+      showProviderInSessionRows ? formatProviderLabel(entry.session.provider) : null,
+      ago,
+    ])
 
     return (
       <box
@@ -12582,12 +12599,13 @@ export default function OpenTuiApp() {
         <box paddingX={1} flexDirection="row" backgroundColor={selected ? theme.surface3 : theme.surface}>
           <text fg={sessionAccent} wrapMode="none">{selected ? '▎' : ' '}</text>
           <text fg={selected ? sessionAccent : theme.dim} wrapMode="none">
-            {fitText(metaLine, sidebarInnerWidth - 3)}
+            {fitText(metaLine, sidebarInnerWidth - 3 - (recentlyTouched ? 2 : 0))}
           </text>
+          {recentlyTouched ? <text fg={sessionAccent} wrapMode="none">{' ●'}</text> : null}
         </box>
       </box>
     )
-  }, [theme, density, sidebarInnerWidth, renameSessionKey, renameDraft, commitRename, selectSidebarSession])
+  }, [theme, density, sidebarInnerWidth, renameSessionKey, renameDraft, commitRename, selectSidebarSession, showProviderInSessionRows])
 
   const buildCoordinatorRow = useCallback((entry: CoordinatorSidebarEntry, selected: boolean) => {
     if (entry.type === 'run') {
