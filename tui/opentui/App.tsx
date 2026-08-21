@@ -178,6 +178,7 @@ import { deliverComposerSteer } from '../../lib/composerSteering'
 import { parseClaudeCommandLifecycle, type ClaudeCommandLifecycleState } from '../../lib/claudeCommandLifecycle'
 import { isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs, TransientAwareSendError } from '../../lib/transientError'
 import { listProjectFiles } from '../../lib/projectFiles'
+import { fetchGitSummary, type GitSummary } from '../../lib/gitProvider'
 import { runGitCommand } from '../../lib/gitNodeProvider'
 import { getSlashCommandSuggestions, filterSlashCommands, normalizeSlashCommandSuggestions, type SlashCommandSuggestion } from '../../lib/slashCommands'
 import { parseCrossSessionComposerCommand } from '../../lib/crossSessionCommands'
@@ -674,6 +675,7 @@ const NOOP_SELECT_AGENT_TOOL = (_groupKey: string, _toolKey: string) => {}
 // command lists change rarely (new files in .claude/commands etc.).
 const COMPOSER_AFFORDANCES_TTL_MS = 5 * 60_000
 const COMPOSER_AFFORDANCES_CACHE_MAX = 64
+const COMPOSER_GIT_SUMMARY_POLL_MS = 5_000
 // Safety net: max time to wait for a completed turn's persisted rows before
 // force-revealing the polled transcript, so the "Syncing…" state can't hang
 // forever on a lost/delayed write. Generous vs the 2s detail poll.
@@ -9072,19 +9074,44 @@ export default function OpenTuiApp() {
   )
   const composerWorkingDirectory = composerTargetSessionInfo?.cwd ?? composerTargetSession?.cwd ?? null
   const composerGitBranch = composerTargetSessionInfo?.gitBranch ?? null
+  const [composerGitSummary, setComposerGitSummary] = useState<GitSummary | null>(null)
+  useEffect(() => {
+    if (!composerWorkingDirectory) {
+      setComposerGitSummary(null)
+      return
+    }
+
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    setComposerGitSummary(null)
+    const refresh = async () => {
+      const summary = await fetchGitSummary(composerWorkingDirectory, runGitCommand)
+      if (cancelled) return
+      setComposerGitSummary(summary)
+      timer = setTimeout(() => { void refresh() }, COMPOSER_GIT_SUMMARY_POLL_MS)
+    }
+    void refresh()
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [composerWorkingDirectory])
   const composerLocationSegments = useMemo<InlineTextSegment[]>(() => {
     const parts: InlineTextSegment[] = []
-    if (composerWorkingDirectory) parts.push({ text: `cwd ${composerWorkingDirectory}`, fg: theme.dim })
-    if (composerGitBranch) parts.push({ text: `⎇ ${composerGitBranch}`, fg: theme.violet })
+    const branch = composerGitSummary?.branch ?? composerGitBranch
+    if (branch) parts.push({ text: branch, fg: theme.green })
+    if (composerGitSummary?.modified) parts.push({ text: `  ~${composerGitSummary.modified}`, fg: theme.amber })
+    if (composerGitSummary?.untracked) parts.push({ text: `  ?${composerGitSummary.untracked}`, fg: theme.dim })
+    if (composerGitSummary?.stashes) parts.push({ text: `  *${composerGitSummary.stashes}`, fg: theme.amber })
     if (selectedWorktreeTask) {
       const counts = [
         selectedWorktreeTask.dirtyFiles > 0 ? `${selectedWorktreeTask.dirtyFiles} dirty` : null,
         selectedWorktreeTask.aheadCommits > 0 ? `+${selectedWorktreeTask.aheadCommits}` : null,
       ].filter(Boolean).join(' ')
-      parts.push({ text: `⧉ worktree task${counts ? ` · ${counts}` : ''}`, fg: theme.amber })
+      parts.push({ text: ` · ⧉ worktree task${counts ? ` · ${counts}` : ''}`, fg: theme.amber })
     }
     return parts
-  }, [composerGitBranch, composerWorkingDirectory, selectedWorktreeTask, theme.amber, theme.dim, theme.violet])
+  }, [composerGitBranch, composerGitSummary, selectedWorktreeTask, theme.amber, theme.dim, theme.green])
   const buildComposerStatsSegments = (lineCount: number): InlineTextSegment[] => {
     const segments: InlineTextSegment[] = []
     if (composerDraft.length === 0) {
@@ -9107,10 +9134,7 @@ export default function OpenTuiApp() {
     }
     if (composerLocationSegments.length > 0) {
       segments.push({ text: ' · ', fg: theme.dim })
-      composerLocationSegments.forEach((segment, index) => {
-        if (index > 0) segments.push({ text: ' · ', fg: theme.dim })
-        segments.push(segment)
-      })
+      segments.push(...composerLocationSegments)
     }
     return segments
   }
@@ -18071,10 +18095,7 @@ export default function OpenTuiApp() {
     })
     if (composerLocationSegments.length > 0) {
       if (segments.length > 0) segments.push({ text: ' · ', fg: theme.dim })
-      composerLocationSegments.forEach((segment, index) => {
-        if (index > 0) segments.push({ text: ' · ', fg: theme.dim })
-        segments.push(segment)
-      })
+      segments.push(...composerLocationSegments)
     }
     return segments
   }, [composerKnobSegments, composerLocationSegments, theme.dim])

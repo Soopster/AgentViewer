@@ -16,6 +16,13 @@ export type GitData = {
   commits: string[]
 }
 
+export type GitSummary = {
+  branch: string
+  modified: number
+  untracked: number
+  stashes: number
+}
+
 export type GitReviewFile = {
   path: string
   x: string
@@ -65,6 +72,29 @@ function parseGitStatus(statusRaw: string): GitStatusEntry[] {
         path: line.slice(3),
       }))
     : []
+}
+
+export async function fetchGitSummary(cwd: string, runGit: GitCommandRunner): Promise<GitSummary | null> {
+  const [branch, statusRaw, stashCountRaw] = await Promise.all([
+    runGit(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']),
+    runGit(cwd, ['status', '--porcelain', '-u']),
+    runGit(cwd, ['rev-list', '--walk-reflogs', '--count', 'refs/stash']),
+  ])
+  if (!branch) return null
+
+  let modified = 0
+  let untracked = 0
+  for (const entry of parseGitStatus(statusRaw)) {
+    if (entry.x === '?' && entry.y === '?') untracked += 1
+    else modified += 1
+  }
+
+  return {
+    branch,
+    modified,
+    untracked,
+    stashes: Number.parseInt(stashCountRaw, 10) || 0,
+  }
 }
 
 function reviewPath(entry: GitStatusEntry): string {
