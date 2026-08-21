@@ -172,6 +172,7 @@ import type {
 import type {
   DynamicToolSpec,
   ErrorNotification,
+  ThreadSourceKind,
   ThreadStatusChangedNotification,
   ThreadTokenUsageUpdatedNotification,
   TurnCompletedNotification,
@@ -455,6 +456,18 @@ const OPENCODE_OPTIONS = {
 // watchdog probes session.status to confirm the turn really finished.
 const OPENCODE_WATCHDOG_IDLE_MS = 30000
 const CODEX_WATCHDOG_IDLE_MS = 30000
+const CODEX_SESSION_LIST_SOURCE_KINDS: ThreadSourceKind[] = [
+  'cli',
+  'vscode',
+  'exec',
+  'appServer',
+  'subAgent',
+  'subAgentReview',
+  'subAgentCompact',
+  'subAgentThreadSpawn',
+  'subAgentOther',
+  'unknown',
+]
 const COPILOT_TURN_INACTIVITY_MS = 300_000
 
 function openCodeData<T>(response: T | { data: T }): T {
@@ -2381,6 +2394,7 @@ async function listCodexSessions({ limit, offset, dir }: ListParams): Promise<Se
   const response = await client.request('thread/list', {
     limit: limit + offset,
     cwd: dir || undefined,
+    sourceKinds: CODEX_SESSION_LIST_SOURCE_KINDS,
   })
   const page = response.data.slice(offset, offset + limit)
   const tags = await getCodexStoredTagsForSessions(page.map((thread) => thread.id))
@@ -3835,6 +3849,104 @@ export async function getClaudeSubagentSummaries(sessionId: string, providerOver
     }
   })
   return summaries.filter((s): s is SubagentSummary => s !== null)
+}
+
+function copilotSubagentSummaries(events: CopilotSessionEvent[]): SubagentSummary[] {
+  const summaries = new Map<string, SubagentSummary>()
+  for (const rawEvent of events) {
+    if (
+      rawEvent.type !== 'subagent.started'
+      && rawEvent.type !== 'subagent.completed'
+      && rawEvent.type !== 'subagent.failed'
+    ) continue
+    const event = rawEvent as typeof rawEvent & {
+      agentId?: string
+      timestamp?: string
+      data: {
+        toolCallId?: string
+        agentDescription?: string
+        agentDisplayName?: string
+        agentName?: string
+        totalTokens?: number
+        error?: string
+      }
+    }
+    const agentId = event.agentId ?? event.data.toolCallId
+    if (!agentId) continue
+    const existing = summaries.get(agentId)
+    const taskDescription = event.data.agentDescription
+      ?? event.data.agentDisplayName
+      ?? event.data.agentName
+      ?? existing?.taskDescription
+    const totalTokens = (existing?.usage.totalTokens ?? 0) + (event.data.totalTokens ?? 0)
+    summaries.set(agentId, {
+      agentId,
+      provider: 'copilot',
+      taskDescription,
+      messageCount: (existing?.messageCount ?? 0) + 1,
+      usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, totalTokens },
+      startedAt: existing?.startedAt ?? event.timestamp,
+      endedAt: event.type === 'subagent.started' ? existing?.endedAt : event.timestamp,
+    })
+  }
+  return [...summaries.values()]
+}
+
+const SIDEBAR_SUBAGENT_TOOL_NAMES = new Set(['agent', 'subagent', 'spawn_agent', 'delegate'])
+
+function toolSubagentSummaries(messages: SessionMessage[], provider: AgentProvider): SubagentSummary[] {
+  const summaries = new Map<string, SubagentSummary>()
+  for (const message of messages) {
+    const apiMessage = message.message as { content?: unknown }
+    if (!Array.isArray(apiMessage.content)) continue
+    for (const rawBlock of apiMessage.content) {
+      if (!rawBlock || typeof rawBlock !== 'object') continue
+      const block = rawBlock as { type?: string; id?: string; name?: string; input?: Record<string, unknown> }
+      if (block.type !== 'tool_use' || !block.id || !block.name) continue
+      const normalizedName = block.name.toLowerCase().replace(/^functions[._]/, '')
+      if (!SIDEBAR_SUBAGENT_TOOL_NAMES.has(normalizedName)) continue
+      const input = block.input ?? {}
+      const taskDescription = ['description', 'prompt', 'task', 'subject']
+        .map((key) => input[key])
+        .find((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      summaries.set(block.id, {
+        agentId: block.id,
+        provider,
+        taskDescription: taskDescription?.trim(),
+        messageCount: 1,
+        usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 },
+        startedAt: message.timestamp,
+        endedAt: message.timestamp,
+      })
+    }
+  }
+  return [...summaries.values()]
+}
+
+/** Provider-neutral sidebar summaries. Durable child sessions are returned by
+ * normal session listing with parentSessionId; transcript-local subagents are
+ * summarized here so every provider can use the same nested TUI presentation. */
+export async function getProviderSubagentSummaries(
+  sessionId: string,
+  providerOverride?: AgentProvider,
+): Promise<SubagentSummary[]> {
+  const provider = await resolveProvider(providerOverride)
+  if (provider === 'claude') return getClaudeSubagentSummaries(sessionId, provider)
+  if (provider === 'codex' || provider === 'opencode') return []
+  if (provider === 'copilot') {
+    const events = await readCopilotSessionEvents(sessionId).catch(() => [] as CopilotSessionEvent[])
+    return copilotSubagentSummaries(events)
+  }
+
+  let messages: SessionMessage[] = []
+  if (provider === 'pi') messages = await readPiMessagesAll(sessionId).catch(() => [])
+  else if (provider === 'lmstudio') {
+    const record = await getLmstudioSession(sessionId).catch(() => null)
+    messages = record ? mapLmstudioSessionToMessages(record) : []
+  } else if (provider === 'claude-acp' || provider === 'codex-acp') {
+    messages = readAcpMessagesAll(sessionId, provider)
+  }
+  return toolSubagentSummaries(messages, provider)
 }
 
 async function listProviderSessionsForIndex(params: {

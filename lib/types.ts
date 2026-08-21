@@ -111,8 +111,9 @@ export type Session = {
   isPinned?: boolean
   /**
    * When this session was spawned as a subagent by another session, the id of
-   * the parent. OpenCode subagents (spawned by the `task` tool) populate this
-   * from the SDK's `Session.parentID`.
+   * the parent. Providers with durable child sessions populate this from their
+   * native hierarchy (for example OpenCode `parentID` and Codex
+   * `parentThreadId`).
    */
   parentSessionId?: string
   /**
@@ -130,7 +131,7 @@ export type SubagentSummary = {
   agentId: string
   taskDescription?: string
   messageCount: number
-  usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number }
+  usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; totalTokens?: number }
   startedAt?: string
   endedAt?: string
   provider: AgentProvider

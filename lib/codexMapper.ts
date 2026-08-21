@@ -341,6 +341,7 @@ export function mapCodexThreadToSession(thread: CodexThread, tag: string | null)
     provider: 'codex',
     capabilities: CODEX_CAPABILITIES,
     isPinned: false,
+    parentSessionId: thread.parentThreadId ?? undefined,
     isPending: isPendingCodexThread(thread) ? true : undefined,
   }
 }
@@ -360,6 +361,7 @@ export function mapCodexThreadToSessionInfo(thread: CodexThread, tag: string | n
     capabilities: CODEX_CAPABILITIES,
     isPinned: false,
     currentModel: currentModel ?? undefined,
+    parentSessionId: thread.parentThreadId ?? undefined,
   }
 }
 
