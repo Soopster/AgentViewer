@@ -1574,7 +1574,7 @@ const COMPOSER_MAX_HEIGHT = 12
 // Chat mode has no border to budget rows for — just the input line(s) plus
 // the one dim stats row underneath.
 const CHAT_COMPOSER_CHROME_HEIGHT = 1
-const CHAT_COMPOSER_MIN_HEIGHT = 3
+const CHAT_COMPOSER_MIN_HEIGHT = 2
 const COMPOSER_DOCK_CHROME_HEIGHT = 3
 const COMPOSER_WINDOW_MAX_WIDTH = 88
 const COMPOSER_WINDOW_MAX_HEIGHT = 24
@@ -18958,7 +18958,8 @@ export default function OpenTuiApp() {
             ) : null}
           </box>
 
-          {followTail && visibleTranscriptCards.length > 0 && transcriptView !== 'chat' ? (
+          {followTail && visibleTranscriptCards.length > 0
+            && (transcriptView !== 'chat' || turnRunningForComposer) ? (
             <box paddingX={2} paddingBottom={1}>
               <IdleTicker seed={selectedSessionKey ?? ''} theme={theme} />
             </box>
