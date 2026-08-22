@@ -3760,7 +3760,7 @@ export function usesAgentCardPresentation(
   transcriptView: TuiTranscriptView,
 ): boolean {
   return transcriptView === 'agents'
-    || (transcriptView === 'stream' && isStreamOperationalCard(card))
+    || ((transcriptView === 'stream' || transcriptView === 'chat') && isStreamOperationalCard(card))
 }
 
 export function shouldCenterTranscriptCard(
@@ -4455,7 +4455,7 @@ function cycleDensityValue(current: TuiDensity): TuiDensity {
     : 'comfortable'
 }
 
-const TRANSCRIPT_VIEWS: TuiTranscriptView[] = ['conversation', 'full', 'continue', 'stream', 'agents']
+const TRANSCRIPT_VIEWS: TuiTranscriptView[] = ['conversation', 'full', 'continue', 'stream', 'agents', 'chat']
 
 const TRANSCRIPT_VIEW_LABELS: Record<TuiTranscriptView, string> = {
   conversation: 'CONVERSATION',
@@ -4463,6 +4463,7 @@ const TRANSCRIPT_VIEW_LABELS: Record<TuiTranscriptView, string> = {
   continue: 'CONTINUE',
   stream: 'STREAM',
   agents: 'AGENTS',
+  chat: 'CHAT',
 }
 
 const TRANSCRIPT_VIEW_DESCRIPTIONS: Record<TuiTranscriptView, string> = {
@@ -4471,6 +4472,7 @@ const TRANSCRIPT_VIEW_DESCRIPTIONS: Record<TuiTranscriptView, string> = {
   continue: 'Focus on the latest continuation',
   stream: 'Chronological Claude-style activity stream',
   agents: 'Group tool activity by agent',
+  chat: 'Composer flows inline with the conversation, no dock',
 }
 
 const PROVIDER_SELECT_OPTIONS: SelectOption[] = PROVIDERS.map((provider) => ({
@@ -6957,7 +6959,7 @@ function SplitTranscriptPaneInner({
       diffLayout,
       imessageStyle,
       transcriptWidth,
-      streamMode: transcriptView === 'stream',
+      streamMode: transcriptView === 'stream' || transcriptView === 'chat',
       agentsMode: false,
       agentToolCursorKey: null,
       agentToolExpandedKeys: EMPTY_EXPANDED_KEYS,
@@ -7128,6 +7130,9 @@ export default function OpenTuiApp() {
   const [transcriptDiffSelectionAnchorByCardKey, setTranscriptDiffSelectionAnchorByCardKey] = useState<Record<string, number>>({})
   const [agentToolCursorByGroupKey, setAgentToolCursorByGroupKey] = useState<Record<string, string>>({})
   const [transcriptView, setTranscriptView] = useState<TuiTranscriptView>('conversation')
+  // Chat reuses stream's chronological, borderless card grouping — the two views
+  // diverge only in composer placement (docked vs. inline-with-transcript).
+  const isChatLikeView = transcriptView === 'stream' || transcriptView === 'chat'
   const [transcriptWidth, setTranscriptWidth] = useState<TuiTranscriptWidth>('centered')
   const [focusMode, setFocusMode] = useState(false)
   const [railVisible, setRailVisible] = useState(true)
@@ -8536,13 +8541,13 @@ export default function OpenTuiApp() {
 
   // Continue is prose-only. Stream mirrors native agent CLIs: conversation plus
   // compact operational rows, while low-level system bookkeeping stays hidden.
-  const groupedToolView = transcriptView === 'agents' || transcriptView === 'stream'
+  const groupedToolView = transcriptView === 'agents' || isChatLikeView
   const visibleTranscriptCards = useMemo(
     () => {
       if (transcriptView === 'continue') {
         return transcriptCards.filter((card) => !card.autoFold)
       }
-      if (transcriptView === 'stream') {
+      if (isChatLikeView) {
         // Cards with no renderable content (turn boundaries, empty tool-only
         // messages) collapse to zero height in Stream view but would still be
         // selectable ghost stops for j/k — drop them from the list entirely.
@@ -8723,7 +8728,7 @@ export default function OpenTuiApp() {
     for (const card of visibleTranscriptCards) {
       const shouldAutoFold = (
         transcriptView === 'conversation'
-        || transcriptView === 'stream'
+        || isChatLikeView
         || transcriptView === 'agents'
       ) && card.autoFold
       const isExpanded = shouldAutoFold
@@ -9793,7 +9798,7 @@ export default function OpenTuiApp() {
     if (hasComposerStatusMessage) {
       const streamingResponse = composerSendState === 'sending' && composerLiveText && !composerError
       rows += streamingResponse
-        ? transcriptView === 'stream' || liveAssistantTextCardVisible ? 0 : LIVE_PREVIEW_HEIGHT
+        ? isChatLikeView || liveAssistantTextCardVisible ? 0 : LIVE_PREVIEW_HEIGHT
         : 2
     }
     if (awaitingPersistedTurn) rows += 2
@@ -9841,11 +9846,14 @@ export default function OpenTuiApp() {
     }
     return rows
   })()
+  // Chat mode renders the composer bar as the reader box's own trailing child
+  // (inside its border) rather than a sibling row below it, so its height comes
+  // out of the scrollbox's budget (transcriptViewportRows), not this one.
   const mainContentHeight = Math.max(
     height
     - 3
     - (searchMode || sessionSearchMode ? 4 : 1)
-    - composerDockHeight
+    - (transcriptView === 'chat' ? 0 : composerDockHeight)
     - composerPopoverHeight
     - composerStatusBlockHeight,
     8,
@@ -9992,14 +10000,17 @@ export default function OpenTuiApp() {
     ) return null
     return streamCompletedTurnHint(visibleTranscriptCards)
   }, [awaitingPersistedTurn, composerSendState, reattachedRunning, transcriptView, visibleTranscriptCards])
-  const streamActionFooterRows = transcriptView === 'stream' && visibleTranscriptCards.length > 0 ? 1 : 0
+  const streamActionFooterRows = isChatLikeView && visibleTranscriptCards.length > 0 ? 1 : 0
   const transcriptViewportRows = Math.max(
     mainContentHeight
     - (focusMode ? 4 : 7)
     - (showTabs || showPreviewBar ? TAB_BAR_HEIGHT : 0)
     // Fleet strip is one header row when visible.
     - (fleetStripVisible ? 1 : 0)
-    - streamActionFooterRows,
+    - streamActionFooterRows
+    // The chat-mode composer bar lives inside this same bordered box, below
+    // the scrollbox, so its rows come out of the viewport budget here.
+    - (transcriptView === 'chat' && !composerWindowOpen && !composerHidden ? composerDockHeight : 0),
     8,
   )
 
@@ -10141,7 +10152,7 @@ export default function OpenTuiApp() {
       // Stream is a chronological transcript, not a collapsed card preview:
       // feed prose its untruncated formatter lines and let the text renderer
       // wrap them to the active transcript width. Technical cards stay bounded.
-      const fullTextForCard = transcriptView === 'stream'
+      const fullTextForCard = isChatLikeView
         && (card.category === 'conversation' || card.category === 'insight')
       const prev = cache.get(card)
       if (
@@ -10200,7 +10211,7 @@ export default function OpenTuiApp() {
       unreadBoundaryIndex - transcriptRenderStart,
       pendingNewCount,
       allLandmarksRef.current,
-      transcriptView === 'stream',
+      isChatLikeView,
     )
     return next
   }, [renderedTranscriptCards, transcriptRenderStart, resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount, transcriptView])
@@ -10373,7 +10384,7 @@ export default function OpenTuiApp() {
         diffLayout,
         imessageStyle,
         transcriptWidth,
-        streamMode: transcriptView === 'stream',
+        streamMode: isChatLikeView,
         agentsMode: usesAgentCardPresentation(card, transcriptView),
         agentToolCursorKey: groupedToolView ? agentToolCursorByGroupKey[card.key] ?? null : null,
         agentToolExpandedKeys: groupedToolView ? expandedCardKeys : EMPTY_EXPANDED_KEYS,
@@ -11060,7 +11071,7 @@ export default function OpenTuiApp() {
     const isAgentToolTarget = selectedAgentTool !== null
     const shouldAutoFold = (
       transcriptView === 'conversation'
-      || transcriptView === 'stream'
+      || isChatLikeView
       || transcriptView === 'agents'
     ) && targetCard.autoFold
     const isExpanded = isAgentToolTarget
@@ -18711,12 +18722,12 @@ export default function OpenTuiApp() {
             // side has focus instead of the frame staying uniformly dim.
             borderColor={effectiveFocus === 'messages' && splitFocusIndex === null
               ? providerAccent
-              : transcriptView === 'stream'
+              : isChatLikeView
                 ? theme.surface
                 : theme.border}
             backgroundColor={theme.surface}
             flexDirection="column"
-            title={transcriptView === 'stream' ? undefined : headerStatusRight}
+            title={isChatLikeView ? undefined : headerStatusRight}
             titleColor={providerAccent}
           >
           {!focusMode && transcriptView !== 'stream' ? (
@@ -18857,7 +18868,7 @@ export default function OpenTuiApp() {
                 </TuiErrorBoundary>
 
                 {composerSendState === 'sending' && composerLiveText && !liveAssistantTextCardVisible ? (
-                  transcriptView === 'stream' ? (
+                  isChatLikeView ? (
                     <box
                       key="live-stream-text"
                       marginBottom={densityState.cardGap}
@@ -18914,6 +18925,40 @@ export default function OpenTuiApp() {
           {followTail && visibleTranscriptCards.length > 0 ? (
             <box paddingX={2} paddingBottom={1}>
               <IdleTicker seed={selectedSessionKey ?? ''} theme={theme} />
+            </box>
+          ) : null}
+
+          {!composerWindowOpen && !composerHidden && transcriptView === 'chat' ? (
+            // Chat mode: the composer is the reader box's own trailing child —
+            // a full-width highlighted bar in the same style as a user message
+            // row, inside the same border as the transcript, so it reads as
+            // the next line of the conversation rather than a docked control.
+            <box height={composerDockHeight} flexDirection="column">
+              <box
+                paddingX={1}
+                backgroundColor={theme.userBg}
+                flexDirection="row"
+                onMouseDown={(event) => {
+                  if (event.button !== 0) return
+                  if (!composerActive) setComposerActive(true)
+                  composerTextareaRef.current?.focus()
+                }}
+              >
+                <text fg={composerAccentColor} wrapMode="none">{'› '}</text>
+                <box flexGrow={1}>
+                  {renderComposerTextarea(submitComposerFromDock, {
+                    height: composerDockTextareaHeight,
+                    width: Math.max(composerDockTextareaWidth - 2, 1),
+                  })}
+                </box>
+              </box>
+              <box height={1} paddingX={1} flexDirection="row" alignItems="center">
+                <text fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none">
+                  {composerSlashHint
+                    ? fitText(composerSlashHint, Math.max(rightPaneWidth - 4, 20))
+                    : renderInlineTextSegments(composerDockStatsSegments, Math.max(rightPaneWidth - 4, 20), theme.dim)}
+                </text>
+              </box>
             </box>
           ) : null}
           </box>
@@ -19741,12 +19786,12 @@ export default function OpenTuiApp() {
 
       {composerSendState === 'sending' && !composerLiveText && !composerLiveReasoning.trim() && activeRunningToolCount === 0 ? (
         <box
-          backgroundColor={transcriptView === 'stream' ? theme.surface : theme.surface2}
-          paddingLeft={transcriptView === 'stream' ? densityState.bodyIndent : 1}
-          paddingTop={transcriptView === 'stream' ? 0 : 1}
+          backgroundColor={isChatLikeView ? theme.surface : theme.surface2}
+          paddingLeft={isChatLikeView ? densityState.bodyIndent : 1}
+          paddingTop={isChatLikeView ? 0 : 1}
           flexDirection="row"
         >
-          <text fg={theme.cyan} wrapMode="none">{transcriptView === 'stream' ? '● ' : '▌ '}</text>
+          <text fg={theme.cyan} wrapMode="none">{isChatLikeView ? '● ' : '▌ '}</text>
           <box flexGrow={1}>
             <ComposerWaitingStatus
               startedAt={composerSendStartedAt}
@@ -19770,12 +19815,12 @@ export default function OpenTuiApp() {
 
       {liveToolActivities.length > 0 && activeRunningToolCount > 0 ? (
         <box
-          backgroundColor={transcriptView === 'stream' ? theme.surface : theme.surface2}
-          paddingLeft={transcriptView === 'stream' ? densityState.bodyIndent : 1}
-          paddingTop={transcriptView === 'stream' ? 0 : 1}
+          backgroundColor={isChatLikeView ? theme.surface : theme.surface2}
+          paddingLeft={isChatLikeView ? densityState.bodyIndent : 1}
+          paddingTop={isChatLikeView ? 0 : 1}
           flexDirection="row"
         >
-          <text fg={theme.green} wrapMode="none">{transcriptView === 'stream' ? '● ' : '▌ '}</text>
+          <text fg={theme.green} wrapMode="none">{isChatLikeView ? '● ' : '▌ '}</text>
           <text wrapMode="none">
             {renderInlineTextSegments([
               { text: 'tools  ', fg: theme.dim },
@@ -19828,7 +19873,7 @@ export default function OpenTuiApp() {
 
       {composerStatusMessage ? (
         composerSendState === 'sending' && composerLiveText && !composerError ? (
-          transcriptView === 'stream' || liveAssistantTextCardVisible ? null : (
+          isChatLikeView || liveAssistantTextCardVisible ? null : (
             <LivePreviewCard
               title={`● ASSISTANT · ${String(composerProvider ?? 'agent').toUpperCase()} · STREAMING`}
               lines={liveAssistantPreviewLines}
@@ -19865,18 +19910,18 @@ export default function OpenTuiApp() {
       {!composerWindowOpen && !composerHidden ? renderComposerStashPanel(width, Math.max(width - 4, 20)) : null}
       {!composerWindowOpen && !composerHidden && !composerHistoryOpen && !composerStashOpen ? renderComposerQueuePanel(width, Math.max(width - 4, 20)) : null}
 
-      {!composerWindowOpen && !composerHidden ? (
+      {!composerWindowOpen && !composerHidden && transcriptView !== 'chat' ? (
         <box
           paddingX={1}
-          backgroundColor={transcriptView === 'stream' ? theme.surface : theme.surface2}
+          backgroundColor={isChatLikeView ? theme.surface : theme.surface2}
           border
-          borderStyle={composerDockRouted ? 'heavy' : transcriptView === 'stream' ? 'single' : 'rounded'}
+          borderStyle={composerDockRouted ? 'heavy' : isChatLikeView ? 'single' : 'rounded'}
           borderColor={composerDockEmphasized
             ? composerAccentColor
-            : transcriptView === 'stream'
+            : isChatLikeView
               ? theme.border2
               : theme.border}
-          title={transcriptView === 'stream' ? undefined : composerDockBorderTitle}
+          title={isChatLikeView ? undefined : composerDockBorderTitle}
           titleColor={composerDockEmphasized ? composerAccentColor : theme.dim}
           titleAlignment="left"
           height={composerDockHeight}

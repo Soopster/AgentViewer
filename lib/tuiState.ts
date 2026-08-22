@@ -271,7 +271,7 @@ export async function setConfiguredTuiDiffLayout(diffLayout: TuiDiffLayout): Pro
 
 export async function getConfiguredTuiTranscriptView(): Promise<TuiTranscriptView> {
   const parsed = await readTuiState()
-  return parsed.transcriptView === 'full' ? 'full' : parsed.transcriptView === 'continue' ? 'continue' : parsed.transcriptView === 'stream' ? 'stream' : parsed.transcriptView === 'agents' ? 'agents' : 'conversation'
+  return parsed.transcriptView === 'full' ? 'full' : parsed.transcriptView === 'continue' ? 'continue' : parsed.transcriptView === 'stream' ? 'stream' : parsed.transcriptView === 'agents' ? 'agents' : parsed.transcriptView === 'chat' ? 'chat' : 'conversation'
 }
 
 export async function setConfiguredTuiTranscriptView(transcriptView: TuiTranscriptView): Promise<void> {
