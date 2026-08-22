@@ -71,6 +71,9 @@ const MAX_COMPLETIONS = 12
 const AUTO_COMPLETE_DELAY_MS = 160
 const SYNTAX_DELAY_MS = 90
 const LSP_CHANGE_DELAY_MS = 120
+const VELOCITY_SCROLL_RESET_MS = 420
+const VELOCITY_SCROLL_RAMP_MS = 720
+const VELOCITY_SCROLL_MAX_STEP = 8
 const WORD_PATTERN = /[A-Za-z_$][\w$-]{1,}/g
 
 const COMPLETION_KIND_GLYPHS: Readonly<Record<number, string>> = {
@@ -236,12 +239,14 @@ export function EditorPopover({
   const [message, setMessage] = useState('Ready')
   const [closeConfirm, setCloseConfirm] = useState(false)
   const [clock, setClock] = useState(() => new Date())
+  const [velocityScrollEnabled, setVelocityScrollEnabled] = useState(false)
   const scrollAcceleration = useMemo(() => new MacOSScrollAccel({ maxMultiplier: 3 }), [])
   const editorRef = useRef<TextareaRenderable | null>(null)
   const lineNumberRef = useRef<LineNumberRenderable | null>(null)
   const lspRef = useRef<EditorLspClient | null>(null)
   const syntaxRequestRef = useRef(0)
   const completionRequestRef = useRef(0)
+  const velocityScrollStateRef = useRef<{ direction: -1 | 1; streakStart: number; lastEventTime: number } | null>(null)
 
   const activeTab = tabs.find((tab) => tab.path === activePath) ?? null
   const dirty = activeTab ? activeTab.content !== activeTab.savedContent : false
@@ -530,8 +535,38 @@ export function EditorPopover({
     setMessage(`${item.source === 'lsp' ? 'LSP' : item.source} completion: ${item.label}`)
   }, [completions])
 
+  const velocityScrollStep = useCallback((direction: -1 | 1): number => {
+    if (!velocityScrollEnabled) return 1
+    const now = performance.now()
+    const state = velocityScrollStateRef.current
+    if (!state || state.direction !== direction || now - state.lastEventTime > VELOCITY_SCROLL_RESET_MS) {
+      velocityScrollStateRef.current = { direction, streakStart: now, lastEventTime: now }
+      return 1
+    }
+    state.lastEventTime = now
+    const progress = Math.max(0, Math.min(1, (now - state.streakStart) / VELOCITY_SCROLL_RAMP_MS))
+    return Math.max(1, Math.round(1 + (VELOCITY_SCROLL_MAX_STEP - 1) * progress * progress))
+  }, [velocityScrollEnabled])
+
+  const moveEditorByLines = useCallback((direction: -1 | 1) => {
+    const editor = editorRef.current
+    if (!editor) return
+    const lines = editor.plainText.split('\n')
+    const current = editor.logicalCursor
+    const step = velocityScrollStep(direction)
+    const row = Math.max(0, Math.min(lines.length - 1, current.row + direction * step))
+    let offset = 0
+    for (let index = 0; index < row; index += 1) offset += (lines[index]?.length ?? 0) + 1
+    editor.cursorOffset = offset + Math.min(current.col, lines[row]?.length ?? 0)
+  }, [velocityScrollStep])
+
   const handleKey = useCallback((key: EditorKeyEvent): boolean => {
     const sequence = key.sequence ?? ''
+    if (key.sequence === 'V' && !key.ctrl && !key.meta) {
+      velocityScrollStateRef.current = null
+      setVelocityScrollEnabled((value) => !value)
+      return true
+    }
     if (key.ctrl && key.name === 'tab') {
       switchTab(key.shift ? -1 : 1)
       return true
@@ -554,6 +589,10 @@ export function EditorPopover({
       if (key.name === 'up' || (key.ctrl && key.name === 'p')) { setCompletionCursor((value) => Math.max(0, value - 1)); return true }
       if (key.name === 'down' || (key.ctrl && key.name === 'n')) { setCompletionCursor((value) => Math.min(completions.length - 1, value + 1)); return true }
       if (key.name === 'tab' || key.name === 'return') { acceptCompletion(); return true }
+    }
+    if (focusPane === 'editor' && velocityScrollEnabled && (key.name === 'up' || key.name === 'down')) {
+      moveEditorByLines(key.name === 'up' ? -1 : 1)
+      return true
     }
     if (key.name === 'escape' && closeConfirm) {
       setCloseConfirm(false)
@@ -589,7 +628,7 @@ export function EditorPopover({
       return true
     }
     return false
-  }, [acceptCompletion, activateTreeRow, activeTab, chooseQuickFile, closeActiveTab, completionCursor, completions.length, filteredQuickFiles.length, focusPane, quickOpen, requestClose, requestCompletions, saveActive, switchTab, treeCursor, treeExpanded, treeRows])
+  }, [acceptCompletion, activateTreeRow, activeTab, chooseQuickFile, closeActiveTab, completionCursor, completions.length, filteredQuickFiles.length, focusPane, moveEditorByLines, quickOpen, requestClose, requestCompletions, saveActive, switchTab, treeCursor, treeExpanded, treeRows, velocityScrollEnabled])
 
   useEffect(() => {
     onKeyHandlerReady(handleKey)
@@ -771,7 +810,7 @@ export function EditorPopover({
       <box height={1} paddingX={1} backgroundColor={theme.surface2} flexDirection="row">
         <text fg={message.startsWith('Unable') || message.startsWith('Refused') ? theme.red : theme.dim} wrapMode="none">{fitText(message, Math.max(10, width - 55))}</text>
         <box flexGrow={1} />
-        <text fg={theme.dim}>^S save  ^P files  ^Space complete  ^E focus  ^B explorer  ^W close tab  ^Q exit</text>
+        <text fg={theme.dim}>^S save  ^P files  ^Space complete  ^E focus  ^B explorer  V velocity {velocityScrollEnabled ? 'on' : 'off'}  ^W close tab  ^Q exit</text>
       </box>
 
       {quickOpen ? (
