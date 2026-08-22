@@ -467,8 +467,9 @@ export function FileViewerPopover({
     if (key.name === 'return') { enterSelected(); return }
     const direction = key.name === 'up' || key.sequence === 'k' ? -1 : key.name === 'down' || key.sequence === 'j' ? 1 : 0
     if (direction !== 0) {
-      if (previewFocused) previewScrollRef.current?.scrollBy(direction * velocityScrollStep(direction))
-      else setCursor((value) => Math.max(0, Math.min(filteredEntries.length - 1, value + direction)))
+      const step = velocityScrollStep(direction)
+      if (previewFocused) previewScrollRef.current?.scrollBy(direction * step)
+      else setCursor((value) => Math.max(0, Math.min(filteredEntries.length - 1, value + direction * step)))
       return
     }
     if (key.ctrl && key.name === 'u') previewScrollRef.current?.scrollBy(-10)
