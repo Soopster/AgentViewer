@@ -7714,6 +7714,22 @@ export default function OpenTuiApp() {
     }
     if (renderer.currentFocusedRenderable !== renderable) renderable.focus()
   }, [composerActive, composerFocusBlocked, composerWindowOpen, renderer])
+  // Overlay pickers (theme menu, transcript-view menu, etc.) own a search
+  // <input> that unmounts when the overlay closes, and the renderer hands
+  // focus to whatever else declares `focused` (the transcript scrollbox) as
+  // part of that same unmount — after the layout effect above already ran,
+  // so its focus() call loses the race. Defer one tick past that fallback
+  // and reclaim focus for the composer whenever the last blocking overlay
+  // closes.
+  useEffect(() => {
+    if (!composerActive || composerFocusBlocked) return
+    const renderable = composerTextareaRef.current
+    if (!renderable) return
+    const timer = setTimeout(() => {
+      if (renderer.currentFocusedRenderable !== renderable) renderable.focus()
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [composerActive, composerFocusBlocked, renderer])
   useEffect(() => { awaitingPersistedTurnRef.current = awaitingPersistedTurn }, [awaitingPersistedTurn])
   useEffect(() => {
     setActiveTheme(themeMode)
