@@ -20,6 +20,7 @@ import {
   type EditorDiagnostic,
   type EditorLspStatus,
 } from './editorLsp'
+import { createScrollVelocityState, velocityScrollStep } from './scrollVelocity'
 
 export type EditorKeyEvent = {
   name: string
@@ -73,10 +74,6 @@ const MAX_COMPLETIONS = 12
 const AUTO_COMPLETE_DELAY_MS = 160
 const SYNTAX_DELAY_MS = 90
 const LSP_CHANGE_DELAY_MS = 120
-const VELOCITY_SCROLL_RESET_MS = 420
-const VELOCITY_SCROLL_HOLD_DELAY_MS = 700
-const VELOCITY_SCROLL_RAMP_MS = 1400
-const VELOCITY_SCROLL_MAX_STEP = 6
 const WORD_PATTERN = /[A-Za-z_$][\w$-]{1,}/g
 
 const COMPLETION_KIND_GLYPHS: Readonly<Record<number, string>> = {
@@ -249,7 +246,7 @@ export function EditorPopover({
   const lspRef = useRef<EditorLspClient | null>(null)
   const syntaxRequestRef = useRef(0)
   const completionRequestRef = useRef(0)
-  const velocityScrollStateRef = useRef<{ direction: -1 | 1; streakStart: number; lastEventTime: number } | null>(null)
+  const velocityScrollStateRef = useRef(createScrollVelocityState())
 
   const activeTab = tabs.find((tab) => tab.path === activePath) ?? null
   const dirty = activeTab ? activeTab.content !== activeTab.savedContent : false
@@ -538,28 +535,10 @@ export function EditorPopover({
     setMessage(`${item.source === 'lsp' ? 'LSP' : item.source} completion: ${item.label}`)
   }, [completions])
 
-  const velocityScrollStep = useCallback((direction: -1 | 1, isRepeat: boolean): number => {
-    if (!velocityScrollEnabled || !isRepeat) {
-      velocityScrollStateRef.current = null
-      return 1
-    }
-    const now = performance.now()
-    const state = velocityScrollStateRef.current
-    if (!state || state.direction !== direction || now - state.lastEventTime > VELOCITY_SCROLL_RESET_MS) {
-      velocityScrollStateRef.current = { direction, streakStart: now, lastEventTime: now }
-      return 1
-    }
-    state.lastEventTime = now
-    const heldFor = now - state.streakStart
-    if (heldFor < VELOCITY_SCROLL_HOLD_DELAY_MS) return 1
-    const progress = Math.max(0, Math.min(1, (heldFor - VELOCITY_SCROLL_HOLD_DELAY_MS) / VELOCITY_SCROLL_RAMP_MS))
-    return Math.max(1, Math.round(1 + (VELOCITY_SCROLL_MAX_STEP - 1) * progress * progress))
-  }, [velocityScrollEnabled])
-
   const handleKey = useCallback((key: EditorKeyEvent): boolean => {
     const sequence = key.sequence ?? ''
     if (key.sequence === 'V' && !key.ctrl && !key.meta) {
-      velocityScrollStateRef.current = null
+      velocityScrollStateRef.current = createScrollVelocityState()
       setVelocityScrollEnabled((value) => !value)
       return true
     }
@@ -587,13 +566,12 @@ export function EditorPopover({
       if (key.name === 'tab' || key.name === 'return') { acceptCompletion(); return true }
     }
     if (focusPane === 'editor' && velocityScrollEnabled && (key.name === 'up' || key.name === 'down')) {
-      const isRepeat = key.eventType === 'repeat' || key.repeated === true
       const editor = editorRef.current
       if (!editor) return true
       const lines = editor.plainText.split('\n')
       const current = editor.logicalCursor
-      const step = velocityScrollStep(key.name === 'up' ? -1 : 1, isRepeat)
       const direction = key.name === 'up' ? -1 : 1
+      const step = velocityScrollStep(velocityScrollStateRef.current, direction, key, 6)
       const row = Math.max(0, Math.min(lines.length - 1, current.row + direction * step))
       let offset = 0
       for (let index = 0; index < row; index += 1) offset += (lines[index]?.length ?? 0) + 1
@@ -634,7 +612,7 @@ export function EditorPopover({
       return true
     }
     return false
-  }, [acceptCompletion, activateTreeRow, activeTab, chooseQuickFile, closeActiveTab, completionCursor, completions.length, filteredQuickFiles.length, focusPane, quickOpen, requestClose, requestCompletions, saveActive, switchTab, treeCursor, treeExpanded, treeRows, velocityScrollEnabled, velocityScrollStep])
+  }, [acceptCompletion, activateTreeRow, activeTab, chooseQuickFile, closeActiveTab, completionCursor, completions.length, filteredQuickFiles.length, focusPane, quickOpen, requestClose, requestCompletions, saveActive, switchTab, treeCursor, treeExpanded, treeRows, velocityScrollEnabled])
 
   useEffect(() => {
     onKeyHandlerReady(handleKey)
