@@ -18547,7 +18547,7 @@ export default function OpenTuiApp() {
         {showRail ? (
           <box
             width={sidebarWidth}
-            border={sidebarView === 'sessions' ? ['left', 'right', 'bottom'] : true}
+            border={sidebarView === 'sessions' ? ['top', 'left', 'right', 'bottom'] : true}
             borderStyle="single"
             borderColor={effectiveFocus === 'sessions' ? theme.cyan : theme.border}
             backgroundColor={theme.surface}
