@@ -3,12 +3,24 @@ import { pathToFileURL } from 'node:url'
 
 export type EditorPosition = { line: number; character: number }
 
+export type EditorTextEdit = {
+  range: { start: EditorPosition; end: EditorPosition }
+  newText: string
+}
+
 export type EditorCompletion = {
   label: string
   detail?: string
   documentation?: string
   insertText: string
+  filterText?: string
+  sortText?: string
   kind?: number
+  preselect?: boolean
+  textEdit?: EditorTextEdit
+  additionalTextEdits?: EditorTextEdit[]
+  rawItem?: Record<string, unknown>
+  resolved?: boolean
   source: 'lsp'
 }
 
@@ -92,6 +104,65 @@ function hoverText(value: unknown): string | undefined {
   return markupText(value)
 }
 
+function position(value: unknown): EditorPosition | null {
+  if (!value || typeof value !== 'object') return null
+  const record = value as Record<string, unknown>
+  if (typeof record.line !== 'number' || typeof record.character !== 'number') return null
+  return { line: record.line, character: record.character }
+}
+
+function textEdit(value: unknown): EditorTextEdit | null {
+  if (!value || typeof value !== 'object') return null
+  const record = value as Record<string, unknown>
+  const rangeValue = record.range ?? record.replace ?? record.insert ?? (record.start && record.end ? record : undefined)
+  if (!rangeValue || typeof rangeValue !== 'object' || typeof record.newText !== 'string') return null
+  const range = rangeValue as Record<string, unknown>
+  const start = position(range.start)
+  const end = position(range.end)
+  if (!start || !end) return null
+  return { range: { start, end }, newText: record.newText }
+}
+
+type CompletionDefaults = { editRange?: unknown; data?: unknown }
+
+function completionItem(value: unknown, defaults: CompletionDefaults = {}): EditorCompletion | null {
+  if (!value || typeof value !== 'object') return null
+  const item = value as Record<string, unknown>
+  if (typeof item.label !== 'string') return null
+  const rawItem = defaults.data !== undefined && item.data === undefined ? { ...item, data: defaults.data } : item
+  const explicitEdit = textEdit(item.textEdit)
+  const defaultEditRange = defaults.editRange && typeof defaults.editRange === 'object'
+    ? defaults.editRange as Record<string, unknown>
+    : null
+  const defaultNewText = typeof item.textEditText === 'string'
+    ? item.textEditText
+    : typeof item.insertText === 'string' ? item.insertText : item.label
+  const defaultEdit = explicitEdit ?? textEdit(defaultEditRange
+    ? { ...defaultEditRange, newText: defaultNewText }
+    : null)
+  const insertText = defaultEdit?.newText ?? defaultNewText
+  const additionalTextEdits = Array.isArray(item.additionalTextEdits)
+    ? item.additionalTextEdits.flatMap((entry) => {
+        const parsed = textEdit(entry)
+        return parsed ? [parsed] : []
+      })
+    : undefined
+  return {
+    label: item.label,
+    detail: typeof item.detail === 'string' ? item.detail : undefined,
+    documentation: markupText(item.documentation),
+    insertText,
+    filterText: typeof item.filterText === 'string' ? item.filterText : undefined,
+    sortText: typeof item.sortText === 'string' ? item.sortText : undefined,
+    kind: typeof item.kind === 'number' ? item.kind : undefined,
+    preselect: item.preselect === true,
+    textEdit: defaultEdit ?? undefined,
+    additionalTextEdits,
+    rawItem,
+    source: 'lsp',
+  }
+}
+
 export type EditorLspStatus =
   | { state: 'starting'; name: string }
   | { state: 'ready'; name: string }
@@ -107,6 +178,9 @@ export class EditorLspClient {
   private openedUri: string | null = null
   private stopped = false
   private serverIndex = 0
+  private lastText: string | null = null
+  private completionResolveProvider = false
+  private completionTriggerCharacters = new Set<string>()
   private diagnosticsHandler: (diagnostics: EditorDiagnostic[]) => void = () => {}
   private statusHandler: (status: EditorLspStatus) => void = () => {}
 
@@ -133,7 +207,7 @@ export class EditorLspClient {
       try {
         await this.spawnServer(spec)
         const rootUri = pathToFileURL(this.rootPath).href
-        await this.request('initialize', {
+        const initializeResult = await this.request('initialize', {
           processId: process.pid,
           clientInfo: { name: 'agent-viewer', version: '1' },
           rootUri,
@@ -144,7 +218,10 @@ export class EditorLspClient {
                 completionItem: {
                   snippetSupport: false,
                   documentationFormat: ['plaintext', 'markdown'],
-                  insertReplaceSupport: false,
+                  insertReplaceSupport: true,
+                  resolveSupport: {
+                    properties: ['documentation', 'detail', 'additionalTextEdits'],
+                  },
                 },
                 contextSupport: true,
               },
@@ -163,6 +240,18 @@ export class EditorLspClient {
             workspace: { workspaceFolders: true },
           },
         }, 8_000)
+        const serverCapabilities = initializeResult && typeof initializeResult === 'object'
+          ? (initializeResult as { capabilities?: Record<string, unknown> }).capabilities
+          : undefined
+        const completionProvider = serverCapabilities?.completionProvider && typeof serverCapabilities.completionProvider === 'object'
+          ? serverCapabilities.completionProvider as Record<string, unknown>
+          : undefined
+        this.completionResolveProvider = completionProvider?.resolveProvider === true
+        this.completionTriggerCharacters = new Set(
+          Array.isArray(completionProvider?.triggerCharacters)
+            ? completionProvider.triggerCharacters.filter((value): value is string => typeof value === 'string')
+            : [],
+        )
         this.notify('initialized', {})
         this.openedUri = pathToFileURL(this.filePath).href
         this.notify('textDocument/didOpen', {
@@ -173,6 +262,7 @@ export class EditorLspClient {
             text,
           },
         })
+        this.lastText = text
         this.statusHandler({ state: 'ready', name: spec.name })
         return true
       } catch (error) {
@@ -192,6 +282,8 @@ export class EditorLspClient {
 
   change(text: string): void {
     if (!this.openedUri || !this.child) return
+    if (text === this.lastText) return
+    this.lastText = text
     this.version += 1
     this.notify('textDocument/didChange', {
       textDocument: { uri: this.openedUri, version: this.version },
@@ -204,37 +296,55 @@ export class EditorLspClient {
     this.notify('textDocument/didSave', { textDocument: { uri: this.openedUri }, text })
   }
 
-  async completion(position: EditorPosition): Promise<EditorCompletion[]> {
+  isCompletionTriggerCharacter(character: string | undefined): boolean {
+    return Boolean(character && this.completionTriggerCharacters.has(character))
+  }
+
+  async completion(position: EditorPosition, triggerCharacter?: string): Promise<EditorCompletion[]> {
     if (!this.openedUri || !this.child) return []
+    const useTriggerCharacter = this.isCompletionTriggerCharacter(triggerCharacter)
     const raw = await this.request('textDocument/completion', {
       textDocument: { uri: this.openedUri },
       position,
-      context: { triggerKind: 1 },
+      context: useTriggerCharacter
+        ? { triggerKind: 2, triggerCharacter }
+        : { triggerKind: 1 },
     }, 2_500).catch(() => null)
     const list = Array.isArray(raw)
       ? raw
       : raw && typeof raw === 'object' && Array.isArray((raw as { items?: unknown[] }).items)
         ? (raw as { items: unknown[] }).items
         : []
+    const defaults = raw && typeof raw === 'object' && !Array.isArray(raw)
+      ? ((raw as { itemDefaults?: CompletionDefaults }).itemDefaults ?? {})
+      : {}
     const completions: EditorCompletion[] = []
     for (const entry of list.slice(0, 100)) {
-      if (!entry || typeof entry !== 'object') continue
-      const item = entry as Record<string, unknown>
-      if (typeof item.label !== 'string') continue
-      const textEdit = item.textEdit && typeof item.textEdit === 'object' ? item.textEdit as Record<string, unknown> : null
-      const insertText = typeof textEdit?.newText === 'string'
-        ? textEdit.newText
-        : typeof item.insertText === 'string' ? item.insertText : item.label
-      completions.push({
-        label: item.label,
-        detail: typeof item.detail === 'string' ? item.detail : undefined,
-        documentation: markupText(item.documentation),
-        insertText,
-        kind: typeof item.kind === 'number' ? item.kind : undefined,
-        source: 'lsp',
-      })
+      const parsed = completionItem(entry, defaults)
+      if (parsed) completions.push(parsed)
     }
+    completions.sort((left, right) => {
+      const leftKey = left.sortText ?? left.label
+      const rightKey = right.sortText ?? right.label
+      return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0
+    })
     return completions
+  }
+
+  async resolveCompletion(completion: EditorCompletion): Promise<EditorCompletion> {
+    if (!this.openedUri || !this.child || !this.completionResolveProvider || completion.resolved || !completion.rawItem) {
+      return completion.resolved ? completion : { ...completion, resolved: true }
+    }
+    const raw = await this.request('completionItem/resolve', completion.rawItem, 2_500).catch(() => null)
+    const resolved = completionItem(raw)
+    if (!resolved) return { ...completion, resolved: true }
+    return {
+      ...completion,
+      ...resolved,
+      textEdit: resolved.textEdit ?? completion.textEdit,
+      additionalTextEdits: resolved.additionalTextEdits ?? completion.additionalTextEdits,
+      resolved: true,
+    }
   }
 
   async hover(position: EditorPosition): Promise<EditorHover | null> {
@@ -411,6 +521,9 @@ export class EditorLspClient {
     const child = this.child
     this.child = null
     this.openedUri = null
+    this.lastText = null
+    this.completionResolveProvider = false
+    this.completionTriggerCharacters.clear()
     if (child && !child.killed) child.kill()
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer)

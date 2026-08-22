@@ -213,6 +213,88 @@ function wordPrefixAt(content: string, offset: number): { value: string; start: 
   return { value, start: offset - value.length }
 }
 
+function completionContextAt(content: string, offset: number): {
+  prefix: { value: string; start: number }
+  memberAccess: boolean
+  lastCharacter?: string
+} {
+  const prefix = wordPrefixAt(content, offset)
+  const beforePrefix = content.slice(0, prefix.start)
+  return {
+    prefix,
+    memberAccess: beforePrefix.endsWith('.') || beforePrefix.endsWith('::') || beforePrefix.endsWith('->'),
+    lastCharacter: offset > 0 ? content[offset - 1] : undefined,
+  }
+}
+
+function editorPositionAtOffset(content: string, offset: number): { line: number; character: number } {
+  const safeOffset = Math.max(0, Math.min(offset, content.length))
+  const lineStart = content.lastIndexOf('\n', safeOffset - 1) + 1
+  let line = 0
+  for (let index = 0; index < lineStart; index += 1) if (content.charCodeAt(index) === 10) line += 1
+  return { line, character: safeOffset - lineStart }
+}
+
+function offsetAtEditorPosition(content: string, position: { line: number; character: number }): number {
+  let lineStart = 0
+  for (let line = 0; line < position.line; line += 1) {
+    const next = content.indexOf('\n', lineStart)
+    if (next < 0) return content.length
+    lineStart = next + 1
+  }
+  const lineEnd = content.indexOf('\n', lineStart)
+  return Math.min(lineEnd < 0 ? content.length : lineEnd, lineStart + Math.max(0, position.character))
+}
+
+function editorDocumentOffset(
+  editor: TextareaRenderable,
+  cursor?: { line: number; visualColumn: number },
+): number {
+  const logicalCursor = cursor ?? { line: editor.logicalCursor.row, visualColumn: editor.logicalCursor.col }
+  return offsetAtEditorPosition(editor.plainText, { line: logicalCursor.line, character: logicalCursor.visualColumn })
+}
+
+function setEditorDocumentOffset(editor: TextareaRenderable, offset: number): void {
+  const position = editorPositionAtOffset(editor.plainText, offset)
+  editor.setCursor(position.line, position.character)
+}
+
+function applyCompletion(
+  editor: TextareaRenderable,
+  item: Completion,
+  cursor?: { line: number; visualColumn: number },
+): void {
+  const content = editor.plainText
+  const cursorOffset = editorDocumentOffset(editor, cursor)
+  const prefix = wordPrefixAt(content, cursorOffset)
+  const mainEdit = item.source === 'lsp' && item.textEdit
+    ? item.textEdit
+    : { range: { start: editorPositionAtOffset(content, prefix.start), end: editorPositionAtOffset(content, cursorOffset) }, newText: item.insertText }
+  const edits = [
+    { edit: mainEdit, main: true },
+    ...(item.source === 'lsp' ? (item.additionalTextEdits ?? []).map((edit) => ({ edit, main: false })) : []),
+  ].map(({ edit, main }) => ({
+    start: offsetAtEditorPosition(content, edit.range.start),
+    end: offsetAtEditorPosition(content, edit.range.end),
+    newText: edit.newText,
+    main,
+  })).sort((a, b) => a.start - b.start || a.end - b.end)
+
+  let sourceOffset = 0
+  let nextContent = ''
+  let nextCursor = cursorOffset
+  for (const edit of edits) {
+    if (edit.start < sourceOffset || edit.end < edit.start) continue
+    nextContent += content.slice(sourceOffset, edit.start)
+    nextContent += edit.newText
+    sourceOffset = edit.end
+    if (edit.main) nextCursor = nextContent.length
+  }
+  nextContent += content.slice(sourceOffset)
+  editor.replaceText(nextContent)
+  setEditorDocumentOffset(editor, nextCursor)
+}
+
 function localCompletions(content: string, paths: string[], prefix: string): LocalCompletion[] {
   const normalized = prefix.toLowerCase()
   const seen = new Set<string>()
@@ -237,10 +319,17 @@ function localCompletions(content: string, paths: string[], prefix: string): Loc
 function mergeCompletions(lsp: EditorCompletion[], local: LocalCompletion[], prefix: string): Completion[] {
   const normalized = prefix.toLowerCase()
   const seen = new Set<string>()
+  const lspLabels = new Set(lsp.map((item) => item.label))
   const output: Completion[] = []
   for (const item of [...lsp, ...local]) {
-    if (!item.label.toLowerCase().includes(normalized) || seen.has(item.label)) continue
-    seen.add(item.label)
+    const filterValue = item.source === 'lsp' ? item.filterText ?? item.label : item.label
+    const identity = item.source === 'lsp'
+      ? `lsp:${item.label}:${item.detail ?? ''}:${item.insertText}`
+      : item.label
+    if (!filterValue.toLowerCase().includes(normalized)
+      || seen.has(identity)
+      || (item.source !== 'lsp' && lspLabels.has(item.label))) continue
+    seen.add(identity)
     output.push(item)
     if (output.length >= MAX_COMPLETIONS) break
   }
@@ -415,11 +504,14 @@ export function EditorPopover({
     [theme.muted, theme.surface2],
   )
   const editorRef = useRef<TextareaRenderable | null>(null)
+  const cursorRef = useRef({ line: 0, visualColumn: 0 })
   const editorScrollbarRef = useRef<ScrollBarRenderable | null>(null)
+  const syncingEditorScrollbarRef = useRef(false)
   const lineNumberRef = useRef<LineNumberRenderable | null>(null)
   const lspRef = useRef<EditorLspClient | null>(null)
   const syntaxRequestRef = useRef(0)
   const completionRequestRef = useRef(0)
+  const completionResolveRequestRef = useRef(0)
   const hoverRequestRef = useRef(0)
   const signatureRequestRef = useRef(0)
   const velocityScrollStateRef = useRef<ReturnType<typeof createScrollVelocityState> | null>(null)
@@ -652,11 +744,12 @@ export function EditorPopover({
     const editor = editorRef.current
     if (!activeTab || !editor || focusPane !== 'editor') return
     const request = ++signatureRequestRef.current
-    const trigger = editor.plainText[editor.cursorOffset - 1]
+    const offset = editorDocumentOffset(editor, cursorRef.current)
+    const trigger = editor.plainText[offset - 1]
     if (trigger !== '(' && trigger !== ',') return
     const timer = setTimeout(() => {
       void lspRef.current?.signatureHelp(
-        { line: cursor.line, character: cursor.visualColumn },
+        editorPositionAtOffset(editor.plainText, offset),
         trigger,
       ).then((result) => {
         if (request !== signatureRequestRef.current) return
@@ -717,54 +810,79 @@ export function EditorPopover({
     const editor = editorRef.current
     if (!activeTab || !editor) return
     const content = editor.plainText
-    const prefix = wordPrefixAt(content, editor.cursorOffset)
-    if (!force && prefix.value.length < 2) {
+    const requestCursor = cursorRef.current
+    const documentOffset = editorDocumentOffset(editor, requestCursor)
+    const context = completionContextAt(content, documentOffset)
+    const client = lspRef.current
+    const serverTrigger = client?.isCompletionTriggerCharacter(context.lastCharacter) ?? false
+    if (!force && context.prefix.value.length < 2 && !context.memberAccess && !serverTrigger) {
       setCompletions([])
       return
     }
     const request = ++completionRequestRef.current
-    const local = localCompletions(content, projectFiles, prefix.value)
-    const lsp = await lspRef.current?.completion({ line: cursor.line, character: cursor.visualColumn }) ?? []
-    if (request !== completionRequestRef.current) return
-    setCompletions(mergeCompletions(lsp, local, prefix.value))
-    setCompletionCursor(0)
-  }, [activeTab, cursor.line, cursor.visualColumn, projectFiles])
+    completionResolveRequestRef.current += 1
+    const cursorOffset = documentOffset
+    client?.change(content)
+    const local = context.memberAccess ? [] : localCompletions(content, projectFiles, context.prefix.value)
+    const lsp = await client?.completion(
+      editorPositionAtOffset(content, cursorOffset),
+      serverTrigger ? context.lastCharacter : undefined,
+    ) ?? []
+    if (request !== completionRequestRef.current
+      || editorRef.current?.plainText !== content
+      || cursorRef.current.line !== requestCursor.line
+      || cursorRef.current.visualColumn !== requestCursor.visualColumn) return
+    const merged = mergeCompletions(lsp, local, context.prefix.value)
+    setCompletions(merged)
+    const preselected = merged.findIndex((item) => item.source === 'lsp' && item.preselect)
+    setCompletionCursor(preselected >= 0 ? preselected : 0)
+  }, [activeTab, projectFiles])
 
   const requestHover = useCallback(async () => {
-    if (!activeTab || !editorRef.current) return
+    const editor = editorRef.current
+    if (!activeTab || !editor) return
     setCompletions([])
     setSignatureInfo(null)
     const request = ++hoverRequestRef.current
-    const result = await lspRef.current?.hover({ line: cursor.line, character: cursor.visualColumn }) ?? null
+    const result = await lspRef.current?.hover(editorPositionAtOffset(editor.plainText, editorDocumentOffset(editor, cursorRef.current))) ?? null
     if (request !== hoverRequestRef.current) return
     setHoverInfo(result)
     setMessage(result ? 'LSP hover · Esc dismisses' : 'No hover information at cursor')
-  }, [activeTab, cursor.line, cursor.visualColumn])
+  }, [activeTab])
 
   const requestSignatureHelp = useCallback(async () => {
-    if (!activeTab || !editorRef.current) return
+    const editor = editorRef.current
+    if (!activeTab || !editor) return
     setCompletions([])
     setHoverInfo(null)
     const request = ++signatureRequestRef.current
-    const result = await lspRef.current?.signatureHelp({ line: cursor.line, character: cursor.visualColumn }) ?? null
+    const result = await lspRef.current?.signatureHelp(editorPositionAtOffset(editor.plainText, editorDocumentOffset(editor, cursorRef.current))) ?? null
     if (request !== signatureRequestRef.current) return
     setSignatureInfo(result)
     setMessage(result ? 'LSP signature help · Esc dismisses' : 'No signature information at cursor')
-  }, [activeTab, cursor.line, cursor.visualColumn])
+  }, [activeTab])
 
   useEffect(() => {
     if (!activeTab || focusPane !== 'editor' || hoverInfo || signatureInfo) return
     const timer = setTimeout(() => { void requestCompletions(false) }, AUTO_COMPLETE_DELAY_MS)
     return () => clearTimeout(timer)
-  }, [activeTab, cursor, focusPane, hoverInfo, requestCompletions, signatureInfo])
+  }, [activeTab, cursor, focusPane, hoverInfo, lspStatus?.state, requestCompletions, signatureInfo])
+
+  useEffect(() => {
+    const item = completions[completionCursor]
+    if (!item || item.source !== 'lsp' || item.resolved) return
+    const request = ++completionResolveRequestRef.current
+    void lspRef.current?.resolveCompletion(item).then((resolved) => {
+      if (!resolved || request !== completionResolveRequestRef.current) return
+      setCompletions((current) => current.map((candidate) => candidate === item ? resolved : candidate))
+    })
+  }, [completionCursor, completions])
 
   const acceptCompletion = useCallback(() => {
     const editor = editorRef.current
     const item = completions[completionCursor]
     if (!editor || !item) return
-    const prefix = wordPrefixAt(editor.plainText, editor.cursorOffset)
-    editor.setSelection(prefix.start, editor.cursorOffset)
-    editor.insertText(item.insertText)
+    applyCompletion(editor, item, cursorRef.current)
     setCompletions([])
     setSignatureInfo(null)
     setMessage(`${item.source === 'lsp' ? 'LSP' : item.source} completion: ${item.label}`)
@@ -816,7 +934,7 @@ export function EditorPopover({
     }
     let next = searchCursor
     if (next < 0) {
-      const offset = editor.cursorOffset
+      const offset = editorDocumentOffset(editor, cursorRef.current)
       next = direction > 0
         ? searchMatches.findIndex((match) => match.start >= offset)
         : searchMatches.findLastIndex((match) => match.end <= offset)
@@ -849,9 +967,14 @@ export function EditorPopover({
     const editor = editorRef.current
     const scrollbar = editorScrollbarRef.current
     if (!editor || !scrollbar) return
-    scrollbar.scrollSize = editor.editorView.getTotalVirtualLineCount()
-    scrollbar.viewportSize = Math.max(1, editor.height)
-    scrollbar.scrollPosition = editor.scrollY
+    syncingEditorScrollbarRef.current = true
+    try {
+      scrollbar.scrollSize = editor.editorView.getTotalVirtualLineCount()
+      scrollbar.viewportSize = Math.max(1, editor.height)
+      scrollbar.scrollPosition = editor.scrollY
+    } finally {
+      syncingEditorScrollbarRef.current = false
+    }
   }, [])
 
   const reportToggle = useCallback((label: string, enabled: boolean) => {
@@ -934,9 +1057,7 @@ export function EditorPopover({
     const editor = editorRef.current
     const item = completions[index]
     if (!editor || !item) return
-    const prefix = wordPrefixAt(editor.plainText, editor.cursorOffset)
-    editor.setSelection(prefix.start, editor.cursorOffset)
-    editor.insertText(item.insertText)
+    applyCompletion(editor, item, cursorRef.current)
     setCompletions([])
     setSignatureInfo(null)
     setMessage(`${item.source === 'lsp' ? 'LSP' : item.source} completion: ${item.label}`)
@@ -991,7 +1112,8 @@ export function EditorPopover({
       return true
     }
 
-    const bounds = lineBoundsAtOffset(editor.plainText, editor.cursorOffset)
+    const documentOffset = editorDocumentOffset(editor, cursorRef.current)
+    const bounds = lineBoundsAtOffset(editor.plainText, documentOffset)
     const pending = vimPendingRef.current
     vimPendingRef.current = null
     if (key.ctrl && key.name === 'r') { editor.redo(); setMessage('Redo'); return true }
@@ -1002,8 +1124,8 @@ export function EditorPopover({
     if (sequence === 'l' || key.name === 'right') { editor.moveCursorRight(); return true }
     if (sequence === 'w') { editor.moveWordForward(); return true }
     if (sequence === 'b') { editor.moveWordBackward(); return true }
-    if (sequence === '0' || key.name === 'home') { editor.cursorOffset = bounds.start; return true }
-    if (sequence === '$' || key.name === 'end') { editor.cursorOffset = bounds.end; return true }
+    if (sequence === '0' || key.name === 'home') { setEditorDocumentOffset(editor, bounds.start); return true }
+    if (sequence === '$' || key.name === 'end') { setEditorDocumentOffset(editor, bounds.end); return true }
     if (sequence === 'G' || (key.name === 'g' && key.shift)) { editor.gotoBufferEnd(); return true }
     if (sequence === 'g') {
       if (pending === 'g') { editor.gotoBufferHome(); return true }
@@ -1013,27 +1135,27 @@ export function EditorPopover({
     }
     if (sequence === 'i') { setVimMode('insert'); setMessage('Vim INSERT · Esc normal'); return true }
     if (sequence === 'a') { editor.moveCursorRight(); setVimMode('insert'); setMessage('Vim INSERT · Esc normal'); return true }
-    if (sequence === 'I') { editor.cursorOffset = bounds.start; setVimMode('insert'); setMessage('Vim INSERT · Esc normal'); return true }
-    if (sequence === 'A') { editor.cursorOffset = bounds.end; setVimMode('insert'); setMessage('Vim INSERT · Esc normal'); return true }
+    if (sequence === 'I') { setEditorDocumentOffset(editor, bounds.start); setVimMode('insert'); setMessage('Vim INSERT · Esc normal'); return true }
+    if (sequence === 'A') { setEditorDocumentOffset(editor, bounds.end); setVimMode('insert'); setMessage('Vim INSERT · Esc normal'); return true }
     if (sequence === 'o') {
-      const indentation = indentationForNewLine(editor.plainText, editor.cursorOffset)
-      editor.cursorOffset = bounds.end
+      const indentation = indentationForNewLine(editor.plainText, documentOffset)
+      setEditorDocumentOffset(editor, bounds.end)
       editor.insertText(`\n${indentation}`)
       setVimMode('insert')
       setMessage('Vim INSERT · opened line below')
       return true
     }
     if (sequence === 'O') {
-      const indentation = indentationForNewLine(editor.plainText, editor.cursorOffset)
-      editor.cursorOffset = bounds.start
+      const indentation = indentationForNewLine(editor.plainText, documentOffset)
+      setEditorDocumentOffset(editor, bounds.start)
       editor.insertText(`${indentation}\n`)
-      editor.cursorOffset = bounds.start + indentation.length
+      setEditorDocumentOffset(editor, bounds.start + indentation.length)
       setVimMode('insert')
       setMessage('Vim INSERT · opened line above')
       return true
     }
     if (sequence === 'v') {
-      editor.setSelection(editor.cursorOffset, Math.min(editor.plainText.length, editor.cursorOffset + 1))
+      editor.setSelection(documentOffset, Math.min(editor.plainText.length, documentOffset + 1))
       setVimMode('visual')
       setMessage('Vim VISUAL · y yank · d delete · Esc normal')
       return true
@@ -1069,7 +1191,7 @@ export function EditorPopover({
     }
     if (sequence === 'p' && vimRegisterRef.current) {
       if (vimRegisterRef.current.endsWith('\n')) {
-        editor.cursorOffset = bounds.end
+        setEditorDocumentOffset(editor, bounds.end)
         editor.insertText(`\n${vimRegisterRef.current.slice(0, -1)}`)
       } else {
         editor.moveCursorRight()
@@ -1144,19 +1266,20 @@ export function EditorPopover({
     if (focusPane === 'editor' && (key.name === 'home' || key.name === 'end')) {
       const editor = editorRef.current
       if (!editor) return true
-      const bounds = lineBoundsAtOffset(editor.plainText, editor.cursorOffset)
+      const documentOffset = editorDocumentOffset(editor, cursorRef.current)
+      const bounds = lineBoundsAtOffset(editor.plainText, documentOffset)
       const target = key.name === 'home' ? bounds.start : bounds.end
-      if (key.shift) editor.setSelection(editor.cursorOffset, target)
+      if (key.shift) editor.setSelection(documentOffset, target)
       else {
         editor.clearSelection()
-        editor.cursorOffset = target
+        setEditorDocumentOffset(editor, target)
       }
       return true
     }
     if (focusPane === 'editor' && key.name === 'return' && !key.ctrl && !key.meta) {
       const editor = editorRef.current
       if (!editor) return true
-      const indentation = indentationForNewLine(editor.plainText, editor.cursorOffset)
+      const indentation = indentationForNewLine(editor.plainText, editorDocumentOffset(editor, cursorRef.current))
       editor.insertText(`\n${indentation}`)
       setSignatureInfo(null)
       return true
@@ -1171,7 +1294,7 @@ export function EditorPopover({
       const row = Math.max(0, Math.min(lines.length - 1, current.row + direction * step))
       let offset = 0
       for (let index = 0; index < row; index += 1) offset += (lines[index]?.length ?? 0) + 1
-      editor.cursorOffset = offset + Math.min(current.col, lines[row]?.length ?? 0)
+      setEditorDocumentOffset(editor, offset + Math.min(current.col, lines[row]?.length ?? 0))
       return true
     }
     if (key.name === 'escape' && closeConfirm) {
@@ -1230,6 +1353,12 @@ export function EditorPopover({
 
   const setEditorRef = useCallback((node: TextareaRenderable | null) => {
     editorRef.current = node
+    if (node) cursorRef.current = { line: node.logicalCursor.row, visualColumn: node.logicalCursor.col }
+  }, [])
+
+  const handleEditorCursorChange = useCallback((next: { line: number; visualColumn: number }) => {
+    cursorRef.current = next
+    setCursor(next)
   }, [])
 
   const setEditorScrollbarRef = useCallback((node: ScrollBarRenderable | null) => {
@@ -1238,6 +1367,7 @@ export function EditorPopover({
   }, [syncEditorScrollbar])
 
   const scrollEditorTo = useCallback((position: number) => {
+    if (syncingEditorScrollbarRef.current) return
     const editor = editorRef.current
     if (!editor) return
     const viewport = editor.editorView.getViewport()
@@ -1256,12 +1386,20 @@ export function EditorPopover({
   const updateActiveContent = useCallback(() => {
     const content = editorRef.current?.plainText
     if (content == null || !activePath) return
+    completionRequestRef.current += 1
+    completionResolveRequestRef.current += 1
+    setCompletions([])
     setCloseConfirm(false)
     setTabs((current) => current.map((tab) => tab.path === activePath ? { ...tab, content } : tab))
   }, [activePath])
 
   const counts = useMemo(() => diagnosticCounts(diagnostics), [diagnostics])
   const selectedCompletion = completions[completionCursor]
+  const completionWindowStart = Math.min(
+    Math.max(0, completionCursor - 7),
+    Math.max(0, completions.length - 8),
+  )
+  const visibleCompletions = completions.slice(completionWindowStart, completionWindowStart + 8)
   const completionDocumentation = selectedCompletion && 'documentation' in selectedCompletion
     ? compactLspText(selectedCompletion.documentation ?? '', 2)
     : []
@@ -1277,9 +1415,17 @@ export function EditorPopover({
   const completionPopupWidth = showCompletionDetailPane
     ? Math.min(78, Math.max(58, editorWidth - 6))
     : Math.min(48, Math.max(28, editorWidth - 8))
+  const completionDetailRows = selectedCompletion
+    ? 1 + (selectedCompletion.detail ? 1 : 0) + completionDocumentation.length
+    : 0
   const completionPopupHeight = Math.min(
     11,
-    Math.max(4, Math.min(completions.length, 8) + 2 + (showCompletionDetailPane ? 0 : completionDocumentation.length)),
+    Math.max(
+      4,
+      2 + (showCompletionDetailPane
+        ? Math.max(visibleCompletions.length, completionDetailRows)
+        : visibleCompletions.length + completionDocumentation.length),
+    ),
   )
   const completionTop = Math.max(3, Math.min(contentHeight - completionPopupHeight, cursor.line - (editorRef.current?.scrollY ?? 0) + 2))
   const completionLeft = explorerWidth + Math.max(5, Math.min(Math.max(5, editorWidth - completionPopupWidth - 2), cursor.visualColumn + 7))
@@ -1423,7 +1569,7 @@ export function EditorPopover({
                   tabIndicator="→"
                   tabIndicatorColor={theme.dim}
                   onContentChange={updateActiveContent}
-                  onCursorChange={setCursor}
+                  onCursorChange={handleEditorCursorChange}
                 />
               </line-number>
               <editorScrollbar
@@ -1526,28 +1672,31 @@ export function EditorPopover({
       ) : null}
 
       {completions.length > 0 && activeTab && focusPane === 'editor' ? (
-        <box position="absolute" top={completionTop} left={completionLeft} width={completionPopupWidth} height={completionPopupHeight} zIndex={55} border borderStyle="rounded" borderColor={theme.violet} backgroundColor={theme.surface} flexDirection="column" title=" completions ">
+        <box position="absolute" top={completionTop} left={completionLeft} width={completionPopupWidth} height={completionPopupHeight} zIndex={55} border borderStyle="rounded" borderColor={theme.violet} backgroundColor={theme.surface} flexDirection="column" title={` completions ${completionCursor + 1}/${completions.length} `}>
           <box flexGrow={1} flexDirection="row">
             <box width={showCompletionDetailPane ? Math.min(34, completionPopupWidth - 24) : undefined} flexGrow={showCompletionDetailPane ? 0 : 1} flexDirection="column">
-              {completions.slice(0, 8).map((item, index) => (
-                <box
-                  key={`${item.source}:${item.label}`}
-                  height={1}
-                  paddingX={1}
-                  backgroundColor={index === completionCursor ? theme.surface3 : theme.surface}
-                  flexDirection="row"
-                  onMouseUp={(event: MouseEvent) => {
-                    if (event.button !== 0) return
-                    event.stopPropagation()
-                    acceptCompletionAt(index)
-                  }}
-                >
-                  <text fg={item.source === 'lsp' ? theme.violet : item.source === 'path' ? theme.cyan : theme.amber}>{`${item.source === 'lsp' ? COMPLETION_KIND_GLYPHS[item.kind ?? 0] ?? '◇' : item.source === 'path' ? '󰈙' : 'ω'} `}</text>
-                  <text fg={index === completionCursor ? theme.text : theme.muted} wrapMode="none">{fitText(item.label, showCompletionDetailPane ? 18 : Math.min(24, editorWidth - 16))}</text>
-                  <box flexGrow={1} />
-                  {!showCompletionDetailPane ? <text fg={theme.dim} wrapMode="none">{fitText(item.detail ?? item.source, 12)}</text> : null}
-                </box>
-              ))}
+              {visibleCompletions.map((item, visibleIndex) => {
+                const index = completionWindowStart + visibleIndex
+                return (
+                  <box
+                    key={`${item.source}:${item.label}:${item.detail ?? ''}:${index}`}
+                    height={1}
+                    paddingX={1}
+                    backgroundColor={index === completionCursor ? theme.surface3 : theme.surface}
+                    flexDirection="row"
+                    onMouseUp={(event: MouseEvent) => {
+                      if (event.button !== 0) return
+                      event.stopPropagation()
+                      acceptCompletionAt(index)
+                    }}
+                  >
+                    <text fg={item.source === 'lsp' ? theme.violet : item.source === 'path' ? theme.cyan : theme.amber}>{`${item.source === 'lsp' ? COMPLETION_KIND_GLYPHS[item.kind ?? 0] ?? '◇' : item.source === 'path' ? '󰈙' : 'ω'} `}</text>
+                    <text fg={index === completionCursor ? theme.text : theme.muted} wrapMode="none">{fitText(item.label, showCompletionDetailPane ? 18 : Math.min(24, editorWidth - 16))}</text>
+                    <box flexGrow={1} />
+                    {!showCompletionDetailPane ? <text fg={theme.dim} wrapMode="none">{fitText(item.detail ?? item.source, 12)}</text> : null}
+                  </box>
+                )
+              })}
               {!showCompletionDetailPane ? completionDocumentation.map((line, index) => (
                 <text key={`${selectedCompletion?.label}:documentation:${index}`} fg={theme.dim} bg={theme.surface2} wrapMode="none">
                   {fitText(`  ${line}`, Math.min(46, editorWidth - 10))}

@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import React, { act } from 'react'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RGBA, SyntaxStyle } from '@opentui/core'
@@ -13,6 +13,8 @@ import { registerExtraTreeSitterParsers } from './treeSitterParsers'
 const cwd = await mkdtemp(join(tmpdir(), 'agent-viewer-editor-'))
 const filePath = join(cwd, 'main.ts')
 const secondFilePath = join(cwd, 'second.ts')
+const fakeLspPath = join(cwd, 'typescript-language-server')
+const originalPath = process.env.PATH
 let handleKey: ((key: EditorKeyEvent) => boolean) | null = null
 let closeCount = 0
 const notices: Array<{ kind: 'info' | 'error'; message: string }> = []
@@ -35,6 +37,65 @@ async function flush(setup: Awaited<ReturnType<typeof testRender>>, delay = 250)
 }
 
 try {
+  await writeFile(fakeLspPath, String.raw`#!/usr/bin/env node
+let input = Buffer.alloc(0)
+let documentText = ''
+function send(message) {
+  const body = JSON.stringify(message)
+  process.stdout.write('Content-Length: ' + Buffer.byteLength(body) + '\r\n\r\n' + body)
+}
+process.stdin.on('data', (chunk) => {
+  input = Buffer.concat([input, chunk])
+  while (true) {
+    const headerEnd = input.indexOf('\r\n\r\n')
+    if (headerEnd < 0) return
+    const match = /Content-Length:\s*(\d+)/i.exec(input.subarray(0, headerEnd).toString('ascii'))
+    if (!match) return
+    const length = Number(match[1])
+    const start = headerEnd + 4
+    if (input.length < start + length) return
+    const message = JSON.parse(input.subarray(start, start + length).toString('utf8'))
+    input = input.subarray(start + length)
+    if (message.method === 'initialize') send({ jsonrpc: '2.0', id: message.id, result: { capabilities: { completionProvider: { triggerCharacters: ['.'], resolveProvider: true } } } })
+    if (message.method === 'textDocument/didOpen') documentText = message.params.textDocument.text
+    if (message.method === 'textDocument/didChange') documentText = message.params.contentChanges[0].text
+    if (message.method === 'textDocument/completion') {
+      const position = message.params.position
+      const line = (documentText.split('\n')[position.line] || '').slice(0, position.character)
+      const prefix = /[A-Za-z_$][\w$]*$/.exec(line)?.[0] || ''
+      const memberAccess = line.slice(0, line.length - prefix.length).endsWith('console.')
+      const labels = memberAccess
+        ? ['log', 'warn', 'error', 'info', 'debug', 'dir', 'table', 'time', 'timeEnd', 'trace', 'group', 'groupEnd']
+        : ['answer']
+      send({
+        jsonrpc: '2.0', id: message.id, result: labels.map((label, index) => ({
+          label,
+          kind: 2,
+          detail: memberAccess ? '(message?: any) => void' : 'number',
+          sortText: String(index).padStart(3, '0'),
+          preselect: index === 0,
+          data: { memberAccess, label },
+          textEdit: {
+            range: { start: { line: position.line, character: position.character - prefix.length }, end: position },
+            newText: label,
+          },
+        })),
+      })
+    }
+    if (message.method === 'completionItem/resolve') send({
+      jsonrpc: '2.0', id: message.id, result: {
+        ...message.params,
+        documentation: { kind: 'markdown', value: message.params.label === 'log' ? 'Writes a log message.' : 'Console member.' },
+        additionalTextEdits: message.params.label === 'log'
+          ? [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, newText: '// completion import\n' }]
+          : [],
+      },
+    })
+  }
+})
+`, 'utf8')
+  await chmod(fakeLspPath, 0o755)
+  process.env.PATH = `${cwd}:${originalPath ?? ''}`
   const longLine = `const wrappedText = '${'word '.repeat(36).trim()}'`
   const overflowLines = Array.from({ length: 36 }, (_, index) => `const filler${index} = ${index}`).join('\n')
   await writeFile(filePath, `const answer = 41\nconst otherAnswer = answer + 1\n  const nested = true\n${longLine}\n${overflowLines}\n`, 'utf8')
@@ -88,19 +149,18 @@ try {
     if (editor.scrollY <= 0 || editorScrollbar.scrollPosition !== editor.scrollY) {
       throw new Error(`Dragging the editor scrollbar did not synchronize its viewport: ${JSON.stringify({ editorScrollY: editor.scrollY, scrollbarPosition: editorScrollbar.scrollPosition })}`)
     }
-    act(() => {
-      editor.setCursor(1, 5)
-      handleKey?.({ name: 'home', ctrl: false, shift: false, sequence: '\u001b[H' })
-    })
+    act(() => { editor.setCursor(1, 5) })
+    await setup.flush()
+    act(() => { handleKey?.({ name: 'home', ctrl: false, shift: false, sequence: '\u001b[H' }) })
+    await setup.flush()
     if (editor.logicalCursor.col !== 0) throw new Error(`Home did not move to line start: ${JSON.stringify(editor.logicalCursor)}`)
     act(() => { handleKey?.({ name: 'end', ctrl: false, shift: false, sequence: '\u001b[F' }) })
     if (editor.logicalCursor.col !== 'const otherAnswer = answer + 1'.length) {
       throw new Error(`End did not move to line end: ${JSON.stringify(editor.logicalCursor)}`)
     }
-    act(() => {
-      editor.setCursor(2, '  const nested = true'.length)
-      handleKey?.({ name: 'return', ctrl: false, shift: false, sequence: '\r' })
-    })
+    act(() => { editor.setCursor(2, '  const nested = true'.length) })
+    await setup.flush()
+    act(() => { handleKey?.({ name: 'return', ctrl: false, shift: false, sequence: '\r' }) })
     await act(async () => { await setup.mockInput.typeText('keptIndent') })
     await setup.flush()
     if (!editor.plainText.includes('\n  keptIndent')) {
@@ -121,16 +181,49 @@ try {
     if (String(editor.wrapMode) !== 'none' || !notices.some((notice) => notice.message === 'Editor word wrap disabled')) {
       throw new Error(`Alt+Z did not disable word wrapping cleanly: ${JSON.stringify({ wrapMode: editor.wrapMode, notices })}`)
     }
+    act(() => { editor.gotoBufferEnd() })
+    await act(async () => { await setup.mockInput.typeText('\nconsole.') })
+    await flush(setup, 800)
+    const memberCompletionFrame = setup.captureCharFrame()
+    if (!memberCompletionFrame.includes('completions 1/12') || !memberCompletionFrame.includes('log') || !memberCompletionFrame.includes('warn')) {
+      throw new Error(`Member access did not open a code-aware LSP completion list at ${JSON.stringify(editor.logicalCursor)} / ${editor.cursorOffset}:\n${memberCompletionFrame}`)
+    }
+    if (!memberCompletionFrame.includes('Writes a log message.')) {
+      throw new Error(`Selected member completion did not resolve documentation:\n${memberCompletionFrame}`)
+    }
+    for (let index = 0; index < 9; index += 1) {
+      act(() => { handleKey?.({ name: 'down', ctrl: false, shift: false, sequence: '\u001b[B' }) })
+    }
+    await flush(setup, 200)
+    const scrolledCompletionFrame = setup.captureCharFrame()
+    if (!scrolledCompletionFrame.includes('completions 10/12') || !scrolledCompletionFrame.includes('trace') || !scrolledCompletionFrame.includes('error')) {
+      throw new Error(`Completion selection did not keep the active item visible while scrolling:\n${scrolledCompletionFrame}`)
+    }
+    for (let index = 0; index < 9; index += 1) {
+      act(() => { handleKey?.({ name: 'up', ctrl: false, shift: false, sequence: '\u001b[A' }) })
+    }
+    await flush(setup, 150)
+    await act(async () => { await setup.mockInput.typeText('lo') })
+    await flush(setup, 450)
+    const filteredMemberFrame = setup.captureCharFrame()
+    if (!filteredMemberFrame.includes('completions 1/1') || !filteredMemberFrame.includes('log') || filteredMemberFrame.includes('ƒ warn')) {
+      throw new Error(`Typing a member prefix did not narrow the LSP list like an editor completion menu:\n${filteredMemberFrame}`)
+    }
+    act(() => { handleKey?.({ name: 'tab', ctrl: false, shift: false, sequence: '\t' }) })
+    await flush(setup, 150)
+    if (!editor.plainText.startsWith('// completion import\n') || !editor.plainText.includes('console.log')) {
+      throw new Error(`Accepting a member completion did not apply its range and additional edits: ${JSON.stringify(editor.plainText)}`)
+    }
     act(() => { handleKey?.({ name: 'v', ctrl: false, shift: false, option: true, sequence: 'v' }) })
     await setup.flush()
     if (!setup.captureCharFrame().includes('NORMAL')) throw new Error('Alt+V did not enable Vim Normal mode')
     if (!notices.some((notice) => notice.kind === 'info' && notice.message === 'Editor Vim mode enabled')) {
       throw new Error(`Enabling Vim mode did not emit a toast notice: ${JSON.stringify(notices)}`)
     }
-    act(() => {
-      editor.setCursor(0, 5)
-      handleKey?.({ name: '0', ctrl: false, shift: false, sequence: '0' })
-    })
+    const answerLine = editor.plainText.split('\n').findIndex((line) => line.startsWith('const answer'))
+    act(() => { editor.setCursor(answerLine, 5) })
+    await setup.flush()
+    act(() => { handleKey?.({ name: '0', ctrl: false, shift: false, sequence: '0' }) })
     if (editor.logicalCursor.col !== 0) throw new Error(`Vim 0 did not move to line start: ${JSON.stringify(editor.logicalCursor)}`)
     act(() => { handleKey?.({ name: 'a', ctrl: false, shift: true, sequence: 'A' }) })
     await act(async () => { await setup.mockInput.typeText(' // vim') })
@@ -266,6 +359,7 @@ try {
     act(() => setup.renderer.destroy())
   }
 } finally {
+  process.env.PATH = originalPath
   syntaxStyle.destroy()
   await rm(cwd, { recursive: true, force: true })
 }

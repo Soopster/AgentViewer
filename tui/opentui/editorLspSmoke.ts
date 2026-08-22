@@ -26,7 +26,7 @@ process.stdin.on('data', (chunk) => {
     if (input.length < start + length) return
     const message = JSON.parse(input.subarray(start, start + length).toString('utf8'))
     input = input.subarray(start + length)
-    if (message.method === 'initialize') send({ jsonrpc: '2.0', id: message.id, result: { capabilities: { completionProvider: {} } } })
+    if (message.method === 'initialize') send({ jsonrpc: '2.0', id: message.id, result: { capabilities: { completionProvider: { triggerCharacters: ['.'], resolveProvider: true } } } })
     if (message.method === 'textDocument/didOpen') send({
       jsonrpc: '2.0', method: 'textDocument/publishDiagnostics', params: {
         uri: message.params.textDocument.uri,
@@ -34,7 +34,22 @@ process.stdin.on('data', (chunk) => {
       },
     })
     if (message.method === 'textDocument/completion') send({
-      jsonrpc: '2.0', id: message.id, result: [{ label: 'answer', kind: 6, detail: 'number', documentation: { kind: 'markdown', value: '**The answer.**' }, insertText: 'answer' }],
+      jsonrpc: '2.0', id: message.id, result: message.params.context.triggerKind === 2 && message.params.context.triggerCharacter === '.' ? {
+        isIncomplete: false,
+        itemDefaults: {
+          editRange: { start: { line: 0, character: 14 }, end: { line: 0, character: 17 } },
+          data: { symbolId: 42 },
+        },
+        items: [{ label: 'answer', kind: 6, filterText: 'answer', sortText: '001', textEditText: 'answer', preselect: true }],
+      } : [],
+    })
+    if (message.method === 'completionItem/resolve') send({
+      jsonrpc: '2.0', id: message.id, result: {
+        ...message.params,
+        detail: 'number',
+        documentation: { kind: 'markdown', value: '**The answer.**' },
+        additionalTextEdits: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, newText: 'import answer\n' }],
+      },
     })
     if (message.method === 'textDocument/hover') send({
       jsonrpc: '2.0', id: message.id, result: {
@@ -75,9 +90,19 @@ try {
     if (diagnostics.length !== 1 || diagnostics[0]?.message !== 'smoke warning') {
       throw new Error(`Fake LSP diagnostic was not delivered: ${JSON.stringify(diagnostics)}`)
     }
-    const completions = await client.completion({ line: 0, character: 17 })
-    if (completions[0]?.label !== 'answer' || completions[0]?.source !== 'lsp' || completions[0]?.documentation !== '**The answer.**') {
+    if (!client.isCompletionTriggerCharacter('.') || client.isCompletionTriggerCharacter(':')) {
+      throw new Error('Fake LSP completion trigger characters were not retained')
+    }
+    const completions = await client.completion({ line: 0, character: 17 }, '.')
+    const completion = completions[0]
+    if (completion?.label !== 'answer' || completion.source !== 'lsp' || completion.preselect !== true
+      || completion.textEdit?.range.start.character !== 14 || completion.rawItem?.data == null) {
       throw new Error(`Fake LSP completion was not delivered: ${JSON.stringify(completions)}`)
+    }
+    const resolvedCompletion = await client.resolveCompletion(completion)
+    if (resolvedCompletion.documentation !== '**The answer.**' || resolvedCompletion.detail !== 'number'
+      || resolvedCompletion.additionalTextEdits?.[0]?.newText !== 'import answer\n') {
+      throw new Error(`Fake LSP completion resolve was not delivered: ${JSON.stringify(resolvedCompletion)}`)
     }
     const hover = await client.hover({ line: 0, character: 8 })
     if (!hover?.contents.includes('const answer') || hover.range?.start.character !== 6) {
@@ -89,7 +114,7 @@ try {
     }
     client.change('const value = answer\n')
     client.saved('const value = answer\n')
-    console.log('Editor LSP initialize/diagnostics/completion/hover/signature smoke passed')
+    console.log('Editor LSP initialize/diagnostics/context completion/resolve/edit/hover/signature smoke passed')
   } finally {
     client.stop()
   }
