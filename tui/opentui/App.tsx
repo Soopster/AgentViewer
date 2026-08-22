@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process'
 import { GitPopover } from './GitPopover'
 import { PullRequestPopover } from './PullRequestPopover'
 import { FileViewerPopover } from './FileViewerPopover'
+import { EditorPopover } from './EditorPopover'
 import { NewSessionModal, NEW_SESSION_PROVIDERS } from './NewSessionModal'
 import { AnalyticsPopover } from './AnalyticsPopover'
 import { HandoffBriefPopover } from './HandoffBriefPopover'
@@ -4893,6 +4894,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'git',        label: 'Git status',             key: '^G', category: 'Session'    },
   { id: 'pull-requests', label: 'Review pull requests', key: '^⇧G', category: 'Session'   },
   { id: 'files',      label: 'Browse project files',   key: '^F', category: 'Session'    },
+  { id: 'editor',     label: 'Open project editor',    key: '^E', category: 'Session'    },
   { id: 'analytics',  label: 'Session analytics',      key: '^A', category: 'Session'    },
   { id: 'attention',  label: 'Attention inbox',        key: '!',  category: 'Session'    },
   { id: 'messaging',  label: 'Cross-session messaging', key: '⇧M', category: 'Session'   },
@@ -7217,6 +7219,9 @@ export default function OpenTuiApp() {
   const pullRequestKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean) | null>(null)
   const [fileViewerOpen, setFileViewerOpen] = useState(false)
   const fileViewerKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  const [editorOpen, setEditorOpen] = useState(false)
+  const [editorInitialPath, setEditorInitialPath] = useState<string | null>(null)
+  const editorKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; meta?: boolean; sequence: string }) => boolean) | null>(null)
   // New agent session modal: pick a folder (via the file picker in folder-select
   // mode) and provider before creating, instead of defaulting to the viewed cwd.
   const [newSessionModalOpen, setNewSessionModalOpen] = useState(false)
@@ -16133,6 +16138,10 @@ export default function OpenTuiApp() {
       case 'files':
         setFileViewerOpen(true)
         break
+      case 'editor':
+        setEditorInitialPath(null)
+        setEditorOpen(true)
+        break
       case 'analytics':
         setAnalyticsOpen(true)
         break
@@ -16408,6 +16417,12 @@ export default function OpenTuiApp() {
           setSessionSearchQuery('')
         })
       }
+      return
+    }
+
+    if (editorOpen) {
+      const consumed = editorKeyHandlerRef.current?.(key) ?? true
+      if (consumed) handled(() => {})
       return
     }
 
@@ -20052,6 +20067,35 @@ export default function OpenTuiApp() {
         />
       ) : null}
 
+      {editorOpen ? (
+        <box
+          position="absolute"
+          top={0}
+          left={0}
+          width={width}
+          height={height}
+          backgroundColor={RGBA.fromValues(0, 0, 0, 0.5)}
+          zIndex={49}
+        />
+      ) : null}
+
+      {editorOpen ? (
+        <EditorPopover
+          cwd={gitRepoCwd}
+          initialPath={editorInitialPath}
+          theme={theme}
+          width={width}
+          height={height}
+          syntaxStyle={handoffBriefSyntaxStyle}
+          onClose={() => {
+            setEditorOpen(false)
+            setEditorInitialPath(null)
+          }}
+          onKeyHandlerReady={(handler) => { editorKeyHandlerRef.current = handler }}
+          onNotice={(kind, text) => showNotice(kind, text)}
+        />
+      ) : null}
+
       {fileViewerOpen ? (
         <box
           position="absolute"
@@ -20095,6 +20139,11 @@ export default function OpenTuiApp() {
             })
           }}
           onSelectDirectory={folderPickerForNewSession ? handleNewSessionFolderSelected : undefined}
+          onEditPath={folderPickerForNewSession ? undefined : (path) => {
+            setFileViewerOpen(false)
+            setEditorInitialPath(path)
+            setEditorOpen(true)
+          }}
           onInsertPath={folderPickerForNewSession ? undefined : (path) => {
             insertComposerTextAtCursor(`@${path} `)
             setComposerActive(true)

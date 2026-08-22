@@ -112,6 +112,7 @@ const VENDORED_PARSERS: ParserSpec[] = [
     filetype: 'elisp',
     aliases: ['el', 'emacs-lisp', 'emacs_lisp'],
   },
+  { filetype: 'elm' },
   {
     filetype: 'elixir',
     aliases: ['ex', 'exs'],
@@ -129,11 +130,13 @@ const VENDORED_PARSERS: ParserSpec[] = [
     aliases: ['htm', 'xhtml'],
   },
   { filetype: 'java' },
+  { filetype: 'kotlin', aliases: ['kt', 'kts'] },
   {
     filetype: 'javascript',
     aliases: ['js', 'jsx', 'javascriptreact'],
   },
   { filetype: 'json' },
+  { filetype: 'lua' },
   {
     filetype: 'markdown',
     aliases: ['md', 'mdown', 'mkd'],
@@ -157,6 +160,8 @@ const VENDORED_PARSERS: ParserSpec[] = [
     filetype: 'python',
     aliases: ['py', 'pyi', 'pyw'],
   },
+  { filetype: 'powershell', aliases: ['ps1', 'psm1'] },
+  { filetype: 'ql' },
   {
     filetype: 'rescript',
     aliases: ['res', 'resi'],
@@ -173,6 +178,7 @@ const VENDORED_PARSERS: ParserSpec[] = [
     filetype: 'scala',
     aliases: ['sc'],
   },
+  { filetype: 'solidity', aliases: ['sol'] },
   { filetype: 'swift' },
   {
     filetype: 'tlaplus',
@@ -187,6 +193,8 @@ const VENDORED_PARSERS: ParserSpec[] = [
     filetype: 'typescriptreact',
     aliases: ['tsx', 'ctsx', 'mtsx'],
   },
+  { filetype: 'vue' },
+  { filetype: 'yaml', aliases: ['yml'] },
   { filetype: 'zig' },
 ]
 

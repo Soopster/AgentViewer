@@ -108,6 +108,30 @@ await act(async () => {
   await new Promise((resolve) => setTimeout(resolve, 100))
 })
 
+// The project editor is a first-class root overlay. Verify the portable Ctrl+E
+// launcher and that its own Ctrl+Q command returns keyboard ownership to App.
+act(() => {
+  setup.mockInput.pressKey('e', { ctrl: true })
+})
+await act(async () => {
+  await setup.flush()
+  await new Promise((resolve) => setTimeout(resolve, 250))
+})
+const editorFrame = captureCharFrame()
+if (!editorFrame.includes('EDITOR') || !editorFrame.includes('EXPLORER') || !editorFrame.includes('^P files')) {
+  throw new Error(`Ctrl+E did not open the project editor:\n${editorFrame}`)
+}
+act(() => {
+  setup.mockInput.pressKey('q', { ctrl: true })
+})
+await act(async () => {
+  await setup.flush()
+  await new Promise((resolve) => setTimeout(resolve, 100))
+})
+if (captureCharFrame().includes(' EDITOR')) {
+  throw new Error('Ctrl+Q did not close the project editor')
+}
+
 // Split transcript panes ride a tmux-style prefix: ⌃B arms the chord (the
 // status bar becomes the chord legend), then `%` runs the split — which must
 // refuse here rather than mount an empty pane, since no second tab is open.

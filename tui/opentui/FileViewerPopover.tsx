@@ -23,6 +23,7 @@ type Props = {
   onClose: () => void
   onKeyHandlerReady: (handler: (key: FileViewerKeyEvent) => void) => void
   onInsertPath?: (path: string) => void
+  onEditPath?: (path: string) => void
   readRemoteFile?: (path: string) => Promise<{ contents: string; truncated?: boolean } | null>
   // When provided the popover acts as a folder picker: Enter (or `o`) chooses a
   // directory and closes instead of previewing files. Files stay browsable but
@@ -240,6 +241,7 @@ export function FileViewerPopover({
   onClose,
   onKeyHandlerReady,
   onInsertPath,
+  onEditPath,
   readRemoteFile,
   onSelectDirectory,
   onToggleVelocityScroll,
@@ -442,6 +444,11 @@ export function FileViewerPopover({
       setPreviewFocused(true)
       return
     }
+    if (key.sequence === 'E' && selectedEntry?.kind === 'file' && onEditPath) {
+      onEditPath(selectedEntry.path)
+      onClose()
+      return
+    }
     if (key.sequence === 'r') { setRefreshVersion((value) => value + 1); return }
     // Folder-picker mode: `o` chooses the directory currently being browsed.
     if (directorySelect && key.sequence === 'o') { onSelectDirectory?.(directory); onClose(); return }
@@ -470,7 +477,7 @@ export function FileViewerPopover({
     if (key.sequence === 'G') previewFocused
       ? previewScrollRef.current?.scrollTo(Number.MAX_SAFE_INTEGER)
       : setCursor(Math.max(0, filteredEntries.length - 1))
-  }, [directory, directorySelect, enterSelected, filterMode, filteredEntries.length, goParent, navigateInto, onClose, onSelectDirectory, onToggleVelocityScroll, preview, previewExpanded, previewFocused, velocityScrollStep])
+  }, [directory, directorySelect, enterSelected, filterMode, filteredEntries.length, goParent, navigateInto, onClose, onEditPath, onSelectDirectory, onToggleVelocityScroll, preview, previewExpanded, previewFocused, selectedEntry, velocityScrollStep])
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
 
@@ -629,7 +636,7 @@ export function FileViewerPopover({
             ? '  type to filter · enter accept · esc clear'
             : directorySelect
               ? ` move  l open  enter choose dir  o choose here  / filter  . hidden  q cancel`
-              : ` move  h/l open  / filter  . hidden  s sort  tab preview  e ${previewExpanded ? 'restore' : 'expand'}  V velocity  q close`}</span>
+              : ` move  h/l open  / filter  . hidden  s sort  tab preview  e ${previewExpanded ? 'restore' : 'expand'}  E edit  V velocity  q close`}</span>
           {!filterMode ? <span fg={velocityScrollEnabled ? theme.green : theme.dim}>{`  [${sortMode} · vel ${velocityScrollEnabled ? 'on' : 'off'}]`}</span> : null}
         </text>
       </box>
