@@ -34,7 +34,7 @@ async function flush(setup: Awaited<ReturnType<typeof testRender>>, delay = 250)
 }
 
 try {
-  await writeFile(filePath, 'const answer = 41\n', 'utf8')
+  await writeFile(filePath, 'const answer = 41\nconst otherAnswer = answer + 1\n  const nested = true\n', 'utf8')
   await writeFile(secondFilePath, 'export const second = true\n', 'utf8')
   const setup = await testRender(
     <EditorPopover
@@ -55,7 +55,7 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 1_000))
     await setup.flush()
     const initialFrame = setup.captureCharFrame()
-    for (const expected of ['EDITOR', 'EXPLORER', 'main.ts', 'INSERT', '^P files']) {
+    for (const expected of ['EDITOR', 'EXPLORER', 'main.ts', 'INSERT', '^P open']) {
       if (!initialFrame.includes(expected)) throw new Error(`Missing ${expected} from editor frame:\n${initialFrame}`)
     }
     if (!/\b1\s+const answer/.test(initialFrame)) throw new Error(`Editor did not render line numbers:\n${initialFrame}`)
@@ -65,6 +65,45 @@ try {
       const editor = setup.renderer.root.findDescendantById('project-editor-textarea') as TextareaRenderable | null
       throw new Error(`Tree-sitter syntax highlighting did not color the TypeScript keyword: ${JSON.stringify(editor?.getLineHighlights(0) ?? [])}\n${initialFrame}`)
     }
+
+    const editor = setup.renderer.root.findDescendantById('project-editor-textarea') as TextareaRenderable | null
+    if (!editor) throw new Error('Editor textarea was not mounted')
+    act(() => {
+      editor.setCursor(1, 5)
+      handleKey?.({ name: 'home', ctrl: false, shift: false, sequence: '\u001b[H' })
+    })
+    if (editor.logicalCursor.col !== 0) throw new Error(`Home did not move to line start: ${JSON.stringify(editor.logicalCursor)}`)
+    act(() => { handleKey?.({ name: 'end', ctrl: false, shift: false, sequence: '\u001b[F' }) })
+    if (editor.logicalCursor.col !== 'const otherAnswer = answer + 1'.length) {
+      throw new Error(`End did not move to line end: ${JSON.stringify(editor.logicalCursor)}`)
+    }
+    act(() => {
+      editor.setCursor(2, '  const nested = true'.length)
+      handleKey?.({ name: 'return', ctrl: false, shift: false, sequence: '\r' })
+    })
+    await act(async () => { await setup.mockInput.typeText('keptIndent') })
+    await setup.flush()
+    if (!editor.plainText.includes('\n  keptIndent')) {
+      throw new Error(`Enter did not preserve current indentation: ${JSON.stringify(editor.plainText)}`)
+    }
+    act(() => { handleKey?.({ name: 'v', ctrl: false, shift: false, option: true, sequence: 'v' }) })
+    await setup.flush()
+    if (!setup.captureCharFrame().includes('NORMAL')) throw new Error('Alt+V did not enable Vim Normal mode')
+    act(() => {
+      editor.setCursor(0, 5)
+      handleKey?.({ name: '0', ctrl: false, shift: false, sequence: '0' })
+    })
+    if (editor.logicalCursor.col !== 0) throw new Error(`Vim 0 did not move to line start: ${JSON.stringify(editor.logicalCursor)}`)
+    act(() => { handleKey?.({ name: 'a', ctrl: false, shift: true, sequence: 'A' }) })
+    await act(async () => { await setup.mockInput.typeText(' // vim') })
+    act(() => { handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '\u001b' }) })
+    await setup.flush()
+    if (!editor.plainText.includes('const answer = 41 // vim') || !setup.captureCharFrame().includes('NORMAL')) {
+      throw new Error(`Vim A/Insert/Escape flow failed:\n${setup.captureCharFrame()}`)
+    }
+    act(() => { handleKey?.({ name: 'v', ctrl: false, shift: false, option: true, sequence: 'v' }) })
+    await setup.flush()
+    if (!setup.captureCharFrame().includes('INSERT')) throw new Error('Alt+V did not disable Vim mode')
 
     const tabResult = (handleKey as ((key: EditorKeyEvent) => boolean) | null)?.({ name: 'tab', ctrl: false, shift: false, sequence: '\t' })
     if (tabResult !== false) throw new Error('Tab was intercepted instead of being left for the text editor')
@@ -106,6 +145,33 @@ try {
     if (!written.includes('// edited')) throw new Error(`Ctrl+S did not write edited content: ${JSON.stringify(written)}`)
     if (!setup.captureCharFrame().includes('saved')) throw new Error('Editor did not return to saved state')
 
+    act(() => { handleKey?.({ name: 'f', ctrl: true, shift: false, sequence: '\u0006' }) })
+    await setup.flush()
+    if (!setup.captureCharFrame().includes('Find in file')) throw new Error('Ctrl+F did not open in-buffer search')
+    for (const character of 'answer') {
+      act(() => { handleKey?.({ name: character, ctrl: false, shift: false, sequence: character }) })
+    }
+    act(() => { handleKey?.({ name: 'return', ctrl: false, shift: false, sequence: '\r' }) })
+    await setup.flush()
+    if (editor?.getSelectedText().toLowerCase() !== 'answer' || !setup.captureCharFrame().includes('/3')) {
+      throw new Error(`Find did not select and count the first result:\n${setup.captureCharFrame()}`)
+    }
+    act(() => { handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '\u001b' }) })
+    act(() => { handleKey?.({ name: 'g', ctrl: true, shift: false, sequence: '\u0007' }) })
+    act(() => { handleKey?.({ name: '2', ctrl: false, shift: false, sequence: '2' }) })
+    act(() => { handleKey?.({ name: 'return', ctrl: false, shift: false, sequence: '\r' }) })
+    await setup.flush()
+    if (editor?.logicalCursor.row !== 1) throw new Error(`Ctrl+G did not move to line 2: ${JSON.stringify(editor?.logicalCursor)}`)
+
+    act(() => { handleKey?.({ name: 'p', ctrl: true, shift: false, sequence: '\u0010' }) })
+    act(() => { handleKey?.({ name: '>', ctrl: false, shift: true, sequence: '>' }) })
+    await setup.flush()
+    const commandFrame = setup.captureCharFrame()
+    if (!commandFrame.includes('COMMANDS') || !commandFrame.includes('Find in File')) {
+      throw new Error(`Unified quick open did not expose commands:\n${commandFrame}`)
+    }
+    act(() => { handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '\u001b' }) })
+
     act(() => { handleKey?.({ name: 'p', ctrl: true, shift: false, sequence: '\u0010' }) })
     await setup.flush()
     if (!setup.captureCharFrame().includes('Quick open')) throw new Error('Ctrl+P did not open file picker')
@@ -119,6 +185,13 @@ try {
     if (!secondFrame.includes('second.ts') || !secondFrame.includes('export const second')) {
       throw new Error(`Opening a second file did not switch buffers cleanly:\n${secondFrame}`)
     }
+    act(() => { handleKey?.({ name: 'p', ctrl: true, shift: false, sequence: '\u0010' }) })
+    act(() => { handleKey?.({ name: '#', ctrl: false, shift: true, sequence: '#' }) })
+    await setup.flush()
+    if (!setup.captureCharFrame().includes('BUFFERS') || !setup.captureCharFrame().includes('main.ts')) {
+      throw new Error(`Unified quick open did not expose open buffers:\n${setup.captureCharFrame()}`)
+    }
+    act(() => { handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '\u001b' }) })
     act(() => { handleKey?.({ name: 'tab', ctrl: true, shift: false, sequence: '\u0009' }) })
     await flush(setup, 150)
     if (!setup.captureCharFrame().includes('const answer')) throw new Error('Ctrl+Tab did not switch to the previous open file')
@@ -126,7 +199,7 @@ try {
     await flush(setup, 150)
     if (!setup.captureCharFrame().includes('export const second')) throw new Error('Ctrl+Shift+Tab did not switch to the next open file')
 
-    console.log('Editor popover edit/save/quick-open smoke passed')
+    console.log('Editor popover edit/search/navigation/quick-open smoke passed')
   } finally {
     act(() => setup.renderer.destroy())
   }

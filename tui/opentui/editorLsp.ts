@@ -6,9 +6,22 @@ export type EditorPosition = { line: number; character: number }
 export type EditorCompletion = {
   label: string
   detail?: string
+  documentation?: string
   insertText: string
   kind?: number
   source: 'lsp'
+}
+
+export type EditorHover = {
+  contents: string
+  range?: { start: EditorPosition; end: EditorPosition }
+}
+
+export type EditorSignatureHelp = {
+  label: string
+  documentation?: string
+  activeParameter?: number
+  parameters: string[]
 }
 
 export type EditorDiagnostic = {
@@ -60,6 +73,23 @@ type PendingRequest = {
   resolve: (value: unknown) => void
   reject: (error: Error) => void
   timer: ReturnType<typeof setTimeout>
+}
+
+function markupText(value: unknown): string | undefined {
+  if (typeof value === 'string') return value
+  if (!value || typeof value !== 'object') return undefined
+  const record = value as Record<string, unknown>
+  if (typeof record.value === 'string') return record.value
+  if (typeof record.language === 'string' && typeof record.value === 'string') return record.value
+  return undefined
+}
+
+function hoverText(value: unknown): string | undefined {
+  if (Array.isArray(value)) {
+    const parts = value.map(markupText).filter((part): part is string => Boolean(part))
+    return parts.length > 0 ? parts.join('\n\n') : undefined
+  }
+  return markupText(value)
 }
 
 export type EditorLspStatus =
@@ -115,6 +145,15 @@ export class EditorLspClient {
                   snippetSupport: false,
                   documentationFormat: ['plaintext', 'markdown'],
                   insertReplaceSupport: false,
+                },
+                contextSupport: true,
+              },
+              hover: { contentFormat: ['markdown', 'plaintext'] },
+              signatureHelp: {
+                signatureInformation: {
+                  documentationFormat: ['markdown', 'plaintext'],
+                  parameterInformation: { labelOffsetSupport: true },
+                  activeParameterSupport: true,
                 },
                 contextSupport: true,
               },
@@ -189,12 +228,71 @@ export class EditorLspClient {
       completions.push({
         label: item.label,
         detail: typeof item.detail === 'string' ? item.detail : undefined,
+        documentation: markupText(item.documentation),
         insertText,
         kind: typeof item.kind === 'number' ? item.kind : undefined,
         source: 'lsp',
       })
     }
     return completions
+  }
+
+  async hover(position: EditorPosition): Promise<EditorHover | null> {
+    if (!this.openedUri || !this.child) return null
+    const raw = await this.request('textDocument/hover', {
+      textDocument: { uri: this.openedUri },
+      position,
+    }, 2_500).catch(() => null)
+    if (!raw || typeof raw !== 'object') return null
+    const item = raw as Record<string, unknown>
+    const contents = hoverText(item.contents)
+    if (!contents) return null
+    const range = item.range as { start?: EditorPosition; end?: EditorPosition } | undefined
+    return {
+      contents,
+      range: range?.start && range.end ? { start: range.start, end: range.end } : undefined,
+    }
+  }
+
+  async signatureHelp(position: EditorPosition, triggerCharacter?: string): Promise<EditorSignatureHelp | null> {
+    if (!this.openedUri || !this.child) return null
+    const raw = await this.request('textDocument/signatureHelp', {
+      textDocument: { uri: this.openedUri },
+      position,
+      context: {
+        triggerKind: triggerCharacter ? 2 : 1,
+        triggerCharacter,
+        isRetrigger: false,
+      },
+    }, 2_500).catch(() => null)
+    if (!raw || typeof raw !== 'object') return null
+    const response = raw as Record<string, unknown>
+    const signatures = Array.isArray(response.signatures) ? response.signatures : []
+    const activeSignature = typeof response.activeSignature === 'number' ? response.activeSignature : 0
+    const rawSignature = signatures[activeSignature] ?? signatures[0]
+    if (!rawSignature || typeof rawSignature !== 'object') return null
+    const signature = rawSignature as Record<string, unknown>
+    if (typeof signature.label !== 'string') return null
+    const signatureLabel = signature.label
+    const parameters = Array.isArray(signature.parameters)
+      ? signature.parameters.flatMap((rawParameter) => {
+          if (!rawParameter || typeof rawParameter !== 'object') return []
+          const label = (rawParameter as Record<string, unknown>).label
+          if (typeof label === 'string') return [label]
+          if (Array.isArray(label) && label.length === 2 && label.every((part) => typeof part === 'number')) {
+            return [signatureLabel.slice(label[0] as number, label[1] as number)]
+          }
+          return []
+        })
+      : []
+    return {
+      label: signatureLabel,
+      documentation: markupText(signature.documentation),
+      activeParameter: typeof response.activeParameter === 'number'
+        ? response.activeParameter
+        : typeof signature.activeParameter === 'number' ? signature.activeParameter : undefined,
+      parameters,
+    }
   }
 
   stop(): void {

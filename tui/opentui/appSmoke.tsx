@@ -118,7 +118,7 @@ await act(async () => {
   await new Promise((resolve) => setTimeout(resolve, 250))
 })
 const editorFrame = captureCharFrame()
-if (!editorFrame.includes('EDITOR') || !editorFrame.includes('EXPLORER') || !editorFrame.includes('^P files')) {
+if (!editorFrame.includes('EDITOR') || !editorFrame.includes('EXPLORER') || !editorFrame.includes('^P open')) {
   throw new Error(`Ctrl+E did not open the project editor:\n${editorFrame}`)
 }
 act(() => {

@@ -34,7 +34,24 @@ process.stdin.on('data', (chunk) => {
       },
     })
     if (message.method === 'textDocument/completion') send({
-      jsonrpc: '2.0', id: message.id, result: [{ label: 'answer', kind: 6, detail: 'number', insertText: 'answer' }],
+      jsonrpc: '2.0', id: message.id, result: [{ label: 'answer', kind: 6, detail: 'number', documentation: { kind: 'markdown', value: '**The answer.**' }, insertText: 'answer' }],
+    })
+    if (message.method === 'textDocument/hover') send({
+      jsonrpc: '2.0', id: message.id, result: {
+        contents: [{ language: 'typescript', value: 'const answer: number' }, 'The answer.'],
+        range: { start: { line: 0, character: 6 }, end: { line: 0, character: 12 } },
+      },
+    })
+    if (message.method === 'textDocument/signatureHelp') send({
+      jsonrpc: '2.0', id: message.id, result: {
+        signatures: [{
+          label: 'add(left: number, right: number): number',
+          documentation: 'Adds two numbers.',
+          parameters: [{ label: [4, 16] }, { label: 'right: number' }],
+        }],
+        activeSignature: 0,
+        activeParameter: 1,
+      },
     })
   }
 })
@@ -59,12 +76,20 @@ try {
       throw new Error(`Fake LSP diagnostic was not delivered: ${JSON.stringify(diagnostics)}`)
     }
     const completions = await client.completion({ line: 0, character: 17 })
-    if (completions[0]?.label !== 'answer' || completions[0]?.source !== 'lsp') {
+    if (completions[0]?.label !== 'answer' || completions[0]?.source !== 'lsp' || completions[0]?.documentation !== '**The answer.**') {
       throw new Error(`Fake LSP completion was not delivered: ${JSON.stringify(completions)}`)
+    }
+    const hover = await client.hover({ line: 0, character: 8 })
+    if (!hover?.contents.includes('const answer') || hover.range?.start.character !== 6) {
+      throw new Error(`Fake LSP hover was not delivered: ${JSON.stringify(hover)}`)
+    }
+    const signature = await client.signatureHelp({ line: 0, character: 17 }, '(')
+    if (signature?.label !== 'add(left: number, right: number): number' || signature.activeParameter !== 1 || signature.parameters[0] !== 'left: number') {
+      throw new Error(`Fake LSP signature help was not delivered: ${JSON.stringify(signature)}`)
     }
     client.change('const value = answer\n')
     client.saved('const value = answer\n')
-    console.log('Editor LSP initialize/diagnostics/completion smoke passed')
+    console.log('Editor LSP initialize/diagnostics/completion/hover/signature smoke passed')
   } finally {
     client.stop()
   }

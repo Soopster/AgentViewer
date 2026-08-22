@@ -18,7 +18,9 @@ import {
   EditorLspClient,
   type EditorCompletion,
   type EditorDiagnostic,
+  type EditorHover,
   type EditorLspStatus,
+  type EditorSignatureHelp,
 } from './editorLsp'
 import { createScrollVelocityState, velocityScrollStep } from './scrollVelocity'
 
@@ -27,6 +29,7 @@ export type EditorKeyEvent = {
   ctrl: boolean
   shift: boolean
   meta?: boolean
+  option?: boolean
   sequence: string
   eventType?: 'press' | 'repeat' | 'release'
   repeated?: boolean
@@ -68,13 +71,59 @@ type LocalCompletion = {
 
 type Completion = EditorCompletion | LocalCompletion
 type FocusPane = 'explorer' | 'editor'
+type VimMode = 'insert' | 'normal' | 'visual'
+type QuickMode = 'files' | 'buffers' | 'commands' | 'line'
+
+type QuickResult = {
+  id: string
+  label: string
+  detail: string
+  kind: QuickMode
+}
+
+type EditorCommandId =
+  | 'save'
+  | 'find'
+  | 'goto-line'
+  | 'toggle-explorer'
+  | 'focus-explorer'
+  | 'close-tab'
+  | 'next-diagnostic'
+  | 'previous-diagnostic'
+  | 'show-hover'
+  | 'toggle-vim'
+  | 'toggle-velocity'
+
+type EditorCommand = {
+  id: EditorCommandId
+  label: string
+  detail: string
+  keywords: string
+}
+
+type SearchMatch = { start: number; end: number }
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024
 const MAX_COMPLETIONS = 12
 const AUTO_COMPLETE_DELAY_MS = 160
 const SYNTAX_DELAY_MS = 90
 const LSP_CHANGE_DELAY_MS = 120
+const SIGNATURE_DELAY_MS = 110
 const WORD_PATTERN = /[A-Za-z_$][\w$-]{1,}/g
+
+const EDITOR_COMMANDS: readonly EditorCommand[] = [
+  { id: 'save', label: 'File: Save', detail: 'Ctrl+S', keywords: 'write file' },
+  { id: 'find', label: 'Edit: Find in File', detail: 'Ctrl+F', keywords: 'search text' },
+  { id: 'goto-line', label: 'Go to Line', detail: 'Ctrl+G', keywords: 'jump row' },
+  { id: 'next-diagnostic', label: 'Problems: Next Diagnostic', detail: 'F8', keywords: 'error warning issue' },
+  { id: 'previous-diagnostic', label: 'Problems: Previous Diagnostic', detail: 'Shift+F8', keywords: 'error warning issue' },
+  { id: 'show-hover', label: 'IntelliSense: Show Hover', detail: 'Ctrl+K', keywords: 'type documentation symbol' },
+  { id: 'toggle-vim', label: 'Editor: Toggle Vim Mode', detail: 'Alt+V', keywords: 'normal insert visual modal' },
+  { id: 'toggle-explorer', label: 'View: Toggle Explorer', detail: 'Ctrl+B', keywords: 'sidebar files' },
+  { id: 'focus-explorer', label: 'View: Focus Explorer or Editor', detail: 'Ctrl+E', keywords: 'sidebar pane' },
+  { id: 'close-tab', label: 'File: Close Active Tab', detail: 'Ctrl+W', keywords: 'buffer' },
+  { id: 'toggle-velocity', label: 'Editor: Toggle Velocity Scrolling', detail: 'V', keywords: 'accelerate navigation' },
+]
 
 const COMPLETION_KIND_GLYPHS: Readonly<Record<number, string>> = {
   2: 'ƒ', 3: 'ƒ', 4: '◫', 5: '◇', 6: '◆', 7: '◆', 8: '◇', 9: '◇', 10: '◆',
@@ -209,6 +258,88 @@ function lineAtOffset(starts: number[], offset: number): number {
   return Math.max(0, high)
 }
 
+function quickModeFor(query: string): QuickMode {
+  if (query.startsWith('>')) return 'commands'
+  if (query.startsWith('#')) return 'buffers'
+  if (query.startsWith(':')) return 'line'
+  return 'files'
+}
+
+function quickModeQuery(query: string): string {
+  return quickModeFor(query) === 'files' ? query.trim() : query.slice(1).trim()
+}
+
+function fuzzyScore(value: string, query: string): number | null {
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
+  if (terms.length === 0) return 0
+  const target = value.toLowerCase()
+  let score = 0
+  for (const term of terms) {
+    const contiguous = target.indexOf(term)
+    if (contiguous >= 0) {
+      score += 1_000 - contiguous * 2 - Math.max(0, target.length - term.length)
+      continue
+    }
+    let cursor = 0
+    let first = -1
+    let previous = -2
+    for (const character of term) {
+      const index = target.indexOf(character, cursor)
+      if (index < 0) return null
+      if (first < 0) first = index
+      score += index === previous + 1 ? 18 : 4
+      previous = index
+      cursor = index + 1
+    }
+    score += 400 - first * 2 - (previous - first)
+  }
+  return score
+}
+
+function findLiteralMatches(content: string, query: string, matchCase: boolean): SearchMatch[] {
+  if (!query) return []
+  const haystack = matchCase ? content : content.toLocaleLowerCase()
+  const needle = matchCase ? query : query.toLocaleLowerCase()
+  const matches: SearchMatch[] = []
+  let offset = 0
+  while (offset <= haystack.length - needle.length && matches.length < 10_000) {
+    const start = haystack.indexOf(needle, offset)
+    if (start < 0) break
+    matches.push({ start, end: start + needle.length })
+    offset = start + Math.max(1, needle.length)
+  }
+  return matches
+}
+
+function formatClock(clock: Date): string {
+  return `${String(clock.getHours()).padStart(2, '0')}:${String(clock.getMinutes()).padStart(2, '0')}`
+}
+
+function compactLspText(value: string, maxLines: number): string[] {
+  return value
+    .replace(/```[\w-]*\n?/g, '')
+    .replace(/```/g, '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, maxLines)
+}
+
+function lineBoundsAtOffset(content: string, offset: number): { start: number; end: number } {
+  const clamped = Math.max(0, Math.min(content.length, offset))
+  const previousBreak = content.lastIndexOf('\n', Math.max(0, clamped - 1))
+  const nextBreak = content.indexOf('\n', clamped)
+  return {
+    start: previousBreak < 0 ? 0 : previousBreak + 1,
+    end: nextBreak < 0 ? content.length : nextBreak,
+  }
+}
+
+function indentationForNewLine(content: string, offset: number): string {
+  const bounds = lineBoundsAtOffset(content, offset)
+  return /^[\t ]*/.exec(content.slice(bounds.start, bounds.end))?.[0] ?? ''
+}
+
 export function EditorPopover({
   cwd,
   initialPath,
@@ -231,40 +362,89 @@ export function EditorPopover({
   const [quickOpen, setQuickOpen] = useState(false)
   const [quickQuery, setQuickQuery] = useState('')
   const [quickCursor, setQuickCursor] = useState(0)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchMatchCase, setSearchMatchCase] = useState(false)
+  const [searchCursor, setSearchCursor] = useState(-1)
+  const [diagnosticCursor, setDiagnosticCursor] = useState(-1)
   const [cursor, setCursor] = useState({ line: 0, visualColumn: 0 })
   const [completions, setCompletions] = useState<Completion[]>([])
   const [completionCursor, setCompletionCursor] = useState(0)
   const [diagnostics, setDiagnostics] = useState<EditorDiagnostic[]>([])
   const [lspStatus, setLspStatus] = useState<EditorLspStatus | null>(null)
+  const [hoverInfo, setHoverInfo] = useState<EditorHover | null>(null)
+  const [signatureInfo, setSignatureInfo] = useState<EditorSignatureHelp | null>(null)
   const [message, setMessage] = useState('Ready')
   const [closeConfirm, setCloseConfirm] = useState(false)
   const [clock, setClock] = useState(() => new Date())
   const [velocityScrollEnabled, setVelocityScrollEnabled] = useState(false)
+  const [vimEnabled, setVimEnabled] = useState(false)
+  const [vimMode, setVimMode] = useState<VimMode>('insert')
   const scrollAcceleration = useMemo(() => new MacOSScrollAccel({ maxMultiplier: 3 }), [])
   const editorRef = useRef<TextareaRenderable | null>(null)
   const lineNumberRef = useRef<LineNumberRenderable | null>(null)
   const lspRef = useRef<EditorLspClient | null>(null)
   const syntaxRequestRef = useRef(0)
   const completionRequestRef = useRef(0)
-  const velocityScrollStateRef = useRef(createScrollVelocityState())
+  const hoverRequestRef = useRef(0)
+  const signatureRequestRef = useRef(0)
+  const velocityScrollStateRef = useRef<ReturnType<typeof createScrollVelocityState> | null>(null)
+  const vimPendingRef = useRef<string | null>(null)
+  const vimRegisterRef = useRef('')
 
   const activeTab = tabs.find((tab) => tab.path === activePath) ?? null
   const dirty = activeTab ? activeTab.content !== activeTab.savedContent : false
   const dirtyTabs = useMemo(() => tabs.filter((tab) => tab.content !== tab.savedContent), [tabs])
   const tree = useMemo(() => buildTree(projectFiles), [projectFiles])
   const treeRows = useMemo(() => flattenTree(tree, treeExpanded), [tree, treeExpanded])
-  const filteredQuickFiles = useMemo(() => {
-    const query = quickQuery.trim().toLowerCase()
-    if (!query) return projectFiles.slice(0, 50)
+  const quickMode = quickModeFor(quickQuery)
+  const quickResults = useMemo<QuickResult[]>(() => {
+    const query = quickModeQuery(quickQuery)
+    if (quickMode === 'line') {
+      const line = Number.parseInt(query, 10)
+      if (!activeTab || !Number.isFinite(line) || line < 1) return []
+      return [{ id: String(line), label: `Go to line ${line}`, detail: activeTab.path, kind: 'line' }]
+    }
+    if (quickMode === 'buffers') {
+      return tabs
+        .flatMap((tab) => {
+          const score = fuzzyScore(`${basename(tab.path)} ${tab.path}`, query)
+          return score == null ? [] : [{
+            result: { id: tab.path, label: basename(tab.path), detail: tab.path, kind: 'buffers' as const },
+            score,
+          }]
+        })
+        .sort((a, b) => b.score - a.score)
+        .map((entry) => entry.result)
+    }
+    if (quickMode === 'commands') {
+      return EDITOR_COMMANDS
+        .flatMap((command) => {
+          const score = fuzzyScore(`${command.label} ${command.keywords}`, query)
+          return score == null ? [] : [{
+            result: { id: command.id, label: command.label, detail: command.detail, kind: 'commands' as const },
+            score,
+          }]
+        })
+        .sort((a, b) => b.score - a.score)
+        .map((entry) => entry.result)
+    }
     return projectFiles
-      .filter((path) => path.toLowerCase().includes(query))
-      .sort((a, b) => {
-        const aBase = basename(a).toLowerCase().startsWith(query) ? 0 : 1
-        const bBase = basename(b).toLowerCase().startsWith(query) ? 0 : 1
-        return aBase - bBase || a.length - b.length
+      .flatMap((path) => {
+        const score = fuzzyScore(`${basename(path)} ${path}`, query)
+        return score == null ? [] : [{
+          result: { id: path, label: basename(path), detail: path, kind: 'files' as const },
+          score,
+        }]
       })
+      .sort((a, b) => b.score - a.score || a.result.detail.length - b.result.detail.length)
       .slice(0, 50)
-  }, [projectFiles, quickQuery])
+      .map((entry) => entry.result)
+  }, [activeTab, projectFiles, quickMode, quickQuery, tabs])
+  const searchMatches = useMemo(
+    () => findLiteralMatches(activeTab?.content ?? '', searchQuery, searchMatchCase),
+    [activeTab?.content, searchMatchCase, searchQuery],
+  )
 
   const editorWidth = Math.max(24, width - (explorerVisible ? Math.max(24, Math.min(38, Math.floor(width * 0.23))) : 0) - 2)
   const explorerWidth = explorerVisible ? Math.max(24, Math.min(38, Math.floor(width * 0.23))) : 0
@@ -395,6 +575,8 @@ export function EditorPopover({
     lspRef.current = null
     setDiagnostics([])
     setLspStatus(null)
+    setHoverInfo(null)
+    setSignatureInfo(null)
     if (!activeTab) return
     const filetype = detectTuiCodeFiletypeFromPath(activeTab.path) ?? 'plaintext'
     const client = new EditorLspClient(root, filetype, join(root, activeTab.path))
@@ -412,6 +594,26 @@ export function EditorPopover({
     const timer = setTimeout(() => lspRef.current?.change(activeTab.content), LSP_CHANGE_DELAY_MS)
     return () => clearTimeout(timer)
   }, [activeTab])
+
+  useEffect(() => {
+    const editor = editorRef.current
+    if (!activeTab || !editor || focusPane !== 'editor') return
+    const request = ++signatureRequestRef.current
+    const trigger = editor.plainText[editor.cursorOffset - 1]
+    if (trigger !== '(' && trigger !== ',') return
+    const timer = setTimeout(() => {
+      void lspRef.current?.signatureHelp(
+        { line: cursor.line, character: cursor.visualColumn },
+        trigger,
+      ).then((result) => {
+        if (request !== signatureRequestRef.current) return
+        setCompletions([])
+        setHoverInfo(null)
+        setSignatureInfo(result ?? null)
+      })
+    }, SIGNATURE_DELAY_MS)
+    return () => clearTimeout(timer)
+  }, [activeTab, cursor.line, cursor.visualColumn, focusPane])
 
   useEffect(() => {
     if (!activeTab) return
@@ -475,11 +677,33 @@ export function EditorPopover({
     setCompletionCursor(0)
   }, [activeTab, cursor.line, cursor.visualColumn, projectFiles])
 
+  const requestHover = useCallback(async () => {
+    if (!activeTab || !editorRef.current) return
+    setCompletions([])
+    setSignatureInfo(null)
+    const request = ++hoverRequestRef.current
+    const result = await lspRef.current?.hover({ line: cursor.line, character: cursor.visualColumn }) ?? null
+    if (request !== hoverRequestRef.current) return
+    setHoverInfo(result)
+    setMessage(result ? 'LSP hover · Esc dismisses' : 'No hover information at cursor')
+  }, [activeTab, cursor.line, cursor.visualColumn])
+
+  const requestSignatureHelp = useCallback(async () => {
+    if (!activeTab || !editorRef.current) return
+    setCompletions([])
+    setHoverInfo(null)
+    const request = ++signatureRequestRef.current
+    const result = await lspRef.current?.signatureHelp({ line: cursor.line, character: cursor.visualColumn }) ?? null
+    if (request !== signatureRequestRef.current) return
+    setSignatureInfo(result)
+    setMessage(result ? 'LSP signature help · Esc dismisses' : 'No signature information at cursor')
+  }, [activeTab, cursor.line, cursor.visualColumn])
+
   useEffect(() => {
-    if (!activeTab || focusPane !== 'editor') return
+    if (!activeTab || focusPane !== 'editor' || hoverInfo || signatureInfo) return
     const timer = setTimeout(() => { void requestCompletions(false) }, AUTO_COMPLETE_DELAY_MS)
     return () => clearTimeout(timer)
-  }, [activeTab, cursor, focusPane, requestCompletions])
+  }, [activeTab, cursor, focusPane, hoverInfo, requestCompletions, signatureInfo])
 
   const acceptCompletion = useCallback(() => {
     const editor = editorRef.current
@@ -489,6 +713,7 @@ export function EditorPopover({
     editor.setSelection(prefix.start, editor.cursorOffset)
     editor.insertText(item.insertText)
     setCompletions([])
+    setSignatureInfo(null)
     setMessage(`${item.source === 'lsp' ? 'LSP' : item.source} completion: ${item.label}`)
   }, [completionCursor, completions])
 
@@ -507,21 +732,108 @@ export function EditorPopover({
     void openBuffer(row.path)
   }, [openBuffer, treeCursor, treeRows])
 
-  const chooseQuickFile = useCallback(() => {
-    const path = filteredQuickFiles[quickCursor]
-    if (!path) return
-    setQuickOpen(false)
-    setQuickQuery('')
-    void openBuffer(path)
-  }, [filteredQuickFiles, openBuffer, quickCursor])
+  const openQuick = useCallback((seed = '') => {
+    setSearchOpen(false)
+    setCompletions([])
+    setHoverInfo(null)
+    setSignatureInfo(null)
+    setQuickOpen(true)
+    setQuickQuery(seed)
+    setQuickCursor(0)
+  }, [])
 
-  const chooseQuickFileAt = useCallback((index: number) => {
-    const path = filteredQuickFiles[index]
-    if (!path) return
+  const openSearch = useCallback(() => {
+    const editor = editorRef.current
+    const selected = editor?.getSelectedText() ?? ''
+    setQuickOpen(false)
+    setCompletions([])
+    setHoverInfo(null)
+    setSignatureInfo(null)
+    setSearchOpen(true)
+    setSearchQuery(selected.includes('\n') ? '' : selected)
+    setSearchCursor(-1)
+    setFocusPane('editor')
+  }, [])
+
+  const navigateSearch = useCallback((direction: 1 | -1) => {
+    const editor = editorRef.current
+    if (!editor || searchMatches.length === 0) {
+      setMessage(searchQuery ? `No results for “${searchQuery}”` : 'Type to find in the active file')
+      return
+    }
+    let next = searchCursor
+    if (next < 0) {
+      const offset = editor.cursorOffset
+      next = direction > 0
+        ? searchMatches.findIndex((match) => match.start >= offset)
+        : searchMatches.findLastIndex((match) => match.end <= offset)
+      if (next < 0) next = direction > 0 ? 0 : searchMatches.length - 1
+    } else {
+      next = (next + direction + searchMatches.length) % searchMatches.length
+    }
+    const match = searchMatches[next]!
+    setSearchCursor(next)
+    editor.setSelection(match.start, match.end)
+    setMessage(`Find ${next + 1} of ${searchMatches.length}${searchMatchCase ? ' · match case' : ''}`)
+  }, [searchCursor, searchMatchCase, searchMatches, searchQuery])
+
+  const navigateDiagnostic = useCallback((direction: 1 | -1) => {
+    const editor = editorRef.current
+    if (!editor || diagnostics.length === 0) {
+      setMessage('No diagnostics in the active file')
+      return
+    }
+    const next = diagnosticCursor < 0
+      ? (direction > 0 ? 0 : diagnostics.length - 1)
+      : (diagnosticCursor + direction + diagnostics.length) % diagnostics.length
+    const diagnostic = diagnostics[next]!
+    setDiagnosticCursor(next)
+    editor.setCursor(diagnostic.line, diagnostic.character)
+    setMessage(`${next + 1}/${diagnostics.length} ${diagnostic.source ? `${diagnostic.source}: ` : ''}${diagnostic.message}`)
+  }, [diagnosticCursor, diagnostics])
+
+  const toggleVimMode = useCallback(() => {
+    const next = !vimEnabled
+    setVimEnabled(next)
+    setVimMode(next ? 'normal' : 'insert')
+    vimPendingRef.current = null
+    if (!next) editorRef.current?.clearSelection()
+    setMessage(`Vim mode ${next ? 'enabled · NORMAL' : 'disabled'}`)
+  }, [vimEnabled])
+
+  const executeEditorCommand = useCallback((id: EditorCommandId) => {
+    switch (id) {
+      case 'save': void saveActive(); break
+      case 'find': openSearch(); break
+      case 'goto-line': openQuick(':'); break
+      case 'toggle-explorer': setExplorerVisible((value) => !value); setFocusPane('editor'); break
+      case 'focus-explorer': setFocusPane((current) => current === 'editor' ? 'explorer' : 'editor'); break
+      case 'close-tab': closeActiveTab(); break
+      case 'next-diagnostic': navigateDiagnostic(1); break
+      case 'previous-diagnostic': navigateDiagnostic(-1); break
+      case 'show-hover': void requestHover(); break
+      case 'toggle-vim': toggleVimMode(); break
+      case 'toggle-velocity':
+        velocityScrollStateRef.current = createScrollVelocityState()
+        setVelocityScrollEnabled((value) => !value)
+        break
+    }
+  }, [closeActiveTab, navigateDiagnostic, openQuick, openSearch, requestHover, saveActive, toggleVimMode])
+
+  const chooseQuickResultAt = useCallback((index: number) => {
+    const result = quickResults[index]
+    if (!result) return
     setQuickOpen(false)
     setQuickQuery('')
-    void openBuffer(path)
-  }, [filteredQuickFiles, openBuffer])
+    if (result.kind === 'files') void openBuffer(result.id)
+    else if (result.kind === 'buffers') activateTab(result.id)
+    else if (result.kind === 'commands') executeEditorCommand(result.id as EditorCommandId)
+    else {
+      editorRef.current?.gotoLine(Math.max(0, Number.parseInt(result.id, 10) - 1))
+      setFocusPane('editor')
+      setMessage(`Moved to line ${result.id}`)
+    }
+  }, [activateTab, executeEditorCommand, openBuffer, quickResults])
 
   const acceptCompletionAt = useCallback((index: number) => {
     setCompletionCursor(index)
@@ -532,12 +844,156 @@ export function EditorPopover({
     editor.setSelection(prefix.start, editor.cursorOffset)
     editor.insertText(item.insertText)
     setCompletions([])
+    setSignatureInfo(null)
     setMessage(`${item.source === 'lsp' ? 'LSP' : item.source} completion: ${item.label}`)
   }, [completions])
 
+  const handleVimKey = useCallback((key: EditorKeyEvent): boolean => {
+    const editor = editorRef.current
+    if (!editor || focusPane !== 'editor') return false
+    const sequence = key.sequence ?? ''
+    if (vimMode === 'insert') {
+      if (key.name !== 'escape') return false
+      setCompletions([])
+      setHoverInfo(null)
+      setSignatureInfo(null)
+      setVimMode('normal')
+      vimPendingRef.current = null
+      editor.clearSelection()
+      setMessage('Vim NORMAL · i insert · v visual · Alt+V disable')
+      return true
+    }
+
+    if (key.name === 'escape') {
+      editor.clearSelection()
+      setVimMode('normal')
+      vimPendingRef.current = null
+      setMessage('Vim NORMAL')
+      return true
+    }
+
+    if (vimMode === 'visual') {
+      if (key.ctrl || key.meta || key.option) return false
+      const select = { select: true }
+      if (sequence === 'h' || key.name === 'left') { editor.moveCursorLeft(select); return true }
+      if (sequence === 'j' || key.name === 'down') { editor.moveCursorDown(select); return true }
+      if (sequence === 'k' || key.name === 'up') { editor.moveCursorUp(select); return true }
+      if (sequence === 'l' || key.name === 'right') { editor.moveCursorRight(select); return true }
+      if (sequence === 'w') { editor.moveWordForward(select); return true }
+      if (sequence === 'b') { editor.moveWordBackward(select); return true }
+      if (sequence === 'y') {
+        vimRegisterRef.current = editor.getSelectedText()
+        editor.clearSelection()
+        setVimMode('normal')
+        setMessage(`Yanked ${vimRegisterRef.current.length} character${vimRegisterRef.current.length === 1 ? '' : 's'}`)
+        return true
+      }
+      if (sequence === 'd' || sequence === 'x') {
+        editor.deleteSelection()
+        setVimMode('normal')
+        setMessage('Deleted selection')
+        return true
+      }
+      return true
+    }
+
+    const bounds = lineBoundsAtOffset(editor.plainText, editor.cursorOffset)
+    const pending = vimPendingRef.current
+    vimPendingRef.current = null
+    if (key.ctrl && key.name === 'r') { editor.redo(); setMessage('Redo'); return true }
+    if (key.ctrl || key.meta || key.option) return false
+    if (sequence === 'h' || key.name === 'left') { editor.moveCursorLeft(); return true }
+    if (sequence === 'j' || key.name === 'down') { editor.moveCursorDown(); return true }
+    if (sequence === 'k' || key.name === 'up') { editor.moveCursorUp(); return true }
+    if (sequence === 'l' || key.name === 'right') { editor.moveCursorRight(); return true }
+    if (sequence === 'w') { editor.moveWordForward(); return true }
+    if (sequence === 'b') { editor.moveWordBackward(); return true }
+    if (sequence === '0' || key.name === 'home') { editor.cursorOffset = bounds.start; return true }
+    if (sequence === '$' || key.name === 'end') { editor.cursorOffset = bounds.end; return true }
+    if (sequence === 'G' || (key.name === 'g' && key.shift)) { editor.gotoBufferEnd(); return true }
+    if (sequence === 'g') {
+      if (pending === 'g') { editor.gotoBufferHome(); return true }
+      vimPendingRef.current = 'g'
+      setMessage('Vim g… · g goes to first line')
+      return true
+    }
+    if (sequence === 'i') { setVimMode('insert'); setMessage('Vim INSERT · Esc normal'); return true }
+    if (sequence === 'a') { editor.moveCursorRight(); setVimMode('insert'); setMessage('Vim INSERT · Esc normal'); return true }
+    if (sequence === 'I') { editor.cursorOffset = bounds.start; setVimMode('insert'); setMessage('Vim INSERT · Esc normal'); return true }
+    if (sequence === 'A') { editor.cursorOffset = bounds.end; setVimMode('insert'); setMessage('Vim INSERT · Esc normal'); return true }
+    if (sequence === 'o') {
+      const indentation = indentationForNewLine(editor.plainText, editor.cursorOffset)
+      editor.cursorOffset = bounds.end
+      editor.insertText(`\n${indentation}`)
+      setVimMode('insert')
+      setMessage('Vim INSERT · opened line below')
+      return true
+    }
+    if (sequence === 'O') {
+      const indentation = indentationForNewLine(editor.plainText, editor.cursorOffset)
+      editor.cursorOffset = bounds.start
+      editor.insertText(`${indentation}\n`)
+      editor.cursorOffset = bounds.start + indentation.length
+      setVimMode('insert')
+      setMessage('Vim INSERT · opened line above')
+      return true
+    }
+    if (sequence === 'v') {
+      editor.setSelection(editor.cursorOffset, Math.min(editor.plainText.length, editor.cursorOffset + 1))
+      setVimMode('visual')
+      setMessage('Vim VISUAL · y yank · d delete · Esc normal')
+      return true
+    }
+    if (sequence === 'V') {
+      editor.setSelection(bounds.start, Math.min(editor.plainText.length, bounds.end + 1))
+      setVimMode('visual')
+      setMessage('Vim VISUAL LINE · y yank · d delete · Esc normal')
+      return true
+    }
+    if (sequence === 'x') { editor.deleteChar(); return true }
+    if (sequence === 'u') { editor.undo(); setMessage('Undo'); return true }
+    if (sequence === 'd') {
+      if (pending === 'd') {
+        vimRegisterRef.current = `${editor.plainText.slice(bounds.start, bounds.end)}\n`
+        editor.deleteLine()
+        setMessage('Deleted line')
+      } else {
+        vimPendingRef.current = 'd'
+        setMessage('Vim d… · d deletes line')
+      }
+      return true
+    }
+    if (sequence === 'y') {
+      if (pending === 'y') {
+        vimRegisterRef.current = `${editor.plainText.slice(bounds.start, bounds.end)}\n`
+        setMessage('Yanked line')
+      } else {
+        vimPendingRef.current = 'y'
+        setMessage('Vim y… · y yanks line')
+      }
+      return true
+    }
+    if (sequence === 'p' && vimRegisterRef.current) {
+      if (vimRegisterRef.current.endsWith('\n')) {
+        editor.cursorOffset = bounds.end
+        editor.insertText(`\n${vimRegisterRef.current.slice(0, -1)}`)
+      } else {
+        editor.moveCursorRight()
+        editor.insertText(vimRegisterRef.current)
+      }
+      setMessage('Pasted Vim register')
+      return true
+    }
+    return true
+  }, [focusPane, vimMode])
+
   const handleKey = useCallback((key: EditorKeyEvent): boolean => {
     const sequence = key.sequence ?? ''
-    if (key.sequence === 'V' && !key.ctrl && !key.meta) {
+    if (key.option && key.name === 'v') {
+      toggleVimMode()
+      return true
+    }
+    if (key.sequence === 'V' && !key.ctrl && !key.meta && !vimEnabled) {
       velocityScrollStateRef.current = createScrollVelocityState()
       setVelocityScrollEnabled((value) => !value)
       return true
@@ -553,11 +1009,34 @@ export function EditorPopover({
     if (quickOpen) {
       if (key.name === 'escape') { setQuickOpen(false); setQuickQuery(''); return true }
       if (key.name === 'up' || (key.ctrl && key.name === 'p')) { setQuickCursor((value) => Math.max(0, value - 1)); return true }
-      if (key.name === 'down' || (key.ctrl && key.name === 'n')) { setQuickCursor((value) => Math.min(filteredQuickFiles.length - 1, value + 1)); return true }
-      if (key.name === 'return') { chooseQuickFile(); return true }
+      if (key.name === 'down' || (key.ctrl && key.name === 'n')) { setQuickCursor((value) => Math.min(Math.max(0, quickResults.length - 1), value + 1)); return true }
+      if (key.name === 'return') { chooseQuickResultAt(quickCursor); return true }
       if (key.name === 'backspace' || key.name === 'delete') { setQuickQuery((value) => value.slice(0, -1)); setQuickCursor(0); return true }
       if (!key.ctrl && !key.meta && sequence.length === 1 && sequence >= ' ') { setQuickQuery((value) => value + sequence); setQuickCursor(0); return true }
       return true
+    }
+    if (searchOpen) {
+      if (key.name === 'escape') { setSearchOpen(false); setSearchCursor(-1); editorRef.current?.clearSelection(); return true }
+      if (key.name === 'return') { navigateSearch(key.shift ? -1 : 1); return true }
+      if (key.name === 'backspace' || key.name === 'delete') { setSearchQuery((value) => value.slice(0, -1)); setSearchCursor(-1); return true }
+      if (key.ctrl && key.name === 'f') { navigateSearch(key.shift ? -1 : 1); return true }
+      if (key.option && key.name === 'c') { setSearchMatchCase((value) => !value); setSearchCursor(-1); return true }
+      if (!key.ctrl && !key.meta && sequence.length === 1 && sequence >= ' ') { setSearchQuery((value) => value + sequence); setSearchCursor(-1); return true }
+      return true
+    }
+    if (vimEnabled && handleVimKey(key)) return true
+    if (hoverInfo || signatureInfo) {
+      if (key.name === 'escape') {
+        setHoverInfo(null)
+        setSignatureInfo(null)
+        return true
+      }
+      const retainsPopup = (key.ctrl && key.name === 'k')
+        || (key.ctrl && key.shift && (key.name === 'space' || sequence === '\0'))
+      if (!retainsPopup) {
+        setHoverInfo(null)
+        setSignatureInfo(null)
+      }
     }
     if (completions.length > 0) {
       if (key.name === 'escape') { setCompletions([]); return true }
@@ -565,13 +1044,33 @@ export function EditorPopover({
       if (key.name === 'down' || (key.ctrl && key.name === 'n')) { setCompletionCursor((value) => Math.min(completions.length - 1, value + 1)); return true }
       if (key.name === 'tab' || key.name === 'return') { acceptCompletion(); return true }
     }
+    if (focusPane === 'editor' && (key.name === 'home' || key.name === 'end')) {
+      const editor = editorRef.current
+      if (!editor) return true
+      const bounds = lineBoundsAtOffset(editor.plainText, editor.cursorOffset)
+      const target = key.name === 'home' ? bounds.start : bounds.end
+      if (key.shift) editor.setSelection(editor.cursorOffset, target)
+      else {
+        editor.clearSelection()
+        editor.cursorOffset = target
+      }
+      return true
+    }
+    if (focusPane === 'editor' && key.name === 'return' && !key.ctrl && !key.meta) {
+      const editor = editorRef.current
+      if (!editor) return true
+      const indentation = indentationForNewLine(editor.plainText, editor.cursorOffset)
+      editor.insertText(`\n${indentation}`)
+      setSignatureInfo(null)
+      return true
+    }
     if (focusPane === 'editor' && velocityScrollEnabled && (key.name === 'up' || key.name === 'down')) {
       const editor = editorRef.current
       if (!editor) return true
       const lines = editor.plainText.split('\n')
       const current = editor.logicalCursor
       const direction = key.name === 'up' ? -1 : 1
-      const step = velocityScrollStep(velocityScrollStateRef.current, direction, key, 6)
+      const step = velocityScrollStep(velocityScrollStateRef.current ??= createScrollVelocityState(), direction, key, 6)
       const row = Math.max(0, Math.min(lines.length - 1, current.row + direction * step))
       let offset = 0
       for (let index = 0; index < row; index += 1) offset += (lines[index]?.length ?? 0) + 1
@@ -589,9 +1088,14 @@ export function EditorPopover({
     }
     if (key.ctrl && key.name === 'q') { requestClose(); return true }
     if (key.ctrl && key.name === 's') { void saveActive(); return true }
-    if (key.ctrl && key.name === 'p') { setQuickOpen(true); setQuickQuery(''); setQuickCursor(0); return true }
+    if (key.ctrl && key.name === 'p') { openQuick(); return true }
+    if (key.ctrl && key.name === 'f') { openSearch(); return true }
+    if (key.ctrl && key.name === 'g') { openQuick(':'); return true }
     if (key.ctrl && key.name === 'b') { setExplorerVisible((value) => !value); setFocusPane('editor'); return true }
     if (key.ctrl && key.name === 'w') { closeActiveTab(); return true }
+    if (key.name === 'f8') { navigateDiagnostic(key.shift ? -1 : 1); return true }
+    if (key.ctrl && key.name === 'k') { void requestHover(); return true }
+    if (key.ctrl && key.shift && (key.name === 'space' || sequence === '\0')) { void requestSignatureHelp(); return true }
     if (key.ctrl && (key.name === 'space' || sequence === '\0')) { void requestCompletions(true); return true }
     if (key.name === 'escape') {
       if (focusPane === 'explorer' && activeTab) { setFocusPane('editor'); editorRef.current?.focus() }
@@ -612,7 +1116,7 @@ export function EditorPopover({
       return true
     }
     return false
-  }, [acceptCompletion, activateTreeRow, activeTab, chooseQuickFile, closeActiveTab, completionCursor, completions.length, filteredQuickFiles.length, focusPane, quickOpen, requestClose, requestCompletions, saveActive, switchTab, treeCursor, treeExpanded, treeRows, velocityScrollEnabled])
+  }, [acceptCompletion, activateTreeRow, activeTab, chooseQuickResultAt, closeActiveTab, closeConfirm, completions.length, focusPane, handleVimKey, hoverInfo, navigateDiagnostic, navigateSearch, openQuick, openSearch, quickCursor, quickOpen, quickResults.length, requestClose, requestCompletions, requestHover, requestSignatureHelp, saveActive, searchOpen, signatureInfo, switchTab, toggleVimMode, treeCursor, treeExpanded, treeRows, velocityScrollEnabled, vimEnabled])
 
   useEffect(() => {
     onKeyHandlerReady(handleKey)
@@ -621,6 +1125,11 @@ export function EditorPopover({
   useEffect(() => {
     if (focusPane === 'editor') editorRef.current?.focus()
   }, [activePath, focusPane])
+
+  useEffect(() => {
+    setDiagnosticCursor(-1)
+    setSearchCursor(-1)
+  }, [activePath, diagnostics])
 
   const setEditorRef = useCallback((node: TextareaRenderable | null) => {
     editorRef.current = node
@@ -634,9 +1143,37 @@ export function EditorPopover({
   }, [activePath])
 
   const counts = useMemo(() => diagnosticCounts(diagnostics), [diagnostics])
+  const selectedCompletion = completions[completionCursor]
+  const completionDocumentation = selectedCompletion && 'documentation' in selectedCompletion
+    ? compactLspText(selectedCompletion.documentation ?? '', 2)
+    : []
+  const hoverLines = hoverInfo ? compactLspText(hoverInfo.contents, 6) : []
+  const signatureDocumentation = signatureInfo?.documentation
+    ? compactLspText(signatureInfo.documentation, 2)
+    : []
+  const activeSignatureParameter = signatureInfo?.activeParameter == null
+    ? null
+    : signatureInfo.parameters[signatureInfo.activeParameter] ?? null
   const statusPath = activeTab ? activeTab.path : relative(process.cwd(), root) || basename(root)
-  const completionTop = Math.max(3, Math.min(contentHeight - Math.min(completions.length, 7) - 1, cursor.line - (editorRef.current?.scrollY ?? 0) + 2))
-  const completionLeft = explorerWidth + Math.max(7, Math.min(editorWidth - 34, cursor.visualColumn + 7))
+  const showCompletionDetailPane = editorWidth >= 68 && Boolean(selectedCompletion && (selectedCompletion.detail || completionDocumentation.length > 0))
+  const completionPopupWidth = showCompletionDetailPane
+    ? Math.min(78, Math.max(58, editorWidth - 6))
+    : Math.min(48, Math.max(28, editorWidth - 8))
+  const completionPopupHeight = Math.min(
+    11,
+    Math.max(4, Math.min(completions.length, 8) + 2 + (showCompletionDetailPane ? 0 : completionDocumentation.length)),
+  )
+  const completionTop = Math.max(3, Math.min(contentHeight - completionPopupHeight, cursor.line - (editorRef.current?.scrollY ?? 0) + 2))
+  const completionLeft = explorerWidth + Math.max(5, Math.min(Math.max(5, editorWidth - completionPopupWidth - 2), cursor.visualColumn + 7))
+  const editorModeLabel = focusPane === 'explorer' ? 'EXPLORER' : vimEnabled ? vimMode.toUpperCase() : 'INSERT'
+  const editorModeColor = focusPane === 'explorer'
+    ? theme.amber
+    : vimEnabled && vimMode === 'normal' ? theme.amber : vimEnabled && vimMode === 'visual' ? theme.cyan : theme.violet
+  const footerHints = width >= 135
+    ? `^S save  ^P open  ^F find  ^G line  ^K hover  ^⇧Space signature  F8 problem  Alt+V vim ${vimEnabled ? 'on' : 'off'}  ^Q exit`
+    : width >= 90
+      ? `^S save  ^P open  ^F find  ^G line  ^K hover  Alt+V vim ${vimEnabled ? 'on' : 'off'}  ^Q exit`
+      : '^S save  ^P open  ^F find  ^G line  ^Q exit'
 
   return (
     <box
@@ -772,15 +1309,15 @@ export function EditorPopover({
           ) : (
             <box flexGrow={1} alignItems="center" justifyContent="center" flexDirection="column">
               <text fg={theme.violet}>  Agent Viewer Editor</text>
-              <text fg={theme.dim}>Select a file · Ctrl+P quick open · Ctrl+Q close</text>
+              <text fg={theme.dim}>Select a file · Ctrl+P quick open · Ctrl+F find · Ctrl+Q close</text>
             </box>
           )}
         </box>
       </box>
 
       <box height={1} flexDirection="row" backgroundColor={theme.surface3}>
-        <box paddingX={1} backgroundColor={focusPane === 'editor' ? theme.violet : theme.amber}>
-          <text fg={theme.bg}>{focusPane === 'editor' ? 'INSERT' : 'EXPLORER'}</text>
+        <box paddingX={1} backgroundColor={editorModeColor}>
+          <text fg={theme.bg}>{editorModeLabel}</text>
         </box>
         <text fg={theme.cyan}>{`   ${basename(root)} `}</text>
         {dirty ? <text fg={theme.amber}>● modified  </text> : <text fg={theme.green}>✓ saved  </text>}
@@ -789,60 +1326,152 @@ export function EditorPopover({
         {counts.info > 0 ? <text fg={theme.cyan}>{`● ${counts.info} `}</text> : null}
         <text fg={lspStatus?.state === 'ready' ? theme.green : theme.dim}>{` ${lspStatusText(lspStatus)}`}</text>
         <box flexGrow={1} />
-        <text fg={theme.dim}>{`${detectTuiCodeFiletypeFromPath(activeTab?.path) ?? 'text'}  ${cursor.line + 1}:${cursor.visualColumn + 1}  ${clock.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} `}</text>
+        <text fg={theme.dim}>{`${detectTuiCodeFiletypeFromPath(activeTab?.path) ?? 'text'}  ${cursor.line + 1}:${cursor.visualColumn + 1}  ${formatClock(clock)} `}</text>
       </box>
       <box height={1} paddingX={1} backgroundColor={theme.surface2} flexDirection="row">
-        <text fg={message.startsWith('Unable') || message.startsWith('Refused') ? theme.red : theme.dim} wrapMode="none">{fitText(message, Math.max(10, width - 55))}</text>
+        <text fg={message.startsWith('Unable') || message.startsWith('Refused') ? theme.red : theme.dim} wrapMode="none">{fitText(message, Math.max(10, width - footerHints.length - 4))}</text>
         <box flexGrow={1} />
-        <text fg={theme.dim}>^S save  ^P files  ^Space complete  ^E focus  ^B explorer  V velocity {velocityScrollEnabled ? 'on' : 'off'}  ^W close tab  ^Q exit</text>
+        <text fg={theme.dim}>{footerHints}</text>
       </box>
 
       {quickOpen ? (
         <box position="absolute" top={2} left={Math.max(2, Math.floor(width * 0.2))} width={Math.max(30, Math.floor(width * 0.6))} height={Math.min(16, height - 5)} zIndex={60} border borderStyle="heavy" borderColor={theme.cyan} backgroundColor={theme.surface} flexDirection="column" title=" Quick open ">
           <box height={1} paddingX={1} backgroundColor={theme.surface2}>
-            <text fg={theme.text}>{`› ${quickQuery || 'type a file name…'}`}</text>
+            <text fg={theme.text}>{`› ${quickQuery || 'files · > commands · # buffers · : line'}`}</text>
+          </box>
+          <box height={1} paddingX={1} flexDirection="row">
+            <text fg={theme.cyan}>{quickMode === 'files' ? 'FILES' : quickMode === 'buffers' ? 'BUFFERS' : quickMode === 'commands' ? 'COMMANDS' : 'GO TO LINE'}</text>
+            <box flexGrow={1} />
+            <text fg={theme.dim}>{`${quickResults.length} result${quickResults.length === 1 ? '' : 's'}`}</text>
           </box>
           <scrollbox flexGrow={1} scrollAcceleration={scrollAcceleration}>
-            {filteredQuickFiles.slice(0, 12).map((path, index) => (
+            {quickResults.slice(0, 11).map((result, index) => (
               <box
-                key={path}
+                key={`${result.kind}:${result.id}`}
                 height={1}
                 paddingX={1}
                 backgroundColor={index === quickCursor ? theme.surface3 : theme.surface}
+                flexDirection="row"
                 onMouseUp={(event: MouseEvent) => {
                   if (event.button !== 0) return
                   event.stopPropagation()
-                  chooseQuickFileAt(index)
+                  chooseQuickResultAt(index)
                 }}
               >
-                <text fg={index === quickCursor ? theme.amber : theme.text} wrapMode="none">{fitText(path, Math.max(20, Math.floor(width * 0.6) - 4))}</text>
+                <text fg={index === quickCursor ? theme.amber : theme.text} wrapMode="none">{fitText(result.label, Math.max(14, Math.floor(width * 0.25)))}</text>
+                <box flexGrow={1} />
+                <text fg={theme.dim} wrapMode="none">{fitText(result.detail, Math.max(10, Math.floor(width * 0.28)))}</text>
               </box>
             ))}
+            {quickResults.length === 0 ? <text fg={theme.dim}>  No matching results</text> : null}
           </scrollbox>
         </box>
       ) : null}
 
+      {searchOpen && activeTab ? (
+        <box
+          position="absolute"
+          top={2}
+          right={2}
+          width={Math.max(32, Math.min(56, Math.floor(width * 0.48)))}
+          height={4}
+          zIndex={61}
+          border
+          borderStyle="rounded"
+          borderColor={theme.amber}
+          backgroundColor={theme.surface}
+          flexDirection="column"
+          title=" Find in file "
+        >
+          <box height={1} paddingX={1} backgroundColor={theme.surface2} flexDirection="row">
+            <text fg={theme.text} wrapMode="none">{`⌕ ${searchQuery || 'type to search…'}`}</text>
+            <box flexGrow={1} />
+            <text fg={searchMatchCase ? theme.amber : theme.dim}>Aa</text>
+            <text fg={theme.dim}>{`  ${searchMatches.length === 0 ? '0/0' : `${Math.max(0, searchCursor) + 1}/${searchMatches.length}`}`}</text>
+          </box>
+          <text fg={theme.dim}> Enter next · Shift+Enter previous · Alt+C match case · Esc close</text>
+        </box>
+      ) : null}
+
       {completions.length > 0 && activeTab && focusPane === 'editor' ? (
-        <box position="absolute" top={completionTop} left={completionLeft} width={Math.min(42, Math.max(26, editorWidth - 8))} height={Math.min(completions.length + 2, 10)} zIndex={55} border borderStyle="rounded" borderColor={theme.violet} backgroundColor={theme.surface} flexDirection="column" title=" completions ">
-          {completions.slice(0, 8).map((item, index) => (
-            <box
-              key={`${item.source}:${item.label}`}
-              height={1}
-              paddingX={1}
-              backgroundColor={index === completionCursor ? theme.surface3 : theme.surface}
-              flexDirection="row"
-              onMouseUp={(event: MouseEvent) => {
-                if (event.button !== 0) return
-                event.stopPropagation()
-                acceptCompletionAt(index)
-              }}
-            >
-              <text fg={item.source === 'lsp' ? theme.violet : item.source === 'path' ? theme.cyan : theme.amber}>{`${item.source === 'lsp' ? COMPLETION_KIND_GLYPHS[item.kind ?? 0] ?? '◇' : item.source === 'path' ? '󰈙' : 'ω'} `}</text>
-              <text fg={index === completionCursor ? theme.text : theme.muted} wrapMode="none">{fitText(item.label, Math.min(24, editorWidth - 16))}</text>
-              <box flexGrow={1} />
-              <text fg={theme.dim} wrapMode="none">{fitText(item.detail ?? item.source, 12)}</text>
+        <box position="absolute" top={completionTop} left={completionLeft} width={completionPopupWidth} height={completionPopupHeight} zIndex={55} border borderStyle="rounded" borderColor={theme.violet} backgroundColor={theme.surface} flexDirection="column" title=" completions ">
+          <box flexGrow={1} flexDirection="row">
+            <box width={showCompletionDetailPane ? Math.min(34, completionPopupWidth - 24) : undefined} flexGrow={showCompletionDetailPane ? 0 : 1} flexDirection="column">
+              {completions.slice(0, 8).map((item, index) => (
+                <box
+                  key={`${item.source}:${item.label}`}
+                  height={1}
+                  paddingX={1}
+                  backgroundColor={index === completionCursor ? theme.surface3 : theme.surface}
+                  flexDirection="row"
+                  onMouseUp={(event: MouseEvent) => {
+                    if (event.button !== 0) return
+                    event.stopPropagation()
+                    acceptCompletionAt(index)
+                  }}
+                >
+                  <text fg={item.source === 'lsp' ? theme.violet : item.source === 'path' ? theme.cyan : theme.amber}>{`${item.source === 'lsp' ? COMPLETION_KIND_GLYPHS[item.kind ?? 0] ?? '◇' : item.source === 'path' ? '󰈙' : 'ω'} `}</text>
+                  <text fg={index === completionCursor ? theme.text : theme.muted} wrapMode="none">{fitText(item.label, showCompletionDetailPane ? 18 : Math.min(24, editorWidth - 16))}</text>
+                  <box flexGrow={1} />
+                  {!showCompletionDetailPane ? <text fg={theme.dim} wrapMode="none">{fitText(item.detail ?? item.source, 12)}</text> : null}
+                </box>
+              ))}
+              {!showCompletionDetailPane ? completionDocumentation.map((line, index) => (
+                <text key={`${selectedCompletion?.label}:documentation:${index}`} fg={theme.dim} bg={theme.surface2} wrapMode="none">
+                  {fitText(`  ${line}`, Math.min(46, editorWidth - 10))}
+                </text>
+              )) : null}
             </box>
-          ))}
+            {showCompletionDetailPane && selectedCompletion ? (
+              <box flexGrow={1} border borderStyle="single" borderColor={theme.border} backgroundColor={theme.surface2} paddingX={1} flexDirection="column">
+                <text fg={theme.cyan} wrapMode="none">{fitText(selectedCompletion.label, completionPopupWidth - 38)}</text>
+                {selectedCompletion.detail ? <text fg={theme.amber} wrapMode="none">{fitText(selectedCompletion.detail, completionPopupWidth - 38)}</text> : null}
+                {completionDocumentation.map((line, index) => <text key={`completion-detail:${index}`} fg={theme.text} wrapMode="none">{fitText(line, completionPopupWidth - 38)}</text>)}
+              </box>
+            ) : null}
+          </box>
+        </box>
+      ) : null}
+
+      {signatureInfo && activeTab && focusPane === 'editor' ? (
+        <box
+          position="absolute"
+          bottom={3}
+          left={explorerWidth + 7}
+          width={Math.min(72, Math.max(34, editorWidth - 10))}
+          height={Math.min(5, 2 + signatureDocumentation.length + (activeSignatureParameter ? 1 : 0))}
+          zIndex={56}
+          border
+          borderStyle="rounded"
+          borderColor={theme.cyan}
+          backgroundColor={theme.surface}
+          paddingX={1}
+          flexDirection="column"
+          title=" signature help "
+        >
+          <text fg={theme.cyan} wrapMode="none">{fitText(signatureInfo.label, Math.min(68, editorWidth - 14))}</text>
+          {activeSignatureParameter ? <text fg={theme.amber} wrapMode="none">{`parameter ${signatureInfo.activeParameter! + 1}: ${activeSignatureParameter}`}</text> : null}
+          {signatureDocumentation.map((line, index) => <text key={`signature:${index}`} fg={theme.dim} wrapMode="none">{fitText(line, Math.min(68, editorWidth - 14))}</text>)}
+        </box>
+      ) : null}
+
+      {hoverInfo && activeTab && focusPane === 'editor' ? (
+        <box
+          position="absolute"
+          bottom={3}
+          left={explorerWidth + 7}
+          width={Math.min(72, Math.max(34, editorWidth - 10))}
+          height={Math.min(8, hoverLines.length + 2)}
+          zIndex={57}
+          border
+          borderStyle="rounded"
+          borderColor={theme.violet}
+          backgroundColor={theme.surface}
+          paddingX={1}
+          flexDirection="column"
+          title=" hover · Esc close "
+        >
+          {hoverLines.map((line, index) => <text key={`hover:${index}`} fg={index === 0 ? theme.cyan : theme.text} wrapMode="none">{fitText(line, Math.min(68, editorWidth - 14))}</text>)}
         </box>
       ) : null}
 
