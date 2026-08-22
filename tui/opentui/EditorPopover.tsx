@@ -1,7 +1,8 @@
 /** @jsxImportSource @opentui/react */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { readFile, writeFile } from 'node:fs/promises'
-import { basename, join, relative, resolve, sep } from 'node:path'
+import { readFile } from 'node:fs/promises'
+import { basename, dirname, join, relative, resolve, sep } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   getTreeSitterClient,
   MacOSScrollAccel,
@@ -19,13 +20,47 @@ import { listProjectFiles } from '../../lib/projectFiles'
 import { runGitCommand } from '../../lib/gitNodeProvider'
 import {
   EditorLspClient,
+  type EditorCodeAction,
   type EditorCompletion,
   type EditorDiagnostic,
   type EditorHover,
+  type EditorLocation,
   type EditorLspStatus,
   type EditorSignatureHelp,
+  type EditorTextEdit,
+  type EditorWorkspaceEdit,
 } from './editorLsp'
 import { createScrollVelocityState, velocityScrollStep } from './scrollVelocity'
+import {
+  type EditorProjectSearchResult,
+} from './editorProjectSearch'
+import { disposeEditorProjectSearchWorker, searchEditorProjectAsync } from './editorProjectSearchWorkerClient'
+import {
+  clearEditorRecovery,
+  readEditorRecovery,
+  writeEditorRecovery,
+  type EditorRecoveryBuffer,
+} from './editorRecovery'
+import {
+  addEditorCursorAtNextMatch,
+  addEditorCursorOnAdjacentLine,
+  applyEditorMultiCursorEdit,
+  splitEditorSelectionIntoLineEndCursors,
+  updateEditorBlockSelection,
+  type EditorBlockSelectionState,
+  type EditorMultiCursorEdit,
+  type EditorMultiCursorState,
+} from './editorMultiCursor'
+import { createEditorFile, deleteEditorFile, renameEditorFile, resolveSafeEditorFile } from './editorFileOperations'
+import { saveEditorFileSafely } from './editorFileSave'
+import {
+  transformEditorCase,
+  transformEditorLines,
+  trimEditorTrailingWhitespace,
+  detectEditorIndentUnit,
+  type EditorLineTransform,
+} from './editorTransforms'
+import { expandEditorSearchReplacement, findEditorSearchMatches, type EditorSearchMatch } from './editorSearch'
 
 extend({ editorScrollbar: ScrollBarRenderable })
 
@@ -99,9 +134,24 @@ type QuickResult = {
   kind: QuickMode
 }
 
+type SymbolNavigationKind = 'definition' | 'references' | 'implementation'
+type EditorFilePrompt = { kind: 'create' | 'rename' | 'delete'; source?: string; value: string }
+
+type SymbolNavigationResult = {
+  location: EditorLocation
+  path: string
+  label: string
+  detail: string
+}
+
 type EditorCommandId =
   | 'save'
+  | 'save-all'
+  | 'new-file'
+  | 'rename-file'
+  | 'delete-file'
   | 'find'
+  | 'replace'
   | 'goto-line'
   | 'toggle-explorer'
   | 'focus-explorer'
@@ -109,6 +159,28 @@ type EditorCommandId =
   | 'next-diagnostic'
   | 'previous-diagnostic'
   | 'show-hover'
+  | 'goto-definition'
+  | 'find-references'
+  | 'goto-implementation'
+  | 'rename-symbol'
+  | 'code-actions'
+  | 'format-document'
+  | 'project-search'
+  | 'indent-lines'
+  | 'outdent-lines'
+  | 'toggle-comment'
+  | 'add-next-occurrence'
+  | 'add-cursor-above'
+  | 'add-cursor-below'
+  | 'split-selection-lines'
+  | 'move-lines-up'
+  | 'move-lines-down'
+  | 'sort-lines'
+  | 'duplicate-lines'
+  | 'uppercase'
+  | 'lowercase'
+  | 'trim-trailing-whitespace'
+  | 'recovery-conflicts'
   | 'toggle-vim'
   | 'toggle-velocity'
   | 'toggle-word-wrap'
@@ -120,8 +192,6 @@ type EditorCommand = {
   keywords: string
 }
 
-type SearchMatch = { start: number; end: number }
-
 const MAX_FILE_BYTES = 2 * 1024 * 1024
 const MAX_COMPLETIONS = 12
 const AUTO_COMPLETE_DELAY_MS = 160
@@ -129,6 +199,16 @@ const SYNTAX_DELAY_MS = 90
 const LSP_CHANGE_DELAY_MS = 120
 const SIGNATURE_DELAY_MS = 110
 const WORD_PATTERN = /[A-Za-z_$][\w$-]{1,}/g
+const AUTO_PAIR_CLOSE: Readonly<Record<string, string>> = {
+  '(': ')',
+  '[': ']',
+  '{': '}',
+  '"': '"',
+  "'": "'",
+  '`': '`',
+}
+const AUTO_PAIR_OPEN = new Set(Object.keys(AUTO_PAIR_CLOSE))
+const AUTO_PAIR_CLOSERS = new Set(Object.values(AUTO_PAIR_CLOSE))
 
 function packFooterShortcuts(shortcuts: readonly string[], width: number): string[] {
   const rows: string[] = []
@@ -148,11 +228,38 @@ function packFooterShortcuts(shortcuts: readonly string[], width: number): strin
 
 const EDITOR_COMMANDS: readonly EditorCommand[] = [
   { id: 'save', label: 'File: Save', detail: 'Ctrl+S', keywords: 'write file' },
+  { id: 'save-all', label: 'File: Save All', detail: 'Ctrl+Shift+S', keywords: 'write dirty modified buffers workspace' },
+  { id: 'new-file', label: 'File: New File', detail: 'Ctrl+N', keywords: 'create explorer path' },
+  { id: 'rename-file', label: 'File: Rename Explorer File', detail: 'Explorer F2', keywords: 'move path' },
+  { id: 'delete-file', label: 'File: Delete Explorer File', detail: 'Explorer Delete', keywords: 'remove path' },
   { id: 'find', label: 'Edit: Find in File', detail: 'Ctrl+F', keywords: 'search text' },
+  { id: 'replace', label: 'Edit: Replace in File', detail: 'Ctrl+R', keywords: 'search substitute replace all' },
   { id: 'goto-line', label: 'Go to Line', detail: 'Ctrl+G', keywords: 'jump row' },
   { id: 'next-diagnostic', label: 'Problems: Next Diagnostic', detail: 'F8', keywords: 'error warning issue' },
   { id: 'previous-diagnostic', label: 'Problems: Previous Diagnostic', detail: 'Shift+F8', keywords: 'error warning issue' },
   { id: 'show-hover', label: 'IntelliSense: Show Hover', detail: 'Ctrl+K', keywords: 'type documentation symbol' },
+  { id: 'goto-definition', label: 'Go to Definition', detail: 'F12', keywords: 'lsp symbol declaration jump' },
+  { id: 'find-references', label: 'Find All References', detail: 'Shift+F12', keywords: 'lsp symbol usages' },
+  { id: 'goto-implementation', label: 'Go to Implementation', detail: 'Ctrl+F12', keywords: 'lsp symbol implementation jump' },
+  { id: 'rename-symbol', label: 'Rename Symbol', detail: 'F2', keywords: 'lsp refactor workspace edit' },
+  { id: 'code-actions', label: 'Quick Fix and Code Actions', detail: 'Alt+.', keywords: 'lsp fix refactor action' },
+  { id: 'format-document', label: 'Format Document', detail: 'Shift+Alt+F', keywords: 'lsp formatting indent' },
+  { id: 'project-search', label: 'Search: Find in Project', detail: 'Alt+/', keywords: 'live grep workspace quickfix text' },
+  { id: 'indent-lines', label: 'Edit: Indent Lines', detail: 'Ctrl+]', keywords: 'shift selection right tab' },
+  { id: 'outdent-lines', label: 'Edit: Outdent Lines', detail: 'Ctrl+[', keywords: 'shift selection left tab' },
+  { id: 'toggle-comment', label: 'Edit: Toggle Line Comment', detail: 'Ctrl+/', keywords: 'comment uncomment selection' },
+  { id: 'add-next-occurrence', label: 'Selection: Add Next Occurrence', detail: 'Ctrl+D', keywords: 'multiple cursor select match occurrence' },
+  { id: 'add-cursor-above', label: 'Selection: Add Cursor Above', detail: 'Ctrl+Alt+Up', keywords: 'multiple cursor vertical' },
+  { id: 'add-cursor-below', label: 'Selection: Add Cursor Below', detail: 'Ctrl+Alt+Down', keywords: 'multiple cursor vertical' },
+  { id: 'split-selection-lines', label: 'Selection: Add Cursors to Line Ends', detail: 'Ctrl+Shift+L', keywords: 'multiple cursor split selected lines' },
+  { id: 'move-lines-up', label: 'Edit: Move Lines Up', detail: 'Alt+Up', keywords: 'reorder selection' },
+  { id: 'move-lines-down', label: 'Edit: Move Lines Down', detail: 'Alt+Down', keywords: 'reorder selection' },
+  { id: 'sort-lines', label: 'Edit: Sort Selected Lines', detail: '', keywords: 'alphabetical natural reorder' },
+  { id: 'duplicate-lines', label: 'Edit: Duplicate Line or Selection', detail: '', keywords: 'copy repeat lines' },
+  { id: 'uppercase', label: 'Transform: Uppercase', detail: 'Alt+U', keywords: 'case selected word' },
+  { id: 'lowercase', label: 'Transform: Lowercase', detail: 'Alt+L', keywords: 'case selected word' },
+  { id: 'trim-trailing-whitespace', label: 'Transform: Trim Trailing Whitespace', detail: '', keywords: 'spaces cleanup format' },
+  { id: 'recovery-conflicts', label: 'Recovery: Review Conflicts', detail: '', keywords: 'crash hot exit unsaved restore disk conflict' },
   { id: 'toggle-vim', label: 'Editor: Toggle Vim Mode', detail: 'Alt+V', keywords: 'normal insert visual modal' },
   { id: 'toggle-word-wrap', label: 'Editor: Toggle Word Wrap', detail: 'Alt+Z', keywords: 'wrap long lines columns' },
   { id: 'toggle-explorer', label: 'View: Toggle Explorer', detail: 'Ctrl+B', keywords: 'sidebar files' },
@@ -254,6 +361,53 @@ function offsetAtEditorPosition(content: string, position: { line: number; chara
   return Math.min(lineEnd < 0 ? content.length : lineEnd, lineStart + Math.max(0, position.character))
 }
 
+function applyEditorTextEdits(content: string, edits: EditorTextEdit[]): string {
+  const normalized = edits.map((edit) => ({
+    start: offsetAtEditorPosition(content, edit.range.start),
+    end: offsetAtEditorPosition(content, edit.range.end),
+    newText: edit.newText,
+  })).sort((left, right) => right.start - left.start || right.end - left.end)
+  let boundary = content.length
+  let output = content
+  for (const edit of normalized) {
+    if (edit.start < 0 || edit.end < edit.start || edit.end > boundary) {
+      throw new Error('Language server returned overlapping or invalid text edits')
+    }
+    output = `${output.slice(0, edit.start)}${edit.newText}${output.slice(edit.end)}`
+    boundary = edit.start
+  }
+  return output
+}
+
+function wordRangeAt(content: string, offset: number): { start: number; end: number; value: string } | null {
+  const clamped = Math.max(0, Math.min(content.length, offset))
+  let start = clamped
+  let end = clamped
+  while (start > 0 && /[\w$-]/.test(content[start - 1]!)) start -= 1
+  while (end < content.length && /[\w$-]/.test(content[end]!)) end += 1
+  return end > start ? { start, end, value: content.slice(start, end) } : null
+}
+
+function selectedLineBounds(editor: TextareaRenderable): { start: number; end: number; hadSelection: boolean } {
+  const content = editor.plainText
+  const selection = editor.getSelection()
+  const cursorOffset = editorDocumentOffset(editor)
+  const selectionStart = selection?.start ?? cursorOffset
+  const selectionEnd = selection?.end ?? cursorOffset
+  const start = content.lastIndexOf('\n', Math.max(0, selectionStart - 1)) + 1
+  let end = content.indexOf('\n', selectionEnd)
+  if (selection && selectionEnd > selectionStart && content[selectionEnd - 1] === '\n') end = selectionEnd - 1
+  if (end < 0) end = content.length
+  return { start, end, hadSelection: Boolean(selection) }
+}
+
+function lineCommentToken(path: string): string {
+  const filetype = detectTuiCodeFiletypeFromPath(path)
+  if (filetype === 'python' || filetype === 'ruby' || filetype === 'bash' || filetype === 'yaml') return '#'
+  if (filetype === 'lua') return '--'
+  return '//'
+}
+
 function editorDocumentOffset(
   editor: TextareaRenderable,
   cursor?: { line: number; visualColumn: number },
@@ -348,8 +502,8 @@ function lspStatusText(status: EditorLspStatus | null): string {
   if (!status) return 'LSP off'
   if (status.state === 'ready') return `LSP ${status.name}`
   if (status.state === 'starting') return `LSP ${status.name}…`
-  if (status.state === 'unavailable') return 'LSP unavailable'
-  return `LSP error`
+  if (status.state === 'unavailable') return `LSP unavailable: ${status.name}`
+  return `LSP error: ${status.message}`
 }
 
 function diagnosticCounts(diagnostics: EditorDiagnostic[]): { errors: number; warnings: number; info: number } {
@@ -421,21 +575,6 @@ function fuzzyScore(value: string, query: string): number | null {
   return score
 }
 
-function findLiteralMatches(content: string, query: string, matchCase: boolean): SearchMatch[] {
-  if (!query) return []
-  const haystack = matchCase ? content : content.toLocaleLowerCase()
-  const needle = matchCase ? query : query.toLocaleLowerCase()
-  const matches: SearchMatch[] = []
-  let offset = 0
-  while (offset <= haystack.length - needle.length && matches.length < 10_000) {
-    const start = haystack.indexOf(needle, offset)
-    if (start < 0) break
-    matches.push({ start, end: start + needle.length })
-    offset = start + Math.max(1, needle.length)
-  }
-  return matches
-}
-
 function formatClock(clock: Date): string {
   return `${String(clock.getHours()).padStart(2, '0')}:${String(clock.getMinutes()).padStart(2, '0')}`
 }
@@ -465,6 +604,21 @@ function indentationForNewLine(content: string, offset: number): string {
   return /^[\t ]*/.exec(content.slice(bounds.start, bounds.end))?.[0] ?? ''
 }
 
+function smartNewLineInsertion(content: string, offset: number, path: string): { text: string; cursorOffset: number } {
+  const bounds = lineBoundsAtOffset(content, offset)
+  const before = content.slice(bounds.start, offset)
+  const after = content.slice(offset, bounds.end)
+  const baseIndent = /^[\t ]*/.exec(content.slice(bounds.start, bounds.end))?.[0] ?? ''
+  const opensBlock = /(?:\{|\[|\(|:)\s*$/.test(before)
+  const indentUnit = detectEditorIndentUnit(content, path)
+  const innerIndent = opensBlock ? `${baseIndent}${indentUnit}` : baseIndent
+  const betweenPair = opensBlock && /^\s*[}\])]/.test(after)
+  const text = betweenPair
+    ? `\n${innerIndent}\n${baseIndent}`
+    : `\n${innerIndent}`
+  return { text, cursorOffset: offset + 1 + innerIndent.length }
+}
+
 export function EditorPopover({
   cwd,
   initialPath,
@@ -488,8 +642,14 @@ export function EditorPopover({
   const [quickQuery, setQuickQuery] = useState('')
   const [quickCursor, setQuickCursor] = useState(0)
   const [searchOpen, setSearchOpen] = useState(false)
+  const [searchReplaceMode, setSearchReplaceMode] = useState(false)
+  const [searchInput, setSearchInput] = useState<'find' | 'replace'>('find')
   const [searchQuery, setSearchQuery] = useState('')
+  const [replaceQuery, setReplaceQuery] = useState('')
   const [searchMatchCase, setSearchMatchCase] = useState(false)
+  const [searchRegex, setSearchRegex] = useState(false)
+  const [searchSelectionOnly, setSearchSelectionOnly] = useState(false)
+  const [searchSelectionRange, setSearchSelectionRange] = useState<{ start: number; end: number } | null>(null)
   const [searchCursor, setSearchCursor] = useState(-1)
   const [diagnosticCursor, setDiagnosticCursor] = useState(-1)
   const [cursor, setCursor] = useState({ line: 0, visualColumn: 0 })
@@ -499,6 +659,30 @@ export function EditorPopover({
   const [lspStatus, setLspStatus] = useState<EditorLspStatus | null>(null)
   const [hoverInfo, setHoverInfo] = useState<EditorHover | null>(null)
   const [signatureInfo, setSignatureInfo] = useState<EditorSignatureHelp | null>(null)
+  const [symbolNavigationKind, setSymbolNavigationKind] = useState<SymbolNavigationKind | null>(null)
+  const [symbolNavigationResults, setSymbolNavigationResults] = useState<SymbolNavigationResult[]>([])
+  const [symbolNavigationCursor, setSymbolNavigationCursor] = useState(0)
+  const [renameOpen, setRenameOpen] = useState(false)
+  const [renameQuery, setRenameQuery] = useState('')
+  const [renamePosition, setRenamePosition] = useState<{ line: number; character: number } | null>(null)
+  const [codeActions, setCodeActions] = useState<EditorCodeAction[]>([])
+  const [codeActionCursor, setCodeActionCursor] = useState(0)
+  const [projectSearchOpen, setProjectSearchOpen] = useState(false)
+  const [projectSearchQuery, setProjectSearchQuery] = useState('')
+  const [projectSearchRegex, setProjectSearchRegex] = useState(false)
+  const [projectSearchMatchCase, setProjectSearchMatchCase] = useState(false)
+  const [projectSearchWholeWord, setProjectSearchWholeWord] = useState(false)
+  const [projectSearchResults, setProjectSearchResults] = useState<EditorProjectSearchResult[]>([])
+  const [projectSearchCursor, setProjectSearchCursor] = useState(0)
+  const [projectSearchStatus, setProjectSearchStatus] = useState('Type to search project files and unsaved buffers')
+  const [recoveryLoaded, setRecoveryLoaded] = useState(false)
+  const [recoveryConflicts, setRecoveryConflicts] = useState<EditorRecoveryBuffer[]>([])
+  const [recoveryConflictOpen, setRecoveryConflictOpen] = useState(false)
+  const [recoveryConflictCursor, setRecoveryConflictCursor] = useState(0)
+  const [multiCursor, setMultiCursor] = useState<EditorMultiCursorState | null>(null)
+  const [blockSelection, setBlockSelection] = useState<EditorBlockSelectionState | null>(null)
+  const [filePrompt, setFilePrompt] = useState<EditorFilePrompt | null>(null)
+  const [diskConflicts, setDiskConflicts] = useState<Set<string>>(() => new Set())
   const [message, setMessage] = useState('Ready')
   const [closeConfirm, setCloseConfirm] = useState(false)
   const [clock, setClock] = useState(() => new Date())
@@ -512,6 +696,8 @@ export function EditorPopover({
     [theme.muted, theme.surface2],
   )
   const editorRef = useRef<TextareaRenderable | null>(null)
+  const tabsRef = useRef(tabs)
+  const activePathRef = useRef(activePath)
   const cursorRef = useRef({ line: 0, visualColumn: 0 })
   const editorScrollbarRef = useRef<ScrollBarRenderable | null>(null)
   const syncingEditorScrollbarRef = useRef(false)
@@ -525,6 +711,14 @@ export function EditorPopover({
   const velocityScrollStateRef = useRef<ReturnType<typeof createScrollVelocityState> | null>(null)
   const vimPendingRef = useRef<string | null>(null)
   const vimRegisterRef = useRef('')
+  const pendingJumpRef = useRef<{ path: string; line: number; character: number } | null>(null)
+  const jumpHistoryRef = useRef<Array<{ path: string; line: number; character: number }>>([])
+  const applyWorkspaceEditRef = useRef<(edit: EditorWorkspaceEdit) => Promise<boolean>>(async () => false)
+  const projectSearchRequestRef = useRef(0)
+  const projectSearchAbortRef = useRef<AbortController | null>(null)
+  const recoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const multiCursorStyleIdRef = useRef<number | null>(null)
+  const diskPollInFlightRef = useRef(false)
 
   const activeTab = tabs.find((tab) => tab.path === activePath) ?? null
   const dirty = activeTab ? activeTab.content !== activeTab.savedContent : false
@@ -575,17 +769,30 @@ export function EditorPopover({
       .slice(0, 50)
       .map((entry) => entry.result)
   }, [activeTab, projectFiles, quickMode, quickQuery, tabs])
-  const searchMatches = useMemo(
-    () => findLiteralMatches(activeTab?.content ?? '', searchQuery, searchMatchCase),
-    [activeTab?.content, searchMatchCase, searchQuery],
-  )
+  const searchResult = useMemo(() => findEditorSearchMatches(activeTab?.content ?? '', searchQuery, {
+    matchCase: searchMatchCase,
+    regex: searchRegex,
+    range: searchSelectionOnly ? searchSelectionRange : null,
+  }), [activeTab?.content, searchMatchCase, searchQuery, searchRegex, searchSelectionOnly, searchSelectionRange])
+  const searchMatches = searchResult.matches
 
   const editorWidth = Math.max(24, width - (explorerVisible ? Math.max(24, Math.min(38, Math.floor(width * 0.23))) : 0) - 2)
   const explorerWidth = explorerVisible ? Math.max(24, Math.min(38, Math.floor(width * 0.23))) : 0
   const footerShortcutRows = useMemo(() => packFooterShortcuts([
     '^S save',
+    '^⇧S save all',
+    '^N new file',
     '^P open',
     '^F find',
+    '^R replace',
+    '^D next occurrence',
+    '^Alt+↑/↓ cursors',
+    '⇧Alt+arrows block',
+    '^⇧L line cursors',
+    'Alt+↑/↓ move lines',
+    'Alt+U/L case',
+    '^/ comment',
+    '^] indent · ⇧Tab outdent',
     '^G line',
     '^B explorer',
     '^E focus',
@@ -593,6 +800,14 @@ export function EditorPopover({
     '^Tab/^Pg tabs',
     '^Space complete',
     '^K hover',
+    'F2 rename',
+    'F12 definition',
+    '⇧F12 references',
+    '^F12 implementation',
+    '^T jump back',
+    'Alt+. actions',
+    '⇧Alt+F format',
+    'Alt+/ project search',
     '^⇧Space signature',
     'F8/⇧F8 problems',
     `Alt+Z wrap ${wordWrapEnabled ? 'on' : 'off'}`,
@@ -609,6 +824,130 @@ export function EditorPopover({
   }, [])
 
   useEffect(() => {
+    tabsRef.current = tabs
+    activePathRef.current = activePath
+  }, [activePath, tabs])
+
+  useEffect(() => () => disposeEditorProjectSearchWorker(), [])
+
+  useEffect(() => {
+    const existing = syntaxStyle.getStyleId('editor.multi-cursor')
+    multiCursorStyleIdRef.current = existing ?? syntaxStyle.registerStyle('editor.multi-cursor', {
+      bg: theme.surface3,
+      underline: true,
+    })
+  }, [syntaxStyle, theme.surface3])
+
+  useEffect(() => {
+    setMultiCursor(null)
+    setBlockSelection(null)
+  }, [activePath])
+
+  useEffect(() => {
+    let cancelled = false
+    void readEditorRecovery(root).then(({ snapshot, conflicts }) => {
+      if (cancelled) return
+      setRecoveryConflicts(conflicts)
+      setRecoveryConflictOpen(conflicts.length > 0)
+      if (snapshot?.buffers.length) {
+        setTabs(snapshot.buffers)
+        const restoredActive = snapshot.activePath && snapshot.buffers.some((buffer) => buffer.path === snapshot.activePath)
+          ? snapshot.activePath
+          : snapshot.buffers[0]!.path
+        pendingJumpRef.current = {
+          path: restoredActive,
+          line: snapshot.cursor.line,
+          character: snapshot.cursor.character,
+        }
+        setActivePath(restoredActive)
+        setFocusPane('editor')
+        setMessage(`Recovered ${snapshot.buffers.length} unsaved file${snapshot.buffers.length === 1 ? '' : 's'}${conflicts.length ? ` · ${conflicts.length} conflict${conflicts.length === 1 ? '' : 's'} kept` : ''}`)
+      } else if (conflicts.length > 0) {
+        setMessage(`${conflicts.length} recovery conflict${conflicts.length === 1 ? '' : 's'} kept because disk changed`)
+      }
+    }).catch((error) => {
+      if (!cancelled) setMessage(error instanceof Error ? error.message : 'Unable to read editor recovery')
+    }).finally(() => {
+      if (!cancelled) setRecoveryLoaded(true)
+    })
+    return () => { cancelled = true }
+  }, [root])
+
+  useEffect(() => {
+    if (!recoveryLoaded) return
+    const dirtyBuffers = tabs.filter((tab) => tab.content !== tab.savedContent)
+    const retained = [
+      ...dirtyBuffers.map((tab) => ({ path: tab.path, content: tab.content, savedContent: tab.savedContent })),
+      ...recoveryConflicts.filter((conflict) => !dirtyBuffers.some((tab) => tab.path === conflict.path)),
+    ]
+    recoveryTimerRef.current = setTimeout(() => {
+      recoveryTimerRef.current = null
+      const operation = retained.length === 0
+        ? clearEditorRecovery(root)
+        : writeEditorRecovery(root, {
+            version: 1,
+            savedAt: Date.now(),
+            activePath,
+            cursor: { line: cursorRef.current.line, character: cursorRef.current.visualColumn },
+            buffers: retained,
+          })
+      void operation.catch((error) => {
+        const text = error instanceof Error ? error.message : 'Unable to save editor recovery'
+        setMessage(text)
+        onNotice?.('error', text)
+      })
+    }, 300)
+    return () => {
+      if (recoveryTimerRef.current) clearTimeout(recoveryTimerRef.current)
+      recoveryTimerRef.current = null
+    }
+  }, [activePath, onNotice, recoveryConflicts, recoveryLoaded, root, tabs])
+
+  useEffect(() => {
+    if (!projectSearchOpen) return
+    projectSearchAbortRef.current?.abort()
+    const request = ++projectSearchRequestRef.current
+    if (!projectSearchQuery) {
+      setProjectSearchResults([])
+      setProjectSearchCursor(0)
+      setProjectSearchStatus('Type to search project files and unsaved buffers')
+      return
+    }
+    setProjectSearchStatus('Searching…')
+    const abortController = new AbortController()
+    projectSearchAbortRef.current = abortController
+    const timer = setTimeout(() => {
+      const options = {
+        regex: projectSearchRegex,
+        matchCase: projectSearchMatchCase,
+        wholeWord: projectSearchWholeWord,
+        limit: 500,
+        signal: abortController.signal,
+      }
+      void searchEditorProjectAsync(root, projectSearchQuery, options, tabs.map((tab) => ({
+        path: tab.path,
+        content: tab.content,
+      }))).then((merged) => {
+        if (request !== projectSearchRequestRef.current) return
+        setProjectSearchResults(merged)
+        setProjectSearchCursor(0)
+        setProjectSearchStatus(`${merged.length}${merged.length === options.limit ? '+' : ''} match${merged.length === 1 ? '' : 'es'}`)
+      }).catch((error) => {
+        if (request !== projectSearchRequestRef.current) return
+        if (error instanceof Error && error.name === 'AbortError') return
+        setProjectSearchResults([])
+        setProjectSearchCursor(0)
+        setProjectSearchStatus(error instanceof Error ? error.message : 'Project search failed')
+      })
+    }, 140)
+    return () => {
+      clearTimeout(timer)
+      abortController.abort()
+    }
+  }, [projectSearchMatchCase, projectSearchOpen, projectSearchQuery, projectSearchRegex, projectSearchWholeWord, root, tabs])
+
+  useEffect(() => {
+    if (!recoveryLoaded) return
     let cancelled = false
     void listProjectFiles(root, runGitCommand).then((entries) => {
       if (cancelled) return
@@ -625,7 +964,58 @@ export function EditorPopover({
   // `openBuffer` is event-like and intentionally reads current tabs through a
   // functional update; rescanning should only follow the root/path inputs.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialPath, root])
+  }, [initialPath, recoveryLoaded, root])
+
+  useEffect(() => {
+    let cancelled = false
+    const poll = async () => {
+      if (diskPollInFlightRef.current) return
+      const snapshot = tabsRef.current
+      if (snapshot.length === 0) return
+      diskPollInFlightRef.current = true
+      try {
+        const readings = await Promise.all(snapshot.map(async (tab) => {
+          try {
+            const safeFile = await resolveSafeEditorFile(root, tab.path)
+            return { tab, disk: await readFile(safeFile.absolute, 'utf8') as string | null }
+          }
+          catch { return { tab, disk: null as string | null } }
+        }))
+        if (cancelled) return
+        const conflicts = new Set<string>()
+        const reloads = new Map<string, { expected: string; disk: string }>()
+        for (const { tab, disk } of readings) {
+          if (disk === tab.savedContent) continue
+          if (disk != null && tab.content === tab.savedContent) reloads.set(tab.path, { expected: tab.savedContent, disk })
+          else conflicts.add(tab.path)
+        }
+        setDiskConflicts((current) => current.size === conflicts.size && [...current].every((path) => conflicts.has(path))
+          ? current
+          : conflicts)
+        if (reloads.size === 0) return
+        const currentActivePath = activePathRef.current
+        const activeReload = currentActivePath ? reloads.get(currentActivePath) : undefined
+        const editor = editorRef.current
+        if (activeReload && editor?.plainText === activeReload.expected) editor.setText(activeReload.disk)
+        setTabs((current) => current.map((tab) => {
+          const reload = reloads.get(tab.path)
+          return reload && tab.content === reload.expected && tab.savedContent === reload.expected
+            ? { ...tab, content: reload.disk, savedContent: reload.disk }
+            : tab
+        }))
+        const paths = [...reloads.keys()]
+        setMessage(`Reloaded ${paths.length} externally changed file${paths.length === 1 ? '' : 's'}${paths.length === 1 ? `: ${paths[0]}` : ''}`)
+      } finally {
+        diskPollInFlightRef.current = false
+      }
+    }
+    void poll()
+    const timer = setInterval(() => { void poll() }, 1_500)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [root])
 
   const openBuffer = useCallback(async (relativePath: string) => {
     const safePath = normalizeRelativePath(root, relativePath)
@@ -640,11 +1030,13 @@ export function EditorPopover({
       return
     }
     try {
-      const absolute = join(root, safePath)
-      const content = await readFile(absolute, 'utf8')
+      const safeFile = await resolveSafeEditorFile(root, safePath)
+      const content = await readFile(safeFile.absolute, 'utf8')
       if (Buffer.byteLength(content) > MAX_FILE_BYTES) throw new Error('File exceeds 2 MB editor limit')
       if (content.includes('\0')) throw new Error('Binary files cannot be edited')
-      setTabs((current) => [...current, { path: safePath, content, savedContent: content }])
+      setTabs((current) => current.some((tab) => tab.path === safePath)
+        ? current
+        : [...current, { path: safePath, content, savedContent: content }])
       setActivePath(safePath)
       setFocusPane('editor')
       setMessage(`Opened ${safePath}`)
@@ -657,10 +1049,23 @@ export function EditorPopover({
 
   const saveActive = useCallback(async () => {
     if (!activeTab) return
+    const savedContent = activeTab.content
+    const client = lspRef.current
     try {
-      await writeFile(join(root, activeTab.path), activeTab.content, 'utf8')
-      setTabs((current) => current.map((tab) => tab.path === activeTab.path ? { ...tab, savedContent: tab.content } : tab))
-      lspRef.current?.saved(activeTab.content)
+      await saveEditorFileSafely(root, activeTab.path, savedContent, activeTab.savedContent)
+      setTabs((current) => current.map((tab) => tab.path === activeTab.path ? { ...tab, savedContent } : tab))
+      setDiskConflicts((current) => {
+        if (!current.has(activeTab.path)) return current
+        const next = new Set(current); next.delete(activeTab.path); return next
+      })
+      if (lspRef.current === client) client?.saved(savedContent)
+      if (!tabs.some((tab) => tab.path !== activeTab.path && tab.content !== tab.savedContent) && recoveryConflicts.length === 0) {
+        if (recoveryTimerRef.current) clearTimeout(recoveryTimerRef.current)
+        recoveryTimerRef.current = null
+        await clearEditorRecovery(root).catch((error) => {
+          onNotice?.('error', error instanceof Error ? error.message : 'Unable to clear editor recovery')
+        })
+      }
       setMessage(`Written ${activeTab.path}`)
       onNotice?.('info', `Saved ${activeTab.path}`)
     } catch (error) {
@@ -668,7 +1073,227 @@ export function EditorPopover({
       setMessage(text)
       onNotice?.('error', text)
     }
-  }, [activeTab, onNotice, root])
+  }, [activeTab, onNotice, recoveryConflicts.length, root, tabs])
+
+  const saveAll = useCallback(async () => {
+    const modified = tabs.filter((tab) => tab.content !== tab.savedContent)
+    if (modified.length === 0) {
+      setMessage('All files are already saved')
+      return
+    }
+    const activeClient = lspRef.current
+    const results = await Promise.allSettled(modified.map(async (tab) => {
+      await saveEditorFileSafely(root, tab.path, tab.content, tab.savedContent)
+      return { path: tab.path, content: tab.content }
+    }))
+    const savedContents = new Map(results.flatMap((result) => result.status === 'fulfilled'
+      ? [[result.value.path, result.value.content] as const]
+      : []))
+    const savedPaths = new Set(savedContents.keys())
+    setTabs((current) => current.map((tab) => {
+      const savedContent = savedContents.get(tab.path)
+      return savedContent == null ? tab : { ...tab, savedContent }
+    }))
+    setDiskConflicts((current) => {
+      const next = new Set([...current].filter((path) => !savedPaths.has(path)))
+      return next.size === current.size ? current : next
+    })
+    if (activeTab) {
+      const savedContent = savedContents.get(activeTab.path)
+      if (savedContent != null && lspRef.current === activeClient) activeClient?.saved(savedContent)
+    }
+    const failed = results.length - savedPaths.size
+    if (failed > 0) {
+      const firstFailure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+      const detail = firstFailure?.reason instanceof Error ? firstFailure.reason.message : 'write failed'
+      const text = `Saved ${savedPaths.size}/${modified.length} files · ${failed} failed: ${detail}`
+      setMessage(text)
+      onNotice?.('error', text)
+      return
+    }
+    if (recoveryConflicts.length === 0) {
+      if (recoveryTimerRef.current) clearTimeout(recoveryTimerRef.current)
+      recoveryTimerRef.current = null
+      await clearEditorRecovery(root).catch((error) => {
+        onNotice?.('error', error instanceof Error ? error.message : 'Unable to clear editor recovery')
+      })
+    }
+    const text = `Saved all ${savedPaths.size} modified file${savedPaths.size === 1 ? '' : 's'}`
+    setMessage(text)
+    onNotice?.('info', text)
+  }, [activeTab, onNotice, recoveryConflicts.length, root, tabs])
+
+  const addNextOccurrence = useCallback(() => {
+    const editor = editorRef.current
+    if (!editor || !activeTab) return
+    const selection = editor.getSelection() ?? { start: editor.cursorOffset, end: editor.cursorOffset }
+    const next = addEditorCursorAtNextMatch(editor.plainText, multiCursor, selection, editor.cursorOffset)
+    if (!next) {
+      setMessage('No identifier or additional occurrence at cursor')
+      return
+    }
+    setBlockSelection(null)
+    setMultiCursor(next)
+    const active = next.ranges[next.activeIndex]!
+    editor.setSelection(active.start, active.end)
+    setMessage(next.ranges.length === 1
+      ? 'Selected occurrence · Ctrl+D adds the next match'
+      : `${next.ranges.length} cursors · type to edit all · Esc collapses`)
+  }, [activeTab, multiCursor])
+
+  const addAdjacentCursor = useCallback((direction: -1 | 1) => {
+    const editor = editorRef.current
+    if (!editor || !activeTab) return
+    const next = addEditorCursorOnAdjacentLine(editor.plainText, multiCursor, editor.cursorOffset, direction)
+    if (!next || next === multiCursor) {
+      setMessage(direction < 0 ? 'No line above for another cursor' : 'No line below for another cursor')
+      return
+    }
+    setBlockSelection(null)
+    setMultiCursor(next)
+    const active = next.ranges[next.activeIndex]!
+    editor.setSelection(active.start, active.end)
+    setMessage(`${next.ranges.length} cursors · type to edit all · Esc collapses`)
+  }, [activeTab, multiCursor])
+
+  const addLineEndCursors = useCallback(() => {
+    const editor = editorRef.current
+    if (!editor || !activeTab) return
+    const selection = editor.getSelection() ?? { start: editor.cursorOffset, end: editor.cursorOffset }
+    const next = splitEditorSelectionIntoLineEndCursors(editor.plainText, selection)
+    setBlockSelection(null)
+    setMultiCursor(next)
+    const active = next.ranges[next.activeIndex]!
+    editor.setSelection(active.start, active.end)
+    setMessage(`${next.ranges.length} line-end cursor${next.ranges.length === 1 ? '' : 's'} · type to edit all`)
+  }, [activeTab])
+
+  const extendBlockSelection = useCallback((direction: 'left' | 'right' | 'up' | 'down') => {
+    const editor = editorRef.current
+    if (!editor || !activeTab) return
+    const next = updateEditorBlockSelection(editor.plainText, blockSelection, editor.cursorOffset, direction)
+    setBlockSelection(next.block)
+    setMultiCursor(next.cursors)
+    const active = next.cursors.ranges[next.cursors.activeIndex]!
+    editor.setSelection(active.start, active.end)
+    setMessage(`${next.cursors.ranges.length}-line block selection · type to edit columns`)
+  }, [activeTab, blockSelection])
+
+  const editAtAllCursors = useCallback((edit: EditorMultiCursorEdit): boolean => {
+    const editor = editorRef.current
+    if (!editor || !multiCursor) return false
+    const result = applyEditorMultiCursorEdit(editor.plainText, multiCursor, edit)
+    editor.replaceText(result.content)
+    setBlockSelection(null)
+    setMultiCursor(result.state)
+    const active = result.state.ranges[result.state.activeIndex]!
+    editor.setSelection(active.start, active.end)
+    setMessage(`${result.state.ranges.length} cursors`)
+    return true
+  }, [multiCursor])
+
+  const applyLineTransform = useCallback((transform: EditorLineTransform) => {
+    const editor = editorRef.current
+    if (!editor || !activeTab) return
+    const selection = editor.getSelection() ?? { start: editor.cursorOffset, end: editor.cursorOffset }
+    const result = transformEditorLines(editor.plainText, selection.start, selection.end, transform)
+    if (result.content === editor.plainText) {
+      setMessage(transform === 'move-up' ? 'Already at first line' : transform === 'move-down' ? 'Already at last line' : 'No line change')
+      return
+    }
+    editor.replaceText(result.content)
+    editor.setSelection(result.start, result.end)
+    setMultiCursor(null)
+    setBlockSelection(null)
+    setMessage(`${transform === 'move-up' ? 'Moved lines up' : transform === 'move-down' ? 'Moved lines down' : transform === 'sort' ? 'Sorted lines' : 'Duplicated lines'} · undo with Ctrl+Z`)
+  }, [activeTab])
+
+  const applyCaseTransform = useCallback((mode: 'upper' | 'lower') => {
+    const editor = editorRef.current
+    if (!editor || !activeTab) return
+    const selection = editor.getSelection() ?? { start: editor.cursorOffset, end: editor.cursorOffset }
+    const result = transformEditorCase(editor.plainText, selection.start, selection.end, mode)
+    editor.replaceText(result.content)
+    editor.setSelection(result.start, result.end)
+    setMultiCursor(null)
+    setBlockSelection(null)
+    setMessage(mode === 'upper' ? 'Converted selection to uppercase' : 'Converted selection to lowercase')
+  }, [activeTab])
+
+  const trimTrailingWhitespace = useCallback(() => {
+    const editor = editorRef.current
+    if (!editor || !activeTab) return
+    const cursorOffset = editor.cursorOffset
+    const result = trimEditorTrailingWhitespace(editor.plainText)
+    if (result.content === editor.plainText) { setMessage('No trailing whitespace'); return }
+    editor.replaceText(result.content)
+    setEditorDocumentOffset(editor, Math.min(cursorOffset, result.content.length))
+    setMessage('Trimmed trailing whitespace · undo with Ctrl+Z')
+  }, [activeTab])
+
+  const editSelectedLines = useCallback((action: 'indent' | 'outdent' | 'comment') => {
+    const editor = editorRef.current
+    if (!editor || !activeTab) return
+    const content = editor.plainText
+    const bounds = selectedLineBounds(editor)
+    const original = content.slice(bounds.start, bounds.end)
+    const lines = original.split('\n')
+    const token = lineCommentToken(activeTab.path)
+    const indentUnit = detectEditorIndentUnit(content, activeTab.path)
+    const allCommented = action === 'comment' && lines.filter((line) => line.trim()).every((line) => {
+      const indent = /^[\t ]*/.exec(line)?.[0] ?? ''
+      return line.slice(indent.length).startsWith(token)
+    })
+    const transformed = lines.map((line) => {
+      if (action === 'indent') return `${indentUnit}${line}`
+      if (action === 'outdent') {
+        if (line.startsWith(indentUnit)) return line.slice(indentUnit.length)
+        if (line.startsWith('\t')) return line.slice(1)
+        return line.replace(new RegExp(`^ {1,${indentUnit.length}}`), '')
+      }
+      if (!line.trim()) return line
+      const indent = /^[\t ]*/.exec(line)?.[0] ?? ''
+      const body = line.slice(indent.length)
+      if (allCommented) return `${indent}${body.slice(token.length).replace(/^ /, '')}`
+      return `${indent}${token} ${body}`
+    }).join('\n')
+    if (transformed === original) return
+    const cursorBefore = editor.logicalCursor
+    editor.replaceText(`${content.slice(0, bounds.start)}${transformed}${content.slice(bounds.end)}`)
+    if (bounds.hadSelection) editor.setSelection(bounds.start, bounds.start + transformed.length)
+    else editor.setCursor(cursorBefore.row, Math.max(0, cursorBefore.col + transformed.length - original.length))
+    setMessage(action === 'indent' ? 'Indented lines' : action === 'outdent' ? 'Outdented lines' : allCommented ? 'Uncommented lines' : 'Commented lines')
+  }, [activeTab])
+
+  const openRecoveryConflict = useCallback(async (conflict: EditorRecoveryBuffer) => {
+    const safePath = normalizeRelativePath(root, conflict.path)
+    if (!safePath) {
+      setMessage('Recovery entry is outside this workspace')
+      return
+    }
+    try {
+      const safeFile = await resolveSafeEditorFile(root, safePath)
+      const diskContent = await readFile(safeFile.absolute, 'utf8')
+      const existing = tabs.find((tab) => tab.path === safePath)
+      if (existing && existing.content !== existing.savedContent) {
+        setMessage(`${safePath} already has unsaved changes; save or close it before loading recovery`)
+        return
+      }
+      setTabs((current) => {
+        const found = current.some((tab) => tab.path === safePath)
+        return found
+          ? current.map((tab) => tab.path === safePath ? { ...tab, content: conflict.content, savedContent: diskContent } : tab)
+          : [...current, { path: safePath, content: conflict.content, savedContent: diskContent }]
+      })
+      setRecoveryConflicts((current) => current.filter((entry) => entry !== conflict))
+      setRecoveryConflictOpen(false)
+      setActivePath(safePath)
+      setFocusPane('editor')
+      setMessage(`Loaded recovered ${safePath} · current disk content retained as the save baseline`)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Unable to load recovery conflict')
+    }
+  }, [root, tabs])
 
   const closeActiveTab = useCallback(() => {
     if (!activeTab) return
@@ -709,6 +1334,74 @@ export function EditorPopover({
     if (next.length === 0) setFocusPane('explorer')
   }, [activePath, tabs])
 
+  const openFilePrompt = useCallback((kind: EditorFilePrompt['kind']) => {
+    const row = focusPane === 'explorer' ? treeRows[treeCursor] : undefined
+    if (kind === 'create') {
+      const directory = row?.kind === 'directory' ? row.path : row?.kind === 'file' ? dirname(row.path) : '.'
+      setFilePrompt({ kind, value: directory === '.' ? '' : `${directory}/` })
+      setMessage('Enter a workspace-relative path for the new file')
+      return
+    }
+    const source = row?.kind === 'file' ? row.path : activeTab?.path
+    if (!source) {
+      setMessage(`Select a file to ${kind}`)
+      return
+    }
+    if (kind === 'delete' && tabs.some((tab) => tab.path === source && tab.content !== tab.savedContent)) {
+      setMessage('Save or discard the open file before deleting it')
+      return
+    }
+    setFilePrompt({ kind, source, value: source })
+    setMessage(kind === 'rename' ? `Rename ${source}` : `Confirm deletion of ${source}`)
+  }, [activeTab?.path, focusPane, tabs, treeCursor, treeRows])
+
+  const performFileOperation = useCallback(async () => {
+    if (!filePrompt) return
+    try {
+      if (filePrompt.kind === 'create') {
+        const path = await createEditorFile(root, filePrompt.value)
+        setProjectFiles((current) => [...new Set([...current, path])].sort((left, right) => left.localeCompare(right, undefined, { numeric: true })))
+        setFilePrompt(null)
+        await openBuffer(path)
+        setMessage(`Created ${path}`)
+        return
+      }
+      if (!filePrompt.source) return
+      if (filePrompt.kind === 'rename') {
+        const moved = await renameEditorFile(root, filePrompt.source, filePrompt.value)
+        setProjectFiles((current) => current.map((path) => path === moved.from ? moved.to : path)
+          .sort((left, right) => left.localeCompare(right, undefined, { numeric: true })))
+        setTabs((current) => current.map((tab) => tab.path === moved.from ? { ...tab, path: moved.to } : tab))
+        setDiskConflicts((current) => {
+          if (!current.has(moved.from)) return current
+          const next = new Set(current); next.delete(moved.from); next.add(moved.to); return next
+        })
+        if (activePath === moved.from) setActivePath(moved.to)
+        setFilePrompt(null)
+        setMessage(`Renamed ${moved.from} → ${moved.to}`)
+        return
+      }
+      const deleted = await deleteEditorFile(root, filePrompt.source)
+      const nextTabs = tabs.filter((tab) => tab.path !== deleted)
+      setProjectFiles((current) => current.filter((path) => path !== deleted))
+      setTabs(nextTabs)
+      setDiskConflicts((current) => {
+        if (!current.has(deleted)) return current
+        const next = new Set(current); next.delete(deleted); return next
+      })
+      if (activePath === deleted) {
+        setActivePath(nextTabs[0]?.path ?? null)
+        if (nextTabs.length === 0) setFocusPane('explorer')
+      }
+      setFilePrompt(null)
+      setMessage(`Deleted ${deleted}`)
+    } catch (error) {
+      const text = error instanceof Error ? error.message : `Unable to ${filePrompt.kind} file`
+      setMessage(text)
+      onNotice?.('error', text)
+    }
+  }, [activePath, filePrompt, onNotice, openBuffer, root, tabs])
+
   const requestClose = useCallback(() => {
     const modifiedPaths = tabs.filter((tab) => tab.content !== tab.savedContent).map((tab) => tab.path)
     if (modifiedPaths.length > 0 && !closeConfirm) {
@@ -716,8 +1409,77 @@ export function EditorPopover({
       setMessage(`${modifiedPaths.length} modified file${modifiedPaths.length === 1 ? '' : 's'} — review the exit warning`)
       return
     }
-    onClose()
-  }, [closeConfirm, onClose, tabs])
+    if (modifiedPaths.length > 0 || recoveryConflicts.length === 0) {
+      if (recoveryTimerRef.current) clearTimeout(recoveryTimerRef.current)
+      recoveryTimerRef.current = null
+      void clearEditorRecovery(root).then(onClose, (error) => {
+        onNotice?.('error', error instanceof Error ? error.message : 'Unable to clear editor recovery')
+        onClose()
+      })
+    } else {
+      onClose()
+    }
+  }, [closeConfirm, onClose, onNotice, recoveryConflicts.length, root, tabs])
+
+  const applyWorkspaceEdit = useCallback(async (workspaceEdit: EditorWorkspaceEdit): Promise<boolean> => {
+    try {
+      const sourceTabs = tabsRef.current
+      const sourceActivePath = activePathRef.current
+      const updatedBuffers = await Promise.all(workspaceEdit.changes.map(async ({ uri, edits }) => {
+        const absolutePath = fileURLToPath(uri)
+        const path = normalizeRelativePath(root, absolutePath)
+        if (!path) throw new Error('Language server edit targets a file outside this workspace')
+        const openTab = sourceTabs.find((tab) => tab.path === path)
+        const content = (path === sourceActivePath && editorRef.current
+          ? editorRef.current.plainText
+          : openTab?.content) ?? await resolveSafeEditorFile(root, path).then((file) => readFile(file.absolute, 'utf8'))
+        if (content == null) throw new Error(`Unable to read ${path}`)
+        if (Buffer.byteLength(content) > MAX_FILE_BYTES) throw new Error(`${path} exceeds the 2 MB editor limit`)
+        if (content.includes('\0')) throw new Error(`${path} is binary and cannot be edited`)
+        return {
+          path,
+          content: applyEditorTextEdits(content, edits),
+          sourceContent: content,
+          savedContent: openTab?.savedContent ?? content,
+        }
+      }))
+      for (const update of updatedBuffers) {
+        const currentTab = tabsRef.current.find((tab) => tab.path === update.path)
+        const currentContent = update.path === activePathRef.current && editorRef.current
+          ? editorRef.current.plainText
+          : currentTab?.content
+        if (currentContent != null && currentContent !== update.sourceContent) {
+          throw new Error(`${update.path} changed while language server edits were being prepared; retry the action`)
+        }
+      }
+      const updates = new Map(updatedBuffers.map((buffer) => [buffer.path, buffer]))
+      setTabs((current) => {
+        const existing = new Set(current.map((tab) => tab.path))
+        return [
+          ...current.map((tab) => {
+            const update = updates.get(tab.path)
+            return update ? { ...tab, content: update.content } : tab
+          }),
+          ...updatedBuffers.filter((buffer) => !existing.has(buffer.path)),
+        ]
+      })
+      const currentActivePath = activePathRef.current
+      const activeUpdate = currentActivePath ? updates.get(currentActivePath) : undefined
+      if (activeUpdate && editorRef.current?.plainText !== activeUpdate.content) {
+        editorRef.current?.replaceText(activeUpdate.content)
+      }
+      setMessage(`Applied edits to ${updatedBuffers.length} file${updatedBuffers.length === 1 ? '' : 's'} · save to write`)
+      return true
+    } catch (error) {
+      const text = error instanceof Error ? error.message : 'Unable to apply language server edits'
+      setMessage(text)
+      onNotice?.('error', text)
+      return false
+    }
+  }, [onNotice, root])
+  useEffect(() => {
+    applyWorkspaceEditRef.current = applyWorkspaceEdit
+  }, [applyWorkspaceEdit])
 
   useEffect(() => {
     if (!tabs.some((tab) => tab.content !== tab.savedContent)) setCloseConfirm(false)
@@ -734,8 +1496,15 @@ export function EditorPopover({
     const filetype = detectTuiCodeFiletypeFromPath(activeTab.path) ?? 'plaintext'
     const client = new EditorLspClient(root, filetype, join(root, activeTab.path))
     lspRef.current = client
-    client.onStatus(setLspStatus)
-    client.onDiagnostics(setDiagnostics)
+    client.onStatus((status) => {
+      if (lspRef.current !== client) return
+      setLspStatus(status)
+      if (status.state === 'error') setMessage(`LSP ${status.name}: ${status.message}`)
+    })
+    client.onDiagnostics((next) => {
+      if (lspRef.current === client) setDiagnostics(next)
+    })
+    client.onWorkspaceEdit((edit) => applyWorkspaceEditRef.current(edit))
     void client.start(activeTab.content)
     return () => client.stop()
   // Starting an LSP is a buffer lifecycle event, not an every-keystroke event.
@@ -774,13 +1543,12 @@ export function EditorPopover({
     const request = ++syntaxRequestRef.current
     const filetype = detectTuiCodeFiletypeFromPath(activeTab.path)
     const timer = setTimeout(() => {
-      if (!filetype) return
-      void getTreeSitterClient().highlightOnce(activeTab.content, filetype).then((result) => {
+      const renderHighlights = (syntaxHighlights: ReadonlyArray<readonly [number, number, string, ...unknown[]]>) => {
         const editor = editorRef.current
         if (request !== syntaxRequestRef.current || !editor) return
         editor.clearAllHighlights()
         const lineStarts = lineStartsFor(activeTab.content)
-        for (const highlight of result.highlights ?? []) {
+        for (const highlight of syntaxHighlights) {
           const styleId = syntaxStyle.resolveStyleId(highlight[2]) ?? syntaxStyle.resolveStyleId('default')
           if (styleId == null) continue
           const firstLine = lineAtOffset(lineStarts, highlight[0])
@@ -796,10 +1564,41 @@ export function EditorPopover({
             })
           }
         }
-      }).catch(() => {})
+        const multiStyleId = multiCursorStyleIdRef.current
+        if (multiStyleId == null || !multiCursor) return
+        for (let index = 0; index < multiCursor.ranges.length; index += 1) {
+          if (index === multiCursor.activeIndex) continue
+          const range = multiCursor.ranges[index]!
+          const highlightStart = range.start === range.end && range.start === activeTab.content.length
+            ? Math.max(0, range.start - 1)
+            : range.start
+          const highlightEnd = range.start === range.end
+            ? Math.min(activeTab.content.length, Math.max(highlightStart + 1, range.end))
+            : range.end
+          const firstLine = lineAtOffset(lineStarts, highlightStart)
+          const lastLine = lineAtOffset(lineStarts, Math.max(highlightStart, highlightEnd - 1))
+          for (let line = firstLine; line <= lastLine; line += 1) {
+            const lineStart = lineStarts[line] ?? 0
+            const lineEnd = line + 1 < lineStarts.length ? lineStarts[line + 1]! - 1 : activeTab.content.length
+            editor.addHighlight(line, {
+              start: Math.max(0, highlightStart - lineStart),
+              end: Math.max(0, Math.min(highlightEnd, lineEnd) - lineStart),
+              styleId: multiStyleId,
+              priority: 80,
+            })
+          }
+        }
+      }
+      if (!filetype) {
+        renderHighlights([])
+        return
+      }
+      void getTreeSitterClient().highlightOnce(activeTab.content, filetype).then((result) => {
+        renderHighlights(result.highlights ?? [])
+      }).catch(() => renderHighlights([]))
     }, SYNTAX_DELAY_MS)
     return () => clearTimeout(timer)
-  }, [activeTab, syntaxStyle])
+  }, [activeTab, multiCursor, syntaxStyle])
 
   useEffect(() => {
     const lineNumber = lineNumberRef.current
@@ -870,6 +1669,192 @@ export function EditorPopover({
     setMessage(result ? 'LSP signature help · Esc dismisses' : 'No signature information at cursor')
   }, [activeTab])
 
+  const requestRename = useCallback(async () => {
+    const editor = editorRef.current
+    const client = lspRef.current
+    if (!activeTab || !editor || !client) return
+    setCompletions([])
+    setHoverInfo(null)
+    setSignatureInfo(null)
+    client.change(editor.plainText)
+    const offset = editorDocumentOffset(editor, cursorRef.current)
+    const position = editorPositionAtOffset(editor.plainText, offset)
+    const prepared = await client.prepareRename(position)
+    const fallback = wordRangeAt(editor.plainText, offset)
+    const value = prepared?.placeholder
+      ?? (prepared ? editor.plainText.slice(
+        offsetAtEditorPosition(editor.plainText, prepared.range.start),
+        offsetAtEditorPosition(editor.plainText, prepared.range.end),
+      ) : fallback?.value)
+    if (!value) {
+      setMessage('No renameable symbol at cursor')
+      return
+    }
+    setRenamePosition(position)
+    setRenameQuery(value)
+    setRenameOpen(true)
+    setMessage(`Rename “${value}” across workspace · Enter applies · Esc cancels`)
+  }, [activeTab])
+
+  const performRename = useCallback(async () => {
+    const client = lspRef.current
+    const newName = renameQuery.trim()
+    if (!client || !renamePosition || !newName) {
+      setMessage('Rename requires a non-empty symbol name')
+      return
+    }
+    const edit = await client.rename(renamePosition, newName)
+    if (!edit || edit.changes.length === 0) {
+      setMessage('Language server returned no rename edits')
+      return
+    }
+    if (await applyWorkspaceEditRef.current(edit)) {
+      setRenameOpen(false)
+      setRenamePosition(null)
+      setMessage(`Renamed symbol to “${newName}” in ${edit.changes.length} file${edit.changes.length === 1 ? '' : 's'}`)
+    }
+  }, [renamePosition, renameQuery])
+
+  const formatDocument = useCallback(async () => {
+    const editor = editorRef.current
+    const client = lspRef.current
+    if (!activeTab || !editor || !client) return
+    client.change(editor.plainText)
+    setMessage('Formatting document…')
+    const edit = await client.formatting()
+    if (!edit || edit.changes.length === 0) {
+      setMessage('Document is already formatted or no formatter is available')
+      return
+    }
+    if (await applyWorkspaceEditRef.current(edit)) setMessage(`Formatted ${activeTab.path} · save to write`)
+  }, [activeTab])
+
+  const requestCodeActions = useCallback(async () => {
+    const editor = editorRef.current
+    const client = lspRef.current
+    if (!activeTab || !editor || !client) return
+    client.change(editor.plainText)
+    const selection = editor.getSelection()
+    const offset = editorDocumentOffset(editor, cursorRef.current)
+    const range = selection
+      ? { start: editorPositionAtOffset(editor.plainText, selection.start), end: editorPositionAtOffset(editor.plainText, selection.end) }
+      : { start: editorPositionAtOffset(editor.plainText, offset), end: editorPositionAtOffset(editor.plainText, offset) }
+    setMessage('Loading code actions…')
+    const actions = await client.codeActions(range, diagnostics)
+    if (actions.length === 0) {
+      setMessage('No code actions available at cursor')
+      return
+    }
+    setCodeActions(actions)
+    setCodeActionCursor(0)
+    setMessage(`${actions.length} code action${actions.length === 1 ? '' : 's'} · Enter applies · Esc closes`)
+  }, [activeTab, diagnostics])
+
+  const applyCodeAction = useCallback(async (action: EditorCodeAction) => {
+    const client = lspRef.current
+    if (!client) return
+    if (action.edit && !await applyWorkspaceEditRef.current(action.edit)) return
+    if (action.command) await client.executeCommand(action.command)
+    setCodeActions([])
+    setMessage(`Applied code action: ${action.title}`)
+  }, [])
+
+  const jumpToEditorLocation = useCallback(async (location: EditorLocation, recordHistory = true) => {
+    let absolutePath: string
+    try {
+      absolutePath = fileURLToPath(location.uri)
+    } catch {
+      setMessage('Language server returned an unsupported location')
+      return
+    }
+    const path = normalizeRelativePath(root, absolutePath)
+    if (!path) {
+      setMessage('Language server location is outside this workspace')
+      return
+    }
+    if (recordHistory && activePath) {
+      jumpHistoryRef.current.push({
+        path: activePath,
+        line: cursorRef.current.line,
+        character: cursorRef.current.visualColumn,
+      })
+      if (jumpHistoryRef.current.length > 100) jumpHistoryRef.current.shift()
+    }
+    pendingJumpRef.current = {
+      path,
+      line: location.range.start.line,
+      character: location.range.start.character,
+    }
+    setSymbolNavigationKind(null)
+    setSymbolNavigationResults([])
+    setProjectSearchOpen(false)
+    if (path === activePath && editorRef.current) {
+      editorRef.current.setCursor(location.range.start.line, location.range.start.character)
+      pendingJumpRef.current = null
+    } else {
+      await openBuffer(path)
+    }
+    setMessage(`Jumped to ${path}:${location.range.start.line + 1}:${location.range.start.character + 1}`)
+  }, [activePath, openBuffer, root])
+
+  const requestSymbolNavigation = useCallback(async (kind: SymbolNavigationKind) => {
+    const editor = editorRef.current
+    const client = lspRef.current
+    if (!activeTab || !editor || !client) return
+    setCompletions([])
+    setHoverInfo(null)
+    setSignatureInfo(null)
+    client.change(editor.plainText)
+    const position = editorPositionAtOffset(editor.plainText, editorDocumentOffset(editor, cursorRef.current))
+    setMessage(`Finding ${kind}…`)
+    const rawLocations = kind === 'definition'
+      ? await client.definition(position)
+      : kind === 'references'
+        ? await client.references(position)
+        : await client.implementation(position)
+    const results = rawLocations.flatMap((location) => {
+      try {
+        const path = normalizeRelativePath(root, fileURLToPath(location.uri))
+        if (!path) return []
+        return [{
+          location,
+          path,
+          label: basename(path),
+          detail: `${path}:${location.range.start.line + 1}:${location.range.start.character + 1}`,
+        }]
+      } catch {
+        return []
+      }
+    })
+    if (results.length === 0) {
+      setMessage(`No ${kind} found at cursor`)
+      return
+    }
+    if (results.length === 1) {
+      await jumpToEditorLocation(results[0]!.location)
+      return
+    }
+    setSymbolNavigationKind(kind)
+    setSymbolNavigationResults(results)
+    setSymbolNavigationCursor(0)
+    setMessage(`${results.length} ${kind} locations · Enter opens · Esc closes`)
+  }, [activeTab, jumpToEditorLocation, root])
+
+  const jumpBack = useCallback(async () => {
+    const previous = jumpHistoryRef.current.pop()
+    if (!previous) {
+      setMessage('Jump history is empty')
+      return
+    }
+    await jumpToEditorLocation({
+      uri: pathToFileURL(join(root, previous.path)).href,
+      range: {
+        start: { line: previous.line, character: previous.character },
+        end: { line: previous.line, character: previous.character },
+      },
+    }, false)
+  }, [jumpToEditorLocation, root])
+
   useEffect(() => {
     if (!activeTab || focusPane !== 'editor' || hoverInfo || signatureInfo) return
     const timer = setTimeout(() => { void requestCompletions(false) }, AUTO_COMPLETE_DELAY_MS)
@@ -921,18 +1906,83 @@ export function EditorPopover({
     setQuickCursor(0)
   }, [])
 
-  const openSearch = useCallback(() => {
+  const openSearch = useCallback((replace = false) => {
     const editor = editorRef.current
     const selected = editor?.getSelectedText() ?? ''
+    const selection = editor?.getSelection() ?? null
     setQuickOpen(false)
     setCompletions([])
     setHoverInfo(null)
     setSignatureInfo(null)
     setSearchOpen(true)
+    setSearchReplaceMode(replace)
+    setSearchInput('find')
     setSearchQuery(selected.includes('\n') ? '' : selected)
+    setSearchSelectionRange(selection)
+    setSearchSelectionOnly(false)
+    if (!replace) setReplaceQuery('')
     setSearchCursor(-1)
     setFocusPane('editor')
   }, [])
+
+  const openProjectSearch = useCallback(() => {
+    const selected = editorRef.current?.getSelectedText() ?? ''
+    setQuickOpen(false)
+    setSearchOpen(false)
+    setCompletions([])
+    setHoverInfo(null)
+    setSignatureInfo(null)
+    setProjectSearchQuery(selected.includes('\n') ? '' : selected)
+    setProjectSearchCursor(0)
+    setProjectSearchOpen(true)
+  }, [])
+
+  const replaceSearchMatch = useCallback((replaceAll: boolean) => {
+    const editor = editorRef.current
+    if (!editor || !searchQuery || searchMatches.length === 0) {
+      setMessage(searchQuery ? `No results for “${searchQuery}”` : 'Type text to replace')
+      return
+    }
+    const content = editor.plainText
+    const replacementFor = (match: EditorSearchMatch) => searchRegex
+      ? expandEditorSearchReplacement(content, match, replaceQuery)
+      : replaceQuery
+    if (replaceAll) {
+      let nextContent = ''
+      let sourceOffset = 0
+      let replacementDelta = 0
+      for (const match of searchMatches) {
+        const replacement = replacementFor(match)
+        nextContent += content.slice(sourceOffset, match.start)
+        nextContent += replacement
+        replacementDelta += replacement.length - (match.end - match.start)
+        sourceOffset = match.end
+      }
+      nextContent += content.slice(sourceOffset)
+      editor.replaceText(nextContent)
+      if (searchSelectionOnly && searchSelectionRange) {
+        setSearchSelectionRange({ ...searchSelectionRange, end: Math.max(searchSelectionRange.start, searchSelectionRange.end + replacementDelta) })
+      }
+      setSearchCursor(-1)
+      setMessage(`Replaced ${searchMatches.length} occurrence${searchMatches.length === 1 ? '' : 's'}`)
+      return
+    }
+    let index = searchCursor
+    if (index < 0 || index >= searchMatches.length) {
+      const offset = editorDocumentOffset(editor, cursorRef.current)
+      index = searchMatches.findIndex((match) => match.start >= offset)
+      if (index < 0) index = 0
+    }
+    const match = searchMatches[index]!
+    const replacement = replacementFor(match)
+    editor.replaceText(`${content.slice(0, match.start)}${replacement}${content.slice(match.end)}`)
+    if (searchSelectionOnly && searchSelectionRange) {
+      setSearchSelectionRange({ ...searchSelectionRange, end: Math.max(searchSelectionRange.start, searchSelectionRange.end + replacement.length - (match.end - match.start)) })
+    }
+    setEditorDocumentOffset(editor, match.start + replacement.length)
+    setSearchCursor(-1)
+    setMessage(`Replaced occurrence ${index + 1} of ${searchMatches.length}`)
+  }, [replaceQuery, searchCursor, searchMatches, searchQuery, searchRegex, searchSelectionOnly, searchSelectionRange])
 
   const navigateSearch = useCallback((direction: 1 | -1) => {
     const editor = editorRef.current
@@ -953,8 +2003,8 @@ export function EditorPopover({
     const match = searchMatches[next]!
     setSearchCursor(next)
     editor.setSelection(match.start, match.end)
-    setMessage(`Find ${next + 1} of ${searchMatches.length}${searchMatchCase ? ' · match case' : ''}`)
-  }, [searchCursor, searchMatchCase, searchMatches, searchQuery])
+    setMessage(`Find ${next + 1} of ${searchMatches.length}${searchMatchCase ? ' · match case' : ''}${searchRegex ? ' · regex' : ''}${searchSelectionOnly ? ' · selection' : ''}`)
+  }, [searchCursor, searchMatchCase, searchMatches, searchQuery, searchRegex, searchSelectionOnly])
 
   const navigateDiagnostic = useCallback((direction: 1 | -1) => {
     const editor = editorRef.current
@@ -1031,7 +2081,12 @@ export function EditorPopover({
   const executeEditorCommand = useCallback((id: EditorCommandId) => {
     switch (id) {
       case 'save': void saveActive(); break
+      case 'save-all': void saveAll(); break
+      case 'new-file': openFilePrompt('create'); break
+      case 'rename-file': openFilePrompt('rename'); break
+      case 'delete-file': openFilePrompt('delete'); break
       case 'find': openSearch(); break
+      case 'replace': openSearch(true); break
       case 'goto-line': openQuick(':'); break
       case 'toggle-explorer': toggleExplorer(); break
       case 'focus-explorer': setFocusPane((current) => current === 'editor' ? 'explorer' : 'editor'); break
@@ -1039,11 +2094,36 @@ export function EditorPopover({
       case 'next-diagnostic': navigateDiagnostic(1); break
       case 'previous-diagnostic': navigateDiagnostic(-1); break
       case 'show-hover': void requestHover(); break
+      case 'goto-definition': void requestSymbolNavigation('definition'); break
+      case 'find-references': void requestSymbolNavigation('references'); break
+      case 'goto-implementation': void requestSymbolNavigation('implementation'); break
+      case 'rename-symbol': void requestRename(); break
+      case 'code-actions': void requestCodeActions(); break
+      case 'format-document': void formatDocument(); break
+      case 'project-search': openProjectSearch(); break
+      case 'indent-lines': editSelectedLines('indent'); break
+      case 'outdent-lines': editSelectedLines('outdent'); break
+      case 'toggle-comment': editSelectedLines('comment'); break
+      case 'add-next-occurrence': addNextOccurrence(); break
+      case 'add-cursor-above': addAdjacentCursor(-1); break
+      case 'add-cursor-below': addAdjacentCursor(1); break
+      case 'split-selection-lines': addLineEndCursors(); break
+      case 'move-lines-up': applyLineTransform('move-up'); break
+      case 'move-lines-down': applyLineTransform('move-down'); break
+      case 'sort-lines': applyLineTransform('sort'); break
+      case 'duplicate-lines': applyLineTransform('duplicate'); break
+      case 'uppercase': applyCaseTransform('upper'); break
+      case 'lowercase': applyCaseTransform('lower'); break
+      case 'trim-trailing-whitespace': trimTrailingWhitespace(); break
+      case 'recovery-conflicts':
+        if (recoveryConflicts.length > 0) setRecoveryConflictOpen(true)
+        else setMessage('No recovery conflicts')
+        break
       case 'toggle-vim': toggleVimMode(); break
       case 'toggle-velocity': toggleVelocityScrolling(); break
       case 'toggle-word-wrap': toggleWordWrap(); break
     }
-  }, [closeActiveTab, navigateDiagnostic, openQuick, openSearch, requestHover, saveActive, toggleExplorer, toggleVelocityScrolling, toggleVimMode, toggleWordWrap])
+  }, [addAdjacentCursor, addLineEndCursors, addNextOccurrence, applyCaseTransform, applyLineTransform, closeActiveTab, editSelectedLines, formatDocument, navigateDiagnostic, openFilePrompt, openProjectSearch, openQuick, openSearch, recoveryConflicts.length, requestCodeActions, requestHover, requestRename, requestSymbolNavigation, saveActive, saveAll, toggleExplorer, toggleVelocityScrolling, toggleVimMode, toggleWordWrap, trimTrailingWhitespace])
 
   const chooseQuickResultAt = useCallback((index: number) => {
     const result = quickResults[index]
@@ -1233,6 +2313,124 @@ export function EditorPopover({
       switchTab(key.name === 'pageup' ? -1 : 1)
       return true
     }
+    if (symbolNavigationKind) {
+      if (key.name === 'escape') {
+        setSymbolNavigationKind(null)
+        setSymbolNavigationResults([])
+        return true
+      }
+      if (key.name === 'up' || (key.ctrl && key.name === 'p')) {
+        setSymbolNavigationCursor((value) => Math.max(0, value - 1))
+        return true
+      }
+      if (key.name === 'down' || (key.ctrl && key.name === 'n')) {
+        setSymbolNavigationCursor((value) => Math.min(symbolNavigationResults.length - 1, value + 1))
+        return true
+      }
+      if (key.name === 'return') {
+        const result = symbolNavigationResults[symbolNavigationCursor]
+        if (result) void jumpToEditorLocation(result.location)
+        return true
+      }
+      return true
+    }
+    if (recoveryConflictOpen) {
+      if (key.name === 'escape') { setRecoveryConflictOpen(false); return true }
+      if (key.name === 'up' || sequence === 'k') { setRecoveryConflictCursor((value) => Math.max(0, value - 1)); return true }
+      if (key.name === 'down' || sequence === 'j') { setRecoveryConflictCursor((value) => Math.min(recoveryConflicts.length - 1, value + 1)); return true }
+      if (key.name === 'return') {
+        const conflict = recoveryConflicts[recoveryConflictCursor]
+        if (conflict) void openRecoveryConflict(conflict)
+        return true
+      }
+      if (!key.ctrl && !key.meta && sequence === 'D') {
+        setRecoveryConflicts([])
+        setRecoveryConflictOpen(false)
+        setMessage('Discarded all recovery conflicts')
+        return true
+      }
+      if (!key.ctrl && !key.meta && sequence === 'd') {
+        const conflict = recoveryConflicts[recoveryConflictCursor]
+        const next = recoveryConflicts.filter((entry) => entry !== conflict)
+        setRecoveryConflicts(next)
+        setRecoveryConflictCursor((value) => Math.min(value, Math.max(0, next.length - 1)))
+        if (next.length === 0) setRecoveryConflictOpen(false)
+        setMessage(conflict ? `Discarded recovery for ${conflict.path}` : 'No recovery conflict selected')
+        return true
+      }
+      return true
+    }
+    if (filePrompt) {
+      if (key.name === 'escape') {
+        setFilePrompt(null)
+        setMessage('File operation cancelled')
+        return true
+      }
+      if (key.name === 'return') {
+        void performFileOperation()
+        return true
+      }
+      if (filePrompt.kind !== 'delete') {
+        if (key.name === 'backspace' || key.name === 'delete') {
+          setFilePrompt((current) => current ? { ...current, value: current.value.slice(0, -1) } : null)
+          return true
+        }
+        if (!key.ctrl && !key.meta && sequence.length === 1 && sequence >= ' ') {
+          setFilePrompt((current) => current ? { ...current, value: current.value + sequence } : null)
+          return true
+        }
+      }
+      return true
+    }
+    if (renameOpen) {
+      if (key.name === 'escape') {
+        setRenameOpen(false)
+        setRenamePosition(null)
+        setMessage('Rename cancelled')
+        return true
+      }
+      if (key.name === 'return') { void performRename(); return true }
+      if (key.name === 'backspace' || key.name === 'delete') { setRenameQuery((value) => value.slice(0, -1)); return true }
+      if (!key.ctrl && !key.meta && sequence.length === 1 && sequence >= ' ') { setRenameQuery((value) => value + sequence); return true }
+      return true
+    }
+    if (codeActions.length > 0) {
+      if (key.name === 'escape') { setCodeActions([]); return true }
+      if (key.name === 'up' || (key.ctrl && key.name === 'p')) { setCodeActionCursor((value) => Math.max(0, value - 1)); return true }
+      if (key.name === 'down' || (key.ctrl && key.name === 'n')) { setCodeActionCursor((value) => Math.min(codeActions.length - 1, value + 1)); return true }
+      if (key.name === 'return') {
+        const action = codeActions[codeActionCursor]
+        if (action) void applyCodeAction(action)
+        return true
+      }
+      return true
+    }
+    if (projectSearchOpen) {
+      if (key.name === 'escape' || (key.option && (key.name === '/' || sequence === '/'))) {
+        setProjectSearchOpen(false)
+        return true
+      }
+      if (key.name === 'up' || (key.ctrl && key.name === 'p')) { setProjectSearchCursor((value) => Math.max(0, value - 1)); return true }
+      if (key.name === 'down' || (key.ctrl && key.name === 'n')) { setProjectSearchCursor((value) => Math.min(projectSearchResults.length - 1, value + 1)); return true }
+      if (key.name === 'return') {
+        const result = projectSearchResults[projectSearchCursor]
+        if (result) void jumpToEditorLocation({
+          uri: pathToFileURL(join(root, result.path)).href,
+          range: {
+            start: { line: result.line, character: result.character },
+            end: { line: result.line, character: result.character },
+          },
+        })
+        return true
+      }
+      if (key.option && key.name === 'r') { setProjectSearchRegex((value) => !value); return true }
+      if (key.option && key.name === 'c') { setProjectSearchMatchCase((value) => !value); return true }
+      if (key.option && key.name === 'w') { setProjectSearchWholeWord((value) => !value); return true }
+      if (key.ctrl && key.name === 'u') { setProjectSearchQuery(''); return true }
+      if (key.name === 'backspace' || key.name === 'delete') { setProjectSearchQuery((value) => value.slice(0, -1)); return true }
+      if (!key.ctrl && !key.meta && sequence.length === 1 && sequence >= ' ') { setProjectSearchQuery((value) => value + sequence); return true }
+      return true
+    }
     if (quickOpen) {
       if (key.name === 'escape') { setQuickOpen(false); setQuickQuery(''); return true }
       if (key.name === 'up' || (key.ctrl && key.name === 'p')) { setQuickCursor((value) => Math.max(0, value - 1)); return true }
@@ -1244,11 +2442,103 @@ export function EditorPopover({
     }
     if (searchOpen) {
       if (key.name === 'escape') { setSearchOpen(false); setSearchCursor(-1); editorRef.current?.clearSelection(); return true }
-      if (key.name === 'return') { navigateSearch(key.shift ? -1 : 1); return true }
-      if (key.name === 'backspace' || key.name === 'delete') { setSearchQuery((value) => value.slice(0, -1)); setSearchCursor(-1); return true }
+      if (key.name === 'tab' && searchReplaceMode) {
+        setSearchInput((current) => current === 'find' ? 'replace' : 'find')
+        return true
+      }
+      if (key.name === 'return') {
+        if (searchResult.error) { setMessage(`Invalid regular expression: ${searchResult.error}`); return true }
+        if (searchReplaceMode && key.option) replaceSearchMatch(true)
+        else if (searchReplaceMode && searchInput === 'replace') replaceSearchMatch(false)
+        else navigateSearch(key.shift ? -1 : 1)
+        return true
+      }
+      if (key.name === 'backspace' || key.name === 'delete') {
+        if (searchReplaceMode && searchInput === 'replace') setReplaceQuery((value) => value.slice(0, -1))
+        else setSearchQuery((value) => value.slice(0, -1))
+        setSearchCursor(-1)
+        return true
+      }
       if (key.ctrl && key.name === 'f') { navigateSearch(key.shift ? -1 : 1); return true }
+      if (key.ctrl && key.name === 'r') { setSearchReplaceMode(true); setSearchInput('replace'); return true }
       if (key.option && key.name === 'c') { toggleSearchMatchCase(); return true }
-      if (!key.ctrl && !key.meta && sequence.length === 1 && sequence >= ' ') { setSearchQuery((value) => value + sequence); setSearchCursor(-1); return true }
+      if (key.option && key.name === 'r') { setSearchRegex((value) => !value); setSearchCursor(-1); return true }
+      if (key.option && key.name === 's') {
+        if (!searchSelectionRange) setMessage('Select text before opening find to search within a selection')
+        else { setSearchSelectionOnly((value) => !value); setSearchCursor(-1) }
+        return true
+      }
+      if (!key.ctrl && !key.meta && sequence.length === 1 && sequence >= ' ') {
+        if (searchReplaceMode && searchInput === 'replace') setReplaceQuery((value) => value + sequence)
+        else setSearchQuery((value) => value + sequence)
+        setSearchCursor(-1)
+        return true
+      }
+      return true
+    }
+    if (focusPane === 'editor' && key.ctrl && key.name === 'd') {
+      addNextOccurrence()
+      return true
+    }
+    if (focusPane === 'editor' && key.ctrl && key.option && (key.name === 'up' || key.name === 'down')) {
+      addAdjacentCursor(key.name === 'up' ? -1 : 1)
+      return true
+    }
+    if (focusPane === 'editor' && key.option && key.shift
+      && (key.name === 'left' || key.name === 'right' || key.name === 'up' || key.name === 'down')) {
+      extendBlockSelection(key.name)
+      return true
+    }
+    if (focusPane === 'editor' && key.option && !key.shift && !key.ctrl && (key.name === 'up' || key.name === 'down')) {
+      applyLineTransform(key.name === 'up' ? 'move-up' : 'move-down')
+      return true
+    }
+    if (focusPane === 'editor' && key.option && !key.ctrl && (key.name === 'u' || key.name === 'l')) {
+      applyCaseTransform(key.name === 'u' ? 'upper' : 'lower')
+      return true
+    }
+    if (focusPane === 'editor' && key.ctrl && key.shift && key.name === 'l') {
+      addLineEndCursors()
+      return true
+    }
+    if (focusPane === 'editor' && multiCursor) {
+      if (key.name === 'escape') {
+        setMultiCursor(null)
+        setBlockSelection(null)
+        setMessage('Collapsed to primary cursor')
+        return true
+      }
+      if (key.name === 'backspace') return editAtAllCursors('backspace')
+      if (key.name === 'delete') return editAtAllCursors('delete')
+      if (key.name === 'return' && !key.ctrl && !key.meta) return editAtAllCursors({ insert: '\n' })
+      if (key.name === 'tab' && !key.shift && !key.ctrl && !key.meta) return editAtAllCursors({ insert: '  ' })
+      if (!key.ctrl && !key.meta && !key.option && sequence.length === 1) {
+        const close = AUTO_PAIR_CLOSE[sequence]
+        return editAtAllCursors(close ? { insert: `${sequence}${close}`, caretOffset: 1 } : { insert: sequence })
+      }
+      if ((key.ctrl && (key.name === 'z' || key.name === 'y'))
+        || ['left', 'right', 'up', 'down', 'home', 'end', 'pageup', 'pagedown'].includes(key.name)) {
+        setMultiCursor(null)
+        setBlockSelection(null)
+      }
+    }
+    if (key.name === 'f2') {
+      if (focusPane === 'explorer') openFilePrompt('rename')
+      else void requestRename()
+      return true
+    }
+    if (key.name === 'f12') {
+      void requestSymbolNavigation(key.ctrl ? 'implementation' : key.shift ? 'references' : 'definition')
+      return true
+    }
+    if (key.option && key.shift && key.name === 'f') { void formatDocument(); return true }
+    if (key.option && (key.name === '.' || sequence === '.')) { void requestCodeActions(); return true }
+    if (key.option && (key.name === '/' || sequence === '/')) { openProjectSearch(); return true }
+    if (focusPane === 'editor' && key.ctrl && key.name === '/') { editSelectedLines('comment'); return true }
+    if (focusPane === 'editor' && key.ctrl && key.name === ']') { editSelectedLines('indent'); return true }
+    if (focusPane === 'editor' && key.ctrl && key.name === '[') { editSelectedLines('outdent'); return true }
+    if (focusPane === 'editor' && key.name === 'tab' && (key.shift || editorRef.current?.hasSelection())) {
+      editSelectedLines(key.shift ? 'outdent' : 'indent')
       return true
     }
     if (vimEnabled && handleVimKey(key)) return true
@@ -1287,8 +2577,10 @@ export function EditorPopover({
     if (focusPane === 'editor' && key.name === 'return' && !key.ctrl && !key.meta) {
       const editor = editorRef.current
       if (!editor) return true
-      const indentation = indentationForNewLine(editor.plainText, editorDocumentOffset(editor, cursorRef.current))
-      editor.insertText(`\n${indentation}`)
+      const offset = editorDocumentOffset(editor, cursorRef.current)
+      const insertion = smartNewLineInsertion(editor.plainText, offset, activeTab?.path ?? '')
+      editor.insertText(insertion.text)
+      setEditorDocumentOffset(editor, insertion.cursorOffset)
       setSignatureInfo(null)
       return true
     }
@@ -1315,12 +2607,16 @@ export function EditorPopover({
       return true
     }
     if (key.ctrl && key.name === 'q') { requestClose(); return true }
+    if (key.ctrl && key.name === 'n') { openFilePrompt('create'); return true }
+    if (key.ctrl && key.shift && key.name === 's') { void saveAll(); return true }
     if (key.ctrl && key.name === 's') { void saveActive(); return true }
     if (key.ctrl && key.name === 'p') { openQuick(); return true }
     if (key.ctrl && key.name === 'f') { openSearch(); return true }
+    if (key.ctrl && key.name === 'r') { openSearch(true); return true }
     if (key.ctrl && key.name === 'g') { openQuick(':'); return true }
     if (key.ctrl && key.name === 'b') { toggleExplorer(); return true }
     if (key.ctrl && key.name === 'w') { closeActiveTab(); return true }
+    if (key.ctrl && key.name === 't') { void jumpBack(); return true }
     if (key.name === 'f8') { navigateDiagnostic(key.shift ? -1 : 1); return true }
     if (key.ctrl && key.name === 'k') { void requestHover(); return true }
     if (key.ctrl && key.shift && (key.name === 'space' || sequence === '\0')) { void requestSignatureHelp(); return true }
@@ -1331,6 +2627,7 @@ export function EditorPopover({
       return true
     }
     if (focusPane === 'explorer') {
+      if (key.name === 'delete' || key.name === 'backspace') { openFilePrompt('delete'); return true }
       if (key.name === 'up' || sequence === 'k') { setTreeCursor((value) => Math.max(0, value - 1)); return true }
       if (key.name === 'down' || sequence === 'j') { setTreeCursor((value) => Math.min(treeRows.length - 1, value + 1)); return true }
       if (key.name === 'right' || sequence === 'l' || key.name === 'return') { activateTreeRow(); return true }
@@ -1343,8 +2640,39 @@ export function EditorPopover({
       }
       return true
     }
+    if (focusPane === 'editor' && !key.ctrl && !key.meta && !key.option && sequence.length === 1) {
+      const editor = editorRef.current
+      if (!editor) return false
+      const offset = editorDocumentOffset(editor, cursorRef.current)
+      if (AUTO_PAIR_CLOSERS.has(sequence) && editor.plainText[offset] === sequence && !editor.hasSelection()) {
+        setEditorDocumentOffset(editor, offset + 1)
+        return true
+      }
+      if (AUTO_PAIR_OPEN.has(sequence)) {
+        const close = AUTO_PAIR_CLOSE[sequence]!
+        const selection = editor.getSelection()
+        const quote = sequence === '"' || sequence === "'" || sequence === '`'
+        if (quote && !selection) {
+          const previous = editor.plainText[offset - 1]
+          const next = editor.plainText[offset]
+          // Keep apostrophes in identifiers/prose and escaped quotes literal.
+          // Pair only where a closing delimiter is syntactically plausible.
+          if (previous === '\\' || (previous != null && /[\w$]/.test(previous))
+            || (next != null && !/[\s)\]}>;,.:]/.test(next))) return false
+        }
+        if (selection) {
+          const content = editor.plainText
+          editor.replaceText(`${content.slice(0, selection.start)}${sequence}${content.slice(selection.start, selection.end)}${close}${content.slice(selection.end)}`)
+          editor.setSelection(selection.start + 1, selection.end + 1)
+        } else {
+          editor.insertText(`${sequence}${close}`)
+          setEditorDocumentOffset(editor, offset + 1)
+        }
+        return true
+      }
+    }
     return false
-  }, [acceptCompletion, activateTreeRow, activeTab, chooseQuickResultAt, closeActiveTab, closeConfirm, completions.length, focusPane, handleVimKey, hoverInfo, navigateDiagnostic, navigateSearch, openQuick, openSearch, quickCursor, quickOpen, quickResults.length, requestClose, requestCompletions, requestHover, requestSignatureHelp, saveActive, searchOpen, signatureInfo, switchTab, toggleExplorer, toggleSearchMatchCase, toggleVelocityScrolling, toggleVimMode, toggleWordWrap, treeCursor, treeExpanded, treeRows, velocityScrollEnabled, vimEnabled])
+  }, [acceptCompletion, activateTreeRow, activeTab, addAdjacentCursor, addLineEndCursors, addNextOccurrence, applyCaseTransform, applyCodeAction, applyLineTransform, chooseQuickResultAt, closeActiveTab, closeConfirm, codeActionCursor, codeActions, completions.length, editAtAllCursors, editSelectedLines, extendBlockSelection, filePrompt, focusPane, formatDocument, handleVimKey, hoverInfo, jumpBack, jumpToEditorLocation, multiCursor, navigateDiagnostic, navigateSearch, openFilePrompt, openProjectSearch, openQuick, openRecoveryConflict, openSearch, performFileOperation, performRename, projectSearchCursor, projectSearchOpen, projectSearchResults, quickCursor, quickOpen, quickResults.length, recoveryConflictCursor, recoveryConflictOpen, recoveryConflicts, renameOpen, replaceSearchMatch, requestClose, requestCodeActions, requestCompletions, requestHover, requestRename, requestSignatureHelp, requestSymbolNavigation, root, saveActive, saveAll, searchInput, searchOpen, searchReplaceMode, searchResult.error, searchSelectionRange, signatureInfo, switchTab, symbolNavigationCursor, symbolNavigationKind, symbolNavigationResults, toggleExplorer, toggleSearchMatchCase, toggleVelocityScrolling, toggleVimMode, toggleWordWrap, treeCursor, treeExpanded, treeRows, velocityScrollEnabled, vimEnabled])
 
   useEffect(() => {
     onKeyHandlerReady(handleKey)
@@ -1353,6 +2681,14 @@ export function EditorPopover({
   useEffect(() => {
     if (focusPane === 'editor') editorRef.current?.focus()
   }, [activePath, focusPane])
+
+  useEffect(() => {
+    const pending = pendingJumpRef.current
+    const editor = editorRef.current
+    if (!pending || pending.path !== activePath || !editor) return
+    editor.setCursor(pending.line, pending.character)
+    pendingJumpRef.current = null
+  }, [activePath])
 
   useEffect(() => {
     setDiagnosticCursor(-1)
@@ -1403,6 +2739,11 @@ export function EditorPopover({
 
   const counts = useMemo(() => diagnosticCounts(diagnostics), [diagnostics])
   const selectedCompletion = completions[completionCursor]
+  const projectSearchWindowStart = Math.min(
+    Math.max(0, projectSearchCursor - 9),
+    Math.max(0, projectSearchResults.length - 12),
+  )
+  const visibleProjectSearchResults = projectSearchResults.slice(projectSearchWindowStart, projectSearchWindowStart + 12)
   const completionWindowStart = Math.min(
     Math.max(0, completionCursor - 7),
     Math.max(0, completions.length - 8),
@@ -1607,10 +2948,14 @@ export function EditorPopover({
         </box>
         <text fg={theme.cyan}>{`   ${basename(root)} `}</text>
         {dirty ? <text fg={theme.amber}>● modified  </text> : <text fg={theme.green}>✓ saved  </text>}
+        {activePath && diskConflicts.has(activePath) ? <text fg={theme.red}>⚠ disk changed  </text> : null}
         {counts.errors > 0 ? <text fg={theme.red}>{`× ${counts.errors} `}</text> : null}
         {counts.warnings > 0 ? <text fg={theme.amber}>{`▲ ${counts.warnings} `}</text> : null}
         {counts.info > 0 ? <text fg={theme.cyan}>{`● ${counts.info} `}</text> : null}
-        <text fg={lspStatus?.state === 'ready' ? theme.green : theme.dim}>{` ${lspStatusText(lspStatus)}`}</text>
+        {multiCursor && multiCursor.ranges.length > 1 ? <text fg={theme.violet}>{` ${multiCursor.ranges.length} cursors`}</text> : null}
+        <text fg={lspStatus?.state === 'ready' ? theme.green : theme.dim} wrapMode="none">
+          {` ${fitText(lspStatusText(lspStatus), Math.max(18, Math.floor(editorWidth * 0.42)))}`}
+        </text>
         <box flexGrow={1} />
         <text fg={theme.dim}>{`${detectTuiCodeFiletypeFromPath(activeTab?.path) ?? 'text'}  ${cursor.line + 1}:${cursor.visualColumn + 1}  ${formatClock(clock)} `}</text>
       </box>
@@ -1655,28 +3000,276 @@ export function EditorPopover({
         </box>
       ) : null}
 
+      {projectSearchOpen ? (
+        <box
+          position="absolute"
+          top={2}
+          left={Math.max(2, Math.floor(width * 0.12))}
+          width={Math.max(52, Math.floor(width * 0.76))}
+          height={Math.min(19, height - 5)}
+          zIndex={65}
+          border
+          borderStyle="heavy"
+          borderColor={theme.cyan}
+          backgroundColor={theme.surface}
+          flexDirection="column"
+          title=" Project search "
+        >
+          <box height={1} paddingX={1} backgroundColor={theme.surface2} flexDirection="row">
+            <text fg={theme.text} wrapMode="none">{`⌕ ${projectSearchQuery || 'search files and unsaved buffers…'}`}</text>
+            <box flexGrow={1} />
+            <text fg={projectSearchRegex ? theme.amber : theme.dim}>.*</text>
+            <text fg={projectSearchMatchCase ? theme.amber : theme.dim}> Aa</text>
+            <text fg={projectSearchWholeWord ? theme.amber : theme.dim}> W</text>
+          </box>
+          <box height={1} paddingX={1} flexDirection="row">
+            <text fg={theme.cyan}>{projectSearchStatus}</text>
+            <box flexGrow={1} />
+            <text fg={theme.dim}>Alt+R regex · Alt+C case · Alt+W word</text>
+          </box>
+          <scrollbox flexGrow={1} scrollAcceleration={scrollAcceleration}>
+            {visibleProjectSearchResults.map((result, visibleIndex) => {
+              const index = projectSearchWindowStart + visibleIndex
+              return (
+                <box
+                  key={`${result.path}:${result.line}:${result.character}:${index}`}
+                  height={2}
+                  paddingX={1}
+                  backgroundColor={index === projectSearchCursor ? theme.surface3 : theme.surface}
+                  flexDirection="column"
+                  onMouseUp={(event: MouseEvent) => {
+                    if (event.button !== 0) return
+                    event.stopPropagation()
+                    void jumpToEditorLocation({
+                      uri: pathToFileURL(join(root, result.path)).href,
+                      range: {
+                        start: { line: result.line, character: result.character },
+                        end: { line: result.line, character: result.character },
+                      },
+                    })
+                  }}
+                >
+                  <text fg={index === projectSearchCursor ? theme.amber : theme.cyan} wrapMode="none">
+                    {fitText(`${result.path}:${result.line + 1}:${result.character + 1}`, Math.max(24, Math.floor(width * 0.68)))}
+                  </text>
+                  <text fg={theme.muted} wrapMode="none">{fitText(result.preview.trim(), Math.max(24, Math.floor(width * 0.68)))}</text>
+                </box>
+              )
+            })}
+            {projectSearchQuery && projectSearchResults.length === 0 && projectSearchStatus !== 'Searching…'
+              ? <text fg={theme.dim}>  No project matches</text>
+              : null}
+          </scrollbox>
+          <text fg={theme.dim}> Enter open · ↑↓ select · Ctrl+U clear · Esc close</text>
+        </box>
+      ) : null}
+
       {searchOpen && activeTab ? (
         <box
           position="absolute"
           top={2}
           right={2}
           width={Math.max(32, Math.min(56, Math.floor(width * 0.48)))}
-          height={4}
+          height={searchReplaceMode ? 6 : 4}
           zIndex={61}
           border
           borderStyle="rounded"
           borderColor={theme.amber}
           backgroundColor={theme.surface}
           flexDirection="column"
-          title=" Find in file "
+          title={searchReplaceMode ? ' Replace in file ' : ' Find in file '}
         >
           <box height={1} paddingX={1} backgroundColor={theme.surface2} flexDirection="row">
-            <text fg={theme.text} wrapMode="none">{`⌕ ${searchQuery || 'type to search…'}`}</text>
+            <text fg={searchInput === 'find' ? theme.amber : theme.text} wrapMode="none">{`⌕ ${searchQuery || 'type to search…'}`}</text>
             <box flexGrow={1} />
             <text fg={searchMatchCase ? theme.amber : theme.dim}>Aa</text>
+            <text fg={searchRegex ? theme.amber : theme.dim}> .*</text>
+            <text fg={searchSelectionOnly ? theme.amber : theme.dim}> Sel</text>
             <text fg={theme.dim}>{`  ${searchMatches.length === 0 ? '0/0' : `${Math.max(0, searchCursor) + 1}/${searchMatches.length}`}`}</text>
           </box>
-          <text fg={theme.dim}> Enter next · Shift+Enter previous · Alt+C match case · Esc close</text>
+          {searchReplaceMode ? (
+            <box height={1} paddingX={1} backgroundColor={theme.surface2}>
+              <text fg={searchInput === 'replace' ? theme.amber : theme.text} wrapMode="none">{`↪ ${replaceQuery || 'replace with…'}`}</text>
+            </box>
+          ) : null}
+          <text fg={searchResult.error ? theme.red : theme.dim}>{searchResult.error
+            ? fitText(`Invalid regex: ${searchResult.error}`, Math.max(28, Math.min(52, Math.floor(width * 0.44))))
+            : searchReplaceMode
+              ? ' Tab field · Enter next/replace · Alt+Enter all · Alt+C case · Alt+R regex · Alt+S selection · Esc'
+              : ' Enter next · Shift+Enter previous · Alt+C case · Alt+R regex · Alt+S selection · Esc'}</text>
+        </box>
+      ) : null}
+
+      {symbolNavigationKind && symbolNavigationResults.length > 0 ? (
+        <box
+          position="absolute"
+          top={2}
+          left={Math.max(2, Math.floor(width * 0.18))}
+          width={Math.max(42, Math.floor(width * 0.64))}
+          height={Math.min(15, symbolNavigationResults.length + 4)}
+          zIndex={62}
+          border
+          borderStyle="heavy"
+          borderColor={theme.cyan}
+          backgroundColor={theme.surface}
+          flexDirection="column"
+          title={` ${symbolNavigationKind} ${symbolNavigationCursor + 1}/${symbolNavigationResults.length} `}
+        >
+          <text fg={theme.dim}> Enter open · ↑↓ select · Esc close</text>
+          <scrollbox flexGrow={1} scrollAcceleration={scrollAcceleration}>
+            {symbolNavigationResults.map((result, index) => (
+              <box
+                key={`${result.location.uri}:${result.location.range.start.line}:${result.location.range.start.character}`}
+                height={1}
+                paddingX={1}
+                backgroundColor={index === symbolNavigationCursor ? theme.surface3 : theme.surface}
+                flexDirection="row"
+                onMouseUp={(event: MouseEvent) => {
+                  if (event.button !== 0) return
+                  event.stopPropagation()
+                  void jumpToEditorLocation(result.location)
+                }}
+              >
+                <text fg={index === symbolNavigationCursor ? theme.amber : theme.text} wrapMode="none">{fitText(result.label, Math.max(14, Math.floor(width * 0.22)))}</text>
+                <box flexGrow={1} />
+                <text fg={theme.dim} wrapMode="none">{fitText(result.detail, Math.max(20, Math.floor(width * 0.34)))}</text>
+              </box>
+            ))}
+          </scrollbox>
+        </box>
+      ) : null}
+
+      {renameOpen ? (
+        <box
+          position="absolute"
+          top={Math.max(3, Math.floor(height * 0.28))}
+          left={Math.max(3, Math.floor(width * 0.24))}
+          width={Math.max(38, Math.min(width - 6, Math.floor(width * 0.52)))}
+          height={4}
+          zIndex={64}
+          border
+          borderStyle="heavy"
+          borderColor={theme.amber}
+          backgroundColor={theme.surface}
+          flexDirection="column"
+          title=" Rename symbol "
+        >
+          <box height={1} paddingX={1} backgroundColor={theme.surface2}>
+            <text fg={theme.text} wrapMode="none">{`› ${renameQuery || 'new symbol name…'}`}</text>
+          </box>
+          <text fg={theme.dim}> Enter rename across workspace · Esc cancel</text>
+        </box>
+      ) : null}
+
+      {filePrompt ? (
+        <box
+          position="absolute"
+          top={Math.max(3, Math.floor(height * 0.25))}
+          left={Math.max(3, Math.floor(width * 0.2))}
+          width={Math.max(44, Math.min(width - 6, Math.floor(width * 0.6)))}
+          height={filePrompt.kind === 'delete' ? 7 : 6}
+          zIndex={74}
+          border
+          borderStyle="heavy"
+          borderColor={filePrompt.kind === 'delete' ? theme.red : theme.cyan}
+          backgroundColor={theme.surface}
+          paddingX={1}
+          flexDirection="column"
+          title={` ${filePrompt.kind === 'create' ? 'New file' : filePrompt.kind === 'rename' ? 'Rename file' : 'Delete file'} `}
+        >
+          {filePrompt.kind === 'delete' ? (
+            <>
+              <text fg={theme.red}>This permanently deletes the file from disk:</text>
+              <text fg={theme.text} wrapMode="none">{fitText(filePrompt.source ?? '', Math.max(30, Math.floor(width * 0.52)))}</text>
+              <box flexGrow={1} />
+              <text fg={theme.dim}>Enter confirm delete · Esc cancel</text>
+            </>
+          ) : (
+            <>
+              <box height={1} paddingX={1} backgroundColor={theme.surface2}>
+                <text fg={theme.text} wrapMode="none">{`› ${filePrompt.value || 'workspace/path…'}`}</text>
+              </box>
+              <box flexGrow={1} />
+              <text fg={theme.dim}>Workspace-relative path · Enter confirm · Esc cancel</text>
+            </>
+          )}
+        </box>
+      ) : null}
+
+      {recoveryConflictOpen && recoveryConflicts.length > 0 ? (
+        <box
+          position="absolute"
+          top={Math.max(3, Math.floor(height * 0.2))}
+          left={Math.max(3, Math.floor(width * 0.18))}
+          width={Math.max(46, Math.min(width - 6, Math.floor(width * 0.64)))}
+          height={Math.min(14, recoveryConflicts.length + 5)}
+          zIndex={72}
+          border
+          borderStyle="heavy"
+          borderColor={theme.red}
+          backgroundColor={theme.surface}
+          flexDirection="column"
+          title={` Recovery conflicts ${recoveryConflictCursor + 1}/${recoveryConflicts.length} `}
+        >
+          <text fg={theme.amber}>Disk changed after these snapshots; recovery was not applied automatically.</text>
+          <scrollbox flexGrow={1} scrollAcceleration={scrollAcceleration}>
+            {recoveryConflicts.map((conflict, index) => (
+              <box
+                key={conflict.path}
+                height={1}
+                paddingX={1}
+                backgroundColor={index === recoveryConflictCursor ? theme.surface3 : theme.surface}
+                onMouseUp={(event: MouseEvent) => {
+                  if (event.button !== 0) return
+                  event.stopPropagation()
+                  void openRecoveryConflict(conflict)
+                }}
+              >
+                <text fg={index === recoveryConflictCursor ? theme.amber : theme.text} wrapMode="none">{fitText(conflict.path, Math.max(28, Math.floor(width * 0.54)))}</text>
+              </box>
+            ))}
+          </scrollbox>
+          <text fg={theme.dim}> Enter load recovered copy · d discard selected · D discard all · Esc keep</text>
+        </box>
+      ) : null}
+
+      {codeActions.length > 0 ? (
+        <box
+          position="absolute"
+          top={Math.max(3, Math.floor(height * 0.2))}
+          left={Math.max(3, Math.floor(width * 0.2))}
+          width={Math.max(44, Math.min(width - 6, Math.floor(width * 0.6)))}
+          height={Math.min(14, codeActions.length + 4)}
+          zIndex={63}
+          border
+          borderStyle="heavy"
+          borderColor={theme.amber}
+          backgroundColor={theme.surface}
+          flexDirection="column"
+          title={` Code actions ${codeActionCursor + 1}/${codeActions.length} `}
+        >
+          <text fg={theme.dim}> Enter apply · ↑↓ select · Esc close</text>
+          <scrollbox flexGrow={1} scrollAcceleration={scrollAcceleration}>
+            {codeActions.map((action, index) => (
+              <box
+                key={`${action.title}:${action.kind ?? ''}:${index}`}
+                height={1}
+                paddingX={1}
+                backgroundColor={index === codeActionCursor ? theme.surface3 : theme.surface}
+                flexDirection="row"
+                onMouseUp={(event: MouseEvent) => {
+                  if (event.button !== 0) return
+                  event.stopPropagation()
+                  void applyCodeAction(action)
+                }}
+              >
+                <text fg={action.preferred ? theme.green : index === codeActionCursor ? theme.amber : theme.text}>{action.preferred ? '● ' : '◇ '}</text>
+                <text fg={index === codeActionCursor ? theme.text : theme.muted} wrapMode="none">{fitText(action.title, Math.max(20, Math.floor(width * 0.38)))}</text>
+                <box flexGrow={1} />
+                <text fg={theme.dim} wrapMode="none">{fitText(action.kind ?? (action.edit ? 'edit' : 'command'), 18)}</text>
+              </box>
+            ))}
+          </scrollbox>
         </box>
       ) : null}
 

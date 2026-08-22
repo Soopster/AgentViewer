@@ -308,6 +308,14 @@ fn spawn_packaged_backend(
     // instance died unexpectedly and left both children reparented under
     // launchd with nothing left to signal them.
     envs.push(("AGENT_VIEWER_PARENT_PID".to_string(), own_pid.clone()));
+    let typescript_lsp_bin =
+        resources
+            .join("typescript-lsp")
+            .join(if cfg!(windows) { "tsc.exe" } else { "tsc" });
+    envs.push((
+        "AGENT_VIEWER_TYPESCRIPT_LSP_BIN".to_string(),
+        typescript_lsp_bin.to_string_lossy().to_string(),
+    ));
     // Point the embedded-terminal route (lib/terminalSession.ts) at the TUI
     // binary bundled as a sidecar, so packaged installs need only Node (no
     // Bun) to run the OpenTUI terminal inside the app.

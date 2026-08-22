@@ -22,6 +22,13 @@ const staticDir = path.join(repoRoot, '.next', 'static')
 const publicDir = path.join(repoRoot, 'public')
 const resourcesDir = path.join(repoRoot, 'src-tauri', 'resources', 'next-standalone')
 const binariesDir = path.join(repoRoot, 'src-tauri', 'binaries')
+const typescriptLspSourceDir = path.join(
+  repoRoot,
+  'node_modules',
+  '@typescript',
+  `typescript-${process.platform}-${process.arch}`,
+  'lib',
+)
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { stdio: 'inherit', ...options })
@@ -59,6 +66,10 @@ function main() {
   if (existsSync(publicDir)) {
     cpSync(publicDir, path.join(resourcesDir, 'public'), { recursive: true })
   }
+  if (!existsSync(typescriptLspSourceDir)) {
+    throw new Error(`TypeScript 7 LSP runtime not found at ${typescriptLspSourceDir} — run \`npm install\` first.`)
+  }
+  cpSync(typescriptLspSourceDir, path.join(resourcesDir, 'typescript-lsp'), { recursive: true })
 
   console.log('[prepare-desktop] compiling AHP sidecar with bun build --compile...')
   mkdirSync(binariesDir, { recursive: true })
@@ -74,7 +85,7 @@ function main() {
 
   console.log('[prepare-desktop] compiling TUI with bun build --compile...')
   const tuiOutfile = path.join(binariesDir, `agent-viewer-tui-${triple}`)
-  // The three workers are passed as extra entrypoints so `bun build --compile`
+  // The workers are passed as extra entrypoints so `bun build --compile`
   // embeds them in the binary under `$bunfs`. The worker clients resolve their
   // runtime URL via tui/opentui/workerUrl.ts. Entrypoint paths must be RELATIVE
   // (with cwd at the repo root): bun keys $bunfs entries by the path string
@@ -91,6 +102,7 @@ function main() {
       'tui/opentui/threadingWorker.ts',
       'tui/opentui/metadataWorker.ts',
       'tui/opentui/analyticsWorker.ts',
+      'tui/opentui/editorProjectSearchWorker.ts',
       '--compile',
       '--outfile',
       tuiOutfile,

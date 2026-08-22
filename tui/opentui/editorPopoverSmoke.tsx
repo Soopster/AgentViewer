@@ -13,8 +13,8 @@ import { registerExtraTreeSitterParsers } from './treeSitterParsers'
 const cwd = await mkdtemp(join(tmpdir(), 'agent-viewer-editor-'))
 const filePath = join(cwd, 'main.ts')
 const secondFilePath = join(cwd, 'second.ts')
-const fakeLspPath = join(cwd, 'typescript-language-server')
-const originalPath = process.env.PATH
+const fakeLspPath = join(cwd, 'tsc')
+const originalTypeScriptLspBin = process.env.AGENT_VIEWER_TYPESCRIPT_LSP_BIN
 let handleKey: ((key: EditorKeyEvent) => boolean) | null = null
 let closeCount = 0
 const notices: Array<{ kind: 'info' | 'error'; message: string }> = []
@@ -91,11 +91,66 @@ process.stdin.on('data', (chunk) => {
           : [],
       },
     })
+    if (message.method === 'textDocument/definition') send({
+      jsonrpc: '2.0', id: message.id, result: {
+        targetUri: message.params.textDocument.uri.replace('main.ts', 'second.ts'),
+        targetRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 26 } },
+        targetSelectionRange: { start: { line: 0, character: 13 }, end: { line: 0, character: 19 } },
+      },
+    })
+    if (message.method === 'textDocument/references') send({
+      jsonrpc: '2.0', id: message.id, result: [
+        { uri: message.params.textDocument.uri, range: { start: { line: 0, character: 6 }, end: { line: 0, character: 12 } } },
+        { uri: message.params.textDocument.uri.replace('main.ts', 'second.ts'), range: { start: { line: 0, character: 13 }, end: { line: 0, character: 19 } } },
+      ],
+    })
+    if (message.method === 'textDocument/implementation') send({
+      jsonrpc: '2.0', id: message.id, result: [{
+        uri: message.params.textDocument.uri.replace('main.ts', 'second.ts'),
+        range: { start: { line: 0, character: 13 }, end: { line: 0, character: 19 } },
+      }],
+    })
+    if (message.method === 'textDocument/prepareRename') send({
+      jsonrpc: '2.0', id: message.id, result: {
+        range: { start: { line: 1, character: 6 }, end: { line: 1, character: 12 } },
+        placeholder: 'answer',
+      },
+    })
+    if (message.method === 'textDocument/rename') {
+      const edits = []
+      for (const [lineIndex, line] of documentText.split('\n').entries()) {
+        const pattern = /\banswer\b/g
+        for (let match = pattern.exec(line); match; match = pattern.exec(line)) {
+          edits.push({ range: { start: { line: lineIndex, character: match.index }, end: { line: lineIndex, character: match.index + 6 } }, newText: message.params.newName })
+        }
+      }
+      send({ jsonrpc: '2.0', id: message.id, result: { changes: {
+        [message.params.textDocument.uri]: edits,
+        [message.params.textDocument.uri.replace('main.ts', 'second.ts')]: [
+          { range: { start: { line: 0, character: 13 }, end: { line: 0, character: 19 } }, newText: message.params.newName },
+        ],
+      } } })
+    }
+    if (message.method === 'textDocument/formatting') send({
+      jsonrpc: '2.0', id: message.id, result: [{
+        range: { start: { line: 1, character: 0 }, end: { line: 1, character: 5 } },
+        newText: 'CONST',
+      }],
+    })
+    if (message.method === 'textDocument/codeAction') send({
+      jsonrpc: '2.0', id: message.id, result: [
+        { title: 'Explain issue', kind: 'source', command: { command: 'fake.explain' } },
+        { title: 'Insert preferred fix', kind: 'quickfix', isPreferred: true, edit: { changes: {
+          [message.params.textDocument.uri]: [{ range: message.params.range, newText: 'fixed' }],
+        } } },
+      ],
+    })
+    if (message.method === 'workspace/executeCommand') send({ jsonrpc: '2.0', id: message.id, result: null })
   }
 })
 `, 'utf8')
   await chmod(fakeLspPath, 0o755)
-  process.env.PATH = `${cwd}:${originalPath ?? ''}`
+  process.env.AGENT_VIEWER_TYPESCRIPT_LSP_BIN = fakeLspPath
   const longLine = `const wrappedText = '${'word '.repeat(36).trim()}'`
   const overflowLines = Array.from({ length: 36 }, (_, index) => `const filler${index} = ${index}`).join('\n')
   await writeFile(filePath, `const answer = 41\nconst otherAnswer = answer + 1\n  const nested = true\n${longLine}\n${overflowLines}\n`, 'utf8')
@@ -136,6 +191,22 @@ process.stdin.on('data', (chunk) => {
 
     const editor = setup.renderer.root.findDescendantById('project-editor-textarea') as TextareaRenderable | null
     if (!editor) throw new Error('Editor textarea was not mounted')
+    const firstAnswer = editor.plainText.indexOf('answer')
+    const secondAnswer = editor.plainText.indexOf('answer', firstAnswer + 1)
+    editor.setSelection(firstAnswer, firstAnswer + 'answer'.length)
+    act(() => { handleKey?.({ name: 'd', ctrl: true, shift: false, sequence: '\u0004' }) })
+    await flush(setup, 150)
+    if (!setup.captureCharFrame().includes('2 cursors')) throw new Error('Ctrl+D did not expose the multi-cursor state')
+    act(() => { handleKey?.({ name: 'x', ctrl: false, shift: false, sequence: 'x' }) })
+    await flush(setup, 150)
+    if (editor.plainText.slice(firstAnswer, firstAnswer + 1) !== 'x'
+      || editor.plainText.slice(secondAnswer - ('answer'.length - 1), secondAnswer - ('answer'.length - 2)) !== 'x') {
+      throw new Error(`Typing with multiple cursors did not replace both occurrences: ${JSON.stringify(editor.plainText.slice(0, 70))}`)
+    }
+    act(() => { handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '\u001b' }) })
+    act(() => { editor.undo() })
+    await flush(setup, 150)
+    if (!editor.plainText.startsWith('const answer = 41')) throw new Error('Undo did not restore the multi-cursor bulk edit atomically')
     const explorerScrollbox = setup.renderer.root.findDescendantById('project-editor-explorer-scrollbox') as ScrollBoxRenderable | null
     if (!explorerScrollbox?.verticalScrollBar.visible || explorerScrollbox.scrollHeight <= explorerScrollbox.viewport.height) {
       throw new Error(`Explorer scrollbar was not visible for an overflowing tree: ${JSON.stringify({ scrollHeight: explorerScrollbox?.scrollHeight, viewportHeight: explorerScrollbox?.viewport.height, visible: explorerScrollbox?.verticalScrollBar.visible })}`)
@@ -167,6 +238,18 @@ process.stdin.on('data', (chunk) => {
     await setup.flush()
     if (!editor.plainText.includes('\n  keptIndent')) {
       throw new Error(`Enter did not preserve current indentation: ${JSON.stringify(editor.plainText)}`)
+    }
+    act(() => { handleKey?.({ name: '{', ctrl: false, shift: true, sequence: '{' }) })
+    await setup.flush()
+    const pairOffset = editor.cursorOffset
+    if (editor.plainText.slice(pairOffset - 1, pairOffset + 1) !== '{}') {
+      throw new Error(`Typing an opening delimiter did not insert a balanced pair: ${JSON.stringify(editor.plainText)}`)
+    }
+    act(() => { handleKey?.({ name: 'return', ctrl: false, shift: false, sequence: '\r' }) })
+    await act(async () => { await setup.mockInput.typeText('nestedValue') })
+    await setup.flush()
+    if (!editor.plainText.includes('{\n    nestedValue\n  }')) {
+      throw new Error(`Enter between delimiters did not create an indented block: ${JSON.stringify(editor.plainText)}`)
     }
     const unwrappedLineCount = editor.editorView.getTotalVirtualLineCount()
     act(() => { handleKey?.({ name: 'z', ctrl: false, shift: false, option: true, sequence: 'z' }) })
@@ -320,6 +403,24 @@ process.stdin.on('data', (chunk) => {
     await setup.flush()
     if (editor?.logicalCursor.row !== 1) throw new Error(`Ctrl+G did not move to line 2: ${JSON.stringify(editor?.logicalCursor)}`)
 
+    act(() => { handleKey?.({ name: 'r', ctrl: true, shift: false, sequence: '\u0012' }) })
+    await setup.flush()
+    if (!setup.captureCharFrame().includes('Replace in file')) throw new Error('Ctrl+R did not open in-buffer replace')
+    for (const character of 'filler') {
+      act(() => { handleKey?.({ name: character, ctrl: false, shift: false, sequence: character }) })
+    }
+    act(() => { handleKey?.({ name: 'tab', ctrl: false, shift: false, sequence: '\t' }) })
+    for (const character of 'entry') {
+      act(() => { handleKey?.({ name: character, ctrl: false, shift: false, sequence: character }) })
+    }
+    act(() => { handleKey?.({ name: 'return', ctrl: false, shift: false, option: true, sequence: '\r' }) })
+    await setup.flush()
+    if (editor.plainText.includes('filler') || !editor.plainText.includes('const entry35 = 35')
+      || !setup.captureCharFrame().includes('Replaced 36 occurrences')) {
+      throw new Error(`Alt+Enter replace-all did not update every match atomically: ${JSON.stringify(editor.plainText)}`)
+    }
+    act(() => { handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '\u001b' }) })
+
     act(() => { handleKey?.({ name: 'p', ctrl: true, shift: false, sequence: '\u0010' }) })
     act(() => { handleKey?.({ name: '>', ctrl: false, shift: true, sequence: '>' }) })
     await setup.flush()
@@ -356,12 +457,151 @@ process.stdin.on('data', (chunk) => {
     await flush(setup, 150)
     if (!setup.captureCharFrame().includes('export const second')) throw new Error('Ctrl+Shift+Tab did not switch to the next open file')
 
-    console.log('Editor popover edit/search/navigation/quick-open smoke passed')
+    act(() => { handleKey?.({ name: 'tab', ctrl: true, shift: false, sequence: '\u0009' }) })
+    await flush(setup, 150)
+    const navigationOrigin = setup.renderer.root.findDescendantById('project-editor-textarea') as TextareaRenderable | null
+    act(() => { navigationOrigin?.setCursor(1, 8) })
+    await setup.flush()
+    act(() => { handleKey?.({ name: 'f2', ctrl: false, shift: false, sequence: '' }) })
+    await flush(setup, 200)
+    if (!setup.captureCharFrame().includes('Rename symbol') || !setup.captureCharFrame().includes('answer')) {
+      throw new Error(`F2 did not prepare a symbol rename:\n${setup.captureCharFrame()}`)
+    }
+    for (let index = 0; index < 'answer'.length; index += 1) {
+      act(() => { handleKey?.({ name: 'backspace', ctrl: false, shift: false, sequence: '\u007f' }) })
+    }
+    for (const character of 'renamedAnswer') {
+      act(() => { handleKey?.({ name: character, ctrl: false, shift: false, sequence: character }) })
+    }
+    act(() => { handleKey?.({ name: 'return', ctrl: false, shift: false, sequence: '\r' }) })
+    await flush(setup, 350)
+    if (!navigationOrigin?.plainText.includes('const renamedAnswer = 41')
+      || !navigationOrigin.plainText.includes('= renamedAnswer + 1')
+      || !setup.captureCharFrame().includes('Renamed symbol to')) {
+      throw new Error(`F2 rename did not apply all active-buffer workspace edits: ${JSON.stringify(navigationOrigin?.plainText)}`)
+    }
+    act(() => { navigationOrigin?.setCursor(1, 25) })
+    await setup.flush()
+    act(() => { handleKey?.({ name: 'f12', ctrl: false, shift: false, sequence: '' }) })
+    await flush(setup, 300)
+    const definitionEditor = setup.renderer.root.findDescendantById('project-editor-textarea') as TextareaRenderable | null
+    if (!definitionEditor || !setup.captureCharFrame().includes('second.ts') || !definitionEditor.plainText.includes('renamedAnswer')
+      || definitionEditor.logicalCursor.row !== 0 || definitionEditor.logicalCursor.col !== 13) {
+      throw new Error(`F12 did not jump to the LSP definition: ${JSON.stringify({ frame: setup.captureCharFrame(), cursor: definitionEditor?.logicalCursor })}`)
+    }
+    act(() => { handleKey?.({ name: 't', ctrl: true, shift: false, sequence: '\u0014' }) })
+    await flush(setup, 300)
+    const returnedEditor = setup.renderer.root.findDescendantById('project-editor-textarea') as TextareaRenderable | null
+    if (!returnedEditor || !setup.captureCharFrame().includes('main.ts')
+      || returnedEditor.logicalCursor.row !== 1 || returnedEditor.logicalCursor.col !== 25) {
+      throw new Error(`Ctrl+T did not restore the previous jump position: ${JSON.stringify({ frame: setup.captureCharFrame(), cursor: returnedEditor?.logicalCursor })}`)
+    }
+    act(() => { handleKey?.({ name: 'f12', ctrl: false, shift: true, sequence: '' }) })
+    await flush(setup, 250)
+    const referencesFrame = setup.captureCharFrame()
+    if (!referencesFrame.includes('references 1/2') || !referencesFrame.includes('second.ts:1:14')) {
+      throw new Error(`Shift+F12 did not show the multi-location reference picker:\n${referencesFrame}`)
+    }
+    act(() => { handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '\u001b' }) })
+    await setup.flush()
+
+    act(() => { handleKey?.({ name: '.', ctrl: false, shift: false, option: true, sequence: '.' }) })
+    await flush(setup, 250)
+    const actionsFrame = setup.captureCharFrame()
+    if (!actionsFrame.includes('Code actions 1/2') || !actionsFrame.includes('Insert preferred fix')) {
+      throw new Error(`Alt+. did not show preferred-first code actions:\n${actionsFrame}`)
+    }
+    act(() => { handleKey?.({ name: 'return', ctrl: false, shift: false, sequence: '\r' }) })
+    await flush(setup, 250)
+    const actionEditor = setup.renderer.root.findDescendantById('project-editor-textarea') as TextareaRenderable | null
+    if (!actionEditor?.plainText.includes('fixed') || !setup.captureCharFrame().includes('Applied code action')) {
+      throw new Error(`Applying a direct-edit code action did not update the buffer: ${JSON.stringify(actionEditor?.plainText)}`)
+    }
+    act(() => { handleKey?.({ name: 'f', ctrl: false, shift: true, option: true, sequence: 'f' }) })
+    await flush(setup, 250)
+    if (!actionEditor.plainText.includes('\nCONST renamedAnswer') || !setup.captureCharFrame().includes('Formatted main.ts')) {
+      throw new Error(`Shift+Alt+F did not apply document formatting edits: ${JSON.stringify(actionEditor.plainText)}`)
+    }
+
+    act(() => { handleKey?.({ name: '/', ctrl: false, shift: false, option: true, sequence: '/' }) })
+    for (const character of 'renamedAnswer') {
+      act(() => { handleKey?.({ name: character, ctrl: false, shift: false, sequence: character }) })
+    }
+    await flush(setup, 500)
+    const projectSearchFrame = setup.captureCharFrame()
+    if (!projectSearchFrame.includes('Project search') || !projectSearchFrame.includes('3 matches')
+      || !projectSearchFrame.includes('second.ts:1:14')) {
+      throw new Error(`Project search did not merge unsaved open-buffer matches with disk results:\n${projectSearchFrame}`)
+    }
+    act(() => { handleKey?.({ name: 'down', ctrl: false, shift: false, sequence: '\u001b[B' }) })
+    act(() => { handleKey?.({ name: 'down', ctrl: false, shift: false, sequence: '\u001b[B' }) })
+    act(() => { handleKey?.({ name: 'return', ctrl: false, shift: false, sequence: '\r' }) })
+    await flush(setup, 250)
+    const projectSearchEditor = setup.renderer.root.findDescendantById('project-editor-textarea') as TextareaRenderable | null
+    if (!projectSearchEditor || !setup.captureCharFrame().includes('second.ts')
+      || projectSearchEditor.logicalCursor.row !== 0 || projectSearchEditor.logicalCursor.col !== 13) {
+      throw new Error(`Opening a project-search result did not jump to its exact unsaved-buffer location: ${JSON.stringify(projectSearchEditor?.logicalCursor)}`)
+    }
+    projectSearchEditor.setSelection(0, 'export const renamedAnswer = true'.length)
+    act(() => { handleKey?.({ name: '/', ctrl: true, shift: false, sequence: '\u001f' }) })
+    await setup.flush()
+    if (!projectSearchEditor.plainText.startsWith('// export const renamedAnswer')) {
+      throw new Error(`Ctrl+/ did not comment the selected TypeScript line: ${JSON.stringify(projectSearchEditor.plainText)}`)
+    }
+    act(() => { handleKey?.({ name: '/', ctrl: true, shift: false, sequence: '\u001f' }) })
+    act(() => { handleKey?.({ name: 'tab', ctrl: false, shift: false, sequence: '\t' }) })
+    await setup.flush()
+    if (!projectSearchEditor.plainText.startsWith('  export const renamedAnswer')) {
+      throw new Error(`Tab did not indent the selected line: ${JSON.stringify(projectSearchEditor.plainText)}`)
+    }
+    act(() => { handleKey?.({ name: 'tab', ctrl: false, shift: true, sequence: '\u001b[Z' }) })
+    await setup.flush()
+    if (!projectSearchEditor.plainText.startsWith('export const renamedAnswer')) {
+      throw new Error(`Shift+Tab did not outdent the selected line: ${JSON.stringify(projectSearchEditor.plainText)}`)
+    }
+    act(() => { handleKey?.({ name: 's', ctrl: true, shift: true, sequence: '\u0013' }) })
+    await flush(setup, 250)
+    const [savedMain, savedSecond] = await Promise.all([readFile(filePath, 'utf8'), readFile(secondFilePath, 'utf8')])
+    if (!savedMain.includes('CONST renamedAnswer') || !savedSecond.includes('renamedAnswer')
+      || !setup.captureCharFrame().includes('Saved all 2 modified files')) {
+      throw new Error(`Ctrl+Shift+S did not persist every dirty refactor buffer: ${JSON.stringify({ savedMain, savedSecond })}`)
+    }
+
+    act(() => { handleKey?.({ name: 'n', ctrl: true, shift: false, sequence: '\u000e' }) })
+    for (const character of 'created.ts') {
+      act(() => { handleKey?.({ name: character, ctrl: false, shift: false, sequence: character }) })
+    }
+    act(() => { handleKey?.({ name: 'return', ctrl: false, shift: false, sequence: '\r' }) })
+    await flush(setup, 300)
+    if (await readFile(join(cwd, 'created.ts'), 'utf8') !== ''
+      || !setup.captureCharFrame().includes('Created created.ts')) {
+      throw new Error(`Ctrl+N did not create and open a workspace file:\n${setup.captureCharFrame()}`)
+    }
+    await writeFile(join(cwd, 'created.ts'), 'export const external = 1\n', 'utf8')
+    await flush(setup, 1_750)
+    const createdEditor = setup.renderer.root.findDescendantById('project-editor-textarea') as TextareaRenderable | null
+    if (createdEditor?.plainText !== 'export const external = 1\n'
+      || !setup.captureCharFrame().includes('Reloaded 1 externally changed file: created.ts')) {
+      throw new Error(`Clean buffer did not auto-reload an external disk edit: ${JSON.stringify(createdEditor?.plainText)}`)
+    }
+    act(() => { createdEditor.insertText('local ') })
+    await writeFile(join(cwd, 'created.ts'), 'export const external = 2\n', 'utf8')
+    await flush(setup, 1_750)
+    if (!setup.captureCharFrame().includes('disk changed')) throw new Error('Dirty external edit did not show a disk-conflict warning')
+    act(() => { handleKey?.({ name: 's', ctrl: true, shift: false, sequence: '\u0013' }) })
+    await flush(setup, 300)
+    if (await readFile(join(cwd, 'created.ts'), 'utf8') !== 'export const external = 2\n'
+      || !setup.captureCharFrame().includes('changed on disk')) {
+      throw new Error('Stale Ctrl+S overwrote an external disk edit')
+    }
+
+    console.log('Editor popover edit/multi-cursor/project-search/LSP-refactor/safe-save/auto-reload/file-create/navigation/quick-open smoke passed')
   } finally {
     act(() => setup.renderer.destroy())
   }
 } finally {
-  process.env.PATH = originalPath
+  if (originalTypeScriptLspBin == null) delete process.env.AGENT_VIEWER_TYPESCRIPT_LSP_BIN
+  else process.env.AGENT_VIEWER_TYPESCRIPT_LSP_BIN = originalTypeScriptLspBin
   syntaxStyle.destroy()
   await rm(cwd, { recursive: true, force: true })
 }

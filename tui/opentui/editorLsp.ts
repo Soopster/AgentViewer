@@ -1,4 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { createRequire } from 'node:module'
+import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 export type EditorPosition = { line: number; character: number }
@@ -36,6 +38,28 @@ export type EditorSignatureHelp = {
   parameters: string[]
 }
 
+export type EditorLocation = {
+  uri: string
+  range: { start: EditorPosition; end: EditorPosition }
+}
+
+export type EditorWorkspaceEdit = {
+  changes: Array<{ uri: string; edits: EditorTextEdit[] }>
+}
+
+export type EditorPrepareRename = {
+  range: { start: EditorPosition; end: EditorPosition }
+  placeholder?: string
+}
+
+export type EditorCodeAction = {
+  title: string
+  kind?: string
+  preferred?: boolean
+  edit?: EditorWorkspaceEdit
+  command?: { command: string; arguments?: unknown[] }
+}
+
 export type EditorDiagnostic = {
   line: number
   character: number
@@ -48,6 +72,22 @@ export type EditorDiagnostic = {
 
 export type EditorLspServerSpec = { command: string; args: string[]; name: string }
 
+const moduleRequire = createRequire(import.meta.url)
+
+function typescriptLspCommand(): string {
+  const packagedCommand = process.env.AGENT_VIEWER_TYPESCRIPT_LSP_BIN
+  if (packagedCommand) return packagedCommand
+  try {
+    const platformPackage = `@typescript/typescript-${process.platform}-${process.arch}/package.json`
+    const packagePath = moduleRequire.resolve(platformPackage)
+    return join(dirname(packagePath), 'lib', process.platform === 'win32' ? 'tsc.exe' : 'tsc')
+  } catch {
+    return 'tsc'
+  }
+}
+
+const TYPESCRIPT_FILETYPES = new Set(['javascript', 'javascriptreact', 'typescript', 'typescriptreact'])
+
 const SERVER_BY_FILETYPE: Readonly<Record<string, readonly EditorLspServerSpec[]>> = {
   bash: [{ command: 'bash-language-server', args: ['start'], name: 'bash-language-server' }],
   c: [{ command: 'clangd', args: ['--background-index'], name: 'clangd' }],
@@ -56,8 +96,6 @@ const SERVER_BY_FILETYPE: Readonly<Record<string, readonly EditorLspServerSpec[]
   css: [{ command: 'vscode-css-language-server', args: ['--stdio'], name: 'css-language-server' }],
   go: [{ command: 'gopls', args: [], name: 'gopls' }],
   html: [{ command: 'vscode-html-language-server', args: ['--stdio'], name: 'html-language-server' }],
-  javascript: [{ command: 'typescript-language-server', args: ['--stdio'], name: 'typescript-language-server' }],
-  javascriptreact: [{ command: 'typescript-language-server', args: ['--stdio'], name: 'typescript-language-server' }],
   json: [{ command: 'vscode-json-language-server', args: ['--stdio'], name: 'json-language-server' }],
   lua: [{ command: 'lua-language-server', args: [], name: 'lua-language-server' }],
   python: [
@@ -67,14 +105,19 @@ const SERVER_BY_FILETYPE: Readonly<Record<string, readonly EditorLspServerSpec[]
   ],
   ruby: [{ command: 'ruby-lsp', args: [], name: 'ruby-lsp' }],
   rust: [{ command: 'rust-analyzer', args: [], name: 'rust-analyzer' }],
-  typescript: [{ command: 'typescript-language-server', args: ['--stdio'], name: 'typescript-language-server' }],
-  typescriptreact: [{ command: 'typescript-language-server', args: ['--stdio'], name: 'typescript-language-server' }],
   vue: [{ command: 'vue-language-server', args: ['--stdio'], name: 'vue-language-server' }],
   yaml: [{ command: 'yaml-language-server', args: ['--stdio'], name: 'yaml-language-server' }],
 }
 
+export function getEditorLspServerSpecs(filetype: string): readonly EditorLspServerSpec[] {
+  if (TYPESCRIPT_FILETYPES.has(filetype)) {
+    return [{ command: typescriptLspCommand(), args: ['--lsp', '--stdio'], name: 'TypeScript 7' }]
+  }
+  return SERVER_BY_FILETYPE[filetype] ?? []
+}
+
 type JsonRpcMessage = {
-  id?: number
+  id?: number | string
   method?: string
   result?: unknown
   error?: { code?: number; message?: string }
@@ -121,6 +164,103 @@ function textEdit(value: unknown): EditorTextEdit | null {
   const end = position(range.end)
   if (!start || !end) return null
   return { range: { start, end }, newText: record.newText }
+}
+
+function location(value: unknown): EditorLocation | null {
+  if (!value || typeof value !== 'object') return null
+  const record = value as Record<string, unknown>
+  const uri = typeof record.uri === 'string'
+    ? record.uri
+    : typeof record.targetUri === 'string' ? record.targetUri : null
+  const rangeValue = record.targetSelectionRange ?? record.targetRange ?? record.range
+  if (!uri || !rangeValue || typeof rangeValue !== 'object') return null
+  const range = rangeValue as Record<string, unknown>
+  const start = position(range.start)
+  const end = position(range.end)
+  return start && end ? { uri, range: { start, end } } : null
+}
+
+function locations(value: unknown): EditorLocation[] {
+  const values = Array.isArray(value) ? value : value ? [value] : []
+  return values.flatMap((entry) => {
+    const parsed = location(entry)
+    return parsed ? [parsed] : []
+  })
+}
+
+function editorRange(value: unknown): { start: EditorPosition; end: EditorPosition } | null {
+  if (!value || typeof value !== 'object') return null
+  const record = value as Record<string, unknown>
+  const start = position(record.start)
+  const end = position(record.end)
+  return start && end ? { start, end } : null
+}
+
+function workspaceEdit(value: unknown): EditorWorkspaceEdit | null {
+  if (!value || typeof value !== 'object') return null
+  const record = value as Record<string, unknown>
+  const grouped = new Map<string, EditorTextEdit[]>()
+  const add = (uri: unknown, values: unknown) => {
+    if (typeof uri !== 'string' || !Array.isArray(values)) return
+    const edits = values.flatMap((entry) => {
+      const parsed = textEdit(entry)
+      return parsed ? [parsed] : []
+    })
+    if (edits.length > 0) grouped.set(uri, [...(grouped.get(uri) ?? []), ...edits])
+  }
+  if (record.changes && typeof record.changes === 'object') {
+    for (const [uri, edits] of Object.entries(record.changes as Record<string, unknown>)) add(uri, edits)
+  }
+  if (Array.isArray(record.documentChanges)) {
+    for (const change of record.documentChanges) {
+      if (!change || typeof change !== 'object') continue
+      const item = change as Record<string, unknown>
+      const document = item.textDocument as Record<string, unknown> | undefined
+      add(document?.uri, item.edits)
+    }
+  }
+  return { changes: [...grouped].map(([uri, edits]) => ({ uri, edits })) }
+}
+
+function codeAction(value: unknown): EditorCodeAction | null {
+  if (!value || typeof value !== 'object') return null
+  const record = value as Record<string, unknown>
+  if (typeof record.title !== 'string') return null
+  const rawCommand = typeof record.command === 'string'
+    ? { command: record.command, arguments: Array.isArray(record.arguments) ? record.arguments : undefined }
+    : record.command && typeof record.command === 'object'
+      ? record.command as Record<string, unknown>
+      : null
+  return {
+    title: record.title,
+    kind: typeof record.kind === 'string' ? record.kind : undefined,
+    preferred: record.isPreferred === true,
+    edit: workspaceEdit(record.edit) ?? undefined,
+    command: rawCommand && typeof rawCommand.command === 'string'
+      ? { command: rawCommand.command, arguments: Array.isArray(rawCommand.arguments) ? rawCommand.arguments : undefined }
+      : undefined,
+  }
+}
+
+function editorDiagnostics(value: unknown): EditorDiagnostic[] {
+  if (!Array.isArray(value)) return []
+  const diagnostics: EditorDiagnostic[] = []
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object') continue
+    const item = raw as Record<string, unknown>
+    const range = item.range as { start?: EditorPosition; end?: EditorPosition } | undefined
+    if (!range?.start || !range.end || typeof item.message !== 'string') continue
+    diagnostics.push({
+      line: range.start.line,
+      character: range.start.character,
+      endLine: range.end.line,
+      endCharacter: range.end.character,
+      severity: item.severity === 1 || item.severity === 2 || item.severity === 3 || item.severity === 4 ? item.severity : 3,
+      message: item.message,
+      source: typeof item.source === 'string' ? item.source : undefined,
+    })
+  }
+  return diagnostics
 }
 
 type CompletionDefaults = { editRange?: unknown; data?: unknown }
@@ -181,8 +321,12 @@ export class EditorLspClient {
   private lastText: string | null = null
   private completionResolveProvider = false
   private completionTriggerCharacters = new Set<string>()
+  private pullDiagnostics = false
+  private diagnosticRequest = 0
+  private serverStderr = ''
   private diagnosticsHandler: (diagnostics: EditorDiagnostic[]) => void = () => {}
   private statusHandler: (status: EditorLspStatus) => void = () => {}
+  private workspaceEditHandler: (edit: EditorWorkspaceEdit) => Promise<boolean> = async () => false
 
   constructor(
     private readonly rootPath: string,
@@ -199,8 +343,12 @@ export class EditorLspClient {
     this.statusHandler = handler
   }
 
+  onWorkspaceEdit(handler: (edit: EditorWorkspaceEdit) => Promise<boolean>): void {
+    this.workspaceEditHandler = handler
+  }
+
   async start(text: string): Promise<boolean> {
-    const specs = this.serverSpecs ?? SERVER_BY_FILETYPE[this.filetype] ?? []
+    const specs = this.serverSpecs ?? getEditorLspServerSpecs(this.filetype)
     while (!this.stopped && this.serverIndex < specs.length) {
       const spec = specs[this.serverIndex++]!
       this.statusHandler({ state: 'starting', name: spec.name })
@@ -226,6 +374,8 @@ export class EditorLspClient {
                 contextSupport: true,
               },
               hover: { contentFormat: ['markdown', 'plaintext'] },
+              definition: { linkSupport: true },
+              implementation: { linkSupport: true },
               signatureHelp: {
                 signatureInformation: {
                   documentationFormat: ['markdown', 'plaintext'],
@@ -235,11 +385,18 @@ export class EditorLspClient {
                 contextSupport: true,
               },
               publishDiagnostics: { relatedInformation: true },
+              diagnostic: { dynamicRegistration: false, relatedDocumentSupport: false },
               synchronization: { didSave: true, willSave: false },
             },
-            workspace: { workspaceFolders: true },
+            workspace: {
+              workspaceFolders: true,
+              configuration: true,
+              applyEdit: true,
+              workspaceEdit: { documentChanges: true },
+            },
           },
         }, 8_000)
+        if (this.stopped) return false
         const serverCapabilities = initializeResult && typeof initializeResult === 'object'
           ? (initializeResult as { capabilities?: Record<string, unknown> }).capabilities
           : undefined
@@ -252,6 +409,7 @@ export class EditorLspClient {
             ? completionProvider.triggerCharacters.filter((value): value is string => typeof value === 'string')
             : [],
         )
+        this.pullDiagnostics = Boolean(serverCapabilities?.diagnosticProvider)
         this.notify('initialized', {})
         this.openedUri = pathToFileURL(this.filePath).href
         this.notify('textDocument/didOpen', {
@@ -264,11 +422,14 @@ export class EditorLspClient {
         })
         this.lastText = text
         this.statusHandler({ state: 'ready', name: spec.name })
+        void this.refreshDiagnostics()
         return true
       } catch (error) {
         this.disposeChild()
+        if (this.stopped) return false
         if (this.serverIndex >= specs.length) {
-          const message = error instanceof Error ? error.message : 'language server failed'
+          const message = this.serverStderr.trim()
+            || (error instanceof Error ? error.message : 'language server failed')
           const missing = /ENOENT|not found/i.test(message)
           this.statusHandler(missing
             ? { state: 'unavailable', name: spec.name }
@@ -289,11 +450,13 @@ export class EditorLspClient {
       textDocument: { uri: this.openedUri, version: this.version },
       contentChanges: [{ text }],
     })
+    void this.refreshDiagnostics()
   }
 
   saved(text: string): void {
     if (!this.openedUri || !this.child) return
     this.notify('textDocument/didSave', { textDocument: { uri: this.openedUri }, text })
+    void this.refreshDiagnostics()
   }
 
   isCompletionTriggerCharacter(character: string | undefined): boolean {
@@ -405,6 +568,76 @@ export class EditorLspClient {
     }
   }
 
+  async definition(position: EditorPosition): Promise<EditorLocation[]> {
+    return this.documentLocations('textDocument/definition', position)
+  }
+
+  async references(position: EditorPosition): Promise<EditorLocation[]> {
+    return this.documentLocations('textDocument/references', position, { includeDeclaration: true })
+  }
+
+  async implementation(position: EditorPosition): Promise<EditorLocation[]> {
+    return this.documentLocations('textDocument/implementation', position)
+  }
+
+  async prepareRename(position: EditorPosition): Promise<EditorPrepareRename | null> {
+    if (!this.openedUri || !this.child) return null
+    const raw = await this.request('textDocument/prepareRename', {
+      textDocument: { uri: this.openedUri },
+      position,
+    }, 2_500).catch(() => null)
+    const directRange = editorRange(raw)
+    if (directRange) return { range: directRange }
+    if (!raw || typeof raw !== 'object') return null
+    const record = raw as Record<string, unknown>
+    const range = editorRange(record.range)
+    return range ? { range, placeholder: typeof record.placeholder === 'string' ? record.placeholder : undefined } : null
+  }
+
+  async rename(position: EditorPosition, newName: string): Promise<EditorWorkspaceEdit | null> {
+    if (!this.openedUri || !this.child) return null
+    const raw = await this.request('textDocument/rename', {
+      textDocument: { uri: this.openedUri },
+      position,
+      newName,
+    }, 5_000).catch(() => null)
+    return workspaceEdit(raw)
+  }
+
+  async formatting(options: { tabSize: number; insertSpaces: boolean } = { tabSize: 2, insertSpaces: true }): Promise<EditorWorkspaceEdit | null> {
+    if (!this.openedUri || !this.child) return null
+    const raw = await this.request('textDocument/formatting', {
+      textDocument: { uri: this.openedUri },
+      options,
+    }, 5_000).catch(() => null)
+    const edits = Array.isArray(raw) ? raw.flatMap((entry) => {
+      const parsed = textEdit(entry)
+      return parsed ? [parsed] : []
+    }) : []
+    return edits.length > 0 ? { changes: [{ uri: this.openedUri, edits }] } : null
+  }
+
+  async codeActions(
+    range: { start: EditorPosition; end: EditorPosition },
+    diagnostics: EditorDiagnostic[],
+  ): Promise<EditorCodeAction[]> {
+    if (!this.openedUri || !this.child) return []
+    const raw = await this.request('textDocument/codeAction', {
+      textDocument: { uri: this.openedUri },
+      range,
+      context: { diagnostics },
+    }, 3_500).catch(() => null)
+    return Array.isArray(raw) ? raw.flatMap((entry) => {
+      const parsed = codeAction(entry)
+      return parsed ? [parsed] : []
+    }).sort((left, right) => Number(right.preferred) - Number(left.preferred)) : []
+  }
+
+  async executeCommand(command: { command: string; arguments?: unknown[] }): Promise<void> {
+    if (!this.child) return
+    await this.request('workspace/executeCommand', command, 5_000).catch(() => null)
+  }
+
   stop(): void {
     this.stopped = true
     if (this.openedUri && this.child) this.notify('textDocument/didClose', { textDocument: { uri: this.openedUri } })
@@ -413,6 +646,7 @@ export class EditorLspClient {
 
   private async spawnServer(spec: EditorLspServerSpec): Promise<void> {
     await new Promise<void>((resolve, reject) => {
+      this.serverStderr = ''
       const child = spawn(spec.command, spec.args, {
         cwd: this.rootPath,
         env: process.env,
@@ -430,7 +664,15 @@ export class EditorLspClient {
         settled = true
         this.child = child
         child.stdout.on('data', (chunk: Buffer) => this.handleData(chunk))
-        child.stderr.on('data', () => {})
+        child.stderr.setEncoding('utf8')
+        child.stderr.on('data', (chunk: string) => {
+          this.serverStderr = `${this.serverStderr}${chunk}`.slice(-4_096)
+        })
+        child.stdin.on('error', (error) => {
+          if (this.stopped || this.child !== child) return
+          this.serverStderr = `${this.serverStderr}\n${error.message}`.trim().slice(-4_096)
+          this.handleExit(spec.name)
+        })
         child.on('exit', () => this.handleExit(spec.name))
         resolve()
       })
@@ -458,6 +700,47 @@ export class EditorLspClient {
   }
 
   private handleMessage(message: JsonRpcMessage): void {
+    if (message.id != null && message.method === 'workspace/applyEdit') {
+      const params = message.params as { edit?: unknown } | undefined
+      const edit = workspaceEdit(params?.edit)
+      void (edit ? this.workspaceEditHandler(edit) : Promise.resolve(false)).then((applied) => {
+        this.send({ jsonrpc: '2.0', id: message.id, result: { applied } })
+      }).catch((error) => {
+        this.send({ jsonrpc: '2.0', id: message.id, result: { applied: false, failureReason: error instanceof Error ? error.message : 'Unable to apply edit' } })
+      })
+      return
+    }
+    if (message.id != null && message.method === 'workspace/configuration') {
+      const items = (message.params as { items?: unknown } | undefined)?.items
+      this.send({
+        jsonrpc: '2.0',
+        id: message.id,
+        result: Array.isArray(items) ? items.map(() => null) : [],
+      })
+      return
+    }
+    if (message.id != null && message.method === 'workspace/workspaceFolders') {
+      this.send({
+        jsonrpc: '2.0',
+        id: message.id,
+        result: [{ uri: pathToFileURL(this.rootPath).href, name: this.rootPath.split(/[\\/]/).pop() || 'workspace' }],
+      })
+      return
+    }
+    if (message.id != null && (message.method === 'client/registerCapability'
+      || message.method === 'client/unregisterCapability'
+      || message.method === 'window/workDoneProgress/create')) {
+      this.send({ jsonrpc: '2.0', id: message.id, result: null })
+      return
+    }
+    if (message.id != null && message.method) {
+      this.send({
+        jsonrpc: '2.0',
+        id: message.id,
+        error: { code: -32601, message: `Unsupported client method: ${message.method}` },
+      })
+      return
+    }
     if (typeof message.id === 'number') {
       const pending = this.pending.get(message.id)
       if (!pending) return
@@ -469,24 +752,18 @@ export class EditorLspClient {
     }
     if (message.method === 'textDocument/publishDiagnostics') {
       const params = message.params as { diagnostics?: unknown[] } | undefined
-      const diagnostics: EditorDiagnostic[] = []
-      for (const raw of params?.diagnostics ?? []) {
-        if (!raw || typeof raw !== 'object') continue
-        const item = raw as Record<string, unknown>
-        const range = item.range as { start?: EditorPosition; end?: EditorPosition } | undefined
-        if (!range?.start || !range.end || typeof item.message !== 'string') continue
-        diagnostics.push({
-          line: range.start.line,
-          character: range.start.character,
-          endLine: range.end.line,
-          endCharacter: range.end.character,
-          severity: item.severity === 1 || item.severity === 2 || item.severity === 3 || item.severity === 4 ? item.severity : 3,
-          message: item.message,
-          source: typeof item.source === 'string' ? item.source : undefined,
-        })
-      }
-      this.diagnosticsHandler(diagnostics)
+      this.diagnosticsHandler(editorDiagnostics(params?.diagnostics))
     }
+  }
+
+  private async refreshDiagnostics(): Promise<void> {
+    if (!this.pullDiagnostics || !this.openedUri || !this.child) return
+    const request = ++this.diagnosticRequest
+    const raw = await this.request('textDocument/diagnostic', {
+      textDocument: { uri: this.openedUri },
+    }, 5_000).catch(() => null)
+    if (request !== this.diagnosticRequest || this.stopped || !raw || typeof raw !== 'object') return
+    this.diagnosticsHandler(editorDiagnostics((raw as { items?: unknown }).items))
   }
 
   private request(method: string, params: unknown, timeoutMs: number): Promise<unknown> {
@@ -501,6 +778,20 @@ export class EditorLspClient {
     })
   }
 
+  private async documentLocations(
+    method: 'textDocument/definition' | 'textDocument/references' | 'textDocument/implementation',
+    position: EditorPosition,
+    context?: { includeDeclaration: boolean },
+  ): Promise<EditorLocation[]> {
+    if (!this.openedUri || !this.child) return []
+    const raw = await this.request(method, {
+      textDocument: { uri: this.openedUri },
+      position,
+      ...(context ? { context } : {}),
+    }, 3_500).catch(() => null)
+    return locations(raw)
+  }
+
   private notify(method: string, params: unknown): void {
     this.send({ jsonrpc: '2.0', method, params })
   }
@@ -512,8 +803,8 @@ export class EditorLspClient {
   }
 
   private handleExit(name: string): void {
-    if (this.stopped) return
-    this.statusHandler({ state: 'error', name, message: 'language server exited' })
+    if (this.stopped || !this.child) return
+    this.statusHandler({ state: 'error', name, message: this.serverStderr.trim() || 'language server exited' })
     this.disposeChild()
   }
 
@@ -524,6 +815,8 @@ export class EditorLspClient {
     this.lastText = null
     this.completionResolveProvider = false
     this.completionTriggerCharacters.clear()
+    this.pullDiagnostics = false
+    this.diagnosticRequest += 1
     if (child && !child.killed) child.kill()
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer)
