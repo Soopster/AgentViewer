@@ -539,7 +539,7 @@ export function EditorPopover({
   }, [completions])
 
   const velocityScrollStep = useCallback((direction: -1 | 1, isRepeat: boolean): number => {
-    if (!velocityScrollEnabled) {
+    if (!velocityScrollEnabled || !isRepeat) {
       velocityScrollStateRef.current = null
       return 1
     }
@@ -551,7 +551,6 @@ export function EditorPopover({
     }
     state.lastEventTime = now
     const heldFor = now - state.streakStart
-    if (!isRepeat && heldFor < VELOCITY_SCROLL_HOLD_DELAY_MS) return 1
     if (heldFor < VELOCITY_SCROLL_HOLD_DELAY_MS) return 1
     const progress = Math.max(0, Math.min(1, (heldFor - VELOCITY_SCROLL_HOLD_DELAY_MS) / VELOCITY_SCROLL_RAMP_MS))
     return Math.max(1, Math.round(1 + (VELOCITY_SCROLL_MAX_STEP - 1) * progress * progress))
