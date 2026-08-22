@@ -7572,19 +7572,21 @@ function MessageViewInner({
           background: colorTreatment === 'flat' ? 'var(--surface)' : 'linear-gradient(to right, rgba(139,128,240,0.05) 0%, var(--surface) 40%)',
         }}
       >
-        {/* Project / session name */}
-        <span
-          style={{
-            fontFamily: "'Oxanium', monospace",
-            fontSize: 14,
-            fontWeight: 600,
-            letterSpacing: '0.06em',
-            color: 'var(--text)',
-            textTransform: 'uppercase',
-          }}
-        >
-          {dirName}
-        </span>
+        {/* Project / session name (project view only — single-session view shows the full cwd instead) */}
+        {isProject && (
+          <span
+            style={{
+              fontFamily: "'Oxanium', monospace",
+              fontSize: 14,
+              fontWeight: 600,
+              letterSpacing: '0.06em',
+              color: 'var(--text)',
+              textTransform: 'uppercase',
+            }}
+          >
+            {dirName}
+          </span>
+        )}
 
         {/* Project view badge */}
         {isProject && (

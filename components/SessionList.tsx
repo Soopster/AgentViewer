@@ -1918,7 +1918,13 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                     flex: 1,
                   }}
                 >
-                  <LayoutDashboard size={13} strokeWidth={2.2} style={{ color: 'var(--violet)', flexShrink: 0 }} />
+                  <img
+                    src="/icon.png"
+                    alt=""
+                    width={16}
+                    height={16}
+                    style={{ borderRadius: 4, flexShrink: 0 }}
+                  />
                   <span style={{ flex: 1 }}>Agent Viewer</span>
                 </div>
               )}
