@@ -739,6 +739,7 @@ export function EditorPopover({
                 cursorColor={theme.amber}
                 cursorStyle={{ style: 'block', blinking: true }}
                 scrollMargin={4}
+                scrollSpeed={3}
                 tabIndicator="→"
                 tabIndicatorColor={theme.dim}
                 onContentChange={updateActiveContent}
