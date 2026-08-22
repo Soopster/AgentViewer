@@ -12,6 +12,7 @@ import { clearWaitingSession, setWaitingSession } from './sessionRuntime'
 import type { AgentProvider } from './types'
 import { postViewerAttention } from './viewerAttention'
 import { appendClaudeHookEvent } from './claudeHookEvents'
+import { drainCooperativeInbox } from './agentCoordination'
 
 export type ClaudeViewerContext = {
   getSessionId(): string
@@ -153,6 +154,17 @@ function createStopHook(context: ClaudeViewerContext): HookCallback {
       const stopInput = input as StopHookInput
       const sessionId = stopInput.session_id || context.getSessionId()
       if (sessionId) {
+        // Only drain (and thus acknowledge) mail when this is the first Stop
+        // for the turn. stop_hook_active means we already blocked once this
+        // turn — draining again risks an infinite block loop, so let it stop
+        // and leave any newly-arrived mail queued for the next natural drain
+        // (drainCooperativeInbox is also called per-composer-send).
+        if (!stopInput.stop_hook_active) {
+          const mail = await drainCooperativeInbox(sessionId).catch(() => '')
+          if (mail) {
+            return { decision: 'block', reason: mail }
+          }
+        }
         setWaitingSession({
           sessionId,
           provider: 'claude',
