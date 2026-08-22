@@ -27,6 +27,8 @@ export type EditorKeyEvent = {
   shift: boolean
   meta?: boolean
   sequence: string
+  eventType?: 'press' | 'repeat' | 'release'
+  repeated?: boolean
 }
 
 type Props = {
@@ -535,8 +537,11 @@ export function EditorPopover({
     setMessage(`${item.source === 'lsp' ? 'LSP' : item.source} completion: ${item.label}`)
   }, [completions])
 
-  const velocityScrollStep = useCallback((direction: -1 | 1): number => {
-    if (!velocityScrollEnabled) return 1
+  const velocityScrollStep = useCallback((direction: -1 | 1, isRepeat: boolean): number => {
+    if (!velocityScrollEnabled || !isRepeat) {
+      velocityScrollStateRef.current = null
+      return 1
+    }
     const now = performance.now()
     const state = velocityScrollStateRef.current
     if (!state || state.direction !== direction || now - state.lastEventTime > VELOCITY_SCROLL_RESET_MS) {
@@ -547,18 +552,6 @@ export function EditorPopover({
     const progress = Math.max(0, Math.min(1, (now - state.streakStart) / VELOCITY_SCROLL_RAMP_MS))
     return Math.max(1, Math.round(1 + (VELOCITY_SCROLL_MAX_STEP - 1) * progress * progress))
   }, [velocityScrollEnabled])
-
-  const moveEditorByLines = useCallback((direction: -1 | 1) => {
-    const editor = editorRef.current
-    if (!editor) return
-    const lines = editor.plainText.split('\n')
-    const current = editor.logicalCursor
-    const step = velocityScrollStep(direction)
-    const row = Math.max(0, Math.min(lines.length - 1, current.row + direction * step))
-    let offset = 0
-    for (let index = 0; index < row; index += 1) offset += (lines[index]?.length ?? 0) + 1
-    editor.cursorOffset = offset + Math.min(current.col, lines[row]?.length ?? 0)
-  }, [velocityScrollStep])
 
   const handleKey = useCallback((key: EditorKeyEvent): boolean => {
     const sequence = key.sequence ?? ''
@@ -591,7 +584,18 @@ export function EditorPopover({
       if (key.name === 'tab' || key.name === 'return') { acceptCompletion(); return true }
     }
     if (focusPane === 'editor' && velocityScrollEnabled && (key.name === 'up' || key.name === 'down')) {
-      moveEditorByLines(key.name === 'up' ? -1 : 1)
+      const isRepeat = key.eventType === 'repeat' || key.repeated === true
+      if (!isRepeat) velocityScrollStateRef.current = null
+      const editor = editorRef.current
+      if (!editor) return true
+      const lines = editor.plainText.split('\n')
+      const current = editor.logicalCursor
+      const step = velocityScrollStep(key.name === 'up' ? -1 : 1, isRepeat)
+      const direction = key.name === 'up' ? -1 : 1
+      const row = Math.max(0, Math.min(lines.length - 1, current.row + direction * step))
+      let offset = 0
+      for (let index = 0; index < row; index += 1) offset += (lines[index]?.length ?? 0) + 1
+      editor.cursorOffset = offset + Math.min(current.col, lines[row]?.length ?? 0)
       return true
     }
     if (key.name === 'escape' && closeConfirm) {
@@ -628,7 +632,7 @@ export function EditorPopover({
       return true
     }
     return false
-  }, [acceptCompletion, activateTreeRow, activeTab, chooseQuickFile, closeActiveTab, completionCursor, completions.length, filteredQuickFiles.length, focusPane, moveEditorByLines, quickOpen, requestClose, requestCompletions, saveActive, switchTab, treeCursor, treeExpanded, treeRows, velocityScrollEnabled])
+  }, [acceptCompletion, activateTreeRow, activeTab, chooseQuickFile, closeActiveTab, completionCursor, completions.length, filteredQuickFiles.length, focusPane, quickOpen, requestClose, requestCompletions, saveActive, switchTab, treeCursor, treeExpanded, treeRows, velocityScrollEnabled, velocityScrollStep])
 
   useEffect(() => {
     onKeyHandlerReady(handleKey)
