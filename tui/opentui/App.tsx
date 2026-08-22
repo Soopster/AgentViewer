@@ -4872,6 +4872,7 @@ const COMMANDS: PaletteCommand[] = [
   // Session
   { id: 'composer',   label: 'Open composer',          key: 'c',  category: 'Session'    },
   { id: 'composer-window', label: 'Open composer window', key: '^O', category: 'Session'    },
+  { id: 'composer-toggle', label: 'Show/hide composer',   key: '⇧E', category: 'Session'    },
   { id: 'composer-stash', label: 'Stash composer prompt', key: 'stash', category: 'Session' },
   { id: 'composer-stash-pop', label: 'Pop composer stash', key: 'pop', category: 'Session' },
   { id: 'composer-stash-list', label: 'List composer stash', key: 'list', category: 'Session' },
@@ -7388,6 +7389,7 @@ export default function OpenTuiApp() {
   const renameDraftRef = useRef(renameDraft)
   const [composerActive, setComposerActive] = useState(false)
   const [composerWindowOpen, setComposerWindowOpen] = useState(false)
+  const [composerHidden, setComposerHidden] = useState(false)
   const [composerDraft, setComposerDraft] = useState('')
   const composerDraftStorageKeyRef = useRef<string | null>(null)
   const [composerLiveTodos, setComposerLiveTodos] = useState<import('../../lib/taskRegistry').OpenCodeTodo[]>([])
@@ -9000,7 +9002,7 @@ export default function OpenTuiApp() {
     if (selected) openCoordinationAgentSession(selected.agent)
   })
   const composerHeight = Math.max(COMPOSER_MIN_HEIGHT, Math.min(COMPOSER_MAX_HEIGHT, (composerDraft.length === 0 ? 1 : composerDraft.split('\n').length) + COMPOSER_DOCK_CHROME_HEIGHT))
-  const composerDockHeight = composerWindowOpen ? 0 : composerHeight
+  const composerDockHeight = composerWindowOpen || composerHidden ? 0 : composerHeight
   const composerDockTextareaHeight = Math.max(2, composerDockHeight - COMPOSER_DOCK_CHROME_HEIGHT)
   const composerTargetSessionInfo = useMemo(() => {
     if (!composerTargetSession) return null
@@ -15089,6 +15091,15 @@ export default function OpenTuiApp() {
     setComposerWindowOpen((open) => !open)
   })
 
+  const toggleComposerHidden = useEffectEvent(() => {
+    setComposerHidden((hidden) => {
+      const next = !hidden
+      if (next) setComposerActive(false)
+      showToggleOutcome('Composer', next ? 'hidden' : 'shown')
+      return next
+    })
+  })
+
   const insertComposerPasteMarker = useEffectEvent((marker: string, partId: string) => {
     const renderable = composerTextareaRef.current
     if (!renderable || !marker || !partId) return
@@ -16045,10 +16056,14 @@ export default function OpenTuiApp() {
         break
       }
       case 'composer':
+        setComposerHidden(false)
         setComposerActive(true)
         break
       case 'composer-window':
         openComposerWindow()
+        break
+      case 'composer-toggle':
+        toggleComposerHidden()
         break
       case 'composer-stash':
         stashComposerPrompt()
@@ -17483,6 +17498,12 @@ export default function OpenTuiApp() {
       return
     }
 
+    // Show/hide composer
+    if (isShifted('E')) {
+      handled(toggleComposerHidden)
+      return
+    }
+
     // Global diagnostics popover
     if (isShifted('D') && selectedSession) {
       handled(() => openDiagnostics())
@@ -17984,6 +18005,7 @@ export default function OpenTuiApp() {
 
     if (sequence === 'c' && !composerActive) {
       handled(() => {
+        setComposerHidden(false)
         setComposerActive(true)
       })
       return
@@ -19835,15 +19857,15 @@ export default function OpenTuiApp() {
         </box>
       ) : null}
 
-      {!composerWindowOpen ? renderComposerMentionPanel(width, Math.max(width - 4, 20)) : null}
+      {!composerWindowOpen && !composerHidden ? renderComposerMentionPanel(width, Math.max(width - 4, 20)) : null}
 
-      {!composerWindowOpen && !composerHistoryOpen && !composerStashOpen ? renderComposerSlashPanel(width, Math.max(width - 4, 20)) : null}
+      {!composerWindowOpen && !composerHidden && !composerHistoryOpen && !composerStashOpen ? renderComposerSlashPanel(width, Math.max(width - 4, 20)) : null}
 
-      {!composerWindowOpen ? renderComposerHistoryPanel(width, Math.max(width - 4, 20)) : null}
-      {!composerWindowOpen ? renderComposerStashPanel(width, Math.max(width - 4, 20)) : null}
-      {!composerWindowOpen && !composerHistoryOpen && !composerStashOpen ? renderComposerQueuePanel(width, Math.max(width - 4, 20)) : null}
+      {!composerWindowOpen && !composerHidden ? renderComposerHistoryPanel(width, Math.max(width - 4, 20)) : null}
+      {!composerWindowOpen && !composerHidden ? renderComposerStashPanel(width, Math.max(width - 4, 20)) : null}
+      {!composerWindowOpen && !composerHidden && !composerHistoryOpen && !composerStashOpen ? renderComposerQueuePanel(width, Math.max(width - 4, 20)) : null}
 
-      {!composerWindowOpen ? (
+      {!composerWindowOpen && !composerHidden ? (
         <box
           paddingX={1}
           backgroundColor={transcriptView === 'stream' ? theme.surface : theme.surface2}
