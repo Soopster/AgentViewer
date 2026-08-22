@@ -50,6 +50,10 @@ type Preview =
 const MAX_DIRECTORY_ENTRIES = 2_000
 const MAX_PREVIEW_BYTES = 512 * 1024
 const MAX_PREVIEW_LINES = 4_000
+const PREVIEW_WINDOW_LINES = 400
+const PREVIEW_WINDOW_SLIDE = Math.floor(PREVIEW_WINDOW_LINES / 2)
+const PREVIEW_EDGE_ROWS = 8
+const PREVIEW_SCROLL_POLL_MS = 120
 const VELOCITY_SCROLL_RESET_MS = 160
 const VELOCITY_SCROLL_RAMP_MS = 700
 const VELOCITY_SCROLL_MAX_STEP = 8
@@ -256,6 +260,7 @@ export function FileViewerPopover({
   const [filter, setFilter] = useState('')
   const [previewFocused, setPreviewFocused] = useState(false)
   const [previewExpanded, setPreviewExpanded] = useState(false)
+  const [previewWindowStart, setPreviewWindowStart] = useState(0)
   const listScrollRef = useRef<ScrollBoxRenderable>(null)
   const previewScrollRef = useRef<ScrollBoxRenderable>(null)
   const requestRef = useRef(0)
@@ -304,6 +309,7 @@ export function FileViewerPopover({
         if (requestRef.current !== request) return
         setPreview(next)
         setPreviewLoading(false)
+        setPreviewWindowStart(0)
         previewScrollRef.current?.scrollTo(0)
       })
     }, 80)
@@ -313,6 +319,37 @@ export function FileViewerPopover({
   useEffect(() => {
     listScrollRef.current?.scrollTo(Math.max(0, cursor - 2))
   }, [cursor])
+
+  // Preview window sliding: scrollbox emits no scroll events, so poll scrollTop
+  // and recenter the mounted window around the viewport. Spacer boxes keep total
+  // height stable so scrollTop maps to absolute line offsets.
+  useEffect(() => {
+    const totalLines = preview.kind === 'text' ? preview.lines.length : 0
+    if (totalLines <= PREVIEW_WINDOW_LINES) return
+    if (!previewFocused) return
+
+    const interval = setInterval(() => {
+      const sb = previewScrollRef.current
+      if (!sb) return
+      if (sb.scrollHeight <= sb.viewport.height) return
+      const scrollTop = sb.scrollTop
+      const viewportH = sb.viewport.height
+      const start = previewWindowStart
+      const end = start + PREVIEW_WINDOW_LINES
+
+      if (scrollTop <= PREVIEW_EDGE_ROWS && start > 0) {
+        const nextStart = Math.max(0, start - PREVIEW_WINDOW_SLIDE)
+        setPreviewWindowStart(nextStart)
+        return
+      }
+      const maxScroll = Math.max(0, sb.scrollHeight - sb.viewport.height)
+      if (maxScroll - scrollTop <= PREVIEW_EDGE_ROWS && end < totalLines) {
+        const nextStart = Math.min(totalLines - PREVIEW_WINDOW_LINES, start + PREVIEW_WINDOW_SLIDE)
+        setPreviewWindowStart(nextStart)
+      }
+    }, PREVIEW_SCROLL_POLL_MS)
+    return () => clearInterval(interval)
+  }, [preview, previewFocused, previewWindowStart])
 
   const goParent = useCallback(() => {
     const parent = dirname(directory)
@@ -526,39 +563,57 @@ export function FileViewerPopover({
                 )
               })}
             </scrollbox>
-          ) : preview.kind === 'text' ? (
-            <scrollbox ref={previewScrollRef} style={{ height: contentH - 2 }}>
-              <box flexDirection="row">
-                <box width={lineNumberWidth + 1} flexDirection="column">
-                  {preview.lines.map((_, index) => (
-                    <text key={index} fg={theme.dim} wrapMode="none">
-                      {`${String(index + 1).padStart(lineNumberWidth)} `}
-                    </text>
-                  ))}
-                </box>
-                {previewFiletype ? (
-                  <code
-                    content={previewContent}
-                    filetype={previewFiletype}
-                    syntaxStyle={syntaxStyle}
-                    drawUnstyledText={true}
-                    selectable
-                    style={{ height: preview.lines.length }}
-                    width={Math.max(12, previewW - lineNumberWidth - 4)}
-                  />
-                ) : (
-                  <box flexDirection="column">
-                    {preview.lines.map((line, index) => (
-                      <text key={index} fg={theme.text} wrapMode="none" selectable>
-                        {fitText(line.replace(/\t/g, '  '), previewW - lineNumberWidth - 4)}
+          ) : preview.kind === 'text' ? (() => {
+            const totalLines = preview.lines.length
+            const windowStart = Math.min(previewWindowStart, Math.max(0, totalLines - PREVIEW_WINDOW_LINES))
+            const windowEnd = Math.min(windowStart + PREVIEW_WINDOW_LINES, totalLines)
+            const windowLines = preview.lines.slice(windowStart, windowEnd)
+            const windowContent = windowLines.join('\n')
+            const topSpacerH = windowStart
+            const bottomSpacerH = totalLines - windowEnd
+
+            return (
+              <scrollbox ref={previewScrollRef} style={{ height: contentH - 2 }}>
+                <box flexDirection="row">
+                  <box width={lineNumberWidth + 1} flexDirection="column">
+                    <box height={topSpacerH} />
+                    {windowLines.map((_, index) => (
+                      <text key={windowStart + index} fg={theme.dim} wrapMode="none">
+                        {`${String(windowStart + index + 1).padStart(lineNumberWidth)} `}
                       </text>
                     ))}
+                    <box height={bottomSpacerH} />
                   </box>
-                )}
-              </box>
-              {preview.truncated ? <text fg={theme.amber}>… preview truncated</text> : null}
-            </scrollbox>
-          ) : preview.kind === 'binary' ? (
+                  {previewFiletype ? (
+                    <box flexGrow={1} flexDirection="column">
+                      <box height={topSpacerH} />
+                      <code
+                        content={windowContent}
+                        filetype={previewFiletype}
+                        syntaxStyle={syntaxStyle}
+                        drawUnstyledText={true}
+                        selectable
+                        style={{ height: windowLines.length }}
+                        width={Math.max(12, previewW - lineNumberWidth - 4)}
+                      />
+                      <box height={bottomSpacerH} />
+                    </box>
+                  ) : (
+                    <box flexGrow={1} flexDirection="column">
+                      <box height={topSpacerH} />
+                      {windowLines.map((line, index) => (
+                        <text key={windowStart + index} fg={theme.text} wrapMode="none" selectable>
+                          {fitText(line.replace(/\t/g, '  '), previewW - lineNumberWidth - 4)}
+                        </text>
+                      ))}
+                      <box height={bottomSpacerH} />
+                    </box>
+                  )}
+                </box>
+                {preview.truncated ? <text fg={theme.amber}>… preview truncated</text> : null}
+              </scrollbox>
+            )
+          })() : preview.kind === 'binary' ? (
             <box padding={1} flexDirection="column">
               <text fg={theme.violet}>Binary preview</text>
               <text fg={theme.muted}>{preview.extension}</text>
