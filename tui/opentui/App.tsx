@@ -1571,6 +1571,10 @@ function timeAgo(value?: string | number): string {
 
 const COMPOSER_MIN_HEIGHT = 6
 const COMPOSER_MAX_HEIGHT = 12
+// Chat mode has no border to budget rows for — just the input line(s) plus
+// the one dim stats row underneath.
+const CHAT_COMPOSER_CHROME_HEIGHT = 1
+const CHAT_COMPOSER_MIN_HEIGHT = 3
 const COMPOSER_DOCK_CHROME_HEIGHT = 3
 const COMPOSER_WINDOW_MAX_WIDTH = 88
 const COMPOSER_WINDOW_MAX_HEIGHT = 24
@@ -9006,9 +9010,14 @@ export default function OpenTuiApp() {
     const selected = coordinatorAgentEntries.find((entry) => entry.key === coordinatorSelectedKey)
     if (selected) openCoordinationAgentSession(selected.agent)
   })
-  const composerHeight = Math.max(COMPOSER_MIN_HEIGHT, Math.min(COMPOSER_MAX_HEIGHT, (composerDraft.length === 0 ? 1 : composerDraft.split('\n').length) + COMPOSER_DOCK_CHROME_HEIGHT))
+  const composerDraftLines = composerDraft.length === 0 ? 1 : composerDraft.split('\n').length
+  const composerHeight = transcriptView === 'chat'
+    ? Math.max(CHAT_COMPOSER_MIN_HEIGHT, composerDraftLines + CHAT_COMPOSER_CHROME_HEIGHT)
+    : Math.max(COMPOSER_MIN_HEIGHT, Math.min(COMPOSER_MAX_HEIGHT, composerDraftLines + COMPOSER_DOCK_CHROME_HEIGHT))
   const composerDockHeight = composerWindowOpen || composerHidden ? 0 : composerHeight
-  const composerDockTextareaHeight = Math.max(2, composerDockHeight - COMPOSER_DOCK_CHROME_HEIGHT)
+  const composerDockTextareaHeight = transcriptView === 'chat'
+    ? Math.max(1, composerDockHeight - CHAT_COMPOSER_CHROME_HEIGHT)
+    : Math.max(2, composerDockHeight - COMPOSER_DOCK_CHROME_HEIGHT)
   const composerTargetSessionInfo = useMemo(() => {
     if (!composerTargetSession) return null
     const targetKey = sessionKey(composerTargetSession)
@@ -10000,7 +10009,7 @@ export default function OpenTuiApp() {
     ) return null
     return streamCompletedTurnHint(visibleTranscriptCards)
   }, [awaitingPersistedTurn, composerSendState, reattachedRunning, transcriptView, visibleTranscriptCards])
-  const streamActionFooterRows = isChatLikeView && visibleTranscriptCards.length > 0 ? 1 : 0
+  const streamActionFooterRows = isChatLikeView && transcriptView !== 'chat' && visibleTranscriptCards.length > 0 ? 1 : 0
   const transcriptViewportRows = Math.max(
     mainContentHeight
     - (focusMode ? 4 : 7)
@@ -18266,6 +18275,15 @@ export default function OpenTuiApp() {
     focusedBackgroundColor: theme.surface3,
     flexGrow: 1,
   }
+  // The textarea paints its own background over whatever the parent draws, so
+  // chat mode's highlighted bar needs the textarea itself tinted to match —
+  // otherwise the bar only shows through the "› " prefix and padding slivers.
+  const composerChatTextareaStyle = {
+    ...composerBaseTextareaStyle,
+    backgroundColor: theme.surface3,
+    focusedBackgroundColor: theme.surface3,
+    flexGrow: 1,
+  }
   const composerDockHeaderStatus = routeComposerToBridge
     ? 'BRIDGE'
     : routeComposerToIde
@@ -18347,7 +18365,7 @@ export default function OpenTuiApp() {
   }
   const renderComposerTextarea = (
     onSubmit: () => void,
-    options?: { height?: number; width?: number },
+    options?: { height?: number; width?: number; variant?: 'chat' },
   ) => (
     <textarea
       ref={composerTextareaRef}
@@ -18360,7 +18378,9 @@ export default function OpenTuiApp() {
       syntaxStyle={composerSyntaxStyle}
       onContentChange={handleComposerContentChange}
       onSubmit={onSubmit}
-      style={options?.height ? composerBaseTextareaStyle : composerDockTextareaStyle}
+      style={options?.variant === 'chat'
+        ? composerChatTextareaStyle
+        : options?.height ? composerBaseTextareaStyle : composerDockTextareaStyle}
     />
   )
   const renderComposerMentionPanel = (panelWidth: number, rowWidth: number) => {
@@ -18922,7 +18942,7 @@ export default function OpenTuiApp() {
             ) : null}
           </box>
 
-          {followTail && visibleTranscriptCards.length > 0 ? (
+          {followTail && visibleTranscriptCards.length > 0 && transcriptView !== 'chat' ? (
             <box paddingX={2} paddingBottom={1}>
               <IdleTicker seed={selectedSessionKey ?? ''} theme={theme} />
             </box>
@@ -18933,10 +18953,11 @@ export default function OpenTuiApp() {
             // a full-width highlighted bar in the same style as a user message
             // row, inside the same border as the transcript, so it reads as
             // the next line of the conversation rather than a docked control.
-            <box height={composerDockHeight} flexDirection="column">
+            <box width="100%" height={composerDockHeight} flexDirection="column" paddingX={1}>
               <box
+                width="100%"
                 paddingX={1}
-                backgroundColor={theme.userBg}
+                backgroundColor={theme.surface3}
                 flexDirection="row"
                 onMouseDown={(event) => {
                   if (event.button !== 0) return
@@ -18948,7 +18969,8 @@ export default function OpenTuiApp() {
                 <box flexGrow={1}>
                   {renderComposerTextarea(submitComposerFromDock, {
                     height: composerDockTextareaHeight,
-                    width: Math.max(composerDockTextareaWidth - 2, 1),
+                    width: Math.max(rightPaneWidth - 6, 1),
+                    variant: 'chat',
                   })}
                 </box>
               </box>
