@@ -1177,6 +1177,82 @@ html[data-color-treatment="flat"] .av-hover-control:not(:disabled):hover {
   --t-grep: #ff806f; --t-glob: #e68fb3; --t-agent: #e68fb3; --t-other: #c3c3d9;
 }
 
+/* ── Design tokens ── Metalterm material collection ─────────────────────── */
+[data-theme="anodised-obsidian"], [data-theme="dark-ceramic"],
+[data-theme="carbon-surface"], [data-theme="smoked-glass"],
+[data-theme="metalterm"], [data-theme="graphite"], [data-theme="ember"],
+[data-theme="abyss"], [data-theme="orchid"], [data-theme="phosphor"],
+[data-theme="nocturne"], [data-theme="slate"], [data-theme="solstice"],
+[data-theme="dune"], [data-theme="grape"], [data-theme="repo"],
+[data-theme="cappuccino"] {
+  --bg: var(--material-bg);
+  --surface: color-mix(in srgb, var(--material-bg) 96%, var(--material-text));
+  --surface-2: color-mix(in srgb, var(--material-bg) 92%, var(--material-text));
+  --surface-3: color-mix(in srgb, var(--material-bg) 86%, var(--material-text));
+  --border: color-mix(in srgb, var(--material-bg) 82%, var(--material-text));
+  --border-2: var(--material-accent);
+  --text: var(--material-text); --text-2: var(--material-muted);
+  --text-3: color-mix(in srgb, var(--material-bg) 32%, var(--material-muted));
+  --violet: var(--material-accent);
+  --violet-glow: color-mix(in srgb, var(--material-accent) 16%, transparent);
+  --cyan: color-mix(in srgb, var(--material-accent) 80%, var(--material-text));
+  --cyan-glow: color-mix(in srgb, var(--material-accent) 13%, transparent);
+  --green: color-mix(in srgb, var(--material-warm) 58%, #2bb673);
+  --red: color-mix(in srgb, var(--material-accent) 50%, #ef4444);
+  --amber: var(--material-warm);
+  --t-bash: var(--material-warm); --t-edit: var(--green); --t-write: var(--cyan);
+  --t-read: var(--material-accent); --t-grep: var(--red);
+  --t-glob: color-mix(in srgb, var(--material-accent) 62%, #ec4899);
+  --t-agent: color-mix(in srgb, var(--material-accent) 62%, #ec4899);
+  --t-other: var(--material-muted);
+}
+
+[data-theme="bone-china"], [data-theme="cold-pressed"],
+[data-theme="sunlit-alabaster"], [data-theme="brushed-aluminium"] {
+  --bg: var(--material-bg);
+  --surface: color-mix(in srgb, var(--material-bg) 50%, white);
+  --surface-2: color-mix(in srgb, var(--material-bg) 95%, var(--material-text));
+  --surface-3: color-mix(in srgb, var(--material-bg) 90%, var(--material-text));
+  --border: color-mix(in srgb, var(--material-bg) 86%, var(--material-text));
+  --border-2: var(--material-accent);
+  --text: var(--material-text); --text-2: var(--material-muted);
+  --text-3: color-mix(in srgb, var(--material-bg) 42%, var(--material-muted));
+  --violet: var(--material-accent);
+  --violet-glow: color-mix(in srgb, var(--material-accent) 14%, transparent);
+  --cyan: color-mix(in srgb, var(--material-accent) 80%, var(--material-text));
+  --cyan-glow: color-mix(in srgb, var(--material-accent) 11%, transparent);
+  --green: color-mix(in srgb, var(--material-warm) 58%, #23895a);
+  --red: color-mix(in srgb, var(--material-accent) 50%, #c9373f);
+  --amber: var(--material-warm);
+  --t-bash: var(--material-warm); --t-edit: var(--green); --t-write: var(--cyan);
+  --t-read: var(--material-accent); --t-grep: var(--red);
+  --t-glob: color-mix(in srgb, var(--material-accent) 65%, #a83f78);
+  --t-agent: color-mix(in srgb, var(--material-accent) 65%, #a83f78);
+  --t-other: var(--material-muted);
+}
+
+[data-theme="anodised-obsidian"] { --material-bg: #09090b; --material-text: #e4ded2; --material-muted: #8a8882; --material-accent: #f4a35c; --material-warm: #edc36a; }
+[data-theme="dark-ceramic"] { --material-bg: #0d0e12; --material-text: #ded6c7; --material-muted: #797873; --material-accent: #f3a05b; --material-warm: #edc36a; }
+[data-theme="carbon-surface"] { --material-bg: #0b0c0f; --material-text: #ded7c9; --material-muted: #777772; --material-accent: #f1a15c; --material-warm: #ecc36b; }
+[data-theme="smoked-glass"] { --material-bg: #0e0f13; --material-text: #ded6c7; --material-muted: #777873; --material-accent: #f3a45e; --material-warm: #ebc36a; }
+[data-theme="bone-china"] { --material-bg: #f0ece5; --material-text: #2a2927; --material-muted: #77746e; --material-accent: #b75a00; --material-warm: #987213; }
+[data-theme="cold-pressed"] { --material-bg: #f3f3f2; --material-text: #312e2b; --material-muted: #7b7974; --material-accent: #bd6400; --material-warm: #9f7606; }
+[data-theme="sunlit-alabaster"] { --material-bg: #f2e8d2; --material-text: #2c2a26; --material-muted: #787570; --material-accent: #b95b00; --material-warm: #98700b; }
+[data-theme="brushed-aluminium"] { --material-bg: #e7e9eb; --material-text: #2b2927; --material-muted: #7b7974; --material-accent: #b86200; --material-warm: #9a7407; }
+[data-theme="metalterm"] { --material-bg: #201d1a; --material-text: #ddd3c1; --material-muted: #837a6c; --material-accent: #eda15f; --material-warm: #e8bd66; }
+[data-theme="graphite"] { --material-bg: #211e1b; --material-text: #f0ede8; --material-muted: #807e78; --material-accent: #d8d4cb; --material-warm: #d7c391; }
+[data-theme="ember"] { --material-bg: #1f1a17; --material-text: #e7dbcc; --material-muted: #957d6a; --material-accent: #f2a15b; --material-warm: #e9bd65; }
+[data-theme="abyss"] { --material-bg: #081724; --material-text: #d8e5ef; --material-muted: #607c8d; --material-accent: #71cad3; --material-warm: #e5b75d; }
+[data-theme="orchid"] { --material-bg: #1a1029; --material-text: #e1d8eb; --material-muted: #80729a; --material-accent: #c191ef; --material-warm: #e7ba76; }
+[data-theme="phosphor"] { --material-bg: #082019; --material-text: #bce7da; --material-muted: #628c80; --material-accent: #72e2a6; --material-warm: #d9cd87; }
+[data-theme="nocturne"] { --material-bg: #111c2d; --material-text: #dce4ed; --material-muted: #68758b; --material-accent: #7eaee3; --material-warm: #e7bd6c; }
+[data-theme="slate"] { --material-bg: #1a2230; --material-text: #dce4ed; --material-muted: #727c8d; --material-accent: #7cabe0; --material-warm: #e4b96c; }
+[data-theme="solstice"] { --material-bg: #092522; --material-text: #d2dfdc; --material-muted: #5f8583; --material-accent: #62b7ad; --material-warm: #d3aa5d; }
+[data-theme="dune"] { --material-bg: #2a241e; --material-text: #e0d4bc; --material-muted: #8e8370; --material-accent: #e8a84d; --material-warm: #f0cf7a; }
+[data-theme="grape"] { --material-bg: #21172b; --material-text: #e2e0ea; --material-muted: #7f7594; --material-accent: #ec85bd; --material-warm: #ecd46f; }
+[data-theme="repo"] { --material-bg: #101f2d; --material-text: #d7e3eb; --material-muted: #687787; --material-accent: #72aee8; --material-warm: #e9b53f; }
+[data-theme="cappuccino"] { --material-bg: #211d2b; --material-text: #dedbe7; --material-muted: #7f788d; --material-accent: #dfa0ba; --material-warm: #ebc476; }
+
 /* ── Color scheme for native browser widgets (select, scrollbars, etc.) ─── */
 :root,
 [data-theme="dark"], [data-theme="terminal"], [data-theme="solarized-dark"], [data-theme="solar-flare"],
@@ -1189,7 +1265,12 @@ html[data-color-treatment="flat"] .av-hover-control:not(:disabled):hover {
 [data-theme="vitesse-dark"], [data-theme="iceberg"], [data-theme="zenburn"],
 [data-theme="material-darker"], [data-theme="claude-code"], [data-theme="linear"], [data-theme="sentry"],
 [data-theme="raycast"], [data-theme="framer"], [data-theme="ferrari"],
-[data-theme="resend"], [data-theme="cyber"], [data-theme="cyber-wave"], [data-theme="willow-dream"] {
+[data-theme="resend"], [data-theme="cyber"], [data-theme="cyber-wave"], [data-theme="willow-dream"],
+[data-theme="anodised-obsidian"], [data-theme="dark-ceramic"], [data-theme="carbon-surface"],
+[data-theme="smoked-glass"], [data-theme="metalterm"], [data-theme="graphite"], [data-theme="ember"],
+[data-theme="abyss"], [data-theme="orchid"], [data-theme="phosphor"], [data-theme="nocturne"],
+[data-theme="slate"], [data-theme="solstice"], [data-theme="dune"], [data-theme="grape"],
+[data-theme="repo"], [data-theme="cappuccino"] {
   color-scheme: dark;
   --native-color-scheme: dark;
 }
@@ -1207,7 +1288,8 @@ html[data-color-treatment="flat"] .av-hover-control:not(:disabled):hover {
 [data-theme="pinterest"], [data-theme="playstation"], [data-theme="nvidia"],
 [data-theme="mongodb"], [data-theme="slack"], [data-theme="cohere"],
 [data-theme="mistral"], [data-theme="cursor"], [data-theme="airbnb"],
-[data-theme="intercom"] {
+[data-theme="intercom"], [data-theme="bone-china"], [data-theme="cold-pressed"],
+[data-theme="sunlit-alabaster"], [data-theme="brushed-aluminium"] {
   color-scheme: light;
   --native-color-scheme: light;
 }

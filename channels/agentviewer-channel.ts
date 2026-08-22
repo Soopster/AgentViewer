@@ -8,6 +8,13 @@
 // AGENTVIEWER_CHANNEL_PORT (default 8790); this process forwards messages into
 // the CLI session over MCP/stdio and streams replies + permission prompts back
 // out over SSE on /events.
+//
+// Do not set MCP_PROTOCOL_NEGOTIATION=auto when running the host `claude`
+// session: on the v2 MCP client runtime that flag makes Claude Code ask stdio
+// servers (this one included) to negotiate protocol revision 2026-07-28,
+// which can't carry channel messages — Claude Code then silently declines to
+// register this server as a channel. Leave the variable unset, or set it to
+// `legacy`, to keep the handshake this bridge depends on.
 import { McpServer } from '@modelcontextprotocol/server'
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio'
 import { randomUUID } from 'node:crypto'

@@ -160,10 +160,15 @@ const INTERRUPT_FALLBACK_MS = 4000
 // (default 10) and API_TIMEOUT_MS (default 600000) are left at their defaults;
 // the SDK already retries transient API errors, which our client-side retry sits
 // on top of. CLAUDE_STREAM_IDLE_TIMEOUT_MS has a 300000ms (5 min) floor.
+// Tool search is on by default in the SDK (auto-activates at 10% of the
+// context window), but the coordinator MCP alone can register 40+ tools, so
+// we lower the threshold to activate deferral sooner rather than relying on
+// the default budget.
 export const CLAUDE_QUERY_ENV: Record<string, string | undefined> = {
   ...process.env,
   CLAUDE_ENABLE_STREAM_WATCHDOG: '1',
   CLAUDE_STREAM_IDLE_TIMEOUT_MS: '300000',
+  ENABLE_TOOL_SEARCH: 'auto:5',
 }
 
 // Surface the Claude CLI subprocess's stderr (otherwise dropped) so a genuinely

@@ -18,6 +18,10 @@ export type Theme =
   | 'iceberg-light'
   | 'material-lighter'
   | 'min-light'
+  | 'bone-china'
+  | 'cold-pressed'
+  | 'sunlit-alabaster'
+  | 'brushed-aluminium'
   | 'imessage'
   | 'dark'
   | 'terminal'
@@ -76,6 +80,23 @@ export type Theme =
   | 'cyber'
   | 'cyber-wave'
   | 'willow-dream'
+  | 'anodised-obsidian'
+  | 'dark-ceramic'
+  | 'carbon-surface'
+  | 'smoked-glass'
+  | 'metalterm'
+  | 'graphite'
+  | 'ember'
+  | 'abyss'
+  | 'orchid'
+  | 'phosphor'
+  | 'nocturne'
+  | 'slate'
+  | 'solstice'
+  | 'dune'
+  | 'grape'
+  | 'repo'
+  | 'cappuccino'
 
 export type ThemeCategory = 'dark' | 'light'
 
@@ -99,6 +120,10 @@ export const THEME_META: Record<Theme, { category: ThemeCategory; icon: string; 
   'iceberg-light':    { category: 'light', icon: '☀', label: 'Iceberg Light' },
   'material-lighter': { category: 'light', icon: '☀', label: 'Material Lighter' },
   'min-light':        { category: 'light', icon: '☀', label: 'Min Light' },
+  'bone-china':       { category: 'light', icon: '◻', label: 'Bone China' },
+  'cold-pressed':     { category: 'light', icon: '◻', label: 'Cold-Pressed' },
+  'sunlit-alabaster': { category: 'light', icon: '◻', label: 'Sunlit Alabaster' },
+  'brushed-aluminium': { category: 'light', icon: '◻', label: 'Brushed Aluminium' },
   stripe:             { category: 'light', icon: '☀', label: 'Stripe' },
   'claude-cream':     { category: 'light', icon: '☀', label: 'Claude Cream' },
   supabase:           { category: 'light', icon: '☀', label: 'Supabase' },
@@ -157,6 +182,23 @@ export const THEME_META: Record<Theme, { category: ThemeCategory; icon: string; 
   cyber:              { category: 'dark',  icon: '✦', label: 'Cyber' },
   'cyber-wave':       { category: 'dark',  icon: '≋', label: 'Cyber Wave' },
   'willow-dream':     { category: 'dark',  icon: '⌁', label: 'Willow Dream' },
+  'anodised-obsidian': { category: 'dark', icon: '◆', label: 'Anodised Obsidian' },
+  'dark-ceramic':     { category: 'dark', icon: '◆', label: 'Dark Ceramic' },
+  'carbon-surface':   { category: 'dark', icon: '◆', label: 'Carbon Surface' },
+  'smoked-glass':     { category: 'dark', icon: '◆', label: 'Smoked Glass' },
+  metalterm:          { category: 'dark', icon: '◆', label: 'Metalterm' },
+  graphite:           { category: 'dark', icon: '◆', label: 'Graphite' },
+  ember:              { category: 'dark', icon: '◆', label: 'Ember' },
+  abyss:              { category: 'dark', icon: '◆', label: 'Abyss' },
+  orchid:             { category: 'dark', icon: '◆', label: 'Orchid' },
+  phosphor:           { category: 'dark', icon: '◆', label: 'Phosphor' },
+  nocturne:           { category: 'dark', icon: '◆', label: 'Nocturne' },
+  slate:              { category: 'dark', icon: '◆', label: 'Slate' },
+  solstice:           { category: 'dark', icon: '◆', label: 'Solstice' },
+  dune:               { category: 'dark', icon: '◆', label: 'Dune' },
+  grape:              { category: 'dark', icon: '◆', label: 'Grape' },
+  repo:               { category: 'dark', icon: '◆', label: 'Repo' },
+  cappuccino:         { category: 'dark', icon: '◆', label: 'Cappuccino' },
 }
 
 export const THEMES: Theme[] = Object.keys(THEME_META) as Theme[]

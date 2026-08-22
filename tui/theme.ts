@@ -65,6 +65,28 @@ export type TuiThemeMode =
   | 'retro-82'
   | 'ristretto'
   | 'vantablack'
+  | 'orchestrator'
+  | 'anodised-obsidian'
+  | 'dark-ceramic'
+  | 'carbon-surface'
+  | 'smoked-glass'
+  | 'bone-china'
+  | 'cold-pressed'
+  | 'sunlit-alabaster'
+  | 'brushed-aluminium'
+  | 'metalterm'
+  | 'graphite'
+  | 'ember'
+  | 'abyss'
+  | 'orchid'
+  | 'phosphor'
+  | 'nocturne'
+  | 'slate'
+  | 'solstice'
+  | 'dune'
+  | 'grape'
+  | 'repo'
+  | 'cappuccino'
   | 'white'
   | 'stripe'
   | 'claude-cream'
@@ -160,6 +182,45 @@ export type TuiThemePalette = {
   amber: string
   pink: string
   userBg: string
+}
+
+function mixHex(from: string, to: string, amount: number): string {
+  const channel = (hex: string, offset: number) => Number.parseInt(hex.slice(offset, offset + 2), 16)
+  const mixed = [1, 3, 5].map((offset) => Math.round(
+    channel(from, offset) + (channel(to, offset) - channel(from, offset)) * amount,
+  ))
+  return `#${mixed.map((value) => value.toString(16).padStart(2, '0')).join('')}`
+}
+
+function swatchTheme(
+  bg: string,
+  text: string,
+  muted: string,
+  accent: string,
+  warm: string,
+  light = false,
+): TuiThemePalette {
+  return {
+    bg,
+    surface: mixHex(bg, light ? '#ffffff' : text, light ? 0.5 : 0.04),
+    surface2: mixHex(bg, text, light ? 0.05 : 0.08),
+    surface3: mixHex(bg, text, light ? 0.1 : 0.14),
+    diffAddBg: mixHex(bg, '#2f9e62', light ? 0.1 : 0.2),
+    diffRemoveBg: mixHex(bg, '#d14d52', light ? 0.1 : 0.2),
+    diffMetaBg: mixHex(bg, accent, light ? 0.1 : 0.18),
+    border: mixHex(bg, text, light ? 0.14 : 0.18),
+    border2: accent,
+    text,
+    muted,
+    dim: mixHex(bg, muted, light ? 0.58 : 0.68),
+    violet: accent,
+    cyan: mixHex(accent, text, 0.2),
+    green: mixHex(warm, '#2bb673', 0.42),
+    red: mixHex(accent, '#ef4444', 0.5),
+    amber: warm,
+    pink: mixHex(accent, '#ec4899', 0.38),
+    userBg: mixHex(bg, accent, light ? 0.12 : 0.24),
+  }
 }
 
 export const LIGHT_THEME: TuiThemePalette = {
@@ -1636,6 +1697,54 @@ export const VANTABLACK_THEME: TuiThemePalette = {
   userBg: '#1a1a1a',
 } as const
 
+export const ORCHESTRATOR_THEME: TuiThemePalette = {
+  bg: '#050506',
+  surface: '#0a0a0c',
+  surface2: '#121318',
+  surface3: '#292d42',
+  diffAddBg: '#102c25',
+  diffRemoveBg: '#321719',
+  diffMetaBg: '#142647',
+  border: '#00d7e5',
+  border2: '#f3ed00',
+  text: '#d8d8dc',
+  muted: '#aaaab2',
+  dim: '#666873',
+  violet: '#6284ff',
+  cyan: '#00d7e5',
+  green: '#20d6b0',
+  red: '#ff6268',
+  amber: '#f3ed00',
+  pink: '#ff70b7',
+  userBg: '#165db9',
+} as const
+
+// Material-inspired palettes from the Metalterm reference board. Each theme is
+// anchored by the five visible swatches: canvas, foreground, muted, accent,
+// and warm highlight. The shared builder derives surfaces and semantic colors
+// consistently so the family reads as one collection in every TUI surface.
+export const ANODISED_OBSIDIAN_THEME = swatchTheme('#09090b', '#e4ded2', '#8a8882', '#f4a35c', '#edc36a')
+export const DARK_CERAMIC_THEME = swatchTheme('#0d0e12', '#ded6c7', '#797873', '#f3a05b', '#edc36a')
+export const CARBON_SURFACE_THEME = swatchTheme('#0b0c0f', '#ded7c9', '#777772', '#f1a15c', '#ecc36b')
+export const SMOKED_GLASS_THEME = swatchTheme('#0e0f13', '#ded6c7', '#777873', '#f3a45e', '#ebc36a')
+export const BONE_CHINA_THEME = swatchTheme('#f0ece5', '#2a2927', '#77746e', '#b75a00', '#987213', true)
+export const COLD_PRESSED_THEME = swatchTheme('#f3f3f2', '#312e2b', '#7b7974', '#bd6400', '#9f7606', true)
+export const SUNLIT_ALABASTER_THEME = swatchTheme('#f2e8d2', '#2c2a26', '#787570', '#b95b00', '#98700b', true)
+export const BRUSHED_ALUMINIUM_THEME = swatchTheme('#e7e9eb', '#2b2927', '#7b7974', '#b86200', '#9a7407', true)
+export const METALTERM_THEME = swatchTheme('#201d1a', '#ddd3c1', '#837a6c', '#eda15f', '#e8bd66')
+export const GRAPHITE_THEME = swatchTheme('#211e1b', '#f0ede8', '#807e78', '#d8d4cb', '#d7c391')
+export const EMBER_THEME = swatchTheme('#1f1a17', '#e7dbcc', '#957d6a', '#f2a15b', '#e9bd65')
+export const ABYSS_THEME = swatchTheme('#081724', '#d8e5ef', '#607c8d', '#71cad3', '#e5b75d')
+export const ORCHID_THEME = swatchTheme('#1a1029', '#e1d8eb', '#80729a', '#c191ef', '#e7ba76')
+export const PHOSPHOR_THEME = swatchTheme('#082019', '#bce7da', '#628c80', '#72e2a6', '#d9cd87')
+export const NOCTURNE_THEME = swatchTheme('#111c2d', '#dce4ed', '#68758b', '#7eaee3', '#e7bd6c')
+export const SLATE_THEME = swatchTheme('#1a2230', '#dce4ed', '#727c8d', '#7cabe0', '#e4b96c')
+export const SOLSTICE_THEME = swatchTheme('#092522', '#d2dfdc', '#5f8583', '#62b7ad', '#d3aa5d')
+export const DUNE_THEME = swatchTheme('#2a241e', '#e0d4bc', '#8e8370', '#e8a84d', '#f0cf7a')
+export const GRAPE_THEME = swatchTheme('#21172b', '#e2e0ea', '#7f7594', '#ec85bd', '#ecd46f')
+export const REPO_THEME = swatchTheme('#101f2d', '#d7e3eb', '#687787', '#72aee8', '#e9b53f')
+export const CAPPUCCINO_THEME = swatchTheme('#211d2b', '#dedbe7', '#7f788d', '#dfa0ba', '#ebc476')
+
 export const WHITE_THEME: TuiThemePalette = {
   bg: '#ffffff',
   surface: '#fafafa',
@@ -2907,6 +3016,28 @@ export function getThemePalette(mode: TuiThemeMode): TuiThemePalette {
     case 'retro-82': return RETRO_82_THEME
     case 'ristretto': return RISTRETTO_THEME
     case 'vantablack': return VANTABLACK_THEME
+    case 'orchestrator': return ORCHESTRATOR_THEME
+    case 'anodised-obsidian': return ANODISED_OBSIDIAN_THEME
+    case 'dark-ceramic': return DARK_CERAMIC_THEME
+    case 'carbon-surface': return CARBON_SURFACE_THEME
+    case 'smoked-glass': return SMOKED_GLASS_THEME
+    case 'bone-china': return BONE_CHINA_THEME
+    case 'cold-pressed': return COLD_PRESSED_THEME
+    case 'sunlit-alabaster': return SUNLIT_ALABASTER_THEME
+    case 'brushed-aluminium': return BRUSHED_ALUMINIUM_THEME
+    case 'metalterm': return METALTERM_THEME
+    case 'graphite': return GRAPHITE_THEME
+    case 'ember': return EMBER_THEME
+    case 'abyss': return ABYSS_THEME
+    case 'orchid': return ORCHID_THEME
+    case 'phosphor': return PHOSPHOR_THEME
+    case 'nocturne': return NOCTURNE_THEME
+    case 'slate': return SLATE_THEME
+    case 'solstice': return SOLSTICE_THEME
+    case 'dune': return DUNE_THEME
+    case 'grape': return GRAPE_THEME
+    case 'repo': return REPO_THEME
+    case 'cappuccino': return CAPPUCCINO_THEME
     case 'white': return WHITE_THEME
     case 'stripe': return STRIPE_THEME
     case 'claude-cream': return CLAUDE_CREAM_THEME

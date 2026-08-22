@@ -469,8 +469,11 @@ const LIGHT_MODES: TuiThemeMode[] = [
   'alabaster',
   'apple',
   'ayu-light',
+  'bone-china',
+  'brushed-aluminium',
   'catppuccin-latte',
   'claude-cream',
+  'cold-pressed',
   'cohere',
   'cursor',
   'everforest-light',
@@ -506,13 +509,18 @@ const LIGHT_MODES: TuiThemeMode[] = [
   'solarized-light',
   'stripe',
   'supabase',
+  'sunlit-alabaster',
   'tokyo-night-day',
   'tomorrow',
   'vitesse-light',
   'white',
 ]
 const DARK_MODES: TuiThemeMode[] = [
+  'abyss',
+  'anodised-obsidian',
   'ayu-dark',
+  'cappuccino',
+  'carbon-surface',
   'catppuccin-mocha',
   'claude-code',
   'cobalt',
@@ -520,7 +528,10 @@ const DARK_MODES: TuiThemeMode[] = [
   'cyber-wave',
   'willow-dream',
   'dark',
+  'dark-ceramic',
   'dracula',
+  'dune',
+  'ember',
   'fancy-dracula',
   'ethereal',
   'everforest-dark',
@@ -528,6 +539,7 @@ const DARK_MODES: TuiThemeMode[] = [
   'flexoki-dark',
   'framer',
   'github-dark',
+  'graphite',
   'gruvbox-dark',
   'hackerman',
   'iceberg',
@@ -536,29 +548,39 @@ const DARK_MODES: TuiThemeMode[] = [
   'lumon',
   'material-darker',
   'matte-black',
+  'metalterm',
   'miasma',
   'monokai',
   'night-owl',
+  'nocturne',
   'nord',
   'obsidian',
   'oceanic-next',
   'one-dark',
+  'orchestrator',
+  'orchid',
   'osaka-jade',
   'palenight',
   'papercolor-dark',
+  'phosphor',
   'raycast',
   'resend',
+  'repo',
   'retro-82',
   'ristretto',
   'rose-pine',
   'sentry',
+  'slate',
   'slack-dark',
+  'smoked-glass',
   'snazzy',
   'solarized-dark',
   'solar-flare',
+  'solstice',
   'synthwave',
   'tokyo-night',
   'tomorrow-night',
+  'grape',
   'vantablack',
   'vitesse-dark',
   'zenburn',
@@ -1296,6 +1318,7 @@ function openExternalUrl(url: string): Promise<void> {
 type InlineTextSegment = {
   text: string
   fg: string
+  bg?: string
   attributes?: number
 }
 
@@ -1380,7 +1403,7 @@ function renderInlineTextSegments(segments: InlineTextSegment[], width: number, 
     if (!segment?.text) continue
     const clipped = clipText(segment.text, remaining)
     if (!clipped) continue
-    out.push(<span key={i} fg={segment.fg} attributes={segment.attributes}>{clipped}</span>)
+    out.push(<span key={i} fg={segment.fg} bg={segment.bg} attributes={segment.attributes}>{clipped}</span>)
     remaining -= clipped.length
   }
   if (remaining > 0) {
@@ -4618,6 +4641,10 @@ const THEME_DESCRIPTIONS_BASE: Record<Exclude<TuiThemeMode, (typeof PROCEDURAL_T
   'iceberg-light': 'Iceberg cool cream',
   'material-lighter': 'Material Theme lighter',
   'min-light': 'Atom Min minimalist',
+  'bone-china': 'Porcelain, warm white',
+  'cold-pressed': 'Rag paper, neutral cool',
+  'sunlit-alabaster': 'Translucent stone, warm',
+  'brushed-aluminium': 'Silver, machined',
   'light-owl': 'Night Owl daylight palette',
   'papercolor-light': 'PaperColor neutral light',
   tomorrow: 'Tomorrow clean daylight',
@@ -4683,6 +4710,24 @@ const THEME_DESCRIPTIONS_BASE: Record<Exclude<TuiThemeMode, (typeof PROCEDURAL_T
   'retro-82': 'Retro 82 neon arcade',
   ristretto: 'Ristretto warm coffee',
   vantablack: 'Vantablack pure dark',
+  orchestrator: 'Black terminal with cyan rails and yellow focus',
+  'anodised-obsidian': 'Pulp brush, warm room',
+  'dark-ceramic': 'Sintered, one softbox',
+  'carbon-surface': 'Forged fibre, matte coat',
+  'smoked-glass': 'Cover glass over graphite',
+  metalterm: 'Soot, orange accent',
+  graphite: 'Neutral warm grey',
+  ember: 'Amber on soot',
+  abyss: 'Cyan on ink',
+  orchid: 'Violet, magenta lift',
+  phosphor: 'Green CRT glass',
+  nocturne: 'Slate blue, low glare',
+  slate: 'Graphite blue',
+  solstice: 'Teal ink, low contrast',
+  dune: 'Retro earth',
+  grape: 'Night purple, candy',
+  repo: 'Blue-grey, code host',
+  cappuccino: 'Mocha, soft pastels',
   linear: 'Linear lavender dusk',
   sentry: 'Sentry deep violet',
   'slack-dark': 'Slack charcoal aubergine',
@@ -4745,6 +4790,10 @@ const THEME_LABELS_BASE: Record<Exclude<TuiThemeMode, (typeof PROCEDURAL_THEME_N
   'iceberg-light': 'ICEBERG LIGHT',
   'material-lighter': 'MATERIAL LIGHTER',
   'min-light': 'MIN LIGHT',
+  'bone-china': 'BONE CHINA',
+  'cold-pressed': 'COLD-PRESSED',
+  'sunlit-alabaster': 'SUNLIT ALABASTER',
+  'brushed-aluminium': 'BRUSHED ALUMINIUM',
   'light-owl': 'LIGHT OWL',
   'papercolor-light': 'PAPERCOLOR LIGHT',
   tomorrow: 'TOMORROW',
@@ -4810,6 +4859,24 @@ const THEME_LABELS_BASE: Record<Exclude<TuiThemeMode, (typeof PROCEDURAL_THEME_N
   'retro-82': 'RETRO 82',
   ristretto: 'RISTRETTO',
   vantablack: 'VANTABLACK',
+  orchestrator: 'ORCHESTRATOR',
+  'anodised-obsidian': 'ANODISED OBSIDIAN',
+  'dark-ceramic': 'DARK CERAMIC',
+  'carbon-surface': 'CARBON SURFACE',
+  'smoked-glass': 'SMOKED GLASS',
+  metalterm: 'METALTERM',
+  graphite: 'GRAPHITE',
+  ember: 'EMBER',
+  abyss: 'ABYSS',
+  orchid: 'ORCHID',
+  phosphor: 'PHOSPHOR',
+  nocturne: 'NOCTURNE',
+  slate: 'SLATE',
+  solstice: 'SOLSTICE',
+  dune: 'DUNE',
+  grape: 'GRAPE',
+  repo: 'REPO',
+  cappuccino: 'CAPPUCCINO',
   linear: 'LINEAR',
   sentry: 'SENTRY',
   'slack-dark': 'SLACK DARK',
@@ -6034,12 +6101,12 @@ function TranscriptCardInner({
         id={`card:${card.key}`}
         alignSelf={userBubble ? 'flex-end' : undefined}
         width={cardWidth}
-        border
-        borderStyle={hasCursor ? 'heavy' : 'single'}
-        borderColor={borderColor}
+        border={!streamMode}
+        borderStyle={streamMode ? undefined : hasCursor ? 'heavy' : 'single'}
+        borderColor={streamMode ? undefined : borderColor}
         backgroundColor={cardBg}
         flexDirection="column"
-        title={cardTitle}
+        title={streamMode ? undefined : cardTitle}
         titleColor={accent}
         onMouseDown={(event) => {
           if (event.button !== 0) return
@@ -9177,6 +9244,7 @@ export default function OpenTuiApp() {
   }, [composerWorkingDirectory])
   const composerLocationSegments = useMemo<InlineTextSegment[]>(() => {
     const parts: InlineTextSegment[] = []
+    if (composerWorkingDirectory) parts.push({ text: `${composerWorkingDirectory}  `, fg: theme.dim })
     const branch = composerGitSummary?.branch ?? composerGitBranch
     if (branch) parts.push({ text: branch, fg: theme.green })
     if (composerGitSummary?.modified) parts.push({ text: `  ~${composerGitSummary.modified}`, fg: theme.amber })
@@ -9190,12 +9258,11 @@ export default function OpenTuiApp() {
       parts.push({ text: ` · ⧉ worktree task${counts ? ` · ${counts}` : ''}`, fg: theme.amber })
     }
     return parts
-  }, [composerGitBranch, composerGitSummary, selectedWorktreeTask, theme.amber, theme.dim, theme.green])
+  }, [composerGitBranch, composerGitSummary, composerWorkingDirectory, selectedWorktreeTask, theme.amber, theme.dim, theme.green])
   const buildComposerStatsSegments = (lineCount: number): InlineTextSegment[] => {
     const segments: InlineTextSegment[] = []
     if (composerDraft.length === 0) {
-      segments.push({ text: composerConfig.glyph, fg: composerAccentColor })
-      segments.push({ text: ` ${composerConfig.label}`, fg: composerAccentColor })
+      segments.push({ text: ` ${composerConfig.label} `, fg: theme.surface, bg: composerAccentColor })
     } else {
       segments.push({ text: `${lineCount} line${lineCount === 1 ? '' : 's'}`, fg: composerAccentColor })
       segments.push({ text: ` · ${composerDraft.length} chars`, fg: theme.text })
@@ -17408,6 +17475,16 @@ export default function OpenTuiApp() {
       return
     }
 
+    // LazyVim-inspired project editor. The editor owns text input while open;
+    // the root handler only intercepts shortcuts the editor reports consumed.
+    if (isCtrl('e')) {
+      handled(() => {
+        setEditorInitialPath(null)
+        setEditorOpen(true)
+      })
+      return
+    }
+
     // Agent Operations. On legacy terminals raw ^A is the portable fallback.
     if (isCtrlShift('a')) {
       handled(openCoordinationBoard)
@@ -18326,7 +18403,7 @@ export default function OpenTuiApp() {
     : composerActive
     ? 'FOCUSED'
     : 'READY'
-  const composerDockTitleLeft = `◆ COMPOSER · ${composerConfig.label.toUpperCase()}`
+  const composerDockTitleLeft = '◆ COMPOSER'
   const composerDockTitleWidth = Math.max(composerDockTextareaWidth - 2, 12)
   const composerDockTitleGap = composerDockTitleWidth - composerDockTitleLeft.length - composerDockHeaderStatus.length
   const composerDockRouted = routeComposerToBridge || routeComposerToIde
@@ -18340,7 +18417,7 @@ export default function OpenTuiApp() {
     : reattachedRunning
     ? 'REATTACHED'
     : 'EXPANDED'
-  const composerWindowTitleLeft = `◆ COMPOSER · ${composerConfig.label.toUpperCase()}`
+  const composerWindowTitleLeft = '◆ COMPOSER'
   const composerWindowTitleWidth = Math.max(composerWindowWidth - 4, 12)
   const composerWindowTitleGap = composerWindowTitleWidth - composerWindowTitleLeft.length - composerWindowHeaderStatus.length
   const composerWindowBorderTitle = composerWindowTitleGap > 0
@@ -19007,11 +19084,21 @@ export default function OpenTuiApp() {
                 </box>
               </box>
               <box height={1} paddingX={1} flexDirection="row" alignItems="center">
-                <text fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none">
-                  {composerSlashHint
-                    ? fitText(composerSlashHint, Math.max(rightPaneWidth - 4, 20))
-                    : renderInlineTextSegments(composerDockStatsSegments, Math.max(rightPaneWidth - 4, 20), theme.dim)}
-                </text>
+                <box width={Math.max(Math.floor((rightPaneWidth - 4) * 0.55), 12)} overflow="hidden">
+                  <text fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none">
+                    {composerSlashHint
+                      ? fitText(composerSlashHint, Math.max(Math.floor((rightPaneWidth - 4) * 0.55), 12))
+                      : renderInlineTextSegments(composerDockStatsSegments, Math.max(Math.floor((rightPaneWidth - 4) * 0.55), 12), theme.dim)}
+                  </text>
+                </box>
+                <box flexGrow={1} />
+                <box overflow="hidden">
+                  <text fg={composerActive && composerSendState !== 'sending' ? composerAccentColor : theme.dim} wrapMode="none">
+                    {composerDockSendingHintSegments
+                      ? renderInlineTextSegments(composerDockSendingHintSegments, Math.max(Math.floor((rightPaneWidth - 4) * 0.45) - 1, 12), theme.dim)
+                      : fitText(composerDockFooterHint, Math.max(Math.floor((rightPaneWidth - 4) * 0.45) - 1, 12))}
+                  </text>
+                </box>
               </box>
             </box>
           ) : null}
