@@ -74,7 +74,8 @@ const AUTO_COMPLETE_DELAY_MS = 160
 const SYNTAX_DELAY_MS = 90
 const LSP_CHANGE_DELAY_MS = 120
 const VELOCITY_SCROLL_RESET_MS = 420
-const VELOCITY_SCROLL_RAMP_MS = 720
+const VELOCITY_SCROLL_HOLD_DELAY_MS = 360
+const VELOCITY_SCROLL_RAMP_MS = 900
 const VELOCITY_SCROLL_MAX_STEP = 8
 const WORD_PATTERN = /[A-Za-z_$][\w$-]{1,}/g
 
@@ -549,7 +550,9 @@ export function EditorPopover({
       return 1
     }
     state.lastEventTime = now
-    const progress = Math.max(0, Math.min(1, (now - state.streakStart) / VELOCITY_SCROLL_RAMP_MS))
+    const heldFor = now - state.streakStart
+    if (heldFor < VELOCITY_SCROLL_HOLD_DELAY_MS) return 1
+    const progress = Math.max(0, Math.min(1, (heldFor - VELOCITY_SCROLL_HOLD_DELAY_MS) / VELOCITY_SCROLL_RAMP_MS))
     return Math.max(1, Math.round(1 + (VELOCITY_SCROLL_MAX_STEP - 1) * progress * progress))
   }, [velocityScrollEnabled])
 
