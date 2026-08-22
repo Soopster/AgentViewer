@@ -6,10 +6,12 @@ import {
   getTreeSitterClient,
   MacOSScrollAccel,
   type LineNumberRenderable,
+  ScrollBarRenderable,
   type SyntaxStyle,
   type TextareaRenderable,
 } from '@opentui/core'
 import type { MouseEvent } from '@opentui/core'
+import { extend } from '@opentui/react'
 import type { TuiThemePalette } from '../theme'
 import { detectTuiCodeFiletypeFromPath } from '../codeFiletypes'
 import { listProjectFiles } from '../../lib/projectFiles'
@@ -23,6 +25,14 @@ import {
   type EditorSignatureHelp,
 } from './editorLsp'
 import { createScrollVelocityState, velocityScrollStep } from './scrollVelocity'
+
+extend({ editorScrollbar: ScrollBarRenderable })
+
+declare module '@opentui/react' {
+  interface OpenTUIComponents {
+    editorScrollbar: typeof ScrollBarRenderable
+  }
+}
 
 export type EditorKeyEvent = {
   name: string
@@ -93,6 +103,7 @@ type EditorCommandId =
   | 'show-hover'
   | 'toggle-vim'
   | 'toggle-velocity'
+  | 'toggle-word-wrap'
 
 type EditorCommand = {
   id: EditorCommandId
@@ -111,6 +122,22 @@ const LSP_CHANGE_DELAY_MS = 120
 const SIGNATURE_DELAY_MS = 110
 const WORD_PATTERN = /[A-Za-z_$][\w$-]{1,}/g
 
+function packFooterShortcuts(shortcuts: readonly string[], width: number): string[] {
+  const rows: string[] = []
+  let current = ''
+  for (const shortcut of shortcuts) {
+    const candidate = current ? `${current}  ${shortcut}` : shortcut
+    if (current && candidate.length > width) {
+      rows.push(current)
+      current = shortcut
+    } else {
+      current = candidate
+    }
+  }
+  if (current) rows.push(current)
+  return rows
+}
+
 const EDITOR_COMMANDS: readonly EditorCommand[] = [
   { id: 'save', label: 'File: Save', detail: 'Ctrl+S', keywords: 'write file' },
   { id: 'find', label: 'Edit: Find in File', detail: 'Ctrl+F', keywords: 'search text' },
@@ -119,6 +146,7 @@ const EDITOR_COMMANDS: readonly EditorCommand[] = [
   { id: 'previous-diagnostic', label: 'Problems: Previous Diagnostic', detail: 'Shift+F8', keywords: 'error warning issue' },
   { id: 'show-hover', label: 'IntelliSense: Show Hover', detail: 'Ctrl+K', keywords: 'type documentation symbol' },
   { id: 'toggle-vim', label: 'Editor: Toggle Vim Mode', detail: 'Alt+V', keywords: 'normal insert visual modal' },
+  { id: 'toggle-word-wrap', label: 'Editor: Toggle Word Wrap', detail: 'Alt+Z', keywords: 'wrap long lines columns' },
   { id: 'toggle-explorer', label: 'View: Toggle Explorer', detail: 'Ctrl+B', keywords: 'sidebar files' },
   { id: 'focus-explorer', label: 'View: Focus Explorer or Editor', detail: 'Ctrl+E', keywords: 'sidebar pane' },
   { id: 'close-tab', label: 'File: Close Active Tab', detail: 'Ctrl+W', keywords: 'buffer' },
@@ -378,10 +406,16 @@ export function EditorPopover({
   const [closeConfirm, setCloseConfirm] = useState(false)
   const [clock, setClock] = useState(() => new Date())
   const [velocityScrollEnabled, setVelocityScrollEnabled] = useState(false)
+  const [wordWrapEnabled, setWordWrapEnabled] = useState(false)
   const [vimEnabled, setVimEnabled] = useState(false)
   const [vimMode, setVimMode] = useState<VimMode>('insert')
   const scrollAcceleration = useMemo(() => new MacOSScrollAccel({ maxMultiplier: 3 }), [])
+  const paneScrollbarOptions = useMemo(
+    () => ({ trackOptions: { foregroundColor: theme.muted, backgroundColor: theme.surface2 } }),
+    [theme.muted, theme.surface2],
+  )
   const editorRef = useRef<TextareaRenderable | null>(null)
+  const editorScrollbarRef = useRef<ScrollBarRenderable | null>(null)
   const lineNumberRef = useRef<LineNumberRenderable | null>(null)
   const lspRef = useRef<EditorLspClient | null>(null)
   const syntaxRequestRef = useRef(0)
@@ -448,7 +482,26 @@ export function EditorPopover({
 
   const editorWidth = Math.max(24, width - (explorerVisible ? Math.max(24, Math.min(38, Math.floor(width * 0.23))) : 0) - 2)
   const explorerWidth = explorerVisible ? Math.max(24, Math.min(38, Math.floor(width * 0.23))) : 0
-  const contentHeight = Math.max(6, height - 5)
+  const footerShortcutRows = useMemo(() => packFooterShortcuts([
+    '^S save',
+    '^P open',
+    '^F find',
+    '^G line',
+    '^B explorer',
+    '^E focus',
+    '^W close tab',
+    '^Tab/^Pg tabs',
+    '^Space complete',
+    '^K hover',
+    '^⇧Space signature',
+    'F8/⇧F8 problems',
+    `Alt+Z wrap ${wordWrapEnabled ? 'on' : 'off'}`,
+    `Alt+V vim ${vimEnabled ? 'on' : 'off'}`,
+    `V velocity ${velocityScrollEnabled ? 'on' : 'off'}`,
+    '^Q exit',
+  ], Math.max(20, width - 4)), [velocityScrollEnabled, vimEnabled, width, wordWrapEnabled])
+  const footerHeight = 1 + footerShortcutRows.length
+  const contentHeight = Math.max(6, height - 4 - footerHeight)
 
   useEffect(() => {
     const timer = setInterval(() => setClock(new Date()), 30_000)
@@ -792,33 +845,74 @@ export function EditorPopover({
     setMessage(`${next + 1}/${diagnostics.length} ${diagnostic.source ? `${diagnostic.source}: ` : ''}${diagnostic.message}`)
   }, [diagnosticCursor, diagnostics])
 
+  const syncEditorScrollbar = useCallback(() => {
+    const editor = editorRef.current
+    const scrollbar = editorScrollbarRef.current
+    if (!editor || !scrollbar) return
+    scrollbar.scrollSize = editor.editorView.getTotalVirtualLineCount()
+    scrollbar.viewportSize = Math.max(1, editor.height)
+    scrollbar.scrollPosition = editor.scrollY
+  }, [])
+
+  const reportToggle = useCallback((label: string, enabled: boolean) => {
+    const text = `${label} ${enabled ? 'enabled' : 'disabled'}`
+    setMessage(text)
+    onNotice?.('info', text)
+  }, [onNotice])
+
+  const toggleExplorer = useCallback(() => {
+    const next = !explorerVisible
+    setExplorerVisible(next)
+    setFocusPane('editor')
+    reportToggle('Editor explorer', next)
+  }, [explorerVisible, reportToggle])
+
+  const toggleVelocityScrolling = useCallback(() => {
+    const next = !velocityScrollEnabled
+    velocityScrollStateRef.current = createScrollVelocityState()
+    setVelocityScrollEnabled(next)
+    reportToggle('Editor velocity scrolling', next)
+  }, [reportToggle, velocityScrollEnabled])
+
+  const toggleWordWrap = useCallback(() => {
+    const next = !wordWrapEnabled
+    setWordWrapEnabled(next)
+    reportToggle('Editor word wrap', next)
+    queueMicrotask(syncEditorScrollbar)
+  }, [reportToggle, syncEditorScrollbar, wordWrapEnabled])
+
+  const toggleSearchMatchCase = useCallback(() => {
+    const next = !searchMatchCase
+    setSearchMatchCase(next)
+    setSearchCursor(-1)
+    reportToggle('Editor find match case', next)
+  }, [reportToggle, searchMatchCase])
+
   const toggleVimMode = useCallback(() => {
     const next = !vimEnabled
     setVimEnabled(next)
     setVimMode(next ? 'normal' : 'insert')
     vimPendingRef.current = null
     if (!next) editorRef.current?.clearSelection()
-    setMessage(`Vim mode ${next ? 'enabled · NORMAL' : 'disabled'}`)
-  }, [vimEnabled])
+    reportToggle('Editor Vim mode', next)
+  }, [reportToggle, vimEnabled])
 
   const executeEditorCommand = useCallback((id: EditorCommandId) => {
     switch (id) {
       case 'save': void saveActive(); break
       case 'find': openSearch(); break
       case 'goto-line': openQuick(':'); break
-      case 'toggle-explorer': setExplorerVisible((value) => !value); setFocusPane('editor'); break
+      case 'toggle-explorer': toggleExplorer(); break
       case 'focus-explorer': setFocusPane((current) => current === 'editor' ? 'explorer' : 'editor'); break
       case 'close-tab': closeActiveTab(); break
       case 'next-diagnostic': navigateDiagnostic(1); break
       case 'previous-diagnostic': navigateDiagnostic(-1); break
       case 'show-hover': void requestHover(); break
       case 'toggle-vim': toggleVimMode(); break
-      case 'toggle-velocity':
-        velocityScrollStateRef.current = createScrollVelocityState()
-        setVelocityScrollEnabled((value) => !value)
-        break
+      case 'toggle-velocity': toggleVelocityScrolling(); break
+      case 'toggle-word-wrap': toggleWordWrap(); break
     }
-  }, [closeActiveTab, navigateDiagnostic, openQuick, openSearch, requestHover, saveActive, toggleVimMode])
+  }, [closeActiveTab, navigateDiagnostic, openQuick, openSearch, requestHover, saveActive, toggleExplorer, toggleVelocityScrolling, toggleVimMode, toggleWordWrap])
 
   const chooseQuickResultAt = useCallback((index: number) => {
     const result = quickResults[index]
@@ -993,9 +1087,12 @@ export function EditorPopover({
       toggleVimMode()
       return true
     }
+    if (key.option && key.name === 'z') {
+      toggleWordWrap()
+      return true
+    }
     if (key.sequence === 'V' && !key.ctrl && !key.meta && !vimEnabled) {
-      velocityScrollStateRef.current = createScrollVelocityState()
-      setVelocityScrollEnabled((value) => !value)
+      toggleVelocityScrolling()
       return true
     }
     if (key.ctrl && key.name === 'tab') {
@@ -1020,7 +1117,7 @@ export function EditorPopover({
       if (key.name === 'return') { navigateSearch(key.shift ? -1 : 1); return true }
       if (key.name === 'backspace' || key.name === 'delete') { setSearchQuery((value) => value.slice(0, -1)); setSearchCursor(-1); return true }
       if (key.ctrl && key.name === 'f') { navigateSearch(key.shift ? -1 : 1); return true }
-      if (key.option && key.name === 'c') { setSearchMatchCase((value) => !value); setSearchCursor(-1); return true }
+      if (key.option && key.name === 'c') { toggleSearchMatchCase(); return true }
       if (!key.ctrl && !key.meta && sequence.length === 1 && sequence >= ' ') { setSearchQuery((value) => value + sequence); setSearchCursor(-1); return true }
       return true
     }
@@ -1091,7 +1188,7 @@ export function EditorPopover({
     if (key.ctrl && key.name === 'p') { openQuick(); return true }
     if (key.ctrl && key.name === 'f') { openSearch(); return true }
     if (key.ctrl && key.name === 'g') { openQuick(':'); return true }
-    if (key.ctrl && key.name === 'b') { setExplorerVisible((value) => !value); setFocusPane('editor'); return true }
+    if (key.ctrl && key.name === 'b') { toggleExplorer(); return true }
     if (key.ctrl && key.name === 'w') { closeActiveTab(); return true }
     if (key.name === 'f8') { navigateDiagnostic(key.shift ? -1 : 1); return true }
     if (key.ctrl && key.name === 'k') { void requestHover(); return true }
@@ -1116,7 +1213,7 @@ export function EditorPopover({
       return true
     }
     return false
-  }, [acceptCompletion, activateTreeRow, activeTab, chooseQuickResultAt, closeActiveTab, closeConfirm, completions.length, focusPane, handleVimKey, hoverInfo, navigateDiagnostic, navigateSearch, openQuick, openSearch, quickCursor, quickOpen, quickResults.length, requestClose, requestCompletions, requestHover, requestSignatureHelp, saveActive, searchOpen, signatureInfo, switchTab, toggleVimMode, treeCursor, treeExpanded, treeRows, velocityScrollEnabled, vimEnabled])
+  }, [acceptCompletion, activateTreeRow, activeTab, chooseQuickResultAt, closeActiveTab, closeConfirm, completions.length, focusPane, handleVimKey, hoverInfo, navigateDiagnostic, navigateSearch, openQuick, openSearch, quickCursor, quickOpen, quickResults.length, requestClose, requestCompletions, requestHover, requestSignatureHelp, saveActive, searchOpen, signatureInfo, switchTab, toggleExplorer, toggleSearchMatchCase, toggleVelocityScrolling, toggleVimMode, toggleWordWrap, treeCursor, treeExpanded, treeRows, velocityScrollEnabled, vimEnabled])
 
   useEffect(() => {
     onKeyHandlerReady(handleKey)
@@ -1134,6 +1231,27 @@ export function EditorPopover({
   const setEditorRef = useCallback((node: TextareaRenderable | null) => {
     editorRef.current = node
   }, [])
+
+  const setEditorScrollbarRef = useCallback((node: ScrollBarRenderable | null) => {
+    editorScrollbarRef.current = node
+    if (node) queueMicrotask(syncEditorScrollbar)
+  }, [syncEditorScrollbar])
+
+  const scrollEditorTo = useCallback((position: number) => {
+    const editor = editorRef.current
+    if (!editor) return
+    const viewport = editor.editorView.getViewport()
+    // Match TextareaRenderable's own wheel path: moveCursor=true keeps the
+    // requested viewport authoritative instead of snapping back to the caret.
+    editor.editorView.setViewport(viewport.offsetX, position, viewport.width, viewport.height, true)
+  }, [])
+
+  useEffect(() => {
+    if (!activePath) return undefined
+    syncEditorScrollbar()
+    const interval = setInterval(syncEditorScrollbar, 120)
+    return () => clearInterval(interval)
+  }, [activePath, syncEditorScrollbar])
 
   const updateActiveContent = useCallback(() => {
     const content = editorRef.current?.plainText
@@ -1169,12 +1287,6 @@ export function EditorPopover({
   const editorModeColor = focusPane === 'explorer'
     ? theme.amber
     : vimEnabled && vimMode === 'normal' ? theme.amber : vimEnabled && vimMode === 'visual' ? theme.cyan : theme.violet
-  const footerHints = width >= 135
-    ? `^S save  ^P open  ^F find  ^G line  ^K hover  ^⇧Space signature  F8 problem  Alt+V vim ${vimEnabled ? 'on' : 'off'}  ^Q exit`
-    : width >= 90
-      ? `^S save  ^P open  ^F find  ^G line  ^K hover  Alt+V vim ${vimEnabled ? 'on' : 'off'}  ^Q exit`
-      : '^S save  ^P open  ^F find  ^G line  ^Q exit'
-
   return (
     <box
       position="absolute"
@@ -1232,7 +1344,14 @@ export function EditorPopover({
             <box height={1} paddingX={1} backgroundColor={theme.surface2}>
               <text fg={theme.cyan} wrapMode="none">{fitText(`▾ ${basename(root)}`, explorerWidth - 4)}</text>
             </box>
-            <scrollbox flexGrow={1} focused={focusPane === 'explorer'} scrollAcceleration={scrollAcceleration}>
+            <scrollbox
+              id="project-editor-explorer-scrollbox"
+              flexGrow={1}
+              focused={focusPane === 'explorer'}
+              scrollAcceleration={scrollAcceleration}
+              viewportCulling
+              scrollbarOptions={paneScrollbarOptions}
+            >
               {treeRows.map((row, index) => {
                 const selected = index === treeCursor
                 const indent = '  '.repeat(row.depth)
@@ -1272,40 +1391,52 @@ export function EditorPopover({
 
         <box flexGrow={1} flexDirection="column" backgroundColor={theme.bg}>
           {activeTab ? (
-            <line-number
-              key={activeTab.path}
-              ref={lineNumberRef}
-              minWidth={4}
-              paddingRight={1}
-              showLineNumbers
-              fg={theme.dim}
-              bg={theme.surface}
-              flexGrow={1}
-            >
-              <textarea
-                id="project-editor-textarea"
-                ref={setEditorRef}
-                initialValue={activeTab.content}
-                focused={focusPane === 'editor'}
+            <box flexGrow={1} flexDirection="row">
+              <line-number
+                key={activeTab.path}
+                ref={lineNumberRef}
+                minWidth={4}
+                paddingRight={1}
+                showLineNumbers
+                fg={theme.dim}
+                bg={theme.surface}
                 flexGrow={1}
-                wrapMode="none"
-                syntaxStyle={syntaxStyle}
-                textColor={theme.text}
-                backgroundColor={theme.bg}
-                focusedBackgroundColor={theme.bg}
-                focusedTextColor={theme.text}
-                selectionBg={theme.surface3}
-                selectionFg={theme.text}
-                cursorColor={theme.amber}
-                cursorStyle={{ style: 'block', blinking: true }}
-                scrollMargin={4}
-                scrollSpeed={3}
-                tabIndicator="→"
-                tabIndicatorColor={theme.dim}
-                onContentChange={updateActiveContent}
-                onCursorChange={setCursor}
+              >
+                <textarea
+                  id="project-editor-textarea"
+                  ref={setEditorRef}
+                  initialValue={activeTab.content}
+                  focused={focusPane === 'editor'}
+                  flexGrow={1}
+                  wrapMode={wordWrapEnabled ? 'word' : 'none'}
+                  syntaxStyle={syntaxStyle}
+                  textColor={theme.text}
+                  backgroundColor={theme.bg}
+                  focusedBackgroundColor={theme.bg}
+                  focusedTextColor={theme.text}
+                  selectionBg={theme.surface3}
+                  selectionFg={theme.text}
+                  cursorColor={theme.amber}
+                  cursorStyle={{ style: 'block', blinking: true }}
+                  scrollMargin={4}
+                  scrollSpeed={3}
+                  tabIndicator="→"
+                  tabIndicatorColor={theme.dim}
+                  onContentChange={updateActiveContent}
+                  onCursorChange={setCursor}
+                />
+              </line-number>
+              <editorScrollbar
+                id="project-editor-scrollbar"
+                ref={setEditorScrollbarRef}
+                orientation="vertical"
+                width={1}
+                flexShrink={0}
+                showArrows={false}
+                trackOptions={paneScrollbarOptions.trackOptions}
+                onChange={scrollEditorTo}
               />
-            </line-number>
+            </box>
           ) : (
             <box flexGrow={1} alignItems="center" justifyContent="center" flexDirection="column">
               <text fg={theme.violet}>  Agent Viewer Editor</text>
@@ -1328,10 +1459,11 @@ export function EditorPopover({
         <box flexGrow={1} />
         <text fg={theme.dim}>{`${detectTuiCodeFiletypeFromPath(activeTab?.path) ?? 'text'}  ${cursor.line + 1}:${cursor.visualColumn + 1}  ${formatClock(clock)} `}</text>
       </box>
-      <box height={1} paddingX={1} backgroundColor={theme.surface2} flexDirection="row">
-        <text fg={message.startsWith('Unable') || message.startsWith('Refused') ? theme.red : theme.dim} wrapMode="none">{fitText(message, Math.max(10, width - footerHints.length - 4))}</text>
-        <box flexGrow={1} />
-        <text fg={theme.dim}>{footerHints}</text>
+      <box height={footerHeight} paddingX={1} backgroundColor={theme.surface2} flexDirection="column">
+        <text fg={message.startsWith('Unable') || message.startsWith('Refused') ? theme.red : theme.dim} wrapMode="none">
+          {fitText(message, Math.max(10, width - 4))}
+        </text>
+        {footerShortcutRows.map((row) => <text key={row} fg={theme.dim} wrapMode="none">{row}</text>)}
       </box>
 
       {quickOpen ? (
