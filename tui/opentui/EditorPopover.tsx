@@ -8,6 +8,7 @@ import {
   type LineNumberRenderable,
   ScrollBarRenderable,
   type SyntaxStyle,
+  type TextareaOptions,
   type TextareaRenderable,
 } from '@opentui/core'
 import type { MouseEvent } from '@opentui/core'
@@ -27,6 +28,13 @@ import {
 import { createScrollVelocityState, velocityScrollStep } from './scrollVelocity'
 
 extend({ editorScrollbar: ScrollBarRenderable })
+
+const EDITOR_TEXTAREA_KEY_BINDINGS: NonNullable<TextareaOptions['keyBindings']> = [
+  { name: 'home', action: 'line-home' },
+  { name: 'end', action: 'line-end' },
+  { name: 'home', shift: true, action: 'select-line-home' },
+  { name: 'end', shift: true, action: 'select-line-end' },
+]
 
 declare module '@opentui/react' {
   interface OpenTUIComponents {
@@ -1564,6 +1572,7 @@ export function EditorPopover({
                   selectionFg={theme.text}
                   cursorColor={theme.amber}
                   cursorStyle={{ style: 'block', blinking: true }}
+                  keyBindings={EDITOR_TEXTAREA_KEY_BINDINGS}
                   scrollMargin={4}
                   scrollSpeed={3}
                   tabIndicator="→"

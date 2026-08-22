@@ -151,11 +151,13 @@ process.stdin.on('data', (chunk) => {
     }
     act(() => { editor.setCursor(1, 5) })
     await setup.flush()
-    act(() => { handleKey?.({ name: 'home', ctrl: false, shift: false, sequence: '\u001b[H' }) })
+    act(() => { setup.mockInput.pressKey('HOME') })
     await setup.flush()
-    if (editor.logicalCursor.col !== 0) throw new Error(`Home did not move to line start: ${JSON.stringify(editor.logicalCursor)}`)
-    act(() => { handleKey?.({ name: 'end', ctrl: false, shift: false, sequence: '\u001b[F' }) })
-    if (editor.logicalCursor.col !== 'const otherAnswer = answer + 1'.length) {
+    if (editor.logicalCursor.row !== 1 || editor.logicalCursor.col !== 0) {
+      throw new Error(`Home did not move to the current line start: ${JSON.stringify(editor.logicalCursor)}`)
+    }
+    act(() => { setup.mockInput.pressKey('END') })
+    if (editor.logicalCursor.row !== 1 || editor.logicalCursor.col !== 'const otherAnswer = answer + 1'.length) {
       throw new Error(`End did not move to line end: ${JSON.stringify(editor.logicalCursor)}`)
     }
     act(() => { editor.setCursor(2, '  const nested = true'.length) })
