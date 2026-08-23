@@ -87,8 +87,12 @@ export async function writeEditorRecovery(root: string, snapshot: EditorRecovery
       await handle.close()
       handle = undefined
       await rename(temporary, target)
-      const directoryHandle = await open(directory, 'r')
-      try { await directoryHandle.sync() } finally { await directoryHandle.close() }
+      // Windows cannot open a directory handle for fsync (EPERM); the rename
+      // is already durable there without this POSIX directory-fsync step.
+      if (process.platform !== 'win32') {
+        const directoryHandle = await open(directory, 'r')
+        try { await directoryHandle.sync() } finally { await directoryHandle.close() }
+      }
     } catch (error) {
       await handle?.close().catch(() => {})
       await unlink(temporary).catch(() => {})
