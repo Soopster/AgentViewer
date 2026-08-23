@@ -39,8 +39,12 @@ export async function saveEditorFileSafely(
     const latestTarget = await resolveSafeEditorFile(root, path)
     if (latestTarget.absolute !== target.absolute) throw new EditorDiskConflictError(target.path)
     await rename(temporary, target.absolute)
-    const directoryHandle = await open(dirname(target.absolute), 'r')
-    try { await directoryHandle.sync() } finally { await directoryHandle.close() }
+    // Windows cannot open a directory handle for fsync (EPERM); the rename
+    // is already durable there without this POSIX directory-fsync step.
+    if (process.platform !== 'win32') {
+      const directoryHandle = await open(dirname(target.absolute), 'r')
+      try { await directoryHandle.sync() } finally { await directoryHandle.close() }
+    }
   } catch (error) {
     await handle?.close().catch(() => {})
     await unlink(temporary).catch(() => {})
