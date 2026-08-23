@@ -443,6 +443,7 @@ try {
   assert.equal(savedTeammate.runId, runId)
   await chmod(leadIdentity, 0o600)
   await pushSubscription.close()
+  assert.equal(await pushSubscription.closed, 'local', 'subscriptions/listen cancellation must close locally')
 } finally {
   await lead.client.close().catch(() => {})
   await teammate.client.close().catch(() => {})

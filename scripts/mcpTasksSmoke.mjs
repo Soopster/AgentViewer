@@ -132,8 +132,13 @@ async function rawClient() {
     },
   })
   const pending = new Map()
+  const notifications = []
   let nextId = 1
   transport.onmessage = (message) => {
+    if (message.method && message.id === undefined) {
+      notifications.push(message)
+      return
+    }
     const waiter = pending.get(message.id)
     if (!waiter) return
     pending.delete(message.id)
@@ -144,14 +149,14 @@ async function rawClient() {
     pending.clear()
   }
   await transport.start()
-  async function request(method, params = {}, capabilities = taskCapabilities) {
+  async function request(method, params = {}, capabilities = taskCapabilities, meta = {}) {
     const id = nextId++
     const response = new Promise((resolve, reject) => pending.set(id, { resolve, reject }))
     await transport.send({
       jsonrpc: '2.0',
       id,
       method,
-      params: { ...params, _meta: envelope(capabilities) },
+      params: { ...params, _meta: { ...meta, ...envelope(capabilities) } },
     })
     return response
   }
@@ -159,7 +164,7 @@ async function rawClient() {
   if (!discovered.result?.capabilities?.extensions?.['io.modelcontextprotocol/tasks']) {
     throw new Error('MCP bridge did not advertise the Tasks extension')
   }
-  return { transport, request }
+  return { transport, request, notifications }
 }
 
 async function pollTask(client, taskId, status, timeoutMs = 5_000) {
@@ -182,6 +187,26 @@ try {
   })
   if (created.result?.resultType !== 'complete') throw new Error('Coordinator run was not created before task testing')
 
+  const progressToken = 'coord-wait-progress'
+  const progressStart = client.notifications.length
+  const blockingWait = await client.request('tools/call', {
+    name: 'coord_wait',
+    arguments: { cursor: 'progress-test', timeout_ms: 1_000 },
+  }, { extensions: {} }, { progressToken })
+  if (blockingWait.result?.resultType !== 'complete') {
+    throw new Error('A client without Tasks support did not receive the blocking coord_wait result')
+  }
+  const progress = client.notifications.slice(progressStart).filter((message) => (
+    message.method === 'notifications/progress'
+    && message.params?.progressToken === progressToken
+  ))
+  if (progress.length < 2
+    || progress[0].params.progress !== 0
+    || progress.at(-1).params.progress !== 1_000
+    || progress.some((entry, index) => index > 0 && entry.params.progress <= progress[index - 1].params.progress)) {
+    throw new Error(`Blocking coord_wait did not emit monotonic requested progress: ${JSON.stringify(progress)}`)
+  }
+
   const wait = await client.request('tools/call', {
     name: 'coord_wait',
     arguments: { cursor: 'restart-test', timeout_ms: 5_000 },
@@ -200,7 +225,7 @@ try {
   if ((await stat(taskFile)).mode & 0o077) throw new Error('MCP task ledger is not mode 0600')
 
   const denied = await client.request('tasks/get', { taskId: restartTaskId }, { extensions: {} })
-  if (denied.error?.code !== -32003) throw new Error(`tasks/get did not require per-request Tasks capability: ${JSON.stringify(denied)}`)
+  if (denied.error?.code !== -32021) throw new Error(`tasks/get did not require per-request Tasks capability: ${JSON.stringify(denied)}`)
 
   const cancellable = await client.request('tools/call', {
     name: 'coord_wait',

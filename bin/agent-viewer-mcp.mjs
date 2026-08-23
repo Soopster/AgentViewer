@@ -44,7 +44,6 @@ const coordinatorSkillDescription = coordinatorSkillMarkdown.match(/^description
 const DEFAULT_MCP_TASK_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const DEFAULT_MCP_TASK_POLL_INTERVAL_MS = 2_000
 const COORD_FINDING_DETAIL_MAX_CHARS = 32_000
-const MISSING_REQUIRED_TASK_CAPABILITY = -32003
 const MCP_TASK_METHODS = new Set(['tasks/get', 'tasks/update', 'tasks/cancel'])
 const taskStores = new Map()
 const taskRunners = new Map()
@@ -192,10 +191,56 @@ function supportsMcpTasks(ctx) {
 function requireMcpTasks(ctx) {
   if (supportsMcpTasks(ctx)) return
   throw new ProtocolError(
-    MISSING_REQUIRED_TASK_CAPABILITY,
+    ProtocolErrorCode.MissingRequiredClientCapability,
     'Missing required client capability',
     { requiredCapabilities: { extensions: { [MCP_TASKS_EXTENSION]: {} } } },
   )
+}
+
+function createMcpProgressReporter(ctx, total) {
+  const progressToken = ctx?.mcpReq?._meta?.progressToken
+  if (!((typeof progressToken === 'string' && progressToken.length > 0)
+    || (typeof progressToken === 'number' && Number.isFinite(progressToken)))) return null
+
+  let lastProgress = -1
+  let pending = Promise.resolve()
+  return {
+    send: async (progress, message) => {
+      if (progress <= lastProgress) return pending
+      lastProgress = progress
+      pending = pending
+        .then(() => ctx.mcpReq.notify({
+          method: 'notifications/progress',
+          params: { progressToken, progress, total, message },
+        }))
+        // Progress is optional. A client that closes its notification channel
+        // must not turn a successful Coordinator wait into a failed tool call.
+        .catch(() => {})
+      return pending
+    },
+    flush: () => pending,
+  }
+}
+
+async function withMcpProgress(ctx, { total, startedMessage, completedMessage }, operation) {
+  const reporter = createMcpProgressReporter(ctx, total)
+  if (!reporter) return operation()
+
+  const startedAt = Date.now()
+  await reporter.send(0, startedMessage)
+  const timer = setInterval(() => {
+    const elapsed = Math.min(total - 1, Math.max(1, Date.now() - startedAt))
+    void reporter.send(elapsed, startedMessage)
+  }, Math.min(5_000, Math.max(250, Math.floor(total / 4))))
+  timer.unref?.()
+  try {
+    const result = await operation()
+    await reporter.send(total, completedMessage)
+    return result
+  } finally {
+    clearInterval(timer)
+    await reporter.flush()
+  }
 }
 
 function coordinatorRunStatus(result) {
@@ -1131,10 +1176,18 @@ server.registerTool('coord_wait', {
       ttlMs: 60 * 60 * 1000,
     })
   }
-  const { snapshot: _snapshot, ...compact } = await coordinatorRequest('wait', {
+  const effectiveTimeoutMs = timeout_ms ?? 25_000
+  const wait = () => coordinatorRequest('wait', {
     cursor: cursor ?? coordinatorCursor ?? undefined,
     timeoutMs: timeout_ms,
   })
+  const { snapshot: _snapshot, ...compact } = effectiveTimeoutMs > 0
+    ? await withMcpProgress(ctx, {
+        total: effectiveTimeoutMs,
+        startedMessage: 'Waiting for another participant to change the Coordinator run.',
+        completedMessage: 'Coordinator wait finished.',
+      }, wait)
+    : await wait()
   return textResult(compact)
 })
 
