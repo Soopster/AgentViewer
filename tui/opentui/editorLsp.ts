@@ -92,7 +92,7 @@ const SERVER_BY_FILETYPE: Readonly<Record<string, readonly EditorLspServerSpec[]
   bash: [{ command: 'bash-language-server', args: ['start'], name: 'bash-language-server' }],
   c: [{ command: 'clangd', args: ['--background-index'], name: 'clangd' }],
   cpp: [{ command: 'clangd', args: ['--background-index'], name: 'clangd' }],
-  csharp: [{ command: 'omnisharp', args: ['--languageserver'], name: 'OmniSharp' }],
+  csharp: [{ command: 'roslyn-language-server', args: ['--stdio'], name: 'Roslyn' }],
   css: [{ command: 'vscode-css-language-server', args: ['--stdio'], name: 'css-language-server' }],
   go: [{ command: 'gopls', args: [], name: 'gopls' }],
   html: [{ command: 'vscode-html-language-server', args: ['--stdio'], name: 'html-language-server' }],
