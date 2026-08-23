@@ -10,6 +10,7 @@ const sourcePath = join(cwd, 'main.ts')
 
 const fakeServer = String.raw`
 let input = Buffer.alloc(0)
+const cancelledRequests = new Set()
 function send(message) {
   const body = JSON.stringify(message)
   process.stdout.write('Content-Length: ' + Buffer.byteLength(body) + '\r\n\r\n' + body)
@@ -34,8 +35,12 @@ process.stdin.on('data', (chunk) => {
         diagnostics: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } }, severity: 2, source: 'fake-lsp', message: 'smoke warning' }],
       },
     })
-    if (message.method === 'textDocument/completion') send({
-      jsonrpc: '2.0', id: message.id, result: message.params.context.triggerKind === 2 && message.params.context.triggerCharacter === '.' ? {
+    if (message.method === '$/cancelRequest') cancelledRequests.add(message.params.id)
+    if (message.method === 'textDocument/completion') {
+      const response = {
+        jsonrpc: '2.0', id: message.id, result: message.params.position.character === 18
+          ? [{ label: 'cancel-observed-' + cancelledRequests.size }]
+          : message.params.context.triggerKind === 2 && message.params.context.triggerCharacter === '.' ? {
         isIncomplete: false,
         itemDefaults: {
           editRange: { start: { line: 0, character: 14 }, end: { line: 0, character: 17 } },
@@ -43,15 +48,21 @@ process.stdin.on('data', (chunk) => {
         },
         items: [{ label: 'answer', kind: 6, filterText: 'answer', sortText: '001', textEditText: 'answer', preselect: true }],
       } : [],
-    })
-    if (message.method === 'completionItem/resolve') send({
-      jsonrpc: '2.0', id: message.id, result: {
-        ...message.params,
-        detail: 'number',
-        documentation: { kind: 'markdown', value: '**The answer.**' },
-        additionalTextEdits: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, newText: 'import answer\n' }],
-      },
-    })
+      }
+      if (message.params.position.character === 99) {
+        setTimeout(() => { if (!cancelledRequests.has(message.id)) send(response) }, 500)
+      } else send(response)
+    }
+    if (message.method === 'completionItem/resolve') send(message.params.label === 'custom-insert'
+      ? { jsonrpc: '2.0', id: message.id, result: { label: message.params.label, documentation: 'Resolved docs only.' } }
+      : {
+          jsonrpc: '2.0', id: message.id, result: {
+            ...message.params,
+            detail: 'number',
+            documentation: { kind: 'markdown', value: '**The answer.**' },
+            additionalTextEdits: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, newText: 'import answer\n' }],
+          },
+        })
     if (message.method === 'textDocument/hover') send({
       jsonrpc: '2.0', id: message.id, result: {
         contents: [{ language: 'typescript', value: 'const answer: number' }, 'The answer.'],
@@ -169,6 +180,30 @@ try {
     if (resolvedCompletion.documentation !== '**The answer.**' || resolvedCompletion.detail !== 'number'
       || resolvedCompletion.additionalTextEdits?.[0]?.newText !== 'import answer\n') {
       throw new Error(`Fake LSP completion resolve was not delivered: ${JSON.stringify(resolvedCompletion)}`)
+    }
+    const partialResolvedCompletion = await client.resolveCompletion({
+      ...completion,
+      label: 'custom-insert',
+      insertText: 'insertedValue',
+      textEdit: undefined,
+      rawItem: { label: 'custom-insert' },
+      resolved: false,
+    })
+    if (partialResolvedCompletion.insertText !== 'insertedValue' || partialResolvedCompletion.documentation !== 'Resolved docs only.') {
+      throw new Error(`Documentation-only completion resolve changed insertion semantics: ${JSON.stringify(partialResolvedCompletion)}`)
+    }
+    const completionController = new AbortController()
+    const cancellationStarted = performance.now()
+    const cancelledCompletionPromise = client.completion({ line: 0, character: 99 }, undefined, completionController.signal)
+    setTimeout(() => completionController.abort(), 25)
+    const cancelledCompletions = await cancelledCompletionPromise
+    const cancellationElapsed = performance.now() - cancellationStarted
+    if (cancelledCompletions.length !== 0 || cancellationElapsed >= 400) {
+      throw new Error(`Cancelled completion did not settle promptly: ${JSON.stringify({ cancelledCompletions, cancellationElapsed })}`)
+    }
+    const cancellationProof = await client.completion({ line: 0, character: 18 })
+    if (cancellationProof[0]?.label !== 'cancel-observed-1') {
+      throw new Error(`Completion cancellation was not forwarded to the language server: ${JSON.stringify(cancellationProof)}`)
     }
     const hover = await client.hover({ line: 0, character: 8 })
     if (!hover?.contents.includes('const answer') || hover.range?.start.character !== 6) {

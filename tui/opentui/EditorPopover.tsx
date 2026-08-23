@@ -71,6 +71,11 @@ const EDITOR_TEXTAREA_KEY_BINDINGS: NonNullable<TextareaOptions['keyBindings']> 
   { name: 'end', shift: true, action: 'select-line-end' },
 ]
 
+const OCCURRENCE_HIGHLIGHT_REF = 41_001
+const OCCURRENCE_MIN_LENGTH = 2
+const OCCURRENCE_MAX_MATCHES = 1_000
+const OCCURRENCE_VIEWPORT_MARGIN_LINES = 120
+
 declare module '@opentui/react' {
   interface OpenTUIComponents {
     editorScrollbar: typeof ScrollBarRenderable
@@ -98,6 +103,8 @@ type Props = {
   onClose: () => void
   onKeyHandlerReady: (handler: (key: EditorKeyEvent) => boolean) => void
   onNotice?: (kind: 'info' | 'error', message: string) => void
+  onClipboardRead?: () => Promise<string>
+  onClipboardWrite?: (text: string) => Promise<void>
 }
 
 type BufferTab = {
@@ -136,6 +143,12 @@ type QuickResult = {
 
 type SymbolNavigationKind = 'definition' | 'references' | 'implementation'
 type EditorFilePrompt = { kind: 'create' | 'rename' | 'delete'; source?: string; value: string }
+type CompletionSession = {
+  content: string
+  cursorOffset: number
+  line: number
+  visualColumn: number
+}
 
 type SymbolNavigationResult = {
   location: EditorLocation
@@ -361,6 +374,20 @@ function offsetAtEditorPosition(content: string, position: { line: number; chara
   return Math.min(lineEnd < 0 ? content.length : lineEnd, lineStart + Math.max(0, position.character))
 }
 
+function validOffsetAtEditorPosition(content: string, position: { line: number; character: number }): number | null {
+  if (!Number.isInteger(position.line) || !Number.isInteger(position.character)
+    || position.line < 0 || position.character < 0) return null
+  let lineStart = 0
+  for (let line = 0; line < position.line; line += 1) {
+    const next = content.indexOf('\n', lineStart)
+    if (next < 0) return null
+    lineStart = next + 1
+  }
+  const lineEnd = content.indexOf('\n', lineStart)
+  const end = lineEnd < 0 ? content.length : lineEnd
+  return lineStart + position.character <= end ? lineStart + position.character : null
+}
+
 function applyEditorTextEdits(content: string, edits: EditorTextEdit[]): string {
   const normalized = edits.map((edit) => ({
     start: offsetAtEditorPosition(content, edit.range.start),
@@ -386,6 +413,38 @@ function wordRangeAt(content: string, offset: number): { start: number; end: num
   while (start > 0 && /[\w$-]/.test(content[start - 1]!)) start -= 1
   while (end < content.length && /[\w$-]/.test(content[end]!)) end += 1
   return end > start ? { start, end, value: content.slice(start, end) } : null
+}
+
+function smartHomeOffset(content: string, offset: number): number {
+  const bounds = lineBoundsAtOffset(content, offset)
+  const line = content.slice(bounds.start, bounds.end)
+  const indentation = /^[\t ]*/.exec(line)?.[0].length ?? 0
+  const firstContent = bounds.start + indentation
+  return offset === firstContent ? bounds.start : firstContent
+}
+
+function occurrenceRanges(
+  content: string,
+  value: string,
+  startOffset: number,
+  endOffset: number,
+  wholeWord: boolean,
+): Array<{ start: number; end: number }> {
+  if (value.length < OCCURRENCE_MIN_LENGTH || value.length > 256 || value.includes('\n')) return []
+  const ranges: Array<{ start: number; end: number }> = []
+  let offset = Math.max(0, startOffset)
+  const limit = Math.min(content.length, endOffset)
+  while (offset <= limit - value.length && ranges.length < OCCURRENCE_MAX_MATCHES) {
+    const start = content.indexOf(value, offset)
+    if (start < 0 || start + value.length > limit) break
+    const end = start + value.length
+    const bounded = !wholeWord
+      || ((start === 0 || !/[\w$-]/.test(content[start - 1]!))
+        && (end === content.length || !/[\w$-]/.test(content[end]!)))
+    if (bounded) ranges.push({ start, end })
+    offset = start + Math.max(1, value.length)
+  }
+  return ranges
 }
 
 function selectedLineBounds(editor: TextareaRenderable): { start: number; end: number; hadSelection: boolean } {
@@ -424,23 +483,33 @@ function setEditorDocumentOffset(editor: TextareaRenderable, offset: number): vo
 function applyCompletion(
   editor: TextareaRenderable,
   item: Completion,
-  cursor?: { line: number; visualColumn: number },
-): void {
+): string | null {
   const content = editor.plainText
-  const cursorOffset = editorDocumentOffset(editor, cursor)
+  const cursorOffset = editorDocumentOffset(editor)
   const prefix = wordPrefixAt(content, cursorOffset)
   const mainEdit = item.source === 'lsp' && item.textEdit
     ? item.textEdit
     : { range: { start: editorPositionAtOffset(content, prefix.start), end: editorPositionAtOffset(content, cursorOffset) }, newText: item.insertText }
-  const edits = [
+  const rawEdits = [
     { edit: mainEdit, main: true },
     ...(item.source === 'lsp' ? (item.additionalTextEdits ?? []).map((edit) => ({ edit, main: false })) : []),
-  ].map(({ edit, main }) => ({
-    start: offsetAtEditorPosition(content, edit.range.start),
-    end: offsetAtEditorPosition(content, edit.range.end),
-    newText: edit.newText,
-    main,
-  })).sort((a, b) => a.start - b.start || a.end - b.end)
+  ]
+  const edits: Array<{ start: number; end: number; newText: string; main: boolean }> = []
+  for (const { edit, main } of rawEdits) {
+    const start = validOffsetAtEditorPosition(content, edit.range.start)
+    const end = validOffsetAtEditorPosition(content, edit.range.end)
+    if (start == null || end == null || end < start) return 'Language server returned an invalid completion edit'
+    edits.push({ start, end, newText: edit.newText, main })
+  }
+  edits.sort((a, b) => a.start - b.start || a.end - b.end)
+  for (let index = 1; index < edits.length; index += 1) {
+    const previous = edits[index - 1]!
+    const current = edits[index]!
+    if (current.start < previous.end
+      || (current.start === previous.start && (current.start === current.end || previous.start === previous.end))) {
+      return 'Language server returned overlapping completion edits'
+    }
+  }
 
   let sourceOffset = 0
   let nextContent = ''
@@ -455,6 +524,7 @@ function applyCompletion(
   nextContent += content.slice(sourceOffset)
   editor.replaceText(nextContent)
   setEditorDocumentOffset(editor, nextCursor)
+  return null
 }
 
 function localCompletions(content: string, paths: string[], prefix: string): LocalCompletion[] {
@@ -503,7 +573,7 @@ function lspStatusText(status: EditorLspStatus | null): string {
   if (status.state === 'ready') return `LSP ${status.name}`
   if (status.state === 'starting') return `LSP ${status.name}…`
   if (status.state === 'unavailable') return `LSP unavailable: ${status.name}`
-  return `LSP error: ${status.message}`
+  return `LSP error: ${status.message} · ⌃⇧R restarts`
 }
 
 function diagnosticCounts(diagnostics: EditorDiagnostic[]): { errors: number; warnings: number; info: number } {
@@ -629,6 +699,8 @@ export function EditorPopover({
   onClose,
   onKeyHandlerReady,
   onNotice,
+  onClipboardRead,
+  onClipboardWrite,
 }: Props) {
   const root = resolve(cwd || process.cwd())
   const [projectFiles, setProjectFiles] = useState<string[]>([])
@@ -657,6 +729,7 @@ export function EditorPopover({
   const [completionCursor, setCompletionCursor] = useState(0)
   const [diagnostics, setDiagnostics] = useState<EditorDiagnostic[]>([])
   const [lspStatus, setLspStatus] = useState<EditorLspStatus | null>(null)
+  const [lspRestartToken, setLspRestartToken] = useState(0)
   const [hoverInfo, setHoverInfo] = useState<EditorHover | null>(null)
   const [signatureInfo, setSignatureInfo] = useState<EditorSignatureHelp | null>(null)
   const [symbolNavigationKind, setSymbolNavigationKind] = useState<SymbolNavigationKind | null>(null)
@@ -706,6 +779,9 @@ export function EditorPopover({
   const syntaxRequestRef = useRef(0)
   const completionRequestRef = useRef(0)
   const completionResolveRequestRef = useRef(0)
+  const completionAbortRef = useRef<AbortController | null>(null)
+  const completionResolveAbortRef = useRef<AbortController | null>(null)
+  const completionSessionRef = useRef<CompletionSession | null>(null)
   const hoverRequestRef = useRef(0)
   const signatureRequestRef = useRef(0)
   const velocityScrollStateRef = useRef<ReturnType<typeof createScrollVelocityState> | null>(null)
@@ -718,6 +794,8 @@ export function EditorPopover({
   const projectSearchAbortRef = useRef<AbortController | null>(null)
   const recoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const multiCursorStyleIdRef = useRef<number | null>(null)
+  const occurrenceStyleIdRef = useRef<number | null>(null)
+  const occurrenceMergedStyleIdsRef = useRef<Map<number, number>>(new Map())
   const diskPollInFlightRef = useRef(false)
 
   const activeTab = tabs.find((tab) => tab.path === activePath) ?? null
@@ -785,6 +863,9 @@ export function EditorPopover({
     '^P open',
     '^F find',
     '^R replace',
+    '^C/^X/^V clipboard',
+    '^Z/^Y undo/redo',
+    'Alt+←/→ words',
     '^D next occurrence',
     '^Alt+↑/↓ cursors',
     '⇧Alt+arrows block',
@@ -836,7 +917,13 @@ export function EditorPopover({
       bg: theme.surface3,
       underline: true,
     })
-  }, [syntaxStyle, theme.surface3])
+    const existingOccurrence = syntaxStyle.getStyleId('editor.occurrence')
+    occurrenceStyleIdRef.current = existingOccurrence ?? syntaxStyle.registerStyle('editor.occurrence', {
+      bg: theme.surface2,
+      underline: true,
+    })
+    occurrenceMergedStyleIdsRef.current.clear()
+  }, [syntaxStyle, theme.surface2, theme.surface3])
 
   useEffect(() => {
     setMultiCursor(null)
@@ -882,13 +969,16 @@ export function EditorPopover({
     ]
     recoveryTimerRef.current = setTimeout(() => {
       recoveryTimerRef.current = null
+      const logicalCursor = editorRef.current?.logicalCursor
       const operation = retained.length === 0
         ? clearEditorRecovery(root)
         : writeEditorRecovery(root, {
             version: 1,
             savedAt: Date.now(),
             activePath,
-            cursor: { line: cursorRef.current.line, character: cursorRef.current.visualColumn },
+            cursor: logicalCursor
+              ? { line: logicalCursor.row, character: logicalCursor.col }
+              : { line: cursorRef.current.line, character: cursorRef.current.visualColumn },
             buffers: retained,
           })
       void operation.catch((error) => {
@@ -1192,6 +1282,63 @@ export function EditorPopover({
     return true
   }, [multiCursor])
 
+  const copyEditorSelection = useCallback(async (cut: boolean) => {
+    const editor = editorRef.current
+    const path = activePathRef.current
+    if (!editor || !path) return
+    if (!onClipboardWrite) {
+      setMessage('Clipboard integration is unavailable')
+      return
+    }
+    const selection = editor.getSelection()
+    const cursorOffset = editorDocumentOffset(editor)
+    const bounds = lineBoundsAtOffset(editor.plainText, cursorOffset)
+    const range = selection ?? {
+      start: bounds.start,
+      end: bounds.end < editor.plainText.length ? bounds.end + 1 : bounds.end,
+    }
+    const sourceContent = editor.plainText
+    const text = sourceContent.slice(range.start, range.end)
+    if (!text) return
+    try {
+      await onClipboardWrite(text)
+      if (cut && editorRef.current === editor && activePathRef.current === path) {
+        if (editor.plainText !== sourceContent) {
+          setMessage('Copied selection · buffer changed before cut completed')
+          return
+        }
+        editor.setSelection(range.start, range.end)
+        editor.deleteSelection()
+      }
+      setMessage(`${cut ? 'Cut' : 'Copied'} ${selection ? 'selection' : 'line'} · ${text.length} character${text.length === 1 ? '' : 's'}`)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'clipboard command failed'
+      setMessage(`Clipboard failed: ${detail}`)
+      onNotice?.('error', `Clipboard failed: ${detail}`)
+    }
+  }, [onClipboardWrite, onNotice])
+
+  const pasteIntoEditor = useCallback(async () => {
+    const editor = editorRef.current
+    const path = activePathRef.current
+    if (!editor || !path) return
+    if (!onClipboardRead) {
+      setMessage('Clipboard integration is unavailable')
+      return
+    }
+    try {
+      const text = (await onClipboardRead()).replace(/\r\n?/g, '\n')
+      if (!text || editorRef.current !== editor || activePathRef.current !== path) return
+      if (multiCursor) editAtAllCursors({ insert: text })
+      else editor.insertText(text)
+      setMessage(`Pasted ${text.length} character${text.length === 1 ? '' : 's'}`)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'clipboard command failed'
+      setMessage(`Clipboard failed: ${detail}`)
+      onNotice?.('error', `Clipboard failed: ${detail}`)
+    }
+  }, [editAtAllCursors, multiCursor, onClipboardRead, onNotice])
+
   const applyLineTransform = useCallback((transform: EditorLineTransform) => {
     const editor = editorRef.current
     if (!editor || !activeTab) return
@@ -1486,12 +1633,17 @@ export function EditorPopover({
   }, [tabs])
 
   useEffect(() => {
+    completionAbortRef.current?.abort()
+    completionAbortRef.current = null
+    completionResolveAbortRef.current?.abort()
+    completionResolveAbortRef.current = null
     lspRef.current?.stop()
     lspRef.current = null
     setDiagnostics([])
     setLspStatus(null)
     setHoverInfo(null)
     setSignatureInfo(null)
+    completionSessionRef.current = null
     if (!activeTab) return
     const filetype = detectTuiCodeFiletypeFromPath(activeTab.path) ?? 'plaintext'
     const client = new EditorLspClient(root, filetype, join(root, activeTab.path))
@@ -1509,7 +1661,13 @@ export function EditorPopover({
     return () => client.stop()
   // Starting an LSP is a buffer lifecycle event, not an every-keystroke event.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab?.path, root])
+  }, [activeTab?.path, root, lspRestartToken])
+
+  const restartLsp = useCallback(() => {
+    if (!activeTab) return
+    setLspRestartToken((token) => token + 1)
+    setMessage('Restarting language server…')
+  }, [activeTab])
 
   useEffect(() => {
     if (!activeTab) return
@@ -1521,7 +1679,7 @@ export function EditorPopover({
     const editor = editorRef.current
     if (!activeTab || !editor || focusPane !== 'editor') return
     const request = ++signatureRequestRef.current
-    const offset = editorDocumentOffset(editor, cursorRef.current)
+    const offset = editorDocumentOffset(editor)
     const trigger = editor.plainText[offset - 1]
     if (trigger !== '(' && trigger !== ',') return
     const timer = setTimeout(() => {
@@ -1538,6 +1696,89 @@ export function EditorPopover({
     return () => clearTimeout(timer)
   }, [activeTab, cursor.line, cursor.visualColumn, focusPane])
 
+  const applyOccurrenceHighlights = useCallback((
+    editor: TextareaRenderable,
+    content: string,
+    lineStarts: number[],
+  ) => {
+    editor.removeHighlightsByRef(OCCURRENCE_HIGHLIGHT_REF)
+    const styleId = occurrenceStyleIdRef.current
+    if (styleId == null || focusPane !== 'editor' || multiCursor || content.length === 0) return
+
+    const selection = editor.getSelection()
+    const selected = selection && selection.end > selection.start
+      ? content.slice(selection.start, selection.end)
+      : null
+    const cursorOffset = editorDocumentOffset(editor)
+    const word = selected ? null : wordRangeAt(content, cursorOffset)
+    const value = selected ?? word?.value ?? ''
+    if (value.length < OCCURRENCE_MIN_LENGTH) return
+    if (!selected && word) {
+      const tokenLine = lineAtOffset(lineStarts, word.start)
+      const tokenLineStart = lineStarts[tokenLine] ?? 0
+      const tokenStart = word.start - tokenLineStart
+      const tokenEnd = word.end - tokenLineStart
+      const syntaxHighlight = editor.getLineHighlights(tokenLine).find((highlight) => (
+        highlight.hlRef !== OCCURRENCE_HIGHLIGHT_REF
+        && highlight.start <= tokenStart
+        && highlight.end >= tokenEnd
+      ))
+      const syntaxName = syntaxHighlight == null
+        ? null
+        : syntaxStyle.getRegisteredNames().find((name) => syntaxStyle.resolveStyleId(name) === syntaxHighlight.styleId) ?? null
+      // Fresh's scope-aware path highlights identifiers, not every textual
+      // token. Keep the fallback out of keywords, literals, comments and
+      // punctuation so occurrence decoration never degrades syntax colors.
+      if (syntaxName && /(?:keyword|string|comment|number|operator|punctuation)/i.test(syntaxName)) return
+    }
+
+    const firstLine = Math.max(0, Math.floor(editor.scrollY) - OCCURRENCE_VIEWPORT_MARGIN_LINES)
+    const lastLine = Math.min(
+      lineStarts.length - 1,
+      Math.ceil(editor.scrollY + editor.height) + OCCURRENCE_VIEWPORT_MARGIN_LINES,
+    )
+    const startOffset = lineStarts[firstLine] ?? 0
+    const endOffset = lastLine + 1 < lineStarts.length ? lineStarts[lastLine + 1]! : content.length
+    const ranges = occurrenceRanges(content, value, startOffset, endOffset, !selected)
+      .filter((range) => !selection || range.start !== selection.start || range.end !== selection.end)
+    if (ranges.length === 0 || (!selected && ranges.length < 2)) return
+
+    for (const range of ranges) {
+      const startLine = lineAtOffset(lineStarts, range.start)
+      const lineStart = lineStarts[startLine] ?? 0
+      const relativeStart = range.start - lineStart
+      const relativeEnd = range.end - lineStart
+      const baseHighlight = editor.getLineHighlights(startLine).find((highlight) => (
+        highlight.hlRef !== OCCURRENCE_HIGHLIGHT_REF
+        && highlight.start <= relativeStart
+        && highlight.end >= relativeEnd
+      ))
+      let rangeStyleId = styleId
+      if (baseHighlight) {
+        const cached = occurrenceMergedStyleIdsRef.current.get(baseHighlight.styleId)
+        if (cached != null) rangeStyleId = cached
+        else {
+          const baseName = syntaxStyle.getRegisteredNames().find((name) => syntaxStyle.resolveStyleId(name) === baseHighlight.styleId)
+          const baseStyle = baseName ? syntaxStyle.getStyle(baseName) : undefined
+          const mergedName = `editor.occurrence.${baseHighlight.styleId}`
+          rangeStyleId = syntaxStyle.getStyleId(mergedName) ?? syntaxStyle.registerStyle(mergedName, {
+            ...baseStyle,
+            bg: theme.surface2,
+            underline: true,
+          })
+          occurrenceMergedStyleIdsRef.current.set(baseHighlight.styleId, rangeStyleId)
+        }
+      }
+      editor.addHighlight(startLine, {
+        start: relativeStart,
+        end: relativeEnd,
+        styleId: rangeStyleId,
+        priority: 40,
+        hlRef: OCCURRENCE_HIGHLIGHT_REF,
+      })
+    }
+  }, [focusPane, multiCursor, syntaxStyle, theme.surface2])
+
   useEffect(() => {
     if (!activeTab) return
     const request = ++syntaxRequestRef.current
@@ -1545,7 +1786,7 @@ export function EditorPopover({
     const timer = setTimeout(() => {
       const renderHighlights = (syntaxHighlights: ReadonlyArray<readonly [number, number, string, ...unknown[]]>) => {
         const editor = editorRef.current
-        if (request !== syntaxRequestRef.current || !editor) return
+        if (request !== syntaxRequestRef.current || !editor || editor.plainText !== activeTab.content) return
         editor.clearAllHighlights()
         const lineStarts = lineStartsFor(activeTab.content)
         for (const highlight of syntaxHighlights) {
@@ -1565,29 +1806,31 @@ export function EditorPopover({
           }
         }
         const multiStyleId = multiCursorStyleIdRef.current
-        if (multiStyleId == null || !multiCursor) return
-        for (let index = 0; index < multiCursor.ranges.length; index += 1) {
-          if (index === multiCursor.activeIndex) continue
-          const range = multiCursor.ranges[index]!
-          const highlightStart = range.start === range.end && range.start === activeTab.content.length
-            ? Math.max(0, range.start - 1)
-            : range.start
-          const highlightEnd = range.start === range.end
-            ? Math.min(activeTab.content.length, Math.max(highlightStart + 1, range.end))
-            : range.end
-          const firstLine = lineAtOffset(lineStarts, highlightStart)
-          const lastLine = lineAtOffset(lineStarts, Math.max(highlightStart, highlightEnd - 1))
-          for (let line = firstLine; line <= lastLine; line += 1) {
-            const lineStart = lineStarts[line] ?? 0
-            const lineEnd = line + 1 < lineStarts.length ? lineStarts[line + 1]! - 1 : activeTab.content.length
-            editor.addHighlight(line, {
-              start: Math.max(0, highlightStart - lineStart),
-              end: Math.max(0, Math.min(highlightEnd, lineEnd) - lineStart),
-              styleId: multiStyleId,
-              priority: 80,
-            })
+        if (multiStyleId != null && multiCursor) {
+          for (let index = 0; index < multiCursor.ranges.length; index += 1) {
+            if (index === multiCursor.activeIndex) continue
+            const range = multiCursor.ranges[index]!
+            const highlightStart = range.start === range.end && range.start === activeTab.content.length
+              ? Math.max(0, range.start - 1)
+              : range.start
+            const highlightEnd = range.start === range.end
+              ? Math.min(activeTab.content.length, Math.max(highlightStart + 1, range.end))
+              : range.end
+            const firstLine = lineAtOffset(lineStarts, highlightStart)
+            const lastLine = lineAtOffset(lineStarts, Math.max(highlightStart, highlightEnd - 1))
+            for (let line = firstLine; line <= lastLine; line += 1) {
+              const lineStart = lineStarts[line] ?? 0
+              const lineEnd = line + 1 < lineStarts.length ? lineStarts[line + 1]! - 1 : activeTab.content.length
+              editor.addHighlight(line, {
+                start: Math.max(0, highlightStart - lineStart),
+                end: Math.max(0, Math.min(highlightEnd, lineEnd) - lineStart),
+                styleId: multiStyleId,
+                priority: 80,
+              })
+            }
           }
         }
+        applyOccurrenceHighlights(editor, activeTab.content, lineStarts)
       }
       if (!filetype) {
         renderHighlights([])
@@ -1598,7 +1841,17 @@ export function EditorPopover({
       }).catch(() => renderHighlights([]))
     }, SYNTAX_DELAY_MS)
     return () => clearTimeout(timer)
-  }, [activeTab, multiCursor, syntaxStyle])
+  }, [activeTab, applyOccurrenceHighlights, multiCursor, syntaxStyle])
+
+  useEffect(() => {
+    const editor = editorRef.current
+    if (!activeTab || !editor) return
+    const timer = setTimeout(() => {
+      const content = editor.plainText
+      applyOccurrenceHighlights(editor, content, lineStartsFor(content))
+    }, 55)
+    return () => clearTimeout(timer)
+  }, [activeTab, applyOccurrenceHighlights, cursor.line, cursor.visualColumn])
 
   useEffect(() => {
     const lineNumber = lineNumberRef.current
@@ -1615,35 +1868,49 @@ export function EditorPopover({
 
   const requestCompletions = useCallback(async (force = false) => {
     const editor = editorRef.current
-    if (!activeTab || !editor) return
+    if (!activePath || !editor) return
+    completionAbortRef.current?.abort()
+    completionAbortRef.current = null
+    completionResolveAbortRef.current?.abort()
+    completionResolveAbortRef.current = null
+    const request = ++completionRequestRef.current
+    completionResolveRequestRef.current += 1
     const content = editor.plainText
-    const requestCursor = cursorRef.current
+    const logicalCursor = editor.logicalCursor
+    const requestCursor = { line: logicalCursor.row, visualColumn: logicalCursor.col }
     const documentOffset = editorDocumentOffset(editor, requestCursor)
     const context = completionContextAt(content, documentOffset)
     const client = lspRef.current
     const serverTrigger = client?.isCompletionTriggerCharacter(context.lastCharacter) ?? false
     if (!force && context.prefix.value.length < 2 && !context.memberAccess && !serverTrigger) {
+      completionSessionRef.current = null
       setCompletions([])
       return
     }
-    const request = ++completionRequestRef.current
-    completionResolveRequestRef.current += 1
     const cursorOffset = documentOffset
     client?.change(content)
     const local = context.memberAccess ? [] : localCompletions(content, projectFiles, context.prefix.value)
+    const controller = client ? new AbortController() : null
+    if (controller) completionAbortRef.current = controller
     const lsp = await client?.completion(
       editorPositionAtOffset(content, cursorOffset),
       serverTrigger ? context.lastCharacter : undefined,
+      controller?.signal,
     ) ?? []
+    if (completionAbortRef.current === controller) completionAbortRef.current = null
+    const currentCursor = editorRef.current?.logicalCursor
     if (request !== completionRequestRef.current
       || editorRef.current?.plainText !== content
-      || cursorRef.current.line !== requestCursor.line
-      || cursorRef.current.visualColumn !== requestCursor.visualColumn) return
+      || currentCursor?.row !== requestCursor.line
+      || currentCursor.col !== requestCursor.visualColumn) return
     const merged = mergeCompletions(lsp, local, context.prefix.value)
+    completionSessionRef.current = merged.length > 0
+      ? { content, cursorOffset, line: requestCursor.line, visualColumn: requestCursor.visualColumn }
+      : null
     setCompletions(merged)
     const preselected = merged.findIndex((item) => item.source === 'lsp' && item.preselect)
     setCompletionCursor(preselected >= 0 ? preselected : 0)
-  }, [activeTab, projectFiles])
+  }, [activePath, projectFiles])
 
   const requestHover = useCallback(async () => {
     const editor = editorRef.current
@@ -1651,7 +1918,7 @@ export function EditorPopover({
     setCompletions([])
     setSignatureInfo(null)
     const request = ++hoverRequestRef.current
-    const result = await lspRef.current?.hover(editorPositionAtOffset(editor.plainText, editorDocumentOffset(editor, cursorRef.current))) ?? null
+    const result = await lspRef.current?.hover(editorPositionAtOffset(editor.plainText, editorDocumentOffset(editor))) ?? null
     if (request !== hoverRequestRef.current) return
     setHoverInfo(result)
     setMessage(result ? 'LSP hover · Esc dismisses' : 'No hover information at cursor')
@@ -1663,7 +1930,7 @@ export function EditorPopover({
     setCompletions([])
     setHoverInfo(null)
     const request = ++signatureRequestRef.current
-    const result = await lspRef.current?.signatureHelp(editorPositionAtOffset(editor.plainText, editorDocumentOffset(editor, cursorRef.current))) ?? null
+    const result = await lspRef.current?.signatureHelp(editorPositionAtOffset(editor.plainText, editorDocumentOffset(editor))) ?? null
     if (request !== signatureRequestRef.current) return
     setSignatureInfo(result)
     setMessage(result ? 'LSP signature help · Esc dismisses' : 'No signature information at cursor')
@@ -1677,7 +1944,7 @@ export function EditorPopover({
     setHoverInfo(null)
     setSignatureInfo(null)
     client.change(editor.plainText)
-    const offset = editorDocumentOffset(editor, cursorRef.current)
+    const offset = editorDocumentOffset(editor)
     const position = editorPositionAtOffset(editor.plainText, offset)
     const prepared = await client.prepareRename(position)
     const fallback = wordRangeAt(editor.plainText, offset)
@@ -1735,7 +2002,7 @@ export function EditorPopover({
     if (!activeTab || !editor || !client) return
     client.change(editor.plainText)
     const selection = editor.getSelection()
-    const offset = editorDocumentOffset(editor, cursorRef.current)
+    const offset = editorDocumentOffset(editor)
     const range = selection
       ? { start: editorPositionAtOffset(editor.plainText, selection.start), end: editorPositionAtOffset(editor.plainText, selection.end) }
       : { start: editorPositionAtOffset(editor.plainText, offset), end: editorPositionAtOffset(editor.plainText, offset) }
@@ -1773,10 +2040,11 @@ export function EditorPopover({
       return
     }
     if (recordHistory && activePath) {
+      const logicalCursor = editorRef.current?.logicalCursor
       jumpHistoryRef.current.push({
         path: activePath,
-        line: cursorRef.current.line,
-        character: cursorRef.current.visualColumn,
+        line: logicalCursor?.row ?? cursorRef.current.line,
+        character: logicalCursor?.col ?? cursorRef.current.visualColumn,
       })
       if (jumpHistoryRef.current.length > 100) jumpHistoryRef.current.shift()
     }
@@ -1805,7 +2073,7 @@ export function EditorPopover({
     setHoverInfo(null)
     setSignatureInfo(null)
     client.change(editor.plainText)
-    const position = editorPositionAtOffset(editor.plainText, editorDocumentOffset(editor, cursorRef.current))
+    const position = editorPositionAtOffset(editor.plainText, editorDocumentOffset(editor))
     setMessage(`Finding ${kind}…`)
     const rawLocations = kind === 'definition'
       ? await client.definition(position)
@@ -1856,29 +2124,49 @@ export function EditorPopover({
   }, [jumpToEditorLocation, root])
 
   useEffect(() => {
-    if (!activeTab || focusPane !== 'editor' || hoverInfo || signatureInfo) return
+    if (!activePath || focusPane !== 'editor' || hoverInfo || signatureInfo) return
     const timer = setTimeout(() => { void requestCompletions(false) }, AUTO_COMPLETE_DELAY_MS)
     return () => clearTimeout(timer)
-  }, [activeTab, cursor, focusPane, hoverInfo, lspStatus?.state, requestCompletions, signatureInfo])
+  }, [activePath, activeTab?.content, cursor.line, cursor.visualColumn, focusPane, hoverInfo, lspStatus?.state, requestCompletions, signatureInfo])
 
   useEffect(() => {
     const item = completions[completionCursor]
     if (!item || item.source !== 'lsp' || item.resolved) return
+    completionResolveAbortRef.current?.abort()
+    const controller = new AbortController()
+    completionResolveAbortRef.current = controller
     const request = ++completionResolveRequestRef.current
-    void lspRef.current?.resolveCompletion(item).then((resolved) => {
-      if (!resolved || request !== completionResolveRequestRef.current) return
+    void lspRef.current?.resolveCompletion(item, controller.signal).then((resolved) => {
+      if (completionResolveAbortRef.current === controller) completionResolveAbortRef.current = null
+      if (!resolved || controller.signal.aborted || request !== completionResolveRequestRef.current) return
       setCompletions((current) => current.map((candidate) => candidate === item ? resolved : candidate))
     })
+    return () => {
+      controller.abort()
+      if (completionResolveAbortRef.current === controller) completionResolveAbortRef.current = null
+    }
   }, [completionCursor, completions])
 
   const acceptCompletion = useCallback(() => {
     const editor = editorRef.current
     const item = completions[completionCursor]
     if (!editor || !item) return
-    applyCompletion(editor, item, cursorRef.current)
+    const session = completionSessionRef.current
+    const currentCursor = editor.logicalCursor
+    if (!session || editor.plainText !== session.content || editorDocumentOffset(editor) !== session.cursorOffset
+      || currentCursor.row !== session.line || currentCursor.col !== session.visualColumn) {
+      completionSessionRef.current = null
+      setCompletions([])
+      setMessage('Completion dismissed after the buffer or cursor changed')
+      return
+    }
+    completionAbortRef.current?.abort()
+    completionResolveAbortRef.current?.abort()
+    const completionError = applyCompletion(editor, item)
+    completionSessionRef.current = null
     setCompletions([])
     setSignatureInfo(null)
-    setMessage(`${item.source === 'lsp' ? 'LSP' : item.source} completion: ${item.label}`)
+    setMessage(completionError ?? `${item.source === 'lsp' ? 'LSP' : item.source} completion: ${item.label}`)
   }, [completionCursor, completions])
 
   const activateTreeRow = useCallback(() => {
@@ -1969,7 +2257,7 @@ export function EditorPopover({
     }
     let index = searchCursor
     if (index < 0 || index >= searchMatches.length) {
-      const offset = editorDocumentOffset(editor, cursorRef.current)
+      const offset = editorDocumentOffset(editor)
       index = searchMatches.findIndex((match) => match.start >= offset)
       if (index < 0) index = 0
     }
@@ -1992,7 +2280,7 @@ export function EditorPopover({
     }
     let next = searchCursor
     if (next < 0) {
-      const offset = editorDocumentOffset(editor, cursorRef.current)
+      const offset = editorDocumentOffset(editor)
       next = direction > 0
         ? searchMatches.findIndex((match) => match.start >= offset)
         : searchMatches.findLastIndex((match) => match.end <= offset)
@@ -2145,10 +2433,22 @@ export function EditorPopover({
     const editor = editorRef.current
     const item = completions[index]
     if (!editor || !item) return
-    applyCompletion(editor, item, cursorRef.current)
+    const session = completionSessionRef.current
+    const currentCursor = editor.logicalCursor
+    if (!session || editor.plainText !== session.content || editorDocumentOffset(editor) !== session.cursorOffset
+      || currentCursor.row !== session.line || currentCursor.col !== session.visualColumn) {
+      completionSessionRef.current = null
+      setCompletions([])
+      setMessage('Completion dismissed after the buffer or cursor changed')
+      return
+    }
+    completionAbortRef.current?.abort()
+    completionResolveAbortRef.current?.abort()
+    const completionError = applyCompletion(editor, item)
+    completionSessionRef.current = null
     setCompletions([])
     setSignatureInfo(null)
-    setMessage(`${item.source === 'lsp' ? 'LSP' : item.source} completion: ${item.label}`)
+    setMessage(completionError ?? `${item.source === 'lsp' ? 'LSP' : item.source} completion: ${item.label}`)
   }, [completions])
 
   const handleVimKey = useCallback((key: EditorKeyEvent): boolean => {
@@ -2200,7 +2500,7 @@ export function EditorPopover({
       return true
     }
 
-    const documentOffset = editorDocumentOffset(editor, cursorRef.current)
+    const documentOffset = editorDocumentOffset(editor)
     const bounds = lineBoundsAtOffset(editor.plainText, documentOffset)
     const pending = vimPendingRef.current
     vimPendingRef.current = null
@@ -2476,6 +2776,51 @@ export function EditorPopover({
       }
       return true
     }
+    if (focusPane === 'editor' && key.ctrl && key.name === 'c') {
+      void copyEditorSelection(false)
+      return true
+    }
+    if (focusPane === 'editor' && key.ctrl && key.name === 'x') {
+      void copyEditorSelection(true)
+      return true
+    }
+    if (focusPane === 'editor' && key.ctrl && key.name === 'v') {
+      void pasteIntoEditor()
+      return true
+    }
+    if (focusPane === 'editor' && key.ctrl && key.name === 'z') {
+      setMultiCursor(null)
+      setBlockSelection(null)
+      if (key.shift) editorRef.current?.redo()
+      else editorRef.current?.undo()
+      setMessage(key.shift ? 'Redo' : 'Undo')
+      return true
+    }
+    if (focusPane === 'editor' && key.ctrl && key.name === 'y') {
+      setMultiCursor(null)
+      setBlockSelection(null)
+      editorRef.current?.redo()
+      setMessage('Redo')
+      return true
+    }
+    if (focusPane === 'editor'
+      && (key.name === 'left' || key.name === 'right')
+      && !(key.option && key.shift)
+      && ((key.ctrl && !key.option && !key.meta) || (!key.ctrl && (key.option || key.meta)))) {
+      const editor = editorRef.current
+      if (!editor) return true
+      const options = key.shift ? { select: true } : undefined
+      if (key.name === 'left') editor.moveWordBackward(options)
+      else editor.moveWordForward(options)
+      return true
+    }
+    if (focusPane === 'editor' && key.ctrl && (key.name === 'home' || key.name === 'end')) {
+      const editor = editorRef.current
+      if (!editor) return true
+      if (key.name === 'home') editor.gotoBufferHome(key.shift ? { select: true } : undefined)
+      else editor.gotoBufferEnd(key.shift ? { select: true } : undefined)
+      return true
+    }
     if (focusPane === 'editor' && key.ctrl && key.name === 'd') {
       addNextOccurrence()
       return true
@@ -2505,6 +2850,8 @@ export function EditorPopover({
       if (key.name === 'escape') {
         setMultiCursor(null)
         setBlockSelection(null)
+        editorRef.current?.clearSelection()
+        editorRef.current?.removeHighlightsByRef(OCCURRENCE_HIGHLIGHT_REF)
         setMessage('Collapsed to primary cursor')
         return true
       }
@@ -2564,9 +2911,9 @@ export function EditorPopover({
     if (focusPane === 'editor' && (key.name === 'home' || key.name === 'end')) {
       const editor = editorRef.current
       if (!editor) return true
-      const documentOffset = editorDocumentOffset(editor, cursorRef.current)
+      const documentOffset = editorDocumentOffset(editor)
       const bounds = lineBoundsAtOffset(editor.plainText, documentOffset)
-      const target = key.name === 'home' ? bounds.start : bounds.end
+      const target = key.name === 'home' ? smartHomeOffset(editor.plainText, documentOffset) : bounds.end
       if (key.shift) editor.setSelection(documentOffset, target)
       else {
         editor.clearSelection()
@@ -2577,7 +2924,7 @@ export function EditorPopover({
     if (focusPane === 'editor' && key.name === 'return' && !key.ctrl && !key.meta) {
       const editor = editorRef.current
       if (!editor) return true
-      const offset = editorDocumentOffset(editor, cursorRef.current)
+      const offset = editorDocumentOffset(editor)
       const insertion = smartNewLineInsertion(editor.plainText, offset, activeTab?.path ?? '')
       editor.insertText(insertion.text)
       setEditorDocumentOffset(editor, insertion.cursorOffset)
@@ -2610,6 +2957,7 @@ export function EditorPopover({
     if (key.ctrl && key.name === 'n') { openFilePrompt('create'); return true }
     if (key.ctrl && key.shift && key.name === 's') { void saveAll(); return true }
     if (key.ctrl && key.name === 's') { void saveActive(); return true }
+    if (key.ctrl && key.shift && key.name === 'r') { restartLsp(); return true }
     if (key.ctrl && key.name === 'p') { openQuick(); return true }
     if (key.ctrl && key.name === 'f') { openSearch(); return true }
     if (key.ctrl && key.name === 'r') { openSearch(true); return true }
@@ -2621,6 +2969,14 @@ export function EditorPopover({
     if (key.ctrl && key.name === 'k') { void requestHover(); return true }
     if (key.ctrl && key.shift && (key.name === 'space' || sequence === '\0')) { void requestSignatureHelp(); return true }
     if (key.ctrl && (key.name === 'space' || sequence === '\0')) { void requestCompletions(true); return true }
+    if (focusPane === 'editor' && key.name === 'escape' && editorRef.current?.hasSelection()) {
+      editorRef.current.clearSelection()
+      editorRef.current.removeHighlightsByRef(OCCURRENCE_HIGHLIGHT_REF)
+      setMultiCursor(null)
+      setBlockSelection(null)
+      setMessage('Selection cleared')
+      return true
+    }
     if (key.name === 'escape') {
       if (focusPane === 'explorer' && activeTab) { setFocusPane('editor'); editorRef.current?.focus() }
       else setMessage('Ctrl+Q closes editor · Ctrl+P opens files')
@@ -2643,7 +2999,7 @@ export function EditorPopover({
     if (focusPane === 'editor' && !key.ctrl && !key.meta && !key.option && sequence.length === 1) {
       const editor = editorRef.current
       if (!editor) return false
-      const offset = editorDocumentOffset(editor, cursorRef.current)
+      const offset = editorDocumentOffset(editor)
       if (AUTO_PAIR_CLOSERS.has(sequence) && editor.plainText[offset] === sequence && !editor.hasSelection()) {
         setEditorDocumentOffset(editor, offset + 1)
         return true
@@ -2672,7 +3028,7 @@ export function EditorPopover({
       }
     }
     return false
-  }, [acceptCompletion, activateTreeRow, activeTab, addAdjacentCursor, addLineEndCursors, addNextOccurrence, applyCaseTransform, applyCodeAction, applyLineTransform, chooseQuickResultAt, closeActiveTab, closeConfirm, codeActionCursor, codeActions, completions.length, editAtAllCursors, editSelectedLines, extendBlockSelection, filePrompt, focusPane, formatDocument, handleVimKey, hoverInfo, jumpBack, jumpToEditorLocation, multiCursor, navigateDiagnostic, navigateSearch, openFilePrompt, openProjectSearch, openQuick, openRecoveryConflict, openSearch, performFileOperation, performRename, projectSearchCursor, projectSearchOpen, projectSearchResults, quickCursor, quickOpen, quickResults.length, recoveryConflictCursor, recoveryConflictOpen, recoveryConflicts, renameOpen, replaceSearchMatch, requestClose, requestCodeActions, requestCompletions, requestHover, requestRename, requestSignatureHelp, requestSymbolNavigation, root, saveActive, saveAll, searchInput, searchOpen, searchReplaceMode, searchResult.error, searchSelectionRange, signatureInfo, switchTab, symbolNavigationCursor, symbolNavigationKind, symbolNavigationResults, toggleExplorer, toggleSearchMatchCase, toggleVelocityScrolling, toggleVimMode, toggleWordWrap, treeCursor, treeExpanded, treeRows, velocityScrollEnabled, vimEnabled])
+  }, [acceptCompletion, activateTreeRow, activeTab, addAdjacentCursor, addLineEndCursors, addNextOccurrence, applyCaseTransform, applyCodeAction, applyLineTransform, chooseQuickResultAt, closeActiveTab, closeConfirm, codeActionCursor, codeActions, completions.length, copyEditorSelection, editAtAllCursors, editSelectedLines, extendBlockSelection, filePrompt, focusPane, formatDocument, handleVimKey, hoverInfo, jumpBack, jumpToEditorLocation, multiCursor, navigateDiagnostic, navigateSearch, openFilePrompt, openProjectSearch, openQuick, openRecoveryConflict, openSearch, pasteIntoEditor, performFileOperation, performRename, projectSearchCursor, projectSearchOpen, projectSearchResults, quickCursor, quickOpen, quickResults.length, recoveryConflictCursor, recoveryConflictOpen, recoveryConflicts, renameOpen, replaceSearchMatch, requestClose, requestCodeActions, requestCompletions, requestHover, requestRename, requestSignatureHelp, requestSymbolNavigation, restartLsp, root, saveActive, saveAll, searchInput, searchOpen, searchReplaceMode, searchResult.error, searchSelectionRange, signatureInfo, switchTab, symbolNavigationCursor, symbolNavigationKind, symbolNavigationResults, toggleExplorer, toggleSearchMatchCase, toggleVelocityScrolling, toggleVimMode, toggleWordWrap, treeCursor, treeExpanded, treeRows, velocityScrollEnabled, vimEnabled])
 
   useEffect(() => {
     onKeyHandlerReady(handleKey)
@@ -2732,6 +3088,11 @@ export function EditorPopover({
     if (content == null || !activePath) return
     completionRequestRef.current += 1
     completionResolveRequestRef.current += 1
+    completionSessionRef.current = null
+    completionAbortRef.current?.abort()
+    completionAbortRef.current = null
+    completionResolveAbortRef.current?.abort()
+    completionResolveAbortRef.current = null
     setCompletions([])
     setCloseConfirm(false)
     setTabs((current) => current.map((tab) => tab.path === activePath ? { ...tab, content } : tab))

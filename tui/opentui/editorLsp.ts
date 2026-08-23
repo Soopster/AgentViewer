@@ -128,6 +128,13 @@ type PendingRequest = {
   resolve: (value: unknown) => void
   reject: (error: Error) => void
   timer: ReturnType<typeof setTimeout>
+  abortCleanup?: () => void
+}
+
+function abortError(method: string): Error {
+  const error = new Error(`${method} cancelled`)
+  error.name = 'AbortError'
+  return error
 }
 
 function markupText(value: unknown): string | undefined {
@@ -463,7 +470,7 @@ export class EditorLspClient {
     return Boolean(character && this.completionTriggerCharacters.has(character))
   }
 
-  async completion(position: EditorPosition, triggerCharacter?: string): Promise<EditorCompletion[]> {
+  async completion(position: EditorPosition, triggerCharacter?: string, signal?: AbortSignal): Promise<EditorCompletion[]> {
     if (!this.openedUri || !this.child) return []
     const useTriggerCharacter = this.isCompletionTriggerCharacter(triggerCharacter)
     const raw = await this.request('textDocument/completion', {
@@ -472,7 +479,7 @@ export class EditorLspClient {
       context: useTriggerCharacter
         ? { triggerKind: 2, triggerCharacter }
         : { triggerKind: 1 },
-    }, 2_500).catch(() => null)
+    }, 2_500, signal).catch(() => null)
     const list = Array.isArray(raw)
       ? raw
       : raw && typeof raw === 'object' && Array.isArray((raw as { items?: unknown[] }).items)
@@ -494,16 +501,23 @@ export class EditorLspClient {
     return completions
   }
 
-  async resolveCompletion(completion: EditorCompletion): Promise<EditorCompletion> {
+  async resolveCompletion(completion: EditorCompletion, signal?: AbortSignal): Promise<EditorCompletion> {
     if (!this.openedUri || !this.child || !this.completionResolveProvider || completion.resolved || !completion.rawItem) {
       return completion.resolved ? completion : { ...completion, resolved: true }
     }
-    const raw = await this.request('completionItem/resolve', completion.rawItem, 2_500).catch(() => null)
+    const raw = await this.request('completionItem/resolve', completion.rawItem, 2_500, signal).catch(() => null)
     const resolved = completionItem(raw)
     if (!resolved) return { ...completion, resolved: true }
+    const rawRecord = raw && typeof raw === 'object' ? raw as Record<string, unknown> : null
+    const resolvedInsertion = Boolean(rawRecord && (
+      typeof rawRecord.insertText === 'string'
+      || typeof rawRecord.textEditText === 'string'
+      || rawRecord.textEdit != null
+    ))
     return {
       ...completion,
       ...resolved,
+      insertText: resolvedInsertion ? resolved.insertText : completion.insertText,
       textEdit: resolved.textEdit ?? completion.textEdit,
       additionalTextEdits: resolved.additionalTextEdits ?? completion.additionalTextEdits,
       resolved: true,
@@ -745,6 +759,7 @@ export class EditorLspClient {
       const pending = this.pending.get(message.id)
       if (!pending) return
       clearTimeout(pending.timer)
+      pending.abortCleanup?.()
       this.pending.delete(message.id)
       if (message.error) pending.reject(new Error(message.error.message || `LSP error ${message.error.code ?? ''}`.trim()))
       else pending.resolve(message.result)
@@ -766,14 +781,33 @@ export class EditorLspClient {
     this.diagnosticsHandler(editorDiagnostics((raw as { items?: unknown }).items))
   }
 
-  private request(method: string, params: unknown, timeoutMs: number): Promise<unknown> {
+  private request(method: string, params: unknown, timeoutMs: number, signal?: AbortSignal): Promise<unknown> {
     const id = this.nextId++
     return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(abortError(method))
+        return
+      }
       const timer = setTimeout(() => {
+        const pending = this.pending.get(id)
+        pending?.abortCleanup?.()
         this.pending.delete(id)
         reject(new Error(`${method} timed out`))
       }, timeoutMs)
-      this.pending.set(id, { resolve, reject, timer })
+      const onAbort = signal ? () => {
+        const pending = this.pending.get(id)
+        if (!pending) return
+        clearTimeout(pending.timer)
+        pending.abortCleanup?.()
+        this.pending.delete(id)
+        this.notify('$/cancelRequest', { id })
+        reject(abortError(method))
+      } : null
+      const abortCleanup = onAbort && signal
+        ? () => signal.removeEventListener('abort', onAbort)
+        : undefined
+      if (onAbort && signal) signal.addEventListener('abort', onAbort, { once: true })
+      this.pending.set(id, { resolve, reject, timer, abortCleanup })
       this.send({ jsonrpc: '2.0', id, method, params })
     })
   }
@@ -820,6 +854,7 @@ export class EditorLspClient {
     if (child && !child.killed) child.kill()
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer)
+      pending.abortCleanup?.()
       pending.reject(new Error('language server stopped'))
     }
     this.pending.clear()

@@ -7288,7 +7288,7 @@ export default function OpenTuiApp() {
   const fileViewerKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [editorOpen, setEditorOpen] = useState(false)
   const [editorInitialPath, setEditorInitialPath] = useState<string | null>(null)
-  const editorKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; meta?: boolean; sequence: string }) => boolean) | null>(null)
+  const editorKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; meta?: boolean; option?: boolean; sequence: string }) => boolean) | null>(null)
   // New agent session modal: pick a folder (via the file picker in folder-select
   // mode) and provider before creating, instead of defaulting to the viewed cwd.
   const [newSessionModalOpen, setNewSessionModalOpen] = useState(false)
@@ -20180,6 +20180,8 @@ export default function OpenTuiApp() {
           }}
           onKeyHandlerReady={(handler) => { editorKeyHandlerRef.current = handler }}
           onNotice={(kind, text) => showNotice(kind, text)}
+          onClipboardRead={readClipboardText}
+          onClipboardWrite={(text) => writeClipboard(text, renderer)}
         />
       ) : null}
 

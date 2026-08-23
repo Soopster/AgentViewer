@@ -17,6 +17,7 @@ const fakeLspPath = join(cwd, 'tsc')
 const originalTypeScriptLspBin = process.env.AGENT_VIEWER_TYPESCRIPT_LSP_BIN
 let handleKey: ((key: EditorKeyEvent) => boolean) | null = null
 let closeCount = 0
+let clipboardText = ''
 const notices: Array<{ kind: 'info' | 'error'; message: string }> = []
 registerExtraTreeSitterParsers()
 
@@ -64,7 +65,9 @@ process.stdin.on('data', (chunk) => {
       const line = (documentText.split('\n')[position.line] || '').slice(0, position.character)
       const prefix = /[A-Za-z_$][\w$]*$/.exec(line)?.[0] || ''
       const memberAccess = line.slice(0, line.length - prefix.length).endsWith('console.')
-      const labels = memberAccess
+      const labels = prefix === 'bad'
+        ? ['badValue']
+        : memberAccess
         ? ['log', 'warn', 'error', 'info', 'debug', 'dir', 'table', 'time', 'timeEnd', 'trace', 'group', 'groupEnd']
         : ['answer']
       send({
@@ -86,7 +89,9 @@ process.stdin.on('data', (chunk) => {
       jsonrpc: '2.0', id: message.id, result: {
         ...message.params,
         documentation: { kind: 'markdown', value: message.params.label === 'log' ? 'Writes a log message.' : 'Console member.' },
-        additionalTextEdits: message.params.label === 'log'
+        additionalTextEdits: message.params.label === 'badValue'
+          ? [{ range: message.params.textEdit.range, newText: 'corrupt' }]
+          : message.params.label === 'log'
           ? [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, newText: '// completion import\n' }]
           : [],
       },
@@ -169,6 +174,8 @@ process.stdin.on('data', (chunk) => {
       onClose={() => { closeCount += 1 }}
       onKeyHandlerReady={(handler) => { handleKey = handler }}
       onNotice={(kind, message) => { notices.push({ kind, message }) }}
+      onClipboardRead={async () => clipboardText}
+      onClipboardWrite={async (text) => { clipboardText = text }}
     />,
     { width: 110, height: 34 },
   )
@@ -231,6 +238,62 @@ process.stdin.on('data', (chunk) => {
     if (editor.logicalCursor.row !== 1 || editor.logicalCursor.col !== 'const otherAnswer = answer + 1'.length) {
       throw new Error(`End did not move to line end: ${JSON.stringify(editor.logicalCursor)}`)
     }
+    act(() => { editor.setCursor(2, '  const nested = true'.length) })
+    await setup.flush()
+    act(() => { handleKey?.({ name: 'home', ctrl: false, shift: false, sequence: '\u001b[H' }) })
+    const smartHomeCursor: { row: number; col: number } = editor.logicalCursor
+    if (smartHomeCursor.row !== 2 || smartHomeCursor.col !== 2) {
+      throw new Error(`Smart Home did not move to the first non-whitespace column: ${JSON.stringify(smartHomeCursor)}`)
+    }
+    await setup.flush()
+    act(() => { handleKey?.({ name: 'home', ctrl: false, shift: false, sequence: '\u001b[H' }) })
+    if (editor.logicalCursor.col !== 0) throw new Error(`Second Smart Home did not toggle to column zero: ${JSON.stringify(editor.logicalCursor)}`)
+
+    act(() => { editor.setCursor(1, 0) })
+    act(() => { handleKey?.({ name: 'right', ctrl: false, shift: false, option: true, sequence: '\u001bf' }) })
+    if (editor.logicalCursor.col <= 0) throw new Error(`Alt+Right did not move by a word: ${JSON.stringify(editor.logicalCursor)}`)
+    act(() => { handleKey?.({ name: 'left', ctrl: true, shift: true, option: false, sequence: '\u001b[1;6D' }) })
+    if (!editor.hasSelection()) throw new Error('Shift+Ctrl+Left did not extend a word selection')
+    act(() => { handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '\u001b' }) })
+    if (editor.hasSelection()) throw new Error('Escape did not collapse the active word selection')
+
+    act(() => { editor.setCursor(1, 5) })
+    act(() => { handleKey?.({ name: 'right', ctrl: false, shift: true, option: true, sequence: '\u001b[1;10C' }) })
+    if (!editor.hasSelection()) throw new Error('Shift+Alt+Right did not extend a block selection')
+    act(() => { handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '\u001b' }) })
+    if (editor.hasSelection()) throw new Error('Escape did not collapse the active block selection')
+
+    const answerOffset = editor.plainText.indexOf('answer')
+    editor.setSelection(answerOffset, answerOffset + 'answer'.length)
+    act(() => { handleKey?.({ name: 'c', ctrl: true, shift: false, sequence: '\u0003' }) })
+    await flush(setup, 80)
+    if (clipboardText !== 'answer') throw new Error(`Ctrl+C did not copy the editor selection: ${JSON.stringify(clipboardText)}`)
+    editor.clearSelection()
+    editor.setCursor(0, 'const answer = 41'.length)
+    clipboardText = '_clipboard'
+    act(() => { handleKey?.({ name: 'v', ctrl: true, shift: false, sequence: '\u0016' }) })
+    await flush(setup, 80)
+    if (!editor.plainText.startsWith('const answer = 41_clipboard')) throw new Error(`Ctrl+V did not insert clipboard text: ${JSON.stringify(editor.plainText.slice(0, 40))}`)
+    act(() => { handleKey?.({ name: 'z', ctrl: true, shift: false, sequence: '\u001a' }) })
+    if (!editor.plainText.startsWith('const answer = 41\n')) throw new Error('Ctrl+Z did not undo the clipboard insertion')
+    act(() => { handleKey?.({ name: 'y', ctrl: true, shift: false, sequence: '\u0019' }) })
+    if (!editor.plainText.startsWith('const answer = 41_clipboard')) throw new Error('Ctrl+Y did not redo the clipboard insertion')
+    act(() => { handleKey?.({ name: 'z', ctrl: true, shift: false, sequence: '\u001a' }) })
+    await flush(setup, 120)
+    if (!editor.plainText.startsWith('const answer = 41\n')) throw new Error('A subsequent Ctrl+Z did not undo the redone insertion')
+
+    act(() => { editor.clearSelection(); editor.setCursor(1, 20) })
+    await flush(setup, 120)
+    const occurrenceHighlights = [0, 1].flatMap((line) => editor.getLineHighlights(line)).filter((highlight) => highlight.hlRef === 41_001)
+    if (occurrenceHighlights.length < 2) {
+      throw new Error(`Word occurrences were not highlighted near the cursor: ${JSON.stringify(occurrenceHighlights)}`)
+    }
+
+    act(() => { handleKey?.({ name: 'end', ctrl: true, shift: false, sequence: '\u001b[1;5F' }) })
+    if (editor.cursorOffset !== editor.plainText.length) throw new Error('Ctrl+End did not navigate to the document end')
+    act(() => { handleKey?.({ name: 'home', ctrl: true, shift: false, sequence: '\u001b[1;5H' }) })
+    if (editor.cursorOffset !== 0) throw new Error('Ctrl+Home did not navigate to the document start')
+
     act(() => { editor.setCursor(2, '  const nested = true'.length) })
     await setup.flush()
     act(() => { handleKey?.({ name: 'return', ctrl: false, shift: false, sequence: '\r' }) })
@@ -298,6 +361,41 @@ process.stdin.on('data', (chunk) => {
     await flush(setup, 150)
     if (!editor.plainText.startsWith('// completion import\n') || !editor.plainText.includes('console.log')) {
       throw new Error(`Accepting a member completion did not apply its range and additional edits: ${JSON.stringify(editor.plainText)}`)
+    }
+    act(() => {
+      editor.gotoBufferEnd()
+      editor.insertText("\nconst wide = '界'; console.")
+    })
+    await flush(setup, 800)
+    const unicodeCompletionFrame = setup.captureCharFrame()
+    if (!unicodeCompletionFrame.includes('completions 1/12') || !unicodeCompletionFrame.includes('log')) {
+      throw new Error(`Unicode text before the cursor corrupted the LSP completion position at ${JSON.stringify(editor.logicalCursor)} / ${editor.cursorOffset}:\n${unicodeCompletionFrame}`)
+    }
+    const beforeStaleCompletion = editor.plainText
+    const completionCursorBeforeMove = editor.logicalCursor
+    act(() => { editor.setCursor(completionCursorBeforeMove.row, completionCursorBeforeMove.col - 1) })
+    await setup.flush()
+    if (editor.logicalCursor.col !== completionCursorBeforeMove.col - 1) {
+      throw new Error(`Completion stale-cursor setup did not move the caret: ${JSON.stringify(editor.logicalCursor)}`)
+    }
+    act(() => { handleKey?.({ name: 'tab', ctrl: false, shift: false, sequence: '\t' }) })
+    await flush(setup, 120)
+    if (editor.plainText !== beforeStaleCompletion || !setup.captureCharFrame().includes('Completion dismissed after the buffer or cursor changed')) {
+      throw new Error(`A stale completion was applied after cursor movement:\n${setup.captureCharFrame()}`)
+    }
+    act(() => { editor.gotoBufferEnd() })
+    await setup.flush()
+    act(() => { handleKey?.({ name: 'return', ctrl: false, shift: false, sequence: '\r' }) })
+    await act(async () => { await setup.mockInput.typeText('bad') })
+    await flush(setup, 600)
+    if (!setup.captureCharFrame().includes('badValue')) {
+      throw new Error(`Invalid-edit completion fixture did not open:\n${setup.captureCharFrame()}`)
+    }
+    const beforeInvalidCompletion = editor.plainText
+    act(() => { handleKey?.({ name: 'tab', ctrl: false, shift: false, sequence: '\t' }) })
+    await flush(setup, 120)
+    if (editor.plainText !== beforeInvalidCompletion || !setup.captureCharFrame().includes('Language server returned overlapping completion edits')) {
+      throw new Error(`Overlapping completion edits corrupted the buffer:\n${setup.captureCharFrame()}`)
     }
     act(() => { handleKey?.({ name: 'v', ctrl: false, shift: false, option: true, sequence: 'v' }) })
     await setup.flush()
