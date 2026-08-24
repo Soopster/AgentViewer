@@ -277,6 +277,14 @@ export type ClaudePoolRunOptions = {
   /** Called once if the underlying CLI dies mid-turn. */
   onError?(error: Error): void
   /**
+   * Called the instant the user message reaches the subprocess input stream —
+   * after the FIFO mutex and after any buffered messages from the previous
+   * turn have been replayed. Callers that time the subprocess's response to
+   * *this* turn must start their clock here: a replayed frame says nothing
+   * about whether the subprocess is still answering.
+   */
+  onSubmitted?(): void
+  /**
    * Per-turn canUseTool implementation. Installed into the entry's bridgeBox
    * before the turn starts and cleared when the turn ends. Used to route
    * interactive permission requests through the current turn's SSE stream
@@ -355,8 +363,6 @@ export function effortToSdk(effort: ReasoningEffortLevel | undefined):
   if (effort === 'minimal') return { thinking: { type: 'adaptive' } }
   return { effort, thinking: { type: 'adaptive' } }
 }
-
-let __lastPushAt = 0
 
 class ClaudePool {
   private entries = new Map<string, InternalEntry>()
@@ -536,10 +542,6 @@ class ClaudePool {
   private async pumpQueryToSubscriber(entry: InternalEntry): Promise<void> {
     try {
       for await (const message of entry.query) {
-        if (process.env.AV_SEND_TRACE && __lastPushAt) {
-          console.error(`[trace] pump first msg after push: ${Date.now() - __lastPushAt}ms (${message.type}${(message as { subtype?: string }).subtype ? ':' + (message as { subtype?: string }).subtype : ''})`)
-          __lastPushAt = 0
-        }
         if (!entry.alive) break
         // A streaming query is active by definition — keep the LRU/idle-sweep
         // ordering honest even when no run() subscriber is attached (e.g. a
@@ -798,7 +800,6 @@ class ClaudePool {
     message: SDKUserMessage,
     options: ClaudePoolRunOptions,
   ): Promise<void> {
-    const __t = Date.now()
     // FIFO mutex — wait for previous turn on the same entry to finish.
     const prev = entry.turnTail
     let releaseMutex!: () => void
@@ -923,18 +924,8 @@ class ClaudePool {
       // delivery. Let it use the already-warm Query in the background so a
       // queued file-read seed cannot delay the user's turn.
       void this.applyReadSeeds(entry).catch(() => {})
-      if (process.env.AV_SEND_TRACE) {
-        console.error(`[trace] pool.runTurn mutex+setup ${Date.now() - __t}ms`)
-        __lastPushAt = Date.now()
-        let last = Date.now()
-        const lagTimer = setInterval(() => {
-          const now = Date.now()
-          if (now - last > 120) console.error(`[trace] event-loop lag ${now - last}ms`)
-          last = now
-          if (!__lastPushAt) clearInterval(lagTimer)
-        }, 20)
-      }
       entry.pushUserMessage(message)
+      try { options.onSubmitted?.() } catch { /* a caller hook must never strand the mutex */ }
       try { broadcastClaudeTurnStart(entry.sessionId) } catch { /* swallow */ }
     } catch (err) {
       entry.bridgeBox.fn = null

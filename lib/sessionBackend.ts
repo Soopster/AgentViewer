@@ -1211,6 +1211,46 @@ function codexContextUsageToEventData(contextUsage: ContextUsage): string {
   return `event: context-usage\ndata: ${JSON.stringify(contextUsage)}\n\n`
 }
 
+/**
+ * Context meter for a Claude turn, read out of the turn's own result message.
+ *
+ * The obvious source is Query.getContextUsage(), but that is a control RPC the
+ * CLI answers on the same queue it accepts prompts on, taking ~1.4s on a warm
+ * subprocess — asking for it around every turn parked that 1.4s in front of the
+ * user's next send. The result message already carries what the meter shows:
+ * `usage` is the main loop's per-turn usage in streaming-input sessions, so its
+ * input side (fresh + both cache buckets) is the prompt the model was just
+ * given — i.e. the context in use — and modelUsage carries the window it was
+ * measured against. Free, and it refreshes on every turn.
+ */
+function claudeResultContextUsage(msg: SDKMessage): ContextUsage | null {
+  if (msg.type !== 'result') return null
+  const result = msg as unknown as {
+    usage?: { input_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; output_tokens?: number }
+    modelUsage?: Record<string, { contextWindow?: number }>
+  }
+  const usage = result.usage
+  if (!usage) return null
+  const totalTokens = (usage.input_tokens ?? 0)
+    + (usage.cache_read_input_tokens ?? 0)
+    + (usage.cache_creation_input_tokens ?? 0)
+    + (usage.output_tokens ?? 0)
+  if (totalTokens <= 0) return null
+  const models = Object.entries(result.modelUsage ?? {})
+  // The main-loop model is the one with a window; several entries can appear
+  // once subagents run, so take the largest window rather than an arbitrary
+  // first key — a small subagent model's window would overstate the meter.
+  const maxTokens = models.reduce((widest, [, entry]) => Math.max(widest, entry.contextWindow ?? 0), 0)
+  if (maxTokens <= 0) return null
+  return {
+    totalTokens,
+    maxTokens,
+    percentage: (totalTokens / maxTokens) * 100,
+    model: models.find(([, entry]) => entry.contextWindow === maxTokens)?.[0] ?? '',
+    categories: [],
+  }
+}
+
 function turnUsageToEventData(outputTokens: number): string {
   return `event: turn-usage\ndata: ${JSON.stringify({ outputTokens })}\n\n`
 }
@@ -4199,14 +4239,20 @@ const CLAUDE_STREAM_HEARTBEAT_MS = 15_000
 // nothing drains — the turn then hangs until the pool's 10-min hard timeout
 // while server heartbeats keep the client's socket watchdog satisfied (so the
 // existing stall-reconnect never fires either). getContextUsage() is a
-// control-channel RPC the subprocess answers in a few ms regardless of model
-// latency, so a reused entry that can't answer within this window — and has
-// emitted no turn frames — is treated as dead: we recycle it and respawn a
-// fresh subprocess for one transparent retry. 4s is ~100x the healthy answer
-// time, far below the hang it replaces, and a false positive costs only one
-// invisible respawn, not a broken turn.
+// control-channel RPC, so a reused entry that can't answer within this window
+// — and has emitted no turn frames — is treated as dead: we recycle it and
+// respawn a fresh subprocess for one transparent retry. A false positive costs
+// only one invisible respawn, not a broken turn.
 const CLAUDE_WARM_LIVENESS_PROBE_MS = 4000
 const CLAUDE_WARM_MAX_RESPAWN = 1
+// How long a reused entry may stay silent after the prompt before the liveness
+// probe above is issued. The probe cannot run up front: the CLI answers
+// getContextUsage() on the same queue it accepts prompts on, taking ~1.4s on a
+// warm subprocess, so probing first prepends that to every warm send. A healthy
+// warm turn emits its first frame (hook events, then init) in ~0.2s, and even a
+// cold-ish resume is well inside this window, so the probe only ever fires on a
+// subprocess that really has gone quiet.
+const CLAUDE_WARM_SILENCE_BEFORE_PROBE_MS = 6000
 
 async function createClaudeStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>, checkpoint?: Promise<unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
@@ -4828,17 +4874,24 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
         (heartbeat as { unref?: () => void }).unref?.()
       }
 
-      const emitUsage = (usage: Awaited<ReturnType<Query['getContextUsage']>>) => {
+      const emitUsage = (usage: ContextUsage) => {
         try {
           controller.enqueue(encoder.encode(codexContextUsageToEventData(usage)))
         } catch { /* downstream already closed */ }
       }
 
-      // Liveness probe for a reused warm entry: getContextUsage() answers from
-      // the control channel in a few ms when the subprocess is healthy. If it
-      // cannot answer, the caller first asks the SDK to reinitialize its
-      // transport; only a failed reconnect pays the subprocess-respawn cost.
-      // The usage request doubles as the usage-frame source on success.
+      // Liveness probe for a reused warm entry. NOTE the scheduling: this must
+      // never be issued *before* the user's message. getContextUsage() is a
+      // control request the CLI answers on the same queue it uses to accept a
+      // prompt, and on a warm subprocess it takes ~1.4s — so probing first put
+      // that 1.4s in front of every single warm send (measured: first frame
+      // 1.3s vs 0.2s, whole turn 3.3s vs 1.8s against the native CLI). The
+      // probe is a backstop for a subprocess that has silently died, and a
+      // dead subprocess produces no frames at all, so it loses nothing by
+      // running only once the turn has gone quiet for longer than a healthy
+      // turn ever takes to say something. If it cannot answer, the caller
+      // first asks the SDK to reinitialize its transport; only a failed
+      // reconnect pays the subprocess-respawn cost.
       const probeWarmLiveness = (e: ClaudePoolEntry): Promise<'live' | 'dead'> => {
         let timer: ReturnType<typeof setTimeout> | null = null
         const timeout = new Promise<'dead'>((resolve) => {
@@ -4856,6 +4909,12 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
 
       let attempt = 0
       let turnAccepted = false
+      // Set per attempt by the warm-entry branch below. armWarmProbe runs when
+      // the message actually reaches the subprocess; the first frame after that
+      // cancels the pending probe, so a healthy turn never issues it.
+      let armWarmProbe: (() => void) | null = null
+      let cancelWarmProbe: (() => void) | null = null
+      let runWarmProbe: () => Promise<void> = async () => {}
       try {
         while (true) {
           attempt += 1
@@ -4909,14 +4968,32 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
           })
 
           let sawActivity = false
+          // Distinct from sawActivity: run() replays messages buffered since
+          // the last turn before it submits, and a replayed frame proves
+          // nothing about whether the subprocess is still answering *now*.
+          // Only frames seen after onSubmitted retire the liveness probe.
+          let sawFrameSinceSubmit = false
           // Set when we deliberately recycle a dead-looking warm entry, so the
           // catch below knows the run() rejection is our own doing — not a real
           // turn failure to surface — and the retry path stays silent.
           let respawnRequested = false
 
           if (activeEntry.reused && attempt <= CLAUDE_WARM_MAX_RESPAWN) {
-            void probeWarmLiveness(activeEntry).then(async (verdict) => {
-              if (verdict !== 'dead' || sawActivity) return
+            armWarmProbe = () => {
+              // Replay happens before submission, so anything it set is stale.
+              sawFrameSinceSubmit = false
+              const probeTimer = setTimeout(() => {
+                if (sawFrameSinceSubmit) return
+                void runWarmProbe()
+              }, CLAUDE_WARM_SILENCE_BEFORE_PROBE_MS)
+              if (typeof probeTimer === 'object' && probeTimer && 'unref' in probeTimer) {
+                (probeTimer as { unref?: () => void }).unref?.()
+              }
+              cancelWarmProbe = () => clearTimeout(probeTimer)
+            }
+            runWarmProbe = async () => {
+              const verdict = await probeWarmLiveness(activeEntry)
+              if (verdict !== 'dead' || sawFrameSinceSubmit) return
 
               let timer: ReturnType<typeof setTimeout> | null = null
               const timeout = new Promise<false>((resolve) => {
@@ -4931,24 +5008,27 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
               const recovered = await Promise.race([reinitialized, timeout]).finally(() => {
                 if (timer) clearTimeout(timer)
               })
-              if (recovered || sawActivity) return
+              if (recovered || sawFrameSinceSubmit) return
 
               respawnRequested = true
               // Recycling pushes null to the turn subscriber, so the pending
               // run() below rejects promptly — caught and respawned fresh.
               recycleClaudeSession(sessionId)
-            })
-          } else {
-            // Fresh spawn (or a retry): surface context usage without gating —
-            // a fresh spawn is the already-reliable path and may be slow to
-            // answer during init, which must never trigger a respawn.
-            void activeEntry.query.getContextUsage().then(emitUsage).catch(() => {})
+            }
           }
 
           const onTurnMessage = (msg: SDKMessage) => {
             // Any frame proves the subprocess is alive — cancels a pending
-            // dead verdict so a slow-but-healthy turn is never respawned.
+            // dead verdict so a slow-but-healthy turn is never respawned, and
+            // retires the scheduled liveness probe before it can be issued.
             sawActivity = true
+            if (!sawFrameSinceSubmit) {
+              sawFrameSinceSubmit = true
+              cancelWarmProbe?.()
+              cancelWarmProbe = null
+            }
+            const usage = claudeResultContextUsage(msg)
+            if (usage) emitUsage(usage)
             try {
               const resultError = claudeResultErrorMessage(msg as unknown as Record<string, unknown>)
               if (!turnAccepted && !resultError) {
@@ -4977,9 +5057,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
           }
 
           try {
-            const __t = Date.now()
             await checkpoint?.catch(() => null)
-            if (process.env.AV_SEND_TRACE) console.error(`[trace] checkpoint await ${Date.now() - __t}ms (attempt ${attempt})`)
             if (bangShell != null) {
               // Input-box bash mode, in the CLI's native order: persist the
               // input entry silently (its empty ack result is not forwarded),
@@ -4993,6 +5071,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
                   onTurnMessage(msg)
                 },
                 onError: onTurnError,
+                onSubmitted: () => armWarmProbe?.(),
               })
               const bangResult = await runClaudeBangShellCommand(bangShell, cwdOverride, {
                 registerKill: (kill) => { killBangShell = kill },
@@ -5005,23 +5084,17 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
                 dialog,
                 onMessage: onTurnMessage,
                 onError: onTurnError,
+                onSubmitted: () => armWarmProbe?.(),
               })
             } else {
-              const __tr = Date.now()
-              let __first = true
               await activeEntry.run(pushMessage!, {
                 signal: turnAbort.signal,
                 bridge,
                 elicit,
                 dialog,
-                onMessage: (msg) => {
-                  if (__first && process.env.AV_SEND_TRACE) {
-                    __first = false
-                    console.error(`[trace] run -> first frame ${Date.now() - __tr}ms`)
-                  }
-                  onTurnMessage(msg)
-                },
+                onMessage: onTurnMessage,
                 onError: onTurnError,
+                onSubmitted: () => armWarmProbe?.(),
               })
             }
             break
