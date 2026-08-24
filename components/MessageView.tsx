@@ -4480,7 +4480,15 @@ function MessageViewInner({
     // falls back to whatever the backend guesses as a default — which may not
     // actually be available yet. Block until the fetch settles (success or
     // failure) rather than gamble on an unresolved model.
-    if (!retryOverride && modelsLoading && !selectedModel) {
+    // Claude and Codex are exempt: both explicitly treat an omitted `model` as
+    // "use the CLI/thread's own configured default" server-side, exactly like
+    // typing into the native CLI never waits on a model list first — gating
+    // the very first send on this fetch (which can take a second or two,
+    // notably Claude's getContextUsage() round trip) only made the composer
+    // feel slower than the CLI for no correctness benefit.
+    const modelIsOptionalForProvider = session.provider === 'claude' || session.provider === 'codex'
+    if (!retryOverride && !modelIsOptionalForProvider && modelsLoading && !selectedModel) {
+      pendingSendOnModelsReadyRef.current = session.sessionId
       setSendError('Waiting for model list to load…')
       return
     }

@@ -7921,7 +7921,13 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
   }
 
   const models = await readClaudeSupportedModels().catch(() => [] as SessionModelInfo[])
-  const q = createSessionControlQuery(sessionId)
+  // The composer refreshes this on every session open and after every turn
+  // (to pick up `/model` slash changes) — reuse the pool's already-warm
+  // subprocess instead of cold-spawning a second `claude` CLI just to answer
+  // getContextUsage(). A cold spawn here previously added a full subprocess
+  // start + resume handshake to what should be an instant dropdown refresh.
+  const warm = peekClaudeSession(sessionId)
+  const q = warm?.query ?? createSessionControlQuery(sessionId)
   try {
     const contextUsage = await q.getContextUsage().catch(() => null)
     return {
@@ -7936,7 +7942,7 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
       contextUsage: null,
     }
   } finally {
-    q.close()
+    if (!warm) q.close()
   }
 }
 
