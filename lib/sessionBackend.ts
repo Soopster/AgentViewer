@@ -7019,6 +7019,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
         clearPiUiHandler?.()
         releasePiOperation?.()
         signal.removeEventListener('abort', onAbort)
+        flushPendingPiDelta()
         if (downstreamClosed) return
         downstreamClosed = true
         try {
@@ -7026,6 +7027,59 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
         } catch {
           /* downstream already closed */
         }
+      }
+
+      // Pi's AssistantMessageEvent stream emits one text_delta/thinking_delta/
+      // toolcall_delta per chunk, each embedding the full cumulative `partial`
+      // AssistantMessage — so forwarding every one verbatim resends the whole
+      // in-progress message on every chunk (O(n^2) bytes for an n-length
+      // reply). Nothing on the client reads `.partial` off these sub-events
+      // (only `.delta`/`.type`/`.message`), so it's dropped entirely, and
+      // consecutive deltas of the same kind/contentIndex are merged into one
+      // SSE frame, spilling early past PI_DELTA_SPILL_CHARS so a long
+      // uninterrupted stream still flushes periodically. Any other event is
+      // an interaction boundary and flushes the pending delta first.
+      const PI_DELTA_SPILL_CHARS = 4000
+      const PI_DELTA_SUBTYPES = new Set(['text_delta', 'thinking_delta', 'toolcall_delta'])
+      let pendingPiDelta: { type: 'message_update'; message: PiAgentMessage; assistantMessageEvent: Record<string, unknown> } | null = null
+
+      const flushPendingPiDelta = () => {
+        if (!pendingPiDelta) return
+        const event = pendingPiDelta
+        pendingPiDelta = null
+        safeEnqueue(`data: ${JSON.stringify({ type: 'pi_event', event })}\n\n`)
+      }
+
+      const emitPiEvent = (event: PiAgentEvent) => {
+        if (event.type !== 'message_update') {
+          flushPendingPiDelta()
+          safeEnqueue(`data: ${JSON.stringify({ type: 'pi_event', event })}\n\n`)
+          return
+        }
+        // Strip `.partial` off every sub-event, not just deltas — it's never
+        // read client-side and duplicating the whole in-progress message on
+        // every start/end frame is wasted bandwidth too.
+        const { partial: _partial, ...lightSubEvent } = event.assistantMessageEvent as Record<string, unknown> & { partial?: unknown }
+        const subType = lightSubEvent.type
+        if (typeof subType !== 'string' || !PI_DELTA_SUBTYPES.has(subType) || typeof lightSubEvent.delta !== 'string') {
+          flushPendingPiDelta()
+          safeEnqueue(`data: ${JSON.stringify({ type: 'pi_event', event: { ...event, assistantMessageEvent: lightSubEvent } })}\n\n`)
+          return
+        }
+        const pendingSub = pendingPiDelta?.assistantMessageEvent
+        if (!pendingPiDelta || pendingSub?.type !== subType || pendingSub?.contentIndex !== lightSubEvent.contentIndex) {
+          flushPendingPiDelta()
+          pendingPiDelta = { type: 'message_update', message: event.message, assistantMessageEvent: lightSubEvent }
+          return
+        }
+        const mergedDelta = `${String(pendingSub.delta ?? '')}${lightSubEvent.delta}`
+        const merged = { type: 'message_update' as const, message: event.message, assistantMessageEvent: { ...lightSubEvent, delta: mergedDelta } }
+        if (mergedDelta.length >= PI_DELTA_SPILL_CHARS) {
+          pendingPiDelta = null
+          safeEnqueue(`data: ${JSON.stringify({ type: 'pi_event', event: merged })}\n\n`)
+          return
+        }
+        pendingPiDelta = merged
       }
 
       try {
@@ -7317,7 +7371,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
           const agentEvent = event as PiAgentEvent
           recordPiLiveTranscriptEvent(targetSessionId, agentEvent)
           broadcastLiveSessionActivity('pi', targetSessionId)
-          safeEnqueue(`data: ${JSON.stringify({ type: 'pi_event', event: agentEvent })}\n\n`)
+          emitPiEvent(agentEvent)
 
           if (event.type === 'message_end' && event.message.role === 'assistant') {
             turnOutputTokens += Math.max(0, event.message.usage.output)
