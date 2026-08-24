@@ -492,6 +492,11 @@ export type SessionMessageWindow = {
   offset: number
   total: number
   messages: SessionMessage[]
+  // Codex only: another Codex client currently holds the rollout writer lock,
+  // so `messages` is a stale cached snapshot rather than a fresh read — the
+  // UI should tell the user this transcript may lag until that client's turn
+  // finishes (see readCodexMessagesAll).
+  externalWriter?: boolean
 }
 
 type ProjectMessageBatchParams = {
@@ -3622,13 +3627,15 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
   throw new Error(`Action ${action || '(missing)'} is not supported for ${resolvedProvider} sessions`)
 }
 
-async function readCodexMessagesAll(sessionId: string): Promise<SessionMessage[]> {
+async function readCodexMessagesAll(sessionId: string): Promise<{ messages: SessionMessage[]; externalWriter: boolean }> {
   let thread: CodexThread
   try {
     thread = await readCodexThreadWithFullTurns(sessionId)
   } catch (err) {
-    if (isCodexMissingRolloutError(err)) return []
-    if (isCodexActiveWriterError(err)) return readLatestMappedMessagesCache(`codex:${sessionId}`) ?? []
+    if (isCodexMissingRolloutError(err)) return { messages: [], externalWriter: false }
+    if (isCodexActiveWriterError(err)) {
+      return { messages: readLatestMappedMessagesCache(`codex:${sessionId}`) ?? [], externalWriter: true }
+    }
     throw err
   }
   const turns = thread.turns
@@ -3649,13 +3656,13 @@ async function readCodexMessagesAll(sessionId: string): Promise<SessionMessage[]
     turnsSignature,
   ].join(':')
   const cached = readMappedMessagesCache(`codex:${sessionId}`, signature)
-  if (cached) return cached
+  if (cached) return { messages: cached, externalWriter: false }
   // thread/turns/list(sortDirection: 'asc') plus each Turn.items array is the
   // Codex archive's authoritative order. Do not timestamp-sort it: many items
   // only have the turn-level fallback timestamp while user items can have a
   // later UUID-derived timestamp, which moved the prompt behind its reply.
   const messages = mapCodexThreadToMessages(thread)
-  return writeMappedMessagesCache(`codex:${sessionId}`, signature, messages)
+  return { messages: writeMappedMessagesCache(`codex:${sessionId}`, signature, messages), externalWriter: false }
 }
 
 async function readOpenCodeMessagesAll(sessionId: string): Promise<SessionMessage[]> {
@@ -3743,9 +3750,10 @@ async function listViewSessionMessageWindowImpl(sessionId: string, params: Messa
   const provider = await resolveProvider(providerOverride)
   let messages: SessionMessage[]
   if (provider === 'codex') {
-    messages = await readCodexMessagesAll(sessionId)
-    await syncMessagesBestEffort(provider, sessionId, messages)
-    return windowForParams(messages, params)
+    const result = await readCodexMessagesAll(sessionId)
+    await syncMessagesBestEffort(provider, sessionId, result.messages)
+    const window = windowForParams(result.messages, params)
+    return result.externalWriter ? { ...window, externalWriter: true } : window
   }
   if (provider === 'opencode') {
     messages = await readOpenCodeMessagesAll(sessionId)
@@ -4200,7 +4208,7 @@ const CLAUDE_STREAM_HEARTBEAT_MS = 15_000
 const CLAUDE_WARM_LIVENESS_PROBE_MS = 4000
 const CLAUDE_WARM_MAX_RESPAWN = 1
 
-async function createClaudeStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>): Promise<Response> {
+async function createClaudeStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>, checkpoint?: Promise<unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
   const turnRequestId = parseTurnRequestId(body)
   const agentPolicy = parseClaudeAgentPolicy(body.claudeAgentPolicy)
@@ -4281,6 +4289,7 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
       turnRequestId,
       fallbackModel,
       agentPolicy,
+      checkpoint,
     })
   }
 
@@ -4301,6 +4310,7 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
     turnRequestId,
     fallbackModel,
     agentPolicy,
+    checkpoint,
     // Threaded through even though the common case (prewarm already spawned
     // a compatible entry) never uses it — if the warm entry turns out
     // incompatible (cwd/effort/taskBudget changed since prewarm) or died,
@@ -4334,6 +4344,7 @@ type ClaudeStreamColdArgs = {
   turnRequestId: string | undefined
   fallbackModel: string | undefined
   agentPolicy: ClaudeAgentPolicy | undefined
+  checkpoint?: Promise<unknown>
 }
 
 async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Response> {
@@ -4359,6 +4370,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
     turnRequestId,
     fallbackModel,
     agentPolicy,
+    checkpoint,
   } = args
 
   // Build the user message in the same SDKUserMessage shape the pool uses,
@@ -4580,10 +4592,14 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           pushUserMessage(buildClaudeBashOutputMessage(bangResult))
         }
 
-        try {
-          const usage = await q.getContextUsage()
-          safeEnqueue(codexContextUsageToEventData(usage))
-        } catch {}
+        // Do not put a control-channel usage RPC in front of the first model
+        // event. The native CLI starts consuming the prompt immediately; the
+        // usage frame is auxiliary and can be fetched concurrently.
+        void q.getContextUsage()
+          .then((usage) => safeEnqueue(codexContextUsageToEventData(usage)))
+          .catch(() => {})
+
+        await checkpoint?.catch(() => null)
 
         // This is the CLI's cold spawn — no pool watchdog covers it yet (that
         // only guards turns already adopted into claudePool). On a machine
@@ -4726,6 +4742,7 @@ type ClaudeStreamPooledArgs = {
   agentPolicy: ClaudeAgentPolicy | undefined
   /** See ClaudePoolAcquireOptions.isPendingSession. Only relevant if the entry needs a fresh spawn. */
   isPendingSession?: boolean
+  checkpoint?: Promise<unknown>
 }
 
 async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<Response> {
@@ -4747,6 +4764,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
     turnRequestId,
     fallbackModel,
     agentPolicy,
+    checkpoint,
   } = args
 
   // Bash mode builds its own transcript-shaped messages after the command runs.
@@ -4959,6 +4977,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
           }
 
           try {
+            await checkpoint?.catch(() => null)
             if (bangShell != null) {
               // Input-box bash mode, in the CLI's native order: persist the
               // input entry silently (its empty ack result is not forwarded),
@@ -5417,7 +5436,7 @@ function parseCodexApprovalPolicy(body: Record<string, unknown>): CodexApprovalP
   return (CODEX_APPROVAL_POLICIES as readonly string[]).includes(value) ? (value as CodexApprovalPolicy) : undefined
 }
 
-async function createCodexStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>): Promise<Response> {
+async function createCodexStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>, checkpoint?: Promise<unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
   const turnRequestId = parseTurnRequestId(body)
   const model = typeof body.model === 'string' ? body.model : null
@@ -5782,6 +5801,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
           // persistent thread queue is specifically addressable while the
           // thread is not loaded here; the owning client can consume the
           // submission without Agent Viewer manufacturing a duplicate turn.
+          await checkpoint?.catch(() => null)
           const queued = await client.request('thread/queue/add', {
             threadId: sessionId,
             input: buildCodexComposerInput(userMessage, attachments, cwdOverride),
@@ -5805,6 +5825,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
         }
         currentModel = model ?? resume?.model ?? currentModel
         safeEnqueue(`event: session\ndata: ${JSON.stringify({ sessionId })}\n\n`)
+        await checkpoint?.catch(() => null)
 
         if (bangShell !== null) {
           if (!bangShell) throw new Error('Enter a shell command after !')
@@ -5931,6 +5952,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
         // classifies as retryable on the client.
         let started: CodexResponseFor<'turn/start'>
         try {
+          await checkpoint?.catch(() => null)
           started = await withTimeout(client.request('turn/start', turnStartParams), 20000, 'Codex turn/start')
         } catch (err) {
           // The resume cache said this thread was live but the server lost it
@@ -7457,23 +7479,34 @@ export async function streamViewSessionTurn(params: SendMessageParams): Promise<
 
   const provider = await resolveProvider(params.provider)
 
-  // Turn checkpoint: snapshot the working tree BEFORE the agent can touch it
-  // (hidden git commit behind refs/agent-viewer-checkpoints/). Best-effort and
-  // internally time-capped — a missing checkpoint never blocks the turn.
+  // Start the checkpoint immediately, but overlap it with provider setup. Each
+  // provider awaits it at the final turn-submission boundary, preserving the
+  // race-free "snapshot before agent writes" guarantee without making the UI
+  // wait through all Git work before it can open the SSE stream.
   const checkpointCwd = typeof params.body.cwd === 'string' && params.body.cwd.trim()
     ? params.body.cwd.trim()
     : null
-  if (checkpointCwd) {
-    await createTurnCheckpoint(checkpointCwd, {
+  const checkpoint = checkpointCwd
+    ? createTurnCheckpoint(checkpointCwd, {
       sessionId: params.sessionId,
       provider,
       message: userMessage,
     }).catch(() => null)
-  }
+    : undefined
 
   if (provider === 'codex') {
-    return createCodexStream(params.sessionId, params.signal, params.body)
+    return createCodexStream(params.sessionId, params.signal, params.body, checkpoint)
   }
+  // Claude gates the actual provider submission on the checkpoint promise
+  // internally (createClaudeStream/*Pooled/*Cold), matching Codex's overlap —
+  // awaiting it here too would block opening the SSE stream on the git
+  // snapshot (git add -A can take seconds) for no reason.
+  if (provider === 'claude') {
+    return createClaudeStream(params.sessionId, params.signal, params.body, checkpoint)
+  }
+  // Other providers don't yet have that explicit submission boundary — keep
+  // the original blocking ordering for them until they gain one.
+  await checkpoint?.catch(() => null)
   if (provider === 'opencode') {
     return createOpenCodeStream(params.sessionId, params.signal, params.body)
   }
@@ -7490,7 +7523,7 @@ export async function streamViewSessionTurn(params: SendMessageParams): Promise<
     return createAcpStream(provider, params.sessionId, params.signal, params.body)
   }
 
-  return createClaudeStream(params.sessionId, params.signal, params.body)
+  return createClaudeStream(params.sessionId, params.signal, params.body, checkpoint)
 }
 
 export async function forkViewSession({ sessionId, body, provider }: ForkParams): Promise<{ sessionId: string }> {
