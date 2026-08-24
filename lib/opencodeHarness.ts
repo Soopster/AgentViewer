@@ -218,6 +218,20 @@ function mergeAdjacentOpenCodeEvents(previous: OpenCodeEvent, next: OpenCodeEven
   } as unknown as OpenCodeEvent
 }
 
+// A merged message.part.delta run has no natural boundary of its own (unlike
+// tool/status events, which change key and stop coalescing on their own) —
+// without a cap, one long uninterrupted stream would coalesce into a single
+// ever-growing queue entry. Spill past this length so a very long reply
+// still flushes periodically, matching the Codex/Pi delta buffering.
+const OPENCODE_DELTA_SPILL_CHARS = 4000
+
+function deltaLength(event: OpenCodeEvent): number {
+  const record = event as unknown as { type: string; properties?: Record<string, unknown> }
+  if (record.type !== 'message.part.delta') return 0
+  const delta = record.properties?.delta
+  return typeof delta === 'string' ? delta.length : 0
+}
+
 /**
  * Queue one upstream event without crossing semantic barriers. OpenCode's
  * part snapshots are cumulative, so only directly adjacent updates for the
@@ -235,6 +249,10 @@ export function enqueueOpenCodeHarnessEvent(
   const key = coalesceKey(event, directoryKey)
   const previous = queue[queue.length - 1]
   if (key && previous?.key === key) {
+    if (deltaLength(previous.event) + deltaLength(event) >= OPENCODE_DELTA_SPILL_CHARS) {
+      queue.push({ event, directoryKey, key })
+      return true
+    }
     queue[queue.length - 1] = {
       event: mergeAdjacentOpenCodeEvents(previous.event, event),
       directoryKey,
