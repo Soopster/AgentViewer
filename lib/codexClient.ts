@@ -166,21 +166,38 @@ class CodexAppServerClient {
     if (!skipInitialize) {
       await this.initialize()
     }
+    return this.writeRequest(method, params) as Promise<CodexResponseFor<M>>
+  }
 
+  // Split out from request() so a write that lands on a just-dead pipe (the
+  // child exited between ensureProcess() and this write — a narrow but real
+  // race, since the 'exit' handler that clears `this.child` runs async) can
+  // retry once against a freshly spawned process instead of surfacing a raw
+  // EPIPE/ECONNRESET to the caller. Saves the full UI-level retry round-trip
+  // (a failed SSE turn plus a multi-second backoff) for this specific case.
+  // Untyped on the method/params pair internally (that contract is already
+  // enforced at the request() call boundary) to avoid fighting the generic's
+  // variance across the recursive retry call.
+  private writeRequest(method: string, params: unknown, isRetry = false): Promise<unknown> {
     const child = this.ensureProcess()
     const id = String(this.nextId++)
-    const payload: CodexJsonRpcRequest<M> = {
-      jsonrpc: '2.0',
+    const payload = {
+      jsonrpc: '2.0' as const,
       id,
       method,
       params,
     }
 
-    return new Promise<CodexResponseFor<M>>((resolve, reject) => {
+    return new Promise<unknown>((resolve, reject) => {
       this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject })
       child.stdin.write(`${JSON.stringify(payload)}\n`, 'utf8', (error) => {
         if (!error) return
         this.pending.delete(id)
+        const dead = /epipe|econnreset|not writable/i.test(error.message)
+        if (dead && !isRetry) {
+          resolve(this.writeRequest(method, params, true))
+          return
+        }
         reject(error)
       })
     })

@@ -682,6 +682,12 @@ const CODEX_REFETCH_DEBOUNCE_MS = 80
 
 async function pumpCodex({ sessionId, provider, limit, backfill, offset, enqueue, close, signal }: OpenCodePumpInput): Promise<void> {
   let lastSignature = ''
+  // Tracked separately from lastSignature: another Codex client grabbing or
+  // releasing the rollout writer lock can flip this while the (stale-cached)
+  // transcript signature stays byte-identical, so the signature check alone
+  // would silently drop the flag flip and the client's sync banner would
+  // never appear or clear.
+  let lastExternalWriter = false
   let cursorOffset = offset
   let lastHeartbeat = Date.now()
   let inFlight = false
@@ -706,13 +712,17 @@ async function pumpCodex({ sessionId, provider, limit, backfill, offset, enqueue
         const replacement = await readReplacementWindow(sessionId, provider, limit)
         enqueue('messages', replacement)
         lastSignature = messageWindowSignature(replacement.offset, replacement.messages)
+        lastExternalWriter = replacement.externalWriter === true
         cursorOffset = Math.max(0, replacement.offset + replacement.messages.length - backfill)
         return
       }
       const signature = messageWindowSignature(window.offset, window.messages)
-      if (window.messages.length > 0 && signature !== lastSignature) {
+      const externalWriter = window.externalWriter === true
+      const externalWriterChanged = externalWriter !== lastExternalWriter
+      if (window.messages.length > 0 && (signature !== lastSignature || externalWriterChanged)) {
         enqueue('messages', messageWindowPayload(sessionId, provider, window))
         lastSignature = signature
+        lastExternalWriter = externalWriter
         cursorOffset = Math.max(0, window.offset + window.messages.length - backfill)
         if (window.offset + window.messages.length < window.total) {
           pending = true

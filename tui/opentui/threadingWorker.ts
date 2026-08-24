@@ -64,6 +64,7 @@ type WorkerResponse =
       rawPrefix: number
       threadedPrefix: number
       cardsPrefix: number
+      externalWriter?: boolean
     }
   | {
       id: number
@@ -71,6 +72,7 @@ type WorkerResponse =
       info: SessionInfo | null
       unchanged: true
       deliveryToken: number
+      externalWriter?: boolean
     }
   | { id: number; ok: true; transcriptCards: TuiTranscriptCard[]; formatToken: number }
   | {
@@ -430,7 +432,7 @@ self.onmessage = async (event) => {
       self.postMessage({ id: data.id, ok: true, transcriptCards, formatToken: data.id })
       return
     }
-    const { info, rawMessages } = await readTuiSessionDetailSource(data.session)
+    const { info, rawMessages, externalWriter } = await readTuiSessionDetailSource(data.session)
     const { threaded: threadedMessages, messages: alignedMessages } = threadMessages(data.session, rawMessages)
     const sessionCacheKey = cacheKey(data.session)
     const cardsVariant = `${data.density}|${data.showToolCalls ? 1 : 0}`
@@ -454,6 +456,7 @@ self.onmessage = async (event) => {
         info,
         unchanged: true,
         deliveryToken: prev.deliveryToken,
+        externalWriter,
       })
       return
     }
@@ -489,7 +492,7 @@ self.onmessage = async (event) => {
       deliveryToken,
     })
     if (canReusePreviousDelivery) {
-      self.postMessage({ id: data.id, ok: true, info, unchanged: true, deliveryToken })
+      self.postMessage({ id: data.id, ok: true, info, unchanged: true, deliveryToken, externalWriter })
       return
     }
     self.postMessage({
@@ -504,6 +507,7 @@ self.onmessage = async (event) => {
       rawPrefix,
       threadedPrefix,
       cardsPrefix,
+      externalWriter,
     })
   } catch (err) {
     self.postMessage({

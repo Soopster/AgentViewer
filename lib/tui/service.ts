@@ -45,7 +45,7 @@ import {
   listViewRunningSessions,
   readClaudeObservedFilePaths,
   readViewRuntimeActivity,
-  listViewSessionMessages,
+  listViewSessionMessageWindow,
   listViewSessions,
   patchViewSession,
   interruptViewSession,
@@ -142,6 +142,9 @@ export type TuiSessionDetail = {
   rawMessages: SessionMessage[]
   threadedMessages: ThreadedMessage[]
   contextUsage: ContextUsage | null
+  // Codex only: another Codex client holds the rollout writer lock, so
+  // rawMessages is a stale cached snapshot until that client's turn ends.
+  externalWriter?: boolean
 }
 
 export type TuiSessionMetadata = {
@@ -361,6 +364,7 @@ function threadMessages(session: Session, messages: SessionMessage[]): ThreadedM
 export async function readTuiSessionDetailSource(session: Session): Promise<{
   info: SessionInfo | null
   rawMessages: SessionMessage[]
+  externalWriter?: boolean
 }> {
   const messageLimit = session.provider === 'claude'
     ? CLAUDE_MESSAGE_LIMIT
@@ -370,18 +374,18 @@ export async function readTuiSessionDetailSource(session: Session): Promise<{
     const [infoResult, windowResult] = await Promise.all([
       remoteJson<{ info: SessionInfo | null }>(encodeSessionPath(session.sessionId, query))
         .catch(() => ({ info: null })),
-      remoteJson<{ messages: SessionMessage[] }>(
+      remoteJson<{ messages: SessionMessage[]; externalWriter?: boolean }>(
         encodeSessionPath(
           session.sessionId,
           `/messages?limit=${messageLimit}&offset=0&tail=1${session.provider ? `&provider=${encodeURIComponent(session.provider)}` : ''}`,
         ),
       ),
     ])
-    return { info: infoResult.info, rawMessages: windowResult.messages }
+    return { info: infoResult.info, rawMessages: windowResult.messages, externalWriter: windowResult.externalWriter }
   }
-  const [info, messages] = await Promise.all([
+  const [info, window] = await Promise.all([
     readViewSessionInfo(session.sessionId, session.provider),
-    listViewSessionMessages(
+    listViewSessionMessageWindow(
       session.sessionId,
       { limit: messageLimit, offset: 0, tail: true },
       session.provider,
@@ -390,18 +394,20 @@ export async function readTuiSessionDetailSource(session: Session): Promise<{
 
   return {
     info,
-    rawMessages: messages,
+    rawMessages: window.messages,
+    externalWriter: window.externalWriter,
   }
 }
 
 export async function readTuiSessionDetail(session: Session): Promise<TuiSessionDetail> {
-  const { info, rawMessages } = await readTuiSessionDetailSource(session)
+  const { info, rawMessages, externalWriter } = await readTuiSessionDetailSource(session)
 
   return {
     info,
     rawMessages,
     threadedMessages: threadMessages(session, rawMessages),
     contextUsage: null,
+    externalWriter,
   }
 }
 

@@ -213,7 +213,13 @@ function createObservabilityHook(context: ClaudeViewerContext): HookCallback {
     const sessionId = typeof record.session_id === 'string' && record.session_id
       ? record.session_id
       : context.getSessionId()
-    if (sessionId) await appendClaudeHookEvent(sessionId, input, toolUseId)
+    if (sessionId) {
+      // Persistence is serialized per session by appendClaudeHookEvent, but it
+      // must not hold up Claude's hook lifecycle. Readers still await the
+      // per-session write tail before listing events, so durability/readback
+      // semantics are preserved while prompt/tool progression stays hot.
+      void appendClaudeHookEvent(sessionId, input, toolUseId).catch(() => {})
+    }
     return { continue: true }
   }
 }

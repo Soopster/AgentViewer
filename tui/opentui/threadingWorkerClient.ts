@@ -10,6 +10,7 @@ export type SessionDetailPayload = {
   rawMessages: SessionMessage[]
   threadedMessages: ThreadedMessage[]
   transcriptCards: TuiTranscriptCard[]
+  externalWriter?: boolean
 }
 
 type ThreadingClientCache = {
@@ -55,6 +56,7 @@ type WorkerResponse =
       rawPrefix: number
       threadedPrefix: number
       cardsPrefix: number
+      externalWriter?: boolean
     }
   | {
       id: number
@@ -62,6 +64,7 @@ type WorkerResponse =
       info: SessionInfo | null
       unchanged: true
       deliveryToken: number
+      externalWriter?: boolean
     }
   | { id: number; ok: true; transcriptCards: TuiTranscriptCard[]; formatToken: number }
   | {
@@ -229,6 +232,7 @@ function ensureWorker(): Worker {
         rawMessages: prev.raw,
         threadedMessages: prev.threaded,
         transcriptCards: prev.cards,
+        externalWriter: data.externalWriter,
       })
     } else if (entry.kind === 'detail' && 'rawMessages' in data) {
       const prev = entry.previousDelivery?.deliveryToken === data.baseDeliveryToken
@@ -254,6 +258,7 @@ function ensureWorker(): Worker {
         rawMessages,
         threadedMessages,
         transcriptCards,
+        externalWriter: data.externalWriter,
       })
     } else if (entry.kind === 'format' && 'transcriptCards' in data && 'formatToken' in data) {
       touchLastFormatted(entry.formatKey, {

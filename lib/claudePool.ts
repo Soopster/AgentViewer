@@ -142,8 +142,9 @@ const SWEEP_INTERVAL_MS = 60_000
 // messages that arrive after `result` — notably `prompt_suggestion`, which
 // the SDK explicitly documents as "arrives after the result message".
 // Reset on every received message; close the turn when nothing new arrives
-// inside the window.
-const TURN_TAIL_DRAIN_MS = 500
+// inside the window. Keep this short so the composer does not look finished
+// half a second after Claude has already emitted its result.
+const TURN_TAIL_DRAIN_MS = 150
 // Hard ceiling so a stuck SDK can't strand the mutex forever.
 const TURN_HARD_TIMEOUT_MS = 10 * 60 * 1000
 // Grace after an interrupt request before we assume the SDK interrupt was a
@@ -355,6 +356,8 @@ export function effortToSdk(effort: ReasoningEffortLevel | undefined):
   return { effort, thinking: { type: 'adaptive' } }
 }
 
+let __lastPushAt = 0
+
 class ClaudePool {
   private entries = new Map<string, InternalEntry>()
   private pendingReadSeeds = new Map<string, Map<string, number>>()
@@ -533,6 +536,10 @@ class ClaudePool {
   private async pumpQueryToSubscriber(entry: InternalEntry): Promise<void> {
     try {
       for await (const message of entry.query) {
+        if (process.env.AV_SEND_TRACE && __lastPushAt) {
+          console.error(`[trace] pump first msg after push: ${Date.now() - __lastPushAt}ms (${message.type}${(message as { subtype?: string }).subtype ? ':' + (message as { subtype?: string }).subtype : ''})`)
+          __lastPushAt = 0
+        }
         if (!entry.alive) break
         // A streaming query is active by definition — keep the LRU/idle-sweep
         // ordering honest even when no run() subscriber is attached (e.g. a
@@ -791,6 +798,7 @@ class ClaudePool {
     message: SDKUserMessage,
     options: ClaudePoolRunOptions,
   ): Promise<void> {
+    const __t = Date.now()
     // FIFO mutex — wait for previous turn on the same entry to finish.
     const prev = entry.turnTail
     let releaseMutex!: () => void
@@ -911,7 +919,21 @@ class ClaudePool {
     entry.bridgeBox.elicit = options.elicit ?? null
     entry.bridgeBox.dialog = options.dialog ?? null
     try {
-      await this.applyReadSeeds(entry)
+      // Read-state seeding is a safety/cache repair, not part of prompt
+      // delivery. Let it use the already-warm Query in the background so a
+      // queued file-read seed cannot delay the user's turn.
+      void this.applyReadSeeds(entry).catch(() => {})
+      if (process.env.AV_SEND_TRACE) {
+        console.error(`[trace] pool.runTurn mutex+setup ${Date.now() - __t}ms`)
+        __lastPushAt = Date.now()
+        let last = Date.now()
+        const lagTimer = setInterval(() => {
+          const now = Date.now()
+          if (now - last > 120) console.error(`[trace] event-loop lag ${now - last}ms`)
+          last = now
+          if (!__lastPushAt) clearInterval(lagTimer)
+        }, 20)
+      }
       entry.pushUserMessage(message)
       try { broadcastClaudeTurnStart(entry.sessionId) } catch { /* swallow */ }
     } catch (err) {

@@ -170,6 +170,9 @@ type Props = {
   onComposerInsertConsumed?: (requestId: number) => void
   openCodeTodos?: OpenCodeTodo[]
   codexPlan?: { plan: CodexPlanStep[]; explanation: string | null }
+  // Another Codex client currently owns this session's rollout writer lock —
+  // the transcript is a stale cached snapshot until that client's turn ends.
+  codexExternalWriter?: boolean
 }
 
 type CopilotContextTier = 'default' | 'long_context'
@@ -2917,6 +2920,7 @@ function MessageViewInner({
   onComposerInsertConsumed,
   openCodeTodos,
   codexPlan,
+  codexExternalWriter,
 }: Props) {
   const [inputText, setInputText] = useState('')
   const [sendState, setSendState] = useState<SendState>('idle')
@@ -3294,6 +3298,12 @@ function MessageViewInner({
   const turnProducedOutputRef = useRef(false)
   const transientRetryCountRef = useRef(0)
   const transientRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Set when a send was blocked because the model list hadn't resolved yet
+  // (see the modelsLoading guard in sendMessage). The composer draft is left
+  // untouched in that case — this just re-fires the send once the fetch
+  // settles, so a cold custom-model connection reads as "sending" rather than
+  // making the user notice the error and hit enter again.
+  const pendingSendOnModelsReadyRef = useRef<string | null>(null)
   const pendingMessageBaselineRef = useRef<PendingMessageBaseline | null>(null)
   const liveTurnSessionHandoffRef = useRef<string | null>(null)
   const liveAssistantTextRef = useRef('')
@@ -3627,9 +3637,10 @@ function MessageViewInner({
   }, [selectedEffort, selectedModel, session?.cwd, session?.isPending, session?.provider, session?.sessionId])
 
   useEffect(() => {
-    // Session/model selection can change through keyboard navigation while the
-    // same textarea node retains focus, in which case no new focus event fires.
-    if (document.activeElement === textareaRef.current) prewarmComposer()
+    // Prewarm on session selection, not only textarea focus. Native CLIs keep
+    // their provider runtime hot while you browse; waiting until the first
+    // keystroke leaves the cold spawn on the send critical path.
+    prewarmComposer()
   }, [prewarmComposer])
 
   // Load message bookmarks for the active session. Reset the "bookmarks only"
@@ -4606,6 +4617,7 @@ function MessageViewInner({
 
     // Reset the retry counter at the start of a fresh (non-retry) send.
     if (!retryOverride) transientRetryCountRef.current = 0
+    pendingSendOnModelsReadyRef.current = null
     turnProducedOutputRef.current = false
 
     sendInFlightRef.current = true
@@ -5284,6 +5296,18 @@ function MessageViewInner({
       composerQueueClaimInFlightRef.current.delete(next.id)
     })
   }, [activeQueuedSends, awaitingPersistedTurn, commitQueuedSends, composerQueueStorageReady, composerQueueTargetKey, reattachedRunning, resizeComposer, runningProbeReadyKey, sendMessage, sendState])
+
+  // A send blocked on the model list (cold LM Studio / custom-endpoint
+  // connection) re-fires automatically once the fetch settles, rather than
+  // leaving the user staring at "Waiting for model list to load…" and having
+  // to hit enter a second time themselves.
+  useEffect(() => {
+    if (modelsLoading) return
+    if (!pendingSendOnModelsReadyRef.current || pendingSendOnModelsReadyRef.current !== session?.sessionId) return
+    pendingSendOnModelsReadyRef.current = null
+    setSendError(null)
+    void sendMessage()
+  }, [modelsLoading, sendMessage, session?.sessionId])
 
   // Remove a single queued message (× on its chip) without firing it.
   const removeQueuedSend = useCallback((id: string) => {
@@ -8832,6 +8856,17 @@ function MessageViewInner({
             letterSpacing: '0.03em',
           }}>
             {sessionActionError ?? sessionActionNotice}
+          </div>
+        )}
+        {session?.provider === 'codex' && codexExternalWriter && (
+          <div style={{
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 11,
+            color: 'var(--amber)',
+            marginBottom: 8,
+            letterSpacing: '0.03em',
+          }}>
+            Open in another Codex client — transcript will lag until that turn finishes.
           </div>
         )}
         {livePromptSuggestion && sendState !== 'sending' && (

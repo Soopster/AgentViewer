@@ -8,6 +8,7 @@ import {
   MacOSScrollAccel,
   type LineNumberRenderable,
   ScrollBarRenderable,
+  type ScrollBoxRenderable,
   type SyntaxStyle,
   type TextareaOptions,
   type TextareaRenderable,
@@ -706,6 +707,7 @@ export function EditorPopover({
   const [projectFiles, setProjectFiles] = useState<string[]>([])
   const [treeExpanded, setTreeExpanded] = useState<Set<string>>(() => new Set())
   const [treeCursor, setTreeCursor] = useState(0)
+  const explorerScrollRef = useRef<ScrollBoxRenderable>(null)
   const [tabs, setTabs] = useState<BufferTab[]>([])
   const [activePath, setActivePath] = useState<string | null>(null)
   const [focusPane, setFocusPane] = useState<FocusPane>('explorer')
@@ -799,10 +801,31 @@ export function EditorPopover({
   const diskPollInFlightRef = useRef(false)
 
   const activeTab = tabs.find((tab) => tab.path === activePath) ?? null
+  // The line-number gutter's own auto-sizing lags the textarea's real line
+  // count for files loaded in one shot (it widens on later edits, not on the
+  // initial multi-thousand-line buffer) — 3+ digit numbers render clipped
+  // against a gutter still sized for 2 digits. Compute the floor ourselves
+  // from the loaded content so it's correct from the first paint.
+  const gutterMinWidth = useMemo(() => {
+    if (!activeTab?.content) return 4
+    const lineCount = activeTab.content.split('\n').length
+    return Math.max(4, String(lineCount).length + 2)
+  }, [activeTab])
   const dirty = activeTab ? activeTab.content !== activeTab.savedContent : false
   const dirtyTabs = useMemo(() => tabs.filter((tab) => tab.content !== tab.savedContent), [tabs])
   const tree = useMemo(() => buildTree(projectFiles), [projectFiles])
   const treeRows = useMemo(() => flattenTree(tree, treeExpanded), [tree, treeExpanded])
+
+  useEffect(() => {
+    const sb = explorerScrollRef.current
+    if (!sb) return
+    const viewportH = sb.viewport.height
+    if (viewportH <= 0) return
+    const rowTop = treeCursor
+    const rowBottom = treeCursor + 1
+    if (rowTop < sb.scrollTop) sb.scrollTop = rowTop
+    else if (rowBottom > sb.scrollTop + viewportH) sb.scrollTop = rowBottom - viewportH
+  }, [treeCursor])
   const quickMode = quickModeFor(quickQuery)
   const quickResults = useMemo<QuickResult[]>(() => {
     const query = quickModeQuery(quickQuery)
@@ -3202,6 +3225,7 @@ export function EditorPopover({
             </box>
             <scrollbox
               id="project-editor-explorer-scrollbox"
+              ref={explorerScrollRef}
               flexGrow={1}
               focused={focusPane === 'explorer'}
               scrollAcceleration={scrollAcceleration}
@@ -3251,7 +3275,7 @@ export function EditorPopover({
               <line-number
                 key={activeTab.path}
                 ref={lineNumberRef}
-                minWidth={4}
+                minWidth={gutterMinWidth}
                 paddingRight={1}
                 showLineNumbers
                 fg={theme.dim}

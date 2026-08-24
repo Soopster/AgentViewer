@@ -4977,7 +4977,9 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
           }
 
           try {
+            const __t = Date.now()
             await checkpoint?.catch(() => null)
+            if (process.env.AV_SEND_TRACE) console.error(`[trace] checkpoint await ${Date.now() - __t}ms (attempt ${attempt})`)
             if (bangShell != null) {
               // Input-box bash mode, in the CLI's native order: persist the
               // input entry silently (its empty ack result is not forwarded),
@@ -5005,12 +5007,20 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
                 onError: onTurnError,
               })
             } else {
+              const __tr = Date.now()
+              let __first = true
               await activeEntry.run(pushMessage!, {
                 signal: turnAbort.signal,
                 bridge,
                 elicit,
                 dialog,
-                onMessage: onTurnMessage,
+                onMessage: (msg) => {
+                  if (__first && process.env.AV_SEND_TRACE) {
+                    __first = false
+                    console.error(`[trace] run -> first frame ${Date.now() - __tr}ms`)
+                  }
+                  onTurnMessage(msg)
+                },
                 onError: onTurnError,
               })
             }

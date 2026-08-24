@@ -1298,6 +1298,24 @@ function fitText(value: string, width: number): string {
   return `${value.slice(0, width - 1)}…`
 }
 
+// Composer hint rows are ' · '-joined key/label pairs (e.g. "⏎ send · ⇧⏎
+// newline · ⌃O expand"). A plain char-slice truncation lands mid-key ("⌃…"),
+// which reads as broken rather than cut off. Drop whole segments from the
+// end instead so the ellipsis always follows a complete " · "-separated hint.
+function fitHintText(value: string, width: number): string {
+  if (width <= 0) return ''
+  if (value.length <= width) return value.padEnd(width, ' ')
+  const segments = value.split(' · ')
+  if (segments.length <= 1) return fitText(value, width)
+  let kept = segments.length
+  while (kept > 1) {
+    const candidate = `${segments.slice(0, kept).join(' · ')} …`
+    if (candidate.length <= width) return candidate.padEnd(width, ' ')
+    kept -= 1
+  }
+  return fitText(value, width)
+}
+
 function openExternalUrl(url: string): Promise<void> {
   const command = process.platform === 'darwin'
     ? 'open'
@@ -1744,13 +1762,13 @@ const NATIVE_OSC_ENABLED = !IS_WINDOWS
 // still-running turn instead of blocking on read() for minutes.
 const CLAUDE_STREAM_STALL_MS = 45_000
 const STREAM_STALL_SENTINEL = Symbol('claude-stream-stall')
-// Coalesce live streaming-text flushes to ~30fps. Uses a timer, NOT
+// Coalesce live streaming-text flushes to roughly one display frame. Uses a timer, NOT
 // requestAnimationFrame: OpenTUI's RAF only fires on the renderer's frame loop,
 // which goes idle during a pure-text streaming turn (deltas touch a ref and
 // schedule a flush with no React commit to drive a frame), freezing the preview
 // after the first token. A timer is render-loop-independent and each flush's
 // setState drives a repaint.
-const LIVE_TEXT_FLUSH_MS = 33
+const LIVE_TEXT_FLUSH_MS = 16
 const MAX_CODE_BLOCK_RENDER_LINES = 240
 const MAX_MARKDOWN_SYNTAX_CHARS = 80_000
 
@@ -4541,8 +4559,9 @@ function parseCoordContractLines(value: string): string[] {
 type TuiEffort = 'auto' | ReasoningEffortLevel
 type TuiCodexApproval = 'auto' | 'untrusted' | 'on-request' | 'never'
 type TuiCopilotPermissionMode = 'off' | 'auto' | 'on'
+type TuiCopilotContextTier = 'default' | 'long_context'
 type ModelPickerFocus = 'model' | 'effort' | 'permissions'
-type ModelPickerOption = SelectOption & Pick<SessionModelInfo, 'supportsEffort' | 'supportedEffortLevels'>
+type ModelPickerOption = SelectOption & Pick<SessionModelInfo, 'supportsEffort' | 'supportedEffortLevels' | 'supportsLongContext'>
 
 function filterModelPickerOptions(options: ModelPickerOption[], query: string): ModelPickerOption[] {
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
@@ -7578,6 +7597,10 @@ export default function OpenTuiApp() {
   const tuiPermissionModeByKeyRef = useRef<Record<string, TuiPermissionMode>>({})
   const [tuiCodexApprovalByKey, setTuiCodexApprovalByKey] = useState<Record<string, TuiCodexApproval>>({})
   const [tuiCopilotPermissionModeByKey, setTuiCopilotPermissionModeByKey] = useState<Record<string, TuiCopilotPermissionMode>>({})
+  // Mirrors web's CONTEXT selector (components/MessageView.tsx) — GitHub
+  // Copilot's long-context tier. Toggled with ⌃L while the model picker is
+  // open; only reachable when the selected model reports supportsLongContext.
+  const [tuiCopilotContextTierByKey, setTuiCopilotContextTierByKey] = useState<Record<string, TuiCopilotContextTier>>({})
   const [tuiCopilotMode, setTuiCopilotMode] = useState<'interactive' | 'plan' | 'autopilot' | 'shell'>('interactive')
   const [tuiOpenCodeAgent, setTuiOpenCodeAgent] = useState('')
   const [tuiModelOverride, setTuiModelOverride] = useState<Record<string, string>>({})
@@ -8321,6 +8344,9 @@ export default function OpenTuiApp() {
   const composerCopilotPermissionMode = composerTargetSession?.provider === 'copilot'
     ? tuiCopilotPermissionModeByKey[sessionKey(composerTargetSession)] ?? 'off'
     : 'off'
+  const composerCopilotContextTier = composerTargetSession?.provider === 'copilot'
+    ? tuiCopilotContextTierByKey[sessionKey(composerTargetSession)] ?? 'default'
+    : 'default'
   const composerConfig = useMemo(() => getProviderComposer(composerProvider), [composerProvider])
   const composerExampleSeed = useMemo(() => {
     const source = composerTargetSession?.sessionId ?? composerProvider ?? ''
@@ -9207,11 +9233,14 @@ export default function OpenTuiApp() {
     if (composerTargetSession?.provider === 'copilot' && composerCopilotPermissionMode !== 'off') {
       parts.push({ text: `permissions:${composerCopilotPermissionMode}`, fg: composerCopilotPermissionMode === 'on' ? theme.red : theme.amber })
     }
+    if (composerTargetSession?.provider === 'copilot' && composerCopilotContextTier === 'long_context') {
+      parts.push({ text: 'context:long', fg: theme.cyan })
+    }
     if (composerTargetSession?.provider === 'claude' && composerEnableWorkflow) {
       parts.push({ text: 'workflow:on', fg: theme.cyan })
     }
     return parts
-  }, [composerAccentColor, composerCodexApproval, composerContextUsage, composerCopilotPermissionMode, composerCurrentModel, composerEnableWorkflow, composerPermissionMode, composerTargetSession?.provider, theme.amber, theme.cyan, theme.dim, theme.green, theme.red, theme.violet, tuiCopilotMode, tuiEffort, tuiOpenCodeAgent])
+  }, [composerAccentColor, composerCodexApproval, composerContextUsage, composerCopilotContextTier, composerCopilotPermissionMode, composerCurrentModel, composerEnableWorkflow, composerPermissionMode, composerTargetSession?.provider, theme.amber, theme.cyan, theme.dim, theme.green, theme.red, theme.violet, tuiCopilotMode, tuiEffort, tuiOpenCodeAgent])
   const composerKnobsChip = useMemo(
     () => composerKnobSegments.length > 0
       ? `· ${composerKnobSegments.map((part) => part.text).join(' · ')}`
@@ -9432,7 +9461,9 @@ export default function OpenTuiApp() {
   // Claude branch reuse the warm Query instead of spawning a second CLI.
   const composerPrewarmInFlightRef = useRef(new Set<string>())
   useEffect(() => {
-    if (!composerActive) return
+    // Start provider prewarming when the session is selected. Native CLIs keep
+    // their runtime hot while you browse, so waiting for composer activation
+    // makes an immediate first send pay the cold startup cost.
     const target = transcriptSession
     if (!target || !committedSessionKey) return
     const fullSession = sessionsByKeyRef.current.get(committedSessionKey)
@@ -9470,7 +9501,7 @@ export default function OpenTuiApp() {
     }
     return () => { cancelled = true }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [composerActive, committedSessionKey, fetchComposerAffordances, tuiEffort, tuiModelOverride])
+  }, [committedSessionKey, fetchComposerAffordances, tuiEffort, tuiModelOverride])
   const composerSlashHint = useMemo(() => {
     if (!composerSlashOpen) return ''
     const provider = selectedSession?.provider ?? 'claude'
@@ -9904,6 +9935,9 @@ export default function OpenTuiApp() {
     if (composerSendState === 'sending' && composerLiveReasoning.trim() && transcriptView !== 'stream') rows += LIVE_PREVIEW_HEIGHT
     // Reattached-turn banner (rendered when a turn runs without an owned stream).
     if (composerSendState !== 'sending' && reattachedRunning && !awaitingPersistedTurn) rows += 2
+    // Codex external-writer banner — another Codex client owns the rollout,
+    // so this transcript is a stale cached snapshot until it finishes.
+    if (composerTargetSession?.provider === 'codex' && sessionDetail?.externalWriter) rows += 2
     if (pendingPermissions.length > 0) {
       const permission = pendingPermissions[0]!
       const questions = permission.questions ?? []
@@ -11379,6 +11413,7 @@ export default function OpenTuiApp() {
           description: m.description ?? '',
           supportsEffort: m.supportsEffort,
           supportedEffortLevels: m.supportedEffortLevels,
+          supportsLongContext: m.supportsLongContext,
         }))
       if (options.length === 0) {
         setModelPickerError('No models reported by provider')
@@ -11390,6 +11425,13 @@ export default function OpenTuiApp() {
       const idx = Math.max(0, options.findIndex((o) => o.value === currentValue))
       setModelPickerOptions(options)
       setModelPickerIndex(idx >= 0 ? idx : 0)
+      // The stored tier only means anything for a model that reports long-context
+      // support — dropping to a model that doesn't clears a stale 'long_context'.
+      if (target.provider === 'copilot' && !options[idx >= 0 ? idx : 0]?.supportsLongContext) {
+        setTuiCopilotContextTierByKey((prev) => (
+          prev[sessionKey(target)] ? { ...prev, [sessionKey(target)]: 'default' } : prev
+        ))
+      }
     } catch (err) {
       setModelPickerError(err instanceof Error ? err.message : 'Failed to load models')
     } finally {
@@ -13234,6 +13276,9 @@ export default function OpenTuiApp() {
           mode: targetSession.provider === 'copilot'
             ? tuiCopilotMode
             : undefined,
+          contextTier: targetSession.provider === 'copilot' && composerCopilotContextTier !== 'default'
+            ? composerCopilotContextTier
+            : undefined,
           permissionMode: targetSession.provider === 'claude' && composerPermissionMode !== 'default'
             ? composerPermissionMode
             : targetSession.provider === 'copilot'
@@ -13818,6 +13863,27 @@ export default function OpenTuiApp() {
       void refreshSessions(provider, true, false)
       void refreshSelectedSessionDetail(targetSession, true)
 
+      // A native `/model X` slash command (any provider) changes the SDK's
+      // live current model out from under a stored override — mirrors web's
+      // post-send refreshSessionModels (components/MessageView.tsx), which
+      // re-fetches and lets the dropdown follow the live model. Without this,
+      // the next TUI send would silently pin back to the stale override
+      // instead of following the session like every other composer knob.
+      // Only fires when an override is actually set — the common case (no
+      // override) already follows the server's live model with no fetch.
+      if (tuiModelOverride[targetKey]) {
+        void readTuiSessionMetadata(targetSession).then((meta) => {
+          if (meta.currentModel && meta.currentModel !== tuiModelOverride[targetKey]) {
+            setTuiModelOverride((prev) => {
+              if (prev[targetKey] !== tuiModelOverride[targetKey]) return prev
+              const next = { ...prev }
+              delete next[targetKey]
+              return next
+            })
+          }
+        }).catch(() => { /* best-effort reconciliation; next explicit pick still wins */ })
+      }
+
       if (liveTextFlushTimerRef.current != null) {
         clearTimeout(liveTextFlushTimerRef.current)
         liveTextFlushTimerRef.current = null
@@ -14010,6 +14076,7 @@ export default function OpenTuiApp() {
     tuiEffort,
     tuiCopilotMode,
     composerCopilotPermissionMode,
+    composerCopilotContextTier,
     composerCodexApproval,
     tuiOpenCodeAgent,
     composerPermissionMode,
@@ -15051,11 +15118,11 @@ export default function OpenTuiApp() {
   // keys pop in the accent color, labels stay muted, groups split by a dim
   // divider so the bar scans at a glance instead of reading as one dim wall.
   const footerSegments = useMemo<InlineTextSegment[]>(() => {
+    // ⇧⏎ newline / ⌃O expand are already advertised by the composer's own hint
+    // row directly above this bar — repeating them here just duplicated text.
     const groups: Array<Array<[string, string]>> = composerActive
       ? [[
           ['Esc', 'transcript'],
-          ['⇧⏎', 'newline'],
-          ['⌃O', 'expand'],
           ...(composerSendState === 'sending'
             ? [['⌃C', 'cancel'], ['↵', 'queue']] as Array<[string, string]>
             : [['↵', 'send']] as Array<[string, string]>),
@@ -16742,6 +16809,23 @@ export default function OpenTuiApp() {
               ? Math.max(current - 1, 0)
               : Math.min(current + 1, lastIndex)
           })
+        })
+        return
+      }
+      if (
+        isCtrl('l')
+        && modelPickerTarget?.provider === 'copilot'
+        && (modelPickerOptions[modelPickerIndex]?.supportsLongContext ?? false)
+      ) {
+        handled(() => {
+          const target = modelPickerTarget
+          if (!target) return
+          setTuiCopilotContextTierByKey((prev) => ({
+            ...prev,
+            [sessionKey(target)]: (prev[sessionKey(target)] ?? 'default') === 'long_context'
+              ? 'default'
+              : 'long_context',
+          }))
         })
         return
       }
@@ -19096,7 +19180,7 @@ export default function OpenTuiApp() {
                   <text fg={composerActive && composerSendState !== 'sending' ? composerAccentColor : theme.dim} wrapMode="none">
                     {composerDockSendingHintSegments
                       ? renderInlineTextSegments(composerDockSendingHintSegments, Math.max(Math.floor((rightPaneWidth - 4) * 0.45) - 1, 12), theme.dim)
-                      : fitText(composerDockFooterHint, Math.max(Math.floor((rightPaneWidth - 4) * 0.45) - 1, 12))}
+                      : fitHintText(composerDockFooterHint, Math.max(Math.floor((rightPaneWidth - 4) * 0.45) - 1, 12))}
                   </text>
                 </box>
               </box>
@@ -19253,7 +19337,12 @@ export default function OpenTuiApp() {
                       )}
                     </text>
                     <text fg={ot.dim} wrapMode="none">
-                      {fitText('type to filter · ↑/↓ choose · tab/←/→ switch · enter apply · esc close', headerWidth)}
+                      {fitText(
+                        modelPickerTarget?.provider === 'copilot' && (modelPickerOptions[modelPickerIndex]?.supportsLongContext ?? false)
+                          ? `type to filter · ↑/↓ choose · tab/←/→ switch · enter apply · ⌃L context:${composerCopilotContextTier === 'long_context' ? 'long' : 'default'} · esc close`
+                          : 'type to filter · ↑/↓ choose · tab/←/→ switch · enter apply · esc close',
+                        headerWidth,
+                      )}
                     </text>
                   </box>
                   <box height={settingsContentHeight} paddingX={1} flexDirection="row" gap={1}>
@@ -19954,6 +20043,15 @@ export default function OpenTuiApp() {
         </box>
       ) : null}
 
+      {composerTargetSession?.provider === 'codex' && sessionDetail?.externalWriter ? (
+        <box backgroundColor={theme.surface2} paddingX={1} paddingTop={1} flexDirection="row">
+          <text fg={theme.amber} wrapMode="none">{'▌ '}</text>
+          <text fg={theme.muted} wrapMode="none">
+            {fitText('● Open in another Codex client — transcript will lag until that turn finishes', Math.max(width - 6, 16))}
+          </text>
+        </box>
+      ) : null}
+
       {liveToolActivities.length > 0 && activeRunningToolCount > 0 ? (
         <box
           backgroundColor={isChatLikeView ? theme.surface : theme.surface2}
@@ -20090,7 +20188,7 @@ export default function OpenTuiApp() {
               <text fg={composerActive && composerSendState !== 'sending' ? composerAccentColor : theme.dim} wrapMode="none">
                 {composerDockSendingHintSegments
                   ? renderInlineTextSegments(composerDockSendingHintSegments, composerDockFooterHintWidth, theme.dim)
-                  : fitText(composerDockFooterHint, composerDockFooterHintWidth)}
+                  : fitHintText(composerDockFooterHint, composerDockFooterHintWidth)}
               </text>
             </box>
           </box>
@@ -20608,7 +20706,7 @@ export default function OpenTuiApp() {
               <text fg={theme.dim} wrapMode="none">
                 {composerWindowSendingHintSegments
                   ? renderInlineTextSegments(composerWindowSendingHintSegments, composerWindowFooterHintWidth, theme.dim)
-                  : fitText(composerWindowFooterHint, composerWindowFooterHintWidth)}
+                  : fitHintText(composerWindowFooterHint, composerWindowFooterHintWidth)}
               </text>
             </box>
           </box>

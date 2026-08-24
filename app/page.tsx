@@ -95,6 +95,7 @@ type MessageStreamPayload = {
   total?: number
   messages?: SessionMessage[]
   replace?: boolean
+  externalWriter?: boolean
 }
 
 function numericOffset(value: unknown, fallback = 0): number {
@@ -340,6 +341,9 @@ export default function Home() {
   // steps surface in the Tasks panel.
   const [sessionPlan, setSessionPlan] = useState<SessionPlan>({ plan: [], explanation: null })
   const [planForSessionId, setPlanForSessionId] = useState<string | null>(null)
+  // Codex only: another Codex client holds the rollout writer lock, so the
+  // transcript below is a stale cached snapshot until that turn finishes.
+  const [codexExternalWriter, setCodexExternalWriter] = useState(false)
   const [loadingSessions, setLoadingSessions] = useState(true)
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [sessionsError, setSessionsError] = useState<string | null>(null)
@@ -513,6 +517,7 @@ export default function Home() {
       offset: numericOffset(data.offset),
       total: numericOffset(data.total, numericOffset(data.offset) + ((data.messages ?? []) as SessionMessage[]).length),
       messages: (data.messages ?? []) as SessionMessage[],
+      externalWriter: data.externalWriter === true,
     }
   }, [])
 
@@ -593,6 +598,7 @@ export default function Home() {
   const applySessionMessagePayload = useCallback((payload: MessageStreamPayload, expectedSession: Session) => {
     if (selectedTabKey !== projectSessionKey(expectedSession)) return
     if (payload.sessionId && payload.sessionId !== expectedSession.sessionId) return
+    if (expectedSession.provider === 'codex') setCodexExternalWriter(payload.externalWriter === true)
     if (payload.provider && payload.provider !== (expectedSession.provider ?? 'claude')) return
 
     const incoming = Array.isArray(payload.messages) ? payload.messages : []
@@ -970,6 +976,7 @@ export default function Home() {
     fullTranscriptLoadedRef.current = false
     setLoadingMessages(true)
     setMessages([])
+    setCodexExternalWriter(false)
     sessionLoadAbortRef.current?.abort()
     if (session.isPending) {
       sessionLoadAbortRef.current = null
@@ -984,6 +991,7 @@ export default function Home() {
       msgCountRef.current = loadedWindow.offset + loadedWindow.messages.length
       fullTranscriptLoadedRef.current = Boolean(nextTargetMessageId)
       setMessages(loadedWindow.messages)
+      if (session.provider === 'codex') setCodexExternalWriter(loadedWindow.externalWriter)
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
       console.error('Failed to load messages:', err)
@@ -1391,6 +1399,7 @@ export default function Home() {
                     onComposerInsertConsumed={consumeComposerInsertRequest}
                     openCodeTodos={openCodeTodosForView}
                     codexPlan={codexPlanForView}
+                    codexExternalWriter={codexExternalWriter}
                   />
                 )}
               </ViewTransition>
