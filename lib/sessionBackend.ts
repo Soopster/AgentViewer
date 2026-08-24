@@ -5586,6 +5586,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
         cancelWatchdog?.()
         cancelWatchdog = null
         clearRunningSession(sessionId, turnRequestId)
+        flushPendingDelta()
         unsubscribe()
         safeClose()
       }
@@ -5601,6 +5602,57 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
         const payload = formatCodexNotification(notification)
         if (!payload) return
         safeEnqueue(`data: ${payload}\n\n`)
+      }
+
+      // Codex emits one delta notification per streamed chunk of assistant/
+      // reasoning text. Forwarding each as its own SSE frame makes the live
+      // view re-render on every chunk; coalesce same-item deltas into one
+      // frame instead, spilling early if a single item's buffered text grows
+      // past DELTA_SPILL_CHARS so a very long uninterrupted stream still
+      // flushes periodically. Any non-delta notification (tool call, item
+      // completion, approval, etc.) is an interaction boundary and flushes
+      // the pending delta first so ordering in the transcript stays intact.
+      const DELTA_SPILL_CHARS = 4000
+      const DELTA_METHODS = new Set([
+        'item/agentMessage/delta',
+        'item/reasoning/textDelta',
+        'item/reasoning/summaryTextDelta',
+      ])
+      let pendingDelta: CodexNotification | null = null
+
+      const flushPendingDelta = () => {
+        if (!pendingDelta) return
+        const notification = pendingDelta
+        pendingDelta = null
+        flushNotification(notification)
+      }
+
+      const emitNotification = (notification: CodexNotification) => {
+        if (!DELTA_METHODS.has(notification.method)) {
+          flushPendingDelta()
+          flushNotification(notification)
+          return
+        }
+        const params = notification.params as { itemId?: string; delta?: string }
+        const pendingParams = pendingDelta?.params as { itemId?: string; delta?: string } | undefined
+        if (typeof params.delta !== 'string' || typeof params.itemId !== 'string') {
+          flushPendingDelta()
+          flushNotification(notification)
+          return
+        }
+        if (!pendingDelta || pendingDelta.method !== notification.method || pendingParams?.itemId !== params.itemId) {
+          flushPendingDelta()
+          pendingDelta = notification
+          return
+        }
+        const mergedDelta = `${pendingParams?.delta ?? ''}${params.delta}`
+        const merged = { ...notification, params: { ...params, delta: mergedDelta } } as CodexNotification
+        if (mergedDelta.length >= DELTA_SPILL_CHARS) {
+          pendingDelta = null
+          flushNotification(merged)
+          return
+        }
+        pendingDelta = merged
       }
 
       // Prime the SSE stream before Codex startup/resume work so the TUI can
@@ -5783,7 +5835,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
               continue
             }
             if (isCodexRealtimeNotification(notification)) {
-              flushNotification(notification)
+              emitNotification(notification)
               if (notification.method === 'item/completed') {
                 scheduleCompletionClose(unsubscribe)
               }
@@ -5844,7 +5896,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
           }
 
           if (completionSeen) scheduleCompletionClose(unsubscribe)
-          flushNotification(notification)
+          emitNotification(notification)
         }
       })()
       void consume.catch(() => {})
