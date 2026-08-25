@@ -4502,6 +4502,12 @@ function cycleDensityValue(current: TuiDensity): TuiDensity {
     : 'comfortable'
 }
 
+// Rows the picker leaves for the transcript before it starts collapsing —
+// mainContentHeight's own floor, so the two agree — and the floor the picker
+// will not shrink below even on a very short terminal.
+const QUESTION_PICKER_MIN_TRANSCRIPT_ROWS = 8
+const QUESTION_PICKER_MIN_ROWS = 8
+
 const TRANSCRIPT_VIEWS: TuiTranscriptView[] = ['conversation', 'full', 'continue', 'stream', 'agents', 'chat']
 
 const TRANSCRIPT_VIEW_LABELS: Record<TuiTranscriptView, string> = {
@@ -9901,6 +9907,75 @@ export default function OpenTuiApp() {
     // them even before the turn streams any output.
     || (steeredSendNotice && (composerSendState === 'sending' || reattachedRunning))
   )
+  // AskUserQuestion picker layout.
+  //
+  // The picker used to reserve exactly as many rows as a full render needs —
+  // one per question plus one per option — with no upper bound. On a short
+  // terminal that exceeds what the layout can give it, yoga shrinks the card,
+  // and the options that fall off the bottom are simply gone: invisible and
+  // unanswerable, on every transcript view. A blocking prompt you cannot see
+  // is worse than a cramped one, so when the full picker will not fit we keep
+  // the FOCUSED question complete (its options are what the keys act on) and
+  // collapse the others to a single row each, windowing the option list around
+  // the cursor if even that overflows.
+  //
+  // The reservation below and the render both read this plan, so they cannot
+  // disagree about how tall the card is.
+  const questionPickerPlan = useMemo(() => {
+    const permission = pendingPermissions[0]
+    const questions = permission?.questions ?? []
+    if (questions.length === 0) return null
+    const focusIndex = Math.min(Math.max(questionFocusIndex, 0), questions.length - 1)
+    const optionRowsFor = (index: number) => {
+      const question = questions[index]!
+      return question.options.length + (question.allowFreeform ? 1 : 0)
+    }
+    // border(2) + outer padding(1) + title(1) + hint(1), plus the blank
+    // marginTop row each question after the first carries.
+    const chrome = 5 + (questions.length - 1)
+    const questionRows = questions.length
+    const fullRows = chrome + questionRows + questions.reduce((total, _, index) => total + optionRowsFor(index), 0)
+    // Budget derived from the SAME expression mainContentHeight uses, so it is
+    // automatically correct per transcript view (chat docks the composer
+    // inside the reader box; the others do not). mainContentHeight floors at
+    // QUESTION_PICKER_MIN_TRANSCRIPT_ROWS, and anything the picker reserves
+    // beyond that floor is rows the screen does not have — which is exactly
+    // when yoga starts compositing the card's rows onto each other.
+    const budget = Math.max(
+      height
+      - 3
+      - (searchMode || sessionSearchMode ? 4 : 1)
+      - (transcriptView === 'chat' ? 0 : composerDockHeight)
+      - composerPopoverHeight
+      - QUESTION_PICKER_MIN_TRANSCRIPT_ROWS,
+      QUESTION_PICKER_MIN_ROWS,
+    )
+    if (fullRows <= budget) {
+      return { questions, focusIndex, collapsed: false, optionStart: 0, optionCount: optionRowsFor(focusIndex), rows: fullRows }
+    }
+    // Collapsed: every question keeps its own row, only the focused one shows
+    // options, so ←/→ still reaches all of them.
+    const collapsedChrome = chrome + questionRows
+    const optionCount = Math.max(Math.min(optionRowsFor(focusIndex), budget - collapsedChrome), 1)
+    const cursor = Math.min(Math.max(questionOptionIndex, 0), Math.max(optionRowsFor(focusIndex) - 1, 0))
+    // Window around the cursor so the option the keys act on is always drawn.
+    const optionStart = Math.min(
+      Math.max(cursor - Math.floor(optionCount / 2), 0),
+      Math.max(optionRowsFor(focusIndex) - optionCount, 0),
+    )
+    return { questions, focusIndex, collapsed: true, optionStart, optionCount, rows: collapsedChrome + optionCount }
+  }, [
+    composerDockHeight,
+    composerPopoverHeight,
+    height,
+    pendingPermissions,
+    questionFocusIndex,
+    questionOptionIndex,
+    searchMode,
+    sessionSearchMode,
+    transcriptView,
+  ])
+
   const composerStatusBlockHeight = (() => {
     let rows = 0
     // Keep in sync with the pinned turn-status row below (rendered for the
@@ -9929,18 +10004,10 @@ export default function OpenTuiApp() {
       const permission = pendingPermissions[0]!
       const questions = permission.questions ?? []
       if (questions.length > 0) {
-        // The AskUserQuestion picker renders one row per question plus one per
-        // option, so it must be measured question-by-question — the flat
-        // permission budget below leaves it too few rows and the option lines
-        // composite on top of the question line.
-        // border(2) + outer padding(1) + title(1) + hint(1)
-        let questionRows = 5
-        for (const question of questions) {
-          // Questions after the first carry a blank marginTop row.
-          questionRows += 1 + question.options.length + (question.allowFreeform ? 1 : 0)
-        }
-        questionRows += questions.length - 1
-        rows += questionRows
+        // Measured by questionPickerPlan, which the render reads too — a flat
+        // budget leaves the card too few rows and the option lines composite
+        // on top of the question line.
+        rows += questionPickerPlan?.rows ?? 0
       } else {
         const permInnerWidth = Math.max(width - 8, 20)
         // border(2) + outer padding(1) + title(1) + options marginTop(1)
@@ -19821,7 +19888,13 @@ export default function OpenTuiApp() {
         const permission = pendingPermissions[0]!
         const questions = permission.questions ?? []
         const innerWidth = Math.max(width - 8, 20)
-        const focusIndex = Math.min(questionFocusIndex, questions.length - 1)
+        // Same plan the height reservation used, so the card is drawn at the
+        // size the layout actually gave it.
+        const { collapsed, optionStart, optionCount } = questionPickerPlan
+          ?? { collapsed: false, optionStart: 0, optionCount: Number.MAX_SAFE_INTEGER }
+        const focusIndex = questionPickerPlan?.focusIndex ?? Math.min(questionFocusIndex, questions.length - 1)
+        const focusedQuestion = questions[focusIndex]
+        const focusedTotalOptions = (focusedQuestion?.options.length ?? 0) + (focusedQuestion?.allowFreeform ? 1 : 0)
         return (
           <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
             <box borderStyle="single" borderColor={theme.violet ?? theme.amber} backgroundColor={theme.surface} flexDirection="column" paddingX={1}>
@@ -19833,14 +19906,29 @@ export default function OpenTuiApp() {
               {questions.map((q, qi) => {
                 const focused = qi === focusIndex
                 const selected = questionSelections[qi] ?? []
+                // When the picker cannot fit, only the focused question shows
+                // its options — the others keep a row so ←/→ still reaches
+                // them, with their answer summarised inline.
+                const showOptions = !collapsed || focused
+                // The freeform row is one more selectable option, so the
+                // cursor index must be clamped against the TOTAL. Clamping
+                // each branch against q.options.length separately drew a
+                // cursor on the last option AND on "Other" whenever "Other"
+                // was selected.
+                const totalOptions = q.options.length + (q.allowFreeform ? 1 : 0)
+                const cursorIndex = Math.min(questionOptionIndex, Math.max(totalOptions - 1, 0))
+                const answered = selected.length > 0
+                  ? ` — ${selected.join(', ')}`
+                  : questionFreeformAnswers[qi] ? ` — ${questionFreeformAnswers[qi]}` : ''
                 return (
-                  <box key={`q:${qi}`} flexDirection="column" marginTop={qi === 0 ? 0 : 1}>
+                  <box key={`q:${qi}`} flexDirection="column" marginTop={qi === 0 || collapsed ? 0 : 1}>
                     <text fg={focused ? theme.text : theme.dim} wrapMode="none">
-                      {fitText(`${questions.length > 1 ? `${focused ? '▶ ' : '  '}` : ''}${q.header ? `[${q.header}] ` : ''}${q.question}${q.multiSelect ? ' (multi)' : ''}`, innerWidth)}
+                      {fitText(`${questions.length > 1 ? `${focused ? '▶ ' : '  '}` : ''}${q.header ? `[${q.header}] ` : ''}${q.question}${q.multiSelect ? ' (multi)' : ''}${showOptions ? '' : answered}`, innerWidth)}
                     </text>
-                    {q.options.map((opt, oi) => {
+                    {showOptions ? q.options.map((opt, oi) => {
+                      if (collapsed && (oi < optionStart || oi >= optionStart + optionCount)) return null
                       const isSelected = selected.includes(opt.value ?? opt.label)
-                      const isCursor = focused && oi === Math.min(questionOptionIndex, q.options.length - 1)
+                      const isCursor = focused && oi === cursorIndex
                       const marker = isSelected ? (q.multiSelect ? '☑' : '●') : (q.multiSelect ? '☐' : '○')
                       const color = isCursor ? (theme.violet ?? theme.cyan) : isSelected ? theme.green : theme.dim
                       return (
@@ -19848,12 +19936,14 @@ export default function OpenTuiApp() {
                           {fitText(`  ${isCursor ? '▶' : ' '} ${marker} [${oi + 1}] ${opt.label}`, innerWidth)}
                         </text>
                       )
-                    })}
-                    {q.allowFreeform ? (() => {
+                    }) : null}
+                    {q.allowFreeform && showOptions
+                      && (!collapsed || (q.options.length >= optionStart && q.options.length < optionStart + optionCount))
+                      ? (() => {
                       const oi = q.options.length
                       const value = questionFreeformAnswers[qi] ?? ''
                       const displayValue = q.secret && value ? '•'.repeat(Math.min(value.length, 24)) : value
-                      const isCursor = focused && oi === Math.min(questionOptionIndex, q.options.length)
+                      const isCursor = focused && oi === cursorIndex
                       const isEditing = focused && isCursor && questionFreeformEditing
                       return (
                         <text key={`q:${qi}:other`} fg={isEditing ? theme.green : isCursor ? (theme.violet ?? theme.cyan) : value ? theme.green : theme.dim} wrapMode="none">
@@ -19869,7 +19959,7 @@ export default function OpenTuiApp() {
                   ? 'submitting…'
                   : questionFreeformEditing
                   ? fitText('type custom answer · enter finish · esc cancel editing', innerWidth)
-                  : fitText(`↑/↓ option${questions.length > 1 ? ' · ←/→ question' : ''} · space/number select · enter submit · esc skip`, innerWidth)}
+                  : fitText(`${collapsed ? `${Math.min(questionOptionIndex, Math.max(focusedTotalOptions - 1, 0)) + 1}/${focusedTotalOptions} · ` : ''}↑/↓ option${questions.length > 1 ? ' · ←/→ question' : ''} · space/number select · enter submit · esc skip`, innerWidth)}
               </text>
             </box>
           </box>
