@@ -34,10 +34,13 @@ const OUTRO = 'The working tree has two relevant changes.'
 
 const encoder = new TextEncoder()
 let pushFrame: (payload: unknown) => void = () => {}
+let pushEvent: (event: string, payload: unknown) => void = () => {}
 let closeStream: () => void = () => {}
 const streamBody = new ReadableStream<Uint8Array>({
   start(controller) {
     pushFrame = (payload) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`))
+    pushEvent = (event, payload) =>
+      controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`))
     closeStream = () => controller.close()
   },
 })
@@ -104,6 +107,13 @@ const settle = async (ms: number) => {
 const emitFrame = async (payload: unknown, ms = 500) => {
   await act(async () => {
     pushFrame(payload)
+    await setup.flush()
+    await new Promise((resolve) => setTimeout(resolve, ms))
+  })
+}
+const emitEvent = async (event: string, payload: unknown, ms = 200) => {
+  await act(async () => {
+    pushEvent(event, payload)
     await setup.flush()
     await new Promise((resolve) => setTimeout(resolve, ms))
   })
@@ -188,6 +198,24 @@ try {
       delta: { type: 'text_delta', text: OUTRO },
     },
   })
+
+  // The server reports live output tokens as an absolute total over
+  // `turn-usage` (createClaudeTurnUsageTracker); the pinned status line must
+  // show that number, and a later, larger total must replace it rather than
+  // add to it.
+  await emitEvent('turn-usage', { outputTokens: 40 })
+  const firstUsageFrame = setup.captureCharFrame()
+  if (!/↓ 40 tokens/.test(firstUsageFrame)) {
+    throw new Error(`Status line did not adopt the reported turn usage:\n${firstUsageFrame}`)
+  }
+  await emitEvent('turn-usage', { outputTokens: 70 })
+  const secondUsageFrame = setup.captureCharFrame()
+  if (!/↓ 70 tokens/.test(secondUsageFrame)) {
+    throw new Error(`Status line did not track the updated turn usage:\n${secondUsageFrame}`)
+  }
+  if (/↓ 110 tokens/.test(secondUsageFrame)) {
+    throw new Error(`Status line summed absolute turn totals instead of replacing:\n${secondUsageFrame}`)
+  }
 
   const resultFrame = setup.captureCharFrame()
   if (/output will appear/i.test(resultFrame)) {
