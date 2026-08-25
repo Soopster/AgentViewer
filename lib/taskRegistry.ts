@@ -606,10 +606,13 @@ export function buildTaskRegistry(messages: ThreadedMessage[]): TaskRegistry {
 
       if (name === 'TodoWrite') {
         const inp = thread.toolUse.input as { todos?: Array<{ content: string; status: string; activeForm?: string }> }
-        const todos = inp.todos ?? []
+        const todos = Array.isArray(inp.todos) ? inp.todos : []
         for (let i = 0; i < todos.length; i++) {
           const todo = todos[i]
-          if (!todo.content) continue
+          // Tool input is provider data, not a validated type: a null or
+          // non-object entry here used to throw and take the whole transcript
+          // render down with it.
+          if (!todo || typeof todo !== 'object' || typeof todo.content !== 'string' || !todo.content) continue
           const id = `todo:${uuid}:${i}`
           const status = normalizeStatus(todo.status)
           if (!status) continue
@@ -660,6 +663,7 @@ export function buildTaskRegistryFromCodexPlan(steps: CodexPlanStep[]): TaskRegi
 export function buildTaskRegistryFromTodos(todos: OpenCodeTodo[]): TaskRegistry {
   const registry: TaskRegistry = new Map()
   for (const todo of todos) {
+    if (!todo || typeof todo !== 'object') continue
     const subject = todo.content
     const status = normalizeStatus(todo.status) ?? (
       todo.status === 'cancelled' ? 'stopped' as TaskStatus : undefined

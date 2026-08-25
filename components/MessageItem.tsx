@@ -1976,10 +1976,15 @@ const TODO_ICON: Record<string, string>  = { completed: '✓', in_progress: '◐
 const TODO_COLOR: Record<string, string> = { completed: 'var(--green)', in_progress: 'var(--amber)', pending: 'var(--text-3)' }
 
 function TodoWriteCard({ thread }: { thread: ToolThread }) {
-  const input = thread.toolUse.input as { todos?: TodoItem[] }
-  const todos = input.todos ?? []
+  const input = thread.toolUse.input as { todos?: unknown }
+  // Tool input is provider data, not a validated type — a null or non-object
+  // entry must not throw and blank the whole transcript.
+  const todos: TodoItem[] = (Array.isArray(input.todos) ? input.todos : [])
+    .filter((todo): todo is TodoItem => Boolean(todo) && typeof todo === 'object' && !Array.isArray(todo))
   const counts = { completed: 0, in_progress: 0, pending: 0 }
-  for (const t of todos) counts[t.status] = (counts[t.status] ?? 0) + 1
+  for (const t of todos) {
+    if (t.status === 'completed' || t.status === 'in_progress' || t.status === 'pending') counts[t.status] += 1
+  }
   const flat = useColorTreatment() === 'flat'
 
   return (
@@ -1998,7 +2003,7 @@ function TodoWriteCard({ thread }: { thread: ToolThread }) {
               {TODO_ICON[todo.status] ?? '○'}
             </span>
             <span style={{ fontSize: 13, color: todo.status === 'completed' ? 'var(--text-3)' : 'var(--text)', textDecoration: todo.status === 'completed' ? 'line-through' : 'none', lineHeight: 1.5 }}>
-              {todo.content}
+              {typeof todo.content === 'string' && todo.content ? todo.content : todo.activeForm || '(untitled todo)'}
             </span>
           </div>
         ))}

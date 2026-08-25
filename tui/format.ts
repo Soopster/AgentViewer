@@ -1467,30 +1467,84 @@ function resultLineCount(thread: ToolThread): number {
   return raw.split('\n').filter((entry) => entry.trim().length > 0).length
 }
 
-function formatTodoCounts(input: Record<string, unknown>): string | null {
+type TodoStatus = 'completed' | 'in_progress' | 'pending' | 'other'
+type NormalizedTodo = { status: TodoStatus; content: string; activeForm: string }
+
+// Mirrors the web TodoWriteCard's glyphs (components/MessageItem.tsx) so a todo
+// list reads the same on both surfaces. All BMP so Windows terminals keep them.
+const TODO_GLYPH: Record<TodoStatus, string> = {
+  completed: '✓',
+  in_progress: '◐',
+  pending: '○',
+  other: '·',
+}
+const TODO_TONE: Record<TodoStatus, TuiTranscriptLineTone> = {
+  completed: 'dim',
+  in_progress: 'default',
+  pending: 'muted',
+  other: 'muted',
+}
+
+function readTodoItems(input: Record<string, unknown>): NormalizedTodo[] {
   const todos = Array.isArray(input.todos) ? input.todos : []
-  if (todos.length === 0) return null
-  const counts = { completed: 0, inProgress: 0, pending: 0, other: 0 }
-  for (const todo of todos) {
+  return todos.map((todo): NormalizedTodo => {
     if (!todo || typeof todo !== 'object' || Array.isArray(todo)) {
-      counts.other += 1
-      continue
+      return { status: 'other', content: '', activeForm: '' }
     }
-    const status = typeof (todo as Record<string, unknown>).status === 'string'
-      ? String((todo as Record<string, unknown>).status).toLowerCase()
-      : ''
-    if (status === 'completed' || status === 'done') counts.completed += 1
-    else if (status === 'in_progress' || status === 'running' || status === 'active') counts.inProgress += 1
-    else if (status === 'pending' || status === 'todo') counts.pending += 1
-    else counts.other += 1
-  }
+    const record = todo as Record<string, unknown>
+    const raw = typeof record.status === 'string' ? record.status.toLowerCase() : ''
+    const status: TodoStatus = raw === 'completed' || raw === 'done'
+      ? 'completed'
+      : raw === 'in_progress' || raw === 'running' || raw === 'active'
+        ? 'in_progress'
+        : raw === 'pending' || raw === 'todo'
+          ? 'pending'
+          : 'other'
+    return {
+      status,
+      content: typeof record.content === 'string' ? record.content : '',
+      activeForm: typeof record.activeForm === 'string' ? record.activeForm : '',
+    }
+  })
+}
+
+function formatTodoCounts(input: Record<string, unknown>): string | null {
+  const items = readTodoItems(input)
+  if (items.length === 0) return null
+  const counts = { completed: 0, in_progress: 0, pending: 0, other: 0 }
+  for (const item of items) counts[item.status] += 1
   const parts = [
     counts.completed > 0 ? `${counts.completed} done` : '',
-    counts.inProgress > 0 ? `${counts.inProgress} active` : '',
+    counts.in_progress > 0 ? `${counts.in_progress} active` : '',
     counts.pending > 0 ? `${counts.pending} pending` : '',
     counts.other > 0 ? `${counts.other} other` : '',
   ].filter(Boolean)
-  return parts.join(' · ') || `${todos.length} todo${todos.length === 1 ? '' : 's'}`
+  return parts.join(' · ') || `${items.length} todo${items.length === 1 ? '' : 's'}`
+}
+
+/**
+ * The checklist itself, one line per todo. Previews stay two lines like every
+ * other tool here, so this is what expanding a TodoWrite card reveals — the
+ * plan, not just a tally of it.
+ */
+function formatTodoChecklist(input: Record<string, unknown>): TuiTranscriptCardLine[] {
+  return readTodoItems(input).map((item) => {
+    const text = item.content.trim() || item.activeForm.trim()
+    return line(`  ${TODO_GLYPH[item.status]} ${truncateLine(text || '(untitled todo)')}`, TODO_TONE[item.status])
+  })
+}
+
+/**
+ * Preview subtitle: name the todo actually being worked on rather than only
+ * tallying statuses. That one line is what the native CLI keeps on screen, and
+ * it is the difference between "3 todos" and knowing what the agent is doing.
+ */
+function formatTodoSubtitle(input: Record<string, unknown>): string | null {
+  const counts = formatTodoCounts(input)
+  const active = readTodoItems(input).find((item) => item.status === 'in_progress')
+  const label = active ? (active.activeForm.trim() || active.content.trim()) : ''
+  if (!label) return counts
+  return `${TODO_GLYPH.in_progress} ${compactOneLine(label, 72)}${counts ? ` · ${counts}` : ''}`
 }
 
 function previewTool(thread: ToolThread, activeForms?: TaskActiveForms, taskRegistry?: TaskRegistry): TuiTranscriptCardLine[] {
@@ -1546,10 +1600,10 @@ function previewTool(thread: ToolThread, activeForms?: TaskActiveForms, taskRegi
 
   if (toolName === 'TodoWrite') {
     const todos = Array.isArray(input.todos) ? input.todos : []
-    const counts = formatTodoCounts(input)
+    const subtitle = formatTodoSubtitle(input)
     return [
       line(`tool TodoWrite: ${todos.length} todo${todos.length === 1 ? '' : 's'}`, 'tool'),
-      line(counts ?? (normalizedThread.result ? '✓ updated' : 'pending'), normalizedThread.result?.is_error ? 'result_error' : normalizedThread.result ? 'result_ok' : 'dim'),
+      line(subtitle ?? (normalizedThread.result ? '✓ updated' : 'pending'), normalizedThread.result?.is_error ? 'result_error' : normalizedThread.result ? 'result_ok' : 'dim'),
     ]
   }
 
@@ -2442,6 +2496,7 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
           line(`tool TodoWrite: ${todos.length} todo${todos.length === 1 ? '' : 's'}`, 'tool'),
         ]
         if (counts) lines.push(line(counts, 'muted'))
+        lines.push(...formatTodoChecklist(input))
         return lines
       }
 
