@@ -1255,6 +1255,31 @@ function turnUsageToEventData(outputTokens: number): string {
   return `event: turn-usage\ndata: ${JSON.stringify({ outputTokens })}\n\n`
 }
 
+/**
+ * Emits the composer status line's live output-token counter.
+ *
+ * Every provider computes its own turn total differently — Codex advances a
+ * usage struct, OpenCode keys by message id, Copilot dedupes by usage-event
+ * id, Pi and LM Studio read a final per-message count, Claude sums the latest
+ * cumulative count per message. What the `turn-usage` frame means must NOT
+ * vary with that: it is always the ABSOLUTE total so far, and the client only
+ * ever assigns it. Route every provider through this reporter so none of them
+ * can drift back to emitting a delta, and so an unchanged total doesn't cost
+ * an SSE frame and a status-line re-render.
+ *
+ * Exported for turnUsageReporterSmoke.ts.
+ */
+export function createTurnUsageReporter(enqueue: (chunk: string) => void) {
+  let lastEmitted = -1
+  return (outputTokens: number | null | undefined) => {
+    if (typeof outputTokens !== 'number' || !Number.isFinite(outputTokens)) return
+    const total = Math.max(0, Math.trunc(outputTokens))
+    if (total === lastEmitted) return
+    lastEmitted = total
+    enqueue(turnUsageToEventData(total))
+  }
+}
+
 // Exported for reliabilityTimeoutSmoke.ts, which verifies (without needing
 // real Claude/Codex credentials or a custom-model deployment) that a hung
 // composer RPC actually times out at its bound and that the resulting error
@@ -4433,13 +4458,13 @@ function claudeStreamDeltaKey(msg: SDKMessage): { index: number; kind: 'text_del
  * Exported for claudeTurnUsageSmoke.ts.
  */
 export function createClaudeTurnUsageTracker(enqueue: (chunk: string) => void) {
+  const report = createTurnUsageReporter(enqueue)
   const outputByMessageId = new Map<string, number>()
   // Fallback bucket for the theoretical stream that reports a message_delta
   // without a preceding message_start: overwriting undercounts at worst,
   // whereas a fresh key per delta would resurrect the inflation bug.
   const UNKEYED = '\u0000unkeyed'
   let currentMessageId = UNKEYED
-  let lastEmitted = -1
 
   return (msg: SDKMessage) => {
     const record = msg as unknown as Record<string, unknown>
@@ -4459,9 +4484,7 @@ export function createClaudeTurnUsageTracker(enqueue: (chunk: string) => void) {
     outputByMessageId.set(currentMessageId, Math.max(0, outputTokens))
     let total = 0
     for (const value of outputByMessageId.values()) total += value
-    if (total === lastEmitted) return
-    lastEmitted = total
-    enqueue(turnUsageToEventData(total))
+    report(total)
   }
 }
 
@@ -5850,11 +5873,12 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
         declinePendingCodexApprovals(sessionId)
         subscription.close()
       }
+      const reportTurnUsage = createTurnUsageReporter(safeEnqueue)
       const emitTokenUsage = (tokenUsage: CodexThreadTokenUsage) => {
         const usage = mapCodexTokenUsageToContextUsage(tokenUsage, currentModel)
         safeEnqueue(codexContextUsageToEventData(usage))
         turnOutputUsage = advanceCodexTurnOutputUsage(turnOutputUsage, tokenUsage)
-        safeEnqueue(turnUsageToEventData(turnOutputUsage.outputTokens))
+        reportTurnUsage(turnOutputUsage.outputTokens)
       }
       const activateTargetTurn = (turnId: string) => {
         if (!turnId || targetTurnId) return
@@ -6282,6 +6306,9 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
       const outputTokensByMessageId = new Map<string, number>()
       const messageRoles = new Map<string, OpenCodeMessageRole>()
       let turnOutputTokens = 0
+      // safeEnqueue is declared further down this stream body; the arrow defers
+      // the lookup so the reporter can live beside the counter it reports.
+      const reportTurnUsage = createTurnUsageReporter((chunk) => safeEnqueue(chunk))
       // Subscribe to the shared event harness — one upstream connection per
       // directory (opencode ≥1.17 only delivers session/message events on the
       // directory-scoped bus; the unscoped stream is server heartbeats only),
@@ -6444,7 +6471,7 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
                 event.properties.info,
                 turnOutputTokens,
               )
-              safeEnqueue(turnUsageToEventData(turnOutputTokens))
+              reportTurnUsage(turnOutputTokens)
             }
 
             if (event.type === 'session.status') {
@@ -6676,6 +6703,9 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
       const bridgedPermissionIds = new Set<string>()
       const bridgedElicitationIds = new Set<string>()
       let turnOutputTokens = 0
+      // safeEnqueue is declared further down this stream body; the arrow defers
+      // the lookup so the reporter can live beside the counter it reports.
+      const reportTurnUsage = createTurnUsageReporter((chunk) => safeEnqueue(chunk))
 
       const safeEnqueue = (chunk: string) => {
         if (downstreamClosed) return
@@ -6792,7 +6822,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
               if (!seenUsageEventIds.has(event.id)) {
                 seenUsageEventIds.add(event.id)
                 turnOutputTokens += Math.max(0, event.data.outputTokens ?? 0)
-                safeEnqueue(turnUsageToEventData(turnOutputTokens))
+                reportTurnUsage(turnOutputTokens)
               }
             }
           }
@@ -7114,6 +7144,9 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
       let targetSessionId = sessionId
       let unsubscribePi: (() => void) | undefined
       let turnOutputTokens = 0
+      // safeEnqueue is declared further down this stream body; the arrow defers
+      // the lookup so the reporter can live beside the counter it reports.
+      const reportTurnUsage = createTurnUsageReporter((chunk) => safeEnqueue(chunk))
       const activePiUiIds = new Set<string>()
       let piUiHandler: PiUiHandler | undefined
       let clearPiUiHandler: (() => void) | undefined
@@ -7506,7 +7539,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
 
           if (event.type === 'message_end' && event.message.role === 'assistant') {
             turnOutputTokens += Math.max(0, event.message.usage.output)
-            safeEnqueue(turnUsageToEventData(turnOutputTokens))
+            reportTurnUsage(turnOutputTokens)
           }
 
           if (event.type === 'agent_end') {
@@ -7673,12 +7706,20 @@ async function createLmstudioStream(sessionId: string, signal: AbortSignal, body
 
       try {
         const model = selectedModel || record.model
+        // Live output tokens for the composer status line, over the same
+        // `turn-usage` frame every other provider reports on. OpenAI-style
+        // streams carry `completion_tokens` as an absolute running total (and
+        // usually only on the final chunk), which is exactly the frame's
+        // contract — forward it whenever it moves rather than accumulating.
+        const reportTurnUsage = createTurnUsageReporter(safeEnqueue)
         const result = await streamLmstudioChatCompletion(record.messages, userMessage, model, signal, (delta) => {
           if (delta.content) {
             broadcastLiveSessionActivity('lmstudio', sessionId)
             safeEnqueue(`data: ${JSON.stringify({ type: 'lmstudio_delta', delta: delta.content })}\n\n`)
           }
+          reportTurnUsage(delta.usage?.completion_tokens)
         })
+        reportTurnUsage(result.usage?.completionTokens)
         await appendLmstudioTurn(sessionId, userMessage, result.text, result.model, result.usage)
       } catch (err) {
         if (!signal.aborted) {
