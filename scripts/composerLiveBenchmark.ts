@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
+import { BENCHMARK_CONTROL_EVENTS, isBenchmarkStartupPayload } from '../lib/composerBenchmarkComparison'
 import type { AgentProvider } from '../lib/types'
 
 type Target = { provider: AgentProvider; sessionId: string }
@@ -65,12 +66,9 @@ function extractFrames(buffer: string): { frames: string[]; remaining: string } 
 function isProviderEvent(frame: string): boolean {
   if (!frame || frame.startsWith(':')) return false
   const event = frame.split('\n').find((line) => line.startsWith('event:'))?.slice(6).trim() ?? 'message'
-  return event !== 'heartbeat'
-    && event !== 'session'
-    && event !== 'context-usage'
-    && event !== 'turn-usage'
-    && event !== 'opencode-status'
-    && event !== 'opencode-todos'
+  if (BENCHMARK_CONTROL_EVENTS.has(event)) return false
+  const data = frame.split('\n').filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim()).join('\n')
+  return !isBenchmarkStartupPayload(data)
 }
 
 async function runSample(target: Target, run: number): Promise<Sample> {

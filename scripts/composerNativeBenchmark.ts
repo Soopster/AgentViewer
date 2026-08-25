@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 
+import { isBenchmarkStartupPayload } from '../lib/composerBenchmarkComparison'
 import type { AgentProvider } from '../lib/types'
 
 type Target = { provider: AgentProvider; sessionId: string }
@@ -50,7 +51,10 @@ function commandFor(target: Target): { command: string; args: string[] } {
     case 'claude':
       return {
         command: 'claude',
-        args: ['-p', '--resume', target.sessionId, '--output-format', 'stream-json', '--include-partial-messages', '--permission-mode', 'dontAsk', prompt],
+        // --verbose is mandatory alongside `-p --output-format stream-json`;
+        // without it the CLI exits immediately and every run scores as a
+        // failure rather than a slow success.
+        args: ['-p', '--resume', target.sessionId, '--output-format', 'stream-json', '--include-partial-messages', '--verbose', '--permission-mode', 'dontAsk', prompt],
       }
     case 'codex':
       return {
@@ -112,8 +116,23 @@ async function runSample(target: Target, run: number): Promise<Sample> {
         ...(error ? { error } : {}),
       })
     }
+    // First event means the first sign of MODEL output, not the first byte of
+    // startup chatter. Claude's stream-json opens with session/init and hook
+    // lifecycle lines (and SessionStart hooks can emit several), which land
+    // almost immediately and would flatter the native number against the
+    // AgentViewer side, whose isProviderEvent filter already skips its
+    // equivalents. Lines that aren't JSON fall back to first-byte timing.
+    let stdoutBuffer = ''
+    const isStartupChatter = (rawLine: string): boolean =>
+      rawLine.trim().length === 0 || isBenchmarkStartupPayload(rawLine)
     child.stdout.on('data', (chunk: Buffer) => {
-      if (firstEventMs == null && chunk.length > 0) firstEventMs = performance.now() - startedAt
+      if (firstEventMs != null || chunk.length === 0) return
+      stdoutBuffer += chunk.toString('utf8')
+      const lines = stdoutBuffer.split('\n')
+      stdoutBuffer = lines.pop() ?? ''
+      if (lines.some((rawLine) => !isStartupChatter(rawLine))) {
+        firstEventMs = performance.now() - startedAt
+      }
     })
     child.stderr.on('data', (chunk: Buffer) => {
       if (stderr.length < 16_000) stderr += chunk.toString('utf8')

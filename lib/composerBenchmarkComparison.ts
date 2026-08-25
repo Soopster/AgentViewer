@@ -116,3 +116,47 @@ export function compareComposerBenchmarks(
     }
   })
 }
+
+/**
+ * "First event" only means something if both benchmark surfaces agree on what
+ * counts as one. Each turn opens with plumbing — SSE control frames, provider
+ * session/init envelopes, hook lifecycle lines, command queue/start
+ * notifications — that lands in single-digit milliseconds and says nothing
+ * about how fast the model started answering. Counting any of it makes the
+ * measured surface look arbitrarily fast, so the two benchmarks share these
+ * predicates rather than each keeping their own drifting copy.
+ */
+
+/** SSE `event:` names the server uses for turn control rather than model output. */
+export const BENCHMARK_CONTROL_EVENTS: ReadonlySet<string> = new Set([
+  'heartbeat',
+  'session',
+  'context-usage',
+  'turn-usage',
+  'turn-accepted',
+  'turn-notice',
+  'command-result',
+  'merged',
+  'opencode-status',
+  'opencode-todos',
+])
+
+/** Provider envelope `type`s that announce a turn rather than carry its output. */
+export const BENCHMARK_STARTUP_PAYLOAD_TYPES: ReadonlySet<string> = new Set([
+  'system',
+  'session',
+  'thread.started',
+  'command_lifecycle',
+  'pi_status',
+])
+
+/** True when a JSON payload line is turn plumbing rather than model output. */
+export function isBenchmarkStartupPayload(rawJson: string): boolean {
+  const trimmed = rawJson.trim()
+  if (!trimmed.startsWith('{')) return false
+  try {
+    return BENCHMARK_STARTUP_PAYLOAD_TYPES.has(String((JSON.parse(trimmed) as { type?: unknown }).type))
+  } catch {
+    return false
+  }
+}
