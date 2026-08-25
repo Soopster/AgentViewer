@@ -169,7 +169,7 @@ try {
   // The turn status line stays pinned once output starts — native CLIs keep
   // the elapsed clock, token counter and interrupt affordance visible for the
   // whole turn instead of hiding them behind the first delta.
-  if (!/⌃C to interrupt/.test(runningFrame)) {
+  if (!/⌃C cancel/.test(runningFrame)) {
     throw new Error(`Turn status line lost its interrupt hint while streaming:\n${runningFrame}`)
   }
   if (!/\d+s\s+·/.test(runningFrame)) {
@@ -227,7 +227,7 @@ try {
   if (/running/i.test(resultFrame.split('\n').filter((l) => l.includes('OK')).join('\n'))) {
     throw new Error(`Live card still reads as running after its result:\n${resultFrame}`)
   }
-  if (!/⌃C to interrupt/.test(resultFrame)) {
+  if (!/⌃C cancel/.test(resultFrame)) {
     throw new Error(`Turn status line vanished after the tool result landed:\n${resultFrame}`)
   }
   if (resultFrame.indexOf('tool Bash') > resultFrame.indexOf(OUTRO)) {

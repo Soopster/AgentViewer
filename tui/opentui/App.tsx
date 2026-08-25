@@ -9330,7 +9330,7 @@ export default function OpenTuiApp() {
     // not only in the footer — the user's eye is on the spinner, not the hint
     // bar. Mirrors the two-press arm/confirm the ⌃C handler implements.
     if (composerSendState === 'sending') {
-      parts.push(interruptPressActive ? '⌃C again to interrupt' : '⌃C to interrupt')
+      parts.push(interruptPressActive ? '⌃C again to interrupt' : '⌃C cancel')
     }
     return parts.length > 0 ? parts.join(' · ') : null
   }, [composerKnobsChip, composerSendState, interruptPressActive, liveOutputTokens])
