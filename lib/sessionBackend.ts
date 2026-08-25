@@ -4393,6 +4393,83 @@ type ClaudeStreamColdArgs = {
   checkpoint?: Promise<unknown>
 }
 
+// The Claude SDK emits one `stream_event` message per streamed text/thinking
+// chunk (content_block_delta), each forwarded as its own SSE frame. Unlike
+// Codex/Pi/OpenCode (see DELTA_METHODS / PI_DELTA_SPILL_CHARS above), Claude's
+// deltas went straight to the wire — every token triggered a client re-render.
+// Coalesce consecutive deltas for the same block index/kind into one merged
+// frame, spilling early past CLAUDE_DELTA_SPILL_CHARS so a long uninterrupted
+// stream still flushes periodically. Any non-delta message is an interaction
+// boundary and flushes the pending delta first so transcript ordering holds.
+const CLAUDE_DELTA_SPILL_CHARS = 4000
+
+function claudeStreamDeltaKey(msg: SDKMessage): { index: number; kind: 'text_delta' | 'thinking_delta'; text: string } | null {
+  const record = msg as unknown as Record<string, unknown>
+  if (record.type !== 'stream_event') return null
+  const event = record.event as Record<string, unknown> | undefined
+  if (!event || event.type !== 'content_block_delta' || typeof event.index !== 'number') return null
+  const delta = event.delta as Record<string, unknown> | undefined
+  if (!delta) return null
+  if (delta.type === 'text_delta' && typeof delta.text === 'string') {
+    return { index: event.index, kind: 'text_delta', text: delta.text }
+  }
+  if (delta.type === 'thinking_delta' && typeof delta.thinking === 'string') {
+    return { index: event.index, kind: 'thinking_delta', text: delta.thinking }
+  }
+  return null
+}
+
+function createClaudeDeltaCoalescer(enqueue: (chunk: string) => void) {
+  let pending: SDKMessage | null = null
+  let pendingKey: { index: number; kind: 'text_delta' | 'thinking_delta'; text: string } | null = null
+
+  const flush = () => {
+    if (!pending) return
+    const msg = pending
+    pending = null
+    pendingKey = null
+    enqueue(`data: ${JSON.stringify(msg)}\n\n`)
+  }
+
+  const emit = (msg: SDKMessage) => {
+    const key = claudeStreamDeltaKey(msg)
+    if (!key) {
+      flush()
+      enqueue(`data: ${JSON.stringify(msg)}\n\n`)
+      return
+    }
+    if (!pending || !pendingKey || pendingKey.index !== key.index || pendingKey.kind !== key.kind) {
+      flush()
+      pending = msg
+      pendingKey = key
+      return
+    }
+    const mergedText = pendingKey.text + key.text
+    const pendingRecord = pending as unknown as Record<string, unknown>
+    const pendingEvent = pendingRecord.event as Record<string, unknown>
+    const pendingDelta = pendingEvent.delta as Record<string, unknown>
+    const merged = {
+      ...pendingRecord,
+      event: {
+        ...pendingEvent,
+        delta: key.kind === 'text_delta'
+          ? { ...pendingDelta, text: mergedText }
+          : { ...pendingDelta, thinking: mergedText },
+      },
+    } as unknown as SDKMessage
+    if (mergedText.length >= CLAUDE_DELTA_SPILL_CHARS) {
+      pending = null
+      pendingKey = null
+      enqueue(`data: ${JSON.stringify(merged)}\n\n`)
+      return
+    }
+    pending = merged
+    pendingKey = { ...key, text: mergedText }
+  }
+
+  return { emit, flush }
+}
+
 async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Response> {
   const {
     sessionId,
@@ -4470,6 +4547,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           downstreamClosed = true
         }
       }
+      const coldDeltaCoalescer = createClaudeDeltaCoalescer(safeEnqueue)
       // Commit headers/body immediately, before CLI startup or initialization.
       // SSE comments are ignored by both clients and do not count as model output.
       safeEnqueue(':ok\n\n')
@@ -4695,7 +4773,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
             ? claudeResultErrorMessage(msg as unknown as Record<string, unknown>)
             : null
           if (!resultError) acceptTurn(messageSessionId ?? realizedSessionId ?? sessionId)
-          safeEnqueue(`data: ${JSON.stringify(msg)}\n\n`)
+          coldDeltaCoalescer.emit(msg)
           // Break after the result so we can adopt the Query into the pool.
           // The pool's pump loop takes over consuming for any tail messages
           // (notably prompt_suggestion, which the SDK emits after `result`)
@@ -4733,6 +4811,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: friendlyClaudePoolError(err) })}\n\n`)
         }
       } finally {
+        coldDeltaCoalescer.flush()
         clearInterval(heartbeat)
         // Clear the bridge in case adoption didn't happen (error, abort) so the
         // box isn't left pointing at a dead stream controller.
@@ -4835,6 +4914,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
       // registration, permission cleanup, and the session frame all key off
       // `sessionId` directly rather than a particular pool entry.
       const bridgedPermissionIds = new Set<string>()
+      const poolDeltaCoalescer = createClaudeDeltaCoalescer((chunk) => controller.enqueue(encoder.encode(chunk)))
       const bridgeInstalled = manualPermissions
         && permissionMode !== 'bypassPermissions'
         && permissionMode !== 'plan'
@@ -5035,7 +5115,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
                 turnAccepted = true
                 controller.enqueue(encoder.encode(`event: turn-accepted\ndata: ${JSON.stringify({ sessionId, provider: 'claude' })}\n\n`))
               }
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify(msg)}\n\n`))
+              poolDeltaCoalescer.emit(msg)
               if (resultError) {
                 controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: resultError.message, apiErrorStatus: resultError.apiErrorStatus })}\n\n`))
               }
@@ -5126,6 +5206,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
           }
         }
       } finally {
+        try { poolDeltaCoalescer.flush() } catch { /* downstream closed */ }
         clearInterval(heartbeat)
         clearRunningSession(sessionId, turnRequestId)
         resolvePendingClaudePermissions(sessionId, bridgedPermissionIds, 'Permission request ended before a response was received')
@@ -8109,29 +8190,22 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
     return { models: [], currentModel: null, contextUsage: null }
   }
 
-  const models = await readClaudeSupportedModels().catch(() => [] as SessionModelInfo[])
   // The composer refreshes this on every session open and after every turn
-  // (to pick up `/model` slash changes) — reuse the pool's already-warm
-  // subprocess instead of cold-spawning a second `claude` CLI just to answer
-  // getContextUsage(). A cold spawn here previously added a full subprocess
-  // start + resume handshake to what should be an instant dropdown refresh.
-  const warm = peekClaudeSession(sessionId)
-  const q = warm?.query ?? createSessionControlQuery(sessionId)
-  try {
-    const contextUsage = await q.getContextUsage().catch(() => null)
-    return {
-      models,
-      currentModel: contextUsage?.model ?? null,
-      contextUsage: contextUsage ?? null,
-    }
-  } catch {
-    return {
-      models,
-      currentModel: null,
-      contextUsage: null,
-    }
-  } finally {
-    if (!warm) q.close()
+  // (to pick up `/model` slash changes). This used to await
+  // Query.getContextUsage() to learn the current model — a control RPC the
+  // CLI answers on the same queue it accepts prompts on, taking ~1.4s on a
+  // warm subprocess (see the comment on claudeResultContextUsage) and
+  // blocking every session switch. The client never read the contextUsage
+  // this returned (the context meter is driven entirely by the
+  // turn-result-derived `context-usage` SSE event), so the RPC bought
+  // nothing but latency. currentModel is instead derived client-side from
+  // the transcript it already loads for display (last assistant message's
+  // `model` field) — see the effect in MessageView.tsx.
+  const models = await readClaudeSupportedModels().catch(() => [] as SessionModelInfo[])
+  return {
+    models,
+    currentModel: null,
+    contextUsage: null,
   }
 }
 

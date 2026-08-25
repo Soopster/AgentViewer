@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { memo, useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo, useDeferredValue, useSyncExternalStore } from 'react'
 import type {
+  ApiMessage,
   SessionMessage,
   Session,
   SendState,
@@ -3745,6 +3746,30 @@ function MessageViewInner({
     }
     refreshSessionModels({ preserveSelection: false })
   }, [session?.provider, session?.sessionId, refreshSessionModels])
+
+  // Claude's /models endpoint no longer resolves currentModel (that required
+  // a ~1.4s getContextUsage() control RPC on every session switch — see the
+  // comment on readViewSessionModels). Once the transcript we already fetch
+  // for display finishes loading, pull the model straight off the last
+  // assistant message instead — free, and it's the same data the backend
+  // would have derived from a live RPC anyway. Applied once per session
+  // switch (not on every later message-array update) so it can't stomp a
+  // model the user just picked in the dropdown but hasn't sent yet.
+  const appliedModelSessionKeyRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (session?.provider !== 'claude' || !session.sessionId || messages.length === 0) return
+    if (appliedModelSessionKeyRef.current === session.sessionId) return
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i]
+      if (msg.type !== 'assistant') continue
+      const model = (msg.message as Partial<ApiMessage> & { model?: unknown }).model
+      if (typeof model === 'string' && model) {
+        appliedModelSessionKeyRef.current = session.sessionId
+        setSelectedModel(model)
+      }
+      break
+    }
+  }, [session?.provider, session?.sessionId, messages])
 
   useEffect(() => {
     if (!session) {
