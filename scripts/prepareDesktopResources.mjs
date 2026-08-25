@@ -103,6 +103,7 @@ function main() {
       'tui/opentui/metadataWorker.ts',
       'tui/opentui/analyticsWorker.ts',
       'tui/opentui/editorProjectSearchWorker.ts',
+      'tui/opentui/composerMentionWorker.ts',
       '--compile',
       '--outfile',
       tuiOutfile,

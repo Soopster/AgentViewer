@@ -165,6 +165,7 @@ import {
 } from '../../lib/claudeMapper'
 import { normalizeCodexStreamThreadedMessage } from '../../lib/codexMapper'
 import { readTuiSessionMetadataAsync } from './metadataWorkerClient'
+import { filterComposerMentionFilesAsync } from './composerMentionWorkerClient'
 import {
   readTuiSessionDetailAsync,
   readTuiSessionsAsync,
@@ -9558,28 +9559,11 @@ export default function OpenTuiApp() {
         try {
           const all = await listProjectFiles(cwd, runGitCommand)
           if (cancelled) return
-          const query = composerMention.query.toLowerCase()
-          const fileMatches: Array<{ path: string; basename: string }> = []
-          for (const entry of all) {
-            if (fileMatches.length >= 12) break
-            if (!query) { fileMatches.push(entry); continue }
-            const lower = entry.path.toLowerCase()
-            const base = entry.basename.toLowerCase()
-            if (base === query || base.startsWith(query) || base.includes(query) || lower.includes(query)) {
-              fileMatches.push(entry)
-            }
-          }
-          if (fileMatches.length < 12 && query) {
-            for (const entry of all) {
-              if (fileMatches.length >= 12) break
-              if (fileMatches.includes(entry)) continue
-              let qi = 0
-              for (let i = 0; i < entry.path.length && qi < query.length; i += 1) {
-                if (entry.path[i] === query[qi]) qi += 1
-              }
-              if (qi === query.length) fileMatches.push(entry)
-            }
-          }
+          // The substring + fuzzy-subsequence scan over `all` (up to 5 000
+          // entries) is CPU-bound — run it off the render/input thread so a
+          // large repo doesn't stall the composer while the user is typing.
+          const fileMatches = await filterComposerMentionFilesAsync(all, composerMention.query, 12)
+          if (cancelled) return
           const matches: TuiMentionResult[] = [
             ...agentMatches,
             ...fileMatches.map((entry) => ({ kind: 'file' as const, ...entry })),
