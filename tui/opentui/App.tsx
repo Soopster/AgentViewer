@@ -9320,8 +9320,14 @@ export default function OpenTuiApp() {
     if (composerSendState === 'sending' && liveOutputTokens > 0) {
       parts.push(`↓ ${formatLiveOutputTokens(liveOutputTokens)} tokens`)
     }
+    // Native CLIs keep the interrupt affordance inside the live status line,
+    // not only in the footer — the user's eye is on the spinner, not the hint
+    // bar. Mirrors the two-press arm/confirm the ⌃C handler implements.
+    if (composerSendState === 'sending') {
+      parts.push(interruptPressActive ? '⌃C again to interrupt' : '⌃C to interrupt')
+    }
     return parts.length > 0 ? parts.join(' · ') : null
-  }, [composerKnobsChip, composerSendState, liveOutputTokens])
+  }, [composerKnobsChip, composerSendState, interruptPressActive, liveOutputTokens])
 
   useEffect(() => {
     if (!modelPickerOpen) return
@@ -9890,19 +9896,16 @@ export default function OpenTuiApp() {
     composerError
     || awaitingPersistedTurn
     || activeQueuedComposerSends.length > 0
-    || (composerSendState === 'sending' && (composerLiveText || activeRunningToolCount > 0))
+    || (composerSendState === 'sending' && Boolean(composerLiveText))
     // Steered notices render while a turn runs, owned or reattached — count
     // them even before the turn streams any output.
     || (steeredSendNotice && (composerSendState === 'sending' || reattachedRunning))
   )
   const composerStatusBlockHeight = (() => {
     let rows = 0
-    if (
-      composerSendState === 'sending'
-      && !composerLiveText
-      && !composerLiveReasoning.trim()
-      && activeRunningToolCount === 0
-    ) rows += 2
+    // Keep in sync with the pinned turn-status row below (rendered for the
+    // entire turn, not just the pre-output window).
+    if (composerSendState === 'sending') rows += 2
     if (hasSubagentTail) rows += 2
     if (liveToolActivities.length > 0 && activeRunningToolCount > 0) rows += 2
     if (livePromptSuggestion && composerSendState !== 'sending') rows += 2
@@ -15181,11 +15184,12 @@ export default function OpenTuiApp() {
         : steeredSendNotice && turnRunningForComposer
           ? `Steered · delivered to the running turn: "${steeredSendNotice.slice(0, 60)}${steeredSendNotice.length > 60 ? '…' : ''}"`
           : composerSendState === 'sending'
-          ? activeRunningToolCount > 0
-            ? `Using ${activeRunningToolCount} tool${activeRunningToolCount === 1 ? '' : 's'}.`
-            : composerLiveText
-              ? 'Streaming assistant response.'
-              : null
+          // "Using N tools" is not repeated here: the pinned turn-status row
+          // and the tool-activity row above already carry it, and a third copy
+          // just steals transcript rows.
+          ? composerLiveText
+            ? 'Streaming assistant response.'
+            : null
           // Plain reattached state renders as its own banner row (counted in
           // composerStatusBlockHeight), not through this message slot.
           : null
@@ -19998,7 +20002,10 @@ export default function OpenTuiApp() {
         />
       ) : null}
 
-      {composerSendState === 'sending' && !composerLiveText && !composerLiveReasoning.trim() && activeRunningToolCount === 0 ? (
+      {/* Pinned for the whole turn — elapsed + token counter + interrupt hint
+          must not vanish the moment the first delta or tool arrives, which is
+          how the native Claude CLI status line behaves. */}
+      {composerSendState === 'sending' ? (
         <box
           backgroundColor={isChatLikeView ? theme.surface : theme.surface2}
           paddingLeft={isChatLikeView ? densityState.bodyIndent : 1}

@@ -183,7 +183,10 @@ const LMSTUDIO: ProviderComposerConfig = {
   placeholderStreaming: 'Type a follow-up — Enter steers this turn or queues it safely',
   placeholderNoSession: 'Pick an LM Studio session to send a message',
   footerHintIdle: '⏎ send · ⇧⏎ newline · ↑↓ history',
-  footerHintSending: 'Esc view transcript · ⌃C cancel',
+  // LM Studio has no steer primitive, so Enter falls through to the queue —
+  // but the affordance is the same one every other provider advertises, and
+  // placeholderStreaming above already promises it.
+  footerHintSending: 'Esc view transcript · ⌃C cancel · ⏎ steer/queue follow-up',
   sendVerb: 'Send',
   examples: [
     'Try "summarise this file"',

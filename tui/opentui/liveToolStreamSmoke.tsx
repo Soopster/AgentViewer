@@ -156,6 +156,15 @@ try {
   if (!/running/i.test(runningFrame)) {
     throw new Error(`Live card did not show the tool as still running:\n${runningFrame}`)
   }
+  // The turn status line stays pinned once output starts — native CLIs keep
+  // the elapsed clock, token counter and interrupt affordance visible for the
+  // whole turn instead of hiding them behind the first delta.
+  if (!/⌃C to interrupt/.test(runningFrame)) {
+    throw new Error(`Turn status line lost its interrupt hint while streaming:\n${runningFrame}`)
+  }
+  if (!/\d+s\s+·/.test(runningFrame)) {
+    throw new Error(`Turn status line lost its elapsed clock while streaming:\n${runningFrame}`)
+  }
   if (runningFrame.indexOf(INTRO) > runningFrame.indexOf('tool Bash')) {
     throw new Error(`Claude text did not stream into the conversation before its tool call:\n${runningFrame}`)
   }
@@ -189,6 +198,9 @@ try {
   }
   if (/running/i.test(resultFrame.split('\n').filter((l) => l.includes('OK')).join('\n'))) {
     throw new Error(`Live card still reads as running after its result:\n${resultFrame}`)
+  }
+  if (!/⌃C to interrupt/.test(resultFrame)) {
+    throw new Error(`Turn status line vanished after the tool result landed:\n${resultFrame}`)
   }
   if (resultFrame.indexOf('tool Bash') > resultFrame.indexOf(OUTRO)) {
     throw new Error(`Claude follow-up text did not stream after its tool call:\n${resultFrame}`)

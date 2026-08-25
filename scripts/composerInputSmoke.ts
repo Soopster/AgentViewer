@@ -33,8 +33,14 @@ import type { AgentProvider, SendAttachment } from '../lib/types'
 const providers: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'lmstudio']
 const queueItemIds = new Set(Array.from({ length: 100 }, () => createComposerQueueItemId('codex:shared')))
 assert.equal(queueItemIds.size, 100, 'queue item ids must remain unique across independent producers')
-for (const provider of providers) {
+// LM Studio streams plain chat completions with no tool-permission round-trip,
+// so it is the one provider here that legitimately cannot respond to one.
+const interactivePermissionProviders = providers.filter((provider) => provider !== 'lmstudio')
+for (const provider of interactivePermissionProviders) {
   assert.equal(getProviderCapabilities(provider).respondToPermission, true, `${provider} interactive response capability`)
+}
+assert.equal(getProviderCapabilities('lmstudio').respondToPermission, false, 'lmstudio has no permission round-trip')
+for (const provider of providers) {
   const composer = getProviderComposer(provider)
   assert.match(composer.placeholderStreaming, /Enter steers this turn or queues it safely/)
   assert.match(composer.footerHintSending, /⏎ steer\/queue follow-up/)
@@ -324,14 +330,23 @@ const expectedNative: Record<AgentProvider, SendAttachment['type'][]> = {
 for (const provider of providers) {
   const plan = planComposerAttachments(provider, attachmentMatrix)
   assert.deepEqual(plan.native.map((attachment) => attachment.type), expectedNative[provider])
-  assert.equal(plan.unsupported.length, 0, `${provider} silently lost a representative attachment`)
+  // A raw blob carries no path and no text, so a text-only backend has nothing
+  // truthful to degrade it to — it must surface as unsupported (the composer
+  // then refuses the send) rather than silently shipping a "[blob: x.png]"
+  // label the model cannot see. Every agentic provider encodes blobs natively.
+  const expectedUnsupported = provider === 'lmstudio' ? ['blob'] : []
+  assert.deepEqual(
+    plan.unsupported.map((attachment) => attachment.type),
+    expectedUnsupported,
+    `${provider} classified representative attachments unexpectedly`,
+  )
   assert.equal(
-    plan.native.length + plan.portable.length,
+    plan.native.length + plan.portable.length + plan.unsupported.length,
     attachmentMatrix.length,
     `${provider} did not classify every representative attachment`,
   )
   assert.deepEqual(
-    new Set([...plan.native, ...plan.portable].map((attachment) => attachment.id)),
+    new Set([...plan.native, ...plan.portable, ...plan.unsupported].map((attachment) => attachment.id)),
     new Set(attachmentMatrix.map((attachment) => attachment.id)),
     `${provider} classified an attachment more than once or not at all`,
   )
@@ -348,7 +363,9 @@ assert.deepEqual(
 )
 assert.deepEqual(
   providers.filter((provider) => planComposerAttachments(provider, [remoteImage]).portable.length > 0),
-  ['claude', 'copilot', 'pi'],
+  // A remote image degrades honestly everywhere it isn't native: the URL is
+  // still meaningful text, unlike a raw blob.
+  ['claude', 'copilot', 'pi', 'lmstudio'],
 )
 
 const native = buildCodexComposerInput('Inspect these.', [
@@ -407,7 +424,7 @@ assert.deepEqual(
 )
 assert.deepEqual(
   providers.filter((provider) => planComposerAttachments(provider, [opaqueBlob]).unsupported.length > 0),
-  ['claude', 'codex', 'opencode', 'pi'],
+  ['claude', 'codex', 'opencode', 'pi', 'lmstudio'],
 )
 
 // A retry/new turn can replace the running registry before the old stream's
