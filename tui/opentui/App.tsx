@@ -13509,16 +13509,6 @@ export default function OpenTuiApp() {
           })
         }
 
-        // Accumulate output tokens from message_delta events (top-level only, not subagents).
-        if (parsedRecord.type === 'stream_event' && !parsedRecord.parent_tool_use_id) {
-          const sseEvent = parsedRecord.event as Record<string, unknown> | undefined
-          if (sseEvent?.type === 'message_delta') {
-            const usage = sseEvent.usage as Record<string, unknown> | undefined
-            const toks = typeof usage?.output_tokens === 'number' ? usage.output_tokens : 0
-            if (toks > 0) setLiveOutputTokens((prev) => prev + toks)
-          }
-        }
-
         const claudeToolUse = extractClaudeStreamToolUse(parsed)
         if (claudeToolUse) {
           noteFirstOutput()

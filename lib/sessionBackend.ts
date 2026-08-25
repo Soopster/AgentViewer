@@ -4419,9 +4419,56 @@ function claudeStreamDeltaKey(msg: SDKMessage): { index: number; kind: 'text_del
   return null
 }
 
+/**
+ * Live output-token accounting for a Claude turn.
+ *
+ * Anthropic reports `usage.output_tokens` on `message_delta` as the running
+ * total FOR THAT MESSAGE, and one turn contains several assistant messages
+ * once tools run. So the total is "sum of the latest count per message id",
+ * not "sum of every delta" — the latter re-adds the whole message on each
+ * delta and inflates the counter badly. This mirrors the per-message
+ * accounting the OpenCode/Copilot/Pi paths already do, and lets Claude report
+ * live usage over the same `turn-usage` frame every other provider uses.
+ *
+ * Exported for claudeTurnUsageSmoke.ts.
+ */
+export function createClaudeTurnUsageTracker(enqueue: (chunk: string) => void) {
+  const outputByMessageId = new Map<string, number>()
+  // Fallback bucket for the theoretical stream that reports a message_delta
+  // without a preceding message_start: overwriting undercounts at worst,
+  // whereas a fresh key per delta would resurrect the inflation bug.
+  const UNKEYED = '\u0000unkeyed'
+  let currentMessageId = UNKEYED
+  let lastEmitted = -1
+
+  return (msg: SDKMessage) => {
+    const record = msg as unknown as Record<string, unknown>
+    // Subagent streams carry their own usage; the turn counter tracks the
+    // main loop only, matching what the composer status line claims to show.
+    if (record.type !== 'stream_event' || record.parent_tool_use_id) return
+    const event = record.event as Record<string, unknown> | undefined
+    if (!event) return
+    if (event.type === 'message_start') {
+      const message = event.message as Record<string, unknown> | undefined
+      currentMessageId = typeof message?.id === 'string' && message.id ? message.id : UNKEYED
+      return
+    }
+    if (event.type !== 'message_delta') return
+    const outputTokens = (event.usage as Record<string, unknown> | undefined)?.output_tokens
+    if (typeof outputTokens !== 'number' || !Number.isFinite(outputTokens)) return
+    outputByMessageId.set(currentMessageId, Math.max(0, outputTokens))
+    let total = 0
+    for (const value of outputByMessageId.values()) total += value
+    if (total === lastEmitted) return
+    lastEmitted = total
+    enqueue(turnUsageToEventData(total))
+  }
+}
+
 function createClaudeDeltaCoalescer(enqueue: (chunk: string) => void) {
   let pending: SDKMessage | null = null
   let pendingKey: { index: number; kind: 'text_delta' | 'thinking_delta'; text: string } | null = null
+  const trackTurnUsage = createClaudeTurnUsageTracker(enqueue)
 
   const flush = () => {
     if (!pending) return
@@ -4436,6 +4483,9 @@ function createClaudeDeltaCoalescer(enqueue: (chunk: string) => void) {
     if (!key) {
       flush()
       enqueue(`data: ${JSON.stringify(msg)}\n\n`)
+      // After the frame itself, so a usage frame never lands ahead of the
+      // message it accounts for.
+      trackTurnUsage(msg)
       return
     }
     if (!pending || !pendingKey || pendingKey.index !== key.index || pendingKey.kind !== key.kind) {
