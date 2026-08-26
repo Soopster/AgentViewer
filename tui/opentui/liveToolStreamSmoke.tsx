@@ -95,7 +95,7 @@ if (sidecarResults.length !== 1
   throw new Error('Claude structured tool-result sidecar was not normalized')
 }
 
-const { default: OpenTuiApp } = await import('./App')
+const { default: OpenTuiApp, IDLE_TICKER_PHRASES } = await import('./App')
 
 const setup = await testRender(<OpenTuiApp />, { width: 120, height: 44, kittyKeyboard: true })
 const settle = async (ms: number) => {
@@ -166,6 +166,15 @@ try {
   if (!/running/i.test(runningFrame)) {
     throw new Error(`Live card did not show the tool as still running:\n${runningFrame}`)
   }
+  // Exactly one spinner at a time. The idle ticker means "nothing is
+  // happening", so it must never sit above a live turn's status row — that
+  // put "waiting patiently" directly on top of "Shaping the next move… 2s".
+  const idlePhrasesOn = (f: string) => IDLE_TICKER_PHRASES.filter((phrase) => f.includes(phrase))
+  const strayIdle = idlePhrasesOn(runningFrame)
+  if (strayIdle.length > 0) {
+    throw new Error(`Idle ticker rendered during a running turn (${strayIdle.join(', ')}):\n${runningFrame}`)
+  }
+
   // The turn status line stays pinned once output starts — native CLIs keep
   // the elapsed clock, token counter and interrupt affordance visible for the
   // whole turn instead of hiding them behind the first delta.
@@ -229,6 +238,10 @@ try {
   }
   if (!/⌃C cancel/.test(resultFrame)) {
     throw new Error(`Turn status line vanished after the tool result landed:\n${resultFrame}`)
+  }
+  const strayIdleAfter = idlePhrasesOn(resultFrame)
+  if (strayIdleAfter.length > 0) {
+    throw new Error(`Idle ticker returned mid-turn (${strayIdleAfter.join(', ')}):\n${resultFrame}`)
   }
   if (resultFrame.indexOf('tool Bash') > resultFrame.indexOf(OUTRO)) {
     throw new Error(`Claude follow-up text did not stream after its tool call:\n${resultFrame}`)

@@ -242,7 +242,10 @@ const COMPOSER_WAITING_SPINNER_FRAMES = [
   ['▖', '▘', '▝', '▗'],
   ['◜', '◝', '◞', '◟'],
 ] as const
-const IDLE_TICKER_PHRASES = [
+// Exported so liveToolStreamSmoke can assert none of them are on screen
+// while a turn runs — the idle ticker and the pinned turn status are mutually
+// exclusive, and a stale "waiting patiently" above a live turn is a lie.
+export const IDLE_TICKER_PHRASES = [
   'waiting for new messages',
   'listening for activity',
   'standing by',
@@ -19179,8 +19182,20 @@ export default function OpenTuiApp() {
             ) : null}
           </box>
 
+          {/* The idle ticker means "nothing is happening — still watching". A
+              running turn has its own pinned status row below the composer
+              (elapsed, tokens, interrupt hint), so showing both put a spinner
+              reading "waiting patiently" directly above one reading "Shaping
+              the next move… 2s". Exactly one spinner is on screen at a time,
+              and which one tells you whether a turn is live.
+
+              Chat view drops it entirely: the clause it used to render under
+              was `turnRunningForComposer`, i.e. it existed only as an in-turn
+              activity hint inside the reader box, which the pinned status row
+              now does properly. Chat has no idle ticker rather than gaining a
+              new one it never had. */}
           {followTail && visibleTranscriptCards.length > 0
-            && (transcriptView !== 'chat' || turnRunningForComposer) ? (
+            && !turnRunningForComposer && transcriptView !== 'chat' ? (
             <box paddingX={2} paddingBottom={1}>
               <IdleTicker seed={selectedSessionKey ?? ''} theme={theme} />
             </box>
