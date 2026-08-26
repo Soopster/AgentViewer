@@ -15230,7 +15230,13 @@ export default function OpenTuiApp() {
     return segs
   }, [attentionNeedsInputCount, composerActive, composerSendState, diffLayout, transcriptView, density, transcriptWidth, showToolCalls, velocityScrollEnabled, visibleSplitPaneCount, splitChordPending, splitFocusIndex, effectiveFocus, theme])
 
-  const turnRunningForComposer = composerSendState === 'sending' || reattachedRunning
+  // awaitingPersistedTurn belongs here too: a Claude stream stall (see the
+  // stallGuard comment above the read loop) drops composerSendState back to
+  // 'idle' and never sets reattachedRunning, but the turn is still genuinely
+  // running server-side while the transcript reconciles. Without this, the
+  // idle ticker ("waiting patiently") rendered right through a live turn —
+  // the exact bug 907bb64 fixed for the sending/reattached cases.
+  const turnRunningForComposer = composerSendState === 'sending' || reattachedRunning || awaitingPersistedTurn
   const composerStatusMessage = composerError
     ? composerError
     : activeQueuedComposerSends.length > 0 && !composerQueueDurable
@@ -20207,6 +20213,14 @@ export default function OpenTuiApp() {
               theme={theme}
             />
           )
+        ) : awaitingPersistedTurn && !composerError ? (
+          // Reconciling a still-running turn (stall recovery or the brief
+          // window after completion before persisted rows land) is not idle —
+          // an animated spinner here, not static dim text, is what tells the
+          // idle-ticker exclusion above the truth on screen too.
+          <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
+            <Spinner label={fitText(composerStatusMessage, Math.max(width - 6, 16))} fg={theme.cyan} labelFg={theme.dim} />
+          </box>
         ) : (
           <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
             <text fg={composerError ? theme.red : theme.dim} wrapMode="none">
