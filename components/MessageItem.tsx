@@ -4883,6 +4883,13 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
     ? 'var(--violet)'
     : subtype === 'model_refusal_fallback'
     ? 'var(--yellow)'
+    // A refusal with no fallback ends the turn — red, not the fallback's yellow.
+    : subtype === 'model_refusal_no_fallback'
+    ? 'var(--red)'
+    : subtype === 'worker_shutting_down'
+    ? 'var(--yellow)'
+    : subtype === 'conversation_reset'
+    ? 'var(--violet)'
     : subtype === 'informational'
     ? (payload.level === 'suggestion' ? 'var(--green)' : payload.level === 'notice' ? 'var(--text-3)' : 'var(--cyan)')
     : subtype === 'local_command_output'
@@ -4896,6 +4903,12 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
     if (apiErrorStatus != null) nextBadges.push(`HTTP ${apiErrorStatus}`)
     if (typeof payload.status === 'string') nextBadges.push(payload.status)
     if (typeof payload.task_id === 'string') nextBadges.push(payload.task_id.slice(0, 8))
+    if (subtype === 'model_refusal_no_fallback' && typeof payload.api_refusal_category === 'string') {
+      nextBadges.push(payload.api_refusal_category)
+    }
+    if (subtype === 'conversation_reset' && typeof payload.new_conversation_id === 'string') {
+      nextBadges.push(payload.new_conversation_id.slice(0, 8))
+    }
     if (typeof payload.tool_use_id === 'string') nextBadges.push(payload.tool_use_id.slice(0, 8))
     if (typeof payload.tool_name === 'string') nextBadges.push(payload.tool_name)
     if (typeof payload.hook_name === 'string') nextBadges.push(payload.hook_name)

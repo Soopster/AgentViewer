@@ -12,14 +12,50 @@
 // isTransientSendError can classify it without parsing prose.
 export class TransientAwareSendError extends Error {
   apiErrorStatus?: number
-  constructor(message: string, apiErrorStatus?: number | null) {
+  /**
+   * Set when the server classified this error as a genuine plan/usage limit or
+   * an org-policy block (see lib/claudeUsageLimits). Both are permanent for the
+   * moment — retrying only burns round-trips — but they read like a rate limit
+   * to a substring matcher, so the classification has to ride along rather than
+   * be re-derived from the prose here.
+   */
+  usageLimitKind?: UsageLimitKind
+  constructor(message: string, apiErrorStatus?: number | null, usageLimitKind?: UsageLimitKind | null) {
     super(message)
     this.name = 'TransientAwareSendError'
     if (typeof apiErrorStatus === 'number') this.apiErrorStatus = apiErrorStatus
+    if (usageLimitKind) this.usageLimitKind = usageLimitKind
   }
 }
 
-export function isTransientSendError(message: string | null | undefined, apiErrorStatus?: number | null): boolean {
+/**
+ * Mirror of ClaudeUsageLimitKind from lib/claudeUsageLimits. Duplicated as a
+ * plain union rather than imported because this module is bundled into the web
+ * and OpenTUI composers, and claudeUsageLimits pulls in the Agent SDK (a
+ * serverExternalPackage that must never reach a client bundle).
+ */
+export type UsageLimitKind = 'limit-reached' | 'org-policy' | 'transition' | 'warning'
+
+/**
+ * True when the server told us the send failed on an exhausted usage limit or
+ * an org policy. Callers must consult this before isTransientSendError():
+ * "You've hit your usage limit" contains none of the transient tokens today,
+ * but the retry decision should rest on the SDK's own classification rather
+ * than on that continuing to be true.
+ */
+export function isPermanentUsageError(kind: UsageLimitKind | null | undefined): boolean {
+  return kind === 'limit-reached' || kind === 'org-policy'
+}
+
+export function isTransientSendError(
+  message: string | null | undefined,
+  apiErrorStatus?: number | null,
+  usageLimitKind?: UsageLimitKind | null,
+): boolean {
+  // A genuine usage limit / org-policy block is permanent for now. It has to be
+  // rejected before the heuristics below, which would otherwise be free to
+  // classify a future "…rate limit…"-worded limit message as retryable.
+  if (isPermanentUsageError(usageLimitKind)) return false
   // Structural signal first: Claude's SDK now reports the HTTP status of a
   // recovered-but-errored API call directly (api_error_status on result
   // messages) instead of only embedding it in prose. Prefer it over the

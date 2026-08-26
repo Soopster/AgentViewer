@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { classifyClaudeUsageMessage, type ClaudeUsageLimitKind } from './claudeUsageLimits'
 
 async function mapConcurrent<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const results: R[] = new Array(items.length)
@@ -33,6 +34,7 @@ import {
   type PermissionResult,
   type PermissionUpdate,
   type Query,
+  type SDKControlGetUsageResponse,
   type SDKMessage,
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
@@ -685,6 +687,70 @@ async function readClaudeSessionMessages(sessionId: string): Promise<SessionMess
 
   const messages = sortMessagesChronologically([...deduped.values()])
   return writeMappedMessagesCache(`claude:${sessionId}`, signature, messages)
+}
+
+/**
+ * Plan rate-limit utilization — the data behind Claude Code's `/usage` command
+ * (5-hour and 7-day windows, per-model buckets, extra-usage credits). There is
+ * no other source for it: `rate_limit_event` only arrives once the API decides
+ * to warn, so without this a user can't see how close they are until they are
+ * already there.
+ *
+ * The SDK method is explicitly marked unstable and expected to be renamed when
+ * it stabilizes, so it is called through a defensive lookup: a rename degrades
+ * this section to "Unavailable" instead of throwing and taking the whole
+ * diagnostics panel down with it.
+ */
+type ClaudeUsageCapableQuery = {
+  usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: () => Promise<SDKControlGetUsageResponse>
+}
+
+async function claudePlanUsageItems(q: unknown): Promise<string[]> {
+  const call = (q as ClaudeUsageCapableQuery)?.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET
+  if (typeof call !== 'function') return ['Unavailable']
+  let usage: SDKControlGetUsageResponse
+  try {
+    usage = await call.call(q)
+  } catch {
+    return ['Unavailable']
+  }
+  const items: string[] = []
+  if (usage.subscription_type) items.push(`plan · ${usage.subscription_type}`)
+  if (!usage.rate_limits_available || !usage.rate_limits) {
+    // API key / Bedrock / Vertex sessions have no plan windows at all — say so
+    // rather than showing an empty section that reads like a failed read.
+    items.push('plan limits do not apply to this session')
+    return items
+  }
+  const limits = usage.rate_limits
+  const formatReset = (iso: string | null) => {
+    if (!iso) return ''
+    const at = new Date(iso)
+    if (Number.isNaN(at.getTime())) return ''
+    return ` · resets ${at.toLocaleString()}`
+  }
+  const window = (label: string, value: { utilization: number | null; resets_at: string | null } | null | undefined) => {
+    if (!value || value.utilization == null) return
+    items.push(`${label} · ${Math.round(value.utilization)}%${formatReset(value.resets_at)}`)
+  }
+  window('5-hour', limits.five_hour)
+  window('7-day', limits.seven_day)
+  window('7-day opus', limits.seven_day_opus)
+  window('7-day sonnet', limits.seven_day_sonnet)
+  window('7-day oauth apps', limits.seven_day_oauth_apps)
+  for (const scoped of limits.model_scoped ?? []) {
+    window(`7-day ${scoped.display_name}`, scoped)
+  }
+  // `used_credits` / `monthly_limit` are minor units whose exponent is not in
+  // the typed shape, so only the server-computed percentage is safe to render —
+  // printing the raw integers would show "2232/15000" for AUD 22.32 of 150.
+  const extra = limits.extra_usage
+  if (extra) {
+    const pct = extra.utilization != null ? ` · ${Math.round(extra.utilization)}%` : ''
+    const currency = extra.currency ? ` ${extra.currency}` : ''
+    items.push(extra.is_enabled ? `extra usage · enabled${pct}${currency}` : `extra usage · disabled${pct}${currency}`)
+  }
+  return items.length > 0 ? items : ['No plan limit windows reported']
 }
 
 function claudeLatencyDiagnosticItems(rawMessages: unknown[]): string[] {
@@ -4212,7 +4278,7 @@ function parseClaudePermissionMode(body: Record<string, unknown>): ClaudePermiss
 // human-readable error string plus the raw HTTP status when the SDK reported
 // one, so callers can classify retryability structurally instead of parsing
 // the message text; null when the result is a clean success.
-export function claudeResultErrorMessage(msg: Record<string, unknown>): { message: string; apiErrorStatus?: number } | null {
+export function claudeResultErrorMessage(msg: Record<string, unknown>): { message: string; apiErrorStatus?: number; usageLimit?: ClaudeUsageLimitKind } | null {
   if (msg.type !== 'result') return null
   const subtype = typeof msg.subtype === 'string' ? msg.subtype : ''
   if (subtype === 'error_max_turns') return { message: 'Claude reached the maximum number of turns before finishing.' }
@@ -4226,7 +4292,11 @@ export function claudeResultErrorMessage(msg: Record<string, unknown>): { messag
     const apiErrorStatus = typeof msg.api_error_status === 'number' ? msg.api_error_status : undefined
     const status = apiErrorStatus != null ? ` (HTTP ${apiErrorStatus})` : ''
     const detail = typeof msg.result === 'string' && msg.result.trim() ? `: ${msg.result.trim()}` : ''
-    return { message: `Claude API error${status}${detail}`, apiErrorStatus }
+    // Classify before wrapping: the SDK's prefixes describe the raw generated
+    // text, and "Claude API error (HTTP 429): You've hit your…" is a usage
+    // limit, not an overloaded API — the retry paths need to tell them apart.
+    const usageLimit = classifyClaudeUsageMessage(typeof msg.result === 'string' ? msg.result : null) ?? undefined
+    return { message: `Claude API error${status}${detail}`, apiErrorStatus, usageLimit }
   }
   return null
 }
@@ -4856,7 +4926,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           // and for future turns.
           if (msg.type === 'result') {
             if (resultError) {
-              safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: resultError.message, apiErrorStatus: resultError.apiErrorStatus })}\n\n`)
+              safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: resultError.message, apiErrorStatus: resultError.apiErrorStatus, usageLimit: resultError.usageLimit })}\n\n`)
             }
             break
           }
@@ -5193,7 +5263,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
               }
               poolDeltaCoalescer.emit(msg)
               if (resultError) {
-                controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: resultError.message, apiErrorStatus: resultError.apiErrorStatus })}\n\n`))
+                controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: resultError.message, apiErrorStatus: resultError.apiErrorStatus, usageLimit: resultError.usageLimit })}\n\n`))
               }
             } catch {
               /* downstream closed; ignore — the turn keeps running in the pool */
@@ -8634,7 +8704,7 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
   const q = createSessionControlQuery(sessionId)
   try {
     const init = await q.initializationResult()
-    const [commands, agents, mcpServers, contextUsage, subagents, rawMessages, resolvedSettings, hookEvents] = await Promise.all([
+    const [commands, agents, mcpServers, contextUsage, subagents, rawMessages, resolvedSettings, hookEvents, planUsageItems] = await Promise.all([
       q.supportedCommands(),
       q.supportedAgents(),
       q.mcpServerStatus(),
@@ -8648,6 +8718,7 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
         .then((info) => resolveSettings({ cwd: info?.cwd }))
         .catch(() => null),
       listClaudeHookEvents(sessionId, { limit: 20 }).catch(() => []),
+      claudePlanUsageItems(q),
     ])
     const accountItems: string[] = []
     if (init.account?.email) accountItems.push(init.account.email)
@@ -8719,6 +8790,11 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
           id: 'account',
           title: 'ACCOUNT',
           items: accountItems.length > 0 ? accountItems : ['Unknown'],
+        },
+        {
+          id: 'plan-usage',
+          title: 'PLAN USAGE',
+          items: planUsageItems,
         },
         {
           id: 'latency',

@@ -1869,6 +1869,20 @@ function formatBlock(block: ThreadedBlock, activeForms?: TaskActiveForms, taskRe
         const scopeNote = block.payload.scope === 'local' ? ' (this response only)' : ''
         return [line(`refusal: ${verb} ${from} → ${to}${scopeNote}${category ? ` (${category})` : ''}`, 'result_error')]
       }
+      // Refusal with nothing to fall back to: the turn is over, not degraded.
+      if (block.subtype === 'model_refusal_no_fallback') {
+        const model = typeof block.payload.original_model === 'string' ? block.payload.original_model : 'model'
+        const category = typeof block.payload.api_refusal_category === 'string' ? block.payload.api_refusal_category : ''
+        return [line(`refusal: ${model} refused, no fallback${category ? ` (${category})` : ''}`, 'result_error')]
+      }
+      if (block.subtype === 'worker_shutting_down') {
+        const reason = typeof block.payload.reason === 'string' && block.payload.reason ? block.payload.reason : 'unknown'
+        return [line(`worker shutting down (${reason.replace(/_/g, ' ')})`, 'result_error')]
+      }
+      if (block.subtype === 'conversation_reset') {
+        const next = typeof block.payload.new_conversation_id === 'string' ? block.payload.new_conversation_id : ''
+        return [line(`conversation reset${next ? ` → ${next.slice(0, 8)}` : ''}`, 'system')]
+      }
       if (block.subtype === 'informational') {
         const text = typeof block.payload.content === 'string' && block.payload.content.trim()
           ? block.payload.content.replace(/\s+/g, ' ').trim()
@@ -2708,6 +2722,27 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
         return [
           line(`● ${text}${status}`, 'thinking'),
           ...claudeRuntimeDetailCardLines(block.payload),
+        ]
+      }
+      if (block.subtype === 'model_refusal_no_fallback') {
+        const model = typeof block.payload.original_model === 'string' ? block.payload.original_model : 'model'
+        const category = typeof block.payload.api_refusal_category === 'string' ? block.payload.api_refusal_category : ''
+        const explanation = typeof block.payload.api_refusal_explanation === 'string' ? block.payload.api_refusal_explanation.trim() : ''
+        return [
+          line(`refusal: ${model} refused, no fallback configured`, 'result_error'),
+          ...(category ? [line(`  category: ${category}`, 'dim')] : []),
+          ...(explanation ? [line(`  ${truncateLine(explanation)}`, 'dim')] : []),
+        ]
+      }
+      if (block.subtype === 'worker_shutting_down') {
+        const reason = typeof block.payload.reason === 'string' && block.payload.reason ? block.payload.reason : 'unknown'
+        return [line(`worker shutting down`, 'result_error'), line(`  reason: ${reason}`, 'dim')]
+      }
+      if (block.subtype === 'conversation_reset') {
+        const next = typeof block.payload.new_conversation_id === 'string' ? block.payload.new_conversation_id : ''
+        return [
+          line('conversation reset', 'system'),
+          ...(next ? [line(`  continuing as ${next}`, 'dim')] : []),
         ]
       }
       if (block.subtype === 'rate_limit_event') {

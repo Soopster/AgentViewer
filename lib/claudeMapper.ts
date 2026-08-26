@@ -111,11 +111,35 @@ function normalizeApiMessage(
 function normalizeSystemMessage(value: unknown, fallbackSubtype: string): SystemMessagePayload {
   const record = asObject(value)
   const subtype = typeof record.subtype === 'string' ? record.subtype : fallbackSubtype
-  return {
+  const payload: SystemMessagePayload = {
     type: 'system',
     subtype,
     ...record,
   }
+
+  // A refusal with no fallback model configured ends the turn outright — the
+  // sibling of model_refusal_fallback, which agent-viewer already renders. Left
+  // unenriched it arrives as a bare untyped system row and the turn reads as
+  // having gone quiet for no reason.
+  if (subtype === 'model_refusal_no_fallback' && !payload.content) {
+    const model = typeof record.original_model === 'string' ? record.original_model : 'the model'
+    const category = typeof record.api_refusal_category === 'string' ? record.api_refusal_category : ''
+    const explanation = typeof record.api_refusal_explanation === 'string' ? record.api_refusal_explanation.trim() : ''
+    payload.content = explanation
+      || `${model} refused this request${category ? ` (${category})` : ''} and no fallback model is configured.`
+    payload.level = 'warning'
+  }
+
+  // The CLI is tearing its worker down (host exit, remote control disabled).
+  // The pool acts on this too (lib/claudePool.ts); surfacing it in the
+  // transcript explains why a live session suddenly stops responding.
+  if (subtype === 'worker_shutting_down' && !payload.content) {
+    const reason = typeof record.reason === 'string' && record.reason ? record.reason : 'unknown'
+    payload.content = `Claude worker shutting down (${reason.replace(/_/g, ' ')})`
+    payload.level = 'notice'
+  }
+
+  return payload
 }
 
 function normalizeClaudeEventAsSystem(record: Record<string, unknown>): SystemMessagePayload | null {
@@ -150,6 +174,23 @@ function normalizeClaudeEventAsSystem(record: Record<string, unknown>): SystemMe
       ...record,
       content: `Rate limit ${status}${utilization}`,
       level: status === 'rejected' ? 'warning' : undefined,
+    }
+  }
+
+  // The CLI started a fresh conversation id underneath this session (e.g. an
+  // auto-reset after an unrecoverable context state). Consumers that keep
+  // polling the old id silently stop seeing new messages, so surface the new
+  // id in the transcript rather than dropping the event on the floor.
+  if (record.type === 'conversation_reset') {
+    const next = typeof record.new_conversation_id === 'string' ? record.new_conversation_id : ''
+    return {
+      type: 'system',
+      subtype: 'conversation_reset',
+      ...record,
+      content: next
+        ? `Conversation was reset — continuing as ${next}`
+        : 'Conversation was reset',
+      level: 'notice',
     }
   }
 

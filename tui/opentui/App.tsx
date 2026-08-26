@@ -183,7 +183,7 @@ import { getContinueInCliCommand } from '../../lib/cliContinue'
 import { commandResultExpectsTranscript, isNativeComposerCommandText } from '../../lib/composerCommands'
 import { deliverComposerSteer } from '../../lib/composerSteering'
 import { parseClaudeCommandLifecycle, type ClaudeCommandLifecycleState } from '../../lib/claudeCommandLifecycle'
-import { isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs, TransientAwareSendError } from '../../lib/transientError'
+import { isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs, TransientAwareSendError, type UsageLimitKind } from '../../lib/transientError'
 import { listProjectFiles } from '../../lib/projectFiles'
 import { fetchGitSummary, type GitSummary } from '../../lib/gitProvider'
 import { runGitCommand } from '../../lib/gitNodeProvider'
@@ -13399,7 +13399,8 @@ export default function OpenTuiApp() {
           const record = parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : undefined
           const message = record?.error
           const apiErrorStatus = typeof record?.apiErrorStatus === 'number' ? record.apiErrorStatus : undefined
-          throw new TransientAwareSendError(typeof message === 'string' ? message : 'Unknown agent error', apiErrorStatus)
+          const usageLimit = typeof record?.usageLimit === 'string' ? record.usageLimit as UsageLimitKind : undefined
+          throw new TransientAwareSendError(typeof message === 'string' ? message : 'Unknown agent error', apiErrorStatus, usageLimit)
         }
         if (frame.event === 'context-usage' && parsed) {
           const usage = parsed as ContextUsage
@@ -13990,12 +13991,13 @@ export default function OpenTuiApp() {
       }
       const errorMessage = err instanceof Error ? err.message : 'Failed to send message'
       const apiErrorStatus = err instanceof TransientAwareSendError ? err.apiErrorStatus : undefined
+      const usageLimitKind = err instanceof TransientAwareSendError ? err.usageLimitKind : undefined
       // Visible auto-retry: ride out a transient API/network blip when the turn
       // produced no output yet (mirrors the web composer + Pi's native retry).
       // Keep the turn 'sending' with a 'retrying' status across the backoff,
       // then re-fire the same draft. The finally below preserves liveStatus
       // while a retry timer is armed (see the guarded setLiveStatus there).
-      if (isTransientSendError(errorMessage, apiErrorStatus)
+      if (isTransientSendError(errorMessage, apiErrorStatus, usageLimitKind)
         && !composerTurnProducedOutputRef.current
         && composerRetryCountRef.current < MAX_TRANSIENT_SEND_RETRIES) {
         composerRetryCountRef.current += 1

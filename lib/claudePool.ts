@@ -9,6 +9,7 @@ import {
   type SDKMessage,
   type SDKSessionStateChangedMessage,
   type SDKUserMessage,
+  type SDKWorkerShuttingDownMessage,
 } from '@anthropic-ai/claude-agent-sdk'
 import { stat } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
@@ -142,10 +143,13 @@ export function claudeIntegratedQueryExtensions(context: {
 //   - Pending (brand-new) sessions still take the cold path; the SSE adapter
 //     pre-warms a pool entry once the real session_id arrives, so turn 2 is
 //     hot.
-//   - Live setModel / setPermissionMode where the SDK supports it; everything
-//     else (effort, cwd, taskBudget, resumeSessionAt, forkSession) recycles
-//     the entry on change.
+//   - Live setModel / setPermissionMode / effortLevel (the last via
+//     applyFlagSettings) where the SDK supports it; everything else (cwd,
+//     taskBudget, thinking on/off, resumeSessionAt, forkSession) recycles the
+//     entry on change.
 //   - Idle eviction + LRU cap; process death → recycle + signal subscriber.
+//   - worker_shutting_down marks the entry doomed so it is never handed out
+//     for a new turn, instead of being adopted and stalling.
 //   - No multi-tab fan-out yet (one subscriber slot).
 
 const IDLE_TTL_MS = 10 * 60 * 1000
@@ -389,7 +393,14 @@ class ClaudePool {
 
   acquire(opts: ClaudePoolAcquireOptions): ClaudePoolEntry {
     const existing = this.entries.get(opts.sessionId)
-    if (existing && existing.alive && this.compatible(existing.state, opts)) {
+    // A doomed entry (worker_shutting_down seen, or a failed live-settings
+    // apply) must not be handed out for a NEW turn — that adopts a subprocess
+    // that is about to be torn down. But it must still be reused while its own
+    // turn is in flight: recycling here would kill that live turn out from
+    // under its SSE stream. The deferred recycle fires at turn end, so the
+    // next acquire after that spawns fresh.
+    const doomed = Boolean(existing?.pendingRecycleReason) && existing?.inTurn === false
+    if (existing && existing.alive && !doomed && this.compatible(existing.state, opts)) {
       // Fire-and-forget: the caller doesn't wait on live settings sync. If
       // this rejects unhandled, Node 15+ terminates the whole process by
       // default — one bad setModel/setPermissionMode call would take down
@@ -403,7 +414,7 @@ class ClaudePool {
       this.ensureSweep()
       return { ...this.toPublic(existing), reused: true }
     }
-    if (existing) this.recycleInternal(existing, 'options-changed')
+    if (existing) this.recycleInternal(existing, existing.pendingRecycleReason ?? 'options-changed')
     this.ensureCapacity()
     const entry = this.spawn(opts)
     this.entries.set(opts.sessionId, entry)
@@ -574,6 +585,27 @@ class ClaudePool {
           try { broadcastClaudeMessage(entry.sessionId, message.type) } catch { /* never let a subscriber stall the pump */ }
           try { noteClaudeCommandsChanged(entry.sessionId, message) } catch { /* commands-cache bookkeeping must never kill a healthy live turn */ }
         }
+        // The CLI announces its own worker teardown (host exit, remote control
+        // disabled, ...) before the iterator ends. Without this we only learn
+        // the subprocess is doomed when a later acquire adopts it and stalls
+        // until the liveness probe or the 10-minute hard timeout notices —
+        // the exact silent-dead-entry hang the warm-entry backstop was added
+        // for. Mark it here so the entry is never handed out again, and let
+        // the in-flight turn finish streaming rather than killing it mid-turn.
+        if (
+          message.type === 'system'
+          && 'subtype' in message
+          && (message as SDKWorkerShuttingDownMessage).subtype === 'worker_shutting_down'
+        ) {
+          const why = (message as SDKWorkerShuttingDownMessage).reason || 'unknown'
+          if (entry.inTurn) entry.pendingRecycleReason = `worker-shutting-down:${why}`
+          else {
+            const sub = entry.subscriber
+            if (sub) sub.push(message)
+            this.recycleInternal(entry, `worker-shutting-down:${why}`)
+            break
+          }
+        }
         const sub = entry.subscriber
         if (sub) {
           sub.push(message)
@@ -594,7 +626,14 @@ class ClaudePool {
   private compatible(state: EntryState, opts: ClaudePoolAcquireOptions): boolean {
     if (state.cwd !== opts.cwd) return false
     if (state.fallbackModel !== opts.fallbackModel) return false
-    if (state.effort !== opts.effort) return false
+    // Effort only forces a respawn when it can't be applied live. A move
+    // between two named levels is just an effortLevel change on an unchanged
+    // adaptive-thinking config, which applyLiveChanges pushes through
+    // applyFlagSettings — recycling for that cost a full cold spawn (seconds
+    // to first token) for something the CLI can change in place. 'off' and
+    // 'minimal' instead map to a `thinking` config, and thinking has no live
+    // control method, so those transitions still need a fresh subprocess.
+    if (state.effort !== opts.effort && !(effortToSdk(state.effort).effort && effortToSdk(opts.effort).effort)) return false
     if (state.taskBudgetTokens !== opts.taskBudgetTokens) return false
     if (state.maxBudgetUsd !== opts.maxBudgetUsd) return false
     if (Boolean(state.enableWorkflow) !== Boolean(opts.enableWorkflow)) return false
@@ -621,8 +660,11 @@ class ClaudePool {
     // applyFlagSettings surface routes it through `permissions.defaultMode`,
     // whose equivalence to setPermissionMode isn't guaranteed — a silent
     // mismatch there wouldn't trip the recycle-on-failure guard. effortLevel
-    // isn't in the typed Settings surface at all, so it still recycles via
-    // compatible(). Concurrency gets the latency win safely.
+    // has no dedicated control method, but it IS in the typed Settings surface
+    // and applyFlagSettings special-cases it (it alone also accepts 'max',
+    // session-scoped), so it goes through the flag layer here instead of
+    // forcing a cold respawn via compatible(). Concurrency gets the latency
+    // win safely.
     const modelChange = opts.model && opts.model !== entry.state.model
       ? entry.query.setModel(opts.model).then(
         () => { entry.state.model = opts.model; return null },
@@ -635,8 +677,18 @@ class ClaudePool {
         () => 'set-permission-mode-failed' as const,
       )
       : Promise.resolve(null)
-    const [modelResult, permissionResult] = await Promise.all([modelChange, permissionChange])
-    const failure = modelResult ?? permissionResult
+    // 'off' / 'minimal' map to a thinking config rather than an effort level,
+    // and thinking has no live control method — those still need a respawn, so
+    // they are left to bake in at construction time on the next acquire.
+    const nextEffort = effortToSdk(opts.effort).effort
+    const effortChange = opts.effort !== entry.state.effort && nextEffort
+      ? entry.query.applyFlagSettings({ effortLevel: nextEffort }).then(
+        () => { entry.state.effort = opts.effort; return null },
+        () => 'apply-effort-failed' as const,
+      )
+      : Promise.resolve(null)
+    const [modelResult, permissionResult, effortResult] = await Promise.all([modelChange, permissionChange, effortChange])
+    const failure = modelResult ?? permissionResult ?? effortResult
     if (!failure) return
     // acquire() fires this without awaiting it, so by the time a live
     // setModel/setPermissionMode rejects, the caller may already be mid-turn
@@ -731,7 +783,10 @@ class ClaudePool {
 
   peek(sessionId: string): ClaudePoolEntry | null {
     const entry = this.entries.get(sessionId)
-    if (!entry || !entry.alive) return null
+    // A doomed idle entry must not be handed to a prewarm/context probe — it
+    // would warm a subprocess that is about to be torn down. An in-turn one is
+    // still the live handle callers need (interrupt, context usage).
+    if (!entry || !entry.alive || (entry.pendingRecycleReason && !entry.inTurn)) return null
     return this.toPublic(entry)
   }
 

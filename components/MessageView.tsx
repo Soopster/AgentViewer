@@ -36,7 +36,7 @@ import { getProviderComposer, pickProviderExample } from '@/lib/providerComposer
 import { extractCopilotPushedAttachments, extractPendingPermission, extractPendingPermissions, extractPermissionReply, type PendingPermission, type PendingQuestionAnswers } from '@/lib/permissions'
 import { extractClaudeReadFileSummary } from '@/lib/claudeSdkFeatures'
 import { parseClaudeCommandLifecycle, type ClaudeCommandLifecycleState } from '@/lib/claudeCommandLifecycle'
-import { isResumeDropsTurnRefusal, isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs, TransientAwareSendError } from '@/lib/transientError'
+import { isResumeDropsTurnRefusal, isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs, TransientAwareSendError, type UsageLimitKind } from '@/lib/transientError'
 import { respondToChannelPermission, readBridgeConfigFromEnv, type ChannelPermissionRequestEvent } from '@/lib/channelBridge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
@@ -4837,7 +4837,7 @@ function MessageViewInner({
           if (frame.event === 'error') {
             try {
               const parsed = JSON.parse(frame.data)
-              throw new TransientAwareSendError(parsed.error ?? 'Unknown agent error', parsed.apiErrorStatus)
+              throw new TransientAwareSendError(parsed.error ?? 'Unknown agent error', parsed.apiErrorStatus, parsed.usageLimit as UsageLimitKind | undefined)
             } catch (e) { throw e }
           }
 
@@ -5155,7 +5155,7 @@ function MessageViewInner({
           if (frame.event !== 'error') continue
           try {
             const parsed = JSON.parse(frame.data)
-            throw new TransientAwareSendError(parsed.error ?? 'Unknown agent error', parsed.apiErrorStatus)
+            throw new TransientAwareSendError(parsed.error ?? 'Unknown agent error', parsed.apiErrorStatus, parsed.usageLimit as UsageLimitKind | undefined)
           } catch (e) { throw e }
         }
       }
@@ -5188,6 +5188,7 @@ function MessageViewInner({
       }
       const errorMessage = err instanceof Error ? err.message : 'Failed to send message'
       const apiErrorStatus = err instanceof TransientAwareSendError ? err.apiErrorStatus : undefined
+      const usageLimitKind = err instanceof TransientAwareSendError ? err.usageLimitKind : undefined
       // The fork point straddled the discarded turn's own payload (a
       // tool_result carrier or structured_output attachment) — the CLI
       // refuses deterministically, so retrying the same fork target would
@@ -5202,7 +5203,7 @@ function MessageViewInner({
       // streamed no output (so a retry can't duplicate a tool call or partial
       // reply) AND we're under the retry budget. Show a "Retrying…" badge so a
       // multi-second wait reads as recovery, not a hang.
-      const canRetry = isTransientSendError(errorMessage, apiErrorStatus)
+      const canRetry = isTransientSendError(errorMessage, apiErrorStatus, usageLimitKind)
         && !turnProducedOutputRef.current
         && transientRetryCountRef.current < MAX_TRANSIENT_SEND_RETRIES
       if (canRetry) {
