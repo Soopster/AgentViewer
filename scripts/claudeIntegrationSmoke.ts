@@ -9,7 +9,12 @@ import {
   setClaudeDynamicMcpServers,
 } from '../lib/claudeDynamicMcp'
 import { deleteClaudeHookEvents, listClaudeHookEvents } from '../lib/claudeHookEvents'
+import { claudeResultHasQueuedTurns } from '../lib/claudePool'
 import { createClaudeViewerQueryExtensions } from '../lib/claudeViewerIntegration'
+
+assert.equal(claudeResultHasQueuedTurns({ type: 'result', queued_turn_count: 2 } as never), true)
+assert.equal(claudeResultHasQueuedTurns({ type: 'result', queued_turn_count: 0 } as never), false)
+assert.equal(claudeResultHasQueuedTurns({ type: 'assistant' } as never), false)
 
 const servers = parseClaudeDynamicMcpServers({
   docs: {

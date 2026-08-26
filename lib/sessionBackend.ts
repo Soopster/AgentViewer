@@ -4690,6 +4690,9 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           ...(resumeDropsTurn ? { resumeDropsTurn } : {}),
           forkSession: forkSessionOnSend,
           includePartialMessages: true,
+          // Interrupt only the foreground turn; Agent Viewer already exposes
+          // background agents/workflows through Query.backgroundTasks().
+          perTaskStopAffordance: true,
           agentProgressSummaries: true,
           includeHookEvents: true,
           promptSuggestions: true,

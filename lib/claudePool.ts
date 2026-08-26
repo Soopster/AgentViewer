@@ -69,6 +69,19 @@ export async function interruptClaudeQuery(query: Query, cancelQueued = false): 
   }
   return query.interrupt()
 }
+
+/**
+ * Claude 0.3.243+ reports how many queued user sends remain after each result.
+ * A result with pending turns is not a pool turn boundary: detaching the
+ * subscriber there drops the queued turns' output before the next result.
+ */
+export function claudeResultHasQueuedTurns(message: SDKMessage): boolean {
+  if (message.type !== 'result') return false
+  const queuedTurnCount = (message as SDKMessage & { queued_turn_count?: unknown }).queued_turn_count
+  return typeof queuedTurnCount === 'number'
+    && Number.isFinite(queuedTurnCount)
+    && queuedTurnCount > 0
+}
 import type { ReasoningEffortLevel } from './types'
 import {
   broadcastClaudeMessage,
@@ -451,6 +464,10 @@ class ClaudePool {
         resumeSessionAt: opts.resumeSessionAt,
         forkSession: opts.forkSession,
         includePartialMessages: true,
+        // Keep background agents/workflows alive when the user interrupts the
+        // foreground turn. They remain visible and independently stoppable via
+        // Query.backgroundTasks(); cancelQueued still controls queued sends.
+        perTaskStopAffordance: true,
         agentProgressSummaries: true,
         includeHookEvents: true,
         promptSuggestions: true,
@@ -828,6 +845,7 @@ class ClaudePool {
     })
 
     let resultSeen = false
+    let queuedTurnsPending = false
     let tailTimer: ReturnType<typeof setTimeout> | null = null
     const scheduleTailDrain = () => {
       if (tailTimer) clearTimeout(tailTimer)
@@ -865,6 +883,15 @@ class ClaudePool {
         resetHardTimer()
         try { options.onMessage(msg) } catch { /* don't let consumer errors strand the mutex */ }
         if (msg.type === 'result') {
+          queuedTurnsPending = claudeResultHasQueuedTurns(msg)
+          if (queuedTurnsPending) {
+            resultSeen = false
+            if (tailTimer) {
+              clearTimeout(tailTimer)
+              tailTimer = null
+            }
+            return
+          }
           resultSeen = true
           scheduleTailDrain()
           return
@@ -874,6 +901,7 @@ class ClaudePool {
           && 'subtype' in msg
           && (msg as SDKSessionStateChangedMessage).subtype === 'session_state_changed'
           && (msg as SDKSessionStateChangedMessage).state === 'idle'
+          && !queuedTurnsPending
         ) {
           // Authoritative turn-over signal — short-circuit the tail drain.
           if (tailTimer) clearTimeout(tailTimer)
