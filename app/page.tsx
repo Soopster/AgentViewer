@@ -329,6 +329,9 @@ export default function Home() {
   // browser-only preference after hydration instead of branching in the state
   // initializer (which rendered different pane structures on server/client).
   const [messagePaneCollapsed, setMessagePaneCollapsed] = useState(false)
+  const [messageViewMaximized, setMessageViewMaximized] = useState(false)
+  const [messageViewFullscreen, setMessageViewFullscreen] = useState(false)
+  const messageViewFullscreenRef = useRef(false)
   const [sessions, setSessions] = useState<Session[]>([])
   const [openTabSessions, setOpenTabSessions] = useState<Session[]>([])
   const [selectedTabKey, setSelectedTabKey] = useState<string | null>(null)
@@ -433,12 +436,57 @@ export default function Home() {
     : undefined
   const canUseChannelBridge = !selectedProject && !!selectedSession && (selectedSession.provider ?? 'claude') === 'claude'
   const canUseIdeBridge = canUseChannelBridge
+  const canMaximizeMessageView = !dashboardSelected && !selectedProject && !!selectedSession
+  const isMessageViewMaximized = messageViewMaximized && canMaximizeMessageView
 
   const toggleMessagePane = useCallback(() => {
     const next = !messagePaneCollapsed
     setMessagePaneCollapsed(next)
     try { window.localStorage.setItem('agentViewer:messagePaneCollapsed', next ? '1' : '0') } catch { /* ignore */ }
   }, [messagePaneCollapsed])
+
+  const toggleMessageViewMaximized = useCallback(() => {
+    if (messageViewMaximized && document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => {})
+    }
+    setMessageViewMaximized((current) => !current)
+    setMessagePaneCollapsed(false)
+  }, [messageViewMaximized])
+
+  const enterMessageViewFullscreen = useCallback(() => {
+    if (!canMaximizeMessageView) return
+    setMessageViewMaximized(true)
+    setMessagePaneCollapsed(false)
+    if (document.fullscreenElement || !document.documentElement.requestFullscreen) return
+    void document.documentElement.requestFullscreen().catch(() => {
+      // Keep the app-level focus mode as a graceful fallback when the host
+      // browser or embedded webview declines native fullscreen.
+    })
+  }, [canMaximizeMessageView])
+
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      const active = document.fullscreenElement !== null
+      if (!active && messageViewFullscreenRef.current) {
+        setMessageViewMaximized(false)
+      }
+      messageViewFullscreenRef.current = active
+      setMessageViewFullscreen(active)
+    }
+    document.addEventListener('fullscreenchange', onFullscreenChange)
+    return () => document.removeEventListener('fullscreenchange', onFullscreenChange)
+  }, [])
+
+  useEffect(() => {
+    if (!isMessageViewMaximized) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      event.preventDefault()
+      setMessageViewMaximized(false)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [isMessageViewMaximized])
 
   const openGitPopover = useCallback(() => {
     if (!activeProjectDir) return
@@ -1296,7 +1344,7 @@ export default function Home() {
     <CodeThemeProvider>
     <SidebarProvider defaultOpen>
       <div suppressHydrationWarning style={{ display: 'flex', height: '100vh' }}>
-        <Sidebar variant="inset">
+        {!isMessageViewMaximized && <Sidebar variant="inset">
           <SessionList
             sessions={sessions}
             loading={loadingSessions}
@@ -1331,8 +1379,8 @@ export default function Home() {
             onNewSession={handleNewSession}
             creatingSession={creatingNewSession}
           />
-        </Sidebar>
-        {messagePaneCollapsed ? (
+        </Sidebar>}
+        {messagePaneCollapsed && !isMessageViewMaximized ? (
           <div
             style={{
               width: 32,
@@ -1369,28 +1417,30 @@ export default function Home() {
         ) : (
           <SidebarInset style={{ position: 'relative' }}>
             <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden', position: 'relative', flex: 1 }}>
-              <button
-                type="button"
-                onClick={toggleMessagePane}
-                title="Collapse message pane"
-                className="av-hover-control"
-                style={{
-                  position: 'absolute',
-                  top: 6,
-                  right: 8,
-                  zIndex: 10,
-                  background: 'var(--surface-2)',
-                  border: '1px solid var(--border)',
-                  cursor: 'pointer',
-                  color: 'var(--text-3)',
-                  padding: '2px 6px',
-                  borderRadius: 6,
-                  lineHeight: 1,
-                  fontSize: 12,
-                }}
-              >
-                ›
-              </button>
+              {!isMessageViewMaximized && (
+                <button
+                  type="button"
+                  onClick={toggleMessagePane}
+                  title="Collapse message pane"
+                  className="av-hover-control"
+                  style={{
+                    position: 'absolute',
+                    top: 6,
+                    right: 8,
+                    zIndex: 10,
+                    background: 'var(--surface-2)',
+                    border: '1px solid var(--border)',
+                    cursor: 'pointer',
+                    color: 'var(--text-3)',
+                    padding: '2px 6px',
+                    borderRadius: 6,
+                    lineHeight: 1,
+                    fontSize: 12,
+                  }}
+                >
+                  ›
+                </button>
+              )}
               <ViewTransition key={messageAreaKey} enter="fade-in" exit="fade-out" default="none">
                 {dashboardSelected ? (
                   <Tabs
@@ -1466,6 +1516,9 @@ export default function Home() {
                     openCodeTodos={openCodeTodosForView}
                     codexPlan={codexPlanForView}
                     codexExternalWriter={codexExternalWriter}
+                    maximized={isMessageViewMaximized}
+                    onToggleMaximized={toggleMessageViewMaximized}
+                    onEnterFullscreen={enterMessageViewFullscreen}
                   />
                 )}
               </ViewTransition>
@@ -1483,6 +1536,9 @@ export default function Home() {
                   scopeProjectName={activeProjectName}
                   includeWorktrees={includeWorktrees}
                   messagePaneCollapsed={messagePaneCollapsed}
+                  messageViewMaximized={isMessageViewMaximized}
+                  messageViewFullscreen={messageViewFullscreen}
+                  canMaximizeMessageView={canMaximizeMessageView}
                   canOpenGit={!!activeProjectDir}
                   canOpenFiles={!!activeProjectDir}
                   canOpenTasks={!selectedProject && (selectedSession?.provider ?? provider) === 'claude'}
@@ -1497,6 +1553,8 @@ export default function Home() {
                   onChangeScope={setSessionScope}
                   onToggleWorktrees={setIncludeWorktrees}
                   onToggleMessagePane={toggleMessagePane}
+                  onToggleMessageViewMaximized={toggleMessageViewMaximized}
+                  onEnterMessageViewFullscreen={enterMessageViewFullscreen}
                   onOpenGit={openGitPopover}
                   onOpenPullRequests={openPullRequestView}
                   onOpenFiles={openFileViewer}
@@ -1574,7 +1632,7 @@ export default function Home() {
             }}
           />
         ) : null}
-        <PiActivityPopover />
+        {!isMessageViewMaximized ? <PiActivityPopover /> : null}
       </div>
     </SidebarProvider>
     </CodeThemeProvider>

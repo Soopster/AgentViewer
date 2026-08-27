@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { BarChart3, Bookmark, BookOpen, Bot, Database, FileSearch, FolderOpen, GitBranch, GitPullRequest, Layers3, ListTodo, MessageSquare, PanelLeftOpen, PanelRightOpen, Plug, Radio, RefreshCw, Search, SlidersHorizontal, Smartphone, SquareTerminal, UsersRound } from 'lucide-react'
+import { BarChart3, Bookmark, BookOpen, Bot, Database, FileSearch, FolderOpen, Fullscreen, GitBranch, GitPullRequest, Layers3, ListTodo, Maximize2, MessageSquare, Minimize2, PanelLeftOpen, PanelRightOpen, Plug, Radio, RefreshCw, Search, SlidersHorizontal, Smartphone, SquareTerminal, UsersRound } from 'lucide-react'
 
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
 import { SidebarGlyph, useSidebar } from '@/components/ui/sidebar'
@@ -29,6 +29,9 @@ type CommandPaletteProps = {
   scopeProjectName: string | null
   includeWorktrees: boolean
   messagePaneCollapsed: boolean
+  messageViewMaximized: boolean
+  messageViewFullscreen: boolean
+  canMaximizeMessageView: boolean
   canOpenGit: boolean
   canOpenFiles: boolean
   canOpenTasks: boolean
@@ -43,6 +46,8 @@ type CommandPaletteProps = {
   onChangeScope: (mode: 'all' | 'project') => void
   onToggleWorktrees: (include: boolean) => void
   onToggleMessagePane: () => void
+  onToggleMessageViewMaximized: () => void
+  onEnterMessageViewFullscreen: () => void
   onOpenGit: () => void
   onOpenPullRequests: () => void
   onOpenFiles: () => void
@@ -320,6 +325,9 @@ export default function CommandPalette({
   scopeProjectName,
   includeWorktrees,
   messagePaneCollapsed,
+  messageViewMaximized,
+  messageViewFullscreen,
+  canMaximizeMessageView,
   canOpenGit,
   canOpenFiles,
   canOpenTasks,
@@ -334,6 +342,8 @@ export default function CommandPalette({
   onChangeScope,
   onToggleWorktrees,
   onToggleMessagePane,
+  onToggleMessageViewMaximized,
+  onEnterMessageViewFullscreen,
   onOpenGit,
   onOpenPullRequests,
   onOpenFiles,
@@ -513,6 +523,40 @@ export default function CommandPalette({
         keywords: ['message', 'pane', 'transcript', 'expand', 'collapse'],
         score: 0,
         run: onToggleMessagePane,
+      },
+      {
+        id: 'toggle-message-view-maximized',
+        label: messageViewMaximized ? 'Restore app chrome' : 'Maximize transcript',
+        description: canMaximizeMessageView
+          ? (messageViewMaximized ? 'Show the sidebar and transcript controls' : 'Show only the message transcript and composer')
+          : 'Select a session first',
+        icon: messageViewMaximized ? <Minimize2 size={16} /> : <Maximize2 size={16} />,
+        shortcut: messageViewMaximized ? 'Esc' : undefined,
+        active: messageViewMaximized,
+        group: 'actions',
+        keywords: ['maximize', 'maximise', 'restore', 'chrome', 'transcript', 'composer', 'focus'],
+        score: 0,
+        run: () => {
+          if (canMaximizeMessageView) onToggleMessageViewMaximized()
+        },
+      },
+      {
+        id: 'toggle-message-view-fullscreen',
+        label: messageViewFullscreen ? 'Exit fullscreen' : 'Enter fullscreen',
+        description: canMaximizeMessageView
+          ? (messageViewFullscreen ? 'Return to the normal app window' : 'Hide browser and app chrome around the transcript')
+          : 'Select a session first',
+        icon: messageViewFullscreen ? <Minimize2 size={16} /> : <Fullscreen size={16} />,
+        shortcut: messageViewFullscreen ? 'Esc' : undefined,
+        active: messageViewFullscreen,
+        group: 'actions',
+        keywords: ['fullscreen', 'full screen', 'focus', 'chrome', 'transcript', 'composer'],
+        score: 0,
+        run: () => {
+          if (!canMaximizeMessageView) return
+          if (messageViewFullscreen) onToggleMessageViewMaximized()
+          else onEnterMessageViewFullscreen()
+        },
       },
       {
         id: 'open-git',
@@ -770,7 +814,7 @@ export default function CommandPalette({
     }
 
     return items
-  }, [canOpenFiles, canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenFiles, onOpenGit, onOpenPullRequests, onOpenCoordinator, onOpenCrossSessionMessaging, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onOpenProvenance, onOpenRemoteAccess, onToggleMessagePane, onToggleWorktrees, provider, providerInstanceId, providerInstances, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
+  }, [canMaximizeMessageView, canOpenFiles, canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, messageViewFullscreen, messageViewMaximized, onChangeProvider, onChangeScope, onEnterMessageViewFullscreen, onOpenFiles, onOpenGit, onOpenPullRequests, onOpenCoordinator, onOpenCrossSessionMessaging, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onOpenProvenance, onOpenRemoteAccess, onToggleMessagePane, onToggleMessageViewMaximized, onToggleWorktrees, provider, providerInstanceId, providerInstances, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
 
   const projectItems = useMemo(() => {
     const groups = new Map<string, {

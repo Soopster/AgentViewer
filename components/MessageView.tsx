@@ -46,7 +46,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import dynamic from 'next/dynamic'
-import { BookOpen, ChartNetwork, FileCode2, Filter, Minimize2, Plug, Radio, RotateCcw, Search, SendHorizontal, Square, Terminal, X } from 'lucide-react'
+import { BookOpen, ChartNetwork, FileCode2, Filter, Fullscreen, Maximize2, Minimize2, Plug, Radio, RotateCcw, Search, SendHorizontal, Square, Terminal, X } from 'lucide-react'
 import MessageItem, { MessageDensityProvider, ViewModeProvider, DiffStyleProvider, DiffOptionsProvider, type MessageDensity, type WebViewMode } from './MessageItem'
 import { useChannelBridge } from './useChannelBridge'
 import { useIdeBridge } from './useIdeBridge'
@@ -174,6 +174,9 @@ type Props = {
   // Another Codex client currently owns this session's rollout writer lock —
   // the transcript is a stale cached snapshot until that client's turn ends.
   codexExternalWriter?: boolean
+  maximized?: boolean
+  onToggleMaximized?: () => void
+  onEnterFullscreen?: () => void
 }
 
 type CopilotContextTier = 'default' | 'long_context'
@@ -2929,6 +2932,9 @@ function MessageViewInner({
   openCodeTodos,
   codexPlan,
   codexExternalWriter,
+  maximized = false,
+  onToggleMaximized,
+  onEnterFullscreen,
 }: Props) {
   const [inputText, setInputText] = useState('')
   const [sendState, setSendState] = useState<SendState>('idle')
@@ -6828,6 +6834,7 @@ function MessageViewInner({
   }, [liveTimelineRows, persistedTimelineRows])
   const normalizedTranscriptSearch = deferredTranscriptSearch.trim().toLowerCase()
   const transcriptTimelineRows = useMemo<TimelineRow[]>(() => {
+    if (maximized) return timelineRows
     // Preserve referential identity with timelineRows when nothing is focused —
     // the scroll-anchor logic below relies on this equality.
     if (transcriptFilters.length === 0 && normalizedTranscriptSearch === '' && !bookmarksOnly) return timelineRows
@@ -6837,7 +6844,7 @@ function MessageViewInner({
       if (!normalizedTranscriptSearch) return true
       return timelineRowSearchText(row).includes(normalizedTranscriptSearch)
     })
-  }, [normalizedTranscriptSearch, timelineRows, transcriptFilters, bookmarksOnly, bookmarkIds])
+  }, [normalizedTranscriptSearch, timelineRows, transcriptFilters, bookmarksOnly, bookmarkIds, maximized])
   const renderedTimelineRows = useMemo<TimelineRow[]>(() => {
     if (viewMode === 'agents') return groupAgentsToolRows(transcriptTimelineRows)
     if (viewMode === 'stream') {
@@ -7631,7 +7638,7 @@ function MessageViewInner({
       }}
     >
       {/* ── Top bar ──────────────────────────────────── */}
-      <div
+      {!maximized && <div
         style={{
           padding: '0 28px',
           height: 52,
@@ -8004,6 +8011,56 @@ function MessageViewInner({
         <RenderFontToggle />
         <CodeThemeToggle />
 
+        {!isProject && onToggleMaximized ? (
+          <Button
+            type="button"
+            onClick={onToggleMaximized}
+            title="Maximize transcript"
+            aria-label="Maximize transcript"
+            variant="outline"
+            size="sm"
+            className="av-hover-control"
+            style={{
+              flexShrink: 0,
+              width: 28,
+              height: 26,
+              padding: 0,
+              background: 'transparent',
+              border: '1px solid var(--border)',
+              borderRadius: 5,
+              color: 'var(--text-2)',
+              cursor: 'pointer',
+            }}
+          >
+            <Maximize2 size={13} aria-hidden="true" />
+          </Button>
+        ) : null}
+
+        {!isProject && onEnterFullscreen ? (
+          <Button
+            type="button"
+            onClick={onEnterFullscreen}
+            title="Enter fullscreen"
+            aria-label="Enter fullscreen"
+            variant="outline"
+            size="sm"
+            className="av-hover-control"
+            style={{
+              flexShrink: 0,
+              width: 28,
+              height: 26,
+              padding: 0,
+              background: 'transparent',
+              border: '1px solid var(--border)',
+              borderRadius: 5,
+              color: 'var(--text-2)',
+              cursor: 'pointer',
+            }}
+          >
+            <Fullscreen size={13} aria-hidden="true" />
+          </Button>
+        ) : null}
+
         {/* ··· actions dropdown — session actions */}
         {!isProject && (
           <div ref={actionsDropdownRef} style={{ position: 'relative', flexShrink: 0 }}>
@@ -8137,10 +8194,10 @@ function MessageViewInner({
           >
             {autoFollow ? 'FOLLOWING LIVE' : 'FOLLOW LIVE'}
           </Button>
-        </div>
+        </div>}
 
       {/* ── Tab bar ──────────────────────────────────── */}
-      {openTabs && openTabs.length > 0 && (
+      {!maximized && openTabs && openTabs.length > 0 && (
         <TabBar
           tabs={openTabs}
           activeId={selectedTabId ?? null}
@@ -8150,7 +8207,7 @@ function MessageViewInner({
       )}
 
       {/* ── OpenCode todos (mirrors opencode-web's pinned task list) ──── */}
-      {!isProject && session?.provider === 'opencode' && openCodeTodos && openCodeTodos.length > 0 && (
+      {!maximized && !isProject && session?.provider === 'opencode' && openCodeTodos && openCodeTodos.length > 0 && (
         <OpenCodeTodosBanner todos={openCodeTodos} />
       )}
 
@@ -8162,8 +8219,37 @@ function MessageViewInner({
           display: 'flex',
           flexDirection: 'row',
           overflow: 'hidden',
+          position: 'relative',
         }}
       >
+      {maximized && onToggleMaximized ? (
+        <button
+          type="button"
+          className="av-hover-control"
+          onClick={onToggleMaximized}
+          title="Restore app chrome (Esc)"
+          aria-label="Restore app chrome"
+          style={{
+            position: 'absolute',
+            top: 12,
+            right: 16,
+            zIndex: 20,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 30,
+            height: 30,
+            background: 'var(--surface-2)',
+            border: '1px solid var(--border)',
+            borderRadius: 6,
+            color: 'var(--text-2)',
+            cursor: 'pointer',
+            boxShadow: '0 6px 18px rgba(0,0,0,0.22)',
+          }}
+        >
+          <Minimize2 size={14} aria-hidden="true" />
+        </button>
+      ) : null}
       <div
         style={{
           flex: 1,
@@ -8173,7 +8259,7 @@ function MessageViewInner({
           overflow: 'hidden',
         }}
       >
-        {showReviewMode && session && !isProject ? (
+        {!maximized && showReviewMode && session && !isProject ? (
           <DiffReviewMode
             session={session}
             messages={threadedFull}
@@ -8182,7 +8268,7 @@ function MessageViewInner({
             onJumpToMessage={handleReviewJumpToMessage}
             onClose={() => setShowReviewMode(false)}
           />
-        ) : showVisualizer ? (
+        ) : !maximized && showVisualizer ? (
           <div
             style={{
               flex: 1,
@@ -8203,7 +8289,7 @@ function MessageViewInner({
           </div>
         ) : (
           <>
-            {!loading && hasLiveTimeline && (
+            {!maximized && !loading && hasLiveTimeline && (
               <div className="av-transcript-filter-panel">
                 <label className="av-session-viz-search">
                   <Search aria-hidden="true" />
@@ -8306,7 +8392,7 @@ function MessageViewInner({
               </div>
             )}
             <div style={{ position: 'relative', flex: 1, minHeight: 0, overflow: 'hidden' }}>
-              {viewMode === 'stream' && streamHistoryItems.length > 1 ? (
+              {!maximized && viewMode === 'stream' && streamHistoryItems.length > 1 ? (
                 <StreamHistoryRail
                   items={streamHistoryItems}
                   scrollRef={timelineRef}
@@ -8323,10 +8409,10 @@ function MessageViewInner({
                   minHeight: 0,
                   overflow: 'auto',
                   overflowAnchor: 'none',
-                  padding: viewMode === 'stream' ? '28px 32px 72px 94px' : '28px 32px 72px',
+                  padding: viewMode === 'stream' && !maximized ? '28px 32px 72px 94px' : '28px 32px 72px',
                 }}
               >
-        {showDiagnostics && !isProject && (
+        {!maximized && showDiagnostics && !isProject && (
           <div
             style={{
               marginBottom: 18,
@@ -8699,7 +8785,7 @@ function MessageViewInner({
             </div>
           </div>
         )}
-        {hasTranscriptTimeline && (
+        {!maximized && hasTranscriptTimeline && (
           <div style={{ position: 'sticky', bottom: 12, display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
             {autoFollow ? (
               <div
@@ -8749,7 +8835,7 @@ function MessageViewInner({
           </>
         )}
       </div>
-      {taskRailOpen && taskRegistry.size > 0 && (
+      {!maximized && taskRailOpen && taskRegistry.size > 0 && (
         <TaskRail
           registry={taskRegistry}
           onJumpToEvent={handleJumpToMessage}

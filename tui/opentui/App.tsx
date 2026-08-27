@@ -5029,6 +5029,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'split-toggle', label: 'Toggle split panes',       key: splitCommandKey('z', RUNNING_INSIDE_TMUX), category: 'View'  },
   { id: 'rail',       label: 'Toggle session rail',    key: 'h',  category: 'View'       },
   { id: 'focus',      label: 'Toggle focus mode',      key: 'z',  category: 'View'       },
+  { id: 'fullscreen', label: 'Toggle fullscreen transcript', key: '⇧Z', category: 'View' },
   { id: 'tools',      label: 'Toggle tool calls',      key: 'X',  category: 'View'       },
   { id: 'velocity-scroll', label: 'Toggle velocity scroll', key: '⇧V', category: 'View'  },
   { id: 'mode',       label: 'Cycle provider mode',    key: 'M',  category: 'Session'    },
@@ -7237,6 +7238,10 @@ export default function OpenTuiApp() {
   const isChatLikeView = transcriptView === 'stream' || transcriptView === 'chat'
   const [transcriptWidth, setTranscriptWidth] = useState<TuiTranscriptWidth>('centered')
   const [focusMode, setFocusMode] = useState(false)
+  // Temporary presentation mode, deliberately separate from the persisted
+  // focus preference: fullscreen can be entered and restored without changing
+  // the user's normal rail/header layout.
+  const [fullscreenMode, setFullscreenMode] = useState(false)
   const [railVisible, setRailVisible] = useState(true)
   const [tabsEnabled, setTabsEnabled] = useState(true)
   // Number of read-only split panes mounted beside the reader (0 = off), and
@@ -7901,7 +7906,8 @@ export default function OpenTuiApp() {
   const theme = useMemo(() => getThemePalette(themeMode), [themeMode])
   const composerSyntaxStyle = useMemo(() => buildComposerSyntaxStyle(theme), [theme])
   const densityState = useMemo(() => densityConfig(density), [density])
-  const showRail = railVisible
+  const presentationFocusMode = focusMode || fullscreenMode
+  const showRail = railVisible && !fullscreenMode
   const effectiveFocus: PaneFocus = showRail ? focusedPane : 'messages'
   const selectedIndex = useMemo(
     () => resolveSelectedSessionIndex(selectedSessionKey, sessions, sessionKey),
@@ -8303,7 +8309,7 @@ export default function OpenTuiApp() {
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runningSessions, waitingSessions, viewerAttentionNotes, attentionItems, attentionDone, sessions])
-  const fleetStripVisible = fleetStripEnabled && !focusMode && fleetEntries.length > 0
+  const fleetStripVisible = fleetStripEnabled && !presentationFocusMode && fleetEntries.length > 0
   const fleetPageCount = Math.max(Math.ceil(fleetEntries.length / FLEET_PAGE_SIZE), 1)
   const activeFleetPage = Math.min(fleetPage, fleetPageCount - 1)
   const visibleFleetEntries = useMemo(
@@ -9135,13 +9141,20 @@ export default function OpenTuiApp() {
     if (selected) openCoordinationAgentSession(selected.agent)
   })
   const composerDraftLines = composerDraft.length === 0 ? 1 : composerDraft.split('\n').length
+  const composerDockChromeHeight = fullscreenMode ? 1 : COMPOSER_DOCK_CHROME_HEIGHT
   const composerHeight = transcriptView === 'chat'
     ? Math.max(CHAT_COMPOSER_MIN_HEIGHT, composerDraftLines + CHAT_COMPOSER_CHROME_HEIGHT)
-    : Math.max(COMPOSER_MIN_HEIGHT, Math.min(COMPOSER_MAX_HEIGHT, composerDraftLines + COMPOSER_DOCK_CHROME_HEIGHT))
+    : Math.max(
+        fullscreenMode ? COMPOSER_MIN_HEIGHT - 2 : COMPOSER_MIN_HEIGHT,
+        Math.min(
+          fullscreenMode ? COMPOSER_MAX_HEIGHT - 2 : COMPOSER_MAX_HEIGHT,
+          composerDraftLines + composerDockChromeHeight,
+        ),
+      )
   const composerDockHeight = composerWindowOpen || composerHidden ? 0 : composerHeight
   const composerDockTextareaHeight = transcriptView === 'chat'
     ? Math.max(1, composerDockHeight - CHAT_COMPOSER_CHROME_HEIGHT)
-    : Math.max(2, composerDockHeight - COMPOSER_DOCK_CHROME_HEIGHT)
+    : Math.max(2, composerDockHeight - composerDockChromeHeight)
   const composerTargetSessionInfo = useMemo(() => {
     if (!composerTargetSession) return null
     const targetKey = sessionKey(composerTargetSession)
@@ -10039,17 +10052,19 @@ export default function OpenTuiApp() {
   // out of the scrollbox's budget (transcriptViewportRows), not this one.
   const mainContentHeight = Math.max(
     height
-    - 3
-    - (searchMode || sessionSearchMode ? 4 : 1)
+    - (fullscreenMode ? 0 : 3)
+    - (searchMode || sessionSearchMode ? 4 : fullscreenMode ? 0 : 1)
     - (transcriptView === 'chat' ? 0 : composerDockHeight)
     - composerPopoverHeight
     - composerStatusBlockHeight,
     8,
   )
-  const effectiveTaskPanelWidth = taskPanelOpen ? taskPanelWidth : 0
-  const maxSidebarWidth = Math.max(MIN_SIDEBAR_WIDTH, width - 4 - 1 - MIN_READER_WIDTH - effectiveTaskPanelWidth - (taskPanelOpen ? 1 : 0))
+  const taskPanelVisible = taskPanelOpen && !fullscreenMode
+  const effectiveTaskPanelWidth = taskPanelVisible ? taskPanelWidth : 0
+  const outerChromeWidth = fullscreenMode ? 0 : 4
+  const maxSidebarWidth = Math.max(MIN_SIDEBAR_WIDTH, width - outerChromeWidth - 1 - MIN_READER_WIDTH - effectiveTaskPanelWidth - (taskPanelVisible ? 1 : 0))
   const sidebarWidth = showRail ? clamp(sidebarWidthPreference, MIN_SIDEBAR_WIDTH, maxSidebarWidth) : 0
-  const readerAreaWidth = Math.max(width - 4 - sidebarWidth - (showRail ? 1 : 0) - effectiveTaskPanelWidth - (taskPanelOpen ? 1 : 0), 40)
+  const readerAreaWidth = Math.max(width - outerChromeWidth - sidebarWidth - (showRail ? 1 : 0) - effectiveTaskPanelWidth - (taskPanelVisible ? 1 : 0), 40)
   // Split panes take their width out of the reader area, so `rightPaneWidth`
   // (the primary transcript's layout width, threaded through every card) keeps
   // being the single source of truth for the reader. Panes are dropped one at a
@@ -10066,7 +10081,7 @@ export default function OpenTuiApp() {
   })
   const splitLayout = calculateSplitPaneLayout({
     readerAreaWidth,
-    requestedCount: splitPaneCount,
+    requestedCount: fullscreenMode ? 0 : splitPaneCount,
     availableCount: splitPinnedSessions.length,
     maxPanes: SPLIT_PANE_MAX,
     minPaneWidth: SPLIT_PANE_MIN_WIDTH,
@@ -10110,7 +10125,7 @@ export default function OpenTuiApp() {
   }, [runningSessions])
 
   const textareaInnerWidth = Math.max(rightPaneWidth - 4, 10)
-  const composerDockTextareaWidth = Math.max(width - 4, 20)
+  const composerDockTextareaWidth = Math.max(width - (fullscreenMode ? 2 : 4), 20)
   const composerVisualLineCount = composerDraft.length === 0
     ? 1
     : composerDraft.split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / textareaInnerWidth)), 0)
@@ -10166,7 +10181,7 @@ export default function OpenTuiApp() {
       ? [...openTabSessions, selectedSession]
       : openTabSessions
   ), [isPreviewMode, openTabSessions, selectedSession])
-  const showTabs = tabsEnabled && visibleTabSessions.length > 0
+  const showTabs = !fullscreenMode && tabsEnabled && visibleTabSessions.length > 0
   const showPreviewBar = false
   // Panes are siblings of the reader COLUMN, which puts the tab strip above the
   // reader box. Without matching that offset a pane's top border shares the tab
@@ -10191,7 +10206,9 @@ export default function OpenTuiApp() {
   const streamActionFooterRows = isChatLikeView && transcriptView !== 'chat' && visibleTranscriptCards.length > 0 ? 1 : 0
   const transcriptViewportRows = Math.max(
     mainContentHeight
-    - (focusMode ? 4 : 7)
+    // Fullscreen removes the two-row reader frame, leaving only the compact
+    // restore affordance plus the transcript's top/bottom content insets.
+    - (fullscreenMode ? 3 : focusMode ? 4 : 7)
     - (showTabs || showPreviewBar ? TAB_BAR_HEIGHT : 0)
     // Fleet strip is one header row when visible.
     - (fleetStripVisible ? 1 : 0)
@@ -11599,7 +11616,7 @@ export default function OpenTuiApp() {
     })
     return rows
   }, [commandPaletteQuery, filteredCommands])
-  const commandPaletteTopOffset = focusMode ? 2 : 4
+  const commandPaletteTopOffset = presentationFocusMode ? 2 : 4
   const commandPaletteBodyRows = Math.max(1, Math.min(
     paletteDisplayRows.length || 1,
     mainContentHeight - commandPaletteTopOffset - 8,
@@ -15181,7 +15198,7 @@ export default function OpenTuiApp() {
           [['/', 'search'], ['n/N', 'hits'], ['u', 'unread'], ['f', 'live']],
           [['m', 'mark'], ['[ ]', 'jump'], ['⇧B', 'all'], ['b', effectiveFocus === 'sessions' ? 'tabs' : 'bookmark']],
           [['()', 'convo'], ['{}', 'tech'], ['e', 'fold'], ['v', transcriptView], ['s', `diff:${diffLayout}`], ['d', density], ['⇧W', transcriptWidth], ['i', 'think'], ['X', showToolCalls ? 'hide tools' : 'tools']],
-          [['h', 'rail'], ['⇧T', 'tasks'], ['z', 'focus'], [
+          [['h', 'rail'], ['⇧T', 'tasks'], ['z', 'focus'], ['⇧Z', 'fullscreen'], [
             RUNNING_INSIDE_TMUX ? '?' : '⌃B',
             RUNNING_INSIDE_TMUX
               ? `split palette · tmux captures ⌃B`
@@ -15304,6 +15321,20 @@ export default function OpenTuiApp() {
   const showToggleOutcome = useEffectEvent((label: string, outcome: string | boolean) => {
     const state = typeof outcome === 'boolean' ? (outcome ? 'enabled' : 'disabled') : outcome
     showNotice('info', `${label} ${state}`)
+  })
+
+  const toggleFullscreenMode = useEffectEvent((forced?: boolean) => {
+    const next = forced ?? !fullscreenMode
+    setFullscreenMode(next)
+    showToggleOutcome('Fullscreen transcript', next)
+    if (next) {
+      // Hidden panes keep their state, but keyboard ownership belongs to the
+      // visible reader while fullscreen is active.
+      setFocusedPane('messages')
+      setSplitFocusIndex(null)
+      setSplitChordPending(false)
+      setSessionSearchMode(false)
+    }
   })
 
   const rememberComposerCursor = useCallback(() => {
@@ -16123,6 +16154,9 @@ export default function OpenTuiApp() {
         void writeTuiFocusMode(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store focus mode'))
         break
       }
+      case 'fullscreen':
+        toggleFullscreenMode()
+        break
       case 'tools': {
         setShowToolCalls((v) => {
           const next = !v
@@ -17227,6 +17261,10 @@ export default function OpenTuiApp() {
           })
           return
         }
+        if (fullscreenMode) {
+          handled(() => toggleFullscreenMode(false))
+          return
+        }
         handled(() => {
           // While a turn is running (owned stream or reattached), Esc hides the
           // composer so the user can read the transcript without cancelling.
@@ -17474,6 +17512,13 @@ export default function OpenTuiApp() {
       return
     }
 
+    // Shift+Z extends the existing z focus binding. It lives outside the
+    // composer branch so typing a capital Z into a draft remains ordinary text.
+    if (isShifted('Z')) {
+      handled(toggleFullscreenMode)
+      return
+    }
+
     // ── Focused split pane owns the keys ──────────────────────────────────────
     // A focused pane is a reader, not an editor: it scrolls, it opens, it hands
     // focus back. Everything else is swallowed rather than falling through to
@@ -17581,6 +17626,11 @@ export default function OpenTuiApp() {
 
     if (isCtrl('o')) {
       handled(openComposerWindow)
+      return
+    }
+
+    if (fullscreenMode && key.name === 'escape') {
+      handled(() => toggleFullscreenMode(false))
       return
     }
 
@@ -18373,7 +18423,7 @@ export default function OpenTuiApp() {
       return
     }
 
-    if (key.name === 'z') {
+    if (key.name === 'z' && !key.shift) {
       handled(() => {
         const next = !focusMode
         setFocusMode(next)
@@ -18844,7 +18894,14 @@ export default function OpenTuiApp() {
 
   return (
     <box width={width} height={height} flexDirection="column" backgroundColor={theme.bg}>
-      <box flexGrow={1} padding={1} gap={1} height={mainContentHeight} flexDirection="row" backgroundColor={theme.bg}>
+      <box
+        flexGrow={1}
+        padding={fullscreenMode ? 0 : 1}
+        gap={fullscreenMode ? 0 : 1}
+        height={mainContentHeight}
+        flexDirection="row"
+        backgroundColor={theme.bg}
+      >
         {showRail ? (
           <box
             width={sidebarWidth}
@@ -18981,9 +19038,10 @@ export default function OpenTuiApp() {
 
           <box flexDirection="row" flexGrow={1}>
           <box
+            id="transcript-reader"
             ref={readerBoxRef}
             flexGrow={1}
-            border
+            border={fullscreenMode ? [] : ['top', 'left', 'right', 'bottom']}
             borderStyle="single"
             // Focused pane lights its frame in its own title color (transcript →
             // provider accent, like the sidebar → cyan) so it's obvious which
@@ -18995,10 +19053,28 @@ export default function OpenTuiApp() {
                 : theme.border}
             backgroundColor={theme.surface}
             flexDirection="column"
-            title={isChatLikeView ? undefined : headerStatusRight}
+            title={fullscreenMode || isChatLikeView ? undefined : headerStatusRight}
             titleColor={providerAccent}
           >
-          {!focusMode && transcriptView !== 'stream' ? (
+          {fullscreenMode ? (
+            <box height={1} paddingX={1} flexDirection="row" alignItems="center">
+              <box flexGrow={1} />
+              <box
+                id="fullscreen-restore"
+                paddingX={1}
+                backgroundColor={theme.surface2}
+                onMouseDown={(event) => {
+                  if (event.button !== 0) return
+                  event.stopPropagation()
+                  toggleFullscreenMode(false)
+                }}
+              >
+                <text fg={theme.dim} wrapMode="none">FULLSCREEN  Shift+Z / Esc restore</text>
+              </box>
+            </box>
+          ) : null}
+
+          {!presentationFocusMode && transcriptView !== 'stream' ? (
             <box paddingX={2} paddingTop={1} flexDirection="row" alignItems="center">
               <text fg={providerAccent} wrapMode="none">{'● '}</text>
               <box flexGrow={1} overflow="hidden">
@@ -19012,7 +19088,7 @@ export default function OpenTuiApp() {
             </box>
           ) : null}
 
-          {!focusMode && transcriptView !== 'stream' && contextUsage ? (
+          {!presentationFocusMode && transcriptView !== 'stream' && contextUsage ? (
             <box paddingX={1}>
               <text wrapMode="none">
                 {renderInlineTextSegments(
@@ -19022,11 +19098,11 @@ export default function OpenTuiApp() {
                 )}
               </text>
             </box>
-          ) : !focusMode && transcriptView !== 'stream' && selectedSession?.provider === 'claude' && contextUsageStatus === 'loading' ? (
+          ) : !presentationFocusMode && transcriptView !== 'stream' && selectedSession?.provider === 'claude' && contextUsageStatus === 'loading' ? (
             <box paddingX={1}>
               <text fg={theme.dim}>{fitText('Loading context usage…', rightPaneWidth - 4)}</text>
             </box>
-          ) : !focusMode && transcriptView !== 'stream' && selectedSession?.provider === 'claude' && contextUsageStatus === 'unavailable' ? (
+          ) : !presentationFocusMode && transcriptView !== 'stream' && selectedSession?.provider === 'claude' && contextUsageStatus === 'unavailable' ? (
             <box paddingX={1}>
               <text fg={theme.dim}>{fitText('Context usage unavailable', rightPaneWidth - 4)}</text>
             </box>
@@ -19303,7 +19379,7 @@ export default function OpenTuiApp() {
           </box>
         </box>
 
-        {taskPanelOpen ? (
+        {taskPanelVisible ? (
           <box width={taskPanelWidth} overflow="hidden" marginLeft={1}>
             <TaskSidePanel
               messages={taskPanelMessages}
@@ -19330,7 +19406,7 @@ export default function OpenTuiApp() {
             {providerMenuOpen ? (
               <box
                 position="absolute"
-                top={focusMode ? 1 : 3}
+                top={presentationFocusMode ? 1 : 3}
                 right={2}
                 width={34}
                 height={14}
@@ -20253,16 +20329,17 @@ export default function OpenTuiApp() {
 
       {!composerWindowOpen && !composerHidden && transcriptView !== 'chat' ? (
         <box
+          id="composer-dock"
           paddingX={1}
           backgroundColor={isChatLikeView ? theme.surface : theme.surface2}
-          border
+          border={fullscreenMode ? [] : ['top', 'left', 'right', 'bottom']}
           borderStyle={composerDockRouted ? 'heavy' : isChatLikeView ? 'single' : 'rounded'}
           borderColor={composerDockEmphasized
             ? composerAccentColor
             : isChatLikeView
               ? theme.border2
               : theme.border}
-          title={isChatLikeView ? undefined : composerDockBorderTitle}
+          title={fullscreenMode || isChatLikeView ? undefined : composerDockBorderTitle}
           titleColor={composerDockEmphasized ? composerAccentColor : theme.dim}
           titleAlignment="left"
           height={composerDockHeight}
@@ -20297,7 +20374,7 @@ export default function OpenTuiApp() {
         </box>
       ) : null}
 
-      {!searchMode ? (
+      {!searchMode && !fullscreenMode ? (
         <box backgroundColor={theme.surface2} paddingX={1}>
           <text wrapMode="none">{renderInlineTextSegments(footerSegments, Math.max(width - 2, 20), theme.dim)}</text>
         </box>
@@ -21397,7 +21474,7 @@ export default function OpenTuiApp() {
         />
       ) : null}
 
-      <PiActivityPopover theme={theme} width={width} height={height} />
+      {!fullscreenMode ? <PiActivityPopover theme={theme} width={width} height={height} /> : null}
 
       {exitConfirmOpen ? (
         <box

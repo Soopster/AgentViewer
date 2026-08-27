@@ -53,6 +53,65 @@ if (
   throw new Error('Session header provider badge is missing its compact distinctive background')
 }
 
+// Shift+Z is the TUI equivalent of the web transcript fullscreen experience: it
+// keeps the reader and composer, replaces the ordinary header with one compact
+// restore affordance, and hides the surrounding app chrome. Composer visibility
+// remains independently toggleable while fullscreen is active.
+act(() => {
+  setup.mockInput.pressKey('z', { shift: true })
+})
+await act(async () => {
+  await setup.flush()
+  await new Promise((resolve) => setTimeout(resolve, 100))
+})
+let fullscreenFrame = captureCharFrame()
+if (!fullscreenFrame.includes('FULLSCREEN  Shift+Z / Esc restore')) {
+  throw new Error(`Shift+Z did not expose the fullscreen restore affordance:\n${fullscreenFrame}`)
+}
+if (fullscreenFrame.includes('j/k move') || fullscreenFrame.includes('SESSIONS') || fullscreenFrame.includes('● LIVE')) {
+  throw new Error(`Fullscreen left non-essential app chrome visible:\n${fullscreenFrame}`)
+}
+const fullscreenReader = setup.renderer.root.findDescendantById('transcript-reader') as unknown as { border: boolean | string[]; width: number } | null
+const fullscreenComposer = setup.renderer.root.findDescendantById('composer-dock') as unknown as { border: boolean | string[] } | null
+const fullscreenRows = fullscreenFrame.split('\n')
+if (
+  !fullscreenReader
+  || !Array.isArray(fullscreenReader.border)
+  || fullscreenReader.border.length !== 0
+  || fullscreenReader.width !== 120
+  || !fullscreenComposer
+  || !Array.isArray(fullscreenComposer.border)
+  || fullscreenComposer.border.length !== 0
+  || fullscreenRows[0]?.startsWith('┌')
+  || fullscreenRows[1]?.startsWith('│')
+) {
+  throw new Error(`Fullscreen did not remove the edge frames or return their width to the transcript:\n${fullscreenFrame}`)
+}
+
+act(() => {
+  setup.mockInput.pressKey('e', { shift: true })
+})
+await act(async () => {
+  await setup.flush()
+  await new Promise((resolve) => setTimeout(resolve, 100))
+})
+fullscreenFrame = captureCharFrame()
+if (fullscreenFrame.includes('COMPOSER') || !fullscreenFrame.includes('FULLSCREEN  Shift+Z / Esc restore')) {
+  throw new Error(`Shift+E did not minimize the composer independently in fullscreen:\n${fullscreenFrame}`)
+}
+act(() => {
+  setup.mockInput.pressKey('e', { shift: true })
+  setup.mockInput.pressEscape()
+})
+await act(async () => {
+  await setup.flush()
+  await new Promise((resolve) => setTimeout(resolve, 100))
+})
+const restoredFullscreenFrame = captureCharFrame()
+if (restoredFullscreenFrame.includes('FULLSCREEN  Shift+Z / Esc restore') || !restoredFullscreenFrame.includes('COMPOSER')) {
+  throw new Error(`Esc did not restore normal chrome and composer state:\n${restoredFullscreenFrame}`)
+}
+
 // New agent session: Shift+N opens the folder/provider picker modal (rather
 // than immediately creating a session in the viewed workspace). Assert the
 // modal renders both choosable rows, then Esc restores the reader so the
