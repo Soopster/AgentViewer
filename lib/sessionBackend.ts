@@ -1,40 +1,19 @@
 import { NextResponse } from 'next/server'
 import { classifyClaudeUsageMessage, type ClaudeUsageLimitKind } from './claudeUsageLimits'
 
-async function mapConcurrent<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = new Array(items.length)
-  let next = 0
-  async function worker() {
-    while (next < items.length) {
-      const i = next++
-      results[i] = await fn(items[i])
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker))
-  return results
-}
 import { readFile } from 'node:fs/promises'
 import { basename, extname, resolve as resolvePath } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
-  deleteSession as deleteClaudeSession,
   forkSession,
   getSessionInfo,
-  getSessionMessages,
-  getSubagentMessages,
-  listSubagents,
-  listSessions,
   query,
-  renameSession,
   resolveSettings,
-  tagSession,
   type CanUseTool,
   type ElicitationResult as ClaudeElicitationResult,
   type OnUserDialog,
   type PermissionResult,
   type PermissionUpdate,
-  type Query,
-  type SDKControlGetUsageResponse,
   type SDKMessage,
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
@@ -58,26 +37,24 @@ import {
 } from './claudePool'
 import {
   claudeDynamicMcpServerNames,
-  clearClaudeDynamicMcpServers,
   getClaudeDynamicMcpServers,
   parseClaudeDynamicMcpServers,
   setClaudeDynamicMcpServers,
 } from './claudeDynamicMcp'
-import { deleteClaudeHookEvents, listClaudeHookEvents } from './claudeHookEvents'
+import { listClaudeHookEvents } from './claudeHookEvents'
 import {
   broadcastClaudeMessage,
   broadcastClaudeRecycled,
   broadcastClaudeTurnEnd,
   broadcastClaudeTurnStart,
 } from './claudeHarness'
-import { getClaudeCommandsOverride, noteClaudeCommandsChanged } from './claudeCommandsStore'
+import { noteClaudeCommandsChanged } from './claudeCommandsStore'
 import { claudeAgentPolicyOptions, claudeQueryBudgetOptions, parseClaudeAgentPolicy, type ClaudeAgentPolicy } from './claudeRuntimePolicy'
 import { claudeSessionPersistenceQueryOptions, claudeSessionStoreOptions } from './claudeSessionStore'
 import { claudeProcessSpawnOptions, claudeProcessTransportStatus } from './claudeProcessSpawner'
 import { dispatchCoordinatorCodexToolCall } from './agentCoordinationSdkTools'
 import {
   broadcastLiveSessionActivity,
-  broadcastLiveSessionRecycled,
   broadcastLiveSessionTurnEnd,
   broadcastLiveSessionTurnStart,
 } from './liveSessionHarness'
@@ -85,8 +62,6 @@ import type { ContentBlockParam as ClaudeContentBlockParam } from '@anthropic-ai
 import {
   approveAll,
   type ContextTier as CopilotContextTier,
-  type GetAuthStatusResponse as CopilotGetAuthStatusResponse,
-  type GetStatusResponse as CopilotGetStatusResponse,
   type MessageOptions as CopilotMessageOptions,
   type ModelInfo as CopilotModelInfo,
   type PermissionRequest as CopilotPermissionRequest,
@@ -94,16 +69,64 @@ import {
   type ElicitationContext as CopilotElicitationContext,
   type ElicitationResult as CopilotElicitationResult,
   type SessionEvent as CopilotSessionEvent,
-  type SessionMetadata as CopilotSessionMetadata,
 } from '@github/copilot-sdk'
-import { backgroundRunningSession, clearRunningSession, clearWaitingSession, getRunningSession, getRunningSessionInfo, getSessionRuntimeDiagnostics, interruptRunningSession, listRunningSessionRefs, listWaitingSessions, setRunningSession, steerRunningSessionIdempotent } from './sessionRuntime'
+import {
+  ensureCodexThreadResumed,
+  forgetCodexThreadResumed,
+  markCodexThreadResumed,
+  isCodexActiveWriterError,
+  isCodexMissingRolloutError,
+  readCodexThread,
+} from './codexThreads'
+import {
+  readClaudeSessionMessages,
+  sessionInfoCache,
+} from './claudeSessionReads'
+import { getSessionAdapter, unsupported } from './adapters/registry'
+import { mapConcurrent } from './adapters/shared'
+import { withTimeout } from './withTimeout'
+import { claudeFallbackModelChain } from './claudeModels'
+import { PI_THINKING_LEVELS } from './piComposer'
+import {
+  type CopilotAgentMode,
+  type CopilotPersistentMode,
+  parseCopilotContextTier,
+  parseCopilotMode,
+  parseCopilotModeResponse,
+} from './copilotComposer'
+import {
+  copilotLiveTranscripts,
+  scheduleCopilotLiveTranscriptCleanup,
+  schedulePiLiveTranscriptCleanup,
+  getPiLiveTranscriptMessages,
+  markLiveSessionMessages,
+  piLiveTranscripts,
+  piLiveTranscriptSignature,
+  recordCopilotLiveTranscriptEvent,
+  recordPiLiveBashMessage,
+  recordPiLiveTranscriptEvent,
+  sessionMessageIdentity,
+} from './liveTranscripts'
+import {
+  PROVIDER_MANAGED_PERMISSION_OPTIONS,
+  sortMessagesChronologically,
+} from './adapters/shared'
+import {
+  OPENCODE_OPTIONS,
+  getOpenCodeSession,
+  openCodeData,
+} from './opencodeSessions'
+import {
+  mappedMessagesCacheDiagnostics,
+  readMappedMessagesCache,
+  writeMappedMessagesCache,
+} from './mappedMessagesCache'
+import { backgroundRunningSession, clearRunningSession, getRunningSession, getRunningSessionInfo, getSessionRuntimeDiagnostics, interruptRunningSession, listRunningSessionRefs, listWaitingSessions, setRunningSession, steerRunningSessionIdempotent } from './sessionRuntime'
 import {
   acpPendingRequests,
   acquireAcpSession,
   closeAcpSession,
-  declineAcpElicitation,
   interruptAcpSession,
-  isAcpSessionAlive,
   peekAcpSession,
   readAcpMessagesSince,
   resolveAcpElicitation,
@@ -121,13 +144,11 @@ import {
   planComposerAttachments,
   resolveLocalComposerAttachmentPath,
 } from './composerAttachments'
-import { getProviderCapabilities } from './provider'
 import { getConfiguredProvider } from './providerState'
 import {
   currentProviderInstanceId,
   listProviderInstances,
   resolveProviderInstance,
-  withProviderProcessEnvironment,
   withProviderInstance,
   type ProviderInstance,
 } from './providerInstances'
@@ -136,7 +157,6 @@ import type {
   AgentProvider,
   ContextUsage,
   Session,
-  SessionComposerAgentOption,
   SessionComposerOptions,
   SessionDiagnosticSection,
   SessionInfo,
@@ -149,17 +169,11 @@ import type {
 
 type CopilotReasoningEffort = Extract<ReasoningEffortLevel, 'low' | 'medium' | 'high' | 'xhigh'>
 
-import { consumeReadModelsWarmQuery, createSessionControlQuery, openPrompt } from './sdkControlQuery'
-import { acquireCopilotSession, copilotIntegrationDiagnostics, copilotPoolSize, copilotSessionConfigOverrides, evictCopilotSession, getCopilotClient, setCopilotElicitationHandler, setCopilotPermissionHandler, steerCopilotSession } from './copilotClient'
+import { createSessionControlQuery } from './sdkControlQuery'
+import { acquireCopilotSession, copilotPoolSize, copilotSessionConfigOverrides, evictCopilotSession, getCopilotClient, setCopilotElicitationHandler, setCopilotPermissionHandler, steerCopilotSession } from './copilotClient'
 import { timeAsync } from './perfLog'
 import { registerDiagnosticsReporter } from './runtimeDiagnostics'
 import {
-  deriveCopilotState,
-  mapCopilotDiagnosticsToSections,
-  mapCopilotEventsToSessionMessages,
-  mapCopilotModelsToSessionModels,
-  mapCopilotSessionToInfo,
-  mapCopilotSessionToSession,
   mapCopilotUsageToContextUsage,
 } from './copilotMapper'
 import {
@@ -169,75 +183,44 @@ import {
   setCopilotStoredTitle,
 } from './copilotMetadata'
 import { getCodexClient } from './codexClient'
-import { compactStableFingerprint } from './compactFingerprint'
 import type {
   CodexNotification,
   CodexRequestParams,
   CodexResponseFor,
   CodexKnownServerRequest,
   CodexServerRequest,
-  CodexThread,
-  CodexThreadResumeResponse,
   CodexThreadTokenUsage,
 } from './codexProtocol'
 import type {
   DynamicToolSpec,
   ErrorNotification,
-  ThreadSourceKind,
   ThreadStatusChangedNotification,
   ThreadTokenUsageUpdatedNotification,
-  TurnCompletedNotification,
-  TurnStartedNotification,
 } from './codex-schema/v2'
 import {
   advanceCodexTurnOutputUsage,
-  currentCodexModelValue,
-  mapCodexDiagnosticsToSections,
-  mapCodexModelsToSessionModels,
-  mapCodexThreadToMessages,
-  mapCodexThreadToSession,
-  mapCodexThreadToSessionInfo,
   mapCodexTokenUsageToContextUsage,
 } from './codexMapper'
 import { getCodexStoredTag, getCodexStoredTagsForSessions, setCodexStoredTag } from './codexTags'
 import { getOpenCodeClient, getOpenCodeV2Client } from './opencodeClient'
 import {
-  ensureOpenCodeEventsStarted,
-  getOpenCodeProjectDiagnostics,
   getOpenCodeSessionSnapshot,
-  getOpenCodeTranscriptCacheVersion,
   subscribeToOpenCodeEvents,
 } from './opencodeHarness'
-import { getCodexProjectDiagnostics, subscribeToCodexEvents } from './codexHarness'
+import { subscribeToCodexEvents } from './codexHarness'
 import {
-  currentOpenCodeModelValue,
   decodeOpenCodeModelValue,
-  firstOpenCodePrompt,
   mapOpenCodeContextUsage,
-  mapOpenCodeDiagnosticsToSections,
-  mapOpenCodeMessagesToSessionMessages,
-  mapOpenCodeModelsToSessionModels,
-  mapOpenCodeSessionToInfo,
-  mapOpenCodeSessionToSession,
-  openCodeMessagesSignature,
   summarizeOpenCodeDiffs,
   updateOpenCodeTurnOutputUsage,
 } from './opencodeMapper'
 import { getOpenCodeStoredTag, getOpenCodeStoredTagsForSessions, setOpenCodeStoredTag } from './opencodeTags'
 import { openCodeStreamEnvelope, type OpenCodeMessageRole } from './opencodeStreamEvents'
 import type {
-  Agent as OpenCodeAgent,
-  Command as OpenCodeCommand,
-  ConfigProvidersResponse as OpenCodeConfigProvidersResponse,
   Event as OpenCodeEvent,
   FileDiff as OpenCodeFileDiff,
   AgentPartInput as OpenCodeAgentPartInput,
   FilePartInput as OpenCodeFilePartInput,
-  FormatterStatus as OpenCodeFormatterStatus,
-  LspStatus as OpenCodeLspStatus,
-  McpStatus as OpenCodeMcpStatus,
-  Message as OpenCodeMessage,
-  Part as OpenCodePart,
   Session as OpenCodeSession,
   TextPartInput as OpenCodeTextPartInput,
 } from '@opencode-ai/sdk'
@@ -248,17 +231,13 @@ import {
   beginPiSessionOperation,
   compactPiSession,
   createPiAgentSession,
-  deletePiSession,
   evictPiAgentSession,
   forkPiSession,
   getPiSessionEntries,
-  getPiSessionMessages,
-  listPiSessions,
   openPiAgentSession,
   piPoolSize,
   piSessionEntryCacheDiagnostics,
   piSessionOperationCount,
-  refreshPiSessionCache,
   setPiSessionName,
 } from './piClient'
 import {
@@ -273,15 +252,9 @@ import {
   type PiUiHandler,
 } from './piExtensionUi'
 import {
-  mapPiDiagnosticsToSections,
   mapPiEntriesToSessionMessages,
   mapPiMessagesToSessionMessages,
-  mapPiModelsToSessionModels,
-  piAgentMessageDuplicateKey,
   piAgentMessageFingerprint,
-  mapPiSessionToInfo,
-  mapPiSessionToSession,
-  currentPiModelValue,
   decodePiModelValue,
 } from './piMapper'
 import { reducePiTurnLifecycle } from './piTurnLifecycle'
@@ -294,20 +267,12 @@ import {
 import {
   appendLmstudioTurn,
   createLmstudioSession,
-  deleteLmstudioSession,
   getLmstudioSession,
-  listLmstudioModels,
-  listLmstudioSessions,
-  lmstudioBaseUrl,
-  patchLmstudioSession,
   streamLmstudioChatCompletion,
 } from './lmstudioClient'
 import {
-  mapLmstudioSessionToInfo,
   mapLmstudioSessionToMessages,
-  mapLmstudioSessionToSession,
 } from './lmstudioMapper'
-import { normalizeClaudeHistoryMessages } from './claudeMapper'
 import {
   clearPersistedSessionIndex,
   readPersistedIndexStats,
@@ -323,130 +288,6 @@ import {
 // suite, a multi-file refactor — isn't truncated mid-stream on that platform.
 export const maxDuration = 3600
 
-// Session info rarely changes between polls — cache for 20 s to avoid repeating
-// filesystem I/O on every 5-second session list refresh. Bounded by LRU so the
-// long-lived dev server cannot accumulate entries for every session ever listed.
-//
-// The cap MUST stay >= the session-list limit (500): listClaudeSessions calls
-// getCachedSessionInfo for every listed session, so a cap below the list size
-// thrashes the LRU and every poll re-reads the overflow from disk. With 128 and
-// a 300+ session corpus, ~60% of sessions missed the cache on every 5 s poll,
-// making listViewSessions ~300ms (measured). 640 covers the 500 limit with
-// headroom; entries are small metadata records, so the memory cost is ~1 MB.
-const SESSION_INFO_TTL = 20_000
-const SESSION_INFO_CACHE_MAX = 640
-type SessionInfoCacheEntry = { result: Awaited<ReturnType<typeof getSessionInfo>>; ts: number }
-const sessionInfoCache = new Map<string, SessionInfoCacheEntry>()
-
-function pruneSessionInfoCache() {
-  const deadline = Date.now() - SESSION_INFO_TTL * 3
-  for (const [key, entry] of sessionInfoCache) {
-    if (entry.ts < deadline) sessionInfoCache.delete(key)
-  }
-}
-
-function touchSessionInfoCache(sessionId: string, entry: SessionInfoCacheEntry): void {
-  if (sessionInfoCache.has(sessionId)) sessionInfoCache.delete(sessionId)
-  sessionInfoCache.set(sessionId, entry)
-  while (sessionInfoCache.size > SESSION_INFO_CACHE_MAX) {
-    const oldest = sessionInfoCache.keys().next().value
-    if (oldest === undefined) break
-    sessionInfoCache.delete(oldest)
-  }
-}
-
-async function getCachedSessionInfo(sessionId: string, dir: string | undefined): Promise<Awaited<ReturnType<typeof getSessionInfo>>> {
-  const cached = sessionInfoCache.get(sessionId)
-  if (cached && Date.now() - cached.ts < SESSION_INFO_TTL) {
-    touchSessionInfoCache(sessionId, cached)
-    return cached.result
-  }
-  const result = await getSessionInfo(sessionId, {
-    ...(dir ? { dir } : {}),
-    ...claudeSessionStoreOptions(),
-  })
-  touchSessionInfoCache(sessionId, { result, ts: Date.now() })
-  return result
-}
-
-// Per-session cache of mapped+sorted messages. Lets idle polls skip the
-// normalize/dedup/sort pipeline when the underlying transcript is unchanged.
-// Each call computes a cheap raw signature; on match we return the cached
-// array (slice happens at the call site). On mismatch we re-map and store.
-// LRU-capped because each entry holds a fully normalized message array — a
-// large session can be MBs (base64 images included), so this cache is the
-// single largest deliberate server retainer. 4 keeps the active session (LRU
-// touch on every poll) plus a few recently viewed ones resident; anything
-// beyond that re-maps once on revisit instead of pinning MBs indefinitely.
-const MAPPED_MESSAGE_TTL = 60_000
-const MAPPED_MESSAGE_CACHE_MAX = 4
-// OpenCode events invalidate transcript mappings immediately, but the event
-// stream is only an optimization: a startup/reconnect race must not leave an
-// empty or partial transcript authoritative forever. Revalidate against the
-// SDK often enough that the active transcript's fallback poll is meaningful.
-const OPENCODE_TRANSCRIPT_EVENT_CACHE_MAX_AGE_MS = 1_000
-type MappedMessageCacheEntry = {
-  signature: string
-  messages: SessionMessage[]
-  ts: number
-}
-const mappedMessageCache = new Map<string, MappedMessageCacheEntry>()
-const openCodeTranscriptVerifications = new Map<string, {
-  version: string
-  signature: string
-  at: number
-}>()
-
-function touchOpenCodeTranscriptVerification(sessionId: string, version: string, signature: string): void {
-  openCodeTranscriptVerifications.delete(sessionId)
-  openCodeTranscriptVerifications.set(sessionId, { version, signature, at: Date.now() })
-  while (openCodeTranscriptVerifications.size > MAPPED_MESSAGE_CACHE_MAX) {
-    const oldest = openCodeTranscriptVerifications.keys().next().value
-    if (oldest === undefined) break
-    openCodeTranscriptVerifications.delete(oldest)
-  }
-}
-
-function pruneMappedMessageCache() {
-  const deadline = Date.now() - MAPPED_MESSAGE_TTL * 3
-  for (const [key, entry] of mappedMessageCache) {
-    if (entry.ts < deadline) mappedMessageCache.delete(key)
-  }
-}
-
-function readMappedMessagesCache(key: string, signature: string): SessionMessage[] | null {
-  const cached = mappedMessageCache.get(key)
-  if (cached && cached.signature === signature) {
-    cached.ts = Date.now()
-    // Touch LRU order so the active session stays resident under cap.
-    mappedMessageCache.delete(key)
-    mappedMessageCache.set(key, cached)
-    return cached.messages
-  }
-  return null
-}
-
-function readLatestMappedMessagesCache(key: string): SessionMessage[] | null {
-  const cached = mappedMessageCache.get(key)
-  if (!cached) return null
-  cached.ts = Date.now()
-  mappedMessageCache.delete(key)
-  mappedMessageCache.set(key, cached)
-  return cached.messages
-}
-
-function writeMappedMessagesCache(key: string, signature: string, messages: SessionMessage[]): SessionMessage[] {
-  pruneMappedMessageCache()
-  if (mappedMessageCache.has(key)) mappedMessageCache.delete(key)
-  mappedMessageCache.set(key, { signature, messages, ts: Date.now() })
-  while (mappedMessageCache.size > MAPPED_MESSAGE_CACHE_MAX) {
-    const oldest = mappedMessageCache.keys().next().value
-    if (oldest === undefined) break
-    mappedMessageCache.delete(oldest)
-  }
-  return messages
-}
-
 function windowForParams(messages: SessionMessage[], params: MessageListParams): SessionMessageWindow {
   const total = messages.length
   if (params.tail) {
@@ -457,33 +298,13 @@ function windowForParams(messages: SessionMessage[], params: MessageListParams):
   return { offset, total, messages: messages.slice(offset, offset + params.limit) }
 }
 
-const OPENCODE_OPTIONS = {
-  responseStyle: 'data' as const,
-  throwOnError: true as const,
-}
-
 // OpenCode streams complete on a `session.idle` event. If that event is dropped
 // (e.g. the shared harness subscription reconnects across a heartbeat gap), the
 // consume loop would otherwise wait forever. After this much total silence the
 // watchdog probes session.status to confirm the turn really finished.
 const OPENCODE_WATCHDOG_IDLE_MS = 30000
 const CODEX_WATCHDOG_IDLE_MS = 30000
-const CODEX_SESSION_LIST_SOURCE_KINDS: ThreadSourceKind[] = [
-  'cli',
-  'vscode',
-  'exec',
-  'appServer',
-  'subAgentThreadSpawn',
-  'unknown',
-]
 const COPILOT_TURN_INACTIVITY_MS = 300_000
-
-function openCodeData<T>(response: T | { data: T }): T {
-  if (response && typeof response === 'object' && 'data' in response) {
-    return (response as { data: T }).data
-  }
-  return response as T
-}
 
 type ListParams = {
   limit: number
@@ -570,135 +391,10 @@ export type SessionIndexRebuildResult = {
 }
 
 const REASONING_EFFORT_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'max', 'xhigh'] as const
-const PI_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
-const PI_SLASH_COMMANDS = [
-  { command: '/help', description: 'Show available AgentViewer Pi commands' },
-  { command: '/model', description: 'Show or switch the active model', argumentHint: '[provider/model]' },
-  { command: '/thinking', description: 'Show or change thinking effort', argumentHint: `[${PI_THINKING_LEVELS.join('|')}]` },
-  { command: '/compact', description: 'Compact conversation history', argumentHint: '[instructions]' },
-  { command: '/name', description: 'Set the session display name', argumentHint: '<name>' },
-  { command: '/session', description: 'Show session usage and cost' },
-  { command: '/reload', description: 'Reload Pi extensions, skills, prompts, settings, and context files' },
-] as const
 const INDEX_REBUILD_PROVIDERS: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'lmstudio']
 const INDEX_REBUILD_PAGE_SIZE = 500
 const INDEX_REBUILD_MESSAGE_LIMIT = 100_000
 const INDEX_REBUILD_MESSAGE_CONCURRENCY = 4
-
-function sortMessagesChronologically(messages: SessionMessage[]): SessionMessage[] {
-  return messages.toSorted((a, b) => {
-    const aTimestamp = a.timestamp ? Date.parse(a.timestamp) : Number.NaN
-    const bTimestamp = b.timestamp ? Date.parse(b.timestamp) : Number.NaN
-    if (!Number.isNaN(aTimestamp) && !Number.isNaN(bTimestamp) && aTimestamp !== bTimestamp) {
-      return aTimestamp - bTimestamp
-    }
-    return 0
-  })
-}
-
-function withOriginKind(messages: SessionMessage[], originKind: string): SessionMessage[] {
-  return messages.map((message) => ({
-    ...message,
-    origin: message.origin ?? { kind: originKind },
-  }))
-}
-
-/**
- * Walk parent_agent_id links (SDK 0.3.202+) up to the main loop and return the
- * spawn chain as a `/`-joined path (`parentId/childId`), outermost first.
- * Depth-1 agents (parent null or unknown) return just their own id, preserving
- * the historical `subagent:<agentId>` origin shape.
- */
-function claudeSubagentSpawnPath(agentId: string, parentByAgent: Map<string, string | null>): string {
-  const path = [agentId]
-  let current = parentByAgent.get(agentId) ?? null
-  while (current && !path.includes(current) && path.length < 16) {
-    path.unshift(current)
-    current = parentByAgent.get(current) ?? null
-  }
-  return path.join('/')
-}
-
-function claudeSubagentParentId(rawMessages: unknown[]): string | null {
-  const first = rawMessages[0] as { parent_agent_id?: string | null } | undefined
-  return typeof first?.parent_agent_id === 'string' ? first.parent_agent_id : null
-}
-
-/** Indent each subagent under its spawner so the diagnostics list reads as a tree. */
-function formatClaudeSubagentTree(agentIds: string[], parentByAgent: Map<string, string | null>): string[] {
-  const idSet = new Set(agentIds)
-  const childrenOf = new Map<string, string[]>()
-  const roots: string[] = []
-  for (const id of agentIds) {
-    const parent = parentByAgent.get(id)
-    if (parent && idSet.has(parent) && parent !== id) {
-      childrenOf.set(parent, [...(childrenOf.get(parent) ?? []), id])
-    } else {
-      roots.push(id)
-    }
-  }
-  const items: string[] = []
-  const visited = new Set<string>()
-  const visit = (id: string, depth: number) => {
-    if (visited.has(id)) return
-    visited.add(id)
-    items.push(depth === 0 ? id : `${'  '.repeat(depth - 1)}└ ${id}`)
-    for (const child of childrenOf.get(id) ?? []) visit(child, depth + 1)
-  }
-  for (const root of roots) visit(root, 0)
-  // Cyclic parent metadata leaves no roots; emit whatever the DFS missed so
-  // every listed agent still appears.
-  for (const id of agentIds) visit(id, 0)
-  return items
-}
-
-async function readClaudeSessionMessages(sessionId: string): Promise<SessionMessage[]> {
-  const [mainRaw, subagentIds] = await Promise.all([
-    getSessionMessages(sessionId, {
-      includeSystemMessages: true,
-      ...claudeSessionStoreOptions(),
-    }),
-    listSubagents(sessionId, claudeSessionStoreOptions()).catch(() => [] as string[]),
-  ])
-
-  const lastMain = mainRaw.at(-1) as { uuid?: string } | undefined
-  const signature = `${mainRaw.length}:${lastMain?.uuid ?? ''}:${subagentIds.length}:${subagentIds.at(-1) ?? ''}`
-  const cached = readMappedMessagesCache(`claude:${sessionId}`, signature)
-  if (cached) return cached
-
-  const subagentRaw = await Promise.all(
-    subagentIds.map(async (agentId) => ({
-      agentId,
-      messages: await getSubagentMessages(sessionId, agentId, claudeSessionStoreOptions())
-        .catch(() => [] as SessionMessage[]),
-    })),
-  )
-
-  // parent_agent_id (SDK 0.3.202+) names the subagent that spawned each agent,
-  // null for agents spawned by the main loop. Encode the spawn chain into the
-  // origin kind (`subagent:parent/child`) so renderers can show nesting depth.
-  const parentByAgent = new Map<string, string | null>()
-  for (const { agentId, messages } of subagentRaw) {
-    parentByAgent.set(agentId, claudeSubagentParentId(messages as unknown[]))
-  }
-  const subagentMessages = subagentRaw.map(({ agentId, messages }) =>
-    withOriginKind(
-      normalizeClaudeHistoryMessages(messages as unknown[]),
-      `subagent:${claudeSubagentSpawnPath(agentId, parentByAgent)}`,
-    ),
-  )
-
-  const deduped = new Map<string, SessionMessage>()
-  for (const message of [
-    ...normalizeClaudeHistoryMessages(mainRaw as unknown[]),
-    ...subagentMessages.flat(),
-  ]) {
-    deduped.set(`${message.provider ?? 'claude'}:${message.uuid}`, message)
-  }
-
-  const messages = sortMessagesChronologically([...deduped.values()])
-  return writeMappedMessagesCache(`claude:${sessionId}`, signature, messages)
-}
 
 /**
  * Plan rate-limit utilization — the data behind Claude Code's `/usage` command
@@ -712,95 +408,6 @@ async function readClaudeSessionMessages(sessionId: string): Promise<SessionMess
  * this section to "Unavailable" instead of throwing and taking the whole
  * diagnostics panel down with it.
  */
-type ClaudeUsageCapableQuery = {
-  usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: () => Promise<SDKControlGetUsageResponse>
-}
-
-async function claudePlanUsageItems(q: unknown): Promise<string[]> {
-  const call = (q as ClaudeUsageCapableQuery)?.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET
-  if (typeof call !== 'function') return ['Unavailable']
-  let usage: SDKControlGetUsageResponse
-  try {
-    usage = await call.call(q)
-  } catch {
-    return ['Unavailable']
-  }
-  const items: string[] = []
-  if (usage.subscription_type) items.push(`plan · ${usage.subscription_type}`)
-  if (!usage.rate_limits_available || !usage.rate_limits) {
-    // API key / Bedrock / Vertex sessions have no plan windows at all — say so
-    // rather than showing an empty section that reads like a failed read.
-    items.push('plan limits do not apply to this session')
-    return items
-  }
-  const limits = usage.rate_limits
-  const formatReset = (iso: string | null) => {
-    if (!iso) return ''
-    const at = new Date(iso)
-    if (Number.isNaN(at.getTime())) return ''
-    return ` · resets ${at.toLocaleString()}`
-  }
-  const window = (label: string, value: { utilization: number | null; resets_at: string | null } | null | undefined) => {
-    if (!value || value.utilization == null) return
-    items.push(`${label} · ${Math.round(value.utilization)}%${formatReset(value.resets_at)}`)
-  }
-  window('5-hour', limits.five_hour)
-  window('7-day', limits.seven_day)
-  window('7-day opus', limits.seven_day_opus)
-  window('7-day sonnet', limits.seven_day_sonnet)
-  window('7-day oauth apps', limits.seven_day_oauth_apps)
-  for (const scoped of limits.model_scoped ?? []) {
-    window(`7-day ${scoped.display_name}`, scoped)
-  }
-  // `used_credits` / `monthly_limit` are minor units whose exponent is not in
-  // the typed shape, so only the server-computed percentage is safe to render —
-  // printing the raw integers would show "2232/15000" for AUD 22.32 of 150.
-  const extra = limits.extra_usage
-  if (extra) {
-    const pct = extra.utilization != null ? ` · ${Math.round(extra.utilization)}%` : ''
-    const currency = extra.currency ? ` ${extra.currency}` : ''
-    items.push(extra.is_enabled ? `extra usage · enabled${pct}${currency}` : `extra usage · disabled${pct}${currency}`)
-  }
-  return items.length > 0 ? items : ['No plan limit windows reported']
-}
-
-function claudeLatencyDiagnosticItems(rawMessages: unknown[]): string[] {
-  const results = rawMessages
-    .filter((value): value is Record<string, unknown> => Boolean(value && typeof value === 'object'))
-    .filter((value) => value.type === 'result' && value.subtype === 'success')
-    .slice(-20)
-  if (results.length === 0) return ['No Claude result timing samples']
-  const samples = (key: string) => results
-    .map((result) => result[key])
-    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
-  const median = (values: number[]) => {
-    if (values.length === 0) return null
-    const sorted = [...values].sort((a, b) => a - b)
-    return sorted[Math.floor(sorted.length / 2)]
-  }
-  const formatMs = (value: number | null) => value == null ? null : `${Math.round(value)}ms`
-  const items = [`${results.length} recent result sample${results.length === 1 ? '' : 's'}`]
-  const timing: Array<[string, number]> = []
-  for (const [label, key] of [['TTFT', 'ttft_ms'], ['API', 'duration_api_ms'], ['Request', 'time_to_request_ms']] as const) {
-    const value = median(samples(key))
-    if (value != null) timing.push([label, value])
-  }
-  if (timing.length > 0) items.push(...timing.map(([label, value]) => `${label} median ${formatMs(value)}`))
-  const latest = results.at(-1)
-  if (typeof latest?.api_error_status === 'number') items.push(`Latest API status HTTP ${latest.api_error_status}`)
-  const modelUsage = latest?.modelUsage && typeof latest.modelUsage === 'object' ? latest.modelUsage as Record<string, unknown> : null
-  if (modelUsage) {
-    const models = Object.values(modelUsage).flatMap((value) => {
-      if (!value || typeof value !== 'object') return []
-      const entry = value as Record<string, unknown>
-      const model = typeof entry.canonicalModel === 'string' ? entry.canonicalModel : typeof entry.model === 'string' ? entry.model : null
-      const provider = typeof entry.provider === 'string' ? entry.provider : null
-      return model ? [provider ? `${provider}/${model}` : model] : []
-    })
-    if (models.length > 0) items.push(`Models ${[...new Set(models)].join(', ')}`)
-  }
-  return items
-}
 
 /**
  * Absolute paths the session has authoritatively observed through Claude's
@@ -835,19 +442,6 @@ function parseEffort(body: Record<string, unknown>): ReasoningEffortLevel | unde
   return REASONING_EFFORT_LEVELS.includes(effort as typeof REASONING_EFFORT_LEVELS[number])
     ? effort as typeof REASONING_EFFORT_LEVELS[number]
     : undefined
-}
-
-function parseCopilotContextTier(value: unknown): CopilotContextTier | undefined {
-  return value === 'default' || value === 'long_context' ? value : undefined
-}
-
-function claudeFallbackModelChain(): string | undefined {
-  const value = process.env.AGENT_VIEWER_CLAUDE_FALLBACK_MODELS
-    ?? process.env.CLAUDE_FALLBACK_MODELS
-    ?? process.env.CLAUDE_FALLBACK_MODEL
-  if (!value) return undefined
-  const models = value.split(',').map((model) => model.trim()).filter(Boolean)
-  return models.length > 0 ? models.join(',') : undefined
 }
 
 function parseTurnRequestId(body: Record<string, unknown>): string {
@@ -1357,27 +951,6 @@ export function createTurnUsageReporter(enqueue: (chunk: string) => void) {
   }
 }
 
-// Exported for reliabilityTimeoutSmoke.ts, which verifies (without needing
-// real Claude/Codex credentials or a custom-model deployment) that a hung
-// composer RPC actually times out at its bound and that the resulting error
-// message is classified as auto-retryable by isTransientSendError — the two
-// properties every withTimeout call site added for composer reliability
-// depends on.
-export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | null = null
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      reject(new Error(`${label} timed out after ${timeoutMs}ms`))
-    }, timeoutMs)
-    if (typeof timer === 'object' && timer && 'unref' in timer) {
-      (timer as { unref: () => void }).unref()
-    }
-  })
-  return Promise.race([promise, timeout]).finally(() => {
-    if (timer != null) clearTimeout(timer)
-  })
-}
-
 // How many inconclusive probes (provider unreachable / status unknown) to
 // tolerate after a silence window before giving up and resolving the turn so
 // the request can never hang indefinitely.
@@ -1502,69 +1075,6 @@ function commandResultEvent(provider: AgentProvider, data: Record<string, unknow
 // to clear the live overlay.
 function turnNoticeEvent(message: string): string {
   return `event: turn-notice\ndata: ${JSON.stringify({ message })}\n\n`
-}
-
-const COPILOT_COMPOSER_MODES = [
-  {
-    value: 'interactive',
-    label: 'INTERACTIVE',
-    description: 'Respond conversationally and make changes as needed.',
-  },
-  {
-    value: 'plan',
-    label: 'PLAN',
-    description: 'Prepare a plan before changing files.',
-  },
-  {
-    value: 'autopilot',
-    label: 'AUTOPILOT',
-    description: 'Work autonomously toward task completion.',
-  },
-  {
-    value: 'shell',
-    label: 'SHELL',
-    description: 'Use Copilot shell-focused mode for the next turn.',
-  },
-] satisfies NonNullable<SessionComposerOptions['modes']>
-
-const CLAUDE_PERMISSION_MODE_OPTIONS = [
-  { value: 'default', label: 'DEFAULT', description: 'Use the session permission policy.' },
-  { value: 'acceptEdits', label: 'ACCEPT EDITS', description: 'Approve file edits while prompting for other tools.' },
-  { value: 'plan', label: 'PLAN', description: 'Plan without making changes.' },
-  { value: 'bypassPermissions', label: 'BYPASS', description: 'Run tools without permission prompts.' },
-] satisfies NonNullable<SessionComposerOptions['permissionModes']>
-
-const CODEX_PERMISSION_MODE_OPTIONS = [
-  { value: 'auto', label: 'CONFIG', description: 'Use the app-server configured approval policy.' },
-  { value: 'untrusted', label: 'UNTRUSTED', description: 'Only trusted operations run without approval.' },
-  { value: 'on-request', label: 'ON REQUEST', description: 'Ask when the agent requests elevated execution.' },
-  { value: 'never', label: 'NEVER', description: 'Never request approval.' },
-] satisfies NonNullable<SessionComposerOptions['permissionModes']>
-
-const COPILOT_PERMISSION_MODE_OPTIONS = [
-  { value: 'off', label: 'PROMPT', description: 'Use the normal permission approval flow.' },
-  { value: 'auto', label: 'AUTO', description: 'Attach Copilot safety recommendations to requests.' },
-  { value: 'on', label: 'ALLOW ALL', description: 'Automatically approve tool, path, and URL requests.' },
-] satisfies NonNullable<SessionComposerOptions['permissionModes']>
-
-const PROVIDER_MANAGED_PERMISSION_OPTIONS = [
-  { value: 'native', label: 'NATIVE', description: 'Permissions are managed by the provider.' },
-] satisfies NonNullable<SessionComposerOptions['permissionModes']>
-
-type CopilotAgentMode = NonNullable<CopilotMessageOptions['agentMode']>
-type CopilotPersistentMode = Exclude<CopilotAgentMode, 'shell'>
-
-function parseCopilotMode(value: unknown): CopilotAgentMode | undefined {
-  return value === 'interactive' || value === 'plan' || value === 'autopilot' || value === 'shell'
-    ? value
-    : undefined
-}
-
-function parseCopilotModeResponse(value: unknown): CopilotAgentMode | undefined {
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    return parseCopilotMode((value as { mode?: unknown }).mode)
-  }
-  return parseCopilotMode(value)
 }
 
 type CopilotPermissionMode = 'off' | 'auto' | 'on'
@@ -1729,371 +1239,6 @@ function resolvePendingCopilotElicitations(sessionId: string, ids: Set<string>, 
     ids.delete(id)
     pending.resolve(result)
   }
-}
-
-type CopilotAssistantMessageEvent = Extract<CopilotSessionEvent, { type: 'assistant.message' }>
-type CopilotAssistantMessageDeltaEvent = Extract<CopilotSessionEvent, { type: 'assistant.message_delta' }>
-type CopilotAssistantMessageStartEvent = Extract<CopilotSessionEvent, { type: 'assistant.message_start' }>
-
-type CopilotLiveDraft = {
-  agentId?: string
-  content: string
-  messageId: string
-  parentId: string | null
-  phase?: string
-  timestamp: string
-  turnId?: string
-}
-
-type CopilotLiveTranscriptEntry = {
-  currentTurnId?: string
-  drafts: Map<string, CopilotLiveDraft>
-  events: Map<string, CopilotSessionEvent>
-  timer?: ReturnType<typeof setTimeout>
-  updatedAt: number
-}
-
-const COPILOT_LIVE_TRANSCRIPT_TTL_MS = 5 * 60 * 1000
-// Size backstop on top of the TTL cleanup: if cleanup scheduling is ever
-// missed (e.g. a turn dies mid-stream), the map still cannot grow past the
-// realistic concurrent-live-session count.
-const LIVE_TRANSCRIPT_MAX_ENTRIES = 32
-declare global {
-  // eslint-disable-next-line no-var
-  var __agentViewerCopilotLiveTranscripts: Map<string, CopilotLiveTranscriptEntry> | undefined
-}
-const copilotLiveTranscripts = globalThis.__agentViewerCopilotLiveTranscripts
-  ?? (globalThis.__agentViewerCopilotLiveTranscripts = new Map<string, CopilotLiveTranscriptEntry>())
-
-function getCopilotLiveTranscriptEntry(sessionId: string): CopilotLiveTranscriptEntry {
-  let entry = copilotLiveTranscripts.get(sessionId)
-  if (!entry) {
-    entry = {
-      drafts: new Map(),
-      events: new Map(),
-      updatedAt: Date.now(),
-    }
-    copilotLiveTranscripts.set(sessionId, entry)
-    while (copilotLiveTranscripts.size > LIVE_TRANSCRIPT_MAX_ENTRIES) {
-      const oldestKey = copilotLiveTranscripts.keys().next().value
-      if (oldestKey === undefined) break
-      const oldest = copilotLiveTranscripts.get(oldestKey)
-      if (oldest?.timer) clearTimeout(oldest.timer)
-      copilotLiveTranscripts.delete(oldestKey)
-    }
-  }
-  if (entry.timer) {
-    clearTimeout(entry.timer)
-    entry.timer = undefined
-  }
-  entry.updatedAt = Date.now()
-  return entry
-}
-
-function scheduleCopilotLiveTranscriptCleanup(sessionId: string): void {
-  const entry = copilotLiveTranscripts.get(sessionId)
-  if (!entry) return
-  if (entry.timer) clearTimeout(entry.timer)
-  entry.timer = setTimeout(() => {
-    copilotLiveTranscripts.delete(sessionId)
-  }, COPILOT_LIVE_TRANSCRIPT_TTL_MS)
-  if (typeof entry.timer === 'object' && entry.timer && 'unref' in entry.timer) {
-    (entry.timer as { unref: () => void }).unref()
-  }
-}
-
-function copilotLiveEventKey(event: CopilotSessionEvent): string {
-  if (event.type === 'assistant.message') return `assistant.message:${event.data.messageId}`
-  return `${event.type}:${event.id}`
-}
-
-function makeCopilotLiveAssistantMessageEvent(draft: CopilotLiveDraft): CopilotAssistantMessageEvent {
-  return {
-    agentId: draft.agentId,
-    data: {
-      content: draft.content,
-      messageId: draft.messageId,
-      phase: draft.phase,
-      turnId: draft.turnId,
-    },
-    ephemeral: true,
-    id: `agent-viewer-live:${draft.messageId}`,
-    parentId: draft.parentId,
-    timestamp: draft.timestamp,
-    type: 'assistant.message',
-  } as CopilotAssistantMessageEvent
-}
-
-function recordCopilotLiveDraftStart(sessionId: string, event: CopilotAssistantMessageStartEvent): void {
-  const entry = getCopilotLiveTranscriptEntry(sessionId)
-  const existing = entry.drafts.get(event.data.messageId)
-  entry.drafts.set(event.data.messageId, {
-    agentId: event.agentId,
-    content: existing?.content ?? '',
-    messageId: event.data.messageId,
-    parentId: event.parentId,
-    phase: event.data.phase,
-    timestamp: existing?.timestamp ?? event.timestamp,
-    turnId: entry.currentTurnId,
-  })
-}
-
-function recordCopilotLiveDraftDelta(sessionId: string, event: CopilotAssistantMessageDeltaEvent): void {
-  const entry = getCopilotLiveTranscriptEntry(sessionId)
-  const existing = entry.drafts.get(event.data.messageId)
-  entry.drafts.set(event.data.messageId, {
-    agentId: event.agentId ?? existing?.agentId,
-    content: `${existing?.content ?? ''}${event.data.deltaContent}`,
-    messageId: event.data.messageId,
-    parentId: existing?.parentId ?? event.parentId,
-    phase: existing?.phase,
-    timestamp: event.timestamp,
-    turnId: existing?.turnId ?? entry.currentTurnId,
-  })
-}
-
-function recordCopilotLiveTranscriptEvent(sessionId: string, event: CopilotSessionEvent): void {
-  const entry = getCopilotLiveTranscriptEntry(sessionId)
-
-  if (event.type === 'assistant.turn_start') {
-    entry.currentTurnId = event.data.turnId
-  } else if (event.type === 'assistant.turn_end' && entry.currentTurnId === event.data.turnId) {
-    entry.currentTurnId = undefined
-    scheduleCopilotLiveTranscriptCleanup(sessionId)
-  }
-
-  if (event.type === 'assistant.message_start') {
-    recordCopilotLiveDraftStart(sessionId, event)
-    return
-  }
-  if (event.type === 'assistant.message_delta') {
-    recordCopilotLiveDraftDelta(sessionId, event)
-    return
-  }
-  if (event.type === 'assistant.message') {
-    entry.drafts.delete(event.data.messageId)
-  }
-
-  entry.events.set(copilotLiveEventKey(event), event)
-}
-
-function getCopilotLiveTranscriptEvents(sessionId: string): CopilotSessionEvent[] {
-  const entry = copilotLiveTranscripts.get(sessionId)
-  if (!entry) return []
-  const events = Array.from(entry.events.values())
-  for (const draft of entry.drafts.values()) {
-    if (!draft.content) continue
-    events.push(makeCopilotLiveAssistantMessageEvent(draft))
-  }
-  return events.sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))
-}
-
-function copilotLiveTranscriptSignature(events: CopilotSessionEvent[]): string {
-  if (events.length === 0) return ''
-  return events.map((event) => {
-    if (event.type === 'assistant.message') {
-      return `${event.type}:${event.data.messageId}:${event.data.content.length}:${event.data.content.slice(-64)}`
-    }
-    return `${event.type}:${event.id}`
-  }).join('|')
-}
-
-function mergeCopilotSessionEvents(persisted: CopilotSessionEvent[], live: CopilotSessionEvent[]): CopilotSessionEvent[] {
-  if (live.length === 0) return persisted
-  return [...persisted, ...filterCopilotLiveEvents(persisted, live)].sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))
-}
-
-function filterCopilotLiveEvents(persisted: CopilotSessionEvent[], live: CopilotSessionEvent[]): CopilotSessionEvent[] {
-  const persistedIds = new Set(persisted.map((event) => event.id))
-  const persistedAssistantIds = new Set(
-    persisted
-      .filter((event): event is CopilotAssistantMessageEvent => event.type === 'assistant.message')
-      .map((event) => event.data.messageId),
-  )
-  const filtered: CopilotSessionEvent[] = []
-  for (const event of live) {
-    if (persistedIds.has(event.id)) continue
-    if (event.type === 'assistant.message' && persistedAssistantIds.has(event.data.messageId)) continue
-    filtered.push(event)
-  }
-  return filtered
-}
-
-function sessionMessageIdentity(message: SessionMessage): string {
-  return `${message.provider ?? 'claude'}:${message.uuid}`
-}
-
-function markLiveSessionMessages(messages: SessionMessage[], liveKeys: Set<string>): SessionMessage[] {
-  if (liveKeys.size === 0) return messages
-  return messages.map((message) => liveKeys.has(sessionMessageIdentity(message))
-    ? { ...message, ephemeral: true }
-    : message
-  )
-}
-
-type PiLiveTranscriptEntry = {
-  activeAssistantKey?: string
-  messages: Map<string, PiAgentMessage>
-  timer?: ReturnType<typeof setTimeout>
-  updatedAt: number
-}
-
-const PI_LIVE_TRANSCRIPT_TTL_MS = 5 * 60 * 1000
-declare global {
-  // eslint-disable-next-line no-var
-  var __agentViewerPiLiveTranscripts: Map<string, PiLiveTranscriptEntry> | undefined
-}
-const piLiveTranscripts = globalThis.__agentViewerPiLiveTranscripts
-  ?? (globalThis.__agentViewerPiLiveTranscripts = new Map<string, PiLiveTranscriptEntry>())
-
-function getPiLiveTranscriptEntry(sessionId: string): PiLiveTranscriptEntry {
-  let entry = piLiveTranscripts.get(sessionId)
-  if (!entry) {
-    entry = {
-      messages: new Map(),
-      updatedAt: Date.now(),
-    }
-    piLiveTranscripts.set(sessionId, entry)
-    while (piLiveTranscripts.size > LIVE_TRANSCRIPT_MAX_ENTRIES) {
-      const oldestKey = piLiveTranscripts.keys().next().value
-      if (oldestKey === undefined) break
-      const oldest = piLiveTranscripts.get(oldestKey)
-      if (oldest?.timer) clearTimeout(oldest.timer)
-      piLiveTranscripts.delete(oldestKey)
-    }
-  }
-  if (entry.timer) {
-    clearTimeout(entry.timer)
-    entry.timer = undefined
-  }
-  entry.updatedAt = Date.now()
-  return entry
-}
-
-function schedulePiLiveTranscriptCleanup(sessionId: string): void {
-  const entry = piLiveTranscripts.get(sessionId)
-  if (!entry) return
-  if (entry.timer) clearTimeout(entry.timer)
-  entry.timer = setTimeout(() => {
-    piLiveTranscripts.delete(sessionId)
-  }, PI_LIVE_TRANSCRIPT_TTL_MS)
-  if (typeof entry.timer === 'object' && entry.timer && 'unref' in entry.timer) {
-    (entry.timer as { unref: () => void }).unref()
-  }
-}
-
-function piLiveMessageKey(message: PiAgentMessage, fallback: string): string {
-  const record = message as unknown as Record<string, unknown>
-  const role = typeof record.role === 'string' ? record.role : 'message'
-  if (role === 'assistant') {
-    const responseId = typeof record.responseId === 'string' && record.responseId ? record.responseId : ''
-    const timestamp = typeof record.timestamp === 'number' ? record.timestamp : ''
-    const model = typeof record.model === 'string' ? record.model : ''
-    return `assistant:${responseId || timestamp || model || fallback}`
-  }
-  if (role === 'toolResult') {
-    const toolCallId = typeof record.toolCallId === 'string' && record.toolCallId ? record.toolCallId : ''
-    const timestamp = typeof record.timestamp === 'number' ? record.timestamp : ''
-    return `toolResult:${toolCallId || timestamp || fallback}`
-  }
-  if (role === 'bashExecution') {
-    const command = typeof record.command === 'string' && record.command ? record.command : ''
-    const timestamp = typeof record.timestamp === 'number' ? record.timestamp : ''
-    return `bashExecution:${command || timestamp || fallback}`
-  }
-  if (role === 'user') {
-    const timestamp = typeof record.timestamp === 'number' ? record.timestamp : ''
-    return `user:${timestamp || fallback}`
-  }
-  const timestamp = typeof record.timestamp === 'number' ? record.timestamp : ''
-  return `${role}:${timestamp || fallback}`
-}
-
-function recordPiLiveMessage(sessionId: string, message: PiAgentMessage, fallback: string): void {
-  const entry = getPiLiveTranscriptEntry(sessionId)
-  let key = piLiveMessageKey(message, fallback)
-  if ((message as { role?: unknown }).role === 'assistant') {
-    if (entry.activeAssistantKey && entry.activeAssistantKey !== key) {
-      entry.messages.delete(entry.activeAssistantKey)
-    }
-    entry.activeAssistantKey = key
-  }
-  entry.messages.set(key, message)
-}
-
-function recordPiLiveBashMessage(
-  sessionId: string,
-  params: {
-    command: string
-    output: string
-    excludeFromContext: boolean
-    exitCode?: number
-    cancelled?: boolean
-    truncated?: boolean
-    fullOutputPath?: string
-  },
-): void {
-  recordPiLiveMessage(sessionId, {
-    role: 'bashExecution',
-    command: params.command,
-    output: params.output,
-    exitCode: params.exitCode,
-    cancelled: params.cancelled ?? false,
-    truncated: params.truncated ?? false,
-    fullOutputPath: params.fullOutputPath,
-    timestamp: Date.now(),
-    excludeFromContext: params.excludeFromContext,
-  } as unknown as PiAgentMessage, `bash:${params.command}`)
-}
-
-function recordPiLiveTranscriptEvent(sessionId: string, event: PiAgentEvent): void {
-  switch (event.type) {
-    case 'message_start':
-    case 'message_update':
-    case 'message_end':
-      recordPiLiveMessage(sessionId, event.message, event.type)
-      if (event.type === 'message_end' && event.message.role === 'assistant') {
-        const entry = getPiLiveTranscriptEntry(sessionId)
-        entry.activeAssistantKey = undefined
-      }
-      break
-    case 'turn_end':
-      recordPiLiveMessage(sessionId, event.message, 'turn_end')
-      for (const result of event.toolResults) {
-        recordPiLiveMessage(sessionId, result, `turn_end:${result.toolCallId}`)
-      }
-      break
-    default:
-      break
-  }
-}
-
-function getPiLiveTranscriptMessages(sessionId: string, persisted: PiAgentMessage[]): PiAgentMessage[] {
-  const entry = piLiveTranscripts.get(sessionId)
-  if (!entry) return []
-  const persistedFingerprints = new Set(persisted.map(piAgentMessageFingerprint))
-  const persistedDuplicateKeys = new Set(persisted.map(piAgentMessageDuplicateKey))
-  const liveMessages: PiAgentMessage[] = []
-  for (const message of entry.messages.values()) {
-    if (persistedFingerprints.has(piAgentMessageFingerprint(message))) continue
-    if (persistedDuplicateKeys.has(piAgentMessageDuplicateKey(message))) continue
-    liveMessages.push(message)
-  }
-  return liveMessages.sort((a, b) => {
-    const at = typeof (a as { timestamp?: unknown }).timestamp === 'number' ? (a as { timestamp: number }).timestamp : 0
-    const bt = typeof (b as { timestamp?: unknown }).timestamp === 'number' ? (b as { timestamp: number }).timestamp : 0
-    return at - bt
-  })
-}
-
-function piLiveTranscriptSignature(messages: PiAgentMessage[]): string {
-  if (messages.length === 0) return ''
-  return messages.map((message) => {
-    const record = message as unknown as Record<string, unknown>
-    const role = typeof record.role === 'string' ? record.role : ''
-    const timestamp = typeof record.timestamp === 'number' ? record.timestamp : ''
-    return `${role}:${timestamp}:${piAgentMessageFingerprint(message)}`
-  }).join('|')
 }
 
 type PendingClaudePermission = {
@@ -2427,41 +1572,8 @@ function resolvePendingClaudePermissions(sessionId: string, ids: Set<string>, me
   }
 }
 
-function openCodeAgentOption(agent: OpenCodeAgent): SessionComposerAgentOption {
-  const metadata = agent as OpenCodeAgent & { hidden?: boolean; native?: boolean }
-  return {
-    value: agent.name,
-    label: agent.name,
-    description: agent.description ?? undefined,
-    mode: agent.mode,
-    native: metadata.native ?? agent.builtIn,
-  }
-}
-
-function isOpenCodeAgentHidden(agent: OpenCodeAgent): boolean {
-  return (agent as OpenCodeAgent & { hidden?: boolean }).hidden === true
-}
-
-function lastOpenCodeUserAgent(messages: Array<{ info: OpenCodeMessage; parts: OpenCodePart[] }>): string | null {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const info = messages[i]?.info
-    if (info?.role === 'user' && typeof info.agent === 'string' && info.agent.trim()) {
-      return info.agent
-    }
-  }
-  return null
-}
-
 function formatCopilotEvent(event: CopilotSessionEvent): string {
   return JSON.stringify({ type: 'copilot_event', event })
-}
-
-async function findCopilotSessionMetadata(sessionId: string): Promise<CopilotSessionMetadata | null> {
-  const client = await getCopilotClient()
-  const metadata = await client.getSessionMetadata(sessionId).catch(() => undefined)
-  if (metadata) return metadata
-  const sessions = await client.listSessions()
-  return sessions.find((session) => session.sessionId === sessionId) ?? null
 }
 
 async function readCopilotSessionEvents(sessionId: string): Promise<CopilotSessionEvent[]> {
@@ -2511,75 +1623,6 @@ function findCopilotHistoryCompletion(
   return hasCompletionSignal || (allowFinalMessageFallback && !hasToolRequests)
     ? assistant
     : null
-}
-
-async function listCopilotSessions({ limit, offset, dir, includeWorktrees }: ListParams): Promise<Session[]> {
-  const client = await getCopilotClient()
-  const response = dir && !includeWorktrees
-    ? await client.listSessions({ workingDirectory: dir })
-    : await client.listSessions()
-
-  const filtered = dir
-    ? response.filter((session) => {
-        const cwd = session.context?.workingDirectory
-        if (!cwd) return false
-        return includeWorktrees ? sameProjectPath(dir, cwd) : normalizeProjectPath(cwd) === normalizeProjectPath(dir)
-      })
-    : response
-
-  const sorted = filtered.toSorted((a, b) => b.modifiedTime.getTime() - a.modifiedTime.getTime())
-  const page = sorted.slice(offset, offset + limit)
-  const stored = await getCopilotStoredMetadataForSessions(page.map((session) => session.sessionId))
-  return page.map((session) => mapCopilotSessionToSession(session, stored[session.sessionId] ?? { title: null, tag: null }))
-}
-
-async function listCodexSessions({ limit, offset, dir }: ListParams): Promise<Session[]> {
-  const client = getCodexClient()
-  const response = await client.request('thread/list', {
-    limit: limit + offset,
-    cwd: dir || undefined,
-    sourceKinds: CODEX_SESSION_LIST_SOURCE_KINDS,
-  })
-  const page = response.data.slice(offset, offset + limit)
-  const tags = await getCodexStoredTagsForSessions(page.map((thread) => thread.id))
-  return page.map((thread) => mapCodexThreadToSession(thread, tags[thread.id] ?? null))
-}
-
-async function listClaudeSessions({ limit, offset, dir, includeWorktrees }: ListParams): Promise<Session[]> {
-  pruneSessionInfoCache()
-  const sessions = await timeAsync('claude.listSessions', () => listSessions({
-    limit,
-    offset,
-    dir,
-    includeWorktrees: dir ? includeWorktrees : undefined,
-    // SessionStore.listSessions is project-scoped: the SDK has no API for
-    // enumerating project keys. Preserve its true cross-project filesystem
-    // behavior when no directory filter is present. Store mirroring requires
-    // local persistence, so those sessions remain visible in this fallback.
-    ...(dir ? claudeSessionStoreOptions() : {}),
-  }))
-  const normalized = await timeAsync('claude.sessionInfo', () => mapConcurrent(sessions, 20, async (session) => {
-    try {
-      const sessionDir = typeof session.cwd === 'string' && session.cwd ? session.cwd : dir
-      const info = await getCachedSessionInfo(session.sessionId, sessionDir)
-      if (!info) return session
-      return {
-        ...session,
-        ...info,
-        // Keep the list-level working directory when the single-session lookup
-        // can't resolve one, but prefer the stable per-session metadata.
-        cwd: info.cwd ?? session.cwd,
-      }
-    } catch {
-      return session
-    }
-  }))
-
-  return normalized.map((session) => ({
-    ...session,
-    provider: 'claude',
-    capabilities: getProviderCapabilities('claude'),
-  }))
 }
 
 function acpAgentKindOf(provider: 'claude-acp' | 'codex-acp'): 'claude' | 'codex' {
@@ -2696,180 +1739,6 @@ async function removePersistedSessionBestEffort(provider: AgentProvider, session
   }
 }
 
-async function readCodexThread(sessionId: string, includeTurns: boolean) {
-  const client = getCodexClient()
-  const response = await client.request('thread/read', {
-    threadId: sessionId,
-    includeTurns,
-  })
-  return response.thread
-}
-
-async function listCodexTurnsFull(sessionId: string): Promise<CodexThread['turns']> {
-  const client = getCodexClient()
-  const turns: CodexThread['turns'] = []
-  let cursor: string | null = null
-
-  do {
-    const response: CodexResponseFor<'thread/turns/list'> = await client.request('thread/turns/list', {
-      threadId: sessionId,
-      cursor,
-      limit: 200,
-      sortDirection: 'asc',
-      itemsView: 'full',
-    })
-    turns.push(...response.data)
-    cursor = response.nextCursor
-  } while (cursor)
-
-  return turns
-}
-
-async function readCodexThreadWithFullTurns(sessionId: string): Promise<CodexThread> {
-  const thread = await readCodexThread(sessionId, false)
-  try {
-    const turns = await listCodexTurnsFull(sessionId)
-    return { ...thread, turns }
-  } catch (err) {
-    if (isCodexMissingRolloutError(err)) return { ...thread, turns: [] }
-    // Older app-server builds populated `thread/read(includeTurns)` before
-    // the paginated turns API existed. Keep that as a fallback, but prefer
-    // `itemsView: "full"` above because it matches live Codex CLI state.
-    return readCodexThread(sessionId, true)
-  }
-}
-
-export function isCodexMissingRolloutError(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err)
-  return (
-    /no rollout found for thread id/i.test(message) ||
-    /thread not found:/i.test(message) ||
-    /thread .+ is not materialized yet/i.test(message) ||
-    /includeTurns is unavailable before first user message/i.test(message)
-  )
-}
-
-export function isCodexActiveWriterError(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err)
-  return /thread .+ already has an active writer/i.test(message)
-}
-
-function pendingCodexSessionInfo(sessionId: string, tag: string | null): SessionInfo {
-  return {
-    sessionId,
-    summary: 'New session',
-    lastModified: Date.now(),
-    tag: tag ?? undefined,
-    provider: 'codex',
-    capabilities: getProviderCapabilities('codex'),
-  }
-}
-
-async function resumeCodexThread(sessionId: string): Promise<CodexThreadResumeResponse> {
-  const client = getCodexClient()
-  return client.request('thread/resume', {
-    threadId: sessionId,
-  })
-}
-
-// Threads already resumed on the current app-server process, mapped to the
-// model reported at resume time. thread/resume materializes the rollout
-// server-side; once done the thread stays live for the process lifetime, so
-// paying the RPC on every send just added a serial round-trip ahead of
-// turn/start (first-token latency). Cleared wholesale when the app-server
-// child exits — a respawned server has no live threads — and per-thread when
-// turn/start reports a missing rollout (see createCodexStream's retry).
-declare global {
-  // eslint-disable-next-line no-var
-  var __agentViewerCodexResumedThreads: Map<string, string | null> | undefined
-  // eslint-disable-next-line no-var
-  var __agentViewerCodexResumeInvalidatorInstalled: boolean | undefined
-  // eslint-disable-next-line no-var
-  var __agentViewerCodexResumeInflight: Map<string, Promise<{ model: string | null }>> | undefined
-}
-const codexResumedThreads = globalThis.__agentViewerCodexResumedThreads
-  ?? (globalThis.__agentViewerCodexResumedThreads = new Map<string, string | null>())
-const codexResumeInflight = globalThis.__agentViewerCodexResumeInflight
-  ?? (globalThis.__agentViewerCodexResumeInflight = new Map<string, Promise<{ model: string | null }>>())
-
-function codexThreadKey(sessionId: string): string {
-  return `${currentProviderInstanceId('codex')}:${sessionId}`
-}
-
-async function ensureCodexThreadResumed(sessionId: string): Promise<{ model: string | null }> {
-  const client = getCodexClient()
-  if (!globalThis.__agentViewerCodexResumeInvalidatorInstalled) {
-    globalThis.__agentViewerCodexResumeInvalidatorInstalled = true
-    client.subscribeDisconnect(() => codexResumedThreads.clear())
-  }
-  const key = codexThreadKey(sessionId)
-  const cached = codexResumedThreads.get(key)
-  if (cached !== undefined) return { model: cached }
-  const inflight = codexResumeInflight.get(key)
-  if (inflight) return inflight
-  const resume = resumeCodexThread(sessionId).then((result) => {
-    const model = typeof result?.model === 'string' ? result.model : null
-    codexResumedThreads.set(key, model)
-    return { model }
-  })
-  codexResumeInflight.set(key, resume)
-  resume.finally(() => codexResumeInflight.delete(key)).catch(() => {})
-  return resume
-}
-
-async function listOpenCodeSessions({ dir, limit, offset }: ListParams): Promise<Session[]> {
-  const client = await getOpenCodeV2Client()
-  // The compatibility client bundled at the package root still omits the
-  // server's `limit` field from its generated type and silently leaves us at
-  // OpenCode's 100-session default. The v2 client describes the current
-  // endpoint accurately, so request exactly the prefix needed for local
-  // pagination instead of fetching too little or an unbounded history.
-  const response = await client.session.list({
-    ...(dir ? { directory: dir } : {}),
-    limit: Math.max(1, limit + offset),
-  }, OPENCODE_OPTIONS)
-  const sessions = openCodeData<OpenCodeSession[]>(response as unknown as { data: OpenCodeSession[] })
-  const tags = await getOpenCodeStoredTagsForSessions(sessions.map((session) => session.id))
-  return sessions.map((session) => mapOpenCodeSessionToSession(session, tags[session.id] ?? null))
-}
-
-async function getOpenCodeSession(sessionId: string): Promise<OpenCodeSession> {
-  const client = await getOpenCodeClient()
-  const response = await client.session.get({
-    ...OPENCODE_OPTIONS,
-    path: { id: sessionId },
-  })
-  return openCodeData<OpenCodeSession>(response)
-}
-
-async function getOpenCodeSessionMessages(sessionId: string): Promise<Array<{ info: OpenCodeMessage; parts: OpenCodePart[] }>> {
-  const client = await getOpenCodeClient()
-  const response = await client.session.messages({
-    ...OPENCODE_OPTIONS,
-    path: { id: sessionId },
-    query: { limit: 2000 },
-  })
-  return openCodeData<Array<{ info: OpenCodeMessage; parts: OpenCodePart[] }>>(response)
-}
-
-function openCodeDirectoryQuery(session: OpenCodeSession): { directory?: string } | undefined {
-  return session.directory ? { directory: session.directory } : undefined
-}
-
-async function listPiSessionsForView({ limit, offset, dir }: ListParams): Promise<Session[]> {
-  const sessions = await listPiSessions(dir || undefined)
-  const sorted = sessions.toSorted((a, b) => b.modified.getTime() - a.modified.getTime())
-  const page = sorted.slice(offset, offset + limit)
-  const stored = await getPiStoredMetadataForSessions(page.map((s) => s.id))
-  return page.map((s) => mapPiSessionToSession(s, stored[s.id] ?? { title: null, tag: null }))
-}
-
-async function listLmstudioSessionsForView({ limit, offset, dir }: ListParams): Promise<Session[]> {
-  const sessions = await listLmstudioSessions()
-  const filtered = dir ? sessions.filter((s) => s.cwd === dir) : sessions
-  return filtered.slice(offset, offset + limit).map(mapLmstudioSessionToSession)
-}
-
 export function listViewSessions(params: ListParams): Promise<Session[]> {
   return timeAsync('listViewSessions', () => listViewSessionsImpl(params))
 }
@@ -2919,9 +1788,21 @@ async function applyInboxStates(sessions: Session[]): Promise<Session[]> {
 
 async function listViewSessionsImpl(params: ListParams): Promise<Session[]> {
   const provider = params.provider ?? await getConfiguredProvider()
-  let sessions: Session[]
+
+  // Every listing ends the same way — stamp instance identity, apply inbox
+  // ordering, mirror into the search index — so that tail lives here once
+  // instead of in each adapter.
+  const finish = async (sessions: Session[]): Promise<Session[]> => {
+    const decorated = await applyInboxStates(sessions)
+    await syncSessionsBestEffort(decorated)
+    return decorated
+  }
+
   if (provider === 'all') {
     const combinedLimit = params.limit + params.offset
+    // ACP sessions are transient and unlistable, so they cannot contribute to
+    // an aggregated view; excluding them here keeps the fan-out honest rather
+    // than relying on each adapter to return nothing.
     const instances = (await listProviderInstances()).filter((instance) =>
       instance.provider !== 'claude-acp' && instance.provider !== 'codex-acp'
     )
@@ -2929,34 +1810,28 @@ async function listViewSessionsImpl(params: ListParams): Promise<Session[]> {
       instance.id,
       instance.provider,
       async () => {
-        const instanceParams = {
+        const adapter = getSessionAdapter(instance.provider)
+        if (!adapter.listSessions) return []
+        const page = await adapter.listSessions({
           ...params,
           provider: instance.provider,
           providerInstanceId: instance.id,
           limit: combinedLimit,
           offset: 0,
-        }
-        let page: Session[]
-        if (instance.provider === 'claude') page = await withProviderProcessEnvironment(() => listClaudeSessions(instanceParams))
-        else if (instance.provider === 'codex') page = await listCodexSessions(instanceParams)
-        else if (instance.provider === 'opencode') page = await listOpenCodeSessions(instanceParams)
-        else if (instance.provider === 'copilot') page = await listCopilotSessions(instanceParams)
-        else if (instance.provider === 'pi') page = await listPiSessionsForView(instanceParams)
-        else page = await listLmstudioSessionsForView(instanceParams)
+        })
         return page.map((session) => applyProviderInstance(session, instance))
       },
     )))
-    sessions = pages.flat()
+    const merged = pages.flat()
       .sort((a, b) => {
         const aTime = Number(a.lastModified ?? a.createdAt ?? 0)
         const bTime = Number(b.lastModified ?? b.createdAt ?? 0)
         return bTime - aTime
       })
       .slice(params.offset, params.offset + params.limit)
-    sessions = await applyInboxStates(sessions)
-    await syncSessionsBestEffort(sessions)
-    return sessions
+    return finish(merged)
   }
+
   const instance = await resolveProviderInstance(params.providerInstanceId, provider)
   if (currentProviderInstanceId(provider) !== instance.id) {
     return withProviderInstance(instance.id, provider, () => listViewSessionsImpl({
@@ -2965,216 +1840,37 @@ async function listViewSessionsImpl(params: ListParams): Promise<Session[]> {
       providerInstanceId: instance.id,
     }))
   }
-  if (provider === 'codex') {
-    sessions = await listCodexSessions(params)
-    sessions = sessions.map((session) => applyProviderInstance(session, instance))
-    sessions = await applyInboxStates(sessions)
-    await syncSessionsBestEffort(sessions)
-    return sessions
-  }
-  if (provider === 'opencode') {
-    sessions = (await listOpenCodeSessions(params)).slice(params.offset, params.offset + params.limit)
-    sessions = sessions.map((session) => applyProviderInstance(session, instance))
-    sessions = await applyInboxStates(sessions)
-    await syncSessionsBestEffort(sessions)
-    return sessions
-  }
-  if (provider === 'copilot') {
-    sessions = await listCopilotSessions(params)
-    sessions = sessions.map((session) => applyProviderInstance(session, instance))
-    sessions = await applyInboxStates(sessions)
-    await syncSessionsBestEffort(sessions)
-    return sessions
-  }
-  if (provider === 'pi') {
-    sessions = await listPiSessionsForView(params)
-    sessions = sessions.map((session) => applyProviderInstance(session, instance))
-    sessions = await applyInboxStates(sessions)
-    await syncSessionsBestEffort(sessions)
-    return sessions
-  }
-  if (provider === 'lmstudio') {
-    sessions = await listLmstudioSessionsForView(params)
-    sessions = sessions.map((session) => applyProviderInstance(session, instance))
-    sessions = await applyInboxStates(sessions)
-    await syncSessionsBestEffort(sessions)
-    return sessions
-  }
-  if (provider === 'claude-acp' || provider === 'codex-acp') {
-    // ACP has no session-listing RPC — these sessions are transient/in-memory
-    // only, tracked from creation via the running-session registry, never
-    // backed by persisted history.
-    return []
-  }
-  sessions = await withProviderProcessEnvironment(() => listClaudeSessions(params))
-  sessions = sessions.map((session) => applyProviderInstance(session, instance))
-  sessions = await applyInboxStates(sessions)
-  await syncSessionsBestEffort(sessions)
-  return sessions
+
+  const adapter = getSessionAdapter(provider)
+  if (!adapter.listSessions) return []
+  const page = await adapter.listSessions(params)
+  return finish(page.map((session) => applyProviderInstance(session, instance)))
 }
 
 export async function readViewSessionInfo(sessionId: string, providerOverride?: AgentProvider): Promise<SessionInfo | null> {
   const provider = await resolveProvider(providerOverride)
-  if (provider === 'codex') {
-    const tag = await getCodexStoredTag(sessionId)
-    let thread: CodexThread | null = null
-    let resume: { model: string | null } | null = null
-    try {
-      thread = await readCodexThread(sessionId, false)
-    } catch (err) {
-      if (!isCodexMissingRolloutError(err) && !isCodexActiveWriterError(err)) throw err
-    }
-    try {
-      resume = await ensureCodexThreadResumed(sessionId)
-    } catch (err) {
-      if (!isCodexMissingRolloutError(err) && !isCodexActiveWriterError(err)) throw err
-    }
-    if (!thread) return pendingCodexSessionInfo(sessionId, tag)
-    return mapCodexThreadToSessionInfo(thread, tag, resume?.model ?? null)
-  }
-  if (provider === 'opencode') {
-    const [session, messages, tag] = await Promise.all([
-      getOpenCodeSession(sessionId),
-      getOpenCodeSessionMessages(sessionId),
-      getOpenCodeStoredTag(sessionId),
-    ])
-    return mapOpenCodeSessionToInfo(
-      session,
-      tag,
-      firstOpenCodePrompt(messages),
-      currentOpenCodeModelValue(messages.at(-1)?.info) ?? undefined,
-    )
-  }
-  if (provider === 'copilot') {
-    const [metadata, stored, session] = await Promise.all([
-      findCopilotSessionMetadata(sessionId),
-      getCopilotStoredMetadata(sessionId),
-      acquireCopilotSession(sessionId),
-    ])
-
-    const [events, currentModel] = await Promise.all([
-      session.getEvents(),
-      session.rpc.model.getCurrent().catch(() => ({ modelId: undefined })),
-    ])
-
-    return mapCopilotSessionToInfo(sessionId, events, stored, metadata, currentModel.modelId)
-  }
-  if (provider === 'pi') {
-    const [sessions, stored] = await Promise.all([
-      listPiSessions(),
-      getPiStoredMetadata(sessionId),
-    ])
-    const info = sessions.find((s) => s.id === sessionId)
-    if (!info) return null
-    const messages = await getPiSessionMessages(sessionId)
-    return mapPiSessionToInfo(info, stored, messages)
-  }
-  if (provider === 'lmstudio') {
-    const record = await getLmstudioSession(sessionId)
-    if (!record) return null
-    return mapLmstudioSessionToInfo(record)
-  }
-  if (provider === 'claude-acp' || provider === 'codex-acp') {
-    // ACP has no session-read RPC — only reflect state for a live pooled
-    // session; there is no persisted history to fall back to.
-    if (!isAcpSessionAlive(sessionId)) return null
-    return {
-      sessionId,
-      summary: `${provider} session`,
-      lastModified: Date.now(),
-      provider,
-      capabilities: getProviderCapabilities(provider),
-    }
-  }
-
-  const info = await getSessionInfo(sessionId, claudeSessionStoreOptions())
-  if (!info) return null
-  return {
-    ...info,
-    provider: 'claude',
-    capabilities: getProviderCapabilities('claude'),
-  }
+  const adapter = getSessionAdapter(provider)
+  if (!adapter.readSessionInfo) return null
+  return adapter.readSessionInfo(sessionId)
 }
 
 export async function patchViewSession(sessionId: string, body: Record<string, unknown>, providerOverride?: AgentProvider): Promise<void> {
   const provider = await resolveProvider(providerOverride)
-  if (provider === 'codex') {
-    const client = getCodexClient()
-    if ('title' in body) {
-      await client.request('thread/name/set', {
-        threadId: sessionId,
-        name: typeof body.title === 'string' ? body.title : '',
-      })
-      return
-    }
-    if ('tag' in body) {
-      await setCodexStoredTag(sessionId, typeof body.tag === 'string' ? body.tag : null)
-      return
-    }
-    throw new Error('title or tag required')
-  }
-  if (provider === 'opencode') {
-    const client = await getOpenCodeClient()
-    if ('title' in body) {
-      await client.session.update({
-        ...OPENCODE_OPTIONS,
-        path: { id: sessionId },
-        body: { title: typeof body.title === 'string' ? body.title : undefined },
-      })
-      return
-    }
-    if ('tag' in body) {
-      await setOpenCodeStoredTag(sessionId, typeof body.tag === 'string' ? body.tag : null)
-      return
-    }
-    throw new Error('title or tag required')
-  }
-  if (provider === 'copilot') {
-    if ('title' in body) {
-      await setCopilotStoredTitle(sessionId, typeof body.title === 'string' ? body.title : null)
-      return
-    }
-    if ('tag' in body) {
-      await setCopilotStoredTag(sessionId, typeof body.tag === 'string' ? body.tag : null)
-      return
-    }
-    throw new Error('title or tag required')
-  }
-  if (provider === 'pi') {
-    if ('title' in body) {
-      const title = typeof body.title === 'string' ? body.title : null
-      await setPiSessionName(sessionId, title ?? '')
-      await setPiStoredTitle(sessionId, title)
-      return
-    }
-    if ('tag' in body) {
-      await setPiStoredTag(sessionId, typeof body.tag === 'string' ? body.tag : null)
-      return
-    }
-    throw new Error('title or tag required')
-  }
-  if (provider === 'lmstudio') {
-    if ('title' in body) {
-      await patchLmstudioSession(sessionId, { title: typeof body.title === 'string' ? body.title : null })
-      return
-    }
-    if ('tag' in body) {
-      await patchLmstudioSession(sessionId, { tag: typeof body.tag === 'string' ? body.tag : null })
-      return
-    }
-    throw new Error('title or tag required')
-  }
-
+  const adapter = getSessionAdapter(provider)
   if ('title' in body) {
-    if (typeof body.title !== 'string') throw new Error('title must be a string')
-    await renameSession(sessionId, body.title, claudeSessionStoreOptions())
+    if (body.title !== null && body.title !== undefined && typeof body.title !== 'string') {
+      throw new Error('title must be a string')
+    }
+    if (!adapter.setTitle) unsupported(provider, 'setTitle')
+    await adapter.setTitle(sessionId, (body.title as string | null | undefined) ?? null)
     return
   }
   if ('tag' in body) {
-    const tag = body.tag === null || body.tag === undefined ? null
-      : typeof body.tag === 'string' ? body.tag
-      : (() => { throw new Error('tag must be a string or null') })()
-    await tagSession(sessionId, tag, claudeSessionStoreOptions())
+    if (body.tag !== null && body.tag !== undefined && typeof body.tag !== 'string') {
+      throw new Error('tag must be a string or null')
+    }
+    if (!adapter.setTag) unsupported(provider, 'setTag')
+    await adapter.setTag(sessionId, (body.tag as string | null | undefined) ?? null)
     return
   }
   throw new Error('title or tag required')
@@ -3182,43 +1878,12 @@ export async function patchViewSession(sessionId: string, body: Record<string, u
 
 export async function deleteViewSession(sessionId: string, providerOverride?: AgentProvider): Promise<void> {
   const provider = await resolveProvider(providerOverride)
-  if (provider === 'opencode') {
-    const client = await getOpenCodeClient()
-    await client.session.delete({
-      ...OPENCODE_OPTIONS,
-      path: { id: sessionId },
-    })
-    await removePersistedSessionBestEffort(provider, sessionId, currentProviderInstanceId(provider))
-    return
-  }
-  if (provider === 'copilot') {
-    // Drop any warm session for this id before the SDK deletes it so the next
-    // resume reconnects against the new state.
-    await evictCopilotSession(sessionId).catch(() => {})
-    const client = await getCopilotClient()
-    await client.deleteSession(sessionId)
-    await removePersistedSessionBestEffort(provider, sessionId, currentProviderInstanceId(provider))
-    return
-  }
-  if (provider === 'claude') {
-    await deleteClaudeSession(sessionId, claudeSessionStoreOptions())
-    clearClaudeDynamicMcpServers(sessionId)
-    await deleteClaudeHookEvents(sessionId)
-    clearWaitingSession(sessionId)
-    await removePersistedSessionBestEffort(provider, sessionId, currentProviderInstanceId(provider))
-    return
-  }
-  if (provider === 'pi') {
-    await deletePiSession(sessionId)
-    await removePersistedSessionBestEffort(provider, sessionId, currentProviderInstanceId(provider))
-    return
-  }
-  if (provider === 'lmstudio') {
-    await deleteLmstudioSession(sessionId)
-    await removePersistedSessionBestEffort(provider, sessionId, currentProviderInstanceId(provider))
-    return
-  }
-  throw new Error(`Delete is not supported for ${provider} sessions`)
+  const adapter = getSessionAdapter(provider)
+  if (!adapter.deleteSession) unsupported(provider, 'deleteSession')
+  await adapter.deleteSession(sessionId)
+  // Index removal is the router's job: every provider that can delete needs it,
+  // and an adapter that forgot would leave the session searchable forever.
+  await removePersistedSessionBestEffort(provider, sessionId, currentProviderInstanceId(provider))
 }
 
 function summarizeResolvedClaudeSettings(resolved: Awaited<ReturnType<typeof resolveSettings>>): Record<string, unknown> {
@@ -3854,95 +2519,6 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
   throw new Error(`Action ${action || '(missing)'} is not supported for ${resolvedProvider} sessions`)
 }
 
-async function readCodexMessagesAll(sessionId: string): Promise<{ messages: SessionMessage[]; externalWriter: boolean }> {
-  let thread: CodexThread
-  try {
-    thread = await readCodexThreadWithFullTurns(sessionId)
-  } catch (err) {
-    if (isCodexMissingRolloutError(err)) return { messages: [], externalWriter: false }
-    if (isCodexActiveWriterError(err)) {
-      return { messages: readLatestMappedMessagesCache(`codex:${sessionId}`) ?? [], externalWriter: true }
-    }
-    throw err
-  }
-  const turns = thread.turns
-  // ThreadStatus is a discriminated union; TurnError is an object — both
-  // need flat keys for cache fingerprinting or they'd stringify to "[object
-  // Object]" and miss invalidations.
-  const threadStatusKey = thread.status.type === 'active'
-    ? `active:${thread.status.activeFlags.join(',')}`
-    : thread.status.type
-  // Codex may update an earlier assistant item after a tool-heavy turn has
-  // already appended later tool/result items. Fingerprint the whole turn
-  // sequence so those in-place item updates invalidate the mapped transcript.
-  const turnsSignature = compactStableFingerprint(turns)
-  const signature = [
-    thread.updatedAt,
-    threadStatusKey,
-    turns.length,
-    turnsSignature,
-  ].join(':')
-  const cached = readMappedMessagesCache(`codex:${sessionId}`, signature)
-  if (cached) return { messages: cached, externalWriter: false }
-  // thread/turns/list(sortDirection: 'asc') plus each Turn.items array is the
-  // Codex archive's authoritative order. Do not timestamp-sort it: many items
-  // only have the turn-level fallback timestamp while user items can have a
-  // later UUID-derived timestamp, which moved the prompt behind its reply.
-  const messages = mapCodexThreadToMessages(thread)
-  return { messages: writeMappedMessagesCache(`codex:${sessionId}`, signature, messages), externalWriter: false }
-}
-
-async function readOpenCodeMessagesAll(sessionId: string): Promise<SessionMessage[]> {
-  ensureOpenCodeEventsStarted()
-  const cacheKey = `opencode:${sessionId}`
-  const versionBeforeFetch = getOpenCodeTranscriptCacheVersion(sessionId)
-  const verified = openCodeTranscriptVerifications.get(sessionId)
-  if (
-    versionBeforeFetch
-    && verified?.version === versionBeforeFetch
-    && Date.now() - verified.at < OPENCODE_TRANSCRIPT_EVENT_CACHE_MAX_AGE_MS
-  ) {
-    const cached = readMappedMessagesCache(cacheKey, verified.signature)
-    if (cached) return cached
-  }
-  const raw = await getOpenCodeSessionMessages(sessionId)
-  // OpenCode mutates the current assistant bundle in place while streaming:
-  // IDs and array lengths stay constant as text grows and tool states advance.
-  // Fingerprint that mutable tail so polling cannot return a stale mapped
-  // transcript, while avoiding a full-history hash for large sessions.
-  const signature = openCodeMessagesSignature(raw)
-  const cached = readMappedMessagesCache(cacheKey, signature)
-  const messages = cached
-    ?? writeMappedMessagesCache(cacheKey, signature, sortMessagesChronologically(mapOpenCodeMessagesToSessionMessages(raw)))
-  const versionAfterFetch = getOpenCodeTranscriptCacheVersion(sessionId)
-  // Only trust an event version that stayed stable across the SDK read. If an
-  // event raced the fetch, leave the verification absent so the next read
-  // checks OpenCode again instead of blessing a potentially older snapshot.
-  if (versionBeforeFetch && versionAfterFetch === versionBeforeFetch) {
-    touchOpenCodeTranscriptVerification(sessionId, versionAfterFetch, signature)
-  } else {
-    openCodeTranscriptVerifications.delete(sessionId)
-  }
-  return messages
-}
-
-async function readCopilotMessagesAll(sessionId: string): Promise<SessionMessage[]> {
-  const persistedEvents = await readCopilotSessionEvents(sessionId)
-  const liveEvents = getCopilotLiveTranscriptEvents(sessionId)
-  const filteredLiveEvents = filterCopilotLiveEvents(persistedEvents, liveEvents)
-  const events = mergeCopilotSessionEvents(persistedEvents, filteredLiveEvents)
-  const last = events.at(-1) as { id?: string; type?: string } | undefined
-  const liveKeys = new Set(mapCopilotEventsToSessionMessages(sessionId, filteredLiveEvents).map(sessionMessageIdentity))
-  const signature = `${events.length}:${last?.id ?? ''}:${last?.type ?? ''}:${copilotLiveTranscriptSignature(filteredLiveEvents)}`
-  const cached = readMappedMessagesCache(`copilot:${sessionId}`, signature)
-  if (cached) return cached
-  const messages = markLiveSessionMessages(
-    sortMessagesChronologically(mapCopilotEventsToSessionMessages(sessionId, events)),
-    liveKeys,
-  )
-  return writeMappedMessagesCache(`copilot:${sessionId}`, signature, messages)
-}
-
 async function readPiMessagesAll(sessionId: string): Promise<SessionMessage[]> {
   const entries = await getPiSessionEntries(sessionId)
   const persistedEntries = entries.filter((entry): entry is Extract<typeof entry, { type: 'message' }> => entry.type === 'message')
@@ -3975,45 +2551,14 @@ export function listViewSessionMessageWindow(sessionId: string, params: MessageL
 
 async function listViewSessionMessageWindowImpl(sessionId: string, params: MessageListParams, providerOverride?: AgentProvider): Promise<SessionMessageWindow> {
   const provider = await resolveProvider(providerOverride)
+  const adapter = getSessionAdapter(provider)
+  if (!adapter.readAllMessages) unsupported(provider, 'readAllMessages')
+  const { messages: raw, externalWriter } = await adapter.readAllMessages(sessionId)
   const instanceId = currentProviderInstanceId(provider)
-  const withInstance = (items: SessionMessage[]) => items.map((message) => ({ ...message, providerInstanceId: instanceId }))
-  let messages: SessionMessage[]
-  if (provider === 'codex') {
-    const result = await readCodexMessagesAll(sessionId)
-    const instanceMessages = withInstance(result.messages)
-    await syncMessagesBestEffort(provider, sessionId, instanceMessages)
-    const window = windowForParams(instanceMessages, params)
-    return result.externalWriter ? { ...window, externalWriter: true } : window
-  }
-  if (provider === 'opencode') {
-    messages = withInstance(await readOpenCodeMessagesAll(sessionId))
-    await syncMessagesBestEffort(provider, sessionId, messages)
-    return windowForParams(messages, params)
-  }
-  if (provider === 'copilot') {
-    messages = withInstance(await readCopilotMessagesAll(sessionId))
-    await syncMessagesBestEffort(provider, sessionId, messages)
-    return windowForParams(messages, params)
-  }
-  if (provider === 'pi') {
-    messages = withInstance(await readPiMessagesAll(sessionId))
-    await syncMessagesBestEffort(provider, sessionId, messages)
-    return windowForParams(messages, params)
-  }
-  if (provider === 'lmstudio') {
-    const record = await getLmstudioSession(sessionId)
-    messages = withInstance(record ? mapLmstudioSessionToMessages(record) : [])
-    await syncMessagesBestEffort(provider, sessionId, messages)
-    return windowForParams(messages, params)
-  }
-  if (provider === 'claude-acp' || provider === 'codex-acp') {
-    messages = withInstance(readAcpMessagesAll(sessionId, provider))
-    await syncMessagesBestEffort(provider, sessionId, messages)
-    return windowForParams(messages, params)
-  }
-  messages = withInstance(await readClaudeSessionMessages(sessionId))
+  const messages = raw.map((message) => ({ ...message, providerInstanceId: instanceId }))
   await syncMessagesBestEffort(provider, sessionId, messages)
-  return windowForParams(messages, params)
+  const window = windowForParams(messages, params)
+  return externalWriter ? { ...window, externalWriter: true } : window
 }
 
 export async function listViewSessionMessages(sessionId: string, params: MessageListParams, providerOverride?: AgentProvider): Promise<SessionMessage[]> {
@@ -4027,19 +2572,11 @@ export async function getViewSubagentMessages(
   providerOverride?: AgentProvider,
 ): Promise<SessionMessage[]> {
   const provider = await resolveProvider(providerOverride)
-  if (provider === 'opencode') {
-    // OpenCode subagents (spawned by the `task` tool) are real child sessions:
-    // task_id === child sessionId. Fetch and map the child transcript so the
-    // parent's task card can render the inner conversation inline.
-    const raw = await getOpenCodeSessionMessages(agentId).catch(() => [] as Array<{ info: OpenCodeMessage; parts: OpenCodePart[] }>)
-    if (raw.length === 0) return []
-    const mapped = sortMessagesChronologically(mapOpenCodeMessagesToSessionMessages(raw))
-    return withOriginKind(mapped, `subagent:${agentId}`)
-  }
-  if (provider !== 'claude') return []
-  const raw = await getSubagentMessages(sessionId, agentId, claudeSessionStoreOptions())
-    .catch(() => [] as SessionMessage[])
-  return withOriginKind(normalizeClaudeHistoryMessages(raw as unknown[]), `subagent:${agentId}`)
+  const adapter = getSessionAdapter(provider)
+  // A provider without subagents genuinely has none — empty is the answer, not
+  // a failure to look.
+  if (!adapter.readSubagentMessages) return []
+  return adapter.readSubagentMessages(sessionId, agentId)
 }
 
 /**
@@ -4049,46 +2586,9 @@ export async function getViewSubagentMessages(
  */
 export async function getClaudeSubagentSummaries(sessionId: string, providerOverride?: AgentProvider): Promise<SubagentSummary[]> {
   const provider = await resolveProvider(providerOverride)
-  if (provider !== 'claude') return []
-  const subagentIds = await listSubagents(sessionId, claudeSessionStoreOptions()).catch(() => [] as string[])
-  if (subagentIds.length === 0) return []
-
-  const summaries = await mapConcurrent(subagentIds, 4, async (agentId): Promise<SubagentSummary | null> => {
-    const raw = await getSubagentMessages(sessionId, agentId, claudeSessionStoreOptions())
-      .catch(() => [] as SessionMessage[])
-    if (raw.length === 0) return null
-    const messages = normalizeClaudeHistoryMessages(raw as unknown[])
-    let inputTokens = 0
-    let outputTokens = 0
-    let cacheReadTokens = 0
-    let taskDescription: string | undefined
-    let startedAt: string | undefined
-    let endedAt: string | undefined
-    for (const msg of messages) {
-      if (msg.timestamp) {
-        if (!startedAt) startedAt = msg.timestamp
-        endedAt = msg.timestamp
-      }
-      if (!taskDescription && msg.taskDescription) taskDescription = msg.taskDescription
-      const apiMessage = msg.message as { usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number | null } } | undefined
-      const usage = apiMessage?.usage
-      if (usage) {
-        inputTokens += usage.input_tokens ?? 0
-        outputTokens += usage.output_tokens ?? 0
-        cacheReadTokens += usage.cache_read_input_tokens ?? 0
-      }
-    }
-    return {
-      agentId,
-      taskDescription,
-      messageCount: messages.length,
-      usage: { inputTokens, outputTokens, cacheReadTokens },
-      startedAt,
-      endedAt,
-      provider: 'claude',
-    }
-  })
-  return summaries.filter((s): s is SubagentSummary => s !== null)
+  const adapter = getSessionAdapter(provider)
+  if (!adapter.readSubagentSummaries) return []
+  return adapter.readSubagentSummaries(sessionId)
 }
 
 function copilotSubagentSummaries(events: CopilotSessionEvent[]): SubagentSummary[] {
@@ -5474,77 +3974,6 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
   })
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms)
-    if (typeof timer === 'object' && timer && 'unref' in timer) (timer as { unref: () => void }).unref()
-  })
-}
-
-async function readClaudeSupportedModelsOnce(): Promise<SessionModelInfo[]> {
-  // Prefer the pre-warmed slot primed by instrumentation.ts → skips the
-  // ~1–3s subprocess spawn for the first call after boot. The slot
-  // automatically re-warms in the background after consumption so the next
-  // call is hot too. Falls back to a fresh query() when the slot is empty
-  // (warmup failed, or this is the second concurrent call before re-warm
-  // finished).
-  //
-  // `maxTurns: 0` + a never-yielding prompt iterator stops the SDK from
-  // starting an actual model turn — the subprocess spins up, services the
-  // `initializationResult` / `supportedModels` control RPCs, and shuts down
-  // via `q.close()`. The legacy `prompt: 'ping'` + `maxTurns: 1` pattern
-  // would burn a full API round-trip on every cache miss.
-  const warm = await consumeReadModelsWarmQuery()
-  const fallbackModel = claudeFallbackModelChain()
-  const q = warm
-    ? warm.query(openPrompt())
-    : query({
-        prompt: openPrompt(),
-        options: {
-          // No explicit model — let the CLI boot with its own default so this
-          // works on custom deployments (Bedrock/Vertex, proxied base URLs,
-          // non-default ANTHROPIC_MODEL) instead of a literal that may not
-          // resolve there.
-          ...(fallbackModel ? { fallbackModel } : {}),
-          persistSession: false,
-          maxTurns: 0,
-          enableFileCheckpointing: true,
-          ...claudeProcessSpawnOptions(),
-        },
-      })
-
-  try {
-    const initialization = await q.initializationResult()
-    const supportedModels = await q.supportedModels().catch(() => [] as SessionModelInfo[])
-    return supportedModels.length > 0
-      ? supportedModels
-      : (initialization.models ?? [])
-  } finally {
-    q.close()
-  }
-}
-
-// Retry delays for a not-yet-ready model list, not a genuinely model-less
-// install. On some systems — custom model configuration especially (a
-// non-default ANTHROPIC_MODEL, a custom base URL, Bedrock/Vertex — anything
-// where the CLI enumerates models from somewhere other than its own static
-// table) — the very first query right after a fresh subprocess spawn can
-// come back before that recognition has finished, both on
-// initializationResult() and supportedModels(). A real zero-model install
-// doesn't happen in practice, so treat an empty result as "not ready yet"
-// and retry with backoff rather than caching/returning it as final.
-const CLAUDE_MODELS_RETRY_DELAYS_MS = [300, 800, 1500, 3000]
-
-async function readClaudeSupportedModels(): Promise<SessionModelInfo[]> {
-  let models = await readClaudeSupportedModelsOnce()
-  for (const wait of CLAUDE_MODELS_RETRY_DELAYS_MS) {
-    if (models.length > 0) break
-    await delay(wait)
-    models = await readClaudeSupportedModelsOnce()
-  }
-  return models
-}
-
 function formatCodexNotification(notification: CodexNotification): string | null {
   switch (notification.method) {
     case 'error':
@@ -6336,7 +4765,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
               ...(nextEffort ? { effort: nextEffort } : {}),
             })
             currentModel = nextModel ?? currentModel
-            if (nextModel) codexResumedThreads.set(codexThreadKey(sessionId), nextModel)
+            if (nextModel) markCodexThreadResumed(sessionId, nextModel)
             finishCommand(nextEffort
               ? `Codex model set to ${nextModel} (${nextEffort}).`
               : `Codex model set to ${nextModel}.`)
@@ -6425,7 +4854,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
           // The resume cache said this thread was live but the server lost it
           // (e.g. a restart raced the disconnect listener). Re-resume once.
           if (!isCodexMissingRolloutError(err)) throw err
-          codexResumedThreads.delete(codexThreadKey(sessionId))
+          forgetCodexThreadResumed(sessionId)
           await withTimeout(ensureCodexThreadResumed(sessionId), 8000, 'Codex thread re-resume')
           started = await withTimeout(client.request('turn/start', turnStartParams), 20000, 'Codex turn/start retry')
         }
@@ -8171,7 +6600,7 @@ export async function createNewViewSession({
     // thread/start already loads the thread into this app-server process. Mark
     // it before the TUI can poll session detail so metadata reads reuse the
     // loaded writer instead of issuing thread/resume against an active turn.
-    codexResumedThreads.set(codexThreadKey(newId), response.model)
+    markCodexThreadResumed(newId, response.model)
     if (title && title.trim()) {
       await client.request('thread/name/set', { threadId: newId, name: title.trim() }).catch(() => {})
     }
@@ -8244,7 +6673,7 @@ export async function closeViewSession(sessionId: string, providerOverride?: Age
   }
   if (provider === 'codex') {
     await getCodexClient().request('thread/unsubscribe', { threadId: sessionId }).catch(() => {})
-    codexResumedThreads.delete(codexThreadKey(sessionId))
+    forgetCodexThreadResumed(sessionId)
     return
   }
   if (provider === 'copilot') {
@@ -8373,549 +6802,39 @@ export function readViewRuntimeActivity() {
 
 export async function readViewSessionModels(sessionId: string, providerOverride?: AgentProvider): Promise<{ models: SessionModelInfo[]; currentModel: string | null; currentContextTier?: CopilotContextTier | null; contextUsage: ContextUsage | null }> {
   const provider = await resolveProvider(providerOverride)
-  if (provider === 'codex') {
-    const client = getCodexClient()
-    // Custom model providers (proxied base URLs, non-default profiles) can
-    // leave the app-server slow to answer model/list on a cold connection —
-    // without a timeout the composer's model picker hangs indefinitely
-    // instead of falling back to an empty list the UI can recover from.
-    const [modelsResponse, resume] = await Promise.all([
-      withTimeout(client.request('model/list', {}), 8000, 'Codex model list')
-        .catch(() => ({ data: [] as Parameters<typeof mapCodexModelsToSessionModels>[0] })),
-      withTimeout(ensureCodexThreadResumed(sessionId), 8000, 'Codex thread resume').catch(() => null),
-    ])
-    return {
-      models: mapCodexModelsToSessionModels(modelsResponse.data),
-      currentModel: currentCodexModelValue(modelsResponse.data, resume?.model),
-      contextUsage: null,
-    }
-  }
-  if (provider === 'opencode') {
-    const client = await getOpenCodeClient()
-    const session = await getOpenCodeSession(sessionId)
-    const [configResponse, messages] = await Promise.all([
-      client.config.providers({
-        ...OPENCODE_OPTIONS,
-        query: openCodeDirectoryQuery(session),
-      }),
-      getOpenCodeSessionMessages(sessionId),
-    ])
-    return {
-      models: mapOpenCodeModelsToSessionModels(openCodeData<OpenCodeConfigProvidersResponse>(configResponse)),
-      currentModel: currentOpenCodeModelValue(messages.at(-1)?.info),
-      contextUsage: null,
-    }
-  }
-  if (provider === 'copilot') {
-    const client = await getCopilotClient()
-    const session = await acquireCopilotSession(sessionId)
-    const [models, currentModel] = await Promise.all([
-      client.listModels(),
-      session.rpc.model.getCurrent().catch(() => ({ modelId: undefined, contextTier: undefined })),
-    ])
-    return {
-      models: mapCopilotModelsToSessionModels(models),
-      currentModel: currentModel.modelId ?? null,
-      currentContextTier: parseCopilotContextTier(currentModel.contextTier) ?? null,
-      contextUsage: null,
-    }
-  }
-  if (provider === 'pi') {
-    const messages = await getPiSessionMessages(sessionId)
-    let currentModel: string | undefined
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msg = messages[i] as { role: string; model?: string }
-      if (msg.role === 'assistant' && msg.model) {
-        currentModel = msg.model
-        break
-      }
-    }
-    const agentSession = await openPiAgentSession(sessionId)
-    const availableModels = await agentSession.modelRuntime.getAvailable()
-    const currentModelValue = currentPiModelValue(agentSession.model, currentModel)
-    const piContextUsage = agentSession.getContextUsage()
-    return {
-      models: mapPiModelsToSessionModels(availableModels, currentModelValue ?? currentModel),
-      currentModel: currentModelValue ?? currentModel ?? null,
-      contextUsage: piContextUsage
-        ? {
-            totalTokens: piContextUsage.tokens ?? 0,
-            maxTokens: piContextUsage.contextWindow,
-            percentage: piContextUsage.percent ?? 0,
-            model: agentSession.model?.id ?? currentModel ?? 'unknown',
-            categories: [
-              { name: 'Context', tokens: piContextUsage.tokens ?? 0, color: 'var(--cyan)' },
-            ],
-          }
-        : null,
-    }
-  }
-  if (provider === 'lmstudio') {
-    const record = await getLmstudioSession(sessionId)
-    const models = await listLmstudioModels().catch(() => [])
-    return {
-      models: models.map((m) => ({ value: m.id, displayName: m.id, description: 'LM Studio local model' })),
-      currentModel: record?.model ?? null,
-      contextUsage: null,
-    }
-  }
-  if (provider === 'claude-acp' || provider === 'codex-acp') {
-    // ACP's session/new has no model-listing RPC to query against.
-    return { models: [], currentModel: null, contextUsage: null }
-  }
-
-  // The composer refreshes this on every session open and after every turn
-  // (to pick up `/model` slash changes). This used to await
-  // Query.getContextUsage() to learn the current model — a control RPC the
-  // CLI answers on the same queue it accepts prompts on, taking ~1.4s on a
-  // warm subprocess (see the comment on claudeResultContextUsage) and
-  // blocking every session switch. The client never read the contextUsage
-  // this returned (the context meter is driven entirely by the
-  // turn-result-derived `context-usage` SSE event), so the RPC bought
-  // nothing but latency. currentModel is instead derived client-side from
-  // the transcript it already loads for display (last assistant message's
-  // `model` field) — see the effect in MessageView.tsx.
-  const models = await readClaudeSupportedModels().catch(() => [] as SessionModelInfo[])
-  return {
-    models,
-    currentModel: null,
-    contextUsage: null,
-  }
+  const adapter = getSessionAdapter(provider)
+  // A provider with no model-listing RPC (ACP) degrades the picker to "no
+  // choices" rather than failing the whole session view around it.
+  if (!adapter.readModels) return { models: [], currentModel: null, contextUsage: null }
+  return adapter.readModels(sessionId)
 }
 
 export async function readViewSessionComposerOptions(sessionId: string, providerOverride?: AgentProvider): Promise<SessionComposerOptions> {
   const provider = await resolveProvider(providerOverride)
-  if (provider === 'opencode') {
-    try {
-      const session = await getOpenCodeSession(sessionId)
-      const query = openCodeDirectoryQuery(session)
-      const [project, messages] = await Promise.all([
-        getOpenCodeProjectDiagnostics(query?.directory),
-        getOpenCodeSessionMessages(sessionId).catch(() => [] as Array<{ info: OpenCodeMessage; parts: OpenCodePart[] }>),
-      ])
-      const selectableAgents = project.agents
-        .filter((agent) => !isOpenCodeAgentHidden(agent) && agent.mode !== 'subagent')
-        .map(openCodeAgentOption)
-      const mentionAgents = project.agents
-        .filter((agent) => !isOpenCodeAgentHidden(agent) && agent.mode !== 'primary')
-        .map(openCodeAgentOption)
-      const currentAgent = lastOpenCodeUserAgent(messages)
-        ?? selectableAgents.find((agent) => agent.value === 'build')?.value
-        ?? selectableAgents[0]?.value
-        ?? null
-      return {
-        agents: selectableAgents,
-        mentionAgents,
-        currentAgent,
-        permissionModes: PROVIDER_MANAGED_PERMISSION_OPTIONS,
-        currentPermissionMode: 'native',
-      }
-    } catch {
-      return {
-        agents: [],
-        mentionAgents: [],
-        currentAgent: null,
-        permissionModes: PROVIDER_MANAGED_PERMISSION_OPTIONS,
-        currentPermissionMode: 'native',
-      }
-    }
-  }
-
-  if (provider === 'copilot') {
-    const session = await acquireCopilotSession(sessionId)
-    const [currentMode, currentPermissionMode] = await Promise.all([
-      session.rpc.mode.get().catch(() => 'interactive'),
-      session.rpc.permissions.getAllowAll().catch(() => ({ enabled: false, mode: 'off' as const })),
-    ])
+  const adapter = getSessionAdapter(provider)
+  // The default is the honest answer for a provider whose CLI owns its own
+  // approval policy and exposes no knob for us to drive.
+  if (!adapter.readComposerOptions) {
     return {
-      modes: COPILOT_COMPOSER_MODES,
-      currentMode: parseCopilotModeResponse(currentMode) ?? 'interactive',
-      permissionModes: COPILOT_PERMISSION_MODE_OPTIONS,
-      currentPermissionMode: currentPermissionMode.mode ?? (currentPermissionMode.enabled ? 'on' : 'off'),
+      permissionModes: PROVIDER_MANAGED_PERMISSION_OPTIONS,
+      currentPermissionMode: 'native',
     }
   }
-
-  if (provider === 'claude') {
-    return {
-      permissionModes: CLAUDE_PERMISSION_MODE_OPTIONS,
-      currentPermissionMode: 'default',
-    }
-  }
-
-  if (provider === 'codex') {
-    return {
-      permissionModes: CODEX_PERMISSION_MODE_OPTIONS,
-      currentPermissionMode: 'auto',
-    }
-  }
-
-  return {
-    permissionModes: PROVIDER_MANAGED_PERMISSION_OPTIONS,
-    currentPermissionMode: 'native',
-  }
+  return adapter.readComposerOptions(sessionId)
 }
 
 export async function readViewSessionSlashCommands(sessionId: string, providerOverride?: AgentProvider): Promise<Array<{ command: string; description: string; argumentHint?: string }>> {
   const provider = await resolveProvider(providerOverride)
-  if (provider === 'claude') {
-    // Prefer the warm pool entry's persistent Query (composer prewarm or a
-    // recent send) — supportedCommands is then a control RPC on the existing
-    // subprocess instead of a fresh ~1-3s CLI spawn.
-    const mapCommands = (commands: Awaited<ReturnType<Query['supportedCommands']>>) => commands.map((command) => ({
-      command: command.name.startsWith('/') ? command.name : `/${command.name}`,
-      description: command.description ?? '',
-      argumentHint: command.argumentHint && command.argumentHint.trim() ? command.argumentHint : undefined,
-    }))
-    // A commands_changed push supersedes any RPC fetch: supportedCommands()
-    // returns the init-captured list and never reflects mid-session changes.
-    const pushed = getClaudeCommandsOverride(sessionId)
-    if (pushed) return mapCommands(pushed)
-    const warm = peekClaudeSession(sessionId)
-    if (warm) {
-      const commands = await warm.query.supportedCommands().catch(() => [])
-      return mapCommands(commands)
-    }
-    const q = createSessionControlQuery(sessionId)
-    try {
-      const commands = await q.supportedCommands().catch(() => [])
-      return mapCommands(commands)
-    } finally {
-      q.close()
-    }
-  }
-  if (provider === 'opencode') {
-    try {
-      const session = await getOpenCodeSession(sessionId).catch(() => null)
-      const query = session ? openCodeDirectoryQuery(session) : undefined
-      // Routed through the harness cache — every keystroke in the
-      // composer was previously firing a fresh command.list HTTP call.
-      const project = await getOpenCodeProjectDiagnostics(query?.directory)
-      return project.commands.map((command) => ({
-        command: command.name.startsWith('/') ? command.name : `/${command.name}`,
-        description: command.description ?? '',
-      }))
-    } catch {
-      return []
-    }
-  }
-  if (provider === 'pi') {
-    // Pi's SDK catalog includes interactive-only commands such as /settings,
-    // /resume, and /quit. AgentViewer has no matching modal/terminal lifecycle
-    // for those, so advertise only commands this composer executes natively.
-    return PI_SLASH_COMMANDS.map((command) => ({ ...command }))
-  }
-  if (provider === 'copilot') {
-    try {
-      const session = await acquireCopilotSession(sessionId)
-      const commandsRpc = (session.rpc as typeof session.rpc & {
-        commands?: {
-          list?: (params?: {
-            includeBuiltins?: boolean
-            includeSkills?: boolean
-            includeClientCommands?: boolean
-          }) => Promise<{
-            commands: Array<{
-              name: string
-              description?: string
-              input?: { hint?: string }
-            }>
-          }>
-        }
-      }).commands
-      if (!commandsRpc?.list) return []
-      const response = await commandsRpc.list({
-        includeBuiltins: true,
-        includeSkills: true,
-        includeClientCommands: true,
-      })
-      return response.commands.map((command) => ({
-        command: command.name.startsWith('/') ? command.name : `/${command.name}`,
-        description: command.description ?? '',
-        argumentHint: command.input?.hint && command.input.hint.trim() ? command.input.hint.trim() : undefined,
-      }))
-    } catch {
-      return []
-    }
-  }
-  return []
+  const adapter = getSessionAdapter(provider)
+  if (!adapter.readSlashCommands) return []
+  return adapter.readSlashCommands(sessionId)
 }
 
 export async function readViewSessionDiagnostics(sessionId: string, providerOverride?: AgentProvider): Promise<{ sections: SessionDiagnosticSection[]; currentModel: string | null }> {
   const provider = await resolveProvider(providerOverride)
-  if (provider === 'codex') {
-    // Per-thread reads stay direct (they're specific to this sessionId),
-    // but the four project-wide reads go through the harness cache so
-    // repeated opens of the diagnostics panel share one HTTP round-trip.
-    const [thread, resume, project] = await Promise.all([
-      readCodexThread(sessionId, false),
-      ensureCodexThreadResumed(sessionId).catch((error) => {
-        if (isCodexActiveWriterError(error)) return { model: null }
-        throw error
-      }),
-      getCodexProjectDiagnostics(),
-    ])
-
-    return {
-      sections: mapCodexDiagnosticsToSections({
-        thread,
-        currentModel: resume.model,
-        mcpServers: project.mcpServers,
-        features: project.features,
-        skills: project.skills,
-        apps: project.apps,
-      }),
-      currentModel: resume.model,
-    }
-  }
-  if (provider === 'opencode') {
-    const client = await getOpenCodeClient()
-    const session = await getOpenCodeSession(sessionId)
-    const query = openCodeDirectoryQuery(session)
-    // Project-level config (providers/commands/agents/lsp/formatters/mcp)
-    // is identical across every session under the same directory, so route
-    // those reads through the harness cache. The remaining session-specific
-    // calls fan out as before.
-    const [project, messages, children] = await Promise.all([
-      getOpenCodeProjectDiagnostics(query?.directory),
-      getOpenCodeSessionMessages(sessionId),
-      client.session.children({
-        ...OPENCODE_OPTIONS,
-        path: { id: sessionId },
-        query,
-      }).catch(() => ({ data: [] as OpenCodeSession[] })),
-    ])
-
-    return {
-      currentModel: currentOpenCodeModelValue(messages.at(-1)?.info),
-      sections: mapOpenCodeDiagnosticsToSections({
-        providers: project.providers,
-        commands: project.commands,
-        agents: project.agents,
-        lsp: project.lsp,
-        formatters: project.formatters,
-        mcp: project.mcp,
-        children: openCodeData<OpenCodeSession[]>(children),
-        currentSession: session,
-      }),
-    }
-  }
-  if (provider === 'copilot') {
-    const client = await getCopilotClient()
-    const [metadata, session, status, auth] = await Promise.all([
-      findCopilotSessionMetadata(sessionId),
-      acquireCopilotSession(sessionId),
-      client.getStatus().catch(() => ({ version: 'unknown', protocolVersion: 0 }) as CopilotGetStatusResponse),
-      client.getAuthStatus().catch(() => ({
-        isAuthenticated: false,
-        statusMessage: 'Authentication status unavailable',
-      }) as CopilotGetAuthStatusResponse),
-    ])
-
-    const [events, currentModel, mode, tools, currentTools, quota] = await Promise.all([
-      session.getEvents(),
-      session.rpc.model.getCurrent().catch(() => ({ modelId: undefined })),
-      session.rpc.mode.get().catch(() => ({ mode: undefined })),
-      client.rpc.tools.list({ model: undefined }).catch(() => ({ tools: [] as Array<{ name: string; description?: string }> })),
-      session.rpc.tools.getCurrentMetadata().catch(() => ({ tools: null })),
-      client.rpc.account.getQuota({}).catch(() => ({ quotaSnapshots: {} as Record<string, {
-        entitlementRequests: number
-        usedRequests: number
-        remainingPercentage: number
-        overage: number
-        overageAllowedWithExhaustedQuota: boolean
-        resetDate?: string
-      }> })),
-    ])
-
-    const quotaItems = Object.entries(quota.quotaSnapshots).flatMap(([name, snapshot]) => {
-      if (!snapshot) return []
-      const remaining = Math.round(snapshot.remainingPercentage * 100)
-      const reset = snapshot.resetDate ? ` · resets ${snapshot.resetDate}` : ''
-      return [`${name} · ${snapshot.usedRequests}/${snapshot.entitlementRequests} used · ${remaining}% remaining${reset}`]
-    })
-
-    return {
-      currentModel: currentModel.modelId ?? deriveCopilotState(events, metadata).currentModel ?? null,
-      sections: mapCopilotDiagnosticsToSections({
-        sessionId,
-        status,
-        auth,
-        currentModel: currentModel.modelId ?? null,
-        mode: typeof mode === 'string' ? mode : mode.mode ?? null,
-        tools: tools.tools,
-        currentTools: currentTools.tools ?? [],
-        quotaItems,
-        integrationItems: copilotIntegrationDiagnostics(sessionId),
-        metadata,
-        events,
-        workspacePath: session.workspacePath,
-      }),
-    }
-  }
-  if (provider === 'pi') {
-    const entries = await getPiSessionEntries(sessionId)
-    let currentModel: string | undefined
-    let thinkingLevel: string | undefined
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const entry = entries[i]
-      if (entry.type === 'thinking_level_change') {
-        thinkingLevel ??= (entry as { thinkingLevel: string }).thinkingLevel
-      }
-      if (entry.type === 'message') {
-        const msg = (entry as { message: { role: string; model?: string; thinking?: boolean } }).message
-        if (msg.role === 'assistant') {
-          currentModel ??= msg.model
-          if (thinkingLevel === undefined && msg.thinking !== undefined) {
-            thinkingLevel = msg.thinking ? 'enabled' : 'off'
-          }
-        }
-      }
-      if (currentModel && thinkingLevel !== undefined) break
-    }
-
-    const agentSession = await openPiAgentSession(sessionId)
-    const sessionFile = agentSession.sessionManager.getSessionFile()
-    const cwd = agentSession.sessionManager.getCwd()
-    const stats = agentSession.getSessionStats()
-
-    return {
-      currentModel: currentModel ?? null,
-      sections: mapPiDiagnosticsToSections({
-        sessionId,
-        cwd,
-        currentModel,
-        thinkingLevel: agentSession.thinkingLevel ?? thinkingLevel,
-        toolNames: agentSession.getActiveToolNames(),
-        sessionFile,
-        stats,
-      }),
-    }
-  }
-  if (provider === 'lmstudio') {
-    const record = await getLmstudioSession(sessionId)
-    return {
-      currentModel: record?.model ?? null,
-      sections: [
-        { id: 'server', title: 'LM STUDIO SERVER', items: [lmstudioBaseUrl()] },
-        { id: 'messages', title: 'MESSAGES', items: [String(record?.messages.length ?? 0)] },
-      ],
-    }
-  }
-  if (provider === 'claude-acp' || provider === 'codex-acp') {
-    const alive = isAcpSessionAlive(sessionId)
-    return {
-      currentModel: null,
-      sections: [
-        { id: 'acp', title: 'ACP TRANSPORT', items: [alive ? 'session alive' : 'no active subprocess'] },
-      ],
-    }
-  }
-
-  const q = createSessionControlQuery(sessionId)
-  try {
-    const init = await q.initializationResult()
-    const [commands, agents, mcpServers, contextUsage, subagents, rawMessages, resolvedSettings, hookEvents, planUsageItems] = await Promise.all([
-      q.supportedCommands(),
-      q.supportedAgents(),
-      q.mcpServerStatus(),
-      q.getContextUsage().catch(() => null),
-      listSubagents(sessionId, claudeSessionStoreOptions()).catch(() => [] as string[]),
-      getSessionMessages(sessionId, {
-        includeSystemMessages: true,
-        ...claudeSessionStoreOptions(),
-      }).catch(() => [] as unknown[]),
-      getSessionInfo(sessionId, claudeSessionStoreOptions())
-        .then((info) => resolveSettings({ cwd: info?.cwd }))
-        .catch(() => null),
-      listClaudeHookEvents(sessionId, { limit: 20 }).catch(() => []),
-      claudePlanUsageItems(q),
-    ])
-    const accountItems: string[] = []
-    if (init.account?.email) accountItems.push(init.account.email)
-    if (init.account?.organization) accountItems.push(init.account.organization)
-    if (init.account?.subscriptionType) accountItems.push(init.account.subscriptionType)
-    const subagentParents = new Map<string, string | null>()
-    if (subagents.length > 0) {
-      await Promise.all(subagents.map(async (agentId) => {
-        const messages = await getSubagentMessages(sessionId, agentId, claudeSessionStoreOptions())
-          .catch(() => [] as SessionMessage[])
-        subagentParents.set(agentId, claudeSubagentParentId(messages as unknown[]))
-      }))
-    }
-    const settingItems = resolvedSettings
-      ? [
-          `effective keys · ${Object.keys(resolvedSettings.effective).sort().join(', ') || 'none'}`,
-          `sources · ${resolvedSettings.sources.map((source) => source.source).join(', ') || 'managed/default only'}`,
-        ]
-      : ['Unavailable']
-    const sandboxSettings = resolvedSettings?.effective.sandbox
-    const sandboxItems = sandboxSettings && typeof sandboxSettings === 'object'
-      ? [
-          `enabled · ${sandboxSettings.enabled === false ? 'no' : 'yes'}`,
-          `bash auto-allow · ${sandboxSettings.autoAllowBashIfSandboxed === false ? 'no' : 'yes'}`,
-          `unsandboxed commands · ${sandboxSettings.allowUnsandboxedCommands === true ? 'allowed' : 'blocked'}`,
-        ]
-      : ['Not configured']
-    return {
-      currentModel: contextUsage?.model ?? null,
-      sections: [
-        { id: 'commands', title: 'COMMANDS', items: commands.length > 0 ? commands.slice(0, 20).map((command) => command.name) : ['None'] },
-        { id: 'agents', title: 'AGENTS', items: agents.length > 0 ? agents.slice(0, 20).map((agent) => agent.name) : ['None'] },
-        { id: 'settings', title: 'SETTINGS', items: settingItems },
-        { id: 'sandbox', title: 'SANDBOX', items: sandboxItems },
-        {
-          id: 'transport',
-          title: 'PROCESS TRANSPORT',
-          items: [
-            `${claudeProcessTransportStatus().kind} · ${claudeProcessTransportStatus().healthy ? 'healthy' : 'unhealthy'}`,
-            ...(claudeProcessTransportStatus().target ? [`target · ${claudeProcessTransportStatus().target}`] : []),
-            ...(claudeProcessTransportStatus().lastError ? [`last error · ${claudeProcessTransportStatus().lastError}`] : []),
-          ],
-        },
-        {
-          id: 'mcp',
-          title: 'MCP',
-          items: mcpServers.length > 0
-            ? mcpServers.map((server) => `${server.name} · ${server.status}${claudeDynamicMcpServerNames(sessionId).includes(server.name) ? ' · dynamic' : ''}`)
-            : ['None'],
-        },
-        {
-          id: 'subagents',
-          title: 'SUBAGENTS',
-          items: subagents.length > 0 ? formatClaudeSubagentTree(subagents, subagentParents).slice(0, 20) : ['None'],
-        },
-        {
-          id: 'hooks',
-          title: 'HOOK TIMELINE',
-          items: hookEvents.length > 0
-            ? hookEvents.map((event) => `${event.timestamp} · ${event.summary}`)
-            : ['None'],
-        },
-        {
-          id: 'output-style',
-          title: 'OUTPUT STYLE',
-          items: init.output_style ? [init.output_style] : ['default'],
-        },
-        {
-          id: 'account',
-          title: 'ACCOUNT',
-          items: accountItems.length > 0 ? accountItems : ['Unknown'],
-        },
-        {
-          id: 'plan-usage',
-          title: 'PLAN USAGE',
-          items: planUsageItems,
-        },
-        {
-          id: 'latency',
-          title: 'LATENCY & MODEL USAGE',
-          items: claudeLatencyDiagnosticItems(rawMessages),
-        },
-      ],
-    }
-  } finally {
-    q.close()
-  }
+  const adapter = getSessionAdapter(provider)
+  if (!adapter.readDiagnostics) unsupported(provider, 'readDiagnostics')
+  return adapter.readDiagnostics(sessionId)
 }
 
 export async function rewindOrRollbackViewSession({ sessionId, body, provider }: RewindParams): Promise<Record<string, unknown>> {
@@ -9056,12 +6975,11 @@ export function getServerMemoryDiagnostics(): Record<string, number> {
   let codexApprovals = 0
   try { codexApprovals = pendingCodexApprovals.size } catch { /* defined later in module; ignore during init */ }
   const piEntryCache = piSessionEntryCacheDiagnostics()
+  const mappedMessages = mappedMessagesCacheDiagnostics()
   return {
     sessionInfoCache: sessionInfoCache.size,
-    mappedMessageCache: mappedMessageCache.size,
-    // Entry count alone hides the real weight of this cache (entries are whole
-    // mapped sessions); total retained messages tracks the actual footprint.
-    mappedMessageCacheMessages: Array.from(mappedMessageCache.values()).reduce((acc, entry) => acc + entry.messages.length, 0),
+    mappedMessageCache: mappedMessages.entries,
+    mappedMessageCacheMessages: mappedMessages.messages,
     persistedMessagesSignature: persistedMessagesSignature.size,
     persistedSessionListSignatures: persistedSessionListSignatures.size,
     projectSessionsCache: projectSessionsCache.size,
@@ -9083,3 +7001,11 @@ export function getServerMemoryDiagnostics(): Record<string, number> {
     copilotPool: copilotPoolSize(),
   }
 }
+
+// Re-exported for scripts/codexSchemaAlignmentSmoke.ts, which has imported
+// these classifiers from this module since before they moved to codexThreads.
+export { isCodexActiveWriterError, isCodexMissingRolloutError }
+
+// Re-exported for scripts/reliabilityTimeoutSmoke.ts, which has imported this
+// from sessionBackend since before it moved to its own module.
+export { withTimeout }

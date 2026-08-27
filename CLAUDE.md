@@ -57,7 +57,20 @@ Each provider follows the same pattern in `lib/`:
 - `<provider>Mapper.ts` — translates provider-native events into the shared `SessionMessage` shape
 - `<provider>Tags.ts` / `<provider>Metadata.ts` — local-only tag/title overrides for providers that can't mutate their own metadata (stored under `.agent-viewer-data/`)
 
-`lib/sessionBackend.ts` is the unified facade: it reads the active provider from `lib/providerState.ts` and delegates to the correct client/mapper. `lib/provider.ts` declares per-provider `SessionCapabilities` (which controls reflect in the UI: fork, rewind, rollback, delete, share, summarize, etc.). When adding a provider, wire it through both files plus `isAgentProvider`.
+`lib/sessionBackend.ts` is the unified facade: it reads the active provider from `lib/providerState.ts` and routes to that provider's implementation. `lib/provider.ts` declares per-provider `SessionCapabilities` (which controls reflect in the UI: fork, rewind, rollback, delete, share, summarize, etc.).
+
+**Read path — `lib/adapters/`.** Every read/metadata op (list, session info, title/tag, delete, transcript, subagents, models, composer options, slash commands, diagnostics) goes through a `SessionAdapter` (`lib/adapters/types.ts`), one file per provider, resolved by `lib/adapters/registry.ts`. `sessionBackend.ts` keeps the shared work — instance decoration, inbox ordering, search-index sync and removal, message windowing — and adapters return only the provider's own data.
+
+Two rules make this safe to extend:
+
+- **An op a provider cannot do is an omitted method, never a stub.** How an omission behaves is documented per method in `types.ts`: some ops have a genuine empty answer (a provider with no subagents has none), others raise, because an empty transcript and an unreadable one must not look alike.
+- **`registry.ts` asserts capabilities and adapters agree** at module load, so a `SessionCapabilities` flag cannot drift away from the method backing it. Add new pairs to `CAPABILITY_METHODS` as ops move behind the interface.
+
+Adapters must stay stateless — they are resolved per *provider instance* (`lib/providerRequest.ts`), so two Claude instances with different `CLAUDE_CONFIG_DIR`s cannot share state. Warm resources belong in the existing per-instance pools. Keep each adapter file under ~800 lines; split by concern before it grows past that.
+
+**Send path — still a provider switch in `sessionBackend.ts`.** Turn streaming, prewarm, fork, rewind/rollback, and interrupt have not moved behind the interface yet; that is where the remaining `provider === '…'` branches live.
+
+Supporting modules split out of `sessionBackend.ts` so both paths can share them without an import cycle through the registry: `lib/mappedMessagesCache.ts` (LRU transcript cache), `lib/liveTranscripts.ts` (Copilot/Pi in-flight turn buffers), `lib/codexThreads.ts` (thread read/resume/error classification), `lib/opencodeSessions.ts`, `lib/claudeSessionReads.ts`, `lib/claudeModels.ts`, `lib/withTimeout.ts`, and the composer vocabularies in `lib/adapters/shared.ts` / `lib/copilotComposer.ts` / `lib/piComposer.ts`.
 
 `lib/types.ts` defines the canonical wire format. Every provider must produce `SessionMessage { type, uuid, session_id, message: ApiMessage|SystemMessagePayload, parent_tool_use_id, timestamp?, origin?, provider? }`. `lib/threading.ts` `buildThreadedMessages()` then groups tool_use/tool_result pairs and parses XML tags into the renderer-ready blocks consumed by `MessageItem.tsx` and the TUI formatters.
 
@@ -142,7 +155,7 @@ A handful of files dominate the codebase. **Don't `Read` these without `offset`/
 | `components/MessageView.tsx` | ~4220 | Web virtual-scroll timeline, top bar, session controls, `VirtualTimelineRow`, `handleTimelineRowMeasure` |
 | `components/MessageItem.tsx` | ~3240 | Renderer for every threaded block — all tool cards (bash/edit/read/grep/glob/agent/etc.) live here |
 | `tui/App.tsx` | ~2450 | Legacy Ink TUI root |
-| `lib/sessionBackend.ts` | ~2430 | Per-provider switch for every backend op (list/get/messages/diagnostics/fork/rewind/models/send) |
+| `lib/sessionBackend.ts` | ~7000 | Send/turn path per-provider switch, plus the router that dispatches read ops to `lib/adapters/` |
 | `components/SessionList.tsx` | ~2050 | Sidebar: project grouping, search, tag filters, collapsible groups |
 | `lib/sessionPersistence.ts` | ~1570 | SQLite mirror of sessions+messages; powers `/api/session-index/*` search/rebuild/stats |
 | `components/GitPopover.tsx` | ~1370 | Git diff/branch popover |
@@ -168,7 +181,7 @@ Also: never `Read` `package-lock.json` (~573 KB), `pnpm-lock.yaml` (~360 KB), or
 Concrete recipes for typical asks. Each lists every file you usually need to touch.
 
 - **Add a new tool card** (e.g. a new SDK tool to render specially) → `components/MessageItem.tsx` for the web card; `tui/format.ts` for both TUIs (formats are shared); `lib/threading.ts` only if the tool needs new block-grouping logic. Tool color: add a `--t-<name>` var in each `[data-theme="…"]` block in `app/globals.css`.
-- **Add a provider** → new `lib/<provider>Client.ts` + `<provider>Mapper.ts`; extend the `AgentProvider` union and `isAgentProvider` in `lib/types.ts`/`lib/provider.ts`; add a `<PROVIDER>_CAPABILITIES` constant + branch in `getProviderCapabilities`; add provider branches throughout `lib/sessionBackend.ts` (every backend op switches on provider); add an entry to `PROVIDER_SELECT_OPTIONS` in `components/CommandPalette.tsx`.
+- **Add a provider** → new `lib/<provider>Client.ts` + `<provider>Mapper.ts`; extend the `AgentProvider` union and `isAgentProvider` in `lib/types.ts`/`lib/provider.ts`; add a `<PROVIDER>_CAPABILITIES` constant + branch in `getProviderCapabilities`; write `lib/adapters/<provider>.ts` and register it in `lib/adapters/registry.ts` (that covers the whole read path — do **not** add read branches to `sessionBackend.ts`); add send-path branches in `lib/sessionBackend.ts` for the turn/fork/rewind ops; add an entry to `PROVIDER_SELECT_OPTIONS` in `components/CommandPalette.tsx`. Verify with `npm run adapters:smoke`.
 - **Add a theme** → web: extend the `Theme` union + `THEMES`/`THEME_GROUPS`/`THEME_META` in `lib/themes.ts`, then add a `[data-theme="<name>"] { … }` block in `app/globals.css`. TUI: add the name to `VALID_TUI_THEMES` in `lib/tuiState.ts` and a palette in `tui/theme.ts`. Both registries must agree.
 - **Add a command-palette entry** → `components/CommandPalette.tsx` (single registry of user-facing actions and keybindings).
 - **Change polling cadence** → `app/page.tsx` (5s sessions list, 2s active-session messages with `offset` delta).
@@ -178,4 +191,4 @@ Concrete recipes for typical asks. Each lists every file you usually need to tou
 
 - **Handle a new Claude SDK message type** → `lib/claudeMapper.ts` (`normalizeSystemMessage` for `type:'system'` subtypes, `normalizeClaudeEventAsSystem` for top-level event types — the live-stream path passes the record flat, the history path nests it under `.message`, so both shapes must enrich); then the accent color + badges in `components/MessageItem.tsx`'s `ClaudeSystemCard`, and both `formatBlock`/`formatBlockExpanded` in `tui/format.ts`. Pin it in `scripts/claudeSdkSurfaceSmoke.ts`.
 
-Verification after a change: `npx tsc --noEmit` (web) and/or `npm run tui:check` (OpenTUI). There is no test runner, but there are smoke suites: `npm run composer:smoke` (fast, no network) and `npm run tui:smoke` (slow, spawns real CLIs).
+Verification after a change: `npx tsc --noEmit` (web) and/or `npm run tui:check` (OpenTUI). There is no test runner, but there are smoke suites: `npm run composer:smoke` (fast, no network), `npm run adapters:smoke` (drives every provider's read path against your real local sessions; providers with no local sessions report SKIP), and `npm run tui:smoke` (slow, spawns real CLIs).
