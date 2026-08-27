@@ -17,6 +17,8 @@ function parseArgs(rawArgs) {
   let ahpPort
   let noAhp = false
   let production = false
+  let host
+  let scope
 
   for (let i = 0; i < rawArgs.length; i += 1) {
     const arg = rawArgs[i]
@@ -97,10 +99,38 @@ function parseArgs(rawArgs) {
       continue
     }
 
+    if (arg === '--host') {
+      const next = rawArgs[i + 1]
+      if (next && !next.startsWith('-')) {
+        host = next
+        i += 1
+        continue
+      }
+    }
+
+    if (arg.startsWith('--host=')) {
+      host = arg.slice('--host='.length)
+      continue
+    }
+
+    if (arg === '--scope') {
+      const next = rawArgs[i + 1]
+      if (next && !next.startsWith('-')) {
+        scope = next
+        i += 1
+        continue
+      }
+    }
+
+    if (arg.startsWith('--scope=')) {
+      scope = arg.slice('--scope='.length)
+      continue
+    }
+
     forwarded.push(arg)
   }
 
-  return { forwarded, port, legacy, attach, identity, ahpPort, noAhp, production }
+  return { forwarded, port, legacy, attach, identity, ahpPort, noAhp, production, host, scope }
 }
 
 // The bind address is fixed for the process's lifetime (you can't rebind a
@@ -108,7 +138,11 @@ function parseArgs(rawArgs) {
 // enableRemoteAccess()/disableRemoteAccess() writes, once, at startup —
 // toggling remote access in the running app's UI updates the *auth* check
 // immediately, but only takes effect on the network bind after a restart.
-function resolveWebHostname() {
+function resolveWebHostname(override) {
+  // An explicit --host is the whole point of the flag: the bind address should
+  // be a stated choice, not a side effect of whether remote auth happens to be
+  // toggled on. Without it, fall back to the historical inference below.
+  if (override) return override
   try {
     const stateFile = fileURLToPath(new URL('../.agent-viewer-data/remote-access.json', import.meta.url))
     const state = JSON.parse(readFileSync(stateFile, 'utf8'))
@@ -133,6 +167,7 @@ function printUsage() {
 Modes:
   (default)  Launch the OpenTUI terminal app via Bun
   web        Launch the Next.js web app
+  pair       Mint a pairing code for a phone against a running web daemon
   mcp        Run the Claude/Codex stdio MCP bridge
   ahp        Run the published AHP JSON-RPC host over stdio, TCP, or WebSocket
   acp        Run an ACP (agentclientprotocol.com) Agent over stdio
@@ -148,9 +183,16 @@ Options:
   --ahp-port <port>    AHP WebSocket port in web mode (default: web port + 1)
   --no-ahp             Disable the default AHP Coordinator sidecar
   --production         Run a built Next.js app with \`next start\`
+  --host <address>     Bind address in web mode (default: 127.0.0.1, or 0.0.0.0
+                       when remote access is already enabled)
+  --scope <scope>      Pairing scope for \`pair\`: full (default) or read-only
   -a, --attach <url>   Connect the TUI or MCP bridge to an \`agent-viewer web\` daemon
                        (e.g. --attach 3000 or --attach http://127.0.0.1:3000).
                        Turns run in the daemon and survive TUI restarts.
+
+Pairing a phone:
+  agent-viewer pair                       # against a daemon on port 3000
+  agent-viewer pair --attach 4000 --scope read-only
 
 CLI MCP:
   claude mcp add agent-viewer -- npx -y agent-viewer mcp --attach 3000
@@ -320,9 +362,84 @@ function failMissingBun() {
   process.exitCode = 1
 }
 
+
+// `agent-viewer pair` — the headless path to adding a device. A daemon started
+// with `agent-viewer web` has no window to open the settings popover in, so
+// this mints a pairing code over its own HTTP API and prints the URL plus a
+// scannable QR right in the terminal.
+async function runPairCommand(rawArgs) {
+  const { attach, scope, port } = parseArgs(rawArgs)
+  const base = normalizeAttachUrl(attach || port || process.env.AGENT_VIEWER_ATTACH || '3000')
+  const requestedScope = scope === 'read-only' || scope === 'full' ? scope : 'full'
+
+  let state
+  try {
+    const response = await fetch(new URL('/api/remote-access', base), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'pair', scope: requestedScope }),
+    })
+    if (!response.ok) {
+      console.error(`Pairing failed: ${response.status} ${response.statusText}`)
+      console.error(`Is an \`agent-viewer web\` daemon running at ${base}?`)
+      process.exitCode = 1
+      return
+    }
+    state = await response.json()
+  } catch (error) {
+    console.error(`Could not reach Agent Viewer at ${base}: ${error?.message ?? error}`)
+    console.error('Start one with `agent-viewer web`, or point at it with --attach <url|port>.')
+    process.exitCode = 1
+    return
+  }
+
+  if (!state?.pairing?.token) {
+    console.error('The daemon did not return a pairing code.')
+    process.exitCode = 1
+    return
+  }
+
+  const endpoints = Array.isArray(state.endpoints) ? state.endpoints : []
+  const chosen = endpoints.find((entry) => entry.id === state.defaultId) ?? endpoints[0]
+  if (!chosen) {
+    console.error('No reachable network address — connect this machine to a network and retry.')
+    process.exitCode = 1
+    return
+  }
+
+  const origin = chosen.https ? `https://${chosen.host}` : `http://${chosen.host}:${state.port}`
+  // The code rides in the fragment so it never reaches the server; see
+  // app/pair/page.tsx.
+  const url = `${origin}/pair#token=${encodeURIComponent(state.pairing.token)}`
+  const expiresIn = Math.max(0, Math.round((Date.parse(state.pairing.expiresAt) - Date.now()) / 1000))
+
+  try {
+    const { default: qrcode } = await import('qrcode')
+    console.log(await qrcode.toString(url, { type: 'terminal', small: true }))
+  } catch {
+    // No qrcode module (a pruned install) — the URL alone is still usable.
+  }
+
+  console.log(url)
+  console.log('')
+  console.log(`Scope:   ${state.pairing.scope}`)
+  console.log(`Expires: in ${Math.floor(expiresIn / 60)}m ${expiresIn % 60}s, single use`)
+  if (endpoints.length > 1) {
+    console.log('')
+    console.log('Other addresses this machine answers on:')
+    for (const entry of endpoints) {
+      if (entry.id === chosen.id) continue
+      const other = entry.https ? `https://${entry.host}` : `http://${entry.host}:${state.port}`
+      console.log(`  ${other}  (${entry.label})`)
+    }
+  }
+}
+
 if (command === '-h' || command === '--help' || command === 'help') {
   printUsage()
   process.exitCode = 0
+} else if (command === 'pair') {
+  await runPairCommand(args.slice(1))
 } else if (command === 'mcp') {
   const { attach, identity } = parseArgs(args.slice(1))
   const entrypoint = fileURLToPath(new URL('./agent-viewer-mcp.mjs', import.meta.url))
@@ -409,7 +526,7 @@ if (command === '-h' || command === '--help' || command === 'help') {
 
 Run \`agent-viewer coord <subcommand> --help\` for subcommand-specific options.`)
 } else if (command === 'web') {
-  const { forwarded, port, legacy, ahpPort, noAhp, production } = parseArgs(args.slice(1))
+  const { forwarded, port, legacy, ahpPort, noAhp, production, host } = parseArgs(args.slice(1))
   if (legacy) {
     const entrypoint = fileURLToPath(new URL('../tui/main.tsx', import.meta.url))
     const child = spawn(process.execPath, ['--import', 'tsx', entrypoint, ...forwarded], {
@@ -429,7 +546,7 @@ Run \`agent-viewer coord <subcommand> --help\` for subcommand-specific options.`
     // through the `next` CLI, which standalone builds don't include.
     const standaloneServer = fileURLToPath(new URL('../.next/standalone/server.js', import.meta.url))
     const webPort = String(port || process.env.PORT || 3000)
-    const hostname = resolveWebHostname()
+    const hostname = resolveWebHostname(host)
     let child
 
     if (production && existsSync(standaloneServer)) {

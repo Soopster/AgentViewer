@@ -43,7 +43,7 @@ There is no test runner and no lint script. Type-checking is the verification st
 - OpenTUI: `npm run tui:check` (uses `tsconfig.opentui.json` with `jsxImportSource: "@opentui/react"`)
 - Legacy Ink TUI: `tsconfig.tui.json` covers `tui/**` + `lib/**`
 
-`bin/agent-viewer.mjs` is the published `npx agent-viewer` entrypoint — it dispatches to OpenTUI (default), `web` (Next.js), or `--legacy` (Ink). Adding flags or modes belongs here. `--attach <url|port>` connects the OpenTUI app to a running `agent-viewer web` daemon instead of running the backend in-process (env `AGENT_VIEWER_ATTACH`, transport in `lib/tui/remote.ts`): turns run server-side, survive TUI restarts, and share the running-turn registry with the web UI. Git-based features (worktree tasks, checkpoints) stay local — attach assumes the daemon shares the machine/mounts.
+`bin/agent-viewer.mjs` is the published `npx agent-viewer` entrypoint — it dispatches to OpenTUI (default), `web` (Next.js), or `--legacy` (Ink). Adding flags or modes belongs here. `--attach <url|port>` connects the OpenTUI app to a running `agent-viewer web` daemon instead of running the backend in-process (env `AGENT_VIEWER_ATTACH`, transport in `lib/tui/remote.ts`): turns run server-side, survive TUI restarts, and share the running-turn registry with the web UI. Git-based features (worktree tasks, checkpoints) stay local — attach assumes the daemon shares the machine/mounts. `agent-viewer pair` mints a pairing code against a running daemon and prints a terminal QR (the headless path to adding a phone); `--host <address>` sets the web bind address explicitly instead of inferring it from whether remote access happens to be enabled.
 
 ## Architecture
 
@@ -133,6 +133,40 @@ Both TUIs depend on the same `lib/` provider layer — changes to `sessionBacken
 - **Place static content outside `scrollbox`** — the scrollbox has a fixed `height: transcriptViewportRows` budget. The live-mode spinner intentionally lives outside it.
 - **Module-level constants** for static option arrays (e.g. `PROVIDER_SELECT_OPTIONS`); not inside the component body.
 - Use **BMP-safe glyphs** (e.g. `●` U+25CF, not `⏺`) — terminal renderers truncate astral chars on Windows.
+
+### Remote access
+
+Opt-in pairing for a phone or a second browser, off by default. `lib/remoteAuth.ts` owns two
+credential kinds that are deliberately different:
+
+- A **pairing token** is what the QR carries: single-use, ~10 minute TTL, stored in plaintext so the
+  popover can re-render the same code while it is live. It rides in the URL **hash**
+  (`/pair#token=…`, `app/pair/page.tsx`) so it never reaches the server or any access log.
+- A **device session secret** is what a paired device keeps. It is returned exactly once by
+  `POST /api/remote/handshake` as an httpOnly cookie (`<sessionId>.<secret>`) and persisted only as
+  a SHA-256 hash, so the state file cannot be replayed as a device. One session per device, so
+  revoking one phone leaves the others paired.
+
+`proxy.ts` calls `evaluateRequestTrust()` and enforces the two scopes — `full` and `read-only`,
+where read-only means "no mutating methods". Keep it at two: a scope set can widen later, it cannot
+shrink.
+
+**`lib/remoteAuth.ts` and `lib/remoteEndpoints.ts` must not cache their state files in module
+scope** (load-bearing). Next gives `proxy.ts` and the route handlers *separate module instances*, so
+a cache in one never sees writes made by the other — an earlier version let a revoked device keep
+working because the proxy's copy was stale. Reads only happen for genuinely remote requests; local
+callers short-circuit before touching disk.
+
+`lib/remoteEndpoints.ts` enumerates every interface and tags it `loopback | lan | private | tunnel`,
+persisting the user's default **by kind, not by literal address** — a remembered IP stops matching
+the moment DHCP hands out a new lease. `lib/tailscale.ts` is an opt-in *endpoint provider* on top of
+that, not a new connection kind: tailnet addresses become extra `listAdvertisedEndpoints()` entries
+and pair through the ordinary bearer path. A missing or logged-out Tailscale reports
+`available`/`running` false and is never an error.
+
+Upgrade path: the pre-per-device state file (`{ enabled, token, createdAt }`) migrates on read into
+one device session with a fixed id, so already-paired devices keep working rather than being
+silently signed out.
 
 ### Local data
 

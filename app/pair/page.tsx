@@ -2,54 +2,64 @@
 
 // Mobile pairing landing page — the target of the QR code in
 // RemoteAccessPopover. Any phone's own camera app opens this as a plain
-// URL (no companion app needed); it exchanges the token in the query
-// string for an httpOnly session cookie via /api/remote/handshake, then
-// hands off to the real app. The token never touches localStorage or any
-// client-visible state beyond this one request.
+// URL (no companion app needed); it exchanges the pairing token for an
+// httpOnly per-device session cookie via /api/remote/handshake, then hands
+// off to the real app.
+//
+// The token rides in the URL *hash*, not the query string: a fragment is
+// never transmitted to the server, so the secret stays out of request logs
+// and any reverse-proxy access log in front of them. This page reads it
+// client-side, spends it once, and strips it from the address bar so it
+// doesn't linger in browser history either.
 
-import { Suspense, useEffect, useState } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 
 const DISPLAY = "'Oxanium', sans-serif"
 const SANS = "'IBM Plex Sans', sans-serif"
 
 type Status = 'pairing' | 'success' | 'error'
 
-export default function PairPage() {
-  return (
-    <Suspense fallback={<PairShell status="pairing" message="Pairing with Agent Viewer…" />}>
-      <PairContent />
-    </Suspense>
-  )
+/** Accepts `#token=…` and a bare `#…`, so a hand-typed code still works. */
+function readPairingToken(hash: string): string | null {
+  const raw = hash.startsWith('#') ? hash.slice(1) : hash
+  if (!raw) return null
+  const params = new URLSearchParams(raw)
+  const named = params.get('token')
+  if (named) return named
+  return raw.includes('=') ? null : decodeURIComponent(raw)
 }
 
-function PairContent() {
+export default function PairPage() {
   const router = useRouter()
-  const searchParams = useSearchParams()
   const [status, setStatus] = useState<Status>('pairing')
   const [message, setMessage] = useState('Pairing with Agent Viewer…')
 
   useEffect(() => {
-    const token = searchParams.get('token')
+    const token = readPairingToken(window.location.hash)
     if (!token) {
       setStatus('error')
-      setMessage('Missing pairing token — rescan the QR code from the desktop app.')
+      setMessage('Missing pairing code — rescan the QR code from the desktop app.')
       return
     }
+    // Spend-once: drop it from the address bar before the request resolves.
+    window.history.replaceState(null, '', window.location.pathname)
+
     let cancelled = false
     fetch('/api/remote/handshake', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
     })
-      .then((res) => {
+      .then(async (res) => {
         if (cancelled) return
         if (!res.ok) {
           setStatus('error')
-          setMessage('This pairing link is no longer valid — it may have been revoked or rotated. Rescan the QR code from the desktop app.')
+          setMessage('This pairing code is no longer valid — it expires after a few minutes and works only once. Generate a new one from the desktop app.')
           return
         }
+        const body = (await res.json().catch(() => ({}))) as { scope?: string }
         setStatus('success')
-        setMessage('Paired. Opening Agent Viewer…')
+        setMessage(body.scope === 'read-only' ? 'Paired read-only. Opening Agent Viewer…' : 'Paired. Opening Agent Viewer…')
         setTimeout(() => { if (!cancelled) router.replace('/') }, 700)
       })
       .catch(() => {
@@ -59,7 +69,7 @@ function PairContent() {
         }
       })
     return () => { cancelled = true }
-  }, [searchParams, router])
+  }, [router])
 
   return <PairShell status={status} message={message} />
 }
