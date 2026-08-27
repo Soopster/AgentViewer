@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { isAgentProvider } from '@/lib/provider'
+import { withProviderRequest } from '@/lib/providerRequest'
 import { prewarmViewSession, readViewSessionComposerOptions } from '@/lib/sessionBackend'
 import type { ReasoningEffortLevel } from '@/lib/types'
 
@@ -21,7 +22,8 @@ export async function GET(
   const providerParam = new URL(request.url).searchParams.get('provider')
   const provider = isAgentProvider(providerParam) ? providerParam : undefined
   try {
-    const options = await readViewSessionComposerOptions(sessionId, provider)
+    const options = await withProviderRequest(request, provider, undefined, () =>
+      readViewSessionComposerOptions(sessionId, provider))
     return NextResponse.json(options)
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
@@ -43,14 +45,14 @@ export async function POST(
     : undefined
 
   try {
-    await prewarmViewSession({
-      sessionId,
-      provider,
-      cwd,
-      model,
-      effort,
-      isPending: body?.isPending === true,
-    })
+    await withProviderRequest(request, provider, body, () => prewarmViewSession({
+        sessionId,
+        provider,
+        cwd,
+        model,
+        effort,
+        isPending: body?.isPending === true,
+      }))
     return NextResponse.json({ ok: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'

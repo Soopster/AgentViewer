@@ -8,7 +8,7 @@ import { SidebarGlyph, useSidebar } from '@/components/ui/sidebar'
 import { normalizeProjectPath, pathBasename, sameProjectPath } from '@/lib/projectPaths'
 import { applyTheme, getCurrentTheme, subscribeTheme, THEME_GROUPS, THEME_META } from '@/lib/themes'
 import type { PersistedSearchMatch, PersistedSearchResult, PersistedSessionRecord } from '@/lib/sessionPersistence'
-import type { AgentProvider, ProviderSelection, Session } from '@/lib/types'
+import type { AgentProvider, ProviderInstanceSummary, ProviderSelection, Session } from '@/lib/types'
 
 type ProjectSelection = {
   key: string
@@ -23,6 +23,8 @@ type CommandPaletteProps = {
   selectedSession: Session | null
   selectedProject: ProjectSelection | null
   provider: ProviderSelection
+  providerInstanceId: string
+  providerInstances: ProviderInstanceSummary[]
   scopeMode: 'all' | 'project'
   scopeProjectName: string | null
   includeWorktrees: boolean
@@ -37,7 +39,7 @@ type CommandPaletteProps = {
   ideBridgeRouting: boolean
   onSelectSession: (session: Session, targetMessageId?: string) => void
   onSelectProject: (projectDir: string, projectName: string, sessions: Session[]) => void
-  onChangeProvider: (provider: ProviderSelection) => void
+  onChangeProvider: (provider: ProviderSelection, providerInstanceId?: string) => void
   onChangeScope: (mode: 'all' | 'project') => void
   onToggleWorktrees: (include: boolean) => void
   onToggleMessagePane: () => void
@@ -104,20 +106,8 @@ type IndexedMessageItem = PaletteItem & {
 const MESSAGE_SEARCH_SESSION_LIMIT = 32
 const MESSAGE_SEARCH_RESULT_LIMIT = 12
 
-const PROVIDER_ITEMS: Array<{ provider: ProviderSelection; label: string; description: string }> = [
-  { provider: 'claude', label: 'Claude', description: 'Use the Claude provider' },
-  { provider: 'codex', label: 'Codex', description: 'Use the Codex provider' },
-  { provider: 'opencode', label: 'OpenCode', description: 'Use the OpenCode provider' },
-  { provider: 'copilot', label: 'Copilot', description: 'Use the GitHub Copilot provider' },
-  { provider: 'pi', label: 'Pi', description: 'Use the Pi provider' },
-  { provider: 'lmstudio', label: 'LM Studio', description: 'Use local models via LM Studio' },
-  { provider: 'claude-acp', label: 'Claude (ACP)', description: 'Drive Claude via the claude-agent-acp subprocess' },
-  { provider: 'codex-acp', label: 'Codex (ACP)', description: 'Drive Codex via the codex-acp subprocess' },
-  { provider: 'all', label: 'All providers', description: 'Show sessions from every provider' },
-]
-
-function sessionTabKey(session: Pick<Session, 'sessionId' | 'provider'>): string {
-  return `${session.provider ?? 'claude'}:${session.sessionId}`
+function sessionTabKey(session: Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'>): string {
+  return `${session.providerInstanceId ?? session.provider ?? 'claude'}:${session.sessionId}`
 }
 
 function getSessionTitle(session: Session): string {
@@ -324,6 +314,8 @@ export default function CommandPalette({
   selectedSession,
   selectedProject,
   provider,
+  providerInstanceId,
+  providerInstances,
   scopeMode,
   scopeProjectName,
   includeWorktrees,
@@ -748,23 +740,37 @@ export default function CommandPalette({
       }
     }
 
-    for (const item of PROVIDER_ITEMS) {
+    for (const item of [
+      ...providerInstances.map((instance) => ({
+        provider: instance.provider as ProviderSelection,
+        providerInstanceId: instance.id,
+        label: instance.displayName,
+        description: `Use the ${instance.displayName} provider instance`,
+      })),
+      {
+        provider: 'all' as ProviderSelection,
+        providerInstanceId: 'all',
+        label: 'All providers',
+        description: 'Show sessions from every provider instance',
+      },
+    ]) {
+      const active = provider === item.provider && providerInstanceId === item.providerInstanceId
       items.push({
-        id: `provider:${item.provider}`,
+        id: `provider:${item.providerInstanceId}`,
         label: item.label,
         description: item.description,
         icon: <Bot size={16} />,
-        shortcut: provider === item.provider ? 'Active' : undefined,
-        active: provider === item.provider,
+        shortcut: active ? 'Active' : undefined,
+        active,
         group: 'actions',
-        keywords: ['provider', item.provider, item.label.toLowerCase(), 'switch'],
+        keywords: ['provider', item.provider, item.providerInstanceId, item.label.toLowerCase(), 'switch'],
         score: 0,
-        run: () => onChangeProvider(item.provider),
+        run: () => onChangeProvider(item.provider, item.providerInstanceId),
       })
-      }
+    }
 
     return items
-  }, [canOpenFiles, canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenFiles, onOpenGit, onOpenPullRequests, onOpenCoordinator, onOpenCrossSessionMessaging, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onOpenProvenance, onOpenRemoteAccess, onToggleMessagePane, onToggleWorktrees, provider, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
+  }, [canOpenFiles, canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenFiles, onOpenGit, onOpenPullRequests, onOpenCoordinator, onOpenCrossSessionMessaging, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onOpenProvenance, onOpenRemoteAccess, onToggleMessagePane, onToggleWorktrees, provider, providerInstanceId, providerInstances, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
 
   const projectItems = useMemo(() => {
     const groups = new Map<string, {

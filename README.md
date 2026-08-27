@@ -98,6 +98,26 @@ AGENT_VIEWER_PROVIDER=claude npm run dev
 
 Valid values are `claude`, `codex`, `opencode`, `copilot`, `pi`, `claude-acp`, `codex-acp`, and `all`. The in-app provider picker persists the choice to `.agent-viewer-data/provider.json`.
 
+### Provider instances and thread inbox
+
+The picker can target multiple local Claude or Codex configurations. Add
+`.agent-viewer-data/provider-instances.json` (kept local and gitignored):
+
+```json
+{
+  "version": 1,
+  "instances": [
+    { "id": "claude-work", "provider": "claude", "displayName": "Claude · Work", "environment": { "CLAUDE_CONFIG_DIR": "/path/to/work" } },
+    { "id": "codex-personal", "provider": "codex", "displayName": "Codex · Personal", "executable": "codex" }
+  ]
+}
+```
+
+Sessions carry `providerInstanceId`; the inbox supports pin, settle, reopen, and
+one-hour snooze. Inbox state is stored separately in
+`.agent-viewer-data/session-inbox.json`, so identical native session IDs remain
+distinct across instances.
+
 ### Claude
 
 Claude sessions are read through `@anthropic-ai/claude-agent-sdk`.

@@ -10,6 +10,11 @@ import {
   type CodexServerRequest,
 } from './codexProtocol'
 import type { InitializeCapabilities } from './codex-schema'
+import {
+  currentProviderEnvironment,
+  currentProviderExecutable,
+  currentProviderInstanceId,
+} from './providerInstances'
 
 // Coordinator-owned Codex threads declare dynamicTools at thread/start. The
 // app-server gates that field behind the connection-level experimentalApi
@@ -30,6 +35,11 @@ type ServerRequestListener = (request: CodexServerRequest) => boolean
 type DisconnectListener = () => void
 
 class CodexAppServerClient {
+  constructor(
+    private readonly executable: string,
+    private readonly environment: NodeJS.ProcessEnv,
+  ) {}
+
   private child: ChildProcessWithoutNullStreams | null = null
   private nextId = 1
   private pending = new Map<string, PendingRequest>()
@@ -43,9 +53,10 @@ class CodexAppServerClient {
   private ensureProcess(): ChildProcessWithoutNullStreams {
     if (this.child && !this.child.killed) return this.child
 
-    const child = spawn('codex', ['app-server', '--listen', 'stdio://'], {
+    const child = spawn(this.executable, ['app-server', '--listen', 'stdio://'], {
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: process.platform === 'win32',
+      env: this.environment,
     })
 
     child.stdout.setEncoding('utf8')
@@ -252,10 +263,19 @@ declare global {
   // Next.js development module reloads. A second client would spawn a competing
   // app-server while the first still owns in-flight turns and approvals.
   // eslint-disable-next-line no-var
-  var __agentViewerCodexClient: CodexAppServerClient | undefined
+  var __agentViewerCodexClients: Map<string, CodexAppServerClient> | undefined
 }
 
 export function getCodexClient(): CodexAppServerClient {
-  return globalThis.__agentViewerCodexClient
-    ?? (globalThis.__agentViewerCodexClient = new CodexAppServerClient())
+  const instanceId = currentProviderInstanceId('codex')
+  const clients = globalThis.__agentViewerCodexClients
+    ?? (globalThis.__agentViewerCodexClients = new Map<string, CodexAppServerClient>())
+  const existing = clients.get(instanceId)
+  if (existing) return existing
+  const client = new CodexAppServerClient(
+    currentProviderExecutable('codex'),
+    currentProviderEnvironment(),
+  )
+  clients.set(instanceId, client)
+  return client
 }

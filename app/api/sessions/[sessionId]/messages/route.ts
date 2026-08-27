@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { drainCooperativeInbox, observeCoordinatorSessionTurn } from '@/lib/agentCoordination'
 import { isAgentProvider } from '@/lib/provider'
+import { withProviderRequest } from '@/lib/providerRequest'
 import { listViewSessionMessageWindow, streamViewSessionTurn } from '@/lib/sessionBackend'
 
 export { maxDuration } from '@/lib/sessionBackend'
@@ -21,7 +22,8 @@ export async function GET(
   const provider = isAgentProvider(providerParam) ? providerParam : undefined
 
   try {
-    const window = await listViewSessionMessageWindow(sessionId, { limit, offset, tail }, provider)
+    const window = await withProviderRequest(request, provider, undefined, () =>
+      listViewSessionMessageWindow(sessionId, { limit, offset, tail }, provider))
     return NextResponse.json({ sessionId, provider, ...window }, {
       headers: { 'Cache-Control': 'private, max-age=2, stale-while-revalidate=8' },
     })
@@ -46,6 +48,7 @@ export async function POST(
     const drained = await drainCooperativeInbox(sessionId).catch(() => '')
     if (drained) body.message = `${body.message}\n${drained}`
   }
-  const response = await streamViewSessionTurn({ sessionId, signal: request.signal, body, provider })
+  const response = await withProviderRequest(request, provider, body, () =>
+    streamViewSessionTurn({ sessionId, signal: request.signal, body, provider }))
   return observeCoordinatorSessionTurn(sessionId, response)
 }

@@ -18,7 +18,7 @@ type Props = {
   open: boolean
   onClose: () => void
   /** Session whose written files show in the default view (blame-only when absent). */
-  session?: { sessionId: string; provider?: AgentProvider } | null
+  session?: { sessionId: string; provider?: AgentProvider; providerInstanceId?: string } | null
   /** Base dir for resolving relative file input in the blame view. */
   cwd?: string | null
   onOpenSession: (target: { sessionId: string; provider: AgentProvider; uuid: string }) => void
@@ -127,7 +127,8 @@ export default function ProvenancePopover({ open, onClose, session, cwd, onOpenS
     setLoading(true)
     setError(null)
     const provider = session.provider ?? 'claude'
-    fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/provenance?provider=${provider}`)
+    const instance = session.providerInstanceId ? `&providerInstanceId=${encodeURIComponent(session.providerInstanceId)}` : ''
+    fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/provenance?provider=${provider}${instance}`)
       .then(readJsonResponse)
       .then((data) => {
         if (data?.error) setError(String(data.error))

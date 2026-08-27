@@ -1275,10 +1275,17 @@ function shouldReplaceLiveAssistantText(payload: unknown): boolean {
   return (event as Record<string, unknown>).type === 'assistant.message'
 }
 
-function withProviderQuery(path: string, provider?: Session['provider']): string {
-  if (!provider) return path
+function withProviderQuery(
+  path: string,
+  provider?: Session['provider'],
+  providerInstanceId?: Session['providerInstanceId'],
+): string {
+  if (!provider && !providerInstanceId) return path
+  const params = new URLSearchParams()
+  if (provider) params.set('provider', provider)
+  if (providerInstanceId) params.set('providerInstanceId', providerInstanceId)
   const separator = path.includes('?') ? '&' : '?'
-  return `${path}${separator}provider=${provider}`
+  return `${path}${separator}${params.toString()}`
 }
 
 function usageEqual(a: ThreadedMessage['usage'], b: ThreadedMessage['usage']): boolean {
@@ -3595,7 +3602,7 @@ function MessageViewInner({
   // Load session info (git branch, summary, etc.) when session changes
   useEffect(() => {
     if (!session) { setSessionInfo(null); return }
-    fetch(withProviderQuery(`/api/sessions/${session.sessionId}`, session.provider))
+    fetch(withProviderQuery(`/api/sessions/${session.sessionId}`, session.provider, session.providerInstanceId))
       .then(readJsonResponse)
       .then(data => { if (!data.error) setSessionInfo(data.info) })
       .catch(() => {})
@@ -3650,7 +3657,7 @@ function MessageViewInner({
     setBookmarksOnly(false)
     if (!session || session.isPending) { setBookmarkIds(new Set()); return }
     let cancelled = false
-    fetch(withProviderQuery(`/api/sessions/${session.sessionId}/bookmarks`, session.provider))
+    fetch(withProviderQuery(`/api/sessions/${session.sessionId}/bookmarks`, session.provider, session.providerInstanceId))
       .then(readJsonResponse)
       .then(data => {
         if (cancelled || !Array.isArray(data?.ids)) return
@@ -3688,7 +3695,7 @@ function MessageViewInner({
     fetch(`/api/sessions/${session.sessionId}/bookmarks`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider: session.provider, uuid, bookmarked: next, meta }),
+      body: JSON.stringify({ provider: session.provider, providerInstanceId: session.providerInstanceId, uuid, bookmarked: next, meta }),
     })
       .then(readJsonResponse)
       .then((data) => {
@@ -3710,10 +3717,11 @@ function MessageViewInner({
   // change the SDK's current model and the dropdown should follow.
   const modelSessionId = session?.sessionId
   const modelSessionProvider = session?.provider
+  const modelSessionProviderInstanceId = session?.providerInstanceId
   const refreshSessionModels = useCallback(({ preserveSelection }: { preserveSelection: boolean }) => {
     if (!modelSessionId) return
     setModelsLoading(true)
-    fetch(withProviderQuery(`/api/sessions/${modelSessionId}/models`, modelSessionProvider))
+    fetch(withProviderQuery(`/api/sessions/${modelSessionId}/models`, modelSessionProvider, modelSessionProviderInstanceId))
       .then(readJsonResponse)
       .then(data => {
         if (data.error) return
@@ -3733,7 +3741,7 @@ function MessageViewInner({
       })
       .catch(() => {})
       .finally(() => setModelsLoading(false))
-  }, [modelSessionId, modelSessionProvider])
+  }, [modelSessionId, modelSessionProvider, modelSessionProviderInstanceId])
 
   useEffect(() => {
     if (!session) {
@@ -3780,7 +3788,7 @@ function MessageViewInner({
     }
 
     const controller = new AbortController()
-    fetch(withProviderQuery(`/api/sessions/${session.sessionId}/composer`, session.provider), { signal: controller.signal })
+    fetch(withProviderQuery(`/api/sessions/${session.sessionId}/composer`, session.provider, session.providerInstanceId), { signal: controller.signal })
       .then((res) => res.ok ? res.json() : null)
       .then((data: SessionComposerOptions | null) => {
         if (controller.signal.aborted || !data) return
@@ -4354,6 +4362,7 @@ function MessageViewInner({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           provider: session.provider,
+          providerInstanceId: session.providerInstanceId,
           turnRequestId: activeTurnRequestIdRef.current ?? undefined,
           cancelQueued: true,
         }),
@@ -4601,7 +4610,7 @@ function MessageViewInner({
             const res = await fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/actions`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload),
+              body: JSON.stringify({ ...payload, providerInstanceId: session.providerInstanceId }),
             })
             if (!res.ok) throw new Error(`Steer failed with HTTP ${res.status}`)
             const json = await res.json() as { result?: { delivered?: unknown; messageUuid?: unknown } }
@@ -4718,6 +4727,7 @@ function MessageViewInner({
           resumeDropsTurn: resumeFromMessageId ?? undefined,
           forkSession: Boolean(resumeFromMessageId),
           provider: session.provider,
+          providerInstanceId: session.providerInstanceId,
           agent: session.provider === 'opencode' && selectedAgent ? selectedAgent : undefined,
           mode: session.provider === 'copilot' ? selectedCopilotMode : undefined,
           contextTier: session.provider === 'copilot'
@@ -5866,10 +5876,10 @@ function MessageViewInner({
     setSessionActionError(null)
     setSessionActionNotice(null)
     try {
-      const res = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}`, session.provider), {
+      const res = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}`, session.provider, session.providerInstanceId), {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: session.provider }),
+        body: JSON.stringify({ provider: session.provider, providerInstanceId: session.providerInstanceId }),
       })
       const data = await readOptionalJsonResponse(res, {})
       if (data.error) throw new Error(data.error)
@@ -5891,7 +5901,7 @@ function MessageViewInner({
       const res = await fetch(`/api/sessions/${session.sessionId}/actions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, provider: session.provider }),
+        body: JSON.stringify({ action, provider: session.provider, providerInstanceId: session.providerInstanceId }),
       })
       const data = await readOptionalJsonResponse(res, {})
       if (data.error) throw new Error(data.error)
@@ -5943,6 +5953,7 @@ function MessageViewInner({
           response,
           permissionDecisionReason: response === 'reject' ? permissionDenialReason(permission) : undefined,
           provider: session.provider,
+          providerInstanceId: session.providerInstanceId,
         }),
       })
       const data = await readOptionalJsonResponse(res, {})
@@ -5977,6 +5988,7 @@ function MessageViewInner({
           permissionId: permission.id,
           answers,
           provider: session.provider,
+          providerInstanceId: session.providerInstanceId,
         }),
       })
       const data = await readOptionalJsonResponse(res, {})
@@ -6013,7 +6025,7 @@ function MessageViewInner({
       const res = await fetch(`/api/sessions/${session.sessionId}/fork`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: session.provider }),
+        body: JSON.stringify({ provider: session.provider, providerInstanceId: session.providerInstanceId }),
       })
       const data = await readJsonResponse(res)
       if (data.error) throw new Error(data.error)
@@ -6034,7 +6046,7 @@ function MessageViewInner({
       const res = await fetch(`/api/sessions/${session.sessionId}/fork`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ upToMessageId: messageId, provider: session.provider }),
+        body: JSON.stringify({ upToMessageId: messageId, provider: session.provider, providerInstanceId: session.providerInstanceId }),
       })
       const data = await res.json()
       if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
@@ -6123,7 +6135,7 @@ function MessageViewInner({
     if (!session) return
     setDiagnosticsLoading(true)
     try {
-      const res = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}/diagnostics`, session.provider))
+      const res = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}/diagnostics`, session.provider, session.providerInstanceId))
       const data = await res.json()
       if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
       setDiagnosticSections(data.sections ?? [])
@@ -6151,7 +6163,7 @@ function MessageViewInner({
       const res = await fetch(`/api/sessions/${session.sessionId}/actions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, provider: session.provider, ...extra }),
+        body: JSON.stringify({ action, provider: session.provider, providerInstanceId: session.providerInstanceId, ...extra }),
       })
       const data = await readOptionalJsonResponse(res, {})
       if (data.error) throw new Error(data.error)
@@ -6256,7 +6268,7 @@ function MessageViewInner({
 
     setDiagnosticsLoading(true)
     try {
-      const res = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}/diagnostics`, session.provider))
+      const res = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}/diagnostics`, session.provider, session.providerInstanceId))
       const data = await res.json()
       if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
       setDiagnosticSections(data.sections ?? [])
@@ -6501,6 +6513,7 @@ function MessageViewInner({
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               provider: session.provider,
+              providerInstanceId: session.providerInstanceId,
               sessionId: session.sessionId,
               kind: entry.kind,
               text: entry.text,
@@ -7425,7 +7438,7 @@ function MessageViewInner({
       const res = await fetch(`/api/sessions/${session.sessionId}/rewind`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userMessageId: selectedRewindTarget.uuid, model: selectedModel, dryRun: true, provider: session.provider }),
+        body: JSON.stringify({ userMessageId: selectedRewindTarget.uuid, model: selectedModel, dryRun: true, provider: session.provider, providerInstanceId: session.providerInstanceId }),
       })
       const data = await res.json()
       if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
@@ -7460,7 +7473,7 @@ function MessageViewInner({
       const res = await fetch(`/api/sessions/${session.sessionId}/rewind`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userMessageId: rewindPreview.userMessageId, model: selectedModel, provider: session.provider }),
+        body: JSON.stringify({ userMessageId: rewindPreview.userMessageId, model: selectedModel, provider: session.provider, providerInstanceId: session.providerInstanceId }),
       })
       const data = await res.json()
       if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
@@ -7486,7 +7499,7 @@ function MessageViewInner({
       const res = await fetch(`/api/sessions/${session.sessionId}/rewind`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ numTurns: rollbackTurns, dryRun: true, provider: session.provider }),
+        body: JSON.stringify({ numTurns: rollbackTurns, dryRun: true, provider: session.provider, providerInstanceId: session.providerInstanceId }),
       })
       const data = await res.json()
       if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
@@ -7517,7 +7530,7 @@ function MessageViewInner({
       const res = await fetch(`/api/sessions/${session.sessionId}/rewind`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ numTurns: rollbackPreview.numTurns, provider: session.provider }),
+        body: JSON.stringify({ numTurns: rollbackPreview.numTurns, provider: session.provider, providerInstanceId: session.providerInstanceId }),
       })
       const data = await res.json()
       if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)

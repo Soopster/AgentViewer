@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { isAgentProvider } from '@/lib/provider'
+import { withProviderRequest } from '@/lib/providerRequest'
 import { interruptViewSession } from '@/lib/sessionBackend'
 
 export async function POST(
@@ -14,8 +15,8 @@ export async function POST(
     : undefined
   const cancelQueued = body?.cancelQueued === true
   try {
-    void provider
-    const stillQueued = await interruptViewSession(sessionId, turnRequestId, cancelQueued)
+    const stillQueued = await withProviderRequest(request, provider, body, () =>
+      interruptViewSession(sessionId, turnRequestId, cancelQueued))
     return NextResponse.json({ ok: true, ...(stillQueued !== undefined ? { stillQueued } : {}) })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'

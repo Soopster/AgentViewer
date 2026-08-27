@@ -55,6 +55,24 @@ export type SystemMessagePayload = {
 
 export type AgentProvider = 'claude' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'lmstudio' | 'claude-acp' | 'codex-acp'
 export type ProviderSelection = AgentProvider | 'all'
+export type ProviderInstanceId = string
+
+export type ProviderInstanceSummary = {
+  id: ProviderInstanceId
+  provider: AgentProvider
+  displayName: string
+  accentColor?: string
+  enabled: boolean
+  isDefault: boolean
+  configured: boolean
+}
+
+export type SessionInboxState = {
+  pinnedAt?: number
+  pinOrder?: number
+  settledAt?: number
+  snoozedUntil?: number
+}
 export type ReasoningEffortLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh'
 
 export type SessionCapabilities = {
@@ -84,6 +102,8 @@ export type SessionMessage = {
   timestamp?: string
   origin?: { kind: string; subkind?: string }
   provider?: AgentProvider
+  /** Configured provider runtime that owns this message/session. */
+  providerInstanceId?: ProviderInstanceId
   turnId?: string
   taskDescription?: string
   requestId?: string
@@ -106,6 +126,11 @@ export type Session = {
   tag?: string | null
   createdAt?: string | number
   provider?: AgentProvider
+  /** Configured provider runtime; defaults to the provider name for legacy sessions. */
+  providerInstanceId?: ProviderInstanceId
+  providerDisplayName?: string
+  providerAccentColor?: string
+  inbox?: SessionInboxState
   capabilities?: SessionCapabilities
   /** Provider-native pinned state when the session backend exposes it. */
   isPinned?: boolean
@@ -217,6 +242,9 @@ export type SessionInfo = {
   tag?: string
   createdAt?: number
   provider: AgentProvider
+  providerInstanceId?: ProviderInstanceId
+  providerDisplayName?: string
+  providerAccentColor?: string
   capabilities: SessionCapabilities
   isPinned?: boolean
   currentModel?: string
@@ -226,4 +254,5 @@ export type SessionInfo = {
 export type RunningSessionRef = {
   sessionId: string
   provider: AgentProvider
+  providerInstanceId?: ProviderInstanceId
 }

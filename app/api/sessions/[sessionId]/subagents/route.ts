@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { isAgentProvider } from '@/lib/provider'
+import { withProviderRequest } from '@/lib/providerRequest'
 import { getProviderSubagentSummaries } from '@/lib/sessionBackend'
 
 export { maxDuration } from '@/lib/sessionBackend'
@@ -13,7 +14,8 @@ export async function GET(
   const provider = isAgentProvider(providerParam) ? providerParam : undefined
 
   try {
-    const subagents = await getProviderSubagentSummaries(sessionId, provider)
+    const subagents = await withProviderRequest(request, provider, undefined, () =>
+      getProviderSubagentSummaries(sessionId, provider))
     return NextResponse.json({ subagents })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'

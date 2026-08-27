@@ -8,7 +8,7 @@ import {
   type ColorTreatment,
 } from '@/lib/colorTreatment'
 import { normalizeProjectPath, pathBasename, pickCanonicalProjectPath, sameProjectPath } from '@/lib/projectPaths'
-import type { AgentProvider, ProviderSelection, Session, SubagentSummary } from '@/lib/types'
+import type { AgentProvider, ProviderInstanceSummary, ProviderSelection, Session, SubagentSummary } from '@/lib/types'
 import { parseSessionTagInput, parseStoredSessionTags, serializeSessionTags } from '@/lib/sessionTags'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -138,6 +138,8 @@ type Props = {
   loading: boolean
   error: string | null
   provider: ProviderSelection
+  providerInstanceId: string
+  providerInstances: ProviderInstanceSummary[]
   switchingProvider: boolean
   selectedId: string | null
   selectedProject: string | null
@@ -150,7 +152,7 @@ type Props = {
   onOpenDashboard: () => void
   onRename: (sessionId: string, title: string) => void
   onTag: (sessionId: string, tag: string | null) => void
-  onChangeProvider: (provider: ProviderSelection) => void
+  onChangeProvider: (provider: ProviderSelection, providerInstanceId?: string) => void
   scopeMode: 'all' | 'project'
   scopeProjectName: string | null
   canScopeToProject: boolean
@@ -214,8 +216,8 @@ function getSessionPreview(session: Session, sessionTitle: string): string | nul
   return preview
 }
 
-function sessionTabKey(session: Pick<Session, 'sessionId' | 'provider'>): string {
-  return `${session.provider ?? 'claude'}:${session.sessionId}`
+function sessionTabKey(session: Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'>): string {
+  return `${session.providerInstanceId ?? session.provider ?? 'claude'}:${session.sessionId}`
 }
 
 type IndexedSession = {
@@ -323,6 +325,20 @@ function providerChipStyle(provider: AgentProvider): { color: string; background
   return { color: 'var(--violet)', background: 'rgba(139,128,240,0.08)', border: 'rgba(139,128,240,0.22)' }
 }
 
+function inboxButtonStyle(active: boolean): React.CSSProperties {
+  return {
+    border: '1px solid transparent',
+    borderRadius: 4,
+    background: active ? 'var(--surface-3)' : 'transparent',
+    color: active ? 'var(--violet)' : 'var(--text-3)',
+    cursor: 'pointer',
+    fontFamily: "'IBM Plex Mono', monospace",
+    fontSize: 12,
+    lineHeight: 1,
+    padding: '2px 4px',
+  }
+}
+
 const SessionRow = memo(function SessionRow({
   session,
   selected,
@@ -341,6 +357,7 @@ const SessionRow = memo(function SessionRow({
   const [hovered, setHovered] = useState(false)
   const [editing, setEditing] = useState<'title' | 'tag' | null>(null)
   const [editValue, setEditValue] = useState('')
+  const [inbox, setInbox] = useState(session.inbox)
   const inputRef = useRef<HTMLInputElement>(null)
   const shortId = useMemo(() => session.sessionId.slice(-12), [session.sessionId])
   const sessionTitle = getSessionTitle(session)
@@ -355,6 +372,34 @@ const SessionRow = memo(function SessionRow({
     () => (session.provider ? providerChipStyle(session.provider) : null),
     [session.provider],
   )
+
+  useEffect(() => setInbox(session.inbox), [session.inbox])
+
+  const updateInbox = useCallback(async (action: 'pin' | 'unpin' | 'settle' | 'reopen' | 'snooze' | 'unsnooze') => {
+    const previous = inbox
+    const optimistic = action === 'pin'
+      ? { ...inbox, pinnedAt: Date.now(), pinOrder: inbox?.pinOrder ?? Date.now() }
+      : action === 'unpin'
+        ? { ...inbox, pinnedAt: undefined, pinOrder: undefined }
+        : action === 'settle'
+          ? { ...inbox, settledAt: Date.now(), snoozedUntil: undefined }
+          : action === 'reopen' || action === 'unsnooze'
+            ? { ...inbox, settledAt: action === 'reopen' ? undefined : inbox?.settledAt, snoozedUntil: undefined }
+            : { ...inbox, snoozedUntil: Date.now() + 60 * 60 * 1000, settledAt: undefined }
+    setInbox(optimistic)
+    try {
+      const response = await fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/inbox`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, provider: session.provider, providerInstanceId: session.providerInstanceId }),
+      })
+      const data = await response.json()
+      if (!response.ok || data.error) throw new Error(data.error ?? 'Inbox update failed')
+      setInbox(data.inbox)
+    } catch {
+      setInbox(previous)
+    }
+  }, [inbox, session.provider, session.providerInstanceId, session.sessionId])
 
   const startEdit = useCallback((kind: 'title' | 'tag', value: string) => (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -373,7 +418,7 @@ const SessionRow = memo(function SessionRow({
       await fetch(`/api/sessions/${session.sessionId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: value, provider: session.provider }),
+        body: JSON.stringify({ title: value, provider: session.provider, providerInstanceId: session.providerInstanceId }),
       })
     } catch { /* optimistic — ignore errors */ }
   }, [editValue, onRename, session.sessionId, sessionTitle])
@@ -390,7 +435,7 @@ const SessionRow = memo(function SessionRow({
       await fetch(`/api/sessions/${session.sessionId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tag: nextTag, provider: session.provider }),
+        body: JSON.stringify({ tag: nextTag, provider: session.provider, providerInstanceId: session.providerInstanceId }),
       })
     } catch { /* optimistic — ignore errors */ }
   }, [editValue, onTag, session.sessionId, session.tag])
@@ -583,7 +628,7 @@ const SessionRow = memo(function SessionRow({
               minWidth: 0,
             }}
           >
-            {sessionTags.map((tag) => (
+        {sessionTags.map((tag) => (
               <span
                 key={tag}
                 style={{
@@ -600,8 +645,8 @@ const SessionRow = memo(function SessionRow({
               >
                 #{tag}
               </span>
-            ))}
-          </div>
+        ))}
+      </div>
         ) : hovered ? (
           <span
             onDoubleClick={startEdit('tag', '')}
@@ -621,6 +666,11 @@ const SessionRow = memo(function SessionRow({
             + tags
           </span>
         ) : null}
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 2, opacity: hovered || inbox ? 1 : 0.35 }}>
+          <button type="button" title={inbox?.pinnedAt ? 'Unpin' : 'Pin'} onClick={(event) => { event.stopPropagation(); void updateInbox(inbox?.pinnedAt ? 'unpin' : 'pin') }} style={inboxButtonStyle(Boolean(inbox?.pinnedAt))}>{inbox?.pinnedAt ? '★' : '☆'}</button>
+          <button type="button" title={inbox?.settledAt ? 'Reopen' : 'Settle'} onClick={(event) => { event.stopPropagation(); void updateInbox(inbox?.settledAt ? 'reopen' : 'settle') }} style={inboxButtonStyle(Boolean(inbox?.settledAt))}>{inbox?.settledAt ? '↺' : '✓'}</button>
+          <button type="button" title={inbox?.snoozedUntil ? 'Unsnooze' : 'Snooze 1h'} onClick={(event) => { event.stopPropagation(); void updateInbox(inbox?.snoozedUntil ? 'unsnooze' : 'snooze') }} style={inboxButtonStyle(Boolean(inbox?.snoozedUntil))}>z</button>
+        </div>
         {activityTime != null && (
           <span
             title={activityTitle}
@@ -929,6 +979,8 @@ function SessionListInner({
   loading,
   error,
   provider,
+  providerInstanceId,
+  providerInstances,
   switchingProvider,
   selectedId,
   selectedProject,
@@ -1574,16 +1626,20 @@ function SessionListInner({
                       </Label>
                       <NativeSelect
                         ref={providerSelectRef}
-                        value={provider}
-                        onChange={(event) => onChangeProvider(event.target.value as ProviderSelection)}
+                        value={provider === 'all' ? 'all' : providerInstanceId}
+                        onChange={(event) => {
+                          if (event.target.value === 'all') return onChangeProvider('all')
+                          const instance = providerInstances.find((candidate) => candidate.id === event.target.value)
+                          if (instance) onChangeProvider(instance.provider, instance.id)
+                        }}
                         disabled={switchingProvider}
 className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed opacity-60' : 'cursor-pointer')}
                       >
-                        <NativeSelectOption value="claude">CLAUDE</NativeSelectOption>
-                        <NativeSelectOption value="codex">CODEX</NativeSelectOption>
-                        <NativeSelectOption value="opencode">OPENCODE</NativeSelectOption>
-                        <NativeSelectOption value="copilot">COPILOT</NativeSelectOption>
-                        <NativeSelectOption value="pi">PI</NativeSelectOption>
+                        {providerInstances.map((instance) => (
+                          <NativeSelectOption key={instance.id} value={instance.id}>
+                            {instance.displayName.toUpperCase()}
+                          </NativeSelectOption>
+                        ))}
                         <NativeSelectOption value="all">ALL</NativeSelectOption>
                       </NativeSelect>
                     </div>
@@ -2064,16 +2120,20 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                   </Label>
                   <NativeSelect
                     ref={providerSelectRef}
-                    value={provider}
-                    onChange={(event) => onChangeProvider(event.target.value as ProviderSelection)}
+                    value={provider === 'all' ? 'all' : providerInstanceId}
+                    onChange={(event) => {
+                      if (event.target.value === 'all') return onChangeProvider('all')
+                      const instance = providerInstances.find((candidate) => candidate.id === event.target.value)
+                      if (instance) onChangeProvider(instance.provider, instance.id)
+                    }}
                     disabled={switchingProvider}
                     className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed opacity-60' : 'cursor-pointer')}
                   >
-                    <NativeSelectOption value="claude">CLAUDE</NativeSelectOption>
-                    <NativeSelectOption value="codex">CODEX</NativeSelectOption>
-                    <NativeSelectOption value="opencode">OPENCODE</NativeSelectOption>
-                    <NativeSelectOption value="copilot">COPILOT</NativeSelectOption>
-                    <NativeSelectOption value="pi">PI</NativeSelectOption>
+                    {providerInstances.map((instance) => (
+                      <NativeSelectOption key={instance.id} value={instance.id}>
+                        {instance.displayName.toUpperCase()}
+                      </NativeSelectOption>
+                    ))}
                     <NativeSelectOption value="all">ALL</NativeSelectOption>
                   </NativeSelect>
                 </div>

@@ -102,6 +102,7 @@ import { claudeSessionPersistenceQueryOptions } from './claudeSessionStore'
 import { claudeProcessSpawnOptions } from './claudeProcessSpawner'
 import { getClaudeDynamicMcpServers } from './claudeDynamicMcp'
 import { createMessagingMcpServer } from './claudeMessagingMcp'
+import { currentProviderEnvironment, currentProviderExecutable, currentProviderInstanceId } from './providerInstances'
 
 export function claudeIntegratedMcpServers(context: {
   getSessionId(): string
@@ -334,6 +335,7 @@ type EntryState = {
 
 type InternalEntry = {
   sessionId: string
+  poolKey: string
   query: Query
   state: EntryState
   /** Buffer of messages received while no subscriber is attached. Capped. */
@@ -392,7 +394,8 @@ class ClaudePool {
   }
 
   acquire(opts: ClaudePoolAcquireOptions): ClaudePoolEntry {
-    const existing = this.entries.get(opts.sessionId)
+    const poolKey = `${currentProviderInstanceId('claude')}:${opts.sessionId}`
+    const existing = this.entries.get(poolKey)
     // A doomed entry (worker_shutting_down seen, or a failed live-settings
     // apply) must not be handed out for a NEW turn — that adopts a subprocess
     // that is about to be torn down. But it must still be reused while its own
@@ -417,13 +420,14 @@ class ClaudePool {
     if (existing) this.recycleInternal(existing, existing.pendingRecycleReason ?? 'options-changed')
     this.ensureCapacity()
     const entry = this.spawn(opts)
-    this.entries.set(opts.sessionId, entry)
+    entry.poolKey = poolKey
+    this.entries.set(poolKey, entry)
     this.ensureSweep()
     return { ...this.toPublic(entry), reused: false }
   }
 
   recycle(sessionId: string): void {
-    const entry = this.entries.get(sessionId)
+    const entry = this.entries.get(`${currentProviderInstanceId('claude')}:${sessionId}`)
     if (entry) this.recycleInternal(entry, 'explicit')
   }
 
@@ -443,7 +447,8 @@ class ClaudePool {
     const q = query({
       prompt: iterable,
       options: {
-        env: CLAUDE_QUERY_ENV,
+        env: { ...CLAUDE_QUERY_ENV, ...currentProviderEnvironment() },
+        ...(currentProviderExecutable('') ? { pathToClaudeCodeExecutable: currentProviderExecutable('') } : {}),
         stderr: (data) => logClaudeSubprocessStderr(opts.sessionId, data),
         ...(opts.isPendingSession
           ? { sessionId: opts.sessionId }
@@ -496,6 +501,7 @@ class ClaudePool {
 
     const entry: InternalEntry = {
       sessionId: opts.sessionId,
+      poolKey: `${currentProviderInstanceId('claude')}:${opts.sessionId}`,
       query: q,
       state: {
         cwd: opts.cwd,
@@ -535,15 +541,16 @@ class ClaudePool {
 
   queueReadSeeds(sessionId: string, seeds: Array<{ path: string; mtime: number }>): void {
     if (seeds.length === 0) return
-    const queued = this.pendingReadSeeds.get(sessionId) ?? new Map<string, number>()
+    const key = `${currentProviderInstanceId('claude')}:${sessionId}`
+    const queued = this.pendingReadSeeds.get(key) ?? new Map<string, number>()
     for (const seed of seeds) queued.set(seed.path, seed.mtime)
     while (queued.size > 200) {
       const oldest = queued.keys().next().value
       if (oldest === undefined) break
       queued.delete(oldest)
     }
-    this.pendingReadSeeds.delete(sessionId)
-    this.pendingReadSeeds.set(sessionId, queued)
+    this.pendingReadSeeds.delete(key)
+    this.pendingReadSeeds.set(key, queued)
     while (this.pendingReadSeeds.size > 64) {
       const oldest = this.pendingReadSeeds.keys().next().value
       if (oldest === undefined) break
@@ -552,7 +559,7 @@ class ClaudePool {
   }
 
   private async applyReadSeeds(entry: InternalEntry): Promise<void> {
-    const queued = this.pendingReadSeeds.get(entry.sessionId)
+    const queued = this.pendingReadSeeds.get(entry.poolKey)
     if (!queued || queued.size === 0) return
     await entry.query.initializationResult().catch(() => null)
     for (const [path, mtime] of [...queued]) {
@@ -564,7 +571,7 @@ class ClaudePool {
         // because this safety-cache repair could not be delivered.
       }
     }
-    if (queued.size === 0) this.pendingReadSeeds.delete(entry.sessionId)
+    if (queued.size === 0) this.pendingReadSeeds.delete(entry.poolKey)
   }
 
   private async pumpQueryToSubscriber(entry: InternalEntry): Promise<void> {
@@ -715,8 +722,8 @@ class ClaudePool {
     if (entry.subscriber) {
       try { entry.subscriber.push(null) } catch { /* swallow */ }
     }
-    if (this.entries.get(entry.sessionId) === entry) {
-      this.entries.delete(entry.sessionId)
+    if (this.entries.get(entry.poolKey) === entry) {
+      this.entries.delete(entry.poolKey)
     }
     // Nudge harness observers to do a final refetch so any tail messages
     // persisted right before the entry died still surface.
@@ -782,7 +789,7 @@ class ClaudePool {
   }
 
   peek(sessionId: string): ClaudePoolEntry | null {
-    const entry = this.entries.get(sessionId)
+    const entry = this.entries.get(`${currentProviderInstanceId('claude')}:${sessionId}`)
     // A doomed idle entry must not be handed to a prewarm/context probe — it
     // would warm a subprocess that is about to be torn down. An in-turn one is
     // still the live handle callers need (interrupt, context usage).
@@ -825,12 +832,14 @@ class ClaudePool {
     bridgeBox?: ClaudeBridgeBox
   }): void {
     const { sessionId, query: q, pushUserMessage, endInput, options } = args
-    const existing = this.entries.get(sessionId)
+    const poolKey = `${currentProviderInstanceId('claude')}:${sessionId}`
+    const existing = this.entries.get(poolKey)
     if (existing) this.recycleInternal(existing, 'pre-adopt-replace')
     this.ensureCapacity()
 
     const entry: InternalEntry = {
       sessionId,
+      poolKey,
       query: q,
       state: {
         cwd: options.cwd,
@@ -862,7 +871,7 @@ class ClaudePool {
       bridgeBox: args.bridgeBox ?? { fn: null, elicit: null, dialog: null },
     }
 
-    this.entries.set(sessionId, entry)
+    this.entries.set(poolKey, entry)
     this.ensureSweep()
     void this.pumpQueryToSubscriber(entry)
   }

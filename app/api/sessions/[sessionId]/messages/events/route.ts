@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server'
 import { isAgentProvider } from '@/lib/provider'
+import { withProviderRequest } from '@/lib/providerRequest'
 import { listViewSessionMessageWindow, readViewSessionInfo } from '@/lib/sessionBackend'
 import { subscribeToOpenCodeEvents } from '@/lib/opencodeHarness'
 import { subscribeToCodexEvents } from '@/lib/codexHarness'
@@ -111,7 +112,7 @@ async function readReplacementWindow(sessionId: string, provider: AgentProvider 
   return messageWindowPayload(sessionId, provider, window, true)
 }
 
-export async function GET(
+async function getEventsResponse(
   request: NextRequest,
   { params }: { params: Promise<{ sessionId: string }> },
 ) {
@@ -213,6 +214,12 @@ export async function GET(
       'X-Accel-Buffering': 'no',
     },
   })
+}
+
+export async function GET(request: NextRequest, context: { params: Promise<{ sessionId: string }> }) {
+  const rawProvider = new URL(request.url).searchParams.get('provider')
+  const provider = isAgentProvider(rawProvider) ? rawProvider : undefined
+  return withProviderRequest(request, provider, undefined, () => getEventsResponse(request, context))
 }
 
 type OpenCodePumpInput = {

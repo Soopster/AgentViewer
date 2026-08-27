@@ -246,8 +246,8 @@ function persistenceDisabled(): boolean {
   return process.env.AGENT_VIEWER_DISABLE_SESSION_INDEX === '1'
 }
 
-export function persistedSessionKey(provider: AgentProvider | undefined, sessionId: string): string {
-  return `${provider ?? 'claude'}:${sessionId}`
+export function persistedSessionKey(provider: AgentProvider | undefined, sessionId: string, providerInstanceId?: string): string {
+  return `${providerInstanceId ?? provider ?? 'claude'}:${sessionId}`
 }
 
 async function ensureIndexDirs(): Promise<void> {
@@ -612,7 +612,7 @@ function normalizeStoredSession(value: unknown): PersistedSessionRecord | null {
 
 function normalizeSession(session: Session, existing?: PersistedSessionRecord): PersistedSessionRecord {
   const provider = session.provider ?? 'claude'
-  const key = persistedSessionKey(provider, session.sessionId)
+  const key = persistedSessionKey(provider, session.sessionId, session.providerInstanceId)
   return {
     key,
     provider,
@@ -946,7 +946,7 @@ export async function syncPersistedSessions(sessions: Session[]): Promise<void> 
     withTransaction(db, () => {
       for (const session of sessions) {
         const provider = session.provider ?? 'claude'
-        const key = persistedSessionKey(provider, session.sessionId)
+        const key = persistedSessionKey(provider, session.sessionId, session.providerInstanceId)
         const next = normalizeSession(session, selectSessionByKey(db, key))
         if (!recordsEqual(selectSessionByKey(db, key), next)) {
           next.indexedAt = Date.now()
@@ -968,9 +968,9 @@ export async function clearPersistedSessionIndex(): Promise<void> {
   await run
 }
 
-export async function removePersistedSession(provider: AgentProvider, sessionId: string): Promise<void> {
+export async function removePersistedSession(provider: AgentProvider, sessionId: string, providerInstanceId?: string): Promise<void> {
   if (persistenceDisabled()) return
-  const sessionKey = persistedSessionKey(provider, sessionId)
+  const sessionKey = persistedSessionKey(provider, sessionId, providerInstanceId)
   await runPersistenceWrite((db) => {
     withTransaction(db, () => {
       messageSignatureCache.delete(sessionKey)
@@ -1127,7 +1127,7 @@ function modelFromMessage(message: SessionMessage): string | null {
 }
 
 function mapPersistedMessages(provider: AgentProvider, sessionId: string, messages: SessionMessage[]): PersistedMessageRecord[] {
-  const sessionKey = persistedSessionKey(provider, sessionId)
+  const sessionKey = persistedSessionKey(provider, sessionId, messages[0]?.providerInstanceId)
   const usedKeys = new Map<string, number>()
   const details = messages.map((message) => extractMessageDetails(message))
 
@@ -1365,7 +1365,7 @@ async function syncPersistedSessionMessagesImpl(
   messages: SessionMessage[],
 ): Promise<void> {
   if (persistenceDisabled()) return
-  const sessionKey = persistedSessionKey(provider, sessionId)
+  const sessionKey = persistedSessionKey(provider, sessionId, messages[0]?.providerInstanceId)
   const signature = messageSignature(provider, messages)
   if (messageSignatureCache.get(sessionKey) === signature) return
 

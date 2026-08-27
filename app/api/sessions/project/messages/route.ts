@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { isProviderSelection } from '@/lib/provider'
 import { normalizeProjectPath } from '@/lib/projectPaths'
 import { listProjectSessionMessageBatches } from '@/lib/sessionBackend'
+import { withProviderRequest } from '@/lib/providerRequest'
 
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({}))
@@ -30,14 +31,16 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const result = await listProjectSessionMessageBatches({
-      dir,
-      includeWorktrees,
-      provider,
-      offsets,
-      initialLimit,
-      incrementalLimit,
-    })
+    const result = await withProviderRequest(request, provider === 'all' ? undefined : provider, body, () =>
+      listProjectSessionMessageBatches({
+        dir,
+        includeWorktrees,
+        provider,
+        providerInstanceId: typeof body?.providerInstanceId === 'string' ? body.providerInstanceId : undefined,
+        offsets,
+        initialLimit,
+        incrementalLimit,
+      }))
     return NextResponse.json(result)
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'

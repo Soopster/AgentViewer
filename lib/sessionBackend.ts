@@ -123,6 +123,15 @@ import {
 } from './composerAttachments'
 import { getProviderCapabilities } from './provider'
 import { getConfiguredProvider } from './providerState'
+import {
+  currentProviderInstanceId,
+  listProviderInstances,
+  resolveProviderInstance,
+  withProviderProcessEnvironment,
+  withProviderInstance,
+  type ProviderInstance,
+} from './providerInstances'
+import { readSessionInboxStates, updateSessionInboxState } from './sessionInbox'
 import type {
   AgentProvider,
   ContextUsage,
@@ -482,6 +491,7 @@ type ListParams = {
   dir?: string
   includeWorktrees?: boolean
   provider?: AgentProvider | 'all'
+  providerInstanceId?: string
 }
 
 type MessageListParams = {
@@ -505,6 +515,7 @@ type ProjectMessageBatchParams = {
   dir: string
   includeWorktrees: boolean
   provider?: AgentProvider | 'all'
+  providerInstanceId?: string
   offsets: Record<string, number>
   initialLimit: number
   incrementalLimit: number
@@ -2586,7 +2597,7 @@ async function resolveProvider(provider?: AgentProvider): Promise<AgentProvider>
 async function syncSessionsBestEffort(sessions: Session[]): Promise<void> {
   if (sessions.length === 0) return
 
-  const listKey = sessions.map((session) => `${session.provider ?? 'claude'}:${session.sessionId}`).join('|')
+  const listKey = sessions.map((session) => `${session.providerInstanceId ?? session.provider ?? 'claude'}:${session.sessionId}`).join('|')
   const signature = sessionsPersistSignature(sessions)
   const cached = persistedSessionListSignatures.get(listKey)
   if (cached && cached.signature === signature && Date.now() - cached.ts < SESSION_LIST_PERSIST_TTL) return
@@ -2660,7 +2671,7 @@ async function syncMessagesBestEffort(
   sessionId: string,
   messages: SessionMessage[],
 ): Promise<void> {
-  const key = `${provider}:${sessionId}`
+  const key = `${currentProviderInstanceId(provider)}:${provider}:${sessionId}`
   const durableMessages = messages.filter((message) => message.ephemeral !== true)
   const signature = messagesPersistSignature(durableMessages)
   if (persistedMessagesSignature.get(key) === signature) {
@@ -2677,9 +2688,9 @@ async function syncMessagesBestEffort(
   }
 }
 
-async function removePersistedSessionBestEffort(provider: AgentProvider, sessionId: string): Promise<void> {
+async function removePersistedSessionBestEffort(provider: AgentProvider, sessionId: string, providerInstanceId?: string): Promise<void> {
   try {
-    await removePersistedSession(provider, sessionId)
+    await removePersistedSession(provider, sessionId, providerInstanceId)
   } catch {
     // Local index cleanup is opportunistic and should not mask provider deletes.
   }
@@ -2781,23 +2792,28 @@ const codexResumedThreads = globalThis.__agentViewerCodexResumedThreads
 const codexResumeInflight = globalThis.__agentViewerCodexResumeInflight
   ?? (globalThis.__agentViewerCodexResumeInflight = new Map<string, Promise<{ model: string | null }>>())
 
+function codexThreadKey(sessionId: string): string {
+  return `${currentProviderInstanceId('codex')}:${sessionId}`
+}
+
 async function ensureCodexThreadResumed(sessionId: string): Promise<{ model: string | null }> {
   const client = getCodexClient()
   if (!globalThis.__agentViewerCodexResumeInvalidatorInstalled) {
     globalThis.__agentViewerCodexResumeInvalidatorInstalled = true
     client.subscribeDisconnect(() => codexResumedThreads.clear())
   }
-  const cached = codexResumedThreads.get(sessionId)
+  const key = codexThreadKey(sessionId)
+  const cached = codexResumedThreads.get(key)
   if (cached !== undefined) return { model: cached }
-  const inflight = codexResumeInflight.get(sessionId)
+  const inflight = codexResumeInflight.get(key)
   if (inflight) return inflight
   const resume = resumeCodexThread(sessionId).then((result) => {
     const model = typeof result?.model === 'string' ? result.model : null
-    codexResumedThreads.set(sessionId, model)
+    codexResumedThreads.set(key, model)
     return { model }
   })
-  codexResumeInflight.set(sessionId, resume)
-  resume.finally(() => codexResumeInflight.delete(sessionId)).catch(() => {})
+  codexResumeInflight.set(key, resume)
+  resume.finally(() => codexResumeInflight.delete(key)).catch(() => {})
   return resume
 }
 
@@ -2858,51 +2874,129 @@ export function listViewSessions(params: ListParams): Promise<Session[]> {
   return timeAsync('listViewSessions', () => listViewSessionsImpl(params))
 }
 
+function applyProviderInstance<T extends Session | SessionMessage | SessionInfo>(
+  value: T,
+  instance: ProviderInstance,
+): T {
+  return {
+    ...value,
+    provider: instance.provider,
+    providerInstanceId: instance.id,
+    providerDisplayName: instance.displayName,
+    ...(instance.accentColor ? { providerAccentColor: instance.accentColor } : {}),
+  }
+}
+
+async function applyInboxStates(sessions: Session[]): Promise<Session[]> {
+  const states = await readSessionInboxStates(sessions)
+  const decorated = sessions.map((session) => {
+    const provider = session.provider ?? 'claude'
+    const key = `${session.providerInstanceId ?? provider}:${provider}:${session.sessionId}`
+    const inbox = states.get(key)
+    if (!inbox) return session
+    // Snoozes expire naturally; keep the persisted state so the next explicit
+    // snooze can still be audited, but expose only currently active snoozes.
+    return inbox.snoozedUntil && inbox.snoozedUntil <= Date.now()
+      ? { ...session, inbox: { ...inbox, snoozedUntil: undefined } }
+      : { ...session, inbox }
+  })
+  return decorated
+    .map((session, index) => ({ session, index }))
+    .sort((a, b) => {
+      const rank = (session: Session) => {
+        if (session.inbox?.pinnedAt) return 0
+        if (session.inbox?.snoozedUntil && session.inbox.snoozedUntil > Date.now()) return 2
+        if (session.inbox?.settledAt) return 3
+        return 1
+      }
+      const rankDiff = rank(a.session) - rank(b.session)
+      if (rankDiff !== 0) return rankDiff
+      if (rank(a.session) === 0) return (a.session.inbox?.pinOrder ?? 0) - (b.session.inbox?.pinOrder ?? 0)
+      return a.index - b.index
+    })
+    .map(({ session }) => session)
+}
+
 async function listViewSessionsImpl(params: ListParams): Promise<Session[]> {
   const provider = params.provider ?? await getConfiguredProvider()
   let sessions: Session[]
   if (provider === 'all') {
     const combinedLimit = params.limit + params.offset
-    const [claude, codex, opencode, copilot, pi, lmstudio] = await Promise.all([
-      listClaudeSessions({ ...params, provider: 'claude', limit: combinedLimit, offset: 0 }),
-      listCodexSessions({ ...params, provider: 'codex', limit: combinedLimit, offset: 0 }),
-      listOpenCodeSessions({ ...params, provider: 'opencode', limit: combinedLimit, offset: 0 }),
-      listCopilotSessions({ ...params, provider: 'copilot', limit: combinedLimit, offset: 0 }),
-      listPiSessionsForView({ ...params, provider: 'pi', limit: combinedLimit, offset: 0 }),
-      listLmstudioSessionsForView({ ...params, provider: 'lmstudio', limit: combinedLimit, offset: 0 }),
-    ])
-    sessions = [...claude, ...codex, ...opencode, ...copilot, ...pi, ...lmstudio]
+    const instances = (await listProviderInstances()).filter((instance) =>
+      instance.provider !== 'claude-acp' && instance.provider !== 'codex-acp'
+    )
+    const pages = await Promise.all(instances.map((instance) => withProviderInstance(
+      instance.id,
+      instance.provider,
+      async () => {
+        const instanceParams = {
+          ...params,
+          provider: instance.provider,
+          providerInstanceId: instance.id,
+          limit: combinedLimit,
+          offset: 0,
+        }
+        let page: Session[]
+        if (instance.provider === 'claude') page = await withProviderProcessEnvironment(() => listClaudeSessions(instanceParams))
+        else if (instance.provider === 'codex') page = await listCodexSessions(instanceParams)
+        else if (instance.provider === 'opencode') page = await listOpenCodeSessions(instanceParams)
+        else if (instance.provider === 'copilot') page = await listCopilotSessions(instanceParams)
+        else if (instance.provider === 'pi') page = await listPiSessionsForView(instanceParams)
+        else page = await listLmstudioSessionsForView(instanceParams)
+        return page.map((session) => applyProviderInstance(session, instance))
+      },
+    )))
+    sessions = pages.flat()
       .sort((a, b) => {
         const aTime = Number(a.lastModified ?? a.createdAt ?? 0)
         const bTime = Number(b.lastModified ?? b.createdAt ?? 0)
         return bTime - aTime
       })
       .slice(params.offset, params.offset + params.limit)
+    sessions = await applyInboxStates(sessions)
     await syncSessionsBestEffort(sessions)
     return sessions
   }
+  const instance = await resolveProviderInstance(params.providerInstanceId, provider)
+  if (currentProviderInstanceId(provider) !== instance.id) {
+    return withProviderInstance(instance.id, provider, () => listViewSessionsImpl({
+      ...params,
+      provider,
+      providerInstanceId: instance.id,
+    }))
+  }
   if (provider === 'codex') {
     sessions = await listCodexSessions(params)
+    sessions = sessions.map((session) => applyProviderInstance(session, instance))
+    sessions = await applyInboxStates(sessions)
     await syncSessionsBestEffort(sessions)
     return sessions
   }
   if (provider === 'opencode') {
     sessions = (await listOpenCodeSessions(params)).slice(params.offset, params.offset + params.limit)
+    sessions = sessions.map((session) => applyProviderInstance(session, instance))
+    sessions = await applyInboxStates(sessions)
     await syncSessionsBestEffort(sessions)
     return sessions
   }
   if (provider === 'copilot') {
     sessions = await listCopilotSessions(params)
+    sessions = sessions.map((session) => applyProviderInstance(session, instance))
+    sessions = await applyInboxStates(sessions)
     await syncSessionsBestEffort(sessions)
     return sessions
   }
   if (provider === 'pi') {
     sessions = await listPiSessionsForView(params)
+    sessions = sessions.map((session) => applyProviderInstance(session, instance))
+    sessions = await applyInboxStates(sessions)
     await syncSessionsBestEffort(sessions)
     return sessions
   }
   if (provider === 'lmstudio') {
     sessions = await listLmstudioSessionsForView(params)
+    sessions = sessions.map((session) => applyProviderInstance(session, instance))
+    sessions = await applyInboxStates(sessions)
     await syncSessionsBestEffort(sessions)
     return sessions
   }
@@ -2912,7 +3006,9 @@ async function listViewSessionsImpl(params: ListParams): Promise<Session[]> {
     // backed by persisted history.
     return []
   }
-  sessions = await listClaudeSessions(params)
+  sessions = await withProviderProcessEnvironment(() => listClaudeSessions(params))
+  sessions = sessions.map((session) => applyProviderInstance(session, instance))
+  sessions = await applyInboxStates(sessions)
   await syncSessionsBestEffort(sessions)
   return sessions
 }
@@ -3092,7 +3188,7 @@ export async function deleteViewSession(sessionId: string, providerOverride?: Ag
       ...OPENCODE_OPTIONS,
       path: { id: sessionId },
     })
-    await removePersistedSessionBestEffort(provider, sessionId)
+    await removePersistedSessionBestEffort(provider, sessionId, currentProviderInstanceId(provider))
     return
   }
   if (provider === 'copilot') {
@@ -3101,7 +3197,7 @@ export async function deleteViewSession(sessionId: string, providerOverride?: Ag
     await evictCopilotSession(sessionId).catch(() => {})
     const client = await getCopilotClient()
     await client.deleteSession(sessionId)
-    await removePersistedSessionBestEffort(provider, sessionId)
+    await removePersistedSessionBestEffort(provider, sessionId, currentProviderInstanceId(provider))
     return
   }
   if (provider === 'claude') {
@@ -3109,17 +3205,17 @@ export async function deleteViewSession(sessionId: string, providerOverride?: Ag
     clearClaudeDynamicMcpServers(sessionId)
     await deleteClaudeHookEvents(sessionId)
     clearWaitingSession(sessionId)
-    await removePersistedSessionBestEffort(provider, sessionId)
+    await removePersistedSessionBestEffort(provider, sessionId, currentProviderInstanceId(provider))
     return
   }
   if (provider === 'pi') {
     await deletePiSession(sessionId)
-    await removePersistedSessionBestEffort(provider, sessionId)
+    await removePersistedSessionBestEffort(provider, sessionId, currentProviderInstanceId(provider))
     return
   }
   if (provider === 'lmstudio') {
     await deleteLmstudioSession(sessionId)
-    await removePersistedSessionBestEffort(provider, sessionId)
+    await removePersistedSessionBestEffort(provider, sessionId, currentProviderInstanceId(provider))
     return
   }
   throw new Error(`Delete is not supported for ${provider} sessions`)
@@ -3879,40 +3975,43 @@ export function listViewSessionMessageWindow(sessionId: string, params: MessageL
 
 async function listViewSessionMessageWindowImpl(sessionId: string, params: MessageListParams, providerOverride?: AgentProvider): Promise<SessionMessageWindow> {
   const provider = await resolveProvider(providerOverride)
+  const instanceId = currentProviderInstanceId(provider)
+  const withInstance = (items: SessionMessage[]) => items.map((message) => ({ ...message, providerInstanceId: instanceId }))
   let messages: SessionMessage[]
   if (provider === 'codex') {
     const result = await readCodexMessagesAll(sessionId)
-    await syncMessagesBestEffort(provider, sessionId, result.messages)
-    const window = windowForParams(result.messages, params)
+    const instanceMessages = withInstance(result.messages)
+    await syncMessagesBestEffort(provider, sessionId, instanceMessages)
+    const window = windowForParams(instanceMessages, params)
     return result.externalWriter ? { ...window, externalWriter: true } : window
   }
   if (provider === 'opencode') {
-    messages = await readOpenCodeMessagesAll(sessionId)
+    messages = withInstance(await readOpenCodeMessagesAll(sessionId))
     await syncMessagesBestEffort(provider, sessionId, messages)
     return windowForParams(messages, params)
   }
   if (provider === 'copilot') {
-    messages = await readCopilotMessagesAll(sessionId)
+    messages = withInstance(await readCopilotMessagesAll(sessionId))
     await syncMessagesBestEffort(provider, sessionId, messages)
     return windowForParams(messages, params)
   }
   if (provider === 'pi') {
-    messages = await readPiMessagesAll(sessionId)
+    messages = withInstance(await readPiMessagesAll(sessionId))
     await syncMessagesBestEffort(provider, sessionId, messages)
     return windowForParams(messages, params)
   }
   if (provider === 'lmstudio') {
     const record = await getLmstudioSession(sessionId)
-    messages = record ? mapLmstudioSessionToMessages(record) : []
+    messages = withInstance(record ? mapLmstudioSessionToMessages(record) : [])
     await syncMessagesBestEffort(provider, sessionId, messages)
     return windowForParams(messages, params)
   }
   if (provider === 'claude-acp' || provider === 'codex-acp') {
-    messages = readAcpMessagesAll(sessionId, provider)
+    messages = withInstance(readAcpMessagesAll(sessionId, provider))
     await syncMessagesBestEffort(provider, sessionId, messages)
     return windowForParams(messages, params)
   }
-  messages = await readClaudeSessionMessages(sessionId)
+  messages = withInstance(await readClaudeSessionMessages(sessionId))
   await syncMessagesBestEffort(provider, sessionId, messages)
   return windowForParams(messages, params)
 }
@@ -4218,7 +4317,7 @@ export async function listProjectSessionMessageBatches(params: ProjectMessageBat
     messages: SessionMessage[]
   }>
 }> {
-  const cacheKey = `${params.provider ?? ''}:${params.includeWorktrees ? '1' : '0'}:${params.dir}`
+  const cacheKey = `${params.provider ?? ''}:${params.providerInstanceId ?? ''}:${params.includeWorktrees ? '1' : '0'}:${params.dir}`
   const cached = projectSessionsCache.get(cacheKey)
   let sessions: Session[]
   if (cached && Date.now() - cached.ts < PROJECT_SESSIONS_TTL) {
@@ -4230,18 +4329,23 @@ export async function listProjectSessionMessageBatches(params: ProjectMessageBat
       dir: params.dir,
       includeWorktrees: params.includeWorktrees,
       provider: params.provider,
+      providerInstanceId: params.providerInstanceId,
     })
     pruneProjectSessionsCache()
     projectSessionsCache.set(cacheKey, { sessions, ts: Date.now() })
   }
 
   const batches = await mapConcurrent(sessions, 10, async (session) => {
-    const key = `${session.provider ?? 'claude'}:${session.sessionId}`
+    const key = `${session.providerInstanceId ?? session.provider ?? 'claude'}:${session.sessionId}`
     const hasKnownOffset = Object.prototype.hasOwnProperty.call(params.offsets, key)
     const offset = Math.max(0, params.offsets[key] ?? 0)
     const limit = offset === 0 && !hasKnownOffset ? params.initialLimit : params.incrementalLimit
     const messages = limit > 0
-      ? await listViewSessionMessages(session.sessionId, { offset, limit }, session.provider)
+      ? await withProviderInstance(
+        session.providerInstanceId,
+        session.provider ?? 'claude',
+        () => listViewSessionMessages(session.sessionId, { offset, limit }, session.provider),
+      )
       : []
 
     return {
@@ -6232,7 +6336,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
               ...(nextEffort ? { effort: nextEffort } : {}),
             })
             currentModel = nextModel ?? currentModel
-            if (nextModel) codexResumedThreads.set(sessionId, nextModel)
+            if (nextModel) codexResumedThreads.set(codexThreadKey(sessionId), nextModel)
             finishCommand(nextEffort
               ? `Codex model set to ${nextModel} (${nextEffort}).`
               : `Codex model set to ${nextModel}.`)
@@ -6321,7 +6425,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
           // The resume cache said this thread was live but the server lost it
           // (e.g. a restart raced the disconnect listener). Re-resume once.
           if (!isCodexMissingRolloutError(err)) throw err
-          codexResumedThreads.delete(sessionId)
+          codexResumedThreads.delete(codexThreadKey(sessionId))
           await withTimeout(ensureCodexThreadResumed(sessionId), 8000, 'Codex thread re-resume')
           started = await withTimeout(client.request('turn/start', turnStartParams), 20000, 'Codex turn/start retry')
         }
@@ -7912,6 +8016,12 @@ export async function streamViewSessionTurn(params: SendMessageParams): Promise<
   }
 
   const provider = await resolveProvider(params.provider)
+  void updateSessionInboxState({
+    provider,
+    sessionId: params.sessionId,
+    providerInstanceId: currentProviderInstanceId(provider),
+    action: 'reopen',
+  }).catch(() => {})
 
   // Start the checkpoint immediately, but overlap it with provider setup. Each
   // provider awaits it at the final turn-submission boundary, preserving the
@@ -8061,7 +8171,7 @@ export async function createNewViewSession({
     // thread/start already loads the thread into this app-server process. Mark
     // it before the TUI can poll session detail so metadata reads reuse the
     // loaded writer instead of issuing thread/resume against an active turn.
-    codexResumedThreads.set(newId, response.model)
+    codexResumedThreads.set(codexThreadKey(newId), response.model)
     if (title && title.trim()) {
       await client.request('thread/name/set', { threadId: newId, name: title.trim() }).catch(() => {})
     }
@@ -8134,7 +8244,7 @@ export async function closeViewSession(sessionId: string, providerOverride?: Age
   }
   if (provider === 'codex') {
     await getCodexClient().request('thread/unsubscribe', { threadId: sessionId }).catch(() => {})
-    codexResumedThreads.delete(sessionId)
+    codexResumedThreads.delete(codexThreadKey(sessionId))
     return
   }
   if (provider === 'copilot') {

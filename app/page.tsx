@@ -14,7 +14,7 @@ import { compactStableFingerprint } from '@/lib/compactFingerprint'
 import { startClientPerf, measureAsync } from '@/lib/clientPerf'
 import { readJsonResponse } from '@/lib/httpResponse'
 import { mergeOrderedSessionMessageWindow } from '@/lib/sessionMessageWindow'
-import type { AgentProvider, ProviderSelection, Session, SessionMessage } from '@/lib/types'
+import type { AgentProvider, ProviderInstanceSummary, ProviderSelection, Session, SessionMessage } from '@/lib/types'
 import type { Todo as OpenCodeTodo } from '@opencode-ai/sdk'
 import type { CodexPlanStep } from '@/lib/taskRegistry'
 
@@ -104,10 +104,13 @@ function numericOffset(value: unknown, fallback = 0): number {
     : fallback
 }
 
-function withProviderQuery(path: string, provider?: AgentProvider | 'all'): string {
-  if (!provider) return path
+function withProviderQuery(path: string, provider?: AgentProvider | 'all', providerInstanceId?: string): string {
+  if (!provider && !providerInstanceId) return path
+  const params = new URLSearchParams()
+  if (provider) params.set('provider', provider)
+  if (providerInstanceId && provider !== 'all') params.set('providerInstanceId', providerInstanceId)
   const separator = path.includes('?') ? '&' : '?'
-  return `${path}${separator}provider=${provider}`
+  return `${path}${separator}${params.toString()}`
 }
 
 function messageEventsPath(session: Session, offset: number): string {
@@ -116,6 +119,7 @@ function messageEventsPath(session: Session, offset: number): string {
   params.set('limit', String(MESSAGE_STREAM_LIMIT))
   params.set('backfill', String(MESSAGE_POLL_BACKFILL))
   if (session.provider) params.set('provider', session.provider)
+  if (session.providerInstanceId) params.set('providerInstanceId', session.providerInstanceId)
   return `/api/sessions/${encodeURIComponent(session.sessionId)}/messages/events?${params.toString()}`
 }
 
@@ -128,15 +132,15 @@ function messageTimestampMs(message: SessionMessage): number {
 }
 
 function sessionMessageKey(message: SessionMessage): string {
-  return `${message.provider ?? 'claude'}:${message.uuid}`
+  return `${message.providerInstanceId ?? message.provider ?? 'claude'}:${message.uuid}`
 }
 
 function projectMessageSessionKey(message: SessionMessage): string {
-  return `${message.provider ?? 'claude'}:${message.session_id}`
+  return `${message.providerInstanceId ?? message.provider ?? 'claude'}:${message.session_id}`
 }
 
-function projectSessionKey(session: Pick<Session, 'sessionId' | 'provider'>): string {
-  return `${session.provider ?? 'claude'}:${session.sessionId}`
+function projectSessionKey(session: Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'>): string {
+  return `${session.providerInstanceId ?? session.provider ?? 'claude'}:${session.sessionId}`
 }
 
 function dedupeSessionsByKey(sessions: Session[]): Session[] {
@@ -348,6 +352,8 @@ export default function Home() {
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [sessionsError, setSessionsError] = useState<string | null>(null)
   const [provider, setProvider] = useState<ProviderSelection>('claude')
+  const [providerInstanceId, setProviderInstanceId] = useState<string>('claude')
+  const [providerInstances, setProviderInstances] = useState<ProviderInstanceSummary[]>([])
   const [switchingProvider, setSwitchingProvider] = useState(false)
   const [sessionScope, setSessionScope] = useState<SessionScopeMode>('all')
   const [includeWorktrees, setIncludeWorktrees] = useState(true)
@@ -491,12 +497,19 @@ export default function Home() {
   const openIdeBridge = useCallback(() => setIdeBridgeOpenRequest((value) => value + 1), [])
   const toggleIdeBridgeRoute = useCallback(() => setIdeBridgeRouteToggleRequest((value) => value + 1), [])
 
-  const fetchProjectSessions = useCallback(async (dir: string, selection: ProviderSelection) => {
+  const fetchProjectSessions = useCallback(async (
+    dir: string,
+    selection: ProviderSelection,
+    selectedProviderInstanceId?: string,
+  ) => {
     const params = new URLSearchParams()
     params.set('dir', dir)
     params.set('includeWorktrees', String(includeWorktrees))
     params.set('limit', '500')
     params.set('provider', selection)
+    if (selection !== 'all' && selectedProviderInstanceId) {
+      params.set('providerInstanceId', selectedProviderInstanceId)
+    }
     const response = await fetch(`/api/sessions?${params.toString()}`)
     const data = await response.json()
     if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`)
@@ -508,7 +521,11 @@ export default function Home() {
       ? 'limit=100000&all=1'
       : 'limit=2000&tail=1'
     const response = await fetch(
-      withProviderQuery(`/api/sessions/${session.sessionId}/messages?${query}`, session.provider),
+      withProviderQuery(
+        `/api/sessions/${session.sessionId}/messages?${query}`,
+        session.provider,
+        session.providerInstanceId,
+      ),
       { signal },
     )
     const data = await response.json()
@@ -525,9 +542,10 @@ export default function Home() {
     selection: ProviderSelection,
     scopeMode: SessionScopeMode = sessionScope,
     projectDir: string | null = activeProjectDir,
+    selectedProviderInstanceId: string = providerInstanceId,
   ) => {
     if (scopeMode === 'project' && projectDir) {
-      const loaded = await fetchProjectSessions(projectDir, selection)
+      const loaded = await fetchProjectSessions(projectDir, selection, selectedProviderInstanceId)
       const fp = sessionsFingerprint(loaded)
       if (fp !== sessionsFingerprintRef.current) {
         sessionsFingerprintRef.current = fp
@@ -540,6 +558,9 @@ export default function Home() {
 
     const params = new URLSearchParams()
     params.set('provider', selection)
+    if (selection !== 'all' && selectedProviderInstanceId) {
+      params.set('providerInstanceId', selectedProviderInstanceId)
+    }
     params.set('limit', '500')
     const suffix = params.toString() ? `?${params.toString()}` : ''
     const data = await measureAsync('fetch.sessions', async () => {
@@ -555,7 +576,7 @@ export default function Home() {
         setSessions((prev) => stabilizeSessionIdentities(prev, loaded))
       })
     }
-  }, [activeProjectDir, fetchProjectSessions, sessionScope])
+  }, [activeProjectDir, fetchProjectSessions, providerInstanceId, sessionScope])
 
   const fetchSessions = useCallback(async () => {
     await loadSessionsForProvider(provider)
@@ -573,6 +594,7 @@ export default function Home() {
         dir,
         includeWorktrees,
         provider: selection,
+        ...(selection !== 'all' ? { providerInstanceId } : {}),
         offsets,
         initialLimit: 300,
         incrementalLimit: 200,
@@ -584,15 +606,22 @@ export default function Home() {
       sessions: (data.sessions ?? []) as Session[],
       batches: (data.batches ?? []) as ProjectMessageBatch[],
     }
-  }, [includeWorktrees])
+  }, [includeWorktrees, providerInstanceId])
 
   const fetchProvider = useCallback(async () => {
     const r = await fetch('/api/provider')
     const data = await readJsonResponse(r)
     if (data.error) throw new Error(data.error)
     const nextProvider = isProviderSelection(data.provider) ? data.provider : 'claude'
+    const nextProviderInstanceId = nextProvider === 'all'
+      ? 'all'
+      : typeof data.providerInstanceId === 'string'
+        ? data.providerInstanceId
+        : nextProvider
     setProvider(nextProvider)
-    return nextProvider
+    setProviderInstanceId(nextProviderInstanceId)
+    setProviderInstances(Array.isArray(data.instances) ? data.instances : [])
+    return { provider: nextProvider, providerInstanceId: nextProviderInstanceId }
   }, [])
 
   const applySessionMessagePayload = useCallback((payload: MessageStreamPayload, expectedSession: Session) => {
@@ -601,7 +630,11 @@ export default function Home() {
     if (expectedSession.provider === 'codex') setCodexExternalWriter(payload.externalWriter === true)
     if (payload.provider && payload.provider !== (expectedSession.provider ?? 'claude')) return
 
-    const incoming = Array.isArray(payload.messages) ? payload.messages : []
+    const incoming = Array.isArray(payload.messages)
+      ? payload.messages.map((message) => message.providerInstanceId
+        ? message
+        : { ...message, providerInstanceId: expectedSession.providerInstanceId })
+      : []
     const previousTotal = msgCountRef.current
     const offset = numericOffset(payload.offset, Math.max(0, msgCountRef.current - incoming.length))
     const nextOffset = offset + incoming.length
@@ -636,7 +669,11 @@ export default function Home() {
     pollInFlightRef.current = true
     const offset = Math.max(0, msgCountRef.current - MESSAGE_POLL_BACKFILL)
     try {
-      const r = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}/messages?offset=${offset}&limit=${MESSAGE_STREAM_LIMIT}`, session.provider))
+      const r = await fetch(withProviderQuery(
+        `/api/sessions/${session.sessionId}/messages?offset=${offset}&limit=${MESSAGE_STREAM_LIMIT}`,
+        session.provider,
+        session.providerInstanceId,
+      ))
       const data = await readJsonResponse(r)
       if (!data.error) applySessionMessagePayload(data as MessageStreamPayload, session)
     } catch { /* ignore transient errors */ } finally {
@@ -663,8 +700,8 @@ export default function Home() {
     setLoadingSessions(true)
     Promise.resolve()
       .then(async () => {
-        const nextProvider = await fetchProvider()
-        await loadSessionsForProvider(nextProvider)
+        const target = await fetchProvider()
+        await loadSessionsForProvider(target.provider, undefined, undefined, target.providerInstanceId)
       })
       .catch((err) => {
         if (!cancelled) setSessionsError(err.message)
@@ -940,11 +977,13 @@ export default function Home() {
 
   const selectSession = useCallback(async (session: Session, nextTargetMessageId?: string) => {
     const nextProvider = session.provider ?? 'claude'
+    const nextProviderInstanceId = session.providerInstanceId ?? nextProvider
     const nextScopeMode: SessionScopeMode = 'all'
-    if (nextProvider !== provider) {
+    if (nextProvider !== provider || nextProviderInstanceId !== providerInstanceId) {
       setProvider(nextProvider)
+      setProviderInstanceId(nextProviderInstanceId)
       setLoadingSessions(true)
-      void loadSessionsForProvider(nextProvider, nextScopeMode, null)
+      void loadSessionsForProvider(nextProvider, nextScopeMode, null, nextProviderInstanceId)
         .catch((err) => setSessionsError(err instanceof Error ? err.message : 'Failed to sync sessions'))
         .finally(() => setLoadingSessions(false))
     }
@@ -1001,7 +1040,7 @@ export default function Home() {
       }
       if (!abortController.signal.aborted) setLoadingMessages(false)
     }
-  }, [fetchSessionMessages, getProjectMessageCounts, provider, loadSessionsForProvider])
+  }, [fetchSessionMessages, getProjectMessageCounts, provider, providerInstanceId, loadSessionsForProvider])
 
   const scrollSessionListToSession = useCallback((session: Session) => {
     setSessionListScrollRequest({
@@ -1142,7 +1181,13 @@ export default function Home() {
       void selectSession(materialized)
       return
     }
-    void selectSession({ sessionId: newSessionId, provider: selectedSession.provider } as Session)
+    void selectSession({
+      sessionId: newSessionId,
+      provider: selectedSession.provider,
+      providerInstanceId: selectedSession.providerInstanceId,
+      providerDisplayName: selectedSession.providerDisplayName,
+      providerAccentColor: selectedSession.providerAccentColor,
+    } as Session)
   }, [selectSession, selectedSession])
 
   const handleDelete = useCallback((sessionId: string, deletedProvider?: AgentProvider) => {
@@ -1155,7 +1200,9 @@ export default function Home() {
       ? { ...prev, sessions: prev.sessions.filter((session) => !sameSession(session)) }
       : prev
     )
-    if (selectedTabKey && (deletedTabKey ? selectedTabKey === deletedTabKey : openTabSessions.some((session) => session.sessionId === sessionId))) {
+    if (selectedTabKey && (deletedTabKey
+      ? (selectedTabKey === deletedTabKey || selectedTabKey.endsWith(`:${sessionId}`))
+      : openTabSessions.some((session) => session.sessionId === sessionId))) {
       setSelectedTabKey(null)
       setTargetMessage(null)
       msgCountRef.current = 0
@@ -1174,13 +1221,22 @@ export default function Home() {
       const res = await fetch('/api/sessions/new', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: activeProvider, cwd }),
+        body: JSON.stringify({
+          provider: activeProvider,
+          providerInstanceId: provider === 'all'
+            ? selectedSession?.providerInstanceId ?? activeProvider
+            : providerInstanceId,
+          cwd,
+        }),
       })
       const data = await res.json()
       if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
       const draft: Session = {
         sessionId: data.sessionId,
         provider: data.provider ?? activeProvider,
+        providerInstanceId: data.providerInstanceId ?? (provider === 'all'
+          ? selectedSession?.providerInstanceId ?? activeProvider
+          : providerInstanceId),
         cwd: data.cwd,
         createdAt: Date.now(),
         lastModified: Date.now(),
@@ -1193,10 +1249,14 @@ export default function Home() {
     } finally {
       setCreatingNewSession(false)
     }
-  }, [activeProjectDir, creatingNewSession, provider, selectSession, selectedSession?.cwd, selectedSession?.provider])
+  }, [activeProjectDir, creatingNewSession, provider, providerInstanceId, selectSession, selectedSession?.cwd, selectedSession?.provider, selectedSession?.providerInstanceId])
 
-  const handleChangeProvider = useCallback(async (nextProvider: ProviderSelection) => {
-    if (nextProvider === provider || switchingProvider) return
+  const handleChangeProvider = useCallback(async (
+    nextProvider: ProviderSelection,
+    nextProviderInstanceId?: string,
+  ) => {
+    const resolvedInstanceId = nextProvider === 'all' ? 'all' : nextProviderInstanceId ?? nextProvider
+    if ((nextProvider === provider && resolvedInstanceId === providerInstanceId) || switchingProvider) return
     const nextScopeMode = sessionScope
     const nextProjectDir = activeProjectDir
     setSwitchingProvider(true)
@@ -1205,12 +1265,16 @@ export default function Home() {
       const res = await fetch('/api/provider', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: nextProvider }),
+        body: JSON.stringify({
+          provider: nextProvider,
+          ...(nextProvider !== 'all' ? { providerInstanceId: resolvedInstanceId } : {}),
+        }),
       })
       const data = await res.json()
       if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
 
       setProvider(nextProvider)
+      setProviderInstanceId(resolvedInstanceId)
       setSelectedTabKey(null)
       setSelectedProject(null)
       setTargetMessage(null)
@@ -1219,14 +1283,14 @@ export default function Home() {
       setMessages([])
       setLoadingMessages(false)
       setLoadingSessions(true)
-      await loadSessionsForProvider(nextProvider, nextScopeMode, nextProjectDir)
+      await loadSessionsForProvider(nextProvider, nextScopeMode, nextProjectDir, resolvedInstanceId)
     } catch (err) {
       setSessionsError(err instanceof Error ? err.message : 'Failed to switch provider')
     } finally {
       setLoadingSessions(false)
       setSwitchingProvider(false)
     }
-  }, [activeProjectDir, loadSessionsForProvider, provider, sessionScope, switchingProvider])
+  }, [activeProjectDir, loadSessionsForProvider, provider, providerInstanceId, sessionScope, switchingProvider])
 
   return (
     <CodeThemeProvider>
@@ -1238,6 +1302,8 @@ export default function Home() {
             loading={loadingSessions}
             error={sessionsError}
             provider={provider}
+            providerInstanceId={providerInstanceId}
+            providerInstances={providerInstances}
             switchingProvider={switchingProvider}
             selectedId={selectedTabKey}
             selectedProject={selectedProject?.dir ?? null}
@@ -1411,6 +1477,8 @@ export default function Home() {
                   selectedSession={selectedSession}
                   selectedProject={selectedProject}
                   provider={provider}
+                  providerInstanceId={providerInstanceId}
+                  providerInstances={providerInstances}
                   scopeMode={sessionScope}
                   scopeProjectName={activeProjectName}
                   includeWorktrees={includeWorktrees}
@@ -1481,7 +1549,13 @@ export default function Home() {
           <ProvenancePopover
             open={provenanceOpen}
             onClose={() => setProvenanceOpen(false)}
-            session={selectedSession && !selectedSession.isPending ? { sessionId: selectedSession.sessionId, provider: selectedSession.provider } : null}
+                    session={selectedSession && !selectedSession.isPending
+                      ? {
+                          sessionId: selectedSession.sessionId,
+                          provider: selectedSession.provider,
+                          providerInstanceId: selectedSession.providerInstanceId,
+                        }
+                      : null}
             cwd={activeProjectDir}
             onOpenSession={({ sessionId, provider: editProvider, uuid }) => {
               selectCommandPaletteSession({ sessionId, provider: editProvider } as Session, uuid)

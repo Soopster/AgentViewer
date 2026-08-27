@@ -13,9 +13,10 @@ export async function GET(request: Request) {
   const includeWorktrees = searchParams.get('includeWorktrees') !== 'false'
   const providerParam = searchParams.get('provider')
   const provider = isProviderSelection(providerParam) ? providerParam : undefined
+  const providerInstanceId = searchParams.get('providerInstanceId') || undefined
 
   try {
-    const sessions = await listViewSessions({ limit, offset, dir, includeWorktrees, provider })
+    const sessions = await listViewSessions({ limit, offset, dir, includeWorktrees, provider, providerInstanceId })
     return NextResponse.json({ sessions }, {
       headers: { 'Cache-Control': 'private, max-age=2, stale-while-revalidate=8' },
     })
