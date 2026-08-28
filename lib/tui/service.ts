@@ -16,6 +16,8 @@ import {
   getConfiguredTuiShowToolCalls,
   getConfiguredTuiTabsEnabled,
   getConfiguredTuiSplitPanes,
+  getConfiguredTuiSplitOrientation,
+  getConfiguredTuiSplitReaderShare,
   getConfiguredTuiTheme,
   getConfiguredTuiTranscriptView,
   getConfiguredTuiTranscriptWidth,
@@ -30,6 +32,8 @@ import {
   setConfiguredTuiSidebarWidth,
   setConfiguredTuiTabsEnabled,
   setConfiguredTuiSplitPanes,
+  setConfiguredTuiSplitOrientation,
+  setConfiguredTuiSplitReaderShare,
   setConfiguredTuiTheme,
   setConfiguredTuiThemeSync,
   setConfiguredTuiTranscriptView,
@@ -38,6 +42,7 @@ import {
   type TuiSessionReaderState,
   type TuiDiffLayout,
   type TuiSidebarSort,
+  type TuiSplitOrientation,
   type TuiTranscriptWidth,
 } from '../tuiState'
 import {
@@ -280,6 +285,22 @@ export async function readTuiSplitPanes(): Promise<number> {
 
 export async function writeTuiSplitPanes(splitPanes: number): Promise<void> {
   await setConfiguredTuiSplitPanes(splitPanes)
+}
+
+export async function readTuiSplitOrientation(): Promise<TuiSplitOrientation> {
+  return getConfiguredTuiSplitOrientation()
+}
+
+export async function writeTuiSplitOrientation(orientation: TuiSplitOrientation): Promise<void> {
+  await setConfiguredTuiSplitOrientation(orientation)
+}
+
+export async function readTuiSplitReaderShare(): Promise<number> {
+  return getConfiguredTuiSplitReaderShare()
+}
+
+export async function writeTuiSplitReaderShare(share: number): Promise<void> {
+  await setConfiguredTuiSplitReaderShare(share)
 }
 
 export async function readTuiShowToolCalls(): Promise<boolean> {

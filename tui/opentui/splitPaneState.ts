@@ -2,8 +2,100 @@ import type { Session } from '../../lib/types'
 
 export type SplitPaneLayout = {
   visibleCount: number
-  paneWidth: number
-  readerWidth: number
+  /** Extent (columns side-by-side, rows when stacked) of each split pane. */
+  paneExtent: number
+  /** Extent left for the primary reader on the same axis. */
+  readerExtent: number
+}
+
+/**
+ * Side-by-side splits the reader area into columns; stacked splits it into
+ * rows. Stacked is what makes the split view usable on a narrow terminal,
+ * where two 46-column panes never fit beside each other.
+ */
+export type SplitPaneOrientation = 'columns' | 'rows'
+
+/** Reader share bounds for the manual resize keys; 0 means "even split". */
+export const SPLIT_SHARE_MIN = 0.25
+export const SPLIT_SHARE_MAX = 0.8
+export const SPLIT_SHARE_STEP = 0.05
+export const SPLIT_SHARE_EVEN = 0
+
+export function adjustSplitReaderShare(
+  current: number,
+  delta: number,
+  evenShare: number,
+): number {
+  const base = current === SPLIT_SHARE_EVEN ? evenShare : current
+  const next = Math.round((base + delta) * 100) / 100
+  if (next <= SPLIT_SHARE_MIN) return SPLIT_SHARE_MIN
+  if (next >= SPLIT_SHARE_MAX) return SPLIT_SHARE_MAX
+  return next
+}
+
+// Every ⌃B chord in one table. The overlay, the status bar's chord hint and the
+// unknown-key notice all read it, so a chord cannot be added to the dispatcher
+// and quietly stay out of its own help.
+export type SplitChordEntry = { keys: string; label: string }
+export type SplitChordSection = { title: string; entries: SplitChordEntry[] }
+export const SPLIT_CHORD_HELP: SplitChordSection[] = [
+  {
+    title: 'split',
+    entries: [
+      { keys: '% · v', label: 'split side by side' },
+      { keys: '" · s', label: 'split stacked' },
+      { keys: 'r', label: 'rotate side-by-side ↔ stacked' },
+      { keys: 'n', label: 'next session in this pane' },
+      { keys: 'x', label: 'close pane' },
+      { keys: 'z', label: 'toggle split panes off/on' },
+    ],
+  },
+  {
+    title: 'size',
+    entries: [
+      { keys: '<', label: 'shrink the reader' },
+      { keys: '>', label: 'grow the reader' },
+      { keys: '=', label: 'even sizes' },
+    ],
+  },
+  {
+    title: 'focus',
+    entries: [
+      { keys: 'o · → · tab', label: 'focus next pane' },
+      { keys: '←', label: 'focus previous pane' },
+      { keys: ';', label: 'flip reader ↔ last pane' },
+      { keys: '1 … 9', label: 'focus pane by number' },
+      { keys: '?', label: 'this help' },
+      { keys: 'esc · ⌃C · ⌃G', label: 'cancel the chord' },
+    ],
+  },
+  {
+    // These need no prefix — a focused pane owns the keyboard outright, and
+    // everything not listed here is deliberately inert while it does.
+    title: 'inside a focused pane (no ⌃B)',
+    entries: [
+      { keys: 'j · k', label: 'move card cursor' },
+      { keys: 'g · G', label: 'first · last card' },
+      { keys: '⌃u · ⌃d', label: 'page up · down' },
+      { keys: 'e', label: 'expand / collapse card' },
+      { keys: 'y', label: 'copy card' },
+      { keys: 'b', label: 'bookmark card' },
+      { keys: 'Q', label: 'quote and reply' },
+      { keys: 'c', label: 'compose to this session' },
+      { keys: 'i', label: 'toggle thinking mode' },
+      { keys: '↵', label: 'open this pane in the reader' },
+      { keys: '⌃G · D', label: 'git · diagnostics for this session' },
+      { keys: '⌃C', label: 'interrupt this session' },
+      { keys: 'esc', label: 'back to the reader' },
+    ],
+  },
+]
+
+/** Flat set of prefix keys the help documents, for the anti-drift assertion. */
+export function documentedSplitChordKeys(): string[] {
+  return SPLIT_CHORD_HELP
+    .filter((section) => !section.title.includes('no ⌃B'))
+    .flatMap((section) => section.entries.flatMap((entry) => entry.keys.split(' · ')))
 }
 
 export function splitCommandKey(command: string, runningInsideTmux: boolean): string {
@@ -11,38 +103,58 @@ export function splitCommandKey(command: string, runningInsideTmux: boolean): st
 }
 
 export function calculateSplitPaneLayout({
-  readerAreaWidth,
+  availableExtent,
   requestedCount,
   availableCount,
   maxPanes,
-  minPaneWidth,
-  minReaderWidth,
+  minPaneExtent,
+  minReaderExtent,
+  readerShare = SPLIT_SHARE_EVEN,
 }: {
-  readerAreaWidth: number
+  availableExtent: number
   requestedCount: number
   availableCount: number
   maxPanes: number
-  minPaneWidth: number
-  minReaderWidth: number
+  minPaneExtent: number
+  minReaderExtent: number
+  /**
+   * Fraction of the axis the reader keeps. `SPLIT_SHARE_EVEN` (0) divides the
+   * axis equally, which is what every caller wanted before the resize keys
+   * existed; any other value is clamped so neither side drops below its
+   * minimum rather than dropping a pane the user explicitly asked for.
+   */
+  readerShare?: number
 }): SplitPaneLayout {
   let visibleCount = Math.min(requestedCount, maxPanes, availableCount)
-  let paneWidth = 0
+  let paneExtent = 0
+  let readerExtent = Math.max(availableExtent, minReaderExtent)
   while (visibleCount > 0) {
-    const candidateWidth = Math.floor((readerAreaWidth - visibleCount) / (visibleCount + 1))
-    if (
-      candidateWidth >= minPaneWidth
-      && readerAreaWidth - visibleCount * (candidateWidth + 1) >= minReaderWidth
-    ) {
-      paneWidth = candidateWidth
+    // One separator column/row per pane, matching the flex `gap` between frames.
+    const usable = availableExtent - visibleCount
+    const maxReader = usable - visibleCount * minPaneExtent
+    if (maxReader >= minReaderExtent) {
+      if (readerShare === SPLIT_SHARE_EVEN) {
+        // Even: every frame the same size, the rounding remainder to the reader.
+        paneExtent = Math.floor(usable / (visibleCount + 1))
+      } else {
+        const reader = Math.min(Math.max(Math.round(usable * readerShare), minReaderExtent), maxReader)
+        paneExtent = Math.floor((usable - reader) / visibleCount)
+      }
+      readerExtent = usable - visibleCount * paneExtent
       break
     }
     visibleCount -= 1
   }
   return {
     visibleCount,
-    paneWidth,
-    readerWidth: Math.max(readerAreaWidth - visibleCount * (paneWidth + 1), minReaderWidth),
+    paneExtent,
+    readerExtent: visibleCount === 0 ? Math.max(availableExtent, minReaderExtent) : readerExtent,
   }
+}
+
+/** The share the even split would produce, used as the resize keys' origin. */
+export function evenSplitReaderShare(visibleCount: number): number {
+  return visibleCount <= 0 ? 1 : 1 / (visibleCount + 1)
 }
 
 // Reserve the pane-action row whether or not the pane is focused. Focus must
@@ -206,8 +318,16 @@ export function resolveComposerTargetSession({
   keyOf: (session: Pick<Session, 'sessionId' | 'provider'>) => string
 }): Session | null {
   if (paneTargetKey) {
-    const pinned = openTabSessions.find((tab) => keyOf(tab) === paneTargetKey)
-    if (pinned) return pinned
+    // An explicit pane target must never fall through to the reader's session.
+    // Closing the pane's tab (or the pane) while a message is composed for it
+    // used to leave the draft aimed at whatever the reader happened to show —
+    // silently sending it to a different agent, the worst outcome this
+    // function can produce. Look the target up in the full session list too,
+    // so the ordinary case still resolves, and refuse rather than guess when
+    // it genuinely cannot be found.
+    return openTabSessions.find((tab) => keyOf(tab) === paneTargetKey)
+      ?? sessions.find((session) => keyOf(session) === paneTargetKey)
+      ?? null
   }
 
   if (selectedSession && preferredTargetKey === keyOf(selectedSession)) {

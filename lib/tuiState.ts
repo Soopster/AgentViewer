@@ -161,6 +161,8 @@ type TuiState = {
   transcriptWidth?: unknown
   tabsEnabled?: unknown
   splitPanes?: unknown
+  splitOrientation?: unknown
+  splitReaderShare?: unknown
   showToolCalls?: unknown
   velocityScroll?: unknown
   sidebarSort?: unknown
@@ -170,6 +172,12 @@ type TuiState = {
 // Mirrors SPLIT_PANE_MAX in the OpenTUI reader — the persisted value is clamped
 // here so a hand-edited tui.json can't ask for panes the layout won't mount.
 export const MAX_TUI_SPLIT_PANES = 2
+
+export type TuiSplitOrientation = 'columns' | 'rows'
+
+// Mirror SPLIT_SHARE_MIN/MAX in tui/opentui/splitPaneState.ts.
+export const MIN_TUI_SPLIT_READER_SHARE = 0.25
+export const MAX_TUI_SPLIT_READER_SHARE = 0.8
 
 export type TuiSidebarSort = 'project' | 'time'
 export type TuiDiffLayout = 'stack' | 'split'
@@ -326,6 +334,34 @@ export async function getConfiguredTuiSplitPanes(): Promise<number> {
 
 export async function setConfiguredTuiSplitPanes(splitPanes: number): Promise<void> {
   await writeTuiState({ splitPanes: Math.min(Math.max(Math.floor(splitPanes), 0), MAX_TUI_SPLIT_PANES) })
+}
+
+// Side-by-side (columns) is the historical layout, so an absent or unreadable
+// value must resolve to it rather than silently restacking an existing setup.
+export async function getConfiguredTuiSplitOrientation(): Promise<TuiSplitOrientation> {
+  const parsed = await readTuiState()
+  return parsed.splitOrientation === 'rows' ? 'rows' : 'columns'
+}
+
+export async function setConfiguredTuiSplitOrientation(splitOrientation: TuiSplitOrientation): Promise<void> {
+  await writeTuiState({ splitOrientation })
+}
+
+// 0 means "even split" — the value the layout used before the resize keys
+// existed. Anything outside the manual range is clamped back into it so a
+// hand-edited tui.json cannot squeeze the reader or a pane below its minimum.
+export async function getConfiguredTuiSplitReaderShare(): Promise<number> {
+  const parsed = await readTuiState()
+  const value = typeof parsed.splitReaderShare === 'number' ? parsed.splitReaderShare : 0
+  if (!Number.isFinite(value) || value <= 0) return 0
+  return Math.min(Math.max(value, MIN_TUI_SPLIT_READER_SHARE), MAX_TUI_SPLIT_READER_SHARE)
+}
+
+export async function setConfiguredTuiSplitReaderShare(splitReaderShare: number): Promise<void> {
+  const clamped = splitReaderShare <= 0
+    ? 0
+    : Math.min(Math.max(splitReaderShare, MIN_TUI_SPLIT_READER_SHARE), MAX_TUI_SPLIT_READER_SHARE)
+  await writeTuiState({ splitReaderShare: clamped })
 }
 
 export async function getConfiguredTuiShowToolCalls(): Promise<boolean> {

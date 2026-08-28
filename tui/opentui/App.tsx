@@ -98,6 +98,8 @@ import {
   readTuiShowToolCalls,
   readTuiTabsEnabled,
   readTuiSplitPanes,
+  readTuiSplitOrientation,
+  readTuiSplitReaderShare,
   readTuiTheme,
   readTuiTranscriptView,
   readTuiTranscriptWidth,
@@ -144,6 +146,8 @@ import {
   writeTuiSidebarWidth,
   writeTuiTabsEnabled,
   writeTuiSplitPanes,
+  writeTuiSplitOrientation,
+  writeTuiSplitReaderShare,
   writeTuiTheme,
   writeTuiThemeSync,
   writeTuiTranscriptView,
@@ -204,8 +208,10 @@ import { release, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  adjustSplitReaderShare,
   calculateSplitPaneBodyRows,
   calculateSplitPaneLayout,
+  evenSplitReaderShare,
   groupItemsBySplitPaneKey,
   isComposerTargetReady,
   preserveArrayIdentity,
@@ -216,6 +222,10 @@ import {
   resolveSelectedSessionIndex,
   runComposerSessionPreparation,
   splitCommandKey,
+  SPLIT_CHORD_HELP,
+  SPLIT_SHARE_EVEN,
+  SPLIT_SHARE_STEP,
+  type SplitPaneOrientation,
 } from './splitPaneState'
 import {
   isAltKey,
@@ -5056,7 +5066,13 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'diff-layout', label: 'Toggle diff layout',    key: 's',  category: 'View'       },
   { id: 'view',       label: 'Switch transcript view', key: 'v',  category: 'View'       },
   { id: 'width',      label: 'Toggle transcript width', key: '⇧W', category: 'View'       },
-  { id: 'split-add',    label: 'Split transcript pane',    key: splitCommandKey('%', RUNNING_INSIDE_TMUX), category: 'View'  },
+  { id: 'split-add',    label: 'Split transcript pane (side by side)', key: splitCommandKey('%', RUNNING_INSIDE_TMUX), category: 'View'  },
+  { id: 'split-add-stacked', label: 'Split transcript pane (stacked)', key: splitCommandKey('"', RUNNING_INSIDE_TMUX), category: 'View' },
+  { id: 'split-rotate', label: 'Rotate split layout',       key: splitCommandKey('r', RUNNING_INSIDE_TMUX), category: 'View' },
+  { id: 'split-grow-reader',   label: 'Grow reader in split',  key: splitCommandKey('>', RUNNING_INSIDE_TMUX), category: 'View' },
+  { id: 'split-shrink-reader', label: 'Shrink reader in split', key: splitCommandKey('<', RUNNING_INSIDE_TMUX), category: 'View' },
+  { id: 'split-even',   label: 'Even split sizes',          key: splitCommandKey('=', RUNNING_INSIDE_TMUX), category: 'View' },
+  { id: 'split-help',   label: 'Split pane keybinds',       key: splitCommandKey('?', RUNNING_INSIDE_TMUX), category: 'View' },
   { id: 'split-close',  label: 'Close split pane',         key: splitCommandKey('x', RUNNING_INSIDE_TMUX), category: 'View'  },
   { id: 'split-focus',  label: 'Focus next split pane',    key: splitCommandKey('o', RUNNING_INSIDE_TMUX), category: 'View'  },
   { id: 'split-focus-prev', label: 'Focus previous split pane', key: splitCommandKey('←', RUNNING_INSIDE_TMUX), category: 'View' },
@@ -6666,6 +6682,11 @@ export function createLazyTranscriptIndexLookup(
 // composer. Panes stay collapsed and tail-anchored: they answer "what is that
 // agent doing right now", not "let me read that transcript".
 const SPLIT_PANE_MIN_WIDTH = 46
+// Row minimums for the stacked orientation. A pane needs its two border rows,
+// a meta row, the reserved action row and a few body rows to say anything at
+// all; below that the layout drops the pane rather than render a sliver.
+const SPLIT_PANE_MIN_ROWS = 9
+const MIN_READER_ROWS = 12
 const SPLIT_PANE_MAX = 2
 // Tail-only mount budget. OpenTUI's scrollbox lays out every mounted child, so
 // a pane that mounted the whole transcript would cost the same as a second
@@ -6673,6 +6694,16 @@ const SPLIT_PANE_MAX = 2
 // existing paged growth behavior for older history.
 const SPLIT_PANE_CARD_WINDOW = 80
 const SPLIT_PANE_POLL_MS = 2500
+// A yielded poll retries soon rather than waiting out the full interval — the
+// open it stepped aside for is usually done in well under a second.
+const SPLIT_PANE_YIELD_RETRY_MS = 300
+// Stagger panes onto different ticks. Two panes mounted in the same commit
+// (a rotate, or restoring a saved 2-pane layout) would otherwise post their
+// reads into the serial worker back-to-back, every interval, forever — the
+// offset persists because the interval is shared. Kept small deliberately: a
+// pane remounts whenever its session changes (⌃B n), and this delay is on that
+// path, so it buys tick separation without a visible wait.
+const SPLIT_PANE_POLL_STAGGER_MS = 120
 const SPLIT_PANE_EMPTY_NOTES: Map<string, TranscriptDiffNote> = new Map()
 const SPLIT_PANE_EMPTY_NUMBERS: Readonly<Record<string, number>> = {}
 const SPLIT_PANE_EMPTY_LIVE: ThreadedMessage[] = []
@@ -6733,6 +6764,8 @@ type SplitTranscriptPaneProps = {
   width: number
   height: number
   paneIndex: number
+  /** Total mounted panes — drives the ⌃B <digit> hint in the frame title. */
+  paneCount: number
   focused: boolean
   // Live overlay for THIS pane's session, sliced from the app-wide live stream.
   liveMessages: ThreadedMessage[]
@@ -6740,6 +6773,12 @@ type SplitTranscriptPaneProps = {
   liveText: string | null
   registerHandle: (paneIndex: number, handle: SplitPaneHandle | null) => void
   onActivate: (paneIndex: number) => void
+  // True while the reader is opening a session. The threading worker is
+  // serial, and a pane's poll is a FULL detail read — the same shape the
+  // neighbour prefetch was reshaped to avoid — so a pane posted ahead of a
+  // real open delays the thing the user is actually waiting for. With two
+  // panes it delays it twice.
+  shouldYieldToForeground: () => boolean
 }
 
 function SplitTranscriptPaneInner({
@@ -6757,12 +6796,14 @@ function SplitTranscriptPaneInner({
   width,
   height,
   paneIndex,
+  paneCount,
   focused,
   liveMessages,
   running,
   liveText,
   registerHandle,
   onActivate,
+  shouldYieldToForeground,
 }: SplitTranscriptPaneProps) {
   const [cards, setCards] = useState<TuiTranscriptCard[]>([])
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
@@ -6780,6 +6821,13 @@ function SplitTranscriptPaneInner({
     let timer: ReturnType<typeof setTimeout> | null = null
 
     const load = async () => {
+      // Yield BEFORE the mtime check: stepping aside must not consume this
+      // pane's turn, or a pane that yields once would then believe it was
+      // already up to date and skip the read entirely.
+      if (shouldYieldToForeground()) {
+        timer = setTimeout(() => { void load() }, SPLIT_PANE_YIELD_RETRY_MS)
+        return
+      }
       const lastModified = typeof session.lastModified === 'number' ? session.lastModified : undefined
       if (!shouldPollSplitPaneDetail(lastLoadedRef.current, key, variant, lastModified, activityVisible)) {
         timer = setTimeout(() => { void load() }, SPLIT_PANE_POLL_MS)
@@ -6810,12 +6858,14 @@ function SplitTranscriptPaneInner({
     }
 
     setStatus('loading')
-    void load()
+    // First read is staggered by pane so simultaneously-mounted panes land on
+    // different ticks; the interval then keeps them apart.
+    timer = setTimeout(() => { void load() }, paneIndex * SPLIT_PANE_POLL_STAGGER_MS)
     return () => {
       cancelled = true
       if (timer) clearTimeout(timer)
     }
-  }, [activityVisible, key, session, density, showToolCalls, variant])
+  }, [activityVisible, key, session, density, showToolCalls, variant, paneIndex, shouldYieldToForeground])
 
   // Tail window. A pane starts at the last SPLIT_PANE_CARD_WINDOW cards (the
   // mount budget that keeps a pane cheap) and grows a page at a time as the
@@ -7161,7 +7211,12 @@ function SplitTranscriptPaneInner({
       borderColor={focused ? accent : theme.border}
       backgroundColor={theme.surface}
       flexDirection="column"
-      title={fitText(formatSessionTitle(session), Math.max(width - 4, 8))}
+      // Number the frame whenever more than one is mounted: ⌃B 1/⌃B 2 jump
+      // straight to a pane, and nothing else on screen says which is which.
+      title={fitText(
+        paneCount > 1 ? `${paneIndex + 1} · ${formatSessionTitle(session)}` : formatSessionTitle(session),
+        Math.max(width - 4, 8),
+      )}
       titleColor={accent}
       onMouseDown={(event) => {
         if (event.button === 0) onActivate(paneIndex)
@@ -7229,7 +7284,9 @@ function SplitTranscriptPaneInner({
         <text fg={theme.dim} wrapMode="none">
           {focused
             ? fitText(running ? 'j/k card  e fold  y copy  b mark  c send  ⌃C stop  ↵ open  esc reader' : 'j/k card  e fold  y copy  b mark  Q reply  c send  ↵ open  esc reader', innerWidth)
-            : ' '}
+            // The row is reserved either way (focus must not resize the
+            // viewport), so an unfocused pane spends it saying how to reach it.
+            : fitText(`⌃B ${paneIndex + 1} focus  ·  ⌃B n next session`, innerWidth)}
         </text>
       </box>
     </box>
@@ -7293,8 +7350,18 @@ export default function OpenTuiApp() {
   // reads as panes randomly swapping while you navigate. The reconcile effect
   // below is the only thing that rewrites these keys.
   const [splitPinnedKeys, setSplitPinnedKeys] = useState<string[]>([])
+  // Which axis the split divides. Columns is the historical layout; rows is
+  // what makes the split view reachable at all on a narrow terminal, where two
+  // 46-column frames can never sit beside each other.
+  const [splitOrientation, setSplitOrientation] = useState<SplitPaneOrientation>('columns')
+  // Reader's share of that axis. SPLIT_SHARE_EVEN keeps the even split every
+  // layout had before the resize keys; anything else is a deliberate ⌃B < / >.
+  const [splitReaderShare, setSplitReaderShare] = useState<number>(SPLIT_SHARE_EVEN)
   // tmux-style prefix state: true between ⌃B and the command key that follows.
   const [splitChordPending, setSplitChordPending] = useState(false)
+  // ⌃B ? opens the full chord reference. A toast can only ever show one
+  // truncated line, and the chord namespace outgrew that.
+  const [splitHelpOpen, setSplitHelpOpen] = useState(false)
   // Portable command prefix for actions whose Ctrl+Shift shortcuts cannot be
   // distinguished from Ctrl on legacy/raw terminals (notably on Windows).
   const [commandChordPending, setCommandChordPending] = useState(false)
@@ -7314,6 +7381,12 @@ export default function OpenTuiApp() {
   const [composerPreferredTargetKey, setComposerPreferredTargetKey] = useState<string | null>(null)
   const [composerPreparingTargetKey, setComposerPreparingTargetKey] = useState<string | null>(null)
   const composerPreparingTargetKeyRef = useRef<string | null>(null)
+  // Stable predicate the panes poll through, so none of them re-subscribes
+  // when the reader's load state flips.
+  const splitPaneShouldYield = useCallback(
+    () => foregroundLoadInFlightRef.current || pendingForegroundLoadRef.current !== null,
+    [],
+  )
   const splitPaneHandlesRef = useRef(new Map<number, SplitPaneHandle>())
   const registerSplitPaneHandle = useEffectEvent((paneIndex: number, handle: SplitPaneHandle | null) => {
     if (handle) splitPaneHandlesRef.current.set(paneIndex, handle)
@@ -10136,20 +10209,33 @@ export default function OpenTuiApp() {
     const tab = openTabSessions.find((candidate) => sessionKey(candidate) === pinnedKey)
     return tab ? [tab] : []
   })
+  // Stacked splits divide the reader area's ROWS instead of its columns, so the
+  // same drop-a-pane-before-shrinking rule runs against a different axis. The
+  // reader area's inner height is the frame minus the main row's padding.
+  const stackedSplit = splitOrientation === 'rows'
+  const splitAxisExtent = stackedSplit ? Math.max(mainContentHeight - 2, 8) : readerAreaWidth
   const splitLayout = calculateSplitPaneLayout({
-    readerAreaWidth,
+    availableExtent: splitAxisExtent,
     requestedCount: fullscreenMode ? 0 : splitPaneCount,
     availableCount: splitPinnedSessions.length,
     maxPanes: SPLIT_PANE_MAX,
-    minPaneWidth: SPLIT_PANE_MIN_WIDTH,
-    minReaderWidth: MIN_READER_WIDTH,
+    minPaneExtent: stackedSplit ? SPLIT_PANE_MIN_ROWS : SPLIT_PANE_MIN_WIDTH,
+    minReaderExtent: stackedSplit ? MIN_READER_ROWS : MIN_READER_WIDTH,
+    readerShare: splitReaderShare,
   })
   const visibleSplitPaneCount = splitLayout.visibleCount
-  const splitPaneWidth = splitLayout.paneWidth
+  const stackedPanesVisible = stackedSplit && visibleSplitPaneCount > 0
+  // Off-axis, a frame simply spans the reader area: stacked panes are full
+  // width, side-by-side panes are full height.
+  const splitPaneWidth = stackedSplit ? readerAreaWidth : splitLayout.paneExtent
   const splitPaneSessions = visibleSplitPaneCount > 0
     ? splitPinnedSessions.slice(0, visibleSplitPaneCount)
     : []
-  const rightPaneWidth = splitLayout.readerWidth
+  const rightPaneWidth = stackedSplit ? readerAreaWidth : splitLayout.readerExtent
+  // Row budget the reader column actually gets. Stacked panes take theirs out
+  // of it, so every downstream height (transcript viewport included) must be
+  // measured from this rather than from the whole frame.
+  const readerRowBudget = stackedPanesVisible ? splitLayout.readerExtent + 2 : mainContentHeight
   const splitPaneKeys = splitPaneSessions.map((pane) => sessionKey(pane))
   const splitPaneKeysSignature = splitPaneKeys.join('\u0000')
   // Live slices for the split panes. The app-wide live list is already tagged
@@ -10243,13 +10329,18 @@ export default function OpenTuiApp() {
   // Panes are siblings of the reader COLUMN, which puts the tab strip above the
   // reader box. Without matching that offset a pane's top border shares the tab
   // strip's row and the two frames read as different windows.
-  const splitPaneTopOffset = (showTabs || showPreviewBar) ? 1 : 0
+  // Stacked panes sit BELOW the reader column, so they inherit no tab-strip
+  // offset — the strip is already inside the column above them.
+  const splitPaneTopOffset = (!stackedSplit && (showTabs || showPreviewBar)) ? 1 : 0
   // Fall back to the arithmetic budget for the first frame, then track the
-  // reader's measured frame so both sides always end on the same row.
-  const splitPaneBoxHeight = Math.max(
-    measuredReaderBoxHeight > 0 ? measuredReaderBoxHeight : mainContentHeight - 2 - splitPaneTopOffset,
-    8,
-  )
+  // reader's measured frame so both sides always end on the same row. Stacked
+  // panes own an explicit row slice instead, so they never chase that measure.
+  const splitPaneBoxHeight = stackedSplit
+    ? Math.max(splitLayout.paneExtent, SPLIT_PANE_MIN_ROWS)
+    : Math.max(
+      measuredReaderBoxHeight > 0 ? measuredReaderBoxHeight : mainContentHeight - 2 - splitPaneTopOffset,
+      8,
+    )
   const TAB_BAR_HEIGHT = 1
   const streamTurnFooterText = useMemo(() => {
     if (
@@ -10262,7 +10353,7 @@ export default function OpenTuiApp() {
   }, [awaitingPersistedTurn, composerSendState, reattachedRunning, transcriptView, visibleTranscriptCards])
   const streamActionFooterRows = isChatLikeView && transcriptView !== 'chat' && visibleTranscriptCards.length > 0 ? 1 : 0
   const transcriptViewportRows = Math.max(
-    mainContentHeight
+    readerRowBudget
     // Fullscreen removes the two-row reader frame, leaving only the compact
     // restore affordance plus the transcript's top/bottom content insets.
     - (fullscreenMode ? 3 : focusMode ? 4 : 7)
@@ -13110,7 +13201,16 @@ export default function OpenTuiApp() {
         }
       : prepareComposerSubmission(visibleText, composerMentionAttachments, composerPromptParts)
     const trimmed = submission.messageText
-    if ((!trimmed && submission.attachments.length === 0) || !composerTargetSession) return
+    if (!trimmed && submission.attachments.length === 0) return
+    if (!composerTargetSession) {
+      // A pane-aimed composer refuses rather than retargeting, so this is the
+      // one case where the send is deliberately blocked and must say why —
+      // an unexplained dead Enter key is worse than the message it replaces.
+      if (composerPaneTargetKey) {
+        showNotice('error', 'That split pane\'s session is gone — press esc and reopen the composer to retarget')
+      }
+      return
+    }
     const submissionTargetKey = sessionKey(composerTargetSession)
     if (!isRetry && !isComposerTargetReady({
       preparingTargetKey: composerPreparingTargetKeyRef.current,
@@ -14420,6 +14520,8 @@ export default function OpenTuiApp() {
           configuredShowToolCalls,
           configuredVelocityScroll,
           configuredSplitPanes,
+          configuredSplitOrientation,
+          configuredSplitReaderShare,
         ] = await Promise.all([
           readTuiTheme(),
           readTuiProvider(),
@@ -14435,6 +14537,8 @@ export default function OpenTuiApp() {
           readTuiShowToolCalls(),
           readTuiVelocityScroll(),
           readTuiSplitPanes(),
+          readTuiSplitOrientation(),
+          readTuiSplitReaderShare(),
         ])
         if (cancelled) return
         setThemeMode(configuredTheme)
@@ -14452,6 +14556,8 @@ export default function OpenTuiApp() {
         setShowToolCalls(configuredShowToolCalls)
         setVelocityScrollEnabled(configuredVelocityScroll)
         setSplitPaneCount(configuredSplitPanes)
+        setSplitOrientation(configuredSplitOrientation)
+        setSplitReaderShare(configuredSplitReaderShare)
         if (!configuredRailVisible || configuredFocusMode) setFocusedPane('messages')
         await refreshSessions(configuredProvider, false, true)
       } catch (err) {
@@ -15326,7 +15432,7 @@ export default function OpenTuiApp() {
     if (splitChordPending) {
       return [
         { text: '⌃B', fg: theme.amber },
-        { text: '  % split   x close   o focus   ; flip   1-2 pane   n next session   z toggle   esc cancel', fg: theme.muted },
+        { text: '  % side-by-side   " stacked   r rotate   < > = size   x close   o focus   n next   z toggle   ? all keys   esc cancel', fg: theme.muted },
       ]
     }
     // A focused pane owns the keys, so the bar advertises its keys, not the
@@ -15395,6 +15501,8 @@ export default function OpenTuiApp() {
   // this composer at a split pane and must be able to see that before sending.
   const composerTargetMessage = composerPaneTargetKey && composerTargetSession
     ? `Sending to split pane: ${formatSessionTitle(composerTargetSession)}`
+    : composerPaneTargetKey
+    ? 'Split pane target is gone — esc to retarget'
     : composerAutoTargetingRunning && composerTargetSession
       ? `Auto-targeting running ${String(composerTargetSession.provider ?? 'claude').toUpperCase()} session ${composerTargetSession.sessionId.slice(-8)}`
       : null
@@ -15990,7 +16098,7 @@ export default function OpenTuiApp() {
   // Split panes are driven by a tmux-style prefix chord (⌃B then a command key),
   // so the reader's single-key namespace stays free. applySplitPaneCount is the
   // one writer of the count — it persists and narrates every change.
-  const applySplitPaneCount = useEffectEvent((next: number, label?: string) => {
+  const applySplitPaneCount = useEffectEvent((next: number, label?: string, orientation?: SplitPaneOrientation) => {
     setSplitPaneCount(next)
     void writeTuiSplitPanes(next).catch((err) => {
       setError(err instanceof Error ? err.message : 'Failed to store split view setting')
@@ -16002,16 +16110,26 @@ export default function OpenTuiApp() {
     // Narrate the requested NEXT layout. Reading splitPaneWidth here would use
     // the previous render, which made the first successful split falsely claim
     // that even wide terminals were too narrow.
+    // Project against the orientation being applied, not the one still in
+    // state: an orientation change and a pane add land in the same keystroke,
+    // and reading the rendered axis here told a working stacked split it had
+    // no room.
+    const nextStacked = (orientation ?? splitOrientation) === 'rows'
     const nextLayout = calculateSplitPaneLayout({
-      readerAreaWidth,
+      availableExtent: nextStacked ? Math.max(mainContentHeight - 2, 8) : readerAreaWidth,
       requestedCount: next,
       availableCount: Math.min(next, splitCandidateSessions.length),
       maxPanes: SPLIT_PANE_MAX,
-      minPaneWidth: SPLIT_PANE_MIN_WIDTH,
-      minReaderWidth: MIN_READER_WIDTH,
+      minPaneExtent: nextStacked ? SPLIT_PANE_MIN_ROWS : SPLIT_PANE_MIN_WIDTH,
+      minReaderExtent: nextStacked ? MIN_READER_ROWS : MIN_READER_WIDTH,
+      readerShare: splitReaderShare,
     })
     if (nextLayout.visibleCount < next) {
-      showNotice('info', `Split panes: ${nextLayout.visibleCount}/${next} visible (widen the terminal or hide the rail with h)`)
+      // Stacked is the escape hatch from a narrow terminal, so offer it rather
+      // than only saying "widen the terminal".
+      showNotice('info', nextStacked
+        ? `Split panes: ${nextLayout.visibleCount}/${next} visible (terminal too short — ⌃B % for side-by-side)`
+        : `Split panes: ${nextLayout.visibleCount}/${next} visible (⌃B " to stack instead, or hide the rail with h)`)
       return
     }
     showNotice('info', label ?? (
@@ -16021,17 +16139,26 @@ export default function OpenTuiApp() {
     ))
   })
 
-  const addSplitPane = useEffectEvent(() => {
+  // tmux shape: % opens a side-by-side pane, " opens a stacked one. The
+  // orientation is the split's, not the pane's, so asking for the other shape
+  // re-lays the existing panes rather than mixing two axes in one frame area.
+  const addSplitPane = useEffectEvent((orientation: SplitPaneOrientation) => {
     if (splitCandidateSessions.length === 0) {
       showNotice('error', 'Open another tab to split the transcript view')
       return
     }
+    const reorienting = orientation !== splitOrientation
+    applySplitOrientation(orientation, true)
     const maxPanes = Math.min(SPLIT_PANE_MAX, splitCandidateSessions.length)
     if (splitPaneCount >= maxPanes) {
-      showNotice('info', `Already showing ${splitPaneCount} split pane${splitPaneCount === 1 ? '' : 's'} (max ${maxPanes})`)
+      // At the pane cap the key still did something useful if it changed the
+      // axis; only say "already showing" when nothing moved.
+      showNotice('info', reorienting
+        ? `Split panes: ${orientation === 'rows' ? 'stacked' : 'side-by-side'}`
+        : `Already showing ${splitPaneCount} split pane${splitPaneCount === 1 ? '' : 's'} (max ${maxPanes})`)
       return
     }
-    applySplitPaneCount(splitPaneCount + 1)
+    applySplitPaneCount(splitPaneCount + 1, undefined, orientation)
   })
 
   const closeSplitPane = useEffectEvent(() => {
@@ -16066,6 +16193,66 @@ export default function OpenTuiApp() {
     const maxPanes = Math.min(SPLIT_PANE_MAX, splitCandidateSessions.length)
     applySplitPaneCount(Math.min(lastSplitPaneCountRef.current, maxPanes))
   })
+
+  // Orientation and the reader/pane ratio are layout preferences, not per-pane
+  // state: every pane shares them, and both persist so a split comes back the
+  // shape you left it.
+  const applySplitOrientation = useEffectEvent((next: SplitPaneOrientation, quiet?: boolean) => {
+    if (next === splitOrientation) {
+      if (!quiet) showNotice('info', next === 'rows' ? 'Split panes already stacked' : 'Split panes already side-by-side')
+      return
+    }
+    setSplitOrientation(next)
+    void writeTuiSplitOrientation(next).catch((err) => {
+      setError(err instanceof Error ? err.message : 'Failed to store split orientation')
+    })
+    if (!quiet) showNotice('info', next === 'rows' ? 'Split panes: stacked' : 'Split panes: side-by-side')
+  })
+
+  const rotateSplitOrientation = useEffectEvent(() => {
+    applySplitOrientation(splitOrientation === 'rows' ? 'columns' : 'rows')
+  })
+
+  const resizeSplitReader = useEffectEvent((direction: 1 | -1 | 0) => {
+    if (visibleSplitPaneCount === 0) {
+      showNotice('error', 'No split panes open (⌃B % to split)')
+      return
+    }
+    const next = direction === 0
+      ? SPLIT_SHARE_EVEN
+      : adjustSplitReaderShare(
+        splitReaderShare,
+        direction * SPLIT_SHARE_STEP,
+        evenSplitReaderShare(visibleSplitPaneCount),
+      )
+    if (next === splitReaderShare) {
+      showNotice('info', direction === 0
+        ? 'Split sizes are already even'
+        : direction > 0 ? 'Reader is already at its widest' : 'Reader is already at its narrowest')
+      return
+    }
+    setSplitReaderShare(next)
+    void writeTuiSplitReaderShare(next).catch((err) => {
+      setError(err instanceof Error ? err.message : 'Failed to store split ratio')
+    })
+    showNotice('info', next === SPLIT_SHARE_EVEN
+      ? 'Split ratio: even'
+      : `Reader ${Math.round(next * 100)}% of the ${splitOrientation === 'rows' ? 'height' : 'width'}`)
+  })
+
+  // A terminal that shrinks past the pane minimum drops panes silently — the
+  // layout is doing the right thing, but the user only sees a pane vanish. Say
+  // it once per transition, and name the orientation that would still fit.
+  const splitPanesHiddenRef = useRef(false)
+  useEffect(() => {
+    const hidden = splitPaneCount > 0 && visibleSplitPaneCount === 0 && splitPinnedKeys.length > 0 && !fullscreenMode
+    if (hidden === splitPanesHiddenRef.current) return
+    splitPanesHiddenRef.current = hidden
+    if (!hidden) return
+    showNotice('info', stackedSplit
+      ? 'Split panes hidden — terminal too short (⌃B % for side-by-side)'
+      : 'Split panes hidden — terminal too narrow (⌃B " to stack them instead)')
+  }, [fullscreenMode, splitPaneCount, splitPinnedKeys.length, stackedSplit, visibleSplitPaneCount])
 
   // ── Split pane focus ───────────────────────────────────────────────────────
   // Focus is a third keyboard owner alongside the sidebar and the reader. It is
@@ -16480,7 +16667,25 @@ export default function OpenTuiApp() {
         break
       }
       case 'split-add':
-        addSplitPane()
+        addSplitPane('columns')
+        break
+      case 'split-add-stacked':
+        addSplitPane('rows')
+        break
+      case 'split-rotate':
+        rotateSplitOrientation()
+        break
+      case 'split-grow-reader':
+        resizeSplitReader(1)
+        break
+      case 'split-shrink-reader':
+        resizeSplitReader(-1)
+        break
+      case 'split-even':
+        resizeSplitReader(0)
+        break
+      case 'split-help':
+        setSplitHelpOpen(true)
         break
       case 'split-close':
         closeSplitPane()
@@ -16910,6 +17115,13 @@ export default function OpenTuiApp() {
 
     if (ideBridgeOpen) {
       handled(() => { ideBridgeKeyHandlerRef.current?.(key) })
+      return
+    }
+
+    // Reference card, not a picker: any key dismisses it rather than leaving
+    // the user hunting for the one that does.
+    if (splitHelpOpen) {
+      handled(() => setSplitHelpOpen(false))
       return
     }
 
@@ -17725,10 +17937,13 @@ export default function OpenTuiApp() {
           return
         }
         // % and " are tmux's split keys; v/s are the vim-shaped aliases.
-        if (sequence === '%' || sequence === '"' || sequence === 'v' || sequence === 's') {
-          addSplitPane()
-          return
-        }
+        if (sequence === '%' || sequence === 'v') { addSplitPane('columns'); return }
+        if (sequence === '"' || sequence === 's') { addSplitPane('rows'); return }
+        if (sequence === 'r') { rotateSplitOrientation(); return }
+        // Ratio keys: < gives the reader less of the shared axis, > more, = even.
+        if (sequence === '<') { resizeSplitReader(-1); return }
+        if (sequence === '>') { resizeSplitReader(1); return }
+        if (sequence === '=') { resizeSplitReader(0); return }
         if (sequence === 'x') { closeSplitPane(); return }
         if (sequence === 'z') { toggleSplitPanes(); return }
         // Focus movement, tmux-shaped: o/→/tab walk forward, ← walks back,
@@ -17738,11 +17953,8 @@ export default function OpenTuiApp() {
         if (sequence === ';') { toggleSplitFocus(); return }
         if (/^[1-9]$/.test(sequence)) { focusSplitPane(Number(sequence) - 1); return }
         if (sequence === 'n') { cycleSplitPaneSession(); return }
-        if (sequence === '?') {
-          showNotice('info', '⌃B: % split · x close · o focus next · ; flip · 1-2 pane · n next session · z toggle')
-          return
-        }
-        showNotice('info', `⌃B ${sequence || key.name} is not a split chord — % split · x close · o focus · n next session · z toggle`)
+        if (sequence === '?') { setSplitHelpOpen(true); return }
+        showNotice('info', `⌃B ${sequence || key.name} is not a split chord — ⌃B ? for the full list`)
       })
       return
     }
@@ -19277,7 +19489,10 @@ export default function OpenTuiApp() {
             </box>
           ) : null}
 
-          <box flexDirection="row" flexGrow={1}>
+          {/* Reader + split panes share one frame area. Side-by-side lays it
+              out as columns; stacked as rows, which is the only shape a split
+              can take on a terminal too narrow for two 46-column frames. */}
+          <box flexDirection={stackedSplit ? 'column' : 'row'} flexGrow={1}>
           <box
             id="transcript-reader"
             ref={readerBoxRef}
@@ -19573,19 +19788,25 @@ export default function OpenTuiApp() {
           ) : null}
           </box>
 
-        {/* Split panes live in the reader's row, under the shared tab strip, so
-            every frame in this area lines up top and bottom. */}
+        {/* Split panes live in the reader's frame area, under the shared tab
+            strip, so every frame in here lines up on the axis they share. */}
         {splitPaneSessions.map((splitSession, splitIndex) => (
           <box
             key={`split:${sessionKey(splitSession)}`}
             width={splitPaneWidth}
+            // Stacked panes own a fixed row slice so the reader flex-grows into
+            // exactly what is left; side-by-side panes fill the column height.
+            height={stackedSplit ? splitPaneBoxHeight : undefined}
+            flexShrink={0}
             flexDirection="column"
             overflow="hidden"
-            marginLeft={1}
+            marginLeft={stackedSplit ? 0 : 1}
+            marginTop={stackedSplit ? 1 : 0}
           >
             <SplitTranscriptPane
               session={splitSession}
               paneIndex={splitIndex}
+              paneCount={visibleSplitPaneCount}
               focused={splitFocusIndex === splitIndex}
               registerHandle={registerSplitPaneHandle}
               theme={theme}
@@ -19614,6 +19835,7 @@ export default function OpenTuiApp() {
                   : null
               }
               onActivate={focusSplitPane}
+              shouldYieldToForeground={splitPaneShouldYield}
             />
           </box>
         ))}
@@ -20099,6 +20321,70 @@ export default function OpenTuiApp() {
                   <text fg={theme.dim} wrapMode="none">{`▼ ${hiddenBelow} more`}</text>
                 </box>
               ) : null}
+            </box>
+          )
+        })() : null}
+
+        {splitHelpOpen ? (() => {
+          const keysW = SPLIT_CHORD_HELP.reduce((longest, section) => section.entries.reduce(
+            (inner, entry) => Math.max(inner, entry.keys.length),
+            longest,
+          ), 0)
+          const overlayW = Math.min(width - 6, Math.max(keysW + 44, 52))
+          const labelW = Math.max(overlayW - keysW - 5, 12)
+          // Sections stack; the overlay is a reference card, so it is sized to
+          // the content and clipped by the terminal rather than scrolled.
+          const rows: { key: string; keys: string | null; label: string }[] = []
+          for (const section of SPLIT_CHORD_HELP) {
+            rows.push({ key: `head:${section.title}`, keys: null, label: section.title })
+            for (const entry of section.entries) {
+              rows.push({ key: `${section.title}:${entry.keys}`, keys: entry.keys, label: entry.label })
+            }
+          }
+          const maxRows = Math.max(height - 8, 6)
+          const visible = rows.slice(0, maxRows)
+          const hidden = rows.length - visible.length
+          return (
+            <box
+              position="absolute"
+              top={2}
+              left={Math.max(Math.floor((width - overlayW) / 2), 2)}
+              width={overlayW}
+              border
+              borderStyle="single"
+              borderColor={theme.amber}
+              backgroundColor={theme.surface}
+              zIndex={32}
+              flexDirection="column"
+            >
+              <box paddingX={1} backgroundColor={theme.surface2} flexDirection="row">
+                <box flexGrow={1}>
+                  <text fg={theme.amber} wrapMode="none">split pane keybinds</text>
+                </box>
+                <text fg={theme.dim} wrapMode="none">
+                  {RUNNING_INSIDE_TMUX ? 'tmux owns ⌃B — use ?' : 'prefix ⌃B'}
+                </text>
+              </box>
+              {visible.map((row) => (row.keys === null ? (
+                <box key={row.key} paddingX={1} backgroundColor={theme.surface2} flexDirection="row">
+                  <text fg={theme.cyan} wrapMode="none">{'┄ '}</text>
+                  <text fg={theme.cyan} wrapMode="none">{row.label.toUpperCase()}</text>
+                </box>
+              ) : (
+                <box key={row.key} paddingX={1} flexDirection="row">
+                  <box width={keysW}>
+                    <text fg={theme.amber} wrapMode="none">{fitText(row.keys, keysW)}</text>
+                  </box>
+                  <box flexGrow={1} paddingLeft={2}>
+                    <text fg={theme.muted} wrapMode="none">{fitText(row.label, labelW)}</text>
+                  </box>
+                </box>
+              )))}
+              <box paddingX={1} backgroundColor={theme.surface2}>
+                <text fg={theme.dim} wrapMode="none">
+                  {fitText(hidden > 0 ? `${hidden} more — widen the terminal · any key closes` : 'any key closes', overlayW - 4)}
+                </text>
+              </box>
             </box>
           )
         })() : null}
