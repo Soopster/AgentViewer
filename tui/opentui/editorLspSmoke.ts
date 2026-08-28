@@ -28,7 +28,10 @@ process.stdin.on('data', (chunk) => {
     if (input.length < start + length) return
     const message = JSON.parse(input.subarray(start, start + length).toString('utf8'))
     input = input.subarray(start + length)
-    if (message.method === 'initialize') send({ jsonrpc: '2.0', id: message.id, result: { capabilities: { completionProvider: { triggerCharacters: ['.'], resolveProvider: true } } } })
+    if (message.method === 'initialize') {
+      if (message.params.capabilities.textDocument.completion.completionItem.snippetSupport !== true) process.exit(23)
+      send({ jsonrpc: '2.0', id: message.id, result: { capabilities: { completionProvider: { triggerCharacters: ['.'], resolveProvider: true } } } })
+    }
     if (message.method === 'textDocument/didOpen') send({
       jsonrpc: '2.0', method: 'textDocument/publishDiagnostics', params: {
         uri: message.params.textDocument.uri,
@@ -38,7 +41,9 @@ process.stdin.on('data', (chunk) => {
     if (message.method === '$/cancelRequest') cancelledRequests.add(message.params.id)
     if (message.method === 'textDocument/completion') {
       const response = {
-        jsonrpc: '2.0', id: message.id, result: message.params.position.character === 18
+        jsonrpc: '2.0', id: message.id, result: message.params.position.character === 19
+          ? { itemDefaults: { insertTextFormat: 2 }, items: [{ label: 'function', insertText: '$' + '{1:name}($' + '{2:value})$0' }] }
+          : message.params.position.character === 18
           ? [{ label: 'cancel-observed-' + cancelledRequests.size }]
           : message.params.context.triggerKind === 2 && message.params.context.triggerCharacter === '.' ? {
         isIncomplete: false,
@@ -204,6 +209,10 @@ try {
     const cancellationProof = await client.completion({ line: 0, character: 18 })
     if (cancellationProof[0]?.label !== 'cancel-observed-1') {
       throw new Error(`Completion cancellation was not forwarded to the language server: ${JSON.stringify(cancellationProof)}`)
+    }
+    const snippetCompletion = (await client.completion({ line: 0, character: 19 }))[0]
+    if (snippetCompletion?.insertTextFormat !== 2 || snippetCompletion.insertText !== '${1:name}(${2:value})$0') {
+      throw new Error(`Snippet completion format/defaults were not retained: ${JSON.stringify(snippetCompletion)}`)
     }
     const hover = await client.hover({ line: 0, character: 8 })
     if (!hover?.contents.includes('const answer') || hover.range?.start.character !== 6) {

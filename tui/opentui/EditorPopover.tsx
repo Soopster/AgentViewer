@@ -62,6 +62,11 @@ import {
   type EditorLineTransform,
 } from './editorTransforms'
 import { expandEditorSearchReplacement, findEditorSearchMatches, type EditorSearchMatch } from './editorSearch'
+import {
+  parseEditorSnippet,
+  transformEditorSnippetValue,
+  type EditorSnippetTabstop,
+} from './editorSnippet'
 
 extend({ editorScrollbar: ScrollBarRenderable })
 
@@ -150,6 +155,21 @@ type CompletionSession = {
   line: number
   visualColumn: number
 }
+
+type SnippetSession = {
+  tabstops: EditorSnippetTabstop[]
+  active: number
+  content: string
+  parent?: SnippetSession
+}
+
+type AppliedCompletion = {
+  error: string | null
+  snippet?: SnippetSession
+  continuedSnippet?: SnippetSession
+}
+
+type AppliedEditorEdit = { start: number; end: number; newText: string; main: boolean }
 
 type SymbolNavigationResult = {
   location: EditorLocation
@@ -488,22 +508,35 @@ function setEditorDocumentOffset(editor: TextareaRenderable, offset: number): vo
 function applyCompletion(
   editor: TextareaRenderable,
   item: Completion,
-): string | null {
+  path: string,
+  parentSnippet?: SnippetSession,
+): AppliedCompletion {
   const content = editor.plainText
   const cursorOffset = editorDocumentOffset(editor)
   const prefix = wordPrefixAt(content, cursorOffset)
-  const mainEdit = item.source === 'lsp' && item.textEdit
+  const rawMainEdit = item.source === 'lsp' && item.textEdit
     ? item.textEdit
     : { range: { start: editorPositionAtOffset(content, prefix.start), end: editorPositionAtOffset(content, cursorOffset) }, newText: item.insertText }
+  const filename = basename(path)
+  const parsedSnippet = item.source === 'lsp' && item.insertTextFormat === 2
+    ? parseEditorSnippet(rawMainEdit.newText, {
+      TM_FILENAME: filename,
+      TM_FILENAME_BASE: filename.replace(/\.[^.]*$/, ''),
+      TM_DIRECTORY: dirname(path),
+      RELATIVE_FILEPATH: path,
+      CURRENT_YEAR: String(new Date().getFullYear()),
+    })
+    : null
+  const mainEdit = parsedSnippet ? { ...rawMainEdit, newText: parsedSnippet.text } : rawMainEdit
   const rawEdits = [
     { edit: mainEdit, main: true },
     ...(item.source === 'lsp' ? (item.additionalTextEdits ?? []).map((edit) => ({ edit, main: false })) : []),
   ]
-  const edits: Array<{ start: number; end: number; newText: string; main: boolean }> = []
+  const edits: AppliedEditorEdit[] = []
   for (const { edit, main } of rawEdits) {
     const start = validOffsetAtEditorPosition(content, edit.range.start)
     const end = validOffsetAtEditorPosition(content, edit.range.end)
-    if (start == null || end == null || end < start) return 'Language server returned an invalid completion edit'
+    if (start == null || end == null || end < start) return { error: 'Language server returned an invalid completion edit' }
     edits.push({ start, end, newText: edit.newText, main })
   }
   edits.sort((a, b) => a.start - b.start || a.end - b.end)
@@ -512,24 +545,169 @@ function applyCompletion(
     const current = edits[index]!
     if (current.start < previous.end
       || (current.start === previous.start && (current.start === current.end || previous.start === previous.end))) {
-      return 'Language server returned overlapping completion edits'
+      return { error: 'Language server returned overlapping completion edits' }
     }
   }
 
   let sourceOffset = 0
   let nextContent = ''
   let nextCursor = cursorOffset
+  let snippetTabstops: EditorSnippetTabstop[] | undefined
   for (const edit of edits) {
     if (edit.start < sourceOffset || edit.end < edit.start) continue
     nextContent += content.slice(sourceOffset, edit.start)
+    const insertionStart = nextContent.length
     nextContent += edit.newText
     sourceOffset = edit.end
-    if (edit.main) nextCursor = nextContent.length
+    if (edit.main) {
+      nextCursor = nextContent.length
+      snippetTabstops = parsedSnippet?.tabstops.map((tabstop) => ({
+        index: tabstop.index,
+        ranges: tabstop.ranges.map((range) => ({
+          ...range,
+          start: insertionStart + range.start,
+          end: insertionStart + range.end,
+        })),
+      }))
+    }
   }
   nextContent += content.slice(sourceOffset)
+  const continuedSnippet = parentSnippet
+    ? rebaseSnippetHierarchy(parentSnippet, edits, nextContent)
+    : undefined
   editor.replaceText(nextContent)
   setEditorDocumentOffset(editor, nextCursor)
-  return null
+  return {
+    error: null,
+    snippet: snippetTabstops
+      ? { tabstops: snippetTabstops, active: 0, content: nextContent, parent: continuedSnippet }
+      : undefined,
+    continuedSnippet: snippetTabstops ? undefined : continuedSnippet,
+  }
+}
+
+function rebaseSnippetSession(
+  session: SnippetSession,
+  edits: readonly AppliedEditorEdit[],
+  nextContent: string,
+): SnippetSession | null {
+  const tabstops: EditorSnippetTabstop[] = []
+  for (let tabstopIndex = 0; tabstopIndex < session.tabstops.length; tabstopIndex += 1) {
+    const tabstop = session.tabstops[tabstopIndex]!
+    const ranges = []
+    for (let rangeIndex = 0; rangeIndex < tabstop.ranges.length; rangeIndex += 1) {
+      const range = tabstop.ranges[rangeIndex]!
+      let beforeDelta = 0
+      let insideDelta = 0
+      let valid = true
+      for (const edit of edits) {
+        const delta = edit.newText.length - (edit.end - edit.start)
+        const activePrimary = tabstopIndex === session.active && rangeIndex === 0
+        const insertionAtStart = edit.start === edit.end && edit.start === range.start
+        const insertionAtEnd = edit.start === edit.end && edit.start === range.end
+        if (edit.end < range.start || (edit.end === range.start && !(activePrimary && insertionAtStart))) {
+          beforeDelta += delta
+        } else if (edit.start > range.end || (edit.start === range.end && !(activePrimary && insertionAtEnd))) {
+          continue
+        } else if (edit.start >= range.start && edit.end <= range.end) {
+          insideDelta += delta
+        } else {
+          valid = false
+          break
+        }
+      }
+      if (!valid) return null
+      ranges.push({
+        ...range,
+        start: range.start + beforeDelta,
+        end: range.end + beforeDelta + insideDelta,
+      })
+    }
+    tabstops.push({ ...tabstop, ranges })
+  }
+  return { ...session, tabstops, content: nextContent }
+}
+
+function rebaseSnippetHierarchy(
+  session: SnippetSession,
+  edits: readonly AppliedEditorEdit[],
+  nextContent: string,
+): SnippetSession | undefined {
+  const rebased = rebaseSnippetSession(session, edits, nextContent)
+  if (!rebased) return undefined
+  const parent = session.parent ? rebaseSnippetHierarchy(session.parent, edits, nextContent) : undefined
+  return { ...rebased, parent }
+}
+
+function editorDiffAsEdit(before: string, after: string): AppliedEditorEdit[] {
+  if (before === after) return []
+  let start = 0
+  while (start < before.length && start < after.length && before[start] === after[start]) start += 1
+  let beforeEnd = before.length
+  let afterEnd = after.length
+  while (beforeEnd > start && afterEnd > start && before[beforeEnd - 1] === after[afterEnd - 1]) {
+    beforeEnd -= 1
+    afterEnd -= 1
+  }
+  return [{ start, end: beforeEnd, newText: after.slice(start, afterEnd), main: true }]
+}
+
+function reconcileSnippetSession(session: SnippetSession, content: string, cursorOffset: number): SnippetSession | null {
+  if (content === session.content) return session
+  const activeRange = session.tabstops[session.active]?.ranges[0]
+  if (!activeRange || cursorOffset < activeRange.start
+    || session.content.slice(0, activeRange.start) !== content.slice(0, activeRange.start)
+    || session.content.slice(activeRange.end) !== content.slice(cursorOffset)) return null
+  const delta = cursorOffset - activeRange.end
+  const tabstops = session.tabstops.map((tabstop, tabstopIndex) => ({
+    ...tabstop,
+    ranges: tabstop.ranges.map((range, rangeIndex) => {
+      if (tabstopIndex === session.active && rangeIndex === 0) {
+        return { ...range, start: range.start, end: cursorOffset }
+      }
+      if (range.end <= activeRange.start) return range
+      if (range.start >= activeRange.end) return { ...range, start: range.start + delta, end: range.end + delta }
+      return range
+    }),
+  }))
+  return { ...session, tabstops, content }
+}
+
+function synchronizeSnippetMirrors(
+  session: SnippetSession,
+  content: string,
+): { session: SnippetSession; content: string } | null {
+  const tabstop = session.tabstops[session.active]
+  const primary = tabstop?.ranges[0]
+  if (!tabstop || !primary || tabstop.ranges.length < 2) return { session, content }
+  const value = content.slice(primary.start, primary.end)
+  let nextSession = session
+  let nextContent = content
+  for (let rangeIndex = tabstop.ranges.length - 1; rangeIndex >= 1; rangeIndex -= 1) {
+    const target = nextSession.tabstops[session.active]?.ranges[rangeIndex]
+    if (!target) return null
+    const overlapsAnotherPlaceholder = nextSession.tabstops.some((candidate, candidateIndex) =>
+      candidateIndex !== session.active && candidate.ranges.some((range) => range.start < target.end && target.start < range.end))
+    if (overlapsAnotherPlaceholder) return null
+    const replacement = target.transform ? transformEditorSnippetValue(value, target.transform) : value
+    const delta = replacement.length - (target.end - target.start)
+    nextContent = `${nextContent.slice(0, target.start)}${replacement}${nextContent.slice(target.end)}`
+    nextSession = {
+      ...nextSession,
+      tabstops: nextSession.tabstops.map((candidate, candidateIndex) => ({
+        ...candidate,
+        ranges: candidate.ranges.map((range, candidateRangeIndex) => {
+          if (candidateIndex === session.active && candidateRangeIndex === rangeIndex) {
+            return { ...range, start: target.start, end: target.start + replacement.length }
+          }
+          if (range.end <= target.start) return range
+          if (range.start >= target.end) return { ...range, start: range.start + delta, end: range.end + delta }
+          return range
+        }),
+      })),
+    }
+  }
+  return { session: { ...nextSession, content: nextContent }, content: nextContent }
 }
 
 function localCompletions(content: string, paths: string[], prefix: string): LocalCompletion[] {
@@ -563,7 +741,7 @@ function mergeCompletions(lsp: EditorCompletion[], local: LocalCompletion[], pre
     const identity = item.source === 'lsp'
       ? `lsp:${item.label}:${item.detail ?? ''}:${item.insertText}`
       : item.label
-    if (!filterValue.toLowerCase().includes(normalized)
+    if (fuzzyScore(filterValue, normalized) == null
       || seen.has(identity)
       || (item.source !== 'lsp' && lspLabels.has(item.label))) continue
     seen.add(identity)
@@ -788,6 +966,8 @@ export function EditorPopover({
   const completionAbortRef = useRef<AbortController | null>(null)
   const completionResolveAbortRef = useRef<AbortController | null>(null)
   const completionSessionRef = useRef<CompletionSession | null>(null)
+  const completionAcceptingRef = useRef(false)
+  const snippetSessionRef = useRef<SnippetSession | null>(null)
   const hoverRequestRef = useRef(0)
   const signatureRequestRef = useRef(0)
   const velocityScrollStateRef = useRef<ReturnType<typeof createScrollVelocityState> | null>(null)
@@ -956,6 +1136,7 @@ export function EditorPopover({
   useEffect(() => {
     setMultiCursor(null)
     setBlockSelection(null)
+    snippetSessionRef.current = null
   }, [activePath])
 
   useEffect(() => {
@@ -2175,10 +2356,70 @@ export function EditorPopover({
     }
   }, [completionCursor, completions])
 
-  const acceptCompletion = useCallback(() => {
+  const focusSnippetTabstop = useCallback((session: SnippetSession) => {
     const editor = editorRef.current
-    const item = completions[completionCursor]
-    if (!editor || !item) return
+    const tabstop = session.tabstops[session.active]
+    const range = tabstop?.ranges[0]
+    if (!editor || !tabstop || !range) {
+      snippetSessionRef.current = null
+      return
+    }
+    if (tabstop.index === 0) {
+      editor.clearSelection()
+      setEditorDocumentOffset(editor, range.start)
+      snippetSessionRef.current = session.parent ?? null
+      setMessage(session.parent ? 'Nested snippet complete · outer placeholders resumed' : 'Snippet complete')
+      return
+    }
+    snippetSessionRef.current = session
+    if (range.start === range.end) {
+      editor.clearSelection()
+      setEditorDocumentOffset(editor, range.start)
+    } else {
+      editor.setSelection(range.start, range.end)
+    }
+    const editableCount = session.tabstops.filter((candidate) => candidate.index !== 0).length
+    setMessage(`Snippet ${Math.min(session.active + 1, editableCount)}/${editableCount} · Tab next · Shift+Tab previous · Esc exits`)
+  }, [])
+
+  const activateSnippet = useCallback((session: SnippetSession | undefined) => {
+    if (!session || session.tabstops.length === 0) {
+      snippetSessionRef.current = null
+      return
+    }
+    focusSnippetTabstop(session)
+  }, [focusSnippetTabstop])
+
+  const navigateSnippet = useCallback((direction: 1 | -1) => {
+    const editor = editorRef.current
+    const existing = snippetSessionRef.current
+    if (!editor || !existing) return false
+    const reconciled = reconcileSnippetSession(existing, editor.plainText, editorDocumentOffset(editor))
+    const synchronized = reconciled ? synchronizeSnippetMirrors(reconciled, editor.plainText) : null
+    if (!synchronized) {
+      snippetSessionRef.current = null
+      setMessage('Snippet placeholders dismissed after cursor moved outside the active field')
+      return false
+    }
+    if (synchronized.content !== editor.plainText) editor.replaceText(synchronized.content)
+    const parent = existing.parent
+      ? rebaseSnippetHierarchy(
+        existing.parent,
+        editorDiffAsEdit(existing.content, synchronized.content),
+        synchronized.content,
+      )
+      : undefined
+    const session = { ...synchronized.session, parent }
+    const next = direction > 0
+      ? Math.min(session.tabstops.length - 1, session.active + 1)
+      : Math.max(0, session.active - 1)
+    focusSnippetTabstop({ ...session, active: next, content: synchronized.content })
+    return true
+  }, [focusSnippetTabstop])
+
+  const applyCompletionItem = useCallback(async (item: Completion) => {
+    const editor = editorRef.current
+    if (!editor) return
     const session = completionSessionRef.current
     const currentCursor = editor.logicalCursor
     if (!session || editor.plainText !== session.content || editorDocumentOffset(editor) !== session.cursorOffset
@@ -2188,14 +2429,50 @@ export function EditorPopover({
       setMessage('Completion dismissed after the buffer or cursor changed')
       return
     }
+    if (completionAcceptingRef.current) return
+    completionAcceptingRef.current = true
     completionAbortRef.current?.abort()
     completionResolveAbortRef.current?.abort()
-    const completionError = applyCompletion(editor, item)
+    let acceptedItem = item
+    if (item.source === 'lsp' && !item.resolved) {
+      const controller = new AbortController()
+      completionResolveAbortRef.current = controller
+      acceptedItem = await lspRef.current?.resolveCompletion(item, controller.signal) ?? item
+      if (completionResolveAbortRef.current === controller) completionResolveAbortRef.current = null
+      const latestEditor = editorRef.current
+      const latestCursor = latestEditor?.logicalCursor
+      if (!latestEditor || controller.signal.aborted || completionSessionRef.current !== session
+        || latestEditor.plainText !== session.content
+        || editorDocumentOffset(latestEditor) !== session.cursorOffset
+        || latestCursor?.row !== session.line || latestCursor.col !== session.visualColumn) {
+        completionSessionRef.current = null
+        setCompletions([])
+        setMessage('Completion dismissed after the buffer or cursor changed')
+        completionAcceptingRef.current = false
+        return
+      }
+    }
+    const currentSnippet = snippetSessionRef.current
+    const reconciledSnippet = currentSnippet
+      ? reconcileSnippetSession(currentSnippet, editor.plainText, editorDocumentOffset(editor)) ?? undefined
+      : undefined
+    const completion = applyCompletion(editor, acceptedItem, activePath ?? '', reconciledSnippet)
     completionSessionRef.current = null
     setCompletions([])
     setSignatureInfo(null)
-    setMessage(completionError ?? `${item.source === 'lsp' ? 'LSP' : item.source} completion: ${item.label}`)
-  }, [completionCursor, completions])
+    if (completion.error) setMessage(completion.error)
+    else if (completion.snippet) activateSnippet(completion.snippet)
+    else {
+      snippetSessionRef.current = completion.continuedSnippet ?? null
+      setMessage(`${item.source === 'lsp' ? 'LSP' : item.source} completion: ${item.label}`)
+    }
+    completionAcceptingRef.current = false
+  }, [activateSnippet, activePath])
+
+  const acceptCompletion = useCallback(() => {
+    const item = completions[completionCursor]
+    if (item) void applyCompletionItem(item)
+  }, [applyCompletionItem, completionCursor, completions])
 
   const activateTreeRow = useCallback(() => {
     const row = treeRows[treeCursor]
@@ -2460,26 +2737,9 @@ export function EditorPopover({
 
   const acceptCompletionAt = useCallback((index: number) => {
     setCompletionCursor(index)
-    const editor = editorRef.current
     const item = completions[index]
-    if (!editor || !item) return
-    const session = completionSessionRef.current
-    const currentCursor = editor.logicalCursor
-    if (!session || editor.plainText !== session.content || editorDocumentOffset(editor) !== session.cursorOffset
-      || currentCursor.row !== session.line || currentCursor.col !== session.visualColumn) {
-      completionSessionRef.current = null
-      setCompletions([])
-      setMessage('Completion dismissed after the buffer or cursor changed')
-      return
-    }
-    completionAbortRef.current?.abort()
-    completionResolveAbortRef.current?.abort()
-    const completionError = applyCompletion(editor, item)
-    completionSessionRef.current = null
-    setCompletions([])
-    setSignatureInfo(null)
-    setMessage(completionError ?? `${item.source === 'lsp' ? 'LSP' : item.source} completion: ${item.label}`)
-  }, [completions])
+    if (item) void applyCompletionItem(item)
+  }, [applyCompletionItem, completions])
 
   const handleVimKey = useCallback((key: EditorKeyEvent): boolean => {
     const editor = editorRef.current
@@ -2915,10 +3175,6 @@ export function EditorPopover({
     if (focusPane === 'editor' && key.ctrl && (key.name === '/' || sequence === '\x1f')) { editSelectedLines('comment'); return true }
     if (focusPane === 'editor' && key.ctrl && key.name === ']') { editSelectedLines('indent'); return true }
     if (focusPane === 'editor' && key.ctrl && key.name === '[') { editSelectedLines('outdent'); return true }
-    if (focusPane === 'editor' && key.name === 'tab' && (key.shift || editorRef.current?.hasSelection())) {
-      editSelectedLines(key.shift ? 'outdent' : 'indent')
-      return true
-    }
     if (vimEnabled && handleVimKey(key)) return true
     if (hoverInfo || signatureInfo) {
       if (key.name === 'escape') {
@@ -2939,6 +3195,30 @@ export function EditorPopover({
       if (key.name === 'up' || (key.ctrl && key.name === 'p')) { setCompletionCursor((value) => Math.max(0, value - 1)); return true }
       if (key.name === 'down' || (key.ctrl && key.name === 'n')) { setCompletionCursor((value) => Math.min(completions.length - 1, value + 1)); return true }
       if (key.name === 'tab' || key.name === 'return') { acceptCompletion(); return true }
+    }
+    if (focusPane === 'editor' && snippetSessionRef.current) {
+      if (key.name === 'escape') {
+        const current = snippetSessionRef.current
+        const content = editorRef.current?.plainText ?? current.content
+        const parent = current.parent
+          ? rebaseSnippetHierarchy(current.parent, editorDiffAsEdit(current.content, content), content)
+          : undefined
+        snippetSessionRef.current = parent ?? null
+        editorRef.current?.clearSelection()
+        setMessage(parent ? 'Nested snippet dismissed · outer placeholders resumed' : 'Snippet placeholders dismissed')
+        return true
+      }
+      if (key.name === 'tab' && !key.ctrl && !key.meta) {
+        if (navigateSnippet(key.shift ? -1 : 1)) return true
+      }
+      if (['left', 'right', 'up', 'down', 'home', 'end', 'pageup', 'pagedown'].includes(key.name)
+        || (key.ctrl && (key.name === 'z' || key.name === 'y'))) {
+        snippetSessionRef.current = null
+      }
+    }
+    if (focusPane === 'editor' && key.name === 'tab' && (key.shift || editorRef.current?.hasSelection())) {
+      editSelectedLines(key.shift ? 'outdent' : 'indent')
+      return true
     }
     if (focusPane === 'editor' && (key.name === 'home' || key.name === 'end')) {
       const editor = editorRef.current
@@ -3060,7 +3340,7 @@ export function EditorPopover({
       }
     }
     return false
-  }, [acceptCompletion, activateTreeRow, activeTab, addAdjacentCursor, addLineEndCursors, addNextOccurrence, applyCaseTransform, applyCodeAction, applyLineTransform, chooseQuickResultAt, closeActiveTab, closeConfirm, codeActionCursor, codeActions, completions.length, copyEditorSelection, editAtAllCursors, editSelectedLines, extendBlockSelection, filePrompt, focusPane, formatDocument, handleVimKey, hoverInfo, jumpBack, jumpToEditorLocation, multiCursor, navigateDiagnostic, navigateSearch, openFilePrompt, openProjectSearch, openQuick, openRecoveryConflict, openSearch, pasteIntoEditor, performFileOperation, performRename, projectSearchCursor, projectSearchOpen, projectSearchResults, quickCursor, quickOpen, quickResults.length, recoveryConflictCursor, recoveryConflictOpen, recoveryConflicts, renameOpen, replaceSearchMatch, requestClose, requestCodeActions, requestCompletions, requestHover, requestRename, requestSignatureHelp, requestSymbolNavigation, restartLsp, root, saveActive, saveAll, searchInput, searchOpen, searchReplaceMode, searchResult.error, searchSelectionRange, signatureInfo, switchTab, symbolNavigationCursor, symbolNavigationKind, symbolNavigationResults, toggleExplorer, toggleSearchMatchCase, toggleVelocityScrolling, toggleVimMode, toggleWordWrap, treeCursor, treeExpanded, treeRows, velocityScrollEnabled, vimEnabled])
+  }, [acceptCompletion, activateTreeRow, activeTab, addAdjacentCursor, addLineEndCursors, addNextOccurrence, applyCaseTransform, applyCodeAction, applyLineTransform, chooseQuickResultAt, closeActiveTab, closeConfirm, codeActionCursor, codeActions, completions.length, copyEditorSelection, editAtAllCursors, editSelectedLines, extendBlockSelection, filePrompt, focusPane, formatDocument, handleVimKey, hoverInfo, jumpBack, jumpToEditorLocation, multiCursor, navigateDiagnostic, navigateSearch, navigateSnippet, openFilePrompt, openProjectSearch, openQuick, openRecoveryConflict, openSearch, pasteIntoEditor, performFileOperation, performRename, projectSearchCursor, projectSearchOpen, projectSearchResults, quickCursor, quickOpen, quickResults.length, recoveryConflictCursor, recoveryConflictOpen, recoveryConflicts, renameOpen, replaceSearchMatch, requestClose, requestCodeActions, requestCompletions, requestHover, requestRename, requestSignatureHelp, requestSymbolNavigation, restartLsp, root, saveActive, saveAll, searchInput, searchOpen, searchReplaceMode, searchResult.error, searchSelectionRange, signatureInfo, switchTab, symbolNavigationCursor, symbolNavigationKind, symbolNavigationResults, toggleExplorer, toggleSearchMatchCase, toggleVelocityScrolling, toggleVimMode, toggleWordWrap, treeCursor, treeExpanded, treeRows, velocityScrollEnabled, vimEnabled])
 
   useEffect(() => {
     onKeyHandlerReady(handleKey)
@@ -3157,6 +3437,11 @@ export function EditorPopover({
   const completionPopupWidth = showCompletionDetailPane
     ? Math.min(78, Math.max(58, editorWidth - 6))
     : Math.min(48, Math.max(28, editorWidth - 8))
+  const completionListWidth = showCompletionDetailPane
+    ? Math.min(34, completionPopupWidth - 24)
+    : completionPopupWidth - 2
+  // Outer border (2), detail border (2), and detail horizontal padding (2).
+  const completionDetailTextWidth = Math.max(12, completionPopupWidth - completionListWidth - 6)
   const completionDetailRows = selectedCompletion
     ? 1 + (selectedCompletion.detail ? 1 : 0) + completionDocumentation.length
     : 0
@@ -3165,7 +3450,7 @@ export function EditorPopover({
     Math.max(
       4,
       2 + (showCompletionDetailPane
-        ? Math.max(visibleCompletions.length, completionDetailRows)
+        ? Math.max(visibleCompletions.length, completionDetailRows + 2)
         : visibleCompletions.length + completionDocumentation.length),
     ),
   )
@@ -3670,7 +3955,7 @@ export function EditorPopover({
       {completions.length > 0 && activeTab && focusPane === 'editor' ? (
         <box position="absolute" top={completionTop} left={completionLeft} width={completionPopupWidth} height={completionPopupHeight} zIndex={55} border borderStyle="rounded" borderColor={theme.violet} backgroundColor={theme.surface} flexDirection="column" title={` completions ${completionCursor + 1}/${completions.length} `}>
           <box flexGrow={1} flexDirection="row">
-            <box width={showCompletionDetailPane ? Math.min(34, completionPopupWidth - 24) : undefined} flexGrow={showCompletionDetailPane ? 0 : 1} flexDirection="column">
+            <box width={showCompletionDetailPane ? completionListWidth : undefined} flexGrow={showCompletionDetailPane ? 0 : 1} flexDirection="column">
               {visibleCompletions.map((item, visibleIndex) => {
                 const index = completionWindowStart + visibleIndex
                 return (
@@ -3687,7 +3972,7 @@ export function EditorPopover({
                     }}
                   >
                     <text fg={item.source === 'lsp' ? theme.violet : item.source === 'path' ? theme.cyan : theme.amber}>{`${item.source === 'lsp' ? COMPLETION_KIND_GLYPHS[item.kind ?? 0] ?? '◇' : item.source === 'path' ? '󰈙' : 'ω'} `}</text>
-                    <text fg={index === completionCursor ? theme.text : theme.muted} wrapMode="none">{fitText(item.label, showCompletionDetailPane ? 18 : Math.min(24, editorWidth - 16))}</text>
+                    <text fg={index === completionCursor ? theme.text : theme.muted} wrapMode="none">{fitText(item.label, showCompletionDetailPane ? Math.max(8, completionListWidth - 5) : Math.max(8, completionPopupWidth - 18))}</text>
                     <box flexGrow={1} />
                     {!showCompletionDetailPane ? <text fg={theme.dim} wrapMode="none">{fitText(item.detail ?? item.source, 12)}</text> : null}
                   </box>
@@ -3701,9 +3986,9 @@ export function EditorPopover({
             </box>
             {showCompletionDetailPane && selectedCompletion ? (
               <box flexGrow={1} border borderStyle="single" borderColor={theme.border} backgroundColor={theme.surface2} paddingX={1} flexDirection="column">
-                <text fg={theme.cyan} wrapMode="none">{fitText(selectedCompletion.label, completionPopupWidth - 38)}</text>
-                {selectedCompletion.detail ? <text fg={theme.amber} wrapMode="none">{fitText(selectedCompletion.detail, completionPopupWidth - 38)}</text> : null}
-                {completionDocumentation.map((line, index) => <text key={`completion-detail:${index}`} fg={theme.text} wrapMode="none">{fitText(line, completionPopupWidth - 38)}</text>)}
+                <text fg={theme.cyan} wrapMode="none">{fitText(selectedCompletion.label, completionDetailTextWidth)}</text>
+                {selectedCompletion.detail ? <text fg={theme.amber} wrapMode="none">{fitText(selectedCompletion.detail, completionDetailTextWidth)}</text> : null}
+                {completionDocumentation.map((line, index) => <text key={`completion-detail:${index}`} fg={theme.text} wrapMode="none">{fitText(line, completionDetailTextWidth)}</text>)}
               </box>
             ) : null}
           </box>

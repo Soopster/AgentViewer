@@ -67,6 +67,12 @@ process.stdin.on('data', (chunk) => {
       const memberAccess = line.slice(0, line.length - prefix.length).endsWith('console.')
       const labels = prefix === 'bad'
         ? ['badValue']
+        : prefix === 'inner'
+        ? ['innerSnippet']
+        : prefix === 'fn'
+        ? ['function']
+        : prefix === 'short'
+        ? ['shortOne', 'shortTwo', 'shortThree']
         : memberAccess
         ? ['log', 'warn', 'error', 'info', 'debug', 'dir', 'table', 'time', 'timeEnd', 'trace', 'group', 'groupEnd']
         : ['answer']
@@ -74,14 +80,19 @@ process.stdin.on('data', (chunk) => {
         jsonrpc: '2.0', id: message.id, result: labels.map((label, index) => ({
           label,
           kind: 2,
-          detail: memberAccess ? '(message?: any) => void' : 'number',
+          detail: label === 'shortTwo' ? 'DETAIL_SHORT_TWO' : memberAccess ? '(message?: any) => void' : 'number',
           sortText: String(index).padStart(3, '0'),
           preselect: index === 0,
           data: { memberAccess, label },
           textEdit: {
             range: { start: { line: position.line, character: position.character - prefix.length }, end: position },
-            newText: label,
+            newText: label === 'function'
+              ? 'function $' + '{1:name}($' + '{2:value}) {\n  return $1\n  $0\n}'
+              : label === 'innerSnippet'
+              ? '$' + '{1:child}-$' + '{1/(.*)/$' + '{1:/upcase}/}$0'
+              : label,
           },
+          insertTextFormat: label === 'function' || label === 'innerSnippet' ? 2 : 1,
         })),
       })
     }
@@ -336,8 +347,10 @@ process.stdin.on('data', (chunk) => {
     if (!memberCompletionFrame.includes('completions 1/12') || !memberCompletionFrame.includes('log') || !memberCompletionFrame.includes('warn')) {
       throw new Error(`Member access did not open a code-aware LSP completion list at ${JSON.stringify(editor.logicalCursor)} / ${editor.cursorOffset}:\n${memberCompletionFrame}`)
     }
-    if (!memberCompletionFrame.includes('Writes a log message.')) {
-      throw new Error(`Selected member completion did not resolve documentation:\n${memberCompletionFrame}`)
+    await flush(setup, 100)
+    const resolvedMemberCompletionFrame = setup.captureCharFrame()
+    if (!resolvedMemberCompletionFrame.includes('Writes a log message.')) {
+      throw new Error(`Selected member completion did not resolve documentation:\n${resolvedMemberCompletionFrame}`)
     }
     for (let index = 0; index < 9; index += 1) {
       act(() => { handleKey?.({ name: 'down', ctrl: false, shift: false, sequence: '\u001b[B' }) })
@@ -361,6 +374,86 @@ process.stdin.on('data', (chunk) => {
     await flush(setup, 150)
     if (!editor.plainText.startsWith('// completion import\n') || !editor.plainText.includes('console.log')) {
       throw new Error(`Accepting a member completion did not apply its range and additional edits: ${JSON.stringify(editor.plainText)}`)
+    }
+    await act(async () => {
+      editor.gotoBufferEnd()
+      await setup.mockInput.typeText('\nshort')
+    })
+    await flush(setup, 450)
+    act(() => { handleKey?.({ name: 'down', ctrl: false, shift: false, sequence: '\u001b[B' }) })
+    await flush(setup, 80)
+    const shortCompletionFrame = setup.captureCharFrame()
+    const shortCompletionLines = setup.captureSpans().lines
+    const cyan = RGBA.fromHex(DARK_THEME.cyan).toString()
+    const amber = RGBA.fromHex(DARK_THEME.amber).toString()
+    const detailLabelRow = shortCompletionLines.findIndex((line) => line.spans.some((span) => (
+      span.text.includes('shortTwo') && span.fg.toString() === cyan
+    )))
+    const detailSignatureRow = shortCompletionLines.findIndex((line) => line.spans.some((span) => (
+      span.text.includes('DETAIL_SHORT_TWO') && span.fg.toString() === amber
+    )))
+    if (!shortCompletionFrame.includes('completions 2/3')
+      || detailLabelRow < 0 || detailSignatureRow < 0 || detailLabelRow === detailSignatureRow) {
+      throw new Error(`Short completion details overlapped instead of rendering on distinct rows:\n${shortCompletionFrame}`)
+    }
+    act(() => { handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '\u001b' }) })
+    await setup.flush()
+    await act(async () => {
+      editor.gotoBufferEnd()
+      await setup.mockInput.typeText('\nfn')
+    })
+    await flush(setup, 450)
+    const snippetCompletionFrame = setup.captureCharFrame()
+    if (!snippetCompletionFrame.includes('function')) {
+      throw new Error(`Snippet completion did not appear in the completion menu:\n${setup.captureCharFrame()}`)
+    }
+    act(() => { handleKey?.({ name: 'tab', ctrl: false, shift: false, sequence: '\t' }) })
+    await flush(setup, 80)
+    if (editor.getSelectedText() !== 'name' || !setup.captureCharFrame().includes('Snippet 1/2')) {
+      throw new Error(`Accepting an LSP snippet did not select its first placeholder:\n${setup.captureCharFrame()}`)
+    }
+    await act(async () => { await setup.mockInput.typeText('inner') })
+    await flush(setup, 450)
+    const nestedCompletionFrame = setup.captureCharFrame()
+    if (!nestedCompletionFrame.includes('innerSnippet')) {
+      throw new Error(`Completion inside a snippet placeholder did not open:\n${setup.captureCharFrame()}`)
+    }
+    act(() => { handleKey?.({ name: 'tab', ctrl: false, shift: false, sequence: '\t' }) })
+    await flush(setup, 60)
+    if (editor.getSelectedText() !== 'child' || !setup.captureCharFrame().includes('Snippet 1/1')) {
+      throw new Error(`Nested snippet completion did not select its placeholder: ${JSON.stringify(editor.getSelectedText())}`)
+    }
+    await act(async () => { await setup.mockInput.typeText('compute') })
+    await flush(setup, 40)
+    act(() => { handleKey?.({ name: 'tab', ctrl: false, shift: false, sequence: '\t' }) })
+    await flush(setup, 60)
+    if (!editor.plainText.includes('function compute-COMPUTE(value)')
+      || !setup.captureCharFrame().includes('outer placeholders resumed')) {
+      throw new Error(`Nested transformed snippet did not finish into its outer field: ${JSON.stringify(editor.plainText)}`)
+    }
+    act(() => { handleKey?.({ name: 'tab', ctrl: false, shift: false, sequence: '\t' }) })
+    await flush(setup, 60)
+    if (editor.getSelectedText() !== 'value'
+      || !editor.plainText.includes('function compute-COMPUTE(value)')
+      || !editor.plainText.includes('return compute-COMPUTE')) {
+      throw new Error(`Tab did not advance to the next live snippet placeholder: ${JSON.stringify({ text: editor.plainText, selected: editor.getSelectedText() })}`)
+    }
+    act(() => { handleKey?.({ name: 'tab', ctrl: false, shift: true, sequence: '\t' }) })
+    await flush(setup, 40)
+    if (editor.getSelectedText() !== 'compute-COMPUTE') {
+      throw new Error(`Shift+Tab did not return to the previous snippet placeholder: ${JSON.stringify(editor.getSelectedText())}`)
+    }
+    act(() => { handleKey?.({ name: 'tab', ctrl: false, shift: false, sequence: '\t' }) })
+    await flush(setup, 40)
+    if (editor.getSelectedText() !== 'value') {
+      throw new Error(`Tab did not return to the next snippet placeholder: ${JSON.stringify(editor.getSelectedText())}`)
+    }
+    await act(async () => { await setup.mockInput.typeText('input') })
+    await flush(setup, 40)
+    act(() => { handleKey?.({ name: 'tab', ctrl: false, shift: false, sequence: '\t' }) })
+    await flush(setup, 60)
+    if (!editor.plainText.includes('function compute-COMPUTE(input)') || !setup.captureCharFrame().includes('Snippet complete')) {
+      throw new Error(`Snippet completion did not preserve edits and land at its final cursor: ${JSON.stringify(editor.plainText)}`)
     }
     act(() => {
       editor.gotoBufferEnd()

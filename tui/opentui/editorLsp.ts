@@ -17,6 +17,7 @@ export type EditorCompletion = {
   insertText: string
   filterText?: string
   sortText?: string
+  insertTextFormat?: 1 | 2
   kind?: number
   preselect?: boolean
   textEdit?: EditorTextEdit
@@ -270,7 +271,7 @@ function editorDiagnostics(value: unknown): EditorDiagnostic[] {
   return diagnostics
 }
 
-type CompletionDefaults = { editRange?: unknown; data?: unknown }
+type CompletionDefaults = { editRange?: unknown; data?: unknown; insertTextFormat?: unknown }
 
 function completionItem(value: unknown, defaults: CompletionDefaults = {}): EditorCompletion | null {
   if (!value || typeof value !== 'object') return null
@@ -288,6 +289,7 @@ function completionItem(value: unknown, defaults: CompletionDefaults = {}): Edit
     ? { ...defaultEditRange, newText: defaultNewText }
     : null)
   const insertText = defaultEdit?.newText ?? defaultNewText
+  const rawInsertTextFormat = item.insertTextFormat ?? defaults.insertTextFormat
   const additionalTextEdits = Array.isArray(item.additionalTextEdits)
     ? item.additionalTextEdits.flatMap((entry) => {
         const parsed = textEdit(entry)
@@ -301,6 +303,7 @@ function completionItem(value: unknown, defaults: CompletionDefaults = {}): Edit
     insertText,
     filterText: typeof item.filterText === 'string' ? item.filterText : undefined,
     sortText: typeof item.sortText === 'string' ? item.sortText : undefined,
+    insertTextFormat: rawInsertTextFormat === 2 ? 2 : rawInsertTextFormat === 1 ? 1 : undefined,
     kind: typeof item.kind === 'number' ? item.kind : undefined,
     preselect: item.preselect === true,
     textEdit: defaultEdit ?? undefined,
@@ -371,7 +374,7 @@ export class EditorLspClient {
             textDocument: {
               completion: {
                 completionItem: {
-                  snippetSupport: false,
+                  snippetSupport: true,
                   documentationFormat: ['plaintext', 'markdown'],
                   insertReplaceSupport: true,
                   resolveSupport: {
@@ -518,6 +521,7 @@ export class EditorLspClient {
       ...completion,
       ...resolved,
       insertText: resolvedInsertion ? resolved.insertText : completion.insertText,
+      insertTextFormat: resolved.insertTextFormat ?? completion.insertTextFormat,
       textEdit: resolved.textEdit ?? completion.textEdit,
       additionalTextEdits: resolved.additionalTextEdits ?? completion.additionalTextEdits,
       resolved: true,
