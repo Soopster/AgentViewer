@@ -103,6 +103,7 @@ import { claudeProcessSpawnOptions } from './claudeProcessSpawner'
 import { getClaudeDynamicMcpServers } from './claudeDynamicMcp'
 import { createMessagingMcpServer } from './claudeMessagingMcp'
 import { currentProviderEnvironment, currentProviderExecutable, currentProviderInstanceId } from './providerInstances'
+import { selectIdleProviderPoolEvictions } from './providerPoolPolicy'
 import { providerStartupTimeoutMs } from './providerWarmup'
 import { withTimeout } from './withTimeout'
 
@@ -166,7 +167,20 @@ const SWEEP_INTERVAL_MS = 60_000
 // half a second after Claude has already emitted its result.
 const TURN_TAIL_DRAIN_MS = 150
 // Hard ceiling so a stuck SDK can't strand the mutex forever.
-const TURN_HARD_TIMEOUT_MS = 10 * 60 * 1000
+const DEFAULT_TURN_HARD_TIMEOUT_MS = 10 * 60 * 1000
+const EXPLICIT_MODEL_TURN_HARD_TIMEOUT_MS = 20 * 60 * 1000
+const MAX_TURN_HARD_TIMEOUT_MS = 30 * 60 * 1000
+// A no-output deadline is not proof that a custom endpoint is dead. Give a
+// slow model a short recovery window: any frame that arrives during it resets
+// the inactivity watchdog and keeps the existing turn/subscriber alive.
+const TURN_TIMEOUT_RECOVERY_GRACE_MS = 30_000
+function claudeTurnHardTimeoutMs(model?: string): number {
+  const configured = Number(process.env.AGENT_VIEWER_CLAUDE_TURN_TIMEOUT_MS)
+  if (Number.isFinite(configured) && configured > 0) {
+    return Math.min(MAX_TURN_HARD_TIMEOUT_MS, Math.max(30_000, Math.trunc(configured)))
+  }
+  return model?.trim() ? EXPLICIT_MODEL_TURN_HARD_TIMEOUT_MS : DEFAULT_TURN_HARD_TIMEOUT_MS
+}
 // Grace after an interrupt request before we assume the SDK interrupt was a
 // no-op and recycle the entry. A genuine interrupt emits a result well within
 // this; if it doesn't, recycling frees the FIFO mutex instead of holding it
@@ -304,7 +318,16 @@ export type ClaudePoolEntry = {
 
 export type ClaudePoolRunOptions = {
   signal: AbortSignal
+  /** Selected model, used to give explicit/custom models a wider no-output window. */
+  model?: string
   onMessage(message: SDKMessage): void
+  /**
+   * Frames emitted while no turn subscriber was attached. They are catch-up
+   * output, not evidence that the newly submitted prompt was accepted or
+   * completed. Defaults to onMessage for callers that do not distinguish the
+   * phases.
+   */
+  onBufferedMessage?(message: SDKMessage): void
   /** Called once if the underlying CLI dies mid-turn. */
   onError?(error: Error): void
   /**
@@ -326,6 +349,16 @@ export type ClaudePoolRunOptions = {
   elicit?: ClaudeElicitationHandler
   /** Per-turn native Claude dialog handler. */
   dialog?: OnUserDialog
+}
+
+export function dispatchClaudeBufferedMessages(
+  messages: readonly SDKMessage[],
+  handlers: Pick<ClaudePoolRunOptions, 'onMessage' | 'onBufferedMessage'>,
+): void {
+  const onBufferedMessage = handlers.onBufferedMessage ?? handlers.onMessage
+  for (const message of messages) {
+    try { onBufferedMessage(message) } catch { /* catch-up delivery is best-effort */ }
+  }
 }
 
 type Subscriber = {
@@ -421,6 +454,22 @@ type InternalEntry = {
 // generous headroom while halving the worst-case detached-session footprint.
 const BUFFER_CAP = 64
 
+export function selectClaudePoolEvictions(
+  entries: readonly { poolKey: string; lastActivityAt: number; inTurn: boolean }[],
+  maxEntries = MAX_POOL_SIZE,
+  protectedPoolKey?: string,
+): string[] {
+  return selectIdleProviderPoolEvictions(
+    entries.map((entry) => ({
+      key: entry.poolKey,
+      lastUsed: entry.lastActivityAt,
+      active: entry.inTurn,
+    })),
+    maxEntries,
+    protectedPoolKey,
+  )
+}
+
 export function effortToSdk(effort: ReasoningEffortLevel | undefined):
   | { effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'; thinking?: { type: 'disabled' } | { type: 'adaptive' } }
   | Record<string, never> {
@@ -470,10 +519,10 @@ class ClaudePool {
       return { ...this.toPublic(existing, configuration), reused: true }
     }
     if (existing) this.recycleInternal(existing, existing.pendingRecycleReason ?? 'options-changed')
-    this.ensureCapacity()
     const entry = this.spawn(opts)
     entry.poolKey = poolKey
     this.entries.set(poolKey, entry)
+    this.enforceCapacity(poolKey)
     this.ensureSweep()
     return { ...this.toPublic(entry, entry.settingsTail), reused: false }
   }
@@ -776,7 +825,7 @@ class ClaudePool {
     // turn's subscriber and kills that live turn out from under its SSE
     // stream, surfacing as "Lost connection to Claude mid-turn" even though
     // the turn itself was healthy. Defer to the same inTurn=false transition
-    // ensureCapacity/sweep already respect; the entry's stale model/
+    // capacity enforcement and the idle sweep already respect; the stale model/
     // permission state just gets retried on the next acquire() in the
     // meantime, same as when compatible() rejects it for other reasons.
     if (entry.inTurn) {
@@ -841,17 +890,21 @@ class ClaudePool {
     try { broadcastClaudeRecycled(entry.sessionId) } catch { /* swallow */ }
   }
 
-  private ensureCapacity(): void {
-    if (this.entries.size < MAX_POOL_SIZE) return
-    // Only idle entries are eviction candidates. An in-turn entry's
-    // lastActivityAt can look ancient mid-turn, but recycling it would kill a
-    // live turn; if every entry is mid-turn, temporarily exceed the cap.
-    let oldest: InternalEntry | null = null
-    for (const entry of this.entries.values()) {
-      if (entry.inTurn) continue
-      if (!oldest || entry.lastActivityAt < oldest.lastActivityAt) oldest = entry
+  private enforceCapacity(protectedPoolKey?: string): void {
+    const evictions = selectClaudePoolEvictions(
+      Array.from(this.entries.values(), (entry) => ({
+        poolKey: entry.poolKey,
+        lastActivityAt: entry.lastActivityAt,
+        inTurn: entry.inTurn,
+      })),
+      MAX_POOL_SIZE,
+      protectedPoolKey,
+    )
+    for (const poolKey of evictions) {
+      const entry = this.entries.get(poolKey)
+      if (!entry || entry.inTurn) continue
+      this.recycleInternal(entry, 'lru-evict')
     }
-    if (oldest) this.recycleInternal(oldest, 'lru-evict')
   }
 
   private ensureSweep(): void {
@@ -972,8 +1025,6 @@ class ClaudePool {
     const poolKey = `${currentProviderInstanceId('claude')}:${sessionId}`
     const existing = this.entries.get(poolKey)
     if (existing) this.recycleInternal(existing, 'pre-adopt-replace')
-    this.ensureCapacity()
-
     const entry: InternalEntry = {
       sessionId,
       poolKey,
@@ -1015,6 +1066,7 @@ class ClaudePool {
     }
 
     this.entries.set(poolKey, entry)
+    this.enforceCapacity(poolKey)
     this.ensureSweep()
     void this.pumpQueryToSubscriber(entry)
   }
@@ -1067,6 +1119,7 @@ class ClaudePool {
     let resultSeen = false
     let queuedTurnsPending = false
     let tailTimer: ReturnType<typeof setTimeout> | null = null
+    let recoveryTimer: ReturnType<typeof setTimeout> | null = null
     const scheduleTailDrain = () => {
       if (tailTimer) clearTimeout(tailTimer)
       tailTimer = setTimeout(() => {
@@ -1083,14 +1136,29 @@ class ClaudePool {
     // is the mutex getting stranded on a subprocess that has gone silent, so
     // the timer resets on every message received and only fires after the
     // session produces nothing at all for the full window.
-    let hardTimer = setTimeout(() => {
+    const turnHardTimeoutMs = claudeTurnHardTimeoutMs(options.model)
+    const expireAfterRecoveryGrace = () => {
+      recoveryTimer = null
       rejectTurn(new Error('Claude turn exceeded hard timeout'))
-    }, TURN_HARD_TIMEOUT_MS)
-    const resetHardTimer = () => {
-      clearTimeout(hardTimer)
+    }
+    const armHardTimer = () => {
       hardTimer = setTimeout(() => {
-        rejectTurn(new Error('Claude turn exceeded hard timeout'))
-      }, TURN_HARD_TIMEOUT_MS)
+        // Do not reject immediately at the deadline. A slow custom endpoint
+        // can resume just after the deadline; activity during this grace
+        // period is treated as recovery rather than a failed turn.
+        if (recoveryTimer) clearTimeout(recoveryTimer)
+        recoveryTimer = setTimeout(expireAfterRecoveryGrace, TURN_TIMEOUT_RECOVERY_GRACE_MS)
+      }, turnHardTimeoutMs)
+    }
+    let hardTimer: ReturnType<typeof setTimeout> | null = null
+    armHardTimer()
+    const resetHardTimer = () => {
+      if (hardTimer) clearTimeout(hardTimer)
+      if (recoveryTimer) {
+        clearTimeout(recoveryTimer)
+        recoveryTimer = null
+      }
+      armHardTimer()
     }
 
     const subscriber: Subscriber = {
@@ -1132,15 +1200,17 @@ class ClaudePool {
       },
     }
 
-    // Replay buffered messages first (init / state events emitted between
-    // entry spawn and this subscribe).
+    // Replay buffered messages first (init/state events or output from a
+    // detached prior turn). Catch-up frames must not flow through `subscriber`:
+    // a buffered result/idle frame belongs to work that pre-dates this prompt
+    // and would otherwise resolve the new turn before pushUserMessage runs.
     const replay = entry.buffer.splice(0)
+    dispatchClaudeBufferedMessages(replay, options)
     entry.subscriber = subscriber
-    for (const buffered of replay) subscriber.push(buffered)
     if (!entry.alive) {
       entry.inTurn = false
       entry.subscriber = null
-      clearTimeout(hardTimer)
+      if (hardTimer) clearTimeout(hardTimer)
       releaseMutex()
       throw new Error('Claude pool entry was recycled before turn could start')
     }
@@ -1182,7 +1252,7 @@ class ClaudePool {
       entry.subscriber = null
       entry.inTurn = false
       if (interruptFallbackTimer) clearTimeout(interruptFallbackTimer)
-      clearTimeout(hardTimer)
+      if (hardTimer) clearTimeout(hardTimer)
       options.signal.removeEventListener('abort', abortHandler)
       releaseMutex()
       throw err instanceof Error ? err : new Error(String(err))
@@ -1202,7 +1272,8 @@ class ClaudePool {
       entry.bridgeBox.dialog = null
       if (tailTimer) clearTimeout(tailTimer)
       if (interruptFallbackTimer) clearTimeout(interruptFallbackTimer)
-      clearTimeout(hardTimer)
+      if (hardTimer) clearTimeout(hardTimer)
+      if (recoveryTimer) clearTimeout(recoveryTimer)
       options.signal.removeEventListener('abort', abortHandler)
       entry.subscriber = null
       entry.inTurn = false
@@ -1216,6 +1287,11 @@ class ClaudePool {
         const reason = entry.pendingRecycleReason
         entry.pendingRecycleReason = null
         this.recycleInternal(entry, reason)
+      } else {
+        // Busy entries can temporarily push the pool over its soft cap. The
+        // first safe turn boundary shrinks it again without sacrificing the
+        // just-completed warm session.
+        this.enforceCapacity(entry.poolKey)
       }
     }
   }

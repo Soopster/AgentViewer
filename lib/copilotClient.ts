@@ -12,6 +12,7 @@ import {
   type ElicitationHandler,
 } from '@github/copilot-sdk'
 import { getCoordinatorCopilotTools } from './agentCoordinationSdkTools'
+import { selectIdleProviderPoolEvictions } from './providerPoolPolicy'
 
 function normalizedEnv(value: string | undefined): string | undefined {
   const trimmed = value?.trim()
@@ -160,7 +161,12 @@ export function copilotIntegrationDiagnostics(sessionId?: string): string[] {
 // turns auto-approve, others route through an interactive bridge. We resume
 // with a stable dispatcher that reads the current handler from this map so a
 // turn can swap behavior without forcing a re-resume.
-type CopilotPoolEntry = { session: CopilotSession; lastUsed: number; timer: ReturnType<typeof setTimeout> }
+type CopilotPoolEntry = {
+  session: CopilotSession
+  lastUsed: number
+  activeUses: number
+  timer: ReturnType<typeof setTimeout> | null
+}
 
 declare global {
   // Copilot's client and streaming sessions retain JSON-RPC subscriptions and
@@ -287,6 +293,7 @@ async function resumeCopilotSession(
 // streaming-enabled session per sessionId and let callers subscribe via the
 // session's native `on()` API per turn. Evicted after TTL to bound memory.
 const COPILOT_SESSION_TTL_MS = 5 * 60 * 1000
+const COPILOT_SESSION_POOL_MAX = 8
 const copilotSessionPool = globalThis.__agentViewerCopilotSessionPool
   ?? (globalThis.__agentViewerCopilotSessionPool = new Map<string, CopilotPoolEntry>())
 const copilotSessionInflight = globalThis.__agentViewerCopilotSessionInflight
@@ -297,6 +304,44 @@ export function copilotPoolSize(): number {
   return copilotSessionPool.size
 }
 
+export function selectCopilotPoolEvictions(
+  entries: readonly { sessionId: string; lastUsed: number; activeUses: number }[],
+  maxEntries = COPILOT_SESSION_POOL_MAX,
+  protectedSessionId?: string,
+): string[] {
+  return selectIdleProviderPoolEvictions(
+    entries.map((entry) => ({
+      key: entry.sessionId,
+      lastUsed: entry.lastUsed,
+      active: entry.activeUses > 0,
+    })),
+    maxEntries,
+    protectedSessionId,
+  )
+}
+
+function enforceCopilotPoolLimit(protectedSessionId?: string): void {
+  const evictions = selectCopilotPoolEvictions(
+    Array.from(copilotSessionPool, ([sessionId, entry]) => ({
+      sessionId,
+      lastUsed: entry.lastUsed,
+      activeUses: entry.activeUses,
+    })),
+    COPILOT_SESSION_POOL_MAX,
+    protectedSessionId,
+  )
+  for (const sessionId of evictions) {
+    const entry = copilotSessionPool.get(sessionId)
+    if (!entry || entry.activeUses > 0) continue
+    if (entry.timer) clearTimeout(entry.timer)
+    copilotSessionPool.delete(sessionId)
+    clearCopilotPermissionHandler(sessionId)
+    clearCopilotElicitationHandler(sessionId)
+    copilotLastStopReason.delete(sessionId)
+    void entry.session.disconnect().catch(() => {})
+  }
+}
+
 function scheduleCopilotEviction(sessionId: string): void {
   const entry = copilotSessionPool.get(sessionId)
   if (!entry) return
@@ -304,7 +349,10 @@ function scheduleCopilotEviction(sessionId: string): void {
   entry.timer = setTimeout(async () => {
     const current = copilotSessionPool.get(sessionId)
     if (!current) return
-    if (Date.now() - current.lastUsed < COPILOT_SESSION_TTL_MS) return
+    if (current.activeUses > 0 || Date.now() - current.lastUsed < COPILOT_SESSION_TTL_MS) {
+      scheduleCopilotEviction(sessionId)
+      return
+    }
     copilotSessionPool.delete(sessionId)
     clearCopilotPermissionHandler(sessionId)
     clearCopilotElicitationHandler(sessionId)
@@ -313,6 +361,29 @@ function scheduleCopilotEviction(sessionId: string): void {
   }, COPILOT_SESSION_TTL_MS)
   if (typeof entry.timer === 'object' && entry.timer && 'unref' in entry.timer) {
     (entry.timer as { unref: () => void }).unref()
+  }
+}
+
+/**
+ * Protect a warm session for the complete composer turn, not just acquisition.
+ * Long-running Copilot agents regularly outlive the five-minute idle TTL.
+ */
+export function retainCopilotSession(sessionId: string, session: CopilotSession): () => void {
+  const entry = copilotSessionPool.get(sessionId)
+  if (!entry || entry.session !== session) return () => {}
+  entry.activeUses += 1
+  entry.lastUsed = Date.now()
+  scheduleCopilotEviction(sessionId)
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    const current = copilotSessionPool.get(sessionId)
+    if (!current || current.session !== session) return
+    current.activeUses = Math.max(0, current.activeUses - 1)
+    current.lastUsed = Date.now()
+    scheduleCopilotEviction(sessionId)
+    enforceCopilotPoolLimit(sessionId)
   }
 }
 
@@ -332,10 +403,12 @@ export async function acquireCopilotSession(sessionId: string): Promise<CopilotS
     const entry: CopilotPoolEntry = {
       session,
       lastUsed: Date.now(),
-      timer: setTimeout(() => {}, 0),
+      activeUses: 0,
+      timer: null,
     }
     copilotSessionPool.set(sessionId, entry)
     scheduleCopilotEviction(sessionId)
+    enforceCopilotPoolLimit(sessionId)
     return session
   })
   copilotSessionInflight.set(sessionId, build)
@@ -347,9 +420,10 @@ export async function evictCopilotSession(sessionId: string): Promise<void> {
   await copilotSessionInflight.get(sessionId)?.catch(() => {})
   const entry = copilotSessionPool.get(sessionId)
   if (!entry) return
-  clearTimeout(entry.timer)
+  if (entry.timer) clearTimeout(entry.timer)
   copilotSessionPool.delete(sessionId)
   clearCopilotPermissionHandler(sessionId)
   clearCopilotElicitationHandler(sessionId)
+  copilotLastStopReason.delete(sessionId)
   await entry.session.disconnect().catch(() => {})
 }

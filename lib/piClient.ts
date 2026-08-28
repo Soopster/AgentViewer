@@ -8,6 +8,7 @@ import type {
 import type { AgentMessage } from '@earendil-works/pi-agent-core'
 import { getCoordinatorPiTools } from './agentCoordinationSdkTools'
 import { appendPiActivity, beginPiActivity, completePiActivity, failPiActivity, updatePiActivity } from './piActivity'
+import { selectIdleProviderPoolEvictions } from './providerPoolPolicy'
 
 // The Pi SDK is ~86MB resident once loaded (measured) — by far the heaviest
 // provider SDK. Import it lazily and cache the module so a Claude/Codex/etc.
@@ -475,18 +476,29 @@ export function selectPiPoolEvictions(
   maxEntries = PI_SESSION_POOL_MAX,
   protectedSessionId?: string,
 ): string[] {
-  const excess = entries.length - Math.max(0, maxEntries)
-  if (excess <= 0) return []
-  return entries
-    .filter((entry) => !entry.isStreaming && entry.sessionId !== protectedSessionId)
-    .toSorted((a, b) => a.lastUsed - b.lastUsed)
-    .slice(0, excess)
-    .map((entry) => entry.sessionId)
+  return selectIdleProviderPoolEvictions(
+    entries.map((entry) => ({
+      key: entry.sessionId,
+      lastUsed: entry.lastUsed,
+      active: entry.isStreaming,
+    })),
+    maxEntries,
+    protectedSessionId,
+  )
 }
 
 /** Number of warm Pi AgentSessions currently pooled. Diagnostics only. */
 export function piPoolSize(): number {
   return piSessionPool.size
+}
+
+/** Refresh warm retention from a completed composer operation and recover a soft-cap overflow. */
+export function markPiAgentSessionUsed(sessionId: string): void {
+  const entry = piSessionPool.get(sessionId)
+  if (!entry) return
+  entry.lastUsed = Date.now()
+  schedulePiEviction(sessionId)
+  enforcePiPoolLimit(sessionId)
 }
 
 // Tear down a pooled AgentSession's background work (retry/compaction loops,
@@ -594,7 +606,11 @@ export async function openPiAgentSession(sessionId: string): Promise<AgentSessio
   return build
 }
 
-export function evictPiAgentSession(sessionId: string): void {
+export async function evictPiAgentSession(sessionId: string): Promise<void> {
+  // A close can race selection-time prewarm. Let the single-flight build settle
+  // before removing it so the completed build cannot repopulate the pool after
+  // the user has already closed the session.
+  await piSessionInflight.get(sessionId)?.catch(() => {})
   const entry = piSessionPool.get(sessionId)
   if (!entry) return
   clearTimeout(entry.timer)
@@ -690,7 +706,7 @@ export async function deletePiSession(sessionId: string): Promise<void> {
       ?? sessions?.find((session) => session.id === sessionId)?.path
     if (!sessionPath) throw new Error(`Pi session not found: ${sessionId}`)
 
-    evictPiAgentSession(sessionId)
+    await evictPiAgentSession(sessionId)
     const { unlink } = await import('node:fs/promises')
     await unlink(sessionPath)
     sessionPathCache.delete(sessionId)

@@ -102,7 +102,7 @@ declare global {
   // eslint-disable-next-line no-var
   var __agentViewerCodexResumedThreads: Map<string, string | null> | undefined
   // eslint-disable-next-line no-var
-  var __agentViewerCodexResumeInvalidatorInstalled: boolean | undefined
+  var __agentViewerCodexResumeInvalidators: Set<string> | undefined
   // eslint-disable-next-line no-var
   var __agentViewerCodexResumeInflight: Map<string, Promise<{ model: string | null }>> | undefined
 }
@@ -110,6 +110,8 @@ const codexResumedThreads = globalThis.__agentViewerCodexResumedThreads
   ?? (globalThis.__agentViewerCodexResumedThreads = new Map<string, string | null>())
 const codexResumeInflight = globalThis.__agentViewerCodexResumeInflight
   ?? (globalThis.__agentViewerCodexResumeInflight = new Map<string, Promise<{ model: string | null }>>())
+const codexResumeInvalidators = globalThis.__agentViewerCodexResumeInvalidators
+  ?? (globalThis.__agentViewerCodexResumeInvalidators = new Set<string>())
 
 export function codexThreadKey(sessionId: string): string {
   return `${currentProviderInstanceId('codex')}:${sessionId}`
@@ -117,9 +119,15 @@ export function codexThreadKey(sessionId: string): string {
 
 export async function ensureCodexThreadResumed(sessionId: string): Promise<{ model: string | null }> {
   const client = getCodexClient()
-  if (!globalThis.__agentViewerCodexResumeInvalidatorInstalled) {
-    globalThis.__agentViewerCodexResumeInvalidatorInstalled = true
-    client.subscribeDisconnect(() => codexResumedThreads.clear())
+  const instanceId = currentProviderInstanceId('codex')
+  if (!codexResumeInvalidators.has(instanceId)) {
+    codexResumeInvalidators.add(instanceId)
+    client.subscribeDisconnect(() => {
+      const prefix = `${instanceId}:`
+      for (const key of codexResumedThreads.keys()) {
+        if (key.startsWith(prefix)) codexResumedThreads.delete(key)
+      }
+    })
   }
   const key = codexThreadKey(sessionId)
   const cached = codexResumedThreads.get(key)

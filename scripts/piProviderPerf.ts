@@ -102,7 +102,7 @@ try {
   assert.ok(metrics.hotWindow5000Ms < 10, `hot 5000-message Pi window exceeded 10ms: ${metrics.hotWindow5000Ms}ms`)
   console.log(JSON.stringify(metrics, null, 2))
 } finally {
-  evictPiAgentSession(sessionId)
+  await evictPiAgentSession(sessionId)
   if (previousSessionDir === undefined) delete process.env.PI_SESSION_DIR
   else process.env.PI_SESSION_DIR = previousSessionDir
   if (previousDisableSessionIndex === undefined) delete process.env.AGENT_VIEWER_DISABLE_SESSION_INDEX

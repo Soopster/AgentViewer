@@ -1,5 +1,4 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { once } from 'node:events'
 import {
   CodexJsonRpcResponse,
   type CodexClientMethod,
@@ -48,7 +47,22 @@ class CodexAppServerClient {
   private disconnectListeners = new Set<DisconnectListener>()
   private stdoutBuffer = ''
   private initializePromise: Promise<void> | null = null
-  private exitPromise: Promise<void> | null = null
+
+  private handleDisconnect(child: ChildProcessWithoutNullStreams, error: Error): void {
+    if (this.child !== child) return
+    for (const [id, pending] of this.pending) {
+      this.pending.delete(id)
+      pending.reject(error)
+    }
+    this.child = null
+    this.initializePromise = null
+    // Discard any partial line buffered from the dead process so it cannot
+    // corrupt the first frame parsed from the next respawned app-server.
+    this.stdoutBuffer = ''
+    for (const listener of this.disconnectListeners) {
+      try { listener() } catch { /* a listener throwing must not strand the others */ }
+    }
+  }
 
   private ensureProcess(): ChildProcessWithoutNullStreams {
     if (this.child && !this.child.killed) return this.child
@@ -65,28 +79,16 @@ class CodexAppServerClient {
     child.stderr.on('data', () => {
       // The app-server emits CLI warnings on stderr. Ignore them unless the process exits.
     })
-    child.on('exit', (code, signal) => {
-      const error = new Error(`Codex app-server exited (${code ?? 'null'}${signal ? `/${signal}` : ''})`)
-      for (const [id, pending] of this.pending) {
-        this.pending.delete(id)
-        pending.reject(error)
-      }
-      this.child = null
-      this.initializePromise = null
-      this.exitPromise = null
-      // Discard any partial line buffered from the dead process so it can't
-      // corrupt the first frame parsed from the next respawned app-server.
-      this.stdoutBuffer = ''
-      // Notify subscribers (the harness, hence every active turn stream) that
-      // the app-server died. Without this an in-flight turn's consume loop
-      // would block forever waiting for events that can never arrive.
-      for (const listener of this.disconnectListeners) {
-        try { listener() } catch { /* a listener throwing must not strand the others */ }
-      }
-    })
-
     this.child = child
-    this.exitPromise = once(child, 'exit').then(() => undefined).catch(() => undefined)
+    child.once('error', (cause) => {
+      this.handleDisconnect(child, new Error(`Failed to start Codex app-server: ${cause.message}`, { cause }))
+    })
+    child.once('exit', (code, signal) => {
+      this.handleDisconnect(
+        child,
+        new Error(`Codex app-server exited (${code ?? 'null'}${signal ? `/${signal}` : ''})`),
+      )
+    })
     return child
   }
 
@@ -153,7 +155,7 @@ class CodexAppServerClient {
   private async initialize(): Promise<void> {
     if (this.initializePromise) return this.initializePromise
 
-    this.initializePromise = (async () => {
+    const initialization = (async () => {
       await this.request('initialize', {
         clientInfo: {
           name: 'agent-viewer',
@@ -163,8 +165,14 @@ class CodexAppServerClient {
         capabilities: CODEX_INITIALIZE_CAPABILITIES,
       }, true)
     })()
-
-    return this.initializePromise
+    const recoverable = initialization.catch((error) => {
+      // A transient initialize/auth transport failure must not poison this
+      // process instance forever. The next request gets one fresh handshake.
+      if (this.initializePromise === recoverable) this.initializePromise = null
+      throw error
+    })
+    this.initializePromise = recoverable
+    return recoverable
   }
 
   async request<M extends CodexClientMethod>(

@@ -125,15 +125,18 @@ import {
 } from './mappedMessagesCache'
 import { backgroundRunningSession, clearRunningSession, getRunningSession, getRunningSessionInfo, getSessionRuntimeDiagnostics, interruptRunningSession, listRunningSessionRefs, listWaitingSessions, setRunningSession, steerRunningSessionIdempotent } from './sessionRuntime'
 import {
+  acpPoolSize,
   acpPendingRequests,
   acquireAcpSession,
   closeAcpSession,
+  getAcpSessionError,
   interruptAcpSession,
   peekAcpSession,
   readAcpMessagesSince,
   resolveAcpElicitation,
   respondAcpPermissionDecision,
   sendAcpPrompt,
+  waitForAcpActivity,
 } from './acpClientPool'
 import { mapAcpBufferedMessages } from './acpMapper'
 import { listViewerAttention } from './viewerAttention'
@@ -172,7 +175,7 @@ import type {
 type CopilotReasoningEffort = Extract<ReasoningEffortLevel, 'low' | 'medium' | 'high' | 'xhigh'>
 
 import { createSessionControlQuery } from './sdkControlQuery'
-import { acquireCopilotSession, copilotPoolSize, copilotSessionConfigOverrides, evictCopilotSession, getCopilotClient, setCopilotElicitationHandler, setCopilotPermissionHandler, steerCopilotSession } from './copilotClient'
+import { acquireCopilotSession, copilotPoolSize, copilotSessionConfigOverrides, evictCopilotSession, getCopilotClient, retainCopilotSession, setCopilotElicitationHandler, setCopilotPermissionHandler, steerCopilotSession } from './copilotClient'
 import { timeAsync } from './perfLog'
 import { registerDiagnosticsReporter } from './runtimeDiagnostics'
 import {
@@ -236,6 +239,7 @@ import {
   evictPiAgentSession,
   forkPiSession,
   getPiSessionEntries,
+  markPiAgentSessionUsed,
   openPiAgentSession,
   piPoolSize,
   piSessionEntryCacheDiagnostics,
@@ -2547,6 +2551,27 @@ function readAcpMessagesAll(sessionId: string, provider: 'claude-acp' | 'codex-a
   return mapAcpBufferedMessages(sessionId, provider, messages)
 }
 
+// Provider adapters deliberately cache their normalized SessionMessage object
+// graphs. Adding provider-instance provenance with an unconditional object
+// spread discarded that identity on every poll, forcing downstream threading
+// and virtual-row caches to redo work even when the transcript was unchanged.
+// Cache one lightweight variant per raw message+instance without mutating the
+// adapter-owned object (Claude/Codex instances can legitimately share ids).
+const providerInstanceMessageVariants = new WeakMap<SessionMessage, Map<string, SessionMessage>>()
+function messageForProviderInstance(message: SessionMessage, instanceId: string): SessionMessage {
+  if (message.providerInstanceId === instanceId) return message
+  let variants = providerInstanceMessageVariants.get(message)
+  if (!variants) {
+    variants = new Map<string, SessionMessage>()
+    providerInstanceMessageVariants.set(message, variants)
+  }
+  const cached = variants.get(instanceId)
+  if (cached) return cached
+  const marked = { ...message, providerInstanceId: instanceId }
+  variants.set(instanceId, marked)
+  return marked
+}
+
 export function listViewSessionMessageWindow(sessionId: string, params: MessageListParams, providerOverride?: AgentProvider): Promise<SessionMessageWindow> {
   return timeAsync('listViewSessionMessageWindow', () => listViewSessionMessageWindowImpl(sessionId, params, providerOverride))
 }
@@ -2557,7 +2582,7 @@ async function listViewSessionMessageWindowImpl(sessionId: string, params: Messa
   if (!adapter.readAllMessages) unsupported(provider, 'readAllMessages')
   const { messages: raw, externalWriter } = await adapter.readAllMessages(sessionId)
   const instanceId = currentProviderInstanceId(provider)
-  const messages = raw.map((message) => ({ ...message, providerInstanceId: instanceId }))
+  const messages = raw.map((message) => messageForProviderInstance(message, instanceId))
   await syncMessagesBestEffort(provider, sessionId, messages)
   const window = windowForParams(messages, params)
   return externalWriter ? { ...window, externalWriter: true } : window
@@ -3911,6 +3936,15 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
               /* downstream closed; ignore — the turn keeps running in the pool */
             }
           }
+          const onBufferedTurnMessage = (msg: SDKMessage) => {
+            // Catch-up frames were produced before this prompt reached the
+            // subprocess. Forward useful output/usage, but never use them to
+            // acknowledge the new turn, retire its liveness probe, or suppress
+            // a safe pre-output retry.
+            const usage = claudeResultContextUsage(msg)
+            if (usage) emitUsage(usage)
+            try { poolDeltaCoalescer.emit(msg) } catch { /* downstream closed */ }
+          }
           const onTurnError = (_err: Error) => {
             // A respawn we triggered ourselves already recycled the entry.
             if (respawnRequested) return
@@ -3933,10 +3967,15 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
               // starts the turn where Claude responds to the output.
               await activeEntry.run(buildClaudeBashInputMessage(bangShell), {
                 signal: turnAbort.signal,
+                model,
                 onMessage: (msg) => {
                   sawActivity = true
                   if ((msg as { type?: string }).type === 'result') return
                   onTurnMessage(msg)
+                },
+                onBufferedMessage: (msg) => {
+                  if ((msg as { type?: string }).type === 'result') return
+                  onBufferedTurnMessage(msg)
                 },
                 onError: onTurnError,
                 onSubmitted: () => armWarmProbe?.(),
@@ -3947,20 +3986,24 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
               killBangShell = null
               await activeEntry.run(buildClaudeBashOutputMessage(bangResult), {
                 signal: turnAbort.signal,
+                model,
                 bridge,
                 elicit,
                 dialog,
                 onMessage: onTurnMessage,
+                onBufferedMessage: onBufferedTurnMessage,
                 onError: onTurnError,
                 onSubmitted: () => armWarmProbe?.(),
               })
             } else {
               await activeEntry.run(pushMessage!, {
                 signal: turnAbort.signal,
+                model,
                 bridge,
                 elicit,
                 dialog,
                 onMessage: onTurnMessage,
+                onBufferedMessage: onBufferedTurnMessage,
                 onError: onTurnError,
                 onSubmitted: () => armWarmProbe?.(),
               })
@@ -5333,6 +5376,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
   const stream = new ReadableStream({
     async start(controller) {
       let session: Awaited<ReturnType<typeof acquireCopilotSession>> | null = null
+      let releasePooledSession: (() => void) | null = null
       let unsubscribe: (() => void) | null = null
       let cleanedUp = false
       let downstreamClosed = false
@@ -5502,6 +5546,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
             .catch(() => [] as CopilotModelInfo[]),
         ])
         session = acquiredSession
+        releasePooledSession = retainCopilotSession(sessionId, acquiredSession)
         if (permissionMode) {
           await session.rpc.permissions.setAllowAll({ mode: permissionMode })
         }
@@ -5751,6 +5796,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         }
         clearRunningSession(sessionId, turnRequestId)
         try { unsubscribe?.() } catch { /* ignore */ }
+        releasePooledSession?.()
         // Do NOT evict the warm session on a clean turn completion. Evicting
         // here disconnects the JSON-RPC session and forces a full resumeSession
         // (up to a 20s timeout) on the very next send, defeating the warm pool
@@ -5832,6 +5878,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
       const close = () => {
         if (cleanedUp) return
         cleanedUp = true
+        markPiAgentSessionUsed(targetSessionId)
         cancelPendingPiUiRequests(targetSessionId, activePiUiIds)
         clearPiUiHandler?.()
         releasePiOperation?.()
@@ -6363,6 +6410,14 @@ export async function prewarmViewSession(params: {
     )
     return
   }
+  if (provider === 'claude-acp' || provider === 'codex-acp') {
+    await acquireAcpSession(
+      params.sessionId,
+      acpAgentKindOf(provider),
+      params.cwd ?? process.cwd(),
+    )
+    return
+  }
   // opencode connects through a long-lived local server — no spawn to hide.
 }
 
@@ -6444,7 +6499,7 @@ async function createLmstudioStream(sessionId: string, signal: AbortSignal, body
   })
 }
 
-const ACP_POLL_INTERVAL_MS = 200
+const ACP_ACTIVITY_BACKSTOP_MS = 1000
 
 async function createAcpStream(
   provider: 'claude-acp' | 'codex-acp',
@@ -6454,11 +6509,13 @@ async function createAcpStream(
 ): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
   const cwd = typeof body.cwd === 'string' && body.cwd.trim() ? body.cwd.trim() : process.cwd()
+  const detachOnClientAbort = body.detachOnClientAbort === true
   const encoder = new TextEncoder()
 
   const stream = new ReadableStream({
     async start(controller) {
       let downstreamClosed = false
+      let requestAborted = false
       const safeEnqueue = (chunk: string) => {
         if (downstreamClosed) return
         try {
@@ -6476,30 +6533,46 @@ async function createAcpStream(
           /* downstream already closed */
         }
       }
+      const onAbort = () => {
+        requestAborted = true
+        downstreamClosed = true
+        if (!detachOnClientAbort) void interruptAcpSession(sessionId).catch(() => {})
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+      if (signal.aborted) onAbort()
 
       try {
         await acquireAcpSession(sessionId, acpAgentKindOf(provider), cwd)
       } catch (err) {
         safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Failed to start ACP session' })}\n\n`)
+        signal.removeEventListener('abort', onAbort)
         close()
         return
       }
 
-      setRunningSession(sessionId, {
-        provider,
-        interrupt: async () => {
-          await interruptAcpSession(sessionId)
-        },
-      })
-      broadcastLiveSessionTurnStart(provider, sessionId)
-      safeEnqueue(`event: turn-accepted\ndata: ${JSON.stringify({ sessionId, provider })}\n\n`)
-
-      let lastIndex = -1
+      // The pool buffer is the canonical transcript across turns. Begin at its
+      // current tail so this SSE stream sends only updates caused by the new
+      // prompt instead of replaying every prior ACP message on every send.
+      let lastIndex = readAcpMessagesSince(sessionId, Number.MAX_SAFE_INTEGER).latestIndex
+      let claimedTurn = false
       try {
+        if (requestAborted && !detachOnClientAbort) return
+        // sendAcpPrompt synchronously claims the pool entry before starting the
+        // async prompt. Only publish the running-session handle after that claim
+        // succeeds, so a duplicate stream cannot overwrite/clear the real turn.
         sendAcpPrompt(sessionId, userMessage)
+        claimedTurn = true
+        setRunningSession(sessionId, {
+          provider,
+          interrupt: async () => {
+            await interruptAcpSession(sessionId)
+          },
+        })
+        broadcastLiveSessionTurnStart(provider, sessionId)
+        safeEnqueue(`event: turn-accepted\ndata: ${JSON.stringify({ sessionId, provider })}\n\n`)
         // sendAcpPrompt sets inTurn synchronously before returning, so this
-        // poll loop's very first iteration always observes a running turn.
-        while (!signal.aborted) {
+        // activity loop's very first iteration always observes a running turn.
+        while (!requestAborted || detachOnClientAbort) {
           const { messages, latestIndex } = readAcpMessagesSince(sessionId, lastIndex)
           if (messages.length > 0) {
             lastIndex = latestIndex
@@ -6510,16 +6583,30 @@ async function createAcpStream(
             }
           }
           const entry = peekAcpSession(sessionId)
-          if (!entry || !entry.alive || !entry.inTurn) break
-          await new Promise((resolve) => setTimeout(resolve, ACP_POLL_INTERVAL_MS))
+          if (!entry || !entry.alive) {
+            throw new Error(getAcpSessionError(sessionId) ?? 'ACP provider session ended before the turn completed.')
+          }
+          if (!entry.inTurn) {
+            if (entry.lastError) throw new Error(entry.lastError)
+            break
+          }
+          await waitForAcpActivity(
+            sessionId,
+            lastIndex,
+            ACP_ACTIVITY_BACKSTOP_MS,
+            detachOnClientAbort ? undefined : signal,
+          )
         }
       } catch (err) {
-        if (!signal.aborted) {
+        if (!requestAborted) {
           safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown ACP error' })}\n\n`)
         }
       } finally {
-        clearRunningSession(sessionId)
-        broadcastLiveSessionTurnEnd(provider, sessionId)
+        signal.removeEventListener('abort', onAbort)
+        if (claimedTurn) {
+          clearRunningSession(sessionId)
+          broadcastLiveSessionTurnEnd(provider, sessionId)
+        }
         close()
       }
     },
@@ -6777,11 +6864,11 @@ export async function closeViewSession(sessionId: string, providerOverride?: Age
     return
   }
   if (provider === 'pi') {
-    evictPiAgentSession(sessionId)
+    await evictPiAgentSession(sessionId)
     return
   }
   if (provider === 'claude-acp' || provider === 'codex-acp') {
-    closeAcpSession(sessionId)
+    await closeAcpSession(sessionId)
   }
 }
 
@@ -7122,6 +7209,7 @@ export function getServerMemoryDiagnostics(): Record<string, number> {
     piEntryCacheSessions: piEntryCache.sessions,
     piEntryCacheEntries: piEntryCache.entries,
     copilotPool: copilotPoolSize(),
+    acpPool: acpPoolSize(),
   }
 }
 

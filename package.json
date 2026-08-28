@@ -46,6 +46,7 @@
     "tui:worker-perf": "bun run ./tui/opentui/workerLatencyPerf.ts",
     "pi:provider:smoke": "bun run ./scripts/piProviderSmoke.ts",
     "pi:provider:perf": "bun run ./scripts/piProviderPerf.ts",
+    "provider:pools:smoke": "bun run ./scripts/providerPoolSmoke.ts",
     "opencode:harness:smoke": "node --import tsx ./scripts/opencodeHarnessSmoke.ts && node --import tsx ./scripts/opencodeHarnessTransportSmoke.ts && node --import tsx ./scripts/opencodeHarnessFallbackSmoke.ts && node --import tsx ./scripts/opencodeHarnessSnapshotSmoke.ts && node --import tsx ./scripts/opencodeProviderListSmoke.ts && node --import tsx ./scripts/opencodeMessageCacheSmoke.ts",
     "opencode:provider:perf": "node --import tsx ./scripts/opencodeProviderPerf.ts",
     "tui:smoke": "node ./scripts/withoutEnv.mjs AGENT_VIEWER_ATTACH AGENT_VIEWER_COORD_WORKER AGENT_VIEWER_COORD_IDENTITY_FILE -- npm run tui:smoke:run",

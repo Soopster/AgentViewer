@@ -27,6 +27,8 @@ import {
   type RequestPermissionResponse,
 } from '@agentclientprotocol/sdk'
 import { resolveAcpAgentCommand, type AcpAgentKind } from './acpAgentSpawn'
+import { selectIdleProviderPoolEvictions } from './providerPoolPolicy'
+import { DEFAULT_PROVIDER_STARTUP_TIMEOUT_MS } from './providerWarmup'
 
 // Buffered updates the poll+offset window can never realistically approach
 // in one session's lifetime; caps memory for an abandoned/runaway session.
@@ -38,6 +40,29 @@ const IDLE_TTL_MS = 15 * 60 * 1000
 // treat the subprocess as hung, kill it, and let the next acquire respawn.
 const STALL_TTL_MS = 5 * 60 * 1000
 const SWEEP_INTERVAL_MS = 60 * 1000
+const MAX_POOL_SIZE = 8
+const TURN_STOP_FALLBACK_MS = 250
+const acpRecentErrors = new Map<string, string>()
+
+export function selectAcpPoolEvictions(
+  entries: readonly { sessionId: string; lastActivityAt: number; inTurn: boolean }[],
+  maxEntries = MAX_POOL_SIZE,
+  protectedSessionId?: string,
+): string[] {
+  return selectIdleProviderPoolEvictions(
+    entries.map((entry) => ({
+      key: entry.sessionId,
+      lastUsed: entry.lastActivityAt,
+      active: entry.inTurn,
+    })),
+    maxEntries,
+    protectedSessionId,
+  )
+}
+
+export function getAcpSessionError(sessionId: string): string | null {
+  return acpRecentErrors.get(sessionId) ?? null
+}
 
 export type AcpBufferedMessage = {
   index: number
@@ -62,6 +87,7 @@ type AcpPoolEntry = {
   agentKind: AcpAgentKind
   cwd: string
   child: ChildProcess
+  stderrTail: string
   ctx: ClientContext
   session: ActiveSession
   buffer: AcpBufferedMessage[]
@@ -71,6 +97,8 @@ type AcpPoolEntry = {
   alive: boolean
   inTurn: boolean
   lastActivityAt: number
+  activityWaiters: Set<() => void>
+  turnStopFallback: ReturnType<typeof setTimeout> | null
   closedDeferred: { promise: Promise<void>; resolve: () => void }
   lastError: string | null
 }
@@ -101,6 +129,8 @@ function nextRequestId(): string {
 
 class AcpClientPool {
   private entries = new Map<string, AcpPoolEntry>()
+  private inflight = new Map<string, Promise<AcpPoolEntry>>()
+  private cleaningChildren = new WeakSet<ChildProcess>()
   private sweepHandle: ReturnType<typeof setInterval> | null = null
 
   get size(): number {
@@ -119,10 +149,55 @@ class AcpClientPool {
       if (!entry.alive) continue
       const idleFor = now - entry.lastActivityAt
       if (entry.inTurn && idleFor > STALL_TTL_MS) {
+        // A human-facing permission or elicitation is an active wait, not a
+        // stalled provider. Keep it alive until the UI answers or closes it.
+        if (entry.pendingResolvers.size > 0) continue
         this.terminate(entry, 'stall-evict')
       } else if (!entry.inTurn && idleFor > IDLE_TTL_MS) {
         this.terminate(entry, 'idle-evict')
       }
+    }
+    if (this.entries.size === 0 && this.sweepHandle) {
+      clearInterval(this.sweepHandle)
+      this.sweepHandle = null
+    }
+  }
+
+  private reuseCompatibleEntry(
+    entry: AcpPoolEntry,
+    agentKind: AcpAgentKind,
+    cwd: string,
+  ): AcpPoolEntry | null {
+    if (!entry.alive) return null
+    if (entry.agentKind === agentKind && entry.cwd === cwd) {
+      entry.lastActivityAt = Date.now()
+      this.ensureSweep()
+      return entry
+    }
+    if (entry.inTurn) {
+      throw new Error(
+        `ACP session ${entry.sessionId} is active with ${entry.agentKind} in ${entry.cwd}; `
+        + `it cannot be reused as ${agentKind} in ${cwd}.`,
+      )
+    }
+    this.terminate(entry, 'incompatible-acquire')
+    return null
+  }
+
+  private enforceCapacity(protectedSessionId?: string): void {
+    const evictions = selectAcpPoolEvictions(
+      Array.from(this.entries.values(), (entry) => ({
+        sessionId: entry.sessionId,
+        lastActivityAt: entry.lastActivityAt,
+        inTurn: entry.inTurn,
+      })),
+      MAX_POOL_SIZE,
+      protectedSessionId,
+    )
+    for (const sessionId of evictions) {
+      const entry = this.entries.get(sessionId)
+      if (!entry || entry.inTurn) continue
+      this.terminate(entry, 'lru-evict')
     }
   }
 
@@ -135,8 +210,23 @@ class AcpClientPool {
   /** Spawn-or-reuse a persistent ACP subprocess+session for sessionId. */
   async acquire(sessionId: string, agentKind: AcpAgentKind, cwd: string): Promise<AcpPoolEntry> {
     const existing = this.entries.get(sessionId)
-    if (existing && existing.alive) return existing
-    return this.spawnEntry(sessionId, agentKind, cwd)
+    if (existing) {
+      const reused = this.reuseCompatibleEntry(existing, agentKind, cwd)
+      if (reused) return reused
+    }
+    const pending = this.inflight.get(sessionId)
+    if (pending) {
+      const pendingEntry = await pending
+      const reused = this.reuseCompatibleEntry(pendingEntry, agentKind, cwd)
+      if (reused) return reused
+    }
+    const build = this.spawnEntry(sessionId, agentKind, cwd)
+    this.inflight.set(sessionId, build)
+    try {
+      return await build
+    } finally {
+      if (this.inflight.get(sessionId) === build) this.inflight.delete(sessionId)
+    }
   }
 
   private async spawnEntry(sessionId: string, agentKind: AcpAgentKind, cwd: string): Promise<AcpPoolEntry> {
@@ -146,11 +236,21 @@ class AcpClientPool {
     // group — its own sandboxed exec helpers are then reachable by signaling
     // the group, not just the direct child, on close/reap.
     const child = spawn(command, [], { cwd, env: process.env, stdio: ['pipe', 'pipe', 'pipe'], detached: true })
-
-    let spawnErrored: Error | null = null
-    child.once('error', (err) => {
-      spawnErrored = err instanceof Error ? err : new Error(String(err))
+    let stderrTail = ''
+    child.stderr?.setEncoding('utf8')
+    child.stderr?.on('data', (chunk: string) => {
+      stderrTail = `${stderrTail}${chunk}`.slice(-4000)
+      if (entryRef.current) entryRef.current.stderrTail = stderrTail
     })
+
+    let startupCancelled = false
+    let resolveStarted!: (entry: AcpPoolEntry) => void
+    let rejectStarted!: (error: unknown) => void
+    const started = new Promise<AcpPoolEntry>((resolve, reject) => {
+      resolveStarted = resolve
+      rejectStarted = reject
+    })
+    child.once('error', rejectStarted)
 
     const stream = ndJsonStream(Writable.toWeb(child.stdin), Readable.toWeb(child.stdout) as ReadableStream)
     const closedDeferred = deferred()
@@ -165,6 +265,7 @@ class AcpClientPool {
     ): Promise<Method extends 'session/request_permission' ? RequestPermissionResponse : CreateElicitationResponse> {
       const id = nextRequestId()
       pendingRequests.set(id, { id, sessionId, method, params, createdAt: Date.now() })
+      if (entryRef.current) entryRef.current.lastActivityAt = Date.now()
       return new Promise((resolve, reject) => {
         pendingResolvers.set(id, { method, resolve, reject } as PendingResolver)
       }) as never
@@ -187,12 +288,14 @@ class AcpClientPool {
         clientInfo: { name: 'agent-viewer', title: 'Agent Viewer', version: '0.1.0' },
       })
       const session = await ctx.buildSession(cwd).start()
+      if (startupCancelled) throw new Error(`ACP startup for ${agentKind} was cancelled`)
 
       const entry: AcpPoolEntry = {
         sessionId,
         agentKind,
         cwd,
         child,
+        stderrTail,
         ctx,
         session,
         buffer: [],
@@ -202,44 +305,61 @@ class AcpClientPool {
         alive: true,
         inTurn: false,
         lastActivityAt: Date.now(),
+        activityWaiters: new Set(),
+        turnStopFallback: null,
         closedDeferred,
         lastError: null,
       }
       entryRef.current = entry
       this.entries.set(sessionId, entry)
+      this.enforceCapacity(sessionId)
+      resolveStarted(entry)
 
       void this.pumpUpdates(entry)
 
       await closedDeferred.promise
     })
 
-    connectPromise.catch((err) => {
-      const entry = entryRef.current
-      if (entry) {
-        entry.alive = false
-        entry.lastError = err instanceof Error ? err.message : String(err)
-      }
-    }).finally(() => {
+    void connectPromise.then(
+      () => {
+        if (!entryRef.current) {
+          rejectStarted(new Error(`ACP agent process for ${agentKind} exited before session/new completed`))
+        }
+      },
+      (err) => {
+        const detail = stderrTail.trim()
+        const failure = detail ? new Error(`${err instanceof Error ? err.message : String(err)}: ${detail}`) : err
+        acpRecentErrors.set(sessionId, failure instanceof Error ? failure.message : String(failure))
+        rejectStarted(failure)
+        const entry = entryRef.current
+        if (entry) {
+          entry.alive = false
+          entry.lastError = failure instanceof Error ? failure.message : String(failure)
+          this.notifyActivity(entry)
+        }
+      },
+    ).finally(() => {
       this.cleanupChild(child)
       const entry = entryRef.current
       if (entry && this.entries.get(sessionId) === entry) this.entries.delete(sessionId)
     })
 
-    // Wait for either the session to come up or the subprocess to fail fast.
-    const started = await Promise.race([
-      new Promise<AcpPoolEntry>((resolve, reject) => {
-        const check = () => {
-          if (spawnErrored) return reject(spawnErrored)
-          if (entryRef.current) return resolve(entryRef.current)
-          setTimeout(check, 20)
-        }
-        check()
-      }),
-      connectPromise.then(() => {
-        throw new Error(`ACP agent process for ${agentKind} exited before session/new completed`)
-      }),
-    ])
-    return started
+    const startupTimer = setTimeout(() => {
+      startupCancelled = true
+      const error = new Error(
+        `ACP ${agentKind} session startup produced no ready session within ${DEFAULT_PROVIDER_STARTUP_TIMEOUT_MS / 1000}s`,
+      )
+      rejectStarted(error)
+      const entry = entryRef.current
+      if (entry) this.terminate(entry, 'startup-timeout')
+      else this.cleanupChild(child)
+    }, DEFAULT_PROVIDER_STARTUP_TIMEOUT_MS)
+    startupTimer.unref?.()
+    try {
+      return await started
+    } finally {
+      clearTimeout(startupTimer)
+    }
   }
 
   private async pumpUpdates(entry: AcpPoolEntry): Promise<void> {
@@ -252,16 +372,61 @@ class AcpClientPool {
         entry.nextIndex += 1
         entry.buffer.push({ index, receivedAt: Date.now(), message })
         if (entry.buffer.length > BUFFER_CAP) entry.buffer.splice(0, entry.buffer.length - BUFFER_CAP)
-        if (message.kind === 'stop') entry.inTurn = false
+        if (message.kind === 'stop') {
+          if (entry.turnStopFallback) clearTimeout(entry.turnStopFallback)
+          entry.turnStopFallback = null
+          entry.inTurn = false
+          this.enforceCapacity(entry.sessionId)
+        }
+        this.notifyActivity(entry)
       }
     } catch (err) {
       entry.alive = false
-      entry.lastError = err instanceof Error ? err.message : String(err)
+      const detail = entry.stderrTail.trim()
+      entry.lastError = detail ? `${err instanceof Error ? err.message : String(err)}: ${detail}` : (err instanceof Error ? err.message : String(err))
+      acpRecentErrors.set(entry.sessionId, entry.lastError)
+      this.notifyActivity(entry)
       entry.closedDeferred.resolve()
     }
   }
 
+  private notifyActivity(entry: AcpPoolEntry): void {
+    for (const notify of entry.activityWaiters) notify()
+    entry.activityWaiters.clear()
+  }
+
+  async waitForActivity(
+    sessionId: string,
+    afterIndex: number,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const entry = this.entries.get(sessionId)
+    if (!entry || !entry.alive || !entry.inTurn || entry.nextIndex - 1 > afterIndex || signal?.aborted) return
+    await new Promise<void>((resolve) => {
+      let settled = false
+      let timer: ReturnType<typeof setTimeout> | null = null
+      const finish = () => {
+        if (settled) return
+        settled = true
+        entry.activityWaiters.delete(finish)
+        if (timer) clearTimeout(timer)
+        signal?.removeEventListener('abort', finish)
+        resolve()
+      }
+      entry.activityWaiters.add(finish)
+      timer = setTimeout(finish, Math.max(1, timeoutMs))
+      timer.unref?.()
+      signal?.addEventListener('abort', finish, { once: true })
+      // Close the check/register race if an update landed between the initial
+      // condition above and adding this waiter.
+      if (!entry.alive || !entry.inTurn || entry.nextIndex - 1 > afterIndex || signal?.aborted) finish()
+    })
+  }
+
   private cleanupChild(child: ChildProcess): void {
+    if (this.cleaningChildren.has(child)) return
+    this.cleaningChildren.add(child)
     if (child.exitCode !== null || child.signalCode !== null) return
     const pid = child.pid
     if (typeof pid !== 'number') {
@@ -296,6 +461,8 @@ class AcpClientPool {
 
   private terminate(entry: AcpPoolEntry, _reason: string): void {
     entry.alive = false
+    if (entry.turnStopFallback) clearTimeout(entry.turnStopFallback)
+    entry.turnStopFallback = null
     for (const [id, resolver] of entry.pendingResolvers) {
       resolver.reject(new Error('ACP session closed'))
       entry.pendingResolvers.delete(id)
@@ -307,19 +474,53 @@ class AcpClientPool {
     // can hit a since-recycled pid and throw EPERM/ESRCH).
     entry.closedDeferred.resolve()
     this.entries.delete(entry.sessionId)
+    this.notifyActivity(entry)
   }
 
   /** Sends a prompt; resolves once queued (not once the turn completes). */
   sendPrompt(sessionId: string, text: string): void {
     const entry = this.entries.get(sessionId)
     if (!entry || !entry.alive) throw new Error(`No live ACP session: ${sessionId}`)
+    if (entry.inTurn) throw new Error(`ACP session ${sessionId} is still finishing the previous message.`)
+    if (entry.turnStopFallback) clearTimeout(entry.turnStopFallback)
+    entry.turnStopFallback = null
+    entry.lastError = null
     entry.inTurn = true
     entry.lastActivityAt = Date.now()
-    entry.session.prompt(text).catch((err) => {
-      entry.lastError = err instanceof Error ? err.message : String(err)
-    }).finally(() => {
+    let prompt: Promise<unknown>
+    try {
+      prompt = entry.session.prompt(text)
+    } catch (err) {
       entry.inTurn = false
-    })
+      entry.lastError = err instanceof Error ? err.message : String(err)
+      this.notifyActivity(entry)
+      throw err
+    }
+    void prompt.then(
+      () => {
+        // Prefer the ordered `stop` update as the terminal boundary. A short
+        // fallback prevents a provider that resolves prompt() without emitting
+        // stop from pinning the turn forever, while still giving the update pump
+        // time to append final frames before the composer stream closes.
+        if (!entry.alive || !entry.inTurn) return
+        entry.turnStopFallback = setTimeout(() => {
+          entry.turnStopFallback = null
+          if (!entry.alive || !entry.inTurn) return
+          entry.inTurn = false
+          entry.lastActivityAt = Date.now()
+          this.notifyActivity(entry)
+          this.enforceCapacity(entry.sessionId)
+        }, TURN_STOP_FALLBACK_MS)
+        entry.turnStopFallback.unref?.()
+      },
+      (err) => {
+        entry.lastError = err instanceof Error ? err.message : String(err)
+        entry.inTurn = false
+        entry.lastActivityAt = Date.now()
+        this.notifyActivity(entry)
+        this.enforceCapacity(entry.sessionId)
+      },
+    )
   }
 
   async interrupt(sessionId: string): Promise<void> {
@@ -328,7 +529,10 @@ class AcpClientPool {
     await entry.ctx.notify('session/cancel', { sessionId: entry.session.sessionId })
   }
 
-  close(sessionId: string): void {
+  async close(sessionId: string): Promise<void> {
+    // Selection-time prewarm and close can overlap. Await the single-flight
+    // startup so a late completion cannot resurrect a session the user closed.
+    await this.inflight.get(sessionId)?.catch(() => {})
     const entry = this.entries.get(sessionId)
     if (!entry) return
     this.terminate(entry, 'closed')
@@ -338,7 +542,9 @@ class AcpClientPool {
   readSince(sessionId: string, offset: number): { messages: AcpBufferedMessage[]; latestIndex: number } {
     const entry = this.entries.get(sessionId)
     if (!entry) return { messages: [], latestIndex: -1 }
-    const messages = entry.buffer.filter((m) => m.index > offset)
+    const firstIndex = entry.buffer[0]?.index ?? entry.nextIndex
+    const start = Math.max(0, Math.min(entry.buffer.length, offset - firstIndex + 1))
+    const messages = entry.buffer.slice(start)
     const latestIndex = entry.nextIndex - 1
     return { messages, latestIndex }
   }
@@ -356,6 +562,7 @@ class AcpClientPool {
     if (!resolver || resolver.method !== 'session/request_permission') return
     entry.pendingResolvers.delete(requestId)
     entry.pendingRequests.delete(requestId)
+    entry.lastActivityAt = Date.now()
     resolver.resolve(response)
   }
 
@@ -366,6 +573,7 @@ class AcpClientPool {
     if (!resolver || resolver.method !== 'elicitation/create') return
     entry.pendingResolvers.delete(requestId)
     entry.pendingRequests.delete(requestId)
+    entry.lastActivityAt = Date.now()
     resolver.resolve(response)
   }
 
@@ -404,10 +612,20 @@ class AcpClientPool {
   }
 }
 
-let pool: AcpClientPool | null = null
+
+declare global {
+  // ACP entries own subprocess groups, update pumps, and pending UI requests.
+  // Preserve the pool across Next.js development reloads so a module refresh
+  // cannot orphan live agent processes behind an unreachable local singleton.
+  // eslint-disable-next-line no-var
+  var __agentViewerAcpClientPool: AcpClientPool | undefined
+}
+
 function getPool(): AcpClientPool {
-  if (!pool) pool = new AcpClientPool()
-  return pool
+  if (!globalThis.__agentViewerAcpClientPool) {
+    globalThis.__agentViewerAcpClientPool = new AcpClientPool()
+  }
+  return globalThis.__agentViewerAcpClientPool
 }
 
 export function acquireAcpSession(sessionId: string, agentKind: AcpAgentKind, cwd: string): Promise<AcpPoolEntry> {
@@ -426,12 +644,21 @@ export function interruptAcpSession(sessionId: string): Promise<void> {
   return getPool().interrupt(sessionId)
 }
 
-export function closeAcpSession(sessionId: string): void {
-  getPool().close(sessionId)
+export function closeAcpSession(sessionId: string): Promise<void> {
+  return getPool().close(sessionId)
 }
 
 export function readAcpMessagesSince(sessionId: string, offset: number): { messages: AcpBufferedMessage[]; latestIndex: number } {
   return getPool().readSince(sessionId, offset)
+}
+
+export function waitForAcpActivity(
+  sessionId: string,
+  afterIndex: number,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  return getPool().waitForActivity(sessionId, afterIndex, timeoutMs, signal)
 }
 
 export function acpPendingRequests(sessionId: string): AcpPendingRequest[] {

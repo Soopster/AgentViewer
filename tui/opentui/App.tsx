@@ -9510,9 +9510,16 @@ export default function OpenTuiApp() {
     // (createPiAgentSession is idempotent on the id). Claude also benefits:
     // prewarmViewSession forces the SDK to adopt the reserved id as its real
     // session id, so the first real send finds a warm pool entry instead of
-    // cold-spawning. Pending Codex/Copilot sessions still have no resumable
+    // cold-spawning. ACP sessions are also pool-owned and can start against the
+    // reserved id. Pending Codex/Copilot sessions still have no resumable
     // identity yet, so prewarmViewSession no-ops them — skip the work here too.
-    if (isPending && target.provider !== 'pi' && target.provider !== 'claude') return
+    if (
+      isPending
+      && target.provider !== 'pi'
+      && target.provider !== 'claude'
+      && target.provider !== 'claude-acp'
+      && target.provider !== 'codex-acp'
+    ) return
     const needsAffordances = !isPending && (() => {
       const cached = composerAffordancesCacheRef.current.get(committedSessionKey)
       return !cached || Date.now() - cached.ts >= COMPOSER_AFFORDANCES_TTL_MS

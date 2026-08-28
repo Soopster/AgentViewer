@@ -3654,10 +3654,15 @@ function MessageViewInner({
     const isPending = session?.isPending === true
     if (!sessionId) return
     // Pending Codex/Copilot sessions do not have a resumable provider identity
-    // yet. Pi warms its expensive cold open against the reserved id, and
-    // Claude forces the SDK to adopt the reserved id as its real session id
-    // (see prewarmViewSession), so both benefit from prewarming while pending.
-    if (isPending && provider !== 'pi' && provider !== 'claude') return
+    // yet. Pi and Claude can warm against their reserved ids; ACP sessions are
+    // themselves pool-owned and are also created lazily against that id.
+    if (
+      isPending
+      && provider !== 'pi'
+      && provider !== 'claude'
+      && provider !== 'claude-acp'
+      && provider !== 'codex-acp'
+    ) return
     const effort = selectedEffort === 'auto' ? undefined : selectedEffort
     const key = [
       provider ?? 'claude',
