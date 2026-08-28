@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { evaluateRequestTrust, isLocalOrigin } from '@/lib/remoteAuth'
+import { requiredScopeFor } from '@/lib/routeScopes'
 
 // Reject mutation requests from non-local callers unless they're trusted —
 // this prevents drive-by CSRF: a malicious page open in the same browser
@@ -61,9 +62,11 @@ export async function proxy(request: NextRequest) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
     // A read-only pairing may watch anything it can already see, but must not
-    // drive a session — every state change in this app is a mutating method,
-    // so the scope check is exactly the method check.
-    if (verdict.scope === 'read-only' && MUTATION_METHODS.has(request.method)) {
+    // drive a session. What counts as driving is declared per route+method in
+    // lib/routeScopes.ts — the HTTP method alone gets this wrong in both
+    // directions (a POST that only reads, a GET that leaks the pairing token).
+    if (verdict.scope === 'read-only'
+      && requiredScopeFor(request.method, request.nextUrl.pathname) === 'write') {
       return NextResponse.json(
         { error: 'This device is paired read-only' },
         { status: 403, headers: isRemoteOrigin && origin ? corsHeaders(origin) : undefined },

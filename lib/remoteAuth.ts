@@ -24,7 +24,7 @@
 // offer.
 
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 export function isLocalOrigin(origin: string): boolean {
@@ -201,9 +201,31 @@ async function readState(): Promise<RemoteAccessState> {
   }
 }
 
+/** Writes the state file owner-only and atomically.
+ *
+ *  Both matter for what this file holds. It carries a live pairing token in
+ *  plaintext, so the default 0644 would expose it to every account on a shared
+ *  machine. And a torn write — the process dying between truncate and flush —
+ *  leaves unparseable JSON, which readState() treats as "no state", silently
+ *  unpairing every device. Writing to a temp file and renaming makes the
+ *  replacement atomic; the same shape the coordinator's own records use
+ *  (bin/agent-viewer-coord-state.mjs).
+ *
+ *  The 0700 on the directory only applies when this call creates it — an
+ *  install that already has `.agent-viewer-data` keeps whatever mode it had.
+ *  That is fine: the 0600 on the file is what actually protects the token, and
+ *  silently re-permissioning a directory full of the user's other data is not
+ *  this function's business. */
 async function persist(state: RemoteAccessState): Promise<RemoteAccessState> {
-  await mkdir(path.dirname(REMOTE_AUTH_FILE), { recursive: true })
-  await writeFile(REMOTE_AUTH_FILE, JSON.stringify(state, null, 2), 'utf8')
+  await mkdir(path.dirname(REMOTE_AUTH_FILE), { recursive: true, mode: 0o700 })
+  const temporary = `${REMOTE_AUTH_FILE}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    await writeFile(temporary, JSON.stringify(state, null, 2), { encoding: 'utf8', mode: 0o600 })
+    await rename(temporary, REMOTE_AUTH_FILE)
+  } catch (error) {
+    await unlink(temporary).catch(() => undefined)
+    throw error
+  }
   return state
 }
 

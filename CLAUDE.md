@@ -177,9 +177,22 @@ credential kinds that are deliberately different:
   a SHA-256 hash, so the state file cannot be replayed as a device. One session per device, so
   revoking one phone leaves the others paired.
 
-`proxy.ts` calls `evaluateRequestTrust()` and enforces the two scopes — `full` and `read-only`,
-where read-only means "no mutating methods". Keep it at two: a scope set can widen later, it cannot
-shrink.
+`proxy.ts` calls `evaluateRequestTrust()` and enforces two scopes — `full` and `read-only`. Keep it
+at two: a scope set can widen later, it cannot shrink.
+
+**What read-only may reach is declared per route+method in `lib/routeScopes.ts`, not inferred from
+the HTTP method.** The method is a proxy for intent and gets it wrong both ways: `POST
+/api/sessions/project/messages` is a pure read (so a read-only phone could not load the project
+feed), and `GET /api/remote-access` returns the live pairing token (so a read-only device could mint
+itself a full-scope credential). Anything undeclared is `write`, so a new route fails closed, and
+`npm run routes:smoke` asserts every route file and every method it exports appears in the table —
+the same anti-drift pairing as `CAPABILITY_METHODS` in `lib/adapters/registry.ts`. Where patterns
+overlap (`/api/sessions/running` vs `/api/sessions/[sessionId]`), the one with more literal segments
+wins.
+
+State files under `.agent-viewer-data/` that hold credentials are written `0600` via temp-and-rename:
+`remote-access.json` carries a live plaintext pairing token, and a torn write would leave
+unparseable JSON, which reads as "no state" and silently unpairs every device.
 
 **`lib/remoteAuth.ts` and `lib/remoteEndpoints.ts` must not cache their state files in module
 scope** (load-bearing). Next gives `proxy.ts` and the route handlers *separate module instances*, so
@@ -267,4 +280,4 @@ Concrete recipes for typical asks. Each lists every file you usually need to tou
 
 - **Handle a new Claude SDK message type** → `lib/claudeMapper.ts` (`normalizeSystemMessage` for `type:'system'` subtypes, `normalizeClaudeEventAsSystem` for top-level event types — the live-stream path passes the record flat, the history path nests it under `.message`, so both shapes must enrich); then the accent color + badges in `components/MessageItem.tsx`'s `ClaudeSystemCard`, and both `formatBlock`/`formatBlockExpanded` in `tui/format.ts`. Pin it in `scripts/claudeSdkSurfaceSmoke.ts`.
 
-Verification after a change: `npx tsc --noEmit` (web) and/or `npm run tui:check` (OpenTUI). There is no test runner, but there are smoke suites: `npm run composer:smoke` (fast, no network), `npm run adapters:smoke` (drives every provider's read path against your real local sessions; providers with no local sessions report SKIP), and `npm run tui:smoke` (slow, spawns real CLIs).
+Verification after a change: `npx tsc --noEmit` (web) and/or `npm run tui:check` (OpenTUI). There is no test runner, but there are smoke suites: `npm run composer:smoke` (fast, no network), `npm run routes:smoke` (asserts the remote-access scope table covers every API route), `npm run adapters:smoke` (drives every provider's read path against your real local sessions; providers with no local sessions report SKIP), and `npm run tui:smoke` (slow, spawns real CLIs).

@@ -12,7 +12,7 @@
 // "192.168.1.47" would silently stop matching, while remembering "lan" keeps
 // resolving to the right interface across networks.
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { networkInterfaces } from 'node:os'
 import path from 'node:path'
 
@@ -123,8 +123,17 @@ async function readPreferences(): Promise<EndpointPreferences> {
 
 /** Records which *kind* of endpoint to prefer. Passing null clears it. */
 export async function setPreferredEndpointKind(kind: EndpointKind | null): Promise<void> {
-  await mkdir(path.dirname(ENDPOINTS_FILE), { recursive: true })
-  await writeFile(ENDPOINTS_FILE, JSON.stringify({ defaultKind: kind }, null, 2), 'utf8')
+  // Same write discipline as the auth state next door: owner-only, and
+  // atomic so a torn write cannot leave unparseable JSON behind.
+  await mkdir(path.dirname(ENDPOINTS_FILE), { recursive: true, mode: 0o700 })
+  const temporary = `${ENDPOINTS_FILE}.${process.pid}.tmp`
+  try {
+    await writeFile(temporary, JSON.stringify({ defaultKind: kind }, null, 2), { encoding: 'utf8', mode: 0o600 })
+    await rename(temporary, ENDPOINTS_FILE)
+  } catch (error) {
+    await unlink(temporary).catch(() => undefined)
+    throw error
+  }
 }
 
 export interface EndpointListing {

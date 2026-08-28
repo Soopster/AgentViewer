@@ -66,7 +66,8 @@
     "claude:channel:smoke": "bun run ./scripts/channelBridgeDurabilitySmoke.ts && bun run ./scripts/channelBridgeServerSmoke.ts",
     "claude:live:smoke": "node --import tsx ./scripts/claudeLiveParitySmoke.ts",
     "seed-prompts": "node ./scripts/seed-prompts.mjs",
-    "doctor": "npx react-doctor@latest"
+    "doctor": "npx react-doctor@latest",
+    "routes:smoke": "bun run ./scripts/routeScopeSmoke.ts"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.4.0",
