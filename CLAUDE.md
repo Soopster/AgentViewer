@@ -197,11 +197,21 @@ Both TUIs depend on the same `lib/` provider layer — changes to `sessionBacken
   whichever sessions sit at those positions, and a 12-card session and a 263-card one are not
   comparable. The `cards` column reports what the reader was actually holding — check it before
   believing any before/after, and interleave A/B runs rather than batching them.
+- **Switching to an already-cached session costs ~40-60ms of React render**, and that is the floor
+  on tab switching (`NAV_PATTERN=tabs`) and on cached sidebar revisits alike. Three plausible causes
+  are measured and ruled out, so do not re-try them: the card pipeline (transcriptCards →
+  stableCardData → cardDisplayData) profiles at ~3.5ms across a whole switching run
+  (`AGENT_VIEWER_TUI_CARD_PROFILE=1`); the mounted-window size is not it either — forcing a 5-card
+  window in place of 240 changed nothing; and progressively growing the window after the first
+  commit bought nothing for the same reason. What remains is the wider App render, which re-runs in
+  full on any state change because the root is one very large component. Attributing it needs a real
+  CPU profile — the harnesses here cannot resolve a 20-40ms difference against their own run-to-run
+  variance, and bisecting with them produces contradictory answers.
 - **Measure with `npm run tui:navperf`** (`tui/opentui/navPerf.tsx`) before changing any of this. It
   mounts the real root against your local sessions and reports the metrics logger's `nav.*` rollup:
   `select-to-open` (debounce), `open-to-detail` (worker read), `detail-to-paint`, and
-  `select-to-paint` — the number the user feels. `NAV_PATTERN=down|pingpong|scrub` covers first
-  visits, cached revisits, and fly-by scrubbing. Current settled navigation is ~50–85ms p50, from
+  `select-to-paint` — the number the user feels. `NAV_PATTERN=down|pingpong|scrub|tabs` covers
+  first visits, cached revisits, fly-by scrubbing, and switching between open tabs. Current settled navigation is ~50–85ms p50, from
   ~210ms. The harness flushes on a frame cadence on purpose: React's scheduler is driven by `act()`
   under the test renderer, so a single flush followed by a long sleep reports every state update as
   taking the whole sleep.
