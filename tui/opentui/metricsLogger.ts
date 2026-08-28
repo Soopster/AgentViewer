@@ -160,6 +160,20 @@ export function noteTuiComposerLatency(
   composerLatencyStats.record(`composer.${provider}.${phase}`, durationMs)
 }
 
+// Session-navigation latency, recorded by App.tsx around the sidebar open path.
+// `select-to-open` is the debounce the selection waits out; `open-to-detail` is
+// the worker read (0 on a cache hit); `select-to-paint` is the number the user
+// actually feels — keypress to the new transcript being on screen.
+const navLatencyStats = new PerfStats()
+
+export function noteTuiNavLatency(
+  phase: 'select-to-open' | 'open-to-detail' | 'detail-to-paint' | 'select-to-paint',
+  durationMs: number,
+): void {
+  if (!METRICS_ENABLED || !Number.isFinite(durationMs) || durationMs < 0) return
+  navLatencyStats.record(`nav.${phase}`, durationMs)
+}
+
 function drainFrameWindow(): { commits: number; overBudget: number; maxMs: number } {
   const snapshot = { ...frameWindow }
   frameWindow.commits = 0
@@ -331,6 +345,9 @@ export function startTuiMetricsLogger(): void {
 
     const composerLatency = composerLatencyStats.snapshot()
     if (composerLatency.length > 0) sample.composerLatency = composerLatency
+
+    const navLatency = navLatencyStats.snapshot()
+    if (navLatency.length > 0) sample.navLatency = navLatency
 
     const gauges = collectGauges()
     if (Object.keys(gauges).length > 0) sample.gauges = gauges

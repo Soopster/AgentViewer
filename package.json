@@ -40,6 +40,7 @@
     "tui": "bun run ./tui/opentui/main.tsx",
     "tui:dev": "bun --watch ./tui/opentui/main.tsx",
     "tui:check": "tsc -p tsconfig.opentui.json --noEmit",
+    "tui:navperf": "bun run ./tui/opentui/navPerf.tsx",
     "tui:perf": "bun --expose-gc run ./tui/opentui/transcriptPerf.tsx",
     "tui:worker-perf": "bun run ./tui/opentui/workerLatencyPerf.ts",
     "pi:provider:smoke": "bun run ./scripts/piProviderSmoke.ts",

@@ -35,7 +35,7 @@ import {
   scheduleWriteComposerQueue,
 } from '../../lib/tuiComposerState'
 import { registerExtraTreeSitterParsers } from './treeSitterParsers'
-import { startTuiMetricsLogger, tuiMetricsEnabled, noteRenderFrame, noteTuiComposerLatency, registerTuiMetricsGauge, cardProfileEnabled, logCardRecompute } from './metricsLogger'
+import { startTuiMetricsLogger, tuiMetricsEnabled, noteRenderFrame, noteTuiComposerLatency, noteTuiNavLatency, registerTuiMetricsGauge, cardProfileEnabled, logCardRecompute } from './metricsLogger'
 import {
   buildPierreDiffView,
   type TuiPierreDiffRow,
@@ -171,6 +171,7 @@ import {
   readTuiSessionsAsync,
   formatTranscriptCardsAsync,
   getTranscriptCardsSync,
+  warmTranscriptAsync,
 } from './sessionDetailWorkerClient'
 import type { TuiSessionReaderState } from '../../lib/tuiState'
 import type { AgentProvider, ContextUsage, ProviderSelection, ReasoningEffortLevel, RunningSessionRef, SendAttachment, SendState, Session, SessionComposerAgentOption, SessionModelInfo, SubagentSummary, ToolResultBlock } from '../../lib/types'
@@ -654,8 +655,17 @@ const ATTENTION_DONE_LIMIT = 20
 // Debounce before opening a selected session's transcript. Scrubbing quickly
 // through the sidebar (mouse or keyboard) lands on many sessions in passing;
 // without this every fly-by would load + reformat a full transcript only to be
-// discarded a few ms later. Short enough to feel instant once you settle.
-const DETAIL_OPEN_DELAY_MS = 200
+// discarded a few ms later.
+//
+// Two delays, because the two cases cost wildly different amounts. A session
+// whose detail is already cached and mtime-fresh opens with no read and no
+// reformat at all — waiting on it buys nothing and is pure added latency, so
+// it opens on the next tick. Everything else pays a worker round-trip, which
+// is what the debounce protects; the neighbour warm and the single-flight
+// coalescing in refreshSelectedSessionDetail keep that cheap enough that it
+// needs far less than the 200ms this used to sit at.
+const DETAIL_OPEN_DELAY_MS = 70
+const DETAIL_OPEN_CACHED_DELAY_MS = 0
 // While browsing (sidebar focused) only the last N cards of the selected
 // session are mounted. OpenTUI's scrollbox lays out EVERY mounted card to
 // compute scroll height (viewportCulling only skips paint, not layout), so a
@@ -723,19 +733,21 @@ const TASK_PANEL_MAX_WIDTH = 60
 const TASK_PANEL_RESIZE_STEP = 4
 // Cached TuiSessionDetail bundles include the full transcript, blocks, and
 // derived landmarks, so this cap bounds the resident footprint on long-running
-// TUI sessions. 8 covers the settled session plus its prefetched neighbourhood
-// (NEIGHBOR_PREFETCH_RADIUS on each side) with room for a couple of recents —
+// TUI sessions. 8 covers the settled session and the recents around it —
 // paired with the foreground mtime guard it makes revisiting a recent session
-// free (no worker re-read, no reformat). Matches the spirit of
+// free (no worker re-read, no reformat) and lets the open skip its debounce
+// entirely. Matches the spirit of
 // THREADING_CACHE_LIMIT (10) in threadingWorkerClient.ts, which already holds
 // threaded messages + cards for the same neighbourhood.
 const SESSION_CACHE_LIMIT = 8
 const WORKTREE_TASK_CWD_SEGMENT = `${sep}.agent-viewer-worktrees${sep}`
-// After a settle, warm the detail cache for the sessions adjacent to the
-// current one in sidebar order so the *first* visit to a neighbour opens from
-// cache instead of paying the full worker read (150ms–1s on big sessions).
+// After a settle, warm the threading worker's caches for the sessions adjacent
+// to the current one in sidebar order, so the *first* visit to a neighbour is
+// served from those caches instead of paying a cold read + thread + format.
 // The delay keeps the worker free for the settled session's own load first;
-// prefetches run one at a time and yield to any real open.
+// prefetches run one at a time and yield to any real open. Raising the radius
+// means raising the worker's THREADING_CACHE_LIMIT with it — see
+// threadingWorker.ts.
 const NEIGHBOR_PREFETCH_DELAY_MS = 450
 const NEIGHBOR_PREFETCH_RADIUS = 2
 const EXIT_CLEANUP_TIMEOUT_MS = 1500
@@ -7733,6 +7745,10 @@ export default function OpenTuiApp() {
   // every fly-by session in between.
   const foregroundLoadInFlightRef = useRef(false)
   const pendingForegroundLoadRef = useRef<Session | null>(null)
+  // Open-path latency bookkeeping (metrics only — see noteTuiNavLatency).
+  const navSelectStartRef = useRef<{ key: string; at: number } | null>(null)
+  const navPaintedKeyRef = useRef<string | null>(null)
+  const navDetailSetAtRef = useRef<{ key: string; at: number } | null>(null)
   const backgroundRefreshInFlightRef = useRef(new Set<string>())
   const sessionDetailMtimeRef = useRef(new Map<string, number>())
   const selectedSessionKeyRef = useRef<string | null>(null)
@@ -10943,6 +10959,7 @@ export default function OpenTuiApp() {
       // background refresh below runs.
       const cached = sessionDetailCacheRef.current.get(cacheKeyForGuards)
       if (cached) {
+        navDetailSetAtRef.current = { key: cacheKeyForGuards, at: performance.now() }
         setSessionDetail(cached)
         setLoadingDetail(false)
         if (!cached.info?.currentModel) {
@@ -10988,7 +11005,9 @@ export default function OpenTuiApp() {
     setError((current) => current?.startsWith('Failed to load session detail') ? null : current)
 
     try {
+      const readStartedAt = performance.now()
       const detail = await readTuiSessionDetailAsync(session, densityRef.current, showToolCallsRef.current)
+      if (foreground) noteTuiNavLatency('open-to-detail', performance.now() - readStartedAt)
       // Cache the completed read BEFORE the staleness gate. A newer request
       // superseding this one only makes the result too old to display — the
       // read itself is still the freshest snapshot of this session, and
@@ -11049,6 +11068,7 @@ export default function OpenTuiApp() {
           && sessionMessageSequenceFingerprint(displayedDetail.rawMessages) === sessionMessageSequenceFingerprint(detail.rawMessages)
           && displayedDetail.info?.currentModel === detail.info?.currentModel
           && displayedDetail.info?.customTitle === detail.info?.customTitle
+        navDetailSetAtRef.current = { key: cacheKeyForGuards, at: performance.now() }
         if (unchanged) {
           // Keep the displayed and cached identities aligned so cache-first
           // revisits do not trigger a full transcript reformat on idle polls.
@@ -11093,47 +11113,36 @@ export default function OpenTuiApp() {
     }
   }, [refreshSessionMetadata])
 
-  // Cache-only warm read for a sidebar neighbour. Never touches display state,
-  // detailRequestRef, or loading/error flags — its only output is a filled
-  // sessionDetailCache + mtime record, so the user's next settle on this
-  // session takes refreshSelectedSessionDetail's cached-and-unchanged fast
-  // path (instant open, no worker read).
+  // Worker-only warm for a sidebar neighbour. Never touches display state,
+  // detailRequestRef, or loading/error flags — and, critically, never asks for
+  // the transcript back. The threading worker reads, threads and formats the
+  // session into its own caches; the payload stays there.
+  //
+  // Returning the transcript (as this used to) made a prefetch round several
+  // times more expensive *in the worker*, which is the resource a real open
+  // needs: delivering 8 first-visit sessions costs ~311ms of worker time
+  // against ~47ms to warm the same eight. Since the worker is serial, every
+  // one of those milliseconds is time a genuine open can spend queued behind a
+  // prefetch — and the App cache the payload filled only ever paid off if the
+  // user actually visited that neighbour.
   const prefetchSessionDetail = useCallback(async (session: Session): Promise<void> => {
     const key = sessionKey(session)
     if (backgroundRefreshInFlightRef.current.has(key)) return
     if (liveTranscriptBaselineRef.current.has(key)) return
+    // Already displayable from the App's own cache and known fresh — the open
+    // takes the cached fast path, so there is nothing for the worker to warm.
     const lastModified = typeof session.lastModified === 'number'
       ? session.lastModified
       : sessionsByKeyRef.current.get(key)?.lastModified
-    const cached = sessionDetailCacheRef.current.has(key)
-    if (cached) {
-      // Fresh enough already — and without an mtime to compare, whatever is
-      // cached is good enough for a prefetch (the open's background refresh
-      // catches real staleness).
-      if (typeof lastModified !== 'number') return
+    if (sessionDetailCacheRef.current.has(key) && typeof lastModified === 'number') {
       const recorded = sessionDetailMtimeRef.current.get(key)
       if (recorded != null && recorded >= lastModified) return
     }
     backgroundRefreshInFlightRef.current.add(key)
     try {
-      const detail = await readTuiSessionDetailAsync(session, densityRef.current, showToolCallsRef.current)
-      if (typeof lastModified === 'number') sessionDetailMtimeRef.current.set(key, lastModified)
-      touchMapEntry(sessionDetailCacheRef.current, key, detail)
-      if (detail.contextUsage) {
-        touchMapEntry(sessionContextUsageCacheRef.current, key, detail.contextUsage)
-      }
-      const pinnedKeys = new Set([
-        ...openTabSessionsRef.current.map((openSession) => sessionKey(openSession)),
-        selectedSessionKeyRef.current,
-      ].filter((pinned): pinned is string => Boolean(pinned)))
-      pruneSessionCaches(
-        sessionDetailCacheRef.current,
-        sessionContextUsageCacheRef.current,
-        sessionMetadataFetchedAtRef.current,
-        pinnedKeys,
-      )
+      await warmTranscriptAsync(session, densityRef.current, showToolCallsRef.current)
     } catch {
-      // Best-effort: a failed prefetch just means the eventual open pays the
+      // Best-effort: a failed warm just means the eventual open pays the
       // normal read (which surfaces its own error if it also fails).
     } finally {
       backgroundRefreshInFlightRef.current.delete(key)
@@ -14419,24 +14428,56 @@ export default function OpenTuiApp() {
     // Debounce the actual open so rapid scrubbing through the sidebar doesn't
     // load + reformat a transcript for every session passed through. The
     // cleanup clears the pending timer when the selection changes again, so
-    // only the session we land on (and hold for DETAIL_OPEN_DELAY_MS) renders.
+    // only the session we land on (and hold for the delay chosen below) renders.
     // The previously-shown transcript stays visible during the wait — no flash.
     const target = selectedSessionTarget
+    const navStartedAt = performance.now()
+    const targetKey = sessionKey(target)
+    navSelectStartRef.current = { key: targetKey, at: navStartedAt }
+    const targetLastModified = typeof target.lastModified === 'number'
+      ? target.lastModified
+      : sessionsByKeyRef.current.get(targetKey)?.lastModified
+    const recordedMtime = sessionDetailMtimeRef.current.get(targetKey)
+    // Mirrors refreshSelectedSessionDetail's cached-and-unchanged fast path: if
+    // that branch will fire, this open does no work and deserves no wait.
+    const opensFromCache = sessionDetailCacheRef.current.has(targetKey)
+      && typeof targetLastModified === 'number'
+      && recordedMtime != null
+      && recordedMtime >= targetLastModified
+      && !awaitingPersistedTurnRef.current
+      && !liveTranscriptBaselineRef.current.has(targetKey)
     const timer = setTimeout(() => {
+      noteTuiNavLatency('select-to-open', performance.now() - navStartedAt)
       // Display is owned by refreshSelectedSessionDetail's cache-first branch,
       // which is single-flight-gated: if a load is already running (still
       // scrubbing) it defers without rendering this session, so intermediates
       // never open. The previously-shown transcript stays put until we settle.
       void refreshSelectedSessionDetail(target, true)
-    }, DETAIL_OPEN_DELAY_MS)
+    }, opensFromCache ? DETAIL_OPEN_CACHED_DELAY_MS : DETAIL_OPEN_DELAY_MS)
     return () => clearTimeout(timer)
   }, [bootstrapped, refreshSelectedSessionDetail, selectedSession?.isPending, selectedSessionIdentity, selectedSessionTarget])
 
+  // Close the nav-latency sample: this effect runs after the commit that put the
+  // newly-selected session's transcript on screen, so it measures what the user
+  // feels — keypress to new transcript visible.
+  useEffect(() => {
+    const pending = navSelectStartRef.current
+    if (!pending || pending.key !== committedSessionKey) return
+    if (navPaintedKeyRef.current === committedSessionKey) return
+    navPaintedKeyRef.current = committedSessionKey
+    navSelectStartRef.current = null
+    const now = performance.now()
+    const detailSet = navDetailSetAtRef.current
+    if (detailSet?.key === committedSessionKey) noteTuiNavLatency('detail-to-paint', now - detailSet.at)
+    noteTuiNavLatency('select-to-paint', now - pending.at)
+  }, [committedSessionKey, sessionDetail])
+
   // Neighbour prefetch: once a session settles (committedSessionKey catches up
-  // to the selection), warm the detail cache for the sessions around it in
+  // to the selection), warm the threading worker for the sessions around it in
   // sidebar order — nearest first, alternating below/above — so scrubbing one
-  // step in either direction opens instantly instead of paying the first-visit
-  // worker read. Keyed on the SETTLED key so it never fires mid-scrub, and
+  // step in either direction reads from warm worker caches instead of paying
+  // the first-visit read, threading and formatting in full. Keyed on the
+  // SETTLED key so it never fires mid-scrub, and
   // each step re-checks that no real open is (or is about to be) running —
   // the threading worker is serial, so a prefetch posted ahead of a real open
   // would delay it.

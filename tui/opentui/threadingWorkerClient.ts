@@ -42,6 +42,11 @@ type Pending =
       resolve: (sessions: Session[]) => void
       reject: (error: Error) => void
     }
+  | {
+      kind: 'warm'
+      resolve: () => void
+      reject: (error: Error) => void
+    }
 
 type WorkerResponse =
   | {
@@ -77,6 +82,7 @@ type WorkerResponse =
       baseFormatToken: number
     }
   | { id: number; ok: true; sessions: Session[] }
+  | { id: number; ok: true; warmed: true }
   | { id: number; ok: false; error: string }
 
 let worker: Worker | null = null
@@ -291,6 +297,8 @@ function ensureWorker(): Worker {
       entry.resolve(transcriptCards)
     } else if (entry.kind === 'sessions' && 'sessions' in data) {
       entry.resolve(data.sessions)
+    } else if (entry.kind === 'warm' && 'warmed' in data) {
+      entry.resolve()
     }
   }
   w.onerror = (event) => {
@@ -367,6 +375,25 @@ export function readAndBuildTranscriptAsync(
         ? previousDelivery.deliveryToken
         : undefined,
     })
+  })
+}
+
+/**
+ * Warm the worker's threading + card caches for a session without shipping the
+ * transcript back. Used by the sidebar neighbour prefetch: the worker is
+ * serial, so a prefetch that also builds and posts a full transcript spends
+ * most of its time occupying the queue a real open has to wait in.
+ */
+export function warmTranscriptAsync(
+  session: Session,
+  density: TuiDensity,
+  showToolCalls: boolean,
+): Promise<void> {
+  const id = ++requestCounter
+  const w = ensureWorker()
+  return new Promise<void>((resolve, reject) => {
+    pending.set(id, { kind: 'warm', resolve, reject })
+    w.postMessage({ kind: 'warm', id, session, density, showToolCalls })
   })
 }
 

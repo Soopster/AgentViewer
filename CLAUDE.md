@@ -32,6 +32,7 @@ npm run start                  # serve production build
 npm run tui                    # primary OpenTUI terminal app (requires Bun on PATH)
 npm run tui:dev                # OpenTUI with --watch
 npm run tui:check              # type-check OpenTUI surface (tsc --noEmit via tsconfig.opentui.json)
+npm run tui:navperf            # session-navigation latency against your real local sessions
 npm run tui:ink                # legacy Ink TUI
 ```
 
@@ -163,6 +164,28 @@ Both TUIs depend on the same `lib/` provider layer — changes to `sessionBacken
 - **Place static content outside `scrollbox`** — the scrollbox has a fixed `height: transcriptViewportRows` budget. The live-mode spinner intentionally lives outside it.
 - **Module-level constants** for static option arrays (e.g. `PROVIDER_SELECT_OPTIONS`); not inside the component body.
 - Use **BMP-safe glyphs** (e.g. `●` U+25CF, not `⏺`) — terminal renderers truncate astral chars on Windows.
+- **A prefetch must not compete for the threading worker.** The sidebar neighbour prefetch warms the
+  worker's own threading/card caches (`warmTranscriptAsync` → the worker's `kind: 'warm'` request)
+  and deliberately gets no transcript back. Building and posting a full detail response is most of
+  the cost of a read — ~311ms of worker time for eight first-visit sessions against ~47ms to warm the
+  same eight — and the worker is serial, so a prefetch shaped as a `detail` spends that time holding
+  the queue against the open the user is actually waiting on. The worker's `THREADING_CACHE_LIMIT`
+  must stay ≥ reader + panes + `NEIGHBOR_PREFETCH_RADIUS × 2`, or a prefetch round evicts the session
+  being read and the cache thrashes itself.
+- **The open debounce is adaptive, and that is the point.** `DETAIL_OPEN_DELAY_MS` protects against
+  loading a transcript for every session scrubbed past; a session whose detail is already cached and
+  mtime-fresh does no read and no reformat, so it opens on the next tick
+  (`DETAIL_OPEN_CACHED_DELAY_MS`) instead of paying a wait for work that will not happen. The
+  `opensFromCache` test must keep mirroring `refreshSelectedSessionDetail`'s cached-and-unchanged
+  fast path — if they drift, the debounce is skipped for opens that really do read.
+- **Measure with `npm run tui:navperf`** (`tui/opentui/navPerf.tsx`) before changing any of this. It
+  mounts the real root against your local sessions and reports the metrics logger's `nav.*` rollup:
+  `select-to-open` (debounce), `open-to-detail` (worker read), `detail-to-paint`, and
+  `select-to-paint` — the number the user feels. `NAV_PATTERN=down|pingpong|scrub` covers first
+  visits, cached revisits, and fly-by scrubbing. Current settled navigation is ~50–85ms p50, from
+  ~210ms. The harness flushes on a frame cadence on purpose: React's scheduler is driven by `act()`
+  under the test renderer, so a single flush followed by a long sleep reports every state update as
+  taking the whole sleep.
 
 ### Remote access
 

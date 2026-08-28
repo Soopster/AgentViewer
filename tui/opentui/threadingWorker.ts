@@ -44,7 +44,21 @@ type SessionsRequest = {
   id: number
   provider: ProviderSelection
 }
-type WorkerRequest = DetailRequest | FormatRequest | SessionsRequest
+// A neighbour prefetch. Identical work to `detail` — read, thread, format —
+// but the payload never crosses back: the caller only wants this worker's
+// threading/card caches warm so the real open is cheap. Building and posting
+// the response dominates a prefetch (~311ms of worker time for eight
+// first-visit sessions, against ~47ms to warm the same eight), and this worker
+// is serial — so a `detail` used as a prefetch spends that time holding the
+// queue against the open the user is waiting on.
+type WarmRequest = {
+  kind: 'warm'
+  id: number
+  session: Session
+  density: TuiDensity
+  showToolCalls: boolean
+}
+type WorkerRequest = DetailRequest | FormatRequest | SessionsRequest | WarmRequest
 
 type WorkerResponse =
   | {
@@ -85,6 +99,7 @@ type WorkerResponse =
       baseFormatToken: number
     }
   | { id: number; ok: true; sessions: Session[] }
+  | { id: number; ok: true; warmed: true }
   | { id: number; ok: false; error: string }
 
 declare const self: {
@@ -93,10 +108,13 @@ declare const self: {
 }
 
 // Each entry pins a full threaded transcript + per-message card cache; for the
-// largest sessions that is multiple MB. The visible working set can be the
-// primary reader plus two split panes, so retaining fewer than three entries
-// makes their independent polls evict one another and repeatedly rebuild.
-const THREADING_CACHE_LIMIT = 3
+// largest sessions that is multiple MB. The visible working set is the primary
+// reader plus up to two split panes, *plus* the neighbourhood the `warm`
+// requests prefetch (NEIGHBOR_PREFETCH_RADIUS on each side of the reader in
+// App.tsx). Sized below that, a prefetch round evicts the very session the user
+// is reading and the next poll rebuilds it from scratch — the cache thrashes
+// itself and the prefetch becomes a pure cost.
+const THREADING_CACHE_LIMIT = 6
 const CARD_DENSITY_CACHE_LIMIT = 1
 const threadingCacheByKey = new Map<string, IncrementalThreadingCache>()
 
@@ -319,6 +337,15 @@ self.onmessage = async (event) => {
     if (data.kind === 'sessions') {
       const sessions = await readTuiSessions(data.provider)
       self.postMessage({ id: data.id, ok: true, sessions })
+      return
+    }
+    if (data.kind === 'warm') {
+      const { info: _info, rawMessages } = await readTuiSessionDetailSource(data.session)
+      const { threaded } = threadMessages(data.session, rawMessages)
+      // Populates this worker's per-message card cache for the variant the
+      // reader will ask for; the cards themselves stay here.
+      formatCards(cacheKey(data.session), threaded, data.density, data.showToolCalls)
+      self.postMessage({ id: data.id, ok: true, warmed: true })
       return
     }
     if (data.kind === 'format') {
