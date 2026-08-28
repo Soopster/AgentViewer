@@ -74,9 +74,13 @@ export const ROUTE_SCOPES: Record<string, Partial<Record<HttpMethod, RouteScope>
   // --- Files and source control ------------------------------------------
   '/api/files': { GET: 'read' },
   '/api/files/edit': { GET: 'read', POST: 'write' },
-  // The action lives in the body ('data' reads, others mutate), so the method
-  // cannot separate them. Fail closed rather than parse the body here.
-  '/api/git': { POST: 'write' },
+  // GET serves the panel data and the review diff, both pure reads. POST is
+  // the raw allowlisted-command escape hatch and stays write: the allowlist
+  // includes `branch`, which creates and deletes branches.
+  '/api/git': { GET: 'read', POST: 'write' },
+  // A read that needs a body (the caller's GitData), hence a POST declared
+  // read — method is not intent.
+  '/api/git/content': { POST: 'read' },
   '/api/github/pr': { POST: 'write' },
   '/api/worktrees': { GET: 'read', POST: 'write' },
 

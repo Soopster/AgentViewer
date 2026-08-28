@@ -179,11 +179,7 @@ function analyzeMessages(messages: ThreadedMessage[]): ReviewAnalysis {
 }
 
 async function fetchReview(cwd: string): Promise<GitReviewData> {
-  const res = await fetch('/api/git', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ cwd, action: 'review' }),
-  })
+  const res = await fetch(`/api/git?action=review&cwd=${encodeURIComponent(cwd)}`)
   const body = await res.json() as { review?: GitReviewData; error?: string }
   if (!res.ok || !body.review) throw new Error(body.error ?? 'Failed to load review')
   return body.review

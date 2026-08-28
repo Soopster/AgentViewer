@@ -75,6 +75,9 @@ async function main() {
     ['POST', '/api/sessions/abc123/messages', 'write'],
     ['GET', '/api/sessions/abc123/messages', 'read'],
     ['GET', '/api/remote-access', 'write'],
+    ['GET', '/api/git', 'read'],
+    ['POST', '/api/git', 'write'],
+    ['POST', '/api/git/content', 'read'],
     ['GET', '/api/sessions/abc/messages/uuid-1/raw', 'write'],
     ['DELETE', '/api/sessions/abc123', 'write'],
     // Undeclared paths must fail closed.

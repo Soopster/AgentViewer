@@ -100,11 +100,7 @@ function allDirPaths(entries: GitStatusEntry[]): Set<string> {
 
 async function fetchGitData(cwd: string): Promise<GitData> {
   try {
-    const res = await fetch('/api/git', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cwd, action: 'data' }),
-    })
+    const res = await fetch(`/api/git?action=data&cwd=${encodeURIComponent(cwd)}`)
     const body = await res.json() as { data?: GitData }
     if (!res.ok || !body.data) throw new Error('Failed to load git data')
     return body.data
@@ -139,12 +135,11 @@ async function fetchGitContent({
   commitIndex: number
 }): Promise<string> {
   try {
-    const res = await fetch('/api/git', {
+    const res = await fetch('/api/git/content', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         cwd,
-        action: 'content',
         data,
         pane,
         selectedFilePath,
