@@ -53,6 +53,41 @@ if (
   throw new Error('Session header provider badge is missing its compact distinctive background')
 }
 
+// The root command palette doubles as the discoverable hotkey guide. Verify it
+// advertises the portable alias for a command whose direct Ctrl+Shift chord is
+// unavailable in legacy/raw terminal protocols.
+act(() => {
+  setup.mockInput.pressKey('?')
+})
+await act(async () => {
+  await setup.flush()
+})
+// The command array and category-grouped render order must stay identical.
+// Eleven moves reaches the second Transcript command; a mismatch used to jump
+// the highlight ahead to the later Session group instead.
+for (let index = 0; index < 11; index += 1) {
+  act(() => { setup.mockInput.pressArrow('down') })
+  await act(async () => { await setup.flush() })
+}
+const orderedPaletteFrame = captureCharFrame()
+if (!orderedPaletteFrame.includes('▎Previous search match')) {
+  throw new Error(`Command palette keyboard navigation diverged from its visible category order:\n${orderedPaletteFrame}`)
+}
+await act(async () => {
+  await setup.mockInput.typeText('coordinated')
+  await setup.flush()
+})
+const shortcutPaletteFrame = captureCharFrame()
+if (!shortcutPaletteFrame.includes('Start coordinated run') || !shortcutPaletteFrame.includes('⌃K n / ⌃⇧N')) {
+  throw new Error(`Command palette did not advertise the portable coordinated-run shortcut:\n${shortcutPaletteFrame}`)
+}
+act(() => {
+  setup.mockInput.pressEscape()
+})
+await act(async () => {
+  await setup.flush()
+})
+
 // Shift+Z is the TUI equivalent of the web transcript fullscreen experience: it
 // keeps the reader and composer, replaces the ordinary header with one compact
 // restore affordance, and hides the surrounding app chrome. Composer visibility
@@ -65,7 +100,7 @@ await act(async () => {
   await new Promise((resolve) => setTimeout(resolve, 100))
 })
 let fullscreenFrame = captureCharFrame()
-if (!fullscreenFrame.includes('FULLSCREEN  Shift+Z / Esc restore')) {
+if (!fullscreenFrame.includes('FULLSCREEN  Shift+Z restore')) {
   throw new Error(`Shift+Z did not expose the fullscreen restore affordance:\n${fullscreenFrame}`)
 }
 if (fullscreenFrame.includes('j/k move') || fullscreenFrame.includes('SESSIONS') || fullscreenFrame.includes('● LIVE')) {
@@ -96,21 +131,68 @@ await act(async () => {
   await new Promise((resolve) => setTimeout(resolve, 100))
 })
 fullscreenFrame = captureCharFrame()
-if (fullscreenFrame.includes('COMPOSER') || !fullscreenFrame.includes('FULLSCREEN  Shift+Z / Esc restore')) {
+if (fullscreenFrame.includes('COMPOSER') || !fullscreenFrame.includes('FULLSCREEN  Shift+Z restore')) {
   throw new Error(`Shift+E did not minimize the composer independently in fullscreen:\n${fullscreenFrame}`)
 }
 act(() => {
   setup.mockInput.pressKey('e', { shift: true })
-  setup.mockInput.pressEscape()
+  setup.mockInput.pressKey('z', { shift: true })
 })
 await act(async () => {
   await setup.flush()
   await new Promise((resolve) => setTimeout(resolve, 100))
 })
 const restoredFullscreenFrame = captureCharFrame()
-if (restoredFullscreenFrame.includes('FULLSCREEN  Shift+Z / Esc restore') || !restoredFullscreenFrame.includes('COMPOSER')) {
-  throw new Error(`Esc did not restore normal chrome and composer state:\n${restoredFullscreenFrame}`)
+if (restoredFullscreenFrame.includes('FULLSCREEN  Shift+Z restore') || !restoredFullscreenFrame.includes('COMPOSER')) {
+  throw new Error(`Shift+Z did not restore normal chrome and composer state:\n${restoredFullscreenFrame}`)
 }
+
+// The fullscreen toggle must also restore the app while the composer owns the
+// keyboard; Esc only leaves the composer and keeps fullscreen active.
+act(() => {
+  setup.mockInput.pressKey('z', { shift: true })
+})
+await act(async () => {
+  await setup.flush()
+})
+act(() => {
+  setup.mockInput.pressKey('c')
+})
+await act(async () => {
+  await setup.flush()
+})
+act(() => {
+  setup.mockInput.pressEscape()
+})
+await act(async () => {
+  await setup.flush()
+})
+const escapedComposerFrame = captureCharFrame()
+if (!escapedComposerFrame.includes('FULLSCREEN  Shift+Z restore')) {
+  throw new Error(`Esc unexpectedly restored normal chrome from fullscreen:\n${escapedComposerFrame}`)
+}
+act(() => {
+  setup.mockInput.pressKey('c')
+})
+await act(async () => {
+  await setup.flush()
+})
+act(() => {
+  setup.mockInput.pressKey('z', { shift: true })
+})
+await act(async () => {
+  await setup.flush()
+})
+const shiftZRestoredFrame = captureCharFrame()
+if (shiftZRestoredFrame.includes('FULLSCREEN  Shift+Z restore') || !shiftZRestoredFrame.includes('SESSIONS')) {
+  throw new Error(`Shift+Z did not restore normal chrome while the composer was active:\n${shiftZRestoredFrame}`)
+}
+act(() => {
+  setup.mockInput.pressEscape()
+})
+await act(async () => {
+  await setup.flush()
+})
 
 // New agent session: Shift+N opens the folder/provider picker modal (rather
 // than immediately creating a session in the viewed workspace). Assert the
@@ -218,11 +300,22 @@ if (!splitFrame.includes('Open another tab to split')) {
   throw new Error(`Ctrl+B % did not run the split transcript command:\n${splitFrame}`)
 }
 
-// Exercise the real root keyboard dispatcher and overlay hand-off. This is
-// intentionally App-level: the CoordinationPopover smoke also covers `n`, but
-// it cannot prove the board closes and the New Workflow launcher replaces it.
+// Exercise the portable root command chord and overlay hand-off. Ctrl+K then A
+// must work even when a terminal cannot distinguish Ctrl+Shift+A from Ctrl+A.
+// This is intentionally App-level: the CoordinationPopover smoke also covers
+// `n`, but it cannot prove the board closes and the New Workflow launcher.
 act(() => {
-  setup.mockInput.pressKey('a', { ctrl: true, shift: true })
+  setup.mockInput.pressKey('k', { ctrl: true })
+})
+await act(async () => {
+  await setup.flush()
+})
+const commandChordFrame = captureCharFrame()
+if (!commandChordFrame.includes('a Agent Operations')) {
+  throw new Error(`Ctrl+K did not expose the portable command chord:\n${commandChordFrame}`)
+}
+act(() => {
+  setup.mockInput.pressKey('a')
 })
 await act(async () => {
   await setup.flush()
@@ -230,7 +323,7 @@ await act(async () => {
 })
 let coordinationFrame = captureCharFrame()
 if (!coordinationFrame.includes('AGENT CONTROL CENTER')) {
-  throw new Error(`Ctrl+Shift+A did not open Agent Operations:\n${coordinationFrame}`)
+  throw new Error(`Ctrl+K A did not open Agent Operations:\n${coordinationFrame}`)
 }
 
 act(() => {

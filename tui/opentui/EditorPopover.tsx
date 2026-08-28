@@ -161,6 +161,8 @@ type SymbolNavigationResult = {
 type EditorCommandId =
   | 'save'
   | 'save-all'
+  | 'restart-lsp'
+  | 'signature-help'
   | 'new-file'
   | 'rename-file'
   | 'delete-file'
@@ -242,7 +244,9 @@ function packFooterShortcuts(shortcuts: readonly string[], width: number): strin
 
 const EDITOR_COMMANDS: readonly EditorCommand[] = [
   { id: 'save', label: 'File: Save', detail: 'Ctrl+S', keywords: 'write file' },
-  { id: 'save-all', label: 'File: Save All', detail: 'Ctrl+Shift+S', keywords: 'write dirty modified buffers workspace' },
+  { id: 'save-all', label: 'File: Save All', detail: 'Alt+S / Ctrl+Shift+S', keywords: 'write dirty modified buffers workspace' },
+  { id: 'restart-lsp', label: 'Developer: Restart Language Server', detail: 'Alt+R / Ctrl+Shift+R', keywords: 'lsp recover reconnect typescript' },
+  { id: 'signature-help', label: 'IntelliSense: Signature Help', detail: 'Alt+K / Ctrl+Shift+Space', keywords: 'parameters function call lsp' },
   { id: 'new-file', label: 'File: New File', detail: 'Ctrl+N', keywords: 'create explorer path' },
   { id: 'rename-file', label: 'File: Rename Explorer File', detail: 'Explorer F2', keywords: 'move path' },
   { id: 'delete-file', label: 'File: Delete Explorer File', detail: 'Explorer Delete', keywords: 'remove path' },
@@ -260,12 +264,12 @@ const EDITOR_COMMANDS: readonly EditorCommand[] = [
   { id: 'format-document', label: 'Format Document', detail: 'Shift+Alt+F', keywords: 'lsp formatting indent' },
   { id: 'project-search', label: 'Search: Find in Project', detail: 'Alt+/', keywords: 'live grep workspace quickfix text' },
   { id: 'indent-lines', label: 'Edit: Indent Lines', detail: 'Ctrl+]', keywords: 'shift selection right tab' },
-  { id: 'outdent-lines', label: 'Edit: Outdent Lines', detail: 'Ctrl+[', keywords: 'shift selection left tab' },
+  { id: 'outdent-lines', label: 'Edit: Outdent Lines', detail: 'Shift+Tab / Ctrl+[', keywords: 'shift selection left tab' },
   { id: 'toggle-comment', label: 'Edit: Toggle Line Comment', detail: 'Ctrl+/', keywords: 'comment uncomment selection' },
   { id: 'add-next-occurrence', label: 'Selection: Add Next Occurrence', detail: 'Ctrl+D', keywords: 'multiple cursor select match occurrence' },
   { id: 'add-cursor-above', label: 'Selection: Add Cursor Above', detail: 'Ctrl+Alt+Up', keywords: 'multiple cursor vertical' },
   { id: 'add-cursor-below', label: 'Selection: Add Cursor Below', detail: 'Ctrl+Alt+Down', keywords: 'multiple cursor vertical' },
-  { id: 'split-selection-lines', label: 'Selection: Add Cursors to Line Ends', detail: 'Ctrl+Shift+L', keywords: 'multiple cursor split selected lines' },
+  { id: 'split-selection-lines', label: 'Selection: Add Cursors to Line Ends', detail: 'Alt+I / Ctrl+Shift+L', keywords: 'multiple cursor split selected lines' },
   { id: 'move-lines-up', label: 'Edit: Move Lines Up', detail: 'Alt+Up', keywords: 'reorder selection' },
   { id: 'move-lines-down', label: 'Edit: Move Lines Down', detail: 'Alt+Down', keywords: 'reorder selection' },
   { id: 'sort-lines', label: 'Edit: Sort Selected Lines', detail: '', keywords: 'alphabetical natural reorder' },
@@ -574,7 +578,7 @@ function lspStatusText(status: EditorLspStatus | null): string {
   if (status.state === 'ready') return `LSP ${status.name}`
   if (status.state === 'starting') return `LSP ${status.name}…`
   if (status.state === 'unavailable') return `LSP unavailable: ${status.name}`
-  return `LSP error: ${status.message} · ⌃⇧R restarts`
+  return `LSP error: ${status.message} · Alt+R restarts`
 }
 
 function diagnosticCounts(diagnostics: EditorDiagnostic[]): { errors: number; warnings: number; info: number } {
@@ -881,7 +885,7 @@ export function EditorPopover({
   const explorerWidth = explorerVisible ? Math.max(24, Math.min(38, Math.floor(width * 0.23))) : 0
   const footerShortcutRows = useMemo(() => packFooterShortcuts([
     '^S save',
-    '^⇧S save all',
+    'Alt+S/^⇧S save all',
     '^N new file',
     '^P open',
     '^F find',
@@ -892,7 +896,7 @@ export function EditorPopover({
     '^D next occurrence',
     '^Alt+↑/↓ cursors',
     '⇧Alt+arrows block',
-    '^⇧L line cursors',
+    'Alt+I/^⇧L line cursors',
     'Alt+↑/↓ move lines',
     'Alt+U/L case',
     '^/ comment',
@@ -912,7 +916,8 @@ export function EditorPopover({
     'Alt+. actions',
     '⇧Alt+F format',
     'Alt+/ project search',
-    '^⇧Space signature',
+    'Alt+K/^⇧Space signature',
+    'Alt+R/^⇧R restart LSP',
     'F8/⇧F8 problems',
     `Alt+Z wrap ${wordWrapEnabled ? 'on' : 'off'}`,
     `Alt+V vim ${vimEnabled ? 'on' : 'off'}`,
@@ -2393,6 +2398,8 @@ export function EditorPopover({
     switch (id) {
       case 'save': void saveActive(); break
       case 'save-all': void saveAll(); break
+      case 'restart-lsp': restartLsp(); break
+      case 'signature-help': void requestSignatureHelp(); break
       case 'new-file': openFilePrompt('create'); break
       case 'rename-file': openFilePrompt('rename'); break
       case 'delete-file': openFilePrompt('delete'); break
@@ -2434,7 +2441,7 @@ export function EditorPopover({
       case 'toggle-velocity': toggleVelocityScrolling(); break
       case 'toggle-word-wrap': toggleWordWrap(); break
     }
-  }, [addAdjacentCursor, addLineEndCursors, addNextOccurrence, applyCaseTransform, applyLineTransform, closeActiveTab, editSelectedLines, formatDocument, navigateDiagnostic, openFilePrompt, openProjectSearch, openQuick, openSearch, recoveryConflicts.length, requestCodeActions, requestHover, requestRename, requestSymbolNavigation, saveActive, saveAll, toggleExplorer, toggleVelocityScrolling, toggleVimMode, toggleWordWrap, trimTrailingWhitespace])
+  }, [addAdjacentCursor, addLineEndCursors, addNextOccurrence, applyCaseTransform, applyLineTransform, closeActiveTab, editSelectedLines, formatDocument, navigateDiagnostic, openFilePrompt, openProjectSearch, openQuick, openSearch, recoveryConflicts.length, requestCodeActions, requestHover, requestRename, requestSignatureHelp, requestSymbolNavigation, restartLsp, saveActive, saveAll, toggleExplorer, toggleVelocityScrolling, toggleVimMode, toggleWordWrap, trimTrailingWhitespace])
 
   const chooseQuickResultAt = useCallback((index: number) => {
     const result = quickResults[index]
@@ -2616,11 +2623,12 @@ export function EditorPopover({
 
   const handleKey = useCallback((key: EditorKeyEvent): boolean => {
     const sequence = key.sequence ?? ''
-    if (key.option && key.name === 'v') {
+    const alt = Boolean(key.option || key.meta)
+    if (alt && key.name === 'v') {
       toggleVimMode()
       return true
     }
-    if (key.option && key.name === 'z') {
+    if (alt && key.name === 'z') {
       toggleWordWrap()
       return true
     }
@@ -2729,7 +2737,7 @@ export function EditorPopover({
       return true
     }
     if (projectSearchOpen) {
-      if (key.name === 'escape' || (key.option && (key.name === '/' || sequence === '/'))) {
+      if (key.name === 'escape' || (alt && (key.name === '/' || sequence === '/'))) {
         setProjectSearchOpen(false)
         return true
       }
@@ -2746,9 +2754,9 @@ export function EditorPopover({
         })
         return true
       }
-      if (key.option && key.name === 'r') { setProjectSearchRegex((value) => !value); return true }
-      if (key.option && key.name === 'c') { setProjectSearchMatchCase((value) => !value); return true }
-      if (key.option && key.name === 'w') { setProjectSearchWholeWord((value) => !value); return true }
+      if (alt && key.name === 'r') { setProjectSearchRegex((value) => !value); return true }
+      if (alt && key.name === 'c') { setProjectSearchMatchCase((value) => !value); return true }
+      if (alt && key.name === 'w') { setProjectSearchWholeWord((value) => !value); return true }
       if (key.ctrl && key.name === 'u') { setProjectSearchQuery(''); return true }
       if (key.name === 'backspace' || key.name === 'delete') { setProjectSearchQuery((value) => value.slice(0, -1)); return true }
       if (!key.ctrl && !key.meta && sequence.length === 1 && sequence >= ' ') { setProjectSearchQuery((value) => value + sequence); return true }
@@ -2771,7 +2779,7 @@ export function EditorPopover({
       }
       if (key.name === 'return') {
         if (searchResult.error) { setMessage(`Invalid regular expression: ${searchResult.error}`); return true }
-        if (searchReplaceMode && key.option) replaceSearchMatch(true)
+        if (searchReplaceMode && alt) replaceSearchMatch(true)
         else if (searchReplaceMode && searchInput === 'replace') replaceSearchMatch(false)
         else navigateSearch(key.shift ? -1 : 1)
         return true
@@ -2784,9 +2792,9 @@ export function EditorPopover({
       }
       if (key.ctrl && key.name === 'f') { navigateSearch(key.shift ? -1 : 1); return true }
       if (key.ctrl && key.name === 'r') { setSearchReplaceMode(true); setSearchInput('replace'); return true }
-      if (key.option && key.name === 'c') { toggleSearchMatchCase(); return true }
-      if (key.option && key.name === 'r') { setSearchRegex((value) => !value); setSearchCursor(-1); return true }
-      if (key.option && key.name === 's') {
+      if (alt && key.name === 'c') { toggleSearchMatchCase(); return true }
+      if (alt && key.name === 'r') { setSearchRegex((value) => !value); setSearchCursor(-1); return true }
+      if (alt && key.name === 's') {
         if (!searchSelectionRange) setMessage('Select text before opening find to search within a selection')
         else { setSearchSelectionOnly((value) => !value); setSearchCursor(-1) }
         return true
@@ -2828,8 +2836,8 @@ export function EditorPopover({
     }
     if (focusPane === 'editor'
       && (key.name === 'left' || key.name === 'right')
-      && !(key.option && key.shift)
-      && ((key.ctrl && !key.option && !key.meta) || (!key.ctrl && (key.option || key.meta)))) {
+      && !(alt && key.shift)
+      && ((key.ctrl && !alt) || (!key.ctrl && alt))) {
       const editor = editorRef.current
       if (!editor) return true
       const options = key.shift ? { select: true } : undefined
@@ -2848,24 +2856,24 @@ export function EditorPopover({
       addNextOccurrence()
       return true
     }
-    if (focusPane === 'editor' && key.ctrl && key.option && (key.name === 'up' || key.name === 'down')) {
+    if (focusPane === 'editor' && key.ctrl && alt && (key.name === 'up' || key.name === 'down')) {
       addAdjacentCursor(key.name === 'up' ? -1 : 1)
       return true
     }
-    if (focusPane === 'editor' && key.option && key.shift
+    if (focusPane === 'editor' && alt && key.shift
       && (key.name === 'left' || key.name === 'right' || key.name === 'up' || key.name === 'down')) {
       extendBlockSelection(key.name)
       return true
     }
-    if (focusPane === 'editor' && key.option && !key.shift && !key.ctrl && (key.name === 'up' || key.name === 'down')) {
+    if (focusPane === 'editor' && alt && !key.shift && !key.ctrl && (key.name === 'up' || key.name === 'down')) {
       applyLineTransform(key.name === 'up' ? 'move-up' : 'move-down')
       return true
     }
-    if (focusPane === 'editor' && key.option && !key.ctrl && (key.name === 'u' || key.name === 'l')) {
+    if (focusPane === 'editor' && alt && !key.ctrl && (key.name === 'u' || key.name === 'l')) {
       applyCaseTransform(key.name === 'u' ? 'upper' : 'lower')
       return true
     }
-    if (focusPane === 'editor' && key.ctrl && key.shift && key.name === 'l') {
+    if (focusPane === 'editor' && ((key.ctrl && key.shift && key.name === 'l') || (alt && !key.ctrl && !key.shift && key.name === 'i'))) {
       addLineEndCursors()
       return true
     }
@@ -2882,7 +2890,7 @@ export function EditorPopover({
       if (key.name === 'delete') return editAtAllCursors('delete')
       if (key.name === 'return' && !key.ctrl && !key.meta) return editAtAllCursors({ insert: '\n' })
       if (key.name === 'tab' && !key.shift && !key.ctrl && !key.meta) return editAtAllCursors({ insert: '  ' })
-      if (!key.ctrl && !key.meta && !key.option && sequence.length === 1) {
+      if (!key.ctrl && !alt && sequence.length === 1) {
         const close = AUTO_PAIR_CLOSE[sequence]
         return editAtAllCursors(close ? { insert: `${sequence}${close}`, caretOffset: 1 } : { insert: sequence })
       }
@@ -2901,10 +2909,10 @@ export function EditorPopover({
       void requestSymbolNavigation(key.ctrl ? 'implementation' : key.shift ? 'references' : 'definition')
       return true
     }
-    if (key.option && key.shift && key.name === 'f') { void formatDocument(); return true }
-    if (key.option && (key.name === '.' || sequence === '.')) { void requestCodeActions(); return true }
-    if (key.option && (key.name === '/' || sequence === '/')) { openProjectSearch(); return true }
-    if (focusPane === 'editor' && key.ctrl && key.name === '/') { editSelectedLines('comment'); return true }
+    if (alt && key.shift && key.name === 'f') { void formatDocument(); return true }
+    if (alt && (key.name === '.' || sequence === '.')) { void requestCodeActions(); return true }
+    if (alt && (key.name === '/' || sequence === '/')) { openProjectSearch(); return true }
+    if (focusPane === 'editor' && key.ctrl && (key.name === '/' || sequence === '\x1f')) { editSelectedLines('comment'); return true }
     if (focusPane === 'editor' && key.ctrl && key.name === ']') { editSelectedLines('indent'); return true }
     if (focusPane === 'editor' && key.ctrl && key.name === '[') { editSelectedLines('outdent'); return true }
     if (focusPane === 'editor' && key.name === 'tab' && (key.shift || editorRef.current?.hasSelection())) {
@@ -2919,6 +2927,7 @@ export function EditorPopover({
         return true
       }
       const retainsPopup = (key.ctrl && key.name === 'k')
+        || (alt && key.name === 'k')
         || (key.ctrl && key.shift && (key.name === 'space' || sequence === '\0'))
       if (!retainsPopup) {
         setHoverInfo(null)
@@ -2978,9 +2987,9 @@ export function EditorPopover({
     }
     if (key.ctrl && key.name === 'q') { requestClose(); return true }
     if (key.ctrl && key.name === 'n') { openFilePrompt('create'); return true }
-    if (key.ctrl && key.shift && key.name === 's') { void saveAll(); return true }
+    if ((key.ctrl && key.shift && key.name === 's') || (alt && !key.ctrl && key.name === 's')) { void saveAll(); return true }
     if (key.ctrl && key.name === 's') { void saveActive(); return true }
-    if (key.ctrl && key.shift && key.name === 'r') { restartLsp(); return true }
+    if ((key.ctrl && key.shift && key.name === 'r') || (alt && !key.ctrl && key.name === 'r')) { restartLsp(); return true }
     if (key.ctrl && key.name === 'p') { openQuick(); return true }
     if (key.ctrl && key.name === 'f') { openSearch(); return true }
     if (key.ctrl && key.name === 'r') { openSearch(true); return true }
@@ -2990,7 +2999,7 @@ export function EditorPopover({
     if (key.ctrl && key.name === 't') { void jumpBack(); return true }
     if (key.name === 'f8') { navigateDiagnostic(key.shift ? -1 : 1); return true }
     if (key.ctrl && key.name === 'k') { void requestHover(); return true }
-    if (key.ctrl && key.shift && (key.name === 'space' || sequence === '\0')) { void requestSignatureHelp(); return true }
+    if ((key.ctrl && key.shift && (key.name === 'space' || sequence === '\0')) || (alt && !key.ctrl && key.name === 'k')) { void requestSignatureHelp(); return true }
     if (key.ctrl && (key.name === 'space' || sequence === '\0')) { void requestCompletions(true); return true }
     if (focusPane === 'editor' && key.name === 'escape' && editorRef.current?.hasSelection()) {
       editorRef.current.clearSelection()
@@ -3019,7 +3028,7 @@ export function EditorPopover({
       }
       return true
     }
-    if (focusPane === 'editor' && !key.ctrl && !key.meta && !key.option && sequence.length === 1) {
+    if (focusPane === 'editor' && !key.ctrl && !alt && sequence.length === 1) {
       const editor = editorRef.current
       if (!editor) return false
       const offset = editorDocumentOffset(editor)

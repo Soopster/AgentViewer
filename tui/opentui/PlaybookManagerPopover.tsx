@@ -10,7 +10,7 @@ import {
 } from '../../lib/tui/service'
 import type { TuiThemePalette } from '../theme'
 
-type ManagerKey = { name: string; ctrl: boolean; shift: boolean; sequence: string }
+type ManagerKey = { name: string; ctrl: boolean; shift: boolean; meta?: boolean; option?: boolean; sequence: string }
 type ManagerMode = 'list' | 'edit' | 'delete'
 type EditorFocus = 'name' | 'description' | 'argsHint' | 'maxAgents' | 'gateCommand' | 'approval' | 'autonomy' | 'review'
   | 'phaseNav' | 'phaseTitle' | 'taskNav' | 'taskKey' | 'taskTitle' | 'taskDetail' | 'taskRole' | 'taskSeat' | 'taskProvider' | 'taskModel' | 'taskPaths' | 'taskDeps' | 'taskVerify'
@@ -254,6 +254,7 @@ export function PlaybookManagerPopover({
     if (key.ctrl && key.name === 's') { void saveDraft(); return true }
     if (key.ctrl && key.name === 'p') { addPhase(); return true }
     if (key.ctrl && key.name === 't') { addTask(); return true }
+    if ((key.meta || key.option) && key.name === 'x') { deletePhase(); return true }
     if (key.ctrl && key.name === 'x') { key.shift ? deletePhase() : deleteTask(); return true }
     if (key.name === 'tab') {
       const direction = key.shift ? -1 : 1
@@ -512,7 +513,7 @@ export function PlaybookManagerPopover({
       <box height={2} paddingX={1} border={['top']} borderStyle="single" borderColor={theme.border} flexDirection="row" alignItems="center">
         <text fg={busy ? theme.amber : theme.dim} wrapMode="none">
           {busy ? 'Working…' : mode === 'edit'
-            ? `${MULTILINE_EDITOR_FIELDS.has(editorFocus) ? 'Enter newline · ' : ''}Ctrl+S save · Ctrl+P phase · Ctrl+T task · Ctrl+X delete task · Ctrl+Shift+X delete phase · Esc cancel`
+            ? `${MULTILINE_EDITOR_FIELDS.has(editorFocus) ? 'Enter newline · ' : ''}Ctrl+S save · Ctrl+P phase · Ctrl+T task · Ctrl+X delete task · Alt+X delete phase · Esc cancel`
             : '↑/↓ select · Enter/E edit · N new · D delete · Esc close'}
         </text>
       </box>

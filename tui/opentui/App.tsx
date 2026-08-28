@@ -217,6 +217,14 @@ import {
   runComposerSessionPreparation,
   splitCommandKey,
 } from './splitPaneState'
+import {
+  isAltKey,
+  isCtrlKey,
+  isCtrlShiftKey,
+  isShiftedKey,
+  PORTABLE_COMMAND_CHORDS,
+  portableCommandChord,
+} from './shortcutKeys'
 
 // Stable-reference event handler — reads the latest closure on every call
 // without appearing in any deps array. Mirrors React's upcoming useEffectEvent
@@ -4957,11 +4965,20 @@ type PaletteRow =
   | { kind: 'header'; label: string }
   | { kind: 'cmd'; cmd: PaletteCommand; cmdIndex: number }
 
+const COMMAND_CATEGORY_ORDER = ['Navigation', 'Transcript', 'Session', 'Coordination', 'Worktree', 'Tabs', 'View', 'App'] as const
+
 const RUNNING_INSIDE_TMUX = Boolean(process.env.TMUX)
 const FLEET_PAGE_SIZE = 9
 
 const COMMANDS: PaletteCommand[] = [
   // Navigation
+  { id: 'move-prev',  label: 'Move to previous item',  key: 'k / ↑', category: 'Navigation' },
+  { id: 'move-next',  label: 'Move to next item',      key: 'j / ↓', category: 'Navigation' },
+  { id: 'first',      label: 'Jump to first item',     key: 'g',     category: 'Navigation' },
+  { id: 'last',       label: 'Jump to last item',      key: '⇧G',    category: 'Navigation' },
+  { id: 'page-prev',  label: 'Page transcript up',     key: 'PgUp / ⌃U', category: 'Navigation' },
+  { id: 'page-next',  label: 'Page transcript down',   key: 'PgDn / ⌃D', category: 'Navigation' },
+  { id: 'focus-next', label: 'Move focus',              key: 'Tab',   category: 'Navigation' },
   { id: 'live',       label: 'Jump to live tail',      key: 'f',  category: 'Navigation' },
   { id: 'unread',     label: 'Jump to first unread',   key: 'u',  category: 'Navigation' },
   { id: 'mark',       label: 'Mark position',          key: 'm',  category: 'Navigation' },
@@ -4969,50 +4986,63 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'search',     label: 'Search messages',        key: '/',  category: 'Transcript' },
   { id: 'session-search', label: 'Search sessions',    key: '/',  category: 'Session'    },
   { id: 'next-attention', label: 'Jump to next attention item', key: '⌃N', category: 'Session' },
+  { id: 'search-prev', label: 'Previous search match', key: '⇧N', category: 'Transcript' },
+  { id: 'search-next', label: 'Next search match',     key: 'n',  category: 'Transcript' },
+  { id: 'conversation-prev', label: 'Previous conversation card', key: '(', category: 'Transcript' },
+  { id: 'conversation-next', label: 'Next conversation card',     key: ')', category: 'Transcript' },
+  { id: 'technical-prev', label: 'Previous technical card', key: '{', category: 'Transcript' },
+  { id: 'technical-next', label: 'Next technical card',     key: '}', category: 'Transcript' },
   { id: 'fold',       label: 'Fold/expand card',       key: 'e',  category: 'Transcript' },
+  { id: 'fold-parent', label: 'Fold/expand parent card', key: 'Enter', category: 'Transcript' },
   { id: 'copy',       label: 'Copy selected message',  key: 'y',  category: 'Transcript' },
   { id: 'reply',      label: 'Reply to selected message', key: '⇧Q', category: 'Transcript' },
   { id: 'bookmark-toggle', label: 'Bookmark message',  key: 'b',  category: 'Transcript' },
-  { id: 'bookmark-jump',   label: 'Jump to next bookmark', key: '[ ]', category: 'Transcript' },
+  { id: 'bookmark-prev',   label: 'Jump to previous bookmark', key: '[', category: 'Transcript' },
+  { id: 'bookmark-jump',   label: 'Jump to next bookmark', key: ']', category: 'Transcript' },
   { id: 'bookmark-all',    label: 'Browse all bookmarks', key: '⇧B', category: 'Transcript' },
   { id: 'tasks',      label: 'Open task panel',         key: '⇧T', category: 'Transcript' },
   { id: 'tasks-full', label: 'Task lineage popover',   key: '⇧L', category: 'Transcript' },
+  { id: 'tasks-narrow', label: 'Narrow task panel',    key: '_', category: 'Transcript' },
+  { id: 'tasks-wide', label: 'Widen task panel',       key: '+', category: 'Transcript' },
   // Session
   { id: 'composer',   label: 'Open composer',          key: 'c',  category: 'Session'    },
-  { id: 'composer-window', label: 'Open composer window', key: '^O', category: 'Session'    },
+  { id: 'composer-window', label: 'Open composer window', key: '⌃O', category: 'Session'    },
+  { id: 'clipboard-paste', label: 'Paste clipboard into composer', key: '⌃V', category: 'Session' },
   { id: 'composer-toggle', label: 'Show/hide composer',   key: '⇧E', category: 'Session'    },
-  { id: 'composer-stash', label: 'Stash composer prompt', key: 'stash', category: 'Session' },
-  { id: 'composer-stash-pop', label: 'Pop composer stash', key: 'pop', category: 'Session' },
-  { id: 'composer-stash-list', label: 'List composer stash', key: 'list', category: 'Session' },
-  { id: 'new',        label: 'New agent session',      key: 'N',  category: 'Session'    },
-  { id: 'reuse',      label: 'Reuse last prompt',      key: 'R',  category: 'Session'    },
-  { id: 'rename',     label: 'Rename session',         key: '^R', category: 'Session'    },
-  { id: 'cli',        label: 'Copy CLI resume command', key: 'C',  category: 'Session'    },
+  { id: 'composer-stash', label: 'Stash composer prompt', key: '', category: 'Session' },
+  { id: 'composer-stash-pop', label: 'Pop composer stash', key: '', category: 'Session' },
+  { id: 'composer-stash-list', label: 'List composer stash', key: '', category: 'Session' },
+  { id: 'new',        label: 'New agent session',      key: '⇧N',  category: 'Session'    },
+  { id: 'reuse',      label: 'Reuse last prompt',      key: '⇧R',  category: 'Session'    },
+  { id: 'rename',     label: 'Rename session',         key: '⌃R', category: 'Session'    },
+  { id: 'cli',        label: 'Copy CLI resume command', key: '',  category: 'Session'    },
   { id: 'channel-bridge', label: 'Channel bridge',      key: '⇧C', category: 'Session'    },
-  { id: 'channel-bridge-route', label: 'Toggle composer → bridge routing', key: 'route', category: 'Session' },
+  { id: 'channel-bridge-route', label: 'Toggle composer → bridge routing', key: 'composer ⌃R', category: 'Session' },
   { id: 'ide-bridge', label: 'IDE bridge',              key: '⇧I', category: 'Session'    },
-  { id: 'ide-bridge-route', label: 'Toggle composer → IDE routing', key: 'route', category: 'Session' },
-  { id: 'git',        label: 'Git status',             key: '^G', category: 'Session'    },
-  { id: 'pull-requests', label: 'Review pull requests', key: '^⇧G', category: 'Session'   },
-  { id: 'files',      label: 'Browse project files',   key: '^F', category: 'Session'    },
-  { id: 'editor',     label: 'Open project editor',    key: '^E', category: 'Session'    },
-  { id: 'analytics',  label: 'Session analytics',      key: '^A', category: 'Session'    },
+  { id: 'ide-bridge-route', label: 'Toggle composer → IDE routing', key: '', category: 'Session' },
+  { id: 'git',        label: 'Git status',             key: '⌃G', category: 'Session'    },
+  { id: 'pull-requests', label: 'Review pull requests', key: '⌃K g / ⌃⇧G', category: 'Session'   },
+  { id: 'files',      label: 'Browse project files',   key: '⌃F', category: 'Session'    },
+  { id: 'editor',     label: 'Open project editor',    key: '⌃E', category: 'Session'    },
+  { id: 'analytics',  label: 'Session analytics',      key: '⌃A', category: 'Session'    },
   { id: 'attention',  label: 'Attention inbox',        key: '!',  category: 'Session'    },
   { id: 'messaging',  label: 'Cross-session messaging', key: '⇧M', category: 'Session'   },
   { id: 'worktree-new',     label: 'New worktree task',              key: '⇧F', category: 'Worktree' },
   { id: 'worktree-merge',   label: 'Merge worktree task into main',  key: '',   category: 'Worktree' },
   { id: 'worktree-discard', label: 'Discard worktree task',          key: '',   category: 'Worktree' },
-  { id: 'coord-start', label: 'Start coordinated run', key: '^⇧N', category: 'Coordination' },
-  { id: 'coord-board', label: 'Open Agent Operations', key: '^⇧A', category: 'Coordination' },
-  { id: 'coord-cleanup', label: 'Clean completed worktrees', key: 'c', category: 'Coordination' },
+  { id: 'coord-start', label: 'Start coordinated run', key: '⌃K n / ⌃⇧N', category: 'Coordination' },
+  { id: 'coord-board', label: 'Open Agent Operations', key: '⌃K a / ⌃⇧A', category: 'Coordination' },
+  { id: 'coord-cleanup', label: 'Clean completed worktrees', key: '', category: 'Coordination' },
   { id: 'coord-stop', label: 'Stop coordinated run', key: '', category: 'Coordination' },
   { id: 'fleet',      label: 'Toggle fleet strip',      key: '⇧A', category: 'View'       },
+  { id: 'fleet-prev', label: 'Previous fleet page',     key: '{', category: 'View'       },
+  { id: 'fleet-next', label: 'Next fleet page',         key: '}', category: 'View'       },
   { id: 'checkpoints', label: 'Checkpoints & review',   key: '⇧U', category: 'Session'    },
-  { id: 'handoff-brief', label: 'Handoff brief',       key: 'H',  category: 'Session'    },
+  { id: 'handoff-brief', label: 'Handoff brief',       key: '⇧H',  category: 'Session'    },
   { id: 'prompt-library', label: 'Prompt library',     key: '⇧P', category: 'Session'    },
-  { id: 'diagnostics', label: 'Session diagnostics',   key: 'D',  category: 'Session'    },
+  { id: 'diagnostics', label: 'Session diagnostics',   key: '⇧D',  category: 'Session'    },
   { id: 'provider',   label: 'Switch provider',        key: 'p',  category: 'Session'    },
-  { id: 'sort',       label: 'Toggle sidebar sort',    key: 'S',  category: 'Session'    },
+  { id: 'sort',       label: 'Toggle sidebar sort',    key: '⇧S',  category: 'Session'    },
   { id: 'sidebar-view', label: 'Switch sidebar view',  key: 'a',  category: 'Session'    },
   // Tabs
   { id: 'tab-toggle', label: 'Toggle tab bar',         key: 'b',  category: 'Tabs'       },
@@ -5029,20 +5059,25 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'split-add',    label: 'Split transcript pane',    key: splitCommandKey('%', RUNNING_INSIDE_TMUX), category: 'View'  },
   { id: 'split-close',  label: 'Close split pane',         key: splitCommandKey('x', RUNNING_INSIDE_TMUX), category: 'View'  },
   { id: 'split-focus',  label: 'Focus next split pane',    key: splitCommandKey('o', RUNNING_INSIDE_TMUX), category: 'View'  },
+  { id: 'split-focus-prev', label: 'Focus previous split pane', key: splitCommandKey('←', RUNNING_INSIDE_TMUX), category: 'View' },
+  { id: 'split-flip',   label: 'Flip reader/split focus',  key: splitCommandKey(';', RUNNING_INSIDE_TMUX), category: 'View'  },
   { id: 'split-focus-back', label: 'Focus reader (leave split pane)', key: 'esc', category: 'View' },
   { id: 'split-cycle',  label: 'Next session in split pane', key: splitCommandKey('n', RUNNING_INSIDE_TMUX), category: 'View' },
   { id: 'split-toggle', label: 'Toggle split panes',       key: splitCommandKey('z', RUNNING_INSIDE_TMUX), category: 'View'  },
   { id: 'rail',       label: 'Toggle session rail',    key: 'h',  category: 'View'       },
+  { id: 'rail-narrow', label: 'Narrow session rail',   key: '[', category: 'View'       },
+  { id: 'rail-wide',  label: 'Widen session rail',     key: ']', category: 'View'       },
   { id: 'focus',      label: 'Toggle focus mode',      key: 'z',  category: 'View'       },
   { id: 'fullscreen', label: 'Toggle fullscreen transcript', key: '⇧Z', category: 'View' },
-  { id: 'tools',      label: 'Toggle tool calls',      key: 'X',  category: 'View'       },
+  { id: 'tools',      label: 'Toggle tool calls',      key: '⇧X',  category: 'View'       },
   { id: 'velocity-scroll', label: 'Toggle velocity scroll', key: '⇧V', category: 'View'  },
-  { id: 'mode',       label: 'Cycle provider mode',    key: 'M',  category: 'Session'    },
-  { id: 'model',      label: 'Composer settings',      key: '⌥M', category: 'Session'    },
-  { id: 'workflow',   label: 'Toggle workflow tool',   key: '',   category: 'Session'    },
+  { id: 'mode',       label: 'Cycle provider mode',    key: '',  category: 'Session'    },
+  { id: 'model',      label: 'Composer settings',      key: 'Alt+M', category: 'Session'    },
+  { id: 'workflow',   label: 'Toggle workflow tool',   key: 'composer ⌃W',   category: 'Session'    },
   // App
+  { id: 'shortcut-guide', label: 'Keyboard shortcut guide', key: '?', category: 'App' },
   { id: 'refresh',    label: 'Refresh sessions',       key: 'r',  category: 'App'        },
-  { id: 'quit',       label: 'Quit',                   key: 'q',  category: 'App'        },
+  { id: 'quit',       label: 'Quit',                   key: 'q / Esc / ⌃C',  category: 'App'        },
 ]
 
 function extractDiffText(lines: TuiTranscriptCardLine[]): string | null {
@@ -7260,6 +7295,9 @@ export default function OpenTuiApp() {
   const [splitPinnedKeys, setSplitPinnedKeys] = useState<string[]>([])
   // tmux-style prefix state: true between ⌃B and the command key that follows.
   const [splitChordPending, setSplitChordPending] = useState(false)
+  // Portable command prefix for actions whose Ctrl+Shift shortcuts cannot be
+  // distinguished from Ctrl on legacy/raw terminals (notably on Windows).
+  const [commandChordPending, setCommandChordPending] = useState(false)
   // Which split pane owns the keyboard (null = the reader does). Panes register
   // an imperative scroll handle here so the root dispatcher can drive the
   // focused one without every pane subscribing to the key stream.
@@ -11584,8 +11622,14 @@ export default function OpenTuiApp() {
       ? bridgeFiltered
       : bridgeFiltered.filter((cmd) => cmd.id !== 'ide-bridge' && cmd.id !== 'ide-bridge-route')
     const q = commandPaletteQuery.toLowerCase()
-    if (!q) return availableCommands
-    return availableCommands.filter((cmd) => cmd.label.toLowerCase().includes(q))
+    if (!q) {
+      // Keyboard selection indexes this array, so keep it in the exact same
+      // category order used by the rendered palette rows.
+      return COMMAND_CATEGORY_ORDER.flatMap((category) => (
+        availableCommands.filter((cmd) => cmd.category === category)
+      ))
+    }
+    return availableCommands.filter((cmd) => `${cmd.label} ${cmd.key} ${cmd.category}`.toLowerCase().includes(q))
   }, [canUseChannelBridge, canUseIdeBridge, commandPaletteQuery])
 
   useEffect(() => {
@@ -11620,13 +11664,13 @@ export default function OpenTuiApp() {
       return filteredCommands.map((cmd, cmdIndex) => ({ kind: 'cmd', cmd, cmdIndex }))
     }
     const rows: PaletteRow[] = []
-    let lastCategory = ''
-    filteredCommands.forEach((cmd, cmdIndex) => {
-      if (cmd.category !== lastCategory) {
-        rows.push({ kind: 'header', label: cmd.category })
-        lastCategory = cmd.category
-      }
-      rows.push({ kind: 'cmd', cmd, cmdIndex })
+    COMMAND_CATEGORY_ORDER.forEach((category) => {
+      const commands = filteredCommands
+        .map((cmd, cmdIndex) => ({ cmd, cmdIndex }))
+        .filter((entry) => entry.cmd.category === category)
+      if (commands.length === 0) return
+      rows.push({ kind: 'header', label: category })
+      commands.forEach((entry) => rows.push({ kind: 'cmd', ...entry }))
     })
     return rows
   }, [commandPaletteQuery, filteredCommands])
@@ -12642,7 +12686,7 @@ export default function OpenTuiApp() {
         for (const agent of snapshot.agents) {
           if (agent.status === 'blocked' && !watch.blockedAgents.has(agent.id)) {
             watch.blockedAgents.add(agent.id)
-            showNotice('info', `Team: ${agent.name} is blocked${agent.taskId ? ` on ${agent.taskId}` : ''} — ^⇧A to intervene`, 6000)
+            showNotice('info', `Team: ${agent.name} is blocked${agent.taskId ? ` on ${agent.taskId}` : ''} — ⌃K a to intervene`, 6000)
             notifyTeamEvent('teammate blocked', `${agent.name} is blocked${agent.taskId ? ` on ${agent.taskId}` : ''}`)
           }
         }
@@ -12651,7 +12695,7 @@ export default function OpenTuiApp() {
           watch.status = status
           if (status === 'completed' || status === 'failed' || status === 'stopped') {
             const headline = snapshot.run.summary?.split('\n')[0] ?? ''
-            showNotice(status === 'completed' ? 'info' : 'error', `Team run ${status}${headline ? `: ${headline}` : ''} — ^⇧A for the board`, 8000)
+            showNotice(status === 'completed' ? 'info' : 'error', `Team run ${status}${headline ? `: ${headline}` : ''} — ⌃K a for the board`, 8000)
             notifyTeamEvent(`team run ${status}`, headline || snapshot.run.prompt.slice(0, 80))
             coordWatchStateRef.current.delete(runId)
             setCoordWatchIds((prev) => prev.filter((id) => id !== runId))
@@ -14880,8 +14924,22 @@ export default function OpenTuiApp() {
   // key handlers run before the chord branch, so a chord left dangling there
   // would swallow the next reader keystroke long after the user moved on.
   useEffect(() => {
-    if (composerActive && splitChordPending) setSplitChordPending(false)
-  }, [composerActive, splitChordPending])
+    if (!composerActive) return
+    if (splitChordPending) setSplitChordPending(false)
+    if (commandChordPending) setCommandChordPending(false)
+  }, [commandChordPending, composerActive, splitChordPending])
+
+  // Prefix chords are intentionally short-lived. A dropped key event (remote
+  // shell, terminal multiplexer, focus change) must not leave the next ordinary
+  // key trapped as a command indefinitely.
+  useEffect(() => {
+    if (!splitChordPending && !commandChordPending) return
+    const timeout = setTimeout(() => {
+      setSplitChordPending(false)
+      setCommandChordPending(false)
+    }, 4_000)
+    return () => clearTimeout(timeout)
+  }, [commandChordPending, splitChordPending])
 
   // Focus can outlive the pane that held it: closing a pane, a narrower
   // terminal, or a closed tab all shrink visibleSplitPaneCount. Opening the
@@ -15251,11 +15309,17 @@ export default function OpenTuiApp() {
               : visibleSplitPaneCount > 0 ? `split ${visibleSplitPaneCount}` : 'split',
           ], ['V', velocityScrollEnabled ? 'vel off' : 'vel on']],
           [['⌃O', 'composer'], ['p', 'provider'], ['y', 'copy'], ['Q', 'reply'], ['r', 'refresh']],
-          [['?', 'help'], ['q', 'quit']],
+          [['⌃K', 'commands'], ['?', 'help'], ['q', 'quit']],
         ]
     const segs: InlineTextSegment[] = []
     // A pending prefix takes over the bar: the chord is modal, so the only keys
     // that matter right now are its own.
+    if (commandChordPending) {
+      return [
+        { text: '⌃K', fg: theme.amber },
+        { text: '  a Agent Operations   n new coordinated run   g pull requests   esc cancel', fg: theme.muted },
+      ]
+    }
     if (splitChordPending) {
       return [
         { text: '⌃B', fg: theme.amber },
@@ -15268,7 +15332,7 @@ export default function OpenTuiApp() {
       return [
         { text: `split pane ${splitFocusIndex + 1}`, fg: theme.amber },
         {
-          text: `  j/k card   e fold   y copy   b mark   Q reply   c send   ⌃G git   D diag   ↵ open   ${RUNNING_INSIDE_TMUX ? '? palette' : '⌃B o next'}   esc reader`,
+          text: `  j/k card   e fold   y copy   b mark   Q reply   c send   ⌃G git   D diag   ⌃K a ops   ↵ open   ${RUNNING_INSIDE_TMUX ? '? palette' : '⌃B o next'}   esc reader`,
           fg: theme.muted,
         },
       ]
@@ -15293,7 +15357,7 @@ export default function OpenTuiApp() {
       segs.push({ text: `⇌ ${ATTACHED_DAEMON_HOST}`, fg: theme.cyan })
     }
     return segs
-  }, [attentionNeedsInputCount, composerActive, composerSendState, diffLayout, transcriptView, density, transcriptWidth, showToolCalls, velocityScrollEnabled, visibleSplitPaneCount, splitChordPending, splitFocusIndex, effectiveFocus, theme])
+  }, [attentionNeedsInputCount, commandChordPending, composerActive, composerSendState, diffLayout, transcriptView, density, transcriptWidth, showToolCalls, velocityScrollEnabled, visibleSplitPaneCount, splitChordPending, splitFocusIndex, effectiveFocus, theme])
 
   // awaitingPersistedTurn belongs here too: a Claude stream stall (see the
   // stallGuard comment above the read loop) drops composerSendState back to
@@ -15379,6 +15443,7 @@ export default function OpenTuiApp() {
       setFocusedPane('messages')
       setSplitFocusIndex(null)
       setSplitChordPending(false)
+      setCommandChordPending(false)
       setSessionSearchMode(false)
     }
   })
@@ -16162,6 +16227,12 @@ export default function OpenTuiApp() {
         showToggleOutcome('Fleet strip', next)
         break
       }
+      case 'fleet-prev':
+        if (fleetPageCount > 1) setFleetPage((current) => (current - 1 + fleetPageCount) % fleetPageCount)
+        break
+      case 'fleet-next':
+        if (fleetPageCount > 1) setFleetPage((current) => (current + 1) % fleetPageCount)
+        break
       case 'checkpoints':
         if (gitRepoCwd) setCheckpointOpen(true)
         else showNotice('info', 'Selected session has no working directory', 3000)
@@ -16192,6 +16263,12 @@ export default function OpenTuiApp() {
         void writeTuiRailVisible(nextVisible).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store rail'))
         break
       }
+      case 'rail-narrow':
+        resizeSidebar(-SIDEBAR_RESIZE_STEP)
+        break
+      case 'rail-wide':
+        resizeSidebar(SIDEBAR_RESIZE_STEP)
+        break
       case 'focus': {
         const next = !focusMode
         setFocusMode(next)
@@ -16266,6 +16343,46 @@ export default function OpenTuiApp() {
         void writeTuiTranscriptWidth(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store transcript width'))
         break
       }
+      case 'move-prev':
+        if (effectiveFocus === 'sessions') {
+          if (sidebarView === 'coordinator') moveCoordinatorSelection(-1)
+          else moveSelection(-1)
+        } else {
+          setFocusedPane('messages')
+          if (!moveAgentToolCursor(-1)) moveCursor(-1)
+        }
+        break
+      case 'move-next':
+        if (effectiveFocus === 'sessions') {
+          if (sidebarView === 'coordinator') moveCoordinatorSelection(1)
+          else moveSelection(1)
+        } else {
+          setFocusedPane('messages')
+          if (!moveAgentToolCursor(1)) moveCursor(1)
+        }
+        break
+      case 'first':
+        setFocusedPane('messages')
+        jumpToTranscriptIndex(0)
+        break
+      case 'last':
+        setFocusedPane('messages')
+        jumpToTranscriptTail()
+        break
+      case 'page-prev':
+        setFocusedPane('messages')
+        moveViewport(-1)
+        break
+      case 'page-next':
+        setFocusedPane('messages')
+        moveViewport(1)
+        break
+      case 'focus-next': {
+        const next: PaneFocus = focusedPane === 'sessions' ? 'messages' : 'sessions'
+        if (next === 'messages') promotePreviewToTab()
+        setFocusedPane(next)
+        break
+      }
       case 'live':
         setFocusedPane('messages')
         jumpToTranscriptTail()
@@ -16282,9 +16399,39 @@ export default function OpenTuiApp() {
         setFocusedPane('messages')
         setSearchMode(true)
         break
+      case 'search-prev':
+        setFocusedPane('messages')
+        if (searchMatches.length > 0) jumpToSearchMatch(-1)
+        else setSearchMode(true)
+        break
+      case 'search-next':
+        setFocusedPane('messages')
+        if (searchMatches.length > 0) jumpToSearchMatch(1)
+        else setSearchMode(true)
+        break
+      case 'conversation-prev':
+        setFocusedPane('messages')
+        jumpToMatchingCard(-1, (card) => card.category === 'conversation')
+        break
+      case 'conversation-next':
+        setFocusedPane('messages')
+        jumpToMatchingCard(1, (card) => card.category === 'conversation')
+        break
+      case 'technical-prev':
+        setFocusedPane('messages')
+        jumpToMatchingCard(-1, (card) => card.category !== 'conversation')
+        break
+      case 'technical-next':
+        setFocusedPane('messages')
+        jumpToMatchingCard(1, (card) => card.category !== 'conversation')
+        break
       case 'fold':
         setFocusedPane('messages')
         toggleExpansion()
+        break
+      case 'fold-parent':
+        setFocusedPane('messages')
+        toggleExpansion('parent')
         break
       case 'copy':
         setFocusedPane('messages')
@@ -16297,6 +16444,10 @@ export default function OpenTuiApp() {
       case 'bookmark-toggle':
         setFocusedPane('messages')
         void toggleBookmarkForCursor()
+        break
+      case 'bookmark-prev':
+        setFocusedPane('messages')
+        jumpToBookmark(-1)
         break
       case 'bookmark-jump':
         setFocusedPane('messages')
@@ -16311,6 +16462,12 @@ export default function OpenTuiApp() {
         break
       case 'tasks-full':
         setTaskPopoverOpen(true)
+        break
+      case 'tasks-narrow':
+        resizeTaskPanel(-TASK_PANEL_RESIZE_STEP)
+        break
+      case 'tasks-wide':
+        resizeTaskPanel(TASK_PANEL_RESIZE_STEP)
         break
       case 'tab-toggle': {
         const next = !tabsEnabled
@@ -16330,6 +16487,12 @@ export default function OpenTuiApp() {
         break
       case 'split-focus':
         cycleSplitFocus(1)
+        break
+      case 'split-focus-prev':
+        cycleSplitFocus(-1)
+        break
+      case 'split-flip':
+        toggleSplitFocus()
         break
       case 'split-focus-back':
         focusReaderFromSplit()
@@ -16372,6 +16535,10 @@ export default function OpenTuiApp() {
         break
       case 'composer-window':
         openComposerWindow()
+        break
+      case 'clipboard-paste':
+        setComposerActive(true)
+        void pasteSystemClipboardToComposer()
         break
       case 'composer-toggle':
         toggleComposerHidden()
@@ -16456,6 +16623,9 @@ export default function OpenTuiApp() {
           return next
         })
         break
+      case 'shortcut-guide':
+        showNotice('info', 'Press ? at any time outside the composer to open this shortcut guide')
+        break
       case 'refresh':
         void refreshSessions(provider)
         if (selectedSessionTarget) void refreshSelectedSessionDetail(selectedSessionTarget, false)
@@ -16469,22 +16639,11 @@ export default function OpenTuiApp() {
   useKeyboard((key) => {
     if (key.eventType === 'release') return
     const sequence = key.sequence || ''
-    const isShifted = (char: string): boolean => key.name === char.toLowerCase() && key.shift
-    const isCtrl = (char: string): boolean => {
-      const normalized = char.toLowerCase()
-      const code = normalized.charCodeAt(0)
-      const ctrlSequence = code >= 97 && code <= 122
-        ? String.fromCharCode(code - 96)
-        : ''
-      return (key.ctrl && key.name === normalized) || sequence === ctrlSequence
-    }
-    // Legacy terminal input collapses Ctrl+Shift+letter to the same single
-    // control byte as Ctrl+letter. Kitty/CSI-u and xterm modifyOtherKeys retain
-    // Shift, so only apply the ambiguous fallback to genuine one-byte input.
-    const isCtrlShift = (char: string): boolean => isCtrl(char)
-      && (key.shift || (key.source === 'raw' && key.raw.length === 1))
+    const isShifted = (char: string): boolean => isShiftedKey(key, char)
+    const isCtrl = (char: string): boolean => isCtrlKey(key, char)
+    const isCtrlShift = (char: string): boolean => isCtrlShiftKey(key, char)
     const isKeyRepeat = key.eventType === 'repeat' || key.repeated === true
-    const isModelEffortShortcut = (key.name === 'm' && (key.option || key.meta)) || sequence === 'µ'
+    const isModelEffortShortcut = isAltKey(key, 'm') || sequence === 'µ'
     const handled = (action: () => void): void => {
       key.preventDefault()
       key.stopPropagation()
@@ -17275,6 +17434,13 @@ export default function OpenTuiApp() {
       }
     }
 
+    // Fullscreen's restore binding remains global even when the composer owns
+    // keyboard input. Outside fullscreen, Shift+Z is still ordinary draft text.
+    if (fullscreenMode && isShifted('Z')) {
+      handled(() => toggleFullscreenMode(false))
+      return
+    }
+
     if (composerActive) {
       if (isCtrl('v')) {
         handled(() => { void pasteSystemClipboardToComposer() })
@@ -17305,10 +17471,6 @@ export default function OpenTuiApp() {
             setComposerStashOpen(false)
             setComposerStashIndex(0)
           })
-          return
-        }
-        if (fullscreenMode) {
-          handled(() => toggleFullscreenMode(false))
           return
         }
         handled(() => {
@@ -17519,6 +17681,35 @@ export default function OpenTuiApp() {
       return
     }
 
+    // ── portable command chord ───────────────────────────────────────────────
+    // Ctrl+Shift+letter is indistinguishable from Ctrl+letter in legacy raw
+    // terminal input. Ctrl+K followed by a printable command key gives Windows
+    // and other legacy terminals an unambiguous path to those same actions.
+    if (commandChordPending) {
+      handled(() => {
+        setCommandChordPending(false)
+        if (key.name === 'escape' || isCtrl('c') || isCtrl('g')) {
+          showNotice('info', 'Command chord cancelled')
+          return
+        }
+        const chord = portableCommandChord(sequence || key.name)
+        if (chord) {
+          executeCommandPalette(PORTABLE_COMMAND_CHORDS[chord])
+          return
+        }
+        showNotice('info', `⌃K ${sequence || key.name} is not a command chord — a operations · n coordinated run · g pull requests`)
+      })
+      return
+    }
+
+    if (isCtrl('k')) {
+      handled(() => {
+        setSplitChordPending(false)
+        setCommandChordPending(true)
+      })
+      return
+    }
+
     // ── tmux-style split chord ────────────────────────────────────────────────
     // Must sit at the very top of the non-composer path: the pending-chord
     // branch swallows the command key, and anything above it (notably the
@@ -17554,14 +17745,17 @@ export default function OpenTuiApp() {
     }
 
     if (isCtrl('b')) {
-      handled(() => setSplitChordPending(true))
+      handled(() => {
+        setCommandChordPending(false)
+        setSplitChordPending(true)
+      })
       return
     }
 
-    // Shift+Z extends the existing z focus binding. It lives outside the
-    // composer branch so typing a capital Z into a draft remains ordinary text.
+    // Shift+Z extends the existing z focus binding. This entry shortcut lives
+    // outside the composer branch so a capital Z remains ordinary draft text.
     if (isShifted('Z')) {
-      handled(toggleFullscreenMode)
+      handled(() => toggleFullscreenMode(true))
       return
     }
 
@@ -17675,11 +17869,6 @@ export default function OpenTuiApp() {
       return
     }
 
-    if (fullscreenMode && key.name === 'escape') {
-      handled(() => toggleFullscreenMode(false))
-      return
-    }
-
     if ((key.name === 'q' && !key.shift) || key.name === 'escape' || isCtrl('c')) {
       handled(requestExit)
       return
@@ -17721,7 +17910,8 @@ export default function OpenTuiApp() {
       return
     }
 
-    // Agent Operations. On legacy terminals raw ^A is the portable fallback.
+    // Enhanced terminals preserve this direct modifier chord; ⌃K a is the
+    // portable path when Ctrl+Shift cannot be represented independently.
     if (isCtrlShift('a')) {
       handled(openCoordinationBoard)
       return
@@ -17734,8 +17924,8 @@ export default function OpenTuiApp() {
       return
     }
 
-    // Global analytics popover. On legacy terminals ^A is reserved for the
-    // coordinator fallback above; analytics remains available in the palette.
+    // Global analytics popover. Raw Ctrl+A remains analytics; it must never be
+    // guessed to mean Ctrl+Shift+A on terminals that cannot distinguish them.
     if (isCtrl('a')) {
       handled(() => setAnalyticsOpen(true))
       return
@@ -19006,7 +19196,7 @@ export default function OpenTuiApp() {
             <box flexGrow={1} paddingX={1}>
               {sidebarView === 'coordinator' ? (
                 coordinatorEntries.length === 0 ? (
-                  <text fg={theme.dim}>{fitText('No coordinator runs — ⌃⇧N to start one', sidebarInnerWidth)}</text>
+                  <text fg={theme.dim}>{fitText('No coordinator runs — ⌃K n to start one', sidebarInnerWidth)}</text>
                 ) : (
                   <scrollbox
                     style={{ height: sidebarRowBudget }}
@@ -19115,7 +19305,7 @@ export default function OpenTuiApp() {
                   toggleFullscreenMode(false)
                 }}
               >
-                <text fg={theme.dim} wrapMode="none">FULLSCREEN  Shift+Z / Esc restore</text>
+                <text fg={theme.dim} wrapMode="none">FULLSCREEN  Shift+Z restore</text>
               </box>
             </box>
           ) : null}
@@ -19818,8 +20008,12 @@ export default function OpenTuiApp() {
         })() : null}
 
         {commandPaletteOpen ? (() => {
-          const paletteW = Math.min(width - 8, 64)
-          const labelW = paletteW - 10
+          const paletteW = Math.min(width - 8, 76)
+          const shortcutW = Math.max(8, Math.min(18, filteredCommands.reduce(
+            (longest, command) => Math.max(longest, command.key.length),
+            0,
+          )))
+          const labelW = Math.max(12, paletteW - shortcutW - 5)
           // Keep the absolute overlay bounded with a deterministic row window.
           // Stable slot keys avoid stale terminal cells as the window moves.
           const selectedRowIndex = paletteDisplayRows.findIndex((row) => row.kind === 'cmd' && row.cmdIndex === commandPaletteIndex)
@@ -19887,7 +20081,11 @@ export default function OpenTuiApp() {
                         {fitText(row.cmd.label, labelW - 1)}
                       </text>
                     </box>
-                    <text fg={isSelected ? theme.cyan : theme.dim}>{row.cmd.key}</text>
+                    <box width={shortcutW} justifyContent="flex-end">
+                      <text fg={isSelected ? theme.cyan : theme.dim} wrapMode="none">
+                        {fitText(row.cmd.key, shortcutW)}
+                      </text>
+                    </box>
                   </box>
                 )
               })}

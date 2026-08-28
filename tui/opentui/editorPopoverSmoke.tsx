@@ -551,9 +551,9 @@ process.stdin.on('data', (chunk) => {
     act(() => { handleKey?.({ name: 'tab', ctrl: true, shift: false, sequence: '\u0009' }) })
     await flush(setup, 150)
     if (!setup.captureCharFrame().includes('const answer')) throw new Error('Ctrl+Tab did not switch to the previous open file')
-    act(() => { handleKey?.({ name: 'tab', ctrl: true, shift: true, sequence: '\u0009' }) })
+    act(() => { handleKey?.({ name: 'pagedown', ctrl: true, shift: false, sequence: '\u001b[6;5~' }) })
     await flush(setup, 150)
-    if (!setup.captureCharFrame().includes('export const second')) throw new Error('Ctrl+Shift+Tab did not switch to the next open file')
+    if (!setup.captureCharFrame().includes('export const second')) throw new Error('Ctrl+PageDown did not switch to the next open file')
 
     act(() => { handleKey?.({ name: 'tab', ctrl: true, shift: false, sequence: '\u0009' }) })
     await flush(setup, 150)
@@ -621,7 +621,9 @@ process.stdin.on('data', (chunk) => {
       throw new Error(`Shift+Alt+F did not apply document formatting edits: ${JSON.stringify(actionEditor.plainText)}`)
     }
 
-    act(() => { handleKey?.({ name: '/', ctrl: false, shift: false, option: true, sequence: '/' }) })
+    // Legacy/raw terminals (including Windows) expose Alt as `meta`, not
+    // `option`; the portable modifier path must still open project search.
+    act(() => { handleKey?.({ name: '/', ctrl: false, shift: false, meta: true, sequence: '\u001b/' }) })
     for (const character of 'renamedAnswer') {
       act(() => { handleKey?.({ name: character, ctrl: false, shift: false, sequence: character }) })
     }
@@ -641,12 +643,12 @@ process.stdin.on('data', (chunk) => {
       throw new Error(`Opening a project-search result did not jump to its exact unsaved-buffer location: ${JSON.stringify(projectSearchEditor?.logicalCursor)}`)
     }
     projectSearchEditor.setSelection(0, 'export const renamedAnswer = true'.length)
-    act(() => { handleKey?.({ name: '/', ctrl: true, shift: false, sequence: '\u001f' }) })
+    act(() => { handleKey?.({ name: '_', ctrl: true, shift: false, sequence: '\u001f' }) })
     await setup.flush()
     if (!projectSearchEditor.plainText.startsWith('// export const renamedAnswer')) {
       throw new Error(`Ctrl+/ did not comment the selected TypeScript line: ${JSON.stringify(projectSearchEditor.plainText)}`)
     }
-    act(() => { handleKey?.({ name: '/', ctrl: true, shift: false, sequence: '\u001f' }) })
+    act(() => { handleKey?.({ name: '_', ctrl: true, shift: false, sequence: '\u001f' }) })
     act(() => { handleKey?.({ name: 'tab', ctrl: false, shift: false, sequence: '\t' }) })
     await setup.flush()
     if (!projectSearchEditor.plainText.startsWith('  export const renamedAnswer')) {
@@ -657,12 +659,12 @@ process.stdin.on('data', (chunk) => {
     if (!projectSearchEditor.plainText.startsWith('export const renamedAnswer')) {
       throw new Error(`Shift+Tab did not outdent the selected line: ${JSON.stringify(projectSearchEditor.plainText)}`)
     }
-    act(() => { handleKey?.({ name: 's', ctrl: true, shift: true, sequence: '\u0013' }) })
+    act(() => { handleKey?.({ name: 's', ctrl: false, shift: false, meta: true, sequence: '\u001bs' }) })
     await flush(setup, 250)
     const [savedMain, savedSecond] = await Promise.all([readFile(filePath, 'utf8'), readFile(secondFilePath, 'utf8')])
     if (!savedMain.includes('CONST renamedAnswer') || !savedSecond.includes('renamedAnswer')
       || !setup.captureCharFrame().includes('Saved all 2 modified files')) {
-      throw new Error(`Ctrl+Shift+S did not persist every dirty refactor buffer: ${JSON.stringify({ savedMain, savedSecond })}`)
+      throw new Error(`Raw Alt+S did not persist every dirty refactor buffer: ${JSON.stringify({ savedMain, savedSecond })}`)
     }
 
     act(() => { handleKey?.({ name: 'n', ctrl: true, shift: false, sequence: '\u000e' }) })
