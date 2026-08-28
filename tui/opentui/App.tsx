@@ -666,13 +666,6 @@ const ATTENTION_DONE_LIMIT = 20
 // needs far less than the 200ms this used to sit at.
 const DETAIL_OPEN_DELAY_MS = 70
 const DETAIL_OPEN_CACHED_DELAY_MS = 0
-// While browsing (sidebar focused) only the last N cards of the selected
-// session are mounted. OpenTUI's scrollbox lays out EVERY mounted card to
-// compute scroll height (viewportCulling only skips paint, not layout), so a
-// large transcript costs O(cards) — hundreds of ms to seconds — on every open.
-// Capping the preview keeps browsing snappy; the full transcript mounts only
-// when you focus the messages pane to actually read it.
-const PREVIEW_CARD_CAP = 60
 // Reader-mode virtualization. The messages pane used to mount the FULL
 // transcript, so opening a huge session paid an O(cards) Yoga layout once and
 // every commit while reading stayed that size. Instead mount a sliding window
@@ -10306,22 +10299,27 @@ export default function OpenTuiApp() {
     ),
     [sidebarInnerWidth, coordinatorAgentEntries.length, coordinatorRuns.length],
   )
-  // Mounted-card window. Browsing (sidebar focused) caps to the most-recent
-  // PREVIEW_CARD_CAP cards so scrubbing never pays for a giant session; the
-  // focused reader mounts a READER_CARD_WINDOW slice that follows the tail
+  // Mounted-card window: a READER_CARD_WINDOW slice that follows the tail
   // (followTail) or the detached readerWindowStart anchor (slides/recenters).
   // This window bounds the ENTIRE per-card pipeline below (stableCardData →
   // allLandmarks → cardDisplayData → transcriptChildren), not just element
   // construction — and OpenTUI's scrollbox lays out every mounted card on
   // every commit (viewportCulling only skips paint), so it also bounds the
   // per-commit Yoga layout cost while reading.
+  //
+  // Deliberately NOT a function of which pane has focus. Browsing used to cap
+  // the mount to a much smaller preview, which meant every Tab between the
+  // sidebar and the reader mounted or unmounted the difference and re-laid it
+  // out: 91% of the commits during focus toggling missed the 60fps budget,
+  // worst frame 46ms. Holding the window fixed takes that to zero over budget
+  // and a 16ms worst frame, and costs nothing on open — browse-mode cards all
+  // render collapsed (see expandedKeysForRender), so what a mounted card costs
+  // there is bounded by density, not by how many are mounted. Scrub is already
+  // covered without a cap: the transcript unmounts entirely while isScrubbing.
   const totalTranscriptCards = visibleTranscriptCards.length
   let transcriptRenderStart: number
   let transcriptRenderEnd: number
-  if (effectiveFocus !== 'messages') {
-    transcriptRenderStart = Math.max(0, totalTranscriptCards - PREVIEW_CARD_CAP)
-    transcriptRenderEnd = totalTranscriptCards
-  } else if (totalTranscriptCards <= READER_CARD_WINDOW) {
+  if (totalTranscriptCards <= READER_CARD_WINDOW) {
     transcriptRenderStart = 0
     transcriptRenderEnd = totalTranscriptCards
   } else if (followTail || readerWindowStart == null) {

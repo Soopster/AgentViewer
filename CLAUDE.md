@@ -33,6 +33,7 @@ npm run tui                    # primary OpenTUI terminal app (requires Bun on P
 npm run tui:dev                # OpenTUI with --watch
 npm run tui:check              # type-check OpenTUI surface (tsc --noEmit via tsconfig.opentui.json)
 npm run tui:navperf            # session-navigation latency against your real local sessions
+npm run tui:inputperf          # per-keystroke render cost for each navigation surface
 npm run tui:ink                # legacy Ink TUI
 ```
 
@@ -178,6 +179,24 @@ Both TUIs depend on the same `lib/` provider layer — changes to `sessionBacken
   (`DETAIL_OPEN_CACHED_DELAY_MS`) instead of paying a wait for work that will not happen. The
   `opensFromCache` test must keep mirroring `refreshSelectedSessionDetail`'s cached-and-unchanged
   fast path — if they drift, the debounce is skipped for opens that really do read.
+- **The mounted card window must not depend on which pane has focus.** Browsing used to cap the
+  transcript to a small preview and the focused reader mounted `READER_CARD_WINDOW`, so every Tab
+  between the sidebar and the reader mounted or unmounted the difference and re-laid it out — 91% of
+  commits during focus toggling missed the 60fps budget, worst frame 46ms, against zero over budget
+  and 13ms once the window was held fixed. Holding it fixed costs nothing on open because browse-mode
+  cards all render collapsed (`expandedKeysForRender`), so a mounted card's cost there is bounded by
+  density, not by how many are mounted; scrubbing is covered separately, by the transcript unmounting
+  entirely while `isScrubbing`.
+- **Measure with `npm run tui:inputperf`** (`tui/opentui/inputPerf.tsx`) for anything that changes what
+  the reader mounts or how a keystroke renders. It drives each navigation surface at key-repeat speed
+  and reports the app's own frame canary: commits, how many blew the 60fps budget, and the worst one.
+  Each scenario runs in its **own process** — a scenario that leaves the app in an unexpected mode
+  (a stray escape on the exit confirm, a `/` reaching the composer instead of search) silently
+  mismeasures every scenario after it, and it reads as an app regression rather than a harness bug.
+  It is **not deterministic across runs**: scenarios drive the real sidebar, so a run measures
+  whichever sessions sit at those positions, and a 12-card session and a 263-card one are not
+  comparable. The `cards` column reports what the reader was actually holding — check it before
+  believing any before/after, and interleave A/B runs rather than batching them.
 - **Measure with `npm run tui:navperf`** (`tui/opentui/navPerf.tsx`) before changing any of this. It
   mounts the real root against your local sessions and reports the metrics logger's `nav.*` rollup:
   `select-to-open` (debounce), `open-to-detail` (worker read), `detail-to-paint`, and
