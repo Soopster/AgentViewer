@@ -9187,7 +9187,10 @@ export default function OpenTuiApp() {
     const selected = coordinatorAgentEntries.find((entry) => entry.key === coordinatorSelectedKey)
     if (selected) openCoordinationAgentSession(selected.agent)
   })
-  const composerDraftLines = composerDraft.length === 0 ? 1 : composerDraft.split('\n').length
+  const composerLogicalLineCount = composerEntryLineCount(composerDraft)
+  const composerDraftLines = composerTextareaRef.current?.plainText === composerDraft
+    ? Math.max(composerLogicalLineCount, composerTextareaRef.current.editorView.getTotalVirtualLineCount())
+    : composerLogicalLineCount
   const composerDockChromeHeight = fullscreenMode ? 1 : COMPOSER_DOCK_CHROME_HEIGHT
   const composerHeight = transcriptView === 'chat'
     ? Math.max(CHAT_COMPOSER_MIN_HEIGHT, composerDraftLines + CHAT_COMPOSER_CHROME_HEIGHT)
@@ -18902,10 +18905,12 @@ export default function OpenTuiApp() {
     options?: { height?: number; width?: number; variant?: 'chat' },
   ) => (
     <textarea
+      id="composer-textarea"
       ref={composerTextareaRef}
       focused={composerActive}
       width={options?.width}
       height={options?.height}
+      wrapMode="word"
       placeholder={composerPlaceholder}
       initialValue={composerDraft}
       keyBindings={composerKeyBindings}
