@@ -9,12 +9,37 @@ import {
   setClaudeDynamicMcpServers,
 } from '../lib/claudeDynamicMcp'
 import { deleteClaudeHookEvents, listClaudeHookEvents } from '../lib/claudeHookEvents'
-import { claudeResultHasQueuedTurns } from '../lib/claudePool'
+import { claudeResultHasQueuedTurns, sequenceClaudePoolConfiguration } from '../lib/claudePool'
 import { createClaudeViewerQueryExtensions } from '../lib/claudeViewerIntegration'
 
 assert.equal(claudeResultHasQueuedTurns({ type: 'result', queued_turn_count: 2 } as never), true)
 assert.equal(claudeResultHasQueuedTurns({ type: 'result', queued_turn_count: 0 } as never), false)
 assert.equal(claudeResultHasQueuedTurns({ type: 'assistant' } as never), false)
+
+function deferred() {
+  let resolve!: () => void
+  const promise = new Promise<void>((settle) => { resolve = settle })
+  return { promise, resolve }
+}
+
+const initialization = deferred()
+const previousTurn = deferred()
+let configurationApplied = false
+const configuration = sequenceClaudePoolConfiguration({
+  previousSettings: Promise.resolve(),
+  previousTurn: previousTurn.promise,
+  initialization: initialization.promise,
+  isAlive: () => true,
+  apply: async () => { configurationApplied = true },
+})
+await Promise.resolve()
+assert.equal(configurationApplied, false, 'Claude model changes must wait for the active turn')
+previousTurn.resolve()
+await Promise.resolve()
+assert.equal(configurationApplied, false, 'Claude model changes must wait for Query initialization')
+initialization.resolve()
+await configuration
+assert.equal(configurationApplied, true, 'Claude model changes apply after turn and initialization readiness')
 
 const servers = parseClaudeDynamicMcpServers({
   docs: {

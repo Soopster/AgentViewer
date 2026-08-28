@@ -87,6 +87,7 @@ import { getSessionAdapter, unsupported } from './adapters/registry'
 import { mapConcurrent } from './adapters/shared'
 import { withTimeout } from './withTimeout'
 import { claudeFallbackModelChain } from './claudeModels'
+import { PROVIDER_MODEL_DISCOVERY_TIMEOUT_MS, providerStartupTimeoutMs } from './providerWarmup'
 import { PI_THINKING_LEVELS } from './piComposer'
 import {
   type CopilotAgentMode,
@@ -3485,7 +3486,11 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
         // fails into the existing isTransientSendError retry instead.
         const coldIterator = q[Symbol.asyncIterator]()
         while (true) {
-          const step = await withTimeout(coldIterator.next(), 60000, 'Claude cold-start turn')
+          const step = await withTimeout(
+            coldIterator.next(),
+            providerStartupTimeoutMs(model, 60_000),
+            'Claude cold-start turn',
+          )
           if (step.done) break
           const msg = step.value
           const messageSessionId = typeof msg.session_id === 'string' && msg.session_id ? msg.session_id : undefined
@@ -3813,14 +3818,46 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
             armWarmProbe = () => {
               // Replay happens before submission, so anything it set is stale.
               sawFrameSinceSubmit = false
-              const probeTimer = setTimeout(() => {
-                if (sawFrameSinceSubmit) return
-                void runWarmProbe()
-              }, CLAUDE_WARM_SILENCE_BEFORE_PROBE_MS)
-              if (typeof probeTimer === 'object' && probeTimer && 'unref' in probeTimer) {
-                (probeTimer as { unref?: () => void }).unref?.()
+              let cancelled = false
+              let probeTimer: ReturnType<typeof setTimeout> | null = null
+              const scheduleProbe = () => {
+                if (cancelled || sawFrameSinceSubmit) return
+                probeTimer = setTimeout(() => {
+                  probeTimer = null
+                  if (cancelled || sawFrameSinceSubmit) return
+                  void runWarmProbe()
+                }, CLAUDE_WARM_SILENCE_BEFORE_PROBE_MS)
+                if (typeof probeTimer === 'object' && probeTimer && 'unref' in probeTimer) {
+                  (probeTimer as { unref?: () => void }).unref?.()
+                }
               }
-              cancelWarmProbe = () => clearTimeout(probeTimer)
+              cancelWarmProbe = () => {
+                cancelled = true
+                if (probeTimer) clearTimeout(probeTimer)
+              }
+
+              if (activeEntry.isInitialized()) {
+                scheduleProbe()
+                return
+              }
+
+              // A selection-time prewarm places the Query in the pool as soon
+              // as the subprocess is spawned, before initialize has answered.
+              // Slow custom endpoints can legitimately stay in that state for
+              // tens of seconds. Do not run the dead-process probe until the
+              // warmup has either completed or exceeded its bounded startup
+              // allowance; otherwise the probe/reinitialize cycle kills a
+              // healthy custom-model boot around the 10–14 second mark.
+              void withTimeout(
+                activeEntry.whenInitialized(),
+                providerStartupTimeoutMs(model),
+                'Claude warm initialization',
+              ).then(
+                scheduleProbe,
+                () => {
+                  if (!cancelled && !sawFrameSinceSubmit) void runWarmProbe()
+                },
+              )
             }
             runWarmProbe = async () => {
               const verdict = await probeWarmLiveness(activeEntry)
@@ -4850,14 +4887,22 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
         let started: CodexResponseFor<'turn/start'>
         try {
           await checkpoint?.catch(() => null)
-          started = await withTimeout(client.request('turn/start', turnStartParams), 20000, 'Codex turn/start')
+          started = await withTimeout(
+            client.request('turn/start', turnStartParams),
+            providerStartupTimeoutMs(model, 20_000),
+            'Codex turn/start',
+          )
         } catch (err) {
           // The resume cache said this thread was live but the server lost it
           // (e.g. a restart raced the disconnect listener). Re-resume once.
           if (!isCodexMissingRolloutError(err)) throw err
           forgetCodexThreadResumed(sessionId)
           await withTimeout(ensureCodexThreadResumed(sessionId), 8000, 'Codex thread re-resume')
-          started = await withTimeout(client.request('turn/start', turnStartParams), 20000, 'Codex turn/start retry')
+          started = await withTimeout(
+            client.request('turn/start', turnStartParams),
+            providerStartupTimeoutMs(model, 20_000),
+            'Codex turn/start retry',
+          )
         }
 
         activateTargetTurn(started.turn.id)
@@ -5449,8 +5494,9 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         // Warm session pool: re-use a single Copilot session per id across
         // sends and bind a fresh listener for this turn only. The native CLI
         // keeps the JSON-RPC connection alive between turns; this matches.
+        const copilotStartupTimeoutMs = providerStartupTimeoutMs(selectedModel, 20_000)
         const [acquiredSession, availableModels] = await Promise.all([
-          withTimeout(acquireCopilotSession(sessionId), 20000, 'Copilot session resume'),
+          withTimeout(acquireCopilotSession(sessionId), copilotStartupTimeoutMs, 'Copilot session resume'),
           getCopilotClient()
             .then((client) => withTimeout(client.listModels(), 15000, 'Copilot model list'))
             .catch(() => [] as CopilotModelInfo[]),
@@ -5526,7 +5572,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         if (selectedModel) {
           await withTimeout(
             session.setModel(selectedModel, copilotModelOptions({ effort: copilotEffort, contextTier })),
-            15000,
+            providerStartupTimeoutMs(selectedModel, 15_000),
             'Copilot model switch',
           )
         } else if (copilotEffort || contextTier) {
@@ -5538,7 +5584,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
                 effort: copilotEffort,
                 contextTier: contextTier ?? parseCopilotContextTier(current.contextTier),
               })),
-              15000,
+              providerStartupTimeoutMs(nextModel, 15_000),
               'Copilot model switch',
             )
           }
@@ -5587,7 +5633,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
             }
             await withTimeout(
               session.setModel(requestedModel, copilotModelOptions({ effort: copilotEffort, contextTier })),
-              15000,
+              providerStartupTimeoutMs(requestedModel, 15_000),
               'Copilot model switch',
             )
             safeEnqueue(copilotCommandResultEvent({
@@ -5890,7 +5936,11 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
             throw new Error(`Pi model not found: ${selectedModel.providerID}/${selectedModel.modelID}`)
           }
           if (agentSession.model?.provider !== selectedModel.providerID || agentSession.model?.id !== selectedModel.modelID) {
-            await agentSession.setModel(model)
+            await withTimeout(
+              agentSession.setModel(model),
+              providerStartupTimeoutMs(`${selectedModel.providerID}/${selectedModel.modelID}`),
+              'Pi model switch',
+            )
           }
         }
         if (effort && PI_THINKING_LEVELS.includes(effort as typeof PI_THINKING_LEVELS[number])) {
@@ -6223,7 +6273,24 @@ export async function prewarmViewSession(params: {
   if (provider === 'claude') {
     const warm = peekClaudeSession(params.sessionId)
     if (warm) {
-      await warm.query.initializationResult()
+      // Re-acquire with the latest composer model/effort. acquire() queues
+      // live-settable changes onto the entry's configuration gate; awaiting
+      // that gate here lets selection-time prewarm absorb a slow custom-model
+      // switch, while runTurn independently waits the same gate if the user
+      // presses Enter before this request returns.
+      const entry = acquireClaudeSession({
+        sessionId: params.sessionId,
+        cwd: params.cwd,
+        model: params.model,
+        fallbackModel: claudeFallbackModelChain(),
+        effort: params.effort,
+        isPendingSession: params.isPending,
+      })
+      await withTimeout(
+        Promise.all([entry.whenInitialized(), entry.whenConfigured()]).then(() => undefined),
+        providerStartupTimeoutMs(params.model),
+        'Claude session prewarm',
+      )
       return
     }
     // The SDK's `sessionId` create-time option forces the CLI to adopt the
@@ -6249,7 +6316,11 @@ export async function prewarmViewSession(params: {
         effort: params.effort,
         isPendingSession: params.isPending,
       })
-      await entry.query.initializationResult()
+      await withTimeout(
+        Promise.all([entry.whenInitialized(), entry.whenConfigured()]).then(() => undefined),
+        providerStartupTimeoutMs(params.model),
+        'Claude session prewarm',
+      )
     }
     if (params.isPending) await spawn()
     else await withClaudeResumeTouchRecorded(params.sessionId, spawn)
@@ -6257,12 +6328,20 @@ export async function prewarmViewSession(params: {
   }
   if (provider === 'codex') {
     if (params.isPending) return
-    await ensureCodexThreadResumed(params.sessionId)
+    await withTimeout(
+      ensureCodexThreadResumed(params.sessionId),
+      providerStartupTimeoutMs(params.model),
+      'Codex session prewarm',
+    )
     return
   }
   if (provider === 'copilot') {
     if (params.isPending) return
-    await acquireCopilotSession(params.sessionId)
+    await withTimeout(
+      acquireCopilotSession(params.sessionId),
+      providerStartupTimeoutMs(params.model),
+      'Copilot session prewarm',
+    )
     return
   }
   if (provider === 'pi') {
@@ -6270,10 +6349,18 @@ export async function prewarmViewSession(params: {
     // prewarm pays off. createPiAgentSession is idempotent on the id, so the
     // first send reuses this pooled session instead of recreating it.
     if (params.isPending) {
-      await createPiAgentSession(params.cwd ?? process.cwd(), { id: params.sessionId })
+      await withTimeout(
+        createPiAgentSession(params.cwd ?? process.cwd(), { id: params.sessionId }),
+        providerStartupTimeoutMs(params.model),
+        'Pi session prewarm',
+      )
       return
     }
-    await openPiAgentSession(params.sessionId)
+    await withTimeout(
+      openPiAgentSession(params.sessionId),
+      providerStartupTimeoutMs(params.model),
+      'Pi session prewarm',
+    )
     return
   }
   // opencode connects through a long-lived local server — no spawn to hide.
@@ -6809,13 +6896,40 @@ export function readViewRuntimeActivity() {
   }
 }
 
-export async function readViewSessionModels(sessionId: string, providerOverride?: AgentProvider): Promise<{ models: SessionModelInfo[]; currentModel: string | null; currentContextTier?: CopilotContextTier | null; contextUsage: ContextUsage | null }> {
+type ViewSessionModels = {
+  models: SessionModelInfo[]
+  currentModel: string | null
+  currentContextTier?: CopilotContextTier | null
+  contextUsage: ContextUsage | null
+}
+
+// Model discovery is read-only but can be one of the slowest control-plane
+// calls on custom endpoints. Share concurrent web/TUI reads for the same
+// provider session so a cold catalog/auth handshake happens once, and bound it
+// with the explicit-model allowance so a dead endpoint cannot leave the
+// composer in `modelsLoading` forever.
+const sessionModelReadsInFlight = new Map<string, Promise<ViewSessionModels>>()
+
+export async function readViewSessionModels(sessionId: string, providerOverride?: AgentProvider): Promise<ViewSessionModels> {
   const provider = await resolveProvider(providerOverride)
   const adapter = getSessionAdapter(provider)
   // A provider with no model-listing RPC (ACP) degrades the picker to "no
   // choices" rather than failing the whole session view around it.
   if (!adapter.readModels) return { models: [], currentModel: null, contextUsage: null }
-  return adapter.readModels(sessionId)
+  const key = `${currentProviderInstanceId(provider)}:${provider}:${sessionId}`
+  const existing = sessionModelReadsInFlight.get(key)
+  if (existing) return existing
+  const read = withTimeout(
+    adapter.readModels(sessionId),
+    PROVIDER_MODEL_DISCOVERY_TIMEOUT_MS,
+    `${provider} model discovery`,
+  )
+  sessionModelReadsInFlight.set(key, read)
+  try {
+    return await read
+  } finally {
+    if (sessionModelReadsInFlight.get(key) === read) sessionModelReadsInFlight.delete(key)
+  }
 }
 
 export async function readViewSessionComposerOptions(sessionId: string, providerOverride?: AgentProvider): Promise<SessionComposerOptions> {

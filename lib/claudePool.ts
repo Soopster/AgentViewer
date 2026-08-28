@@ -103,6 +103,8 @@ import { claudeProcessSpawnOptions } from './claudeProcessSpawner'
 import { getClaudeDynamicMcpServers } from './claudeDynamicMcp'
 import { createMessagingMcpServer } from './claudeMessagingMcp'
 import { currentProviderEnvironment, currentProviderExecutable, currentProviderInstanceId } from './providerInstances'
+import { providerStartupTimeoutMs } from './providerWarmup'
+import { withTimeout } from './withTimeout'
 
 export function claudeIntegratedMcpServers(context: {
   getSessionId(): string
@@ -278,6 +280,17 @@ export type ClaudePoolEntry = {
   run(message: SDKUserMessage, options: ClaudePoolRunOptions): Promise<void>
   /** True until the entry is recycled. */
   isAlive(): boolean
+  /** True once the CLI has answered its initialize control request. */
+  isInitialized(): boolean
+  /**
+   * Resolve when startup initialization finishes. A selection-time prewarm can
+   * hand the entry to a send before this settles; callers use this distinction
+   * to avoid treating a legitimately slow custom-model boot as a dead warm
+   * subprocess.
+   */
+  whenInitialized(): Promise<void>
+  /** Resolve after model/permission/effort changes queued by acquire(). */
+  whenConfigured(): Promise<void>
   /**
    * Apply a model change live on the warm Query and remember it in the
    * entry state so the next `acquire()` doesn't redundantly re-set it.
@@ -319,6 +332,28 @@ type Subscriber = {
   push(message: SDKMessage | null): void
 }
 
+/**
+ * Testable ordering primitive for a pool settings change. A change waits for
+ * earlier settings, the turn that was active when it was selected, and Query
+ * initialization — in that order — before touching the SDK control channel.
+ */
+export function sequenceClaudePoolConfiguration(options: {
+  previousSettings: Promise<unknown>
+  previousTurn: Promise<unknown>
+  initialization: Promise<unknown>
+  isAlive: () => boolean
+  apply: () => Promise<void>
+}): Promise<void> {
+  return Promise.all([
+    options.previousSettings.catch(() => {}),
+    options.previousTurn.catch(() => {}),
+  ]).then(async () => {
+    if (!options.isAlive()) throw new Error('Claude pool entry was recycled before configuration completed')
+    await options.initialization
+    await options.apply()
+  })
+}
+
 type EntryState = {
   cwd: string | undefined
   model: string | undefined
@@ -346,6 +381,18 @@ type InternalEntry = {
   endInput(): void
   /** FIFO mutex tail. Each turn appends to this chain. */
   turnTail: Promise<void>
+  /** The CLI's one-shot initialization result, tracked without polling. */
+  initialization: Promise<void>
+  initialized: boolean
+  /**
+   * Serializes live settings RPCs. runTurn() waits for the tail captured by
+   * acquire() before it submits the prompt, so a slow setModel cannot race the
+   * message onto the previous model.
+   */
+  settingsTail: Promise<void>
+  desiredModel: string | undefined
+  desiredPermissionMode: PermissionMode | undefined
+  desiredEffort: ReasoningEffortLevel | undefined
   lastActivityAt: number
   /**
    * True while a run() turn holds this entry. LRU eviction and the idle sweep
@@ -404,18 +451,23 @@ class ClaudePool {
     // next acquire after that spawns fresh.
     const doomed = Boolean(existing?.pendingRecycleReason) && existing?.inTurn === false
     if (existing && existing.alive && !doomed && this.compatible(existing.state, opts)) {
-      // Fire-and-forget: the caller doesn't wait on live settings sync. If
-      // this rejects unhandled, Node 15+ terminates the whole process by
-      // default — one bad setModel/setPermissionMode call would take down
-      // every session in the pool, not just this one. .catch() is the
-      // backstop; applyLiveChanges itself already swallows the expected SDK
-      // rejections, so this only guards against the unexpected.
-      this.applyLiveChanges(existing, opts).catch((err) => {
-        console.error(`[claude pool ${opts.sessionId}] applyLiveChanges failed unexpectedly:`, err)
-      })
+      // Queue live settings immediately. The public acquire stays synchronous,
+      // but runTurn waits this entry's settings tail before delivering the
+      // prompt. That preserves the hot path when nothing changed and closes a
+      // correctness race for slow custom-model setModel RPCs.
+      const needsConfiguration = this.hasLiveChanges(existing, opts)
+      if (needsConfiguration) this.noteDesiredChanges(existing, opts)
+      const configuration = needsConfiguration
+        ? this.queueConfiguration(existing, () => this.applyLiveChanges(existing, opts))
+        : existing.settingsTail
+      if (needsConfiguration) {
+        void configuration.catch((err) => {
+          console.error(`[claude pool ${opts.sessionId}] applyLiveChanges failed unexpectedly:`, err)
+        })
+      }
       existing.lastActivityAt = Date.now()
       this.ensureSweep()
-      return { ...this.toPublic(existing), reused: true }
+      return { ...this.toPublic(existing, configuration), reused: true }
     }
     if (existing) this.recycleInternal(existing, existing.pendingRecycleReason ?? 'options-changed')
     this.ensureCapacity()
@@ -423,7 +475,7 @@ class ClaudePool {
     entry.poolKey = poolKey
     this.entries.set(poolKey, entry)
     this.ensureSweep()
-    return { ...this.toPublic(entry), reused: false }
+    return { ...this.toPublic(entry, entry.settingsTail), reused: false }
   }
 
   recycle(sessionId: string): void {
@@ -499,6 +551,16 @@ class ClaudePool {
       },
     })
 
+    let initialized = false
+    const initialization = q.initializationResult().then(() => {
+      initialized = true
+    })
+    // The pool pump owns lifecycle failure. This handler prevents a startup
+    // rejection from becoming process-wide merely because no prewarm caller
+    // happened to await it yet; whenInitialized() still receives the original
+    // rejected promise.
+    void initialization.catch(() => {})
+
     const entry: InternalEntry = {
       sessionId: opts.sessionId,
       poolKey: `${currentProviderInstanceId('claude')}:${opts.sessionId}`,
@@ -521,7 +583,13 @@ class ClaudePool {
       pushUserMessage,
       endInput,
       turnTail: Promise.resolve(),
+      initialization,
+      get initialized() { return initialized },
       lastActivityAt: Date.now(),
+      settingsTail: Promise.resolve(),
+      desiredModel: opts.model,
+      desiredPermissionMode: opts.permissionMode,
+      desiredEffort: opts.effort,
       inTurn: false,
       pendingRecycleReason: null,
       alive: true,
@@ -673,7 +741,11 @@ class ClaudePool {
     // forcing a cold respawn via compatible(). Concurrency gets the latency
     // win safely.
     const modelChange = opts.model && opts.model !== entry.state.model
-      ? entry.query.setModel(opts.model).then(
+      ? withTimeout(
+        entry.query.setModel(opts.model),
+        providerStartupTimeoutMs(opts.model),
+        'Claude model switch',
+      ).then(
         () => { entry.state.model = opts.model; return null },
         () => 'set-model-failed' as const,
       )
@@ -712,6 +784,45 @@ class ClaudePool {
       return
     }
     this.recycleInternal(entry, failure)
+  }
+
+  private hasLiveChanges(entry: InternalEntry, opts: ClaudePoolAcquireOptions): boolean {
+    if (opts.model && opts.model !== entry.desiredModel) return true
+    if (opts.permissionMode && opts.permissionMode !== entry.desiredPermissionMode) return true
+    const nextEffort = effortToSdk(opts.effort).effort
+    return Boolean(opts.effort !== entry.desiredEffort && nextEffort)
+  }
+
+  private noteDesiredChanges(entry: InternalEntry, opts: ClaudePoolAcquireOptions): void {
+    if (opts.model) entry.desiredModel = opts.model
+    if (opts.permissionMode) entry.desiredPermissionMode = opts.permissionMode
+    if (effortToSdk(opts.effort).effort) entry.desiredEffort = opts.effort
+  }
+
+  private queueConfiguration(entry: InternalEntry, apply: () => Promise<void>): Promise<void> {
+    // Recover the chain for a later retry, but keep `next` rejected for the
+    // current run so it cannot submit on stale settings after an unexpected
+    // control-plane failure.
+    // A settings change selected while a turn is active belongs to the next
+    // turn. Waiting the current turn tail prevents setModel from mutating the
+    // model underneath an already-submitted response.
+    const previousSettings = entry.settingsTail.catch(() => {})
+    const previousTurn = entry.turnTail.catch(() => {})
+    const next = sequenceClaudePoolConfiguration({
+      previousSettings,
+      previousTurn,
+      initialization: entry.initialization,
+      isAlive: () => entry.alive,
+      // The SDK begins initialize as the Query is constructed. Custom-model
+      // control requests must follow that handshake; issuing setModel beside
+      // initialize relies on transport ordering and can race on slow workers.
+      apply,
+    })
+    entry.settingsTail = next
+    // Every caller normally awaits or attaches its own error handler. Retain a
+    // final backstop because this promise is also stored process-wide.
+    void next.catch(() => {})
+    return next
   }
 
   private recycleInternal(entry: InternalEntry, _reason: string): void {
@@ -766,24 +877,50 @@ class ClaudePool {
     }
   }
 
-  private toPublic(entry: InternalEntry): ClaudePoolEntry {
+  private toPublic(entry: InternalEntry, configuration = entry.settingsTail): ClaudePoolEntry {
     return {
       sessionId: entry.sessionId,
       query: entry.query,
       pushUserMessage: (msg) => entry.pushUserMessage(msg),
       isAlive: () => entry.alive,
-      run: (message, options) => this.runTurn(entry, message, options),
+      isInitialized: () => entry.initialized,
+      whenInitialized: () => entry.initialization,
+      whenConfigured: async () => {
+        await configuration
+        if (!entry.alive) throw new Error('Claude pool entry was recycled while applying configuration')
+      },
+      run: (message, options) => this.runTurn(entry, configuration, message, options),
       setModel: async (model: string) => {
-        if (!entry.alive) throw new Error('Claude pool entry was recycled')
-        await entry.query.setModel(model)
-        entry.state.model = model
-        entry.lastActivityAt = Date.now()
+        entry.desiredModel = model
+        await this.queueConfiguration(entry, async () => {
+          try {
+            await withTimeout(
+              entry.query.setModel(model),
+              providerStartupTimeoutMs(model),
+              'Claude model switch',
+            )
+            entry.state.model = model
+            entry.lastActivityAt = Date.now()
+          } catch (err) {
+            if (entry.inTurn) entry.pendingRecycleReason = 'set-model-failed'
+            else this.recycleInternal(entry, 'set-model-failed')
+            throw err
+          }
+        })
       },
       setPermissionMode: async (mode: PermissionMode) => {
-        if (!entry.alive) throw new Error('Claude pool entry was recycled')
-        await entry.query.setPermissionMode(mode)
-        entry.state.permissionMode = mode
-        entry.lastActivityAt = Date.now()
+        entry.desiredPermissionMode = mode
+        await this.queueConfiguration(entry, async () => {
+          try {
+            await withTimeout(entry.query.setPermissionMode(mode), 30_000, 'Claude permission-mode switch')
+            entry.state.permissionMode = mode
+            entry.lastActivityAt = Date.now()
+          } catch (err) {
+            if (entry.inTurn) entry.pendingRecycleReason = 'set-permission-mode-failed'
+            else this.recycleInternal(entry, 'set-permission-mode-failed')
+            throw err
+          }
+        })
       },
     }
   }
@@ -862,6 +999,12 @@ class ClaudePool {
       pushUserMessage,
       endInput,
       turnTail: Promise.resolve(),
+      initialization: Promise.resolve(),
+      initialized: true,
+      settingsTail: Promise.resolve(),
+      desiredModel: options.model,
+      desiredPermissionMode: options.permissionMode,
+      desiredEffort: options.effort,
       lastActivityAt: Date.now(),
       inTurn: false,
       pendingRecycleReason: null,
@@ -878,6 +1021,7 @@ class ClaudePool {
 
   private async runTurn(
     entry: InternalEntry,
+    configuration: Promise<void>,
     message: SDKUserMessage,
     options: ClaudePoolRunOptions,
   ): Promise<void> {
@@ -890,6 +1034,18 @@ class ClaudePool {
       await prev
     } catch {
       // Prior turn rejected; we still get the mutex slot.
+    }
+
+    // acquire() synchronously queued any live model/permission/effort changes
+    // before run() was called. Wait for those control RPCs before submitting
+    // the prompt; otherwise a slow custom-model switch can lose a race and the
+    // previous model receives the turn. The no-change hot path is one already-
+    // resolved promise.
+    try {
+      await configuration
+    } catch (err) {
+      releaseMutex()
+      throw err instanceof Error ? err : new Error(String(err))
     }
 
     if (!entry.alive) {

@@ -10,8 +10,10 @@
 
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import { claudeProcessSpawnOptions } from './claudeProcessSpawner'
+import { PROVIDER_MODEL_DISCOVERY_TIMEOUT_MS } from './providerWarmup'
 import { consumeReadModelsWarmQuery, openPrompt } from './sdkControlQuery'
 import type { SessionModelInfo } from './types'
+import { withTimeout } from './withTimeout'
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -62,7 +64,11 @@ export async function readClaudeSupportedModelsOnce(): Promise<SessionModelInfo[
       })
 
   try {
-    const initialization = await q.initializationResult()
+    const initialization = await withTimeout(
+      q.initializationResult(),
+      PROVIDER_MODEL_DISCOVERY_TIMEOUT_MS,
+      'Claude model discovery',
+    )
     const supportedModels = await q.supportedModels().catch(() => [] as SessionModelInfo[])
     return supportedModels.length > 0
       ? supportedModels
@@ -92,4 +98,3 @@ export async function readClaudeSupportedModels(): Promise<SessionModelInfo[]> {
   }
   return models
 }
-

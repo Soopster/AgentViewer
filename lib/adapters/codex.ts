@@ -17,6 +17,7 @@ import { compactStableFingerprint } from '../compactFingerprint'
 import { getCodexClient } from '../codexClient'
 import { getCodexProjectDiagnostics } from '../codexHarness'
 import { withTimeout } from '../withTimeout'
+import { PROVIDER_MODEL_DISCOVERY_TIMEOUT_MS } from '../providerWarmup'
 import {
   currentCodexModelValue,
   mapCodexDiagnosticsToSections,
@@ -137,7 +138,11 @@ export const codexAdapter: SessionAdapter = {
     // without a timeout the composer's model picker hangs indefinitely
     // instead of falling back to an empty list the UI can recover from.
     const [modelsResponse, resume] = await Promise.all([
-      withTimeout(client.request('model/list', {}), 8000, 'Codex model list')
+      withTimeout(
+        client.request('model/list', {}),
+        PROVIDER_MODEL_DISCOVERY_TIMEOUT_MS,
+        'Codex model list',
+      )
         .catch(() => ({ data: [] as Parameters<typeof mapCodexModelsToSessionModels>[0] })),
       withTimeout(ensureCodexThreadResumed(sessionId), 8000, 'Codex thread resume').catch(() => null),
     ])

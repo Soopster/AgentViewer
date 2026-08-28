@@ -9,6 +9,10 @@
 //      permanently wedged composer.
 // Run: npx tsx scripts/reliabilityTimeoutSmoke.ts
 import { withTimeout } from '../lib/sessionBackend'
+import {
+  EXPLICIT_MODEL_STARTUP_TIMEOUT_MS,
+  providerStartupTimeoutMs,
+} from '../lib/providerWarmup'
 import { isTransientSendError } from '../lib/transientError'
 
 function assert(condition: boolean, message: string): void {
@@ -42,6 +46,19 @@ async function main() {
   // A resolved promise inside the bound must pass its value through untouched.
   const resolved = await withTimeout(Promise.resolve('ok'), 5000, 'smoke fast RPC')
   assert(resolved === 'ok', 'a promise that resolves before the bound is unaffected')
+
+  assert(
+    providerStartupTimeoutMs(undefined, 20_000) === 20_000,
+    'default-model startup keeps the call site fast-path deadline',
+  )
+  assert(
+    providerStartupTimeoutMs('custom/provider-model', 20_000) >= EXPLICIT_MODEL_STARTUP_TIMEOUT_MS,
+    'an explicit model receives the slower custom-provider startup allowance',
+  )
+  assert(
+    providerStartupTimeoutMs('custom/provider-model') >= providerStartupTimeoutMs(undefined),
+    'the explicit-model allowance is never shorter than the ordinary warmup window',
+  )
 
   console.log('\nAll reliability-timeout checks passed.')
   clearInterval(keepAlive)
