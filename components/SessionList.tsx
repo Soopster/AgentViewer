@@ -375,7 +375,7 @@ const SessionRow = memo(function SessionRow({
 
   useEffect(() => setInbox(session.inbox), [session.inbox])
 
-  const updateInbox = useCallback(async (action: 'pin' | 'unpin' | 'settle' | 'reopen' | 'snooze' | 'unsnooze') => {
+  const updateInbox = useCallback(async (action: 'pin' | 'unpin' | 'settle' | 'reopen' | 'snooze' | 'unsnooze' | 'unlink-pr') => {
     const previous = inbox
     const optimistic = action === 'pin'
       ? { ...inbox, pinnedAt: Date.now(), pinOrder: inbox?.pinOrder ?? Date.now() }
@@ -385,7 +385,9 @@ const SessionRow = memo(function SessionRow({
           ? { ...inbox, settledAt: Date.now(), snoozedUntil: undefined }
           : action === 'reopen' || action === 'unsnooze'
             ? { ...inbox, settledAt: action === 'reopen' ? undefined : inbox?.settledAt, snoozedUntil: undefined }
-            : { ...inbox, snoozedUntil: Date.now() + 60 * 60 * 1000, settledAt: undefined }
+            : action === 'unlink-pr'
+              ? { ...inbox, linkedPr: undefined }
+              : { ...inbox, snoozedUntil: Date.now() + 60 * 60 * 1000, settledAt: undefined }
     setInbox(optimistic)
     try {
       const response = await fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/inbox`, {
@@ -664,6 +666,29 @@ const SessionRow = memo(function SessionRow({
             }}
           >
             + tags
+          </span>
+        ) : null}
+        {inbox?.linkedPr ? (
+          <span
+            title={`${inbox.linkedPr.repo}#${inbox.linkedPr.number}${inbox.linkedPr.state ? ` — ${inbox.linkedPr.state.toLowerCase()}` : ''}\nClick to open, shift-click to unlink`}
+            onClick={(event) => {
+              event.stopPropagation()
+              if (event.shiftKey) { void updateInbox('unlink-pr'); return }
+              if (inbox.linkedPr?.url) window.open(inbox.linkedPr.url, '_blank', 'noopener,noreferrer')
+            }}
+            style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 10,
+              padding: '1px 5px',
+              borderRadius: 5,
+              cursor: 'pointer',
+              marginLeft: 6,
+              color: inbox.linkedPr.state === 'MERGED' ? 'var(--violet)' : 'var(--text-3)',
+              border: '1px solid var(--border)',
+              background: 'var(--surface-2)',
+            }}
+          >
+            #{inbox.linkedPr.number}
           </span>
         ) : null}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 2, opacity: hovered || inbox ? 1 : 0.35 }}>

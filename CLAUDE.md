@@ -105,7 +105,37 @@ Routes live under `app/api/`:
 
 `next.config.ts` marks Claude/Pi SDKs as `serverExternalPackages` because they rely on Node APIs and cannot be bundled. Do not import them from client components.
 
-The page (`app/page.tsx`) drives polling: sessions list every 5s, active-session messages every 2s with an `offset` param for incremental delta. `MessageView.tsx` uses a custom absolute-positioning virtual scroll (`ResizeObserver` per-row + RAF batching), not `react-window`.
+The page (`app/page.tsx`) drives polling: sessions list every 5s, active-session messages every 2s with an `offset` param for incremental delta.
+
+**`offset` is a positional index, not a stable cursor** (load-bearing). Every window is sliced from
+a transcript re-derived from the provider on that read, so a compaction or rollback can leave an
+offset pointing at a different message than it did last time. Two guards exist and both matter:
+callers pass `expectUuid` (the uuid they believe sits at `offset`) and get a `replace` tail back on
+a mismatch instead of a window they would splice into the wrong place; and the SSE pumps stop
+walking a cursor forward once it falls more than `MESSAGE_CATCHUP_MAX_MESSAGES` behind, because
+each catch-up step re-reads the *whole* transcript and paginating a large gap costs O(gap/limit)
+full reads. Both live in `lib/sessionBackend.ts`'s `windowForParams` and the shared
+`createWindowPump` in `app/api/sessions/[sessionId]/messages/events/route.ts`.
+
+That route's four provider pumps share `createWindowPump` for the fetch/diff/emit/cursor half and
+differ only in which harness they subscribe to. **Each pump must keep subscribing to its harness
+before its first `refetch()`** — an event arriving during that first read sets `pending` and is
+picked up afterwards, so nothing published during catch-up is lost. It reads like incidental
+ordering; it is the thing that closes the reconnect gap. `MessageView.tsx` uses a custom absolute-positioning virtual scroll (`ResizeObserver` per-row + RAF batching), not `react-window`.
+
+### Raw provider frames
+
+`lib/rawFrames.ts` keeps the provider's original frame beside every message the mappers normalize,
+so "the card rendered wrong — what did the SDK actually send?" is answerable. Served by
+`GET /api/sessions/[sessionId]/messages/[uuid]/raw` (full scope only — a frame carries whatever the
+provider sent) and surfaced as the `RAW` action on a transcript row.
+
+Deliberate boundaries: a frame is never a field on `SessionMessage`, never reaches the SQLite index,
+and lives only in this process. **Retention is pinned to the mapped-message cache** — frames are
+recorded by the mappers, and `lib/mappedMessagesCache.ts` serves an unchanged transcript *without*
+re-running its mapper, so a session that is cached but whose frames were dropped would never record
+them again. Bucketing per session under the same cap keeps the lifetimes aligned; a 404 means
+"no longer retained", which is normal, not an error.
 
 ### Persistent search index
 
@@ -167,6 +197,18 @@ and pair through the ordinary bearer path. A missing or logged-out Tailscale rep
 Upgrade path: the pre-per-device state file (`{ enabled, token, createdAt }`) migrates on read into
 one device session with a fixed id, so already-paired devices keep working rather than being
 silently signed out.
+
+### Session lifecycle and linked pull requests
+
+`lib/sessionInbox.ts` owns `pin | unpin | settle | reopen | snooze | unsnooze` plus
+`link-pr | unlink-pr`, stored in `.agent-viewer-data/session-inbox.json`. A session linked to a pull
+request settles itself when that PR merges, so finished work leaves the active list on its own.
+
+`lib/linkedPullRequests.ts` runs that sweep: throttled process-wide, batched per repo, and
+**fire-and-forget off the sessions-list route, never inside it** — resolving PR state shells out to
+`gh`, which must not sit in the path of a 5s sidebar refresh. Settling is one-shot (it fires on the
+transition into `MERGED`), so deliberately reopening a settled session is not undone on the next
+sweep. A missing or logged-out `gh` yields no state at all and is never an error.
 
 ### Local data
 

@@ -21,6 +21,7 @@ import type {
 } from './types'
 import { compactStableFingerprint } from './compactFingerprint'
 import { OPENCODE_CAPABILITIES } from './provider'
+import { recordRawFrames } from './rawFrames'
 
 type OpenCodeMessageBundle = {
   info: Message
@@ -288,6 +289,13 @@ export function mapOpenCodeMessagesToSessionMessages(messages: OpenCodeMessageBu
 
   for (const entry of messages) {
     const timestamp = toIsoTimestamp(entry.info.time.created)
+    // Everything produced below came from this one bundle. See lib/rawFrames.ts.
+    const startedAt = result.length
+    const recordEntry = () => recordRawFrames(result.slice(startedAt), {
+      source: 'opencode.sdk.event',
+      messageType: entry.info.role,
+      payload: entry,
+    })
 
     if (entry.info.role === 'user') {
       result.push({
@@ -302,6 +310,7 @@ export function mapOpenCodeMessagesToSessionMessages(messages: OpenCodeMessageBu
         },
         timestamp,
       })
+      recordEntry()
       continue
     }
 
@@ -320,6 +329,7 @@ export function mapOpenCodeMessagesToSessionMessages(messages: OpenCodeMessageBu
       timestamp,
     })
     result.push(...assistant.syntheticResults)
+    recordEntry()
   }
 
   return result

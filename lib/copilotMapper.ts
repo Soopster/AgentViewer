@@ -17,6 +17,7 @@ import type {
   SessionModelInfo,
 } from './types'
 import { COPILOT_CAPABILITIES } from './provider'
+import { recordRawFrames } from './rawFrames'
 
 type CopilotStoredMetadata = {
   title: string | null
@@ -353,6 +354,7 @@ export function mapCopilotEventsToSessionMessages(sessionId: string, events: Ses
   const pendingUsageByTurn = new Map<string, NonNullable<ApiMessage['usage']>>()
 
   for (const event of events) {
+    const startedAt = messages.length
     switch (event.type) {
       case 'assistant.turn_start':
         currentTurnId = event.data.turnId
@@ -472,6 +474,12 @@ export function mapCopilotEventsToSessionMessages(sessionId: string, events: Ses
       default:
         break
     }
+    // Every message this event produced came from the same SDK frame.
+    recordRawFrames(messages.slice(startedAt), {
+      source: 'copilot.sdk.event',
+      messageType: event.type,
+      payload: event,
+    })
   }
 
   return messages

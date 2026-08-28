@@ -14,6 +14,7 @@ import type {
 } from './types'
 import { PI_CAPABILITIES } from './provider'
 import type { PiSessionListEntry } from './piClient'
+import { recordRawFrames } from './rawFrames'
 
 type PiStoredMetadata = {
   title: string | null
@@ -340,7 +341,9 @@ function mapSingleMessage(
 export function mapPiMessagesToSessionMessages(sessionId: string, messages: AgentMessage[]): SessionMessage[] {
   const result: SessionMessage[] = []
   for (let i = 0; i < messages.length; i++) {
-    result.push(...mapSingleMessage(sessionId, messages[i], i))
+    const mapped = mapSingleMessage(sessionId, messages[i], i)
+    recordRawFrames(mapped, { source: 'pi.agent.event', messageType: messages[i]?.role, payload: messages[i] })
+    result.push(...mapped)
   }
   return result
 }
@@ -350,7 +353,9 @@ export function mapPiEntriesToSessionMessages(sessionId: string, entries: readon
   let messageIndex = 0
   for (const entry of entries) {
     if (entry.type !== 'message') continue
-    result.push(...mapSingleMessage(sessionId, entry.message, messageIndex, entry.id))
+    const mapped = mapSingleMessage(sessionId, entry.message, messageIndex, entry.id)
+    recordRawFrames(mapped, { source: 'pi.agent.event', messageType: entry.message?.role, payload: entry })
+    result.push(...mapped)
     messageIndex += 1
   }
   return result

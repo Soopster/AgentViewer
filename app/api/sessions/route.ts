@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { isProviderSelection } from '@/lib/provider'
 import { normalizeProjectPath } from '@/lib/projectPaths'
 import { listViewSessions } from '@/lib/sessionBackend'
+import { maybeSweepLinkedPullRequests } from '@/lib/linkedPullRequests'
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
@@ -14,6 +15,11 @@ export async function GET(request: Request) {
   const providerParam = searchParams.get('provider')
   const provider = isProviderSelection(providerParam) ? providerParam : undefined
   const providerInstanceId = searchParams.get('providerInstanceId') || undefined
+
+  // Fire-and-forget, throttled internally: resolving linked PR state shells
+  // out to `gh`, which must never sit in the path of the sidebar refresh. A
+  // settle simply appears on a later poll.
+  maybeSweepLinkedPullRequests()
 
   try {
     const sessions = await listViewSessions({ limit, offset, dir, includeWorktrees, provider, providerInstanceId })

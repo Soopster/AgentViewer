@@ -277,3 +277,42 @@ export async function mutatePullRequest(cwd: string, repo: string, mutation: Pul
   const result = await runGh(cwd, args, undefined, input)
   if (result.code !== 0) throw new Error(result.stderr || 'GitHub CLI command failed.')
 }
+
+/** Current state of specific pull requests, for the linked-PR sweep.
+ *
+ *  Deliberately leaner than fetchPullRequestWorkspace: that one runs an auth
+ *  check, a list, and a full detail fetch, which is far too much to do on a
+ *  background refresh. This asks only the question being asked.
+ *
+ *  REST reports `state` as open/closed and signals a merge separately, so a
+ *  merged PR must be derived rather than read — `closed` alone would settle
+ *  sessions whose PR was rejected. Returns states uppercased to match the
+ *  GraphQL vocabulary the rest of this module uses (OPEN/CLOSED/MERGED).
+ *
+ *  An absent or unauthenticated `gh` yields an empty map, never an error: a
+ *  machine without it simply has no linked-PR state. */
+export async function fetchPullRequestStates(
+  cwd: string,
+  repo: string,
+  numbers: number[],
+): Promise<Map<number, string>> {
+  const states = new Map<number, string>()
+  const pending = [...new Set(numbers)]
+  const CONCURRENCY = 4
+  let cursor = 0
+  const workers = Array.from({ length: Math.min(CONCURRENCY, pending.length) }, async () => {
+    while (cursor < pending.length) {
+      const number = pending[cursor++]
+      const result = await runGh(cwd, [
+        'api', `repos/${repo}/pulls/${number}`,
+        '--jq', '{state: .state, merged: .merged}',
+      ])
+      if (result.code !== 0) continue
+      const parsed = parseJson<{ state?: string; merged?: boolean }>(result.stdout, {})
+      if (!parsed.state) continue
+      states.set(number, parsed.merged ? 'MERGED' : parsed.state.toUpperCase())
+    }
+  })
+  await Promise.all(workers)
+  return states
+}

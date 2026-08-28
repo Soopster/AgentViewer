@@ -41,12 +41,30 @@ export type MessageListParams = {
   limit: number
   offset: number
   tail?: boolean
+  /** The uuid the caller believes sits at `offset`.
+   *
+   *  `offset` is a positional index into a transcript that is re-derived from
+   *  the provider on every read, so it is not a stable cursor: a provider that
+   *  compacts or rewrites history can leave a caller's offset pointing at a
+   *  different message than it did last time. Length checks only catch the
+   *  transcript *shrinking*; a rewrite that keeps or grows the length passes
+   *  them and the caller silently splices misaligned history.
+   *
+   *  Passing the expected uuid turns that into a detectable condition: on a
+   *  mismatch the window comes back as a `replace` tail instead of a window
+   *  the caller would merge incorrectly. */
+  expectUuid?: string
 }
 
 export type SessionMessageWindow = {
   offset: number
   total: number
   messages: SessionMessage[]
+  /** This window is a fresh bounded tail, not a continuation — the caller must
+   *  discard what it has rather than merging. Set when the caller's cursor was
+   *  found to be stale (see `expectUuid`) or too far behind to catch up on
+   *  incrementally. */
+  replace?: boolean
   // Codex only: another Codex client currently holds the rollout writer lock,
   // so `messages` is a stale cached snapshot rather than a fresh read — the
   // UI should tell the user this transcript may lag until that client's turn

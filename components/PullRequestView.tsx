@@ -33,6 +33,11 @@ type Props = {
   cwd: string
   onClose: () => void
   onAskAgent: (prompt: string) => void
+  /** Attach this PR to the active session, so the session settles itself when
+   *  the PR merges. Absent when no session is selected. */
+  onLinkToSession?: (pr: { repo: string; number: number; url: string; cwd: string }) => void
+  /** PR number already linked to the active session, if any. */
+  linkedPrNumber?: number
 }
 
 type TabId = 'conversation' | 'commits' | 'checks' | 'files'
@@ -362,7 +367,7 @@ function checkStateIcon(state: 'success' | 'failure' | 'pending' | 'neutral', si
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function PullRequestView({ open, cwd, onClose, onAskAgent }: Props) {
+export default function PullRequestView({ open, cwd, onClose, onAskAgent, onLinkToSession, linkedPrNumber }: Props) {
   const [workspace, setWorkspace] = useState<PullRequestWorkspace | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -944,6 +949,25 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent }: Prop
                   </Chip>
                   <Chip color={decisionMeta.color}>{decisionMeta.label}</Chip>
                   <Chip color="var(--violet)" mono>{pr.headRefName} → {pr.baseRefName}</Chip>
+                  {onLinkToSession && workspace?.repo ? (
+                    linkedPrNumber === pr.number ? (
+                      <Chip color="var(--violet)">Linked to session</Chip>
+                    ) : (
+                      <button
+                        type="button"
+                        className="av-hover-control"
+                        title="Link this pull request to the active session, so it settles when the PR merges"
+                        onClick={() => onLinkToSession({ repo: workspace.repo as string, number: pr.number, url: pr.url, cwd })}
+                        style={{
+                          fontFamily: MONO, fontSize: 10, padding: '2px 7px', borderRadius: 999,
+                          border: '1px solid var(--border-2)', background: 'var(--surface-3)',
+                          color: 'var(--text-2)', cursor: 'pointer',
+                        }}
+                      >
+                        LINK TO SESSION
+                      </button>
+                    )
+                  ) : null}
                 </>
               ) : null}
             </div>

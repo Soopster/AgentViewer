@@ -18,12 +18,16 @@ export async function GET(
   const rawOffset = parseInt(searchParams.get('offset') ?? '', 10)
   const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0
   const tail = searchParams.get('tail') === '1'
+  // Optional cursor check: the uuid the client believes sits at `offset`. A
+  // mismatch means the transcript was rewritten under it, and the response
+  // comes back as a replace-tail. See MessageListParams.expectUuid.
+  const expectUuid = searchParams.get('expectUuid') || undefined
   const providerParam = searchParams.get('provider')
   const provider = isAgentProvider(providerParam) ? providerParam : undefined
 
   try {
     const window = await withProviderRequest(request, provider, undefined, () =>
-      listViewSessionMessageWindow(sessionId, { limit, offset, tail }, provider))
+      listViewSessionMessageWindow(sessionId, { limit, offset, tail, expectUuid }, provider))
     return NextResponse.json({ sessionId, provider, ...window }, {
       headers: { 'Cache-Control': 'private, max-age=2, stale-while-revalidate=8' },
     })

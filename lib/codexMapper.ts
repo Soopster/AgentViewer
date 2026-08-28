@@ -19,6 +19,7 @@ import type {
 } from './codexProtocol'
 import { CODEX_CAPABILITIES } from './provider'
 import { buildThreadedMessages, type ThreadedMessage } from './threading'
+import { recordRawFrames } from './rawFrames'
 
 function isPendingCodexThread(thread: CodexThread): boolean {
   return !thread.path && !thread.preview && (thread.turns?.length ?? 0) === 0
@@ -388,7 +389,13 @@ export function mapCodexThreadToMessages(thread: CodexThread): SessionMessage[] 
       // UUID is still the only finer-grained signal we can use; fall
       // back to the turn timestamp if even that doesn't parse.
       const itemTimestamp = uuidV7ToIsoTimestamp(item.id) ?? turnTimestamp
-      messages.push(...mapItemToMessages(thread.id, turn.id, item, itemTimestamp))
+      const itemMessages = mapItemToMessages(thread.id, turn.id, item, itemTimestamp)
+      recordRawFrames(itemMessages, {
+        source: 'codex.thread-event',
+        messageType: (item as { type?: string })?.type,
+        payload: item,
+      })
+      messages.push(...itemMessages)
     }
 
     if (turn.error) {

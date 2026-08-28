@@ -7,6 +7,7 @@ import type {
   ToolUseBlock,
 } from './types'
 import type { ThreadedMessage } from './threading'
+import { recordRawFrame } from './rawFrames'
 
 function asObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -281,7 +282,20 @@ function normalizeClaudeHistoryMessage(value: unknown): SessionMessage | null {
 
 export function normalizeClaudeHistoryMessages(messages: unknown[]): SessionMessage[] {
   return messages
-    .map(normalizeClaudeHistoryMessage)
+    .map((raw) => {
+      const message = normalizeClaudeHistoryMessage(raw)
+      // Keep the SDK's own record beside what we made of it. See lib/rawFrames.ts.
+      if (message) {
+        recordRawFrame(message.session_id, message.uuid, {
+          source: 'claude.sdk.message',
+          messageType: typeof (raw as { type?: unknown })?.type === 'string'
+            ? (raw as { type: string }).type
+            : undefined,
+          payload: raw,
+        })
+      }
+      return message
+    })
     .filter((message): message is SessionMessage => Boolean(message))
 }
 

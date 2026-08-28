@@ -288,13 +288,23 @@ import {
 // suite, a multi-file refactor — isn't truncated mid-stream on that platform.
 export const maxDuration = 3600
 
+function tailWindow(messages: SessionMessage[], limit: number, replace: boolean): SessionMessageWindow {
+  const total = messages.length
+  const offset = Math.max(total - limit, 0)
+  return { offset, total, messages: messages.slice(offset), ...(replace ? { replace: true } : {}) }
+}
+
 function windowForParams(messages: SessionMessage[], params: MessageListParams): SessionMessageWindow {
   const total = messages.length
-  if (params.tail) {
-    const offset = Math.max(total - params.limit, 0)
-    return { offset, total, messages: messages.slice(offset) }
-  }
+  if (params.tail) return tailWindow(messages, params.limit, false)
   const offset = Math.max(params.offset, 0)
+  // A caller that names the uuid it expects at `offset` is asking us to prove
+  // its cursor still means what it meant. If the transcript was rewritten
+  // underneath it, hand back a replace-tail rather than a window it would
+  // merge into the wrong place. See MessageListParams.expectUuid.
+  if (params.expectUuid && offset < total && messages[offset]?.uuid !== params.expectUuid) {
+    return tailWindow(messages, params.limit, true)
+  }
   return { offset, total, messages: messages.slice(offset, offset + params.limit) }
 }
 
@@ -315,22 +325,12 @@ type ListParams = {
   providerInstanceId?: string
 }
 
-type MessageListParams = {
-  limit: number
-  offset: number
-  tail?: boolean
-}
-
-export type SessionMessageWindow = {
-  offset: number
-  total: number
-  messages: SessionMessage[]
-  // Codex only: another Codex client currently holds the rollout writer lock,
-  // so `messages` is a stale cached snapshot rather than a fresh read — the
-  // UI should tell the user this transcript may lag until that client's turn
-  // finishes (see readCodexMessagesAll).
-  externalWriter?: boolean
-}
+// The wire shapes for a transcript window live with the adapter contract that
+// produces them (lib/adapters/types.ts). They were duplicated here, which meant
+// a field added to one copy silently did nothing on the other — re-export
+// instead so there is one definition.
+import type { MessageListParams, SessionMessageWindow } from './adapters/types'
+export type { MessageListParams, SessionMessageWindow }
 
 type ProjectMessageBatchParams = {
   dir: string

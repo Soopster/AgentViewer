@@ -112,6 +112,185 @@ async function readReplacementWindow(sessionId: string, provider: AgentProvider 
   return messageWindowPayload(sessionId, provider, window, true)
 }
 
+// How far behind a cursor may fall before we stop walking it forward.
+//
+// Catching up incrementally means one `listViewSessionMessageWindow` call per
+// `limit` messages, and *each* of those re-reads and re-maps the session's
+// entire transcript (see listViewSessionMessageWindowImpl → readAllMessages).
+// So closing a large gap costs O(gap / limit) full-transcript reads, which a
+// client only has to fall behind on a long session — a closed laptop lid, a
+// dropped connection during a big turn — to trigger. Past this bound we send
+// one replace-tail instead, which costs exactly one read and leaves the client
+// correct rather than complete.
+const MESSAGE_CATCHUP_MAX_MESSAGES = 2000
+
+type WindowPumpOptions = {
+  sessionId: string
+  provider: AgentProvider | undefined
+  limit: number
+  backfill: number
+  offset: number
+  enqueue: (event: string, data: unknown) => void
+  close: () => void
+  signal: AbortSignal
+  refetchDebounceMs: number
+  fallbackPollMs: number
+}
+
+type WindowPump = {
+  refetch: () => Promise<void>
+  scheduleRefetch: (debounceMs?: number) => void
+  scheduleFallback: () => void
+  scheduleHeartbeat: () => void
+  clearTimers: () => void
+}
+
+/** The persisted-window half of every provider pump: fetch the canonical
+ *  window, decide whether it changed, emit it, and keep a cursor.
+ *
+ *  All four providers ran a byte-identical copy of this; the only real
+ *  differences were their debounce and fallback intervals (and Codex's
+ *  `externalWriter` flag, which is simply always absent for the others, so
+ *  tracking it here is free). The provider-specific part — which harness to
+ *  subscribe to and which of its events warrant a refetch — stays in the pump.
+ *
+ *  Callers must keep subscribing to their harness *before* the first
+ *  `refetch()`: an event that lands while that first read is in flight sets
+ *  `pending` and is picked up when it finishes, so nothing published during
+ *  the catch-up window is lost. That ordering is load-bearing. */
+function createWindowPump(options: WindowPumpOptions): WindowPump {
+  const {
+    sessionId, provider, limit, backfill, offset,
+    enqueue, close, signal, refetchDebounceMs, fallbackPollMs,
+  } = options
+
+  let lastSignature = ''
+  // Tracked separately from lastSignature (Codex only in practice): another
+  // Codex client grabbing or releasing the rollout writer lock can flip this
+  // while the (stale-cached) transcript signature stays byte-identical, so the
+  // signature check alone would silently drop the flag flip and the client's
+  // sync banner would never appear or clear.
+  let lastExternalWriter = false
+  let cursorOffset = offset
+  // The uuid we expect to find at `cursorOffset` on the next read. Offsets are
+  // positional indexes into a transcript re-derived from the provider each
+  // time, so a compaction or rollback can leave the cursor pointing at a
+  // different message than it did last read; comparing the uuid is what turns
+  // that from a silent mis-splice into a detected reset.
+  let cursorUuid: string | undefined
+  let lastHeartbeat = Date.now()
+  let inFlight = false
+  let pending = false
+  let refetchTimer: ReturnType<typeof setTimeout> | undefined
+  let fallbackTimer: ReturnType<typeof setTimeout> | undefined
+  let heartbeatTimer: ReturnType<typeof setTimeout> | undefined
+
+  const adoptCursor = (windowOffset: number, messages: SessionMessage[]) => {
+    cursorOffset = Math.max(0, windowOffset + messages.length - backfill)
+    cursorUuid = messages[cursorOffset - windowOffset]?.uuid
+  }
+
+  const emitReplacement = async () => {
+    const replacement = await readReplacementWindow(sessionId, provider, limit)
+    enqueue('messages', replacement)
+    lastSignature = messageWindowSignature(replacement.offset, replacement.messages)
+    lastExternalWriter = replacement.externalWriter === true
+    adoptCursor(replacement.offset, replacement.messages)
+  }
+
+  const refetch = async () => {
+    if (inFlight) {
+      pending = true
+      return
+    }
+    inFlight = true
+    try {
+      const window = await listViewSessionMessageWindow(
+        sessionId,
+        { offset: cursorOffset, limit, tail: false },
+        provider,
+      )
+
+      // The transcript shrank past where we were reading.
+      if (window.messages.length === 0 && window.total < cursorOffset) {
+        await emitReplacement()
+        return
+      }
+      // Our cursor no longer names the message it named last read.
+      if (cursorUuid && window.messages.length > 0 && window.messages[0]?.uuid !== cursorUuid) {
+        await emitReplacement()
+        return
+      }
+      // Too far behind to walk forward — see MESSAGE_CATCHUP_MAX_MESSAGES.
+      const remaining = window.total - (window.offset + window.messages.length)
+      if (remaining > MESSAGE_CATCHUP_MAX_MESSAGES) {
+        await emitReplacement()
+        return
+      }
+
+      const signature = messageWindowSignature(window.offset, window.messages)
+      const externalWriter = window.externalWriter === true
+      const externalWriterChanged = externalWriter !== lastExternalWriter
+      if (window.messages.length > 0 && (signature !== lastSignature || externalWriterChanged)) {
+        enqueue('messages', messageWindowPayload(sessionId, provider, window))
+        lastSignature = signature
+        lastExternalWriter = externalWriter
+        adoptCursor(window.offset, window.messages)
+        if (remaining > 0) pending = true
+      }
+    } catch (err) {
+      enqueue('error', { error: err instanceof Error ? err.message : 'Unknown error' })
+      close()
+      return
+    } finally {
+      inFlight = false
+    }
+    if (pending && !signal.aborted) {
+      pending = false
+      void refetch()
+    }
+  }
+
+  const scheduleRefetch = (debounceMs: number = refetchDebounceMs) => {
+    if (signal.aborted) return
+    if (refetchTimer) return
+    refetchTimer = setTimeout(() => {
+      refetchTimer = undefined
+      void refetch()
+    }, debounceMs)
+  }
+
+  const scheduleFallback = () => {
+    if (fallbackTimer) clearTimeout(fallbackTimer)
+    fallbackTimer = setTimeout(() => {
+      if (signal.aborted) return
+      void refetch()
+      scheduleFallback()
+    }, fallbackPollMs)
+  }
+
+  const scheduleHeartbeat = () => {
+    if (heartbeatTimer) clearTimeout(heartbeatTimer)
+    heartbeatTimer = setTimeout(() => {
+      if (signal.aborted) return
+      const now = Date.now()
+      if (now - lastHeartbeat >= HEARTBEAT_MS) {
+        enqueue('heartbeat', { ts: now })
+        lastHeartbeat = now
+      }
+      scheduleHeartbeat()
+    }, HEARTBEAT_MS)
+  }
+
+  const clearTimers = () => {
+    if (refetchTimer) clearTimeout(refetchTimer)
+    if (fallbackTimer) clearTimeout(fallbackTimer)
+    if (heartbeatTimer) clearTimeout(heartbeatTimer)
+  }
+
+  return { refetch, scheduleRefetch, scheduleFallback, scheduleHeartbeat, clearTimers }
+}
+
 async function getEventsResponse(
   request: NextRequest,
   { params }: { params: Promise<{ sessionId: string }> },
@@ -238,86 +417,11 @@ type GenericPumpInput = Omit<OpenCodePumpInput, 'provider'> & {
 }
 
 async function pumpGenericLiveSession({ sessionId, provider, limit, backfill, offset, enqueue, close, signal }: GenericPumpInput): Promise<void> {
-  let lastSignature = ''
-  let cursorOffset = offset
-  let lastHeartbeat = Date.now()
-  let inFlight = false
-  let pending = false
-  let refetchTimer: ReturnType<typeof setTimeout> | undefined
-  let fallbackTimer: ReturnType<typeof setTimeout> | undefined
-  let heartbeatTimer: ReturnType<typeof setTimeout> | undefined
-
-  const refetch = async () => {
-    if (inFlight) {
-      pending = true
-      return
-    }
-    inFlight = true
-    try {
-      const window = await listViewSessionMessageWindow(
-        sessionId,
-        { offset: cursorOffset, limit, tail: false },
-        provider,
-      )
-      if (window.messages.length === 0 && window.total < cursorOffset) {
-        const replacement = await readReplacementWindow(sessionId, provider, limit)
-        enqueue('messages', replacement)
-        lastSignature = messageWindowSignature(replacement.offset, replacement.messages)
-        cursorOffset = Math.max(0, replacement.offset + replacement.messages.length - backfill)
-        return
-      }
-      const signature = messageWindowSignature(window.offset, window.messages)
-      if (window.messages.length > 0 && signature !== lastSignature) {
-        enqueue('messages', messageWindowPayload(sessionId, provider, window))
-        lastSignature = signature
-        cursorOffset = Math.max(0, window.offset + window.messages.length - backfill)
-        if (window.offset + window.messages.length < window.total) {
-          pending = true
-        }
-      }
-    } catch (err) {
-      enqueue('error', { error: err instanceof Error ? err.message : 'Unknown error' })
-      close()
-      return
-    } finally {
-      inFlight = false
-    }
-    if (pending && !signal.aborted) {
-      pending = false
-      void refetch()
-    }
-  }
-
-  const scheduleRefetch = () => {
-    if (signal.aborted) return
-    if (refetchTimer) return
-    refetchTimer = setTimeout(() => {
-      refetchTimer = undefined
-      void refetch()
-    }, GENERIC_REFETCH_DEBOUNCE_MS)
-  }
-
-  const scheduleFallback = () => {
-    if (fallbackTimer) clearTimeout(fallbackTimer)
-    fallbackTimer = setTimeout(() => {
-      if (signal.aborted) return
-      void refetch()
-      scheduleFallback()
-    }, MESSAGE_STREAM_POLL_MS)
-  }
-
-  const scheduleHeartbeat = () => {
-    if (heartbeatTimer) clearTimeout(heartbeatTimer)
-    heartbeatTimer = setTimeout(() => {
-      if (signal.aborted) return
-      const now = Date.now()
-      if (now - lastHeartbeat >= HEARTBEAT_MS) {
-        enqueue('heartbeat', { ts: now })
-        lastHeartbeat = now
-      }
-      scheduleHeartbeat()
-    }, HEARTBEAT_MS)
-  }
+  const { refetch, scheduleRefetch, scheduleFallback, scheduleHeartbeat, clearTimers } = createWindowPump({
+    sessionId, provider, limit, backfill, offset, enqueue, close, signal,
+    refetchDebounceMs: GENERIC_REFETCH_DEBOUNCE_MS,
+    fallbackPollMs: MESSAGE_STREAM_POLL_MS,
+  })
 
   const subscription = subscribeToLiveSessionEvents({ sessionId, provider })
   let consumeAborted = false
@@ -341,9 +445,7 @@ async function pumpGenericLiveSession({ sessionId, provider, limit, backfill, of
   const onAbort = () => {
     consumeAborted = true
     subscription.close()
-    if (refetchTimer) clearTimeout(refetchTimer)
-    if (fallbackTimer) clearTimeout(fallbackTimer)
-    if (heartbeatTimer) clearTimeout(heartbeatTimer)
+    clearTimers()
     close()
   }
   if (signal.aborted) {
@@ -367,86 +469,11 @@ async function pumpOpenCode({ sessionId, provider, limit, backfill, offset, enqu
   // emits message.updated / message.part.updated / message.removed
   // whenever the persisted log changes — we just need to refetch and
   // re-emit the canonical window.
-  let lastSignature = ''
-  let cursorOffset = offset
-  let lastHeartbeat = Date.now()
-  let inFlight = false
-  let pending = false
-  let refetchTimer: ReturnType<typeof setTimeout> | undefined
-  let fallbackTimer: ReturnType<typeof setTimeout> | undefined
-  let heartbeatTimer: ReturnType<typeof setTimeout> | undefined
-
-  const refetch = async () => {
-    if (inFlight) {
-      pending = true
-      return
-    }
-    inFlight = true
-    try {
-      const window = await listViewSessionMessageWindow(
-        sessionId,
-        { offset: cursorOffset, limit, tail: false },
-        provider,
-      )
-      if (window.messages.length === 0 && window.total < cursorOffset) {
-        const replacement = await readReplacementWindow(sessionId, provider, limit)
-        enqueue('messages', replacement)
-        lastSignature = messageWindowSignature(replacement.offset, replacement.messages)
-        cursorOffset = Math.max(0, replacement.offset + replacement.messages.length - backfill)
-        return
-      }
-      const signature = messageWindowSignature(window.offset, window.messages)
-      if (window.messages.length > 0 && signature !== lastSignature) {
-        enqueue('messages', messageWindowPayload(sessionId, provider, window))
-        lastSignature = signature
-        cursorOffset = Math.max(0, window.offset + window.messages.length - backfill)
-        if (window.offset + window.messages.length < window.total) {
-          pending = true
-        }
-      }
-    } catch (err) {
-      enqueue('error', { error: err instanceof Error ? err.message : 'Unknown error' })
-      close()
-      return
-    } finally {
-      inFlight = false
-    }
-    if (pending && !signal.aborted) {
-      pending = false
-      void refetch()
-    }
-  }
-
-  const scheduleRefetch = (debounceMs: number = OPENCODE_REFETCH_DEBOUNCE_MS) => {
-    if (signal.aborted) return
-    if (refetchTimer) return
-    refetchTimer = setTimeout(() => {
-      refetchTimer = undefined
-      void refetch()
-    }, debounceMs)
-  }
-
-  const scheduleFallback = () => {
-    if (fallbackTimer) clearTimeout(fallbackTimer)
-    fallbackTimer = setTimeout(() => {
-      if (signal.aborted) return
-      void refetch()
-      scheduleFallback()
-    }, OPENCODE_FALLBACK_POLL_MS)
-  }
-
-  const scheduleHeartbeat = () => {
-    if (heartbeatTimer) clearTimeout(heartbeatTimer)
-    heartbeatTimer = setTimeout(() => {
-      if (signal.aborted) return
-      const now = Date.now()
-      if (now - lastHeartbeat >= HEARTBEAT_MS) {
-        enqueue('heartbeat', { ts: now })
-        lastHeartbeat = now
-      }
-      scheduleHeartbeat()
-    }, HEARTBEAT_MS)
-  }
+  const { refetch, scheduleRefetch, scheduleFallback, scheduleHeartbeat, clearTimers } = createWindowPump({
+    sessionId, provider, limit, backfill, offset, enqueue, close, signal,
+    refetchDebounceMs: OPENCODE_REFETCH_DEBOUNCE_MS,
+    fallbackPollMs: OPENCODE_FALLBACK_POLL_MS,
+  })
 
   // opencode ≥1.17 delivers session events only on the directory-scoped bus,
   // so the subscription needs the session's working directory.
@@ -505,9 +532,7 @@ async function pumpOpenCode({ sessionId, provider, limit, backfill, offset, enqu
   const onAbort = () => {
     consumeAborted = true
     subscription.close()
-    if (refetchTimer) clearTimeout(refetchTimer)
-    if (fallbackTimer) clearTimeout(fallbackTimer)
-    if (heartbeatTimer) clearTimeout(heartbeatTimer)
+    clearTimers()
     close()
   }
   if (signal.aborted) {
@@ -542,86 +567,11 @@ const CLAUDE_REFETCH_DEBOUNCE_MS = 80
 const CLAUDE_FALLBACK_POLL_MS = 4000
 
 async function pumpClaude({ sessionId, provider, limit, backfill, offset, enqueue, close, signal }: OpenCodePumpInput): Promise<void> {
-  let lastSignature = ''
-  let cursorOffset = offset
-  let lastHeartbeat = Date.now()
-  let inFlight = false
-  let pending = false
-  let refetchTimer: ReturnType<typeof setTimeout> | undefined
-  let fallbackTimer: ReturnType<typeof setTimeout> | undefined
-  let heartbeatTimer: ReturnType<typeof setTimeout> | undefined
-
-  const refetch = async () => {
-    if (inFlight) {
-      pending = true
-      return
-    }
-    inFlight = true
-    try {
-      const window = await listViewSessionMessageWindow(
-        sessionId,
-        { offset: cursorOffset, limit, tail: false },
-        provider,
-      )
-      if (window.messages.length === 0 && window.total < cursorOffset) {
-        const replacement = await readReplacementWindow(sessionId, provider, limit)
-        enqueue('messages', replacement)
-        lastSignature = messageWindowSignature(replacement.offset, replacement.messages)
-        cursorOffset = Math.max(0, replacement.offset + replacement.messages.length - backfill)
-        return
-      }
-      const signature = messageWindowSignature(window.offset, window.messages)
-      if (window.messages.length > 0 && signature !== lastSignature) {
-        enqueue('messages', messageWindowPayload(sessionId, provider, window))
-        lastSignature = signature
-        cursorOffset = Math.max(0, window.offset + window.messages.length - backfill)
-        if (window.offset + window.messages.length < window.total) {
-          pending = true
-        }
-      }
-    } catch (err) {
-      enqueue('error', { error: err instanceof Error ? err.message : 'Unknown error' })
-      close()
-      return
-    } finally {
-      inFlight = false
-    }
-    if (pending && !signal.aborted) {
-      pending = false
-      void refetch()
-    }
-  }
-
-  const scheduleRefetch = () => {
-    if (signal.aborted) return
-    if (refetchTimer) return
-    refetchTimer = setTimeout(() => {
-      refetchTimer = undefined
-      void refetch()
-    }, CLAUDE_REFETCH_DEBOUNCE_MS)
-  }
-
-  const scheduleFallback = () => {
-    if (fallbackTimer) clearTimeout(fallbackTimer)
-    fallbackTimer = setTimeout(() => {
-      if (signal.aborted) return
-      void refetch()
-      scheduleFallback()
-    }, CLAUDE_FALLBACK_POLL_MS)
-  }
-
-  const scheduleHeartbeat = () => {
-    if (heartbeatTimer) clearTimeout(heartbeatTimer)
-    heartbeatTimer = setTimeout(() => {
-      if (signal.aborted) return
-      const now = Date.now()
-      if (now - lastHeartbeat >= HEARTBEAT_MS) {
-        enqueue('heartbeat', { ts: now })
-        lastHeartbeat = now
-      }
-      scheduleHeartbeat()
-    }, HEARTBEAT_MS)
-  }
+  const { refetch, scheduleRefetch, scheduleFallback, scheduleHeartbeat, clearTimers } = createWindowPump({
+    sessionId, provider, limit, backfill, offset, enqueue, close, signal,
+    refetchDebounceMs: CLAUDE_REFETCH_DEBOUNCE_MS,
+    fallbackPollMs: CLAUDE_FALLBACK_POLL_MS,
+  })
 
   const subscription = subscribeToClaudeEvents({ sessionId })
 
@@ -649,9 +599,7 @@ async function pumpClaude({ sessionId, provider, limit, backfill, offset, enqueu
   const onAbort = () => {
     consumeAborted = true
     subscription.close()
-    if (refetchTimer) clearTimeout(refetchTimer)
-    if (fallbackTimer) clearTimeout(fallbackTimer)
-    if (heartbeatTimer) clearTimeout(heartbeatTimer)
+    clearTimers()
     close()
   }
   if (signal.aborted) {
@@ -688,96 +636,11 @@ const CODEX_FALLBACK_POLL_MS = 30_000
 const CODEX_REFETCH_DEBOUNCE_MS = 80
 
 async function pumpCodex({ sessionId, provider, limit, backfill, offset, enqueue, close, signal }: OpenCodePumpInput): Promise<void> {
-  let lastSignature = ''
-  // Tracked separately from lastSignature: another Codex client grabbing or
-  // releasing the rollout writer lock can flip this while the (stale-cached)
-  // transcript signature stays byte-identical, so the signature check alone
-  // would silently drop the flag flip and the client's sync banner would
-  // never appear or clear.
-  let lastExternalWriter = false
-  let cursorOffset = offset
-  let lastHeartbeat = Date.now()
-  let inFlight = false
-  let pending = false
-  let refetchTimer: ReturnType<typeof setTimeout> | undefined
-  let fallbackTimer: ReturnType<typeof setTimeout> | undefined
-  let heartbeatTimer: ReturnType<typeof setTimeout> | undefined
-
-  const refetch = async () => {
-    if (inFlight) {
-      pending = true
-      return
-    }
-    inFlight = true
-    try {
-      const window = await listViewSessionMessageWindow(
-        sessionId,
-        { offset: cursorOffset, limit, tail: false },
-        provider,
-      )
-      if (window.messages.length === 0 && window.total < cursorOffset) {
-        const replacement = await readReplacementWindow(sessionId, provider, limit)
-        enqueue('messages', replacement)
-        lastSignature = messageWindowSignature(replacement.offset, replacement.messages)
-        lastExternalWriter = replacement.externalWriter === true
-        cursorOffset = Math.max(0, replacement.offset + replacement.messages.length - backfill)
-        return
-      }
-      const signature = messageWindowSignature(window.offset, window.messages)
-      const externalWriter = window.externalWriter === true
-      const externalWriterChanged = externalWriter !== lastExternalWriter
-      if (window.messages.length > 0 && (signature !== lastSignature || externalWriterChanged)) {
-        enqueue('messages', messageWindowPayload(sessionId, provider, window))
-        lastSignature = signature
-        lastExternalWriter = externalWriter
-        cursorOffset = Math.max(0, window.offset + window.messages.length - backfill)
-        if (window.offset + window.messages.length < window.total) {
-          pending = true
-        }
-      }
-    } catch (err) {
-      enqueue('error', { error: err instanceof Error ? err.message : 'Unknown error' })
-      close()
-      return
-    } finally {
-      inFlight = false
-    }
-    if (pending && !signal.aborted) {
-      pending = false
-      void refetch()
-    }
-  }
-
-  const scheduleRefetch = () => {
-    if (signal.aborted) return
-    if (refetchTimer) return
-    refetchTimer = setTimeout(() => {
-      refetchTimer = undefined
-      void refetch()
-    }, CODEX_REFETCH_DEBOUNCE_MS)
-  }
-
-  const scheduleFallback = () => {
-    if (fallbackTimer) clearTimeout(fallbackTimer)
-    fallbackTimer = setTimeout(() => {
-      if (signal.aborted) return
-      void refetch()
-      scheduleFallback()
-    }, CODEX_FALLBACK_POLL_MS)
-  }
-
-  const scheduleHeartbeat = () => {
-    if (heartbeatTimer) clearTimeout(heartbeatTimer)
-    heartbeatTimer = setTimeout(() => {
-      if (signal.aborted) return
-      const now = Date.now()
-      if (now - lastHeartbeat >= HEARTBEAT_MS) {
-        enqueue('heartbeat', { ts: now })
-        lastHeartbeat = now
-      }
-      scheduleHeartbeat()
-    }, HEARTBEAT_MS)
-  }
+  const { refetch, scheduleRefetch, scheduleFallback, scheduleHeartbeat, clearTimers } = createWindowPump({
+    sessionId, provider, limit, backfill, offset, enqueue, close, signal,
+    refetchDebounceMs: CODEX_REFETCH_DEBOUNCE_MS,
+    fallbackPollMs: CODEX_FALLBACK_POLL_MS,
+  })
 
   const subscription = subscribeToCodexEvents({ threadId: sessionId })
   // Replay the cached structured plan so a late subscriber sees the panel
@@ -836,9 +699,7 @@ async function pumpCodex({ sessionId, provider, limit, backfill, offset, enqueue
   const onAbort = () => {
     consumeAborted = true
     subscription.close()
-    if (refetchTimer) clearTimeout(refetchTimer)
-    if (fallbackTimer) clearTimeout(fallbackTimer)
-    if (heartbeatTimer) clearTimeout(heartbeatTimer)
+    clearTimers()
     close()
   }
   if (signal.aborted) {

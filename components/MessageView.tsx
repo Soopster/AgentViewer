@@ -2021,6 +2021,9 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
   onEditFromMessage: (messageId: string, text: string) => void
 }) {
   const [copied, setCopied] = useState(false)
+  // 'missing' is an ordinary outcome, not an error: raw frames are retained
+  // only for recently mapped sessions (see lib/rawFrames.ts).
+  const [rawState, setRawState] = useState<'idle' | 'copied' | 'missing' | 'denied'>('idle')
   const copyText = useMemo(() => messageToCopyText(row.message), [row.message])
   const flatTimeline = useSyncExternalStore<ColorTreatment>(subscribeColorTreatment, getCurrentColorTreatment, () => DEFAULT_COLOR_TREATMENT) === 'flat'
   const canCopy = copyText.length > 0
@@ -2030,11 +2033,28 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
   const canQuote = !isUserMessage && copyText.length > 0
   const canReply = copyText.length > 0
   const canBookmark = !row.message.uuid.startsWith('live-')
-  const showActions = canCopy || canReuse || canQuote || canReply || canEdit || canBookmark || (row.showForkControls && (row.allowFork || row.allowResume))
+  // The provider's own frame for this message, when the server still holds it.
+  const canCopyRaw = canBookmark && !!row.message.sessionId
+  const showActions = canCopy || canReuse || canQuote || canReply || canEdit || canBookmark || canCopyRaw || (row.showForkControls && (row.allowFork || row.allowResume))
   const handleBookmark = useCallback(() => {
     if (!canBookmark) return
     onToggleBookmark(row.message.uuid)
   }, [canBookmark, onToggleBookmark, row.message.uuid])
+  const handleCopyRaw = useCallback(() => {
+    const sessionId = row.message.sessionId
+    if (!canCopyRaw || !sessionId) return
+    const url = `/api/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(row.message.uuid)}/raw`
+    void fetch(url)
+      .then(async (res) => {
+        if (res.status === 404) { setRawState('missing'); return }
+        if (!res.ok) { setRawState('denied'); return }
+        const frame = await res.json()
+        await navigator.clipboard.writeText(JSON.stringify(frame, null, 2))
+        setRawState('copied')
+      })
+      .catch(() => setRawState('denied'))
+      .finally(() => { window.setTimeout(() => setRawState('idle'), 1600) })
+  }, [canCopyRaw, row.message.sessionId, row.message.uuid])
   const handleCopy = useCallback(() => {
     if (!canCopy) return
     void navigator.clipboard.writeText(copyText).then(() => {
@@ -2271,6 +2291,19 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
               title="Copy message text"
             >
               {copied ? 'COPIED' : 'COPY'}
+            </button>
+          )}
+          {canCopyRaw && (
+            <button
+              type="button"
+              className="timeline-row-action av-hover-control timeline-row-action--copy"
+              onClick={handleCopyRaw}
+              title="Copy the provider's original frame for this message"
+            >
+              {rawState === 'copied' ? 'COPIED'
+                : rawState === 'missing' ? 'NO FRAME'
+                  : rawState === 'denied' ? 'DENIED'
+                    : 'RAW'}
             </button>
           )}
         </div>

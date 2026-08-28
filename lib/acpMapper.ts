@@ -18,6 +18,7 @@ import type {
   ToolUseBlock,
 } from './types'
 import type { AcpBufferedMessage } from './acpClientPool'
+import { recordRawFrame } from './rawFrames'
 
 function stringify(value: unknown): string {
   if (typeof value === 'string') return value
@@ -151,7 +152,17 @@ export function mapAcpBufferedMessages(
   buffered: AcpBufferedMessage[],
 ): SessionMessage[] {
   return buffered
-    .map((entry) => mapAcpBufferedMessage(sessionId, provider, entry))
+    .map((entry) => {
+      const message = mapAcpBufferedMessage(sessionId, provider, entry)
+      if (message) {
+        recordRawFrame(message.session_id, message.uuid, {
+          source: 'acp.jsonrpc',
+          messageType: entry.message?.kind,
+          payload: entry.message,
+        })
+      }
+      return message
+    })
     .filter((msg): msg is SessionMessage => msg !== null)
 }
 

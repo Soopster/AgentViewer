@@ -72,6 +72,24 @@ export type SessionInboxState = {
   pinOrder?: number
   settledAt?: number
   snoozedUntil?: number
+  /** The pull request this session's work became. Recorded so the session can
+   *  settle itself when that PR merges instead of sitting in the active list
+   *  long after the work landed. */
+  linkedPr?: LinkedPullRequest
+}
+
+export type LinkedPullRequest = {
+  /** `owner/repo`, as `gh` reports it. */
+  repo: string
+  number: number
+  url: string
+  /** Working directory to resolve the PR from — `gh` is repo-scoped and a
+   *  session's cwd is the only thing that identifies which checkout it means. */
+  cwd?: string
+  /** Last state observed from the host, uppercase as `gh` reports it
+   *  (OPEN / CLOSED / MERGED). Absent until the first refresh. */
+  state?: string
+  checkedAt?: number
 }
 export type ReasoningEffortLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh'
 

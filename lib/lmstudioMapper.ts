@@ -1,6 +1,7 @@
 import type { Session, SessionInfo, SessionMessage } from './types'
 import { LMSTUDIO_CAPABILITIES } from './provider'
 import type { LmstudioSessionRecord } from './lmstudioClient'
+import { recordRawFrame } from './rawFrames'
 
 export function mapLmstudioSessionToSession(record: LmstudioSessionRecord): Session {
   return {
@@ -38,6 +39,9 @@ function firstLmstudioPrompt(record: LmstudioSessionRecord): string | undefined 
 }
 
 export function mapLmstudioSessionToMessages(record: LmstudioSessionRecord): SessionMessage[] {
+  for (const message of record.messages) {
+    recordRawFrame(record.id, message.id, { source: 'lmstudio.record', messageType: message.role, payload: message })
+  }
   return record.messages.map((message) => ({
     type: message.role,
     uuid: message.id,

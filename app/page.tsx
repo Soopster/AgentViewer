@@ -384,6 +384,12 @@ export default function Home() {
   // message window. This is not always messages.length because session loads
   // use tail windows for long transcripts.
   const msgCountRef = useRef(0)
+  // The uuid the client believes sits at the offset its next poll will ask
+  // from. Offsets are positional indexes into a transcript the server
+  // re-derives each read, so sending this lets the server detect that the
+  // transcript was rewritten underneath us and answer with a replace-tail
+  // instead of a window we would splice into the wrong place.
+  const pollCursorUuidRef = useRef<string | undefined>(undefined)
   // True when the active transcript was loaded in full via the deep-link
   // (all=1) path, so the head-trim below must NOT evict the anchored history.
   const fullTranscriptLoadedRef = useRef(false)
@@ -700,6 +706,12 @@ export default function Home() {
     // invariant no longer holds, so trimming may resume.
     if (replaceWindow) fullTranscriptLoadedRef.current = false
     msgCountRef.current = replaceWindow ? nextOffset : Math.max(msgCountRef.current, nextOffset)
+    // Only meaningful when this window actually ends where the next poll will
+    // start, and when it reaches back far enough to contain that message.
+    const cursorIndex = incoming.length - MESSAGE_POLL_BACKFILL
+    pollCursorUuidRef.current = msgCountRef.current === nextOffset && cursorIndex >= 0
+      ? incoming[cursorIndex]?.uuid
+      : undefined
     setMessages((prev) => {
       if (replaceWindow) return incoming
       const merged = mergeOrderedSessionMessageWindow(prev, incoming, { offset, previousTotal })
@@ -716,9 +728,11 @@ export default function Home() {
     if (pollInFlightRef.current) return
     pollInFlightRef.current = true
     const offset = Math.max(0, msgCountRef.current - MESSAGE_POLL_BACKFILL)
+    const expectUuid = pollCursorUuidRef.current
     try {
       const r = await fetch(withProviderQuery(
-        `/api/sessions/${session.sessionId}/messages?offset=${offset}&limit=${MESSAGE_STREAM_LIMIT}`,
+        `/api/sessions/${session.sessionId}/messages?offset=${offset}&limit=${MESSAGE_STREAM_LIMIT}`
+        + (expectUuid ? `&expectUuid=${encodeURIComponent(expectUuid)}` : ''),
         session.provider,
         session.providerInstanceId,
       ))
@@ -848,6 +862,7 @@ export default function Home() {
     if (sessions.some((s) => projectSessionKey(s) === selectedTabKey)) return
     setSelectedTabKey(null)
     msgCountRef.current = 0
+    pollCursorUuidRef.current = undefined
     setMessages([])
   }, [openTabSessions, selectedTabKey, sessions])
 
@@ -1057,6 +1072,7 @@ export default function Home() {
     })
     getProjectMessageCounts().clear()
     msgCountRef.current = 0
+    pollCursorUuidRef.current = undefined
     // Clear before the pending-session early-return below so a stale `true`
     // from a previously deep-linked session can't disable trimming here. The
     // non-pending path re-sets it from nextTargetMessageId after the load.
@@ -1120,6 +1136,7 @@ export default function Home() {
           setSelectedTabKey(null)
           setTargetMessage(null)
           msgCountRef.current = 0
+          pollCursorUuidRef.current = undefined
           setMessages([])
         })
       }
@@ -1133,6 +1150,7 @@ export default function Home() {
       setTargetMessage(null)
     })
     msgCountRef.current = 0
+    pollCursorUuidRef.current = undefined
     setLoadingMessages(true)
     setMessages([])
     try {
@@ -1254,6 +1272,7 @@ export default function Home() {
       setSelectedTabKey(null)
       setTargetMessage(null)
       msgCountRef.current = 0
+      pollCursorUuidRef.current = undefined
       setMessages([])
     }
   }, [openTabSessions, selectedTabKey])
@@ -1328,6 +1347,7 @@ export default function Home() {
       setTargetMessage(null)
       setSessionListScrollRequest(null)
       msgCountRef.current = 0
+      pollCursorUuidRef.current = undefined
       setMessages([])
       setLoadingMessages(false)
       setLoadingSessions(true)
@@ -1590,6 +1610,20 @@ export default function Home() {
               composerInsertRequestRef.current += 1
               setComposerInsertRequest({ requestId: composerInsertRequestRef.current, text: prompt })
             }}
+            linkedPrNumber={selectedSession?.inbox?.linkedPr?.number}
+            onLinkToSession={selectedSession ? (pr) => {
+              const target = selectedSession
+              void fetch(`/api/sessions/${encodeURIComponent(target.sessionId)}/inbox`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  action: 'link-pr',
+                  provider: target.provider,
+                  providerInstanceId: target.providerInstanceId,
+                  linkedPr: pr,
+                }),
+              }).then(() => { void fetchSessions() }).catch(() => {})
+            } : undefined}
           />
         ) : null}
         {activeProjectDir && fileViewerOpen ? (
