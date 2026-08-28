@@ -30,6 +30,7 @@
 // evict another's frames.
 
 import { MAPPED_MESSAGE_CACHE_MAX } from './mappedMessagesCache'
+import { registerDiagnosticsReporter } from './runtimeDiagnostics'
 
 /** Where a frame came from. Mirrors T3's tagged union so the label says both
  *  which provider and which transport produced it — `claude.sdk.message` and
@@ -126,3 +127,11 @@ export function rawFrameDiagnostics(): { sessions: number; frames: number } {
   for (const bucket of bySession.values()) frames += bucket.size
   return { sessions: bySession.size, frames }
 }
+
+// This store retains unnormalized provider payloads, so it needs to be visible
+// in the memory report alongside the caches it is sized against — otherwise the
+// per-session cap is a number nobody can check against reality.
+registerDiagnosticsReporter(() => {
+  const { sessions, frames } = rawFrameDiagnostics()
+  return { rawFrameSessions: sessions, rawFrames: frames }
+})
