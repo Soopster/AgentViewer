@@ -33,6 +33,7 @@ import { clearClaudeDynamicMcpServers, claudeDynamicMcpServerNames } from '../cl
 import { deleteClaudeHookEvents, listClaudeHookEvents } from '../claudeHookEvents'
 import { claudeProcessTransportStatus } from '../claudeProcessSpawner'
 import { readClaudeSupportedModels } from '../claudeModels'
+import { withoutClaudeResumeTouch } from '../claudeResumeTouch'
 import { peekClaudeSession } from '../claudePool'
 import { getClaudeCommandsOverride } from '../claudeCommandsStore'
 import {
@@ -180,7 +181,7 @@ export const claudeAdapter: SessionAdapter = {
       }))
 
       return normalized.map((session) => ({
-        ...session,
+        ...withoutClaudeResumeTouch(session),
         provider: 'claude' as const,
         capabilities: getProviderCapabilities('claude'),
       }))
@@ -191,7 +192,7 @@ export const claudeAdapter: SessionAdapter = {
     const info = await getSessionInfo(sessionId, claudeSessionStoreOptions())
     if (!info) return null
     return {
-      ...info,
+      ...withoutClaudeResumeTouch(info),
       provider: 'claude',
       capabilities: getProviderCapabilities('claude'),
     }

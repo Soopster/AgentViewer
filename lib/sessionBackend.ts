@@ -51,6 +51,7 @@ import {
 import { noteClaudeCommandsChanged } from './claudeCommandsStore'
 import { claudeAgentPolicyOptions, claudeQueryBudgetOptions, parseClaudeAgentPolicy, type ClaudeAgentPolicy } from './claudeRuntimePolicy'
 import { claudeSessionPersistenceQueryOptions, claudeSessionStoreOptions } from './claudeSessionStore'
+import { withClaudeResumeTouchRecorded } from './claudeResumeTouch'
 import { claudeProcessSpawnOptions, claudeProcessTransportStatus } from './claudeProcessSpawner'
 import { dispatchCoordinatorCodexToolCall } from './agentCoordinationSdkTools'
 import {
@@ -6233,17 +6234,25 @@ export async function prewarmViewSession(params: {
     // this warm entry up via the pooled path once a message actually arrives
     // (see the pendingWarm check there); if it isn't ready in time, the cold
     // path spawns fresh exactly as before — no regression either way.
-    const entry = acquireClaudeSession({
-      sessionId: params.sessionId,
-      cwd: params.cwd,
-      // Leave model unset when not provided — see createClaudeStream for why
-      // a hardcoded literal breaks custom-model deployments.
-      model: params.model,
-      fallbackModel: claudeFallbackModelChain(),
-      effort: params.effort,
-      isPendingSession: params.isPending,
-    })
-    await entry.query.initializationResult()
+    // Spawning resumes the session, which rewrites its transcript and moves its
+    // mtime even though nothing was said. Prewarm fires on selection, so record
+    // that touch and keep the session's real last-activity time in the lists
+    // (lib/claudeResumeTouch.ts). A pending session has no transcript to touch.
+    const spawn = async () => {
+      const entry = acquireClaudeSession({
+        sessionId: params.sessionId,
+        cwd: params.cwd,
+        // Leave model unset when not provided — see createClaudeStream for why
+        // a hardcoded literal breaks custom-model deployments.
+        model: params.model,
+        fallbackModel: claudeFallbackModelChain(),
+        effort: params.effort,
+        isPendingSession: params.isPending,
+      })
+      await entry.query.initializationResult()
+    }
+    if (params.isPending) await spawn()
+    else await withClaudeResumeTouchRecorded(params.sessionId, spawn)
     return
   }
   if (provider === 'codex') {
