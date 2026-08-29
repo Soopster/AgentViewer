@@ -771,6 +771,20 @@ const VELOCITY_SCROLL_RAMP_MS = 700
 const VELOCITY_SCROLL_MAX_STEP = 8
 const TERMINAL_SELECTION_COPY_WINDOW_MS = 15_000
 
+export type TerminalSelectionCopyDestination = 'none' | 'osc52' | 'host'
+
+export function terminalSelectionCopyDestination(options: {
+  isDragging: boolean
+  nativeOscEnabled: boolean
+  osc52Supported: boolean
+  windowsClipboard: boolean
+}): TerminalSelectionCopyDestination {
+  if (options.isDragging) return 'none'
+  if (options.nativeOscEnabled && options.osc52Supported) return 'osc52'
+  if (options.windowsClipboard) return 'host'
+  return 'none'
+}
+
 type PaneFocus = 'sessions' | 'messages'
 
 type CardLandmark = {
@@ -1205,10 +1219,22 @@ async function writeClipboard(text: string, renderer?: CliRenderer): Promise<voi
   )
 
   const platform = process.platform
+  const windowsClipboard = platform === 'win32' || isWslRuntime()
   const candidates = platform === 'darwin'
     ? [['pbcopy', []] as const]
-    : platform === 'win32'
-    ? [['clip', []] as const, ['powershell', ['-Command', 'Set-Clipboard']] as const]
+    : windowsClipboard
+    ? [
+        [
+          'powershell.exe',
+          [
+            '-NonInteractive',
+            '-NoProfile',
+            '-Command',
+            '[Console]::InputEncoding = [Text.UTF8Encoding]::new($false); Set-Clipboard -Value ([Console]::In.ReadToEnd())',
+          ],
+        ] as const,
+        [platform === 'win32' ? 'clip' : 'clip.exe', []] as const,
+      ]
     : [
         ['wl-copy', []] as const,
         ['xclip', ['-selection', 'clipboard']] as const,
@@ -1225,7 +1251,7 @@ async function writeClipboard(text: string, renderer?: CliRenderer): Promise<voi
     }
   }
 
-  if (renderer?.isOsc52Supported() && renderer.copyToClipboardOSC52(text)) return
+  if (NATIVE_OSC_ENABLED && renderer?.isOsc52Supported() && renderer.copyToClipboardOSC52(text)) return
 
   throw lastError ?? new Error('No clipboard command available')
 }
@@ -15813,13 +15839,28 @@ export default function OpenTuiApp() {
     const text = selection.getSelectedText()
     if (!text.trim()) return
     terminalSelectionRef.current = { text, capturedAt: Date.now() }
-    // Auto-copy via OSC 52 so Cmd+C / Ctrl+Shift+C work immediately after
-    // dragging to select, without needing to press y. Native OSC FFI: off on
-    // Windows (same opentui.dll segfault surface as notifications), and only
-    // when the terminal advertises OSC 52 support. Clipboard text is copied
-    // verbatim — not BMP-sanitized — so selections keep their exact contents.
-    if (NATIVE_OSC_ENABLED && renderer.capabilities?.osc52 !== false) {
-      renderer.copyToClipboardOSC52(text)
+    // Copy only after mouse-up. During a drag OpenTUI emits every intermediate
+    // range, and spawning a Windows clipboard process for each frame makes
+    // selection lag badly. Non-Windows terminals keep the OSC 52 path. Native
+    // Windows deliberately avoids that renderer FFI path (opentui.dll has
+    // faulted there), so use the host clipboard command instead; WSL uses the
+    // same bridge when OSC 52 is unavailable. Text stays verbatim rather than
+    // BMP-sanitized so selections keep their exact Unicode contents.
+    const windowsClipboard = IS_WINDOWS || isWslRuntime()
+    const destination = terminalSelectionCopyDestination({
+      isDragging: selection.isDragging,
+      nativeOscEnabled: NATIVE_OSC_ENABLED,
+      osc52Supported: renderer.capabilities?.osc52 !== false,
+      windowsClipboard,
+    })
+    if (destination === 'osc52') {
+      const copied = renderer.copyToClipboardOSC52(text)
+      if (copied || !windowsClipboard) return
+    }
+    if (destination === 'host' || windowsClipboard) {
+      // Keep the selection usable even if the automatic bridge fails: `y`
+      // still retries through copySelectedMessage and reports the real error.
+      void writeClipboard(text, renderer).catch(() => {})
     }
   })
 

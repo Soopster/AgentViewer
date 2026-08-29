@@ -3,6 +3,7 @@ import React from 'react'
 import {
   selectTranscriptCardVariants,
   shouldCenterTranscriptCard,
+  terminalSelectionCopyDestination,
   transcriptCursorScrollTargetKey,
   type TranscriptCardSelectionVariants,
   usesAgentCardPresentation,
@@ -114,6 +115,39 @@ if (transcriptCursorScrollTargetKey('card:one', null, false) !== 'card:one') {
 }
 if (transcriptCursorScrollTargetKey('card:one', null, true) !== null) {
   throw new Error('Ordinary tail-follow unexpectedly requested an outer card reveal')
+}
+
+if (terminalSelectionCopyDestination({
+  isDragging: true,
+  nativeOscEnabled: false,
+  osc52Supported: false,
+  windowsClipboard: true,
+}) !== 'none') {
+  throw new Error('Windows transcript selection tried to copy an intermediate drag range')
+}
+if (terminalSelectionCopyDestination({
+  isDragging: false,
+  nativeOscEnabled: false,
+  osc52Supported: false,
+  windowsClipboard: true,
+}) !== 'host') {
+  throw new Error('Windows transcript selection did not fall back to the host clipboard after mouse-up')
+}
+if (terminalSelectionCopyDestination({
+  isDragging: false,
+  nativeOscEnabled: true,
+  osc52Supported: true,
+  windowsClipboard: false,
+}) !== 'osc52') {
+  throw new Error('Non-Windows transcript selection lost its OSC 52 clipboard path')
+}
+if (terminalSelectionCopyDestination({
+  isDragging: false,
+  nativeOscEnabled: true,
+  osc52Supported: false,
+  windowsClipboard: true,
+}) !== 'host') {
+  throw new Error('WSL transcript selection did not use the Windows clipboard bridge when OSC 52 is unavailable')
 }
 
 console.log('Transcript selection identity, consistent Agents tool rendering, and nested reveal smoke passed')
