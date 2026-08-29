@@ -1,5 +1,12 @@
 import { execFile } from 'child_process'
 
+export class GitCommandError extends Error {
+  constructor(args: string[], detail: string) {
+    super(`git ${args.join(' ')} failed${detail ? `: ${detail.trim()}` : ''}`)
+    this.name = 'GitCommandError'
+  }
+}
+
 export function runGitCommand(cwd: string, args: string[]): Promise<string> {
   return new Promise((resolve) => {
     const normalizedArgs = process.platform === 'win32'
@@ -30,6 +37,23 @@ export function runGitCommand(cwd: string, args: string[]): Promise<string> {
       }
 
       resolve('')
+    })
+  })
+}
+
+/** Mutation runner: unlike read-only probes, a failed command must surface. */
+export function runGitCommandStrict(cwd: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile('git', args, {
+      cwd,
+      encoding: 'utf-8',
+      maxBuffer: 10 * 1024 * 1024,
+    }, (err, stdout, stderr) => {
+      if (err) {
+        reject(new GitCommandError(args, String(stderr ?? '') || (err instanceof Error ? err.message : String(err))))
+        return
+      }
+      resolve(String(stdout ?? '').trimEnd())
     })
   })
 }

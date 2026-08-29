@@ -23,6 +23,12 @@ export type GitSummary = {
   stashes: number
 }
 
+export type GitBranchRef = {
+  name: string
+  current: boolean
+  worktreePath: string | null
+}
+
 export type GitReviewFile = {
   path: string
   x: string
@@ -95,6 +101,42 @@ export async function fetchGitSummary(cwd: string, runGit: GitCommandRunner): Pr
     untracked,
     stashes: Number.parseInt(stashCountRaw, 10) || 0,
   }
+}
+
+export async function fetchGitBranches(cwd: string, runGit: GitCommandRunner): Promise<GitBranchRef[]> {
+  const [current, branchesRaw, worktreesRaw] = await Promise.all([
+    runGit(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']),
+    runGit(cwd, ['branch', '--format=%(refname:short)']),
+    runGit(cwd, ['worktree', 'list', '--porcelain']),
+  ])
+
+  const worktreeByBranch = new Map<string, string>()
+  let worktreePath: string | null = null
+  for (const line of worktreesRaw.split('\n')) {
+    if (line.startsWith('worktree ')) {
+      worktreePath = line.slice('worktree '.length)
+    } else if (line.startsWith('branch refs/heads/') && worktreePath) {
+      worktreeByBranch.set(line.slice('branch refs/heads/'.length), worktreePath)
+    } else if (!line) {
+      worktreePath = null
+    }
+  }
+
+  return [...new Set(branchesRaw.split('\n').map((branch) => branch.trim()).filter(Boolean))]
+    .map((name) => ({
+      name,
+      current: name === current,
+      worktreePath: worktreeByBranch.get(name) ?? null,
+    }))
+    .sort((left, right) => Number(right.current) - Number(left.current) || left.name.localeCompare(right.name))
+}
+
+export function isSafeGitBranchName(value: unknown): value is string {
+  if (typeof value !== 'string' || !value || value !== value.trim() || value.length > 255) return false
+  if (value.startsWith('-') || value.startsWith('/') || value.endsWith('/') || value.endsWith('.')) return false
+  if (value.includes('..') || value.includes('//') || value.includes('@{')) return false
+  if (/[\s~^:?*[\\\]]/.test(value)) return false
+  return value.split('/').every((part) => part && !part.startsWith('.') && !part.endsWith('.lock'))
 }
 
 function reviewPath(entry: GitStatusEntry): string {

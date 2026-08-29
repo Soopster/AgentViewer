@@ -32,7 +32,7 @@ import {
 } from '@/lib/claudeMapper'
 import { normalizeCodexStreamThreadedMessage } from '@/lib/codexMapper'
 import { getSlashCommandSuggestions, filterSlashCommands, normalizeSlashCommandSuggestions, type SlashCommandSuggestion } from '@/lib/slashCommands'
-import { getProviderComposer, pickProviderExample } from '@/lib/providerComposer'
+import { getProviderComposer } from '@/lib/providerComposer'
 import { extractCopilotPushedAttachments, extractPendingPermission, extractPendingPermissions, extractPermissionReply, type PendingPermission, type PendingQuestionAnswers } from '@/lib/permissions'
 import { extractClaudeReadFileSummary } from '@/lib/claudeSdkFeatures'
 import { parseClaudeCommandLifecycle, type ClaudeCommandLifecycleState } from '@/lib/claudeCommandLifecycle'
@@ -46,13 +46,15 @@ import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import dynamic from 'next/dynamic'
-import { BookOpen, ChartNetwork, FileCode2, Filter, Fullscreen, Maximize2, Minimize2, Plug, Radio, RotateCcw, Search, SendHorizontal, Square, Terminal, X } from 'lucide-react'
+import { ArrowUp, BookOpen, ChartNetwork, ChevronDown, CircleAlert, CircleCheck, Clock3, FileCode2, Filter, Fullscreen, GitBranch, LoaderCircle, Maximize2, Minimize2, MonitorUp, Paperclip, Plug, Radio, RotateCcw, Search, Square, Terminal, TriangleAlert, X } from 'lucide-react'
 import MessageItem, { MessageDensityProvider, ViewModeProvider, DiffStyleProvider, DiffOptionsProvider, type MessageDensity, type WebViewMode } from './MessageItem'
 import { useChannelBridge } from './useChannelBridge'
 import { useIdeBridge } from './useIdeBridge'
 import type { PierreDiffStyle } from './PierreDiffView'
 import { DEFAULT_DIFF_OPTIONS, DiffCommentComposerContext, LiveSubagentTextContext, TaskActiveFormsContext, buildTaskActiveFormsForWeb, streamMessageHasContent, type DiffOptions } from './messageItemShared'
 import { TaskRail } from './TaskRail'
+import ProviderIcon from './ProviderIcon'
+import BranchSwitcher from './BranchSwitcher'
 import { buildTaskRegistry, buildTaskRegistryFromCodexPlan, buildTaskRegistryFromTodos, type CodexPlanStep } from '@/lib/taskRegistry'
 import MessageSessionVisualizer, { type MessageVisualizerRow } from './MessageSessionVisualizer'
 import StreamHistoryRail, { type StreamHistoryItem } from './StreamHistoryRail'
@@ -60,6 +62,8 @@ import { getContinueInCliCommand } from '@/lib/cliContinue'
 import { commandResultExpectsTranscript, isNativeComposerCommandText } from '@/lib/composerCommands'
 import { deliverComposerSteer } from '@/lib/composerSteering'
 import { createDefaultWebComposerQueueStore, type WebComposerQueueDurability } from '@/lib/webComposerQueue'
+import { deriveComposerRuntimeState } from '@/lib/composerRuntimeState'
+import type { GitSummary } from '@/lib/gitProvider'
 import {
   clearComposerQueueTarget,
   createComposerQueueItemId,
@@ -174,6 +178,7 @@ type Props = {
   // Another Codex client currently owns this session's rollout writer lock —
   // the transcript is a stale cached snapshot until that client's turn ends.
   codexExternalWriter?: boolean
+  onOpenGit?: () => void
   maximized?: boolean
   onToggleMaximized?: () => void
   onEnterFullscreen?: () => void
@@ -399,6 +404,7 @@ const CLAUDE_STREAM_STALL_MS = 45000
 // ReadableStream read result.
 const STREAM_STALL_SENTINEL = Symbol('claude-stream-stall')
 const PROGRAMMATIC_SCROLL_SUPPRESSION_MS = 120
+const COMPOSER_GIT_SUMMARY_POLL_MS = 5000
 const ESTIMATED_CHARS_PER_LINE = 92
 const TIMELINE_BOTTOM_GUTTER_PX = 72
 const TIMELINE_TARGET_TOP_GUTTER_PX = 72
@@ -470,6 +476,63 @@ function normalizeSelectValue(value: string | null | undefined): string | null {
 function effortLabel(level: ReasoningEffortLevel): string {
   if (level === 'xhigh') return 'XHIGH'
   return level.toUpperCase()
+}
+
+function gitSummariesMatch(left: GitSummary | null, right: GitSummary | null): boolean {
+  return left?.branch === right?.branch
+    && left?.modified === right?.modified
+    && left?.untracked === right?.untracked
+    && left?.stashes === right?.stashes
+}
+
+function ComposerContextUsageRing({ usage }: { usage: ContextUsage | null }) {
+  const percentage = usage ? Math.max(0, Math.min(usage.percentage, 100)) : 0
+  const ringColor = usage?.percentage && usage.percentage > 80
+    ? 'var(--red, #f87171)'
+    : usage?.percentage && usage.percentage > 60
+    ? 'var(--yellow, #fbbf24)'
+    : 'var(--violet)'
+  const label = usage
+    ? `Context usage: ${usage.totalTokens.toLocaleString()} of ${usage.maxTokens.toLocaleString()} tokens, ${Math.round(usage.percentage)}%`
+    : 'Context usage unavailable until the provider reports it'
+
+  return (
+    <span
+      className="av-web-composer-context-ring"
+      role="img"
+      aria-label={label}
+      title={label}
+      data-available={usage ? 'true' : 'false'}
+      style={{
+        '--av-context-progress': `${percentage * 3.6}deg`,
+        '--av-context-color': ringColor,
+      } as React.CSSProperties}
+    />
+  )
+}
+
+function ComposerStatusBanner({
+  tone,
+  icon,
+  children,
+  action,
+}: {
+  tone: 'info' | 'success' | 'warning' | 'error'
+  icon: React.ReactNode
+  children: React.ReactNode
+  action?: React.ReactNode
+}) {
+  return (
+    <div
+      className="av-web-composer-banner"
+      data-tone={tone}
+      role={tone === 'error' ? 'alert' : 'status'}
+    >
+      <span className="av-web-composer-banner-icon" aria-hidden="true">{icon}</span>
+      <span className="av-web-composer-banner-message">{children}</span>
+      {action ? <span className="av-web-composer-banner-action">{action}</span> : null}
+    </div>
+  )
 }
 
 function LiveSpinner({ label }: { label: string }) {
@@ -2965,6 +3028,7 @@ function MessageViewInner({
   openCodeTodos,
   codexPlan,
   codexExternalWriter,
+  onOpenGit,
   maximized = false,
   onToggleMaximized,
   onEnterFullscreen,
@@ -2979,6 +3043,8 @@ function MessageViewInner({
   const [liveSubagentText, setLiveSubagentText] = useState<Record<string, string>>({})
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null)
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null)
+  const [composerGitSummary, setComposerGitSummary] = useState<GitSummary | null>(null)
+  const [branchSwitcherOpen, setBranchSwitcherOpen] = useState(false)
   const [availableModels, setAvailableModels] = useState<SessionModelInfo[]>([])
   const [modelsLoading, setModelsLoading] = useState(false)
   const [selectedModel, setSelectedModel] = useState('')
@@ -3059,6 +3125,7 @@ function MessageViewInner({
   const [attachments, setAttachments] = useState<SendAttachment[]>([])
   const [attachmentType, setAttachmentType] = useState<SendAttachment['type']>('file')
   const [attachmentPath, setAttachmentPath] = useState('')
+  const [attachmentPanelOpen, setAttachmentPanelOpen] = useState(false)
   const [failedSend, setFailedSend] = useState<FailedSend | null>(null)
   const [rewindTargetId, setRewindTargetId] = useState('')
   const [rollbackTurns, setRollbackTurns] = useState(1)
@@ -3646,6 +3713,53 @@ function MessageViewInner({
       .then(data => { if (!data.error) setSessionInfo(data.info) })
       .catch(() => {})
   }, [session?.provider, session?.sessionId])
+
+  const composerWorkingDirectory = sessionInfo?.cwd ?? session?.cwd ?? null
+  useEffect(() => {
+    setBranchSwitcherOpen(false)
+  }, [composerWorkingDirectory])
+
+  const handleComposerBranchSwitched = useCallback((summary: GitSummary) => {
+    setComposerGitSummary(summary)
+    setSessionInfo((current) => current ? { ...current, gitBranch: summary.branch } : current)
+  }, [])
+
+  useEffect(() => {
+    if (!composerWorkingDirectory) {
+      setComposerGitSummary(null)
+      return
+    }
+
+    let cancelled = false
+    let timer: number | null = null
+    const controller = new AbortController()
+    setComposerGitSummary(null)
+
+    const refresh = async () => {
+      try {
+        const response = await fetch(`/api/git?action=summary&cwd=${encodeURIComponent(composerWorkingDirectory)}`, {
+          cache: 'no-store',
+          signal: controller.signal,
+        })
+        const data = await readJsonResponse(response) as { summary?: GitSummary | null }
+        if (!cancelled) {
+          const next = data.summary ?? null
+          setComposerGitSummary((current) => gitSummariesMatch(current, next) ? current : next)
+        }
+      } catch {
+        // Best-effort: session metadata remains the branch fallback.
+      } finally {
+        if (!cancelled) timer = window.setTimeout(() => { void refresh() }, COMPOSER_GIT_SUMMARY_POLL_MS)
+      }
+    }
+
+    void refresh()
+    return () => {
+      cancelled = true
+      controller.abort()
+      if (timer !== null) window.clearTimeout(timer)
+    }
+  }, [composerWorkingDirectory])
 
   const prewarmComposer = useCallback(() => {
     const sessionId = session?.sessionId
@@ -6600,55 +6714,70 @@ function MessageViewInner({
   const turnRunning = sendBusy || reattachedRunning
   const canSubmitMessage = Boolean(session && (inputText.trim() || attachments.length > 0))
   const composerConfig = useMemo(() => getProviderComposer(session?.provider), [session?.provider])
-  const composerExampleSeed = useMemo(() => {
-    const source = session?.sessionId ?? session?.provider ?? ''
-    let hash = 0
-    for (let i = 0; i < source.length; i += 1) hash = ((hash << 5) - hash + source.charCodeAt(i)) | 0
-    return hash
-  }, [session?.sessionId, session?.provider])
-  const composerExample = useMemo(
-    () => pickProviderExample(session?.provider, composerExampleSeed),
-    [composerExampleSeed, session?.provider],
-  )
   const composerPlaceholder = canUseChannelBridge && channelBridge.routeComposer
     ? 'Send to the live CLI bridge… (toggle off in the bridge panel)'
     : turnRunning
     ? composerConfig.placeholderStreaming
     : activeToolCount > 0
     ? `${composerConfig.label} is using ${activeToolCount} tool${activeToolCount === 1 ? '' : 's'}…`
-    : composerExample
-  const composerStatus = sendState === 'error'
-    ? 'Failed'
-    : canUseChannelBridge && channelBridge.routeComposer
+    : 'Ask for changes, send follow-ups, or attach images'
+  const composerRuntime = useMemo(() => deriveComposerRuntimeState({
+    hasSession: Boolean(session),
+    preparing: modelsPending,
+    sendState,
+    awaitingPersistedTurn,
+    reattachedRunning,
+    interrupting,
+    liveStatus,
+    hasLiveOutput: Boolean(liveAssistantText.trim() || liveThreadedMessages.length > 0),
+    activeToolCount,
+    queuedCount: activeQueuedSends.length,
+    queueDurability: composerQueueDurability,
+  }), [
+    activeQueuedSends.length,
+    activeToolCount,
+    awaitingPersistedTurn,
+    composerQueueDurability,
+    interrupting,
+    liveAssistantText,
+    liveStatus,
+    liveThreadedMessages.length,
+    modelsPending,
+    reattachedRunning,
+    sendState,
+    session?.sessionId,
+  ])
+  const composerStatus = canUseChannelBridge && channelBridge.routeComposer
     ? (channelBridge.sendError ? 'Bridge error' : 'Bridge · sends to live CLI')
-    : interrupting
-    ? 'Interrupting…'
-    : activeQueuedSends.length > 0 && composerQueueDurability === 'memory-only'
-    ? 'Queued in memory · keep this tab open'
-    : activeQueuedSends.length > 0 && (sendState === 'sending' || awaitingPersistedTurn)
-    ? (activeQueuedSends.length === 1
-      ? 'Queued · sends after current turn'
-      : `${activeQueuedSends.length} queued · send in order after current turn`)
     : steeredNotice && (sendState === 'sending' || reattachedRunning)
     ? 'Steered · delivered to the running turn'
-    : sendState === 'sending'
-    ? 'Sending...'
-    : awaitingPersistedTurn
-    ? 'Waiting for saved response...'
-    : reattachedRunning
-    ? 'Turn running · reattached'
-    : 'Ready'
-  const composerStatusColor = sendState === 'error'
-    ? 'var(--red, #f87171)'
-    : canUseChannelBridge && channelBridge.routeComposer
+    : composerRuntime.label
+  const composerStatusDetail = canUseChannelBridge && channelBridge.routeComposer
+    ? (channelBridge.sendError ?? 'Messages are routed directly to the attached CLI session.')
+    : sendState === 'error' && sendError
+    ? `${composerRuntime.detail} ${sendError}`
+    : composerRuntime.detail
+  const composerStatusColor = canUseChannelBridge && channelBridge.routeComposer
     ? (channelBridge.sendError ? 'var(--red, #f87171)' : `var(${composerConfig.cssAccentVar})`)
-    : activeQueuedSends.length > 0 && composerQueueDurability === 'memory-only'
+    : composerRuntime.tone === 'error'
     ? 'var(--red, #f87171)'
-    : activeQueuedSends.length > 0
+    : composerRuntime.tone === 'warning'
     ? 'var(--amber, #eaaa40)'
-    : sendState === 'sending' || awaitingPersistedTurn || reattachedRunning
+    : composerRuntime.tone === 'active'
     ? 'var(--cyan)'
     : 'var(--text-3)'
+  const composerGitBranch = composerGitSummary?.branch ?? sessionInfo?.gitBranch ?? null
+  const composerGitTitle = composerGitBranch
+    ? [
+        `Branch ${composerGitBranch}`,
+        composerGitSummary?.modified ? `${composerGitSummary.modified} modified` : null,
+        composerGitSummary?.untracked ? `${composerGitSummary.untracked} untracked` : null,
+        composerGitSummary?.stashes ? `${composerGitSummary.stashes} stashes` : null,
+      ].filter(Boolean).join(' · ')
+    : null
+  const composerGitHasDetails = Boolean(
+    composerGitSummary?.modified || composerGitSummary?.untracked || composerGitSummary?.stashes,
+  )
   const liveTurnTone: 'running' | 'syncing' = awaitingPersistedTurn ? 'syncing' : 'running'
   const liveTurnBadge = interrupting ? 'STOPPING' : awaitingPersistedTurn ? 'SYNCING' : 'RUNNING'
   const liveTurnActivityDetail = interrupting
@@ -8918,14 +9047,15 @@ function MessageViewInner({
         </div>
       )}
       {!isProject && !composerCollapsed && <div
+        className="av-web-composer-shell"
         onDragEnter={handleComposerDragEnter}
         onDragOver={handleComposerDragOver}
         onDragLeave={handleComposerDragLeave}
         onDrop={handleComposerDrop}
         style={{
-          padding: '8px 16px 10px',
-          borderTop: '1px solid var(--border)',
-          background: composerDropActive ? 'rgba(56,217,245,0.06)' : 'var(--surface)',
+          padding: '12px clamp(16px, 4vw, 48px) 14px',
+          borderTop: '1px solid color-mix(in srgb, var(--border) 72%, transparent)',
+          background: composerDropActive ? 'rgba(56,217,245,0.06)' : 'color-mix(in srgb, var(--bg) 78%, var(--surface))',
           flexShrink: 0,
           position: 'relative',
           transition: 'background 120ms ease',
@@ -8957,79 +9087,52 @@ function MessageViewInner({
         >
           ▼
         </button>
-        {modelsPending && !sendError && (
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 11,
-            color: 'var(--text-3)',
-            marginBottom: 8,
-            letterSpacing: '0.03em',
-          }}>
-            <span className="av-spin" style={{ display: 'inline-block' }}>⟳</span>
-            <span>Loading models…</span>
-          </div>
-        )}
-        {sendError && (
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            flexWrap: 'wrap',
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 11,
-            color: 'var(--red, #f87171)',
-            marginBottom: 8,
-            letterSpacing: '0.03em',
-          }}>
-            <span>{sendError}</span>
-            {failedSend && (
-              <Button
-                type="button"
-                onClick={restoreFailedSend}
-                disabled={sendBusy}
-                variant="outline"
-                size="sm"
-                style={{
-                  height: 24,
-                  padding: '0 8px',
-                  borderRadius: 5,
-                  border: '1px solid rgba(248,113,113,0.28)',
-                  background: 'rgba(248,113,113,0.08)',
-                  color: 'var(--red, #f87171)',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 9,
-                  letterSpacing: '0.06em',
-                }}
+        {(modelsPending || sendError || sessionActionError || sessionActionNotice || (session?.provider === 'codex' && codexExternalWriter)) && (
+          <div className="av-web-composer-banner-stack">
+            {modelsPending && !sendError ? (
+              <ComposerStatusBanner tone="info" icon={<LoaderCircle className="av-spin" size={14} />}>
+                Loading available models…
+              </ComposerStatusBanner>
+            ) : null}
+            {sendError ? (
+              <ComposerStatusBanner
+                tone="error"
+                icon={<CircleAlert size={14} />}
+                action={failedSend ? (
+                  <Button
+                    type="button"
+                    onClick={restoreFailedSend}
+                    disabled={sendBusy}
+                    variant="outline"
+                    size="sm"
+                    className="av-web-composer-banner-retry"
+                  >
+                    <RotateCcw data-icon="inline-start" />
+                    RETRY
+                  </Button>
+                ) : undefined}
               >
-                <RotateCcw data-icon="inline-start" />
-                RETRY
-              </Button>
-            )}
-          </div>
-        )}
-        {(sessionActionError || sessionActionNotice) && (
-          <div style={{
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 11,
-            color: sessionActionError ? 'var(--red, #f87171)' : 'var(--green)',
-            marginBottom: 8,
-            letterSpacing: '0.03em',
-          }}>
-            {sessionActionError ?? sessionActionNotice}
-          </div>
-        )}
-        {session?.provider === 'codex' && codexExternalWriter && (
-          <div style={{
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 11,
-            color: 'var(--amber)',
-            marginBottom: 8,
-            letterSpacing: '0.03em',
-          }}>
-            Open in another Codex client — transcript will lag until that turn finishes.
+                {sendError}
+              </ComposerStatusBanner>
+            ) : null}
+            {sessionActionError || sessionActionNotice ? (
+              <ComposerStatusBanner
+                tone={sessionActionError ? 'error' : sessionActionNotice?.toLowerCase().includes('queued') ? 'info' : 'success'}
+                icon={sessionActionError
+                  ? <TriangleAlert size={14} />
+                  : sessionActionNotice?.toLowerCase().includes('queued')
+                  ? <Clock3 size={14} />
+                  : <CircleCheck size={14} />}
+              >
+                {sessionActionError ?? sessionActionNotice}
+              </ComposerStatusBanner>
+            ) : null}
+            {session?.provider === 'codex' && codexExternalWriter ? (
+              <ComposerStatusBanner tone="warning" icon={<MonitorUp size={14} />}>
+                <strong>Another Codex client owns this session.</strong>{' '}
+                Prompts queue there; the transcript updates when its turn finishes.
+              </ComposerStatusBanner>
+            ) : null}
           </div>
         )}
         {livePromptSuggestion && sendState !== 'sending' && (
@@ -9099,18 +9202,19 @@ function MessageViewInner({
           </div>
         )}
         <Card
+          className="av-web-composer-card"
           style={{
-            borderRadius: 10,
-            border: '1px solid var(--border)',
-            background: colorTreatment === 'flat' ? 'var(--surface)' : 'linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%)',
-            boxShadow: '0 10px 24px var(--violet-glow)',
+            borderRadius: 16,
+            border: '1px solid color-mix(in srgb, var(--border-2) 82%, transparent)',
+            background: colorTreatment === 'flat' ? 'var(--surface)' : 'linear-gradient(180deg, color-mix(in srgb, var(--surface) 96%, white 1%) 0%, var(--surface) 100%)',
+            boxShadow: '0 14px 38px rgba(0,0,0,0.22), 0 2px 8px var(--violet-glow)',
           }}
         >
           <CardHeader className="sr-only">
             <CardTitle>Message composer</CardTitle>
           </CardHeader>
-          <CardContent style={{ padding: '10px 12px' }}>
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+          <CardContent className="av-web-composer-content" style={{ padding: '14px 16px 10px' }}>
+            <div className="av-web-composer-controls" style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 176px', minWidth: 0 }}>
                 <Label style={{
                   fontFamily: "'IBM Plex Mono', monospace",
@@ -9120,6 +9224,7 @@ function MessageViewInner({
                 }}>
                   MODEL
                 </Label>
+                <ProviderIcon provider={activeProvider} size={18} className="av-web-composer-provider-icon" />
                 <NativeSelect
                   value={selectedModelValue ?? ''}
                   onChange={(event) => commitClaudeModelSelection(event.target.value)}
@@ -9559,6 +9664,7 @@ function MessageViewInner({
                 ))}
               </div>
             )}
+            {(attachmentPanelOpen || attachments.length > 0) && (
             <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
               <NativeSelect
                 value={attachmentType}
@@ -9678,6 +9784,7 @@ function MessageViewInner({
                 )
               })}
             </div>
+            )}
             {activeQueuedSends.length > 0 && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6, alignItems: 'center' }}>
                 <span style={{
@@ -9779,7 +9886,7 @@ function MessageViewInner({
                 })}
               </div>
             )}
-            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', position: 'relative' }}>
+            <div className="av-web-composer-input-row" style={{ position: 'relative' }}>
               {mentionQuery && mentionResults.length > 0 && (
                 <div style={composerPopoverStyle}>
                   <div style={{ ...composerPopoverHintStyle, color: `var(${composerConfig.cssAccentVar})` }}>
@@ -9852,6 +9959,7 @@ function MessageViewInner({
                 </div>
               )}
               <Textarea
+                className="av-web-composer-textarea"
                 ref={textareaRef}
                 value={inputText}
                 onFocus={prewarmComposer}
@@ -9879,28 +9987,52 @@ function MessageViewInner({
                 placeholder={composerPlaceholder}
                 rows={1}
                 style={{
-                  flex: 1,
+                  width: '100%',
+                  minHeight: 66,
                   resize: 'none',
-                  background: 'var(--surface-2)',
+                  background: 'transparent',
                   border: `1px solid ${
                     sendState === 'error'
                       ? 'rgba(248,113,113,0.4)'
                       : canUseChannelBridge && channelBridge.routeComposer
                       ? `rgba(${composerConfig.cssAccentRgb},0.45)`
-                      : 'var(--border-2)'
+                      : 'transparent'
                   }`,
-                  borderRadius: 6,
-                  padding: '6px 10px',
+                  borderRadius: 10,
+                  padding: '2px 3px 8px',
                   fontFamily: "'IBM Plex Sans', sans-serif",
-                  fontSize: 12,
+                  fontSize: 15,
                   color: 'var(--text)',
-                  lineHeight: 1.4,
+                  lineHeight: 1.55,
                   outline: 'none',
                   overflowX: 'hidden',
                   overflowY: 'hidden',
                   transition: 'border-color 0.15s, opacity 0.15s',
                 }}
               />
+              <div className="av-web-composer-actions">
+              <Button
+                type="button"
+                onClick={() => setAttachmentPanelOpen((open) => !open)}
+                variant="outline"
+                aria-label="Add attachment"
+                aria-expanded={attachmentPanelOpen}
+                title="Attach a file, folder, image, skill, or mention"
+                style={{
+                  flexShrink: 0,
+                  width: 34,
+                  height: 34,
+                  padding: 0,
+                  background: attachmentPanelOpen ? `rgba(${composerConfig.cssAccentRgb},0.18)` : 'transparent',
+                  border: `1px solid ${attachmentPanelOpen ? `rgba(${composerConfig.cssAccentRgb},0.4)` : 'transparent'}`,
+                  borderRadius: 999,
+                  color: attachmentPanelOpen ? `var(${composerConfig.cssAccentVar})` : 'var(--text-2)',
+                  cursor: 'pointer',
+                  transition: 'background 0.15s, color 0.15s, border-color 0.15s',
+                }}
+              >
+                <Paperclip size={16} />
+              </Button>
               <Button
                 type="button"
                 data-prompt-library-trigger="true"
@@ -10048,9 +10180,11 @@ function MessageViewInner({
                   onSendComment={handleDiffCommentToComposer}
                 />
               )}
+              <ComposerContextUsageRing usage={contextUsage} />
               {sendState === 'sending' || reattachedRunning ? (
                 <div style={{ flexShrink: 0, display: 'flex', gap: 6, alignItems: 'center' }}>
                   <Button
+                    className="av-web-composer-send"
                     type="button"
                     onClick={() => { void sendMessage() }}
                     disabled={!canSubmitMessage}
@@ -10061,9 +10195,9 @@ function MessageViewInner({
                       width: 34,
                       height: 34,
                       padding: 0,
-                      background: `rgba(${composerConfig.cssAccentRgb},0.18)`,
-                      border: `1px solid rgba(${composerConfig.cssAccentRgb},0.3)`,
-                      borderRadius: 6,
+                      background: canSubmitMessage ? `var(${composerConfig.cssAccentVar})` : `rgba(${composerConfig.cssAccentRgb},0.18)`,
+                      border: `1px solid rgba(${composerConfig.cssAccentRgb},${canSubmitMessage ? '0.75' : '0.3'})`,
+                      borderRadius: 999,
                       color: `var(${composerConfig.cssAccentVar})`,
                       fontFamily: "'Oxanium', monospace",
                       fontSize: 10,
@@ -10075,7 +10209,7 @@ function MessageViewInner({
                       opacity: !canSubmitMessage ? 0.55 : 1,
                     }}
                   >
-                    <SendHorizontal data-icon="inline-start" />
+                    <ArrowUp data-icon="inline-start" />
                   </Button>
                   {session?.provider === 'claude' && activeToolCount > 0 ? (
                     <Button
@@ -10134,6 +10268,7 @@ function MessageViewInner({
                 </div>
               ) : (
                 <Button
+                  className="av-web-composer-send"
                   type="button"
                   onClick={() => { void sendMessage() }}
                   disabled={!canSubmitMessage}
@@ -10144,10 +10279,10 @@ function MessageViewInner({
                     width: 34,
                     height: 34,
                     padding: 0,
-                    background: `rgba(${composerConfig.cssAccentRgb},0.18)`,
-                    border: `1px solid rgba(${composerConfig.cssAccentRgb},0.3)`,
-                    borderRadius: 6,
-                    color: `var(${composerConfig.cssAccentVar})`,
+                    background: canSubmitMessage ? `var(${composerConfig.cssAccentVar})` : `rgba(${composerConfig.cssAccentRgb},0.18)`,
+                    border: `1px solid rgba(${composerConfig.cssAccentRgb},${canSubmitMessage ? '0.75' : '0.3'})`,
+                    borderRadius: 999,
+                    color: canSubmitMessage ? 'var(--surface)' : `var(${composerConfig.cssAccentVar})`,
                     fontFamily: "'Oxanium', monospace",
                     fontSize: 10,
                     fontWeight: 600,
@@ -10158,11 +10293,13 @@ function MessageViewInner({
                     opacity: !canSubmitMessage ? 0.55 : 1,
                   }}
                 >
-                  <SendHorizontal data-icon="inline-start" />
+                  <ArrowUp data-icon="inline-start" />
                 </Button>
               )}
+              </div>
             </div>
             <div
+              className="av-web-composer-status"
               aria-live="polite"
               style={{
                 marginTop: 6,
@@ -10177,13 +10314,63 @@ function MessageViewInner({
                 flexWrap: 'wrap',
               }}
             >
-              <span>
+              <span
+                role="status"
+                data-composer-runtime-phase={composerRuntime.phase}
+                data-composer-transport-state={composerRuntime.transport}
+                data-composer-transcript-state={composerRuntime.transcript}
+                data-composer-queue-state={composerRuntime.queue}
+                title={composerStatusDetail}
+                aria-label={`${composerStatus}. ${composerStatusDetail}`}
+              >
                 <span style={{ color: `var(${composerConfig.cssAccentVar})`, marginRight: 6, fontWeight: 600 }}>{composerConfig.glyph}</span>
                 {composerStatus}
               </span>
-              <span style={{ color: 'var(--text-3)', opacity: 0.7 }}>
-                {sendBusy ? composerConfig.footerHintSending : composerConfig.footerHintIdle}
-                {!sendBusy && sentHistory.length > 0 ? ` (${sentHistory.length})` : ''}
+              <span className="av-web-composer-meta">
+                <span className="av-web-composer-hint">
+                  {sendBusy ? composerConfig.footerHintSending : composerConfig.footerHintIdle}
+                  {!sendBusy && sentHistory.length > 0 ? ` (${sentHistory.length})` : ''}
+                </span>
+                {composerGitBranch ? (
+                  <span className="av-web-composer-git-cluster">
+                    <button
+                      type="button"
+                      className="av-web-composer-git-branch"
+                      data-branch-switcher-trigger="true"
+                      onClick={() => setBranchSwitcherOpen((current) => !current)}
+                      disabled={!composerWorkingDirectory}
+                      aria-haspopup="listbox"
+                      aria-expanded={branchSwitcherOpen}
+                      title={`Switch branch from ${composerGitBranch}`}
+                    >
+                      <GitBranch aria-hidden size={13} />
+                      <span>{composerGitBranch}</span>
+                      <ChevronDown aria-hidden size={11} />
+                    </button>
+                    <button
+                      type="button"
+                      className="av-web-composer-git-counts"
+                      onClick={onOpenGit}
+                      disabled={!onOpenGit}
+                      title={composerGitTitle ? `${composerGitTitle} · Open Git status` : 'Open Git status'}
+                      aria-label={composerGitTitle ? `Open Git status. ${composerGitTitle}` : 'Open Git status'}
+                    >
+                      {composerGitSummary?.modified ? <span className="av-web-composer-git-dirty">~{composerGitSummary.modified}</span> : null}
+                      {composerGitSummary?.untracked ? <span>?{composerGitSummary.untracked}</span> : null}
+                      {composerGitSummary?.stashes ? <span className="av-web-composer-git-dirty">*{composerGitSummary.stashes}</span> : null}
+                      {!composerGitHasDetails ? <span>{composerGitSummary ? 'clean' : 'status'}</span> : null}
+                    </button>
+                    {composerWorkingDirectory ? (
+                      <BranchSwitcher
+                        cwd={composerWorkingDirectory}
+                        currentBranch={composerGitBranch}
+                        open={branchSwitcherOpen}
+                        onOpenChange={setBranchSwitcherOpen}
+                        onSwitched={handleComposerBranchSwitched}
+                      />
+                    ) : null}
+                  </span>
+                ) : null}
               </span>
             </div>
           </CardContent>

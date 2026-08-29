@@ -1536,6 +1536,7 @@ export default function Home() {
                     openCodeTodos={openCodeTodosForView}
                     codexPlan={codexPlanForView}
                     codexExternalWriter={codexExternalWriter}
+                    onOpenGit={openGitPopover}
                     maximized={isMessageViewMaximized}
                     onToggleMaximized={toggleMessageViewMaximized}
                     onEnterFullscreen={enterMessageViewFullscreen}

@@ -56,7 +56,7 @@
     "ahp:smoke": "bun run ./scripts/ahpSmoke.ts",
     "a2a:smoke": "bun run ./scripts/a2aFacadeSmoke.ts",
     "adapters:smoke": "bun run ./scripts/adapterReadSweep.ts",
-    "composer:smoke": "bun run ./scripts/claudeSdkSurfaceSmoke.ts && bun run ./scripts/composerInputSmoke.ts && bun run ./scripts/claudeTurnUsageSmoke.ts && bun run ./scripts/turnUsageReporterSmoke.ts && bun run ./scripts/todoCardSmoke.ts && bun run ./scripts/piExtensionUiSmoke.ts && bun run ./scripts/webComposerQueueSmoke.ts && bun run ./scripts/sessionMessageWindowSmoke.ts && bun run ./scripts/composerBenchmarkCompareSmoke.ts",
+    "composer:smoke": "bun run ./scripts/claudeSdkSurfaceSmoke.ts && bun run ./scripts/composerInputSmoke.ts && bun run ./scripts/composerRuntimeStateSmoke.ts && bun run ./scripts/claudeTurnUsageSmoke.ts && bun run ./scripts/turnUsageReporterSmoke.ts && bun run ./scripts/todoCardSmoke.ts && bun run ./scripts/piExtensionUiSmoke.ts && bun run ./scripts/webComposerQueueSmoke.ts && bun run ./scripts/sessionMessageWindowSmoke.ts && bun run ./scripts/composerBenchmarkCompareSmoke.ts",
     "composer:benchmark": "bun run ./scripts/composerLiveBenchmark.ts",
     "composer:benchmark:native": "bun run ./scripts/composerNativeBenchmark.ts",
     "composer:benchmark:compare": "bun run ./scripts/composerBenchmarkCompare.ts",
