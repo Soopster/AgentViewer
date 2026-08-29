@@ -140,7 +140,7 @@ process.stdin.on('data', (chunk) => {
         await settle(setup, 8)
       }
       if (!setup.captureCharFrame().includes('sampleCompletion')) {
-        throw new Error(`Autocomplete sample ${sample + 1} did not render a completion menu`)
+        throw new Error(`Autocomplete sample ${sample + 1} did not render a completion menu:\n${setup.captureCharFrame()}`)
       }
       latencies.push(performance.now() - startedAt)
 

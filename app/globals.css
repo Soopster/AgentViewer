@@ -2883,7 +2883,8 @@ body {
 
 /* ── Web composer ──────────────────────────────────────────────────────── */
 .av-web-composer-card {
-  width: min(100%, 1040px);
+  /* Measure follows the transcript's width mode; the shell sets the variable. */
+  width: min(100%, var(--av-composer-measure, 1040px));
   margin-inline: auto;
   position: relative;
   z-index: 2;
@@ -2893,7 +2894,7 @@ body {
 
 .av-web-composer-banner-stack {
   display: flex;
-  width: min(100%, 1040px);
+  width: min(100%, var(--av-composer-measure, 1040px));
   margin: 0 auto 8px;
   flex-direction: column;
   gap: 6px;

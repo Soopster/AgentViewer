@@ -9053,6 +9053,12 @@ function MessageViewInner({
         onDragLeave={handleComposerDragLeave}
         onDrop={handleComposerDrop}
         style={{
+          // The composer is part of the same column as the transcript, so it
+          // tracks the width mode: a readable measure when centered, the whole
+          // window when full.
+          ['--av-composer-measure' as string]: timelineWidth === 'centered'
+            ? (viewMode === 'stream' ? '900px' : '1040px')
+            : '100%',
           padding: '12px clamp(16px, 4vw, 48px) 14px',
           borderTop: '1px solid color-mix(in srgb, var(--border) 72%, transparent)',
           background: composerDropActive ? 'rgba(56,217,245,0.06)' : 'color-mix(in srgb, var(--bg) 78%, var(--surface))',

@@ -67,6 +67,12 @@ import {
   transformEditorSnippetValue,
   type EditorSnippetTabstop,
 } from './editorSnippet'
+import {
+  classifyEditorOffset,
+  editorSyntaxForPath,
+  indentForClosingBracket,
+  matchingBracketAt,
+} from './editorSyntaxContext'
 
 extend({ editorScrollbar: ScrollBarRenderable })
 
@@ -78,6 +84,7 @@ const EDITOR_TEXTAREA_KEY_BINDINGS: NonNullable<TextareaOptions['keyBindings']> 
 ]
 
 const OCCURRENCE_HIGHLIGHT_REF = 41_001
+const BRACKET_HIGHLIGHT_REF = 41_002
 const OCCURRENCE_MIN_LENGTH = 2
 const OCCURRENCE_MAX_MATCHES = 1_000
 const OCCURRENCE_VIEWPORT_MARGIN_LINES = 120
@@ -205,6 +212,7 @@ type EditorCommandId =
   | 'indent-lines'
   | 'outdent-lines'
   | 'toggle-comment'
+  | 'goto-matching-bracket'
   | 'add-next-occurrence'
   | 'add-cursor-above'
   | 'add-cursor-below'
@@ -220,6 +228,7 @@ type EditorCommandId =
   | 'toggle-vim'
   | 'toggle-velocity'
   | 'toggle-word-wrap'
+  | 'show-shortcuts'
 
 type EditorCommand = {
   id: EditorCommandId
@@ -230,6 +239,8 @@ type EditorCommand = {
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024
 const MAX_COMPLETIONS = 12
+const QUICK_VISIBLE_ROWS = 11
+const SYMBOL_VISIBLE_ROWS = 11
 const AUTO_COMPLETE_DELAY_MS = 160
 const SYNTAX_DELAY_MS = 90
 const LSP_CHANGE_DELAY_MS = 120
@@ -286,6 +297,7 @@ const EDITOR_COMMANDS: readonly EditorCommand[] = [
   { id: 'indent-lines', label: 'Edit: Indent Lines', detail: 'Ctrl+]', keywords: 'shift selection right tab' },
   { id: 'outdent-lines', label: 'Edit: Outdent Lines', detail: 'Shift+Tab / Ctrl+[', keywords: 'shift selection left tab' },
   { id: 'toggle-comment', label: 'Edit: Toggle Line Comment', detail: 'Ctrl+/', keywords: 'comment uncomment selection' },
+  { id: 'goto-matching-bracket', label: 'Go to Matching Bracket', detail: 'Ctrl+M', keywords: 'brace paren jump pair balance' },
   { id: 'add-next-occurrence', label: 'Selection: Add Next Occurrence', detail: 'Ctrl+D', keywords: 'multiple cursor select match occurrence' },
   { id: 'add-cursor-above', label: 'Selection: Add Cursor Above', detail: 'Ctrl+Alt+Up', keywords: 'multiple cursor vertical' },
   { id: 'add-cursor-below', label: 'Selection: Add Cursor Below', detail: 'Ctrl+Alt+Down', keywords: 'multiple cursor vertical' },
@@ -304,11 +316,77 @@ const EDITOR_COMMANDS: readonly EditorCommand[] = [
   { id: 'focus-explorer', label: 'View: Focus Explorer or Editor', detail: 'Ctrl+E', keywords: 'sidebar pane' },
   { id: 'close-tab', label: 'File: Close Active Tab', detail: 'Ctrl+W', keywords: 'buffer' },
   { id: 'toggle-velocity', label: 'Editor: Toggle Velocity Scrolling', detail: 'V', keywords: 'accelerate navigation' },
+  { id: 'show-shortcuts', label: 'Help: Keyboard Shortcuts', detail: '?', keywords: 'keys bindings reference cheatsheet help' },
+]
+
+type EditorShortcutGroup = { title: string; entries: readonly (readonly [string, string])[] }
+
+// The full reference lives behind F1 rather than under the buffer: a wall of
+// every binding is not something an engineer reads, and it costs three rows of
+// the code they are actually looking at.
+const EDITOR_SHORTCUT_GROUPS: readonly EditorShortcutGroup[] = [
+  {
+    title: 'File',
+    entries: [
+      ['^S', 'Save'], ['Alt+S / ^⇧S', 'Save all'], ['^N', 'New file'], ['^P', 'Open file'],
+      ['^W', 'Close tab'], ['^Tab / ^PgUp/PgDn', 'Switch tabs'], ['^Q', 'Close editor'],
+    ],
+  },
+  {
+    title: 'Edit',
+    entries: [
+      ['^Z / ^Y', 'Undo / redo'], ['^C / ^X / ^V', 'Copy / cut / paste'],
+      ['^] / ⇧Tab', 'Indent / outdent'], ['^/', 'Toggle comment'],
+      ['Alt+↑/↓', 'Move lines'], ['Alt+U / Alt+L', 'Upper / lower case'],
+    ],
+  },
+  {
+    title: 'Selection',
+    entries: [
+      ['^D', 'Add next occurrence'], ['^Alt+↑/↓', 'Add cursor above/below'],
+      ['⇧Alt+arrows', 'Block selection'], ['Alt+I / ^⇧L', 'Cursors at line ends'],
+    ],
+  },
+  {
+    title: 'Navigate',
+    entries: [
+      ['^G', 'Go to line'], ['^M', 'Matching bracket'], ['^T', 'Jump back'],
+      ['F8 / ⇧F8', 'Next / previous problem'], ['Alt+←/→', 'Move by word'],
+      ['^B', 'Toggle explorer'], ['^E', 'Focus explorer / editor'],
+    ],
+  },
+  {
+    title: 'Search',
+    entries: [['^F', 'Find'], ['^R', 'Replace'], ['Alt+/', 'Search project']],
+  },
+  {
+    title: 'Language',
+    entries: [
+      ['^Space', 'Completions'], ['Tab / ⏎', 'Accept (⏎ once list is engaged)'],
+      ['^K', 'Hover'], ['Alt+K / ^⇧Space', 'Signature help'],
+      ['F12 / ⇧F12 / ^F12', 'Definition / references / implementation'],
+      ['F2', 'Rename symbol'], ['Alt+.', 'Quick fix'], ['⇧Alt+F', 'Format document'],
+      ['Alt+R / ^⇧R', 'Restart language server'],
+    ],
+  },
+  {
+    title: 'View',
+    entries: [['Alt+Z', 'Word wrap'], ['Alt+V', 'Vim mode'], ['V', 'Velocity scrolling'], ['F1', 'This reference']],
+  },
 ]
 
 const COMPLETION_KIND_GLYPHS: Readonly<Record<number, string>> = {
   2: 'ƒ', 3: 'ƒ', 4: '◫', 5: '◇', 6: '◆', 7: '◆', 8: '◇', 9: '◇', 10: '◆',
   11: '◆', 12: '◆', 13: '◇', 14: '◆', 15: '⌁', 17: '◇', 18: '◇', 21: '◇', 22: '◇', 25: '◇',
+}
+
+/**
+ * First row to render so `cursor` stays on screen in a fixed-height picker.
+ * Without it a list renders a fixed slice and the selection walks off it —
+ * "50 results" showing the same eleven rows however far you arrow down.
+ */
+function listWindowStart(cursor: number, total: number, visible: number): number {
+  return Math.min(Math.max(0, cursor - visible + 3), Math.max(0, total - visible))
 }
 
 function fitText(value: string, width: number): string {
@@ -862,10 +940,33 @@ function smartNewLineInsertion(content: string, offset: number, path: string): {
   const before = content.slice(bounds.start, offset)
   const after = content.slice(offset, bounds.end)
   const baseIndent = /^[\t ]*/.exec(content.slice(bounds.start, bounds.end))?.[0] ?? ''
-  const opensBlock = /(?:\{|\[|\(|:)\s*$/.test(before)
+  const syntax = editorSyntaxForPath(path)
+  const opener = /(\{|\[|\(|:)\s*$/.exec(before)?.[1]
+  // An opener inside a string or comment is text, not structure: indenting
+  // after `const label = "a {"` is the classic tell that an editor is only
+  // pattern-matching the line.
+  const openerIsCode = opener != null
+    && classifyEditorOffset(content, bounds.start + before.trimEnd().length - 1, path) === 'code'
+  const opensBlock = openerIsCode && (opener !== ':'
+    // `:` opens a block where the language says so, and in C-family code only
+    // for switch labels — a trailing type annotation or object key must not
+    // pull the next line in.
+    ? true
+    : syntax.colonOpensBlock || /^\s*(?:case\b|default\b)/.test(before))
   const indentUnit = detectEditorIndentUnit(content, path)
   const innerIndent = opensBlock ? `${baseIndent}${indentUnit}` : baseIndent
   const betweenPair = opensBlock && /^\s*[}\])]/.test(after)
+  // Continue a block comment the way every editor does, so writing a doc
+  // comment does not mean retyping its leading star on every line.
+  const blockComment = editorSyntaxForPath(path).blockComments[0]
+  const blockOpenIndex = blockComment ? content.lastIndexOf(blockComment[0], offset) : -1
+  const inBlockComment = blockComment != null
+    && blockOpenIndex >= 0
+    && content.lastIndexOf(blockComment[1], offset) < blockOpenIndex
+  if (inBlockComment) {
+    const starIndent = `${baseIndent}${before.trimStart().startsWith('*') ? '' : ' '}* `
+    return { text: `\n${starIndent}`, cursorOffset: offset + 1 + starIndent.length }
+  }
   const text = betweenPair
     ? `\n${innerIndent}\n${baseIndent}`
     : `\n${innerIndent}`
@@ -909,6 +1010,7 @@ export function EditorPopover({
   const [searchCursor, setSearchCursor] = useState(-1)
   const [diagnosticCursor, setDiagnosticCursor] = useState(-1)
   const [cursor, setCursor] = useState({ line: 0, visualColumn: 0 })
+  const [selectionSummary, setSelectionSummary] = useState<{ characters: number; lines: number } | null>(null)
   const [completions, setCompletions] = useState<Completion[]>([])
   const [completionCursor, setCompletionCursor] = useState(0)
   const [diagnostics, setDiagnostics] = useState<EditorDiagnostic[]>([])
@@ -942,6 +1044,7 @@ export function EditorPopover({
   const [diskConflicts, setDiskConflicts] = useState<Set<string>>(() => new Set())
   const [message, setMessage] = useState('Ready')
   const [closeConfirm, setCloseConfirm] = useState(false)
+  const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [clock, setClock] = useState(() => new Date())
   const [velocityScrollEnabled, setVelocityScrollEnabled] = useState(false)
   const [wordWrapEnabled, setWordWrapEnabled] = useState(false)
@@ -959,6 +1062,7 @@ export function EditorPopover({
   const editorScrollbarRef = useRef<ScrollBarRenderable | null>(null)
   const syncingEditorScrollbarRef = useRef(false)
   const lineNumberRef = useRef<LineNumberRenderable | null>(null)
+  const shortcutsScrollRef = useRef<ScrollBoxRenderable | null>(null)
   const lspRef = useRef<EditorLspClient | null>(null)
   const syntaxRequestRef = useRef(0)
   const completionRequestRef = useRef(0)
@@ -967,6 +1071,20 @@ export function EditorPopover({
   const completionResolveAbortRef = useRef<AbortController | null>(null)
   const completionSessionRef = useRef<CompletionSession | null>(null)
   const completionAcceptingRef = useRef(false)
+  // An auto-opened list is a suggestion, not a prompt: Enter still means
+  // newline until the engineer moves through it (or asked for it with
+  // Ctrl+Space). Tab accepts either way, so nothing becomes unreachable.
+  const completionEngagedRef = useRef(false)
+  const [completionEngaged, setCompletionEngaged] = useState(false)
+  // Escape must stick. Remember the word the user dismissed on so typing more
+  // of that same word does not immediately pop the list back open.
+  const completionDismissedAtRef = useRef<{ start: number; value: string } | null>(null)
+  // Content the auto-trigger must not fire for: the buffer as it stood after
+  // the last accepted completion, so accepting never re-suggests itself.
+  const completionSuppressedContentRef = useRef<string | null>(null)
+  const autoCompleteContentRef = useRef<string | null>(null)
+  const autoCompleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const autoCompleteCursorRef = useRef<{ row: number; col: number } | null>(null)
   const snippetSessionRef = useRef<SnippetSession | null>(null)
   const hoverRequestRef = useRef(0)
   const signatureRequestRef = useRef(0)
@@ -981,6 +1099,7 @@ export function EditorPopover({
   const recoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const multiCursorStyleIdRef = useRef<number | null>(null)
   const occurrenceStyleIdRef = useRef<number | null>(null)
+  const bracketStyleIdRef = useRef<number | null>(null)
   const occurrenceMergedStyleIdsRef = useRef<Map<number, number>>(new Map())
   const diskPollInFlightRef = useRef(false)
 
@@ -1065,45 +1184,14 @@ export function EditorPopover({
   const explorerWidth = explorerVisible ? Math.max(24, Math.min(38, Math.floor(width * 0.23))) : 0
   const footerShortcutRows = useMemo(() => packFooterShortcuts([
     '^S save',
-    'Alt+S/^⇧S save all',
-    '^N new file',
     '^P open',
     '^F find',
-    '^R replace',
-    '^C/^X/^V clipboard',
-    '^Z/^Y undo/redo',
-    'Alt+←/→ words',
-    '^D next occurrence',
-    '^Alt+↑/↓ cursors',
-    '⇧Alt+arrows block',
-    'Alt+I/^⇧L line cursors',
-    'Alt+↑/↓ move lines',
-    'Alt+U/L case',
-    '^/ comment',
-    '^] indent · ⇧Tab outdent',
-    '^G line',
-    '^B explorer',
-    '^E focus',
-    '^W close tab',
-    '^Tab/^Pg tabs',
     '^Space complete',
-    '^K hover',
-    'F2 rename',
+    '^/ comment',
     'F12 definition',
-    '⇧F12 references',
-    '^F12 implementation',
-    '^T jump back',
-    'Alt+. actions',
-    '⇧Alt+F format',
-    'Alt+/ project search',
-    'Alt+K/^⇧Space signature',
-    'Alt+R/^⇧R restart LSP',
-    'F8/⇧F8 problems',
-    `Alt+Z wrap ${wordWrapEnabled ? 'on' : 'off'}`,
-    `Alt+V vim ${vimEnabled ? 'on' : 'off'}`,
-    `V velocity ${velocityScrollEnabled ? 'on' : 'off'}`,
+    '? shortcuts',
     '^Q exit',
-  ], Math.max(20, width - 4)), [velocityScrollEnabled, vimEnabled, width, wordWrapEnabled])
+  ], Math.max(20, width - 4)), [width])
   const footerHeight = 1 + footerShortcutRows.length
   const contentHeight = Math.max(6, height - 4 - footerHeight)
 
@@ -1117,7 +1205,10 @@ export function EditorPopover({
     activePathRef.current = activePath
   }, [activePath, tabs])
 
-  useEffect(() => () => disposeEditorProjectSearchWorker(), [])
+  useEffect(() => () => {
+    disposeEditorProjectSearchWorker()
+    if (autoCompleteTimerRef.current) clearTimeout(autoCompleteTimerRef.current)
+  }, [])
 
   useEffect(() => {
     const existing = syntaxStyle.getStyleId('editor.multi-cursor')
@@ -1129,6 +1220,11 @@ export function EditorPopover({
     occurrenceStyleIdRef.current = existingOccurrence ?? syntaxStyle.registerStyle('editor.occurrence', {
       bg: theme.surface2,
       underline: true,
+    })
+    const existingBracket = syntaxStyle.getStyleId('editor.bracket-match')
+    bracketStyleIdRef.current = existingBracket ?? syntaxStyle.registerStyle('editor.bracket-match', {
+      bg: theme.surface3,
+      bold: true,
     })
     occurrenceMergedStyleIdsRef.current.clear()
   }, [syntaxStyle, theme.surface2, theme.surface3])
@@ -1905,6 +2001,46 @@ export function EditorPopover({
     return () => clearTimeout(timer)
   }, [activeTab, cursor.line, cursor.visualColumn, focusPane])
 
+  const applyBracketHighlights = useCallback((
+    editor: TextareaRenderable,
+    content: string,
+    lineStarts: number[],
+  ) => {
+    editor.removeHighlightsByRef(BRACKET_HIGHLIGHT_REF)
+    const styleId = bracketStyleIdRef.current
+    if (styleId == null || focusPane !== 'editor' || !activePathRef.current) return
+    const match = matchingBracketAt(content, editorDocumentOffset(editor), activePathRef.current)
+    if (!match) return
+    for (const offset of [match.open, match.close]) {
+      const line = lineAtOffset(lineStarts, offset)
+      const lineStart = lineStarts[line] ?? 0
+      editor.addHighlight(line, {
+        start: offset - lineStart,
+        end: offset - lineStart + 1,
+        styleId,
+        priority: 60,
+        hlRef: BRACKET_HIGHLIGHT_REF,
+      })
+    }
+  }, [focusPane])
+
+  const jumpToMatchingBracket = useCallback(() => {
+    const editor = editorRef.current
+    if (!editor || !activePath) return
+    const content = editor.plainText
+    const offset = editorDocumentOffset(editor)
+    const match = matchingBracketAt(content, offset, activePath)
+    if (!match) {
+      setMessage('No matching bracket at the cursor')
+      return
+    }
+    // Land past the closer and on the opener, so a repeat press bounces back.
+    const target = offset === match.close || offset === match.close + 1 ? match.open : match.close + 1
+    editor.clearSelection()
+    setEditorDocumentOffset(editor, target)
+    setMessage(`Matching bracket · line ${editorPositionAtOffset(content, target).line + 1}`)
+  }, [activePath])
+
   const applyOccurrenceHighlights = useCallback((
     editor: TextareaRenderable,
     content: string,
@@ -2040,6 +2176,7 @@ export function EditorPopover({
           }
         }
         applyOccurrenceHighlights(editor, activeTab.content, lineStarts)
+        applyBracketHighlights(editor, activeTab.content, lineStarts)
       }
       if (!filetype) {
         renderHighlights([])
@@ -2050,17 +2187,19 @@ export function EditorPopover({
       }).catch(() => renderHighlights([]))
     }, SYNTAX_DELAY_MS)
     return () => clearTimeout(timer)
-  }, [activeTab, applyOccurrenceHighlights, multiCursor, syntaxStyle])
+  }, [activeTab, applyBracketHighlights, applyOccurrenceHighlights, multiCursor, syntaxStyle])
 
   useEffect(() => {
     const editor = editorRef.current
     if (!activeTab || !editor) return
     const timer = setTimeout(() => {
       const content = editor.plainText
-      applyOccurrenceHighlights(editor, content, lineStartsFor(content))
+      const lineStarts = lineStartsFor(content)
+      applyOccurrenceHighlights(editor, content, lineStarts)
+      applyBracketHighlights(editor, content, lineStarts)
     }, 55)
     return () => clearTimeout(timer)
-  }, [activeTab, applyOccurrenceHighlights, cursor.line, cursor.visualColumn])
+  }, [activeTab, applyBracketHighlights, applyOccurrenceHighlights, cursor.line, cursor.visualColumn])
 
   useEffect(() => {
     const lineNumber = lineNumberRef.current
@@ -2074,6 +2213,35 @@ export function EditorPopover({
     }
     lineNumber.setLineColors(colors)
   }, [cursor.line, diagnostics, theme.amber, theme.cyan, theme.red, theme.surface2, theme.surface3])
+
+  // A windowed list has no overflow for the scrollbox to measure, so its
+  // position indicator is drawn from the window itself.
+  const renderListScrollbar = (start: number, visible: number, total: number) => {
+    if (total <= visible) return null
+    const thumb = Math.max(1, Math.round((visible / total) * visible))
+    const maxStart = Math.max(1, total - visible)
+    const top = Math.round((start / maxStart) * (visible - thumb))
+    return (
+      <box width={1} flexDirection="column">
+        {Array.from({ length: visible }, (_, row) => {
+          const onThumb = row >= top && row < top + thumb
+          return (
+            <text key={row} fg={onThumb ? theme.muted : theme.surface3} wrapMode="none">
+              {onThumb ? '█' : '│'}
+            </text>
+          )
+        })}
+      </box>
+    )
+  }
+
+  const closeCompletions = useCallback((dismissed?: { start: number; value: string }) => {
+    completionSessionRef.current = null
+    completionEngagedRef.current = false
+    completionDismissedAtRef.current = dismissed ?? null
+    setCompletions([])
+    setCompletionEngaged(false)
+  }, [])
 
   const requestCompletions = useCallback(async (force = false) => {
     const editor = editorRef.current
@@ -2091,10 +2259,27 @@ export function EditorPopover({
     const context = completionContextAt(content, documentOffset)
     const client = lspRef.current
     const serverTrigger = client?.isCompletionTriggerCharacter(context.lastCharacter) ?? false
-    if (!force && context.prefix.value.length < 2 && !context.memberAccess && !serverTrigger) {
-      completionSessionRef.current = null
-      setCompletions([])
-      return
+    if (force) completionDismissedAtRef.current = null
+    if (!force) {
+      if (context.prefix.value.length < 2 && !context.memberAccess && !serverTrigger) {
+        closeCompletions()
+        return
+      }
+      // Escape stays dismissed while the user is still editing the same word.
+      // A different word starting at the same offset is a new word, so the
+      // dismissal is keyed on the text too, not the position alone.
+      const dismissed = completionDismissedAtRef.current
+      if (dismissed && dismissed.start === context.prefix.start
+        && (dismissed.value.startsWith(context.prefix.value) || context.prefix.value.startsWith(dismissed.value))) {
+        setCompletions([])
+        setCompletionEngaged(false)
+        return
+      }
+      // Word suggestions in prose are noise; Ctrl+Space still reaches them.
+      if (classifyEditorOffset(content, context.prefix.start, activePath) !== 'code') {
+        closeCompletions()
+        return
+      }
     }
     const cursorOffset = documentOffset
     client?.change(content)
@@ -2113,13 +2298,25 @@ export function EditorPopover({
       || currentCursor?.row !== requestCursor.line
       || currentCursor.col !== requestCursor.visualColumn) return
     const merged = mergeCompletions(lsp, local, context.prefix.value)
-    completionSessionRef.current = merged.length > 0
-      ? { content, cursorOffset, line: requestCursor.line, visualColumn: requestCursor.visualColumn }
-      : null
+    // One candidate the user has already finished typing adds nothing but a
+    // popup over the code they are reading.
+    const redundant = !force && merged.length === 1 && merged[0]!.label === context.prefix.value
+    if (redundant || merged.length === 0) {
+      closeCompletions()
+      return
+    }
+    completionSessionRef.current = {
+      content,
+      cursorOffset,
+      line: requestCursor.line,
+      visualColumn: requestCursor.visualColumn,
+    }
+    completionEngagedRef.current = force
+    setCompletionEngaged(force)
     setCompletions(merged)
     const preselected = merged.findIndex((item) => item.source === 'lsp' && item.preselect)
     setCompletionCursor(preselected >= 0 ? preselected : 0)
-  }, [activePath, projectFiles])
+  }, [activePath, closeCompletions, projectFiles])
 
   const requestHover = useCallback(async () => {
     const editor = editorRef.current
@@ -2334,9 +2531,50 @@ export function EditorPopover({
 
   useEffect(() => {
     if (!activePath || focusPane !== 'editor' || hoverInfo || signatureInfo) return
-    const timer = setTimeout(() => { void requestCompletions(false) }, AUTO_COMPLETE_DELAY_MS)
-    return () => clearTimeout(timer)
-  }, [activePath, activeTab?.content, cursor.line, cursor.visualColumn, focusPane, hoverInfo, lspStatus?.state, requestCompletions, signatureInfo])
+    const content = activeTab?.content ?? ''
+    // The debounce lives in a ref rather than this effect's cleanup because
+    // the caret commits separately from the buffer: a cleanup-owned timer is
+    // cancelled by the cursor re-render that immediately follows every
+    // keystroke, and the request never fires.
+    if (autoCompleteContentRef.current === content) {
+      // Moving the caret is navigation, not a request for suggestions. Real
+      // editors close the list on cursor movement rather than re-querying, so
+      // arrowing through code never paints a popup over it.
+      if (completionSessionRef.current) closeCompletions()
+      return
+    }
+    const previous = autoCompleteContentRef.current
+    autoCompleteContentRef.current = content
+    // A dismissal covers one word. Once the buffer changes ahead of that word
+    // it is no longer the word the user dismissed, so the dismissal lapses.
+    const dismissed = completionDismissedAtRef.current
+    if (dismissed && previous != null
+      && previous.slice(0, dismissed.start) !== content.slice(0, dismissed.start)) {
+      completionDismissedAtRef.current = null
+    }
+    if (autoCompleteTimerRef.current) clearTimeout(autoCompleteTimerRef.current)
+    autoCompleteTimerRef.current = null
+    if (completionSuppressedContentRef.current === content) {
+      completionSuppressedContentRef.current = null
+      return
+    }
+    completionSuppressedContentRef.current = null
+    // Capture the caret this edit landed on. A pending request whose caret has
+    // since moved belongs to a position the user has left, so it is dropped
+    // rather than allowed to open a list somewhere they navigated to.
+    const editedAt = editorRef.current?.logicalCursor
+    autoCompleteCursorRef.current = editedAt ? { row: editedAt.row, col: editedAt.col } : null
+    autoCompleteTimerRef.current = setTimeout(() => {
+      autoCompleteTimerRef.current = null
+      const live = editorRef.current?.logicalCursor
+      const scheduled = autoCompleteCursorRef.current
+      if (!live || !scheduled || live.row !== scheduled.row || live.col !== scheduled.col) {
+        closeCompletions()
+        return
+      }
+      void requestCompletions(false)
+    }, AUTO_COMPLETE_DELAY_MS)
+  }, [activePath, activeTab?.content, closeCompletions, cursor.line, cursor.visualColumn, focusPane, hoverInfo, lspStatus?.state, requestCompletions, signatureInfo])
 
   useEffect(() => {
     const item = completions[completionCursor]
@@ -2458,6 +2696,12 @@ export function EditorPopover({
       : undefined
     const completion = applyCompletion(editor, acceptedItem, activePath ?? '', reconciledSnippet)
     completionSessionRef.current = null
+    completionEngagedRef.current = false
+    completionDismissedAtRef.current = null
+    // The accepted word is now the prefix under the cursor, and re-querying it
+    // just re-suggests what was taken. Skip exactly the edit we made.
+    completionSuppressedContentRef.current = editor.plainText
+    setCompletionEngaged(false)
     setCompletions([])
     setSignatureInfo(null)
     if (completion.error) setMessage(completion.error)
@@ -2699,6 +2943,8 @@ export function EditorPopover({
       case 'indent-lines': editSelectedLines('indent'); break
       case 'outdent-lines': editSelectedLines('outdent'); break
       case 'toggle-comment': editSelectedLines('comment'); break
+      case 'goto-matching-bracket': jumpToMatchingBracket(); break
+      case 'show-shortcuts': setShortcutsOpen(true); break
       case 'add-next-occurrence': addNextOccurrence(); break
       case 'add-cursor-above': addAdjacentCursor(-1); break
       case 'add-cursor-below': addAdjacentCursor(1); break
@@ -2718,7 +2964,7 @@ export function EditorPopover({
       case 'toggle-velocity': toggleVelocityScrolling(); break
       case 'toggle-word-wrap': toggleWordWrap(); break
     }
-  }, [addAdjacentCursor, addLineEndCursors, addNextOccurrence, applyCaseTransform, applyLineTransform, closeActiveTab, editSelectedLines, formatDocument, navigateDiagnostic, openFilePrompt, openProjectSearch, openQuick, openSearch, recoveryConflicts.length, requestCodeActions, requestHover, requestRename, requestSignatureHelp, requestSymbolNavigation, restartLsp, saveActive, saveAll, toggleExplorer, toggleVelocityScrolling, toggleVimMode, toggleWordWrap, trimTrailingWhitespace])
+  }, [addAdjacentCursor, addLineEndCursors, addNextOccurrence, applyCaseTransform, applyLineTransform, closeActiveTab, editSelectedLines, formatDocument, jumpToMatchingBracket, navigateDiagnostic, openFilePrompt, openProjectSearch, openQuick, openSearch, recoveryConflicts.length, requestCodeActions, requestHover, requestRename, requestSignatureHelp, requestSymbolNavigation, restartLsp, saveActive, saveAll, toggleExplorer, toggleVelocityScrolling, toggleVimMode, toggleWordWrap, trimTrailingWhitespace])
 
   const chooseQuickResultAt = useCallback((index: number) => {
     const result = quickResults[index]
@@ -3190,11 +3436,52 @@ export function EditorPopover({
         setSignatureInfo(null)
       }
     }
+    if (shortcutsOpen) {
+      if (key.name === 'escape' || key.name === 'return' || sequence === '?' || sequence === 'q') {
+        setShortcutsOpen(false)
+        return true
+      }
+      const scroll = shortcutsScrollRef.current
+      if (scroll) {
+        const step = key.name === 'pageup' || key.name === 'pagedown' ? Math.max(1, scroll.height - 2) : 1
+        if (key.name === 'up' || key.name === 'pageup') scroll.scrollTop = Math.max(0, scroll.scrollTop - step)
+        if (key.name === 'down' || key.name === 'pagedown') scroll.scrollTop += step
+      }
+      return true
+    }
+    // `?` is the reference key wherever it is not text: the explorer pane and
+    // Vim's normal mode. Inside the buffer it must still type a question mark,
+    // so the command palette carries it there.
+    if (sequence === '?' && !key.ctrl && !alt
+      && (focusPane === 'explorer' || (vimEnabled && vimMode !== 'insert'))) {
+      setShortcutsOpen(true)
+      return true
+    }
     if (completions.length > 0) {
-      if (key.name === 'escape') { setCompletions([]); return true }
-      if (key.name === 'up' || (key.ctrl && key.name === 'p')) { setCompletionCursor((value) => Math.max(0, value - 1)); return true }
-      if (key.name === 'down' || (key.ctrl && key.name === 'n')) { setCompletionCursor((value) => Math.min(completions.length - 1, value + 1)); return true }
-      if (key.name === 'tab' || key.name === 'return') { acceptCompletion(); return true }
+      if (key.name === 'escape') {
+        const editor = editorRef.current
+        const prefix = editor ? wordPrefixAt(editor.plainText, editorDocumentOffset(editor)) : null
+        closeCompletions(prefix?.value ? prefix : undefined)
+        return true
+      }
+      const engage = () => {
+        completionEngagedRef.current = true
+        setCompletionEngaged(true)
+      }
+      if (key.name === 'up' || (key.ctrl && key.name === 'p')) {
+        engage()
+        setCompletionCursor((value) => Math.max(0, value - 1))
+        return true
+      }
+      if (key.name === 'down' || (key.ctrl && key.name === 'n')) {
+        engage()
+        setCompletionCursor((value) => Math.min(completions.length - 1, value + 1))
+        return true
+      }
+      if (key.name === 'tab') { acceptCompletion(); return true }
+      // An unengaged list is only a suggestion, so Enter keeps meaning newline.
+      if (key.name === 'return' && completionEngagedRef.current) { acceptCompletion(); return true }
+      if (key.name === 'return') closeCompletions()
     }
     if (focusPane === 'editor' && snippetSessionRef.current) {
       if (key.name === 'escape') {
@@ -3277,6 +3564,7 @@ export function EditorPopover({
     if (key.ctrl && key.name === 'b') { toggleExplorer(); return true }
     if (key.ctrl && key.name === 'w') { closeActiveTab(); return true }
     if (key.ctrl && key.name === 't') { void jumpBack(); return true }
+    if (key.ctrl && key.name === 'm') { jumpToMatchingBracket(); return true }
     if (key.name === 'f8') { navigateDiagnostic(key.shift ? -1 : 1); return true }
     if (key.ctrl && key.name === 'k') { void requestHover(); return true }
     if ((key.ctrl && key.shift && (key.name === 'space' || sequence === '\0')) || (alt && !key.ctrl && key.name === 'k')) { void requestSignatureHelp(); return true }
@@ -3308,10 +3596,46 @@ export function EditorPopover({
       }
       return true
     }
+    if (focusPane === 'editor' && key.name === 'backspace' && !key.ctrl && !alt && !multiCursor) {
+      // Deleting the opener of a pair the editor inserted should take the
+      // closer with it, or every auto-pair leaves an orphan behind.
+      const editor = editorRef.current
+      if (editor && !editor.hasSelection()) {
+        const content = editor.plainText
+        const offset = editorDocumentOffset(editor)
+        const opener = content[offset - 1]
+        if (opener && AUTO_PAIR_CLOSE[opener] === content[offset]) {
+          editor.replaceText(`${content.slice(0, offset - 1)}${content.slice(offset + 1)}`)
+          setEditorDocumentOffset(editor, offset - 1)
+          return true
+        }
+      }
+    }
     if (focusPane === 'editor' && !key.ctrl && !alt && sequence.length === 1) {
       const editor = editorRef.current
       if (!editor) return false
-      const offset = editorDocumentOffset(editor)
+      let offset = editorDocumentOffset(editor)
+      // Typing a closer on an otherwise blank line snaps that line back to its
+      // opener's indentation, so a block closes where it started instead of
+      // wherever the previous line happened to leave the caret.
+      if (AUTO_PAIR_CLOSERS.has(sequence) && !editor.hasSelection()) {
+        const content = editor.plainText
+        const lineStart = content.lastIndexOf('\n', Math.max(0, offset - 1)) + 1
+        const aligned = indentForClosingBracket(content, offset, sequence, activeTab?.path ?? '')
+        if (aligned != null && aligned !== content.slice(lineStart, offset)) {
+          editor.replaceText(`${content.slice(0, lineStart)}${aligned}${content.slice(offset)}`)
+          offset = lineStart + aligned.length
+          setEditorDocumentOffset(editor, offset)
+          // The realignment consumed this key, so the closer is placed here
+          // rather than left to a fall-through that would not see the new caret.
+          if (editor.plainText[offset] === sequence) setEditorDocumentOffset(editor, offset + 1)
+          else {
+            editor.insertText(sequence)
+            setEditorDocumentOffset(editor, offset + 1)
+          }
+          return true
+        }
+      }
       if (AUTO_PAIR_CLOSERS.has(sequence) && editor.plainText[offset] === sequence && !editor.hasSelection()) {
         setEditorDocumentOffset(editor, offset + 1)
         return true
@@ -3340,7 +3664,7 @@ export function EditorPopover({
       }
     }
     return false
-  }, [acceptCompletion, activateTreeRow, activeTab, addAdjacentCursor, addLineEndCursors, addNextOccurrence, applyCaseTransform, applyCodeAction, applyLineTransform, chooseQuickResultAt, closeActiveTab, closeConfirm, codeActionCursor, codeActions, completions.length, copyEditorSelection, editAtAllCursors, editSelectedLines, extendBlockSelection, filePrompt, focusPane, formatDocument, handleVimKey, hoverInfo, jumpBack, jumpToEditorLocation, multiCursor, navigateDiagnostic, navigateSearch, navigateSnippet, openFilePrompt, openProjectSearch, openQuick, openRecoveryConflict, openSearch, pasteIntoEditor, performFileOperation, performRename, projectSearchCursor, projectSearchOpen, projectSearchResults, quickCursor, quickOpen, quickResults.length, recoveryConflictCursor, recoveryConflictOpen, recoveryConflicts, renameOpen, replaceSearchMatch, requestClose, requestCodeActions, requestCompletions, requestHover, requestRename, requestSignatureHelp, requestSymbolNavigation, restartLsp, root, saveActive, saveAll, searchInput, searchOpen, searchReplaceMode, searchResult.error, searchSelectionRange, signatureInfo, switchTab, symbolNavigationCursor, symbolNavigationKind, symbolNavigationResults, toggleExplorer, toggleSearchMatchCase, toggleVelocityScrolling, toggleVimMode, toggleWordWrap, treeCursor, treeExpanded, treeRows, velocityScrollEnabled, vimEnabled])
+  }, [acceptCompletion, activateTreeRow, activeTab, addAdjacentCursor, closeCompletions, jumpToMatchingBracket, shortcutsOpen, vimMode, addLineEndCursors, addNextOccurrence, applyCaseTransform, applyCodeAction, applyLineTransform, chooseQuickResultAt, closeActiveTab, closeConfirm, codeActionCursor, codeActions, completions.length, copyEditorSelection, editAtAllCursors, editSelectedLines, extendBlockSelection, filePrompt, focusPane, formatDocument, handleVimKey, hoverInfo, jumpBack, jumpToEditorLocation, multiCursor, navigateDiagnostic, navigateSearch, navigateSnippet, openFilePrompt, openProjectSearch, openQuick, openRecoveryConflict, openSearch, pasteIntoEditor, performFileOperation, performRename, projectSearchCursor, projectSearchOpen, projectSearchResults, quickCursor, quickOpen, quickResults.length, recoveryConflictCursor, recoveryConflictOpen, recoveryConflicts, renameOpen, replaceSearchMatch, requestClose, requestCodeActions, requestCompletions, requestHover, requestRename, requestSignatureHelp, requestSymbolNavigation, restartLsp, root, saveActive, saveAll, searchInput, searchOpen, searchReplaceMode, searchResult.error, searchSelectionRange, signatureInfo, switchTab, symbolNavigationCursor, symbolNavigationKind, symbolNavigationResults, toggleExplorer, toggleSearchMatchCase, toggleVelocityScrolling, toggleVimMode, toggleWordWrap, treeCursor, treeExpanded, treeRows, velocityScrollEnabled, vimEnabled])
 
   useEffect(() => {
     onKeyHandlerReady(handleKey)
@@ -3371,6 +3695,18 @@ export function EditorPopover({
   const handleEditorCursorChange = useCallback((next: { line: number; visualColumn: number }) => {
     cursorRef.current = next
     setCursor(next)
+    const editor = editorRef.current
+    const selection = editor?.getSelection()
+    const summary = !editor || !selection || selection.end <= selection.start
+      ? null
+      : {
+        characters: selection.end - selection.start,
+        lines: editor.plainText.slice(selection.start, selection.end).split('\n').length,
+      }
+    // Caret movement is the hot path; only re-render when the readout changes.
+    setSelectionSummary((current) => (
+      current?.characters === summary?.characters && current?.lines === summary?.lines ? current : summary
+    ))
   }, [])
 
   const setEditorScrollbarRef = useCallback((node: ScrollBarRenderable | null) => {
@@ -3405,18 +3741,35 @@ export function EditorPopover({
     completionAbortRef.current = null
     completionResolveAbortRef.current?.abort()
     completionResolveAbortRef.current = null
+    // Typing drops engagement but keeps an Escape dismissal standing; the
+    // auto-trigger decides whether this edit is allowed to reopen the list.
+    completionEngagedRef.current = false
+    setCompletionEngaged(false)
     setCompletions([])
     setCloseConfirm(false)
     setTabs((current) => current.map((tab) => tab.path === activePath ? { ...tab, content } : tab))
   }, [activePath])
 
   const counts = useMemo(() => diagnosticCounts(diagnostics), [diagnostics])
+  // Only the toggles that are on earn status-bar space; the bindings that turn
+  // them on live in the F1 reference.
+  const enabledToggles = [
+    wordWrapEnabled ? 'Wrap' : null,
+    velocityScrollEnabled ? 'Velocity' : null,
+  ].filter(Boolean).join(' ')
+  const indentSummary = useMemo(() => {
+    if (!activeTab) return 'Spaces: 2'
+    const unit = detectEditorIndentUnit(activeTab.content, activeTab.path)
+    return unit === '\t' ? 'Tab' : `Spaces: ${unit.length}`
+  }, [activeTab])
   const selectedCompletion = completions[completionCursor]
   const projectSearchWindowStart = Math.min(
     Math.max(0, projectSearchCursor - 9),
     Math.max(0, projectSearchResults.length - 12),
   )
   const visibleProjectSearchResults = projectSearchResults.slice(projectSearchWindowStart, projectSearchWindowStart + 12)
+  const quickWindowStart = listWindowStart(quickCursor, quickResults.length, QUICK_VISIBLE_ROWS)
+  const symbolWindowStart = listWindowStart(symbolNavigationCursor, symbolNavigationResults.length, SYMBOL_VISIBLE_ROWS)
   const completionWindowStart = Math.min(
     Math.max(0, completionCursor - 7),
     Math.max(0, completions.length - 8),
@@ -3454,7 +3807,14 @@ export function EditorPopover({
         : visibleCompletions.length + completionDocumentation.length),
     ),
   )
-  const completionTop = Math.max(3, Math.min(contentHeight - completionPopupHeight, cursor.line - (editorRef.current?.scrollY ?? 0) + 2))
+  // Prefer the row below the caret, but flip above when the list would not fit
+  // there — clamping it into view instead would paint it over the line being
+  // typed, which is exactly what a suggestion must never do.
+  const completionCaretRow = cursor.line - (editorRef.current?.scrollY ?? 0) + 2
+  const completionFitsBelow = completionCaretRow + completionPopupHeight <= contentHeight
+  const completionTop = completionFitsBelow
+    ? Math.max(3, completionCaretRow)
+    : Math.max(3, completionCaretRow - completionPopupHeight - 1)
   const completionLeft = explorerWidth + Math.max(5, Math.min(Math.max(5, editorWidth - completionPopupWidth - 2), cursor.visualColumn + 7))
   const editorModeLabel = focusPane === 'explorer' ? 'EXPLORER' : vimEnabled ? vimMode.toUpperCase() : 'INSERT'
   const editorModeColor = focusPane === 'explorer'
@@ -3636,7 +3996,7 @@ export function EditorPopover({
           {` ${fitText(lspStatusText(lspStatus), Math.max(18, Math.floor(editorWidth * 0.42)))}`}
         </text>
         <box flexGrow={1} />
-        <text fg={theme.dim}>{`${detectTuiCodeFiletypeFromPath(activeTab?.path) ?? 'text'}  ${cursor.line + 1}:${cursor.visualColumn + 1}  ${formatClock(clock)} `}</text>
+        <text fg={theme.dim}>{`${detectTuiCodeFiletypeFromPath(activeTab?.path) ?? 'text'}  ${indentSummary}${enabledToggles ? `  ${enabledToggles}` : ''}  Ln ${cursor.line + 1}, Col ${cursor.visualColumn + 1}${selectionSummary ? ` (${selectionSummary.characters} sel${selectionSummary.lines > 1 ? `, ${selectionSummary.lines} lines` : ''})` : ''}  ${formatClock(clock)} `}</text>
       </box>
       <box height={footerHeight} paddingX={1} backgroundColor={theme.surface2} flexDirection="column">
         <text fg={message.startsWith('Unable') || message.startsWith('Refused') ? theme.red : theme.dim} wrapMode="none">
@@ -3655,8 +4015,11 @@ export function EditorPopover({
             <box flexGrow={1} />
             <text fg={theme.dim}>{`${quickResults.length} result${quickResults.length === 1 ? '' : 's'}`}</text>
           </box>
+          <box flexGrow={1} flexDirection="row">
           <scrollbox flexGrow={1} scrollAcceleration={scrollAcceleration}>
-            {quickResults.slice(0, 11).map((result, index) => (
+            {quickResults.slice(quickWindowStart, quickWindowStart + QUICK_VISIBLE_ROWS).map((result, visibleIndex) => {
+              const index = quickWindowStart + visibleIndex
+              return (
               <box
                 key={`${result.kind}:${result.id}`}
                 height={1}
@@ -3673,9 +4036,12 @@ export function EditorPopover({
                 <box flexGrow={1} />
                 <text fg={theme.dim} wrapMode="none">{fitText(result.detail, Math.max(10, Math.floor(width * 0.28)))}</text>
               </box>
-            ))}
+              )
+            })}
             {quickResults.length === 0 ? <text fg={theme.dim}>  No matching results</text> : null}
           </scrollbox>
+          {renderListScrollbar(quickWindowStart, QUICK_VISIBLE_ROWS, quickResults.length)}
+          </box>
         </box>
       ) : null}
 
@@ -3706,6 +4072,7 @@ export function EditorPopover({
             <box flexGrow={1} />
             <text fg={theme.dim}>Alt+R regex · Alt+C case · Alt+W word</text>
           </box>
+          <box flexGrow={1} flexDirection="row">
           <scrollbox flexGrow={1} scrollAcceleration={scrollAcceleration}>
             {visibleProjectSearchResults.map((result, visibleIndex) => {
               const index = projectSearchWindowStart + visibleIndex
@@ -3739,6 +4106,8 @@ export function EditorPopover({
               ? <text fg={theme.dim}>  No project matches</text>
               : null}
           </scrollbox>
+          {renderListScrollbar(projectSearchWindowStart, 12, projectSearchResults.length)}
+          </box>
           <text fg={theme.dim}> Enter open · ↑↓ select · Ctrl+U clear · Esc close</text>
         </box>
       ) : null}
@@ -3795,8 +4164,11 @@ export function EditorPopover({
           title={` ${symbolNavigationKind} ${symbolNavigationCursor + 1}/${symbolNavigationResults.length} `}
         >
           <text fg={theme.dim}> Enter open · ↑↓ select · Esc close</text>
+          <box flexGrow={1} flexDirection="row">
           <scrollbox flexGrow={1} scrollAcceleration={scrollAcceleration}>
-            {symbolNavigationResults.map((result, index) => (
+            {symbolNavigationResults.slice(symbolWindowStart, symbolWindowStart + SYMBOL_VISIBLE_ROWS).map((result, visibleIndex) => {
+              const index = symbolWindowStart + visibleIndex
+              return (
               <box
                 key={`${result.location.uri}:${result.location.range.start.line}:${result.location.range.start.character}`}
                 height={1}
@@ -3813,8 +4185,11 @@ export function EditorPopover({
                 <box flexGrow={1} />
                 <text fg={theme.dim} wrapMode="none">{fitText(result.detail, Math.max(20, Math.floor(width * 0.34)))}</text>
               </box>
-            ))}
+              )
+            })}
           </scrollbox>
+          {renderListScrollbar(symbolWindowStart, SYMBOL_VISIBLE_ROWS, symbolNavigationResults.length)}
+          </box>
         </box>
       ) : null}
 
@@ -3912,6 +4287,41 @@ export function EditorPopover({
         </box>
       ) : null}
 
+      {shortcutsOpen ? (
+        <box
+          position="absolute"
+          top={2}
+          left={Math.max(2, Math.floor(width * 0.12))}
+          width={Math.max(46, Math.min(width - 4, Math.floor(width * 0.76)))}
+          height={Math.max(10, contentHeight - 1)}
+          zIndex={80}
+          border
+          borderStyle="heavy"
+          borderColor={theme.cyan}
+          backgroundColor={theme.surface}
+          flexDirection="column"
+          title=" Keyboard shortcuts "
+        >
+          <scrollbox ref={shortcutsScrollRef} flexGrow={1} scrollAcceleration={scrollAcceleration}>
+            {EDITOR_SHORTCUT_GROUPS.map((group) => (
+              <box key={group.title} flexDirection="column" paddingX={1}>
+                <text fg={theme.cyan} wrapMode="none">{group.title}</text>
+                {group.entries.map(([binding, label]) => (
+                  <box key={`${group.title}:${binding}`} flexDirection="row">
+                    <text fg={theme.amber} wrapMode="none">{`  ${binding.padEnd(20)}`}</text>
+                    <text fg={theme.text} wrapMode="none">{fitText(label, Math.max(16, Math.floor(width * 0.5)))}</text>
+                  </box>
+                ))}
+                <text fg={theme.dim}> </text>
+              </box>
+            ))}
+          </scrollbox>
+          <box height={1} paddingX={1} backgroundColor={theme.surface2}>
+            <text fg={theme.dim} wrapMode="none">↑↓ scroll · Esc closes</text>
+          </box>
+        </box>
+      ) : null}
+
       {codeActions.length > 0 ? (
         <box
           position="absolute"
@@ -3953,7 +4363,7 @@ export function EditorPopover({
       ) : null}
 
       {completions.length > 0 && activeTab && focusPane === 'editor' ? (
-        <box position="absolute" top={completionTop} left={completionLeft} width={completionPopupWidth} height={completionPopupHeight} zIndex={55} border borderStyle="rounded" borderColor={theme.violet} backgroundColor={theme.surface} flexDirection="column" title={` completions ${completionCursor + 1}/${completions.length} `}>
+        <box position="absolute" top={completionTop} left={completionLeft} width={completionPopupWidth} height={completionPopupHeight} zIndex={55} border borderStyle="rounded" borderColor={theme.violet} backgroundColor={theme.surface} flexDirection="column" title={` completions ${completionCursor + 1}/${completions.length} · ${completionEngaged ? '⏎/Tab accept' : 'Tab accept'} `}>
           <box flexGrow={1} flexDirection="row">
             <box width={showCompletionDetailPane ? completionListWidth : undefined} flexGrow={showCompletionDetailPane ? 0 : 1} flexDirection="column">
               {visibleCompletions.map((item, visibleIndex) => {

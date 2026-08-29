@@ -29,6 +29,19 @@ const syntaxStyle = SyntaxStyle.fromStyles({
   default: { fg: RGBA.fromHex(DARK_THEME.text) },
 })
 
+function editorPositionInside(editor: TextareaRenderable, offset: number): { line: number; character: number } {
+  const before = editor.plainText.slice(0, offset)
+  const lineStart = before.lastIndexOf('\n') + 1
+  return { line: before.split('\n').length - 1, character: offset - lineStart }
+}
+
+function editorOffsetOf(editor: TextareaRenderable): number {
+  const lines = editor.plainText.split('\n')
+  let offset = 0
+  for (let index = 0; index < editor.logicalCursor.row; index += 1) offset += (lines[index]?.length ?? 0) + 1
+  return offset + editor.logicalCursor.col
+}
+
 async function flush(setup: Awaited<ReturnType<typeof testRender>>, delay = 250) {
   await act(async () => {
     await setup.flush()
@@ -196,8 +209,39 @@ process.stdin.on('data', (chunk) => {
     await new Promise((resolve) => setTimeout(resolve, 2_000))
     await setup.flush()
     const initialFrame = setup.captureCharFrame()
-    for (const expected of ['EDITOR', 'EXPLORER', 'main.ts', 'INSERT', '^P open', '^Space complete', 'Alt+Z wrap off', 'V velocity off']) {
+    for (const expected of ['EDITOR', 'EXPLORER', 'main.ts', 'INSERT', '^P open', '^Space complete', '? shortcuts']) {
       if (!initialFrame.includes(expected)) throw new Error(`Missing ${expected} from editor frame:\n${initialFrame}`)
+
+    // The footer stays one compact row; the full reference is behind `?` from
+    // the explorer, where the key is not text.
+    act(() => { handleKey?.({ name: 'e', ctrl: true, shift: false, sequence: '\u0005' }) })
+    await flush(setup, 120)
+    act(() => { handleKey?.({ name: '?', ctrl: false, shift: true, sequence: '?' }) })
+    await flush(setup, 120)
+    const shortcutsFrame = setup.captureCharFrame()
+    if (!shortcutsFrame.includes('Keyboard shortcuts') || !shortcutsFrame.includes('Save all')
+      || !shortcutsFrame.includes('Toggle comment') || !shortcutsFrame.includes('Esc closes')) {
+      throw new Error(`\`?\` did not open the keyboard reference:\n${shortcutsFrame}`)
+    }
+    for (let index = 0; index < 12; index += 1) {
+      act(() => { handleKey?.({ name: 'down', ctrl: false, shift: false, sequence: '\u001b[B' }) })
+    }
+    await flush(setup, 120)
+    const scrolledShortcutsFrame = setup.captureCharFrame()
+    if (scrolledShortcutsFrame.includes('Save all') || !scrolledShortcutsFrame.includes('Keyboard shortcuts')) {
+      throw new Error(`The keyboard reference did not scroll:\n${scrolledShortcutsFrame}`)
+    }
+    // The reference must not cover the status bar it sits above.
+    if (!scrolledShortcutsFrame.includes('Ln ')) {
+      throw new Error(`The keyboard reference covered the status bar:\n${scrolledShortcutsFrame}`)
+    }
+    act(() => { handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '\u001b' }) })
+    await flush(setup, 120)
+    if (setup.captureCharFrame().includes('Keyboard shortcuts')) {
+      throw new Error(`Escape did not close the keyboard reference:\n${setup.captureCharFrame()}`)
+    }
+    act(() => { handleKey?.({ name: 'e', ctrl: true, shift: false, sequence: '\u0005' }) })
+    await flush(setup, 120)
     }
     if (!/\b1\s+const answer/.test(initialFrame)) throw new Error(`Editor did not render line numbers:\n${initialFrame}`)
     const keywordColor = RGBA.fromHex(DARK_THEME.violet).toString()
@@ -396,6 +440,234 @@ process.stdin.on('data', (chunk) => {
       || detailLabelRow < 0 || detailSignatureRow < 0 || detailLabelRow === detailSignatureRow) {
       throw new Error(`Short completion details overlapped instead of rendering on distinct rows:\n${shortCompletionFrame}`)
     }
+    // Escape must stay dismissed while the same word keeps being typed, the
+    // way a real editor treats an explicit dismissal.
+    act(() => { handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '\u001b' }) })
+    await flush(setup, 120)
+    if (setup.captureCharFrame().includes('completions ')) {
+      throw new Error(`Escape did not dismiss the completion list:\n${setup.captureCharFrame()}`)
+    }
+    // Ctrl+Space overrides the dismissal and marks the list engaged, so Enter
+    // accepts from there.
+    act(() => { handleKey?.({ name: 'space', ctrl: true, shift: false, sequence: '\0' }) })
+    await flush(setup, 450)
+    if (!setup.captureCharFrame().includes('⏎/Tab accept')) {
+      throw new Error(`Ctrl+Space did not reopen an engaged completion list:\n${setup.captureCharFrame()}`)
+    }
+    act(() => { handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '\u001b' }) })
+    await flush(setup, 120)
+    // Editing the same word does not undo the dismissal, even once the prefix
+    // is back to one the server answers.
+    act(() => { handleKey?.({ name: 'backspace', ctrl: false, shift: false, sequence: '\u007f' }) })
+    await flush(setup, 200)
+    await act(async () => { await setup.mockInput.typeText('t') })
+    await flush(setup, 500)
+    if (setup.captureCharFrame().includes('completions ')) {
+      throw new Error(`Editing a dismissed word reopened the list:\n${setup.captureCharFrame()}`)
+    }
+    await act(async () => {
+      editor.gotoBufferEnd()
+      await setup.mockInput.typeText('\nshort')
+    })
+    await flush(setup, 450)
+    const suggestedFrame = setup.captureCharFrame()
+    if (!suggestedFrame.includes('completions ') || !suggestedFrame.includes('Tab accept')
+      || suggestedFrame.includes('⏎/Tab accept')) {
+      throw new Error(`An auto-opened list should read as a suggestion, not an engaged menu:\n${suggestedFrame}`)
+    }
+    // Near the bottom of the viewport the list must flip above the caret
+    // rather than clamp down over the line being typed.
+    const suggestedRows = suggestedFrame.split('\n')
+    const popupRow = suggestedRows.findIndex((row) => row.includes('completions '))
+    const caretRow = suggestedRows.findIndex((row) => row.includes(` ${editor.logicalCursor.row + 1} `))
+    const popupBottomRow = suggestedRows.findLastIndex((row) => row.includes('╰─'))
+    if (popupRow < 0 || caretRow < 0 || popupBottomRow >= caretRow) {
+      throw new Error(`The completion list covered the caret line instead of clearing it (popup ${popupRow}-${popupBottomRow}, caret ${caretRow}):\n${suggestedRows.map((row, index) => `${index} ${row}`).join('\n')}`)
+    }
+    // Enter over an unengaged list is a newline, not an accept.
+    const beforeEnterLines = editor.plainText.split('\n').length
+    act(() => { handleKey?.({ name: 'return', ctrl: false, shift: false, sequence: '\r' }) })
+    await flush(setup, 150)
+    if (editor.plainText.includes('shortOne') || editor.plainText.split('\n').length !== beforeEnterLines + 1) {
+      throw new Error(`Enter accepted an unengaged completion instead of inserting a newline: ${JSON.stringify(editor.plainText.slice(-40))}`)
+    }
+    // Arrowing into the list engages it, and then Enter accepts.
+    await act(async () => { await setup.mockInput.typeText('short') })
+    await flush(setup, 450)
+    act(() => { handleKey?.({ name: 'down', ctrl: false, shift: false, sequence: '\u001b[B' }) })
+    await flush(setup, 80)
+    if (!setup.captureCharFrame().includes('⏎/Tab accept')) {
+      throw new Error(`Navigating the list did not engage it:\n${setup.captureCharFrame()}`)
+    }
+    act(() => { handleKey?.({ name: 'return', ctrl: false, shift: false, sequence: '\r' }) })
+    await flush(setup, 200)
+    if (!editor.plainText.includes('shortTwo')) {
+      throw new Error(`Enter did not accept an engaged completion: ${JSON.stringify(editor.plainText.slice(-40))}`)
+    }
+    // Accepting must not immediately re-suggest the word it just inserted.
+    if (setup.captureCharFrame().includes('completions ')) {
+      throw new Error(`The completion list reopened over the word it just accepted:\n${setup.captureCharFrame()}`)
+    }
+    // Word suggestions stay out of comments; Ctrl+Space still reaches them.
+    await act(async () => {
+      editor.gotoBufferEnd()
+      await setup.mockInput.typeText('\n// shortcut for shor')
+    })
+    await flush(setup, 500)
+    if (setup.captureCharFrame().includes('completions ')) {
+      throw new Error(`Completions opened inside a line comment:\n${setup.captureCharFrame()}`)
+    }
+    act(() => { handleKey?.({ name: 'space', ctrl: true, shift: false, sequence: '\0' }) })
+    await flush(setup, 450)
+    if (!setup.captureCharFrame().includes('completions ')) {
+      throw new Error(`Ctrl+Space did not force completions inside a comment:\n${setup.captureCharFrame()}`)
+    }
+    act(() => { handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '\u001b' }) })
+    await flush(setup, 120)
+    // Moving the caret closes the list instead of re-querying at the new spot.
+    await act(async () => {
+      editor.gotoBufferEnd()
+      await setup.mockInput.typeText('\nshort')
+    })
+    await flush(setup, 450)
+    if (!setup.captureCharFrame().includes('completions ')) {
+      throw new Error(`Completions did not reopen for a fresh word:\n${setup.captureCharFrame()}`)
+    }
+    const caretBeforeMove = editor.logicalCursor
+    act(() => { editor.setCursor(caretBeforeMove.row, Math.max(0, caretBeforeMove.col - 1)) })
+    await flush(setup, 300)
+    if (setup.captureCharFrame().includes('completions ')) {
+      throw new Error(`Moving the caret left the completion popup over the code:\n${setup.captureCharFrame()}`)
+    }
+    act(() => { editor.gotoBufferEnd() })
+    await flush(setup, 120)
+
+    // Auto-pairs behave like an editor's: the closer follows the opener in,
+    // and backspacing the opener takes the closer back out.
+    await act(async () => { await setup.mockInput.typeText('\nconst pair = ') })
+    await flush(setup, 120)
+    act(() => { handleKey?.({ name: '(', ctrl: false, shift: false, sequence: '(' }) })
+    await flush(setup, 120)
+    if (!editor.plainText.endsWith('const pair = ()')) {
+      throw new Error(`Typing an opener did not insert its pair: ${JSON.stringify(editor.plainText.slice(-24))}`)
+    }
+    const pairOpenOffset = editor.plainText.length - 2
+    act(() => { handleKey?.({ name: 'm', ctrl: true, shift: false, sequence: '\r' }) })
+    await flush(setup, 120)
+    if (editorOffsetOf(editor) !== pairOpenOffset) {
+      throw new Error(`Ctrl+M did not jump to the matching bracket: ${editorOffsetOf(editor)} vs ${pairOpenOffset}`)
+    }
+    act(() => { handleKey?.({ name: 'm', ctrl: true, shift: false, sequence: '\r' }) })
+    await flush(setup, 120)
+    if (editorOffsetOf(editor) !== pairOpenOffset + 2) {
+      throw new Error(`A second Ctrl+M did not bounce back across the pair: ${editorOffsetOf(editor)} vs ${pairOpenOffset + 2}`)
+    }
+    act(() => {
+      const inside = editorPositionInside(editor, pairOpenOffset + 1)
+      editor.setCursor(inside.line, inside.character)
+    })
+    await flush(setup, 120)
+    act(() => { handleKey?.({ name: 'backspace', ctrl: false, shift: false, sequence: '\u007f' }) })
+    await flush(setup, 150)
+    if (!editor.plainText.endsWith('const pair = ')) {
+      throw new Error(`Backspacing an auto-pair left its closer orphaned: ${JSON.stringify(editor.plainText.slice(-24))}`)
+    }
+    if (!setup.captureCharFrame().includes('Ln ')) {
+      throw new Error(`The status bar lost its line/column readout:\n${setup.captureCharFrame()}`)
+    }
+    // Inside the buffer `?` is still a question mark, not a help key.
+    await act(async () => {
+      editor.gotoBufferEnd()
+      await setup.mockInput.typeText('\n// why?')
+    })
+    await flush(setup, 150)
+    if (setup.captureCharFrame().includes('Keyboard shortcuts') || !editor.plainText.endsWith('// why?')) {
+      throw new Error(`Typing \`?\` in the buffer opened the reference instead of typing: ${JSON.stringify(editor.plainText.slice(-12))}`)
+    }
+
+    // Enter carries the block's indentation, opens a body between a pair, and
+    // a closer typed on the blank line snaps back to its opener.
+    await act(async () => {
+      editor.gotoBufferEnd()
+      await setup.mockInput.typeText('\nfunction indented() {')
+    })
+    await flush(setup, 150)
+    act(() => { handleKey?.({ name: 'return', ctrl: false, shift: false, sequence: '\r' }) })
+    await flush(setup, 150)
+    if (!editor.plainText.endsWith('function indented() {\n  ')) {
+      throw new Error(`Enter did not indent into a new block: ${JSON.stringify(editor.plainText.slice(-30))}`)
+    }
+    await act(async () => { await setup.mockInput.typeText('if (ready) {') })
+    await flush(setup, 150)
+    act(() => { handleKey?.({ name: 'return', ctrl: false, shift: false, sequence: '\r' }) })
+    await flush(setup, 150)
+    if (!editor.plainText.endsWith('  if (ready) {\n    ')) {
+      throw new Error(`Enter did not nest indentation: ${JSON.stringify(editor.plainText.slice(-30))}`)
+    }
+    await act(async () => { await setup.mockInput.typeText('run()') })
+    await flush(setup, 150)
+    act(() => { handleKey?.({ name: 'return', ctrl: false, shift: false, sequence: '\r' }) })
+    await flush(setup, 150)
+    if (!editor.plainText.endsWith('    run()\n    ')) {
+      throw new Error(`Enter did not keep the block's indentation: ${JSON.stringify(editor.plainText.slice(-30))}`)
+    }
+    act(() => { handleKey?.({ name: '}', ctrl: false, shift: false, sequence: '}' }) })
+    await flush(setup, 150)
+    if (!editor.plainText.endsWith('    run()\n  }')) {
+      throw new Error(`A closer typed on a blank line did not align with its opener: ${JSON.stringify(editor.plainText.slice(-30))}`)
+    }
+    act(() => { handleKey?.({ name: 'return', ctrl: false, shift: false, sequence: '\r' }) })
+    await flush(setup, 150)
+    act(() => { handleKey?.({ name: '}', ctrl: false, shift: false, sequence: '}' }) })
+    await flush(setup, 150)
+    if (!editor.plainText.endsWith('  }\n}')) {
+      throw new Error(`The outer closer did not return to column zero: ${JSON.stringify(editor.plainText.slice(-30))}`)
+    }
+    // An opener inside a string is text, not structure.
+    await act(async () => {
+      editor.gotoBufferEnd()
+      await setup.mockInput.typeText('\n  const label = "a {"')
+    })
+    await flush(setup, 150)
+    act(() => { handleKey?.({ name: 'return', ctrl: false, shift: false, sequence: '\r' }) })
+    await flush(setup, 150)
+    if (!editor.plainText.endsWith('"a {"\n  ')) {
+      throw new Error(`A brace inside a string was treated as a block opener: ${JSON.stringify(editor.plainText.slice(-24))}`)
+    }
+    // In TypeScript a trailing `:` is an annotation, not a block.
+    await act(async () => { await setup.mockInput.typeText('const value:') })
+    await flush(setup, 150)
+    act(() => { handleKey?.({ name: 'return', ctrl: false, shift: false, sequence: '\r' }) })
+    await flush(setup, 150)
+    if (!editor.plainText.endsWith('const value:\n  ')) {
+      throw new Error(`A trailing colon indented like a Python block: ${JSON.stringify(editor.plainText.slice(-24))}`)
+    }
+    await act(async () => { await setup.mockInput.typeText('number = 1') })
+    await flush(setup, 150)
+
+    // Enter inside a block comment continues it rather than dropping the user
+    // back to bare indentation.
+    await act(async () => {
+      editor.gotoBufferEnd()
+      await setup.mockInput.typeText('\n/** doc')
+    })
+    await flush(setup, 150)
+    act(() => { handleKey?.({ name: 'return', ctrl: false, shift: false, sequence: '\r' }) })
+    await flush(setup, 150)
+    if (!editor.plainText.endsWith('/** doc\n * ')) {
+      throw new Error(`Enter did not continue a block comment: ${JSON.stringify(editor.plainText.slice(-20))}`)
+    }
+    await act(async () => { await setup.mockInput.typeText('more') })
+    await flush(setup, 150)
+    act(() => { handleKey?.({ name: 'return', ctrl: false, shift: false, sequence: '\r' }) })
+    await flush(setup, 150)
+    if (!editor.plainText.endsWith(' * more\n * ')) {
+      throw new Error(`A continued block comment did not keep continuing: ${JSON.stringify(editor.plainText.slice(-20))}`)
+    }
+    await act(async () => { await setup.mockInput.typeText('*/') })
+    await flush(setup, 150)
+
+
     act(() => { handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '\u001b' }) })
     await setup.flush()
     await act(async () => {
@@ -459,7 +731,12 @@ process.stdin.on('data', (chunk) => {
       editor.gotoBufferEnd()
       editor.insertText("\nconst wide = '界'; console.")
     })
-    await flush(setup, 800)
+    // Poll rather than assume one fixed wait covers the language-server round
+    // trip; the buffer this runs against keeps growing as the suite grows.
+    const unicodeDeadline = Date.now() + 6_000
+    while (Date.now() < unicodeDeadline && !setup.captureCharFrame().includes('completions 1/12')) {
+      await flush(setup, 200)
+    }
     const unicodeCompletionFrame = setup.captureCharFrame()
     if (!unicodeCompletionFrame.includes('completions 1/12') || !unicodeCompletionFrame.includes('log')) {
       throw new Error(`Unicode text before the cursor corrupted the LSP completion position at ${JSON.stringify(editor.logicalCursor)} / ${editor.cursorOffset}:\n${unicodeCompletionFrame}`)
@@ -471,10 +748,22 @@ process.stdin.on('data', (chunk) => {
     if (editor.logicalCursor.col !== completionCursorBeforeMove.col - 1) {
       throw new Error(`Completion stale-cursor setup did not move the caret: ${JSON.stringify(editor.logicalCursor)}`)
     }
+    // Moving the caret dismisses the list outright, so there is no stale
+    // suggestion left for Tab to accept at the position the user left.
+    await flush(setup, 400)
+    if (setup.captureCharFrame().includes('completions ')) {
+      throw new Error(`Cursor movement left a stale completion list open:\n${setup.captureCharFrame()}`)
+    }
     act(() => { handleKey?.({ name: 'tab', ctrl: false, shift: false, sequence: '\t' }) })
     await flush(setup, 120)
-    if (editor.plainText !== beforeStaleCompletion || !setup.captureCharFrame().includes('Completion dismissed after the buffer or cursor changed')) {
-      throw new Error(`A stale completion was applied after cursor movement:\n${setup.captureCharFrame()}`)
+    if (editor.plainText.includes('console.logg') || editor.plainText.includes('warnlog')) {
+      throw new Error(`A stale completion was applied after cursor movement: ${JSON.stringify(editor.plainText.slice(-40))}`)
+    }
+    act(() => { handleKey?.({ name: 'z', ctrl: true, shift: false, sequence: '\u001a' }) })
+    await flush(setup, 150)
+    if (editor.plainText !== beforeStaleCompletion) {
+      act(() => { editor.replaceText(beforeStaleCompletion) })
+      await flush(setup, 150)
     }
     act(() => { editor.gotoBufferEnd() })
     await setup.flush()
@@ -624,6 +913,26 @@ process.stdin.on('data', (chunk) => {
     act(() => { handleKey?.({ name: 'p', ctrl: true, shift: false, sequence: '\u0010' }) })
     await setup.flush()
     if (!setup.captureCharFrame().includes('Quick open')) throw new Error('Ctrl+P did not open file picker')
+    // The picker lists far more than it can show, so the window has to follow
+    // the cursor instead of rendering a fixed first slice.
+    const quickAmber = RGBA.fromHex(DARK_THEME.amber).toString()
+    const selectedQuickRow = () => setup.captureSpans().lines.findIndex((line) => (
+      line.spans.some((span) => span.text.includes('fixture-') && span.fg.toString() === quickAmber)
+    ))
+    if (selectedQuickRow() < 0) {
+      throw new Error(`Quick open did not mark a selected row:\n${setup.captureCharFrame()}`)
+    }
+    for (let index = 0; index < 20; index += 1) {
+      act(() => { handleKey?.({ name: 'down', ctrl: false, shift: false, sequence: '\u001b[B' }) })
+    }
+    await flush(setup, 150)
+    if (selectedQuickRow() < 0) {
+      throw new Error(`Quick open scrolled its selection out of the rendered window:\n${setup.captureCharFrame()}`)
+    }
+    act(() => { handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '\u001b' }) })
+    await flush(setup, 120)
+    act(() => { handleKey?.({ name: 'p', ctrl: true, shift: false, sequence: '\u0010' }) })
+    await setup.flush()
 
     for (const character of 'second.ts') {
       act(() => { handleKey?.({ name: character, ctrl: false, shift: false, sequence: character }) })
@@ -779,8 +1088,13 @@ process.stdin.on('data', (chunk) => {
     }
     act(() => { createdEditor.insertText('local ') })
     await writeFile(join(cwd, 'created.ts'), 'export const external = 2\n', 'utf8')
-    await flush(setup, 1_750)
-    if (!setup.captureCharFrame().includes('disk changed')) throw new Error('Dirty external edit did not show a disk-conflict warning')
+    // The watcher's poll interval is not a fixed budget; wait for the warning
+    // rather than for a duration that happened to be long enough once.
+    const conflictDeadline = Date.now() + 8_000
+    while (Date.now() < conflictDeadline && !setup.captureCharFrame().includes('disk changed')) {
+      await flush(setup, 250)
+    }
+    if (!setup.captureCharFrame().includes('disk changed')) throw new Error(`Dirty external edit did not show a disk-conflict warning:\n${setup.captureCharFrame()}`)
     act(() => { handleKey?.({ name: 's', ctrl: true, shift: false, sequence: '\u0013' }) })
     await flush(setup, 300)
     if (await readFile(join(cwd, 'created.ts'), 'utf8') !== 'export const external = 2\n'
