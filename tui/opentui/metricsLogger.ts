@@ -17,7 +17,7 @@
 //  - event-loop delay histogram (mean/p50/p99/max), reset each interval so
 //    samples show per-window behavior rather than a lifetime average
 //  - GC pressure (count/total/max ms per generation), also reset each interval
-//  - render-frame summary (commits, frames over the 60fps budget, slowest),
+//  - render-frame summary (commits, frames over the 120fps budget, slowest),
 //    fed by noteRenderFrame() from the existing render canary in App.tsx
 //  - app-level gauges (session counts, cache/map sizes, queue depths) supplied
 //    by registerTuiMetricsGauge — App.tsx and worker clients register reporters
@@ -32,6 +32,7 @@ import { dirname, join } from 'node:path'
 import { monitorEventLoopDelay, PerformanceObserver, type IntervalHistogram } from 'node:perf_hooks'
 import { PerfStats } from '../../lib/perfStats'
 import type { AgentProvider } from '../../lib/types'
+import { TUI_FRAME_BUDGET_MS } from './performanceBudget'
 
 const METRICS_ENABLED = process.env.AGENT_VIEWER_TUI_METRICS === '1'
 const METRICS_PATH = process.env.AGENT_VIEWER_TUI_METRICS_LOG
@@ -140,14 +141,13 @@ function startMonitors(): void {
 // Fed by the existing render canary in App.tsx (renderStartRef / useEffect),
 // independent of the AGENT_VIEWER_PERF text-log path — both can run at once.
 
-const FRAME_BUDGET_MS = 1000 / 60
 const frameWindow = { commits: 0, overBudget: 0, maxMs: 0 }
 const composerLatencyStats = new PerfStats()
 
 export function noteRenderFrame(durationMs: number): void {
   if (!METRICS_ENABLED) return
   frameWindow.commits += 1
-  if (durationMs > FRAME_BUDGET_MS) frameWindow.overBudget += 1
+  if (durationMs > TUI_FRAME_BUDGET_MS) frameWindow.overBudget += 1
   if (durationMs > frameWindow.maxMs) frameWindow.maxMs = durationMs
 }
 

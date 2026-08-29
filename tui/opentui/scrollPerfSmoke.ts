@@ -13,13 +13,14 @@
 //     READER_CARD_WINDOW/READER_WINDOW_SLIDE/READER_WINDOW_MARGIN slide+recenter
 //     state machine (App.tsx lines ~14159-14243; keep this port in sync if that
 //     logic changes) — driven through a wheel-flood scroll burst plus keyboard
-//     cursor jumps. Each slide re-runs formatTranscriptCards on the new window
-//     (the real per-slide cost App.tsx pays) and the timing feeds the same
-//     frame-budget accounting as the AGENT_VIEWER_PERF canary. Correctness
-//     assertions cover the invariants that matter for "no visible lag, no
+//     cursor jumps. Each slide selects the same bounded formatted-card slice as
+//     App.tsx and feeds its cost into the shared frame-budget accounting.
+//     Correctness assertions cover the invariants that matter for "no visible lag, no
 //     misalignment": window bounds stay in range, slides are monotonic with the
 //     scroll direction, and the recenter effect never fires while the cursor is
-//     stationary (the documented slide/recenter livelock gotcha).
+//     stationary (the documented slide/recenter livelock gotcha). Native render
+//     cost is covered by inputPerf's hermetic reader-scroll scenarios; this
+//     smoke times only the App-equivalent window slice/state transition.
 //
 // Usage: bun run ./tui/opentui/scrollPerfSmoke.ts
 // Env: AGENT_VIEWER_READER_WINDOW to match a non-default App.tsx window size.
@@ -28,6 +29,7 @@ import { buildThreadedMessages } from '../../lib/threading'
 import type { ContentBlock, SessionMessage } from '../../lib/types'
 import { formatTranscriptCards } from '../format'
 import { createScrollVelocityState, velocityScrollStep } from './scrollVelocity'
+import { TUI_FRAME_BUDGET_MS, TUI_TARGET_FPS } from './performanceBudget'
 
 // ── Synthetic session (same shape/variety as transcriptPerf.tsx's generator) ──
 
@@ -156,23 +158,22 @@ function maybeRecenter(state: WindowState, total: number, cursorMoved: boolean):
 
 // ── Frame-budget accounting (mirrors metricsLogger.ts's frameWindow rollup) ──
 
-const FRAME_BUDGET_MS = 1000 / 60
 const frameStats = { commits: 0, overBudget: 0, maxMs: 0, totalMs: 0 }
 function recordFrame(durationMs: number): void {
   frameStats.commits += 1
   frameStats.totalMs += durationMs
-  if (durationMs > FRAME_BUDGET_MS) frameStats.overBudget += 1
+  if (durationMs > TUI_FRAME_BUDGET_MS) frameStats.overBudget += 1
   if (durationMs > frameStats.maxMs) frameStats.maxMs = durationMs
 }
 
 function timeSlide(state: WindowState): number {
   const startedAt = performance.now()
-  // The real per-slide cost App.tsx pays: reformatting the newly-mounted
-  // window's cards (cardDisplayData/formatTranscriptCard for the visible slice).
+  // App.tsx already owns formatted cards from the worker. A window slide only
+  // selects the newly-mounted slice; inputPerf measures the downstream React +
+  // OpenTUI commit with the real root.
   const windowCards = allCards.slice(state.start, state.end)
-  const rebuilt = formatTranscriptCards(threaded.slice(state.start, state.end))
   const durationMs = performance.now() - startedAt
-  assert.equal(rebuilt.length, windowCards.length, 'reformatted window card count mismatch')
+  assert.equal(windowCards.length, state.end - state.start, 'window card count mismatch')
   recordFrame(durationMs)
   return durationMs
 }
@@ -264,7 +265,8 @@ const report = {
     slidesTriggered: slideCount,
   },
   frameBudget: {
-    frameBudgetMs: Math.round(FRAME_BUDGET_MS * 100) / 100,
+    targetFps: TUI_TARGET_FPS,
+    frameBudgetMs: Math.round(TUI_FRAME_BUDGET_MS * 100) / 100,
     commits: frameStats.commits,
     overBudget: frameStats.overBudget,
     overBudgetRate: Math.round(overBudgetRate * 1000) / 1000,
@@ -286,6 +288,7 @@ const report = {
 process.stdout.write(`${JSON.stringify(report)}\n`)
 console.log(
   `Scroll benchmark: ${frameStats.commits} slides, ` +
-  `${frameStats.overBudget} over the 60fps budget (${(overBudgetRate * 100).toFixed(1)}%), ` +
+  `${frameStats.overBudget} over the ${TUI_TARGET_FPS}fps budget (${(overBudgetRate * 100).toFixed(1)}%), ` +
   `avg ${report.frameBudget.avgMs}ms, max ${report.frameBudget.maxMs}ms — correctness checks passed`,
 )
+if (frameStats.overBudget > 0) process.exitCode = 1

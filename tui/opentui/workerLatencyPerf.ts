@@ -249,6 +249,13 @@ async function main(): Promise<void> {
     taskListRoundTrips.push(sample.durationMs)
     taskListCards = sample.value
   }
+  const correctness = {
+    initialByteIdentical: JSON.stringify(firstWorkerCards) === JSON.stringify(initialExpected),
+    streamingByteIdentical: JSON.stringify(finalStreamingCards) === JSON.stringify(streamingExpected),
+    mutationFallbackByteIdentical: JSON.stringify(mutatedCards) === JSON.stringify(formatTranscriptCards(mutatedThreaded)),
+    truncationFallbackByteIdentical: JSON.stringify(truncatedCards) === JSON.stringify(formatTranscriptCards(truncatedThreaded)),
+    taskListFallbackByteIdentical: JSON.stringify(taskListCards) === JSON.stringify(formatTranscriptCards(taskListThreaded)),
+  }
   const output = {
     schemaVersion: 1,
     benchmark: 'opentui-threading-worker-latency',
@@ -262,11 +269,7 @@ async function main(): Promise<void> {
       mainThreadCacheHit: summarize(cachedRoundTrips),
     },
     correctness: {
-      initialByteIdentical: JSON.stringify(firstWorkerCards) === JSON.stringify(initialExpected),
-      streamingByteIdentical: JSON.stringify(finalStreamingCards) === JSON.stringify(streamingExpected),
-      mutationFallbackByteIdentical: JSON.stringify(mutatedCards) === JSON.stringify(formatTranscriptCards(mutatedThreaded)),
-      truncationFallbackByteIdentical: JSON.stringify(truncatedCards) === JSON.stringify(formatTranscriptCards(truncatedThreaded)),
-      taskListFallbackByteIdentical: JSON.stringify(taskListCards) === JSON.stringify(formatTranscriptCards(taskListThreaded)),
+      ...correctness,
       checksums: {
         mutation: checksum(mutatedCards),
         mutationExpected: checksum(formatTranscriptCards(mutatedThreaded)),
@@ -280,7 +283,7 @@ async function main(): Promise<void> {
     },
   }
   process.stdout.write(`${JSON.stringify(output)}\n`)
-  process.exit(0)
+  process.exit(Object.values(correctness).some((value) => !value) ? 1 : 0)
 }
 
 void main().catch((error) => {

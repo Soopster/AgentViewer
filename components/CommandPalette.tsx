@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { BarChart3, Bookmark, BookOpen, Bot, Database, FileSearch, FolderOpen, Fullscreen, GitBranch, GitPullRequest, Layers3, ListTodo, Maximize2, MessageSquare, Minimize2, PanelLeftOpen, PanelRightOpen, Plug, Radio, RefreshCw, Search, SlidersHorizontal, Smartphone, SquareTerminal, UsersRound } from 'lucide-react'
+import { BarChart3, Bookmark, BookOpen, Bot, Database, FileSearch, FolderOpen, Fullscreen, GitBranch, GitPullRequest, Layers3, ListTodo, Maximize2, MessageSquare, Minimize2, PanelLeftOpen, PanelRight, PanelRightOpen, Plug, Radio, RefreshCw, Search, SlidersHorizontal, Smartphone, SquareTerminal, UsersRound } from 'lucide-react'
 
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
 import { SidebarGlyph, useSidebar } from '@/components/ui/sidebar'
@@ -9,6 +9,13 @@ import { normalizeProjectPath, pathBasename, sameProjectPath } from '@/lib/proje
 import { applyTheme, getCurrentTheme, subscribeTheme, THEME_GROUPS, THEME_META } from '@/lib/themes'
 import type { PersistedSearchMatch, PersistedSearchResult, PersistedSessionRecord } from '@/lib/sessionPersistence'
 import type { AgentProvider, ProviderInstanceSummary, ProviderSelection, Session } from '@/lib/types'
+import {
+  RIGHT_PANEL_SURFACE_KINDS,
+  surfaceKindDescription,
+  surfaceKindLabel,
+  surfaceKindShortcut,
+  type RightPanelSurfaceKind,
+} from '@/lib/rightPanel'
 
 type ProjectSelection = {
   key: string
@@ -46,6 +53,10 @@ type CommandPaletteProps = {
   onChangeScope: (mode: 'all' | 'project') => void
   onToggleWorktrees: (include: boolean) => void
   onToggleMessagePane: () => void
+  rightPanelOpen: boolean
+  rightPanelAvailability: Readonly<Record<RightPanelSurfaceKind, boolean>>
+  onToggleRightPanel: () => void
+  onOpenRightPanelSurface: (kind: RightPanelSurfaceKind) => void
   onToggleMessageViewMaximized: () => void
   onEnterMessageViewFullscreen: () => void
   onOpenGit: () => void
@@ -342,6 +353,10 @@ export default function CommandPalette({
   onChangeScope,
   onToggleWorktrees,
   onToggleMessagePane,
+  rightPanelOpen,
+  rightPanelAvailability,
+  onToggleRightPanel,
+  onOpenRightPanelSurface,
   onToggleMessageViewMaximized,
   onEnterMessageViewFullscreen,
   onOpenGit,
@@ -524,6 +539,28 @@ export default function CommandPalette({
         score: 0,
         run: onToggleMessagePane,
       },
+      {
+        id: 'toggle-right-panel',
+        label: rightPanelOpen ? 'Hide right panel' : 'Show right panel',
+        description: 'Browser, terminal, files, diff, pull request and agents beside the transcript',
+        icon: <PanelRight size={16} />,
+        shortcut: 'Ctrl B',
+        group: 'actions',
+        keywords: ['right', 'panel', 'surface', 'sidebar', 'dock', 'browser', 'terminal'],
+        score: 0,
+        run: onToggleRightPanel,
+      },
+      ...RIGHT_PANEL_SURFACE_KINDS.map((kind) => ({
+        id: `right-panel-${kind}`,
+        label: `Open ${surfaceKindLabel(kind).toLowerCase()} in the right panel`,
+        description: rightPanelAvailability[kind] ? surfaceKindDescription(kind) : 'Not available right now',
+        icon: <PanelRight size={16} />,
+        shortcut: surfaceKindShortcut(kind),
+        group: 'actions' as const,
+        keywords: ['right', 'panel', 'surface', kind, surfaceKindLabel(kind).toLowerCase()],
+        score: 0,
+        run: () => onOpenRightPanelSurface(kind),
+      })),
       {
         id: 'toggle-message-view-maximized',
         label: messageViewMaximized ? 'Restore app chrome' : 'Maximize transcript',
@@ -814,7 +851,7 @@ export default function CommandPalette({
     }
 
     return items
-  }, [canMaximizeMessageView, canOpenFiles, canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, messageViewFullscreen, messageViewMaximized, onChangeProvider, onChangeScope, onEnterMessageViewFullscreen, onOpenFiles, onOpenGit, onOpenPullRequests, onOpenCoordinator, onOpenCrossSessionMessaging, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onOpenProvenance, onOpenRemoteAccess, onToggleMessagePane, onToggleMessageViewMaximized, onToggleWorktrees, provider, providerInstanceId, providerInstances, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
+  }, [rightPanelOpen, rightPanelAvailability, onToggleRightPanel, onOpenRightPanelSurface, canMaximizeMessageView, canOpenFiles, canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, messageViewFullscreen, messageViewMaximized, onChangeProvider, onChangeScope, onEnterMessageViewFullscreen, onOpenFiles, onOpenGit, onOpenPullRequests, onOpenCoordinator, onOpenCrossSessionMessaging, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onOpenProvenance, onOpenRemoteAccess, onToggleMessagePane, onToggleMessageViewMaximized, onToggleWorktrees, provider, providerInstanceId, providerInstances, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
 
   const projectItems = useMemo(() => {
     const groups = new Map<string, {

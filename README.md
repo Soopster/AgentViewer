@@ -368,6 +368,16 @@ npm run doctor     # React diagnostics helper
 
 OpenTUI is the default terminal runtime. It supports provider selection, session navigation, transcript reading, tabs, search, folding, density and focus controls, theme selection, analytics, Git status, clipboard copy, refresh, and provider-backed sends where wired through the shared TUI service.
 
+When a provider asks for permission to open a URL, OpenTUI uses the installed `terminal-browser` package to open a borderless browser in a right-hand terminal split (`terminal-browser open <url> --split right --app-mode`). Set `AGENT_VIEWER_DISABLE_TERMINAL_BROWSER=1` to use the native desktop opener instead, or `AGENT_VIEWER_TERMINAL_BROWSER` to select a different executable.
+
+### Surface panel
+
+Both UIs can dock an auxiliary surface beside the transcript instead of covering it: a **browser**, a **shell**, the **file** browser, the **diff**, this branch's **pull request**, or **agents**. The panel is a shell around the components the full-screen overlays already use, so a surface shows the same thing in either place; the overlays and their shortcuts are unchanged.
+
+On the web, the panel-right button in the transcript top bar (or `Ctrl+B`, or the command palette) opens it. With nothing open it shows a launcher — `B`, `T`, `F`, `D`, `P`, `A` pick a surface — and after that a tab strip with a `+` for more, so a browser, a shell and a diff can stay open together. Browser, terminal and file surfaces can each be opened more than once; the rest are singletons because their content comes entirely from the active project. Drag the panel's left edge to resize it, or use the expand button to give it the whole content area.
+
+In OpenTUI, `⇧O` opens the panel and takes focus; `⇧O` again returns focus, and once more closes it. `Escape` leaves the panel without closing it, `⌃N` / `⌃P` move between surface tabs, `⌃T` adds one, `⌃W` closes one, `=` expands the panel to everything the reader's minimum leaves, and `<` / `>` resize it. It is mouse-driven too: click a launcher card to open a surface, a tab to switch, its `×` to close, `⌃T +` to add — and clicking anywhere in the panel takes focus, while clicking the transcript or composer hands it back. The panel runs the full height of the window, past the composer, which stops short of its column. The terminal's browser surface hands the URL to `terminal-browser` (see below) rather than pretending to render a page in a text cell, and its shell surface runs one command at a time in the workspace.
+
 Transcript splits use a tmux-style `Ctrl+B` prefix (`Ctrl+B %` to add, `Ctrl+B o` to focus, and `Ctrl+B x` to close the focused pane). Inside tmux, tmux consumes `Ctrl+B`; use the `?` command palette for split actions, or send tmux's prefix through before the Agent Viewer chord.
 
 ### Agent Teams

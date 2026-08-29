@@ -22,6 +22,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
+import { isDocked, shouldIgnoreDockedKey, type SurfaceVariant } from './surfaceVariant'
 import { DIFF_WORKER_POOL_OPTIONS, PierreBuiltInIconSprite, PierreFileTypeIcon } from '@/components/PierreDiffView'
 import type {
   PullRequestComment, PullRequestDetail, PullRequestFile, PullRequestMutation,
@@ -38,6 +39,8 @@ type Props = {
   onLinkToSession?: (pr: { repo: string; number: number; url: string; cwd: string }) => void
   /** PR number already linked to the active session, if any. */
   linkedPrNumber?: number
+  /** 'docked' drops the modal scrim and fills its container (right panel). */
+  variant?: SurfaceVariant
 }
 
 type TabId = 'conversation' | 'commits' | 'checks' | 'files'
@@ -67,6 +70,9 @@ const STATUS_META: Record<string, { letter: string; color: string }> = {
 const MONO = "'IBM Plex Mono', monospace"
 
 const LEFT_PANE_MIN_WIDTH = 240
+/** Docked in the right panel the whole shell is barely wider than the floating
+ *  popover's file tree, so the tree gets a smaller floor to leave the diff room. */
+const LEFT_PANE_DOCKED_MIN_WIDTH = 190
 const LEFT_PANE_DEFAULT_WIDTH = 320
 const LEFT_PANE_EXPANDED_WIDTH = 520
 const LEFT_PANE_MAX_WIDTH_RATIO = 0.5
@@ -367,7 +373,7 @@ function checkStateIcon(state: 'success' | 'failure' | 'pending' | 'neutral', si
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function PullRequestView({ open, cwd, onClose, onAskAgent, onLinkToSession, linkedPrNumber }: Props) {
+export default function PullRequestView({ open, cwd, onClose, onAskAgent, onLinkToSession, linkedPrNumber, variant }: Props) {
   const [workspace, setWorkspace] = useState<PullRequestWorkspace | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -384,7 +390,11 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent, onLink
   const [busyAction, setBusyAction] = useState<string | null>(null)
   const [prPickerOpen, setPrPickerOpen] = useState(false)
   const [leftPaneMode, setLeftPaneMode] = useState<'normal' | 'expanded' | 'hidden'>('normal')
-  const [leftPaneWidth, setLeftPaneWidth] = useState(LEFT_PANE_DEFAULT_WIDTH)
+  // Docked, the tree starts at its floor so the diff — the thing you docked the
+  // panel to read — gets the rest; floating, the tree keeps its roomy default.
+  const [leftPaneWidth, setLeftPaneWidth] = useState(
+    variant === 'docked' ? LEFT_PANE_DOCKED_MIN_WIDTH : LEFT_PANE_DEFAULT_WIDTH,
+  )
   const [viewedFiles, setViewedFiles] = useState<ReadonlySet<string>>(() => new Set())
   const [pending, setPending] = useState<PendingComment[]>([])
   const [reviewPanelOpen, setReviewPanelOpen] = useState(false)
@@ -436,6 +446,9 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent, onLink
   useEffect(() => {
     if (!open) return
     const onKeyDown = (event: KeyboardEvent) => {
+      // Docked, the transcript and composer are alive beside this panel, so
+      // j/k and Escape only apply while focus is inside the shell.
+      if (shouldIgnoreDockedKey(variant, shellRef.current)) return
       const target = event.target as HTMLElement | null
       const typing = target && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT' || target.isContentEditable)
       if (event.key === 'Escape') {
@@ -461,7 +474,7 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent, onLink
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onClose, open, prPickerOpen, reviewPanelOpen, tab, viewOptionsOpen])
+  }, [onClose, open, prPickerOpen, reviewPanelOpen, tab, variant, viewOptionsOpen])
 
   const items = useMemo(() => (pr ? buildReviewItems(pr, pending) : []), [pr]) // eslint-disable-line react-hooks/exhaustive-deps -- pending is injected imperatively after mount; items only seed the uncontrolled CodeView
   const itemIds = useMemo(() => items.map((item) => item.id), [items])
@@ -833,9 +846,27 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent, onLink
 
   function clampLeftPaneWidth(width: number): number {
     const shellWidth = shellRef.current?.getBoundingClientRect().width ?? window.innerWidth
-    const maxWidth = Math.max(LEFT_PANE_MIN_WIDTH, Math.min(LEFT_PANE_EXPANDED_WIDTH, Math.floor(shellWidth * LEFT_PANE_MAX_WIDTH_RATIO)))
-    return Math.max(LEFT_PANE_MIN_WIDTH, Math.min(width, maxWidth))
+    const minWidth = variant === 'docked' ? LEFT_PANE_DOCKED_MIN_WIDTH : LEFT_PANE_MIN_WIDTH
+    const maxWidth = Math.max(minWidth, Math.min(LEFT_PANE_EXPANDED_WIDTH, Math.floor(shellWidth * LEFT_PANE_MAX_WIDTH_RATIO)))
+    return Math.max(minWidth, Math.min(width, maxWidth))
   }
+
+  // The pane width is only clamped when the *user* changes it, which is enough
+  // for a full-screen popover whose shell never resizes. Docked, the shell is
+  // whatever the panel is dragged to, so re-clamp whenever the shell resizes.
+  useEffect(() => {
+    const shell = shellRef.current
+    if (!shell || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => {
+      setLeftPaneWidth((current) => {
+        const next = clampLeftPaneWidth(current)
+        return next === current ? current : next
+      })
+    })
+    observer.observe(shell)
+    return () => observer.disconnect()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- clampLeftPaneWidth reads refs only
+  }, [variant])
 
   function setPresetLeftPaneWidth(mode: 'normal' | 'expanded') {
     setLeftPaneMode(mode)
@@ -896,24 +927,35 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent, onLink
     </button>
   )
 
+  const docked = isDocked(variant)
+
   return (
     <div
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
+      onClick={docked ? undefined : onClose}
+      role={docked ? undefined : 'dialog'}
+      aria-modal={docked ? undefined : true}
       aria-labelledby="pr-view-title"
-      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 8 }}
+      style={docked
+        ? { display: 'flex', flex: 1, minWidth: 0, minHeight: 0 }
+        : { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 8 }}
     >
       <PierreBuiltInIconSprite />
       <div
         ref={shellRef}
+        tabIndex={docked ? -1 : undefined}
         onClick={(event) => event.stopPropagation()}
-        style={{
-          width: 'min(1680px, calc(100vw - 16px))', height: 'calc(100vh - 16px)',
-          background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 12,
-          boxShadow: '0 24px 60px rgba(0,0,0,0.45)', display: 'flex', flexDirection: 'column', overflow: 'hidden',
-          color: 'var(--text)',
-        }}
+        style={docked
+          ? {
+              flex: 1, minWidth: 0, minHeight: 0, background: 'var(--surface)',
+              display: 'flex', flexDirection: 'column', overflow: 'hidden',
+              color: 'var(--text)', outline: 'none',
+            }
+          : {
+              width: 'min(1680px, calc(100vw - 16px))', height: 'calc(100vh - 16px)',
+              background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 12,
+              boxShadow: '0 24px 60px rgba(0,0,0,0.45)', display: 'flex', flexDirection: 'column', overflow: 'hidden',
+              color: 'var(--text)',
+            }}
       >
         {/* ── Header ─────────────────────────────────────── */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)', flexShrink: 0 }}>
@@ -1000,7 +1042,13 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent, onLink
         </div>
 
         {/* ── Tabs row ───────────────────────────────────── */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px', borderBottom: '1px solid var(--border)', background: 'var(--surface)', flexShrink: 0 }}>
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px',
+          borderBottom: '1px solid var(--border)', background: 'var(--surface)', flexShrink: 0,
+          // Docked, four tabs plus the view controls exceed the panel width;
+          // scroll the row rather than clipping the last tab off the edge.
+          overflowX: docked ? 'auto' : undefined,
+        }}>
           {tabButton('conversation', <MessageSquare size={15} />, 'Conversation', pr ? countBadge(conversation.length + inlineCommentCount) : null)}
           {tabButton('commits', <GitCommitHorizontal size={15} />, 'Commits', pr ? countBadge(pr.commits.length) : null)}
           {tabButton('checks', <ListChecks size={15} />, 'Checks', pr ? countBadge(pr.checks.length, failingChecks > 0 ? 'var(--red)' : checkSummary && checkSummary.success > 0 ? 'var(--green)' : undefined) : null)}

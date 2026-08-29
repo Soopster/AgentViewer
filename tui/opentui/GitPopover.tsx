@@ -522,6 +522,8 @@ type Props = {
   cwd?: string | null
   scopeLabel?: string
   zIndex?: number
+  /** Docked in the surface panel: fill the given box in flow, no scrim margin. */
+  docked?: boolean
   theme: TuiThemePalette
   width: number
   height: number
@@ -530,7 +532,7 @@ type Props = {
   onSendDiffNoteToComposer?: (prompt: string) => void
 }
 
-export function GitPopover({ cwd, scopeLabel, zIndex = 50, theme, width, height, onClose, onKeyHandlerReady, onSendDiffNoteToComposer }: Props) {
+export function GitPopover({ cwd, scopeLabel, zIndex = 50, docked = false, theme, width, height, onClose, onKeyHandlerReady, onSendDiffNoteToComposer }: Props) {
   const repoCwd = cwd || process.cwd()
   const [data, setData] = useState<GitData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -1031,8 +1033,10 @@ export function GitPopover({ cwd, scopeLabel, zIndex = 50, theme, width, height,
   }, [focusSide, leftPaneMode])
 
   // Dimensions
-  const popW = width - 4
-  const popH = height - 4
+  // Docked the panel already reserves its own margins, so the popover fills the
+  // box it is given; floating it insets by the scrim's 2-cell gutter.
+  const popW = docked ? width : width - 4
+  const popH = docked ? height : height - 4
   const defaultLeftW = Math.min(LEFT_PANE_DEFAULT_MAX_WIDTH, Math.floor(popW * 0.28))
   const minLeftW = Math.min(LEFT_PANE_MIN_WIDTH, Math.max(defaultLeftW, popW - LEFT_PANE_RIGHT_MIN_WIDTH - 4))
   const maxLeftW = Math.max(defaultLeftW, Math.min(Math.floor(popW * LEFT_PANE_EXPANDED_RATIO), popW - LEFT_PANE_RIGHT_MIN_WIDTH - 4))
@@ -1040,7 +1044,11 @@ export function GitPopover({ cwd, scopeLabel, zIndex = 50, theme, width, height,
   const leftPaneExpanded = leftPaneMode === 'expanded'
   const leftW = leftPaneHidden ? 0 : Math.max(minLeftW, Math.min(leftPaneWidth, maxLeftW))
   const dividerW = leftPaneHidden ? 0 : 1
-  const rightW = Math.max(LEFT_PANE_RIGHT_MIN_WIDTH, popW - leftW - dividerW - 2)
+  // The right pane takes whatever the left pane and dividers leave. Clamping it
+  // up to LEFT_PANE_RIGHT_MIN_WIDTH would overflow a panel narrower than the two
+  // minimums combined — the left pane already shrinks first (minLeftW), so once
+  // it is at its floor the only honest answer is the remaining width.
+  const rightW = Math.max(8, popW - leftW - dividerW - 2)
   const popTop = Math.floor((height - popH) / 2)
   const popLeft = Math.floor((width - popW) / 2)
 
@@ -1221,16 +1229,16 @@ export function GitPopover({ cwd, scopeLabel, zIndex = 50, theme, width, height,
 
   return (
     <box
-      position="absolute"
-      top={popTop}
-      left={popLeft}
+      position={docked ? undefined : 'absolute'}
+      top={docked ? undefined : popTop}
+      left={docked ? undefined : popLeft}
       width={popW}
       height={popH}
       border
       borderStyle="single"
       borderColor={theme.border2}
       backgroundColor={theme.surface}
-      zIndex={zIndex}
+      zIndex={docked ? undefined : zIndex}
       flexDirection="row"
       title={scopeLabel ? ` Git · ${fitTerminalText(scopeLabel, Math.max(popW - 10, 8))} ` : ' Git '}
       titleColor={theme.cyan}

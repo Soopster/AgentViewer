@@ -15,6 +15,8 @@ export type FileViewerKeyEvent = {
 
 type Props = {
   cwd?: string | null
+  /** Docked in the surface panel: fill the given box in flow, no scrim margin. */
+  docked?: boolean
   theme: TuiThemePalette
   width: number
   height: number
@@ -233,6 +235,7 @@ async function loadPreview(
 
 export function FileViewerPopover({
   cwd,
+  docked = false,
   theme,
   width,
   height,
@@ -482,9 +485,14 @@ export function FileViewerPopover({
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
 
-  const popW = Math.max(72, width - 4)
-  const popH = Math.max(18, height - 4)
-  const leftW = Math.max(20, Math.floor((popW - 2) * 0.22))
+  // Docked the panel already reserves its own margins, so the popover fills the
+  // box it is given; floating it insets by the scrim's 2-cell gutter.
+  const popW = docked ? Math.max(40, width) : Math.max(72, width - 4)
+  const popH = docked ? Math.max(12, height) : Math.max(18, height - 4)
+  // Three columns do not fit a narrow dock. The parent listing is the one that
+  // can go — it is reachable with `h` — leaving the listing and the preview.
+  const narrow = popW < 72
+  const leftW = narrow ? 0 : Math.max(20, Math.floor((popW - 2) * 0.22))
   const middleW = Math.max(26, Math.floor((popW - 2) * 0.34))
   const previewW = previewExpanded ? popW - 2 : Math.max(24, popW - leftW - middleW - 4)
   const contentH = popH - 5
@@ -496,12 +504,12 @@ export function FileViewerPopover({
 
   return (
     <box
-      position="absolute"
-      top={Math.max(0, Math.floor((height - popH) / 2))}
-      left={Math.max(0, Math.floor((width - popW) / 2))}
+      position={docked ? undefined : 'absolute'}
+      top={docked ? undefined : Math.max(0, Math.floor((height - popH) / 2))}
+      left={docked ? undefined : Math.max(0, Math.floor((width - popW) / 2))}
       width={popW}
       height={popH}
-      zIndex={50}
+      zIndex={docked ? undefined : 50}
       border
       borderStyle="rounded"
       borderColor={theme.cyan}
@@ -519,7 +527,7 @@ export function FileViewerPopover({
         </text>
       </box>
       <box flexDirection="row" height={contentH}>
-        {!previewExpanded ? <box width={leftW} border borderStyle="single" borderColor={theme.border} title=" Parent " flexDirection="column">
+        {!previewExpanded && !narrow ? <box width={leftW} border borderStyle="single" borderColor={theme.border} title=" Parent " flexDirection="column">
           <text fg={theme.dim}>{fitText(parentPath, leftW - 2)}</text>
           <scrollbox style={{ height: contentH - 3 }}>
             {parentEntries.map((entry) => {

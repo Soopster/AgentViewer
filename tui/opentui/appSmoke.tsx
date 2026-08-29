@@ -73,10 +73,10 @@ const orderedPaletteFrame = captureCharFrame()
 if (!orderedPaletteFrame.includes('▎Previous search match')) {
   throw new Error(`Command palette keyboard navigation diverged from its visible category order:\n${orderedPaletteFrame}`)
 }
-await act(async () => {
-  await setup.mockInput.typeText('coordinated')
-  await setup.flush()
-})
+for (const key of 'coordinated') {
+  act(() => { setup.mockInput.pressKey(key) })
+  await act(async () => { await setup.flush() })
+}
 const shortcutPaletteFrame = captureCharFrame()
 if (!shortcutPaletteFrame.includes('Start coordinated run') || !shortcutPaletteFrame.includes('⌃K n / ⌃⇧N')) {
   throw new Error(`Command palette did not advertise the portable coordinated-run shortcut:\n${shortcutPaletteFrame}`)

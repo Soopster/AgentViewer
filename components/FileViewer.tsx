@@ -32,6 +32,7 @@ import { CommandDialog } from '@/components/ui/command'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
+import { isDocked, shouldIgnoreDockedKey, type SurfaceVariant } from './surfaceVariant'
 
 const CodeViewer = dynamic(() => import('./CodeRenderers').then((module) => module.CodeViewer), {
   ssr: false,
@@ -72,6 +73,8 @@ type Props = {
   provider?: string
   onOpenChange: (open: boolean) => void
   onInsertPath?: (path: string) => void
+  /** 'docked' drops the modal dialog and fills its container (right panel). */
+  variant?: SurfaceVariant
 }
 
 const DEFAULT_ICON: IconSpec = { icon: File, tone: 'default' }
@@ -201,7 +204,12 @@ function FileRow({ entry, selected, onClick, onDoubleClick }: {
   )
 }
 
-export default function FileViewer({ open, cwd, canInsert, sessionId, provider, onOpenChange, onInsertPath }: Props) {
+export default function FileViewer({ open, cwd, canInsert, sessionId, provider, onOpenChange, onInsertPath, variant }: Props) {
+  const dockedShellRef = useRef<HTMLDivElement | null>(null)
+  // Docked, the shell is whatever the panel is dragged (or expanded) to, so the
+  // three-column layout is chosen from the measured width rather than from the
+  // variant: a narrow dock drops the parent listing, an expanded one keeps it.
+  const [dockedShellWidth, setDockedShellWidth] = useState<number | null>(null)
   const [directory, setDirectory] = useState(cwd)
   const [directoryData, setDirectoryData] = useState<DirectoryResponse | null>(null)
   const [preview, setPreview] = useState<PreviewResponse | null>(null)
@@ -336,6 +344,9 @@ export default function FileViewer({ open, cwd, canInsert, sessionId, provider, 
   useEffect(() => {
     if (!open) return
     const handleKeyDown = (event: KeyboardEvent) => {
+      // Docked, the transcript and composer are alive beside this panel, so the
+      // bare-letter bindings only apply while focus is inside the shell.
+      if (shouldIgnoreDockedKey(variant, dockedShellRef.current)) return
       const target = event.target as HTMLElement | null
       const typing = target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA'
       if (event.key === 'Escape') {
@@ -416,28 +427,28 @@ export default function FileViewer({ open, cwd, canInsert, sessionId, provider, 
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [activateEntry, entries.length, filter, focusedPane, goParent, onOpenChange, open, preview, previewEntries.length, previewExpanded, selectedEntry, selectedPreviewEntry])
+  }, [activateEntry, entries.length, filter, focusedPane, goParent, onOpenChange, open, preview, previewEntries.length, previewExpanded, selectedEntry, selectedPreviewEntry, variant])
+
+  useEffect(() => {
+    const shell = dockedShellRef.current
+    if (!shell || typeof ResizeObserver === 'undefined') return
+    const measure = () => setDockedShellWidth(shell.clientWidth)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(shell)
+    return () => observer.disconnect()
+  }, [variant])
 
   const breadcrumbs = useMemo(() => buildBreadcrumbs(directoryData?.path ?? directory), [directory, directoryData?.path])
   const currentName = breadcrumbs.at(-1)?.label ?? directory
 
-  return (
-    <CommandDialog
-      open={open}
-      onOpenChange={onOpenChange}
-      centered
-      insetPadding={8}
-      ariaLabel="File browser"
-      className="flex-col rounded-2xl"
-      style={{
-        width: 'min(calc(100vw - 16px), 2000px)',
-        height: 'calc(100vh - 16px)',
-        maxWidth: 2000,
-        maxHeight: 'calc(100vh - 16px)',
-        borderColor: 'var(--border-2)',
-        boxShadow: '0 24px 60px rgba(0,0,0,0.45)',
-      }}
-    >
+  const docked = isDocked(variant)
+  // 190 + 300 + 360 is what three columns need; below that the parent listing
+  // goes (`h` still walks up) rather than the layout overflowing.
+  const dockedNarrow = docked && (dockedShellWidth ?? 0) < 880
+
+  const body = (
+    <>
       <div
         className="flex h-16 shrink-0 items-center border-b border-[var(--border)]"
         style={{ gap: 12, padding: '0 16px', background: 'var(--surface-2)' }}
@@ -494,9 +505,9 @@ export default function FileViewer({ open, cwd, canInsert, sessionId, provider, 
 
       <div
         className="flex shrink-0 items-center border-b border-[var(--border)]"
-        style={{ gap: 10, minHeight: 54, padding: '8px 16px', background: 'var(--surface)' }}
+        style={{ gap: 10, minHeight: 54, padding: '8px 16px', background: 'var(--surface)', flexWrap: dockedNarrow ? 'wrap' : undefined }}
       >
-        <div className="relative shrink-0" style={{ width: 'clamp(260px, 26vw, 380px)' }}>
+        <div className="relative shrink-0" style={{ width: docked ? 'min(100%, 320px)' : 'clamp(260px, 26vw, 380px)' }}>
           <Search
             className="pointer-events-none absolute top-1/2 size-4 -translate-y-1/2 text-[var(--text-3)]"
             style={{ left: 14 }}
@@ -564,9 +575,20 @@ export default function FileViewer({ open, cwd, canInsert, sessionId, provider, 
 
       <div
         className="grid min-h-0 flex-1 bg-[var(--surface)]"
-        style={{ gridTemplateColumns: previewExpanded ? 'minmax(0, 1fr)' : 'minmax(190px, 24%) minmax(300px, 34%) minmax(360px, 1fr)' }}
+        style={{
+          gridTemplateColumns: previewExpanded
+            ? 'minmax(0, 1fr)'
+            // Docked in the right panel there is no room for three columns
+            // (their minimums alone come to 850px). The parent listing is the
+            // one that goes — `h` still walks up — leaving listing and preview.
+            : dockedNarrow
+            ? 'minmax(0, 40%) minmax(0, 1fr)'
+            : docked
+            ? 'minmax(0, 22%) minmax(0, 32%) minmax(0, 1fr)'
+            : 'minmax(190px, 24%) minmax(300px, 34%) minmax(360px, 1fr)',
+        }}
       >
-        {!previewExpanded ? <section className="flex min-h-0 flex-col border-r border-[var(--border)]" aria-label="Parent directory">
+        {!previewExpanded && !dockedNarrow ? <section className="flex min-h-0 flex-col border-r border-[var(--border)]" aria-label="Parent directory">
           <div className="flex h-11 shrink-0 items-center text-xs font-bold text-[var(--text)]" style={{ padding: '0 14px', background: 'var(--surface-2)' }}>Parent</div>
           <Separator />
           <div className="min-h-0 flex-1 overflow-y-auto" style={{ padding: '12px 14px' }}>
@@ -664,6 +686,40 @@ export default function FileViewer({ open, cwd, canInsert, sessionId, provider, 
         {error ? <span className="text-[var(--red)]">{error}</span> : null}
         <span className={canInsert ? 'text-[var(--text-2)]' : 'text-[var(--text-3)]'}>{canInsert ? 'Enter file · add to composer' : 'Select a session to insert files'}</span>
       </div>
+    </>
+  )
+
+  if (docked) {
+    return (
+      <div
+        ref={dockedShellRef}
+        tabIndex={-1}
+        className="flex flex-col"
+        style={{ flex: 1, minWidth: 0, minHeight: 0, background: 'var(--surface)', outline: 'none' }}
+      >
+        {body}
+      </div>
+    )
+  }
+
+  return (
+    <CommandDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      centered
+      insetPadding={8}
+      ariaLabel="File browser"
+      className="flex-col rounded-2xl"
+      style={{
+        width: 'min(calc(100vw - 16px), 2000px)',
+        height: 'calc(100vh - 16px)',
+        maxWidth: 2000,
+        maxHeight: 'calc(100vh - 16px)',
+        borderColor: 'var(--border-2)',
+        boxShadow: '0 24px 60px rgba(0,0,0,0.45)',
+      }}
+    >
+      {body}
     </CommandDialog>
   )
 }

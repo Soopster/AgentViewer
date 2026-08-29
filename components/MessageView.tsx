@@ -46,7 +46,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import dynamic from 'next/dynamic'
-import { ArrowUp, BookOpen, ChartNetwork, ChevronDown, CircleAlert, CircleCheck, Clock3, FileCode2, Filter, Fullscreen, GitBranch, LoaderCircle, Maximize2, Minimize2, MonitorUp, Paperclip, Plug, Radio, RotateCcw, Search, Square, Terminal, TriangleAlert, X } from 'lucide-react'
+import { ArrowUp, BookOpen, ChartNetwork, ChevronDown, CircleAlert, CircleCheck, Clock3, FileCode2, Filter, Fullscreen, GitBranch, LoaderCircle, Maximize2, Minimize2, MonitorUp, PanelRight, Paperclip, Plug, Radio, RotateCcw, Search, Square, Terminal, TriangleAlert, X } from 'lucide-react'
 import MessageItem, { MessageDensityProvider, ViewModeProvider, DiffStyleProvider, DiffOptionsProvider, type MessageDensity, type WebViewMode } from './MessageItem'
 import { useChannelBridge } from './useChannelBridge'
 import { useIdeBridge } from './useIdeBridge'
@@ -182,6 +182,9 @@ type Props = {
   maximized?: boolean
   onToggleMaximized?: () => void
   onEnterFullscreen?: () => void
+  /** Right-hand surface panel (browser/terminal/files/diff/PR/agents). */
+  rightPanelOpen?: boolean
+  onToggleRightPanel?: () => void
 }
 
 type CopilotContextTier = 'default' | 'long_context'
@@ -3032,6 +3035,8 @@ function MessageViewInner({
   maximized = false,
   onToggleMaximized,
   onEnterFullscreen,
+  rightPanelOpen,
+  onToggleRightPanel,
 }: Props) {
   const [inputText, setInputText] = useState('')
   const [sendState, setSendState] = useState<SendState>('idle')
@@ -8200,6 +8205,32 @@ function MessageViewInner({
             }}
           >
             <Maximize2 size={13} aria-hidden="true" />
+          </Button>
+        ) : null}
+
+        {onToggleRightPanel ? (
+          <Button
+            type="button"
+            onClick={onToggleRightPanel}
+            title={rightPanelOpen ? 'Hide right panel' : 'Show right panel'}
+            aria-label={rightPanelOpen ? 'Hide right panel' : 'Show right panel'}
+            aria-pressed={rightPanelOpen ? true : false}
+            variant="outline"
+            size="sm"
+            className="av-hover-control"
+            style={{
+              flexShrink: 0,
+              width: 28,
+              height: 26,
+              padding: 0,
+              background: rightPanelOpen ? 'var(--surface-3)' : 'transparent',
+              border: `1px solid ${rightPanelOpen ? 'color-mix(in srgb, var(--cyan) 40%, var(--border))' : 'var(--border)'}`,
+              borderRadius: 5,
+              color: rightPanelOpen ? 'var(--cyan)' : 'var(--text-2)',
+              cursor: 'pointer',
+            }}
+          >
+            <PanelRight size={13} aria-hidden="true" />
           </Button>
         ) : null}
 

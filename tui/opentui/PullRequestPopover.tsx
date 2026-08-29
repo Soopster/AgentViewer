@@ -29,6 +29,8 @@ const PR_COMPOSER_KEY_BINDINGS: ComposerKeyBinding[] = [
 
 type Props = {
   cwd?: string | null
+  /** Docked in the surface panel: fill the given box in flow, no scrim margin. */
+  docked?: boolean
   theme: TuiThemePalette
   width: number
   height: number
@@ -489,6 +491,7 @@ function clampNumber(value: number, min: number, max: number): number {
 
 export function PullRequestPopover({
   cwd,
+  docked = false,
   theme,
   width,
   height,
@@ -563,8 +566,10 @@ export function PullRequestPopover({
   }, [pr?.number])
 
   // ── Dimensions (mirrors GitPopover) ──────────────────────────────────────
-  const popW = Math.max(width - 4, 60)
-  const popH = Math.max(height - 4, 16)
+  // Docked the panel already reserves its own margins, so the popover fills the
+  // box it is given; floating it insets by the scrim's 2-cell gutter.
+  const popW = docked ? Math.max(width, 40) : Math.max(width - 4, 60)
+  const popH = docked ? Math.max(height, 12) : Math.max(height - 4, 16)
   const popTop = Math.floor((height - popH) / 2)
   const popLeft = Math.floor((width - popW) / 2)
   const defaultLeftW = Math.min(LEFT_PANE_DEFAULT_MAX_WIDTH, Math.floor(popW * 0.28))
@@ -573,7 +578,11 @@ export function PullRequestPopover({
   const leftPaneHidden = leftPaneMode === 'hidden'
   const leftW = leftPaneHidden ? 0 : Math.max(minLeftW, Math.min(leftPaneWidth, maxLeftW))
   const dividerW = leftPaneHidden ? 0 : 1
-  const rightW = Math.max(LEFT_PANE_RIGHT_MIN_WIDTH, popW - leftW - dividerW - 2)
+  // The right pane takes whatever the left pane and dividers leave. Clamping it
+  // up to LEFT_PANE_RIGHT_MIN_WIDTH would overflow a panel narrower than the two
+  // minimums combined — the left pane already shrinks first (minLeftW), so once
+  // it is at its floor the only honest answer is the remaining width.
+  const rightW = Math.max(8, popW - leftW - dividerW - 2)
   const innerH = popH - 2
   const bodyH = innerH - 1        // bottom action bar
   const diffRows = Math.max(bodyH - 1, 4)  // top hint bar
@@ -1283,16 +1292,16 @@ export function PullRequestPopover({
 
   return (
     <box
-      position="absolute"
-      top={popTop}
-      left={popLeft}
+      position={docked ? undefined : 'absolute'}
+      top={docked ? undefined : popTop}
+      left={docked ? undefined : popLeft}
       width={popW}
       height={popH}
       border
       borderStyle="single"
       borderColor={theme.border2}
       backgroundColor={theme.surface}
-      zIndex={50}
+      zIndex={docked ? undefined : 50}
       flexDirection="column"
       title=" PR review "
       titleColor={theme.cyan}

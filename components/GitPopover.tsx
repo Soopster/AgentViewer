@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { isDocked, shouldIgnoreDockedKey, type SurfaceVariant } from './surfaceVariant'
 import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react'
 import { ChevronDown, Clock3, Columns2, GitBranch, Hash, Info, ListTree, Maximize2, Minus, PanelLeftClose, PanelLeftOpen, PencilLine, RefreshCw, Rows3, SlidersHorizontal, X } from 'lucide-react'
 import type { SelectedLineRange } from '@pierre/diffs'
@@ -47,6 +48,9 @@ type LeftPaneMode = 'normal' | 'expanded' | 'hidden'
 type PierreAnnotationKind = 'thread' | 'draft'
 
 const LEFT_PANE_MIN_WIDTH = 280
+/** Docked in the right panel the whole shell is barely wider than the floating
+ *  popover's file tree, so the tree gets a smaller floor to leave the diff room. */
+const LEFT_PANE_DOCKED_MIN_WIDTH = 190
 const LEFT_PANE_DEFAULT_WIDTH = 440
 const LEFT_PANE_EXPANDED_WIDTH = 680
 const LEFT_PANE_MAX_WIDTH_RATIO = 0.58
@@ -514,9 +518,11 @@ type Props = {
   open: boolean
   onClose: () => void
   cwd: string
+  /** 'docked' drops the modal scrim and fills its container (right panel). */
+  variant?: SurfaceVariant
 }
 
-export default function GitPopover({ open, onClose, cwd }: Props) {
+export default function GitPopover({ open, onClose, cwd, variant }: Props) {
   const [data, setData] = useState<GitData | null>(null)
   const [loading, setLoading] = useState(false)
   const [pane, setPane] = useState<PaneId>(2)
@@ -525,7 +531,11 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
   const [commitIndex, setCommitIndex] = useState(0)
   const [rightContent, setRightContent] = useState('')
   const [leftPaneMode, setLeftPaneMode] = useState<LeftPaneMode>('normal')
-  const [leftPaneWidth, setLeftPaneWidth] = useState(LEFT_PANE_DEFAULT_WIDTH)
+  // Docked, the tree starts at its floor so the diff — the thing you docked the
+  // panel to read — gets the rest; floating, the tree keeps its roomy default.
+  const [leftPaneWidth, setLeftPaneWidth] = useState(
+    variant === 'docked' ? LEFT_PANE_DOCKED_MIN_WIDTH : LEFT_PANE_DEFAULT_WIDTH,
+  )
   const [diffStyle, setDiffStyle] = useState<PierreDiffStyle>('stacked')
   const [changeStyle, setChangeStyle] = useState<PierreChangeStyle>('classic')
   const [showBackgrounds, setShowBackgrounds] = useState(true)
@@ -707,13 +717,37 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
 
   useEffect(() => {
     if (!open) return
-    window.addEventListener('keydown', handleKey)
-    return () => window.removeEventListener('keydown', handleKey)
-  }, [open, handleKey])
+    // Docked, the transcript and composer are alive beside this panel, so the
+    // bare-letter bindings only apply while focus is inside the shell.
+    const scoped = (event: KeyboardEvent) => {
+      if (shouldIgnoreDockedKey(variant, shellRef.current)) return
+      handleKey(event)
+    }
+    window.addEventListener('keydown', scoped)
+    return () => window.removeEventListener('keydown', scoped)
+  }, [open, handleKey, variant])
 
   useEffect(() => {
     if (leftPaneHidden && focusSide === 'left') setFocusSide('right')
   }, [focusSide, leftPaneHidden])
+
+  // The pane width is only clamped when the *user* changes it, which is enough
+  // for a full-screen popover whose shell never resizes. Docked, the shell is
+  // whatever the panel is dragged to, so a width picked at 900px would leave
+  // the diff a few pixels wide at 560px. Re-clamp whenever the shell resizes.
+  useEffect(() => {
+    const shell = shellRef.current
+    if (!shell || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => {
+      setLeftPaneWidth((current) => {
+        const next = clampLeftPaneWidth(current)
+        return next === current ? current : next
+      })
+    })
+    observer.observe(shell)
+    return () => observer.disconnect()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- clampLeftPaneWidth reads refs only
+  }, [variant])
 
   const diffLines = rightContent.split('\n')
   const changedFileCount = data?.status.length ?? 0
@@ -1081,11 +1115,12 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
 
   function clampLeftPaneWidth(width: number): number {
     const shellWidth = shellRef.current?.getBoundingClientRect().width ?? window.innerWidth
+    const minWidth = variant === 'docked' ? LEFT_PANE_DOCKED_MIN_WIDTH : LEFT_PANE_MIN_WIDTH
     const maxWidth = Math.max(
-      LEFT_PANE_MIN_WIDTH,
+      minWidth,
       Math.min(LEFT_PANE_EXPANDED_WIDTH, Math.floor(shellWidth * LEFT_PANE_MAX_WIDTH_RATIO)),
     )
-    return Math.max(LEFT_PANE_MIN_WIDTH, Math.min(width, maxWidth))
+    return Math.max(minWidth, Math.min(width, maxWidth))
   }
 
   function setPresetLeftPaneWidth(mode: Exclude<LeftPaneMode, 'hidden'>) {
@@ -1217,34 +1252,50 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
     window.addEventListener('pointercancel', handlePointerUp)
   }
 
+  const docked = isDocked(variant)
+
   return (
     <div
-      onClick={onClose}
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.55)',
-        zIndex: 1000,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: 8,
-      }}
+      onClick={docked ? undefined : onClose}
+      style={docked
+        ? { display: 'flex', flex: 1, minWidth: 0, minHeight: 0 }
+        : {
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.55)',
+            zIndex: 1000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 8,
+          }}
     >
       <div
         ref={shellRef}
+        tabIndex={docked ? -1 : undefined}
         onClick={(e) => e.stopPropagation()}
-        style={{
-          width: 'min(1680px, calc(100vw - 16px))',
-          height: 'calc(100vh - 16px)',
-          background: 'var(--surface)',
-          border: '1px solid var(--border-2)',
-          borderRadius: 12,
-          boxShadow: '0 24px 60px rgba(0,0,0,0.45)',
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-        }}
+        style={docked
+          ? {
+              flex: 1,
+              minWidth: 0,
+              minHeight: 0,
+              background: 'var(--surface)',
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+              outline: 'none',
+            }
+          : {
+              width: 'min(1680px, calc(100vw - 16px))',
+              height: 'calc(100vh - 16px)',
+              background: 'var(--surface)',
+              border: '1px solid var(--border-2)',
+              borderRadius: 12,
+              boxShadow: '0 24px 60px rgba(0,0,0,0.45)',
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+            }}
       >
         <div
           style={{

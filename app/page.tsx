@@ -17,6 +17,8 @@ import { mergeOrderedSessionMessageWindow } from '@/lib/sessionMessageWindow'
 import type { AgentProvider, ProviderInstanceSummary, ProviderSelection, Session, SessionMessage } from '@/lib/types'
 import type { Todo as OpenCodeTodo } from '@opencode-ai/sdk'
 import type { CodexPlanStep } from '@/lib/taskRegistry'
+import { useRightPanel } from '@/components/useRightPanel'
+import { surfaceKindLabel, type RightPanelSurface, type RightPanelSurfaceKind } from '@/lib/rightPanel'
 
 const CommandPalette = dynamic(() => import('@/components/CommandPalette'), { ssr: false })
 const GitPopover = dynamic(() => import('@/components/GitPopover'), { ssr: false })
@@ -29,6 +31,9 @@ const RunDashboard = dynamic(() => import('@/components/RunDashboard'), { ssr: f
 const AgentTeamCoordinator = dynamic(() => import('@/components/AgentTeamCoordinator'), { ssr: false })
 const CrossSessionMessaging = dynamic(() => import('@/app/agents/page'), { ssr: false })
 const PiActivityPopover = dynamic(() => import('@/components/PiActivityPopover'), { ssr: false })
+const RightPanel = dynamic(() => import('@/components/RightPanel'), { ssr: false })
+const BrowserSurface = dynamic(() => import('@/components/BrowserSurface'), { ssr: false })
+const TerminalView = dynamic(() => import('@/components/TerminalView'), { ssr: false })
 
 type SessionScopeMode = 'all' | 'project'
 type ProjectSelection = {
@@ -370,6 +375,7 @@ export default function Home() {
   const [provenanceOpen, setProvenanceOpen] = useState(false)
   const [remoteAccessOpen, setRemoteAccessOpen] = useState(false)
   const [dashboardTab, setDashboardTab] = useState<DashboardTab>('sessions')
+  const rightPanel = useRightPanel()
   const [taskPanelOpenRequest, setTaskPanelOpenRequest] = useState(0)
   const [promptLibraryOpenRequest, setPromptLibraryOpenRequest] = useState(0)
   const [channelBridgeOpenRequest, setChannelBridgeOpenRequest] = useState(0)
@@ -773,6 +779,19 @@ export default function Home() {
       })
     return () => { cancelled = true }
   }, [fetchProvider, loadSessionsForProvider])
+
+  // ⌃B toggles the right-hand surface panel, matching the editor convention.
+  const toggleRightPanel = rightPanel.toggle
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
+      if (event.key.toLowerCase() !== 'b') return
+      event.preventDefault()
+      toggleRightPanel()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [toggleRightPanel])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1360,6 +1379,108 @@ export default function Home() {
     }
   }, [activeProjectDir, loadSessionsForProvider, provider, providerInstanceId, sessionScope, switchingProvider])
 
+  // ── Right-hand surface panel ────────────────────────────────────────────────
+  // Additive: every surface here is the same component the full-screen overlay
+  // renders, in a docked shell. The overlay entry points (⌃G, ⌃F, the command
+  // palette) are untouched.
+  const rightPanelAvailability = useMemo<Record<RightPanelSurfaceKind, boolean>>(() => ({
+    browser: true,
+    terminal: true,
+    files: !!activeProjectDir,
+    diff: !!activeProjectDir,
+    'pull-request': !!activeProjectDir,
+    agents: true,
+  }), [activeProjectDir])
+
+  const rightPanelHints = useMemo<Partial<Record<RightPanelSurfaceKind, string>>>(() => ({
+    files: 'Available when a project is open.',
+    diff: 'Available for Git repositories.',
+    'pull-request': 'Available when a project is open.',
+  }), [])
+
+  const rightPanelSurfaceTitle = useCallback((surface: RightPanelSurface) => {
+    if (surface.kind !== 'browser') return surfaceKindLabel(surface.kind)
+    if (!surface.url) return 'Browser'
+    try {
+      return new URL(surface.url).host || 'Browser'
+    } catch {
+      return 'Browser'
+    }
+  }, [])
+
+  const { setBrowserUrl: setRightPanelBrowserUrl, close: closeRightPanelSurface } = rightPanel
+  const renderRightPanelSurface = useCallback((surface: RightPanelSurface) => {
+    switch (surface.kind) {
+      case 'browser':
+        return (
+          <BrowserSurface
+            url={surface.url ?? null}
+            onUrlChange={(url) => setRightPanelBrowserUrl(surface.id, url)}
+          />
+        )
+      case 'terminal':
+        return (
+          <div style={{ display: 'flex', flex: 1, minHeight: 0, minWidth: 0 }}>
+            <TerminalView />
+          </div>
+        )
+      case 'files':
+        return activeProjectDir ? (
+          <FileViewer
+            variant="docked"
+            open
+            cwd={activeProjectDir}
+            canInsert={!selectedProject && !!selectedSession}
+            sessionId={selectedSession && !selectedSession.isPending ? selectedSession.sessionId : undefined}
+            provider={selectedSession && !selectedSession.isPending ? selectedSession.provider : undefined}
+            onOpenChange={(next) => { if (!next) closeRightPanelSurface(surface.id) }}
+            onInsertPath={insertFilePathToComposer}
+          />
+        ) : null
+      case 'diff':
+        return activeProjectDir ? (
+          <GitPopover variant="docked" open cwd={activeProjectDir} onClose={() => closeRightPanelSurface(surface.id)} />
+        ) : null
+      case 'pull-request':
+        return activeProjectDir ? (
+          <PullRequestView
+            variant="docked"
+            open
+            cwd={activeProjectDir}
+            onClose={() => closeRightPanelSurface(surface.id)}
+            onAskAgent={(prompt) => {
+              composerInsertRequestRef.current += 1
+              setComposerInsertRequest({ requestId: composerInsertRequestRef.current, text: prompt })
+            }}
+            linkedPrNumber={selectedSession?.inbox?.linkedPr?.number}
+          />
+        ) : null
+      case 'agents':
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0, overflow: 'auto' }}>
+            <AgentTeamCoordinator
+              provider={provider}
+              selectedSession={selectedSession}
+              onOpenSession={selectCommandPaletteSession}
+              onSessionsChanged={() => {
+                void loadSessionsForProvider(provider).catch(() => {})
+              }}
+            />
+          </div>
+        )
+    }
+  }, [
+    activeProjectDir,
+    closeRightPanelSurface,
+    insertFilePathToComposer,
+    loadSessionsForProvider,
+    provider,
+    selectCommandPaletteSession,
+    selectedProject,
+    selectedSession,
+    setRightPanelBrowserUrl,
+  ])
+
   return (
     <CodeThemeProvider>
     <SidebarProvider defaultOpen>
@@ -1400,7 +1521,7 @@ export default function Home() {
             creatingSession={creatingNewSession}
           />
         </Sidebar>}
-        {messagePaneCollapsed && !isMessageViewMaximized ? (
+        {rightPanel.open && rightPanel.expanded && !isMessageViewMaximized ? null : messagePaneCollapsed && !isMessageViewMaximized ? (
           <div
             style={{
               width: 32,
@@ -1540,6 +1661,8 @@ export default function Home() {
                     maximized={isMessageViewMaximized}
                     onToggleMaximized={toggleMessageViewMaximized}
                     onEnterFullscreen={enterMessageViewFullscreen}
+                    rightPanelOpen={rightPanel.open}
+                    onToggleRightPanel={rightPanel.toggle}
                   />
                 )}
               </ViewTransition>
@@ -1574,6 +1697,10 @@ export default function Home() {
                   onChangeScope={setSessionScope}
                   onToggleWorktrees={setIncludeWorktrees}
                   onToggleMessagePane={toggleMessagePane}
+                  rightPanelOpen={rightPanel.open}
+                  rightPanelAvailability={rightPanelAvailability}
+                  onToggleRightPanel={rightPanel.toggle}
+                  onOpenRightPanelSurface={rightPanel.openSurface}
                   onToggleMessageViewMaximized={toggleMessageViewMaximized}
                   onEnterMessageViewFullscreen={enterMessageViewFullscreen}
                   onOpenGit={openGitPopover}
@@ -1595,6 +1722,25 @@ export default function Home() {
             </div>
           </SidebarInset>
         )}
+        {rightPanel.open && !isMessageViewMaximized ? (
+          <RightPanel
+            surfaces={rightPanel.surfaces}
+            activeId={rightPanel.activeId}
+            width={rightPanel.width}
+            expanded={rightPanel.expanded}
+            availability={rightPanelAvailability}
+            unavailableHints={rightPanelHints}
+            onOpenSurface={rightPanel.openSurface}
+            onActivate={rightPanel.activate}
+            onClose={rightPanel.close}
+            onCloseAll={rightPanel.closeAll}
+            onCollapse={rightPanel.collapse}
+            onToggleExpanded={rightPanel.toggleExpanded}
+            onWidthChange={rightPanel.setWidth}
+            surfaceTitle={rightPanelSurfaceTitle}
+            renderSurface={renderRightPanelSurface}
+          />
+        ) : null}
         {activeProjectDir && gitPopoverOpen ? (
           <GitPopover
             open={gitPopoverOpen}
