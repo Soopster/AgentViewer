@@ -1,10 +1,10 @@
 // Resuming a session in the warm pool rewrites its transcript: the CLI writes
 // the same bytes back (verified — identical size and sha256 before and after)
 // but the file's mtime moves, and mtime is what `listSessions` reports as
-// `lastModified`. Because the pool is prewarmed when a session is *selected*
-// (see prewarmViewSession), merely navigating to a session would otherwise jump
-// it to the top of every list ordered by last activity, in the app and in
-// `claude --resume` alike.
+// `lastModified`. OpenTUI now defers existing-session pool prewarm until the
+// composer is engaged, but other prewarm callers can still resume without a
+// turn; without this fallback that would jump the session to the top of every
+// list ordered by last activity, in the app and in `claude --resume` alike.
 //
 // Read-only control queries avoid this with `persistSession: false`
 // (lib/sdkControlQuery.ts). A pool entry cannot: the turn it is being warmed

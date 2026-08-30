@@ -131,6 +131,7 @@ import {
 import type { AgentProtocolEvent, PlaybookSummary, ProtocolRun, ProtocolRunSnapshot, RunPlaybook, StartProtocolRunParams, StartProtocolRunResult } from '../agentProtocol'
 import type { AgentProvider, ContextUsage, ProviderSelection, Session, SessionDiagnosticSection, SessionInfo, SessionMessage, SessionModelInfo } from '../types'
 import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../../tui/theme'
+import type { TuiTranscriptCard } from '../../tui/format'
 import {
   listAddressableSessions,
   sendCrossSessionMessage,
@@ -146,6 +147,12 @@ export type TuiSessionDetail = {
   info: SessionInfo | null
   rawMessages: SessionMessage[]
   threadedMessages: ThreadedMessage[]
+  // Worker-backed OpenTUI reads attach the cards they already paid to build.
+  // Keeping that payload with the detail prevents a large transcript from
+  // rendering empty when the worker client's side cache has been evicted.
+  transcriptCards?: TuiTranscriptCard[]
+  transcriptCardsDensity?: TuiDensity
+  transcriptCardsShowToolCalls?: boolean
   contextUsage: ContextUsage | null
   // Codex only: another Codex client holds the rollout writer lock, so
   // rawMessages is a stale cached snapshot until that client's turn ends.

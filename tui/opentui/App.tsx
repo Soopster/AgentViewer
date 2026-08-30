@@ -181,10 +181,12 @@ import {
 } from '../../lib/claudeMapper'
 import { normalizeCodexStreamThreadedMessage } from '../../lib/codexMapper'
 import { readTuiSessionMetadataAsync } from './metadataWorkerClient'
+import { shouldPrewarmTuiRuntime } from './sessionPrewarm'
 import { filterComposerMentionFilesAsync } from './composerMentionWorkerClient'
 import { TUI_FRAME_BUDGET_MS } from './performanceBudget'
 import {
   readTuiSessionDetailAsync,
+  attachedTranscriptCardsForVariant,
   readTuiSessionsAsync,
   formatTranscriptCardsAsync,
   getTranscriptCardsSync,
@@ -8682,12 +8684,14 @@ export default function OpenTuiApp() {
   // sessions above SYNC_FORMAT_CARD_LIMIT, where the main-thread fallback is
   // skipped.
   const [workerCardCacheVersion, setWorkerCardCacheVersion] = useState(0)
+  const [formattingTranscriptCards, setFormattingTranscriptCards] = useState(false)
   const baseTranscriptCards = useMemo<TuiTranscriptCard[]>(() => {
     const profileStart = CARD_PROFILE ? performance.now() : 0
     if (!transcriptSession || !sessionDetail) return []
     let cards: TuiTranscriptCard[]
     let recomputed = 0
-    const cachedSync = getTranscriptCardsSync(
+    const attachedCards = attachedTranscriptCardsForVariant(sessionDetail, density, showToolCalls)
+    const cachedSync = attachedCards ?? getTranscriptCardsSync(
       transcriptSession,
       sessionDetail.threadedMessages,
       density,
@@ -8933,15 +8937,25 @@ export default function OpenTuiApp() {
   // UI responsive in the meantime; this effect just ensures subsequent toggles
   // hit the cache instead of running a main-thread format every time.
   useEffect(() => {
-    if (!sessionDetail || !transcriptSession) return
+    if (!sessionDetail || !transcriptSession) {
+      setFormattingTranscriptCards(false)
+      return
+    }
+    const attachedCardsMatch = attachedTranscriptCardsForVariant(sessionDetail, density, showToolCalls) !== null
     const cachedSync = getTranscriptCardsSync(
       transcriptSession,
       sessionDetail.threadedMessages,
       density,
       showToolCalls,
     )
-    if (cachedSync) return
+    if (attachedCardsMatch || cachedSync) {
+      setFormattingTranscriptCards(false)
+      setError((current) => current?.startsWith('Failed to format transcript') ? null : current)
+      return
+    }
     let cancelled = false
+    setFormattingTranscriptCards(true)
+    setError((current) => current?.startsWith('Failed to format transcript') ? null : current)
     void formatTranscriptCardsAsync(
       transcriptSession,
       sessionDetail.threadedMessages,
@@ -8952,7 +8966,15 @@ export default function OpenTuiApp() {
       // cache — required for over-SYNC_FORMAT_CARD_LIMIT sessions, which
       // render empty until this format lands.
       if (!cancelled) setWorkerCardCacheVersion((version) => version + 1)
-    }).catch(() => { /* worker errors surface elsewhere */ })
+    }).catch((cause) => {
+      if (!cancelled) {
+        setError(cause instanceof Error
+          ? `Failed to format transcript: ${cause.message}`
+          : 'Failed to format transcript')
+      }
+    }).finally(() => {
+      if (!cancelled) setFormattingTranscriptCards(false)
+    })
     return () => {
       cancelled = true
     }
@@ -9664,9 +9686,9 @@ export default function OpenTuiApp() {
   // Claude branch reuse the warm Query instead of spawning a second CLI.
   const composerPrewarmInFlightRef = useRef(new Set<string>())
   useEffect(() => {
-    // Start provider prewarming when the session is selected. Native CLIs keep
-    // their runtime hot while you browse, so waiting for composer activation
-    // makes an immediate first send pay the cold startup cost.
+    // Most providers can warm on selection without mutating the session.
+    // Existing Claude sessions cannot: SDK resume rewrites the transcript and
+    // moves its last-activity mtime, so their prewarm waits for composer use.
     const target = transcriptSession
     if (!target || !committedSessionKey) return
     const fullSession = sessionsByKeyRef.current.get(committedSessionKey)
@@ -9678,13 +9700,7 @@ export default function OpenTuiApp() {
     // cold-spawning. ACP sessions are also pool-owned and can start against the
     // reserved id. Pending Codex/Copilot sessions still have no resumable
     // identity yet, so prewarmViewSession no-ops them — skip the work here too.
-    if (
-      isPending
-      && target.provider !== 'pi'
-      && target.provider !== 'claude'
-      && target.provider !== 'claude-acp'
-      && target.provider !== 'codex-acp'
-    ) return
+    if (!shouldPrewarmTuiRuntime(target.provider, isPending, composerActive)) return
     const needsAffordances = !isPending && (() => {
       const cached = composerAffordancesCacheRef.current.get(committedSessionKey)
       return !cached || Date.now() - cached.ts >= COMPOSER_AFFORDANCES_TTL_MS
@@ -9711,7 +9727,7 @@ export default function OpenTuiApp() {
     }
     return () => { cancelled = true }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [committedSessionKey, fetchComposerAffordances, tuiEffort, tuiModelOverride])
+  }, [committedSessionKey, composerActive, fetchComposerAffordances, tuiEffort, tuiModelOverride])
   const composerSlashHint = useMemo(() => {
     if (!composerSlashOpen) return ''
     const provider = selectedSession?.provider ?? 'claude'
@@ -19790,8 +19806,11 @@ export default function OpenTuiApp() {
           ) : null}
 
           <box flexGrow={1} paddingX={1} paddingBottom={1} marginTop={1} overflow="hidden">
-            {loadingDetail && visibleTranscriptCards.length === 0 ? (
-              <Spinner label={fitText('Loading transcript…', rightPaneWidth - 6)} fg={theme.dim} />
+            {(loadingDetail || formattingTranscriptCards) && visibleTranscriptCards.length === 0 ? (
+              <Spinner
+                label={fitText(formattingTranscriptCards ? 'Formatting transcript…' : 'Loading transcript…', rightPaneWidth - 6)}
+                fg={theme.dim}
+              />
             ) : visibleTranscriptCards.length === 0 ? (
               !selectedSession ? (
                 <box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1} paddingY={2}>

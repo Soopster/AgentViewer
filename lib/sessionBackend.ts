@@ -6355,9 +6355,10 @@ export async function prewarmViewSession(params: {
     // (see the pendingWarm check there); if it isn't ready in time, the cold
     // path spawns fresh exactly as before — no regression either way.
     // Spawning resumes the session, which rewrites its transcript and moves its
-    // mtime even though nothing was said. Prewarm fires on selection, so record
-    // that touch and keep the session's real last-activity time in the lists
-    // (lib/claudeResumeTouch.ts). A pending session has no transcript to touch.
+    // mtime even though nothing was said. Callers should defer existing-session
+    // prewarm until the composer is engaged; record the touch as a fallback for
+    // any other caller (lib/claudeResumeTouch.ts). A pending session has no
+    // transcript to touch.
     const spawn = async () => {
       const entry = claudePoolModule().acquireClaudeSession({
         sessionId: params.sessionId,
