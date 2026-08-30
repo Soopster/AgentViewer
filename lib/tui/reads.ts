@@ -22,6 +22,7 @@ import {
   readViewSessionInfo,
   readViewSessionModels,
 } from '../sessionReads'
+import { listViewRunningSessions, readViewRuntimeActivity } from '../sessionActivity'
 import { encodeSessionPath, isRemoteAttached, providerQuery, remoteJson } from './remote'
 import type {
   ContextUsage,
@@ -102,4 +103,32 @@ export async function readTuiSessionMetadata(session: Session): Promise<TuiSessi
     )
   }
   return readViewSessionModels(session.sessionId, session.provider)
+}
+
+
+// ── Live-turn registry ───────────────────────────────────────────────────────
+//
+// Polled from boot every few seconds, so it must not touch the send path: doing
+// so loaded ~56MB within seconds of startup in a TUI that may only ever read.
+// lib/sessionActivity.ts answers it from the runtime registry alone.
+
+export type TuiRuntimeActivity = ReturnType<typeof readViewRuntimeActivity>
+
+/**
+ * Sessions with a live turn, each with whatever provider-native prompts or
+ * permissions that turn is blocked on. The TUI and its backend share one
+ * process, so this registry read is synchronous and authoritative for live-turn
+ * reattach and cross-session attention.
+ */
+export async function readTuiRunningSessions(): Promise<ReturnType<typeof listViewRunningSessions>> {
+  if (isRemoteAttached()) {
+    const { running } = await remoteJson<{ running: ReturnType<typeof listViewRunningSessions> }>('/api/sessions/running')
+    return running
+  }
+  return listViewRunningSessions()
+}
+
+export async function readTuiRuntimeActivityState(): Promise<TuiRuntimeActivity> {
+  if (isRemoteAttached()) return remoteJson<TuiRuntimeActivity>('/api/sessions/running')
+  return readViewRuntimeActivity()
 }

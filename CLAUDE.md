@@ -309,6 +309,22 @@ output, and allocator arenas.
   must return an unsubscribe immediately, so it subscribes once the loader
   resolves and its disposer cancels a subscription still in flight.
 
+- **A deferral is only worth what its callers respect.** The live-turn registry
+  read (`lib/sessionActivity.ts`) describes turns but is squarely on the *read*
+  path: the TUI polls it from boot, every few seconds, to drive live-turn
+  reattach and the attention inbox. While it lived in `sessionBackend.ts` that
+  poll loaded the whole send path within seconds of startup, so a read-only
+  session paid the composer's footprint anyway and the `sendPath()` deferral
+  bought nothing. It now answers from `lib/sessionRuntime.ts` and
+  `lib/viewerAttention.ts` alone; `sessionBackend` registers a reader for the
+  pending-prompt/permission payloads, which are its own state, and until it does
+  there are none — exact, not approximate, because nothing can be pending before
+  a turn has run. Browsing now never loads the send path at all (verified by
+  tracing the loader), worth ~35MB settled on top of the split.
+
+  **When adding a poll or a boot-time read, check what it pulls.** One
+  `sendPath()` call on a timer undoes the whole thing, silently.
+
 ### Remote access
 
 Opt-in pairing for a phone or a second browser, off by default. `lib/remoteAuth.ts` owns two

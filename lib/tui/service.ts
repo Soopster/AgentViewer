@@ -95,9 +95,12 @@ function coordination(): Promise<CoordinationModule> {
 // this file's graph into it cost ~72MB against ~16MB. Re-exported so callers of
 // service.ts are unaffected.
 import {
+  readTuiRunningSessions,
+  readTuiRuntimeActivityState,
   readTuiSessionDetailSource,
   readTuiSessionMetadata,
   readTuiSessions,
+  type TuiRuntimeActivity,
   type TuiSessionMetadata,
 } from './reads'
 
@@ -105,6 +108,7 @@ export {
   readTuiSessionDetailSource,
   readTuiSessionMetadata,
   readTuiSessions,
+  type TuiRuntimeActivity,
   type TuiSessionMetadata,
 } from './reads'
 
@@ -475,19 +479,12 @@ export async function interruptTuiSessionTurn(session: { sessionId: string; prov
  * backend share one process, so this registry read is synchronous and
  * authoritative for live-turn reattach and cross-session attention.
  */
-export async function listTuiRunningSessions(): Promise<ReturnType<SessionBackendModule['listViewRunningSessions']>> {
-  if (isRemoteAttached()) {
-    const { running } = await remoteJson<{ running: ReturnType<SessionBackendModule['listViewRunningSessions']> }>('/api/sessions/running')
-    return running
-  }
-  return (await sendPath()).listViewRunningSessions()
+export async function listTuiRunningSessions(): Promise<Awaited<ReturnType<typeof readTuiRunningSessions>>> {
+  return readTuiRunningSessions()
 }
 
-export type TuiRuntimeActivity = ReturnType<SessionBackendModule['readViewRuntimeActivity']>
-
 export async function readTuiRuntimeActivity(): Promise<TuiRuntimeActivity> {
-  if (isRemoteAttached()) return remoteJson<TuiRuntimeActivity>('/api/sessions/running')
-  return (await sendPath()).readViewRuntimeActivity()
+  return readTuiRuntimeActivityState()
 }
 
 export async function dismissTuiViewerAttention(attentionId: string): Promise<boolean> {

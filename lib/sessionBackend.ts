@@ -128,6 +128,13 @@ import {
 } from './acpClientPool'
 import { mapAcpBufferedMessages } from './acpMapper'
 import { listViewerAttention } from './viewerAttention'
+import {
+  listViewRunningSessions,
+  readViewRuntimeActivity,
+  registerPendingTurnPayloadReader,
+} from './sessionActivity'
+
+export { listViewRunningSessions, readViewRuntimeActivity } from './sessionActivity'
 import { createTurnCheckpoint } from './checkpoints'
 import { isNativeComposerCommandText } from './composerCommands'
 import { buildCodexComposerInput } from './codexComposerInput'
@@ -6664,27 +6671,18 @@ export function readViewSessionRunning(
  * Every session with a turn running in this process, including provider-native
  * permission/question payloads needed by reattach and attention surfaces.
  */
-export function listViewRunningSessions(): Array<{
-  sessionId: string
-  provider: AgentProvider
-  pendingPrompts: Record<string, unknown>[]
-  pendingPermissions: Record<string, unknown>[]
-}> {
-  return listRunningSessionRefs().map((ref) => ({
-    ...ref,
-    pendingPrompts: listPendingClaudePrompts(ref.sessionId),
-    pendingPermissions: listPendingProviderPermissionPayloads(ref.sessionId, ref.provider),
-  }))
-}
+// The registry read itself lives in lib/sessionActivity.ts, which imports no
+// provider client: the TUI polls it from boot to drive live-turn reattach and
+// the attention inbox, and a read-only session was loading this whole module to
+// answer it. Only the pending payloads below are genuinely this module's state,
+// so it registers a reader for them — and until it does, there are none, which
+// is exact: nothing can be pending before a turn has run.
+registerPendingTurnPayloadReader({
+  listPendingPrompts: listPendingClaudePrompts,
+  listPendingPermissions: listPendingProviderPermissionPayloads,
+})
 
 /** Process-local control-plane state for fleet and attention clients. */
-export function readViewRuntimeActivity() {
-  return {
-    running: listViewRunningSessions(),
-    waiting: listWaitingSessions(),
-    attention: listViewerAttention(),
-  }
-}
 
 
 export async function rewindOrRollbackViewSession({ sessionId, body, provider }: RewindParams): Promise<Record<string, unknown>> {
