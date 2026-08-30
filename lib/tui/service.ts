@@ -46,24 +46,68 @@ import {
   type TuiSplitOrientation,
   type TuiTranscriptWidth,
 } from '../tuiState'
+// Reads come from lib/sessionReads.ts directly: they route to adapters and
+// touch no provider client, so they cost ~16MB rather than sessionBackend's ~72.
 import {
-  createNewViewSession,
-  listViewRunningSessions,
-  readClaudeObservedFilePaths,
-  readViewRuntimeActivity,
   listViewSessionMessageWindow,
   listViewSessions,
   patchViewSession,
-  interruptViewSession,
-  prewarmViewSession,
   readViewSessionComposerOptions,
   readViewSessionDiagnostics,
   readViewSessionInfo,
   readViewSessionModels,
   readViewSessionSlashCommands,
-  runViewSessionAction,
-  streamViewSessionTurn,
-} from '../sessionBackend'
+} from '../sessionReads'
+
+// The send path is loaded on first use, not at import (load-bearing for
+// memory). lib/sessionBackend.ts reaches every provider's client, harness and
+// SDK; evaluating it is ~56MB of physical footprint on top of the read path.
+// The TUI boots into a session list and a transcript — it can go a whole
+// session without sending a turn — so paying that at startup was paying for
+// work the user may never ask for. Every caller below is already async.
+type SessionBackendModule = typeof import('../sessionBackend')
+let loadedSessionBackend: SessionBackendModule | null = null
+let sessionBackendLoad: Promise<SessionBackendModule> | null = null
+function sendPath(): Promise<SessionBackendModule> {
+  if (loadedSessionBackend) return Promise.resolve(loadedSessionBackend)
+  sessionBackendLoad ??= import('../sessionBackend').then((mod) => {
+    loadedSessionBackend = mod
+    return mod
+  })
+  return sessionBackendLoad
+}
+
+// Same treatment, same reason: lib/agentCoordination.ts imports sessionBackend,
+// so a static import here would drag the send path back in regardless.
+type CoordinationModule = typeof import('../agentCoordination')
+let loadedCoordination: CoordinationModule | null = null
+let coordinationLoad: Promise<CoordinationModule> | null = null
+function coordination(): Promise<CoordinationModule> {
+  if (loadedCoordination) return Promise.resolve(loadedCoordination)
+  coordinationLoad ??= import('../agentCoordination').then((mod) => {
+    loadedCoordination = mod
+    return mod
+  })
+  return coordinationLoad
+}
+// The read path lives in lib/tui/reads.ts, which imports no send-path module —
+// the TUI's transcript Worker is a separate JS VM that only reads, and pulling
+// this file's graph into it cost ~72MB against ~16MB. Re-exported so callers of
+// service.ts are unaffected.
+import {
+  readTuiSessionDetailSource,
+  readTuiSessionMetadata,
+  readTuiSessions,
+  type TuiSessionMetadata,
+} from './reads'
+
+export {
+  readTuiSessionDetailSource,
+  readTuiSessionMetadata,
+  readTuiSessions,
+  type TuiSessionMetadata,
+} from './reads'
+
 import { dismissViewerAttention } from '../viewerAttention'
 import {
   encodeSessionPath,
@@ -111,23 +155,7 @@ import {
   type TurnCheckpoint,
   type WorkingDiffHunk,
 } from '../checkpoints'
-import {
-  appendProtocolEvent,
-  cleanupProtocolRunWorktrees,
-  deleteRunPlaybook,
-  deleteProtocolRun,
-  drainCooperativeInbox,
-  listProtocolRuns,
-  listRunPlaybooks,
-  loadRunPlaybook,
-  observeCoordinatorSessionTurn,
-  readProtocolRun,
-  startProtocolRun,
-  stopProtocolRun,
-  subscribeProtocolRunChanges,
-  validateWorktreeTaskLocks,
-  writeRunPlaybook,
-} from '../agentCoordination'
+
 import type { AgentProtocolEvent, PlaybookSummary, ProtocolRun, ProtocolRunSnapshot, RunPlaybook, StartProtocolRunParams, StartProtocolRunResult } from '../agentProtocol'
 import type { AgentProvider, ContextUsage, ProviderSelection, Session, SessionDiagnosticSection, SessionInfo, SessionMessage, SessionModelInfo } from '../types'
 import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../../tui/theme'
@@ -139,9 +167,6 @@ import {
   type SendCrossSessionMessageResult,
 } from '../crossSessionMessaging'
 
-const DEFAULT_SESSION_LIMIT = 200
-const CLAUDE_MESSAGE_LIMIT = 2000
-const TOOL_HEAVY_PROVIDER_MESSAGE_LIMIT = 2000
 
 export type TuiSessionDetail = {
   info: SessionInfo | null
@@ -159,11 +184,6 @@ export type TuiSessionDetail = {
   externalWriter?: boolean
 }
 
-export type TuiSessionMetadata = {
-  models: SessionModelInfo[]
-  currentModel: string | null
-  contextUsage: ContextUsage | null
-}
 
 export async function readTuiProvider(): Promise<ProviderSelection> {
   if (isRemoteAttached()) {
@@ -347,20 +367,6 @@ export async function writeTuiSessionReaderState(
   await setConfiguredTuiSessionReaderState(sessionKey, sessionReaderState)
 }
 
-export async function readTuiSessions(provider: ProviderSelection): Promise<Session[]> {
-  if (isRemoteAttached()) {
-    const { sessions } = await remoteJson<{ sessions: Session[] }>(
-      `/api/sessions?limit=${DEFAULT_SESSION_LIMIT}&offset=0&includeWorktrees=true&provider=${encodeURIComponent(provider)}`,
-    )
-    return sessions
-  }
-  return listViewSessions({
-    limit: DEFAULT_SESSION_LIMIT,
-    offset: 0,
-    includeWorktrees: true,
-    provider,
-  })
-}
 
 const THREADING_CACHE_LIMIT = 3
 const threadingCacheByKey = new Map<string, IncrementalThreadingCache>()
@@ -389,44 +395,6 @@ function threadMessages(session: Session, messages: SessionMessage[]): ThreadedM
   return nextThreaded
 }
 
-export async function readTuiSessionDetailSource(session: Session): Promise<{
-  info: SessionInfo | null
-  rawMessages: SessionMessage[]
-  externalWriter?: boolean
-}> {
-  const messageLimit = session.provider === 'claude'
-    ? CLAUDE_MESSAGE_LIMIT
-    : TOOL_HEAVY_PROVIDER_MESSAGE_LIMIT
-  if (isRemoteAttached()) {
-    const query = providerQuery(session.provider)
-    const [infoResult, windowResult] = await Promise.all([
-      remoteJson<{ info: SessionInfo | null }>(encodeSessionPath(session.sessionId, query))
-        .catch(() => ({ info: null })),
-      remoteJson<{ messages: SessionMessage[]; externalWriter?: boolean }>(
-        encodeSessionPath(
-          session.sessionId,
-          `/messages?limit=${messageLimit}&offset=0&tail=1${session.provider ? `&provider=${encodeURIComponent(session.provider)}` : ''}`,
-        ),
-      ),
-    ])
-    return { info: infoResult.info, rawMessages: windowResult.messages, externalWriter: windowResult.externalWriter }
-  }
-  const [info, window] = await Promise.all([
-    readViewSessionInfo(session.sessionId, session.provider),
-    listViewSessionMessageWindow(
-      session.sessionId,
-      { limit: messageLimit, offset: 0, tail: true },
-      session.provider,
-    ),
-  ])
-
-  return {
-    info,
-    rawMessages: window.messages,
-    externalWriter: window.externalWriter,
-  }
-}
-
 export async function readTuiSessionDetail(session: Session): Promise<TuiSessionDetail> {
   const { info, rawMessages, externalWriter } = await readTuiSessionDetailSource(session)
 
@@ -439,14 +407,6 @@ export async function readTuiSessionDetail(session: Session): Promise<TuiSession
   }
 }
 
-export async function readTuiSessionMetadata(session: Session): Promise<TuiSessionMetadata> {
-  if (isRemoteAttached()) {
-    return remoteJson<TuiSessionMetadata>(
-      encodeSessionPath(session.sessionId, `/models${providerQuery(session.provider)}`),
-    )
-  }
-  return readViewSessionModels(session.sessionId, session.provider)
-}
 
 export async function patchTuiSession(session: Session, body: Record<string, unknown>): Promise<void> {
   if (isRemoteAttached()) {
@@ -475,16 +435,16 @@ export async function streamTuiSessionTurn(
   // Cooperative Coordinator join (see lib/agentCoordination.ts): no-ops
   // instantly unless this session was explicitly joined to a run.
   if (typeof body.message === 'string') {
-    const drained = await drainCooperativeInbox(session.sessionId).catch(() => '')
+    const drained = await (await coordination()).drainCooperativeInbox(session.sessionId).catch(() => '')
     if (drained) body.message = `${body.message}\n${drained}`
   }
-  const response = await streamViewSessionTurn({
+  const response = await (await sendPath()).streamViewSessionTurn({
     sessionId: session.sessionId,
     signal: signal ?? new AbortController().signal,
     body,
     provider: session.provider as AgentProvider | undefined,
   })
-  return observeCoordinatorSessionTurn(session.sessionId, response)
+  return (await coordination()).observeCoordinatorSessionTurn(session.sessionId, response)
 }
 
 /**
@@ -506,7 +466,7 @@ export async function interruptTuiSessionTurn(session: { sessionId: string; prov
       ? response.stillQueued.filter((uuid): uuid is string => typeof uuid === 'string')
       : undefined
   }
-  return await interruptViewSession(session.sessionId, session.turnRequestId)
+  return await (await sendPath()).interruptViewSession(session.sessionId, session.turnRequestId)
 }
 
 /**
@@ -515,19 +475,19 @@ export async function interruptTuiSessionTurn(session: { sessionId: string; prov
  * backend share one process, so this registry read is synchronous and
  * authoritative for live-turn reattach and cross-session attention.
  */
-export async function listTuiRunningSessions(): Promise<ReturnType<typeof listViewRunningSessions>> {
+export async function listTuiRunningSessions(): Promise<ReturnType<SessionBackendModule['listViewRunningSessions']>> {
   if (isRemoteAttached()) {
-    const { running } = await remoteJson<{ running: ReturnType<typeof listViewRunningSessions> }>('/api/sessions/running')
+    const { running } = await remoteJson<{ running: ReturnType<SessionBackendModule['listViewRunningSessions']> }>('/api/sessions/running')
     return running
   }
-  return listViewRunningSessions()
+  return (await sendPath()).listViewRunningSessions()
 }
 
-export type TuiRuntimeActivity = ReturnType<typeof readViewRuntimeActivity>
+export type TuiRuntimeActivity = ReturnType<SessionBackendModule['readViewRuntimeActivity']>
 
 export async function readTuiRuntimeActivity(): Promise<TuiRuntimeActivity> {
   if (isRemoteAttached()) return remoteJson<TuiRuntimeActivity>('/api/sessions/running')
-  return readViewRuntimeActivity()
+  return (await sendPath()).readViewRuntimeActivity()
 }
 
 export async function dismissTuiViewerAttention(attentionId: string): Promise<boolean> {
@@ -556,7 +516,7 @@ export async function listTuiWorktreeTasks(cwd: string): Promise<WorktreeTask[]>
 }
 
 export async function mergeTuiWorktreeTask(task: WorktreeTask): Promise<{ staged: boolean }> {
-  const validation = await validateWorktreeTaskLocks(task)
+  const validation = await (await coordination()).validateWorktreeTaskLocks(task)
   if (!validation.ok) throw new Error(validation.message)
   return mergeWorktreeTask(task)
 }
@@ -590,7 +550,7 @@ export async function restoreTuiCheckpoint(
 ): Promise<{ restored: number; deleted: number }> {
   const result = await restoreCheckpoint(cwd, sha, paths)
   if (context?.provider === 'claude' && context.sessionId) {
-    const observedPaths = await readClaudeObservedFilePaths(context.sessionId, cwd).catch(() => [])
+    const observedPaths = await (await sendPath()).readClaudeObservedFilePaths(context.sessionId, cwd).catch(() => [])
     // Loaded here rather than imported: this module is the TUI's entry to the
     // provider layer and is evaluated in the transcript Worker too, which never
     // sends a turn and would otherwise pay ~30MB for the send-path pool.
@@ -629,7 +589,7 @@ export async function startTuiProtocolRun(params: StartProtocolRunParams): Promi
       body: JSON.stringify(params),
     })
   }
-  return startProtocolRun(params)
+  return (await coordination()).startProtocolRun(params)
 }
 
 export async function listTuiRunPlaybooks(cwd: string): Promise<{ playbooks: PlaybookSummary[]; invalid: Array<{ file: string; error: string }> }> {
@@ -637,7 +597,7 @@ export async function listTuiRunPlaybooks(cwd: string): Promise<{ playbooks: Pla
     const query = new URLSearchParams({ cwd }).toString()
     return remoteJson(`/api/agent-protocol/playbooks?${query}`)
   }
-  return listRunPlaybooks(cwd)
+  return (await coordination()).listRunPlaybooks(cwd)
 }
 
 export async function readTuiRunPlaybook(cwd: string, name: string): Promise<RunPlaybook> {
@@ -646,7 +606,7 @@ export async function readTuiRunPlaybook(cwd: string, name: string): Promise<Run
     const result = await remoteJson<{ playbook: RunPlaybook }>(`/api/agent-protocol/playbooks?${query}`)
     return result.playbook
   }
-  return loadRunPlaybook(cwd, name)
+  return (await coordination()).loadRunPlaybook(cwd, name)
 }
 
 export async function writeTuiRunPlaybook(cwd: string, playbook: unknown, previousName?: string): Promise<{ playbook: RunPlaybook; path: string }> {
@@ -656,7 +616,7 @@ export async function writeTuiRunPlaybook(cwd: string, playbook: unknown, previo
       body: JSON.stringify({ cwd, playbook, previousName }),
     })
   }
-  return writeRunPlaybook(cwd, playbook, previousName)
+  return (await coordination()).writeRunPlaybook(cwd, playbook, previousName)
 }
 
 export async function deleteTuiRunPlaybook(cwd: string, name: string): Promise<void> {
@@ -667,14 +627,14 @@ export async function deleteTuiRunPlaybook(cwd: string, name: string): Promise<v
     })
     return
   }
-  await deleteRunPlaybook(cwd, name)
+  await (await coordination()).deleteRunPlaybook(cwd, name)
 }
 
 export async function readTuiProtocolRun(runId: string): Promise<ProtocolRunSnapshot | null> {
   if (isRemoteAttached()) {
     return remoteJson(`/api/agent-protocol/runs/${encodeURIComponent(runId)}`)
   }
-  return readProtocolRun(runId)
+  return (await coordination()).readProtocolRun(runId)
 }
 
 export async function listTuiProtocolRuns(limit?: number): Promise<ProtocolRun[]> {
@@ -683,7 +643,7 @@ export async function listTuiProtocolRuns(limit?: number): Promise<ProtocolRun[]
     const { runs } = await remoteJson<{ runs: ProtocolRun[] }>(`/api/agent-protocol/runs${query}`)
     return runs
   }
-  return listProtocolRuns(limit)
+  return (await coordination()).listProtocolRuns(limit)
 }
 
 /** Subscribe to Coordinator changes locally or through the attached daemon. */
@@ -691,31 +651,44 @@ export function subscribeTuiProtocolRunChanges(listener: (runId: string | null) 
   if (isRemoteAttached()) {
     return subscribeRemoteProtocolRunChanges(listener, () => listener(null))
   }
-  return subscribeProtocolRunChanges(listener)
+  // Synchronous by contract — callers get an unsubscribe back immediately — so
+  // it cannot await the coordinator module. Subscribe once it resolves, and let
+  // an unsubscribe that arrives first cancel the pending subscription.
+  let dispose: (() => void) | null = null
+  let cancelled = false
+  void coordination().then(({ subscribeProtocolRunChanges }) => {
+    if (cancelled) return
+    dispose = subscribeProtocolRunChanges(listener)
+  })
+  return () => {
+    cancelled = true
+    dispose?.()
+    dispose = null
+  }
 }
 
 export async function stopTuiProtocolRun(runId: string): Promise<ProtocolRunSnapshot | null> {
   if (isRemoteAttached()) {
     return remoteJson(`/api/agent-protocol/runs/${encodeURIComponent(runId)}/stop`, { method: 'POST' })
   }
-  return stopProtocolRun(runId)
+  return (await coordination()).stopProtocolRun(runId)
 }
 
-export async function cleanupTuiProtocolRunWorktrees(runId: string, opts?: { force?: boolean }): Promise<Awaited<ReturnType<typeof cleanupProtocolRunWorktrees>>> {
+export async function cleanupTuiProtocolRunWorktrees(runId: string, opts?: { force?: boolean }): Promise<Awaited<ReturnType<CoordinationModule['cleanupProtocolRunWorktrees']>>> {
   if (isRemoteAttached()) {
     return remoteJson(`/api/agent-protocol/runs/${encodeURIComponent(runId)}/cleanup`, {
       method: 'POST',
       body: JSON.stringify(opts ?? {}),
     })
   }
-  return cleanupProtocolRunWorktrees(runId, opts)
+  return (await coordination()).cleanupProtocolRunWorktrees(runId, opts)
 }
 
 export async function deleteTuiProtocolRun(runId: string): Promise<{ deleted: boolean; keptWorktrees: string[] }> {
   if (isRemoteAttached()) {
     return remoteJson(`/api/agent-protocol/runs/${encodeURIComponent(runId)}`, { method: 'DELETE' })
   }
-  return deleteProtocolRun(runId)
+  return (await coordination()).deleteProtocolRun(runId)
 }
 
 export async function appendTuiProtocolEvent(event: AgentProtocolEvent): Promise<ProtocolRunSnapshot | null> {
@@ -725,7 +698,7 @@ export async function appendTuiProtocolEvent(event: AgentProtocolEvent): Promise
       body: JSON.stringify(event),
     })
   }
-  return appendProtocolEvent(event)
+  return (await coordination()).appendProtocolEvent(event)
 }
 
 /** Create a session (or a pending draft) locally or on the attached daemon. */
@@ -737,7 +710,7 @@ export async function createTuiSession(params: {
   if (isRemoteAttached()) {
     return remoteJson('/api/sessions/new', { method: 'POST', body: JSON.stringify(params) })
   }
-  return createNewViewSession(params)
+  return (await sendPath()).createNewViewSession(params)
 }
 
 export async function readTuiSlashCommands(
@@ -781,7 +754,7 @@ export async function prewarmTuiSession(
     })
     return
   }
-  await prewarmViewSession({
+  await (await sendPath()).prewarmViewSession({
     sessionId: session.sessionId,
     provider: session.provider as AgentProvider | undefined,
     cwd: session.cwd ?? undefined,
@@ -811,7 +784,7 @@ export async function runTuiSessionAction(
     )
     return result ?? {}
   }
-  return runViewSessionAction({
+  return (await sendPath()).runViewSessionAction({
     sessionId: session.sessionId,
     body,
     provider: session.provider as AgentProvider | undefined,

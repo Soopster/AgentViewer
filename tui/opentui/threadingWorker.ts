@@ -15,7 +15,11 @@ import {
 } from '../format'
 import type { TuiDensity } from '../theme'
 import type { ContextUsage, ProviderSelection, Session, SessionInfo, SessionMessage } from '../../lib/types'
-import { readTuiSessionDetailSource, readTuiSessionMetadata, readTuiSessions } from '../../lib/tui/service'
+// lib/tui/reads.ts, not lib/tui/service.ts: this Worker is a separate JS VM
+// that only ever reads, and service.ts's graph reaches the whole send path —
+// every provider client, harness and SDK — for ~72MB of footprint against
+// ~16MB here. Keep this import off service.ts.
+import { readTuiSessionDetailSource, readTuiSessionMetadata, readTuiSessions } from '../../lib/tui/reads'
 import { sameSessionMessageContent, threadedMessageFingerprint } from './messageFingerprint'
 import { reportWorkerHeap } from './workerHeapProbe'
 

@@ -267,14 +267,47 @@ output, and allocator arenas.
   `NODE_ENV` still wins, so `NODE_ENV=development agent-viewer` gets the warnings back. `npm run
   tui` sets it too; `npm run tui:dev` is the variant that keeps React's development build (and its
   warnings) for contributors.
-- **Known remaining cost, measured, deliberately not paid down:** `lib/sessionBackend.ts`'s graph is
-  ~66MB of footprint, ~46MB of which is the Claude Agent SDK, and both isolates load it. The
-  transcript worker genuinely needs it (the Claude read path calls `getSessionMessages`), and the
-  main isolate loads it as soon as the composer prewarms, so deferring it across the remaining
-  static importers (`sdkControlQuery`, `claudeUsageLimits`, `claudeResumeTouch`,
-  `claudeSessionReads`, `claudeModels`) buys memory only while the user is purely browsing. The
-  other providers' clients look expensive in isolation (~60MB each) but that is shared base — their
-  marginal cost inside this graph is under 2MB each. Re-measure before assuming otherwise.
+- **Keep the send path out of read-path modules.** `lib/adapters/claude.ts` is a read adapter and
+  was importing `claudePool` for a single `peekClaudeSession` — 30MB of send-path pool in every
+  isolate that reads a session, the transcript worker included. It now asks through
+  `lib/claudePoolHandle.ts`, which **is the only module that imports the pool**. That handle's
+  read-path answer is exact rather than approximate: a warm entry cannot exist unless the pool has
+  been loaded, because only the send path creates one and the send path loads it — so "not loaded"
+  and "no warm entry" are the same answer, and the caller's existing cold path is correct. Don't
+  reintroduce a direct `import … from './claudePool'`; go through the handle.
+- **This graph is cycle-laden, so single-module deferrals measure as zero.** `lib/agentCoordination.ts`
+  imports `lib/sessionBackend.ts`, which imports every provider's client, which import the
+  coordination tools — so almost any one module, imported alone, drags in nearly the whole layer.
+  Three separate deferrals were measured and abandoned because of it: the Claude Agent SDK, the
+  coordination SDK tools, and the non-active providers' clients each have a **marginal cost of
+  ~0.1MB** inside the full graph, despite costing 30-57MB in isolation. The costs only separate when
+  a whole class is excluded at once: with the other providers' clients out, the Claude SDK is 29.5MB
+  and zod/typebox (via `agentCoordinationSdkTools`) is 15.5MB. **Always measure the marginal cost in
+  the real graph before deferring anything here** — an isolated `import` number will lie to you.
+- **The read path is its own module, and the send path loads on demand.**
+  `lib/sessionReads.ts` holds every adapter-routed read (list, info, title/tag,
+  delete, transcript window, subagents, models, composer options, slash commands,
+  diagnostics) plus the shared tail each read ends with — provider-instance
+  provenance, inbox ordering, the search-index mirror, and `windowForParams`.
+  **Nothing in it may import `lib/sessionBackend.ts`, a provider client, or a
+  provider SDK**; adapters load lazily, so a process materializes only the
+  providers it talks to. `lib/tui/reads.ts` is the TUI's three read wrappers over
+  it (plus the `--attach` HTTP path). `sessionBackend.ts` and `lib/tui/service.ts`
+  re-export both, so existing callers are unchanged.
+
+  This is what lets the two isolates stop paying for each other's work:
+  `tui/opentui/threadingWorker.ts` imports `lib/tui/reads.ts` rather than
+  `lib/tui/service.ts` (72MB → 16MB before its adapter loads), and `service.ts`
+  reaches `sessionBackend` and `agentCoordination` only through `sendPath()` /
+  `coordination()` loaders, so the main isolate boots without the send path at
+  all. Measured on a browse-only run: peak footprint 547MB → 372MB.
+
+  The send path arrives on first use — composer prewarm, a turn, an interrupt —
+  and costs one ~94ms import, off the keystroke path. Keep new send-path calls in
+  `service.ts` behind `sendPath()`; a static import there silently restores the
+  whole graph. `subscribeTuiProtocolRunChanges` is the one synchronous caller: it
+  must return an unsubscribe immediately, so it subscribes once the loader
+  resolves and its disposer cancels a subscription still in flight.
 
 ### Remote access
 
