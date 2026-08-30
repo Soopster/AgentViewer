@@ -15,6 +15,7 @@ import {
   readViewSessionDiagnostics,
   getClaudeSubagentSummaries,
 } from '../lib/sessionBackend'
+import { assertAllAdapterCapabilities } from '../lib/adapters/registry'
 import type { AgentProvider } from '../lib/types'
 
 const PROVIDERS: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'lmstudio']
@@ -89,6 +90,13 @@ async function assertAcpDeclines(provider: AgentProvider) {
   console.log(models.length === 0 ? '    ok   readModels returns empty (no model RPC in ACP)' : '    FAIL expected empty')
   if (models.length !== 0) failures += 1
 }
+
+// The capability/adapter pairing used to be asserted for all eight providers
+// at registry import. Adapters now load on demand (they each drag a provider
+// SDK in, and importing all eight cost ~88MB of RSS), so the whole-table check
+// lives here instead — this suite is the place that legitimately wants every
+// adapter resident at once.
+await step('capabilities match adapters (all providers)', assertAllAdapterCapabilities)
 
 for (const provider of PROVIDERS) await sweep(provider)
 for (const provider of ACP) await assertAcpDeclines(provider)

@@ -8,13 +8,16 @@ import {
 } from '../../lib/threading'
 import {
   buildTranscriptTaskContext,
+  ensureTuiMermaidRenderer,
   formatTranscriptCard,
+  textNeedsTuiMermaid,
   type TuiTranscriptCard,
 } from '../format'
 import type { TuiDensity } from '../theme'
-import type { ProviderSelection, Session, SessionInfo, SessionMessage } from '../../lib/types'
-import { readTuiSessionDetailSource, readTuiSessions } from '../../lib/tui/service'
+import type { ContextUsage, ProviderSelection, Session, SessionInfo, SessionMessage } from '../../lib/types'
+import { readTuiSessionDetailSource, readTuiSessionMetadata, readTuiSessions } from '../../lib/tui/service'
 import { sameSessionMessageContent, threadedMessageFingerprint } from './messageFingerprint'
+import { reportWorkerHeap } from './workerHeapProbe'
 
 // Reads the session from disk/SDK *inside the worker*, then threads + formats.
 // Keeping the read here means the full transcript (and the read/normalize/sort
@@ -58,7 +61,21 @@ type WarmRequest = {
   density: TuiDensity
   showToolCalls: boolean
 }
-type WorkerRequest = DetailRequest | FormatRequest | SessionsRequest | WarmRequest
+// A session's current model + context usage. This used to run in a Worker of
+// its own, which bought isolation from a read that can block for over a second
+// (the Agent SDK's getContextUsage) — but a Bun Worker is a whole JS VM, and
+// that one re-imported this exact provider graph to return two scalars: ~95MB
+// of RSS for a model badge. It lives here now because this worker already
+// holds the graph. Serialization is not a concern the way it is for `warm`:
+// the read is I/O-bound (it awaits a provider round-trip), so it yields the
+// event loop immediately and interleaves with a detail read rather than
+// queueing behind it.
+type MetadataRequest = {
+  kind: 'metadata'
+  id: number
+  session: Session
+}
+type WorkerRequest = DetailRequest | FormatRequest | SessionsRequest | WarmRequest | MetadataRequest
 
 type WorkerResponse =
   | {
@@ -100,6 +117,7 @@ type WorkerResponse =
     }
   | { id: number; ok: true; sessions: Session[] }
   | { id: number; ok: true; warmed: true }
+  | { id: number; ok: true; metadata: { currentModel: string | null; contextUsage: ContextUsage | null } }
   | { id: number; ok: false; error: string }
 
 declare const self: {
@@ -172,6 +190,19 @@ function touchLastFormatted(key: string, value: LastFormatted): void {
   }
 }
 
+/** Every cache here is keyed by session except this one, which is keyed by
+ *  `${sessionCacheKey}|${cardsVariant}` — so evicting a session from the
+ *  threading cache used to leave its formatted transcript behind. Each entry
+ *  pins a full ThreadedMessage[] *and* a full card array, and the cap is four
+ *  per session, so the worker could hold 24 whole transcripts while intending
+ *  to hold 6. That gap was the bulk of this worker's resident memory. */
+function dropLastFormattedForSession(sessionCacheKey: string): void {
+  const prefix = `${sessionCacheKey}|`
+  for (const key of lastFormattedByKey.keys()) {
+    if (key.startsWith(prefix)) lastFormattedByKey.delete(key)
+  }
+}
+
 function cacheKey(session: Session): string {
   return `${session.provider ?? 'claude'}:${session.sessionId}`
 }
@@ -185,6 +216,7 @@ function touchThreadingCache(key: string, cache: IncrementalThreadingCache): voi
     threadingCacheByKey.delete(oldestKey)
     cardCacheByKey.delete(oldestKey)
     lastSentByKey.delete(oldestKey)
+    dropLastFormattedForSession(oldestKey)
   }
 }
 
@@ -249,13 +281,32 @@ function hasTaskListBlock(msg: ThreadedMessage): boolean {
   return false
 }
 
-function formatCards(
+/** Loads the Mermaid renderer only for a transcript that actually contains a
+ *  Mermaid fence. The renderer costs ~21MB of RSS to evaluate and almost no
+ *  transcript needs it, so paying for it at import — in this Worker's own VM,
+ *  on top of the main one's — was the single largest avoidable allocation
+ *  here. Formatting itself stays synchronous; this is the await that lets it. */
+async function ensureMermaidForTranscript(threaded: ThreadedMessage[]): Promise<void> {
+  for (const msg of threaded) {
+    for (const block of msg.blocks) {
+      // Only text blocks reach the Mermaid path in tui/format.ts.
+      if (block.type !== 'text') continue
+      if (textNeedsTuiMermaid(block.text)) {
+        await ensureTuiMermaidRenderer()
+        return
+      }
+    }
+  }
+}
+
+async function formatCards(
   sessionCacheKey: string,
   threaded: ThreadedMessage[],
   density: TuiDensity,
   showToolCalls: boolean,
   pruneCache = true,
-): TuiTranscriptCard[] {
+): Promise<TuiTranscriptCard[]> {
+  await ensureMermaidForTranscript(threaded)
   const messages = showToolCalls ? threaded : stripToolCallBlocks(threaded)
   let perSession = cardCacheByKey.get(sessionCacheKey)
   if (!perSession) {
@@ -363,10 +414,20 @@ function pruneCardCacheRange(sessionCacheKey: string, messages: ThreadedMessage[
 
 self.onmessage = async (event) => {
   const data = event.data
+  reportWorkerHeap('threading')
   try {
     if (data.kind === 'sessions') {
       const sessions = await readTuiSessions(data.provider)
       self.postMessage({ id: data.id, ok: true, sessions })
+      return
+    }
+    if (data.kind === 'metadata') {
+      const metadata = await readTuiSessionMetadata(data.session)
+      self.postMessage({
+        id: data.id,
+        ok: true,
+        metadata: { currentModel: metadata.currentModel, contextUsage: metadata.contextUsage },
+      })
       return
     }
     if (data.kind === 'warm') {
@@ -374,7 +435,7 @@ self.onmessage = async (event) => {
       const { threaded } = threadMessages(data.session, rawMessages)
       // Populates this worker's per-message card cache for the variant the
       // reader will ask for; the cards themselves stay here.
-      formatCards(cacheKey(data.session), threaded, data.density, data.showToolCalls)
+      await formatCards(cacheKey(data.session), threaded, data.density, data.showToolCalls)
       self.postMessage({ id: data.id, ok: true, warmed: true })
       return
     }
@@ -421,7 +482,7 @@ self.onmessage = async (event) => {
           sessionCacheKey,
           prev.threaded.slice(replaceStart, previousEnd),
         )
-        const replacementCards = formatCards(
+        const replacementCards = await formatCards(
           sessionCacheKey,
           threaded.slice(replaceStart, replaceEnd),
           data.density,
@@ -452,7 +513,7 @@ self.onmessage = async (event) => {
         return
       }
 
-      const transcriptCards = formatCards(sessionCacheKey, threaded, data.density, data.showToolCalls)
+      const transcriptCards = await formatCards(sessionCacheKey, threaded, data.density, data.showToolCalls)
       touchLastFormatted(formatKey, {
         threaded,
         cards: transcriptCards,
@@ -505,7 +566,7 @@ self.onmessage = async (event) => {
       return
     }
 
-    const transcriptCards = formatCards(sessionCacheKey, threadedMessages, data.density, data.showToolCalls)
+    const transcriptCards = await formatCards(sessionCacheKey, threadedMessages, data.density, data.showToolCalls)
     const rawPrefix = prev ? sharedIdentityPrefix(alignedMessages, prev.raw) : 0
     const threadedPrefix = prev ? sharedIdentityPrefix(threadedMessages, prev.threaded) : 0
     const cardsPrefix = prev && prev.cardsVariant === cardsVariant

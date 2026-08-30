@@ -46,6 +46,7 @@ export default function PairPage() {
     window.history.replaceState(null, '', window.location.pathname)
 
     let cancelled = false
+    let redirectTimer: number | null = null
     fetch('/api/remote/handshake', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
@@ -58,9 +59,10 @@ export default function PairPage() {
           return
         }
         const body = (await res.json().catch(() => ({}))) as { scope?: string }
+        if (cancelled) return
         setStatus('success')
         setMessage(body.scope === 'read-only' ? 'Paired read-only. Opening Agent Viewer…' : 'Paired. Opening Agent Viewer…')
-        setTimeout(() => { if (!cancelled) router.replace('/') }, 700)
+        redirectTimer = window.setTimeout(() => { if (!cancelled) router.replace('/') }, 700)
       })
       .catch(() => {
         if (!cancelled) {
@@ -68,7 +70,10 @@ export default function PairPage() {
           setMessage('Could not reach Agent Viewer — check you’re on the same network as the desktop.')
         }
       })
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      if (redirectTimer) window.clearTimeout(redirectTimer)
+    }
   }, [router])
 
   return <PairShell status={status} message={message} />

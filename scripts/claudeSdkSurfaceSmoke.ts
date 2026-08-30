@@ -12,6 +12,7 @@
 import assert from 'node:assert/strict'
 import { normalizeClaudeHistoryMessages, normalizeClaudeStreamThreadedMessage } from '../lib/claudeMapper'
 import { effortToSdk } from '../lib/claudePool'
+import { formatClaudeRuntimeCounts, formatClaudeRuntimeDetailLines } from '../lib/claudeSdkFeatures'
 import { classifyClaudeUsageMessage, isClaudeUsageLimitError } from '../lib/claudeUsageLimits'
 import { isTransientSendError } from '../lib/transientError'
 import { formatMessageExpanded, formatTranscriptCards } from '../tui/format'
@@ -104,6 +105,25 @@ for (const message of history) {
     `${payload.subtype} lost its content on the history path`,
   )
 }
+
+// SDK 0.3.247+ identifies housekeeping tasks that should stay out of the
+// user-facing activity count while real background work remains visible.
+const backgroundTasks = {
+  subtype: 'background_tasks_changed',
+  tasks: [
+    { task_id: 'task-user', task_type: 'local_workflow', description: 'Index the repository' },
+    { task_id: 'task-ambient', task_type: 'watcher', description: 'Watch for updates', ambient: true },
+  ],
+} as unknown as SystemMessagePayload
+assert.deepEqual(formatClaudeRuntimeCounts(backgroundTasks), ['1 background task'])
+assert.deepEqual(formatClaudeRuntimeDetailLines(backgroundTasks), [
+  'Background tasks:',
+  '- 1. local_workflow running: Index the repository',
+])
+assert.deepEqual(formatClaudeRuntimeCounts({
+  subtype: 'background_tasks_changed',
+  tasks: [{ task_id: 'task-ambient', task_type: 'watcher', description: 'Watch for updates', ambient: true }],
+} as unknown as SystemMessagePayload), [])
 
 // --- warm-pool effort changes ---------------------------------------------
 // applyFlagSettings({effortLevel}) applies a named-level change in place, so

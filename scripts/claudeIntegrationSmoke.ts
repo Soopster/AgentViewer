@@ -92,7 +92,7 @@ try {
     getCwd: () => process.cwd(),
   })
   const hooks = extensions.hooks as unknown as Record<string, Array<{ hooks: Array<(input: never, toolUseId?: string) => Promise<unknown>> }>>
-  for (const event of ['PreToolUse', 'PostToolUse', 'PermissionRequest', 'PreCompact', 'PostCompact', 'SubagentStart', 'SubagentStop', 'ConfigChange']) {
+  for (const event of ['PreToolUse', 'PostToolUse', 'PermissionRequest', 'PreCompact', 'PostCompact', 'PreModelSwitch', 'PostModelSwitch', 'SubagentStart', 'SubagentStop', 'ConfigChange']) {
     assert.ok(hooks[event]?.[0]?.hooks[0], `${event} observability hook is missing`)
   }
   assert.equal(hooks.MessageDisplay, undefined)

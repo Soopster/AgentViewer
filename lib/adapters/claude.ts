@@ -34,7 +34,7 @@ import { deleteClaudeHookEvents, listClaudeHookEvents } from '../claudeHookEvent
 import { claudeProcessTransportStatus } from '../claudeProcessSpawner'
 import { readClaudeSupportedModels } from '../claudeModels'
 import { withoutClaudeResumeTouch } from '../claudeResumeTouch'
-import { peekClaudeSession } from '../claudePool'
+import { peekClaudeSessionIfLoaded } from '../claudePoolHandle'
 import { getClaudeCommandsOverride } from '../claudeCommandsStore'
 import {
   claudeSubagentParentId,
@@ -298,7 +298,11 @@ export const claudeAdapter: SessionAdapter = {
     // Prefer the warm pool entry's persistent Query (composer prewarm or a
     // recent send) — supportedCommands is then a control RPC on the existing
     // subprocess instead of a fresh ~1-3s CLI spawn.
-    const warm = peekClaudeSession(sessionId)
+    // Via the handle, so this read path does not drag the ~30MB send-path pool
+    // into every isolate that reads a session. Undefined when the pool has
+    // never loaded, which is the same answer as "no warm entry" — nothing can
+    // have created one — and falls through to the cold control query below.
+    const warm = peekClaudeSessionIfLoaded(sessionId)
     if (warm) {
       const commands = await warm.query.supportedCommands().catch(() => [])
       return mapCommands(commands)

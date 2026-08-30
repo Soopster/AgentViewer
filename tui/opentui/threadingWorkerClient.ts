@@ -1,7 +1,7 @@
 import type { ThreadedMessage } from '../../lib/threading'
 import type { TuiTranscriptCard } from '../format'
 import type { TuiDensity } from '../theme'
-import type { ProviderSelection, Session, SessionInfo, SessionMessage } from '../../lib/types'
+import type { ContextUsage, ProviderSelection, Session, SessionInfo, SessionMessage } from '../../lib/types'
 import { threadedMessageFingerprint } from './messageFingerprint'
 import { tuiWorkerUrl } from './workerUrl'
 
@@ -47,6 +47,11 @@ type Pending =
       resolve: () => void
       reject: (error: Error) => void
     }
+  | {
+      kind: 'metadata'
+      resolve: (metadata: TuiSessionMetadataResult) => void
+      reject: (error: Error) => void
+    }
 
 type WorkerResponse =
   | {
@@ -83,6 +88,7 @@ type WorkerResponse =
     }
   | { id: number; ok: true; sessions: Session[] }
   | { id: number; ok: true; warmed: true }
+  | { id: number; ok: true; metadata: TuiSessionMetadataResult }
   | { id: number; ok: false; error: string }
 
 let worker: Worker | null = null
@@ -126,6 +132,17 @@ function touchLastFormatted(key: string, value: LastFormattedDelivery): void {
     const oldestKey = lastFormattedByKey.keys().next().value
     if (oldestKey === undefined) break
     lastFormattedByKey.delete(oldestKey)
+  }
+}
+
+/** Mirrors the worker's own eviction: this map is keyed by
+ *  `${sessionKey}|${cardsVariant}`, so a session dropped from the threading
+ *  cache would otherwise leave its threaded transcript and cards pinned here
+ *  until twelve other format keys pushed them out. */
+function dropLastFormattedForSession(sessionKey: string): void {
+  const prefix = `${sessionKey}|`
+  for (const key of lastFormattedByKey.keys()) {
+    if (key.startsWith(prefix)) lastFormattedByKey.delete(key)
   }
 }
 
@@ -211,6 +228,8 @@ function touchThreadingCache(key: string, cache: ThreadingClientCache): void {
     const oldestKey = threadingCacheByKey.keys().next().value
     if (oldestKey === undefined) break
     threadingCacheByKey.delete(oldestKey)
+    lastDeliveredByKey.delete(oldestKey)
+    dropLastFormattedForSession(oldestKey)
   }
 }
 
@@ -299,6 +318,8 @@ function ensureWorker(): Worker {
       entry.resolve(data.sessions)
     } else if (entry.kind === 'warm' && 'warmed' in data) {
       entry.resolve()
+    } else if (entry.kind === 'metadata' && 'metadata' in data) {
+      entry.resolve(data.metadata)
     }
   }
   w.onerror = (event) => {
@@ -320,6 +341,25 @@ function ensureWorker(): Worker {
  * isolate. Pi's SDK has a large fixed resident cost; listing in the main TUI
  * and reading detail in this worker otherwise loads a full copy in each.
  */
+export type TuiSessionMetadataResult = { currentModel: string | null; contextUsage: ContextUsage | null }
+
+/**
+ * Read a session's current model + context usage in the transcript worker.
+ * This had a Worker to itself, for isolation from a read that can block for
+ * over a second — but that Worker was a second JS VM re-importing this exact
+ * provider graph to produce two scalars, ~95MB of RSS for a model badge. The
+ * read is I/O-bound, so sharing this worker costs no serialization: it yields
+ * at its first await rather than queueing behind a detail read.
+ */
+export function readTuiSessionMetadataAsync(session: Session): Promise<TuiSessionMetadataResult> {
+  const id = ++requestCounter
+  const w = ensureWorker()
+  return new Promise<TuiSessionMetadataResult>((resolve, reject) => {
+    pending.set(id, { kind: 'metadata', resolve, reject })
+    w.postMessage({ kind: 'metadata', id, session })
+  })
+}
+
 export function readTuiSessionsAsync(provider: ProviderSelection): Promise<Session[]> {
   const id = ++requestCounter
   const w = ensureWorker()

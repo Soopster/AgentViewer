@@ -1,50 +1,21 @@
-import type { ContextUsage } from '../../lib/types'
-import type { Session } from '../../lib/types'
-import { tuiWorkerUrl } from './workerUrl'
-
-type Pending = {
-  resolve: (metadata: { currentModel: string | null; contextUsage: ContextUsage | null }) => void
-  reject: (error: Error) => void
-}
-
-type WorkerResponse =
-  | { id: number; ok: true; metadata: { currentModel: string | null; contextUsage: ContextUsage | null } }
-  | { id: number; ok: false; error: string }
-
-let worker: Worker | null = null
-let requestCounter = 0
-const pending = new Map<number, Pending>()
-
-function ensureWorker(): Worker {
-  if (worker) return worker
-  const w = new Worker(tuiWorkerUrl('metadataWorker', import.meta.url), { type: 'module' })
-  w.onmessage = (event: MessageEvent<WorkerResponse>) => {
-    const data = event.data
-    const entry = pending.get(data.id)
-    if (!entry) return
-    pending.delete(data.id)
-    if (data.ok) entry.resolve(data.metadata)
-    else entry.reject(new Error(data.error))
-  }
-  w.onerror = (event) => {
-    const message = typeof event === 'object' && event && 'message' in event
-      ? String((event as { message?: unknown }).message ?? 'metadata worker error')
-      : 'metadata worker error'
-    const err = new Error(message)
-    for (const entry of pending.values()) entry.reject(err)
-    pending.clear()
-    worker?.terminate()
-    worker = null
-  }
-  worker = w
-  return w
-}
-
-export function readTuiSessionMetadataAsync(session: Session): Promise<{ currentModel: string | null; contextUsage: ContextUsage | null }> {
-  const id = ++requestCounter
-  const w = ensureWorker()
-  return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject })
-    w.postMessage({ id, session })
-  })
-}
+// Session model + context-usage reads.
+//
+// This used to own a Worker of its own. That bought isolation from a read that
+// can block for over a second (the Agent SDK's getContextUsage), but a Bun
+// Worker is a whole JS VM: it re-imported the entire provider graph — every
+// SDK the read path can reach — to return two scalars, ~95MB of RSS for a
+// model badge and a context gauge.
+//
+// The work now runs in the transcript worker, which already holds that graph.
+// The isolation survives the move because the read is I/O-bound: it awaits a
+// provider round-trip and yields the worker's event loop immediately, so it
+// interleaves with a detail read instead of queueing behind one. (That is what
+// separates it from a `warm` prefetch, which is CPU-bound and *does* have to
+// stay off the critical path.)
+//
+// The module stays as the name callers import, so a future change of mind about
+// where this runs is one file.
+export {
+  readTuiSessionMetadataAsync,
+  type TuiSessionMetadataResult,
+} from './threadingWorkerClient'

@@ -286,10 +286,13 @@ function getClaudeBackgroundTasks(payload: SystemMessagePayload): ClaudeBackgrou
 
   // `background_tasks_changed` (SDK 0.3.203+) is a level signal: `tasks` is the
   // full live set (task_id/task_type/description only, no per-task status), sent
-  // whenever membership changes. Treat every listed task as currently running.
+  // whenever membership changes. Treat every listed non-ambient task as
+  // currently running; SDK 0.3.247+ marks housekeeping that should not keep the
+  // user-facing activity indicator busy.
   if (payload.subtype === 'background_tasks_changed' && Array.isArray(payload.tasks)) {
     return payload.tasks.flatMap((entry) => {
       if (!isRecord(entry)) return []
+      if (entry.ambient === true) return []
       const id = stringValue(entry.task_id)
       const type = stringValue(entry.task_type)
       const description = stringValue(entry.description)

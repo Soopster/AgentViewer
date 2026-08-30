@@ -217,6 +217,65 @@ Both TUIs depend on the same `lib/` provider layer — changes to `sessionBacken
   under the test renderer, so a single flush followed by a long sleep reports every state update as
   taking the whole sleep.
 
+#### OpenTUI memory patterns (load-bearing)
+
+The TUI's footprint is dominated by **parsed module code across isolates**, not by live objects. A
+Bun `Worker` is a whole JS VM in the same process: it re-imports its entire graph, so anything the
+main isolate and the transcript worker both import is paid for twice. At steady state, live JS is
+~60MB (main) + ~65MB (worker) against a ~400MB physical footprint — the rest is module code, JIT
+output, and allocator arenas.
+
+- **Measure physical footprint, not RSS.** RSS counts the resident slice of Bun's own ~2GB binary,
+  which is shared and file-backed; it swamps the app's real cost and swings 100MB between identical
+  runs. `npm run tui:memrun` reports `vmmap`'s physical footprint, sampled throughout the run
+  (a single reading lands wherever the collector happened to leave the heap and varies ~2x).
+  `npm run tui:memperf` reports the same split under the test renderer, plus per-isolate JS heap;
+  `AGENT_VIEWER_TUI_MEM=1` turns on `tui/opentui/workerHeapProbe.ts`, which is the only way to
+  attribute memory to a specific VM.
+- **The scenario decides what you measure.** Sidebar navigation alone never fetches session
+  metadata; you have to Tab into the reader (`KEYS=$'j\t'`) before that path runs at all. A memory
+  A/B against the wrong key sequence reports "no change" for a change worth 95MB.
+- **A provider SDK must not load until that provider is used.** `lib/adapters/registry.ts` resolves
+  adapters by dynamic import for exactly this reason — importing all eight cost ~88MB. The same rule
+  applies to anything in `lib/sessionBackend.ts`'s graph: `claudePool` is loaded on demand behind
+  `ensureClaudePool()` because it is the *send* path, and the transcript worker never sends a turn
+  yet was paying ~31MB to hold a pool it could not use. Its call sites use the synchronous
+  `claudePoolModule()` accessor, which **throws** rather than loading, so a use that is not behind a
+  send-path entry point is loud instead of a stall on a hot path.
+- **Don't spend a whole VM on a small answer.** Session model + context usage had its own Worker for
+  isolation from a read that can block for over a second. That Worker re-imported the full provider
+  graph — ~95MB of RSS for a model badge. It now runs in the transcript worker
+  (`kind: 'metadata'`), which already holds that graph. The isolation survives because the read is
+  I/O-bound: it awaits a provider round-trip and yields immediately, so it interleaves with a detail
+  read rather than queueing behind one. That is what separates it from a `warm` prefetch, which is
+  CPU-bound and must stay off the critical path.
+- **Evict every per-session cache together.** `lastFormattedByKey` (in both the worker and its
+  client) is keyed by `${sessionKey}|${cardsVariant}`, not by session, so evicting a session from
+  the threading cache used to leave its threaded transcript *and* its card array pinned. With four
+  variants per session the worker could hold 24 whole transcripts while intending to hold 6.
+  `dropLastFormattedForSession` runs alongside every threading-cache eviction; a new per-session
+  cache must join it.
+- **Load a rare renderer on demand.** `beautiful-mermaid` costs ~21MB to evaluate and `tui/format.ts`
+  is imported by both TUIs *and* the transcript worker. It is now behind
+  `ensureTuiMermaidRenderer()`, which the worker awaits only for a transcript that actually contains
+  a Mermaid fence (`textNeedsTuiMermaid`); formatting itself stays synchronous. The legacy Ink TUI
+  bumps a `mermaidEpoch` to re-run its memo once the renderer resolves.
+- **The shipped TUI runs React's production build.** Bun leaves `NODE_ENV` unset, so the TUI was
+  loading React's development build, which allocates an `Error` per JSX element for owner stacks —
+  ~6,000 per session opened, ~49,000 across a dozen. `bin/agent-viewer.mjs` defaults the OpenTUI
+  spawn to `NODE_ENV=production` (worth ~27MB peak / ~60MB settled, plus the churn); an explicit
+  `NODE_ENV` still wins, so `NODE_ENV=development agent-viewer` gets the warnings back. `npm run
+  tui` sets it too; `npm run tui:dev` is the variant that keeps React's development build (and its
+  warnings) for contributors.
+- **Known remaining cost, measured, deliberately not paid down:** `lib/sessionBackend.ts`'s graph is
+  ~66MB of footprint, ~46MB of which is the Claude Agent SDK, and both isolates load it. The
+  transcript worker genuinely needs it (the Claude read path calls `getSessionMessages`), and the
+  main isolate loads it as soon as the composer prewarms, so deferring it across the remaining
+  static importers (`sdkControlQuery`, `claudeUsageLimits`, `claudeResumeTouch`,
+  `claudeSessionReads`, `claudeModels`) buys memory only while the user is purely browsing. The
+  other providers' clients look expensive in isolation (~60MB each) but that is shared base — their
+  marginal cost inside this graph is under 2MB each. Re-measure before assuming otherwise.
+
 ### Remote access
 
 Opt-in pairing for a phone or a second browser, off by default. `lib/remoteAuth.ts` owns two

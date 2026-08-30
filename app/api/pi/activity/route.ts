@@ -9,13 +9,13 @@ function frame(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
 }
 
-export async function GET(request: Request) {
+function createActivityStream(request: Request): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder()
   let closed = false
   let unsubscribe = () => {}
   let heartbeat: ReturnType<typeof setInterval> | undefined
 
-  const stream = new ReadableStream<Uint8Array>({
+  return new ReadableStream<Uint8Array>({
     start(controller) {
       const send = () => {
         if (closed) return
@@ -48,8 +48,10 @@ export async function GET(request: Request) {
       if (heartbeat) clearInterval(heartbeat)
     },
   })
+}
 
-  return new Response(stream, {
+export async function GET(request: Request) {
+  return new Response(createActivityStream(request), {
     headers: {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache, no-transform',

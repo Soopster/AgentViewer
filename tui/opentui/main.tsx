@@ -3,6 +3,7 @@ import React from 'react'
 import { createCliRenderer } from '@opentui/core'
 import { createRoot } from '@opentui/react'
 import OpenTuiApp from './App'
+import { reportWorkerHeap } from './workerHeapProbe'
 
 const renderer = await createCliRenderer({
   exitOnCtrlC: false,
@@ -19,3 +20,6 @@ const renderer = await createCliRenderer({
 })
 
 createRoot(renderer).render(<OpenTuiApp />)
+
+// Boot footprint of the main isolate (AGENT_VIEWER_TUI_MEM=1 only).
+setTimeout(() => reportWorkerHeap('main', true), 4000)

@@ -12,6 +12,16 @@ type Props = {
   onSwitched: (summary: GitSummary) => void
 }
 
+async function readBranchesResponse(response: Response): Promise<GitBranchRef[]> {
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as { error?: string }
+    throw new Error(body.error ?? 'Unable to load branches')
+  }
+  const body = await response.json() as { branches?: GitBranchRef[]; error?: string }
+  if (!body.branches) throw new Error(body.error ?? 'Unable to load branches')
+  return body.branches
+}
+
 export default function BranchSwitcher({ cwd, currentBranch, open, onOpenChange, onSwitched }: Props) {
   const [branches, setBranches] = useState<GitBranchRef[]>([])
   const [query, setQuery] = useState('')
@@ -32,10 +42,10 @@ export default function BranchSwitcher({ cwd, currentBranch, open, onOpenChange,
       cache: 'no-store',
       signal: controller.signal,
     })
-      .then(async (response) => {
-        const body = await response.json() as { branches?: GitBranchRef[]; error?: string }
-        if (!response.ok || !body.branches) throw new Error(body.error ?? 'Unable to load branches')
-        setBranches(body.branches)
+      .then(readBranchesResponse)
+      .then((branches) => {
+        if (controller.signal.aborted) return
+        setBranches(branches)
       })
       .catch((cause) => {
         if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'Unable to load branches')

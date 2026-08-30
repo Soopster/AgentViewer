@@ -7,6 +7,14 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import type { PiActivitySnapshot } from '@/lib/piActivity'
 
 const READY_VISIBILITY_MS = 12_000
+const ACTIVITY_TIME_FORMATTER = new Intl.DateTimeFormat('en-AU', {
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+  timeZone: 'UTC',
+  timeZoneName: 'short',
+})
 
 function initialSnapshot(): PiActivitySnapshot {
   return {
@@ -75,7 +83,7 @@ export default function PiActivityPopover() {
           <div className="max-h-52 overflow-y-auto rounded-lg border border-border bg-muted/40 p-2 font-mono text-[11px] leading-relaxed">
             {recentEvents.map((event) => (
               <div key={event.id} className={event.tone === 'error' ? 'text-destructive' : 'text-muted-foreground'}>
-                <span className="select-none opacity-60">{new Date(event.timestamp).toLocaleTimeString()} </span>
+                <span className="select-none opacity-60">{ACTIVITY_TIME_FORMATTER.format(event.timestamp)} </span>
                 {event.message}
               </div>
             ))}

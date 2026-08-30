@@ -17,7 +17,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 const LOCAL_PRESETS = ['http://localhost:3000', 'http://localhost:5173', 'http://localhost:8080']
 
 /** Bare hosts, ports and paths all become something loadable. */
-export function normalizeBrowserUrl(input: string): string | null {
+function normalizeBrowserUrl(input: string): string | null {
   const trimmed = input.trim()
   if (!trimmed) return null
   if (/^\d{2,5}$/.test(trimmed)) return `http://localhost:${trimmed}`
@@ -141,7 +141,7 @@ export default function BrowserSurface({
           key={`${current}#${reloadKey}`}
           src={current}
           title="Browser surface"
-          sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-modals"
+          sandbox="allow-scripts allow-forms allow-popups allow-modals"
           style={{ flex: 1, minHeight: 0, width: '100%', border: 0, background: '#fff' }}
         />
       ) : (

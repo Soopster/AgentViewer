@@ -6,12 +6,8 @@ import { EditProvider, FileDiff, MultiFileDiff, WorkerPoolContextProvider } from
 import { Editor } from '@pierre/diffs/edit'
 import { parsePatchFiles, type DiffLineAnnotation, type FileDiffContentsLoader, type FileDiffMetadata, type FileDiffOptions, type SelectedLineRange } from '@pierre/diffs'
 import { createFileTreeIconResolver, getBuiltInSpriteSheet, prepareFileTreeInput } from '@pierre/trees'
+import { DIFF_WORKER_POOL_OPTIONS } from '@/components/pierreDiffWorker'
 
-export const DIFF_WORKER_POOL_OPTIONS = {
-  poolSize: 2,
-  workerFactory: () =>
-    new Worker(new URL('@pierre/diffs/worker/worker.js', import.meta.url), { type: 'module' }),
-}
 // Editable surfaces need token-level (not line-level) highlight patching so the
 // worker can re-highlight around the cursor without discarding editor state.
 const DIFF_WORKER_HIGHLIGHTER_OPTIONS = { useTokenTransformer: true }

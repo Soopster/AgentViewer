@@ -8,7 +8,35 @@ import {
   formatClaudeRuntimeDetailLines,
 } from '../lib/claudeSdkFeatures'
 import { pathBasename } from '../lib/projectPaths'
-import { renderMermaidASCII } from 'beautiful-mermaid'
+// beautiful-mermaid is loaded on demand, not at import (load-bearing for
+// memory). It costs ~21MB of RSS to evaluate, this module is imported by both
+// TUIs *and* by the threading worker — a Bun Worker re-imports its graph into
+// its own VM, so the eager import was paying that price two or three times
+// over — and a transcript containing a Mermaid fence is rare. Callers that are
+// about to format a transcript containing one await ensureTuiMermaidRenderer()
+// first; formatting stays synchronous.
+type MermaidRenderer = typeof import('beautiful-mermaid').renderMermaidASCII
+
+let mermaidRenderer: MermaidRenderer | null = null
+let mermaidLoad: Promise<void> | null = null
+
+/** True when the text contains a fence this module would hand to Mermaid, so a
+ *  caller can skip the load for the overwhelming majority of transcripts. */
+export function textNeedsTuiMermaid(text: string): boolean {
+  return MERMAID_FENCE_HINT.test(text)
+}
+
+/** Loads the Mermaid renderer if it isn't loaded yet. Safe to call
+ *  concurrently and on every format; it is a no-op once resolved. A failure to
+ *  load is swallowed — renderMermaidForTui already degrades to showing the
+ *  diagram source, which is what a render failure has always produced. */
+export async function ensureTuiMermaidRenderer(): Promise<void> {
+  if (mermaidRenderer) return
+  mermaidLoad ??= import('beautiful-mermaid')
+    .then((mod) => { mermaidRenderer = mod.renderMermaidASCII })
+    .catch(() => { /* fall through to the source-only rendering below */ })
+  await mermaidLoad
+}
 import { detectTuiCodeFiletypeFromPath, normalizeTuiCodeFiletype } from './codeFiletypes'
 import { computeTurnDurationsMs, type ThreadedBlock, type ThreadedMessage, type ToolThread } from '../lib/threading'
 import { buildTaskRegistry, parseCreatedTaskId, type TaskRegistry } from '../lib/taskRegistry'
@@ -2238,6 +2266,7 @@ function extractMarkdownContent(blocks: ThreadedBlock[]): string | undefined {
 
 const CODE_FENCE_RE = /^```([^\s`]*)[^\n]*\n([\s\S]*?)^```[ \t]*$/gm
 const MERMAID_LANGS = new Set(['mermaid', 'mmd'])
+const MERMAID_FENCE_HINT = /^```(?:mermaid|mmd)\b/im
 
 function displayLanguageFromPath(filePath?: string): string {
   if (!filePath) return 'text'
@@ -2287,8 +2316,12 @@ function readCodeBlockFromTool(thread: ToolThread, key: string): TuiTranscriptCo
 }
 
 function renderMermaidForTui(content: string): string {
+  // Not loaded means no caller ran ensureTuiMermaidRenderer(). Show the source
+  // fence alone rather than a "render failed" banner — nothing failed, the
+  // diagram just isn't drawable in this pass.
+  if (!mermaidRenderer) return ['```mermaid', content, '```'].join('\n')
   try {
-    const rendered = renderMermaidASCII(content, {
+    const rendered = mermaidRenderer(content, {
       colorMode: 'none',
       useAscii: false,
       paddingX: 3,

@@ -1633,6 +1633,8 @@ function TurnInspector({
   onOpenMessage?: (messageId: string) => void
   onClearSelection: () => void
 }) {
+  const flat = useSyncExternalStore<ColorTreatment>(subscribeColorTreatment, getCurrentColorTreatment, () => DEFAULT_COLOR_TREATMENT) === 'flat'
+
   if (!entry) {
     return (
       <div className="av-session-viz-panel">
@@ -1642,7 +1644,6 @@ function TurnInspector({
     )
   }
 
-  const flat = useSyncExternalStore<ColorTreatment>(subscribeColorTreatment, getCurrentColorTreatment, () => DEFAULT_COLOR_TREATMENT) === 'flat'
   const roleMeta = ROLE_META[entry.role]
   const phaseMeta = PHASE_META[phaseForEntry(entry, total)]
   const tokenLabel = entry.inputTokens > 0 || entry.outputTokens > 0

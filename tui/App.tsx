@@ -8,7 +8,9 @@ import {
   formatProviderLabel,
   formatSessionProject,
   formatSessionTitle,
+  ensureTuiMermaidRenderer,
   formatTranscriptCards,
+  textNeedsTuiMermaid,
   type TuiTranscriptCard,
   type TuiTranscriptCardLine,
 } from './format'
@@ -651,13 +653,32 @@ export default function App() {
     4,
   )
 
+  // The Mermaid renderer is loaded on demand (it costs ~21MB of RSS), and
+  // formatting is synchronous, so a transcript that contains a diagram renders
+  // its source on the first pass and the diagram once this resolves. Bumping
+  // the epoch is what re-runs the memo; transcripts without a fence never load
+  // it and never re-render.
+  const [mermaidEpoch, setMermaidEpoch] = useState(0)
+  useEffect(() => {
+    if (!sessionDetail) return
+    const needed = sessionDetail.threadedMessages.some((msg) =>
+      msg.blocks.some((block) => block.type === 'text' && textNeedsTuiMermaid(block.text)),
+    )
+    if (!needed) return
+    let cancelled = false
+    void ensureTuiMermaidRenderer().then(() => { if (!cancelled) setMermaidEpoch((n) => n + 1) })
+    return () => { cancelled = true }
+  }, [sessionDetail])
+
   const transcriptCards = useMemo(() => {
     if (!sessionDetail) return []
     const messages = showToolCalls
       ? sessionDetail.threadedMessages
       : stripToolCallBlocks(sessionDetail.threadedMessages)
     return formatTranscriptCards(messages, density)
-  }, [density, sessionDetail, showToolCalls])
+    // mermaidEpoch is a re-format trigger, not an input.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [density, sessionDetail, showToolCalls, mermaidEpoch])
   const resolvedExpandedKeys = useMemo(() => {
     const next = new Set<string>()
     for (const card of transcriptCards) {

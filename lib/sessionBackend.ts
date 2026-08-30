@@ -1,4 +1,3 @@
-import { NextResponse } from 'next/server'
 import { classifyClaudeUsageMessage, type ClaudeUsageLimitKind } from './claudeUsageLimits'
 
 import { readFile } from 'node:fs/promises'
@@ -17,24 +16,13 @@ import {
   type SDKMessage,
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
-import {
-  acquireClaudeSession,
-  adoptClaudeSession,
-  type ClaudeBridgeBox,
-  type ClaudeElicitationHandler,
-  type ClaudePoolEntry,
-  claudePoolSize,
-  CLAUDE_QUERY_ENV,
-  claudeIntegratedQueryExtensions,
-  claudeIntegratedMcpServers,
-  createInputStream,
-  effortToSdk,
-  interruptClaudeQuery,
-  logClaudeSubprocessStderr,
-  peekClaudeSession,
-  queueClaudeReadStateSeeds,
-  recycleClaudeSession,
+import type {
+  ClaudeBridgeBox,
+  ClaudeElicitationHandler,
+  ClaudePoolEntry,
 } from './claudePool'
+import { claudePoolIfLoaded, claudePoolModule, ensureClaudePool } from './claudePoolHandle'
+
 import {
   claudeDynamicMcpServerNames,
   getClaudeDynamicMcpServers,
@@ -336,6 +324,17 @@ type ListParams = {
 // a field added to one copy silently did nothing on the other — re-export
 // instead so there is one definition.
 import type { MessageListParams, SessionMessageWindow } from './adapters/types'
+
+// claudePool is loaded on demand, not at import (load-bearing for memory) —
+// see lib/claudePoolHandle.ts, which owns the loading and is the only module
+// that imports the pool. It is the warm-subprocess pool for Claude turns, the
+// send path and nothing else, and it costs ~30MB to evaluate; the TUI's
+// transcript Worker is a separate JS VM that reads sessions and never sends.
+//
+// Every use below is inside an async send-path function that awaits
+// ensureClaudePool() on entry — gated on the session actually being a Claude
+// session — so claudePoolModule() stays a synchronous accessor and the call
+// sites read as they did before.
 export type { MessageListParams, SessionMessageWindow }
 
 type ProjectMessageBatchParams = {
@@ -1816,7 +1815,7 @@ async function listViewSessionsImpl(params: ListParams): Promise<Session[]> {
       instance.id,
       instance.provider,
       async () => {
-        const adapter = getSessionAdapter(instance.provider)
+        const adapter = await getSessionAdapter(instance.provider)
         if (!adapter.listSessions) return []
         const page = await adapter.listSessions({
           ...params,
@@ -1847,7 +1846,7 @@ async function listViewSessionsImpl(params: ListParams): Promise<Session[]> {
     }))
   }
 
-  const adapter = getSessionAdapter(provider)
+  const adapter = await getSessionAdapter(provider)
   if (!adapter.listSessions) return []
   const page = await adapter.listSessions(params)
   return finish(page.map((session) => applyProviderInstance(session, instance)))
@@ -1855,14 +1854,14 @@ async function listViewSessionsImpl(params: ListParams): Promise<Session[]> {
 
 export async function readViewSessionInfo(sessionId: string, providerOverride?: AgentProvider): Promise<SessionInfo | null> {
   const provider = await resolveProvider(providerOverride)
-  const adapter = getSessionAdapter(provider)
+  const adapter = await getSessionAdapter(provider)
   if (!adapter.readSessionInfo) return null
   return adapter.readSessionInfo(sessionId)
 }
 
 export async function patchViewSession(sessionId: string, body: Record<string, unknown>, providerOverride?: AgentProvider): Promise<void> {
   const provider = await resolveProvider(providerOverride)
-  const adapter = getSessionAdapter(provider)
+  const adapter = await getSessionAdapter(provider)
   if ('title' in body) {
     if (body.title !== null && body.title !== undefined && typeof body.title !== 'string') {
       throw new Error('title must be a string')
@@ -1884,7 +1883,7 @@ export async function patchViewSession(sessionId: string, body: Record<string, u
 
 export async function deleteViewSession(sessionId: string, providerOverride?: AgentProvider): Promise<void> {
   const provider = await resolveProvider(providerOverride)
-  const adapter = getSessionAdapter(provider)
+  const adapter = await getSessionAdapter(provider)
   if (!adapter.deleteSession) unsupported(provider, 'deleteSession')
   await adapter.deleteSession(sessionId)
   // Index removal is the router's job: every provider that can delete needs it,
@@ -1913,6 +1912,9 @@ function summarizeResolvedClaudeSettings(resolved: Awaited<ReturnType<typeof res
 
 export async function runViewSessionAction({ sessionId, body, provider }: SessionActionParams): Promise<Record<string, unknown>> {
   const resolvedProvider = await resolveProvider(provider)
+  // Only Claude sessions have a warm pool; loading it for another provider's
+  // action would reinstate the cost this deferral exists to avoid.
+  if (resolvedProvider === 'claude') await ensureClaudePool()
   const action = typeof body.action === 'string' ? body.action : ''
 
   // Provider-agnostic: deliver a user message into the running turn (native
@@ -2256,7 +2258,7 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
     if (action === 'setModel') {
       const model = typeof body.model === 'string' ? body.model.trim() : ''
       if (!model) throw new Error('model is required')
-      const warm = peekClaudeSession(sessionId)
+      const warm = claudePoolModule().peekClaudeSession(sessionId)
       if (warm) {
         await warm.setModel(model)
         return { ok: true, applied: 'live' }
@@ -2271,7 +2273,7 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
         : undefined
       if (!serverName) throw new Error('serverName is required')
       if (mode === undefined) throw new Error("mode must be 'default', 'auto', or null")
-      const warm = peekClaudeSession(sessionId)
+      const warm = claudePoolModule().peekClaudeSession(sessionId)
       const q = warm?.query ?? createSessionControlQuery(sessionId)
       try {
         const result = await q.setMcpPermissionModeOverride(serverName, mode)
@@ -2283,7 +2285,7 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
     if (action === 'setPermissionMode') {
       const mode = parseClaudePermissionMode(body)
       if (!mode) throw new Error('permissionMode is required')
-      const warm = peekClaudeSession(sessionId)
+      const warm = claudePoolModule().peekClaudeSession(sessionId)
       if (warm) {
         await warm.setPermissionMode(mode)
         return { ok: true, applied: 'live' }
@@ -2291,7 +2293,7 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
       return { ok: true, applied: 'next-send' }
     }
     if (action === 'getContextUsage') {
-      const warm = peekClaudeSession(sessionId)
+      const warm = claudePoolModule().peekClaudeSession(sessionId)
       if (!warm) {
         // Don't spin a subprocess for a getter — the next pooled send will
         // emit a fresh usage event at the top of its stream anyway.
@@ -2311,7 +2313,7 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
       // fresh control query (different subprocess) wouldn't know about it. So
       // unlike the MCP RPCs above there's no cold fallback — without a warm
       // entry there's nothing running to stop.
-      const warm = peekClaudeSession(sessionId)
+      const warm = claudePoolModule().peekClaudeSession(sessionId)
       if (!warm) return { ok: true, applied: 'cold', stopped: false }
       await warm.query.stopTask(taskId)
       return { ok: true, applied: 'live', stopped: true }
@@ -2319,7 +2321,7 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
     if (action === 'reconnectMcpServer') {
       const serverName = typeof body.serverName === 'string' ? body.serverName : ''
       if (!serverName) throw new Error('serverName is required')
-      const warm = peekClaudeSession(sessionId)
+      const warm = claudePoolModule().peekClaudeSession(sessionId)
       if (warm) {
         await warm.query.reconnectMcpServer(serverName)
         return { ok: true, applied: 'live' }
@@ -2337,7 +2339,7 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
       const enabled = typeof body.enabled === 'boolean' ? body.enabled : null
       if (!serverName) throw new Error('serverName is required')
       if (enabled === null) throw new Error('enabled (boolean) is required')
-      const warm = peekClaudeSession(sessionId)
+      const warm = claudePoolModule().peekClaudeSession(sessionId)
       if (warm) {
         await warm.query.toggleMcpServer(serverName, enabled)
         return { ok: true, applied: 'live' }
@@ -2367,14 +2369,14 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
         servers = parseClaudeDynamicMcpServers(body.servers)
       }
       setClaudeDynamicMcpServers(sessionId, servers)
-      const warm = peekClaudeSession(sessionId)
+      const warm = claudePoolModule().peekClaudeSession(sessionId)
       if (!warm) {
         return { ok: true, applied: 'next-send', dynamicServers: Object.keys(servers).sort(), added: [], removed: [], errors: {} }
       }
       const info = await getSessionInfo(sessionId, claudeSessionStoreOptions()).catch(() => undefined)
       const context = { getSessionId: () => sessionId, getCwd: () => info?.cwd }
       try {
-        const result = await warm.query.setMcpServers(claudeIntegratedMcpServers(context, sessionId))
+        const result = await warm.query.setMcpServers(claudePoolModule().claudeIntegratedMcpServers(context, sessionId))
         const statuses = await warm.query.mcpServerStatus()
         const authRequired = statuses.filter((status) => status.status === 'needs-auth').map((status) => status.name)
         return { ok: true, applied: 'live', dynamicServers: Object.keys(servers).sort(), statuses, authRequired, ...result }
@@ -2388,7 +2390,7 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
       }
     }
     if (action === 'reloadPlugins') {
-      const warm = peekClaudeSession(sessionId)
+      const warm = claudePoolModule().peekClaudeSession(sessionId)
       if (warm) {
         const result = await warm.query.reloadPlugins()
         return {
@@ -2414,7 +2416,7 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
       }
     }
     if (action === 'reloadSkills') {
-      const warm = peekClaudeSession(sessionId)
+      const warm = claudePoolModule().peekClaudeSession(sessionId)
       const q = warm?.query ?? createSessionControlQuery(sessionId)
       try {
         const result = await q.reloadSkills()
@@ -2428,7 +2430,7 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
       return { ok: true, ...summarizeResolvedClaudeSettings(await resolveSettings({ cwd: info?.cwd })) }
     }
     if (action === 'inspectClaudeRuntime') {
-      const warm = peekClaudeSession(sessionId)
+      const warm = claudePoolModule().peekClaudeSession(sessionId)
       const q = warm?.query ?? createSessionControlQuery(sessionId)
       try {
         const info = await getSessionInfo(sessionId, claudeSessionStoreOptions()).catch(() => undefined)
@@ -2465,7 +2467,7 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
         ? Math.max(1, Math.min(10 * 1024 * 1024, Math.floor(body.maxBytes)))
         : 512 * 1024
       if (!path || path.includes('\0')) throw new Error('path is required')
-      const warm = peekClaudeSession(sessionId)
+      const warm = claudePoolModule().peekClaudeSession(sessionId)
       const q = warm?.query ?? createSessionControlQuery(sessionId)
       try {
         const file = await q.readFile(path, { maxBytes, encoding })
@@ -2578,7 +2580,7 @@ export function listViewSessionMessageWindow(sessionId: string, params: MessageL
 
 async function listViewSessionMessageWindowImpl(sessionId: string, params: MessageListParams, providerOverride?: AgentProvider): Promise<SessionMessageWindow> {
   const provider = await resolveProvider(providerOverride)
-  const adapter = getSessionAdapter(provider)
+  const adapter = await getSessionAdapter(provider)
   if (!adapter.readAllMessages) unsupported(provider, 'readAllMessages')
   const { messages: raw, externalWriter } = await adapter.readAllMessages(sessionId)
   const instanceId = currentProviderInstanceId(provider)
@@ -2599,7 +2601,7 @@ export async function getViewSubagentMessages(
   providerOverride?: AgentProvider,
 ): Promise<SessionMessage[]> {
   const provider = await resolveProvider(providerOverride)
-  const adapter = getSessionAdapter(provider)
+  const adapter = await getSessionAdapter(provider)
   // A provider without subagents genuinely has none — empty is the answer, not
   // a failure to look.
   if (!adapter.readSubagentMessages) return []
@@ -2613,7 +2615,7 @@ export async function getViewSubagentMessages(
  */
 export async function getClaudeSubagentSummaries(sessionId: string, providerOverride?: AgentProvider): Promise<SubagentSummary[]> {
   const provider = await resolveProvider(providerOverride)
-  const adapter = getSessionAdapter(provider)
+  const adapter = await getSessionAdapter(provider)
   if (!adapter.readSubagentSummaries) return []
   return adapter.readSubagentSummaries(sessionId)
 }
@@ -2981,6 +2983,7 @@ const CLAUDE_WARM_MAX_RESPAWN = 1
 const CLAUDE_WARM_SILENCE_BEFORE_PROBE_MS = 6000
 
 async function createClaudeStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>, checkpoint?: Promise<unknown>): Promise<Response> {
+  await ensureClaudePool()
   const userMessage = String(body.message ?? '').trim()
   const turnRequestId = parseTurnRequestId(body)
   const agentPolicy = parseClaudeAgentPolicy(body.claudeAgentPolicy)
@@ -3005,7 +3008,7 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
     ? userMessage.slice(1).trim()
     : null
   if (bangShell !== null && !bangShell) {
-    return NextResponse.json({ error: 'Enter a shell command after !' }, { status: 400 })
+    return Response.json({ error: 'Enter a shell command after !' }, { status: 400 })
   }
   const resumeSessionAt = typeof body.resumeSessionAt === 'string' ? body.resumeSessionAt : undefined
   const resumeDropsTurn = typeof body.resumeDropsTurn === 'string' ? body.resumeDropsTurn : undefined
@@ -3027,14 +3030,14 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
   // per-turn bridges via the bridgeBox delegation pattern.
   //
   // Exception: a pending session that was already prewarmed (composer focus
-  // triggers acquireClaudeSession with a forced `sessionId` — see
+  // triggers claudePoolModule().acquireClaudeSession with a forced `sessionId` — see
   // prewarmViewSession) has a warm entry sitting in the pool under this exact
   // id already. Route straight to the pooled path so the first real send
   // reuses it instead of cold-spawning a redundant second subprocess. If
   // prewarm hasn't completed yet (or never ran), peek finds nothing and this
   // falls through to the cold path exactly as before.
   const pendingWarmEntry = isPendingSession && !forkSessionOnSend && !resumeSessionAt
-    ? peekClaudeSession(sessionId)
+    ? claudePoolModule().peekClaudeSession(sessionId)
     : null
   const useColdPath = (isPendingSession && !pendingWarmEntry) || forkSessionOnSend || Boolean(resumeSessionAt)
 
@@ -3086,7 +3089,7 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
     // Threaded through even though the common case (prewarm already spawned
     // a compatible entry) never uses it — if the warm entry turns out
     // incompatible (cwd/effort/taskBudget changed since prewarm) or died,
-    // acquireClaudeSession recycles and respawns; a pending session has
+    // claudePoolModule().acquireClaudeSession recycles and respawns; a pending session has
     // nothing on disk yet, so that respawn must still force `sessionId`
     // instead of trying to `resume` a conversation that doesn't exist.
     isPendingSession: isPendingSession && Boolean(pendingWarmEntry),
@@ -3277,7 +3280,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
   //   2) The pool can keep pushing future turns onto the same stream.
   // Bash mode (`!command`) defers its pushes until the command has run — see
   // the bang branch inside start() below.
-  const { pushUserMessage, endInput, iterable } = createInputStream()
+  const { pushUserMessage, endInput, iterable } = claudePoolModule().createInputStream()
   if (bangShell == null) {
     pushUserMessage(await buildClaudeUserMessage(userMessage, attachments, cwdOverride))
   }
@@ -3357,8 +3360,8 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
       const q = query({
         prompt: iterable,
         options: {
-          env: CLAUDE_QUERY_ENV,
-          stderr: (data) => logClaudeSubprocessStderr(sessionId, data),
+          env: claudePoolModule().CLAUDE_QUERY_ENV,
+          stderr: (data) => claudePoolModule().logClaudeSubprocessStderr(sessionId, data),
           ...(isPendingSession ? {} : { resume: sessionId }),
           ...(cwdOverride ? { cwd: cwdOverride } : {}),
           ...(model ? { model } : {}),
@@ -3381,9 +3384,9 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
             ? bridgeBox.dialog(request, dialogOpts)
             : Promise.resolve({ behavior: 'cancelled' as const }),
           supportedDialogKinds: ['refusal_fallback_prompt'],
-          ...claudeIntegratedQueryExtensions(viewerContext, sessionId),
+          ...claudePoolModule().claudeIntegratedQueryExtensions(viewerContext, sessionId),
           ...claudeAgentPolicyOptions(agentPolicy),
-          ...effortToSdk(effort),
+          ...claudePoolModule().effortToSdk(effort),
           abortController,
           ...claudeSessionPersistenceQueryOptions(),
           ...claudeProcessSpawnOptions(),
@@ -3428,7 +3431,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
         }
         // On interrupt_receipt_v1 CLIs this resolves to { still_queued }: uuids
         // of queued async messages that WILL still run unless cancelled.
-        return await interruptClaudeQuery(q, cancelQueued)
+        return await claudePoolModule().interruptClaudeQuery(q, cancelQueued)
       }
 
       setRunningSession(sessionId, {
@@ -3577,7 +3580,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           bridgeBox.elicit = null
           bridgeBox.dialog = null
           signal.removeEventListener('abort', propagateAbort)
-          adoptClaudeSession({
+          claudePoolModule().adoptClaudeSession({
             sessionId: realizedSessionId,
             query: q,
             pushUserMessage,
@@ -3781,7 +3784,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
           attempt += 1
           let entry: ClaudePoolEntry
           try {
-            entry = acquireClaudeSession({
+            entry = claudePoolModule().acquireClaudeSession({
               sessionId,
               cwd: cwdOverride,
               model,
@@ -3816,7 +3819,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
                 killBangShell()
                 return undefined
               }
-              return await interruptClaudeQuery(activeEntry.query, cancelQueued)
+              return await claudePoolModule().interruptClaudeQuery(activeEntry.query, cancelQueued)
             },
             background: () => activeEntry.query.backgroundTasks(),
             // Mid-turn user input rides the warm query's persistent input stream —
@@ -3906,7 +3909,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
               respawnRequested = true
               // Recycling pushes null to the turn subscriber, so the pending
               // run() below rejects promptly — caught and respawned fresh.
-              recycleClaudeSession(sessionId)
+              claudePoolModule().recycleClaudeSession(sessionId)
             }
           }
 
@@ -3955,7 +3958,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
             // whether to retry silently or surface something to the client;
             // surfacing here too would leak a raw pool-internal message even
             // on attempts that go on to retry invisibly.
-            recycleClaudeSession(sessionId)
+            claudePoolModule().recycleClaudeSession(sessionId)
           }
 
           try {
@@ -4021,7 +4024,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
             // or contradict what the client already rendered, so that case
             // always surfaces (below) instead.
             if (!sawActivity && attempt <= CLAUDE_WARM_MAX_RESPAWN) {
-              if (!respawnRequested) recycleClaudeSession(sessionId)
+              if (!respawnRequested) claudePoolModule().recycleClaudeSession(sessionId)
               continue
             }
             if (!signal.aborted) {
@@ -6317,15 +6320,18 @@ export async function prewarmViewSession(params: {
   isPending?: boolean
 }): Promise<void> {
   const provider = await resolveProvider(params.provider)
+  // Only Claude sessions have a warm pool; loading it for another provider's
+  // action would reinstate the cost this deferral exists to avoid.
+  if (provider === 'claude') await ensureClaudePool()
   if (provider === 'claude') {
-    const warm = peekClaudeSession(params.sessionId)
+    const warm = claudePoolModule().peekClaudeSession(params.sessionId)
     if (warm) {
       // Re-acquire with the latest composer model/effort. acquire() queues
       // live-settable changes onto the entry's configuration gate; awaiting
       // that gate here lets selection-time prewarm absorb a slow custom-model
       // switch, while runTurn independently waits the same gate if the user
       // presses Enter before this request returns.
-      const entry = acquireClaudeSession({
+      const entry = claudePoolModule().acquireClaudeSession({
         sessionId: params.sessionId,
         cwd: params.cwd,
         model: params.model,
@@ -6353,7 +6359,7 @@ export async function prewarmViewSession(params: {
     // that touch and keep the session's real last-activity time in the lists
     // (lib/claudeResumeTouch.ts). A pending session has no transcript to touch.
     const spawn = async () => {
-      const entry = acquireClaudeSession({
+      const entry = claudePoolModule().acquireClaudeSession({
         sessionId: params.sessionId,
         cwd: params.cwd,
         // Leave model unset when not provided — see createClaudeStream for why
@@ -6624,7 +6630,7 @@ async function createAcpStream(
 export async function streamViewSessionTurn(params: SendMessageParams): Promise<Response> {
   const userMessage = String(params.body.message ?? '').trim()
   if (!userMessage) {
-    return NextResponse.json({ error: 'message is required' }, { status: 400 })
+    return Response.json({ error: 'message is required' }, { status: 400 })
   }
 
   const provider = await resolveProvider(params.provider)
@@ -6849,9 +6855,12 @@ export async function interruptViewSession(sessionId: string, turnRequestId?: st
 /** Release provider-side resources for an active session without deleting its durable history. */
 export async function closeViewSession(sessionId: string, providerOverride?: AgentProvider): Promise<void> {
   const provider = await resolveProvider(providerOverride)
+  // Only Claude sessions have a warm pool; loading it for another provider's
+  // action would reinstate the cost this deferral exists to avoid.
+  if (provider === 'claude') await ensureClaudePool()
   await interruptViewSession(sessionId, undefined, true).catch(() => {})
   if (provider === 'claude') {
-    recycleClaudeSession(sessionId)
+    claudePoolModule().recycleClaudeSession(sessionId)
     return
   }
   if (provider === 'codex') {
@@ -6999,7 +7008,7 @@ const sessionModelReadsInFlight = new Map<string, Promise<ViewSessionModels>>()
 
 export async function readViewSessionModels(sessionId: string, providerOverride?: AgentProvider): Promise<ViewSessionModels> {
   const provider = await resolveProvider(providerOverride)
-  const adapter = getSessionAdapter(provider)
+  const adapter = await getSessionAdapter(provider)
   // A provider with no model-listing RPC (ACP) degrades the picker to "no
   // choices" rather than failing the whole session view around it.
   if (!adapter.readModels) return { models: [], currentModel: null, contextUsage: null }
@@ -7021,7 +7030,7 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
 
 export async function readViewSessionComposerOptions(sessionId: string, providerOverride?: AgentProvider): Promise<SessionComposerOptions> {
   const provider = await resolveProvider(providerOverride)
-  const adapter = getSessionAdapter(provider)
+  const adapter = await getSessionAdapter(provider)
   // The default is the honest answer for a provider whose CLI owns its own
   // approval policy and exposes no knob for us to drive.
   if (!adapter.readComposerOptions) {
@@ -7035,20 +7044,23 @@ export async function readViewSessionComposerOptions(sessionId: string, provider
 
 export async function readViewSessionSlashCommands(sessionId: string, providerOverride?: AgentProvider): Promise<Array<{ command: string; description: string; argumentHint?: string }>> {
   const provider = await resolveProvider(providerOverride)
-  const adapter = getSessionAdapter(provider)
+  const adapter = await getSessionAdapter(provider)
   if (!adapter.readSlashCommands) return []
   return adapter.readSlashCommands(sessionId)
 }
 
 export async function readViewSessionDiagnostics(sessionId: string, providerOverride?: AgentProvider): Promise<{ sections: SessionDiagnosticSection[]; currentModel: string | null }> {
   const provider = await resolveProvider(providerOverride)
-  const adapter = getSessionAdapter(provider)
+  const adapter = await getSessionAdapter(provider)
   if (!adapter.readDiagnostics) unsupported(provider, 'readDiagnostics')
   return adapter.readDiagnostics(sessionId)
 }
 
 export async function rewindOrRollbackViewSession({ sessionId, body, provider }: RewindParams): Promise<Record<string, unknown>> {
   const resolvedProvider = await resolveProvider(provider)
+  // Only Claude sessions have a warm pool; loading it for another provider's
+  // action would reinstate the cost this deferral exists to avoid.
+  if (resolvedProvider === 'claude') await ensureClaudePool()
   if (resolvedProvider === 'codex') {
     const numTurns = Number(body.numTurns ?? 1)
     if (!Number.isFinite(numTurns) || numTurns < 1) {
@@ -7164,7 +7176,7 @@ export async function rewindOrRollbackViewSession({ sessionId, body, provider }:
       const info = await getSessionInfo(sessionId, claudeSessionStoreOptions()).catch(() => undefined)
       if (info?.cwd) {
         const observedPaths = await readClaudeObservedFilePaths(sessionId, info.cwd).catch(() => [])
-        await queueClaudeReadStateSeeds(sessionId, info.cwd, observedPaths)
+        await claudePoolModule().queueClaudeReadStateSeeds(sessionId, info.cwd, observedPaths)
       }
     }
     return result
@@ -7203,7 +7215,9 @@ export function getServerMemoryDiagnostics(): Record<string, number> {
     pendingPiUiRequests: pendingPiUiRequestCount(),
     pendingCodexApprovals: codexApprovals,
     ...getSessionRuntimeDiagnostics(),
-    claudePool: claudePoolSize(),
+    // Not loaded means no pool exists, so its size is genuinely zero — this
+    // must not be the thing that drags the pool into a diagnostics read.
+    claudePool: claudePoolIfLoaded()?.claudePoolSize() ?? 0,
     piPool: piPoolSize(),
     piOperations: piSessionOperationCount(),
     piEntryCacheSessions: piEntryCache.sessions,

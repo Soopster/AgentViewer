@@ -722,15 +722,17 @@ function formatCompactTokens(n: number): string {
 
 const SubagentSidebarRow = memo(function SubagentSidebarRow({
   summary,
+  session,
   onSelect,
 }: {
   summary: SubagentSummary
-  onSelect: () => void
+  session: Session
+  onSelect: (session: Session) => void
 }) {
   const label = summary.taskDescription?.trim() || summary.agentId
   return (
     <div
-      onClick={onSelect}
+      onClick={() => onSelect(session)}
       className="av-session-row av-hover-control"
       title={summary.taskDescription || summary.agentId}
       style={{
@@ -873,7 +875,7 @@ const SessionRowGroup = memo(function SessionRowGroup({
             </div>
           )}
           {claudeSubagents?.map((summary) => (
-            <SubagentSidebarRow key={summary.agentId} summary={summary} onSelect={() => onSelect(session)} />
+            <SubagentSidebarRow key={summary.agentId} summary={summary} session={session} onSelect={onSelect} />
           ))}
         </div>
       )}

@@ -7,6 +7,7 @@ import {
   type Snapshot,
   type TerminalClaim,
   type TerminalInfo,
+  type TerminalLifecycleState,
   type URI,
 } from '@microsoft/agent-host-protocol'
 
@@ -20,7 +21,7 @@ type TerminalStateValue = {
   cols?: number
   rows?: number
   content: Array<{ type: 'unclassified'; value: string }>
-  exitCode?: number
+  lifecycle: TerminalLifecycleState
   claim: Claim
   supportsCommandDetection: false
   isPty: false
@@ -104,7 +105,7 @@ export class AhpTerminalManager {
       resource,
       title: state.title,
       claim: state.claim,
-      ...(state.exitCode === undefined ? {} : { exitCode: state.exitCode }),
+      lifecycle: state.lifecycle,
     }))
   }
 
@@ -144,6 +145,7 @@ export class AhpTerminalManager {
       ...(positiveDimension(params.cols, 'cols') ? { cols: positiveDimension(params.cols, 'cols') } : {}),
       ...(positiveDimension(params.rows, 'rows') ? { rows: positiveDimension(params.rows, 'rows') } : {}),
       content: [],
+      lifecycle: { status: 'running' } as TerminalLifecycleState,
       claim,
       supportsCommandDetection: false,
       isPty: false,
@@ -160,7 +162,10 @@ export class AhpTerminalManager {
     child.stdout.on('data', onData)
     child.stderr.on('data', onData)
     child.once('exit', (code) => {
-      state.exitCode = code ?? undefined
+      state.lifecycle = {
+        status: 'exited',
+        ...(code === null ? {} : { exitCode: code }),
+      } as TerminalLifecycleState
       this.emit(channel, {
         type: 'terminal/exited',
         ...(code === null ? {} : { exitCode: code }),

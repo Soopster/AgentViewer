@@ -5,6 +5,7 @@ import {
   type ThreadedMessage,
 } from '../threading'
 import { getConfiguredProvider, setConfiguredProvider } from '../providerState'
+import { ensureClaudePool } from '../claudePoolHandle'
 import {
   getConfiguredTuiDensity,
   getConfiguredTuiDiffLayout,
@@ -130,7 +131,6 @@ import {
 import type { AgentProtocolEvent, PlaybookSummary, ProtocolRun, ProtocolRunSnapshot, RunPlaybook, StartProtocolRunParams, StartProtocolRunResult } from '../agentProtocol'
 import type { AgentProvider, ContextUsage, ProviderSelection, Session, SessionDiagnosticSection, SessionInfo, SessionMessage, SessionModelInfo } from '../types'
 import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../../tui/theme'
-import { queueClaudeReadStateSeeds } from '../claudePool'
 import {
   listAddressableSessions,
   sendCrossSessionMessage,
@@ -584,6 +584,10 @@ export async function restoreTuiCheckpoint(
   const result = await restoreCheckpoint(cwd, sha, paths)
   if (context?.provider === 'claude' && context.sessionId) {
     const observedPaths = await readClaudeObservedFilePaths(context.sessionId, cwd).catch(() => [])
+    // Loaded here rather than imported: this module is the TUI's entry to the
+    // provider layer and is evaluated in the transcript Worker too, which never
+    // sends a turn and would otherwise pay ~30MB for the send-path pool.
+    const { queueClaudeReadStateSeeds } = await ensureClaudePool()
     await queueClaudeReadStateSeeds(context.sessionId, cwd, observedPaths)
   }
   return result

@@ -205,6 +205,7 @@ const terminalSubscription = await request(207, 'subscribe', { channel: terminal
 assert.equal(terminalSubscription.result.snapshot.resource, terminalChannel)
 assert.equal(terminalSubscription.result.snapshot.state.title, 'AHP smoke shell')
 assert.equal(terminalSubscription.result.snapshot.state.isPty, false)
+assert.equal(terminalSubscription.result.snapshot.state.lifecycle.status, 'running')
 await connection.handle({
   jsonrpc: '2.0',
   method: 'dispatchAction',
@@ -238,6 +239,31 @@ const terminalOutput = await new Promise<Frame>((resolve, reject) => {
   poll()
 })
 assert.match(terminalOutput.params.action.data, /AHP_TERMINAL_OK/)
+await connection.handle({
+  jsonrpc: '2.0',
+  method: 'dispatchAction',
+  params: {
+    channel: terminalChannel,
+    clientSeq: 10,
+    action: { type: 'terminal/input', data: 'exit\n' },
+  },
+})
+await new Promise<Frame>((resolve, reject) => {
+  const deadline = Date.now() + 3_000
+  const poll = () => {
+    const found = frames.find((frame) =>
+      frame.method === 'action'
+      && frame.params.channel === terminalChannel
+      && frame.params.action.type === 'terminal/exited')
+    if (found) return resolve(found)
+    if (Date.now() >= deadline) return reject(new Error('terminal exit action timed out'))
+    setTimeout(poll, 20)
+  }
+  poll()
+})
+const exitedTerminal = await request(2071, 'subscribe', { channel: terminalChannel })
+assert.equal(exitedTerminal.result.snapshot.state.lifecycle.status, 'exited')
+assert.equal(exitedTerminal.result.snapshot.state.lifecycle.exitCode, 0)
 assert.equal((await request(208, 'disposeTerminal', { channel: terminalChannel })).result, null)
 const missingTerminal = await request(209, 'subscribe', { channel: terminalChannel })
 assert.equal(missingTerminal.error.code, -32008)

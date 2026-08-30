@@ -14,8 +14,12 @@
       { "files": ["lib/opencodePlugin/agentViewerCoordinator.mjs"], "rules": ["react-doctor/agent-tool-capability-risk"] },
       { "files": ["lib/agentCoordination.ts"], "rules": ["react-doctor/path-traversal-risk"] },
       { "files": ["lib/sessionBackend.ts"], "rules": ["react-doctor/insecure-crypto-risk"] },
-      { "files": ["channels/agentviewer-channel.ts", "channels/agentviewer-ide.ts"], "rules": ["deslop/unused-file"] },
-      { "files": ["lib/bridgeMessages.ts", "lib/checkpoints.ts", "lib/copilotClient.ts", "lib/ideBridge.ts", "lib/messageBookmarks.ts"], "rules": ["deslop/unused-export"] },
+      { "files": ["channels/agentviewer-channel.ts", "channels/agentviewer-ide.ts", "lib/sqliteReadWorker.mjs"], "rules": ["deslop/unused-file"] },
+      { "files": ["lib/bridgeMessages.ts", "lib/checkpoints.ts", "lib/copilotClient.ts", "lib/ideBridge.ts", "lib/messageBookmarks.ts", "lib/acpAgentSpawn.ts", "lib/acpClientPool.ts", "lib/claudeUsageLimits.ts", "lib/linkedPullRequests.ts", "lib/liveSessionHarness.ts", "lib/opencodeSessions.ts", "lib/piClient.ts", "lib/providerInstances.ts", "lib/remoteAuth.ts", "lib/remoteEndpoints.ts", "lib/sessionInbox.ts", "lib/terminalSession.ts"], "rules": ["deslop/unused-export"] },
+      { "files": ["lib/adapters/claude.ts"], "rules": ["deslop/circular-dependency"] },
+      { "files": ["tui/opentui/SurfaceViews.tsx"], "rules": ["react-doctor/effect-needs-cleanup"] },
+      { "files": ["tui/opentui/editorCompletionPerf.tsx", "tui/opentui/navPerf.tsx"], "rules": ["react-doctor/no-impure-call-at-module-scope"] },
+      { "files": ["tui/opentui/editorSearch.ts"], "rules": ["react-doctor/no-unescaped-dynamic-string-in-regexp"] },
       { "files": ["package.json"], "rules": ["deslop/unused-dependency"] },
       { "files": ["components/ui/tabs.tsx"], "rules": ["react-doctor/only-export-components"] }
     ]
