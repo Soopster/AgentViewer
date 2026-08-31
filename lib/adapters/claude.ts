@@ -144,6 +144,18 @@ function claudeLatencyDiagnosticItems(rawMessages: unknown[]): string[] {
   return items
 }
 
+// Fields getSessionInfo would supply for a Claude session. When the list entry
+// already has all of them there is nothing for the per-session lookup to add
+// (verified field-by-field across the local corpus), so the read is skipped.
+// `summary` is deliberately absent: a session whose first turn has not been
+// summarized yet has none to find, and requiring it would re-read that
+// transcript on every poll forever.
+function isCompleteClaudeListEntry(session: { cwd?: unknown; createdAt?: unknown; firstPrompt?: unknown }): boolean {
+  return typeof session.cwd === 'string' && session.cwd.length > 0
+    && session.createdAt != null
+    && typeof session.firstPrompt === 'string'
+}
+
 export const claudeAdapter: SessionAdapter = {
   provider: 'claude',
 
@@ -164,6 +176,14 @@ export const claudeAdapter: SessionAdapter = {
         ...(dir ? claudeSessionStoreOptions() : {}),
       }))
       const normalized = await timeAsync('claude.sessionInfo', () => mapConcurrent(sessions, 20, async (session) => {
+        // getSessionInfo re-derives the very fields the list entry already
+        // carries, and deriving them means re-reading that session's transcript:
+        // enriching a complete entry costs a full pass over every JSONL in the
+        // corpus on every list poll (~140MB of allocation for 225 sessions here,
+        // measured, against ~60MB for the list itself). A complete entry is
+        // returned as-is; only a sparse one — a store-backed or partially
+        // written session — still pays for the single-session lookup.
+        if (isCompleteClaudeListEntry(session)) return session
         try {
           const sessionDir = typeof session.cwd === 'string' && session.cwd ? session.cwd : dir
           const info = await getCachedSessionInfo(session.sessionId, sessionDir)
