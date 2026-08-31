@@ -99,6 +99,11 @@ export function copilotSessionConfigOverrides(sessionId?: string): Partial<Sessi
   const overrides: Partial<SessionConfigBase> = {
     enableCitations: true,
     enableConfigDiscovery: true,
+    // SDK 1.0.11 captures a preimage before each tool-driven file mutation.
+    // Supplying this on create starts a complete rewind history; re-supplying
+    // it on resume keeps eligible sessions tracking without breaking older
+    // sessions whose pre-upgrade turns have no recoverable baseline.
+    enableFileChangeTracking: true,
   }
 
   // Coordinator sessions get their coord_* tools registered by session id
@@ -256,6 +261,66 @@ export async function getCopilotClient(): Promise<CopilotClient> {
     globalThis.__agentViewerCopilotClientPromise = client
   }
   return globalThis.__agentViewerCopilotClientPromise
+}
+
+type CopilotRewindSession = Pick<CopilotSession, 'rpc'>
+
+export type CopilotFileRewindResult = {
+  mode: 'rewind'
+  canRewind: boolean
+  filesChanged: string[]
+  outcome?: string
+  warning?: string
+  error?: string
+}
+
+function copilotRewindUnavailableMessage(reason: string | undefined): string {
+  if (reason === 'session-busy') return 'Copilot is still working; retry rewind after the turn finishes.'
+  if (reason === 'file-change-tracking-disabled') {
+    return 'This Copilot session predates file-change tracking and has no recoverable file baseline.'
+  }
+  if (reason === 'unsupported-remote-session') return 'Copilot cannot rewind files for remote-backed sessions.'
+  return reason ? `Copilot rewind is unavailable: ${reason}` : 'Copilot rewind is unavailable for this session.'
+}
+
+/** Preview or apply Copilot's native conversation-and-files rewind. */
+export async function rewindCopilotSessionFiles(
+  session: CopilotRewindSession,
+  eventId: string,
+  dryRun: boolean,
+): Promise<CopilotFileRewindResult> {
+  const preview = await session.rpc.history.previewRewind({ eventId })
+  const filesChanged = preview.files.map((file) => file.path)
+  if (!preview.available) {
+    return {
+      mode: 'rewind',
+      canRewind: false,
+      filesChanged,
+      error: copilotRewindUnavailableMessage(preview.reason),
+    }
+  }
+  if (dryRun) return { mode: 'rewind', canRewind: true, filesChanged }
+
+  const result = await session.rpc.history.rewind({ eventId, mode: 'conversation-and-files' })
+  if (result.outcome === 'success') {
+    return { mode: 'rewind', canRewind: true, filesChanged, outcome: result.outcome }
+  }
+  if (result.outcome === 'checkpoint-cleanup-failed' || result.outcome === 'snapshot-prune-failed') {
+    return {
+      mode: 'rewind',
+      canRewind: true,
+      filesChanged,
+      outcome: result.outcome,
+      warning: result.error ?? `Copilot rewind completed with ${result.outcome}.`,
+    }
+  }
+  return {
+    mode: 'rewind',
+    canRewind: false,
+    filesChanged,
+    outcome: result.outcome,
+    error: result.error ?? copilotRewindUnavailableMessage(result.outcome),
+  }
 }
 
 async function resumeCopilotSession(

@@ -51,6 +51,7 @@
     "pi:provider:smoke": "bun run ./scripts/piProviderSmoke.ts",
     "pi:provider:perf": "bun run ./scripts/piProviderPerf.ts",
     "provider:pools:smoke": "bun run ./scripts/providerPoolSmoke.ts",
+    "copilot:sdk:smoke": "bun run ./scripts/copilotRewindSmoke.ts",
     "opencode:harness:smoke": "node --import tsx ./scripts/opencodeHarnessSmoke.ts && node --import tsx ./scripts/opencodeHarnessTransportSmoke.ts && node --import tsx ./scripts/opencodeHarnessFallbackSmoke.ts && node --import tsx ./scripts/opencodeHarnessSnapshotSmoke.ts && node --import tsx ./scripts/opencodeProviderListSmoke.ts && node --import tsx ./scripts/opencodeMessageCacheSmoke.ts",
     "opencode:provider:perf": "node --import tsx ./scripts/opencodeProviderPerf.ts",
     "tui:smoke": "node ./scripts/withoutEnv.mjs AGENT_VIEWER_ATTACH AGENT_VIEWER_COORD_WORKER AGENT_VIEWER_COORD_IDENTITY_FILE -- npm run tui:smoke:run",
@@ -78,7 +79,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.4.0",
-    "@anthropic-ai/claude-agent-sdk": "^0.3.251",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.252",
     "@anthropic-ai/sdk": "^0.122.0",
     "@earendil-works/pi-agent-core": "^0.84.4",
     "@earendil-works/pi-ai": "^0.84.4",
@@ -107,9 +108,9 @@
     "clsx": "^2.1.1",
     "gray-matter": "^4.0.3",
     "ink": "^7.1.1",
-    "lucide-react": "^1.37.0",
+    "lucide-react": "^1.38.0",
     "marked": "^18.0.11",
-    "next": "^16.3.3",
+    "next": "^16.3.4",
     "qrcode": "^1.5.4",
     "radix-ui": "^1.6.7",
     "react": "^19.2.8",
@@ -132,9 +133,9 @@
     "@types/react-dom": "^19.2.5",
     "postcss": "^8.5.25",
     "react-doctor": "^0.9.12",
-    "shadcn": "^4.19.0",
+    "shadcn": "^4.19.1",
     "tailwindcss": "^4.3.3",
-    "tsx": "^4.23.12"
+    "tsx": "^4.23.13"
   },
   "overrides": {
     "postcss": "$postcss",

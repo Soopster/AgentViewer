@@ -42,7 +42,7 @@ export const OPENCODE_CAPABILITIES: SessionCapabilities = {
 export const COPILOT_CAPABILITIES: SessionCapabilities = {
   messageFork: false,
   resumeAtMessage: false,
-  fileRewind: false,
+  fileRewind: true,
   rollback: false,
   deleteSession: true,
   shareSession: false,

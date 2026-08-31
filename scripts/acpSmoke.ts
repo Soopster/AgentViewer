@@ -5,7 +5,7 @@ import { createInterface } from 'node:readline'
 import { PROTOCOL_VERSION } from '@agentclientprotocol/sdk'
 
 const child = spawn(process.execPath, [
-  'node_modules/tsx/dist/cli.mjs',
+  'run',
   'bin/agent-viewer-acp.ts',
   '--provider',
   'claude',

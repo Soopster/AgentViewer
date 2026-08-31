@@ -85,6 +85,7 @@ import {
   parseCopilotModeResponse,
 } from './copilotComposer'
 import {
+  clearCopilotLiveTranscript,
   copilotLiveTranscripts,
   scheduleCopilotLiveTranscriptCleanup,
   schedulePiLiveTranscriptCleanup,
@@ -170,7 +171,7 @@ import type {
 type CopilotReasoningEffort = Extract<ReasoningEffortLevel, 'low' | 'medium' | 'high' | 'xhigh'>
 
 import { createSessionControlQuery } from './sdkControlQuery'
-import { acquireCopilotSession, copilotPoolSize, copilotSessionConfigOverrides, evictCopilotSession, getCopilotClient, retainCopilotSession, setCopilotElicitationHandler, setCopilotPermissionHandler, steerCopilotSession } from './copilotClient'
+import { acquireCopilotSession, copilotPoolSize, copilotSessionConfigOverrides, evictCopilotSession, getCopilotClient, retainCopilotSession, rewindCopilotSessionFiles, setCopilotElicitationHandler, setCopilotPermissionHandler, steerCopilotSession } from './copilotClient'
 import { timeAsync } from './perfLog'
 import { registerDiagnosticsReporter } from './runtimeDiagnostics'
 import {
@@ -6768,9 +6769,17 @@ export async function rewindOrRollbackViewSession({ sessionId, body, provider }:
     }
   }
   if (resolvedProvider === 'copilot') {
-    void sessionId
-    void body
-    throw new Error('Rewind is not supported for GitHub Copilot sessions')
+    const userMessageId = typeof body.userMessageId === 'string' ? body.userMessageId : undefined
+    if (!userMessageId) throw new Error('userMessageId is required')
+    const session = await acquireCopilotSession(sessionId)
+    const releaseSession = retainCopilotSession(sessionId, session)
+    try {
+      const result = await rewindCopilotSessionFiles(session, userMessageId, Boolean(body.dryRun))
+      if (!body.dryRun && result.canRewind) clearCopilotLiveTranscript(sessionId)
+      return result
+    } finally {
+      releaseSession()
+    }
   }
   if (resolvedProvider === 'pi') {
     void sessionId

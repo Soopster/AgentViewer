@@ -88,6 +88,12 @@ export function scheduleCopilotLiveTranscriptCleanup(sessionId: string): void {
   }
 }
 
+export function clearCopilotLiveTranscript(sessionId: string): void {
+  const entry = copilotLiveTranscripts.get(sessionId)
+  if (entry?.timer) clearTimeout(entry.timer)
+  copilotLiveTranscripts.delete(sessionId)
+}
+
 export function copilotLiveEventKey(event: CopilotSessionEvent): string {
   if (event.type === 'assistant.message') return `assistant.message:${event.data.messageId}`
   return `${event.type}:${event.id}`
