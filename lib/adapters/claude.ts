@@ -34,6 +34,12 @@ import { deleteClaudeHookEvents, listClaudeHookEvents } from '../claudeHookEvent
 import { claudeProcessTransportStatus } from '../claudeProcessSpawner'
 import { readClaudeSupportedModels } from '../claudeModels'
 import { withoutClaudeResumeTouch } from '../claudeResumeTouch'
+import {
+  claudeListCacheKey,
+  readClaudeCorpusToken,
+  readClaudeListCache,
+  writeClaudeListCache,
+} from '../claudeSessionListCache'
 import { peekClaudeSessionIfLoaded } from '../claudePoolHandle'
 import { getClaudeCommandsOverride } from '../claudeCommandsStore'
 import {
@@ -163,6 +169,15 @@ export const claudeAdapter: SessionAdapter = {
     // The per-instance environment (a distinct CLAUDE_CONFIG_DIR, say) has to
     // be in place for the store read, not just for spawned processes.
     return withProviderProcessEnvironment(async () => {
+      // The corpus's own size+mtime sweep decides whether this page has to be
+      // re-derived at all — see lib/claudeSessionListCache.ts. An unchanged
+      // corpus is the common case on a 5s poll, and re-deriving it reads every
+      // listed transcript.
+      const cacheKey = claudeListCacheKey({ limit, offset, dir, includeWorktrees })
+      const corpusToken = await readClaudeCorpusToken()
+      const cachedPage = readClaudeListCache(cacheKey, corpusToken)
+      if (cachedPage) return cachedPage
+
       pruneSessionInfoCache()
       const sessions = await timeAsync('claude.listSessions', () => listSessions({
         limit,
@@ -200,11 +215,11 @@ export const claudeAdapter: SessionAdapter = {
         }
       }))
 
-      return normalized.map((session) => ({
+      return writeClaudeListCache(cacheKey, corpusToken, normalized.map((session) => ({
         ...withoutClaudeResumeTouch(session),
         provider: 'claude' as const,
         capabilities: getProviderCapabilities('claude'),
-      }))
+      })))
     })
   },
 

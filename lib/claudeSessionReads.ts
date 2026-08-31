@@ -116,18 +116,54 @@ export function formatClaudeSubagentTree(agentIds: string[], parentByAgent: Map<
 }
 
 
-export async function readClaudeSessionMessages(sessionId: string): Promise<SessionMessage[]> {
-  const [mainRaw, subagentIds] = await Promise.all([
-    getSessionMessages(sessionId, {
-      includeSystemMessages: true,
-      ...claudeSessionStoreOptions(),
-    }),
-    listSubagents(sessionId, claudeSessionStoreOptions()).catch(() => [] as string[]),
-  ])
+/**
+ * A transcript's identity without reading it: file size, mtime, and the set of
+ * subagents beside it. getSessionInfo answers this from the file's header and a
+ * stat (3ms and no measurable allocation on a 14.7MB transcript, against ~1s
+ * and ~45MB to parse the same file), which is what makes it usable as a poll
+ * gate. Null whenever the answer would be a guess — an unreadable session, or a
+ * store-backed one that reports no size or mtime — so the caller falls back to
+ * the authoritative read rather than trusting a token that cannot change.
+ */
+async function readClaudeTranscriptToken(
+  sessionId: string,
+  subagentIds: string[],
+): Promise<string | null> {
+  const info = await getSessionInfo(sessionId, claudeSessionStoreOptions()).catch(() => null)
+  if (!info) return null
+  const { fileSize, lastModified } = info as { fileSize?: number; lastModified?: number }
+  if (typeof fileSize !== 'number' || fileSize <= 0) return null
+  if (typeof lastModified !== 'number' || lastModified <= 0) return null
+  return `${fileSize}:${lastModified}:${subagentIds.length}:${subagentIds.at(-1) ?? ''}`
+}
 
+export async function readClaudeSessionMessages(sessionId: string): Promise<SessionMessage[]> {
+  const cacheKey = `claude:${sessionId}`
+  const subagentIds = await listSubagents(sessionId, claudeSessionStoreOptions()).catch(() => [] as string[])
+
+  // Idle polls dominate this path: the reader re-reads the open session every
+  // 2s, and parsing a large transcript to discover it is unchanged costs about
+  // a second of CPU and tens of MB of allocation each time — which is what pins
+  // the allocator's high-water mark, since a JS engine keeps its arenas mapped
+  // long after the garbage in them is collected. Ask what the file *is* before
+  // reading what it says, and an unchanged transcript costs a stat.
+  const token = await readClaudeTranscriptToken(sessionId, subagentIds)
+  if (token) {
+    const fresh = readMappedMessagesCache(cacheKey, token)
+    if (fresh) return fresh
+  }
+
+  const mainRaw = await getSessionMessages(sessionId, {
+    includeSystemMessages: true,
+    ...claudeSessionStoreOptions(),
+  })
+
+  // Content signature for the case where no token could be derived: the same
+  // guarantee the cache had before the token existed.
   const lastMain = mainRaw.at(-1) as { uuid?: string } | undefined
-  const signature = `${mainRaw.length}:${lastMain?.uuid ?? ''}:${subagentIds.length}:${subagentIds.at(-1) ?? ''}`
-  const cached = readMappedMessagesCache(`claude:${sessionId}`, signature)
+  const signature = token
+    ?? `${mainRaw.length}:${lastMain?.uuid ?? ''}:${subagentIds.length}:${subagentIds.at(-1) ?? ''}`
+  const cached = readMappedMessagesCache(cacheKey, signature)
   if (cached) return cached
 
   const subagentRaw = await Promise.all(
@@ -161,5 +197,5 @@ export async function readClaudeSessionMessages(sessionId: string): Promise<Sess
   }
 
   const messages = sortMessagesChronologically([...deduped.values()])
-  return writeMappedMessagesCache(`claude:${sessionId}`, signature, messages)
+  return writeMappedMessagesCache(cacheKey, signature, messages)
 }

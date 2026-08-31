@@ -45,7 +45,8 @@ while kill -0 "$PID" 2>/dev/null; do
     if [ "$n" -gt "$seen" ]; then
       seen=$n
       label=$(tail -1 "$MARKS" | awk '{print $1}')
-      printf '%-18s %sMB\n' "$label" "$(footprint)"
+      RSS=$(/bin/ps -o rss= -p "$PID" 2>/dev/null | tr -d ' ')
+      printf '%-18s fp=%sMB rss=%sMB\n' "$label" "$(footprint)" "$((RSS/1024))"
       [ "$label" = "settle" ] && break
     fi
   fi
