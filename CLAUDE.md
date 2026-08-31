@@ -225,7 +225,34 @@ main isolate and the transcript worker both import is paid for twice. At steady 
 ~60MB (main) + ~65MB (worker) against a ~400MB physical footprint — the rest is module code, JIT
 output, and allocator arenas.
 
-- **Measure physical footprint, not RSS.** RSS counts the resident slice of Bun's own ~2GB binary,
+- **Idle polling is the app's largest allocator, and allocation rate is what a user sees as
+  "it's using a gigabyte".** A JS engine keeps its allocator arenas mapped long after the garbage in
+  them is collected: a full `Bun.gc(true)` drops the physical footprint from 180MB to 60MB and moves
+  RSS *not at all*. So resident size tracks the high-water mark of churn, not what is live, and the
+  only way down is to allocate less. Both steady-state polls therefore ask what a file **is** before
+  reading what it **says**:
+  `lib/claudeSessionReads.ts` gates the open session's 2s re-read on size + mtime + subagent set
+  (3ms and no measurable allocation, against ~45MB to parse a 14.7MB transcript), and
+  `lib/claudeSessionListCache.ts` gates the 5s sidebar list on one stat per transcript (601 files in
+  1-2ms, against ~300ms and ~44MB to re-derive a 200-session page — listing is not a metadata
+  lookup, the SDK derives every entry's summary and first prompt from the transcript itself).
+  One minute of idle polling with a session open: **+291MB RSS and 2.1s of CPU before, +45MB and
+  0.35s after.** Each token is a gate, never a source — compared only against a previous token, and
+  any doubt returns null and re-derives. **Before adding a poll, measure what it allocates**, and
+  keep any cache's expiry rare: a 15s TTL on the list cache was itself worth a 45MB burst every
+  fourth poll, which is the cost it existed to avoid.
+- **`AGENT_VIEWER_TUI_MEM_RAW=1` measures churn; `AGENT_VIEWER_TUI_MEM=1` measures retention.** Both
+  live in `tui/opentui/workerHeapProbe.ts` and both write to `AGENT_VIEWER_TUI_MEM_LOG`. The
+  retention probe collects before reading, so it can look perfectly flat while resident size climbs
+  all night; the raw sampler does not, so a repeating step of the same size in its `objs` column is
+  one periodic job, which is how the list cache's expiry was caught.
+- **`tui/opentui/memPhases.sh` attributes a phase; `memRun.sh` reports one aggregate peak.** memRun
+  hid that the ratchet was on the list path rather than in any one feature. memPhases drives a
+  scripted `label:keys:reps:dwell` sequence (`PHASES=`) and prints footprint and RSS after each, so
+  "analytics costs 55MB" and "nothing is released when it closes" are separate, visible facts. Run
+  it with `MEM_CWD=$PWD` — in an empty temp dir the git, editor and composer phases do nothing.
+- **Measure physical footprint, not RSS** — except when chasing churn, where RSS is the point
+  (above). RSS counts the resident slice of Bun's own ~2GB binary,
   which is shared and file-backed; it swamps the app's real cost and swings 100MB between identical
   runs. `npm run tui:memrun` reports `vmmap`'s physical footprint, sampled throughout the run
   (a single reading lands wherever the collector happened to leave the heap and varies ~2x).

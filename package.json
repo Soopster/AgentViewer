@@ -47,6 +47,7 @@
     "tui:perf": "bun --expose-gc run ./tui/opentui/transcriptPerf.tsx",
     "tui:memperf": "bun --expose-gc run ./tui/opentui/memPerf.tsx",
     "tui:memrun": "REPO=\"$PWD\" ./tui/opentui/memRun.sh",
+    "tui:memphases": "REPO=\"$PWD\" MEM_CWD=\"$PWD\" ./tui/opentui/memPhases.sh",
     "tui:worker-perf": "bun run ./tui/opentui/workerLatencyPerf.ts",
     "pi:provider:smoke": "bun run ./scripts/piProviderSmoke.ts",
     "pi:provider:perf": "bun run ./scripts/piProviderPerf.ts",

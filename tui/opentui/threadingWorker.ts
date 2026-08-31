@@ -21,7 +21,7 @@ import type { ContextUsage, ProviderSelection, Session, SessionInfo, SessionMess
 // ~16MB here. Keep this import off service.ts.
 import { readTuiSessionDetailSource, readTuiSessionMetadata, readTuiSessions } from '../../lib/tui/reads'
 import { sameSessionMessageContent, threadedMessageFingerprint } from './messageFingerprint'
-import { reportWorkerHeap } from './workerHeapProbe'
+import { startRawHeapSampler, reportWorkerHeap } from './workerHeapProbe'
 
 // Reads the session from disk/SDK *inside the worker*, then threads + formats.
 // Keeping the read here means the full transcript (and the read/normalize/sort
@@ -626,3 +626,5 @@ self.onmessage = async (event) => {
     })
   }
 }
+
+startRawHeapSampler('threading')

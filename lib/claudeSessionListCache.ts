@@ -28,9 +28,12 @@ import { join } from 'node:path'
 import { configuredClaudeSessionStore } from './claudeSessionStore'
 import type { Session } from './types'
 
-/** Bounds staleness in any configuration whose changes the sweep cannot see.
- *  Three sidebar polls; short enough that nobody watches a stale list. */
-const LIST_CACHE_TTL_MS = 15_000
+/** A backstop for a change the sweep cannot see, not a routine refresh: when a
+ *  token exists it is already exact, so expiring often just pays the full
+ *  re-derive on a timer — at 15s the transcript worker allocated a 45MB burst
+ *  every fourth poll while the app sat idle. Long enough to be rare, short
+ *  enough that an unforeseen blind spot self-corrects. */
+const LIST_CACHE_TTL_MS = 5 * 60_000
 /** One entry per distinct list shape (params + config dir). A handful of shapes
  *  exist — the sidebar's, the project feed's, each provider instance's. */
 const LIST_CACHE_MAX = 8
