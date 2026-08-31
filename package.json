@@ -37,7 +37,7 @@
     "desktop:dev": "tauri dev",
     "desktop:prepare": "node ./scripts/prepareDesktopResources.mjs",
     "desktop:build": "npm run build && npm run desktop:prepare && tauri build",
-    "tui": "NODE_ENV=production bun run ./tui/opentui/main.tsx",
+    "tui": "bun run ./tui/opentui/main.tsx",
     "tui:dev": "bun --watch ./tui/opentui/main.tsx",
     "tui:check": "tsc -p tsconfig.opentui.json --noEmit",
     "tui:navperf": "bun run ./tui/opentui/navPerf.tsx",

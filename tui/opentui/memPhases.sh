@@ -6,7 +6,8 @@
 #   REPO="$PWD" ./tui/opentui/memPhases.sh
 set -u
 : "${REPO:?set REPO to the repo root}"
-export NODE_ENV=${NODE_ENV:-production}
+# NODE_ENV is left as the caller set it, which is what the shipped TUI runs
+# with — defaulting it here would measure a configuration nobody runs.
 WORK=${MEM_CWD:-$(mktemp -d)}
 MARKS=$(mktemp -d)/marks
 cd "$WORK" || exit 1

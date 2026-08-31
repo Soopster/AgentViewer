@@ -619,13 +619,12 @@ Run \`agent-viewer coord <subcommand> --help\` for subcommand-specific options.`
     failMissingBun()
   } else {
     const attachUrl = normalizeAttachUrl(attach)
-    // Default the shipped TUI to React's production build. Bun leaves NODE_ENV
-    // unset, so React loaded its development build, which allocates an Error
-    // per JSX element to capture owner stacks — roughly 6,000 per session
-    // opened, ~49,000 across a dozen. That is pure churn for a terminal app
-    // nobody is debugging with React DevTools. An explicit NODE_ENV still wins,
-    // so `NODE_ENV=development agent-viewer` gets the warnings back.
-    const tuiEnv = { NODE_ENV: 'production', ...process.env }
+    // NODE_ENV is deliberately left as the caller set it. Defaulting it to
+    // 'production' here bought React's production build (its development build
+    // allocates an Error per JSX element for owner stacks — ~6,000 per session
+    // opened) but broke running the TUI, because NODE_ENV reaches far more than
+    // React: everything else the app and its dependencies load reads it too.
+    const tuiEnv = { ...process.env }
     if (attachUrl) tuiEnv.AGENT_VIEWER_ATTACH = attachUrl
     const child = spawn(bunLauncher.command, [...bunLauncher.args, 'run', entrypoint, ...forwarded], {
       stdio: 'inherit',

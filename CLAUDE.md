@@ -287,13 +287,13 @@ output, and allocator arenas.
   `ensureTuiMermaidRenderer()`, which the worker awaits only for a transcript that actually contains
   a Mermaid fence (`textNeedsTuiMermaid`); formatting itself stays synchronous. The legacy Ink TUI
   bumps a `mermaidEpoch` to re-run its memo once the renderer resolves.
-- **The shipped TUI runs React's production build.** Bun leaves `NODE_ENV` unset, so the TUI was
-  loading React's development build, which allocates an `Error` per JSX element for owner stacks —
-  ~6,000 per session opened, ~49,000 across a dozen. `bin/agent-viewer.mjs` defaults the OpenTUI
-  spawn to `NODE_ENV=production` (worth ~27MB peak / ~60MB settled, plus the churn); an explicit
-  `NODE_ENV` still wins, so `NODE_ENV=development agent-viewer` gets the warnings back. `npm run
-  tui` sets it too; `npm run tui:dev` is the variant that keeps React's development build (and its
-  warnings) for contributors.
+- **Do not set `NODE_ENV` for the TUI.** Bun leaves it unset, which costs React's development
+  build — an `Error` allocated per JSX element for owner stacks, ~6,000 per session opened — and
+  defaulting the spawn in `bin/agent-viewer.mjs` to `NODE_ENV=production` did buy that back
+  (~27MB peak / ~60MB settled, plus the churn). It also broke running the TUI, because `NODE_ENV`
+  is not a React flag: every other module the app and its dependencies load reads it too. It has
+  been removed from both `bin/agent-viewer.mjs` and `npm run tui`. Reclaiming React's production
+  build needs a mechanism scoped to React alone, not a process-wide environment variable.
 - **Keep the send path out of read-path modules.** `lib/adapters/claude.ts` is a read adapter and
   was importing `claudePool` for a single `peekClaudeSession` — 30MB of send-path pool in every
   isolate that reads a session, the transcript worker included. It now asks through
