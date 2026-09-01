@@ -321,9 +321,25 @@ auto-pair checks nor anything else `handleKey` does per character. Set
   tree-sitter buffer, and the file the moment anyone pressed save. Not worth it;
   it is also documented upstream as a simulation pending a native implementation.
   Because an overlay cannot push real text aside the way virtual text does, a
-  ghost is drawn **only at end of line**, only when the suggestion is a
-  case-exact continuation of the typed prefix, and never for a snippet (whose
-  body is `${1:name}` placeholder syntax, not text).
+  ghost is drawn **only where the rest of the line is blank**, only when the
+  suggestion is a case-exact continuation of the typed prefix, and never for a
+  snippet (whose body is `${1:name}` placeholder syntax, not text).
+- **The ghost outlives the completion list, on purpose.** The list is cleared on
+  every keystroke and a new one costs a 160ms debounce plus a round trip, so a
+  hint derived from the list blinks out for ~120ms per character — at typing
+  speed it is only ever visible to someone who has stopped. A standing
+  `ghostCandidate` is re-checked against the live buffer instead, so it shrinks
+  as the word is typed and drops the moment the word stops matching. Because it
+  outlives the list it must be retired explicitly: `closeCompletions` (Escape),
+  acceptance, and a tab switch all clear it, or the hint describes a suggestion
+  the user already refused. And because it is visible while no list is open,
+  **Tab accepts a standing ghost** — a hint you can see but cannot act on is
+  worse than no hint.
+- **A ghost must describe what acceptance actually does**, so
+  `editorGhostCandidate` mirrors `applyCompletion` rather than approximating it:
+  a server-supplied `textEdit` decides its own replaced range, which is often
+  not the word under the caret, and an edit that does not end at the caret is
+  not something a ghost can describe at all.
 - **The overlay's origin is one row and one column inside the caret's cell.**
   Absolute coordinates are relative to the popover frame, which the completion
   popup absorbs into its own rough placement but the ghost cannot — it has to

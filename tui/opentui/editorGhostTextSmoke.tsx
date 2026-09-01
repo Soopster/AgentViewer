@@ -15,28 +15,66 @@ import { join } from 'node:path'
 import { RGBA, SyntaxStyle, type TextareaRenderable } from '@opentui/core'
 import { testRender } from '@opentui/react/test-utils'
 import { DARK_THEME } from '../theme'
-import { EditorPopover, editorGhostSuffix, type EditorKeyEvent } from './EditorPopover'
+import { EditorPopover, editorGhostCandidate, editorGhostSuffix, type EditorKeyEvent } from './EditorPopover'
 
-// --- the rule, in isolation --------------------------------------------------
+// --- the rules, in isolation ------------------------------------------------
 
-const completion = (insertText: string, insertTextFormat?: 1 | 2) => ({ insertText, insertTextFormat })
+const word = (content: string, cursorOffset: number, insertText: string) =>
+  editorGhostCandidate(content, cursorOffset, { label: insertText, insertText, source: 'buffer' })
 
-if (editorGhostSuffix('bo', 2, completion('body')) !== 'dy') throw new Error('A suggestion continuing the typed prefix must ghost its remainder')
-if (editorGhostSuffix('const bo', 8, completion('body')) !== 'dy') throw new Error('A prefix mid-line at end of line must still ghost')
-if (editorGhostSuffix('bo\nnext', 2, completion('body')) !== 'dy') throw new Error('End of line before a newline must ghost')
-// Nothing to add.
-if (editorGhostSuffix('body', 4, completion('body')) !== null) throw new Error('A fully typed suggestion must not ghost')
-// Not a continuation: showing `dy` after `xy` would be a lie about what Tab does.
-if (editorGhostSuffix('xy', 2, completion('body')) !== null) throw new Error('A suggestion that does not continue the prefix must not ghost')
-if (editorGhostSuffix('BO', 2, completion('body')) !== null) throw new Error('Ghosting must be case-exact, not case-insensitive')
-// An overlay cannot push real text aside the way virtual text can.
-if (editorGhostSuffix('bo)', 2, completion('body')) !== null) throw new Error('A caret with text after it must not ghost')
+// A candidate is the offset acceptance starts replacing from, plus what it puts
+// there — derived once, then re-checked against the buffer as it changes.
+if (JSON.stringify(word('bo', 2, 'body')) !== JSON.stringify({ replaceStart: 0, newText: 'body' })) {
+  throw new Error('A plain suggestion replaces the word under the caret')
+}
+// A language server's own edit range wins, because that is what acceptance uses.
+const lspItem = (newText: string, startCharacter: number, endCharacter: number, insertTextFormat?: 1 | 2) => ({
+  label: newText,
+  insertText: newText,
+  insertTextFormat,
+  source: 'lsp' as const,
+  textEdit: {
+    range: { start: { line: 0, character: startCharacter }, end: { line: 0, character: endCharacter } },
+    newText,
+  },
+})
+if (JSON.stringify(editorGhostCandidate('a.bo', 4, lspItem('bodyweight', 2, 4))) !== JSON.stringify({ replaceStart: 2, newText: 'bodyweight' })) {
+  throw new Error('A server-supplied textEdit range must be used instead of the word under the caret')
+}
+// An edit that does not end at the caret describes something else entirely.
+if (editorGhostCandidate('a.bo', 4, lspItem('bodyweight', 0, 2)) !== null) {
+  throw new Error('An edit that does not end at the caret must not ghost')
+}
 // Snippet bodies are placeholder syntax, not text.
-if (editorGhostSuffix('fu', 2, completion('function ${1:name}() {}', 2)) !== null) throw new Error('A snippet must not ghost its placeholder syntax')
-if (editorGhostSuffix('bo', 2, undefined) !== null) throw new Error('No selection means no ghost')
-if (editorGhostSuffix('', 0, completion('body')) !== null) throw new Error('An empty prefix must not ghost a whole word')
-if (editorGhostSuffix('bo', 2, completion('bo\nnext')) !== null) throw new Error('A multi-line suggestion must not ghost')
-console.log('Ghost suffix is produced only where a suggestion truly continues what was typed.')
+if (editorGhostCandidate('fu', 2, lspItem('function ${1:name}() {}', 0, 2, 2)) !== null) {
+  throw new Error('A snippet must not ghost its placeholder syntax')
+}
+if (editorGhostCandidate('bo', 2, undefined) !== null) throw new Error('No selection means no candidate')
+
+const candidate = (newText: string, replaceStart = 0) => ({ replaceStart, newText })
+
+if (editorGhostSuffix('bo', 2, candidate('body')) !== 'dy') throw new Error('A suggestion continuing the typed prefix must ghost its remainder')
+if (editorGhostSuffix('const bo', 8, candidate('body', 6)) !== 'dy') throw new Error('A prefix mid-line at end of line must still ghost')
+if (editorGhostSuffix('bo\nnext', 2, candidate('body')) !== 'dy') throw new Error('End of line before a newline must ghost')
+// The overlay can sit on blank columns, which trailing whitespace already is.
+if (editorGhostSuffix('bo   \nnext', 2, candidate('body')) !== 'dy') throw new Error('Trailing whitespace is blank space the ghost may occupy')
+// Nothing to add.
+if (editorGhostSuffix('body', 4, candidate('body')) !== null) throw new Error('A fully typed suggestion must not ghost')
+// Not a continuation: showing `dy` after `xy` would be a lie about what Tab does.
+if (editorGhostSuffix('xy', 2, candidate('body')) !== null) throw new Error('A suggestion that does not continue the prefix must not ghost')
+if (editorGhostSuffix('BO', 2, candidate('body')) !== null) throw new Error('Ghosting must be case-exact, not case-insensitive')
+// An overlay cannot push real text aside the way virtual text can.
+if (editorGhostSuffix('bo)', 2, candidate('body')) !== null) throw new Error('A caret with code after it must not ghost')
+if (editorGhostSuffix('bo', 2, null) !== null) throw new Error('No candidate means no ghost')
+if (editorGhostSuffix('', 0, candidate('body')) !== null) throw new Error('An empty prefix must not ghost a whole word')
+if (editorGhostSuffix('bo', 2, candidate('bo\nnext')) !== null) throw new Error('A multi-line suggestion must not ghost')
+
+// The candidate is re-checked as the word grows, which is what keeps the hint
+// still while a list is being re-requested.
+if (editorGhostSuffix('b', 1, candidate('bodyweight')) !== 'odyweight') throw new Error('A standing candidate must shrink as the word is typed')
+if (editorGhostSuffix('body', 4, candidate('bodyweight')) !== 'weight') throw new Error('A standing candidate must shrink as the word is typed')
+if (editorGhostSuffix('bodyq', 5, candidate('bodyweight')) !== null) throw new Error('A standing candidate must drop once the word stops matching')
+console.log('Ghost candidates mirror what acceptance does, and are re-checked against the live buffer.')
 
 // --- on screen, against the real editor --------------------------------------
 
@@ -184,16 +222,90 @@ process.stdin.on('data', (chunk) => {
     }
     console.log('Moving through the list re-ghosts against the selected suggestion.')
 
-    // Accepting turns the hint into real text, and the hint goes away.
+    // Back to the first suggestion, so the run below types through `bodyweight`.
+    act(() => { handleKey?.({ name: 'up', ctrl: false, shift: false, sequence: '[A' }) })
+    const backDeadline = performance.now() + 5_000
+    while (performance.now() < backDeadline && !findGhost('dyweight')) await settle(40)
+    if (!findGhost('dyweight')) throw new Error('Moving back up the list did not restore the first suggestion\'s ghost')
+
+    // The reliability property. The completion list is cleared on every
+    // keystroke and a new one costs a debounce plus a round trip, so a ghost
+    // derived from the list alone blinks out for ~120ms per character — at
+    // typing speed it is only ever visible to someone who has stopped. Typing
+    // through the word must leave the hint standing at every step.
+    for (const [typed, expected] of [['d', 'yweight'], ['y', 'weight'], ['w', 'eight']] as const) {
+      await act(async () => { await setup.mockInput.typeText(typed) })
+      await settle(24)
+      const standing = findGhost(expected)
+      if (!standing) {
+        throw new Error(
+          `The ghost blinked out while typing: after '${typed}' there was no dim '${expected}'.\n`
+          + setup.captureCharFrame(),
+        )
+      }
+    }
+    console.log('The ghost holds still while a word is typed, rather than blinking once per character.')
+
+    // ...and goes away as soon as the word stops matching it.
+    await act(async () => { await setup.mockInput.typeText('q') })
+    await settle(24)
+    if (findGhost('ight') || findGhost('ght')) {
+      throw new Error(`The ghost survived a keystroke that no longer matches it:\n${setup.captureCharFrame()}`)
+    }
+    console.log('The ghost drops the moment the typed word stops matching it.')
+
+    // A visible hint has to be actionable. Immediately after a keystroke the
+    // list is cleared and has not come back, so Tab would otherwise indent
+    // while a suggestion sits on screen.
+    act(() => { handleKey?.({ name: 'backspace', ctrl: false, shift: false, sequence: '' }) })
+    await settle(400)
+    await act(async () => { await setup.mockInput.typeText('e') })
+    // No settling: this is the window where the list is empty by construction.
+    if (findGhost('ight') == null) {
+      throw new Error(`No ghost was standing in the window before the list returns:\n${setup.captureCharFrame()}`)
+    }
+    act(() => { handleKey?.({ name: 'tab', ctrl: false, shift: false, sequence: '\t' }) })
+    await settle(120)
+    if (!editor.plainText.endsWith('bodyweight')) {
+      throw new Error(
+        `Tab did not accept the standing ghost before the list returned: ${JSON.stringify(editor.plainText.slice(-40))}`,
+      )
+    }
+    console.log('Tab accepts a standing ghost even before the completion list comes back.')
+
+    // Reset for the acceptance-through-the-list check below.
+    act(() => { editor.replaceText('const seed = 0\nbo'); editor.gotoBufferEnd() })
+    await settle(500)
+
+    // Accepting through an open list inserts the real text and retires the hint.
+    const listDeadline = performance.now() + 8_000
+    while (performance.now() < listDeadline && !setup.captureCharFrame().includes('completions')) await settle(40)
+    if (!findGhost('dyweight')) {
+      throw new Error(`The reopened list did not ghost its selection:\n${setup.captureCharFrame()}`)
+    }
     act(() => { handleKey?.({ name: 'tab', ctrl: false, shift: false, sequence: '\t' }) })
     const acceptDeadline = performance.now() + 5_000
-    while (performance.now() < acceptDeadline && !editor.plainText.endsWith('bodySize')) await settle(40)
-    if (!editor.plainText.endsWith('bodySize')) {
+    while (performance.now() < acceptDeadline && !editor.plainText.endsWith('bodyweight')) await settle(40)
+    if (!editor.plainText.endsWith('bodyweight')) {
       throw new Error(`Accepting the suggestion did not insert it: ${JSON.stringify(editor.plainText.slice(-40))}`)
     }
     await settle(200)
-    if (findGhost('dySize')) throw new Error('The ghost is still drawn after its suggestion was accepted')
-    console.log('Accepting inserts the real text and clears the ghost.')
+    if (findGhost('dyweight')) throw new Error('The ghost is still drawn after its suggestion was accepted')
+    console.log('Accepting through the list inserts the real text and clears the ghost.')
+
+    // Escape refuses the suggestion, and the hint outlives the list by design —
+    // so it has to be retired explicitly or it would describe something the
+    // user has just declined.
+    act(() => { editor.replaceText('const seed = 0\nbo'); editor.gotoBufferEnd() })
+    const escDeadline = performance.now() + 8_000
+    while (performance.now() < escDeadline && !findGhost('dyweight')) await settle(40)
+    if (!findGhost('dyweight')) throw new Error('No ghost to dismiss')
+    act(() => { handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '\u001b' }) })
+    await settle(300)
+    if (findGhost('dyweight')) {
+      throw new Error(`The ghost survived an Escape that dismissed its suggestion:\n${setup.captureCharFrame()}`)
+    }
+    console.log('Escape retires the ghost along with the list.')
 
     // A caret with code after it has no empty columns to borrow.
     act(() => {

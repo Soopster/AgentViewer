@@ -506,35 +506,73 @@ function wordPrefixAt(content: string, offset: number): { value: string; start: 
   return { value, start: offset - value.length }
 }
 
+export type EditorGhostCandidate = { replaceStart: number; newText: string }
+
+/**
+ * What accepting a suggestion would actually do, as the offset it starts
+ * replacing from and the text it puts there.
+ *
+ * This has to mirror `applyCompletion`, not approximate it: a language server
+ * that returns a `textEdit` decides its own replaced range, which is often not
+ * the word under the caret, and a ghost derived from `insertText` and the word
+ * prefix would then be showing something Tab does not do.
+ *
+ * Returns null for a snippet, whose body is `${1:name}` placeholder syntax
+ * rather than the text that will be inserted.
+ */
+export function editorGhostCandidate(
+  content: string,
+  cursorOffset: number,
+  completion: Completion | undefined,
+): EditorGhostCandidate | null {
+  if (!completion) return null
+  if (completion.source === 'lsp' && completion.insertTextFormat === 2) return null
+  if (completion.source === 'lsp' && completion.textEdit) {
+    const start = validOffsetAtEditorPosition(content, completion.textEdit.range.start)
+    const end = validOffsetAtEditorPosition(content, completion.textEdit.range.end)
+    // An edit that does not end at the caret is not something a ghost can
+    // describe: the text it replaces is not the text the user is typing.
+    if (start == null || end == null || end !== cursorOffset || start > cursorOffset) return null
+    return { replaceStart: start, newText: completion.textEdit.newText }
+  }
+  return { replaceStart: wordPrefixAt(content, cursorOffset).start, newText: completion.insertText }
+}
+
 /**
  * The part of a suggestion the user has not typed yet, shown dim at the caret
  * the way an inline suggestion is in an editor with virtual text.
  *
  * It is drawn as an overlay rather than inserted into the buffer, so it can
- * only occupy space that is already empty: a terminal overlay cannot push real
+ * only occupy space that is already blank: a terminal overlay cannot push real
  * code aside the way virtual text does, and painting over the rest of the line
- * would be worse than showing nothing. Hence the end-of-line requirement.
+ * would be worse than showing nothing. Hence the rule that the rest of the line
+ * must be empty.
  *
- * Returns null wherever a ghost would be wrong rather than merely absent — a
- * suggestion that does not continue what was typed, a snippet whose body is
- * placeholder syntax rather than text, or anything spanning a line break.
+ * Evaluated against the *live* buffer, not the content the suggestion was
+ * requested for. The completion list is cleared on every keystroke and takes a
+ * debounce plus a round trip to come back, so a ghost tied to the list flickers
+ * out for ~120ms per character — at typing speed, it is only ever visible to
+ * someone who has stopped. Re-checking the standing candidate against what is
+ * now on screen is what makes it hold still while a word is being typed, and
+ * what drops it the moment the word stops matching.
  */
 export function editorGhostSuffix(
   content: string,
   cursorOffset: number,
-  completion: { insertText: string; insertTextFormat?: 1 | 2 } | undefined,
+  candidate: EditorGhostCandidate | null,
 ): string | null {
-  if (!completion) return null
-  // Snippet bodies are `${1:name}` placeholder syntax, not the text that will
-  // be inserted; ghosting them raw would show the user the machinery.
-  if (completion.insertTextFormat === 2) return null
-  const next = content[cursorOffset]
-  // Only at end of line, where the overlay has empty columns to occupy.
-  if (next != null && next !== '\n') return null
-  const prefix = wordPrefixAt(content, cursorOffset)
-  if (prefix.value.length === 0) return null
-  if (!completion.insertText.startsWith(prefix.value)) return null
-  const suffix = completion.insertText.slice(prefix.value.length)
+  if (!candidate) return null
+  if (candidate.replaceStart > cursorOffset) return null
+  // The rest of the line has to be blank for the overlay to sit in.
+  for (let index = cursorOffset; index < content.length; index += 1) {
+    const code = content.charCodeAt(index)
+    if (code === 10) break
+    if (code !== 32 && code !== 9) return null
+  }
+  const replaced = content.slice(candidate.replaceStart, cursorOffset)
+  if (replaced.length === 0) return null
+  if (!candidate.newText.startsWith(replaced)) return null
+  const suffix = candidate.newText.slice(replaced.length)
   if (suffix.length === 0 || suffix.includes('\n')) return null
   return suffix
 }
@@ -1191,6 +1229,11 @@ export function EditorPopover({
   const syntaxBufferRef = useRef<EditorSyntaxBuffer | null>(null)
   const verifiedBuffersRef = useRef(new WeakSet<TextareaRenderable>())
   const syntaxBackfillRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // The suggestion the ghost is currently describing. It outlives the
+  // completion list, which is cleared on every keystroke, so the hint holds
+  // still while a word is typed instead of blinking once per character.
+  const [ghostCandidate, setGhostCandidate] = useState<EditorGhostCandidate | null>(null)
+  const ghostTextRef = useRef<string | null>(null)
   const completionRequestRef = useRef(0)
   const completionResolveRequestRef = useRef(0)
   const completionAbortRef = useRef<AbortController | null>(null)
@@ -1366,6 +1409,8 @@ export function EditorPopover({
     setMultiCursor(null)
     setBlockSelection(null)
     snippetSessionRef.current = null
+    // The candidate is an offset into a particular buffer.
+    setGhostCandidate(null)
   }, [activePath])
 
   useEffect(() => {
@@ -2507,6 +2552,10 @@ export function EditorPopover({
     completionDismissedAtRef.current = dismissed ?? null
     setCompletions([])
     setCompletionEngaged(false)
+    // The standing ghost is deliberately outliving the list, so it has to be
+    // retired here: an Escape that left the hint on screen would be describing
+    // a suggestion the user just refused.
+    setGhostCandidate(null)
   }, [])
 
   const requestCompletions = useCallback(async (force = false) => {
@@ -2981,7 +3030,9 @@ export function EditorPopover({
 
   const acceptCompletion = useCallback(() => {
     const item = completions[completionCursor]
-    if (item) void applyCompletionItem(item)
+    if (!item) return
+    setGhostCandidate(null)
+    void applyCompletionItem(item)
   }, [applyCompletionItem, completionCursor, completions])
 
   const activateTreeRow = useCallback(() => {
@@ -3783,6 +3834,17 @@ export function EditorPopover({
         snippetSessionRef.current = null
       }
     }
+    // A standing ghost is acceptable even with no list on screen. The hint
+    // outlives the completion list by design, so between the keystroke and the
+    // list coming back there is a window where the suggestion is plainly
+    // visible and Tab would otherwise indent — which makes the hint look like
+    // something you cannot act on.
+    if (focusPane === 'editor' && key.name === 'tab' && !key.shift && !key.ctrl && !key.meta
+      && completions.length === 0 && ghostTextRef.current && !editorRef.current?.hasSelection()) {
+      editorRef.current?.insertText(ghostTextRef.current)
+      setGhostCandidate(null)
+      return true
+    }
     if (focusPane === 'editor' && key.name === 'tab' && (key.shift || editorRef.current?.hasSelection())) {
       editSelectedLines(key.shift ? 'outdent' : 'indent')
       return true
@@ -4131,20 +4193,31 @@ export function EditorPopover({
     ? Math.max(3, completionCaretRow)
     : Math.max(3, completionCaretRow - completionPopupHeight - 1)
   const completionLeft = explorerWidth + Math.max(5, Math.min(Math.max(5, editorWidth - completionPopupWidth - 2), cursor.visualColumn + 7))
-  // Inline suggestion at the caret. The completion list is cleared on every
-  // content change, so whenever it is non-empty the buffer still holds exactly
-  // the content the session was requested against — which is what makes the
-  // session's offset safe to measure the prefix from.
-  const ghostSuffix = useMemo(() => {
+  // Inline suggestion at the caret. The candidate is captured whenever a list
+  // is open and re-checked against the live buffer on every keystroke, so it
+  // survives the debounce and round trip that a new list costs.
+  useEffect(() => {
     const session = completionSessionRef.current
-    if (!session || focusPane !== 'editor' || multiCursor || snippetSessionRef.current) return null
-    if (session.line !== cursor.line || session.visualColumn !== cursor.visualColumn) return null
-    return editorGhostSuffix(session.content, session.cursorOffset, completions[completionCursor])
-  }, [completionCursor, completions, cursor.line, cursor.visualColumn, focusPane, multiCursor])
-  // The caret's own column, which is where the buffer's text ends and the
-  // overlay's begins. Word wrap makes the logical column stop matching the
-  // visual one, so the ghost is only drawn while the line it sits on — with the
-  // suggestion appended — still fits on one screen row.
+    const selected = completions[completionCursor]
+    if (!session || !selected) return
+    const next = editorGhostCandidate(session.content, session.cursorOffset, selected)
+    setGhostCandidate((current) => (
+      current && next && current.replaceStart === next.replaceStart && current.newText === next.newText
+        ? current
+        : next
+    ))
+  }, [completionCursor, completions])
+
+  const ghostSuffix = useMemo(() => {
+    if (!activeTab || focusPane !== 'editor' || multiCursor || snippetSessionRef.current) return null
+    const lineStarts = lineStartsFor(activeTab.content)
+    if (cursor.line >= lineStarts.length) return null
+    const cursorOffset = Math.min(
+      cursor.line + 1 < lineStarts.length ? lineStarts[cursor.line + 1]! - 1 : activeTab.content.length,
+      lineStarts[cursor.line]! + cursor.visualColumn,
+    )
+    return editorGhostSuffix(activeTab.content, cursorOffset, ghostCandidate)
+  }, [activeTab, cursor.line, cursor.visualColumn, focusPane, ghostCandidate, multiCursor])
   // Absolute coordinates here are relative to the popover's frame, one row and
   // one column inside the terminal cell the caret occupies — the same offset
   // the completion popup absorbs into its own rough placement. The ghost has to
@@ -4152,10 +4225,11 @@ export function EditorPopover({
   const ghostRow = cursor.line - (editorRef.current?.scrollY ?? 0) + contentTop - 1
   const ghostLeft = explorerWidth + gutterMinWidth + cursor.visualColumn
   const ghostFits = ghostSuffix != null
-    && ghostRow >= contentTop
+    && ghostRow >= contentTop - 1
     && ghostRow < contentTop + contentHeight
     && cursor.visualColumn + ghostSuffix.length < editorWidth - gutterMinWidth - 2
   const ghostText = ghostFits ? ghostSuffix : null
+  ghostTextRef.current = ghostText
   const editorModeLabel = focusPane === 'explorer' ? 'EXPLORER' : vimEnabled ? vimMode.toUpperCase() : 'INSERT'
   const editorModeColor = focusPane === 'explorer'
     ? theme.amber
