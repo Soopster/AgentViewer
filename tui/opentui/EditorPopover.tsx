@@ -388,7 +388,7 @@ const EDITOR_SHORTCUT_GROUPS: readonly EditorShortcutGroup[] = [
     title: 'Edit',
     entries: [
       ['^Z / ^Y', 'Undo / redo'], ['^C / ^X / ^V', 'Copy / cut / paste'],
-      ['^] / ^[', 'Indent / outdent lines'], ['Tab / ⇧Tab', 'Indent / outdent selection'],
+      ['^] / ^[', 'Indent / outdent lines'], ['Tab / ⇧Tab', 'Indent / outdent'],
       ['^/', 'Toggle comment'],
       ['Alt+↑/↓', 'Move lines'], ['Alt+U / Alt+L', 'Upper / lower case'],
     ],
@@ -3847,6 +3847,22 @@ export function EditorPopover({
     }
     if (focusPane === 'editor' && key.name === 'tab' && (key.shift || editorRef.current?.hasSelection())) {
       editSelectedLines(key.shift ? 'outdent' : 'indent')
+      return true
+    }
+    // Plain Tab with nothing selected. Neither the popover nor the textarea
+    // claimed this before — the textarea has no Tab action at all — so the key
+    // did nothing whatsoever, in an editor, which is the one place Tab is
+    // expected to work. It advances to the next tab stop rather than inserting
+    // a whole indent unit, so a caret sitting mid-indent lands on the stop
+    // instead of overshooting it.
+    if (focusPane === 'editor' && key.name === 'tab' && !key.ctrl && !key.meta && !alt) {
+      const editor = editorRef.current
+      if (!editor || !activeTab) return true
+      const indentUnit = detectEditorIndentUnit(activeTab.content, activeTab.path)
+      const insertion = indentUnit === '\t'
+        ? '\t'
+        : ' '.repeat(indentUnit.length - (cursorRef.current.visualColumn % indentUnit.length))
+      editor.insertText(insertion)
       return true
     }
     if (focusPane === 'editor' && (key.name === 'home' || key.name === 'end')) {

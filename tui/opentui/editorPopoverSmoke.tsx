@@ -864,8 +864,19 @@ process.stdin.on('data', (chunk) => {
       }
     }
 
+    // Tab used to be left for the textarea, on the assumption that the textarea
+    // would indent. It does not: `TextareaAction` has no tab or indent action,
+    // and a real Tab through the input pipeline left the buffer untouched — so
+    // declining it made Tab do nothing at all. The editor claims it now.
+    // editorTabSmoke.tsx covers the ordering against completions and snippets.
+    const editorBefore = (setup.renderer.root.findDescendantById('project-editor-textarea') as TextareaRenderable).plainText
     const tabResult = (handleKey as ((key: EditorKeyEvent) => boolean) | null)?.({ name: 'tab', ctrl: false, shift: false, sequence: '\t' })
-    if (tabResult !== false) throw new Error('Tab was intercepted instead of being left for the text editor')
+    if (tabResult !== true) throw new Error('Tab was declined, which leaves it doing nothing at all')
+    await setup.flush()
+    const editorAfter = (setup.renderer.root.findDescendantById('project-editor-textarea') as TextareaRenderable).plainText
+    if (editorAfter.length <= editorBefore.length || editorAfter.trim() === editorBefore.trim()) {
+      throw new Error(`Tab did not indent: ${JSON.stringify(editorBefore)} -> ${JSON.stringify(editorAfter)}`)
+    }
     act(() => { handleKey?.({ name: 'e', ctrl: true, shift: false, sequence: '\u0005' }) })
     await setup.flush()
     if (!setup.captureCharFrame().includes('EXPLORER')) throw new Error('Ctrl+E did not move focus to Explorer')

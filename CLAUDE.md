@@ -312,6 +312,17 @@ auto-pair checks nor anything else `handleKey` does per character. Set
   pair: LSP positions are UTF-16 code units, but half a pair is not a character
   and a server cannot recover from being sent one.
 
+- **Tab is overloaded, and its claimants are ordered.** In one key handler, in
+  order: a snippet placeholder, an open completion list, a standing ghost, a
+  selection or Shift (indent/outdent lines), and finally plain Tab, which
+  advances to the next tab stop. That last branch had no one behind it — the
+  textarea has **no Tab action at all** (`TextareaAction` has no tab or indent
+  member), so the editor declining Tab left it doing *nothing*, silently, in the
+  one place a Tab key is expected to work. `editorPopoverSmoke.tsx` had asserted
+  the old contract, which was asserting the bug. `editorTabSmoke.tsx` now pins
+  every state Tab can be pressed in, including that a claimant added too early
+  swallows indenting — verified by moving the indent branch ahead of the
+  suggestion branches and watching it fail.
 - **Ghost text is an overlay, never buffer content.** The dim remainder of the
   selected suggestion at the caret (`editorGhostSuffix` + an absolutely
   positioned `<text>`) is painted over the terminal. OpenTUI's `ExtmarksController`
