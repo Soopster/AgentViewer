@@ -230,6 +230,19 @@ gets slower. `EDITOR_TYPING_LONG_LINES=1` measures a minified file and
 `EDITOR_TYPING_EXT=txt` disables highlighting, which is how the highlighter's
 share of a cost is separated from the rest.
 
+**Measure at 6,000 lines, not 20,000.** At 6,000 the harness reproduces to ±2%;
+at 20,000 it swings ±25% run to run, which is wider than most changes worth
+making — two separate readings of the *same* build came out 30.8ms and 73.2ms.
+A/B interleaved (never batched), and treat a single 20,000-line reading as
+evidence of nothing. Two changes were nearly accepted and one nearly reverted on
+noise before this was pinned down.
+
+**The harness must drive the real key path.** `App.tsx` hands every key to the
+popover's `handleKey` first and only lets the textarea see it if that returns
+false, so a harness calling `mockInput.typeText` alone measures neither the
+auto-pair checks nor anything else `handleKey` does per character. Set
+`EDITOR_TYPING_RAW_INPUT=1` to get the textarea-only path for comparison.
+
 - **Syntax highlighting is incremental, and must stay that way.** It used to
   call `highlightOnce(entireBuffer)` on a 90ms debounce after every keystroke
   and apply the result with one `addHighlight` per token per line: in a
@@ -240,6 +253,13 @@ share of a cost is separated from the rest.
   lines and 2.7ms at 20,000. Measured end to end: `cpu/key` at 6,000 lines went
   77.3ms → 12.1ms, and its growth from 200 lines 5.84x → 1.78x. Do not
   reintroduce a whole-file re-highlight.
+- **The initial parse is applied in slices, viewport first.** It answers with
+  every line in the file, and applying 20,000 of them in one tick was a 45ms
+  frame — the single visible hitch in an otherwise flat profile, landing on
+  whichever keystroke happened to coincide with it. What is on screen is painted
+  immediately and the rest backfills in `SYNTAX_BACKFILL_CHUNK_LINES` slices,
+  abandoned if an edit lands (those lines describe the old content). Key p95 at
+  20,000 lines: 60ms → 21ms.
 - **A highlight response is only valid against the content that produced it.**
   The handler drops a batch unless `editor.plainText === buffer.content`; a
   pending update answers with fresh lines. Applying a stale batch decorates the
@@ -255,13 +275,28 @@ share of a cost is separated from the rest.
   the old code took **over ten minutes** to type 25 characters into a 660KB
   minified file. Same threshold skips decorating a single over-wide line pasted
   into an otherwise normal file.
-- **Do not read `editor.plainText` on a hot path.** It materialises the whole
-  buffer; the highlight passes each used to take their own copy. `lineStartsFor`
-  caches by string identity and `editorDocumentOffset` takes optional
-  `content`/`lineStarts` so callers that already hold them pay nothing.
-  `detectEditorIndentUnit` samples a bounded prefix rather than splitting the
-  file — the status bar's indent readout was an O(file) allocation per
-  keystroke.
+- **Do not read `editor.plainText` on a hot path.** It is not cached: **1.1ms
+  per read at 20,000 lines, 6.3ms immediately after an edit**, every time. The
+  highlight passes, the signature-help effect and the key handler each used to
+  take their own copy per keystroke — the key handler's on *every printable
+  character*, for auto-pair checks that only brackets and quotes reach.
+  `lineStartsFor` caches by string identity, `editorDocumentOffset` takes
+  optional `content`/`lineStarts`, and `detectEditorIndentUnit` samples a
+  bounded prefix rather than splitting the file.
+- **`activeTab.content` is the buffer's content, not a copy of it.** Every
+  change runs `updateActiveContent`, which writes back exactly the string it
+  read, and an edit landing before a debounced effect fires cancels and
+  reschedules it — so a debounced pass may use `activeTab.content` instead of
+  re-materialising the buffer, and gets `lineStartsFor` cache hits for free.
+  This invariant is what the whole file already relies on; breaking
+  `updateActiveContent` breaks far more than decoration.
+- **Still full-document: the language server.** `editorLsp.ts` never reads the
+  server's advertised `textDocumentSync` and sends the entire document in every
+  `textDocument/didChange` — 572KB per keystroke at 20,000 lines. Incremental
+  sync is the obvious fix but is **not implemented, because the win was never
+  demonstrated**: the local `typescript-language-server` published no
+  diagnostics under test, so the end-to-end A/B could not be run. Do not
+  implement it blind; get a server that reports first.
 
 The file boundary is the other half, and both halves lose data silently when
 wrong — a smoke is the only thing that catches either, because a truncated

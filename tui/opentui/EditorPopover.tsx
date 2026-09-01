@@ -30,7 +30,7 @@ import {
   type EditorTextEdit,
   type EditorWorkspaceEdit,
 } from './editorLsp'
-import { openEditorSyntaxBuffer, type EditorSyntaxBuffer } from './editorSyntaxBuffer'
+import { openEditorSyntaxBuffer, type EditorSyntaxBuffer, type EditorSyntaxLine } from './editorSyntaxBuffer'
 import { createScrollVelocityState, velocityScrollStep } from './scrollVelocity'
 import {
   type EditorProjectSearchResult,
@@ -109,6 +109,10 @@ const OCCURRENCE_MAX_SCAN_CHARS = 128 * 1024
 // them over only to be discarded, which measured at 37ms of the 52ms a
 // keystroke cost in a 900KB minified file.
 const MAX_HIGHLIGHTED_LINE_CHARS = 10_000
+// Lines painted per slice when backfilling a whole file's highlights, and the
+// margin of off-screen lines painted in the first slice so a small scroll lands
+// on colour that is already there.
+const SYNTAX_BACKFILL_CHUNK_LINES = 2_000
 
 function longestLineLength(content: string): number {
   let longest = 0
@@ -1153,6 +1157,7 @@ export function EditorPopover({
   const lspRef = useRef<EditorLspClient | null>(null)
   const syntaxBufferRef = useRef<EditorSyntaxBuffer | null>(null)
   const verifiedBuffersRef = useRef(new WeakSet<TextareaRenderable>())
+  const syntaxBackfillRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const completionRequestRef = useRef(0)
   const completionResolveRequestRef = useRef(0)
   const completionAbortRef = useRef<AbortController | null>(null)
@@ -2098,12 +2103,16 @@ export function EditorPopover({
     const editor = editorRef.current
     if (!activeTab || !editor || focusPane !== 'editor') return
     const request = ++signatureRequestRef.current
-    const offset = editorDocumentOffset(editor)
-    const trigger = editor.plainText[offset - 1]
+    // One read, reused. `plainText` materialises the whole buffer on every
+    // access — 1.1ms at 20,000 lines, 6.3ms just after an edit — and this
+    // effect runs on every keystroke to inspect a single character.
+    const content = editor.plainText
+    const offset = editorDocumentOffset(editor, undefined, content)
+    const trigger = content[offset - 1]
     if (trigger !== '(' && trigger !== ',') return
     const timer = setTimeout(() => {
       void lspRef.current?.signatureHelp(
-        editorPositionAtOffset(editor.plainText, offset),
+        editorPositionAtOffset(content, offset),
         trigger,
       ).then((result) => {
         if (request !== signatureRequestRef.current) return
@@ -2316,12 +2325,12 @@ export function EditorPopover({
         if (!current || current.plainText !== buffer.content) return
         const content = buffer.content
         const lineStarts = lineStartsFor(content)
-        if (full) current.clearAllHighlights()
-        for (const entry of lines) {
-          if (!full) current.clearLineHighlights(entry.line)
+
+        const applyLine = (entry: EditorSyntaxLine, clearFirst: boolean) => {
+          if (clearFirst) current.clearLineHighlights(entry.line)
           const lineStart = lineStarts[entry.line] ?? 0
           const lineEnd = entry.line + 1 < lineStarts.length ? lineStarts[entry.line + 1]! - 1 : content.length
-          if (lineEnd - lineStart > MAX_HIGHLIGHTED_LINE_CHARS) continue
+          if (lineEnd - lineStart > MAX_HIGHLIGHTED_LINE_CHARS) return
           for (const range of entry.highlights) {
             const styleId = syntaxStyle.resolveStyleId(range.group) ?? syntaxStyle.resolveStyleId('default')
             if (styleId == null) continue
@@ -2334,12 +2343,52 @@ export function EditorPopover({
             })
           }
         }
+
+        if (!full) {
+          for (const entry of lines) applyLine(entry, true)
+          applyEditorOverlays(current, content, lineStarts)
+          return
+        }
+
+        // The initial parse answers with every line in the file, and applying
+        // 20,000 of them in one tick is a 45ms frame — the single visible hitch
+        // in an otherwise flat typing profile. What is on screen is painted
+        // now; the rest is backfilled in slices, so colour appears immediately
+        // and the keystroke that happens to coincide with the parse is not the
+        // one that pays for the whole file.
+        if (syntaxBackfillRef.current != null) clearTimeout(syntaxBackfillRef.current)
+        syntaxBackfillRef.current = null
+        current.clearAllHighlights()
+        const firstVisible = Math.max(0, Math.floor(current.scrollY) - SYNTAX_BACKFILL_CHUNK_LINES)
+        const lastVisible = Math.ceil(current.scrollY + current.height) + SYNTAX_BACKFILL_CHUNK_LINES
+        const deferred: EditorSyntaxLine[] = []
+        for (const entry of lines) {
+          if (entry.line >= firstVisible && entry.line <= lastVisible) applyLine(entry, false)
+          else deferred.push(entry)
+        }
         applyEditorOverlays(current, content, lineStarts)
+
+        let index = 0
+        const backfill = () => {
+          syntaxBackfillRef.current = null
+          const editor = editorRef.current
+          // An edit landed while the file was still being painted: the parser
+          // is already answering for the new content, and these lines describe
+          // the old one.
+          if (!editor || editor !== current || editor.plainText !== buffer.content) return
+          const end = Math.min(deferred.length, index + SYNTAX_BACKFILL_CHUNK_LINES)
+          for (; index < end; index += 1) applyLine(deferred[index]!, false)
+          if (index >= deferred.length) return
+          syntaxBackfillRef.current = setTimeout(backfill, 0)
+        }
+        if (deferred.length > 0) syntaxBackfillRef.current = setTimeout(backfill, 0)
       },
     })
     syntaxBufferRef.current = buffer
     return () => {
       if (syntaxBufferRef.current === buffer) syntaxBufferRef.current = null
+      if (syntaxBackfillRef.current != null) clearTimeout(syntaxBackfillRef.current)
+      syntaxBackfillRef.current = null
       buffer.dispose()
     }
   }, [activePath, applyEditorOverlays, syntaxStyle])
@@ -2373,8 +2422,14 @@ export function EditorPopover({
     const editor = editorRef.current
     if (!activeTab || !editor) return
     const timer = setTimeout(() => {
-      const content = editor.plainText
-      applyEditorOverlays(editor, content, lineStartsFor(content))
+      // `activeTab.content` is the buffer's content, not a copy of it: every
+      // change to the buffer runs `updateActiveContent`, which writes exactly
+      // the string it read back onto the tab, and any edit landing before this
+      // timer fires cancels and reschedules it. Reading `plainText` again here
+      // would materialise the whole buffer a second time (6.3ms at 20,000
+      // lines) and defeat `lineStartsFor`'s identity cache, since the parser's
+      // pass over the same keystroke already built the table for this string.
+      applyEditorOverlays(editor, activeTab.content, lineStartsFor(activeTab.content))
     }, 55)
     return () => clearTimeout(timer)
   }, [activeTab, applyEditorOverlays, cursor.line, cursor.visualColumn])
@@ -3809,12 +3864,18 @@ export function EditorPopover({
     if (focusPane === 'editor' && !key.ctrl && !alt && sequence.length === 1) {
       const editor = editorRef.current
       if (!editor) return false
-      let offset = editorDocumentOffset(editor)
+      // Only brackets and quotes have anything to do here. Everything else —
+      // which is nearly every character typed — used to pay for a whole-buffer
+      // read before falling through to the textarea untouched.
+      const closesPair = AUTO_PAIR_CLOSERS.has(sequence)
+      const opensPair = AUTO_PAIR_OPEN.has(sequence)
+      if (!closesPair && !opensPair) return false
+      const content = editor.plainText
+      let offset = editorDocumentOffset(editor, undefined, content)
       // Typing a closer on an otherwise blank line snaps that line back to its
       // opener's indentation, so a block closes where it started instead of
       // wherever the previous line happened to leave the caret.
-      if (AUTO_PAIR_CLOSERS.has(sequence) && !editor.hasSelection()) {
-        const content = editor.plainText
+      if (closesPair && !editor.hasSelection()) {
         const lineStart = content.lastIndexOf('\n', Math.max(0, offset - 1)) + 1
         const aligned = indentForClosingBracket(content, offset, sequence, activeTab?.path ?? '')
         if (aligned != null && aligned !== content.slice(lineStart, offset)) {
@@ -3831,24 +3892,23 @@ export function EditorPopover({
           return true
         }
       }
-      if (AUTO_PAIR_CLOSERS.has(sequence) && editor.plainText[offset] === sequence && !editor.hasSelection()) {
+      if (closesPair && content[offset] === sequence && !editor.hasSelection()) {
         setEditorDocumentOffset(editor, offset + 1)
         return true
       }
-      if (AUTO_PAIR_OPEN.has(sequence)) {
+      if (opensPair) {
         const close = AUTO_PAIR_CLOSE[sequence]!
         const selection = editor.getSelection()
         const quote = sequence === '"' || sequence === "'" || sequence === '`'
         if (quote && !selection) {
-          const previous = editor.plainText[offset - 1]
-          const next = editor.plainText[offset]
+          const previous = content[offset - 1]
+          const next = content[offset]
           // Keep apostrophes in identifiers/prose and escaped quotes literal.
           // Pair only where a closing delimiter is syntactically plausible.
           if (previous === '\\' || (previous != null && /[\w$]/.test(previous))
             || (next != null && !/[\s)\]}>;,.:]/.test(next))) return false
         }
         if (selection) {
-          const content = editor.plainText
           editor.replaceText(`${content.slice(0, selection.start)}${sequence}${content.slice(selection.start, selection.end)}${close}${content.slice(selection.end)}`)
           editor.setSelection(selection.start + 1, selection.end + 1)
         } else {

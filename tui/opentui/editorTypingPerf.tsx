@@ -111,7 +111,20 @@ async function runSize(lines: number): Promise<void> {
     { width: 120, height: 36 },
   )
   try {
-    await settle(setup, 900)
+    // Open latency: mount to a painted, highlighted buffer. This is the wait a
+    // user feels between pressing ^P and being able to read the file.
+    const openStartedAt = performance.now()
+    let openMs = -1
+    const openDeadline = performance.now() + 20_000
+    while (performance.now() < openDeadline) {
+      await settle(setup, 24)
+      const mounted = setup.renderer.root.findDescendantById('project-editor-textarea') as TextareaRenderable | null
+      if (mounted && mounted.plainText.length > 0 && mounted.getLineHighlights(0).length > 0) {
+        openMs = performance.now() - openStartedAt
+        break
+      }
+    }
+    await settle(setup, 300)
     const editor = setup.renderer.root.findDescendantById('project-editor-textarea') as TextareaRenderable | null
     if (!editor || !handleKey) throw new Error(`Typing benchmark did not mount the editor for ${lines} lines`)
     if (editor.plainText.split('\n').length < lines) {
@@ -134,7 +147,14 @@ async function runSize(lines: number): Promise<void> {
     for (let index = 0; index < KEYSTROKES; index += 1) {
       const startedAt = performance.now()
       await act(async () => {
-        await setup.mockInput.typeText('x')
+        // The real path: App gives every key to the popover's handler first and
+        // only lets the textarea see it if the popover did not consume it.
+        // Driving `mockInput` alone skips that handler, and with it the
+        // auto-pair and bracket-alignment checks that run on every character.
+        const consumed = process.env.EDITOR_TYPING_RAW_INPUT === '1'
+          ? false
+          : handleKey?.({ name: 'x', ctrl: false, shift: false, sequence: 'x' }) ?? false
+        if (!consumed) await setup.mockInput.typeText('x')
         await setup.flush()
       })
       keystrokes.push(performance.now() - startedAt)
@@ -158,12 +178,15 @@ async function runSize(lines: number): Promise<void> {
     const cpuMsPerKey = (cpuAfter.user + cpuAfter.system) / 1000 / KEYSTROKES
     recording = false
 
+    if (process.env.EDITOR_TYPING_TRACE === '1') {
+      console.error(`keystrokes(${lines}): ${keystrokes.map((value) => value.toFixed(1)).join(' ')}`)
+    }
     const sorted = [...keystrokes].sort((left, right) => left - right)
     const p50 = sorted[Math.ceil(sorted.length * 0.5) - 1]!
     const p95 = sorted[Math.ceil(sorted.length * 0.95) - 1]!
     console.log(JSON.stringify({
       lines, commits: frames.commits, over: frames.over, worst: frames.worst,
-      keyP50: p50, keyP95: p95, settleMs, cpuMsPerKey,
+      keyP50: p50, keyP95: p95, settleMs, cpuMsPerKey, openMs,
     }))
   } finally {
     act(() => setup.renderer.destroy())
@@ -182,7 +205,7 @@ if (childSize > 0) {
 
 console.log('Editor typing latency by file size')
 console.log(`  target ${TUI_TARGET_FPS}fps (${formatTuiFrameBudgetMs()}ms frame budget), ${KEYSTROKES} keystrokes per size`)
-console.log(`  ${'lines'.padStart(6)} ${'commits'.padStart(8)} ${`over-${formatTuiFrameBudgetMs()}ms`.padStart(12)} ${'worst'.padStart(9)} ${'key p50'.padStart(9)} ${'key p95'.padStart(9)} ${'settle'.padStart(9)} ${'cpu/key'.padStart(9)}`)
+console.log(`  ${'lines'.padStart(6)} ${'commits'.padStart(8)} ${`over-${formatTuiFrameBudgetMs()}ms`.padStart(12)} ${'worst'.padStart(9)} ${'key p50'.padStart(9)} ${'key p95'.padStart(9)} ${'settle'.padStart(9)} ${'cpu/key'.padStart(9)} ${'open'.padStart(9)}`)
 const rows: Array<{ lines: number; keyP50: number; cpuMsPerKey: number }> = []
 for (const lines of SIZES) {
   const child = spawnSync('bun', ['run', fileURLToPath(import.meta.url)], {
@@ -201,7 +224,8 @@ for (const lines of SIZES) {
     `  ${String(lines).padStart(6)} ${String(parsed.commits).padStart(8)} ${String(parsed.over).padStart(12)}`
     + ` ${(parsed.worst!.toFixed(1) + 'ms').padStart(9)} ${(parsed.keyP50!.toFixed(1) + 'ms').padStart(9)}`
     + ` ${(parsed.keyP95!.toFixed(1) + 'ms').padStart(9)} ${(parsed.settleMs!.toFixed(0) + 'ms').padStart(9)}`
-    + ` ${(parsed.cpuMsPerKey!.toFixed(1) + 'ms').padStart(9)}`,
+    + ` ${(parsed.cpuMsPerKey!.toFixed(1) + 'ms').padStart(9)}`
+    + ` ${(parsed.openMs! < 0 ? 'never' : parsed.openMs!.toFixed(0) + 'ms').padStart(9)}`,
   )
 }
 const smallest = rows[0]
