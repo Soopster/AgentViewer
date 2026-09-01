@@ -1,6 +1,7 @@
 import { open, readFile, rename, stat, unlink } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { resolveSafeEditorFile } from './editorFileOperations'
+import { applyEditorLineEnding, normalizeEditorNewlines, type EditorLineEnding } from './editorLineEndings'
 
 let saveCounter = 0
 
@@ -19,9 +20,13 @@ export async function saveEditorFileSafely(
   path: string,
   content: string,
   savedContent: string,
+  lineEnding: EditorLineEnding = '\n',
 ): Promise<void> {
   const target = await resolveSafeEditorFile(root, path)
-  const current = await readFile(target.absolute, 'utf8')
+  // `content` and `savedContent` are the editor's LF-normalized text, so the
+  // disk is compared in the same terms; the file's own ending is restored only
+  // on the bytes actually written.
+  const current = normalizeEditorNewlines(await readFile(target.absolute, 'utf8'))
   if (current !== savedContent) throw new EditorDiskConflictError(target.path)
   const info = await stat(target.absolute)
   saveCounter += 1
@@ -29,13 +34,13 @@ export async function saveEditorFileSafely(
   let handle
   try {
     handle = await open(temporary, 'wx', info.mode & 0o777)
-    await handle.writeFile(content, 'utf8')
+    await handle.writeFile(applyEditorLineEnding(content, lineEnding), 'utf8')
     await handle.sync()
     await handle.close()
     handle = undefined
     // Recheck immediately before replacement so an edit that landed while the
     // temporary file was being flushed is never silently overwritten.
-    if (await readFile(target.absolute, 'utf8') !== savedContent) throw new EditorDiskConflictError(target.path)
+    if (normalizeEditorNewlines(await readFile(target.absolute, 'utf8')) !== savedContent) throw new EditorDiskConflictError(target.path)
     const latestTarget = await resolveSafeEditorFile(root, path)
     if (latestTarget.absolute !== target.absolute) throw new EditorDiskConflictError(target.path)
     await rename(temporary, target.absolute)

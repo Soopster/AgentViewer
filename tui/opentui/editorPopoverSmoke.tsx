@@ -209,7 +209,7 @@ process.stdin.on('data', (chunk) => {
     await new Promise((resolve) => setTimeout(resolve, 2_000))
     await setup.flush()
     const initialFrame = setup.captureCharFrame()
-    for (const expected of ['EDITOR', 'EXPLORER', 'main.ts', 'INSERT', '^P open', '^Space complete', '? shortcuts']) {
+    for (const expected of ['EDITOR', 'EXPLORER', 'main.ts', 'INSERT', '^P open', '^Space complete', 'F1 help', '⇧Z zen']) {
       if (!initialFrame.includes(expected)) throw new Error(`Missing ${expected} from editor frame:\n${initialFrame}`)
 
     // The footer stays one compact row; the full reference is behind `?` from
@@ -243,6 +243,45 @@ process.stdin.on('data', (chunk) => {
     act(() => { handleKey?.({ name: 'e', ctrl: true, shift: false, sequence: '\u0005' }) })
     await flush(setup, 120)
     }
+    // Shift+Z from the explorer maximises the buffer: no border, no tab strip,
+    // no explorer, no footer — only the status line survives, so the file gets
+    // every row. Escape restores the chrome.
+    // The status bar's mode chip is the pane truth: Shift+Z is a toggle only
+    // where it is not text, so drive it from the explorer.
+    if (setup.captureCharFrame().includes(' INSERT ')) {
+      act(() => { handleKey?.({ name: 'e', ctrl: true, shift: false, sequence: '\u0005' }) })
+      await flush(setup, 120)
+    }
+    act(() => { handleKey?.({ name: 'Z', ctrl: false, shift: true, sequence: 'Z' }) })
+    await flush(setup, 150)
+    const zenFrame = setup.captureCharFrame()
+    if (zenFrame.includes('EXPLORER') || zenFrame.includes('F1 help') || zenFrame.includes('EDITOR ')) {
+      throw new Error(`Shift+Z did not maximise the buffer:\n${zenFrame}`)
+    }
+    if (!zenFrame.includes('Ln ') || !zenFrame.includes('Zen (Esc)') || !zenFrame.includes('main.ts')) {
+      throw new Error(`Zen mode dropped the status line:\n${zenFrame}`)
+    }
+    const zenRows = zenFrame.split('\n').filter((row) => /\d+ const /.test(row)).length
+    act(() => { handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '\u001b' }) })
+    await flush(setup, 150)
+    const restoredFrame = setup.captureCharFrame()
+    if (!restoredFrame.includes('EXPLORER') || !restoredFrame.includes('F1 help')) {
+      throw new Error(`Escape did not restore the editor chrome:\n${restoredFrame}`)
+    }
+    const restoredRows = restoredFrame.split('\n').filter((row) => /\d+ const /.test(row)).length
+    if (zenRows <= restoredRows) {
+      throw new Error(`Zen mode did not show more of the file: ${zenRows} vs ${restoredRows} rows`)
+    }
+    // Ctrl+Shift+P opens the palette straight into command mode.
+    act(() => { handleKey?.({ name: 'p', ctrl: true, shift: true, sequence: '\u0010' }) })
+    await flush(setup, 150)
+    const paletteFrame = setup.captureCharFrame()
+    if (!paletteFrame.includes('COMMANDS') || !paletteFrame.includes('Go to Line')) {
+      throw new Error(`Ctrl+Shift+P did not open the command palette:\n${paletteFrame}`)
+    }
+    act(() => { handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '\u001b' }) })
+    await flush(setup, 120)
+
     if (!/\b1\s+const answer/.test(initialFrame)) throw new Error(`Editor did not render line numbers:\n${initialFrame}`)
     const keywordColor = RGBA.fromHex(DARK_THEME.violet).toString()
     const syntaxSpans = setup.captureSpans().lines.flatMap((line) => line.spans)
@@ -803,8 +842,14 @@ process.stdin.on('data', (chunk) => {
     if (!notices.some((notice) => notice.message === 'Editor Vim mode disabled')) {
       throw new Error(`Disabling Vim mode did not emit a toast notice: ${JSON.stringify(notices)}`)
     }
+    // Shift+V is a view toggle only where it is not text: in the buffer it has
+    // to fall through to the textarea, like `?` does.
+    const bufferShiftV = (handleKey as ((key: EditorKeyEvent) => boolean) | null)?.({ name: 'V', ctrl: false, shift: true, sequence: 'V' })
+    if (bufferShiftV !== false) throw new Error('Shift+V was intercepted inside the buffer instead of typing')
+    act(() => { handleKey?.({ name: 'e', ctrl: true, shift: false, sequence: '\u0005' }) })
     act(() => { handleKey?.({ name: 'V', ctrl: false, shift: true, sequence: 'V' }) })
     act(() => { handleKey?.({ name: 'V', ctrl: false, shift: true, sequence: 'V' }) })
+    act(() => { handleKey?.({ name: 'e', ctrl: true, shift: false, sequence: '\u0005' }) })
     act(() => { handleKey?.({ name: 'b', ctrl: true, shift: false, sequence: '\u0002' }) })
     act(() => { handleKey?.({ name: 'b', ctrl: true, shift: false, sequence: '\u0002' }) })
     await setup.flush()

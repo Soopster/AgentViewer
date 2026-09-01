@@ -4,7 +4,6 @@ import { readFile } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
-  getTreeSitterClient,
   MacOSScrollAccel,
   type LineNumberRenderable,
   ScrollBarRenderable,
@@ -31,6 +30,7 @@ import {
   type EditorTextEdit,
   type EditorWorkspaceEdit,
 } from './editorLsp'
+import { openEditorSyntaxBuffer, type EditorSyntaxBuffer } from './editorSyntaxBuffer'
 import { createScrollVelocityState, velocityScrollStep } from './scrollVelocity'
 import {
   type EditorProjectSearchResult,
@@ -54,6 +54,11 @@ import {
 } from './editorMultiCursor'
 import { createEditorFile, deleteEditorFile, renameEditorFile, resolveSafeEditorFile } from './editorFileOperations'
 import { saveEditorFileSafely } from './editorFileSave'
+import {
+  detectEditorLineEnding,
+  normalizeEditorNewlines,
+  type EditorLineEnding,
+} from './editorLineEndings'
 import {
   transformEditorCase,
   transformEditorLines,
@@ -85,9 +90,36 @@ const EDITOR_TEXTAREA_KEY_BINDINGS: NonNullable<TextareaOptions['keyBindings']> 
 
 const OCCURRENCE_HIGHLIGHT_REF = 41_001
 const BRACKET_HIGHLIGHT_REF = 41_002
+const MULTI_CURSOR_HIGHLIGHT_REF = 41_003
+const SYNTAX_HIGHLIGHT_REF = 41_004
 const OCCURRENCE_MIN_LENGTH = 2
 const OCCURRENCE_MAX_MATCHES = 1_000
 const OCCURRENCE_VIEWPORT_MARGIN_LINES = 120
+// The line margin is meaningless in a minified file, where a hundred lines can
+// be a megabyte: the scan has to be bounded in characters too, or occurrence
+// matching walks the whole buffer on every keystroke. Decoration outside the
+// viewport is invisible anyway; the margin only exists so a small scroll does
+// not have to rescan.
+const OCCURRENCE_MAX_SCAN_CHARS = 128 * 1024
+// A minified bundle is a handful of lines of a hundred kilobytes each, and one
+// of them carries thousands of tokens. Two rules bound what that can cost, both
+// of them the rule editors settle on: a line wider than this is left
+// undecorated, and a file that contains one is not parsed at all — the parser
+// would re-derive thousands of ranges for that line on every keystroke and hand
+// them over only to be discarded, which measured at 37ms of the 52ms a
+// keystroke cost in a 900KB minified file.
+const MAX_HIGHLIGHTED_LINE_CHARS = 10_000
+
+function longestLineLength(content: string): number {
+  let longest = 0
+  let lineStart = 0
+  for (let index = 0; index <= content.length; index += 1) {
+    if (index !== content.length && content.charCodeAt(index) !== 10) continue
+    if (index - lineStart > longest) longest = index - lineStart
+    lineStart = index + 1
+  }
+  return longest
+}
 
 declare module '@opentui/react' {
   interface OpenTUIComponents {
@@ -124,6 +156,9 @@ type BufferTab = {
   path: string
   content: string
   savedContent: string
+  // `content` and `savedContent` always use LF; this is what the file on disk
+  // uses, restored on save. See editorLineEndings.ts.
+  lineEnding: EditorLineEnding
 }
 
 type TreeNode = {
@@ -228,6 +263,8 @@ type EditorCommandId =
   | 'toggle-vim'
   | 'toggle-velocity'
   | 'toggle-word-wrap'
+  | 'toggle-zen'
+  | 'command-palette'
   | 'show-shortcuts'
 
 type EditorCommand = {
@@ -237,7 +274,15 @@ type EditorCommand = {
   keywords: string
 }
 
-const MAX_FILE_BYTES = 2 * 1024 * 1024
+// The terminal edit buffer holds at most 1,048,576 characters and silently
+// discards the rest — a 1.5 MB file used to open as a cheerful "Opened
+// main.ts" over two thirds of its content. The editor's own limit is therefore
+// the buffer's, checked in bytes, which for any non-ASCII file is the stricter
+// of the two. `assertEditorBufferIntact` is the backstop for the limit itself
+// being wrong.
+const MAX_EDITOR_BUFFER_CHARS = 1024 * 1024
+const MAX_FILE_BYTES = MAX_EDITOR_BUFFER_CHARS
+const MAX_FILE_LABEL = '1 MB'
 const MAX_COMPLETIONS = 12
 const QUICK_VISIBLE_ROWS = 11
 const SYMBOL_VISIBLE_ROWS = 11
@@ -313,10 +358,12 @@ const EDITOR_COMMANDS: readonly EditorCommand[] = [
   { id: 'toggle-vim', label: 'Editor: Toggle Vim Mode', detail: 'Alt+V', keywords: 'normal insert visual modal' },
   { id: 'toggle-word-wrap', label: 'Editor: Toggle Word Wrap', detail: 'Alt+Z', keywords: 'wrap long lines columns' },
   { id: 'toggle-explorer', label: 'View: Toggle Explorer', detail: 'Ctrl+B', keywords: 'sidebar files' },
+  { id: 'toggle-zen', label: 'View: Maximise Editor (Zen Mode)', detail: 'Explorer Shift+Z / Esc', keywords: 'full screen fullscreen maximise maximize zen distraction free focus' },
   { id: 'focus-explorer', label: 'View: Focus Explorer or Editor', detail: 'Ctrl+E', keywords: 'sidebar pane' },
   { id: 'close-tab', label: 'File: Close Active Tab', detail: 'Ctrl+W', keywords: 'buffer' },
-  { id: 'toggle-velocity', label: 'Editor: Toggle Velocity Scrolling', detail: 'V', keywords: 'accelerate navigation' },
-  { id: 'show-shortcuts', label: 'Help: Keyboard Shortcuts', detail: '?', keywords: 'keys bindings reference cheatsheet help' },
+  { id: 'toggle-velocity', label: 'Editor: Toggle Velocity Scrolling', detail: 'Explorer Shift+V', keywords: 'accelerate navigation scroll' },
+  { id: 'command-palette', label: 'View: Command Palette', detail: 'Ctrl+Shift+P', keywords: 'commands run action palette' },
+  { id: 'show-shortcuts', label: 'Help: Keyboard Shortcuts', detail: 'F1 / Explorer ?', keywords: 'keys bindings reference cheatsheet help' },
 ]
 
 type EditorShortcutGroup = { title: string; entries: readonly (readonly [string, string])[] }
@@ -330,13 +377,15 @@ const EDITOR_SHORTCUT_GROUPS: readonly EditorShortcutGroup[] = [
     entries: [
       ['^S', 'Save'], ['Alt+S / ^⇧S', 'Save all'], ['^N', 'New file'], ['^P', 'Open file'],
       ['^W', 'Close tab'], ['^Tab / ^PgUp/PgDn', 'Switch tabs'], ['^Q', 'Close editor'],
+      ['F2 / Del (explorer)', 'Rename / delete file'],
     ],
   },
   {
     title: 'Edit',
     entries: [
       ['^Z / ^Y', 'Undo / redo'], ['^C / ^X / ^V', 'Copy / cut / paste'],
-      ['^] / ⇧Tab', 'Indent / outdent'], ['^/', 'Toggle comment'],
+      ['^] / ^[', 'Indent / outdent lines'], ['Tab / ⇧Tab', 'Indent / outdent selection'],
+      ['^/', 'Toggle comment'],
       ['Alt+↑/↓', 'Move lines'], ['Alt+U / Alt+L', 'Upper / lower case'],
     ],
   },
@@ -352,12 +401,17 @@ const EDITOR_SHORTCUT_GROUPS: readonly EditorShortcutGroup[] = [
     entries: [
       ['^G', 'Go to line'], ['^M', 'Matching bracket'], ['^T', 'Jump back'],
       ['F8 / ⇧F8', 'Next / previous problem'], ['Alt+←/→', 'Move by word'],
+      ['Home / End', 'Line start / end'], ['^Home / ^End', 'Buffer start / end'],
       ['^B', 'Toggle explorer'], ['^E', 'Focus explorer / editor'],
     ],
   },
   {
     title: 'Search',
-    entries: [['^F', 'Find'], ['^R', 'Replace'], ['Alt+/', 'Search project']],
+    entries: [
+      ['^F', 'Find'], ['^R', 'Replace'], ['Alt+/', 'Search project'],
+      ['^F / ^⇧F (in find)', 'Next / previous match'],
+      ['Alt+C / Alt+R / Alt+S (in find)', 'Match case / regex / selection only'],
+    ],
   },
   {
     title: 'Language',
@@ -371,7 +425,11 @@ const EDITOR_SHORTCUT_GROUPS: readonly EditorShortcutGroup[] = [
   },
   {
     title: 'View',
-    entries: [['Alt+Z', 'Word wrap'], ['Alt+V', 'Vim mode'], ['V', 'Velocity scrolling'], ['F1', 'This reference']],
+    entries: [
+      ['^⇧P / Alt+P', 'Command palette'], ['⇧Z (explorer) / Esc', 'Maximise editor (zen) / restore'],
+      ['Alt+Z', 'Word wrap'], ['Alt+V', 'Vim mode'],
+      ['⇧V (explorer)', 'Velocity scrolling'], ['F1', 'This reference'],
+    ],
   },
 ]
 
@@ -570,12 +628,25 @@ function lineCommentToken(path: string): string {
   return '//'
 }
 
+// `content` and `lineStarts` are optional only because most callers do not
+// have them. Reading `editor.plainText` materialises the whole buffer, so a
+// caller that already holds the content — the highlight passes, which run on
+// every keystroke — must pass it rather than ask for another copy.
 function editorDocumentOffset(
   editor: TextareaRenderable,
   cursor?: { line: number; visualColumn: number },
+  content?: string,
+  lineStarts?: readonly number[],
 ): number {
   const logicalCursor = cursor ?? { line: editor.logicalCursor.row, visualColumn: editor.logicalCursor.col }
-  return offsetAtEditorPosition(editor.plainText, { line: logicalCursor.line, character: logicalCursor.visualColumn })
+  const position = { line: logicalCursor.line, character: logicalCursor.visualColumn }
+  if (content != null && lineStarts != null) {
+    if (position.line >= lineStarts.length) return content.length
+    const lineStart = lineStarts[position.line]!
+    const lineEnd = position.line + 1 < lineStarts.length ? lineStarts[position.line + 1]! - 1 : content.length
+    return Math.min(lineEnd, lineStart + Math.max(0, position.character))
+  }
+  return offsetAtEditorPosition(content ?? editor.plainText, position)
 }
 
 function setEditorDocumentOffset(editor: TextareaRenderable, offset: number): void {
@@ -849,11 +920,21 @@ function diagnosticCounts(diagnostics: EditorDiagnostic[]): { errors: number; wa
   return { errors, warnings, info }
 }
 
+// A keystroke asks for the line table two or three times over the same string
+// — the parser's response, the overlay pass, the cursor readout. Building it is
+// O(file) and allocates one number per line, so the last one is kept: the
+// content is the same string object each time, which makes the check exact.
+let lineStartsCacheContent: string | null = null
+let lineStartsCacheValue: number[] = [0]
+
 function lineStartsFor(content: string): number[] {
+  if (lineStartsCacheContent === content) return lineStartsCacheValue
   const starts = [0]
   for (let index = 0; index < content.length; index += 1) {
     if (content.charCodeAt(index) === 10) starts.push(index + 1)
   }
+  lineStartsCacheContent = content
+  lineStartsCacheValue = starts
   return starts
 }
 
@@ -1043,12 +1124,18 @@ export function EditorPopover({
   const [filePrompt, setFilePrompt] = useState<EditorFilePrompt | null>(null)
   const [diskConflicts, setDiskConflicts] = useState<Set<string>>(() => new Set())
   const [message, setMessage] = useState('Ready')
+  // Set when a file's lines are too long to be worth parsing; shown in the
+  // status bar so unhighlighted code reads as a decision, not a failure.
+  const [syntaxSuspended, setSyntaxSuspended] = useState(false)
   const [closeConfirm, setCloseConfirm] = useState(false)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [clock, setClock] = useState(() => new Date())
   const [velocityScrollEnabled, setVelocityScrollEnabled] = useState(false)
   const [wordWrapEnabled, setWordWrapEnabled] = useState(false)
   const [vimEnabled, setVimEnabled] = useState(false)
+  // Zen mode gives the buffer every row and column the popover has: no chrome,
+  // no explorer, no footer — the file, its gutter, and one status line.
+  const [zenMode, setZenMode] = useState(false)
   const [vimMode, setVimMode] = useState<VimMode>('insert')
   const scrollAcceleration = useMemo(() => new MacOSScrollAccel({ maxMultiplier: 3 }), [])
   const paneScrollbarOptions = useMemo(
@@ -1064,7 +1151,8 @@ export function EditorPopover({
   const lineNumberRef = useRef<LineNumberRenderable | null>(null)
   const shortcutsScrollRef = useRef<ScrollBoxRenderable | null>(null)
   const lspRef = useRef<EditorLspClient | null>(null)
-  const syntaxRequestRef = useRef(0)
+  const syntaxBufferRef = useRef<EditorSyntaxBuffer | null>(null)
+  const verifiedBuffersRef = useRef(new WeakSet<TextareaRenderable>())
   const completionRequestRef = useRef(0)
   const completionResolveRequestRef = useRef(0)
   const completionAbortRef = useRef<AbortController | null>(null)
@@ -1180,20 +1268,27 @@ export function EditorPopover({
   }), [activeTab?.content, searchMatchCase, searchQuery, searchRegex, searchSelectionOnly, searchSelectionRange])
   const searchMatches = searchResult.matches
 
-  const editorWidth = Math.max(24, width - (explorerVisible ? Math.max(24, Math.min(38, Math.floor(width * 0.23))) : 0) - 2)
-  const explorerWidth = explorerVisible ? Math.max(24, Math.min(38, Math.floor(width * 0.23))) : 0
+  const explorerShown = explorerVisible && !zenMode
+  const explorerWidth = explorerShown ? Math.max(24, Math.min(38, Math.floor(width * 0.23))) : 0
+  // Zen mode drops the popover border, so the buffer gets those columns too.
+  const editorWidth = Math.max(24, width - explorerWidth - (zenMode ? 0 : 2))
   const footerShortcutRows = useMemo(() => packFooterShortcuts([
     '^S save',
     '^P open',
+    '^⇧P commands',
     '^F find',
     '^Space complete',
     '^/ comment',
     'F12 definition',
-    '? shortcuts',
+    '⇧Z zen',
+    'F1 help',
     '^Q exit',
   ], Math.max(20, width - 4)), [width])
   const footerHeight = 1 + footerShortcutRows.length
-  const contentHeight = Math.max(6, height - 4 - footerHeight)
+  // Non-zen chrome: 2 border rows + 1 tab row + 1 status row + the footer.
+  // Zen keeps only the status row.
+  const contentTop = zenMode ? 0 : 2
+  const contentHeight = zenMode ? Math.max(6, height - 1) : Math.max(6, height - 4 - footerHeight)
 
   useEffect(() => {
     const timer = setInterval(() => setClock(new Date()), 30_000)
@@ -1242,7 +1337,7 @@ export function EditorPopover({
       setRecoveryConflicts(conflicts)
       setRecoveryConflictOpen(conflicts.length > 0)
       if (snapshot?.buffers.length) {
-        setTabs(snapshot.buffers)
+        setTabs(snapshot.buffers.map((buffer) => ({ ...buffer, lineEnding: buffer.lineEnding ?? '\n' })))
         const restoredActive = snapshot.activePath && snapshot.buffers.some((buffer) => buffer.path === snapshot.activePath)
           ? snapshot.activePath
           : snapshot.buffers[0]!.path
@@ -1269,7 +1364,9 @@ export function EditorPopover({
     if (!recoveryLoaded) return
     const dirtyBuffers = tabs.filter((tab) => tab.content !== tab.savedContent)
     const retained = [
-      ...dirtyBuffers.map((tab) => ({ path: tab.path, content: tab.content, savedContent: tab.savedContent })),
+      ...dirtyBuffers.map((tab) => ({
+        path: tab.path, content: tab.content, savedContent: tab.savedContent, lineEnding: tab.lineEnding,
+      })),
       ...recoveryConflicts.filter((conflict) => !dirtyBuffers.some((tab) => tab.path === conflict.path)),
     ]
     recoveryTimerRef.current = setTimeout(() => {
@@ -1372,16 +1469,19 @@ export function EditorPopover({
         const readings = await Promise.all(snapshot.map(async (tab) => {
           try {
             const safeFile = await resolveSafeEditorFile(root, tab.path)
-            return { tab, disk: await readFile(safeFile.absolute, 'utf8') as string | null }
+            const raw = await readFile(safeFile.absolute, 'utf8')
+            // Compared in the buffer's terms, or a CRLF file reads as changed
+            // against its own normalized copy on every poll.
+            return { tab, disk: normalizeEditorNewlines(raw), lineEnding: detectEditorLineEnding(raw) }
           }
-          catch { return { tab, disk: null as string | null } }
+          catch { return { tab, disk: null as string | null, lineEnding: tab.lineEnding } }
         }))
         if (cancelled) return
         const conflicts = new Set<string>()
-        const reloads = new Map<string, { expected: string; disk: string }>()
-        for (const { tab, disk } of readings) {
-          if (disk === tab.savedContent) continue
-          if (disk != null && tab.content === tab.savedContent) reloads.set(tab.path, { expected: tab.savedContent, disk })
+        const reloads = new Map<string, { expected: string; disk: string; lineEnding: EditorLineEnding }>()
+        for (const { tab, disk, lineEnding } of readings) {
+          if (disk === tab.savedContent && lineEnding === tab.lineEnding) continue
+          if (disk != null && tab.content === tab.savedContent) reloads.set(tab.path, { expected: tab.savedContent, disk, lineEnding })
           else conflicts.add(tab.path)
         }
         setDiskConflicts((current) => current.size === conflicts.size && [...current].every((path) => conflicts.has(path))
@@ -1395,7 +1495,7 @@ export function EditorPopover({
         setTabs((current) => current.map((tab) => {
           const reload = reloads.get(tab.path)
           return reload && tab.content === reload.expected && tab.savedContent === reload.expected
-            ? { ...tab, content: reload.disk, savedContent: reload.disk }
+            ? { ...tab, content: reload.disk, savedContent: reload.disk, lineEnding: reload.lineEnding }
             : tab
         }))
         const paths = [...reloads.keys()]
@@ -1426,12 +1526,14 @@ export function EditorPopover({
     }
     try {
       const safeFile = await resolveSafeEditorFile(root, safePath)
-      const content = await readFile(safeFile.absolute, 'utf8')
-      if (Buffer.byteLength(content) > MAX_FILE_BYTES) throw new Error('File exceeds 2 MB editor limit')
-      if (content.includes('\0')) throw new Error('Binary files cannot be edited')
+      const raw = await readFile(safeFile.absolute, 'utf8')
+      if (Buffer.byteLength(raw) > MAX_FILE_BYTES) throw new Error(`File exceeds the ${MAX_FILE_LABEL} editor limit`)
+      if (raw.includes('\0')) throw new Error('Binary files cannot be edited')
+      const lineEnding = detectEditorLineEnding(raw)
+      const content = normalizeEditorNewlines(raw)
       setTabs((current) => current.some((tab) => tab.path === safePath)
         ? current
-        : [...current, { path: safePath, content, savedContent: content }])
+        : [...current, { path: safePath, content, savedContent: content, lineEnding }])
       setActivePath(safePath)
       setFocusPane('editor')
       setMessage(`Opened ${safePath}`)
@@ -1447,7 +1549,7 @@ export function EditorPopover({
     const savedContent = activeTab.content
     const client = lspRef.current
     try {
-      await saveEditorFileSafely(root, activeTab.path, savedContent, activeTab.savedContent)
+      await saveEditorFileSafely(root, activeTab.path, savedContent, activeTab.savedContent, activeTab.lineEnding)
       setTabs((current) => current.map((tab) => tab.path === activeTab.path ? { ...tab, savedContent } : tab))
       setDiskConflicts((current) => {
         if (!current.has(activeTab.path)) return current
@@ -1478,7 +1580,7 @@ export function EditorPopover({
     }
     const activeClient = lspRef.current
     const results = await Promise.allSettled(modified.map(async (tab) => {
-      await saveEditorFileSafely(root, tab.path, tab.content, tab.savedContent)
+      await saveEditorFileSafely(root, tab.path, tab.content, tab.savedContent, tab.lineEnding)
       return { path: tab.path, content: tab.content }
     }))
     const savedContents = new Map(results.flatMap((result) => result.status === 'fulfilled'
@@ -1725,7 +1827,9 @@ export function EditorPopover({
     }
     try {
       const safeFile = await resolveSafeEditorFile(root, safePath)
-      const diskContent = await readFile(safeFile.absolute, 'utf8')
+      const diskRaw = await readFile(safeFile.absolute, 'utf8')
+      const diskContent = normalizeEditorNewlines(diskRaw)
+      const diskLineEnding = conflict.lineEnding ?? detectEditorLineEnding(diskRaw)
       const existing = tabs.find((tab) => tab.path === safePath)
       if (existing && existing.content !== existing.savedContent) {
         setMessage(`${safePath} already has unsaved changes; save or close it before loading recovery`)
@@ -1734,8 +1838,10 @@ export function EditorPopover({
       setTabs((current) => {
         const found = current.some((tab) => tab.path === safePath)
         return found
-          ? current.map((tab) => tab.path === safePath ? { ...tab, content: conflict.content, savedContent: diskContent } : tab)
-          : [...current, { path: safePath, content: conflict.content, savedContent: diskContent }]
+          ? current.map((tab) => tab.path === safePath
+              ? { ...tab, content: conflict.content, savedContent: diskContent, lineEnding: diskLineEnding }
+              : tab)
+          : [...current, { path: safePath, content: conflict.content, savedContent: diskContent, lineEnding: diskLineEnding }]
       })
       setRecoveryConflicts((current) => current.filter((entry) => entry !== conflict))
       setRecoveryConflictOpen(false)
@@ -1882,17 +1988,25 @@ export function EditorPopover({
         const path = normalizeRelativePath(root, absolutePath)
         if (!path) throw new Error('Language server edit targets a file outside this workspace')
         const openTab = sourceTabs.find((tab) => tab.path === path)
-        const content = (path === sourceActivePath && editorRef.current
+        const buffered = (path === sourceActivePath && editorRef.current
           ? editorRef.current.plainText
-          : openTab?.content) ?? await resolveSafeEditorFile(root, path).then((file) => readFile(file.absolute, 'utf8'))
+          : openTab?.content) ?? null
+        // A file the edit touches but nobody has opened is read here, so its
+        // own line ending has to be picked up here too.
+        const raw = buffered == null
+          ? await resolveSafeEditorFile(root, path).then((file) => readFile(file.absolute, 'utf8'))
+          : null
+        const content = buffered ?? (raw == null ? null : normalizeEditorNewlines(raw))
+        const lineEnding = openTab?.lineEnding ?? (raw == null ? '\n' : detectEditorLineEnding(raw))
         if (content == null) throw new Error(`Unable to read ${path}`)
-        if (Buffer.byteLength(content) > MAX_FILE_BYTES) throw new Error(`${path} exceeds the 2 MB editor limit`)
+        if (Buffer.byteLength(content) > MAX_FILE_BYTES) throw new Error(`${path} exceeds the ${MAX_FILE_LABEL} editor limit`)
         if (content.includes('\0')) throw new Error(`${path} is binary and cannot be edited`)
         return {
           path,
           content: applyEditorTextEdits(content, edits),
           sourceContent: content,
           savedContent: openTab?.savedContent ?? content,
+          lineEnding,
         }
       }))
       for (const update of updatedBuffers) {
@@ -2009,7 +2123,7 @@ export function EditorPopover({
     editor.removeHighlightsByRef(BRACKET_HIGHLIGHT_REF)
     const styleId = bracketStyleIdRef.current
     if (styleId == null || focusPane !== 'editor' || !activePathRef.current) return
-    const match = matchingBracketAt(content, editorDocumentOffset(editor), activePathRef.current)
+    const match = matchingBracketAt(content, editorDocumentOffset(editor, undefined, content, lineStarts), activePathRef.current)
     if (!match) return
     for (const offset of [match.open, match.close]) {
       const line = lineAtOffset(lineStarts, offset)
@@ -2054,7 +2168,7 @@ export function EditorPopover({
     const selected = selection && selection.end > selection.start
       ? content.slice(selection.start, selection.end)
       : null
-    const cursorOffset = editorDocumentOffset(editor)
+    const cursorOffset = editorDocumentOffset(editor, undefined, content, lineStarts)
     const word = selected ? null : wordRangeAt(content, cursorOffset)
     const value = selected ?? word?.value ?? ''
     if (value.length < OCCURRENCE_MIN_LENGTH) return
@@ -2082,8 +2196,10 @@ export function EditorPopover({
       lineStarts.length - 1,
       Math.ceil(editor.scrollY + editor.height) + OCCURRENCE_VIEWPORT_MARGIN_LINES,
     )
-    const startOffset = lineStarts[firstLine] ?? 0
-    const endOffset = lastLine + 1 < lineStarts.length ? lineStarts[lastLine + 1]! : content.length
+    const lineStartOffset = lineStarts[firstLine] ?? 0
+    const lineEndOffset = lastLine + 1 < lineStarts.length ? lineStarts[lastLine + 1]! : content.length
+    const startOffset = Math.max(lineStartOffset, cursorOffset - OCCURRENCE_MAX_SCAN_CHARS)
+    const endOffset = Math.min(lineEndOffset, cursorOffset + OCCURRENCE_MAX_SCAN_CHARS)
     const ranges = occurrenceRanges(content, value, startOffset, endOffset, !selected)
       .filter((range) => !selection || range.start !== selection.start || range.end !== selection.end)
     if (ranges.length === 0 || (!selected && ranges.length < 2)) return
@@ -2124,82 +2240,144 @@ export function EditorPopover({
     }
   }, [focusPane, multiCursor, syntaxStyle, theme.surface2])
 
+  const applyMultiCursorHighlights = useCallback((
+    editor: TextareaRenderable,
+    content: string,
+    lineStarts: number[],
+  ) => {
+    editor.removeHighlightsByRef(MULTI_CURSOR_HIGHLIGHT_REF)
+    const styleId = multiCursorStyleIdRef.current
+    if (styleId == null || !multiCursor) return
+    for (let index = 0; index < multiCursor.ranges.length; index += 1) {
+      if (index === multiCursor.activeIndex) continue
+      const range = multiCursor.ranges[index]!
+      const highlightStart = range.start === range.end && range.start === content.length
+        ? Math.max(0, range.start - 1)
+        : range.start
+      const highlightEnd = range.start === range.end
+        ? Math.min(content.length, Math.max(highlightStart + 1, range.end))
+        : range.end
+      const firstLine = lineAtOffset(lineStarts, highlightStart)
+      const lastLine = lineAtOffset(lineStarts, Math.max(highlightStart, highlightEnd - 1))
+      for (let line = firstLine; line <= lastLine; line += 1) {
+        const lineStart = lineStarts[line] ?? 0
+        const lineEnd = line + 1 < lineStarts.length ? lineStarts[line + 1]! - 1 : content.length
+        editor.addHighlight(line, {
+          start: Math.max(0, highlightStart - lineStart),
+          end: Math.max(0, Math.min(highlightEnd, lineEnd) - lineStart),
+          styleId,
+          priority: 80,
+          hlRef: MULTI_CURSOR_HIGHLIGHT_REF,
+        })
+      }
+    }
+  }, [multiCursor])
+
+  // Decoration that is not syntax — occurrences, brackets, extra cursors — is
+  // reapplied together, because clearing a line to re-syntax it also clears
+  // whatever those had put there. All three are bounded by the viewport or by
+  // the cursor count, never by the size of the file.
+  const applyEditorOverlays = useCallback((
+    editor: TextareaRenderable,
+    content: string,
+    lineStarts: number[],
+  ) => {
+    applyMultiCursorHighlights(editor, content, lineStarts)
+    applyOccurrenceHighlights(editor, content, lineStarts)
+    applyBracketHighlights(editor, content, lineStarts)
+  }, [applyBracketHighlights, applyMultiCursorHighlights, applyOccurrenceHighlights])
+
+  // One tree-sitter buffer for the file being edited, parsed once on open and
+  // fed edits after that. The worker answers with only the lines it
+  // re-highlighted, so a keystroke costs the same in a 20,000-line file as in
+  // a 200-line one — see editorSyntaxBuffer.ts for the measurements this
+  // replaced.
   useEffect(() => {
-    if (!activeTab) return
-    const request = ++syntaxRequestRef.current
-    const filetype = detectTuiCodeFiletypeFromPath(activeTab.path)
-    const timer = setTimeout(() => {
-      const renderHighlights = (syntaxHighlights: ReadonlyArray<readonly [number, number, string, ...unknown[]]>) => {
-        const editor = editorRef.current
-        if (request !== syntaxRequestRef.current || !editor || editor.plainText !== activeTab.content) return
-        editor.clearAllHighlights()
-        const lineStarts = lineStartsFor(activeTab.content)
-        for (const highlight of syntaxHighlights) {
-          const styleId = syntaxStyle.resolveStyleId(highlight[2]) ?? syntaxStyle.resolveStyleId('default')
-          if (styleId == null) continue
-          const firstLine = lineAtOffset(lineStarts, highlight[0])
-          const lastLine = lineAtOffset(lineStarts, Math.max(highlight[0], highlight[1] - 1))
-          for (let line = firstLine; line <= lastLine; line += 1) {
-            const lineStart = lineStarts[line] ?? 0
-            const lineEnd = line + 1 < lineStarts.length ? lineStarts[line + 1]! - 1 : activeTab.content.length
-            editor.addHighlight(line, {
-              start: Math.max(0, highlight[0] - lineStart),
-              end: Math.max(0, Math.min(highlight[1], lineEnd) - lineStart),
+    const editor = editorRef.current
+    if (!activePath || !editor) return
+    const filetype = detectTuiCodeFiletypeFromPath(activePath)
+    const initialContent = editor.plainText
+    const machineGenerated = longestLineLength(initialContent) > MAX_HIGHLIGHTED_LINE_CHARS
+    setSyntaxSuspended(machineGenerated)
+    if (!filetype || machineGenerated) {
+      editor.clearAllHighlights()
+      applyEditorOverlays(editor, initialContent, lineStartsFor(initialContent))
+      syntaxBufferRef.current = null
+      return
+    }
+    const buffer = openEditorSyntaxBuffer({
+      content: initialContent,
+      filetype,
+      onHighlights: (lines, full) => {
+        const current = editorRef.current
+        // Line indices are only meaningful against the content that produced
+        // them. If the editor has moved on, the update already in flight will
+        // answer with fresh lines; applying these would decorate the wrong text.
+        if (!current || current.plainText !== buffer.content) return
+        const content = buffer.content
+        const lineStarts = lineStartsFor(content)
+        if (full) current.clearAllHighlights()
+        for (const entry of lines) {
+          if (!full) current.clearLineHighlights(entry.line)
+          const lineStart = lineStarts[entry.line] ?? 0
+          const lineEnd = entry.line + 1 < lineStarts.length ? lineStarts[entry.line + 1]! - 1 : content.length
+          if (lineEnd - lineStart > MAX_HIGHLIGHTED_LINE_CHARS) continue
+          for (const range of entry.highlights) {
+            const styleId = syntaxStyle.resolveStyleId(range.group) ?? syntaxStyle.resolveStyleId('default')
+            if (styleId == null) continue
+            current.addHighlight(entry.line, {
+              start: range.startCol,
+              end: range.endCol,
               styleId,
               priority: 10,
+              hlRef: SYNTAX_HIGHLIGHT_REF,
             })
           }
         }
-        const multiStyleId = multiCursorStyleIdRef.current
-        if (multiStyleId != null && multiCursor) {
-          for (let index = 0; index < multiCursor.ranges.length; index += 1) {
-            if (index === multiCursor.activeIndex) continue
-            const range = multiCursor.ranges[index]!
-            const highlightStart = range.start === range.end && range.start === activeTab.content.length
-              ? Math.max(0, range.start - 1)
-              : range.start
-            const highlightEnd = range.start === range.end
-              ? Math.min(activeTab.content.length, Math.max(highlightStart + 1, range.end))
-              : range.end
-            const firstLine = lineAtOffset(lineStarts, highlightStart)
-            const lastLine = lineAtOffset(lineStarts, Math.max(highlightStart, highlightEnd - 1))
-            for (let line = firstLine; line <= lastLine; line += 1) {
-              const lineStart = lineStarts[line] ?? 0
-              const lineEnd = line + 1 < lineStarts.length ? lineStarts[line + 1]! - 1 : activeTab.content.length
-              editor.addHighlight(line, {
-                start: Math.max(0, highlightStart - lineStart),
-                end: Math.max(0, Math.min(highlightEnd, lineEnd) - lineStart),
-                styleId: multiStyleId,
-                priority: 80,
-              })
-            }
-          }
-        }
-        applyOccurrenceHighlights(editor, activeTab.content, lineStarts)
-        applyBracketHighlights(editor, activeTab.content, lineStarts)
-      }
-      if (!filetype) {
-        renderHighlights([])
-        return
-      }
-      void getTreeSitterClient().highlightOnce(activeTab.content, filetype).then((result) => {
-        renderHighlights(result.highlights ?? [])
-      }).catch(() => renderHighlights([]))
+        applyEditorOverlays(current, content, lineStarts)
+      },
+    })
+    syntaxBufferRef.current = buffer
+    return () => {
+      if (syntaxBufferRef.current === buffer) syntaxBufferRef.current = null
+      buffer.dispose()
+    }
+  }, [activePath, applyEditorOverlays, syntaxStyle])
+
+  // Edits reach the parser on a short debounce: a burst of keystrokes becomes
+  // one edit rather than one round-trip each, and the delay can be short
+  // because an incremental parse is ~1ms rather than the whole-file parse it
+  // replaced.
+  useEffect(() => {
+    const content = activeTab?.content
+    if (content == null) return
+    const timer = setTimeout(() => {
+      const buffer = syntaxBufferRef.current
+      if (!buffer) return
+      const previous = buffer.content
+      buffer.update(previous, content)
     }, SYNTAX_DELAY_MS)
     return () => clearTimeout(timer)
-  }, [activeTab, applyBracketHighlights, applyOccurrenceHighlights, multiCursor, syntaxStyle])
+  }, [activeTab?.content])
+
+  // Extra cursors are drawn by the overlay pass, which the parser's responses
+  // drive; a cursor change with no edit behind it needs its own repaint.
+  useEffect(() => {
+    const editor = editorRef.current
+    if (!editor) return
+    const content = editor.plainText
+    applyMultiCursorHighlights(editor, content, lineStartsFor(content))
+  }, [applyMultiCursorHighlights])
 
   useEffect(() => {
     const editor = editorRef.current
     if (!activeTab || !editor) return
     const timer = setTimeout(() => {
       const content = editor.plainText
-      const lineStarts = lineStartsFor(content)
-      applyOccurrenceHighlights(editor, content, lineStarts)
-      applyBracketHighlights(editor, content, lineStarts)
+      applyEditorOverlays(editor, content, lineStartsFor(content))
     }, 55)
     return () => clearTimeout(timer)
-  }, [activeTab, applyBracketHighlights, applyOccurrenceHighlights, cursor.line, cursor.visualColumn])
+  }, [activeTab, applyEditorOverlays, cursor.line, cursor.visualColumn])
 
   useEffect(() => {
     const lineNumber = lineNumberRef.current
@@ -2899,6 +3077,14 @@ export function EditorPopover({
     queueMicrotask(syncEditorScrollbar)
   }, [reportToggle, syncEditorScrollbar, wordWrapEnabled])
 
+  const toggleZenMode = useCallback(() => {
+    const next = !zenMode
+    setZenMode(next)
+    if (next) setFocusPane('editor')
+    setMessage(next ? 'Zen mode · Esc restores the editor chrome' : 'Zen mode disabled')
+    onNotice?.('info', next ? 'Editor zen mode enabled' : 'Editor zen mode disabled')
+  }, [onNotice, zenMode])
+
   const toggleSearchMatchCase = useCallback(() => {
     const next = !searchMatchCase
     setSearchMatchCase(next)
@@ -2945,6 +3131,7 @@ export function EditorPopover({
       case 'toggle-comment': editSelectedLines('comment'); break
       case 'goto-matching-bracket': jumpToMatchingBracket(); break
       case 'show-shortcuts': setShortcutsOpen(true); break
+      case 'command-palette': openQuick('>'); break
       case 'add-next-occurrence': addNextOccurrence(); break
       case 'add-cursor-above': addAdjacentCursor(-1); break
       case 'add-cursor-below': addAdjacentCursor(1); break
@@ -2963,8 +3150,9 @@ export function EditorPopover({
       case 'toggle-vim': toggleVimMode(); break
       case 'toggle-velocity': toggleVelocityScrolling(); break
       case 'toggle-word-wrap': toggleWordWrap(); break
+      case 'toggle-zen': toggleZenMode(); break
     }
-  }, [addAdjacentCursor, addLineEndCursors, addNextOccurrence, applyCaseTransform, applyLineTransform, closeActiveTab, editSelectedLines, formatDocument, jumpToMatchingBracket, navigateDiagnostic, openFilePrompt, openProjectSearch, openQuick, openSearch, recoveryConflicts.length, requestCodeActions, requestHover, requestRename, requestSignatureHelp, requestSymbolNavigation, restartLsp, saveActive, saveAll, toggleExplorer, toggleVelocityScrolling, toggleVimMode, toggleWordWrap, trimTrailingWhitespace])
+  }, [addAdjacentCursor, addLineEndCursors, addNextOccurrence, applyCaseTransform, applyLineTransform, closeActiveTab, editSelectedLines, formatDocument, jumpToMatchingBracket, navigateDiagnostic, openFilePrompt, openProjectSearch, openQuick, openSearch, recoveryConflicts.length, requestCodeActions, requestHover, requestRename, requestSignatureHelp, requestSymbolNavigation, restartLsp, saveActive, saveAll, toggleExplorer, toggleVelocityScrolling, toggleVimMode, toggleWordWrap, toggleZenMode, trimTrailingWhitespace])
 
   const chooseQuickResultAt = useCallback((index: number) => {
     const result = quickResults[index]
@@ -3138,7 +3326,11 @@ export function EditorPopover({
       toggleWordWrap()
       return true
     }
-    if (key.sequence === 'V' && !key.ctrl && !key.meta && !vimEnabled) {
+    if (key.sequence === 'Z' && !key.ctrl && !key.meta && !alt && focusPane === 'explorer') {
+      toggleZenMode()
+      return true
+    }
+    if (key.sequence === 'V' && !key.ctrl && !key.meta && !vimEnabled && focusPane === 'explorer') {
       toggleVelocityScrolling()
       return true
     }
@@ -3557,11 +3749,13 @@ export function EditorPopover({
     if ((key.ctrl && key.shift && key.name === 's') || (alt && !key.ctrl && key.name === 's')) { void saveAll(); return true }
     if (key.ctrl && key.name === 's') { void saveActive(); return true }
     if ((key.ctrl && key.shift && key.name === 'r') || (alt && !key.ctrl && key.name === 'r')) { restartLsp(); return true }
+    if ((key.ctrl && key.shift && key.name === 'p') || (alt && !key.ctrl && key.name === 'p')) { openQuick('>'); return true }
     if (key.ctrl && key.name === 'p') { openQuick(); return true }
     if (key.ctrl && key.name === 'f') { openSearch(); return true }
     if (key.ctrl && key.name === 'r') { openSearch(true); return true }
     if (key.ctrl && key.name === 'g') { openQuick(':'); return true }
     if (key.ctrl && key.name === 'b') { toggleExplorer(); return true }
+    if (key.name === 'f1') { setShortcutsOpen(true); return true }
     if (key.ctrl && key.name === 'w') { closeActiveTab(); return true }
     if (key.ctrl && key.name === 't') { void jumpBack(); return true }
     if (key.ctrl && key.name === 'm') { jumpToMatchingBracket(); return true }
@@ -3579,6 +3773,7 @@ export function EditorPopover({
     }
     if (key.name === 'escape') {
       if (focusPane === 'explorer' && activeTab) { setFocusPane('editor'); editorRef.current?.focus() }
+      else if (zenMode) toggleZenMode()
       else setMessage('Ctrl+Q closes editor · Ctrl+P opens files')
       return true
     }
@@ -3664,7 +3859,7 @@ export function EditorPopover({
       }
     }
     return false
-  }, [acceptCompletion, activateTreeRow, activeTab, addAdjacentCursor, closeCompletions, jumpToMatchingBracket, shortcutsOpen, vimMode, addLineEndCursors, addNextOccurrence, applyCaseTransform, applyCodeAction, applyLineTransform, chooseQuickResultAt, closeActiveTab, closeConfirm, codeActionCursor, codeActions, completions.length, copyEditorSelection, editAtAllCursors, editSelectedLines, extendBlockSelection, filePrompt, focusPane, formatDocument, handleVimKey, hoverInfo, jumpBack, jumpToEditorLocation, multiCursor, navigateDiagnostic, navigateSearch, navigateSnippet, openFilePrompt, openProjectSearch, openQuick, openRecoveryConflict, openSearch, pasteIntoEditor, performFileOperation, performRename, projectSearchCursor, projectSearchOpen, projectSearchResults, quickCursor, quickOpen, quickResults.length, recoveryConflictCursor, recoveryConflictOpen, recoveryConflicts, renameOpen, replaceSearchMatch, requestClose, requestCodeActions, requestCompletions, requestHover, requestRename, requestSignatureHelp, requestSymbolNavigation, restartLsp, root, saveActive, saveAll, searchInput, searchOpen, searchReplaceMode, searchResult.error, searchSelectionRange, signatureInfo, switchTab, symbolNavigationCursor, symbolNavigationKind, symbolNavigationResults, toggleExplorer, toggleSearchMatchCase, toggleVelocityScrolling, toggleVimMode, toggleWordWrap, treeCursor, treeExpanded, treeRows, velocityScrollEnabled, vimEnabled])
+  }, [acceptCompletion, activateTreeRow, activeTab, addAdjacentCursor, closeCompletions, jumpToMatchingBracket, shortcutsOpen, vimMode, addLineEndCursors, addNextOccurrence, applyCaseTransform, applyCodeAction, applyLineTransform, chooseQuickResultAt, closeActiveTab, closeConfirm, codeActionCursor, codeActions, completions.length, copyEditorSelection, editAtAllCursors, editSelectedLines, extendBlockSelection, filePrompt, focusPane, formatDocument, handleVimKey, hoverInfo, jumpBack, jumpToEditorLocation, multiCursor, navigateDiagnostic, navigateSearch, navigateSnippet, openFilePrompt, openProjectSearch, openQuick, openRecoveryConflict, openSearch, pasteIntoEditor, performFileOperation, performRename, projectSearchCursor, projectSearchOpen, projectSearchResults, quickCursor, quickOpen, quickResults.length, recoveryConflictCursor, recoveryConflictOpen, recoveryConflicts, renameOpen, replaceSearchMatch, requestClose, requestCodeActions, requestCompletions, requestHover, requestRename, requestSignatureHelp, requestSymbolNavigation, restartLsp, root, saveActive, saveAll, searchInput, searchOpen, searchReplaceMode, searchResult.error, searchSelectionRange, signatureInfo, switchTab, symbolNavigationCursor, symbolNavigationKind, symbolNavigationResults, toggleExplorer, toggleSearchMatchCase, toggleVelocityScrolling, toggleVimMode, toggleWordWrap, toggleZenMode, treeCursor, zenMode, treeExpanded, treeRows, velocityScrollEnabled, vimEnabled])
 
   useEffect(() => {
     onKeyHandlerReady(handleKey)
@@ -3691,6 +3886,31 @@ export function EditorPopover({
     editorRef.current = node
     if (node) cursorRef.current = { line: node.logicalCursor.row, visualColumn: node.logicalCursor.col }
   }, [])
+
+  // The size limit above is the buffer's documented capacity, but a limit is a
+  // claim about someone else's code. This checks the claim: a buffer that took
+  // less than it was handed is not an editable view of the file — every offset,
+  // line number and language-server position computed from it would be wrong,
+  // and saving would write the truncation over the rest of the file. The tab is
+  // closed rather than shown, because a silently short buffer looks exactly
+  // like a short file.
+  //
+  // Each mount is checked once. The textarea is keyed by path, so a new
+  // renderable is a newly loaded file, and the check runs before the first edit
+  // can make the buffer and the tab legitimately differ.
+  useEffect(() => {
+    const editor = editorRef.current
+    if (!editor || !activeTab || verifiedBuffersRef.current.has(editor)) return
+    verifiedBuffersRef.current.add(editor)
+    if (editor.plainText.length === activeTab.content.length) return
+    const path = activeTab.path
+    const text = `${path} did not fit the editor buffer`
+      + ` (${editor.plainText.length} of ${activeTab.content.length} characters) and was not opened`
+    setTabs((current) => current.filter((tab) => tab.path !== path))
+    setActivePath((current) => (current === path ? null : current))
+    setMessage(text)
+    onNotice?.('error', text)
+  }, [activeTab, onNotice])
 
   const handleEditorCursorChange = useCallback((next: { line: number; visualColumn: number }) => {
     cursorRef.current = next
@@ -3756,6 +3976,8 @@ export function EditorPopover({
   const enabledToggles = [
     wordWrapEnabled ? 'Wrap' : null,
     velocityScrollEnabled ? 'Velocity' : null,
+    zenMode ? 'Zen (Esc)' : null,
+    syntaxSuspended ? 'Syntax off (long lines)' : null,
   ].filter(Boolean).join(' ')
   const indentSummary = useMemo(() => {
     if (!activeTab) return 'Spaces: 2'
@@ -3810,7 +4032,7 @@ export function EditorPopover({
   // Prefer the row below the caret, but flip above when the list would not fit
   // there — clamping it into view instead would paint it over the line being
   // typed, which is exactly what a suggestion must never do.
-  const completionCaretRow = cursor.line - (editorRef.current?.scrollY ?? 0) + 2
+  const completionCaretRow = cursor.line - (editorRef.current?.scrollY ?? 0) + contentTop
   const completionFitsBelow = completionCaretRow + completionPopupHeight <= contentHeight
   const completionTop = completionFitsBelow
     ? Math.max(3, completionCaretRow)
@@ -3828,14 +4050,15 @@ export function EditorPopover({
       width={width}
       height={height}
       backgroundColor={theme.bg}
-      border
+      border={!zenMode}
       borderStyle="heavy"
       borderColor={theme.violet}
-      title="  EDITOR "
+      title={zenMode ? undefined : "  EDITOR "}
       titleColor={theme.violet}
       zIndex={50}
       flexDirection="column"
     >
+      {zenMode ? null : (
       <box height={1} flexDirection="row" backgroundColor={theme.surface3}>
         {tabs.length === 0 ? <text fg={theme.dim}>  No buffers · choose a file from Explorer</text> : null}
         {tabs.map((tab) => {
@@ -3865,9 +4088,10 @@ export function EditorPopover({
           )
         })}
       </box>
+      )}
 
       <box height={contentHeight} flexDirection="row">
-        {explorerVisible ? (
+        {explorerShown ? (
           <box width={explorerWidth} border borderStyle={focusPane === 'explorer' ? 'heavy' : 'single'} borderColor={focusPane === 'explorer' ? theme.amber : theme.border} flexDirection="column">
             <box height={1} paddingX={1} flexDirection="row">
               <text fg={theme.amber}>EXPLORER</text>
@@ -3985,7 +4209,7 @@ export function EditorPopover({
         <box paddingX={1} backgroundColor={editorModeColor}>
           <text fg={theme.bg}>{editorModeLabel}</text>
         </box>
-        <text fg={theme.cyan}>{`   ${basename(root)} `}</text>
+        <text fg={theme.cyan}>{`   ${basename(root)}${zenMode && activePath ? ` › ${basename(activePath)}` : ''} `}</text>
         {dirty ? <text fg={theme.amber}>● modified  </text> : <text fg={theme.green}>✓ saved  </text>}
         {activePath && diskConflicts.has(activePath) ? <text fg={theme.red}>⚠ disk changed  </text> : null}
         {counts.errors > 0 ? <text fg={theme.red}>{`× ${counts.errors} `}</text> : null}
@@ -3998,12 +4222,14 @@ export function EditorPopover({
         <box flexGrow={1} />
         <text fg={theme.dim}>{`${detectTuiCodeFiletypeFromPath(activeTab?.path) ?? 'text'}  ${indentSummary}${enabledToggles ? `  ${enabledToggles}` : ''}  Ln ${cursor.line + 1}, Col ${cursor.visualColumn + 1}${selectionSummary ? ` (${selectionSummary.characters} sel${selectionSummary.lines > 1 ? `, ${selectionSummary.lines} lines` : ''})` : ''}  ${formatClock(clock)} `}</text>
       </box>
+      {zenMode ? null : (
       <box height={footerHeight} paddingX={1} backgroundColor={theme.surface2} flexDirection="column">
         <text fg={message.startsWith('Unable') || message.startsWith('Refused') ? theme.red : theme.dim} wrapMode="none">
           {fitText(message, Math.max(10, width - 4))}
         </text>
         {footerShortcutRows.map((row) => <text key={row} fg={theme.dim} wrapMode="none">{row}</text>)}
       </box>
+      )}
 
       {quickOpen ? (
         <box position="absolute" top={2} left={Math.max(2, Math.floor(width * 0.2))} width={Math.max(30, Math.floor(width * 0.6))} height={Math.min(16, height - 5)} zIndex={60} border borderStyle="heavy" borderColor={theme.cyan} backgroundColor={theme.surface} flexDirection="column" title=" Quick open ">

@@ -1,11 +1,15 @@
 import { mkdir, open, readFile, rename, stat, unlink } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
 import { resolveSafeEditorFile } from './editorFileOperations'
+import { isEditorLineEnding, type EditorLineEnding } from './editorLineEndings'
 
 export type EditorRecoveryBuffer = {
   path: string
   content: string
   savedContent: string
+  // Absent in snapshots written before line endings were tracked; those
+  // restore as LF, which is what they were already being saved as.
+  lineEnding?: EditorLineEnding
 }
 
 export type EditorRecoverySnapshot = {
@@ -43,7 +47,12 @@ function parseSnapshot(value: unknown): EditorRecoverySnapshot | null {
     if (!entry || typeof entry !== 'object') return []
     const buffer = entry as Record<string, unknown>
     return typeof buffer.path === 'string' && typeof buffer.content === 'string' && typeof buffer.savedContent === 'string'
-      ? [{ path: buffer.path, content: buffer.content, savedContent: buffer.savedContent }]
+      ? [{
+          path: buffer.path,
+          content: buffer.content,
+          savedContent: buffer.savedContent,
+          ...(isEditorLineEnding(buffer.lineEnding) ? { lineEnding: buffer.lineEnding } : {}),
+        }]
       : []
   })
   if (buffers.length !== record.buffers.length) return null

@@ -1,10 +1,23 @@
 export type EditorTransformResult = { content: string; start: number; end: number }
 export type EditorLineTransform = 'move-up' | 'move-down' | 'sort' | 'duplicate'
 
+const INDENT_SAMPLE_LINES = 1_000
+
 export function detectEditorIndentUnit(content: string, path = ''): string {
   let tabLines = 0
   const spaceIndents: number[] = []
-  for (const line of content.split('\n').slice(0, 1_000)) {
+  // Only the first thousand lines decide the indent, so only they are split.
+  // Splitting the whole file allocated one string per line on every keystroke,
+  // which put an O(file) cost behind the status bar's indent readout.
+  let sampleEnd = -1
+  for (let line = 0, index = 0; line < INDENT_SAMPLE_LINES; line += 1) {
+    index = content.indexOf('\n', index)
+    if (index < 0) break
+    index += 1
+    sampleEnd = index
+  }
+  const sample = sampleEnd < 0 ? content : content.slice(0, sampleEnd)
+  for (const line of sample.split('\n')) {
     if (/^\t+\S/.test(line)) tabLines += 1
     const spaces = /^( +)\S/.exec(line)?.[1].length
     if (spaces) spaceIndents.push(spaces)
@@ -16,7 +29,7 @@ export function detectEditorIndentUnit(content: string, path = ''): string {
 
 function startsFor(content: string): number[] {
   const starts = [0]
-  for (let index = 0; index < content.length; index += 1) if (content[index] === '\n') starts.push(index + 1)
+  for (let index = 0; index < content.length; index += 1) if (content.charCodeAt(index) === 10) starts.push(index + 1)
   return starts
 }
 

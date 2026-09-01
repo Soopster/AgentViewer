@@ -217,6 +217,78 @@ Both TUIs depend on the same `lib/` provider layer — changes to `sessionBacken
   under the test renderer, so a single flush followed by a long sleep reports every state update as
   taking the whole sleep.
 
+#### Project editor: cost per keystroke and the file boundary (load-bearing)
+
+`tui/opentui/EditorPopover.tsx` is a real editor, so it is held to an editor's
+defining property: **a keystroke costs the same in a 20,000-line file as in a
+200-line one.** Measure with `npm run tui:editortypingperf`
+(`tui/opentui/editorTypingPerf.tsx`), which types into the real popover at
+key-repeat speed and reports **`cpu/key`** — process CPU per keystroke across
+every thread. A React Profiler cannot see this work: the highlighter runs on
+timers and in the tree-sitter worker, so `commits` stays flat while the editor
+gets slower. `EDITOR_TYPING_LONG_LINES=1` measures a minified file and
+`EDITOR_TYPING_EXT=txt` disables highlighting, which is how the highlighter's
+share of a cost is separated from the rest.
+
+- **Syntax highlighting is incremental, and must stay that way.** It used to
+  call `highlightOnce(entireBuffer)` on a 90ms debounce after every keystroke
+  and apply the result with one `addHighlight` per token per line: in a
+  6,000-line file, a 181ms parse and 112,013 highlight calls **per character
+  typed**. `tui/opentui/editorSyntaxBuffer.ts` now holds one tree-sitter buffer
+  per open file and pushes `Edit` ranges, so the worker answers with **only the
+  lines it re-parsed** — one line for a one-character insert, 1.0ms at 6,000
+  lines and 2.7ms at 20,000. Measured end to end: `cpu/key` at 6,000 lines went
+  77.3ms → 12.1ms, and its growth from 200 lines 5.84x → 1.78x. Do not
+  reintroduce a whole-file re-highlight.
+- **A highlight response is only valid against the content that produced it.**
+  The handler drops a batch unless `editor.plainText === buffer.content`; a
+  pending update answers with fresh lines. Applying a stale batch decorates the
+  wrong text, and after a newline insert it decorates the wrong *lines*.
+- **Decoration that is not syntax is reapplied together** (`applyEditorOverlays`
+  — occurrences, brackets, extra cursors), because re-syntaxing a line clears
+  whatever those put on it. Each is bounded by the viewport or by cursor count.
+  Occurrence scanning is bounded in **characters** as well as lines
+  (`OCCURRENCE_MAX_SCAN_CHARS`): a line margin means nothing in a minified file.
+- **A file whose longest line exceeds `MAX_HIGHLIGHTED_LINE_CHARS` is not parsed
+  at all**, and the status bar says so. The parser would re-derive thousands of
+  ranges for that line on every keystroke and hand them over to be discarded —
+  the old code took **over ten minutes** to type 25 characters into a 660KB
+  minified file. Same threshold skips decorating a single over-wide line pasted
+  into an otherwise normal file.
+- **Do not read `editor.plainText` on a hot path.** It materialises the whole
+  buffer; the highlight passes each used to take their own copy. `lineStartsFor`
+  caches by string identity and `editorDocumentOffset` takes optional
+  `content`/`lineStarts` so callers that already hold them pay nothing.
+  `detectEditorIndentUnit` samples a bounded prefix rather than splitting the
+  file — the status bar's indent readout was an O(file) allocation per
+  keystroke.
+
+The file boundary is the other half, and both halves lose data silently when
+wrong — a smoke is the only thing that catches either, because a truncated
+buffer and a converted line ending both *render perfectly*:
+
+- **Line endings are normalized on read and restored on write**
+  (`tui/opentui/editorLineEndings.ts`). The edit buffer strips carriage returns,
+  so a CRLF file came back as LF and was saved that way: opening a
+  Windows-authored file, typing one character and saving rewrote **every line**.
+  The buffer holds only LF — which every offset, line table and tree-sitter edit
+  already assumes — and `BufferTab.lineEnding` carries the file's own. Every
+  disk read normalizes before comparing, including the 1.5s watcher's, or a CRLF
+  file reads as externally changed against its own copy forever. Guarded by
+  `editorLineEndingSmoke.tsx`.
+- **`MAX_FILE_BYTES` is the edit buffer's capacity, not a policy.** The buffer
+  holds 1,048,576 characters and discards the rest without a word, while the
+  editor advertised 2 MB: a 1.5 MB file opened as "Opened main.ts" missing two
+  thirds of itself, and every offset computed from it was wrong. The limit now
+  matches, and `verifiedBuffersRef` checks the claim after each mount — a buffer
+  that took less than it was handed closes its tab rather than presenting a
+  truncation as the file. Guarded by `editorLargeFileSmoke.tsx`; both layers are
+  verified to fail independently.
+- **`editorSyntaxHighlightSmoke.tsx` is the only test that can see highlighting
+  at all** — the editor renders identically whether every token was painted or
+  none was. It asserts colours on open, colours travelling with text when a line
+  is inserted above them, and a keyword typed mid-file picking up its own colour.
+
 #### OpenTUI memory patterns (load-bearing)
 
 The TUI's footprint is dominated by **parsed module code across isolates**, not by live objects. A
@@ -436,6 +508,7 @@ A handful of files dominate the codebase. **Don't `Read` these without `offset`/
 | `components/SessionList.tsx` | ~2050 | Sidebar: project grouping, search, tag filters, collapsible groups |
 | `lib/sessionPersistence.ts` | ~1570 | SQLite mirror of sessions+messages; powers `/api/session-index/*` search/rebuild/stats |
 | `components/GitPopover.tsx` | ~1370 | Git diff/branch popover |
+| `tui/opentui/EditorPopover.tsx` | ~4715 | Project editor: explorer, buffers, LSP, completion, search, highlighting, key handling |
 | `tui/opentui/AnalyticsPopover.tsx` | ~1150 | OpenTUI analytics overlay (separate impl from the web one) |
 | `components/AnalyticsPopover.tsx` | ~1050 | Recharts analytics |
 | `components/CommandPalette.tsx` | ~1010 | Web cmd-K palette: provider switch, theme, session actions, navigation — single registry of user-facing commands |
