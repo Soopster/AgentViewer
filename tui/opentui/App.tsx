@@ -10113,7 +10113,10 @@ export default function OpenTuiApp() {
   )
   const hasComposerStatusMessage = Boolean(
     composerError
-    || awaitingPersistedTurn
+    // Chat view renders every turn-activity spinner as the transcript's own
+    // trailing row (see chat-turn-activity below), so the sync spinner must not
+    // also claim a row here — two spinners for one turn.
+    || (awaitingPersistedTurn && transcriptView !== 'chat')
     || activeQueuedComposerSends.length > 0
     || (composerSendState === 'sending' && Boolean(composerLiveText))
     // Steered notices render while a turn runs, owned or reattached — count
@@ -10193,7 +10196,9 @@ export default function OpenTuiApp() {
     let rows = 0
     // Keep in sync with the pinned turn-status row below (rendered for the
     // entire turn, not just the pre-output window).
-    if (composerSendState === 'sending') rows += 2
+    // Chat view moves the pinned turn status into the transcript tail, so it
+    // costs scroll content rather than layout budget here.
+    if (composerSendState === 'sending' && transcriptView !== 'chat') rows += 2
     if (hasSubagentTail) rows += 2
     if (liveToolActivities.length > 0 && activeRunningToolCount > 0) rows += 2
     if (livePromptSuggestion && composerSendState !== 'sending') rows += 2
@@ -10204,12 +10209,12 @@ export default function OpenTuiApp() {
         ? isChatLikeView || liveAssistantTextCardVisible ? 0 : LIVE_PREVIEW_HEIGHT
         : 2
     }
-    if (awaitingPersistedTurn) rows += 2
+    if (awaitingPersistedTurn && transcriptView !== 'chat') rows += 2
     if (composerAutoTargetingRunning && composerTargetSession) rows += 1
     if ((liveStatus === 'retrying' || liveStatus === 'compacting') && composerSendState === 'sending') rows += 2
     if (composerSendState === 'sending' && composerLiveReasoning.trim() && transcriptView !== 'stream') rows += LIVE_PREVIEW_HEIGHT
     // Reattached-turn banner (rendered when a turn runs without an owned stream).
-    if (composerSendState !== 'sending' && reattachedRunning && !awaitingPersistedTurn) rows += 2
+    if (composerSendState !== 'sending' && reattachedRunning && !awaitingPersistedTurn && transcriptView !== 'chat') rows += 2
     // Codex external-writer banner — another Codex client owns the rollout,
     // so this transcript is a stale cached snapshot until it finishes.
     if (composerTargetSession?.provider === 'codex' && sessionDetail?.externalWriter) rows += 2
@@ -15613,7 +15618,8 @@ export default function OpenTuiApp() {
     ? composerError
     : activeQueuedComposerSends.length > 0 && !composerQueueDurable
       ? 'Queue persistence failed · keep this TUI open or edit the message back into the composer.'
-    : awaitingPersistedTurn
+    // Chat view shows this as the transcript's own trailing spinner row.
+    : awaitingPersistedTurn && transcriptView !== 'chat'
       ? 'Syncing transcript…'
       : activeQueuedComposerSends.length > 0 && turnRunningForComposer
         ? (activeQueuedComposerSends.length === 1
@@ -19907,6 +19913,45 @@ export default function OpenTuiApp() {
                   )
                 ) : null}
 
+                {/* Chat view's activity indicator lives at the tail of the
+                    conversation itself, the way the next message would — a
+                    turn is visibly in progress without the eye leaving the
+                    transcript. The equivalent rows below the composer are
+                    suppressed for chat (and their height not reserved), so
+                    exactly one spinner is on screen per running turn. */}
+                {transcriptView === 'chat' && turnRunningForComposer ? (
+                  <box
+                    key="chat-turn-activity"
+                    marginBottom={densityState.cardGap}
+                    paddingLeft={densityState.bodyIndent}
+                    flexDirection="row"
+                  >
+                    <text fg={theme.cyan} wrapMode="none">{'● '}</text>
+                    <box flexGrow={1}>
+                      {composerSendState === 'sending' ? (
+                        <ComposerWaitingStatus
+                          startedAt={composerSendStartedAt}
+                          seed={composerWaitingStatusSeed}
+                          suffix={composerWaitingSuffix}
+                          theme={theme}
+                          width={Math.max(rightPaneWidth - densityState.bodyIndent - 6, 16)}
+                        />
+                      ) : (
+                        <Spinner
+                          label={fitText(
+                            awaitingPersistedTurn
+                              ? 'Syncing transcript…'
+                              : 'Turn running · reattached — output syncs as it persists · ⌃C interrupt',
+                            Math.max(rightPaneWidth - densityState.bodyIndent - 6, 16),
+                          )}
+                          fg={theme.cyan}
+                          labelFg={theme.dim}
+                        />
+                      )}
+                    </box>
+                  </box>
+                ) : null}
+
                 {streamTurnFooterText ? (
                   <box key="stream-turn-footer" paddingX={1} marginBottom={densityState.cardGap}>
                     <text fg={theme.dim} width={Math.max(rightPaneWidth - 5, 12)} wrapMode="none" selectable>
@@ -21094,7 +21139,7 @@ export default function OpenTuiApp() {
       {/* Pinned for the whole turn — elapsed + token counter + interrupt hint
           must not vanish the moment the first delta or tool arrives, which is
           how the native Claude CLI status line behaves. */}
-      {composerSendState === 'sending' ? (
+      {composerSendState === 'sending' && transcriptView !== 'chat' ? (
         <box
           backgroundColor={isChatLikeView ? theme.surface : theme.surface2}
           paddingLeft={isChatLikeView ? densityState.bodyIndent : 1}
@@ -21114,7 +21159,7 @@ export default function OpenTuiApp() {
         </box>
       ) : null}
 
-      {composerSendState !== 'sending' && reattachedRunning && !awaitingPersistedTurn ? (
+      {composerSendState !== 'sending' && reattachedRunning && !awaitingPersistedTurn && transcriptView !== 'chat' ? (
         <box backgroundColor={theme.surface2} paddingX={1} paddingTop={1} flexDirection="row">
           <text fg={theme.cyan} wrapMode="none">{'▌ '}</text>
           <text fg={theme.muted} wrapMode="none">
