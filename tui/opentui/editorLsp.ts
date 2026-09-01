@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { LSP_SYNC_FULL, lspContentChanges, lspSyncKind, type LspSyncKind } from './editorLspSync'
 
 export type EditorPosition = { line: number; character: number }
 
@@ -329,6 +330,9 @@ export class EditorLspClient {
   private stopped = false
   private serverIndex = 0
   private lastText: string | null = null
+  // What the server said it accepts in textDocument/didChange. Full until the
+  // handshake says otherwise, which is what this client always sent.
+  private syncKind: LspSyncKind = LSP_SYNC_FULL
   private completionResolveProvider = false
   private completionTriggerCharacters = new Set<string>()
   private pullDiagnostics = false
@@ -420,6 +424,7 @@ export class EditorLspClient {
             : [],
         )
         this.pullDiagnostics = Boolean(serverCapabilities?.diagnosticProvider)
+        this.syncKind = lspSyncKind(serverCapabilities?.textDocumentSync)
         this.notify('initialized', {})
         this.openedUri = pathToFileURL(this.filePath).href
         this.notify('textDocument/didOpen', {
@@ -454,11 +459,18 @@ export class EditorLspClient {
   change(text: string): void {
     if (!this.openedUri || !this.child) return
     if (text === this.lastText) return
+    // The changes describe the transition from what the server currently
+    // holds, so they must be computed before `lastText` moves. A server that
+    // asked for no synchronisation gets none, and the version stays put — a
+    // version that advances without a notification would make the next real
+    // one look like it skipped an edit.
+    const contentChanges = lspContentChanges(this.lastText ?? '', text, this.lastText == null ? LSP_SYNC_FULL : this.syncKind)
     this.lastText = text
+    if (contentChanges.length === 0) return
     this.version += 1
     this.notify('textDocument/didChange', {
       textDocument: { uri: this.openedUri, version: this.version },
-      contentChanges: [{ text }],
+      contentChanges,
     })
     void this.refreshDiagnostics()
   }
@@ -851,6 +863,7 @@ export class EditorLspClient {
     this.child = null
     this.openedUri = null
     this.lastText = null
+    this.syncKind = LSP_SYNC_FULL
     this.completionResolveProvider = false
     this.completionTriggerCharacters.clear()
     this.pullDiagnostics = false

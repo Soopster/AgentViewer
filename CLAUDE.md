@@ -290,13 +290,27 @@ auto-pair checks nor anything else `handleKey` does per character. Set
   re-materialising the buffer, and gets `lineStartsFor` cache hits for free.
   This invariant is what the whole file already relies on; breaking
   `updateActiveContent` breaks far more than decoration.
-- **Still full-document: the language server.** `editorLsp.ts` never reads the
-  server's advertised `textDocumentSync` and sends the entire document in every
-  `textDocument/didChange` — 572KB per keystroke at 20,000 lines. Incremental
-  sync is the obvious fix but is **not implemented, because the win was never
-  demonstrated**: the local `typescript-language-server` published no
-  diagnostics under test, so the end-to-end A/B could not be run. Do not
-  implement it blind; get a server that reports first.
+- **The language server is synced incrementally too.** `editorLsp.ts` used to
+  send the entire document in every `textDocument/didChange`, having never read
+  the server's advertised `textDocumentSync`. It now reads the capability and
+  sends the one replaced range that separates the two document states
+  (`editorLspSync.ts`): measured through the real client, **572.3KB → 0.3KB per
+  keystroke** at 20,000 lines, and constant rather than growing with the file.
+  A server that asks for full documents still gets them, and one that says
+  nothing is treated as asking for full — the spec's literal default of None
+  would mean never telling the server about edits at all.
+
+  **A wrong range here fails silently**, which is the whole reason this is
+  tested the way it is: the server's copy of the file diverges from the
+  editor's and every completion, diagnostic and rename after that is computed
+  against a document nobody is looking at, with plausible wrong answers on
+  screen. `editorLspSyncSmoke.ts` replays 1,500 randomised edits through a
+  conforming server's reconstruction and asserts it still equals the editor's
+  text, then runs the real client against a server that rebuilds the document
+  from the ranges it receives and reports what it ended up holding. Three
+  mutations were checked to fail it. Range boundaries never split a surrogate
+  pair: LSP positions are UTF-16 code units, but half a pair is not a character
+  and a server cannot recover from being sent one.
 
 The file boundary is the other half, and both halves lose data silently when
 wrong — a smoke is the only thing that catches either, because a truncated
