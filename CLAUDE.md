@@ -312,6 +312,25 @@ auto-pair checks nor anything else `handleKey` does per character. Set
   pair: LSP positions are UTF-16 code units, but half a pair is not a character
   and a server cannot recover from being sent one.
 
+- **Ghost text is an overlay, never buffer content.** The dim remainder of the
+  selected suggestion at the caret (`editorGhostSuffix` + an absolutely
+  positioned `<text>`) is painted over the terminal. OpenTUI's `ExtmarksController`
+  *would* give real virtual text, but it works by putting the text in the edit
+  buffer and marking the range virtual — which would put it into `plainText`,
+  and from there into the tab content, the dirty flag, the language server, the
+  tree-sitter buffer, and the file the moment anyone pressed save. Not worth it;
+  it is also documented upstream as a simulation pending a native implementation.
+  Because an overlay cannot push real text aside the way virtual text does, a
+  ghost is drawn **only at end of line**, only when the suggestion is a
+  case-exact continuation of the typed prefix, and never for a snippet (whose
+  body is `${1:name}` placeholder syntax, not text).
+- **The overlay's origin is one row and one column inside the caret's cell.**
+  Absolute coordinates are relative to the popover frame, which the completion
+  popup absorbs into its own rough placement but the ghost cannot — it has to
+  land on the caret exactly. `editorGhostTextSmoke.tsx` asserts the rendered
+  column against the typed text's, and a one-column shift was verified to fail
+  it; the constants were calibrated from the rendered frame, not derived.
+
 The file boundary is the other half, and both halves lose data silently when
 wrong — a smoke is the only thing that catches either, because a truncated
 buffer and a converted line ending both *render perfectly*:

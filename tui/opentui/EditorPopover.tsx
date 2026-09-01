@@ -506,6 +506,39 @@ function wordPrefixAt(content: string, offset: number): { value: string; start: 
   return { value, start: offset - value.length }
 }
 
+/**
+ * The part of a suggestion the user has not typed yet, shown dim at the caret
+ * the way an inline suggestion is in an editor with virtual text.
+ *
+ * It is drawn as an overlay rather than inserted into the buffer, so it can
+ * only occupy space that is already empty: a terminal overlay cannot push real
+ * code aside the way virtual text does, and painting over the rest of the line
+ * would be worse than showing nothing. Hence the end-of-line requirement.
+ *
+ * Returns null wherever a ghost would be wrong rather than merely absent — a
+ * suggestion that does not continue what was typed, a snippet whose body is
+ * placeholder syntax rather than text, or anything spanning a line break.
+ */
+export function editorGhostSuffix(
+  content: string,
+  cursorOffset: number,
+  completion: { insertText: string; insertTextFormat?: 1 | 2 } | undefined,
+): string | null {
+  if (!completion) return null
+  // Snippet bodies are `${1:name}` placeholder syntax, not the text that will
+  // be inserted; ghosting them raw would show the user the machinery.
+  if (completion.insertTextFormat === 2) return null
+  const next = content[cursorOffset]
+  // Only at end of line, where the overlay has empty columns to occupy.
+  if (next != null && next !== '\n') return null
+  const prefix = wordPrefixAt(content, cursorOffset)
+  if (prefix.value.length === 0) return null
+  if (!completion.insertText.startsWith(prefix.value)) return null
+  const suffix = completion.insertText.slice(prefix.value.length)
+  if (suffix.length === 0 || suffix.includes('\n')) return null
+  return suffix
+}
+
 function completionContextAt(content: string, offset: number): {
   prefix: { value: string; start: number }
   memberAccess: boolean
@@ -4098,6 +4131,31 @@ export function EditorPopover({
     ? Math.max(3, completionCaretRow)
     : Math.max(3, completionCaretRow - completionPopupHeight - 1)
   const completionLeft = explorerWidth + Math.max(5, Math.min(Math.max(5, editorWidth - completionPopupWidth - 2), cursor.visualColumn + 7))
+  // Inline suggestion at the caret. The completion list is cleared on every
+  // content change, so whenever it is non-empty the buffer still holds exactly
+  // the content the session was requested against — which is what makes the
+  // session's offset safe to measure the prefix from.
+  const ghostSuffix = useMemo(() => {
+    const session = completionSessionRef.current
+    if (!session || focusPane !== 'editor' || multiCursor || snippetSessionRef.current) return null
+    if (session.line !== cursor.line || session.visualColumn !== cursor.visualColumn) return null
+    return editorGhostSuffix(session.content, session.cursorOffset, completions[completionCursor])
+  }, [completionCursor, completions, cursor.line, cursor.visualColumn, focusPane, multiCursor])
+  // The caret's own column, which is where the buffer's text ends and the
+  // overlay's begins. Word wrap makes the logical column stop matching the
+  // visual one, so the ghost is only drawn while the line it sits on — with the
+  // suggestion appended — still fits on one screen row.
+  // Absolute coordinates here are relative to the popover's frame, one row and
+  // one column inside the terminal cell the caret occupies — the same offset
+  // the completion popup absorbs into its own rough placement. The ghost has to
+  // land on the caret exactly, so it subtracts it.
+  const ghostRow = cursor.line - (editorRef.current?.scrollY ?? 0) + contentTop - 1
+  const ghostLeft = explorerWidth + gutterMinWidth + cursor.visualColumn
+  const ghostFits = ghostSuffix != null
+    && ghostRow >= contentTop
+    && ghostRow < contentTop + contentHeight
+    && cursor.visualColumn + ghostSuffix.length < editorWidth - gutterMinWidth - 2
+  const ghostText = ghostFits ? ghostSuffix : null
   const editorModeLabel = focusPane === 'explorer' ? 'EXPLORER' : vimEnabled ? vimMode.toUpperCase() : 'INSERT'
   const editorModeColor = focusPane === 'explorer'
     ? theme.amber
@@ -4645,6 +4703,12 @@ export function EditorPopover({
               </box>
             ))}
           </scrollbox>
+        </box>
+      ) : null}
+
+      {ghostText && activeTab ? (
+        <box position="absolute" top={ghostRow} left={ghostLeft} height={1} zIndex={40}>
+          <text fg={theme.dim} wrapMode="none">{ghostText}</text>
         </box>
       ) : null}
 
