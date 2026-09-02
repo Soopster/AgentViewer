@@ -87,5 +87,39 @@ if (chatDock.height !== chatTextarea.height + 2) {
   throw new Error(`Chat dock is ${chatDock.height} rows for a ${chatTextarea.height}-row draft; expected ${chatTextarea.height + 2}`)
 }
 
+// Focused and unfocused carry very different hints (`c focus · click to
+// compose` against the full key list). Both are pushed against the right end of
+// the border run, and neither pads the gap between the two halves with panel
+// background — the border has to show through it.
+const hintEndOf = (needle: string): number => {
+  const row = setup.captureCharFrame().split('\n')[chatBorderRow] ?? ''
+  const index = row.indexOf(needle)
+  if (index === -1) throw new Error(`Chat status row is missing "${needle}":\n${row}`)
+  return index + needle.length
+}
+const statusRight = chatStatus.x + chatStatus.width
+const unfocusedEnd = hintEndOf('click to compose')
+if (unfocusedEnd !== statusRight) {
+  throw new Error(`Unfocused hint ends at ${unfocusedEnd}, not flush with the border run's end ${statusRight}`)
+}
+const gapRow = setup.captureCharFrame().split('\n')[chatBorderRow] ?? ''
+const gap = gapRow.slice(chatStatus.x + 12, unfocusedEnd - 'click to compose'.length - 4)
+if (!gap.includes('─')) {
+  throw new Error(`Border does not show through between the status halves:\n${gapRow}`)
+}
+// Dashes are not enough on their own: a half padded to a fixed share paints a
+// run of blank panel background over the border and still leaves dashes beyond
+// it. Nothing between the halves may be blank.
+if (/ {4}/.test(gap)) {
+  throw new Error(`Blank panel background is painted over the border between the halves:\n${gapRow}`)
+}
+
+act(() => { setup.mockInput.pressKey('c') })
+await settle(900)
+const focusedEnd = hintEndOf('newline')
+if (focusedEnd > statusRight) {
+  throw new Error(`Focused hint runs past the border run's end ${statusRight} (ends ${focusedEnd})`)
+}
+
 console.log('composerStatusRowSmoke: ok')
 process.exit(0)

@@ -1672,7 +1672,10 @@ const COMPOSER_MAX_HEIGHT = 12
 // Top border + bottom border. As in the docked composer, the status/hint row
 // is painted into the bottom border rather than costing a row of its own.
 const CHAT_COMPOSER_CHROME_HEIGHT = 2
-const CHAT_COMPOSER_MIN_HEIGHT = 4
+// Two border rows plus one line of draft. It was 4 while the status row cost a
+// row of its own; leaving it there would spend that reclaimed row on a blank
+// second draft line the chat composer never needed.
+const CHAT_COMPOSER_MIN_HEIGHT = 3
 // Top border + bottom border. The status/hint row costs no height of its own:
 // outside fullscreen it is painted into the bottom border, the way a title is
 // painted into the top one.
@@ -19307,10 +19310,13 @@ export default function OpenTuiApp() {
   // otherwise the bar only shows through the "› " prefix and padding slivers.
   const composerChatTextareaStyle = {
     ...composerBaseTextareaStyle,
-    // Keep focus legible through the rail/metadata and border without washing
-    // the whole input in the theme's brighter user-message background.
-    backgroundColor: theme.surface2,
-    focusedBackgroundColor: theme.surface2,
+    // Focused, the draft area drops to the theme's own ground so it reads as a
+    // well you can type into rather than another band of panel. Unfocused it
+    // stays flush with the surrounding chat surface — the transcript's last
+    // row, not a control. Neither state uses the theme's brighter
+    // user-message background, which washes the whole input out.
+    backgroundColor: chatComposerFocused ? theme.bg : theme.surface2,
+    focusedBackgroundColor: theme.bg,
     flexGrow: 1,
   }
   const composerDockHeaderStatus = routeComposerToBridge
@@ -19370,12 +19376,6 @@ export default function OpenTuiApp() {
     Math.min(composerDockFooterHint.length + 1, composerDockTextareaWidth - 24),
   )
   const composerDockFooterStatsWidth = Math.max(composerDockTextareaWidth - composerDockFooterHintWidth - 1, 8)
-  // The chat composer's status row is painted into its bottom border, so its
-  // budget is that border's horizontal run less a column of inset at each end —
-  // the reader's frame, the chat dock's own border, and its padding.
-  const chatComposerStatusWidth = Math.max(rightPaneWidth - 8, 12)
-  const chatComposerStatsWidth = Math.max(Math.floor(chatComposerStatusWidth * 0.55), 12)
-  const chatComposerHintWidth = Math.max(chatComposerStatusWidth - chatComposerStatsWidth - 1, 12)
   const composerWindowFooterHint = turnRunningForComposer
     ? `${sendingHintBase} · ⌃O dock`
     : `⏎ send · ⌥M settings · ⇧⏎ newline${composerWorkflowFooterHint} · ⌃O dock · Esc close`
@@ -19385,6 +19385,37 @@ export default function OpenTuiApp() {
   const chatComposerFooterHint = chatComposerFocused
     ? composerDockFooterHint
     : 'c focus · click to compose'
+  // The chat composer's status row is painted into its bottom border, so its
+  // budget is that border's horizontal run less a column of inset at each end —
+  // the reader's frame, the chat dock's own border, and its padding.
+  const chatComposerStatusWidth = Math.max(rightPaneWidth - 8, 12)
+  // Both halves are sized to their own content rather than to a fixed share of
+  // the row. Both renderers pad to the width they are given, so a fixed share
+  // paints a blank band of panel background over the border — and the two
+  // states have very different hints (`c focus · click to compose` against the
+  // full key list), so a fixed share left the unfocused hint stranded mid-row
+  // instead of against the right end where the focused one sits.
+  // Stats take what they need up to their old share of the row; the hint takes
+  // what is left, so a long key list still truncates before it can crowd them.
+  // `||`, not `??`: the render picks between these two by truthiness, so an
+  // empty slash hint must fall through to the stats segments here as well.
+  const chatComposerStatsText = composerSlashHint
+    || composerDockStatsSegments.map((segment) => segment.text).join('')
+  const chatComposerStatsWidth = Math.max(
+    Math.min(chatComposerStatsText.length, Math.floor(chatComposerStatusWidth * 0.55)),
+    8,
+  )
+  const chatComposerHintText = chatComposerFocused && composerDockSendingHintSegments
+    ? composerDockSendingHintSegments.map((segment) => segment.text).join('')
+    : chatComposerFooterHint
+  // Fit once and measure the result: `fitHintText` pads to whatever width it is
+  // given, so sizing the box from the raw length leaves a run of blank panel
+  // background where the border should be whenever the hint had to truncate.
+  const chatComposerHintFitted = fitHintText(
+    chatComposerHintText,
+    Math.max(chatComposerStatusWidth - chatComposerStatsWidth - 2, 0),
+  ).trimEnd()
+  const chatComposerHintWidth = chatComposerHintFitted.length
   const composerWindowFooterHintWidth = Math.max(
     18,
     Math.min(composerWindowFooterHint.length + 1, composerWindowContentWidth - 16),
@@ -20098,7 +20129,9 @@ export default function OpenTuiApp() {
                 flexGrow={1}
                 overflow="hidden"
                 paddingX={1}
-                backgroundColor={theme.surface2}
+                // Matches the textarea so the well covers the prompt glyph and
+                // the padding either side of it, not just the text.
+                backgroundColor={chatComposerFocused ? theme.bg : theme.surface2}
                 flexDirection="row"
                 onMouseDown={(event) => {
                   if (event.button !== 0) return
@@ -20140,7 +20173,7 @@ export default function OpenTuiApp() {
                   <text fg={chatComposerFocused && !visibleComposerSending ? composerAccentColor : theme.dim} wrapMode="none">
                     {chatComposerFocused && composerDockSendingHintSegments
                       ? renderInlineTextSegments(composerDockSendingHintSegments, chatComposerHintWidth, theme.dim)
-                      : fitHintText(chatComposerFooterHint, chatComposerHintWidth)}
+                      : chatComposerHintFitted}
                   </text>
                 </box>
               </box>
