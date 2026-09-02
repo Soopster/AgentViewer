@@ -1669,9 +1669,14 @@ const COMPOSER_MIN_HEIGHT = 6
 const COMPOSER_MAX_HEIGHT = 12
 // Chat mode keeps the input line plus one compact metadata strip underneath;
 // the two border rows are included in the composer budget.
-const CHAT_COMPOSER_CHROME_HEIGHT = 3
+// Top border + bottom border. As in the docked composer, the status/hint row
+// is painted into the bottom border rather than costing a row of its own.
+const CHAT_COMPOSER_CHROME_HEIGHT = 2
 const CHAT_COMPOSER_MIN_HEIGHT = 4
-const COMPOSER_DOCK_CHROME_HEIGHT = 3
+// Top border + bottom border. The status/hint row costs no height of its own:
+// outside fullscreen it is painted into the bottom border, the way a title is
+// painted into the top one.
+const COMPOSER_DOCK_CHROME_HEIGHT = 2
 const COMPOSER_WINDOW_MAX_WIDTH = 88
 const COMPOSER_WINDOW_MAX_HEIGHT = 24
 const CODEX_LIVE_ASSISTANT_UUID = 'live-codex-assistant'
@@ -5692,7 +5697,11 @@ function TranscriptCardInner({
           id={`card:${card.key}`}
           flexDirection="row"
           width={agentWidth}
-          border={!streamMode}
+          // OpenTUI does not clear an existing native border when the boolean
+          // shorthand changes from true to false. Agents and Chat reuse these
+          // keyed technical-card nodes, so pass an explicit empty edge set to
+          // remove the Agents frame when returning to Chat.
+          border={streamMode ? [] : ['top', 'left', 'right', 'bottom']}
           borderStyle={streamMode ? undefined : hasCursor ? 'heavy' : 'single'}
           borderColor={streamMode ? undefined : hasCursor || isSearchHit ? agentAccent : borderColor}
           backgroundColor={streamMode ? streamAgentBg : agentBg}
@@ -5978,6 +5987,10 @@ function TranscriptCardInner({
       <box
         id={`card:${card.key}`}
         flexDirection="column"
+        // Agents mode uses this same keyed outer card with a full border.
+        // Keep the stream/chat edge set explicit so returning here clears the
+        // native frame instead of leaving the previous view's border painted.
+        border={[]}
         marginBottom={streamRendersSomething
           ? (card.role === 'user' ? densityState.streamUserGap : densityState.streamGap)
           : 0}
@@ -6220,7 +6233,10 @@ function TranscriptCardInner({
         id={`card:${card.key}`}
         alignSelf={userBubble ? 'flex-end' : undefined}
         width={cardWidth}
-        border={!streamMode}
+        // Use an explicit empty edge set for the borderless stream/chat
+        // presentation. The native renderer can retain a prior `border=true`
+        // frame when this keyed card is reused across transcript views.
+        border={streamMode ? [] : ['top', 'left', 'right', 'bottom']}
         borderStyle={streamMode ? undefined : hasCursor ? 'heavy' : 'single'}
         borderColor={streamMode ? undefined : borderColor}
         backgroundColor={cardBg}
@@ -10292,21 +10308,26 @@ export default function OpenTuiApp() {
   const taskPanelVisible = taskPanelOpen && !fullscreenMode
   const effectiveTaskPanelWidth = taskPanelVisible ? taskPanelWidth : 0
   const surfacePanelVisible = surfacePanelOpen && !fullscreenMode
+  // Both right-hand panels can be open at once, so the surface panel's ceiling
+  // has to leave the task panel its reservation as well as the reader's minimum.
   const surfacePanelMaxWidth = Math.max(
     SURFACE_PANEL_MIN_WIDTH,
-    width - (fullscreenMode ? 0 : 4) - (showRail ? sidebarWidthPreference + 1 : 0) - MIN_READER_WIDTH - 1,
+    width - (fullscreenMode ? 0 : 4) - (showRail ? sidebarWidthPreference + 1 : 0) - MIN_READER_WIDTH - 1
+      - effectiveTaskPanelWidth - (taskPanelVisible ? 1 : 0),
   )
   const effectiveSurfacePanelWidth = surfacePanelVisible
     ? (surfacePanelExpanded ? surfacePanelMaxWidth : Math.min(surfacePanelWidth, surfacePanelMaxWidth))
     : 0
   // Both right-hand panels come out of the same budget as the task panel, so
   // the reader keeps its minimum no matter how many are open.
+  // The task panel sits in flow behind the root row's one-column gap, which is
+  // the whole of its reservation beyond its own width.
   const rightPanelsWidth = effectiveTaskPanelWidth + (taskPanelVisible ? 1 : 0)
     + effectiveSurfacePanelWidth
-  // The absolutely positioned surface panel already owns the right inset. Its
-  // in-flow reservation only needs the ordinary outer padding, not the legacy
-  // two extra gutter columns used when the reader is the rightmost pane.
-  const outerChromeWidth = fullscreenMode ? 0 : surfacePanelVisible ? 2 : 4
+  // Only the root row's `paddingX={1}` sits outside the panes. Reserving four
+  // columns here left two unclaimed on the right, so the reader frame stopped
+  // short of the screen edge while its left border sat against the padding.
+  const outerChromeWidth = fullscreenMode ? 0 : 2
   const maxSidebarWidth = Math.max(MIN_SIDEBAR_WIDTH, width - outerChromeWidth - 1 - MIN_READER_WIDTH - rightPanelsWidth)
   const sidebarWidth = showRail ? clamp(sidebarWidthPreference, MIN_SIDEBAR_WIDTH, maxSidebarWidth) : 0
   const readerAreaWidth = Math.max(width - outerChromeWidth - sidebarWidth - (showRail ? 1 : 0) - rightPanelsWidth, 40)
@@ -19349,6 +19370,12 @@ export default function OpenTuiApp() {
     Math.min(composerDockFooterHint.length + 1, composerDockTextareaWidth - 24),
   )
   const composerDockFooterStatsWidth = Math.max(composerDockTextareaWidth - composerDockFooterHintWidth - 1, 8)
+  // The chat composer's status row is painted into its bottom border, so its
+  // budget is that border's horizontal run less a column of inset at each end —
+  // the reader's frame, the chat dock's own border, and its padding.
+  const chatComposerStatusWidth = Math.max(rightPaneWidth - 8, 12)
+  const chatComposerStatsWidth = Math.max(Math.floor(chatComposerStatusWidth * 0.55), 12)
+  const chatComposerHintWidth = Math.max(chatComposerStatusWidth - chatComposerStatsWidth - 1, 12)
   const composerWindowFooterHint = turnRunningForComposer
     ? `${sendingHintBase} · ⌃O dock`
     : `⏎ send · ⌥M settings · ⇧⏎ newline${composerWorkflowFooterHint} · ⌃O dock · Esc close`
@@ -20091,27 +20118,29 @@ export default function OpenTuiApp() {
                 </box>
               </box>
               <box
-                flexGrow={1}
-                overflow="hidden"
+                id="chat-composer-status"
+                position="absolute"
+                bottom={-1}
+                left={1}
+                width={chatComposerStatusWidth}
                 height={1}
-                paddingX={1}
+                overflow="hidden"
                 flexDirection="row"
                 alignItems="center"
-                backgroundColor={chatComposerFocused ? theme.surface3 : theme.surface}
               >
-                <box width={Math.max(Math.floor((rightPaneWidth - 4) * 0.55), 12)} overflow="hidden">
+                <box width={chatComposerStatsWidth} overflow="hidden" backgroundColor={theme.surface2}>
                   <text id="chat-composer-focus-state" fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none">
                     {composerSlashHint
-                      ? fitText(composerSlashHint, Math.max(Math.floor((rightPaneWidth - 4) * 0.55), 12))
-                      : renderInlineTextSegments(composerDockStatsSegments, Math.max(Math.floor((rightPaneWidth - 4) * 0.55), 12), theme.dim)}
+                      ? fitText(composerSlashHint, chatComposerStatsWidth)
+                      : renderInlineTextSegments(composerDockStatsSegments, chatComposerStatsWidth, theme.dim)}
                   </text>
                 </box>
                 <box flexGrow={1} />
-                <box overflow="hidden">
+                <box width={chatComposerHintWidth} overflow="hidden" backgroundColor={theme.surface2}>
                   <text fg={chatComposerFocused && !visibleComposerSending ? composerAccentColor : theme.dim} wrapMode="none">
                     {chatComposerFocused && composerDockSendingHintSegments
-                      ? renderInlineTextSegments(composerDockSendingHintSegments, Math.max(Math.floor((rightPaneWidth - 4) * 0.45) - 1, 12), theme.dim)
-                      : fitHintText(chatComposerFooterHint, Math.max(Math.floor((rightPaneWidth - 4) * 0.45) - 1, 12))}
+                      ? renderInlineTextSegments(composerDockSendingHintSegments, chatComposerHintWidth, theme.dim)
+                      : fitHintText(chatComposerFooterHint, chatComposerHintWidth)}
                   </text>
                 </box>
               </box>
@@ -20171,6 +20200,28 @@ export default function OpenTuiApp() {
         ))}
           </box>
         </box>
+
+        {/* The task panel is placed ahead of the surface panel's reservation:
+            the surface panel is absolutely positioned against the right edge,
+            so anything after it in flow would render underneath it. */}
+        {taskPanelVisible ? (
+          <box width={taskPanelWidth} overflow="hidden">
+            <TaskSidePanel
+              messages={taskPanelMessages}
+              todos={composerLiveTodos}
+              session={selectedSession}
+              theme={theme}
+              width={taskPanelWidth}
+              height={mainContentHeight - 2}
+              onSelectTask={(uuid) => {
+                const idx = visibleTranscriptCards.findIndex((c) => c.key === uuid)
+                if (idx >= 0) jumpToTranscriptIndex(idx)
+              }}
+              tab={taskPanelTab}
+              liveSubagentText={liveSubagentText}
+            />
+          </box>
+        ) : null}
 
         {/* Width reservation only — the panel itself is positioned absolutely
             below so it can run past the composer to the footer. */}
@@ -20338,24 +20389,6 @@ export default function OpenTuiApp() {
           </box>
         ) : null}
 
-        {taskPanelVisible ? (
-          <box width={taskPanelWidth} overflow="hidden" marginLeft={1}>
-            <TaskSidePanel
-              messages={taskPanelMessages}
-              todos={composerLiveTodos}
-              session={selectedSession}
-              theme={theme}
-              width={taskPanelWidth}
-              height={mainContentHeight - 2}
-              onSelectTask={(uuid) => {
-                const idx = visibleTranscriptCards.findIndex((c) => c.key === uuid)
-                if (idx >= 0) jumpToTranscriptIndex(idx)
-              }}
-              tab={taskPanelTab}
-              liveSubagentText={liveSubagentText}
-            />
-          </box>
-        ) : null}
 
         {(() => {
           // All floating select overlays share this palette so light-themed
@@ -21388,8 +21421,19 @@ export default function OpenTuiApp() {
             height: composerDockTextareaHeight,
             width: composerDockTextareaWidth,
           })}
-          <box height={1} flexDirection="row" alignItems="center" backgroundColor={theme.surface3}>
-            <box width={composerDockFooterStatsWidth} overflow="hidden">
+          {/* Stats and key hints sit *in* the bottom border rather than on a
+              row above it — the same trick the top border's title uses, worth
+              a whole row of draft back. Fullscreen has no border to sit in, so
+              there it stays an ordinary flow row. */}
+          <box
+            id="composer-dock-status"
+            {...(fullscreenMode
+              ? { height: 1, backgroundColor: theme.surface3 }
+              : { position: 'absolute' as const, bottom: -1, left: 1, width: composerDockTextareaWidth, height: 1 })}
+            flexDirection="row"
+            alignItems="center"
+          >
+            <box width={composerDockFooterStatsWidth} overflow="hidden" backgroundColor={fullscreenMode ? undefined : theme.surface2}>
               <text fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none">
                 {composerSlashHint
                   ? fitText(composerSlashHint, composerDockFooterStatsWidth)
@@ -21397,7 +21441,7 @@ export default function OpenTuiApp() {
               </text>
             </box>
             <box flexGrow={1} />
-            <box width={composerDockFooterHintWidth} overflow="hidden">
+            <box width={composerDockFooterHintWidth} overflow="hidden" backgroundColor={fullscreenMode ? undefined : theme.surface2}>
               <text fg={composerActive && !visibleComposerSending ? composerAccentColor : theme.dim} wrapMode="none">
                 {composerDockSendingHintSegments
                   ? renderInlineTextSegments(composerDockSendingHintSegments, composerDockFooterHintWidth, theme.dim)
