@@ -1667,8 +1667,7 @@ function timeAgo(value?: string | number): string {
 
 const COMPOSER_MIN_HEIGHT = 6
 const COMPOSER_MAX_HEIGHT = 12
-// Chat mode has no border to budget rows for — just the input line(s) plus
-// the one dim stats row underneath.
+// Chat mode keeps the input line plus one compact metadata strip underneath.
 const CHAT_COMPOSER_CHROME_HEIGHT = 1
 const CHAT_COMPOSER_MIN_HEIGHT = 2
 const COMPOSER_DOCK_CHROME_HEIGHT = 3
@@ -20076,8 +20075,8 @@ export default function OpenTuiApp() {
                   composerTextareaRef.current?.focus()
                 }}
               >
-                <text fg={chatComposerFocused ? composerAccentColor : theme.dim} wrapMode="none">
-                  {chatComposerFocused ? '▌ ' : '│ '}
+                <text fg={chatComposerFocused ? theme.text : theme.dim} wrapMode="none">
+                  {chatComposerFocused ? '❯ ' : '› '}
                 </text>
                 <box flexGrow={1}>
                   {renderComposerTextarea(submitComposerFromDock, {
