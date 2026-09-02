@@ -284,7 +284,7 @@ await act(async () => {
   await new Promise((resolve) => setTimeout(resolve, 100))
 })
 const chordFrame = captureCharFrame()
-if (!chordFrame.includes('% split')) {
+if (!chordFrame.includes('% side-by-side')) {
   throw new Error(`Ctrl+B did not arm the split chord:\n${chordFrame}`)
 }
 
