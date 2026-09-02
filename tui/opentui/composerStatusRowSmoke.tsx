@@ -83,8 +83,13 @@ if (!/[│┘].*[│┘]\s*$/.test(chatDrawn.trimEnd())) {
 }
 const chatTextarea = setup.renderer.root.findDescendantById('composer-textarea') as unknown as Geometry | null
 if (!chatTextarea) throw new Error('Chat composer textarea is missing')
-if (chatDock.height !== chatTextarea.height + 2) {
-  throw new Error(`Chat dock is ${chatDock.height} rows for a ${chatTextarea.height}-row draft; expected ${chatTextarea.height + 2}`)
+if (chatDock.height !== chatTextarea.height + 3) {
+  throw new Error(`Chat dock is ${chatDock.height} rows for a ${chatTextarea.height}-row draft; expected ${chatTextarea.height + 3}`)
+}
+// Chat keeps one quiet row between the draft and its metadata-bearing bottom
+// border, so the single-line input does not feel pinned between two rules.
+if (chatTextarea.y + chatTextarea.height + 1 !== chatBorderRow) {
+  throw new Error(`Chat draft does not leave one breathing row before border row ${chatBorderRow}`)
 }
 
 // Focused and unfocused carry very different hints (`c focus · click to

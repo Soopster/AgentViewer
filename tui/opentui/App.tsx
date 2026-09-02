@@ -1667,15 +1667,13 @@ function timeAgo(value?: string | number): string {
 
 const COMPOSER_MIN_HEIGHT = 6
 const COMPOSER_MAX_HEIGHT = 12
-// Chat mode keeps the input line plus one compact metadata strip underneath;
-// the two border rows are included in the composer budget.
-// Top border + bottom border. As in the docked composer, the status/hint row
-// is painted into the bottom border rather than costing a row of its own.
-const CHAT_COMPOSER_CHROME_HEIGHT = 2
-// Two border rows plus one line of draft. It was 4 while the status row cost a
-// row of its own; leaving it there would spend that reclaimed row on a blank
-// second draft line the chat composer never needed.
-const CHAT_COMPOSER_MIN_HEIGHT = 3
+// Chat mode keeps one deliberate breathing row below the draft. Its height
+// budget includes that row plus the top and bottom borders.
+// The status/hint row is painted into the bottom border rather than costing a
+// row of its own.
+const CHAT_COMPOSER_CHROME_HEIGHT = 3
+// Two border rows, one line of draft, and the breathing row.
+const CHAT_COMPOSER_MIN_HEIGHT = 4
 // Top border + bottom border. The status/hint row costs no height of its own:
 // outside fullscreen it is painted into the bottom border, the way a title is
 // painted into the top one.
@@ -20129,6 +20127,7 @@ export default function OpenTuiApp() {
                 flexGrow={1}
                 overflow="hidden"
                 paddingX={1}
+                paddingBottom={1}
                 // Matches the textarea so the well covers the prompt glyph and
                 // the padding either side of it, not just the text.
                 backgroundColor={chatComposerFocused ? theme.bg : theme.surface2}
