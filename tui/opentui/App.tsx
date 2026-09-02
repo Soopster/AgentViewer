@@ -7696,6 +7696,10 @@ export default function OpenTuiApp() {
   const [composerHistoryIndex, setComposerHistoryIndex] = useState(0)
   const [composerLiveSlashCommands, setComposerLiveSlashCommands] = useState<SlashCommandSuggestion[]>([])
   const [composerSendState, setComposerSendState] = useState<SendState>('idle')
+  // Transient stream UI belongs to the session that started the turn, not the
+  // tab selected later. Keep the owner through persisted-transcript reconcile
+  // so the final syncing spinner cannot jump across tabs either.
+  const [composerActivitySessionKey, setComposerActivitySessionKey] = useState<string | null>(null)
   const [composerSendStartedAt, setComposerSendStartedAt] = useState<number | null>(null)
   const [interruptPressActive, setInterruptPressActive] = useState(false)
   const [backgroundingTasks, setBackgroundingTasks] = useState(false)
@@ -8918,7 +8922,7 @@ export default function OpenTuiApp() {
   useEffect(() => {
     if (!awaitingPersistedTurn) return
     const timer = setTimeout(() => {
-      const key = selectedSessionTarget ? sessionKey(selectedSessionTarget) : null
+      const key = composerActivitySessionKey
       if (key) {
         liveTranscriptBaselineRef.current.delete(key)
         setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== key))
@@ -8929,7 +8933,7 @@ export default function OpenTuiApp() {
       setAwaitingPersistedTurn(false)
     }, AWAITING_PERSISTED_TURN_TIMEOUT_MS)
     return () => clearTimeout(timer)
-  }, [awaitingPersistedTurn, selectedSessionTarget])
+  }, [awaitingPersistedTurn, composerActivitySessionKey])
 
   // (Auto-open of the composer on a pending session was removed: with
   // composerActive=true, the global key handler's `N` / `c` / `q` shortcuts
@@ -10119,21 +10123,33 @@ export default function OpenTuiApp() {
     () => liveToolActivities.reduce((n, a) => (a.status === 'running' ? n + 1 : n), 0),
     [liveToolActivities],
   )
+  const composerActivityVisible = Boolean(
+    composerActivitySessionKey
+    && selectedSessionIdentity === composerActivitySessionKey,
+  )
+  const visibleComposerSending = composerActivityVisible && composerSendState === 'sending'
+  const visibleAwaitingPersistedTurn = composerActivityVisible && awaitingPersistedTurn
+  const visibleComposerLiveText = composerActivityVisible ? composerLiveText : ''
+  const visibleComposerError = composerActivityVisible ? composerError : null
+  const visibleLiveToolActivities = composerActivityVisible ? liveToolActivities : []
+  const visibleRunningToolCount = composerActivityVisible ? activeRunningToolCount : 0
   // A stalled owned stream can drop composerSendState to idle while the turn
   // continues server-side. Treat reconciliation and reattachment as running
-  // everywhere that reserves or renders the live-turn status row.
-  const turnRunningForComposer = composerSendState === 'sending' || reattachedRunning || awaitingPersistedTurn
+  // everywhere that reserves or renders the live-turn status row. Owned state
+  // is visible only on its origin tab; reattachedRunning is already scoped to
+  // the selected session by reconcileSelectedRunningRegistry.
+  const turnRunningForComposer = visibleComposerSending || reattachedRunning || visibleAwaitingPersistedTurn
   const hasComposerStatusMessage = Boolean(
-    composerError
+    visibleComposerError
     // Chat view renders turn activity in its compact in-frame status row, so
     // the sync spinner must not also claim a sibling row here — two spinners
     // for one turn.
-    || (awaitingPersistedTurn && transcriptView !== 'chat')
+    || (visibleAwaitingPersistedTurn && transcriptView !== 'chat')
     || activeQueuedComposerSends.length > 0
-    || (composerSendState === 'sending' && Boolean(composerLiveText))
+    || (visibleComposerSending && Boolean(visibleComposerLiveText))
     // Steered notices render while a turn runs, owned or reattached — count
     // them even before the turn streams any output.
-    || (steeredSendNotice && (composerSendState === 'sending' || reattachedRunning))
+    || (steeredSendNotice && (visibleComposerSending || reattachedRunning))
   )
   // AskUserQuestion picker layout.
   //
@@ -10210,23 +10226,23 @@ export default function OpenTuiApp() {
     // entire turn, not just the pre-output window).
     // Chat view owns a compact status row inside the reader frame, so it comes
     // out of transcriptViewportRows rather than this sibling-status budget.
-    if (composerSendState === 'sending' && transcriptView !== 'chat') rows += 2
-    if (hasSubagentTail) rows += 2
-    if (liveToolActivities.length > 0 && activeRunningToolCount > 0) rows += 2
+    if (visibleComposerSending && transcriptView !== 'chat') rows += 2
+    if (composerActivityVisible && hasSubagentTail) rows += 2
+    if (visibleLiveToolActivities.length > 0 && visibleRunningToolCount > 0) rows += 2
     if (livePromptSuggestion && composerSendState !== 'sending') rows += 2
     if (composerTargetSession?.provider === 'claude' && composerPermissionMode !== 'default') rows += 2
     if (hasComposerStatusMessage) {
-      const streamingResponse = composerSendState === 'sending' && composerLiveText && !composerError
+      const streamingResponse = visibleComposerSending && visibleComposerLiveText && !visibleComposerError
       rows += streamingResponse
         ? isChatLikeView || liveAssistantTextCardVisible ? 0 : LIVE_PREVIEW_HEIGHT
         : 2
     }
-    if (awaitingPersistedTurn && transcriptView !== 'chat') rows += 2
+    if (visibleAwaitingPersistedTurn && transcriptView !== 'chat') rows += 2
     if (composerAutoTargetingRunning && composerTargetSession) rows += 1
-    if ((liveStatus === 'retrying' || liveStatus === 'compacting') && composerSendState === 'sending') rows += 2
-    if (composerSendState === 'sending' && composerLiveReasoning.trim() && transcriptView !== 'stream') rows += LIVE_PREVIEW_HEIGHT
+    if ((liveStatus === 'retrying' || liveStatus === 'compacting') && visibleComposerSending) rows += 2
+    if (visibleComposerSending && composerLiveReasoning.trim() && transcriptView !== 'stream') rows += LIVE_PREVIEW_HEIGHT
     // Reattached-turn banner (rendered when a turn runs without an owned stream).
-    if (composerSendState !== 'sending' && reattachedRunning && !awaitingPersistedTurn && transcriptView !== 'chat') rows += 2
+    if (!visibleComposerSending && reattachedRunning && !visibleAwaitingPersistedTurn && transcriptView !== 'chat') rows += 2
     // Codex external-writer banner — another Codex client owns the rollout,
     // so this transcript is a stale cached snapshot until it finishes.
     if (composerTargetSession?.provider === 'codex' && sessionDetail?.externalWriter) rows += 2
@@ -10455,12 +10471,10 @@ export default function OpenTuiApp() {
   const streamTurnFooterText = useMemo(() => {
     if (
       transcriptView !== 'stream'
-      || composerSendState === 'sending'
-      || reattachedRunning
-      || awaitingPersistedTurn
+      || turnRunningForComposer
     ) return null
     return streamCompletedTurnHint(visibleTranscriptCards)
-  }, [awaitingPersistedTurn, composerSendState, reattachedRunning, transcriptView, visibleTranscriptCards])
+  }, [transcriptView, turnRunningForComposer, visibleTranscriptCards])
   const streamActionFooterRows = isChatLikeView && transcriptView !== 'chat' && visibleTranscriptCards.length > 0 ? 1 : 0
   const chatTurnStatusRows = transcriptView === 'chat' && turnRunningForComposer && visibleTranscriptCards.length > 0 ? 1 : 0
   const transcriptViewportRows = Math.max(
@@ -13651,6 +13665,7 @@ export default function OpenTuiApp() {
     // This send loop owns the turn's stream — the registry poll must not treat
     // the session as reattached while the stream is alive.
     ownedTurnKeyRef.current = targetKey
+    setComposerActivitySessionKey(targetKey)
     const baselineDetail = sessionDetailCacheRef.current.get(targetKey)
       ?? (selectedSessionKeyRef.current === targetKey ? sessionDetail : null)
     const baselineSummary = summarizeDurableSessionMessages(baselineDetail?.rawMessages ?? [])
@@ -13801,6 +13816,7 @@ export default function OpenTuiApp() {
               liveTranscriptBaselineRef.current.set(newKey, baseline)
             }
             if (ownedTurnKeyRef.current === oldKey) ownedTurnKeyRef.current = newKey
+            setComposerActivitySessionKey((current) => current === oldKey ? newKey : current)
             commitQueuedComposerSends(rekeyComposerQueueTarget(queuedComposerSendsRef.current, oldKey, newKey))
             setLiveTranscriptMessages((prev) => prev.map((message) =>
               liveMessageSessionKey(message) === oldKey
@@ -14270,7 +14286,6 @@ export default function OpenTuiApp() {
       setFollowTail(true)
       setPendingNewCount(0)
       setUnreadBoundaryKey(null)
-      setSelectedSessionKey(sessionKey(targetSession))
       void refreshSessions(provider, true, false)
       void refreshSelectedSessionDetail(targetSession, true)
 
@@ -15587,7 +15602,7 @@ export default function OpenTuiApp() {
     const groups: Array<Array<[string, string]>> = composerActive
       ? [[
           ['Esc', 'transcript'],
-          ...(composerSendState === 'sending'
+          ...(turnRunningForComposer
             ? [['⌃C', 'cancel'], ['↵', 'queue']] as Array<[string, string]>
             : [['↵', 'send']] as Array<[string, string]>),
         ]]
@@ -15651,14 +15666,14 @@ export default function OpenTuiApp() {
       segs.push({ text: `⇌ ${ATTACHED_DAEMON_HOST}`, fg: theme.cyan })
     }
     return segs
-  }, [attentionNeedsInputCount, commandChordPending, composerActive, composerSendState, diffLayout, transcriptView, density, transcriptWidth, showToolCalls, velocityScrollEnabled, visibleSplitPaneCount, splitChordPending, splitFocusIndex, effectiveFocus, theme])
+  }, [attentionNeedsInputCount, commandChordPending, composerActive, diffLayout, transcriptView, density, transcriptWidth, showToolCalls, velocityScrollEnabled, visibleSplitPaneCount, splitChordPending, splitFocusIndex, effectiveFocus, theme, turnRunningForComposer])
 
-  const composerStatusMessage = composerError
-    ? composerError
+  const composerStatusMessage = visibleComposerError
+    ? visibleComposerError
     : activeQueuedComposerSends.length > 0 && !composerQueueDurable
       ? 'Queue persistence failed · keep this TUI open or edit the message back into the composer.'
     // Chat view shows this in the compact row directly above its composer.
-    : awaitingPersistedTurn && transcriptView !== 'chat'
+    : visibleAwaitingPersistedTurn && transcriptView !== 'chat'
       ? 'Syncing transcript…'
       : activeQueuedComposerSends.length > 0 && turnRunningForComposer
         ? (activeQueuedComposerSends.length === 1
@@ -15666,11 +15681,11 @@ export default function OpenTuiApp() {
           : `${activeQueuedComposerSends.length} queued · send in order after current turn`)
         : steeredSendNotice && turnRunningForComposer
           ? `Steered · delivered to the running turn: "${steeredSendNotice.slice(0, 60)}${steeredSendNotice.length > 60 ? '…' : ''}"`
-          : composerSendState === 'sending'
+          : visibleComposerSending
           // "Using N tools" is not repeated here: the pinned turn-status row
           // and the tool-activity row above already carry it, and a third copy
           // just steals transcript rows.
-          ? composerLiveText
+          ? visibleComposerLiveText
             ? 'Streaming assistant response.'
             : null
           // Plain reattached state renders as its own banner row (counted in
@@ -19216,7 +19231,7 @@ export default function OpenTuiApp() {
   const providerOptions = PROVIDER_SELECT_OPTIONS
   const providerAccent = getProviderAccent(provider)
   const composerPlaceholder = composerTargetSession
-    ? (composerSendState === 'sending'
+    ? (visibleComposerSending
         ? composerConfig.placeholderStreaming
         : composerExample)
     : composerConfig.placeholderNoSession
@@ -19265,20 +19280,21 @@ export default function OpenTuiApp() {
     focusedBackgroundColor: theme.surface3,
     flexGrow: 1,
   }
+  const chatComposerFocused = composerActive && !composerFocusBlocked
   // The textarea paints its own background over whatever the parent draws, so
   // chat mode's highlighted bar needs the textarea itself tinted to match —
   // otherwise the bar only shows through the "› " prefix and padding slivers.
   const composerChatTextareaStyle = {
     ...composerBaseTextareaStyle,
-    backgroundColor: theme.surface3,
-    focusedBackgroundColor: theme.surface3,
+    backgroundColor: chatComposerFocused ? theme.userBg : theme.surface2,
+    focusedBackgroundColor: theme.userBg,
     flexGrow: 1,
   }
   const composerDockHeaderStatus = routeComposerToBridge
     ? 'BRIDGE'
     : routeComposerToIde
     ? 'IDE'
-    : composerSendState === 'sending'
+    : visibleComposerSending
     ? 'SENDING'
     : reattachedRunning
     ? 'REATTACHED'
@@ -19294,7 +19310,7 @@ export default function OpenTuiApp() {
   const composerDockBorderTitle = composerDockTitleGap > 0
     ? `${composerDockTitleLeft}${composerDockTitleRule.repeat(composerDockTitleGap)}${composerDockHeaderStatus}`
     : fitText(`${composerDockTitleLeft} · ${composerDockHeaderStatus}`, composerDockTitleWidth)
-  const composerWindowHeaderStatus = composerSendState === 'sending'
+  const composerWindowHeaderStatus = visibleComposerSending
     ? 'SENDING'
     : reattachedRunning
     ? 'REATTACHED'
@@ -19307,7 +19323,7 @@ export default function OpenTuiApp() {
     : fitText(`${composerWindowTitleLeft} · ${composerWindowHeaderStatus}`, composerWindowTitleWidth)
   const sendingHintBase = interruptPressActive
     ? composerConfig.footerHintSending.replace('⌃C cancel', '⌃C again to interrupt')
-    : composerTargetSession?.provider === 'claude' && activeRunningToolCount > 0
+    : composerTargetSession?.provider === 'claude' && visibleRunningToolCount > 0
     ? `${composerConfig.footerHintSending} · ⌃B background`
     : composerConfig.footerHintSending
   const composerWorkflowFooterHint = composerTargetSession?.provider === 'claude' ? ' · ⌃W workflow' : ''
@@ -19315,12 +19331,12 @@ export default function OpenTuiApp() {
     ? '● → live CLI bridge · ⌃R off · ⇧C panel'
     : canUseIdeBridge && routeComposerToIde
     ? '● → IDE @mentions · ⇧I panel'
-    : composerSendState === 'sending' || reattachedRunning
+    : turnRunningForComposer
     ? sendingHintBase
     : canUseChannelBridge
     ? `${composerIdleFooterHint}${composerWorkflowFooterHint} · ⌃R bridge · ⌃O expand`
     : `${composerIdleFooterHint}${composerWorkflowFooterHint} · ⌃O expand`
-  const composerDockSendingHintSegments = composerSendState === 'sending' || reattachedRunning
+  const composerDockSendingHintSegments = turnRunningForComposer
     ? composerSendingHintSegments(composerDockFooterHint, theme)
     : null
   // Size the hint box to exactly fit its text, capped by available width minus
@@ -19331,12 +19347,19 @@ export default function OpenTuiApp() {
     Math.min(composerDockFooterHint.length + 1, composerDockTextareaWidth - 24),
   )
   const composerDockFooterStatsWidth = Math.max(composerDockTextareaWidth - composerDockFooterHintWidth - 1, 8)
-  const composerWindowFooterHint = composerSendState === 'sending' || reattachedRunning
+  const composerWindowFooterHint = turnRunningForComposer
     ? `${sendingHintBase} · ⌃O dock`
     : `⏎ send · ⌥M settings · ⇧⏎ newline${composerWorkflowFooterHint} · ⌃O dock · Esc close`
-  const composerWindowSendingHintSegments = composerSendState === 'sending' || reattachedRunning
+  const composerWindowSendingHintSegments = turnRunningForComposer
     ? composerSendingHintSegments(composerWindowFooterHint, theme)
     : null
+  const chatComposerFooterHint = chatComposerFocused
+    ? composerDockFooterHint
+    : 'c focus · click to compose'
+  const chatComposerStateSegments: InlineTextSegment[] = [
+    { text: chatComposerFocused ? '● FOCUSED · ' : '○ COMPOSER · ', fg: chatComposerFocused ? composerAccentColor : theme.dim },
+    ...composerDockStatsSegments,
+  ]
   const composerWindowFooterHintWidth = Math.max(
     18,
     Math.min(composerWindowFooterHint.length + 1, composerWindowContentWidth - 16),
@@ -19921,7 +19944,7 @@ export default function OpenTuiApp() {
                   ) : transcriptChildren}
                 </TuiErrorBoundary>
 
-                {composerSendState === 'sending' && composerLiveText && !liveAssistantTextCardVisible ? (
+                {visibleComposerSending && visibleComposerLiveText && !liveAssistantTextCardVisible ? (
                   isChatLikeView ? (
                     <box
                       key="live-stream-text"
@@ -19929,7 +19952,7 @@ export default function OpenTuiApp() {
                       paddingLeft={densityState.bodyIndent}
                     >
                       <text fg={theme.text} width={Math.max(rightPaneWidth - densityState.bodyIndent - 4, 16)} wrapMode="word">
-                        {`● ${composerLiveText}`}
+                        {`● ${visibleComposerLiveText}`}
                       </text>
                     </box>
                   ) : (
@@ -19943,7 +19966,7 @@ export default function OpenTuiApp() {
                           </box>
                           <box paddingX={1} paddingY={1}>
                             <text fg={theme.text} wrapMode="word">
-                              {composerLiveText}
+                              {visibleComposerLiveText}
                             </text>
                           </box>
                         </box>
@@ -19986,7 +20009,7 @@ export default function OpenTuiApp() {
             >
               <text fg={theme.cyan} wrapMode="none">{'● '}</text>
               <box flexGrow={1}>
-                {composerSendState === 'sending' ? (
+                {visibleComposerSending ? (
                   <ComposerWaitingStatus
                     startedAt={composerSendStartedAt}
                     seed={composerWaitingStatusSeed}
@@ -19997,7 +20020,7 @@ export default function OpenTuiApp() {
                 ) : (
                   <Spinner
                     label={fitText(
-                      awaitingPersistedTurn
+                      visibleAwaitingPersistedTurn
                         ? 'Syncing transcript…'
                         : 'Turn running · reattached — output syncs as it persists · ⌃C interrupt',
                       Math.max(rightPaneWidth - densityState.bodyIndent - 6, 16),
@@ -20034,11 +20057,18 @@ export default function OpenTuiApp() {
             // a full-width highlighted bar in the same style as a user message
             // row, inside the same border as the transcript, so it reads as
             // the next line of the conversation rather than a docked control.
-            <box id="composer-dock" width="100%" height={composerDockHeight} flexDirection="column" paddingX={1}>
+            <box
+              id="composer-dock"
+              width="100%"
+              height={composerDockHeight}
+              flexDirection="column"
+              paddingX={1}
+              backgroundColor={chatComposerFocused ? theme.userBg : theme.surface}
+            >
               <box
                 width="100%"
                 paddingX={1}
-                backgroundColor={theme.surface3}
+                backgroundColor={chatComposerFocused ? theme.userBg : theme.surface2}
                 flexDirection="row"
                 onMouseDown={(event) => {
                   if (event.button !== 0) return
@@ -20046,7 +20076,9 @@ export default function OpenTuiApp() {
                   composerTextareaRef.current?.focus()
                 }}
               >
-                <text fg={composerAccentColor} wrapMode="none">{'› '}</text>
+                <text fg={chatComposerFocused ? composerAccentColor : theme.dim} wrapMode="none">
+                  {chatComposerFocused ? '▌ ' : '│ '}
+                </text>
                 <box flexGrow={1}>
                   {renderComposerTextarea(submitComposerFromDock, {
                     height: composerDockTextareaHeight,
@@ -20055,20 +20087,26 @@ export default function OpenTuiApp() {
                   })}
                 </box>
               </box>
-              <box height={1} paddingX={1} flexDirection="row" alignItems="center">
+              <box
+                height={1}
+                paddingX={1}
+                flexDirection="row"
+                alignItems="center"
+                backgroundColor={chatComposerFocused ? theme.surface3 : theme.surface}
+              >
                 <box width={Math.max(Math.floor((rightPaneWidth - 4) * 0.55), 12)} overflow="hidden">
-                  <text fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none">
+                  <text id="chat-composer-focus-state" fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none">
                     {composerSlashHint
                       ? fitText(composerSlashHint, Math.max(Math.floor((rightPaneWidth - 4) * 0.55), 12))
-                      : renderInlineTextSegments(composerDockStatsSegments, Math.max(Math.floor((rightPaneWidth - 4) * 0.55), 12), theme.dim)}
+                      : renderInlineTextSegments(chatComposerStateSegments, Math.max(Math.floor((rightPaneWidth - 4) * 0.55), 12), theme.dim)}
                   </text>
                 </box>
                 <box flexGrow={1} />
                 <box overflow="hidden">
-                  <text fg={composerActive && composerSendState !== 'sending' ? composerAccentColor : theme.dim} wrapMode="none">
-                    {composerDockSendingHintSegments
+                  <text fg={chatComposerFocused && !visibleComposerSending ? composerAccentColor : theme.dim} wrapMode="none">
+                    {chatComposerFocused && composerDockSendingHintSegments
                       ? renderInlineTextSegments(composerDockSendingHintSegments, Math.max(Math.floor((rightPaneWidth - 4) * 0.45) - 1, 12), theme.dim)
-                      : fitHintText(composerDockFooterHint, Math.max(Math.floor((rightPaneWidth - 4) * 0.45) - 1, 12))}
+                      : fitHintText(chatComposerFooterHint, Math.max(Math.floor((rightPaneWidth - 4) * 0.45) - 1, 12))}
                   </text>
                 </box>
               </box>
@@ -20116,8 +20154,7 @@ export default function OpenTuiApp() {
               liveText={
                 composerSendState === 'sending'
                 && composerLiveText
-                && composerTargetSession
-                && sessionKey(composerTargetSession) === sessionKey(splitSession)
+                && composerActivitySessionKey === sessionKey(splitSession)
                 && !(splitPaneLiveMessages.get(sessionKey(splitSession)) ?? []).some(isLiveAssistantTextMessage)
                   ? composerLiveText
                   : null
@@ -21146,7 +21183,7 @@ export default function OpenTuiApp() {
         )
       })() : null}
 
-      {(liveStatus === 'retrying' || liveStatus === 'compacting') && composerSendState === 'sending' ? (
+      {(liveStatus === 'retrying' || liveStatus === 'compacting') && visibleComposerSending ? (
         <box backgroundColor={theme.surface2} paddingX={1} paddingTop={1} flexDirection="row">
           <text fg={theme.amber} wrapMode="none">{'▌ '}</text>
           <text fg={theme.amber} wrapMode="none">
@@ -21160,7 +21197,7 @@ export default function OpenTuiApp() {
         </box>
       ) : null}
 
-      {composerSendState === 'sending' && composerLiveReasoning.trim() && transcriptView !== 'stream' ? (
+      {visibleComposerSending && composerLiveReasoning.trim() && transcriptView !== 'stream' ? (
         <LivePreviewCard
           title={`✻ THINKING · ${String(composerProvider ?? 'agent').toUpperCase()} · ${tuiEffort.toUpperCase()}${composerThinkingTokens > 0 ? ` · ~${composerThinkingTokens >= 1000 ? `${(composerThinkingTokens / 1000).toFixed(1)}k` : composerThinkingTokens} tok` : ''}`}
           lines={liveReasoningPreviewLines}
@@ -21173,7 +21210,7 @@ export default function OpenTuiApp() {
       {/* Pinned for the whole turn — elapsed + token counter + interrupt hint
           must not vanish the moment the first delta or tool arrives, which is
           how the native Claude CLI status line behaves. */}
-      {composerSendState === 'sending' && transcriptView !== 'chat' ? (
+      {visibleComposerSending && transcriptView !== 'chat' ? (
         <box
           backgroundColor={isChatLikeView ? theme.surface : theme.surface2}
           paddingLeft={isChatLikeView ? densityState.bodyIndent : 1}
@@ -21193,7 +21230,7 @@ export default function OpenTuiApp() {
         </box>
       ) : null}
 
-      {composerSendState !== 'sending' && reattachedRunning && !awaitingPersistedTurn && transcriptView !== 'chat' ? (
+      {!visibleComposerSending && reattachedRunning && !visibleAwaitingPersistedTurn && transcriptView !== 'chat' ? (
         <box backgroundColor={theme.surface2} paddingX={1} paddingTop={1} flexDirection="row">
           <text fg={theme.cyan} wrapMode="none">{'▌ '}</text>
           <text fg={theme.muted} wrapMode="none">
@@ -21211,7 +21248,7 @@ export default function OpenTuiApp() {
         </box>
       ) : null}
 
-      {liveToolActivities.length > 0 && activeRunningToolCount > 0 ? (
+      {visibleLiveToolActivities.length > 0 && visibleRunningToolCount > 0 ? (
         <box
           backgroundColor={isChatLikeView ? theme.surface : theme.surface2}
           paddingLeft={isChatLikeView ? densityState.bodyIndent : 1}
@@ -21222,7 +21259,7 @@ export default function OpenTuiApp() {
           <text wrapMode="none">
             {renderInlineTextSegments([
               { text: 'tools  ', fg: theme.dim },
-              ...liveToolActivities.flatMap((a, i): InlineTextSegment[] => [
+              ...visibleLiveToolActivities.flatMap((a, i): InlineTextSegment[] => [
                 ...(i > 0 ? [{ text: '  ', fg: theme.dim }] : []),
                 { text: a.label, fg: a.status === 'running' ? theme.text : theme.muted },
                 { text: a.status === 'running' ? ' ●' : ' ✓', fg: a.status === 'running' ? theme.green : theme.dim },
@@ -21232,7 +21269,7 @@ export default function OpenTuiApp() {
         </box>
       ) : null}
 
-      {(() => {
+      {composerActivityVisible ? (() => {
         const subagentEntries = Object.entries(liveSubagentText).filter(([, text]) => text.trim().length > 0)
         if (subagentEntries.length === 0) return null
         const [, latest] = subagentEntries[subagentEntries.length - 1]
@@ -21245,7 +21282,7 @@ export default function OpenTuiApp() {
             </text>
           </box>
         )
-      })()}
+      })() : null}
 
       {livePromptSuggestion && composerSendState !== 'sending' ? (
         <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
@@ -21270,7 +21307,7 @@ export default function OpenTuiApp() {
       ) : null}
 
       {composerStatusMessage ? (
-        composerSendState === 'sending' && composerLiveText && !composerError ? (
+        visibleComposerSending && visibleComposerLiveText && !visibleComposerError ? (
           isChatLikeView || liveAssistantTextCardVisible ? null : (
             <LivePreviewCard
               title={`● ASSISTANT · ${String(composerProvider ?? 'agent').toUpperCase()} · STREAMING`}
@@ -21280,7 +21317,7 @@ export default function OpenTuiApp() {
               theme={theme}
             />
           )
-        ) : awaitingPersistedTurn && !composerError ? (
+        ) : visibleAwaitingPersistedTurn && !visibleComposerError ? (
           // Reconciling a still-running turn (stall recovery or the brief
           // window after completion before persisted rows land) is not idle —
           // an animated spinner here, not static dim text, is what tells the
@@ -21290,7 +21327,7 @@ export default function OpenTuiApp() {
           </box>
         ) : (
           <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
-            <text fg={composerError ? theme.red : theme.dim} wrapMode="none">
+            <text fg={visibleComposerError ? theme.red : theme.dim} wrapMode="none">
               {fitText(
                 composerStatusMessage,
                 Math.max(width - 4, 20),
@@ -21356,7 +21393,7 @@ export default function OpenTuiApp() {
             </box>
             <box flexGrow={1} />
             <box width={composerDockFooterHintWidth} overflow="hidden">
-              <text fg={composerActive && composerSendState !== 'sending' ? composerAccentColor : theme.dim} wrapMode="none">
+              <text fg={composerActive && !visibleComposerSending ? composerAccentColor : theme.dim} wrapMode="none">
                 {composerDockSendingHintSegments
                   ? renderInlineTextSegments(composerDockSendingHintSegments, composerDockFooterHintWidth, theme.dim)
                   : fitHintText(composerDockFooterHint, composerDockFooterHintWidth)}

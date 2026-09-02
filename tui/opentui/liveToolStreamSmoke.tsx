@@ -27,6 +27,14 @@ const SESSION = {
   firstPrompt: 'Live tool smoke',
   lastModified: 1_700_000_000_000,
 }
+const OTHER_SESSION = {
+  sessionId: 'live-tool-unrelated-session',
+  provider: 'claude' as const,
+  cwd: process.cwd(),
+  summary: 'Unrelated idle tab',
+  firstPrompt: 'Unrelated idle tab',
+  lastModified: 1_699_999_999_000,
+}
 const COMMAND = 'git status --short'
 const OUTPUT = 'M  tui/opentui/App.tsx\nM  tui/format.ts\n'
 const INTRO = 'I will inspect the working tree first.'
@@ -36,6 +44,7 @@ const encoder = new TextEncoder()
 let pushFrame: (payload: unknown) => void = () => {}
 let pushEvent: (event: string, payload: unknown) => void = () => {}
 let closeStream: () => void = () => {}
+let streamClosed = false
 const streamBody = new ReadableStream<Uint8Array>({
   start(controller) {
     pushFrame = (payload) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`))
@@ -50,7 +59,7 @@ const EMPTY_DETAIL = { info: null, rawMessages: [], threadedMessages: [], contex
 const detailClient = await import('./sessionDetailWorkerClient')
 mock.module('./sessionDetailWorkerClient', () => ({
   ...detailClient,
-  readTuiSessionsAsync: async () => [SESSION],
+  readTuiSessionsAsync: async () => [SESSION, OTHER_SESSION],
   readTuiSessionDetailAsync: async () => EMPTY_DETAIL,
 }))
 const metadataClient = await import('./metadataWorkerClient')
@@ -62,7 +71,7 @@ mock.module('./metadataWorkerClient', () => ({
 const service = await import('../../lib/tui/service')
 mock.module('../../lib/tui/service', () => ({
   ...service,
-  readTuiSessions: async () => [SESSION],
+  readTuiSessions: async () => [SESSION, OTHER_SESSION],
   readTuiSessionDetail: async () => EMPTY_DETAIL,
   readTuiSessionMetadata: async () => ({ models: [], currentModel: null, contextUsage: null }),
   readTuiRuntimeActivity: async () => ({ running: [], waiting: [], attention: [] }),
@@ -191,11 +200,45 @@ try {
     throw new Error(`Claude text rendered outside the transcript or more than once:\n${runningFrame}`)
   }
 
+  // Navigate to a different session while the first session's stream remains
+  // open. The transcript cards were already session-keyed; the regression was
+  // the global composer/tool/status state continuing to render underneath the
+  // unrelated tab (and then pulling navigation back when the stream ended).
+  act(() => { setup.mockInput.pressEscape() })
+  await settle(100)
+  act(() => { setup.mockInput.pressTab() })
+  await settle(100)
+  act(() => { setup.mockInput.pressArrow('down') })
+  await settle(100)
+  act(() => { setup.mockInput.pressEnter() })
+  await settle(300)
+
+  const unrelatedFrame = setup.captureCharFrame()
+  if (
+    unrelatedFrame.includes(INTRO)
+    || unrelatedFrame.includes(COMMAND)
+    || unrelatedFrame.includes('tools  ')
+    || /⌃C cancel/.test(unrelatedFrame)
+  ) {
+    throw new Error(`Live composer state bled into the unrelated tab:\n${unrelatedFrame}`)
+  }
+
+  // Return to the origin session and prove its live status/tool card remained
+  // attached there while it was hidden.
+  act(() => { setup.mockInput.pressTab() })
+  await settle(100)
+  act(() => { setup.mockInput.pressArrow('up') })
+  await settle(100)
+  act(() => { setup.mockInput.pressEnter() })
+  await settle(300)
+  const returnedFrame = setup.captureCharFrame()
+  if (!returnedFrame.includes(INTRO) || !returnedFrame.includes(COMMAND) || !/⌃C cancel/.test(returnedFrame)) {
+    throw new Error(`Origin tab did not retain its live composer state:\n${returnedFrame}`)
+  }
+
   // Chat keeps the live-turn status as one fixed footer row immediately above
   // its composer. It must not sit inside the full-height transcript scrollbox,
   // where a short turn makes the remaining viewport look like a giant footer.
-  act(() => { setup.mockInput.pressEscape() })
-  await settle(100)
   act(() => { setup.mockInput.pressKey('v') })
   await settle(100)
   for (let index = 0; index < 5; index += 1) {
@@ -220,6 +263,18 @@ try {
       + setup.captureCharFrame(),
     )
   }
+  const idleChatComposerFrame = setup.captureCharFrame()
+  if (!idleChatComposerFrame.includes('○ COMPOSER') || !idleChatComposerFrame.includes('click to compose')) {
+    throw new Error(`Unfocused Chat composer did not expose its idle affordance:\n${idleChatComposerFrame}`)
+  }
+  act(() => { setup.mockInput.pressKey('c') })
+  await settle(150)
+  const focusedChatComposerFrame = setup.captureCharFrame()
+  if (!focusedChatComposerFrame.includes('● FOCUSED') || focusedChatComposerFrame.includes('click to compose')) {
+    throw new Error(`Focused Chat composer did not expose its active affordance:\n${focusedChatComposerFrame}`)
+  }
+  act(() => { setup.mockInput.pressEscape() })
+  await settle(100)
   // Return to Conversation so the existing detailed tool-result assertions
   // continue covering the expanded card presentation too.
   act(() => { setup.mockInput.pressKey('v') })
@@ -286,9 +341,33 @@ try {
     throw new Error(`Claude follow-up text did not stream after its tool call:\n${resultFrame}`)
   }
 
+  // Finishing in the background must not pull navigation back to the origin
+  // or move its short-lived persisted-sync spinner onto the selected tab.
+  act(() => { setup.mockInput.pressTab() })
+  await settle(100)
+  act(() => { setup.mockInput.pressArrow('down') })
+  await settle(100)
+  act(() => { setup.mockInput.pressEnter() })
+  await settle(200)
+  await act(async () => {
+    closeStream()
+    streamClosed = true
+    await setup.flush()
+    await new Promise((resolve) => setTimeout(resolve, 500))
+  })
+  const completedElsewhereFrame = setup.captureCharFrame()
+  if (
+    completedElsewhereFrame.includes(INTRO)
+    || completedElsewhereFrame.includes(OUTRO)
+    || completedElsewhereFrame.includes('Syncing transcript')
+    || /⌃C cancel/.test(completedElsewhereFrame)
+  ) {
+    throw new Error(`Background completion changed or contaminated the unrelated tab:\n${completedElsewhereFrame}`)
+  }
+
   console.log('OpenTUI live tool stream smoke passed')
 } finally {
-  closeStream()
+  if (!streamClosed) closeStream()
   act(() => {
     setup.renderer.destroy()
   })
