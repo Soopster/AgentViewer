@@ -1667,9 +1667,10 @@ function timeAgo(value?: string | number): string {
 
 const COMPOSER_MIN_HEIGHT = 6
 const COMPOSER_MAX_HEIGHT = 12
-// Chat mode keeps the input line plus one compact metadata strip underneath.
-const CHAT_COMPOSER_CHROME_HEIGHT = 1
-const CHAT_COMPOSER_MIN_HEIGHT = 2
+// Chat mode keeps the input line plus one compact metadata strip underneath;
+// the two border rows are included in the composer budget.
+const CHAT_COMPOSER_CHROME_HEIGHT = 3
+const CHAT_COMPOSER_MIN_HEIGHT = 4
 const COMPOSER_DOCK_CHROME_HEIGHT = 3
 const COMPOSER_WINDOW_MAX_WIDTH = 88
 const COMPOSER_WINDOW_MAX_HEIGHT = 24
@@ -19285,8 +19286,10 @@ export default function OpenTuiApp() {
   // otherwise the bar only shows through the "› " prefix and padding slivers.
   const composerChatTextareaStyle = {
     ...composerBaseTextareaStyle,
-    backgroundColor: chatComposerFocused ? theme.userBg : theme.surface2,
-    focusedBackgroundColor: theme.userBg,
+    // Keep focus legible through the rail/metadata and border without washing
+    // the whole input in the theme's brighter user-message background.
+    backgroundColor: theme.surface2,
+    focusedBackgroundColor: theme.surface2,
     flexGrow: 1,
   }
   const composerDockHeaderStatus = routeComposerToBridge
@@ -19355,10 +19358,6 @@ export default function OpenTuiApp() {
   const chatComposerFooterHint = chatComposerFocused
     ? composerDockFooterHint
     : 'c focus · click to compose'
-  const chatComposerStateSegments: InlineTextSegment[] = [
-    { text: chatComposerFocused ? '● FOCUSED · ' : '○ COMPOSER · ', fg: chatComposerFocused ? composerAccentColor : theme.dim },
-    ...composerDockStatsSegments,
-  ]
   const composerWindowFooterHintWidth = Math.max(
     18,
     Math.min(composerWindowFooterHint.length + 1, composerWindowContentWidth - 16),
@@ -19717,6 +19716,7 @@ export default function OpenTuiApp() {
           {showTabs ? (
             <box
               paddingX={1}
+              overflow="hidden"
               backgroundColor={theme.surface2}
             >
               <tab-select
@@ -20062,12 +20062,16 @@ export default function OpenTuiApp() {
               height={composerDockHeight}
               flexDirection="column"
               paddingX={1}
-              backgroundColor={chatComposerFocused ? theme.userBg : theme.surface}
+              backgroundColor={theme.surface2}
+              border={['top', 'left', 'right', 'bottom']}
+              borderStyle="single"
+              borderColor={theme.border}
             >
               <box
-                width="100%"
+                flexGrow={1}
+                overflow="hidden"
                 paddingX={1}
-                backgroundColor={chatComposerFocused ? theme.userBg : theme.surface2}
+                backgroundColor={theme.surface2}
                 flexDirection="row"
                 onMouseDown={(event) => {
                   if (event.button !== 0) return
@@ -20081,12 +20085,14 @@ export default function OpenTuiApp() {
                 <box flexGrow={1}>
                   {renderComposerTextarea(submitComposerFromDock, {
                     height: composerDockTextareaHeight,
-                    width: Math.max(rightPaneWidth - 6, 1),
+                    width: Math.max(rightPaneWidth - 8, 1),
                     variant: 'chat',
                   })}
                 </box>
               </box>
               <box
+                flexGrow={1}
+                overflow="hidden"
                 height={1}
                 paddingX={1}
                 flexDirection="row"
@@ -20097,7 +20103,7 @@ export default function OpenTuiApp() {
                   <text id="chat-composer-focus-state" fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none">
                     {composerSlashHint
                       ? fitText(composerSlashHint, Math.max(Math.floor((rightPaneWidth - 4) * 0.55), 12))
-                      : renderInlineTextSegments(chatComposerStateSegments, Math.max(Math.floor((rightPaneWidth - 4) * 0.55), 12), theme.dim)}
+                      : renderInlineTextSegments(composerDockStatsSegments, Math.max(Math.floor((rightPaneWidth - 4) * 0.55), 12), theme.dim)}
                   </text>
                 </box>
                 <box flexGrow={1} />

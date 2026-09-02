@@ -264,13 +264,17 @@ try {
     )
   }
   const idleChatComposerFrame = setup.captureCharFrame()
-  if (!idleChatComposerFrame.includes('› ')) {
+  if (!idleChatComposerFrame.includes('› ')
+    || idleChatComposerFrame.includes('COMPOSER')
+    || idleChatComposerFrame.includes('FOCUSED')) {
     throw new Error(`Unfocused Chat composer did not expose its input rail:\n${idleChatComposerFrame}`)
   }
   act(() => { setup.mockInput.pressKey('c') })
   await settle(150)
   const focusedChatComposerFrame = setup.captureCharFrame()
-  if (!focusedChatComposerFrame.includes('❯ ')) {
+  if (!focusedChatComposerFrame.includes('❯ ')
+    || focusedChatComposerFrame.includes('COMPOSER')
+    || focusedChatComposerFrame.includes('FOCUSED')) {
     throw new Error(`Focused Chat composer did not expose its active input rail:\n${focusedChatComposerFrame}`)
   }
   act(() => { setup.mockInput.pressEscape() })
