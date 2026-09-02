@@ -191,6 +191,45 @@ try {
     throw new Error(`Claude text rendered outside the transcript or more than once:\n${runningFrame}`)
   }
 
+  // Chat keeps the live-turn status as one fixed footer row immediately above
+  // its composer. It must not sit inside the full-height transcript scrollbox,
+  // where a short turn makes the remaining viewport look like a giant footer.
+  act(() => { setup.mockInput.pressEscape() })
+  await settle(100)
+  act(() => { setup.mockInput.pressKey('v') })
+  await settle(100)
+  for (let index = 0; index < 5; index += 1) {
+    act(() => { setup.mockInput.pressArrow('down') })
+  }
+  act(() => { setup.mockInput.pressEnter() })
+  await settle(200)
+
+  type FrameGeometry = { y: number; height: number }
+  const chatStatus = setup.renderer.root.findDescendantById('chat-turn-status') as unknown as FrameGeometry | null
+  const chatComposer = setup.renderer.root.findDescendantById('composer-dock') as unknown as FrameGeometry | null
+  if (
+    !chatStatus
+    || !chatComposer
+    || chatStatus.height !== 1
+    || chatStatus.y + chatStatus.height !== chatComposer.y
+  ) {
+    throw new Error(
+      `Chat turn status did not occupy one row directly above the composer `
+      + `(status=${chatStatus ? `${chatStatus.y}/${chatStatus.height}` : 'missing'}, `
+      + `composer=${chatComposer ? `${chatComposer.y}/${chatComposer.height}` : 'missing'}):\n`
+      + setup.captureCharFrame(),
+    )
+  }
+  // Return to Conversation so the existing detailed tool-result assertions
+  // continue covering the expanded card presentation too.
+  act(() => { setup.mockInput.pressKey('v') })
+  await settle(100)
+  for (let index = 0; index < 5; index += 1) {
+    act(() => { setup.mockInput.pressArrow('up') })
+  }
+  act(() => { setup.mockInput.pressEnter() })
+  await settle(200)
+
   // The tool's real result arrives while the turn is still streaming.
   await emitFrame({
     type: 'user',

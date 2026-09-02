@@ -7786,6 +7786,11 @@ export default function OpenTuiApp() {
   const [tuiCopilotMode, setTuiCopilotMode] = useState<'interactive' | 'plan' | 'autopilot' | 'shell'>('interactive')
   const [tuiOpenCodeAgent, setTuiOpenCodeAgent] = useState('')
   const [tuiModelOverride, setTuiModelOverride] = useState<Record<string, string>>({})
+  // Provider-reported models are separate from explicit overrides: using the
+  // latter for discovery would silently force a model on the next send. Keep
+  // null as a settled "provider default" result so the footer cannot claim it
+  // is loading forever after a completed lookup with no concrete model.
+  const [tuiReportedModelByKey, setTuiReportedModelByKey] = useState<Record<string, string | null>>({})
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
   const [modelPickerTarget, setModelPickerTarget] = useState<Session | null>(null)
   const [modelPickerFocus, setModelPickerFocus] = useState<ModelPickerFocus>('model')
@@ -7842,7 +7847,6 @@ export default function OpenTuiApp() {
   const tabSelectRef = useRef<TabSelectRenderable>(null)
   const sessionRequestRef = useRef(0)
   const detailRequestRef = useRef(0)
-  const metadataRequestRef = useRef(0)
   const backgroundMetadataCursorRef = useRef(0)
   const providerSwitchRef = useRef(false)
   const readerStateWriteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -9370,12 +9374,17 @@ export default function OpenTuiApp() {
     const targetKey = sessionKey(composerTargetSession)
     const modelOverride = tuiModelOverride[targetKey]
     const selectedDetailModel = composerTargetSessionInfo?.currentModel
+    const reportedModel = tuiReportedModelByKey[targetKey]
     const contextModel = selectedSessionKey === targetKey ? contextUsage?.model : undefined
-    const rawModel = modelOverride ?? selectedDetailModel ?? contextModel
+    const rawModel = modelOverride ?? selectedDetailModel ?? reportedModel ?? contextModel
     if (!rawModel) return null
     const model = formatModelChipValue(rawModel)
     return model && model.toLowerCase() !== 'unknown' ? model : null
-  }, [composerTargetSession, composerTargetSessionInfo, contextUsage, selectedSessionKey, tuiModelOverride])
+  }, [composerTargetSession, composerTargetSessionInfo, contextUsage, selectedSessionKey, tuiModelOverride, tuiReportedModelByKey])
+  const composerModelLookupSettled = Boolean(
+    composerTargetSessionIdentity
+    && Object.prototype.hasOwnProperty.call(tuiReportedModelByKey, composerTargetSessionIdentity),
+  )
   const filteredModelPickerOptions = useMemo(
     () => filterModelPickerOptions(modelPickerOptions, modelPickerQuery),
     [modelPickerOptions, modelPickerQuery],
@@ -9430,10 +9439,9 @@ export default function OpenTuiApp() {
     } else if (composerTargetSession?.provider && composerTargetSession.provider !== 'claude-acp' && composerTargetSession.provider !== 'codex-acp') {
       // Custom-model providers (LM Studio, opencode/copilot custom endpoints,
       // Claude on a non-default deployment) can take a moment to report their
-      // current model on a cold session — surface that instead of silently
-      // omitting the chip, so it's clear a send won't yet know which model
-      // it's hitting.
-      parts.push({ text: 'model:loading…', fg: theme.dim })
+      // current model on a cold session. Show the in-flight state, then settle
+      // on "auto" when the provider intentionally reports no concrete model.
+      parts.push({ text: composerModelLookupSettled ? 'model:auto' : 'model:loading…', fg: theme.dim })
     }
     if (composerContextUsage) parts.push({ text: `ctx:${composerContextUsage}`, fg: theme.green })
     parts.push({ text: `effort:${tuiEffort}`, fg: theme.amber })
@@ -9459,7 +9467,7 @@ export default function OpenTuiApp() {
       parts.push({ text: 'workflow:on', fg: theme.cyan })
     }
     return parts
-  }, [composerAccentColor, composerCodexApproval, composerContextUsage, composerCopilotContextTier, composerCopilotPermissionMode, composerCurrentModel, composerEnableWorkflow, composerPermissionMode, composerTargetSession?.provider, theme.amber, theme.cyan, theme.dim, theme.green, theme.red, theme.violet, tuiCopilotMode, tuiEffort, tuiOpenCodeAgent])
+  }, [composerAccentColor, composerCodexApproval, composerContextUsage, composerCopilotContextTier, composerCopilotPermissionMode, composerCurrentModel, composerEnableWorkflow, composerModelLookupSettled, composerPermissionMode, composerTargetSession?.provider, theme.amber, theme.cyan, theme.dim, theme.green, theme.red, theme.violet, tuiCopilotMode, tuiEffort, tuiOpenCodeAgent])
   const composerKnobsChip = useMemo(
     () => composerKnobSegments.length > 0
       ? `· ${composerKnobSegments.map((part) => part.text).join(' · ')}`
@@ -10111,11 +10119,15 @@ export default function OpenTuiApp() {
     () => liveToolActivities.reduce((n, a) => (a.status === 'running' ? n + 1 : n), 0),
     [liveToolActivities],
   )
+  // A stalled owned stream can drop composerSendState to idle while the turn
+  // continues server-side. Treat reconciliation and reattachment as running
+  // everywhere that reserves or renders the live-turn status row.
+  const turnRunningForComposer = composerSendState === 'sending' || reattachedRunning || awaitingPersistedTurn
   const hasComposerStatusMessage = Boolean(
     composerError
-    // Chat view renders every turn-activity spinner as the transcript's own
-    // trailing row (see chat-turn-activity below), so the sync spinner must not
-    // also claim a row here — two spinners for one turn.
+    // Chat view renders turn activity in its compact in-frame status row, so
+    // the sync spinner must not also claim a sibling row here — two spinners
+    // for one turn.
     || (awaitingPersistedTurn && transcriptView !== 'chat')
     || activeQueuedComposerSends.length > 0
     || (composerSendState === 'sending' && Boolean(composerLiveText))
@@ -10196,8 +10208,8 @@ export default function OpenTuiApp() {
     let rows = 0
     // Keep in sync with the pinned turn-status row below (rendered for the
     // entire turn, not just the pre-output window).
-    // Chat view moves the pinned turn status into the transcript tail, so it
-    // costs scroll content rather than layout budget here.
+    // Chat view owns a compact status row inside the reader frame, so it comes
+    // out of transcriptViewportRows rather than this sibling-status budget.
     if (composerSendState === 'sending' && transcriptView !== 'chat') rows += 2
     if (hasSubagentTail) rows += 2
     if (liveToolActivities.length > 0 && activeRunningToolCount > 0) rows += 2
@@ -10450,6 +10462,7 @@ export default function OpenTuiApp() {
     return streamCompletedTurnHint(visibleTranscriptCards)
   }, [awaitingPersistedTurn, composerSendState, reattachedRunning, transcriptView, visibleTranscriptCards])
   const streamActionFooterRows = isChatLikeView && transcriptView !== 'chat' && visibleTranscriptCards.length > 0 ? 1 : 0
+  const chatTurnStatusRows = transcriptView === 'chat' && turnRunningForComposer && visibleTranscriptCards.length > 0 ? 1 : 0
   const transcriptViewportRows = Math.max(
     readerRowBudget
     // Fullscreen removes the two-row reader frame, leaving only the compact
@@ -10459,6 +10472,10 @@ export default function OpenTuiApp() {
     // Fleet strip is one header row when visible.
     - (fleetStripVisible ? 1 : 0)
     - streamActionFooterRows
+    // Pin Chat's live-turn status directly above its composer. Keeping this
+    // outside the scrollbox prevents a short transcript from leaving the
+    // spinner at the top of an otherwise empty full-height viewport.
+    - chatTurnStatusRows
     // The chat-mode composer bar lives inside this same bordered box, below
     // the scrollbox, so its rows come out of the viewport budget here.
     - (transcriptView === 'chat' && !composerWindowOpen && !composerHidden ? composerDockHeight : 0),
@@ -11069,7 +11086,9 @@ export default function OpenTuiApp() {
     if (session.provider === 'claude') {
       const isPreviewingSession = tabsEnabledRef.current
         && !openTabSessionsRef.current.some((openSession) => sessionKey(openSession) === cacheKey)
-      if (isPreviewingSession) return
+      const activeComposerTarget = composerTargetSessionRef.current
+      const isComposerTarget = Boolean(activeComposerTarget && sessionKey(activeComposerTarget) === cacheKey)
+      if (isPreviewingSession && !isComposerTarget) return
 
       if (
         includeContextUsage
@@ -11097,7 +11116,6 @@ export default function OpenTuiApp() {
     )
     if (!shouldFetchMetadata) return
 
-    const metadataRequestId = ++metadataRequestRef.current
     sessionMetadataInFlightRef.current.add(cacheKey)
     if (includeContextUsage && foreground && isSelectedTab) {
       setContextUsageStatus('loading')
@@ -11109,12 +11127,22 @@ export default function OpenTuiApp() {
       }),
     ])
       .then((metadata) => {
-        if (metadataRequestId !== metadataRequestRef.current) return
+        // Metadata reads are session-scoped and may legitimately overlap (the
+        // reader can show one session while the composer auto-targets another).
+        // A single global request id made the newer request discard the older
+        // session's valid result, leaving that composer's chip on "loading".
+        const isStillSelectedTab = cacheKey === selectedSessionKeyRef.current
         const pinnedKeys = new Set([
           ...openTabSessionsRef.current.map((openSession) => sessionKey(openSession)),
           selectedSessionKeyRef.current,
         ].filter((key): key is string => Boolean(key)))
         touchMapEntry(sessionMetadataFetchedAtRef.current, cacheKey, Date.now())
+        const reportedModel = metadata?.currentModel ?? null
+        setTuiReportedModelByKey((prev) => (
+          Object.prototype.hasOwnProperty.call(prev, cacheKey) && prev[cacheKey] === reportedModel
+            ? prev
+            : { ...prev, [cacheKey]: reportedModel }
+        ))
         if (!metadata) {
           pruneSessionCaches(
             sessionDetailCacheRef.current,
@@ -11122,7 +11150,7 @@ export default function OpenTuiApp() {
             sessionMetadataFetchedAtRef.current,
             pinnedKeys,
           )
-          if (includeContextUsage && foreground && isSelectedTab) {
+          if (includeContextUsage && foreground && isStillSelectedTab) {
             startTransition(() => setContextUsageStatus('unavailable'))
           }
           return
@@ -11130,7 +11158,7 @@ export default function OpenTuiApp() {
         startTransition(() => {
           if (includeContextUsage && metadata.contextUsage) {
             touchMapEntry(sessionContextUsageCacheRef.current, cacheKey, metadata.contextUsage)
-            if (isSelectedTab) {
+            if (isStillSelectedTab) {
               setContextUsage(metadata.contextUsage)
               setContextUsageStatus('ready')
             }
@@ -11172,13 +11200,18 @@ export default function OpenTuiApp() {
             sessionMetadataFetchedAtRef.current,
             pinnedKeys,
           )
-          if (includeContextUsage && !metadata.contextUsage && isSelectedTab) {
+          if (includeContextUsage && !metadata.contextUsage && isStillSelectedTab) {
             setContextUsageStatus('unavailable')
           }
         })
       })
       .catch(() => {
-        if (includeContextUsage && foreground && isSelectedTab) {
+        setTuiReportedModelByKey((prev) => (
+          Object.prototype.hasOwnProperty.call(prev, cacheKey) && prev[cacheKey] === null
+            ? prev
+            : { ...prev, [cacheKey]: null }
+        ))
+        if (includeContextUsage && foreground && cacheKey === selectedSessionKeyRef.current) {
           startTransition(() => setContextUsageStatus('unavailable'))
         }
       })
@@ -11186,6 +11219,19 @@ export default function OpenTuiApp() {
         sessionMetadataInFlightRef.current.delete(cacheKey)
       })
   }, [])
+
+  // The composer can target a different session from the reader (most often
+  // the provider's sole running turn). Resolve metadata for that actual target
+  // instead of waiting for a reader-detail load that may never happen.
+  useEffect(() => {
+    const targetKey = composerTargetSessionIdentity
+    if (!bootstrapped || !targetKey || composerCurrentModel || composerModelLookupSettled) return
+    const target = composerTargetSessionRef.current
+    if (!target || sessionKey(target) !== targetKey) return
+    if (target.provider === 'claude-acp' || target.provider === 'codex-acp') return
+    const cached = sessionDetailCacheRef.current.get(targetKey) ?? null
+    refreshSessionMetadata(target, false, cached ?? undefined, cached, false)
+  }, [bootstrapped, composerCurrentModel, composerModelLookupSettled, composerTargetSessionIdentity, refreshSessionMetadata])
 
   const refreshSelectedSessionDetail = useCallback(async (session: Session, foreground = true) => {
     const cacheKeyForGuards = sessionKey(session)
@@ -15607,18 +15653,11 @@ export default function OpenTuiApp() {
     return segs
   }, [attentionNeedsInputCount, commandChordPending, composerActive, composerSendState, diffLayout, transcriptView, density, transcriptWidth, showToolCalls, velocityScrollEnabled, visibleSplitPaneCount, splitChordPending, splitFocusIndex, effectiveFocus, theme])
 
-  // awaitingPersistedTurn belongs here too: a Claude stream stall (see the
-  // stallGuard comment above the read loop) drops composerSendState back to
-  // 'idle' and never sets reattachedRunning, but the turn is still genuinely
-  // running server-side while the transcript reconciles. Without this, the
-  // idle ticker ("waiting patiently") rendered right through a live turn —
-  // the exact bug 907bb64 fixed for the sending/reattached cases.
-  const turnRunningForComposer = composerSendState === 'sending' || reattachedRunning || awaitingPersistedTurn
   const composerStatusMessage = composerError
     ? composerError
     : activeQueuedComposerSends.length > 0 && !composerQueueDurable
       ? 'Queue persistence failed · keep this TUI open or edit the message back into the composer.'
-    // Chat view shows this as the transcript's own trailing spinner row.
+    // Chat view shows this in the compact row directly above its composer.
     : awaitingPersistedTurn && transcriptView !== 'chat'
       ? 'Syncing transcript…'
       : activeQueuedComposerSends.length > 0 && turnRunningForComposer
@@ -19913,45 +19952,6 @@ export default function OpenTuiApp() {
                   )
                 ) : null}
 
-                {/* Chat view's activity indicator lives at the tail of the
-                    conversation itself, the way the next message would — a
-                    turn is visibly in progress without the eye leaving the
-                    transcript. The equivalent rows below the composer are
-                    suppressed for chat (and their height not reserved), so
-                    exactly one spinner is on screen per running turn. */}
-                {transcriptView === 'chat' && turnRunningForComposer ? (
-                  <box
-                    key="chat-turn-activity"
-                    marginBottom={densityState.cardGap}
-                    paddingLeft={densityState.bodyIndent}
-                    flexDirection="row"
-                  >
-                    <text fg={theme.cyan} wrapMode="none">{'● '}</text>
-                    <box flexGrow={1}>
-                      {composerSendState === 'sending' ? (
-                        <ComposerWaitingStatus
-                          startedAt={composerSendStartedAt}
-                          seed={composerWaitingStatusSeed}
-                          suffix={composerWaitingSuffix}
-                          theme={theme}
-                          width={Math.max(rightPaneWidth - densityState.bodyIndent - 6, 16)}
-                        />
-                      ) : (
-                        <Spinner
-                          label={fitText(
-                            awaitingPersistedTurn
-                              ? 'Syncing transcript…'
-                              : 'Turn running · reattached — output syncs as it persists · ⌃C interrupt',
-                            Math.max(rightPaneWidth - densityState.bodyIndent - 6, 16),
-                          )}
-                          fg={theme.cyan}
-                          labelFg={theme.dim}
-                        />
-                      )}
-                    </box>
-                  </box>
-                ) : null}
-
                 {streamTurnFooterText ? (
                   <box key="stream-turn-footer" paddingX={1} marginBottom={densityState.cardGap}>
                     <text fg={theme.dim} width={Math.max(rightPaneWidth - 5, 12)} wrapMode="none" selectable>
@@ -19976,8 +19976,42 @@ export default function OpenTuiApp() {
             ) : null}
           </box>
 
+          {chatTurnStatusRows > 0 ? (
+            <box
+              id="chat-turn-status"
+              height={1}
+              flexShrink={0}
+              paddingLeft={densityState.bodyIndent + 1}
+              flexDirection="row"
+            >
+              <text fg={theme.cyan} wrapMode="none">{'● '}</text>
+              <box flexGrow={1}>
+                {composerSendState === 'sending' ? (
+                  <ComposerWaitingStatus
+                    startedAt={composerSendStartedAt}
+                    seed={composerWaitingStatusSeed}
+                    suffix={composerWaitingSuffix}
+                    theme={theme}
+                    width={Math.max(rightPaneWidth - densityState.bodyIndent - 6, 16)}
+                  />
+                ) : (
+                  <Spinner
+                    label={fitText(
+                      awaitingPersistedTurn
+                        ? 'Syncing transcript…'
+                        : 'Turn running · reattached — output syncs as it persists · ⌃C interrupt',
+                      Math.max(rightPaneWidth - densityState.bodyIndent - 6, 16),
+                    )}
+                    fg={theme.cyan}
+                    labelFg={theme.dim}
+                  />
+                )}
+              </box>
+            </box>
+          ) : null}
+
           {/* The idle ticker means "nothing is happening — still watching". A
-              running turn has its own pinned status row below the composer
+              running turn has its own pinned status row next to the composer
               (elapsed, tokens, interrupt hint), so showing both put a spinner
               reading "waiting patiently" directly above one reading "Shaping
               the next move… 2s". Exactly one spinner is on screen at a time,
@@ -19985,9 +20019,9 @@ export default function OpenTuiApp() {
 
               Chat view drops it entirely: the clause it used to render under
               was `turnRunningForComposer`, i.e. it existed only as an in-turn
-              activity hint inside the reader box, which the pinned status row
-              now does properly. Chat has no idle ticker rather than gaining a
-              new one it never had. */}
+              activity hint inside the reader box. It is now a compact row
+              immediately above the composer. Chat has no idle ticker rather
+              than gaining a new one it never had. */}
           {followTail && visibleTranscriptCards.length > 0
             && !turnRunningForComposer && transcriptView !== 'chat' ? (
             <box paddingX={2} paddingBottom={1}>
@@ -20000,7 +20034,7 @@ export default function OpenTuiApp() {
             // a full-width highlighted bar in the same style as a user message
             // row, inside the same border as the transcript, so it reads as
             // the next line of the conversation rather than a docked control.
-            <box width="100%" height={composerDockHeight} flexDirection="column" paddingX={1}>
+            <box id="composer-dock" width="100%" height={composerDockHeight} flexDirection="column" paddingX={1}>
               <box
                 width="100%"
                 paddingX={1}
