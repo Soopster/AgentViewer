@@ -34,7 +34,7 @@ import type {
   TaskUpdateOutput,
   TaskListOutput,
 } from '@anthropic-ai/claude-agent-sdk/sdk-tools'
-import { getAssistantLabel } from '@/lib/provider'
+import { getAssistantDisplayName } from '@/lib/provider'
 import { buildDiffCommentComposerPrompt } from '@/lib/diffCommentComposer'
 import { answerTextFor, parseAskUserAnswers, selectedOptionLabels, type AskUserAnswers, type AskUserOption, type AskUserQuestionSpec } from '@/lib/askUserAnswers'
 import { Separator } from '@/components/ui/separator'
@@ -2341,7 +2341,7 @@ function AgentCard({ thread }: { thread: ToolThread }) {
                       <div key={msg.uuid} style={{ borderBottom: '1px solid var(--border)', padding: '6px 14px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3, flexWrap: 'wrap' }}>
                           <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, fontWeight: 600, color: isAssistant ? c : 'var(--text-3)', letterSpacing: '0.06em' }}>
-                            {isAssistant ? 'CLAUDE' : 'USER'}
+                            {isAssistant ? 'Claude' : 'You'}
                           </span>
                           {tools.length > 0 && (
                             <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>
@@ -2614,7 +2614,7 @@ function OpenCodeTaskCard({ thread }: { thread: ToolThread }) {
                       <div key={msg.uuid} style={{ borderBottom: '1px solid var(--border)', padding: '6px 14px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3, flexWrap: 'wrap' }}>
                           <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, fontWeight: 600, color: isAssistant ? c : 'var(--text-3)', letterSpacing: '0.06em' }}>
-                            {isAssistant ? 'AGENT' : 'USER'}
+                            {isAssistant ? 'Agent' : 'You'}
                           </span>
                           {tools.length > 0 && (
                             <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>
@@ -4309,11 +4309,9 @@ function RenderThinking({ block }: { block: ThinkingBlock }) {
         }}
       >
         <span style={{
-          fontFamily: "'IBM Plex Mono', monospace",
           fontSize: 11,
           color: 'var(--violet)',
           fontWeight: 600,
-          letterSpacing: '0.1em',
           flexShrink: 0,
           marginTop: 2,
           background: 'rgba(139,128,240,0.1)',
@@ -4321,7 +4319,7 @@ function RenderThinking({ block }: { block: ThinkingBlock }) {
           borderRadius: 3,
           padding: '1px 5px',
         }}>
-          THINK
+          Thinking
         </span>
         {!open && (
           <span style={{
@@ -6382,8 +6380,8 @@ function AgentsViewMessageItem({ message, showSession, hydrated, roleLabel }: {
 
 const ROLE_STYLE = {
   assistant: { dot: 'var(--violet)', glow: 'var(--violet-glow)', labelColor: 'var(--violet)' },
-  user:      { dot: 'var(--cyan)',   glow: 'var(--cyan-glow)',   label: 'USER',   labelColor: 'var(--cyan)'   },
-  system:    { dot: 'var(--yellow)', glow: 'rgba(251,191,36,0.18)', label: 'SYSTEM', labelColor: 'var(--yellow)' },
+  user:      { dot: 'var(--cyan)',   glow: 'var(--cyan-glow)',   label: 'You',    labelColor: 'var(--cyan)'   },
+  system:    { dot: 'var(--yellow)', glow: 'rgba(251,191,36,0.18)', label: 'System', labelColor: 'var(--yellow)' },
 } as const
 
 export type MessageDensity = 'comfortable' | 'balanced' | 'dense'
@@ -6485,7 +6483,7 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
   const style = ROLE_STYLE[message.role]
   const flatItem = useColorTreatment() === 'flat'
   const roleLabel = message.role === 'assistant'
-    ? getAssistantLabel(message.provider)
+    ? getAssistantDisplayName(message.provider)
     : ROLE_STYLE[message.role].label
 
   if (viewMode === 'agents' && !isBridgeMessage) {
@@ -6549,10 +6547,8 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
         <div className="msg-label" style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: dc.labelGap }}>
           <span
             style={{
-              fontFamily: "'Oxanium', monospace",
-              fontSize: 11,
-              fontWeight: 700,
-              letterSpacing: '0.12em',
+              fontSize: 12,
+              fontWeight: 600,
               color: style.labelColor,
             }}
           >

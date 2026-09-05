@@ -137,3 +137,19 @@ export function isAgentProvider(value: unknown): value is AgentProvider {
 export function isProviderSelection(value: unknown): value is ProviderSelection {
   return value === 'all' || isAgentProvider(value)
 }
+
+/**
+ * Sentence-case assistant name for the web UI. `getAssistantLabel` returns the
+ * all-caps form the terminal UIs render; the web chrome reads as prose, so it
+ * uses this instead.
+ */
+export function getAssistantDisplayName(provider: AgentProvider | undefined): string {
+  if (provider === 'codex') return 'Codex'
+  if (provider === 'opencode') return 'OpenCode'
+  if (provider === 'copilot') return 'Copilot'
+  if (provider === 'pi') return 'Pi'
+  if (provider === 'lmstudio') return 'LM Studio'
+  if (provider === 'claude-acp') return 'Claude (ACP)'
+  if (provider === 'codex-acp') return 'Codex (ACP)'
+  return 'Claude'
+}

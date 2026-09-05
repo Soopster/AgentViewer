@@ -3654,8 +3654,7 @@ body {
   outline: none;
   background: transparent;
   color: var(--text);
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .av-session-viz-search input::placeholder {
@@ -3683,15 +3682,14 @@ body {
 }
 
 .av-session-viz-filterbar button {
-  height: 28px;
+  height: 26px;
   border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface-2);
+  border-radius: 6px;
+  background: transparent;
   color: var(--text-3);
   cursor: pointer;
   flex-shrink: 0;
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 10px;
+  font-size: 12px;
   padding: 0 10px;
 }
 
@@ -3713,8 +3711,7 @@ body {
 }
 
 .av-session-viz-result-count {
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 10px;
+  font-size: 12px;
   color: var(--text-3);
   white-space: nowrap;
 }
@@ -3779,7 +3776,7 @@ body {
   gap: 10px;
   align-items: center;
   border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--surface) 96%, var(--cyan));
+  background: var(--surface);
   padding: 10px 32px;
 }
 

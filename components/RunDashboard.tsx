@@ -15,7 +15,7 @@ import {
   Wrench,
 } from 'lucide-react'
 import type { AgentProvider, ApiMessage, ContentBlock, Session, SessionMessage, ToolResultBlock, ToolUseBlock } from '@/lib/types'
-import { getAssistantLabel } from '@/lib/provider'
+import { getAssistantDisplayName } from '@/lib/provider'
 import { pathBasename } from '@/lib/projectPaths'
 import { cn } from '@/lib/utils'
 
@@ -268,7 +268,7 @@ const RunRow = memo(function RunRow({
         <span className="av-run-title-line">
           <StatusBadge status={row.status} reason={row.statusReason} />
           <strong title={row.title}>{row.title}</strong>
-          <em style={{ color: providerTone(row.provider) }}>{getAssistantLabel(row.provider)}</em>
+          <em style={{ color: providerTone(row.provider) }}>{getAssistantDisplayName(row.provider)}</em>
         </span>
         <span className="av-run-cause" title={row.statusReason}>
           <CircleHelp aria-hidden="true" />

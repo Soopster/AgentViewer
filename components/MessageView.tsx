@@ -480,8 +480,8 @@ function normalizeSelectValue(value: string | null | undefined): string | null {
 }
 
 function effortLabel(level: ReasoningEffortLevel): string {
-  if (level === 'xhigh') return 'XHIGH'
-  return level.toUpperCase()
+  if (level === 'xhigh') return 'Extra high'
+  return level.charAt(0).toUpperCase() + level.slice(1)
 }
 
 function gitSummariesMatch(left: GitSummary | null, right: GitSummary | null): boolean {
@@ -2673,7 +2673,7 @@ function PlanApprovalCard({
             opacity: busy ? 0.55 : 1,
           }}
         >
-          {busy ? 'STARTING…' : 'APPROVE · AUTO-ACCEPT EDITS'}
+          {busy ? 'Starting…' : 'Approve · auto-accept edits'}
         </Button>
       </div>
     </div>
@@ -7734,23 +7734,18 @@ function MessageViewInner({
 
         <div style={{ textAlign: 'center' }}>
           <div style={{
-            fontFamily: "'Oxanium', monospace",
-            fontSize: 11,
+            fontSize: 14,
             fontWeight: 600,
-            letterSpacing: '0.14em',
-            textTransform: 'uppercase',
-            color: 'var(--text-3)',
+            color: 'var(--text-2)',
             marginBottom: 8,
           }}>
             No session selected
           </div>
           <div style={{
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 11,
+            fontSize: 12,
             color: 'var(--text-3)',
-            letterSpacing: '0.03em',
           }}>
-            ← Choose a session from the sidebar
+            Choose a session from the sidebar to get started
           </div>
         </div>
       </div>
@@ -7784,12 +7779,9 @@ function MessageViewInner({
         {isProject && (
           <span
             style={{
-              fontFamily: "'Oxanium', monospace",
               fontSize: 14,
               fontWeight: 600,
-              letterSpacing: '0.06em',
               color: 'var(--text)',
-              textTransform: 'uppercase',
             }}
           >
             {dirName}
@@ -7813,7 +7805,7 @@ function MessageViewInner({
                 flexShrink: 0,
               }}
             >
-              ALL SESSIONS
+              All sessions
             </span>
             <span
               style={{
@@ -7829,7 +7821,7 @@ function MessageViewInner({
                 flexShrink: 0,
               }}
             >
-              {projectView.providerMode === 'all' ? 'ALL PROVIDERS' : 'CURRENT PROVIDER'}
+              {projectView.providerMode === 'all' ? 'All providers' : 'Current provider'}
             </span>
           </>
         )}
@@ -7915,13 +7907,11 @@ function MessageViewInner({
             border: '1px solid var(--border)',
             borderRadius: 5,
             color: 'var(--text-2)',
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 11,
-            letterSpacing: '0.08em',
+            fontSize: 12,
             textDecoration: 'none',
           }}
         >
-          📈 ALL SESSIONS
+          Analytics
         </Link>
 
         {/* Embedded TUI terminal */}
@@ -7941,14 +7931,12 @@ function MessageViewInner({
             border: '1px solid var(--border)',
             borderRadius: 5,
             color: 'var(--text-2)',
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 11,
-            letterSpacing: '0.08em',
+            fontSize: 12,
             textDecoration: 'none',
           }}
         >
           <Terminal size={13} strokeWidth={2.2} />
-          TERMINAL
+          Terminal
         </Link>
 
         {/* Analytics */}
@@ -7967,13 +7955,11 @@ function MessageViewInner({
               border: '1px solid var(--border)',
               borderRadius: 5,
               color: 'var(--text-2)',
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              letterSpacing: '0.08em',
+              fontSize: 12,
               cursor: 'pointer',
             }}
           >
-            📊 ANALYTICS
+            Session stats
           </Button>
         )}
 
@@ -7994,13 +7980,13 @@ function MessageViewInner({
             className="av-hover-control"
             style={{
               height: 26, padding: '0 10px', borderRadius: 5, cursor: 'pointer',
-              background: viewDropdownOpen ? 'rgba(139,92,246,0.18)' : 'rgba(139,92,246,0.08)',
-              border: '1px solid rgba(139,92,246,0.22)',
-              color: 'var(--violet)',
-              fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.08em',
+              background: viewDropdownOpen ? 'var(--surface-3)' : 'transparent',
+              border: '1px solid var(--border)',
+              color: 'var(--text-2)',
+              fontSize: 12,
             }}
           >
-            VIEW ▾
+            View ▾
           </button>
           {viewDropdownOpen && (
             <div style={{
@@ -8012,32 +7998,32 @@ function MessageViewInner({
             }}>
               {/* Visualiser toggle */}
               <button type="button" className="av-hover-control" onClick={() => { setShowVisualizer(v => !v); setShowReviewMode(false); setViewDropdownOpen(false) }}
-                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: showVisualizer ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
+                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: showVisualizer ? 'var(--cyan)' : 'var(--text-2)', fontSize: 12, textAlign: 'left' }}>
                 <ChartNetwork style={{ width: 13, height: 13, flexShrink: 0 }} />
-                {showVisualizer ? 'TRANSCRIPT' : 'VISUALISER'}
+                {showVisualizer ? 'Transcript' : 'Visualiser'}
               </button>
               {!isProject && session?.cwd && (
                 <button type="button" className="av-hover-control" onClick={() => { setShowReviewMode(v => !v); setShowVisualizer(false); setViewDropdownOpen(false) }}
-                  style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: showReviewMode ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: showReviewMode ? 'var(--cyan)' : 'var(--text-2)', fontSize: 12, textAlign: 'left' }}>
                   <FileCode2 style={{ width: 13, height: 13, flexShrink: 0 }} />
-                  {showReviewMode ? 'TRANSCRIPT' : 'REVIEW'}
+                  {showReviewMode ? 'Transcript' : 'Review changes'}
                 </button>
               )}
               {/* Tasks toggle */}
               {!isProject && taskRegistry.size > 0 && (
                 <button type="button" className="av-hover-control" onClick={() => { setTaskRailOpen(v => !v); setViewDropdownOpen(false) }}
-                  style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: taskRailOpen ? 'var(--amber)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
-                  ☐ TASKS · {taskRegistry.size}
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: taskRailOpen ? 'var(--amber)' : 'var(--text-2)', fontSize: 12, textAlign: 'left' }}>
+                  ☐ Tasks · {taskRegistry.size}
                 </button>
               )}
               <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
               {/* View mode */}
-              <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>MESSAGES</div>
+              <div style={{ padding: '4px 14px 2px', fontSize: 11, fontWeight: 600, color: 'var(--text-3)' }}>Messages</div>
               {(['conversation', 'continue', 'stream', 'agents'] as const).map((mode) => (
                 <button key={mode} type="button" className="av-hover-control"
                   onClick={() => { setViewMode(mode); setViewDropdownOpen(false) }}
-                  style={{ padding: '6px 14px', background: viewMode === mode || (mode === 'conversation' && viewMode === 'full') ? 'rgba(139,92,246,0.1)' : 'transparent', border: 0, cursor: 'pointer', color: viewMode === mode || (mode === 'conversation' && viewMode === 'full') ? 'var(--violet)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
-                  {mode === 'conversation' ? 'FULL' : mode === 'continue' ? 'CONT' : mode === 'stream' ? 'STREAM' : 'AGENTS'}
+                  style={{ padding: '6px 14px', background: viewMode === mode || (mode === 'conversation' && viewMode === 'full') ? 'rgba(139,92,246,0.1)' : 'transparent', border: 0, cursor: 'pointer', color: viewMode === mode || (mode === 'conversation' && viewMode === 'full') ? 'var(--violet)' : 'var(--text-2)', fontSize: 12, textAlign: 'left' }}>
+                  {mode === 'conversation' ? 'Full' : mode === 'continue' ? 'Continue' : mode === 'stream' ? 'Stream' : 'Agents'}
                   <span style={{ color: 'var(--text-3)', marginLeft: 8, fontSize: 10 }}>
                     {mode === 'conversation' ? 'all cards' : mode === 'continue' ? 'no tools' : mode === 'stream' ? 'plain text' : 'AgentsView cards'}
                   </span>
@@ -8045,86 +8031,86 @@ function MessageViewInner({
               ))}
               <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
               {/* Density */}
-              <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>DENSITY</div>
+              <div style={{ padding: '4px 14px 2px', fontSize: 11, fontWeight: 600, color: 'var(--text-3)' }}>Density</div>
               {(['comfortable', 'balanced', 'dense'] as const).map((d) => (
                 <button key={d} type="button" className="av-hover-control"
                   onClick={() => { setDensity(d); setViewDropdownOpen(false) }}
-                  style={{ padding: '6px 14px', background: density === d ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: density === d ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
-                  {d === 'comfortable' ? 'COMFY' : d.toUpperCase()}
+                  style={{ padding: '6px 14px', background: density === d ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: density === d ? 'var(--cyan)' : 'var(--text-2)', fontSize: 12, textAlign: 'left' }}>
+                  {d === 'comfortable' ? 'Comfortable' : d === 'balanced' ? 'Balanced' : 'Dense'}
                 </button>
               ))}
               <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
               {/* Timeline width */}
-              <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>WIDTH</div>
+              <div style={{ padding: '4px 14px 2px', fontSize: 11, fontWeight: 600, color: 'var(--text-3)' }}>Width</div>
               {(['centered', 'full'] as const).map((w) => (
                 <button key={w} type="button" className="av-hover-control"
                   onClick={() => { setTimelineWidth(w); setViewDropdownOpen(false) }}
-                  style={{ padding: '6px 14px', background: timelineWidth === w ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: timelineWidth === w ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', whiteSpace: 'nowrap' }}>
-                  {w.toUpperCase()}
-                  <span style={{ color: 'var(--text-3)', marginLeft: 8, fontSize: 10 }}>
+                  style={{ padding: '6px 14px', background: timelineWidth === w ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: timelineWidth === w ? 'var(--cyan)' : 'var(--text-2)', fontSize: 12, textAlign: 'left', whiteSpace: 'nowrap' }}>
+                  {w === 'centered' ? 'Centered' : 'Full width'}
+                  <span style={{ color: 'var(--text-3)', marginLeft: 8, fontSize: 11 }}>
                     {w === 'centered' ? 'readable column' : 'whole window'}
                   </span>
                 </button>
               ))}
               <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
               {/* Color treatment */}
-              <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>COLOR</div>
+              <div style={{ padding: '4px 14px 2px', fontSize: 11, fontWeight: 600, color: 'var(--text-3)' }}>Color</div>
               {(['gradient', 'flat'] as const).map((c) => (
                 <button key={c} type="button" className="av-hover-control"
                   onClick={() => { applyColorTreatment(c); setViewDropdownOpen(false) }}
-                  style={{ padding: '6px 14px', background: colorTreatment === c ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: colorTreatment === c ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', whiteSpace: 'nowrap' }}>
-                  {c.toUpperCase()}
-                  <span style={{ color: 'var(--text-3)', marginLeft: 8, fontSize: 10 }}>
+                  style={{ padding: '6px 14px', background: colorTreatment === c ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: colorTreatment === c ? 'var(--cyan)' : 'var(--text-2)', fontSize: 12, textAlign: 'left', whiteSpace: 'nowrap' }}>
+                  {c === 'gradient' ? 'Gradient' : 'Flat'}
+                  <span style={{ color: 'var(--text-3)', marginLeft: 8, fontSize: 11 }}>
                     {c === 'gradient' ? 'themed washes & glows' : 'flat surfaces'}
                   </span>
                 </button>
               ))}
               <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
               {/* Diff style */}
-              <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>DIFF STYLE</div>
+              <div style={{ padding: '4px 14px 2px', fontSize: 11, fontWeight: 600, color: 'var(--text-3)' }}>Diff style</div>
               {(['stacked', 'split'] as const).map((style) => (
                 <button key={style} type="button" className="av-hover-control"
                   onClick={() => { setDiffStyle(style); setViewDropdownOpen(false) }}
-                  style={{ padding: '6px 14px', background: diffStyle === style ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: diffStyle === style ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', whiteSpace: 'nowrap' }}>
-                  {style.toUpperCase()}
-                  <span style={{ color: 'var(--text-3)', marginLeft: 8, fontSize: 10 }}>
+                  style={{ padding: '6px 14px', background: diffStyle === style ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: diffStyle === style ? 'var(--cyan)' : 'var(--text-2)', fontSize: 12, textAlign: 'left', whiteSpace: 'nowrap' }}>
+                  {style === 'stacked' ? 'Stacked' : 'Split'}
+                  <span style={{ color: 'var(--text-3)', marginLeft: 8, fontSize: 11 }}>
                     {style === 'stacked' ? 'one column' : 'side by side'}
                   </span>
                 </button>
               ))}
               <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
               {/* Change indicators */}
-              <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>CHANGE INDICATORS</div>
+              <div style={{ padding: '4px 14px 2px', fontSize: 11, fontWeight: 600, color: 'var(--text-3)' }}>Change indicators</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: '2px 14px 3px' }}>
                 {(['classic', 'bars', 'none'] as const).map((style) => (
                   <button key={style} type="button" className="av-hover-control"
                     onClick={() => { setDiffOptions((prev) => ({ ...prev, changeStyle: style })); setViewDropdownOpen(false) }}
-                    style={{ padding: '4px 8px', borderRadius: 4, background: diffOptions.changeStyle === style ? 'rgba(56,217,245,0.12)' : 'var(--surface)', border: '1px solid var(--border)', cursor: 'pointer', color: diffOptions.changeStyle === style ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: '0.06em' }}>
-                    {style.toUpperCase()}
+                    style={{ padding: '4px 8px', borderRadius: 4, background: diffOptions.changeStyle === style ? 'rgba(56,217,245,0.12)' : 'var(--surface)', border: '1px solid var(--border)', cursor: 'pointer', color: diffOptions.changeStyle === style ? 'var(--cyan)' : 'var(--text-2)', fontSize: 11 }}>
+                    {style === 'classic' ? 'Classic' : style === 'bars' ? 'Bars' : 'None'}
                   </button>
                 ))}
               </div>
               <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
               {/* Inline diff highlighting */}
-              <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>INLINE DIFF</div>
+              <div style={{ padding: '4px 14px 2px', fontSize: 11, fontWeight: 600, color: 'var(--text-3)' }}>Inline diff</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: '2px 14px 3px' }}>
                 {(['word-alt', 'word', 'char', 'none'] as const).map((style) => (
                   <button key={style} type="button" className="av-hover-control"
                     onClick={() => { setDiffOptions((prev) => ({ ...prev, inlineDiffStyle: style })); setViewDropdownOpen(false) }}
-                    style={{ padding: '4px 8px', borderRadius: 4, background: diffOptions.inlineDiffStyle === style ? 'rgba(56,217,245,0.12)' : 'var(--surface)', border: '1px solid var(--border)', cursor: 'pointer', color: diffOptions.inlineDiffStyle === style ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: '0.06em' }}>
-                    {style === 'word-alt' ? 'WORD-ALT' : style.toUpperCase()}
+                    style={{ padding: '4px 8px', borderRadius: 4, background: diffOptions.inlineDiffStyle === style ? 'rgba(56,217,245,0.12)' : 'var(--surface)', border: '1px solid var(--border)', cursor: 'pointer', color: diffOptions.inlineDiffStyle === style ? 'var(--cyan)' : 'var(--text-2)', fontSize: 11 }}>
+                    {style === 'word-alt' ? 'Word (alt)' : style === 'word' ? 'Word' : style === 'char' ? 'Character' : 'None'}
                   </button>
                 ))}
               </div>
               <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
               {/* Display toggles */}
-              <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>DISPLAY</div>
+              <div style={{ padding: '4px 14px 2px', fontSize: 11, fontWeight: 600, color: 'var(--text-3)' }}>Display</div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0, padding: '0 6px' }}>
                 {([
-                  { key: 'backgrounds', label: 'BG', active: diffOptions.showBackgrounds, toggle: () => setDiffOptions((prev) => ({ ...prev, showBackgrounds: !prev.showBackgrounds })) },
-                  { key: 'wrap', label: 'WRAP', active: diffOptions.wrap, toggle: () => setDiffOptions((prev) => ({ ...prev, wrap: !prev.wrap })) },
-                  { key: 'lineNumbers', label: 'LINE #S', active: diffOptions.showLineNumbers, toggle: () => setDiffOptions((prev) => ({ ...prev, showLineNumbers: !prev.showLineNumbers })) },
-                  { key: 'hunkHeaders', label: 'HUNKS', active: diffOptions.showHunkHeaders, toggle: () => setDiffOptions((prev) => ({ ...prev, showHunkHeaders: !prev.showHunkHeaders })) },
+                  { key: 'backgrounds', label: 'Backgrounds', active: diffOptions.showBackgrounds, toggle: () => setDiffOptions((prev) => ({ ...prev, showBackgrounds: !prev.showBackgrounds })) },
+                  { key: 'wrap', label: 'Wrap', active: diffOptions.wrap, toggle: () => setDiffOptions((prev) => ({ ...prev, wrap: !prev.wrap })) },
+                  { key: 'lineNumbers', label: 'Line numbers', active: diffOptions.showLineNumbers, toggle: () => setDiffOptions((prev) => ({ ...prev, showLineNumbers: !prev.showLineNumbers })) },
+                  { key: 'hunkHeaders', label: 'Hunk headers', active: diffOptions.showHunkHeaders, toggle: () => setDiffOptions((prev) => ({ ...prev, showHunkHeaders: !prev.showHunkHeaders })) },
                 ] as const).map((opt) => (
                   <button key={opt.key} type="button" className="av-hover-control"
                     onClick={opt.toggle}
@@ -8244,47 +8230,47 @@ function MessageViewInner({
               }}>
                 {session?.provider !== 'copilot' && (
                   <button type="button" className="av-hover-control" onClick={() => { handleFork(); setActionsDropdownOpen(false) }} disabled={forking}
-                    style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: forking ? 'not-allowed' : 'pointer', color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', opacity: forking ? 0.5 : 1 }}>
-                    {forking ? 'FORKING…' : 'FORK'}
+                    style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: forking ? 'not-allowed' : 'pointer', color: 'var(--text-2)', fontSize: 12, textAlign: 'left', opacity: forking ? 0.5 : 1 }}>
+                    {forking ? 'Forking…' : 'Fork session'}
                   </button>
                 )}
                 {cliCommand && (
                   <div ref={cliPopoverRef} style={{ position: 'relative' }}>
                     <button type="button" className="av-hover-control" onClick={() => setCliPopoverOpen(v => !v)}
-                      style={{ width: '100%', padding: '7px 14px', background: cliPopoverOpen ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: cliPopoverOpen ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
-                      CLI
+                      style={{ width: '100%', padding: '7px 14px', background: cliPopoverOpen ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: cliPopoverOpen ? 'var(--cyan)' : 'var(--text-2)', fontSize: 12, textAlign: 'left' }}>
+                      Resume in CLI
                     </button>
                     {cliPopoverOpen && (
                       <div style={{ position: 'absolute', top: 0, right: 170, zIndex: 70, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 8, minWidth: 320, boxShadow: '0 4px 24px rgba(0,0,0,0.35)' }}>
                         <code style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--cyan)', wordBreak: 'break-all', userSelect: 'all' }}>{cliCommand}</code>
                         <button type="button" className="av-hover-control" style={{ alignSelf: 'flex-end', height: 24, fontSize: 11, padding: '0 10px', cursor: 'pointer', background: 'rgba(56,217,245,0.07)', border: '1px solid rgba(56,217,245,0.25)', borderRadius: 4, color: 'var(--cyan)', fontFamily: "'IBM Plex Mono', monospace", letterSpacing: '0.08em' }}
-                          onClick={() => { void navigator.clipboard.writeText(cliCommand); setCliPopoverOpen(false); setActionsDropdownOpen(false) }}>COPY</button>
+                          onClick={() => { void navigator.clipboard.writeText(cliCommand); setCliPopoverOpen(false); setActionsDropdownOpen(false) }}>Copy</button>
                       </div>
                     )}
                   </div>
                 )}
                 <button type="button" className="av-hover-control" onClick={() => { handleExport(); setActionsDropdownOpen(false) }} disabled={exporting}
-                  style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: exporting ? 'not-allowed' : 'pointer', color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', opacity: exporting ? 0.6 : 1 }}>
-                  {exporting ? 'EXPORTING…' : 'EXPORT'}
+                  style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: exporting ? 'not-allowed' : 'pointer', color: 'var(--text-2)', fontSize: 12, textAlign: 'left', opacity: exporting ? 0.6 : 1 }}>
+                  {exporting ? 'Exporting…' : 'Export'}
                 </button>
                 <button type="button" className="av-hover-control" onClick={() => { toggleDiagnostics(); setActionsDropdownOpen(false) }}
-                  style={{ padding: '7px 14px', background: showDiagnostics ? 'rgba(234,170,64,0.1)' : 'transparent', border: 0, cursor: 'pointer', color: showDiagnostics ? 'var(--amber)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
-                  DIAG
+                  style={{ padding: '7px 14px', background: showDiagnostics ? 'rgba(234,170,64,0.1)' : 'transparent', border: 0, cursor: 'pointer', color: showDiagnostics ? 'var(--amber)' : 'var(--text-2)', fontSize: 12, textAlign: 'left' }}>
+                  Diagnostics
                 </button>
                 {activeProvider === 'opencode' && (
                   <>
-                    {sessionCapabilities?.shareSession && <button type="button" className="av-hover-control" onClick={() => { runSessionAction('share'); setActionsDropdownOpen(false) }} disabled={!!sessionActionLoading} style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', opacity: sessionActionLoading ? 0.55 : 1 }}>SHARE</button>}
-                    {sessionCapabilities?.unshareSession && <button type="button" className="av-hover-control" onClick={() => { runSessionAction('unshare'); setActionsDropdownOpen(false) }} disabled={!!sessionActionLoading} style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', opacity: sessionActionLoading ? 0.55 : 1 }}>UNSHARE</button>}
-                    {sessionCapabilities?.summarizeSession && <button type="button" className="av-hover-control" onClick={() => { runSessionAction('summarize'); setActionsDropdownOpen(false) }} disabled={!!sessionActionLoading} style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', opacity: sessionActionLoading ? 0.55 : 1 }}>SUMMARY</button>}
-                    {sessionCapabilities?.unrevertSession && <button type="button" className="av-hover-control" onClick={() => { runSessionAction('unrevert'); setActionsDropdownOpen(false) }} disabled={!!sessionActionLoading} style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', opacity: sessionActionLoading ? 0.55 : 1 }}>UNREVERT</button>}
+                    {sessionCapabilities?.shareSession && <button type="button" className="av-hover-control" onClick={() => { runSessionAction('share'); setActionsDropdownOpen(false) }} disabled={!!sessionActionLoading} style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--text-2)', fontSize: 12, textAlign: 'left', opacity: sessionActionLoading ? 0.55 : 1 }}>Share</button>}
+                    {sessionCapabilities?.unshareSession && <button type="button" className="av-hover-control" onClick={() => { runSessionAction('unshare'); setActionsDropdownOpen(false) }} disabled={!!sessionActionLoading} style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--text-2)', fontSize: 12, textAlign: 'left', opacity: sessionActionLoading ? 0.55 : 1 }}>Unshare</button>}
+                    {sessionCapabilities?.summarizeSession && <button type="button" className="av-hover-control" onClick={() => { runSessionAction('summarize'); setActionsDropdownOpen(false) }} disabled={!!sessionActionLoading} style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--text-2)', fontSize: 12, textAlign: 'left', opacity: sessionActionLoading ? 0.55 : 1 }}>Summarize</button>}
+                    {sessionCapabilities?.unrevertSession && <button type="button" className="av-hover-control" onClick={() => { runSessionAction('unrevert'); setActionsDropdownOpen(false) }} disabled={!!sessionActionLoading} style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--text-2)', fontSize: 12, textAlign: 'left', opacity: sessionActionLoading ? 0.55 : 1 }}>Unrevert</button>}
                   </>
                 )}
                 {sessionCapabilities?.deleteSession && (
                   <>
                     <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
                     <button type="button" className="av-hover-control" onClick={() => { handleDeleteSession(); setActionsDropdownOpen(false) }} disabled={deleting}
-                      style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: deleting ? 'not-allowed' : 'pointer', color: deleting ? 'var(--red, #f87171)' : 'rgba(248,113,113,0.8)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', opacity: deleting ? 0.55 : 1 }}>
-                      {deleting ? 'DELETING…' : 'DELETE'}
+                      style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: deleting ? 'not-allowed' : 'pointer', color: deleting ? 'var(--red, #f87171)' : 'rgba(248,113,113,0.8)', fontSize: 12, textAlign: 'left', opacity: deleting ? 0.55 : 1 }}>
+                      {deleting ? 'Deleting…' : 'Delete session'}
                     </button>
                   </>
                 )}
@@ -8293,63 +8279,42 @@ function MessageViewInner({
           </div>
         )}
 
-        {/* Live pill */}
-        <div
+        {/* Live follow toggle — the dot is the live indicator, the button is the control */}
+        <Button
+          onClick={toggleLiveFollow}
+          title={autoFollow ? 'Following new messages — click to pause' : 'Paused — click to follow new messages'}
+          aria-pressed={autoFollow}
+          variant="outline"
+          size="sm"
+          className="av-hover-control"
           style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 5,
-            background: 'rgba(45, 212, 160, 0.08)',
-            border: '1px solid rgba(45, 212, 160, 0.2)',
-            borderRadius: 20,
-            padding: '2px 8px 2px 6px',
             flexShrink: 0,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            height: 26,
+            padding: '0 10px',
+            borderRadius: 999,
+            border: `1px solid ${autoFollow ? 'rgba(45,212,160,0.26)' : 'var(--border)'}`,
+            background: autoFollow ? 'rgba(45,212,160,0.10)' : 'transparent',
+            color: autoFollow ? 'var(--green)' : 'var(--text-3)',
+            fontSize: 12,
+            cursor: 'pointer',
           }}
         >
           <span
+            aria-hidden
             style={{
-              width: 5,
-              height: 5,
+              width: 6,
+              height: 6,
               borderRadius: '50%',
-              background: 'var(--green)',
+              background: autoFollow ? 'var(--green)' : 'var(--text-3)',
               display: 'inline-block',
-              animation: 'live-pulse 2.5s ease-in-out infinite',
+              animation: autoFollow ? 'live-pulse 2.5s ease-in-out infinite' : undefined,
             }}
           />
-          <span
-            style={{
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              color: 'var(--green)',
-              letterSpacing: '0.08em',
-            }}
-          >
-              LIVE
-            </span>
-          </div>
-
-          <Button
-            onClick={toggleLiveFollow}
-            title={autoFollow ? 'Pause live follow' : 'Follow new messages live'}
-            variant="outline"
-            size="sm"
-            className="av-hover-control"
-            style={{
-              flexShrink: 0,
-              height: 26,
-              padding: '0 10px',
-              borderRadius: 999,
-              border: autoFollow ? '1px solid rgba(45,212,160,0.26)' : '1px solid rgba(56,217,245,0.22)',
-              background: autoFollow ? 'rgba(45,212,160,0.12)' : 'rgba(56,217,245,0.08)',
-              color: autoFollow ? 'var(--green)' : 'var(--cyan)',
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 10,
-              letterSpacing: '0.07em',
-              cursor: 'pointer',
-            }}
-          >
-            {autoFollow ? 'FOLLOWING LIVE' : 'FOLLOW LIVE'}
-          </Button>
+          {autoFollow ? 'Live' : 'Paused'}
+        </Button>
         </div>}
 
       {/* ── Tab bar ──────────────────────────────────── */}
@@ -8449,11 +8414,11 @@ function MessageViewInner({
               <div className="av-transcript-filter-panel">
                 <label className="av-session-viz-search">
                   <Search aria-hidden="true" />
-                  <span>Search</span>
                   <input
+                    aria-label="Search transcript"
                     value={transcriptSearch}
                     onChange={(event) => setTranscriptSearch(event.target.value)}
-                    placeholder="Search turns, tools, paths, commands..."
+                    placeholder="Search turns, tools, paths, commands…"
                   />
                 </label>
                 <div className="av-session-viz-filterbar" aria-label="Transcript filters">
@@ -8621,7 +8586,7 @@ function MessageViewInner({
                 {diagnosticSections.map((section) => (
                   <div key={section.id}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, marginBottom: 6 }}>
-                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-3)' }}>
                         {section.title}
                       </span>
                       {section.id === 'mcp' && session?.provider === 'claude' && (
@@ -8714,7 +8679,7 @@ function MessageViewInner({
                                 >
                                   <option value="" disabled>POLICY…</option>
                                   <option value="default">DEFAULT</option>
-                                  <option value="auto">AUTO</option>
+                                  <option value="auto">Auto</option>
                                   <option value="clear">CLEAR</option>
                                 </select>
                                 <button
@@ -9203,7 +9168,7 @@ function MessageViewInner({
             borderRadius: 16,
             border: '1px solid color-mix(in srgb, var(--border-2) 82%, transparent)',
             background: colorTreatment === 'flat' ? 'var(--surface)' : 'linear-gradient(180deg, color-mix(in srgb, var(--surface) 96%, white 1%) 0%, var(--surface) 100%)',
-            boxShadow: '0 14px 38px rgba(0,0,0,0.22), 0 2px 8px var(--violet-glow)',
+            boxShadow: '0 8px 24px var(--shadow, rgba(0,0,0,0.16))',
           }}
         >
           <CardHeader className="sr-only">
@@ -9211,15 +9176,8 @@ function MessageViewInner({
           </CardHeader>
           <CardContent className="av-web-composer-content" style={{ padding: '14px 16px 10px' }}>
             <div className="av-web-composer-controls" style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 176px', minWidth: 0 }}>
-                <Label style={{
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 10,
-                  color: 'var(--text-3)',
-                  letterSpacing: '0.05em',
-                }}>
-                  MODEL
-                </Label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 220px', minWidth: 0 }}>
+                <Label style={{ fontSize: 11, color: 'var(--text-3)' }}>Model</Label>
                 <ProviderIcon provider={activeProvider} size={18} className="av-web-composer-provider-icon" />
                 <NativeSelect
                   value={selectedModelValue ?? ''}
@@ -9241,20 +9199,13 @@ function MessageViewInner({
               </label>
               {effortOptions.length > 0 && (
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 150px', minWidth: 128 }}>
-                  <Label style={{
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 10,
-                    color: 'var(--text-3)',
-                    letterSpacing: '0.05em',
-                  }}>
-                    EFFORT
-                  </Label>
+                  <Label style={{ fontSize: 11, color: 'var(--text-3)' }}>Effort</Label>
                   <NativeSelect
                     value={selectedEffort}
                     onChange={(event) => setSelectedEffort(event.target.value as 'auto' | ReasoningEffortLevel)}
                     className={cn(compactNativeSelectClassName, 'flex-1')}
                   >
-                    <NativeSelectOption value="auto">AUTO</NativeSelectOption>
+                    <NativeSelectOption value="auto">Auto</NativeSelectOption>
                     {effortOptions.map((level) => (
                       <NativeSelectOption key={level} value={level}>
                         {effortLabel(level)}
@@ -9265,40 +9216,26 @@ function MessageViewInner({
               )}
               {activeProvider === 'copilot' && (
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 148px', minWidth: 128 }}>
-                  <Label style={{
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 10,
-                    color: 'var(--text-3)',
-                    letterSpacing: '0.05em',
-                  }}>
-                    CONTEXT
-                  </Label>
+                  <Label style={{ fontSize: 11, color: 'var(--text-3)' }}>Context</Label>
                   <NativeSelect
                     value={selectedCopilotContextTier ?? 'default'}
                     onChange={(event) => setSelectedCopilotContextTier(event.target.value as CopilotContextTier)}
                     className={cn(compactNativeSelectClassName, 'flex-1')}
                     title="GitHub Copilot context tier"
                   >
-                    <NativeSelectOption value="default">DEFAULT</NativeSelectOption>
+                    <NativeSelectOption value="default">Default</NativeSelectOption>
                     <NativeSelectOption
                       value="long_context"
                       disabled={!selectedModelInfo?.supportsLongContext}
                     >
-                      LONG
+                      Long context
                     </NativeSelectOption>
                   </NativeSelect>
                 </label>
               )}
               {activeProvider === 'opencode' && composerAgentOptions.length > 0 && (
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 160px', minWidth: 136 }}>
-                  <Label style={{
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 10,
-                    color: 'var(--text-3)',
-                    letterSpacing: '0.05em',
-                  }}>
-                    AGENT
-                  </Label>
+                  <Label style={{ fontSize: 11, color: 'var(--text-3)' }}>Agent</Label>
                   <NativeSelect
                     value={selectedAgent}
                     onChange={(event) => setSelectedAgent(event.target.value)}
@@ -9315,14 +9252,7 @@ function MessageViewInner({
               )}
               {activeProvider === 'copilot' && composerModeOptions.length > 0 && (
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 160px', minWidth: 138 }}>
-                  <Label style={{
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 10,
-                    color: 'var(--text-3)',
-                    letterSpacing: '0.05em',
-                  }}>
-                    MODE
-                  </Label>
+                  <Label style={{ fontSize: 11, color: 'var(--text-3)' }}>Mode</Label>
                   <NativeSelect
                     value={selectedCopilotMode}
                     onChange={(event) => commitCopilotModeSelection(event.target.value)}
@@ -9339,60 +9269,39 @@ function MessageViewInner({
               )}
               {session?.provider === 'claude' && (
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 160px', minWidth: 140 }}>
-                  <Label style={{
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 10,
-                    color: 'var(--text-3)',
-                    letterSpacing: '0.05em',
-                  }}>
-                    MODE
-                  </Label>
+                  <Label style={{ fontSize: 11, color: 'var(--text-3)' }}>Mode</Label>
                   <NativeSelect
                     value={selectedPermissionMode}
                     onChange={(event) => commitClaudePermissionSelection(event.target.value as typeof selectedPermissionMode)}
                     className={cn(compactNativeSelectClassName, 'flex-1')}
                     title="Claude permission mode — mirrors the CLI's /permissions"
                   >
-                    <NativeSelectOption value="default">DEFAULT</NativeSelectOption>
-                    <NativeSelectOption value="acceptEdits">ACCEPT EDITS</NativeSelectOption>
-                    <NativeSelectOption value="plan">PLAN</NativeSelectOption>
-                    <NativeSelectOption value="bypassPermissions">BYPASS</NativeSelectOption>
+                    <NativeSelectOption value="default">Default</NativeSelectOption>
+                    <NativeSelectOption value="acceptEdits">Accept edits</NativeSelectOption>
+                    <NativeSelectOption value="plan">Plan</NativeSelectOption>
+                    <NativeSelectOption value="bypassPermissions">Bypass permissions</NativeSelectOption>
                   </NativeSelect>
                 </label>
               )}
               {session?.provider === 'codex' && (
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 180px', minWidth: 150 }}>
-                  <Label style={{
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 10,
-                    color: 'var(--text-3)',
-                    letterSpacing: '0.05em',
-                  }}>
-                    APPROVALS
-                  </Label>
+                  <Label style={{ fontSize: 11, color: 'var(--text-3)' }}>Approvals</Label>
                   <NativeSelect
                     value={selectedCodexApproval}
                     onChange={(event) => setSelectedCodexApproval(event.target.value as typeof selectedCodexApproval)}
                     className={cn(compactNativeSelectClassName, 'flex-1')}
                     title="Codex approval policy — mirrors the CLI's /approvals (AskForApproval)"
                   >
-                    <NativeSelectOption value="auto">CONFIG</NativeSelectOption>
-                    <NativeSelectOption value="untrusted">UNTRUSTED</NativeSelectOption>
-                    <NativeSelectOption value="on-request">ON REQUEST</NativeSelectOption>
-                    <NativeSelectOption value="never">NEVER</NativeSelectOption>
+                    <NativeSelectOption value="auto">From config</NativeSelectOption>
+                    <NativeSelectOption value="untrusted">Untrusted</NativeSelectOption>
+                    <NativeSelectOption value="on-request">On request</NativeSelectOption>
+                    <NativeSelectOption value="never">Never</NativeSelectOption>
                   </NativeSelect>
                 </label>
               )}
               {session?.provider === 'claude' && (
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 140px', minWidth: 120 }}>
-                  <Label style={{
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 10,
-                    color: 'var(--text-3)',
-                    letterSpacing: '0.05em',
-                  }}>
-                    BUDGET
-                  </Label>
+                  <Label style={{ fontSize: 11, color: 'var(--text-3)' }}>Token budget</Label>
                   <input
                     type="number"
                     inputMode="numeric"
@@ -9433,14 +9342,7 @@ function MessageViewInner({
                     checked={enableWorkflow}
                     onChange={(event) => setEnableWorkflow(event.target.checked)}
                   />
-                  <Label style={{
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 10,
-                    color: 'var(--text-3)',
-                    letterSpacing: '0.05em',
-                  }}>
-                    WORKFLOW
-                  </Label>
+                  <span style={{ fontSize: 11, color: 'var(--text-3)', whiteSpace: 'nowrap' }}>Workflow</span>
                 </label>
               )}
               {sessionCapabilities?.fileRewind && rewindCandidates.length > 0 && (
@@ -9472,14 +9374,12 @@ function MessageViewInner({
                       border: '1px solid rgba(251,191,36,0.22)',
                       borderRadius: 5,
                       color: 'var(--yellow, #fbbf24)',
-                      fontFamily: "'IBM Plex Mono', monospace",
-                      fontSize: 10,
-                      letterSpacing: '0.06em',
+                      fontSize: 12,
                       cursor: previewingRewind || applyingRewind || !rewindTargetId ? 'not-allowed' : 'pointer',
                       opacity: previewingRewind || applyingRewind || !rewindTargetId ? 0.5 : 1,
                     }}
                   >
-                    {previewingRewind ? 'PREVIEWING…' : 'REWIND'}
+                    {previewingRewind ? 'Previewing…' : 'Rewind'}
                   </Button>
                 </div>
               )}
@@ -9509,14 +9409,12 @@ function MessageViewInner({
                       border: '1px solid rgba(251,191,36,0.22)',
                       borderRadius: 5,
                       color: 'var(--yellow, #fbbf24)',
-                      fontFamily: "'IBM Plex Mono', monospace",
-                      fontSize: 10,
-                      letterSpacing: '0.06em',
+                      fontSize: 12,
                       cursor: previewingRewind || applyingRewind ? 'not-allowed' : 'pointer',
                       opacity: previewingRewind || applyingRewind ? 0.5 : 1,
                     }}
                   >
-                    {previewingRewind ? 'PREVIEWING…' : 'ROLLBACK'}
+                    {previewingRewind ? 'Previewing…' : 'Roll back'}
                   </Button>
                 </div>
               )}
@@ -10432,7 +10330,7 @@ function MessageViewInner({
                     opacity: applyingRewind ? 0.5 : 1,
                   }}
                 >
-                  {applyingRewind ? 'APPLYING…' : 'APPLY REWIND'}
+                  {applyingRewind ? 'Applying…' : 'Apply rewind'}
                 </Button>
                 <Button
                   onClick={() => setRewindPreview(null)}

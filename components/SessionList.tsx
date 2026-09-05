@@ -1,6 +1,6 @@
 'use client'
 
-import { memo, useState, useRef, useCallback, useDeferredValue, useEffect, useMemo, useSyncExternalStore } from 'react'
+import { createContext, memo, useContext, useState, useRef, useCallback, useDeferredValue, useEffect, useMemo, useSyncExternalStore } from 'react'
 import {
   DEFAULT_COLOR_TREATMENT,
   getCurrentColorTreatment,
@@ -231,6 +231,41 @@ function providerChipStyle(provider: AgentProvider): { color: string; background
   return { color: 'var(--violet)', background: 'rgba(139,128,240,0.08)', border: 'rgba(139,128,240,0.22)' }
 }
 
+const PROVIDER_LABELS: Partial<Record<AgentProvider, string>> = {
+  claude: 'Claude',
+  'claude-acp': 'Claude (ACP)',
+  codex: 'Codex',
+  'codex-acp': 'Codex (ACP)',
+  opencode: 'OpenCode',
+  copilot: 'Copilot',
+  pi: 'Pi',
+}
+
+// The provider label repeats on every row, which is pure noise when the list
+// holds a single provider — the common case. Provided once per list rather than
+// threaded through ProjectGroup/SessionRowGroup as a prop.
+const ShowProviderContext = createContext(true)
+
+function providerLabel(provider: AgentProvider): string {
+  return PROVIDER_LABELS[provider] ?? provider
+}
+
+function segmentStyle(active: boolean, position: 'first' | 'last', enabled = true): React.CSSProperties {
+  return {
+    flex: 1,
+    height: 28,
+    borderRadius: position === 'first' ? '6px 0 0 6px' : '0 6px 6px 0',
+    border: '1px solid var(--border)',
+    borderLeftWidth: position === 'last' ? 0 : 1,
+    background: active ? 'var(--surface-3)' : 'transparent',
+    color: active ? 'var(--text)' : 'var(--text-3)',
+    fontSize: 12,
+    fontWeight: active ? 600 : 400,
+    cursor: enabled ? 'pointer' : 'not-allowed',
+    opacity: enabled ? 1 : 0.45,
+  }
+}
+
 function inboxButtonStyle(active: boolean): React.CSSProperties {
   return {
     border: '1px solid transparent',
@@ -278,6 +313,7 @@ const SessionRow = memo(function SessionRow({
     () => (session.provider ? providerChipStyle(session.provider) : null),
     [session.provider],
   )
+  const showProvider = useContext(ShowProviderContext)
 
   useEffect(() => setInbox(session.inbox), [session.inbox])
 
@@ -364,7 +400,7 @@ const SessionRow = memo(function SessionRow({
       className={`av-session-row ${selected ? 'av-selected' : ''}`}
       data-session-key={sessionTabKey(session)}
       style={{
-        padding: '10px 16px 10px 24px',
+        padding: '9px 16px 9px 24px',
         borderBottom: '1px solid var(--border)',
         contentVisibility: 'auto',
         // `auto 96px` lets the browser remember the real measured row height
@@ -374,40 +410,9 @@ const SessionRow = memo(function SessionRow({
         containIntrinsicSize: 'auto 96px',
       }}
     >
-      {/* Session ID */}
-      <div
-        className="av-session-id"
-        style={{
-          fontFamily: "'IBM Plex Mono', monospace",
-          fontSize: 12,
-          letterSpacing: '0.04em',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-        }}
-      >
-        <span>{shortId}</span>
-        {session.parentSessionId && (
-          <span
-            title={`Subagent of ${session.parentSessionId}`}
-            style={{
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 9,
-              padding: '0 5px',
-              borderRadius: 3,
-              border: '1px solid var(--border)',
-              color: 'var(--text-3)',
-              letterSpacing: '0.06em',
-              opacity: 0.85,
-            }}
-          >
-            ↪ child of {session.parentSessionId.slice(-8)}
-          </span>
-        )}
-      </div>
-
-      {/* Session title */}
-      <div style={{ marginTop: 5 }}>
+      {/* Title + id */}
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
         {editing === 'title' ? (
           <Input
             ref={inputRef}
@@ -418,11 +423,10 @@ const SessionRow = memo(function SessionRow({
             onClick={e => e.stopPropagation()}
             autoFocus
             style={{
-              fontFamily: "'Oxanium', monospace",
-              fontSize: 12,
+              fontSize: 13,
               background: 'var(--surface-3)',
               border: '1px solid var(--violet)',
-              borderRadius: 3,
+              borderRadius: 6,
               color: 'var(--text)',
               padding: '4px 7px',
               outline: 'none',
@@ -436,10 +440,8 @@ const SessionRow = memo(function SessionRow({
             title="Double-click to rename title"
             className="av-session-title"
             style={{
-              fontFamily: "'Oxanium', monospace",
-              fontSize: 12,
+              fontSize: 13,
               fontWeight: 600,
-              letterSpacing: '0.04em',
               cursor: 'text',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
@@ -448,33 +450,51 @@ const SessionRow = memo(function SessionRow({
           >
             {sessionTitle}
           </div>
-        ) : hovered ? (
+        ) : (
           <span
             onDoubleClick={startEdit('title', '')}
             onClick={e => { e.stopPropagation(); startEdit('title', '')(e) }}
             title="Click to add a title"
             style={{
-              fontFamily: "'Oxanium', monospace",
-              fontSize: 12,
+              fontSize: 13,
               color: 'var(--text-3)',
-              padding: '2px 0',
               cursor: 'text',
+              opacity: hovered ? 1 : 0.6,
             }}
           >
-            + title
+            {hovered ? 'Add a title' : 'Untitled'}
           </span>
-        ) : (
-          <div style={{ height: 18 }} />
+        )}
+        </div>
+        {editing !== 'title' && activityTime != null && (
+          <span
+            title={activityTitle}
+            style={{ fontSize: 11, color: 'var(--text-3)', flexShrink: 0 }}
+          >
+            {hydrated ? timeAgo(activityTime) : formatStableTimeLabel(activityTime)}
+          </span>
         )}
       </div>
+      {session.parentSessionId && (
+        <div
+          title={`Subagent of ${session.parentSessionId}`}
+          style={{
+            marginTop: 3,
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 10,
+            color: 'var(--text-3)',
+          }}
+        >
+          ↪ child of {session.parentSessionId.slice(-8)}
+        </div>
+      )}
 
       {sessionPreview && editing !== 'title' && (
         <div
           title={sessionPreview}
           style={{
-            marginTop: 4,
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 11,
+            marginTop: 3,
+            fontSize: 12,
             color: 'var(--text-3)',
             overflow: 'hidden',
             textOverflow: 'ellipsis',
@@ -487,20 +507,41 @@ const SessionRow = memo(function SessionRow({
 
       {/* Tag + time */}
       <div style={{ marginTop: 5, display: 'flex', alignItems: 'center', gap: 6, minHeight: 18 }}>
-        {session.provider && (
+        <span
+          title={session.sessionId}
+          className="av-session-id"
+          style={{
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 10,
+            color: 'var(--text-3)',
+            flexShrink: 0,
+          }}
+        >
+          {shortId}
+        </span>
+        {session.provider && showProvider && (
           <span
+            title={session.provider}
             style={{
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 10,
-              padding: '1px 6px',
-              borderRadius: 999,
-              letterSpacing: '0.05em',
-              border: `1px solid ${providerStyle?.border}`,
-              background: providerStyle?.background,
-              color: providerStyle?.color,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 5,
+              fontSize: 11,
+              color: 'var(--text-3)',
+              flexShrink: 0,
             }}
           >
-            {session.provider.toUpperCase()}
+            <span
+              aria-hidden
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: 999,
+                background: providerStyle?.color ?? 'var(--text-3)',
+                flexShrink: 0,
+              }}
+            />
+            {providerLabel(session.provider)}
           </span>
         )}
         {editing === 'tag' ? (
@@ -597,23 +638,19 @@ const SessionRow = memo(function SessionRow({
             #{inbox.linkedPr.number}
           </span>
         ) : null}
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 2, opacity: hovered || inbox ? 1 : 0.35 }}>
+        <div
+          style={{
+            marginLeft: 'auto',
+            display: 'flex',
+            gap: 2,
+            opacity: hovered || inbox ? 1 : 0,
+            pointerEvents: hovered || inbox ? 'auto' : 'none',
+          }}
+        >
           <button type="button" title={inbox?.pinnedAt ? 'Unpin' : 'Pin'} onClick={(event) => { event.stopPropagation(); void updateInbox(inbox?.pinnedAt ? 'unpin' : 'pin') }} style={inboxButtonStyle(Boolean(inbox?.pinnedAt))}>{inbox?.pinnedAt ? '★' : '☆'}</button>
           <button type="button" title={inbox?.settledAt ? 'Reopen' : 'Settle'} onClick={(event) => { event.stopPropagation(); void updateInbox(inbox?.settledAt ? 'reopen' : 'settle') }} style={inboxButtonStyle(Boolean(inbox?.settledAt))}>{inbox?.settledAt ? '↺' : '✓'}</button>
           <button type="button" title={inbox?.snoozedUntil ? 'Unsnooze' : 'Snooze 1h'} onClick={(event) => { event.stopPropagation(); void updateInbox(inbox?.snoozedUntil ? 'unsnooze' : 'snooze') }} style={inboxButtonStyle(Boolean(inbox?.snoozedUntil))}>z</button>
         </div>
-        {activityTime != null && (
-          <span
-            title={activityTitle}
-            style={{
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              color: 'var(--text-3)',
-            }}
-          >
-            {hydrated ? timeAgo(activityTime) : formatStableTimeLabel(activityTime)}
-          </span>
-        )}
       </div>
     </div>
   )
@@ -753,11 +790,8 @@ const SessionRowGroup = memo(function SessionRowGroup({
             <div
               style={{
                 padding: '4px 16px 4px 32px',
-                fontFamily: "'IBM Plex Mono', monospace",
-                fontSize: 9,
-                letterSpacing: '0.08em',
+                fontSize: 11,
                 color: 'var(--text-3)',
-                textTransform: 'uppercase',
               }}
             >
               Subagents {subagentCount > 0 ? `(${subagentCount})` : ''}
@@ -859,11 +893,9 @@ const ProjectGroup = memo(function ProjectGroup({
           onClick={() => onSelectProject(projectKey, name, sessions)}
           className="av-project-name"
           style={{
-            fontFamily: "'Oxanium', monospace",
             fontSize: 12,
             fontWeight: 600,
-            letterSpacing: '0.08em',
-            textTransform: 'uppercase',
+            letterSpacing: '0.01em',
             flex: 1,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
@@ -1059,6 +1091,10 @@ function SessionListInner({
     [indexedSessions, normalizedSearch, activeTag],
   )
   const { groups, childrenByParentId } = useMemo(() => groupByProject(filteredSessions), [filteredSessions])
+  const showProviderPerRow = useMemo(
+    () => new Set(filteredSessions.map((entry) => entry.session.provider ?? 'claude')).size > 1,
+    [filteredSessions],
+  )
   const timeEntries = useMemo(
     () => sortMode === 'time' ? buildSessionTimeEntries(filteredSessions) : [],
     [filteredSessions, sortMode],
@@ -1338,11 +1374,10 @@ function SessionListInner({
               >
                 <div
                   style={{
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 10,
-                    letterSpacing: '0.12em',
-                    textTransform: 'uppercase',
-                    color: 'var(--text-3)',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: 'var(--text-2)',
+                    textTransform: 'capitalize',
                   }}
                 >
                   {collapsedPanel}
@@ -1358,13 +1393,11 @@ function SessionListInner({
                     color: 'var(--text-2)',
                     borderRadius: 8,
                     padding: '4px 8px',
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 10,
-                    letterSpacing: '0.08em',
+                    fontSize: 12,
                     cursor: 'pointer',
                   }}
                 >
-                  CLOSE
+                  Close
                 </button>
               </div>
               <div
@@ -1382,15 +1415,12 @@ function SessionListInner({
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <div
                         style={{
-                          fontFamily: "'Oxanium', monospace",
                           fontSize: 12,
                           fontWeight: 600,
-                          letterSpacing: '0.08em',
-                          textTransform: 'uppercase',
                           color: 'var(--text)',
                         }}
                       >
-                        AGENTVIEWER
+                        Sessions
                       </div>
                       <div style={{ flex: 1 }} />
                       <div
@@ -1452,11 +1482,9 @@ function SessionListInner({
                               <span
                                 className="av-project-name"
                                 style={{
-                                  fontFamily: "'Oxanium', monospace",
                                   fontSize: 12,
                                   fontWeight: 600,
-                                  letterSpacing: '0.08em',
-                                  textTransform: 'uppercase',
+                                  letterSpacing: '0.01em',
                                   flex: 1,
                                   overflow: 'hidden',
                                   textOverflow: 'ellipsis',
@@ -1501,19 +1529,9 @@ function SessionListInner({
                 {collapsedPanel === 'provider' && (
                   <>
                     <div style={{ display: 'grid', gap: 6 }}>
-                      <Label
-                        style={{
-                          fontFamily: "'IBM Plex Mono', monospace",
-                          fontSize: 8,
-                          color: 'var(--text-3)',
-                          letterSpacing: '0.1em',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        PROVIDER
-                      </Label>
                       <NativeSelect
                         ref={providerSelectRef}
+                        aria-label="Provider"
                         value={provider === 'all' ? 'all' : providerInstanceId}
                         onChange={(event) => {
                           if (event.target.value === 'all') return onChangeProvider('all')
@@ -1525,10 +1543,10 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                       >
                         {providerInstances.map((instance) => (
                           <NativeSelectOption key={instance.id} value={instance.id}>
-                            {instance.displayName.toUpperCase()}
+                            {instance.displayName}
                           </NativeSelectOption>
                         ))}
-                        <NativeSelectOption value="all">ALL</NativeSelectOption>
+                        <NativeSelectOption value="all">All providers</NativeSelectOption>
                       </NativeSelect>
                     </div>
                     <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
@@ -1554,8 +1572,7 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                           background: 'var(--surface-2)',
                           color: 'var(--text)',
                           padding: '0 10px',
-                          fontFamily: "'IBM Plex Mono', monospace",
-                          fontSize: 11,
+                          fontSize: 12,
                           outline: 'none',
                         }}
                       />
@@ -1575,13 +1592,11 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                             border: '1px solid var(--border)',
                             background: 'var(--surface-2)',
                             color: 'var(--text-3)',
-                            fontFamily: "'IBM Plex Mono', monospace",
-                            fontSize: 11,
-                            letterSpacing: '0.05em',
+                            fontSize: 12,
                             cursor: 'pointer',
                           }}
                         >
-                          CLEAR
+                          Clear
                         </Button>
                       )}
                     </div>
@@ -1603,12 +1618,10 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                           flex: 1,
                           height: 32,
                           borderRadius: 8,
-                          fontFamily: "'IBM Plex Mono', monospace",
-                          fontSize: 11,
-                          letterSpacing: '0.06em',
+                          fontSize: 12,
                         }}
                       >
-                        BY PROJECT
+                        By project
                       </Button>
                       <Button
                         onClick={() => setSortMode('time')}
@@ -1619,12 +1632,10 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                           flex: 1,
                           height: 32,
                           borderRadius: 8,
-                          fontFamily: "'IBM Plex Mono', monospace",
-                          fontSize: 11,
-                          letterSpacing: '0.06em',
+                          fontSize: 12,
                         }}
                       >
-                        BY TIME
+                        By time
                       </Button>
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>
@@ -1637,12 +1648,10 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                           flex: 1,
                           height: 32,
                           borderRadius: 8,
-                          fontFamily: "'IBM Plex Mono', monospace",
-                          fontSize: 11,
-                          letterSpacing: '0.06em',
+                          fontSize: 12,
                         }}
                       >
-                        ALL PROJECTS
+                        All projects
                       </Button>
                       <Button
                         onClick={() => canScopeToProject && onChangeScope('project')}
@@ -1655,13 +1664,11 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                           flex: 1,
                           height: 32,
                           borderRadius: 8,
-                          fontFamily: "'IBM Plex Mono', monospace",
-                          fontSize: 11,
-                          letterSpacing: '0.06em',
+                          fontSize: 12,
                           opacity: canScopeToProject ? 1 : 0.45,
                         }}
                       >
-                        THIS PROJECT
+                        This project
                       </Button>
                     </div>
                     {scopeMode === 'project' && scopeProjectName && (
@@ -1752,11 +1759,11 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                         gap: 8,
                       }}
                     >
-                      <div style={{ fontFamily: "'Oxanium', monospace", fontSize: 14, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text)' }}>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>
                         {summaryText}
                       </div>
                       <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
-                        {provider.toUpperCase()} · {sortMode === 'time' ? 'sorted by time' : 'grouped by project'}
+                        {provider === 'all' ? 'All providers' : providerLabel(provider)} · {sortMode === 'time' ? 'sorted by time' : 'grouped by project'}
                         {scopeMode === 'project' && scopeProjectName ? ` · ${scopeProjectName}` : ''}
                       </div>
                     </div>
@@ -1790,6 +1797,7 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
   }
 
   return (
+    <ShowProviderContext.Provider value={showProviderPerRow}>
     <div
       ref={rootRef}
       style={{
@@ -1986,8 +1994,8 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
               margin: '10px 14px 8px',
               borderRadius: 10,
               border: '1px solid var(--border)',
-              background: colorTreatment === 'flat' ? 'var(--surface)' : 'linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%)',
-              boxShadow: '0 10px 24px var(--violet-glow)',
+              background: 'var(--surface)',
+              boxShadow: 'none',
             }}
           >
             <CardHeader className="sr-only">
@@ -1995,19 +2003,9 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
             </CardHeader>
             <CardContent style={{ padding: 12 }}>
               <div style={{ display: 'grid', gap: 5 }}>
-                  <Label
-                    style={{
-                      fontFamily: "'IBM Plex Mono', monospace",
-                      fontSize: 8,
-                      color: 'var(--text-3)',
-                      letterSpacing: '0.1em',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    PROVIDER
-                  </Label>
                   <NativeSelect
                     ref={providerSelectRef}
+                    aria-label="Provider"
                     value={provider === 'all' ? 'all' : providerInstanceId}
                     onChange={(event) => {
                       if (event.target.value === 'all') return onChangeProvider('all')
@@ -2019,10 +2017,10 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                   >
                     {providerInstances.map((instance) => (
                       <NativeSelectOption key={instance.id} value={instance.id}>
-                        {instance.displayName.toUpperCase()}
+                        {instance.displayName}
                       </NativeSelectOption>
                     ))}
-                    <NativeSelectOption value="all">ALL</NativeSelectOption>
+                    <NativeSelectOption value="all">All providers</NativeSelectOption>
                   </NativeSelect>
                 </div>
                 <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -2040,8 +2038,7 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                       background: 'var(--surface-2)',
                       color: 'var(--text)',
                       padding: '0 10px',
-                      fontFamily: "'IBM Plex Mono', monospace",
-                      fontSize: 11,
+                      fontSize: 12,
                       outline: 'none',
                     }}
                   />
@@ -2061,13 +2058,11 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                         border: '1px solid var(--border)',
                         background: 'var(--surface-2)',
                         color: 'var(--text-3)',
-                        fontFamily: "'IBM Plex Mono', monospace",
-                        fontSize: 11,
-                        letterSpacing: '0.05em',
+                        fontSize: 12,
                         cursor: 'pointer',
                       }}
                     >
-                      CLEAR
+                      Clear
                     </Button>
                   )}
                 </div>
@@ -2102,70 +2097,37 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                     })}
                   </div>
                 )}
-                <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+                <div role="group" aria-label="Sort sessions" style={{ marginTop: 10, display: 'flex' }}>
                   <Button
                     onClick={() => setSortMode('project')}
                     variant="outline"
                     size="sm"
-                    className="av-hover-control"
-                    style={{
-                      flex: 1,
-                      height: 28,
-                      borderRadius: 5,
-                      border: `1px solid ${sortMode === 'project' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
-                      background: sortMode === 'project' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
-                      color: sortMode === 'project' ? 'var(--violet)' : 'var(--text-3)',
-                      fontFamily: "'IBM Plex Mono', monospace",
-                      fontSize: 11,
-                      letterSpacing: '0.06em',
-                      cursor: 'pointer',
-                    }}
+                    aria-pressed={sortMode === 'project'}
+                    style={segmentStyle(sortMode === 'project', 'first')}
                     title="Group sessions by project"
                   >
-                    BY PROJECT
+                    By project
                   </Button>
                   <Button
                     onClick={() => setSortMode('time')}
                     variant="outline"
                     size="sm"
-                    className="av-hover-control"
-                    style={{
-                      flex: 1,
-                      height: 28,
-                      borderRadius: 5,
-                      border: `1px solid ${sortMode === 'time' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
-                      background: sortMode === 'time' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
-                      color: sortMode === 'time' ? 'var(--violet)' : 'var(--text-3)',
-                      fontFamily: "'IBM Plex Mono', monospace",
-                      fontSize: 11,
-                      letterSpacing: '0.06em',
-                      cursor: 'pointer',
-                    }}
+                    aria-pressed={sortMode === 'time'}
+                    style={segmentStyle(sortMode === 'time', 'last')}
                     title="Sort sessions by most recent activity"
                   >
-                    BY TIME
+                    By time
                   </Button>
                 </div>
-                <div style={{ marginTop: 6, display: 'flex', gap: 8 }}>
+                <div role="group" aria-label="Session scope" style={{ marginTop: 6, display: 'flex' }}>
                   <Button
                     onClick={() => onChangeScope('all')}
                     variant="outline"
                     size="sm"
-                    className="av-hover-control"
-                    style={{
-                      flex: 1,
-                      height: 28,
-                      borderRadius: 5,
-                      border: `1px solid ${scopeMode === 'all' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
-                      background: scopeMode === 'all' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
-                      color: scopeMode === 'all' ? 'var(--violet)' : 'var(--text-3)',
-                      fontFamily: "'IBM Plex Mono', monospace",
-                      fontSize: 11,
-                      letterSpacing: '0.06em',
-                      cursor: 'pointer',
-                    }}
+                    aria-pressed={scopeMode === 'all'}
+                    style={segmentStyle(scopeMode === 'all', 'first')}
                   >
-                    ALL PROJECTS
+                    All projects
                   </Button>
                   <Button
                     onClick={() => canScopeToProject && onChangeScope('project')}
@@ -2173,22 +2135,10 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                     title={canScopeToProject ? 'Show only sessions for the current project' : 'Select a session or project first'}
                     variant="outline"
                     size="sm"
-                    className="av-hover-control"
-                    style={{
-                      flex: 1,
-                      height: 28,
-                      borderRadius: 5,
-                      border: `1px solid ${scopeMode === 'project' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
-                      background: scopeMode === 'project' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
-                      color: scopeMode === 'project' ? 'var(--violet)' : 'var(--text-3)',
-                      fontFamily: "'IBM Plex Mono', monospace",
-                      fontSize: 11,
-                      letterSpacing: '0.06em',
-                      cursor: canScopeToProject ? 'pointer' : 'not-allowed',
-                      opacity: canScopeToProject ? 1 : 0.45,
-                    }}
+                    aria-pressed={scopeMode === 'project'}
+                    style={segmentStyle(scopeMode === 'project', 'last', canScopeToProject)}
                   >
-                    THIS PROJECT
+                    This project
                   </Button>
                 </div>
                 {scopeMode === 'project' && scopeProjectName && (
@@ -2285,11 +2235,9 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                     <span
                       className="av-project-name"
                       style={{
-                        fontFamily: "'Oxanium', monospace",
                         fontSize: 12,
                         fontWeight: 600,
-                        letterSpacing: '0.08em',
-                        textTransform: 'uppercase',
+                        letterSpacing: '0.01em',
                         flex: 1,
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
@@ -2372,6 +2320,7 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
         </SidebarFooter>
       )}
     </div>
+    </ShowProviderContext.Provider>
   )
 }
 

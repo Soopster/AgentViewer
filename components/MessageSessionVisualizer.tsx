@@ -30,7 +30,7 @@ import {
 import type { LucideIcon } from 'lucide-react'
 import type { ThreadedBlock, ThreadedMessage } from '@/lib/threading'
 import type { AgentProvider, ApiMessage } from '@/lib/types'
-import { getAssistantLabel } from '@/lib/provider'
+import { getAssistantDisplayName } from '@/lib/provider'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { DEFAULT_COLOR_TREATMENT, getCurrentColorTreatment, subscribeColorTreatment, type ColorTreatment } from '@/lib/colorTreatment'
 import { cn } from '@/lib/utils'
@@ -416,7 +416,7 @@ function buildEntry(row: MessageVisualizerRow, index: number): VisualizerEntry {
   const timestampMs = message.timestamp ? Date.parse(message.timestamp) : Number.NaN
   const tokenUsage = usageTokens(message.usage)
   const roleLabel = message.role === 'assistant'
-    ? getAssistantLabel(message.provider)
+    ? getAssistantDisplayName(message.provider)
     : ROLE_META[message.role].label
   const preview = messagePreview(message)
   const searchText = [
