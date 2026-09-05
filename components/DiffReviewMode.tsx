@@ -2,7 +2,7 @@
 
 import dynamic from 'next/dynamic'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, ArrowRight, Check, FileCode2, GitBranch, Pencil, RefreshCw, Save, Terminal, X } from 'lucide-react'
+import { AlertTriangle, ArrowRight, Check, FileCode2, GitBranch, Pencil, RefreshCw, Save, Terminal, Undo2, X } from 'lucide-react'
 import type { FileContents } from '@pierre/diffs'
 import type { GitReviewData, GitReviewFile } from '@/lib/gitProvider'
 import type { Session } from '@/lib/types'
@@ -317,8 +317,22 @@ export default function DiffReviewMode({ session, messages, diffStyle, diffOptio
   const [error, setError] = useState<string | null>(null)
   const [editable, setEditable] = useState<EditableFile | null>(null)
   const [editedContent, setEditedContent] = useState<string | null>(null)
+  // What the editor was handed when it opened. Deliberately NOT `editedContent`:
+  // that changes on every keystroke, and feeding a live document back into the
+  // component it came from is exactly what @pierre/diffs warns against.
+  const [editorSeed, setEditorSeed] = useState<string | null>(null)
   const [editBusy, setEditBusy] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
+  // Unsaved edits keyed by path. Switching files unmounts the editor, and
+  // before this the draft went with it — silently, with no way back. The
+  // editor's own buffer and undo history survive under the same key
+  // (`editStateKey`, @pierre/diffs 1.4); this keeps the copy React needs to
+  // know the file is dirty and what to write on save.
+  const draftsRef = useRef(new Map<string, string>())
+  const [draftPaths, setDraftPaths] = useState<readonly string[]>([])
+  // Bumped when a draft is discarded, so the retention key changes and the
+  // editor cannot restore the buffer the user just threw away.
+  const [discardEpoch, setDiscardEpoch] = useState(0)
   // Whole-file contents keyed by path, so expanding several hunks in one file
   // costs a single fetch. Invalidated whenever the working copy may have moved.
   const contentsCache = useRef(new Map<string, EditableFile>())
@@ -363,13 +377,41 @@ export default function DiffReviewMode({ session, messages, diffStyle, diffOptio
     }
   }, [selectedFile?.path, session.cwd])
 
-  const closeEditor = useCallback(() => {
-    setEditable(null)
-    setEditedContent(null)
-    setEditError(null)
+  const rememberDraft = useCallback((path: string, draft: string | null, original: string) => {
+    const drafts = draftsRef.current
+    if (draft == null || draft === original) drafts.delete(path)
+    else drafts.set(path, draft)
+    setDraftPaths([...drafts.keys()])
   }, [])
 
-  // Switching files abandons an edit session; the editor is bound to one file.
+  /** Leaves the editor, keeping any unsaved edit for when the file is reopened. */
+  const closeEditor = useCallback(() => {
+    if (editable) rememberDraft(editable.path, editedContent, editable.content)
+    setEditable(null)
+    setEditedContent(null)
+    setEditorSeed(null)
+    setEditError(null)
+  }, [editable, editedContent, rememberDraft])
+
+  /** Throws the unsaved edit away — the only path that loses one, and it is
+   *  the user asking for it. */
+  const discardDraft = useCallback((path: string) => {
+    draftsRef.current.delete(path)
+    setDraftPaths([...draftsRef.current.keys()])
+    setEditable((current) => {
+      if (current?.path !== path) return current
+      setEditedContent(current.content)
+      // The one place the editor is deliberately reset: the user asked for the
+      // disk contents back. A new retention key sheds the retained buffer and
+      // its undo history along with the draft.
+      setEditorSeed(current.content)
+      setDiscardEpoch((epoch) => epoch + 1)
+      return current
+    })
+  }, [])
+
+  // The editor is bound to one file, so switching files closes it — but the
+  // draft is kept rather than dropped.
   useEffect(() => {
     if (editingPath && selectedFile?.path !== editingPath) closeEditor()
   }, [closeEditor, editingPath, selectedFile?.path])
@@ -380,8 +422,14 @@ export default function DiffReviewMode({ session, messages, diffStyle, diffOptio
     setEditError(null)
     try {
       const file = await fetchEditableFile(session.cwd, selectedFile.path)
+      // A draft is only meaningful against the disk contents it was made from;
+      // if the file moved underneath it, the sha256 the save is guarded with
+      // has moved too, so drop the draft rather than offer an edit that could
+      // only fail to save.
+      const draft = draftsRef.current.get(file.path)
       setEditable(file)
-      setEditedContent(file.content)
+      setEditedContent(draft ?? file.content)
+      setEditorSeed(draft ?? file.content)
     } catch (err) {
       setEditError(err instanceof Error ? err.message : 'Failed to open file for editing')
     } finally {
@@ -396,7 +444,13 @@ export default function DiffReviewMode({ session, messages, diffStyle, diffOptio
     try {
       await saveEditableFile(session.cwd, editable.path, editedContent, editable.sha256)
       contentsCache.current.delete(editable.path)
-      closeEditor()
+      // Saved is not a draft any more; closeEditor must not re-record it.
+      draftsRef.current.delete(editable.path)
+      setDraftPaths([...draftsRef.current.keys()])
+      setEditable(null)
+      setEditedContent(null)
+      setEditorSeed(null)
+      setEditError(null)
       await loadReview()
     } catch (err) {
       setEditError(err instanceof Error ? err.message : 'Failed to save file')
@@ -539,7 +593,11 @@ export default function DiffReviewMode({ session, messages, diffStyle, diffOptio
                     </span>
                   </span>
                   <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3, fontFamily: "'IBM Plex Mono', monospace", fontSize: 10 }}>
-                    <span style={{ color: statusColor(file), textTransform: 'uppercase' }}>{file.status}</span>
+                    {draftPaths.includes(file.path) ? (
+                      <span style={{ color: 'var(--amber)' }} title="Unsaved edit kept for this file">DRAFT</span>
+                    ) : (
+                      <span style={{ color: statusColor(file), textTransform: 'uppercase' }}>{file.status}</span>
+                    )}
                     <span><span style={{ color: 'var(--green)' }}>+{file.additions}</span> <span style={{ color: 'var(--red)' }}>-{file.deletions}</span></span>
                   </span>
                 </button>
@@ -585,7 +643,27 @@ export default function DiffReviewMode({ session, messages, diffStyle, diffOptio
                         <Save size={12} />
                         SAVE
                       </button>
-                      <button type="button" className="av-hover-control" onClick={closeEditor} disabled={editBusy} style={editActionStyle(null)}>
+                      {dirty && (
+                        <button
+                          type="button"
+                          className="av-hover-control"
+                          onClick={() => discardDraft(editable.path)}
+                          disabled={editBusy}
+                          title="Throw away this unsaved edit"
+                          style={editActionStyle('var(--red)')}
+                        >
+                          <Undo2 size={12} />
+                          DISCARD
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="av-hover-control"
+                        onClick={closeEditor}
+                        disabled={editBusy}
+                        title={dirty ? 'Leave the editor, keeping this unsaved edit' : 'Leave the editor'}
+                        style={editActionStyle(null)}
+                      >
                         <X size={12} />
                         DONE
                       </button>
@@ -615,9 +693,12 @@ export default function DiffReviewMode({ session, messages, diffStyle, diffOptio
               {editable ? (
                 <PierreEditableFileDiffView
                   headStr={editable.headContent}
-                  workingStr={editable.content}
+                  // Open on the retained draft when there is one, so the text
+                  // on screen is the text SAVE would write.
+                  workingStr={editorSeed ?? editable.content}
                   filePath={editable.path}
                   presentation={{ ...diffOptions, diffStyle }}
+                  editStateKey={`diff-review:${discardEpoch}:${session.cwd ?? ''}:${editable.path}`}
                   onEditedContentChange={setEditedContent}
                 />
               ) : selectedFile ? (

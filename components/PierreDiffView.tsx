@@ -197,6 +197,7 @@ export function PierreEditableFileDiffView({
   filePath,
   maxHeight = null,
   presentation,
+  editStateKey,
   onEditedContentChange,
 }: {
   headStr: string
@@ -204,6 +205,8 @@ export function PierreEditableFileDiffView({
   filePath: string
   maxHeight?: number | null
   presentation?: PierreDiffPresentation
+  /** Retains the draft and undo history under this key across unmounts. */
+  editStateKey?: string
   onEditedContentChange: (contents: string) => void
 }) {
   const oldFile = useMemo(() => ({ name: filePath, contents: headStr }), [filePath, headStr])
@@ -214,23 +217,16 @@ export function PierreEditableFileDiffView({
     changeRef.current = onEditedContentChange
   }, [onEditedContentChange])
 
-  // The factory must forward the editor type and the options the component
-  // hands it — that is how the surface's own onChange reaches the editor
-  // instance. @pierre/diffs 1.4 made the surface an explicit constructor
-  // argument and collapsed onChange's three parameters into one event.
+  // The factory must forward the editor type, the options and the retention
+  // key the component hands it — those are how the surface's own callbacks and
+  // its draft retention reach the editor instance. @pierre/diffs 1.4 made the
+  // surface an explicit constructor argument.
   const createEditor: EditorFactory<undefined, undefined> = useCallback((
     editorType,
     options,
-    editStateKey,
+    key,
   ) => (
-    new Editor(editorType, {
-      ...options,
-      historyMaxEntries: 500,
-      onChange: (event) => {
-        options?.onChange?.(event)
-        changeRef.current(event.file.contents)
-      },
-    }, editStateKey)
+    new Editor(editorType, { ...options, historyMaxEntries: 500 }, key)
   ), [])
 
   const options = useMemo(() => ({
@@ -246,6 +242,14 @@ export function PierreEditableFileDiffView({
           newFile={newFile}
           options={options}
           edit
+          // Retains this file's draft *and* its undo history for as long as the
+          // page lives, so leaving the file and coming back resumes the edit
+          // instead of discarding it. Keyed by path: two files must not share
+          // one buffer.
+          editStateKey={editStateKey}
+          // 1.4 reports document changes as a first-class prop, so the factory
+          // no longer has to wrap the surface's own onChange to see them.
+          onEditChange={(event: { file: { contents: string } }) => changeRef.current(event.file.contents)}
         />
       </EditProvider>
     </PierreDiffFrame>
