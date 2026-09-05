@@ -50,6 +50,8 @@
     "tui:memrun": "REPO=\"$PWD\" ./tui/opentui/memRun.sh",
     "tui:memphases": "REPO=\"$PWD\" MEM_CWD=\"$PWD\" ./tui/opentui/memPhases.sh",
     "tui:worker-perf": "bun run ./tui/opentui/workerLatencyPerf.ts",
+    "tui:worker-memperf": "bun run ./tui/opentui/workerMemoryPerf.ts",
+    "tui:tab-position:smoke": "bun run ./tui/opentui/tabReaderPositionSmoke.tsx",
     "pi:provider:smoke": "bun run ./scripts/piProviderSmoke.ts",
     "pi:provider:perf": "bun run ./scripts/piProviderPerf.ts",
     "provider:pools:smoke": "bun run ./scripts/providerPoolSmoke.ts",

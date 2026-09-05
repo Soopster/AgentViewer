@@ -249,7 +249,16 @@ async function main(): Promise<void> {
     taskListRoundTrips.push(sample.durationMs)
     taskListCards = sample.value
   }
+  // Keep the client baseline warm while evicting it from the smaller worker
+  // cache, then send a delta. The client must transparently resend full input.
+  const evictionSession = session('eviction')
+  await formatTranscriptCardsAsync(evictionSession, threaded, 'balanced', true)
+  for (let i = 0; i < 7; i++) {
+    await formatTranscriptCardsAsync(session(`evict-${i}`), threaded.slice(0, 20), 'balanced', true)
+  }
+  const evictionCards = await formatTranscriptCardsAsync(evictionSession, finalStreamingThreaded, 'balanced', true)
   const correctness = {
+    evictionRecoveryByteIdentical: JSON.stringify(evictionCards) === JSON.stringify(streamingExpected),
     initialByteIdentical: JSON.stringify(firstWorkerCards) === JSON.stringify(initialExpected),
     streamingByteIdentical: JSON.stringify(finalStreamingCards) === JSON.stringify(streamingExpected),
     mutationFallbackByteIdentical: JSON.stringify(mutatedCards) === JSON.stringify(formatTranscriptCards(mutatedThreaded)),

@@ -137,7 +137,6 @@ declare const self: {
 // is reading and the next poll rebuilds it from scratch — the cache thrashes
 // itself and the prefetch becomes a pure cost.
 const THREADING_CACHE_LIMIT = 6
-const CARD_DENSITY_CACHE_LIMIT = 1
 const threadingCacheByKey = new Map<string, IncrementalThreadingCache>()
 
 // Arrays from the previous detail response per session, for the identity-prefix
@@ -166,14 +165,15 @@ function sharedIdentitySuffix<T>(next: readonly T[], prev: readonly T[], prefix:
   return i
 }
 
-// Per-session card cache keyed by message content fingerprint -> density -> card.
+// Per-session card cache keyed by message content fingerprint.
 // Stable refs are returned across calls for the active density without keeping
 // every previously-seen density resident for large transcripts.
 type CachedCard = {
   card: TuiTranscriptCard
+  density: TuiDensity
   durationMs?: number
 }
-type CardCache = Map<string, Map<TuiDensity, CachedCard>>
+type CardCache = Map<string, CachedCard>
 const cardCacheByKey = new Map<string, CardCache>()
 
 type LastFormatted = {
@@ -315,7 +315,19 @@ async function formatCards(
   let perSession = cardCacheByKey.get(sessionCacheKey)
   if (!perSession) {
     perSession = new Map()
-    cardCacheByKey.set(sessionCacheKey, perSession)
+  }
+  // Format-only sessions (including live overlays) never touch the threading
+  // LRU. Bound their caches here too, and retire delta baselines together so
+  // they cannot keep an evicted transcript resident.
+  cardCacheByKey.delete(sessionCacheKey)
+  cardCacheByKey.set(sessionCacheKey, perSession)
+  while (cardCacheByKey.size > THREADING_CACHE_LIMIT) {
+    const oldestKey = cardCacheByKey.keys().next().value
+    if (oldestKey === undefined) break
+    cardCacheByKey.delete(oldestKey)
+    threadingCacheByKey.delete(oldestKey)
+    lastSentByKey.delete(oldestKey)
+    dropLastFormattedForSession(oldestKey)
   }
   const { activeForms, taskRegistry } = buildTranscriptTaskContext(messages)
   const durations = computeTurnDurationsMs(messages)
@@ -334,44 +346,23 @@ async function formatCards(
     // first TaskList in the transcript and forfeits the downstream cache hits.
     if (hasTaskListBlock(msg)) {
       const fresh = formatTranscriptCard(msg, density, activeForms, taskRegistry, durationMs)
-      let perTaskMessage = perSession.get(messageKey)
-      if (!perTaskMessage) {
-        perTaskMessage = new Map()
-        perSession.set(messageKey, perTaskMessage)
-      }
-      const prevEntry = perTaskMessage.get(density)
-      if (prevEntry && Object.is(prevEntry.durationMs, durationMs) && JSON.stringify(prevEntry.card) === JSON.stringify(fresh)) {
+      const prevEntry = perSession.get(messageKey)
+      if (prevEntry?.density === density && Object.is(prevEntry.durationMs, durationMs) && JSON.stringify(prevEntry.card) === JSON.stringify(fresh)) {
         cards[i] = prevEntry.card
         continue
       }
-      if (perTaskMessage.has(density)) perTaskMessage.delete(density)
-      perTaskMessage.set(density, { card: fresh, durationMs })
-      while (perTaskMessage.size > CARD_DENSITY_CACHE_LIMIT) {
-        const oldestDensity = perTaskMessage.keys().next().value
-        if (oldestDensity === undefined) break
-        perTaskMessage.delete(oldestDensity)
-      }
+      perSession.set(messageKey, { card: fresh, durationMs, density })
       cards[i] = fresh
       continue
     }
-    let perMessage = perSession.get(messageKey)
-    if (!perMessage) {
-      perMessage = new Map()
-      perSession.set(messageKey, perMessage)
-    }
-    let entry = perMessage.get(density)
-    if (!entry || !Object.is(entry.durationMs, durationMs)) {
+    let entry = perSession.get(messageKey)
+    if (!entry || entry.density !== density || !Object.is(entry.durationMs, durationMs)) {
       entry = {
         card: formatTranscriptCard(msg, density, activeForms, taskRegistry, durationMs),
         durationMs,
+        density,
       }
-      if (perMessage.has(density)) perMessage.delete(density)
-      perMessage.set(density, entry)
-      while (perMessage.size > CARD_DENSITY_CACHE_LIMIT) {
-        const oldestDensity = perMessage.keys().next().value
-        if (oldestDensity === undefined) break
-        perMessage.delete(oldestDensity)
-      }
+      perSession.set(messageKey, entry)
     }
     cards[i] = entry.card
   }

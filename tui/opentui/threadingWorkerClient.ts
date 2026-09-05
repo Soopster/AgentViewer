@@ -468,7 +468,8 @@ export function formatTranscriptCardsAsync(
     ? threadedPatchBounds(threaded, previousDelivery.threaded)
     : null
   return new Promise<TuiTranscriptCard[]>((resolve, reject) => {
-    pending.set(id, {
+    let retriedWithFullTranscript = false
+    const request: Extract<Pending, { kind: 'format' }> = {
       kind: 'format',
       formatKey,
       threaded,
@@ -487,8 +488,20 @@ export function formatTranscriptCardsAsync(
         touchThreadingCache(key, entry)
         resolve(transcriptCards)
       },
-      reject,
-    })
+      reject: (error) => {
+        // Worker and client LRUs have different working sets. An evicted
+        // worker baseline is a cache miss: retry once with the full source.
+        if (!retriedWithFullTranscript && patch && error.message === 'threading worker format delta baseline unavailable') {
+          retriedWithFullTranscript = true
+          request.previousDelivery = undefined
+          pending.set(id, request)
+          w.postMessage({ kind: 'format', id, session, threaded, density, showToolCalls })
+          return
+        }
+        reject(error)
+      },
+    }
+    pending.set(id, request)
     w.postMessage(patch && previousDelivery
       ? {
           kind: 'format',

@@ -7473,7 +7473,14 @@ export default function OpenTuiApp() {
   const [runningSessions, setRunningSessions] = useState<RunningSessionRef[]>([])
   const [waitingSessions, setWaitingSessions] = useState<Awaited<ReturnType<typeof readTuiRuntimeActivity>>['waiting']>([])
   const [viewerAttentionNotes, setViewerAttentionNotes] = useState<Awaited<ReturnType<typeof readTuiRuntimeActivity>>['attention']>([])
-  const [selectedSessionKey, setSelectedSessionKey] = useState<string | null>(null)
+  const [selectedSessionKey, setSelectedSessionKeyState] = useState<string | null>(null)
+  const captureReaderPositionRef = useRef<(() => void) | null>(null)
+  const setSelectedSessionKey = useCallback((next: React.SetStateAction<string | null>) => {
+    // Capture before React replaces the outgoing transcript, including rapid
+    // tab switches that happen before the disk-write debounce has fired.
+    captureReaderPositionRef.current?.()
+    setSelectedSessionKeyState(next)
+  }, [])
   const [sessionDetail, setSessionDetail] = useState<TuiSessionDetail | null>(null)
   const sessionDetailRef = useRef<TuiSessionDetail | null>(sessionDetail)
   useLayoutEffect(() => {
@@ -7858,6 +7865,17 @@ export default function OpenTuiApp() {
   const readerBoxRef = useRef<BoxRenderable>(null)
   const [measuredReaderBoxHeight, setMeasuredReaderBoxHeight] = useState(0)
   const pausedTranscriptScrollTopRef = useRef<number | null>(null)
+  const tabReaderPositionsRef = useRef(new Map<string, {
+    state: TuiSessionReaderState
+    windowStart: number
+    scrollTop: number
+    anchorKey: string | null
+    anchorOffset: number
+  }>())
+  const pendingTabReaderRestoreRef = useRef<{
+    sessionKey: string
+    position: NonNullable<ReturnType<typeof tabReaderPositionsRef.current.get>>
+  } | null>(null)
   const prevFollowTailRef = useRef(true)
   // Velocity scroll: ramps the per-tick cursor step up smoothly the longer j/k/↑/↓
   // is held, by tracking how recently the same-direction key keeps repeating.
@@ -8179,7 +8197,10 @@ export default function OpenTuiApp() {
       transcriptDiffHoverTimeoutRef.current = null
     }, 2000)
   }, [])
-  const openTranscriptDiffNote = useCallback((selection: SelectedLineRange) => {
+  // Sidebar selection changes on every scrub keypress. Read the latest note
+  // state when invoked without invalidating all mounted card variants just
+  // because the sidebar moved; this handler is passed to every transcript card.
+  const openTranscriptDiffNote = useEffectEvent((selection: SelectedLineRange) => {
     const key = transcriptDiffSelectionKey(selectedSessionIdentity ?? 'no-session', selection)
     setTranscriptDiffDraft({
       anchor: key,
@@ -8187,7 +8208,7 @@ export default function OpenTuiApp() {
       lineLabel: transcriptDiffSelectionLineLabel(selection),
       text: transcriptDiffNotes.get(key)?.text ?? '',
     })
-  }, [selectedSessionIdentity, transcriptDiffNotes])
+  })
   const deleteTranscriptDiffNote = useCallback((selectionKey: string) => {
     setTranscriptDiffNotes((prev) => {
       const next = new Map(prev)
@@ -14982,13 +15003,72 @@ export default function OpenTuiApp() {
     }
   }, [bootstrapped, openTabSessions.length, refreshSessionMetadata, tabsEnabled])
 
+  useLayoutEffect(() => {
+    captureReaderPositionRef.current = () => {
+      if (!committedSessionKey || restoredReaderState.sessionKey !== committedSessionKey
+        || selectedSessionKey !== committedSessionKey || isScrubbing
+        || !restoredReaderState.loaded || pendingTabReaderRestoreRef.current) return
+      const sb = transcriptScrollRef.current
+      if (!sb || visibleTranscriptCards.length === 0) return
+      const scrollTop = sb.scrollTop
+      let anchorKey: string | null = null
+      let anchorOffset = 0
+      // Walk the mounted tree once. Culled cards can have zero height, so
+      // their geometry cannot be used for a binary search of the viewport.
+      const cardIds = new Set(renderedTranscriptCards.map((card) => `card:${card.key}`))
+      const nodes = [...sb.content.getChildren()].reverse()
+      while (nodes.length > 0) {
+        const element = nodes.pop()!
+        if (cardIds.has(element.id)) {
+          const offset = element.y - sb.content.y - scrollTop
+          if (element.height > 0 && offset + element.height > 0) {
+            anchorKey = element.id.slice('card:'.length)
+            anchorOffset = offset
+            break
+          }
+          continue
+        }
+        const children = element.getChildren()
+        for (let i = children.length - 1; i >= 0; i--) nodes.push(children[i])
+      }
+      const positions = tabReaderPositionsRef.current
+      positions.delete(committedSessionKey)
+      positions.set(committedSessionKey, {
+        state: {
+          followTail: followTail && scrollTop >= Math.max(0, sb.scrollHeight - sb.viewport.height) - 1,
+          cursorKey: transcriptCursorKey,
+          topKey: anchorKey,
+          expandedKeys: [...expandedCardKeys],
+          collapsedKeys: [...collapsedCardKeys],
+        },
+        windowStart: transcriptRenderStart,
+        scrollTop,
+        anchorKey,
+        anchorOffset,
+      })
+      // Preserve every open tab, with only a small LRU for sidebar previews.
+      const pinned = new Set(openTabSessions.map(sessionKey))
+      for (const key of positions.keys()) {
+        if (positions.size <= pinned.size + 10) break
+        if (key !== committedSessionKey && !pinned.has(key)) positions.delete(key)
+      }
+    }
+  })
+
   useEffect(() => {
     let cancelled = false
+    const saved = committedSessionKey ? tabReaderPositionsRef.current.get(committedSessionKey) : undefined
+    pendingTabReaderRestoreRef.current = saved && committedSessionKey
+      ? { sessionKey: committedSessionKey, position: saved } : null
+    readerScrollFixupRef.current = null
+    setReaderWindowStart(saved?.windowStart ?? null)
+    pausedTranscriptScrollTopRef.current = saved?.scrollTop ?? null
+    if (saved) recenterCursorKeyRef.current = saved.state.cursorKey
 
-    setTranscriptCursorKey(null)
-    setExpandedCardKeys(new Set())
-    setCollapsedCardKeys(new Set())
-    setFollowTail(true)
+    setTranscriptCursorKey(saved?.state.cursorKey ?? null)
+    setExpandedCardKeys(new Set(saved?.state.expandedKeys))
+    setCollapsedCardKeys(new Set(saved?.state.collapsedKeys))
+    setFollowTail(saved?.state.followTail ?? true)
     setPendingNewCount(0)
     setUnreadBoundaryKey(null)
     setResumeMarkerKey(null)
@@ -14997,9 +15077,13 @@ export default function OpenTuiApp() {
     setSearchMatchIndex(0)
     setRestoredReaderState({
       sessionKey: committedSessionKey,
-      loaded: committedSessionKey == null,
-      state: null,
+      loaded: saved !== undefined || committedSessionKey == null,
+      state: saved?.state ?? null,
     })
+
+    if (saved) {
+      return () => { cancelled = true }
+    }
 
     if (!committedSessionKey) {
       return () => {
@@ -15395,7 +15479,7 @@ export default function OpenTuiApp() {
       activeAgentToolCursorKey,
       followTail,
     )
-    if (!scrollTargetKey) return
+    if (!scrollTargetKey || pendingTabReaderRestoreRef.current) return
     const timer = setTimeout(() => {
       const scrollbox = transcriptScrollRef.current
       scrollbox?.scrollChildIntoView(`card:${scrollTargetKey}`)
@@ -15408,12 +15492,8 @@ export default function OpenTuiApp() {
   }, [activeAgentToolCursorKey, followTail, transcriptCursorKey])
 
   // ── Reader window management ───────────────────────────────────────────────
-  // Reset the detached window whenever the displayed session changes or the
-  // reader re-engages the tail — the derived tail window takes over.
-  useEffect(() => {
-    setReaderWindowStart(null)
-    readerScrollFixupRef.current = null
-  }, [committedSessionKey])
+  // Session restoration above owns the detached window. Re-engaging the tail
+  // lets the derived tail window take over again.
   useEffect(() => {
     if (followTail) setReaderWindowStart(null)
   }, [followTail])
@@ -15428,6 +15508,7 @@ export default function OpenTuiApp() {
   // window straight back — a slide/recenter livelock against the scroll poll.
   const recenterCursorKeyRef = useRef<string | null>(null)
   useEffect(() => {
+    if (pendingTabReaderRestoreRef.current) return
     const cursorMoved = transcriptCursorKey !== recenterCursorKeyRef.current
     recenterCursorKeyRef.current = transcriptCursorKey
     if (!cursorMoved) return
@@ -15458,6 +15539,7 @@ export default function OpenTuiApp() {
     if (effectiveFocus !== 'messages' || isScrubbing) return undefined
     if (totalTranscriptCards <= READER_CARD_WINDOW) return undefined
     const interval = setInterval(() => {
+      if (pendingTabReaderRestoreRef.current) return
       if (readerScrollFixupRef.current) return
       const sb = transcriptScrollRef.current
       if (!sb) return
@@ -15548,6 +15630,36 @@ export default function OpenTuiApp() {
       if (timer) clearTimeout(timer)
     }
   }, [transcriptRenderStart, transcriptRenderEnd])
+
+  // Native layout happens after the React commit. Restore by the visible card
+  // and its row offset once that card has laid out, rather than scrolling the
+  // cursor into view (mouse scrolling can leave the cursor far off screen).
+  useEffect(() => {
+    const pending = pendingTabReaderRestoreRef.current
+    if (!pending || pending.sessionKey !== committedSessionKey
+      || restoredReaderState.sessionKey !== committedSessionKey || !restoredReaderState.loaded) return
+    let timer: ReturnType<typeof setTimeout>
+    let tries = 0
+    const restore = () => {
+      if (pendingTabReaderRestoreRef.current !== pending) return
+      const sb = transcriptScrollRef.current
+      const { position } = pending
+      const anchor = position.anchorKey ? sb?.content.findDescendantById(`card:${position.anchorKey}`) : null
+      if ((!sb || (position.anchorKey && (!anchor || anchor.height <= 0)) || tries < 1)
+        && ++tries < READER_FIXUP_MAX_TRIES) {
+        timer = setTimeout(restore, READER_FIXUP_RETRY_MS)
+        return
+      }
+      if (sb) {
+        sb.scrollTo(position.state.followTail ? sb.scrollHeight
+          : anchor ? Math.max(0, anchor.y - sb.content.y - position.anchorOffset) : position.scrollTop)
+        pausedTranscriptScrollTopRef.current = position.state.followTail ? null : sb.scrollTop
+      }
+      pendingTabReaderRestoreRef.current = null
+    }
+    timer = setTimeout(restore, READER_FIXUP_RETRY_MS)
+    return () => clearTimeout(timer)
+  }, [committedSessionKey, restoredReaderState, renderedTranscriptCards, expandedKeysForRender])
 
   useLayoutEffect(() => {
     if (!followTail) return
@@ -19973,6 +20085,7 @@ export default function OpenTuiApp() {
               )
             ) : (
               <scrollbox
+                id="transcript-scroll"
                 ref={transcriptScrollRef}
                 style={{ height: transcriptViewportRows }}
                 focused={effectiveFocus === 'messages' && splitFocusIndex === null}

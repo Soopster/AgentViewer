@@ -104,11 +104,17 @@ function sanitizeLine(value: string): string {
     .replace(/[\u0000-\u0008\u000B-\u001A\u001C-\u001F\u007F]/g, '')
 }
 
+// Reuse locale setup across transcript messages. toLocaleTimeString with
+// options repeats it for every card, dominating large-session formatting.
+const TIMESTAMP_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+})
+
 function formatTimestamp(value?: string): string {
   if (!value) return ''
   const parsed = new Date(value)
   if (Number.isNaN(parsed.getTime())) return ''
-  return parsed.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+  return TIMESTAMP_FORMATTER.format(parsed)
 }
 
 function truncateLine(value: string, maxChars = MAX_PREVIEW_CHARS): string {
