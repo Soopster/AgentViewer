@@ -93,6 +93,32 @@ ACP has no session-listing, fork, rewind/rollback, delete, or model-listing RPC 
 - **`worker_shutting_down`** marks the entry doomed (`pendingRecycleReason`) so `acquire`/`peek` never hand it out for a new turn. An in-turn doomed entry is still reused — recycling it there kills the live turn out from under its SSE stream.
 - **Spawning resumes, and resuming rewrites the transcript** — identical bytes, new mtime, which is what `listSessions` reports as `lastModified`. Since the pool is prewarmed when a session is *selected*, merely navigating to one would jump it to the top of every list ordered by last activity. Read-only control queries dodge this with `persistSession: false` (`lib/sdkControlQuery.ts`); a pool entry cannot, because the turn it is warmed for must persist. `lib/claudeResumeTouch.ts` instead records the touch during prewarm and subtracts it in the Claude adapter's `listSessions`/`readSessionInfo`. The override is pinned to the exact post-resume mtime *and* file size, so any real write drops it on the next read — it can only hide a timestamp we caused. Codex's `thread/resume` was checked and leaves `updatedAt` alone; no other provider needs this.
 
+#### Copilot reads must not activate the session (load-bearing)
+
+Resuming a Copilot session to read it costs **1.4-7.8s** and appends a synthetic
+`session.resume` event to the history it then hands back — so browsing a session
+changed what the session was made of, and the sidebar paid a multi-second stall
+per open. SDK 1.0.13's `sessions.readPersistedEvents` reads the durable journal
+directly (1-7ms, no activation), and `lib/adapters/copilot.ts` uses it for the
+transcript, `readSessionInfo`, and the model badge; `peekCopilotSession` returns
+a pooled runtime without spawning one, so a read can *decorate* its answer from
+a live session without bringing one up to find out.
+
+- **A cold read reports no context tier, and that is not a gap to fill.** The
+  journal records the model (`session.model_change` / `session.start`) but never
+  the tier, which is runtime state. The composer sends its tier back on every
+  send, so inventing a `default` here would silently downgrade a long-context
+  session on its next turn — `selectedCopilotContextTier` is therefore
+  `null`-until-known in `MessageView.tsx`, and an omitted tier lets
+  `sessionBackend` resolve the session's real one.
+- **Diagnostics and `readComposerOptions` still activate**, deliberately: status,
+  tool lists and the permission/agent mode are runtime state with no journal
+  equivalent, and both are reached by an explicit user action rather than by
+  selecting a session.
+- Guarded by `npm run copilot:sdk:smoke`, which asserts no read leaves a runtime
+  behind and that the journal maps to the same transcript as the activating
+  reader (verified to fail when the persisted path is disabled).
+
 ### Web app (Next.js 16, React 19)
 
 Routes live under `app/api/`:

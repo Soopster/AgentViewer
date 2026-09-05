@@ -452,6 +452,20 @@ export function retainCopilotSession(sessionId: string, session: CopilotSession)
   }
 }
 
+/**
+ * The pooled session for an id, or null — never a spawn. Resuming a Copilot
+ * session costs 1.4-7.8s and appends a `session.resume` event to its history,
+ * so a read that only wants to *decorate* its answer must be able to ask
+ * whether the runtime is already up rather than bringing one up to find out.
+ */
+export function peekCopilotSession(sessionId: string): CopilotSession | null {
+  const entry = copilotSessionPool.get(sessionId)
+  if (!entry) return null
+  entry.lastUsed = Date.now()
+  scheduleCopilotEviction(sessionId)
+  return entry.session
+}
+
 export async function acquireCopilotSession(sessionId: string): Promise<CopilotSession> {
   const cached = copilotSessionPool.get(sessionId)
   if (cached) {

@@ -7,7 +7,7 @@ import {
   subscribeColorTreatment,
   type ColorTreatment,
 } from '@/lib/colorTreatment'
-import { normalizeProjectPath, pathBasename, pickCanonicalProjectPath, sameProjectPath } from '@/lib/projectPaths'
+import { sameProjectPath } from '@/lib/projectPaths'
 import type { AgentProvider, ProviderInstanceSummary, ProviderSelection, Session, SubagentSummary } from '@/lib/types'
 import { parseSessionTagInput, parseStoredSessionTags, serializeSessionTags } from '@/lib/sessionTags'
 import { Button } from '@/components/ui/button'
@@ -40,6 +40,7 @@ import {
   UsersRound,
 } from 'lucide-react'
 import ThemeToggle from './ThemeToggle'
+import { createSessionListIndexer, matchesIndexedSessionSearch, groupByProject, buildSessionTimeEntries } from '@/lib/sessionListModel'
 
 const providerNativeSelectClassName = cn(
   nativeSelectBaseClassName,
@@ -197,12 +198,6 @@ function formatStableTimeLabel(value?: string | number): string {
   return date.toISOString().slice(11, 16) + ' UTC'
 }
 
-type ProjectGroupEntry = {
-  projectDir: string
-  projectName: string
-  sessions: Session[]
-}
-
 type CollapsedPanel = 'sessions' | 'provider' | 'search' | 'project' | 'filters' | 'overview'
 
 function getSessionTitle(session: Session): string {
@@ -218,95 +213,6 @@ function getSessionPreview(session: Session, sessionTitle: string): string | nul
 
 function sessionTabKey(session: Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'>): string {
   return `${session.providerInstanceId ?? session.provider ?? 'claude'}:${session.sessionId}`
-}
-
-type IndexedSession = {
-  session: Session
-  tags: string[]
-  lowerTags: string[]
-  searchText: string
-  normalizedProjectDir: string
-  projectName: string
-}
-
-function indexSession(session: Session): IndexedSession {
-  const tags = parseStoredSessionTags(session.tag)
-  const title = getSessionTitle(session)
-  const normalizedDir = normalizeProjectPath(session.cwd) || '—'
-  return {
-    session,
-    tags,
-    lowerTags: tags.map((tag) => tag.toLowerCase()),
-    searchText: [
-      title,
-      tags.join(' '),
-      session.cwd ?? '',
-      session.firstPrompt ?? '',
-    ].join('\n').toLowerCase(),
-    normalizedProjectDir: normalizedDir,
-    projectName: pathBasename(normalizedDir) || '—',
-  }
-}
-
-function matchesIndexedSessionSearch(session: IndexedSession, search: string, activeTag: string | null): boolean {
-  if (activeTag && !session.lowerTags.includes(activeTag.toLowerCase())) return false
-  if (!search) return true
-  return session.searchText.includes(search)
-}
-
-/**
- * Sessions with a known `parentSessionId` (today: OpenCode subagent child
- * sessions — Claude subagents aren't real sessions at all, see
- * getClaudeSubagentSummaries) are pulled out of the flat/grouped list and
- * returned separately so the sidebar can nest them under their parent row
- * instead of showing them as unrelated top-level sessions.
- */
-function groupByProject(sessions: IndexedSession[]): { groups: ProjectGroupEntry[]; childrenByParentId: Map<string, Session[]> } {
-  const groups: ProjectGroupEntry[] = []
-  const groupsByPath = new Map<string, ProjectGroupEntry>()
-  const groupsByBaseName = new Map<string, ProjectGroupEntry>()
-  const childrenByParentId = new Map<string, Session[]>()
-  // Only nest a child under its parent if the parent is actually present in
-  // this list — otherwise (parent filtered out by search/tags, or deleted)
-  // fall through to the flat "↪ child of …" badge so the row isn't hidden.
-  const presentIds = new Set(sessions.map((s) => s.session.sessionId))
-
-  for (const indexed of sessions) {
-    const { session, normalizedProjectDir, projectName } = indexed
-    if (session.parentSessionId && presentIds.has(session.parentSessionId)) {
-      const siblings = childrenByParentId.get(session.parentSessionId)
-      if (siblings) siblings.push(session)
-      else childrenByParentId.set(session.parentSessionId, [session])
-      continue
-    }
-
-    const byPath = groupsByPath.get(normalizedProjectDir)
-    if (byPath) {
-      byPath.sessions.push(session)
-      continue
-    }
-
-    const byBaseName = groupsByBaseName.get(projectName)
-    if (byBaseName) {
-      byBaseName.projectDir = pickCanonicalProjectPath(byBaseName.projectDir, normalizedProjectDir) || byBaseName.projectDir
-      byBaseName.projectName = pathBasename(byBaseName.projectDir) || '—'
-      byBaseName.sessions.push(session)
-      groupsByPath.set(normalizedProjectDir, byBaseName)
-      groupsByBaseName.set(byBaseName.projectName, byBaseName)
-      continue
-    }
-
-    const group = {
-      projectDir: normalizedProjectDir,
-      projectName,
-      sessions: [session],
-    }
-    groups.push(group)
-    groupsByPath.set(normalizedProjectDir, group)
-    groupsByBaseName.set(projectName, group)
-  }
-
-  return { groups, childrenByParentId }
 }
 
 function providerChipStyle(provider: AgentProvider): { color: string; background: string; border: string } {
@@ -1146,62 +1052,17 @@ function SessionListInner({
   const debouncedSearchText = useDebouncedValue(searchText, 120)
   const deferredSearchText = useDeferredValue(debouncedSearchText)
   const normalizedSearch = deferredSearchText.trim().toLowerCase()
-  const indexedSessions = useMemo(() => sessions.map(indexSession), [sessions])
+  const indexSessions = useMemo(() => createSessionListIndexer(), [])
+  const indexedSessions = useMemo(() => indexSessions(sessions), [indexSessions, sessions])
   const filteredSessions = useMemo(
     () => indexedSessions.filter((session) => matchesIndexedSessionSearch(session, normalizedSearch, activeTag)),
     [indexedSessions, normalizedSearch, activeTag],
   )
   const { groups, childrenByParentId } = useMemo(() => groupByProject(filteredSessions), [filteredSessions])
-  const sessionActivityMs = useCallback((session: Session): number => {
-    const value = session.lastModified ?? session.createdAt
-    if (value == null) return 0
-    const ms = new Date(value).getTime()
-    return Number.isNaN(ms) ? 0 : ms
-  }, [])
-  const timeEntries = useMemo(() => {
-    if (sortMode !== 'time') return [] as Array<
-      | { type: 'header'; key: string; projectDir: string; projectName: string; count: number; projectSessions: Session[] }
-      | { type: 'session'; key: string; session: Session }
-    >
-    const sorted = filteredSessions.toSorted(
-      (a, b) => sessionActivityMs(b.session) - sessionActivityMs(a.session),
-    )
-    const projectSessionsByDir = new Map<string, Session[]>()
-    for (const indexed of sorted) {
-      const list = projectSessionsByDir.get(indexed.normalizedProjectDir)
-      if (list) list.push(indexed.session)
-      else projectSessionsByDir.set(indexed.normalizedProjectDir, [indexed.session])
-    }
-    const entries: Array<
-      | { type: 'header'; key: string; projectDir: string; projectName: string; count: number; projectSessions: Session[] }
-      | { type: 'session'; key: string; session: Session }
-    > = []
-    for (let i = 0; i < sorted.length; i++) {
-      const indexed = sorted[i]
-      const prev = i > 0 ? sorted[i - 1] : null
-      if (!prev || prev.normalizedProjectDir !== indexed.normalizedProjectDir) {
-        let run = 1
-        while (
-          i + run < sorted.length
-          && sorted[i + run].normalizedProjectDir === indexed.normalizedProjectDir
-        ) run++
-        entries.push({
-          type: 'header',
-          key: `project:${indexed.normalizedProjectDir}:${i}`,
-          projectDir: indexed.normalizedProjectDir,
-          projectName: indexed.projectName,
-          count: run,
-          projectSessions: projectSessionsByDir.get(indexed.normalizedProjectDir) ?? [],
-        })
-      }
-      entries.push({
-        type: 'session',
-        key: `${sessionTabKey(indexed.session)}:${i}`,
-        session: indexed.session,
-      })
-    }
-    return entries
-  }, [filteredSessions, sortMode, sessionActivityMs])
+  const timeEntries = useMemo(
+    () => sortMode === 'time' ? buildSessionTimeEntries(filteredSessions) : [],
+    [filteredSessions, sortMode],
+  )
   const tagCounts = useMemo(() => {
     const map = new Map<string, number>()
     for (const session of indexedSessions) {

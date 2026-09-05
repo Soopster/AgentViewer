@@ -21,7 +21,9 @@ import type {
 import { readJsonResponse, readOptionalJsonResponse } from '@/lib/httpResponse'
 import { buildThreadedMessages, buildThreadedMessagesIncremental, computeTurnDurationsMs, stripToolCallBlocks, type IncrementalThreadingCache, type ThreadedMessage, type ThreadedBlock } from '@/lib/threading'
 import { measureSync, recordClientPerf } from '@/lib/clientPerf'
-import { exportSessionToHtml, downloadHtml } from '@/lib/export'
+import { createStreamHistoryMetadataBuilder } from '@/lib/streamHistoryMetadata'
+import { messageToCopyText } from '@/lib/threadedMessageText'
+import { downloadHtml } from '@/lib/downloadHtml'
 import { pathBasename } from '@/lib/projectPaths'
 import { getPrimarySessionTag } from '@/lib/sessionTags'
 import {
@@ -1868,63 +1870,6 @@ function resolveTimelineTargetMessageId(
   return owningRow?.message.uuid ?? targetMessageId
 }
 
-function toolResultToText(result: ToolResultBlock | null): string {
-  if (!result) return ''
-  if (typeof result.content === 'string') return result.content
-  return result.content
-    .map((b) => (b.type === 'text' && typeof (b as { text?: unknown }).text === 'string'
-      ? (b as { text: string }).text
-      : ''))
-    .filter(Boolean)
-    .join('\n')
-}
-
-function toolInputToText(input: Record<string, unknown>): string {
-  if (typeof input.command === 'string') return input.command
-  if (typeof input.file_path === 'string') {
-    if (typeof input.old_string === 'string' && typeof input.new_string === 'string') {
-      return `${input.file_path}\n\n--- old\n${input.old_string}\n+++ new\n${input.new_string}`
-    }
-    if (typeof input.content === 'string') return `${input.file_path}\n\n${input.content}`
-    return input.file_path
-  }
-  if (typeof input.pattern === 'string') return input.pattern
-  if (typeof input.query === 'string') return input.query
-  if (typeof input.url === 'string') return input.url
-  if (typeof input.prompt === 'string') return input.prompt
-  try {
-    return JSON.stringify(input, null, 2)
-  } catch {
-    return ''
-  }
-}
-
-function messageToCopyText(message: ThreadedMessage): string {
-  const parts: string[] = []
-  for (const block of message.blocks) {
-    if (block.type === 'text' && block.text) {
-      parts.push(block.text)
-    } else if (block.type === 'thinking' && block.thinking) {
-      parts.push(block.thinking)
-    } else if (block.type === 'tool_thread') {
-      const sections = [`[${block.toolUse.name}]`]
-      const inputText = toolInputToText(block.toolUse.input)
-      if (inputText) sections.push(inputText)
-      const resultText = toolResultToText(block.result)
-      if (resultText) sections.push(resultText)
-      parts.push(sections.join('\n\n'))
-    } else if (block.type === 'task_notification') {
-      const sections = [`[Task: ${block.taskId}]`]
-      if (block.summary) sections.push(block.summary)
-      if (block.result) sections.push(block.result)
-      parts.push(sections.join('\n\n'))
-    } else if (block.type === 'local_command_stdout' && block.stdout) {
-      parts.push(block.stdout)
-    }
-  }
-  return parts.join('\n\n').trim()
-}
-
 function timelineRowSearchText(row: TimelineRow): string {
   return [
     row.message.role,
@@ -3054,7 +2999,12 @@ function MessageViewInner({
   const [modelsLoading, setModelsLoading] = useState(false)
   const [selectedModel, setSelectedModel] = useState('')
   const [selectedEffort, setSelectedEffort] = useState<'auto' | ReasoningEffortLevel>('auto')
-  const [selectedCopilotContextTier, setSelectedCopilotContextTier] = useState<CopilotContextTier>('default')
+  // null means "not known yet", not "default". A cold Copilot session answers
+  // its model read from the event journal rather than starting its runtime
+  // (lib/adapters/copilot.ts), and the journal does not record the context
+  // tier — so the composer must not send a tier it never learned, or the first
+  // send would quietly downgrade a long-context session to default.
+  const [selectedCopilotContextTier, setSelectedCopilotContextTier] = useState<CopilotContextTier | null>(null)
   const [composerOptions, setComposerOptions] = useState<SessionComposerOptions>({})
   const [selectedAgent, setSelectedAgent] = useState('')
   const [selectedCopilotMode, setSelectedCopilotMode] = useState('interactive')
@@ -3891,8 +3841,11 @@ function MessageViewInner({
         const nextModels = Array.isArray(data.models) ? data.models.filter((model: SessionModelInfo) => normalizeSelectValue(model.value)) : []
         setAvailableModels(nextModels)
         const live = normalizeSelectValue(data.currentModel)
-        const liveContextTier = data.currentContextTier === 'long_context' ? 'long_context' : 'default'
-        setSelectedCopilotContextTier(liveContextTier)
+        // Only a reported tier is a known tier; anything else leaves whatever
+        // the user (or an earlier warm read) already established.
+        if (data.currentContextTier === 'long_context' || data.currentContextTier === 'default') {
+          setSelectedCopilotContextTier(data.currentContextTier)
+        }
         setSelectedModel((prev) => {
           if (preserveSelection && prev && nextModels.some((m: SessionModelInfo) => normalizeSelectValue(m.value) === normalizeSelectValue(prev))) {
             // Keep user's pick if it is still valid; otherwise fall back.
@@ -3912,7 +3865,7 @@ function MessageViewInner({
       setModelsLoading(false)
       setSelectedModel('')
       setSelectedEffort('auto')
-      setSelectedCopilotContextTier('default')
+      setSelectedCopilotContextTier(null)
       return
     }
     refreshSessionModels({ preserveSelection: false })
@@ -3992,7 +3945,7 @@ function MessageViewInner({
 
   useEffect(() => {
     if (activeProvider !== 'copilot') {
-      if (selectedCopilotContextTier !== 'default') setSelectedCopilotContextTier('default')
+      if (selectedCopilotContextTier !== null) setSelectedCopilotContextTier(null)
       return
     }
     if (selectedCopilotContextTier === 'long_context' && !selectedModelInfo?.supportsLongContext) {
@@ -4894,7 +4847,7 @@ function MessageViewInner({
           agent: session.provider === 'opencode' && selectedAgent ? selectedAgent : undefined,
           mode: session.provider === 'copilot' ? selectedCopilotMode : undefined,
           contextTier: session.provider === 'copilot'
-            ? selectedCopilotContextTier
+            ? selectedCopilotContextTier ?? undefined
             : undefined,
           manualPermissions: session.provider === 'copilot'
             || (session.provider === 'claude' && selectedPermissionMode !== 'bypassPermissions' && selectedPermissionMode !== 'plan')
@@ -5879,15 +5832,23 @@ function MessageViewInner({
     }
   }, [sendMessage, sentHistory, historyIndex, resizeComposer, mentionQuery, mentionResults, mentionActiveIndex, insertMention, slashOpen, slashCommands, slashActiveIndex, insertSlashCommand])
 
-  const handleExport = useCallback(() => {
+  const handleExport = useCallback(async () => {
     if (!session) return
     const dirName  = session.customTitle ?? session.summary ?? getPrimarySessionTag(session.tag) ?? (pathBasename(session.cwd) || session.sessionId)
     const safeName = dirName.replace(/[^a-z0-9\-_]/gi, '-').toLowerCase()
     const filename = `${safeName}_${session.sessionId.slice(0, 8)}.html`
 
     if (typeof Worker === 'undefined') {
-      const html = exportSessionToHtml(session, messages)
-      downloadHtml(html, filename)
+      setExporting(true)
+      try {
+        const { exportSessionToHtml } = await import('@/lib/export')
+        const html = exportSessionToHtml(session, messages)
+        downloadHtml(html, filename)
+      } catch (error) {
+        setSessionActionError(error instanceof Error ? error.message : 'Failed to export session')
+      } finally {
+        setExporting(false)
+      }
       return
     }
 
@@ -7283,24 +7244,11 @@ function MessageViewInner({
   }, [baseLayout, estimateTimelineRowHeightForLayout, liveTimelineRows, renderedTimelineRows, rowMeasurementVersion, timelineRows])
   rowLayoutRef.current = rowLayout
 
-  const streamHistoryMetadata = useMemo<Array<Omit<StreamHistoryItem, 'position' | 'top' | 'height'>>>(() => {
+  const buildStreamHistoryMetadata = useLazyRef(() => createStreamHistoryMetadataBuilder(messageToCopyText))
+  const streamHistoryMetadata = useMemo(() => {
     if (viewMode !== 'stream') return []
-    return renderedTimelineRows.map((row, index) => {
-      const normalized = messageToCopyText(row.message).replace(/\s+/g, ' ').trim()
-      const title = normalized.slice(0, 92) || row.previewBadge || `${row.message.role} message`
-      const detail = normalized.length > 92 ? normalized.slice(92, 280).trim() : ''
-      const firstTool = row.message.blocks.find((block) => block.type === 'tool_thread')
-      return {
-        key: row.key,
-        messageId: row.message.uuid,
-        index,
-        role: row.message.role,
-        title,
-        detail,
-        meta: firstTool?.type === 'tool_thread' ? firstTool.toolUse.name : `Turn ${index + 1} · ${row.message.role}`,
-      }
-    })
-  }, [renderedTimelineRows, viewMode])
+    return measureSync('timeline.streamHistoryMetadata', () => buildStreamHistoryMetadata.current(renderedTimelineRows))
+  }, [buildStreamHistoryMetadata, renderedTimelineRows, viewMode])
 
   const streamHistoryItems = useMemo<StreamHistoryItem[]>(() => {
     if (streamHistoryMetadata.length === 0) return []
@@ -9315,7 +9263,7 @@ function MessageViewInner({
                     CONTEXT
                   </Label>
                   <NativeSelect
-                    value={selectedCopilotContextTier}
+                    value={selectedCopilotContextTier ?? 'default'}
                     onChange={(event) => setSelectedCopilotContextTier(event.target.value as CopilotContextTier)}
                     className={cn(compactNativeSelectClassName, 'flex-1')}
                     title="GitHub Copilot context tier"

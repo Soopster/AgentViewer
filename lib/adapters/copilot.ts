@@ -16,6 +16,7 @@ import {
   copilotIntegrationDiagnostics,
   evictCopilotSession,
   getCopilotClient,
+  peekCopilotSession,
 } from '../copilotClient'
 import {
   deriveCopilotState,
@@ -62,7 +63,63 @@ async function findSessionMetadata(sessionId: string): Promise<CopilotSessionMet
   return sessions.find((session) => session.sessionId === sessionId) ?? null
 }
 
-async function readSessionEvents(sessionId: string): Promise<CopilotSessionEvent[]> {
+// Copilot SDK 1.0.13 can read a session's durable event journal without
+// creating, resuming, or activating it. That matters more than it sounds:
+// activation spawns the session's runtime and replays it, which measured
+// 1.4-7.8s per session against 1-7ms for the journal read, and it appends a
+// synthetic `session.resume` event to what the read hands back — so merely
+// opening a session to look at it changed the events it was made of. Verified
+// across five local sessions: every mapped message identical, and the only
+// event the old path had was the resume it caused itself.
+const PERSISTED_EVENT_PAGE_MAX = 1000
+// Ceiling on pagination, not on history: 200k events is far past any real
+// session, and a cursor that stops advancing must not spin forever.
+const PERSISTED_EVENT_PAGE_LIMIT = 200
+
+type CopilotPersistedEventPage = {
+  events: CopilotSessionEvent[]
+  cursor: string
+  hasMore: boolean
+  cursorStatus?: string
+}
+
+type CopilotPersistedEventReader = {
+  sessions?: {
+    readPersistedEvents?: (params: {
+      sessionId: string
+      cursor?: string
+      max?: number
+    }) => Promise<CopilotPersistedEventPage>
+  }
+}
+
+/** Null when the runtime predates the RPC, or when history moved under the
+ *  read — both mean "ask the activating reader instead", never "no events". */
+async function readPersistedSessionEvents(sessionId: string): Promise<CopilotSessionEvent[] | null> {
+  const client = await getCopilotClient()
+  const read = (client.rpc as CopilotPersistedEventReader)?.sessions?.readPersistedEvents
+  if (typeof read !== 'function') return null
+
+  const events: CopilotSessionEvent[] = []
+  let cursor: string | undefined
+  for (let page = 0; page < PERSISTED_EVENT_PAGE_LIMIT; page += 1) {
+    const batch = await read({ sessionId, max: PERSISTED_EVENT_PAGE_MAX, ...(cursor ? { cursor } : {}) })
+    // An expired cursor is answered with a fresh boundary snapshot rather than
+    // a continuation, so the pages we already hold may overlap it and paging
+    // on could revisit them forever. Rare enough to hand off rather than
+    // reconcile.
+    if (batch.cursorStatus === 'expired' && page > 0) return null
+    events.push(...batch.events)
+    // hasMore with an empty page means the cursor is not advancing.
+    if (!batch.hasMore || batch.events.length === 0) return events
+    cursor = batch.cursor
+  }
+  return events
+}
+
+/** Activating fallback: spawns the session runtime, so only for a runtime whose
+ *  journal cannot be read directly. */
+async function readActiveSessionEvents(sessionId: string): Promise<CopilotSessionEvent[]> {
   const session = await acquireCopilotSession(sessionId)
   const historyReader = session as typeof session & {
     getEvents?: () => Promise<CopilotSessionEvent[]>
@@ -71,6 +128,11 @@ async function readSessionEvents(sessionId: string): Promise<CopilotSessionEvent
   if (typeof historyReader.getEvents === 'function') return historyReader.getEvents()
   if (typeof historyReader.getMessages === 'function') return historyReader.getMessages()
   throw new Error('Copilot session does not expose a history reader')
+}
+
+async function readSessionEvents(sessionId: string): Promise<CopilotSessionEvent[]> {
+  const persisted = await readPersistedSessionEvents(sessionId).catch(() => null)
+  return persisted ?? readActiveSessionEvents(sessionId)
 }
 
 export const copilotAdapter: SessionAdapter = {
@@ -97,18 +159,23 @@ export const copilotAdapter: SessionAdapter = {
   },
 
   async readSessionInfo(sessionId) {
-    const [metadata, stored, session] = await Promise.all([
+    // Selecting a session in the sidebar lands here, so it must not be what
+    // starts the session's runtime. The journal read gives the same events,
+    // and the model badge is derived from the `session.model_change` and
+    // `session.start` events that record it — the live RPC is asked only when
+    // a runtime is already up for some other reason.
+    const [metadata, stored, events] = await Promise.all([
       findSessionMetadata(sessionId),
       getCopilotStoredMetadata(sessionId),
-      acquireCopilotSession(sessionId),
+      readSessionEvents(sessionId),
     ])
 
-    const [events, currentModel] = await Promise.all([
-      session.getEvents(),
-      session.rpc.model.getCurrent().catch(() => ({ modelId: undefined })),
-    ])
+    const warm = peekCopilotSession(sessionId)
+    const currentModel = warm
+      ? await warm.rpc.model.getCurrent().then((model) => model.modelId).catch(() => undefined)
+      : undefined
 
-    return mapCopilotSessionToInfo(sessionId, events, stored, metadata, currentModel.modelId)
+    return mapCopilotSessionToInfo(sessionId, events, stored, metadata, currentModel)
   },
 
   async setTitle(sessionId, title) {
@@ -145,16 +212,30 @@ export const copilotAdapter: SessionAdapter = {
   },
 
   async readModels(sessionId) {
+    // Same rule as readSessionInfo: the TUI reads this when a session is
+    // merely selected, so a cold session answers from its journal rather than
+    // paying a resume for a model badge. The catalogue itself is client-level
+    // and never needed a session at all.
     const client = await getCopilotClient()
-    const session = await acquireCopilotSession(sessionId)
-    const [models, currentModel] = await Promise.all([
+    const warm = peekCopilotSession(sessionId)
+    const [models, current] = await Promise.all([
       client.listModels(),
-      session.rpc.model.getCurrent().catch(() => ({ modelId: undefined, contextTier: undefined })),
+      warm
+        ? warm.rpc.model.getCurrent().catch(() => ({ modelId: undefined, contextTier: undefined }))
+        : readSessionEvents(sessionId)
+          .then((events) => ({
+            modelId: deriveCopilotState(events).currentModel,
+            // The context tier is session runtime state, not something the
+            // event journal records; a cold read reports none rather than
+            // guessing one.
+            contextTier: undefined,
+          }))
+          .catch(() => ({ modelId: undefined, contextTier: undefined })),
     ])
     return {
       models: mapCopilotModelsToSessionModels(models),
-      currentModel: currentModel.modelId ?? null,
-      currentContextTier: parseCopilotContextTier(currentModel.contextTier) ?? null,
+      currentModel: current.modelId ?? null,
+      currentContextTier: parseCopilotContextTier(current.contextTier) ?? null,
       contextUsage: null,
     }
   },
