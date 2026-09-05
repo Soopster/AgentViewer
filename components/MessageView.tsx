@@ -21,6 +21,7 @@ import type {
 import { readJsonResponse, readOptionalJsonResponse } from '@/lib/httpResponse'
 import { buildThreadedMessages, buildThreadedMessagesIncremental, computeTurnDurationsMs, stripToolCallBlocks, type IncrementalThreadingCache, type ThreadedMessage, type ThreadedBlock } from '@/lib/threading'
 import { measureSync, recordClientPerf } from '@/lib/clientPerf'
+import { countLinesUpTo } from '@/lib/boundedLineCount'
 import { createStreamHistoryMetadataBuilder } from '@/lib/streamHistoryMetadata'
 import { messageToCopyText } from '@/lib/threadedMessageText'
 import { downloadHtml } from '@/lib/downloadHtml'
@@ -1598,7 +1599,7 @@ function toolResultHasImage(content: ToolResultBlock['content']): boolean {
 }
 
 function estimateLimitedPreHeight(text: string, limit: number): { lineHeight: number; hidden: boolean } {
-  const lineCount = Math.max(1, text.split('\n').length)
+  const lineCount = countLinesUpTo(text, limit + 1)
   const visibleLines = Math.min(lineCount, limit)
   return {
     lineHeight: 16 + visibleLines * 21,
@@ -1608,8 +1609,7 @@ function estimateLimitedPreHeight(text: string, limit: number): { lineHeight: nu
 
 function estimateGenericToolResultHeight(result: ToolResultBlock): number {
   const raw = toolResultContentToText(result.content)
-  const nonEmpty = raw.split('\n').filter((line) => line.trim())
-  if (!result.is_error && nonEmpty.length === 1 && raw.length < 140) return 30
+  if (!result.is_error && raw.length < 140 && raw.split('\n').filter((line) => line.trim()).length === 1) return 30
 
   const persistedMatch = raw.match(/<persisted-output>[\s\S]*?Preview[^\n]*:\n([\s\S]*)/)
   const displayText = persistedMatch ? persistedMatch[1].trim() : raw
@@ -1627,7 +1627,7 @@ function estimateReadToolResultHeight(result: ToolResultBlock, filePath?: string
   }
 
   const raw = summary?.content ?? toolResultContentToText(result.content)
-  const lineCount = Math.max(1, raw.split('\n').length)
+  const lineCount = countLinesUpTo(raw, 26)
   const visibleLines = Math.min(lineCount, 25)
   const metadataHeight = summary ? 30 : 0
   const codeHeight = Math.min(500, Math.max(44, 38 + visibleLines * 20))
@@ -4196,7 +4196,16 @@ function MessageViewInner({
     updateMetrics()
     const observer = new ResizeObserver(() => updateMetrics())
     observer.observe(node)
-    const handleWheel = () => {
+    const handleWheel = (event: WheelEvent) => {
+      // Real input takes ownership from programmatic alignment immediately.
+      // Otherwise resize-driven tail alignment can keep extending scroll-event
+      // suppression while an upward gesture is trying to leave the tail.
+      programmaticScrollUntilRef.current = 0
+      suppressFollowEvalUntilRef.current = 0
+      if (event.deltaY < 0) {
+        autoFollowRef.current = false
+        setAutoFollow(false)
+      }
       wheelScrollCompensationUntilRef.current = performance.now() + WHEEL_SCROLL_COMPENSATION_MS
       // Track the input event itself. Anchor compensation also writes
       // scrollTop and temporarily marks resulting scroll events programmatic;
@@ -7250,12 +7259,13 @@ function MessageViewInner({
     return measureSync('timeline.streamHistoryMetadata', () => buildStreamHistoryMetadata.current(renderedTimelineRows))
   }, [buildStreamHistoryMetadata, renderedTimelineRows, viewMode])
 
+  // Rows carry only their layout-space geometry. The rail maps them onto the
+  // scroll container's document itself, which totalHeight is not: the container
+  // pads the list and renders blocks around it.
   const streamHistoryItems = useMemo<StreamHistoryItem[]>(() => {
     if (streamHistoryMetadata.length === 0) return []
-    const denominator = Math.max(rowLayout.totalHeight, 1)
     return streamHistoryMetadata.map((item, index) => ({
       ...item,
-      position: Math.max(0, Math.min((rowLayout.tops[index] + rowLayout.heights[index] / 2) / denominator, 1)),
       top: rowLayout.tops[index],
       height: rowLayout.heights[index],
     }))
@@ -8542,6 +8552,7 @@ function MessageViewInner({
                 <StreamHistoryRail
                   items={streamHistoryItems}
                   scrollRef={timelineRef}
+                  contentRef={timelineContentRef}
                   anchorOffset={TIMELINE_TARGET_TOP_GUTTER_PX}
                   onSelect={handleJumpToMessage}
                 />
