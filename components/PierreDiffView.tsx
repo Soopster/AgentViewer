@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type { ReactNode } from 'react'
 import { EditProvider, FileDiff, MultiFileDiff, WorkerPoolContextProvider } from '@pierre/diffs/react'
-import { Editor } from '@pierre/diffs/edit'
+import { Editor, type EditorFactory } from '@pierre/diffs/edit'
 import { parsePatchFiles, type DiffLineAnnotation, type FileDiffContentsLoader, type FileDiffMetadata, type FileDiffOptions, type SelectedLineRange } from '@pierre/diffs'
 import { createFileTreeIconResolver, getBuiltInSpriteSheet, prepareFileTreeInput } from '@pierre/trees'
 import { DIFF_WORKER_POOL_OPTIONS } from '@/components/pierreDiffWorker'
@@ -40,7 +40,7 @@ const COMPLETE_TREE_ICON_RESOLVER = createFileTreeIconResolver(COMPLETE_TREE_ICO
 const FileDiffAny = FileDiff as any
 const MultiFileDiffAny = MultiFileDiff as any
 
-const DIFF_OPTIONS: FileDiffOptions<undefined> = {
+const DIFF_OPTIONS: FileDiffOptions<undefined, undefined> = {
   diffStyle: 'unified',
   diffIndicators: 'classic',
   overflow: 'wrap',
@@ -85,7 +85,7 @@ const DIFF_OPTIONS: FileDiffOptions<undefined> = {
   `,
 }
 
-function getDiffOptions(presentation?: PierreDiffPresentation): FileDiffOptions<undefined> {
+function getDiffOptions(presentation?: PierreDiffPresentation): FileDiffOptions<undefined, undefined> {
   if (!presentation) return DIFF_OPTIONS
 
   const diffIndicators =
@@ -214,17 +214,23 @@ export function PierreEditableFileDiffView({
     changeRef.current = onEditedContentChange
   }, [onEditedContentChange])
 
-  // The factory must forward the options the component hands it — that is how
-  // the surface's own onChange reaches the editor instance.
-  const createEditor = useCallback((options: ConstructorParameters<typeof Editor<undefined>>[0]) => (
-    new Editor<undefined>({
+  // The factory must forward the editor type and the options the component
+  // hands it — that is how the surface's own onChange reaches the editor
+  // instance. @pierre/diffs 1.4 made the surface an explicit constructor
+  // argument and collapsed onChange's three parameters into one event.
+  const createEditor: EditorFactory<undefined, undefined> = useCallback((
+    editorType,
+    options,
+    editStateKey,
+  ) => (
+    new Editor(editorType, {
       ...options,
       historyMaxEntries: 500,
-      onChange: (file, lineAnnotations, event) => {
-        options?.onChange?.(file, lineAnnotations, event)
-        changeRef.current(file.contents)
+      onChange: (event) => {
+        options?.onChange?.(event)
+        changeRef.current(event.file.contents)
       },
-    })
+    }, editStateKey)
   ), [])
 
   const options = useMemo(() => ({

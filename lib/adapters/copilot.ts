@@ -42,7 +42,7 @@ import {
 import { readMappedMessagesCache, writeMappedMessagesCache } from '../mappedMessagesCache'
 import { normalizeProjectPath, sameProjectPath } from '../projectPaths'
 import { COPILOT_COMPOSER_MODES, parseCopilotContextTier, parseCopilotModeResponse } from '../copilotComposer'
-import { COPILOT_PERMISSION_MODE_OPTIONS, sortMessagesChronologically } from './shared'
+import { COPILOT_PERMISSION_MODE_OPTIONS, copilotPermissionModeFromSdk, sortMessagesChronologically } from './shared'
 import type {
   GetAuthStatusResponse as CopilotGetAuthStatusResponse,
   GetStatusResponse as CopilotGetStatusResponse,
@@ -163,13 +163,13 @@ export const copilotAdapter: SessionAdapter = {
     const session = await acquireCopilotSession(sessionId)
     const [currentMode, currentPermissionMode] = await Promise.all([
       session.rpc.mode.get().catch(() => 'interactive'),
-      session.rpc.permissions.getAllowAll().catch(() => ({ enabled: false, mode: 'off' as const })),
+      session.rpc.permissions.getMode().catch(() => ({ mode: 'manual' as const })),
     ])
     return {
       modes: COPILOT_COMPOSER_MODES,
       currentMode: parseCopilotModeResponse(currentMode) ?? 'interactive',
       permissionModes: COPILOT_PERMISSION_MODE_OPTIONS,
-      currentPermissionMode: currentPermissionMode.mode ?? (currentPermissionMode.enabled ? 'on' : 'off'),
+      currentPermissionMode: copilotPermissionModeFromSdk(currentPermissionMode.mode) ?? 'off',
     }
   },
 

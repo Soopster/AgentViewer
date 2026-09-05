@@ -53,7 +53,7 @@ type ReviewMeta =
 
 type ReviewItem = CodeViewItem<ReviewMeta>
 type ReviewDiffItem = CodeViewDiffItem<ReviewMeta>
-type ReviewHandle = CodeViewHandle<ReviewMeta>
+type ReviewHandle = CodeViewHandle<ReviewMeta, undefined>
 
 type PendingComment = { key: string; path: string; range: SelectedLineRange; body: string }
 
@@ -767,7 +767,7 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent, onLink
 
   // ── CodeView wiring ────────────────────────────────────────────────────────
 
-  const codeViewOptions = useMemo((): CodeViewOptions<ReviewMeta> => ({
+  const codeViewOptions = useMemo((): CodeViewOptions<ReviewMeta, undefined> => ({
     themeType: 'system',
     diffStyle: viewOptions.diffStyle,
     diffIndicators: 'classic',

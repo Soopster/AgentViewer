@@ -4815,6 +4815,16 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
       else if (attempt != null) parts.push(`attempt ${attempt}`)
       if (delayMs != null) parts.push(`retry in ${(delayMs / 1000).toFixed(1)}s`)
       if (status != null) parts.push(`HTTP ${status}`)
+      // SDK 0.3.261: a first-byte timeout retries with error_status null, so
+      // without this the card reads as a bare "attempt 1/1" with no cause.
+      const noResponse = payload.no_response && typeof payload.no_response === 'object'
+        ? payload.no_response as { waited_ms?: unknown }
+        : null
+      if (noResponse) {
+        parts.push(typeof noResponse.waited_ms === 'number'
+          ? `no response in ${(noResponse.waited_ms / 1000).toFixed(1)}s`
+          : 'no response')
+      }
       return parts.length > 0 ? parts.join(' · ') : 'API retry'
     }
     if (subtype === 'session_state_changed') {
@@ -5041,12 +5051,21 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
     }
     else if (subtype === 'api_retry') {
       const err = payload.error && typeof payload.error === 'object' ? payload.error as Record<string, unknown> : null
+      const noResponse = payload.no_response && typeof payload.no_response === 'object'
+        ? payload.no_response as { waited_ms?: unknown; retry_wait_ms?: unknown }
+        : null
       const lines = [
         typeof payload.attempt === 'number' && typeof payload.max_retries === 'number'
           ? `Attempt ${payload.attempt} of ${payload.max_retries}`
           : '',
         typeof payload.retry_delay_ms === 'number' ? `Retry delay: ${(payload.retry_delay_ms / 1000).toFixed(1)}s` : '',
         typeof payload.error_status === 'number' ? `HTTP ${payload.error_status}` : '',
+        typeof noResponse?.waited_ms === 'number'
+          ? `No response headers after ${(noResponse.waited_ms / 1000).toFixed(1)}s`
+            + (typeof noResponse.retry_wait_ms === 'number'
+              ? ` · retry waits ${(noResponse.retry_wait_ms / 1000).toFixed(1)}s`
+              : '')
+          : '',
         typeof err?.message === 'string' ? err.message : '',
       ].filter(Boolean)
       main = lines.join('\n')

@@ -100,7 +100,10 @@ import {
 } from './liveTranscripts'
 import {
   PROVIDER_MANAGED_PERMISSION_OPTIONS,
+  copilotPermissionModeFromSdk,
+  copilotPermissionModeToSdk,
   sortMessagesChronologically,
+  type CopilotPermissionMode,
 } from './adapters/shared'
 import {
   OPENCODE_OPTIONS,
@@ -1099,8 +1102,6 @@ function turnNoticeEvent(message: string): string {
   return `event: turn-notice\ndata: ${JSON.stringify({ message })}\n\n`
 }
 
-type CopilotPermissionMode = 'off' | 'auto' | 'on'
-
 function parseCopilotPermissionMode(value: unknown): CopilotPermissionMode | undefined {
   return value === 'off' || value === 'auto' || value === 'on' ? value : undefined
 }
@@ -1896,8 +1897,8 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
       const mode = parseCopilotPermissionMode(body.permissionMode)
       if (!mode) throw new Error('permissionMode must be off, auto, or on')
       const session = await acquireCopilotSession(sessionId)
-      const result = await session.rpc.permissions.setAllowAll({ mode })
-      return { ok: result.success, mode: result.mode ?? mode }
+      const result = await session.rpc.permissions.setMode({ mode: copilotPermissionModeToSdk(mode) })
+      return { ok: result.success, mode: copilotPermissionModeFromSdk(result.mode) ?? mode }
     }
   }
 
@@ -2060,7 +2061,11 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
         // emit a fresh usage event at the top of its stream anyway.
         return { ok: true, applied: 'cold', usage: null }
       }
-      const usage = await warm.query.getContextUsage()
+      // The meter is the same number the turn's own result message carries, so
+      // ask for the estimate rather than a token-count API call per category
+      // (SDK 0.3.261's `summary` detail) — this getter sits on the same control
+      // queue the CLI accepts prompts on, and a full read costs ~1.4s there.
+      const usage = await warm.query.getContextUsage({ detail: 'summary' })
       return { ok: true, applied: 'live', usage }
     }
     if (action === 'backgroundTasks') {
@@ -3200,7 +3205,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
         // Do not put a control-channel usage RPC in front of the first model
         // event. The native CLI starts consuming the prompt immediately; the
         // usage frame is auxiliary and can be fetched concurrently.
-        void q.getContextUsage()
+        void q.getContextUsage({ detail: 'summary' })
           .then((usage) => safeEnqueue(codexContextUsageToEventData(usage)))
           .catch(() => {})
 
@@ -3475,7 +3480,10 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
             (timer as { unref?: () => void }).unref?.()
           }
         })
-        const answered: Promise<'live' | 'dead'> = e.query.getContextUsage().then(
+        // `summary` detail (SDK 0.3.261) skips the per-category token-count
+        // calls. The probe only needs the subprocess to answer at all, and a
+        // cheaper answer is one that more often beats CLAUDE_WARM_LIVENESS_PROBE_MS.
+        const answered: Promise<'live' | 'dead'> = e.query.getContextUsage({ detail: 'summary' }).then(
           (usage) => { emitUsage(usage); return 'live' },
           () => 'dead',
         )
@@ -5262,7 +5270,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         session = acquiredSession
         releasePooledSession = retainCopilotSession(sessionId, acquiredSession)
         if (permissionMode) {
-          await session.rpc.permissions.setAllowAll({ mode: permissionMode })
+          await session.rpc.permissions.setMode({ mode: copilotPermissionModeToSdk(permissionMode) })
         }
         for (const model of availableModels) modelsById.set(model.id, model)
         if (!activeContextTier) {

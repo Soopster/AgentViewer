@@ -2844,6 +2844,16 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
         const lines: TuiTranscriptCardLine[] = [line(head, 'result_error')]
         if (delayMs != null) lines.push(line(`  delay: ${(delayMs / 1000).toFixed(1)}s`, 'dim'))
         if (status != null) lines.push(line(`  HTTP ${status}`, 'dim'))
+        // A first-byte timeout retries with error_status null (SDK 0.3.261);
+        // name the cause rather than showing a retry with no reason.
+        const noResponse = block.payload.no_response && typeof block.payload.no_response === 'object'
+          ? block.payload.no_response as { waited_ms?: unknown }
+          : null
+        if (noResponse) {
+          lines.push(line(typeof noResponse.waited_ms === 'number'
+            ? `  no response in ${(noResponse.waited_ms / 1000).toFixed(1)}s`
+            : '  no response', 'dim'))
+        }
         const err = block.payload.error && typeof block.payload.error === 'object'
           ? block.payload.error as Record<string, unknown>
           : null

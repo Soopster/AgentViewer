@@ -51,6 +51,32 @@ export const COPILOT_PERMISSION_MODE_OPTIONS = [
   { value: 'on', label: 'ALLOW ALL', description: 'Automatically approve tool, path, and URL requests.' },
 ] satisfies NonNullable<SessionComposerOptions['permissionModes']>
 
+/**
+ * Copilot SDK 1.0.13 replaced the boolean-ish `permissions.getAllowAll` /
+ * `setAllowAll` pair with a three-valued `permissions.getMode` / `setMode`.
+ * The composer's own vocabulary already had the same three values, so this is
+ * a rename at the wire, not a behaviour change — keep the mapping beside the
+ * option list it mirrors so the two cannot drift apart.
+ */
+export type CopilotPermissionMode = 'off' | 'auto' | 'on'
+export type CopilotSdkPermissionMode = 'manual' | 'assisted' | 'allow-all'
+
+const COPILOT_PERMISSION_MODE_TO_SDK = {
+  off: 'manual',
+  auto: 'assisted',
+  on: 'allow-all',
+} as const satisfies Record<CopilotPermissionMode, CopilotSdkPermissionMode>
+
+export function copilotPermissionModeToSdk(mode: CopilotPermissionMode): CopilotSdkPermissionMode {
+  return COPILOT_PERMISSION_MODE_TO_SDK[mode]
+}
+
+export function copilotPermissionModeFromSdk(mode: unknown): CopilotPermissionMode | undefined {
+  const entry = Object.entries(COPILOT_PERMISSION_MODE_TO_SDK)
+    .find(([, sdkMode]) => sdkMode === mode)
+  return entry?.[0] as CopilotPermissionMode | undefined
+}
+
 export const PROVIDER_MANAGED_PERMISSION_OPTIONS = [
   { value: 'native', label: 'NATIVE', description: 'Permissions are managed by the provider.' },
 ] satisfies NonNullable<SessionComposerOptions['permissionModes']>

@@ -60,7 +60,9 @@ import type { SessionMessage, SessionModelInfo, SubagentSummary } from '../types
 import type { SessionAdapter } from './types'
 
 type ClaudeUsageCapableQuery = {
-  usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: () => Promise<SDKControlGetUsageResponse>
+  usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: (
+    opts?: { skipBehaviors?: boolean },
+  ) => Promise<SDKControlGetUsageResponse>
 }
 
 async function claudePlanUsageItems(q: unknown): Promise<string[]> {
@@ -68,7 +70,9 @@ async function claudePlanUsageItems(q: unknown): Promise<string[]> {
   if (typeof call !== 'function') return ['Unavailable']
   let usage: SDKControlGetUsageResponse
   try {
-    usage = await call.call(q)
+    // `behaviors` is a scan of the local transcripts and nothing here reads it
+    // — skip it (SDK 0.3.261) and keep only the plan rate limits.
+    usage = await call.call(q, { skipBehaviors: true })
   } catch {
     return ['Unavailable']
   }
@@ -360,7 +364,11 @@ export const claudeAdapter: SessionAdapter = {
         q.supportedCommands(),
         q.supportedAgents(),
         q.mcpServerStatus(),
-        q.getContextUsage().catch(() => null),
+        // Diagnostics only prints the meter, so take the cheap answer: SDK
+        // 0.3.261's `summary` detail derives it from the last response's usage
+        // and local estimates instead of running a token-count API call per
+        // category. This read already fans out eight other control RPCs.
+        q.getContextUsage({ detail: 'summary' }).catch(() => null),
         listSubagents(sessionId, claudeSessionStoreOptions()).catch(() => [] as string[]),
         getSessionMessages(sessionId, {
           includeSystemMessages: true,
