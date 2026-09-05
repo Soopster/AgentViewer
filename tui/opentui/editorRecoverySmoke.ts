@@ -47,6 +47,22 @@ try {
   const cleared = await readEditorRecovery(root)
   if (cleared.snapshot || cleared.conflicts.length) throw new Error('Clearing recovery left a readable snapshot')
 
+  await writeFile(firstPath, 'const first = 1\r\n', 'utf8')
+  await writeEditorRecovery(root, {
+    ...snapshot,
+    buffers: [{ ...snapshot.buffers[0]!, lineEnding: '\r\n' }],
+  })
+  const crlf = await readEditorRecovery(root)
+  if (crlf.conflicts.length || crlf.snapshot?.buffers[0]?.lineEnding !== '\r\n'
+    || crlf.snapshot.buffers[0]?.content !== 'const first = 2\n') {
+    throw new Error('Unchanged CRLF file must recover with its original line ending')
+  }
+  await writeFile(firstPath, 'const first = 9\r\n', 'utf8')
+  const changedCrlf = await readEditorRecovery(root)
+  if (changedCrlf.snapshot || changedCrlf.conflicts.length !== 1) {
+    throw new Error('Changed CRLF file must still report a recovery conflict')
+  }
+
   console.log('Editor atomic recovery/restore/conflict/clear smoke passed')
 } finally {
   await rm(root, { recursive: true, force: true })

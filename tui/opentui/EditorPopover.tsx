@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/react */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { readFile } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -54,6 +54,7 @@ import {
 } from './editorMultiCursor'
 import { createEditorFile, deleteEditorFile, renameEditorFile, resolveSafeEditorFile } from './editorFileOperations'
 import { saveEditorFileSafely } from './editorFileSave'
+import { createEditorDiskReader } from './editorDiskReader'
 import {
   detectEditorLineEnding,
   normalizeEditorNewlines,
@@ -1543,19 +1544,17 @@ export function EditorPopover({
 
   useEffect(() => {
     let cancelled = false
+    const diskReader = createEditorDiskReader(root)
     const poll = async () => {
       if (diskPollInFlightRef.current) return
       const snapshot = tabsRef.current
+      diskReader.retain(snapshot.map((tab) => tab.path))
       if (snapshot.length === 0) return
       diskPollInFlightRef.current = true
       try {
         const readings = await Promise.all(snapshot.map(async (tab) => {
           try {
-            const safeFile = await resolveSafeEditorFile(root, tab.path)
-            const raw = await readFile(safeFile.absolute, 'utf8')
-            // Compared in the buffer's terms, or a CRLF file reads as changed
-            // against its own normalized copy on every poll.
-            return { tab, disk: normalizeEditorNewlines(raw), lineEnding: detectEditorLineEnding(raw) }
+            return { tab, ...await diskReader.read(tab.path) }
           }
           catch { return { tab, disk: null as string | null, lineEnding: tab.lineEnding } }
         }))
@@ -1639,13 +1638,9 @@ export function EditorPopover({
         const next = new Set(current); next.delete(activeTab.path); return next
       })
       if (lspRef.current === client) client?.saved(savedContent)
-      if (!tabs.some((tab) => tab.path !== activeTab.path && tab.content !== tab.savedContent) && recoveryConflicts.length === 0) {
-        if (recoveryTimerRef.current) clearTimeout(recoveryTimerRef.current)
-        recoveryTimerRef.current = null
-        await clearEditorRecovery(root).catch((error) => {
-          onNotice?.('error', error instanceof Error ? error.message : 'Unable to clear editor recovery')
-        })
-      }
+      // The recovery effect observes the committed tabs, including edits made
+      // while this save was in flight. Clearing from this captured snapshot
+      // could delete recovery for newer unsaved text.
       setMessage(`Written ${activeTab.path}`)
       onNotice?.('info', `Saved ${activeTab.path}`)
     } catch (error) {
@@ -1653,7 +1648,7 @@ export function EditorPopover({
       setMessage(text)
       onNotice?.('error', text)
     }
-  }, [activeTab, onNotice, recoveryConflicts.length, root, tabs])
+  }, [activeTab, onNotice, root])
 
   const saveAll = useCallback(async () => {
     const modified = tabs.filter((tab) => tab.content !== tab.savedContent)
@@ -1691,17 +1686,10 @@ export function EditorPopover({
       onNotice?.('error', text)
       return
     }
-    if (recoveryConflicts.length === 0) {
-      if (recoveryTimerRef.current) clearTimeout(recoveryTimerRef.current)
-      recoveryTimerRef.current = null
-      await clearEditorRecovery(root).catch((error) => {
-        onNotice?.('error', error instanceof Error ? error.message : 'Unable to clear editor recovery')
-      })
-    }
     const text = `Saved all ${savedPaths.size} modified file${savedPaths.size === 1 ? '' : 's'}`
     setMessage(text)
     onNotice?.('info', text)
-  }, [activeTab, onNotice, recoveryConflicts.length, root, tabs])
+  }, [activeTab, onNotice, root, tabs])
 
   const addNextOccurrence = useCallback(() => {
     const editor = editorRef.current
@@ -4245,7 +4233,9 @@ export function EditorPopover({
     && ghostRow < contentTop + contentHeight
     && cursor.visualColumn + ghostSuffix.length < editorWidth - gutterMinWidth - 2
   const ghostText = ghostFits ? ghostSuffix : null
-  ghostTextRef.current = ghostText
+  useLayoutEffect(() => {
+    ghostTextRef.current = ghostText
+  }, [ghostText])
   const editorModeLabel = focusPane === 'explorer' ? 'EXPLORER' : vimEnabled ? vimMode.toUpperCase() : 'INSERT'
   const editorModeColor = focusPane === 'explorer'
     ? theme.amber

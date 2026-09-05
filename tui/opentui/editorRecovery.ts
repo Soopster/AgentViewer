@@ -1,7 +1,7 @@
 import { mkdir, open, readFile, rename, stat, unlink } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
 import { resolveSafeEditorFile } from './editorFileOperations'
-import { isEditorLineEnding, type EditorLineEnding } from './editorLineEndings'
+import { isEditorLineEnding, normalizeEditorNewlines, type EditorLineEnding } from './editorLineEndings'
 
 export type EditorRecoveryBuffer = {
   path: string
@@ -143,7 +143,7 @@ export async function readEditorRecovery(root: string): Promise<EditorRecoveryRe
     let diskContent: string | null = null
     try {
       const safeFile = await resolveSafeEditorFile(root, buffer.path)
-      diskContent = await readFile(safeFile.absolute, 'utf8')
+      diskContent = normalizeEditorNewlines(await readFile(safeFile.absolute, 'utf8'))
     } catch { /* missing/unreadable/outside-workspace is a conflict */ }
     if (diskContent === buffer.savedContent) recoverable.push(buffer)
     else conflicts.push(buffer)
