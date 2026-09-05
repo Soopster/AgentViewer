@@ -15,15 +15,15 @@ Use empty, small (100), medium (1,000), and large (10,000) datasets where releva
 | Initial load and hydration, initial JavaScript | Production build passes; initial JavaScript reduced by 89,689 bytes (26,340 gzip); browser hydration baseline pending |
 | Session list, projects, tags, search, session switching | Indexing and time-order helpers measured at 100/1,000/10,000 sessions; mounted sidebar/browser baseline pending |
 | Conversation, Full, Stream, Agents transcript views | Stream preview helper measured; other derivations and actual rendering pending |
-| Scroll, jump, follow-tail, resize, density, tool expansion | Existing virtualizer correctness smoke passes; browser latency/geometry pending |
+| Scroll, jump, follow-tail, resize, density, tool expansion | Headless 2,000-event search/view/scroll matrix passes; wheel-to-follow race fixed; resize/expansion coverage pending |
 | Live tokens, tool updates, persisted handoff, idle polling | Stream preview helper live-update benchmark passes; full pipeline pending |
-| Composer typing, drafts, queue, attachments, commands | Existing composer harness available; browser measurement pending |
+| Composer typing, drafts, queue, attachments, commands | Synthetic typing passes with no long tasks; queue/attachments/commands browser coverage pending |
 | Transcript search, bookmarks, filters, project feed | Preview filter/reorder correctness checked; browser workloads pending |
-| Large markdown, code, diffs, images, nested subagents | Large tool-output previews measured; renderer and expansion workloads pending |
+| Large markdown, code, diffs, images, nested subagents | 10,000-line tool-output browser workload passes; bounded height counting implemented; broader renderer/expansion coverage pending |
 | Git, file/editor, terminal/browser side panels, split views | Browser baseline pending |
 | Analytics, command palette, coordinator and fleet surfaces | Browser baseline pending |
 | API/session polling and search across all providers | Provider-specific harnesses exist; web end-to-end and concurrent request measurements pending |
-| Memory after long streams, scrolling, switching sessions | Preview cache uses weak keys and bounded strings; retained-heap measurement pending |
+| Memory after long streams, scrolling, switching sessions | 12 alternating-session GC snapshots recorded; extended streaming/panel memory and DOM drift investigation pending |
 
 For interactive browser work, use 16.67 ms as a frame-work diagnostic threshold
 and report end-to-end input latency separately. A helper passing that threshold
@@ -131,9 +131,9 @@ errors in the extracted helper. No remote score was requested.
 ## Browser availability
 
 The browser runtime initialized, but selection returned `No browser is available`
-and the documented discovery returned an empty list. Browser performance work
-remains unverified; a request to connect the browser is pending. This does not
-block builds or pure data-processing measurement.
+and the documented discovery returned an empty list. The interactive browser remains unavailable. Isolated headless Chromium was
+subsequently available for synthetic production-UI tests; no user browser
+profile or real session data is used. Builds and helper measurements also remain available.
 
 ## Implemented: Deferred HTML export renderer
 
@@ -162,3 +162,101 @@ HTML formatting/escaping, the existing download export API, exact Blob contents,
 filename, click and object-URL cleanup. This does not replace browser testing of
 the asynchronous fallback. React Doctor continues to report the same three
 MessageView complexity warnings, with no errors or remote score.
+
+## Production browser matrix and wheel fix (2026-09-06)
+
+`node scripts/webBrowserPerf.mjs` now runs an isolated Chromium context against
+a local production build. All API calls receive synthetic responses; non-local
+network requests are blocked and no live provider sessions are touched. Set
+`PLAYWRIGHT_CHROMIUM_EXECUTABLE` to an installed headless Chromium executable,
+`WEB_PERF_ORIGIN` to the local server (default `http://127.0.0.1:3107`),
+`WEB_PERF_ROWS=500`, `WEB_PERF_MESSAGES=2000`, and `WEB_PERF_CONTENT=text` or
+`mixed`. Mixed fixtures include Bash tool-use/result pairs and Markdown/code.
+The messages endpoint honors offset/limit/tail, so larger configured histories
+still open the same bounded tail that production requests. This is not a test
+of loading the entire larger history.
+
+The harness checks startup, sidebar filtering, transcript open, composer input,
+transcript search/clear, and Stream/Agents/Continue/Full mode changes. It sends
+12 real wheel inputs per view and asserts both departure from the tail and
+readable content intersecting the viewport. rAF intervals measure browser frame
+cadence; typing timing deliberately includes two frames and automation overhead
+and is not an INP measurement. Long tasks are collected with PerformanceObserver.
+
+Repeated runs exposed a real race after a view change: upward wheel input could
+remain at the tail (72 px bottom gutter) while row-height settlement repeatedly
+aligned it. Scroll-event suppression delayed auto-follow cancellation. The wheel
+handler now clears programmatic suppression and cancels auto-follow immediately
+on upward input. This prevents layout work from taking control back from the
+user's gesture. Absolute scrollTop is not a correctness gate because row-height
+compensation legitimately changes it; tail distance and visible content are.
+
+After the fix, all six complete runs passed (three per content type, 84 workload
+observations, 24 scroll cases). Every upward gesture left the tail by at least
+8,396 px. No scrolling long tasks occurred. There were three transcript-opening
+long tasks of 52, 54, and 63 ms; opening performance remains an explicit open item.
+
+| Content | View | Runs | rAF p95 ms | Maximum ms |
+| --- | --- | ---: | ---: | ---: |
+| text | stream | 3 | 17.4 | 34.1 |
+| text | agents | 3 | 17.3 | 33.5 |
+| text | cont | 3 | 17.3 | 17.7 |
+| text | full | 3 | 17.4 | 17.7 |
+| mixed | stream | 3 | 17.3 | 17.5 |
+| mixed | agents | 3 | 17.2 | 17.7 |
+| mixed | cont | 3 | 17.4 | 17.7 |
+| mixed | full | 3 | 17.1 | 17.6 |
+
+These results establish a focused Chromium synthetic workload, not all-browser
+or all-workload completion. Two text scrolling cases included a roughly 33–34 ms
+frame; no claim of a strict 16.67 ms frame gate is made. Real provider streaming,
+large-history loads, resize, expansion, side panels, retained memory and other
+matrix gaps above still need measurement. Production build, OpenTUI type check,
+virtualizer correctness and diff hygiene passed. React Doctor reported the same
+three MessageView complexity warnings, with no errors or remote score.
+
+## Bounded tool-height work and memory sampling (2026-09-06)
+
+The browser harness supports `WEB_PERF_PROFILE=/tmp/open.cpuprofile` to sample
+opening CPU work. One mixed-content opening profile attributed about 11.4 ms
+of sampled self time to `estimateGenericToolResultHeight`; much of the total
+automation duration was idle, so it must not be treated as CPU time. The
+estimator split full outputs into arrays just to determine whether collapsed
+previews exceeded 20 or 25 lines.
+
+`countLinesUpTo` now scans only enough newline boundaries for that decision.
+Generic results only compute the one-nonempty-line special case for strings
+shorter than 140 characters, where that case can apply. The height and hidden
+line decisions are unchanged, including empty text and trailing newlines.
+`node --import tsx scripts/webLineCountPerf.ts` checks CRLF, Unicode text,
+preview boundaries and 1,000 deterministic randomized inputs against the
+original split behavior. The timing below uses five warmups and 20 samples;
+it measures this helper, not end-to-end opening.
+
+| Output lines | Before p95 ms | After p95 ms |
+| ---: | ---: | ---: |
+| 100 | 0.001625 | 0.000417 |
+| 10,000 | 0.230083 | 0.000375 |
+| 1,000,000 | 35.308459 | 0.000334 |
+
+The production browser run with `WEB_PERF_MESSAGES=200`,
+`WEB_PERF_CONTENT=mixed`, and `WEB_PERF_TOOL_LINES=10000` passed all 14 stages
+with no long tasks. It includes 50 tool results (about 8 MB of output), search,
+view changes and visible-content wheel assertions. Opening was about 451 ms,
+search 60 ms and clearing search 64 ms including automation overhead. There
+is no before/after browser latency claim for that fixture.
+
+`WEB_PERF_MEMORY=1` adds 12 alternating selections of two distinct synthetic
+sessions, waits for the expected session's transcript, runs V8 garbage collection,
+and records heap plus DOM counters. The final-source 2,000-event mixed run used
+15,590,596–17,213,412 bytes of collected JS heap. The last first-session snapshot
+was 16,062,420 bytes versus 16,265,148 on its first return; documents remained
+at one. This short run shows no sustained heap rise, not absence of every leak.
+DOM counters vary with mounted rows and show a small drift across returns;
+longer runs with settled-layout snapshots remain necessary. The measurement
+does not cover process RSS, uncollected peaks, provider runtimes, streams or
+other panels.
+
+Production build, web and OpenTUI type checks, helper parity and browser checks
+passed. React Doctor still reports three MessageView complexity warnings, with
+no errors or remote score. The full workload objective remains incomplete.
