@@ -3107,7 +3107,11 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           includeHookEvents: true,
           promptSuggestions: true,
           forwardSubagentText: true,
-          systemPrompt: { type: 'preset', preset: 'claude_code', excludeDynamicSections: true },
+          // Recorded for the conversation — see lib/claudePool.ts's spawn()
+          // for what that buys and what it costs. Both paths must agree, or a
+          // session's first (cold) turn would record a prompt the pooled turns
+          // then decline to reuse.
+          systemPrompt: { type: 'preset', preset: 'claude_code', excludeDynamicSections: true, snapshot: true },
           ...claudeQueryBudgetOptions(taskBudgetTotal, maxBudgetUsd),
           ...(enableWorkflow ? { settings: { enableWorkflows: true } } : {}),
           // See lib/claudePool.ts's spawn() for why this needs no compat-check

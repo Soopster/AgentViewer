@@ -42,6 +42,13 @@ export function createSessionControlQuery(sessionId: string, model?: string): Qu
       // *viewing* a session reorders it to the top of the list. See
       // READ_MODELS_WARM_OPTIONS, which sets this for the same reason.
       persistSession: false,
+      // Nothing here runs a tool (maxTurns: 0) and there is no canUseTool
+      // handler to run one past, so there is no surface on which a permission
+      // prompt could be answered. Say so (SDK 0.3.261) rather than leaving a
+      // prompt able to park the control queue on a question nobody will see:
+      // an unanswerable prompt is denied immediately with a message explaining
+      // why. Rules, hooks and the permission mode still decide as before.
+      permissionPrompts: 'none',
     },
   })
 }
@@ -60,6 +67,9 @@ export function createSessionControlQuery(sessionId: string, model?: string): Qu
 // next call is hot too.
 
 const READ_MODELS_WARM_OPTIONS = {
+  // Same reasoning as createSessionControlQuery's: a model listing has no
+  // approval surface, so a prompt on this query could only hang it.
+  permissionPrompts: 'none',
   // No explicit model: this only asks the CLI what models it knows about, so
   // it should boot with whatever default it would normally pick (respecting
   // custom ANTHROPIC_MODEL/base URL/Bedrock/Vertex config) rather than a

@@ -589,7 +589,18 @@ class ClaudePool {
         includeHookEvents: true,
         promptSuggestions: true,
         forwardSubagentText: true,
-        systemPrompt: { type: 'preset', preset: 'claude_code', excludeDynamicSections: true },
+        // `snapshot` records the rendered system prompt once for the
+        // conversation and replays it verbatim, which is what keeps the API
+        // prompt-cache prefix stable across turns and across a resume — and,
+        // with extended thinking, stops a prompt that shifted between launches
+        // from discarding the model's earlier reasoning. The trade it makes is
+        // real and deliberate: a mid-session `setModel` no longer re-renders
+        // the prompt, so a model switch inherits the recorded one until the
+        // next compaction or a new session. The preset carries no per-model
+        // text worth that instability. Where prompt recording is not enabled
+        // for the account (and on Bedrock/Vertex/Foundry) the field is accepted
+        // and does nothing.
+        systemPrompt: { type: 'preset', preset: 'claude_code', excludeDynamicSections: true, snapshot: true },
         ...claudeQueryBudgetOptions(opts.taskBudgetTokens, opts.maxBudgetUsd),
         ...(opts.enableWorkflow ? { settings: { enableWorkflows: true } } : {}),
         // Coordinator-owned sessions get their coord_* tools bound in-process at

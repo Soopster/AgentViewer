@@ -59,6 +59,8 @@ export async function readClaudeSupportedModelsOnce(): Promise<SessionModelInfo[
           persistSession: false,
           maxTurns: 0,
           enableFileCheckpointing: true,
+          // No approval surface on a model listing — see sdkControlQuery.ts.
+          permissionPrompts: 'none',
           ...claudeProcessSpawnOptions(),
         },
       })
