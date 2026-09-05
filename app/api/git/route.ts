@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { fetchGitBranches, fetchGitData, fetchGitReviewData, fetchGitSummary, isAllowedGitCommand, isSafeGitBranchName, parseGitDiffSource } from '@/lib/gitProvider'
-import { fetchSourceStatus, listGitTurns } from '@/lib/gitDiffSources'
+import { fetchSourceStatus, listGitTurnsForMenu } from '@/lib/gitDiffSources'
 import { runGitCommand, runGitCommandStrict } from '@/lib/gitNodeProvider'
 
 type GitRequestBody = {
@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
     }
     if (action === 'turns') {
       return NextResponse.json(
-        { turns: await listGitTurns(cwd, searchParams.get('sessionId')) },
+        await listGitTurnsForMenu(cwd, searchParams.get('sessionId')),
         { headers: { 'Cache-Control': 'no-store' } },
       )
     }

@@ -9153,6 +9153,9 @@ export default function OpenTuiApp() {
   // Git follows the focused split pane when there is one: the popover is
   // cwd-scoped, and the pane you are looking at is the repo you mean.
   const gitRepoCwd = focusedSplitPaneSession?.cwd ?? sessionDetail?.info?.cwd ?? selectedSession?.cwd ?? null
+  // Scopes the git panel's turn list, and follows the same pane-then-selection
+  // precedence as the cwd it is read alongside.
+  const gitSessionId = focusedSplitPaneSession?.sessionId ?? sessionDetail?.info?.sessionId ?? selectedSession?.sessionId ?? null
   const projectCount = useMemo(
     () => new Set(sessions.map((session) => formatSessionProject(session))).size,
     [sessions],
@@ -20479,6 +20482,7 @@ export default function OpenTuiApp() {
                       <GitPopover
                         docked
                         cwd={gitRepoCwd}
+                        sessionId={gitSessionId}
                         theme={theme}
                         width={box.width}
                         height={box.height}
@@ -21642,6 +21646,7 @@ export default function OpenTuiApp() {
       {gitOpen ? (
         <GitPopover
           cwd={gitRepoCwd}
+          sessionId={gitSessionId}
           theme={theme}
           width={width}
           height={height}

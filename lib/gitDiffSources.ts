@@ -54,6 +54,22 @@ async function resolveTurnSuccessor(cwd: string, sha: string): Promise<string | 
   return checkpoints[index - 1].sha
 }
 
+/** The turns to offer in the picker, and whether they are this session's.
+ *
+ *  A session with no checkpoints of its own is common and is not an error: the
+ *  repo may have been worked before turn snapshots recorded a session id, or by
+ *  another session entirely. Falling back to every turn in the repo keeps the
+ *  menu usable; `scoped` lets the UI say which list it is showing, so the
+ *  numbering is never read as this session's when it isn't. */
+export async function listGitTurnsForMenu(
+  cwd: string,
+  sessionId?: string | null,
+): Promise<{ turns: GitTurnRef[]; scoped: boolean }> {
+  const scoped = await listGitTurns(cwd, sessionId)
+  if (!sessionId || scoped.length > 0) return { turns: scoped, scoped: !!sessionId }
+  return { turns: await listGitTurns(cwd, null), scoped: false }
+}
+
 /** The commit a branch's changes are measured from: its fork point. */
 async function resolveBranchBase(cwd: string, runGit: GitCommandRunner): Promise<string | null> {
   const upstreamRaw = await runGit(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'])

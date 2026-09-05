@@ -8,6 +8,7 @@ import type { SelectedLineRange } from '@pierre/diffs'
 import { FileTree, useFileTree } from '@pierre/trees/react'
 import { prepareFileTreeInput, themeToTreeStyles } from '@pierre/trees'
 import type { GitData, GitDiffSource, GitStatusEntry, GitTurnRef } from '@/lib/gitProvider'
+import { DIFF_SOURCE_HEAD_ITEMS, diffSourceKey, diffSourceLabel, isSameSelection, resolveDiffSource, turnMenuItems, type DiffSourceSelection } from '@/lib/gitDiffSourceMenu'
 import type { GitStatusEntry as TreeGitStatusEntry } from '@pierre/trees'
 import { getCurrentTheme, subscribeTheme, THEME_META, type Theme } from '@/lib/themes'
 import { PierrePatchDiffView, type PierreAnnotationMetadata, type PierreChangeStyle, type PierreDiffAnnotation, type PierreDiffPresentation, type PierreDiffStyle, type PierreInlineDiffStyle } from './PierreDiffView'
@@ -45,15 +46,6 @@ type DraftDiffNote = {
 
 type PaneId = 1 | 2 | 3 | 4
 
-/** What the user picked, which is not the same as what gets diffed: 'latest'
- *  has to keep meaning "whichever turn is newest" after another turn runs, so
- *  it is resolved against the turn list on every render rather than frozen into
- *  a sha when the menu is clicked. */
-type DiffSourceSelection =
-  | { kind: 'working' }
-  | { kind: 'branch' }
-  | { kind: 'latest' }
-  | { kind: 'turn'; sha: string }
 type LeftPaneMode = 'normal' | 'expanded' | 'hidden'
 type PierreAnnotationKind = 'thread' | 'draft'
 
@@ -136,28 +128,16 @@ async function fetchGitData(cwd: string, source: GitDiffSource): Promise<GitData
   }
 }
 
-async function fetchTurnList(cwd: string, sessionId?: string | null): Promise<GitTurnRef[]> {
+async function fetchGitTurns(cwd: string, sessionId?: string | null): Promise<{ turns: GitTurnRef[]; scoped: boolean }> {
   try {
     const scope = sessionId ? `&sessionId=${encodeURIComponent(sessionId)}` : ''
     const res = await fetch(`/api/git?action=turns&cwd=${encodeURIComponent(cwd)}${scope}`)
-    const body = await res.json() as { turns?: GitTurnRef[] }
-    return res.ok && body.turns ? body.turns : []
+    const body = await res.json() as { turns?: GitTurnRef[]; scoped?: boolean }
+    if (!res.ok || !body.turns) return { turns: [], scoped: false }
+    return { turns: body.turns, scoped: !!body.scoped }
   } catch {
-    return []
+    return { turns: [], scoped: false }
   }
-}
-
-/** The turns to offer, and whether they are this session's.
- *
- *  A session with no checkpoints of its own is common and is not an error: the
- *  repo may have been worked before turn snapshots recorded a session id, or by
- *  another session entirely. Falling back to every turn in the repo keeps the
- *  menu usable; the caption says which list is on screen so the numbering is
- *  never read as this session's when it isn't. */
-async function fetchGitTurns(cwd: string, sessionId?: string | null): Promise<{ turns: GitTurnRef[]; scoped: boolean }> {
-  const scoped = await fetchTurnList(cwd, sessionId)
-  if (!sessionId || scoped.length > 0) return { turns: scoped, scoped: !!sessionId }
-  return { turns: await fetchTurnList(cwd, null), scoped: false }
 }
 
 async function fetchGitContent({
@@ -541,35 +521,6 @@ function statusLabel(x: string, y: string): string {
   return 'Changed'
 }
 
-/** A time alone cannot separate 60 turns spread over days — 15:56 appears once
- *  per day the agent ran — so anything older than today carries its date. */
-function formatTurnTime(createdAt: number): string {
-  if (!createdAt) return ''
-  const at = new Date(createdAt)
-  const time = at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).toLowerCase()
-  const today = new Date()
-  const sameDay = at.getFullYear() === today.getFullYear()
-    && at.getMonth() === today.getMonth()
-    && at.getDate() === today.getDate()
-  return sameDay ? time : `${at.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`
-}
-
-/** Turns are listed newest first; numbering counts up from the oldest so a
- *  turn keeps its number as newer ones arrive. */
-function turnNumber(turns: GitTurnRef[], index: number): number {
-  return turns.length - index
-}
-
-function diffSourceLabel(selection: DiffSourceSelection, turns: GitTurnRef[]): string {
-  if (selection.kind === 'branch') return 'Branch changes'
-  if (selection.kind === 'latest') return 'Latest turn'
-  if (selection.kind === 'turn') {
-    const index = turns.findIndex((turn) => turn.sha === selection.sha)
-    return index === -1 ? 'Turn' : `Turn ${turnNumber(turns, index)}`
-  }
-  return 'Working tree'
-}
-
 function DiffSourceMenuRow({
   label,
   secondary,
@@ -714,24 +665,15 @@ function DiffSourceMenu({
 
       {open ? (
         <div style={{ ...panelStyle, left: 0 }}>
-          <DiffSourceMenuRow
-            label="Working tree"
-            selected={selection.kind === 'working'}
-            onClick={() => choose({ kind: 'working' })}
-            onHover={() => setTurnsOpen(false)}
-          />
-          <DiffSourceMenuRow
-            label="Branch changes"
-            selected={selection.kind === 'branch'}
-            onClick={() => choose({ kind: 'branch' })}
-            onHover={() => setTurnsOpen(false)}
-          />
-          <DiffSourceMenuRow
-            label="Latest turn"
-            selected={selection.kind === 'latest'}
-            onClick={() => choose({ kind: 'latest' })}
-            onHover={() => setTurnsOpen(false)}
-          />
+          {DIFF_SOURCE_HEAD_ITEMS.map((item) => (
+            <DiffSourceMenuRow
+              key={item.label}
+              label={item.label}
+              selected={isSameSelection(selection, item.selection)}
+              onClick={() => choose(item.selection)}
+              onHover={() => setTurnsOpen(false)}
+            />
+          ))}
           <div style={{ position: 'relative' }}>
             <DiffSourceMenuRow
               label="Turn"
@@ -762,14 +704,14 @@ function DiffSourceMenu({
                     No turns for this session — showing all turns in this repo
                   </div>
                 ) : null}
-                {turns.map((turn, index) => (
+                {turnMenuItems(turns).map((item) => (
                   <DiffSourceMenuRow
-                    key={turn.sha}
-                    label={`Turn ${turnNumber(turns, index)}`}
-                    secondary={turn.label}
-                    detail={formatTurnTime(turn.createdAt)}
-                    selected={selection.kind === 'turn' && selection.sha === turn.sha}
-                    onClick={() => choose({ kind: 'turn', sha: turn.sha })}
+                    key={item.label}
+                    label={item.label}
+                    secondary={item.secondary}
+                    detail={item.detail}
+                    selected={isSameSelection(selection, item.selection)}
+                    onClick={() => choose(item.selection)}
                   />
                 ))}
               </div>
@@ -859,19 +801,11 @@ export default function GitPopover({ open, onClose, cwd, sessionId, variant }: P
     showHunkHeaders,
     showBackgrounds,
   }), [changeStyle, diffStyle, inlineDiffStyle, showBackgrounds, showHunkHeaders, showLineNumbers, wrapDiff])
-  // A selection only becomes a diff source once the turn list is known: with no
-  // checkpoints, 'latest' has nothing to point at and falls back to the working
-  // tree rather than showing an empty diff.
-  const diffSource = useMemo<GitDiffSource>(() => {
-    if (diffSourceSelection.kind === 'branch') return { kind: 'branch' }
-    if (diffSourceSelection.kind === 'turn') return { kind: 'turn', sha: diffSourceSelection.sha }
-    if (diffSourceSelection.kind === 'latest') {
-      const latest = turns[0]
-      return latest ? { kind: 'turn', sha: latest.sha } : { kind: 'working' }
-    }
-    return { kind: 'working' }
-  }, [diffSourceSelection, turns])
-  const sourceKey = diffSource.kind === 'turn' ? `turn:${diffSource.sha}` : diffSource.kind
+  const diffSource = useMemo<GitDiffSource>(
+    () => resolveDiffSource(diffSourceSelection, turns),
+    [diffSourceSelection, turns],
+  )
+  const sourceKey = diffSourceKey(diffSource)
 
   const reloadGitData = useCallback(() => {
     setLoading(true)

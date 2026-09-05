@@ -5,7 +5,9 @@ import type { MouseEvent, ScrollBoxRenderable } from '@opentui/core'
 import type { SelectedLineRange } from '@pierre/diffs'
 import type { TuiThemePalette } from '../theme'
 import { prepareFileTreeInput } from '@pierre/trees'
-import { fetchGitData, fetchGitPaneContent, type GitData, type GitStatusEntry } from '../../lib/gitProvider'
+import { fetchGitData, fetchGitPaneContent, type GitData, type GitDiffSource, type GitStatusEntry, type GitTurnRef } from '../../lib/gitProvider'
+import { fetchSourceDiff, fetchSourceStatus, listGitTurnsForMenu } from '../../lib/gitDiffSources'
+import { DIFF_SOURCE_HEAD_ITEMS, diffSourceKey, diffSourceLabel, isSameSelection, resolveDiffSource, turnMenuItems, type DiffSourceMenuItem, type DiffSourceSelection } from '../../lib/gitDiffSourceMenu'
 import { runGitCommand } from '../../lib/gitNodeProvider'
 import { buildDiffCommentComposerPrompt } from '../../lib/diffCommentComposer'
 import {
@@ -520,6 +522,9 @@ const LEFT_PANE_RESIZE_STEP = 4
 
 type Props = {
   cwd?: string | null
+  /** Scopes the turn list to the session being read. Without it the menu offers
+   *  every turn taken in the repo, which is what a repo-wide review wants. */
+  sessionId?: string | null
   scopeLabel?: string
   zIndex?: number
   /** Docked in the surface panel: fill the given box in flow, no scrim margin. */
@@ -532,7 +537,7 @@ type Props = {
   onSendDiffNoteToComposer?: (prompt: string) => void
 }
 
-export function GitPopover({ cwd, scopeLabel, zIndex = 50, docked = false, theme, width, height, onClose, onKeyHandlerReady, onSendDiffNoteToComposer }: Props) {
+export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = false, theme, width, height, onClose, onKeyHandlerReady, onSendDiffNoteToComposer }: Props) {
   const repoCwd = cwd || process.cwd()
   const [data, setData] = useState<GitData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -554,6 +559,18 @@ export function GitPopover({ cwd, scopeLabel, zIndex = 50, docked = false, theme
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set())
   const [branchIndex, setBranchIndex] = useState(0)
   const [commitIndex, setCommitIndex] = useState(0)
+  const [sourceSelection, setSourceSelection] = useState<DiffSourceSelection>({ kind: 'working' })
+  const [turns, setTurns] = useState<GitTurnRef[]>([])
+  const [turnsScoped, setTurnsScoped] = useState(false)
+  const [sourceMenuOpen, setSourceMenuOpen] = useState(false)
+  const [sourceMenuCursor, setSourceMenuCursor] = useState(0)
+  // Enter reads the cursor from here, not from the key handler's closure: keys
+  // arriving faster than React re-renders (key repeat) would otherwise every
+  // one of them see the cursor as it was before the first of them moved it.
+  const sourceMenuCursorRef = useRef(0)
+  // Likewise for the open flag: a key arriving in the same tick as the 't' that
+  // opened the menu would otherwise fall through to the file tree underneath.
+  const sourceMenuOpenRef = useRef(false)
   const diffScrollRef = useRef<ScrollBoxRenderable>(null)
   const fileTreeScrollRef = useRef<ScrollBoxRenderable>(null)
   const branchesScrollRef = useRef<ScrollBoxRenderable>(null)
@@ -570,12 +587,53 @@ export function GitPopover({ cwd, scopeLabel, zIndex = 50, docked = false, theme
   const [scrollVelocityRef] = useState(() => ({ current: createScrollVelocityState() }))
   const renderer = useRenderer()
 
-  // Refresh on mount
+  const sourceMenuItems = useMemo<DiffSourceMenuItem[]>(
+    // Flattened rather than a "Turn ▸" submenu: with only a cursor to move,
+    // one list is fewer keys than a list plus a nested one.
+    () => [...DIFF_SOURCE_HEAD_ITEMS, ...turnMenuItems(turns)],
+    [turns],
+  )
+
+  const diffSource = useMemo<GitDiffSource>(
+    () => resolveDiffSource(sourceSelection, turns),
+    [sourceSelection, turns],
+  )
+  const sourceKey = diffSourceKey(diffSource)
+  const sourceLabel = diffSourceLabel(sourceSelection, turns)
+  // Said once, at the top of the picker: the numbering below is the repo's, not
+  // this session's, and reading it as this session's would be wrong.
+  const turnsScopedNotice = sessionId && !turnsScoped && turns.length > 0
+    ? 'no turns for this session — showing all'
+    : null
+
+  /** A non-working source replaces the file list only: branch, upstream and the
+   *  commit/branch panes describe the repository, not the change set. */
+  const loadGitData = useCallback(async (source: GitDiffSource): Promise<GitData> => {
+    const next = await fetchGitData(repoCwd, runGitCommand)
+    if (source.kind === 'working') return next
+    return { ...next, status: await fetchSourceStatus(repoCwd, runGitCommand, source) }
+  }, [repoCwd])
+
+  // Turn checkpoints are their own list: the menu needs them before a selection
+  // can resolve, and they change only when an agent turn starts.
+  useEffect(() => {
+    let cancelled = false
+    void listGitTurnsForMenu(repoCwd, sessionId)
+      .then((next) => {
+        if (cancelled) return
+        setTurns(next.turns)
+        setTurnsScoped(next.scoped)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [repoCwd, sessionId])
+
+  // Refresh on mount and whenever the diff source changes
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setData(null)
-    void fetchGitData(repoCwd, runGitCommand)
+    void loadGitData(diffSource)
       .then((next) => {
         if (!cancelled) setData(next)
       })
@@ -586,7 +644,8 @@ export function GitPopover({ cwd, scopeLabel, zIndex = 50, docked = false, theme
     return () => {
       cancelled = true
     }
-  }, [repoCwd])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sourceKey is diffSource's identity
+  }, [repoCwd, sourceKey, loadGitData])
 
   // When data loads, expand all dirs and place cursor on the first file node
   useEffect(() => {
@@ -667,15 +726,21 @@ export function GitPopover({ cwd, scopeLabel, zIndex = 50, docked = false, theme
     rightContentTimerRef.current = setTimeout(() => {
       const activeRequestId = rightContentRequestRef.current
       void (async () => {
-        const content = await fetchGitPaneContent({
-          cwd: repoCwd,
-          runGit: runGitCommand,
-          data,
-          pane,
-          selectedFilePath,
-          branchIndex,
-          commitIndex,
-        })
+        // Panes 0 and 2 are the only ones a source changes: the whole change
+        // set and one file of it.
+        const content = diffSource.kind !== 'working' && (pane === 0 || pane === 2)
+          ? (pane === 2 && !selectedFilePath
+            ? (data.status.length === 0 ? '(no changes)' : '(select a file)')
+            : (await fetchSourceDiff(repoCwd, runGitCommand, diffSource, pane === 2 ? selectedFilePath : null)) || '(no changes)')
+          : await fetchGitPaneContent({
+            cwd: repoCwd,
+            runGit: runGitCommand,
+            data,
+            pane,
+            selectedFilePath,
+            branchIndex,
+            commitIndex,
+          })
 
         if (rightContentRequestRef.current !== activeRequestId) return
         setRightContent(content)
@@ -696,7 +761,8 @@ export function GitPopover({ cwd, scopeLabel, zIndex = 50, docked = false, theme
         rightContentRequestRef.current += 1
       }
     }
-  }, [branchIndex, commitIndex, data, pane, repoCwd, selectedFilePath])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sourceKey is diffSource's identity
+  }, [branchIndex, commitIndex, data, pane, repoCwd, selectedFilePath, sourceKey])
 
   // Derive the Pierre appearance (dark/light) from the theme's bg luminance.
   const pierreAppearance: 'dark' | 'light' = useMemo(() => {
@@ -752,6 +818,11 @@ export function GitPopover({ cwd, scopeLabel, zIndex = 50, docked = false, theme
     }, 2000)
   }, [])
 
+  const closeSourceMenu = useCallback(() => {
+    sourceMenuOpenRef.current = false
+    setSourceMenuOpen(false)
+  }, [])
+
   const handleKey = useCallback((key: GitKeyEvent) => {
     // While a draft note is open, all keyboard input goes to the note editor.
     if (draftNote !== null) {
@@ -778,7 +849,44 @@ export function GitPopover({ cwd, scopeLabel, zIndex = 50, docked = false, theme
       return
     }
 
+    // The source menu owns the keyboard while it is open, or its j/k would
+    // also move the file cursor underneath it.
+    if (sourceMenuOpenRef.current) {
+      if (key.name === 'escape' || key.sequence === 't') { closeSourceMenu(); return }
+      // Moved through the ref rather than a state updater: an updater can be
+      // replayed from the base state on a later render, and one that also
+      // writes the ref would then count the same keypress twice.
+      if (key.name === 'down' || key.sequence === 'j') {
+        sourceMenuCursorRef.current = Math.min(sourceMenuCursorRef.current + 1, sourceMenuItems.length - 1)
+        setSourceMenuCursor(sourceMenuCursorRef.current)
+        return
+      }
+      if (key.name === 'up' || key.sequence === 'k') {
+        sourceMenuCursorRef.current = Math.max(sourceMenuCursorRef.current - 1, 0)
+        setSourceMenuCursor(sourceMenuCursorRef.current)
+        return
+      }
+      if (key.name === 'return') {
+        const picked = sourceMenuItems[sourceMenuCursorRef.current]
+        // The tree cursor is repositioned onto the first file by the effect
+        // that runs when the new change set loads, so nothing to reset here.
+        if (picked) setSourceSelection(picked.selection)
+        closeSourceMenu()
+        return
+      }
+      return
+    }
+
     if (key.name === 'escape') { onClose(); return }
+
+    if (key.sequence === 't') {
+      const active = Math.max(0, sourceMenuItems.findIndex((item) => isSameSelection(item.selection, sourceSelection)))
+      sourceMenuCursorRef.current = active
+      setSourceMenuCursor(active)
+      sourceMenuOpenRef.current = true
+      setSourceMenuOpen(true)
+      return
+    }
 
     if (key.name === 'tab' && key.shift) {
       setFocusSide(leftPaneMode === 'hidden' ? 'right' : 'left')
@@ -943,9 +1051,12 @@ export function GitPopover({ cwd, scopeLabel, zIndex = 50, docked = false, theme
     if (key.name === 'u') { diffScrollRef.current?.scrollBy(-10); return }
     if (key.name === 'r') {
       setLoading(true)
-      void fetchGitData(repoCwd, runGitCommand)
+      void loadGitData(diffSource)
         .then((next) => setData(next))
         .finally(() => setLoading(false))
+      void listGitTurnsForMenu(repoCwd, sessionId)
+        .then((next) => { setTurns(next.turns); setTurnsScoped(next.scoped) })
+        .catch(() => {})
       return
     }
     if (key.name === 'v' && pane === 2) {
@@ -1257,12 +1368,17 @@ export function GitPopover({ cwd, scopeLabel, zIndex = 50, docked = false, theme
           backgroundColor={pane === 1 ? theme.surface2 : theme.surface}
           onMouseUp={(event) => activateMousePane(event, 1)}
         >
-          <box paddingX={1} width={leftW - 2} backgroundColor={pane === 1 ? theme.cyan : 'transparent'}>
+          <box paddingX={1} width={leftW - 2} flexDirection="row" backgroundColor={pane === 1 ? theme.cyan : 'transparent'}>
             <text fg={pane === 1 ? theme.surface : theme.muted}>[1] Status</text>
           </box>
           <box paddingX={1}>
             <text fg={theme.text} wrapMode="none">
               {loading ? 'loading…' : data ? `${data.branch}${data.upstream ? `  ↑${data.ahead}↓${data.behind}` : ''}` : '…'}
+            </text>
+          </box>
+          <box paddingX={1} flexDirection="row">
+            <text fg={sourceSelection.kind === 'working' ? theme.muted : theme.cyan} wrapMode="none">
+              {fitTerminalText(`◇ ${sourceLabel}`, Math.max(leftW - 3, 6))}
             </text>
           </box>
         </box>
@@ -1424,7 +1540,7 @@ export function GitPopover({ cwd, scopeLabel, zIndex = 50, docked = false, theme
         <box paddingX={1} flexDirection="row" backgroundColor={theme.surface2}>
           {(() => {
             const groups: Array<[string, string]> = [
-              ['1-4', 'sections'], ['[ ]', 'resize'], ['w', 'wide'], ['-', 'hide/show'],
+              ['1-4', 'sections'], ['t', 'source'], ['[ ]', 'resize'], ['w', 'wide'], ['-', 'hide/show'],
               ['j/k', 'move/fast'], ['h/l', 'fold'], ['⏎', 'toggle'], ['p', 'PRs'], ['r', 'refresh'], ['esc', 'close'],
             ]
             const segs: React.ReactNode[] = [
@@ -1754,6 +1870,62 @@ export function GitPopover({ cwd, scopeLabel, zIndex = 50, docked = false, theme
           )}
         </scrollbox>
       </box>
+
+      {/* ── Diff source picker ──────────────────────────── */}
+      {sourceMenuOpen ? (() => {
+        // Only the rows around the cursor are mounted: a repo can hold 60
+        // checkpoints and the popover is not tall enough for them.
+        const menuH = Math.min(sourceMenuItems.length + 2, Math.max(6, popH - 6))
+        const visibleRows = menuH - 2
+        const firstRow = clampNumber(sourceMenuCursor - Math.floor(visibleRows / 2), 0, Math.max(0, sourceMenuItems.length - visibleRows))
+        const menuW = Math.min(Math.max(Math.floor(popW / 2), 34), Math.max(popW - 6, 20))
+        return (
+          <box
+            position="absolute"
+            left={2}
+            top={2}
+            width={menuW}
+            height={menuH}
+            flexDirection="column"
+            border
+            borderStyle="rounded"
+            borderColor={theme.cyan}
+            backgroundColor={theme.surface2}
+            zIndex={(zIndex ?? 50) + 1}
+            title=" Diff source "
+            titleColor={theme.cyan}
+          >
+            {turnsScopedNotice ? (
+              <box paddingX={1}>
+                <text fg={theme.dim} wrapMode="none">{fitTerminalText(turnsScopedNotice, menuW - 4)}</text>
+              </box>
+            ) : null}
+            {turns.length === 0 ? (
+              <box paddingX={1}>
+                <text fg={theme.dim} wrapMode="none">
+                  {fitTerminalText(sessionId ? 'no turns recorded for this session' : 'no turn checkpoints yet', menuW - 4)}
+                </text>
+              </box>
+            ) : null}
+            {sourceMenuItems.slice(firstRow, firstRow + visibleRows).map((item, offset) => {
+              const index = firstRow + offset
+              const isCursor = index === sourceMenuCursor
+              const isActive = isSameSelection(item.selection, sourceSelection)
+              const detail = item.detail ? ` ${item.detail}` : ''
+              const head = `${isActive ? '●' : ' '} ${item.label}`
+              const room = Math.max(menuW - 4 - head.length - detail.length - 1, 0)
+              const secondary = item.secondary && room > 3 ? ` ${fitTerminalText(item.secondary, room)}` : ''
+              return (
+                <box key={item.label} paddingX={1} backgroundColor={isCursor ? theme.cyan : undefined}>
+                  <text fg={isCursor ? theme.surface : isActive ? theme.cyan : theme.text} wrapMode="none">
+                    {fitTerminalText(`${head}${secondary}${detail}`, menuW - 3)}
+                  </text>
+                </box>
+              )
+            })}
+          </box>
+        )
+      })() : null}
     </box>
   )
 }
