@@ -1439,7 +1439,7 @@ export default function Home() {
         ) : null
       case 'diff':
         return activeProjectDir ? (
-          <GitPopover variant="docked" open cwd={activeProjectDir} onClose={() => closeRightPanelSurface(surface.id)} />
+          <GitPopover variant="docked" open cwd={activeProjectDir} sessionId={selectedSession?.sessionId ?? null} onClose={() => closeRightPanelSurface(surface.id)} />
         ) : null
       case 'pull-request':
         return activeProjectDir ? (
@@ -1746,6 +1746,7 @@ export default function Home() {
             open={gitPopoverOpen}
             onClose={() => setGitPopoverOpen(false)}
             cwd={activeProjectDir}
+            sessionId={selectedSession?.sessionId ?? null}
           />
         ) : null}
         {activeProjectDir && pullRequestViewOpen ? (

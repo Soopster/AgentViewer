@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { fetchGitBranches, fetchGitData, fetchGitReviewData, fetchGitSummary, isAllowedGitCommand, isSafeGitBranchName } from '@/lib/gitProvider'
+import { fetchGitBranches, fetchGitData, fetchGitReviewData, fetchGitSummary, isAllowedGitCommand, isSafeGitBranchName, parseGitDiffSource } from '@/lib/gitProvider'
+import { fetchSourceStatus, listGitTurns } from '@/lib/gitDiffSources'
 import { runGitCommand, runGitCommandStrict } from '@/lib/gitNodeProvider'
 
 type GitRequestBody = {
@@ -30,7 +31,18 @@ export async function GET(request: NextRequest) {
 
   try {
     if (action === 'data') {
-      return NextResponse.json({ data: await fetchGitData(cwd, runGitCommand) })
+      const data = await fetchGitData(cwd, runGitCommand)
+      // A non-working source replaces the file list only: branch, upstream and
+      // the commit/branch panes describe the repository, not the change set.
+      const source = parseGitDiffSource(searchParams.get('source'), searchParams.get('sha'))
+      if (source.kind === 'working') return NextResponse.json({ data })
+      return NextResponse.json({ data: { ...data, status: await fetchSourceStatus(cwd, runGitCommand, source) } })
+    }
+    if (action === 'turns') {
+      return NextResponse.json(
+        { turns: await listGitTurns(cwd, searchParams.get('sessionId')) },
+        { headers: { 'Cache-Control': 'no-store' } },
+      )
     }
     if (action === 'review') {
       return NextResponse.json({ review: await fetchGitReviewData(cwd, runGitCommand) })
@@ -44,7 +56,7 @@ export async function GET(request: NextRequest) {
         { headers: { 'Cache-Control': 'no-store' } },
       )
     }
-    return NextResponse.json({ error: 'action must be data, review, summary, or branches' }, { status: 400 })
+    return NextResponse.json({ error: 'action must be data, turns, review, summary, or branches' }, { status: 400 })
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 })
   }

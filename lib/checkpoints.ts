@@ -128,6 +128,33 @@ export async function createTurnCheckpoint(
   return Promise.race([work.catch(() => null), timeout])
 }
 
+/**
+ * Re-stamp a checkpoint with the session id the turn actually ran under.
+ *
+ * A turn is addressed to the session the user clicked, but Claude's cold
+ * resume realizes its own id and the viewer follows *that* one — so a
+ * checkpoint stamped at submission time can name a session that no longer
+ * matches anything on screen, and a per-session turn list comes back empty.
+ * The snapshot itself is already correct; only its metadata is stale, so this
+ * rebuilds the commit around the same tree and parent and moves the ref. The
+ * ref name is left alone: it carries the creation time the list sorts on.
+ */
+export async function retagCheckpointSession(
+  cwd: string,
+  checkpoint: TurnCheckpoint,
+  sessionId: string,
+): Promise<TurnCheckpoint> {
+  if (!sessionId || sessionId === checkpoint.sessionId) return checkpoint
+  const tree = await git(cwd, ['rev-parse', `${checkpoint.sha}^{tree}`])
+  const parent = await git(cwd, ['rev-parse', '--verify', `${checkpoint.sha}^`]).catch(() => null)
+  const body = JSON.stringify({ sessionId, provider: checkpoint.provider })
+  const args = ['commit-tree', tree, '-m', `${checkpoint.label}\n\n${body}`]
+  if (parent) args.push('-p', parent)
+  const sha = await git(cwd, args)
+  await git(cwd, ['update-ref', checkpoint.ref, sha, checkpoint.sha])
+  return { ...checkpoint, sha, sessionId }
+}
+
 /** Repo-scoped checkpoint list, newest first. */
 export async function listTurnCheckpoints(cwd: string): Promise<TurnCheckpoint[]> {
   const out = await git(cwd, [

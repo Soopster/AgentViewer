@@ -3,11 +3,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { isDocked, shouldIgnoreDockedKey, type SurfaceVariant } from './surfaceVariant'
 import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react'
-import { ChevronDown, Clock3, Columns2, GitBranch, Hash, Info, ListTree, Maximize2, Minus, PanelLeftClose, PanelLeftOpen, PencilLine, RefreshCw, Rows3, SlidersHorizontal, X } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Clock3, Columns2, GitBranch, Hash, History, Info, ListTree, Maximize2, Minus, PanelLeftClose, PanelLeftOpen, PencilLine, RefreshCw, Rows3, SlidersHorizontal, X } from 'lucide-react'
 import type { SelectedLineRange } from '@pierre/diffs'
 import { FileTree, useFileTree } from '@pierre/trees/react'
 import { prepareFileTreeInput, themeToTreeStyles } from '@pierre/trees'
-import type { GitData, GitStatusEntry } from '@/lib/gitProvider'
+import type { GitData, GitDiffSource, GitStatusEntry, GitTurnRef } from '@/lib/gitProvider'
 import type { GitStatusEntry as TreeGitStatusEntry } from '@pierre/trees'
 import { getCurrentTheme, subscribeTheme, THEME_META, type Theme } from '@/lib/themes'
 import { PierrePatchDiffView, type PierreAnnotationMetadata, type PierreChangeStyle, type PierreDiffAnnotation, type PierreDiffPresentation, type PierreDiffStyle, type PierreInlineDiffStyle } from './PierreDiffView'
@@ -44,6 +44,16 @@ type DraftDiffNote = {
 }
 
 type PaneId = 1 | 2 | 3 | 4
+
+/** What the user picked, which is not the same as what gets diffed: 'latest'
+ *  has to keep meaning "whichever turn is newest" after another turn runs, so
+ *  it is resolved against the turn list on every render rather than frozen into
+ *  a sha when the menu is clicked. */
+type DiffSourceSelection =
+  | { kind: 'working' }
+  | { kind: 'branch' }
+  | { kind: 'latest' }
+  | { kind: 'turn'; sha: string }
 type LeftPaneMode = 'normal' | 'expanded' | 'hidden'
 type PierreAnnotationKind = 'thread' | 'draft'
 
@@ -102,9 +112,12 @@ function allDirPaths(entries: GitStatusEntry[]): Set<string> {
 
 // ─── API helper ───────────────────────────────────────────────────────────────
 
-async function fetchGitData(cwd: string): Promise<GitData> {
+async function fetchGitData(cwd: string, source: GitDiffSource): Promise<GitData> {
   try {
-    const res = await fetch(`/api/git?action=data&cwd=${encodeURIComponent(cwd)}`)
+    const query = source.kind === 'turn'
+      ? `&source=turn&sha=${encodeURIComponent(source.sha)}`
+      : source.kind === 'branch' ? '&source=branch' : ''
+    const res = await fetch(`/api/git?action=data&cwd=${encodeURIComponent(cwd)}${query}`)
     const body = await res.json() as { data?: GitData }
     if (!res.ok || !body.data) throw new Error('Failed to load git data')
     return body.data
@@ -123,6 +136,30 @@ async function fetchGitData(cwd: string): Promise<GitData> {
   }
 }
 
+async function fetchTurnList(cwd: string, sessionId?: string | null): Promise<GitTurnRef[]> {
+  try {
+    const scope = sessionId ? `&sessionId=${encodeURIComponent(sessionId)}` : ''
+    const res = await fetch(`/api/git?action=turns&cwd=${encodeURIComponent(cwd)}${scope}`)
+    const body = await res.json() as { turns?: GitTurnRef[] }
+    return res.ok && body.turns ? body.turns : []
+  } catch {
+    return []
+  }
+}
+
+/** The turns to offer, and whether they are this session's.
+ *
+ *  A session with no checkpoints of its own is common and is not an error: the
+ *  repo may have been worked before turn snapshots recorded a session id, or by
+ *  another session entirely. Falling back to every turn in the repo keeps the
+ *  menu usable; the caption says which list is on screen so the numbering is
+ *  never read as this session's when it isn't. */
+async function fetchGitTurns(cwd: string, sessionId?: string | null): Promise<{ turns: GitTurnRef[]; scoped: boolean }> {
+  const scoped = await fetchTurnList(cwd, sessionId)
+  if (!sessionId || scoped.length > 0) return { turns: scoped, scoped: !!sessionId }
+  return { turns: await fetchTurnList(cwd, null), scoped: false }
+}
+
 async function fetchGitContent({
   cwd,
   data,
@@ -130,6 +167,7 @@ async function fetchGitContent({
   selectedFilePath,
   branchIndex,
   commitIndex,
+  source,
 }: {
   cwd: string
   data: GitData
@@ -137,6 +175,7 @@ async function fetchGitContent({
   selectedFilePath: string | null
   branchIndex: number
   commitIndex: number
+  source: GitDiffSource
 }): Promise<string> {
   try {
     const res = await fetch('/api/git/content', {
@@ -149,6 +188,8 @@ async function fetchGitContent({
         selectedFilePath,
         branchIndex,
         commitIndex,
+        sourceKind: source.kind,
+        sourceSha: source.kind === 'turn' ? source.sha : undefined,
       }),
     })
     const body = await readJsonResponse<{ content?: string }>(res)
@@ -241,6 +282,7 @@ function GitFileTreePane({
 
 function statusColor(x: string, y: string): string {
   if (x === '?' && y === '?') return 'var(--red)'
+  if (y === 'A') return 'var(--green)'
   if (x.trim()) return 'var(--green)'
   if (y === 'M') return 'var(--amber)'
   if (y === 'D') return 'var(--red)'
@@ -491,11 +533,252 @@ function CompactToggle({
 
 function statusLabel(x: string, y: string): string {
   if (x === '?' && y === '?') return 'Untracked'
+  if (y === 'A') return 'Added'
   if (x.trim() && y.trim()) return 'Staged + modified'
   if (x.trim()) return 'Staged'
   if (y === 'M') return 'Modified'
   if (y === 'D') return 'Deleted'
   return 'Changed'
+}
+
+/** A time alone cannot separate 60 turns spread over days — 15:56 appears once
+ *  per day the agent ran — so anything older than today carries its date. */
+function formatTurnTime(createdAt: number): string {
+  if (!createdAt) return ''
+  const at = new Date(createdAt)
+  const time = at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).toLowerCase()
+  const today = new Date()
+  const sameDay = at.getFullYear() === today.getFullYear()
+    && at.getMonth() === today.getMonth()
+    && at.getDate() === today.getDate()
+  return sameDay ? time : `${at.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`
+}
+
+/** Turns are listed newest first; numbering counts up from the oldest so a
+ *  turn keeps its number as newer ones arrive. */
+function turnNumber(turns: GitTurnRef[], index: number): number {
+  return turns.length - index
+}
+
+function diffSourceLabel(selection: DiffSourceSelection, turns: GitTurnRef[]): string {
+  if (selection.kind === 'branch') return 'Branch changes'
+  if (selection.kind === 'latest') return 'Latest turn'
+  if (selection.kind === 'turn') {
+    const index = turns.findIndex((turn) => turn.sha === selection.sha)
+    return index === -1 ? 'Turn' : `Turn ${turnNumber(turns, index)}`
+  }
+  return 'Working tree'
+}
+
+function DiffSourceMenuRow({
+  label,
+  secondary,
+  detail,
+  selected,
+  submenu,
+  onClick,
+  onHover,
+}: {
+  label: string
+  /** What the turn was asked to do — the number alone identifies nothing. */
+  secondary?: string
+  detail?: string
+  selected: boolean
+  submenu?: boolean
+  onClick: () => void
+  onHover?: () => void
+}) {
+  return (
+    <button
+      type="button"
+      className="av-hover-control"
+      title={secondary ? `${label} — ${secondary}` : label}
+      onClick={onClick}
+      onMouseEnter={onHover}
+      style={{
+        width: '100%',
+        minHeight: 30,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '0 10px',
+        border: 'none',
+        borderRadius: 6,
+        background: selected ? 'color-mix(in srgb, var(--cyan) 14%, var(--surface-3))' : 'transparent',
+        color: selected ? 'var(--text)' : 'var(--text-2)',
+        cursor: 'pointer',
+        font: 'inherit',
+        fontSize: 12,
+        textAlign: 'left',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <span style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'baseline', gap: 7, overflow: 'hidden' }}>
+        <span style={{ flexShrink: 0 }}>{label}</span>
+        {secondary ? (
+          <span style={{ flex: 1, minWidth: 0, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {secondary}
+          </span>
+        ) : null}
+      </span>
+      {detail ? (
+        <span style={{ color: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10 }}>{detail}</span>
+      ) : null}
+      {submenu ? <ChevronRight size={13} style={{ color: 'var(--text-3)' }} /> : null}
+      {selected && !submenu ? <Check size={13} style={{ color: 'var(--cyan)' }} /> : null}
+    </button>
+  )
+}
+
+/** Picks which change set the panel is showing: the working tree, everything
+ *  this branch changed, or one agent turn's checkpoint. */
+function DiffSourceMenu({
+  selection,
+  turns,
+  scoped,
+  sessionScoped,
+  onSelect,
+}: {
+  selection: DiffSourceSelection
+  turns: GitTurnRef[]
+  /** Whether `turns` is one session's or the whole repo's. */
+  scoped: boolean
+  /** Whether a session was asked for at all — with one, an unscoped list is a
+   *  fallback worth captioning rather than the plain repo-wide view. */
+  sessionScoped: boolean
+  onSelect: (next: DiffSourceSelection) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [turnsOpen, setTurnsOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target
+      if (!(target instanceof Node)) return
+      if (containerRef.current?.contains(target)) return
+      setOpen(false)
+      setTurnsOpen(false)
+    }
+    window.addEventListener('pointerdown', handlePointerDown)
+    return () => window.removeEventListener('pointerdown', handlePointerDown)
+  }, [open])
+
+  const choose = (next: DiffSourceSelection) => {
+    onSelect(next)
+    setOpen(false)
+    setTurnsOpen(false)
+  }
+
+  const panelStyle = {
+    position: 'absolute' as const,
+    top: 'calc(100% + 6px)',
+    zIndex: 40,
+    minWidth: 190,
+    padding: 4,
+    borderRadius: 10,
+    border: '1px solid var(--border)',
+    background: 'var(--surface-2)',
+    boxShadow: '0 12px 32px rgba(0, 0, 0, 0.34)',
+  }
+
+  return (
+    <div ref={containerRef} style={{ position: 'relative', flexShrink: 0 }}>
+      <button
+        type="button"
+        className="av-hover-control"
+        title="Choose what to diff"
+        aria-expanded={open}
+        onClick={() => { setOpen((value) => !value); setTurnsOpen(false) }}
+        style={{
+          height: 34,
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 7,
+          padding: '0 11px',
+          borderRadius: 8,
+          border: `1px solid ${selection.kind === 'working' ? 'var(--border)' : 'color-mix(in srgb, var(--cyan) 42%, var(--border))'}`,
+          background: selection.kind === 'working' ? 'var(--surface)' : 'color-mix(in srgb, var(--cyan) 13%, var(--surface-2))',
+          color: selection.kind === 'working' ? 'var(--text-2)' : 'var(--cyan)',
+          cursor: 'pointer',
+          fontSize: 12,
+          fontWeight: 600,
+          whiteSpace: 'nowrap',
+        }}
+      >
+        <History size={15} />
+        {diffSourceLabel(selection, turns)}
+        <ChevronDown size={13} />
+      </button>
+
+      {open ? (
+        <div style={{ ...panelStyle, left: 0 }}>
+          <DiffSourceMenuRow
+            label="Working tree"
+            selected={selection.kind === 'working'}
+            onClick={() => choose({ kind: 'working' })}
+            onHover={() => setTurnsOpen(false)}
+          />
+          <DiffSourceMenuRow
+            label="Branch changes"
+            selected={selection.kind === 'branch'}
+            onClick={() => choose({ kind: 'branch' })}
+            onHover={() => setTurnsOpen(false)}
+          />
+          <DiffSourceMenuRow
+            label="Latest turn"
+            selected={selection.kind === 'latest'}
+            onClick={() => choose({ kind: 'latest' })}
+            onHover={() => setTurnsOpen(false)}
+          />
+          <div style={{ position: 'relative' }}>
+            <DiffSourceMenuRow
+              label="Turn"
+              selected={selection.kind === 'turn'}
+              submenu
+              onClick={() => setTurnsOpen((value) => !value)}
+              onHover={() => setTurnsOpen(true)}
+            />
+            {turnsOpen ? (
+              <div
+                style={{
+                  ...panelStyle,
+                  top: -4,
+                  left: '100%',
+                  marginLeft: 4,
+                  maxHeight: 260,
+                  overflowY: 'auto',
+                  minWidth: 320,
+                }}
+              >
+                {turns.length === 0 ? (
+                  <div style={{ padding: '8px 10px', fontSize: 12, color: 'var(--text-3)' }}>
+                    {sessionScoped ? 'No turns recorded for this session' : 'No turn checkpoints yet'}
+                  </div>
+                ) : null}
+                {turns.length > 0 && sessionScoped && !scoped ? (
+                  <div style={{ padding: '6px 10px 7px', fontSize: 11, color: 'var(--text-3)' }}>
+                    No turns for this session — showing all turns in this repo
+                  </div>
+                ) : null}
+                {turns.map((turn, index) => (
+                  <DiffSourceMenuRow
+                    key={turn.sha}
+                    label={`Turn ${turnNumber(turns, index)}`}
+                    secondary={turn.label}
+                    detail={formatTurnTime(turn.createdAt)}
+                    selected={selection.kind === 'turn' && selection.sha === turn.sha}
+                    onClick={() => choose({ kind: 'turn', sha: turn.sha })}
+                  />
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
 }
 
 const PANE_LABELS: Record<PaneId, string> = {
@@ -518,11 +801,14 @@ type Props = {
   open: boolean
   onClose: () => void
   cwd: string
+  /** Scopes the turn list to the session being read. Without it the menu offers
+   *  every turn taken in the repo, which is what a repo-wide review wants. */
+  sessionId?: string | null
   /** 'docked' drops the modal scrim and fills its container (right panel). */
   variant?: SurfaceVariant
 }
 
-export default function GitPopover({ open, onClose, cwd, variant }: Props) {
+export default function GitPopover({ open, onClose, cwd, sessionId, variant }: Props) {
   const [data, setData] = useState<GitData | null>(null)
   const [loading, setLoading] = useState(false)
   const [pane, setPane] = useState<PaneId>(2)
@@ -550,6 +836,9 @@ export default function GitPopover({ open, onClose, cwd, variant }: Props) {
   const [draftNote, setDraftNote] = useState<DraftDiffNote | null>(null)
   const [contentLoading, setContentLoading] = useState(false)
   const [hoveredRow, setHoveredRow] = useState<string | null>(null)
+  const [diffSourceSelection, setDiffSourceSelection] = useState<DiffSourceSelection>({ kind: 'working' })
+  const [turns, setTurns] = useState<GitTurnRef[]>([])
+  const [turnsScoped, setTurnsScoped] = useState(false)
 
   const rightContentRequestRef = useRef(0)
   const rightContentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -570,17 +859,52 @@ export default function GitPopover({ open, onClose, cwd, variant }: Props) {
     showHunkHeaders,
     showBackgrounds,
   }), [changeStyle, diffStyle, inlineDiffStyle, showBackgrounds, showHunkHeaders, showLineNumbers, wrapDiff])
-  // Fetch git data when popover opens
+  // A selection only becomes a diff source once the turn list is known: with no
+  // checkpoints, 'latest' has nothing to point at and falls back to the working
+  // tree rather than showing an empty diff.
+  const diffSource = useMemo<GitDiffSource>(() => {
+    if (diffSourceSelection.kind === 'branch') return { kind: 'branch' }
+    if (diffSourceSelection.kind === 'turn') return { kind: 'turn', sha: diffSourceSelection.sha }
+    if (diffSourceSelection.kind === 'latest') {
+      const latest = turns[0]
+      return latest ? { kind: 'turn', sha: latest.sha } : { kind: 'working' }
+    }
+    return { kind: 'working' }
+  }, [diffSourceSelection, turns])
+  const sourceKey = diffSource.kind === 'turn' ? `turn:${diffSource.sha}` : diffSource.kind
+
+  const reloadGitData = useCallback(() => {
+    setLoading(true)
+    return fetchGitData(cwd, diffSource)
+      .then((next) => { setData(next); setLoading(false) })
+      .catch(() => setLoading(false))
+  }, [cwd, diffSource])
+
+  // Turn checkpoints are their own list: the menu needs them before a selection
+  // can resolve, and they change only when an agent turn starts.
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    void fetchGitTurns(cwd, sessionId).then((next) => {
+      if (cancelled) return
+      setTurns(next.turns)
+      setTurnsScoped(next.scoped)
+    })
+    return () => { cancelled = true }
+  }, [open, cwd, sessionId])
+
+  // Fetch git data when the popover opens or the diff source changes
   useEffect(() => {
     if (!open) return
     let cancelled = false
     setLoading(true)
     setData(null)
-    void fetchGitData(cwd)
+    void fetchGitData(cwd, diffSource)
       .then((next) => { if (!cancelled) { setData(next); setLoading(false) } })
       .catch(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [open, cwd])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sourceKey is diffSource's identity
+  }, [open, cwd, sourceKey])
 
   // Place the right pane on the first file when data loads
   useEffect(() => {
@@ -637,6 +961,7 @@ export default function GitPopover({ open, onClose, cwd, variant }: Props) {
           selectedFilePath,
           branchIndex,
           commitIndex,
+          source: diffSource,
         })
 
         if (rightContentRequestRef.current !== requestId) return
@@ -649,7 +974,8 @@ export default function GitPopover({ open, onClose, cwd, variant }: Props) {
     return () => {
       if (rightContentTimerRef.current) clearTimeout(rightContentTimerRef.current)
     }
-  }, [open, data, pane, cwd, selectedFilePath, branchIndex, commitIndex])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sourceKey is diffSource's identity
+  }, [open, data, pane, cwd, selectedFilePath, branchIndex, commitIndex, sourceKey])
 
   // Keyboard handler
   const handleKey = useCallback(
@@ -705,14 +1031,12 @@ export default function GitPopover({ open, onClose, cwd, variant }: Props) {
       }
 
       if (e.key === 'r') {
-        setLoading(true)
-        void fetchGitData(cwd)
-          .then((next) => { setData(next); setLoading(false) })
-          .catch(() => setLoading(false))
+        void reloadGitData()
+        void fetchGitTurns(cwd, sessionId).then((next) => { setTurns(next.turns); setTurnsScoped(next.scoped) })
         return
       }
     },
-    [cwd, data, focusSide, leftPaneHidden, leftPaneWidth, onClose, pane],
+    [cwd, data, focusSide, leftPaneHidden, leftPaneWidth, onClose, pane, reloadGitData, sessionId],
   )
 
   useEffect(() => {
@@ -1101,9 +1425,11 @@ export default function GitPopover({ open, onClose, cwd, variant }: Props) {
   }, [diffNotes, draftNote])
   if (!open) return null
 
+  const sourceLabel = diffSourceLabel(diffSourceSelection, turns)
+  const emptyChangeSetTitle = diffSource.kind === 'working' ? 'Working tree clean' : `No changes in ${sourceLabel.toLowerCase()}`
   const selectedTitle =
     pane === 1 ? 'Repository status'
-      : pane === 2 ? (selectedFilePath ?? (changedFileCount === 0 ? 'Working tree clean' : 'Select a file'))
+      : pane === 2 ? (selectedFilePath ?? (changedFileCount === 0 ? emptyChangeSetTitle : 'Select a file'))
         : pane === 3 ? (data?.branches[branchIndex] ?? 'Branches')
           : (data?.commits[commitIndex] ?? 'Commits')
 
@@ -1385,11 +1711,8 @@ export default function GitPopover({ open, onClose, cwd, variant }: Props) {
             type="button"
             className="av-hover-control"
             onClick={() => {
-              setLoading(true)
-              void fetchGitData(cwd)
-                .then((next) => setData(next))
-                .catch(() => {})
-                .finally(() => setLoading(false))
+              void reloadGitData()
+              void fetchGitTurns(cwd, sessionId).then((next) => { setTurns(next.turns); setTurnsScoped(next.scoped) })
             }}
             title="Refresh git status"
             style={{
@@ -1478,6 +1801,17 @@ export default function GitPopover({ open, onClose, cwd, variant }: Props) {
               ) : null}
             </button>
           ))}
+          <span style={{ width: 1, height: 20, background: 'var(--border)', margin: '0 2px' }} />
+          <DiffSourceMenu
+            selection={diffSourceSelection}
+            turns={turns}
+            scoped={turnsScoped}
+            sessionScoped={!!sessionId}
+            onSelect={(next) => {
+              setDiffSourceSelection(next)
+              setSelectedFilePath(null)
+            }}
+          />
           <span style={{ flex: 1 }} />
           {leftPaneHidden ? (
             <button
@@ -1608,7 +1942,7 @@ export default function GitPopover({ open, onClose, cwd, variant }: Props) {
             {pane === 1 ? (
               <div style={{ padding: 14, display: 'grid', gap: 10, overflow: 'auto' }}>
                 <InfoCard label="Branch" value={data?.branch ?? 'HEAD'} tone="violet" />
-                <InfoCard label="Working tree" value={changedFileCount === 0 ? 'Clean' : `${changedFileCount} changed files`} tone={changedFileCount === 0 ? 'green' : 'amber'} />
+                <InfoCard label={sourceLabel} value={changedFileCount === 0 ? 'Clean' : `${changedFileCount} changed files`} tone={changedFileCount === 0 ? 'green' : 'amber'} />
                 <InfoCard label="Upstream" value={data?.upstream ?? 'No upstream configured'} tone="muted" />
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                   <InfoCard label="Ahead" value={String(data?.ahead ?? 0)} tone="green" />
@@ -1626,7 +1960,12 @@ export default function GitPopover({ open, onClose, cwd, variant }: Props) {
               ) : loading ? (
                 <div style={{ padding: 14, color: 'var(--text-3)', fontSize: 13 }}>Loading…</div>
               ) : (
-                <EmptyState title="No file changes" description="The working tree is clean." />
+                <EmptyState
+                  title="No file changes"
+                  description={diffSource.kind === 'working'
+                    ? 'The working tree is clean.'
+                    : `Nothing changed in ${sourceLabel.toLowerCase()}.`}
+                />
               )
             ) : pane === 3 ? (
               <div ref={branchListRef} style={{ overflow: 'auto', flex: 1, padding: 8 }}>

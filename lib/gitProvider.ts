@@ -48,6 +48,31 @@ export type GitReviewData = GitData & {
   generatedAt: number
 }
 
+/** Which pair of trees the panel is diffing.
+ *
+ *  'working' is git's own uncommitted-changes view; 'branch' is everything this
+ *  branch changed since its fork point; 'turn' is one agent turn's checkpoint
+ *  compared against the working tree right now. Resolution lives in
+ *  lib/gitDiffSources.ts — this file stays free of Node imports so client
+ *  components can keep importing these types. */
+export type GitDiffSource =
+  | { kind: 'working' }
+  | { kind: 'branch' }
+  | { kind: 'turn'; sha: string }
+
+export type GitTurnRef = {
+  sha: string
+  label: string
+  createdAt: number
+  sessionId?: string
+}
+
+export function parseGitDiffSource(kind: unknown, sha: unknown): GitDiffSource {
+  if (kind === 'branch') return { kind: 'branch' }
+  if (kind === 'turn' && typeof sha === 'string' && /^[0-9a-f]{7,64}$/.test(sha)) return { kind: 'turn', sha }
+  return { kind: 'working' }
+}
+
 export type GitPaneId = 0 | 1 | 2 | 3 | 4
 
 export type GitCommandRunner = (cwd: string, args: string[]) => Promise<string>

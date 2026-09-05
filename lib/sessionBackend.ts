@@ -136,7 +136,7 @@ import {
 } from './sessionActivity'
 
 export { listViewRunningSessions, readViewRuntimeActivity } from './sessionActivity'
-import { createTurnCheckpoint } from './checkpoints'
+import { createTurnCheckpoint, retagCheckpointSession, type TurnCheckpoint } from './checkpoints'
 import { isNativeComposerCommandText } from './composerCommands'
 import { buildCodexComposerInput } from './codexComposerInput'
 import {
@@ -2683,7 +2683,7 @@ const CLAUDE_WARM_MAX_RESPAWN = 1
 // subprocess that really has gone quiet.
 const CLAUDE_WARM_SILENCE_BEFORE_PROBE_MS = 6000
 
-async function createClaudeStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>, checkpoint?: Promise<unknown>): Promise<Response> {
+async function createClaudeStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>, checkpoint?: Promise<TurnCheckpoint | null>): Promise<Response> {
   await ensureClaudePool()
   const userMessage = String(body.message ?? '').trim()
   const turnRequestId = parseTurnRequestId(body)
@@ -2820,7 +2820,7 @@ type ClaudeStreamColdArgs = {
   turnRequestId: string | undefined
   fallbackModel: string | undefined
   agentPolicy: ClaudeAgentPolicy | undefined
-  checkpoint?: Promise<unknown>
+  checkpoint?: Promise<TurnCheckpoint | null>
 }
 
 // The Claude SDK emits one `stream_event` message per streamed text/thinking
@@ -3227,6 +3227,16 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
             emittedSessionEvent = true
             realizedSessionId = messageSessionId
             viewerContext.sessionId = messageSessionId
+            // The checkpoint was stamped with the id this turn was addressed
+            // to, but a cold resume realizes its own — and the viewer follows
+            // the realized one. Left alone, every turn's snapshot would be
+            // filed under a session that is no longer on screen, and the
+            // session's own turn list would come back empty.
+            if (messageSessionId !== sessionId && cwdOverride) {
+              void checkpoint
+                ?.then((snapshot) => snapshot && retagCheckpointSession(cwdOverride, snapshot, messageSessionId))
+                .catch(() => null)
+            }
             // Mirror the registry entry under the realized id — a pending
             // session registers under its draft id, but reattach polls and
             // interrupts address the turn by the real id once it's known.
