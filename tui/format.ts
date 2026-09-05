@@ -8,6 +8,7 @@ import {
   formatClaudeRuntimeDetailLines,
 } from '../lib/claudeSdkFeatures'
 import { pathBasename } from '../lib/projectPaths'
+import { answerTextFor, parseAskUserAnswers, selectedOptionLabels, type AskUserQuestionSpec } from '../lib/askUserAnswers'
 // beautiful-mermaid is loaded on demand, not at import (load-bearing for
 // memory). It costs ~21MB of RSS to evaluate, this module is imported by both
 // TUIs *and* by the threading worker — a Bun Worker re-imports its graph into
@@ -1269,40 +1270,7 @@ type OpenCodeTaskInput = {
   wait?: boolean
 }
 
-type AskUserOption = { label: string; description?: string; preview?: string }
-type AskUserQuestion = { question: string; header?: string; multiSelect?: boolean; options: AskUserOption[] }
-type AskUserAnswers = { answers?: Record<string, string>; annotations?: Record<string, { preview?: string; notes?: string }> }
-
-function parseAskUserAnswers(raw: string | null): AskUserAnswers {
-  if (!raw) return {}
-  try {
-    const parsed = JSON.parse(raw) as AskUserAnswers
-    if (parsed && typeof parsed === 'object') return parsed
-  } catch { /* fall through */ }
-  return {}
-}
-
-function selectedOptionLabels(
-  question: AskUserQuestion,
-  answers: AskUserAnswers['answers'],
-  rawResult?: string | null,
-): Set<string> {
-  const raw = answers?.[question.question]
-  if (typeof raw === 'string' && raw) {
-    // multi-select answers are comma-separated per AskUserQuestionOutput schema
-    return new Set(raw.split(',').map((p) => p.trim()).filter(Boolean))
-  }
-  // Fallback: the tool result is often a plain confirmation string
-  // (`...="Blue"`) rather than a JSON answers map — match option labels in it
-  // so the answered selection still renders (mirrors the web card).
-  if (rawResult) {
-    const hits = question.options
-      .map((o) => o.label)
-      .filter((label) => rawResult.includes(`"${label}"`) || rawResult.includes(`=${label}`))
-    if (hits.length > 0) return new Set(hits)
-  }
-  return new Set()
-}
+type AskUserQuestion = AskUserQuestionSpec
 
 function formatAskUserQuestionTool(thread: ToolThread, expanded: boolean): TuiTranscriptCardLine[] {
   const input = thread.toolUse.input as { questions?: Array<Partial<AskUserQuestion>> }
@@ -1369,7 +1337,7 @@ function formatAskUserQuestionTool(thread: ToolThread, expanded: boolean): TuiTr
         const selected = selectedOptionLabels(q, parsed.answers, raw)
         const answer = selected.size > 0
           ? [...selected].join(', ')
-          : (answered ? '—' : 'pending')
+          : (answerTextFor(q, parsed.answers) || (answered ? '—' : 'pending'))
         const headerChip = q.header ? `[${q.header}] ` : ''
         const tone: TuiTranscriptLineTone = selected.size > 0 ? 'result_ok' : 'muted'
         lines.push(line(`  ${headerChip}${truncateLine(q.question)} → ${truncateLine(answer)}`, tone))
@@ -1401,6 +1369,11 @@ function formatAskUserQuestionTool(thread: ToolThread, expanded: boolean): TuiTr
         lines.push(line(`      ${truncateLine(opt.description)}`, 'dim'))
       }
     }
+
+    // A typed "Other" answer matches no option; show it rather than leaving
+    // every box empty under an "answered" header.
+    const custom = selected.size === 0 ? answerTextFor(q, parsed.answers) : ''
+    if (custom) lines.push(line(`  → ${truncateLine(custom)}`, 'result_ok'))
 
     const note = parsed.annotations?.[q.question]?.notes?.trim()
     if (note) {
