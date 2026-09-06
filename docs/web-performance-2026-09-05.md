@@ -291,3 +291,18 @@ The browser profiler remains available with `WEB_PERF_PROFILE`; the most recent
 opening profile showed most sampled time idle, with the largest application
 sample in the page bundle around row/layout work. Follow-up work should profile
 real provider streams, large-history loading, resize and expansion separately.
+
+## Project polling identity reuse (2026-09-06)
+
+Project mode polls message batches every 2 seconds. When a poll returned the
+same session metadata, the page still replaced `selectedProject` with a fresh
+object and session array, propagating a render through the project shell and
+transcript consumers. Both the project message poll and the global session
+synchronization now reuse the prior project object when
+`stabilizeSessionIdentities` finds no metadata changes; updates still replace
+only the changed session references. This is an idle-poll allocation and
+render reduction; a live-provider project workload still needs browser-side
+before/after measurement.
+
+Production build, web and OpenTUI type checks, virtualizer checks and diff
+hygiene passed after the change.

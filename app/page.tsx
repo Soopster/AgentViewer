@@ -864,7 +864,8 @@ export default function Home() {
       if (!prev) return prev
       const nextSessions = sessions.filter((s) => sameProjectPath(prev.dir, s.cwd))
       if (nextSessions.length === 0) return provider === 'all' && sessionScope !== 'project' ? prev : null
-      return { ...prev, sessions: nextSessions }
+      const stabilizedSessions = stabilizeSessionIdentities(prev.sessions, nextSessions)
+      return stabilizedSessions === prev.sessions ? prev : { ...prev, sessions: stabilizedSessions }
     })
   }, [provider, sessionScope, sessions])
 
@@ -1046,10 +1047,11 @@ export default function Home() {
         if (incoming.length > 0) {
           setMessages((prev) => trimProjectMessagesForMemory(mergeMessages(prev, incoming)))
         }
-        setSelectedProject((prev) => prev && sameProjectPath(prev.dir, selectedProject.dir)
-          ? { ...prev, sessions: projectSessions }
-          : prev
-        )
+        setSelectedProject((prev) => {
+          if (!prev || !sameProjectPath(prev.dir, selectedProject.dir)) return prev
+          const nextSessions = stabilizeSessionIdentities(prev.sessions, projectSessions)
+          return nextSessions === prev.sessions ? prev : { ...prev, sessions: nextSessions }
+        })
       } catch { /* ignore transient errors */ } finally {
         projectPollInFlightRef.current = false
       }
