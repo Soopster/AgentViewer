@@ -4,6 +4,7 @@ import type { TuiDensity } from '../theme'
 import type { ContextUsage, ProviderSelection, Session, SessionInfo, SessionMessage } from '../../lib/types'
 import { threadedMessageFingerprint } from './messageFingerprint'
 import { tuiWorkerUrl } from './workerUrl'
+import { restoreDeliveredPrefix } from './transcriptDelivery'
 
 export type SessionDetailPayload = {
   info: SessionInfo | null
@@ -63,6 +64,7 @@ type WorkerResponse =
       transcriptCards: TuiTranscriptCard[]
       deliveryToken: number
       baseDeliveryToken?: number
+      suffixOnly?: boolean
       rawPrefix: number
       threadedPrefix: number
       cardsPrefix: number
@@ -154,20 +156,6 @@ function touchLastDelivered(key: string, value: LastDeliveredDetail): void {
     if (oldestKey === undefined) break
     lastDeliveredByKey.delete(oldestKey)
   }
-}
-
-// Replace the unchanged prefix of a fresh-cloned array with the objects we
-// handed out last time. Falls back to the fresh array whenever the previous
-// delivery is missing or the prefix is empty — the response always carries the
-// full content, so reconciliation is purely an identity optimization.
-function spliceDelivered<T>(prev: T[] | undefined, fresh: T[], prefix: number): T[] {
-  if (!prev || prefix <= 0) return fresh
-  const n = Math.min(prefix, prev.length, fresh.length)
-  if (n <= 0) return fresh
-  if (n === fresh.length && prev.length === fresh.length) return prev
-  const out = fresh.slice()
-  for (let i = 0; i < n; i++) out[i] = prev[i]
-  return out
 }
 
 function sameThreadedMessage(next: ThreadedMessage, prev: ThreadedMessage): boolean {
@@ -264,12 +252,21 @@ function ensureWorker(): Worker {
         ? entry.previousDelivery
         : undefined
       const variantMatches = prev?.cardsVariant === entry.cardsVariant
-      const rawMessages = spliceDelivered(prev?.raw, data.rawMessages, data.rawPrefix ?? 0)
-      const threadedMessages = spliceDelivered(prev?.threaded, data.threadedMessages, data.threadedPrefix ?? 0)
-      const transcriptCards = spliceDelivered(
+      if (data.suffixOnly && (!variantMatches || !prev
+        || ![data.rawPrefix, data.threadedPrefix, data.cardsPrefix].every(Number.isInteger)
+        || data.rawPrefix < 0 || data.rawPrefix > prev.raw.length
+        || data.threadedPrefix < 0 || data.threadedPrefix > prev.threaded.length
+        || data.cardsPrefix < 0 || data.cardsPrefix > prev.cards.length)) {
+        entry.reject(new Error('threading worker returned an unknown detail delta baseline'))
+        return
+      }
+      const rawMessages = restoreDeliveredPrefix(prev?.raw, data.rawMessages, data.rawPrefix ?? 0, data.suffixOnly)
+      const threadedMessages = restoreDeliveredPrefix(prev?.threaded, data.threadedMessages, data.threadedPrefix ?? 0, data.suffixOnly)
+      const transcriptCards = restoreDeliveredPrefix(
         variantMatches ? prev?.cards : undefined,
         data.transcriptCards,
         data.cardsPrefix ?? 0,
+        data.suffixOnly,
       )
       touchLastDelivered(entry.sessionKey, {
         raw: rawMessages,

@@ -91,6 +91,7 @@ type WorkerResponse =
       transcriptCards: TuiTranscriptCard[]
       deliveryToken: number
       baseDeliveryToken?: number
+      suffixOnly?: boolean
       // How many leading entries of each array are object-identical (in this
       // worker) to the previous detail response for the same session. postMessage
       // cloning destroys identity, so the client uses these counts to splice its
@@ -571,7 +572,7 @@ self.onmessage = async (event) => {
     // owns. Prefix/length equality proves the transcript is unchanged; the
     // token prevents concurrent reads or a client eviction from reusing a
     // different baseline. Mutations, truncations and card-variant changes all
-    // fall through to the full response below.
+    // fall through to the array delivery below.
     const canReusePreviousDelivery = Boolean(
       prev
       && data.previousDeliveryToken === prev.deliveryToken
@@ -595,13 +596,19 @@ self.onmessage = async (event) => {
       self.postMessage({ id: data.id, ok: true, info, unchanged: true, deliveryToken, externalWriter })
       return
     }
+    // Only omit a prefix when this request captured the matching delivery.
+    // Concurrent reads and client eviction otherwise receive complete arrays.
+    const suffixOnly = Boolean(prev
+      && data.previousDeliveryToken === prev.deliveryToken
+      && prev.cardsVariant === cardsVariant)
     self.postMessage({
       id: data.id,
       ok: true,
       info,
-      rawMessages: alignedMessages,
-      threadedMessages,
-      transcriptCards,
+      suffixOnly,
+      rawMessages: suffixOnly ? alignedMessages.slice(rawPrefix) : alignedMessages,
+      threadedMessages: suffixOnly ? threadedMessages.slice(threadedPrefix) : threadedMessages,
+      transcriptCards: suffixOnly ? transcriptCards.slice(cardsPrefix) : transcriptCards,
       deliveryToken,
       baseDeliveryToken: prev?.deliveryToken,
       rawPrefix,
