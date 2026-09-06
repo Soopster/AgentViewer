@@ -469,7 +469,7 @@ const SessionRow = memo(function SessionRow({
         {editing !== 'title' && activityTime != null && (
           <span
             title={activityTitle}
-            style={{ fontSize: 11, color: 'var(--text-3)', flexShrink: 0 }}
+            style={{ fontSize: 11, color: 'var(--text-2)', flexShrink: 0 }}
           >
             {hydrated ? timeAgo(activityTime) : formatStableTimeLabel(activityTime)}
           </span>
@@ -495,7 +495,7 @@ const SessionRow = memo(function SessionRow({
           style={{
             marginTop: 3,
             fontSize: 12,
-            color: 'var(--text-3)',
+            color: 'var(--text-2)',
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
@@ -513,7 +513,7 @@ const SessionRow = memo(function SessionRow({
           style={{
             fontFamily: "'IBM Plex Mono', monospace",
             fontSize: 10,
-            color: 'var(--text-3)',
+            color: 'var(--text-2)',
             flexShrink: 0,
           }}
         >
@@ -527,7 +527,7 @@ const SessionRow = memo(function SessionRow({
               alignItems: 'center',
               gap: 5,
               fontSize: 11,
-              color: 'var(--text-3)',
+              color: 'var(--text-2)',
               flexShrink: 0,
             }}
           >
