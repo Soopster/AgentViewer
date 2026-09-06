@@ -39,6 +39,18 @@ export type Theme =
   | 'everforest-dark'
   | 'obsidian'
   | 'true-black'
+  | 'grove-dark'
+  | 'grove-light'
+  | 'ocean-dark'
+  | 'ocean-light'
+  | 'ember-dark'
+  | 'ember-light'
+  | 'iris-dark'
+  | 'iris-light'
+  | 't3-chat-dark'
+  | 't3-chat-light'
+  | 't3-code-dark'
+  | 't3-code-light'
   | 'github-dark'
   | 'ayu-dark'
   | 'rose-pine'
@@ -162,6 +174,18 @@ export const THEME_META: Record<Theme, { category: ThemeCategory; icon: string; 
   'everforest-dark':  { category: 'dark',  icon: '☾', label: 'Everforest Dark' },
   obsidian:           { category: 'dark',  icon: '☾', label: 'Obsidian' },
   'true-black':       { category: 'dark',  icon: '●', label: 'True Black' },
+  'grove-dark':        { category: 'dark', icon: '☾', label: 'Grove Dark' },
+  'grove-light':       { category: 'light', icon: '☀', label: 'Grove Light' },
+  'ocean-dark':        { category: 'dark', icon: '☾', label: 'Ocean Dark' },
+  'ocean-light':       { category: 'light', icon: '☀', label: 'Ocean Light' },
+  'ember-dark':        { category: 'dark', icon: '☾', label: 'Ember Dark' },
+  'ember-light':       { category: 'light', icon: '☀', label: 'Ember Light' },
+  'iris-dark':         { category: 'dark', icon: '☾', label: 'Iris Dark' },
+  'iris-light':        { category: 'light', icon: '☀', label: 'Iris Light' },
+  't3-chat-dark':      { category: 'dark', icon: '☾', label: 'T3 Chat Dark' },
+  't3-chat-light':     { category: 'light', icon: '☀', label: 'T3 Chat Light' },
+  't3-code-dark':      { category: 'dark', icon: '☾', label: 'T3 Code Dark' },
+  't3-code-light':     { category: 'light', icon: '☀', label: 'T3 Code Light' },
   'github-dark':      { category: 'dark',  icon: '☾', label: 'GitHub Dark' },
   'ayu-dark':         { category: 'dark',  icon: '☾', label: 'Ayu Dark' },
   'rose-pine':        { category: 'dark',  icon: '☾', label: 'Rosé Pine' },

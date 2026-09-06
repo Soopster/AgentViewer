@@ -690,6 +690,150 @@ html[data-color-treatment="flat"] .av-hover-control:not(:disabled):hover {
   --t-grep: #f87171; --t-glob: #d989c4; --t-agent: #d989c4; --t-other: #8a8a8a;
 }
 
+/* ── Design tokens ── grove-dark ──────────────────────────────────────────── */
+[data-theme="grove-dark"] {
+  --bg: #0a120f; --surface: #111a16; --surface-2: #1b2822; --surface-3: #283932;
+  --border: #2e4038; --border-2: #4ec98a;
+  --text: #c9d8d2; --text-2: #759587; --text-3: #5b7168;
+  --violet: #4ec98a; --violet-glow: color-mix(in srgb, #4ec98a 15%, transparent);
+  --cyan: #5ec8e5; --cyan-glow: color-mix(in srgb, #5ec8e5 12%, transparent);
+  --green: #4ade80; --red: #f87171; --amber: #e3b341;
+  --t-bash: #e3b341; --t-edit: #4ade80; --t-write: #5ec8e5; --t-read: #4ec98a;
+  --t-grep: #f87171; --t-glob: #e987c8; --t-agent: #e987c8; --t-other: #759587;
+}
+
+/* ── Design tokens ── grove-light ─────────────────────────────────────────── */
+[data-theme="grove-light"] {
+  --bg: #f7fbf9; --surface: #ffffff; --surface-2: #f0f7f4; --surface-3: #e4efea;
+  --border: #d7e4df; --border-2: #2f8f5b;
+  --text: #2a3a33; --text-2: #567065; --text-3: #769186;
+  --violet: #2f8f5b; --violet-glow: color-mix(in srgb, #2f8f5b 12%, transparent);
+  --cyan: #0e7490; --cyan-glow: color-mix(in srgb, #0e7490 10%, transparent);
+  --green: #15803d; --red: #b91c1c; --amber: #a16207;
+  --t-bash: #a16207; --t-edit: #15803d; --t-write: #0e7490; --t-read: #2f8f5b;
+  --t-grep: #b91c1c; --t-glob: #be185d; --t-agent: #be185d; --t-other: #567065;
+}
+
+/* ── Design tokens ── ocean-dark ──────────────────────────────────────────── */
+[data-theme="ocean-dark"] {
+  --bg: #0a0f12; --surface: #11171a; --surface-2: #1b2328; --surface-3: #283339;
+  --border: #2e3940; --border-2: #4fb0e0;
+  --text: #cbd4d9; --text-2: #7c8f9a; --text-3: #5f6d76;
+  --violet: #4fb0e0; --violet-glow: color-mix(in srgb, #4fb0e0 15%, transparent);
+  --cyan: #5ec8e5; --cyan-glow: color-mix(in srgb, #5ec8e5 12%, transparent);
+  --green: #4ade80; --red: #f87171; --amber: #e3b341;
+  --t-bash: #e3b341; --t-edit: #4ade80; --t-write: #5ec8e5; --t-read: #4fb0e0;
+  --t-grep: #f87171; --t-glob: #e987c8; --t-agent: #e987c8; --t-other: #7c8f9a;
+}
+
+/* ── Design tokens ── ocean-light ─────────────────────────────────────────── */
+[data-theme="ocean-light"] {
+  --bg: #f7f9fb; --surface: #ffffff; --surface-2: #f0f4f7; --surface-3: #e4ebef;
+  --border: #d7e0e4; --border-2: #1f74a8;
+  --text: #2d383e; --text-2: #5b6d77; --text-3: #7d8e97;
+  --violet: #1f74a8; --violet-glow: color-mix(in srgb, #1f74a8 12%, transparent);
+  --cyan: #0e7490; --cyan-glow: color-mix(in srgb, #0e7490 10%, transparent);
+  --green: #15803d; --red: #b91c1c; --amber: #a16207;
+  --t-bash: #a16207; --t-edit: #15803d; --t-write: #0e7490; --t-read: #1f74a8;
+  --t-grep: #b91c1c; --t-glob: #be185d; --t-agent: #be185d; --t-other: #5b6d77;
+}
+
+/* ── Design tokens ── ember-dark ──────────────────────────────────────────── */
+[data-theme="ember-dark"] {
+  --bg: #120d0a; --surface: #1a1511; --surface-2: #28201b; --surface-3: #392f28;
+  --border: #40352e; --border-2: #e08a4f;
+  --text: #d9d1cb; --text-2: #9b897d; --text-3: #77685f;
+  --violet: #e08a4f; --violet-glow: color-mix(in srgb, #e08a4f 15%, transparent);
+  --cyan: #5ec8e5; --cyan-glow: color-mix(in srgb, #5ec8e5 12%, transparent);
+  --green: #4ade80; --red: #f87171; --amber: #e3b341;
+  --t-bash: #e3b341; --t-edit: #4ade80; --t-write: #5ec8e5; --t-read: #e08a4f;
+  --t-grep: #f87171; --t-glob: #e987c8; --t-agent: #e987c8; --t-other: #9b897d;
+}
+
+/* ── Design tokens ── ember-light ─────────────────────────────────────────── */
+[data-theme="ember-light"] {
+  --bg: #fbf8f7; --surface: #ffffff; --surface-2: #f7f3f0; --surface-3: #efe8e4;
+  --border: #e4ddd7; --border-2: #b4602a;
+  --text: #3f352e; --text-2: #78675c; --text-3: #98887e;
+  --violet: #b4602a; --violet-glow: color-mix(in srgb, #b4602a 12%, transparent);
+  --cyan: #0e7490; --cyan-glow: color-mix(in srgb, #0e7490 10%, transparent);
+  --green: #15803d; --red: #b91c1c; --amber: #a16207;
+  --t-bash: #a16207; --t-edit: #15803d; --t-write: #0e7490; --t-read: #b4602a;
+  --t-grep: #b91c1c; --t-glob: #be185d; --t-agent: #be185d; --t-other: #78675c;
+}
+
+/* ── Design tokens ── iris-dark ───────────────────────────────────────────── */
+[data-theme="iris-dark"] {
+  --bg: #0d0a12; --surface: #15111a; --surface-2: #201b28; --surface-3: #2f2839;
+  --border: #352e40; --border-2: #a78bfa;
+  --text: #d3cddb; --text-2: #9185a1; --text-3: #6f657e;
+  --violet: #a78bfa; --violet-glow: color-mix(in srgb, #a78bfa 15%, transparent);
+  --cyan: #5ec8e5; --cyan-glow: color-mix(in srgb, #5ec8e5 12%, transparent);
+  --green: #4ade80; --red: #f87171; --amber: #e3b341;
+  --t-bash: #e3b341; --t-edit: #4ade80; --t-write: #5ec8e5; --t-read: #a78bfa;
+  --t-grep: #f87171; --t-glob: #e987c8; --t-agent: #e987c8; --t-other: #9185a1;
+}
+
+/* ── Design tokens ── iris-light ──────────────────────────────────────────── */
+[data-theme="iris-light"] {
+  --bg: #f8f7fb; --surface: #ffffff; --surface-2: #f3f0f7; --surface-3: #e8e4ef;
+  --border: #ddd7e4; --border-2: #7c5cd6;
+  --text: #3b3346; --text-2: #716583; --text-3: #91879f;
+  --violet: #7c5cd6; --violet-glow: color-mix(in srgb, #7c5cd6 12%, transparent);
+  --cyan: #0e7490; --cyan-glow: color-mix(in srgb, #0e7490 10%, transparent);
+  --green: #15803d; --red: #b91c1c; --amber: #a16207;
+  --t-bash: #a16207; --t-edit: #15803d; --t-write: #0e7490; --t-read: #7c5cd6;
+  --t-grep: #b91c1c; --t-glob: #be185d; --t-agent: #be185d; --t-other: #716583;
+}
+
+/* ── Design tokens ── t3-chat-dark ────────────────────────────────────────── */
+[data-theme="t3-chat-dark"] {
+  --bg: #120a0e; --surface: #1a1116; --surface-2: #281b21; --surface-3: #392830;
+  --border: #402e37; --border-2: #f472b6;
+  --text: #dacdd3; --text-2: #9f8391; --text-3: #7b636f;
+  --violet: #f472b6; --violet-glow: color-mix(in srgb, #f472b6 15%, transparent);
+  --cyan: #5ec8e5; --cyan-glow: color-mix(in srgb, #5ec8e5 12%, transparent);
+  --green: #4ade80; --red: #f87171; --amber: #e3b341;
+  --t-bash: #e3b341; --t-edit: #4ade80; --t-write: #5ec8e5; --t-read: #f472b6;
+  --t-grep: #f87171; --t-glob: #e987c8; --t-agent: #e987c8; --t-other: #9f8391;
+}
+
+/* ── Design tokens ── t3-chat-light ───────────────────────────────────────── */
+[data-theme="t3-chat-light"] {
+  --bg: #fbf7f9; --surface: #ffffff; --surface-2: #f7f0f4; --surface-3: #efe4e9;
+  --border: #e4d7de; --border-2: #c2185b;
+  --text: #44313b; --text-2: #7f6271; --text-3: #9d8591;
+  --violet: #c2185b; --violet-glow: color-mix(in srgb, #c2185b 12%, transparent);
+  --cyan: #0e7490; --cyan-glow: color-mix(in srgb, #0e7490 10%, transparent);
+  --green: #15803d; --red: #b91c1c; --amber: #a16207;
+  --t-bash: #a16207; --t-edit: #15803d; --t-write: #0e7490; --t-read: #c2185b;
+  --t-grep: #b91c1c; --t-glob: #be185d; --t-agent: #be185d; --t-other: #7f6271;
+}
+
+/* ── Design tokens ── t3-code-dark ────────────────────────────────────────── */
+[data-theme="t3-code-dark"] {
+  --bg: #0c0a12; --surface: #12111a; --surface-2: #1d1b28; --surface-3: #2b2839;
+  --border: #312e40; --border-2: #9d9bd4;
+  --text: #d0cddb; --text-2: #8b86a2; --text-3: #6a667f;
+  --violet: #9d9bd4; --violet-glow: color-mix(in srgb, #9d9bd4 15%, transparent);
+  --cyan: #5ec8e5; --cyan-glow: color-mix(in srgb, #5ec8e5 12%, transparent);
+  --green: #4ade80; --red: #f87171; --amber: #e3b341;
+  --t-bash: #e3b341; --t-edit: #4ade80; --t-write: #5ec8e5; --t-read: #9d9bd4;
+  --t-grep: #f87171; --t-glob: #e987c8; --t-agent: #e987c8; --t-other: #8b86a2;
+}
+
+/* ── Design tokens ── t3-code-light ───────────────────────────────────────── */
+[data-theme="t3-code-light"] {
+  --bg: #f7f7fb; --surface: #ffffff; --surface-2: #f1f0f7; --surface-3: #e6e4ef;
+  --border: #d9d7e4; --border-2: #6c63b5;
+  --text: #373448; --text-2: #6c6685; --text-3: #8c88a0;
+  --violet: #6c63b5; --violet-glow: color-mix(in srgb, #6c63b5 12%, transparent);
+  --cyan: #0e7490; --cyan-glow: color-mix(in srgb, #0e7490 10%, transparent);
+  --green: #15803d; --red: #b91c1c; --amber: #a16207;
+  --t-bash: #a16207; --t-edit: #15803d; --t-write: #0e7490; --t-read: #6c63b5;
+  --t-grep: #b91c1c; --t-glob: #be185d; --t-agent: #be185d; --t-other: #6c6685;
+}
+
 /* ── Design tokens ── github-dark ────────────────────────────────────────── */
 [data-theme="github-dark"] {
   --bg: #0d1117; --surface: #161b22; --surface-2: #21262d; --surface-3: #30363d;
@@ -1277,6 +1421,7 @@ html[data-color-treatment="flat"] .av-hover-control:not(:disabled):hover {
 [data-theme="tokyo-night"], [data-theme="catppuccin-mocha"], [data-theme="one-dark"],
 [data-theme="monokai"], [data-theme="kanagawa"], [data-theme="everforest-dark"],
 [data-theme="obsidian"], [data-theme="true-black"], [data-theme="github-dark"], [data-theme="ayu-dark"],
+[data-theme="grove-dark"], [data-theme="ocean-dark"], [data-theme="ember-dark"], [data-theme="iris-dark"], [data-theme="t3-chat-dark"], [data-theme="t3-code-dark"],
 [data-theme="rose-pine"], [data-theme="synthwave"], [data-theme="palenight"],
 [data-theme="night-owl"], [data-theme="flexoki-dark"], [data-theme="cobalt"],
 [data-theme="vitesse-dark"], [data-theme="iceberg"], [data-theme="zenburn"],
@@ -1293,6 +1438,7 @@ html[data-color-treatment="flat"] .av-hover-control:not(:disabled):hover {
 }
 
 [data-theme="light"], [data-theme="imessage"], [data-theme="paper"],
+[data-theme="grove-light"], [data-theme="ocean-light"], [data-theme="ember-light"], [data-theme="iris-light"], [data-theme="t3-chat-light"], [data-theme="t3-code-light"],
 [data-theme="solarized-light"], [data-theme="github-light"], [data-theme="gruvbox-light"],
 [data-theme="catppuccin-latte"], [data-theme="rose-pine-dawn"], [data-theme="ayu-light"],
 [data-theme="one-light"], [data-theme="everforest-light"], [data-theme="tokyo-night-day"],
