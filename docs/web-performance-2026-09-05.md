@@ -260,3 +260,34 @@ other panels.
 Production build, web and OpenTUI type checks, helper parity and browser checks
 passed. React Doctor still reports three MessageView complexity warnings, with
 no errors or remote score. The full workload objective remains incomplete.
+
+## Initial transcript settlement and final browser verification (2026-09-06)
+
+Initial transcript loading previously scheduled six consecutive animation-frame
+passes that each read layout and forced bottom alignment. The existing content
+ResizeObserver continues to pin the viewport while row measurements settle, so
+the initial loop now uses two passes: the first paint and the first observer
+delivery. This removes four forced layout passes while preserving the observer
+based late-row settlement. The virtualizer correctness smoke still passes.
+
+The post-change Chromium run used 500 synthetic sessions, a 2,000-event mixed
+transcript, all four view modes, transcript search/clear, composer typing and
+12 upward wheel inputs per mode. It passed with no page errors or long tasks.
+Opening was 909 ms in one run including automation and synthetic API setup;
+search was 44 ms and clear was 65 ms. Mode changes ranged from 92–180 ms.
+All wheel checks left the tail by 8,396–8,436 px and mounted readable rows.
+Frame samples stayed around the 60 Hz cadence; these timings include harness
+overhead and are not INP or a strict frame-budget certification. A corrected
+text/mixed matrix had 84 observations before this two-pass change; the final
+post-change mixed run completed all mode/scroll stages.
+
+The 10,000-line mixed tool-output run also passed all 14 stages with no long
+tasks: opening 451 ms, search 60 ms and clear 64 ms. The retained-memory run
+performed 12 alternating selections after forced collection and stayed between
+15.6 and 17.2 MB of collected JS heap. DOM counts vary with the mounted window;
+this is a bounded synthetic sample, not proof of no leak across long streams.
+
+The browser profiler remains available with `WEB_PERF_PROFILE`; the most recent
+opening profile showed most sampled time idle, with the largest application
+sample in the page bundle around row/layout work. Follow-up work should profile
+real provider streams, large-history loading, resize and expansion separately.

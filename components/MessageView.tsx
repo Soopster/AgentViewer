@@ -7059,11 +7059,14 @@ function MessageViewInner({
 
     let cancelled = false
     let frameId: number | null = null
+    // Two passes cover the initial paint and the first ResizeObserver delivery.
+    // The content observer below continues pinning while late rows settle, so
+    // six forced layout reads here only delayed first interaction.
     const runInitialScrollPass = (pass: number) => {
       if (cancelled) return
       scrollTimelineToBottom()
       alignLastTimelineRowToViewportBottom()
-      if (pass >= 6) return
+      if (pass >= 2) return
       frameId = window.requestAnimationFrame(() => runInitialScrollPass(pass + 1))
     }
 

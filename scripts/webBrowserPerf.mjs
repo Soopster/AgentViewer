@@ -85,6 +85,10 @@ try {
   console.log(JSON.stringify({ workload: 'browser-sidebar-filter', contentKind, sessions: size, durationMs: performance.now() - searchStarted,
     mountedSessionRows: await page.locator('[data-session-key]').count() }))
   assert.equal(await page.locator('[data-session-key="codex:perf-0"]').count(), 1)
+  // The sidebar filter is independent of transcript search; clear it before
+  // opening so the selected session's transcript controls can mount.
+  await search.fill('')
+  await page.waitForFunction(() => document.querySelectorAll('[data-session-key]').length >= 2)
   await page.evaluate(() => { window.__webPerfLongTasks = [] })
   const profiler = process.env.WEB_PERF_PROFILE ? await context.newCDPSession(page) : null
   if (profiler) {
@@ -117,7 +121,7 @@ try {
   console.log(JSON.stringify({ workload: 'browser-composer-type-two-frames', contentKind, messages: messageCount, samplesMs: typingSamples,
     longTasks: await page.evaluate(() => window.__webPerfLongTasks) }))
   await page.evaluate(() => { window.__webPerfLongTasks = [] })
-  const transcriptSearch = page.getByPlaceholder('Search turns, tools, paths, commands...')
+  const transcriptSearch = page.getByPlaceholder('Search turns, tools, paths, commands…')
   const searchTurn = `Fixture turn ${messageCount - 1}`
   let started = performance.now()
   await transcriptSearch.fill(searchTurn)
@@ -128,10 +132,10 @@ try {
   await transcriptSearch.fill('')
   await page.waitForFunction(() => document.querySelectorAll('[data-timeline-key]').length > 1)
   await report('browser-transcript-search-clear', started)
-  for (const [mode, description] of [['STREAM', 'plain text'], ['AGENTS', 'AgentsView cards'], ['CONT', 'no tools'], ['FULL', 'all cards']]) {
+  for (const mode of ['STREAM', 'AGENTS', 'CONT', 'FULL']) {
     started = performance.now()
-    await page.getByRole('button', { name: /^VIEW/ }).click()
-    await page.getByRole('button', { name: new RegExp(`^${mode}.*${description}`) }).click()
+    await page.locator('button').filter({ hasText: 'VIEW' }).first().click()
+    await page.locator('button').filter({ hasText: mode }).last().click()
     await page.locator('[data-timeline-key]').first().waitFor()
     await report(`browser-mode-${mode.toLowerCase()}`, started)
     const scroller = await page.locator('[data-timeline-key]').first().evaluate(row => {
