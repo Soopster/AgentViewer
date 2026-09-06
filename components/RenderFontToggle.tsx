@@ -62,7 +62,7 @@ export default function RenderFontToggle() {
       >
         <span aria-hidden="true" style={{ fontFamily: current.family, fontSize: 12, lineHeight: 1 }}>Aa</span>
         <span>{current.label}</span>
-        <span aria-hidden="true" style={{ fontSize: 9, color: 'var(--text-3)', marginLeft: 1 }}>{open ? '▲' : '▼'}</span>
+        <span aria-hidden="true" style={{ fontSize: 11, color: 'var(--text-3)', marginLeft: 1 }}>{open ? '▲' : '▼'}</span>
       </Button>
 
       {open ? (

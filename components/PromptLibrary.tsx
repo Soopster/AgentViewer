@@ -101,9 +101,9 @@ const headerStyle: React.CSSProperties = {
 
 const fieldLabelStyle: React.CSSProperties = {
   fontFamily: "'IBM Plex Mono', monospace",
-  fontSize: 9,
-  letterSpacing: '0.08em',
-  textTransform: 'uppercase',
+  fontSize: 11,
+  letterSpacing: '0.02em',
+  textTransform: 'capitalize',
   color: 'var(--text-3)',
   marginBottom: 4,
 }
@@ -395,7 +395,7 @@ export default function PromptLibrary({
           <div style={{
             padding: '4px 8px 6px',
             fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 9,
+            fontSize: 11,
             color: accentColor,
             letterSpacing: '0.06em',
           }}>
@@ -453,7 +453,7 @@ export default function PromptLibrary({
                       {prompt.title}
                     </span>
                     {prompt.placeholders.length > 0 && (
-                      <span style={{ fontSize: 9, color: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }}>
+                      <span style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }}>
                         {prompt.placeholders.length} placeholder{prompt.placeholders.length === 1 ? '' : 's'}
                       </span>
                     )}
@@ -465,7 +465,7 @@ export default function PromptLibrary({
                     <div style={{ display: 'flex', gap: 4, marginTop: 3, flexWrap: 'wrap' }}>
                       {prompt.tags.map((tag) => (
                         <span key={tag} style={{
-                          fontSize: 9,
+                          fontSize: 11,
                           padding: '1px 6px',
                           borderRadius: 999,
                           border: '1px solid var(--border)',

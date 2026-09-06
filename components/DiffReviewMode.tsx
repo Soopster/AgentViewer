@@ -263,7 +263,7 @@ const EvidenceList = memo(function EvidenceList({
 }) {
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.02em', textTransform: 'capitalize' }}>
         {title}
       </div>
       {items.length === 0 ? (
@@ -535,7 +535,7 @@ export default function DiffReviewMode({ session, messages, diffStyle, diffOptio
         <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8 }}>
           {repoFacts.map((fact) => (
             <div key={fact.label} style={{ minWidth: 0, padding: '9px 10px', border: '1px solid var(--border)', borderRadius: 7, background: 'var(--surface-2)' }}>
-              <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>
+              <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.02em', textTransform: 'capitalize', marginBottom: 4 }}>
                 {fact.label}
               </div>
               <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: fact.tone, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={fact.value}>
@@ -596,7 +596,7 @@ export default function DiffReviewMode({ session, messages, diffStyle, diffOptio
                     {draftPaths.includes(file.path) ? (
                       <span style={{ color: 'var(--amber)' }} title="Unsaved edit kept for this file">DRAFT</span>
                     ) : (
-                      <span style={{ color: statusColor(file), textTransform: 'uppercase' }}>{file.status}</span>
+                      <span style={{ color: statusColor(file), textTransform: 'capitalize' }}>{file.status}</span>
                     )}
                     <span><span style={{ color: 'var(--green)' }}>+{file.additions}</span> <span style={{ color: 'var(--red)' }}>-{file.deletions}</span></span>
                   </span>
@@ -619,7 +619,7 @@ export default function DiffReviewMode({ session, messages, diffStyle, diffOptio
                   {selectedFile?.path ?? 'No file selected'}
                 </div>
                 {selectedFile && (
-                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: statusColor(selectedFile), letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: statusColor(selectedFile), letterSpacing: '0.02em', textTransform: 'capitalize' }}>
                     {selectedFile.status} · {selectedFile.staged ? 'staged' : 'unstaged'}{selectedFile.untracked ? ' · untracked' : ''}
                   </div>
                 )}
@@ -721,7 +721,7 @@ export default function DiffReviewMode({ session, messages, diffStyle, diffOptio
             <EvidenceList title="Verification" items={analysis.tests} empty="No verification commands found." onJumpToMessage={onJumpToMessage} />
             <EvidenceList title="Tool Errors" items={analysis.errors} empty="No tool errors found." onJumpToMessage={onJumpToMessage} />
             <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+              <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.02em', textTransform: 'capitalize' }}>
                 Recent Commits
               </div>
               {review?.commits.length ? (
@@ -747,7 +747,7 @@ export default function DiffReviewMode({ session, messages, diffStyle, diffOptio
               )}
             </section>
             <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.02em', textTransform: 'capitalize' }}>
                 <Terminal size={12} />
                 Recent Commands
               </div>

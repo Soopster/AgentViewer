@@ -65,7 +65,7 @@ export default function ThemeToggle() {
       >
         <span style={{ fontSize: 12, lineHeight: 1, flexShrink: 0 }}>{meta.icon}</span>
         <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{meta.label}</span>
-        <span style={{ fontSize: 9, color: 'var(--text-3)', marginLeft: 'auto', flexShrink: 0 }}>{open ? '▲' : '▼'}</span>
+        <span style={{ fontSize: 11, color: 'var(--text-3)', marginLeft: 'auto', flexShrink: 0 }}>{open ? '▲' : '▼'}</span>
       </Button>
 
       {open && (
@@ -102,8 +102,8 @@ export default function ThemeToggle() {
                   padding: '6px 14px 4px',
                   fontFamily: "'IBM Plex Mono', monospace",
                   fontSize: 10,
-                  letterSpacing: '0.12em',
-                  textTransform: 'uppercase',
+                  letterSpacing: '0.02em',
+                  textTransform: 'capitalize',
                   color: 'var(--text-3)',
                 }}
               >

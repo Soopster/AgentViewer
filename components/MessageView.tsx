@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { getAssistantDisplayName } from '@/lib/provider'
 import { memo, useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo, useDeferredValue, useSyncExternalStore } from 'react'
 import type {
   ApiMessage,
@@ -454,7 +455,7 @@ const composerPopoverStyle: React.CSSProperties = {
 const composerPopoverHintStyle: React.CSSProperties = {
   padding: '4px 8px 6px',
   fontFamily: "'IBM Plex Mono', monospace",
-  fontSize: 9,
+  fontSize: 11,
   color: 'var(--text-3)',
   letterSpacing: '0.06em',
   borderBottom: '1px solid var(--border)',
@@ -2415,10 +2416,10 @@ const OpenCodeTodosBanner = memo(function OpenCodeTodosBanner({ todos }: { todos
               {todo.priority && todo.priority !== 'medium' && (
                 <span
                   style={{
-                    fontSize: 9,
-                    letterSpacing: '0.08em',
+                    fontSize: 11,
+                    letterSpacing: '0.02em',
                     color: 'var(--text-3)',
-                    textTransform: 'uppercase',
+                    textTransform: 'capitalize',
                     flexShrink: 0,
                   }}
                 >
@@ -2612,7 +2613,7 @@ function PlanApprovalCard({
       )}
       {permission.allowedPrompts && permission.allowedPrompts.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: 'var(--text-3)', letterSpacing: '0.06em' }}>
+          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.06em' }}>
             APPROVING ALLOWS
           </div>
           {permission.allowedPrompts.map((p, i) => (
@@ -2634,7 +2635,7 @@ function PlanApprovalCard({
             border: '1px solid rgba(234,170,64,0.30)',
             background: 'rgba(234,170,64,0.08)',
             color: 'var(--amber, #eaaa40)',
-            fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, letterSpacing: '0.06em',
+            fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.06em',
             cursor: busy ? 'not-allowed' : 'pointer',
           }}
         >
@@ -2651,7 +2652,7 @@ function PlanApprovalCard({
             border: '1px solid rgba(45,212,160,0.30)',
             background: 'rgba(45,212,160,0.08)',
             color: 'var(--green)',
-            fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, letterSpacing: '0.06em',
+            fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.06em',
             cursor: busy ? 'not-allowed' : 'pointer',
           }}
         >
@@ -2668,7 +2669,7 @@ function PlanApprovalCard({
             border: '1px solid rgba(45,212,160,0.45)',
             background: 'rgba(45,212,160,0.16)',
             color: 'var(--green)',
-            fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, letterSpacing: '0.06em',
+            fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.06em',
             cursor: busy ? 'not-allowed' : 'pointer',
             opacity: busy ? 0.55 : 1,
           }}
@@ -2751,8 +2752,8 @@ function AskUserQuestionPicker({
     >
       <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--violet)', letterSpacing: '0.06em' }}>
         {questions.length === 1
-          ? `${(permission.provider ?? 'claude').toUpperCase()} ASKS`
-          : `${(permission.provider ?? 'claude').toUpperCase()} ASKS · ${questions.length} QUESTIONS`}
+          ? `${getAssistantDisplayName(permission.provider ?? 'claude')} asks`
+          : `${getAssistantDisplayName(permission.provider ?? 'claude')} asks · ${questions.length} questions`}
       </div>
       {questions.map((q, qi) => {
         const selected = selections[qi] ?? []
@@ -2770,7 +2771,7 @@ function AskUserQuestionPicker({
                   padding: '1px 5px',
                   flexShrink: 0,
                 }}>
-                  {q.header.toUpperCase()}
+                  {q.header}
                 </span>
               )}
               <span>{q.question}{q.multiSelect ? <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--text-3)', fontWeight: 400 }}>(select all that apply)</span> : null}</span>
@@ -2814,7 +2815,7 @@ function AskUserQuestionPicker({
                         marginTop: 2,
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                       }}>
-                        {isSelected && <span style={{ fontSize: 8, color: 'var(--bg)', lineHeight: 1, fontWeight: 700 }}>✓</span>}
+                        {isSelected && <span style={{ fontSize: 10, color: 'var(--bg)', lineHeight: 1, fontWeight: 700 }}>✓</span>}
                       </span>
                       <span style={{ flex: 1, minWidth: 0 }}>
                         <span style={{
@@ -2920,7 +2921,7 @@ function AskUserQuestionPicker({
             border: '1px solid rgba(248,113,113,0.24)',
             background: 'rgba(248,113,113,0.08)',
             color: 'var(--red, #f87171)',
-            fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, letterSpacing: '0.06em',
+            fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.06em',
             cursor: busy ? 'not-allowed' : 'pointer',
           }}
         >
@@ -2937,7 +2938,7 @@ function AskUserQuestionPicker({
             border: '1px solid rgba(139,128,240,0.40)',
             background: 'rgba(139,128,240,0.14)',
             color: 'var(--violet)',
-            fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, letterSpacing: '0.06em',
+            fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.06em',
             cursor: (!allAnswered || busy) ? 'not-allowed' : 'pointer',
             opacity: (!allAnswered || busy) ? 0.55 : 1,
           }}
@@ -8574,7 +8575,7 @@ function MessageViewInner({
                       title={title}
                       style={{
                         fontFamily: "'IBM Plex Mono', monospace",
-                        fontSize: 9,
+                        fontSize: 11,
                         color: 'var(--cyan)',
                         background: 'var(--surface)',
                         border: '1px solid rgba(56,217,245,0.3)',
@@ -8610,7 +8611,7 @@ function MessageViewInner({
                           onClick={() => { void addClaudeMcpServer() }}
                           disabled={claudeMcpBusy !== null}
                           title="Add a session-scoped MCP server"
-                          style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: 'var(--green)', background: 'transparent', border: '1px solid rgba(74,222,128,0.3)', borderRadius: 4, height: 18, padding: '0 5px', cursor: claudeMcpBusy ? 'not-allowed' : 'pointer' }}
+                          style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--green)', background: 'transparent', border: '1px solid rgba(74,222,128,0.3)', borderRadius: 4, height: 18, padding: '0 5px', cursor: claudeMcpBusy ? 'not-allowed' : 'pointer' }}
                         >
                           + ADD
                         </button>
@@ -8623,14 +8624,14 @@ function MessageViewInner({
                             onChange={(event) => setClaudeHookQuery(event.target.value)}
                             onKeyDown={(event) => { if (event.key === 'Enter') void searchClaudeHookEvents() }}
                             placeholder="filter hooks"
-                            style={{ width: 110, height: 18, padding: '0 5px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: 'var(--text)', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4 }}
+                            style={{ width: 110, height: 18, padding: '0 5px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text)', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4 }}
                           />
                           <button
                             type="button"
                             className="av-hover-control"
                             onClick={() => { void searchClaudeHookEvents() }}
                             disabled={claudeHookSearching}
-                            style={{ height: 18, padding: '0 5px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: 'var(--cyan)', background: 'transparent', border: '1px solid rgba(56,217,245,0.3)', borderRadius: 4, cursor: claudeHookSearching ? 'wait' : 'pointer' }}
+                            style={{ height: 18, padding: '0 5px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--cyan)', background: 'transparent', border: '1px solid rgba(56,217,245,0.3)', borderRadius: 4, cursor: claudeHookSearching ? 'wait' : 'pointer' }}
                           >
                             {claudeHookSearching ? '…' : 'SEARCH'}
                           </button>
@@ -8684,7 +8685,7 @@ function MessageViewInner({
                                     height: 18,
                                     maxWidth: 82,
                                     fontFamily: "'IBM Plex Mono', monospace",
-                                    fontSize: 9,
+                                    fontSize: 11,
                                     color: 'var(--text-2)',
                                     background: 'var(--surface)',
                                     border: '1px solid var(--border)',
@@ -8704,7 +8705,7 @@ function MessageViewInner({
                                   title={`Reconnect ${name}`}
                                   style={{
                                     fontFamily: "'IBM Plex Mono', monospace",
-                                    fontSize: 9,
+                                    fontSize: 11,
                                     color: 'var(--cyan)',
                                     background: 'transparent',
                                     border: '1px solid rgba(56,217,245,0.3)',
@@ -8726,7 +8727,7 @@ function MessageViewInner({
                                   title={`${enabled ? 'Disable' : 'Enable'} ${name}`}
                                   style={{
                                     fontFamily: "'IBM Plex Mono', monospace",
-                                    fontSize: 9,
+                                    fontSize: 11,
                                     color: enabled ? 'var(--yellow)' : 'var(--green)',
                                     background: 'transparent',
                                     border: enabled ? '1px solid rgba(251,191,36,0.3)' : '1px solid rgba(74,222,128,0.3)',
@@ -8747,7 +8748,7 @@ function MessageViewInner({
                                     onClick={() => runClaudeSessionAction('setMcpServers', { operation: 'remove', serverName: name }, `mcp:remove:${name}`, `Removed dynamic MCP server ${name}.`)}
                                     disabled={busy}
                                     title={`Remove dynamic MCP server ${name}`}
-                                    style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: 'var(--red)', background: 'transparent', border: '1px solid rgba(248,113,113,0.3)', borderRadius: 4, padding: '0 5px', height: 18, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}
+                                    style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--red)', background: 'transparent', border: '1px solid rgba(248,113,113,0.3)', borderRadius: 4, padding: '0 5px', height: 18, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}
                                   >
                                     REMOVE
                                   </button>
@@ -9457,7 +9458,7 @@ function MessageViewInner({
                     background: 'rgba(56,217,245,0.08)',
                     color: 'var(--cyan)',
                     fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 9,
+                    fontSize: 11,
                     letterSpacing: '0.06em',
                     cursor: 'pointer',
                   }}
@@ -9531,7 +9532,7 @@ function MessageViewInner({
                               background: response === 'reject' ? 'rgba(248,113,113,0.08)' : 'rgba(45,212,160,0.08)',
                               color: response === 'reject' ? 'var(--red, #f87171)' : 'var(--green)',
                               fontFamily: "'IBM Plex Mono', monospace",
-                              fontSize: 9,
+                              fontSize: 11,
                               letterSpacing: '0.06em',
                               cursor: sessionActionLoading === `permission:${permission.id}` ? 'not-allowed' : 'pointer',
                               opacity: sessionActionLoading === `permission:${permission.id}` ? 0.55 : 1,
@@ -9539,7 +9540,7 @@ function MessageViewInner({
                           >
                             {response === 'once' && permission.elicitation?.mode === 'url'
                               ? 'OPEN & CONTINUE'
-                              : response === 'once' ? 'ALLOW' : response.toUpperCase()}
+                              : response === 'once' ? 'Allow' : response}
                           </Button>
                         ))}
                       </div>
@@ -9686,7 +9687,7 @@ function MessageViewInner({
                         </span>
                       </>
                     ) : (
-                      `${attachment.type.toUpperCase()} ${attachmentDisplayName(attachment)}`
+                      `${attachment.type} ${attachmentDisplayName(attachment)}`
                     )}
                   </button>
                 )
@@ -9697,9 +9698,9 @@ function MessageViewInner({
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6, alignItems: 'center' }}>
                 <span style={{
                   fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 9,
-                  letterSpacing: '0.08em',
-                  textTransform: 'uppercase',
+                  fontSize: 11,
+                  letterSpacing: '0.02em',
+                  textTransform: 'capitalize',
                   color: 'var(--amber, #eaaa40)',
                   opacity: 0.85,
                 }}>
@@ -9709,7 +9710,7 @@ function MessageViewInner({
                   role="status"
                   style={{
                     fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 9,
+                    fontSize: 11,
                     color: composerQueueDurability === 'memory-only'
                       ? 'var(--red, #f87171)'
                       : composerQueueDurability === 'saving'
@@ -9750,7 +9751,7 @@ function MessageViewInner({
                         color: 'var(--amber, #eaaa40)',
                       }}
                     >
-                      <span style={{ color: 'var(--text-3)', fontSize: 9 }}>{index + 1}.</span>
+                      <span style={{ color: 'var(--text-3)', fontSize: 11 }}>{index + 1}.</span>
                       <button
                         type="button"
                         className="av-hover-control"
@@ -10011,7 +10012,7 @@ function MessageViewInner({
                         background: `var(${composerConfig.cssAccentVar})`,
                         color: 'var(--surface)',
                         fontFamily: "'IBM Plex Mono', monospace",
-                        fontSize: 8,
+                        fontSize: 10,
                         fontWeight: 700,
                         lineHeight: '13px',
                         textAlign: 'center',
@@ -10069,7 +10070,7 @@ function MessageViewInner({
                         background: `var(${composerConfig.cssAccentVar})`,
                         color: 'var(--surface)',
                         fontFamily: "'IBM Plex Mono', monospace",
-                        fontSize: 8,
+                        fontSize: 10,
                         fontWeight: 700,
                         lineHeight: '13px',
                         textAlign: 'center',

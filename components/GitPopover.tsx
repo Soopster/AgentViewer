@@ -2110,7 +2110,7 @@ export default function GitPopover({ open, onClose, cwd, sessionId, variant }: P
                       }}
                     >
                       <div style={{ display: 'grid', gap: 6 }}>
-                        <div style={{ color: 'var(--text-3)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.04 }}>
+                        <div style={{ color: 'var(--text-3)', fontSize: 10, fontWeight: 700, textTransform: 'capitalize', letterSpacing: 0.04 }}>
                           Layout
                         </div>
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
@@ -2125,7 +2125,7 @@ export default function GitPopover({ open, onClose, cwd, sessionId, variant }: P
                         </div>
                       </div>
                       <div style={{ display: 'grid', gap: 6 }}>
-                        <div style={{ color: 'var(--text-3)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.04 }}>
+                        <div style={{ color: 'var(--text-3)', fontSize: 10, fontWeight: 700, textTransform: 'capitalize', letterSpacing: 0.04 }}>
                           Indicators
                         </div>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
@@ -2154,7 +2154,7 @@ export default function GitPopover({ open, onClose, cwd, sessionId, variant }: P
                         />
                       </div>
                       <div style={{ display: 'grid', gap: 6 }}>
-                        <div style={{ color: 'var(--text-3)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.04 }}>
+                        <div style={{ color: 'var(--text-3)', fontSize: 10, fontWeight: 700, textTransform: 'capitalize', letterSpacing: 0.04 }}>
                           Display
                         </div>
                         <div style={{ display: 'grid', gap: 6 }}>
@@ -2279,8 +2279,8 @@ function InfoCard({
           color: 'var(--text-3)',
           fontFamily: "'IBM Plex Mono', monospace",
           fontSize: 10,
-          textTransform: 'uppercase',
-          letterSpacing: '0.08em',
+          textTransform: 'capitalize',
+          letterSpacing: '0.02em',
         }}
       >
         {label}

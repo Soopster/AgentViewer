@@ -255,7 +255,7 @@ export default function BookmarksPanel({ open, onClose, onSelect }: Props) {
                     }}
                   >
                     {bookmark.role && (
-                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase' }}>
+                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', textTransform: 'capitalize' }}>
                         {bookmark.role}
                       </span>
                     )}

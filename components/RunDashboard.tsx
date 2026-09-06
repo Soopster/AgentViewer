@@ -337,7 +337,7 @@ export default function RunDashboard({
             <PlayCircle aria-hidden="true" />
             Run Dashboard
           </h1>
-          <p>{providerLabel.toUpperCase()} / {scopeLabel ?? 'all projects'} / {rows.length} sessions</p>
+          <p>{providerLabel} / {scopeLabel ?? 'all projects'} / {rows.length} sessions</p>
         </div>
         <div className="av-run-statbar">
           {(['active', 'failed', 'paused', 'recent'] as const).map((status) => {

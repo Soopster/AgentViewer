@@ -51,7 +51,7 @@ export default function CodeThemeToggle() {
       >
         <span style={{ fontSize: 11, lineHeight: 1 }}>{'</>'}</span>
         <span>{current.label}</span>
-        <span style={{ fontSize: 9, color: 'var(--text-3)', marginLeft: 1 }}>{open ? '▲' : '▼'}</span>
+        <span style={{ fontSize: 11, color: 'var(--text-3)', marginLeft: 1 }}>{open ? '▲' : '▼'}</span>
       </Button>
 
       {open && (

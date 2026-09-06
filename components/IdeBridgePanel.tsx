@@ -246,7 +246,7 @@ export default function IdeBridgePanel({
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, fontWeight: 600, color: 'var(--text)' }}>
             IDE bridge
           </span>
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: statusColor(status, claudeConnected) }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: statusColor(status, claudeConnected) }}>
             {statusLabel(status, claudeConnected)} · {baseUrl.replace(/^https?:\/\//, '')}
           </span>
         </div>
@@ -316,7 +316,7 @@ export default function IdeBridgePanel({
           <span style={{ fontSize: 11.5, fontWeight: 600, color: routeComposer ? accentColor : 'var(--text)' }}>
             Route composer through IDE
           </span>
-          <span style={{ fontSize: 9.5, color: 'var(--text-3)', lineHeight: 1.4 }}>
+          <span style={{ fontSize: 11.5, color: 'var(--text-3)', lineHeight: 1.4 }}>
             {routeComposer
               ? 'Composer lines push as @file mentions into the live session'
               : 'Main composer sends go to the active provider'}
@@ -327,7 +327,7 @@ export default function IdeBridgePanel({
       {configOpen && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '8px 10px', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)' }}>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, letterSpacing: '0.04em', color: 'var(--text-3)', textTransform: 'uppercase' }}>
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.04em', color: 'var(--text-3)', textTransform: 'capitalize' }}>
               IDE host control URL
             </span>
             <input
@@ -339,7 +339,7 @@ export default function IdeBridgePanel({
             />
           </label>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, letterSpacing: '0.04em', color: 'var(--text-3)', textTransform: 'uppercase' }}>
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.04em', color: 'var(--text-3)', textTransform: 'capitalize' }}>
               Token (optional — AGENTVIEWER_IDE_CONTROL_TOKEN)
             </span>
             <input
@@ -518,7 +518,7 @@ export default function IdeBridgePanel({
                   </div>
                   </>
                 )}
-                <span style={{ fontSize: 9, color: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }}>
+                <span style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }}>
                   {entry.request.diff_id} · claude is blocked until you respond
                 </span>
               </div>

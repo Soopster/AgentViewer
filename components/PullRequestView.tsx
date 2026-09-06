@@ -1472,7 +1472,7 @@ function ConversationTab({
 
       <aside className="av-pr-conversation-sidebar">
         <div>
-          <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-3)', letterSpacing: '0.06em', marginBottom: 6 }}>Reviewers</div>
+          <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'capitalize', color: 'var(--text-3)', letterSpacing: '0.02em', marginBottom: 6 }}>Reviewers</div>
           {reviewers.length === 0 ? <div style={{ color: 'var(--text-3)' }}>No reviews yet.</div> : reviewers.map((reviewer) => {
             const meta = reviewer.state === 'PENDING'
               ? { label: 'requested', color: 'var(--amber)', icon: <CircleDot size={12} /> }
@@ -1487,7 +1487,7 @@ function ConversationTab({
           })}
         </div>
         <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-3)', letterSpacing: '0.06em', marginBottom: 7 }}>Labels</div>
+          <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'capitalize', color: 'var(--text-3)', letterSpacing: '0.02em', marginBottom: 7 }}>Labels</div>
           {pr.labels.length === 0 ? <div style={{ color: 'var(--text-3)' }}>No labels.</div> : (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
               {pr.labels.map((label) => (
@@ -1499,7 +1499,7 @@ function ConversationTab({
           )}
         </div>
         <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-3)', letterSpacing: '0.06em', marginBottom: 6 }}>Checks</div>
+          <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'capitalize', color: 'var(--text-3)', letterSpacing: '0.02em', marginBottom: 6 }}>Checks</div>
           {pr.checks.length === 0 ? <div style={{ color: 'var(--text-3)' }}>No checks reported.</div> : (
             <button type="button" className="av-hover-control" onClick={onOpenChecks} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 0, background: 'transparent', color: 'var(--text-2)', cursor: 'pointer', padding: 0, font: 'inherit' }}>
               {checkSummary && checkSummary.failure > 0
@@ -1511,7 +1511,7 @@ function ConversationTab({
           )}
         </div>
         <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-3)', letterSpacing: '0.06em', marginBottom: 6 }}>Merge status</div>
+          <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'capitalize', color: 'var(--text-3)', letterSpacing: '0.02em', marginBottom: 6 }}>Merge status</div>
           <div style={{ color: 'var(--text-2)', display: 'grid', gap: 4 }}>
             <span>{pr.mergeable === 'MERGEABLE' ? 'No conflicts with base branch' : pr.mergeable === 'CONFLICTING' ? 'Conflicts must be resolved' : 'Merge status unknown'}</span>
             <span style={{ color: 'var(--text-3)', fontSize: 11 }}>{pr.reviewDecision ? pr.reviewDecision.toLowerCase().replace(/_/g, ' ') : 'review pending'}</span>

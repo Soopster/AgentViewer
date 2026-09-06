@@ -1,6 +1,7 @@
 'use client'
 
 import dynamic from 'next/dynamic'
+import { getAssistantDisplayName } from '@/lib/provider'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ToggleGroup as ToggleGroupPrimitive } from 'radix-ui'
 import {
@@ -331,7 +332,7 @@ function StructuredPlaybookEditor({
                     <div className="av-coord-field"><Label>Key <em>optional</em></Label><Input value={task.key ?? ''} onChange={(event) => updateTask(phaseIndex, taskIndex, { key: event.target.value || undefined })} placeholder="stable-key" /></div>
                     <div className="av-coord-field"><Label>Assigned role</Label><NativeSelect value={task.role ?? 'teammate'} onChange={(event) => updateTask(phaseIndex, taskIndex, { role: event.target.value as PlaybookTask['role'] })}><NativeSelectOption value="teammate">Teammate</NativeSelectOption><NativeSelectOption value="lead">Lead</NativeSelectOption><NativeSelectOption value="any">Any available agent</NativeSelectOption></NativeSelect></div>
                     <div className="av-coord-field"><Label>Seat</Label><NativeSelect value={task.seat ?? (task.role === 'lead' ? 'director' : 'executor')} onChange={(event) => updateTask(phaseIndex, taskIndex, { seat: event.target.value as PlaybookTask['seat'] })}><NativeSelectOption value="director">Director</NativeSelectOption><NativeSelectOption value="executor">Executor</NativeSelectOption><NativeSelectOption value="validator">Validator</NativeSelectOption><NativeSelectOption value="watcher">Watcher</NativeSelectOption></NativeSelect></div>
-                    <div className="av-coord-field"><Label>Requested provider <em>optional</em></Label><NativeSelect value={task.provider ?? ''} onChange={(event) => updateTask(phaseIndex, taskIndex, { provider: (event.target.value || undefined) as PlaybookTask['provider'] })}><NativeSelectOption value="">Any provider</NativeSelectOption>{PROVIDER_ORDER.map((entry) => <NativeSelectOption key={entry} value={entry}>{entry.toUpperCase()}</NativeSelectOption>)}</NativeSelect></div>
+                    <div className="av-coord-field"><Label>Requested provider <em>optional</em></Label><NativeSelect value={task.provider ?? ''} onChange={(event) => updateTask(phaseIndex, taskIndex, { provider: (event.target.value || undefined) as PlaybookTask['provider'] })}><NativeSelectOption value="">Any provider</NativeSelectOption>{PROVIDER_ORDER.map((entry) => <NativeSelectOption key={entry} value={entry}>{getAssistantDisplayName(entry)}</NativeSelectOption>)}</NativeSelect></div>
                     <div className="av-coord-field"><Label>Requested model <em>optional</em></Label><Input value={task.model ?? ''} onChange={(event) => updateTask(phaseIndex, taskIndex, { model: event.target.value || undefined })} placeholder="Provider-native model id" /></div>
                     <div className="av-coord-field"><Label>Effort <em>optional</em></Label><Input value={task.effort ?? ''} onChange={(event) => updateTask(phaseIndex, taskIndex, { effort: event.target.value || undefined })} placeholder="high" /></div>
                     <div className="av-coord-field av-coord-wide"><Label>Title</Label><Input value={task.title} onChange={(event) => updateTask(phaseIndex, taskIndex, { title: event.target.value })} placeholder="Task outcome" /></div>
@@ -1364,7 +1365,7 @@ export default function AgentTeamCoordinator({
                     >
                       <strong>{firstLine(entry.prompt)}</strong>
                       <span className={cn('av-coord-run-state', `av-tone-${statusTone(entry.status)}`)}>{entry.status}</span>
-                      <small><b>{String(entry.provider).toUpperCase()}</b><span>{formatAge(entry.createdAt)} ago</span></small>
+                      <small><b>{getAssistantDisplayName(entry.provider)}</b><span>{formatAge(entry.createdAt)} ago</span></small>
                     </button>
                   ))}
                 </section>
@@ -1503,7 +1504,7 @@ export default function AgentTeamCoordinator({
                               onChange={(event) => setRunProviderOverride(event.target.value as AgentProvider)}
                               className="av-coord-start-select"
                             >
-                              {PROVIDER_ORDER.map((providerName) => <NativeSelectOption key={providerName} value={providerName}>{providerName.toUpperCase()}</NativeSelectOption>)}
+                              {PROVIDER_ORDER.map((providerName) => <NativeSelectOption key={providerName} value={providerName}>{getAssistantDisplayName(providerName)}</NativeSelectOption>)}
                             </NativeSelect>
                             <small>The lead session coordinates every task and teammate.</small>
                           </div>
@@ -1568,7 +1569,7 @@ export default function AgentTeamCoordinator({
                                     className={cn(`av-provider-${providerName}`, selected && 'av-selected')}
                                     aria-label={`${selected ? 'Remove' : 'Add'} ${providerName} from teammate provider pool`}
                                   >
-                                    <span aria-hidden="true">{selected ? '✓' : '+'}</span>{providerName.toUpperCase()}
+                                    <span aria-hidden="true">{selected ? '✓' : '+'}</span>{getAssistantDisplayName(providerName)}
                                   </ToggleGroupPrimitive.Item>
                                 )
                               })}
@@ -1625,8 +1626,8 @@ export default function AgentTeamCoordinator({
                       <CardContent className="av-coord-launch-summary">
                         <div><span>Workspace</span><strong title={baseCwd}>{baseCwd.split('/').at(-1) || 'agentViewer'}</strong></div>
                         <div><span>Playbook</span><strong>{selectedPlaybook?.name ?? 'Lead-planned board'}</strong></div>
-                        <div><span>Lead provider</span><strong className={`av-provider-${targetProvider}`}>{String(targetProvider).toUpperCase()}</strong></div>
-                        <div><span>Teammate providers</span><strong>{teammateProviders.map((entry) => entry.toUpperCase()).join(' · ')}</strong></div>
+                        <div><span>Lead provider</span><strong className={`av-provider-${targetProvider}`}>{getAssistantDisplayName(targetProvider)}</strong></div>
+                        <div><span>Teammate providers</span><strong>{teammateProviders.map((entry) => getAssistantDisplayName(entry)).join(' · ')}</strong></div>
                         <div><span>Agent limit</span><strong>{maxAgents} total</strong></div>
                         <div><span>Autonomy</span><strong>{autonomy}</strong></div>
                         <div><span>Checkout mode</span><strong>{useWorktrees ? 'Isolated checkouts' : 'Shared checkout'}</strong></div>
@@ -1751,7 +1752,7 @@ export default function AgentTeamCoordinator({
                           </NativeSelect>
                           <span className={cn('av-coord-status', `av-tone-${selectedAgent.turnActive ? 'good' : statusTone(selectedAgent.status)}`)}>{selectedAgent.turnActive ? 'working' : selectedAgent.status}</span>
                         </div>
-                        <div><span>Provider</span><strong>{String(selectedAgent.provider).toUpperCase()}</strong></div>
+                        <div><span>Provider</span><strong>{getAssistantDisplayName(selectedAgent.provider)}</strong></div>
                         <div><span>Role</span><strong>{selectedAgent.role}</strong></div>
                         <div><span>Task</span><strong>{tasks.find((task) => task.id === selectedAgent.taskId)?.title ?? selectedAgent.taskId ?? 'No task claimed'}</strong></div>
                         <div><span>Current</span><strong title={selectedAgentLatestEvent?.summary}>{selectedAgentLatestEvent?.type.replaceAll('.', ' ') ?? 'Waiting for activity'}</strong></div>
@@ -1904,7 +1905,7 @@ export default function AgentTeamCoordinator({
                                   <small>{task.roleName ? `${task.roleName} · ${task.paths[0] ?? task.id}` : (task.paths[0] ?? task.id)}</small>
                                 </span>
                                 <strong>{owner?.name ?? 'unassigned'}</strong>
-                                <span className={`av-coord-provider-name av-provider-${owner?.provider ?? run.provider}`}>{String(owner?.provider ?? run.provider).toUpperCase()}</span>
+                                <span className={`av-coord-provider-name av-provider-${owner?.provider ?? run.provider}`}>{getAssistantDisplayName(owner?.provider ?? run.provider)}</span>
                                 <span>{formatAge(task.createdAt)}</span>
                                 <span>{task.blockedBy.length > 0 ? task.blockedBy.map((id) => tasks.find((entry) => entry.id === id)?.title ?? id).join(', ') : '—'}</span>
                               </button>

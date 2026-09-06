@@ -204,7 +204,7 @@ export default function ChannelBridgePanel({
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, fontWeight: 600, color: 'var(--text)' }}>
             Live CLI bridge
           </span>
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: statusColor(status) }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: statusColor(status) }}>
             {statusLabel(status)} · {baseUrl.replace(/^https?:\/\//, '')}
           </span>
         </div>
@@ -274,7 +274,7 @@ export default function ChannelBridgePanel({
           <span style={{ fontSize: 11.5, fontWeight: 600, color: routeComposer ? accentColor : 'var(--text)' }}>
             Route composer through bridge
           </span>
-          <span style={{ fontSize: 9.5, color: 'var(--text-3)', lineHeight: 1.4 }}>
+          <span style={{ fontSize: 11.5, color: 'var(--text-3)', lineHeight: 1.4 }}>
             {routeComposer
               ? 'Main composer sends land in the live CLI session'
               : 'Main composer sends go to the active provider'}
@@ -285,7 +285,7 @@ export default function ChannelBridgePanel({
       {configOpen && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '8px 10px', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)' }}>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, letterSpacing: '0.04em', color: 'var(--text-3)', textTransform: 'uppercase' }}>
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.04em', color: 'var(--text-3)', textTransform: 'capitalize' }}>
               Channel server URL
             </span>
             <input
@@ -297,7 +297,7 @@ export default function ChannelBridgePanel({
             />
           </label>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, letterSpacing: '0.04em', color: 'var(--text-3)', textTransform: 'uppercase' }}>
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.04em', color: 'var(--text-3)', textTransform: 'capitalize' }}>
               Token (optional — AGENTVIEWER_CHANNEL_TOKEN)
             </span>
             <input
@@ -337,7 +337,7 @@ export default function ChannelBridgePanel({
                   >
                     {entry.text}
                     {isSent ? (
-                      <div style={{ marginTop: 3, fontFamily: "'IBM Plex Mono', monospace", fontSize: 8.5, color: 'var(--text-3)' }}>
+                      <div style={{ marginTop: 3, fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, color: 'var(--text-3)' }}>
                         {entry.delivery === 'processed'
                           ? 'processed by Claude'
                           : entry.delivery === 'accepted'
@@ -434,7 +434,7 @@ export default function ChannelBridgePanel({
                     </button>
                   </div>
                 )}
-                <span style={{ fontSize: 9, color: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }}>
+                <span style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }}>
                   request {entry.request.request_id} · also answerable from the CLI terminal — first wins
                 </span>
               </div>

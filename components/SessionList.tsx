@@ -765,7 +765,7 @@ const SessionRowGroup = memo(function SessionRowGroup({
               position: 'absolute',
               left: 8,
               top: 12,
-              fontSize: 9,
+              fontSize: 11,
               color: 'var(--text-3)',
               cursor: 'pointer',
               zIndex: 1,

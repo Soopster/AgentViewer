@@ -121,8 +121,8 @@ export default function AnalyticsPopover({ open, onClose, input }: Props) {
             style={{
               fontSize: 11,
               color: 'var(--text-3)',
-              letterSpacing: '0.12em',
-              textTransform: 'uppercase',
+              letterSpacing: '0.02em',
+              textTransform: 'capitalize',
               marginRight: 10,
             }}
           >
@@ -219,7 +219,7 @@ export default function AnalyticsPopover({ open, onClose, input }: Props) {
 const LABEL_STYLE: React.CSSProperties = {
   fontSize: 10,
   letterSpacing: '0.1em',
-  textTransform: 'uppercase',
+  textTransform: 'capitalize',
   color: 'var(--text-3)',
   marginBottom: 8,
 }
@@ -235,7 +235,7 @@ function ChartTooltip({ active, payload, label, formatter }: {
   return (
     <div style={{ background: 'var(--surface-2)', border: '1px solid var(--border-2)', padding: '4px 8px', fontSize: 10, borderRadius: 3, color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace" }}>
       {label != null && String(label) !== '' && (
-        <div style={{ color: 'var(--text-3)', marginBottom: 2, fontSize: 9 }}>{String(label)}</div>
+        <div style={{ color: 'var(--text-3)', marginBottom: 2, fontSize: 11 }}>{String(label)}</div>
       )}
       {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
       {payload.map((p: any, i: number) => (
@@ -279,7 +279,7 @@ function Kpi({
         }}
       />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0, flex: 1 }}>
-        <span style={{ fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', color: accent }}>
+        <span style={{ fontSize: 10, letterSpacing: '0.1em', textTransform: 'capitalize', color: accent }}>
           {label}
         </span>
         <span style={{ fontSize: 18, color: 'var(--text)', fontWeight: 500, lineHeight: 1.1 }}>
@@ -404,7 +404,7 @@ function HealthCard({ health }: { health: HealthReport }) {
       </div>
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+          <span style={{ fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.1em', textTransform: 'capitalize' }}>
             Session health
           </span>
           <Chip label={archetypeLabel(health.archetype)} />
@@ -633,7 +633,7 @@ function TokensPane({ a }: { a: Analytics }) {
         <SectionLabel>Top token-producing turns</SectionLabel>
         <ResponsiveContainer width="100%" height={topTurnsData.length * 26 + 24}>
           <BarChart data={topTurnsData} layout="vertical" margin={{ top: 0, right: 56, left: 0, bottom: 0 }}>
-            <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} tickFormatter={(v: number) => fmtNum(v)} />
+            <XAxis type="number" tick={{ fontSize: 11, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} tickFormatter={(v: number) => fmtNum(v)} />
             <YAxis type="category" dataKey="label" tick={{ fontSize: 10, fill: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} width={90} />
             <Tooltip content={(props) => <ChartTooltip {...(props as any)} formatter={fmtNum} />} />
             <Bar dataKey="tokens" name="tokens" fill="var(--violet)" radius={[0, 2, 2, 0]}>
@@ -665,7 +665,7 @@ function ToolsPane({ a }: { a: Analytics }) {
       </div>
       <ResponsiveContainer width="100%" height={height}>
         <BarChart data={data} layout="vertical" margin={{ top: 0, right: 44, left: 0, bottom: 0 }}>
-          <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} />
+          <XAxis type="number" tick={{ fontSize: 11, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} />
           <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} width={160} />
           <Tooltip content={(props) => <ChartTooltip {...(props as any)} />} />
           <Bar dataKey="success" name="calls" stackId="a" fill="var(--cyan, #5eead4)" radius={[0, 0, 0, 0]}>
@@ -727,8 +727,8 @@ function ActivityPane({ a }: { a: Analytics }) {
         <ResponsiveContainer width="100%" height={120}>
           <BarChart data={rows} margin={{ top: 4, right: 4, left: -24, bottom: 4 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-            <XAxis dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} />
-            <YAxis tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} allowDecimals={false} />
+            <XAxis dataKey="label" tick={{ fontSize: 11, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} />
+            <YAxis tick={{ fontSize: 11, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} allowDecimals={false} />
             <Tooltip content={(props) => <ChartTooltip {...(props as any)} />} />
             <Bar dataKey="count" radius={[2, 2, 0, 0]}>
               {rows.map((r, i) => <Cell key={i} fill={r.color} />)}
@@ -806,7 +806,7 @@ function RankedBars({ entries, color }: { entries: [string, number][]; color: st
   return (
     <ResponsiveContainer width="100%" height={height}>
       <BarChart data={data} layout="vertical" margin={{ top: 0, right: 44, left: 0, bottom: 0 }}>
-        <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} />
+        <XAxis type="number" tick={{ fontSize: 11, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} />
         <YAxis type="category" dataKey="label" tick={{ fontSize: 10, fill: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} width={220} />
         <Tooltip content={(props) => <ChartTooltip {...(props as any)} />} />
         <Bar dataKey="count" fill={color} radius={[0, 2, 2, 0]}>
@@ -829,8 +829,8 @@ function SizeHistogram({ values }: { values: number[] }) {
     <ResponsiveContainer width="100%" height={120}>
       <BarChart data={buckets} margin={{ top: 4, right: 4, left: -24, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-        <XAxis dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} />
-        <YAxis tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} allowDecimals={false} />
+        <XAxis dataKey="label" tick={{ fontSize: 11, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} />
+        <YAxis tick={{ fontSize: 11, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} allowDecimals={false} />
         <Tooltip content={(props) => <ChartTooltip {...(props as any)} />} />
         <Bar dataKey="count" fill="var(--violet)" radius={[2, 2, 0, 0]} />
       </BarChart>
@@ -849,8 +849,8 @@ function LatencyHistogram({ latencies }: { latencies: number[] }) {
     <ResponsiveContainer width="100%" height={120}>
       <BarChart data={buckets} margin={{ top: 4, right: 4, left: -24, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-        <XAxis dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} />
-        <YAxis tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} allowDecimals={false} />
+        <XAxis dataKey="label" tick={{ fontSize: 11, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} />
+        <YAxis tick={{ fontSize: 11, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} allowDecimals={false} />
         <Tooltip content={(props) => <ChartTooltip {...(props as any)} />} />
         <Bar dataKey="count" fill="var(--cyan, #5eead4)" radius={[2, 2, 0, 0]} />
       </BarChart>
@@ -893,8 +893,8 @@ function TimelinePane({ a }: { a: Analytics }) {
           <ComposedChart data={msgCounts.map((m, i) => ({ i, messages: m, tokens: outTokens[i] }))} margin={{ top: 4, right: 36, left: -24, bottom: 4 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
             <XAxis dataKey="i" tick={false} axisLine={false} tickLine={false} />
-            <YAxis yAxisId="msg" orientation="left" tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} allowDecimals={false} />
-            <YAxis yAxisId="tok" orientation="right" tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} tickFormatter={(v: number) => fmtNum(v)} />
+            <YAxis yAxisId="msg" orientation="left" tick={{ fontSize: 11, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} allowDecimals={false} />
+            <YAxis yAxisId="tok" orientation="right" tick={{ fontSize: 11, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} tickFormatter={(v: number) => fmtNum(v)} />
             <Tooltip content={(props) => <ChartTooltip {...(props as any)} />} />
             <Legend wrapperStyle={{ fontSize: 10, fontFamily: "'IBM Plex Mono', monospace", paddingTop: 4 }} formatter={(value) => <span style={{ color: 'var(--text-2)' }}>{value}</span>} />
             <Brush dataKey="i" height={22} stroke="var(--border-2)" fill="var(--surface-2)" travellerWidth={6} />
@@ -929,7 +929,7 @@ function DayOfWeekBar({ counts }: { counts: number[] }) {
       <BarChart data={data} margin={{ top: 4, right: 4, left: -24, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
         <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} />
-        <YAxis tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} allowDecimals={false} />
+        <YAxis tick={{ fontSize: 11, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} allowDecimals={false} />
         <Tooltip content={(props) => <ChartTooltip {...(props as any)} />} />
         <Bar dataKey="value" fill="var(--violet)" radius={[2, 2, 0, 0]} />
       </BarChart>
@@ -970,7 +970,7 @@ function HourHeatmap({ counts }: { counts: number[] }) {
           )
         })}
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(24, 1fr)', gap: 3, marginTop: 3, fontSize: 9, color: 'var(--text-3)', textAlign: 'center' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(24, 1fr)', gap: 3, marginTop: 3, fontSize: 11, color: 'var(--text-3)', textAlign: 'center' }}>
         {counts.map((_, h) => (
           <span key={h}>{h % 6 === 0 ? String(h).padStart(2, '0') : ''}</span>
         ))}
@@ -1102,7 +1102,7 @@ function AICoachSection({ input }: { input: AnalyticsInput | null }) {
   return (
     <div style={{ marginTop: 8, paddingTop: 12, borderTop: '1px solid var(--border-2)', display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 11, color: 'var(--text-2)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+        <span style={{ fontSize: 11, color: 'var(--text-2)', letterSpacing: '0.02em', textTransform: 'capitalize' }}>
           AI coaching
         </span>
         <span style={{ fontSize: 10, color: 'var(--text-3)' }}>opt-in · sends only aggregate metrics, never transcript</span>

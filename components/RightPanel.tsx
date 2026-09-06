@@ -427,7 +427,7 @@ function Launcher(props: RightPanelProps) {
                           borderRadius: 999,
                           background: 'var(--cyan)',
                           color: 'var(--bg)',
-                          fontSize: 9,
+                          fontSize: 11,
                           fontWeight: 700,
                         }}
                       >

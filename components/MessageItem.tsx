@@ -292,11 +292,11 @@ function AgentProtocolCard({ codeString }: { codeString: string }) {
           fontSize: 10,
           color: tone,
           fontWeight: 700,
-          letterSpacing: '0.08em',
-          textTransform: 'uppercase',
+          letterSpacing: '0.02em',
+          textTransform: 'capitalize',
           flexShrink: 0,
         }}>
-          AGENT PROTOCOL
+          Agent protocol
         </span>
         <strong style={{
           minWidth: 0,
@@ -873,7 +873,7 @@ function EditToolCard({ thread }: { thread: ToolThread }) {
             userSelect: 'none',
           }}
         >
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>EDIT</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.01em', flexShrink: 0 }}>Edit</span>
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13 }}>
             {basename(filePath)}
           </span>
@@ -948,7 +948,7 @@ function WriteToolCard({ thread }: { thread: ToolThread }) {
             userSelect: 'none',
           }}
         >
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>WRITE</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.01em', flexShrink: 0 }}>Write</span>
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13 }}>
             {basename(filePath)}
           </span>
@@ -1007,7 +1007,7 @@ function FileChangeCard({ thread }: { thread: ToolThread }) {
             userSelect: 'none',
           }}
         >
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.01em', flexShrink: 0 }}>
             FILE CHANGE
           </span>
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13 }}>
@@ -1167,8 +1167,8 @@ function GenericToolCard({ thread }: { thread: ToolThread }) {
             userSelect: 'none',
           }}
         >
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
-            {toolUse.name.toUpperCase()}
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.01em', flexShrink: 0 }}>
+            {toolUse.name}
           </span>
           {!open && preview !== null && (
             <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-2)', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
@@ -1585,7 +1585,7 @@ function AUQQuestionBlock({ q, answers, resultStr }: { q: AUQQuestion; answers: 
             padding: '1px 5px',
             flexShrink: 0,
           }}>
-            {q.header.toUpperCase()}
+            {q.header}
           </span>
         )}
         {q.question}
@@ -1625,7 +1625,7 @@ function AUQQuestionBlock({ q, answers, resultStr }: { q: AUQQuestion; answers: 
                   transition: 'background 0.14s ease, border-color 0.14s ease',
                 }}>
                   {selected && (
-                    <span style={{ fontSize: 8, color: 'var(--bg)', lineHeight: 1, fontWeight: 700 }}>✓</span>
+                    <span style={{ fontSize: 10, color: 'var(--bg)', lineHeight: 1, fontWeight: 700 }}>✓</span>
                   )}
                 </span>
 
@@ -1777,7 +1777,7 @@ function ToolSearchCard({ thread }: { thread: ToolThread }) {
           transition: 'background 0.15s ease',
         }}
       >
-        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.01em', flexShrink: 0 }}>
           TOOLSEARCH
         </span>
         <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-2)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }}>
@@ -1825,7 +1825,7 @@ function BashCard({ thread }: { thread: ToolThread }) {
             transition: 'background 0.15s ease',
           }}
         >
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0, marginTop: 2 }}>BASH</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.01em', flexShrink: 0, marginTop: 2 }}>Bash</span>
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', flex: 1, fontSize: 13, whiteSpace: 'pre-wrap', wordBreak: 'break-all', lineHeight: 1.55 }}>
             {command}
           </span>
@@ -1871,7 +1871,7 @@ function ReadCard({ thread }: { thread: ToolThread }) {
             transition: 'background 0.15s ease',
           }}
         >
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>READ</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.01em', flexShrink: 0 }}>Read</span>
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
             {basename(filePath)}
           </span>
@@ -1927,7 +1927,7 @@ function GrepCard({ thread }: { thread: ToolThread }) {
             transition: 'background 0.15s ease',
           }}
         >
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>GREP</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.01em', flexShrink: 0 }}>Grep</span>
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 13, flexShrink: 0 }}>
             /{pattern}/
           </span>
@@ -1973,7 +1973,7 @@ function GlobCard({ thread }: { thread: ToolThread }) {
             transition: 'background 0.15s ease',
           }}
         >
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>GLOB</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.01em', flexShrink: 0 }}>Glob</span>
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 13, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {pattern}
           </span>
@@ -2193,7 +2193,7 @@ function AgentCard({ thread }: { thread: ToolThread }) {
           transition: 'background 0.15s ease',
         }}
       >
-        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.01em', flexShrink: 0 }}>
           {input.run_in_background ? 'AGENT ⟳' : 'AGENT'}
         </span>
         <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-2)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }}>
@@ -2232,7 +2232,7 @@ function AgentCard({ thread }: { thread: ToolThread }) {
         >
           <div style={{
             fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 9,
+            fontSize: 11,
             color: c,
             letterSpacing: '0.1em',
             marginBottom: 4,
@@ -2540,7 +2540,7 @@ function OpenCodeTaskCard({ thread }: { thread: ToolThread }) {
           transition: 'background 0.15s ease',
         }}
       >
-        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.01em', flexShrink: 0 }}>
           {headerLabel}
         </span>
         <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-2)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }}>
@@ -2708,7 +2708,7 @@ function SkillCard({ thread }: { thread: ToolThread }) {
             transition: 'background 0.15s ease',
           }}
         >
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>SKILL</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.01em', flexShrink: 0 }}>Skill</span>
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 13, fontWeight: 500, flexShrink: 0 }}>
             {skillName}
           </span>
@@ -2763,7 +2763,7 @@ function MultiEditCard({ thread }: { thread: ToolThread }) {
             userSelect: 'none',
           }}
         >
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.01em', flexShrink: 0 }}>
             EDIT
           </span>
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 13, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -2933,7 +2933,7 @@ function WebSearchCard({ thread }: { thread: ToolThread }) {
           transition: 'background 0.15s ease',
         }}
       >
-        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.01em', flexShrink: 0 }}>
           WEBSEARCH
         </span>
         <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-2)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }}>
@@ -3019,7 +3019,7 @@ function WebFetchCard({ thread }: { thread: ToolThread }) {
             transition: 'background 0.15s ease',
           }}
         >
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.01em', flexShrink: 0 }}>
             WEBFETCH
           </span>
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 13, fontWeight: 500, flexShrink: 0 }}>
@@ -3328,7 +3328,7 @@ function TaskCard({ thread }: { thread: ToolThread }) {
         transition: 'background 0.15s ease',
       }}
     >
-      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.01em', flexShrink: 0 }}>
         TASK
       </span>
       {name === 'TaskCreate' && (
@@ -3601,7 +3601,7 @@ function CronCard({ thread }: { thread: ToolThread }) {
         transition: 'background 0.15s ease',
       }}
     >
-      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.01em', flexShrink: 0 }}>
         CRON
       </span>
       {name === 'CronCreate' && (
@@ -3698,7 +3698,7 @@ function McpCard({ thread }: { thread: ToolThread }) {
         cursor: 'pointer', userSelect: 'none', transition: 'background 0.15s ease',
       }}
     >
-      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.01em', flexShrink: 0 }}>
         MCP
       </span>
       {name === 'ListMcpResourcesTool' && (
@@ -4406,7 +4406,7 @@ function SystemReminderCard({ block }: { block: SystemReminderBlock }) {
           </span>
         )}
         {open && <span style={{ flex: 1 }} />}
-        <span style={{ color: 'var(--text-3)', fontSize: 9 }}>{open ? '▲' : '▼'}</span>
+        <span style={{ color: 'var(--text-3)', fontSize: 11 }}>{open ? '▲' : '▼'}</span>
       </div>
       {open && (
         <pre style={{
@@ -4456,7 +4456,7 @@ function TaskNotificationCard({ block }: { block: TaskNotificationBlock }) {
           userSelect: 'none', transition: 'background 0.15s ease',
         }}
       >
-        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.01em', flexShrink: 0 }}>
           TASK
         </span>
         <span style={{ fontFamily: "var(--render-font)", color: 'var(--text)', fontSize: 13, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -4715,7 +4715,7 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
       && typeof (payload.hookSpecificOutput as Record<string, unknown>).additionalContext === 'string'
     ? String((payload.hookSpecificOutput as Record<string, unknown>).additionalContext).trim()
     : ''
-  const headerLabel = subtype.replace(/_/g, ' ').toUpperCase()
+  const headerLabel = subtype.replace(/_/g, ' ')
   const errorCode = typeof payload.error === 'string' ? payload.error : ''
   const apiErrorStatus = typeof payload.api_error_status === 'number' ? payload.api_error_status : null
   const errorSummary = useMemo(() => {
@@ -6357,7 +6357,7 @@ function AgentsViewMessageItem({ message, showSession, hydrated, roleLabel }: {
                 turn · {toolThreads.length} {toolThreads.length === 1 ? 'call' : 'calls'}
               </span>
             )}
-            {showSession && message.provider && <span>{message.provider.toUpperCase()}</span>}
+            {showSession && message.provider && <span>{getAssistantDisplayName(message.provider)}</span>}
             {message.timestamp && <span>{hydrated ? formatLocalMessageTime(message.timestamp) : formatStableMessageTime(message.timestamp)}</span>}
           </div>
         </header>
@@ -6508,7 +6508,7 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
             🔌 {bridgeLabel}
           </span>
           {message.timestamp && (
-            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: 'var(--text-4)' }}>
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-4)' }}>
               {hydrated ? formatLocalMessageTime(message.timestamp) : formatStableMessageTime(message.timestamp)}
             </span>
           )}
@@ -6622,7 +6622,7 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
             const depth = spawnPath.length
             const label = isSubagent
               ? `${'↪'.repeat(Math.min(Math.max(depth, 1), 3))} SUBAGENT`
-              : isPeerSend ? '⇄ PEER SEND' : message.origin.kind.toUpperCase()
+              : isPeerSend ? '⇄ Peer send' : message.origin.kind
             const color = isSubagent ? 'var(--t-agent)' : 'var(--t-other)'
             const bg    = isSubagent ? 'rgba(244,114,182,0.08)' : 'rgba(139,128,240,0.08)'
             const bdr   = isSubagent ? '1px solid rgba(244,114,182,0.22)' : '1px solid rgba(139,128,240,0.2)'
@@ -6704,7 +6704,7 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
                 padding: '1px 6px',
               }}
             >
-              {message.provider.toUpperCase()}
+              {getAssistantDisplayName(message.provider)}
             </span>
           )}
           {showSession && message.sessionId && (
