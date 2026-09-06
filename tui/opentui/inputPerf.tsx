@@ -79,6 +79,24 @@ const SCENARIOS: Scenario[] = [
     expect: 'send',
   },
   {
+    name: 'composer-window-type',
+    setup: [TAB, { key: 'c' }, { key: 'o', ctrl: true }],
+    press: 'expanded-composer-performance'.split('').map((key) => ({ key })),
+    expect: 'send',
+  },
+  {
+    name: 'composer-slash-filter',
+    setup: [TAB, { key: 'c' }],
+    press: '/model'.split('').map((key) => ({ key })),
+    expect: 'send',
+  },
+  {
+    name: 'composer-mention-filter',
+    setup: [TAB, { key: 'c' }],
+    press: '@src'.split('').map((key) => ({ key })),
+    expect: 'send',
+  },
+  {
     name: 'command-palette-nav',
     setup: [{ key: '?' }],
     press: [{ key: 'j' }, { key: 'k' }],

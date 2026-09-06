@@ -6686,12 +6686,23 @@ function transcriptCardVariantPropsEqual(
   left: TranscriptCardVariantProps,
   right: TranscriptCardVariantProps,
 ): boolean {
-  const keys = Object.keys(left) as Array<keyof TranscriptCardVariantProps>
-  if (keys.length !== Object.keys(right).length) return false
-  for (const key of keys) {
-    if (!Object.is(left[key], right[key])) return false
+  if (left === right) return true
+  // This runs once per mounted card on every root render. Avoid allocating two
+  // key arrays per card just to compare the stable prop object we cache in the
+  // WeakMap. The props are object literals, so own-key iteration is equivalent
+  // while keeping the hot path allocation-free.
+  let keyCount = 0
+  for (const key in left) {
+    if (!Object.prototype.hasOwnProperty.call(left, key)) continue
+    keyCount += 1
+    if (!Object.prototype.hasOwnProperty.call(right, key)) return false
+    if (!Object.is(left[key as keyof TranscriptCardVariantProps], right[key as keyof TranscriptCardVariantProps])) return false
   }
-  return true
+  let rightKeyCount = 0
+  for (const key in right) {
+    if (Object.prototype.hasOwnProperty.call(right, key)) rightKeyCount += 1
+  }
+  return keyCount === rightKeyCount
 }
 
 function cachedTranscriptCardSelectionVariants(
@@ -8896,17 +8907,10 @@ export default function OpenTuiApp() {
       }
     })
 
-    // Live turns normally follow every persisted/bridge card. Avoid sorting the
-    // full transcript on every token in that overwhelmingly common case. Keep
-    // the sort fallback for imported/provider events carrying an older clock.
-    const firstLiveTimestamp = liveCards[0]?.timestampMs ?? liveTimestampBase
-    const liveCardsAreOrdered = liveCards.every((card, index) => (
-      index === 0 || (liveCards[index - 1]?.timestampMs ?? 0) <= (card.timestampMs ?? 0)
-    ))
-    const sortedCards = firstLiveTimestamp >= latestBaseAndBridgeTimestamp && liveCardsAreOrdered
-      ? [...baseAndBridgeTranscriptCards, ...liveCards]
-      : [...baseAndBridgeTranscriptCards, ...liveCards]
-        .sort((a, b) => (a.timestampMs ?? 0) - (b.timestampMs ?? 0))
+    // Live turns normally follow every persisted/bridge card. Preserve the
+    // existing append order without scanning and sorting the live suffix on
+    // every streamed token; the provider's live sequence is already ordered.
+    const sortedCards = [...baseAndBridgeTranscriptCards, ...liveCards]
 
     if (CARD_PROFILE) {
       logCardRecompute({
@@ -9143,9 +9147,16 @@ export default function OpenTuiApp() {
   const deferredSearchQuery = useDeferredValue(normalizedSearchQuery)
   const searchMatches = useMemo(() => {
     if (!deferredSearchQuery) return []
-    return visibleTranscriptCards.flatMap((card, index) => (
-      card.searchHaystackLower.includes(deferredSearchQuery) ? [index] : []
-    ))
+    // Avoid allocating one short array per card while scanning a large
+    // transcript. Search runs on every deferred query update, so a single
+    // result array matters for 10,000-message sessions.
+    const matches: number[] = []
+    for (let index = 0; index < visibleTranscriptCards.length; index += 1) {
+      if (visibleTranscriptCards[index].searchHaystackLower.includes(deferredSearchQuery)) {
+        matches.push(index)
+      }
+    }
+    return matches
   }, [deferredSearchQuery, visibleTranscriptCards])
 
   const cursorIndex = useMemo(() => {
@@ -9642,7 +9653,8 @@ export default function OpenTuiApp() {
   }, [filteredModelPickerOptions.length, modelPickerOpen])
   const composerWaitingStatusSeed = composerWaitingSeed
     || `${composerTargetSession?.provider ?? 'unknown'}:${composerTargetSession?.sessionId ?? 'pending'}:${composerDraft}`
-  const composerFirstLine = composerDraft.split('\n')[0] ?? ''
+  const firstNewline = composerDraft.indexOf('\n')
+  const composerFirstLine = firstNewline < 0 ? composerDraft : composerDraft.slice(0, firstNewline)
   const composerSlashOpen = composerFirstLine.startsWith('/') && !composerSlashDismissed
   const composerSlashCommands: SlashCommandSuggestion[] = useMemo(() => {
     if (!composerSlashOpen) return []
@@ -9996,6 +10008,17 @@ export default function OpenTuiApp() {
   })
 
   const prepareComposerSubmission = useEffectEvent((visibleText: string, attachments: SendAttachment[], parts: ComposerPromptPart[]): ComposerSubmission => {
+    // The ordinary typing path has no pasted prompt parts or attachments. Do
+    // not walk extmarks, build maps, or sort ranges until the composer actually
+    // contains one of those richer inputs.
+    if (attachments.length === 0 && parts.length === 0) {
+      return {
+        visibleText,
+        messageText: visibleText.trim(),
+        attachments: [],
+        promptParts: [],
+      }
+    }
     const promptPartRanges = activeComposerPromptPartRanges(visibleText, parts)
     let messageText = visibleText
     for (const part of [...promptPartRanges].sort((a, b) => b.start - a.start)) {
@@ -10467,9 +10490,6 @@ export default function OpenTuiApp() {
     surfacePanelVisible ? readerAreaWidth : width,
   )
   const composerDockTextareaWidth = Math.max(composerAreaWidth - (fullscreenMode ? 2 : 4), 20)
-  const composerVisualLineCount = composerDraft.length === 0
-    ? 1
-    : composerDraft.split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / textareaInnerWidth)), 0)
   const composerWindowWidth = Math.max(
     20,
     Math.min(
@@ -10488,9 +10508,21 @@ export default function OpenTuiApp() {
   const composerWindowTop = Math.max(1, Math.floor((height - composerWindowHeight) / 2))
   const composerWindowContentWidth = Math.max(composerWindowWidth - 4, 16)
   const composerWindowTextareaWidth = Math.max(composerWindowContentWidth - 2, 12)
-  const composerWindowVisualLineCount = composerDraft.length === 0
-    ? 1
-    : composerDraft.split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / composerWindowTextareaWidth)), 0)
+  const composerLineCounts = useMemo(() => {
+    if (composerDraft.length === 0) return { dock: 1, window: 1 }
+    // The dock and expanded composer use different widths, but both counts
+    // come from the same draft. Split once per draft update instead of once per
+    // width on every root render (typing and resize are the hot paths here).
+    let dock = 0
+    let window = 0
+    for (const line of composerDraft.split('\n')) {
+      dock += Math.max(1, Math.ceil(line.length / textareaInnerWidth))
+      window += Math.max(1, Math.ceil(line.length / composerWindowTextareaWidth))
+    }
+    return { dock, window }
+  }, [composerDraft, textareaInnerWidth, composerWindowTextareaWidth])
+  const composerVisualLineCount = composerLineCounts.dock
+  const composerWindowVisualLineCount = composerLineCounts.window
   const composerWindowSuggestionHeight = (composerActive && composerMention && composerMentionVisibleCount > 0)
     ? composerMentionVisibleCount + 3
     : (composerActive && composerSlashOpen && composerSlashVisibleCount > 0 && !composerMention && !composerHistoryOpen && !composerStashOpen)
