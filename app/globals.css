@@ -1906,12 +1906,12 @@ body {
 
 .av-stream-history {
   position: absolute;
-  inset: 18px auto 22px auto;
-  /* Hug the left edge of the centered transcript column rather than the
-     viewport: on a wide monitor those are hundreds of pixels apart, and a rail
-     that far from the rows it indexes reads as unrelated furniture. Falls back
-     to the container edge once the column is wide enough to reach it. */
-  left: max(10px, calc((100% - var(--av-timeline-measure, 900px)) / 2 - 82px));
+  /* Pinned to the left edge of the transcript area in every width mode, so the
+     rail stays where the eye learns to find it rather than sliding inward as
+     the window grows. It cannot overlap the rows it indexes: the stream
+     timeline reserves a 94px left gutter (see MessageView's scroll container),
+     which clears this 74px rail and its 10px offset. */
+  inset: 18px auto 22px 10px;
   width: 74px;
   z-index: 12;
   overflow: visible;

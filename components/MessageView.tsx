@@ -8513,21 +8513,7 @@ function MessageViewInner({
                 )}
               </div>
             )}
-            <div
-              style={{
-                position: 'relative',
-                flex: 1,
-                minHeight: 0,
-                overflow: 'hidden',
-                // The stream rail is positioned against this box, but it
-                // annotates the centered column inside it. Publishing the
-                // measure lets the rail sit beside that column instead of
-                // stranding itself at the viewport edge on a wide monitor.
-                ['--av-timeline-measure' as string]: timelineWidth === 'centered'
-                  ? (viewMode === 'stream' ? '900px' : '1040px')
-                  : '100%',
-              }}
-            >
+            <div style={{ position: 'relative', flex: 1, minHeight: 0, overflow: 'hidden' }}>
               {!maximized && viewMode === 'stream' && streamHistoryItems.length > 1 ? (
                 <StreamHistoryRail
                   items={streamHistoryItems}
