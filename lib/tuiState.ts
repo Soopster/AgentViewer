@@ -70,6 +70,7 @@ const VALID_TUI_THEMES: readonly TuiThemeMode[] = [
   'kanagawa',
   'everforest-dark',
   'obsidian',
+  'true-black',
   'github-dark',
   'ayu-dark',
   'rose-pine',

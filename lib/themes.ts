@@ -38,6 +38,7 @@ export type Theme =
   | 'kanagawa'
   | 'everforest-dark'
   | 'obsidian'
+  | 'true-black'
   | 'github-dark'
   | 'ayu-dark'
   | 'rose-pine'
@@ -160,6 +161,7 @@ export const THEME_META: Record<Theme, { category: ThemeCategory; icon: string; 
   kanagawa:           { category: 'dark',  icon: '☾', label: 'Kanagawa' },
   'everforest-dark':  { category: 'dark',  icon: '☾', label: 'Everforest Dark' },
   obsidian:           { category: 'dark',  icon: '☾', label: 'Obsidian' },
+  'true-black':       { category: 'dark',  icon: '●', label: 'True Black' },
   'github-dark':      { category: 'dark',  icon: '☾', label: 'GitHub Dark' },
   'ayu-dark':         { category: 'dark',  icon: '☾', label: 'Ayu Dark' },
   'rose-pine':        { category: 'dark',  icon: '☾', label: 'Rosé Pine' },

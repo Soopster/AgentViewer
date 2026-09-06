@@ -39,6 +39,7 @@ export type TuiThemeMode =
   | 'kanagawa'
   | 'everforest-dark'
   | 'obsidian'
+  | 'true-black'
   | 'github-dark'
   | 'ayu-dark'
   | 'rose-pine'
@@ -661,6 +662,28 @@ export const OBSIDIAN_THEME: TuiThemePalette = {
   amber: '#fbbf24',
   pink: '#f472b6',
   userBg: '#111111',
+} as const
+
+export const TRUE_BLACK_THEME: TuiThemePalette = {
+  bg: '#000000',
+  surface: '#0a0a0a',
+  surface2: '#121212',
+  surface3: '#1c1c1c',
+  diffAddBg: '#0c2417',
+  diffRemoveBg: '#280d12',
+  diffMetaBg: '#0d1626',
+  border: '#1f1f1f',
+  border2: '#333333',
+  text: '#ededed',
+  muted: '#8a8a8a',
+  dim: '#666666',
+  violet: '#6e8bff',
+  cyan: '#5ec8e5',
+  green: '#4ade80',
+  red: '#f87171',
+  amber: '#e3b341',
+  pink: '#d989c4',
+  userBg: '#101010',
 } as const
 
 export const IMESSAGE_THEME: TuiThemePalette = {
@@ -2977,6 +3000,7 @@ export function getThemePalette(mode: TuiThemeMode): TuiThemePalette {
     case 'kanagawa': return KANAGAWA_THEME
     case 'everforest-dark': return EVERFOREST_DARK_THEME
     case 'obsidian': return OBSIDIAN_THEME
+    case 'true-black': return TRUE_BLACK_THEME
     case 'tokyo-night-day': return TOKYO_NIGHT_DAY_THEME
     case 'quiet-light': return QUIET_LIGHT_THEME
     case 'horizon-light': return HORIZON_LIGHT_THEME
