@@ -1,27 +1,203 @@
 'use client'
 
-import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
+import Link from 'next/link'
+import { getAssistantDisplayName } from '@/lib/provider'
+import { memo, useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo, useDeferredValue, useSyncExternalStore } from 'react'
 import type {
+  ApiMessage,
   SessionMessage,
   Session,
   SendState,
   ContextUsage,
   SessionInfo,
   SessionModelInfo,
+  SessionComposerOptions,
   SessionDiagnosticSection,
+  ToolUseBlock,
+  ToolResultBlock,
+  ContentBlock,
+  SendAttachment,
+  ReasoningEffortLevel,
 } from '@/lib/types'
-import { buildThreadedMessages, type ThreadedMessage } from '@/lib/threading'
-import { exportSessionToHtml, downloadHtml } from '@/lib/export'
+import { readJsonResponse, readOptionalJsonResponse } from '@/lib/httpResponse'
+import { buildThreadedMessages, buildThreadedMessagesIncremental, computeTurnDurationsMs, stripToolCallBlocks, type IncrementalThreadingCache, type ThreadedMessage, type ThreadedBlock } from '@/lib/threading'
+import { measureSync, recordClientPerf } from '@/lib/clientPerf'
+import { countLinesUpTo } from '@/lib/boundedLineCount'
+import { createStreamHistoryMetadataBuilder } from '@/lib/streamHistoryMetadata'
+import { messageToCopyText } from '@/lib/threadedMessageText'
+import { downloadHtml } from '@/lib/downloadHtml'
+import { pathBasename } from '@/lib/projectPaths'
 import { getPrimarySessionTag } from '@/lib/sessionTags'
-import MessageItem from './MessageItem'
+import {
+  extractClaudeStreamToolInputDelta,
+  extractClaudeStreamToolUse,
+  normalizeClaudeStreamThreadedMessage,
+  parseClaudeStreamToolInput,
+} from '@/lib/claudeMapper'
+import { normalizeCodexStreamThreadedMessage } from '@/lib/codexMapper'
+import { getSlashCommandSuggestions, filterSlashCommands, normalizeSlashCommandSuggestions, type SlashCommandSuggestion } from '@/lib/slashCommands'
+import { getProviderComposer } from '@/lib/providerComposer'
+import { extractCopilotPushedAttachments, extractPendingPermission, extractPendingPermissions, extractPermissionReply, type PendingPermission, type PendingQuestionAnswers } from '@/lib/permissions'
+import { extractClaudeReadFileSummary } from '@/lib/claudeSdkFeatures'
+import { parseClaudeCommandLifecycle, type ClaudeCommandLifecycleState } from '@/lib/claudeCommandLifecycle'
+import { isResumeDropsTurnRefusal, isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs, TransientAwareSendError, type UsageLimitKind } from '@/lib/transientError'
+import { respondToChannelPermission, readBridgeConfigFromEnv, type ChannelPermissionRequestEvent } from '@/lib/channelBridge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
+import { Label } from '@/components/ui/label'
+import { NativeSelect, NativeSelectOption, nativeSelectBaseClassName } from '@/components/ui/native-select'
+import { Textarea } from '@/components/ui/textarea'
+import { Input } from '@/components/ui/input'
+import { cn } from '@/lib/utils'
+import dynamic from 'next/dynamic'
+import { ArrowUp, BookOpen, ChartNetwork, ChevronDown, CircleAlert, CircleCheck, Clock3, FileCode2, Filter, Fullscreen, GitBranch, LoaderCircle, Maximize2, Minimize2, MonitorUp, PanelRight, Paperclip, Plug, Radio, RotateCcw, Search, Square, Terminal, TriangleAlert, X } from 'lucide-react'
+import MessageItem, { MessageDensityProvider, ViewModeProvider, DiffStyleProvider, DiffOptionsProvider, type MessageDensity, type WebViewMode } from './MessageItem'
+import { useChannelBridge } from './useChannelBridge'
+import { useIdeBridge } from './useIdeBridge'
+import type { PierreDiffStyle } from './PierreDiffView'
+import { DEFAULT_DIFF_OPTIONS, DiffCommentComposerContext, LiveSubagentTextContext, TaskActiveFormsContext, buildTaskActiveFormsForWeb, streamMessageHasContent, type DiffOptions } from './messageItemShared'
+import { TaskRail } from './TaskRail'
+import ProviderIcon from './ProviderIcon'
+import BranchSwitcher from './BranchSwitcher'
+import { buildTaskRegistry, buildTaskRegistryFromCodexPlan, buildTaskRegistryFromTodos, type CodexPlanStep } from '@/lib/taskRegistry'
+import MessageSessionVisualizer, { type MessageVisualizerRow } from './MessageSessionVisualizer'
+import StreamHistoryRail, { type StreamHistoryItem } from './StreamHistoryRail'
+import { getContinueInCliCommand } from '@/lib/cliContinue'
+import { commandResultExpectsTranscript, isNativeComposerCommandText } from '@/lib/composerCommands'
+import { deliverComposerSteer } from '@/lib/composerSteering'
+import { createDefaultWebComposerQueueStore, type WebComposerQueueDurability } from '@/lib/webComposerQueue'
+import { deriveComposerRuntimeState } from '@/lib/composerRuntimeState'
+import type { GitSummary } from '@/lib/gitProvider'
+import {
+  clearComposerQueueTarget,
+  createComposerQueueItemId,
+  mergeComposerAttachments,
+  removeComposerQueueItem,
+  restoreComposerDraftPayload,
+  selectComposerQueueTarget,
+} from '@/lib/composerAttachments'
 import CodeThemeToggle from './CodeThemeToggle'
+import RenderFontToggle from './RenderFontToggle'
+import {
+  applyColorTreatment,
+  DEFAULT_COLOR_TREATMENT,
+  getCurrentColorTreatment,
+  subscribeColorTreatment,
+  type ColorTreatment,
+} from '@/lib/colorTreatment'
+import TabBar from './TabBar'
+import { compactStableFingerprint } from '@/lib/compactFingerprint'
+import { isOpenCodeAssistantStreamEnvelope } from '@/lib/opencodeStreamEvents'
+import {
+  appendTimelineRowLayout,
+  buildTimelineRowLayout,
+  computeTimelineScrollCompensation,
+  findTimelineScrollAnchor,
+  getVirtualTimelineWindow,
+  resolveTimelineRenderedHeight,
+  type TimelineMeasurementChange,
+  type TimelineRowLayout,
+  type TimelineScrollAnchor,
+} from '@/lib/timelineVirtualizer'
+
+const AnalyticsPopover = dynamic(() => import('./AnalyticsPopover'), { ssr: false })
+const PromptLibrary = dynamic(() => import('./PromptLibrary'), { ssr: false })
+const ChannelBridgePanel = dynamic(() => import('./ChannelBridgePanel'), { ssr: false })
+const IdeBridgePanel = dynamic(() => import('./IdeBridgePanel'), { ssr: false })
+const DiffReviewMode = dynamic(() => import('./DiffReviewMode'), { ssr: false })
+const PierrePatchDiffView = dynamic(() => import('./PierreDiffView').then((mod) => mod.PierrePatchDiffView), {
+  ssr: false,
+  loading: () => (
+    <pre style={{ margin: 0, fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, background: 'rgba(0,0,0,0.18)', padding: '5px 7px', borderRadius: 4, maxHeight: 180, overflow: 'auto' }}>
+      Loading diff…
+    </pre>
+  ),
+})
+
+const compactNativeSelectClassName = cn(
+  nativeSelectBaseClassName,
+  'h-[30px] min-w-0 rounded-[5px] border-[var(--border)] bg-[var(--surface-2)] px-[10px] text-[11px] text-[var(--text)]'
+)
+
+const CLAUDE_DIAGNOSTIC_ACTIONS = [
+  ['reloadPlugins', 'reload-plugins', 'RELOAD PLUGINS', 'Plugins reloaded.', 'Reload plugins from disk'],
+  ['reloadSkills', 'reload-skills', 'RELOAD SKILLS', 'Skills reloaded.', 'Reload skills from disk'],
+  ['resolveSettings', 'resolve-settings', 'RESOLVE SETTINGS', 'Settings resolved.', 'Resolve effective Claude settings'],
+] as const
+
+function claudeDiagnosticActionNotice(
+  action: string,
+  fallback: string,
+  result: Record<string, unknown>,
+): string {
+  if (action === 'setMcpServers') {
+    const authRequired = Array.isArray(result.authRequired)
+      ? result.authRequired.filter((name): name is string => typeof name === 'string')
+      : []
+    const errors = result.errors && typeof result.errors === 'object' && !Array.isArray(result.errors)
+      ? Object.keys(result.errors)
+      : []
+    if (authRequired.length > 0) return `${fallback} Authentication required: ${authRequired.join(', ')}.`
+    if (errors.length > 0) return `${fallback} Connection failed: ${errors.join(', ')}.`
+    return fallback
+  }
+  if (action !== 'resolveSettings') return fallback
+  const sources = typeof result.sourceCount === 'number'
+    ? result.sourceCount
+    : Array.isArray(result.sources) ? result.sources.length : null
+  const effective = typeof result.effectiveKeyCount === 'number'
+    ? result.effectiveKeyCount
+    : Array.isArray(result.effectiveKeys) ? result.effectiveKeys.length : null
+  if (sources == null && effective == null) return fallback
+  return `Settings resolved${sources == null ? '' : ` · ${sources} source${sources === 1 ? '' : 's'}`}${effective == null ? '' : ` · ${effective} effective key${effective === 1 ? '' : 's'}`}`
+}
 
 type Props = {
   messages: SessionMessage[]
   loading: boolean
   session: Session | null
+  targetMessageId?: string | null
+  targetMessageRequestId?: number
   projectView?: { key: string; sessionCount: number; providerMode: 'current' | 'all' }
   onFork?: (newSessionId: string) => void
+  onDelete?: (sessionId: string, provider?: Session['provider']) => void
+  openTabs?: Session[]
+  selectedTabId?: string | null
+  onSelectTab?: (session: Session) => void
+  onCloseTab?: (sessionKey: string) => void
+  /** Opens a session that isn't necessarily in the current sidebar/tab list — e.g. an OpenCode subagent's own real child session, deep-linked from an inline AgentCard's "Open session" action. */
+  onOpenSession?: (session: Session) => void
+  taskPanelOpenRequest?: number
+  promptLibraryOpenRequest?: number
+  channelBridgeOpenRequest?: number
+  channelBridgeRouteToggleRequest?: number
+  onChannelBridgeRoutingChange?: (routing: boolean) => void
+  ideBridgeOpenRequest?: number
+  ideBridgeRouteToggleRequest?: number
+  onIdeBridgeRoutingChange?: (routing: boolean) => void
+  composerInsertRequest?: { requestId: number; text: string } | null
+  onComposerInsertConsumed?: (requestId: number) => void
+  openCodeTodos?: OpenCodeTodo[]
+  codexPlan?: { plan: CodexPlanStep[]; explanation: string | null }
+  // Another Codex client currently owns this session's rollout writer lock —
+  // the transcript is a stale cached snapshot until that client's turn ends.
+  codexExternalWriter?: boolean
+  onOpenGit?: () => void
+  maximized?: boolean
+  onToggleMaximized?: () => void
+  onEnterFullscreen?: () => void
+  /** Right-hand surface panel (browser/terminal/files/diff/PR/agents). */
+  rightPanelOpen?: boolean
+  onToggleRightPanel?: () => void
+}
+
+type CopilotContextTier = 'default' | 'long_context'
+
+type OpenCodeTodo = {
+  id: string
+  content: string
+  status: string
+  priority: string
 }
 
 type SseFrame = {
@@ -34,6 +210,7 @@ type LiveToolActivity = {
   label: string
   detail?: string
   status: 'running' | 'done'
+  toolUse?: ToolUseBlock
 }
 
 type RewindPreview = {
@@ -45,6 +222,485 @@ type RewindPreview = {
 type RollbackPreview = {
   numTurns: number
   turnsRemoved: Array<{ turnId: string; preview: string }>
+}
+
+type FailedSend = {
+  text: string
+  attachments: SendAttachment[]
+}
+
+type QueuedWebSend = {
+  id: string
+  targetKey: string
+  text: string
+  attachments: SendAttachment[]
+}
+
+type PendingMessageBaseline = {
+  count: number
+  lastUuid: string | null
+  lastFingerprint: string | null
+  sessionId: string
+  keys: Set<string>
+  fingerprintsByKey: Map<string, string | null>
+}
+
+type ComposerDraft = {
+  text: string
+  attachments: SendAttachment[]
+}
+
+type MentionResult =
+  | { kind: 'file'; path: string; basename: string }
+  | { kind: 'agent'; name: string; description?: string; mode?: string }
+
+type TimelineRow = {
+  key: string
+  message: ThreadedMessage
+  groupedMessageIds?: string[]
+  showSession: boolean
+  dimmed?: boolean
+  previewBadge?: string
+  activityDetail?: string
+  activityTone?: 'running' | 'syncing'
+  liveToolActivities?: LiveToolActivity[]
+  showForkControls?: boolean
+  allowFork?: boolean
+  allowResume?: boolean
+  allowEdit?: boolean
+  streamTurnHint?: string
+  streamTurnFooterHint?: string
+}
+
+type TranscriptFilter = 'all' | 'user' | 'assistant' | 'system' | 'tools' | 'errors' | 'thinking' | 'media'
+
+type SteeredSendEntry = {
+  text: string
+  messageUuid?: string
+  state?: Extract<ClaudeCommandLifecycleState, 'queued' | 'started' | 'completed'>
+}
+type ActiveTranscriptFilter = Exclude<TranscriptFilter, 'all'>
+type TimelineEstimateBucket = 'text' | 'tool' | 'media' | 'system' | 'stream'
+
+type TimelineEstimateCalibration = {
+  estimatedTotal: number
+  measuredTotal: number
+  sampleCount: number
+}
+
+type TimelineEstimateSample = {
+  bucket: TimelineEstimateBucket
+  estimatedHeight: number
+  measuredHeight: number
+}
+
+// Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
+function formatLiveThinkingTokens(tokens: number): string {
+  return tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : `${tokens}`
+}
+
+function useLazyRef<T>(create: () => T): { current: T } {
+  const [ref] = useState(() => ({ current: create() }))
+  return ref
+}
+
+const SENT_HISTORY_MAX = 200
+const SENT_HISTORY_STORAGE_KEY = 'agent-viewer:composer-sent-history'
+
+function readLocalStorageValue(key: string): string | null {
+  if (typeof window === 'undefined') return null
+  try {
+    return window.localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+function writeLocalStorageValue(key: string, value: string): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(key, value)
+  } catch {
+    // Best-effort preference persistence (privacy mode/quota can reject it).
+  }
+}
+
+function readPersistedSentHistory(): string[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = readLocalStorageValue(SENT_HISTORY_STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((e): e is string => typeof e === 'string').slice(-SENT_HISTORY_MAX)
+  } catch {
+    return []
+  }
+}
+
+function writePersistedSentHistory(entries: string[]): void {
+  if (typeof window === 'undefined') return
+  try {
+    writeLocalStorageValue(SENT_HISTORY_STORAGE_KEY, JSON.stringify(entries))
+  } catch {
+    // best-effort; quota or privacy mode
+  }
+}
+
+const TRANSCRIPT_FILTERS: Array<{ key: TranscriptFilter; label: string }> = [
+  { key: 'all', label: 'All' },
+  { key: 'user', label: 'User' },
+  { key: 'assistant', label: 'Agent' },
+  { key: 'tools', label: 'Tools' },
+  { key: 'errors', label: 'Errors' },
+  { key: 'thinking', label: 'Thinking' },
+  { key: 'media', label: 'Media' },
+  { key: 'system', label: 'System' },
+]
+
+const TRANSCRIPT_FILTER_LABELS = new Map(TRANSCRIPT_FILTERS.map((filter) => [filter.key, filter.label]))
+
+const ESTIMATED_TIMELINE_ROW_HEIGHT = 220
+// Bumped from 1200 → 2400 so more rows are mounted ahead of the visible
+// window when the user scrubs the scrollbar quickly. With variable-height
+// tool cards, this gives ResizeObserver more time to settle each row before
+// it enters view, which keeps the visible layout stable during fast scrolls.
+const TIMELINE_OVERSCAN_PX = 2400
+// High-frequency scroll paths only commit scrollTop to React state once the
+// drift from the last committed value exceeds this. The virtual window is
+// computed from committed state but overscans TIMELINE_OVERSCAN_PX on both
+// sides, so a sub-threshold stale window still covers the viewport — this
+// turns a fling from one full MessageView render per frame into one per
+// ~600px scrolled. Exact positions are re-committed at scroll idle.
+const TIMELINE_SCROLL_COMMIT_PX = 600
+// Above this scroll velocity, rows ENTERING the virtual window mount as
+// lightweight placeholders instead of full message cards — full cards
+// (markdown, syntax highlighting, diffs) can't mount fast enough to keep up
+// with a fling or scrollbar drag, which left blank space until the gesture
+// ended. Rows already mounted keep their content. Hysteresis: enter fast,
+// exit slow; the scroll-idle timer always hydrates as a backstop.
+const FAST_SCROLL_ENTER_PX_PER_S = 3000
+const FAST_SCROLL_EXIT_PX_PER_S = 1200
+// Milliseconds of inactivity after the last scroll event before we consider
+// the user "done scrolling" and start applying scrollTop anchor adjustments
+// again for direct scrollbar/touch scrubbing.
+const SCROLL_IDLE_MS = 140
+// Trailing-edge debounce for persisting the composer draft to localStorage.
+const COMPOSER_DRAFT_SAVE_DEBOUNCE_MS = 400
+// Wheel and trackpad scrolling benefits from keeping the visible row anchored
+// while overscanned rows settle. The window outlives the wheel event long
+// enough to cover ResizeObserver delivery and the following animation frame.
+const WHEEL_SCROLL_COMPENSATION_MS = 180
+const TIMELINE_CALIBRATION_MIN_SAMPLES = 3
+const TIMELINE_CALIBRATION_BUCKET_CONFIDENCE = 6
+const TIMELINE_CALIBRATION_MIN_RATIO = 0.22
+const TIMELINE_CALIBRATION_MAX_RATIO = 2
+// Safety net: how long the composer will wait for a turn's persisted rows to
+// land before force-revealing the polled timeline. The 2s message poll means
+// the durable rows are normally present within a poll or two; this only fires
+// when a write is lost/delayed so "Syncing transcript…" can never stick forever.
+const AWAITING_PERSISTED_TURN_TIMEOUT_MS = 15000
+const REATTACH_POLL_MS = 2500
+// If the Claude send stream goes fully silent for this long — no data AND no
+// heartbeat (the server pulses one every 15s) — the socket is presumed dead.
+// We stop owning the stream and hand off to the persisted-window SSE + /running
+// reattach poll, which keep rendering the still-running turn. Three missed
+// heartbeats is a confident "dead, not slow" signal.
+const CLAUDE_STREAM_STALL_MS = 45000
+// Unique marker so the read/stall race can tell a stall timeout from a real
+// ReadableStream read result.
+const STREAM_STALL_SENTINEL = Symbol('claude-stream-stall')
+const PROGRAMMATIC_SCROLL_SUPPRESSION_MS = 120
+const COMPOSER_GIT_SUMMARY_POLL_MS = 5000
+const ESTIMATED_CHARS_PER_LINE = 92
+const TIMELINE_BOTTOM_GUTTER_PX = 72
+const TIMELINE_TARGET_TOP_GUTTER_PX = 72
+const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
+const COMPOSER_DRAFT_STORAGE_PREFIX = 'agentViewer:composerDraft:v1:'
+const COMPOSER_QUEUE_LOCAL_INLINE_LIMIT = 256 * 1024
+const SEND_ATTACHMENT_TYPES = new Set<SendAttachment['type']>(['file', 'directory', 'selection', 'image', 'mention', 'skill', 'blob', 'agent', 'extension_context'])
+function detectMentionAtCursor(text: string, cursor: number): { start: number; query: string } | null {
+  if (cursor === 0) return null
+  let i = cursor - 1
+  while (i >= 0) {
+    const ch = text[i]
+    if (ch === '@') break
+    if (!ch || /\s/.test(ch)) return null
+    i -= 1
+  }
+  if (i < 0 || text[i] !== '@') return null
+  if (i > 0 && !/\s/.test(text[i - 1] ?? '')) return null
+  const query = text.slice(i + 1, cursor)
+  if (query.length > 60) return null
+  return { start: i, query }
+}
+
+
+const composerPopoverStyle: React.CSSProperties = {
+  position: 'absolute',
+  bottom: 'calc(100% + 6px)',
+  left: 0,
+  right: 60,
+  maxHeight: 240,
+  overflowY: 'auto',
+  background: 'var(--surface)',
+  border: '1px solid var(--border)',
+  borderRadius: 8,
+  boxShadow: '0 18px 40px rgba(0,0,0,0.34)',
+  zIndex: 30,
+  padding: 4,
+  display: 'flex',
+  flexDirection: 'column',
+}
+const composerPopoverHintStyle: React.CSSProperties = {
+  padding: '4px 8px 6px',
+  fontFamily: "'IBM Plex Mono', monospace",
+  fontSize: 11,
+  color: 'var(--text-3)',
+  letterSpacing: '0.06em',
+  borderBottom: '1px solid var(--border)',
+  marginBottom: 4,
+}
+const composerPopoverItemStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'baseline',
+  textAlign: 'left',
+  background: 'transparent',
+  border: 'none',
+  borderRadius: 5,
+  padding: '5px 8px',
+  fontFamily: "'IBM Plex Sans', sans-serif",
+  fontSize: 12,
+  color: 'var(--text)',
+  cursor: 'pointer',
+}
+
+function normalizeSelectValue(value: string | null | undefined): string | null {
+  const trimmed = value?.trim()
+  return trimmed ? trimmed : null
+}
+
+function effortLabel(level: ReasoningEffortLevel): string {
+  if (level === 'xhigh') return 'Extra high'
+  return level.charAt(0).toUpperCase() + level.slice(1)
+}
+
+function gitSummariesMatch(left: GitSummary | null, right: GitSummary | null): boolean {
+  return left?.branch === right?.branch
+    && left?.modified === right?.modified
+    && left?.untracked === right?.untracked
+    && left?.stashes === right?.stashes
+}
+
+function ComposerContextUsageRing({ usage }: { usage: ContextUsage | null }) {
+  const percentage = usage ? Math.max(0, Math.min(usage.percentage, 100)) : 0
+  const ringColor = usage?.percentage && usage.percentage > 80
+    ? 'var(--red, #f87171)'
+    : usage?.percentage && usage.percentage > 60
+    ? 'var(--yellow, #fbbf24)'
+    : 'var(--violet)'
+  const label = usage
+    ? `Context usage: ${usage.totalTokens.toLocaleString()} of ${usage.maxTokens.toLocaleString()} tokens, ${Math.round(usage.percentage)}%`
+    : 'Context usage unavailable until the provider reports it'
+
+  return (
+    <span
+      className="av-web-composer-context-ring"
+      role="img"
+      aria-label={label}
+      title={label}
+      data-available={usage ? 'true' : 'false'}
+      style={{
+        '--av-context-progress': `${percentage * 3.6}deg`,
+        '--av-context-color': ringColor,
+      } as React.CSSProperties}
+    />
+  )
+}
+
+function ComposerStatusBanner({
+  tone,
+  icon,
+  children,
+  action,
+}: {
+  tone: 'info' | 'success' | 'warning' | 'error'
+  icon: React.ReactNode
+  children: React.ReactNode
+  action?: React.ReactNode
+}) {
+  return (
+    <div
+      className="av-web-composer-banner"
+      data-tone={tone}
+      role={tone === 'error' ? 'alert' : 'status'}
+    >
+      <span className="av-web-composer-banner-icon" aria-hidden="true">{icon}</span>
+      <span className="av-web-composer-banner-message">{children}</span>
+      {action ? <span className="av-web-composer-banner-action">{action}</span> : null}
+    </div>
+  )
+}
+
+function LiveSpinner({ label }: { label: string }) {
+  const [frame, setFrame] = useState(0)
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setFrame((current) => (current + 1) % SPINNER_FRAMES.length)
+    }, 80)
+
+    return () => window.clearInterval(timer)
+  }, [])
+
+  return (
+    <span
+      aria-label={label}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        fontFamily: "'IBM Plex Mono', monospace",
+        fontSize: 11,
+        letterSpacing: '0.08em',
+        color: 'var(--violet)',
+      }}
+    >
+      <span
+        aria-hidden="true"
+        style={{
+          color: 'var(--cyan)',
+          filter: 'drop-shadow(0 0 5px var(--cyan))',
+        }}
+      >
+        {SPINNER_FRAMES[frame]}
+      </span>
+      <span>{label}</span>
+    </span>
+  )
+}
+
+function attachmentImagePreviewSrc(attachment: SendAttachment): string | null {
+  if (attachment.type === 'blob' && attachment.data && attachment.mimeType?.startsWith('image/')) {
+    return `data:${attachment.mimeType};base64,${attachment.data}`
+  }
+  if (attachment.type === 'image') {
+    const path = attachment.path ?? attachment.filePath ?? ''
+    if (/^https?:\/\//i.test(path)) return path
+    if (path.startsWith('data:')) return path
+  }
+  return null
+}
+
+function attachmentDisplayName(attachment: SendAttachment): string {
+  if (attachment.displayName) return attachment.displayName
+  const path = attachment.path ?? attachment.filePath ?? attachment.type
+  return path.split('/').filter(Boolean).at(-1) ?? path
+}
+
+function permissionDenialReason(permission: PendingPermission): string {
+  const target = permission.command
+    ? `command "${permission.command}"`
+    : permission.url
+    ? `URL ${permission.url}`
+    : permission.paths && permission.paths.length > 0
+    ? `path ${permission.paths.join(', ')}`
+    : permission.detail
+    ? permission.detail
+    : permission.title
+  return `User rejected ${target} in Agent Viewer.`
+}
+
+function composerDraftStorageKey(session: Session | null): string | null {
+  if (!session) return null
+  return `${COMPOSER_DRAFT_STORAGE_PREFIX}${session.provider ?? 'claude'}:${session.sessionId}`
+}
+
+function normalizeDraftAttachments(value: unknown): SendAttachment[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((attachment) => {
+    if (!attachment || typeof attachment !== 'object') return []
+    const record = attachment as Partial<SendAttachment>
+    if (!record.type || typeof record.type !== 'string' || !SEND_ATTACHMENT_TYPES.has(record.type as SendAttachment['type'])) return []
+    return [{
+      ...record,
+      id: typeof record.id === 'string' ? record.id : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      type: record.type as SendAttachment['type'],
+    } as SendAttachment]
+  })
+}
+
+function readComposerDraft(storageKey: string | null): ComposerDraft {
+  if (!storageKey || typeof window === 'undefined') return { text: '', attachments: [] }
+  try {
+    const raw = window.localStorage.getItem(storageKey)
+    if (!raw) return { text: '', attachments: [] }
+    const parsed = JSON.parse(raw) as Partial<ComposerDraft>
+    return {
+      text: typeof parsed.text === 'string' ? parsed.text : '',
+      attachments: normalizeDraftAttachments(parsed.attachments),
+    }
+  } catch {
+    return { text: '', attachments: [] }
+  }
+}
+
+function writeComposerDraft(storageKey: string | null, draft: ComposerDraft) {
+  if (!storageKey || typeof window === 'undefined') return
+  try {
+    if (!draft.text.trim() && draft.attachments.length === 0) {
+      window.localStorage.removeItem(storageKey)
+      return
+    }
+    window.localStorage.setItem(storageKey, JSON.stringify(draft))
+  } catch {
+    /* localStorage may be unavailable or full */
+  }
+}
+
+function isQueuedWebSend(value: unknown): value is QueuedWebSend {
+  if (!value || typeof value !== 'object') return false
+  const entry = value as Partial<QueuedWebSend>
+  if (typeof entry.id !== 'string' || !entry.id) return false
+  if (typeof entry.targetKey !== 'string' || !entry.targetKey) return false
+  if (typeof entry.text !== 'string' || !Array.isArray(entry.attachments)) return false
+  return entry.attachments.every((attachment) => (
+    Boolean(attachment)
+    && typeof attachment === 'object'
+    && typeof attachment.type === 'string'
+    && SEND_ATTACHMENT_TYPES.has(attachment.type as SendAttachment['type'])
+  ))
+}
+
+function shouldInlineComposerQueue(queue: QueuedWebSend[]): boolean {
+  let inlineChars = 0
+  for (const entry of queue) {
+    inlineChars += entry.text.length + entry.id.length + entry.targetKey.length
+    for (const attachment of entry.attachments) {
+      // Structured extension payloads can be arbitrarily large. Keep those on
+      // IndexedDB's asynchronous path instead of serializing them on the input
+      // event that queues the follow-up.
+      if (attachment.payload) return false
+      inlineChars += (attachment.data?.length ?? 0)
+        + (attachment.text?.length ?? 0)
+        + (attachment.path?.length ?? 0)
+        + (attachment.filePath?.length ?? 0)
+        + (attachment.displayName?.length ?? 0)
+      if (inlineChars > COMPOSER_QUEUE_LOCAL_INLINE_LIMIT) return false
+    }
+  }
+  return true
+}
+
+let webComposerQueueStore: ReturnType<typeof createDefaultWebComposerQueueStore<QueuedWebSend>> | null = null
+
+function getWebComposerQueueStore() {
+  webComposerQueueStore ??= createDefaultWebComposerQueueStore(
+    isQueuedWebSend,
+    shouldInlineComposerQueue,
+    (entry) => entry.id,
+  )
+  return webComposerQueueStore
 }
 
 function extractSseFrames(buffer: string): { frames: SseFrame[]; remaining: string } {
@@ -105,7 +761,42 @@ function extractStreamingAssistantText(payload: unknown): string | null {
     return record.delta
   }
 
+  // Reasoning deltas (codex_reasoning_delta / _summary_delta) are handled by
+  // extractStreamingReasoningText and rendered on their own channel — only the
+  // plan delta stays in the answer stream here.
+  if (record.type === 'codex_plan_delta' && typeof record.delta === 'string') {
+    return record.delta
+  }
+
+  if (record.type === 'codex_realtime_transcript') {
+    return record.role === 'assistant' && typeof record.text === 'string'
+      ? record.text
+      : null
+  }
+
+  if (record.type === 'codex_realtime_item_added') {
+    const item = record.item
+    if (!item || typeof item !== 'object') return null
+    const itemRecord = item as Record<string, unknown>
+    if ((itemRecord.type === 'agentMessage' || itemRecord.type === 'plan') && typeof itemRecord.text === 'string') {
+      return itemRecord.text
+    }
+    return null
+  }
+
+  if (record.type === 'codex_item_completed') {
+    const item = record.item
+    if (!item || typeof item !== 'object') return null
+    const itemRecord = item as Record<string, unknown>
+    return itemRecord.type === 'agentMessage' && typeof itemRecord.text === 'string'
+      ? itemRecord.text
+      : itemRecord.type === 'plan' && typeof itemRecord.text === 'string'
+      ? itemRecord.text
+      : null
+  }
+
   if (record.type === 'stream_event') {
+    if (typeof record.parent_tool_use_id === 'string' && record.parent_tool_use_id) return null
     const event = record.event
     if (!event || typeof event !== 'object') return null
     const eventRecord = event as Record<string, unknown>
@@ -119,21 +810,33 @@ function extractStreamingAssistantText(payload: unknown): string | null {
       : null
   }
 
+  if (record.type === 'lmstudio_delta') {
+    return typeof record.delta === 'string' ? record.delta : null
+  }
+
   if (record.type === 'opencode_event') {
+    if (!isOpenCodeAssistantStreamEnvelope(record)) return null
     const event = record.event
     if (!event || typeof event !== 'object') return null
     const eventRecord = event as Record<string, unknown>
-    if (eventRecord.type !== 'message.part.updated') return null
-
     const properties = eventRecord.properties
     if (!properties || typeof properties !== 'object') return null
     const propertiesRecord = properties as Record<string, unknown>
+    if (eventRecord.type === 'message.part.delta') {
+      const field = typeof propertiesRecord.field === 'string' ? propertiesRecord.field : ''
+      return field === 'text' && typeof propertiesRecord.delta === 'string'
+        ? propertiesRecord.delta
+        : null
+    }
+
+    if (eventRecord.type !== 'message.part.updated') return null
+
     const part = propertiesRecord.part
     if (!part || typeof part !== 'object') return null
     const partRecord = part as Record<string, unknown>
 
-    return partRecord.type === 'text' && typeof propertiesRecord.delta === 'string'
-      ? propertiesRecord.delta
+    return partRecord.type === 'text' && typeof partRecord.text === 'string'
+      ? partRecord.text
       : null
   }
 
@@ -159,6 +862,48 @@ function extractStreamingAssistantText(payload: unknown): string | null {
     return null
   }
 
+  if (record.type === 'pi_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+
+    if (eventRecord.type === 'message_update') {
+      const assistantMessageEvent = eventRecord.assistantMessageEvent
+      if (!assistantMessageEvent || typeof assistantMessageEvent !== 'object') return null
+      const updateRecord = assistantMessageEvent as Record<string, unknown>
+
+      if (updateRecord.type === 'text_delta' && typeof updateRecord.delta === 'string') {
+        return updateRecord.delta
+      }
+
+      if ((updateRecord.type === 'done' || updateRecord.type === 'error')) {
+        const finalMessage = updateRecord.type === 'done'
+          ? updateRecord.message
+          : updateRecord.error
+        if (!finalMessage || typeof finalMessage !== 'object') return null
+        const finalRecord = finalMessage as Record<string, unknown>
+        return extractTextContent(finalRecord.content)
+          || (typeof finalRecord.errorMessage === 'string' ? finalRecord.errorMessage : null)
+      }
+    }
+
+    if (eventRecord.type === 'message_end') {
+      const message = eventRecord.message
+      if (!message || typeof message !== 'object') return null
+      const messageRecord = message as Record<string, unknown>
+      return messageRecord.role === 'assistant'
+        ? extractTextContent(messageRecord.content)
+          || (typeof messageRecord.errorMessage === 'string' ? messageRecord.errorMessage : null)
+        : null
+    }
+
+    return null
+  }
+
+  if (record.type === 'pi_bash_delta' && typeof record.delta === 'string') {
+    return record.delta
+  }
+
   if (record.type === 'assistant') {
     const message = record.message
     if (!message || typeof message !== 'object') return null
@@ -167,6 +912,125 @@ function extractStreamingAssistantText(payload: unknown): string | null {
   }
 
   return null
+}
+
+// Append-only reasoning/thinking deltas, kept separate from the answer so the UI
+// can stream them as a distinct dim "thinking" block (matching the native CLIs).
+function extractStreamingReasoningText(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null
+  const record = payload as Record<string, unknown>
+
+  if ((record.type === 'codex_reasoning_delta' || record.type === 'codex_reasoning_summary_delta')
+    && typeof record.delta === 'string') {
+    return record.delta
+  }
+
+  if (record.type === 'stream_event') {
+    if (typeof record.parent_tool_use_id === 'string' && record.parent_tool_use_id) return null
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+    if (eventRecord.type !== 'content_block_delta') return null
+    const delta = eventRecord.delta
+    if (!delta || typeof delta !== 'object') return null
+    const deltaRecord = delta as Record<string, unknown>
+    return deltaRecord.type === 'thinking_delta' && typeof deltaRecord.thinking === 'string'
+      ? deltaRecord.thinking
+      : null
+  }
+
+  if (record.type === 'pi_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+    if (eventRecord.type !== 'message_update') return null
+    const assistantMessageEvent = eventRecord.assistantMessageEvent
+    if (!assistantMessageEvent || typeof assistantMessageEvent !== 'object') return null
+    const updateRecord = assistantMessageEvent as Record<string, unknown>
+    return updateRecord.type === 'thinking_delta' && typeof updateRecord.delta === 'string'
+      ? updateRecord.delta
+      : null
+  }
+
+  if (record.type === 'opencode_event') {
+    if (!isOpenCodeAssistantStreamEnvelope(record)) return null
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+    if (eventRecord.type !== 'message.part.delta') return null
+    const properties = eventRecord.properties
+    if (!properties || typeof properties !== 'object') return null
+    const propertiesRecord = properties as Record<string, unknown>
+    const field = typeof propertiesRecord.field === 'string' ? propertiesRecord.field : ''
+    return field === 'reasoning' && typeof propertiesRecord.delta === 'string'
+      ? propertiesRecord.delta
+      : null
+  }
+
+  if (record.type === 'copilot_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+    if (eventRecord.type !== 'assistant.reasoning_delta') return null
+    const data = eventRecord.data
+    if (!data || typeof data !== 'object') return null
+    const dataRecord = data as Record<string, unknown>
+    return typeof dataRecord.deltaContent === 'string'
+      ? dataRecord.deltaContent
+      : typeof dataRecord.delta === 'string'
+      ? dataRecord.delta
+      : null
+  }
+
+  return null
+}
+
+function upsertThreadedMessage(
+  messages: ThreadedMessage[],
+  nextMessage: ThreadedMessage,
+): ThreadedMessage[] {
+  const existingIndex = messages.findIndex((message) => message.uuid === nextMessage.uuid)
+  if (existingIndex === -1) return [...messages, nextMessage]
+  return messages.map((message, index) => index === existingIndex ? nextMessage : message)
+}
+
+function completeLiveToolThread(messages: ThreadedMessage[], key: string): ThreadedMessage[] {
+  const targetUuid = `live-tool:${key}`
+  return messages.map((message) => {
+    if (message.uuid !== targetUuid) return message
+    return {
+      ...message,
+      blocks: message.blocks.map((block) => {
+        if (block.type !== 'tool_thread') return block
+        if (block.result) return block
+        return {
+          ...block,
+          result: {
+            type: 'tool_result',
+            tool_use_id: block.toolUse.id,
+            content: 'Tool call emitted in live preview. Final output will appear when the transcript syncs.',
+          },
+        }
+      }),
+    }
+  })
+}
+
+function updateLiveToolThreadInput(
+  messages: ThreadedMessage[],
+  key: string,
+  input: Record<string, unknown>,
+): ThreadedMessage[] {
+  const targetUuid = `live-tool:${key}`
+  return messages.map((message) => {
+    if (message.uuid !== targetUuid) return message
+    return {
+      ...message,
+      blocks: message.blocks.map((block) => block.type === 'tool_thread'
+        ? { ...block, toolUse: { ...block.toolUse, input } }
+        : block),
+    }
+  })
 }
 
 function formatToolLabel(name: string): string {
@@ -233,7 +1097,7 @@ function copilotToolLabel(event: Record<string, unknown>): { label: string; deta
   }
 }
 
-function extractLiveToolStart(payload: unknown): { index: number; key: string; label: string; detail?: string } | null {
+function extractLiveToolStart(payload: unknown): { index: number; key: string; label: string; detail?: string; toolUse?: ToolUseBlock } | null {
   if (!payload || typeof payload !== 'object') return null
   const record = payload as Record<string, unknown>
 
@@ -253,6 +1117,7 @@ function extractLiveToolStart(payload: unknown): { index: number; key: string; l
   }
 
   if (record.type === 'opencode_event') {
+    if (!isOpenCodeAssistantStreamEnvelope(record)) return null
     const event = record.event
     if (!event || typeof event !== 'object') return null
     const eventRecord = event as Record<string, unknown>
@@ -303,6 +1168,23 @@ function extractLiveToolStart(payload: unknown): { index: number; key: string; l
     }
   }
 
+  if (record.type === 'pi_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+    if (eventRecord.type !== 'tool_execution_start') return null
+
+    const toolCallId = typeof eventRecord.toolCallId === 'string' ? eventRecord.toolCallId : null
+    const toolName = typeof eventRecord.toolName === 'string' ? eventRecord.toolName : null
+    if (!toolCallId || !toolName) return null
+
+    return {
+      index: -1,
+      key: toolCallId,
+      label: formatToolLabel(toolName),
+    }
+  }
+
   if (record.type !== 'stream_event') return null
 
   const event = record.event
@@ -318,12 +1200,14 @@ function extractLiveToolStart(payload: unknown): { index: number; key: string; l
 
   const name = typeof blockRecord.name === 'string' ? blockRecord.name : 'tool'
   const serverName = typeof blockRecord.server_name === 'string' ? blockRecord.server_name : null
+  const toolUse = extractClaudeStreamToolUse(payload)
 
   return {
     index: eventRecord.index,
     key: typeof blockRecord.id === 'string' ? blockRecord.id : `${blockType}-${eventRecord.index}`,
     label: formatToolLabel(name),
     detail: serverName ?? undefined,
+    ...(toolUse ? { toolUse } : {}),
   }
 }
 
@@ -362,6 +1246,7 @@ function extractCompletedToolKey(payload: unknown): string | null {
   }
 
   if (record.type === 'opencode_event') {
+    if (!isOpenCodeAssistantStreamEnvelope(record)) return null
     const event = record.event
     if (!event || typeof event !== 'object') return null
     const eventRecord = event as Record<string, unknown>
@@ -399,6 +1284,14 @@ function extractCompletedToolKey(payload: unknown): string | null {
     return typeof dataRecord.toolCallId === 'string' ? dataRecord.toolCallId : null
   }
 
+  if (record.type === 'pi_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+    if (eventRecord.type !== 'tool_execution_end') return null
+    return typeof eventRecord.toolCallId === 'string' ? eventRecord.toolCallId : null
+  }
+
   return null
 }
 
@@ -406,6 +1299,7 @@ function assistantDisplayName(provider: Session['provider'] | SessionInfo['provi
   if (provider === 'codex') return 'Codex'
   if (provider === 'opencode') return 'OpenCode'
   if (provider === 'copilot') return 'Copilot'
+  if (provider === 'pi') return 'Pi'
   return 'Claude'
 }
 
@@ -413,26 +1307,1782 @@ function shouldReplaceLiveAssistantText(payload: unknown): boolean {
   if (!payload || typeof payload !== 'object') return false
   const record = payload as Record<string, unknown>
   if (record.type === 'assistant') return true
+  if (record.type === 'codex_realtime_transcript') return true
+  if (record.type === 'codex_realtime_item_added') return true
+  if (record.type === 'codex_item_completed') {
+    const item = record.item
+    return !!item && typeof item === 'object' && (
+      (item as Record<string, unknown>).type === 'agentMessage'
+      || (item as Record<string, unknown>).type === 'plan'
+    )
+  }
+  if (record.type === 'opencode_event') {
+    if (!isOpenCodeAssistantStreamEnvelope(record)) return false
+    const event = record.event
+    if (!event || typeof event !== 'object') return false
+    const eventRecord = event as Record<string, unknown>
+    if (eventRecord.type !== 'message.part.updated') return false
+    const properties = eventRecord.properties
+    if (!properties || typeof properties !== 'object') return false
+    const part = (properties as Record<string, unknown>).part
+    if (!part || typeof part !== 'object') return false
+    return (part as Record<string, unknown>).type === 'text'
+  }
+  if (record.type === 'pi_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return false
+    const eventRecord = event as Record<string, unknown>
+    if (eventRecord.type === 'message_end') {
+      const message = eventRecord.message
+      return !!message && typeof message === 'object' && (message as Record<string, unknown>).role === 'assistant'
+    }
+    if (eventRecord.type !== 'message_update') return false
+    const assistantMessageEvent = eventRecord.assistantMessageEvent
+    if (!assistantMessageEvent || typeof assistantMessageEvent !== 'object') return false
+    const updateRecord = assistantMessageEvent as Record<string, unknown>
+    return updateRecord.type === 'done' || updateRecord.type === 'error'
+  }
   if (record.type !== 'copilot_event') return false
   const event = record.event
   if (!event || typeof event !== 'object') return false
   return (event as Record<string, unknown>).type === 'assistant.message'
 }
 
-function withProviderQuery(path: string, provider?: Session['provider']): string {
-  if (!provider) return path
+function withProviderQuery(
+  path: string,
+  provider?: Session['provider'],
+  providerInstanceId?: Session['providerInstanceId'],
+): string {
+  if (!provider && !providerInstanceId) return path
+  const params = new URLSearchParams()
+  if (provider) params.set('provider', provider)
+  if (providerInstanceId) params.set('providerInstanceId', providerInstanceId)
   const separator = path.includes('?') ? '&' : '?'
-  return `${path}${separator}provider=${provider}`
+  return `${path}${separator}${params.toString()}`
 }
 
-export default function MessageView({ messages, loading, session, projectView, onFork }: Props) {
+function usageEqual(a: ThreadedMessage['usage'], b: ThreadedMessage['usage']): boolean {
+  return a?.input_tokens === b?.input_tokens
+    && a?.output_tokens === b?.output_tokens
+    && a?.cache_read_input_tokens === b?.cache_read_input_tokens
+    && a?.cache_creation_input_tokens === b?.cache_creation_input_tokens
+}
+
+function threadedBlockEqual(a: ThreadedMessage['blocks'][number], b: ThreadedMessage['blocks'][number]): boolean {
+  if (a.type !== b.type) return false
+
+  switch (a.type) {
+    case 'text':
+      return a.text === (b.type === 'text' ? b.text : '')
+    case 'thinking':
+      return a.thinking === (b.type === 'thinking' ? b.thinking : '')
+        && a.signature === (b.type === 'thinking' ? b.signature : undefined)
+    case 'image':
+      return a === b
+    case 'system_reminder':
+      return a.content === (b.type === 'system_reminder' ? b.content : '')
+    case 'slash_command':
+      return a.command === (b.type === 'slash_command' ? b.command : '')
+        && a.message === (b.type === 'slash_command' ? b.message : '')
+        && a.args === (b.type === 'slash_command' ? b.args : '')
+    case 'local_command_stdout':
+      return a.stdout === (b.type === 'local_command_stdout' ? b.stdout : '')
+    case 'bash_input':
+      return a.command === (b.type === 'bash_input' ? b.command : '')
+    case 'bash_output':
+      return b.type === 'bash_output'
+        && a.stdout === b.stdout
+        && a.stderr === b.stderr
+    case 'task_notification':
+      return b.type === 'task_notification'
+        && a.taskId === b.taskId
+        && a.toolUseId === b.toolUseId
+        && a.outputFile === b.outputFile
+        && a.status === b.status
+        && a.summary === b.summary
+        && a.result === b.result
+        && a.usage.totalTokens === b.usage.totalTokens
+        && a.usage.toolUses === b.usage.toolUses
+        && a.usage.durationMs === b.usage.durationMs
+    case 'claude_system':
+      return b.type === 'claude_system'
+        && a.subtype === b.subtype
+        && a.payload === b.payload
+    case 'tool_thread':
+      return b.type === 'tool_thread'
+        && a.toolUse === b.toolUse
+        && a.result === b.result
+  }
+}
+
+function threadedMessageEqual(a: ThreadedMessage, b: ThreadedMessage): boolean {
+  if (a === b) return true
+  if (
+    a.uuid !== b.uuid
+    || a.role !== b.role
+    || a.sessionId !== b.sessionId
+    || a.timestamp !== b.timestamp
+    || a.provider !== b.provider
+    || a.origin?.kind !== b.origin?.kind
+    || !usageEqual(a.usage, b.usage)
+    || a.blocks.length !== b.blocks.length
+  ) {
+    return false
+  }
+
+  for (let index = 0; index < a.blocks.length; index += 1) {
+    if (!threadedBlockEqual(a.blocks[index], b.blocks[index])) return false
+  }
+  return true
+}
+
+function threadedMessageKey(message: ThreadedMessage): string {
+  return `${message.provider ?? 'claude'}:${message.uuid}`
+}
+
+function sessionMessageThreadedKey(message: SessionMessage): string {
+  return `${message.provider ?? 'claude'}:${message.uuid}`
+}
+
+function sessionMessageFingerprint(message: SessionMessage | undefined): string | null {
+  if (!message) return null
+  return [
+    message.type,
+    message.uuid,
+    message.timestamp ?? '',
+    message.turnId ?? '',
+    message.origin?.kind ?? '',
+    compactStableFingerprint(message.message),
+  ].join('|')
+}
+
+function isDurableSessionMessage(message: SessionMessage): boolean {
+  return message.ephemeral !== true
+}
+
+function buildPendingMessageBaseline(messages: SessionMessage[], sessionId: string): PendingMessageBaseline {
+  const durableMessages = messages.filter(isDurableSessionMessage)
+  const keys = new Set<string>()
+  const fingerprintsByKey = new Map<string, string | null>()
+  for (const message of durableMessages) {
+    const key = sessionMessageThreadedKey(message)
+    keys.add(key)
+    fingerprintsByKey.set(key, sessionMessageFingerprint(message))
+  }
+  return {
+    count: durableMessages.length,
+    lastUuid: durableMessages.at(-1)?.uuid ?? null,
+    lastFingerprint: sessionMessageFingerprint(durableMessages.at(-1)),
+    sessionId,
+    keys,
+    fingerprintsByKey,
+  }
+}
+
+function retargetPendingMessageBaseline(
+  baseline: PendingMessageBaseline,
+  sessionId: string,
+  resetKnownMessages = false,
+): PendingMessageBaseline {
+  if (resetKnownMessages) {
+    return {
+      count: 0,
+      lastUuid: null,
+      lastFingerprint: null,
+      sessionId,
+      keys: new Set(),
+      fingerprintsByKey: new Map(),
+    }
+  }
+  return { ...baseline, sessionId }
+}
+
+function messagesChangedSinceBaseline(messages: SessionMessage[], baseline: PendingMessageBaseline): SessionMessage[] {
+  return messages.filter((message) => {
+    const key = sessionMessageThreadedKey(message)
+    const previousFingerprint = baseline.fingerprintsByKey.get(key)
+    return previousFingerprint === undefined || previousFingerprint !== sessionMessageFingerprint(message)
+  })
+}
+
+function estimateWrappedLines(text: string, charsPerLine = ESTIMATED_CHARS_PER_LINE): number {
+  if (!text) return 1
+
+  let lines = 0
+  for (const rawLine of text.replace(/\t/g, '    ').split('\n')) {
+    if (!rawLine) {
+      lines += 1
+      continue
+    }
+    lines += Math.max(1, Math.ceil(rawLine.length / charsPerLine))
+  }
+  return Math.max(lines, 1)
+}
+
+function estimateTextSectionHeight(
+  text: string,
+  { lineHeight = 24, padding = 26, min = 56, max }: { lineHeight?: number; padding?: number; min?: number; max?: number } = {},
+): number {
+  const estimated = padding + estimateWrappedLines(text) * lineHeight
+  const bounded = max != null ? Math.min(estimated, max) : estimated
+  return Math.max(min, bounded)
+}
+
+const STANDALONE_DATA_IMAGE_ESTIMATE_RE =
+  /^(?:\[image\]\s*)?data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+\s*$/
+
+function hasStandaloneDataImage(text: string): boolean {
+  return text.split('\n').some((line) => STANDALONE_DATA_IMAGE_ESTIMATE_RE.test(line.trim()))
+}
+
+function estimateRenderedTextHeight(text: string): number {
+  if (!hasStandaloneDataImage(text)) return estimateTextSectionHeight(text)
+
+  let estimated = 0
+  const textLines: string[] = []
+  const flushText = () => {
+    const chunk = textLines.join('\n').trimEnd()
+    if (chunk) estimated += estimateTextSectionHeight(chunk)
+    textLines.length = 0
+  }
+
+  for (const line of text.split('\n')) {
+    if (!STANDALONE_DATA_IMAGE_ESTIMATE_RE.test(line.trim())) {
+      textLines.push(line)
+      continue
+    }
+    flushText()
+    estimated += 520
+  }
+  flushText()
+  return Math.max(estimated, 56)
+}
+
+function estimateContentBlockHeight(block: ContentBlock): number {
+  if (block.type === 'text') return estimateTextSectionHeight(typeof block.text === 'string' ? block.text : '')
+  if (block.type === 'thinking') return 70
+  if (block.type === 'image') return 520
+  if (block.type === 'tool_result') {
+    if (typeof block.content === 'string') {
+      return estimateTextSectionHeight(block.content, { lineHeight: 18, padding: 18, min: 60, max: 260 })
+    }
+    if (Array.isArray(block.content)) {
+      return 60 + block.content.reduce((total: number, child: ContentBlock) => total + estimateContentBlockHeight(child), 0)
+    }
+    return 60
+  }
+  return 68
+}
+
+function toolResultContentToText(content: ToolResultBlock['content']): string {
+  if (typeof content === 'string') return content
+  if (Array.isArray(content)) {
+    return content
+      .map((block) => {
+        if (!block || typeof block !== 'object') return ''
+        const record = block as Record<string, unknown>
+        if (record.type !== 'text') return JSON.stringify(block)
+        if (typeof record.text === 'string') return record.text
+        const file = record.file
+        if (file && typeof file === 'object' && typeof (file as Record<string, unknown>).content === 'string') {
+          return (file as { content: string }).content
+        }
+        return JSON.stringify(block)
+      })
+      .filter(Boolean)
+      .join('\n')
+  }
+  return JSON.stringify(content, null, 2)
+}
+
+function toolResultHasImage(content: ToolResultBlock['content']): boolean {
+  return Array.isArray(content) && content.some((block) => !!block && typeof block === 'object' && (block as { type?: unknown }).type === 'image')
+}
+
+function estimateLimitedPreHeight(text: string, limit: number): { lineHeight: number; hidden: boolean } {
+  const lineCount = countLinesUpTo(text, limit + 1)
+  const visibleLines = Math.min(lineCount, limit)
+  return {
+    lineHeight: 16 + visibleLines * 21,
+    hidden: lineCount > limit,
+  }
+}
+
+function estimateGenericToolResultHeight(result: ToolResultBlock): number {
+  const raw = toolResultContentToText(result.content)
+  if (!result.is_error && raw.length < 140 && raw.split('\n').filter((line) => line.trim()).length === 1) return 30
+
+  const persistedMatch = raw.match(/<persisted-output>[\s\S]*?Preview[^\n]*:\n([\s\S]*)/)
+  const displayText = persistedMatch ? persistedMatch[1].trim() : raw
+  const { lineHeight, hidden } = estimateLimitedPreHeight(displayText, 20)
+  return 28 + lineHeight + (hidden ? 31 : 0)
+}
+
+function estimateReadToolResultHeight(result: ToolResultBlock, filePath?: string): number {
+  const summary = extractClaudeReadFileSummary(result, filePath)
+  if (summary && summary.kind !== 'text') {
+    return estimateGenericToolResultHeight({
+      ...result,
+      content: summary.content,
+    })
+  }
+
+  const raw = summary?.content ?? toolResultContentToText(result.content)
+  const lineCount = countLinesUpTo(raw, 26)
+  const visibleLines = Math.min(lineCount, 25)
+  const metadataHeight = summary ? 30 : 0
+  const codeHeight = Math.min(500, Math.max(44, 38 + visibleLines * 20))
+  const expandHeight = lineCount > 25 ? 31 : 0
+  return 1 + metadataHeight + codeHeight + expandHeight
+}
+
+function estimateToolResultHeight(result: ToolResultBlock | null | undefined, toolName: string, filePath?: string): number {
+  if (!result) return 0
+  if (toolResultHasImage(result.content)) return 540
+  if (toolName === 'Read') return estimateReadToolResultHeight(result, filePath)
+  return estimateGenericToolResultHeight(result)
+}
+
+function estimateSimpleToolHeaderHeight(toolName: string, input: Record<string, unknown>): number {
+  if (toolName === 'Bash') {
+    const command = typeof input.command === 'string' ? input.command : ''
+    return estimateTextSectionHeight(command, { lineHeight: 20, padding: 18, min: 38, max: 180 })
+  }
+  return 38
+}
+
+function estimateToolThreadHeight(block: Extract<ThreadedBlock, { type: 'tool_thread' }>): number {
+  const { toolUse, result } = block
+  const input = toolUse.input as Record<string, unknown>
+
+  if (toolUse.name === 'FileChange') {
+    const changes = Array.isArray(input.changes) ? input.changes : []
+    const bodyHeight = changes.length === 0
+      ? 56
+      : changes.reduce((total, change) => {
+          const record = change && typeof change === 'object' ? change as Record<string, unknown> : {}
+          const diff = typeof record.diff === 'string' ? record.diff : ''
+          return total + 84 + estimateTextSectionHeight(diff, { lineHeight: 17, padding: 20, min: 96, max: 420 })
+        }, 0)
+    return 72 + bodyHeight
+  }
+
+  if (toolUse.name === 'MultiEdit') {
+    const edits = Array.isArray(input.edits) ? input.edits : []
+    const bodyHeight = edits.reduce((total, edit) => {
+      const record = edit && typeof edit === 'object' ? edit as Record<string, unknown> : {}
+      const oldString = typeof record.old_string === 'string' ? record.old_string : ''
+      const newString = typeof record.new_string === 'string' ? record.new_string : ''
+      const diffText = `${oldString}\n${newString}`.trim()
+      return total + 54 + estimateTextSectionHeight(diffText, { lineHeight: 17, padding: 20, min: 88, max: 260 })
+    }, 28)
+    return 78 + bodyHeight
+  }
+
+  if (toolUse.name === 'TodoWrite') {
+    const todos = Array.isArray(input.todos) ? input.todos : []
+    return 88 + Math.max(42, todos.length * 28)
+  }
+
+  if (toolUse.name === 'AskUserQuestion') {
+    const questions = Array.isArray(input.questions) ? input.questions : []
+    return 92 + questions.length * 92
+  }
+
+  if (toolUse.name === 'Read' || toolUse.name === 'Glob' || toolUse.name === 'Grep' || toolUse.name === 'Bash') {
+    const filePath = typeof input.file_path === 'string' ? input.file_path : undefined
+    const bodyHeight = toolUse.name === 'Bash' && typeof input.description === 'string' && input.description
+      ? 24
+      : 0
+    return 8 + estimateSimpleToolHeaderHeight(toolUse.name, input) + bodyHeight + estimateToolResultHeight(result, toolUse.name, filePath)
+  }
+
+  if (toolUse.name === 'Agent') {
+    const description = typeof input.description === 'string' ? input.description : ''
+    return 86 + (result ? estimateTextSectionHeight(description, { lineHeight: 16, padding: 10, min: 0, max: 80 }) : 0)
+  }
+
+  if (result?.content) {
+    if (typeof result.content === 'string') {
+      return 86 + estimateTextSectionHeight(result.content, { lineHeight: 18, padding: 16, min: 40, max: 220 })
+    }
+    return 92 + result.content.reduce((total, child) => total + estimateContentBlockHeight(child), 0)
+  }
+
+  return 84
+}
+
+function estimateThreadedBlockHeight(block: ThreadedBlock): number {
+  if (block.type === 'text') return estimateRenderedTextHeight(block.text)
+  if (block.type === 'thinking') return 72
+  if (block.type === 'image') return 220
+  if (block.type === 'tool_thread') return estimateToolThreadHeight(block)
+  if (block.type === 'task_notification') return 96
+  if (block.type === 'system_reminder') return 72
+  if (block.type === 'slash_command') return 64
+  if (block.type === 'local_command_stdout') {
+    return 60 + estimateTextSectionHeight(block.stdout, { lineHeight: 17, padding: 8, min: 20, max: 80 })
+  }
+  if (block.type === 'claude_system') return 72
+  return 68
+}
+
+function timelineEstimateBucket(row: TimelineRow, viewMode: WebViewMode): TimelineEstimateBucket {
+  if (viewMode === 'stream') return 'stream'
+  if (row.message.role === 'system') return 'system'
+  if (row.message.blocks.some((block) => (
+    block.type === 'image' ||
+    (block.type === 'text' && hasStandaloneDataImage(block.text))
+  ))) return 'media'
+  if (row.message.blocks.some((block) => block.type === 'tool_thread')) return 'tool'
+  return 'text'
+}
+
+function estimateTimelineRowHeight(
+  row: TimelineRow,
+  density: MessageDensity = 'balanced',
+  viewMode: WebViewMode = 'conversation',
+): number {
+  const { message } = row
+  if (viewMode === 'stream') {
+    const textHeight = message.blocks.reduce((total: number, block: ThreadedBlock) => (
+      block.type === 'text' ? total + estimateRenderedTextHeight(block.text) : total
+    ), 0)
+    const toolRowHeight = density === 'dense' ? 26 : density === 'comfortable' ? 36 : 30
+    const toolHeight = message.blocks.reduce((total: number, block: ThreadedBlock) => (
+      block.type === 'tool_thread' ? total + toolRowHeight : total
+    ), 0)
+    const marginBottom = message.role === 'user'
+      ? (density === 'dense' ? 8 : density === 'comfortable' ? 24 : 14)
+      : (density === 'dense' ? 1 : density === 'comfortable' ? 6 : 2)
+    const landmarkHeight = (row.streamTurnHint !== undefined ? 24 : 0) + (row.streamTurnFooterHint ? 22 : 0)
+    return Math.max(36, 20 + textHeight + toolHeight + marginBottom + landmarkHeight)
+  }
+
+  const headerHeight = 82
+  const previewHeight = row.previewBadge ? (row.activityDetail ? 42 : 28) : 0
+  const liveToolsHeight = row.liveToolActivities && row.liveToolActivities.length > 0
+    ? 34 * Math.ceil(row.liveToolActivities.length / 3) + 10
+    : 0
+  const blockGap = Math.max(message.blocks.length - 1, 0) * 8
+  const blockHeight = message.blocks.reduce((total: number, block: ThreadedBlock) => total + estimateThreadedBlockHeight(block), 0)
+  const densityAdjustment = density === 'comfortable' ? 16 : density === 'dense' ? -24 : 0
+  const estimated = headerHeight + previewHeight + liveToolsHeight + blockGap + blockHeight + densityAdjustment
+  return Math.max(estimated, message.role === 'system' ? 120 : ESTIMATED_TIMELINE_ROW_HEIGHT)
+}
+
+function calibratedTimelineRowHeight(
+  row: TimelineRow,
+  rawEstimate: number,
+  viewMode: WebViewMode,
+  calibration: ReadonlyMap<TimelineEstimateBucket | 'all', TimelineEstimateCalibration>,
+): number {
+  const global = calibration.get('all')
+  if (!global || global.sampleCount < TIMELINE_CALIBRATION_MIN_SAMPLES || global.estimatedTotal <= 0) {
+    return rawEstimate
+  }
+
+  const globalRatio = global.measuredTotal / global.estimatedTotal
+  const bucket = calibration.get(timelineEstimateBucket(row, viewMode))
+  const bucketRatio = bucket && bucket.estimatedTotal > 0
+    ? bucket.measuredTotal / bucket.estimatedTotal
+    : globalRatio
+  const bucketConfidence = bucket
+    ? Math.min(bucket.sampleCount / TIMELINE_CALIBRATION_BUCKET_CONFIDENCE, 1)
+    : 0
+  const ratio = Math.max(
+    TIMELINE_CALIBRATION_MIN_RATIO,
+    Math.min(
+      TIMELINE_CALIBRATION_MAX_RATIO,
+      globalRatio + (bucketRatio - globalRatio) * bucketConfidence,
+    ),
+  )
+  return Math.max(48, Math.round(rawEstimate * ratio))
+}
+
+function readResizeObserverHeight(entry: ResizeObserverEntry, fallbackNode: HTMLElement): number {
+  const borderBoxSize = entry.borderBoxSize
+  const firstBorderBox = Array.isArray(borderBoxSize) ? borderBoxSize[0] : borderBoxSize
+  if (firstBorderBox?.blockSize) return firstBorderBox.blockSize
+  if (entry.contentRect.height) return entry.contentRect.height
+  return fallbackNode.getBoundingClientRect().height
+}
+
+// One shared ResizeObserver for every mounted timeline row instead of one
+// observer instance per row. The virtual scroll keeps dozens of rows mounted
+// (visible + overscan), and each native observer carries its own allocation
+// and per-frame delivery bookkeeping — pooling them into a single instance
+// with a per-element callback map cuts that to one. Semantics match the
+// per-row version: observe() still delivers an initial entry per element.
+const timelineRowResizeCallbacks = new Map<Element, (entry: ResizeObserverEntry) => void>()
+let timelineRowResizeObserver: ResizeObserver | null = null
+
+function observeTimelineRowResize(node: Element, onResize: (entry: ResizeObserverEntry) => void): () => void {
+  if (!timelineRowResizeObserver) {
+    timelineRowResizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) timelineRowResizeCallbacks.get(entry.target)?.(entry)
+    })
+  }
+  timelineRowResizeCallbacks.set(node, onResize)
+  timelineRowResizeObserver.observe(node)
+  return () => {
+    timelineRowResizeCallbacks.delete(node)
+    timelineRowResizeObserver?.unobserve(node)
+    if (timelineRowResizeCallbacks.size === 0) {
+      timelineRowResizeObserver?.disconnect()
+      timelineRowResizeObserver = null
+    }
+  }
+}
+
+function messageContentBlocksForTarget(message: SessionMessage): ContentBlock[] {
+  if (message.type === 'system') return []
+  const content = message.message.content
+  if (typeof content === 'string') return content ? [{ type: 'text', text: content }] : []
+  return (content ?? []) as ContentBlock[]
+}
+
+function isToolResultBlock(block: ContentBlock): block is ToolResultBlock {
+  return block.type === 'tool_result' && typeof (block as ToolResultBlock).tool_use_id === 'string'
+}
+
+function resolveTimelineTargetMessageId(
+  targetMessageId: string | null | undefined,
+  messages: SessionMessage[],
+  timelineRows: TimelineRow[],
+): string | null {
+  if (!targetMessageId) return null
+  if (timelineRows.some((row) => row.message.uuid === targetMessageId)) return targetMessageId
+
+  const rawTarget = messages.find((message) => message.uuid === targetMessageId)
+  if (!rawTarget) return targetMessageId
+
+  const targetToolUseIds = messageContentBlocksForTarget(rawTarget)
+    .filter(isToolResultBlock)
+    .map((block) => block.tool_use_id)
+    .filter(Boolean)
+
+  if (targetToolUseIds.length === 0) return targetMessageId
+  const targetToolUseIdSet = new Set(targetToolUseIds)
+  const owningRow = timelineRows.find((row) => row.message.blocks.some((block) => (
+    block.type === 'tool_thread' &&
+    (targetToolUseIdSet.has(block.toolUse.id) || (block.result?.tool_use_id ? targetToolUseIdSet.has(block.result.tool_use_id) : false))
+  )))
+  return owningRow?.message.uuid ?? targetMessageId
+}
+
+function timelineRowSearchText(row: TimelineRow): string {
+  return [
+    row.message.role,
+    row.message.provider,
+    row.message.sessionId,
+    row.previewBadge,
+    row.activityDetail,
+    messageToCopyText(row.message),
+  ].filter(Boolean).join(' ').toLowerCase()
+}
+
+function isAgentsToolOnlyRow(row: TimelineRow): boolean {
+  const blocks = row.message.blocks
+  return blocks.length > 0 && blocks.every((block) => block.type === 'tool_thread')
+}
+
+function rowContainsMessage(row: TimelineRow, messageId: string | null | undefined): boolean {
+  if (!messageId) return false
+  return row.message.uuid === messageId || row.groupedMessageIds?.includes(messageId) === true
+}
+
+function groupAgentsToolRows(rows: TimelineRow[]): TimelineRow[] {
+  const grouped: TimelineRow[] = []
+  let pending: TimelineRow[] = []
+
+  const flush = () => {
+    if (pending.length === 0) return
+    if (pending.length === 1) {
+      grouped.push(pending[0])
+      pending = []
+      return
+    }
+    const first = pending[0]
+    const last = pending[pending.length - 1]
+    const blocks = pending.flatMap((row) => row.message.blocks)
+    grouped.push({
+      key: `agents-tools:${first.key}:${last.key}:${pending.length}`,
+      message: {
+        ...first.message,
+        uuid: first.message.uuid,
+        blocks,
+      },
+      groupedMessageIds: pending.map((row) => row.message.uuid),
+      showSession: pending.some((row) => row.showSession),
+      dimmed: pending.every((row) => row.dimmed),
+      streamTurnFooterHint: last.streamTurnFooterHint,
+    })
+    pending = []
+  }
+
+  for (const row of rows) {
+    if (isAgentsToolOnlyRow(row)) {
+      pending.push(row)
+    } else {
+      flush()
+      grouped.push(row)
+    }
+  }
+  flush()
+  return grouped
+}
+
+function streamMessageTimestampMs(message: ThreadedMessage): number | null {
+  if (!message.timestamp) return null
+  const value = Date.parse(message.timestamp)
+  return Number.isFinite(value) ? value : null
+}
+
+function formatStreamElapsed(elapsedMs: number): string {
+  const totalSeconds = Math.max(1, Math.floor(elapsedMs / 1000))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`
+  if (minutes > 0) return `${minutes}m ${seconds}s`
+  return `${seconds}s`
+}
+
+function decorateStreamTurnLandmarks(rows: TimelineRow[], showLatestFooter: boolean): TimelineRow[] {
+  let turnStartedAt: number | null = null
+  let turnLatestAt: number | null = null
+  let hasPriorTurn = false
+  const decorated = rows.map((row) => {
+    const timestamp = streamMessageTimestampMs(row.message)
+    if (row.message.role === 'user') {
+      const elapsed = turnStartedAt != null && turnLatestAt != null ? turnLatestAt - turnStartedAt : 0
+      const next = hasPriorTurn
+        ? { ...row, streamTurnHint: elapsed >= 1000 ? `Worked for ${formatStreamElapsed(elapsed)}` : '' }
+        : row
+      hasPriorTurn = true
+      turnStartedAt = timestamp
+      turnLatestAt = timestamp
+      return next
+    }
+    if (timestamp != null && (turnLatestAt == null || timestamp > turnLatestAt)) turnLatestAt = timestamp
+    return row
+  })
+
+  if (!showLatestFooter || decorated.length === 0 || turnStartedAt == null || turnLatestAt == null) return decorated
+  const elapsed = turnLatestAt - turnStartedAt
+  const lastIndex = decorated.length - 1
+  const last = decorated[lastIndex]
+  if (!last || last.message.role === 'user' || elapsed < 1000) return decorated
+  const next = decorated.slice()
+  next[lastIndex] = { ...last, streamTurnFooterHint: `Worked for ${formatStreamElapsed(elapsed)}` }
+  return next
+}
+
+function timelineRowMatchesTranscriptFilter(row: TimelineRow, filter: ActiveTranscriptFilter): boolean {
+  switch (filter) {
+    case 'user':
+    case 'assistant':
+    case 'system':
+      return row.message.role === filter
+    case 'tools':
+      return row.message.blocks.some((block) => block.type === 'tool_thread')
+    case 'errors':
+      return row.message.blocks.some((block) => block.type === 'tool_thread' && (block.result?.is_error || !block.result))
+    case 'thinking':
+      return row.message.blocks.some((block) => block.type === 'thinking')
+    case 'media':
+      return row.message.blocks.some((block) => block.type === 'image')
+  }
+}
+
+function timelineRowMatchesTranscriptFilters(row: TimelineRow, filters: ActiveTranscriptFilter[]): boolean {
+  return filters.length === 0 || filters.some((filter) => timelineRowMatchesTranscriptFilter(row, filter))
+}
+
+const TimelineMessageRow = memo(function TimelineMessageRow({
+  row,
+  highlighted,
+  forking,
+  resumeTarget,
+  bookmarked,
+  streamMode,
+  onForkFromMessage,
+  onToggleResume,
+  onToggleBookmark,
+  onReusePrompt,
+  onQuoteMessage,
+  onReplyMessage,
+  onEditFromMessage,
+}: {
+  row: TimelineRow
+  // Per-row interaction state passed as booleans (not baked into the row
+  // object) so a highlight/fork/resume change re-renders only the affected
+  // rows instead of rebuilding the whole rows array + virtual layout.
+  highlighted: boolean
+  forking: boolean
+  resumeTarget: boolean
+  bookmarked: boolean
+  streamMode: boolean
+  onForkFromMessage: (messageId: string) => void
+  onToggleResume: (messageId: string) => void
+  onToggleBookmark: (messageId: string) => void
+  onReusePrompt: (text: string) => void
+  onQuoteMessage: (text: string) => void
+  onReplyMessage: (text: string) => void
+  onEditFromMessage: (messageId: string, text: string) => void
+}) {
+  const [copied, setCopied] = useState(false)
+  // 'missing' is an ordinary outcome, not an error: raw frames are retained
+  // only for recently mapped sessions (see lib/rawFrames.ts).
+  const [rawState, setRawState] = useState<'idle' | 'copied' | 'missing' | 'denied'>('idle')
+  const copyText = useMemo(() => messageToCopyText(row.message), [row.message])
+  const flatTimeline = useSyncExternalStore<ColorTreatment>(subscribeColorTreatment, getCurrentColorTreatment, () => DEFAULT_COLOR_TREATMENT) === 'flat'
+  const canCopy = copyText.length > 0
+  const isUserMessage = row.message.role === 'user'
+  const canReuse = isUserMessage && copyText.length > 0
+  const canEdit = isUserMessage && copyText.length > 0 && !!row.allowEdit
+  const canQuote = !isUserMessage && copyText.length > 0
+  const canReply = copyText.length > 0
+  const canBookmark = !row.message.uuid.startsWith('live-')
+  // The provider's own frame for this message, when the server still holds it.
+  const canCopyRaw = canBookmark && !!row.message.sessionId
+  const showActions = canCopy || canReuse || canQuote || canReply || canEdit || canBookmark || canCopyRaw || (row.showForkControls && (row.allowFork || row.allowResume))
+  const handleBookmark = useCallback(() => {
+    if (!canBookmark) return
+    onToggleBookmark(row.message.uuid)
+  }, [canBookmark, onToggleBookmark, row.message.uuid])
+  const handleCopyRaw = useCallback(() => {
+    const sessionId = row.message.sessionId
+    if (!canCopyRaw || !sessionId) return
+    const url = `/api/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(row.message.uuid)}/raw`
+    void fetch(url)
+      .then(async (res) => {
+        if (res.status === 404) { setRawState('missing'); return }
+        if (!res.ok) { setRawState('denied'); return }
+        const frame = await res.json()
+        await navigator.clipboard.writeText(JSON.stringify(frame, null, 2))
+        setRawState('copied')
+      })
+      .catch(() => setRawState('denied'))
+      .finally(() => { window.setTimeout(() => setRawState('idle'), 1600) })
+  }, [canCopyRaw, row.message.sessionId, row.message.uuid])
+  const handleCopy = useCallback(() => {
+    if (!canCopy) return
+    void navigator.clipboard.writeText(copyText).then(() => {
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1200)
+    }).catch(() => {})
+  }, [canCopy, copyText])
+  const handleReuse = useCallback(() => {
+    if (!canReuse) return
+    onReusePrompt(copyText)
+  }, [canReuse, copyText, onReusePrompt])
+  const handleQuote = useCallback(() => {
+    if (!canQuote) return
+    const selection = typeof window !== 'undefined' ? window.getSelection()?.toString().trim() : ''
+    onQuoteMessage(selection && selection.length > 0 ? selection : copyText)
+  }, [canQuote, copyText, onQuoteMessage])
+  const handleReply = useCallback(() => {
+    if (!canReply) return
+    onReplyMessage(copyText)
+  }, [canReply, copyText, onReplyMessage])
+  const handleEdit = useCallback(() => {
+    if (!canEdit) return
+    onEditFromMessage(row.message.uuid, copyText)
+  }, [canEdit, copyText, onEditFromMessage, row.message.uuid])
+
+  return (
+    <div
+      style={{
+        position: 'relative',
+        opacity: row.dimmed ? 0.92 : 1,
+        borderRadius: streamMode ? 6 : 10,
+        padding: streamMode ? '8px 12px' : undefined,
+        // The cyan ring is the transient nav/target highlight; the amber ring
+        // is the persistent bookmark accent. Both use theme-aware colours so
+        // bookmarks read correctly on every theme. Highlight wins when both.
+        boxShadow: streamMode
+          ? flatTimeline
+            ? highlighted
+              ? '0 0 0 1.5px rgba(56,217,245,0.55)'
+              : bookmarked
+                ? '0 0 0 1.5px color-mix(in srgb, var(--t-bookmark) 60%, transparent)'
+                : 'none'
+            : highlighted
+              ? '0 0 0 1.5px rgba(56,217,245,0.55)'
+              : bookmarked
+                ? '0 0 0 1.5px color-mix(in srgb, var(--t-bookmark) 60%, transparent)'
+                : 'none'
+          : flatTimeline
+            ? highlighted
+              ? '0 0 0 2px rgba(56,217,245,0.55)'
+              : bookmarked
+                ? '0 0 0 1.5px color-mix(in srgb, var(--t-bookmark) 60%, transparent)'
+                : 'none'
+            : highlighted
+              ? '0 0 0 2px rgba(56,217,245,0.55), 0 0 36px rgba(56,217,245,0.18)'
+              : bookmarked
+                ? '0 0 0 1.5px color-mix(in srgb, var(--t-bookmark) 60%, transparent), 0 0 22px color-mix(in srgb, var(--t-bookmark) 14%, transparent)'
+                : 'none',
+        background: streamMode ? 'transparent' : highlighted
+          ? 'rgba(56,217,245,0.06)'
+          : bookmarked
+            ? 'color-mix(in srgb, var(--t-bookmark) 7%, transparent)'
+            : 'transparent',
+        // Only transition compositor-friendly properties (box-shadow, background).
+        // Animating padding would be layout-affecting and re-trigger the per-row
+        // ResizeObserver the virtual scroll relies on for measurement — let
+        // padding changes (streamMode toggles) apply instantly instead.
+        transition: 'box-shadow 180ms ease, background 180ms ease',
+      }}
+    >
+      {bookmarked && !streamMode && (
+        <span
+          className="timeline-row-bookmark-flag"
+          aria-hidden
+          title="Bookmarked"
+        >
+          ★
+        </span>
+      )}
+      {row.previewBadge && !streamMode && (
+        <div style={{
+          display: 'flex',
+          justifyContent: 'flex-end',
+          alignItems: 'center',
+          gap: 8,
+          margin: '0 0 8px 0',
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 10,
+          letterSpacing: '0.05em',
+        }}>
+          {row.activityDetail && (
+            <span style={{
+              color: 'var(--text-3)',
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}>
+              {row.activityDetail}
+            </span>
+          )}
+          <span style={{
+            height: 20,
+            padding: '0 8px',
+            borderRadius: 999,
+            border: row.activityTone === 'syncing' ? '1px solid rgba(234,170,64,0.28)' : '1px solid rgba(56,217,245,0.25)',
+            background: row.activityTone === 'syncing' ? 'rgba(234,170,64,0.09)' : 'rgba(56,217,245,0.08)',
+            color: row.activityTone === 'syncing' ? 'var(--amber, #eaaa40)' : 'var(--cyan)',
+            letterSpacing: '0.06em',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+          }}>
+            <span style={{
+              width: 6,
+              height: 6,
+              borderRadius: '50%',
+              background: row.activityTone === 'syncing' ? 'var(--amber, #eaaa40)' : 'var(--cyan)',
+              boxShadow: flatTimeline ? 'none' : row.activityTone === 'syncing' ? '0 0 6px rgba(234,170,64,0.45)' : '0 0 6px var(--cyan-glow)',
+              animation: row.activityTone === 'syncing' ? undefined : 'pulse 1.2s ease-in-out infinite',
+            }} />
+            {row.previewBadge}
+          </span>
+        </div>
+      )}
+      {row.liveToolActivities && row.liveToolActivities.length > 0 && !streamMode && (
+        <div style={{ margin: '0 0 10px 38px', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {row.liveToolActivities.map((activity) => (
+            <span
+              key={activity.key}
+              style={{
+                height: 22,
+                padding: '0 8px',
+                borderRadius: 999,
+                border: `1px solid ${activity.status === 'running' ? 'rgba(56,217,245,0.25)' : 'rgba(45,212,160,0.22)'}`,
+                background: activity.status === 'running' ? 'rgba(56,217,245,0.08)' : 'rgba(45,212,160,0.08)',
+                color: activity.status === 'running' ? 'var(--cyan)' : 'var(--green)',
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 10,
+                letterSpacing: '0.05em',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+              title={activity.detail ?? activity.label}
+            >
+              <span>{activity.label}</span>
+              <span style={{ color: activity.status === 'running' ? 'var(--cyan)' : 'var(--green)' }}>
+                {activity.status === 'running' ? 'RUNNING' : 'DONE'}
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
+      {streamMode && row.streamTurnHint !== undefined ? (
+        <div className="av-stream-turn-rule">{row.streamTurnHint}</div>
+      ) : null}
+      {showActions && (
+        <div className="timeline-row-actions">
+          {canBookmark && (
+            <button
+              type="button"
+              className={`timeline-row-action av-hover-control timeline-row-action--bookmark${bookmarked ? ' timeline-row-action--bookmark-active' : ''}`}
+              onClick={handleBookmark}
+              title={bookmarked ? 'Remove bookmark' : 'Bookmark this message'}
+            >
+              {bookmarked ? '★ SAVED' : '☆ BOOKMARK'}
+            </button>
+          )}
+          {row.showForkControls && row.allowFork && (
+            <button
+              type="button"
+              className="timeline-row-action av-hover-control timeline-row-action--fork"
+              onClick={() => onForkFromMessage(row.message.providerMessageId ?? row.message.uuid)}
+              disabled={forking}
+            >
+              {forking ? 'FORKING…' : 'FORK HERE'}
+            </button>
+          )}
+          {row.showForkControls && row.allowResume && (
+            <button
+              type="button"
+              className={`timeline-row-action av-hover-control timeline-row-action--resume${resumeTarget ? ' timeline-row-action--resume-active' : ''}`}
+              onClick={() => onToggleResume(row.message.uuid)}
+            >
+              {resumeTarget ? 'RESUME TARGET' : 'RESUME HERE'}
+            </button>
+          )}
+          {canEdit && (
+            <button
+              type="button"
+              className="timeline-row-action av-hover-control timeline-row-action--resume"
+              onClick={handleEdit}
+              title="Edit this prompt and resend — replaces from this point"
+            >
+              EDIT
+            </button>
+          )}
+          {canReuse && (
+            <button
+              type="button"
+              className="timeline-row-action av-hover-control timeline-row-action--copy"
+              onClick={handleReuse}
+              title="Load this prompt into the composer"
+            >
+              REUSE
+            </button>
+          )}
+          {canQuote && (
+            <button
+              type="button"
+              className="timeline-row-action av-hover-control timeline-row-action--copy"
+              onClick={handleQuote}
+              title="Quote selection (or this message) in the composer"
+            >
+              QUOTE
+            </button>
+          )}
+          {canReply && (
+            <button
+              type="button"
+              className="timeline-row-action av-hover-control timeline-row-action--copy"
+              onClick={handleReply}
+              title="Reply to this message in the composer"
+            >
+              REPLY
+            </button>
+          )}
+          {canCopy && (
+            <button
+              type="button"
+              className={`timeline-row-action av-hover-control timeline-row-action--copy${copied ? ' timeline-row-action--copy-active' : ''}`}
+              onClick={handleCopy}
+              title="Copy message text"
+            >
+              {copied ? 'COPIED' : 'COPY'}
+            </button>
+          )}
+          {canCopyRaw && (
+            <button
+              type="button"
+              className="timeline-row-action av-hover-control timeline-row-action--copy"
+              onClick={handleCopyRaw}
+              title="Copy the provider's original frame for this message"
+            >
+              {rawState === 'copied' ? 'COPIED'
+                : rawState === 'missing' ? 'NO FRAME'
+                  : rawState === 'denied' ? 'DENIED'
+                    : 'RAW'}
+            </button>
+          )}
+        </div>
+      )}
+      <MessageItem message={row.message} showSession={row.showSession} />
+      {streamMode && row.streamTurnFooterHint ? (
+        <div className="av-stream-turn-footer">{row.streamTurnFooterHint}</div>
+      ) : null}
+    </div>
+  )
+})
+
+// Pinned todo list — mirrors opencode-web's session-level todos widget.
+// Renders status icons and counts inline so users see live progress as
+// the agent flips each item from `pending` → `in_progress` → `completed`.
+const OpenCodeTodosBanner = memo(function OpenCodeTodosBanner({ todos }: { todos: OpenCodeTodo[] }) {
+  const [collapsed, setCollapsed] = useState(false)
+  const completedCount = todos.filter((todo) => todo.status === 'completed').length
+  const inProgress = todos.find((todo) => todo.status === 'in_progress')
+
+  return (
+    <div
+      style={{
+        borderBottom: '1px solid var(--border)',
+        background: 'rgba(56,217,245,0.04)',
+        padding: '8px 28px',
+        flexShrink: 0,
+        fontFamily: "'IBM Plex Mono', monospace",
+        fontSize: 11,
+      }}
+    >
+      <button
+        type="button"
+        className="av-hover-control"
+        onClick={() => setCollapsed((value) => !value)}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          background: 'transparent',
+          border: 0,
+          padding: 0,
+          color: 'var(--text-2)',
+          cursor: 'pointer',
+          width: '100%',
+          textAlign: 'left',
+        }}
+      >
+        <span
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 18,
+            height: 18,
+            borderRadius: 4,
+            background: 'rgba(56,217,245,0.12)',
+            color: 'var(--cyan)',
+            fontSize: 10,
+            letterSpacing: '0.06em',
+          }}
+          aria-hidden="true"
+        >
+          {collapsed ? '+' : '−'}
+        </span>
+        <span style={{ fontWeight: 600, letterSpacing: '0.08em', color: 'var(--cyan)' }}>TODOS</span>
+        <span style={{ color: 'var(--text-3)' }}>
+          {completedCount}/{todos.length}
+          {inProgress ? ` · ${inProgress.content}` : ''}
+        </span>
+      </button>
+      {!collapsed && (
+        <ul style={{ listStyle: 'none', margin: '8px 0 0 28px', padding: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {todos.map((todo) => (
+            <li
+              key={todo.id}
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 8,
+                color: todo.status === 'completed' ? 'var(--text-3)' : 'var(--text)',
+                textDecoration: todo.status === 'completed' ? 'line-through' : 'none',
+                opacity: todo.status === 'cancelled' ? 0.6 : 1,
+              }}
+            >
+              <span
+                aria-hidden="true"
+                style={{
+                  flexShrink: 0,
+                  width: 12,
+                  marginTop: 1,
+                  color: todoStatusColor(todo.status),
+                }}
+              >
+                {todoStatusGlyph(todo.status)}
+              </span>
+              <span style={{ flex: 1 }}>{todo.content}</span>
+              {todo.priority && todo.priority !== 'medium' && (
+                <span
+                  style={{
+                    fontSize: 11,
+                    letterSpacing: '0.02em',
+                    color: 'var(--text-3)',
+                    textTransform: 'capitalize',
+                    flexShrink: 0,
+                  }}
+                >
+                  {todo.priority}
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+})
+
+function todoStatusGlyph(status: string): string {
+  if (status === 'completed') return '✓'
+  if (status === 'in_progress') return '●'
+  if (status === 'cancelled') return '✗'
+  return '○'
+}
+
+function todoStatusColor(status: string): string {
+  if (status === 'completed') return 'var(--green)'
+  if (status === 'in_progress') return 'var(--cyan)'
+  if (status === 'cancelled') return 'var(--text-3)'
+  return 'var(--text-3)'
+}
+
+const VirtualTimelineRow = memo(function VirtualTimelineRow({
+  row,
+  top,
+  isLast,
+  highlighted,
+  forking,
+  resumeTarget,
+  bookmarked,
+  streamMode,
+  placeholder,
+  placeholderHeight,
+  onMeasure,
+  onLastRowRef,
+  onForkFromMessage,
+  onToggleResume,
+  onToggleBookmark,
+  onReusePrompt,
+  onQuoteMessage,
+  onReplyMessage,
+  onEditFromMessage,
+}: {
+  row: TimelineRow
+  top: number
+  isLast: boolean
+  highlighted: boolean
+  forking: boolean
+  resumeTarget: boolean
+  bookmarked: boolean
+  streamMode: boolean
+  // Fast-scroll placeholder: render a cheap skeleton at the layout height
+  // instead of the full message card, and skip measurement so the skeleton
+  // can't poison the measured-height cache. placeholderHeight is 0 (stable)
+  // when placeholder is false.
+  placeholder: boolean
+  placeholderHeight: number
+  onMeasure: (key: string, height: number) => void
+  onLastRowRef: (node: HTMLDivElement | null) => void
+  onForkFromMessage: (messageId: string) => void
+  onToggleResume: (messageId: string) => void
+  onToggleBookmark: (messageId: string) => void
+  onReusePrompt: (text: string) => void
+  onQuoteMessage: (text: string) => void
+  onReplyMessage: (text: string) => void
+  onEditFromMessage: (messageId: string, text: string) => void
+}) {
+  const rowRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (placeholder) return
+    const node = rowRef.current
+    if (!node) return
+
+    onMeasure(row.key, node.getBoundingClientRect().height)
+
+    return observeTimelineRowResize(node, (entry) => {
+      onMeasure(row.key, readResizeObserverHeight(entry, node))
+    })
+  }, [onMeasure, placeholder, row.key])
+
+  useEffect(() => {
+    if (!isLast) return
+    onLastRowRef(rowRef.current)
+    return () => onLastRowRef(null)
+  }, [isLast, onLastRowRef, row.key])
+
+  return (
+    <div
+      className="timeline-row"
+      ref={rowRef}
+      data-message-id={row.message.uuid}
+      data-timeline-key={row.key}
+      style={{
+        position: 'absolute',
+        top: 0,
+        transform: `translateY(${top}px)`,
+        left: 0,
+        right: 0,
+      }}
+    >
+      {placeholder ? (
+        // Explicit height matches the layout's height for this row exactly, so
+        // swapping placeholder ↔ full card never shifts surrounding rows.
+        <div style={{ height: placeholderHeight, padding: '6px 0', boxSizing: 'border-box' }}>
+          <div
+            style={{
+              height: '100%',
+              borderRadius: 8,
+              border: '1px solid rgba(128,128,128,0.10)',
+              background: 'rgba(128,128,128,0.05)',
+            }}
+          />
+        </div>
+      ) : (
+        <TimelineMessageRow
+          row={row}
+          highlighted={highlighted}
+          forking={forking}
+          resumeTarget={resumeTarget}
+          bookmarked={bookmarked}
+          streamMode={streamMode}
+          onForkFromMessage={onForkFromMessage}
+          onToggleResume={onToggleResume}
+          onToggleBookmark={onToggleBookmark}
+          onReusePrompt={onReusePrompt}
+          onQuoteMessage={onQuoteMessage}
+          onReplyMessage={onReplyMessage}
+          onEditFromMessage={onEditFromMessage}
+        />
+      )}
+    </div>
+  )
+})
+
+// Interactive answer surface for a Claude AskUserQuestion prompt. Collects a
+// selection per question (single or multi) and submits the answers map back to
+// the running turn. Lives in the composer's pending-approval area.
+// Plan-approval surface for Claude's ExitPlanMode. Shows the plan + the
+// prompt-based permissions it needs, and lets the user approve (exiting plan
+// mode into accept-edits or default) or keep planning.
+function PlanApprovalCard({
+  permission,
+  busy,
+  onApprove,
+  onReject,
+}: {
+  permission: PendingPermission
+  busy: boolean
+  onApprove: (mode: 'acceptEdits' | 'default') => void
+  onReject: () => void
+}) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        padding: '10px 11px',
+        borderRadius: 6,
+        border: '1px solid rgba(45,212,160,0.30)',
+        background: 'rgba(45,212,160,0.06)',
+      }}
+    >
+      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--green)', letterSpacing: '0.06em' }}>
+        ● CLAUDE FINISHED PLANNING
+      </div>
+      {permission.plan && (
+        <div style={{
+          maxHeight: 260,
+          overflow: 'auto',
+          padding: '8px 10px',
+          borderRadius: 4,
+          background: 'var(--bg)',
+          border: '1px solid var(--border)',
+          fontFamily: "'IBM Plex Sans', sans-serif",
+          fontSize: 12,
+          lineHeight: 1.55,
+          color: 'var(--text-2)',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+        }}>
+          {permission.plan}
+        </div>
+      )}
+      {permission.allowedPrompts && permission.allowedPrompts.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.06em' }}>
+            APPROVING ALLOWS
+          </div>
+          {permission.allowedPrompts.map((p, i) => (
+            <div key={i} style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-2)' }}>
+              · {p}
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+        <Button
+          type="button"
+          onClick={onReject}
+          disabled={busy}
+          variant="outline"
+          size="sm"
+          style={{
+            height: 26, padding: '0 10px', borderRadius: 4,
+            border: '1px solid rgba(234,170,64,0.30)',
+            background: 'rgba(234,170,64,0.08)',
+            color: 'var(--amber, #eaaa40)',
+            fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.06em',
+            cursor: busy ? 'not-allowed' : 'pointer',
+          }}
+        >
+          KEEP PLANNING
+        </Button>
+        <Button
+          type="button"
+          onClick={() => onApprove('default')}
+          disabled={busy}
+          variant="outline"
+          size="sm"
+          style={{
+            height: 26, padding: '0 10px', borderRadius: 4,
+            border: '1px solid rgba(45,212,160,0.30)',
+            background: 'rgba(45,212,160,0.08)',
+            color: 'var(--green)',
+            fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.06em',
+            cursor: busy ? 'not-allowed' : 'pointer',
+          }}
+        >
+          APPROVE · ASK PER TOOL
+        </Button>
+        <Button
+          type="button"
+          onClick={() => onApprove('acceptEdits')}
+          disabled={busy}
+          variant="outline"
+          size="sm"
+          style={{
+            height: 26, padding: '0 12px', borderRadius: 4,
+            border: '1px solid rgba(45,212,160,0.45)',
+            background: 'rgba(45,212,160,0.16)',
+            color: 'var(--green)',
+            fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.06em',
+            cursor: busy ? 'not-allowed' : 'pointer',
+            opacity: busy ? 0.55 : 1,
+          }}
+        >
+          {busy ? 'Starting…' : 'Approve · auto-accept edits'}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function AskUserQuestionPicker({
+  permission,
+  busy,
+  onSubmit,
+  onCancel,
+}: {
+  permission: PendingPermission
+  busy: boolean
+  onSubmit: (answers: PendingQuestionAnswers) => void
+  onCancel: () => void
+}) {
+  const questions = permission.questions ?? []
+  const [selections, setSelections] = useState<Record<number, string[]>>({})
+  const [freeformAnswers, setFreeformAnswers] = useState<Record<number, string>>({})
+  const [openPreview, setOpenPreview] = useState<string | null>(null)
+  const flat = useSyncExternalStore<ColorTreatment>(subscribeColorTreatment, getCurrentColorTreatment, () => DEFAULT_COLOR_TREATMENT) === 'flat'
+
+  const toggle = (qi: number, multiSelect: boolean, label: string) => {
+    if (!multiSelect) {
+      setFreeformAnswers((freeform) => freeform[qi] ? { ...freeform, [qi]: '' } : freeform)
+    }
+    setSelections((prev) => {
+      const current = prev[qi] ?? []
+      let next: string[]
+      if (multiSelect) {
+        next = current.includes(label) ? current.filter((l) => l !== label) : [...current, label]
+      } else {
+        next = current.length === 1 && current[0] === label ? current : [label]
+      }
+      return { ...prev, [qi]: next }
+    })
+  }
+
+  let allAnswered = questions.length > 0
+  for (let qi = 0; qi < questions.length; qi += 1) {
+    if (questions[qi]?.required !== false && (selections[qi]?.length ?? 0) === 0 && !freeformAnswers[qi]?.trim()) {
+      allAnswered = false
+      break
+    }
+  }
+
+  const submit = () => {
+    if (!allAnswered || busy) return
+    const answers: PendingQuestionAnswers = {}
+    questions.forEach((q, qi) => {
+      const selected = selections[qi] ?? []
+      const freeform = freeformAnswers[qi]?.trim()
+      const values = q.multiSelect && freeform
+        ? [...selected, freeform]
+        : freeform
+        ? [freeform]
+        : selected
+      if (values.length > 0) answers[q.id ?? q.question] = values
+    })
+    onSubmit(answers)
+  }
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+        padding: '10px 11px',
+        borderRadius: 6,
+        border: '1px solid rgba(139,128,240,0.30)',
+        background: 'rgba(139,128,240,0.06)',
+      }}
+    >
+      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--violet)', letterSpacing: '0.06em' }}>
+        {questions.length === 1
+          ? `${getAssistantDisplayName(permission.provider ?? 'claude')} asks`
+          : `${getAssistantDisplayName(permission.provider ?? 'claude')} asks · ${questions.length} questions`}
+      </div>
+      {questions.map((q, qi) => {
+        const selected = selections[qi] ?? []
+        return (
+          <div key={qi} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: "'IBM Plex Sans', sans-serif", fontSize: 13, fontWeight: 500, color: 'var(--text)' }}>
+              {q.header && (
+                <span style={{
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 10, fontWeight: 600, letterSpacing: '0.06em',
+                  color: 'var(--text-3)',
+                  background: 'var(--surface-3)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 3,
+                  padding: '1px 5px',
+                  flexShrink: 0,
+                }}>
+                  {q.header}
+                </span>
+              )}
+              <span>{q.question}{q.multiSelect ? <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--text-3)', fontWeight: 400 }}>(select all that apply)</span> : null}</span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {q.options.map((opt, oi) => {
+                const optionValue = opt.value ?? opt.label
+                const isSelected = selected.includes(optionValue)
+                const previewKey = `${qi}:${oi}`
+                const previewOpen = openPreview === previewKey
+                return (
+                  <div key={oi}>
+                    <div style={{ display: 'flex', alignItems: 'stretch', gap: 4 }}>
+                    <button
+                      type="button"
+                      className="av-hover-control"
+                      onClick={() => toggle(qi, q.multiSelect === true, optionValue)}
+                      disabled={busy}
+                      style={{
+                        flex: 1,
+                        textAlign: 'left',
+                        display: 'flex', alignItems: 'flex-start', gap: 8,
+                        padding: '6px 10px',
+                        borderRadius: 4,
+                        border: `1px solid ${isSelected ? 'rgba(139,128,240,0.55)' : 'var(--border)'}`,
+                        background: isSelected
+                          ? flat
+                            ? 'rgba(139,128,240,0.16)'
+                            : 'linear-gradient(to right, rgba(139,128,240,0.16), rgba(139,128,240,0.05))'
+                          : 'var(--surface)',
+                        cursor: busy ? 'not-allowed' : 'pointer',
+                        transition: 'border-color 0.14s ease, background 0.14s ease',
+                      }}
+                    >
+                      <span style={{
+                        width: 14, height: 14,
+                        borderRadius: q.multiSelect ? 3 : '50%',
+                        border: `1.5px solid ${isSelected ? 'var(--violet)' : 'var(--border-2)'}`,
+                        background: isSelected ? 'var(--violet)' : 'transparent',
+                        flexShrink: 0,
+                        marginTop: 2,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      }}>
+                        {isSelected && <span style={{ fontSize: 10, color: 'var(--bg)', lineHeight: 1, fontWeight: 700 }}>✓</span>}
+                      </span>
+                      <span style={{ flex: 1, minWidth: 0 }}>
+                        <span style={{
+                          display: 'flex', alignItems: 'center', gap: 6,
+                          fontFamily: "'IBM Plex Sans', sans-serif",
+                          fontSize: 13, fontWeight: isSelected ? 600 : 400,
+                          color: isSelected ? 'var(--text)' : 'var(--text-2)',
+                        }}>
+                          {opt.label}
+                        </span>
+                        {opt.description && (
+                          <span style={{
+                            display: 'block',
+                            fontFamily: "'IBM Plex Sans', sans-serif",
+                            fontSize: 11, color: 'var(--text-3)',
+                            marginTop: 2, lineHeight: 1.5,
+                          }}>
+                            {opt.description}
+                          </span>
+                        )}
+                      </span>
+                    </button>
+                    {opt.preview && (
+                      <button
+                        type="button"
+                        className="av-hover-control"
+                        aria-label={`${previewOpen ? 'Hide' : 'Show'} preview for ${opt.label}`}
+                        aria-expanded={previewOpen}
+                        onClick={() => setOpenPreview(previewOpen ? null : previewKey)}
+                        disabled={busy}
+                        style={{
+                          fontFamily: "'IBM Plex Mono', monospace",
+                          fontSize: 10,
+                          color: 'var(--text-3)',
+                          background: 'var(--surface)',
+                          border: '1px solid var(--border)',
+                          borderRadius: 4,
+                          padding: '0 8px',
+                          cursor: busy ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        {previewOpen ? '▲ preview' : '▼ preview'}
+                      </button>
+                    )}
+                    </div>
+                    {opt.preview && previewOpen && (
+                      <pre style={{
+                        margin: '2px 0 0',
+                        padding: '8px 12px',
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 11, lineHeight: 1.6,
+                        color: 'var(--text-2)',
+                        background: 'var(--bg)',
+                        border: '1px solid var(--border)',
+                        borderTop: 'none',
+                        borderRadius: '0 0 4px 4px',
+                        overflowX: 'auto',
+                        whiteSpace: 'pre',
+                      }}>
+                        {opt.preview}
+                      </pre>
+                    )}
+                  </div>
+                )
+              })}
+              {q.allowFreeform && (
+                <Input
+                  type={q.secret ? 'password' : 'text'}
+                  value={freeformAnswers[qi] ?? ''}
+                  onChange={(event) => {
+                    const value = event.target.value
+                    setFreeformAnswers((prev) => ({ ...prev, [qi]: value }))
+                    if (!q.multiSelect && value) {
+                      setSelections((prev) => ({ ...prev, [qi]: [] }))
+                    }
+                  }}
+                  disabled={busy}
+                  aria-label={`Custom answer for ${q.question}`}
+                  placeholder={q.secret ? 'Enter a private answer…' : 'Other — type a custom answer…'}
+                  autoComplete="off"
+                  style={{
+                    height: 32,
+                    borderColor: freeformAnswers[qi]?.trim() ? 'rgba(139,128,240,0.55)' : 'var(--border)',
+                    background: 'var(--surface)',
+                    fontFamily: q.secret ? "'IBM Plex Mono', monospace" : "'IBM Plex Sans', sans-serif",
+                    fontSize: 12,
+                  }}
+                />
+              )}
+            </div>
+          </div>
+        )
+      })}
+      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+        <Button
+          type="button"
+          onClick={onCancel}
+          disabled={busy}
+          variant="outline"
+          size="sm"
+          style={{
+            height: 26, padding: '0 10px', borderRadius: 4,
+            border: '1px solid rgba(248,113,113,0.24)',
+            background: 'rgba(248,113,113,0.08)',
+            color: 'var(--red, #f87171)',
+            fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.06em',
+            cursor: busy ? 'not-allowed' : 'pointer',
+          }}
+        >
+          SKIP
+        </Button>
+        <Button
+          type="button"
+          onClick={submit}
+          disabled={!allAnswered || busy}
+          variant="outline"
+          size="sm"
+          style={{
+            height: 26, padding: '0 12px', borderRadius: 4,
+            border: '1px solid rgba(139,128,240,0.40)',
+            background: 'rgba(139,128,240,0.14)',
+            color: 'var(--violet)',
+            fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.06em',
+            cursor: (!allAnswered || busy) ? 'not-allowed' : 'pointer',
+            opacity: (!allAnswered || busy) ? 0.55 : 1,
+          }}
+        >
+          {busy ? 'SENDING…' : 'SUBMIT'}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function MessageViewInner({
+  messages,
+  loading,
+  session,
+  targetMessageId,
+  targetMessageRequestId = 0,
+  projectView,
+  onFork,
+  onDelete,
+  openTabs,
+  selectedTabId,
+  onSelectTab,
+  onCloseTab,
+  onOpenSession,
+  taskPanelOpenRequest = 0,
+  promptLibraryOpenRequest = 0,
+  channelBridgeOpenRequest = 0,
+  channelBridgeRouteToggleRequest = 0,
+  onChannelBridgeRoutingChange,
+  ideBridgeOpenRequest = 0,
+  ideBridgeRouteToggleRequest = 0,
+  onIdeBridgeRoutingChange,
+  composerInsertRequest,
+  onComposerInsertConsumed,
+  openCodeTodos,
+  codexPlan,
+  codexExternalWriter,
+  onOpenGit,
+  maximized = false,
+  onToggleMaximized,
+  onEnterFullscreen,
+  rightPanelOpen,
+  onToggleRightPanel,
+}: Props) {
   const [inputText, setInputText] = useState('')
   const [sendState, setSendState] = useState<SendState>('idle')
   const [sendError, setSendError] = useState<string | null>(null)
+  const [livePromptSuggestion, setLivePromptSuggestion] = useState<string | null>(null)
+  const [liveStatus, setLiveStatus] = useState<'requesting' | 'compacting' | 'retrying' | null>(null)
+  const [taskBudgetTokens, setTaskBudgetTokens] = useState<number | null>(null)
+  const [enableWorkflow, setEnableWorkflow] = useState(false)
+  const [liveSubagentText, setLiveSubagentText] = useState<Record<string, string>>({})
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null)
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null)
+  const [composerGitSummary, setComposerGitSummary] = useState<GitSummary | null>(null)
+  const [branchSwitcherOpen, setBranchSwitcherOpen] = useState(false)
   const [availableModels, setAvailableModels] = useState<SessionModelInfo[]>([])
+  const [modelsLoading, setModelsLoading] = useState(false)
   const [selectedModel, setSelectedModel] = useState('')
+  const [selectedEffort, setSelectedEffort] = useState<'auto' | ReasoningEffortLevel>('auto')
+  // null means "not known yet", not "default". A cold Copilot session answers
+  // its model read from the event journal rather than starting its runtime
+  // (lib/adapters/copilot.ts), and the journal does not record the context
+  // tier — so the composer must not send a tier it never learned, or the first
+  // send would quietly downgrade a long-context session to default.
+  const [selectedCopilotContextTier, setSelectedCopilotContextTier] = useState<CopilotContextTier | null>(null)
+  const [composerOptions, setComposerOptions] = useState<SessionComposerOptions>({})
+  const [selectedAgent, setSelectedAgent] = useState('')
+  const [selectedCopilotMode, setSelectedCopilotMode] = useState('interactive')
+  // Claude `/permissions` modes — passed through to body.permissionMode on send.
+  const [selectedPermissionMode, setSelectedPermissionMode] = useState<'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'>('default')
+  // Codex `/approvals` policy — passed through to body.approvalPolicy on send.
+  // 'auto' leaves the app-server's configured default untouched.
+  const [selectedCodexApproval, setSelectedCodexApproval] = useState<'auto' | 'untrusted' | 'on-request' | 'never'>('auto')
+  // Mirrors the CLI "queue next prompt while streaming" behavior. When a send
+  // fires while one is in flight, the draft is captured here and flushed by an
+  // effect once the active turn finishes.
+  // FIFO backlog of follow-up prompts typed while a turn is in flight. Native
+  // CLIs queue an arbitrary number of follow-ups; a single overwritten slot
+  // silently dropped all but the most recent draft.
+  const [queuedSends, setQueuedSends] = useState<QueuedWebSend[]>([])
+  const queuedSendsRef = useRef<QueuedWebSend[]>([])
+  const [composerQueueStorageReady, setComposerQueueStorageReady] = useState(false)
+  const [composerQueueDurability, setComposerQueueDurability] = useState<WebComposerQueueDurability>('saving')
+  const composerQueueCommitCounterRef = useRef(0)
+  const composerQueueClaimInFlightRef = useRef(new Set<string>())
+  const composerQueueMountedRef = useRef(false)
+  // Queue mutations are durability-sensitive: update the transient ref and
+  // localStorage in the originating event before yielding back to React. An
+  // effect-only write leaves a small page-close window where the newest queue
+  // state has rendered but is neither in the ref nor on disk yet.
+  const commitQueuedSends = useCallback((next: QueuedWebSend[]) => {
+    queuedSendsRef.current = next
+    setQueuedSends(next)
+    composerQueueCommitCounterRef.current += 1
+    const commitNumber = composerQueueCommitCounterRef.current
+    const commit = getWebComposerQueueStore().commit(next)
+    setComposerQueueDurability(commit.durability)
+    void commit.settled.then((durability) => {
+      if (composerQueueCommitCounterRef.current === commitNumber) setComposerQueueDurability(durability)
+    })
+  }, [])
+  useEffect(() => {
+    let cancelled = false
+    composerQueueMountedRef.current = true
+    const store = getWebComposerQueueStore()
+    const sync = store.hydrateSync()
+    queuedSendsRef.current = sync.entries
+    setQueuedSends(sync.entries)
+    setComposerQueueDurability(sync.durability)
+    void store.hydrateAsync().then((restored) => {
+      if (cancelled) return
+      if (restored) {
+        queuedSendsRef.current = restored.entries
+        setQueuedSends(restored.entries)
+        setComposerQueueDurability(restored.durability)
+      }
+      setComposerQueueStorageReady(true)
+    })
+    return () => {
+      cancelled = true
+      composerQueueMountedRef.current = false
+    }
+  }, [])
+  const composerQueueTargetKey = session
+    ? `${session.provider ?? 'claude'}:${session.sessionId}`
+    : null
+  const composerQueueTargetKeyRef = useRef(composerQueueTargetKey)
+  useLayoutEffect(() => {
+    composerQueueTargetKeyRef.current = composerQueueTargetKey
+  }, [composerQueueTargetKey])
+  const activeQueuedSends = useMemo(
+    () => selectComposerQueueTarget(queuedSends, composerQueueTargetKey),
+    [composerQueueTargetKey, queuedSends],
+  )
+  // Last message delivered INTO the running turn via native steering — shown
+  // in the composer status line while the turn is still streaming.
+  const [steeredNotice, setSteeredNotice] = useState<string | null>(null)
+  const [attachments, setAttachments] = useState<SendAttachment[]>([])
+  const [attachmentType, setAttachmentType] = useState<SendAttachment['type']>('file')
+  const [attachmentPath, setAttachmentPath] = useState('')
+  const [attachmentPanelOpen, setAttachmentPanelOpen] = useState(false)
+  const [failedSend, setFailedSend] = useState<FailedSend | null>(null)
   const [rewindTargetId, setRewindTargetId] = useState('')
   const [rollbackTurns, setRollbackTurns] = useState(1)
   const [resumeFromMessageId, setResumeFromMessageId] = useState<string | null>(null)
@@ -443,51 +3093,890 @@ export default function MessageView({ messages, loading, session, projectView, o
   const [forking, setForking] = useState(false)
   const [forkingMessageId, setForkingMessageId] = useState<string | null>(null)
   const [showDiagnostics, setShowDiagnostics] = useState(false)
+  const [preferencesHydrated, setPreferencesHydrated] = useState(false)
+  const [showVisualizer, setShowVisualizer] = useState(false)
+  useEffect(() => {
+    if (!preferencesHydrated) return
+    writeLocalStorageValue('agentViewer:messageVisualizer', showVisualizer ? 'true' : 'false')
+  }, [preferencesHydrated, showVisualizer])
+  const [showReviewMode, setShowReviewMode] = useState(false)
+  useEffect(() => {
+    if (!preferencesHydrated) return
+    writeLocalStorageValue('agentViewer:diffReviewMode', showReviewMode ? 'true' : 'false')
+  }, [preferencesHydrated, showReviewMode])
+  const [transcriptFilters, setTranscriptFilters] = useState<ActiveTranscriptFilter[]>([])
+  const [transcriptSearch, setTranscriptSearch] = useState('')
+  const deferredTranscriptSearch = useDeferredValue(transcriptSearch)
+  // Bookmarked message uuids for the active session (local-only, mirrored via
+  // /api/sessions/[id]/bookmarks). bookmarkIdsRef keeps the toggle callback
+  // stable without re-creating it on every bookmark change.
+  const [bookmarkIds, setBookmarkIds] = useState<Set<string>>(() => new Set())
+  const bookmarkIdsRef = useRef<Set<string>>(bookmarkIds)
+  useLayoutEffect(() => {
+    bookmarkIdsRef.current = bookmarkIds
+  }, [bookmarkIds])
+  const [bookmarksOnly, setBookmarksOnly] = useState(false)
+  const [viewMode, setViewMode] = useState<WebViewMode>('conversation')
+  useEffect(() => {
+    if (!preferencesHydrated) return
+    writeLocalStorageValue('agentViewer:viewMode', viewMode)
+    rowHeightsRef.current.clear()
+    timelineEstimateCalibrationRef.current.clear()
+    timelineEstimateSamplesRef.current.clear()
+    timelineEstimateCalibrationFrozenRef.current = false
+    setRowMeasurementVersion((version) => version + 1)
+    setPersistedMeasurementVersion((version) => version + 1)
+  }, [preferencesHydrated, viewMode])
+  const showTools = viewMode === 'conversation' || viewMode === 'full' || viewMode === 'stream' || viewMode === 'agents'
+  const [density, setDensity] = useState<MessageDensity>('balanced')
+  useEffect(() => {
+    if (!preferencesHydrated) return
+    writeLocalStorageValue('agentViewer:density', density)
+    rowHeightsRef.current.clear()
+    timelineEstimateCalibrationRef.current.clear()
+    timelineEstimateSamplesRef.current.clear()
+    timelineEstimateCalibrationFrozenRef.current = false
+    setRowMeasurementVersion((version) => version + 1)
+    setPersistedMeasurementVersion((version) => version + 1)
+  }, [density, preferencesHydrated])
+  // Document-level preference (applies via [data-color-treatment] CSS in
+  // globals.css, not component state) — same external-store pattern as
+  // RenderFontToggle, just read inline here instead of a separate popover.
+  const colorTreatment = useSyncExternalStore<ColorTreatment>(
+    subscribeColorTreatment,
+    getCurrentColorTreatment,
+    () => DEFAULT_COLOR_TREATMENT,
+  )
+  const [timelineWidth, setTimelineWidth] = useState<'centered' | 'full'>('centered')
+  useEffect(() => {
+    if (!preferencesHydrated) return
+    writeLocalStorageValue('agentViewer:timelineWidth', timelineWidth)
+    // Width changes rewrap every row: measured heights are stale.
+    rowHeightsRef.current.clear()
+    timelineEstimateCalibrationRef.current.clear()
+    timelineEstimateSamplesRef.current.clear()
+    timelineEstimateCalibrationFrozenRef.current = false
+    setRowMeasurementVersion((version) => version + 1)
+    setPersistedMeasurementVersion((version) => version + 1)
+  }, [preferencesHydrated, timelineWidth])
+  const [diffStyle, setDiffStyle] = useState<PierreDiffStyle>('stacked')
+  useEffect(() => {
+    if (!preferencesHydrated) return
+    writeLocalStorageValue('agentViewer:diffStyle', diffStyle)
+  }, [diffStyle, preferencesHydrated])
+  const [diffOptions, setDiffOptions] = useState<DiffOptions>(DEFAULT_DIFF_OPTIONS)
+  useEffect(() => {
+    if (!preferencesHydrated) return
+    writeLocalStorageValue('agentViewer:diffChangeStyle', diffOptions.changeStyle)
+    writeLocalStorageValue('agentViewer:diffInlineStyle', diffOptions.inlineDiffStyle)
+    writeLocalStorageValue('agentViewer:diffShowBackgrounds', String(diffOptions.showBackgrounds))
+    writeLocalStorageValue('agentViewer:diffWrap', String(diffOptions.wrap))
+    writeLocalStorageValue('agentViewer:diffShowLineNumbers', String(diffOptions.showLineNumbers))
+    writeLocalStorageValue('agentViewer:diffShowHunkHeaders', String(diffOptions.showHunkHeaders))
+  }, [diffOptions, preferencesHydrated])
+  const [composerCollapsed, setComposerCollapsed] = useState(false)
+  useEffect(() => {
+    const storedViewMode = readLocalStorageValue('agentViewer:viewMode')
+    setShowVisualizer(readLocalStorageValue('agentViewer:messageVisualizer') === 'true')
+    setShowReviewMode(readLocalStorageValue('agentViewer:diffReviewMode') === 'true')
+    if (storedViewMode === 'full' || storedViewMode === 'continue' || storedViewMode === 'stream' || storedViewMode === 'agents') {
+      setViewMode(storedViewMode)
+    } else if (readLocalStorageValue('agentViewer:showTools') === 'false') {
+      setViewMode('continue')
+    }
+    const storedDensity = readLocalStorageValue('agentViewer:density')
+    if (storedDensity === 'comfortable' || storedDensity === 'dense') setDensity(storedDensity)
+    setTimelineWidth(readLocalStorageValue('agentViewer:timelineWidth') === 'full' ? 'full' : 'centered')
+    setDiffStyle(readLocalStorageValue('agentViewer:diffStyle') === 'split' ? 'split' : 'stacked')
+    const changeStyle = readLocalStorageValue('agentViewer:diffChangeStyle')
+    const inlineDiffStyle = readLocalStorageValue('agentViewer:diffInlineStyle')
+    const showBackgrounds = readLocalStorageValue('agentViewer:diffShowBackgrounds')
+    const wrap = readLocalStorageValue('agentViewer:diffWrap')
+    const showLineNumbers = readLocalStorageValue('agentViewer:diffShowLineNumbers')
+    const showHunkHeaders = readLocalStorageValue('agentViewer:diffShowHunkHeaders')
+    setDiffOptions({
+      changeStyle: changeStyle === 'bars' || changeStyle === 'classic' || changeStyle === 'none' ? changeStyle : DEFAULT_DIFF_OPTIONS.changeStyle,
+      inlineDiffStyle: inlineDiffStyle === 'word-alt' || inlineDiffStyle === 'word' || inlineDiffStyle === 'char' || inlineDiffStyle === 'none' ? inlineDiffStyle : DEFAULT_DIFF_OPTIONS.inlineDiffStyle,
+      showBackgrounds: showBackgrounds === null ? DEFAULT_DIFF_OPTIONS.showBackgrounds : showBackgrounds === 'true',
+      wrap: wrap === null ? DEFAULT_DIFF_OPTIONS.wrap : wrap === 'true',
+      showLineNumbers: showLineNumbers === null ? DEFAULT_DIFF_OPTIONS.showLineNumbers : showLineNumbers === 'true',
+      showHunkHeaders: showHunkHeaders === null ? DEFAULT_DIFF_OPTIONS.showHunkHeaders : showHunkHeaders === 'true',
+    })
+    setComposerCollapsed(readLocalStorageValue('agentViewer:composerCollapsed') === 'true')
+    setPreferencesHydrated(true)
+  }, [])
+  useEffect(() => {
+    if (!preferencesHydrated) return
+    writeLocalStorageValue('agentViewer:composerCollapsed', composerCollapsed ? 'true' : 'false')
+  }, [composerCollapsed, preferencesHydrated])
+  const [analyticsOpen, setAnalyticsOpen] = useState(false)
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
   const [diagnosticSections, setDiagnosticSections] = useState<SessionDiagnosticSection[]>([])
+  const [exporting, setExporting] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [cliPopoverOpen, setCliPopoverOpen] = useState(false)
+  const cliPopoverRef = useRef<HTMLDivElement>(null)
+  const [viewDropdownOpen, setViewDropdownOpen] = useState(false)
+  const viewDropdownRef = useRef<HTMLDivElement>(null)
+  const [actionsDropdownOpen, setActionsDropdownOpen] = useState(false)
+  const actionsDropdownRef = useRef<HTMLDivElement>(null)
+  const [sessionActionLoading, setSessionActionLoading] = useState<string | null>(null)
   const [sessionActionError, setSessionActionError] = useState<string | null>(null)
   const [sessionActionNotice, setSessionActionNotice] = useState<string | null>(null)
   const [optimisticUserText, setOptimisticUserText] = useState<string | null>(null)
+  // Messages steered INTO the running turn — echoed in the live overlay until
+  // the persisted transcript reconciles (same lifecycle as optimisticUserText).
+  // `messageUuid` is the server's uuid stamp; command_lifecycle frames
+  // correlate on it and drive `state` (queued/started/completed) or drop the
+  // entry entirely (cancelled/discarded).
+  const [steeredUserTexts, setSteeredUserTexts] = useState<SteeredSendEntry[]>([])
+  const steeredUserTextsRef = useRef<SteeredSendEntry[]>([])
+  useEffect(() => { steeredUserTextsRef.current = steeredUserTexts }, [steeredUserTexts])
+  const [backgroundingTasks, setBackgroundingTasks] = useState(false)
+  // True from when the user hits stop until the interrupted turn's partial
+  // output reconciles (or the awaitingPersistedTurn escape hatch fires). Lets
+  // the composer show a definite "Interrupting…" instead of snapping to idle
+  // while the agent is still wrapping up server-side.
+  const [interrupting, setInterrupting] = useState(false)
+  // Reattach: a turn is running server-side that this client does NOT own (it
+  // was started before a navigation/reload — turns keep running via
+  // detachOnClientAbort). Detected by polling /running while we're otherwise
+  // idle. When set, the composer reflects the live turn (stop button, steer on
+  // send) and the persisted poll surfaces output until the turn finishes.
+  const [reattachedRunning, setReattachedRunning] = useState(false)
+  const [runningProbeReadyKey, setRunningProbeReadyKey] = useState<string | null>(null)
+  const reattachedRunningRef = useRef(false)
+  useEffect(() => { reattachedRunningRef.current = reattachedRunning }, [reattachedRunning])
   const [liveAssistantText, setLiveAssistantText] = useState('')
+  // Reasoning/thinking streams on its own channel so it renders as a distinct
+  // dim block above the answer (like the native CLIs) instead of being folded
+  // into the reply text.
+  const [liveReasoningText, setLiveReasoningText] = useState('')
+  // Live estimate of thinking tokens for the current turn, streamed by the SDK
+  // as `thinking_tokens` system messages. Surfaced on the THINKING preview only.
+  const [liveThinkingTokens, setLiveThinkingTokens] = useState(0)
   const [liveToolActivities, setLiveToolActivities] = useState<LiveToolActivity[]>([])
+  const [liveThreadedMessages, setLiveThreadedMessages] = useState<ThreadedMessage[]>([])
+  const [pendingPermissions, setPendingPermissions] = useState<PendingPermission[]>([])
   const [awaitingPersistedTurn, setAwaitingPersistedTurn] = useState(false)
-  const [autoFollow, setAutoFollow] = useState(true)
+  const [autoFollow, setAutoFollow] = useState(false)
+  // Approximate: may trail the live node.scrollTop by up to
+  // TIMELINE_SCROLL_COMMIT_PX during user scrolls (see
+  // commitTimelineScrollTopIfDrifted). Consumers needing the exact position
+  // must read timelineRef.current.scrollTop.
+  const [timelineScrollTop, setTimelineScrollTop] = useState(0)
+  // Last scrollTop actually committed to state. All commits flow through
+  // commitTimelineScrollTop so quantized paths (RAF scroll handler, streaming
+  // pin) can measure their drift against it. See TIMELINE_SCROLL_COMMIT_PX.
+  const committedScrollTopRef = useRef(0)
+  const commitTimelineScrollTop = useCallback((value: number) => {
+    committedScrollTopRef.current = value
+    setTimelineScrollTop(value)
+  }, [])
+  // Quantized commit for high-frequency paths (RAF scroll handler, streaming
+  // pin): only re-render when the position has drifted far enough to matter
+  // for the virtual window, which overscans well beyond the threshold.
+  const commitTimelineScrollTopIfDrifted = useCallback((value: number) => {
+    if (Math.abs(value - committedScrollTopRef.current) >= TIMELINE_SCROLL_COMMIT_PX) {
+      commitTimelineScrollTop(value)
+    }
+  }, [commitTimelineScrollTop])
+  // Fast-scroll mode: while the gesture outruns FAST_SCROLL_ENTER_PX_PER_S,
+  // rows entering the window render as placeholders. See the constant's doc.
+  const [fastScrolling, setFastScrolling] = useState(false)
+  const fastScrollingRef = useRef(false)
+  const scrollVelocitySampleRef = useRef<{ top: number; time: number } | null>(null)
+  const setFastScrollingMode = useCallback((value: boolean) => {
+    if (fastScrollingRef.current === value) return
+    fastScrollingRef.current = value
+    setFastScrolling(value)
+  }, [])
+  const [timelineViewportHeight, setTimelineViewportHeight] = useState(0)
+  const [timelineHeightOverride, setTimelineHeightOverride] = useState<number | null>(null)
+  const [rowMeasurementVersion, setRowMeasurementVersion] = useState(0)
+  // Bumps only when a PERSISTED row's measured height changes (or rows reset),
+  // never on live-row height growth. Keys the persisted base layout so a
+  // streaming turn doesn't rebuild the whole transcript layout each frame.
+  const [persistedMeasurementVersion, setPersistedMeasurementVersion] = useState(0)
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null)
+  const [sentHistory, setSentHistory] = useState<string[]>(readPersistedSentHistory)
+  const sentHistoryRef = useRef(sentHistory)
+  useLayoutEffect(() => {
+    sentHistoryRef.current = sentHistory
+  }, [sentHistory])
+  const [historyIndex, setHistoryIndex] = useState(-1)
+  const draftBeforeHistoryRef = useRef<{ text: string; cursorPos: number }>({ text: '', cursorPos: 0 })
+  const [mentionQuery, setMentionQuery] = useState<{ start: number; query: string } | null>(null)
+  const [mentionResults, setMentionResults] = useState<MentionResult[]>([])
+  const [mentionActiveIndex, setMentionActiveIndex] = useState(0)
+  const mentionAbortRef = useRef<AbortController | null>(null)
+  const mentionItemRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const [promptLibraryOpen, setPromptLibraryOpen] = useState(false)
+  const [channelBridgeOpen, setChannelBridgeOpen] = useState(false)
+  const canUseChannelBridge = !projectView && !!session && (session.provider ?? 'claude') === 'claude'
+  const channelBridge = useChannelBridge({
+    open: channelBridgeOpen,
+    available: canUseChannelBridge,
+    sessionId: session?.sessionId,
+  })
+  const handledChannelBridgeOpenRequestRef = useRef(channelBridgeOpenRequest)
+  const handledChannelBridgeRouteRequestRef = useRef(channelBridgeRouteToggleRequest)
+  // Read the latest bridge controller from inside sendMessage without widening
+  // its (already large) dependency array.
+  const channelBridgeRef = useRef(channelBridge)
+  useLayoutEffect(() => {
+    channelBridgeRef.current = channelBridge
+  }, [channelBridge])
+  // IDE bridge — the third Claude composer flow (agentViewer hosts an IDE
+  // endpoint an external `claude` connects to; see channels/agentviewer-ide.ts).
+  // Shares the Claude-only availability gate with the channel bridge.
+  const [ideBridgeOpen, setIdeBridgeOpen] = useState(false)
+  const canUseIdeBridge = !projectView && !!session && (session.provider ?? 'claude') === 'claude'
+  const ideBridge = useIdeBridge({ open: ideBridgeOpen, available: canUseIdeBridge })
+  const handledIdeBridgeOpenRequestRef = useRef(ideBridgeOpenRequest)
+  const handledIdeBridgeRouteRequestRef = useRef(ideBridgeRouteToggleRequest)
+  const ideBridgeRef = useRef(ideBridge)
+  useLayoutEffect(() => {
+    ideBridgeRef.current = ideBridge
+  }, [ideBridge])
+  // Track bridge entries (sent + replies) with timestamps for inline transcript display
+  const [bridgeTranscriptEntries, setBridgeTranscriptEntries] = useState<
+    Array<{ kind: 'sent' | 'reply'; text: string; timestamp: string }>
+  >([])
+  const persistedBridgeCountRef = useRef(0)
+  const [slashOpen, setSlashOpen] = useState(false)
+  const [slashActiveIndex, setSlashActiveIndex] = useState(0)
+  const slashItemRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const [liveSlashCommands, setLiveSlashCommands] = useState<SlashCommandSuggestion[]>([])
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const composerPrewarmInFlightRef = useRef(new Set<string>())
+  const isComposingRef = useRef(false)
   const timelineRef = useRef<HTMLDivElement>(null)
+  const timelineContentRef = useRef<HTMLDivElement | null>(null)
+  const lastTimelineRowRef = useRef<HTMLDivElement | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
-  const pendingMessageBaselineRef = useRef<{ count: number; lastUuid: string | null; sessionId: string } | null>(null)
-  const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
+  const activeTurnRequestIdRef = useRef<string | null>(null)
+  const inputTextRef = useRef(inputText)
+  const suppressDraftSaveRef = useRef(false)
+  const sendInFlightRef = useRef(false)
+  const awaitingPersistedTurnRef = useRef(false)
+  const pushedCopilotAttachmentsRef = useRef<SendAttachment[]>([])
+  // Transient auto-retry bookkeeping. turnProducedOutputRef gates retries to
+  // turns that streamed nothing yet (so a retry can't duplicate work);
+  // transientRetryCountRef counts attempts within one logical send;
+  // transientRetryTimerRef holds the pending backoff so cancel can clear it.
+  const turnProducedOutputRef = useRef(false)
+  const transientRetryCountRef = useRef(0)
+  const transientRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Set when a send was blocked because the model list hadn't resolved yet
+  // (see the modelsLoading guard in sendMessage). The composer draft is left
+  // untouched in that case — this just re-fires the send once the fetch
+  // settles, so a cold custom-model connection reads as "sending" rather than
+  // making the user notice the error and hit enter again.
+  const pendingSendOnModelsReadyRef = useRef<string | null>(null)
+  const pendingMessageBaselineRef = useRef<PendingMessageBaseline | null>(null)
+  const liveTurnSessionHandoffRef = useRef<string | null>(null)
+  const liveAssistantTextRef = useRef('')
+  const pendingLiveAssistantTextRef = useRef<string | null>(null)
+  const liveAssistantFlushFrameRef = useRef<number | null>(null)
+  // Reasoning shares the assistant flush frame (one RAF flushes both buffers).
+  const liveReasoningTextRef = useRef('')
+  const pendingLiveReasoningTextRef = useRef<string | null>(null)
+  // Ref-backed source of truth for per-subagent streamed text. Deltas mutate
+  // this ref and a single RAF flushes a fresh snapshot into state, so a burst
+  // of subagent tokens collapses to one re-render per frame instead of one per
+  // token re-rendering every mounted AgentCard via LiveSubagentTextContext.
+  const liveSubagentTextRef = useRef<Record<string, string>>({})
+  const liveSubagentFlushFrameRef = useRef<number | null>(null)
+  const liveToolIndexesRef = useLazyRef(() => new Map<number, string>())
+  const liveToolInputJsonRef = useLazyRef(() => new Map<number, string>())
+  const rowHeightsRef = useLazyRef(() => new Map<string, number>())
+  const timelineEstimateCalibrationRef = useLazyRef(
+    () => new Map<TimelineEstimateBucket | 'all', TimelineEstimateCalibration>(),
+  )
+  const timelineEstimateSamplesRef = useLazyRef(() => new Map<string, TimelineEstimateSample>())
+  // Recalibrate during initial settling, then keep estimates stable once the
+  // user starts manipulating the scrollbar.
+  const timelineEstimateCalibrationFrozenRef = useRef(false)
+  const rowLayoutRef = useLazyRef<TimelineRowLayout>(() => (
+    buildTimelineRowLayout([], new Map(), estimateTimelineRowHeight)
+  ))
+  const threadedCacheRef = useLazyRef(() => new Map<string, ThreadedMessage>())
+  const prevThreadingRef = useRef<IncrementalThreadingCache | null>(null)
+  // Last taskActiveForms Map, reused when contents are unchanged so the context
+  // value identity stays stable across idle polls.
+  const taskActiveFormsRef = useLazyRef(() => new Map<string, string>())
+  const pendingRowMeasurementsRef = useLazyRef(() => new Map<string, number>())
+  const measurementFrameRef = useRef<number | null>(null)
+  const scheduleTimelineMeasurementFlushRef = useRef<() => void>(() => {})
+  const pendingTimelineScrollCompensationRef = useRef(0)
+  const pendingMountedAnchorCaptureRef = useRef(false)
+  const scrollRafRef = useRef<number | null>(null)
+  const programmaticScrollUntilRef = useRef<number>(0)
+  const wheelScrollCompensationUntilRef = useRef<number>(0)
+  const timelineHeightOverrideRef = useRef<number | null>(null)
+  const activeTimelineScrollAnchorRef = useRef<TimelineScrollAnchor | null>(null)
+  const pendingTimelineAnchorRestoreRef = useRef(false)
+  // Set true on each scroll event, cleared SCROLL_IDLE_MS after the last
+  // event. Direct scrollbar/touch scrubbing suppresses scrollTop adjustment;
+  // wheel/trackpad input opts back in via wheelScrollCompensationUntilRef.
+  const userScrollingRef = useRef(false)
+  const userScrollingTimerRef = useRef<number | null>(null)
+  const suppressFollowEvalUntilRef = useRef<number>(0)
+  const autoFollowRef = useRef(false)
+  const timelineRowsRef = useRef<TimelineRow[]>([])
+  const handledTargetMessageRequestRef = useRef(0)
+  const initialScrollDoneRef = useRef(false)
   const sessionCapabilities = sessionInfo?.capabilities ?? session?.capabilities
   const assistantName = assistantDisplayName(sessionInfo?.provider ?? session?.provider)
+  const activeProvider = sessionInfo?.provider ?? session?.provider
+  const cliCommand = useMemo(() => {
+    if (!session) return null
+    return getContinueInCliCommand(
+      activeProvider ?? 'claude',
+      session.sessionId,
+      sessionInfo?.cwd ?? session.cwd,
+    )
+  }, [session, activeProvider, sessionInfo])
+  const modelOptions = useMemo(() => {
+    const filtered = availableModels.filter((model) => normalizeSelectValue(model.value))
+    if (filtered.length > 0) return filtered
+
+    const fallbackValue = normalizeSelectValue(selectedModel)
+    return fallbackValue ? [{ value: fallbackValue, displayName: fallbackValue, description: '' }] : []
+  }, [availableModels, selectedModel])
+  const selectedModelValue = normalizeSelectValue(selectedModel)
+  const selectedModelInfo = useMemo(
+    () => modelOptions.find((model) => model.value === selectedModelValue) ?? null,
+    [modelOptions, selectedModelValue],
+  )
+  const composerAgentOptions = useMemo(
+    () => composerOptions.agents?.filter((agent) => normalizeSelectValue(agent.value)) ?? [],
+    [composerOptions.agents],
+  )
+  const composerMentionAgentOptions = useMemo(
+    () => composerOptions.mentionAgents?.filter((agent) => normalizeSelectValue(agent.value)) ?? [],
+    [composerOptions.mentionAgents],
+  )
+  const composerModeOptions = useMemo(
+    () => composerOptions.modes?.filter((mode) => normalizeSelectValue(mode.value)) ?? [],
+    [composerOptions.modes],
+  )
+  const effortOptions = useMemo<ReasoningEffortLevel[]>(() => {
+    if (!selectedModelInfo?.supportsEffort) return []
+    if (activeProvider === 'opencode') return []
+    const levels = selectedModelInfo.supportedEffortLevels?.filter((level) => {
+      if (activeProvider === 'codex') return level === 'low' || level === 'medium' || level === 'high'
+      if (activeProvider === 'copilot') return level === 'low' || level === 'medium' || level === 'high' || level === 'xhigh'
+      if (activeProvider === 'claude') return level === 'low' || level === 'medium' || level === 'high' || level === 'xhigh' || level === 'max'
+      if (activeProvider === 'pi') return level === 'off' || level === 'minimal' || level === 'low' || level === 'medium' || level === 'high' || level === 'xhigh' || level === 'max'
+      return false
+    }) ?? []
+    if (levels.length > 0) return levels
+    if (activeProvider === 'pi') return ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+    if (activeProvider === 'codex') return ['low', 'medium', 'high']
+    return ['low', 'medium', 'high']
+  }, [activeProvider, selectedModelInfo])
+  const composerDraftKey = useMemo(() => composerDraftStorageKey(session), [session])
+
+  useEffect(() => {
+    inputTextRef.current = inputText
+  }, [inputText])
+
+  useEffect(() => {
+    awaitingPersistedTurnRef.current = awaitingPersistedTurn
+  }, [awaitingPersistedTurn])
+
+  const flushLiveAssistantText = useCallback(() => {
+    liveAssistantFlushFrameRef.current = null
+    const nextText = pendingLiveAssistantTextRef.current
+    if (nextText != null) {
+      pendingLiveAssistantTextRef.current = null
+      setLiveAssistantText(nextText)
+    }
+    const nextReasoning = pendingLiveReasoningTextRef.current
+    if (nextReasoning != null) {
+      pendingLiveReasoningTextRef.current = null
+      setLiveReasoningText(nextReasoning)
+    }
+  }, [])
+
+  const flushLiveAssistantTextNow = useCallback(() => {
+    if (liveAssistantFlushFrameRef.current != null) {
+      window.cancelAnimationFrame(liveAssistantFlushFrameRef.current)
+      liveAssistantFlushFrameRef.current = null
+    }
+    flushLiveAssistantText()
+  }, [flushLiveAssistantText])
+
+  const clearLiveAssistantText = useCallback(() => {
+    if (liveAssistantFlushFrameRef.current != null) {
+      window.cancelAnimationFrame(liveAssistantFlushFrameRef.current)
+      liveAssistantFlushFrameRef.current = null
+    }
+    liveAssistantTextRef.current = ''
+    pendingLiveAssistantTextRef.current = null
+    setLiveAssistantText('')
+    liveReasoningTextRef.current = ''
+    pendingLiveReasoningTextRef.current = null
+    setLiveReasoningText('')
+    setLiveThinkingTokens(0)
+  }, [])
+
+  const queueLiveAssistantText = useCallback((deltaText: string, replace: boolean) => {
+    const nextText = replace ? deltaText : `${liveAssistantTextRef.current}${deltaText}`
+    liveAssistantTextRef.current = nextText
+    pendingLiveAssistantTextRef.current = nextText
+    if (liveAssistantFlushFrameRef.current == null) {
+      liveAssistantFlushFrameRef.current = window.requestAnimationFrame(flushLiveAssistantText)
+    }
+  }, [flushLiveAssistantText])
+
+  // Reasoning is always append-only (no replace semantics like the codex
+  // realtime answer transcript), and piggybacks on the assistant flush frame.
+  const queueLiveReasoningText = useCallback((deltaText: string) => {
+    const nextText = `${liveReasoningTextRef.current}${deltaText}`
+    liveReasoningTextRef.current = nextText
+    pendingLiveReasoningTextRef.current = nextText
+    if (liveAssistantFlushFrameRef.current == null) {
+      liveAssistantFlushFrameRef.current = window.requestAnimationFrame(flushLiveAssistantText)
+    }
+  }, [flushLiveAssistantText])
+
+  const flushLiveSubagentText = useCallback(() => {
+    liveSubagentFlushFrameRef.current = null
+    // Snapshot the ref into a fresh object so context consumers see one new
+    // identity per frame; the ref keeps mutating in place between flushes.
+    setLiveSubagentText({ ...liveSubagentTextRef.current })
+  }, [])
+
+  const scheduleLiveSubagentFlush = useCallback(() => {
+    if (liveSubagentFlushFrameRef.current == null) {
+      liveSubagentFlushFrameRef.current = window.requestAnimationFrame(flushLiveSubagentText)
+    }
+  }, [flushLiveSubagentText])
+
+  const queueLiveSubagentDelta = useCallback((parentId: string, delta: string) => {
+    const map = liveSubagentTextRef.current
+    map[parentId] = (map[parentId] ?? '') + delta
+    scheduleLiveSubagentFlush()
+  }, [scheduleLiveSubagentFlush])
+
+  const removeLiveSubagentEntry = useCallback((parentId: string) => {
+    const map = liveSubagentTextRef.current
+    if (!(parentId in map)) return
+    delete map[parentId]
+    scheduleLiveSubagentFlush()
+  }, [scheduleLiveSubagentFlush])
+
+  const clearLiveSubagentText = useCallback(() => {
+    if (liveSubagentFlushFrameRef.current != null) {
+      window.cancelAnimationFrame(liveSubagentFlushFrameRef.current)
+      liveSubagentFlushFrameRef.current = null
+    }
+    liveSubagentTextRef.current = {}
+    setLiveSubagentText({})
+  }, [])
+
+  useEffect(() => {
+    if (!cliPopoverOpen) return
+    function onDown(e: MouseEvent) {
+      if (cliPopoverRef.current && !cliPopoverRef.current.contains(e.target as Node))
+        setCliPopoverOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [cliPopoverOpen])
+
+  useEffect(() => {
+    if (!viewDropdownOpen) return
+    function onDown(e: MouseEvent) {
+      if (viewDropdownRef.current && !viewDropdownRef.current.contains(e.target as Node))
+        setViewDropdownOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [viewDropdownOpen])
+
+  useEffect(() => {
+    if (!actionsDropdownOpen) return
+    function onDown(e: MouseEvent) {
+      if (actionsDropdownRef.current && !actionsDropdownRef.current.contains(e.target as Node))
+        setActionsDropdownOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [actionsDropdownOpen])
+
+  const resizeComposer = useCallback(() => {
+    const textarea = textareaRef.current
+    if (!textarea) return
+    textarea.style.height = 'auto'
+    const next = Math.min(textarea.scrollHeight, 260)
+    textarea.style.height = `${next}px`
+    textarea.style.overflowY = textarea.scrollHeight > 260 ? 'auto' : 'hidden'
+  }, [])
+
+  // Fire-and-forget push of model/permission changes through the actions
+  // route. For warm Claude sessions the server's claudePool applies these
+  // live via setModel/setPermissionMode on the persistent Query; for cold
+  // sessions it's a no-op and the change still rides on body.{model,
+  // permissionMode} of the next /messages/events POST. Either way the next
+  // send is correct — this just makes the change visible immediately on
+  // warm sessions instead of waiting for the next turn to start.
+  const commitClaudeModelSelection = useCallback((nextModel: string) => {
+    setSelectedModel(nextModel)
+    if (!session || session.provider !== 'claude' || session.isPending) return
+    if (!nextModel || nextModel === selectedModel) return
+    void fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/actions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: 'claude', action: 'setModel', model: nextModel }),
+    }).catch(() => { /* swallow; next send carries body.model */ })
+  }, [session, selectedModel])
+
+  const commitClaudePermissionSelection = useCallback((nextMode: typeof selectedPermissionMode) => {
+    setSelectedPermissionMode(nextMode)
+    if (!session || session.provider !== 'claude' || session.isPending) return
+    if (nextMode === selectedPermissionMode) return
+    void fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/actions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: 'claude', action: 'setPermissionMode', permissionMode: nextMode }),
+    }).catch(() => { /* swallow; next send carries body.permissionMode */ })
+  }, [session, selectedPermissionMode])
+
+  const commitCopilotModeSelection = useCallback((nextMode: string) => {
+    setSelectedCopilotMode(nextMode)
+    if (!session || session.provider !== 'copilot' || session.isPending) return
+    if (nextMode === selectedCopilotMode) return
+    void fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/actions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: 'copilot', action: 'setMode', mode: nextMode }),
+    }).catch(() => { /* swallow; next send carries body.mode */ })
+  }, [session, selectedCopilotMode])
+
+  useLayoutEffect(() => {
+    resizeComposer()
+  }, [inputText, resizeComposer])
 
   // Load session info (git branch, summary, etc.) when session changes
   useEffect(() => {
     if (!session) { setSessionInfo(null); return }
-    fetch(withProviderQuery(`/api/sessions/${session.sessionId}`, session.provider))
-      .then(r => r.json())
+    fetch(withProviderQuery(`/api/sessions/${session.sessionId}`, session.provider, session.providerInstanceId))
+      .then(readJsonResponse)
       .then(data => { if (!data.error) setSessionInfo(data.info) })
       .catch(() => {})
   }, [session?.provider, session?.sessionId])
 
+  const composerWorkingDirectory = sessionInfo?.cwd ?? session?.cwd ?? null
   useEffect(() => {
-    if (!session) {
-      setAvailableModels([])
-      setSelectedModel('')
+    setBranchSwitcherOpen(false)
+  }, [composerWorkingDirectory])
+
+  const handleComposerBranchSwitched = useCallback((summary: GitSummary) => {
+    setComposerGitSummary(summary)
+    setSessionInfo((current) => current ? { ...current, gitBranch: summary.branch } : current)
+  }, [])
+
+  useEffect(() => {
+    if (!composerWorkingDirectory) {
+      setComposerGitSummary(null)
       return
     }
 
-    fetch(withProviderQuery(`/api/sessions/${session.sessionId}/models`, session.provider))
-      .then(r => r.json())
+    let cancelled = false
+    let timer: number | null = null
+    const controller = new AbortController()
+    setComposerGitSummary(null)
+
+    const refresh = async () => {
+      try {
+        const response = await fetch(`/api/git?action=summary&cwd=${encodeURIComponent(composerWorkingDirectory)}`, {
+          cache: 'no-store',
+          signal: controller.signal,
+        })
+        const data = await readJsonResponse(response) as { summary?: GitSummary | null }
+        if (!cancelled) {
+          const next = data.summary ?? null
+          setComposerGitSummary((current) => gitSummariesMatch(current, next) ? current : next)
+        }
+      } catch {
+        // Best-effort: session metadata remains the branch fallback.
+      } finally {
+        if (!cancelled) timer = window.setTimeout(() => { void refresh() }, COMPOSER_GIT_SUMMARY_POLL_MS)
+      }
+    }
+
+    void refresh()
+    return () => {
+      cancelled = true
+      controller.abort()
+      if (timer !== null) window.clearTimeout(timer)
+    }
+  }, [composerWorkingDirectory])
+
+  const prewarmComposer = useCallback(() => {
+    const sessionId = session?.sessionId
+    const provider = session?.provider
+    const cwd = session?.cwd
+    const isPending = session?.isPending === true
+    if (!sessionId) return
+    // Pending Codex/Copilot sessions do not have a resumable provider identity
+    // yet. Pi and Claude can warm against their reserved ids; ACP sessions are
+    // themselves pool-owned and are also created lazily against that id.
+    if (
+      isPending
+      && provider !== 'pi'
+      && provider !== 'claude'
+      && provider !== 'claude-acp'
+      && provider !== 'codex-acp'
+    ) return
+    const effort = selectedEffort === 'auto' ? undefined : selectedEffort
+    const key = [
+      provider ?? 'claude',
+      sessionId,
+      cwd ?? '',
+      selectedModel,
+      effort ?? '',
+    ].join('\0')
+    if (composerPrewarmInFlightRef.current.has(key)) return
+    composerPrewarmInFlightRef.current.add(key)
+    void fetch(`/api/sessions/${sessionId}/composer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider,
+        cwd: cwd ?? undefined,
+        model: selectedModel || undefined,
+        effort,
+        isPending,
+      }),
+    })
+      .catch(() => { /* best-effort: send pays the usual cold cost */ })
+      .finally(() => { composerPrewarmInFlightRef.current.delete(key) })
+  }, [selectedEffort, selectedModel, session?.cwd, session?.isPending, session?.provider, session?.sessionId])
+
+  useEffect(() => {
+    // Prewarm on session selection, not only textarea focus. Native CLIs keep
+    // their provider runtime hot while you browse; waiting until the first
+    // keystroke leaves the cold spawn on the send critical path.
+    prewarmComposer()
+  }, [prewarmComposer])
+
+  // Load message bookmarks for the active session. Reset the "bookmarks only"
+  // filter on every session switch so a stale focus doesn't carry over.
+  useEffect(() => {
+    setBookmarksOnly(false)
+    if (!session || session.isPending) { setBookmarkIds(new Set()); return }
+    let cancelled = false
+    fetch(withProviderQuery(`/api/sessions/${session.sessionId}/bookmarks`, session.provider, session.providerInstanceId))
+      .then(readJsonResponse)
       .then(data => {
-        if (data.error) return
-        setAvailableModels(data.models ?? [])
-        setSelectedModel(data.currentModel ?? data.models?.[0]?.value ?? '')
+        if (cancelled || !Array.isArray(data?.ids)) return
+        setBookmarkIds(new Set(data.ids as string[]))
       })
       .catch(() => {})
+    return () => { cancelled = true }
+  }, [session?.provider, session?.sessionId, session?.isPending])
+
+  // Build the metadata stored alongside a bookmark so the global browser can
+  // render a useful row (title, snippet, role) without re-reading the session.
+  const buildBookmarkMeta = useCallback((uuid: string) => {
+    const row = timelineRowsRef.current.find((candidate) => candidate.message.uuid === uuid)
+    const preview = row ? messageToCopyText(row.message).replace(/\s+/g, ' ').trim().slice(0, 200) : ''
+    const sessionTitle = sessionInfo?.customTitle || sessionInfo?.summary || session?.customTitle || session?.summary || session?.firstPrompt
+    return {
+      role: row?.message.role,
+      label: row?.message.role === 'user' ? 'user' : 'assistant',
+      preview: preview || undefined,
+      sessionTitle: sessionTitle || undefined,
+      messageTimestamp: row?.message.timestamp,
+    }
+  }, [session?.customTitle, session?.summary, session?.firstPrompt, sessionInfo?.customTitle, sessionInfo?.summary])
+
+  const toggleBookmark = useCallback((uuid: string) => {
+    if (!session) return
+    const next = !bookmarkIdsRef.current.has(uuid)
+    setBookmarkIds((prev) => {
+      const updated = new Set(prev)
+      if (next) updated.add(uuid)
+      else updated.delete(uuid)
+      return updated
+    })
+    const meta = next ? buildBookmarkMeta(uuid) : undefined
+    fetch(`/api/sessions/${session.sessionId}/bookmarks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: session.provider, providerInstanceId: session.providerInstanceId, uuid, bookmarked: next, meta }),
+    })
+      .then(readJsonResponse)
+      .then((data) => {
+        if (Array.isArray(data?.ids)) setBookmarkIds(new Set(data.ids as string[]))
+      })
+      .catch(() => {
+        // Revert the optimistic update on failure.
+        setBookmarkIds((prev) => {
+          const updated = new Set(prev)
+          if (next) updated.delete(uuid)
+          else updated.add(uuid)
+          return updated
+        })
+      })
+  }, [session, buildBookmarkMeta])
+
+  // Fetches the live model list + current model from the active provider.
+  // Used both on session change and after each turn — `/model X` slashes
+  // change the SDK's current model and the dropdown should follow.
+  const modelSessionId = session?.sessionId
+  const modelSessionProvider = session?.provider
+  const modelSessionProviderInstanceId = session?.providerInstanceId
+  const refreshSessionModels = useCallback(({ preserveSelection }: { preserveSelection: boolean }) => {
+    if (!modelSessionId) return
+    setModelsLoading(true)
+    fetch(withProviderQuery(`/api/sessions/${modelSessionId}/models`, modelSessionProvider, modelSessionProviderInstanceId))
+      .then(readJsonResponse)
+      .then(data => {
+        if (data.error) return
+        const nextModels = Array.isArray(data.models) ? data.models.filter((model: SessionModelInfo) => normalizeSelectValue(model.value)) : []
+        setAvailableModels(nextModels)
+        const live = normalizeSelectValue(data.currentModel)
+        // Only a reported tier is a known tier; anything else leaves whatever
+        // the user (or an earlier warm read) already established.
+        if (data.currentContextTier === 'long_context' || data.currentContextTier === 'default') {
+          setSelectedCopilotContextTier(data.currentContextTier)
+        }
+        setSelectedModel((prev) => {
+          if (preserveSelection && prev && nextModels.some((m: SessionModelInfo) => normalizeSelectValue(m.value) === normalizeSelectValue(prev))) {
+            // Keep user's pick if it is still valid; otherwise fall back.
+            if (live && live !== normalizeSelectValue(prev)) return live
+            return prev
+          }
+          return live ?? normalizeSelectValue(nextModels[0]?.value) ?? ''
+        })
+      })
+      .catch(() => {})
+      .finally(() => setModelsLoading(false))
+  }, [modelSessionId, modelSessionProvider, modelSessionProviderInstanceId])
+
+  useEffect(() => {
+    if (!session) {
+      setAvailableModels([])
+      setModelsLoading(false)
+      setSelectedModel('')
+      setSelectedEffort('auto')
+      setSelectedCopilotContextTier(null)
+      return
+    }
+    refreshSessionModels({ preserveSelection: false })
+  }, [session?.provider, session?.sessionId, refreshSessionModels])
+
+  // Claude's /models endpoint no longer resolves currentModel (that required
+  // a ~1.4s getContextUsage() control RPC on every session switch — see the
+  // comment on readViewSessionModels). Once the transcript we already fetch
+  // for display finishes loading, pull the model straight off the last
+  // assistant message instead — free, and it's the same data the backend
+  // would have derived from a live RPC anyway. Applied once per session
+  // switch (not on every later message-array update) so it can't stomp a
+  // model the user just picked in the dropdown but hasn't sent yet.
+  const appliedModelSessionKeyRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (session?.provider !== 'claude' || !session.sessionId || messages.length === 0) return
+    if (appliedModelSessionKeyRef.current === session.sessionId) return
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i]
+      if (msg.type !== 'assistant') continue
+      const model = (msg.message as Partial<ApiMessage> & { model?: unknown }).model
+      if (typeof model === 'string' && model) {
+        appliedModelSessionKeyRef.current = session.sessionId
+        setSelectedModel(model)
+      }
+      break
+    }
+  }, [session?.provider, session?.sessionId, messages])
+
+  useEffect(() => {
+    if (!session) {
+      setComposerOptions({})
+      setSelectedAgent('')
+      setSelectedCopilotMode('interactive')
+      return
+    }
+
+    const controller = new AbortController()
+    fetch(withProviderQuery(`/api/sessions/${session.sessionId}/composer`, session.provider, session.providerInstanceId), { signal: controller.signal })
+      .then((res) => res.ok ? res.json() : null)
+      .then((data: SessionComposerOptions | null) => {
+        if (controller.signal.aborted || !data) return
+        setComposerOptions(data)
+        if (session.provider === 'opencode') {
+          const agents = data.agents ?? []
+          const current = normalizeSelectValue(data.currentAgent)
+          setSelectedAgent(
+            current && agents.some((agent) => normalizeSelectValue(agent.value) === current)
+              ? current
+              : normalizeSelectValue(agents[0]?.value) ?? '',
+          )
+        } else {
+          setSelectedAgent('')
+        }
+        if (session.provider === 'copilot') {
+          const modes = data.modes ?? []
+          const current = normalizeSelectValue(data.currentMode) ?? 'interactive'
+          setSelectedCopilotMode(
+            modes.some((mode) => normalizeSelectValue(mode.value) === current)
+              ? current
+              : normalizeSelectValue(modes[0]?.value) ?? 'interactive',
+          )
+        } else {
+          setSelectedCopilotMode('interactive')
+        }
+      })
+      .catch(() => { /* ignore; provider defaults still apply on send */ })
+    return () => controller.abort()
   }, [session?.provider, session?.sessionId])
+
+  useEffect(() => {
+    if (selectedEffort === 'auto') return
+    if (!effortOptions.includes(selectedEffort)) {
+      setSelectedEffort('auto')
+    }
+  }, [effortOptions, selectedEffort])
+
+  useEffect(() => {
+    if (activeProvider !== 'copilot') {
+      if (selectedCopilotContextTier !== null) setSelectedCopilotContextTier(null)
+      return
+    }
+    if (selectedCopilotContextTier === 'long_context' && !selectedModelInfo?.supportsLongContext) {
+      setSelectedCopilotContextTier('default')
+    }
+  }, [activeProvider, selectedCopilotContextTier, selectedModelInfo])
+
+  useEffect(() => {
+    if (activeProvider !== 'opencode' && attachmentType === 'agent') {
+      setAttachmentType('file')
+    }
+  }, [activeProvider, attachmentType])
 
   // Reset context usage when switching sessions
   useEffect(() => {
+    const handoffSessionId = liveTurnSessionHandoffRef.current
+    if (
+      handoffSessionId
+      && session?.sessionId === handoffSessionId
+      && (sendInFlightRef.current || awaitingPersistedTurnRef.current)
+    ) {
+      liveTurnSessionHandoffRef.current = null
+      return
+    }
+    liveTurnSessionHandoffRef.current = null
+    abortControllerRef.current?.abort()
+    abortControllerRef.current = null
+    activeTurnRequestIdRef.current = null
+    sendInFlightRef.current = false
+    awaitingPersistedTurnRef.current = false
     setContextUsage(null)
     setSessionActionError(null)
     setSessionActionNotice(null)
@@ -496,118 +3985,856 @@ export default function MessageView({ messages, loading, session, projectView, o
     setRollbackPreview(null)
     setShowDiagnostics(false)
     setDiagnosticSections([])
+    setAttachments([])
+    setAttachmentPath('')
+    setSelectedEffort('auto')
+    setSelectedAgent('')
+    setSelectedCopilotMode('interactive')
+    setComposerOptions({})
+    setPendingPermissions([])
     setOptimisticUserText(null)
-    setLiveAssistantText('')
+    setSteeredUserTexts([])
+    clearLiveAssistantText()
     setLiveToolActivities([])
+    setLiveThreadedMessages([])
+    clearLiveSubagentText()
     setAwaitingPersistedTurn(false)
-    setAutoFollow(true)
+    setSendState('idle')
+    setSendError(null)
+    setFailedSend(null)
+    setAutoFollow(false)
+    commitTimelineScrollTop(0)
+    setTimelineViewportHeight(0)
+    rowHeightsRef.current.clear()
+    timelineEstimateCalibrationRef.current.clear()
+    timelineEstimateSamplesRef.current.clear()
+    timelineEstimateCalibrationFrozenRef.current = false
+    threadedCacheRef.current.clear()
+    prevThreadingRef.current = null
+    pendingRowMeasurementsRef.current.clear()
+    pendingTimelineScrollCompensationRef.current = 0
+    pendingMountedAnchorCaptureRef.current = false
+    if (measurementFrameRef.current != null) {
+      window.cancelAnimationFrame(measurementFrameRef.current)
+      measurementFrameRef.current = null
+    }
+    timelineHeightOverrideRef.current = null
+    wheelScrollCompensationUntilRef.current = 0
+    activeTimelineScrollAnchorRef.current = null
+    pendingTimelineAnchorRestoreRef.current = false
+    setTimelineHeightOverride(null)
+    setRowMeasurementVersion(0)
+    setPersistedMeasurementVersion(0)
     pendingMessageBaselineRef.current = null
     liveToolIndexesRef.current.clear()
-  }, [session?.sessionId])
+    liveToolInputJsonRef.current.clear()
+    initialScrollDoneRef.current = false
+  }, [clearLiveAssistantText, commitTimelineScrollTop, session?.sessionId])
 
   useEffect(() => {
-    if (!awaitingPersistedTurn || !session) return
+    suppressDraftSaveRef.current = true
+    const draft = readComposerDraft(composerDraftKey)
+    setInputText(draft.text)
+    inputTextRef.current = draft.text
+    setAttachments(draft.attachments)
 
-    const baseline = pendingMessageBaselineRef.current
-    if (!baseline || baseline.sessionId !== session.sessionId) return
+    window.requestAnimationFrame(() => {
+      suppressDraftSaveRef.current = false
+      resizeComposer()
+    })
+  }, [composerDraftKey, resizeComposer])
 
-    const currentLastUuid = messages.at(-1)?.uuid ?? null
-    const persistedTurnArrived =
-      messages.length > baseline.count
-      || currentLastUuid !== baseline.lastUuid
+  const autoFocusedSessionsRef = useLazyRef(() => new Set<string>())
 
-    if (persistedTurnArrived) {
-      setOptimisticUserText(null)
-      setLiveAssistantText('')
-      setLiveToolActivities([])
-      setAwaitingPersistedTurn(false)
-      pendingMessageBaselineRef.current = null
-      liveToolIndexesRef.current.clear()
+  // Draft saves are debounced: a synchronous localStorage write (plus
+  // JSON.stringify) on every keystroke is measurable main-thread jank, and the
+  // draft only needs to survive tab/session switches. The latest value sits in
+  // pendingComposerDraftRef (with the key it belongs to, so a session switch
+  // flushes under the OLD key); flushes happen at the trailing edge, on
+  // draft-key change, on unmount, and on pagehide.
+  const pendingComposerDraftRef = useRef<{ key: string | null; draft: ComposerDraft } | null>(null)
+  const composerDraftTimerRef = useRef<number | null>(null)
+  const flushComposerDraft = useCallback(() => {
+    if (composerDraftTimerRef.current != null) {
+      window.clearTimeout(composerDraftTimerRef.current)
+      composerDraftTimerRef.current = null
     }
-  }, [awaitingPersistedTurn, messages, session])
+    const pending = pendingComposerDraftRef.current
+    pendingComposerDraftRef.current = null
+    if (pending) writeComposerDraft(pending.key, pending.draft)
+  }, [])
+
+  useEffect(() => {
+    if (suppressDraftSaveRef.current) return
+    pendingComposerDraftRef.current = { key: composerDraftKey, draft: { text: inputText, attachments } }
+    // Trailing debounce: reset the timer on every change so the write lands
+    // once typing pauses. Staleness is bounded by the flush-on-unmount /
+    // key-change / pagehide paths below.
+    if (composerDraftTimerRef.current != null) window.clearTimeout(composerDraftTimerRef.current)
+    composerDraftTimerRef.current = window.setTimeout(() => {
+      composerDraftTimerRef.current = null
+      flushComposerDraft()
+    }, COMPOSER_DRAFT_SAVE_DEBOUNCE_MS)
+  }, [attachments, composerDraftKey, flushComposerDraft, inputText])
+
+  useEffect(() => {
+    // visibilitychange covers mobile tabs backgrounded then killed, which
+    // never fire pagehide.
+    const flushIfHidden = () => {
+      if (document.visibilityState === 'hidden') flushComposerDraft()
+    }
+    window.addEventListener('pagehide', flushComposerDraft)
+    document.addEventListener('visibilitychange', flushIfHidden)
+    return () => {
+      window.removeEventListener('pagehide', flushComposerDraft)
+      document.removeEventListener('visibilitychange', flushIfHidden)
+      flushComposerDraft()
+    }
+  }, [composerDraftKey, flushComposerDraft])
+
+  useEffect(() => () => {
+    if (measurementFrameRef.current != null) {
+      window.cancelAnimationFrame(measurementFrameRef.current)
+    }
+    if (scrollRafRef.current != null) {
+      window.cancelAnimationFrame(scrollRafRef.current)
+    }
+    if (liveAssistantFlushFrameRef.current != null) {
+      window.cancelAnimationFrame(liveAssistantFlushFrameRef.current)
+    }
+    if (liveSubagentFlushFrameRef.current != null) {
+      window.cancelAnimationFrame(liveSubagentFlushFrameRef.current)
+    }
+    if (userScrollingTimerRef.current != null) {
+      window.clearTimeout(userScrollingTimerRef.current)
+    }
+    pendingTimelineScrollCompensationRef.current = 0
+    pendingMountedAnchorCaptureRef.current = false
+    timelineHeightOverrideRef.current = null
+    wheelScrollCompensationUntilRef.current = 0
+    activeTimelineScrollAnchorRef.current = null
+    pendingTimelineAnchorRestoreRef.current = false
+  }, [])
+
+  const captureTimelineScrollAnchor = useCallback((): TimelineScrollAnchor | null => {
+    const node = timelineRef.current
+    const rows = timelineRowsRef.current
+    const layout = rowLayoutRef.current
+    if (!node) return findTimelineScrollAnchor(rows, layout, 0)
+
+    const viewportTop = node.getBoundingClientRect().top
+    let nearest: TimelineScrollAnchor | null = null
+    let nearestDistance = Number.POSITIVE_INFINITY
+
+    for (const candidate of Array.from(node.querySelectorAll<HTMLElement>('.timeline-row[data-timeline-key]'))) {
+      const key = candidate.dataset.timelineKey
+      if (!key) continue
+      const index = layout.indexByKey.get(key)
+      if (index == null) continue
+
+      const rect = candidate.getBoundingClientRect()
+      if (rect.bottom <= viewportTop) continue
+      const distance = Math.max(rect.top - viewportTop, 0)
+      if (distance >= nearestDistance) continue
+
+      nearestDistance = distance
+      nearest = {
+        index,
+        key,
+        offset: node.scrollTop - layout.tops[index],
+      }
+      if (distance === 0) break
+    }
+
+    return nearest ?? findTimelineScrollAnchor(rows, layout, node.scrollTop)
+  }, [])
+
+  const markTimelineUserScrolling = useCallback(() => {
+    timelineEstimateCalibrationFrozenRef.current = true
+    if (timelineHeightOverrideRef.current == null) {
+      const stableHeight = rowLayoutRef.current.totalHeight
+      timelineHeightOverrideRef.current = stableHeight
+      activeTimelineScrollAnchorRef.current = captureTimelineScrollAnchor()
+      setTimelineHeightOverride(stableHeight)
+    }
+
+    userScrollingRef.current = true
+    if (userScrollingTimerRef.current != null) {
+      window.clearTimeout(userScrollingTimerRef.current)
+    }
+    userScrollingTimerRef.current = window.setTimeout(() => {
+      userScrollingRef.current = false
+      userScrollingTimerRef.current = null
+      // Capture fresh (not ??=): scroll commits are quantized, so an anchor
+      // captured on the last commit can lag the real viewport by up to
+      // TIMELINE_SCROLL_COMMIT_PX — restoring it would yank the scroll
+      // position back. The viewport-top row is always mounted (overscan far
+      // exceeds the commit threshold), so this capture is exact.
+      activeTimelineScrollAnchorRef.current = captureTimelineScrollAnchor()
+      timelineHeightOverrideRef.current = null
+      pendingTimelineAnchorRestoreRef.current = true
+      setTimelineHeightOverride(null)
+      // The scroll handler quantizes its commits; settle the exact resting
+      // position now that the gesture is over, and hydrate any placeholder
+      // rows left over from a fast fling.
+      scrollVelocitySampleRef.current = null
+      setFastScrollingMode(false)
+      const node = timelineRef.current
+      if (node) commitTimelineScrollTop(node.scrollTop)
+      scheduleTimelineMeasurementFlushRef.current()
+    }, SCROLL_IDLE_MS)
+  }, [captureTimelineScrollAnchor, commitTimelineScrollTop, setFastScrollingMode])
+
+  useEffect(() => {
+    const node = timelineRef.current
+    if (!node) return
+
+    const updateMetrics = () => {
+      setTimelineViewportHeight(node.clientHeight)
+      commitTimelineScrollTop(node.scrollTop)
+    }
+
+    updateMetrics()
+    const observer = new ResizeObserver(() => updateMetrics())
+    observer.observe(node)
+    const handleWheel = (event: WheelEvent) => {
+      // Real input takes ownership from programmatic alignment immediately.
+      // Otherwise resize-driven tail alignment can keep extending scroll-event
+      // suppression while an upward gesture is trying to leave the tail.
+      programmaticScrollUntilRef.current = 0
+      suppressFollowEvalUntilRef.current = 0
+      if (event.deltaY < 0) {
+        autoFollowRef.current = false
+        setAutoFollow(false)
+      }
+      wheelScrollCompensationUntilRef.current = performance.now() + WHEEL_SCROLL_COMPENSATION_MS
+      // Track the input event itself. Anchor compensation also writes
+      // scrollTop and temporarily marks resulting scroll events programmatic;
+      // relying only on those scroll events allowed the idle timer to expire
+      // in the middle of a continuous wheel/trackpad gesture.
+      markTimelineUserScrolling()
+    }
+    node.addEventListener('wheel', handleWheel, { passive: true })
+    return () => {
+      observer.disconnect()
+      node.removeEventListener('wheel', handleWheel)
+    }
+  }, [commitTimelineScrollTop, markTimelineUserScrolling, showDiagnostics, showVisualizer, session?.sessionId])
 
   useEffect(() => {
     if (!rewindPreview || rewindPreview.userMessageId === rewindTargetId) return
     setRewindPreview(null)
   }, [rewindPreview, rewindTargetId])
 
+  const markProgrammaticTimelineScroll = useCallback((duration = PROGRAMMATIC_SCROLL_SUPPRESSION_MS) => {
+    programmaticScrollUntilRef.current = Math.max(programmaticScrollUntilRef.current, performance.now() + duration)
+  }, [])
+
+  const restoreTimelineScrollAnchor = useCallback(() => {
+    const node = timelineRef.current
+    const anchor = activeTimelineScrollAnchorRef.current
+    activeTimelineScrollAnchorRef.current = null
+    if (!node || !anchor) return
+
+    const layout = rowLayoutRef.current
+    const index = layout.indexByKey.get(anchor.key)
+    if (index == null) return
+
+    const maxScrollTop = Math.max(node.scrollHeight - node.clientHeight, 0)
+    const targetTop = Math.max(0, Math.min(layout.tops[index] + anchor.offset, maxScrollTop))
+    if (Math.abs(node.scrollTop - targetTop) < 1) return
+
+    suppressFollowEvalUntilRef.current = performance.now() + 200
+    markProgrammaticTimelineScroll()
+    node.scrollTop = targetTop
+    commitTimelineScrollTop(node.scrollTop)
+  }, [commitTimelineScrollTop, markProgrammaticTimelineScroll])
+
   const scrollTimelineToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
     const node = timelineRef.current
     if (!node) return
-    node.scrollTo({ top: node.scrollHeight, behavior })
-  }, [])
+    const targetTop = Math.max(node.scrollHeight - node.clientHeight - TIMELINE_BOTTOM_GUTTER_PX, 0)
+    commitTimelineScrollTop(targetTop)
+    suppressFollowEvalUntilRef.current = performance.now() + 200
+    markProgrammaticTimelineScroll(behavior === 'smooth' ? 700 : undefined)
+    node.scrollTo({ top: targetTop, behavior })
+  }, [commitTimelineScrollTop, markProgrammaticTimelineScroll])
 
-  useEffect(() => {
-    if (!autoFollow) return
-    const frame = window.requestAnimationFrame(() => scrollTimelineToBottom())
-    return () => window.cancelAnimationFrame(frame)
-  }, [
-    autoFollow,
-    loading,
-    messages.length,
-    optimisticUserText,
-    liveAssistantText,
-    liveToolActivities,
-    awaitingPersistedTurn,
-    scrollTimelineToBottom,
-  ])
+  const toggleLiveFollow = useCallback(() => {
+    const next = !autoFollow
+    setAutoFollow(next)
+    if (next) {
+      window.requestAnimationFrame(() => scrollTimelineToBottom())
+    }
+  }, [autoFollow, scrollTimelineToBottom])
+
+  const alignLastTimelineRowToViewportBottom = useCallback(() => {
+    const node = timelineRef.current
+    const lastRow = lastTimelineRowRef.current
+    if (!node || !lastRow) return
+    const nodeRect = node.getBoundingClientRect()
+    const rowRect = lastRow.getBoundingClientRect()
+    const targetTop = Math.max(node.scrollTop + (rowRect.bottom - nodeRect.bottom), 0)
+    suppressFollowEvalUntilRef.current = performance.now() + 200
+    markProgrammaticTimelineScroll()
+    node.scrollTop = targetTop
+    commitTimelineScrollTop(targetTop)
+  }, [commitTimelineScrollTop, markProgrammaticTimelineScroll])
 
   const handleTimelineScroll = useCallback(() => {
+    const isProgrammaticScroll = performance.now() < programmaticScrollUntilRef.current
+    if (!isProgrammaticScroll) {
+      markTimelineUserScrolling()
+      pendingMountedAnchorCaptureRef.current = true
+    }
+    if (scrollRafRef.current != null) return
+    scrollRafRef.current = window.requestAnimationFrame(() => {
+      scrollRafRef.current = null
+      const node = timelineRef.current
+      if (!node) return
+      scheduleTimelineMeasurementFlushRef.current()
+      const now = performance.now()
+      if (now < programmaticScrollUntilRef.current) {
+        // A programmatic jump teleports scrollTop; reset the sample so the
+        // jump doesn't read as fling velocity on the next real scroll.
+        scrollVelocitySampleRef.current = { top: node.scrollTop, time: now }
+      } else {
+        const sample = scrollVelocitySampleRef.current
+        scrollVelocitySampleRef.current = { top: node.scrollTop, time: now }
+        if (sample && now > sample.time) {
+          const velocity = (Math.abs(node.scrollTop - sample.top) / (now - sample.time)) * 1000
+          if (velocity >= FAST_SCROLL_ENTER_PX_PER_S) setFastScrollingMode(true)
+          else if (velocity <= FAST_SCROLL_EXIT_PX_PER_S) setFastScrollingMode(false)
+        }
+      }
+      // Quantized: re-render only once the window has meaningfully moved.
+      // The exact resting position is committed by the scroll-idle timer in
+      // markTimelineUserScrolling.
+      commitTimelineScrollTopIfDrifted(node.scrollTop)
+      if (now < suppressFollowEvalUntilRef.current) return
+      const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight
+      setAutoFollow(distanceFromBottom <= TIMELINE_BOTTOM_GUTTER_PX + 16)
+    })
+  }, [commitTimelineScrollTopIfDrifted, markTimelineUserScrolling, setFastScrollingMode])
+
+  const scrollMountedTimelineRowIntoView = useCallback((messageId: string): boolean => {
     const node = timelineRef.current
-    if (!node) return
-    const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight
-    setAutoFollow(distanceFromBottom < 72)
-  }, [])
+    if (!node) return false
+
+    let rowNode: HTMLElement | null = null
+    for (const candidate of Array.from(node.querySelectorAll<HTMLElement>('.timeline-row[data-message-id]'))) {
+      if (candidate.dataset.messageId === messageId) {
+        rowNode = candidate
+        break
+      }
+    }
+    if (!rowNode) return false
+
+    const nodeRect = node.getBoundingClientRect()
+    const rowRect = rowNode.getBoundingClientRect()
+    const targetTop = Math.max(node.scrollTop + rowRect.top - nodeRect.top - TIMELINE_TARGET_TOP_GUTTER_PX, 0)
+    suppressFollowEvalUntilRef.current = performance.now() + 300
+    autoFollowRef.current = false
+    setAutoFollow(false)
+    if (Math.abs(node.scrollTop - targetTop) > 1) {
+      markProgrammaticTimelineScroll()
+      node.scrollTop = targetTop
+      commitTimelineScrollTop(targetTop)
+    }
+    return true
+  }, [commitTimelineScrollTop, markProgrammaticTimelineScroll])
+
+  useLayoutEffect(() => {
+    if (!awaitingPersistedTurn || !session) return
+
+    const baseline = pendingMessageBaselineRef.current
+    if (!baseline || baseline.sessionId !== session.sessionId) return
+
+    const durableMessages = messages.filter(isDurableSessionMessage)
+    const currentLastMessage = durableMessages.at(-1)
+    const currentLastUuid = currentLastMessage?.uuid ?? null
+    const currentLastFingerprint = sessionMessageFingerprint(currentLastMessage)
+    const changedMessages = messagesChangedSinceBaseline(durableMessages, baseline)
+    const persistedTurnArrived =
+      changedMessages.length > 0
+      || durableMessages.length !== baseline.count
+      || currentLastUuid !== baseline.lastUuid
+      || currentLastFingerprint !== baseline.lastFingerprint
+    const persistedAssistantArrived = changedMessages.some((message) => message.type === 'assistant')
+    const liveAssistantVisible = liveAssistantTextRef.current.trim().length > 0 || liveThreadedMessages.length > 0
+
+    if (persistedTurnArrived && (persistedAssistantArrived || !liveAssistantVisible)) {
+      setOptimisticUserText(null)
+      setSteeredUserTexts([])
+      clearLiveAssistantText()
+      setLiveToolActivities([])
+      setLiveThreadedMessages([])
+      clearLiveSubagentText()
+      awaitingPersistedTurnRef.current = false
+      setAwaitingPersistedTurn(false)
+      pendingMessageBaselineRef.current = null
+      liveToolIndexesRef.current.clear()
+      liveToolInputJsonRef.current.clear()
+      if (autoFollow) {
+        window.requestAnimationFrame(() => scrollTimelineToBottom())
+      }
+    }
+  }, [autoFollow, awaitingPersistedTurn, clearLiveAssistantText, liveAssistantText, liveThreadedMessages.length, messages, scrollTimelineToBottom, session])
+
+  // Escape hatch for a persisted row that never lands. Without this, a lost or
+  // badly delayed write leaves the composer stuck on "Syncing transcript…"
+  // indefinitely (the reconcile effect above only resolves on arrival). After a
+  // bounded wait we tear down the live overlay and reveal whatever the poll has.
+  useEffect(() => {
+    if (!awaitingPersistedTurn) return
+    const timer = window.setTimeout(() => {
+      setOptimisticUserText(null)
+      setSteeredUserTexts([])
+      clearLiveAssistantText()
+      setLiveToolActivities([])
+      setLiveThreadedMessages([])
+      clearLiveSubagentText()
+      awaitingPersistedTurnRef.current = false
+      setAwaitingPersistedTurn(false)
+      pendingMessageBaselineRef.current = null
+      liveToolIndexesRef.current.clear()
+      liveToolInputJsonRef.current.clear()
+    }, AWAITING_PERSISTED_TURN_TIMEOUT_MS)
+    return () => window.clearTimeout(timer)
+  }, [awaitingPersistedTurn, clearLiveAssistantText, clearLiveSubagentText])
+
+  // 'Interrupting…' is only meaningful while we're waiting for the interrupted
+  // turn to reconcile. Once awaitingPersistedTurn clears (the partial turn
+  // landed, or the escape-hatch timeout fired), drop the interrupting flag.
+  useEffect(() => {
+    if (!awaitingPersistedTurn && interrupting) {
+      setInterrupting(false)
+    }
+  }, [awaitingPersistedTurn, interrupting])
+
+  // Poll for a server-side turn we don't own so we can reattach to it. Runs
+  // only while this client is idle (no owned stream); pauses the moment we
+  // start/own a turn, and clears as soon as the server reports the turn done.
+  useEffect(() => {
+    if (!session || projectView) {
+      setReattachedRunning(false)
+      setRunningProbeReadyKey(null)
+      return
+    }
+    const sessionId = session.sessionId
+    const sessionProvider = session.provider ?? 'claude'
+    const probeKey = `${sessionProvider}:${sessionId}`
+    setRunningProbeReadyKey(null)
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const poll = async () => {
+      if (cancelled) return
+      // We own a live turn already — the stream renders it; don't double-track.
+      if (sendInFlightRef.current || awaitingPersistedTurnRef.current) {
+        if (reattachedRunningRef.current) setReattachedRunning(false)
+        timer = setTimeout(poll, REATTACH_POLL_MS)
+        return
+      }
+      try {
+        const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/running`, { cache: 'no-store' })
+        if (!cancelled && res.ok) {
+          const info = (await res.json().catch(() => null)) as
+            | {
+                running?: boolean
+                pendingPrompts?: Record<string, unknown>[]
+                pendingPermissions?: Record<string, unknown>[]
+              }
+            | null
+          if (cancelled) return
+          const running = info?.running === true
+          setReattachedRunning((prev) => (prev === running ? prev : running))
+          setRunningProbeReadyKey(probeKey)
+          // Re-surface any provider-native approval/question the turn is
+          // blocked on. The original SSE may be gone after reload/navigation,
+          // but the process-local resolver remains answerable by id.
+          const permissionPayloads = Array.isArray(info?.pendingPermissions)
+            ? info.pendingPermissions
+            : (Array.isArray(info?.pendingPrompts) ? info.pendingPrompts : []).map((data) => ({
+                type: 'claude_permission',
+                event: { type: 'permission.requested', data },
+              }))
+          const reattached = extractPendingPermissions(permissionPayloads, {
+            sessionId,
+            provider: sessionProvider,
+          })
+          setPendingPermissions((prev) => {
+            const others = prev.filter((p) => !(p.provider === sessionProvider && p.sessionId === sessionId))
+            const nextIds = [...others, ...reattached].map((p) => p.id).join('|')
+            const prevIds = prev.map((p) => p.id).join('|')
+            return nextIds === prevIds ? prev : [...others, ...reattached]
+          })
+        }
+      } catch {
+        // best-effort; a failed probe just leaves the prior state
+      }
+      if (!cancelled) timer = setTimeout(poll, REATTACH_POLL_MS)
+    }
+    void poll()
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [projectView, session?.provider, session?.sessionId])
 
   const cancelSend = useCallback(() => {
     if (session) {
       fetch(`/api/sessions/${session.sessionId}/interrupt`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: session.provider }),
+        body: JSON.stringify({
+          provider: session.provider,
+          providerInstanceId: session.providerInstanceId,
+          turnRequestId: activeTurnRequestIdRef.current ?? undefined,
+          cancelQueued: true,
+        }),
+      }).then(async (res) => {
+        // interrupt_receipt_v1: uuids of queued async messages that survive
+        // the interrupt and WILL still run. Warn instead of letting the next
+        // turn look like a ghost send.
+        const json = await readOptionalJsonResponse<{ stillQueued?: unknown } | null>(res, null)
+        const stillQueuedUuids = Array.isArray(json?.stillQueued)
+          ? json.stillQueued.filter((uuid): uuid is string => typeof uuid === 'string')
+          : null
+        if (stillQueuedUuids) {
+          const stillQueued = new Set(stillQueuedUuids)
+          // A queued lifecycle frame says the message had not started. If its
+          // uuid is absent from the interrupt receipt, the interrupt removed it
+          // and its draft is safe to restore. Receipt members remain queued in
+          // Claude and must not also be copied into the composer.
+          const restoreEntries = steeredUserTextsRef.current
+            .filter((entry) => entry.state === 'queued' && entry.messageUuid && !stillQueued.has(entry.messageUuid))
+          const restoreTexts = restoreEntries.map((entry) => entry.text)
+          if (restoreTexts.length > 0) {
+            const restoredUuids = new Set(restoreEntries.map((entry) => entry.messageUuid))
+            const nextSteeredEntries = steeredUserTextsRef.current
+              .filter((entry) => !restoredUuids.has(entry.messageUuid))
+            steeredUserTextsRef.current = nextSteeredEntries
+            setSteeredUserTexts(nextSteeredEntries)
+            const restored = [inputTextRef.current.trim(), ...restoreTexts].filter(Boolean).join('\n\n')
+            inputTextRef.current = restored
+            if (textareaRef.current) textareaRef.current.value = restored
+            setInputText(restored)
+            window.requestAnimationFrame(resizeComposer)
+          }
+          if (stillQueuedUuids.length > 0) {
+            setSessionActionNotice(`Interrupted · ${stillQueuedUuids.length} queued message${stillQueuedUuids.length === 1 ? '' : 's'} will still run`)
+          } else if (restoreTexts.length > 0) {
+            setSessionActionNotice(`Interrupted · restored ${restoreTexts.length} cancelled queued message${restoreTexts.length === 1 ? '' : 's'} to the composer`)
+          }
+        }
       }).catch(() => {})
     }
-    if (optimisticUserText) {
-      setInputText((prev) => prev || optimisticUserText)
+    // Cancel any pending transient auto-retry so it can't fire after the user
+    // explicitly stopped the turn.
+    if (transientRetryTimerRef.current) {
+      clearTimeout(transientRetryTimerRef.current)
+      transientRetryTimerRef.current = null
     }
+    transientRetryCountRef.current = 0
     abortControllerRef.current?.abort()
     abortControllerRef.current = null
+    activeTurnRequestIdRef.current = null
+    sendInFlightRef.current = false
+    setSendError(null)
     setSendState('idle')
-    setSendError(null)
-    setOptimisticUserText(null)
-    setLiveAssistantText('')
-    setLiveToolActivities([])
-    setAwaitingPersistedTurn(false)
-    pendingMessageBaselineRef.current = null
-    liveToolIndexesRef.current.clear()
+    // The user interrupted to change course — auto-firing queued follow-ups
+    // would be a surprise-send. Pop their text back into the composer instead
+    // so they can edit and re-send.
+    const interruptQueue = selectComposerQueueTarget(queuedSendsRef.current, composerQueueTargetKey)
+    if (interruptQueue.length > 0) {
+      commitQueuedSends(clearComposerQueueTarget(queuedSendsRef.current, composerQueueTargetKey))
+      const restored = restoreComposerDraftPayload(
+        { text: inputTextRef.current, attachments: [] },
+        interruptQueue,
+      ).text
+      inputTextRef.current = restored
+      if (textareaRef.current) textareaRef.current.value = restored
+      setInputText(restored)
+      setAttachments((current) => restoreComposerDraftPayload(
+        { text: '', attachments: current },
+        interruptQueue,
+      ).attachments)
+      window.requestAnimationFrame(resizeComposer)
+    }
+    if (pendingMessageBaselineRef.current) {
+      // The turn had started: keep whatever the agent produced visible and
+      // transition into the 'Interrupting…' / syncing state so the interrupted
+      // turn's partial output reconciles smoothly instead of vanishing and then
+      // reappearing on the next poll. The awaitingPersistedTurn timeout is the
+      // escape hatch if the interrupt is a no-op and nothing ever persists.
+      setInterrupting(true)
+      awaitingPersistedTurnRef.current = true
+      setAwaitingPersistedTurn(true)
+    } else {
+      // Nothing started yet — restore the draft and clear cleanly, as if unsent.
+      // (Also the reattach path: we don't own a stream, so stop just fires the
+      // server interrupt and drops back to idle; the /running poll reconciles.)
+      setReattachedRunning(false)
+      if (optimisticUserText) setInputText((prev) => prev || optimisticUserText)
+      setInterrupting(false)
+      awaitingPersistedTurnRef.current = false
+      setAwaitingPersistedTurn(false)
+      setOptimisticUserText(null)
+      setSteeredUserTexts([])
+      clearLiveAssistantText()
+      setLiveToolActivities([])
+      setLiveThreadedMessages([])
+      clearLiveSubagentText()
+      pendingMessageBaselineRef.current = null
+      liveToolIndexesRef.current.clear()
+      liveToolInputJsonRef.current.clear()
+    }
     textareaRef.current?.focus()
-  }, [optimisticUserText, session])
+  }, [clearLiveAssistantText, clearLiveSubagentText, commitQueuedSends, composerQueueTargetKey, optimisticUserText, resizeComposer, session])
 
-  const sendMessage = useCallback(async () => {
-    if (!session || !inputText.trim() || sendState === 'sending') return
+  const backgroundClaudeTasks = useCallback(async () => {
+    if (!session || session.provider !== 'claude' || session.isPending || backgroundingTasks) return
+    setBackgroundingTasks(true)
+    setSessionActionError(null)
+    setSessionActionNotice(null)
+    try {
+      const res = await fetch(`/api/sessions/${session.sessionId}/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: 'claude', action: 'backgroundTasks' }),
+      })
+      const data = await readOptionalJsonResponse(res, {})
+      if (data.error) throw new Error(data.error)
+      const backgrounded = data.result?.backgrounded === true
+      setSessionActionNotice(backgrounded ? 'Claude task moved to background.' : 'No foreground Claude task to background.')
+    } catch (err) {
+      setSessionActionError(err instanceof Error ? err.message : 'Failed to background Claude task')
+    } finally {
+      setBackgroundingTasks(false)
+      textareaRef.current?.focus()
+    }
+  }, [backgroundingTasks, session])
 
-    const text = inputText.trim()
-    setInputText('')
-    setSendState('sending')
+  // Cancel a running Claude SDK background task via query.stopTask(). Routes at
+  // the live warm pool entry server-side, so it only works while the session is
+  // warm (the backend reports stopped:false otherwise).
+  const stopClaudeTask = useCallback(async (taskId: string) => {
+    if (!session || session.provider !== 'claude' || session.isPending) return
+    setSessionActionError(null)
+    setSessionActionNotice(null)
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: 'claude', action: 'stopTask', taskId }),
+      })
+      const data = await readOptionalJsonResponse(res, {})
+      if (data.error) throw new Error(data.error)
+      const stopped = data.result?.stopped === true
+      setSessionActionNotice(stopped ? `Stopped task #${taskId}.` : 'No running task to stop (session not warm).')
+    } catch (err) {
+      setSessionActionError(err instanceof Error ? err.message : 'Failed to stop task')
+    }
+  }, [session])
+
+  const sendMessage = useCallback(async (retryOverride?: {
+    text: string
+    attachments: SendAttachment[]
+    turnRequestId?: string
+  }) => {
+    if (!session) return
     setSendError(null)
+
+    // Custom-model providers (LM Studio, opencode/copilot custom endpoints) can
+    // take a moment to enumerate their model list on a cold connection. Sending
+    // before that resolves means `selectedModel` is still '' and the request
+    // falls back to whatever the backend guesses as a default — which may not
+    // actually be available yet. Block until the fetch settles (success or
+    // failure) rather than gamble on an unresolved model.
+    // Claude and Codex are exempt: both explicitly treat an omitted `model` as
+    // "use the CLI/thread's own configured default" server-side, exactly like
+    // typing into the native CLI never waits on a model list first — gating
+    // the very first send on this fetch (which can take a second or two,
+    // notably Claude's getContextUsage() round trip) only made the composer
+    // feel slower than the CLI for no correctness benefit.
+    const modelIsOptionalForProvider = session.provider === 'claude' || session.provider === 'codex'
+    if (!retryOverride && !modelIsOptionalForProvider && modelsLoading && !selectedModel) {
+      pendingSendOnModelsReadyRef.current = session.sessionId
+      setSendError('Waiting for model list to load…')
+      return
+    }
+
+    // Global Channel Bridge binding: when the user has toggled "route composer
+    // through bridge", a normal composer send (never an auto-retry) is diverted
+    // to the live `claude` CLI session instead of the active provider. The send
+    // is fire-and-forget — replies/permission prompts surface in the bridge
+    // panel — so we just push the text, clear the composer, and return before
+    // any of the provider streaming machinery runs.
+    const bridge = channelBridgeRef.current
+    if (!retryOverride && canUseChannelBridge && bridge.routeComposer) {
+      const text = (textareaRef.current?.value ?? inputTextRef.current).trim()
+      if (!text) return
+      try {
+        await bridge.send(text)
+        setInputText('')
+        inputTextRef.current = ''
+        if (textareaRef.current) textareaRef.current.value = ''
+        setAttachments([])
+        window.requestAnimationFrame(resizeComposer)
+      } catch {
+        // error surfaced via the bridge panel (bridge.sendError)
+      }
+      return
+    }
+    // Global IDE Bridge binding: like the channel bridge above, but pushes the
+    // composer line as an @file mention into the `claude` session connected to
+    // agentViewer's IDE host instead of sending a chat turn. Fire-and-forget —
+    // tool calls / diffs surface in the IDE panel.
+    const ide = ideBridgeRef.current
+    if (!retryOverride && canUseIdeBridge && ide.routeComposer) {
+      const text = (textareaRef.current?.value ?? inputTextRef.current).trim()
+      if (!text) return
+      try {
+        await ide.send(text)
+        setInputText('')
+        inputTextRef.current = ''
+        if (textareaRef.current) textareaRef.current.value = ''
+        setAttachments([])
+        window.requestAnimationFrame(resizeComposer)
+      } catch {
+        // error surfaced via the IDE bridge panel (ide.sendError)
+      }
+      return
+    }
+    // Provider CLIs accept follow-up input while the current turn is still
+    // streaming — they steer or queue it. Mirror that: if a send fires
+    // while one is in flight, stash the draft and have the post-stream effect
+    // flush it once the current turn lands. A transient auto-retry (retryOverride)
+    // is never a queue candidate — it only fires after the failed turn settled.
+    if (!retryOverride && (sendInFlightRef.current || awaitingPersistedTurnRef.current || reattachedRunningRef.current)) {
+      const queueText = (textareaRef.current?.value ?? inputTextRef.current).trim()
+      const queueAttachments = attachments
+      if (!queueText && queueAttachments.length === 0) return
+      setInputText('')
+      inputTextRef.current = ''
+      textareaRef.current?.value !== undefined && (textareaRef.current!.value = '')
+      setAttachments([])
+      window.requestAnimationFrame(resizeComposer)
+      // Native steering first: deliver the message INTO the running turn
+      // (Claude pushes onto the warm query's input stream, Codex turn/steer,
+      // Copilot immediate mode, Pi steer(), opencode queues server-side).
+      // Attachments can't ride a
+      // steer, and a turn in post-stream reconcile has nothing to steer —
+      // those (and delivered:false / errors) fall back to the client queue.
+      // Slash commands and `!` shell input never steer: steering would inject
+      // them as literal prompt text mid-turn, whereas the native CLIs queue
+      // them and execute them natively once the turn ends — the queue below
+      // flushes into the send path, which does exactly that.
+      if ((sendInFlightRef.current || reattachedRunningRef.current) && queueAttachments.length === 0 && !isNativeComposerCommandText(queueText)) {
+        try {
+          const result = await deliverComposerSteer(async (payload) => {
+            const res = await fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/actions`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ ...payload, providerInstanceId: session.providerInstanceId }),
+            })
+            if (!res.ok) throw new Error(`Steer failed with HTTP ${res.status}`)
+            const json = await res.json() as { result?: { delivered?: unknown; messageUuid?: unknown } }
+            if (!json.result) throw new Error('Steer response did not include a result')
+            return json.result
+          }, {
+            message: queueText,
+            provider: session.provider,
+            turnRequestId: activeTurnRequestIdRef.current ?? undefined,
+          })
+          if (result.delivered === true) {
+            setSteeredNotice(queueText)
+            // Echo it into the live overlay immediately — it's part of the
+            // running turn now, like typing in the provider's native CLI.
+            const messageUuid = typeof result.messageUuid === 'string' ? result.messageUuid : undefined
+            const nextSteeredEntries = [...steeredUserTextsRef.current, { text: queueText, messageUuid }]
+            steeredUserTextsRef.current = nextSteeredEntries
+            setSteeredUserTexts(nextSteeredEntries)
+            return
+          }
+        } catch {
+          // Steering is best-effort; the queue below is the reliable path.
+        }
+      }
+      const targetKey = `${session.provider ?? 'claude'}:${session.sessionId}`
+      commitQueuedSends([...queuedSendsRef.current, {
+        id: createComposerQueueItemId(targetKey),
+        targetKey,
+        text: queueText,
+        attachments: queueAttachments,
+      }])
+      return
+    }
+
+    const text = retryOverride ? retryOverride.text : (textareaRef.current?.value ?? inputTextRef.current).trim()
+    const sendAttachments = retryOverride ? retryOverride.attachments : attachments
+    if (!text && sendAttachments.length === 0) return
+
+    // Reset the retry counter at the start of a fresh (non-retry) send.
+    if (!retryOverride) transientRetryCountRef.current = 0
+    pendingSendOnModelsReadyRef.current = null
+    turnProducedOutputRef.current = false
+
+    sendInFlightRef.current = true
+    // We now own a live stream — drop any reattach tracking so the turn renders
+    // from the stream, not the /running poll.
+    reattachedRunningRef.current = false
+    setReattachedRunning(false)
+    pushedCopilotAttachmentsRef.current = []
+    // A send consumes its attachment chips immediately, just like its text.
+    // This lets the user compose the next prompt while the turn runs without
+    // accidentally re-queuing the prior turn's files. Retries keep the user's
+    // newer draft attachments untouched and reuse the captured payload.
+    if (!retryOverride) setAttachments([])
+    const effort = selectedEffort === 'auto' ? undefined : selectedEffort
+    const currentSentHistory = sentHistoryRef.current
+    if (text && currentSentHistory[currentSentHistory.length - 1] !== text) {
+      const next = [...currentSentHistory, text]
+      const capped = next.length > SENT_HISTORY_MAX ? next.slice(next.length - SENT_HISTORY_MAX) : next
+      sentHistoryRef.current = capped
+      setSentHistory(capped)
+      writePersistedSentHistory(capped)
+    }
+    setHistoryIndex(-1)
+    draftBeforeHistoryRef.current = { text: '', cursorPos: 0 }
+    setInputText('')
+    inputTextRef.current = ''
+    setSendState('sending')
+    setSteeredNotice(null)
+    setFailedSend(null)
+    setInterrupting(false)
     setOptimisticUserText(text)
-    setLiveAssistantText('')
+    setSteeredUserTexts([])
+    clearLiveAssistantText()
     setLiveToolActivities([])
+    setLiveThreadedMessages([])
+    setLivePromptSuggestion(null)
+    setLiveStatus(null)
+    clearLiveSubagentText()
+    awaitingPersistedTurnRef.current = false
     setAwaitingPersistedTurn(false)
     setAutoFollow(true)
-    pendingMessageBaselineRef.current = {
-      count: messages.length,
-      lastUuid: messages.at(-1)?.uuid ?? null,
-      sessionId: session.sessionId,
-    }
+    pendingMessageBaselineRef.current = buildPendingMessageBaseline(messages, session.sessionId)
     liveToolIndexesRef.current.clear()
+    liveToolInputJsonRef.current.clear()
 
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'
-    }
+    window.requestAnimationFrame(resizeComposer)
 
     const controller = new AbortController()
+    const sendPerfStartedAt = performance.now()
+    // Keep the request id stable across an automatic transport retry. Codex's
+    // persistent queue uses it as clientUserMessageId, so a response lost after
+    // queue/add cannot manufacture a duplicate queued prompt on retry.
+    const turnRequestId = retryOverride?.turnRequestId
+      ?? globalThis.crypto?.randomUUID?.()
+      ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
     abortControllerRef.current = controller
+    activeTurnRequestIdRef.current = turnRequestId
 
     try {
       const res = await fetch(`/api/sessions/${session.sessionId}/messages`, {
@@ -615,30 +4842,105 @@ export default function MessageView({ messages, loading, session, projectView, o
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: text,
-          model: selectedModel,
+          model: selectedModel || undefined,
+          effort,
+          attachments: sendAttachments,
           resumeSessionAt: resumeFromMessageId ?? undefined,
+          // Same message: it's both the fork point and the prompt UUID of the
+          // turn being discarded from the UI's perspective (see resumeDropsTurn
+          // usage doc). The CLI refuses the fork if that turn's own tool_result
+          // or structured_output would be left in the discarded range.
+          resumeDropsTurn: resumeFromMessageId ?? undefined,
           forkSession: Boolean(resumeFromMessageId),
           provider: session.provider,
+          providerInstanceId: session.providerInstanceId,
+          agent: session.provider === 'opencode' && selectedAgent ? selectedAgent : undefined,
+          mode: session.provider === 'copilot' ? selectedCopilotMode : undefined,
+          contextTier: session.provider === 'copilot'
+            ? selectedCopilotContextTier ?? undefined
+            : undefined,
+          manualPermissions: session.provider === 'copilot'
+            || (session.provider === 'claude' && selectedPermissionMode !== 'bypassPermissions' && selectedPermissionMode !== 'plan')
+            ? true : undefined,
+          nativeCommands: session.provider === 'copilot' ? true : undefined,
+          detachOnClientAbort: true,
+          turnRequestId,
+          taskBudgetTokens: taskBudgetTokens ?? undefined,
+          enableWorkflow: session.provider === 'claude' && enableWorkflow ? true : undefined,
+          isPendingSession: session.isPending === true ? true : undefined,
+          cwd: session.cwd ?? undefined,
+          permissionMode: session.provider === 'claude' && selectedPermissionMode !== 'default'
+            ? selectedPermissionMode
+            : undefined,
+          approvalPolicy: session.provider === 'codex' && selectedCodexApproval !== 'auto'
+            ? selectedCodexApproval
+            : undefined,
         }),
         signal: controller.signal,
       })
+      recordClientPerf(
+        `composer.${session.provider ?? 'claude'}.send-to-ack`,
+        performance.now() - sendPerfStartedAt,
+      )
 
       if (!res.ok) {
         const json = await res.json().catch(() => ({}))
         throw new Error(json.error ?? `HTTP ${res.status}`)
       }
 
-      const reader = res.body!.getReader()
+      if (!res.body) throw new Error('No response stream returned')
+
+      const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let sseBuffer = ''
+      let firstOutputRecorded = false
+      const noteFirstOutput = () => {
+        if (firstOutputRecorded) return
+        firstOutputRecorded = true
+        recordClientPerf(
+          `composer.${session.provider ?? 'claude'}.first-output`,
+          performance.now() - sendPerfStartedAt,
+        )
+      }
+      // Stall watchdog: only Claude emits server heartbeats, so only Claude can
+      // be confidently judged dead-vs-slow. Race each read against a timeout; if
+      // neither data nor a heartbeat lands within the window, treat the socket as
+      // dead and recover via reattach instead of blocking on read() for minutes.
+      const stallGuard = session.provider === 'claude'
+      let streamStalled = false
       while (true) {
-        const { done, value } = await reader.read()
+        let readResult: ReadableStreamReadResult<Uint8Array>
+        if (stallGuard) {
+          const readPromise = reader.read()
+          readPromise.catch(() => {}) // abandoned on stall; swallow its rejection
+          let stallTimer: ReturnType<typeof setTimeout> | undefined
+          const stallPromise = new Promise<typeof STREAM_STALL_SENTINEL>((resolve) => {
+            stallTimer = setTimeout(() => resolve(STREAM_STALL_SENTINEL), CLAUDE_STREAM_STALL_MS)
+          })
+          const raced = await Promise.race([readPromise, stallPromise])
+          if (stallTimer) clearTimeout(stallTimer)
+          if (raced === STREAM_STALL_SENTINEL) { streamStalled = true; break }
+          readResult = raced
+        } else {
+          readResult = await reader.read()
+        }
+        const { done, value } = readResult
         if (done) break
         sseBuffer += decoder.decode(value, { stream: true })
         const { frames, remaining } = extractSseFrames(sseBuffer)
         sseBuffer = remaining
 
         for (const frame of frames) {
+          if (frame.event === 'heartbeat') {
+            // Liveness pulse only — receiving it already reset the stall race on
+            // this iteration; nothing else to do.
+            continue
+          }
+
+          // Transport-only receipt consumed by cross-session senders. The
+          // normal composer already owns this stream, so it has nothing to do.
+          if (frame.event === 'turn-accepted') continue
+
           if (frame.event === 'context-usage') {
             try { setContextUsage(JSON.parse(frame.data)) } catch { /* ignore */ }
             continue
@@ -648,8 +4950,21 @@ export default function MessageView({ messages, loading, session, projectView, o
             try {
               const parsed = JSON.parse(frame.data)
               if (resumeFromMessageId && parsed.sessionId && parsed.sessionId !== session.sessionId) {
+                liveTurnSessionHandoffRef.current = parsed.sessionId
+                if (pendingMessageBaselineRef.current) {
+                  pendingMessageBaselineRef.current = retargetPendingMessageBaseline(pendingMessageBaselineRef.current, parsed.sessionId)
+                }
                 onFork?.(parsed.sessionId)
                 setSessionActionNotice('Forked a continuation from the selected point.')
+              } else if (session.isPending && parsed.sessionId) {
+                // Swap to the real SDK session id silently. Real CLI shows no
+                // "new session created" banner — the streaming reply itself
+                // signals that the session is live.
+                liveTurnSessionHandoffRef.current = parsed.sessionId
+                if (pendingMessageBaselineRef.current) {
+                  pendingMessageBaselineRef.current = retargetPendingMessageBaseline(pendingMessageBaselineRef.current, parsed.sessionId, true)
+                }
+                onFork?.(parsed.sessionId)
               }
             } catch { /* ignore */ }
             continue
@@ -658,21 +4973,200 @@ export default function MessageView({ messages, loading, session, projectView, o
           if (frame.event === 'error') {
             try {
               const parsed = JSON.parse(frame.data)
-              throw new Error(parsed.error ?? 'Unknown agent error')
+              throw new TransientAwareSendError(parsed.error ?? 'Unknown agent error', parsed.apiErrorStatus, parsed.usageLimit as UsageLimitKind | undefined)
             } catch (e) { throw e }
+          }
+
+          // OpenCode session.status frames mirror opencode-web's busy
+          // indicator. Maps to our own live-status state.
+          if (frame.event === 'opencode-status') {
+            try {
+              const parsed = JSON.parse(frame.data) as { type?: string }
+              if (parsed.type === 'busy') setLiveStatus('requesting')
+              else if (parsed.type === 'idle') setLiveStatus(null)
+            } catch { /* ignore */ }
+            continue
+          }
+
+          if (frame.event === 'opencode-todos') {
+            // Todos are surfaced through the polling refresh today, but
+            // catching the frame here drops it cleanly rather than letting
+            // the generic JSON.parse below fail on a non-data frame.
+            continue
+          }
+
+          // Non-fatal turn notice (e.g. an MCP elicitation prompt). Unlike
+          // command-result, this must NOT clear the live turn state — the turn
+          // is still running; we just surface a transient banner.
+          if (frame.event === 'turn-notice') {
+            try {
+              const parsed = JSON.parse(frame.data) as { message?: unknown }
+              if (typeof parsed.message === 'string' && parsed.message.trim()) {
+                noteFirstOutput()
+                setSessionActionNotice(parsed.message.trim())
+              }
+            } catch { /* ignore malformed notice */ }
+            continue
+          }
+
+          if (frame.event === 'command-result') {
+            try {
+              const parsed = JSON.parse(frame.data) as { message?: unknown; mode?: unknown; transcriptExpected?: unknown }
+              noteFirstOutput()
+              if (typeof parsed.message === 'string' && parsed.message.trim()) {
+                setSessionActionNotice(parsed.message.trim())
+              }
+              if (typeof parsed.mode === 'string') {
+                setSelectedCopilotMode(parsed.mode)
+              }
+              if (!commandResultExpectsTranscript(parsed)) {
+                pendingMessageBaselineRef.current = null
+                setOptimisticUserText(null)
+                setSteeredUserTexts([])
+                clearLiveAssistantText()
+                setLiveToolActivities([])
+                setLiveThreadedMessages([])
+                clearLiveSubagentText()
+              }
+            } catch { /* ignore malformed command result */ }
+            continue
           }
 
           try {
             const parsed = JSON.parse(frame.data)
+            if (parsed?.type === 'prompt_suggestion' && typeof parsed.suggestion === 'string') {
+              setLivePromptSuggestion(parsed.suggestion)
+            }
+            if (parsed?.type === 'system' && parsed.subtype === 'commands_changed') {
+              const commands = normalizeSlashCommandSuggestions(parsed.commands)
+              if (commands) setLiveSlashCommands(commands)
+            }
+            if (parsed?.type === 'system' && parsed.subtype === 'status') {
+              const next = parsed.status === 'requesting' || parsed.status === 'compacting' ? parsed.status : null
+              setLiveStatus(next)
+            }
+            // The Claude SDK auto-retries transient API errors (overload/network)
+            // and emits an api_retry system message per attempt. Surface it as the
+            // live "Retrying…" status — same UX Pi gets natively — so a multi-second
+            // SDK retry reads as recovery instead of a hang. It clears when the next
+            // assistant delta / result arrives (those setLiveStatus(null) below).
+            if (parsed?.type === 'system' && parsed.subtype === 'api_retry') {
+              setLiveStatus('retrying')
+            }
+            // Pi surfaces auto-retry / auto-compaction as non-fatal progress so the
+            // turn doesn't look hung while it recovers (mirrors native Pi).
+            if (parsed?.type === 'pi_status') {
+              if (parsed.status === 'retry_start') setLiveStatus('retrying')
+              else if (parsed.status === 'compaction_start' || parsed.status === 'summarization_retry_start') setLiveStatus('compacting')
+              else if (parsed.status === 'retry_end' || parsed.status === 'compaction_end' || parsed.status === 'summarization_retry_end') setLiveStatus(null)
+              else if (parsed.status === 'title_changed' && typeof parsed.name === 'string') {
+                setSessionInfo((prev) => prev ? { ...prev, customTitle: parsed.name } : prev)
+              }
+            }
+            // command_lifecycle frames: the CLI's authoritative per-message
+            // queue state, correlated to steered echoes by uuid stamp.
+            // cancelled/discarded means the message will never run — drop the
+            // echo instead of leaving a ghost the transcript never reconciles.
+            const commandLifecycle = parseClaudeCommandLifecycle(parsed)
+            if (commandLifecycle) {
+              const { commandUuid, state: lifecycleState } = commandLifecycle
+              const currentSteeredEntries = steeredUserTextsRef.current
+              if (currentSteeredEntries.some((entry) => entry.messageUuid === commandUuid)) {
+                const nextSteeredEntries = lifecycleState === 'cancelled' || lifecycleState === 'discarded'
+                  ? currentSteeredEntries.filter((entry) => entry.messageUuid !== commandUuid)
+                  : currentSteeredEntries.map((entry) => entry.messageUuid === commandUuid
+                    ? { ...entry, state: lifecycleState }
+                    : entry)
+                steeredUserTextsRef.current = nextSteeredEntries
+                setSteeredUserTexts(nextSteeredEntries)
+              }
+            }
+            if (parsed?.type === 'stream_event' && typeof parsed.parent_tool_use_id === 'string' && parsed.parent_tool_use_id) {
+              const event = parsed.event
+              if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta' && typeof event.delta.text === 'string') {
+                const parentId = parsed.parent_tool_use_id
+                const delta = event.delta.text
+                queueLiveSubagentDelta(parentId, delta)
+              }
+            }
+            if (parsed?.type === 'user' && typeof parsed.parent_tool_use_id === 'string' && parsed.parent_tool_use_id) {
+              // Route the clear through the same ref buffer so a buffered delta
+              // flushing after this removal can't resurrect the deleted text.
+              removeLiveSubagentEntry(parsed.parent_tool_use_id)
+            }
+            const pendingPermission = extractPendingPermission(parsed)
+            if (pendingPermission) {
+              noteFirstOutput()
+              setPendingPermissions((prev) => [
+                ...prev.filter((permission) => permission.id !== pendingPermission.id),
+                pendingPermission,
+              ])
+            }
+            const repliedPermissionId = extractPermissionReply(parsed)
+            if (repliedPermissionId) {
+              setPendingPermissions((prev) => prev.filter((permission) => permission.id !== repliedPermissionId))
+            }
+            const pushedAttachments = extractCopilotPushedAttachments(parsed)
+            if (pushedAttachments.length > 0) {
+              pushedCopilotAttachmentsRef.current = mergeComposerAttachments(pushedCopilotAttachmentsRef.current, pushedAttachments)
+              setAttachments((prev) => mergeComposerAttachments(prev, pushedAttachments))
+              const nextQueuedSends = (() => {
+                const current = queuedSendsRef.current
+                let newestTargetIndex = -1
+                for (let index = current.length - 1; index >= 0; index -= 1) {
+                  if (current[index]!.targetKey === composerQueueTargetKey) {
+                    newestTargetIndex = index
+                    break
+                  }
+                }
+                if (newestTargetIndex < 0) return current
+                return current.map((queued, index) => index === newestTargetIndex
+                  ? { ...queued, attachments: mergeComposerAttachments(queued.attachments, pushedAttachments) }
+                  : queued)
+              })()
+              if (nextQueuedSends !== queuedSendsRef.current) commitQueuedSends(nextQueuedSends)
+            }
             const toolStart = extractLiveToolStart(parsed)
             if (toolStart) {
+              noteFirstOutput()
+              // A tool call is a real side effect — once one starts, this turn
+              // must never be silently auto-retried (it could re-run the tool).
+              turnProducedOutputRef.current = true
               if (parsed.type === 'stream_event') {
                 liveToolIndexesRef.current.set(toolStart.index, toolStart.key)
+                liveToolInputJsonRef.current.set(toolStart.index, '')
               }
               setLiveToolActivities((prev) => {
                 const existing = prev.filter((activity) => activity.key !== toolStart.key)
-                return [...existing, { key: toolStart.key, label: toolStart.label, detail: toolStart.detail, status: 'running' }]
+                return [...existing, { key: toolStart.key, label: toolStart.label, detail: toolStart.detail, status: 'running', toolUse: 'toolUse' in toolStart ? toolStart.toolUse : undefined }]
               })
+              const liveToolUse = 'toolUse' in toolStart ? toolStart.toolUse : undefined
+              if (liveToolUse && session.provider === 'claude') {
+                setLiveThreadedMessages((prev) => upsertThreadedMessage(prev, {
+                  role: 'assistant',
+                  uuid: `live-tool:${toolStart.key}`,
+                  sessionId: session.sessionId,
+                  provider: session.provider,
+                  blocks: [{
+                    type: 'tool_thread',
+                    toolUse: liveToolUse,
+                    result: null,
+                  }],
+                }))
+              }
+            }
+
+            const toolInputDelta = extractClaudeStreamToolInputDelta(parsed)
+            if (toolInputDelta) {
+              const toolKey = liveToolIndexesRef.current.get(toolInputDelta.index)
+              if (toolKey) {
+                const accumulated = `${liveToolInputJsonRef.current.get(toolInputDelta.index) ?? ''}${toolInputDelta.partialJson}`
+                liveToolInputJsonRef.current.set(toolInputDelta.index, accumulated)
+                const input = parseClaudeStreamToolInput(accumulated)
+                if (input) {
+                  setLiveThreadedMessages((prev) => updateLiveToolThreadInput(prev, toolKey, input))
+                }
+              }
             }
 
             const completedToolKey = extractCompletedToolKey(parsed)
@@ -682,27 +5176,82 @@ export default function MessageView({ messages, loading, session, projectView, o
                   ? { ...activity, status: 'done' }
                   : activity
               ))
+              if (session.provider === 'claude') {
+                setLiveThreadedMessages((prev) => completeLiveToolThread(prev, completedToolKey))
+              }
             }
 
             const toolStopIndex = extractLiveToolStopIndex(parsed)
             if (toolStopIndex != null && parsed.type !== 'codex_item_completed') {
               const activityKey = liveToolIndexesRef.current.get(toolStopIndex)
               if (activityKey) {
+                const accumulated = liveToolInputJsonRef.current.get(toolStopIndex)
+                const finalInput = accumulated ? parseClaudeStreamToolInput(accumulated) : null
+                if (finalInput) {
+                  setLiveThreadedMessages((prev) => updateLiveToolThreadInput(prev, activityKey, finalInput))
+                }
                 setLiveToolActivities((prev) => prev.map((activity) =>
                   activity.key === activityKey
                     ? { ...activity, status: 'done' }
                     : activity
                 ))
+                if (session.provider === 'claude') {
+                  setLiveThreadedMessages((prev) => completeLiveToolThread(prev, activityKey))
+                }
               }
+              liveToolInputJsonRef.current.delete(toolStopIndex)
+              liveToolIndexesRef.current.delete(toolStopIndex)
             }
 
             const deltaText = extractStreamingAssistantText(parsed)
             if (deltaText) {
-              setLiveAssistantText((prev) =>
-                shouldReplaceLiveAssistantText(parsed)
-                  ? deltaText
-                  : `${prev}${deltaText}`
-              )
+              noteFirstOutput()
+              // Committed assistant output — don't blind-retry past this point.
+              turnProducedOutputRef.current = true
+              setLiveStatus(null)
+              queueLiveAssistantText(deltaText, shouldReplaceLiveAssistantText(parsed))
+            }
+
+            const reasoningDelta = extractStreamingReasoningText(parsed)
+            if (reasoningDelta) {
+              noteFirstOutput()
+              setLiveStatus(null)
+              queueLiveReasoningText(reasoningDelta)
+            }
+
+            if (parsed?.type === 'system' && parsed.subtype === 'thinking_tokens') {
+              const estimate = typeof parsed.estimated_tokens === 'number' ? parsed.estimated_tokens : null
+              if (estimate != null) setLiveThinkingTokens(estimate)
+            }
+
+            // A model refusal triggered a fallback to another model. Evict the
+            // refused partial from the live overlay so it doesn't linger; the
+            // banner itself arrives through the normal threaded path.
+            if (parsed?.type === 'system' && parsed.subtype === 'model_refusal_fallback') {
+              const retracted = Array.isArray(parsed.retracted_message_uuids)
+                ? new Set(parsed.retracted_message_uuids.filter((u: unknown): u is string => typeof u === 'string'))
+                : null
+              if (retracted && retracted.size > 0) {
+                setLiveThreadedMessages((prev) => prev.filter((m) => !retracted.has(m.uuid)))
+              }
+              clearLiveAssistantText()
+            }
+
+            const codexCompletionItem = parsed?.type === 'codex_item_completed' && parsed.item && typeof parsed.item === 'object'
+              ? parsed.item as Record<string, unknown>
+              : null
+            const codexCompletionIsText = codexCompletionItem?.type === 'agentMessage' || codexCompletionItem?.type === 'plan'
+
+            if (session.provider === 'claude') {
+              const threaded = normalizeClaudeStreamThreadedMessage(parsed)
+              if (threaded) {
+                setLiveThreadedMessages((prev) => upsertThreadedMessage(prev, threaded))
+              }
+            } else if (session.provider === 'codex' && !codexCompletionIsText) {
+              const threaded = normalizeCodexStreamThreadedMessage(parsed, session.sessionId)
+              if (threaded) {
+                setLiveThreadedMessages((prev) => upsertThreadedMessage(prev, threaded))
+              }
             }
           } catch {
             /* ignore malformed stream payloads */
@@ -710,19 +5259,62 @@ export default function MessageView({ messages, loading, session, projectView, o
         }
       }
 
+      if (streamStalled) {
+        // The send stream went silent past CLAUDE_STREAM_STALL_MS. The turn keeps
+        // running server-side (detachOnClientAbort), so don't interrupt it — drop
+        // our dead live stream and let the persisted-window SSE + /running
+        // reattach poll render the rest. Keeps the partial output visible and the
+        // composer honest ("turn still running") instead of a frozen spinner.
+        try { await reader.cancel() } catch { /* already torn down */ }
+        flushLiveAssistantTextNow()
+        setSendState('idle')
+        setLiveStatus(null)
+        setSessionActionNotice('Live stream stalled — reconnected to the running turn.')
+        // We know a turn is in flight; mark reattached so the composer reflects it
+        // immediately. The /running poll reconciles and clears it when it ends.
+        reattachedRunningRef.current = true
+        setReattachedRunning(true)
+        // Reconcile the partial overlay against the persisted timeline as it
+        // streams in over the always-on events SSE.
+        if (pendingMessageBaselineRef.current) {
+          awaitingPersistedTurnRef.current = true
+          setAwaitingPersistedTurn(true)
+        }
+        return
+      }
+
+      sseBuffer += decoder.decode()
+
       if (sseBuffer.trim()) {
         const { frames } = extractSseFrames(`${sseBuffer}\n\n`)
         for (const frame of frames) {
           if (frame.event !== 'error') continue
           try {
             const parsed = JSON.parse(frame.data)
-            throw new Error(parsed.error ?? 'Unknown agent error')
+            throw new TransientAwareSendError(parsed.error ?? 'Unknown agent error', parsed.apiErrorStatus, parsed.usageLimit as UsageLimitKind | undefined)
           } catch (e) { throw e }
         }
       }
 
+      flushLiveAssistantTextNow()
       setSendState('idle')
-      setAwaitingPersistedTurn(true)
+      setLiveStatus(null)
+      const pushedAttachments = pushedCopilotAttachmentsRef.current
+      pushedCopilotAttachmentsRef.current = []
+      // Copilot may push fresh context attachments during the turn. Merge them
+      // into whatever the user attached to their next draft while this send was
+      // running; never overwrite that newer draft state on completion.
+      setAttachments((current) => mergeComposerAttachments(current, pushedAttachments))
+      // Pick up any model/effort the user invoked via a slash command (e.g.
+      // `/model claude-sonnet-4-6`) so the composer chip mirrors the SDK.
+      refreshSessionModels({ preserveSelection: true })
+      if (pendingMessageBaselineRef.current) {
+        awaitingPersistedTurnRef.current = true
+        setAwaitingPersistedTurn(true)
+      } else {
+        awaitingPersistedTurnRef.current = false
+        setAwaitingPersistedTurn(false)
+      }
       setResumeFromMessageId(null)
       textareaRef.current?.focus()
     } catch (err) {
@@ -730,34 +5322,835 @@ export default function MessageView({ messages, loading, session, projectView, o
         // User cancelled — already reset by cancelSend()
         return
       }
+      const errorMessage = err instanceof Error ? err.message : 'Failed to send message'
+      const apiErrorStatus = err instanceof TransientAwareSendError ? err.apiErrorStatus : undefined
+      const usageLimitKind = err instanceof TransientAwareSendError ? err.usageLimitKind : undefined
+      // The fork point straddled the discarded turn's own payload (a
+      // tool_result carrier or structured_output attachment) — the CLI
+      // refuses deterministically, so retrying the same fork target would
+      // fail forever. Drop it now so the restored draft resends as a plain
+      // follow-up instead of repeating the same refused truncation.
+      if (isResumeDropsTurnRefusal(errorMessage) && resumeFromMessageId) {
+        setResumeFromMessageId(null)
+        setSessionActionNotice('Could not edit cleanly from that point — resend below as a normal message instead.')
+      }
+      // Visible auto-retry: native CLIs quietly ride out transient API/network
+      // blips. Mirror that — but only when the error is transient AND the turn
+      // streamed no output (so a retry can't duplicate a tool call or partial
+      // reply) AND we're under the retry budget. Show a "Retrying…" badge so a
+      // multi-second wait reads as recovery, not a hang.
+      const canRetry = isTransientSendError(errorMessage, apiErrorStatus, usageLimitKind)
+        && !turnProducedOutputRef.current
+        && transientRetryCountRef.current < MAX_TRANSIENT_SEND_RETRIES
+      if (canRetry) {
+        transientRetryCountRef.current += 1
+        const attempt = transientRetryCountRef.current
+        // Keep the turn visually "sending" with a retry status; clear only the
+        // (empty) live overlay. sendState stays 'sending' across the backoff.
+        setLiveStatus('retrying')
+        clearLiveAssistantText()
+        setLiveToolActivities([])
+        setLiveThreadedMessages([])
+        clearLiveSubagentText()
+        liveToolIndexesRef.current.clear()
+        liveToolInputJsonRef.current.clear()
+        if (transientRetryTimerRef.current) clearTimeout(transientRetryTimerRef.current)
+        transientRetryTimerRef.current = setTimeout(() => {
+          transientRetryTimerRef.current = null
+          void sendMessage({ text, attachments: sendAttachments, turnRequestId })
+        }, transientRetryBackoffMs(attempt))
+        return
+      }
       setSendState('error')
-      setSendError(err instanceof Error ? err.message : 'Failed to send message')
-      setInputText(text)
+      setSendError(errorMessage)
+      setLiveStatus(null)
+      setFailedSend({ text, attachments: sendAttachments })
+      // Restore the failed draft, queued follow-ups, and anything the user was
+      // already composing, including every attachment from all three sources.
+      // A failed turn must be fully reversible, never merely text-recoverable.
+      const failedQueue = selectComposerQueueTarget(queuedSendsRef.current, composerQueueTargetKey)
+      commitQueuedSends(clearComposerQueueTarget(queuedSendsRef.current, composerQueueTargetKey))
+      const restored = restoreComposerDraftPayload(
+        { text: inputTextRef.current, attachments: [] },
+        failedQueue,
+        { text, attachments: sendAttachments },
+      ).text
+      inputTextRef.current = restored
+      if (textareaRef.current) textareaRef.current.value = restored
+      setInputText(restored)
+      setAttachments((current) => restoreComposerDraftPayload(
+        { text: '', attachments: current },
+        failedQueue,
+        { text: '', attachments: sendAttachments },
+      ).attachments)
       setOptimisticUserText(null)
-      setLiveAssistantText('')
+      setSteeredUserTexts([])
+      clearLiveAssistantText()
       setLiveToolActivities([])
+      setLiveThreadedMessages([])
+      clearLiveSubagentText()
+      awaitingPersistedTurnRef.current = false
       setAwaitingPersistedTurn(false)
       pendingMessageBaselineRef.current = null
       liveToolIndexesRef.current.clear()
+      liveToolInputJsonRef.current.clear()
+      textareaRef.current?.focus()
     } finally {
       abortControllerRef.current = null
+      activeTurnRequestIdRef.current = null
+      sendInFlightRef.current = false
     }
-  }, [inputText, messages, onFork, resumeFromMessageId, selectedModel, sendState, session])
+  }, [attachments, canUseChannelBridge, canUseIdeBridge, clearLiveAssistantText, clearLiveSubagentText, commitQueuedSends, composerQueueTargetKey, enableWorkflow, flushLiveAssistantTextNow, messages, modelsLoading, onFork, queueLiveAssistantText, queueLiveReasoningText, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedAgent, selectedCopilotContextTier, selectedCopilotMode, selectedCodexApproval, selectedEffort, selectedModel, selectedPermissionMode, session, taskBudgetTokens])
+
+  // Flush queued sends once the active turn finishes. Restores the queued
+  // text into the composer so sendMessage picks it up and fires naturally.
+  useEffect(() => {
+    if (activeQueuedSends.length === 0) return
+    if (!composerQueueStorageReady || runningProbeReadyKey !== composerQueueTargetKey) return
+    if (sendInFlightRef.current || awaitingPersistedTurnRef.current) return
+    if (!composerQueueTargetKey) return
+    // A turn we reattached to is still running server-side — flushing now would
+    // start a second concurrent turn. Wait for the /running poll to clear.
+    if (reattachedRunning) return
+    // Gate on strict idle: flushing while sendState is 'error' would auto-fire
+    // a queued send after a failed turn (and clobber the restored draft).
+    if (sendState !== 'idle' || awaitingPersistedTurn) return
+    const next = activeQueuedSends[0]!
+    if (composerQueueClaimInFlightRef.current.has(next.id)) return
+    composerQueueClaimInFlightRef.current.add(next.id)
+    // Claim across browser tabs and persist the dequeue before provider I/O.
+    // A stale tab that loses the claim updates to the authoritative queue and
+    // never sends the same follow-up a second time.
+    const claimedTargetKey = composerQueueTargetKey
+    const store = getWebComposerQueueStore()
+    void store.claim(claimedTargetKey, next.id).then((claim) => {
+      composerQueueCommitCounterRef.current += 1
+      queuedSendsRef.current = claim.entries
+      if (composerQueueMountedRef.current) {
+        setQueuedSends(claim.entries)
+        setComposerQueueDurability(claim.durability)
+      }
+      if (!claim.claimed) return
+      if (!composerQueueMountedRef.current || composerQueueTargetKeyRef.current !== claimedTargetKey) {
+        // Navigation/session changes can occur while waiting for another tab's
+        // lock. Put the unconsumed entry back instead of sending it through a
+        // composer that now targets a different session.
+        const restoredQueue = [next, ...claim.entries.filter((entry) => entry.id !== next.id)]
+        if (composerQueueMountedRef.current) commitQueuedSends(restoredQueue)
+        else store.commit(restoredQueue)
+        return
+      }
+      setInputText(next.text)
+      inputTextRef.current = next.text
+      setAttachments(next.attachments)
+      window.requestAnimationFrame(() => {
+        const ta = textareaRef.current
+        if (ta) {
+          ta.value = next.text
+          ta.setSelectionRange(next.text.length, next.text.length)
+        }
+        resizeComposer()
+        void sendMessage()
+      })
+    }).catch(() => {
+      if (composerQueueMountedRef.current) setComposerQueueDurability('memory-only')
+    }).finally(() => {
+      composerQueueClaimInFlightRef.current.delete(next.id)
+    })
+  }, [activeQueuedSends, awaitingPersistedTurn, commitQueuedSends, composerQueueStorageReady, composerQueueTargetKey, reattachedRunning, resizeComposer, runningProbeReadyKey, sendMessage, sendState])
+
+  // A send blocked on the model list (cold LM Studio / custom-endpoint
+  // connection) re-fires automatically once the fetch settles, rather than
+  // leaving the user staring at "Waiting for model list to load…" and having
+  // to hit enter a second time themselves.
+  useEffect(() => {
+    if (modelsLoading) return
+    if (!pendingSendOnModelsReadyRef.current || pendingSendOnModelsReadyRef.current !== session?.sessionId) return
+    pendingSendOnModelsReadyRef.current = null
+    setSendError(null)
+    void sendMessage()
+  }, [modelsLoading, sendMessage, session?.sessionId])
+
+  // Remove a single queued message (× on its chip) without firing it.
+  const removeQueuedSend = useCallback((id: string) => {
+    commitQueuedSends(removeComposerQueueItem(queuedSendsRef.current, id))
+  }, [commitQueuedSends])
+
+  // Pull a queued message back into the composer to edit it. Its attachments
+  // are still in memory so they restore too. The current draft is preserved by
+  // prepending the edited text only when the composer is empty; otherwise the
+  // queued text replaces the draft (matching ↑ history-recall behaviour).
+  const editQueuedSend = useCallback((id: string) => {
+    const item = queuedSendsRef.current.find((entry) => entry.id === id)
+    if (!item) return
+    commitQueuedSends(removeComposerQueueItem(queuedSendsRef.current, id))
+    setInputText(item.text)
+    inputTextRef.current = item.text
+    setAttachments(item.attachments ?? [])
+    window.requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (ta) {
+        ta.value = item.text
+        ta.focus()
+        ta.setSelectionRange(item.text.length, item.text.length)
+      }
+      resizeComposer()
+    })
+  }, [commitQueuedSends, resizeComposer])
+
+  const updateComposerHints = useCallback((text: string, cursor: number) => {
+    const mention = detectMentionAtCursor(text, cursor)
+    const mentionChanged = mention
+      ? !mentionQuery || mentionQuery.start !== mention.start || mentionQuery.query !== mention.query
+      : mentionQuery !== null
+    if (mentionChanged) {
+      setMentionActiveIndex(0)
+      setMentionQuery(mention)
+    }
+    const isSlash = text.startsWith('/') && !/\s/.test(text.split('\n')[0] ?? '')
+    if (isSlash !== slashOpen) {
+      if (isSlash) setSlashActiveIndex(0)
+      setSlashOpen(isSlash)
+    }
+  }, [mentionQuery, slashOpen])
+
+  const slashCommands = useMemo(() => {
+    const baseline = getSlashCommandSuggestions(session?.provider)
+    const merged = [...liveSlashCommands]
+    const seen = new Set(merged.map((entry) => entry.command))
+    for (const entry of baseline) {
+      if (!seen.has(entry.command)) {
+        merged.push(entry)
+        seen.add(entry.command)
+      }
+    }
+    const firstLine = inputText.split('\n')[0] ?? ''
+    return filterSlashCommands(merged, firstLine.slice(1))
+  }, [inputText, liveSlashCommands, session?.provider])
+
+  const commandSessionId = session?.sessionId
+  const commandSessionProvider = session?.provider
+
+  useEffect(() => {
+    if (!commandSessionId) {
+      setLiveSlashCommands([])
+      return
+    }
+    const controller = new AbortController()
+    const url = `/api/sessions/${commandSessionId}/commands?provider=${encodeURIComponent(commandSessionProvider ?? 'claude')}`
+    void fetch(url, { signal: controller.signal })
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => {
+        if (controller.signal.aborted || !data || !Array.isArray(data.commands)) return
+        setLiveSlashCommands(data.commands.map((entry: { command: string; description: string; argumentHint?: string }) => ({
+          command: entry.command,
+          description: entry.description ?? '',
+          argumentHint: entry.argumentHint && entry.argumentHint.trim() ? entry.argumentHint.trim() : undefined,
+        })))
+      })
+      .catch(() => { /* ignore */ })
+    return () => controller.abort()
+  }, [commandSessionId, commandSessionProvider])
+
+  useEffect(() => {
+    if (!mentionQuery) {
+      mentionAbortRef.current?.abort()
+      mentionAbortRef.current = null
+      setMentionResults([])
+      return
+    }
+    const agentMatches: MentionResult[] = activeProvider === 'opencode'
+      ? composerMentionAgentOptions
+          .filter((agent) => {
+            const query = mentionQuery.query.toLowerCase()
+            if (!query) return true
+            return agent.value.toLowerCase().includes(query)
+              || agent.label.toLowerCase().includes(query)
+              || (agent.description?.toLowerCase().includes(query) ?? false)
+          })
+          .slice(0, 8)
+          .map((agent) => ({
+            kind: 'agent' as const,
+            name: agent.value,
+            description: agent.description,
+            mode: agent.mode,
+          }))
+      : []
+    const cwd = session?.cwd
+    if (!cwd) {
+      setMentionResults(agentMatches)
+      setMentionActiveIndex(0)
+      return
+    }
+    const controller = new AbortController()
+    mentionAbortRef.current?.abort()
+    mentionAbortRef.current = controller
+    const url = `/api/files?cwd=${encodeURIComponent(cwd)}&q=${encodeURIComponent(mentionQuery.query)}`
+    const handle = window.setTimeout(async () => {
+      try {
+        const res = await fetch(url, { signal: controller.signal })
+        if (!res.ok) return
+        const data = await res.json() as { files?: Array<{ path: string; basename: string }> }
+        if (controller.signal.aborted) return
+        const fileMatches: MentionResult[] = (data.files ?? []).map((file) => ({ kind: 'file', ...file }))
+        setMentionResults([...agentMatches, ...fileMatches])
+        setMentionActiveIndex(0)
+      } catch (err) {
+        if ((err as { name?: string }).name === 'AbortError') return
+      }
+    }, 80)
+    return () => {
+      window.clearTimeout(handle)
+      controller.abort()
+    }
+  }, [activeProvider, composerMentionAgentOptions, mentionQuery, session?.cwd])
+
+  useLayoutEffect(() => {
+    const node = mentionItemRefs.current[mentionActiveIndex]
+    node?.scrollIntoView({ block: 'nearest' })
+  }, [mentionActiveIndex, mentionResults])
+
+  useLayoutEffect(() => {
+    const node = slashItemRefs.current[slashActiveIndex]
+    node?.scrollIntoView({ block: 'nearest' })
+  }, [slashActiveIndex, slashOpen])
+
+  const insertMention = useCallback((entry: MentionResult) => {
+    const mention = mentionQuery
+    if (!mention) return
+    const textarea = textareaRef.current
+    const value = textarea?.value ?? inputTextRef.current
+    const cursor = textarea?.selectionStart ?? value.length
+    const before = value.slice(0, mention.start)
+    const after = value.slice(cursor)
+    const insertion = entry.kind === 'agent'
+      ? `@${entry.name} `
+      : `@${entry.path} `
+    const next = `${before}${insertion}${after}`
+    setInputText(next)
+    inputTextRef.current = next
+    setMentionQuery(null)
+    setMentionResults([])
+    setAttachments((prev) => {
+      if (entry.kind === 'agent') {
+        if (prev.some((attachment) => attachment.type === 'agent' && attachment.displayName === entry.name)) return prev
+        return [
+          ...prev,
+          {
+            id: `${Date.now()}-agent-${entry.name}`,
+            type: 'agent',
+            displayName: entry.name,
+            text: `@${entry.name}`,
+          },
+        ]
+      }
+      if (prev.some((attachment) => attachment.path === entry.path)) return prev
+      return [
+        ...prev,
+        {
+          id: `${Date.now()}-mention-${entry.path}`,
+          type: 'mention',
+          path: entry.path,
+          displayName: entry.basename,
+        },
+      ]
+    })
+    window.requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (!ta) return
+      const caret = before.length + insertion.length
+      ta.setSelectionRange(caret, caret)
+      ta.focus()
+      resizeComposer()
+    })
+  }, [mentionQuery, resizeComposer])
+
+  const insertPromptText = useCallback((text: string) => {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    const textarea = textareaRef.current
+    const value = textarea?.value ?? inputTextRef.current
+    const start = textarea?.selectionStart ?? value.length
+    const end = textarea?.selectionEnd ?? value.length
+    const before = value.slice(0, start)
+    const after = value.slice(end)
+    const insertion = before.length > 0 && !before.endsWith('\n') ? `\n${trimmed}` : trimmed
+    const next = `${before}${insertion}${after}`
+    setInputText(next)
+    inputTextRef.current = next
+    window.requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (!ta) return
+      const caret = before.length + insertion.length
+      ta.setSelectionRange(caret, caret)
+      ta.focus()
+      resizeComposer()
+    })
+  }, [resizeComposer])
+
+  const handledComposerInsertRequestRef = useRef(0)
+  useEffect(() => {
+    if (!composerInsertRequest || composerInsertRequest.requestId <= handledComposerInsertRequestRef.current) return
+    handledComposerInsertRequestRef.current = composerInsertRequest.requestId
+    insertPromptText(composerInsertRequest.text)
+    onComposerInsertConsumed?.(composerInsertRequest.requestId)
+  }, [composerInsertRequest, insertPromptText, onComposerInsertConsumed])
+
+  const insertSlashCommand = useCallback((command: string) => {
+    const remainder = inputText.split('\n').slice(1).join('\n')
+    const next = remainder ? `${command} ${remainder}` : `${command} `
+    setInputText(next)
+    inputTextRef.current = next
+    setSlashOpen(false)
+    window.requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (!ta) return
+      const caret = command.length + 1
+      ta.setSelectionRange(caret, caret)
+      ta.focus()
+      resizeComposer()
+    })
+  }, [inputText, resizeComposer])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+    if (e.nativeEvent.isComposing || isComposingRef.current) return
+    if (mentionQuery && mentionResults.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setMentionActiveIndex((i) => Math.min(i + 1, mentionResults.length - 1))
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setMentionActiveIndex((i) => Math.max(i - 1, 0))
+        return
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        const entry = mentionResults[mentionActiveIndex]
+        if (entry) {
+          e.preventDefault()
+          insertMention(entry)
+          return
+        }
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setMentionQuery(null)
+        return
+      }
+    }
+    if (slashOpen && slashCommands.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setSlashActiveIndex((i) => Math.min(i + 1, slashCommands.length - 1))
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setSlashActiveIndex((i) => Math.max(i - 1, 0))
+        return
+      }
+      if (e.key === 'Tab' || (e.key === 'Enter' && (e.metaKey || e.ctrlKey))) {
+        const entry = slashCommands[slashActiveIndex]
+        if (entry) {
+          e.preventDefault()
+          insertSlashCommand(entry.command)
+          return
+        }
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setSlashOpen(false)
+        return
+      }
+    }
+    if (e.key === 'Enter' && !e.shiftKey && (e.metaKey || e.ctrlKey || !e.altKey)) {
       e.preventDefault()
       sendMessage()
+      return
     }
-  }, [sendMessage])
+    if (e.key === 'ArrowUp' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && sentHistory.length > 0) {
+      const textarea = textareaRef.current
+      const draftValue = textarea?.value ?? inputTextRef.current
+      const cursorAtStart = textarea ? textarea.selectionStart === 0 && textarea.selectionEnd === 0 : true
+      if (historyIndex === -1) {
+        if (draftValue.length > 0 && !cursorAtStart) return
+        draftBeforeHistoryRef.current = {
+          text: draftValue,
+          cursorPos: textarea?.selectionStart ?? draftValue.length,
+        }
+        const nextIndex = sentHistory.length - 1
+        setHistoryIndex(nextIndex)
+        const replacement = sentHistory[nextIndex] ?? ''
+        setInputText(replacement)
+        inputTextRef.current = replacement
+        e.preventDefault()
+        window.requestAnimationFrame(() => {
+          const ta = textareaRef.current
+          if (!ta) return
+          ta.setSelectionRange(replacement.length, replacement.length)
+          resizeComposer()
+        })
+        return
+      }
+      const nextIndex = Math.max(historyIndex - 1, 0)
+      if (nextIndex === historyIndex) {
+        e.preventDefault()
+        return
+      }
+      setHistoryIndex(nextIndex)
+      const replacement = sentHistory[nextIndex] ?? ''
+      setInputText(replacement)
+      inputTextRef.current = replacement
+      e.preventDefault()
+      window.requestAnimationFrame(() => {
+        const ta = textareaRef.current
+        if (!ta) return
+        ta.setSelectionRange(replacement.length, replacement.length)
+        resizeComposer()
+      })
+      return
+    }
+    if (e.key === 'ArrowDown' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && historyIndex !== -1) {
+      const nextIndex = historyIndex + 1
+      if (nextIndex >= sentHistory.length) {
+        setHistoryIndex(-1)
+        const { text: restored, cursorPos } = draftBeforeHistoryRef.current
+        setInputText(restored)
+        inputTextRef.current = restored
+        e.preventDefault()
+        window.requestAnimationFrame(() => {
+          const ta = textareaRef.current
+          if (!ta) return
+          ta.setSelectionRange(cursorPos, cursorPos)
+          resizeComposer()
+        })
+        return
+      }
+      setHistoryIndex(nextIndex)
+      const replacement = sentHistory[nextIndex] ?? ''
+      setInputText(replacement)
+      inputTextRef.current = replacement
+      e.preventDefault()
+      window.requestAnimationFrame(() => {
+        const ta = textareaRef.current
+        if (!ta) return
+        ta.setSelectionRange(replacement.length, replacement.length)
+        resizeComposer()
+      })
+      return
+    }
+  }, [sendMessage, sentHistory, historyIndex, resizeComposer, mentionQuery, mentionResults, mentionActiveIndex, insertMention, slashOpen, slashCommands, slashActiveIndex, insertSlashCommand])
 
-  const handleExport = useCallback(() => {
+  const handleExport = useCallback(async () => {
     if (!session) return
-    const dirName  = session.customTitle ?? session.summary ?? getPrimarySessionTag(session.tag) ?? session.cwd?.split('/').pop() ?? session.sessionId
+    const dirName  = session.customTitle ?? session.summary ?? getPrimarySessionTag(session.tag) ?? (pathBasename(session.cwd) || session.sessionId)
     const safeName = dirName.replace(/[^a-z0-9\-_]/gi, '-').toLowerCase()
-    const html = exportSessionToHtml(session, messages)
-    downloadHtml(html, `${safeName}_${session.sessionId.slice(0, 8)}.html`)
+    const filename = `${safeName}_${session.sessionId.slice(0, 8)}.html`
+
+    if (typeof Worker === 'undefined') {
+      setExporting(true)
+      try {
+        const { exportSessionToHtml } = await import('@/lib/export')
+        const html = exportSessionToHtml(session, messages)
+        downloadHtml(html, filename)
+      } catch (error) {
+        setSessionActionError(error instanceof Error ? error.message : 'Failed to export session')
+      } finally {
+        setExporting(false)
+      }
+      return
+    }
+
+    setExporting(true)
+    const worker = new Worker(new URL('../workers/exportWorker.ts', import.meta.url), { type: 'module' })
+    worker.onmessage = (event: MessageEvent<{ html?: string; error?: string }>) => {
+      const { html, error } = event.data ?? {}
+      if (html) {
+        downloadHtml(html, filename)
+      } else if (error) {
+        setSessionActionError(error)
+      }
+      setExporting(false)
+      worker.terminate()
+    }
+    worker.onerror = () => {
+      setExporting(false)
+      setSessionActionError('Failed to export session')
+      worker.terminate()
+    }
+    worker.postMessage({ session, messages })
   }, [session, messages])
+
+  const addAttachment = useCallback(() => {
+    const path = attachmentPath.trim()
+    if (!path) return
+    setAttachments((prev) => [
+      ...prev,
+      {
+        id: `${Date.now()}-${prev.length}`,
+        type: attachmentType,
+        path,
+        displayName: attachmentType === 'agent' ? path.replace(/^@/, '') : undefined,
+        text: attachmentType === 'agent' ? `@${path.replace(/^@/, '')}` : undefined,
+      },
+    ])
+    setAttachmentPath('')
+  }, [attachmentPath, attachmentType])
+
+  const ingestFileAttachments = useCallback(async (files: File[]) => {
+    if (files.length === 0) return
+    const next: SendAttachment[] = []
+    for (const file of files) {
+      const isImage = file.type.startsWith('image/')
+      if (!isImage) {
+        const path = (file as File & { path?: string }).path
+        if (path) {
+          next.push({
+            id: `${Date.now()}-${next.length}-${file.name}`,
+            type: 'file',
+            path,
+            displayName: file.name,
+          })
+        }
+        continue
+      }
+      try {
+        const buffer = await file.arrayBuffer()
+        const bytes = new Uint8Array(buffer)
+        let binary = ''
+        const chunk = 0x8000
+        for (let i = 0; i < bytes.length; i += chunk) {
+          binary += String.fromCharCode(...bytes.subarray(i, i + chunk))
+        }
+        const data = typeof window === 'undefined' ? '' : window.btoa(binary)
+        next.push({
+          id: `${Date.now()}-${next.length}-${file.name || 'pasted-image'}`,
+          type: 'blob',
+          mimeType: file.type || 'image/png',
+          data,
+          displayName: file.name || `pasted-image.${(file.type.split('/')[1] ?? 'png')}`,
+        })
+      } catch {
+        // skip files that fail to read
+      }
+    }
+    if (next.length === 0) return
+    setAttachments((prev) => [...prev, ...next])
+  }, [])
+
+  const handleComposerPaste = useCallback(async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = event.clipboardData?.items
+    if (!items || items.length === 0) return
+    const files: File[] = []
+    for (const item of Array.from(items)) {
+      if (item.kind !== 'file') continue
+      const file = item.getAsFile()
+      if (file) files.push(file)
+    }
+    if (files.length === 0) return
+    event.preventDefault()
+    await ingestFileAttachments(files)
+  }, [ingestFileAttachments])
+
+  const [composerDropActive, setComposerDropActive] = useState(false)
+  const dropDepthRef = useRef(0)
+
+  const handleComposerDragEnter = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    if (!event.dataTransfer.types.includes('Files')) return
+    dropDepthRef.current += 1
+    setComposerDropActive(true)
+  }, [])
+
+  const handleComposerDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    if (!event.dataTransfer.types.includes('Files')) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'copy'
+  }, [])
+
+  const handleComposerDragLeave = useCallback(() => {
+    dropDepthRef.current = Math.max(0, dropDepthRef.current - 1)
+    if (dropDepthRef.current === 0) setComposerDropActive(false)
+  }, [])
+
+  const handleComposerDrop = useCallback(async (event: React.DragEvent<HTMLDivElement>) => {
+    if (!event.dataTransfer.types.includes('Files')) return
+    event.preventDefault()
+    dropDepthRef.current = 0
+    setComposerDropActive(false)
+    const files = Array.from(event.dataTransfer.files ?? [])
+    if (files.length === 0) return
+    await ingestFileAttachments(files)
+  }, [ingestFileAttachments])
+
+  const removeAttachment = useCallback((id: string | undefined, index: number) => {
+    setAttachments((prev) => prev.filter((attachment, attachmentIndex) => (
+      id ? attachment.id !== id : attachmentIndex !== index
+    )))
+  }, [])
+
+  const restoreFailedSend = useCallback(() => {
+    if (!failedSend || sendInFlightRef.current || awaitingPersistedTurnRef.current) return
+    setInputText(failedSend.text)
+    inputTextRef.current = failedSend.text
+    setAttachments(failedSend.attachments)
+    setFailedSend(null)
+    setSendError(null)
+    window.requestAnimationFrame(() => {
+      resizeComposer()
+      textareaRef.current?.focus()
+    })
+  }, [failedSend, resizeComposer])
+
+  const handleDeleteSession = useCallback(async () => {
+    if (!session || deleting || !sessionCapabilities?.deleteSession) return
+    const confirmed = window.confirm('Delete this session? This cannot be undone from Agent Viewer.')
+    if (!confirmed) return
+    setDeleting(true)
+    setSessionActionError(null)
+    setSessionActionNotice(null)
+    try {
+      const res = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}`, session.provider, session.providerInstanceId), {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: session.provider, providerInstanceId: session.providerInstanceId }),
+      })
+      const data = await readOptionalJsonResponse(res, {})
+      if (data.error) throw new Error(data.error)
+      onDelete?.(session.sessionId, session.provider)
+      setSessionActionNotice('Session deleted.')
+    } catch (err) {
+      setSessionActionError(err instanceof Error ? err.message : 'Failed to delete session')
+    } finally {
+      setDeleting(false)
+    }
+  }, [deleting, onDelete, session, sessionCapabilities?.deleteSession])
+
+  const runSessionAction = useCallback(async (action: string) => {
+    if (!session || sessionActionLoading) return
+    setSessionActionLoading(action)
+    setSessionActionError(null)
+    setSessionActionNotice(null)
+    try {
+      const res = await fetch(`/api/sessions/${session.sessionId}/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, provider: session.provider, providerInstanceId: session.providerInstanceId }),
+      })
+      const data = await readOptionalJsonResponse(res, {})
+      if (data.error) throw new Error(data.error)
+      const shareUrl = data.result?.session?.share?.url
+      setSessionActionNotice(
+        action === 'share' && shareUrl
+          ? `Shared: ${shareUrl}`
+          : `${action.toUpperCase()} complete.`
+      )
+      setDiagnosticSections([])
+    } catch (err) {
+      setSessionActionError(err instanceof Error ? err.message : `Failed to run ${action}`)
+    } finally {
+      setSessionActionLoading(null)
+    }
+  }, [session, sessionActionLoading])
+
+  const respondToPermission = useCallback(async (permission: PendingPermission, response: 'once' | 'always' | 'reject') => {
+    if (response === 'once' && permission.elicitation?.mode === 'url' && permission.url) {
+      window.open(permission.url, '_blank', 'noopener,noreferrer')
+    }
+    // Bridge permissions are those without a sessionId (they came from the CLI bridge)
+    if (!permission.sessionId && !permission.provider) {
+      setSessionActionLoading(`permission:${permission.id}`)
+      setSessionActionError(null)
+      try {
+        const behavior = response === 'reject' ? 'deny' : 'allow'
+        await respondToChannelPermission(readBridgeConfigFromEnv(), permission.id, behavior)
+        setPendingPermissions((prev) => prev.filter((entry) => entry.id !== permission.id))
+      } catch (err) {
+        setSessionActionError(err instanceof Error ? err.message : 'Failed to respond to bridge permission')
+      } finally {
+        setSessionActionLoading(null)
+      }
+      return
+    }
+
+    if (!session || sessionActionLoading) return
+    setSessionActionLoading(`permission:${permission.id}`)
+    setSessionActionError(null)
+    try {
+      const targetSessionId = permission.sessionId ?? session.sessionId
+      const res = await fetch(`/api/sessions/${targetSessionId}/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'respondPermission',
+          permissionId: permission.id,
+          response,
+          permissionDecisionReason: response === 'reject' ? permissionDenialReason(permission) : undefined,
+          provider: session.provider,
+          providerInstanceId: session.providerInstanceId,
+        }),
+      })
+      const data = await readOptionalJsonResponse(res, {})
+      if (data.error) throw new Error(data.error)
+      setPendingPermissions((prev) => prev.filter((entry) =>
+        entry.id !== permission.id || (permission.sessionId !== undefined && entry.sessionId !== permission.sessionId)
+      ))
+    } catch (err) {
+      setSessionActionError(err instanceof Error ? err.message : 'Failed to respond to permission')
+    } finally {
+      setSessionActionLoading(null)
+    }
+  }, [session, sessionActionLoading])
+
+  // Submit answers to a structured question prompt. Codex keys answers by its
+  // schema id; Claude falls back to question text. Arrays stay lossless for
+  // Codex/MCP (including custom answers that contain commas).
+  const respondToQuestion = useCallback(async (
+    permission: PendingPermission,
+    answers: PendingQuestionAnswers,
+  ) => {
+    if (!session || sessionActionLoading) return
+    setSessionActionLoading(`permission:${permission.id}`)
+    setSessionActionError(null)
+    try {
+      const targetSessionId = permission.sessionId ?? session.sessionId
+      const res = await fetch(`/api/sessions/${targetSessionId}/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'respondQuestion',
+          permissionId: permission.id,
+          answers,
+          provider: session.provider,
+          providerInstanceId: session.providerInstanceId,
+        }),
+      })
+      const data = await readOptionalJsonResponse(res, {})
+      if (data.error) throw new Error(data.error)
+      setPendingPermissions((prev) => prev.filter((entry) =>
+        entry.id !== permission.id || (permission.sessionId !== undefined && entry.sessionId !== permission.sessionId)
+      ))
+    } catch (err) {
+      setSessionActionError(err instanceof Error ? err.message : 'Failed to submit answer')
+    } finally {
+      setSessionActionLoading(null)
+    }
+  }, [session, sessionActionLoading])
+
+  // Respond to an ExitPlanMode plan-approval. Approving allows the tool (the SDK
+  // exits plan mode for this turn) AND switches the composer + warm query to the
+  // chosen mode so subsequent turns aren't back in plan mode. Reject keeps planning.
+  const respondToPlan = useCallback(async (
+    permission: PendingPermission,
+    decision: 'acceptEdits' | 'default' | 'reject',
+  ) => {
+    if (decision === 'reject') {
+      await respondToPermission(permission, 'reject')
+      return
+    }
+    commitClaudePermissionSelection(decision)
+    await respondToPermission(permission, 'once')
+  }, [respondToPermission, commitClaudePermissionSelection])
 
   const handleFork = useCallback(async () => {
     if (!session || forking) return
@@ -766,9 +6159,9 @@ export default function MessageView({ messages, loading, session, projectView, o
       const res = await fetch(`/api/sessions/${session.sessionId}/fork`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: session.provider }),
+        body: JSON.stringify({ provider: session.provider, providerInstanceId: session.providerInstanceId }),
       })
-      const data = await res.json()
+      const data = await readJsonResponse(res)
       if (data.error) throw new Error(data.error)
       onFork?.(data.sessionId)
     } catch (err) {
@@ -787,7 +6180,7 @@ export default function MessageView({ messages, loading, session, projectView, o
       const res = await fetch(`/api/sessions/${session.sessionId}/fork`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ upToMessageId: messageId, provider: session.provider }),
+        body: JSON.stringify({ upToMessageId: messageId, provider: session.provider, providerInstanceId: session.providerInstanceId }),
       })
       const data = await res.json()
       if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
@@ -807,6 +6200,200 @@ export default function MessageView({ messages, loading, session, projectView, o
     setSessionActionNotice(null)
   }, [sessionCapabilities?.resumeAtMessage])
 
+  const focusComposer = useCallback(() => {
+    setComposerCollapsed(false)
+    window.requestAnimationFrame(() => {
+      resizeComposer()
+      const ta = textareaRef.current
+      if (!ta) return
+      ta.focus()
+      ta.setSelectionRange(ta.value.length, ta.value.length)
+    })
+  }, [resizeComposer])
+
+  const handleReusePrompt = useCallback((text: string) => {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    setInputText(trimmed)
+    inputTextRef.current = trimmed
+    setHistoryIndex(-1)
+    draftBeforeHistoryRef.current = { text: '', cursorPos: 0 }
+    focusComposer()
+  }, [focusComposer])
+
+  const handleQuoteMessage = useCallback((text: string) => {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    const quoted = trimmed
+      .split('\n')
+      .map((line) => `> ${line}`)
+      .join('\n')
+    const existing = inputTextRef.current
+    const separator = existing.length > 0 ? (existing.endsWith('\n') ? '' : '\n\n') : ''
+    const next = `${existing}${separator}${quoted}\n\n`
+    setInputText(next)
+    inputTextRef.current = next
+    setHistoryIndex(-1)
+    draftBeforeHistoryRef.current = { text: '', cursorPos: 0 }
+    focusComposer()
+  }, [focusComposer])
+
+  const handleDiffCommentToComposer = useCallback((prompt: string) => {
+    const trimmed = prompt.trim()
+    if (!trimmed) return
+    const existing = inputTextRef.current
+    const separator = existing.length > 0 ? (existing.endsWith('\n') ? '\n' : '\n\n') : ''
+    const next = `${existing}${separator}${trimmed}\n\n`
+    setInputText(next)
+    inputTextRef.current = next
+    setHistoryIndex(-1)
+    draftBeforeHistoryRef.current = { text: '', cursorPos: 0 }
+    focusComposer()
+  }, [focusComposer])
+
+  const handleEditFromMessage = useCallback((messageId: string, text: string) => {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    setInputText(trimmed)
+    inputTextRef.current = trimmed
+    setHistoryIndex(-1)
+    draftBeforeHistoryRef.current = { text: '', cursorPos: 0 }
+    if (sessionCapabilities?.resumeAtMessage) {
+      setResumeFromMessageId(messageId)
+      setSessionActionNotice('Editing — safe resume armed; the next send will replace from this point in a guarded fork.')
+    }
+    focusComposer()
+  }, [focusComposer, sessionCapabilities?.resumeAtMessage])
+
+  const refreshDiagnostics = useCallback(async () => {
+    if (!session) return
+    setDiagnosticsLoading(true)
+    try {
+      const res = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}/diagnostics`, session.provider, session.providerInstanceId))
+      const data = await res.json()
+      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+      setDiagnosticSections(data.sections ?? [])
+      const diagnosticsModel = normalizeSelectValue(data.currentModel)
+      if (diagnosticsModel && !selectedModelValue) setSelectedModel(diagnosticsModel)
+    } catch (err) {
+      setSessionActionError(err instanceof Error ? err.message : 'Failed to refresh diagnostics')
+    } finally {
+      setDiagnosticsLoading(false)
+    }
+  }, [selectedModelValue, session])
+
+  const [claudeMcpBusy, setClaudeMcpBusy] = useState<string | null>(null)
+  const [claudeHookQuery, setClaudeHookQuery] = useState('')
+  const [claudeHookSearching, setClaudeHookSearching] = useState(false)
+  // Tracks only policies applied in this viewer. Absence is deliberately shown
+  // as unknown rather than guessing the SDK's current per-server override.
+  const [claudeMcpPermissionModes, setClaudeMcpPermissionModes] = useState<Record<string, 'default' | 'auto'>>({})
+  const runClaudeSessionAction = useCallback(async (action: string, extra: Record<string, unknown>, busyKey: string, successNotice: string) => {
+    if (!session) return null
+    setClaudeMcpBusy(busyKey)
+    setSessionActionError(null)
+    setSessionActionNotice(null)
+    try {
+      const res = await fetch(`/api/sessions/${session.sessionId}/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, provider: session.provider, providerInstanceId: session.providerInstanceId, ...extra }),
+      })
+      const data = await readOptionalJsonResponse(res, {})
+      if (data.error) throw new Error(data.error)
+      const result = data.result && typeof data.result === 'object' && !Array.isArray(data.result)
+        ? data.result as Record<string, unknown>
+        : data as Record<string, unknown>
+      setSessionActionNotice(claudeDiagnosticActionNotice(action, successNotice, result))
+      await refreshDiagnostics()
+      return result
+    } catch (err) {
+      setSessionActionError(err instanceof Error ? err.message : 'Action failed')
+      return null
+    } finally {
+      setClaudeMcpBusy(null)
+    }
+  }, [refreshDiagnostics, session])
+
+  const applyClaudeMcpPermissionMode = useCallback(async (
+    serverName: string,
+    permissionModeKey: string,
+    mode: 'default' | 'auto' | null,
+    previous: 'default' | 'auto' | undefined,
+  ) => {
+    setClaudeMcpPermissionModes((current) => {
+      const next = { ...current }
+      if (mode === null) delete next[permissionModeKey]
+      else next[permissionModeKey] = mode
+      return next
+    })
+    const result = await runClaudeSessionAction(
+      'setMcpPermissionModeOverride',
+      { serverName, mode },
+      `mcp:permission:${serverName}`,
+      mode === null ? `${serverName} MCP policy cleared.` : `${serverName} MCP policy set to ${mode}.`,
+    )
+    if (!result) {
+      setClaudeMcpPermissionModes((current) => {
+        const next = { ...current }
+        if (previous) next[permissionModeKey] = previous
+        else delete next[permissionModeKey]
+        return next
+      })
+    }
+  }, [runClaudeSessionAction])
+
+  const addClaudeMcpServer = useCallback(async () => {
+    const serverName = window.prompt('MCP server name')?.trim()
+    if (!serverName) return
+    const rawConfig = window.prompt(
+      'MCP configuration JSON',
+      '{"type":"http","url":"https://example.com/mcp"}',
+    )
+    if (!rawConfig) return
+    try {
+      const config = JSON.parse(rawConfig) as unknown
+      await runClaudeSessionAction(
+        'setMcpServers',
+        { operation: 'add', serverName, config },
+        `mcp:add:${serverName}`,
+        `Added dynamic MCP server ${serverName}.`,
+      )
+    } catch (err) {
+      setSessionActionError(err instanceof Error ? err.message : 'Invalid MCP configuration JSON')
+    }
+  }, [runClaudeSessionAction])
+
+  const searchClaudeHookEvents = useCallback(async () => {
+    if (!session || session.provider !== 'claude') return
+    setClaudeHookSearching(true)
+    setSessionActionError(null)
+    try {
+      const res = await fetch(`/api/sessions/${session.sessionId}/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'listHookEvents', provider: 'claude', query: claudeHookQuery, limit: 100 }),
+      })
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}))
+        throw new Error(errorData.error ?? `HTTP ${res.status}`)
+      }
+      const data = await res.json().catch(() => ({}))
+      if (data.error) throw new Error(data.error)
+      const result = data.result && typeof data.result === 'object' ? data.result as Record<string, unknown> : data
+      const events = Array.isArray(result.events) ? result.events as Array<Record<string, unknown>> : []
+      const items = events.map((event) => `${String(event.timestamp ?? '')} · ${String(event.summary ?? event.event ?? 'Hook')}`)
+      setDiagnosticSections((sections) => sections.map((section) => section.id === 'hooks'
+        ? { ...section, items: items.length > 0 ? items : ['None'] }
+        : section))
+      setSessionActionNotice(`Hook timeline · ${events.length} match${events.length === 1 ? '' : 'es'}`)
+    } catch (err) {
+      setSessionActionError(err instanceof Error ? err.message : 'Failed to search hook timeline')
+    } finally {
+      setClaudeHookSearching(false)
+    }
+  }, [claudeHookQuery, session])
+
   const toggleDiagnostics = useCallback(async () => {
     if (!session) return
     const nextOpen = !showDiagnostics
@@ -815,23 +6402,395 @@ export default function MessageView({ messages, loading, session, projectView, o
 
     setDiagnosticsLoading(true)
     try {
-      const res = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}/diagnostics`, session.provider))
+      const res = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}/diagnostics`, session.provider, session.providerInstanceId))
       const data = await res.json()
       if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
       setDiagnosticSections(data.sections ?? [])
-      if (data.currentModel && !selectedModel) setSelectedModel(data.currentModel)
+      const diagnosticsModel = normalizeSelectValue(data.currentModel)
+      if (diagnosticsModel && !selectedModelValue) setSelectedModel(diagnosticsModel)
     } catch (err) {
       setSessionActionError(err instanceof Error ? err.message : 'Failed to load diagnostics')
     } finally {
       setDiagnosticsLoading(false)
     }
-  }, [diagnosticSections.length, diagnosticsLoading, selectedModel, session, showDiagnostics])
+  }, [diagnosticSections.length, diagnosticsLoading, selectedModelValue, session, showDiagnostics])
 
-  const threaded = useMemo(() => buildThreadedMessages(messages), [messages])
+  const threadedFull = useMemo(() => measureSync('threading.build', () => {
+    const prev = prevThreadingRef.current
+    const nextMessages = (prev ? buildThreadedMessagesIncremental(messages, prev) : null)
+      ?? buildThreadedMessages(messages)
+    const previous = threadedCacheRef.current
+    const stabilized = nextMessages.map((message) => {
+      const cached = previous.get(threadedMessageKey(message))
+      return cached && threadedMessageEqual(cached, message) ? cached : message
+    })
+    const nextCache = new Map<string, ThreadedMessage>()
+    for (const message of stabilized) nextCache.set(threadedMessageKey(message), message)
+    threadedCacheRef.current = nextCache
+    prevThreadingRef.current = { messages, threaded: stabilized }
+    return stabilized
+  }), [messages])
+  const threaded = useMemo(
+    () => (showTools ? threadedFull : stripToolCallBlocks(threadedFull)),
+    [threadedFull, showTools],
+  )
+  const turnDurations = useMemo(() => computeTurnDurationsMs(threadedFull), [threadedFull])
+
+  // Merge bridge transcript messages into the main threaded view
+  const threadedWithBridge = useMemo(() => {
+    if (bridgeTranscriptEntries.length === 0) return threaded
+
+    const bridgeMessages: ThreadedMessage[] = bridgeTranscriptEntries.map((entry, i) => ({
+      role: entry.kind === 'sent' ? 'user' : 'assistant',
+      uuid: `bridge-${i}`,
+      timestamp: entry.timestamp,
+      origin: { kind: 'bridge' },
+      blocks: [{ type: 'text', text: entry.text } as any],
+    }))
+
+    // Merge chronologically by timestamp
+    const allMessages = [...threaded, ...bridgeMessages]
+    return allMessages.sort((a, b) => {
+      const aTime = a.timestamp ? new Date(a.timestamp).getTime() : 0
+      const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0
+      return aTime - bTime
+    })
+  }, [threaded, bridgeTranscriptEntries])
+
+  // buildTaskActiveFormsForWeb returns a fresh Map every time `threaded`
+  // changes identity (every poll that merges a delta), which would churn the
+  // TaskActiveFormsContext value and re-render all mounted TaskCards even when
+  // no task state changed. Reuse the prior Map instance when contents are
+  // value-equal so idle polls don't propagate through the context. Value-aware
+  // (not size/keys-only): a TaskUpdate reuses a taskId key with a new form.
+  const taskActiveForms = useMemo(() => {
+    const next = buildTaskActiveFormsForWeb(threadedWithBridge)
+    const prev = taskActiveFormsRef.current
+    let same = prev.size === next.size
+    if (same) {
+      for (const [key, value] of next) {
+        if (prev.get(key) !== value) { same = false; break }
+      }
+    }
+    const result = same ? prev : next
+    taskActiveFormsRef.current = result
+    return result
+  }, [threadedWithBridge])
+  const taskRegistry = useMemo(() => {
+    const registry = buildTaskRegistry(threadedWithBridge)
+    if (openCodeTodos && openCodeTodos.length > 0) {
+      const todosRegistry = buildTaskRegistryFromTodos(openCodeTodos)
+      for (const [id, task] of todosRegistry) {
+        registry.set(id, task)
+      }
+    }
+    if (codexPlan && codexPlan.plan.length > 0) {
+      const planRegistry = buildTaskRegistryFromCodexPlan(codexPlan.plan)
+      for (const [id, task] of planRegistry) {
+        registry.set(id, task)
+      }
+    }
+    return registry
+  }, [threadedWithBridge, openCodeTodos, codexPlan])
+  const [taskRailOpen, setTaskRailOpen] = useState(true)
   const isProject = !!projectView
-  const dirName  = projectView?.key ?? session?.cwd?.split('/').pop() ?? session?.sessionId ?? ''
+  const dirName  = projectView?.key ?? (pathBasename(session?.cwd) || session?.sessionId) ?? ''
+
+  useEffect(() => {
+    if (taskPanelOpenRequest <= 0) return
+    setTaskRailOpen(true)
+  }, [taskPanelOpenRequest])
+
+  useEffect(() => {
+    if (promptLibraryOpenRequest <= 0) return
+    setPromptLibraryOpen(true)
+    window.requestAnimationFrame(() => textareaRef.current?.focus())
+  }, [promptLibraryOpenRequest])
+
+  useEffect(() => {
+    if (channelBridgeOpenRequest <= handledChannelBridgeOpenRequestRef.current) return
+    handledChannelBridgeOpenRequestRef.current = channelBridgeOpenRequest
+    if (!canUseChannelBridge) return
+    setChannelBridgeOpen(true)
+  }, [canUseChannelBridge, channelBridgeOpenRequest])
+
+  useEffect(() => {
+    if (canUseChannelBridge) return
+    setChannelBridgeOpen(false)
+    setBridgeTranscriptEntries([])
+    setPendingPermissions((prev) => prev.filter((permission) => permission.sessionId || permission.provider))
+    persistedBridgeCountRef.current = 0
+  }, [canUseChannelBridge])
+
+  // Listen for new bridge sent/reply entries from the hook
+  useEffect(() => {
+    const entries = channelBridge.entries.filter(
+      (e): e is Extract<typeof e, { kind: 'sent' | 'reply' }> => e.kind === 'sent' || e.kind === 'reply'
+    )
+    setBridgeTranscriptEntries((prev) => {
+      // Find entries we haven't already added
+      const newEntries = entries.filter((entry) =>
+        !prev.some((p) => p.kind === entry.kind && p.text === entry.text)
+      )
+      if (newEntries.length === 0) return prev
+      return [
+        ...prev,
+        ...newEntries.map((e) => ({
+          kind: e.kind,
+          text: e.text,
+          timestamp: new Date().toISOString(),
+        })),
+      ]
+    })
+  }, [channelBridge.entries.length])
+
+  // Sync bridge permission requests into the permission composer
+  useEffect(() => {
+    const permissionEntries = channelBridge.entries.filter(
+      (e): e is Extract<typeof e, { kind: 'permission' }> => e.kind === 'permission'
+    )
+    setPendingPermissions((prev) => {
+      const newPerms = permissionEntries
+        .filter((entry) => !prev.some((p) => p.id === entry.id))
+        .map((entry) => ({
+          id: entry.id,
+          title: entry.request.tool_name || 'CLI bridge permission',
+          detail: entry.request.description,
+          toolName: entry.request.tool_name,
+          reason: entry.request.input_preview,
+        }))
+      if (newPerms.length === 0) return prev
+      return [...prev, ...newPerms]
+    })
+  }, [channelBridge.entries.length])
+
+  // The command palette toggles composer routing via a request counter (it lives
+  // outside this component); flip the persisted binding when it bumps.
+  useEffect(() => {
+    if (channelBridgeRouteToggleRequest <= handledChannelBridgeRouteRequestRef.current) return
+    handledChannelBridgeRouteRequestRef.current = channelBridgeRouteToggleRequest
+    if (!canUseChannelBridge) return
+    const bridge = channelBridgeRef.current
+    bridge.setRouteComposer(!bridge.routeComposer)
+  }, [canUseChannelBridge, channelBridgeRouteToggleRequest])
+
+  // Mirror the current routing state up so the palette label can reflect it.
+  useEffect(() => {
+    onChannelBridgeRoutingChange?.(channelBridge.routeComposer)
+  }, [channelBridge.routeComposer, onChannelBridgeRoutingChange])
+
+  // IDE bridge: same open/route/mirror plumbing as the channel bridge above.
+  useEffect(() => {
+    if (ideBridgeOpenRequest <= handledIdeBridgeOpenRequestRef.current) return
+    handledIdeBridgeOpenRequestRef.current = ideBridgeOpenRequest
+    if (!canUseIdeBridge) return
+    setIdeBridgeOpen(true)
+  }, [canUseIdeBridge, ideBridgeOpenRequest])
+
+  useEffect(() => {
+    if (canUseIdeBridge) return
+    setIdeBridgeOpen(false)
+  }, [canUseIdeBridge])
+
+  useEffect(() => {
+    if (ideBridgeRouteToggleRequest <= handledIdeBridgeRouteRequestRef.current) return
+    handledIdeBridgeRouteRequestRef.current = ideBridgeRouteToggleRequest
+    if (!canUseIdeBridge) return
+    const bridge = ideBridgeRef.current
+    bridge.setRouteComposer(!bridge.routeComposer)
+  }, [canUseIdeBridge, ideBridgeRouteToggleRequest])
+
+  useEffect(() => {
+    onIdeBridgeRoutingChange?.(ideBridge.routeComposer)
+  }, [ideBridge.routeComposer, onIdeBridgeRoutingChange])
+
+  // Load persisted bridge messages when session changes
+  useEffect(() => {
+    if (!canUseChannelBridge || !session) {
+      setBridgeTranscriptEntries([])
+      persistedBridgeCountRef.current = 0
+      return
+    }
+    let isMounted = true
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/bridge-messages?provider=${encodeURIComponent(session.provider ?? 'claude')}&sessionId=${encodeURIComponent(session.sessionId)}`)
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const data = await res.json() as { messages: Array<{ kind: 'sent' | 'reply'; text: string; timestamp: string }> }
+        if (isMounted) {
+          setBridgeTranscriptEntries(data.messages)
+          persistedBridgeCountRef.current = data.messages.length
+        }
+      } catch (err) {
+        console.error('[bridge-messages] Failed to load:', err)
+      }
+    })()
+    return () => { isMounted = false }
+  }, [canUseChannelBridge, session?.provider, session?.sessionId])
+
+  // Persist new bridge messages to disk when they arrive
+  useEffect(() => {
+    if (!canUseChannelBridge || !session) return
+    const newCount = bridgeTranscriptEntries.length
+    const persistedCount = persistedBridgeCountRef.current
+    if (newCount <= persistedCount) return
+
+    // Persist only the new entries
+    const newEntries = bridgeTranscriptEntries.slice(persistedCount)
+    let cancelled = false
+    ;(async () => {
+      for (const entry of newEntries) {
+        if (cancelled) return
+        try {
+          const res = await fetch('/api/bridge-messages', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              provider: session.provider,
+              providerInstanceId: session.providerInstanceId,
+              sessionId: session.sessionId,
+              kind: entry.kind,
+              text: entry.text,
+              timestamp: entry.timestamp,
+            }),
+          })
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        } catch (err) {
+          console.error('[bridge-messages] Failed to save:', err)
+        }
+      }
+      if (!cancelled) {
+        persistedBridgeCountRef.current = newCount
+      }
+    })()
+    return () => { cancelled = true }
+  }, [canUseChannelBridge, session?.provider, session?.sessionId, bridgeTranscriptEntries.length])
+
+  // Auto-focus the composer for a brand-new pending session — same as opening
+  // a CLI and landing at the prompt. Gated on `isPending` to avoid stealing
+  // focus on every navigation back to an existing session.
+  useEffect(() => {
+    if (!session || session.isPending !== true) return
+    if (isProject) return
+    const key = `${session.provider ?? 'claude'}:${session.sessionId}`
+    if (autoFocusedSessionsRef.current.has(key)) return
+    autoFocusedSessionsRef.current.add(key)
+    window.requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (!ta) return
+      ta.focus()
+      ta.setSelectionRange(ta.value.length, ta.value.length)
+    })
+  }, [isProject, session])
   const activeToolCount = liveToolActivities.filter((activity) => activity.status === 'running').length
-  const liveUserMessage: ThreadedMessage | null = !isProject && optimisticUserText
+  const modelsPending = modelsLoading && !selectedModel
+  const sendBusy = sendState === 'sending' || awaitingPersistedTurn || modelsPending
+  // A turn is live (whether we own its stream or reattached to it) — drives the
+  // stop button and the "busy" composer presentation.
+  const turnRunning = sendBusy || reattachedRunning
+  const canSubmitMessage = Boolean(session && (inputText.trim() || attachments.length > 0))
+  const composerConfig = useMemo(() => getProviderComposer(session?.provider), [session?.provider])
+  const composerPlaceholder = canUseChannelBridge && channelBridge.routeComposer
+    ? 'Send to the live CLI bridge… (toggle off in the bridge panel)'
+    : turnRunning
+    ? composerConfig.placeholderStreaming
+    : activeToolCount > 0
+    ? `${composerConfig.label} is using ${activeToolCount} tool${activeToolCount === 1 ? '' : 's'}…`
+    : 'Ask for changes, send follow-ups, or attach images'
+  const composerRuntime = useMemo(() => deriveComposerRuntimeState({
+    hasSession: Boolean(session),
+    preparing: modelsPending,
+    sendState,
+    awaitingPersistedTurn,
+    reattachedRunning,
+    interrupting,
+    liveStatus,
+    hasLiveOutput: Boolean(liveAssistantText.trim() || liveThreadedMessages.length > 0),
+    activeToolCount,
+    queuedCount: activeQueuedSends.length,
+    queueDurability: composerQueueDurability,
+  }), [
+    activeQueuedSends.length,
+    activeToolCount,
+    awaitingPersistedTurn,
+    composerQueueDurability,
+    interrupting,
+    liveAssistantText,
+    liveStatus,
+    liveThreadedMessages.length,
+    modelsPending,
+    reattachedRunning,
+    sendState,
+    session?.sessionId,
+  ])
+  const composerStatus = canUseChannelBridge && channelBridge.routeComposer
+    ? (channelBridge.sendError ? 'Bridge error' : 'Bridge · sends to live CLI')
+    : steeredNotice && (sendState === 'sending' || reattachedRunning)
+    ? 'Steered · delivered to the running turn'
+    : composerRuntime.label
+  const composerStatusDetail = canUseChannelBridge && channelBridge.routeComposer
+    ? (channelBridge.sendError ?? 'Messages are routed directly to the attached CLI session.')
+    : sendState === 'error' && sendError
+    ? `${composerRuntime.detail} ${sendError}`
+    : composerRuntime.detail
+  const composerStatusColor = canUseChannelBridge && channelBridge.routeComposer
+    ? (channelBridge.sendError ? 'var(--red, #f87171)' : `var(${composerConfig.cssAccentVar})`)
+    : composerRuntime.tone === 'error'
+    ? 'var(--red, #f87171)'
+    : composerRuntime.tone === 'warning'
+    ? 'var(--amber, #eaaa40)'
+    : composerRuntime.tone === 'active'
+    ? 'var(--cyan)'
+    : 'var(--text-3)'
+  const composerGitBranch = composerGitSummary?.branch ?? sessionInfo?.gitBranch ?? null
+  const composerGitTitle = composerGitBranch
+    ? [
+        `Branch ${composerGitBranch}`,
+        composerGitSummary?.modified ? `${composerGitSummary.modified} modified` : null,
+        composerGitSummary?.untracked ? `${composerGitSummary.untracked} untracked` : null,
+        composerGitSummary?.stashes ? `${composerGitSummary.stashes} stashes` : null,
+      ].filter(Boolean).join(' · ')
+    : null
+  const composerGitHasDetails = Boolean(
+    composerGitSummary?.modified || composerGitSummary?.untracked || composerGitSummary?.stashes,
+  )
+  const liveTurnTone: 'running' | 'syncing' = awaitingPersistedTurn ? 'syncing' : 'running'
+  const liveTurnBadge = interrupting ? 'STOPPING' : awaitingPersistedTurn ? 'SYNCING' : 'RUNNING'
+  const liveTurnActivityDetail = interrupting
+    ? 'Interrupting turn; saving what the agent produced…'
+    : awaitingPersistedTurn
+    ? activeQueuedSends.length > 0
+      ? 'Turn complete; syncing transcript. Next message queued.'
+      : 'Turn complete; syncing transcript.'
+    : liveStatus === 'retrying'
+    ? 'Retrying after a transient error…'
+    : liveStatus === 'compacting'
+    ? 'Compacting conversation to free up context…'
+    : activeToolCount > 0
+    ? `Turn running; using ${activeToolCount} tool${activeToolCount === 1 ? '' : 's'}.`
+    : liveStatus === 'requesting' && !liveAssistantText.trim()
+    ? 'Turn running; waiting for provider response.'
+    : liveAssistantText.trim()
+    ? 'Turn running; streaming assistant response.'
+    : 'Turn running.'
+  const showLiveTimelineOverlay = Boolean(
+    !isProject
+    && session
+    && pendingMessageBaselineRef.current?.sessionId === session.sessionId,
+  )
+  const visiblePersistedMessageKeys = useMemo(() => {
+    const baseline = pendingMessageBaselineRef.current
+    if (!showLiveTimelineOverlay || !baseline || baseline.sessionId !== session?.sessionId) return null
+    return new Set(baseline.keys)
+  }, [messages, session?.sessionId, showLiveTimelineOverlay])
+  const visibleThreaded = useMemo(() => {
+    if (!visiblePersistedMessageKeys) return threadedWithBridge
+    return threadedWithBridge.filter((msg) =>
+      // Always include bridge messages (ephemeral, not in persisted set)
+      msg.origin?.kind === 'bridge' || visiblePersistedMessageKeys.has(threadedMessageKey(msg))
+    )
+  }, [threadedWithBridge, visiblePersistedMessageKeys])
+  const liveUserMessage = useMemo<ThreadedMessage | null>(() => (showLiveTimelineOverlay && optimisticUserText
     ? {
         role: 'user',
         uuid: 'live-user',
@@ -839,52 +6798,771 @@ export default function MessageView({ messages, loading, session, projectView, o
         provider: session?.provider,
         blocks: [{ type: 'text', text: optimisticUserText }],
       }
-    : null
-  const liveAssistantMessage: ThreadedMessage | null = !isProject && (sendState === 'sending' || awaitingPersistedTurn)
+    : null), [optimisticUserText, session?.provider, session?.sessionId, showLiveTimelineOverlay])
+  const liveAssistantMessage = useMemo<ThreadedMessage | null>(() => (showLiveTimelineOverlay && (sendState === 'sending' || awaitingPersistedTurn)
     ? {
         role: 'assistant',
         uuid: 'live-assistant',
         sessionId: session?.sessionId,
         provider: session?.provider,
-        blocks: [{
-          type: 'text',
-          text: liveAssistantText.trim()
-            || (activeToolCount > 0
-              ? `Using ${activeToolCount} tool${activeToolCount === 1 ? '' : 's'}…`
-              : sendState === 'sending'
-              ? 'Working…'
-              : 'Waiting for saved response…'),
-        }],
+        blocks: [
+          ...(liveReasoningText.trim()
+            ? [{ type: 'thinking' as const, thinking: liveReasoningText.trim() }]
+            : []),
+          {
+            type: 'text' as const,
+            text: liveAssistantText.trim()
+              || (activeToolCount > 0
+                ? `Using ${activeToolCount} tool${activeToolCount === 1 ? '' : 's'}…`
+                : liveReasoningText.trim()
+                ? `Thinking…${liveThinkingTokens > 0 ? ` (~${formatLiveThinkingTokens(liveThinkingTokens)} tokens)` : ''}`
+                : sendState === 'sending'
+                ? `Working…${liveThinkingTokens > 0 ? ` (~${formatLiveThinkingTokens(liveThinkingTokens)} thinking tokens)` : ''}`
+                : 'Waiting for saved response…'),
+          },
+        ],
       }
-    : null
-  const rewindCandidates = (sessionCapabilities?.fileRewind ? messages : [])
-    .filter((msg) =>
-      msg.type === 'user'
-      && extractTextContent(msg.message.content).trim() !== ''
-      && !extractTextContent(msg.message.content).trimStart().startsWith('<task-notification>')
-    )
-    .map((msg) => ({
-      uuid: msg.uuid,
-      content: extractTextContent(msg.message.content),
-      timestamp: msg.timestamp,
-    }))
+    : null), [
+      activeToolCount,
+      awaitingPersistedTurn,
+      liveAssistantText,
+      liveReasoningText,
+      liveThinkingTokens,
+      sendState,
+      session?.provider,
+      session?.sessionId,
+      showLiveTimelineOverlay,
+    ])
+  const rewindCandidates = useMemo(() =>
+    (sessionCapabilities?.fileRewind ? messages : [])
+      .filter((msg) =>
+        msg.type === 'user'
+        && extractTextContent(msg.message.content).trim() !== ''
+        && !extractTextContent(msg.message.content).trimStart().startsWith('<task-notification>')
+      )
+      .map((msg) => ({
+        uuid: msg.uuid,
+        content: extractTextContent(msg.message.content),
+        timestamp: msg.timestamp,
+      }))
+  , [messages, sessionCapabilities?.fileRewind])
   const selectedRewindTarget = rewindCandidates.find((candidate) => candidate.uuid === rewindTargetId) ?? null
-  const rollbackCandidates = sessionCapabilities?.rollback
-    ? (() => {
-        const turns = new Map<string, { turnId: string; preview: string }>()
-        for (const msg of messages) {
-          if (!msg.turnId || turns.has(msg.turnId)) continue
-          const preview = typeof msg.message.content === 'string'
-            ? msg.message.content.replace(/\s+/g, ' ').trim().slice(0, 120)
-            : msg.type === 'assistant'
-            ? 'Assistant output'
-            : 'Turn'
-          turns.set(msg.turnId, { turnId: msg.turnId, preview: preview || msg.turnId })
+  const rollbackCandidates = useMemo(() => {
+    if (!sessionCapabilities?.rollback) return []
+    const turns = new Map<string, { turnId: string; preview: string }>()
+    for (const msg of messages) {
+      if (!msg.turnId || turns.has(msg.turnId)) continue
+      const preview = typeof msg.message.content === 'string'
+        ? msg.message.content.replace(/\s+/g, ' ').trim().slice(0, 120)
+        : msg.type === 'assistant'
+        ? 'Assistant output'
+        : 'Turn'
+      turns.set(msg.turnId, { turnId: msg.turnId, preview: preview || msg.turnId })
+    }
+    return Array.from(turns.values())
+  }, [messages, sessionCapabilities?.rollback])
+  const lastUserMessageUuid = useMemo(() => {
+    for (let i = visibleThreaded.length - 1; i >= 0; i -= 1) {
+      const msg = visibleThreaded[i]
+      if (msg && msg.role === 'user') return msg.uuid
+    }
+    return null
+  }, [visibleThreaded])
+
+  const persistedTimelineRows = useMemo<TimelineRow[]>(() =>
+    visibleThreaded.map((msg) => ({
+      key: `persisted:${threadedMessageKey(msg)}`,
+      message: msg,
+      showSession: isProject,
+      showForkControls: !isProject && (sessionCapabilities?.messageFork || (msg.role === 'assistant' && sessionCapabilities?.resumeAtMessage)),
+      allowFork: !!sessionCapabilities?.messageFork,
+      allowResume: msg.role === 'assistant' && !!sessionCapabilities?.resumeAtMessage,
+      allowEdit: !isProject && msg.role === 'user' && msg.uuid === lastUserMessageUuid && !!sessionCapabilities?.resumeAtMessage,
+    }))
+  // highlightedMessageId / forkingMessageId / resumeFromMessageId are
+  // intentionally NOT deps: they are delivered to rows as per-row booleans at
+  // render time so an interaction doesn't rebuild this whole array (and the
+  // timelineRows / transcriptTimelineRows / virtualTimeline cascade below it).
+  , [
+    isProject,
+    lastUserMessageUuid,
+    sessionCapabilities?.messageFork,
+    sessionCapabilities?.resumeAtMessage,
+    visibleThreaded,
+  ])
+
+  const liveThreadedVisible = useMemo(
+    () => (showTools ? liveThreadedMessages : stripToolCallBlocks(liveThreadedMessages)),
+    [liveThreadedMessages, showTools],
+  )
+  const liveTimelineRows = useMemo<TimelineRow[]>(() => {
+    if (!showLiveTimelineOverlay) return []
+    const rows: TimelineRow[] = []
+    if (liveUserMessage) {
+      rows.push({
+        key: 'live:user',
+        message: liveUserMessage,
+        showSession: false,
+        dimmed: true,
+      })
+    }
+
+    if (liveAssistantMessage) {
+      rows.push({
+        key: 'live:assistant',
+        message: liveAssistantMessage,
+        showSession: false,
+        dimmed: true,
+        previewBadge: liveTurnBadge,
+        activityDetail: liveTurnActivityDetail,
+        activityTone: liveTurnTone,
+        liveToolActivities: session?.provider !== 'claude' ? liveToolActivities : undefined,
+      })
+    }
+
+    liveThreadedVisible.forEach((msg, index) => {
+      rows.push({
+        key: `live:threaded:${msg.provider ?? 'claude'}:${msg.uuid}`,
+        message: msg,
+        showSession: false,
+        dimmed: true,
+        previewBadge: index === 0 && !liveAssistantMessage ? liveTurnBadge : undefined,
+        activityDetail: index === 0 && !liveAssistantMessage ? liveTurnActivityDetail : undefined,
+        activityTone: index === 0 && !liveAssistantMessage ? liveTurnTone : undefined,
+      })
+    })
+
+    // Messages steered into the running turn — newest input, shown last.
+    steeredUserTexts.forEach((entry, index) => {
+      rows.push({
+        key: `live:steered:${index}`,
+        message: {
+          role: 'user',
+          uuid: `live-user-steer-${index}`,
+          sessionId: session?.sessionId,
+          provider: session?.provider,
+          blocks: [{ type: 'text', text: entry.text }],
+        },
+        showSession: false,
+        dimmed: true,
+        previewBadge: entry.state === 'queued'
+          ? 'steered · queued'
+          : entry.state === 'started'
+          ? 'steered · running'
+          : entry.state === 'completed'
+          ? 'steered · done'
+          : undefined,
+      })
+    })
+
+    return rows
+  }, [
+    awaitingPersistedTurn,
+    liveAssistantMessage,
+    liveToolActivities,
+    liveThreadedVisible,
+    liveTurnActivityDetail,
+    liveTurnBadge,
+    liveTurnTone,
+    liveUserMessage,
+    session?.provider,
+    session?.sessionId,
+    showLiveTimelineOverlay,
+    steeredUserTexts,
+  ])
+  const timelineRows = useMemo<TimelineRow[]>(() => {
+    if (persistedTimelineRows.length === 0) return liveTimelineRows
+    if (liveTimelineRows.length === 0) return persistedTimelineRows
+    return [...persistedTimelineRows, ...liveTimelineRows]
+  }, [liveTimelineRows, persistedTimelineRows])
+  const normalizedTranscriptSearch = deferredTranscriptSearch.trim().toLowerCase()
+  const transcriptTimelineRows = useMemo<TimelineRow[]>(() => {
+    if (maximized) return timelineRows
+    // Preserve referential identity with timelineRows when nothing is focused —
+    // the scroll-anchor logic below relies on this equality.
+    if (transcriptFilters.length === 0 && normalizedTranscriptSearch === '' && !bookmarksOnly) return timelineRows
+    return timelineRows.filter((row) => {
+      if (bookmarksOnly && !bookmarkIds.has(row.message.uuid)) return false
+      if (!timelineRowMatchesTranscriptFilters(row, transcriptFilters)) return false
+      if (!normalizedTranscriptSearch) return true
+      return timelineRowSearchText(row).includes(normalizedTranscriptSearch)
+    })
+  }, [normalizedTranscriptSearch, timelineRows, transcriptFilters, bookmarksOnly, bookmarkIds, maximized])
+  const renderedTimelineRows = useMemo<TimelineRow[]>(() => {
+    if (viewMode === 'agents') return groupAgentsToolRows(transcriptTimelineRows)
+    if (viewMode === 'stream') {
+      // Rows whose message renders nothing in Stream view (no prose, no tool
+      // calls) must be dropped, not just render null: the row wrapper's stream
+      // padding and the virtual row's minimum height would otherwise paint
+      // empty selectable ghost rows.
+      const streamRows = decorateStreamTurnLandmarks(transcriptTimelineRows, !showLiveTimelineOverlay)
+      return groupAgentsToolRows(streamRows).filter((row) => streamMessageHasContent(row.message))
+    }
+    return transcriptTimelineRows
+  }, [showLiveTimelineOverlay, transcriptTimelineRows, viewMode])
+  const hasTranscriptFocus = transcriptFilters.length > 0 || transcriptSearch.trim().length > 0 || bookmarksOnly
+  const visualizerRows = useMemo<MessageVisualizerRow[]>(
+    () => showVisualizer
+      ? timelineRows.map((row) => ({
+          key: row.key,
+          message: row.message,
+          dimmed: row.dimmed,
+          previewBadge: row.previewBadge,
+          showSession: row.showSession,
+        }))
+      : [],
+    [showVisualizer, timelineRows],
+  )
+  const timelineTargetMessageId = useMemo(
+    () => resolveTimelineTargetMessageId(targetMessageId, messages, timelineRows),
+    [messages, targetMessageId, timelineRows],
+  )
+  const hasLiveTimeline = timelineRows.length > 0
+  const hasTranscriptTimeline = renderedTimelineRows.length > 0
+  useLayoutEffect(() => {
+    timelineRowsRef.current = renderedTimelineRows
+  }, [renderedTimelineRows])
+
+  // On the first completed load for a session, wait for rows to exist and then force the
+  // viewport to the live edge so initial virtualization and measurement do not leave us at the top.
+  useLayoutEffect(() => {
+    if (loading || !session) return
+    if (initialScrollDoneRef.current) return
+
+    if (!hasLiveTimeline) {
+      if (messages.length === 0) {
+        initialScrollDoneRef.current = true
+        setAutoFollow(true)
+      }
+      return
+    }
+
+    if (targetMessageId) {
+      initialScrollDoneRef.current = true
+      autoFollowRef.current = false
+      setAutoFollow(false)
+      return
+    }
+
+    initialScrollDoneRef.current = true
+    setAutoFollow(true)
+
+    const node = timelineRef.current
+    if (node) {
+      const targetTop = Math.max(node.scrollHeight - node.clientHeight - TIMELINE_BOTTOM_GUTTER_PX, 0)
+      suppressFollowEvalUntilRef.current = performance.now() + 200
+      markProgrammaticTimelineScroll()
+      node.scrollTop = targetTop
+      commitTimelineScrollTop(targetTop)
+    }
+    alignLastTimelineRowToViewportBottom()
+
+    let cancelled = false
+    let frameId: number | null = null
+    // Two passes cover the initial paint and the first ResizeObserver delivery.
+    // The content observer below continues pinning while late rows settle, so
+    // six forced layout reads here only delayed first interaction.
+    const runInitialScrollPass = (pass: number) => {
+      if (cancelled) return
+      scrollTimelineToBottom()
+      alignLastTimelineRowToViewportBottom()
+      if (pass >= 2) return
+      frameId = window.requestAnimationFrame(() => runInitialScrollPass(pass + 1))
+    }
+
+    frameId = window.requestAnimationFrame(() => runInitialScrollPass(1))
+
+    return () => {
+      cancelled = true
+      if (frameId != null) window.cancelAnimationFrame(frameId)
+    }
+  }, [alignLastTimelineRowToViewportBottom, commitTimelineScrollTop, hasLiveTimeline, loading, markProgrammaticTimelineScroll, messages.length, scrollTimelineToBottom, session?.sessionId, targetMessageId])
+
+  useEffect(() => {
+    const activeKeys = new Set(renderedTimelineRows.map((row) => row.key))
+    let changed = false
+    let persistedChanged = false
+    for (const key of rowHeightsRef.current.keys()) {
+      if (activeKeys.has(key)) continue
+      rowHeightsRef.current.delete(key)
+      changed = true
+      if (!key.startsWith('live:')) persistedChanged = true
+    }
+    if (changed) setRowMeasurementVersion((version) => version + 1)
+    if (persistedChanged) setPersistedMeasurementVersion((version) => version + 1)
+  }, [renderedTimelineRows])
+
+  const setLastTimelineRow = useCallback((node: HTMLDivElement | null) => {
+    lastTimelineRowRef.current = node
+  }, [])
+
+  const flushTimelineRowMeasurements = useCallback(() => {
+    measurementFrameRef.current = window.requestAnimationFrame(() => {
+      measurementFrameRef.current = null
+      const pending = pendingRowMeasurementsRef.current
+      if (pending.size === 0) return
+
+      const node = timelineRef.current
+      const layout = rowLayoutRef.current
+      const rows = timelineRowsRef.current
+      const isFollowing = autoFollowRef.current
+      // Wheel/trackpad input is delta-based, so measurements can settle while
+      // scrolling as long as their anchor compensation lands with the layout
+      // commit. Direct scrollbar/touch scrubbing controls an absolute
+      // scrollTop, so hold measurements above the viewport until the gesture
+      // ends instead of moving every visible row underneath the pointer.
+      const allowScrollAdjust = !userScrollingRef.current
+        || performance.now() < wheelScrollCompensationUntilRef.current
+      const anchor = node ? findTimelineScrollAnchor(rows, layout, node.scrollTop) : null
+      const measurementChanges: TimelineMeasurementChange[] = []
+      let changed = false
+      let persistedChanged = false
+      let calibrationChanged = false
+
+      for (const [key, nextMeasuredHeight] of pending) {
+        const index = layout.indexByKey.get(key)
+        if (index == null) {
+          pending.delete(key)
+          continue
         }
-        return Array.from(turns.values())
-      })()
-    : []
-  const hasLiveTimeline = threaded.length > 0 || !!liveUserMessage || !!liveAssistantMessage
+        const row = rows[index]
+        if (!row) {
+          pending.delete(key)
+          continue
+        }
+        if (!allowScrollAdjust && anchor && index < anchor.index) continue
+
+        if (!key.startsWith('live:') && !timelineEstimateCalibrationFrozenRef.current) {
+          const rawEstimate = estimateTimelineRowHeight(row, density, viewMode)
+          const bucket = timelineEstimateBucket(row, viewMode)
+          const previousSample = timelineEstimateSamplesRef.current.get(key)
+          const sampleChanged = !previousSample
+            || previousSample.bucket !== bucket
+            || previousSample.estimatedHeight !== rawEstimate
+            || previousSample.measuredHeight !== nextMeasuredHeight
+          if (sampleChanged) {
+            if (previousSample) {
+              for (const calibrationKey of ['all', previousSample.bucket] as const) {
+                const current = timelineEstimateCalibrationRef.current.get(calibrationKey)
+                if (!current) continue
+                current.estimatedTotal -= previousSample.estimatedHeight
+                current.measuredTotal -= previousSample.measuredHeight
+                current.sampleCount -= 1
+                if (current.sampleCount <= 0) timelineEstimateCalibrationRef.current.delete(calibrationKey)
+              }
+            }
+            for (const calibrationKey of ['all', bucket] as const) {
+              const current = timelineEstimateCalibrationRef.current.get(calibrationKey)
+                ?? { estimatedTotal: 0, measuredTotal: 0, sampleCount: 0 }
+              current.estimatedTotal += rawEstimate
+              current.measuredTotal += nextMeasuredHeight
+              current.sampleCount += 1
+              timelineEstimateCalibrationRef.current.set(calibrationKey, current)
+            }
+            timelineEstimateSamplesRef.current.set(key, {
+              bucket,
+              estimatedHeight: rawEstimate,
+              measuredHeight: nextMeasuredHeight,
+            })
+            calibrationChanged = true
+          }
+        }
+
+        const previousHeight = rowHeightsRef.current.get(key) ?? layout.heights[index]
+        pending.delete(key)
+        if (nextMeasuredHeight === previousHeight) continue
+
+        rowHeightsRef.current.set(key, nextMeasuredHeight)
+        changed = true
+        if (!key.startsWith('live:')) persistedChanged = true
+        measurementChanges.push({ index, previousHeight, nextHeight: nextMeasuredHeight })
+      }
+
+      const scrollDelta = allowScrollAdjust && !isFollowing
+        ? computeTimelineScrollCompensation(measurementChanges, anchor)
+        : 0
+      if (scrollDelta !== 0) {
+        pendingTimelineScrollCompensationRef.current += scrollDelta
+      }
+
+      if (changed || calibrationChanged) {
+        setRowMeasurementVersion((version) => version + 1)
+      }
+      if (persistedChanged || calibrationChanged) {
+        setPersistedMeasurementVersion((version) => version + 1)
+      }
+    })
+  }, [density, viewMode])
+
+  const scheduleTimelineMeasurementFlush = useCallback(() => {
+    if (pendingRowMeasurementsRef.current.size === 0 || measurementFrameRef.current != null) return
+    flushTimelineRowMeasurements()
+  }, [flushTimelineRowMeasurements])
+  useLayoutEffect(() => {
+    scheduleTimelineMeasurementFlushRef.current = scheduleTimelineMeasurementFlush
+  }, [scheduleTimelineMeasurementFlush])
+
+  const handleTimelineRowMeasure = useCallback((key: string, height: number) => {
+    pendingRowMeasurementsRef.current.set(key, Math.max(1, Math.ceil(height)))
+    scheduleTimelineMeasurementFlush()
+  }, [scheduleTimelineMeasurementFlush])
+
+  useLayoutEffect(() => {
+    if (!autoFollow || !hasTranscriptTimeline || loading) return
+    scrollTimelineToBottom()
+    alignLastTimelineRowToViewportBottom()
+  }, [alignLastTimelineRowToViewportBottom, autoFollow, hasTranscriptTimeline, loading, renderedTimelineRows.length, rowMeasurementVersion, scrollTimelineToBottom])
+
+  const estimateTimelineRowHeightForLayout = useCallback((row: TimelineRow) => {
+    const rawEstimate = estimateTimelineRowHeight(row, density, viewMode)
+    return calibratedTimelineRowHeight(
+      row,
+      rawEstimate,
+      viewMode,
+      timelineEstimateCalibrationRef.current,
+    )
+  }, [density, viewMode])
+
+  // Layout for the persisted prefix only. Keyed on persistedMeasurementVersion
+  // (not rowMeasurementVersion) so a streaming turn — which bumps the live
+  // row's measured height every few frames — does NOT re-run the O(n) height
+  // accumulation over the entire transcript. Rebuilds only on a real poll
+  // delta (persistedTimelineRows identity) or a persisted-row resize.
+  const baseLayout = useMemo(() => {
+    return measureSync('timeline.baseLayout', () =>
+      buildTimelineRowLayout(persistedTimelineRows, rowHeightsRef.current, estimateTimelineRowHeightForLayout))
+  }, [estimateTimelineRowHeightForLayout, persistedMeasurementVersion, persistedTimelineRows])
+
+  // Separate the expensive O(n) height accumulation from the scroll-reactive
+  // visibility window. rowLayout only recomputes when rows or measurements
+  // change; virtualTimeline re-runs on every scroll but only does a scan of
+  // the visible window — no new objects for off-screen rows.
+  const rowLayout = useMemo(() => {
+    // transcriptTimelineRows returns the SAME reference as timelineRows exactly
+    // when no filter/search applies (and timelineRows === [...persisted,
+    // ...live]). Gate on that referential equality rather than hasTranscriptFocus
+    // — the latter reads the IMMEDIATE search box while transcriptTimelineRows
+    // is filtered from the DEFERRED value, so they desync during the
+    // useDeferredValue lag (e.g. clearing the box) and would pair filtered rows
+    // with a full-list layout. When they differ, a filter is genuinely active
+    // and the base prefix can't be reused — rebuild the full layout.
+    if (renderedTimelineRows !== timelineRows) {
+      return measureSync('timeline.fullLayout', () =>
+        buildTimelineRowLayout(renderedTimelineRows, rowHeightsRef.current, estimateTimelineRowHeightForLayout))
+    }
+    // Otherwise reuse baseLayout for the persisted prefix and append only the
+    // live suffix.
+    return measureSync('timeline.appendLayout', () =>
+      appendTimelineRowLayout(baseLayout, liveTimelineRows, rowHeightsRef.current, estimateTimelineRowHeightForLayout))
+  }, [baseLayout, estimateTimelineRowHeightForLayout, liveTimelineRows, renderedTimelineRows, rowMeasurementVersion, timelineRows])
+  rowLayoutRef.current = rowLayout
+
+  const buildStreamHistoryMetadata = useLazyRef(() => createStreamHistoryMetadataBuilder(messageToCopyText))
+  const streamHistoryMetadata = useMemo(() => {
+    if (viewMode !== 'stream') return []
+    return measureSync('timeline.streamHistoryMetadata', () => buildStreamHistoryMetadata.current(renderedTimelineRows))
+  }, [buildStreamHistoryMetadata, renderedTimelineRows, viewMode])
+
+  // Rows carry only their layout-space geometry. The rail maps them onto the
+  // scroll container's document itself, which totalHeight is not: the container
+  // pads the list and renders blocks around it.
+  const streamHistoryItems = useMemo<StreamHistoryItem[]>(() => {
+    if (streamHistoryMetadata.length === 0) return []
+    return streamHistoryMetadata.map((item, index) => ({
+      ...item,
+      top: rowLayout.tops[index],
+      height: rowLayout.heights[index],
+    }))
+  }, [rowLayout, streamHistoryMetadata])
+
+  useLayoutEffect(() => {
+    const scrollDelta = pendingTimelineScrollCompensationRef.current
+    pendingTimelineScrollCompensationRef.current = 0
+    if (scrollDelta === 0 || autoFollowRef.current) return
+
+    const node = timelineRef.current
+    if (!node) return
+
+    const maxScrollTop = Math.max(node.scrollHeight - node.clientHeight, 0)
+    const targetTop = Math.max(0, Math.min(node.scrollTop + scrollDelta, maxScrollTop))
+    if (Math.abs(node.scrollTop - targetTop) < 1) return
+
+    suppressFollowEvalUntilRef.current = performance.now() + 200
+    markProgrammaticTimelineScroll()
+    node.scrollTop = targetTop
+    commitTimelineScrollTop(node.scrollTop)
+  }, [commitTimelineScrollTop, markProgrammaticTimelineScroll, rowLayout])
+
+  useLayoutEffect(() => {
+    if (timelineHeightOverride !== null || !pendingTimelineAnchorRestoreRef.current) return
+    pendingTimelineAnchorRestoreRef.current = false
+    restoreTimelineScrollAnchor()
+  }, [restoreTimelineScrollAnchor, rowLayout, timelineHeightOverride])
+
+  const handleVisualizerSelectMessage = useCallback((messageId: string) => {
+    setShowVisualizer(false)
+    setTranscriptFilters([])
+    setTranscriptSearch('')
+    setHighlightedMessageId(messageId)
+    autoFollowRef.current = false
+    setAutoFollow(false)
+
+    const scrollToMessage = () => {
+      const node = timelineRef.current
+      const rows = timelineRowsRef.current
+      const layout = rowLayoutRef.current
+      if (!node) return
+
+      const rowIndex = rows.findIndex((row) => rowContainsMessage(row, messageId))
+      if (rowIndex < 0) return
+
+      const targetTop = Math.max(layout.tops[rowIndex] - TIMELINE_TARGET_TOP_GUTTER_PX, 0)
+      suppressFollowEvalUntilRef.current = performance.now() + 300
+      markProgrammaticTimelineScroll()
+      node.scrollTop = targetTop
+      commitTimelineScrollTop(targetTop)
+    }
+
+    window.requestAnimationFrame(() => {
+      scrollToMessage()
+      window.requestAnimationFrame(() => {
+        if (!scrollMountedTimelineRowIntoView(messageId)) {
+          scrollToMessage()
+        }
+      })
+    })
+  }, [commitTimelineScrollTop, markProgrammaticTimelineScroll, scrollMountedTimelineRowIntoView])
+
+  // Used by TaskRail to scroll the transcript to a task's most recent event.
+  // Same scroll/highlight behavior as the visualizer-select path but without
+  // touching filters/search or the visualizer toggle.
+  const handleJumpToMessage = useCallback((messageId: string) => {
+    setHighlightedMessageId(messageId)
+    autoFollowRef.current = false
+    setAutoFollow(false)
+
+    const scrollToMessage = () => {
+      const node = timelineRef.current
+      const rows = timelineRowsRef.current
+      const layout = rowLayoutRef.current
+      if (!node) return
+      const rowIndex = rows.findIndex((row) => row.message.uuid === messageId)
+      if (rowIndex < 0) return
+      const targetTop = Math.max(layout.tops[rowIndex] - TIMELINE_TARGET_TOP_GUTTER_PX, 0)
+      suppressFollowEvalUntilRef.current = performance.now() + 300
+      markProgrammaticTimelineScroll()
+      node.scrollTop = targetTop
+      commitTimelineScrollTop(targetTop)
+    }
+
+    window.requestAnimationFrame(() => {
+      scrollToMessage()
+      window.requestAnimationFrame(() => {
+        if (!scrollMountedTimelineRowIntoView(messageId)) scrollToMessage()
+      })
+    })
+  }, [commitTimelineScrollTop, markProgrammaticTimelineScroll, scrollMountedTimelineRowIntoView])
+
+  const handleReviewJumpToMessage = useCallback((messageId: string) => {
+    setShowReviewMode(false)
+    setShowVisualizer(false)
+    setTranscriptFilters([])
+    setTranscriptSearch('')
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => handleJumpToMessage(messageId))
+    })
+  }, [handleJumpToMessage])
+
+  useLayoutEffect(() => {
+    if (!timelineTargetMessageId || loading) return
+    if (targetMessageRequestId && handledTargetMessageRequestRef.current === targetMessageRequestId) return
+    const node = timelineRef.current
+    if (!node) return
+
+    const rowIndex = renderedTimelineRows.findIndex((row) => rowContainsMessage(row, timelineTargetMessageId))
+    if (rowIndex < 0) return
+
+    handledTargetMessageRequestRef.current = targetMessageRequestId
+    const targetTop = Math.max(rowLayout.tops[rowIndex] - TIMELINE_TARGET_TOP_GUTTER_PX, 0)
+    suppressFollowEvalUntilRef.current = performance.now() + 300
+    autoFollowRef.current = false
+    setAutoFollow(false)
+    commitTimelineScrollTop(targetTop)
+    markProgrammaticTimelineScroll()
+    node.scrollTop = targetTop
+    setHighlightedMessageId(timelineTargetMessageId)
+  }, [commitTimelineScrollTop, loading, markProgrammaticTimelineScroll, renderedTimelineRows, rowLayout, targetMessageRequestId, timelineTargetMessageId])
+
+  useEffect(() => {
+    if (!highlightedMessageId) return
+    const timeout = window.setTimeout(() => {
+      setHighlightedMessageId((current) => current === highlightedMessageId ? null : current)
+    }, 3500)
+    return () => window.clearTimeout(timeout)
+  }, [highlightedMessageId])
+
+  // Scroll commits flow through the drift-gated commitTimelineScrollTop (see
+  // TIMELINE_SCROLL_COMMIT_PX). Feed the virtual WINDOW from a deferred copy so
+  // a commit never forces a synchronous window recompute that blocks the paint
+  // of the scrolled frame — the browser paints the overscanned window first and
+  // React reconciles rows entering/leaving at transition priority. The urgent
+  // committed value still drives anchor capture/restores. Safe under load
+  // because the 2400px overscan far exceeds the ≤600px stale-window lag.
+  const deferredTimelineScrollTop = useDeferredValue(timelineScrollTop)
+
+  const virtualTimeline = useMemo(() => {
+    return getVirtualTimelineWindow({
+      layout: rowLayout,
+      rowCount: renderedTimelineRows.length,
+      scrollTop: deferredTimelineScrollTop,
+      viewportHeight: timelineViewportHeight || 800,
+      overscanPx: TIMELINE_OVERSCAN_PX,
+    })
+  }, [renderedTimelineRows, rowLayout, deferredTimelineScrollTop, timelineViewportHeight])
+
+  useLayoutEffect(() => {
+    if (!pendingMountedAnchorCaptureRef.current) return
+    pendingMountedAnchorCaptureRef.current = false
+    activeTimelineScrollAnchorRef.current = captureTimelineScrollAnchor()
+  }, [captureTimelineScrollAnchor, timelineScrollTop, virtualTimeline.endIndex, virtualTimeline.startIndex])
+
+  const timelineRenderedHeight = useMemo(() => {
+    const lastVisibleIndex = virtualTimeline.endIndex - 1
+    const visibleBottom = lastVisibleIndex >= virtualTimeline.startIndex
+      ? rowLayout.tops[lastVisibleIndex] + rowLayout.heights[lastVisibleIndex] + TIMELINE_BOTTOM_GUTTER_PX
+      : 0
+    return resolveTimelineRenderedHeight({
+      measuredTotalHeight: virtualTimeline.totalHeight,
+      activeScrollHeight: timelineHeightOverride,
+      visibleBottom,
+    })
+  }, [rowLayout, timelineHeightOverride, virtualTimeline.endIndex, virtualTimeline.startIndex, virtualTimeline.totalHeight])
+
+  // Memoized element array for the mounted window. JSX elements are plain
+  // data — reusing the SAME array reference lets React bail out of the whole
+  // timeline subtree (up to a few hundred VirtualTimelineRow memo compares)
+  // when an unrelated part of this large component re-renders, most notably
+  // every composer keystroke. Every handler below is a stable useCallback;
+  // none depends on composer state.
+  const fullRenderedRowKeysRef = useLazyRef(() => new Set<string>())
+  const timelineRowElements = useMemo(() => {
+    const lastRowKey = renderedTimelineRows.at(-1)?.key
+    const streamMode = viewMode === 'stream' || viewMode === 'agents'
+    // During fast scrolls, rows that were already rendered full keep their
+    // cards (their subtrees are reused by key), but rows ENTERING the window
+    // mount as cheap placeholders so the window always paints within a frame.
+    // The set is rebuilt each pass from the rows rendered full, so it tracks
+    // "currently mounted with content", not "ever seen".
+    const prevFullKeys = fullRenderedRowKeysRef.current
+    const nextFullKeys = new Set<string>()
+    const elements = []
+    for (let index = virtualTimeline.startIndex; index < virtualTimeline.endIndex; index += 1) {
+      const row = renderedTimelineRows[index]
+      const top = rowLayout.tops[index]
+      const height = rowLayout.heights[index]
+      const placeholder = fastScrolling && !prevFullKeys.has(row.key)
+      if (!placeholder) nextFullKeys.add(row.key)
+      elements.push(
+        <VirtualTimelineRow
+          key={row.key}
+          row={row}
+          top={top}
+          isLast={row.key === lastRowKey}
+          highlighted={rowContainsMessage(row, highlightedMessageId)}
+          forking={forkingMessageId === row.message.uuid}
+          resumeTarget={resumeFromMessageId === row.message.uuid}
+          bookmarked={bookmarkIds.has(row.message.uuid) || row.groupedMessageIds?.some((id) => bookmarkIds.has(id)) === true}
+          streamMode={streamMode}
+          placeholder={placeholder}
+          placeholderHeight={placeholder ? height : 0}
+          onMeasure={handleTimelineRowMeasure}
+          onLastRowRef={setLastTimelineRow}
+          onForkFromMessage={handleForkFromMessage}
+          onToggleResume={toggleResumeFromMessage}
+          onToggleBookmark={toggleBookmark}
+          onReusePrompt={handleReusePrompt}
+          onQuoteMessage={handleQuoteMessage}
+          onReplyMessage={handleQuoteMessage}
+          onEditFromMessage={handleEditFromMessage}
+        />
+      )
+    }
+    fullRenderedRowKeysRef.current = nextFullKeys
+    return elements
+  }, [
+    bookmarkIds,
+    fastScrolling,
+    forkingMessageId,
+    handleEditFromMessage,
+    handleForkFromMessage,
+    handleQuoteMessage,
+    handleReusePrompt,
+    handleTimelineRowMeasure,
+    highlightedMessageId,
+    resumeFromMessageId,
+    setLastTimelineRow,
+    toggleBookmark,
+    toggleResumeFromMessage,
+    renderedTimelineRows,
+    rowLayout,
+    viewMode,
+    virtualTimeline.endIndex,
+    virtualTimeline.startIndex,
+  ])
+
+  useLayoutEffect(() => {
+    if (!timelineTargetMessageId || highlightedMessageId !== timelineTargetMessageId || loading) return
+    scrollMountedTimelineRowIntoView(timelineTargetMessageId)
+  }, [
+    highlightedMessageId,
+    loading,
+    rowMeasurementVersion,
+    scrollMountedTimelineRowIntoView,
+    timelineScrollTop,
+    timelineTargetMessageId,
+    virtualTimeline.endIndex,
+    virtualTimeline.startIndex,
+  ])
+
+  useEffect(() => {
+    autoFollowRef.current = autoFollow
+  }, [autoFollow])
+
+  // Pin to bottom synchronously via ResizeObserver — fires after layout but
+  // before paint, so new content simply appears at the bottom of the viewport
+  // without any visible scroll or shift.
+  useEffect(() => {
+    if (showVisualizer) return
+    const node = timelineRef.current
+    const content = timelineContentRef.current
+    if (!node || !content) return
+    const pin = () => {
+      if (!autoFollowRef.current) return
+      const target = Math.max(node.scrollHeight - node.clientHeight - TIMELINE_BOTTOM_GUTTER_PX, 0)
+      if (Math.abs(node.scrollTop - target) < 1) return
+      suppressFollowEvalUntilRef.current = performance.now() + 200
+      markProgrammaticTimelineScroll()
+      node.scrollTop = target
+      // Quantized: the DOM stays pinned every resize, but the state commit —
+      // which re-renders the whole view — only needs to track growth at
+      // window granularity. Streaming re-renders still happen through row
+      // measurements; this avoids doubling them.
+      commitTimelineScrollTopIfDrifted(target)
+    }
+    const observer = new ResizeObserver(() => pin())
+    observer.observe(content)
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [commitTimelineScrollTopIfDrifted, hasLiveTimeline, markProgrammaticTimelineScroll, session?.sessionId, showVisualizer])
+
+  // When autoFollow is first enabled, pin once.
+  useEffect(() => {
+    if (!autoFollow) return
+    const frame = window.requestAnimationFrame(() => {
+      if (autoFollowRef.current) scrollTimelineToBottom()
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [autoFollow, loading, scrollTimelineToBottom])
 
   useEffect(() => {
     const fallbackId = rewindCandidates.at(-1)?.uuid ?? ''
@@ -901,7 +7579,7 @@ export default function MessageView({ messages, loading, session, projectView, o
       const res = await fetch(`/api/sessions/${session.sessionId}/rewind`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userMessageId: selectedRewindTarget.uuid, model: selectedModel, dryRun: true, provider: session.provider }),
+        body: JSON.stringify({ userMessageId: selectedRewindTarget.uuid, model: selectedModel, dryRun: true, provider: session.provider, providerInstanceId: session.providerInstanceId }),
       })
       const data = await res.json()
       if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
@@ -936,7 +7614,7 @@ export default function MessageView({ messages, loading, session, projectView, o
       const res = await fetch(`/api/sessions/${session.sessionId}/rewind`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userMessageId: rewindPreview.userMessageId, model: selectedModel, provider: session.provider }),
+        body: JSON.stringify({ userMessageId: rewindPreview.userMessageId, model: selectedModel, provider: session.provider, providerInstanceId: session.providerInstanceId }),
       })
       const data = await res.json()
       if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
@@ -962,7 +7640,7 @@ export default function MessageView({ messages, loading, session, projectView, o
       const res = await fetch(`/api/sessions/${session.sessionId}/rewind`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ numTurns: rollbackTurns, dryRun: true, provider: session.provider }),
+        body: JSON.stringify({ numTurns: rollbackTurns, dryRun: true, provider: session.provider, providerInstanceId: session.providerInstanceId }),
       })
       const data = await res.json()
       if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
@@ -993,7 +7671,7 @@ export default function MessageView({ messages, loading, session, projectView, o
       const res = await fetch(`/api/sessions/${session.sessionId}/rewind`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ numTurns: rollbackPreview.numTurns, provider: session.provider }),
+        body: JSON.stringify({ numTurns: rollbackPreview.numTurns, provider: session.provider, providerInstanceId: session.providerInstanceId }),
       })
       const data = await res.json()
       if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
@@ -1045,38 +7723,33 @@ export default function MessageView({ messages, loading, session, projectView, o
             borderRadius: '50%',
             border: '1px solid var(--border-2)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: 'linear-gradient(135deg, var(--surface-2), var(--surface))',
-            boxShadow: '0 0 40px 8px rgba(139,128,240,0.04) inset',
+            background: colorTreatment === 'flat' ? 'var(--surface)' : 'linear-gradient(135deg, var(--surface-2), var(--surface))',
+            boxShadow: colorTreatment === 'flat' ? 'none' : '0 0 40px 8px rgba(139,128,240,0.04) inset',
           }}>
             <div style={{
               width: 18, height: 18,
               borderRadius: '50%',
               background: 'var(--surface-3)',
               border: '1px solid var(--border-2)',
-              boxShadow: '0 0 8px 2px rgba(139,128,240,0.06)',
+              boxShadow: colorTreatment === 'flat' ? 'none' : '0 0 8px 2px rgba(139,128,240,0.06)',
             }} />
           </div>
         </div>
 
         <div style={{ textAlign: 'center' }}>
           <div style={{
-            fontFamily: "'Oxanium', monospace",
-            fontSize: 11,
+            fontSize: 14,
             fontWeight: 600,
-            letterSpacing: '0.14em',
-            textTransform: 'uppercase',
-            color: 'var(--text-3)',
+            color: 'var(--text-2)',
             marginBottom: 8,
           }}>
             No session selected
           </div>
           <div style={{
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 11,
+            fontSize: 12,
             color: 'var(--text-3)',
-            letterSpacing: '0.03em',
           }}>
-            ← Choose a session from the sidebar
+            Choose a session from the sidebar to get started
           </div>
         </div>
       </div>
@@ -1094,7 +7767,7 @@ export default function MessageView({ messages, loading, session, projectView, o
       }}
     >
       {/* ── Top bar ──────────────────────────────────── */}
-      <div
+      {!maximized && <div
         style={{
           padding: '0 28px',
           height: 52,
@@ -1103,22 +7776,21 @@ export default function MessageView({ messages, loading, session, projectView, o
           display: 'flex',
           alignItems: 'center',
           gap: 14,
-          background: 'linear-gradient(to right, rgba(139,128,240,0.05) 0%, var(--surface) 40%)',
+          background: colorTreatment === 'flat' ? 'var(--surface)' : 'linear-gradient(to right, rgba(139,128,240,0.05) 0%, var(--surface) 40%)',
         }}
       >
-        {/* Project / session name */}
-        <span
-          style={{
-            fontFamily: "'Oxanium', monospace",
-            fontSize: 14,
-            fontWeight: 600,
-            letterSpacing: '0.06em',
-            color: 'var(--text)',
-            textTransform: 'uppercase',
-          }}
-        >
-          {dirName}
-        </span>
+        {/* Project / session name (project view only — single-session view shows the full cwd instead) */}
+        {isProject && (
+          <span
+            style={{
+              fontSize: 14,
+              fontWeight: 600,
+              color: 'var(--text)',
+            }}
+          >
+            {dirName}
+          </span>
+        )}
 
         {/* Project view badge */}
         {isProject && (
@@ -1137,7 +7809,7 @@ export default function MessageView({ messages, loading, session, projectView, o
                 flexShrink: 0,
               }}
             >
-              ALL SESSIONS
+              All sessions
             </span>
             <span
               style={{
@@ -1153,7 +7825,7 @@ export default function MessageView({ messages, loading, session, projectView, o
                 flexShrink: 0,
               }}
             >
-              {projectView.providerMode === 'all' ? 'ALL PROVIDERS' : 'CURRENT PROVIDER'}
+              {projectView.providerMode === 'all' ? 'All providers' : 'Current provider'}
             </span>
           </>
         )}
@@ -1212,7 +7884,7 @@ export default function MessageView({ messages, loading, session, projectView, o
                 height: '100%',
                 width: `${Math.min(contextUsage.percentage, 100)}%`,
                 borderRadius: 2,
-                backgroundColor: contextUsage.percentage > 80
+                background: contextUsage.percentage > 80
                   ? 'var(--red, #f87171)'
                   : contextUsage.percentage > 60
                   ? 'var(--yellow, #fbbf24)'
@@ -1223,166 +7895,650 @@ export default function MessageView({ messages, loading, session, projectView, o
           </div>
         )}
 
-        {/* Code theme picker */}
-        <CodeThemeToggle />
+        {/* All-session analytics */}
+        <Link
+          href="/analytics"
+          transitionTypes={['route']}
+          title="Cross-session analytics"
+          className="av-hover-control"
+          style={{
+            flexShrink: 0,
+            display: 'inline-flex',
+            alignItems: 'center',
+            height: 26,
+            padding: '0 10px',
+            background: 'transparent',
+            border: '1px solid var(--border)',
+            borderRadius: 5,
+            color: 'var(--text-2)',
+            fontSize: 12,
+            textDecoration: 'none',
+          }}
+        >
+          Analytics
+        </Link>
+
+        {/* Embedded TUI terminal */}
+        <Link
+          href="/terminal"
+          transitionTypes={['route']}
+          title="Embedded TUI terminal"
+          className="av-hover-control"
+          style={{
+            flexShrink: 0,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            height: 26,
+            padding: '0 10px',
+            background: 'transparent',
+            border: '1px solid var(--border)',
+            borderRadius: 5,
+            color: 'var(--text-2)',
+            fontSize: 12,
+            textDecoration: 'none',
+          }}
+        >
+          <Terminal size={13} strokeWidth={2.2} />
+          Terminal
+        </Link>
+
+        {/* Analytics */}
+        {!isProject && (
+          <Button
+            onClick={() => setAnalyticsOpen(true)}
+            title="Session analytics"
+            variant="outline"
+            size="sm"
+            className="av-hover-control"
+            style={{
+              flexShrink: 0,
+              height: 26,
+              padding: '0 10px',
+              background: 'transparent',
+              border: '1px solid var(--border)',
+              borderRadius: 5,
+              color: 'var(--text-2)',
+              fontSize: 12,
+              cursor: 'pointer',
+            }}
+          >
+            Session stats
+          </Button>
+        )}
 
         {/* Stats */}
         {!loading && (
-          <span
-            style={{
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              color: 'var(--text-3)',
-              flexShrink: 0,
-            }}
-          >
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', flexShrink: 0 }}>
             {isProject
               ? `${projectView!.sessionCount} sessions · ${threaded.length} turns`
               : `${threaded.length} turns · ${messages.length} events`}
           </span>
         )}
 
-        {/* Fork button (single session only) */}
-        {!isProject && session?.provider !== 'copilot' && (
+        {/* VIEW dropdown — display settings */}
+        <div ref={viewDropdownRef} style={{ position: 'relative', flexShrink: 0 }}>
           <button
-            onClick={handleFork}
-            disabled={forking}
-            title="Fork this session into a new branch"
+            type="button"
+            onClick={() => { setViewDropdownOpen(v => !v); setActionsDropdownOpen(false) }}
+            className="av-hover-control"
             style={{
-              flexShrink: 0,
-              height: 26,
-              padding: '0 10px',
-              background: 'rgba(139,128,240,0.07)',
-              border: '1px solid rgba(139,128,240,0.18)',
-              borderRadius: 5,
-              cursor: forking ? 'not-allowed' : 'pointer',
-              color: 'var(--text-3)',
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              letterSpacing: '0.08em',
-              transition: 'background 0.15s, color 0.15s, border-color 0.15s',
-              opacity: forking ? 0.5 : 1,
-            }}
-            onMouseEnter={e => {
-              if (!forking) {
-                e.currentTarget.style.background    = 'rgba(139,128,240,0.14)'
-                e.currentTarget.style.color         = 'var(--violet)'
-                e.currentTarget.style.borderColor   = 'rgba(139,128,240,0.35)'
-              }
-            }}
-            onMouseLeave={e => {
-              e.currentTarget.style.background    = 'rgba(139,128,240,0.07)'
-              e.currentTarget.style.color         = 'var(--text-3)'
-              e.currentTarget.style.borderColor   = 'rgba(139,128,240,0.18)'
+              height: 26, padding: '0 10px', borderRadius: 5, cursor: 'pointer',
+              background: viewDropdownOpen ? 'var(--surface-3)' : 'transparent',
+              border: '1px solid var(--border)',
+              color: 'var(--text-2)',
+              fontSize: 12,
             }}
           >
-            {forking ? 'FORKING…' : 'FORK'}
+            View ▾
           </button>
-        )}
+          {viewDropdownOpen && (
+            <div style={{
+              position: 'absolute', top: 32, right: 0, zIndex: 60,
+              background: 'var(--surface-2)', border: '1px solid var(--border)',
+              borderRadius: 8, padding: '6px 0', minWidth: 200,
+              boxShadow: '0 4px 24px rgba(0,0,0,0.35)',
+              display: 'flex', flexDirection: 'column', gap: 0,
+            }}>
+              {/* Visualiser toggle */}
+              <button type="button" className="av-hover-control" onClick={() => { setShowVisualizer(v => !v); setShowReviewMode(false); setViewDropdownOpen(false) }}
+                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: showVisualizer ? 'var(--cyan)' : 'var(--text-2)', fontSize: 12, textAlign: 'left' }}>
+                <ChartNetwork style={{ width: 13, height: 13, flexShrink: 0 }} />
+                {showVisualizer ? 'Transcript' : 'Visualiser'}
+              </button>
+              {!isProject && session?.cwd && (
+                <button type="button" className="av-hover-control" onClick={() => { setShowReviewMode(v => !v); setShowVisualizer(false); setViewDropdownOpen(false) }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: showReviewMode ? 'var(--cyan)' : 'var(--text-2)', fontSize: 12, textAlign: 'left' }}>
+                  <FileCode2 style={{ width: 13, height: 13, flexShrink: 0 }} />
+                  {showReviewMode ? 'Transcript' : 'Review changes'}
+                </button>
+              )}
+              {/* Tasks toggle */}
+              {!isProject && taskRegistry.size > 0 && (
+                <button type="button" className="av-hover-control" onClick={() => { setTaskRailOpen(v => !v); setViewDropdownOpen(false) }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: taskRailOpen ? 'var(--amber)' : 'var(--text-2)', fontSize: 12, textAlign: 'left' }}>
+                  ☐ Tasks · {taskRegistry.size}
+                </button>
+              )}
+              <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
+              {/* View mode */}
+              <div style={{ padding: '4px 14px 2px', fontSize: 11, fontWeight: 600, color: 'var(--text-3)' }}>Messages</div>
+              {(['conversation', 'continue', 'stream', 'agents'] as const).map((mode) => (
+                <button key={mode} type="button" className="av-hover-control"
+                  onClick={() => { setViewMode(mode); setViewDropdownOpen(false) }}
+                  style={{ padding: '6px 14px', background: viewMode === mode || (mode === 'conversation' && viewMode === 'full') ? 'rgba(139,92,246,0.1)' : 'transparent', border: 0, cursor: 'pointer', color: viewMode === mode || (mode === 'conversation' && viewMode === 'full') ? 'var(--violet)' : 'var(--text-2)', fontSize: 12, textAlign: 'left' }}>
+                  {mode === 'conversation' ? 'Full' : mode === 'continue' ? 'Continue' : mode === 'stream' ? 'Stream' : 'Agents'}
+                  <span style={{ color: 'var(--text-3)', marginLeft: 8, fontSize: 10 }}>
+                    {mode === 'conversation' ? 'all cards' : mode === 'continue' ? 'no tools' : mode === 'stream' ? 'plain text' : 'AgentsView cards'}
+                  </span>
+                </button>
+              ))}
+              <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
+              {/* Density */}
+              <div style={{ padding: '4px 14px 2px', fontSize: 11, fontWeight: 600, color: 'var(--text-3)' }}>Density</div>
+              {(['comfortable', 'balanced', 'dense'] as const).map((d) => (
+                <button key={d} type="button" className="av-hover-control"
+                  onClick={() => { setDensity(d); setViewDropdownOpen(false) }}
+                  style={{ padding: '6px 14px', background: density === d ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: density === d ? 'var(--cyan)' : 'var(--text-2)', fontSize: 12, textAlign: 'left' }}>
+                  {d === 'comfortable' ? 'Comfortable' : d === 'balanced' ? 'Balanced' : 'Dense'}
+                </button>
+              ))}
+              <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
+              {/* Timeline width */}
+              <div style={{ padding: '4px 14px 2px', fontSize: 11, fontWeight: 600, color: 'var(--text-3)' }}>Width</div>
+              {(['centered', 'full'] as const).map((w) => (
+                <button key={w} type="button" className="av-hover-control"
+                  onClick={() => { setTimelineWidth(w); setViewDropdownOpen(false) }}
+                  style={{ padding: '6px 14px', background: timelineWidth === w ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: timelineWidth === w ? 'var(--cyan)' : 'var(--text-2)', fontSize: 12, textAlign: 'left', whiteSpace: 'nowrap' }}>
+                  {w === 'centered' ? 'Centered' : 'Full width'}
+                  <span style={{ color: 'var(--text-3)', marginLeft: 8, fontSize: 11 }}>
+                    {w === 'centered' ? 'readable column' : 'whole window'}
+                  </span>
+                </button>
+              ))}
+              <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
+              {/* Color treatment */}
+              <div style={{ padding: '4px 14px 2px', fontSize: 11, fontWeight: 600, color: 'var(--text-3)' }}>Color</div>
+              {(['gradient', 'flat'] as const).map((c) => (
+                <button key={c} type="button" className="av-hover-control"
+                  onClick={() => { applyColorTreatment(c); setViewDropdownOpen(false) }}
+                  style={{ padding: '6px 14px', background: colorTreatment === c ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: colorTreatment === c ? 'var(--cyan)' : 'var(--text-2)', fontSize: 12, textAlign: 'left', whiteSpace: 'nowrap' }}>
+                  {c === 'gradient' ? 'Gradient' : 'Flat'}
+                  <span style={{ color: 'var(--text-3)', marginLeft: 8, fontSize: 11 }}>
+                    {c === 'gradient' ? 'themed washes & glows' : 'flat surfaces'}
+                  </span>
+                </button>
+              ))}
+              <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
+              {/* Diff style */}
+              <div style={{ padding: '4px 14px 2px', fontSize: 11, fontWeight: 600, color: 'var(--text-3)' }}>Diff style</div>
+              {(['stacked', 'split'] as const).map((style) => (
+                <button key={style} type="button" className="av-hover-control"
+                  onClick={() => { setDiffStyle(style); setViewDropdownOpen(false) }}
+                  style={{ padding: '6px 14px', background: diffStyle === style ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: diffStyle === style ? 'var(--cyan)' : 'var(--text-2)', fontSize: 12, textAlign: 'left', whiteSpace: 'nowrap' }}>
+                  {style === 'stacked' ? 'Stacked' : 'Split'}
+                  <span style={{ color: 'var(--text-3)', marginLeft: 8, fontSize: 11 }}>
+                    {style === 'stacked' ? 'one column' : 'side by side'}
+                  </span>
+                </button>
+              ))}
+              <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
+              {/* Change indicators */}
+              <div style={{ padding: '4px 14px 2px', fontSize: 11, fontWeight: 600, color: 'var(--text-3)' }}>Change indicators</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: '2px 14px 3px' }}>
+                {(['classic', 'bars', 'none'] as const).map((style) => (
+                  <button key={style} type="button" className="av-hover-control"
+                    onClick={() => { setDiffOptions((prev) => ({ ...prev, changeStyle: style })); setViewDropdownOpen(false) }}
+                    style={{ padding: '4px 8px', borderRadius: 4, background: diffOptions.changeStyle === style ? 'rgba(56,217,245,0.12)' : 'var(--surface)', border: '1px solid var(--border)', cursor: 'pointer', color: diffOptions.changeStyle === style ? 'var(--cyan)' : 'var(--text-2)', fontSize: 11 }}>
+                    {style === 'classic' ? 'Classic' : style === 'bars' ? 'Bars' : 'None'}
+                  </button>
+                ))}
+              </div>
+              <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
+              {/* Inline diff highlighting */}
+              <div style={{ padding: '4px 14px 2px', fontSize: 11, fontWeight: 600, color: 'var(--text-3)' }}>Inline diff</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: '2px 14px 3px' }}>
+                {(['word-alt', 'word', 'char', 'none'] as const).map((style) => (
+                  <button key={style} type="button" className="av-hover-control"
+                    onClick={() => { setDiffOptions((prev) => ({ ...prev, inlineDiffStyle: style })); setViewDropdownOpen(false) }}
+                    style={{ padding: '4px 8px', borderRadius: 4, background: diffOptions.inlineDiffStyle === style ? 'rgba(56,217,245,0.12)' : 'var(--surface)', border: '1px solid var(--border)', cursor: 'pointer', color: diffOptions.inlineDiffStyle === style ? 'var(--cyan)' : 'var(--text-2)', fontSize: 11 }}>
+                    {style === 'word-alt' ? 'Word (alt)' : style === 'word' ? 'Word' : style === 'char' ? 'Character' : 'None'}
+                  </button>
+                ))}
+              </div>
+              <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
+              {/* Display toggles */}
+              <div style={{ padding: '4px 14px 2px', fontSize: 11, fontWeight: 600, color: 'var(--text-3)' }}>Display</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0, padding: '0 6px' }}>
+                {([
+                  { key: 'backgrounds', label: 'Backgrounds', active: diffOptions.showBackgrounds, toggle: () => setDiffOptions((prev) => ({ ...prev, showBackgrounds: !prev.showBackgrounds })) },
+                  { key: 'wrap', label: 'Wrap', active: diffOptions.wrap, toggle: () => setDiffOptions((prev) => ({ ...prev, wrap: !prev.wrap })) },
+                  { key: 'lineNumbers', label: 'Line numbers', active: diffOptions.showLineNumbers, toggle: () => setDiffOptions((prev) => ({ ...prev, showLineNumbers: !prev.showLineNumbers })) },
+                  { key: 'hunkHeaders', label: 'Hunk headers', active: diffOptions.showHunkHeaders, toggle: () => setDiffOptions((prev) => ({ ...prev, showHunkHeaders: !prev.showHunkHeaders })) },
+                ] as const).map((opt) => (
+                  <button key={opt.key} type="button" className="av-hover-control"
+                    onClick={opt.toggle}
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px', background: 'transparent', border: 0, cursor: 'pointer', color: opt.active ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: '0.06em', textAlign: 'left', whiteSpace: 'nowrap' }}>
+                    {opt.active ? '☑' : '☐'} {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
 
-        {/* Export button (single session only) */}
-        {!isProject && (
-          <button
-            onClick={handleExport}
-            title="Export session to HTML"
+        {/* Code theme — standalone so its sub-popover isn't clipped by the VIEW dropdown */}
+        <RenderFontToggle />
+        <CodeThemeToggle />
+
+        {!isProject && onToggleMaximized ? (
+          <Button
+            type="button"
+            onClick={onToggleMaximized}
+            title="Maximize transcript"
+            aria-label="Maximize transcript"
+            variant="outline"
+            size="sm"
+            className="av-hover-control"
             style={{
               flexShrink: 0,
+              width: 28,
               height: 26,
-              padding: '0 10px',
-              background: 'rgba(56,217,245,0.07)',
-              border: '1px solid rgba(56,217,245,0.18)',
+              padding: 0,
+              background: 'transparent',
+              border: '1px solid var(--border)',
               borderRadius: 5,
+              color: 'var(--text-2)',
               cursor: 'pointer',
-              color: 'var(--text-3)',
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              letterSpacing: '0.08em',
-              transition: 'background 0.15s, color 0.15s, border-color 0.15s',
-            }}
-            onMouseEnter={e => {
-              e.currentTarget.style.background    = 'rgba(56,217,245,0.13)'
-              e.currentTarget.style.color         = 'var(--cyan)'
-              e.currentTarget.style.borderColor   = 'rgba(56,217,245,0.35)'
-            }}
-            onMouseLeave={e => {
-              e.currentTarget.style.background    = 'rgba(56,217,245,0.07)'
-              e.currentTarget.style.color         = 'var(--text-3)'
-              e.currentTarget.style.borderColor   = 'rgba(56,217,245,0.18)'
             }}
           >
-            EXPORT
-          </button>
-        )}
+            <Maximize2 size={13} aria-hidden="true" />
+          </Button>
+        ) : null}
 
-        {!isProject && (
-          <button
-            onClick={toggleDiagnostics}
-            title="Show session diagnostics"
+        {onToggleRightPanel ? (
+          <Button
+            type="button"
+            onClick={onToggleRightPanel}
+            title={rightPanelOpen ? 'Hide right panel' : 'Show right panel'}
+            aria-label={rightPanelOpen ? 'Hide right panel' : 'Show right panel'}
+            aria-pressed={rightPanelOpen ? true : false}
+            variant="outline"
+            size="sm"
+            className="av-hover-control"
             style={{
               flexShrink: 0,
+              width: 28,
               height: 26,
-              padding: '0 10px',
-              background: showDiagnostics ? 'rgba(234,170,64,0.14)' : 'rgba(234,170,64,0.07)',
-              border: '1px solid rgba(234,170,64,0.18)',
+              padding: 0,
+              background: rightPanelOpen ? 'var(--surface-3)' : 'transparent',
+              border: `1px solid ${rightPanelOpen ? 'color-mix(in srgb, var(--cyan) 40%, var(--border))' : 'var(--border)'}`,
               borderRadius: 5,
+              color: rightPanelOpen ? 'var(--cyan)' : 'var(--text-2)',
               cursor: 'pointer',
-              color: showDiagnostics ? 'var(--yellow, #fbbf24)' : 'var(--text-3)',
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              letterSpacing: '0.08em',
             }}
           >
-            DIAG
-          </button>
+            <PanelRight size={13} aria-hidden="true" />
+          </Button>
+        ) : null}
+
+        {!isProject && onEnterFullscreen ? (
+          <Button
+            type="button"
+            onClick={onEnterFullscreen}
+            title="Enter fullscreen"
+            aria-label="Enter fullscreen"
+            variant="outline"
+            size="sm"
+            className="av-hover-control"
+            style={{
+              flexShrink: 0,
+              width: 28,
+              height: 26,
+              padding: 0,
+              background: 'transparent',
+              border: '1px solid var(--border)',
+              borderRadius: 5,
+              color: 'var(--text-2)',
+              cursor: 'pointer',
+            }}
+          >
+            <Fullscreen size={13} aria-hidden="true" />
+          </Button>
+        ) : null}
+
+        {/* ··· actions dropdown — session actions */}
+        {!isProject && (
+          <div ref={actionsDropdownRef} style={{ position: 'relative', flexShrink: 0 }}>
+            <button
+              type="button"
+              onClick={() => { setActionsDropdownOpen(v => !v); setViewDropdownOpen(false) }}
+              className="av-hover-control"
+              style={{
+                height: 26, padding: '0 10px', borderRadius: 5, cursor: 'pointer',
+                background: actionsDropdownOpen ? 'var(--surface-3)' : 'transparent',
+                border: '1px solid var(--border)',
+                color: 'var(--text-2)',
+                fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, letterSpacing: '0.05em',
+              }}
+            >
+              ···
+            </button>
+            {actionsDropdownOpen && (
+              <div style={{
+                position: 'absolute', top: 32, right: 0, zIndex: 60,
+                background: 'var(--surface-2)', border: '1px solid var(--border)',
+                borderRadius: 8, padding: '10px 0', minWidth: 160,
+                boxShadow: '0 4px 24px rgba(0,0,0,0.35)',
+                display: 'flex', flexDirection: 'column', gap: 0,
+              }}>
+                {session?.provider !== 'copilot' && (
+                  <button type="button" className="av-hover-control" onClick={() => { handleFork(); setActionsDropdownOpen(false) }} disabled={forking}
+                    style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: forking ? 'not-allowed' : 'pointer', color: 'var(--text-2)', fontSize: 12, textAlign: 'left', opacity: forking ? 0.5 : 1 }}>
+                    {forking ? 'Forking…' : 'Fork session'}
+                  </button>
+                )}
+                {cliCommand && (
+                  <div ref={cliPopoverRef} style={{ position: 'relative' }}>
+                    <button type="button" className="av-hover-control" onClick={() => setCliPopoverOpen(v => !v)}
+                      style={{ width: '100%', padding: '7px 14px', background: cliPopoverOpen ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: cliPopoverOpen ? 'var(--cyan)' : 'var(--text-2)', fontSize: 12, textAlign: 'left' }}>
+                      Resume in CLI
+                    </button>
+                    {cliPopoverOpen && (
+                      <div style={{ position: 'absolute', top: 0, right: 170, zIndex: 70, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 8, minWidth: 320, boxShadow: '0 4px 24px rgba(0,0,0,0.35)' }}>
+                        <code style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--cyan)', wordBreak: 'break-all', userSelect: 'all' }}>{cliCommand}</code>
+                        <button type="button" className="av-hover-control" style={{ alignSelf: 'flex-end', height: 24, fontSize: 11, padding: '0 10px', cursor: 'pointer', background: 'rgba(56,217,245,0.07)', border: '1px solid rgba(56,217,245,0.25)', borderRadius: 4, color: 'var(--cyan)', fontFamily: "'IBM Plex Mono', monospace", letterSpacing: '0.08em' }}
+                          onClick={() => { void navigator.clipboard.writeText(cliCommand); setCliPopoverOpen(false); setActionsDropdownOpen(false) }}>Copy</button>
+                      </div>
+                    )}
+                  </div>
+                )}
+                <button type="button" className="av-hover-control" onClick={() => { handleExport(); setActionsDropdownOpen(false) }} disabled={exporting}
+                  style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: exporting ? 'not-allowed' : 'pointer', color: 'var(--text-2)', fontSize: 12, textAlign: 'left', opacity: exporting ? 0.6 : 1 }}>
+                  {exporting ? 'Exporting…' : 'Export'}
+                </button>
+                <button type="button" className="av-hover-control" onClick={() => { toggleDiagnostics(); setActionsDropdownOpen(false) }}
+                  style={{ padding: '7px 14px', background: showDiagnostics ? 'rgba(234,170,64,0.1)' : 'transparent', border: 0, cursor: 'pointer', color: showDiagnostics ? 'var(--amber)' : 'var(--text-2)', fontSize: 12, textAlign: 'left' }}>
+                  Diagnostics
+                </button>
+                {activeProvider === 'opencode' && (
+                  <>
+                    {sessionCapabilities?.shareSession && <button type="button" className="av-hover-control" onClick={() => { runSessionAction('share'); setActionsDropdownOpen(false) }} disabled={!!sessionActionLoading} style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--text-2)', fontSize: 12, textAlign: 'left', opacity: sessionActionLoading ? 0.55 : 1 }}>Share</button>}
+                    {sessionCapabilities?.unshareSession && <button type="button" className="av-hover-control" onClick={() => { runSessionAction('unshare'); setActionsDropdownOpen(false) }} disabled={!!sessionActionLoading} style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--text-2)', fontSize: 12, textAlign: 'left', opacity: sessionActionLoading ? 0.55 : 1 }}>Unshare</button>}
+                    {sessionCapabilities?.summarizeSession && <button type="button" className="av-hover-control" onClick={() => { runSessionAction('summarize'); setActionsDropdownOpen(false) }} disabled={!!sessionActionLoading} style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--text-2)', fontSize: 12, textAlign: 'left', opacity: sessionActionLoading ? 0.55 : 1 }}>Summarize</button>}
+                    {sessionCapabilities?.unrevertSession && <button type="button" className="av-hover-control" onClick={() => { runSessionAction('unrevert'); setActionsDropdownOpen(false) }} disabled={!!sessionActionLoading} style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--text-2)', fontSize: 12, textAlign: 'left', opacity: sessionActionLoading ? 0.55 : 1 }}>Unrevert</button>}
+                  </>
+                )}
+                {sessionCapabilities?.deleteSession && (
+                  <>
+                    <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
+                    <button type="button" className="av-hover-control" onClick={() => { handleDeleteSession(); setActionsDropdownOpen(false) }} disabled={deleting}
+                      style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: deleting ? 'not-allowed' : 'pointer', color: deleting ? 'var(--red, #f87171)' : 'rgba(248,113,113,0.8)', fontSize: 12, textAlign: 'left', opacity: deleting ? 0.55 : 1 }}>
+                      {deleting ? 'Deleting…' : 'Delete session'}
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         )}
 
-        {/* Live pill */}
-        <div
+        {/* Live follow toggle — the dot is the live indicator, the button is the control */}
+        <Button
+          onClick={toggleLiveFollow}
+          title={autoFollow ? 'Following new messages — click to pause' : 'Paused — click to follow new messages'}
+          aria-pressed={autoFollow}
+          variant="outline"
+          size="sm"
+          className="av-hover-control"
           style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 5,
-            background: 'rgba(45, 212, 160, 0.08)',
-            border: '1px solid rgba(45, 212, 160, 0.2)',
-            borderRadius: 20,
-            padding: '2px 8px 2px 6px',
             flexShrink: 0,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            height: 26,
+            padding: '0 10px',
+            borderRadius: 999,
+            border: `1px solid ${autoFollow ? 'rgba(45,212,160,0.26)' : 'var(--border)'}`,
+            background: autoFollow ? 'rgba(45,212,160,0.10)' : 'transparent',
+            color: autoFollow ? 'var(--green)' : 'var(--text-3)',
+            fontSize: 12,
+            cursor: 'pointer',
           }}
         >
           <span
+            aria-hidden
             style={{
-              width: 5,
-              height: 5,
+              width: 6,
+              height: 6,
               borderRadius: '50%',
-              background: 'var(--green)',
+              background: autoFollow ? 'var(--green)' : 'var(--text-3)',
               display: 'inline-block',
-              animation: 'live-pulse 2.5s ease-in-out infinite',
+              animation: autoFollow ? 'live-pulse 2.5s ease-in-out infinite' : undefined,
             }}
           />
-          <span
-            style={{
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              color: 'var(--green)',
-              letterSpacing: '0.08em',
-            }}
-          >
-            LIVE
-          </span>
-        </div>
-      </div>
+          {autoFollow ? 'Live' : 'Paused'}
+        </Button>
+        </div>}
 
-      {/* ── Timeline feed ────────────────────────────── */}
+      {/* ── Tab bar ──────────────────────────────────── */}
+      {!maximized && openTabs && openTabs.length > 0 && (
+        <TabBar
+          tabs={openTabs}
+          activeId={selectedTabId ?? null}
+          onSelect={onSelectTab ?? (() => {})}
+          onClose={onCloseTab ?? (() => {})}
+        />
+      )}
+
+      {/* ── OpenCode todos (mirrors opencode-web's pinned task list) ──── */}
+      {!maximized && !isProject && session?.provider === 'opencode' && openCodeTodos && openCodeTodos.length > 0 && (
+        <OpenCodeTodosBanner todos={openCodeTodos} />
+      )}
+
+      {/* ── Timeline feed + optional right-rail task panel ── */}
       <div
-        ref={timelineRef}
-        onScroll={handleTimelineScroll}
         style={{
           flex: 1,
-          overflow: 'auto',
-          padding: '28px 32px 72px',
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'row',
+          overflow: 'hidden',
+          position: 'relative',
         }}
       >
-        {showDiagnostics && !isProject && (
+      {maximized && onToggleMaximized ? (
+        <button
+          type="button"
+          className="av-hover-control"
+          onClick={onToggleMaximized}
+          title="Restore app chrome (Esc)"
+          aria-label="Restore app chrome"
+          style={{
+            position: 'absolute',
+            top: 12,
+            right: 16,
+            zIndex: 20,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 30,
+            height: 30,
+            background: 'var(--surface-2)',
+            border: '1px solid var(--border)',
+            borderRadius: 6,
+            color: 'var(--text-2)',
+            cursor: 'pointer',
+            boxShadow: '0 6px 18px rgba(0,0,0,0.22)',
+          }}
+        >
+          <Minimize2 size={14} aria-hidden="true" />
+        </button>
+      ) : null}
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
+      >
+        {!maximized && showReviewMode && session && !isProject ? (
+          <DiffReviewMode
+            session={session}
+            messages={threadedFull}
+            diffStyle={diffStyle}
+            diffOptions={diffOptions}
+            onJumpToMessage={handleReviewJumpToMessage}
+            onClose={() => setShowReviewMode(false)}
+          />
+        ) : !maximized && showVisualizer ? (
+          <div
+            style={{
+              flex: 1,
+              minHeight: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+              padding: '18px 24px',
+            }}
+          >
+            <MessageSessionVisualizer
+              rows={visualizerRows}
+              rawEventCount={messages.length}
+              loading={loading}
+              showSession={isProject}
+              onSelectMessage={handleVisualizerSelectMessage}
+            />
+          </div>
+        ) : (
+          <>
+            {!maximized && !loading && hasLiveTimeline && (
+              <div className="av-transcript-filter-panel">
+                <label className="av-session-viz-search">
+                  <Search aria-hidden="true" />
+                  <input
+                    aria-label="Search transcript"
+                    value={transcriptSearch}
+                    onChange={(event) => setTranscriptSearch(event.target.value)}
+                    placeholder="Search turns, tools, paths, commands…"
+                  />
+                </label>
+                <div className="av-session-viz-filterbar" aria-label="Transcript filters">
+                  <Filter aria-hidden="true" />
+                  {TRANSCRIPT_FILTERS.map((filter) => (
+                    <button
+                      key={filter.key}
+                      type="button"
+                      aria-pressed={filter.key === 'all' ? transcriptFilters.length === 0 : transcriptFilters.includes(filter.key)}
+                      className={cn('av-hover-control', (filter.key === 'all' ? transcriptFilters.length === 0 : transcriptFilters.includes(filter.key)) && 'av-active')}
+                      onClick={() => {
+                        if (filter.key === 'all') {
+                          setTranscriptFilters([])
+                          return
+                        }
+                        const selectedFilter = filter.key
+                        setTranscriptFilters((current) => (
+                          current.includes(selectedFilter)
+                            ? current.filter((activeFilter) => activeFilter !== selectedFilter)
+                            : [...current, selectedFilter]
+                        ))
+                      }}
+                    >
+                      {filter.label}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    aria-pressed={bookmarksOnly}
+                    disabled={bookmarkIds.size === 0 && !bookmarksOnly}
+                    className={cn('av-hover-control', 'av-session-viz-bookmark-filter', bookmarksOnly && 'av-active')}
+                    title={bookmarkIds.size === 0 ? 'No bookmarks in this session yet' : 'Show only bookmarked messages'}
+                    onClick={() => setBookmarksOnly((value) => !value)}
+                  >
+                    {bookmarksOnly ? '★' : '☆'} Bookmarks{bookmarkIds.size > 0 ? ` (${bookmarkIds.size})` : ''}
+                  </button>
+                </div>
+                <div className="av-session-viz-result-count">
+                  {renderedTimelineRows.length} shown
+                </div>
+                {hasTranscriptFocus && (
+                  <div className="av-session-viz-focusbar">
+                    <span className="av-session-viz-focus-count">
+                      {renderedTimelineRows.length} of {timelineRows.length} turns
+                    </span>
+                    {transcriptFilters.map((filter) => (
+                      <button
+                        key={filter}
+                        type="button"
+                        className="av-session-viz-focus-chip av-hover-control"
+                        onClick={() => {
+                          setTranscriptFilters((current) => current.filter((activeFilter) => activeFilter !== filter))
+                        }}
+                      >
+                        Filter: {TRANSCRIPT_FILTER_LABELS.get(filter) ?? filter}
+                        <X aria-hidden="true" />
+                      </button>
+                    ))}
+                    {transcriptSearch.trim() && (
+                      <button
+                        type="button"
+                        className="av-session-viz-focus-chip av-hover-control"
+                        onClick={() => setTranscriptSearch('')}
+                      >
+                        Search: {transcriptSearch.trim()}
+                        <X aria-hidden="true" />
+                      </button>
+                    )}
+                    {bookmarksOnly && (
+                      <button
+                        type="button"
+                        className="av-session-viz-focus-chip av-hover-control"
+                        onClick={() => setBookmarksOnly(false)}
+                      >
+                        ★ Bookmarks only
+                        <X aria-hidden="true" />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="av-session-viz-clear-focus av-hover-control"
+                      onClick={() => {
+                        setTranscriptFilters([])
+                        setTranscriptSearch('')
+                        setBookmarksOnly(false)
+                      }}
+                    >
+                      Clear all
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+            <div style={{ position: 'relative', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+              {!maximized && viewMode === 'stream' && streamHistoryItems.length > 1 ? (
+                <StreamHistoryRail
+                  items={streamHistoryItems}
+                  scrollRef={timelineRef}
+                  contentRef={timelineContentRef}
+                  anchorOffset={TIMELINE_TARGET_TOP_GUTTER_PX}
+                  onSelect={handleJumpToMessage}
+                />
+              ) : null}
+              <div
+                ref={timelineRef}
+                onScroll={handleTimelineScroll}
+                className={cn(viewMode === 'stream' && 'av-stream-timeline-scroll')}
+                style={{
+                  height: '100%',
+                  minHeight: 0,
+                  overflow: 'auto',
+                  overflowAnchor: 'none',
+                  padding: viewMode === 'stream' && !maximized ? '28px 32px 72px 94px' : '28px 32px 72px',
+                }}
+              >
+        {!maximized && showDiagnostics && !isProject && (
           <div
             style={{
               marginBottom: 18,
@@ -1392,9 +8548,39 @@ export default function MessageView({ messages, loading, session, projectView, o
               background: 'var(--surface-2)',
             }}
           >
-            <div style={{ fontFamily: "'Oxanium', monospace", fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 10 }}>
-              Session Diagnostics
-            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 10 }}>
+              <div style={{ fontFamily: "'Oxanium', monospace", fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>
+                Session Diagnostics
+              </div>
+              {session?.provider === 'claude' && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 5 }}>
+                  {CLAUDE_DIAGNOSTIC_ACTIONS.map(([action, busyKey, label, notice, title]) => (
+                    <button
+                      key={action}
+                      type="button"
+                      className="av-hover-control"
+                      onClick={() => { void runClaudeSessionAction(action, {}, busyKey, notice) }}
+                      disabled={claudeMcpBusy !== null}
+                      title={title}
+                      style={{
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 11,
+                        color: 'var(--cyan)',
+                        background: 'var(--surface)',
+                        border: '1px solid rgba(56,217,245,0.3)',
+                        borderRadius: 5,
+                        padding: '3px 8px',
+                        cursor: claudeMcpBusy !== null ? 'not-allowed' : 'pointer',
+                        letterSpacing: '0.06em',
+                        opacity: claudeMcpBusy !== null && claudeMcpBusy !== busyKey ? 0.45 : 1,
+                      }}
+                    >
+                      {claudeMcpBusy === busyKey ? 'WORKING…' : label}
+                    </button>
+                  ))}
+                </div>
+              )}
+              </div>
             {diagnosticsLoading ? (
               <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
                 Loading diagnostics…
@@ -1403,15 +8589,170 @@ export default function MessageView({ messages, loading, session, projectView, o
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14 }}>
                 {diagnosticSections.map((section) => (
                   <div key={section.id}>
-                    <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em', marginBottom: 6 }}>
-                      {section.title}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, marginBottom: 6 }}>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-3)' }}>
+                        {section.title}
+                      </span>
+                      {section.id === 'mcp' && session?.provider === 'claude' && (
+                        <button
+                          type="button"
+                          className="av-hover-control"
+                          onClick={() => { void addClaudeMcpServer() }}
+                          disabled={claudeMcpBusy !== null}
+                          title="Add a session-scoped MCP server"
+                          style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--green)', background: 'transparent', border: '1px solid rgba(74,222,128,0.3)', borderRadius: 4, height: 18, padding: '0 5px', cursor: claudeMcpBusy ? 'not-allowed' : 'pointer' }}
+                        >
+                          + ADD
+                        </button>
+                      )}
+                      {section.id === 'hooks' && session?.provider === 'claude' && (
+                        <span style={{ display: 'flex', gap: 4, minWidth: 0 }}>
+                          <input
+                            aria-label="Search Claude hook timeline"
+                            value={claudeHookQuery}
+                            onChange={(event) => setClaudeHookQuery(event.target.value)}
+                            onKeyDown={(event) => { if (event.key === 'Enter') void searchClaudeHookEvents() }}
+                            placeholder="filter hooks"
+                            style={{ width: 110, height: 18, padding: '0 5px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text)', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4 }}
+                          />
+                          <button
+                            type="button"
+                            className="av-hover-control"
+                            onClick={() => { void searchClaudeHookEvents() }}
+                            disabled={claudeHookSearching}
+                            style={{ height: 18, padding: '0 5px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--cyan)', background: 'transparent', border: '1px solid rgba(56,217,245,0.3)', borderRadius: 4, cursor: claudeHookSearching ? 'wait' : 'pointer' }}
+                          >
+                            {claudeHookSearching ? '…' : 'SEARCH'}
+                          </button>
+                        </span>
+                      )}
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      {section.items.map((item, index) => (
-                        <div key={`${section.id}-${index}`} style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-2)' }}>
-                          {item}
-                        </div>
-                      ))}
+                      {section.id === 'mcp' && session?.provider === 'claude' ? (
+                        section.items.map((item, index) => {
+                          if (item === 'None') {
+                            return <div key={`${section.id}-${index}`} style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>None</div>
+                          }
+                          const [rawName, rawStatus] = item.split(' · ')
+                          const name = rawName?.trim() ?? ''
+                          const status = rawStatus?.trim() ?? ''
+                          const dynamic = item.endsWith(' · dynamic')
+                          const enabled = status !== 'disabled'
+                          const permissionModeKey = `${session.sessionId}:${name}`
+                          const appliedPermissionMode = claudeMcpPermissionModes[permissionModeKey]
+                          const busyKey = `mcp:${name}`
+                          const busy = claudeMcpBusy !== null
+                          return (
+                            <div
+                              key={`${section.id}-${index}`}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: 6,
+                                fontFamily: "'IBM Plex Mono', monospace",
+                                fontSize: 11,
+                                color: 'var(--text-2)',
+                              }}
+                            >
+                              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }} title={item}>
+                                {name} <span style={{ color: enabled ? 'var(--green)' : 'var(--text-3)' }}>· {status}</span>
+                              </span>
+                              <span style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                                <select
+                                  aria-label={`Permission policy for MCP server ${name}`}
+                                  title={`Claude permission policy for ${name}`}
+                                  value={appliedPermissionMode ?? ''}
+                                  disabled={busy}
+                                  onChange={(event) => {
+                                    const selected = event.target.value
+                                    const mode = selected === 'clear' ? null : selected === 'auto' ? 'auto' : 'default'
+                                    const previous = appliedPermissionMode
+                                    void applyClaudeMcpPermissionMode(name, permissionModeKey, mode, previous)
+                                  }}
+                                  style={{
+                                    height: 18,
+                                    maxWidth: 82,
+                                    fontFamily: "'IBM Plex Mono', monospace",
+                                    fontSize: 11,
+                                    color: 'var(--text-2)',
+                                    background: 'var(--surface)',
+                                    border: '1px solid var(--border)',
+                                    borderRadius: 4,
+                                  }}
+                                >
+                                  <option value="" disabled>POLICY…</option>
+                                  <option value="default">DEFAULT</option>
+                                  <option value="auto">Auto</option>
+                                  <option value="clear">CLEAR</option>
+                                </select>
+                                <button
+                                  type="button"
+                                  className="av-hover-control"
+                                  onClick={() => runClaudeSessionAction('reconnectMcpServer', { serverName: name }, busyKey, `Reconnected ${name}.`)}
+                                  disabled={busy}
+                                  title={`Reconnect ${name}`}
+                                  style={{
+                                    fontFamily: "'IBM Plex Mono', monospace",
+                                    fontSize: 11,
+                                    color: 'var(--cyan)',
+                                    background: 'transparent',
+                                    border: '1px solid rgba(56,217,245,0.3)',
+                                    borderRadius: 4,
+                                    padding: '0 5px',
+                                    height: 18,
+                                    cursor: busy ? 'not-allowed' : 'pointer',
+                                    letterSpacing: '0.06em',
+                                    opacity: busy ? 0.5 : 1,
+                                  }}
+                                >
+                                  RECONN
+                                </button>
+                                <button
+                                  type="button"
+                                  className="av-hover-control"
+                                  onClick={() => runClaudeSessionAction('toggleMcpServer', { serverName: name, enabled: !enabled }, `mcp:toggle:${name}`, `${enabled ? 'Disabled' : 'Enabled'} ${name}.`)}
+                                  disabled={busy}
+                                  title={`${enabled ? 'Disable' : 'Enable'} ${name}`}
+                                  style={{
+                                    fontFamily: "'IBM Plex Mono', monospace",
+                                    fontSize: 11,
+                                    color: enabled ? 'var(--yellow)' : 'var(--green)',
+                                    background: 'transparent',
+                                    border: enabled ? '1px solid rgba(251,191,36,0.3)' : '1px solid rgba(74,222,128,0.3)',
+                                    borderRadius: 4,
+                                    padding: '0 5px',
+                                    height: 18,
+                                    cursor: busy ? 'not-allowed' : 'pointer',
+                                    letterSpacing: '0.06em',
+                                    opacity: busy ? 0.5 : 1,
+                                  }}
+                                >
+                                  {enabled ? 'DISABLE' : 'ENABLE'}
+                                </button>
+                                {dynamic && (
+                                  <button
+                                    type="button"
+                                    className="av-hover-control"
+                                    onClick={() => runClaudeSessionAction('setMcpServers', { operation: 'remove', serverName: name }, `mcp:remove:${name}`, `Removed dynamic MCP server ${name}.`)}
+                                    disabled={busy}
+                                    title={`Remove dynamic MCP server ${name}`}
+                                    style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--red)', background: 'transparent', border: '1px solid rgba(248,113,113,0.3)', borderRadius: 4, padding: '0 5px', height: 18, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}
+                                  >
+                                    REMOVE
+                                  </button>
+                                )}
+                              </span>
+                            </div>
+                          )
+                        })
+                      ) : (
+                        section.items.map((item, index) => (
+                          <div key={`${section.id}-${index}`} style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-2)' }}>
+                            {item}
+                          </div>
+                        ))
+                      )}
                     </div>
                   </div>
                 ))}
@@ -1432,581 +8773,1691 @@ export default function MessageView({ messages, loading, session, projectView, o
           </div>
         )}
         {!loading && !hasLiveTimeline && (
-          <div style={{ fontSize: 13, color: 'var(--text-3)' }}>No messages.</div>
+          session ? (
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 14,
+                maxWidth: 640,
+                padding: '20px 18px',
+                borderRadius: 10,
+                border: `1px solid rgba(${composerConfig.cssAccentRgb},0.28)`,
+                background: colorTreatment === 'flat'
+                  ? `rgba(${composerConfig.cssAccentRgb},0.06)`
+                  : `linear-gradient(180deg, rgba(${composerConfig.cssAccentRgb},0.08), transparent 70%)`,
+              }}
+            >
+              <div style={{
+                fontFamily: "'Oxanium', monospace",
+                fontSize: 16,
+                fontWeight: 600,
+                color: `var(${composerConfig.cssAccentVar})`,
+                letterSpacing: '0.04em',
+              }}>
+                {composerConfig.welcomeTitle}
+              </div>
+              <div style={{
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 11,
+                color: 'var(--text-3)',
+                letterSpacing: '0.04em',
+              }}>
+                {composerConfig.welcomeSubtitle}
+              </div>
+              {session.cwd && (
+                <div style={{
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 11,
+                  color: 'var(--text-3)',
+                  letterSpacing: '0.02em',
+                }}>
+                  cwd <span style={{ color: 'var(--text-2)' }}>{session.cwd}</span>
+                </div>
+              )}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
+                {composerConfig.welcomeBullets.map((bullet) => (
+                  <button
+                    key={bullet}
+                    type="button"
+                    className="av-hover-control"
+                    onClick={() => handleReusePrompt(bullet)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'baseline',
+                      gap: 10,
+                      textAlign: 'left',
+                      background: 'transparent',
+                      border: '1px solid var(--border)',
+                      borderRadius: 6,
+                      padding: '8px 12px',
+                      cursor: 'pointer',
+                      fontFamily: "'IBM Plex Sans', sans-serif",
+                      fontSize: 13,
+                      color: 'var(--text)',
+                      transition: 'background 0.15s, border-color 0.15s',
+                    }}
+                    onMouseEnter={(event) => {
+                      event.currentTarget.style.background = `rgba(${composerConfig.cssAccentRgb},0.10)`
+                      event.currentTarget.style.borderColor = `rgba(${composerConfig.cssAccentRgb},0.45)`
+                    }}
+                    onMouseLeave={(event) => {
+                      event.currentTarget.style.background = 'transparent'
+                      event.currentTarget.style.borderColor = 'var(--border)'
+                    }}
+                  >
+                    <span style={{ color: `var(${composerConfig.cssAccentVar})`, fontWeight: 600 }}>{composerConfig.glyph}</span>
+                    <span>{bullet}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontSize: 13, color: 'var(--text-3)' }}>No messages.</div>
+          )
         )}
-        {!loading && hasLiveTimeline && (
+        {!loading && hasLiveTimeline && !hasTranscriptTimeline && (
+          <div className="av-transcript-no-results">
+            No messages match the current filter.
+          </div>
+        )}
+        {!loading && hasTranscriptTimeline && (
           <div style={{ position: 'relative' }}>
-            {/* Continuous timeline track */}
+            {viewMode !== 'stream' && viewMode !== 'agents' && (
             <div
               className="timeline-line"
               style={{
                 position: 'absolute',
                 left: 9,
                 top: 10,
-                bottom: 0,
-                width: 1,
-                background: 'linear-gradient(to bottom, var(--border-2) 0%, var(--border) 60%, transparent 100%)',
+                height: Math.max(timelineRenderedHeight - 10, 0),
+                width: 2,
+                borderRadius: 999,
+                background: 'linear-gradient(to bottom, color-mix(in srgb, var(--border-2) 92%, var(--text-2)) 0%, var(--border-2) 70%, transparent 100%)',
+                boxShadow: '0 0 0 1px color-mix(in srgb, var(--bg) 72%, transparent), 0 0 10px color-mix(in srgb, var(--border-2) 38%, transparent)',
                 pointerEvents: 'none',
               }}
             />
-            {threaded.map((msg, i) => (
-              <div
-                key={msg.uuid}
-                style={{
-                  animation: 'fade-up 0.28s ease both',
-                  animationDelay: `${Math.min(i * 16, 320)}ms`,
-                }}
-              >
-                {!isProject && (sessionCapabilities?.messageFork || (msg.role === 'assistant' && sessionCapabilities?.resumeAtMessage)) && (
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, margin: '0 0 8px 0' }}>
-                    {sessionCapabilities?.messageFork && (
-                      <button
-                        onClick={() => handleForkFromMessage(msg.uuid)}
-                        disabled={forkingMessageId === msg.uuid}
-                        style={{
-                          height: 22,
-                          padding: '0 8px',
-                          borderRadius: 4,
-                          border: '1px solid rgba(139,128,240,0.18)',
-                          background: 'rgba(139,128,240,0.07)',
-                          color: 'var(--text-3)',
-                          fontFamily: "'IBM Plex Mono', monospace",
-                          fontSize: 10,
-                          letterSpacing: '0.06em',
-                          cursor: forkingMessageId === msg.uuid ? 'not-allowed' : 'pointer',
-                          opacity: forkingMessageId === msg.uuid ? 0.5 : 1,
-                        }}
-                      >
-                        {forkingMessageId === msg.uuid ? 'FORKING…' : 'FORK HERE'}
-                      </button>
-                    )}
-                    {msg.role === 'assistant' && sessionCapabilities?.resumeAtMessage && (
-                      <button
-                        onClick={() => toggleResumeFromMessage(msg.uuid)}
-                        style={{
-                          height: 22,
-                          padding: '0 8px',
-                          borderRadius: 4,
-                          border: `1px solid ${resumeFromMessageId === msg.uuid ? 'rgba(56,217,245,0.35)' : 'rgba(56,217,245,0.18)'}`,
-                          background: resumeFromMessageId === msg.uuid ? 'rgba(56,217,245,0.14)' : 'rgba(56,217,245,0.07)',
-                          color: resumeFromMessageId === msg.uuid ? 'var(--cyan)' : 'var(--text-3)',
-                          fontFamily: "'IBM Plex Mono', monospace",
-                          fontSize: 10,
-                          letterSpacing: '0.06em',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        {resumeFromMessageId === msg.uuid ? 'RESUME TARGET' : 'RESUME HERE'}
-                      </button>
-                    )}
-                  </div>
-                )}
-                <MessageItem message={msg} showSession={isProject} />
-              </div>
-            ))}
-            {liveUserMessage && (
-              <div style={{ opacity: 0.9 }}>
-                <MessageItem message={liveUserMessage} showSession={false} />
-              </div>
             )}
-            {liveAssistantMessage && (
-              <div style={{ opacity: 0.92 }}>
-                <div style={{ display: 'flex', justifyContent: 'flex-end', margin: '0 0 8px 0' }}>
-                  <span style={{
-                    height: 20,
-                    padding: '0 8px',
-                    borderRadius: 999,
-                    border: '1px solid rgba(45,212,160,0.22)',
-                    background: 'rgba(45,212,160,0.08)',
-                    color: 'var(--green)',
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 10,
-                    letterSpacing: '0.06em',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                  }}>
-                    {awaitingPersistedTurn ? 'SYNCING TO LOG' : 'LIVE PREVIEW'}
-                  </span>
-                </div>
-                {liveToolActivities.length > 0 && (
-                  <div style={{ margin: '0 0 10px 38px', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    {liveToolActivities.map((activity) => (
-                      <span
-                        key={activity.key}
-                        style={{
-                          height: 22,
-                          padding: '0 8px',
-                          borderRadius: 999,
-                          border: `1px solid ${activity.status === 'running' ? 'rgba(56,217,245,0.25)' : 'rgba(45,212,160,0.22)'}`,
-                          background: activity.status === 'running' ? 'rgba(56,217,245,0.08)' : 'rgba(45,212,160,0.08)',
-                          color: activity.status === 'running' ? 'var(--cyan)' : 'var(--green)',
-                          fontFamily: "'IBM Plex Mono', monospace",
-                          fontSize: 10,
-                          letterSpacing: '0.05em',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 6,
-                        }}
-                        title={activity.detail ?? activity.label}
-                      >
-                        <span>{activity.label}</span>
-                        <span style={{ color: activity.status === 'running' ? 'var(--cyan)' : 'var(--green)' }}>
-                          {activity.status === 'running' ? 'RUNNING' : 'DONE'}
-                        </span>
-                      </span>
-                    ))}
-                  </div>
-                )}
-                <MessageItem message={liveAssistantMessage} showSession={false} />
-              </div>
-            )}
-          </div>
-        )}
-        {!autoFollow && hasLiveTimeline && (
-          <div style={{ position: 'sticky', bottom: 12, display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
-            <button
-              onClick={() => {
-                setAutoFollow(true)
-                scrollTimelineToBottom('smooth')
-              }}
+            <div
+              ref={timelineContentRef}
               style={{
-                height: 28,
-                padding: '0 10px',
-                borderRadius: 999,
-                border: '1px solid rgba(56,217,245,0.24)',
-                background: 'rgba(9,14,22,0.88)',
-                color: 'var(--cyan)',
-                fontFamily: "'IBM Plex Mono', monospace",
-                fontSize: 11,
-                letterSpacing: '0.05em',
-                cursor: 'pointer',
-                boxShadow: '0 10px 30px rgba(0,0,0,0.24)',
+                position: 'relative',
+                minHeight: timelineRenderedHeight,
+                height: timelineRenderedHeight,
+                // Centered width caps the measure so lines stay readable on
+                // wide monitors instead of spanning the viewport. Stream is
+                // prose-first and reads best narrower; card views keep more
+                // room for tool cards and diffs.
+                maxWidth: timelineWidth === 'centered' ? (viewMode === 'stream' ? 900 : 1040) : undefined,
+                marginInline: timelineWidth === 'centered' ? 'auto' : undefined,
               }}
             >
-              JUMP TO LIVE
-            </button>
+              <MessageDensityProvider density={density} onOpenSession={onOpenSession} turnDurations={turnDurations}>
+              <ViewModeProvider mode={viewMode}>
+              <DiffStyleProvider diffStyle={diffStyle}>
+              <DiffOptionsProvider options={diffOptions}>
+              <DiffCommentComposerContext.Provider value={handleDiffCommentToComposer}>
+                <LiveSubagentTextContext.Provider value={liveSubagentText}>
+                  <TaskActiveFormsContext.Provider value={taskActiveForms}>
+                    {timelineRowElements}
+                  </TaskActiveFormsContext.Provider>
+                </LiveSubagentTextContext.Provider>
+              </DiffCommentComposerContext.Provider>
+              </DiffOptionsProvider>
+              </DiffStyleProvider>
+              </ViewModeProvider>
+              </MessageDensityProvider>
+            </div>
           </div>
         )}
+        {!maximized && hasTranscriptTimeline && (
+          <div style={{ position: 'sticky', bottom: 12, display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
+            {autoFollow ? (
+              <div
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '6px 10px',
+                  borderRadius: 999,
+                  border: '1px solid color-mix(in srgb, var(--cyan) 35%, var(--border))',
+                  background: colorTreatment === 'flat'
+                    ? 'color-mix(in srgb, var(--cyan) 10%, var(--surface))'
+                    : 'linear-gradient(110deg, color-mix(in srgb, var(--cyan) 10%, var(--surface)), color-mix(in srgb, var(--violet) 10%, var(--surface)))',
+                  boxShadow: '0 10px 30px var(--cyan-glow), inset 0 0 14px var(--violet-glow)',
+                }}
+              >
+                <LiveSpinner label="waiting for new messages" />
+              </div>
+            ) : (
+              <Button
+                onClick={() => {
+                  setAutoFollow(true)
+                  scrollTimelineToBottom()
+                }}
+                size="sm"
+                style={{
+                  height: 28,
+                  padding: '0 10px',
+                  borderRadius: 999,
+                  border: '1px solid rgba(56,217,245,0.24)',
+                  background: 'var(--surface)',
+                  color: 'var(--cyan)',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 11,
+                  letterSpacing: '0.05em',
+                  cursor: 'pointer',
+                  boxShadow: '0 10px 30px var(--cyan-glow)',
+                }}
+              >
+                FOLLOW LIVE
+              </Button>
+            )}
+          </div>
+        )}
+            </div>
+            </div>
+          </>
+        )}
+      </div>
+      {!maximized && taskRailOpen && taskRegistry.size > 0 && (
+        <TaskRail
+          registry={taskRegistry}
+          onJumpToEvent={handleJumpToMessage}
+          onClose={() => setTaskRailOpen(false)}
+          onStopTask={session?.provider === 'claude' ? stopClaudeTask : undefined}
+        />
+      )}
       </div>
 
       {/* ── Message input (single session only) ──────── */}
-      {!isProject && <div
+      {!isProject && composerCollapsed && (
+        <div
+          style={{
+            padding: '4px 16px',
+            borderTop: '1px solid var(--border)',
+            background: 'var(--surface)',
+            flexShrink: 0,
+            display: 'flex',
+            justifyContent: 'flex-end',
+          }}
+        >
+          <button
+            type="button"
+            className="av-hover-control"
+            onClick={() => setComposerCollapsed(false)}
+            title="Expand composer"
+            style={{
+              background: 'transparent',
+              border: '1px solid var(--border)',
+              cursor: 'pointer',
+              color: 'var(--text-3)',
+              padding: '2px 8px',
+              borderRadius: 6,
+              lineHeight: 1,
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 10,
+              letterSpacing: '0.08em',
+            }}
+          >
+            ▲ COMPOSER
+          </button>
+        </div>
+      )}
+      {!isProject && !composerCollapsed && <div
+        className="av-web-composer-shell"
+        onDragEnter={handleComposerDragEnter}
+        onDragOver={handleComposerDragOver}
+        onDragLeave={handleComposerDragLeave}
+        onDrop={handleComposerDrop}
         style={{
-          padding: '12px 20px 16px',
-          borderTop: '1px solid var(--border)',
-          background: 'var(--surface)',
+          // The composer is part of the same column as the transcript, so it
+          // tracks the width mode: a readable measure when centered, the whole
+          // window when full.
+          ['--av-composer-measure' as string]: timelineWidth === 'centered'
+            ? (viewMode === 'stream' ? '900px' : '1040px')
+            : '100%',
+          padding: '12px clamp(16px, 4vw, 48px) 14px',
+          borderTop: '1px solid color-mix(in srgb, var(--border) 72%, transparent)',
+          background: composerDropActive ? 'rgba(56,217,245,0.06)' : 'color-mix(in srgb, var(--bg) 78%, var(--surface))',
           flexShrink: 0,
+          position: 'relative',
+          transition: 'background 120ms ease',
+          outline: composerDropActive ? '1px dashed rgba(56,217,245,0.45)' : 'none',
+          outlineOffset: composerDropActive ? -4 : 0,
         }}
       >
-        {sendError && (
-          <div style={{
+        <button
+          type="button"
+          className="av-hover-control"
+          onClick={() => setComposerCollapsed(true)}
+          title="Collapse composer"
+          style={{
+            position: 'absolute',
+            top: 2,
+            right: 18,
+            zIndex: 5,
+            background: 'var(--surface-2)',
+            border: '1px solid var(--border)',
+            cursor: 'pointer',
+            color: 'var(--text-3)',
+            padding: '1px 6px',
+            borderRadius: 5,
+            lineHeight: 1,
             fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 11,
-            color: 'var(--red, #f87171)',
-            marginBottom: 8,
-            letterSpacing: '0.03em',
-          }}>
-            {sendError}
+            fontSize: 10,
+            letterSpacing: '0.08em',
+          }}
+        >
+          ▼
+        </button>
+        {(modelsPending || sendError || sessionActionError || sessionActionNotice || (session?.provider === 'codex' && codexExternalWriter)) && (
+          <div className="av-web-composer-banner-stack">
+            {modelsPending && !sendError ? (
+              <ComposerStatusBanner tone="info" icon={<LoaderCircle className="av-spin" size={14} />}>
+                Loading available models…
+              </ComposerStatusBanner>
+            ) : null}
+            {sendError ? (
+              <ComposerStatusBanner
+                tone="error"
+                icon={<CircleAlert size={14} />}
+                action={failedSend ? (
+                  <Button
+                    type="button"
+                    onClick={restoreFailedSend}
+                    disabled={sendBusy}
+                    variant="outline"
+                    size="sm"
+                    className="av-web-composer-banner-retry"
+                  >
+                    <RotateCcw data-icon="inline-start" />
+                    RETRY
+                  </Button>
+                ) : undefined}
+              >
+                {sendError}
+              </ComposerStatusBanner>
+            ) : null}
+            {sessionActionError || sessionActionNotice ? (
+              <ComposerStatusBanner
+                tone={sessionActionError ? 'error' : sessionActionNotice?.toLowerCase().includes('queued') ? 'info' : 'success'}
+                icon={sessionActionError
+                  ? <TriangleAlert size={14} />
+                  : sessionActionNotice?.toLowerCase().includes('queued')
+                  ? <Clock3 size={14} />
+                  : <CircleCheck size={14} />}
+              >
+                {sessionActionError ?? sessionActionNotice}
+              </ComposerStatusBanner>
+            ) : null}
+            {session?.provider === 'codex' && codexExternalWriter ? (
+              <ComposerStatusBanner tone="warning" icon={<MonitorUp size={14} />}>
+                <strong>Another Codex client owns this session.</strong>{' '}
+                Prompts queue there; the transcript updates when its turn finishes.
+              </ComposerStatusBanner>
+            ) : null}
           </div>
         )}
-        {(sessionActionError || sessionActionNotice) && (
+        {livePromptSuggestion && sendState !== 'sending' && (
           <div style={{
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 11,
-            color: sessionActionError ? 'var(--red, #f87171)' : 'var(--green)',
-            marginBottom: 8,
-            letterSpacing: '0.03em',
-          }}>
-            {sessionActionError ?? sessionActionNotice}
-          </div>
-        )}
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              color: 'var(--text-3)',
-              letterSpacing: '0.05em',
-            }}>
-              MODEL
-            </span>
-            <select
-              value={selectedModel}
-              onChange={e => setSelectedModel(e.target.value)}
-              style={{
-                height: 28,
-                minWidth: 180,
-                background: 'var(--surface-2)',
-                border: '1px solid var(--border)',
-                borderRadius: 5,
-                color: 'var(--text)',
-                padding: '0 8px',
-                fontFamily: "'IBM Plex Mono', monospace",
-                fontSize: 11,
-              }}
-            >
-              {(availableModels.length > 0 ? availableModels : [{ value: selectedModel, displayName: selectedModel, description: '' }]).map((model) => (
-                <option key={model.value} value={model.value}>
-                  {model.displayName}
-                </option>
-              ))}
-            </select>
-          </label>
-          {sessionCapabilities?.fileRewind && rewindCandidates.length > 0 && (
-            <>
-              <select
-                value={rewindTargetId}
-                onChange={e => setRewindTargetId(e.target.value)}
-                style={{
-                  flex: 1,
-                  minWidth: 220,
-                  height: 28,
-                  background: 'var(--surface-2)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 5,
-                  color: 'var(--text)',
-                  padding: '0 8px',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 11,
-                }}
-              >
-                {rewindCandidates.slice().reverse().map((candidate) => (
-                  <option key={candidate.uuid} value={candidate.uuid}>
-                    {candidate.content.replace(/\s+/g, ' ').trim().slice(0, 72) || candidate.uuid}
-                  </option>
-                ))}
-              </select>
-              <button
-                onClick={handleRewind}
-                disabled={previewingRewind || applyingRewind || !rewindTargetId}
-                style={{
-                  flexShrink: 0,
-                  height: 28,
-                  padding: '0 12px',
-                  background: 'rgba(251,191,36,0.08)',
-                  border: '1px solid rgba(251,191,36,0.22)',
-                  borderRadius: 5,
-                  color: 'var(--yellow, #fbbf24)',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 11,
-                  letterSpacing: '0.06em',
-                  cursor: previewingRewind || applyingRewind || !rewindTargetId ? 'not-allowed' : 'pointer',
-                  opacity: previewingRewind || applyingRewind || !rewindTargetId ? 0.5 : 1,
-                }}
-              >
-                {previewingRewind ? 'PREVIEWING…' : 'PREVIEW REWIND'}
-              </button>
-            </>
-          )}
-          {sessionCapabilities?.rollback && rollbackCandidates.length > 0 && (
-            <>
-              <select
-                value={rollbackTurns}
-                onChange={e => setRollbackTurns(Number(e.target.value))}
-                style={{
-                  height: 28,
-                  minWidth: 180,
-                  background: 'var(--surface-2)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 5,
-                  color: 'var(--text)',
-                  padding: '0 8px',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 11,
-                }}
-              >
-                {Array.from({ length: Math.min(10, rollbackCandidates.length) }, (_, index) => index + 1).map((value) => (
-                  <option key={value} value={value}>
-                    Roll back {value} turn{value === 1 ? '' : 's'}
-                  </option>
-                ))}
-              </select>
-              <button
-                onClick={handleRollbackPreview}
-                disabled={previewingRewind || applyingRewind}
-                style={{
-                  flexShrink: 0,
-                  height: 28,
-                  padding: '0 12px',
-                  background: 'rgba(251,191,36,0.08)',
-                  border: '1px solid rgba(251,191,36,0.22)',
-                  borderRadius: 5,
-                  color: 'var(--yellow, #fbbf24)',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 11,
-                  letterSpacing: '0.06em',
-                  cursor: previewingRewind || applyingRewind ? 'not-allowed' : 'pointer',
-                  opacity: previewingRewind || applyingRewind ? 0.5 : 1,
-                }}
-              >
-                {previewingRewind ? 'PREVIEWING…' : 'PREVIEW ROLLBACK'}
-              </button>
-            </>
-          )}
-        </div>
-        {rewindPreview && (
-          <div
-            style={{
-              marginBottom: 10,
-              padding: '12px 14px',
-              borderRadius: 8,
-              border: '1px solid rgba(251,191,36,0.22)',
-              background: 'rgba(251,191,36,0.06)',
-            }}
-          >
-            <div style={{ fontFamily: "'Oxanium', monospace", fontSize: 12, fontWeight: 600, color: 'var(--yellow, #fbbf24)', letterSpacing: '0.08em' }}>
-              Rewind Preview
-            </div>
-            <div style={{ marginTop: 6, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-2)', lineHeight: 1.6 }}>
-              {rewindPreview.contentPreview || 'Selected prompt'}
-            </div>
-            <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {rewindPreview.filesChanged.length > 0 ? rewindPreview.filesChanged.map((file) => (
-                <div
-                  key={file}
-                  style={{
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 11,
-                    color: 'var(--text-2)',
-                    padding: '5px 8px',
-                    borderRadius: 5,
-                    background: 'rgba(9,14,22,0.24)',
-                    border: '1px solid var(--border)',
-                  }}
-                >
-                  {file}
-                </div>
-              )) : (
-                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
-                  No tracked files would change.
-                </div>
-              )}
-            </div>
-            <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
-              <button
-                onClick={handleApplyRewind}
-                disabled={applyingRewind}
-                style={{
-                  height: 28,
-                  padding: '0 12px',
-                  background: 'rgba(251,191,36,0.12)',
-                  border: '1px solid rgba(251,191,36,0.28)',
-                  borderRadius: 5,
-                  color: 'var(--yellow, #fbbf24)',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 11,
-                  letterSpacing: '0.06em',
-                  cursor: applyingRewind ? 'not-allowed' : 'pointer',
-                  opacity: applyingRewind ? 0.5 : 1,
-                }}
-              >
-                {applyingRewind ? 'APPLYING…' : 'APPLY REWIND'}
-              </button>
-              <button
-                onClick={() => setRewindPreview(null)}
-                style={{
-                  height: 28,
-                  padding: '0 12px',
-                  background: 'var(--surface-2)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 5,
-                  color: 'var(--text-3)',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 11,
-                  letterSpacing: '0.06em',
-                  cursor: 'pointer',
-                }}
-              >
-                CANCEL
-              </button>
-            </div>
-          </div>
-        )}
-        {rollbackPreview && (
-          <div
-            style={{
-              marginBottom: 10,
-              padding: '12px 14px',
-              borderRadius: 8,
-              border: '1px solid rgba(251,191,36,0.22)',
-              background: 'rgba(251,191,36,0.06)',
-            }}
-          >
-            <div style={{ fontFamily: "'Oxanium', monospace", fontSize: 12, fontWeight: 600, color: 'var(--yellow, #fbbf24)', letterSpacing: '0.08em' }}>
-              Rollback Preview
-            </div>
-            <div style={{ marginTop: 6, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-2)', lineHeight: 1.6 }}>
-              This removes the last {rollbackPreview.numTurns} turn{rollbackPreview.numTurns === 1 ? '' : 's'} from the Codex thread history. It does not revert files in the workspace.
-            </div>
-            <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {rollbackPreview.turnsRemoved.map((turn) => (
-                <div
-                  key={turn.turnId}
-                  style={{
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 11,
-                    color: 'var(--text-2)',
-                    padding: '5px 8px',
-                    borderRadius: 5,
-                    background: 'rgba(9,14,22,0.24)',
-                    border: '1px solid var(--border)',
-                  }}
-                >
-                  {turn.preview || turn.turnId}
-                </div>
-              ))}
-            </div>
-            <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
-              <button
-                onClick={handleApplyRollback}
-                disabled={applyingRewind}
-                style={{
-                  height: 28,
-                  padding: '0 12px',
-                  background: 'rgba(251,191,36,0.12)',
-                  border: '1px solid rgba(251,191,36,0.28)',
-                  borderRadius: 5,
-                  color: 'var(--yellow, #fbbf24)',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 11,
-                  letterSpacing: '0.06em',
-                  cursor: applyingRewind ? 'not-allowed' : 'pointer',
-                  opacity: applyingRewind ? 0.5 : 1,
-                }}
-              >
-                {applyingRewind ? 'APPLYING…' : 'APPLY ROLLBACK'}
-              </button>
-              <button
-                onClick={() => setRollbackPreview(null)}
-                style={{
-                  height: 28,
-                  padding: '0 12px',
-                  background: 'var(--surface-2)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 5,
-                  color: 'var(--text-3)',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 11,
-                  letterSpacing: '0.06em',
-                  cursor: 'pointer',
-                }}
-              >
-                CANCEL
-              </button>
-            </div>
-          </div>
-        )}
-        {sessionCapabilities?.resumeAtMessage && resumeFromMessageId && (
-          <div style={{
-            marginBottom: 10,
             display: 'flex',
             alignItems: 'center',
             gap: 8,
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 11,
-            color: 'var(--cyan)',
-            letterSpacing: '0.03em',
+            marginBottom: 8,
+            flexWrap: 'wrap',
           }}>
-            <span>Next send will resume from the selected timeline point in a forked session.</span>
+            <span style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 10,
+              color: 'var(--text-3)',
+              letterSpacing: '0.08em',
+            }}>
+              SUGGESTED
+            </span>
             <button
-              onClick={() => setResumeFromMessageId(null)}
+              type="button"
+              className="av-hover-control"
+              onClick={() => {
+                setInputText(livePromptSuggestion)
+                inputTextRef.current = livePromptSuggestion
+                setLivePromptSuggestion(null)
+                window.requestAnimationFrame(() => {
+                  textareaRef.current?.focus()
+                  resizeComposer()
+                })
+              }}
+              title={livePromptSuggestion}
               style={{
-                height: 22,
-                padding: '0 8px',
-                borderRadius: 4,
-                border: '1px solid rgba(56,217,245,0.22)',
-                background: 'rgba(56,217,245,0.08)',
-                color: 'var(--cyan)',
-                fontFamily: "'IBM Plex Mono', monospace",
-                fontSize: 10,
-                letterSpacing: '0.06em',
+                fontFamily: "'IBM Plex Sans', sans-serif",
+                fontSize: 12,
+                color: 'var(--text)',
+                background: 'var(--surface-2)',
+                border: '1px solid var(--border)',
+                borderRadius: 999,
+                padding: '3px 10px',
                 cursor: 'pointer',
+                textAlign: 'left',
+                maxWidth: '60ch',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
               }}
             >
-              CLEAR
+              {livePromptSuggestion}
+            </button>
+            <button
+              type="button"
+              className="av-hover-control"
+              onClick={() => setLivePromptSuggestion(null)}
+              title="Dismiss suggestion"
+              style={{
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 10,
+                color: 'var(--text-3)',
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                padding: '0 4px',
+              }}
+            >
+              ✕
             </button>
           </div>
         )}
-        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
-          <textarea
-            ref={textareaRef}
-            value={inputText}
-            onChange={e => {
-              setInputText(e.target.value)
-              if (sendError) setSendError(null)
-              // Auto-resize
-              e.target.style.height = 'auto'
-              e.target.style.height = `${Math.min(e.target.scrollHeight, 96)}px`
-            }}
-            onKeyDown={handleKeyDown}
-            disabled={sendState === 'sending'}
-            placeholder={activeToolCount > 0 ? `${assistantName} is using ${activeToolCount} tool${activeToolCount === 1 ? '' : 's'}…` : 'Send a message… (⌘↩ to send)'}
-            rows={1}
+        <Card
+          className="av-web-composer-card"
+          style={{
+            borderRadius: 16,
+            border: '1px solid color-mix(in srgb, var(--border-2) 82%, transparent)',
+            background: colorTreatment === 'flat' ? 'var(--surface)' : 'linear-gradient(180deg, color-mix(in srgb, var(--surface) 96%, white 1%) 0%, var(--surface) 100%)',
+            boxShadow: '0 8px 24px var(--shadow, rgba(0,0,0,0.16))',
+          }}
+        >
+          <CardHeader className="sr-only">
+            <CardTitle>Message composer</CardTitle>
+          </CardHeader>
+          <CardContent className="av-web-composer-content" style={{ padding: '14px 16px 10px' }}>
+            <div className="av-web-composer-controls" style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 220px', minWidth: 0 }}>
+                <Label style={{ fontSize: 11, color: 'var(--text-3)' }}>Model</Label>
+                <ProviderIcon provider={activeProvider} size={18} className="av-web-composer-provider-icon" />
+                <NativeSelect
+                  value={selectedModelValue ?? ''}
+                  onChange={(event) => commitClaudeModelSelection(event.target.value)}
+                  className={cn(compactNativeSelectClassName, 'flex-1')}
+                >
+                  {modelOptions.length === 0 ? (
+                    <NativeSelectOption value="" disabled>
+                      No models
+                    </NativeSelectOption>
+                  ) : (
+                    modelOptions.map((model) => (
+                      <NativeSelectOption key={model.value} value={model.value}>
+                        {model.displayName}
+                      </NativeSelectOption>
+                    ))
+                  )}
+                </NativeSelect>
+              </label>
+              {effortOptions.length > 0 && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 150px', minWidth: 128 }}>
+                  <Label style={{ fontSize: 11, color: 'var(--text-3)' }}>Effort</Label>
+                  <NativeSelect
+                    value={selectedEffort}
+                    onChange={(event) => setSelectedEffort(event.target.value as 'auto' | ReasoningEffortLevel)}
+                    className={cn(compactNativeSelectClassName, 'flex-1')}
+                  >
+                    <NativeSelectOption value="auto">Auto</NativeSelectOption>
+                    {effortOptions.map((level) => (
+                      <NativeSelectOption key={level} value={level}>
+                        {effortLabel(level)}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                </label>
+              )}
+              {activeProvider === 'copilot' && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 148px', minWidth: 128 }}>
+                  <Label style={{ fontSize: 11, color: 'var(--text-3)' }}>Context</Label>
+                  <NativeSelect
+                    value={selectedCopilotContextTier ?? 'default'}
+                    onChange={(event) => setSelectedCopilotContextTier(event.target.value as CopilotContextTier)}
+                    className={cn(compactNativeSelectClassName, 'flex-1')}
+                    title="GitHub Copilot context tier"
+                  >
+                    <NativeSelectOption value="default">Default</NativeSelectOption>
+                    <NativeSelectOption
+                      value="long_context"
+                      disabled={!selectedModelInfo?.supportsLongContext}
+                    >
+                      Long context
+                    </NativeSelectOption>
+                  </NativeSelect>
+                </label>
+              )}
+              {activeProvider === 'opencode' && composerAgentOptions.length > 0 && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 160px', minWidth: 136 }}>
+                  <Label style={{ fontSize: 11, color: 'var(--text-3)' }}>Agent</Label>
+                  <NativeSelect
+                    value={selectedAgent}
+                    onChange={(event) => setSelectedAgent(event.target.value)}
+                    className={cn(compactNativeSelectClassName, 'flex-1')}
+                    title="OpenCode primary agent — mirrors the native agent selector"
+                  >
+                    {composerAgentOptions.map((agent) => (
+                      <NativeSelectOption key={agent.value} value={agent.value}>
+                        {agent.label}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                </label>
+              )}
+              {activeProvider === 'copilot' && composerModeOptions.length > 0 && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 160px', minWidth: 138 }}>
+                  <Label style={{ fontSize: 11, color: 'var(--text-3)' }}>Mode</Label>
+                  <NativeSelect
+                    value={selectedCopilotMode}
+                    onChange={(event) => commitCopilotModeSelection(event.target.value)}
+                    className={cn(compactNativeSelectClassName, 'flex-1')}
+                    title="GitHub Copilot interaction mode"
+                  >
+                    {composerModeOptions.map((mode) => (
+                      <NativeSelectOption key={mode.value} value={mode.value}>
+                        {mode.label}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                </label>
+              )}
+              {session?.provider === 'claude' && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 160px', minWidth: 140 }}>
+                  <Label style={{ fontSize: 11, color: 'var(--text-3)' }}>Mode</Label>
+                  <NativeSelect
+                    value={selectedPermissionMode}
+                    onChange={(event) => commitClaudePermissionSelection(event.target.value as typeof selectedPermissionMode)}
+                    className={cn(compactNativeSelectClassName, 'flex-1')}
+                    title="Claude permission mode — mirrors the CLI's /permissions"
+                  >
+                    <NativeSelectOption value="default">Default</NativeSelectOption>
+                    <NativeSelectOption value="acceptEdits">Accept edits</NativeSelectOption>
+                    <NativeSelectOption value="plan">Plan</NativeSelectOption>
+                    <NativeSelectOption value="bypassPermissions">Bypass permissions</NativeSelectOption>
+                  </NativeSelect>
+                </label>
+              )}
+              {session?.provider === 'codex' && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 180px', minWidth: 150 }}>
+                  <Label style={{ fontSize: 11, color: 'var(--text-3)' }}>Approvals</Label>
+                  <NativeSelect
+                    value={selectedCodexApproval}
+                    onChange={(event) => setSelectedCodexApproval(event.target.value as typeof selectedCodexApproval)}
+                    className={cn(compactNativeSelectClassName, 'flex-1')}
+                    title="Codex approval policy — mirrors the CLI's /approvals (AskForApproval)"
+                  >
+                    <NativeSelectOption value="auto">From config</NativeSelectOption>
+                    <NativeSelectOption value="untrusted">Untrusted</NativeSelectOption>
+                    <NativeSelectOption value="on-request">On request</NativeSelectOption>
+                    <NativeSelectOption value="never">Never</NativeSelectOption>
+                  </NativeSelect>
+                </label>
+              )}
+              {session?.provider === 'claude' && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 140px', minWidth: 120 }}>
+                  <Label style={{ fontSize: 11, color: 'var(--text-3)' }}>Token budget</Label>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min={0}
+                    step={1000}
+                    placeholder="—"
+                    title="Task token budget (tokens). The model paces itself toward this cap. Leave blank for no budget."
+                    value={taskBudgetTokens ?? ''}
+                    onChange={(event) => {
+                      const next = event.target.value.trim()
+                      if (!next) { setTaskBudgetTokens(null); return }
+                      const parsed = Number(next)
+                      setTaskBudgetTokens(Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null)
+                    }}
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      height: 26,
+                      padding: '0 6px',
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 11,
+                      color: 'var(--text)',
+                      background: 'var(--surface)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 5,
+                      letterSpacing: '0.04em',
+                    }}
+                  />
+                </label>
+              )}
+              {session?.provider === 'claude' && (
+                <label
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 0 auto', cursor: 'pointer' }}
+                  title="Opt this turn into the Workflow tool (settings.enableWorkflows) — Claude can orchestrate multiple subagents via a generated script. Requires plan support."
+                >
+                  <input
+                    type="checkbox"
+                    checked={enableWorkflow}
+                    onChange={(event) => setEnableWorkflow(event.target.checked)}
+                  />
+                  <span style={{ fontSize: 11, color: 'var(--text-3)', whiteSpace: 'nowrap' }}>Workflow</span>
+                </label>
+              )}
+              {sessionCapabilities?.fileRewind && rewindCandidates.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '1 1 300px', minWidth: 220 }}>
+                  <NativeSelect
+                    value={rewindTargetId}
+                    onChange={(event) => setRewindTargetId(event.target.value)}
+                    className={cn(compactNativeSelectClassName, 'flex-1')}
+                  >
+                    <NativeSelectOption value="" disabled>
+                      Rewind target
+                    </NativeSelectOption>
+                    {rewindCandidates.slice().reverse().map((candidate) => (
+                      <NativeSelectOption key={candidate.uuid} value={candidate.uuid}>
+                        {candidate.content.replace(/\s+/g, ' ').trim().slice(0, 72) || candidate.uuid}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                  <Button
+                    onClick={handleRewind}
+                    disabled={previewingRewind || applyingRewind || !rewindTargetId}
+                    variant="outline"
+                    size="sm"
+                    style={{
+                      flexShrink: 0,
+                      height: 26,
+                      padding: '0 10px',
+                      background: 'rgba(251,191,36,0.08)',
+                      border: '1px solid rgba(251,191,36,0.22)',
+                      borderRadius: 5,
+                      color: 'var(--yellow, #fbbf24)',
+                      fontSize: 12,
+                      cursor: previewingRewind || applyingRewind || !rewindTargetId ? 'not-allowed' : 'pointer',
+                      opacity: previewingRewind || applyingRewind || !rewindTargetId ? 0.5 : 1,
+                    }}
+                  >
+                    {previewingRewind ? 'Previewing…' : 'Rewind'}
+                  </Button>
+                </div>
+              )}
+              {sessionCapabilities?.rollback && rollbackCandidates.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 170px', minWidth: 146 }}>
+                  <NativeSelect
+                    value={String(rollbackTurns)}
+                    onChange={(event) => setRollbackTurns(Number(event.target.value))}
+                    className={cn(compactNativeSelectClassName, 'flex-1')}
+                  >
+                    {Array.from({ length: Math.min(10, rollbackCandidates.length) }, (_, index) => index + 1).map((value) => (
+                      <NativeSelectOption key={value} value={String(value)}>
+                        {value} turn{value === 1 ? '' : 's'}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                  <Button
+                    onClick={handleRollbackPreview}
+                    disabled={previewingRewind || applyingRewind}
+                    variant="outline"
+                    size="sm"
+                    style={{
+                      flexShrink: 0,
+                      height: 26,
+                      padding: '0 8px',
+                      background: 'rgba(251,191,36,0.08)',
+                      border: '1px solid rgba(251,191,36,0.22)',
+                      borderRadius: 5,
+                      color: 'var(--yellow, #fbbf24)',
+                      fontSize: 12,
+                      cursor: previewingRewind || applyingRewind ? 'not-allowed' : 'pointer',
+                      opacity: previewingRewind || applyingRewind ? 0.5 : 1,
+                    }}
+                  >
+                    {previewingRewind ? 'Previewing…' : 'Roll back'}
+                  </Button>
+                </div>
+              )}
+            </div>
+            {sessionCapabilities?.resumeAtMessage && resumeFromMessageId && (
+              <div style={{
+                marginBottom: 8,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 10,
+                color: 'var(--cyan)',
+                letterSpacing: '0.03em',
+              }}>
+                <span>Safe resume armed — next send forks at the selected timeline point and guards the discarded turn.</span>
+                <Button
+                  onClick={() => setResumeFromMessageId(null)}
+                  variant="outline"
+                  size="sm"
+                  style={{
+                    height: 22,
+                    padding: '0 8px',
+                    borderRadius: 4,
+                    border: '1px solid rgba(56,217,245,0.22)',
+                    background: 'rgba(56,217,245,0.08)',
+                    color: 'var(--cyan)',
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 11,
+                    letterSpacing: '0.06em',
+                    cursor: 'pointer',
+                  }}
+                >
+                  CLEAR
+                </Button>
+              </div>
+            )}
+            {pendingPermissions.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 }}>
+                {pendingPermissions.map((permission) => (
+                  permission.questions && permission.questions.length > 0 ? (
+                    <AskUserQuestionPicker
+                      key={permission.id}
+                      permission={permission}
+                      busy={sessionActionLoading === `permission:${permission.id}`}
+                      onSubmit={(answers) => respondToQuestion(permission, answers)}
+                      onCancel={() => respondToPermission(permission, 'reject')}
+                    />
+                  ) : permission.toolName === 'ExitPlanMode' ? (
+                    <PlanApprovalCard
+                      key={permission.id}
+                      permission={permission}
+                      busy={sessionActionLoading === `permission:${permission.id}`}
+                      onApprove={(mode) => respondToPlan(permission, mode)}
+                      onReject={() => respondToPlan(permission, 'reject')}
+                    />
+                  ) : (
+                  <div
+                    key={permission.id}
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 6,
+                      padding: '8px 9px',
+                      borderRadius: 6,
+                      border: '1px solid rgba(234,170,64,0.24)',
+                      background: 'rgba(234,170,64,0.07)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--yellow, #fbbf24)', letterSpacing: '0.06em' }}>
+                          {permission.title}
+                        </div>
+                        {permission.reason ? (
+                          <div style={{ marginTop: 2, fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                            {permission.reason}
+                          </div>
+                        ) : permission.detail ? (
+                          <div style={{ marginTop: 2, fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {permission.detail}
+                          </div>
+                        ) : null}
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                        {(['once', 'always', 'reject'] as const)
+                          .filter((response) => response !== 'always' || permission.canApproveAlways !== false)
+                          .map((response) => (
+                          <Button
+                            key={response}
+                            onClick={() => respondToPermission(permission, response)}
+                            disabled={sessionActionLoading === `permission:${permission.id}`}
+                            variant="outline"
+                            size="sm"
+                            style={{
+                              height: 24,
+                              padding: '0 8px',
+                              borderRadius: 4,
+                              border: response === 'reject' ? '1px solid rgba(248,113,113,0.24)' : '1px solid rgba(45,212,160,0.24)',
+                              background: response === 'reject' ? 'rgba(248,113,113,0.08)' : 'rgba(45,212,160,0.08)',
+                              color: response === 'reject' ? 'var(--red, #f87171)' : 'var(--green)',
+                              fontFamily: "'IBM Plex Mono', monospace",
+                              fontSize: 11,
+                              letterSpacing: '0.06em',
+                              cursor: sessionActionLoading === `permission:${permission.id}` ? 'not-allowed' : 'pointer',
+                              opacity: sessionActionLoading === `permission:${permission.id}` ? 0.55 : 1,
+                            }}
+                          >
+                            {response === 'once' && permission.elicitation?.mode === 'url'
+                              ? 'OPEN & CONTINUE'
+                              : response === 'once' ? 'Allow' : response}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+                    {permission.command && (
+                      <pre style={{ margin: 0, fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-2)', background: 'rgba(0,0,0,0.18)', padding: '5px 7px', borderRadius: 4, maxHeight: 120, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                        {`$ ${permission.command}`}
+                      </pre>
+                    )}
+                    {permission.url && (
+                      <a
+                        href={permission.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--cyan)', wordBreak: 'break-all' }}
+                      >
+                        {permission.url}
+                      </a>
+                    )}
+                    {permission.paths && permission.paths.length > 0 && (
+                      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', wordBreak: 'break-all' }}>
+                        {permission.paths.join(', ')}
+                      </div>
+                    )}
+                    {permission.diff && (
+                      <PierrePatchDiffView patch={permission.diff} maxHeight={180} />
+                    )}
+                  </div>
+                  )
+                ))}
+              </div>
+            )}
+            {(attachmentPanelOpen || attachments.length > 0) && (
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+              <NativeSelect
+                value={attachmentType}
+                onChange={(event) => setAttachmentType(event.target.value as SendAttachment['type'])}
+                className={cn(compactNativeSelectClassName, 'w-[112px]')}
+              >
+                <NativeSelectOption value="file">FILE</NativeSelectOption>
+                <NativeSelectOption value="directory">DIR</NativeSelectOption>
+                <NativeSelectOption value="image">IMAGE</NativeSelectOption>
+                <NativeSelectOption value="mention">MENTION</NativeSelectOption>
+                <NativeSelectOption value="skill">SKILL</NativeSelectOption>
+                {activeProvider === 'opencode' && (
+                  <NativeSelectOption value="agent">AGENT</NativeSelectOption>
+                )}
+              </NativeSelect>
+              <Input
+                value={attachmentPath}
+                onChange={(event) => setAttachmentPath(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    addAttachment()
+                  }
+                }}
+                disabled={sendBusy}
+                placeholder={attachmentType === 'agent' ? 'Agent name' : 'Attach path or URL'}
+                style={{
+                  flex: '1 1 220px',
+                  minWidth: 180,
+                  height: 26,
+                  background: 'var(--surface-2)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 5,
+                  color: 'var(--text)',
+                  padding: '0 8px',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 10,
+                }}
+              />
+              <Button
+                onClick={addAttachment}
+                disabled={!attachmentPath.trim() || sendBusy}
+                variant="outline"
+                size="sm"
+                style={{
+                  height: 26,
+                  padding: '0 8px',
+                  borderRadius: 5,
+                  border: '1px solid rgba(56,217,245,0.22)',
+                  background: 'rgba(56,217,245,0.07)',
+                  color: 'var(--cyan)',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 10,
+                  letterSpacing: '0.06em',
+                  cursor: !attachmentPath.trim() || sendBusy ? 'not-allowed' : 'pointer',
+                  opacity: !attachmentPath.trim() || sendBusy ? 0.5 : 1,
+                }}
+              >
+                ADD
+              </Button>
+              {attachments.map((attachment, index) => {
+                const previewSrc = attachmentImagePreviewSrc(attachment)
+                const isImage = previewSrc !== null
+                return (
+                  <button
+                    key={attachment.id ?? `${attachment.type}-${index}`}
+                    type="button"
+                    className="av-hover-control"
+                    onClick={() => removeAttachment(attachment.id, index)}
+                    disabled={sendBusy}
+                    title={`Click to remove · ${attachment.path ?? attachment.filePath ?? attachmentDisplayName(attachment)}`}
+                    style={isImage ? {
+                      height: 46,
+                      maxWidth: 220,
+                      borderRadius: 6,
+                      border: '1px solid rgba(139,128,240,0.32)',
+                      background: 'rgba(139,128,240,0.10)',
+                      color: 'var(--violet)',
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 10,
+                      padding: '3px 8px 3px 3px',
+                      cursor: sendBusy ? 'not-allowed' : 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 8,
+                    } : {
+                      height: 24,
+                      maxWidth: 180,
+                      borderRadius: 5,
+                      border: '1px solid rgba(139,128,240,0.22)',
+                      background: 'rgba(139,128,240,0.08)',
+                      color: 'var(--violet)',
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 10,
+                      padding: '0 7px',
+                      cursor: sendBusy ? 'not-allowed' : 'pointer',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {isImage && previewSrc ? (
+                      <>
+                        <img
+                          src={previewSrc}
+                          alt={attachmentDisplayName(attachment)}
+                          style={{ height: 40, width: 40, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }}
+                        />
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+                          {attachmentDisplayName(attachment)}
+                        </span>
+                      </>
+                    ) : (
+                      `${attachment.type} ${attachmentDisplayName(attachment)}`
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+            )}
+            {activeQueuedSends.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6, alignItems: 'center' }}>
+                <span style={{
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 11,
+                  letterSpacing: '0.02em',
+                  textTransform: 'capitalize',
+                  color: 'var(--amber, #eaaa40)',
+                  opacity: 0.85,
+                }}>
+                  Queued ({activeQueuedSends.length})
+                </span>
+                <span
+                  role="status"
+                  style={{
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 11,
+                    color: composerQueueDurability === 'memory-only'
+                      ? 'var(--red, #f87171)'
+                      : composerQueueDurability === 'saving'
+                      ? 'var(--cyan)'
+                      : 'var(--text-3)',
+                  }}
+                  title={composerQueueDurability === 'memory-only'
+                    ? 'Browser storage is unavailable. Keep this tab open or edit the queued message back into the composer.'
+                    : composerQueueDurability === 'saving'
+                    ? 'Saving queued messages to browser storage…'
+                    : 'Queued messages are saved in browser storage.'}
+                >
+                  {composerQueueDurability === 'memory-only'
+                    ? 'Memory only'
+                    : composerQueueDurability === 'saving'
+                    ? 'Saving…'
+                    : 'Saved'}
+                </span>
+                {activeQueuedSends.map((entry, index) => {
+                  const preview = entry.text.replace(/\s+/g, ' ').trim()
+                  const short = preview.length > 48 ? `${preview.slice(0, 48)}…` : preview
+                  const attachmentSuffix = entry.attachments.length > 0 ? ` +${entry.attachments.length}` : ''
+                  return (
+                    <span
+                      key={entry.id}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        maxWidth: 280,
+                        height: 22,
+                        borderRadius: 5,
+                        border: '1px solid rgba(234,170,64,0.30)',
+                        background: 'rgba(234,170,64,0.08)',
+                        padding: '0 4px 0 8px',
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 10,
+                        color: 'var(--amber, #eaaa40)',
+                      }}
+                    >
+                      <span style={{ color: 'var(--text-3)', fontSize: 11 }}>{index + 1}.</span>
+                      <button
+                        type="button"
+                        className="av-hover-control"
+                        onClick={() => editQueuedSend(entry.id)}
+                        title="Click to edit this queued message"
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          color: 'inherit',
+                          cursor: 'pointer',
+                          padding: 0,
+                          maxWidth: 220,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          fontFamily: 'inherit',
+                          fontSize: 'inherit',
+                        }}
+                      >
+                        {short || '(empty)'}{attachmentSuffix}
+                      </button>
+                      <button
+                        type="button"
+                        className="av-hover-control"
+                        onClick={() => removeQueuedSend(entry.id)}
+                        title="Remove from queue"
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          color: 'var(--text-3)',
+                          cursor: 'pointer',
+                          padding: '0 2px',
+                          fontSize: 12,
+                          lineHeight: 1,
+                        }}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  )
+                })}
+              </div>
+            )}
+            <div className="av-web-composer-input-row" style={{ position: 'relative' }}>
+              {mentionQuery && mentionResults.length > 0 && (
+                <div style={composerPopoverStyle}>
+                  <div style={{ ...composerPopoverHintStyle, color: `var(${composerConfig.cssAccentVar})` }}>
+                    {composerConfig.label} {activeProvider === 'opencode' ? 'files/agents' : 'files'} · ↑↓ select · ⏎ insert · esc cancel
+                  </div>
+                  {mentionResults.map((entry, index) => {
+                    const active = index === mentionActiveIndex
+                    const label = entry.kind === 'agent' ? `@${entry.name}` : entry.basename
+                    const detail = entry.kind === 'agent'
+                      ? [entry.mode, entry.description].filter(Boolean).join(' · ')
+                      : entry.path
+                    return (
+                      <button
+                        key={entry.kind === 'agent' ? `agent:${entry.name}` : `file:${entry.path}`}
+                        type="button"
+                        className="av-hover-control"
+                        ref={(node) => { mentionItemRefs.current[index] = node }}
+                        onMouseDown={(event) => {
+                          event.preventDefault()
+                          insertMention(entry)
+                        }}
+                        onMouseEnter={() => setMentionActiveIndex(index)}
+                        style={{
+                          ...composerPopoverItemStyle,
+                          background: active ? `rgba(${composerConfig.cssAccentRgb},0.18)` : 'transparent',
+                          color: active ? `var(${composerConfig.cssAccentVar})` : 'var(--text-2, var(--text))',
+                        }}
+                      >
+                        <span style={{ fontWeight: active ? 600 : 400 }}>{label}</span>
+                        <span style={{ marginLeft: 8, color: 'var(--text-3)', fontSize: 10 }}>{detail}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+              {slashOpen && slashCommands.length > 0 && !mentionQuery && (
+                <div style={composerPopoverStyle}>
+                  <div style={{ ...composerPopoverHintStyle, color: `var(${composerConfig.cssAccentVar})` }}>
+                    {composerConfig.label} commands · ↑↓ select · tab insert · esc cancel
+                  </div>
+                  {slashCommands.map((entry, index) => {
+                    const active = index === slashActiveIndex
+                    return (
+                      <button
+                        key={entry.command}
+                        type="button"
+                        className="av-hover-control"
+                        ref={(node) => { slashItemRefs.current[index] = node }}
+                        onMouseDown={(event) => {
+                          event.preventDefault()
+                          insertSlashCommand(entry.command)
+                        }}
+                        onMouseEnter={() => setSlashActiveIndex(index)}
+                        style={{
+                          ...composerPopoverItemStyle,
+                          background: active ? `rgba(${composerConfig.cssAccentRgb},0.18)` : 'transparent',
+                          color: active ? `var(${composerConfig.cssAccentVar})` : 'var(--text-2, var(--text))',
+                        }}
+                      >
+                        <span style={{ fontWeight: active ? 600 : 400 }}>{entry.command}</span>
+                        {entry.argumentHint && (
+                          <span style={{ marginLeft: 6, color: 'var(--text-3)', fontSize: 10, fontStyle: 'italic', opacity: 0.85 }}>
+                            {entry.argumentHint}
+                          </span>
+                        )}
+                        <span style={{ marginLeft: 8, color: 'var(--text-3)', fontSize: 10 }}>{entry.description}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+              <Textarea
+                className="av-web-composer-textarea"
+                ref={textareaRef}
+                value={inputText}
+                onFocus={prewarmComposer}
+                onChange={e => {
+                  const next = e.target.value
+                  setInputText(next)
+                  inputTextRef.current = next
+                  if (historyIndex !== -1 && next !== sentHistory[historyIndex]) {
+                    setHistoryIndex(-1)
+                    draftBeforeHistoryRef.current = { text: '', cursorPos: 0 }
+                  }
+                  if (sendError && !failedSend) {
+                    setSendError(null)
+                    setSendState('idle')
+                  }
+                  updateComposerHints(next, e.target.selectionStart ?? next.length)
+                }}
+                onKeyUp={(event) => updateComposerHints(event.currentTarget.value, event.currentTarget.selectionStart ?? event.currentTarget.value.length)}
+                onClick={(event) => updateComposerHints(event.currentTarget.value, event.currentTarget.selectionStart ?? event.currentTarget.value.length)}
+                onBlur={() => { setMentionQuery(null); setSlashOpen(false) }}
+                onCompositionStart={() => { isComposingRef.current = true }}
+                onCompositionEnd={() => { isComposingRef.current = false }}
+                onKeyDown={handleKeyDown}
+                onPaste={handleComposerPaste}
+                placeholder={composerPlaceholder}
+                rows={1}
+                style={{
+                  width: '100%',
+                  minHeight: 66,
+                  resize: 'none',
+                  background: 'transparent',
+                  border: `1px solid ${
+                    sendState === 'error'
+                      ? 'rgba(248,113,113,0.4)'
+                      : canUseChannelBridge && channelBridge.routeComposer
+                      ? `rgba(${composerConfig.cssAccentRgb},0.45)`
+                      : 'transparent'
+                  }`,
+                  borderRadius: 10,
+                  padding: '2px 3px 8px',
+                  fontFamily: "'IBM Plex Sans', sans-serif",
+                  fontSize: 15,
+                  color: 'var(--text)',
+                  lineHeight: 1.55,
+                  outline: 'none',
+                  overflowX: 'hidden',
+                  overflowY: 'hidden',
+                  transition: 'border-color 0.15s, opacity 0.15s',
+                }}
+              />
+              <div className="av-web-composer-actions">
+              <Button
+                type="button"
+                onClick={() => setAttachmentPanelOpen((open) => !open)}
+                variant="outline"
+                aria-label="Add attachment"
+                aria-expanded={attachmentPanelOpen}
+                title="Attach a file, folder, image, skill, or mention"
+                style={{
+                  flexShrink: 0,
+                  width: 34,
+                  height: 34,
+                  padding: 0,
+                  background: attachmentPanelOpen ? `rgba(${composerConfig.cssAccentRgb},0.18)` : 'transparent',
+                  border: `1px solid ${attachmentPanelOpen ? `rgba(${composerConfig.cssAccentRgb},0.4)` : 'transparent'}`,
+                  borderRadius: 999,
+                  color: attachmentPanelOpen ? `var(${composerConfig.cssAccentVar})` : 'var(--text-2)',
+                  cursor: 'pointer',
+                  transition: 'background 0.15s, color 0.15s, border-color 0.15s',
+                }}
+              >
+                <Paperclip size={16} />
+              </Button>
+              <Button
+                type="button"
+                data-prompt-library-trigger="true"
+                onClick={() => setPromptLibraryOpen((open) => !open)}
+                variant="outline"
+                aria-label="Prompt library"
+                title="Prompt library — saved prompts you can insert into the composer"
+                style={{
+                  flexShrink: 0,
+                  width: 34,
+                  height: 34,
+                  padding: 0,
+                  background: promptLibraryOpen ? `rgba(${composerConfig.cssAccentRgb},0.18)` : 'var(--surface-2)',
+                  border: `1px solid ${promptLibraryOpen ? `rgba(${composerConfig.cssAccentRgb},0.4)` : 'var(--border-2)'}`,
+                  borderRadius: 6,
+                  color: promptLibraryOpen ? `var(${composerConfig.cssAccentVar})` : 'var(--text-2)',
+                  cursor: 'pointer',
+                  transition: 'background 0.15s, color 0.15s, border-color 0.15s',
+                }}
+              >
+                <BookOpen size={15} />
+              </Button>
+              {promptLibraryOpen && (
+                <PromptLibrary
+                  accent={{ cssVar: composerConfig.cssAccentVar, cssRgb: composerConfig.cssAccentRgb, label: composerConfig.label }}
+                  activeProvider={session?.provider}
+                  onInsert={insertPromptText}
+                  onClose={() => setPromptLibraryOpen(false)}
+                />
+              )}
+              {canUseChannelBridge ? (
+                <Button
+                  type="button"
+                  data-channel-bridge-trigger="true"
+                  onClick={() => setChannelBridgeOpen((open) => !open)}
+                  variant="outline"
+                  aria-label="Live CLI bridge"
+                  aria-pressed={channelBridge.routeComposer}
+                  title={channelBridge.routeComposer
+                    ? 'Live CLI bridge — composer is routing to the live `claude` CLI session (click to open)'
+                    : 'Live CLI bridge — push messages into a `claude` CLI session running alongside agentViewer'}
+                  style={{
+                    position: 'relative',
+                    flexShrink: 0,
+                    width: 34,
+                    height: 34,
+                    padding: 0,
+                    background: channelBridgeOpen || channelBridge.routeComposer ? `rgba(${composerConfig.cssAccentRgb},0.18)` : 'var(--surface-2)',
+                    border: `1px solid ${channelBridgeOpen || channelBridge.routeComposer ? `rgba(${composerConfig.cssAccentRgb},0.4)` : 'var(--border-2)'}`,
+                    borderRadius: 6,
+                    color: channelBridgeOpen || channelBridge.routeComposer ? `var(${composerConfig.cssAccentVar})` : 'var(--text-2)',
+                    cursor: 'pointer',
+                    transition: 'background 0.15s, color 0.15s, border-color 0.15s',
+                  }}
+                >
+                  <Radio size={15} />
+                  {channelBridge.unread > 0 && !channelBridgeOpen && (
+                    <span
+                      aria-hidden
+                      style={{
+                        position: 'absolute',
+                        top: 3,
+                        right: 3,
+                        minWidth: 13,
+                        height: 13,
+                        padding: '0 3px',
+                        borderRadius: 999,
+                        background: `var(${composerConfig.cssAccentVar})`,
+                        color: 'var(--surface)',
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 10,
+                        fontWeight: 700,
+                        lineHeight: '13px',
+                        textAlign: 'center',
+                      }}
+                    >
+                      {channelBridge.unread > 9 ? '9+' : channelBridge.unread}
+                    </span>
+                  )}
+                </Button>
+              ) : null}
+              {canUseChannelBridge && channelBridgeOpen && (
+                <ChannelBridgePanel
+                  accent={{ cssVar: composerConfig.cssAccentVar, cssRgb: composerConfig.cssAccentRgb, label: composerConfig.label }}
+                  bridge={channelBridge}
+                  onClose={() => setChannelBridgeOpen(false)}
+                />
+              )}
+              {canUseIdeBridge ? (
+                <Button
+                  type="button"
+                  data-ide-bridge-trigger="true"
+                  onClick={() => setIdeBridgeOpen((open) => !open)}
+                  variant="outline"
+                  aria-label="IDE bridge"
+                  aria-pressed={ideBridge.routeComposer}
+                  title={ideBridge.routeComposer
+                    ? 'IDE bridge — composer is pushing @mentions to the connected `claude` session (click to open)'
+                    : 'IDE bridge — host a Claude Code IDE endpoint a `claude` CLI session connects to'}
+                  style={{
+                    position: 'relative',
+                    flexShrink: 0,
+                    width: 34,
+                    height: 34,
+                    padding: 0,
+                    background: ideBridgeOpen || ideBridge.routeComposer ? `rgba(${composerConfig.cssAccentRgb},0.18)` : 'var(--surface-2)',
+                    border: `1px solid ${ideBridgeOpen || ideBridge.routeComposer ? `rgba(${composerConfig.cssAccentRgb},0.4)` : 'var(--border-2)'}`,
+                    borderRadius: 6,
+                    color: ideBridgeOpen || ideBridge.routeComposer ? `var(${composerConfig.cssAccentVar})` : 'var(--text-2)',
+                    cursor: 'pointer',
+                    transition: 'background 0.15s, color 0.15s, border-color 0.15s',
+                  }}
+                >
+                  <Plug size={15} />
+                  {ideBridge.unread > 0 && !ideBridgeOpen && (
+                    <span
+                      aria-hidden
+                      style={{
+                        position: 'absolute',
+                        top: 3,
+                        right: 3,
+                        minWidth: 13,
+                        height: 13,
+                        padding: '0 3px',
+                        borderRadius: 999,
+                        background: `var(${composerConfig.cssAccentVar})`,
+                        color: 'var(--surface)',
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 10,
+                        fontWeight: 700,
+                        lineHeight: '13px',
+                        textAlign: 'center',
+                      }}
+                    >
+                      {ideBridge.unread > 9 ? '9+' : ideBridge.unread}
+                    </span>
+                  )}
+                </Button>
+              ) : null}
+              {canUseIdeBridge && ideBridgeOpen && (
+                <IdeBridgePanel
+                  accent={{ cssVar: composerConfig.cssAccentVar, cssRgb: composerConfig.cssAccentRgb, label: composerConfig.label }}
+                  bridge={ideBridge}
+                  onClose={() => setIdeBridgeOpen(false)}
+                  onSendComment={handleDiffCommentToComposer}
+                />
+              )}
+              <ComposerContextUsageRing usage={contextUsage} />
+              {sendState === 'sending' || reattachedRunning ? (
+                <div style={{ flexShrink: 0, display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <Button
+                    className="av-web-composer-send"
+                    type="button"
+                    onClick={() => { void sendMessage() }}
+                    disabled={!canSubmitMessage}
+                    variant="outline"
+                    aria-label="Queue message after current turn"
+                    title="Queue message after current turn"
+                    style={{
+                      width: 34,
+                      height: 34,
+                      padding: 0,
+                      background: canSubmitMessage ? `var(${composerConfig.cssAccentVar})` : `rgba(${composerConfig.cssAccentRgb},0.18)`,
+                      border: `1px solid rgba(${composerConfig.cssAccentRgb},${canSubmitMessage ? '0.75' : '0.3'})`,
+                      borderRadius: 999,
+                      color: `var(${composerConfig.cssAccentVar})`,
+                      fontFamily: "'Oxanium', monospace",
+                      fontSize: 10,
+                      fontWeight: 600,
+                      letterSpacing: '0.1em',
+                      cursor: !canSubmitMessage ? 'not-allowed' : 'pointer',
+                      transition: 'background 0.15s, color 0.15s',
+                      whiteSpace: 'nowrap',
+                      opacity: !canSubmitMessage ? 0.55 : 1,
+                    }}
+                  >
+                    <ArrowUp data-icon="inline-start" />
+                  </Button>
+                  {session?.provider === 'claude' && activeToolCount > 0 ? (
+                    <Button
+                      type="button"
+                      onClick={() => { void backgroundClaudeTasks() }}
+                      disabled={backgroundingTasks}
+                      variant="outline"
+                      aria-label="Move Claude task to background"
+                      title="Move Claude task to background"
+                      style={{
+                        width: 34,
+                        height: 34,
+                        padding: 0,
+                        background: 'rgba(56,189,248,0.1)',
+                        border: '1px solid rgba(56,189,248,0.3)',
+                        borderRadius: 6,
+                        color: 'var(--cyan)',
+                        fontFamily: "'Oxanium', monospace",
+                        fontSize: 10,
+                        fontWeight: 600,
+                        letterSpacing: '0.1em',
+                        cursor: backgroundingTasks ? 'not-allowed' : 'pointer',
+                        transition: 'background 0.15s',
+                        whiteSpace: 'nowrap',
+                        opacity: backgroundingTasks ? 0.55 : 1,
+                      }}
+                    >
+                      <Minimize2 data-icon="inline-start" />
+                    </Button>
+                  ) : null}
+                  <Button
+                    type="button"
+                    onClick={cancelSend}
+                    variant="outline"
+                    aria-label="Cancel send"
+                    title="Cancel send"
+                    style={{
+                      width: 34,
+                      height: 34,
+                      padding: 0,
+                      background: 'rgba(248,113,113,0.1)',
+                      border: '1px solid rgba(248,113,113,0.3)',
+                      borderRadius: 6,
+                      color: 'var(--red, #f87171)',
+                      fontFamily: "'Oxanium', monospace",
+                      fontSize: 10,
+                      fontWeight: 600,
+                      letterSpacing: '0.1em',
+                      cursor: 'pointer',
+                      transition: 'background 0.15s',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    <Square data-icon="inline-start" />
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  className="av-web-composer-send"
+                  type="button"
+                  onClick={() => { void sendMessage() }}
+                  disabled={!canSubmitMessage}
+                  aria-label={awaitingPersistedTurn ? 'Queue message after current turn' : `${composerConfig.sendVerb} to ${composerConfig.label}`}
+                  title={awaitingPersistedTurn ? 'Queue message after current turn' : `${composerConfig.sendVerb} to ${composerConfig.label}`}
+                  style={{
+                    flexShrink: 0,
+                    width: 34,
+                    height: 34,
+                    padding: 0,
+                    background: canSubmitMessage ? `var(${composerConfig.cssAccentVar})` : `rgba(${composerConfig.cssAccentRgb},0.18)`,
+                    border: `1px solid rgba(${composerConfig.cssAccentRgb},${canSubmitMessage ? '0.75' : '0.3'})`,
+                    borderRadius: 999,
+                    color: canSubmitMessage ? 'var(--surface)' : `var(${composerConfig.cssAccentVar})`,
+                    fontFamily: "'Oxanium', monospace",
+                    fontSize: 10,
+                    fontWeight: 600,
+                    letterSpacing: '0.1em',
+                    cursor: !canSubmitMessage ? 'not-allowed' : 'pointer',
+                    transition: 'background 0.15s, color 0.15s',
+                    whiteSpace: 'nowrap',
+                    opacity: !canSubmitMessage ? 0.55 : 1,
+                  }}
+                >
+                  <ArrowUp data-icon="inline-start" />
+                </Button>
+              )}
+              </div>
+            </div>
+            <div
+              className="av-web-composer-status"
+              aria-live="polite"
+              style={{
+                marginTop: 6,
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 10,
+                color: composerStatusColor,
+                letterSpacing: '0.04em',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+              }}
+            >
+              <span
+                role="status"
+                data-composer-runtime-phase={composerRuntime.phase}
+                data-composer-transport-state={composerRuntime.transport}
+                data-composer-transcript-state={composerRuntime.transcript}
+                data-composer-queue-state={composerRuntime.queue}
+                title={composerStatusDetail}
+                aria-label={`${composerStatus}. ${composerStatusDetail}`}
+              >
+                <span style={{ color: `var(${composerConfig.cssAccentVar})`, marginRight: 6, fontWeight: 600 }}>{composerConfig.glyph}</span>
+                {composerStatus}
+              </span>
+              <span className="av-web-composer-meta">
+                <span className="av-web-composer-hint">
+                  {sendBusy ? composerConfig.footerHintSending : composerConfig.footerHintIdle}
+                  {!sendBusy && sentHistory.length > 0 ? ` (${sentHistory.length})` : ''}
+                </span>
+                {composerGitBranch ? (
+                  <span className="av-web-composer-git-cluster">
+                    <button
+                      type="button"
+                      className="av-web-composer-git-branch"
+                      data-branch-switcher-trigger="true"
+                      onClick={() => setBranchSwitcherOpen((current) => !current)}
+                      disabled={!composerWorkingDirectory}
+                      aria-haspopup="listbox"
+                      aria-expanded={branchSwitcherOpen}
+                      title={`Switch branch from ${composerGitBranch}`}
+                    >
+                      <GitBranch aria-hidden size={13} />
+                      <span>{composerGitBranch}</span>
+                      <ChevronDown aria-hidden size={11} />
+                    </button>
+                    <button
+                      type="button"
+                      className="av-web-composer-git-counts"
+                      onClick={onOpenGit}
+                      disabled={!onOpenGit}
+                      title={composerGitTitle ? `${composerGitTitle} · Open Git status` : 'Open Git status'}
+                      aria-label={composerGitTitle ? `Open Git status. ${composerGitTitle}` : 'Open Git status'}
+                    >
+                      {composerGitSummary?.modified ? <span className="av-web-composer-git-dirty">~{composerGitSummary.modified}</span> : null}
+                      {composerGitSummary?.untracked ? <span>?{composerGitSummary.untracked}</span> : null}
+                      {composerGitSummary?.stashes ? <span className="av-web-composer-git-dirty">*{composerGitSummary.stashes}</span> : null}
+                      {!composerGitHasDetails ? <span>{composerGitSummary ? 'clean' : 'status'}</span> : null}
+                    </button>
+                    {composerWorkingDirectory ? (
+                      <BranchSwitcher
+                        cwd={composerWorkingDirectory}
+                        currentBranch={composerGitBranch}
+                        open={branchSwitcherOpen}
+                        onOpenChange={setBranchSwitcherOpen}
+                        onSwitched={handleComposerBranchSwitched}
+                      />
+                    ) : null}
+                  </span>
+                ) : null}
+              </span>
+            </div>
+          </CardContent>
+        </Card>
+        {rewindPreview && (
+          <Card
             style={{
-              flex: 1,
-              resize: 'none',
-              background: 'var(--surface-2)',
-              border: `1px solid ${sendState === 'error' ? 'rgba(248,113,113,0.4)' : 'var(--border-2)'}`,
-              borderRadius: 6,
-              padding: '8px 12px',
-              fontFamily: "'IBM Plex Sans', sans-serif",
-              fontSize: 13,
-              color: 'var(--text)',
-              lineHeight: 1.5,
-              outline: 'none',
-              overflow: 'hidden',
-              opacity: sendState === 'sending' ? 0.5 : 1,
-              transition: 'border-color 0.15s, opacity 0.15s',
+              marginTop: 10,
+              borderRadius: 8,
+              border: '1px solid rgba(251,191,36,0.22)',
+              background: 'rgba(251,191,36,0.06)',
             }}
-          />
-          {sendState === 'sending' ? (
-            <button
-              onClick={cancelSend}
-              style={{
-                flexShrink: 0,
-                height: 36,
-                padding: '0 14px',
-                background: 'rgba(248,113,113,0.1)',
-                border: '1px solid rgba(248,113,113,0.3)',
-                borderRadius: 6,
-                color: 'var(--red, #f87171)',
-                fontFamily: "'Oxanium', monospace",
-                fontSize: 11,
-                fontWeight: 600,
-                letterSpacing: '0.1em',
-                cursor: 'pointer',
-                transition: 'background 0.15s',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              CANCEL
-            </button>
-          ) : (
-            <button
-              onClick={sendMessage}
-              disabled={!inputText.trim()}
-              style={{
-                flexShrink: 0,
-                height: 36,
-                padding: '0 14px',
-                background: 'rgba(139,128,240,0.18)',
-                border: '1px solid rgba(139,128,240,0.3)',
-                borderRadius: 6,
-                color: 'var(--violet)',
-                fontFamily: "'Oxanium', monospace",
-                fontSize: 11,
-                fontWeight: 600,
-                letterSpacing: '0.1em',
-                cursor: !inputText.trim() ? 'not-allowed' : 'pointer',
-                transition: 'background 0.15s, color 0.15s',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              SEND
-            </button>
-          )}
-        </div>
+          >
+            <CardHeader style={{ padding: '12px 14px 0' }}>
+              <CardTitle style={{ fontFamily: "'Oxanium', monospace", fontSize: 12, fontWeight: 600, color: 'var(--yellow, #fbbf24)', letterSpacing: '0.08em' }}>
+                Rewind Preview
+              </CardTitle>
+            </CardHeader>
+            <CardContent style={{ padding: '6px 14px 0' }}>
+              <div style={{ marginTop: 6, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-2)', lineHeight: 1.6 }}>
+                {rewindPreview.contentPreview || 'Selected prompt'}
+              </div>
+              <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {rewindPreview.filesChanged.length > 0 ? rewindPreview.filesChanged.map((file) => (
+                  <div
+                    key={file}
+                    style={{
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 11,
+                      color: 'var(--text-2)',
+                      padding: '5px 8px',
+                      borderRadius: 5,
+                      background: 'var(--surface-2)',
+                      border: '1px solid var(--border)',
+                    }}
+                  >
+                    {file}
+                  </div>
+                )) : (
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
+                    No tracked files would change.
+                  </div>
+                )}
+              </div>
+            </CardContent>
+            <CardFooter style={{ padding: '10px 14px 12px', display: 'flex', gap: 8 }}>
+                <Button
+                  onClick={handleApplyRewind}
+                  disabled={applyingRewind}
+                  variant="outline"
+                  size="sm"
+                  style={{
+                    height: 28,
+                    padding: '0 12px',
+                    background: 'rgba(251,191,36,0.12)',
+                    border: '1px solid rgba(251,191,36,0.28)',
+                    borderRadius: 5,
+                    color: 'var(--yellow, #fbbf24)',
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 11,
+                    letterSpacing: '0.06em',
+                    cursor: applyingRewind ? 'not-allowed' : 'pointer',
+                    opacity: applyingRewind ? 0.5 : 1,
+                  }}
+                >
+                  {applyingRewind ? 'Applying…' : 'Apply rewind'}
+                </Button>
+                <Button
+                  onClick={() => setRewindPreview(null)}
+                  variant="outline"
+                  size="sm"
+                  style={{
+                    height: 28,
+                    padding: '0 12px',
+                    background: 'var(--surface-2)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 5,
+                    color: 'var(--text-3)',
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 11,
+                    letterSpacing: '0.06em',
+                    cursor: 'pointer',
+                  }}
+                >
+                  CANCEL
+                </Button>
+            </CardFooter>
+          </Card>
+        )}
+        {rollbackPreview && (
+          <Card
+            style={{
+              marginTop: 10,
+              borderRadius: 8,
+              border: '1px solid rgba(251,191,36,0.22)',
+              background: 'rgba(251,191,36,0.06)',
+            }}
+          >
+            <CardHeader style={{ padding: '12px 14px 0' }}>
+              <CardTitle style={{ fontFamily: "'Oxanium', monospace", fontSize: 12, fontWeight: 600, color: 'var(--yellow, #fbbf24)', letterSpacing: '0.08em' }}>
+                Rollback Preview
+              </CardTitle>
+            </CardHeader>
+            <CardContent style={{ padding: '6px 14px 0' }}>
+              <div style={{ marginTop: 6, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-2)', lineHeight: 1.6 }}>
+                This removes the last {rollbackPreview.numTurns} turn{rollbackPreview.numTurns === 1 ? '' : 's'} from the Codex thread history. It does not revert files in the workspace.
+              </div>
+              <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {rollbackPreview.turnsRemoved.map((turn) => (
+                  <div
+                    key={turn.turnId}
+                    style={{
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 11,
+                      color: 'var(--text-2)',
+                      padding: '5px 8px',
+                      borderRadius: 5,
+                      background: 'var(--surface-2)',
+                      border: '1px solid var(--border)',
+                    }}
+                  >
+                    {turn.preview || turn.turnId}
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+            <CardFooter style={{ padding: '10px 14px 12px', display: 'flex', gap: 8 }}>
+                <Button
+                  onClick={handleApplyRollback}
+                  disabled={applyingRewind}
+                  variant="outline"
+                  size="sm"
+                  style={{
+                    height: 28,
+                    padding: '0 12px',
+                    background: 'rgba(251,191,36,0.12)',
+                    border: '1px solid rgba(251,191,36,0.28)',
+                    borderRadius: 5,
+                    color: 'var(--yellow, #fbbf24)',
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 11,
+                    letterSpacing: '0.06em',
+                    cursor: applyingRewind ? 'not-allowed' : 'pointer',
+                    opacity: applyingRewind ? 0.5 : 1,
+                  }}
+                >
+                  {applyingRewind ? 'APPLYING…' : 'APPLY ROLLBACK'}
+                </Button>
+                <Button
+                  onClick={() => setRollbackPreview(null)}
+                  variant="outline"
+                  size="sm"
+                  style={{
+                    height: 28,
+                    padding: '0 12px',
+                    background: 'var(--surface-2)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 5,
+                    color: 'var(--text-3)',
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 11,
+                    letterSpacing: '0.06em',
+                    cursor: 'pointer',
+                  }}
+                >
+                  CANCEL
+                </Button>
+            </CardFooter>
+          </Card>
+        )}
       </div>}
+      {analyticsOpen ? (
+        <AnalyticsPopover
+          open={analyticsOpen}
+          onClose={() => setAnalyticsOpen(false)}
+          input={{ info: sessionInfo, threadedMessages: threadedFull, rawMessages: messages }}
+        />
+      ) : null}
     </div>
   )
 }
+
+// Default comparison keeps parent (page) re-renders that don't touch any
+// transcript-related prop from re-executing this ~10k-line tree. The page
+// re-renders every 5s session list poll (openTabSessions map + selectedProject
+// rebind) and on unrelated dashboard state; without memo that re-executed the
+// entire component (threading, row layout, all hooks, the whole JSX tree) for
+// nothing. Props are referentially stable across idle polls (see
+// mergeMessages' identity bail-out in page.tsx and the threaded cache below),
+// so a stable-compare memo succeeds on every idle tick.
+const MessageView = memo(MessageViewInner)
+export default MessageView

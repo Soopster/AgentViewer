@@ -1,0 +1,153 @@
+/** @jsxImportSource @opentui/react */
+import React from 'react'
+import {
+  selectTranscriptCardVariants,
+  shouldCenterTranscriptCard,
+  terminalSelectionCopyDestination,
+  transcriptCursorScrollTargetKey,
+  type TranscriptCardSelectionVariants,
+  usesAgentCardPresentation,
+} from './App'
+import type { TuiTranscriptCard } from '../format'
+
+function makeVariants(count: number): TranscriptCardSelectionVariants[] {
+  return Array.from({ length: count }, (_, index) => ({
+    cardKey: `card-${index}`,
+    idle: <box id={`idle-${index}`} />,
+    selected: <box id={`selected-${index}`} />,
+    focused: <box id={`focused-${index}`} />,
+  }))
+}
+
+function changedReferences(before: React.ReactNode[], after: React.ReactNode[]): number {
+  let count = 0
+  for (let index = 0; index < before.length; index += 1) {
+    if (before[index] !== after[index]) count += 1
+  }
+  return count
+}
+
+// Match the production reader mount budget. Moving the cursor must preserve
+// element identity for every card except the old and new selection; changing
+// pane focus must change only the selected card. These invariants are the
+// performance win and also prevent wrappers/conditional rows from sneaking
+// back into the transcript layout.
+const variants = makeVariants(240)
+const first = selectTranscriptCardVariants(variants, 'card-100', true)
+const moved = selectTranscriptCardVariants(variants, 'card-101', true)
+const blurred = selectTranscriptCardVariants(variants, 'card-101', false)
+
+const moveChanges = changedReferences(first, moved)
+if (moveChanges !== 2) {
+  throw new Error(`Cursor movement replaced ${moveChanges} card elements; expected exactly 2`)
+}
+
+const focusChanges = changedReferences(moved, blurred)
+if (focusChanges !== 1) {
+  throw new Error(`Focus movement replaced ${focusChanges} card elements; expected exactly 1`)
+}
+
+if (moved[101] !== variants[101]?.focused || blurred[101] !== variants[101]?.selected) {
+  throw new Error('Selection variants did not preserve the original focused/selected states')
+}
+
+const splitVariants = makeVariants(80)
+const splitBefore = selectTranscriptCardVariants(splitVariants, 'card-10', true)
+const splitAfter = selectTranscriptCardVariants(splitVariants, 'card-11', true)
+const splitChanges = changedReferences(splitBefore, splitAfter)
+if (splitChanges !== 2) {
+  throw new Error(`Split cursor movement replaced ${splitChanges} card elements; expected exactly 2`)
+}
+
+const standaloneToolCard = {
+  key: 'tool:one',
+  category: 'technical',
+} as TuiTranscriptCard
+const standaloneDiffCard = {
+  key: 'diff:one',
+  category: 'diff',
+} as TuiTranscriptCard
+const groupedToolCard = {
+  key: 'agents-tools:tool:one:tool:two:2',
+  category: 'technical',
+} as TuiTranscriptCard
+const conversationCard = {
+  key: 'assistant:one',
+  category: 'conversation',
+} as TuiTranscriptCard
+
+if (!usesAgentCardPresentation(standaloneToolCard, 'agents')) {
+  throw new Error('Agents view did not use the grouped presentation for a single tool call')
+}
+if (!usesAgentCardPresentation(standaloneDiffCard, 'agents')) {
+  throw new Error('Agents view did not use the grouped presentation for a single file change')
+}
+if (!usesAgentCardPresentation(groupedToolCard, 'agents')) {
+  throw new Error('Agents view lost the grouped presentation for a multi-tool group')
+}
+if (usesAgentCardPresentation(standaloneToolCard, 'conversation')) {
+  throw new Error('Conversation view incorrectly adopted the Agents tool presentation')
+}
+if (!usesAgentCardPresentation(standaloneToolCard, 'stream')) {
+  throw new Error('Stream view lost its operational tool presentation')
+}
+if (usesAgentCardPresentation(conversationCard, 'stream')) {
+  throw new Error('Stream view incorrectly treated prose as an operational tool card')
+}
+if (!shouldCenterTranscriptCard(standaloneDiffCard, 'centered', true)) {
+  throw new Error('A single Agents file change did not match the centered multi-tool width')
+}
+if (shouldCenterTranscriptCard(standaloneDiffCard, 'centered', false)) {
+  throw new Error('Native diff review unexpectedly lost its full-width layout')
+}
+if (shouldCenterTranscriptCard(groupedToolCard, 'full', true)) {
+  throw new Error('Wide Agents view unexpectedly centered a tool group')
+}
+
+if (transcriptCursorScrollTargetKey('group:one', 'tool:two', true) !== 'tool:two') {
+  throw new Error('Nested tool navigation did not override tail-follow with the selected child target')
+}
+if (transcriptCursorScrollTargetKey('group:one', 'tool:three', false) !== 'tool:three') {
+  throw new Error('Detached nested tool navigation did not select the child scroll target')
+}
+if (transcriptCursorScrollTargetKey('card:one', null, false) !== 'card:one') {
+  throw new Error('Detached transcript navigation lost the outer card scroll target')
+}
+if (transcriptCursorScrollTargetKey('card:one', null, true) !== null) {
+  throw new Error('Ordinary tail-follow unexpectedly requested an outer card reveal')
+}
+
+if (terminalSelectionCopyDestination({
+  isDragging: true,
+  nativeOscEnabled: false,
+  osc52Supported: false,
+  windowsClipboard: true,
+}) !== 'none') {
+  throw new Error('Windows transcript selection tried to copy an intermediate drag range')
+}
+if (terminalSelectionCopyDestination({
+  isDragging: false,
+  nativeOscEnabled: false,
+  osc52Supported: false,
+  windowsClipboard: true,
+}) !== 'host') {
+  throw new Error('Windows transcript selection did not fall back to the host clipboard after mouse-up')
+}
+if (terminalSelectionCopyDestination({
+  isDragging: false,
+  nativeOscEnabled: true,
+  osc52Supported: true,
+  windowsClipboard: false,
+}) !== 'osc52') {
+  throw new Error('Non-Windows transcript selection lost its OSC 52 clipboard path')
+}
+if (terminalSelectionCopyDestination({
+  isDragging: false,
+  nativeOscEnabled: true,
+  osc52Supported: false,
+  windowsClipboard: true,
+}) !== 'host') {
+  throw new Error('WSL transcript selection did not use the Windows clipboard bridge when OSC 52 is unavailable')
+}
+
+console.log('Transcript selection identity, consistent Agents tool rendering, and nested reveal smoke passed')

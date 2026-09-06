@@ -1,0 +1,30 @@
+{
+  "expectations": [
+    {
+      "text": "Correctly identifies judgment-review as an intentional gate, not a bug, no bypass",
+      "passed": true,
+      "evidence": "Both explain it as the documented post-mechanical judgment-review gate and explicitly say not to bypass it."
+    },
+    {
+      "text": "Correctly explains coord_wait task-handle absence as client-capability-gated, not a Copilot bug",
+      "passed": true,
+      "evidence": "Both attribute it to the io.modelcontextprotocol/tasks client declaration, unrelated to provider."
+    },
+    {
+      "text": "Recommends coord_publish_finding for genuine client discrepancies",
+      "passed": true,
+      "evidence": "Both mention coord_publish_finding as the right channel if something is a genuine client gap."
+    },
+    {
+      "text": "Grounded in the skill's actual documented content, no invention",
+      "passed": true,
+      "evidence": "Both responses quote/paraphrase specific skill language rather than guessing."
+    }
+  ],
+  "summary": {
+    "passed": 4,
+    "failed": 0,
+    "total": 4,
+    "pass_rate": 1.0
+  }
+}

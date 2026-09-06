@@ -1,0 +1,1359 @@
+#!/usr/bin/env node
+
+import { spawn, spawnSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { appendFile, chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import {
+  coordinatorStateRoot,
+  workerLogPath,
+  workerProcessMarker,
+  writeWorkerRecord,
+} from './agent-viewer-coord-state.mjs'
+import {
+  CoordinatorAhpClient,
+  coordinatorTransport,
+} from './agent-viewer-ahp-client.mjs'
+import {
+  ACP_TRANSPORT_PROVIDERS,
+  resolveAcpAgentCommand,
+  runAcpProviderTick,
+} from './agent-viewer-acp-client.mjs'
+
+const ahpClients = new Map()
+const shutdownController = new AbortController()
+const PROVIDER_STOP_GRACE_MS = Math.max(100, Number(process.env.AGENT_VIEWER_COORD_PROVIDER_STOP_GRACE_MS) || 2_000)
+const PROVIDER_TURN_TIMEOUT_MS = Math.max(100, Number(process.env.AGENT_VIEWER_COORD_PROVIDER_TURN_TIMEOUT_MS) || 30 * 60_000)
+const PROVIDER_INACTIVITY_TIMEOUT_MS = Math.max(100, Number(process.env.AGENT_VIEWER_COORD_PROVIDER_INACTIVITY_TIMEOUT_MS) || 10 * 60_000)
+const RUN_CHECK_INTERVAL_MS = Math.max(100, Number(process.env.AGENT_VIEWER_COORD_RUN_CHECK_INTERVAL_MS) || 5_000)
+const PROVIDER_FRAME_MAX_BYTES = Math.max(1_024, Number(process.env.AGENT_VIEWER_COORD_PROVIDER_FRAME_MAX_BYTES) || 1024 * 1024)
+const WORKER_LOG_MAX_BYTES = Math.max(4_096, Number(process.env.AGENT_VIEWER_COORD_WORKER_LOG_MAX_BYTES) || 10 * 1024 * 1024)
+let logDrainPromise = null
+let logPendingChunks = []
+let logPendingBytes = 0
+let logDroppedBytes = 0
+let shutdownRequested = false
+let shutdownSignal = null
+let activeProviderChild = null
+let activeProviderKillTimer = null
+let resolveShutdown
+const shutdownRequestedPromise = new Promise((resolve) => { resolveShutdown = resolve })
+
+function closeAhpClients() {
+  for (const client of ahpClients.values()) client.close()
+  ahpClients.clear()
+}
+
+function supervisorStoppedError() {
+  const error = new Error(`Coordinator worker stopping${shutdownSignal ? ` after ${shutdownSignal}` : ''}`)
+  error.code = 'COORDINATOR_WORKER_STOPPING'
+  return error
+}
+
+function providerChildRunning(child) {
+  return child?.exitCode === null && child?.signalCode === null
+}
+
+function signalProviderChild(child, signal) {
+  if (!providerChildRunning(child)) return
+  let signaled = false
+  if (process.platform !== 'win32' && Number.isInteger(child.pid)) {
+    try {
+      process.kill(-child.pid, signal)
+      signaled = true
+    } catch { /* process group may already be gone */ }
+  }
+  if (!signaled) {
+    try { child.kill(signal) } catch { /* child may have exited between checks */ }
+  }
+}
+
+function clearProviderChild(child) {
+  if (activeProviderChild !== child) return
+  activeProviderChild = null
+  if (activeProviderKillTimer) clearTimeout(activeProviderKillTimer)
+  activeProviderKillTimer = null
+}
+
+function requestShutdown(reason, providerSignal = 'SIGTERM') {
+  if (shutdownRequested) return
+  shutdownRequested = true
+  shutdownSignal = reason
+  shutdownController.abort(supervisorStoppedError())
+  closeAhpClients()
+  if (providerChildRunning(activeProviderChild)) {
+    const child = activeProviderChild
+    signalProviderChild(child, providerSignal)
+    activeProviderKillTimer = setTimeout(() => {
+      if (activeProviderChild === child && providerChildRunning(child)) signalProviderChild(child, 'SIGKILL')
+    }, PROVIDER_STOP_GRACE_MS)
+    activeProviderKillTimer.unref?.()
+  }
+  resolveShutdown?.()
+}
+
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => requestShutdown(signal, signal))
+}
+
+function usage(message) {
+  if (message) console.error(message)
+  console.log(`Usage:
+  agent-viewer coord worker --start <goal> --name <name> [--provider codex|claude|opencode|copilot|pi]
+  agent-viewer coord worker --join <run-id|latest> --name <name> [--provider codex|claude|opencode|copilot|pi]
+  agent-viewer coord worker --identity <file> [--provider codex|claude|opencode|copilot|pi]
+
+Options:
+  --attach <url>       Agent Viewer web daemon (default http://127.0.0.1:3000)
+  --cwd <path>         Source checkout (default current directory)
+  --shared             Join in the current checkout instead of an isolated worktree
+  --once               Run one CLI tick and exit
+  --identity <file>    Durable 0600 participant and provider-session state
+  --model <id>         Provider model override (e.g. sonnet, gpt-5.2-codex, openai-codex/gpt-5.2-codex)
+  --transport <cli|acp> Provider transport (default cli). acp drives claude-agent-acp/codex-acp
+                       over ACP instead of the raw CLI; only supported for --provider claude or codex.
+  --playbook <name>    With --start: seed the board from a saved playbook
+  --args <value>       With --playbook: args interpolated into task text (JSON or string)
+  --max-agents <n>     With --start: participant limit from 2 to 16 (default 6 or playbook value)
+  --gate-command <cmd> With --start: command every task must pass before completion
+  --autonomy <level>   With --start: low, medium, or high (default medium)
+  --acceptance <json>  With --start: structured acceptance contract JSON
+  --token-budget <n>  With --start: maximum aggregate reported tokens
+  --duration-budget <minutes>
+                       With --start: maximum run duration in minutes
+  --require-review     With --start: require judgment review before synthesis
+  --require-plan-approval
+                       With --start: require lead approval before teammate edits
+
+Lifecycle environment (milliseconds):
+  AGENT_VIEWER_COORD_PROVIDER_TURN_TIMEOUT_MS        Absolute provider-turn limit (default 1800000)
+  AGENT_VIEWER_COORD_PROVIDER_INACTIVITY_TIMEOUT_MS  No-output limit (default 600000)
+  AGENT_VIEWER_COORD_PROVIDER_STOP_GRACE_MS          Grace before SIGKILL (default 2000)
+  AGENT_VIEWER_COORD_RUN_CHECK_INTERVAL_MS           Terminal-run poll interval (default 5000)
+`)
+  process.exit(message ? 1 : 0)
+}
+
+function parseArgs(args) {
+  const options = { provider: 'codex', providerExplicit: false, transport: 'cli', transportExplicit: false, cwd: process.cwd(), shared: false, once: false }
+  const booleanOptions = new Map([
+    ['--shared', 'shared'],
+    ['--once', 'once'],
+    ['--require-review', 'requireReview'],
+    ['--require-plan-approval', 'requirePlanApproval'],
+  ])
+  const valueOptions = new Map([
+    ['--attach', 'attach'],
+    ['--cwd', 'cwd'],
+    ['--identity', 'identity'],
+    ['--name', 'name'],
+    ['--start', 'start'],
+    ['--join', 'join'],
+    ['--provider', 'provider'],
+    ['--model', 'model'],
+    ['--transport', 'transport'],
+    ['--playbook', 'playbook'],
+    ['--args', 'args'],
+    ['--max-agents', 'maxAgents'],
+    ['--gate-command', 'gateCommand'],
+    ['--autonomy', 'autonomy'],
+    ['--acceptance', 'acceptance'],
+    ['--token-budget', 'tokenBudget'],
+    ['--duration-budget', 'durationBudget'],
+  ])
+  for (let index = 0; index < args.length; index += 1) {
+    const key = args[index]
+    if (key === '--help' || key === '-h') {
+      options.help = true
+      continue
+    }
+    const equals = key?.indexOf('=') ?? -1
+    const optionKey = equals > 0 ? key.slice(0, equals) : key
+    const booleanName = booleanOptions.get(optionKey)
+    if (booleanName) {
+      if (equals > 0) throw new Error(`${optionKey} does not take a value`)
+      options[booleanName] = true
+      continue
+    }
+    const optionName = valueOptions.get(optionKey)
+    if (!optionName) throw new Error(`Unknown argument: ${key}`)
+    const value = equals > 0 ? key.slice(equals + 1) : args[index + 1]
+    if (!value || (equals < 0 && value.startsWith('--'))) throw new Error(`${optionKey} requires a value`)
+    options[optionName] = value
+    if (optionName === 'provider') options.providerExplicit = true
+    if (optionName === 'transport') options.transportExplicit = true
+    if (equals < 0) index += 1
+  }
+  return options
+}
+
+function normalizeUrl(value) {
+  if (/^\d+$/.test(value)) return `http://127.0.0.1:${value}`
+  return /^https?:\/\//.test(value) ? value.replace(/\/+$/, '') : `http://${value.replace(/\/+$/, '')}`
+}
+
+async function api(baseUrl, action, body, timeoutMs = 65_000, allowDuringShutdown = false) {
+  if (shutdownRequested && !allowDuringShutdown) throw supervisorStoppedError()
+  if (coordinatorTransport() === 'ahp') {
+    let client = ahpClients.get(baseUrl)
+    if (!client) {
+      client = new CoordinatorAhpClient({
+        attachUrl: baseUrl,
+        title: 'Agent Viewer Coordinator worker',
+      })
+      ahpClients.set(baseUrl, client)
+    }
+    return client.request(action, body, timeoutMs, allowDuringShutdown ? undefined : shutdownController.signal)
+  }
+  const response = await fetch(`${baseUrl}/api/agent-protocol/external`, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, ...body }),
+    signal: allowDuringShutdown
+      ? AbortSignal.timeout(timeoutMs)
+      : AbortSignal.any([AbortSignal.timeout(timeoutMs), shutdownController.signal]),
+  })
+  const payload = await response.json().catch(() => null)
+  if (!response.ok) throw new Error(payload?.error || `${response.status} ${response.statusText}`)
+  return payload
+}
+
+function run(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, options)
+    child.on('error', reject)
+    child.on('exit', (code, signal) => code === 0 ? resolve() : reject(new Error(`${command} exited ${code ?? signal}`)))
+  })
+}
+
+async function isolatedWorktree(cwd, runId, name) {
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'worker'
+  const target = path.join(cwd, '.agent-viewer-data', 'coord-worktrees', runId, slug)
+  const branch = `agent-viewer/coord/${runId.slice(0, 8)}/${slug}`
+  await mkdir(path.dirname(target), { recursive: true })
+  await run('git', ['worktree', 'add', '-b', branch, target, 'HEAD'], { cwd, stdio: 'inherit' })
+  return { target, branch }
+}
+
+async function rollbackIsolatedWorktree(cwd, checkout) {
+  if (!checkout) return
+  await run('git', ['worktree', 'remove', '--force', checkout.target], { cwd, stdio: 'ignore' }).catch(() => {})
+  await run('git', ['branch', '-D', checkout.branch], { cwd, stdio: 'ignore' }).catch(() => {})
+  await rm(checkout.target, { recursive: true, force: true }).catch(() => {})
+}
+
+async function saveState(file, state) {
+  await mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 })
+    await rename(temporary, file)
+    await chmod(file, 0o600)
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => {})
+    throw error
+  }
+}
+
+function identityFileFor(state) {
+  return path.join(coordinatorStateRoot(), state.runId, `${state.agentId}.json`)
+}
+
+async function workerLog(state, message) {
+  const line = `[${new Date().toISOString()}] ${message}\n`
+  try {
+    await appendWorkerLog(state, line)
+  } catch { /* logging must never stop coordination */ }
+}
+
+function appendWorkerLog(state, chunk) {
+  const requested = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))
+  const data = requested.length > WORKER_LOG_MAX_BYTES
+    ? requested.subarray(requested.length - WORKER_LOG_MAX_BYTES)
+    : requested
+  logPendingChunks.push(data)
+  logPendingBytes += data.length
+  // Provider pipes can outpace a slow or full filesystem. Keep the newest
+  // bounded window instead of retaining an unbounded promise/Buffer chain.
+  while (logPendingBytes > WORKER_LOG_MAX_BYTES && logPendingChunks.length > 1) {
+    const dropped = logPendingChunks.shift()
+    logPendingBytes -= dropped.length
+    logDroppedBytes += dropped.length
+  }
+  if (logDrainPromise) return logDrainPromise
+  logDrainPromise = (async () => {
+    await mkdir(path.dirname(state.logFile), { recursive: true, mode: 0o700 })
+    while (logPendingChunks.length > 0) {
+      const pendingChunks = logPendingChunks
+      const droppedBytes = logDroppedBytes
+      logPendingChunks = []
+      logPendingBytes = 0
+      logDroppedBytes = 0
+      const droppedNotice = droppedBytes > 0
+        ? Buffer.from(`[provider log truncated: dropped ${droppedBytes} queued bytes]\n`)
+        : Buffer.alloc(0)
+      const requestedBatch = Buffer.concat([droppedNotice, ...pendingChunks])
+      const batch = requestedBatch.length > WORKER_LOG_MAX_BYTES
+        ? requestedBatch.subarray(requestedBatch.length - WORKER_LOG_MAX_BYTES)
+        : requestedBatch
+      const currentSize = await stat(state.logFile).then((entry) => entry.size).catch(() => 0)
+      if (currentSize > 0 && currentSize + batch.length > WORKER_LOG_MAX_BYTES) {
+        const rotated = `${state.logFile}.1`
+        await rm(rotated, { force: true })
+        await rename(state.logFile, rotated)
+      }
+      await appendFile(state.logFile, batch, { mode: 0o600 })
+      await chmod(state.logFile, 0o600)
+    }
+  })().finally(() => { logDrainPromise = null })
+  return logDrainPromise
+}
+
+/** Shared by both transports' cancel-turn handling — see cancelExternalProtocolTurn. */
+function makeTurnCancelledError(command, providerOutput) {
+  const error = new Error(`${command} turn cancelled by the Coordinator lead (coord_cancel_turn) — task ownership is unaffected, retrying with a fresh turn`)
+  error.code = 'COORDINATOR_TURN_CANCELLED'
+  error.providerOutput = providerOutput
+  return error
+}
+
+function classifyProviderFailure(error) {
+  const text = `${error?.message || error}\n${error?.providerOutput || ''}`.toLowerCase()
+  if (error?.code === 'COORDINATOR_TURN_CANCELLED') return 'turn_cancelled'
+  if (error?.code === 'COORDINATOR_PROVIDER_TURN_TIMEOUT') return 'provider_timeout'
+  if (error?.code === 'ENOENT' || /enoent|command not found|not recognized as/.test(text)) return 'cli_missing'
+  if (/rate.?limit|quota|usage limit|credit balance|insufficient credits|billing|too many requests|429/.test(text)) return 'rate_limited'
+  if (/unauthori[sz]ed|authentication|not logged in|invalid api key|401|403/.test(text)) return 'authentication_failed'
+  if (/context (window|length)|maximum context|context.*exceed|too many tokens/.test(text)) return 'context_exhausted'
+  if (/approval|permission.*denied|not approved|requires approval/.test(text)) return 'approval_blocked'
+  if (/econnreset|econnrefused|timed? out|temporar|network|socket|transport/.test(text)) return 'transient_transport'
+  return 'provider_failure'
+}
+
+function providerEventFailure(event) {
+  if (!event || typeof event !== 'object') return null
+  const failed = event.type === 'error'
+    || event.type === 'turn.failed'
+    || event.type === 'turn.error'
+    || event.type === 'agent.error'
+    || event.is_error === true
+    || event.isError === true
+    || event.stopReason === 'error'
+    || event.message?.stopReason === 'error'
+  if (!failed) return null
+  const detail = event.errorMessage
+    || event.message?.errorMessage
+    || event.error?.message
+    || event.message?.error?.message
+    || event.data?.error?.message
+  return typeof detail === 'string' && detail.trim()
+    ? detail.trim()
+    : `provider emitted ${event.type || 'an error event'}`
+}
+
+function isTerminalCoordinatorError(error) {
+  return /Coordinator (run|participant) not found/i.test(String(error?.message || error))
+}
+
+function workerNegotiation() {
+  return {
+    client: { name: 'agent-viewer-coord-worker', version: '1.0.0', protocolVersion: 2 },
+    capabilities: {
+      unattended: true,
+      sessionResume: true,
+      filesystemWrite: true,
+      git: true,
+      maxParallelTasks: 1,
+      tools: ['coord_*'],
+    },
+  }
+}
+
+function mcpConfig(state, baseUrl) {
+  const entry = fileURLToPath(new URL('./agent-viewer.mjs', import.meta.url))
+  return {
+    command: process.execPath,
+    args: [entry, 'mcp', '--attach', baseUrl, '--identity', state.identityFile],
+  }
+}
+
+function gitCommonDir(cwd) {
+  if (!cwd) return null
+  const result = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
+    cwd,
+    encoding: 'utf8',
+    timeout: 5_000,
+  })
+  if (result.status !== 0) return null
+  const resolved = String(result.stdout || '').trim()
+  return resolved ? path.resolve(cwd, resolved) : null
+}
+
+function tickPrompt(state, actionable) {
+  const skillPath = path.join(state.cwd, '.agents', 'skills', 'coordinate-agents', 'SKILL.md')
+  const checkoutGuidance = state.checkoutMode === 'isolated'
+    ? `You are working in an isolated git worktree at ${state.cwd}; stay within granted paths and leave integration to the lead.`
+    : `You are working in the shared checkout at ${state.cwd}; keep writes inside granted non-overlapping paths, preserve existing changes, and do not reset or clean files owned by another participant.`
+  const roleGuidance = state.role === 'lead'
+    ? 'You are the lead: supervise and delegate before implementing. Never claim a teammate lane merely because it is claimable; claim only an explicit lead integration/review task, or perform board work yourself when no teammate is available.'
+    : 'You are a teammate: answer reply-required mail first, then continue your owned task or claim one unblocked teammate lane. Complete, release, or hand off owned work before going idle.'
+  return [
+    `Continue Coordinator run ${state.runId} as ${state.name || state.agentId} (${state.role || 'participant'}).`,
+    'You are ALREADY bound to this run: never call coord_create_run, coord_join_run, or coord_list_runs — start with coord_status and act on its actionable digest.',
+    `Read and follow the coordinate-agents skill at ${skillPath} if it exists, then use the agent-viewer coord_* MCP tools now. Do not search outside this checkout for the skill; these supervisor instructions are sufficient if the file is absent.`,
+    checkoutGuidance,
+    roleGuidance,
+    'Drain the inbox, then perform every immediately actionable role-appropriate step, including implementation and verification.',
+    'Coordinate actively — teammates run in other CLIs and cannot see your terminal: answer reply_required mail first, publish reusable discoveries with coord_publish_finding, and send coord_send_message whenever your progress, blockers, or findings affect another lane.',
+    'If you are the lead, maintain an explicit status view for every teammate from coord_status: active task, working/blocked/idle state, latest update, and terminal task result. Do not interrupt healthy work; unblock, reassign, or add work when the board shows a real need.',
+    'If blocked, report blocked with coord_progress and include the exact obstacle; the Coordinator will alert the lead. Also message the teammate best placed to help, check the inbox for guidance, and report working again as soon as you can resume.',
+    'If your task work will take several steps, call coord_read_inbox again partway through rather than only at the start — a reply_required message from the lead can arrive mid-task and change your plan; you will not be woken for it until you check.',
+    'Use stable request_id values before retrying mutations. If no action is ready, return control to the supervisor; never call coord_wait, poll, or sleep inside this model turn. The supervisor receives board changes and will re-dispatch you.',
+    'If all tasks are terminal and you are lead, review every durable task result, synthesize the run, and finalize it. Never print participant credentials.',
+    ...(actionable?.replyGuardReminder ? [actionable.replyGuardReminder] : []),
+  ].join(' ')
+}
+
+async function providerTick(state, baseUrl, actionable) {
+  if (shutdownRequested) throw supervisorStoppedError()
+  const config = mcpConfig(state, baseUrl)
+  const prompt = tickPrompt(state, actionable)
+  // Baseline for the runCheckTimer's cancel-turn detection below: only a
+  // cancel_requested_at newer than this tick's own start counts — an older
+  // one belongs to a cancel this same tick already acted on (or one aimed at
+  // a now-finished prior tick) and must not retrigger.
+  const tickStartedAtIso = new Date().toISOString()
+  const previousProviderSessionId = state.providerSessionId
+  // A linked worktree's checkout lives under state.cwd, but commits also write
+  // its branch, index, and objects through the parent repository's common Git
+  // directory. Native interactive CLIs can request that path when prompted;
+  // unattended workers cannot, so grant only that repository-local metadata
+  // directory up front. Without this, valid `git add`/`git commit` calls fail
+  // at .git/worktrees/<name>/index.lock and accepted tasks remain unmergeable.
+  const isolatedGitDir = state.checkoutMode === 'isolated' ? gitCommonDir(state.cwd) : null
+  const gitDirectoryArgs = isolatedGitDir ? ['--add-dir', isolatedGitDir] : []
+  if (state.transport === 'acp') {
+    return acpProviderTick(state, baseUrl, config, prompt, isolatedGitDir ? [isolatedGitDir] : [], tickStartedAtIso)
+  }
+  let command
+  let args
+  const extraEnv = {}
+  if (state.provider === 'claude') {
+    command = process.env.CLAUDE_PATH || 'claude'
+    args = [
+      '-p', '--verbose', '--output-format', 'stream-json', '--permission-mode', 'auto',
+      // Headless ticks have no human to approve MCP calls: without this
+      // pre-allow, permission-mode auto stalls every coordinator tool call
+      // and the tick burns its whole turn asking nobody for access.
+      '--allowedTools', 'mcp__agent-viewer__*',
+      ...gitDirectoryArgs,
+      ...(state.model ? ['--model', state.model] : []),
+      '--strict-mcp-config', '--mcp-config', JSON.stringify({ mcpServers: { 'agent-viewer': config } }),
+      state.providerSessionId ? '--resume' : '--session-id', state.providerSessionId || randomUUID(),
+      prompt,
+    ]
+    state.providerSessionId ||= args[args.indexOf('--session-id') + 1]
+  } else if (state.provider === 'opencode') {
+    command = process.env.OPENCODE_PATH || 'opencode'
+    // OpenCode reads MCP servers from its config file; OPENCODE_CONFIG points
+    // at a worker-owned file so the project's opencode.json stays untouched.
+    const configFile = `${state.identityFile}.opencode.json`
+    await writeFile(configFile, JSON.stringify({
+      mcp: {
+        'agent-viewer': { type: 'local', command: [config.command, ...config.args], enabled: true },
+      },
+    }, null, 2), { mode: 0o600 })
+    extraEnv.OPENCODE_CONFIG = configFile
+    // Headless ticks cannot answer permission prompts; --auto approves
+    // anything not explicitly denied by the user's permission config.
+    args = [
+      'run', '--format', 'json', '--auto',
+      ...(state.model ? ['--model', state.model] : []),
+      ...(state.providerSessionId ? ['--session', state.providerSessionId] : []),
+      prompt,
+    ]
+  } else if (state.provider === 'copilot') {
+    command = process.env.COPILOT_CLI_PATH || process.env.COPILOT_PATH || 'copilot'
+    args = [
+      '-p', prompt,
+      // Non-interactive mode requires --allow-all-tools; worktree .git files
+      // point outside the checkout, so path verification must not prompt either.
+      '--allow-all-tools', '--allow-all-paths', '--no-ask-user', '--no-auto-update',
+      '--output-format', 'json',
+      ...(state.model ? ['--model', state.model] : []),
+      '--additional-mcp-config', JSON.stringify({
+        mcpServers: { 'agent-viewer': { type: 'local', command: config.command, args: config.args, tools: ['*'] } },
+      }),
+      ...(state.providerSessionId ? ['--resume', state.providerSessionId] : []),
+    ]
+  } else if (state.provider === 'pi') {
+    command = process.env.PI_PATH || 'pi'
+    // Pi reaches MCP through the pi-mcp-adapter extension; directTools with no
+    // prefix registers coord_* as first-class tools instead of a proxy.
+    const configFile = `${state.identityFile}.mcp.json`
+    await writeFile(configFile, JSON.stringify({
+      mcpServers: {
+        'agent-viewer': { command: config.command, args: config.args, directTools: true },
+      },
+      settings: { toolPrefix: 'none' },
+    }, null, 2), { mode: 0o600 })
+    // Pi creates the session for a supplied id, so resume needs no output parsing.
+    state.providerSessionId ||= randomUUID()
+    args = [
+      '-p', '--mode', 'json', '--mcp-config', configFile,
+      ...(state.model ? ['--model', state.model] : []),
+      '--session-id', state.providerSessionId, prompt,
+    ]
+  } else {
+    command = process.env.CODEX_PATH || 'codex'
+    const configArgs = [
+      '-c', `mcp_servers.agent-viewer.command=${JSON.stringify(config.command)}`,
+      '-c', `mcp_servers.agent-viewer.args=${JSON.stringify(config.args)}`,
+      '-c', 'mcp_servers.agent-viewer.required=true',
+      // Headless ticks cannot answer Codex's per-MCP-tool approval prompt.
+      // `approval_policy="never"` covers command approvals, while MCP servers
+      // have their own tool approval mode. Trust only this Coordinator server;
+      // all other configured MCP servers retain the user's normal policy.
+      '-c', 'mcp_servers.agent-viewer.default_tools_approval_mode="approve"',
+      '-c', 'approval_policy="never"',
+      '-c', 'sandbox_mode="workspace-write"',
+      ...gitDirectoryArgs,
+      ...(state.model ? ['-c', `model=${JSON.stringify(state.model)}`] : []),
+    ]
+    args = state.providerSessionId
+      ? ['exec', ...configArgs, 'resume', '--json', state.providerSessionId, prompt]
+      : ['exec', ...configArgs, '--json', '--sandbox', 'workspace-write', prompt]
+  }
+
+  // Claude and Pi allocate their resumable id before launch. Persist it before
+  // starting the provider so a supervisor crash during the first turn cannot
+  // orphan the native conversation.
+  if (state.providerSessionId && state.providerSessionId !== previousProviderSessionId) {
+    await saveState(state.identityFile, state)
+  }
+
+  await new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: state.cwd,
+      env: {
+        ...process.env,
+        ...extraEnv,
+        AGENT_VIEWER_ATTACH: baseUrl,
+        AGENT_VIEWER_COORD_IDENTITY_FILE: state.identityFile,
+        AGENT_VIEWER_COORD_WORKER: '1',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
+    })
+    activeProviderChild = child
+    let buffered = ''
+    let droppingOversizedFrame = false
+    let providerOutput = ''
+    let providerReportedError = null
+    let sessionStateSave = Promise.resolve()
+    let turnTimedOut = false
+    let turnCancelled = false
+    let providerTimeoutDetail = null
+    let timeoutKillTimer = null
+    let runCheckInFlight = false
+    let lastProviderActivityAt = Date.now()
+    const beginProviderTimeout = (detail) => {
+      if (turnTimedOut || turnCancelled) return
+      turnTimedOut = true
+      providerTimeoutDetail = detail
+      signalProviderChild(child, 'SIGTERM')
+      timeoutKillTimer = setTimeout(() => {
+        if (providerChildRunning(child)) signalProviderChild(child, 'SIGKILL')
+      }, PROVIDER_STOP_GRACE_MS)
+      timeoutKillTimer.unref?.()
+    }
+    // Lead-issued coord_cancel_turn (see cancelExternalProtocolTurn):
+    // interrupt this turn but leave task ownership alone — distinct from
+    // beginProviderTimeout, whose class DOES count toward the durable-failure
+    // threshold that eventually hands the task back to the board.
+    const beginCancelledTurn = () => {
+      if (turnTimedOut || turnCancelled) return
+      turnCancelled = true
+      signalProviderChild(child, 'SIGTERM')
+      timeoutKillTimer = setTimeout(() => {
+        if (providerChildRunning(child)) signalProviderChild(child, 'SIGKILL')
+      }, PROVIDER_STOP_GRACE_MS)
+      timeoutKillTimer.unref?.()
+    }
+    const turnTimeoutTimer = setTimeout(() => {
+      beginProviderTimeout(`exceeded the ${PROVIDER_TURN_TIMEOUT_MS}ms Coordinator provider-turn deadline`)
+    }, PROVIDER_TURN_TIMEOUT_MS)
+    turnTimeoutTimer.unref?.()
+    const inactivityTimer = setInterval(() => {
+      if (Date.now() - lastProviderActivityAt < PROVIDER_INACTIVITY_TIMEOUT_MS || turnTimedOut) return
+      beginProviderTimeout(`produced no output for ${PROVIDER_INACTIVITY_TIMEOUT_MS}ms`)
+    }, Math.min(5_000, Math.max(50, Math.floor(PROVIDER_INACTIVITY_TIMEOUT_MS / 2))))
+    inactivityTimer.unref?.()
+    const runCheckTimer = setInterval(async () => {
+      if (runCheckInFlight || shutdownRequested) return
+      runCheckInFlight = true
+      try {
+        const current = await api(baseUrl, 'wait', { ...state, cursor: null, timeoutMs: 0 }, 10_000)
+        if (isTerminal(current)) requestShutdown('terminal Coordinator run', 'SIGTERM')
+        else {
+          const self = current.snapshot?.agents?.find((entry) => entry.id === state.agentId)
+          if (self?.cancelRequestedAt && self.cancelRequestedAt > tickStartedAtIso) beginCancelledTurn()
+        }
+      } catch (error) {
+        if (isTerminalCoordinatorError(error)) requestShutdown('deleted Coordinator run', 'SIGTERM')
+      } finally {
+        runCheckInFlight = false
+      }
+    }, RUN_CHECK_INTERVAL_MS)
+    runCheckTimer.unref?.()
+    const clearTurnTimers = () => {
+      clearTimeout(turnTimeoutTimer)
+      clearInterval(inactivityTimer)
+      clearInterval(runCheckTimer)
+      if (timeoutKillTimer) clearTimeout(timeoutKillTimer)
+    }
+    const providerTimeoutError = () => {
+      const error = new Error(`${command} ${providerTimeoutDetail ?? 'exceeded its Coordinator provider-turn limit'}`)
+      error.code = 'COORDINATOR_PROVIDER_TURN_TIMEOUT'
+      error.providerOutput = providerOutput
+      return error
+    }
+    const turnCancelledError = () => makeTurnCancelledError(command, providerOutput)
+    child.stdout.on('data', (chunk) => {
+      lastProviderActivityAt = Date.now()
+      process.stdout.write(chunk)
+      void appendWorkerLog(state, chunk).catch(() => {})
+      providerOutput = `${providerOutput}${chunk.toString()}`.slice(-16_000)
+      buffered += chunk.toString()
+      const lines = buffered.split('\n')
+      buffered = lines.pop() || ''
+      for (const line of lines) {
+        if (droppingOversizedFrame) {
+          droppingOversizedFrame = false
+          continue
+        }
+        if (Buffer.byteLength(line) > PROVIDER_FRAME_MAX_BYTES) continue
+        try {
+          const event = JSON.parse(line)
+          providerReportedError ||= providerEventFailure(event)
+          // codex: thread_id · claude: session_id · opencode: sessionID (also
+          // nested under info/part) · copilot: sessionId
+          const sessionId = event.thread_id || event.session_id || event.sessionID || event.sessionId
+            || event.info?.sessionID || event.part?.sessionID
+          if (typeof sessionId === 'string' && sessionId && sessionId !== state.providerSessionId) {
+            state.providerSessionId = sessionId
+            // Serialize identity writes because providers can repeat the session
+            // id across several events in the same stdout burst.
+            sessionStateSave = sessionStateSave.then(() => saveState(state.identityFile, state))
+          }
+        } catch { /* provider text or partial JSON */ }
+      }
+      if (Buffer.byteLength(buffered) > PROVIDER_FRAME_MAX_BYTES) {
+        providerOutput = `${providerOutput}\n[provider frame discarded: exceeded ${PROVIDER_FRAME_MAX_BYTES} bytes]`.slice(-16_000)
+        buffered = ''
+        // Bytes through the next newline still belong to the discarded frame.
+        // Treating that tail as fresh JSON would let a hostile split frame
+        // overwrite durable provider identity.
+        droppingOversizedFrame = true
+      }
+    })
+    child.stderr.on('data', (chunk) => {
+      lastProviderActivityAt = Date.now()
+      process.stderr.write(chunk)
+      void appendWorkerLog(state, chunk).catch(() => {})
+      providerOutput = `${providerOutput}${chunk.toString()}`.slice(-16_000)
+    })
+    const heartbeat = setInterval(() => {
+      void api(baseUrl, 'progress', {
+        runId: state.runId,
+        agentId: state.agentId,
+        token: state.token,
+        status: 'heartbeat',
+        requestId: `heartbeat-${Date.now()}`,
+      }, 10_000).catch(() => {})
+    }, 45_000)
+    heartbeat.unref()
+    child.on('error', async (error) => {
+      clearInterval(heartbeat)
+      clearTurnTimers()
+      clearProviderChild(child)
+      error.providerOutput = providerOutput
+      try {
+        await sessionStateSave
+        reject(turnCancelled ? turnCancelledError() : turnTimedOut ? providerTimeoutError() : error)
+      } catch (saveError) {
+        reject(saveError)
+      }
+    })
+    child.on('exit', async (code, signal) => {
+      clearInterval(heartbeat)
+      clearTurnTimers()
+      clearProviderChild(child)
+      try {
+        await sessionStateSave
+        if (turnCancelled) reject(turnCancelledError())
+        else if (turnTimedOut) reject(providerTimeoutError())
+        else if (code === 0 && !providerReportedError) resolve()
+        else {
+          const error = new Error(providerReportedError
+            ? `${command} reported an unsuccessful provider turn: ${providerReportedError}`
+            : `${command} exited ${code ?? signal}`)
+          error.providerOutput = providerOutput
+          reject(error)
+        }
+      } catch (saveError) {
+        reject(saveError)
+      }
+    })
+  })
+}
+
+/**
+ * ACP-transport counterpart to providerTick's raw-CLI spawn body — drives
+ * claude-agent-acp/codex-acp via agent-viewer-acp-client.mjs instead of the
+ * provider's native CLI, declaring the coord_* MCP server through ACP's
+ * `session/new.mcpServers` instead of that CLI's own bespoke MCP flag. See
+ * agent-viewer-acp-client.mjs's module doc comment for the full rationale.
+ *
+ * Mirrors providerTick's timeout/heartbeat/run-check scaffold as closely as
+ * the two transports' shapes allow: turn-timeout and inactivity-timeout both
+ * abort the ACP subprocess (runAcpProviderTick kills it on abort), a
+ * heartbeat progress ping keeps the board's liveness view current, and a
+ * run-check poll shuts the worker down promptly if another participant
+ * finishes the run mid-turn. `additionalDirectories` is ACP's standard
+ * equivalent of the raw transport's `--add-dir` for isolated-worktree git
+ * access.
+ */
+async function acpProviderTick(state, baseUrl, config, prompt, additionalDirectories, tickStartedAtIso) {
+  const abortController = new AbortController()
+  const forwardShutdown = () => abortController.abort(supervisorStoppedError())
+  if (shutdownController.signal.aborted) forwardShutdown()
+  else shutdownController.signal.addEventListener('abort', forwardShutdown, { once: true })
+
+  let lastActivityAt = Date.now()
+  let turnTimedOut = false
+  let turnCancelled = false
+  let providerTimeoutDetail = null
+  const beginProviderTimeout = (detail) => {
+    if (turnTimedOut || turnCancelled) return
+    turnTimedOut = true
+    providerTimeoutDetail = detail
+    abortController.abort(new Error(detail))
+  }
+  // See providerTick's beginCancelledTurn — same lead-issued coord_cancel_turn
+  // signal, ACP transport variant. The actual thrown error is constructed in
+  // the catch block below from the turnCancelled flag (matching how
+  // turnTimedOut is handled) rather than from the abort reason, since the ACP
+  // SDK's cancellationSignal plumbing doesn't guarantee the reason object
+  // survives to the rejected/resolved promise.
+  const beginCancelledTurn = () => {
+    if (turnTimedOut || turnCancelled) return
+    turnCancelled = true
+    abortController.abort(new Error('cancelled by Coordinator lead'))
+  }
+  const turnTimeoutTimer = setTimeout(() => {
+    beginProviderTimeout(`exceeded the ${PROVIDER_TURN_TIMEOUT_MS}ms Coordinator provider-turn deadline`)
+  }, PROVIDER_TURN_TIMEOUT_MS)
+  turnTimeoutTimer.unref?.()
+  const inactivityTimer = setInterval(() => {
+    if (Date.now() - lastActivityAt < PROVIDER_INACTIVITY_TIMEOUT_MS || turnTimedOut) return
+    beginProviderTimeout(`produced no output for ${PROVIDER_INACTIVITY_TIMEOUT_MS}ms`)
+  }, Math.min(5_000, Math.max(50, Math.floor(PROVIDER_INACTIVITY_TIMEOUT_MS / 2))))
+  inactivityTimer.unref?.()
+  let runCheckInFlight = false
+  const runCheckTimer = setInterval(async () => {
+    if (runCheckInFlight || shutdownRequested) return
+    runCheckInFlight = true
+    try {
+      const current = await api(baseUrl, 'wait', { ...state, cursor: null, timeoutMs: 0 }, 10_000)
+      if (isTerminal(current)) requestShutdown('terminal Coordinator run', 'SIGTERM')
+      else {
+        const self = current.snapshot?.agents?.find((entry) => entry.id === state.agentId)
+        if (self?.cancelRequestedAt && self.cancelRequestedAt > tickStartedAtIso) beginCancelledTurn()
+      }
+    } catch (error) {
+      if (isTerminalCoordinatorError(error)) requestShutdown('deleted Coordinator run', 'SIGTERM')
+    } finally {
+      runCheckInFlight = false
+    }
+  }, RUN_CHECK_INTERVAL_MS)
+  runCheckTimer.unref?.()
+  const heartbeat = setInterval(() => {
+    void api(baseUrl, 'progress', {
+      runId: state.runId,
+      agentId: state.agentId,
+      token: state.token,
+      status: 'heartbeat',
+      requestId: `heartbeat-${Date.now()}`,
+    }, 10_000).catch(() => {})
+  }, 45_000)
+  heartbeat.unref()
+  const clearTimers = () => {
+    clearTimeout(turnTimeoutTimer)
+    clearInterval(inactivityTimer)
+    clearInterval(runCheckTimer)
+    clearInterval(heartbeat)
+    shutdownController.signal.removeEventListener('abort', forwardShutdown)
+  }
+
+  let providerOutput = ''
+  try {
+    const result = await runAcpProviderTick({
+      providerId: state.provider,
+      cwd: state.cwd,
+      prompt,
+      mcpServer: { name: 'agent-viewer', command: config.command, args: config.args },
+      env: {
+        AGENT_VIEWER_ATTACH: baseUrl,
+        AGENT_VIEWER_COORD_IDENTITY_FILE: state.identityFile,
+        AGENT_VIEWER_COORD_WORKER: '1',
+      },
+      additionalDirectories,
+      signal: abortController.signal,
+      onOutput: (chunk, stream) => {
+        lastActivityAt = Date.now()
+        process[stream].write(chunk)
+        void appendWorkerLog(state, chunk).catch(() => {})
+        providerOutput = `${providerOutput}${chunk.toString()}`.slice(-16_000)
+      },
+    })
+    if (result.sessionId && result.sessionId !== state.providerSessionId) {
+      state.providerSessionId = result.sessionId
+      await saveState(state.identityFile, state)
+    }
+    if (result.stopReason === 'refusal') {
+      const error = new Error(`${resolveAcpAgentCommand(state.provider)} refused the turn`)
+      error.providerOutput = providerOutput
+      throw error
+    }
+  } catch (error) {
+    if (turnCancelled) throw makeTurnCancelledError(resolveAcpAgentCommand(state.provider), providerOutput)
+    if (turnTimedOut) {
+      const timeoutError = new Error(`${resolveAcpAgentCommand(state.provider)} ${providerTimeoutDetail}`)
+      timeoutError.code = 'COORDINATOR_PROVIDER_TURN_TIMEOUT'
+      timeoutError.providerOutput = providerOutput
+      throw timeoutError
+    }
+    error.providerOutput ??= providerOutput
+    throw error
+  } finally {
+    clearTimers()
+  }
+}
+
+let options
+try { options = parseArgs(process.argv.slice(2)) } catch (error) { usage(error.message) }
+if (!options || options.help) usage()
+if (!['codex', 'claude', 'opencode', 'copilot', 'pi'].includes(options.provider)) usage('--provider must be codex, claude, opencode, copilot, or pi')
+if (!['cli', 'acp'].includes(options.transport)) usage('--transport must be cli or acp')
+// A fresh --start/--join with an explicit bad combination is a user mistake —
+// reject it up front. A resumed --identity worker is unattended and may not
+// have --transport re-passed at all (see the loadedIdentity branch below,
+// which only overrides state.transport when --transport was explicit this
+// invocation), so this check only fires for the combination actually given
+// on this command line, not the persisted state.
+if (options.transportExplicit && options.transport === 'acp' && !ACP_TRANSPORT_PROVIDERS.has(options.provider)) {
+  usage(`--transport acp is only supported for --provider ${[...ACP_TRANSPORT_PROVIDERS].join(' or ')}`)
+}
+if (options.maxAgents !== undefined) {
+  const maxAgents = Number(options.maxAgents)
+  if (!Number.isInteger(maxAgents) || maxAgents < 2 || maxAgents > 16) usage('--max-agents must be an integer from 2 to 16')
+  options.maxAgents = maxAgents
+}
+if (options.autonomy !== undefined && !['low', 'medium', 'high'].includes(options.autonomy)) {
+  usage('--autonomy must be low, medium, or high')
+}
+if (options.tokenBudget !== undefined) {
+  const tokenBudget = Number(options.tokenBudget)
+  if (!Number.isInteger(tokenBudget) || tokenBudget <= 0) usage('--token-budget must be a positive integer')
+  options.tokenBudget = tokenBudget
+}
+if (options.durationBudget !== undefined) {
+  const durationBudget = Number(options.durationBudget)
+  if (!Number.isFinite(durationBudget) || durationBudget <= 0) usage('--duration-budget must be a positive number of minutes')
+  options.durationBudget = durationBudget
+}
+if (options.acceptance !== undefined) {
+  try { options.acceptance = JSON.parse(options.acceptance) } catch { usage('--acceptance must be valid JSON') }
+  if (!options.acceptance || typeof options.acceptance !== 'object' || Array.isArray(options.acceptance)) usage('--acceptance must be a JSON object')
+}
+if (!options.start && (options.playbook || options.args !== undefined || options.maxAgents !== undefined || options.gateCommand || options.requirePlanApproval || options.requireReview || options.autonomy || options.acceptance || options.tokenBudget || options.durationBudget)) {
+  usage('run policy options require --start')
+}
+if (options.args !== undefined && !options.playbook) usage('--args requires --playbook')
+if (options.shared && !options.join) usage('--shared requires --join; the lead always starts in its current checkout')
+if (options.identity && !options.start && !options.join && options.name) usage('--name cannot rename a resumed --identity worker')
+
+let baseUrl = normalizeUrl(options.attach || 'http://127.0.0.1:3000')
+let state
+let loadedIdentity = false
+if (options.identity && !options.start && !options.join) {
+  loadedIdentity = true
+  state = JSON.parse(await readFile(path.resolve(options.identity), 'utf8'))
+  state.identityFile = path.resolve(options.identity)
+  if (options.providerExplicit && state.provider !== options.provider) {
+    state.provider = options.provider
+    // Session identifiers are provider-native and cannot be resumed by a
+    // different CLI. Preserve the Coordinator identity, but start a fresh
+    // provider conversation for the failover supervisor.
+    delete state.providerSessionId
+    delete state.lastFailureClass
+    delete state.lastError
+  } else {
+    state.provider ||= options.provider
+  }
+  state.cwd ||= options.cwd
+  state.checkoutMode ||= state.cwd.includes(`${path.sep}coord-worktrees${path.sep}`) ? 'isolated' : 'shared'
+  if (options.model) state.model = options.model
+  // Only touch a resumed worker's transport when --transport was explicitly
+  // re-passed this invocation — a bare `--identity <file>` resume (the
+  // common restart path, see agent-viewer-coord-admin.mjs) must keep
+  // whatever transport the file already records.
+  if (options.transportExplicit) {
+    state.transport = ACP_TRANSPORT_PROVIDERS.has(state.provider) && options.transport === 'acp' ? 'acp' : undefined
+  } else if (state.transport === 'acp' && !ACP_TRANSPORT_PROVIDERS.has(state.provider)) {
+    // A --provider failover switched this worker onto a CLI with no ACP
+    // adapter. Fall back to the raw-CLI transport rather than crash-looping
+    // an unattended supervisor over a now-invalid persisted combination.
+    state.transport = undefined
+  }
+  if (!options.attach && state.attach) baseUrl = normalizeUrl(state.attach)
+} else {
+  if (!options.name || (!options.start && !options.join) || (options.start && options.join)) {
+    usage('Provide --name and exactly one of --start or --join')
+  }
+  let cwd = path.resolve(options.cwd)
+  const baseCwd = cwd
+  let isolatedCheckout = null
+  // `--join latest` (or `auto`) discovers the newest joinable run server-side.
+  const joinRunId = ['latest', 'auto'].includes(options.join ?? '') ? undefined : options.join
+  if (options.join && !options.shared) {
+    isolatedCheckout = await isolatedWorktree(cwd, joinRunId ?? `latest-${Date.now().toString(36)}`, options.name)
+    cwd = isolatedCheckout.target
+  }
+  let playbookArgs = options.args
+  if (typeof playbookArgs === 'string') {
+    try { playbookArgs = JSON.parse(playbookArgs) } catch { /* keep as plain string */ }
+  }
+  let result
+  try {
+    result = await api(baseUrl, options.start ? 'create_run' : 'join_run', {
+      ...(options.start
+        ? {
+            prompt: options.start,
+            playbookName: options.playbook,
+            args: playbookArgs,
+            maxAgents: options.maxAgents,
+            gateCommand: options.gateCommand,
+            requirePlanApproval: options.requirePlanApproval,
+            autonomy: options.autonomy,
+            acceptanceContract: options.acceptance,
+            requireReview: options.requireReview,
+            budget: options.tokenBudget || options.durationBudget
+              ? {
+                  maxTokens: options.tokenBudget,
+                  maxDurationMinutes: options.durationBudget,
+                }
+              : undefined,
+          }
+        : { runId: joinRunId }),
+      name: options.name,
+      provider: options.provider,
+      cwd,
+      ...workerNegotiation(),
+    })
+  } catch (error) {
+    await rollbackIsolatedWorktree(baseCwd, isolatedCheckout)
+    throw error
+  }
+  state = {
+    ...result.participant,
+    cwd,
+    attach: baseUrl,
+    checkoutMode: options.join && !options.shared ? 'isolated' : 'shared',
+  }
+  if (options.model) state.model = options.model
+  if (options.transport === 'acp') state.transport = 'acp'
+  state.identityFile = path.resolve(options.identity || identityFileFor(state))
+}
+state.attach = baseUrl
+state.logFile ||= workerLogPath(state.identityFile)
+// Give process inspection a stable identity that survives wrappers, symlinks,
+// and packaged entrypoints. The state helper still checks launch time for
+// older workers that do not publish this marker.
+process.title = workerProcessMarker(state.identityFile)
+if (loadedIdentity) {
+  const resumed = await api(baseUrl, 'resume', { ...state, ...workerNegotiation() })
+  if (resumed?.participant) {
+    state = { ...state, ...resumed.participant, identityFile: state.identityFile, logFile: state.logFile, attach: baseUrl }
+  }
+}
+await saveState(state.identityFile, state)
+console.error(`Coordinator ${state.runId}: ${state.name || state.agentId} (${state.role || 'participant'})`)
+console.error(`Identity: ${state.identityFile}`)
+await workerLog(state, `worker starting pid=${process.pid} provider=${state.provider} run=${state.runId}`)
+const workerInstanceId = randomUUID()
+await writeWorkerRecord(state.identityFile, {
+  runId: state.runId,
+  agentId: state.agentId,
+  name: state.name,
+  role: state.role,
+  provider: state.provider,
+  cwd: state.cwd,
+  attach: baseUrl,
+  logFile: state.logFile,
+  pid: process.pid,
+  workerInstanceId,
+  heartbeatAt: new Date().toISOString(),
+  status: 'running',
+  startedAt: new Date().toISOString(),
+})
+const heartbeatTimer = setInterval(() => {
+  void writeWorkerRecord(state.identityFile, {
+    pid: process.pid,
+    workerInstanceId,
+    heartbeatAt: new Date().toISOString(),
+  }).catch((error) => {
+    void workerLog(state, `worker heartbeat failed: ${error instanceof Error ? error.message : error}`)
+  })
+}, 5_000)
+heartbeatTimer.unref?.()
+
+async function retryDelay(delay) {
+  if (shutdownRequested) return
+  let timer
+  await Promise.race([
+    new Promise((resolve) => { timer = setTimeout(resolve, delay) }),
+    shutdownRequestedPromise,
+  ])
+  if (timer) clearTimeout(timer)
+}
+
+function isTerminal(wait) {
+  const status = wait?.actionable?.runStatus ?? wait?.snapshot?.run?.status
+  return ['completed', 'failed', 'stopped'].includes(status)
+}
+
+// A provider tick is a full model turn; only spend one when the wait's
+// actionable digest shows work for this role. Leads also wake for claimable
+// work so they can assign it or claim an explicit integration lane; their
+// prompt keeps ordinary teammate lanes delegated. Teammates act on mail,
+// claimable tasks, or their owned task.
+// Daemons that predate the digest omit it — then every wake ticks, as before.
+function shouldTick(actionable, role) {
+  if (!actionable) return true
+  if ((actionable.inboxCount ?? 0) > 0) return true
+  if ((actionable.replyRequiredCount ?? 0) > 0) return true
+  if (role === 'lead') {
+    return (actionable.plansAwaitingReview?.length ?? 0) > 0
+      || Boolean(actionable.myTask)
+      || (actionable.claimableTasks?.length ?? 0) > 0
+      || actionable.allTasksTerminal === true
+      || actionable.runStatus === 'synthesizing'
+  }
+  return (actionable.claimableTasks?.length ?? 0) > 0 || Boolean(actionable.myTask)
+}
+
+let cursor = null
+let providerFailures = 0
+let coordinatorFailures = 0
+let finalStatus = 'stopped'
+// Actionable digest from the most recent `wait`, threaded into the next
+// providerTick's prompt (reply guard reminder) — null on the very first
+// tick, before anything has been claimed.
+let lastActionable = null
+const role = state.role === 'lead' ? 'lead' : 'teammate'
+
+async function leaveRunBeforeExit(reason, status = 'stopped') {
+  await api(baseUrl, 'leave_run', {
+    ...state,
+    reason,
+    requestId: `worker-leave-${workerInstanceId}`,
+  }, 10_000, true)
+  finalStatus = status
+  await workerLog(state, `${reason}; participant retired from the active roster`)
+}
+
+async function checkpointBeforeExit(detail, unownedReason, allowDuringShutdown = false) {
+  let lastError = null
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const current = await api(baseUrl, 'wait', { ...state, cursor, timeoutMs: 0 }, 10_000, allowDuringShutdown)
+      cursor = current.cursor
+      const ownedTask = current?.actionable?.myTask
+      if (isTerminal(current)) return true
+      if (!ownedTask) {
+        await leaveRunBeforeExit(unownedReason)
+        return true
+      }
+      const summary = `${state.provider} worker checkpointed ${ownedTask.id} before supervisor exit`
+      await api(baseUrl, 'handoff_task', {
+        ...state,
+        taskId: ownedTask.id,
+        summary,
+        detail,
+        failureClass: 'supervisor_stopped',
+        requestId: `worker-handoff-${ownedTask.id}-supervisor-stopped-${workerInstanceId}`,
+      }, 10_000, allowDuringShutdown)
+      finalStatus = 'handed_off'
+      await workerLog(state, `${summary}; task returned to board`)
+      return true
+    } catch (error) {
+      if (isTerminalCoordinatorError(error)) return true
+      lastError = error
+      await workerLog(state, `exit checkpoint failed attempt=${attempt}: ${error.message}`)
+      if (attempt < 3) {
+        await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** (attempt - 1)))
+      }
+    }
+  }
+  state.lastFailureClass = 'transient_transport'
+  state.lastError = lastError?.message || 'Coordinator exit checkpoint failed'
+  process.exitCode = 1
+  await workerLog(state, `could not verify or hand off owned work before exit: ${state.lastError}`)
+  return false
+}
+
+async function checkpointForSupervisorStop(detail) {
+  await checkpointBeforeExit(
+    detail,
+    `${state.provider} worker retired before supervisor shutdown: ${detail}`,
+    true,
+  )
+}
+
+outer: for (;;) {
+  if (shutdownRequested) {
+    await checkpointForSupervisorStop(`Supervisor received ${shutdownSignal ?? 'a shutdown request'} before the next provider turn.`)
+    break
+  }
+  try {
+    const recoveringProvider = providerFailures > 0
+    await providerTick(state, baseUrl, lastActionable)
+    providerFailures = 0
+    if (recoveringProvider) {
+      delete state.lastFailureClass
+      delete state.lastError
+      await writeWorkerRecord(state.identityFile, {
+        status: 'running',
+        failures: coordinatorFailures,
+        failureClass: undefined,
+        lastError: undefined,
+        recoveredAt: new Date().toISOString(),
+      })
+    }
+    await saveState(state.identityFile, state)
+  } catch (error) {
+    if (shutdownRequested) {
+      await checkpointForSupervisorStop(`Supervisor received ${shutdownSignal ?? 'a shutdown request'} and stopped the active provider turn.`)
+      break
+    }
+    if (classifyProviderFailure(error) === 'turn_cancelled') {
+      // Lead-issued coord_cancel_turn (see cancelExternalProtocolTurn): an
+      // intentional interrupt, not a real failure. Task ownership was never
+      // touched, so skip the whole failure-classification/backoff/handoff
+      // apparatus below and just start a fresh tick immediately — except in
+      // --once mode, which always checkpoints owned work before exiting
+      // regardless of why the single tick ended, same as every other
+      // --once exit path.
+      await workerLog(state, error.message)
+      if (options.once) {
+        await checkpointBeforeExit(
+          'The bounded supervisor\'s single provider turn was cancelled by the lead while the task was still owned.',
+          `${state.provider} worker completed its bounded --once turn without owned work`,
+        )
+        break
+      }
+      continue
+    }
+    providerFailures += 1
+    const failureClass = classifyProviderFailure(error)
+    state.lastFailureClass = failureClass
+    state.lastError = error.message
+    await workerLog(state, `provider tick failed class=${failureClass} attempt=${providerFailures}: ${error.message}`)
+    await writeWorkerRecord(state.identityFile, {
+      status: 'retrying',
+      failureClass,
+      failures: providerFailures,
+      lastError: error.message,
+    })
+    // A broken provider CLI must not strand the supervisor forever after the
+    // run was stopped or completed by another participant.
+    let current
+    let ownershipReadFailures = 0
+    while (!current && !shutdownRequested) {
+      try {
+        current = await api(baseUrl, 'wait', { ...state, cursor, timeoutMs: 0 })
+        cursor = current.cursor
+        lastActionable = current.actionable ?? lastActionable
+        if (isTerminal(current)) break outer
+      } catch (waitError) {
+        if (isTerminalCoordinatorError(waitError)) break outer
+        ownershipReadFailures += 1
+        coordinatorFailures += 1
+        await workerLog(state, `ownership recheck failed attempt=${ownershipReadFailures}: ${waitError.message}`)
+        await writeWorkerRecord(state.identityFile, {
+          status: 'retrying',
+          failureClass: 'transient_transport',
+          failures: providerFailures + coordinatorFailures,
+          lastError: waitError.message,
+        })
+        // A bounded worker cannot wait forever for a missing daemon, but it
+        // also must not infer "no task" from an unavailable status read and
+        // retire while secretly owning work. Leave the participant intact for
+        // stale recovery/operator resume when the bounded recheck is exhausted.
+        if (options.once && ownershipReadFailures >= 3) break
+        const statusDelay = Math.min(30_000, 1_000 * 2 ** Math.min(ownershipReadFailures - 1, 5))
+        await retryDelay(statusDelay)
+      }
+    }
+    if (shutdownRequested) {
+      await checkpointForSupervisorStop(`Supervisor received ${shutdownSignal ?? 'a shutdown request'} while rechecking task ownership.`)
+      break
+    }
+    if (!current) {
+      finalStatus = 'failed'
+      state.lastFailureClass = 'transient_transport'
+      state.lastError = 'Coordinator unavailable while rechecking task ownership after provider failure'
+      process.exitCode = 1
+      console.error(state.lastError)
+      break
+    }
+    if (ownershipReadFailures > 0) {
+      await writeWorkerRecord(state.identityFile, {
+        status: 'retrying',
+        failureClass,
+        failures: providerFailures,
+        lastError: error.message,
+        recoveredAt: new Date().toISOString(),
+      })
+    }
+    // Transient transport failures deserve retries, but not an infinite lease
+    // on owned work. After a bounded retry window, checkpoint exactly like a
+    // persistent provider failure so another healthy teammate can take over.
+    const durableFailure = failureClass === 'transient_transport'
+      ? providerFailures >= 5
+      : (failureClass !== 'provider_failure' || providerFailures >= 3)
+    const ownedTask = current?.actionable?.myTask
+    if (ownedTask && (durableFailure || options.once)) {
+      const summary = `${state.provider} worker checkpointed ${ownedTask.id} after ${failureClass}`
+      try {
+        await api(baseUrl, 'handoff_task', {
+          ...state,
+          taskId: ownedTask.id,
+          summary,
+          detail: `Provider CLI error: ${error.message}`,
+          failureClass,
+          requestId: `worker-handoff-${ownedTask.id}-${failureClass}-${workerInstanceId}`,
+        })
+        finalStatus = 'handed_off'
+        await workerLog(state, `${summary}; task returned to board`)
+        console.error(`${summary}; task returned to board`)
+        break
+      } catch (handoffError) {
+        await workerLog(state, `automatic handoff failed: ${handoffError.message}`)
+      }
+    }
+    if (!ownedTask && (durableFailure || options.once)) {
+      const reason = `${state.provider} worker retired after ${failureClass}: ${error.message}`
+      try {
+        await leaveRunBeforeExit(reason, 'failed')
+        process.exitCode = 1
+        console.error(reason)
+        break
+      } catch (leaveError) {
+        await workerLog(state, `automatic participant retirement failed: ${leaveError.message}`)
+      }
+    }
+    if (options.once) {
+      console.error(`Coordinator tick failed: ${error.message}`)
+      process.exitCode = 1
+      break
+    }
+    const delay = Math.min(30_000, 1_000 * 2 ** Math.min(providerFailures - 1, 5))
+    console.error(`Coordinator tick failed: ${error.message}; retrying in ${delay}ms`)
+    await retryDelay(delay)
+    continue
+  }
+  if (shutdownRequested) {
+    await checkpointForSupervisorStop(`Supervisor received ${shutdownSignal ?? 'a shutdown request'} after the provider turn.`)
+    break
+  }
+  if (options.once) {
+    // A single model turn may claim work before returning. Exiting with that
+    // lease still attached strands the task until stale recovery, so a bounded
+    // worker must checkpoint it explicitly before it stops.
+    await checkpointBeforeExit(
+      'The bounded supervisor completed its single provider turn while the task was still owned.',
+      `${state.provider} worker completed its bounded --once turn without owned work`,
+    )
+    break
+  }
+  try {
+    const current = await api(baseUrl, 'wait', { ...state, cursor, timeoutMs: 0 })
+    if (coordinatorFailures > 0) {
+      coordinatorFailures = 0
+      if (providerFailures === 0) {
+        delete state.lastFailureClass
+        delete state.lastError
+        await writeWorkerRecord(state.identityFile, {
+          status: 'running',
+          failures: 0,
+          failureClass: undefined,
+          lastError: undefined,
+          recoveredAt: new Date().toISOString(),
+        })
+      }
+    }
+    cursor = current.cursor
+    lastActionable = current.actionable ?? lastActionable
+    if (isTerminal(current)) break
+    // The provider turn may have claimed a task, received mail, or left owned
+    // work open. Act on that returned digest immediately instead of entering a
+    // 55-second long poll and adding avoidable coordination latency.
+    if (shouldTick(current.actionable, role)) continue
+    for (;;) {
+      const next = await api(baseUrl, 'wait', { ...state, cursor, timeoutMs: 55_000 })
+      cursor = next.cursor
+      lastActionable = next.actionable ?? lastActionable
+      if (isTerminal(next)) break outer
+      if (shouldTick(next.actionable, role)) break
+    }
+  } catch (error) {
+    if (shutdownRequested) {
+      await checkpointForSupervisorStop(`Supervisor received ${shutdownSignal ?? 'a shutdown request'} while waiting for Coordinator work.`)
+      break
+    }
+    if (isTerminalCoordinatorError(error)) break
+    coordinatorFailures += 1
+    state.lastFailureClass = 'transient_transport'
+    state.lastError = error.message
+    await workerLog(state, `coordinator wait failed attempt=${coordinatorFailures}: ${error.message}`)
+    await writeWorkerRecord(state.identityFile, {
+      status: 'retrying',
+      failureClass: 'transient_transport',
+      failures: coordinatorFailures,
+      lastError: error.message,
+    })
+    const delay = Math.min(30_000, 1_000 * 2 ** Math.min(coordinatorFailures - 1, 5))
+    console.error(`Coordinator wait failed: ${error.message}; retrying in ${delay}ms`)
+    await retryDelay(delay)
+  }
+}
+
+await saveState(state.identityFile, state)
+clearInterval(heartbeatTimer)
+await writeWorkerRecord(state.identityFile, {
+  status: finalStatus,
+  pid: process.pid,
+  stoppedAt: new Date().toISOString(),
+  failures: providerFailures + coordinatorFailures,
+  failureClass: state.lastFailureClass,
+  lastError: state.lastError,
+})
+await workerLog(state, `worker exiting status=${finalStatus}`)
+// A shutdown checkpoint can create a fresh AHP client after requestShutdown()
+// closed the original one. Always close the final transport set so a recorded
+// "worker exiting" state also means the supervisor process can actually exit.
+closeAhpClients()

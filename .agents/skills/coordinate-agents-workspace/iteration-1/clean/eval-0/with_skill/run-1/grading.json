@@ -1,0 +1,35 @@
+{
+  "expectations": [
+    {
+      "text": "Calls coord_query_context before coord_create_run",
+      "passed": true,
+      "evidence": "Both open with a coord_query_context call before coord_create_run."
+    },
+    {
+      "text": "Seeds 2 teammate lanes + 1 dependent lead task before workers join",
+      "passed": true,
+      "evidence": "Both create exactly 3 tasks (2 teammate, 1 lead with depends_on) before any worker joins."
+    },
+    {
+      "text": "Explicitly refuses an umbrella lead task",
+      "passed": true,
+      "evidence": "Both state the lead does not claim/absorb the teammates' work."
+    },
+    {
+      "text": "Calls coord_status to verify seeding before/after workers join",
+      "passed": true,
+      "evidence": "Both call coord_status twice: once to verify seeding, once to verify real claims."
+    },
+    {
+      "text": "No hallucinated tool names/args",
+      "passed": true,
+      "evidence": "All tool names and args match the skill's documented surface."
+    }
+  ],
+  "summary": {
+    "passed": 5,
+    "failed": 0,
+    "total": 5,
+    "pass_rate": 1.0
+  }
+}

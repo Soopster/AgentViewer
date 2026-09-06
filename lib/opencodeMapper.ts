@@ -19,11 +19,18 @@ import type {
   SessionMessage,
   SessionModelInfo,
 } from './types'
+import { compactStableFingerprint } from './compactFingerprint'
 import { OPENCODE_CAPABILITIES } from './provider'
+import { recordRawFrames } from './rawFrames'
 
 type OpenCodeMessageBundle = {
   info: Message
   parts: Part[]
+}
+
+export function openCodeMessagesSignature(messages: OpenCodeMessageBundle[]): string {
+  const last = messages.at(-1)
+  return `${messages.length}:${last?.info.id ?? ''}:${last ? compactStableFingerprint(last) : ''}`
 }
 
 type OpenCodeModelRef = {
@@ -61,9 +68,9 @@ function partSummary(part: Part): string | null {
     case 'file':
       return `[file] ${part.filename ?? part.url}`
     case 'agent':
-      return `Agent: ${part.name}`
+      return `↪ Switched to agent: ${part.name}`
     case 'subtask':
-      return `Subtask: ${part.description}`
+      return `↪ Subtask launched: ${part.description}${part.agent ? ` (@${part.agent})` : ''}`
     case 'patch':
       return `Patched files: ${part.files.join(', ')}`
     case 'compaction':
@@ -86,6 +93,31 @@ function buildAssistantContent(parts: Part[]) {
   const content: Exclude<ApiMessage['content'], string> = []
   const syntheticResults: SessionMessage[] = []
 
+  const pushSyntheticResult = (
+    part: Part,
+    toolUseId: string,
+    resultContent: unknown,
+    isError = false,
+  ) => {
+    syntheticResults.push({
+      type: 'user',
+      uuid: `${part.messageID}:${part.id}:result`,
+      session_id: part.sessionID,
+      parent_tool_use_id: null,
+      provider: 'opencode',
+      message: {
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: toolUseId,
+          content: stringify(resultContent),
+          is_error: isError || undefined,
+        }],
+      },
+      timestamp: toIsoTimestamp((part as { state?: { time?: { start?: number } } }).state?.time?.start),
+    })
+  }
+
   for (const part of parts) {
     switch (part.type) {
       case 'text':
@@ -103,32 +135,76 @@ function buildAssistantContent(parts: Part[]) {
           input: part.state.input ?? {},
         })
         if (part.state.status === 'completed' || part.state.status === 'error') {
-          syntheticResults.push({
-            type: 'user',
-            uuid: `${part.messageID}:${part.id}:result`,
-            session_id: part.sessionID,
-            parent_tool_use_id: null,
-            provider: 'opencode',
-            message: {
-              role: 'user',
-              content: [{
-                type: 'tool_result',
-                tool_use_id: toolUseId,
-                content: part.state.status === 'completed' ? part.state.output : part.state.error,
-                is_error: part.state.status === 'error' || undefined,
-              }],
-            },
-            timestamp: toIsoTimestamp(part.state.time.start),
-          })
+          pushSyntheticResult(part, toolUseId, part.state.status === 'completed' ? part.state.output : part.state.error, part.state.status === 'error')
         }
         break
       }
-      case 'patch':
-        content.push(textBlock(`Patched files: ${part.files.join(', ')}`))
+      case 'patch': {
+        const toolUseId = `${part.id}:patch`
+        content.push({
+          type: 'tool_use',
+          id: toolUseId,
+          name: 'FileChange',
+          input: {
+            status: 'completed',
+            hash: part.hash,
+            changes: part.files.map((path) => ({ path, kind: 'patch' })),
+          },
+        })
+        pushSyntheticResult(part, toolUseId, {
+          status: 'completed',
+          files: part.files,
+          hash: part.hash,
+        })
         break
-      case 'agent':
-        content.push(textBlock(`Using agent ${part.name}`))
+      }
+      case 'agent': {
+        const toolUseId = `${part.id}:agent`
+        content.push({
+          type: 'tool_use',
+          id: toolUseId,
+          name: 'AgentSwitch',
+          input: {
+            name: part.name,
+            status: 'completed',
+            source: part.source,
+          },
+        })
+        pushSyntheticResult(part, toolUseId, {
+          status: 'completed',
+          message: `Switched to agent: ${part.name}`,
+          source: part.source,
+        })
         break
+      }
+      case 'subtask': {
+        const toolUseId = `${part.id}:subtask`
+        const optional = part as typeof part & {
+          model?: { providerID: string; modelID: string }
+          command?: string
+        }
+        content.push({
+          type: 'tool_use',
+          id: toolUseId,
+          name: 'Agent',
+          input: {
+            description: part.description,
+            prompt: part.prompt,
+            subagent_type: part.agent,
+            model: optional.model ? `${optional.model.providerID}/${optional.model.modelID}` : undefined,
+            command: optional.command,
+            status: 'launched',
+          },
+        })
+        pushSyntheticResult(part, toolUseId, {
+          status: 'completed',
+          message: `Subtask launched: ${part.description}${part.agent ? ` (@${part.agent})` : ''}`,
+          agent: part.agent,
+          model: optional.model,
+          command: optional.command,
+        })
+        break
+      }
       case 'file':
         content.push(textBlock(`[file] ${part.filename ?? part.url}`))
         break
@@ -159,7 +235,7 @@ function messageUsage(info: Message): ApiMessage['usage'] | undefined {
   }
 }
 
-export function encodeOpenCodeModelValue(model: OpenCodeModelRef): string {
+function encodeOpenCodeModelValue(model: OpenCodeModelRef): string {
   return JSON.stringify(model)
 }
 
@@ -187,6 +263,7 @@ export function mapOpenCodeSessionToSession(session: OpenCodeSession, tag: strin
     createdAt: normalizeTimestamp(session.time.created),
     provider: 'opencode',
     capabilities: OPENCODE_CAPABILITIES,
+    parentSessionId: session.parentID,
   }
 }
 
@@ -203,6 +280,7 @@ export function mapOpenCodeSessionToInfo(session: OpenCodeSession, tag: string |
     provider: 'opencode',
     capabilities: OPENCODE_CAPABILITIES,
     currentModel,
+    parentSessionId: session.parentID,
   }
 }
 
@@ -211,6 +289,13 @@ export function mapOpenCodeMessagesToSessionMessages(messages: OpenCodeMessageBu
 
   for (const entry of messages) {
     const timestamp = toIsoTimestamp(entry.info.time.created)
+    // Everything produced below came from this one bundle. See lib/rawFrames.ts.
+    const startedAt = result.length
+    const recordEntry = () => recordRawFrames(result.slice(startedAt), {
+      source: 'opencode.sdk.event',
+      messageType: entry.info.role,
+      payload: entry,
+    })
 
     if (entry.info.role === 'user') {
       result.push({
@@ -225,6 +310,7 @@ export function mapOpenCodeMessagesToSessionMessages(messages: OpenCodeMessageBu
         },
         timestamp,
       })
+      recordEntry()
       continue
     }
 
@@ -243,6 +329,7 @@ export function mapOpenCodeMessagesToSessionMessages(messages: OpenCodeMessageBu
       timestamp,
     })
     result.push(...assistant.syntheticResults)
+    recordEntry()
   }
 
   return result
@@ -285,7 +372,12 @@ export function firstOpenCodePrompt(messages: OpenCodeMessageBundle[]): string |
 
 export function mapOpenCodeContextUsage(message?: Message): ContextUsage | null {
   if (!message || message.role !== 'assistant') return null
-  const totalTokens = message.tokens.input + message.tokens.output + message.tokens.reasoning + message.tokens.cache.read + message.tokens.cache.write
+  // Newer OpenCode payloads normalize provider-specific cache semantics into
+  // `total`. Prefer it because cached tokens are additive for some providers
+  // and already included in input for others.
+  const normalizedTotal = (message.tokens as typeof message.tokens & { total?: number }).total
+  const totalTokens = normalizedTotal
+    ?? message.tokens.input + message.tokens.output + message.tokens.reasoning + message.tokens.cache.read + message.tokens.cache.write
   return {
     totalTokens,
     maxTokens: 0,
@@ -301,6 +393,18 @@ export function mapOpenCodeContextUsage(message?: Message): ContextUsage | null 
   }
 }
 
+export function updateOpenCodeTurnOutputUsage(
+  outputByMessageId: Map<string, number>,
+  message: Message,
+  currentTotal: number,
+): number {
+  if (message.role !== 'assistant') return currentTotal
+  const nextOutput = Math.max(0, message.tokens.output)
+  const previousOutput = outputByMessageId.get(message.id) ?? 0
+  outputByMessageId.set(message.id, nextOutput)
+  return Math.max(0, currentTotal - previousOutput + nextOutput)
+}
+
 export function mapOpenCodeDiagnosticsToSections(params: {
   providers: ConfigProvidersResponse
   commands: CommandListResponse
@@ -308,6 +412,8 @@ export function mapOpenCodeDiagnosticsToSections(params: {
   lsp: LspStatus[]
   formatters: FormatterStatus[]
   mcp: Record<string, McpStatus>
+  children?: OpenCodeSession[]
+  currentSession?: OpenCodeSession
 }): SessionDiagnosticSection[] {
   const connectedProviders = params.providers.providers.map((provider) =>
     `${provider.id} · default ${params.providers.default[provider.id] ?? 'none'}`
@@ -317,7 +423,7 @@ export function mapOpenCodeDiagnosticsToSections(params: {
     `${name} · ${status.status}${'error' in status && status.error ? ` · ${status.error}` : ''}`
   )
 
-  return [
+  const sections: SessionDiagnosticSection[] = [
     {
       id: 'providers',
       title: 'PROVIDERS',
@@ -349,6 +455,19 @@ export function mapOpenCodeDiagnosticsToSections(params: {
       items: mcpItems.length > 0 ? mcpItems : ['None'],
     },
   ]
+
+  sections.push({
+    id: 'session',
+    title: 'SESSION',
+    items: [
+      params.currentSession?.share?.url ? `Share ${params.currentSession.share.url}` : 'Share not active',
+      params.children && params.children.length > 0
+        ? `Children ${params.children.length}: ${params.children.slice(0, 5).map((child) => child.id).join(', ')}`
+        : 'Children none',
+    ],
+  })
+
+  return sections
 }
 
 export function summarizeOpenCodeDiffs(diffs: FileDiff[]): string[] {

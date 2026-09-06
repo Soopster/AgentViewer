@@ -8,6 +8,7 @@ import type {
   ThinkingBlock,
   ImageBlock,
   ApiMessage,
+  SystemMessagePayload,
 } from './types'
 
 // ── Output types ──────────────────────────────────────────────────────────────
@@ -35,6 +36,12 @@ export type SystemReminderBlock = {
   content: string
 }
 
+export type ClaudeSystemBlock = {
+  type: 'claude_system'
+  subtype: string
+  payload: SystemMessagePayload
+}
+
 export type SlashCommandBlock = {
   type: 'slash_command'
   command: string
@@ -47,24 +54,77 @@ export type LocalCommandStdoutBlock = {
   stdout: string
 }
 
-export type ThreadedBlock = TextBlock | ThinkingBlock | ImageBlock | ToolThread | TaskNotificationBlock | SystemReminderBlock | SlashCommandBlock | LocalCommandStdoutBlock
+/** A `!command` the user ran from the input box (Claude Code bash mode). */
+export type BashInputBlock = {
+  type: 'bash_input'
+  command: string
+}
+
+/** Output of an input-box `!command` — persisted as <bash-stdout>/<bash-stderr>. */
+export type BashOutputBlock = {
+  type: 'bash_output'
+  stdout: string
+  stderr: string
+}
+
+export type ThreadedBlock = TextBlock | ThinkingBlock | ImageBlock | ToolThread | TaskNotificationBlock | SystemReminderBlock | SlashCommandBlock | LocalCommandStdoutBlock | BashInputBlock | BashOutputBlock | ClaudeSystemBlock
 
 export type ThreadedMessage = {
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant' | 'system'
   uuid: string
   sessionId?: string
   timestamp?: string
-  origin?: { kind: string }
+  origin?: { kind: string; subkind?: string }
   usage?: ApiMessage['usage']
   provider?: AgentProvider
+  taskDescription?: string
+  requestId?: string
+  providerMessageId?: string
+  aborted?: boolean
+  subagentType?: string
+  subagentRetry?: Record<string, unknown>
   blocks: ThreadedBlock[]
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// LRU-capped: tags are drawn from a small known set (task-notification,
+// command-name, …) so this cap is comfortably above steady state and just
+// prevents a leak if an unusual or attacker-controlled tag ever appears.
+const XML_TAG_RE_CACHE_MAX = 32
+const XML_TAG_RE_CACHE = new Map<string, RegExp>()
+function xmlTagRegex(tag: string): RegExp {
+  const cached = XML_TAG_RE_CACHE.get(tag)
+  if (cached) {
+    XML_TAG_RE_CACHE.delete(tag)
+    XML_TAG_RE_CACHE.set(tag, cached)
+    return cached
+  }
+  const re = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`)
+  XML_TAG_RE_CACHE.set(tag, re)
+  while (XML_TAG_RE_CACHE.size > XML_TAG_RE_CACHE_MAX) {
+    const oldest = XML_TAG_RE_CACHE.keys().next().value
+    if (oldest === undefined) break
+    XML_TAG_RE_CACHE.delete(oldest)
+  }
+  return re
+}
+
 function xmlTag(xml: string, tag: string): string {
-  const m = xml.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`))
+  const m = xml.match(xmlTagRegex(tag))
   return m ? m[1].trim() : ''
+}
+
+const SYSTEM_REMINDER_RE = /<system-reminder>([\s\S]*?)<\/system-reminder>/g
+const LOCAL_COMMAND_STDOUT_RE = /<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/g
+const COMMAND_NAME_RE = /<command-name>([\s\S]*?)<\/command-name>/g
+const BASH_INPUT_RE = /<bash-input>([\s\S]*?)<\/bash-input>/g
+const BASH_STDOUT_RE = /<bash-stdout>([\s\S]*?)<\/bash-stdout>/g
+
+// The CLI XML-escapes command/output text before wrapping it in bash-* tags
+// (observed in native transcripts: `bun &lt;command&gt;`). Reverse it for display.
+function unescapeBashTagContent(text: string): string {
+  return text.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
 }
 
 function parseTaskNotification(content: string): TaskNotificationBlock | null {
@@ -102,23 +162,52 @@ type SpecialRegion =
   | { kind: 'system_reminder'; start: number; end: number; content: string }
   | { kind: 'local_command_stdout'; start: number; end: number; stdout: string }
   | { kind: 'slash_command'; start: number; end: number; block: SlashCommandBlock }
+  | { kind: 'bash_input'; start: number; end: number; command: string }
+  | { kind: 'bash_output'; start: number; end: number; stdout: string; stderr: string }
 
 /** Finds all special XML regions in text and returns them sorted by position. */
 function findSpecialRegions(text: string): SpecialRegion[] {
   const regions: SpecialRegion[] = []
 
   // system-reminder
-  for (const m of text.matchAll(/<system-reminder>([\s\S]*?)<\/system-reminder>/g)) {
+  for (const m of text.matchAll(SYSTEM_REMINDER_RE)) {
     regions.push({ kind: 'system_reminder', start: m.index!, end: m.index! + m[0].length, content: m[1].trim() })
   }
 
   // local-command-stdout
-  for (const m of text.matchAll(/<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/g)) {
+  for (const m of text.matchAll(LOCAL_COMMAND_STDOUT_RE)) {
     regions.push({ kind: 'local_command_stdout', start: m.index!, end: m.index! + m[0].length, stdout: m[1].trim() })
   }
 
+  // bash-input (input-box `!command`)
+  for (const m of text.matchAll(BASH_INPUT_RE)) {
+    regions.push({ kind: 'bash_input', start: m.index!, end: m.index! + m[0].length, command: unescapeBashTagContent(m[1].trim()) })
+  }
+
+  // bash-stdout, optionally followed by a sibling bash-stderr — one output region
+  for (const m of text.matchAll(BASH_STDOUT_RE)) {
+    const start = m.index!
+    let end = start + m[0].length
+    let stderr = ''
+    const rest = text.slice(end)
+    const stderrMatch = /^\s*<bash-stderr>([\s\S]*?)<\/bash-stderr>/.exec(rest)
+    if (stderrMatch) {
+      end += stderrMatch[0].length
+      stderr = unescapeBashTagContent(stderrMatch[1].trim())
+    }
+    regions.push({ kind: 'bash_output', start, end, stdout: unescapeBashTagContent(m[1].trim()), stderr })
+  }
+
+  // stderr-only output (no stdout tag preceding it)
+  for (const m of text.matchAll(/<bash-stderr>([\s\S]*?)<\/bash-stderr>/g)) {
+    const covered = regions.some((r) => r.kind === 'bash_output' && m.index! >= r.start && m.index! < r.end)
+    if (!covered) {
+      regions.push({ kind: 'bash_output', start: m.index!, end: m.index! + m[0].length, stdout: '', stderr: unescapeBashTagContent(m[1].trim()) })
+    }
+  }
+
   // slash-command cluster: starts at <command-name>, ends at </command-args> (or </command-message> or </command-name>)
-  for (const m of text.matchAll(/<command-name>([\s\S]*?)<\/command-name>/g)) {
+  for (const m of text.matchAll(COMMAND_NAME_RE)) {
     const start = m.index!
     // Try to extend to the end of the cluster (command-args or command-message)
     const argsEnd  = text.indexOf('</command-args>',    start)
@@ -139,11 +228,11 @@ function findSpecialRegions(text: string): SpecialRegion[] {
  * Splits a text string into typed blocks: TextBlock, SystemReminderBlock,
  * SlashCommandBlock, and LocalCommandStdoutBlock.
  */
-function splitSystemReminders(text: string): Array<TextBlock | SystemReminderBlock | SlashCommandBlock | LocalCommandStdoutBlock> {
+function splitSystemReminders(text: string): Array<TextBlock | SystemReminderBlock | SlashCommandBlock | LocalCommandStdoutBlock | BashInputBlock | BashOutputBlock> {
   const regions = findSpecialRegions(text)
   if (regions.length === 0) return [{ type: 'text', text }]
 
-  const out: Array<TextBlock | SystemReminderBlock | SlashCommandBlock | LocalCommandStdoutBlock> = []
+  const out: Array<TextBlock | SystemReminderBlock | SlashCommandBlock | LocalCommandStdoutBlock | BashInputBlock | BashOutputBlock> = []
   let cursor = 0
 
   for (const region of regions) {
@@ -154,6 +243,8 @@ function splitSystemReminders(text: string): Array<TextBlock | SystemReminderBlo
     if (region.kind === 'system_reminder')     out.push({ type: 'system_reminder',      content: region.content })
     if (region.kind === 'local_command_stdout') out.push({ type: 'local_command_stdout', stdout:  region.stdout  })
     if (region.kind === 'slash_command')        out.push(region.block)
+    if (region.kind === 'bash_input')           out.push({ type: 'bash_input',  command: region.command })
+    if (region.kind === 'bash_output')          out.push({ type: 'bash_output', stdout: region.stdout, stderr: region.stderr })
 
     cursor = region.end
   }
@@ -165,9 +256,65 @@ function splitSystemReminders(text: string): Array<TextBlock | SystemReminderBlo
 }
 
 function toBlocks(msg: SessionMessage): ContentBlock[] {
+  if (msg.type === 'system') return []
   const c = msg.message.content
   if (typeof c === 'string') return c ? [{ type: 'text', text: c }] : []
   return (c ?? []) as ContentBlock[]
+}
+
+function toSystemPayload(msg: SessionMessage): SystemMessagePayload | null {
+  if (msg.type !== 'system') return null
+  return msg.message as SystemMessagePayload
+}
+
+// Subtypes that are SDK plumbing the user never sees from a real `claude` CLI
+// process. Each send to a resumed session re-runs `query()`, which re-fires
+// these — they pile up in the transcript and break the "continuing a session"
+// illusion. The events are still persisted to the session file; we just hide
+// them from the rendered timeline.
+// `thinking_tokens` is a high-frequency live estimate (token count + delta) the
+// SDK streams during a turn; it's surfaced on the live THINKING preview card, not
+// as a persisted transcript row, so hide it from the rendered timeline.
+const HIDDEN_PLUMBING_SUBTYPES = new Set(['init', 'status', 'thinking_tokens'])
+
+function isHiddenPlumbingMessage(payload: SystemMessagePayload): boolean {
+  if (HIDDEN_PLUMBING_SUBTYPES.has(payload.subtype)) return true
+  // SessionStart hooks fire on every resume but the CLI only fires them once
+  // per process. Suppress them so re-sends don't litter the transcript.
+  if (
+    (payload.subtype === 'hook_started'
+      || payload.subtype === 'hook_progress'
+      || payload.subtype === 'hook_response')
+    && typeof payload.hook_event === 'string'
+    && payload.hook_event === 'SessionStart'
+  ) {
+    return true
+  }
+  // Bare fallback event with no payload — the SDK occasionally emits
+  // `{type:"system"}` with no subtype, which our normalizer fills in as
+  // subtype "system". There's nothing to render.
+  if (payload.subtype === 'system') {
+    const keys = Object.keys(payload).filter(
+      (k) => k !== 'type' && k !== 'subtype' && payload[k] !== undefined && payload[k] !== null,
+    )
+    if (keys.length === 0) return true
+  }
+  return false
+}
+
+function messageUsage(msg: SessionMessage): ApiMessage['usage'] | undefined {
+  if (msg.type === 'system') return undefined
+  return (msg.message as ApiMessage).usage
+}
+
+function messageTranscriptMetadata(msg: SessionMessage): Pick<ThreadedMessage, 'aborted' | 'subagentType' | 'subagentRetry'> {
+  if (msg.type === 'system') return {}
+  const message = msg.message as ApiMessage
+  return {
+    aborted: message.aborted,
+    subagentType: message.subagent_type,
+    subagentRetry: message.subagent_retry,
+  }
 }
 
 function isPlumbingTurn(msg: SessionMessage): boolean {
@@ -190,35 +337,70 @@ export function buildThreadedMessages(messages: SessionMessage[]): ThreadedMessa
   for (const msg of messages) seen.set(`${msg.provider ?? 'claude'}:${msg.uuid}`, msg)
   const deduped = [...seen.values()]
 
-  // Pass 1: collect all tool results and mark plumbing turns
+  // Pass 1: collect all tool results, mark plumbing turns, and gather any
+  // messages retracted by a model_refusal_fallback. When a model refuses and the
+  // SDK falls back to another model, it emits the refused partial's wire uuids in
+  // `retracted_message_uuids` so consumers evict that stale content. Eviction is
+  // idempotent — unknown/already-removed uuids are a no-op.
   const resultMap = new Map<string, ToolResultBlock>()
+  const resultProviderMessageIdMap = new Map<string, string>()
   const plumbingUuids = new Set<string>()
+  const retractedUuids = new Set<string>()
 
   for (const msg of deduped) {
+    const payload = toSystemPayload(msg)
+    if (payload?.subtype === 'model_refusal_fallback' && Array.isArray(payload.retracted_message_uuids)) {
+      for (const uuid of payload.retracted_message_uuids) {
+        if (typeof uuid === 'string') retractedUuids.add(uuid)
+      }
+    }
     if (!isPlumbingTurn(msg)) continue
     plumbingUuids.add(msg.uuid)
     for (const b of toBlocks(msg)) {
       const r = b as ToolResultBlock
       resultMap.set(r.tool_use_id, r)
+      if (msg.providerMessageId) resultProviderMessageIdMap.set(r.tool_use_id, msg.providerMessageId)
     }
   }
 
-  // Pass 2: build threaded messages, skipping plumbing turns
+  // Pass 2: build threaded messages, skipping plumbing and retracted turns
   const out: ThreadedMessage[] = []
 
   for (const msg of deduped) {
     if (plumbingUuids.has(msg.uuid)) continue
+    if (retractedUuids.has(msg.uuid)) continue
+
+    const systemPayload = toSystemPayload(msg)
+    if (systemPayload) {
+      if (isHiddenPlumbingMessage(systemPayload)) continue
+      out.push({
+        role: 'system',
+        uuid: msg.uuid,
+        sessionId: msg.session_id,
+        timestamp: msg.timestamp,
+        origin: msg.origin,
+        provider: msg.provider,
+        providerMessageId: msg.providerMessageId,
+        blocks: [{
+          type: 'claude_system',
+          subtype: systemPayload.subtype,
+          payload: systemPayload,
+        }],
+      })
+      continue
+    }
 
     // Task notification: string content from the agent orchestrator
     if (msg.type === 'user' && typeof msg.message.content === 'string') {
       const notif = parseTaskNotification(msg.message.content)
       if (notif) {
-        out.push({ role: 'user', uuid: msg.uuid, sessionId: msg.session_id, timestamp: msg.timestamp, origin: msg.origin, provider: msg.provider, blocks: [notif] })
+        out.push({ role: 'user', uuid: msg.uuid, sessionId: msg.session_id, timestamp: msg.timestamp, origin: msg.origin, provider: msg.provider, providerMessageId: msg.providerMessageId, blocks: [notif] })
         continue
       }
     }
 
     const threadedBlocks: ThreadedBlock[] = []
+    let providerMessageId = msg.providerMessageId
 
     for (const b of toBlocks(msg)) {
       switch (b.type) {
@@ -229,6 +411,7 @@ export function buildThreadedMessages(messages: SessionMessage[]): ThreadedMessa
             toolUse: tu,
             result: resultMap.get(tu.id) ?? null,
           })
+          providerMessageId = resultProviderMessageIdMap.get(tu.id) ?? providerMessageId
           break
         }
         case 'text': {
@@ -254,12 +437,129 @@ export function buildThreadedMessages(messages: SessionMessage[]): ThreadedMessa
         sessionId: msg.session_id,
         timestamp: msg.timestamp,
         origin: msg.origin,
-        usage: msg.message.usage,
+        usage: messageUsage(msg),
         provider: msg.provider,
+        taskDescription: msg.taskDescription,
+        requestId: msg.requestId,
+        providerMessageId,
+        ...messageTranscriptMetadata(msg),
         blocks: threadedBlocks,
       })
     }
   }
 
   return out
+}
+
+// ── Incremental threading ─────────────────────────────────────────────────────
+
+export type IncrementalThreadingCache = {
+  messages: SessionMessage[]
+  threaded: ThreadedMessage[]
+}
+
+/**
+ * Incremental variant of buildThreadedMessages for the common append-only case.
+ *
+ * During live polling, the existing prefix of `messages` never changes — only
+ * new messages are appended. When the prefix is provably stable (same object
+ * references), this function reuses the already-computed threaded output for
+ * that prefix and only re-threads the suffix starting from the last non-plumbing
+ * message. That lookback is necessary because a freshly-arrived plumbing turn
+ * (tool_result) can complete a tool_use in the most recent assistant message.
+ *
+ * Returns null when the incremental path is unsafe, signalling the caller to
+ * fall back to a full buildThreadedMessages() call.
+ */
+export function buildThreadedMessagesIncremental(
+  messages: SessionMessage[],
+  cache: IncrementalThreadingCache,
+): ThreadedMessage[] | null {
+  const { messages: prevMessages, threaded: prevThreaded } = cache
+
+  // Only useful when messages grew
+  if (messages.length <= prevMessages.length || prevMessages.length === 0) return null
+
+  // Verify that the existing prefix is identical (same object references)
+  for (let i = 0; i < prevMessages.length; i++) {
+    if (messages[i] !== prevMessages[i]) return null
+  }
+
+  // Find the last non-plumbing message in the previous set — this is our
+  // reprocess boundary. Everything before it is stable.
+  let reprocessFromIndex = -1
+  for (let i = prevMessages.length - 1; i >= 0; i--) {
+    if (!isPlumbingTurn(prevMessages[i])) {
+      reprocessFromIndex = i
+      break
+    }
+  }
+
+  // Need at least one stable message before the boundary to benefit
+  if (reprocessFromIndex <= 0) return null
+
+  // Re-thread from the boundary message through the new tail
+  const partialThreaded = buildThreadedMessages(messages.slice(reprocessFromIndex))
+
+  // Drop the boundary message from the cached threaded output and splice in
+  // the freshly-built partial result (which now includes any new tool results)
+  const boundaryMsg = prevMessages[reprocessFromIndex]
+  const stablePrefix = prevThreaded.filter(
+    t => !(t.uuid === boundaryMsg.uuid && (t.provider ?? null) === (boundaryMsg.provider ?? null)),
+  )
+
+  return [...stablePrefix, ...partialThreaded]
+}
+
+/**
+ * Strips tool_thread blocks from each message. Messages left with no visible
+ * blocks are dropped so the transcript doesn't show empty turns.
+ */
+export function stripToolCallBlocks(messages: ThreadedMessage[]): ThreadedMessage[] {
+  const out: ThreadedMessage[] = []
+  for (const msg of messages) {
+    const kept = msg.blocks.filter((b) => b.type !== 'tool_thread')
+    if (kept.length === 0) continue
+    out.push(kept.length === msg.blocks.length ? msg : { ...msg, blocks: kept })
+  }
+  return out
+}
+
+/** Minimal shape computeTurnDurationsMs needs — satisfied by both
+ * ThreadedMessage and a raw subagent transcript message. */
+export type TurnDurationInput = { role: string; uuid: string; timestamp?: string }
+
+/**
+ * Elapsed wall-clock ms per turn, keyed by every message uuid in that turn
+ * (a turn = one user message plus every message up to the next user
+ * message). Shared by web (components/MessageItem.tsx, including nested
+ * subagent transcripts) and both TUIs (tui/format.ts) so "turn duration"
+ * means the same thing everywhere — renderers format the ms value with
+ * their own local duration formatter.
+ */
+export function computeTurnDurationsMs(messages: TurnDurationInput[]): Map<string, number> {
+  const durations = new Map<string, number>()
+  let turnUuids: string[] = []
+  let turnStart: number | null = null
+  let turnEnd: number | null = null
+  const flush = () => {
+    if (turnStart !== null && turnEnd !== null && turnEnd > turnStart) {
+      const ms = turnEnd - turnStart
+      for (const uuid of turnUuids) durations.set(uuid, ms)
+    }
+    turnUuids = []
+    turnStart = null
+    turnEnd = null
+  }
+  for (const msg of messages) {
+    if (msg.role === 'user') flush()
+    turnUuids.push(msg.uuid)
+    const ts = msg.timestamp ? Date.parse(msg.timestamp) : NaN
+    if (!Number.isNaN(ts)) {
+      if (turnStart === null) turnStart = ts
+      turnEnd = ts
+    }
+  }
+  flush()
+  return durations
 }
