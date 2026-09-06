@@ -9296,13 +9296,26 @@ export default function OpenTuiApp() {
       return idx === undefined ? entry : { ...entry, absoluteIndex: idx }
     })
   }, [filteredSessionsForSidebar, sessions, sidebarSort, childrenByParentId])
+  // Keep keyboard navigation and neighbour prefetch on the same flattened
+  // session order as the rendered sidebar. Rebuilding this array inside every
+  // j/k handler was needlessly allocating one wrapper array per keypress.
+  const sidebarSessionEntries = useMemo(() => {
+    const sessionsInOrder: Session[] = []
+    for (const entry of sidebarEntries) {
+      const session = sidebarEntrySession(entry)
+      if (session) sessionsInOrder.push(session)
+    }
+    return sessionsInOrder
+  }, [sidebarEntries])
   // Ref mirror for the neighbour-prefetch effect: it needs the current sidebar
   // order at fire time without re-triggering on every 5s sessions poll (the
   // entries array gets a fresh identity each refresh).
   const sidebarEntriesRef = useRef<SidebarEntry[]>([])
+  const sidebarSessionEntriesRef = useRef<Session[]>([])
   useEffect(() => {
     sidebarEntriesRef.current = sidebarEntries
-  }, [sidebarEntries])
+    sidebarSessionEntriesRef.current = sidebarSessionEntries
+  }, [sidebarEntries, sidebarSessionEntries])
   const sidebarSortLabel = sidebarSort === 'project' ? 'PROJECT' : 'TIME'
   const selectedSidebarEntryIndex = useMemo(() => {
     const selected = selectedIndex >= 0 ? sessions[selectedIndex] : null
@@ -11614,10 +11627,7 @@ export default function OpenTuiApp() {
   const moveSelection = useEffectEvent((delta: number) => {
     if (sessions.length === 0) return
     // Navigate in sidebar visual order (grouped by project), not raw time-sort order.
-    const sessionEntries = sidebarEntries.flatMap((entry) => {
-      const session = sidebarEntrySession(entry)
-      return session ? [session] : []
-    })
+    const sessionEntries = sidebarSessionEntries
     if (sessionEntries.length === 0) return
     const selected = selectedIndex >= 0 ? sessions[selectedIndex] : null
     const currentPos = selected
@@ -13437,10 +13447,10 @@ export default function OpenTuiApp() {
   const sidebarRowElements = useMemo(() => {
     const cache = sidebarRowCacheRef.current
     const live = new Set<string>()
+    const selectedSession = selectedIndex >= 0 ? sessions[selectedIndex] : null
     const rows = sidebarEntries.map((entry) => {
       live.add(entry.key)
       const entrySession = sidebarEntrySession(entry)
-      const selectedSession = selectedIndex >= 0 ? sessions[selectedIndex] : null
       const selected = Boolean(
         entrySession
         && selectedSession
@@ -14947,10 +14957,7 @@ export default function OpenTuiApp() {
     if (!bootstrapped || !committedSessionKey) return undefined
     let cancelled = false
     const run = async () => {
-      const sessionEntries = sidebarEntriesRef.current.flatMap((entry) => {
-        const session = sidebarEntrySession(entry)
-        return session ? [session] : []
-      })
+      const sessionEntries = sidebarSessionEntriesRef.current
       const idx = sessionEntries.findIndex((session) => sessionKey(session) === committedSessionKey)
       if (idx < 0) return
       const neighbors: Session[] = []

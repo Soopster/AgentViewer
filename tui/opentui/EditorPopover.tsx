@@ -1281,7 +1281,9 @@ export function EditorPopover({
   // from the loaded content so it's correct from the first paint.
   const gutterMinWidth = useMemo(() => {
     if (!activeTab?.content) return 4
-    const lineCount = activeTab.content.split('\n').length
+    // Reuse the editor's cached newline index instead of allocating a full
+    // string array on every editor render and keystroke.
+    const lineCount = lineStartsFor(activeTab.content).length
     return Math.max(4, String(lineCount).length + 2)
   }, [activeTab])
   const dirty = activeTab ? activeTab.content !== activeTab.savedContent : false
@@ -1308,37 +1310,40 @@ export function EditorPopover({
       return [{ id: String(line), label: `Go to line ${line}`, detail: activeTab.path, kind: 'line' }]
     }
     if (quickMode === 'buffers') {
-      return tabs
-        .flatMap((tab) => {
-          const score = fuzzyScore(`${basename(tab.path)} ${tab.path}`, query)
-          return score == null ? [] : [{
-            result: { id: tab.path, label: basename(tab.path), detail: tab.path, kind: 'buffers' as const },
-            score,
-          }]
+      const ranked: Array<{ result: QuickResult; score: number }> = []
+      for (const tab of tabs) {
+        const score = fuzzyScore(`${basename(tab.path)} ${tab.path}`, query)
+        if (score != null) ranked.push({
+          result: { id: tab.path, label: basename(tab.path), detail: tab.path, kind: 'buffers' as const },
+          score,
         })
+      }
+      return ranked
         .sort((a, b) => b.score - a.score)
         .map((entry) => entry.result)
     }
     if (quickMode === 'commands') {
-      return EDITOR_COMMANDS
-        .flatMap((command) => {
-          const score = fuzzyScore(`${command.label} ${command.keywords}`, query)
-          return score == null ? [] : [{
-            result: { id: command.id, label: command.label, detail: command.detail, kind: 'commands' as const },
-            score,
-          }]
+      const ranked: Array<{ result: QuickResult; score: number }> = []
+      for (const command of EDITOR_COMMANDS) {
+        const score = fuzzyScore(`${command.label} ${command.keywords}`, query)
+        if (score != null) ranked.push({
+          result: { id: command.id, label: command.label, detail: command.detail, kind: 'commands' as const },
+          score,
         })
+      }
+      return ranked
         .sort((a, b) => b.score - a.score)
         .map((entry) => entry.result)
     }
-    return projectFiles
-      .flatMap((path) => {
-        const score = fuzzyScore(`${basename(path)} ${path}`, query)
-        return score == null ? [] : [{
-          result: { id: path, label: basename(path), detail: path, kind: 'files' as const },
-          score,
-        }]
+    const ranked: Array<{ result: QuickResult; score: number }> = []
+    for (const path of projectFiles) {
+      const score = fuzzyScore(`${basename(path)} ${path}`, query)
+      if (score != null) ranked.push({
+        result: { id: path, label: basename(path), detail: path, kind: 'files' as const },
+        score,
       })
+    }
+    return ranked
       .sort((a, b) => b.score - a.score || a.result.detail.length - b.result.detail.length)
       .slice(0, 50)
       .map((entry) => entry.result)
