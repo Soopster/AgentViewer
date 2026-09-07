@@ -6,6 +6,33 @@ export type EditorProjectSearchOptions = {
   wholeWord: boolean
   limit?: number
   signal?: AbortSignal
+  /** Injected so win32 path handling is exercised from a posix machine. */
+  platform?: NodeJS.Platform
+}
+
+/** No search backend is installed. Distinct from "the search itself failed". */
+export class EditorProjectSearchUnavailableError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'EditorProjectSearchUnavailableError'
+  }
+}
+
+// Every result path has to be comparable with an open buffer's path, and buffer
+// paths come from `path.relative`, so they use the platform separator. The two
+// backends agree with neither each other nor that: ripgrep echoes the './'
+// prefix it was given (as '.\' on Windows) and git always reports forward
+// slashes, on every platform. Left alone, a Windows search reported '.\a\b.ts'
+// and 'a/b.ts' for the file the editor knows as 'a\b.ts' — so an open buffer's
+// stale disk hits were never deduplicated away, and every path was displayed in
+// a form the editor did not use.
+function normalizeSearchPath(raw: string, platform: NodeJS.Platform): string {
+  const stripped = raw.replace(/^\.[\\/]/, '')
+  return platform === 'win32' ? stripped.replace(/\//g, '\\') : stripped
+}
+
+function isMissingCommand(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException | null)?.code === 'ENOENT'
 }
 
 export type EditorProjectSearchResult = {
@@ -46,7 +73,7 @@ function runCommand(command: string, args: string[], cwd: string, signal?: Abort
   })
 }
 
-function parseRipgrepJson(output: string, limit: number): EditorProjectSearchResult[] {
+function parseRipgrepJson(output: string, limit: number, platform: NodeJS.Platform): EditorProjectSearchResult[] {
   const results: EditorProjectSearchResult[] = []
   for (const line of output.split('\n')) {
     if (!line || results.length >= limit) continue
@@ -67,13 +94,13 @@ function parseRipgrepJson(output: string, limit: number): EditorProjectSearchRes
       const byteOffset = (rawMatch as { start?: unknown }).start
       if (typeof byteOffset !== 'number') continue
       const character = Buffer.from(preview).subarray(0, byteOffset).toString('utf8').length
-      results.push({ path: path.text.replace(/^\.\//, ''), line: lineNumber - 1, character, preview })
+      results.push({ path: normalizeSearchPath(path.text, platform), line: lineNumber - 1, character, preview })
     }
   }
   return results
 }
 
-function parseGitGrep(output: string, query: string, matchCase: boolean, limit: number): EditorProjectSearchResult[] {
+function parseGitGrep(output: string, query: string, matchCase: boolean, limit: number, platform: NodeJS.Platform): EditorProjectSearchResult[] {
   const results: EditorProjectSearchResult[] = []
   const needle = matchCase ? query : query.toLocaleLowerCase()
   for (const row of output.split('\n')) {
@@ -83,7 +110,7 @@ function parseGitGrep(output: string, query: string, matchCase: boolean, limit: 
     const preview = match[3]!
     const haystack = matchCase ? preview : preview.toLocaleLowerCase()
     const character = haystack.indexOf(needle)
-    if (character >= 0) results.push({ path: match[1]!, line: Number(match[2]) - 1, character, preview })
+    if (character >= 0) results.push({ path: normalizeSearchPath(match[1]!, platform), line: Number(match[2]) - 1, character, preview })
   }
   return results
 }
@@ -130,6 +157,7 @@ export async function searchEditorProject(
 ): Promise<EditorProjectSearchResult[]> {
   if (!query) return []
   const limit = options.limit ?? 500
+  const platform = options.platform ?? process.platform
   const rgArgs = [
     '--json',
     '--color', 'never',
@@ -141,15 +169,31 @@ export async function searchEditorProject(
   ]
   try {
     const result = await runCommand('rg', rgArgs, cwd, options.signal)
-    if (result.code === 0 || result.code === 1) return parseRipgrepJson(result.stdout, limit)
+    if (result.code === 0 || result.code === 1) return parseRipgrepJson(result.stdout, limit, platform)
     throw new Error(result.stderr.trim() || `ripgrep exited with ${result.code}`)
   } catch (error) {
-    if (!(error instanceof Error) || !('code' in error) || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    if (!isMissingCommand(error)) throw error
   }
 
-  if (options.regex || options.wholeWord) throw new Error('Regex and whole-word project search require ripgrep')
-  const gitArgs = ['grep', '-n', '-I', ...(options.matchCase ? [] : ['-i']), '-F', '--', query]
-  const fallback = await runCommand('git', gitArgs, cwd, options.signal)
-  if (fallback.code === 0 || fallback.code === 1) return parseGitGrep(fallback.stdout, query, options.matchCase, limit)
-  throw new Error(fallback.stderr.trim() || `git grep exited with ${fallback.code}`)
+  if (options.regex || options.wholeWord) {
+    throw new EditorProjectSearchUnavailableError('Regex and whole-word project search require ripgrep (rg) on PATH')
+  }
+  // `--no-color` because git grep honours a user's `color.grep = always`, which
+  // would otherwise wrap every match in escapes and break the parse below.
+  const gitArgs = ['grep', '--no-color', '-n', '-I', ...(options.matchCase ? [] : ['-i']), '-F', '--', query]
+  let fallback: SearchCommandResult
+  try {
+    fallback = await runCommand('git', gitArgs, cwd, options.signal)
+  } catch (error) {
+    if (!isMissingCommand(error)) throw error
+    throw new EditorProjectSearchUnavailableError('Project search needs ripgrep (rg) on PATH; neither rg nor git was found')
+  }
+  if (fallback.code === 0 || fallback.code === 1) return parseGitGrep(fallback.stdout, query, options.matchCase, limit, platform)
+  const reason = fallback.stderr.trim()
+  // Outside a repository git grep exits 128, which is not a search failure: it
+  // means this folder has no backend at all until ripgrep is installed.
+  if (fallback.code === 128 && /not a git repository/i.test(reason)) {
+    throw new EditorProjectSearchUnavailableError('Project search needs ripgrep (rg) on PATH outside a git repository')
+  }
+  throw new Error(reason || `git grep exited with ${fallback.code}`)
 }

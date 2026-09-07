@@ -62,8 +62,14 @@ export function expandEditorSearchReplacement(
     if (reference === "'") return content.slice(match.end)
     if (reference.startsWith('<')) return match.groups?.[reference.slice(1, -1)] ?? token
     const index = Number.parseInt(reference, 10)
-    return Number.isFinite(index) && index > 0 && index <= match.captures.length
-      ? match.captures[index - 1] ?? ''
+    if (!Number.isFinite(index) || index < 1) return token
+    if (index <= match.captures.length) return match.captures[index - 1] ?? ''
+    // "$12" against two groups is group 1 followed by a literal "2" — every
+    // regex engine falls back a digit at a time, and refusing to would paste
+    // the token itself into the user's file instead of the replacement.
+    const single = Math.floor(index / 10)
+    return reference.length === 2 && single >= 1 && single <= match.captures.length
+      ? `${match.captures[single - 1] ?? ''}${reference[1]}`
       : token
   })
 }

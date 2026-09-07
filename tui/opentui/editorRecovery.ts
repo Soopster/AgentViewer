@@ -1,7 +1,7 @@
 import { mkdir, open, readFile, rename, stat, unlink } from 'node:fs/promises'
-import { join, relative, resolve, sep } from 'node:path'
-import { resolveSafeEditorFile } from './editorFileOperations'
-import { isEditorLineEnding, normalizeEditorNewlines, type EditorLineEnding } from './editorLineEndings'
+import { join, resolve } from 'node:path'
+import { isEditorPathWithin, resolveSafeEditorFile } from './editorFileOperations'
+import { decodeEditorFileText, isEditorLineEnding, normalizeEditorNewlines, type EditorLineEnding } from './editorLineEndings'
 
 export type EditorRecoveryBuffer = {
   path: string
@@ -134,17 +134,20 @@ export async function readEditorRecovery(root: string): Promise<EditorRecoveryRe
   const recoverable: EditorRecoveryBuffer[] = []
   const conflicts: EditorRecoveryBuffer[] = []
   for (const buffer of snapshot.buffers) {
-    const absolute = resolve(root, buffer.path)
-    const rel = relative(root, absolute)
-    if (!rel || rel === '..' || rel.startsWith(`..${sep}`)) {
+    // Same containment rule as every other entry point, rather than a second
+    // hand-rolled one: the local copy omitted the absolute-result case, which on
+    // win32 is how a different drive letter reads as inside the workspace.
+    const absoluteRoot = resolve(root)
+    const absolute = resolve(absoluteRoot, buffer.path)
+    if (absolute === absoluteRoot || !isEditorPathWithin(absoluteRoot, absolute)) {
       conflicts.push(buffer)
       continue
     }
     let diskContent: string | null = null
     try {
       const safeFile = await resolveSafeEditorFile(root, buffer.path)
-      diskContent = normalizeEditorNewlines(await readFile(safeFile.absolute, 'utf8'))
-    } catch { /* missing/unreadable/outside-workspace is a conflict */ }
+      diskContent = normalizeEditorNewlines(decodeEditorFileText(await readFile(safeFile.absolute), safeFile.path))
+    } catch { /* missing/unreadable/undecodable/outside-workspace is a conflict */ }
     if (diskContent === buffer.savedContent) recoverable.push(buffer)
     else conflicts.push(buffer)
   }

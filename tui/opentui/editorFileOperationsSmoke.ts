@@ -32,7 +32,25 @@ try {
   try { await readFile(join(root, deleted), 'utf8') } catch { missing = true }
   if (!missing) throw new Error('Delete left the file on disk')
 
-  console.log('Editor safe create/rename/delete/no-overwrite/symlink smoke passed')
+  // A case-only rename. On APFS and NTFS the new name already resolves — to the
+  // file being renamed — so a bare existence check refused every one of them
+  // with "Refusing to overwrite existing path". Same device and inode is the
+  // file itself, not a collision.
+  await writeFile(join(root, 'CaseOnly.ts'), 'const cased = 1\n', 'utf8')
+  const recased = await renameEditorFile(root, 'CaseOnly.ts', 'caseonly.ts')
+  if (recased.to !== 'caseonly.ts' || await readFile(join(root, recased.to), 'utf8') !== 'const cased = 1\n') {
+    throw new Error('Case-only rename did not keep the file')
+  }
+  // ...and a genuine collision is still refused, on a case-insensitive volume
+  // as well: 'occupied.ts' is a different inode.
+  await writeFile(join(root, 'collide.ts'), 'collide\n', 'utf8')
+  let collisionRejected = false
+  try { await renameEditorFile(root, 'collide.ts', 'occupied.ts') } catch { collisionRejected = true }
+  if (!collisionRejected || await readFile(join(root, 'occupied.ts'), 'utf8') !== 'keep\n') {
+    throw new Error('Rename overwrote a distinct existing file')
+  }
+
+  console.log('Editor safe create/rename/delete/no-overwrite/symlink/case-rename smoke passed')
 } finally {
   await Promise.all([rm(root, { recursive: true, force: true }), rm(outside, { recursive: true, force: true })])
 }

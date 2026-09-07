@@ -20,7 +20,12 @@ export function detectEditorIndentUnit(content: string, path = ''): string {
   for (const line of sample.split('\n')) {
     if (/^\t+\S/.test(line)) tabLines += 1
     const spaces = /^( +)\S/.exec(line)?.[1].length
-    if (spaces) spaceIndents.push(spaces)
+    // A single leading space is a block-comment continuation (" * …"), not an
+    // indent unit — the Math.max(2, …) below already refuses to report one. But
+    // counting it let one doc comment win the tab-vs-space vote outright and
+    // drag Math.min down, so a tab-indented Go file and a 4-space JS file both
+    // reported two spaces the moment they grew a header comment.
+    if (spaces != null && spaces > 1) spaceIndents.push(spaces)
   }
   if (tabLines > spaceIndents.length) return '\t'
   if (spaceIndents.length > 0) return ' '.repeat(Math.max(2, Math.min(8, Math.min(...spaceIndents))))

@@ -2,6 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { EditorLspClient, getEditorLspServerSpecs, type EditorDiagnostic, type EditorLspStatus } from './editorLsp'
+import { disposeAllLspSessions, pooledLspSessionCount } from './editorLspSession'
 
 const cwd = await mkdtemp(join(tmpdir(), 'agent-viewer-editor-lsp-'))
 const serverPath = join(cwd, 'fake-lsp.mjs')
@@ -261,9 +262,42 @@ try {
     if (!appliedCommandEdit) throw new Error('Server-initiated workspace/applyEdit was not acknowledged and applied')
     client.change('const value = answer\n')
     client.saved('const value = answer\n')
+
+    // Two buffers in the same workspace share one server process. Before
+    // pooling, opening the second one killed the first one's server and paid
+    // a full re-index; the count is what proves it does not any more.
+    const sessionsBefore = pooledLspSessionCount()
+    const siblingPath = join(cwd, 'sibling.ts')
+    await writeFile(siblingPath, 'const other = 1\n', 'utf8')
+    let siblingDiagnostics: EditorDiagnostic[] = []
+    const sibling = new EditorLspClient(cwd, 'typescript', siblingPath, [
+      { command: process.execPath, args: [serverPath], name: 'fake-lsp' },
+    ])
+    sibling.onDiagnostics((next) => { siblingDiagnostics = next })
+    const siblingStarted = await sibling.start('const other = 1\n')
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    if (!siblingStarted || pooledLspSessionCount() !== sessionsBefore) {
+      throw new Error(`A second buffer started its own language server: ${JSON.stringify({ sessionsBefore, now: pooledLspSessionCount() })}`)
+    }
+    if (siblingDiagnostics.length !== 1) {
+      throw new Error(`Pooled session did not route diagnostics to the second buffer: ${JSON.stringify(siblingDiagnostics)}`)
+    }
+    // The first buffer must still be answered by the shared server.
+    const afterSharing = await client.completion({ line: 0, character: 17 }, '.')
+    if (afterSharing[0]?.label !== 'answer') {
+      throw new Error(`Opening a second buffer disturbed the first one's session: ${JSON.stringify(afterSharing)}`)
+    }
+    // Closing one buffer must not take the server away from the other.
+    sibling.stop()
+    const afterSiblingClosed = await client.completion({ line: 0, character: 17 }, '.')
+    if (afterSiblingClosed[0]?.label !== 'answer' || pooledLspSessionCount() !== sessionsBefore) {
+      throw new Error('Closing one buffer stopped the language server the other buffer was using')
+    }
     console.log('Editor LSP completion/navigation/rename/format/code-action/workspace-edit smoke passed')
+    console.log('Editor LSP session pooling smoke passed (one server shared by two buffers)')
   } finally {
     client.stop()
+    disposeAllLspSessions()
   }
 
   let slowStatus: EditorLspStatus | null = null
@@ -274,6 +308,7 @@ try {
   const slowStart = slowClient.start('const value = 1\n')
   await new Promise((resolve) => setTimeout(resolve, 25))
   slowClient.stop()
+  disposeAllLspSessions()
   if (await slowStart || (slowStatus as EditorLspStatus | null)?.state === 'error') {
     throw new Error(`Stopping an initializing LSP leaked a stale error: ${JSON.stringify(slowStatus)}`)
   }
@@ -298,6 +333,7 @@ try {
     }
   } finally {
     nativeClient.stop()
+    disposeAllLspSessions()
   }
   console.log('Editor real TypeScript 7 LSP startup/completion/hover/diagnostics/shutdown smoke passed')
 } finally {

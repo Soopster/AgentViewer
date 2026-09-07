@@ -23,6 +23,20 @@ function normalized(range: EditorCursorRange, contentLength: number): EditorCurs
   }
 }
 
+// An offset between the two halves of a surrogate pair is not a text position:
+// an edit that starts or ends there writes a lone surrogate into the file, which
+// renders identically and is not well-formed text. Block selection reaches such
+// an offset through plain column arithmetic, and a stale cursor can land on one
+// after the text beneath it moved, so every range is widened to whole code
+// points before it is used. A caret stays a caret — both ends snap the same way.
+function snapRangeToCodePoints(content: string, range: EditorCursorRange): EditorCursorRange {
+  const splits = (offset: number) => offset > 0 && offset < content.length
+    && content.charCodeAt(offset - 1) >= 0xD800 && content.charCodeAt(offset - 1) <= 0xDBFF
+    && content.charCodeAt(offset) >= 0xDC00 && content.charCodeAt(offset) <= 0xDFFF
+  const start = splits(range.start) ? range.start - 1 : range.start
+  return { start, end: range.start === range.end ? start : splits(range.end) ? range.end + 1 : range.end }
+}
+
 function identifierRange(content: string, offset: number): EditorCursorRange | null {
   const identifier = /[\p{L}\p{N}\p{M}_$]/u
   let start = Math.max(0, Math.min(content.length, offset))
@@ -109,7 +123,11 @@ export function addEditorCursorOnAdjacentLine(
   direction: -1 | 1,
 ): EditorMultiCursorState | null {
   const ranges = state?.ranges ?? [{ start: cursorOffset, end: cursorOffset }]
-  const activeIndex = state?.activeIndex ?? 0
+  // applyEditorMultiCursorEdit can hand back an empty cursor set, and its
+  // activeIndex is only meaningful against the ranges it was built from, so both
+  // are checked here the way addEditorCursorAtNextMatch already checks them.
+  if (ranges.length === 0) return state
+  const activeIndex = Math.max(0, Math.min(ranges.length - 1, state?.activeIndex ?? 0))
   const active = normalized(ranges[activeIndex]!, content.length)
   const starts = lineStarts(content)
   const line = lineIndexAt(starts, active.end)
@@ -170,10 +188,12 @@ export function updateEditorBlockSelection(
     const lineStart = starts[line]!
     const lineEnd = line + 1 < starts.length ? starts[line + 1]! - 1 : content.length
     const lineLength = lineEnd - lineStart
-    ranges.push({
+    // Snapped here too, so the highlighted rectangle is exactly what an edit
+    // through it will consume rather than half a code point less.
+    ranges.push(snapRangeToCodePoints(content, {
       start: lineStart + Math.min(startColumn, lineLength),
       end: lineStart + Math.min(endColumn, lineLength),
-    })
+    }))
     if (line === next.headLine) activeIndex = ranges.length - 1
   }
   return { block: next, cursors: { ranges, activeIndex } }
@@ -198,7 +218,7 @@ export function applyEditorMultiCursorEdit(
   edit: EditorMultiCursorEdit,
 ): { content: string; state: EditorMultiCursorState } {
   const edits = state.ranges.map((rawRange, index) => {
-    let range = normalized(rawRange, content.length)
+    let range = snapRangeToCodePoints(content, normalized(rawRange, content.length))
     const replacement = typeof edit === 'object' ? edit.insert : ''
     if (range.start === range.end && edit === 'backspace') range = { start: previousGraphemeOffset(content, range.start), end: range.end }
     if (range.start === range.end && edit === 'delete') range = { start: range.start, end: nextGraphemeOffset(content, range.end) }

@@ -340,6 +340,84 @@ auto-pair checks nor anything else `handleKey` does per character. Set
   pair: LSP positions are UTF-16 code units, but half a pair is not a character
   and a server cannot recover from being sent one.
 
+- **A click on a tab must select it, and only the `×` may close it.** The tab's
+  box had no `flexDirection`, so it laid its children out in a *column*: the `×`
+  then stretched across the full tab width (cross-axis stretch is the default),
+  painted over the label's status glyph, and took every click meant for the tab
+  — selecting a buffer closed it instead. Nothing about the rendered row looked
+  wrong, which is why `editorTabMouseSmoke.tsx` clicks each column of the label
+  and asserts the buffer survives. Any box holding a click target beside other
+  content needs an explicit direction.
+- **Encoding is the third silent-data-loss boundary**, alongside line endings and
+  buffer capacity. `readFile(path, 'utf8')` never reports a bad byte, it
+  substitutes U+FFFD — so a Latin-1 file opened looking plausible and the first
+  save wrote the replacement character over its own bytes, whole-file and
+  silent. `decodeEditorFileText` (`editorLineEndings.ts`) decodes strictly and
+  **refuses** a file that is not valid UTF-8 or contains NUL, rather than
+  mangling it; `ignoreBOM` keeps a leading U+FEFF so a BOM round-trips.
+- **A save must not narrow a file's permissions.** `open(temp, 'wx', mode)` is
+  masked by the process umask, so a 0o666 file was rewritten 0o644. The
+  temporary file is created 0o600 and `fchmod`'d to the original mode, which is
+  not masked.
+- **A timestamp only proves a file unchanged once it is old enough to.** ext4
+  with 128-byte inodes records whole seconds and FAT two, so an in-place
+  same-size write in the same tick as the read leaves `dev:ino:size:mtime:ctime`
+  identical — and identical on every later poll. `editorDiskReader.ts` refuses
+  to cache against a stamp younger than `COARSE_TIMESTAMP_MS`, the same rule git
+  applies to a racily-clean entry. APFS records nanoseconds, so the case is
+  reached by injecting a truncating stamp source, not by writing files.
+- **The tree-sitter edit and the syntax classifier were linear in file size.**
+  Deriving one keystroke's edit did three full `positionAt` scans from offset 0
+  (~3.4M code-unit comparisons per character at 20,000 lines), and
+  `classifyEditorOffset` allocated three closures and materialized a
+  one-character string *per character of the prefix*. The edit path now compares
+  in 4,096-char blocks and carries a line-start table across edits; the
+  classifier retires impossible characters through a cached delimiter-start
+  table. Measured interleaved in-process at 20,000 lines: 5.12ms → 0.14ms per
+  edit, 26.8ms → 3.0ms per classify. Neither is O(edit) — both still make one
+  O(prefix) pass; the constants fell ~30x and ~9x. `editorSyntaxEditSmoke.ts`
+  and `editorSyntaxContextScanSmoke.ts` are differential (609,309 offsets, 3,000
+  random edits) because a wrong range fails **silently**: the tree diverges and
+  later highlights decorate the wrong text with no error.
+
+- **One language server per workspace and command, not per buffer.** The server
+  process lives in `editorLspSession.ts` and is shared by every buffer that can
+  use it; `EditorLspClient` is now just one document's handle on it. It used to
+  be the other way round, and switching tabs killed the process and spawned a
+  new one — for gopls or rust-analyzer that is the whole workspace re-indexed
+  before the first completion, per Tab. A session is reaped only after
+  `AGENT_VIEWER_LSP_IDLE_MS` (3 min) with nothing holding it, and both the
+  session and each open document are refcounted, so the same file open in two
+  panes cannot have one pane's close send a `didClose` out from under the other.
+  Pooled children are killed on process exit, or they would outlive the TUI and
+  keep indexing a workspace nobody has open.
+- **A server that dies comes back on its own**, up to `AGENT_VIEWER_LSP_MAX_RESTARTS`
+  (3) with exponential backoff, reopening the buffer **as it is now** rather than
+  as it was when the server died — `liveText` is kept while nothing is running
+  for exactly that. Without the cap, a server that crashes during startup
+  respawns forever; `editorLspRestartSmoke.ts` pins both halves.
+- **A command is resolved before it is spawned** (`editorLspCommand.ts`). On
+  Windows most of these servers are `.cmd` shims that `spawn` cannot execute at
+  all, so the whole table was unreachable there — a shim is run through
+  `cmd.exe` with its own quoting, since the usual install path contains a space.
+  Path arithmetic uses the *target* platform's API, which is what lets
+  `editorLspServersSmoke.ts` drive win32 resolution from macOS; a `join` that
+  used the running platform would build `C:\tools\bin/gopls` and find nothing.
+  Resolution also means a missing server costs a `stat` rather than a failed
+  spawn, so a fallback chain (`basedpyright` → `pyright` → `ruff` → `pylsp`)
+  moves on immediately.
+- **The server table lives in `editorLspServers.ts` and a project can override
+  it** via `.agent-viewer/lsp.json` — `servers` (replacing the built-ins, or
+  prepending when an entry sets `extend`), `disabled`, and `rootMarkers`. The
+  file is parsed leniently (comments, trailing commas) because that is what
+  people write in an editor config. **Bare `tsc` is not a fallback for
+  TypeScript**: TypeScript 5's compiler has no `--lsp`, so it would spawn,
+  reject the flags and die; the second choice is `typescript-language-server`.
+- **A server is rooted at its own project, not at the editor's cwd**
+  (`resolveLspWorkspaceRoot`): gopls wants the `go.mod` module, rust-analyzer
+  the Cargo workspace. The search never escapes the root the editor was opened
+  at, and falls back to it, so a stray file still gets a server.
+
 - **Tab is overloaded, and its claimants are ordered.** In one key handler, in
   order: a snippet placeholder, an open completion list, a standing ghost, a
   selection or Shift (indent/outdent lines), and finally plain Tab, which

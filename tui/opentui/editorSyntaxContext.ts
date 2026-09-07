@@ -74,6 +74,35 @@ export function editorSyntaxForPath(path: string): LanguageSyntax {
   return (extension ? SYNTAX_BY_EXTENSION[extension] : undefined) ?? PLAIN_TEXT
 }
 
+// Nearly every character in a source file can begin neither a comment nor a
+// string, and the scan below used to prove that the expensive way: three
+// `Array.prototype.find` calls — each allocating a closure — plus a
+// `content[index]` single-character string, for every character of the prefix.
+// A code unit that starts no delimiter in this language cannot enter any
+// branch, so one table lookup retires it and the `startsWith` work runs only
+// where a delimiter could actually begin. Every delimiter here is ASCII, so a
+// 128-entry table covers them and anything above it is a plain character.
+const DELIMITER_STARTS = new WeakMap<LanguageSyntax, Uint8Array>()
+
+function delimiterStarts(syntax: LanguageSyntax): Uint8Array {
+  const cached = DELIMITER_STARTS.get(syntax)
+  if (cached) return cached
+  const table = new Uint8Array(128)
+  const mark = (token: string) => {
+    const code = token.charCodeAt(0)
+    if (code < 128) table[code] = 1
+  }
+  for (const token of syntax.lineComments) mark(token)
+  for (const [open] of syntax.blockComments) mark(open)
+  for (const token of syntax.tripleQuotes) mark(token)
+  for (const token of syntax.quotes) mark(token)
+  DELIMITER_STARTS.set(syntax, table)
+  return table
+}
+
+const NEWLINE = 10
+const BACKSLASH = 92
+
 /**
  * Classify `offset` as code, comment, or string. The scan starts at the top of
  * the document because block comments and template literals span lines, but it
@@ -81,9 +110,15 @@ export function editorSyntaxForPath(path: string): LanguageSyntax {
  */
 export function classifyEditorOffset(content: string, offset: number, path: string): EditorOffsetKind {
   const syntax = editorSyntaxForPath(path)
+  const starts = delimiterStarts(syntax)
   const target = Math.max(0, Math.min(content.length, offset))
   let index = 0
   while (index < target) {
+    const code = content.charCodeAt(index)
+    if (code >= 128 || starts[code] === 0) {
+      index += 1
+      continue
+    }
     const character = content[index]!
     const lineComment = syntax.lineComments.find((token) => content.startsWith(token, index))
     if (lineComment) {
@@ -110,14 +145,14 @@ export function classifyEditorOffset(content: string, offset: number, path: stri
       const multiline = syntax.multilineQuotes.includes(character)
       let scan = index + 1
       while (scan < content.length) {
-        const inner = content[scan]!
-        if (inner === '\\') { scan += 2; continue }
-        if (inner === character) break
-        if (inner === '\n' && !multiline) break
+        const inner = content.charCodeAt(scan)
+        if (inner === BACKSLASH) { scan += 2; continue }
+        if (inner === code) break
+        if (inner === NEWLINE && !multiline) break
         scan += 1
       }
       if (scan >= content.length) return 'string'
-      if (content[scan] !== character) {
+      if (content.charCodeAt(scan) !== code) {
         // Unterminated on its line: an apostrophe in prose, not a string open.
         index += 1
         continue
@@ -159,12 +194,16 @@ export function matchingBracketAt(content: string, offset: number, path: string)
   return null
 }
 
+// An unbalanced bracket makes this scan the whole file, so it reads code units
+// rather than allocating a one-character string per position.
 function scanBrackets(content: string, from: number, same: string, partner: string, step: 1 | -1): number | null {
+  const sameCode = same.charCodeAt(0)
+  const partnerCode = partner.charCodeAt(0)
   let depth = 0
   for (let index = from; index >= 0 && index < content.length; index += step) {
-    const character = content[index]
-    if (character === same) depth += 1
-    else if (character === partner) {
+    const character = content.charCodeAt(index)
+    if (character === sameCode) depth += 1
+    else if (character === partnerCode) {
       depth -= 1
       if (depth === 0) return index
     }

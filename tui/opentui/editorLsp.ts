@@ -1,8 +1,7 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { createRequire } from 'node:module'
-import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { LSP_SYNC_FULL, lspContentChanges, lspSyncKind, type LspSyncKind } from './editorLspSync'
+import { LSP_SYNC_FULL, lspContentChanges } from './editorLspSync'
+import { acquireLspSession, type EditorLspSession, type LspDocumentHandlers } from './editorLspSession'
+import { getEditorLspServerSpecs, type EditorLspServerSpec } from './editorLspServers'
 
 export type EditorPosition = { line: number; character: number }
 
@@ -72,72 +71,8 @@ export type EditorDiagnostic = {
   source?: string
 }
 
-export type EditorLspServerSpec = { command: string; args: string[]; name: string }
-
-const moduleRequire = createRequire(import.meta.url)
-
-function typescriptLspCommand(): string {
-  const packagedCommand = process.env.AGENT_VIEWER_TYPESCRIPT_LSP_BIN
-  if (packagedCommand) return packagedCommand
-  try {
-    const platformPackage = `@typescript/typescript-${process.platform}-${process.arch}/package.json`
-    const packagePath = moduleRequire.resolve(platformPackage)
-    return join(dirname(packagePath), 'lib', process.platform === 'win32' ? 'tsc.exe' : 'tsc')
-  } catch {
-    return 'tsc'
-  }
-}
-
-const TYPESCRIPT_FILETYPES = new Set(['javascript', 'javascriptreact', 'typescript', 'typescriptreact'])
-
-const SERVER_BY_FILETYPE: Readonly<Record<string, readonly EditorLspServerSpec[]>> = {
-  bash: [{ command: 'bash-language-server', args: ['start'], name: 'bash-language-server' }],
-  c: [{ command: 'clangd', args: ['--background-index'], name: 'clangd' }],
-  cpp: [{ command: 'clangd', args: ['--background-index'], name: 'clangd' }],
-  csharp: [{ command: 'roslyn-language-server', args: ['--stdio'], name: 'Roslyn' }],
-  css: [{ command: 'vscode-css-language-server', args: ['--stdio'], name: 'css-language-server' }],
-  go: [{ command: 'gopls', args: [], name: 'gopls' }],
-  html: [{ command: 'vscode-html-language-server', args: ['--stdio'], name: 'html-language-server' }],
-  json: [{ command: 'vscode-json-language-server', args: ['--stdio'], name: 'json-language-server' }],
-  lua: [{ command: 'lua-language-server', args: [], name: 'lua-language-server' }],
-  python: [
-    { command: 'basedpyright-langserver', args: ['--stdio'], name: 'basedpyright' },
-    { command: 'pyright-langserver', args: ['--stdio'], name: 'pyright' },
-    { command: 'pylsp', args: [], name: 'pylsp' },
-  ],
-  ruby: [{ command: 'ruby-lsp', args: [], name: 'ruby-lsp' }],
-  rust: [{ command: 'rust-analyzer', args: [], name: 'rust-analyzer' }],
-  vue: [{ command: 'vue-language-server', args: ['--stdio'], name: 'vue-language-server' }],
-  yaml: [{ command: 'yaml-language-server', args: ['--stdio'], name: 'yaml-language-server' }],
-}
-
-export function getEditorLspServerSpecs(filetype: string): readonly EditorLspServerSpec[] {
-  if (TYPESCRIPT_FILETYPES.has(filetype)) {
-    return [{ command: typescriptLspCommand(), args: ['--lsp', '--stdio'], name: 'TypeScript 7' }]
-  }
-  return SERVER_BY_FILETYPE[filetype] ?? []
-}
-
-type JsonRpcMessage = {
-  id?: number | string
-  method?: string
-  result?: unknown
-  error?: { code?: number; message?: string }
-  params?: unknown
-}
-
-type PendingRequest = {
-  resolve: (value: unknown) => void
-  reject: (error: Error) => void
-  timer: ReturnType<typeof setTimeout>
-  abortCleanup?: () => void
-}
-
-function abortError(method: string): Error {
-  const error = new Error(`${method} cancelled`)
-  error.name = 'AbortError'
-  return error
-}
+export type { EditorLspServerSpec } from './editorLspServers'
+export { getEditorLspServerSpecs, resolveLspWorkspaceRoot, loadEditorLspConfig } from './editorLspServers'
 
 function markupText(value: unknown): string | undefined {
   if (typeof value === 'string') return value
@@ -320,24 +255,94 @@ export type EditorLspStatus =
   | { state: 'unavailable'; name: string }
   | { state: 'error'; name: string; message: string }
 
+const MAX_LSP_RESTARTS = Number(process.env.AGENT_VIEWER_LSP_MAX_RESTARTS ?? 3)
+const LSP_RESTART_BASE_DELAY_MS = Number(process.env.AGENT_VIEWER_LSP_RESTART_DELAY_MS ?? 1_000)
+const INITIALIZE_TIMEOUT_MS = Number(process.env.AGENT_VIEWER_LSP_INIT_TIMEOUT_MS ?? 20_000)
+
+/**
+ * What this editor tells a server it can do. Sent once per session rather than
+ * once per buffer, so it describes the client, never a particular document.
+ */
+function initializeParams(rootUri: string, rootPath: string): unknown {
+  return {
+    processId: process.pid,
+    clientInfo: { name: 'agent-viewer', version: '1' },
+    rootUri,
+    rootPath,
+    workspaceFolders: [{ uri: rootUri, name: rootPath.split(/[\\/]/).pop() || 'workspace' }],
+    capabilities: {
+      general: { positionEncodings: ['utf-16'] },
+      textDocument: {
+        completion: {
+          completionItem: {
+            snippetSupport: true,
+            documentationFormat: ['plaintext', 'markdown'],
+            insertReplaceSupport: true,
+            labelDetailsSupport: true,
+            resolveSupport: {
+              properties: ['documentation', 'detail', 'additionalTextEdits'],
+            },
+          },
+          completionList: { itemDefaults: ['editRange', 'insertTextFormat', 'data'] },
+          contextSupport: true,
+        },
+        hover: { contentFormat: ['markdown', 'plaintext'] },
+        definition: { linkSupport: true },
+        implementation: { linkSupport: true },
+        references: {},
+        rename: { prepareSupport: true },
+        formatting: {},
+        codeAction: {
+          codeActionLiteralSupport: {
+            codeActionKind: {
+              valueSet: ['', 'quickfix', 'refactor', 'refactor.extract', 'refactor.inline', 'refactor.rewrite', 'source', 'source.organizeImports'],
+            },
+          },
+          isPreferredSupport: true,
+        },
+        signatureHelp: {
+          signatureInformation: {
+            documentationFormat: ['markdown', 'plaintext'],
+            parameterInformation: { labelOffsetSupport: true },
+            activeParameterSupport: true,
+          },
+          contextSupport: true,
+        },
+        publishDiagnostics: { relatedInformation: true },
+        diagnostic: { dynamicRegistration: false, relatedDocumentSupport: false },
+        synchronization: { didSave: true, willSave: false },
+      },
+      workspace: {
+        workspaceFolders: true,
+        configuration: true,
+        applyEdit: true,
+        workspaceEdit: { documentChanges: true },
+        didChangeConfiguration: { dynamicRegistration: false },
+      },
+      window: { workDoneProgress: true },
+    },
+  }
+}
+
+/**
+ * One open buffer's view of a language server.
+ *
+ * The process itself belongs to `editorLspSession.ts` and is shared with every
+ * other buffer in the same workspace that speaks to the same server, so
+ * switching tabs no longer restarts (and re-indexes) anything.
+ */
 export class EditorLspClient {
-  private child: ChildProcessWithoutNullStreams | null = null
-  private buffer = Buffer.alloc(0)
-  private nextId = 1
-  private version = 1
-  private pending = new Map<number, PendingRequest>()
+  private session: EditorLspSession | null = null
+  private releaseSession: (() => void) | null = null
   private openedUri: string | null = null
   private stopped = false
-  private serverIndex = 0
   private lastText: string | null = null
-  // What the server said it accepts in textDocument/didChange. Full until the
-  // handshake says otherwise, which is what this client always sent.
-  private syncKind: LspSyncKind = LSP_SYNC_FULL
-  private completionResolveProvider = false
-  private completionTriggerCharacters = new Set<string>()
-  private pullDiagnostics = false
+  private startupError = ''
+  private restartAttempts = 0
+  private restartTimer: ReturnType<typeof setTimeout> | null = null
+  private liveText = ''
+  private documentHandlers: LspDocumentHandlers | null = null
   private diagnosticRequest = 0
-  private serverStderr = ''
   private diagnosticsHandler: (diagnostics: EditorDiagnostic[]) => void = () => {}
   private statusHandler: (status: EditorLspStatus) => void = () => {}
   private workspaceEditHandler: (edit: EditorWorkspaceEdit) => Promise<boolean> = async () => false
@@ -348,6 +353,19 @@ export class EditorLspClient {
     private readonly filePath: string,
     private readonly serverSpecs?: readonly EditorLspServerSpec[],
   ) {}
+
+  /** Truthy while a live session backs this buffer; kept so guards read as before. */
+  private get child(): EditorLspSession | null {
+    return this.session && this.session.alive ? this.session : null
+  }
+
+  private get completionResolveProvider(): boolean {
+    return this.session?.capabilities.completionResolveProvider ?? false
+  }
+
+  private get pullDiagnostics(): boolean {
+    return this.session?.capabilities.pullDiagnostics ?? false
+  }
 
   onDiagnostics(handler: (diagnostics: EditorDiagnostic[]) => void): void {
     this.diagnosticsHandler = handler
@@ -362,114 +380,109 @@ export class EditorLspClient {
   }
 
   async start(text: string): Promise<boolean> {
+    this.liveText = text
     const specs = this.serverSpecs ?? getEditorLspServerSpecs(this.filetype)
-    while (!this.stopped && this.serverIndex < specs.length) {
-      const spec = specs[this.serverIndex++]!
+    let lastSpec: EditorLspServerSpec | null = null
+    let missing = specs.length > 0
+    for (const spec of specs) {
+      if (this.stopped) return false
+      lastSpec = spec
       this.statusHandler({ state: 'starting', name: spec.name })
       try {
-        await this.spawnServer(spec)
-        const rootUri = pathToFileURL(this.rootPath).href
-        const initializeResult = await this.request('initialize', {
-          processId: process.pid,
-          clientInfo: { name: 'agent-viewer', version: '1' },
-          rootUri,
-          workspaceFolders: [{ uri: rootUri, name: this.rootPath.split(/[\\/]/).pop() || 'workspace' }],
-          capabilities: {
-            textDocument: {
-              completion: {
-                completionItem: {
-                  snippetSupport: true,
-                  documentationFormat: ['plaintext', 'markdown'],
-                  insertReplaceSupport: true,
-                  resolveSupport: {
-                    properties: ['documentation', 'detail', 'additionalTextEdits'],
-                  },
-                },
-                contextSupport: true,
-              },
-              hover: { contentFormat: ['markdown', 'plaintext'] },
-              definition: { linkSupport: true },
-              implementation: { linkSupport: true },
-              signatureHelp: {
-                signatureInformation: {
-                  documentationFormat: ['markdown', 'plaintext'],
-                  parameterInformation: { labelOffsetSupport: true },
-                  activeParameterSupport: true,
-                },
-                contextSupport: true,
-              },
-              publishDiagnostics: { relatedInformation: true },
-              diagnostic: { dynamicRegistration: false, relatedDocumentSupport: false },
-              synchronization: { didSave: true, willSave: false },
-            },
-            workspace: {
-              workspaceFolders: true,
-              configuration: true,
-              applyEdit: true,
-              workspaceEdit: { documentChanges: true },
-            },
-          },
-        }, 8_000)
-        if (this.stopped) return false
-        const serverCapabilities = initializeResult && typeof initializeResult === 'object'
-          ? (initializeResult as { capabilities?: Record<string, unknown> }).capabilities
-          : undefined
-        const completionProvider = serverCapabilities?.completionProvider && typeof serverCapabilities.completionProvider === 'object'
-          ? serverCapabilities.completionProvider as Record<string, unknown>
-          : undefined
-        this.completionResolveProvider = completionProvider?.resolveProvider === true
-        this.completionTriggerCharacters = new Set(
-          Array.isArray(completionProvider?.triggerCharacters)
-            ? completionProvider.triggerCharacters.filter((value): value is string => typeof value === 'string')
-            : [],
-        )
-        this.pullDiagnostics = Boolean(serverCapabilities?.diagnosticProvider)
-        this.syncKind = lspSyncKind(serverCapabilities?.textDocumentSync)
-        this.notify('initialized', {})
-        this.openedUri = pathToFileURL(this.filePath).href
-        this.notify('textDocument/didOpen', {
-          textDocument: {
-            uri: this.openedUri,
-            languageId: this.filetype,
-            version: this.version,
-            text,
-          },
+        const session = await acquireLspSession({
+          rootPath: this.rootPath,
+          command: spec.command,
+          args: spec.args,
+          serverName: spec.name,
+          initializeParams: (rootUri) => initializeParams(rootUri, this.rootPath),
+          initializeTimeoutMs: INITIALIZE_TIMEOUT_MS,
         })
+        if (this.stopped) {
+          session.release()
+          return false
+        }
+        this.session = session
+        this.releaseSession = () => session.release()
+        const uri = pathToFileURL(this.filePath).href
+        this.openedUri = uri
+        const unsubscribeExit = session.onExit((exit) => {
+          if (this.stopped || this.session !== session) return
+          this.session = null
+          this.releaseSession = null
+          this.openedUri = null
+          this.lastText = null
+          this.statusHandler({ state: 'error', name: spec.name, message: exit.message })
+          // A server that dies takes completions, diagnostics and navigation
+          // with it, and the buffer gives no sign beyond a status word. Coming
+          // back on its own is what an editor is expected to do; the attempt
+          // cap is what stops a server that crashes on startup from respawning
+          // forever.
+          this.scheduleRestart(spec.name)
+        })
+        const releaseSession = this.releaseSession
+        this.releaseSession = () => {
+          unsubscribeExit()
+          releaseSession()
+        }
+        const documentHandlers = {
+          onDiagnostics: (params: unknown) => {
+            const diagnostics = (params as { diagnostics?: unknown } | undefined)?.diagnostics
+            this.diagnosticsHandler(editorDiagnostics(diagnostics))
+          },
+          onApplyEdit: async (raw: unknown) => {
+            const edit = workspaceEdit(raw)
+            return edit ? this.workspaceEditHandler(edit) : false
+          },
+        }
+        this.documentHandlers = documentHandlers
+        session.openDocument(uri, this.filetype, text, documentHandlers)
         this.lastText = text
+        this.restartAttempts = 0
         this.statusHandler({ state: 'ready', name: spec.name })
         void this.refreshDiagnostics()
         return true
       } catch (error) {
-        this.disposeChild()
         if (this.stopped) return false
-        if (this.serverIndex >= specs.length) {
-          const message = this.serverStderr.trim()
-            || (error instanceof Error ? error.message : 'language server failed')
-          const missing = /ENOENT|not found/i.test(message)
-          this.statusHandler(missing
-            ? { state: 'unavailable', name: spec.name }
-            : { state: 'error', name: spec.name, message })
-        }
+        const notFound = error instanceof Error && error.name === 'LspCommandNotFound'
+        const message = error instanceof Error ? error.message : 'language server failed'
+        if (!notFound) missing = false
+        this.startupError = message
       }
     }
-    if (specs.length === 0) this.statusHandler({ state: 'unavailable', name: this.filetype || 'plain text' })
+    if (this.stopped) return false
+    if (specs.length === 0 || !lastSpec) {
+      this.statusHandler({ state: 'unavailable', name: this.filetype || 'plain text' })
+      return false
+    }
+    this.statusHandler(missing || /ENOENT|not found/i.test(this.startupError)
+      ? { state: 'unavailable', name: lastSpec.name }
+      : { state: 'error', name: lastSpec.name, message: this.startupError })
     return false
   }
 
   change(text: string): void {
-    if (!this.openedUri || !this.child) return
+    // Kept even while no server is running: a restart has to reopen the
+    // document as it is now, not as it was when the old one died.
+    this.liveText = text
+    const session = this.session
+    if (!this.openedUri || !session || !session.alive) return
     if (text === this.lastText) return
     // The changes describe the transition from what the server currently
     // holds, so they must be computed before `lastText` moves. A server that
     // asked for no synchronisation gets none, and the version stays put — a
     // version that advances without a notification would make the next real
     // one look like it skipped an edit.
-    const contentChanges = lspContentChanges(this.lastText ?? '', text, this.lastText == null ? LSP_SYNC_FULL : this.syncKind)
+    const contentChanges = lspContentChanges(
+      this.lastText ?? '',
+      text,
+      this.lastText == null ? LSP_SYNC_FULL : session.capabilities.syncKind,
+    )
     this.lastText = text
     if (contentChanges.length === 0) return
-    this.version += 1
-    this.notify('textDocument/didChange', {
-      textDocument: { uri: this.openedUri, version: this.version },
+    const version = session.nextVersion(this.openedUri)
+    if (version == null) return
+    session.notify('textDocument/didChange', {
+      textDocument: { uri: this.openedUri, version },
       contentChanges,
     })
     void this.refreshDiagnostics()
@@ -482,7 +495,7 @@ export class EditorLspClient {
   }
 
   isCompletionTriggerCharacter(character: string | undefined): boolean {
-    return Boolean(character && this.completionTriggerCharacters.has(character))
+    return Boolean(character && this.session?.capabilities.completionTriggerCharacters.has(character))
   }
 
   async completion(position: EditorPosition, triggerCharacter?: string, signal?: AbortSignal): Promise<EditorCompletion[]> {
@@ -670,121 +683,36 @@ export class EditorLspClient {
 
   stop(): void {
     this.stopped = true
-    if (this.openedUri && this.child) this.notify('textDocument/didClose', { textDocument: { uri: this.openedUri } })
-    this.disposeChild()
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer)
+      this.restartTimer = null
+    }
+    const session = this.session
+    const uri = this.openedUri
+    this.session = null
+    this.openedUri = null
+    this.lastText = null
+    this.diagnosticRequest += 1
+    // Closing the buffer closes its document; the process stays warm for the
+    // next buffer of the same language and is reaped only once nothing holds it.
+    if (session && uri) session.closeDocument(uri, this.documentHandlers ?? undefined)
+    this.documentHandlers = null
+    this.releaseSession?.()
+    this.releaseSession = null
   }
 
-  private async spawnServer(spec: EditorLspServerSpec): Promise<void> {
-    await new Promise<void>((resolve, reject) => {
-      this.serverStderr = ''
-      const child = spawn(spec.command, spec.args, {
-        cwd: this.rootPath,
-        env: process.env,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      })
-      let settled = false
-      const fail = (error: Error) => {
-        if (settled) return
-        settled = true
-        reject(error)
-      }
-      child.once('error', fail)
-      child.once('spawn', () => {
-        if (settled) return
-        settled = true
-        this.child = child
-        child.stdout.on('data', (chunk: Buffer) => this.handleData(chunk))
-        child.stderr.setEncoding('utf8')
-        child.stderr.on('data', (chunk: string) => {
-          this.serverStderr = `${this.serverStderr}${chunk}`.slice(-4_096)
-        })
-        child.stdin.on('error', (error) => {
-          if (this.stopped || this.child !== child) return
-          this.serverStderr = `${this.serverStderr}\n${error.message}`.trim().slice(-4_096)
-          this.handleExit(spec.name)
-        })
-        child.on('exit', () => this.handleExit(spec.name))
-        resolve()
-      })
-    })
-  }
-
-  private handleData(chunk: Buffer): void {
-    this.buffer = Buffer.concat([this.buffer, chunk])
-    while (this.buffer.length > 0) {
-      const headerEnd = this.buffer.indexOf('\r\n\r\n')
-      if (headerEnd < 0) return
-      const header = this.buffer.subarray(0, headerEnd).toString('ascii')
-      const match = /(?:^|\r\n)Content-Length:\s*(\d+)/i.exec(header)
-      if (!match) {
-        this.buffer = this.buffer.subarray(headerEnd + 4)
-        continue
-      }
-      const length = Number(match[1])
-      const bodyStart = headerEnd + 4
-      if (this.buffer.length < bodyStart + length) return
-      const body = this.buffer.subarray(bodyStart, bodyStart + length).toString('utf8')
-      this.buffer = this.buffer.subarray(bodyStart + length)
-      try { this.handleMessage(JSON.parse(body) as JsonRpcMessage) } catch { /* ignore malformed server output */ }
-    }
-  }
-
-  private handleMessage(message: JsonRpcMessage): void {
-    if (message.id != null && message.method === 'workspace/applyEdit') {
-      const params = message.params as { edit?: unknown } | undefined
-      const edit = workspaceEdit(params?.edit)
-      void (edit ? this.workspaceEditHandler(edit) : Promise.resolve(false)).then((applied) => {
-        this.send({ jsonrpc: '2.0', id: message.id, result: { applied } })
-      }).catch((error) => {
-        this.send({ jsonrpc: '2.0', id: message.id, result: { applied: false, failureReason: error instanceof Error ? error.message : 'Unable to apply edit' } })
-      })
-      return
-    }
-    if (message.id != null && message.method === 'workspace/configuration') {
-      const items = (message.params as { items?: unknown } | undefined)?.items
-      this.send({
-        jsonrpc: '2.0',
-        id: message.id,
-        result: Array.isArray(items) ? items.map(() => null) : [],
-      })
-      return
-    }
-    if (message.id != null && message.method === 'workspace/workspaceFolders') {
-      this.send({
-        jsonrpc: '2.0',
-        id: message.id,
-        result: [{ uri: pathToFileURL(this.rootPath).href, name: this.rootPath.split(/[\\/]/).pop() || 'workspace' }],
-      })
-      return
-    }
-    if (message.id != null && (message.method === 'client/registerCapability'
-      || message.method === 'client/unregisterCapability'
-      || message.method === 'window/workDoneProgress/create')) {
-      this.send({ jsonrpc: '2.0', id: message.id, result: null })
-      return
-    }
-    if (message.id != null && message.method) {
-      this.send({
-        jsonrpc: '2.0',
-        id: message.id,
-        error: { code: -32601, message: `Unsupported client method: ${message.method}` },
-      })
-      return
-    }
-    if (typeof message.id === 'number') {
-      const pending = this.pending.get(message.id)
-      if (!pending) return
-      clearTimeout(pending.timer)
-      pending.abortCleanup?.()
-      this.pending.delete(message.id)
-      if (message.error) pending.reject(new Error(message.error.message || `LSP error ${message.error.code ?? ''}`.trim()))
-      else pending.resolve(message.result)
-      return
-    }
-    if (message.method === 'textDocument/publishDiagnostics') {
-      const params = message.params as { diagnostics?: unknown[] } | undefined
-      this.diagnosticsHandler(editorDiagnostics(params?.diagnostics))
-    }
+  private scheduleRestart(name: string): void {
+    if (this.stopped || this.restartTimer) return
+    if (this.restartAttempts >= MAX_LSP_RESTARTS) return
+    const attempt = ++this.restartAttempts
+    const delay = LSP_RESTART_BASE_DELAY_MS * 2 ** (attempt - 1)
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null
+      if (this.stopped || this.session) return
+      this.statusHandler({ state: 'starting', name })
+      void this.start(this.liveText)
+    }, delay)
+    this.restartTimer.unref?.()
   }
 
   private async refreshDiagnostics(): Promise<void> {
@@ -798,34 +726,9 @@ export class EditorLspClient {
   }
 
   private request(method: string, params: unknown, timeoutMs: number, signal?: AbortSignal): Promise<unknown> {
-    const id = this.nextId++
-    return new Promise((resolve, reject) => {
-      if (signal?.aborted) {
-        reject(abortError(method))
-        return
-      }
-      const timer = setTimeout(() => {
-        const pending = this.pending.get(id)
-        pending?.abortCleanup?.()
-        this.pending.delete(id)
-        reject(new Error(`${method} timed out`))
-      }, timeoutMs)
-      const onAbort = signal ? () => {
-        const pending = this.pending.get(id)
-        if (!pending) return
-        clearTimeout(pending.timer)
-        pending.abortCleanup?.()
-        this.pending.delete(id)
-        this.notify('$/cancelRequest', { id })
-        reject(abortError(method))
-      } : null
-      const abortCleanup = onAbort && signal
-        ? () => signal.removeEventListener('abort', onAbort)
-        : undefined
-      if (onAbort && signal) signal.addEventListener('abort', onAbort, { once: true })
-      this.pending.set(id, { resolve, reject, timer, abortCleanup })
-      this.send({ jsonrpc: '2.0', id, method, params })
-    })
+    const session = this.child
+    if (!session) return Promise.reject(new Error(`${method} failed: language server is not running`))
+    return session.request(method, params, timeoutMs, signal)
   }
 
   private async documentLocations(
@@ -843,37 +746,6 @@ export class EditorLspClient {
   }
 
   private notify(method: string, params: unknown): void {
-    this.send({ jsonrpc: '2.0', method, params })
-  }
-
-  private send(message: unknown): void {
-    if (!this.child) return
-    const body = JSON.stringify(message)
-    this.child.stdin.write(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`)
-  }
-
-  private handleExit(name: string): void {
-    if (this.stopped || !this.child) return
-    this.statusHandler({ state: 'error', name, message: this.serverStderr.trim() || 'language server exited' })
-    this.disposeChild()
-  }
-
-  private disposeChild(): void {
-    const child = this.child
-    this.child = null
-    this.openedUri = null
-    this.lastText = null
-    this.syncKind = LSP_SYNC_FULL
-    this.completionResolveProvider = false
-    this.completionTriggerCharacters.clear()
-    this.pullDiagnostics = false
-    this.diagnosticRequest += 1
-    if (child && !child.killed) child.kill()
-    for (const pending of this.pending.values()) {
-      clearTimeout(pending.timer)
-      pending.abortCleanup?.()
-      pending.reject(new Error('language server stopped'))
-    }
-    this.pending.clear()
+    this.child?.notify(method, params)
   }
 }

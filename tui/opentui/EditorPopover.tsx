@@ -30,6 +30,7 @@ import {
   type EditorTextEdit,
   type EditorWorkspaceEdit,
 } from './editorLsp'
+import { getEditorLspServerSpecs, resolveLspWorkspaceRoot } from './editorLspServers'
 import { openEditorSyntaxBuffer, type EditorSyntaxBuffer, type EditorSyntaxLine } from './editorSyntaxBuffer'
 import { createScrollVelocityState, velocityScrollStep } from './scrollVelocity'
 import {
@@ -68,6 +69,14 @@ import {
   type EditorLineTransform,
 } from './editorTransforms'
 import { expandEditorSearchReplacement, findEditorSearchMatches, type EditorSearchMatch } from './editorSearch'
+import {
+  createEditorJumpList,
+  editorJumpBackward,
+  editorJumpForward,
+  forgetEditorJumpPath,
+  recordEditorJump,
+  type EditorJumpEntry,
+} from './editorJumpList'
 import {
   parseEditorSnippet,
   transformEditorSnippetValue,
@@ -239,6 +248,11 @@ type EditorCommandId =
   | 'toggle-explorer'
   | 'focus-explorer'
   | 'close-tab'
+  | 'close-other-tabs'
+  | 'reopen-closed-tab'
+  | 'jump-back'
+  | 'jump-forward'
+  | 'show-problems'
   | 'next-diagnostic'
   | 'previous-diagnostic'
   | 'show-hover'
@@ -289,6 +303,12 @@ const MAX_EDITOR_BUFFER_CHARS = 1024 * 1024
 const MAX_FILE_BYTES = MAX_EDITOR_BUFFER_CHARS
 const MAX_FILE_LABEL = '1 MB'
 const MAX_COMPLETIONS = 12
+// Remembered caret positions and closed-tab paths are both per-file and both
+// outlive the tab, so both need a ceiling; a session that opens thousands of
+// files must not grow a map entry for every one of them.
+const CURSOR_MEMORY_LIMIT = 200
+const CLOSED_TAB_LIMIT = 20
+const PROBLEM_VISIBLE_ROWS = 11
 const QUICK_VISIBLE_ROWS = 11
 const SYMBOL_VISIBLE_ROWS = 11
 const AUTO_COMPLETE_DELAY_MS = 160
@@ -334,6 +354,7 @@ const EDITOR_COMMANDS: readonly EditorCommand[] = [
   { id: 'find', label: 'Edit: Find in File', detail: 'Ctrl+F', keywords: 'search text' },
   { id: 'replace', label: 'Edit: Replace in File', detail: 'Ctrl+R', keywords: 'search substitute replace all' },
   { id: 'goto-line', label: 'Go to Line', detail: 'Ctrl+G', keywords: 'jump row' },
+  { id: 'show-problems', label: 'Problems: Show List', detail: 'F7', keywords: 'error warning issue diagnostics panel list' },
   { id: 'next-diagnostic', label: 'Problems: Next Diagnostic', detail: 'F8', keywords: 'error warning issue' },
   { id: 'previous-diagnostic', label: 'Problems: Previous Diagnostic', detail: 'Shift+F8', keywords: 'error warning issue' },
   { id: 'show-hover', label: 'IntelliSense: Show Hover', detail: 'Ctrl+K', keywords: 'type documentation symbol' },
@@ -366,6 +387,10 @@ const EDITOR_COMMANDS: readonly EditorCommand[] = [
   { id: 'toggle-zen', label: 'View: Maximise Editor (Zen Mode)', detail: 'Explorer Shift+Z / Esc', keywords: 'full screen fullscreen maximise maximize zen distraction free focus' },
   { id: 'focus-explorer', label: 'View: Focus Explorer or Editor', detail: 'Ctrl+E', keywords: 'sidebar pane' },
   { id: 'close-tab', label: 'File: Close Active Tab', detail: 'Ctrl+W', keywords: 'buffer' },
+  { id: 'close-other-tabs', label: 'File: Close Other Tabs', detail: 'Alt+W', keywords: 'buffers tidy clean close all others' },
+  { id: 'reopen-closed-tab', label: 'File: Reopen Closed Tab', detail: 'Ctrl+Shift+T', keywords: 'undo close restore recent buffer' },
+  { id: 'jump-back', label: 'Go Back', detail: 'Ctrl+T', keywords: 'navigate history previous location jump' },
+  { id: 'jump-forward', label: 'Go Forward', detail: 'Alt+T', keywords: 'navigate history next location jump' },
   { id: 'toggle-velocity', label: 'Editor: Toggle Velocity Scrolling', detail: 'Explorer Shift+V', keywords: 'accelerate navigation scroll' },
   { id: 'command-palette', label: 'View: Command Palette', detail: 'Ctrl+Shift+P', keywords: 'commands run action palette' },
   { id: 'show-shortcuts', label: 'Help: Keyboard Shortcuts', detail: 'F1 / Explorer ?', keywords: 'keys bindings reference cheatsheet help' },
@@ -381,7 +406,8 @@ const EDITOR_SHORTCUT_GROUPS: readonly EditorShortcutGroup[] = [
     title: 'File',
     entries: [
       ['^S', 'Save'], ['Alt+S / ^⇧S', 'Save all'], ['^N', 'New file'], ['^P', 'Open file'],
-      ['^W', 'Close tab'], ['^Tab / ^PgUp/PgDn', 'Switch tabs'], ['^Q', 'Close editor'],
+      ['^W / Alt+W', 'Close tab / other tabs'], ['^⇧T', 'Reopen closed tab'],
+      ['^Tab / ^PgUp/PgDn', 'Switch tabs'], ['^Q', 'Close editor'],
       ['F2 / Del (explorer)', 'Rename / delete file'],
     ],
   },
@@ -404,8 +430,10 @@ const EDITOR_SHORTCUT_GROUPS: readonly EditorShortcutGroup[] = [
   {
     title: 'Navigate',
     entries: [
-      ['^G', 'Go to line'], ['^M', 'Matching bracket'], ['^T', 'Jump back'],
-      ['F8 / ⇧F8', 'Next / previous problem'], ['Alt+←/→', 'Move by word'],
+      ['^G', 'Go to line'], ['^M', 'Matching bracket'],
+      ['^T / Alt+T', 'Go back / forward'],
+      ['F7', 'Problem list'], ['F8 / ⇧F8', 'Next / previous problem'],
+      ['Alt+←/→', 'Move by word'],
       ['Home / End', 'Line start / end'], ['^Home / ^End', 'Buffer start / end'],
       ['^B', 'Toggle explorer'], ['^E', 'Focus explorer / editor'],
     ],
@@ -1205,6 +1233,10 @@ export function EditorPopover({
   const [syntaxSuspended, setSyntaxSuspended] = useState(false)
   const [closeConfirm, setCloseConfirm] = useState(false)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  // Stepping through problems one at a time (F8) answers "what is the next
+  // error"; it never answers "how many, and where". The list does, and shares
+  // `diagnosticCursor` with the stepper so the two agree about where you are.
+  const [problemsOpen, setProblemsOpen] = useState(false)
   const [clock, setClock] = useState(() => new Date())
   const [velocityScrollEnabled, setVelocityScrollEnabled] = useState(false)
   const [wordWrapEnabled, setWordWrapEnabled] = useState(false)
@@ -1262,7 +1294,15 @@ export function EditorPopover({
   const vimPendingRef = useRef<string | null>(null)
   const vimRegisterRef = useRef('')
   const pendingJumpRef = useRef<{ path: string; line: number; character: number } | null>(null)
-  const jumpHistoryRef = useRef<Array<{ path: string; line: number; character: number }>>([])
+  const jumpListRef = useRef(createEditorJumpList())
+  // Where the caret was last seen in each file. The textarea is keyed by path,
+  // so switching tabs unmounts it and the replacement starts at 0:0 — without
+  // this, every tab switch and every reopen threw away the reader's place.
+  const cursorMemoryRef = useRef<Map<string, { line: number; character: number }>>(new Map())
+  // Files closed this session, most recent last, so Ctrl+Shift+T can bring one
+  // back the way it does everywhere else.
+  const closedTabsRef = useRef<string[]>([])
+  const suppressJumpRecordRef = useRef(false)
   const applyWorkspaceEditRef = useRef<(edit: EditorWorkspaceEdit) => Promise<boolean>>(async () => false)
   const projectSearchRequestRef = useRef(0)
   const projectSearchAbortRef = useRef<AbortController | null>(null)
@@ -1274,6 +1314,11 @@ export function EditorPopover({
   const diskPollInFlightRef = useRef(false)
 
   const activeTab = tabs.find((tab) => tab.path === activePath) ?? null
+  // Written during render, not in an effect: the textarea for a newly active
+  // path mounts (and reports its 0:0 caret) before effects run, so an effect
+  // would still be pointing at the previous file when that report arrives and
+  // would file the new file's caret under the old file's name.
+  activePathRef.current = activePath
   // The line-number gutter's own auto-sizing lags the textarea's real line
   // count for files loaded in one shot (it widens on later edits, not on the
   // initial multi-thousand-line buffer) — 3+ digit numbers render clipped
@@ -1599,11 +1644,43 @@ export function EditorPopover({
     }
   }, [root])
 
+  const rememberCursorFor = useCallback((path: string, position: { line: number; character: number }) => {
+    const memory = cursorMemoryRef.current
+    // Re-insert so the map's own iteration order is least-recently-used.
+    memory.delete(path)
+    memory.set(path, position)
+    while (memory.size > CURSOR_MEMORY_LIMIT) {
+      const oldest = memory.keys().next().value
+      if (oldest === undefined) break
+      memory.delete(oldest)
+    }
+  }, [])
+
+  /** Where the caret is right now, as a jump-list entry, or null with no file open. */
+  const captureJumpPoint = useCallback((): EditorJumpEntry | null => {
+    const path = activePathRef.current
+    if (!path) return null
+    const logical = editorRef.current?.logicalCursor
+    return {
+      path,
+      line: logical?.row ?? cursorRef.current.line,
+      character: logical?.col ?? cursorRef.current.visualColumn,
+    }
+  }, [])
+
   const openBuffer = useCallback(async (relativePath: string) => {
     const safePath = normalizeRelativePath(root, relativePath)
     if (!safePath) {
       setMessage('Refused path outside workspace')
       return
+    }
+    // Opening a different file is a jump, whether it came from the explorer,
+    // quick open or a search hit — all of them are places "go back" has to
+    // return from. A jump recorded by the caller lands on the same position and
+    // is collapsed rather than duplicated.
+    if (safePath !== activePathRef.current && !suppressJumpRecordRef.current) {
+      const from = captureJumpPoint()
+      if (from) recordEditorJump(jumpListRef.current, from)
     }
     const existing = tabs.find((tab) => tab.path === safePath)
     if (existing) {
@@ -1629,7 +1706,7 @@ export function EditorPopover({
       setMessage(text)
       onNotice?.('error', text)
     }
-  }, [onNotice, root, tabs])
+  }, [captureJumpPoint, onNotice, root, tabs])
 
   const saveActive = useCallback(async () => {
     if (!activeTab) return
@@ -1929,6 +2006,12 @@ export function EditorPopover({
     }
   }, [root, tabs])
 
+  const rememberClosedTab = useCallback((path: string) => {
+    const closed = closedTabsRef.current.filter((entry) => entry !== path)
+    closed.push(path)
+    closedTabsRef.current = closed.slice(-CLOSED_TAB_LIMIT)
+  }, [])
+
   const closeActiveTab = useCallback(() => {
     if (!activeTab) return
     if (dirty) {
@@ -1937,10 +2020,38 @@ export function EditorPopover({
     }
     const index = tabs.findIndex((tab) => tab.path === activeTab.path)
     const next = tabs.filter((tab) => tab.path !== activeTab.path)
+    rememberClosedTab(activeTab.path)
     setTabs(next)
     setActivePath(next[Math.min(index, Math.max(0, next.length - 1))]?.path ?? null)
     if (next.length === 0) setFocusPane('explorer')
-  }, [activeTab, dirty, tabs])
+  }, [activeTab, dirty, rememberClosedTab, tabs])
+
+  const reopenClosedTab = useCallback(async () => {
+    const path = closedTabsRef.current.pop()
+    if (!path) {
+      setMessage('No recently closed files')
+      return
+    }
+    await openBuffer(path)
+  }, [openBuffer])
+
+  const closeOtherTabs = useCallback(() => {
+    if (!activeTab) return
+    if (tabs.length < 2) {
+      setMessage('No other tabs are open')
+      return
+    }
+    // A modified tab is kept rather than closed: this binding is a tidy-up, and
+    // a tidy-up that can discard unwritten work is one nobody presses twice.
+    const kept = tabs.filter((tab) => tab.path === activeTab.path || tab.content !== tab.savedContent)
+    for (const tab of tabs) if (!kept.includes(tab)) rememberClosedTab(tab.path)
+    const closed = tabs.length - kept.length
+    setTabs(kept)
+    const modified = kept.length - 1
+    setMessage(closed === 0
+      ? 'Every other tab has unsaved changes — none closed'
+      : `Closed ${closed} tab${closed === 1 ? '' : 's'}${modified > 0 ? ` · kept ${modified} with unsaved changes` : ''}`)
+  }, [activeTab, rememberClosedTab, tabs])
 
   const activateTab = useCallback((path: string) => {
     setActivePath(path)
@@ -1963,10 +2074,11 @@ export function EditorPopover({
     }
     const index = tabs.findIndex((candidate) => candidate.path === path)
     const next = tabs.filter((candidate) => candidate.path !== path)
+    rememberClosedTab(path)
     setTabs(next)
     if (path === activePath) setActivePath(next[Math.min(index, Math.max(0, next.length - 1))]?.path ?? null)
     if (next.length === 0) setFocusPane('explorer')
-  }, [activePath, tabs])
+  }, [activePath, rememberClosedTab, tabs])
 
   const openFilePrompt = useCallback((kind: EditorFilePrompt['kind']) => {
     const row = focusPane === 'explorer' ? treeRows[treeCursor] : undefined
@@ -2011,6 +2123,15 @@ export function EditorPopover({
           const next = new Set(current); next.delete(moved.from); next.add(moved.to); return next
         })
         if (activePath === moved.from) setActivePath(moved.to)
+        // History and the remembered caret follow the file, or "go back" walks
+        // into a path that no longer exists.
+        const remembered = cursorMemoryRef.current.get(moved.from)
+        cursorMemoryRef.current.delete(moved.from)
+        if (remembered) rememberCursorFor(moved.to, remembered)
+        for (const entry of [...jumpListRef.current.back, ...jumpListRef.current.forward]) {
+          if (entry.path === moved.from) entry.path = moved.to
+        }
+        closedTabsRef.current = closedTabsRef.current.map((path) => path === moved.from ? moved.to : path)
         setFilePrompt(null)
         setMessage(`Renamed ${moved.from} → ${moved.to}`)
         return
@@ -2027,6 +2148,9 @@ export function EditorPopover({
         setActivePath(nextTabs[0]?.path ?? null)
         if (nextTabs.length === 0) setFocusPane('explorer')
       }
+      forgetEditorJumpPath(jumpListRef.current, deleted)
+      cursorMemoryRef.current.delete(deleted)
+      closedTabsRef.current = closedTabsRef.current.filter((path) => path !== deleted)
       setFilePrompt(null)
       setMessage(`Deleted ${deleted}`)
     } catch (error) {
@@ -2034,7 +2158,7 @@ export function EditorPopover({
       setMessage(text)
       onNotice?.('error', text)
     }
-  }, [activePath, filePrompt, onNotice, openBuffer, root, tabs])
+  }, [activePath, filePrompt, onNotice, openBuffer, rememberCursorFor, root, tabs])
 
   const requestClose = useCallback(() => {
     const modifiedPaths = tabs.filter((tab) => tab.content !== tab.savedContent).map((tab) => tab.path)
@@ -2141,7 +2265,11 @@ export function EditorPopover({
     completionSessionRef.current = null
     if (!activeTab) return
     const filetype = detectTuiCodeFiletypeFromPath(activeTab.path) ?? 'plaintext'
-    const client = new EditorLspClient(root, filetype, join(root, activeTab.path))
+    const filePath = join(root, activeTab.path)
+    // A server indexes its own workspace, not whatever directory the TUI was
+    // launched from: gopls wants the module, rust-analyzer the Cargo workspace.
+    const workspaceRoot = resolveLspWorkspaceRoot(filetype, filePath, root)
+    const client = new EditorLspClient(workspaceRoot, filetype, filePath, getEditorLspServerSpecs(filetype, root))
     lspRef.current = client
     client.onStatus((status) => {
       if (lspRef.current !== client) return
@@ -2753,14 +2881,9 @@ export function EditorPopover({
       setMessage('Language server location is outside this workspace')
       return
     }
-    if (recordHistory && activePath) {
-      const logicalCursor = editorRef.current?.logicalCursor
-      jumpHistoryRef.current.push({
-        path: activePath,
-        line: logicalCursor?.row ?? cursorRef.current.line,
-        character: logicalCursor?.col ?? cursorRef.current.visualColumn,
-      })
-      if (jumpHistoryRef.current.length > 100) jumpHistoryRef.current.shift()
+    if (recordHistory) {
+      const from = captureJumpPoint()
+      if (from) recordEditorJump(jumpListRef.current, from)
     }
     pendingJumpRef.current = {
       path,
@@ -2777,7 +2900,7 @@ export function EditorPopover({
       await openBuffer(path)
     }
     setMessage(`Jumped to ${path}:${location.range.start.line + 1}:${location.range.start.character + 1}`)
-  }, [activePath, openBuffer, root])
+  }, [activePath, captureJumpPoint, openBuffer, root])
 
   const requestSymbolNavigation = useCallback(async (kind: SymbolNavigationKind) => {
     const editor = editorRef.current
@@ -2822,20 +2945,37 @@ export function EditorPopover({
     setMessage(`${results.length} ${kind} locations · Enter opens · Esc closes`)
   }, [activeTab, jumpToEditorLocation, root])
 
-  const jumpBack = useCallback(async () => {
-    const previous = jumpHistoryRef.current.pop()
-    if (!previous) {
-      setMessage('Jump history is empty')
+  const travelJumpList = useCallback(async (direction: 'back' | 'forward') => {
+    const list = jumpListRef.current
+    const current = captureJumpPoint()
+    const target = direction === 'back'
+      ? editorJumpBackward(list, current)
+      : editorJumpForward(list, current)
+    if (!target) {
+      setMessage(direction === 'back' ? 'Nothing earlier in the jump list' : 'Nothing later in the jump list')
       return
     }
-    await jumpToEditorLocation({
-      uri: pathToFileURL(join(root, previous.path)).href,
-      range: {
-        start: { line: previous.line, character: previous.character },
-        end: { line: previous.line, character: previous.character },
-      },
-    }, false)
-  }, [jumpToEditorLocation, root])
+    // Walking history is not itself a jump. `openBuffer` records one for any
+    // file change, and that record would clear the forward stack this travel
+    // just pushed onto — one step back and forward would be gone.
+    suppressJumpRecordRef.current = true
+    try {
+      await jumpToEditorLocation({
+        uri: pathToFileURL(join(root, target.path)).href,
+        range: {
+          start: { line: target.line, character: target.character },
+          end: { line: target.line, character: target.character },
+        },
+      }, false)
+    } finally {
+      suppressJumpRecordRef.current = false
+    }
+    const remaining = direction === 'back' ? list.back.length : list.forward.length
+    setMessage(`${direction === 'back' ? '←' : '→'} ${target.path}:${target.line + 1} · ${remaining} more ${direction}`)
+  }, [captureJumpPoint, jumpToEditorLocation, root])
+
+  const jumpBack = useCallback(() => travelJumpList('back'), [travelJumpList])
+  const jumpForward = useCallback(() => travelJumpList('forward'), [travelJumpList])
 
   useEffect(() => {
     if (!activePath || focusPane !== 'editor' || hoverInfo || signatureInfo) return
@@ -3168,6 +3308,29 @@ export function EditorPopover({
     setMessage(`${next + 1}/${diagnostics.length} ${diagnostic.source ? `${diagnostic.source}: ` : ''}${diagnostic.message}`)
   }, [diagnosticCursor, diagnostics])
 
+  const goToDiagnostic = useCallback((index: number) => {
+    const editor = editorRef.current
+    const diagnostic = diagnostics[index]
+    if (!editor || !diagnostic) return
+    const from = captureJumpPoint()
+    if (from) recordEditorJump(jumpListRef.current, from)
+    setDiagnosticCursor(index)
+    editor.setCursor(diagnostic.line, diagnostic.character)
+    setProblemsOpen(false)
+    setFocusPane('editor')
+    editor.focus()
+    setMessage(`${index + 1}/${diagnostics.length} ${diagnostic.source ? `${diagnostic.source}: ` : ''}${diagnostic.message}`)
+  }, [captureJumpPoint, diagnostics])
+
+  const openProblems = useCallback(() => {
+    if (diagnostics.length === 0) {
+      setMessage('No diagnostics in the active file')
+      return
+    }
+    setDiagnosticCursor((value) => (value < 0 || value >= diagnostics.length ? 0 : value))
+    setProblemsOpen(true)
+  }, [diagnostics.length])
+
   const syncEditorScrollbar = useCallback(() => {
     const editor = editorRef.current
     const scrollbar = editorScrollbarRef.current
@@ -3248,6 +3411,11 @@ export function EditorPopover({
       case 'toggle-explorer': toggleExplorer(); break
       case 'focus-explorer': setFocusPane((current) => current === 'editor' ? 'explorer' : 'editor'); break
       case 'close-tab': closeActiveTab(); break
+      case 'close-other-tabs': closeOtherTabs(); break
+      case 'reopen-closed-tab': void reopenClosedTab(); break
+      case 'jump-back': void jumpBack(); break
+      case 'jump-forward': void jumpForward(); break
+      case 'show-problems': openProblems(); break
       case 'next-diagnostic': navigateDiagnostic(1); break
       case 'previous-diagnostic': navigateDiagnostic(-1); break
       case 'show-hover': void requestHover(); break
@@ -3284,7 +3452,7 @@ export function EditorPopover({
       case 'toggle-word-wrap': toggleWordWrap(); break
       case 'toggle-zen': toggleZenMode(); break
     }
-  }, [addAdjacentCursor, addLineEndCursors, addNextOccurrence, applyCaseTransform, applyLineTransform, closeActiveTab, editSelectedLines, formatDocument, jumpToMatchingBracket, navigateDiagnostic, openFilePrompt, openProjectSearch, openQuick, openSearch, recoveryConflicts.length, requestCodeActions, requestHover, requestRename, requestSignatureHelp, requestSymbolNavigation, restartLsp, saveActive, saveAll, toggleExplorer, toggleVelocityScrolling, toggleVimMode, toggleWordWrap, toggleZenMode, trimTrailingWhitespace])
+  }, [addAdjacentCursor, addLineEndCursors, addNextOccurrence, applyCaseTransform, applyLineTransform, closeActiveTab, closeOtherTabs, jumpBack, jumpForward, openProblems, reopenClosedTab, editSelectedLines, formatDocument, jumpToMatchingBracket, navigateDiagnostic, openFilePrompt, openProjectSearch, openQuick, openSearch, recoveryConflicts.length, requestCodeActions, requestHover, requestRename, requestSignatureHelp, requestSymbolNavigation, restartLsp, saveActive, saveAll, toggleExplorer, toggleVelocityScrolling, toggleVimMode, toggleWordWrap, toggleZenMode, trimTrailingWhitespace])
 
   const chooseQuickResultAt = useCallback((index: number) => {
     const result = quickResults[index]
@@ -3472,6 +3640,19 @@ export function EditorPopover({
     }
     if (key.ctrl && (key.name === 'pageup' || key.name === 'pagedown')) {
       switchTab(key.name === 'pageup' ? -1 : 1)
+      return true
+    }
+    if (problemsOpen) {
+      if (key.name === 'escape' || key.name === 'f7') { setProblemsOpen(false); return true }
+      if (key.name === 'up' || (key.ctrl && key.name === 'p') || sequence === 'k') {
+        setDiagnosticCursor((value) => Math.max(0, value - 1))
+        return true
+      }
+      if (key.name === 'down' || (key.ctrl && key.name === 'n') || sequence === 'j') {
+        setDiagnosticCursor((value) => Math.min(diagnostics.length - 1, value + 1))
+        return true
+      }
+      if (key.name === 'return') { goToDiagnostic(Math.max(0, diagnosticCursor)); return true }
       return true
     }
     if (symbolNavigationKind) {
@@ -3916,8 +4097,14 @@ export function EditorPopover({
     if (key.ctrl && key.name === 'b') { toggleExplorer(); return true }
     if (key.name === 'f1') { setShortcutsOpen(true); return true }
     if (key.ctrl && key.name === 'w') { closeActiveTab(); return true }
+    if (alt && !key.ctrl && key.name === 'w') { closeOtherTabs(); return true }
+    // Shift first: Ctrl+T alone is "go back", and the reopen binding differs
+    // from it only by the modifier.
+    if (key.ctrl && key.shift && key.name === 't') { void reopenClosedTab(); return true }
     if (key.ctrl && key.name === 't') { void jumpBack(); return true }
+    if (alt && !key.ctrl && key.name === 't') { void jumpForward(); return true }
     if (key.ctrl && key.name === 'm') { jumpToMatchingBracket(); return true }
+    if (key.name === 'f7') { openProblems(); return true }
     if (key.name === 'f8') { navigateDiagnostic(key.shift ? -1 : 1); return true }
     if (key.ctrl && key.name === 'k') { void requestHover(); return true }
     if ((key.ctrl && key.shift && (key.name === 'space' || sequence === '\0')) || (alt && !key.ctrl && key.name === 'k')) { void requestSignatureHelp(); return true }
@@ -4023,7 +4210,7 @@ export function EditorPopover({
       }
     }
     return false
-  }, [acceptCompletion, activateTreeRow, activeTab, addAdjacentCursor, closeCompletions, jumpToMatchingBracket, shortcutsOpen, vimMode, addLineEndCursors, addNextOccurrence, applyCaseTransform, applyCodeAction, applyLineTransform, chooseQuickResultAt, closeActiveTab, closeConfirm, codeActionCursor, codeActions, completions.length, copyEditorSelection, editAtAllCursors, editSelectedLines, extendBlockSelection, filePrompt, focusPane, formatDocument, handleVimKey, hoverInfo, jumpBack, jumpToEditorLocation, multiCursor, navigateDiagnostic, navigateSearch, navigateSnippet, openFilePrompt, openProjectSearch, openQuick, openRecoveryConflict, openSearch, pasteIntoEditor, performFileOperation, performRename, projectSearchCursor, projectSearchOpen, projectSearchResults, quickCursor, quickOpen, quickResults.length, recoveryConflictCursor, recoveryConflictOpen, recoveryConflicts, renameOpen, replaceSearchMatch, requestClose, requestCodeActions, requestCompletions, requestHover, requestRename, requestSignatureHelp, requestSymbolNavigation, restartLsp, root, saveActive, saveAll, searchInput, searchOpen, searchReplaceMode, searchResult.error, searchSelectionRange, signatureInfo, switchTab, symbolNavigationCursor, symbolNavigationKind, symbolNavigationResults, toggleExplorer, toggleSearchMatchCase, toggleVelocityScrolling, toggleVimMode, toggleWordWrap, toggleZenMode, treeCursor, zenMode, treeExpanded, treeRows, velocityScrollEnabled, vimEnabled])
+  }, [acceptCompletion, activateTreeRow, activeTab, addAdjacentCursor, closeCompletions, closeOtherTabs, diagnosticCursor, diagnostics.length, goToDiagnostic, jumpForward, openProblems, problemsOpen, reopenClosedTab, jumpToMatchingBracket, shortcutsOpen, vimMode, addLineEndCursors, addNextOccurrence, applyCaseTransform, applyCodeAction, applyLineTransform, chooseQuickResultAt, closeActiveTab, closeConfirm, codeActionCursor, codeActions, completions.length, copyEditorSelection, editAtAllCursors, editSelectedLines, extendBlockSelection, filePrompt, focusPane, formatDocument, handleVimKey, hoverInfo, jumpBack, jumpToEditorLocation, multiCursor, navigateDiagnostic, navigateSearch, navigateSnippet, openFilePrompt, openProjectSearch, openQuick, openRecoveryConflict, openSearch, pasteIntoEditor, performFileOperation, performRename, projectSearchCursor, projectSearchOpen, projectSearchResults, quickCursor, quickOpen, quickResults.length, recoveryConflictCursor, recoveryConflictOpen, recoveryConflicts, renameOpen, replaceSearchMatch, requestClose, requestCodeActions, requestCompletions, requestHover, requestRename, requestSignatureHelp, requestSymbolNavigation, restartLsp, root, saveActive, saveAll, searchInput, searchOpen, searchReplaceMode, searchResult.error, searchSelectionRange, signatureInfo, switchTab, symbolNavigationCursor, symbolNavigationKind, symbolNavigationResults, toggleExplorer, toggleSearchMatchCase, toggleVelocityScrolling, toggleVimMode, toggleWordWrap, toggleZenMode, treeCursor, zenMode, treeExpanded, treeRows, velocityScrollEnabled, vimEnabled])
 
   useEffect(() => {
     onKeyHandlerReady(handleKey)
@@ -4034,16 +4221,28 @@ export function EditorPopover({
   }, [activePath, focusPane])
 
   useEffect(() => {
-    const pending = pendingJumpRef.current
     const editor = editorRef.current
-    if (!pending || pending.path !== activePath || !editor) return
-    editor.setCursor(pending.line, pending.character)
-    pendingJumpRef.current = null
-  }, [activePath])
+    if (!editor || !activePath) return
+    const pending = pendingJumpRef.current
+    if (pending && pending.path === activePath) {
+      editor.setCursor(pending.line, pending.character)
+      pendingJumpRef.current = null
+      rememberCursorFor(activePath, { line: pending.line, character: pending.character })
+      return
+    }
+    if (pending) return
+    // No explicit destination, so this is a plain tab switch or a reopen: the
+    // textarea remounted at 0:0 and the reader's place is only in this map.
+    const remembered = cursorMemoryRef.current.get(activePath)
+    if (remembered) editor.setCursor(remembered.line, remembered.character)
+  }, [activePath, rememberCursorFor])
 
   useEffect(() => {
     setDiagnosticCursor(-1)
     setSearchCursor(-1)
+    // The list describes the active file's diagnostics; a file switch or a
+    // clean re-lint leaves it describing nothing.
+    if (diagnostics.length === 0) setProblemsOpen(false)
   }, [activePath, diagnostics])
 
   const setEditorRef = useCallback((node: TextareaRenderable | null) => {
@@ -4078,6 +4277,14 @@ export function EditorPopover({
 
   const handleEditorCursorChange = useCallback((next: { line: number; visualColumn: number }) => {
     cursorRef.current = next
+    // 0:0 is also what a freshly mounted textarea reports before the remembered
+    // caret is restored, so recording it would overwrite the position this is
+    // meant to preserve. Declining to record it costs nothing: a file with no
+    // entry opens at 0:0 anyway.
+    const path = activePathRef.current
+    if (path && (next.line !== 0 || next.visualColumn !== 0)) {
+      rememberCursorFor(path, { line: next.line, character: next.visualColumn })
+    }
     setCursor(next)
     const editor = editorRef.current
     const selection = editor?.getSelection()
@@ -4156,6 +4363,8 @@ export function EditorPopover({
   const visibleProjectSearchResults = projectSearchResults.slice(projectSearchWindowStart, projectSearchWindowStart + 12)
   const quickWindowStart = listWindowStart(quickCursor, quickResults.length, QUICK_VISIBLE_ROWS)
   const symbolWindowStart = listWindowStart(symbolNavigationCursor, symbolNavigationResults.length, SYMBOL_VISIBLE_ROWS)
+  const problemCursor = Math.max(0, Math.min(diagnosticCursor, diagnostics.length - 1))
+  const problemWindowStart = listWindowStart(problemCursor, diagnostics.length, PROBLEM_VISIBLE_ROWS)
   const completionWindowStart = Math.min(
     Math.max(0, completionCursor - 7),
     Math.max(0, completions.length - 8),
@@ -4271,6 +4480,11 @@ export function EditorPopover({
             <box
               key={tab.path}
               paddingX={1}
+              // Without an explicit row, this box lays its children out in a
+              // column: the `×` then stretches across the whole tab (cross-axis
+              // stretch), paints over the label's status glyph, and takes every
+              // click meant for the tab — so selecting a buffer closed it.
+              flexDirection="row"
               backgroundColor={selected ? theme.surface2 : theme.surface3}
               onMouseUp={(event: MouseEvent) => {
                 if (event.button !== 0) return
@@ -4574,6 +4788,56 @@ export function EditorPopover({
             : searchReplaceMode
               ? ' Tab field · Enter next/replace · Alt+Enter all · Alt+C case · Alt+R regex · Alt+S selection · Esc'
               : ' Enter next · Shift+Enter previous · Alt+C case · Alt+R regex · Alt+S selection · Esc'}</text>
+        </box>
+      ) : null}
+
+      {problemsOpen && diagnostics.length > 0 ? (
+        <box
+          position="absolute"
+          top={2}
+          left={Math.max(2, Math.floor(width * 0.12))}
+          width={Math.max(46, Math.floor(width * 0.74))}
+          height={Math.min(PROBLEM_VISIBLE_ROWS + 4, diagnostics.length + 4)}
+          zIndex={66}
+          border
+          borderStyle="heavy"
+          borderColor={counts.errors > 0 ? theme.red : theme.amber}
+          backgroundColor={theme.surface}
+          flexDirection="column"
+          title={` Problems ${problemCursor + 1}/${diagnostics.length}${counts.errors > 0 ? ` · ${counts.errors} error${counts.errors === 1 ? '' : 's'}` : ''}${counts.warnings > 0 ? ` · ${counts.warnings} warning${counts.warnings === 1 ? '' : 's'}` : ''} `}
+        >
+          <text fg={theme.dim}> Enter jump · ↑↓ select · F8 next · Esc close</text>
+          <box flexGrow={1} flexDirection="row">
+            <scrollbox flexGrow={1} scrollAcceleration={scrollAcceleration}>
+              {diagnostics.slice(problemWindowStart, problemWindowStart + PROBLEM_VISIBLE_ROWS).map((diagnostic, visibleIndex) => {
+                const index = problemWindowStart + visibleIndex
+                const severityColor = diagnostic.severity === 1
+                  ? theme.red
+                  : diagnostic.severity === 2 ? theme.amber : theme.cyan
+                return (
+                  <box
+                    key={`${diagnostic.line}:${diagnostic.character}:${index}`}
+                    height={1}
+                    paddingX={1}
+                    backgroundColor={index === problemCursor ? theme.surface3 : theme.surface}
+                    flexDirection="row"
+                    onMouseUp={(event: MouseEvent) => {
+                      if (event.button !== 0) return
+                      event.stopPropagation()
+                      goToDiagnostic(index)
+                    }}
+                  >
+                    <text fg={severityColor} wrapMode="none">{diagnostic.severity === 1 ? '● ' : diagnostic.severity === 2 ? '▲ ' : '◇ '}</text>
+                    <text fg={theme.dim} wrapMode="none">{`${String(diagnostic.line + 1).padStart(5)}:${String(diagnostic.character + 1).padEnd(4)}`}</text>
+                    <text fg={index === problemCursor ? theme.text : theme.muted} wrapMode="none">
+                      {fitText(`${diagnostic.source ? `${diagnostic.source}: ` : ''}${diagnostic.message.replace(/\s+/g, ' ')}`, Math.max(20, Math.floor(width * 0.55)))}
+                    </text>
+                  </box>
+                )
+              })}
+            </scrollbox>
+            {renderListScrollbar(problemWindowStart, PROBLEM_VISIBLE_ROWS, diagnostics.length)}
+          </box>
         </box>
       ) : null}
 

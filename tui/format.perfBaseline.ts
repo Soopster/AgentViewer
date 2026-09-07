@@ -124,30 +124,16 @@ function truncateLine(value: string, maxChars = MAX_PREVIEW_CHARS): string {
   return `${sanitized.slice(0, Math.max(maxChars - 1, 1))}…`
 }
 
-function compactLines(text: string): string[] {
-  const visible: string[] = []
-  let count = 0
-  let start = 0
-  // Walk the source without allocating an array (and truncated copy) of every
-  // line just to retain a handful of preview rows. Still normalize hidden rows
-  // so ANSI-only and whitespace-only lines keep their original counting rules.
-  while (start <= text.length) {
-    const newline = text.indexOf('\n', start)
-    const end = newline === -1 ? text.length : newline
-    const normalized = sanitizeLine(text.slice(start, end).trimEnd())
-    if (normalized.length > 0) {
-      count++
-      if (visible.length < MAX_BLOCK_LINES) {
-        visible.push(normalized.length <= MAX_PREVIEW_CHARS
-          ? normalized
-          : `${normalized.slice(0, Math.max(MAX_PREVIEW_CHARS - 1, 1))}…`)
-      }
-    }
-    if (newline === -1) break
-    start = newline + 1
-  }
-  if (count > MAX_BLOCK_LINES) visible.push(`… ${count - MAX_BLOCK_LINES} more lines`)
-  return visible
+function compactLines(lines: string[]): string[] {
+  const normalized = lines
+    .map((line) => truncateLine(line.trimEnd()))
+    .filter((line) => line.length > 0)
+
+  if (normalized.length <= MAX_BLOCK_LINES) return normalized
+  return [
+    ...normalized.slice(0, MAX_BLOCK_LINES),
+    `… ${normalized.length - MAX_BLOCK_LINES} more lines`,
+  ]
 }
 
 function previewJson(value: unknown): string {
@@ -196,7 +182,7 @@ function formatAgentProtocolEvent(event: AgentProtocolEvent, expanded: boolean):
   ]
   if (expanded) {
     if (event.detail && event.detail !== event.summary) {
-      lines.push(...compactLines(event.detail).map((entry) => line(`  ${entry}`, 'muted')))
+      lines.push(...compactLines(event.detail.split('\n')).map((entry) => line(`  ${entry}`, 'muted')))
     }
     if (event.paths?.length) lines.push(line(`  paths: ${event.paths.join(', ')}`, 'dim'))
     if (event.dependsOn?.length) lines.push(line(`  depends on: ${event.dependsOn.join(', ')}`, 'dim'))
@@ -219,7 +205,7 @@ function textLinesForProtocolAwareBlock(text: string, expanded: boolean): TuiTra
     const start = match.index ?? 0
     const before = text.slice(lastIndex, start)
     if (before.trim()) {
-      const beforeLines = expanded ? sanitizeLine(before).trim().split('\n') : compactLines(before.trim())
+      const beforeLines = expanded ? sanitizeLine(before).trim().split('\n') : compactLines(before.trim().split('\n'))
       lines.push(...beforeLines.map((entry) => line(entry.trimEnd())).filter((entry) => entry.text.trim()))
     }
     const content = (match[2] ?? '').trim()
@@ -231,14 +217,14 @@ function textLinesForProtocolAwareBlock(text: string, expanded: boolean): TuiTra
       lines.push(...formatAgentProtocolEvent(event, expanded))
     } else {
       const fallback = match[0]
-      const fallbackLines = expanded ? sanitizeLine(fallback).trim().split('\n') : compactLines(fallback.trim())
+      const fallbackLines = expanded ? sanitizeLine(fallback).trim().split('\n') : compactLines(fallback.trim().split('\n'))
       lines.push(...fallbackLines.map((entry) => line(entry.trimEnd())).filter((entry) => entry.text.trim()))
     }
     lastIndex = start + match[0].length
   }
   const after = text.slice(lastIndex)
   if (after.trim()) {
-    const afterLines = expanded ? sanitizeLine(after).trim().split('\n') : compactLines(after.trim())
+    const afterLines = expanded ? sanitizeLine(after).trim().split('\n') : compactLines(after.trim().split('\n'))
     lines.push(...afterLines.map((entry) => line(entry.trimEnd())).filter((entry) => entry.text.trim()))
   }
   return replacedAny ? lines : null
@@ -1777,7 +1763,7 @@ function formatBlock(block: ThreadedBlock, activeForms?: TaskActiveForms, taskRe
       const protocolLines = textLinesForProtocolAwareBlock(block.text, false)
       if (protocolLines) return protocolLines
       return block.text.trim()
-        ? compactLines(block.text.trim()).map((entry) => line(entry))
+        ? compactLines(block.text.trim().split('\n')).map((entry) => line(entry))
         : []
     }
     case 'thinking':
@@ -1993,33 +1979,37 @@ function formatDayLabel(parsed: Date | null): string | undefined {
   return DAY_LABEL_FORMATTER.format(parsed)
 }
 
-function compactPreviewLines(
-  lines: TuiTranscriptCardLine[],
-  limit: number,
-  emptyText: string,
-  emptyTone: TuiTranscriptLineTone,
-): TuiTranscriptCardLine[] {
-  const visible: TuiTranscriptCardLine[] = []
-  let count = 0
-  for (const entry of lines) {
-    const text = truncateLine(entry.text.trim())
-    if (!text) continue
-    count++
-    if (visible.length < limit) {
-      visible.push(text === entry.text ? entry : { text, tone: entry.tone })
-    }
-  }
-  if (count === 0) return [line(emptyText, emptyTone)]
-  if (count > limit) visible[limit - 1] = line(`… ${count - (limit - 1)} more`, 'dim')
-  return visible
-}
-
 function compactCardLines(lines: TuiTranscriptCardLine[], density: TuiDensity): TuiTranscriptCardLine[] {
-  return compactPreviewLines(lines, cardLineLimit(density), 'No visible content', 'dim')
+  const normalized = lines
+    .map((entry) => ({
+      text: truncateLine(entry.text.trim()),
+      tone: entry.tone,
+    }))
+    .filter((entry) => entry.text.length > 0)
+
+  const maxCardLines = cardLineLimit(density)
+  if (normalized.length === 0) return [line('No visible content', 'dim')]
+  if (normalized.length <= maxCardLines) return normalized
+  return [
+    ...normalized.slice(0, maxCardLines - 1),
+    line(`… ${normalized.length - (maxCardLines - 1)} more`, 'dim'),
+  ]
 }
 
 function compactAutoFoldLines(lines: TuiTranscriptCardLine[]): TuiTranscriptCardLine[] {
-  return compactPreviewLines(lines, 2, 'Technical activity', 'muted')
+  const normalized = lines
+    .map((entry) => ({
+      text: truncateLine(entry.text.trim()),
+      tone: entry.tone,
+    }))
+    .filter((entry) => entry.text.length > 0)
+
+  if (normalized.length === 0) return [line('Technical activity', 'muted')]
+  if (normalized.length <= 2) return normalized
+  return [
+    normalized[0],
+    line(`… ${normalized.length - 1} more`, 'dim'),
+  ]
 }
 
 function compactMermaidLines(lines: TuiTranscriptCardLine[]): TuiTranscriptCardLine[] {
