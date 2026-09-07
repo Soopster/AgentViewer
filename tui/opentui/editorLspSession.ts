@@ -78,6 +78,14 @@ export class EditorLspSession {
   private documents = new Map<string, SessionDocument>()
   private exitHandlers = new Set<(exit: LspSessionExit) => void>()
   private refreshHandlers = new Set<() => void>()
+  /**
+   * False while a server that was handed a solution or project has not yet said
+   * it finished loading it. Roslyn answers `initialize` in under a second and
+   * then takes minutes on a large solution, during which every request returns
+   * an empty result — indistinguishable from "there is nothing here" unless the
+   * editor is told to say so. Measured on dotnet/aspire: 131 seconds.
+   */
+  workspaceLoaded = true
   private refCount = 0
   private idleTimer: ReturnType<typeof setTimeout> | null = null
   private stderr = ''
@@ -127,6 +135,11 @@ export class EditorLspSession {
       if (this.refCount === 0) this.dispose()
     }, IDLE_DISPOSE_MS)
     this.idleTimer.unref?.()
+  }
+
+  /** Declared by the caller when it hands the server a workspace to load. */
+  awaitWorkspaceLoad(): void {
+    this.workspaceLoaded = false
   }
 
   /** Fires when the server says its diagnostics are now worth asking for again. */
@@ -364,6 +377,7 @@ export class EditorLspSession {
     if (method && DIAGNOSTIC_REFRESH_METHODS.has(method)) {
       // A request form still needs its reply, or the server waits forever.
       if (id != null) this.send({ jsonrpc: '2.0', id, result: null })
+      this.workspaceLoaded = true
       for (const handler of [...this.refreshHandlers]) handler()
       return
     }

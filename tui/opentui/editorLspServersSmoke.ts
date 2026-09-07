@@ -137,12 +137,31 @@ try {
   const csharpRoot = resolveLspWorkspaceRoot('csharp', join(workspace, 'dotnet', 'src', 'Api', 'Program.cs'), workspace)
   assert(csharpRoot === join(workspace, 'dotnet'),
     `A solution must outrank the nearer project it contains: ${csharpRoot}`)
-  const startup = editorLspStartupNotifications(
-    { command: 'roslyn-language-server', args: [], name: 'Roslyn' },
-    csharpRoot,
-  )
-  assert(startup[0]?.method === 'solution/open',
+  const roslynSpec = { command: 'roslyn-language-server', args: [], name: 'Roslyn' }
+  const startup = editorLspStartupNotifications(roslynSpec, csharpRoot)
+  assert(startup.length === 1 && startup[0]?.method === 'solution/open',
     `A solution root must be opened as a solution: ${JSON.stringify(startup)}`)
+
+  // With a file in hand, its own project is opened first as well. A large
+  // solution takes minutes to load and answers every completion with an empty
+  // result meanwhile; the single project the user is looking at loads in a
+  // fraction of that. Measured on dotnet/aspire: 131s to the first completion
+  // with the solution alone, 32s with both.
+  const withFile = editorLspStartupNotifications(
+    roslynSpec,
+    csharpRoot,
+    join(workspace, 'dotnet', 'src', 'Api', 'Program.cs'),
+  )
+  assert(withFile.length === 2 && withFile[0]?.method === 'project/open' && withFile[1]?.method === 'solution/open',
+    `The file's own project must be opened before the solution: ${JSON.stringify(withFile.map((n) => n.method))}`)
+  const opened = (withFile[0]!.params as { projects: string[] }).projects
+  assert(opened.length === 1 && opened[0]!.endsWith('Api.csproj'),
+    `The wrong project was opened for the file: ${JSON.stringify(opened)}`)
+
+  // A file outside any project must not drag an unrelated one in.
+  const strayFile = editorLspStartupNotifications(roslynSpec, csharpRoot, join(workspace, 'dotnet', 'notes.cs'))
+  assert(strayFile.length === 1 && strayFile[0]?.method === 'solution/open',
+    `A file with no project of its own must only open the solution: ${JSON.stringify(strayFile)}`)
 
   // With no solution anywhere, the project is still found by the lower tier.
   await mkdir(join(workspace, 'loose', 'Tool'), { recursive: true })

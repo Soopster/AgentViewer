@@ -307,11 +307,16 @@ function completionItem(value: unknown, defaults: CompletionDefaults = {}): Edit
 export type EditorLspStatus =
   | { state: 'starting'; name: string }
   | { state: 'ready'; name: string }
+  | { state: 'loading'; name: string; detail?: string }
   | { state: 'unavailable'; name: string }
   | { state: 'error'; name: string; message: string }
 
 const MAX_LSP_RESTARTS = Number(process.env.AGENT_VIEWER_LSP_MAX_RESTARTS ?? 3)
 const LSP_RESTART_BASE_DELAY_MS = Number(process.env.AGENT_VIEWER_LSP_RESTART_DELAY_MS ?? 1_000)
+function workspaceLabel(rootPath: string): string {
+  return rootPath.split(/[\\/]/).filter(Boolean).pop() ?? rootPath
+}
+
 /** Sessions that have already had their server's startup notifications sent. */
 const startedSessions = new WeakSet<EditorLspSession>()
 
@@ -467,7 +472,9 @@ export class EditorLspClient {
         // same project twice is at best wasted work.
         if (!startedSessions.has(session)) {
           startedSessions.add(session)
-          for (const notification of editorLspStartupNotifications(spec, this.rootPath)) {
+          const startup = editorLspStartupNotifications(spec, this.rootPath, this.filePath)
+          if (startup.length > 0) session.awaitWorkspaceLoad()
+          for (const notification of startup) {
             session.notify(notification.method, notification.params)
           }
         }
@@ -475,6 +482,9 @@ export class EditorLspClient {
         this.openedUri = uri
         const unsubscribeRefresh = session.onDiagnosticsStale(() => {
           if (this.stopped || this.session !== session) return
+          // The same signal says the workspace finished loading, which is the
+          // moment the server's answers become worth anything.
+          this.statusHandler({ state: 'ready', name: spec.name })
           void this.refreshDiagnostics()
         })
         const unsubscribeExit = session.onExit((exit) => {
@@ -511,7 +521,12 @@ export class EditorLspClient {
         session.openDocument(uri, this.filetype, text, documentHandlers)
         this.lastText = text
         this.restartAttempts = 0
-        this.statusHandler({ state: 'ready', name: spec.name })
+        // `initialize` returning is not readiness. A server still loading a
+        // solution answers every request with an empty result, and saying
+        // "ready" there makes a two-minute load look like a broken editor.
+        this.statusHandler(session.workspaceLoaded
+          ? { state: 'ready', name: spec.name }
+          : { state: 'loading', name: spec.name, detail: workspaceLabel(this.rootPath) })
         void this.refreshDiagnostics()
         return true
       } catch (error) {

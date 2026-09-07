@@ -468,6 +468,21 @@ auto-pair checks nor anything else `handleKey` does per character. Set
   completions before, 5 diagnostics including two genuine CS0029 errors and 6
   completions after. `editorLspStartupNotifications` sends them once per
   session, and only to Roslyn.
+- **`initialize` returning is not readiness, and saying it is looks like a bug.**
+  Roslyn answers `initialize` in under a second and then spends minutes loading
+  a large solution — 131 seconds on dotnet/aspire — during which every
+  completion and hover comes back empty. Reporting "ready" there is
+  indistinguishable from a broken editor: the user types `.`, nothing appears,
+  and nothing explains why. A session handed a workspace to load stays in a
+  `loading` status until `workspace/projectInitializationComplete`, and the
+  status bar says so.
+- **Open the file's own project as well as the solution.** The one project the
+  user is looking at loads in a fraction of the time the whole solution does,
+  and it is enough to answer for the open buffer while the rest catches up.
+  Same file on dotnet/aspire: **131s to the first completion with the solution
+  alone, 32s with both.** A file with no project of its own opens only the
+  solution rather than dragging in an unrelated one.
+
 - **A server that says its answers changed must be listened to.** Loading a
   project takes seconds, so whatever was pulled at startup is stale. Roslyn
   announces readiness with `workspace/projectInitializationComplete`; the

@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { EditorLspClient, type EditorDiagnostic } from './editorLsp'
+import { EditorLspClient, type EditorDiagnostic, type EditorLspStatus } from './editorLsp'
 import { editorLspStartupNotifications } from './editorLspServers'
 import { disposeAllLspSessions } from './editorLspSession'
 
@@ -117,12 +117,21 @@ try {
   await writeFile(sourcePath, 'class C { string s = 42; }\n', 'utf8')
 
   let diagnostics: EditorDiagnostic[] = []
+  const statuses: EditorLspStatus[] = []
   const client = new EditorLspClient(cwd, 'csharp', sourcePath, [
     { command: process.execPath, args: [serverPath], name: 'Roslyn' },
   ])
   client.onDiagnostics((next) => { diagnostics = next })
+  client.onStatus((status) => { statuses.push(status) })
   try {
     assert(await client.start('class C { string s = 42; }\n'), 'The Roslyn-like server did not start')
+
+    // `initialize` returning is not readiness. Until the workspace is loaded the
+    // server answers every completion and hover with an empty result, and
+    // reporting "ready" there is what makes a two-minute load look like a
+    // broken editor rather than a slow one.
+    assert(statuses.at(-1)?.state === 'loading',
+      `A server still loading its workspace must not be reported ready: ${JSON.stringify(statuses)}`)
 
     const deadline = Date.now() + 5_000
     while (Date.now() < deadline && !diagnostics.some((entry) => entry.severity === 1)) {
@@ -130,6 +139,8 @@ try {
     }
     assert(diagnostics.some((entry) => entry.severity === 1 && entry.message.includes('Cannot implicitly convert')),
       `The compiler error never arrived — the project was not opened, or the readiness notification was ignored: ${JSON.stringify(diagnostics)}`)
+    assert(statuses.at(-1)?.state === 'ready',
+      `The server never became ready after loading its workspace: ${JSON.stringify(statuses)}`)
     assert(!diagnostics.some((entry) => entry.message === 'Use primary constructor'),
       `The pre-load answer was left on screen after the project loaded: ${JSON.stringify(diagnostics)}`)
 

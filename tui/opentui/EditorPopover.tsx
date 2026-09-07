@@ -1023,6 +1023,12 @@ function lspStatusText(status: EditorLspStatus | null): string {
   if (status.state === 'ready') return `LSP ${status.name}`
   if (status.state === 'starting') return `LSP ${status.name}…`
   if (status.state === 'unavailable') return `LSP unavailable: ${status.name}`
+  // Not a spinner for its own sake: while this shows, the server answers every
+  // completion and hover with an empty result, and the only way to tell that
+  // apart from "nothing here" is to say it.
+  if (status.state === 'loading') {
+    return `LSP ${status.name}: loading ${status.detail ?? 'workspace'}…`
+  }
   return `LSP error: ${status.message} · Alt+R restarts`
 }
 
