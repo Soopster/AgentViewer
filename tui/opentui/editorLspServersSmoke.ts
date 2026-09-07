@@ -6,6 +6,7 @@ import {
   clearEditorLspConfigCache,
   getEditorLspServerSpecs,
   loadEditorLspConfig,
+  editorLspStartupNotifications,
   resolveLspWorkspaceRoot,
 } from './editorLspServers'
 
@@ -123,6 +124,32 @@ try {
   const configuredRoot = resolveLspWorkspaceRoot('python', join(workspace, 'pkg', 'app', 'main.py'), workspace)
   assert(configuredRoot === join(workspace, 'pkg', 'app'),
     `A configured root marker must be honoured: ${configuredRoot}`)
+
+  // Root markers are tiered: a marker describing a bigger unit of work wins
+  // even when a smaller one sits closer to the file. In the standard .NET
+  // layout the nearest marker is the project, and opening that alone leaves
+  // Roslyn knowing nothing about the other projects in the solution — verified
+  // against a real two-project solution, completion on a referenced type
+  // returned nothing at all.
+  await mkdir(join(workspace, 'dotnet', 'src', 'Api'), { recursive: true })
+  await writeFile(join(workspace, 'dotnet', 'Demo.sln'), '', 'utf8')
+  await writeFile(join(workspace, 'dotnet', 'src', 'Api', 'Api.csproj'), '<Project/>', 'utf8')
+  const csharpRoot = resolveLspWorkspaceRoot('csharp', join(workspace, 'dotnet', 'src', 'Api', 'Program.cs'), workspace)
+  assert(csharpRoot === join(workspace, 'dotnet'),
+    `A solution must outrank the nearer project it contains: ${csharpRoot}`)
+  const startup = editorLspStartupNotifications(
+    { command: 'roslyn-language-server', args: [], name: 'Roslyn' },
+    csharpRoot,
+  )
+  assert(startup[0]?.method === 'solution/open',
+    `A solution root must be opened as a solution: ${JSON.stringify(startup)}`)
+
+  // With no solution anywhere, the project is still found by the lower tier.
+  await mkdir(join(workspace, 'loose', 'Tool'), { recursive: true })
+  await writeFile(join(workspace, 'loose', 'Tool', 'Tool.csproj'), '<Project/>', 'utf8')
+  const projectRoot = resolveLspWorkspaceRoot('csharp', join(workspace, 'loose', 'Tool', 'Main.cs'), workspace)
+  assert(projectRoot === join(workspace, 'loose', 'Tool'),
+    `Without a solution the project must still be the root: ${projectRoot}`)
 
   const unknownLanguageRoot = resolveLspWorkspaceRoot('not-a-language', join(workspace, 'lib', 'x.q'), workspace)
   assert(unknownLanguageRoot === workspace, `A language with no markers must use the editor root: ${unknownLanguageRoot}`)

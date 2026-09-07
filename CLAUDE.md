@@ -482,6 +482,17 @@ auto-pair checks nor anything else `handleKey` does per character. Set
   (`resolveLspWorkspaceRoot`): gopls wants the `go.mod` module, rust-analyzer
   the Cargo workspace. The search never escapes the root the editor was opened
   at, and falls back to it, so a stray file still gets a server.
+- **Root markers are tiered, and the bigger unit of work wins.** Each tier is
+  searched up the whole ancestor chain before the next is tried, so `*.sln`
+  outranks a `*.csproj` sitting closer to the file (likewise `go.work` over
+  `go.mod`, a Gradle `settings.gradle` over a module's `build.gradle`). C# is
+  why: in the standard .NET layout — solution at the top, projects under `src/`
+  — the nearest marker is the project, so Roslyn was told about that project
+  alone and knew nothing about the others in the solution or the references
+  between them. Completion on a type from a referenced project returned
+  **nothing at all**, with no error to explain it. Measured on a real
+  two-project solution: 0 members before, 6 after, and four phantom
+  "type not found" diagnostics collapsed to one.
 
 - **Tab is overloaded, and its claimants are ordered.** In one key handler, in
   order: a snippet placeholder, an open completion list, a standing ghost, a

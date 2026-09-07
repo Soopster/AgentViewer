@@ -215,39 +215,47 @@ export function getEditorLspServerSpecs(filetype: string, root?: string): readon
 }
 
 /**
- * Files or directories that mark the root of a workspace for a language.
- * Getting this right matters: gopls indexes the module, rust-analyzer the
- * Cargo workspace, and pointing either at the repository root of a polyglot
- * monorepo makes them index everything or nothing.
+ * Files or directories that mark the root of a workspace for a language, in
+ * tiers: every tier is searched up the whole ancestor chain before the next one
+ * is tried, so a marker that describes a *bigger* unit of work wins even when a
+ * smaller one sits closer to the file.
+ *
+ * C# is why this is tiered. In the standard .NET layout — `Demo.sln` at the top,
+ * projects under `src/` — the nearest marker is the project, so Roslyn was told
+ * about that project alone. It then knows nothing about the other projects in
+ * the solution or the references between them: completion on a type from a
+ * referenced project returns **nothing**, with no error to say why. Verified
+ * against a real two-project solution: 0 members before, 6 after.
  */
-const ROOT_MARKERS: Readonly<Record<string, readonly string[]>> = {
-  c: ['compile_commands.json', '.clangd', 'CMakeLists.txt', 'Makefile'],
-  clojure: ['project.clj', 'deps.edn'],
-  cpp: ['compile_commands.json', '.clangd', 'CMakeLists.txt', 'Makefile'],
-  csharp: ['*.sln', '*.csproj'],
-  dart: ['pubspec.yaml'],
-  elixir: ['mix.exs'],
-  elm: ['elm.json'],
-  erlang: ['rebar.config'],
-  go: ['go.mod', 'go.work'],
-  haskell: ['stack.yaml', 'cabal.project', '*.cabal'],
-  java: ['pom.xml', 'build.gradle', 'build.gradle.kts', 'settings.gradle'],
-  javascript: ['package.json', 'jsconfig.json'],
-  javascriptreact: ['package.json', 'jsconfig.json'],
-  kotlin: ['build.gradle.kts', 'build.gradle', 'settings.gradle.kts'],
-  objc: ['compile_commands.json'],
-  ocaml: ['dune-project', '*.opam'],
-  php: ['composer.json'],
-  python: ['pyproject.toml', 'setup.py', 'setup.cfg', 'requirements.txt', 'Pipfile'],
-  r: ['DESCRIPTION'],
-  ruby: ['Gemfile', '*.gemspec'],
-  rust: ['Cargo.toml'],
-  scala: ['build.sbt', 'build.sc'],
-  swift: ['Package.swift'],
-  terraform: ['main.tf', '.terraform'],
-  typescript: ['tsconfig.json', 'package.json'],
-  typescriptreact: ['tsconfig.json', 'package.json'],
-  zig: ['build.zig'],
+const ROOT_MARKERS: Readonly<Record<string, readonly (readonly string[])[]>> = {
+  c: [['compile_commands.json', '.clangd', 'CMakeLists.txt', 'Makefile']],
+  clojure: [['project.clj', 'deps.edn']],
+  cpp: [['compile_commands.json', '.clangd', 'CMakeLists.txt', 'Makefile']],
+  csharp: [['*.sln', '*.slnx'], ['*.csproj']],
+  dart: [['pubspec.yaml']],
+  elixir: [['mix.exs']],
+  elm: [['elm.json']],
+  erlang: [['rebar.config']],
+  go: [['go.work'], ['go.mod']],
+  haskell: [['stack.yaml', 'cabal.project', '*.cabal']],
+  java: [['settings.gradle', 'settings.gradle.kts'], ['pom.xml', 'build.gradle', 'build.gradle.kts']],
+  javascript: [['package.json', 'jsconfig.json']],
+  javascriptreact: [['package.json', 'jsconfig.json']],
+  kotlin: [['settings.gradle.kts', 'settings.gradle'], ['build.gradle.kts', 'build.gradle']],
+  objc: [['compile_commands.json']],
+  ocaml: [['dune-project', '*.opam']],
+  php: [['composer.json']],
+  python: [['pyproject.toml', 'setup.py', 'setup.cfg', 'requirements.txt', 'Pipfile']],
+  r: [['DESCRIPTION']],
+  ruby: [['Gemfile', '*.gemspec']],
+  rust: [['Cargo.toml']],
+  scala: [['build.sbt', 'build.sc']],
+  swift: [['Package.swift']],
+  terraform: [['main.tf', '.terraform']],
+  tex: [['*.tex']],
+  typescript: [['tsconfig.json', 'package.json']],
+  typescriptreact: [['tsconfig.json', 'package.json']],
+  zig: [['build.zig']],
 }
 
 const ALWAYS_ROOT = ['.git', '.hg', '.agent-viewer']
@@ -274,19 +282,26 @@ function markerExists(directory: string, marker: string): boolean {
 export function resolveLspWorkspaceRoot(filetype: string, filePath: string, fallbackRoot: string): string {
   const absolute = isAbsolute(filePath) ? filePath : resolve(fallbackRoot, filePath)
   const boundary = resolve(fallbackRoot)
-  const configured = loadEditorLspConfig(boundary).config.rootMarkers?.[filetype] ?? []
-  const markers = [...configured, ...(ROOT_MARKERS[filetype] ?? [])]
-  if (markers.length === 0) return boundary
+  const configured = loadEditorLspConfig(boundary).config.rootMarkers?.[filetype]
+  // A project's own configuration outranks the built-in tiers.
+  const tiers = [...(configured ? [configured] : []), ...(ROOT_MARKERS[filetype] ?? [])]
   const { root: filesystemRoot } = parse(absolute)
-  let current = dirname(absolute)
+
   let gitRoot: string | null = null
-  while (true) {
-    if (markers.some((marker) => markerExists(current, marker))) return current
+  const ancestors: string[] = []
+  for (let current = dirname(absolute); ; ) {
+    ancestors.push(current)
     if (!gitRoot && ALWAYS_ROOT.some((marker) => existsSync(join(current, marker)))) gitRoot = current
     if (current === boundary || current === filesystemRoot) break
     const parent = dirname(current)
     if (parent === current) break
     current = parent
+  }
+
+  for (const markers of tiers) {
+    for (const directory of ancestors) {
+      if (markers.some((marker) => markerExists(directory, marker))) return directory
+    }
   }
   return gitRoot ?? boundary
 }
