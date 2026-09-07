@@ -44,6 +44,22 @@ export type EditorLocation = {
   range: { start: EditorPosition; end: EditorPosition }
 }
 
+/**
+ * A symbol from `textDocument/documentSymbol` or `workspace/symbol`, flattened.
+ * `depth` keeps the nesting a hierarchical server reports (a method inside a
+ * class), which is what makes an outline readable rather than an alphabet soup
+ * of names.
+ */
+export type EditorSymbol = {
+  name: string
+  kind: number
+  detail?: string
+  container?: string
+  depth: number
+  uri: string
+  range: { start: EditorPosition; end: EditorPosition }
+}
+
 export type EditorWorkspaceEdit = {
   changes: Array<{ uri: string; edits: EditorTextEdit[] }>
 }
@@ -186,6 +202,38 @@ function codeAction(value: unknown): EditorCodeAction | null {
   }
 }
 
+// Servers answer documentSymbol with either shape and are free to pick: a
+// hierarchical `DocumentSymbol[]`, or a flat `SymbolInformation[]` whose
+// position lives under `location`. Both are folded into one flat, depth-tagged
+// list so the caller never has to care which server it is talking to.
+function editorSymbols(value: unknown, fallbackUri: string, depth = 0, container?: string): EditorSymbol[] {
+  if (!Array.isArray(value)) return []
+  const symbols: EditorSymbol[] = []
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object') continue
+    const item = raw as Record<string, unknown>
+    if (typeof item.name !== 'string') continue
+    const locationValue = item.location as Record<string, unknown> | undefined
+    const range = editorRange(item.selectionRange)
+      ?? editorRange(item.range)
+      ?? editorRange(locationValue?.range)
+    if (!range) continue
+    const uri = typeof locationValue?.uri === 'string' ? locationValue.uri : fallbackUri
+    symbols.push({
+      name: item.name,
+      kind: typeof item.kind === 'number' ? item.kind : 0,
+      detail: typeof item.detail === 'string' ? item.detail : undefined,
+      container: typeof item.containerName === 'string' ? item.containerName : container,
+      depth,
+      uri,
+      range,
+    })
+    // A child's own container is its parent, whatever the server chose to send.
+    symbols.push(...editorSymbols(item.children, uri, depth + 1, item.name))
+  }
+  return symbols
+}
+
 function editorDiagnostics(value: unknown): EditorDiagnostic[] {
   if (!Array.isArray(value)) return []
   const diagnostics: EditorDiagnostic[] = []
@@ -290,6 +338,7 @@ function initializeParams(rootUri: string, rootPath: string): unknown {
         definition: { linkSupport: true },
         implementation: { linkSupport: true },
         references: {},
+        documentSymbol: { hierarchicalDocumentSymbolSupport: true },
         rename: { prepareSupport: true },
         formatting: {},
         codeAction: {
@@ -313,6 +362,7 @@ function initializeParams(rootUri: string, rootPath: string): unknown {
         synchronization: { didSave: true, willSave: false },
       },
       workspace: {
+        symbol: {},
         workspaceFolders: true,
         configuration: true,
         applyEdit: true,
@@ -621,6 +671,26 @@ export class EditorLspClient {
 
   async implementation(position: EditorPosition): Promise<EditorLocation[]> {
     return this.documentLocations('textDocument/implementation', position)
+  }
+
+  /** Every symbol in this buffer, in the order the server reports them. */
+  async documentSymbols(signal?: AbortSignal): Promise<EditorSymbol[]> {
+    if (!this.openedUri || !this.child) return []
+    const raw = await this.request('textDocument/documentSymbol', {
+      textDocument: { uri: this.openedUri },
+    }, 5_000, signal).catch(() => null)
+    return editorSymbols(raw, this.openedUri)
+  }
+
+  /**
+   * Symbols matching `query` across the workspace. An empty query is not sent:
+   * several servers answer it with every symbol they know, which is a
+   * multi-second response nobody asked for.
+   */
+  async workspaceSymbols(query: string, signal?: AbortSignal): Promise<EditorSymbol[]> {
+    if (!this.child || query.trim().length === 0) return []
+    const raw = await this.request('workspace/symbol', { query }, 5_000, signal).catch(() => null)
+    return editorSymbols(raw, this.openedUri ?? '')
   }
 
   async prepareRename(position: EditorPosition): Promise<EditorPrepareRename | null> {

@@ -27,6 +27,7 @@ import {
   type EditorLocation,
   type EditorLspStatus,
   type EditorSignatureHelp,
+  type EditorSymbol,
   type EditorTextEdit,
   type EditorWorkspaceEdit,
 } from './editorLsp'
@@ -194,7 +195,7 @@ type LocalCompletion = {
 type Completion = EditorCompletion | LocalCompletion
 type FocusPane = 'explorer' | 'editor'
 type VimMode = 'insert' | 'normal' | 'visual'
-type QuickMode = 'files' | 'buffers' | 'commands' | 'line'
+type QuickMode = 'files' | 'buffers' | 'commands' | 'line' | 'symbols' | 'workspaceSymbols'
 
 type QuickResult = {
   id: string
@@ -245,6 +246,8 @@ type EditorCommandId =
   | 'find'
   | 'replace'
   | 'goto-line'
+  | 'goto-symbol'
+  | 'goto-workspace-symbol'
   | 'toggle-explorer'
   | 'focus-explorer'
   | 'close-tab'
@@ -310,6 +313,19 @@ const CURSOR_MEMORY_LIMIT = 200
 const CLOSED_TAB_LIMIT = 20
 const PROBLEM_VISIBLE_ROWS = 11
 const QUICK_VISIBLE_ROWS = 11
+// A workspace symbol query is a server round-trip, so it is debounced the way
+// completions are; a document outline is not, because it is fetched once.
+const SYMBOL_QUERY_DELAY_MS = 160
+// The existing labels' casing is pinned by editorPopoverSmoke; the new modes
+// follow it rather than introducing a second convention in the same header.
+const QUICK_MODE_LABELS: Readonly<Record<QuickMode, string>> = {
+  files: 'FILES',
+  buffers: 'BUFFERS',
+  commands: 'COMMANDS',
+  line: 'GO TO LINE',
+  symbols: 'SYMBOLS IN FILE',
+  workspaceSymbols: 'WORKSPACE SYMBOLS',
+}
 const SYMBOL_VISIBLE_ROWS = 11
 const AUTO_COMPLETE_DELAY_MS = 160
 const SYNTAX_DELAY_MS = 90
@@ -354,6 +370,8 @@ const EDITOR_COMMANDS: readonly EditorCommand[] = [
   { id: 'find', label: 'Edit: Find in File', detail: 'Ctrl+F', keywords: 'search text' },
   { id: 'replace', label: 'Edit: Replace in File', detail: 'Ctrl+R', keywords: 'search substitute replace all' },
   { id: 'goto-line', label: 'Go to Line', detail: 'Ctrl+G', keywords: 'jump row' },
+  { id: 'goto-symbol', label: 'Go to Symbol in File', detail: 'Ctrl+Shift+O', keywords: 'outline function class method jump navigate @' },
+  { id: 'goto-workspace-symbol', label: 'Go to Symbol in Workspace', detail: 'Alt+O', keywords: 'outline function class method project search @@' },
   { id: 'show-problems', label: 'Problems: Show List', detail: 'F7', keywords: 'error warning issue diagnostics panel list' },
   { id: 'next-diagnostic', label: 'Problems: Next Diagnostic', detail: 'F8', keywords: 'error warning issue' },
   { id: 'previous-diagnostic', label: 'Problems: Previous Diagnostic', detail: 'Shift+F8', keywords: 'error warning issue' },
@@ -430,7 +448,8 @@ const EDITOR_SHORTCUT_GROUPS: readonly EditorShortcutGroup[] = [
   {
     title: 'Navigate',
     entries: [
-      ['^G', 'Go to line'], ['^M', 'Matching bracket'],
+      ['^G', 'Go to line'], ['^⇧O / Alt+O', 'Symbol in file / workspace'],
+      ['^M', 'Matching bracket'],
       ['^T / Alt+T', 'Go back / forward'],
       ['F7', 'Problem list'], ['F8 / ⇧F8', 'Next / previous problem'],
       ['Alt+←/→', 'Move by word'],
@@ -1054,6 +1073,10 @@ function lineAtOffset(starts: number[], offset: number): number {
 }
 
 function quickModeFor(query: string): QuickMode {
+  // `@@` before `@`, or a workspace search is read as a document one whose
+  // query happens to start with an at-sign.
+  if (query.startsWith('@@')) return 'workspaceSymbols'
+  if (query.startsWith('@')) return 'symbols'
   if (query.startsWith('>')) return 'commands'
   if (query.startsWith('#')) return 'buffers'
   if (query.startsWith(':')) return 'line'
@@ -1061,7 +1084,31 @@ function quickModeFor(query: string): QuickMode {
 }
 
 function quickModeQuery(query: string): string {
-  return quickModeFor(query) === 'files' ? query.trim() : query.slice(1).trim()
+  const mode = quickModeFor(query)
+  if (mode === 'files') return query.trim()
+  return query.slice(mode === 'workspaceSymbols' ? 2 : 1).trim()
+}
+
+// LSP SymbolKind, which is a bare number on the wire. Only the name is shown,
+// so an unknown kind from a future spec version degrades to nothing rather
+// than to a wrong label.
+/** A symbol's file as a workspace-relative path, or its uri when it is outside. */
+function symbolWorkspacePath(root: string, uri: string): string {
+  try {
+    return normalizeRelativePath(root, fileURLToPath(uri)) ?? uri
+  } catch {
+    // Not every symbol comes from a file: some servers report library symbols
+    // through their own uri schemes.
+    return uri
+  }
+}
+
+const SYMBOL_KIND_NAMES: Readonly<Record<number, string>> = {
+  1: 'file', 2: 'module', 3: 'namespace', 4: 'package', 5: 'class', 6: 'method',
+  7: 'property', 8: 'field', 9: 'constructor', 10: 'enum', 11: 'interface',
+  12: 'function', 13: 'variable', 14: 'constant', 15: 'string', 16: 'number',
+  17: 'boolean', 18: 'array', 19: 'object', 20: 'key', 21: 'null',
+  22: 'enum member', 23: 'struct', 24: 'event', 25: 'operator', 26: 'type parameter',
 }
 
 function fuzzyScore(value: string, query: string): number | null {
@@ -1181,6 +1228,7 @@ export function EditorPopover({
   const [focusPane, setFocusPane] = useState<FocusPane>('explorer')
   const [explorerVisible, setExplorerVisible] = useState(true)
   const [quickOpen, setQuickOpen] = useState(false)
+  const [quickSymbols, setQuickSymbols] = useState<EditorSymbol[]>([])
   const [quickQuery, setQuickQuery] = useState('')
   const [quickCursor, setQuickCursor] = useState(0)
   const [searchOpen, setSearchOpen] = useState(false)
@@ -1347,12 +1395,72 @@ export function EditorPopover({
     else if (rowBottom > sb.scrollTop + viewportH) sb.scrollTop = rowBottom - viewportH
   }, [treeCursor])
   const quickMode = quickModeFor(quickQuery)
+  const quickSymbolQuery = quickMode === 'workspaceSymbols' ? quickModeQuery(quickQuery) : ''
+  useEffect(() => {
+    if (!quickOpen || (quickMode !== 'symbols' && quickMode !== 'workspaceSymbols')) {
+      setQuickSymbols([])
+      return
+    }
+    const client = lspRef.current
+    if (!client) return
+    let cancelled = false
+    // A document outline is a property of the buffer, so it is fetched once and
+    // then filtered locally as the user types. A workspace search is a server
+    // round-trip per query and is debounced like every other one here.
+    const run = () => {
+      const request = quickMode === 'symbols' ? client.documentSymbols() : client.workspaceSymbols(quickSymbolQuery)
+      void request.then((symbols) => { if (!cancelled) setQuickSymbols(symbols) })
+    }
+    if (quickMode === 'symbols') {
+      run()
+      return () => { cancelled = true }
+    }
+    const timer = setTimeout(run, SYMBOL_QUERY_DELAY_MS)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  // The outline is re-read when the buffer changes identity, not on every
+  // keystroke: filtering happens below, against what was already fetched.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quickOpen, quickMode, quickSymbolQuery, activeTab?.path, lspStatus?.state])
+
   const quickResults = useMemo<QuickResult[]>(() => {
     const query = quickModeQuery(quickQuery)
     if (quickMode === 'line') {
       const line = Number.parseInt(query, 10)
       if (!activeTab || !Number.isFinite(line) || line < 1) return []
       return [{ id: String(line), label: `Go to line ${line}`, detail: activeTab.path, kind: 'line' }]
+    }
+    if (quickMode === 'symbols' || quickMode === 'workspaceSymbols') {
+      const ranked: Array<{ result: QuickResult; score: number; order: number }> = []
+      for (const [order, symbol] of quickSymbols.entries()) {
+        // A workspace query was already answered by the server; re-ranking it
+        // locally would fight the server's own relevance order.
+        const score = quickMode === 'workspaceSymbols'
+          ? -order
+          : fuzzyScore(`${symbol.name} ${symbol.container ?? ''}`, query)
+        if (score == null) continue
+        const kind = SYMBOL_KIND_NAMES[symbol.kind]
+        const where = quickMode === 'workspaceSymbols'
+          ? symbolWorkspacePath(root, symbol.uri)
+          : symbol.container ?? ''
+        ranked.push({
+          score,
+          order,
+          result: {
+            id: `${symbol.uri}\u0000${symbol.range.start.line}\u0000${symbol.range.start.character}`,
+            // The indent is the outline: a method reads as belonging to its class.
+            label: `${'  '.repeat(Math.min(symbol.depth, 4))}${symbol.name}`,
+            detail: [kind, where, `${symbol.range.start.line + 1}`].filter(Boolean).join(' · '),
+            kind: quickMode,
+          },
+        })
+      }
+      // Ties keep the server's order, which for an outline is document order —
+      // the order the reader is looking at.
+      ranked.sort((left, right) => right.score - left.score || left.order - right.order)
+      return ranked.map((entry) => entry.result)
     }
     if (quickMode === 'buffers') {
       const ranked: Array<{ result: QuickResult; score: number }> = []
@@ -1392,7 +1500,7 @@ export function EditorPopover({
       .sort((a, b) => b.score - a.score || a.result.detail.length - b.result.detail.length)
       .slice(0, 50)
       .map((entry) => entry.result)
-  }, [activeTab, projectFiles, quickMode, quickQuery, tabs])
+  }, [activeTab, projectFiles, quickMode, quickQuery, quickSymbols, root, tabs])
   const searchResult = useMemo(() => findEditorSearchMatches(activeTab?.content ?? '', searchQuery, {
     matchCase: searchMatchCase,
     regex: searchRegex,
@@ -3408,6 +3516,8 @@ export function EditorPopover({
       case 'find': openSearch(); break
       case 'replace': openSearch(true); break
       case 'goto-line': openQuick(':'); break
+      case 'goto-symbol': openQuick('@'); break
+      case 'goto-workspace-symbol': openQuick('@@'); break
       case 'toggle-explorer': toggleExplorer(); break
       case 'focus-explorer': setFocusPane((current) => current === 'editor' ? 'explorer' : 'editor'); break
       case 'close-tab': closeActiveTab(); break
@@ -3460,6 +3570,13 @@ export function EditorPopover({
     setQuickOpen(false)
     setQuickQuery('')
     if (result.kind === 'files') void openBuffer(result.id)
+    else if (result.kind === 'symbols' || result.kind === 'workspaceSymbols') {
+      const [uri, line, character] = result.id.split('\u0000')
+      const position = { line: Number(line), character: Number(character) }
+      // Through the same path as go-to-definition, so a symbol jump is
+      // recorded in the jump list and refuses to leave the workspace.
+      void jumpToEditorLocation({ uri: uri!, range: { start: position, end: position } })
+    }
     else if (result.kind === 'buffers') activateTab(result.id)
     else if (result.kind === 'commands') executeEditorCommand(result.id as EditorCommandId)
     else {
@@ -3467,7 +3584,7 @@ export function EditorPopover({
       setFocusPane('editor')
       setMessage(`Moved to line ${result.id}`)
     }
-  }, [activateTab, executeEditorCommand, openBuffer, quickResults])
+  }, [activateTab, executeEditorCommand, jumpToEditorLocation, openBuffer, quickResults])
 
   const acceptCompletionAt = useCallback((index: number) => {
     setCompletionCursor(index)
@@ -4094,6 +4211,8 @@ export function EditorPopover({
     if (key.ctrl && key.name === 'f') { openSearch(); return true }
     if (key.ctrl && key.name === 'r') { openSearch(true); return true }
     if (key.ctrl && key.name === 'g') { openQuick(':'); return true }
+    if (key.ctrl && key.shift && key.name === 'o') { openQuick('@'); return true }
+    if (alt && !key.ctrl && key.name === 'o') { openQuick('@@'); return true }
     if (key.ctrl && key.name === 'b') { toggleExplorer(); return true }
     if (key.name === 'f1') { setShortcutsOpen(true); return true }
     if (key.ctrl && key.name === 'w') { closeActiveTab(); return true }
@@ -4651,10 +4770,10 @@ export function EditorPopover({
       {quickOpen ? (
         <box position="absolute" top={2} left={Math.max(2, Math.floor(width * 0.2))} width={Math.max(30, Math.floor(width * 0.6))} height={Math.min(16, height - 5)} zIndex={60} border borderStyle="heavy" borderColor={theme.cyan} backgroundColor={theme.surface} flexDirection="column" title=" Quick open ">
           <box height={1} paddingX={1} backgroundColor={theme.surface2}>
-            <text fg={theme.text}>{`› ${quickQuery || 'files · > commands · # buffers · : line'}`}</text>
+            <text fg={theme.text}>{`› ${quickQuery || 'files · > commands · # buffers · @ symbols · @@ workspace · : line'}`}</text>
           </box>
           <box height={1} paddingX={1} flexDirection="row">
-            <text fg={theme.cyan}>{quickMode === 'files' ? 'FILES' : quickMode === 'buffers' ? 'BUFFERS' : quickMode === 'commands' ? 'COMMANDS' : 'GO TO LINE'}</text>
+            <text fg={theme.cyan}>{QUICK_MODE_LABELS[quickMode]}</text>
             <box flexGrow={1} />
             <text fg={theme.dim}>{`${quickResults.length} result${quickResults.length === 1 ? '' : 's'}`}</text>
           </box>

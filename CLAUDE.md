@@ -340,6 +340,21 @@ auto-pair checks nor anything else `handleKey` does per character. Set
   pair: LSP positions are UTF-16 code units, but half a pair is not a character
   and a server cannot recover from being sent one.
 
+- **Symbol navigation lives in the quick-open picker, not its own overlay.**
+  `@` is the outline of the current buffer, `@@` searches the workspace (`^⇧O`
+  and `Alt+O` seed them), alongside the existing `>` commands, `#` buffers and
+  `:` line. Reusing the picker means one keyboard model and one list widget.
+  **`documentSymbol` has two legal response shapes** and the server picks:
+  hierarchical `DocumentSymbol[]`, or flat `SymbolInformation[]` whose position
+  hides under `location`. A client that reads only one gets an empty outline
+  from half the table, and an empty outline is indistinguishable from a file
+  with no symbols — so `editorSymbolSmoke.ts` pins both. Symbols use their
+  `selectionRange`, so jumping to a class lands on its name rather than the top
+  of a body hundreds of lines long, and an outline is fetched once per buffer
+  and filtered locally while a workspace query is debounced per keystroke. A
+  blank workspace query is never sent: several servers answer it by enumerating
+  everything they know.
+
 - **A click on a tab must select it, and only the `×` may close it.** The tab's
   box had no `flexDirection`, so it laid its children out in a *column*: the `×`
   then stretched across the full tab width (cross-axis stretch is the default),
