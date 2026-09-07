@@ -340,6 +340,27 @@ auto-pair checks nor anything else `handleKey` does per character. Set
   pair: LSP positions are UTF-16 code units, but half a pair is not a character
   and a server cannot recover from being sent one.
 
+- **Save hygiene is computed on the string that is about to be written**
+  (`editorSaveHygiene.ts`), never by applying edits to the live buffer and
+  reading the result back — an async state update is how a save writes
+  something other than what it formatted. Format-on-save, trim-trailing-
+  whitespace and final-newline are all **off by default and toggled from the
+  palette**: each rewrites lines the user did not touch, which turns a one-line
+  change into a whole-file diff in someone else's repository.
+- **A save must not adopt its own output over a newer edit.** Hygiene rewrites
+  the text, so the buffer has to take it — but only when the buffer has not
+  moved on since the save started. Typing during an in-flight save has to
+  survive it: recovery snapshots `content`, so overwriting a newer edit discards
+  unsaved work *and* its recovery copy. `editorSaveRecoverySmoke.tsx` caught
+  exactly this regression when the commit was written unconditionally.
+- **One `applyEditorTextEdits`, and it clamps.** The popover had its own copy
+  beside the one used for saving. Its offset helper returned `null` for a column
+  past the end of a line, and `slice(0, null)` then truncated the document to
+  nothing without a word. The surviving implementation clamps to the line end
+  and still throws on overlapping edits, because a server contradicting itself
+  has no safe interpretation. LSP edits are applied last-first: in document
+  order every later range is shifted by the earlier ones' length change.
+
 - **A symbol carries two ranges and they answer different questions.** `range`
   is the jump target (the name), `enclosingRange` is the whole extent — which is
   what says whether the caret is inside a symbol, and so what drives the status

@@ -33,6 +33,12 @@ import {
 } from './editorLsp'
 import { getEditorLspServerSpecs, resolveLspWorkspaceRoot } from './editorLspServers'
 import { openEditorSyntaxBuffer, type EditorSyntaxBuffer, type EditorSyntaxLine } from './editorSyntaxBuffer'
+import {
+  applyEditorSaveHygiene,
+  applyEditorTextEdits,
+  DEFAULT_EDITOR_SAVE_HYGIENE,
+  type EditorSaveHygiene,
+} from './editorSaveHygiene'
 import { createScrollVelocityState, velocityScrollStep } from './scrollVelocity'
 import {
   type EditorProjectSearchResult,
@@ -246,6 +252,9 @@ type EditorCommandId =
   | 'find'
   | 'replace'
   | 'goto-line'
+  | 'toggle-format-on-save'
+  | 'toggle-trim-whitespace'
+  | 'toggle-final-newline'
   | 'goto-symbol'
   | 'goto-workspace-symbol'
   | 'toggle-explorer'
@@ -371,6 +380,9 @@ const EDITOR_COMMANDS: readonly EditorCommand[] = [
   { id: 'find', label: 'Edit: Find in File', detail: 'Ctrl+F', keywords: 'search text' },
   { id: 'replace', label: 'Edit: Replace in File', detail: 'Ctrl+R', keywords: 'search substitute replace all' },
   { id: 'goto-line', label: 'Go to Line', detail: 'Ctrl+G', keywords: 'jump row' },
+  { id: 'toggle-format-on-save', label: 'Toggle Format on Save', detail: '', keywords: 'formatter prettier gofmt lsp save' },
+  { id: 'toggle-trim-whitespace', label: 'Toggle Trim Trailing Whitespace on Save', detail: '', keywords: 'strip spaces tabs eol save' },
+  { id: 'toggle-final-newline', label: 'Toggle Final Newline on Save', detail: '', keywords: 'eof newline posix save' },
   { id: 'goto-symbol', label: 'Go to Symbol in File', detail: 'Ctrl+Shift+O', keywords: 'outline function class method jump navigate @' },
   { id: 'goto-workspace-symbol', label: 'Go to Symbol in Workspace', detail: 'Alt+O', keywords: 'outline function class method project search @@' },
   { id: 'show-problems', label: 'Problems: Show List', detail: 'F7', keywords: 'error warning issue diagnostics panel list' },
@@ -671,24 +683,6 @@ function validOffsetAtEditorPosition(content: string, position: { line: number; 
   const lineEnd = content.indexOf('\n', lineStart)
   const end = lineEnd < 0 ? content.length : lineEnd
   return lineStart + position.character <= end ? lineStart + position.character : null
-}
-
-function applyEditorTextEdits(content: string, edits: EditorTextEdit[]): string {
-  const normalized = edits.map((edit) => ({
-    start: offsetAtEditorPosition(content, edit.range.start),
-    end: offsetAtEditorPosition(content, edit.range.end),
-    newText: edit.newText,
-  })).sort((left, right) => right.start - left.start || right.end - left.end)
-  let boundary = content.length
-  let output = content
-  for (const edit of normalized) {
-    if (edit.start < 0 || edit.end < edit.start || edit.end > boundary) {
-      throw new Error('Language server returned overlapping or invalid text edits')
-    }
-    output = `${output.slice(0, edit.start)}${edit.newText}${output.slice(edit.end)}`
-    boundary = edit.start
-  }
-  return output
 }
 
 function wordRangeAt(content: string, offset: number): { start: number; end: number; value: string } | null {
@@ -1292,6 +1286,7 @@ export function EditorPopover({
   const [clock, setClock] = useState(() => new Date())
   const [velocityScrollEnabled, setVelocityScrollEnabled] = useState(false)
   const [wordWrapEnabled, setWordWrapEnabled] = useState(false)
+  const [saveHygiene, setSaveHygiene] = useState<EditorSaveHygiene>(DEFAULT_EDITOR_SAVE_HYGIENE)
   const [vimEnabled, setVimEnabled] = useState(false)
   // Zen mode gives the buffer every row and column the popover has: no chrome,
   // no explorer, no footer — the file, its gutter, and one status line.
@@ -1832,13 +1827,50 @@ export function EditorPopover({
     }
   }, [captureJumpPoint, onNotice, root, tabs])
 
+  const toggleSaveHygiene = useCallback((key: keyof EditorSaveHygiene, label: string) => {
+    setSaveHygiene((current) => {
+      const next = { ...current, [key]: !current[key] }
+      setMessage(`${label}: ${next[key] ? 'on' : 'off'}`)
+      return next
+    })
+  }, [])
+
   const saveActive = useCallback(async () => {
     if (!activeTab) return
-    const savedContent = activeTab.content
     const client = lspRef.current
+    // Hygiene is computed on the string that is about to be written, and the
+    // buffer is then set to exactly that. Applying edits to the live buffer and
+    // reading the result back out of an async state update is how a save writes
+    // something other than what it formatted.
+    let savedContent = activeTab.content
+    if (saveHygiene.formatOnSave && client) {
+      const edit = await client.formatting({
+        tabSize: detectEditorIndentUnit(activeTab.content, activeTab.path).length,
+        insertSpaces: detectEditorIndentUnit(activeTab.content, activeTab.path) !== '\t',
+      }).catch(() => null)
+      const edits = edit?.changes.find((change) => change.uri.endsWith(encodeURI(basename(activeTab.path))))?.edits
+        ?? edit?.changes[0]?.edits
+      // The edits describe the document the server was given. If the buffer
+      // moved on while formatting was in flight they no longer describe it, and
+      // applying them anyway would corrupt the file being saved.
+      if (edits && activeTab.content === savedContent) savedContent = applyEditorTextEdits(savedContent, edits)
+    }
+    savedContent = applyEditorSaveHygiene(savedContent, saveHygiene, cursor.line)
     try {
       await saveEditorFileSafely(root, activeTab.path, savedContent, activeTab.savedContent, activeTab.lineEnding)
-      setTabs((current) => current.map((tab) => tab.path === activeTab.path ? { ...tab, savedContent } : tab))
+      // Hygiene rewrote the text, so the buffer has to adopt it — but only if
+      // the buffer has not moved on. Typing during an in-flight save must
+      // survive it: recovery snapshots `content`, so overwriting a newer edit
+      // here discards unsaved work and takes its recovery copy with it.
+      const rewritten = savedContent !== activeTab.content
+      setTabs((current) => current.map((tab) => {
+        if (tab.path !== activeTab.path) return tab
+        const movedOn = tab.content !== activeTab.content
+        return rewritten && !movedOn ? { ...tab, content: savedContent, savedContent } : { ...tab, savedContent }
+      }))
+      if (rewritten && editorRef.current?.plainText === activeTab.content) {
+        editorRef.current?.setText?.(savedContent)
+      }
       setDiskConflicts((current) => {
         if (!current.has(activeTab.path)) return current
         const next = new Set(current); next.delete(activeTab.path); return next
@@ -1854,7 +1886,7 @@ export function EditorPopover({
       setMessage(text)
       onNotice?.('error', text)
     }
-  }, [activeTab, onNotice, root])
+  }, [activeTab, cursor.line, onNotice, root, saveHygiene])
 
   const saveAll = useCallback(async () => {
     const modified = tabs.filter((tab) => tab.content !== tab.savedContent)
@@ -3532,6 +3564,9 @@ export function EditorPopover({
       case 'find': openSearch(); break
       case 'replace': openSearch(true); break
       case 'goto-line': openQuick(':'); break
+      case 'toggle-format-on-save': toggleSaveHygiene('formatOnSave', 'Format on save'); break
+      case 'toggle-trim-whitespace': toggleSaveHygiene('trimTrailingWhitespace', 'Trim trailing whitespace on save'); break
+      case 'toggle-final-newline': toggleSaveHygiene('finalNewline', 'Final newline on save'); break
       case 'goto-symbol': openQuick('@'); break
       case 'goto-workspace-symbol': openQuick('@@'); break
       case 'toggle-explorer': toggleExplorer(); break
@@ -4501,6 +4536,9 @@ export function EditorPopover({
   // them on live in the F1 reference.
   const enabledToggles = [
     wordWrapEnabled ? 'Wrap' : null,
+    saveHygiene.formatOnSave ? 'Format on save' : null,
+    saveHygiene.trimTrailingWhitespace ? 'Trim' : null,
+    saveHygiene.finalNewline ? 'Final newline' : null,
     velocityScrollEnabled ? 'Velocity' : null,
     zenMode ? 'Zen (Esc)' : null,
     syntaxSuspended ? 'Syntax off (long lines)' : null,
