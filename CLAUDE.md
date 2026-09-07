@@ -340,6 +340,15 @@ auto-pair checks nor anything else `handleKey` does per character. Set
   pair: LSP positions are UTF-16 code units, but half a pair is not a character
   and a server cannot recover from being sent one.
 
+- **A symbol carries two ranges and they answer different questions.** `range`
+  is the jump target (the name), `enclosingRange` is the whole extent — which is
+  what says whether the caret is inside a symbol, and so what drives the status
+  bar's breadcrumb. A flat `SymbolInformation` has only one range and it means
+  the extent, so the two collapse there. The breadcrumb is derived from the
+  outline and the caret line, never asked for, so moving the caret costs
+  nothing; the outline itself is re-read `OUTLINE_REFRESH_DELAY_MS` after typing
+  stops, and the `@` picker reads that same state rather than fetching its own.
+
 - **Symbol navigation lives in the quick-open picker, not its own overlay.**
   `@` is the outline of the current buffer, `@@` searches the workspace (`^⇧O`
   and `Alt+O` seed them), alongside the existing `>` commands, `#` buffers and

@@ -316,6 +316,7 @@ const QUICK_VISIBLE_ROWS = 11
 // A workspace symbol query is a server round-trip, so it is debounced the way
 // completions are; a document outline is not, because it is fetched once.
 const SYMBOL_QUERY_DELAY_MS = 160
+const OUTLINE_REFRESH_DELAY_MS = 700
 // The existing labels' casing is pinned by editorPopoverSmoke; the new modes
 // follow it rather than introducing a second convention in the same header.
 const QUICK_MODE_LABELS: Readonly<Record<QuickMode, string>> = {
@@ -1228,7 +1229,10 @@ export function EditorPopover({
   const [focusPane, setFocusPane] = useState<FocusPane>('explorer')
   const [explorerVisible, setExplorerVisible] = useState(true)
   const [quickOpen, setQuickOpen] = useState(false)
-  const [quickSymbols, setQuickSymbols] = useState<EditorSymbol[]>([])
+  // The current buffer's outline, shared by the `@` picker and the breadcrumb
+  // so the buffer is only ever asked for once.
+  const [outlineSymbols, setOutlineSymbols] = useState<EditorSymbol[]>([])
+  const [workspaceSymbolResults, setWorkspaceSymbolResults] = useState<EditorSymbol[]>([])
   const [quickQuery, setQuickQuery] = useState('')
   const [quickCursor, setQuickCursor] = useState(0)
   const [searchOpen, setSearchOpen] = useState(false)
@@ -1397,33 +1401,44 @@ export function EditorPopover({
   const quickMode = quickModeFor(quickQuery)
   const quickSymbolQuery = quickMode === 'workspaceSymbols' ? quickModeQuery(quickQuery) : ''
   useEffect(() => {
-    if (!quickOpen || (quickMode !== 'symbols' && quickMode !== 'workspaceSymbols')) {
-      setQuickSymbols([])
+    const client = lspRef.current
+    if (!client || !activeTab || lspStatus?.state !== 'ready') {
+      setOutlineSymbols([])
+      return
+    }
+    let cancelled = false
+    // Re-read after typing stops rather than per keystroke: an outline is only
+    // ever used to say where the caret is and to fill a picker, and a server
+    // that is mid-edit answers with a half-parsed file anyway.
+    const timer = setTimeout(() => {
+      void client.documentSymbols().then((symbols) => { if (!cancelled) setOutlineSymbols(symbols) })
+    }, OUTLINE_REFRESH_DELAY_MS)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [activeTab, lspStatus?.state])
+
+  useEffect(() => {
+    if (!quickOpen || quickMode !== 'workspaceSymbols') {
+      setWorkspaceSymbolResults([])
       return
     }
     const client = lspRef.current
     if (!client) return
     let cancelled = false
-    // A document outline is a property of the buffer, so it is fetched once and
-    // then filtered locally as the user types. A workspace search is a server
-    // round-trip per query and is debounced like every other one here.
-    const run = () => {
-      const request = quickMode === 'symbols' ? client.documentSymbols() : client.workspaceSymbols(quickSymbolQuery)
-      void request.then((symbols) => { if (!cancelled) setQuickSymbols(symbols) })
-    }
-    if (quickMode === 'symbols') {
-      run()
-      return () => { cancelled = true }
-    }
-    const timer = setTimeout(run, SYMBOL_QUERY_DELAY_MS)
+    // Unlike the outline, this is a server round-trip per query, so it is
+    // debounced the way completions are.
+    const timer = setTimeout(() => {
+      void client.workspaceSymbols(quickSymbolQuery).then((symbols) => {
+        if (!cancelled) setWorkspaceSymbolResults(symbols)
+      })
+    }, SYMBOL_QUERY_DELAY_MS)
     return () => {
       cancelled = true
       clearTimeout(timer)
     }
-  // The outline is re-read when the buffer changes identity, not on every
-  // keystroke: filtering happens below, against what was already fetched.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quickOpen, quickMode, quickSymbolQuery, activeTab?.path, lspStatus?.state])
+  }, [quickOpen, quickMode, quickSymbolQuery])
 
   const quickResults = useMemo<QuickResult[]>(() => {
     const query = quickModeQuery(quickQuery)
@@ -1434,7 +1449,8 @@ export function EditorPopover({
     }
     if (quickMode === 'symbols' || quickMode === 'workspaceSymbols') {
       const ranked: Array<{ result: QuickResult; score: number; order: number }> = []
-      for (const [order, symbol] of quickSymbols.entries()) {
+      const source = quickMode === 'workspaceSymbols' ? workspaceSymbolResults : outlineSymbols
+      for (const [order, symbol] of source.entries()) {
         // A workspace query was already answered by the server; re-ranking it
         // locally would fight the server's own relevance order.
         const score = quickMode === 'workspaceSymbols'
@@ -1500,7 +1516,7 @@ export function EditorPopover({
       .sort((a, b) => b.score - a.score || a.result.detail.length - b.result.detail.length)
       .slice(0, 50)
       .map((entry) => entry.result)
-  }, [activeTab, projectFiles, quickMode, quickQuery, quickSymbols, root, tabs])
+  }, [activeTab, outlineSymbols, projectFiles, quickMode, quickQuery, root, tabs, workspaceSymbolResults])
   const searchResult = useMemo(() => findEditorSearchMatches(activeTab?.content ?? '', searchQuery, {
     matchCase: searchMatchCase,
     regex: searchRegex,
@@ -4460,6 +4476,26 @@ export function EditorPopover({
     setTabs((current) => current.map((tab) => tab.path === activePath ? { ...tab, content } : tab))
   }, [activePath])
 
+  /**
+   * The symbols the caret is inside, outermost first — a class, then the method
+   * within it. Derived from the outline rather than asked for, so moving the
+   * caret costs nothing.
+   */
+  const enclosingSymbols = useMemo(() => {
+    if (outlineSymbols.length === 0) return []
+    const chain: EditorSymbol[] = []
+    for (const symbol of outlineSymbols) {
+      const { start, end } = symbol.enclosingRange
+      if (cursor.line < start.line || cursor.line > end.line) continue
+      // The outline is depth-tagged and in document order, so a deeper match
+      // replaces anything at or below its own depth rather than appending to a
+      // chain it does not belong to.
+      chain.length = Math.min(chain.length, symbol.depth)
+      chain[symbol.depth] = symbol
+    }
+    return chain.filter(Boolean)
+  }, [cursor.line, outlineSymbols])
+
   const counts = useMemo(() => diagnosticCounts(diagnostics), [diagnostics])
   // Only the toggles that are on earn status-bar space; the bindings that turn
   // them on live in the F1 reference.
@@ -4746,6 +4782,11 @@ export function EditorPopover({
           <text fg={theme.bg}>{editorModeLabel}</text>
         </box>
         <text fg={theme.cyan}>{`   ${basename(root)}${zenMode && activePath ? ` › ${basename(activePath)}` : ''} `}</text>
+        {enclosingSymbols.length > 0 ? (
+          <text fg={theme.violet} wrapMode="none">
+            {`${fitText(enclosingSymbols.map((symbol) => symbol.name).join(' \u203a '), Math.max(12, Math.floor(editorWidth * 0.3)))}  `}
+          </text>
+        ) : null}
         {dirty ? <text fg={theme.amber}>● modified  </text> : <text fg={theme.green}>✓ saved  </text>}
         {activePath && diskConflicts.has(activePath) ? <text fg={theme.red}>⚠ disk changed  </text> : null}
         {counts.errors > 0 ? <text fg={theme.red}>{`× ${counts.errors} `}</text> : null}

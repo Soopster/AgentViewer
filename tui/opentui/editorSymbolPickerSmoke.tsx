@@ -46,6 +46,8 @@ function send(message) {
   process.stdout.write('Content-Length: ' + Buffer.byteLength(body) + '\r\n\r\n' + body)
 }
 const at = (line) => ({ start: { line, character: 0 }, end: { line, character: 6 } })
+// A symbol's own extent, which is what says whether the caret is inside it.
+const spanning = (from, to) => ({ start: { line: from, character: 0 }, end: { line: to, character: 1 } })
 process.stdin.on('data', (chunk) => {
   input = Buffer.concat([input, chunk])
   while (true) {
@@ -63,10 +65,10 @@ process.stdin.on('data', (chunk) => {
     } } })
     if (message.method === 'textDocument/didOpen') documentUri = message.params.textDocument.uri
     if (message.method === 'textDocument/documentSymbol') send({ jsonrpc: '2.0', id: message.id, result: [
-      { name: 'Widget', kind: 5, range: at(0), selectionRange: at(0), children: [
-        { name: 'render', kind: 6, range: at(1), selectionRange: at(1) },
+      { name: 'Widget', kind: 5, range: spanning(0, 2), selectionRange: at(0), children: [
+        { name: 'render', kind: 6, range: spanning(1, 1), selectionRange: at(1) },
       ] },
-      { name: 'helperFunction', kind: 12, range: at(3), selectionRange: at(3) },
+      { name: 'helperFunction', kind: 12, range: spanning(3, 3), selectionRange: at(3) },
     ] })
     if (message.method === 'workspace/symbol') send({ jsonrpc: '2.0', id: message.id, result: [
       { name: 'remoteThing', kind: 14, location: { uri: documentUri.replace('main.ts', 'other.ts'), range: at(0) } },
@@ -167,8 +169,26 @@ process.stdin.on('data', (chunk) => {
     )
     assert(workspace.includes('remoteThing'), 'unreachable')
 
-    await press({ name: 'escape', sequence: '' } as EditorKeyEvent)
-    console.log('Editor symbol picker smoke passed (Ctrl+Shift+O outline, filter, jump, Alt+O workspace)')
+    await press({ name: 'escape', sequence: '\u001b' } as EditorKeyEvent)
+
+    // The breadcrumb: which symbol the caret is inside, without scrolling to
+    // find out. The caret is still on helperFunction from the jump above.
+    const breadcrumb = await waitForFrame(
+      (rendered) => rendered.split('\n').some((row) => row.includes('helperFunction') && /saved|modified/.test(row)),
+      'the status bar to name the symbol the caret is inside',
+    )
+    assert(breadcrumb.includes('helperFunction'), 'unreachable')
+
+    // Inside the class's method, the chain reads outermost first.
+    await press({ name: 'g', ctrl: true, sequence: '' } as EditorKeyEvent)
+    await act(async () => { handleKey?.({ name: '2', sequence: '2' } as EditorKeyEvent) })
+    await press({ name: 'return', sequence: '\r' } as EditorKeyEvent)
+    const nested = await waitForFrame(
+      (rendered) => rendered.includes('Widget \u203a render'),
+      'the status bar to show the enclosing chain for a nested symbol',
+    )
+    assert(nested.includes('Widget \u203a render'), 'unreachable')
+    console.log('Editor symbol picker smoke passed (Ctrl+Shift+O outline, filter, jump, Alt+O workspace, breadcrumb)')
   } finally {
     setup.renderer?.destroy?.()
     disposeAllLspSessions()

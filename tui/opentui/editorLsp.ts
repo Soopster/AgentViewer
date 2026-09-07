@@ -57,7 +57,14 @@ export type EditorSymbol = {
   container?: string
   depth: number
   uri: string
+  /** Where to put the caret: the symbol's name, not the top of its body. */
   range: { start: EditorPosition; end: EditorPosition }
+  /**
+   * The symbol's whole extent, which is what answers "which function is the
+   * caret in". A flat `SymbolInformation` has only one range and it means this
+   * one, so the two collapse together there.
+   */
+  enclosingRange: { start: EditorPosition; end: EditorPosition }
 }
 
 export type EditorWorkspaceEdit = {
@@ -214,9 +221,8 @@ function editorSymbols(value: unknown, fallbackUri: string, depth = 0, container
     const item = raw as Record<string, unknown>
     if (typeof item.name !== 'string') continue
     const locationValue = item.location as Record<string, unknown> | undefined
-    const range = editorRange(item.selectionRange)
-      ?? editorRange(item.range)
-      ?? editorRange(locationValue?.range)
+    const fullRange = editorRange(item.range) ?? editorRange(locationValue?.range)
+    const range = editorRange(item.selectionRange) ?? fullRange
     if (!range) continue
     const uri = typeof locationValue?.uri === 'string' ? locationValue.uri : fallbackUri
     symbols.push({
@@ -227,6 +233,7 @@ function editorSymbols(value: unknown, fallbackUri: string, depth = 0, container
       depth,
       uri,
       range,
+      enclosingRange: fullRange ?? range,
     })
     // A child's own container is its parent, whatever the server chose to send.
     symbols.push(...editorSymbols(item.children, uri, depth + 1, item.name))
