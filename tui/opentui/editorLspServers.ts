@@ -1,6 +1,7 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, parse, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 export type EditorLspServerSpec = { command: string; args: string[]; name: string }
 
@@ -98,6 +99,40 @@ const SERVER_BY_FILETYPE: Readonly<Record<string, readonly EditorLspServerSpec[]
   vue: [{ command: 'vue-language-server', args: ['--stdio'], name: 'vue-language-server' }],
   yaml: [{ command: 'yaml-language-server', args: ['--stdio'], name: 'yaml-language-server' }],
   zig: [{ command: 'zls', args: [], name: 'zls' }],
+}
+
+export type LspStartupNotification = { method: string; params: unknown }
+
+/**
+ * Notifications a server needs after `initialized` before it will do real work.
+ *
+ * Roslyn is the reason this exists. Until it is told which solution or project a
+ * file belongs to — through `solution/open` / `project/open`, Microsoft
+ * extensions rather than standard LSP — it analyses C# as a loose "miscellaneous
+ * file": style hints only, no compiler errors, no inherited members in
+ * completion, and nothing from `workspace/symbol`. Everything looks like it is
+ * working, which is what makes it worth wiring rather than leaving to the user.
+ */
+export function editorLspStartupNotifications(
+  spec: EditorLspServerSpec,
+  rootPath: string,
+): LspStartupNotification[] {
+  if (!/roslyn/i.test(spec.name) && !/roslyn/i.test(spec.command)) return []
+  const uri = (file: string) => pathToFileURL(join(rootPath, file)).href
+  let entries: string[]
+  try {
+    entries = readdirSync(rootPath)
+  } catch {
+    return []
+  }
+  // A solution describes every project in it, so it is strictly better when
+  // there is one.
+  const solution = entries.find((entry) => entry.toLowerCase().endsWith('.sln'))
+    ?? entries.find((entry) => entry.toLowerCase().endsWith('.slnx'))
+  if (solution) return [{ method: 'solution/open', params: { solution: uri(solution) } }]
+  const projects = entries.filter((entry) => /\.(cs|fs|vb)proj$/i.test(entry))
+  if (projects.length === 0) return []
+  return [{ method: 'project/open', params: { projects: projects.map(uri) } }]
 }
 
 export type EditorLspConfig = {

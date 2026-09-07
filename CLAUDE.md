@@ -458,6 +458,26 @@ auto-pair checks nor anything else `handleKey` does per character. Set
   people write in an editor config. **Bare `tsc` is not a fallback for
   TypeScript**: TypeScript 5's compiler has no `--lsp`, so it would spawn,
   reject the flags and die; the second choice is `typescript-language-server`.
+- **C# needs a project opened before it is a language at all.** Roslyn will not
+  compile anything until it is told which solution or project a file belongs to,
+  through `solution/open` / `project/open` — Microsoft extensions, not standard
+  LSP. Without them it treats C# as a loose "miscellaneous file" and *looks*
+  like it is working: hover, definition and the outline all answer. But there
+  are **no compiler errors**, completion omits inherited members, and
+  `workspace/symbol` is empty. Measured on a real project: 1 style hint and 2
+  completions before, 5 diagnostics including two genuine CS0029 errors and 6
+  completions after. `editorLspStartupNotifications` sends them once per
+  session, and only to Roslyn.
+- **A server that says its answers changed must be listened to.** Loading a
+  project takes seconds, so whatever was pulled at startup is stale. Roslyn
+  announces readiness with `workspace/projectInitializationComplete`; the
+  standard spelling is `workspace/diagnostic/refresh`. The session used to
+  answer any unrecognised server request with "unsupported method", so the
+  buffer kept showing the pre-load answer forever. Both now re-pull.
+  `editorLspProjectSmoke.ts` pins this with a server whose state flips only when
+  it sends the notification — flipping it synchronously made ignoring the
+  notification accidentally harmless, and the mutation passed.
+
 - **A server is rooted at its own project, not at the editor's cwd**
   (`resolveLspWorkspaceRoot`): gopls wants the `go.mod` module, rust-analyzer
   the Cargo workspace. The search never escapes the root the editor was opened

@@ -33,6 +33,15 @@ export type LspDocumentHandlers = {
 
 export type LspSessionExit = { message: string }
 
+// Server-initiated "my answers have changed, ask again". `workspace/diagnostic/refresh`
+// is the standard spelling; `workspace/projectInitializationComplete` is Roslyn's,
+// sent once the project is loaded — before it, C# is analysed as a loose file and
+// reports style hints but no compiler errors at all.
+const DIAGNOSTIC_REFRESH_METHODS = new Set([
+  'workspace/diagnostic/refresh',
+  'workspace/projectInitializationComplete',
+])
+
 type PendingRequest = {
   resolve: (value: unknown) => void
   reject: (error: Error) => void
@@ -68,6 +77,7 @@ export class EditorLspSession {
   private pending = new Map<number, PendingRequest>()
   private documents = new Map<string, SessionDocument>()
   private exitHandlers = new Set<(exit: LspSessionExit) => void>()
+  private refreshHandlers = new Set<() => void>()
   private refCount = 0
   private idleTimer: ReturnType<typeof setTimeout> | null = null
   private stderr = ''
@@ -117,6 +127,12 @@ export class EditorLspSession {
       if (this.refCount === 0) this.dispose()
     }, IDLE_DISPOSE_MS)
     this.idleTimer.unref?.()
+  }
+
+  /** Fires when the server says its diagnostics are now worth asking for again. */
+  onDiagnosticsStale(handler: () => void): () => void {
+    this.refreshHandlers.add(handler)
+    return () => this.refreshHandlers.delete(handler)
   }
 
   onExit(handler: (exit: LspSessionExit) => void): () => void {
@@ -343,6 +359,12 @@ export class EditorLspSession {
         id,
         result: [{ uri: pathToFileURL(this.rootPath).href, name: this.rootPath.split(/[\\/]/).pop() || 'workspace' }],
       })
+      return
+    }
+    if (method && DIAGNOSTIC_REFRESH_METHODS.has(method)) {
+      // A request form still needs its reply, or the server waits forever.
+      if (id != null) this.send({ jsonrpc: '2.0', id, result: null })
+      for (const handler of [...this.refreshHandlers]) handler()
       return
     }
     if (id != null && (method === 'client/registerCapability'

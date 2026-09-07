@@ -1,7 +1,7 @@
 import { pathToFileURL } from 'node:url'
 import { LSP_SYNC_FULL, lspContentChanges } from './editorLspSync'
 import { acquireLspSession, type EditorLspSession, type LspDocumentHandlers } from './editorLspSession'
-import { getEditorLspServerSpecs, type EditorLspServerSpec } from './editorLspServers'
+import { editorLspStartupNotifications, getEditorLspServerSpecs, type EditorLspServerSpec } from './editorLspServers'
 
 export type EditorPosition = { line: number; character: number }
 
@@ -312,6 +312,9 @@ export type EditorLspStatus =
 
 const MAX_LSP_RESTARTS = Number(process.env.AGENT_VIEWER_LSP_MAX_RESTARTS ?? 3)
 const LSP_RESTART_BASE_DELAY_MS = Number(process.env.AGENT_VIEWER_LSP_RESTART_DELAY_MS ?? 1_000)
+/** Sessions that have already had their server's startup notifications sent. */
+const startedSessions = new WeakSet<EditorLspSession>()
+
 const INITIALIZE_TIMEOUT_MS = Number(process.env.AGENT_VIEWER_LSP_INIT_TIMEOUT_MS ?? 20_000)
 
 /**
@@ -460,8 +463,20 @@ export class EditorLspClient {
         }
         this.session = session
         this.releaseSession = () => session.release()
+        // Sent once per session, not per buffer: telling a server about the
+        // same project twice is at best wasted work.
+        if (!startedSessions.has(session)) {
+          startedSessions.add(session)
+          for (const notification of editorLspStartupNotifications(spec, this.rootPath)) {
+            session.notify(notification.method, notification.params)
+          }
+        }
         const uri = pathToFileURL(this.filePath).href
         this.openedUri = uri
+        const unsubscribeRefresh = session.onDiagnosticsStale(() => {
+          if (this.stopped || this.session !== session) return
+          void this.refreshDiagnostics()
+        })
         const unsubscribeExit = session.onExit((exit) => {
           if (this.stopped || this.session !== session) return
           this.session = null
@@ -479,6 +494,7 @@ export class EditorLspClient {
         const releaseSession = this.releaseSession
         this.releaseSession = () => {
           unsubscribeExit()
+          unsubscribeRefresh()
           releaseSession()
         }
         const documentHandlers = {
