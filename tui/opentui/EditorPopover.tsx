@@ -34,6 +34,7 @@ import {
 import { getEditorLspServerSpecs, resolveLspWorkspaceRoot } from './editorLspServers'
 import { openEditorSyntaxBuffer, type EditorSyntaxBuffer, type EditorSyntaxLine } from './editorSyntaxBuffer'
 import { formatEditorSize, MAX_EDITOR_BUFFER_CHARS, prepareEditorBuffer } from './editorLargeFile'
+import { undoTypingRun } from './editorUndoRuns'
 import {
   applyEditorSaveHygiene,
   applyEditorTextEdits,
@@ -330,6 +331,10 @@ const MAX_COMPLETIONS = 12
 // outlive the tab, so both need a ceiling; a session that opens thousands of
 // files must not grow a map entry for every one of them.
 const CURSOR_MEMORY_LIMIT = 200
+// Files opened this session, most recent last. Ctrl+P with nothing typed should
+// offer what you have been working in, not an arbitrary slice of the repository
+// — in a repo of any size the unfiltered list is useless otherwise.
+const RECENT_FILE_LIMIT = 50
 const CLOSED_TAB_LIMIT = 20
 const PROBLEM_VISIBLE_ROWS = 11
 const QUICK_VISIBLE_ROWS = 11
@@ -1242,6 +1247,7 @@ export function EditorPopover({
   const [quickOpen, setQuickOpen] = useState(false)
   // The current buffer's outline, shared by the `@` picker and the breadcrumb
   // so the buffer is only ever asked for once.
+  const [recentFiles, setRecentFiles] = useState<string[]>([])
   const [outlineSymbols, setOutlineSymbols] = useState<EditorSymbol[]>([])
   const [workspaceSymbolResults, setWorkspaceSymbolResults] = useState<EditorSymbol[]>([])
   const [quickQuery, setQuickQuery] = useState('')
@@ -1366,6 +1372,7 @@ export function EditorPopover({
   // Files closed this session, most recent last, so Ctrl+Shift+T can bring one
   // back the way it does everywhere else.
   const closedTabsRef = useRef<string[]>([])
+  const recentFilesRef = useRef<string[]>([])
   const suppressJumpRecordRef = useRef(false)
   const applyWorkspaceEditRef = useRef<(edit: EditorWorkspaceEdit) => Promise<boolean>>(async () => false)
   const projectSearchRequestRef = useRef(0)
@@ -1516,19 +1523,27 @@ export function EditorPopover({
         .sort((a, b) => b.score - a.score)
         .map((entry) => entry.result)
     }
-    const ranked: Array<{ result: QuickResult; score: number }> = []
+    const ranked: Array<{ result: QuickResult; score: number; recency: number }> = []
+    // Recency ranks within an equal match, and orders the list outright when
+    // nothing is typed — where every fuzzy score is 0 and the order would
+    // otherwise be whatever the file walk happened to produce.
+    const recentOrder = new Map(recentFiles.map((path, index) => [path, index + 1] as const))
     for (const path of projectFiles) {
       const score = fuzzyScore(`${basename(path)} ${path}`, query)
-      if (score != null) ranked.push({
+      if (score == null) continue
+      ranked.push({
         result: { id: path, label: basename(path), detail: path, kind: 'files' as const },
         score,
+        recency: recentOrder.get(path) ?? 0,
       })
     }
     return ranked
-      .sort((a, b) => b.score - a.score || a.result.detail.length - b.result.detail.length)
+      .sort((a, b) => b.score - a.score
+        || b.recency - a.recency
+        || a.result.detail.length - b.result.detail.length)
       .slice(0, 50)
       .map((entry) => entry.result)
-  }, [activeTab, outlineSymbols, projectFiles, quickMode, quickQuery, root, tabs, workspaceSymbolResults])
+  }, [activeTab, outlineSymbols, projectFiles, quickMode, quickQuery, recentFiles, root, tabs, workspaceSymbolResults])
   const searchResult = useMemo(() => findEditorSearchMatches(activeTab?.content ?? '', searchQuery, {
     matchCase: searchMatchCase,
     regex: searchRegex,
@@ -1804,6 +1819,15 @@ export function EditorPopover({
     }
   }, [])
 
+  const rememberOpenedFile = useCallback((path: string) => {
+    const recent = recentFilesRef.current.filter((entry) => entry !== path)
+    recent.push(path)
+    recentFilesRef.current = recent.slice(-RECENT_FILE_LIMIT)
+    // Mirrored into state so the quick-open list re-ranks; the ref is what the
+    // non-reactive callers read.
+    setRecentFiles(recentFilesRef.current)
+  }, [])
+
   const openBuffer = useCallback(async (relativePath: string) => {
     const safePath = normalizeRelativePath(root, relativePath)
     if (!safePath) {
@@ -1820,6 +1844,7 @@ export function EditorPopover({
     }
     const existing = tabs.find((tab) => tab.path === safePath)
     if (existing) {
+      rememberOpenedFile(safePath)
       setActivePath(safePath)
       setFocusPane('editor')
       return
@@ -1847,6 +1872,7 @@ export function EditorPopover({
             byteOrderMark: prepared.byteOrderMark,
             truncated,
           }])
+      rememberOpenedFile(safePath)
       setActivePath(safePath)
       setFocusPane('editor')
       setMessage(truncated
@@ -1857,7 +1883,7 @@ export function EditorPopover({
       setMessage(text)
       onNotice?.('error', text)
     }
-  }, [captureJumpPoint, onNotice, root, tabs])
+  }, [captureJumpPoint, onNotice, rememberOpenedFile, root, tabs])
 
   const toggleSaveHygiene = useCallback((key: keyof EditorSaveHygiene, label: string) => {
     setSaveHygiene((current) => {
@@ -1907,7 +1933,13 @@ export function EditorPopover({
         return rewritten && !movedOn ? { ...tab, content: savedContent, savedContent } : { ...tab, savedContent }
       }))
       if (rewritten && editorRef.current?.plainText === activeTab.content) {
-        editorRef.current?.setText?.(savedContent)
+        // `replaceText`, never `setText`: setText discards the undo history
+        // outright — measured, undo after it does nothing — so formatting or
+        // trimming on save would silently cost the user every step they could
+        // have gone back through. replaceText records the rewrite as one more
+        // undoable step, which is also what makes the formatting itself
+        // undoable.
+        editorRef.current.replaceText(savedContent)
       }
       setDiskConflicts((current) => {
         if (!current.has(activeTab.path)) return current
@@ -4054,9 +4086,17 @@ export function EditorPopover({
     if (focusPane === 'editor' && key.ctrl && key.name === 'z') {
       setMultiCursor(null)
       setBlockSelection(null)
-      if (key.shift) editorRef.current?.redo()
-      else editorRef.current?.undo()
-      setMessage(key.shift ? 'Redo' : 'Undo')
+      const editor = editorRef.current
+      if (!editor) return true
+      if (key.shift) {
+        editor.redo()
+        setMessage('Redo')
+        return true
+      }
+      // The buffer records one step per character, so a plain undo took a line
+      // back one letter at a time. A whole typed run comes off together.
+      const run = undoTypingRun(editor)
+      setMessage(run.coalesced ? `Undo (${run.steps} characters)` : 'Undo')
       return true
     }
     if (focusPane === 'editor' && key.ctrl && key.name === 'y') {

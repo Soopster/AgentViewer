@@ -3,7 +3,7 @@ import React, { act } from 'react'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { RGBA, SyntaxStyle } from '@opentui/core'
+import { RGBA, SyntaxStyle, type TextareaRenderable } from '@opentui/core'
 import { testRender } from '@opentui/react/test-utils'
 import { DARK_THEME } from '../theme'
 import { EditorPopover, type EditorKeyEvent } from './EditorPopover'
@@ -127,6 +127,22 @@ try {
     const frame = setup.captureCharFrame()
     assert(frame.includes('✓ saved'), `The buffer is still dirty after a hygienic save:\n${frame}`)
     assert(!frame.includes('disk changed'), `A hygienic save reported a conflict against its own write:\n${frame}`)
+
+    // Undo must survive a save that rewrote the buffer, driven the way a user
+    // drives it. Replacing the whole text with `setText` discards the history
+    // outright — measured: undo after it does nothing — so format-on-save would
+    // quietly cost every step the user could have gone back through, and the
+    // formatting itself would be permanent.
+    const textOf = () => (setup.renderer.root.findDescendantById('project-editor-textarea') as TextareaRenderable).plainText
+    const afterHygienicSave = textOf()
+    await press({ name: 'z', ctrl: true, sequence: '' } as EditorKeyEvent)
+    await settle(300)
+    assert(textOf() !== afterHygienicSave,
+      `Undo did nothing after a save rewrote the buffer — the history was discarded: ${JSON.stringify(afterHygienicSave)}`)
+    await press({ name: 'z', ctrl: true, shift: true, sequence: '' } as EditorKeyEvent)
+    await settle(300)
+    assert(textOf() === afterHygienicSave,
+      `Redo did not restore the saved text: ${JSON.stringify(textOf())}`)
 
     // The buffer itself must hold the hygienic text, not merely the tab state:
     // `activeTab.content` is the buffer's content, an invariant the whole file

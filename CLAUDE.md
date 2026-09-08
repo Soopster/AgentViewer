@@ -568,6 +568,31 @@ buffer and a converted line ending both *render perfectly*:
   disk read normalizes before comparing, including the 1.5s watcher's, or a CRLF
   file reads as externally changed against its own copy forever. Guarded by
   `editorLineEndingSmoke.tsx`.
+- **`setText` discards the undo history; `replaceText` keeps it.** Measured
+  directly on the renderable: undo after a `setText` does nothing at all, while
+  undo after a `replaceText` restores exactly the prior state. Any path that
+  rewrites the buffer behind the user — save hygiene, formatting, a workspace
+  edit — must use `replaceText`, or the rewrite is both unundoable itself and
+  takes every earlier step with it. The rest of the file already used
+  `replaceText` throughout; the save-hygiene rewrite was the one exception, and
+  `editorSaveOnDiskSmoke` now presses Ctrl+Z after a hygienic save to keep it
+  that way.
+- **A typed run undoes in one press** (`editorUndoRuns.ts`). The buffer records
+  one step per character, so taking back a line cost as many presses as it had
+  letters. A run is detected from its effect rather than from history metadata
+  the buffer does not expose: each step removes one character from the same
+  line, moving the caret back exactly one column. That test reads only
+  `logicalCursor`, which is O(1) — diffing `plainText` per step would cost about
+  a millisecond each on a large file, on a key that has to feel instant. A
+  newline, a paste, a multi-cursor edit or a formatting rewrite all move the
+  caret differently, so each stays its own step; the danger of coalescing is
+  undoing more than was typed, and every boundary is pinned.
+- **Quick open ranks by recency once matches tie.** An empty query scores every
+  file 0, so Ctrl+P listed whatever the file walk produced first — in a
+  repository of any size, files you have never opened. Recency orders the list
+  when nothing is typed and breaks ties when something is, but never outranks a
+  match: a typed query still finds a file you have never touched.
+
 - **A UTF-8 BOM is a file property, not buffer content — and this was the
   Windows bug.** The terminal edit buffer silently drops a leading U+FEFF (13
   characters handed in, 12 held), and the integrity check reads any such
