@@ -33,6 +33,57 @@ export function applyEditorLineEnding(content: string, lineEnding: EditorLineEnd
   return lineEnding === '\n' ? content : content.replace(/\n/g, '\r\n')
 }
 
+// A byte order mark is the same kind of boundary detail as a line ending, and
+// it fails harder. The terminal edit buffer silently drops a leading U+FEFF —
+// 13 characters in, 12 out — and the editor's integrity check reads any such
+// mismatch as the buffer having refused the file, so it closed the tab and
+// reported that the file "did not fit the editor buffer". Visual Studio writes
+// a UTF-8 BOM into most files it creates, so on Windows that was not an edge
+// case: it was most files, at any size, reported as a buffer-capacity problem.
+//
+// So the mark is stripped for the buffer and remembered beside it, exactly like
+// the line ending, and restored on write. Dropping it instead would rewrite the
+// first bytes of every Windows-authored file the first time it was saved.
+export const EDITOR_BYTE_ORDER_MARK = '\uFEFF'
+
+export type EditorFileEncodingMarks = {
+  lineEnding: EditorLineEnding
+  byteOrderMark: boolean
+}
+
+/** The text without its leading byte order mark, and whether it had one. */
+export function stripEditorByteOrderMark(raw: string): { content: string; byteOrderMark: boolean } {
+  return raw.startsWith(EDITOR_BYTE_ORDER_MARK)
+    ? { content: raw.slice(EDITOR_BYTE_ORDER_MARK.length), byteOrderMark: true }
+    : { content: raw, byteOrderMark: false }
+}
+
+/** The buffer's text written back with the file's own mark restored. */
+export function applyEditorByteOrderMark(content: string, byteOrderMark: boolean): string {
+  if (!byteOrderMark || content.startsWith(EDITOR_BYTE_ORDER_MARK)) return content
+  return `${EDITOR_BYTE_ORDER_MARK}${content}`
+}
+
+/**
+ * A file's text as the buffer must hold it — no mark, LF only — beside what has
+ * to be put back when it is written. Every read of a file goes through this, or
+ * a comparison somewhere sees a file as permanently changed against its own
+ * copy.
+ */
+export function editorTextFromDisk(raw: string): { content: string } & EditorFileEncodingMarks {
+  const { content, byteOrderMark } = stripEditorByteOrderMark(raw)
+  return {
+    content: normalizeEditorNewlines(content),
+    lineEnding: detectEditorLineEnding(content),
+    byteOrderMark,
+  }
+}
+
+/** The bytes to write for a buffer, with the file's own marks restored. */
+export function editorTextToDisk(content: string, marks: EditorFileEncodingMarks): string {
+  return applyEditorByteOrderMark(applyEditorLineEnding(content, marks.lineEnding), marks.byteOrderMark)
+}
+
 export function isEditorLineEnding(value: unknown): value is EditorLineEnding {
   return value === '\n' || value === '\r\n'
 }

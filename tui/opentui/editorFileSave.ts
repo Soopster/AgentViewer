@@ -1,7 +1,12 @@
 import { open, readFile, rename, stat, unlink } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { resolveSafeEditorFile } from './editorFileOperations'
-import { applyEditorLineEnding, decodeEditorFileText, normalizeEditorNewlines, type EditorLineEnding } from './editorLineEndings'
+import {
+  decodeEditorFileText,
+  editorTextFromDisk,
+  editorTextToDisk,
+  type EditorLineEnding,
+} from './editorLineEndings'
 
 let saveCounter = 0
 
@@ -21,6 +26,7 @@ export async function saveEditorFileSafely(
   content: string,
   savedContent: string,
   lineEnding: EditorLineEnding = '\n',
+  byteOrderMark = false,
 ): Promise<void> {
   const target = await resolveSafeEditorFile(root, path)
   // `content` and `savedContent` are the editor's LF-normalized text, so the
@@ -28,7 +34,7 @@ export async function saveEditorFileSafely(
   // on the bytes actually written.
   // Read bytes, not a lossy 'utf8' string: a file whose bytes the editor cannot
   // reproduce is refused here rather than rewritten with U+FFFD in place of them.
-  const current = normalizeEditorNewlines(decodeEditorFileText(await readFile(target.absolute), target.path))
+  const current = editorTextFromDisk(decodeEditorFileText(await readFile(target.absolute), target.path)).content
   if (current !== savedContent) throw new EditorDiskConflictError(target.path)
   const info = await stat(target.absolute)
   saveCounter += 1
@@ -40,14 +46,14 @@ export async function saveEditorFileSafely(
     // dropped bits (0o666 became 0o644 under the usual 0o022) — a save quietly
     // narrowed the file's permissions. fchmod is not masked.
     handle = await open(temporary, 'wx', 0o600)
-    await handle.writeFile(applyEditorLineEnding(content, lineEnding), 'utf8')
+    await handle.writeFile(editorTextToDisk(content, { lineEnding, byteOrderMark }), 'utf8')
     if (process.platform !== 'win32') await handle.chmod(info.mode & 0o777)
     await handle.sync()
     await handle.close()
     handle = undefined
     // Recheck immediately before replacement so an edit that landed while the
     // temporary file was being flushed is never silently overwritten.
-    if (normalizeEditorNewlines(decodeEditorFileText(await readFile(target.absolute), target.path)) !== savedContent) throw new EditorDiskConflictError(target.path)
+    if (editorTextFromDisk(decodeEditorFileText(await readFile(target.absolute), target.path)).content !== savedContent) throw new EditorDiskConflictError(target.path)
     const latestTarget = await resolveSafeEditorFile(root, path)
     if (latestTarget.absolute !== target.absolute) throw new EditorDiskConflictError(target.path)
     await rename(temporary, target.absolute)

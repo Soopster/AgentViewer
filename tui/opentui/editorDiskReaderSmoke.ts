@@ -57,11 +57,19 @@ try {
   await assert.rejects(reader.read('latin1.txt'), /valid UTF-8/)
   await writeFile(join(root, 'binary.dat'), Buffer.from([0x61, 0x00, 0x62, 0x0A]))
   await assert.rejects(reader.read('binary.dat'), /NUL bytes/)
-  // A BOM stays in the text as U+FEFF so it survives the round trip to disk.
+  // A BOM is reported beside the text, not left in it — the same treatment a
+  // CRLF ending gets, and for the same reason. The edit buffer silently drops a
+  // leading U+FEFF, so text that still carried one never compared equal to the
+  // buffer's copy: every BOM'd file would read as externally changed forever,
+  // and Visual Studio writes a BOM into most files it creates.
   await writeFile(join(root, 'bom.txt'), Buffer.concat([Buffer.from([0xEF, 0xBB, 0xBF]), Buffer.from('hello\r\n')]))
   const bom = await reader.read('bom.txt')
-  assert.equal(bom.disk, '\uFEFFhello\n')
+  assert.equal(bom.disk, 'hello\n')
   assert.equal(bom.lineEnding, '\r\n')
+  assert.equal(bom.byteOrderMark, true)
+  await writeFile(join(root, 'plain.txt'), 'hello\n', 'utf8')
+  const plain = await reader.read('plain.txt')
+  assert.equal(plain.byteOrderMark, false)
 
   // A filesystem whose timestamps are whole seconds — ext4 with 128-byte inodes,
   // every FAT volume — cannot distinguish a write that lands in the same second

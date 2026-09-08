@@ -568,6 +568,35 @@ buffer and a converted line ending both *render perfectly*:
   disk read normalizes before comparing, including the 1.5s watcher's, or a CRLF
   file reads as externally changed against its own copy forever. Guarded by
   `editorLineEndingSmoke.tsx`.
+- **A UTF-8 BOM is a file property, not buffer content — and this was the
+  Windows bug.** The terminal edit buffer silently drops a leading U+FEFF (13
+  characters handed in, 12 held), and the integrity check reads any such
+  shortfall as the buffer having refused the file, so it closed the tab and
+  reported that the file **"did not fit the editor buffer"**. Visual Studio
+  writes a BOM into most files it creates, so on Windows that was not an edge
+  case: it was most files, at any size, reported as a capacity problem. The mark
+  is now stripped for the buffer and restored on write, exactly like a CRLF
+  ending — dropping it instead would rewrite the first bytes of every
+  Windows-authored file on its first save. `editorTextFromDisk` /
+  `editorTextToDisk` are the one pair every read and write goes through; the
+  disk reader strips it too, or a BOM'd file reads as externally changed against
+  the editor's own copy forever.
+- **A file bigger than the buffer opens read-only rather than not at all.**
+  Refusing it meant the one thing still worth doing — reading it — was impossible
+  too. The buffer holds a prefix, the tab says which part it is showing, and
+  edits and saves are both refused: saving would replace the file with whatever
+  fitted. The refusal has two independent layers, because the key handler's
+  depends on the host routing keys through it — `updateActiveContent` puts the
+  buffer back whatever changed it.
+- **The size limit is counted in characters, the unit the buffer uses.**
+  Measuring bytes refused files that would have fit: UTF-8 accented or CJK text
+  runs to two or three bytes per character, so a 1.4 MB file of 700,000
+  characters was rejected for exceeding a limit it was nowhere near.
+- **Cut a truncated buffer on a line boundary only when there is one near the
+  limit.** A minified file is one enormous line after a short banner comment,
+  and honouring that boundary showed **212 bytes of a real 1 MB file** — the
+  only newline was at the top. Below `MIN_TRUNCATED_BUFFER_CHARS`, a hard cut
+  mid-line is far better than showing almost nothing.
 - **`MAX_FILE_BYTES` is the edit buffer's capacity, not a policy.** The buffer
   holds 1,048,576 characters and discards the rest without a word, while the
   editor advertised 2 MB: a 1.5 MB file opened as "Opened main.ts" missing two

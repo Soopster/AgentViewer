@@ -149,6 +149,10 @@ try {
       `The buffer and the file disagreed after a hygienic save: ${JSON.stringify(afterToggleOff)}`)
 
     console.log('Editor save-hygiene on-disk smoke passed (off by default, trims and terminates when enabled)')
+    // Let the editor's debounced passes finish before the renderer goes away:
+    // tearing the edit buffer down underneath a pending read throws
+    // "EditBuffer is destroyed" and fails a smoke that has already passed.
+    await settle(400)
   } finally {
     setup.renderer?.destroy?.()
     disposeAllLspSessions()

@@ -14,6 +14,7 @@ import { join } from 'node:path'
 import { RGBA, SyntaxStyle, type TextareaRenderable } from '@opentui/core'
 import { testRender } from '@opentui/react/test-utils'
 import { DARK_THEME } from '../theme'
+import { MAX_EDITOR_BUFFER_CHARS } from './editorLargeFile'
 import { EditorPopover } from './EditorPopover'
 
 const BUFFER_LIMIT_CHARS = 1024 * 1024
@@ -85,18 +86,25 @@ try {
   }
   console.log(`A ${(fitting.length / 1024).toFixed(0)}KB file opens with every character intact.`)
 
-  // Past capacity: must be refused outright, never presented truncated.
+  // Past capacity: opens read-only rather than being refused. Refusing it made
+  // the one thing still worth doing — reading the file — impossible too. What
+  // must never happen is a truncated buffer being presented as the whole file,
+  // so the tab has to say what it is showing; that it also refuses edits and
+  // saves is pinned by editorLargeFileOpenSmoke.
   const over = await open(oversizePath)
-  if (over.content != null) {
+  if (over.content == null) {
+    throw new Error(`A ${(oversize.length / 1024 / 1024).toFixed(1)}MB file was refused instead of opened read-only:\n${over.frame}`)
+  }
+  if (over.content.length > MAX_EDITOR_BUFFER_CHARS || !oversize.startsWith(over.content)) {
     throw new Error(
-      `A ${(oversize.length / 1024 / 1024).toFixed(1)}MB file opened with ${over.content.length}`
-      + ` of ${oversize.length} characters instead of being refused:\n${over.frame}`,
+      `A large file's buffer must be a prefix of it that fits: held ${over.content.length}`
+      + ` of ${oversize.length} characters:\n${over.frame}`,
     )
   }
-  if (!/limit|truncat|did not fit/i.test(over.frame)) {
-    throw new Error(`A file past the buffer limit was refused without telling the user why:\n${over.frame}`)
+  if (!/read-only/i.test(over.frame)) {
+    throw new Error(`A partially loaded file was presented without saying so:\n${over.frame}`)
   }
-  console.log('A file past the buffer limit is refused, with a message, rather than opened truncated.')
+  console.log('A file past the buffer limit opens read-only, labelled, holding a prefix that fits.')
   console.log('Editor large-file smoke passed')
 } finally {
   if (originalServer == null) delete process.env.AGENT_VIEWER_TYPESCRIPT_LSP_BIN

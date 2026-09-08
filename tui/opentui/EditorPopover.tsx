@@ -33,6 +33,7 @@ import {
 } from './editorLsp'
 import { getEditorLspServerSpecs, resolveLspWorkspaceRoot } from './editorLspServers'
 import { openEditorSyntaxBuffer, type EditorSyntaxBuffer, type EditorSyntaxLine } from './editorSyntaxBuffer'
+import { formatEditorSize, MAX_EDITOR_BUFFER_CHARS, prepareEditorBuffer } from './editorLargeFile'
 import {
   applyEditorSaveHygiene,
   applyEditorTextEdits,
@@ -180,6 +181,18 @@ type BufferTab = {
   // `content` and `savedContent` always use LF; this is what the file on disk
   // uses, restored on save. See editorLineEndings.ts.
   lineEnding: EditorLineEnding
+  /**
+   * The file began with a UTF-8 BOM. The edit buffer refuses to hold one, so it
+   * is stripped for the buffer and put back on write — dropping it would
+   * rewrite the first bytes of every Windows-authored file on its first save.
+   */
+  byteOrderMark?: boolean
+  /**
+   * Set when the file is larger than the edit buffer can hold, so `content` is
+   * a prefix of it. Such a tab is readable but never writable: saving it would
+   * replace the file with the part of it that happened to fit.
+   */
+  truncated?: { shownChars: number; totalChars: number }
 }
 
 type TreeNode = {
@@ -311,9 +324,7 @@ type EditorCommand = {
 // the buffer's, checked in bytes, which for any non-ASCII file is the stricter
 // of the two. `assertEditorBufferIntact` is the backstop for the limit itself
 // being wrong.
-const MAX_EDITOR_BUFFER_CHARS = 1024 * 1024
-const MAX_FILE_BYTES = MAX_EDITOR_BUFFER_CHARS
-const MAX_FILE_LABEL = '1 MB'
+
 const MAX_COMPLETIONS = 12
 // Remembered caret positions and closed-tab paths are both per-file and both
 // outlive the tab, so both need a ceiling; a session that opens thousands of
@@ -1816,16 +1827,31 @@ export function EditorPopover({
     try {
       const safeFile = await resolveSafeEditorFile(root, safePath)
       const raw = await readFile(safeFile.absolute, 'utf8')
-      if (Buffer.byteLength(raw) > MAX_FILE_BYTES) throw new Error(`File exceeds the ${MAX_FILE_LABEL} editor limit`)
       if (raw.includes('\0')) throw new Error('Binary files cannot be edited')
-      const lineEnding = detectEditorLineEnding(raw)
-      const content = normalizeEditorNewlines(raw)
+      // A file too big for the buffer opens read-only rather than not at all:
+      // refusing it means the one thing still worth doing — reading it — is not
+      // possible either. This also strips the BOM the buffer will not hold.
+      const prepared = prepareEditorBuffer(raw)
+      const lineEnding = prepared.lineEnding
+      const content = prepared.content
+      const truncated = prepared.truncated
+        ? { shownChars: content.length, totalChars: prepared.totalChars }
+        : undefined
       setTabs((current) => current.some((tab) => tab.path === safePath)
         ? current
-        : [...current, { path: safePath, content, savedContent: content, lineEnding }])
+        : [...current, {
+            path: safePath,
+            content,
+            savedContent: content,
+            lineEnding,
+            byteOrderMark: prepared.byteOrderMark,
+            truncated,
+          }])
       setActivePath(safePath)
       setFocusPane('editor')
-      setMessage(`Opened ${safePath}`)
+      setMessage(truncated
+        ? `Opened ${safePath} read-only — showing the first ${formatEditorSize(truncated.shownChars)} of ${formatEditorSize(truncated.totalChars)}`
+        : `Opened ${safePath}`)
     } catch (error) {
       const text = error instanceof Error ? error.message : 'Unable to open file'
       setMessage(text)
@@ -1843,6 +1869,12 @@ export function EditorPopover({
 
   const saveActive = useCallback(async () => {
     if (!activeTab) return
+    if (activeTab.truncated) {
+      const text = `${activeTab.path} is open read-only — saving would replace the file with the ${formatEditorSize(activeTab.truncated.shownChars)} that fit`
+      setMessage(text)
+      onNotice?.('error', text)
+      return
+    }
     const client = lspRef.current
     // Hygiene is computed on the string that is about to be written, and the
     // buffer is then set to exactly that. Applying edits to the live buffer and
@@ -1863,7 +1895,7 @@ export function EditorPopover({
     }
     savedContent = applyEditorSaveHygiene(savedContent, saveHygiene, cursor.line)
     try {
-      await saveEditorFileSafely(root, activeTab.path, savedContent, activeTab.savedContent, activeTab.lineEnding)
+      await saveEditorFileSafely(root, activeTab.path, savedContent, activeTab.savedContent, activeTab.lineEnding, activeTab.byteOrderMark)
       // Hygiene rewrote the text, so the buffer has to adopt it — but only if
       // the buffer has not moved on. Typing during an in-flight save must
       // survive it: recovery snapshots `content`, so overwriting a newer edit
@@ -1895,14 +1927,19 @@ export function EditorPopover({
   }, [activeTab, cursor.line, onNotice, root, saveHygiene])
 
   const saveAll = useCallback(async () => {
-    const modified = tabs.filter((tab) => tab.content !== tab.savedContent)
+    // A read-only tab is excluded rather than skipped silently later: writing
+    // one would replace the file with the part of it that fit in the buffer.
+    const modified = tabs.filter((tab) => tab.content !== tab.savedContent && !tab.truncated)
+    const readOnlyCount = tabs.filter((tab) => tab.truncated).length
     if (modified.length === 0) {
-      setMessage('All files are already saved')
+      setMessage(readOnlyCount > 0
+        ? `All files are already saved · ${readOnlyCount} open read-only`
+        : 'All files are already saved')
       return
     }
     const activeClient = lspRef.current
     const results = await Promise.allSettled(modified.map(async (tab) => {
-      await saveEditorFileSafely(root, tab.path, tab.content, tab.savedContent, tab.lineEnding)
+      await saveEditorFileSafely(root, tab.path, tab.content, tab.savedContent, tab.lineEnding, tab.byteOrderMark)
       return { path: tab.path, content: tab.content }
     }))
     const savedContents = new Map(results.flatMap((result) => result.status === 'fulfilled'
@@ -2361,7 +2398,10 @@ export function EditorPopover({
         const content = buffered ?? (raw == null ? null : normalizeEditorNewlines(raw))
         const lineEnding = openTab?.lineEnding ?? (raw == null ? '\n' : detectEditorLineEnding(raw))
         if (content == null) throw new Error(`Unable to read ${path}`)
-        if (Buffer.byteLength(content) > MAX_FILE_BYTES) throw new Error(`${path} exceeds the ${MAX_FILE_LABEL} editor limit`)
+        // Counted in characters, the unit the buffer itself uses: measuring
+        // bytes refused files that would have fit, since UTF-8 accented or CJK
+        // text runs to two or three bytes per character.
+        if (content.length > MAX_EDITOR_BUFFER_CHARS) throw new Error(`${path} is too large to edit (${formatEditorSize(content.length)})`)
         if (content.includes('\0')) throw new Error(`${path} is binary and cannot be edited`)
         return {
           path,
@@ -2426,6 +2466,13 @@ export function EditorPopover({
     setSignatureInfo(null)
     completionSessionRef.current = null
     if (!activeTab) return
+    if (activeTab.truncated) {
+      // A server handed a prefix reports on a file that does not exist: every
+      // construct open at the cut is an error, and so is every symbol defined
+      // after it.
+      setLspStatus({ state: 'unavailable', name: 'large file' })
+      return
+    }
     const filetype = detectTuiCodeFiletypeFromPath(activeTab.path) ?? 'plaintext'
     const filePath = join(root, activeTab.path)
     // A server indexes its own workspace, not whatever directory the TUI was
@@ -4328,6 +4375,22 @@ export function EditorPopover({
         }
       }
     }
+    // Ahead of the auto-pair block, which returns false for every character
+    // that is not a bracket or quote — a guard after it would never see an
+    // ordinary keystroke at all.
+    //
+    // A buffer holding only part of a file must not be typed into: saving is
+    // already refused, so an edit could only ever be lost, and a dirty
+    // truncated buffer would also be snapshotted by recovery and later offered
+    // back as if it were the file. Navigation is not a mutation and falls
+    // through untouched.
+    if (activeTab?.truncated && focusPane === 'editor') {
+      const printable = !key.ctrl && !key.meta && !alt && sequence.length === 1 && sequence >= ' '
+      if (printable || key.name === 'backspace' || key.name === 'delete' || key.name === 'return') {
+        setMessage(`${activeTab.path} is open read-only — it is larger than the editor buffer`)
+        return true
+      }
+    }
     if (focusPane === 'editor' && !key.ctrl && !alt && sequence.length === 1) {
       const editor = editorRef.current
       if (!editor) return false
@@ -4501,6 +4564,16 @@ export function EditorPopover({
   const updateActiveContent = useCallback(() => {
     const content = editorRef.current?.plainText
     if (content == null || !activePath) return
+    // The key handler already refuses edits to a truncated buffer, but that
+    // depends on the host routing keys through it. This is the layer that does
+    // not: whatever put text in the buffer, it is put back. Restoring makes the
+    // content match again, so the next call is a no-op rather than a loop.
+    const readOnlyTab = tabsRef.current.find((tab) => tab.path === activePath && tab.truncated)
+    if (readOnlyTab && content !== readOnlyTab.content) {
+      editorRef.current?.setText?.(readOnlyTab.content)
+      setMessage(`${readOnlyTab.path} is open read-only — it is larger than the editor buffer`)
+      return
+    }
     completionRequestRef.current += 1
     completionResolveRequestRef.current += 1
     completionSessionRef.current = null
@@ -4832,6 +4905,11 @@ export function EditorPopover({
           </text>
         ) : null}
         {dirty ? <text fg={theme.amber}>● modified  </text> : <text fg={theme.green}>✓ saved  </text>}
+        {activeTab?.truncated ? (
+          <text fg={theme.amber} wrapMode="none">
+            {`⚠ read-only · first ${formatEditorSize(activeTab.truncated.shownChars)} of ${formatEditorSize(activeTab.truncated.totalChars)}  `}
+          </text>
+        ) : null}
         {activePath && diskConflicts.has(activePath) ? <text fg={theme.red}>⚠ disk changed  </text> : null}
         {counts.errors > 0 ? <text fg={theme.red}>{`× ${counts.errors} `}</text> : null}
         {counts.warnings > 0 ? <text fg={theme.amber}>{`▲ ${counts.warnings} `}</text> : null}

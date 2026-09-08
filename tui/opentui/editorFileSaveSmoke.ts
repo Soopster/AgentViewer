@@ -79,7 +79,10 @@ try {
   const bomPath = join(root, 'bom.txt')
   const bomBytes = Buffer.concat([Buffer.from([0xEF, 0xBB, 0xBF]), Buffer.from('one\r\ntwo\r\n', 'utf8')])
   await writeFile(bomPath, bomBytes)
-  await saveEditorFileSafely(root, 'bom.txt', '﻿one\ntwo\nthree\n', '﻿one\ntwo\n', '\r\n')
+  // The mark is a property of the file, not a character in the buffer: the
+  // terminal edit buffer silently drops a leading U+FEFF, so carrying it in the
+  // content made every BOM'd file look like the buffer had refused it.
+  await saveEditorFileSafely(root, 'bom.txt', 'one\ntwo\nthree\n', 'one\ntwo\n', '\r\n', true)
   const bomSaved = Buffer.from(await readFile(bomPath))
   const bomExpected = Buffer.concat([Buffer.from([0xEF, 0xBB, 0xBF]), Buffer.from('one\r\ntwo\r\nthree\r\n', 'utf8')])
   if (!bomSaved.equals(bomExpected)) {

@@ -1,8 +1,8 @@
 import { readFile, stat } from 'node:fs/promises'
 import { resolveSafeEditorFile } from './editorFileOperations'
-import { decodeEditorFileText, detectEditorLineEnding, normalizeEditorNewlines, type EditorLineEnding } from './editorLineEndings'
+import { decodeEditorFileText, editorTextFromDisk, type EditorLineEnding } from './editorLineEndings'
 
-type Reading = { disk: string; lineEnding: EditorLineEnding }
+type Reading = { disk: string; lineEnding: EditorLineEnding; byteOrderMark: boolean }
 
 // A timestamp only proves a file is unchanged once it is far enough in the past
 // that the filesystem could not have recorded a later write with the same value.
@@ -63,7 +63,10 @@ export function createEditorDiskReader(root: string, options: EditorDiskReaderOp
         // represent is refused rather than shown with U+FFFD where its own
         // bytes were, which is what a later save would then write back.
         const raw = decodeEditorFileText(await readFile(absolute), path)
-        const reading = { disk: normalizeEditorNewlines(raw), lineEnding: detectEditorLineEnding(raw) }
+        // Stripped here too, or a BOM'd file reads as permanently changed
+        // against the editor's own copy of it.
+        const fromDisk = editorTextFromDisk(raw)
+        const reading = { disk: fromDisk.content, lineEnding: fromDisk.lineEnding, byteOrderMark: fromDisk.byteOrderMark }
         // Never cache a read that overlapped a write or atomic replacement, and
         // never cache against a timestamp too fresh to distinguish writes by.
         if (settled && before.signature === (await describe(absolute)).signature) cache.set(path, { ...before, reading })
