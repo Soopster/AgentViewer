@@ -1660,7 +1660,7 @@ export function formatInbox(messages: ProtocolMessage[], agentsById: Map<string,
  */
 function skillGroundingLine(cwd: string): string {
   const skillPath = `${cwd.replace(/\/+$/, '')}/.agents/skills/coordinate-agents/SKILL.md`
-  return `Read and follow the coordinate-agents skill at ${skillPath} if it exists, then use the agent-viewer coord_* MCP tools now. Do not search outside this checkout for the skill; these instructions are sufficient if the file is absent.`
+  return `Read and follow the coordinate-agents skill at ${skillPath} if it exists and is not already loaded in this session; reload after context loss or a skill update. Use the agent-viewer coord_* MCP tools now. Do not search outside this checkout for the skill; these instructions are sufficient if the file is absent.`
 }
 
 function protocolGrammar(runId: string, agentId: string): string {

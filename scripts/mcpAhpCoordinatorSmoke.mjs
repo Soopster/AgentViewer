@@ -220,6 +220,12 @@ try {
   assert.equal(afterRetry.snapshot.tasks.filter((task) => task.id === taskId).length, 1)
   const claimed = await call(teammate.client, 'coord_claim_task', { task_id: taskId })
   assert.equal(claimed.task?.ownerAgentId, joined.participant.agentId)
+  await call(teammate.client, 'coord_progress', { status: 'working', task_id: taskId })
+  await call(lead.client, 'coord_cancel_turn', { agent_id: joined.participant.agentId, request_id: 'cancel-ahp-turn' })
+  const afterCancel = await call(lead.client, 'coord_status')
+  assert.ok(afterCancel.snapshot.agents.find((agent) => agent.id === joined.participant.agentId)?.cancelRequestedAt,
+    'MCP cancellation must preserve caller credentials and target the teammate')
+  assert.equal(afterCancel.snapshot.tasks.find((task) => task.id === taskId)?.ownerAgentId, joined.participant.agentId)
   await assert.rejects(
     call(lead.client, 'coord_progress', {
       status: 'working',
@@ -242,7 +248,12 @@ try {
     reply_required: true,
     correlation_id: `verify-${taskId}`,
   })
-  const teammateInbox = await call(teammate.client, 'coord_read_inbox')
+  const teammateInbox = await call(teammate.client, 'coord_read_inbox', { request_id: 'verify-inbox-read' })
+  const replayedInbox = await call(teammate.client, 'coord_read_inbox', { request_id: 'verify-inbox-read' })
+  assert.deepEqual(replayedInbox, teammateInbox, 'a repeated inbox key must recover the acknowledged batch')
+  const freshInbox = await call(teammate.client, 'coord_read_inbox', { request_id: 'verify-inbox-next' })
+  assert.equal(freshInbox.messages?.some((message) => message.body === `Please verify ${taskId}`), false,
+    'a fresh inbox key must not redeliver the acknowledged request')
   const request = teammateInbox.messages?.find((message) => message.body === `Please verify ${taskId}`)
   assert.ok(request)
   await call(teammate.client, 'coord_send_message', {
@@ -339,6 +350,42 @@ try {
     maxAgents: 2,
     client: { name: 'shutdown-abort-smoke', protocolVersion: 2 },
   })
+  // Drop a successful response before the client can observe it, then close
+  // the actual socket. Reconnect must replay the same key without appending
+  // a second durable memory entry (remember previously lacked safe retries).
+  const originalSend = shutdownClient.sendRequest.bind(shutdownClient)
+  const originalMessage = shutdownClient.handleMessage.bind(shutdownClient)
+  let dropResponseId
+  let rememberAttempts = 0
+  shutdownClient.sendRequest = (method, params, timeoutMs) => {
+    if (method === 'agent-viewer/coordinator' && params.action === 'remember') {
+      rememberAttempts += 1
+      if (rememberAttempts === 1) dropResponseId = shutdownClient.nextId + 1
+      assert.equal(params.payload.requestId, 'remember-lost-response')
+    }
+    return originalSend(method, params, timeoutMs)
+  }
+  shutdownClient.handleMessage = (raw) => {
+    const frame = JSON.parse(typeof raw === 'string' ? raw : Buffer.from(raw).toString('utf8'))
+    if (frame.id === dropResponseId && frame.result) {
+      dropResponseId = undefined
+      shutdownClient.close()
+      return
+    }
+    originalMessage(raw)
+  }
+  await shutdownClient.request('remember', {
+    ...shutdownRun.participant,
+    summary: 'Lost-response recovery marker',
+    requestId: 'remember-lost-response',
+  })
+  assert.equal(rememberAttempts, 2, 'lost mutation response must reconnect and retry once')
+  const memory = await readFile(path.join(testCwd, '.agent-viewer', 'memory.md'), 'utf8')
+  assert.equal(memory.split('Lost-response recovery marker').length - 1, 1,
+    'replayed mutation must not append duplicate durable memory')
+  shutdownClient.sendRequest = originalSend
+  shutdownClient.handleMessage = originalMessage
+
   const shutdownCursor = await shutdownClient.request('wait', {
     ...shutdownRun.participant,
     timeoutMs: 0,

@@ -21,7 +21,7 @@ import {
   isTerminalMcpTask,
   taskSeed,
 } from './agent-viewer-mcp-task-store.mjs'
-import { COORDINATOR_MCP_TOOL_NAMES } from './agent-viewer-coordinator-tools.mjs'
+import { COORDINATOR_MCP_TOOL_NAMES, COORDINATOR_KEYED_ACTIONS } from './agent-viewer-coordinator-tools.mjs'
 
 const PROVIDERS = ['claude', 'codex', 'opencode', 'copilot', 'pi']
 const EXTERNAL_COORD_PROTOCOL_VERSION = 2
@@ -49,27 +49,7 @@ const taskStores = new Map()
 const taskRunners = new Map()
 const pushTimers = new Map()
 const pushMetaFingerprints = new Map()
-const IDEMPOTENT_COORDINATOR_ACTIONS = new Set([
-  'claim_task',
-  'complete_task',
-  'create_task',
-  'fail_task',
-  'finalize_run',
-  'finding',
-  'handoff_task',
-  'leave_run',
-  'progress',
-  'read_inbox',
-  'release_task',
-  'remember',
-  'request_locks',
-  'review_plan',
-  'save_playbook',
-  'save_role',
-  'send_message',
-  'spawn_teammate',
-  'submit_plan',
-])
+const IDEMPOTENT_COORDINATOR_ACTIONS = new Set(COORDINATOR_KEYED_ACTIONS)
 const requestIdField = z.string().min(1).max(160).optional().describe('Stable idempotency key; the bridge generates one when omitted, or reuse your explicit value across separate retries')
 const baseUrl = normalizeBaseUrl(
   process.env.AGENT_VIEWER_MCP_URL
@@ -683,17 +663,13 @@ const server = new McpServer(
       'tools/list': { ttlMs: 5_000, cacheScope: 'private' },
     },
     instructions: [
-      'Agent Viewer Coordinator is a shared multi-CLI task board and mailbox for agents from any provider (Claude, Codex, OpenCode, Copilot, Pi).',
-      `If a coord worker supervisor launched this turn or your prompt says to return control when idle, never call coord_wait: end the turn so the supervisor can receive board changes and re-dispatch you. Otherwise prefer a host subscription to ${COORDINATOR_CURRENT_RUN_URI}; use coord_wait only when the interactive host cannot subscribe.`,
-      'Create or join a run, then read status and inbox; claim one task, lock paths before editing, report progress, and complete it or release unfinished work.',
-      'Teammates run in other CLI processes and see only the board and mailbox — communicate deliberately: answer reply_required mail promptly, publish reusable discoveries with coord_publish_finding, and message teammates whose lanes your work affects.',
-      `On the default AHP transport, a subscribed host receives resources/updated after board actions; re-read ${COORDINATOR_CURRENT_RUN_URI} for the authoritative board and actionable digest.`,
-      'Prefer coord worker for unattended runs, and never disclose participant capabilities or bypass completion gates.',
-      'Coordinator calls use a persistent AHP connection by default. The bridge restores run subscriptions after disconnects and safely retries reads or idempotent mutations once.',
-      'Narrate every mailbox exchange to your own terminal, one line each: "<- <sender>: <message>" on receipt, "-> <recipient>: <message>" after sending. '
-        + 'Your human is watching this terminal, not the board — silence reads as dead, even mid-task.',
-      'If any coord_* call throws (network error, timeout, daemon unreachable), wait ~2s and retry the SAME call — do not ask the user whether to retry, the answer is always yes. '
-        + 'Keep your runId/agentId/token; do not re-create or re-join. If retries keep failing, coord_resume rebinds after the daemon or your own process comes back.',
+      'Coordinate Claude, Codex, OpenCode, Copilot, and Pi through a shared task board and mailbox.',
+      `Read ${COORDINATOR_SKILL_URI} for the workflow. Resume a bound identity; otherwise create or join once. Never disclose capability tokens.`,
+      'Read status and inbox, answer reply-required mail with in_reply_to, claim one task, honor locks and approval gates, verify before completing, and release or checkpoint unfinished work.',
+      'Send actionable changes to affected teammates; publish reusable findings. Keep mailbox narration concise.',
+      `Prefer coord worker for unattended work. Managed turns must return when idle: never coord_wait. Interactive hosts subscribe to ${COORDINATOR_CURRENT_RUN_URI} and re-read after resources/updated; use coord_wait only without subscriptions.`,
+      'The AHP bridge reconnects and retries safe calls once. For retries across tool calls, supply request_id on the FIRST mutation (including acknowledging inbox reads) and reuse it with identical arguments. Generated keys cover only retries within one call.',
+      'After a transport error, retry reads or explicitly keyed mutations with the same identity after about 2s. For an unkeyed mutation or create/join with an unknown outcome, reconcile persisted identity and board state before repeating. Fix validation or gate errors instead of blindly retrying. Empty waits are normal.',
     ].join(' '),
   },
 )
@@ -1312,11 +1288,13 @@ server.registerTool('coord_read_inbox', {
     after: z.string().min(1).optional().describe('Message cursor returned by the previous call'),
     limit: z.number().int().min(1).max(200).optional(),
     acknowledge: z.boolean().optional().describe('Defaults to true'),
+    request_id: requestIdField,
   },
-}, async ({ after, limit, acknowledge }) => textResult(await coordinatorRequest('read_inbox', {
+}, async ({ after, limit, acknowledge, request_id }) => textResult(await coordinatorRequest('read_inbox', {
   after,
   limit,
   acknowledge,
+  requestId: request_id,
 })))
 
 server.registerTool('coord_send_message', {
@@ -1537,7 +1515,7 @@ server.registerTool('coord_cancel_turn', {
     request_id: requestIdField,
   },
 }, async ({ agent_id, request_id }) => textResult(await coordinatorRequest('cancel_turn', {
-  agentId: agent_id,
+  targetAgentId: agent_id,
   requestId: request_id,
 })))
 

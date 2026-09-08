@@ -81,7 +81,7 @@ process.exit(1)
 `)
 await chmod(rateLimitedCodex, 0o700)
 await writeFile(zeroExitErrorPi, `#!/usr/bin/env node
-console.log(JSON.stringify({
+process.stdout.write(JSON.stringify({
   type: 'turn_end',
   message: { stopReason: 'error', errorMessage: 'Your credit balance is too low to access the API.' },
 }))
@@ -1023,8 +1023,7 @@ const restartOutput = execFileSync(process.execPath, [
   encoding: 'utf8',
 })
 if (!restartOutput.includes('Restarted')) throw new Error('coord restart did not relaunch the selected worker')
-await new Promise((resolve) => setTimeout(resolve, 750))
-const failedOverIdentity = JSON.parse(await readFile(identityFile, 'utf8'))
+const failedOverIdentity = await waitForJsonValue(identityFile, 'provider', 'copilot')
 if (failedOverIdentity.provider !== 'copilot') {
   throw new Error('coord restart did not persist the requested provider failover')
 }

@@ -1,28 +1,11 @@
 import { randomUUID } from 'node:crypto'
+import { COORDINATOR_READ_ACTIONS, COORDINATOR_KEYED_ACTIONS } from './agent-viewer-coordinator-tools.mjs'
 import { SUPPORTED_PROTOCOL_VERSIONS } from '@microsoft/agent-host-protocol'
 
 const ROOT_CHANNEL = 'ahp-root://'
 const COORDINATOR_METHOD = 'agent-viewer/coordinator'
-const SAFE_RETRY_ACTIONS = new Set(['list_playbooks', 'list_runs', 'resume', 'status', 'wait'])
-const IDEMPOTENT_RETRY_ACTIONS = new Set([
-  'cancel_turn',
-  'claim_task',
-  'complete_task',
-  'create_task',
-  'fail_task',
-  'finalize_run',
-  'finding',
-  'handoff_task',
-  'leave_run',
-  'progress',
-  'read_inbox',
-  'release_task',
-  'request_locks',
-  'review_plan',
-  'save_playbook',
-  'send_message',
-  'submit_plan',
-])
+const SAFE_RETRY_ACTIONS = new Set(COORDINATOR_READ_ACTIONS)
+const IDEMPOTENT_RETRY_ACTIONS = new Set(COORDINATOR_KEYED_ACTIONS)
 
 function transportClosedError() {
   const error = new Error('AHP WebSocket closed')

@@ -19,11 +19,11 @@ The bridge exposes this workflow through ordinary MCP primitives as well as `coo
 
 ## Provider compatibility
 
-Every `coord_*` tool has one implementation and one JSON Schema — there is no provider-specific tool subset, and the `provider` field on `coord_create_run`/`coord_join_run` only labels which CLI is driving that participant for the roster and for provider-level failure handling (`coord_handoff_task`'s `failure_class`); it never gates which tools that participant can call.
+The standalone MCP bridge exposes the same tool schemas to every provider. In-process Claude, Codex, Copilot, Pi, and OpenCode sessions use the shared `lib/coordinatorToolContract.mjs` contract and provider-native schema adapters; these sessions are already bound, so run creation/join and MCP host extensions are supplied by their host rather than their tool set. The provider label does not waive ownership, role, or completion gates. If a tool is missing, inspect the actual transport and registered schema before diagnosing a provider limitation.
 
 - If a tool call is rejected, trust the error message over any assumption about your provider — every rejection (invalid enum, ownership check, gate failure, capability mismatch) is a specific, actionable string, not a generic failure, and holds regardless of which CLI you are.
 - The MCP Tasks extension (`coord_wait`/`coord_await_run` durable handles) only activates when your MCP client declares `io.modelcontextprotocol/tasks`; clients that don't simply get the blocking result instead — this is a capability check, not a provider allowlist, so don't infer anything about provider support from whether you receive a task handle.
-- If your provider's MCP client behaves unexpectedly on a specific tool (schema rejected, structured content ignored, elicitation not surfaced) where another provider handles the same call fine, that is a client-side MCP implementation gap in that CLI, not a Coordinator-side special case to work around — report it via `coord_publish_finding` so the lead and other lanes know, rather than silently avoiding the tool.
+- If your provider's MCP client behaves unexpectedly on a specific tool (schema rejected, structured content ignored, elicitation not surfaced) where another provider handles the same call fine, inspect both the client and its Coordinator adapter; a matching provider name does not prove matching tool exposure — report it via `coord_publish_finding` so the lead and other lanes know, rather than silently avoiding the tool.
 
 ## Current Coordinator capability surface
 
@@ -58,3 +58,29 @@ Use the two protocols as complementary layers, not interchangeable transports:
 - The gated A2A 1.0 facade is for a separate autonomous peer or client agent to submit and monitor a higher-level, stateful task. An A2A-created task lands on the same durable Coordinator board and is then claimed and completed through the normal `coord_*` MCP workflow; do not create a shadow MCP task for it.
 - MCP Resources expose `a2a://agent-viewer/coordinator/agent-card.json`, a live projection of the daemon's public Agent Card. Read it when an MCP host needs to discover the Coordinator's A2A skills or preferred interface. If the facade is disabled, the resource read fails closed; do not infer that A2A is available merely because the resource URI is listed.
 - Do not wrap `SendMessage` or other conversational A2A operations as ordinary MCP tools. A2A retains task identity, context, streaming, and push semantics across peer-agent turns; reducing it to a stateless tool call loses the distinction the protocols are designed to preserve.
+
+## Cooperative participants
+
+A roster entry may be an ordinary interactive chat session a user is driving by hand (joined via the app's session-level join, not a `coord_*`-equipped worker), not an autonomous worker. Its owner responds at human pace between their own turns, not on a poll loop.
+
+- Do not apply the same idle/stale escalation timing you would to an autonomous worker — a longer gap before its `last_seen_at` moves is expected, not a sign it died.
+- Still message it normally with `coord_send_message` when work needs its attention; the room's mailbox is drained automatically before its owner's next turn, and any reply it sends back arrives through the same board and mailbox as anyone else's.
+- Treat its contributions and completions the same as any other teammate's — cooperative status only changes the expected response cadence, not its standing in the run.
+- You can invite an existing plain session into the run yourself, without it needing `coord_*` tools: `POST /api/sessions/<sessionId>/coord-join` with `{"runId": "<this run>", "name": "<label>"}` against the Coordinator's base URL. `DELETE` the same path to remove it. Only use this for a session the user actually wants pulled in — it starts receiving the run's mailbox on its very next turn.
+
+
+## Mailbox filters and checkout diagnostics
+
+`respond_to_mode` on create/join defaults to `anyone`. Use `owner-only`, `allowlist` with `respond_to_allowlist`, or `nobody` only when the participant needs a restricted mailbox. The lead is implicitly allowed for owner-only/allowlist. These filters affect participant sends, not coordinator-authored notices or turn cancellation.
+
+Completion compares checkout changes against the claim baseline. Existing dirty files are ignored unless changed after claiming. Shared-checkout attribution is skipped when participants share a directory; otherwise another participant's active locks exclude its paths from your attribution. Keep locks disjoint regardless.
+
+If a gate names only another lane's files, inspect ownership and baseline evidence with the lead. Releasing and reclaiming a task captures a new baseline, but releases its locks and may let another participant claim it; it is not atomic recovery and must never hide changes you made outside your scope. Preserve all files while diagnosing.
+
+The OpenTUI launcher is available at `Ctrl+Shift+N`, or Agent Operations (`Ctrl+Shift+A`) then `n`. Keep isolation enabled for parallel checkout work; disable it only for a shared workflow.
+
+## Uncertain operation outcomes
+
+Keyed mutations reserve execution in SQLite before performing effects. A second process cannot run the same key concurrently. Completed results are cached for a bounded window; compact operation records survive for the run's lifetime, so an expired result cannot silently execute again.
+
+`COORDINATOR_OPERATION_UNCERTAIN` means the operation is still running, was interrupted, failed with possible partial effects, or completed but its detailed result expired. Read the board/inbox/context to find the effect before changing anything. The same key may retrieve a result if the original dispatcher subsequently finishes. Do not change keys merely to bypass uncertainty. If the effect is already present, continue from that state; start a new operation only after establishing what remains to be done. Explicit completion-gate results with `accepted:false` remain correctable with the same key. A thrown exception does not prove that no effect occurred.

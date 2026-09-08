@@ -223,6 +223,10 @@ try {
     || !extensions?.['io.modelcontextprotocol/tasks']) {
     throw new Error('Bridge did not advertise the MCP Apps, Skills, and Tasks extensions through server/discover')
   }
+  const instructions = client.getInstructions() ?? ''
+  if (!instructions || instructions.length > 1800) {
+    throw new Error('Coordinator instructions missing or exceeded the context budget')
+  }
   const listed = await client.listTools()
   const actualToolNames = listed.tools.map((tool) => tool.name).sort()
   const expectedToolNames = [...SESSION_MCP_TOOL_NAMES, ...COORDINATOR_MCP_TOOL_NAMES].sort()
@@ -264,6 +268,8 @@ try {
   ))) {
     throw new Error('Coordinator skill resource did not expose the canonical Agent Viewer workflow')
   }
+  const skillText = skill.contents.map((entry) => entry.text ?? '').join('\n')
+  if (skillText.split(/\s+/).length > 1700) throw new Error('Coordinator skill exceeded its hot-path word budget')
   const protocolReference = await client.readResource({ uri: 'skill://coordinate-agents/references/protocol-and-hosts.md' })
   if (!protocolReference.contents.some((entry) => (
     entry.text?.includes('## MCP discovery and host features')
@@ -436,6 +442,18 @@ try {
     const joinedPayload = JSON.parse(joined.content?.[0]?.text ?? '{}')
     if (joinedPayload.participant?.agentId !== 'external-claude') throw new Error('Claude CLI did not bind as Coordinator teammate')
 
+    for (const [action, args] of [
+      ['review_phase', { phase: 'build', approved: true }],
+      ['review_run', { approved: true, summary: 'Reviewed' }],
+      ['resolve_decision', { task_id: 'task-1', decision_id: 'choice-1', answer: 'Proceed' }],
+      ['promote_learning', { candidate_id: 'learning-1', target: 'project_memory' }],
+    ]) {
+      const result = await client.callTool({ name: `coord_${action}`, arguments: args })
+      if (result.isError) throw new Error(`Bridge rejected ${action} schema`)
+      const request = seen.findLast((entry) => entry.body?.action === action)
+      if (!request?.body?.requestId?.startsWith('mcp-')) throw new Error(`${action} omitted its automatic replay key`)
+    }
+
     await client.callTool({
       name: 'coord_create_task',
       arguments: {
@@ -502,7 +520,12 @@ try {
       || typedMessageRequest?.body?.replyRequired !== true) {
       throw new Error('Typed Coordinator mailbox fields did not cross the MCP bridge')
     }
-    const inbox = await secondClient.callTool({ name: 'coord_read_inbox', arguments: {} })
+    const inbox = await secondClient.callTool({ name: 'coord_read_inbox', arguments: { request_id: 'inbox-first-read' } })
+    await secondClient.callTool({ name: 'coord_read_inbox', arguments: { request_id: 'inbox-first-read' } })
+    const inboxRequests = seen.filter((entry) => entry.body?.action === 'read_inbox')
+    if (inboxRequests.length !== 2 || inboxRequests.some((entry) => entry.body.requestId !== 'inbox-first-read')) {
+      throw new Error('Acknowledging inbox retries did not preserve the caller idempotency key')
+    }
     const inboxPayload = JSON.parse(inbox.content?.[0]?.text ?? '{}')
     if (inboxPayload.messages?.[0]?.body !== 'Please finish task-1') throw new Error('Coordinator mailbox did not cross CLI processes')
 

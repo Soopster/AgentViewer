@@ -4,6 +4,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { appendFile, chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { createCoordinatorTurnPacing } from './agent-viewer-coord-pacing.mjs'
 import { fileURLToPath } from 'node:url'
 import {
   coordinatorStateRoot,
@@ -401,7 +402,7 @@ function tickPrompt(state, actionable) {
   return [
     `Continue Coordinator run ${state.runId} as ${state.name || state.agentId} (${state.role || 'participant'}).`,
     'You are ALREADY bound to this run: never call coord_create_run, coord_join_run, or coord_list_runs — start with coord_status and act on its actionable digest.',
-    `Read and follow the coordinate-agents skill at ${skillPath} if it exists, then use the agent-viewer coord_* MCP tools now. Do not search outside this checkout for the skill; these supervisor instructions are sufficient if the file is absent.`,
+    `Read and follow the coordinate-agents skill at ${skillPath} if it exists and is not already loaded in this session; reload after context loss or a skill update. Use the agent-viewer coord_* MCP tools now. Do not search outside this checkout for the skill; these supervisor instructions are sufficient if the file is absent.`,
     checkoutGuidance,
     roleGuidance,
     'Drain the inbox, then perform every immediately actionable role-appropriate step, including implementation and verification.',
@@ -409,7 +410,7 @@ function tickPrompt(state, actionable) {
     'If you are the lead, maintain an explicit status view for every teammate from coord_status: active task, working/blocked/idle state, latest update, and terminal task result. Do not interrupt healthy work; unblock, reassign, or add work when the board shows a real need.',
     'If blocked, report blocked with coord_progress and include the exact obstacle; the Coordinator will alert the lead. Also message the teammate best placed to help, check the inbox for guidance, and report working again as soon as you can resume.',
     'If your task work will take several steps, call coord_read_inbox again partway through rather than only at the start — a reply_required message from the lead can arrive mid-task and change your plan; you will not be woken for it until you check.',
-    'Use stable request_id values before retrying mutations. If no action is ready, return control to the supervisor; never call coord_wait, poll, or sleep inside this model turn. The supervisor receives board changes and will re-dispatch you.',
+    'Supply request_id on the first mutation and reuse it with identical arguments on retries; generated keys protect only one tool call. If no action is ready, return control to the supervisor; never call coord_wait, poll, or sleep inside this model turn. The supervisor receives board changes and will re-dispatch you.',
     'If all tasks are terminal and you are lead, review every durable task result, synthesize the run, and finalize it. Never print participant credentials.',
     ...(actionable?.replyGuardReminder ? [actionable.replyGuardReminder] : []),
   ].join(' ')
@@ -620,6 +621,23 @@ async function providerTick(state, baseUrl, actionable) {
       return error
     }
     const turnCancelledError = () => makeTurnCancelledError(command, providerOutput)
+    const consumeProviderLine = (line) => {
+      if (!line || Buffer.byteLength(line) > PROVIDER_FRAME_MAX_BYTES) return
+      try {
+        const event = JSON.parse(line)
+        providerReportedError ||= providerEventFailure(event)
+        // codex: thread_id · claude: session_id · opencode: sessionID (also
+        // nested under info/part) · copilot: sessionId
+        const sessionId = event.thread_id || event.session_id || event.sessionID || event.sessionId
+          || event.info?.sessionID || event.part?.sessionID
+        if (typeof sessionId === 'string' && sessionId && sessionId !== state.providerSessionId) {
+          state.providerSessionId = sessionId
+          // Serialize identity writes because providers can repeat the session
+          // id across several events in the same stdout burst.
+          sessionStateSave = sessionStateSave.then(() => saveState(state.identityFile, state))
+        }
+      } catch { /* provider text or partial JSON */ }
+    }
     child.stdout.on('data', (chunk) => {
       lastProviderActivityAt = Date.now()
       process.stdout.write(chunk)
@@ -634,20 +652,7 @@ async function providerTick(state, baseUrl, actionable) {
           continue
         }
         if (Buffer.byteLength(line) > PROVIDER_FRAME_MAX_BYTES) continue
-        try {
-          const event = JSON.parse(line)
-          providerReportedError ||= providerEventFailure(event)
-          // codex: thread_id · claude: session_id · opencode: sessionID (also
-          // nested under info/part) · copilot: sessionId
-          const sessionId = event.thread_id || event.session_id || event.sessionID || event.sessionId
-            || event.info?.sessionID || event.part?.sessionID
-          if (typeof sessionId === 'string' && sessionId && sessionId !== state.providerSessionId) {
-            state.providerSessionId = sessionId
-            // Serialize identity writes because providers can repeat the session
-            // id across several events in the same stdout burst.
-            sessionStateSave = sessionStateSave.then(() => saveState(state.identityFile, state))
-          }
-        } catch { /* provider text or partial JSON */ }
+        consumeProviderLine(line)
       }
       if (Buffer.byteLength(buffered) > PROVIDER_FRAME_MAX_BYTES) {
         providerOutput = `${providerOutput}\n[provider frame discarded: exceeded ${PROVIDER_FRAME_MAX_BYTES} bytes]`.slice(-16_000)
@@ -686,11 +691,13 @@ async function providerTick(state, baseUrl, actionable) {
         reject(saveError)
       }
     })
-    child.on('exit', async (code, signal) => {
+    // close follows stdout/stderr drain; exit can precede the final result.
+    child.on('close', async (code, signal) => {
       clearInterval(heartbeat)
       clearTurnTimers()
       clearProviderChild(child)
       try {
+        if (!droppingOversizedFrame) consumeProviderLine(buffered)
         await sessionStateSave
         if (turnCancelled) reject(turnCancelledError())
         else if (turnTimedOut) reject(providerTimeoutError())
@@ -1045,14 +1052,20 @@ function shouldTick(actionable, role) {
   if (!actionable) return true
   if ((actionable.inboxCount ?? 0) > 0) return true
   if ((actionable.replyRequiredCount ?? 0) > 0) return true
+  const ownedTask = actionable.myTask
+  const ownedTaskReady = Boolean(ownedTask)
+    && !['blocked', 'planned'].includes(ownedTask.status)
+    && ownedTask.planState !== 'awaiting'
   if (role === 'lead') {
     return (actionable.plansAwaitingReview?.length ?? 0) > 0
-      || Boolean(actionable.myTask)
+      || ownedTaskReady
       || (actionable.claimableTasks?.length ?? 0) > 0
       || actionable.allTasksTerminal === true
       || actionable.runStatus === 'synthesizing'
   }
-  return (actionable.claimableTasks?.length ?? 0) > 0 || Boolean(actionable.myTask)
+  // Ownership alone is not actionable while a blocker or plan gate is open.
+  // Another pending task cannot be claimed until the owned lane is released.
+  return ownedTask ? ownedTaskReady : (actionable.claimableTasks?.length ?? 0) > 0
 }
 
 let cursor = null
@@ -1063,6 +1076,7 @@ let finalStatus = 'stopped'
 // providerTick's prompt (reply guard reminder) — null on the very first
 // tick, before anything has been claimed.
 let lastActionable = null
+const turnPacing = createCoordinatorTurnPacing()
 const role = state.role === 'lead' ? 'lead' : 'teammate'
 
 async function leaveRunBeforeExit(reason, status = 'stopped') {
@@ -1312,13 +1326,23 @@ outer: for (;;) {
     // The provider turn may have claimed a task, received mail, or left owned
     // work open. Act on that returned digest immediately instead of entering a
     // 55-second long poll and adding avoidable coordination latency.
-    if (shouldTick(current.actionable, role)) continue
+    const pacingMs = turnPacing.observe(current.actionable)
+    const resumeAt = Date.now() + pacingMs
+    if (shouldTick(current.actionable, role) && pacingMs === 0) continue
+    if (pacingMs > 0) await workerLog(state, `unchanged actionable state across successful turns; waiting up to ${pacingMs}ms for change before continuing`)
     for (;;) {
-      const next = await api(baseUrl, 'wait', { ...state, cursor, timeoutMs: 55_000 })
+      const waitStarted = Date.now()
+      const timeoutMs = pacingMs > 0 && waitStarted < resumeAt ? Math.min(55_000, resumeAt - waitStarted) : 55_000
+      const next = await api(baseUrl, 'wait', { ...state, cursor, timeoutMs })
       cursor = next.cursor
       lastActionable = next.actionable ?? lastActionable
       if (isTerminal(next)) break outer
-      if (shouldTick(next.actionable, role)) break
+      if (shouldTick(next.actionable, role)
+        && (pacingMs === 0 || turnPacing.changed(next.actionable) || Date.now() >= resumeAt)) break
+      // A noisy event stream (including worker heartbeats) can make wait
+      // return immediately. Bound polling without delaying cancellation by
+      // more than 100ms; only a changed actionable digest bypasses pacing.
+      if (pacingMs > 0 && Date.now() - waitStarted < 100) await retryDelay(100)
     }
   } catch (error) {
     if (shutdownRequested) {

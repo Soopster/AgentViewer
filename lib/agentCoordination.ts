@@ -172,7 +172,7 @@ const LOCK_LEASE_MS = 20 * 60_000
 // can cancel a teammate's in-flight turn without releasing the task), and
 // respond_to_mode/respond_to_allowlist_json (per-participant mailbox sender
 // gating, mirroring buzz-acp's respond-to modes).
-const SCHEMA_VERSION = 18
+const SCHEMA_VERSION = 19
 const EVENT_WINDOW = 300
 const LOCK_HISTORY_WINDOW = 200
 // Non-terminal tasks (pending/claimed/blocked) are always returned in full —
@@ -183,9 +183,8 @@ const LOCK_HISTORY_WINDOW = 200
 // finalizes) doesn't grow every coord_status/coord_wait payload — and the
 // per-call DB/serialization cost with it — for the rest of its life.
 const TERMINAL_TASK_HISTORY_WINDOW = 300
-// Idempotency is a retry window, not an audit log. Bound it per participant so
-// long-lived autonomous workers cannot retain an unbounded series of compact
-// response snapshots while still leaving ample room for delayed retries.
+// Bound detailed replay responses per participant. Compact operation records
+// remain until run deletion so response eviction never permits re-execution.
 const IDEMPOTENCY_WINDOW_PER_PARTICIPANT = Math.max(
   8,
   Number(process.env.AGENT_VIEWER_COORD_IDEMPOTENCY_WINDOW) || 512,
@@ -578,6 +577,23 @@ function initializeSchema(db: SqliteDatabase): void {
       PRIMARY KEY (run_id, agent_id, action, request_id)
     );
 
+    -- Compact reservations outlive the bounded response cache. Completed
+    -- tombstones prevent an old key from repeating work after result eviction.
+    CREATE TABLE IF NOT EXISTS protocol_operation_attempts (
+      run_id TEXT NOT NULL REFERENCES protocol_runs(id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      request_id TEXT NOT NULL,
+      state TEXT NOT NULL,
+      error_message TEXT,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (run_id, agent_id, action, request_id)
+    );
+    INSERT OR IGNORE INTO protocol_operation_attempts
+      (run_id, agent_id, action, request_id, state, created_at)
+      SELECT run_id, agent_id, action, request_id, 'completed', created_at
+      FROM protocol_idempotency;
+
     CREATE TABLE IF NOT EXISTS protocol_push_configs (
       id TEXT PRIMARY KEY,
       run_id TEXT NOT NULL REFERENCES protocol_runs(id) ON DELETE CASCADE,
@@ -628,6 +644,7 @@ function initializeSchema(db: SqliteDatabase): void {
 // every observed status change can be pushed, not only terminal completion.
 // v16 → v17: structured contracts, autonomy/review policy, task receipts,
 // seat/model routing, progress evidence, phase reports, and resume capsules.
+// v18 → v19: durable operation reservations and compact completed-key tombstones.
 function migrateSchema(db: SqliteDatabase): void {
   const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version') as Row | undefined
   const version = row ? Number(row.value) || 0 : 0
@@ -2372,44 +2389,101 @@ export async function runExternalProtocolIdempotent<T>(
   const key = requestId?.trim()
   if (!key) return operation()
   if (key.length > 160) throw new Error('requestId must be 160 characters or fewer')
-  const cached = await enqueueWrite((db) => {
-    requireExternalParticipantSync(db, identity)
-    const row = db.prepare(`
-      SELECT response_json FROM protocol_idempotency
-      WHERE run_id = ? AND agent_id = ? AND action = ? AND request_id = ?
-    `).get(identity.runId, identity.agentId, action, key) as Row | undefined
-    return typeof row?.response_json === 'string' ? JSON.parse(row.response_json) as T : undefined
-  })
-  if (cached !== undefined) return cached
-  const inFlightKey = `${identity.runId}\0${identity.agentId}\0${action}\0${key}`
+  // Authenticate every caller before sharing an in-process promise. Including
+  // the capability digest also prevents a different credential from sharing it.
+  requireExternalParticipantSync(await getDatabase(), identity)
+  const capabilityDigest = createHash('sha256').update(identity.token).digest('hex')
+  const inFlightKey = `${identity.runId}\0${identity.agentId}\0${action}\0${key}\0${capabilityDigest}`
   const existing = externalIdempotencyInFlight.get(inFlightKey) as Promise<T> | undefined
   if (existing) return existing
 
   const pending = (async () => {
-    const result = await operation()
-    // Rejected completions (gate/plan failures) must not be cached: the agent is
-    // told to retry mutations with the SAME request_id, and a retry after fixing
-    // the gate must re-run the checks rather than replay the stale rejection.
-    if (result && typeof result === 'object' && (result as { accepted?: unknown }).accepted === false) {
-      return result
-    }
-    await enqueueWrite((db) => {
-      db.prepare(`
-        INSERT OR IGNORE INTO protocol_idempotency
-          (run_id, agent_id, action, request_id, response_json, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).run(identity.runId, identity.agentId, action, key, JSON.stringify(result), nowIso())
-      db.prepare(`
-        DELETE FROM protocol_idempotency
-        WHERE rowid IN (
-          SELECT rowid FROM protocol_idempotency
-          WHERE run_id = ? AND agent_id = ?
-          ORDER BY created_at DESC, rowid DESC
-          LIMIT -1 OFFSET ?
-        )
-      `).run(identity.runId, identity.agentId, IDEMPOTENCY_WINDOW_PER_PARTICIPANT)
+    const reservation = await enqueueWrite((db) => {
+      db.exec('BEGIN IMMEDIATE')
+      try {
+        requireExternalParticipantSync(db, identity)
+        const cached = db.prepare(`
+          SELECT response_json FROM protocol_idempotency
+          WHERE run_id = ? AND agent_id = ? AND action = ? AND request_id = ?
+        `).get(identity.runId, identity.agentId, action, key) as Row | undefined
+        if (typeof cached?.response_json === 'string') {
+          const result = JSON.parse(cached.response_json) as T
+          db.exec('COMMIT')
+          return { cached: true as const, result }
+        }
+        const previous = db.prepare(`
+          SELECT state, error_message FROM protocol_operation_attempts
+          WHERE run_id = ? AND agent_id = ? AND action = ? AND request_id = ?
+        `).get(identity.runId, identity.agentId, action, key) as Row | undefined
+        if (previous) {
+          const detail = previous.state === 'completed'
+            ? 'The operation completed, but its cached result has expired.'
+            : previous.state === 'failed'
+              ? `The prior attempt failed: ${String(previous.error_message || 'unknown error')}. Its effects may be partial.`
+              : 'The operation is still running in another dispatcher or was interrupted before its result was recorded.'
+          throw new Error(`COORDINATOR_OPERATION_UNCERTAIN: ${detail} Read status/inbox/context to reconcile the outcome. Retrying this key can retrieve a subsequently recorded result; do not repeat the mutation with a new key until its effects are understood.`)
+        }
+        db.prepare(`
+          INSERT INTO protocol_operation_attempts
+            (run_id, agent_id, action, request_id, state, created_at)
+          VALUES (?, ?, ?, ?, 'running', ?)
+        `).run(identity.runId, identity.agentId, action, key, nowIso())
+        db.exec('COMMIT')
+        return { cached: false as const }
+      } catch (error) {
+        db.exec('ROLLBACK')
+        throw error
+      }
     })
-    return result
+    if (reservation.cached) return reservation.result
+    try {
+      const result = await operation()
+      // A rejected completion explicitly certifies that the gate did not
+      // accept the work. Preserve same-key retries after correcting the gate.
+      if (result && typeof result === 'object' && (result as { accepted?: unknown }).accepted === false) {
+        await enqueueWrite((db) => {
+          db.prepare(`DELETE FROM protocol_operation_attempts
+            WHERE run_id = ? AND agent_id = ? AND action = ? AND request_id = ?`)
+            .run(identity.runId, identity.agentId, action, key)
+        })
+        return result
+      }
+      await enqueueWrite((db) => {
+        db.exec('BEGIN IMMEDIATE')
+        try {
+          db.prepare(`
+            INSERT INTO protocol_idempotency
+              (run_id, agent_id, action, request_id, response_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+          `).run(identity.runId, identity.agentId, action, key, JSON.stringify(result), nowIso())
+          db.prepare(`UPDATE protocol_operation_attempts SET state = 'completed'
+            WHERE run_id = ? AND agent_id = ? AND action = ? AND request_id = ?`)
+            .run(identity.runId, identity.agentId, action, key)
+          db.prepare(`
+            DELETE FROM protocol_idempotency WHERE rowid IN (
+              SELECT rowid FROM protocol_idempotency
+              WHERE run_id = ? AND agent_id = ?
+              ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET ?
+            )
+          `).run(identity.runId, identity.agentId, IDEMPOTENCY_WINDOW_PER_PARTICIPANT)
+          db.exec('COMMIT')
+        } catch (error) {
+          db.exec('ROLLBACK')
+          throw error
+        }
+      })
+      return result
+    } catch (error) {
+      // A thrown exception may follow an irreversible side effect. Retain the
+      // reservation instead of making the key executable again. If recording
+      // failure itself fails, the durable 'running' reservation still fences it.
+      await enqueueWrite((db) => {
+        db.prepare(`UPDATE protocol_operation_attempts SET state = 'failed', error_message = ?
+          WHERE run_id = ? AND agent_id = ? AND action = ? AND request_id = ?`)
+          .run(String(error instanceof Error ? error.message : error).slice(0, 2000), identity.runId, identity.agentId, action, key)
+      }).catch(() => {})
+      throw error
+    }
   })()
   externalIdempotencyInFlight.set(inFlightKey, pending)
   try {

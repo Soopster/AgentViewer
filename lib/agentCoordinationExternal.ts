@@ -234,7 +234,7 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
     }))
   }
   if (action === 'cancel_turn') {
-    return mutate(() => cancelExternalProtocolTurn(participantIdentity!, { agentId: text(body.agentId) }))
+    return mutate(() => cancelExternalProtocolTurn(participantIdentity!, { agentId: text(body.targetAgentId) }))
   }
   if (action === 'read_inbox') {
     return mutate(() => readExternalProtocolInbox(participantIdentity!, {

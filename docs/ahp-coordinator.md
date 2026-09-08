@@ -98,7 +98,15 @@ client ID immediately even when a `coord_wait` is still executing, so a worker
 does not wait for the old long poll to expire before reconnecting. Read
 operations and mutations backed by a stable idempotency key receive one
 automatic transport retry; MCP supplies a per-call key when the caller omits
-one. Create and join are never replayed automatically because duplicating a
+one. For a retry across separate tool calls, supply `request_id` on the first
+mutation and reuse it with identical arguments; generated keys cover only one
+call. Retry-cache retention is bounded, so reconcile board state before repeating
+an old operation whose detailed result may have expired. Durable operation
+reservations prevent concurrent execution and keep completed-key records for the
+run's lifetime. Interrupted or possibly partial attempts return
+`COORDINATOR_OPERATION_UNCERTAIN`; inspect status/inbox/context instead of
+bypassing the reservation with a new key. Explicit `accepted:false` completion
+gates can still be corrected and retried with the same key. Create and join are never replayed automatically because duplicating a
 participant would be less safe than surfacing the transport error.
 
 Set `AGENT_VIEWER_AHP_URL` when the AHP socket is not on the derived port. Set
