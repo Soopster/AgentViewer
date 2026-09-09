@@ -8,6 +8,7 @@ import { createCoordinatorTurnPacing } from './agent-viewer-coord-pacing.mjs'
 import { fileURLToPath } from 'node:url'
 import {
   coordinatorStateRoot,
+  observedWorkerActivity,
   workerLogPath,
   workerProcessMarker,
   writeWorkerRecord,
@@ -1014,6 +1015,7 @@ await writeWorkerRecord(state.identityFile, {
   workerInstanceId,
   heartbeatAt: new Date().toISOString(),
   status: 'running',
+  activity: { state: 'unknown', reason: 'Supervisor starting', observedAt: new Date().toISOString() },
   startedAt: new Date().toISOString(),
 })
 const heartbeatTimer = setInterval(() => {
@@ -1137,13 +1139,116 @@ async function checkpointForSupervisorStop(detail) {
   )
 }
 
+let lastActivityKey
+let lastActivityAt = 0
+async function recordActivity(activity) {
+  const key = JSON.stringify(activity)
+  const now = Date.now()
+  // Keep observation timestamps fresh without writing on every noisy event.
+  if (key === lastActivityKey && now - lastActivityAt < 5_000) return
+  await writeWorkerRecord(state.identityFile, {
+    activity: { ...activity, observedAt: new Date(now).toISOString() },
+  })
+  lastActivityKey = key
+  lastActivityAt = now
+}
+
+// A restarted supervisor must observe live ownership before spending a model
+// turn. Fresh participants still receive their bootstrap turn to plan/join work.
+async function waitForRunnableWork({ pace = true } = {}) {
+  // Observation failures retry observation, never the model turn. Preserve the
+  // pacing deadline across reconnects so failed reads do not count as turns.
+  let waitPacing
+  for (;;) {
+    if (shutdownRequested) {
+      await checkpointForSupervisorStop(`Supervisor received ${shutdownSignal ?? 'a shutdown request'} while waiting for Coordinator work.`)
+      return false
+    }
+    try {
+      const current = await api(baseUrl, 'wait', { ...state, cursor, timeoutMs: 0 })
+      if (coordinatorFailures > 0) {
+        coordinatorFailures = 0
+        if (providerFailures === 0) {
+          delete state.lastFailureClass
+          delete state.lastError
+          await writeWorkerRecord(state.identityFile, {
+            status: 'running',
+            failures: 0,
+            failureClass: undefined,
+            lastError: undefined,
+            recoveredAt: new Date().toISOString(),
+          })
+        }
+      }
+      cursor = current.cursor
+      lastActionable = current.actionable ?? lastActionable
+      if (isTerminal(current)) return false
+      await recordActivity(observedWorkerActivity(current.actionable, shouldTick(current.actionable, role)))
+      // The provider turn may have claimed a task, received mail, or left owned
+      // work open. Act on that returned digest immediately instead of entering a
+      // 55-second long poll and adding avoidable coordination latency.
+      if (waitPacing === undefined) {
+        const delay = pace ? turnPacing.observe(current.actionable) : 0
+        waitPacing = { delay, resumeAt: Date.now() + delay }
+      }
+      const { delay: pacingMs, resumeAt } = waitPacing
+      if (shouldTick(current.actionable, role)
+        && (pacingMs === 0 || turnPacing.changed(current.actionable) || Date.now() >= resumeAt)) return true
+      if (pacingMs > 0) await workerLog(state, `unchanged actionable state across successful turns; waiting up to ${pacingMs}ms for change before continuing`)
+      for (;;) {
+        const waitStarted = Date.now()
+        const timeoutMs = pacingMs > 0 && waitStarted < resumeAt ? Math.min(55_000, resumeAt - waitStarted) : 55_000
+        const next = await api(baseUrl, 'wait', { ...state, cursor, timeoutMs })
+        cursor = next.cursor
+        lastActionable = next.actionable ?? lastActionable
+        if (isTerminal(next)) return false
+        await recordActivity(observedWorkerActivity(next.actionable, shouldTick(next.actionable, role)))
+        if (shouldTick(next.actionable, role)
+          && (pacingMs === 0 || turnPacing.changed(next.actionable) || Date.now() >= resumeAt)) return true
+        // A noisy event stream (including worker heartbeats) can make wait
+        // return immediately. Bound polling without delaying cancellation by
+        // more than 100ms. This also applies to blocked/idle workers, whose
+        // pacing delay is zero but whose event stream can still be noisy.
+        if (Date.now() - waitStarted < 100) await retryDelay(100)
+      }
+    } catch (error) {
+      if (shutdownRequested) {
+        await checkpointForSupervisorStop(`Supervisor received ${shutdownSignal ?? 'a shutdown request'} while waiting for Coordinator work.`)
+        return false
+      }
+      if (isTerminalCoordinatorError(error)) return false
+      await recordActivity({ state: 'unknown', reason: 'Coordinator observation unavailable' })
+      coordinatorFailures += 1
+      state.lastFailureClass = 'transient_transport'
+      state.lastError = error.message
+      await workerLog(state, `coordinator wait failed attempt=${coordinatorFailures}: ${error.message}`)
+      await writeWorkerRecord(state.identityFile, {
+        status: 'retrying',
+        failureClass: 'transient_transport',
+        failures: coordinatorFailures,
+        lastError: error.message,
+      })
+      const delay = Math.min(30_000, 1_000 * 2 ** Math.min(coordinatorFailures - 1, 5))
+      console.error(`Coordinator wait failed: ${error.message}; retrying in ${delay}ms`)
+      await retryDelay(delay)
+    }
+  }
+}
+
+let observeBeforeFirstTurn = loadedIdentity
 outer: for (;;) {
   if (shutdownRequested) {
     await checkpointForSupervisorStop(`Supervisor received ${shutdownSignal ?? 'a shutdown request'} before the next provider turn.`)
     break
   }
+  if (observeBeforeFirstTurn) {
+    if (!await waitForRunnableWork({ pace: false })) break
+    observeBeforeFirstTurn = false
+    if (shutdownRequested) continue
+  }
   try {
     const recoveringProvider = providerFailures > 0
+    await recordActivity({ state: 'working', reason: 'Provider turn in progress', taskId: lastActionable?.myTask?.id })
     await providerTick(state, baseUrl, lastActionable)
     providerFailures = 0
     if (recoveringProvider) {
@@ -1181,6 +1286,7 @@ outer: for (;;) {
       }
       continue
     }
+    await recordActivity({ state: 'unknown', reason: 'Provider turn failed; recovering' })
     providerFailures += 1
     const failureClass = classifyProviderFailure(error)
     state.lastFailureClass = failureClass
@@ -1304,72 +1410,14 @@ outer: for (;;) {
     )
     break
   }
-  try {
-    const current = await api(baseUrl, 'wait', { ...state, cursor, timeoutMs: 0 })
-    if (coordinatorFailures > 0) {
-      coordinatorFailures = 0
-      if (providerFailures === 0) {
-        delete state.lastFailureClass
-        delete state.lastError
-        await writeWorkerRecord(state.identityFile, {
-          status: 'running',
-          failures: 0,
-          failureClass: undefined,
-          lastError: undefined,
-          recoveredAt: new Date().toISOString(),
-        })
-      }
-    }
-    cursor = current.cursor
-    lastActionable = current.actionable ?? lastActionable
-    if (isTerminal(current)) break
-    // The provider turn may have claimed a task, received mail, or left owned
-    // work open. Act on that returned digest immediately instead of entering a
-    // 55-second long poll and adding avoidable coordination latency.
-    const pacingMs = turnPacing.observe(current.actionable)
-    const resumeAt = Date.now() + pacingMs
-    if (shouldTick(current.actionable, role) && pacingMs === 0) continue
-    if (pacingMs > 0) await workerLog(state, `unchanged actionable state across successful turns; waiting up to ${pacingMs}ms for change before continuing`)
-    for (;;) {
-      const waitStarted = Date.now()
-      const timeoutMs = pacingMs > 0 && waitStarted < resumeAt ? Math.min(55_000, resumeAt - waitStarted) : 55_000
-      const next = await api(baseUrl, 'wait', { ...state, cursor, timeoutMs })
-      cursor = next.cursor
-      lastActionable = next.actionable ?? lastActionable
-      if (isTerminal(next)) break outer
-      if (shouldTick(next.actionable, role)
-        && (pacingMs === 0 || turnPacing.changed(next.actionable) || Date.now() >= resumeAt)) break
-      // A noisy event stream (including worker heartbeats) can make wait
-      // return immediately. Bound polling without delaying cancellation by
-      // more than 100ms; only a changed actionable digest bypasses pacing.
-      if (pacingMs > 0 && Date.now() - waitStarted < 100) await retryDelay(100)
-    }
-  } catch (error) {
-    if (shutdownRequested) {
-      await checkpointForSupervisorStop(`Supervisor received ${shutdownSignal ?? 'a shutdown request'} while waiting for Coordinator work.`)
-      break
-    }
-    if (isTerminalCoordinatorError(error)) break
-    coordinatorFailures += 1
-    state.lastFailureClass = 'transient_transport'
-    state.lastError = error.message
-    await workerLog(state, `coordinator wait failed attempt=${coordinatorFailures}: ${error.message}`)
-    await writeWorkerRecord(state.identityFile, {
-      status: 'retrying',
-      failureClass: 'transient_transport',
-      failures: coordinatorFailures,
-      lastError: error.message,
-    })
-    const delay = Math.min(30_000, 1_000 * 2 ** Math.min(coordinatorFailures - 1, 5))
-    console.error(`Coordinator wait failed: ${error.message}; retrying in ${delay}ms`)
-    await retryDelay(delay)
-  }
+  if (!await waitForRunnableWork()) break
 }
 
 await saveState(state.identityFile, state)
 clearInterval(heartbeatTimer)
 await writeWorkerRecord(state.identityFile, {
   status: finalStatus,
+  activity: null,
   pid: process.pid,
   stoppedAt: new Date().toISOString(),
   failures: providerFailures + coordinatorFailures,

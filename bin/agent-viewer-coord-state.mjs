@@ -4,6 +4,23 @@ import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/p
 import os from 'node:os'
 import path from 'node:path'
 
+export const WORKER_ACTIVITIES = ['working', 'ready', 'blocked', 'awaiting_approval', 'idle', 'unknown']
+
+// This describes observed board state while the provider is not executing.
+// Process liveness stays independent: a blocked worker can be healthy and alive.
+export function observedWorkerActivity(actionable, runnable) {
+  const taskId = actionable?.myTask?.id
+  if (!actionable) return { state: 'unknown', reason: 'Coordinator did not provide an activity digest' }
+  if (runnable) return { state: 'ready', reason: 'Actionable work available', taskId }
+  if (actionable.myTask?.planState === 'awaiting' || actionable.myTask?.status === 'planned') {
+    return { state: 'awaiting_approval', reason: 'Waiting for plan approval', taskId }
+  }
+  if (actionable.myTask?.status === 'blocked') {
+    return { state: 'blocked', reason: 'Owned task is blocked', taskId }
+  }
+  return { state: 'idle', reason: 'Waiting for work or mail', taskId }
+}
+
 export function coordinatorStateRoot() {
   return path.resolve(process.env.AGENT_VIEWER_COORD_HOME || path.join(os.homedir(), '.agent-viewer', 'coordinator'))
 }

@@ -946,6 +946,7 @@ async function expectAdminFailure(commandArgs, marker) {
 await expectAdminFailure(['workers', '--limt', '3'], 'Unknown workers option: --limt')
 await expectAdminFailure(['doctor', '--limit', 'many'], '--limit must be an integer from 1 to 1000')
 await expectAdminFailure(['workers', '--status', 'strale'], '--status must be one of:')
+await expectAdminFailure(['workers', '--activity', 'busyish'], '--activity must be one of:')
 process.env.AGENT_VIEWER_COORD_HOME = coordHome
 await writeWorkerRecord(path.join(testDir, 'stale-worker.json'), {
   runId: 'stale-run',
@@ -955,6 +956,7 @@ await writeWorkerRecord(path.join(testDir, 'stale-worker.json'), {
   cwd: testDir,
   pid: 999_999,
   status: 'running',
+  activity: { state: 'blocked', reason: 'Old task state' },
   heartbeatAt: new Date(0).toISOString(),
 })
 const workerList = JSON.parse(execFileSync(process.execPath, [launcher, 'coord', 'workers', '--json'], {
@@ -977,6 +979,13 @@ const runningWorkers = JSON.parse(execFileSync(process.execPath, [launcher, 'coo
 }))
 if (runningWorkers.some((record) => record.name === 'stale-worker')) {
   throw new Error('coord workers --status running included a dead stale registration')
+}
+const blockedWorkers = JSON.parse(execFileSync(process.execPath, [launcher, 'coord', 'workers', '--json', '--activity', 'blocked'], {
+  env: adminEnv,
+  encoding: 'utf8',
+}))
+if (blockedWorkers.some((record) => record.name === 'stale-worker')) {
+  throw new Error('activity filter presented a dead worker as currently blocked')
 }
 const logOutput = execFileSync(process.execPath, [launcher, 'coord', 'logs', identityFile, '-n', '20'], {
   env: adminEnv,

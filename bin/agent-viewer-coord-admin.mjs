@@ -6,6 +6,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   coordinatorStateRoot,
+  WORKER_ACTIVITIES,
   inspectIdentity,
   listWorkerRecords,
   managedWorkerProcess,
@@ -29,7 +30,7 @@ function option(name, fallback) {
 
 const COMMAND_OPTIONS = {
   doctor: { flags: new Set(['--json']), values: new Set(['--attach', '--identity', '--limit']), positionals: 0 },
-  workers: { flags: new Set(['--json']), values: new Set(['--run', '--status', '--limit']), positionals: 0 },
+  workers: { flags: new Set(['--json']), values: new Set(['--run', '--status', '--activity', '--limit']), positionals: 0 },
   restart: { flags: new Set(), values: new Set(['--provider']), positionals: 1 },
   logs: { flags: new Set(['-f', '--follow']), values: new Set(['-n']), positionals: 1 },
 }
@@ -79,7 +80,7 @@ function usage(message) {
   if (message) console.error(message)
   console.log(`Usage:
   agent-viewer coord doctor [--json] [--attach <url>] [--identity <file>] [--limit <n>]
-  agent-viewer coord workers [--json] [--run <run-id>] [--status <status>] [--limit <n>]
+  agent-viewer coord workers [--json] [--run <run-id>] [--status <status>] [--activity <activity>] [--limit <n>]
   agent-viewer coord restart <agent-id|name|identity-file> [--provider codex|claude|opencode|copilot|pi]
   agent-viewer coord logs <agent-id|name|identity-file> [-n <lines>] [-f]
 `)
@@ -219,6 +220,8 @@ async function doctor() {
 async function workers() {
   const runId = option('--run')
   const status = option('--status')
+  const activity = option('--activity')
+  if (activity && !WORKER_ACTIVITIES.includes(activity)) usage(`--activity must be one of: ${WORKER_ACTIVITIES.join(', ')}`)
   const validStatuses = new Set(['running', 'starting', 'retrying', 'stopped', 'handed_off', 'failed', 'corrupt', 'stale'])
   if (status && !validStatuses.has(status)) usage(`--status must be one of: ${[...validStatuses].join(', ')}`)
   const limit = boundedIntegerOption('--limit', 100, 1, 1_000)
@@ -230,6 +233,7 @@ async function workers() {
       if (['running', 'starting', 'retrying'].includes(status)) return !record.stale && record.status === status
       return record.status === status
     })
+    .filter((record) => !activity || (record.alive && (record.activity?.state || 'unknown') === activity))
     .slice(0, limit)
   if (args.includes('--json')) {
     console.log(JSON.stringify(records.map(({ token: _token, ...record }) => record), null, 2))
@@ -241,11 +245,14 @@ async function workers() {
   }
   for (const record of records) {
     console.log([
-      record.alive ? 'running' : record.stale ? 'stale' : record.status || 'stopped',
+      record.stale ? 'stale' : record.status || 'stopped',
+      record.alive ? record.activity?.state || 'unknown' : '-',
       record.name || record.agentId || 'unknown',
       record.provider || 'unknown',
       record.runId || 'unknown-run',
       `pid=${record.pid || '-'}`,
+      ...(record.alive && record.activity?.taskId ? [`task=${record.activity.taskId}`] : []),
+      ...(record.alive && record.activity?.reason ? [record.activity.reason] : []),
       record.identityFile,
     ].join('\t'))
   }

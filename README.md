@@ -241,18 +241,28 @@ For multi-agent startup, seed the full board with `--playbook` before teammates 
 
 Restart a supervisor with `agent-viewer coord worker --identity <file>`. A bridge can also load that file with `agent-viewer mcp --identity <file>` or `AGENT_VIEWER_COORD_IDENTITY_FILE`. The older run ID, agent ID, and token environment variables remain supported for compatibility. Treat identity files as secrets.
 
-Workers register their PID, provider session, status, last classified failure, and log path outside the secret identity file. Inspect or recover the fleet with:
+Workers register their PID, provider session, lifecycle status, observed activity, last classified failure, and log path outside the secret identity file. Inspect or recover the fleet with:
 
 ```bash
 agent-viewer coord doctor --json --attach 3000
 agent-viewer coord workers --json
 agent-viewer coord workers --status stale --limit 20
+agent-viewer coord workers --activity blocked
+agent-viewer coord workers --activity awaiting_approval
 agent-viewer coord logs <agent-name|agent-id|identity-file> -n 200
 agent-viewer coord logs <agent-name|agent-id|identity-file> -f
 agent-viewer coord restart <agent-name|agent-id|identity-file>
 ```
 
 `coord doctor` is read-only and checks daemon reachability, protocol compatibility, provider CLI availability, identity validity/mode, and registered worker liveness. Provider probes run concurrently, and worker detail is bounded by `--limit` while the summary still covers the full registry. `coord workers --status stale` selects dead supervisors whose last persisted lifecycle state was active; `--status running` returns only live supervisors. Worker logs and registry records default to `~/.agent-viewer/coordinator/workers/`; set `AGENT_VIEWER_COORD_HOME` to relocate them.
+
+`coord workers` shows supervisor lifecycle and activity separately. Activity is
+`working` while a provider turn executes, `ready` when runnable work is paced,
+`blocked` for a blocked owned task, `awaiting_approval` for a plan gate, `idle`
+while waiting for work, or `unknown` when observation fails. JSON includes the
+observation time, reason, and owned task ID when available. Activity filters
+select live supervisors only; use `--status stale` to find crashed workers.
+These are supervisor and board observations, not inference from terminal text.
 
 Provider exits are classified as rate limit, authentication, context exhaustion, approval blockage, missing CLI, transient transport, or generic provider failure. A durable classified failure while a worker owns a task calls `coord_handoff_task`: it records a checkpoint, releases locks, returns the task to pending, marks the worker blocked, and sends the lead an urgent durable handoff. Transient transport failures retain bounded exponential retry behavior; an unclassified failure is handed off after three consecutive attempts.
 
