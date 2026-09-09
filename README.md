@@ -239,6 +239,24 @@ agent-viewer coord worker --join <run-id> --name claude-api --provider claude --
 
 For multi-agent startup, seed the full board with `--playbook` before teammates join; an unseeded `--start` is intended only for a lead planning turn. Start-time controls also include `--max-agents 2..16`, `--gate-command <cmd>`, and `--require-plan-approval`. Joined workers create isolated git worktrees by default; pass `--shared` only when that is intentional. Claim-time baselines keep pre-existing dirty files out of completion checks while still detecting participant edits and commits. Mutating MCP tools accept a stable `request_id`, so a resumed CLI can safely repeat a request after losing its response. Stale participants are detected from heartbeat leases and have their locks and tasks released for reassignment.
 
+Add `--detach` to start a worker in the background and return after its identity
+and worker registration are saved:
+
+```bash
+agent-viewer coord worker --start "Implement the release" --name lead --provider codex --detach
+agent-viewer coord worker --join latest --name reviewer --provider claude --detach
+agent-viewer coord workers
+agent-viewer coord logs lead -f
+```
+
+Closing the launching terminal or stopping log following leaves the detached
+worker running. The Agent Viewer daemon must remain available. Detach preserves
+the original supervisor/provider processes; a machine restart still requires
+resuming the saved identity. Startup acknowledgement confirms registration,
+not provider authentication or task completion. If startup is reported as
+unconfirmed, inspect the worker list before retrying: the original process may
+still finish starting.
+
 Restart a supervisor with `agent-viewer coord worker --identity <file>`. A bridge can also load that file with `agent-viewer mcp --identity <file>` or `AGENT_VIEWER_COORD_IDENTITY_FILE`. The older run ID, agent ID, and token environment variables remain supported for compatibility. Treat identity files as secrets.
 
 Workers register their PID, provider session, lifecycle status, observed activity, last classified failure, and log path outside the secret identity file. Inspect or recover the fleet with:
@@ -253,6 +271,9 @@ agent-viewer coord logs <agent-name|agent-id|identity-file> -n 200
 agent-viewer coord logs <agent-name|agent-id|identity-file> -f
 agent-viewer coord restart <agent-name|agent-id|identity-file>
 ```
+
+`coord restart` waits for the replacement worker to register before reporting
+success; startup failures surface as errors.
 
 `coord doctor` is read-only and checks daemon reachability, protocol compatibility, provider CLI availability, identity validity/mode, and registered worker liveness. Provider probes run concurrently, and worker detail is bounded by `--limit` while the summary still covers the full registry. `coord workers --status stale` selects dead supervisors whose last persisted lifecycle state was active; `--status running` returns only live supervisors. Worker logs and registry records default to `~/.agent-viewer/coordinator/workers/`; set `AGENT_VIEWER_COORD_HOME` to relocate them.
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
+import { launchDetachedWorker } from './agent-viewer-coord-detached.mjs'
 import { spawn } from 'node:child_process'
 import { open, readFile, stat, watch } from 'node:fs/promises'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import {
   coordinatorStateRoot,
   WORKER_ACTIVITIES,
@@ -13,7 +13,6 @@ import {
   processAlive,
   resolveWorkerRecord,
   workerLogPath,
-  writeWorkerRecord,
 } from './agent-viewer-coord-state.mjs'
 
 const args = process.argv.slice(2)
@@ -284,24 +283,15 @@ async function restart() {
       }
     }
   }
-  const launcher = fileURLToPath(new URL('./agent-viewer.mjs', import.meta.url))
-  const child = spawn(process.execPath, [
-    launcher, 'coord', 'worker', '--identity', record.identityFile,
+  const started = await launchDetachedWorker([
+    '--identity', record.identityFile,
     ...(provider ? ['--provider', provider] : []),
   ], {
     cwd: record.cwd || process.cwd(),
-    detached: true,
     env: { ...process.env, AGENT_VIEWER_COORD_HOME: coordinatorStateRoot() },
-    stdio: 'ignore',
   })
-  child.unref()
-  await writeWorkerRecord(record.identityFile, {
-    status: 'starting',
-    pid: child.pid,
-    ...(provider ? { provider } : {}),
-    restartRequestedAt: new Date().toISOString(),
-  })
-  console.log(`Restarted ${record.name || record.agentId} as pid ${child.pid}.`)
+  console.log(`Restarted ${record.name || record.agentId} as pid ${started.pid}.`)
+
 }
 
 async function logs() {

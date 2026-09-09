@@ -38,6 +38,12 @@ in this checkout are:
   live workers needing attention; JSON includes the reason, task, and observation
   timestamp. Provider turns report working, observation failures report unknown,
   and stopped workers clear live activity.
+- CLI workers support `--detach`: the launcher waits for durable registration,
+  then exits while the original supervisor/provider processes continue. Restart
+  uses the same acknowledged startup, avoiding optimistic success reports.
+  A startup observation timeout leaves potentially accepted work intact and
+  tells the user to reconcile before retrying. The daemon must remain available;
+  this does not preserve processes across machine restarts.
 - Compact shared tool definitions and conditional skill references keep the
   operating instructions consistent across provider entry points.
 
@@ -48,6 +54,9 @@ that completes during the outage. Restart fixtures verify zero provider turns
 until mail or approval; a heartbeat flood checks bounded poll frequency.
 `scripts/coordWorkerSmoke.mjs` checks an unterminated final error frame
 from a provider that exits successfully, alongside recovery and shutdown cases.
+`scripts/coordDetachedSmoke.mjs` exercises the public launcher for detached
+leads and teammates, confirms provider survival after launcher exit, rejects
+failed startup, and checks late startup after an observation timeout.
 The full `mcp:smoke` suite covers transport replay and provider adapter contracts.
 
 Pacing is deliberately not a proof of no progress: file edits can advance while

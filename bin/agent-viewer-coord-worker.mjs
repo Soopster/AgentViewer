@@ -4,6 +4,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { appendFile, chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { launchDetachedWorker } from './agent-viewer-coord-detached.mjs'
 import { createCoordinatorTurnPacing } from './agent-viewer-coord-pacing.mjs'
 import { fileURLToPath } from 'node:url'
 import {
@@ -111,6 +112,7 @@ Options:
   --cwd <path>         Source checkout (default current directory)
   --shared             Join in the current checkout instead of an isolated worktree
   --once               Run one CLI tick and exit
+  --detach             Start in the background and return after worker registration
   --identity <file>    Durable 0600 participant and provider-session state
   --model <id>         Provider model override (e.g. sonnet, gpt-5.2-codex, openai-codex/gpt-5.2-codex)
   --transport <cli|acp> Provider transport (default cli). acp drives claude-agent-acp/codex-acp
@@ -142,6 +144,7 @@ function parseArgs(args) {
   const booleanOptions = new Map([
     ['--shared', 'shared'],
     ['--once', 'once'],
+    ['--detach', 'detach'],
     ['--require-review', 'requireReview'],
     ['--require-plan-approval', 'requirePlanApproval'],
   ])
@@ -893,6 +896,15 @@ if (options.args !== undefined && !options.playbook) usage('--args requires --pl
 if (options.shared && !options.join) usage('--shared requires --join; the lead always starts in its current checkout')
 if (options.identity && !options.start && !options.join && options.name) usage('--name cannot rename a resumed --identity worker')
 
+if (options.detach) {
+  const started = await launchDetachedWorker(process.argv.slice(2).filter((arg) => arg !== '--detach'))
+  console.log(`Started ${started.name || started.agentId} in background as pid ${started.pid}.`)
+  console.log(`Run: ${started.runId}`)
+  console.log(`Identity: ${started.identityFile}`)
+  console.log(`Logs: ${started.logFile}`)
+  process.exit(0)
+}
+
 let baseUrl = normalizeUrl(options.attach || 'http://127.0.0.1:3000')
 let state
 let loadedIdentity = false
@@ -1018,6 +1030,12 @@ await writeWorkerRecord(state.identityFile, {
   activity: { state: 'unknown', reason: 'Supervisor starting', observedAt: new Date().toISOString() },
   startedAt: new Date().toISOString(),
 })
+if (process.connected) {
+  await new Promise((resolve) => process.send({
+    type: 'coordinator-worker-ready', pid: process.pid, runId: state.runId,
+    agentId: state.agentId, name: state.name, identityFile: state.identityFile, logFile: state.logFile,
+  }, () => resolve()))
+}
 const heartbeatTimer = setInterval(() => {
   void writeWorkerRecord(state.identityFile, {
     pid: process.pid,

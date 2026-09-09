@@ -1025,12 +1025,9 @@ await writeFile(identityFile, `${JSON.stringify({
   lastFailureClass: 'rate_limited',
   lastError: 'previous provider exhausted its quota',
 }, null, 2)}\n`, { mode: 0o600 })
-const restartOutput = execFileSync(process.execPath, [
+const restartOutput = await runNode([
   launcher, 'coord', 'restart', identityFile, '--provider', 'copilot',
-], {
-  env: adminEnv,
-  encoding: 'utf8',
-})
+], adminEnv)
 if (!restartOutput.includes('Restarted')) throw new Error('coord restart did not relaunch the selected worker')
 const failedOverIdentity = await waitForJsonValue(identityFile, 'provider', 'copilot')
 if (failedOverIdentity.provider !== 'copilot') {

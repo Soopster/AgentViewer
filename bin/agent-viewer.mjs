@@ -209,7 +209,7 @@ ACP agent (for Zed and other ACP clients — one process per provider):
 
 Autonomous Coordinator:
   agent-viewer coord worker --start "goal" --playbook <name> --name lead --provider codex --max-agents 4 --attach 3000
-  agent-viewer coord worker --join <run-id> --name claude-1 --provider claude --attach 3000
+  agent-viewer coord worker --join <run-id> --name claude-1 --provider claude --attach 3000 --detach
   agent-viewer coord doctor --json --attach 3000
   agent-viewer coord workers --json
 `)
