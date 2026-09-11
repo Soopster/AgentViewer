@@ -1204,6 +1204,7 @@ server.registerTool('coord_create_task', {
     + 'Use role_name/role_description to give the lane a specialization — a persona the claiming teammate should adopt for this task (e.g. "Explorer" / "read-only research, report findings, propose no edits"). This is invented per task as you distribute work, not a fixed role: the same run can have an Explorer lane, a Refactorer lane, and a Reviewer lane at once, and later tasks can define new specializations entirely. '
     + 'The result includes `similarTasks` when this looks like it may duplicate existing work — not blocking, but check before assuming it\'s new.',
   inputSchema: {
+    assign_to: z.string().min(1).max(160).optional().describe('Lead-only: delegate atomically to an idle teammate by name or ID, reusing its session. Busy/conflicting assignments leave no task. Delivery is queued, not proof of execution.'),
     title: z.string().min(1).max(160),
     detail: z.string().min(1).max(8000),
     paths: z.array(z.string().min(1)).max(100).optional(),
@@ -1219,7 +1220,8 @@ server.registerTool('coord_create_task', {
     verify_commands: z.array(z.string().min(1)).max(20).optional(),
     request_id: requestIdField,
   },
-}, async ({ title, detail, paths, depends_on, phase, role, role_name, role_description, seat, requested_provider, requested_model, requested_effort, verify_commands, request_id }) => textResult(await coordinatorRequest('create_task', {
+}, async ({ assign_to, title, detail, paths, depends_on, phase, role, role_name, role_description, seat, requested_provider, requested_model, requested_effort, verify_commands, request_id }) => textResult(await coordinatorRequest('create_task', {
+  assignTo: assign_to,
   title,
   detail,
   paths,
@@ -1234,6 +1236,20 @@ server.registerTool('coord_create_task', {
   requestedEffort: requested_effort,
   verifyCommands: verify_commands,
   requestId: request_id,
+})))
+
+server.registerTool('coord_delegate', {
+  description: 'Ask another agent to do a concrete task. Omit to to reuse an idle teammate or create one in a server-managed run; name an agent for follow-ups. Atomically creates and assigns work and queues notification. Returns task and session identity; queued is not proof of execution. Busy or conflicting assignments leave no task. Use coord_send_message to steer work already in progress.',
+  inputSchema: {
+    to: z.string().min(1).max(160).optional(),
+    title: z.string().min(1).max(160),
+    detail: z.string().min(1).max(8000),
+    paths: z.array(z.string().min(1)).max(100).optional(),
+    verify_commands: z.array(z.string().min(1)).max(20).optional(),
+    request_id: requestIdField,
+  },
+}, async ({ to, title, detail, paths, verify_commands, request_id }) => textResult(await coordinatorRequest('create_task', {
+  assignTo: to ?? 'auto', title, detail, paths, verifyCommands: verify_commands, targetRole: 'teammate', requestId: request_id,
 })))
 
 server.registerTool('coord_claim_task', {

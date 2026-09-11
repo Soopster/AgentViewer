@@ -862,6 +862,7 @@ export type ExternalProtocolClaimResult = ExternalProtocolMutationResult & {
  * self-tasking teammate can catch redundant work before it's claimed.
  */
 export type ExternalProtocolTaskCreateResult = ExternalProtocolMutationResult & {
+  delegation?: { agentId: string; name: string; provider: AgentProvider; sessionId?: string; delivery: 'queued' }
   similarTasks?: Array<{ taskId: string; title: string; similarity: number }>
 }
 

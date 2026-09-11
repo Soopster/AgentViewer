@@ -1,6 +1,7 @@
 'use client'
 
 import dynamic from 'next/dynamic'
+import CoordinatorAskAgent from './CoordinatorAskAgent'
 import { getAssistantDisplayName } from '@/lib/provider'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ToggleGroup as ToggleGroupPrimitive } from 'radix-ui'
@@ -1699,6 +1700,8 @@ export default function AgentTeamCoordinator({
                     ) : null}
                   </div>
                 </section>
+
+                {snapshot ? <CoordinatorAskAgent key={snapshot.run.id} snapshot={snapshot} onOpenSession={openAgentSession} onMessage={setMessageTarget} /> : null}
 
                 <section className="av-coord-overview" aria-label="Run overview">
                   <div className="av-coord-metrics">

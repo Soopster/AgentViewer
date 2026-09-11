@@ -13,6 +13,7 @@ export const COORDINATOR_MCP_TOOL_NAMES = Object.freeze([
   'coord_wait',
   'coord_await_run',
   'coord_create_task',
+  'coord_delegate',
   'coord_claim_task',
   'coord_release_task',
   'coord_leave_run',

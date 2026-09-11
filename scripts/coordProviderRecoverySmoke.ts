@@ -85,12 +85,13 @@ try {
     })).participant
     const leadCall = await adapter(provider, lead)
     const teammateCall = await adapter(provider, teammate)
-    const createArgs = { title: 'Recover this lane', detail: 'Checkpoint and return work.', paths: ['README.md'], request_id: 'create-lane' }
-    const created = await leadCall('coord_create_task', createArgs)
-    const replayed = await leadCall('coord_create_task', createArgs)
+    const createArgs = { to: teammate.agentId, title: 'Recover this lane', detail: 'Checkpoint and return work.', paths: ['README.md'], request_id: 'create-lane' }
+    const created = await leadCall('coord_delegate', createArgs)
+    const replayed = await leadCall('coord_delegate', createArgs)
     assert.equal(replayed.task.id, created.task.id, `${provider}: create replay`)
     const taskId = created.task.id
-    await teammateCall('coord_claim_task', { task_id: taskId })
+    assert.equal(created.task.ownerAgentId, teammate.agentId, `${provider}: direct delegation assigns ownership`)
+    assert.equal(created.delegation.delivery, 'queued')
     await teammateCall('coord_progress', { status: 'working', task_id: taskId })
     await assert.rejects(teammateCall('coord_cancel_turn', { agent_id: lead.agentId }), /Only the Coordinator lead/)
     await leadCall('coord_cancel_turn', { agent_id: teammate.agentId, request_id: 'cancel-turn' })

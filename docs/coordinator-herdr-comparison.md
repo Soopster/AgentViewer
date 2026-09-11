@@ -44,6 +44,19 @@ in this checkout are:
   A startup observation timeout leaves potentially accepted work intact and
   tells the user to reconcile before retrying. The daemon must remain available;
   this does not preserve processes across machine restarts.
+- Interactive leads can use `coord_delegate` to assign work to a named available
+  teammate with atomic task creation, ownership, baseline capture, path locks,
+  and mail. The same teammate handles follow-up work in its existing session.
+  The result reports queued delivery and identities, not execution success.
+  Omitting the teammate reuses an available session or creates one in managed
+  runs, subject to capacity. Concurrent automatic asks are serialized during
+  allocation. External-only runs still require joined teammates.
+- The Coordinator’s Ask another agent panel shows live task status and results,
+  opens transcripts, sends messages, and starts follow-ups in the same session.
+  Submission retries retain the original request key. This panel supplements
+  the board; broader primary-chat integration and attention routing remain open.
+  These flows have real-ledger tests with fixture provider sessions, not
+  live-provider end-to-end proof.
 - Compact shared tool definitions and conditional skill references keep the
   operating instructions consistent across provider entry points.
 

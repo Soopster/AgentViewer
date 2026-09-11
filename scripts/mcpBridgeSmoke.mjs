@@ -559,6 +559,14 @@ try {
     await secondClient.close().catch(() => {})
   }
 
+  const delegated = await client.callTool({ name: 'coord_delegate', arguments: {
+    to: 'reviewer', title: 'Review revision', detail: 'Reuse your prior review context.', request_id: 'delegate-review',
+  } })
+  if (delegated.isError) throw new Error('MCP bridge rejected direct delegation')
+  const delegationRequest = seen.findLast(entry => entry.body?.requestId === 'delegate-review')
+  if (delegationRequest?.body?.action !== 'create_task' || delegationRequest?.body?.assignTo !== 'reviewer'
+    || delegationRequest?.body?.targetRole !== 'teammate') throw new Error('Delegation lost target or replay identity across MCP')
+
   await client.callTool({ name: 'coord_review_phase', arguments: { phase: 'implementation', approved: true, summary: 'Receipts reviewed' } })
   await client.callTool({ name: 'coord_review_run', arguments: { approved: true, summary: 'Intent and scope reviewed' } })
   await client.callTool({ name: 'coord_resolve_decision', arguments: { task_id: 'task-1', decision_id: 'decision-1', answer: 'yes' } })

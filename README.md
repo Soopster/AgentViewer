@@ -237,6 +237,24 @@ agent-viewer coord worker --start "Implement the release" --playbook release --n
 agent-viewer coord worker --join <run-id> --name claude-api --provider claude --attach 3000
 ```
 
+For interactive work, the lead can use
+`coord_delegate(title, detail, to?, paths?, verify_commands?, request_id?)`.
+Omit `to` to reuse an available teammate or create one within a managed run’s
+agent limit. External-only runs require an existing joined teammate.
+It creates and assigns a task, records the checkout baseline, acquires its paths,
+and queues a teammate notification in one transaction. The result identifies
+the task, teammate, and provider session when available. For follow-up reviews,
+address the same teammate again after completion; for work already in progress,
+use `coord_send_message` to steer it. Busy agents, lock conflicts, and unmet
+dependencies reject the delegation without leaving a task behind. `queued`
+means the assignment is durable, not that the provider has started or finished.
+`coord_create_task` also accepts `assign_to` for delegation with advanced task options.
+
+The Coordinator’s **Ask another agent** panel provides this flow for active
+managed runs: submit a task, watch its status and result, open the teammate’s
+transcript, send a message, or follow up in the same session. A failed response
+retains the original request for safe retry. Follow-ups require an active run.
+
 For multi-agent startup, seed the full board with `--playbook` before teammates join; an unseeded `--start` is intended only for a lead planning turn. Start-time controls also include `--max-agents 2..16`, `--gate-command <cmd>`, and `--require-plan-approval`. Joined workers create isolated git worktrees by default; pass `--shared` only when that is intentional. Claim-time baselines keep pre-existing dirty files out of completion checks while still detecting participant edits and commits. Mutating MCP tools accept a stable `request_id`, so a resumed CLI can safely repeat a request after losing its response. Stale participants are detected from heartbeat leases and have their locks and tasks released for reassignment.
 
 Add `--detach` to start a worker in the background and return after its identity

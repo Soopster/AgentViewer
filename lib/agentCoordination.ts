@@ -1501,6 +1501,7 @@ function externalParticipantInstructions(participant: ExternalProtocolParticipan
   const roleInstructions = participant.role === 'lead'
     ? [
         'You are the lead: decompose the objective, seed independent teammate lanes, supervise the roster, resolve blockers, and finalize only after reviewing durable task results.',
+        'Use coord_delegate to give a concrete task to an idle named teammate in one call. Reuse that teammate for follow-up reviews; steer busy work with coord_send_message. Queued delegation is not proof of execution.',
         'Do not claim a teammate lane merely because it is unblocked. Claim only an explicit lead integration/review task, or work the board yourself when no teammate is available.',
       ]
     : [
@@ -2495,10 +2496,34 @@ export async function runExternalProtocolIdempotent<T>(
   }
 }
 
+/** Browser-owned delegation uses the server's bound lead identity, never a browser capability token. */
+export async function delegateProtocolTaskAdmin(runId: string, params: {
+  detail: string; to?: string; paths?: string[]; requestId: string
+}): Promise<ExternalProtocolTaskCreateResult> {
+  const controller = controllers.get(runId)
+  const identity = controller?.sdkIdentities.get('lead')
+  if (!identity || controller?.stopped) throw new Error('This workflow has no active server-managed lead. Delegate from its connected lead conversation instead.')
+  return runExternalProtocolIdempotent(identity, 'create_task', params.requestId, () => createExternalProtocolTask(identity, {
+    assignTo: params.to || 'auto', title: params.detail.trim().split('\n')[0]!.slice(0, 160), detail: params.detail,
+    paths: params.paths ?? [], targetRole: 'teammate',
+  }))
+}
+
+const automaticDelegationQueues = new Map<string, Promise<unknown>>()
+async function serializeAutomaticDelegation<T>(runId: string, operation: () => Promise<T>): Promise<T> {
+  const prior = automaticDelegationQueues.get(runId) ?? Promise.resolve()
+  const pending = prior.catch(() => {}).then(operation)
+  automaticDelegationQueues.set(runId, pending)
+  try { return await pending } finally {
+    if (automaticDelegationQueues.get(runId) === pending) automaticDelegationQueues.delete(runId)
+  }
+}
+
 export async function createExternalProtocolTask(
   identity: ExternalProtocolIdentity,
   params: {
     title: string
+    assignTo?: string
     detail: string
     paths?: string[]
     dependsOn?: string[]
@@ -2514,6 +2539,45 @@ export async function createExternalProtocolTask(
     verifyCommands?: string[]
   },
 ): Promise<ExternalProtocolTaskCreateResult> {
+  // Automatic delegation resolves once before the atomic assignment. A newly
+  // created session is reserved from the scheduler until its task is committed.
+  if (params.assignTo === 'auto') return serializeAutomaticDelegation(identity.runId, async () => {
+    const db = await getDatabase()
+    const lead = requireExternalParticipantSync(db, identity)
+    if (lead.role !== 'lead') throw new Error('Only the Coordinator lead can delegate work')
+    const run = db.prepare('SELECT status FROM protocol_runs WHERE id = ?').get(identity.runId) as Row | undefined
+    if (!run || !['planning', 'running', 'synthesizing'].includes(String(run.status))) throw new Error('Coordinator run is not accepting tasks')
+    if (!params.title.trim() || !params.detail.trim()) throw new Error('task title and detail are required')
+    const controller = controllers.get(identity.runId)
+    if (controller && params.requestedProvider && !controller.teammateProviders.includes(params.requestedProvider)) {
+      throw new Error('Requested provider is not configured for this team')
+    }
+    const agents = listAgentsSync(db, identity.runId)
+    const available = agents.find(agent => agent.role === 'teammate' && !agent.taskId
+      && (['idle', 'ready'].includes(agent.status) || (agent.status === 'done' && controller?.sessionIds.has(agent.id)))
+      && !controller?.turnInFlight.has(agent.id)
+      && (!params.requestedProvider || agent.provider === params.requestedProvider))
+    if (available) return createExternalProtocolTask(identity, { ...params, assignTo: available.id })
+    if (!controller) throw new Error('No idle teammate is available. Start or join a teammate for this externally managed run, then retry delegation.')
+    if (agents.filter(agent => !['failed', 'stopped'].includes(agent.status)).length >= controller.maxAgents) {
+      throw new Error('All teammate slots are busy; send a message to steer existing work or wait for a result')
+    }
+    const spawned = await spawnAdditionalTeammate(identity, { provider: params.requestedProvider, reserveForDelegation: true })
+    try {
+      return await createExternalProtocolTask(identity, { ...params, assignTo: spawned.agentId })
+    } catch (error) {
+      // Nothing was dispatched. Retire an unsuccessful reservation so it does
+      // not consume a team slot or pick up an unrelated lane after rejection.
+      await enqueueWrite(tx => setAgentStatusSync(tx, identity.runId, spawned.agentId, 'stopped', nowIso()))
+      const sessionId = controller.sessionIds.get(spawned.agentId)
+      if (sessionId) unregisterCoordinatorToolsForSession(sessionId)
+      throw error
+    } finally {
+      controller.turnInFlight.delete(spawned.agentId)
+      const agent = listAgentsSync(await getDatabase(), identity.runId).find(entry => entry.id === spawned.agentId)
+      if (agent?.taskId && agent.status !== 'stopped') void dispatchTeammateWork(controller, spawned.agentId)
+    }
+  })
   const result = await enqueueWrite(async (db) => {
     const agent = requireExternalParticipantSync(db, identity)
     const runRow = db.prepare('SELECT status FROM protocol_runs WHERE id = ?').get(identity.runId) as Row | undefined
@@ -2544,6 +2608,24 @@ export async function createExternalProtocolTask(
         roleDescription = `${roleDescription ? `${roleDescription}\n\n` : ''}Suggested provider/model for this role: ${suggestion}.`
       }
     }
+    let delegate: ProtocolAgent | undefined
+    let delegationBaseline: Record<string, string> | undefined
+    if (params.assignTo?.trim()) {
+      if (agent.role !== 'lead') throw new Error('Only the Coordinator lead can delegate work')
+      const selector = params.assignTo.trim().toLowerCase()
+      const roster = listAgentsSync(db, identity.runId)
+      const byId = roster.find(entry => entry.id.toLowerCase() === selector)
+      const matches = byId ? [byId] : roster.filter(entry => entry.name.toLowerCase() === selector && !['failed', 'stopped'].includes(entry.status) && (entry.status !== 'done' || controllers.get(identity.runId)?.sessionIds.has(entry.id)))
+      if (matches.length !== 1) throw new Error('Delegation requires one active teammate; use its agent ID to disambiguate')
+      delegate = matches[0]
+      if (delegate.role !== 'teammate' || (!['idle', 'ready'].includes(delegate.status) && !(delegate.status === 'done' && controllers.get(identity.runId)?.sessionIds.has(delegate.id))) || delegate.taskId) {
+        throw new Error('Teammate is busy or unavailable; send a follow-up message or wait for its current task')
+      }
+      if (!respondToAllowsSync(db, identity.runId, delegate.id, identity.agentId)) throw new Error('Teammate does not accept messages from this participant')
+      const budget = budgetExceededReasonSync(db, rowToRun(db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(identity.runId) as Row))
+      if (budget) throw new Error(`Cannot delegate more work: ${budget}`)
+      delegationBaseline = await worktreeChangeSnapshot(delegate.worktreePath)
+    }
     db.exec('BEGIN IMMEDIATE')
     try {
       const blockedBy = [...new Set((params.dependsOn ?? []).map((entry) => entry.trim()).filter(Boolean))]
@@ -2562,13 +2644,13 @@ export async function createExternalProtocolTask(
         requestedModel,
         requestedEffort,
       }
-      const task = insertTaskSync(db, identity.runId, {
+      let task = insertTaskSync(db, identity.runId, {
         title,
         prompt: detail,
         paths: params.paths ?? [],
         blockedBy,
         phase: params.phase?.trim() || undefined,
-        targetRole: params.targetRole ?? (reopening ? 'lead' : 'teammate'),
+        targetRole: params.targetRole ?? (delegate ? 'teammate' : reopening ? 'lead' : 'teammate'),
         roleName,
         roleDescription,
         seat,
@@ -2613,10 +2695,27 @@ export async function createExternalProtocolTask(
           payload: { status: 'running' },
         })
       }
+      if (delegate) {
+        if (delegate.status === 'done') setAgentStatusSync(db, identity.runId, delegate.id, 'idle', nowIso())
+        const claimed = claimTaskSync(db, identity.runId, delegate.id, task.id)
+        if (!claimed) throw new Error(describeClaimFailureSync(db, identity.runId, delegate.id, task.id))
+        task = claimed
+        db.prepare(`INSERT INTO protocol_task_baselines (run_id, task_id, agent_id, snapshot_json, created_at)
+          VALUES (?, ?, ?, ?, ?)`).run(identity.runId, task.id, delegate.id, JSON.stringify(delegationBaseline), nowIso())
+        insertMessageSync(db, {
+          runId: identity.runId, fromAgentId: identity.agentId, toAgentId: delegate.id,
+          body: `Delegated ${task.id}: ${title}. This task is already yours. Read its scope, continue in this session, and report progress and completion through the Coordinator.`,
+          kind: 'request', priority: 'normal', ts: nowIso(),
+        })
+      }
       db.prepare('UPDATE protocol_runs SET updated_at = ? WHERE id = ?').run(nowIso(), identity.runId)
       db.exec('COMMIT')
       return {
         ...externalMutationResultSync(db, identity.runId, identity.agentId, task),
+        ...(delegate ? { delegation: {
+          agentId: delegate.id, name: delegate.name, provider: delegate.provider,
+          sessionId: delegate.sessionId, delivery: 'queued' as const,
+        } } : {}),
         ...(similarTasks.length ? { similarTasks } : {}),
       }
     } catch (err) {
@@ -2625,6 +2724,8 @@ export async function createExternalProtocolTask(
     }
   })
   notifyRunChanged(identity.runId)
+  const controller = controllers.get(identity.runId)
+  if (controller && result.delegation && !controller.turnInFlight.has(result.delegation.agentId)) void dispatchTeammateWork(controller, result.delegation.agentId)
   return result
 }
 
@@ -7748,6 +7849,7 @@ async function spawnTeammateSession(
   name: string,
   agentId: string,
   teammateProvider: ProtocolRun['provider'],
+  reserveForDelegation = false,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const ts = nowIso()
   let workspace: WorktreeTask | { path: string; branch: string } | null = null
@@ -7788,7 +7890,7 @@ async function spawnTeammateSession(
         id, run_id, name, role, provider, session_id, worktree_path, worktree_branch, task_id, status, last_seen_at, created_at, updated_at
       ) VALUES (?, ?, ?, 'teammate', ?, ?, ?, ?, NULL, 'idle', NULL, ?, ?)
     `).run(agentId, controller.runId, name, session.provider, session.sessionId, workspace.path, workspace.branch, ts, ts)
-    claimTaskSync(tx, controller.runId, agentId)
+    if (!reserveForDelegation) claimTaskSync(tx, controller.runId, agentId)
     return canUseInProcessTools ? issueParticipantTokenSync(tx, controller.runId, agentId, undefined, ts) : undefined
   })
   if (token) {
@@ -7818,11 +7920,15 @@ async function beginExecutionPhase(controller: RunController): Promise<void> {
   }
 
   const teammateCount = Math.max(1, Math.min(controller.maxAgents - 1, tasks.length))
-  for (let index = 0; index < teammateCount; index += 1) {
+  const existingTeammates = listAgentsSync(db, controller.runId).filter(agent => agent.role === 'teammate')
+  for (let index = existingTeammates.length; index < teammateCount; index += 1) {
     if (controller.stopped) return
-    const name = TEAMMATE_NAMES[index % TEAMMATE_NAMES.length]!
+    const roster = listAgentsSync(db, controller.runId)
+    const name = TEAMMATE_NAMES.find(name => !roster.some(agent => agent.name === name))
+    if (!name) break
     const teammateProvider = controller.teammateProviders[index % controller.teammateProviders.length] ?? controller.provider
-    const agentId = `agent-${index + 1}`
+    const usedNumbers = roster.map(agent => Number(/^agent-(\d+)$/.exec(agent.id)?.[1]) || 0)
+    const agentId = `agent-${Math.max(0, ...usedNumbers) + 1}`
     await spawnTeammateSession(controller, name, agentId, teammateProvider)
   }
 
@@ -7854,7 +7960,7 @@ async function beginExecutionPhase(controller: RunController): Promise<void> {
  */
 export async function spawnAdditionalTeammate(
   identity: ExternalProtocolIdentity,
-  params: { provider?: ProtocolRun['provider'] } = {},
+  params: { provider?: ProtocolRun['provider']; reserveForDelegation?: boolean } = {},
 ): Promise<{ agentId: string; name: string }> {
   const controller = controllers.get(identity.runId)
   if (!controller) {
@@ -7876,7 +7982,15 @@ export async function spawnAdditionalTeammate(
   const teammateProvider = (params.provider && controller.teammateProviders.includes(params.provider))
     ? params.provider
     : controller.teammateProviders[existing.length % controller.teammateProviders.length] ?? controller.provider
-  const result = await spawnTeammateSession(controller, name, agentId, teammateProvider)
+  if (params.reserveForDelegation) controller.turnInFlight.add(agentId)
+  let result: Awaited<ReturnType<typeof spawnTeammateSession>>
+  try {
+    result = await spawnTeammateSession(controller, name, agentId, teammateProvider, params.reserveForDelegation)
+  } catch (error) {
+    controller.turnInFlight.delete(agentId)
+    throw error
+  }
+  if (!result.ok) controller.turnInFlight.delete(agentId)
   if (!result.ok) throw new Error(`Failed to spawn teammate: ${result.error}`)
   await appendProtocolEvent({
     version: AGENT_PROTOCOL_VERSION,
@@ -7886,7 +8000,7 @@ export async function spawnAdditionalTeammate(
     summary: `Lead spawned additional teammate ${name} (${agentId}, ${teammateProvider})`,
   }).catch(() => {})
   notifyRunChanged(controller.runId)
-  void dispatchTeammateWork(controller, agentId)
+  if (!params.reserveForDelegation) void dispatchTeammateWork(controller, agentId)
   return { agentId, name }
 }
 
