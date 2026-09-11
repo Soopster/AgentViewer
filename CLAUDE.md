@@ -233,9 +233,33 @@ Both TUIs depend on the same `lib/` provider layer — changes to `sessionBacken
   (`AGENT_VIEWER_TUI_CARD_PROFILE=1`); the mounted-window size is not it either — forcing a 5-card
   window in place of 240 changed nothing; and progressively growing the window after the first
   commit bought nothing for the same reason. What remains is the wider App render, which re-runs in
-  full on any state change because the root is one very large component. Attributing it needs a real
-  CPU profile — the harnesses here cannot resolve a 20-40ms difference against their own run-to-run
-  variance, and bisecting with them produces contradictory answers.
+  full on any state change because the root is one very large component. The harnesses here cannot
+  resolve a 20-40ms difference against their own run-to-run variance, and bisecting with them
+  produces contradictory answers — so use a CPU profile, below.
+- **`bun --cpu-prof --cpu-prof-md` is how to attribute a frame, and `inputPerf`'s render/commit
+  split is how to decide what to profile.** `INPUT_DEBUG_PROFILE=1` prints every over-budget frame
+  as `actual=` (React render CPU) against `commit=` (everything after the commit: OpenTUI's apply,
+  Yoga layout, paint). On a real-session `tab-switch` run the split is unambiguous — 879.6ms actual
+  against 25.7ms commit on the worst frame, 55.5/0.4 on a typical one — so the switch cost is React
+  rendering the root, **not** the terminal painting it. Do not read the aggregate profile the other
+  way round: OpenTUI's `onLifecyclePass`, `bufferDrawBox` and `yogaNodeCalculateLayout` dominate a
+  profile by sample count because they run every frame in the render loop, which says nothing about
+  what makes one frame long. Two more traps in that output: rank by **sample count**, never by the
+  attributed self-time (a single sample landing before a long native call is credited the whole
+  gap — `readContextForConsumer` showed 1.51s from one sample), and the edge counts under
+  "Called by"/"Calls" are samples, not invocations, so 645 there was 18 real `git` spawns.
+- **`findDescendantById` is a full-subtree walk, and the reader used to call it on a timer.**
+  OpenTUI's implementation recurses through every renderable and sorts each level's children on the
+  way down; under a mounted transcript that is the interior of every card. The scroll-slide and
+  tab-restore fixups call it up to `READER_FIXUP_MAX_TRIES` times on a 16ms timer, and it profiled
+  at **9.7% of all CPU** during tab switching. `findReaderCard` scans to
+  `READER_CARD_SEARCH_DEPTH` instead, which is where a card box actually sits, and falls back to the
+  full search. `scrollChildIntoView(id)` takes only an id and does the same walk internally — it was
+  a tenth the cost, so it was left alone. **This is a CPU reduction, not a measured frame win**:
+  interleaved A/B on `tab-switch` and `reader-scroll` could not resolve a difference in worst frame
+  or over-budget count either way, which is what you would expect from work that runs on a timer
+  between commits rather than inside one. Do not re-litigate it with those harnesses; the profile is
+  the measurement of record.
 - **Measure with `npm run tui:navperf`** (`tui/opentui/navPerf.tsx`) before changing any of this. It
   mounts the real root against your local sessions and reports the metrics logger's `nav.*` rollup:
   `select-to-open` (debounce), `open-to-detail` (worker read), `detail-to-paint`, and
@@ -635,6 +659,191 @@ buffer and a converted line ending both *render perfectly*:
   none was. It asserts colours on open, colours travelling with text when a line
   is inserted above them, and a keyword typed mid-file picking up its own colour.
 
+#### OpenTUI render slots (load-bearing)
+
+`tui/opentui/slots.tsx` is a named-slot registry, taken from OpenCode's TUI plugin API
+(`packages/plugin/src/tui.ts`, where every built-in surface — the context panel, changed files, LSP
+and MCP status — is a plugin filling `sidebar_content`). The root declares where a surface may
+appear (`SlotName` plus the props that arrive there); a surface registers what it draws.
+
+**A slot is a structural seam, and in React it is not a performance fix by itself.** OpenCode's TUI
+is `@opentui/solid`, where a slot child is its own reactive scope and isolates by construction. Ours
+is `@opentui/react`: moving a surface into a slot changes which file it lives in and nothing about
+when it renders. The isolation comes from the *other* half — the surface reading its own state from
+a store instead of from the root's `useState`, so `memo` has stable props to compare. Do one without
+the other and you have moved lines, not work.
+
+- **The registry is deliberately not a React context.** A context provider puts every registration on
+  the root's render path, which is the coupling this exists to remove. `<Slot>` subscribes with
+  `useSyncExternalStore`, so registering re-renders that slot alone. `slotContributionIds` is the
+  test seam.
+- **`tui/opentui/coordinatorStore.ts` is the reference shape.** The coordinator rail was three
+  `useState`s and a polling effect in the root, so every reconcile tick and every pushed run change
+  re-rendered the whole app — mounted transcript included — to repaint a list in the left rail. The
+  store owns the state and the feed; `CoordinatorSidebar` subscribes and is `memo`'d; the root's key
+  handlers read `getCoordinatorState()` imperatively and so do not subscribe at all. The root keeps
+  one subscription, to the header counts alone, because the rail's box title is a string prop.
+- **The feed is refcounted, not per-mount.** Two subscribers must not each open their own poll and
+  SSE subscription. Mounting the rail acquires it and unmounting releases it, which reproduces the
+  old `sidebarView !== 'coordinator'` guard exactly.
+- **`readRootRenderCount()` is the only way to assert any of this.** The frame is identical whether
+  the root re-rendered or the rail did, and a `Profiler` wrapping the root cannot tell them apart
+  either — a commit caused by the memoized child still fires it. `coordinatorSlotSmoke.tsx` asserts
+  the count does not move on a coordinator store update; making the root's selector include
+  `selectedKey` was verified to fail it.
+
+- **Not every surface can take this treatment, and the test is whether its state is self-contained.**
+  The coordinator rail qualified: its own feed, its own selection, consumed nowhere else. The fleet
+  strip and the attention inbox do not. They share `waitingSessions` / `viewerAttentionNotes` /
+  `attentionDone` with `sidebarSessionActivity`, which is a dep of `buildSidebarRow` — so the same
+  derived state paints every sidebar session row inside the root's render — and `attentionItems` is
+  derived from four other pieces of root state (`pendingPermissions`, `backgroundPrompts`,
+  `sessions`, `composerTargetSession`). Moving those two behind slots would relocate JSX and isolate
+  nothing, because the root would still hold and re-render the state. Separating them means
+  splitting the activity registry from the reattach machinery first; that is the prerequisite, not
+  an optional extra.
+
+#### Frecency, the stash, and the supersede queue (load-bearing)
+
+Three patterns taken from opencode in September 2026 (survey: `docs/opencode-survey-2026-09-12.md`).
+
+- **Frecency ranks file pickers, and it breaks ties rather than winning them.**
+  `lib/tuiFrecency.ts` scores a path as `frequency / (1 + ageInDays)` — frequency
+  alone pins a file you have finished with, recency alone forgets the file you
+  return to every day. It orders the editor's quick-open and the composer's
+  `@`-mention list, and **a typed query must still find a file that has never
+  been opened**: the sort is match quality first, frecency second. The mention
+  worker tiers its matches (exact basename, basename prefix, basename substring,
+  path substring, subsequence) precisely so frecency has a tie to break.
+  **Ranking happens in the worker, before the result limit.** A bare `@` matches
+  every file, so slicing to twelve first would hand back whatever the file walk
+  produced and leave frecency nothing to order — which is the one case where it
+  matters most. The table is JSONL, appended on use and compacted once per
+  process, so a crash costs the last line rather than the history; a key is
+  `frecencyKey(root, relativePath)` with separators normalized, because on
+  Windows `path.resolve` and a string join disagree and the symptom would be
+  every file silently scoring 0.
+- **The composer stash is durable.** `composerStash` was `useState`, so a
+  shelved prompt died with the process — and a prompt is shelved precisely
+  because the user is not ready to send it, which outlives one session. It is
+  written by `commitComposerStash` in the originating interaction and flushed
+  immediately, the same rule the follow-up queue follows, because a stash that
+  does not survive an immediate exit has not survived anything. Both files go
+  through one `createJsonListStore` in `lib/tuiComposerState.ts`: a torn write of
+  either reads back as unparseable JSON, which is indistinguishable from "nothing
+  stored" and silently discards work the user believed was kept.
+- **`tui/opentui/latestWorkerQueue.ts` supersedes, and only an idempotent read
+  may go through it.** A newer request for the same key replaces a pending older
+  one instead of queueing behind it. The shape it exists for is a surface that
+  re-asks the same question on every keystroke: without superseding, a slow
+  answer makes the queue grow while the user types, and every answer but the
+  last is computed and discarded — the worker spends its time on questions
+  nobody is waiting for any more, which is exactly when the one the user *is*
+  waiting for arrives late. A superseded caller is resolved with the newer
+  answer, which is sound only because it answers the same question of newer
+  state. **A dispatched request is never superseded** (it has already been
+  posted; a request arriving during `run` starts a new slot), and a rejecting
+  `run` is reported through `onError` rather than escaping — an unhandled
+  rejection is fatal under Bun, and the smoke caught exactly that.
+  The composer's mention filter uses it; the threading worker does **not** yet,
+  because the `format` path's patch/delivery bookkeeping depends on post order.
+
+#### Chord help is derived from the chord table (load-bearing)
+
+`tui/opentui/chordHelp.ts` builds every description of a prefix chord — the
+pending-chord hint in the status bar, the unknown-key notice, and the overlay —
+from one table per prefix. Taken from opencode's which-key panel, which renders
+from the binding registry rather than from a maintained list.
+
+The problem is drift, not effort. ⌃B was described in two places and ⌃K in two
+more, each a hand-written string, so a chord could be added to the dispatcher and
+stay out of some of its own help — or, worse, a removed chord could go on being
+advertised. `SPLIT_CHORD_HELP` had a partial guard; ⌃K had none, and its command
+ids and labels lived apart, so a renamed command kept its old label.
+`chordHelpSmoke.ts` now asserts both directions for ⌃K against
+`PORTABLE_COMMAND_CHORDS`, which is the dispatcher's own table.
+
+- **A self-revealed panel must not consume the keystroke it is advertising.**
+  Hesitating on a prefix reveals its keys after `CHORD_HELP_REVEAL_MS`; the
+  overlay's dismiss branch sits *above* the chord dispatcher, so a panel that
+  absorbed the next key would mean hesitating changed what that key does. Only a
+  panel the user opened on purpose (`⌃B ?`, the palette) sets `dismissOnKey`, and
+  that is the one that closes on any key — a reference card the user asked for
+  should not leave them hunting for the key that dismisses it.
+  `chordHelpRevealSmoke.tsx` presses an *unbound* key while a revealed panel is
+  up and asserts the dispatcher's notice appears: the panel and the pending chord
+  are both on screen, and which of them owns the next key is invisible in the
+  frame until you press one. Widening the branch to `if (chordHelp)` was verified
+  to fail it.
+- **The hint lists only what the next keystroke can do.** ⌃B's table also
+  documents the keys a *focused pane* takes, which need no prefix; those belong
+  in the overlay as reference and never in the hint.
+- **The hint is one line, and what truncation costs is the escape hatch.** It
+  shows one key per entry (an entry may bind aliases — `% · v` — and spelling all
+  of them out costs more width than the rest of the entry), uses `short` wording,
+  and an entry may opt out with `hint: false`. Entries are **included by
+  default**, so a new chord cannot go silently unadvertised; opting one out is a
+  deliberate decision that it refines a listed key. The smoke pins the rendered
+  width against a 120-column bar and asserts `cancel` and `all keys` survive.
+- **The overlay is budgeted against the composer dock, which draws over it.**
+  The old `height - 8` ignored the dock and clipped the footer — which is where
+  the panel says how to dismiss it, so an overflow note the reader never sees.
+
+#### Streaming markdown renders a block at a time (load-bearing)
+
+`lib/markdownStream.ts` splits a document into top-level blocks so a streaming
+answer re-renders only its tail: `MarkdownBlockView` in `components/MessageItem.tsx`
+is memoized per block, and react-markdown re-parses whatever it is handed, so
+handing it the whole document per delta makes the cost of one token grow with
+everything already written. Measured over 120 deltas: **191ms → 36ms at 1.5KB,
+374ms → 54ms at 4.7KB, 837ms → 104ms at 11.9KB** (5.3x / 6.9x / 8.0x). The
+saving growing with the document is the point.
+
+- **Splitting is only safe where a block means the same thing alone as it does
+  in the document**, and two constructs are document-scoped: a link reference
+  definition (`[1]: https://…`) and a GFM footnote definition both resolve
+  references anywhere in the document. Split apart, the paragraph loses its
+  definition and renders literal bracket text — a silent downgrade from a link,
+  with no error and a result that still looks like markdown. Both bail out to
+  whole-document rendering. Merely *mentioning* `[^` in prose (a regex, say)
+  must not: that would disable the optimization for the whole answer.
+- **The blocks must reassemble into exactly the input.** A `space` token is
+  attached to the preceding block rather than dropped, and the projection
+  verifies the total length before splitting — a lexer that rewrote a `raw`
+  would lose content from the middle of an answer and nothing else would notice.
+- **A finished block's `raw` must be byte-identical across deltas** or nothing
+  memoizes, and keys are positional for the same reason: keying by content would
+  remount the tail on every delta, which is the work this exists to avoid.
+- **The tail block is never marked complete**, even when it currently parses as
+  a finished construct — the next delta may extend it.
+- `scripts/markdownStreamSmoke.ts` compares per-block rendering against
+  whole-document rendering across a corpus, because both outputs look like
+  plausible markdown and only a differential test can tell them apart. Dropping
+  the reference-definition bail-out and dropping the `space` tokens were both
+  verified to fail it.
+
+#### The composer's git indicator is spawn-bound, not CPU-bound (load-bearing)
+
+`fetchGitSummary` runs three `git` commands (`rev-parse`, `status --porcelain -u`, `rev-list
+--walk-reflogs`) behind the composer's branch/dirty indicator. **Measure it in process spawns, not
+milliseconds.** On this repo one poll costs ~26ms wall but only **~4ms of main-thread CPU and under
+1ms of event-loop lag** — the work is in the child processes, on other cores. A CPU profile makes
+this look far worse than it is: `lib/gitNodeProvider.ts`'s node was credited 929.7ms, 562.8ms of
+which came from a *single* sample inside `node:child_process`, and its "645 calls" were 645 samples
+against 18 real spawns. Do not go looking for a render-thread stall here; there isn't one.
+
+What is real is the spawn rate. `tui/opentui/gitSummaryCache.ts` keys by **cwd rather than by
+session**, which is what collapses the waste: the composer effect fires immediately whenever
+`composerWorkingDirectory` changes, so switching between two sessions in the same repository — the
+common case, and the point of tabs — used to re-spawn all three commands per switch against an
+answer milliseconds old. The cache also single-flights, so concurrent readers share one spawn rather
+than thirty. Its TTL is deliberately **shorter than the poll interval**: this deduplicates
+back-to-back readers, it does not slow the poll, and a cache outliving the interval would make the
+working-tree indicator stale on purpose. `peekGitSummaryCached` is not TTL-gated for the opposite
+reason — a stale branch name for the moment before a refresh lands beats a blank one.
+`gitSummaryCacheSmoke.ts` asserts the reuse by timing (a cached read must be far under a real ~26ms
+one), because spawn count has no other observable.
+
 #### OpenTUI memory patterns (load-bearing)
 
 The TUI's footprint is dominated by **parsed module code across isolates**, not by live objects. A
@@ -846,20 +1055,20 @@ A handful of files dominate the codebase. **Don't `Read` these without `offset`/
 
 | File | Lines | What lives there |
 |---|---:|---|
-| `tui/opentui/App.tsx` | ~4570 | OpenTUI root; entire reader, composer, key handling, `cardDisplayData` memo, scrollbox layout |
-| `components/MessageView.tsx` | ~4220 | Web virtual-scroll timeline, top bar, session controls, `VirtualTimelineRow`, `handleTimelineRowMeasure` |
-| `components/MessageItem.tsx` | ~3240 | Renderer for every threaded block — all tool cards (bash/edit/read/grep/glob/agent/etc.) live here |
+| `tui/opentui/App.tsx` | ~22730 | OpenTUI root; entire reader, composer, key handling, `cardDisplayData` memo, scrollbox layout |
+| `components/MessageView.tsx` | ~10460 | Web virtual-scroll timeline, top bar, session controls, `VirtualTimelineRow`, `handleTimelineRowMeasure` |
+| `components/MessageItem.tsx` | ~6750 | Renderer for every threaded block — all tool cards (bash/edit/read/grep/glob/agent/etc.) live here |
 | `tui/App.tsx` | ~2450 | Legacy Ink TUI root |
-| `lib/sessionBackend.ts` | ~7000 | Send/turn path per-provider switch, plus the router that dispatches read ops to `lib/adapters/` |
-| `components/SessionList.tsx` | ~2050 | Sidebar: project grouping, search, tag filters, collapsible groups |
+| `lib/sessionBackend.ts` | ~6900 | Send/turn path per-provider switch, plus the router that dispatches read ops to `lib/adapters/` |
+| `components/SessionList.tsx` | ~2330 | Sidebar: project grouping, search, tag filters, collapsible groups |
 | `lib/sessionPersistence.ts` | ~1570 | SQLite mirror of sessions+messages; powers `/api/session-index/*` search/rebuild/stats |
 | `components/GitPopover.tsx` | ~1370 | Git diff/branch popover |
-| `tui/opentui/EditorPopover.tsx` | ~4715 | Project editor: explorer, buffers, LSP, completion, search, highlighting, key handling |
+| `tui/opentui/EditorPopover.tsx` | ~5510 | Project editor: explorer, buffers, LSP, completion, search, highlighting, key handling |
 | `tui/opentui/AnalyticsPopover.tsx` | ~1150 | OpenTUI analytics overlay (separate impl from the web one) |
 | `components/AnalyticsPopover.tsx` | ~1050 | Recharts analytics |
 | `components/CommandPalette.tsx` | ~1010 | Web cmd-K palette: provider switch, theme, session actions, navigation — single registry of user-facing commands |
 | `app/globals.css` | ~1000 | All ~30 themes' CSS vars + base styles (each `[data-theme="…"]` block is contiguous) |
-| `tui/format.ts` | ~915 | `formatTranscriptCards` / `formatMessageExpanded` (shared by both TUIs) |
+| `tui/format.ts` | ~2915 | `formatTranscriptCards` / `formatMessageExpanded` (shared by both TUIs) |
 | `tui/theme.ts` | ~990 | LIGHT/DARK/CYBER palettes + `getProviderAccent` |
 
 Recommended access patterns:

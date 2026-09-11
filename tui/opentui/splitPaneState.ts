@@ -36,37 +36,49 @@ export function adjustSplitReaderShare(
 // Every ⌃B chord in one table. The overlay, the status bar's chord hint and the
 // unknown-key notice all read it, so a chord cannot be added to the dispatcher
 // and quietly stay out of its own help.
-export type SplitChordEntry = { keys: string; label: string }
+export type SplitChordEntry = {
+  keys: string
+  label: string
+  /** Terser wording for the one-line pending-chord hint. */
+  short?: string
+  /**
+   * Set false to keep an entry out of the one-line hint. Entries are included
+   * by default, so a new chord cannot go silently unadvertised — opting one out
+   * is a deliberate decision that it is a refinement of a listed key and that
+   * the overlay is where it belongs.
+   */
+  hint?: false
+}
 export type SplitChordSection = { title: string; entries: SplitChordEntry[] }
 export const SPLIT_CHORD_HELP: SplitChordSection[] = [
   {
     title: 'split',
     entries: [
-      { keys: '% · v', label: 'split side by side' },
-      { keys: '" · s', label: 'split stacked' },
-      { keys: 'r', label: 'rotate side-by-side ↔ stacked' },
-      { keys: 'n', label: 'next session in this pane' },
-      { keys: 'x', label: 'close pane' },
-      { keys: 'z', label: 'toggle split panes off/on' },
+      { keys: '% · v', label: 'split side by side', short: 'split' },
+      { keys: '" · s', label: 'split stacked', short: 'stacked' },
+      { keys: 'r', label: 'rotate side-by-side ↔ stacked', short: 'rotate' },
+      { keys: 'n', label: 'next session in this pane', short: 'next' },
+      { keys: 'x', label: 'close pane', short: 'close' },
+      { keys: 'z', label: 'toggle split panes off/on', short: 'toggle' },
     ],
   },
   {
     title: 'size',
     entries: [
-      { keys: '<', label: 'shrink the reader' },
-      { keys: '>', label: 'grow the reader' },
-      { keys: '=', label: 'even sizes' },
+      { keys: '<', label: 'shrink the reader', short: 'shrink' },
+      { keys: '>', label: 'grow the reader', short: 'grow' },
+      { keys: '=', label: 'even sizes', short: 'even' },
     ],
   },
   {
     title: 'focus',
     entries: [
-      { keys: 'o · → · tab', label: 'focus next pane' },
-      { keys: '←', label: 'focus previous pane' },
-      { keys: ';', label: 'flip reader ↔ last pane' },
-      { keys: '1 … 9', label: 'focus pane by number' },
-      { keys: '?', label: 'this help' },
-      { keys: 'esc · ⌃C · ⌃G', label: 'cancel the chord' },
+      { keys: 'o · → · tab', label: 'focus next pane', short: 'focus' },
+      { keys: '←', label: 'focus previous pane', hint: false },
+      { keys: ';', label: 'flip reader ↔ last pane', hint: false },
+      { keys: '1 … 9', label: 'focus pane by number', hint: false },
+      { keys: '?', label: 'this help', short: 'all keys' },
+      { keys: 'esc · ⌃C · ⌃G', label: 'cancel the chord', short: 'cancel' },
     ],
   },
   {

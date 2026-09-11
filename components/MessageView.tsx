@@ -1,5 +1,6 @@
 'use client'
 
+import CoordinatorConversation from './CoordinatorConversation'
 import Link from 'next/link'
 import { getAssistantDisplayName } from '@/lib/provider'
 import { memo, useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo, useDeferredValue, useSyncExternalStore } from 'react'
@@ -9052,6 +9053,7 @@ function MessageViewInner({
         >
           ▼
         </button>
+        {session ? <CoordinatorConversation key={`${session.provider}:${session.sessionId}`} session={session} onOpenSession={onOpenSession} /> : null}
         {(modelsPending || sendError || sessionActionError || sessionActionNotice || (session?.provider === 'codex' && codexExternalWriter)) && (
           <div className="av-web-composer-banner-stack">
             {modelsPending && !sendError ? (

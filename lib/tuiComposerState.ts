@@ -5,6 +5,7 @@ import path from 'node:path'
 const DATA_DIR = path.join(process.cwd(), '.agent-viewer-data', 'composer-drafts')
 const FILE = path.join(DATA_DIR, 'drafts.json')
 const QUEUE_FILE = path.join(DATA_DIR, 'queue-v1.json')
+const STASH_FILE = path.join(DATA_DIR, 'stash-v1.json')
 
 type DraftStore = Record<string, { text: string }>
 
@@ -60,50 +61,99 @@ export function readComposerDraft(storageKey: string): string {
   return store[storageKey]?.text ?? ''
 }
 
-let queuedComposerState: unknown[] | null = null
-let queuedComposerWriteTimer: ReturnType<typeof setTimeout> | null = null
+/**
+ * A debounced, atomically-written JSON list file. Both the follow-up queue and
+ * the composer stash hold durable arrays of composer entries whose only
+ * difference is the file and the cap, so they share one implementation: a torn
+ * write of either reads back as unparseable JSON, which is indistinguishable
+ * from "nothing queued" and would silently drop work the user believed was kept.
+ */
+function createJsonListStore(file: string, options: { delayMs: number; max?: number }) {
+  let state: unknown[] | null = null
+  let timer: ReturnType<typeof setTimeout> | null = null
 
-function readComposerQueueSync(): unknown[] {
-  try {
-    if (!existsSync(QUEUE_FILE)) return []
-    const parsed = JSON.parse(readFileSync(QUEUE_FILE, 'utf-8')) as { version?: unknown; entries?: unknown }
-    return parsed.version === 1 && Array.isArray(parsed.entries) ? parsed.entries : []
-  } catch {
-    return []
+  function readSync(): unknown[] {
+    try {
+      if (!existsSync(file)) return []
+      const parsed = JSON.parse(readFileSync(file, 'utf-8')) as { version?: unknown; entries?: unknown }
+      return parsed.version === 1 && Array.isArray(parsed.entries) ? parsed.entries : []
+    } catch {
+      return []
+    }
+  }
+
+  function flush(): boolean {
+    timer = null
+    if (!state) return true
+    try {
+      ensureDir()
+      const temporaryFile = `${file}.${process.pid}.tmp`
+      writeFileSync(temporaryFile, JSON.stringify({ version: 1, entries: state }), 'utf-8')
+      renameSync(temporaryFile, file)
+      return true
+    } catch {
+      // best-effort; the in-memory list remains authoritative for this process
+      return false
+    }
+  }
+
+  return {
+    read<T>(isEntry: (value: unknown) => value is T): T[] {
+      if (!state) state = readSync()
+      return state.filter(isEntry)
+    },
+    write<T>(entries: T[]): void {
+      // The cap keeps the newest, which is the end of the list for both callers.
+      state = options.max !== undefined && entries.length > options.max
+        ? entries.slice(entries.length - options.max)
+        : entries
+      if (!timer) timer = setTimeout(flush, options.delayMs)
+    },
+    flushWrites(): boolean {
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+      return flush()
+    },
   }
 }
 
-function flushComposerQueue(): boolean {
-  queuedComposerWriteTimer = null
-  if (!queuedComposerState) return true
-  try {
-    ensureDir()
-    const temporaryFile = `${QUEUE_FILE}.${process.pid}.tmp`
-    writeFileSync(temporaryFile, JSON.stringify({ version: 1, entries: queuedComposerState }), 'utf-8')
-    renameSync(temporaryFile, QUEUE_FILE)
-    return true
-  } catch {
-    // best-effort; the in-memory queue remains authoritative for this process
-    return false
-  }
-}
+const queueStore = createJsonListStore(QUEUE_FILE, { delayMs: 100 })
 
 export function readComposerQueue<T>(isEntry: (value: unknown) => value is T): T[] {
-  if (!queuedComposerState) queuedComposerState = readComposerQueueSync()
-  return queuedComposerState.filter(isEntry)
+  return queueStore.read(isEntry)
 }
 
 export function scheduleWriteComposerQueue<T>(entries: T[]): void {
-  queuedComposerState = entries
-  if (!queuedComposerWriteTimer) queuedComposerWriteTimer = setTimeout(flushComposerQueue, 100)
+  queueStore.write(entries)
 }
 
 export function flushComposerQueueWrites(): boolean {
-  if (queuedComposerWriteTimer) {
-    clearTimeout(queuedComposerWriteTimer)
-    queuedComposerWriteTimer = null
-  }
-  return flushComposerQueue()
+  return queueStore.flushWrites()
+}
+
+// --- Composer stash (durable shelved drafts, newest last) ---
+
+/**
+ * Deep enough that shelving is never a decision about what to discard, bounded
+ * so a stash nobody prunes cannot grow without limit. Matches opencode's
+ * `MAX_STASH_ENTRIES`.
+ */
+export const COMPOSER_STASH_MAX = 50
+
+const stashStore = createJsonListStore(STASH_FILE, { delayMs: 100, max: COMPOSER_STASH_MAX })
+
+export function readComposerStash<T>(isEntry: (value: unknown) => value is T): T[] {
+  return stashStore.read(isEntry)
+}
+
+export function scheduleWriteComposerStash<T>(entries: T[]): void {
+  stashStore.write(entries)
+}
+
+export function flushComposerStashWrites(): boolean {
+  return stashStore.flushWrites()
 }
 
 // --- Sent history (global, text-only, persisted across restarts) ---

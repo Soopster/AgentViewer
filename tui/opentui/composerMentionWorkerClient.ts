@@ -1,4 +1,5 @@
-import type { ComposerMentionFileEntry } from './composerMentionWorker'
+import type { ComposerMentionFileEntry } from './composerMentionRanking'
+import { createLatestWorkerQueue } from './latestWorkerQueue'
 import { tuiWorkerUrl } from './workerUrl'
 
 type Pending = {
@@ -9,6 +10,16 @@ type Pending = {
 type WorkerResponse =
   | { id: number; ok: true; matches: ComposerMentionFileEntry[] }
   | { id: number; ok: false; error: string }
+
+type MentionRequest = {
+  entries: ComposerMentionFileEntry[]
+  query: string
+  limit: number
+  frecency?: Record<string, number>
+  frecencyPrefix?: string
+  resolve: (matches: ComposerMentionFileEntry[]) => void
+  reject: (error: Error) => void
+}
 
 let worker: Worker | null = null
 let requestCounter = 0
@@ -39,15 +50,77 @@ function ensureWorker(): Worker {
   return w
 }
 
+function dispatch(request: MentionRequest): Promise<void> {
+  const id = ++requestCounter
+  const w = ensureWorker()
+  return new Promise<void>((settle) => {
+    pending.set(id, {
+      resolve: (matches) => {
+        request.resolve(matches)
+        settle()
+      },
+      reject: (error) => {
+        request.reject(error)
+        settle()
+      },
+    })
+    w.postMessage({
+      id,
+      entries: request.entries,
+      query: request.query,
+      limit: request.limit,
+      frecency: request.frecency,
+      frecencyPrefix: request.frecencyPrefix,
+    })
+  })
+}
+
+/**
+ * One pending filter at a time: the composer asks the same question of the same
+ * file list on every keystroke, and each `postMessage` structured-clones up to
+ * 5 000 entries. Without superseding, typing faster than the worker answers
+ * queues a clone per character and the answer the user is waiting on arrives
+ * behind every answer they have already typed past.
+ *
+ * A superseded caller is resolved with the newer query's matches. That is wrong
+ * for its query and right for the composer: the only consumer discards a result
+ * whose query is no longer the one in the box.
+ */
+const queue = createLatestWorkerQueue<MentionRequest>({
+  run: dispatch,
+  supersede: (superseded, replacement) => {
+    const { resolve, reject } = superseded
+    const chainedResolve = replacement.resolve
+    const chainedReject = replacement.reject
+    replacement.resolve = (matches) => {
+      chainedResolve(matches)
+      resolve(matches)
+    }
+    replacement.reject = (error) => {
+      chainedReject(error)
+      reject(error)
+    }
+  },
+})
+
 export function filterComposerMentionFilesAsync(
   entries: ComposerMentionFileEntry[],
   query: string,
   limit: number,
+  frecency?: Record<string, number>,
+  frecencyPrefix?: string,
 ): Promise<ComposerMentionFileEntry[]> {
-  const id = ++requestCounter
-  const w = ensureWorker()
   return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject })
-    w.postMessage({ id, entries, query, limit })
+    queue.push({
+      // One composer, one pending filter. The prefix keys by project so two
+      // panes over different repositories do not supersede each other.
+      key: `mention:${frecencyPrefix ?? ''}`,
+      request: { entries, query, limit, frecency, frecencyPrefix, resolve, reject },
+    })
   })
+}
+
+/** Test seam: pending (not yet dispatched) filter count. */
+export function composerMentionQueueSize(): number {
+  return queue.size
 }

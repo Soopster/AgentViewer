@@ -273,6 +273,8 @@ let writeQueue: Promise<unknown> = Promise.resolve()
 
 // Per-run work-loop state. Only exists in the process that started the run.
 type RunController = {
+  /** Human owns the lead conversation; only teammates receive automatic turns. */
+  interactiveLeadId?: string
   runId: string
   prompt: string
   provider: ProtocolRun['provider']
@@ -2496,6 +2498,95 @@ export async function runExternalProtocolIdempotent<T>(
   }
 }
 
+/** Adopt external/chat-led runs without launching or taking over their lead. */
+async function adoptInteractiveController(identity: ExternalProtocolIdentity): Promise<RunController> {
+  const existing = controllers.get(identity.runId)
+  if (existing) return existing
+  const db = await getDatabase()
+  const lead = requireExternalParticipantSync(db, identity)
+  if (lead.role !== 'lead') throw new Error('Only the Coordinator lead can start teammates')
+  const snapshot = readSnapshotSync(db, identity.runId)
+  if (!snapshot || !['planning', 'running', 'synthesizing'].includes(snapshot.run.status)) throw new Error('Coordinator run is not accepting tasks')
+  // Recheck after the asynchronous database open so concurrent callers share one supervisor.
+  const raced = controllers.get(identity.runId)
+  if (raced) return raced
+  const run = snapshot.run
+  const controller: RunController = {
+    interactiveLeadId: lead.id, runId: run.id, prompt: run.prompt, provider: run.provider,
+    teammateProviders: [run.provider], baseCwd: run.baseCwd, maxAgents: run.maxAgents,
+    gateCommand: run.gateCommand, requirePlanApproval: run.requirePlanApproval === true,
+    autonomy: run.autonomy, requireReview: run.requireReview, acceptanceContract: run.acceptanceContract,
+    budget: run.budget, useWorktrees: run.useWorktrees !== false, stopped: false,
+    synthesisStarted: false, synthesisFindingFloorRowid: 0, interventionsUsed: 0, forcedInterventionsUsed: 0,
+    turnInFlight: new Set(), sessionIds: new Map(), pendingSessions: new Set(), nudges: new Map(),
+    dispatchNotes: new Map(), failedProviders: new Map(), sdkIdentities: new Map([['lead', identity]]),
+    executionStarted: true, sameProviderRetries: new Map(), claudeUsageCumulative: new Map(),
+  }
+  // Restore only sessions that this server created. External/interactive participants
+  // retain control of their own turns; never replay work that was in progress.
+  for (const agent of snapshot.agents) {
+    if (!/^agent-\d+$/.test(agent.id) || agent.sessionId.startsWith('external:')) continue
+    controller.sessionIds.set(agent.id, agent.sessionId)
+    const token = rotateSessionParticipantTokenSync(db, run.id, agent.id)
+    const worker = { runId: run.id, agentId: agent.id, token }
+    controller.sdkIdentities.set(agent.id, worker)
+    registerCoordinatorToolsForProvider(agent.provider, agent.sessionId, worker)
+  }
+  controllers.set(run.id, controller)
+  return controller
+}
+
+export async function readSessionCoordinator(sessionId: string, provider: ProtocolRun['provider']): Promise<ProtocolRunSnapshot | null> {
+  const db = await getDatabase()
+  const row = db.prepare(`SELECT run_id FROM protocol_agents WHERE session_id = ? AND provider = ? ORDER BY created_at DESC LIMIT 1`)
+    .get(sessionId, provider) as Row | undefined
+  return row ? readSnapshotSync(db, String(row.run_id)) : null
+}
+
+/** Bind a normal conversation as the human-driven lead. Stable IDs make setup replayable. */
+export async function ensureSessionCoordinator(params: { sessionId: string; provider: ProtocolRun['provider']; cwd: string }): Promise<ProtocolRunSnapshot> {
+  const key = `chat-${createHash('sha256').update(`${params.provider}:${params.sessionId}`).digest('hex').slice(0, 40)}`
+  return serializeAutomaticDelegation(key, async () => {
+    const existing = await readSessionCoordinator(params.sessionId, params.provider)
+    if (existing) return existing
+    const db = await getDatabase()
+    let snapshot = readSnapshotSync(db, key)
+    if (!snapshot) snapshot = (await createExternalProtocolRun({ runId: key, prompt: 'Interactive collaboration in this conversation',
+      baseCwd: params.cwd, provider: params.provider, participantName: 'lead', maxAgents: 4 })).snapshot
+    const lead = snapshot.agents.find(agent => agent.role === 'lead')!
+    await enqueueWrite(tx => {
+      tx.prepare('UPDATE protocol_agents SET session_id = ? WHERE run_id = ? AND id = ?').run(params.sessionId, key, lead.id)
+    })
+    anyActiveCoordinatorAgentCache = null
+    return (await readSessionCoordinator(params.sessionId, params.provider))!
+  })
+}
+
+function rotateSessionParticipantTokenSync(db: SqliteDatabase, runId: string, agentId: string): string {
+  const token = randomBytes(32).toString('base64url')
+  db.prepare('DELETE FROM protocol_participant_tokens WHERE run_id = ? AND agent_id = ?').run(runId, agentId)
+  return issueParticipantTokenSync(db, runId, agentId, token)
+}
+
+export async function sessionCoordinatorIdentity(sessionId: string, provider: ProtocolRun['provider']): Promise<ExternalProtocolIdentity> {
+  return serializeAutomaticDelegation(`identity:${provider}:${sessionId}`, async () => {
+    const snapshot = await readSessionCoordinator(sessionId, provider)
+    const lead = snapshot?.agents.find(agent => agent.sessionId === sessionId && agent.provider === provider && agent.role === 'lead')
+    if (!snapshot || !lead) throw new Error('Delegate from the lead conversation')
+    if (['completed', 'failed', 'stopped'].includes(snapshot.run.status)) throw new Error('This run has ended')
+    const controller = controllers.get(snapshot.run.id)
+    const existing = controller?.sdkIdentities.get('lead')
+    if (existing) return existing
+    // Only this browser-owned session is rebound. External lead credentials are
+    // never rotated by automatic teammate startup.
+    const token = await enqueueWrite(db => rotateSessionParticipantTokenSync(db, snapshot.run.id, lead.id))
+    const identity = { runId: snapshot.run.id, agentId: lead.id, token }
+    await adoptInteractiveController(identity)
+    registerCoordinatorToolsForProvider(provider, sessionId, identity)
+    return identity
+  })
+}
+
 /** Browser-owned delegation uses the server's bound lead identity, never a browser capability token. */
 export async function delegateProtocolTaskAdmin(runId: string, params: {
   detail: string; to?: string; paths?: string[]; requestId: string
@@ -2548,7 +2639,7 @@ export async function createExternalProtocolTask(
     const run = db.prepare('SELECT status FROM protocol_runs WHERE id = ?').get(identity.runId) as Row | undefined
     if (!run || !['planning', 'running', 'synthesizing'].includes(String(run.status))) throw new Error('Coordinator run is not accepting tasks')
     if (!params.title.trim() || !params.detail.trim()) throw new Error('task title and detail are required')
-    const controller = controllers.get(identity.runId)
+    const controller = controllers.get(identity.runId) ?? await adoptInteractiveController(identity)
     if (controller && params.requestedProvider && !controller.teammateProviders.includes(params.requestedProvider)) {
       throw new Error('Requested provider is not configured for this team')
     }
@@ -6217,6 +6308,7 @@ ensureMailSweep()
  * spend earlier in the run.
  */
 async function dispatchLeadIntervention(controller: RunController, opts: { force?: boolean; supervision?: boolean } = {}): Promise<void> {
+  if (controller.interactiveLeadId) return
   if (controller.stopped || controller.synthesisStarted) return
   const db = await getDatabase()
   const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(controller.runId) as Row | undefined
@@ -7352,7 +7444,7 @@ async function dispatchAgentTurn(
   message: string,
   opts: { permissionMode?: 'plan'; inboxMessageIds?: string[] } = {},
 ): Promise<void> {
-  if (controller.stopped || controller.turnInFlight.has(agentId)) return
+  if (controller.stopped || controller.interactiveLeadId === agentId || controller.turnInFlight.has(agentId)) return
   controller.turnInFlight.add(agentId)
   let retryAfterFailover = false
   let providerFailureHandled = false
@@ -7638,7 +7730,7 @@ async function handleAgentTurnEnd(controller: RunController, agentId: string): P
 
 /** Claim and run a playbook's explicit lead lane once its phase barrier opens. */
 async function dispatchClaimableLeadTask(controller: RunController): Promise<boolean> {
-  if (controller.stopped || controller.synthesisStarted || controller.turnInFlight.has('lead')) return false
+  if (controller.interactiveLeadId || controller.stopped || controller.synthesisStarted || controller.turnInFlight.has('lead')) return false
   const db = await getDatabase()
   const lead = listAgentsSync(db, controller.runId).find((agent) => agent.role === 'lead')
   if (!lead) return false
@@ -7649,6 +7741,7 @@ async function dispatchClaimableLeadTask(controller: RunController): Promise<boo
 }
 
 async function maybeStartSynthesis(controller: RunController): Promise<void> {
+  if (controller.interactiveLeadId) return
   if (controller.stopped || controller.synthesisStarted) return
   const db = await getDatabase()
   const lead = listAgentsSync(db, controller.runId).find((agent) => agent.role === 'lead')
@@ -7728,6 +7821,7 @@ async function maybeStartSynthesis(controller: RunController): Promise<void> {
 }
 
 async function handleLeadTurnEnd(controller: RunController): Promise<void> {
+  if (controller.interactiveLeadId) return
   const db = await getDatabase()
   const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(controller.runId) as Row | undefined
   if (!runRow) return

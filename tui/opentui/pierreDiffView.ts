@@ -1,3 +1,6 @@
+import { DiffHighlightCache, estimateHighlightBytes } from './diffHighlightCache'
+import { diffContextGap, type DiffContextGap } from './gitDiffContext'
+import { createHash } from 'node:crypto'
 import {
   cleanLastNewline,
   getFiletypeFromFileName,
@@ -20,6 +23,9 @@ export type TuiRenderSpan = {
 }
 
 export type TuiPierreDiffRow = {
+  filePath?: string
+  contextGap?: DiffContextGap
+  expandedGapId?: string
   key: string
   tone: TuiPierreDiffRowTone
   text: string
@@ -43,6 +49,9 @@ export type TuiSplitRowSide = {
 /** One row in split view. Full-width header rows (file/hunk/meta/tree) use `.text`;
  *  paired change/context rows use `.left` and `.right`. */
 export type TuiPierreSplitRow = {
+  filePath?: string
+  contextGap?: DiffContextGap
+  expandedGapId?: string
   key: string
   tone: TuiPierreDiffRowTone | 'split-change' | 'split-context'
   text?: string
@@ -51,6 +60,8 @@ export type TuiPierreSplitRow = {
 }
 
 export type TuiPierreDiffView = {
+  files?: FileDiffMetadata[]
+  patches?: Map<string, string>
   rows: TuiPierreDiffRow[]
   splitRows: TuiPierreSplitRow[]
 }
@@ -148,9 +159,8 @@ export function flattenHastLine(
 
 // ─── Highlight loading & per-content cache ────────────────────────────────────
 
-const highlightCache = new Map<string, Map<string, TuiFileHighlights>>()
+const highlightCache = new DiffHighlightCache<Map<string, TuiFileHighlights>>()
 const highlightInFlight = new Map<string, Promise<Map<string, TuiFileHighlights>>>()
-const HIGHLIGHT_CACHE_MAX = 60
 
 const RENDER_OPTIONS = {
   dark: {
@@ -169,19 +179,38 @@ const RENDER_OPTIONS = {
   },
 }
 
+export async function highlightDiffFile(file: FileDiffMetadata, appearance: 'dark' | 'light'): Promise<TuiFileHighlights> {
+  const options = RENDER_OPTIONS[appearance]
+  const lang = file.lang ?? getFiletypeFromFileName(diffDisplayPath(file)) ?? 'text'
+  const highlighter = await getSharedHighlighter({ ...getHighlighterOptions(lang, { theme: options.theme }), preferredHighlighter: 'shiki-wasm' })
+  const highlighted = renderDiffWithHighlighter(file, highlighter, options)
+  return { deletionLines: highlighted.code.deletionLines as Array<HastNode | undefined>, additionLines: highlighted.code.additionLines as Array<HastNode | undefined> }
+}
+
+export type DiffFileSpanHighlights = { old: Map<number, TuiRenderSpan[]>; new: Map<number, TuiRenderSpan[]> }
+
+/** Worker output retains only terminal spans indexed by source line, not HAST or duplicate source rows. */
+export async function highlightDiffFileSpans(file: FileDiffMetadata, appearance: 'dark' | 'light'): Promise<DiffFileSpanHighlights> {
+  const highlighted = await highlightDiffFile(file, appearance)
+  const result: DiffFileSpanHighlights = { old: new Map(), new: new Map() }
+  for (const row of buildFileSplitRows(file, highlighted, appearance, 'highlight', 0, false)) {
+    if (row.left?.lineNum !== undefined && row.left.spans) result.old.set(row.left.lineNum, row.left.spans)
+    if (row.right?.lineNum !== undefined && row.right.spans) result.new.set(row.right.lineNum, row.right.spans)
+  }
+  return result
+}
+
 export async function loadDiffHighlights(
   diffText: string,
   cacheKey: string,
   appearance: 'dark' | 'light',
 ): Promise<Map<string, TuiFileHighlights>> {
-  const fullKey = `${appearance}:${cacheKey}:${diffText.length}`
+  const fullKey = `${appearance}:${cacheKey}:${createHash("sha256").update(diffText).digest("hex")}`
   const hit = highlightCache.get(fullKey)
   if (hit) return hit
 
   const inflight = highlightInFlight.get(fullKey)
   if (inflight) return inflight
-
-  const options = RENDER_OPTIONS[appearance]
 
   const promise = (async (): Promise<Map<string, TuiFileHighlights>> => {
     try {
@@ -191,29 +220,13 @@ export async function loadDiffHighlights(
 
       for (const file of files) {
         try {
-          // parsePatchFiles leaves `lang` unset; renderDiffWithHighlighter falls
-          // back to the filename-derived language, so load that same language.
-          const lang = file.lang ?? getFiletypeFromFileName(diffDisplayPath(file)) ?? 'text'
-          const hlOpts = getHighlighterOptions(lang, { theme: options.theme })
-          const highlighter = await getSharedHighlighter({
-            ...hlOpts,
-            preferredHighlighter: 'shiki-wasm',
-          })
-          const highlighted = renderDiffWithHighlighter(file, highlighter, options)
-          result.set(diffDisplayPath(file), {
-            deletionLines: highlighted.code.deletionLines as Array<HastNode | undefined>,
-            additionLines: highlighted.code.additionLines as Array<HastNode | undefined>,
-          })
+          result.set(diffDisplayPath(file), await highlightDiffFile(file, appearance))
         } catch {
           // Per-file highlight failure is non-fatal — leave it unhighlighted.
         }
       }
 
-      if (highlightCache.size >= HIGHLIGHT_CACHE_MAX) {
-        const oldest = highlightCache.keys().next().value
-        if (oldest !== undefined) highlightCache.delete(oldest)
-      }
-      highlightCache.set(fullKey, result)
+      highlightCache.set(fullKey, result, estimateHighlightBytes(result))
       return result
     } catch {
       return new Map()
@@ -234,6 +247,7 @@ function buildFileSplitRows(
   appearance: 'dark' | 'light',
   cacheKey: string,
   fileIndex: number,
+  expandableContext: boolean,
 ): TuiPierreSplitRow[] {
   const rows: TuiPierreSplitRow[] = []
 
@@ -243,6 +257,7 @@ function buildFileSplitRows(
         key: `${cacheKey}:s:${fileIndex}:${hunkIndex}:collapsed`,
         tone: 'meta',
         text: `... ${hunk.collapsedBefore} unchanged line${hunk.collapsedBefore === 1 ? '' : 's'}`,
+        contextGap: expandableContext ? diffContextGap(file, diffDisplayPath(file), hunkIndex, 'before') : undefined,
       })
     }
     rows.push({
@@ -291,7 +306,7 @@ function buildFileSplitRows(
           if (i < content.deletions) {
             const rawText = file.deletionLines[delIdx + i] ?? ''
             const hastNode = fileHighlights?.deletionLines[delIdx + i]
-            const spans = hastNode ? flattenHastLine(hastNode, appearance) : undefined
+            const spans = hastNode ? flattenHastLine(hastNode, appearance, appearance === 'dark' ? '#71343b' : '#ffc1c0') : undefined
             left = {
               kind: 'deletion',
               lineNum: delNum + i,
@@ -305,7 +320,7 @@ function buildFileSplitRows(
           if (i < content.additions) {
             const rawText = file.additionLines[addIdx + i] ?? ''
             const hastNode = fileHighlights?.additionLines[addIdx + i]
-            const spans = hastNode ? flattenHastLine(hastNode, appearance) : undefined
+            const spans = hastNode ? flattenHastLine(hastNode, appearance, appearance === 'dark' ? '#275d3b' : '#a9edbd') : undefined
             right = {
               kind: 'addition',
               lineNum: addNum + i,
@@ -341,6 +356,8 @@ export function buildPierreDiffView(
   cacheKey: string,
   highlights?: Map<string, TuiFileHighlights> | null,
   appearance: 'dark' | 'light' = 'dark',
+  includeTree = true,
+  expandableContext = false,
 ): TuiPierreDiffView | null {
   const rows: TuiPierreDiffRow[] = []
   const splitRows: TuiPierreSplitRow[] = []
@@ -349,8 +366,11 @@ export function buildPierreDiffView(
     const files = parsed.flatMap((patch) => patch.files)
     if (files.length === 0) return buildFallbackDiffView(diffText, cacheKey)
 
+    const patches = new Map<string, string>()
+    const sections = diffText.split(/(?=^diff --git )/m).filter(section => section.startsWith('diff --git '))
+    if (sections.length === files.length) files.forEach((file, index) => patches.set(diffDisplayPath(file), sections[index]!))
     const orderedFiles = orderDiffFiles(files)
-    if (orderedFiles.length > 1) {
+    if (includeTree && orderedFiles.length > 1) {
       const summaryRow: TuiPierreDiffRow = {
         key: `${cacheKey}:tree:summary`,
         tone: 'meta',
@@ -370,7 +390,10 @@ export function buildPierreDiffView(
     }
 
     for (const [fileIndex, file] of orderedFiles.entries()) {
-      const fileHighlights = highlights?.get(diffDisplayPath(file))
+      const rowStart = rows.length
+      const splitStart = splitRows.length
+      const filePath = diffDisplayPath(file)
+      const fileHighlights = highlights?.get(filePath)
 
       if (fileIndex > 0 || rows.length > 0) {
         const spacer: TuiPierreDiffRow = { key: `${cacheKey}:spacer:${fileIndex}`, tone: 'meta', text: '' }
@@ -386,7 +409,7 @@ export function buildPierreDiffView(
       splitRows.push(fileRow)
 
       // Append split rows for this file
-      splitRows.push(...buildFileSplitRows(file, fileHighlights, appearance, cacheKey, fileIndex))
+      splitRows.push(...buildFileSplitRows(file, fileHighlights, appearance, cacheKey, fileIndex, expandableContext))
 
       for (const [hunkIndex, hunk] of file.hunks.entries()) {
         if (hunk.collapsedBefore > 0) {
@@ -394,6 +417,7 @@ export function buildPierreDiffView(
             key: `${cacheKey}:file:${fileIndex}:hunk:${hunkIndex}:collapsed`,
             tone: 'meta',
             text: `... ${hunk.collapsedBefore} unchanged line${hunk.collapsedBefore === 1 ? '' : 's'}`,
+        contextGap: expandableContext ? diffContextGap(file, diffDisplayPath(file), hunkIndex, 'before') : undefined,
           })
         }
         rows.push({
@@ -433,7 +457,7 @@ export function buildPierreDiffView(
               const rawText = file.deletionLines[content.deletionLineIndex + lineIndex] ?? ''
               const hastNode =
                 fileHighlights?.deletionLines[content.deletionLineIndex + lineIndex]
-              const spans = hastNode ? flattenHastLine(hastNode, appearance) : undefined
+              const spans = hastNode ? flattenHastLine(hastNode, appearance, appearance === 'dark' ? '#71343b' : '#ffc1c0') : undefined
               rows.push({
                 key: `${cacheKey}:file:${fileIndex}:hunk:${hunkIndex}:del:${contentIndex}:${lineIndex}`,
                 tone: 'deletion',
@@ -447,7 +471,7 @@ export function buildPierreDiffView(
               const rawText = file.additionLines[content.additionLineIndex + lineIndex] ?? ''
               const hastNode =
                 fileHighlights?.additionLines[content.additionLineIndex + lineIndex]
-              const spans = hastNode ? flattenHastLine(hastNode, appearance) : undefined
+              const spans = hastNode ? flattenHastLine(hastNode, appearance, appearance === 'dark' ? '#275d3b' : '#a9edbd') : undefined
               rows.push({
                 key: `${cacheKey}:file:${fileIndex}:hunk:${hunkIndex}:add:${contentIndex}:${lineIndex}`,
                 tone: 'addition',
@@ -460,9 +484,17 @@ export function buildPierreDiffView(
           }
         }
       }
+      const trailingGap = expandableContext ? diffContextGap(file, filePath, file.hunks.length - 1, 'after') : undefined
+      if (trailingGap) {
+        const marker: TuiPierreDiffRow = { key: `${trailingGap.id}:marker`, tone: 'meta', text: '', contextGap: trailingGap }
+        rows.push(marker)
+        splitRows.push(marker)
+      }
+      for (let index = rowStart; index < rows.length; index++) rows[index]!.filePath = filePath
+      for (let index = splitStart; index < splitRows.length; index++) splitRows[index]!.filePath = filePath
     }
 
-    return rows.length > 0 ? { rows, splitRows } : null
+    return rows.length > 0 ? { rows, splitRows, files: orderedFiles, patches } : null
   } catch {
     return buildFallbackDiffView(diffText, cacheKey)
   }
@@ -620,7 +652,7 @@ function diffTreePaths(files: FileDiffMetadata[]): string[] {
   ]
 }
 
-function diffDisplayPath(file: FileDiffMetadata): string {
+export function diffDisplayPath(file: FileDiffMetadata): string {
   return stripDiffPathPrefix(file.name || file.prevName || 'unknown')
 }
 

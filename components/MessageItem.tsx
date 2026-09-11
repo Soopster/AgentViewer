@@ -11,6 +11,7 @@ import { pathBasename as basename } from '@/lib/projectPaths'
 import { DEFAULT_DIFF_OPTIONS, DiffCommentComposerContext, LiveSubagentTextContext, TaskActiveFormsContext, type DiffOptions } from './messageItemShared'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { projectMarkdownBlocks } from '@/lib/markdownStream'
 import type { Components } from 'react-markdown'
 import { CircleHelp, PencilLine } from 'lucide-react'
 import type { ThreadedMessage, ThreadedBlock, ToolThread, TaskNotificationBlock, SystemReminderBlock, SlashCommandBlock, LocalCommandStdoutBlock, BashInputBlock, BashOutputBlock, ClaudeSystemBlock } from '@/lib/threading'
@@ -4236,29 +4237,44 @@ function DataImageBlock({ src, mediaType }: { src: string; mediaType: string }) 
   )
 }
 
+// One finished top-level block. Memoized on its own source, so a delta landing
+// in the tail of a streaming answer re-renders the tail alone — react-markdown
+// re-parses whatever it is handed, and handing it the whole document per delta
+// makes the cost of one token grow with everything already written.
+const MarkdownBlockView = memo(function MarkdownBlockView({ raw }: { raw: string }) {
+  return (
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+      {raw}
+    </ReactMarkdown>
+  )
+})
+
+function MarkdownBody({ text }: { text: string }) {
+  const blocks = useMemo(() => projectMarkdownBlocks(text), [text])
+  return (
+    <div style={{ fontSize: 15, wordBreak: 'break-word', lineHeight: 1.75 }}>
+      {blocks.map((block, i) => (
+        // Keyed by position: a block's index is stable while it is being
+        // written, and its content is the memo's own input. Keying by content
+        // would remount the tail on every delta, which is the work this exists
+        // to avoid.
+        <MarkdownBlockView key={i} raw={block.raw} />
+      ))}
+    </div>
+  )
+}
+
 function RenderMarkdownText({ text }: { text: string }) {
   const parts = useMemo(() => splitInsights(text), [text])
   if (parts.length === 1 && parts[0].kind === 'text') {
-    return (
-      <div style={{ fontSize: 15, wordBreak: 'break-word', lineHeight: 1.75 }}>
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
-          {text}
-        </ReactMarkdown>
-      </div>
-    )
+    return <MarkdownBody text={text} />
   }
   return (
     <>
       {parts.map((part, i) =>
         part.kind === 'insight'
           ? <InsightCard key={i} content={part.content} />
-          : (
-            <div key={i} style={{ fontSize: 15, wordBreak: 'break-word', lineHeight: 1.75 }}>
-              <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
-                {part.text}
-              </ReactMarkdown>
-            </div>
-          )
+          : <MarkdownBody key={i} text={part.text} />
       )}
     </>
   )

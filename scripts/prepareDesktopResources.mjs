@@ -103,6 +103,7 @@ function main() {
       'tui/opentui/analyticsWorker.ts',
       'tui/opentui/editorProjectSearchWorker.ts',
       'tui/opentui/composerMentionWorker.ts',
+      'tui/opentui/gitDiffHighlightWorker.ts',
       '--compile',
       '--outfile',
       tuiOutfile,

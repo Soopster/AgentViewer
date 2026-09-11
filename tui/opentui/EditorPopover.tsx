@@ -17,6 +17,7 @@ import { extend } from '@opentui/react'
 import type { TuiThemePalette } from '../theme'
 import { detectTuiCodeFiletypeFromPath } from '../codeFiletypes'
 import { listProjectFiles } from '../../lib/projectFiles'
+import { frecencyKey, readFrecencyScores, recordFrecencyUse } from '../../lib/tuiFrecency'
 import { runGitCommand } from '../../lib/gitNodeProvider'
 import {
   EditorLspClient,
@@ -1523,23 +1524,27 @@ export function EditorPopover({
         .sort((a, b) => b.score - a.score)
         .map((entry) => entry.result)
     }
-    const ranked: Array<{ result: QuickResult; score: number; recency: number }> = []
-    // Recency ranks within an equal match, and orders the list outright when
+    const ranked: Array<{ result: QuickResult; score: number; frecency: number }> = []
+    // Frecency ranks within an equal match, and orders the list outright when
     // nothing is typed — where every fuzzy score is 0 and the order would
-    // otherwise be whatever the file walk happened to produce.
-    const recentOrder = new Map(recentFiles.map((path, index) => [path, index + 1] as const))
+    // otherwise be whatever the file walk happened to produce. A file opened
+    // often and opened recently beats one opened once last month; this session's
+    // opens are folded in on top, so a file just opened ranks before its
+    // persisted score has caught up.
+    const scores = readFrecencyScores()
+    const sessionOrder = new Map(recentFiles.map((path, index) => [path, index + 1] as const))
     for (const path of projectFiles) {
       const score = fuzzyScore(`${basename(path)} ${path}`, query)
       if (score == null) continue
       ranked.push({
         result: { id: path, label: basename(path), detail: path, kind: 'files' as const },
         score,
-        recency: recentOrder.get(path) ?? 0,
+        frecency: (scores.get(frecencyKey(root, path)) ?? 0) + (sessionOrder.get(path) ?? 0),
       })
     }
     return ranked
       .sort((a, b) => b.score - a.score
-        || b.recency - a.recency
+        || b.frecency - a.frecency
         || a.result.detail.length - b.result.detail.length)
       .slice(0, 50)
       .map((entry) => entry.result)
@@ -1820,13 +1825,14 @@ export function EditorPopover({
   }, [])
 
   const rememberOpenedFile = useCallback((path: string) => {
+    recordFrecencyUse(frecencyKey(root, path))
     const recent = recentFilesRef.current.filter((entry) => entry !== path)
     recent.push(path)
     recentFilesRef.current = recent.slice(-RECENT_FILE_LIMIT)
     // Mirrored into state so the quick-open list re-ranks; the ref is what the
     // non-reactive callers read.
     setRecentFiles(recentFilesRef.current)
-  }, [])
+  }, [root])
 
   const openBuffer = useCallback(async (relativePath: string) => {
     const safePath = normalizeRelativePath(root, relativePath)

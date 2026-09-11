@@ -35,10 +35,14 @@ export function isAltKey(key: ShortcutKeyEvent, char: string): boolean {
   return (key.option || key.meta) && key.name.toLowerCase() === char.toLowerCase()
 }
 
+// The ⌃K chord table. A chord's command id and its human label live in the
+// same entry so the dispatcher, the status-bar hint, the unknown-key notice and
+// the ⌃K ? overlay are all one table — four hand-written copies of this set is
+// how three of them end up describing keys the fourth no longer has.
 export const PORTABLE_COMMAND_CHORDS = {
-  a: 'coord-board',
-  g: 'pull-requests',
-  n: 'coord-start',
+  a: { command: 'coord-board', label: 'Agent Operations', short: 'operations' },
+  g: { command: 'pull-requests', label: 'Pull requests', short: 'pull requests' },
+  n: { command: 'coord-start', label: 'New coordinated run', short: 'coordinated run' },
 } as const
 
 export type PortableCommandChord = keyof typeof PORTABLE_COMMAND_CHORDS

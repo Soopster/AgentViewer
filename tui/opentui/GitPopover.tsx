@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/react */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useRenderer } from '@opentui/react'
 import type { MouseEvent, ScrollBoxRenderable } from '@opentui/core'
 import type { SelectedLineRange } from '@pierre/diffs'
@@ -12,13 +12,21 @@ import { runGitCommand } from '../../lib/gitNodeProvider'
 import { buildDiffCommentComposerPrompt } from '../../lib/diffCommentComposer'
 import {
   buildPierreDiffView,
-  loadDiffHighlights,
-  type TuiFileHighlights,
   type TuiPierreDiffRow,
   type TuiPierreSplitRow,
-  type TuiRenderSpan,
   type TuiSplitRowSide,
 } from './pierreDiffView'
+import { buildDiffGeometry, diffRowAt, diffRowKeys, type DiffGeometry } from './gitDiffGeometry'
+import { applyDiffContext, nearestDiffContextGap } from './gitDiffContext'
+import { useGitDiffContext } from './useGitDiffContext'
+import { fetchGitReviewStream } from './gitReviewStream'
+import { useGitDiffHighlighting } from './useGitDiffHighlighting'
+import { useGitDiffViewport } from './useGitDiffViewport'
+import { useGitDiffReviewActions, type ReviewActionKey } from './useGitDiffReviewActions'
+import { DiffReviewActionsBar } from './DiffReviewActionsBar'
+import { DiffCodeText } from './DiffCodeText'
+import { DiffViewControls } from './DiffViewControls'
+import { diffTextHeight, diffTextWidth, matchesDiffFile, resolveDiffLayout, type DiffLayoutMode } from './gitDiffText'
 import { createScrollVelocityState, velocityScrollStep } from './scrollVelocity'
 
 // ---------------------------------------------------------------------------
@@ -117,7 +125,7 @@ type PaneId = 0 | 1 | 2 | 3 | 4
 const PANE_TITLES: Record<PaneId, string> = {
   0: 'Unstaged changes',
   1: 'Status',
-  2: 'Files',
+  2: 'Review',
   3: 'Branches',
   4: 'Commits',
 }
@@ -209,24 +217,6 @@ function fitTerminalText(text: string, width: number): string {
   return `${text.slice(0, width - 1)}…`
 }
 
-// Render syntax-highlighted spans clipped to maxWidth terminal columns.
-// Each span becomes an OpenTUI <span fg=...> element inside a parent <text>.
-function renderDiffSpans(spans: TuiRenderSpan[], defaultFg: string, maxWidth: number) {
-  const elements = []
-  let remaining = maxWidth
-  for (let i = 0; i < spans.length; i++) {
-    if (remaining <= 0) break
-    const span = spans[i]!
-    const text = span.text.length <= remaining ? span.text : `${span.text.slice(0, remaining - 1)}…`
-    remaining -= text.length
-    elements.push(<span key={i} fg={span.fg ?? defaultFg}>{text}</span>)
-  }
-  if (remaining > 0) {
-    elements.push(<span key="pad" fg={defaultFg}>{' '.repeat(remaining)}</span>)
-  }
-  return elements
-}
-
 // Stable semantic note anchor — survives diff re-parses as long as the line exists.
 // Format: "<filePath>:<side>:<lineNum>"  e.g. "src/foo.ts:new:42"
 function stackRowAnchor(row: TuiPierreDiffRow, filePath: string | null): string | null {
@@ -297,10 +287,15 @@ function renderSplitSide(
   showLineNumbers: boolean,
   gutterCols: number,
   gutterDigits: number,
+  tabWidth: number,
+  wrap: boolean,
+  offset: number,
+  height: number,
+  searchQuery: string,
 ) {
   if (!side || side.kind === 'empty') {
     return (
-      <box width={sideW} backgroundColor={theme.surface2}>
+      <box width={sideW} height={height} backgroundColor={theme.surface2}>
         <text fg={theme.dim} wrapMode="none">{' '.repeat(sideW)}</text>
       </box>
     )
@@ -309,7 +304,7 @@ function renderSplitSide(
   const bg = splitSideBg(side, theme)
   const indicator = splitSideIndicator(side)
   return (
-    <box width={sideW} flexDirection="row" backgroundColor={bg}>
+    <box width={sideW} height={height} flexShrink={0} flexDirection="row" backgroundColor={bg}>
       {showLineNumbers ? (
         <text fg={theme.dim} wrapMode="none">
           {formatDiffLineNumber(side.lineNum, gutterDigits)}
@@ -317,23 +312,15 @@ function renderSplitSide(
         </text>
       ) : null}
       <text fg={fg} wrapMode="none">{` ${indicator} `}</text>
-      {side.spans && side.spans.length > 0 ? (
-        <text wrapMode="none">
-          {renderDiffSpans(side.spans, fg, textW)}
-        </text>
-      ) : (
-        <text fg={fg} wrapMode="none">
-          {fitTerminalText(side.text || ' ', textW)}
-        </text>
-      )}
+      <DiffCodeText text={side.text || ' '} spans={side.spans} searchQuery={searchQuery} searchFg={theme.bg} searchBg={theme.amber} columns={textW} tabWidth={tabWidth} wrap={wrap} offset={offset} fg={fg} />
     </box>
   )
 }
 
 // ─── Inline note rendering helpers ───────────────────────────────────────────
 
-type DraftNote = { rowKey: string; range: SelectedLineRange; lineLabel: string; text: string }
-type DiffNote = { range: SelectedLineRange; text: string }
+type DraftNote = { filePath: string; rowKey: string; range: SelectedLineRange; lineLabel: string; text: string }
+type DiffNote = { filePath: string; range: SelectedLineRange; text: string }
 
 type DiffSelectionPoint = {
   lineNumber: number
@@ -341,6 +328,7 @@ type DiffSelectionPoint = {
 }
 
 type DiffSelectionSpan = {
+  filePath: string
   startIndex: number
   endIndex: number
   selection: SelectedLineRange
@@ -385,17 +373,21 @@ function diffSelectionSpanFromRowRange(
   endIndex: number,
 ): DiffSelectionSpan | null {
   if (rows.length === 0) return null
-  const lo = clampNumber(Math.min(startIndex, endIndex), 0, rows.length - 1)
-  const hi = clampNumber(Math.max(startIndex, endIndex), 0, rows.length - 1)
+  const anchorIndex = clampNumber(startIndex, 0, rows.length - 1)
+  const selectedPath = rows[anchorIndex]?.filePath ?? filePath ?? 'git diff'
+  const lower = clampNumber(Math.min(startIndex, endIndex), 0, rows.length - 1)
+  const upper = clampNumber(Math.max(startIndex, endIndex), 0, rows.length - 1)
+  let lo = -1
+  let hi = -1
   let startPoint: DiffSelectionPoint | null = null
-  for (let index = lo; index <= hi; index += 1) {
-    startPoint = diffSelectionPointForRow(rows[index]!)
-    if (startPoint) break
-  }
   let endPoint: DiffSelectionPoint | null = null
-  for (let index = hi; index >= lo; index -= 1) {
-    endPoint = diffSelectionPointForRow(rows[index]!)
-    if (endPoint) break
+  for (let index = lower; index <= upper; index += 1) {
+    if ((rows[index]!.filePath ?? filePath ?? 'git diff') !== selectedPath) continue
+    const point = diffSelectionPointForRow(rows[index]!)
+    if (!point) continue
+    if (!startPoint) { startPoint = point; lo = index }
+    endPoint = point
+    hi = index
   }
   if (!startPoint || !endPoint) return null
   const selection: SelectedLineRange = {
@@ -405,10 +397,11 @@ function diffSelectionSpanFromRowRange(
     endSide: endPoint.side,
   }
   return {
+    filePath: selectedPath,
     startIndex: lo,
     endIndex: hi,
     selection,
-    key: diffSelectionKey(filePath, selection),
+    key: diffSelectionKey(selectedPath, selection),
     label: diffSelectionLineLabel(selection),
   }
 }
@@ -422,17 +415,18 @@ function diffSelectionSpanFromSelection(
   let startIndex = -1
   let endIndex = -1
   for (let index = 0; index < rows.length; index += 1) {
-    const point = diffSelectionPointForRow(rows[index]!)
-    if (!point) continue
-    if (startIndex === -1 && point.lineNumber === selection.start && point.side === selection.side) {
-      startIndex = index
-    }
-    if (point.lineNumber === selection.end && point.side === selection.endSide) {
-      endIndex = index
-    }
+    if (rows[index]!.filePath && rows[index]!.filePath !== filePath) continue
+    const row = rows[index]!
+    const oldLine = (row as TuiPierreSplitRow).left?.lineNum ?? (row as TuiPierreDiffRow).oldLine
+    const newLine = (row as TuiPierreSplitRow).right?.lineNum ?? (row as TuiPierreDiffRow).newLine
+    const startLine = selection.side === 'deletions' ? oldLine : newLine
+    const endLine = selection.endSide === 'deletions' ? oldLine : newLine
+    if (startIndex === -1 && startLine === selection.start) startIndex = index
+    if (endLine === selection.end) endIndex = index
   }
   if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) return null
   return {
+    filePath: filePath ?? 'git diff',
     startIndex,
     endIndex,
     selection,
@@ -441,11 +435,16 @@ function diffSelectionSpanFromSelection(
   }
 }
 
+function reviewFileContext(rows: TuiPierreDiffRow[], filePath: string): string {
+  return rows.filter(row => row.filePath === filePath)
+    .map(row => `${row.indicator ?? ''}${row.text}`).join('\n')
+}
+
 function renderNoteDraft(draft: DraftNote, width: number, filePath: string | null, theme: TuiThemePalette) {
   const header = [filePath ?? '', draft.lineLabel].filter(Boolean).join(' ')
   const displayText = draft.text || 'Write a note…'
   return (
-    <box width={width} flexDirection="column" border borderStyle="single" borderColor={theme.cyan} paddingX={1}>
+    <box width={width} height={6} flexShrink={0} flexDirection="column" border borderStyle="single" borderColor={theme.cyan} paddingX={1}>
       <box>
         <text fg={theme.cyan} wrapMode="none">
           {fitTerminalText(`Draft note${header ? ` — ${header}` : ''}`, width - 4)}
@@ -477,7 +476,7 @@ function renderNoteCard(
   if (!note.text) return null
   const header = [filePath ?? '', lineLabel].filter(Boolean).join(' ')
   return (
-    <box width={width} flexDirection="column" border borderStyle="single" borderColor={theme.violet} paddingX={1}>
+    <box width={width} height={3 + note.text.split('\n').length + (onSendToComposer ? 1 : 0)} flexShrink={0} flexDirection="column" border borderStyle="single" borderColor={theme.violet} paddingX={1}>
       <box flexDirection="row">
         <text fg={theme.violet} wrapMode="none">
           {fitTerminalText(`Note${header ? ` — ${header}` : ''}`, width - 6)}
@@ -513,6 +512,10 @@ type FocusSide = 'left' | 'right'
 type FileDiffMode = 'text' | 'viewer'
 type LeftPaneMode = 'normal' | 'expanded' | 'hidden'
 
+const EMPTY_DIFF_NOTES = new Map<string, DiffNote>()
+const EMPTY_DIFF_ROWS: TuiPierreDiffRow[] = []
+const EMPTY_SPLIT_ROWS: TuiPierreSplitRow[] = []
+
 const LEFT_PANE_MIN_WIDTH = 24
 const DIFF_BADGE_WIDTH = 3  // "[+]" badge column reserved on each stack-view diff row
 const LEFT_PANE_DEFAULT_MAX_WIDTH = 40
@@ -534,10 +537,16 @@ type Props = {
   height: number
   onClose: () => void
   onKeyHandlerReady: (handler: (key: GitKeyEvent) => void) => void
+  onKeyCaptureChange?: (capture: boolean) => void
+  onClipboardWrite?: (text: string) => Promise<void>
   onSendDiffNoteToComposer?: (prompt: string) => void
 }
 
-export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = false, theme, width, height, onClose, onKeyHandlerReady, onSendDiffNoteToComposer }: Props) {
+export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = false, theme, width, height, onClose, onKeyHandlerReady, onSendDiffNoteToComposer, onClipboardWrite, onKeyCaptureChange }: Props) {
+  const reviewSearchEditingRef = useRef(false)
+  const reviewActionKeyRef = useRef<(key: ReviewActionKey) => boolean>(() => false)
+  const focusDiff = useCallback(() => setFocusSide('right'), [])
+  const selectSearchRow = useCallback((index: number) => { setDiffCursorRow(index); setDiffSelectionAnchorRow(null) }, [])
   const repoCwd = cwd || process.cwd()
   const [data, setData] = useState<GitData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -545,16 +554,29 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
   const [pane, setPane] = useState<PaneId>(2)
   const [focusSide, setFocusSide] = useState<FocusSide>('left')
   const [fileDiffMode, setFileDiffMode] = useState<FileDiffMode>('viewer')
-  const [diffHighlights, setDiffHighlights] = useState<Map<string, TuiFileHighlights> | null>(null)
-  const [diffLayout, setDiffLayout] = useState<'stack' | 'split'>('stack')
+  const [diffLayoutMode, setDiffLayoutMode] = useState<DiffLayoutMode>('auto')
+  const [wrapDiffLines, setWrapDiffLines] = useState(false)
+  const [diffTabWidth, setDiffTabWidth] = useState(4)
+  const [horizontalOffset, setHorizontalOffset] = useState(0)
+  const [fileFilter, setFileFilter] = useState('')
+  const [filterEditing, setFilterEditing] = useState(false)
+  const filterEditingRef = useRef(false)
+  const [jumpFilePath, setJumpFilePath] = useState<string | undefined>()
+  const normalizedFilter = fileFilter.trim().toLocaleLowerCase()
+  const closeFileFilter = useCallback(() => { filterEditingRef.current = false; setFilterEditing(false) }, [])
   const [showLineNumbers, setShowLineNumbers] = useState(true)
   const [showHunkHeaders, setShowHunkHeaders] = useState(true)
   const [diffCursorRow, setDiffCursorRow] = useState(0)
   const [diffSelectionAnchorRow, setDiffSelectionAnchorRow] = useState<number | null>(null)
-  const [diffNotes, setDiffNotes] = useState<Map<string, DiffNote>>(new Map())
+  const [notesBySource, setNotesBySource] = useState<Map<string, Map<string, DiffNote>>>(new Map())
   const [draftNote, setDraftNote] = useState<DraftNote | null>(null)
+  const openFileFilter = useCallback(() => {
+    if (draftNote) return
+    filterEditingRef.current = true; setFilterEditing(true)
+  }, [draftNote])
   const [leftPaneMode, setLeftPaneMode] = useState<LeftPaneMode>('normal')
   const [leftPaneWidth, setLeftPaneWidth] = useState(LEFT_PANE_DEFAULT_MAX_WIDTH)
+  const [fileJumpRevision, setFileJumpRevision] = useState(0)
   const [treeCursor, setTreeCursor] = useState(0)
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set())
   const [branchIndex, setBranchIndex] = useState(0)
@@ -578,6 +600,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
   const rightContentRequestRef = useRef(0)
   const rightContentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Ref so handleKey can read rightDiffView without a circular dep issue
+  const maxHorizontalOffsetRef = useRef(0)
   const rightDiffViewRef = useRef<ReturnType<typeof buildPierreDiffView>>(null)
   // Ref so handleKey always sees the latest selectedFilePath without stale closure issues
   const selectedFilePathRef = useRef<string | null>(null)
@@ -599,6 +622,11 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
     [sourceSelection, turns],
   )
   const sourceKey = diffSourceKey(diffSource)
+  const noteScope = JSON.stringify([repoCwd, sourceKey])
+  const diffNotes = notesBySource.get(noteScope) ?? EMPTY_DIFF_NOTES
+  const setDiffNotes = useCallback((update: (notes: Map<string, DiffNote>) => Map<string, DiffNote>) => {
+    setNotesBySource(previous => new Map(previous).set(noteScope, update(previous.get(noteScope) ?? EMPTY_DIFF_NOTES)))
+  }, [noteScope])
   const sourceLabel = diffSourceLabel(sourceSelection, turns)
   // Said once, at the top of the picker: the numbering below is the repo's, not
   // this session's, and reading it as this session's would be wrong.
@@ -610,7 +638,8 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
    *  commit/branch panes describe the repository, not the change set. */
   const loadGitData = useCallback(async (source: GitDiffSource): Promise<GitData> => {
     const next = await fetchGitData(repoCwd, runGitCommand)
-    if (source.kind === 'working') return next
+    if (source.kind === 'working') return { ...next, status: next.status.map(entry =>
+      entry.x === 'R' || entry.y === 'R' ? { ...entry, path: entry.path.split(' -> ').at(-1) ?? entry.path } : entry) }
     return { ...next, status: await fetchSourceStatus(repoCwd, runGitCommand, source) }
   }, [repoCwd])
 
@@ -656,15 +685,16 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
     // visibleNodes to recompute in a separate render cycle.
     const nodes = buildVisibleNodes(data.status, dirs)
     const firstFile = nodes.findIndex((n) => n.kind === 'file')
-    setTreeCursor(firstFile >= 0 ? firstFile : 0)
+    const previousFile = nodes.findIndex(node => node.kind === 'file' && node.path === selectedFilePathRef.current)
+    setTreeCursor(previousFile >= 0 ? previousFile : firstFile >= 0 ? firstFile : 0)
     branchesScrollRef.current?.scrollTo(0)
     commitsScrollRef.current?.scrollTo(0)
   }, [data])
 
   // Visible tree nodes (recomputed when data or expanded state changes)
   const visibleNodes = useMemo(
-    () => (data ? buildVisibleNodes(data.status, expandedDirs) : []),
-    [data, expandedDirs],
+    () => (data ? buildVisibleNodes(data.status.filter(entry => matchesDiffFile(entry.path, normalizedFilter)), expandedDirs) : []),
+    [data, expandedDirs, normalizedFilter],
   )
 
   // The file selected by the tree cursor (skip dirs for diff purposes)
@@ -701,6 +731,10 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
 
   // Right-panel content is loaded in an effect so git commands do not block render.
   const [rightContent, setRightContent] = useState('Loading…')
+  const { expansions: contextExpansions, change: changeContext } = useGitDiffContext(repoCwd, rightContent)
+  const contentKey = JSON.stringify([repoCwd, sourceKey, pane, pane === 3 ? branchIndex : null, pane === 4 ? commitIndex : null])
+  const [loadedContentKey, setLoadedContentKey] = useState('')
+  const loadedContentKeyRef = useRef('')
 
   useEffect(() => {
     const requestId = ++rightContentRequestRef.current
@@ -719,33 +753,25 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
       }
     }
 
-    setRightContent('Loading…')
+    if (loadedContentKeyRef.current !== contentKey) setRightContent('Loading…')
     setContentLoading(true)
     // Debounce keeps rapid navigation (j/k) from spawning a git process per
     // keystroke — costly on Windows where process creation is slow.
     rightContentTimerRef.current = setTimeout(() => {
       const activeRequestId = rightContentRequestRef.current
       void (async () => {
-        // Panes 0 and 2 are the only ones a source changes: the whole change
-        // set and one file of it.
-        const content = diffSource.kind !== 'working' && (pane === 0 || pane === 2)
-          ? (pane === 2 && !selectedFilePath
-            ? (data.status.length === 0 ? '(no changes)' : '(select a file)')
-            : (await fetchSourceDiff(repoCwd, runGitCommand, diffSource, pane === 2 ? selectedFilePath : null)) || '(no changes)')
-          : await fetchGitPaneContent({
-            cwd: repoCwd,
-            runGit: runGitCommand,
-            data,
-            pane,
-            selectedFilePath,
-            branchIndex,
-            commitIndex,
-          })
+        const content = pane === 2
+          ? (await fetchGitReviewStream(repoCwd, runGitCommand, diffSource, data.status)) || '(no changes)'
+          : pane === 0 && diffSource.kind !== 'working'
+            ? (await fetchSourceDiff(repoCwd, runGitCommand, diffSource)) || '(no changes)'
+            : await fetchGitPaneContent({ cwd: repoCwd, runGit: runGitCommand, data, pane,
+                selectedFilePath: null, branchIndex, commitIndex })
 
         if (rightContentRequestRef.current !== activeRequestId) return
+        loadedContentKeyRef.current = contentKey
+        setLoadedContentKey(contentKey)
         setRightContent(content)
         setContentLoading(false)
-        diffScrollRef.current?.scrollTo(0)
       })().catch(() => {
         if (rightContentRequestRef.current !== activeRequestId) return
         setContentLoading(false)
@@ -762,7 +788,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sourceKey is diffSource's identity
-  }, [branchIndex, commitIndex, data, pane, repoCwd, selectedFilePath, sourceKey])
+  }, [branchIndex, commitIndex, data, pane, repoCwd, sourceKey, contentKey])
 
   // Derive the Pierre appearance (dark/light) from the theme's bg luminance.
   const pierreAppearance: 'dark' | 'light' = useMemo(() => {
@@ -773,30 +799,13 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
     return (r * 299 + g * 587 + b * 114) / 1000 > 128 ? 'light' : 'dark'
   }, [theme.bg])
 
-  // Load syntax highlights async whenever the diff content or appearance changes.
-  // Resets immediately so stale highlights don't flash over a new file.
-  useEffect(() => {
-    if (pane !== 2 || fileDiffMode !== 'viewer') return
-    const text = rightContent
-    if (!text || text === 'Loading…') {
-      setDiffHighlights(null)
-      return
-    }
-    let cancelled = false
-    setDiffHighlights(null)
-    void loadDiffHighlights(text, selectedFilePath ?? 'git-diff', pierreAppearance).then((result) => {
-      if (!cancelled) setDiffHighlights(result)
-    })
-    return () => { cancelled = true }
-  }, [rightContent, pane, fileDiffMode, selectedFilePath, pierreAppearance])
-
-  // Reset diff cursor and any open draft when the viewed file changes.
+  // New comparisons reset selection; file-tree jumps keep notes attached to their source rows.
   useEffect(() => {
     setDiffCursorRow(0)
     setDiffSelectionAnchorRow(null)
     setDraftNote(null)
     setHoveredDiffRowKey(null)
-  }, [selectedFilePath, pane])
+  }, [pane, sourceKey])
 
   // Clear hover badge when the terminal loses focus (matches hunk's behaviour).
   useEffect(() => {
@@ -823,6 +832,55 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
     setSourceMenuOpen(false)
   }, [])
 
+  // Dimensions
+  // Docked the panel already reserves its own margins, so the popover fills the
+  // box it is given; floating it insets by the scrim's 2-cell gutter.
+  const popW = docked ? width : width - 4
+  const popH = docked ? height : height - 4
+  const defaultLeftW = Math.min(LEFT_PANE_DEFAULT_MAX_WIDTH, Math.floor(popW * 0.28))
+  const minLeftW = Math.min(LEFT_PANE_MIN_WIDTH, Math.max(defaultLeftW, popW - LEFT_PANE_RIGHT_MIN_WIDTH - 4))
+  const maxLeftW = Math.max(defaultLeftW, Math.min(Math.floor(popW * LEFT_PANE_EXPANDED_RATIO), popW - LEFT_PANE_RIGHT_MIN_WIDTH - 4))
+  const leftPaneHidden = leftPaneMode === 'hidden'
+  const leftPaneExpanded = leftPaneMode === 'expanded'
+  const leftW = leftPaneHidden ? 0 : Math.max(minLeftW, Math.min(leftPaneWidth, maxLeftW))
+  const dividerW = leftPaneHidden ? 0 : 1
+  // The right pane takes whatever the left pane and dividers leave. Clamping it
+  // up to LEFT_PANE_RIGHT_MIN_WIDTH would overflow a panel narrower than the two
+  // minimums combined — the left pane already shrinks first (minLeftW), so once
+  // it is at its floor the only honest answer is the remaining width.
+  const rightW = Math.max(8, popW - leftW - dividerW - 2)
+  const popTop = Math.floor((height - popH) / 2)
+  const popLeft = Math.floor((width - popW) / 2)
+
+  const leftInnerH = popH - 2
+  const statusH = 4
+  const branchesH = Math.max(3, Math.min(6, (data?.branches.length ?? 0) + 2))
+  // Files: grow with content up to 60 % of the left panel, with a scrollbox inside.
+  // Commits gets whatever is left via flexGrow.
+  const fileTreeMaxH = Math.max(4, Math.floor((leftInnerH - statusH - branchesH) * 0.6))
+  const fileTreeH = Math.min(Math.max(3, visibleNodes.length + 2), fileTreeMaxH)
+  // Commits gets the remaining height after Status + Files + Branches (minus 3 section borders).
+  const commitsH = Math.max(4, leftInnerH - statusH - fileTreeH - branchesH - 3)
+  // Estimate remaining rows for Commits (used for manual slicing while Commits lacks scrollbox).
+  const rightH = popH - 2
+  const diffLayout = resolveDiffLayout(diffLayoutMode, rightW)
+  const diffViewportHeight = Math.max(1, rightH - (pane === 2 ? fileDiffMode === 'viewer' ? 3 : 2 : 1))
+
+  function navigateTreeCursor(next: number | ((index: number) => number)) {
+    const index = typeof next === 'function' ? next(treeCursor) : next
+    setTreeCursor(index)
+    const node = visibleNodes[index]
+    if (node?.kind === 'file') { setJumpFilePath(node.path); setFileJumpRevision(value => value + 1) }
+  }
+  useEffect(() => { setTreeCursor(index => Math.min(index, Math.max(0, visibleNodes.length - 1))) }, [visibleNodes.length])
+
+  function revealDiffRow(index: number) {
+    const scroll = diffScrollRef.current
+    const row = geometryRef.current.rows[index]
+    if (!scroll || !row) return
+    if (row.top < scroll.scrollTop || row.top >= scroll.scrollTop + scroll.viewport.height) scroll.scrollTo(row.top)
+  }
+
   const handleKey = useCallback((key: GitKeyEvent) => {
     // While a draft note is open, all keyboard input goes to the note editor.
     if (draftNote !== null) {
@@ -831,7 +889,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
         const trimmed = draftNote.text.trim()
         setDiffNotes((prev) => {
           const next = new Map(prev)
-          if (trimmed) next.set(draftNote.rowKey, { range: draftNote.range, text: trimmed })
+          if (trimmed) next.set(draftNote.rowKey, { filePath: draftNote.filePath, range: draftNote.range, text: trimmed })
           else next.delete(draftNote.rowKey)
           return next
         })
@@ -847,6 +905,27 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
         return
       }
       return
+    }
+
+    if (filterEditingRef.current) {
+      if (key.name === 'escape') { setFileFilter(''); closeFileFilter(); return }
+      if (key.name === 'return' || key.name === 'tab') { closeFileFilter(); return }
+      if (key.name === 'backspace') { setFileFilter(value => Array.from(value).slice(0, -1).join('')); return }
+      if (key.ctrl && key.name === 'u') { setFileFilter(''); return }
+      if (!key.ctrl && key.sequence && !/[\x00-\x1f\x7f]/.test(key.sequence)) setFileFilter(value => value + key.sequence)
+      return
+    }
+    if (!sourceMenuOpenRef.current && reviewSearchEditingRef.current && reviewActionKeyRef.current(key)) return
+    if (key.sequence === '/' && pane === 2) { openFileFilter(); return }
+    if (pane === 2) {
+      if (key.sequence === 'z') { setWrapDiffLines(value => !value); return }
+      if (key.sequence === 'T') { setDiffTabWidth(value => value === 2 ? 4 : value === 4 ? 8 : 2); return }
+      if (key.sequence === 'S') { setDiffLayoutMode('auto'); return }
+      if (focusSide === 'right' && (key.name === 'h' || key.name === 'left' || key.name === 'l' || key.name === 'right')) {
+        const delta = key.name === 'h' || key.name === 'left' ? -8 : 8
+        setHorizontalOffset(value => Math.max(0, Math.min(maxHorizontalOffsetRef.current, value + delta)))
+        return
+      }
     }
 
     // The source menu owns the keyboard while it is open, or its j/k would
@@ -877,7 +956,9 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
       return
     }
 
-    if (key.name === 'escape') { onClose(); return }
+    if (reviewActionKeyRef.current(key)) return
+
+    if (key.name === 'escape') { if (fileFilter) { setFileFilter(''); return }; onClose(); return }
 
     if (key.sequence === 't') {
       const active = Math.max(0, sourceMenuItems.findIndex((item) => isSameSelection(item.selection, sourceSelection)))
@@ -904,13 +985,22 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
       return
     }
 
+    if (pane === 2 && fileDiffMode === 'viewer' && focusSide === 'right' && (key.name === 'e' || key.name === 'c' || key.name === 'return')) {
+      const rows = diffLayout === 'split' ? rightDiffViewRef.current?.splitRows : rightDiffViewRef.current?.rows
+      if (rows && (key.name !== 'return' || rows[diffCursorRow]?.contextGap)) {
+        const gap = nearestDiffContextGap(rows, diffCursorRow, contextExpansions, key.name === 'c')
+        if (gap) { setDiffSelectionAnchorRow(null); changeContext(gap, key.name === 'c') }
+      }
+      return
+    }
+
     if ((key.sequence === '{' || key.sequence === '}') && pane === 2 && fileDiffMode === 'viewer' && focusSide === 'right') {
       const rows = diffLayout === 'split' ? rightDiffViewRef.current?.splitRows : rightDiffViewRef.current?.rows
       const nextIndex = rows ? nextHunkRowIndex(rows, diffCursorRow, key.sequence === '}' ? 1 : -1, showHunkHeaders) : null
       if (nextIndex != null) {
         setDiffSelectionAnchorRow(null)
         setDiffCursorRow(nextIndex)
-        diffScrollRef.current?.scrollTo(nextIndex)
+        diffScrollRef.current?.scrollTo(geometryRef.current.rows[nextIndex]?.top ?? nextIndex)
       }
       return
     }
@@ -942,7 +1032,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
 
     if (key.name === 'j' || key.name === 'down') {
       const step = velocityScrollStep(scrollVelocityRef.current, 1, key, Math.max(1, Math.min(8, Math.floor((height - 6) / 3))))
-      if (focusSide === 'left' && pane === 2) setTreeCursor((i) => Math.min(i + step, visibleNodes.length - 1))
+      if (focusSide === 'left' && pane === 2) navigateTreeCursor((i) => Math.min(i + step, visibleNodes.length - 1))
       else if (focusSide === 'left' && pane === 3 && data) setBranchIndex((i) => Math.min(i + step, data.branches.length - 1))
       else if (focusSide === 'left' && pane === 4 && data) setCommitIndex((i) => Math.min(i + step, data.commits.length - 1))
       else {
@@ -959,14 +1049,14 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
             setDiffSelectionAnchorRow(null)
           }
           setDiffCursorRow(nextIndex)
-        }
-        diffScrollRef.current?.scrollBy(step)
+          revealDiffRow(nextIndex)
+        } else diffScrollRef.current?.scrollBy(step)
       }
       return
     }
     if (key.name === 'k' || key.name === 'up') {
       const step = velocityScrollStep(scrollVelocityRef.current, -1, key, Math.max(1, Math.min(8, Math.floor((height - 6) / 3))))
-      if (focusSide === 'left' && pane === 2) setTreeCursor((i) => Math.max(i - step, 0))
+      if (focusSide === 'left' && pane === 2) navigateTreeCursor((i) => Math.max(i - step, 0))
       else if (focusSide === 'left' && pane === 3 && data) setBranchIndex((i) => Math.max(i - step, 0))
       else if (focusSide === 'left' && pane === 4 && data) setCommitIndex((i) => Math.max(i - step, 0))
       else {
@@ -983,11 +1073,12 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
             setDiffSelectionAnchorRow(null)
           }
           setDiffCursorRow(nextIndex)
+          revealDiffRow(nextIndex)
         } else {
           setDiffCursorRow(0)
           setDiffSelectionAnchorRow(null)
         }
-        diffScrollRef.current?.scrollBy(-step)
+        if (totalRows === 0) diffScrollRef.current?.scrollBy(-step)
       }
       return
     }
@@ -1006,6 +1097,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
           return next
         })
       }
+      if (node?.kind === 'file') navigateTreeCursor(treeCursor)
       return
     }
 
@@ -1023,7 +1115,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
         for (let i = treeCursor - 1; i >= 0; i--) {
           const candidate = visibleNodes[i]
           if (candidate?.kind === 'dir' && candidate.depth === node.depth - 1) {
-            setTreeCursor(i)
+            navigateTreeCursor(i)
             break
           }
         }
@@ -1042,7 +1134,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
           return next
         })
       } else if (visibleNodes[treeCursor + 1]) {
-        setTreeCursor(treeCursor + 1)
+        navigateTreeCursor(treeCursor + 1)
       }
       return
     }
@@ -1065,7 +1157,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
       return
     }
     if (key.sequence === 's' && pane === 2 && fileDiffMode === 'viewer') {
-      setDiffLayout((l) => (l === 'stack' ? 'split' : 'stack'))
+      setDiffLayoutMode(diffLayout === 'stack' ? 'split' : 'stack')
       setDiffSelectionAnchorRow(null)
       return
     }
@@ -1090,6 +1182,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
       const span = diffSelectionSpanFromRowRange(fp, rows, diffSelectionAnchorRow ?? currentIndex, currentIndex)
       if (!span) return
       setDraftNote({
+        filePath: span.filePath,
         rowKey: span.key,
         range: span.selection,
         lineLabel: span.label,
@@ -1123,16 +1216,16 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
       const note = diffNotes.get(span.key)
       if (!note) return
       onSendDiffNoteToComposer(buildDiffCommentComposerPrompt({
-        filePath: fp ?? 'git diff',
+        filePath: note.filePath,
         range: note.range,
         comment: note.text,
-        context: rightContent,
+        context: reviewFileContext(rightDiffViewRef.current?.rows ?? [], note.filePath),
         source: `Git popover ${span.label}`,
       }))
       return
     }
   }, [data, diffCursorRow, diffLayout, diffNotes, diffSelectionAnchorRow, draftNote, expandedDirs, fileDiffMode, focusSide,
-      height, leftPaneMode, onClose, onSendDiffNoteToComposer, pane, repoCwd, rightContent, showHunkHeaders, treeCursor, visibleNodes])
+      height, leftPaneMode, onClose, onSendDiffNoteToComposer, pane, repoCwd, rightContent, showHunkHeaders, treeCursor, visibleNodes, sourceKey, diffSource, loadGitData, sessionId, sourceMenuItems, sourceSelection, setDiffNotes, contextExpansions, changeContext, fileFilter, openFileFilter, closeFileFilter])
 
   // Register key handler with parent
   useEffect(() => {
@@ -1143,69 +1236,11 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
     if (leftPaneMode === 'hidden' && focusSide === 'left') setFocusSide('right')
   }, [focusSide, leftPaneMode])
 
-  // Dimensions
-  // Docked the panel already reserves its own margins, so the popover fills the
-  // box it is given; floating it insets by the scrim's 2-cell gutter.
-  const popW = docked ? width : width - 4
-  const popH = docked ? height : height - 4
-  const defaultLeftW = Math.min(LEFT_PANE_DEFAULT_MAX_WIDTH, Math.floor(popW * 0.28))
-  const minLeftW = Math.min(LEFT_PANE_MIN_WIDTH, Math.max(defaultLeftW, popW - LEFT_PANE_RIGHT_MIN_WIDTH - 4))
-  const maxLeftW = Math.max(defaultLeftW, Math.min(Math.floor(popW * LEFT_PANE_EXPANDED_RATIO), popW - LEFT_PANE_RIGHT_MIN_WIDTH - 4))
-  const leftPaneHidden = leftPaneMode === 'hidden'
-  const leftPaneExpanded = leftPaneMode === 'expanded'
-  const leftW = leftPaneHidden ? 0 : Math.max(minLeftW, Math.min(leftPaneWidth, maxLeftW))
-  const dividerW = leftPaneHidden ? 0 : 1
-  // The right pane takes whatever the left pane and dividers leave. Clamping it
-  // up to LEFT_PANE_RIGHT_MIN_WIDTH would overflow a panel narrower than the two
-  // minimums combined — the left pane already shrinks first (minLeftW), so once
-  // it is at its floor the only honest answer is the remaining width.
-  const rightW = Math.max(8, popW - leftW - dividerW - 2)
-  const popTop = Math.floor((height - popH) / 2)
-  const popLeft = Math.floor((width - popW) / 2)
-
-  const leftInnerH = popH - 2
-  const statusH = 4
-  const branchesH = Math.max(3, Math.min(6, (data?.branches.length ?? 0) + 2))
-  // Files: grow with content up to 60 % of the left panel, with a scrollbox inside.
-  // Commits gets whatever is left via flexGrow.
-  const fileTreeMaxH = Math.max(4, Math.floor((leftInnerH - statusH - branchesH) * 0.6))
-  const fileTreeH = Math.min(Math.max(3, visibleNodes.length + 2), fileTreeMaxH)
-  // Commits gets the remaining height after Status + Files + Branches (minus 3 section borders).
-  const commitsH = Math.max(4, leftInnerH - statusH - fileTreeH - branchesH - 3)
-  // Estimate remaining rows for Commits (used for manual slicing while Commits lacks scrollbox).
-  const rightH = popH - 2
   const focusLabel = focusSide === 'right' ? 'shift-tab return left' : 'tab focus right'
   // Diff controls render with the same key-cyan / label-muted convention as the
   // keybinding groups beside them (and the transcript diff strip), instead of a
   // flat muted wall. `syntax` is a status chip (● = highlights loaded), not a
   // fake keybinding.
-  const fileDiffSegs: React.ReactNode[] = fileDiffMode === 'viewer'
-    ? (() => {
-        const controls: Array<[string, string]> = [
-          ['v', 'plain'],
-          ['s', diffLayout],
-          ['n', showLineNumbers ? '#' : 'no#'],
-          ['m', showHunkHeaders ? '@@' : 'no@@'],
-          ['{}', 'hunk'],
-          ['⇧j/k', 'range'],
-          ['a', 'note'],
-          ['A', 'composer'],
-          ['x', 'del'],
-        ]
-        const nodes: React.ReactNode[] = []
-        controls.forEach(([k, l], i) => {
-          if (i > 0) nodes.push(<span key={`fd-sep${i}`} fg={theme.dim}>{'  '}</span>)
-          nodes.push(<span key={`fd-k${i}`} fg={theme.cyan}>{k}</span>)
-          nodes.push(<span key={`fd-l${i}`} fg={theme.muted}>{` ${l}`}</span>)
-        })
-        nodes.push(<span key="fd-syn-dot" fg={diffHighlights ? theme.green : theme.dim}>{'   ● '}</span>)
-        nodes.push(<span key="fd-syn" fg={theme.muted}>syntax</span>)
-        return nodes
-      })()
-    : [
-        <span key="fd-parsed-k" fg={theme.cyan}>v</span>,
-        <span key="fd-parsed-l" fg={theme.muted}> parsed</span>,
-      ]
 
   function statusColor(x: string, y: string): string {
     if (x === '?' && y === '?') return theme.red  // untracked
@@ -1215,29 +1250,53 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
     return theme.muted
   }
 
-  const allDiffLines = rightContent.split('\n')
-  // Cap rendered lines so large diffs do not stall the render loop — each
-  // line becomes a box/text pair and OpenTUI does not virtualize scrollbox
-  // children, so ~10k+ lines can visibly hang the app on Windows.
-  const MAX_DIFF_LINES = 1500
-  const diffTruncated = allDiffLines.length > MAX_DIFF_LINES
-  const diffLines = diffTruncated ? allDiffLines.slice(0, MAX_DIFF_LINES) : allDiffLines
-  const rightDiffView = useMemo(
+  const baseDiffView = useMemo(
     () => {
-      return pane === 2 && fileDiffMode === 'viewer'
-        ? buildPierreDiffView(rightContent, selectedFilePath ?? 'git-diff', diffHighlights, pierreAppearance)
+      return pane === 2
+        ? buildPierreDiffView(rightContent, contentKey, null, pierreAppearance, false, true)
         : null
     },
-    [diffHighlights, fileDiffMode, pane, pierreAppearance, rightContent, selectedFilePath],
+    [contentKey, pane, pierreAppearance, rightContent],
   )
+  const contextDiffView = useMemo(() => baseDiffView ? applyDiffContext(baseDiffView, contextExpansions) : null,
+    [baseDiffView, contextExpansions])
+  const rightDiffView = useMemo(() => {
+    if (!contextDiffView || !normalizedFilter) return contextDiffView
+    const rows = contextDiffView.rows.filter(row => row.filePath && matchesDiffFile(row.filePath, normalizedFilter))
+    const splitRows = contextDiffView.splitRows.filter(row => row.filePath && matchesDiffFile(row.filePath, normalizedFilter))
+    const empty: TuiPierreDiffRow = { key: 'empty-filter', tone: 'meta', text: 'No files match this filter. / to edit, Esc to clear.' }
+    return { ...contextDiffView, rows: rows.length ? rows : [empty], splitRows: splitRows.length ? splitRows : [empty] }
+  }, [contextDiffView, normalizedFilter])
+  const diffLines = useMemo(() => {
+    if (pane !== 2 || !normalizedFilter) return rightContent.split('\n')
+    const patch = [...(baseDiffView?.patches ?? [])].filter(([path]) => matchesDiffFile(path, normalizedFilter)).map(([, text]) => text).join('\n')
+    return (patch || 'No files match this filter. / to edit, Esc to clear.').split('\n')
+  }, [baseDiffView, normalizedFilter, pane, rightContent])
+  const previousContextView = useRef<{ scope: string; layout: string; rows: Array<TuiPierreDiffRow | TuiPierreSplitRow> } | null>(null)
+  useLayoutEffect(() => {
+    const rows = (diffLayout === 'split' ? rightDiffView?.splitRows : rightDiffView?.rows) ?? []
+    const previous = previousContextView.current
+    if (previous?.scope === rightContent && previous.rows !== rows) {
+      const byKey = new Map<string, number>()
+      rows.forEach((row, index) => { for (const key of diffRowKeys(row)) if (!byKey.has(key)) byKey.set(key, index) })
+      const remap = (index: number) => {
+        const oldRow = previous.rows[index]
+        if (!oldRow) return index
+        for (const key of diffRowKeys(oldRow)) { const next = byKey.get(key); if (next !== undefined) return next }
+        const owner = oldRow.expandedGapId ? byKey.get(`gap:${oldRow.expandedGapId}`) : undefined
+        return owner ?? Math.min(index, Math.max(0, rows.length - 1))
+      }
+      setDiffCursorRow(remap)
+      setDiffSelectionAnchorRow(index => index === null ? null : remap(index))
+    }
+    previousContextView.current = { scope: rightContent, layout: diffLayout, rows }
+  }, [diffLayout, rightContent, rightDiffView])
   useEffect(() => {
     selectedFilePathRef.current = selectedFilePath
     rightDiffViewRef.current = rightDiffView
   }, [rightDiffView, selectedFilePath])
-  const rightDiffRows = rightDiffView ? rightDiffView.rows.slice(0, MAX_DIFF_LINES) : []
-  const rightDiffTruncated = rightDiffView ? rightDiffView.rows.length > MAX_DIFF_LINES : false
-  const rightSplitRows = rightDiffView ? rightDiffView.splitRows.slice(0, MAX_DIFF_LINES) : []
-  const rightSplitTruncated = rightDiffView ? rightDiffView.splitRows.length > MAX_DIFF_LINES : false
+  const rightDiffRows = rightDiffView?.rows ?? EMPTY_DIFF_ROWS
+  const rightSplitRows = rightDiffView?.splitRows ?? EMPTY_SPLIT_ROWS
   const activeDiffRows = diffLayout === 'split' ? rightSplitRows : rightDiffRows
   const diffSelectionCurrentIndex = activeDiffRows.length > 0
     ? clampNumber(diffCursorRow, 0, activeDiffRows.length - 1)
@@ -1257,38 +1316,116 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
     const notesByEndIndex = new Map<number, Array<{ key: string; note: DiffNote; label: string; span: DiffSelectionSpan }>>()
     if (pane !== 2 || fileDiffMode !== 'viewer' || activeDiffRows.length === 0) return notesByEndIndex
     for (const [key, note] of diffNotes) {
-      const span = diffSelectionSpanFromSelection(selectedFilePath, activeDiffRows, note.range)
+      const span = diffSelectionSpanFromSelection(note.filePath, activeDiffRows, note.range)
       if (!span) continue
       const list = notesByEndIndex.get(span.endIndex) ?? []
       list.push({ key, note, label: span.label, span })
       notesByEndIndex.set(span.endIndex, list)
     }
     return notesByEndIndex
-  }, [activeDiffRows, diffNotes, fileDiffMode, pane, selectedFilePath])
+  }, [activeDiffRows, diffNotes, fileDiffMode, pane])
   const diffDraftSpan = useMemo(() => {
     if (pane !== 2 || fileDiffMode !== 'viewer' || !draftNote || activeDiffRows.length === 0) return null
-    return diffSelectionSpanFromSelection(selectedFilePath, activeDiffRows, draftNote.range)
-  }, [activeDiffRows, draftNote, fileDiffMode, pane, selectedFilePath])
+    return diffSelectionSpanFromSelection(draftNote.filePath, activeDiffRows, draftNote.range)
+  }, [activeDiffRows, draftNote, fileDiffMode, pane])
 
-  // Gutter width: max line number digit count across all stack rows
-  const rightDiffLineNumbers = rightDiffRows.flatMap((row) => [row.oldLine, row.newLine].filter((value): value is number => value != null))
-  const rightDiffGutterWidth = Math.max(
-    rightDiffLineNumbers.length > 0 ? Math.max(...rightDiffLineNumbers).toString().length : 1,
-    1,
-  )
+  const rightDiffGutterWidth = useMemo(() => {
+    let max = 1
+    for (const row of rightDiffRows) max = Math.max(max, row.oldLine ?? 0, row.newLine ?? 0)
+    return String(max).length
+  }, [rightDiffRows])
 
   // Stack view text column width
   const stackGutterCols = showLineNumbers ? rightDiffGutterWidth * 2 + 2 : 0
   // Always reserve DIFF_BADGE_WIDTH cols for the hover/note badge column.
-  const rightDiffTextWidth = Math.max(rightW - stackGutterCols - 3 - DIFF_BADGE_WIDTH, 12)
+  const rightDiffTextWidth = Math.max(rightW - stackGutterCols - 3 - DIFF_BADGE_WIDTH - 1, 1)
 
   // Split view widths
-  const splitHalfW = Math.floor((rightW - 1) / 2)
-  const splitRightHalfW = rightW - 1 - splitHalfW
+  const splitHalfW = Math.floor((rightW - 2) / 2)
+  const splitRightHalfW = rightW - 2 - splitHalfW
   const splitGutterCols = showLineNumbers ? rightDiffGutterWidth + 1 : 0
   const splitIndicatorCols = 3
-  const splitLeftTextW = Math.max(splitHalfW - splitGutterCols - splitIndicatorCols, 6)
-  const splitRightTextW = Math.max(splitRightHalfW - splitGutterCols - splitIndicatorCols, 6)
+  const splitLeftTextW = Math.max(splitHalfW - splitGutterCols - splitIndicatorCols, 1)
+  const splitRightTextW = Math.max(splitRightHalfW - splitGutterCols - splitIndicatorCols, 1)
+
+  const codeHeights = useMemo(() => activeDiffRows.map(row => {
+    if ('left' in row || 'right' in row) {
+      const split = row as TuiPierreSplitRow
+      return Math.max(diffTextHeight(split.left?.text ?? '', splitLeftTextW, diffTabWidth, wrapDiffLines), diffTextHeight(split.right?.text ?? '', splitRightTextW, diffTabWidth, wrapDiffLines))
+    }
+    return row.tone === 'context' || row.tone === 'addition' || row.tone === 'deletion'
+      ? diffTextHeight(row.text ?? '', rightDiffTextWidth, diffTabWidth, wrapDiffLines) : 1
+  }), [activeDiffRows, diffTabWidth, rightDiffTextWidth, splitLeftTextW, splitRightTextW, wrapDiffLines])
+  const maxHorizontalOffset = useMemo(() => {
+    let maximum = 0
+    if (pane === 2 && fileDiffMode === 'viewer') {
+      for (const row of activeDiffRows) {
+        const split = row as TuiPierreSplitRow
+        if (split.left || split.right) maximum = Math.max(maximum, diffTextWidth(split.left?.text ?? '', diffTabWidth) - splitLeftTextW, diffTextWidth(split.right?.text ?? '', diffTabWidth) - splitRightTextW)
+        else if (row.tone === 'context' || row.tone === 'addition' || row.tone === 'deletion') maximum = Math.max(maximum, diffTextWidth(row.text ?? '', diffTabWidth) - rightDiffTextWidth)
+      }
+    } else for (const line of diffLines) maximum = Math.max(maximum, diffTextWidth(line, diffTabWidth) - rightW + 1)
+    return Math.max(0, maximum)
+  }, [activeDiffRows, diffLines, diffTabWidth, fileDiffMode, pane, rightDiffTextWidth, rightW, splitLeftTextW, splitRightTextW])
+  useLayoutEffect(() => { maxHorizontalOffsetRef.current = maxHorizontalOffset }, [maxHorizontalOffset])
+  const visibleHorizontalOffset = Math.min(horizontalOffset, maxHorizontalOffset)
+
+  const geometry = useMemo(() => buildDiffGeometry(
+    pane === 2 && fileDiffMode === 'viewer' && rightDiffView
+      ? activeDiffRows.map((row, index) => ({
+          keys: diffRowKeys(row),
+          height: !showHunkHeaders && row.tone === 'hunk' ? 0 : codeHeights[index]!
+            + (diffDraftSpan?.endIndex === index ? 6 : 0)
+            + (diffNotesByEndIndex.get(index) ?? []).reduce((height, { key, note }) =>
+              height + (key === draftNote?.rowKey || !note.text ? 0 : 3 + note.text.split('\n').length + (onSendDiffNoteToComposer ? 1 : 0)), 0),
+        }))
+      : diffLines.map((line, index) => ({ keys: [`text:${index}`], height: diffTextHeight(line, rightW - 1, diffTabWidth, wrapDiffLines) })),
+  ), [activeDiffRows, codeHeights, diffTabWidth, wrapDiffLines, rightW, diffDraftSpan, diffLines, diffNotesByEndIndex, draftNote, fileDiffMode, onSendDiffNoteToComposer, pane, rightDiffView, showHunkHeaders])
+  const geometryRef = useRef<DiffGeometry>(geometry)
+  useLayoutEffect(() => { geometryRef.current = geometry }, [geometry])
+  const window = useGitDiffViewport(diffScrollRef, geometry, loadedContentKey + ':' + fileDiffMode + ':filter:' + normalizedFilter,
+    rightContent !== 'Loading…' && loadedContentKey === contentKey, diffViewportHeight,
+    pane === 2 && fileDiffMode === 'viewer' && jumpFilePath ? `${jumpFilePath}\0file` : undefined, setDiffCursorRow, fileJumpRevision, loadedContentKey + ':' + fileDiffMode)
+  const reviewActions = useGitDiffReviewActions({ rows: activeDiffRows, geometry, scrollRef: diffScrollRef,
+    cursor: diffSelectionCurrentIndex, anchor: diffSelectionAnchorRow, enabled: pane === 2 && fileDiffMode === 'viewer',
+    scope: noteScope, keyRef: reviewActionKeyRef, onCursor: selectSearchRow, onFocus: focusDiff, onOffset: setHorizontalOffset,
+    onClipboardWrite, wrap: wrapDiffLines, columns: diffLayout === 'split' ? Math.min(splitLeftTextW, splitRightTextW) : rightDiffTextWidth, tabWidth: diffTabWidth })
+  useLayoutEffect(() => { reviewSearchEditingRef.current = reviewActions.editing }, [reviewActions.editing])
+  const captureReviewKeys = Boolean(draftNote || filterEditing || fileFilter || reviewActions.editing || reviewActions.query || sourceMenuOpen)
+  useLayoutEffect(() => {
+    onKeyCaptureChange?.(captureReviewKeys)
+    return () => onKeyCaptureChange?.(false)
+  }, [captureReviewKeys, onKeyCaptureChange])
+  const diffHighlights = useGitDiffHighlighting(baseDiffView?.files, activeDiffRows, window.start, window.end,
+    pierreAppearance, pane === 2 && fileDiffMode === 'viewer')
+  const fileDiffSegs: React.ReactNode[] = fileDiffMode === 'viewer'
+    ? (() => {
+        const controls: Array<[string, string]> = [
+          ['v', 'plain'],
+          ['s', diffLayout],
+          ['n', showLineNumbers ? '#' : 'no#'],
+          ['m', showHunkHeaders ? '@@' : 'no@@'],
+          ['{}', 'hunk'],
+          ['e/c', 'context'],
+          ['⇧j/k', 'range'],
+          ['a', 'note'],
+          ['A', 'composer'],
+          ['x', 'del'],
+        ]
+        const nodes: React.ReactNode[] = []
+        controls.forEach(([k, l], i) => {
+          if (i > 0) nodes.push(<span key={`fd-sep${i}`} fg={theme.dim}>{'  '}</span>)
+          nodes.push(<span key={`fd-k${i}`} fg={theme.cyan}>{k}</span>)
+          nodes.push(<span key={`fd-l${i}`} fg={theme.muted}>{` ${l}`}</span>)
+        })
+        nodes.push(<span key="fd-syn-dot" fg={diffHighlights.size > 0 ? theme.green : theme.dim}>{'   ● '}</span>)
+        nodes.push(<span key="fd-syn" fg={theme.muted}>syntax</span>)
+        return nodes
+      })()
+    : [
+        <span key="fd-parsed-k" fg={theme.cyan}>v</span>,
+        <span key="fd-parsed-l" fg={theme.muted}> parsed</span>,
+      ]
 
   function clampLeftPaneWidth(nextWidth: number): number {
     return Math.max(minLeftW, Math.min(nextWidth, maxLeftW))
@@ -1322,10 +1459,10 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
   function sendDiffNoteToComposer(note: DiffNote, label: string) {
     if (!onSendDiffNoteToComposer) return
     onSendDiffNoteToComposer(buildDiffCommentComposerPrompt({
-      filePath: selectedFilePath ?? 'git diff',
+      filePath: note.filePath,
       range: note.range,
       comment: note.text,
-      context: rightContent,
+      context: reviewFileContext(rightDiffViewRef.current?.rows ?? [], note.filePath),
       source: `Git popover ${label}`,
     }))
   }
@@ -1399,6 +1536,9 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
               </box>
             ) : null}
           </box>
+          {filterEditing || fileFilter ? <box height={1} paddingX={1} onMouseUp={openFileFilter}>
+            <text fg={theme.cyan} wrapMode="none">{fitTerminalText(`/ ${fileFilter}${filterEditing ? '▌' : ''}`, leftW - 4)}</text>
+          </box> : null}
           <scrollbox
             ref={fileTreeScrollRef}
             flexGrow={1}
@@ -1427,7 +1567,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
                   backgroundColor={isCursor ? theme.surface3 : 'transparent'}
                   onMouseUp={(event) => {
                     if (event.button !== 0) return
-                    event.stopPropagation(); setPane(2); setFocusSide('left'); setTreeCursor(i)
+                    event.stopPropagation(); setPane(2); setFocusSide('left'); navigateTreeCursor(i)
                     if (node.kind === 'dir') {
                       setExpandedDirs((prev) => {
                         const next = new Set(prev)
@@ -1556,10 +1696,18 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
             return <text wrapMode="none">{segs}</text>
           })()}
         </box>
+        {pane === 2 ? <DiffViewControls width={rightW} theme={theme} mode={diffLayoutMode} layout={diffLayout} wrap={wrapDiffLines} tabWidth={diffTabWidth} offset={visibleHorizontalOffset}
+          onLayout={() => setDiffLayoutMode(mode => mode === 'auto' ? 'stack' : mode === 'stack' ? 'split' : 'auto')}
+          onWrap={() => setWrapDiffLines(value => !value)} onTabs={() => setDiffTabWidth(value => value === 2 ? 4 : value === 4 ? 8 : 2)}
+          onPan={delta => setHorizontalOffset(value => Math.max(0, Math.min(maxHorizontalOffset, value + delta)))} onFilter={openFileFilter} /> : null}
+        {pane === 2 && fileDiffMode === 'viewer' ? <DiffReviewActionsBar theme={theme} width={rightW} {...reviewActions}
+          onSearch={() => { if (!draftNote && !filterEditing) reviewActions.openSearch() }}
+          onNext={reviewActions.next} onCopy={side => { if (!draftNote) void reviewActions.copy(side) }} /> : null}
         <scrollbox
+          id="git-diff-scroll"
           ref={diffScrollRef}
           width={rightW}
-          height={rightH - 1}
+          height={diffViewportHeight}
           backgroundColor={theme.surface}
           scrollY
           scrollbarOptions={{ trackOptions: { foregroundColor: theme.muted, backgroundColor: theme.surface2 } }}
@@ -1572,21 +1720,35 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
             const totalRows = pane === 2 && fileDiffMode === 'viewer'
               ? (diffLayout === 'split' ? (rdv?.splitRows.length ?? 0) : (rdv?.rows.length ?? 0))
               : 0
-            if (totalRows > 0) setDiffCursorRow((current) => clampNumber(current + direction * amount, 0, totalRows - 1))
+            if (totalRows > 0 && !wrapDiffLines) setDiffCursorRow((current) => clampNumber(current + direction * amount, 0, totalRows - 1))
             diffScrollRef.current?.scrollBy(direction * amount)
+            if (totalRows > 0 && wrapDiffLines) setDiffCursorRow(Math.min(totalRows - 1, diffRowAt(geometry, diffScrollRef.current?.scrollTop ?? 0)))
           }}
         >
+          {window.before > 0 ? <box height={window.before} flexShrink={0} /> : null}
           {contentLoading && diffLines.length === 1 && diffLines[0] === 'Loading…' ? (
             <box width={rightW}>
               <text fg={theme.dim} wrapMode="none">loading…</text>
             </box>
           ) : pane === 2 && fileDiffMode === 'viewer' && rightDiffView && diffLayout === 'stack' ? (
             <>
-              {rightDiffRows.map((row, idx) => {
+              {rightDiffRows.slice(window.start, window.end).map((row, localIndex) => {
+                const idx = window.start + localIndex
+                const filePath = row.filePath ?? selectedFilePath
                 if (!showHunkHeaders && row.tone === 'hunk') return null
                 const isCursor = focusSide === 'right' && idx === diffCursorRow
+                if (row.contextGap) return (
+                  <box key={row.key} height={1} flexShrink={0} width={rightW} backgroundColor={isCursor ? theme.surface3 : theme.surface2}
+                    onMouseUp={(event) => {
+                      if (event.button !== 0) return
+                      event.stopPropagation(); setFocusSide('right'); setDiffCursorRow(idx); setDiffSelectionAnchorRow(null)
+                      changeContext(row.contextGap!, event.modifiers.shift)
+                    }}>
+                    <text fg={theme.cyan} wrapMode="none">{fitTerminalText(`${isCursor ? '▶ ' : '  '}${row.text ?? ''}`, rightW - 1)}</text>
+                  </box>
+                )
                 const rowFg = diffRowColor(row, theme)
-                const anchor = stackRowAnchor(row, selectedFilePath)
+                const anchor = stackRowAnchor(row, filePath)
                 const point = diffSelectionPointForStackRow(row)
                 const singleRowSelection = point
                   ? {
@@ -1606,6 +1768,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
                   <React.Fragment key={row.key}>
                     <box
                       width={rightW}
+                      height={codeHeights[idx]} flexShrink={0}
                       flexDirection="row"
                       backgroundColor={rowBackground}
                       onMouseDown={(event) => beginDiffMouseSelection(event, idx)}
@@ -1643,15 +1806,9 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
                           3,
                         )}
                       </text>
-                      {row.spans && row.spans.length > 0 ? (
-                        <text wrapMode="none">
-                          {renderDiffSpans(row.spans, rowFg, rightDiffTextWidth)}
-                        </text>
-                      ) : (
-                        <text fg={rowFg} wrapMode="none">
-                          {fitTerminalText(row.text || ' ', rightDiffTextWidth)}
-                        </text>
-                      )}
+                      <DiffCodeText text={row.text || ' '} spans={(row.newLine != null ? diffHighlights.get(row.filePath ?? '')?.new.get(row.newLine) : diffHighlights.get(row.filePath ?? '')?.old.get(row.oldLine!)) ?? row.spans} searchQuery={row.oldLine != null || row.newLine != null ? reviewActions.query : ''} searchFg={theme.bg} searchBg={theme.amber} columns={rightDiffTextWidth} tabWidth={diffTabWidth}
+                        wrap={wrapDiffLines && (row.tone === 'context' || row.tone === 'addition' || row.tone === 'deletion')}
+                        offset={row.tone === 'context' || row.tone === 'addition' || row.tone === 'deletion' ? visibleHorizontalOffset : 0} fg={rowFg} />
                       {/* Badge column: [+] on hover, ● on noted, blank otherwise */}
                       {isHovered ? (
                         <box
@@ -1660,8 +1817,9 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
                             event.stopPropagation()
                             setDiffCursorRow(idx)
                             if (currentSelectionRange) {
-                              const key = diffSelectionKey(selectedFilePath, currentSelectionRange)
+                              const key = diffSelectionKey(filePath, currentSelectionRange)
                               setDraftNote({
+                                filePath: filePath ?? 'git diff',
                                 rowKey: key,
                                 range: currentSelectionRange,
                                 lineLabel: diffSelectionLineLabel(currentSelectionRange),
@@ -1678,13 +1836,13 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
                         <text fg={theme.dim} wrapMode="none">{'   '}</text>
                       )}
                     </box>
-                    {hasDraft && draftNote ? renderNoteDraft(draftNote, rightW, selectedFilePath, theme) : null}
+                    {hasDraft && draftNote ? renderNoteDraft(draftNote, rightW, draftNote.filePath, theme) : null}
                     {noteCards.map(({ key, note, label }) => (
                       <React.Fragment key={key}>
                         {renderNoteCard(
                           note,
                           rightW,
-                          selectedFilePath,
+                          note.filePath,
                           theme,
                           label,
                           onSendDiffNoteToComposer ? () => sendDiffNoteToComposer(note, label) : undefined,
@@ -1694,20 +1852,25 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
                   </React.Fragment>
                 )
               })}
-              {rightDiffTruncated ? (
-                <box width={rightW}>
-                  <text fg={theme.amber} wrapMode="none">
-                    {`... ${rightDiffView.rows.length - MAX_DIFF_LINES} more lines truncated`}
-                  </text>
-                </box>
-              ) : null}
             </>
           ) : pane === 2 && fileDiffMode === 'viewer' && rightDiffView && diffLayout === 'split' ? (
             <>
-              {rightSplitRows.map((row, idx) => {
+              {rightSplitRows.slice(window.start, window.end).map((row, localIndex) => {
+                const idx = window.start + localIndex
+                const filePath = row.filePath ?? selectedFilePath
                 if (!showHunkHeaders && row.tone === 'hunk') return null
                 const isCursor = focusSide === 'right' && idx === diffCursorRow
-                const anchor = splitRowAnchor(row, selectedFilePath)
+                if (row.contextGap) return (
+                  <box key={row.key} height={1} flexShrink={0} width={rightW} backgroundColor={isCursor ? theme.surface3 : theme.surface2}
+                    onMouseUp={(event) => {
+                      if (event.button !== 0) return
+                      event.stopPropagation(); setFocusSide('right'); setDiffCursorRow(idx); setDiffSelectionAnchorRow(null)
+                      changeContext(row.contextGap!, event.modifiers.shift)
+                    }}>
+                    <text fg={theme.cyan} wrapMode="none">{fitTerminalText(`${isCursor ? '▶ ' : '  '}${row.text ?? ''}`, rightW - 1)}</text>
+                  </box>
+                )
+                const anchor = splitRowAnchor(row, filePath)
                 const point = diffSelectionPointForSplitRow(row)
                 const singleRowSelection = point
                   ? {
@@ -1750,13 +1913,13 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
                           {fitTerminalText((isCursor ? '▶ ' : '') + (row.text ?? ''), rightW - 1)}
                         </text>
                       </box>
-                      {hasDraft && draftNote ? renderNoteDraft(draftNote, rightW, selectedFilePath, theme) : null}
+                      {hasDraft && draftNote ? renderNoteDraft(draftNote, rightW, draftNote.filePath, theme) : null}
                       {noteCards.map(({ key, note, label }) => (
                         <React.Fragment key={key}>
                           {renderNoteCard(
                             note,
                             rightW,
-                            selectedFilePath,
+                            note.filePath,
                             theme,
                             label,
                             onSendDiffNoteToComposer ? () => sendDiffNoteToComposer(note, label) : undefined,
@@ -1772,6 +1935,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
                   <React.Fragment key={row.key}>
                     <box
                       width={rightW}
+                      height={codeHeights[idx]} flexShrink={0}
                       flexDirection="row"
                       backgroundColor={isSelectedDiffRow ? theme.surface3 : undefined}
                       onMouseDown={(event) => beginDiffMouseSelection(event, idx)}
@@ -1790,7 +1954,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
                         setDiffCursorRow(idx)
                       }}
                     >
-                      {renderSplitSide(row.left, splitHalfW, splitLeftTextW, theme, showLineNumbers, splitGutterCols, rightDiffGutterWidth)}
+                      {renderSplitSide(row.left ? { ...row.left, spans: diffHighlights.get(row.filePath ?? '')?.old.get(row.left.lineNum!) ?? row.left.spans } : undefined, splitHalfW, splitLeftTextW, theme, showLineNumbers, splitGutterCols, rightDiffGutterWidth, diffTabWidth, wrapDiffLines, visibleHorizontalOffset, codeHeights[idx]!, reviewActions.query)}
                       {isHoveredSplit ? (
                         <box
                           width={1}
@@ -1798,8 +1962,9 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
                             event.stopPropagation()
                             setDiffCursorRow(idx)
                             if (currentSelectionRange) {
-                              const key = diffSelectionKey(selectedFilePath, currentSelectionRange)
+                              const key = diffSelectionKey(filePath, currentSelectionRange)
                               setDraftNote({
+                                filePath: filePath ?? 'git diff',
                                 rowKey: key,
                                 range: currentSelectionRange,
                                 lineLabel: diffSelectionLineLabel(currentSelectionRange),
@@ -1815,15 +1980,15 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
                           {noteCards.length > 0 ? '●' : '│'}
                         </text>
                       )}
-                      {renderSplitSide(row.right, splitRightHalfW, splitRightTextW, theme, showLineNumbers, splitGutterCols, rightDiffGutterWidth)}
+                      {renderSplitSide(row.right ? { ...row.right, spans: diffHighlights.get(row.filePath ?? '')?.new.get(row.right.lineNum!) ?? row.right.spans } : undefined, splitRightHalfW, splitRightTextW, theme, showLineNumbers, splitGutterCols, rightDiffGutterWidth, diffTabWidth, wrapDiffLines, visibleHorizontalOffset, codeHeights[idx]!, reviewActions.query)}
                     </box>
-                    {hasDraft && draftNote ? renderNoteDraft(draftNote, rightW, selectedFilePath, theme) : null}
+                    {hasDraft && draftNote ? renderNoteDraft(draftNote, rightW, draftNote.filePath, theme) : null}
                     {noteCards.map(({ key, note, label }) => (
                       <React.Fragment key={key}>
                         {renderNoteCard(
                           note,
                           rightW,
-                          selectedFilePath,
+                          note.filePath,
                           theme,
                           label,
                           onSendDiffNoteToComposer ? () => sendDiffNoteToComposer(note, label) : undefined,
@@ -1833,17 +1998,11 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
                   </React.Fragment>
                 )
               })}
-              {rightSplitTruncated ? (
-                <box width={rightW}>
-                  <text fg={theme.amber} wrapMode="none">
-                    {`... ${rightDiffView.splitRows.length - MAX_DIFF_LINES} more lines truncated`}
-                  </text>
-                </box>
-              ) : null}
             </>
           ) : (
             <>
-              {diffLines.map((line, i) => {
+              {diffLines.slice(window.start, window.end).map((line, localIndex) => {
+                const i = window.start + localIndex
                 const fg = line.startsWith('+') && !line.startsWith('+++')
                   ? theme.green
                   : line.startsWith('-') && !line.startsWith('---')
@@ -1854,20 +2013,14 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
                         ? theme.muted
                         : theme.text
                 return (
-                  <box key={i} width={rightW}>
-                    <text fg={fg} wrapMode="none">{line || ' '}</text>
+                  <box key={i} width={rightW} height={diffTextHeight(line, rightW - 1, diffTabWidth, wrapDiffLines)} flexShrink={0}>
+                    <DiffCodeText text={line || ' '} columns={rightW - 1} tabWidth={diffTabWidth} wrap={wrapDiffLines} offset={visibleHorizontalOffset} fg={fg} />
                   </box>
                 )
               })}
-              {pane === 2 && diffTruncated ? (
-                <box width={rightW}>
-                  <text fg={theme.amber} wrapMode="none">
-                    {`… diff truncated — ${allDiffLines.length - MAX_DIFF_LINES} more lines not shown`}
-                  </text>
-                </box>
-              ) : null}
             </>
           )}
+          {window.after > 0 ? <box height={window.after} flexShrink={0} /> : null}
         </scrollbox>
       </box>
 

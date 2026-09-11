@@ -1,5 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import React from 'react'
+import assert from 'node:assert/strict'
+import { CardSelectionVariants } from './cardSelectionVariants'
 import {
   selectTranscriptCardVariants,
   shouldCenterTranscriptCard,
@@ -10,13 +12,15 @@ import {
 } from './App'
 import type { TuiTranscriptCard } from '../format'
 
+let elementsCreated = 0
 function makeVariants(count: number): TranscriptCardSelectionVariants[] {
-  return Array.from({ length: count }, (_, index) => ({
-    cardKey: `card-${index}`,
-    idle: <box id={`idle-${index}`} />,
-    selected: <box id={`selected-${index}`} />,
-    focused: <box id={`focused-${index}`} />,
-  }))
+  return Array.from({ length: count }, (_, index) => new CardSelectionVariants(
+    `card-${index}`,
+    (hasCursor, isSelected) => {
+      elementsCreated++
+      return <box id={`${hasCursor ? 'focused' : isSelected ? 'selected' : 'idle'}-${index}`} />
+    },
+  ))
 }
 
 function changedReferences(before: React.ReactNode[], after: React.ReactNode[]): number {
@@ -33,9 +37,15 @@ function changedReferences(before: React.ReactNode[], after: React.ReactNode[]):
 // performance win and also prevent wrappers/conditional rows from sneaking
 // back into the transcript layout.
 const variants = makeVariants(240)
+assert.equal(elementsCreated, 0, 'Unused selection states should not allocate elements')
 const first = selectTranscriptCardVariants(variants, 'card-100', true)
+assert.equal(elementsCreated, 240, 'Initial render should create one element per card')
 const moved = selectTranscriptCardVariants(variants, 'card-101', true)
 const blurred = selectTranscriptCardVariants(variants, 'card-101', false)
+assert.equal(elementsCreated, 243, 'Only newly visited selection states should allocate')
+const revisited = selectTranscriptCardVariants(variants, 'card-100', true)
+assert.equal(elementsCreated, 243, 'Revisiting a selection must reuse its element')
+assert.equal(changedReferences(first, revisited), 0)
 
 const moveChanges = changedReferences(first, moved)
 if (moveChanges !== 2) {

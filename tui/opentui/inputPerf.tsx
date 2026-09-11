@@ -11,6 +11,7 @@
 //   INPUT_SCENARIO=reader-scroll bun tui/opentui/inputPerf.tsx
 //   INPUT_SECONDS=8 bun tui/opentui/inputPerf.tsx     # longer window each
 //   INPUT_REAL_SESSIONS=1 bun tui/opentui/inputPerf.tsx # field diagnostic
+//   INPUT_MEMORY=1 bun tui/opentui/inputPerf.tsx # forced-GC heap/RSS outside timing
 //
 // INPUT_REAL_SESSIONS is intentionally not deterministic across runs. The
 // reported `cards` column makes that field diagnostic interpretable, but only
@@ -199,6 +200,9 @@ if (!process.env.INPUT_CHILD) {
     console.log(
       `  ${scenario.name.padEnd(20)} ${String(commits).padStart(8)} ${String(over).padStart(12)} ${(worst.toFixed(1) + 'ms').padStart(12)} ${String(cards).padStart(7)}`,
     )
+    if ('memory' in parsed && parsed.memory) {
+      console.log(`MEMORY ${JSON.stringify({ scenario: scenario.name, ...parsed.memory as object })}`)
+    }
   }
   if (measuredScenarios === 0 || skippedScenarios > 0 || totalOverBudget > 0) {
     console.error(
@@ -218,6 +222,15 @@ const path = await import('path')
 const React = (await import('react')).default
 const { act } = await import('react')
 const { testRender } = await import('@opentui/react/test-utils')
+
+async function sampleRetainedMemory() {
+  if (process.env.INPUT_MEMORY !== '1') return null
+  // @ts-expect-error Bun-only diagnostics, including native allocations in RSS.
+  const { heapStats } = await import('bun:jsc')
+  ;(globalThis as unknown as { Bun: { gc(sync: boolean): void } }).Bun.gc(true)
+  const { heapSize, objectCount } = heapStats()
+  return { heapSize: heapSize as number, objectCount: objectCount as number, rssBytes: process.memoryUsage.rss() }
+}
 
 const dataDir = mkdtempSync(path.join(tmpdir(), 'agent-viewer-input-perf-'))
 process.chdir(dataDir)
@@ -383,6 +396,7 @@ if (scenario.expect && !preconditionFrame.includes(scenario.expect)) {
   process.exit(0)
 }
 
+const memoryBefore = await sampleRetainedMemory()
 const until = monotonicNow() + SECONDS * 1000
 let i = 0
 profileWindowOpen = true
@@ -393,6 +407,7 @@ while (monotonicNow() < until) {
 profileWindowOpen = false
 // Let the last metrics sample and any asynchronous logging flush.
 await settle(1500)
+const memoryAfter = await sampleRetainedMemory()
 
 let cards = 0
 try {
@@ -406,6 +421,7 @@ console.log(`RESULT ${JSON.stringify({
   over: profiledFrames.over,
   worst: profiledFrames.worst,
   cards,
+  memory: memoryBefore && memoryAfter ? { before: memoryBefore, after: memoryAfter } : undefined,
 })}`)
 if (process.env.INPUT_DEBUG_PROFILE === '1') console.error(`PROFILE ${JSON.stringify(profiledFrames)}`)
 process.exit(0)

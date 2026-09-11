@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/react */
-import React, { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, startTransition, useState } from 'react'
+import React, { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, startTransition, useState, useSyncExternalStore } from 'react'
 import { spawn } from 'node:child_process'
 import { GitPopover } from './GitPopover'
 import { PullRequestPopover } from './PullRequestPopover'
@@ -40,14 +40,19 @@ import { TaskPanelPopover } from './TaskPanelPopover'
 import {
   appendComposerSentHistory,
   flushComposerQueueWrites,
+  flushComposerStashWrites,
   readComposerDraft,
   readComposerQueue,
   readComposerSentHistory,
+  readComposerStash,
   scheduleWriteComposerDraft,
   scheduleWriteComposerQueue,
+  scheduleWriteComposerStash,
 } from '../../lib/tuiComposerState'
+import { frecencyKey, frecencyPrefix, readFrecencyScores, recordFrecencyUse } from '../../lib/tuiFrecency'
 import { registerExtraTreeSitterParsers } from './treeSitterParsers'
 import { startTuiMetricsLogger, tuiMetricsEnabled, noteRenderFrame, noteTuiComposerLatency, noteTuiNavLatency, registerTuiMetricsGauge, cardProfileEnabled, logCardRecompute } from './metricsLogger'
+import { CardSelectionVariants } from './cardSelectionVariants'
 import {
   buildPierreDiffView,
   type TuiPierreDiffRow,
@@ -57,7 +62,7 @@ import {
 } from './pierreDiffView'
 import type { SelectedLineRange } from '@pierre/diffs'
 import { RGBA, SyntaxStyle, MacOSScrollAccel, TextAttributes } from '@opentui/core'
-import type { BaseRenderable, BoxRenderable, CliRenderer, MarkdownRenderable, MouseEvent, ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable, TextareaAction } from '@opentui/core'
+import type { BaseRenderable, BoxRenderable, CliRenderer, Renderable, MarkdownRenderable, MouseEvent, ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable, TextareaAction } from '@opentui/core'
 import { useKeyboard, usePaste, useRenderer, useSelectionHandler, useTerminalDimensions } from '@opentui/react'
 import {
   formatProviderLabel,
@@ -194,6 +199,16 @@ import {
 } from './sessionDetailWorkerClient'
 import type { TuiSessionReaderState } from '../../lib/tuiState'
 import type { AgentProvider, ContextUsage, ProviderSelection, ReasoningEffortLevel, RunningSessionRef, SendAttachment, SendState, Session, SessionComposerAgentOption, SessionModelInfo, SubagentSummary, ToolResultBlock } from '../../lib/types'
+import { fitText, joinMeta } from './textLayout'
+import { Slot } from './slots'
+import { peekGitSummaryCached, readGitSummaryCached } from './gitSummaryCache'
+import './slotRegistrations'
+import { CoordinatorSidebar, coordinatorSidebarHeaderText } from './CoordinatorSidebar'
+import {
+  getCoordinatorState,
+  setCoordinatorSelectedKey,
+  subscribeCoordinator,
+} from './coordinatorStore'
 import { AttentionInboxPopover, attentionItemNeedsInput, type AttentionItem } from './AttentionInboxPopover'
 import { CrossSessionMessagingPopover } from './CrossSessionMessagingPopover'
 import { CheckpointPopover } from './CheckpointPopover'
@@ -205,7 +220,7 @@ import { deliverComposerSteer } from '../../lib/composerSteering'
 import { parseClaudeCommandLifecycle, type ClaudeCommandLifecycleState } from '../../lib/claudeCommandLifecycle'
 import { isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs, TransientAwareSendError, type UsageLimitKind } from '../../lib/transientError'
 import { listProjectFiles } from '../../lib/projectFiles'
-import { fetchGitSummary, type GitSummary } from '../../lib/gitProvider'
+import type { GitSummary } from '../../lib/gitProvider'
 import { runGitCommand } from '../../lib/gitNodeProvider'
 import { getSlashCommandSuggestions, filterSlashCommands, normalizeSlashCommandSuggestions, type SlashCommandSuggestion } from '../../lib/slashCommands'
 import { parseCrossSessionComposerCommand } from '../../lib/crossSessionCommands'
@@ -237,11 +252,20 @@ import {
   resolveSelectedSessionIndex,
   runComposerSessionPreparation,
   splitCommandKey,
-  SPLIT_CHORD_HELP,
   SPLIT_SHARE_EVEN,
   SPLIT_SHARE_STEP,
   type SplitPaneOrientation,
 } from './splitPaneState'
+import {
+  CHORD_HELP_REVEAL_MS,
+  chordHelpKeyWidth,
+  chordHelpRows,
+  chordHintText,
+  chordUnknownKeyNotice,
+  COMMAND_CHORD_MAP,
+  SPLIT_CHORD_MAP,
+  type ChordMap,
+} from './chordHelp'
 import {
   isAltKey,
   isCtrlKey,
@@ -730,6 +754,35 @@ const READER_SCROLL_POLL_MS = 120
 // READER_FIXUP_MAX_TRIES as a safety net.
 const READER_FIXUP_RETRY_MS = 16
 const READER_FIXUP_MAX_TRIES = 12
+// A card box sits at most this deep under the scrollbox content: the content
+// holds one wrapper box per card (landmarks + the `card:` box itself), and a
+// user bubble adds one more level of alignment box.
+const READER_CARD_SEARCH_DEPTH = 3
+
+// OpenTUI's `findDescendantById` is a recursive walk of the WHOLE subtree, and
+// it sorts each level's children on the way down. Under a mounted transcript
+// that is every renderable inside every card — and the fixup executors below
+// call it on a 16ms timer, up to READER_FIXUP_MAX_TRIES times, each time a
+// window slides or a tab is restored. Profiled during tab switching against
+// real sessions it was 9.7% of all CPU, landing squarely in the window between
+// the switch and the first paint. A card box is never deeper than
+// READER_CARD_SEARCH_DEPTH, so stopping there skips every card's interior
+// while still finding the card. The full search stays as a fallback: a missed
+// card would silently drop a scroll restore, not fail loudly.
+function findReaderCard(content: Renderable | undefined | null, id: string): Renderable | undefined {
+  if (!content) return undefined
+  const scan = (node: Renderable, depth: number): Renderable | undefined => {
+    for (const child of node.getChildren()) {
+      if (child.id === id) return child as Renderable
+      if (depth > 1) {
+        const found = scan(child as Renderable, depth - 1)
+        if (found) return found
+      }
+    }
+    return undefined
+  }
+  return scan(content, READER_CARD_SEARCH_DEPTH) ?? content.findDescendantById(id)
+}
 // Above this many threaded messages, never format cards synchronously on the
 // render thread (the fallback in baseTranscriptCards) — formatTranscriptCard ×
 // N is a multi-second freeze on big sessions. The worker formats instead and
@@ -867,17 +920,15 @@ type QueuedComposerSend = {
   promptParts: ComposerPromptPart[]
 }
 
-function isQueuedComposerSend(value: unknown): value is QueuedComposerSend {
-  if (!value || typeof value !== 'object') return false
-  const entry = value as Partial<QueuedComposerSend>
-  if (typeof entry.id !== 'string' || !entry.id) return false
-  if (typeof entry.targetKey !== 'string' || !entry.targetKey) return false
-  if (typeof entry.text !== 'string') return false
-  if (!Array.isArray(entry.attachments) || !entry.attachments.every((attachment) =>
+function isSendAttachmentList(value: unknown): value is SendAttachment[] {
+  return Array.isArray(value) && value.every((attachment) =>
     attachment && typeof attachment === 'object'
       && typeof (attachment as Partial<SendAttachment>).id === 'string'
-      && typeof (attachment as Partial<SendAttachment>).type === 'string')) return false
-  return Array.isArray(entry.promptParts) && entry.promptParts.every((part) => {
+      && typeof (attachment as Partial<SendAttachment>).type === 'string')
+}
+
+function isComposerPromptPartList(value: unknown): value is ComposerPromptPart[] {
+  return Array.isArray(value) && value.every((part) => {
     if (!part || typeof part !== 'object') return false
     const candidate = part as Partial<ComposerPromptPart>
     if (typeof candidate.id !== 'string' || typeof candidate.marker !== 'string') return false
@@ -885,6 +936,23 @@ function isQueuedComposerSend(value: unknown): value is QueuedComposerSend {
     return candidate.kind === 'attachment'
       && Boolean(candidate.attachment && typeof candidate.attachment === 'object')
   })
+}
+
+function isQueuedComposerSend(value: unknown): value is QueuedComposerSend {
+  if (!value || typeof value !== 'object') return false
+  const entry = value as Partial<QueuedComposerSend>
+  if (typeof entry.id !== 'string' || !entry.id) return false
+  if (typeof entry.targetKey !== 'string' || !entry.targetKey) return false
+  if (typeof entry.text !== 'string') return false
+  return isSendAttachmentList(entry.attachments) && isComposerPromptPartList(entry.promptParts)
+}
+
+function isComposerDraftSnapshot(value: unknown): value is ComposerDraftSnapshot {
+  if (!value || typeof value !== 'object') return false
+  const entry = value as Partial<ComposerDraftSnapshot>
+  if (typeof entry.text !== 'string') return false
+  if (entry.cursorOffset !== undefined && typeof entry.cursorOffset !== 'number') return false
+  return isSendAttachmentList(entry.attachments) && isComposerPromptPartList(entry.promptParts)
 }
 type ComposerSubmission = {
   visibleText: string
@@ -1358,16 +1426,6 @@ function contextBarColor(percentage: number, theme: TuiThemePalette): string {
   return theme.green
 }
 
-function joinMeta(parts: Array<string | null | undefined>): string {
-  return parts.filter((part): part is string => Boolean(part && part.trim())).join('  ·  ')
-}
-
-function fitText(value: string, width: number): string {
-  if (width <= 0) return ''
-  if (value.length <= width) return value.padEnd(width, ' ')
-  if (width === 1) return value.slice(0, 1)
-  return `${value.slice(0, width - 1)}…`
-}
 
 // Composer hint rows are ' · '-joined key/label pairs (e.g. "⏎ send · ⇧⏎
 // newline · ⌃O expand"). A plain char-slice truncation lands mid-key ("⌃…"),
@@ -2962,39 +3020,6 @@ function buildSidebarEntries(
       })
       pushSubagents(session, sessionEntryKey)
     }
-  }
-  return entries
-}
-
-type CoordinatorSidebarEntry =
-  | { type: 'run'; key: string; runId: string; run: ProtocolRun; agentCount: number }
-  | { type: 'agent'; key: string; runId: string; agent: ProtocolAgent; isLast: boolean; taskTitle: string | null }
-
-/** Sidebar analogue of buildSidebarEntries: one header per run, lead first
- * then teammates in roster order — mirrors the topology tree already used
- * in CoordinationControlCenter, flattened for a linear list like project
- * groups flatten into session rows. */
-function buildCoordinatorEntries(runs: ProtocolRun[], snapshots: Map<string, ProtocolRunSnapshot>): CoordinatorSidebarEntry[] {
-  const entries: CoordinatorSidebarEntry[] = []
-  for (const run of runs) {
-    const snapshot = snapshots.get(run.id)
-    const agents = snapshot?.agents ?? []
-    const tasksById = new Map((snapshot?.tasks ?? []).map((task) => [task.id, task]))
-    const ordered = [
-      ...agents.filter((agent) => agent.role === 'lead'),
-      ...agents.filter((agent) => agent.role !== 'lead'),
-    ]
-    entries.push({ type: 'run', key: `run:${run.id}`, runId: run.id, run, agentCount: ordered.length })
-    ordered.forEach((agent, index) => {
-      entries.push({
-        type: 'agent',
-        key: `run-agent:${run.id}:${agent.id}`,
-        runId: run.id,
-        agent,
-        isLast: index === ordered.length - 1,
-        taskTitle: (agent.taskId ? tasksById.get(agent.taskId)?.title : undefined) ?? null,
-      })
-    })
   }
   return entries
 }
@@ -6674,12 +6699,7 @@ function makeTranscriptCardSelectionVariants(
       isSelected={isSelected}
     />
   )
-  return {
-    cardKey: props.card.key,
-    idle: render(false, false),
-    selected: render(false, true),
-    focused: render(true, true),
-  }
+  return new CardSelectionVariants(props.card.key, render)
 }
 
 function transcriptCardVariantPropsEqual(
@@ -6718,7 +6738,7 @@ function cachedTranscriptCardSelectionVariants(
 
 // Cursor movement used to rebuild a fresh React element for every mounted
 // card, even though React.memo ultimately rendered only the old and new
-// selection. Reuse the exact prebuilt element for every unchanged card so
+// selection. Reuse the exact cached element for every unchanged card so
 // React can skip reconciliation by identity. The chosen TranscriptCard and
 // its props are identical to the previous implementation; this adds no
 // wrapper or native node and cannot change card geometry or scroll offsets.
@@ -7382,7 +7402,19 @@ function SplitTranscriptPaneInner({
 
 const SplitTranscriptPane = React.memo(SplitTranscriptPaneInner)
 
+// Root render counter. The root is one very large component, so "did this
+// state change re-render the whole app?" is the question every surface moved
+// out of it has to answer — and a Profiler cannot answer it, because a commit
+// caused by a memoized child still fires the Profiler wrapping the root. An
+// increment here is the only thing that distinguishes the two. It costs one
+// integer add per render.
+let rootRenderCount = 0
+export function readRootRenderCount(): number {
+  return rootRenderCount
+}
+
 export default function OpenTuiApp() {
+  rootRenderCount += 1
   const renderer = useRenderer()
   const { width, height } = useTerminalDimensions()
 
@@ -7448,7 +7480,11 @@ export default function OpenTuiApp() {
   const [splitChordPending, setSplitChordPending] = useState(false)
   // ⌃B ? opens the full chord reference. A toast can only ever show one
   // truncated line, and the chord namespace outgrew that.
-  const [splitHelpOpen, setSplitHelpOpen] = useState(false)
+  // Which chord's help is showing, and whether it was asked for. An overlay the
+  // user opened deliberately is dismissed by the next key; one that revealed
+  // itself while a chord is pending must NOT be, or it would swallow the very
+  // keystroke it is advertising.
+  const [chordHelp, setChordHelp] = useState<{ map: ChordMap; dismissOnKey: boolean } | null>(null)
   // Portable command prefix for actions whose Ctrl+Shift shortcuts cannot be
   // distinguished from Ctrl on legacy/raw terminals (notably on Windows).
   const [commandChordPending, setCommandChordPending] = useState(false)
@@ -7483,9 +7519,6 @@ export default function OpenTuiApp() {
   const [velocityScrollEnabled, setVelocityScrollEnabled] = useState(false)
   const [sidebarSort, setSidebarSort] = useState<TuiSidebarSort>('project')
   const [sidebarView, setSidebarView] = useState<'sessions' | 'coordinator'>('sessions')
-  const [coordinatorRuns, setCoordinatorRuns] = useState<ProtocolRun[]>([])
-  const [coordinatorSnapshots, setCoordinatorSnapshots] = useState<Map<string, ProtocolRunSnapshot>>(new Map())
-  const [coordinatorSelectedKey, setCoordinatorSelectedKey] = useState<string | null>(null)
   const [sidebarWidthPreference, setSidebarWidthPreference] = useState(DEFAULT_SIDEBAR_WIDTH)
   const [taskPanelWidth, setTaskPanelWidth] = useState(TASK_PANEL_DEFAULT_WIDTH)
   // Surface panel: the terminal half of the web's right-hand panel. Open
@@ -7543,6 +7576,8 @@ export default function OpenTuiApp() {
   const [exitConfirmOpen, setExitConfirmOpen] = useState(false)
   const [exitCleanupInProgress, setExitCleanupInProgress] = useState(false)
   const [gitOpen, setGitOpen] = useState(false)
+  const gitKeyCaptureRef = useRef(false)
+  const surfaceGitKeyCaptureRef = useRef(false)
   const gitKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [pullRequestOpen, setPullRequestOpen] = useState(false)
   const pullRequestKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean) | null>(null)
@@ -7748,7 +7783,10 @@ export default function OpenTuiApp() {
   const composerPromptPartsRef = useRef<ComposerPromptPart[]>([])
   useEffect(() => { composerMentionAttachmentsRef.current = composerMentionAttachments }, [composerMentionAttachments])
   useEffect(() => { composerPromptPartsRef.current = composerPromptParts }, [composerPromptParts])
-  const [composerStash, setComposerStash] = useState<ComposerDraftSnapshot[]>([])
+  // Shelved drafts survive a restart: the whole point of stashing a prompt is
+  // that you are not ready to send it, and "not ready" outlives one session.
+  const [composerStash, setComposerStash] = useState<ComposerDraftSnapshot[]>(() =>
+    readComposerStash(isComposerDraftSnapshot))
   const [composerStashOpen, setComposerStashOpen] = useState(false)
   const [composerStashIndex, setComposerStashIndex] = useState(0)
   const [composerSlashIndex, setComposerSlashIndex] = useState(0)
@@ -9328,108 +9366,35 @@ export default function OpenTuiApp() {
     return idx >= 0 ? idx : 0
   }, [sidebarEntries, selectedIndex, sessions])
 
-  // Coordinator tab: local ledger writes and attached-daemon SSE frames push
-  // immediate refreshes. Retain a slow reconciliation poll for cross-process
-  // SQLite writes, with the old 2s cadence only if subscription setup fails.
-  useEffect(() => {
-    if (sidebarView !== 'coordinator') return
-    let cancelled = false
-    let refreshInFlight = false
-    let refreshQueued = false
-    let pushTimer: ReturnType<typeof setTimeout> | null = null
-    const changedRunIds = new Set<string>()
-    const refresh = async () => {
-      if (refreshInFlight) {
-        refreshQueued = true
-        return
-      }
-      refreshInFlight = true
-      try {
-        do {
-          refreshQueued = false
-          const runs = await listTuiProtocolRuns(20).catch(() => [] as ProtocolRun[])
-          if (cancelled) return
-          setCoordinatorRuns(runs)
-          const snapshots = await Promise.all(runs.map((run) => readTuiProtocolRun(run.id).catch(() => null)))
-          if (cancelled) return
-          setCoordinatorSnapshots(new Map(snapshots.flatMap((snapshot) => snapshot ? [[snapshot.run.id, snapshot] as const] : [])))
-        } while (refreshQueued && !cancelled)
-      } finally {
-        refreshInFlight = false
-      }
-    }
-    const refreshChangedRun = async (runId: string) => {
-      const snapshot = await readTuiProtocolRun(runId).catch(() => undefined)
-      if (cancelled || snapshot === undefined) return
-      if (!snapshot) {
-        setCoordinatorRuns((current) => current.filter((run) => run.id !== runId))
-        setCoordinatorSnapshots((current) => {
-          const updated = new Map(current)
-          updated.delete(runId)
-          return updated
-        })
-        return
-      }
-      setCoordinatorRuns((current) => {
-        const existingIndex = current.findIndex((run) => run.id === runId)
-        if (existingIndex >= 0) {
-          const updated = [...current]
-          updated[existingIndex] = snapshot.run
-          return updated
-        }
-        return [snapshot.run, ...current]
-          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-          .slice(0, 20)
-      })
-      setCoordinatorSnapshots((current) => {
-        const updated = new Map(current)
-        updated.set(runId, snapshot)
-        return updated
-      })
-    }
-    void refresh()
-    const unsubscribe = subscribeTuiProtocolRunChanges((runId) => {
-      if (runId === null) {
-        void refresh()
-        return
-      }
-      changedRunIds.add(runId)
-      if (pushTimer) clearTimeout(pushTimer)
-      pushTimer = setTimeout(() => {
-        const ids = [...changedRunIds]
-        changedRunIds.clear()
-        void Promise.all(ids.map(refreshChangedRun))
-      }, COORDINATOR_PUSH_DEBOUNCE_MS)
-    })
-    const timer = setInterval(refresh, unsubscribe ? COORDINATOR_RECONCILE_MS : COORDINATOR_FALLBACK_POLL_MS)
-    return () => {
-      cancelled = true
-      unsubscribe?.()
-      if (pushTimer) clearTimeout(pushTimer)
-      clearInterval(timer)
-    }
-  }, [sidebarView])
 
-  const coordinatorEntries = useMemo(
-    () => buildCoordinatorEntries(coordinatorRuns, coordinatorSnapshots),
-    [coordinatorRuns, coordinatorSnapshots],
-  )
-  const coordinatorAgentEntries = useMemo(
-    () => coordinatorEntries.filter((entry): entry is Extract<CoordinatorSidebarEntry, { type: 'agent' }> => entry.type === 'agent'),
-    [coordinatorEntries],
+  // The rail owns this state now (coordinatorStore). The root needs only the
+  // header counts, for the rail's box title — a string prop, so it cannot come
+  // from a memoized child. Key handlers read the store imperatively instead, so
+  // this is the root's ONLY coordinator subscription, and a refresh that
+  // changes rows without changing counts never reaches this component.
+  const coordinatorHeaderCounts = useSyncExternalStore(
+    subscribeCoordinator,
+    () => {
+      const { agentEntries, runs } = getCoordinatorState()
+      return `${agentEntries.length}/${runs.length}`
+    },
+    () => '0/0',
   )
   const moveCoordinatorSelection = useEffectEvent((delta: number) => {
-    if (coordinatorAgentEntries.length === 0) return
-    const currentPos = coordinatorAgentEntries.findIndex((entry) => entry.key === coordinatorSelectedKey)
-    const nextPos = clamp((currentPos >= 0 ? currentPos : 0) + delta, 0, coordinatorAgentEntries.length - 1)
-    setCoordinatorSelectedKey(coordinatorAgentEntries[nextPos]?.key ?? null)
+    const { agentEntries, selectedKey } = getCoordinatorState()
+    if (agentEntries.length === 0) return
+    const currentPos = agentEntries.findIndex((entry) => entry.key === selectedKey)
+    const nextPos = clamp((currentPos >= 0 ? currentPos : 0) + delta, 0, agentEntries.length - 1)
+    setCoordinatorSelectedKey(agentEntries[nextPos]?.key ?? null)
   })
   const jumpCoordinatorSelection = useEffectEvent((edge: 'first' | 'last') => {
-    const target = edge === 'first' ? coordinatorAgentEntries[0] : coordinatorAgentEntries.at(-1)
+    const { agentEntries } = getCoordinatorState()
+    const target = edge === 'first' ? agentEntries[0] : agentEntries.at(-1)
     if (target) setCoordinatorSelectedKey(target.key)
   })
   const openSelectedCoordinatorAgent = useEffectEvent(() => {
-    const selected = coordinatorAgentEntries.find((entry) => entry.key === coordinatorSelectedKey)
+    const { agentEntries, selectedKey: coordinatorSelectedKey } = getCoordinatorState()
+    const selected = agentEntries.find((entry) => entry.key === coordinatorSelectedKey)
     if (selected) openCoordinationAgentSession(selected.agent)
   })
   const composerLogicalLineCount = composerEntryLineCount(composerDraft)
@@ -9580,14 +9545,17 @@ export default function OpenTuiApp() {
 
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | null = null
-    setComposerGitSummary(null)
-    const refresh = async () => {
-      const summary = await fetchGitSummary(composerWorkingDirectory, runGitCommand)
+    // Only clear the indicator when this cwd has nothing cached. Blanking it on
+    // every switch made the branch flicker off and back on when moving between
+    // two sessions in the same repository.
+    setComposerGitSummary(peekGitSummaryCached(composerWorkingDirectory))
+    const refresh = async (force: boolean) => {
+      const summary = await readGitSummaryCached(composerWorkingDirectory, { force })
       if (cancelled) return
       setComposerGitSummary(summary)
-      timer = setTimeout(() => { void refresh() }, COMPOSER_GIT_SUMMARY_POLL_MS)
+      timer = setTimeout(() => { void refresh(true) }, COMPOSER_GIT_SUMMARY_POLL_MS)
     }
-    void refresh()
+    void refresh(false)
     return () => {
       cancelled = true
       if (timer) clearTimeout(timer)
@@ -9891,7 +9859,17 @@ export default function OpenTuiApp() {
           // The substring + fuzzy-subsequence scan over `all` (up to 5 000
           // entries) is CPU-bound — run it off the render/input thread so a
           // large repo doesn't stall the composer while the user is typing.
-          const fileMatches = await filterComposerMentionFilesAsync(all, composerMention.query, 12)
+          // Ranking happens in the worker, before the 12-result cap: a bare `@`
+          // matches every file, so slicing first would leave frecency nothing
+          // to order. Scores come from the in-process table, so this is a map
+          // read rather than a file read per keystroke.
+          const fileMatches = await filterComposerMentionFilesAsync(
+            all,
+            composerMention.query,
+            12,
+            Object.fromEntries(readFrecencyScores()),
+            frecencyPrefix(cwd),
+          )
           if (cancelled) return
           const matches: TuiMentionResult[] = [
             ...agentMatches,
@@ -10062,6 +10040,10 @@ export default function OpenTuiApp() {
     const insertion = entry.kind === 'agent'
       ? `@${entry.name} `
       : `@${entry.path} `
+    // A file you mention is a file you are working in; the next `@` ranks by it.
+    if (entry.kind === 'file' && composerMentionCwd) {
+      recordFrecencyUse(frecencyKey(composerMentionCwd, entry.path))
+    }
     const next = `${before}${insertion}${after}`
     renderable.setText(next)
     renderable.cursorOffset = before.length + insertion.length
@@ -10694,11 +10676,11 @@ export default function OpenTuiApp() {
   }`
   const sidebarProviderAccent = getProviderAccent(provider)
   const coordinatorSidebarHeader = useMemo(
-    () => fitText(
-      joinMeta([`COORDINATOR ${coordinatorAgentEntries.length}`, `${coordinatorRuns.length} run${coordinatorRuns.length === 1 ? '' : 's'}`, 'a sessions']),
-      Math.max(sidebarInnerWidth - 2, 12),
-    ),
-    [sidebarInnerWidth, coordinatorAgentEntries.length, coordinatorRuns.length],
+    () => {
+      const [agents, runs] = coordinatorHeaderCounts.split('/').map((part) => Number(part) || 0)
+      return fitText(coordinatorSidebarHeaderText(agents, runs), Math.max(sidebarInnerWidth - 2, 12))
+    },
+    [sidebarInnerWidth, coordinatorHeaderCounts],
   )
   // Mounted-card window: a READER_CARD_WINDOW slice that follows the tail
   // (followTail) or the detached readerWindowStart anchor (slides/recenters).
@@ -13377,59 +13359,6 @@ export default function OpenTuiApp() {
     )
   }, [theme, density, sidebarInnerWidth, renameSessionKey, renameDraft, commitRename, selectSidebarSession, showProviderInSessionRows, sidebarSessionActivity])
 
-  const buildCoordinatorRow = useCallback((entry: CoordinatorSidebarEntry, selected: boolean) => {
-    if (entry.type === 'run') {
-      const title = (entry.run.prompt.split('\n')[0]?.trim() || entry.run.id).toUpperCase()
-      const countLabel = `${entry.agentCount}`
-      const dashes = '─'.repeat(Math.max(sidebarInnerWidth - 2 - title.length - countLabel.length - 3, 1))
-      const tone = entry.run.status === 'failed' ? theme.red
-        : entry.run.status === 'blocked' ? theme.amber
-        : entry.run.status === 'running' || entry.run.status === 'synthesizing' ? theme.green
-        : entry.run.status === 'planning' ? theme.cyan
-        : theme.dim
-      return (
-        <box key={entry.key} id={`sidebar:${entry.key}`} paddingX={1} marginTop={1} backgroundColor={theme.surface2}>
-          <text fg={tone} wrapMode="none">{fitText(`${title} ${dashes} ${countLabel}`, sidebarInnerWidth - 2)}</text>
-        </box>
-      )
-    }
-
-    const accent = getProviderAccent(entry.agent.provider)
-    const glyph = entry.agent.role === 'lead' ? '◆' : entry.isLast ? '└─' : '├─'
-    const statusColor = entry.agent.turnActive || entry.agent.status === 'working' ? theme.green
-      : entry.agent.status === 'blocked' || entry.agent.status === 'failed' ? theme.amber
-      : theme.dim
-    const statusDot = entry.agent.turnActive || entry.agent.status === 'working' ? '●' : '○'
-    const detailLine = joinMeta([formatProviderLabel(entry.agent.provider), entry.taskTitle ?? 'unassigned'])
-    return (
-      <box
-        key={entry.key}
-        id={`sidebar:${entry.key}`}
-        flexDirection="column"
-        backgroundColor={selected ? theme.surface3 : theme.surface}
-        marginBottom={density === 'comfortable' ? 1 : 0}
-        onMouseDown={(event) => {
-          if (event.button !== 0) return
-          event.stopPropagation()
-          setCoordinatorSelectedKey(entry.key)
-        }}
-      >
-        <box paddingX={1} flexDirection="row" backgroundColor={selected ? theme.surface3 : theme.surface}>
-          <text fg={selected ? accent : theme.dim} wrapMode="none">{selected ? '▎' : ' '}</text>
-          <text fg={selected ? accent : theme.muted} wrapMode="none">
-            {fitText(`${glyph} ${entry.agent.name} · ${entry.agent.role}`, sidebarInnerWidth - 3)}
-          </text>
-        </box>
-        <box paddingX={1} flexDirection="row" backgroundColor={selected ? theme.surface3 : theme.surface}>
-          <text fg={selected ? accent : theme.dim} wrapMode="none">{selected ? '▎' : ' '}</text>
-          <text fg={statusColor} wrapMode="none">{`${statusDot} `}</text>
-          <text fg={selected ? theme.text : theme.dim} wrapMode="none">
-            {fitText(detailLine, sidebarInnerWidth - 5)}
-          </text>
-        </box>
-      </box>
-    )
-  }, [theme, density, sidebarInnerWidth])
 
   // Per-row element cache. Moving the selection highlight only changes TWO rows
   // (the de-selected and newly-selected), but the memo re-runs on every
@@ -13471,12 +13400,6 @@ export default function OpenTuiApp() {
     return rows
   }, [sidebarEntries, selectedIndex, sessions, buildSidebarRow])
 
-  // Coordinator tab is small (a handful of active runs at most) so it skips
-  // sidebarRowElements' scrub-optimized cache — a plain map is plenty here.
-  const coordinatorRowElements = useMemo(
-    () => coordinatorEntries.map((entry) => buildCoordinatorRow(entry, entry.type === 'agent' && entry.key === coordinatorSelectedKey)),
-    [coordinatorEntries, coordinatorSelectedKey, buildCoordinatorRow],
-  )
 
   // Stable scrollbar config objects so the two long-lived <scrollbox>
   // renderables don't see a fresh prop reference on every render.
@@ -15083,11 +15006,18 @@ export default function OpenTuiApp() {
       let anchorOffset = 0
       // Walk the mounted tree once. Culled cards can have zero height, so
       // their geometry cannot be used for a binary search of the viewport.
-      const cardIds = new Set(renderedTranscriptCards.map((card) => `card:${card.key}`))
-      const nodes = [...sb.content.getChildren()].reverse()
+      // Card ids are already namespaced by the scrollbox; checking the prefix
+      // avoids allocating a Set of every visible card on each sidebar key.
+      // Seed the stack in reverse order so pop() visits the same top-to-bottom
+      // order as the previous reversed-array implementation.
+      const rootChildren = sb.content.getChildren()
+      const nodes = new Array<typeof rootChildren[number]>(rootChildren.length)
+      for (let i = 0; i < rootChildren.length; i += 1) {
+        nodes[rootChildren.length - 1 - i] = rootChildren[i]
+      }
       while (nodes.length > 0) {
         const element = nodes.pop()!
-        if (cardIds.has(element.id)) {
+        if (element.id.startsWith('card:')) {
           const offset = element.y - sb.content.y - scrollTop
           if (element.height > 0 && offset + element.height > 0) {
             anchorKey = element.id.slice('card:'.length)
@@ -15424,6 +15354,25 @@ export default function OpenTuiApp() {
     return () => clearTimeout(timeout)
   }, [commandChordPending, splitChordPending])
 
+  // Hesitate on a prefix and its keys appear on their own — the behaviour
+  // which-key is named for, and the only part of the help that reaches someone
+  // who does not already know `?` exists. It closes with the chord, so pressing
+  // the key you were reaching for resolves the chord and takes the panel with
+  // it; a self-revealed panel never consumes that key (see the dismiss branch).
+  useEffect(() => {
+    const pending = splitChordPending ? SPLIT_CHORD_MAP : commandChordPending ? COMMAND_CHORD_MAP : null
+    if (!pending) {
+      setChordHelp((current) => (current && !current.dismissOnKey ? null : current))
+      return
+    }
+    const timeout = setTimeout(() => {
+      // An overlay the user opened deliberately is left alone: it is already
+      // showing what they asked for, and replacing it would reset its state.
+      setChordHelp((current) => (current ? current : { map: pending, dismissOnKey: false }))
+    }, CHORD_HELP_REVEAL_MS)
+    return () => clearTimeout(timeout)
+  }, [commandChordPending, splitChordPending])
+
   // Focus can outlive the pane that held it: closing a pane, a narrower
   // terminal, or a closed tab all shrink visibleSplitPaneCount. Opening the
   // composer also hands the keys back — the composer branch runs first, so a
@@ -15618,7 +15567,7 @@ export default function OpenTuiApp() {
       const beginSlide = (nextStart: number, anchorIndex: number): boolean => {
         const anchorCard = visibleTranscriptCards[anchorIndex]
         if (!anchorCard) return false
-        const el = sb.content.findDescendantById(`card:${anchorCard.key}`)
+        const el = findReaderCard(sb.content, `card:${anchorCard.key}`)
         if (!el) return false
         const prevContentOffset = el.y - sb.content.y
         readerScrollFixupRef.current = {
@@ -15671,7 +15620,7 @@ export default function OpenTuiApp() {
       if (!sb) return
       tries += 1
       if (fixup.kind === 'cursor') {
-        const el = sb.content.findDescendantById(`card:${fixup.cardKey}`)
+        const el = findReaderCard(sb.content, `card:${fixup.cardKey}`)
         if ((!el || el.height <= 0) && tries < READER_FIXUP_MAX_TRIES) {
           timer = setTimeout(attempt, READER_FIXUP_RETRY_MS)
           return
@@ -15682,7 +15631,7 @@ export default function OpenTuiApp() {
         }
         return
       }
-      const el = sb.content.findDescendantById(`card:${fixup.anchorKey}`)
+      const el = findReaderCard(sb.content, `card:${fixup.anchorKey}`)
       if (!el) return // anchor unmounted (session switched mid-slide) — drop
       const contentOffset = el.y - sb.content.y
       if (contentOffset === fixup.prevContentOffset && tries < READER_FIXUP_MAX_TRIES) {
@@ -15712,7 +15661,7 @@ export default function OpenTuiApp() {
       if (pendingTabReaderRestoreRef.current !== pending) return
       const sb = transcriptScrollRef.current
       const { position } = pending
-      const anchor = position.anchorKey ? sb?.content.findDescendantById(`card:${position.anchorKey}`) : null
+      const anchor = position.anchorKey ? findReaderCard(sb?.content, `card:${position.anchorKey}`) : null
       if ((!sb || (position.anchorKey && (!anchor || anchor.height <= 0)) || tries < 1)
         && ++tries < READER_FIXUP_MAX_TRIES) {
         timer = setTimeout(restore, READER_FIXUP_RETRY_MS)
@@ -15827,14 +15776,14 @@ export default function OpenTuiApp() {
     // that matter right now are its own.
     if (commandChordPending) {
       return [
-        { text: '⌃K', fg: theme.amber },
-        { text: '  a Agent Operations   n new coordinated run   g pull requests   esc cancel', fg: theme.muted },
+        { text: COMMAND_CHORD_MAP.prefix, fg: theme.amber },
+        { text: `  ${chordHintText(COMMAND_CHORD_MAP)}`, fg: theme.muted },
       ]
     }
     if (splitChordPending) {
       return [
-        { text: '⌃B', fg: theme.amber },
-        { text: '  % side-by-side   " stacked   r rotate   < > = size   x close   o focus   n next   z toggle   ? all keys   esc cancel', fg: theme.muted },
+        { text: SPLIT_CHORD_MAP.prefix, fg: theme.amber },
+        { text: `  ${chordHintText(SPLIT_CHORD_MAP)}`, fg: theme.muted },
       ]
     }
     // A focused pane owns the keys, so the bar advertises its keys, not the
@@ -16151,13 +16100,22 @@ export default function OpenTuiApp() {
     if (composerDraftStorageKeyRef.current) scheduleWriteComposerDraft(composerDraftStorageKeyRef.current, '')
   })
 
+  // The stash file is written the way the follow-up queue is: in the
+  // originating interaction and flushed immediately, not from an effect. A
+  // stash exists to survive leaving, and leaving includes an immediate exit.
+  const commitComposerStash = useEffectEvent((next: ComposerDraftSnapshot[]) => {
+    scheduleWriteComposerStash(next)
+    flushComposerStashWrites()
+    setComposerStash(next)
+  })
+
   const stashComposerPrompt = useEffectEvent(() => {
     const snapshot = makeComposerSnapshot()
     if (!snapshot.text.trim() && snapshot.attachments.length === 0 && snapshot.promptParts.length === 0) {
       showNotice('info', 'Composer is empty')
       return
     }
-    setComposerStash((prev) => [...prev, snapshot])
+    commitComposerStash([...composerStash, snapshot])
     clearComposerDraft()
     showNotice('info', 'Stashed composer prompt')
   })
@@ -16168,7 +16126,7 @@ export default function OpenTuiApp() {
       showNotice('info', 'Composer stash is empty')
       return
     }
-    setComposerStash((prev) => prev.slice(0, -1))
+    commitComposerStash(composerStash.slice(0, -1))
     setComposerActive(true)
     applyComposerSnapshot(popped)
     showNotice('info', 'Restored composer stash')
@@ -16196,7 +16154,7 @@ export default function OpenTuiApp() {
     const sourceIndex = composerStash.length - 1 - composerStashIndex
     const entry = composerStash[sourceIndex]
     if (!entry) return
-    setComposerStash((prev) => prev.filter((_, index) => index !== sourceIndex))
+    commitComposerStash(composerStash.filter((_, index) => index !== sourceIndex))
     setComposerStashOpen(false)
     setComposerStashIndex(0)
     applyComposerSnapshot(entry)
@@ -17094,7 +17052,7 @@ export default function OpenTuiApp() {
         resizeSplitReader(0)
         break
       case 'split-help':
-        setSplitHelpOpen(true)
+        setChordHelp({ map: SPLIT_CHORD_MAP, dismissOnKey: true })
         break
       case 'split-close':
         closeSplitPane()
@@ -17475,7 +17433,7 @@ export default function OpenTuiApp() {
     if (gitOpen) {
       // p hops to the PR review popover — the reliable path on terminals whose
       // legacy encoding folds Ctrl+Shift+G into Ctrl+G (e.g. Windows).
-      if (key.name === 'p' && !key.ctrl && !key.shift) {
+      if (key.name === 'p' && !key.ctrl && !key.shift && !gitKeyCaptureRef.current) {
         handled(() => {
           setGitOpen(false)
           setPullRequestOpen(true)
@@ -17494,6 +17452,14 @@ export default function OpenTuiApp() {
 
     if (fileViewerOpen) {
       handled(() => { fileViewerKeyHandlerRef.current?.(key) })
+      return
+    }
+
+    // Review text inputs and active search/filter escape handling belong to the diff.
+    // Keep panel close/cycle/add chords available even while an input is active.
+    if (surfacePanelVisible && surfacePanelFocused && activeSurface(surfacePanel)?.kind === 'diff'
+      && surfaceGitKeyCaptureRef.current && !(key.ctrl && ['w', 'n', 'p', 't'].includes(key.name))) {
+      handled(() => { surfaceGitKeyRef.current?.(key) })
       return
     }
 
@@ -17577,9 +17543,11 @@ export default function OpenTuiApp() {
     }
 
     // Reference card, not a picker: any key dismisses it rather than leaving
-    // the user hunting for the one that does.
-    if (splitHelpOpen) {
-      handled(() => setSplitHelpOpen(false))
+    // the user hunting for the one that does. Only when it was opened on
+    // purpose — a self-revealed panel sits above a pending chord, and eating
+    // that chord's next key would make hesitating change what the key does.
+    if (chordHelp?.dismissOnKey) {
+      handled(() => setChordHelp(null))
       return
     }
 
@@ -18367,10 +18335,11 @@ export default function OpenTuiApp() {
         }
         const chord = portableCommandChord(sequence || key.name)
         if (chord) {
-          executeCommandPalette(PORTABLE_COMMAND_CHORDS[chord])
+          executeCommandPalette(PORTABLE_COMMAND_CHORDS[chord].command)
           return
         }
-        showNotice('info', `⌃K ${sequence || key.name} is not a command chord — a operations · n coordinated run · g pull requests`)
+        if (sequence === '?') { setChordHelp({ map: COMMAND_CHORD_MAP, dismissOnKey: true }); return }
+        showNotice('info', chordUnknownKeyNotice(COMMAND_CHORD_MAP, sequence || key.name))
       })
       return
     }
@@ -18411,8 +18380,8 @@ export default function OpenTuiApp() {
         if (sequence === ';') { toggleSplitFocus(); return }
         if (/^[1-9]$/.test(sequence)) { focusSplitPane(Number(sequence) - 1); return }
         if (sequence === 'n') { cycleSplitPaneSession(); return }
-        if (sequence === '?') { setSplitHelpOpen(true); return }
-        showNotice('info', `⌃B ${sequence || key.name} is not a split chord — ⌃B ? for the full list`)
+        if (sequence === '?') { setChordHelp({ map: SPLIT_CHORD_MAP, dismissOnKey: true }); return }
+        showNotice('info', chordUnknownKeyNotice(SPLIT_CHORD_MAP, sequence || key.name))
       })
       return
     }
@@ -19915,19 +19884,14 @@ export default function OpenTuiApp() {
             ) : null}
             <box flexGrow={1} paddingX={1}>
               {sidebarView === 'coordinator' ? (
-                coordinatorEntries.length === 0 ? (
-                  <text fg={theme.dim}>{fitText('No coordinator runs — ⌃K n to start one', sidebarInnerWidth)}</text>
-                ) : (
-                  <scrollbox
-                    style={{ height: sidebarRowBudget }}
-                    backgroundColor={theme.surface}
-                    scrollY
-                    viewportCulling
-                    scrollbarOptions={sidebarScrollbarOptions}
-                  >
-                    {coordinatorRowElements}
-                  </scrollbox>
-                )
+                <Slot
+                  name="sidebar_content"
+                  theme={theme}
+                  innerWidth={sidebarInnerWidth}
+                  rowBudget={sidebarRowBudget}
+                  density={density}
+                  scrollbarOptions={sidebarScrollbarOptions}
+                />
               ) : loadingSessions && sessions.length === 0 ? (
                 <Spinner label={fitText('Loading…', sidebarInnerWidth - 2)} fg={theme.dim} />
               ) : sidebarEntries.length === 0 ? (
@@ -20548,6 +20512,8 @@ export default function OpenTuiApp() {
                         docked
                         cwd={gitRepoCwd}
                         sessionId={gitSessionId}
+                        onKeyCaptureChange={(capture) => { surfaceGitKeyCaptureRef.current = capture }}
+                        onClipboardWrite={(text) => writeClipboard(text, renderer)}
                         theme={theme}
                         width={box.width}
                         height={box.height}
@@ -21068,29 +21034,27 @@ export default function OpenTuiApp() {
           )
         })() : null}
 
-        {splitHelpOpen ? (() => {
-          const keysW = SPLIT_CHORD_HELP.reduce((longest, section) => section.entries.reduce(
-            (inner, entry) => Math.max(inner, entry.keys.length),
-            longest,
-          ), 0)
+        {chordHelp ? (() => {
+          const map = chordHelp.map
+          const keysW = chordHelpKeyWidth(map)
           const overlayW = Math.min(width - 6, Math.max(keysW + 44, 52))
-          const labelW = Math.max(overlayW - keysW - 5, 12)
-          // Sections stack; the overlay is a reference card, so it is sized to
-          // the content and clipped by the terminal rather than scrolled.
-          const rows: { key: string; keys: string | null; label: string }[] = []
-          for (const section of SPLIT_CHORD_HELP) {
-            rows.push({ key: `head:${section.title}`, keys: null, label: section.title })
-            for (const entry of section.entries) {
-              rows.push({ key: `${section.title}:${entry.keys}`, keys: entry.keys, label: entry.label })
-            }
-          }
-          const maxRows = Math.max(height - 8, 6)
+          const labelW = overlayW - keysW - 6
+          // The panel is a reference card, so it is sized to the content and
+          // clipped rather than scrolled — but it must not be clipped by the
+          // composer dock, which draws over it. The old `height - 8` budget
+          // ignored the dock and swallowed the footer, which is where the panel
+          // says how to dismiss it; an overflow note the reader never sees is
+          // worse than showing fewer rows.
+          const overlayTop = 2
+          const overlayChromeRows = 4 // two borders, the header, the footer
+          const rows = chordHelpRows(map)
+          const maxRows = Math.max(height - overlayTop - composerDockHeight - overlayChromeRows, 6)
           const visible = rows.slice(0, maxRows)
           const hidden = rows.length - visible.length
           return (
             <box
               position="absolute"
-              top={2}
+              top={overlayTop}
               left={Math.max(Math.floor((width - overlayW) / 2), 2)}
               width={overlayW}
               border
@@ -21102,19 +21066,21 @@ export default function OpenTuiApp() {
             >
               <box paddingX={1} backgroundColor={theme.surface2} flexDirection="row">
                 <box flexGrow={1}>
-                  <text fg={theme.amber} wrapMode="none">split pane keybinds</text>
+                  <text fg={theme.amber} wrapMode="none">{map.title}</text>
                 </box>
                 <text fg={theme.dim} wrapMode="none">
-                  {RUNNING_INSIDE_TMUX ? 'tmux owns ⌃B — use ?' : 'prefix ⌃B'}
+                  {map === SPLIT_CHORD_MAP && RUNNING_INSIDE_TMUX
+                    ? 'tmux owns ⌃B — use ?'
+                    : `prefix ${map.prefix}`}
                 </text>
               </box>
               {visible.map((row) => (row.keys === null ? (
-                <box key={row.key} paddingX={1} backgroundColor={theme.surface2} flexDirection="row">
+                <box key={row.id} paddingX={1} backgroundColor={theme.surface2} flexDirection="row">
                   <text fg={theme.cyan} wrapMode="none">{'┄ '}</text>
                   <text fg={theme.cyan} wrapMode="none">{row.label.toUpperCase()}</text>
                 </box>
               ) : (
-                <box key={row.key} paddingX={1} flexDirection="row">
+                <box key={row.id} paddingX={1} flexDirection="row">
                   <box width={keysW}>
                     <text fg={theme.amber} wrapMode="none">{fitText(row.keys, keysW)}</text>
                   </box>
@@ -21125,7 +21091,12 @@ export default function OpenTuiApp() {
               )))}
               <box paddingX={1} backgroundColor={theme.surface2}>
                 <text fg={theme.dim} wrapMode="none">
-                  {fitText(hidden > 0 ? `${hidden} more — widen the terminal · any key closes` : 'any key closes', overlayW - 4)}
+                  {fitText(
+                    chordHelp.dismissOnKey
+                      ? (hidden > 0 ? `${hidden} more — widen the terminal · any key closes` : 'any key closes')
+                      : (hidden > 0 ? `${hidden} more — widen the terminal · press a key` : 'press a key'),
+                    overlayW - 4,
+                  )}
                 </text>
               </box>
             </box>
@@ -21712,6 +21683,8 @@ export default function OpenTuiApp() {
         <GitPopover
           cwd={gitRepoCwd}
           sessionId={gitSessionId}
+          onKeyCaptureChange={(capture) => { gitKeyCaptureRef.current = capture }}
+          onClipboardWrite={(text) => writeClipboard(text, renderer)}
           theme={theme}
           width={width}
           height={height}

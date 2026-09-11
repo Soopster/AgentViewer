@@ -14,6 +14,7 @@ import path from 'path'
 // data dir rather than the user's real preferences. Import App AFTER chdir.
 process.chdir(mkdtempSync(path.join(tmpdir(), 'agent-viewer-app-smoke-')))
 const { default: OpenTuiApp } = await import('./App')
+const { chordHintText, COMMAND_CHORD_MAP, SPLIT_CHORD_MAP } = await import('./chordHelp')
 
 const setup = await testRender(<OpenTuiApp />, {
   width: 120,
@@ -284,8 +285,12 @@ await act(async () => {
   await new Promise((resolve) => setTimeout(resolve, 100))
 })
 const chordFrame = captureCharFrame()
-if (!chordFrame.includes('% side-by-side')) {
-  throw new Error(`Ctrl+B did not arm the split chord:\n${chordFrame}`)
+// Derived from the chord table rather than pinned as a literal: a hand-written
+// copy here is one more place the hint can drift out of agreement with the
+// dispatcher, which is what chordHelp.ts exists to prevent.
+const armedHint = chordHintText(SPLIT_CHORD_MAP).split('  ')[0]!
+if (!chordFrame.includes(armedHint)) {
+  throw new Error(`Ctrl+B did not arm the split chord (expected ${armedHint}):\n${chordFrame}`)
 }
 
 act(() => {
@@ -311,8 +316,9 @@ await act(async () => {
   await setup.flush()
 })
 const commandChordFrame = captureCharFrame()
-if (!commandChordFrame.includes('a Agent Operations')) {
-  throw new Error(`Ctrl+K did not expose the portable command chord:\n${commandChordFrame}`)
+const commandHint = chordHintText(COMMAND_CHORD_MAP).split('  ')[0]!
+if (!commandChordFrame.includes(commandHint)) {
+  throw new Error(`Ctrl+K did not expose the portable command chord (expected ${commandHint}):\n${commandChordFrame}`)
 }
 act(() => {
   setup.mockInput.pressKey('a')
