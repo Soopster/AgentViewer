@@ -56,5 +56,5 @@ export function useGitDiffViewport(
     return () => { clearTimeout(timer) }
   }, [anchorGroup, documentKey, geometry, jumpKey, jumpRevision, onJump, ready, scrollRef, viewportHeight])
 
-  return diffRowWindow(geometry, top, viewportHeight)
+  return { ...diffRowWindow(geometry, top, viewportHeight), top }
 }

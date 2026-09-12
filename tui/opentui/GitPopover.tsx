@@ -12,6 +12,7 @@ import { runGitCommand } from '../../lib/gitNodeProvider'
 import { buildDiffCommentComposerPrompt } from '../../lib/diffCommentComposer'
 import {
   buildPierreDiffView,
+  diffDisplayPath,
   type TuiPierreDiffRow,
   type TuiPierreSplitRow,
   type TuiSplitRowSide,
@@ -26,6 +27,8 @@ import { useGitDiffReviewActions, type ReviewActionKey } from './useGitDiffRevie
 import { DiffReviewActionsBar } from './DiffReviewActionsBar'
 import { DiffCodeText } from './DiffCodeText'
 import { DiffViewControls } from './DiffViewControls'
+import { DiffStickyHeader } from './DiffStickyHeader'
+import { buildDiffProgress } from './gitDiffProgress'
 import { diffTextHeight, diffTextWidth, matchesDiffFile, resolveDiffLayout, type DiffLayoutMode } from './gitDiffText'
 import { createScrollVelocityState, velocityScrollStep } from './scrollVelocity'
 
@@ -864,7 +867,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
   // Estimate remaining rows for Commits (used for manual slicing while Commits lacks scrollbox).
   const rightH = popH - 2
   const diffLayout = resolveDiffLayout(diffLayoutMode, rightW)
-  const diffViewportHeight = Math.max(1, rightH - (pane === 2 ? fileDiffMode === 'viewer' ? 3 : 2 : 1))
+  const diffViewportHeight = Math.max(1, rightH - (pane === 2 ? fileDiffMode === 'viewer' ? 4 : 2 : 1))
 
   function navigateTreeCursor(next: number | ((index: number) => number)) {
     const index = typeof next === 'function' ? next(treeCursor) : next
@@ -1398,6 +1401,8 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
   }, [captureReviewKeys, onKeyCaptureChange])
   const diffHighlights = useGitDiffHighlighting(baseDiffView?.files, activeDiffRows, window.start, window.end,
     pierreAppearance, pane === 2 && fileDiffMode === 'viewer')
+  const progressAt = useMemo(() => buildDiffProgress(activeDiffRows, rightDiffView?.files?.map(diffDisplayPath)), [activeDiffRows, rightDiffView?.files])
+  const diffProgress = useMemo(() => progressAt(diffRowAt(geometry, window.top)), [geometry, progressAt, window.top])
   const fileDiffSegs: React.ReactNode[] = fileDiffMode === 'viewer'
     ? (() => {
         const controls: Array<[string, string]> = [
@@ -1703,6 +1708,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
         {pane === 2 && fileDiffMode === 'viewer' ? <DiffReviewActionsBar theme={theme} width={rightW} {...reviewActions}
           onSearch={() => { if (!draftNote && !filterEditing) reviewActions.openSearch() }}
           onNext={reviewActions.next} onCopy={side => { if (!draftNote) void reviewActions.copy(side) }} /> : null}
+        {pane === 2 && fileDiffMode === 'viewer' ? <DiffStickyHeader width={rightW} theme={theme} progress={diffProgress} /> : null}
         <scrollbox
           id="git-diff-scroll"
           ref={diffScrollRef}
