@@ -32,6 +32,7 @@ import { DiffStickyHeader } from './DiffStickyHeader'
 import { buildDiffProgress } from './gitDiffProgress'
 import { diffTextHeight, diffTextWidth, matchesDiffFile, resolveDiffLayout, type DiffLayoutMode } from './gitDiffText'
 import { createScrollVelocityState, velocityScrollStep } from './scrollVelocity'
+import { readTuiDiffReviewState, tuiDiffReviewStorageKey, writeTuiDiffReviewState, type TuiDiffReviewNote } from '../../lib/tuiDiffReviewState'
 
 // ---------------------------------------------------------------------------
 // Git data types
@@ -560,7 +561,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
   const [fileDiffMode, setFileDiffMode] = useState<FileDiffMode>('viewer')
   const [diffLayoutMode, setDiffLayoutMode] = useState<DiffLayoutMode>('auto')
   const [wrapDiffLines, setWrapDiffLines] = useState(false)
-  const [diffTabWidth, setDiffTabWidth] = useState(4)
+  const [diffTabWidth, setDiffTabWidth] = useState<2 | 4 | 8>(4)
   const [horizontalOffset, setHorizontalOffset] = useState(0)
   const [fileFilter, setFileFilter] = useState('')
   const [filterEditing, setFilterEditing] = useState(false)
@@ -629,10 +630,33 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
   )
   const sourceKey = diffSourceKey(diffSource)
   const noteScope = JSON.stringify([repoCwd, sourceKey])
+  const reviewStateKey = tuiDiffReviewStorageKey(repoCwd, sourceKey)
   const diffNotes = notesBySource.get(noteScope) ?? EMPTY_DIFF_NOTES
   const setDiffNotes = useCallback((update: (notes: Map<string, DiffNote>) => Map<string, DiffNote>) => {
     setNotesBySource(previous => new Map(previous).set(noteScope, update(previous.get(noteScope) ?? EMPTY_DIFF_NOTES)))
   }, [noteScope])
+  const reviewStateHydratedRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (reviewStateHydratedRef.current === reviewStateKey) return
+    const saved = readTuiDiffReviewState(reviewStateKey)
+    reviewStateHydratedRef.current = reviewStateKey
+    setDiffLayoutMode(saved.preferences.layoutMode)
+    setWrapDiffLines(saved.preferences.wrap)
+    setDiffTabWidth(saved.preferences.tabWidth)
+    setHorizontalOffset(saved.preferences.horizontalOffset)
+    setShowLineNumbers(saved.preferences.showLineNumbers)
+    setShowHunkHeaders(saved.preferences.showHunkHeaders)
+    const notes = new Map(saved.notes.map(note => [diffSelectionKey(note.filePath, note.range), note as DiffNote]))
+    setNotesBySource(previous => new Map(previous).set(noteScope, notes))
+  }, [noteScope, reviewStateKey])
+  useEffect(() => {
+    if (reviewStateHydratedRef.current !== reviewStateKey) return
+    const notes: TuiDiffReviewNote[] = [...diffNotes.values()]
+    writeTuiDiffReviewState(reviewStateKey, { preferences: {
+      layoutMode: diffLayoutMode, wrap: wrapDiffLines, tabWidth: diffTabWidth,
+      horizontalOffset, showLineNumbers, showHunkHeaders,
+    }, notes })
+  }, [diffLayoutMode, diffNotes, diffTabWidth, horizontalOffset, noteScope, reviewStateKey, showHunkHeaders, showLineNumbers, wrapDiffLines])
   const sourceLabel = diffSourceLabel(sourceSelection, turns)
   // Said once, at the top of the picker: the numbering below is the repo's, not
   // this session's, and reading it as this session's would be wrong.

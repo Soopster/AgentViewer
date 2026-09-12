@@ -14,6 +14,8 @@ import {
 import { buildDiffCommentComposerPrompt } from '../../lib/diffCommentComposer'
 import { flattenHastLine, loadDiffHighlights, type TuiFileHighlights, type TuiRenderSpan } from './pierreDiffView'
 import { createScrollVelocityState, velocityScrollStep } from './scrollVelocity'
+import { DiffCodeText } from './DiffCodeText'
+import { readTuiDiffReviewState, tuiDiffReviewStorageKey, writeTuiDiffReviewState, type TuiDiffReviewNote } from '../../lib/tuiDiffReviewState'
 
 type Key = { name: string; ctrl: boolean; shift: boolean; sequence: string; eventType?: string; repeated?: boolean }
 type ComposerKeyBinding = { name: string; action: TextareaAction; shift?: boolean; meta?: boolean; ctrl?: boolean }
@@ -512,6 +514,9 @@ export function PullRequestPopover({
   const [diffLayout, setDiffLayout] = useState<DiffLayout>('stack')
   const [showLineNumbers, setShowLineNumbers] = useState(true)
   const [showHunkHeaders, setShowHunkHeaders] = useState(true)
+  const [wrapDiffLines, setWrapDiffLines] = useState(false)
+  const [diffTabWidth, setDiffTabWidth] = useState<2 | 4 | 8>(4)
+  const [horizontalOffset, setHorizontalOffset] = useState(0)
   const [diffCursor, setDiffCursor] = useState(0)
   const [diffSelectionAnchor, setDiffSelectionAnchor] = useState<number | null>(null)
   const [diffNotes, setDiffNotes] = useState<Map<string, DiffNote>>(() => new Map())
@@ -540,6 +545,7 @@ export function PullRequestPopover({
   const prListRef = useRef<ScrollBoxRenderable>(null)
   const pendingCommentJumpRef = useRef<string | null>(null)
   const selectedPrNumberRef = useRef<number | null>(null)
+  const reviewStateHydratedRef = useRef<string | null>(null)
   const [scrollVelocityRef] = useState(() => ({ current: createScrollVelocityState() }))
 
   const load = useCallback(async (number?: number) => {
@@ -554,6 +560,31 @@ export function PullRequestPopover({
 
   const pr = workspace?.selected ?? null
   const pullRequests = workspace?.pullRequests ?? []
+  const reviewStateKey = tuiDiffReviewStorageKey(repoCwd, `pr:${pr?.number ?? 'none'}`)
+
+  useEffect(() => {
+    if (!pr || reviewStateHydratedRef.current === reviewStateKey) return
+    const saved = readTuiDiffReviewState(reviewStateKey)
+    reviewStateHydratedRef.current = reviewStateKey
+    setDiffLayout(saved.preferences.layoutMode === 'split' ? 'split' : 'stack')
+    setWrapDiffLines(saved.preferences.wrap)
+    setDiffTabWidth(saved.preferences.tabWidth)
+    setHorizontalOffset(saved.preferences.horizontalOffset)
+    setShowLineNumbers(saved.preferences.showLineNumbers)
+    setShowHunkHeaders(saved.preferences.showHunkHeaders)
+    setDiffNotes(new Map(saved.notes.map(note => [diffSelectionKey(note.filePath, note.range), {
+      path: note.filePath, range: note.range, text: note.text,
+    }])))
+  }, [pr, reviewStateKey])
+
+  useEffect(() => {
+    if (!pr || reviewStateHydratedRef.current !== reviewStateKey) return
+    const notes: TuiDiffReviewNote[] = [...diffNotes.values()].map(note => ({ filePath: note.path, range: note.range, text: note.text }))
+    writeTuiDiffReviewState(reviewStateKey, { preferences: {
+      layoutMode: diffLayout, wrap: wrapDiffLines, tabWidth: diffTabWidth,
+      horizontalOffset, showLineNumbers, showHunkHeaders,
+    }, notes })
+  }, [diffLayout, diffNotes, diffTabWidth, horizontalOffset, pr, reviewStateKey, showHunkHeaders, showLineNumbers, wrapDiffLines])
 
   useEffect(() => {
     const nextNumber = pr?.number ?? null
@@ -975,6 +1006,19 @@ export function PullRequestPopover({
       setDiffSelectionAnchor(null)
       return
     }
+    if (key.sequence === 'Z' && pane === 2 && diffMode === 'viewer') {
+      setWrapDiffLines((value) => !value)
+      setDiffSelectionAnchor(null)
+      return
+    }
+    if (key.sequence === 'T' && pane === 2 && diffMode === 'viewer') {
+      setDiffTabWidth((value) => value === 2 ? 4 : value === 4 ? 8 : 2)
+      return
+    }
+    if (pane === 2 && focusSide === 'right' && (key.name === 'h' || key.name === 'left' || key.name === 'l' || key.name === 'right')) {
+      setHorizontalOffset((value) => Math.max(0, value + (key.name === 'h' || key.name === 'left' ? -8 : 8)))
+      return
+    }
     if (key.sequence === 'r') { void load(pr?.number); return }
 
     // PR actions
@@ -1008,7 +1052,7 @@ export function PullRequestPopover({
   }, [clampedCursor, composer, defaultLeftW, diffMode, diffNotes, diffRows, discussionCursor, discussionEntries, focusSide,
       jumpToComment, jumpToFile, jumpToHunk, leftPaneHidden, leftPaneMode, load, maxLeftW,
       moveCursorTo, onClose, onSendDiffNoteToComposer, openRangeComposer, pane, pr, prCursor, pullRequests, reviewRows.length,
-      selectedDiffSpan, toggleFold, treeCursor, treeRows])
+      selectedDiffSpan, setDiffTabWidth, setHorizontalOffset, setWrapDiffLines, toggleFold, treeCursor, treeRows, wrapDiffLines, diffTabWidth])
   const dispatchKey = useCallback((key: Key): boolean => {
     const editorOwnsKey = composer !== null && key.name !== 'escape'
     handleKey(key)
@@ -1123,11 +1167,7 @@ export function PullRequestPopover({
           </text>
         ) : null}
         <text fg={isCursor ? theme.cyan : fg} wrapMode="none">{`${isCursor ? '▶' : ' '}${sign} `}</text>
-        {spans ? (
-          <text wrapMode="none">{renderDiffSpans(spans, fg, diffTextWidth)}</text>
-        ) : (
-          <text fg={fg} wrapMode="none">{fitText(line.text || ' ', diffTextWidth)}</text>
-        )}
+        <DiffCodeText text={line.text || ' '} spans={spans ?? undefined} columns={diffTextWidth} tabWidth={diffTabWidth} wrap={wrapDiffLines} offset={horizontalOffset} fg={fg} />
       </box>
     )
   }
@@ -1146,11 +1186,7 @@ export function PullRequestPopover({
           <text fg={theme.dim} wrapMode="none">{`${lineNumber != null ? String(lineNumber).padStart(lineNoWidth) : ' '.repeat(lineNoWidth)} `}</text>
         ) : null}
         <text fg={fg} wrapMode="none">{` ${sign} `}</text>
-        {spans ? (
-          <text wrapMode="none">{renderDiffSpans(spans, fg, textWidth)}</text>
-        ) : (
-          <text fg={fg} wrapMode="none">{fitText(line.text || ' ', textWidth)}</text>
-        )}
+        <DiffCodeText text={line.text || ' '} spans={spans ?? undefined} columns={textWidth} tabWidth={diffTabWidth} wrap={wrapDiffLines} offset={horizontalOffset} fg={fg} />
       </box>
     )
   }
@@ -1500,7 +1536,7 @@ export function PullRequestPopover({
                 ['a', 'note'],
                 ['A', 'composer'],
                 ['x', 'del'],
-                ['z', 'fold'],
+                ['z', 'fold'], ['Z', wrapDiffLines ? 'nowrap' : 'wrap'], ['T', `tabs:${diffTabWidth}`],
               ] : [['v', 'parsed']]
               const groups: Array<[string, string]> = [
                 ['1-4', 'sections'], ['[ ]', 'resize'], ['w', 'wide'], ['-', 'hide/show'],
