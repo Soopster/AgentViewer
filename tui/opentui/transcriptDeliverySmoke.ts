@@ -41,10 +41,12 @@ const workerScope = {
 }
 scope.self = workerScope
 await import('./threadingWorker')
+let requestsPosted = 0
 class LocalWorker {
   onmessage: ((event: MessageEvent) => void) | null = null
   onerror = null
   postMessage(data: Wire) {
+    requestsPosted += 1
     receiver = this.onmessage
     const request = structuredClone(data)
     if (stripRequestToken) delete request.previousDeliveryToken
@@ -120,18 +122,40 @@ assert.equal(latestWire.suffixOnly, false)
 assert.deepEqual(fallback.rawMessages, raw)
 assert.deepEqual(fallback.transcriptCards, formatTranscriptCards(buildThreadedMessages(raw), 'dense'))
 stripRequestToken = false
-const simultaneous = await Promise.all([read(), read()])
-for (const result of simultaneous) assert.deepEqual(result.rawMessages, raw)
+
+// ── Overlapping reads for one session serialize ────────────────────────────
+// The worker handles each message in its own async task, so two reads for one
+// session interleaved there: the second carried a baseline the first had
+// already superseded, and the worker answered it with the WHOLE transcript
+// rather than a suffix — correct, and exactly the cost the deltas exist to
+// avoid. They now queue per key, and the second captures its baseline when it
+// is posted rather than when it was asked for.
 raw = [...raw, makeMessage(20001)]
-deferResponses = true
-const firstPending = read()
-const secondPending = read()
-await new Promise((resolve) => setTimeout(resolve, 0))
-assert.equal(responses.length, 2)
-for (const event of responses.reverse()) receiver!(event)
-deferResponses = false
-for (const result of await Promise.all([firstPending, secondPending])) {
+requestsPosted = 0
+const overlapped = await Promise.all([read(), read()])
+assert.equal(requestsPosted, 2, 'both reads are answered')
+// The wire is the evidence, not the timing: this harness answers a read in a
+// microtask, so by any observable delay the queue has already drained. What
+// distinguishes serialized from interleaved is what the SECOND read shipped.
+// Racing the first, it carried a baseline the worker had already superseded and
+// came back with complete arrays; queued behind it, it captures the baseline the
+// first established and finds nothing left to send.
+assert.equal((latestWire as { unchanged?: boolean }).unchanged, true,
+  'a serialized second read captures a fresh baseline and ships nothing at all')
+for (const result of overlapped) {
   assert.deepEqual(result.rawMessages, raw)
+  assert.deepEqual(result.transcriptCards, formatTranscriptCards(buildThreadedMessages(raw)))
+}
+
+// A third read arriving while one is in flight replaces the one already
+// waiting: they ask the same question of the same session, so the queued read
+// would re-derive an answer nobody is waiting for any more.
+raw = [...raw, makeMessage(20002)]
+requestsPosted = 0
+const superseded = await Promise.all([read(), read(), read()])
+assert.equal(requestsPosted, 2, 'three overlapping reads collapse to two: one in flight, one latest')
+for (const result of superseded) {
+  assert.deepEqual(result.rawMessages, raw, 'a superseded caller still gets a correct transcript')
   assert.deepEqual(result.transcriptCards, formatTranscriptCards(buildThreadedMessages(raw)))
 }
 raw = []

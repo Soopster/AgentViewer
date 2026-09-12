@@ -745,8 +745,52 @@ Three patterns taken from opencode in September 2026 (survey: `docs/opencode-sur
   posted; a request arriving during `run` starts a new slot), and a rejecting
   `run` is reported through `onError` rather than escaping — an unhandled
   rejection is fatal under Bun, and the smoke caught exactly that.
-  The composer's mention filter uses it; the threading worker does **not** yet,
-  because the `format` path's patch/delivery bookkeeping depends on post order.
+- **`supersede` is required, because superseding *drops* a request.** Nothing
+  will ever dispatch it, so an owner whose requests carry a promise must settle
+  it there. Omitting it is not a missing optimization, it is a caller that waits
+  forever with no error and no failing frame — the threading smoke caught it as
+  a test timeout rather than an assertion. A queue whose requests are pure side
+  effects passes an explicit no-op.
+- **`createKeyedWorkerQueue` serializes per key and lets keys run concurrently**
+  — the shape of opencode's `SessionRunCoordinator`. A single global queue would
+  be the wrong trade: two sessions' reads share no state to race over, so
+  serializing them would give up the overlap of their disk I/O for nothing.
+  Idle instances are dropped, or the map grows with every key ever seen, and
+  those keys carry a session id and a display variant.
+
+The composer's mention filter uses the plain queue; `threadingWorkerClient.ts`
+uses the keyed one for `detail`, `warm` and `format`.
+
+- **The key is the whole question, and that is what makes superseding sound.**
+  A superseded caller is handed the replacement's answer, so the key must carry
+  everything that would make the two answers different: the session *and* the
+  display variant for a detail or a warm, plus the threaded array's identity for
+  a format. Answering a `balanced` read with `dense` cards, or a format with
+  another transcript's cards, would render a different number of cards than the
+  caller has messages. The threaded identity is minted per array in a `WeakMap`
+  rather than derived from contents — this runs on every density toggle and the
+  arrays are the transcript.
+- **The delta baseline is captured inside `run`, at the moment of posting.**
+  Capturing it when the caller enqueued would reintroduce exactly the staleness
+  the queue removes: the baseline maps are updated on *response*, so a request
+  that waited behind another would carry a baseline the worker had already
+  superseded.
+- **What this is worth:** the worker handles each message in its own async task,
+  so two reads for one session interleaved there. Both sides guard their
+  baselines with tokens, so an overlap was never *wrong* — it fell back to
+  shipping the whole transcript. On the 10,000-message benchmark in
+  `transcriptDeliverySmoke.ts` that fallback is **42.6MB and a 49.3ms clone**
+  against **5.1KB and 0.007ms** for the suffix it should have sent. The reachable
+  case is a foreground detail landing while a background refresh for the same
+  session is in flight: `refreshSelectedSessionDetail` guards foreground loads
+  against each other and background polls per key, but not one against the other.
+- **`App.tsx` keeps its own coalescing, deliberately.**
+  `foregroundLoadInFlightRef` / `pendingForegroundLoadRef` are the same
+  serialize-and-supersede shape hand-rolled one layer up, and the neighbour
+  prefetch already yields to a foreground open between warms — so prefetch
+  starvation is bounded to one in-flight warm (~6ms), not worth a priority
+  queue. The client-side queue is a backstop for the paths that slip past those
+  guards, not a replacement for them.
 
 #### Chord help is derived from the chord table (load-bearing)
 

@@ -31,11 +31,17 @@ export function createLatestWorkerQueue<T>(options: {
   /** Dispatches one request. The queue waits for this before dispatching the next. */
   run: (request: T) => Promise<void>
   /**
-   * Called with a request that was replaced before it was ever dispatched. The
-   * caller settles whatever it promised for that request — usually by chaining
-   * it to the replacement, which answers the same question.
+   * Called with a request that was replaced before it was ever dispatched.
+   *
+   * Required, because superseding *drops* a request: whatever the owner
+   * promised for it will never be settled by a dispatch. An owner whose
+   * requests carry a promise must settle it here — usually by chaining it to
+   * the replacement, which answers the same question. Omitting this is not a
+   * missing optimization, it is a hung caller, and the failure mode is a UI
+   * that waits forever with no error. Pass an explicit no-op for a queue whose
+   * requests are pure side effects and have nobody waiting on them.
    */
-  supersede?: (superseded: T, replacement: T) => void
+  supersede: (superseded: T, replacement: T) => void
   /**
    * Reports a `run` that rejected. `run` is expected to settle its own callers,
    * so a rejection here is a defect rather than a failed read — but it must not
@@ -43,6 +49,12 @@ export function createLatestWorkerQueue<T>(options: {
    * drain, or one failure silences the surface for the rest of the session.
    */
   onError?: (error: unknown, request: T) => void
+  /**
+   * Called when the queue has dispatched everything and nothing is running.
+   * An owner that keeps one queue per key uses this to drop the instance —
+   * otherwise the map grows with every key ever seen.
+   */
+  onIdle?: () => void
 }): LatestWorkerQueue<T> {
   type Slot = { key: string; request: T | undefined }
 
@@ -77,6 +89,7 @@ export function createLatestWorkerQueue<T>(options: {
         running = false
         // A push during the final await lands after `order.length` was read.
         if (order.length > 0) drain()
+        else options.onIdle?.()
       }
     })()
   }
@@ -85,7 +98,7 @@ export function createLatestWorkerQueue<T>(options: {
     push({ key, request }) {
       const existing = slots.get(key)
       if (existing?.request !== undefined) {
-        options.supersede?.(existing.request, request)
+        options.supersede(existing.request, request)
         existing.request = request
         return
       }
@@ -96,6 +109,54 @@ export function createLatestWorkerQueue<T>(options: {
     },
     get size() {
       return order.reduce((total, slot) => total + (slot.request === undefined ? 0 : 1), 0)
+    },
+  }
+}
+
+/**
+ * One `createLatestWorkerQueue` per key, so different keys run concurrently
+ * while requests sharing a key serialize and supersede.
+ *
+ * This is the shape opencode's `SessionRunCoordinator` has
+ * (`packages/core/src/session/run-coordinator.ts`): serialize execution for
+ * each key, allow different keys to run concurrently. A single global queue
+ * would be the wrong trade here — two sessions' reads have no shared state to
+ * race over, and serializing them would give up the overlap of their disk I/O
+ * for nothing.
+ *
+ * Instances are dropped as they go idle, so the map holds only keys with work
+ * in flight rather than every key the process has ever seen.
+ */
+export function createKeyedWorkerQueue<T>(options: {
+  run: (request: T) => Promise<void>
+  /** Required for the same reason as on `createLatestWorkerQueue`. */
+  supersede: (superseded: T, replacement: T) => void
+  onError?: (error: unknown, request: T) => void
+}): { push: (job: LatestWorkerQueueJob<T>) => void; readonly activeKeys: number } {
+  const queues = new Map<string, LatestWorkerQueue<T>>()
+
+  return {
+    push(job) {
+      const existing = queues.get(job.key)
+      if (existing) {
+        existing.push(job)
+        return
+      }
+      const queue = createLatestWorkerQueue<T>({
+        run: options.run,
+        supersede: options.supersede,
+        onError: options.onError,
+        // Only drop the instance if it is still the one registered: an idle
+        // callback firing after a replacement was installed must not evict it.
+        onIdle: () => {
+          if (queues.get(job.key) === queue) queues.delete(job.key)
+        },
+      })
+      queues.set(job.key, queue)
+      queue.push(job)
+    },
+    get activeKeys() {
+      return queues.size
     },
   }
 }

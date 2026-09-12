@@ -2,6 +2,7 @@ import type { ThreadedMessage } from '../../lib/threading'
 import type { TuiTranscriptCard } from '../format'
 import type { TuiDensity } from '../theme'
 import type { ContextUsage, ProviderSelection, Session, SessionInfo, SessionMessage } from '../../lib/types'
+import { createKeyedWorkerQueue } from './latestWorkerQueue'
 import { threadedMessageFingerprint } from './messageFingerprint'
 import { tuiWorkerUrl } from './workerUrl'
 import { restoreDeliveredPrefix } from './transcriptDelivery'
@@ -366,6 +367,213 @@ export function readTuiSessionsAsync(provider: ProviderSelection): Promise<Sessi
   })
 }
 
+// ── Per-key dispatch ────────────────────────────────────────────────────────
+// The worker handles each message in its own async task, so two requests for
+// one session interleave there. Both the worker and this client guard their
+// delta baselines with tokens, so an overlap is never *wrong* — it falls back
+// to shipping the whole transcript, which is exactly the cost the deltas exist
+// to avoid. Serializing per key removes the overlap instead of tolerating it.
+//
+// The baseline is therefore captured inside `run`, at the moment of posting.
+// Capturing it when the caller enqueued would reintroduce the same staleness
+// the queue is here to remove: the baseline maps are updated on *response*, so
+// a request that waited behind another would carry a baseline the worker had
+// already superseded.
+
+type DetailRequest = {
+  session: Session
+  density: TuiDensity
+  showToolCalls: boolean
+  resolve: (payload: SessionDetailPayload) => void
+  reject: (error: Error) => void
+}
+
+type WarmRequest = {
+  session: Session
+  density: TuiDensity
+  showToolCalls: boolean
+  resolve: () => void
+  reject: (error: Error) => void
+}
+
+type FormatRequest = {
+  session: Session
+  threaded: ThreadedMessage[]
+  density: TuiDensity
+  showToolCalls: boolean
+  resolve: (cards: TuiTranscriptCard[]) => void
+  reject: (error: Error) => void
+}
+
+/**
+ * A stable id per threaded array, so a format key can say *which* transcript it
+ * is for. Held weakly: these arrays are the transcript, and the map must not be
+ * what keeps an evicted one alive.
+ */
+const threadedIds = new WeakMap<ThreadedMessage[], number>()
+let threadedIdCounter = 0
+function threadedIdentity(threaded: ThreadedMessage[]): number {
+  const existing = threadedIds.get(threaded)
+  if (existing !== undefined) return existing
+  const id = ++threadedIdCounter
+  threadedIds.set(threaded, id)
+  return id
+}
+
+/**
+ * Hands a superseded caller the replacement's answer. Sound only because the
+ * key is the whole question: the replacement asks the same thing of newer
+ * state, so its answer is at least as fresh as the one that was asked for.
+ */
+function chainSuperseded<R>(
+  superseded: { resolve: (value: R) => void; reject: (error: Error) => void },
+  replacement: { resolve: (value: R) => void; reject: (error: Error) => void },
+): void {
+  const { resolve, reject } = superseded
+  const nextResolve = replacement.resolve
+  const nextReject = replacement.reject
+  replacement.resolve = (value) => { nextResolve(value); resolve(value) }
+  replacement.reject = (error) => { nextReject(error); reject(error) }
+}
+
+function dispatchDetail(request: DetailRequest): Promise<void> {
+  const { session, density, showToolCalls } = request
+  const key = cacheKey(session)
+  const cardsVariant = variantKey(density, showToolCalls)
+  const id = ++requestCounter
+  const w = ensureWorker()
+  const stored = lastDeliveredByKey.get(key)
+  const previousDelivery = stored?.cardsVariant === cardsVariant ? stored : undefined
+  return new Promise<void>((settle) => {
+    pending.set(id, {
+      kind: 'detail',
+      sessionKey: key,
+      cardsVariant,
+      previousDelivery,
+      resolve: (payload) => {
+        const cacheEntry = {
+          threadedMessages: payload.threadedMessages,
+          cardsByVariant: new Map<string, TuiTranscriptCard[]>(),
+        }
+        rememberCardsVariant(cacheEntry, density, showToolCalls, payload.transcriptCards)
+        touchThreadingCache(key, cacheEntry)
+        request.resolve(payload)
+        settle()
+      },
+      reject: (error) => { request.reject(error); settle() },
+    })
+    w.postMessage({
+      kind: 'detail',
+      id,
+      session,
+      density,
+      showToolCalls,
+      previousDeliveryToken: previousDelivery?.deliveryToken,
+    })
+  })
+}
+
+function dispatchWarm(request: WarmRequest): Promise<void> {
+  const id = ++requestCounter
+  const w = ensureWorker()
+  return new Promise<void>((settle) => {
+    pending.set(id, {
+      kind: 'warm',
+      resolve: () => { request.resolve(); settle() },
+      reject: (error) => { request.reject(error); settle() },
+    })
+    w.postMessage({
+      kind: 'warm',
+      id,
+      session: request.session,
+      density: request.density,
+      showToolCalls: request.showToolCalls,
+    })
+  })
+}
+
+function dispatchFormat(request: FormatRequest): Promise<void> {
+  const { session, threaded, density, showToolCalls } = request
+  const key = cacheKey(session)
+  const cardsVariant = variantKey(density, showToolCalls)
+  const formatKey = `${key}|${cardsVariant}`
+  const id = ++requestCounter
+  const w = ensureWorker()
+  const previousDelivery = lastFormattedByKey.get(formatKey)
+  const patch = previousDelivery ? threadedPatchBounds(threaded, previousDelivery.threaded) : null
+  return new Promise<void>((settle) => {
+    let retriedWithFullTranscript = false
+    const entry: Extract<Pending, { kind: 'format' }> = {
+      kind: 'format',
+      formatKey,
+      threaded,
+      previousDelivery,
+      resolve: (transcriptCards) => {
+        // (Re)create the entry when it was evicted or holds a different
+        // threaded identity — getTranscriptCardsSync compares identity against
+        // the caller's `threaded`, so an entry keyed to anything else can never
+        // serve the transcript this format was requested for. A fresher detail
+        // read simply re-caches on its own resolve.
+        const existing = threadingCacheByKey.get(key)
+        const cacheEntry = existing && existing.threadedMessages === threaded
+          ? existing
+          : { threadedMessages: threaded, cardsByVariant: new Map<string, TuiTranscriptCard[]>() }
+        rememberCardsVariant(cacheEntry, density, showToolCalls, transcriptCards)
+        touchThreadingCache(key, cacheEntry)
+        request.resolve(transcriptCards)
+        settle()
+      },
+      reject: (error) => {
+        // Worker and client LRUs have different working sets. An evicted
+        // worker baseline is a cache miss: retry once with the full source.
+        if (!retriedWithFullTranscript && patch && error.message === 'threading worker format delta baseline unavailable') {
+          retriedWithFullTranscript = true
+          entry.previousDelivery = undefined
+          pending.set(id, entry)
+          w.postMessage({ kind: 'format', id, session, threaded, density, showToolCalls })
+          return
+        }
+        request.reject(error)
+        settle()
+      },
+    }
+    pending.set(id, entry)
+    w.postMessage(patch && previousDelivery
+      ? {
+          kind: 'format',
+          id,
+          session,
+          threadedPrefix: patch.prefix,
+          threadedDeleteCount: patch.deleteCount,
+          threadedPatch: patch.patch,
+          previousFormatToken: previousDelivery.formatToken,
+          density,
+          showToolCalls,
+        }
+      : { kind: 'format', id, session, threaded, density, showToolCalls })
+  })
+}
+
+const detailQueue = createKeyedWorkerQueue<DetailRequest>({
+  run: dispatchDetail,
+  supersede: chainSuperseded,
+})
+
+const warmQueue = createKeyedWorkerQueue<WarmRequest>({
+  run: dispatchWarm,
+  supersede: chainSuperseded,
+})
+
+const formatQueue = createKeyedWorkerQueue<FormatRequest>({
+  run: dispatchFormat,
+  supersede: chainSuperseded,
+})
+
+/** Test seam: session keys with threading work queued or in flight. */
+export function threadingQueueActiveKeys(): number {
+  return detailQueue.activeKeys + warmQueue.activeKeys + formatQueue.activeKeys
+}
+
 /**
  * Read a session from disk/SDK, thread it, and format its cards — all inside
  * the worker. Only the finished payload crosses back, so the read +
@@ -378,39 +586,14 @@ export function readAndBuildTranscriptAsync(
   density: TuiDensity,
   showToolCalls: boolean,
 ): Promise<SessionDetailPayload> {
-  const key = cacheKey(session)
-  const id = ++requestCounter
-  const w = ensureWorker()
-  const cardsVariant = variantKey(density, showToolCalls)
-  const previousDelivery = lastDeliveredByKey.get(key)
   return new Promise<SessionDetailPayload>((resolve, reject) => {
-    pending.set(id, {
-      kind: 'detail',
-      sessionKey: key,
-      cardsVariant,
-      previousDelivery: previousDelivery?.cardsVariant === cardsVariant
-        ? previousDelivery
-        : undefined,
-      resolve: (payload) => {
-        const cacheEntry = {
-          threadedMessages: payload.threadedMessages,
-          cardsByVariant: new Map<string, TuiTranscriptCard[]>(),
-        }
-        rememberCardsVariant(cacheEntry, density, showToolCalls, payload.transcriptCards)
-        touchThreadingCache(key, cacheEntry)
-        resolve(payload)
-      },
-      reject,
-    })
-    w.postMessage({
-      kind: 'detail',
-      id,
-      session,
-      density,
-      showToolCalls,
-      previousDeliveryToken: previousDelivery?.cardsVariant === cardsVariant
-        ? previousDelivery.deliveryToken
-        : undefined,
+    detailQueue.push({
+      // The variant is part of the question: two reads that differ in density
+      // are not the same request, and answering one with the other's cards
+      // would hand back a transcript formatted for a display the caller is not
+      // showing.
+      key: `detail:${cacheKey(session)}|${variantKey(density, showToolCalls)}`,
+      request: { session, density, showToolCalls, resolve, reject },
     })
   })
 }
@@ -426,11 +609,11 @@ export function warmTranscriptAsync(
   density: TuiDensity,
   showToolCalls: boolean,
 ): Promise<void> {
-  const id = ++requestCounter
-  const w = ensureWorker()
   return new Promise<void>((resolve, reject) => {
-    pending.set(id, { kind: 'warm', resolve, reject })
-    w.postMessage({ kind: 'warm', id, session, density, showToolCalls })
+    warmQueue.push({
+      key: `warm:${cacheKey(session)}|${variantKey(density, showToolCalls)}`,
+      request: { session, density, showToolCalls, resolve, reject },
+    })
   })
 }
 
@@ -447,8 +630,6 @@ export function formatTranscriptCardsAsync(
   showToolCalls: boolean,
 ): Promise<TuiTranscriptCard[]> {
   const key = cacheKey(session)
-  const cardsVariant = variantKey(density, showToolCalls)
-  const formatKey = `${key}|${cardsVariant}`
   const cached = threadingCacheByKey.get(key)
   if (cached && cached.threadedMessages === threaded) {
     const variant = cached.cardsByVariant.get(variantKey(density, showToolCalls))
@@ -458,60 +639,16 @@ export function formatTranscriptCardsAsync(
     }
   }
 
-  const id = ++requestCounter
-  const w = ensureWorker()
-  const previousDelivery = lastFormattedByKey.get(formatKey)
-  const patch = previousDelivery
-    ? threadedPatchBounds(threaded, previousDelivery.threaded)
-    : null
   return new Promise<TuiTranscriptCard[]>((resolve, reject) => {
-    let retriedWithFullTranscript = false
-    const request: Extract<Pending, { kind: 'format' }> = {
-      kind: 'format',
-      formatKey,
-      threaded,
-      previousDelivery,
-      resolve: (transcriptCards) => {
-        // (Re)create the entry when it was evicted or holds a different
-        // threaded identity — getTranscriptCardsSync compares identity against
-        // the caller's `threaded`, so an entry keyed to anything else can never
-        // serve the transcript this format was requested for. A fresher detail
-        // read simply re-caches on its own resolve.
-        const existing = threadingCacheByKey.get(key)
-        const entry = existing && existing.threadedMessages === threaded
-          ? existing
-          : { threadedMessages: threaded, cardsByVariant: new Map<string, TuiTranscriptCard[]>() }
-        rememberCardsVariant(entry, density, showToolCalls, transcriptCards)
-        touchThreadingCache(key, entry)
-        resolve(transcriptCards)
-      },
-      reject: (error) => {
-        // Worker and client LRUs have different working sets. An evicted
-        // worker baseline is a cache miss: retry once with the full source.
-        if (!retriedWithFullTranscript && patch && error.message === 'threading worker format delta baseline unavailable') {
-          retriedWithFullTranscript = true
-          request.previousDelivery = undefined
-          pending.set(id, request)
-          w.postMessage({ kind: 'format', id, session, threaded, density, showToolCalls })
-          return
-        }
-        reject(error)
-      },
-    }
-    pending.set(id, request)
-    w.postMessage(patch && previousDelivery
-      ? {
-          kind: 'format',
-          id,
-          session,
-          threadedPrefix: patch.prefix,
-          threadedDeleteCount: patch.deleteCount,
-          threadedPatch: patch.patch,
-          previousFormatToken: previousDelivery.formatToken,
-          density,
-          showToolCalls,
-        }
-      : { kind: 'format', id, session, threaded, density, showToolCalls })
+    formatQueue.push({
+      // The threaded array is part of the question — two formats of different
+      // transcripts are not interchangeable, and a superseded caller handed the
+      // other one's cards would render a different number of cards than it has
+      // messages. Identity is minted per array rather than derived from its
+      // contents: this runs on every density toggle, and the arrays are large.
+      key: `format:${key}|${variantKey(density, showToolCalls)}|${threadedIdentity(threaded)}`,
+      request: { session, threaded, density, showToolCalls, resolve, reject },
+    })
   })
 }
 
