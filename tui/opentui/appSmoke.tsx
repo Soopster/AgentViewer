@@ -320,6 +320,40 @@ const commandHint = chordHintText(COMMAND_CHORD_MAP).split('  ')[0]!
 if (!commandChordFrame.includes(commandHint)) {
   throw new Error(`Ctrl+K did not expose the portable command chord (expected ${commandHint}):\n${commandChordFrame}`)
 }
+// ⌃K t is the session-scoped half of the same chord: the Teammates panel is a
+// property of the open conversation, where `a` is every run. With no session
+// selected it says so rather than opening over nothing — either answer proves
+// the chord reached the dispatcher, which is what this is here to pin.
+act(() => {
+  setup.mockInput.pressKey('t')
+})
+await act(async () => {
+  await setup.flush()
+  await new Promise((resolve) => setTimeout(resolve, 250))
+})
+const teammatesFrame = captureCharFrame()
+if (!teammatesFrame.includes('Teammates') && !teammatesFrame.includes('before giving it teammates')) {
+  throw new Error(`Ctrl+K T did not reach the Teammates command:\n${teammatesFrame}`)
+}
+// The panel owns every keystroke while it is up, so it has to be dismissed
+// before the next chord — a ⌃K sent into it would be swallowed, not re-armed.
+act(() => {
+  setup.mockInput.pressKey('\x1b')
+})
+await act(async () => {
+  await setup.flush()
+  await new Promise((resolve) => setTimeout(resolve, 250))
+})
+if (captureCharFrame().includes('─ Teammates ─')) {
+  throw new Error(`Escape did not close the Teammates panel:\n${captureCharFrame()}`)
+}
+act(() => {
+  setup.mockInput.pressKey('k', { ctrl: true })
+})
+await act(async () => {
+  await setup.flush()
+})
+
 act(() => {
   setup.mockInput.pressKey('a')
 })
@@ -467,7 +501,7 @@ if (!coordinationFrame.includes('Second line') || !coordinationFrame.includes('E
   throw new Error(`Structured description did not support multiline editing:\n${coordinationFrame}`)
 }
 
-console.log('Full App smoke render, playbook manager launch, Agent Operations N launch, and split chord passed')
+console.log('Full App smoke render, playbook manager launch, Agent Operations N launch, Teammates panel, and split chord passed')
 // Boot effects leave live timers (session polls, registry reconcile) — exit
 // explicitly instead of waiting for them.
 process.exit(0)

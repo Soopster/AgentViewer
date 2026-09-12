@@ -703,6 +703,54 @@ the other and you have moved lines, not work.
   splitting the activity registry from the reattach machinery first; that is the prerequisite, not
   an optional extra.
 
+#### Interactive Coordinator in the TUI (load-bearing)
+
+`⌃K t` opens `tui/opentui/TeammatesPopover.tsx` for the conversation the reader is on — the TUI's
+counterpart to the web's `CoordinatorConversation`. It is **session-scoped where
+`CoordinationPopover` (`⌃K a`) is run-scoped**: promoting a chat to lead of a Coordinator run is a
+property of that chat, so the two answer "who is helping me here" and "what is every run doing".
+Enable/turn off, the continuation toggle, delivery reconciliation, teammate recovery and the roster
+all go through `lib/tui/service.ts`'s `readTuiSessionCoordinator` / `sendTuiSessionCoordination`,
+which mirror `app/api/sessions/[sessionId]/coordination/route.ts` action for action so the daemon
+(`--attach`) path is the same request.
+
+- **The delivery half was already done.** `streamTuiSessionTurn` goes through
+  `withCooperativeInbox`, so teammate mail, the lead context and the shell fallback client reach a
+  TUI turn exactly as they reach a web one, and `sweepInteractiveCoordinator` drives automatic
+  continuation server-side. What was missing was only the control surface.
+- **State lives in `tui/opentui/interactiveCoordinatorStore.ts`**, following `coordinatorStore.ts`:
+  the panel subscribes and is `memo`'d, and the root's only subscription is the open/closed boolean
+  (`isInteractiveCoordinatorOpen`), which its key dispatcher reads imperatively. A coordinator
+  refresh must never reach the root.
+- **The feed starts on open, not at boot.** Reading coordination state loads
+  `lib/agentCoordination.ts`, which imports the send path; a surface the user may never open must
+  not be what pulls ~56MB in. The read itself is assembled from `lib/sessionActivity.ts` rather than
+  `readViewSessionRunning` for the same reason.
+- **A close keeps the session and its last read**, so reopening the same conversation paints its
+  roster immediately; switching conversations drops the read, because another chat's roster under
+  this one's heading is worse than a blank one.
+- **An unconfirmed request locks the panel.** The idempotency key makes a *replay* safe; it cannot
+  make a second, different mutation safe while the first's outcome is unknown. A failed action is
+  kept verbatim and only `r` (replay the same `requestId`) or `e` (discard) may follow it — the
+  web panel's `locked` rule, and the easiest thing to lose in a port.
+- **The panel owns every keystroke while it is up**, like every other popover here: a `⌃K` sent into
+  it is swallowed, not re-armed. `appSmoke.tsx` pins the chord and that Escape closes it;
+  `teammatesPopoverSmoke.tsx` pins enable, roster activity, inspect, drafts, continuation, the
+  unconfirmed gate and turn-off against a real seeded run.
+- **A modal is a scrim plus a panel, and the panel must sit above it**
+  (`tui/opentui/layers.ts`). The root paints a 35% black scrim over everything while any modal in
+  that list is up; a panel left at a lower z-index is painted *through* it and reads as disabled
+  rather than foregrounded. This shipped once, because the char frame is byte-identical either
+  way — only the colours differ — so `teammatesPopoverSmoke.tsx` asserts the ORDER, not the pixels
+  (verified to fail when the panel is put back below the scrim). Adding a modal to the scrim's
+  condition without raising its panel is the whole bug; use the constants rather than a literal.
+- **Contrast is a hierarchy, not a default.** Rendering a whole panel in `theme.dim` is the easy
+  mistake here and it reads as broken: content the user acts on is `theme.text`, secondary is
+  `theme.muted`, and `dim` is for separators and chrome alone. Key glyphs carry `theme.cyan` so the
+  footer can be scanned, and the header's status is the only coloured word on its line. The footer
+  drops whole hint entries **from the middle** when it will not fit, because the last one is how to
+  leave — the same escape-hatch rule the ⌃B/⌃K chord hint follows, and the smoke pins it.
+
 #### Frecency, the stash, and the supersede queue (load-bearing)
 
 Three patterns taken from opencode in September 2026 (survey: `docs/opencode-survey-2026-09-12.md`).

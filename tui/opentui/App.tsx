@@ -213,6 +213,14 @@ import { AttentionInboxPopover, attentionItemNeedsInput, type AttentionItem } fr
 import { CrossSessionMessagingPopover } from './CrossSessionMessagingPopover'
 import { CheckpointPopover } from './CheckpointPopover'
 import { CoordinationPopover } from './CoordinationPopover'
+import { TeammatesPopover } from './TeammatesPopover'
+import { MODAL_SCRIM_Z_INDEX } from './layers'
+import {
+  closeInteractiveCoordinator,
+  isInteractiveCoordinatorOpen,
+  openInteractiveCoordinator,
+  subscribeInteractiveCoordinator,
+} from './interactiveCoordinatorStore'
 import { PlaybookManagerPopover } from './PlaybookManagerPopover'
 import { getContinueInCliCommand } from '../../lib/cliContinue'
 import { commandResultExpectsTranscript, isNativeComposerCommandText } from '../../lib/composerCommands'
@@ -5134,6 +5142,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'worktree-discard', label: 'Discard worktree task',          key: '',   category: 'Worktree' },
   { id: 'coord-start', label: 'Start coordinated run', key: '⌃K n / ⌃⇧N', category: 'Coordination' },
   { id: 'coord-board', label: 'Open Agent Operations', key: '⌃K a / ⌃⇧A', category: 'Coordination' },
+  { id: 'coord-teammates', label: 'Teammates for this conversation', key: '⌃K t', category: 'Coordination' },
   { id: 'coord-cleanup', label: 'Clean completed worktrees', key: '', category: 'Coordination' },
   { id: 'coord-stop', label: 'Stop coordinated run', key: '', category: 'Coordination' },
   { id: 'fleet',      label: 'Toggle fleet strip',      key: '⇧A', category: 'View'       },
@@ -8072,6 +8081,17 @@ export default function OpenTuiApp() {
   const composerDraftRef = useRef('')
   const searchModeRef = useRef(false)
   const sessionSearchModeRef = useRef(false)
+  // Whether the session-scoped Teammates panel is up. The panel holds its own
+  // state in interactiveCoordinatorStore, so this selector is the root's only
+  // subscription to it: a coordinator refresh repaints the panel and never
+  // reaches this component, and only opening or closing re-renders the root.
+  const teammatesOpen = useSyncExternalStore(
+    subscribeInteractiveCoordinator,
+    isInteractiveCoordinatorOpen,
+    () => false,
+  )
+  const teammatesKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+
   const composerFocusBlocked = Boolean(
     exitConfirmOpen
     || searchMode
@@ -8089,6 +8109,7 @@ export default function OpenTuiApp() {
     || diagnosticsOpen
     || coordModalOpen
     || coordBoardOpen
+    || teammatesOpen
     || renameSessionKey
     || surfacePanelFocused
     || newSessionModalOpen
@@ -12777,6 +12798,26 @@ export default function OpenTuiApp() {
     setCoordBoardOpen(true)
   })
 
+  const openTeammatesPanel = useEffectEvent(() => {
+    const session = selectedSession
+    if (!session) {
+      showNotice('info', 'Open a conversation before giving it teammates', 3500)
+      return
+    }
+    if (session.isPending) {
+      showNotice('info', 'Send a first message before giving this conversation teammates', 4000)
+      return
+    }
+    // The panel owns its own read and poll; it is started here rather than at
+    // boot because reaching coordination state loads the send path.
+    openInteractiveCoordinator({
+      sessionId: session.sessionId,
+      provider: session.provider ?? 'claude',
+      cwd: session.cwd,
+      title: session.customTitle ?? session.summary ?? '(untitled session)',
+    })
+  })
+
   const selectCoordPlaybook = useEffectEvent((name: string | null, available = coordPlaybooks) => {
     setCoordPlaybookName(name)
     setCoordPlaybookArgsDraft('')
@@ -16802,6 +16843,9 @@ export default function OpenTuiApp() {
       case 'coord-board':
         void openCoordinationBoard()
         break
+      case 'coord-teammates':
+        openTeammatesPanel()
+        break
       case 'coord-cleanup':
         void cleanupCompletedCoordinatedRunWorktrees()
         break
@@ -17427,6 +17471,11 @@ export default function OpenTuiApp() {
         handled(() => setCoordModalFocus((current) => moveCoordModalFocus(current, 1)))
       }
       // Everything else falls through to the focused editor/input.
+      return
+    }
+
+    if (teammatesOpen) {
+      handled(() => { teammatesKeyHandlerRef.current?.(key) })
       return
     }
 
@@ -22276,7 +22325,7 @@ export default function OpenTuiApp() {
 
       <ToastOverlay toasts={toasts} theme={theme} width={width} height={height} />
 
-      {worktreeModalOpen || worktreeConfirm || coordModalOpen || coordBoardOpen ? (
+      {worktreeModalOpen || worktreeConfirm || coordModalOpen || coordBoardOpen || teammatesOpen ? (
         <box
           position="absolute"
           top={0}
@@ -22284,7 +22333,7 @@ export default function OpenTuiApp() {
           width={width}
           height={height}
           backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
-          zIndex={69}
+          zIndex={MODAL_SCRIM_Z_INDEX}
         />
       ) : null}
 
@@ -22767,6 +22816,17 @@ export default function OpenTuiApp() {
             showNotice('info', 'Agent diff comment added to composer')
           }}
           onKeyHandlerReady={(handler) => { coordBoardKeyHandlerRef.current = handler }}
+        />
+      ) : null}
+
+      {teammatesOpen ? (
+        <TeammatesPopover
+          theme={theme}
+          width={width}
+          height={height}
+          onOpenSession={openCoordinationAgentSession}
+          onNotice={showNotice}
+          onKeyHandlerReady={(handler) => { teammatesKeyHandlerRef.current = handler }}
         />
       ) : null}
 

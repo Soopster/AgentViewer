@@ -58,6 +58,11 @@ import {
   readViewSessionModels,
   readViewSessionSlashCommands,
 } from '../sessionReads'
+// Pure parsing plus the live-turn registry read — neither reaches a provider
+// client, so the Coordinator panel's state costs no send-path import.
+import { extractPendingPermissions } from '../permissions'
+import { listViewRunningSessions } from '../sessionActivity'
+import type { CoordinatorInteractiveState } from '../coordinatorInteractiveState'
 
 // The send path is loaded on first use, not at import (load-bearing for
 // memory). lib/sessionBackend.ts reaches every provider's client, harness and
@@ -690,6 +695,114 @@ export async function appendTuiProtocolEvent(event: AgentProtocolEvent): Promise
     })
   }
   return (await coordination()).appendProtocolEvent(event)
+}
+
+/**
+ * The interactive Coordinator state for one conversation: its run snapshot,
+ * the durable interactive settings, which teammates are mid-turn, which need
+ * recovery, and any provider-native approval waiting on the human.
+ *
+ * Deliberately assembled from `lib/sessionActivity.ts` rather than
+ * `readViewSessionRunning`: that lives in `lib/sessionBackend.ts`, and reading
+ * it here would pull the whole send path in behind a surface the user may only
+ * ever look at. The coordination module below loads it anyway — but only once
+ * the panel is actually opened, not from a poll.
+ */
+export async function readTuiSessionCoordinator(
+  sessionId: string,
+  provider: AgentProvider,
+): Promise<CoordinatorInteractiveState> {
+  if (isRemoteAttached()) {
+    return remoteJson(`${encodeSessionPath(sessionId, '/coordination')}${providerQuery(provider)}`)
+  }
+  const coord = await coordination()
+  const snapshot = await coord.readSessionCoordinator(sessionId, provider)
+  const interactive = await coord.readInteractiveCoordinator(sessionId)
+  const recoveries = snapshot ? await coord.readInteractiveRecoveries(snapshot.run.id) : []
+  const running = new Map(listViewRunningSessions().map((entry) => [entry.sessionId, entry]))
+  const runningAgentIds: string[] = []
+  const permissions = snapshot?.agents.flatMap((agent) => {
+    const info = running.get(agent.sessionId)
+    if (!info) return []
+    runningAgentIds.push(agent.id)
+    return extractPendingPermissions(info.pendingPermissions, { sessionId: agent.sessionId, provider: agent.provider })
+      .map((permission) => ({ agentId: agent.id, agentName: agent.name, permission }))
+  }) ?? []
+  return { snapshot, interactive, recoveries, permissions, runningAgentIds }
+}
+
+export type TuiSessionCoordinationRequest = {
+  action: 'disable' | 'enable' | 'settings' | 'reconcile' | 'resume-agent' | 'delegate' | 'message'
+  /** Stable across retries: every mutation below is replayed under this key. */
+  requestId: string
+  detail: string
+  cwd?: string
+  autoContinue?: boolean
+  batchId?: string
+  received?: boolean
+  to?: string
+  paths?: string[]
+}
+
+/**
+ * Run one Coordinator action for this conversation and return the state that
+ * followed it. `requestId` is the idempotency key the caller must reuse
+ * verbatim when a request's outcome is unknown — a retry with the same key
+ * reconciles rather than repeating the mutation.
+ */
+export async function sendTuiSessionCoordination(
+  sessionId: string,
+  provider: AgentProvider,
+  request: TuiSessionCoordinationRequest,
+): Promise<CoordinatorInteractiveState> {
+  if (isRemoteAttached()) {
+    return remoteJson(encodeSessionPath(sessionId, '/coordination'), {
+      method: 'POST',
+      body: JSON.stringify({ provider, ...request }),
+    })
+  }
+  const coord = await coordination()
+  if (request.action === 'disable') {
+    // Terminal stop is naturally idempotent, including after the identity ends.
+    await coord.disableInteractiveCoordinator(sessionId, provider)
+    return readTuiSessionCoordinator(sessionId, provider)
+  }
+  if (request.action === 'delegate' || request.action === 'enable' || request.action === 'settings') {
+    const cwd = (await readViewSessionInfo(sessionId, provider).catch(() => null))?.cwd || request.cwd
+    if (!cwd) throw new Error('Open a local project conversation before delegating')
+    await coord.configureInteractiveCoordinator({ sessionId, provider, cwd })
+  }
+  const identity = await coord.sessionCoordinatorIdentity(sessionId, provider)
+  await coord.runExternalProtocolIdempotent(identity, `chat_${request.action}`, request.requestId, async () => {
+    if (request.action === 'enable' || request.action === 'settings') {
+      const snapshot = await coord.readSessionCoordinator(sessionId, provider)
+      await coord.configureInteractiveCoordinator({
+        sessionId, provider, cwd: snapshot!.run.baseCwd, autoContinue: request.autoContinue,
+      })
+      return { configured: true }
+    }
+    if (request.action === 'reconcile') {
+      if (!request.batchId || request.received === undefined) throw new Error('Select the delivery batch and its observed outcome')
+      await coord.reconcileInteractiveDelivery(sessionId, request.batchId, request.received)
+      return { reconciled: true }
+    }
+    if (request.action === 'resume-agent') {
+      if (!request.to) throw new Error('Choose the teammate to resume')
+      await coord.resumeInteractiveAgent(identity, request.to)
+      return { resumed: true }
+    }
+    if (request.action === 'delegate') {
+      return coord.createExternalProtocolTask(identity, {
+        assignTo: request.to ?? 'auto',
+        title: request.detail.split('\n')[0]!.slice(0, 160),
+        detail: request.detail,
+        paths: request.paths,
+      })
+    }
+    if (!request.to) throw new Error('Choose a teammate')
+    return coord.sendExternalProtocolMessage(identity, { to: request.to, body: request.detail, kind: 'request' })
+  })
+  return readTuiSessionCoordinator(sessionId, provider)
 }
 
 /** Create a session (or a pending draft) locally or on the attached daemon. */
