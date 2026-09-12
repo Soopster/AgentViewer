@@ -14,6 +14,7 @@ const { mock } = await (0, eval)('import("bun:test")')
 let created = 0
 const turns = new Map<string, () => void>()
 mock.module(fileURLToPath(new URL('../lib/sessionBackend.ts', import.meta.url)), () => ({
+  readViewSessionRunning: () => ({ running: false, pendingPermissions: [], pendingPrompts: [] }),
   readViewSessionInfo: async () => ({ provider: 'codex', cwd }),
   createNewViewSession: async () => ({ provider: 'codex', sessionId: `teammate-${++created}`, isPending: false }),
   streamViewSessionTurn: async ({ sessionId }: { sessionId: string }) => new Promise<Response>(resolve => {

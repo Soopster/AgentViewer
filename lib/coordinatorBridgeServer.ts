@@ -27,7 +27,12 @@ declare global {
 
 async function readBody(req: import('node:http').IncomingMessage): Promise<string> {
   const chunks: Buffer[] = []
-  for await (const chunk of req) chunks.push(chunk as Buffer)
+  let size = 0
+  for await (const chunk of req) {
+    size += Buffer.byteLength(chunk)
+    if (size > 1_048_576) throw new Error('Coordinator request is too large')
+    chunks.push(chunk as Buffer)
+  }
   return Buffer.concat(chunks).toString('utf8')
 }
 
@@ -57,13 +62,14 @@ async function startBridgeServer(): Promise<{ url: string; secret: string; serve
     }
     const auth = req.headers.authorization ?? ''
     const presented = auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : ''
-    if (!presented || !timingSafeEqualStrings(presented, secret)) {
+    const participantRequest = req.url === '/participant'
+    if (!presented || (!participantRequest && !timingSafeEqualStrings(presented, secret))) {
       res.writeHead(401, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: 'Unauthorized' }))
       return
     }
     readBody(req)
       .then(async (raw) => {
-        let body: { sessionId?: unknown; tool?: unknown; args?: unknown }
+        let body: { sessionId?: unknown; tool?: unknown; args?: unknown; runId?: unknown; agentId?: unknown }
         try {
           body = JSON.parse(raw || '{}') as typeof body
         } catch {
@@ -75,6 +81,23 @@ async function startBridgeServer(): Promise<{ url: string; secret: string; serve
         const args = body.args && typeof body.args === 'object' && !Array.isArray(body.args)
           ? body.args as Record<string, unknown>
           : {}
+        if (participantRequest) {
+          const { resolveCoordinatorToolCall } = await import('./agentCoordinationSdkTools')
+          const invocation = resolveCoordinatorToolCall(toolName, args)
+          if (!invocation || typeof body.runId !== 'string' || typeof body.agentId !== 'string') {
+            res.writeHead(400, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: 'Invalid participant tool request' }))
+            return
+          }
+          const { executeExternalCoordinatorAction } = await import('./agentCoordinationExternal')
+          try {
+            const result = await executeExternalCoordinatorAction({ ...invocation.args, action: invocation.action,
+              runId: body.runId, agentId: body.agentId, token: presented })
+            res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ text: JSON.stringify(result) }))
+          } catch (error) {
+            res.writeHead(400, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: error instanceof Error ? error.message : 'Coordinator request failed' }))
+          }
+          return
+        }
         const result = await dispatchCoordinatorOpenCodeToolCall(sessionId, toolName, args)
         if (!result) {
           res.writeHead(404, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: `Unknown coordinator tool or session: ${toolName}` }))

@@ -1,6 +1,8 @@
 'use client'
 
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import CoordinatorConversation from './CoordinatorConversation'
+import type { ProtocolAgent } from '@/lib/agentProtocol'
 import Link from 'next/link'
 import { getAssistantDisplayName } from '@/lib/provider'
 import { memo, useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo, useDeferredValue, useSyncExternalStore } from 'react'
@@ -154,6 +156,8 @@ function claudeDiagnosticActionNotice(
 }
 
 type Props = {
+  hideCoordinator?: boolean
+  onInspectTeammate?: (agent: ProtocolAgent) => void
   messages: SessionMessage[]
   loading: boolean
   session: Session | null
@@ -2952,6 +2956,8 @@ function AskUserQuestionPicker({
 }
 
 function MessageViewInner({
+  hideCoordinator = false,
+  onInspectTeammate,
   messages,
   loading,
   session,
@@ -2985,6 +2991,9 @@ function MessageViewInner({
   rightPanelOpen,
   onToggleRightPanel,
 }: Props) {
+  const [composerDock, setComposerDock] = useState({ sessionId: '', tab: 'chat' })
+  const composerTab = composerDock.sessionId === session?.sessionId ? composerDock.tab : 'chat'
+  const returnToChat = useCallback(() => setComposerDock({ sessionId: session?.sessionId ?? '', tab: 'chat' }), [session?.sessionId])
   const [inputText, setInputText] = useState('')
   const [sendState, setSendState] = useState<SendState>('idle')
   const [sendError, setSendError] = useState<string | null>(null)
@@ -7763,7 +7772,9 @@ function MessageViewInner({
         flex: 1,
         display: 'flex',
         flexDirection: 'column',
-        height: '100vh',
+        height: hideCoordinator ? '100%' : '100vh',
+        minWidth: 0,
+        minHeight: 0,
         overflow: 'hidden',
       }}
     >
@@ -9053,7 +9064,6 @@ function MessageViewInner({
         >
           ▼
         </button>
-        {session ? <CoordinatorConversation key={`${session.provider}:${session.sessionId}`} session={session} onOpenSession={onOpenSession} /> : null}
         {(modelsPending || sendError || sessionActionError || sessionActionNotice || (session?.provider === 'codex' && codexExternalWriter)) && (
           <div className="av-web-composer-banner-stack">
             {modelsPending && !sendError ? (
@@ -9180,6 +9190,12 @@ function MessageViewInner({
           <CardHeader className="sr-only">
             <CardTitle>Message composer</CardTitle>
           </CardHeader>
+          <Tabs value={hideCoordinator ? 'chat' : composerTab} onValueChange={tab => setComposerDock({ sessionId: session?.sessionId ?? '', tab })} className="av-composer-dock">
+            {session && !hideCoordinator ? <TabsList variant="line" aria-label="Composer" className="av-composer-dock-tabs">
+              <TabsTrigger value="chat">Chat</TabsTrigger>
+              <TabsTrigger value="teammates">Teammates</TabsTrigger>
+            </TabsList> : null}
+            <TabsContent value="chat" forceMount className="av-composer-dock-pane">
           <CardContent className="av-web-composer-content" style={{ padding: '14px 16px 10px' }}>
             <div className="av-web-composer-controls" style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 220px', minWidth: 0 }}>
@@ -10274,6 +10290,11 @@ function MessageViewInner({
               </span>
             </div>
           </CardContent>
+            </TabsContent>
+            {session && !hideCoordinator ? <TabsContent value="teammates" forceMount className="av-composer-dock-pane">
+              <CoordinatorConversation key={`${session.provider}:${session.sessionId}`} session={session} onInspect={onInspectTeammate!} onReturnToChat={returnToChat} />
+            </TabsContent> : null}
+          </Tabs>
         </Card>
         {rewindPreview && (
           <Card
@@ -10461,5 +10482,20 @@ function MessageViewInner({
 // nothing. Props are referentially stable across idle polls (see
 // mergeMessages' identity bail-out in page.tsx and the threaded cache below),
 // so a stable-compare memo succeeds on every idle tick.
-const MessageView = memo(MessageViewInner)
+const MemoMessageViewInner = memo(MessageViewInner)
+const CoordinatorInspector = dynamic(() => import('./CoordinatorInspector'))
+
+function MessageViewShell(props: Props) {
+  const owner = `${props.session?.provider}:${props.session?.sessionId}`
+  const [inspection, setInspection] = useState<{ owner: string; agent: ProtocolAgent } | null>(null)
+  const inspect = useCallback((agent: ProtocolAgent) => setInspection({ owner, agent }), [owner])
+  const close = useCallback(() => setInspection(null), [])
+  const agent = inspection?.owner === owner ? inspection.agent : null
+  if (props.hideCoordinator) return <MemoMessageViewInner {...props} />
+  return <div className="av-coord-reader-layout">
+    <div className="av-coord-lead-reader"><MemoMessageViewInner {...props} onInspectTeammate={inspect} /></div>
+    {agent ? <div className="av-coord-teammate-reader"><CoordinatorInspector key={agent.sessionId} agent={agent} onClose={close} /></div> : null}
+  </div>
+}
+const MessageView = memo(MessageViewShell)
 export default MessageView

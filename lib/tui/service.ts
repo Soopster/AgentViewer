@@ -436,19 +436,13 @@ export async function streamTuiSessionTurn(
       provider: session.provider,
     }, signal)
   }
-  // Cooperative Coordinator join (see lib/agentCoordination.ts): no-ops
-  // instantly unless this session was explicitly joined to a run.
-  if (typeof body.message === 'string') {
-    const drained = await (await coordination()).drainCooperativeInbox(session.sessionId).catch(() => '')
-    if (drained) body.message = `${body.message}\n${drained}`
-  }
-  const response = await (await sendPath()).streamViewSessionTurn({
-    sessionId: session.sessionId,
-    signal: signal ?? new AbortController().signal,
-    body,
-    provider: session.provider as AgentProvider | undefined,
-  })
-  return (await coordination()).observeCoordinatorSessionTurn(session.sessionId, response)
+  return (await coordination()).withCooperativeInbox(session.sessionId, body, async outgoing =>
+    (await sendPath()).streamViewSessionTurn({
+      sessionId: session.sessionId,
+      signal: signal ?? new AbortController().signal,
+      body: outgoing,
+      provider: session.provider as AgentProvider | undefined,
+    }))
 }
 
 /**

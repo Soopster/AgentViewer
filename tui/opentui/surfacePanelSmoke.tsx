@@ -117,18 +117,23 @@ if (process.env.DUMP_FRAME === '1') {
 }
 
 // Search text owns panel shortcuts, and navigation avoids the tab-cycling chords.
+const searchBarText = () => {
+  const bar = setup.renderer.root.findDescendantById('git-diff-review-actions')
+  if (!bar) throw new Error('Diff search controls are missing')
+  return captureCharFrame().split('\n')[bar.y]?.slice(bar.x, bar.x + bar.width) ?? ''
+}
 act(() => { setup.mockInput.pressKey('f', { ctrl: true }) })
 await settle(100)
 for (const char of ['p', 'O', '=', '<', '>']) {
   act(() => { setup.mockInput.pressKey(char, { shift: char === 'O' }) })
   await settle(80)
 }
-if (!captureCharFrame().includes('pO=<>')) throw new Error(`Panel shortcuts stole search text:\n${captureCharFrame()}`)
+if (!searchBarText().includes('pO=<>')) throw new Error(`Panel shortcuts stole search text:\n${captureCharFrame()}`)
 act(() => { setup.mockInput.pressKey('g', { ctrl: true }); setup.mockInput.pressKey('r', { ctrl: true }) })
 await settle(100)
-act(() => { setup.mockInput.pressKey('escape') })
-await settle(100)
-if (captureCharFrame().includes('pO=<>')) throw new Error('Escape did not clear docked diff search')
+act(() => { setup.mockInput.pressKey('\x1b') })
+await settle(500)
+if (searchBarText().includes('pO=<>')) throw new Error(`Escape did not clear docked diff search:\n${captureCharFrame()}`)
 
 // ⌃T re-opens the launcher over the mounted surface so a second tab can be
 // added, and both then live in the tab strip.

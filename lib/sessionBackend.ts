@@ -3068,7 +3068,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
         options: {
           env: claudePoolModule().CLAUDE_QUERY_ENV,
           stderr: (data) => claudePoolModule().logClaudeSubprocessStderr(sessionId, data),
-          ...(isPendingSession ? {} : { resume: sessionId }),
+          ...(isPendingSession ? { sessionId } : { resume: sessionId }),
           ...(cwdOverride ? { cwd: cwdOverride } : {}),
           ...(model ? { model } : {}),
           ...(fallbackModel ? { fallbackModel } : {}),

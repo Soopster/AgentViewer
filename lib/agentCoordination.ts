@@ -152,6 +152,8 @@ async function inProcessToolsAvailable(provider: ProtocolRun['provider']): Promi
   if (provider === 'opencode') return isOpenCodeManagedServer()
   return true
 }
+import { writeCoordinatorSessionClient } from './coordinatorSessionClient'
+import { getCoordinatorBridgeUrl } from './coordinatorBridgeServer'
 import { createNewViewSession, streamViewSessionTurn } from './sessionBackend'
 import { isOpenCodeManagedServer } from './opencodeClient'
 import { getRunningSessionInfo, interruptRunningSession, steerRunningSession } from './sessionRuntime'
@@ -172,7 +174,7 @@ const LOCK_LEASE_MS = 20 * 60_000
 // can cancel a teammate's in-flight turn without releasing the task), and
 // respond_to_mode/respond_to_allowlist_json (per-participant mailbox sender
 // gating, mirroring buzz-acp's respond-to modes).
-const SCHEMA_VERSION = 19
+const SCHEMA_VERSION = 20
 const EVENT_WINDOW = 300
 const LOCK_HISTORY_WINDOW = 200
 // Non-terminal tasks (pending/claimed/blocked) are always returned in full —
@@ -595,6 +597,31 @@ function initializeSchema(db: SqliteDatabase): void {
       (run_id, agent_id, action, request_id, state, created_at)
       SELECT run_id, agent_id, action, request_id, 'completed', created_at
       FROM protocol_idempotency;
+
+    CREATE TABLE IF NOT EXISTS protocol_interactive_sessions (
+      session_id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL REFERENCES protocol_runs(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL,
+      auto_continue INTEGER NOT NULL DEFAULT 0,
+      remaining_turns INTEGER NOT NULL DEFAULT 4
+    );
+    CREATE INDEX IF NOT EXISTS protocol_interactive_run_idx ON protocol_interactive_sessions(run_id);
+    CREATE TABLE IF NOT EXISTS protocol_interactive_dispatches (
+      run_id TEXT NOT NULL REFERENCES protocol_runs(id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL,
+      task_id TEXT,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (run_id, agent_id)
+    );
+    CREATE TABLE IF NOT EXISTS protocol_chat_delivery (
+      session_id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL REFERENCES protocol_runs(id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL,
+      batch_id TEXT NOT NULL,
+      message_ids TEXT NOT NULL,
+      state TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
 
     CREATE TABLE IF NOT EXISTS protocol_push_configs (
       id TEXT PRIMARY KEY,
@@ -2576,7 +2603,10 @@ export async function sessionCoordinatorIdentity(sessionId: string, provider: Pr
     if (['completed', 'failed', 'stopped'].includes(snapshot.run.status)) throw new Error('This run has ended')
     const controller = controllers.get(snapshot.run.id)
     const existing = controller?.sdkIdentities.get('lead')
-    if (existing) return existing
+    if (existing) {
+      registerCoordinatorToolsForProvider(provider, sessionId, existing)
+      return existing
+    }
     // Only this browser-owned session is rebound. External lead credentials are
     // never rotated by automatic teammate startup.
     const token = await enqueueWrite(db => rotateSessionParticipantTokenSync(db, snapshot.run.id, lead.id))
@@ -2647,6 +2677,7 @@ export async function createExternalProtocolTask(
     const available = agents.find(agent => agent.role === 'teammate' && !agent.taskId
       && (['idle', 'ready'].includes(agent.status) || (agent.status === 'done' && controller?.sessionIds.has(agent.id)))
       && !controller?.turnInFlight.has(agent.id)
+      && !db.prepare('SELECT 1 FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').get(identity.runId, agent.id)
       && (!params.requestedProvider || agent.provider === params.requestedProvider))
     if (available) return createExternalProtocolTask(identity, { ...params, assignTo: available.id })
     if (!controller) throw new Error('No idle teammate is available. Start or join a teammate for this externally managed run, then retry delegation.')
@@ -2709,6 +2740,7 @@ export async function createExternalProtocolTask(
       const matches = byId ? [byId] : roster.filter(entry => entry.name.toLowerCase() === selector && !['failed', 'stopped'].includes(entry.status) && (entry.status !== 'done' || controllers.get(identity.runId)?.sessionIds.has(entry.id)))
       if (matches.length !== 1) throw new Error('Delegation requires one active teammate; use its agent ID to disambiguate')
       delegate = matches[0]
+      if (db.prepare('SELECT 1 FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').get(identity.runId, delegate.id)) throw new Error('Inspect and reconcile the previous teammate execution before assigning more work')
       if (delegate.role !== 'teammate' || (!['idle', 'ready'].includes(delegate.status) && !(delegate.status === 'done' && controllers.get(identity.runId)?.sessionIds.has(delegate.id))) || delegate.taskId) {
         throw new Error('Teammate is busy or unavailable; send a follow-up message or wait for its current task')
       }
@@ -2988,6 +3020,11 @@ export async function readExternalProtocolInbox(
         ORDER BY created_at ASC, id ASC
         LIMIT ?
       `).all(identity.runId, identity.agentId, limit) as Row[]
+    }
+    const reserved = db.prepare('SELECT message_ids FROM protocol_chat_delivery WHERE run_id = ? AND agent_id = ?').get(identity.runId, identity.agentId) as Row | undefined
+    if (reserved) {
+      const ids = new Set(parseJsonArray(reserved.message_ids))
+      rows = rows.filter(row => !ids.has(String(row.id)))
     }
     const readyStatusGroups = readyStatusMessageGroups(rows)
     rows = rows.filter((row) => (
@@ -5549,6 +5586,7 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
         `).run(leaseIso(), ts, event.runId, event.agentId)
       }
       const newMessageIds: string[] = []
+      const interactiveRun = Boolean(db.prepare('SELECT 1 FROM protocol_interactive_sessions WHERE run_id = ?').get(event.runId))
       const queueLeadStatus = (body: string) => {
         for (const recipient of resolveRecipientsSync(db, event.runId, event.agentId, 'lead')) {
           newMessageIds.push(insertMessageSync(db, {
@@ -5557,7 +5595,7 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
             toAgentId: recipient,
             body,
             ts,
-            kind: 'review_request',
+            kind: interactiveRun ? 'status' : 'review_request',
           }))
         }
       }
@@ -5719,7 +5757,7 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
           // lead exactly once with the durable result while other work remains;
           // the all-terminal path instead includes every persisted result in
           // the synthesis prompt and avoids racing an intervention turn.
-          if (unfinished > 0) {
+          if (unfinished > 0 || interactiveRun) {
             for (const recipient of resolveRecipientsSync(db, event.runId, event.agentId, 'lead')) {
               newMessageIds.push(insertMessageSync(db, {
                 runId: event.runId,
@@ -5756,7 +5794,7 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
             SELECT COUNT(*) AS n FROM protocol_tasks
             WHERE run_id = ? AND status NOT IN ('completed', 'failed', 'cancelled')
           `).get(event.runId) as Row | undefined)?.n) || 0
-          if (unfinished > 0) {
+          if (unfinished > 0 || interactiveRun) {
             for (const recipient of resolveRecipientsSync(db, event.runId, event.agentId, 'lead')) {
               newMessageIds.push(insertMessageSync(db, {
                 runId: event.runId,
@@ -5962,6 +6000,13 @@ async function deliverMessagesLive(runId: string, messageIds: string[]): Promise
       if (!row) continue
       const message = rowToMessage(row)
       if (message.deliveredAt) continue
+      // Interactive delivery owns a durable batch until its stream settles.
+      // Never race it with steering or consume its mail through another turn.
+      const reserved = db.prepare('SELECT message_ids FROM protocol_chat_delivery WHERE run_id = ? AND agent_id = ?')
+        .get(runId, message.toAgentId) as Row | undefined
+      if (reserved && parseJsonArray(reserved.message_ids).includes(id)) continue
+      if (db.prepare('SELECT 1 FROM protocol_interactive_sessions WHERE run_id = ? AND session_id = ?')
+        .get(runId, agentsById.get(message.toAgentId)?.sessionId ?? '')) continue
       const recipient = agentsById.get(message.toAgentId)
       if (!recipient) continue
       const sessionId = controller?.sessionIds.get(recipient.id) ?? recipient.sessionId
@@ -6275,6 +6320,7 @@ async function sweepMailboxes(): Promise<void> {
     await pingLeadIfTeamIdle(runId).catch(() => {})
     await checkpointLeadSupervision(runId).catch(() => {})
     await sweepIdleTeammates(runId).catch(() => {})
+    await sweepInteractiveCoordinator(runId).catch(() => {})
   }
 }
 
@@ -6357,7 +6403,9 @@ async function dispatchLeadIntervention(controller: RunController, opts: { force
 function takeInboxSync(db: SqliteDatabase, runId: string, agentId: string): ProtocolMessage[] {
   const rows = db.prepare('SELECT * FROM protocol_messages WHERE run_id = ? AND to_agent_id = ? AND delivered_at IS NULL ORDER BY created_at ASC')
     .all(runId, agentId) as Row[]
-  return rows.map(rowToMessage)
+  const reserved = db.prepare('SELECT message_ids FROM protocol_chat_delivery WHERE run_id = ? AND agent_id = ?').get(runId, agentId) as Row | undefined
+  const ids = new Set(reserved ? parseJsonArray(reserved.message_ids) : [])
+  return rows.map(rowToMessage).filter(message => !ids.has(message.id))
 }
 
 function acknowledgeInboxSync(db: SqliteDatabase, runId: string, agentId: string, messageIds: string[]): void {
@@ -6757,6 +6805,261 @@ export async function drainCooperativeInbox(sessionId: string): Promise<string> 
     '--- end Coordinator room ---',
     '',
   ].join('\n')
+}
+
+/** Durable browser-owned collaboration settings and delivery recovery. */
+export async function configureInteractiveCoordinator(params: {
+  sessionId: string; provider: AgentProvider; cwd: string; autoContinue?: boolean
+}): Promise<void> {
+  const snapshot = await ensureSessionCoordinator(params)
+  await sessionCoordinatorIdentity(params.sessionId, params.provider)
+  await enqueueWrite(db => {
+    db.prepare(`INSERT INTO protocol_interactive_sessions (session_id, run_id, provider) VALUES (?, ?, ?)
+      ON CONFLICT(session_id) DO NOTHING`).run(params.sessionId, snapshot.run.id, params.provider)
+    if (params.autoContinue !== undefined) db.prepare(`UPDATE protocol_interactive_sessions
+      SET auto_continue = ?, remaining_turns = 4 WHERE session_id = ?`).run(Number(params.autoContinue), params.sessionId)
+  })
+  notifyRunChanged(snapshot.run.id)
+}
+
+/** Stop this chat's team without interrupting the user's primary conversation. */
+export async function disableInteractiveCoordinator(sessionId: string, provider: AgentProvider): Promise<void> {
+  const snapshot = await readSessionCoordinator(sessionId, provider)
+  if (!snapshot) return
+  if (!snapshot.agents.some(agent => agent.role === 'lead' && agent.sessionId === sessionId && agent.provider === provider)) {
+    throw new Error('Only the lead conversation can turn coordination off')
+  }
+  if (!['completed', 'failed', 'stopped'].includes(snapshot.run.status)) await stopProtocolRun(snapshot.run.id, sessionId)
+  unregisterCoordinatorToolsForSession(sessionId)
+  await enqueueWrite(db => {
+    db.prepare('DELETE FROM protocol_interactive_sessions WHERE session_id = ?').run(sessionId)
+  })
+  anyActiveCoordinatorAgentCache = null
+  notifyRunChanged(snapshot.run.id)
+}
+
+export async function readInteractiveCoordinator(sessionId: string) {
+  const db = await getDatabase()
+  const settings = db.prepare('SELECT * FROM protocol_interactive_sessions WHERE session_id = ?').get(sessionId) as Row | undefined
+  const delivery = db.prepare('SELECT batch_id, state, created_at FROM protocol_chat_delivery WHERE session_id = ?').get(sessionId) as Row | undefined
+  return {
+    enabled: Boolean(settings), autoContinue: Boolean(settings?.auto_continue),
+    remainingTurns: Number(settings?.remaining_turns ?? 4),
+    delivery: delivery ? { batchId: String(delivery.batch_id), state: String(delivery.state), createdAt: String(delivery.created_at),
+      active: activeChatDeliveries.has(sessionId) || getRunningSessionInfo(sessionId).running } : null,
+  }
+}
+
+declare global {
+  // Survive development reloads without mistaking a live stream for a crashed one.
+  var __agentViewerChatDeliveries: Set<string> | undefined
+}
+const activeChatDeliveries = globalThis.__agentViewerChatDeliveries ??= new Set<string>()
+
+/** Explicit reconciliation after the user inspects the lead transcript. No timed replay. */
+export async function reconcileInteractiveDelivery(sessionId: string, batchId: string, received: boolean): Promise<void> {
+  if (activeChatDeliveries.has(sessionId) || getRunningSessionInfo(sessionId).running) throw new Error('Wait for the current turn to settle before reconciling delivery')
+  await enqueueWrite(db => {
+    const row = db.prepare('SELECT * FROM protocol_chat_delivery WHERE session_id = ? AND batch_id = ?').get(sessionId, batchId) as Row | undefined
+    if (!row) return
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      if (received) acknowledgeInboxSync(db, String(row.run_id), String(row.agent_id), parseJsonArray(row.message_ids))
+      db.prepare('DELETE FROM protocol_chat_delivery WHERE session_id = ? AND batch_id = ?').run(sessionId, batchId)
+      db.exec('COMMIT')
+    } catch (error) { db.exec('ROLLBACK'); throw error }
+    notifyRunChanged(String(row.run_id))
+  })
+}
+
+/** Reserve mail before opening the provider stream; consume it only after a clean stream end.
+ * A thrown startup, error frame, or process death keeps the batch for explicit reconciliation.
+ * HTTP rejection is known not to have accepted the stream and releases the mail immediately.
+ */
+export async function withCooperativeInbox(
+  sessionId: string,
+  body: Record<string, unknown>,
+  submit: (body: Record<string, unknown>) => Promise<Response>,
+  automatic = false,
+): Promise<Response> {
+  const db = await getDatabase()
+  const row = findActiveCoordinatorAgentBySessionSync(db, sessionId)
+  if (!row || typeof body.message !== 'string') return submit(body)
+  if (activeChatDeliveries.has(sessionId)) return Response.json({ error: 'Coordinator turn is active. Interrupt it or wait before sending another message.' }, { status: 409 })
+  activeChatDeliveries.add(sessionId)
+  const agent = rowToAgent(row)
+  let batchId: string | null = null
+  let streamOwned = false
+  try {
+    const settings = db.prepare('SELECT * FROM protocol_interactive_sessions WHERE session_id = ?').get(sessionId) as Row | undefined
+    if (!settings && !takeInboxSync(db, agent.runId, agent.id).length
+      && !db.prepare('SELECT 1 FROM protocol_chat_delivery WHERE session_id = ?').get(sessionId)) {
+      return observeCoordinatorSessionTurn(sessionId, await submit(body))
+    }
+    if (settings) await sessionCoordinatorIdentity(sessionId, agent.provider)
+    const batch = await enqueueWrite(tx => {
+      tx.exec('BEGIN IMMEDIATE')
+      try {
+        if (tx.prepare('SELECT 1 FROM protocol_chat_delivery WHERE session_id = ?').get(sessionId)) {
+          throw new Error('Previous Coordinator delivery is unconfirmed. Inspect the transcript and reconcile it in Teammates before sending again.')
+        }
+        if (automatic) {
+          const current = tx.prepare('SELECT auto_continue, remaining_turns FROM protocol_interactive_sessions WHERE session_id = ?').get(sessionId) as Row | undefined
+          if (!current?.auto_continue || Number(current.remaining_turns) <= 0 || getRunningSessionInfo(sessionId).running) throw new Error('Automatic continuation is paused or the lead is busy')
+          tx.prepare('UPDATE protocol_interactive_sessions SET remaining_turns = remaining_turns - 1 WHERE session_id = ?').run(sessionId)
+        }
+        const messages = takeInboxSync(tx, agent.runId, agent.id)
+        const id = randomUUID()
+        tx.prepare(`INSERT INTO protocol_chat_delivery (session_id, run_id, agent_id, batch_id, message_ids, state, created_at)
+          VALUES (?, ?, ?, ?, ?, 'submitting', ?)`).run(sessionId, agent.runId, agent.id, id, JSON.stringify(messages.map(m => m.id)), nowIso())
+        tx.prepare('UPDATE protocol_agents SET last_seen_at = ? WHERE run_id = ? AND id = ?').run(nowIso(), agent.runId, agent.id)
+        if (!automatic) tx.prepare('UPDATE protocol_interactive_sessions SET remaining_turns = 4 WHERE session_id = ?').run(sessionId)
+        tx.exec('COMMIT')
+        return { id, messages }
+      } catch (error) { tx.exec('ROLLBACK'); throw error }
+    })
+    batchId = batch.id
+    const roster = listAgentsSync(db, agent.runId)
+    const fallbackCommand = settings && (agent.provider === 'codex' || agent.provider === 'opencode')
+      ? await writeCoordinatorSessionClient(path.join(DATA_DIR, 'session-bindings'), await getCoordinatorBridgeUrl(), await sessionCoordinatorIdentity(sessionId, agent.provider))
+      : null
+    const context = settings
+      ? `You are the interactive Coordinator lead for run ${agent.runId}. Use coord_delegate to assign bounded tasks, coord_send_message to follow up with named teammates, and coord_status to inspect results. Continue the user's work while teammates run. Keep approvals and questions for the human. Do not end the collaboration room when one task finishes. Do not call coord_wait inside this turn: return control when waiting, and the server will resume you when continuation is enabled.`
+        + (fallbackCommand ? `\nIf coord_* tools are absent from this existing conversation, invoke them through the shell as: ${fallbackCommand} TOOL_NAME 'JSON_ARGUMENTS'. For example use coord_delegate with {"title":"Short task","detail":"Specific bounded work","request_id":"unique-stable-key"}; omit to to allocate a teammate, or set to to its name for follow-up. Use coord_status with {} to inspect results and coord_send_message with {"to":"name","message":"advice","request_id":"unique-stable-key"}. Use a unique request_id for each mutation and reuse it unchanged after uncertainty. The binding is private; do not read or print it.` : '')
+      : ''
+    const mail = batch.messages.length ? formatInbox(batch.messages, new Map(roster.map(a => [a.id, a]))) : ''
+    const response = await submit({ ...body, message: `${body.message}\n\n${context}\n--- Coordinator delivery ${batch.id} ---\n${mail}\n--- end Coordinator delivery ---` })
+    if (!response.ok) {
+      await enqueueWrite(tx => tx.prepare('DELETE FROM protocol_chat_delivery WHERE session_id = ? AND batch_id = ?').run(sessionId, batch.id))
+      return response
+    }
+    if (!response.body) throw new Error('Provider returned no stream; delivery needs reconciliation')
+    await enqueueWrite(tx => tx.prepare("UPDATE protocol_chat_delivery SET state = 'streaming' WHERE session_id = ? AND batch_id = ?").run(sessionId, batch.id))
+    const observed = await observeCoordinatorSessionTurn(sessionId, response)
+    const [client, audit] = observed.body!.tee()
+    streamOwned = true
+    void (async () => {
+      let failed = false
+      let contentObserved = false
+      let buffer = ''
+      let eventType = ''
+      const decoder = new TextDecoder()
+      const reader = audit.getReader()
+      try {
+        for (;;) {
+          const { value, done } = await reader.read()
+          buffer += done ? decoder.decode() : decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = done ? '' : lines.pop() ?? ''
+          for (const line of lines) {
+            if (!line.trim()) { eventType = ''; continue }
+            if (line.startsWith('event:')) { eventType = line.slice(6).trim(); if (eventType === 'error') failed = true; continue }
+            if (!line.startsWith('data:')) continue
+            const text = line.slice(5).trim()
+            if (!text || text === '[DONE]') continue
+            try {
+              const frame = JSON.parse(text)
+              if (frame.error || frame.type === 'error' || frame.type === 'codex_error' || frame.is_error === true
+                || frame.event?.type === 'session.error' || providerTurnFailureFromWire(`${line}\n`, agent.provider)) failed = true
+              else if (eventType !== 'session' && !['session', 'session_info', 'usage', 'heartbeat'].includes(frame.type)) contentObserved = true
+            } catch { /* SSE comments and non-JSON provider payloads are not acceptance evidence. */ }
+          }
+          if (done) break
+        }
+        if (!contentObserved) failed = true
+        await enqueueWrite(tx => {
+          if (failed) tx.prepare("UPDATE protocol_chat_delivery SET state = 'uncertain' WHERE session_id = ? AND batch_id = ?").run(sessionId, batch.id)
+          else {
+            tx.exec('BEGIN IMMEDIATE')
+            try {
+              acknowledgeInboxSync(tx, agent.runId, agent.id, batch.messages.map(m => m.id))
+              tx.prepare('DELETE FROM protocol_chat_delivery WHERE session_id = ? AND batch_id = ?').run(sessionId, batch.id)
+              tx.exec('COMMIT')
+            } catch (error) { tx.exec('ROLLBACK'); throw error }
+          }
+        })
+      } catch {
+        await enqueueWrite(tx => tx.prepare("UPDATE protocol_chat_delivery SET state = 'uncertain' WHERE session_id = ? AND batch_id = ?").run(sessionId, batch.id)).catch(() => {})
+      } finally {
+        activeChatDeliveries.delete(sessionId)
+        notifyRunChanged(agent.runId)
+      }
+    })()
+    return new Response(client, { status: observed.status, statusText: observed.statusText, headers: observed.headers })
+  } catch (error) {
+    if (batchId) await enqueueWrite(tx => tx.prepare("UPDATE protocol_chat_delivery SET state = 'uncertain' WHERE session_id = ? AND batch_id = ?").run(sessionId, batchId)).catch(() => {})
+    return Response.json({ error: error instanceof Error ? error.message : 'Coordinator delivery failed' }, { status: 409 })
+  } finally {
+    if (!streamOwned) activeChatDeliveries.delete(sessionId)
+  }
+}
+
+export async function readInteractiveRecoveries(runId: string): Promise<string[]> {
+  const db = await getDatabase()
+  const snapshot = readSnapshotSync(db, runId)
+  if (!snapshot || !db.prepare('SELECT 1 FROM protocol_interactive_sessions WHERE run_id = ?').get(runId)) return []
+  return snapshot.agents.filter(agent => {
+    if (agent.role !== 'teammate' || agent.turnActive || agent.sessionId.startsWith('external:')) return false
+    const task = snapshot.tasks.find(task => task.id === agent.taskId)
+    const reserved = db.prepare('SELECT 1 FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').get(runId, agent.id)
+    return Boolean(reserved) || task?.status === 'in_progress' || task?.status === 'planning'
+  }).map(agent => agent.id)
+}
+
+export async function resumeInteractiveAgent(identity: ExternalProtocolIdentity, agentId: string): Promise<void> {
+  if (!(await readInteractiveRecoveries(identity.runId)).includes(agentId)) throw new Error('This teammate does not need recovery or is still running')
+  const controller = await adoptInteractiveController(identity)
+  if (!controller.sessionIds.has(agentId)) throw new Error('Only a managed teammate can be resumed')
+  await enqueueWrite(db => db.prepare('DELETE FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').run(identity.runId, agentId))
+  void dispatchTeammateWork(controller, agentId)
+}
+
+/** The server batches inbox events and spends at most four automatic lead turns per user turn. */
+async function sweepInteractiveCoordinator(runId: string): Promise<void> {
+  const db = await getDatabase()
+  const sessions = db.prepare('SELECT * FROM protocol_interactive_sessions WHERE run_id = ?').all(runId) as Row[]
+  for (const session of sessions) {
+    const identity = await sessionCoordinatorIdentity(String(session.session_id), String(session.provider) as AgentProvider)
+    const controller = await adoptInteractiveController(identity)
+    // Resume only durable queued work that never reached a provider submission.
+    // In-progress work without a current runtime is uncertain and requires inspection.
+    const snapshot = readSnapshotSync(db, runId)
+    for (const agent of snapshot?.agents ?? []) {
+      if (agent.role !== 'teammate' || agent.turnActive || !controller.sessionIds.has(agent.id)) continue
+      const task = snapshot?.tasks.find(task => task.id === agent.taskId)
+      if (task?.status === 'claimed' && !db.prepare('SELECT 1 FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').get(runId, agent.id)) {
+        void dispatchTeammateWork(controller, agent.id)
+      }
+    }
+  }
+  const rows = sessions.filter(row => Boolean(row.auto_continue) && Number(row.remaining_turns) > 0)
+  for (const row of rows) {
+    const sessionId = String(row.session_id)
+    if (activeChatDeliveries.has(sessionId) || getRunningSessionInfo(sessionId).running) continue
+    if (db.prepare('SELECT 1 FROM protocol_chat_delivery WHERE session_id = ?').get(sessionId)) continue
+    const snapshot = readSnapshotSync(db, runId)
+    if (!snapshot || snapshot.run.status !== 'running') continue
+    const lead = snapshot.agents.find(agent => agent.sessionId === sessionId && agent.role === 'lead')
+    if (!lead) continue
+    // Human-owned gates must never be answered by an automatic continuation.
+    if (snapshot.tasks.some(task => task.status === 'planned' || task.status === 'blocked'
+      || task.receipt?.needsDecision?.some(decision => decision.status === 'open'))) continue
+    const { readViewSessionRunning } = await import('./sessionBackend')
+    if (snapshot.agents.some(agent => readViewSessionRunning(agent.sessionId).pendingPermissions.length > 0)) continue
+    const mail = takeInboxSync(db, runId, lead.id)
+    if (!mail.length || mail.some(message => message.replyRequired)) continue
+    // Only results/findings/messages wake a lead; no heartbeat-driven model turns.
+    if (!mail.some(message => message.kind !== 'status' && message.kind !== 'status_summary')) continue
+    if (budgetExceededReasonSync(db, snapshot.run)) continue
+    const response = await withCooperativeInbox(sessionId, {
+      taskBudgetTokens: remainingTokenBudgetSync(db, snapshot.run),
+      maxBudgetUsd: remainingCostBudgetSync(db, snapshot.run),
+      message: 'Teammates have responded. Review their results, continue the user’s current work, and summarize material progress. Leave human approvals and questions pending.',
+      provider: lead.provider, cwd: lead.worktreePath, detachOnClientAbort: true,
+    }, body => streamViewSessionTurn({ sessionId, provider: lead.provider, body, signal: new AbortController().signal }), true)
+    // Consume the detached response; the independent audit above owns delivery acknowledgement.
+    if (response.body) void response.body.pipeTo(new WritableStream({ write() {} })).catch(() => {})
+  }
 }
 
 /** Completion gate: reject a task.completed whose worktree changed paths outside the agent's locks. */
@@ -7449,6 +7752,8 @@ async function dispatchAgentTurn(
   let retryAfterFailover = false
   let providerFailureHandled = false
   let activeAgent: ProtocolAgent | null = null
+  let durableDispatch = false
+  let dispatchSettled = false
   for (const messageId of opts.inboxMessageIds ?? []) inboxDispatchInFlight.add(messageId)
   try {
     const db = await getDatabase()
@@ -7471,6 +7776,12 @@ async function dispatchAgentTurn(
     const taskBudgetTokens = remainingTokenBudgetSync(db, run)
     const maxBudgetUsd = remainingCostBudgetSync(db, run)
     const sessionId = controller.sessionIds.get(agent.id) ?? agent.sessionId
+    if (controller.interactiveLeadId) {
+      const reserved = await enqueueWrite(tx => tx.prepare(`INSERT OR IGNORE INTO protocol_interactive_dispatches
+        (run_id, agent_id, task_id, created_at) VALUES (?, ?, ?, ?)`).run(controller.runId, agentId, agent.taskId ?? null, nowIso()))
+      if (!reserved.changes) { providerFailureHandled = true; return }
+      durableDispatch = true
+    }
     const isPending = controller.pendingSessions.has(agent.id)
     controller.pendingSessions.delete(agent.id)
     const response = await streamViewSessionTurn({
@@ -7494,6 +7805,7 @@ async function dispatchAgentTurn(
       },
     })
     if (!response.ok) {
+      dispatchSettled = true
       providerFailureHandled = true
       retryAfterFailover = await handleProviderTurnFailure(
         controller,
@@ -7513,6 +7825,7 @@ async function dispatchAgentTurn(
       providerFailureHandled = true
       retryAfterFailover = await handleProviderTurnFailure(controller, agent, failure, { allowSameProviderRetry: false }) === 'retry'
     } else {
+      dispatchSettled = true
       controller.sameProviderRetries.delete(agent.id)
     }
   } catch (error) {
@@ -7540,6 +7853,8 @@ async function dispatchAgentTurn(
       }
     }
   } finally {
+    if (durableDispatch && dispatchSettled) await enqueueWrite(tx => tx.prepare('DELETE FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').run(controller.runId, agentId))
+    if (durableDispatch && !dispatchSettled) { retryAfterFailover = false; providerFailureHandled = true }
     for (const messageId of opts.inboxMessageIds ?? []) inboxDispatchInFlight.delete(messageId)
     controller.turnInFlight.delete(agentId)
     if (retryAfterFailover && !controller.stopped) {
@@ -7566,6 +7881,7 @@ async function stopProtocolRunForBudget(controller: RunController, reason: strin
 /** Compose and dispatch an assigned work turn (teammate or explicit lead task). */
 async function dispatchTeammateWork(controller: RunController, agentId: string): Promise<void> {
   const db = await getDatabase()
+  if (controller.interactiveLeadId && db.prepare('SELECT 1 FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').get(controller.runId, agentId)) return
   const agents = listAgentsSync(db, controller.runId)
   const agentsById = new Map(agents.map((entry) => [entry.id, entry]))
   const agent = agentsById.get(agentId)
@@ -8270,7 +8586,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
 }
 
 /** Stop the run: halt the loop, interrupt every agent's live turn, release locks. */
-export async function stopProtocolRun(runId: string): Promise<ProtocolRunSnapshot | null> {
+export async function stopProtocolRun(runId: string, preserveSessionId?: string): Promise<ProtocolRunSnapshot | null> {
   const controller = controllers.get(runId)
   if (controller) controller.stopped = true
   const db = await getDatabase()
@@ -8302,7 +8618,7 @@ export async function stopProtocolRun(runId: string): Promise<ProtocolRunSnapsho
   // wake from the event above; local session interrupts are bounded best effort.
   await Promise.allSettled(agents.flatMap((agent) => {
     const ids = new Set([agent.sessionId, controller?.sessionIds.get(agent.id)].filter((id): id is string => Boolean(id)))
-    return [...ids].map((id) => Promise.race([
+    return [...ids].filter(id => id !== preserveSessionId).map((id) => Promise.race([
       interruptRunningSession(id).catch(() => {}),
       new Promise<void>((resolve) => setTimeout(resolve, SESSION_INTERRUPT_TIMEOUT_MS)),
     ]))
