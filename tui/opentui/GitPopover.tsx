@@ -24,6 +24,7 @@ import { fetchGitReviewStream } from './gitReviewStream'
 import { useGitDiffHighlighting } from './useGitDiffHighlighting'
 import { useGitDiffViewport } from './useGitDiffViewport'
 import { useGitDiffReviewActions, type ReviewActionKey } from './useGitDiffReviewActions'
+import { type DiffCellSelection, sourceIndexAtCell } from './gitDiffReviewActions'
 import { DiffReviewActionsBar } from './DiffReviewActionsBar'
 import { DiffCodeText } from './DiffCodeText'
 import { DiffViewControls } from './DiffViewControls'
@@ -571,6 +572,8 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
   const [showHunkHeaders, setShowHunkHeaders] = useState(true)
   const [diffCursorRow, setDiffCursorRow] = useState(0)
   const [diffSelectionAnchorRow, setDiffSelectionAnchorRow] = useState<number | null>(null)
+  const [mouseCellSelection, setMouseCellSelection] = useState<DiffCellSelection | null>(null)
+  const mouseCellSelectionRef = useRef<DiffCellSelection | null>(null)
   const [notesBySource, setNotesBySource] = useState<Map<string, Map<string, DiffNote>>>(new Map())
   const [draftNote, setDraftNote] = useState<DraftNote | null>(null)
   const openFileFilter = useCallback(() => {
@@ -961,7 +964,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
 
     if (reviewActionKeyRef.current(key)) return
 
-    if (key.name === 'escape') { if (fileFilter) { setFileFilter(''); return }; onClose(); return }
+    if (key.name === 'escape') { clearMouseCellSelection(); if (fileFilter) { setFileFilter(''); return }; onClose(); return }
 
     if (key.sequence === 't') {
       const active = Math.max(0, sourceMenuItems.findIndex((item) => isSameSelection(item.selection, sourceSelection)))
@@ -1034,6 +1037,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
     }
 
     if (key.name === 'j' || key.name === 'down') {
+      clearMouseCellSelection()
       const step = velocityScrollStep(scrollVelocityRef.current, 1, key, Math.max(1, Math.min(8, Math.floor((height - 6) / 3))))
       if (focusSide === 'left' && pane === 2) navigateTreeCursor((i) => Math.min(i + step, visibleNodes.length - 1))
       else if (focusSide === 'left' && pane === 3 && data) setBranchIndex((i) => Math.min(i + step, data.branches.length - 1))
@@ -1058,6 +1062,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
       return
     }
     if (key.name === 'k' || key.name === 'up') {
+      clearMouseCellSelection()
       const step = velocityScrollStep(scrollVelocityRef.current, -1, key, Math.max(1, Math.min(8, Math.floor((height - 6) / 3))))
       if (focusSide === 'left' && pane === 2) navigateTreeCursor((i) => Math.max(i - step, 0))
       else if (focusSide === 'left' && pane === 3 && data) setBranchIndex((i) => Math.max(i - step, 0))
@@ -1392,7 +1397,10 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
   const reviewActions = useGitDiffReviewActions({ rows: activeDiffRows, geometry, scrollRef: diffScrollRef,
     cursor: diffSelectionCurrentIndex, anchor: diffSelectionAnchorRow, enabled: pane === 2 && fileDiffMode === 'viewer',
     scope: noteScope, keyRef: reviewActionKeyRef, onCursor: selectSearchRow, onFocus: focusDiff, onOffset: setHorizontalOffset,
-    onClipboardWrite, wrap: wrapDiffLines, columns: diffLayout === 'split' ? Math.min(splitLeftTextW, splitRightTextW) : rightDiffTextWidth, tabWidth: diffTabWidth })
+    onClipboardWrite, cellSelection: mouseCellSelection, onClearCellSelection: () => {
+      mouseCellSelectionRef.current = null
+      setMouseCellSelection(null)
+    }, wrap: wrapDiffLines, columns: diffLayout === 'split' ? Math.min(splitLeftTextW, splitRightTextW) : rightDiffTextWidth, tabWidth: diffTabWidth })
   useLayoutEffect(() => { reviewSearchEditingRef.current = reviewActions.editing }, [reviewActions.editing])
   const captureReviewKeys = Boolean(draftNote || filterEditing || fileFilter || reviewActions.editing || reviewActions.query || sourceMenuOpen)
   useLayoutEffect(() => {
@@ -1442,10 +1450,28 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
     setFocusSide('left')
   }
 
-  function beginDiffMouseSelection(event: MouseEvent, rowIndex: number) {
+  function diffMouseCell(event: MouseEvent, rowIndex: number, side: 'old' | 'new' | undefined): DiffCellSelection | null {
+    const scroll = diffScrollRef.current
+    if (!scroll) return null
+    const localX = event.x - scroll.x
+    const split = diffLayout === 'split'
+    const sideWidth = split ? (localX < splitHalfW ? splitHalfW : splitRightHalfW) : rightW
+    const sideStart = split && localX >= splitHalfW ? splitHalfW + 1 : 0
+    const gutter = split
+      ? (showLineNumbers ? rightDiffGutterWidth + 1 : 0) + 3
+      : stackGutterCols + 3
+    const selectedSide: 'old' | 'new' = side ?? (((activeDiffRows[rowIndex] as TuiPierreDiffRow | undefined)?.newLine != null) ? 'new' : 'old')
+    const column = Math.max(0, Math.min(sideWidth - gutter - 1, localX - sideStart - gutter)) + visibleHorizontalOffset
+    return { startRow: rowIndex, startColumn: column, endRow: rowIndex, endColumn: column + 1, side: selectedSide }
+  }
+
+  function beginDiffMouseSelection(event: MouseEvent, rowIndex: number, side?: 'old' | 'new') {
     if (event.button !== 0) return
     event.stopPropagation()
     setFocusSide('right')
+    const selection = diffMouseCell(event, rowIndex, side)
+    mouseCellSelectionRef.current = selection
+    setMouseCellSelection(selection)
     if (event.modifiers.shift) {
       setDiffSelectionAnchorRow((anchor) => anchor ?? diffSelectionCurrentIndex)
     } else {
@@ -1454,10 +1480,24 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
     setDiffCursorRow(rowIndex)
   }
 
-  function updateDiffMouseSelection(event: MouseEvent, rowIndex: number) {
+  function clearMouseCellSelection() {
+    mouseCellSelectionRef.current = null
+    setMouseCellSelection(null)
+  }
+
+  function updateDiffMouseSelection(event: MouseEvent, rowIndex: number, side?: 'old' | 'new') {
     if (event.button !== 0 || (!event.isDragging && event.type !== 'drag')) return
     event.stopPropagation()
     setFocusSide('right')
+    const start = mouseCellSelectionRef.current
+    if (start) {
+      const point = diffMouseCell(event, rowIndex, side)
+      if (point) {
+        const next = { ...start, endRow: point.endRow, endColumn: point.endColumn, side: point.side }
+        mouseCellSelectionRef.current = next
+        setMouseCellSelection(next)
+      }
+    }
     setDiffCursorRow(rowIndex)
   }
 
@@ -1765,11 +1805,12 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
                     }
                   : null
                 const isSelectedDiffRow = focusSide === 'right' && idx >= diffSelectionStartIndex && idx <= diffSelectionEndIndex
+                const isMouseSelectedDiffRow = mouseCellSelection && idx >= Math.min(mouseCellSelection.startRow, mouseCellSelection.endRow) && idx <= Math.max(mouseCellSelection.startRow, mouseCellSelection.endRow)
                 const currentSelectionRange = isSelectedDiffRow ? (diffSelectionCurrentSelection ?? singleRowSelection) : singleRowSelection
                 const hasDraft = diffDraftSpan?.endIndex === idx
                 const noteCards = (diffNotesByEndIndex.get(idx) ?? []).filter(({ key }) => draftNote?.rowKey !== key)
                 const isHovered = hoveredDiffRowKey === row.key && anchor !== null
-                const rowBackground = isSelectedDiffRow ? theme.surface3 : diffRowBackground(row, theme)
+                const rowBackground = isSelectedDiffRow || isMouseSelectedDiffRow ? theme.surface3 : diffRowBackground(row, theme)
                 return (
                   <React.Fragment key={row.key}>
                     <box
@@ -1887,13 +1928,14 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
                     }
                   : null
                 const isSelectedDiffRow = focusSide === 'right' && idx >= diffSelectionStartIndex && idx <= diffSelectionEndIndex
+                const isMouseSelectedDiffRow = mouseCellSelection && idx >= Math.min(mouseCellSelection.startRow, mouseCellSelection.endRow) && idx <= Math.max(mouseCellSelection.startRow, mouseCellSelection.endRow)
                 const currentSelectionRange = isSelectedDiffRow ? (diffSelectionCurrentSelection ?? singleRowSelection) : singleRowSelection
                 const hasDraft = diffDraftSpan?.endIndex === idx
                 const noteCards = (diffNotesByEndIndex.get(idx) ?? []).filter(({ key }) => draftNote?.rowKey !== key)
                 // Full-width header rows (file label, hunk header, tree summary)
                 if (row.tone !== 'split-change' && row.tone !== 'split-context') {
                   const fg = row.tone === 'file' || row.tone === 'hunk' ? theme.cyan : theme.dim
-                  const bg = isSelectedDiffRow
+                  const bg = isSelectedDiffRow || isMouseSelectedDiffRow
                     ? theme.surface3
                     : row.tone === 'hunk'
                       ? theme.diffMetaBg
@@ -1943,7 +1985,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
                       width={rightW}
                       height={codeHeights[idx]} flexShrink={0}
                       flexDirection="row"
-                      backgroundColor={isSelectedDiffRow ? theme.surface3 : undefined}
+                      backgroundColor={isSelectedDiffRow || isMouseSelectedDiffRow ? theme.surface3 : undefined}
                       onMouseDown={(event) => beginDiffMouseSelection(event, idx)}
                       onMouseDrag={(event) => updateDiffMouseSelection(event, idx)}
                       onMouseOver={(event) => {

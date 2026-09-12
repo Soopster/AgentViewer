@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
-import { copyDiffRows, findDiffTextMatches, type ReviewRow } from './gitDiffReviewActions'
+import { copyDiffCellSelection, copyDiffRows, findDiffTextMatches, type DiffCellSelection, type ReviewRow } from './gitDiffReviewActions'
 import { diffTextHeight, diffTextWidth } from './gitDiffText'
 import type { DiffGeometry } from './gitDiffGeometry'
 
 export type ReviewActionKey = { name: string; sequence: string; ctrl: boolean; shift: boolean }
-export function useGitDiffReviewActions({ rows, geometry, scrollRef, cursor, anchor, enabled, scope, keyRef, onCursor, onFocus, onOffset, onClipboardWrite, wrap, columns, tabWidth }: {
+export function useGitDiffReviewActions({ rows, geometry, scrollRef, cursor, anchor, enabled, scope, keyRef, onCursor, onFocus, onOffset, onClipboardWrite, cellSelection, onClearCellSelection, wrap, columns, tabWidth }: {
   rows: readonly ReviewRow[]; geometry: DiffGeometry; scrollRef: RefObject<ScrollBoxRenderable | null>
   cursor: number; anchor: number | null; enabled: boolean; scope: string
   keyRef: RefObject<(key: ReviewActionKey) => boolean>; onCursor: (index: number) => void; onFocus: () => void
   onOffset: (offset: number) => void; onClipboardWrite?: (text: string) => Promise<void>
+  cellSelection?: DiffCellSelection | null
+  onClearCellSelection?: () => void
   wrap: boolean; columns: number; tabWidth: number
 }) {
   const [query, setQuery] = useState('')
@@ -50,14 +52,17 @@ export function useGitDiffReviewActions({ rows, geometry, scrollRef, cursor, anc
     return () => clearTimeout(timer)
   }, [active?.key, active?.row, scope, query, jumpRevision, columns, geometry, onCursor, onFocus, onOffset, rows, scrollRef, tabWidth, wrap])
   const copy = useCallback(async (side: 'old' | 'new' = 'new') => {
-    const text = copyDiffRows(rows, anchor ?? cursor, cursor, side)
+    const text = cellSelection
+      ? copyDiffCellSelection(rows, cellSelection, tabWidth)
+      : copyDiffRows(rows, anchor ?? cursor, cursor, side)
     if (text === null) { setStatus(side === 'old' ? 'No old-side lines selected' : 'No code selected'); return }
     if (!onClipboardWrite) { setStatus('Clipboard unavailable'); return }
     try {
       await onClipboardWrite(text)
+      onClearCellSelection?.()
       if (live.current) setStatus(`Copied ${text.split('\n').length} line${text.includes('\n') ? 's' : ''}`)
     } catch { if (live.current) setStatus('Copy failed; clipboard unavailable') }
-  }, [anchor, cursor, onClipboardWrite, rows])
+  }, [anchor, cellSelection, cursor, onClipboardWrite, onClearCellSelection, rows, tabWidth])
   useLayoutEffect(() => {
     keyRef.current = key => {
       if (!enabled) return false

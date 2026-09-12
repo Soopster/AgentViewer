@@ -1,7 +1,25 @@
 import type { TuiPierreDiffRow, TuiPierreSplitRow, TuiRenderSpan } from './pierreDiffView'
+import { diffTextWidth } from './gitDiffText'
 
 export type ReviewRow = TuiPierreDiffRow | TuiPierreSplitRow
 export type DiffTextMatch = { row: number; path: string; side: 'old' | 'new'; line: number; start: number; end: number; key: string }
+export type DiffCellSelection = { startRow: number; startColumn: number; endRow: number; endColumn: number; side: 'old' | 'new' }
+
+/** Convert a terminal-cell column back to a UTF-16 source offset. */
+export function sourceIndexAtCell(text: string, cell: number, tabWidth: number): number {
+  const target = Math.max(0, cell)
+  let source = 0
+  let width = 0
+  for (const segment of new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text)) {
+    const value = segment.segment
+    const next = diffTextWidth(text.slice(0, source) + value, tabWidth)
+    const segmentWidth = Math.max(0, next - width)
+    if (target < next) return target - width < segmentWidth / 2 ? source : source + value.length
+    source += value.length
+    width = next
+  }
+  return text.length
+}
 function literalPattern(query: string) { return new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu') }
 export function diffMatchRanges(text: string, query: string): Array<{ start: number; end: number }> {
   if (!query) return []
@@ -47,6 +65,27 @@ export function copyDiffRows(rows: readonly ReviewRow[], start: number, end: num
       const source = row as TuiPierreDiffRow
       if (side === 'old' ? source.oldLine != null : source.newLine != null || source.oldLine != null) lines.push(source.text)
     }
+  }
+  return lines.length ? lines.join('\n') : null
+}
+
+export function copyDiffCellSelection(rows: readonly ReviewRow[], selection: DiffCellSelection, tabWidth: number): string | null {
+  const lower = Math.max(0, Math.min(selection.startRow, selection.endRow))
+  const upper = Math.min(rows.length - 1, Math.max(selection.startRow, selection.endRow))
+  const path = rows[lower]?.filePath
+  const lines: string[] = []
+  for (let index = lower; index <= upper; index += 1) {
+    const row = rows[index]!
+    if (row.filePath !== path) continue
+    const split = row as TuiPierreSplitRow
+    const source = split.left || split.right
+      ? selection.side === 'old' ? split.left : split.right
+      : (() => { const unified = row as TuiPierreDiffRow; return selection.side === 'old' ? (unified.oldLine != null ? unified : null) : (unified.newLine != null ? unified : unified.oldLine != null ? unified : null) })()
+    if (!source) continue
+    const text = source.text
+    const start = index === selection.startRow ? sourceIndexAtCell(text, selection.startColumn, tabWidth) : 0
+    const end = index === selection.endRow ? sourceIndexAtCell(text, selection.endColumn, tabWidth) : text.length
+    lines.push(text.slice(Math.min(start, end), Math.max(start, end)))
   }
   return lines.length ? lines.join('\n') : null
 }
