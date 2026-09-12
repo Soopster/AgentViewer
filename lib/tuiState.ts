@@ -312,9 +312,18 @@ export async function setConfiguredTuiDiffLayout(diffLayout: TuiDiffLayout): Pro
   await writeTuiState({ diffLayout })
 }
 
+const VALID_TUI_TRANSCRIPT_VIEWS: readonly TuiTranscriptView[] = [
+  'conversation', 'full', 'continue', 'stream', 'agents', 'chat', 'transcript',
+]
+
 export async function getConfiguredTuiTranscriptView(): Promise<TuiTranscriptView> {
   const parsed = await readTuiState()
-  return parsed.transcriptView === 'full' ? 'full' : parsed.transcriptView === 'continue' ? 'continue' : parsed.transcriptView === 'stream' ? 'stream' : parsed.transcriptView === 'agents' ? 'agents' : parsed.transcriptView === 'chat' ? 'chat' : 'conversation'
+  // A chain of ternaries per view does not survive a seventh: the list is the
+  // validation, and an unknown value falls back rather than being trusted.
+  const stored = parsed.transcriptView
+  return VALID_TUI_TRANSCRIPT_VIEWS.includes(stored as TuiTranscriptView)
+    ? stored as TuiTranscriptView
+    : 'conversation'
 }
 
 export async function setConfiguredTuiTranscriptView(transcriptView: TuiTranscriptView): Promise<void> {

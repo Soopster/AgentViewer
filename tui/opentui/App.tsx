@@ -4592,7 +4592,7 @@ function cycleDensityValue(current: TuiDensity): TuiDensity {
 const QUESTION_PICKER_MIN_TRANSCRIPT_ROWS = 8
 const QUESTION_PICKER_MIN_ROWS = 8
 
-const TRANSCRIPT_VIEWS: TuiTranscriptView[] = ['conversation', 'full', 'continue', 'stream', 'agents', 'chat']
+const TRANSCRIPT_VIEWS: TuiTranscriptView[] = ['conversation', 'full', 'continue', 'stream', 'agents', 'chat', 'transcript']
 
 const TRANSCRIPT_VIEW_LABELS: Record<TuiTranscriptView, string> = {
   conversation: 'CONVERSATION',
@@ -4601,6 +4601,7 @@ const TRANSCRIPT_VIEW_LABELS: Record<TuiTranscriptView, string> = {
   stream: 'STREAM',
   agents: 'AGENTS',
   chat: 'CHAT',
+  transcript: 'TRANSCRIPT',
 }
 
 const TRANSCRIPT_VIEW_DESCRIPTIONS: Record<TuiTranscriptView, string> = {
@@ -4610,6 +4611,7 @@ const TRANSCRIPT_VIEW_DESCRIPTIONS: Record<TuiTranscriptView, string> = {
   stream: 'Chronological Claude-style activity stream',
   agents: 'Group tool activity by agent',
   chat: 'Composer flows inline with the conversation, no dock',
+  transcript: 'One continuous transcript, a rule per message',
 }
 
 const PROVIDER_SELECT_OPTIONS: SelectOption[] = PROVIDERS.map((provider) => ({
@@ -5263,6 +5265,8 @@ type TranscriptCardProps = {
   imessageStyle: boolean
   transcriptWidth: TuiTranscriptWidth
   streamMode: boolean
+  /** STREAM, but with the role rule on every message and no line markers. */
+  continuousMode: boolean
   agentsMode: boolean
   agentToolCursorKey: string | null
   agentToolExpandedKeys: ReadonlySet<string>
@@ -5393,6 +5397,7 @@ function TranscriptCardInner({
   imessageStyle,
   transcriptWidth,
   streamMode,
+  continuousMode,
   agentsMode,
   agentToolCursorKey,
   agentToolExpandedKeys,
@@ -5898,6 +5903,7 @@ function TranscriptCardInner({
                       imessageStyle={imessageStyle}
                       transcriptWidth="full"
                       streamMode={streamMode}
+                      continuousMode={continuousMode}
                       agentsMode={false}
                       agentToolCursorKey={null}
                       agentToolExpandedKeys={EMPTY_EXPANDED_KEYS}
@@ -5970,15 +5976,21 @@ function TranscriptCardInner({
     // Subagent cards prefix the marker with one ↪ per spawn-chain level
     // (`subagent:parent/child` origin), widening the marker gutter to match.
     const streamSubagentArrows = card.subagentDepth ? '↪'.repeat(Math.min(card.subagentDepth, 3)) : ''
-    const streamMarkerWidth = 2 + streamSubagentArrows.length
+    // The continuous view spends no columns on a marker gutter — the left rule
+    // already says whose message this is, and a glyph per line is the thing
+    // that stops a transcript reading as prose. Subagent arrows stay: they say
+    // something the rule cannot, and they are why this is not simply zero.
+    const streamMarkerWidth = (continuousMode ? 0 : 2) + streamSubagentArrows.length
     const streamTextWidth = Math.max(streamWidth - streamMarkerWidth, 12)
     const streamChildTextWidth = Math.max(streamWidth - 4, 10)
     const firstLine = bodyLines[0]
-    const streamBaseMarker = hasCursor
-      ? '❯'
-      : firstLine
-        ? streamLineMarker(firstLine, card.role)
-        : card.role === 'user' ? '❯' : '•'
+    const streamBaseMarker = continuousMode
+      ? ''
+      : hasCursor
+        ? '❯'
+        : firstLine
+          ? streamLineMarker(firstLine, card.role)
+          : card.role === 'user' ? '❯' : '•'
     const streamMarker = `${streamSubagentArrows}${streamBaseMarker}`
     const streamMarkerColor = hasCursor
       ? theme.text
@@ -6044,7 +6056,13 @@ function TranscriptCardInner({
         // native frame instead of leaving the previous view's border painted.
         border={[]}
         marginBottom={streamRendersSomething
-          ? (card.role === 'user' ? densityState.streamUserGap : densityState.streamGap)
+          // The continuous view never lets two messages touch: the rule is its
+          // only separator, and two abutting rules read as one message with a
+          // colour change halfway down. Density can still make it roomier.
+          ? Math.max(
+              card.role === 'user' ? densityState.streamUserGap : densityState.streamGap,
+              continuousMode ? 1 : 0,
+            )
           : 0}
         alignSelf={streamCentered ? 'center' : undefined}
         width={streamCentered ? streamWidth + densityState.bodyIndent : undefined}
@@ -6078,10 +6096,16 @@ function TranscriptCardInner({
         <box
           flexDirection="column"
           width={streamLandmarkWidth}
-          border={card.role === 'user' ? ['left'] : undefined}
-          borderStyle={card.role === 'user' ? 'heavy' : undefined}
-          borderColor={card.role === 'user' ? theme.violet : undefined}
-          paddingLeft={card.role === 'user'
+          // The continuous view's only chrome. Every message gets a rule in its
+          // own role colour, so the column reads as one transcript rather than
+          // as a stack of things; STREAM keeps the rule for user prompts alone,
+          // where it is an accent on an otherwise unmarked band.
+          border={continuousMode || card.role === 'user' ? ['left'] : undefined}
+          borderStyle={continuousMode ? 'single' : card.role === 'user' ? 'heavy' : undefined}
+          borderColor={continuousMode
+            ? (card.role === 'user' ? accent : theme.border2)
+            : card.role === 'user' ? theme.violet : undefined}
+          paddingLeft={continuousMode || card.role === 'user'
             ? Math.max(densityState.bodyIndent - 1, 0)
             : densityState.bodyIndent}
           paddingBottom={0}
@@ -7259,7 +7283,8 @@ function SplitTranscriptPaneInner({
       diffLayout,
       imessageStyle,
       transcriptWidth,
-      streamMode: transcriptView === 'stream' || transcriptView === 'chat',
+      streamMode: transcriptView === 'stream' || transcriptView === 'chat' || transcriptView === 'transcript',
+      continuousMode: transcriptView === 'transcript',
       agentsMode: false,
       agentToolCursorKey: null,
       agentToolExpandedKeys: EMPTY_EXPANDED_KEYS,
@@ -7451,7 +7476,11 @@ export default function OpenTuiApp() {
   const [transcriptView, setTranscriptView] = useState<TuiTranscriptView>('conversation')
   // Chat reuses stream's chronological, borderless card grouping — the two views
   // diverge only in composer placement (docked vs. inline-with-transcript).
-  const isChatLikeView = transcriptView === 'stream' || transcriptView === 'chat'
+  const isChatLikeView = transcriptView === 'stream' || transcriptView === 'chat' || transcriptView === 'transcript'
+  // TRANSCRIPT is STREAM without the per-line markers, and with the role rule
+  // on every message rather than only on user prompts. Modelled on opencode's
+  // session view, where one left rule per message is the only chrome there is.
+  const isContinuousView = transcriptView === 'transcript'
   const [transcriptWidth, setTranscriptWidth] = useState<TuiTranscriptWidth>('centered')
   const [focusMode, setFocusMode] = useState(false)
   // Temporary presentation mode, deliberately separate from the persisted
@@ -10994,6 +11023,7 @@ export default function OpenTuiApp() {
         imessageStyle,
         transcriptWidth,
         streamMode: isChatLikeView,
+        continuousMode: isContinuousView,
         agentsMode: usesAgentCardPresentation(card, transcriptView),
         agentToolCursorKey: groupedToolView ? agentToolCursorByGroupKey[card.key] ?? null : null,
         agentToolExpandedKeys: groupedToolView ? expandedCardKeys : EMPTY_EXPANDED_KEYS,

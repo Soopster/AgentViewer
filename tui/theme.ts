@@ -173,7 +173,7 @@ export const PROCEDURAL_THEME_NAMES = [
 export type ProceduralThemeName = (typeof PROCEDURAL_THEME_NAMES)[number]
 
 export type TuiDensity = 'comfortable' | 'balanced' | 'dense'
-export type TuiTranscriptView = 'conversation' | 'full' | 'continue' | 'stream' | 'agents' | 'chat'
+export type TuiTranscriptView = 'conversation' | 'full' | 'continue' | 'stream' | 'agents' | 'chat' | 'transcript'
 
 export type TuiThemePalette = {
   bg: string
