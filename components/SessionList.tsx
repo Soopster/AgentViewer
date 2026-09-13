@@ -1,30 +1,172 @@
 'use client'
 
-import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
-import { pickCanonicalProjectPath, sameProjectPath } from '@/lib/projectPaths'
-import type { AgentProvider, ProviderSelection, Session } from '@/lib/types'
+import { createContext, memo, useContext, useState, useRef, useCallback, useDeferredValue, useEffect, useMemo, useSyncExternalStore } from 'react'
+import {
+  DEFAULT_COLOR_TREATMENT,
+  getCurrentColorTreatment,
+  subscribeColorTreatment,
+  type ColorTreatment,
+} from '@/lib/colorTreatment'
+import { sameProjectPath } from '@/lib/projectPaths'
+import type { AgentProvider, ProviderInstanceSummary, ProviderSelection, Session, SubagentSummary } from '@/lib/types'
 import { parseSessionTagInput, parseStoredSessionTags, serializeSessionTags } from '@/lib/sessionTags'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { NativeSelect, NativeSelectOption, nativeSelectBaseClassName } from '@/components/ui/native-select'
+import {
+  SidebarContent,
+  SidebarFooter,
+  SidebarHeader,
+  SidebarGlyph,
+  SidebarRail,
+  SidebarTrigger,
+  useSidebar,
+} from '@/components/ui/sidebar'
+import { cn } from '@/lib/utils'
+import {
+  BookOpen,
+  Bot,
+  Command,
+  GitBranch,
+  LayoutDashboard,
+  ListTree,
+  MessageSquare,
+  PanelLeftOpen,
+  Search,
+  SlidersHorizontal,
+  UsersRound,
+} from 'lucide-react'
 import ThemeToggle from './ThemeToggle'
+import { createSessionListIndexer, matchesIndexedSessionSearch, groupByProject, buildSessionTimeEntries } from '@/lib/sessionListModel'
+
+const providerNativeSelectClassName = cn(
+  nativeSelectBaseClassName,
+  'av-hover-control h-9 rounded-[9px] border-[var(--border)] bg-gradient-to-b from-[var(--surface)] to-[var(--surface-2)] px-3 text-[11px] font-medium tracking-[0.04em] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
+)
+
+const collapsedIconButtonBaseStyle: React.CSSProperties = {
+  width: 34,
+  height: 34,
+  borderRadius: 11,
+  border: '1px solid var(--border)',
+  background: 'var(--surface-2)',
+  color: 'var(--text-2)',
+  display: 'grid',
+  placeItems: 'center',
+  cursor: 'pointer',
+}
+
+const collapsedPrimaryButtonStyle: React.CSSProperties = {
+  ...collapsedIconButtonBaseStyle,
+  width: 46,
+  height: 46,
+  borderRadius: 15,
+  border: '1px solid color-mix(in srgb, var(--violet) 28%, var(--border))',
+  background: 'var(--violet)',
+  color: 'var(--bg)',
+  boxShadow: '0 8px 24px var(--violet-glow)',
+}
+
+const sidebarHeaderPrimaryActionStyle: React.CSSProperties = {
+  height: 30,
+  padding: '0 11px',
+  borderRadius: 8,
+  border: '1px solid color-mix(in srgb, var(--green) 40%, var(--border))',
+  background: 'color-mix(in srgb, var(--green) 11%, var(--surface-2))',
+  color: 'var(--green)',
+  fontFamily: "'IBM Plex Mono', monospace",
+  fontSize: 11,
+  letterSpacing: '0.05em',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  cursor: 'pointer',
+}
+
+const sidebarHeaderIconActionBaseStyle: React.CSSProperties = {
+  width: 30,
+  height: 30,
+  padding: 0,
+  borderRadius: 8,
+  border: '1px solid var(--border)',
+  background: 'color-mix(in srgb, var(--surface-2) 82%, transparent)',
+  color: 'var(--text-3)',
+  display: 'inline-grid',
+  placeItems: 'center',
+  cursor: 'pointer',
+}
+
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value)
+  useEffect(() => {
+    const id = window.setTimeout(() => setDebounced(value), delayMs)
+    return () => window.clearTimeout(id)
+  }, [value, delayMs])
+  return debounced
+}
+
+function collapsedIconButtonStyle(active = false): React.CSSProperties {
+  return {
+    ...collapsedIconButtonBaseStyle,
+    border: active ? '1px solid color-mix(in srgb, var(--violet) 46%, var(--border))' : collapsedIconButtonBaseStyle.border,
+    background: active ? 'color-mix(in srgb, var(--violet) 16%, var(--surface-2))' : 'var(--surface-2)',
+    color: active ? 'var(--violet)' : 'var(--text-2)',
+    boxShadow: active ? '0 10px 18px var(--violet-glow)' : 'none',
+  }
+}
+
+function sidebarHeaderIconActionStyle(options: { active?: boolean; accent?: 'cyan' | 'violet'; disabled?: boolean } = {}): React.CSSProperties {
+  const accent = options.accent === 'cyan' ? 'var(--cyan)' : 'var(--violet)'
+  return {
+    ...sidebarHeaderIconActionBaseStyle,
+    border: options.active
+      ? `1px solid color-mix(in srgb, ${accent} 42%, var(--border))`
+      : sidebarHeaderIconActionBaseStyle.border,
+    background: options.active
+      ? `color-mix(in srgb, ${accent} 13%, var(--surface-2))`
+      : sidebarHeaderIconActionBaseStyle.background,
+    color: options.disabled ? 'var(--text-4, var(--text-3))' : options.active ? accent : sidebarHeaderIconActionBaseStyle.color,
+    cursor: options.disabled ? 'not-allowed' : 'pointer',
+    opacity: options.disabled ? 0.45 : 1,
+  }
+}
 
 type Props = {
   sessions: Session[]
   loading: boolean
   error: string | null
   provider: ProviderSelection
+  providerInstanceId: string
+  providerInstances: ProviderInstanceSummary[]
   switchingProvider: boolean
   selectedId: string | null
   selectedProject: string | null
+  dashboardSelected?: boolean
+  agentOperationsSelected?: boolean
+  messagingSelected?: boolean
+  scrollToSessionRequest?: { sessionKey: string; requestId: number } | null
   onSelect: (session: Session) => void
   onSelectProject: (projectDir: string, projectName: string, sessions: Session[]) => void
+  onOpenDashboard: () => void
   onRename: (sessionId: string, title: string) => void
   onTag: (sessionId: string, tag: string | null) => void
-  onChangeProvider: (provider: ProviderSelection) => void
+  onChangeProvider: (provider: ProviderSelection, providerInstanceId?: string) => void
   scopeMode: 'all' | 'project'
   scopeProjectName: string | null
   canScopeToProject: boolean
   includeWorktrees: boolean
   onChangeScope: (mode: 'all' | 'project') => void
   onToggleWorktrees: (include: boolean) => void
+  onOpenCommandPalette: () => void
+  onOpenCoordinator: () => void
+  onOpenCrossSessionMessaging: () => void
+  canOpenGit: boolean
+  onOpenGit: () => void
+  onNewSession?: () => void
+  creatingSession?: boolean
 }
 
 function timeAgo(value?: string | number): string {
@@ -42,32 +184,21 @@ function formatTimestamp(value?: string | number): string {
   return new Date(value).toLocaleString()
 }
 
-type ProjectGroupEntry = {
-  projectDir: string
-  projectName: string
-  sessions: Session[]
+function formatStableTimestamp(value?: string | number): string {
+  if (value == null) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toISOString().replace('T', ' ').slice(0, 19) + ' UTC'
 }
 
-/** Group sessions by full cwd, preserving first-seen order. */
-function groupByProject(sessions: Session[]): ProjectGroupEntry[] {
-  const groups: ProjectGroupEntry[] = []
-  for (const s of sessions) {
-    const projectDir = s.cwd ?? '—'
-    const existing = groups.find((group) => sameProjectPath(group.projectDir, projectDir))
-    if (existing) {
-      existing.projectDir = pickCanonicalProjectPath(existing.projectDir, projectDir) || existing.projectDir
-      existing.projectName = existing.projectDir.split('/').pop() ?? '—'
-      existing.sessions.push(s)
-      continue
-    }
-    groups.push({
-      projectDir,
-      projectName: s.cwd?.split('/').pop() ?? '—',
-      sessions: [s],
-    })
-  }
-  return groups
+function formatStableTimeLabel(value?: string | number): string {
+  if (value == null) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toISOString().slice(11, 16) + ' UTC'
 }
+
+type CollapsedPanel = 'sessions' | 'provider' | 'search' | 'project' | 'filters' | 'overview'
 
 function getSessionTitle(session: Session): string {
   return session.customTitle ?? session.summary ?? ''
@@ -80,24 +211,8 @@ function getSessionPreview(session: Session, sessionTitle: string): string | nul
   return preview
 }
 
-function matchesSessionSearch(session: Session, search: string, activeTag: string | null): boolean {
-  const tags = parseStoredSessionTags(session.tag)
-
-  if (activeTag && !tags.some((tag) => tag.toLowerCase() === activeTag.toLowerCase())) {
-    return false
-  }
-
-  if (!search) return true
-
-  const title = getSessionTitle(session)
-  const haystack = [
-    title,
-    tags.join(' '),
-    session.cwd ?? '',
-    session.firstPrompt ?? '',
-  ].join('\n').toLowerCase()
-
-  return haystack.includes(search)
+function sessionTabKey(session: Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'>): string {
+  return `${session.providerInstanceId ?? session.provider ?? 'claude'}:${session.sessionId}`
 }
 
 function providerChipStyle(provider: AgentProvider): { color: string; background: string; border: string } {
@@ -110,18 +225,72 @@ function providerChipStyle(provider: AgentProvider): { color: string; background
   if (provider === 'copilot') {
     return { color: 'var(--amber)', background: 'rgba(234,170,64,0.08)', border: 'rgba(234,170,64,0.22)' }
   }
+  if (provider === 'pi') {
+    return { color: 'var(--red)', background: 'rgba(240,80,80,0.08)', border: 'rgba(240,80,80,0.22)' }
+  }
   return { color: 'var(--violet)', background: 'rgba(139,128,240,0.08)', border: 'rgba(139,128,240,0.22)' }
 }
 
-function SessionRow({
+const PROVIDER_LABELS: Partial<Record<AgentProvider, string>> = {
+  claude: 'Claude',
+  'claude-acp': 'Claude (ACP)',
+  codex: 'Codex',
+  'codex-acp': 'Codex (ACP)',
+  opencode: 'OpenCode',
+  copilot: 'Copilot',
+  pi: 'Pi',
+}
+
+// The provider label repeats on every row, which is pure noise when the list
+// holds a single provider — the common case. Provided once per list rather than
+// threaded through ProjectGroup/SessionRowGroup as a prop.
+const ShowProviderContext = createContext(true)
+
+function providerLabel(provider: AgentProvider): string {
+  return PROVIDER_LABELS[provider] ?? provider
+}
+
+function segmentStyle(active: boolean, position: 'first' | 'last', enabled = true): React.CSSProperties {
+  return {
+    flex: 1,
+    height: 28,
+    borderRadius: position === 'first' ? '6px 0 0 6px' : '0 6px 6px 0',
+    border: '1px solid var(--border)',
+    borderLeftWidth: position === 'last' ? 0 : 1,
+    background: active ? 'var(--surface-3)' : 'transparent',
+    color: active ? 'var(--text)' : 'var(--text-3)',
+    fontSize: 12,
+    fontWeight: active ? 600 : 400,
+    cursor: enabled ? 'pointer' : 'not-allowed',
+    opacity: enabled ? 1 : 0.45,
+  }
+}
+
+function inboxButtonStyle(active: boolean): React.CSSProperties {
+  return {
+    border: '1px solid transparent',
+    borderRadius: 4,
+    background: active ? 'var(--surface-3)' : 'transparent',
+    color: active ? 'var(--violet)' : 'var(--text-3)',
+    cursor: 'pointer',
+    fontFamily: "'IBM Plex Mono', monospace",
+    fontSize: 12,
+    lineHeight: 1,
+    padding: '2px 4px',
+  }
+}
+
+const SessionRow = memo(function SessionRow({
   session,
   selected,
+  hydrated,
   onSelect,
   onRename,
   onTag,
 }: {
   session: Session
   selected: boolean
+  hydrated: boolean
   onSelect: (session: Session) => void
   onRename: (sessionId: string, title: string) => void
   onTag: (sessionId: string, tag: string | null) => void
@@ -129,13 +298,52 @@ function SessionRow({
   const [hovered, setHovered] = useState(false)
   const [editing, setEditing] = useState<'title' | 'tag' | null>(null)
   const [editValue, setEditValue] = useState('')
+  const [inbox, setInbox] = useState(session.inbox)
   const inputRef = useRef<HTMLInputElement>(null)
-  const shortId = session.sessionId.slice(-12)
+  const shortId = useMemo(() => session.sessionId.slice(-12), [session.sessionId])
   const sessionTitle = getSessionTitle(session)
-  const sessionPreview = getSessionPreview(session, sessionTitle)
-  const sessionTags = parseStoredSessionTags(session.tag)
+  const sessionPreview = useMemo(() => getSessionPreview(session, sessionTitle), [session, sessionTitle])
+  const sessionTags = useMemo(() => parseStoredSessionTags(session.tag), [session.tag])
   const activityTime = session.lastModified ?? session.createdAt
-  const activityTitle = formatTimestamp(activityTime)
+  const activityTitle = useMemo(
+    () => (hydrated ? formatTimestamp(activityTime) : formatStableTimestamp(activityTime)),
+    [activityTime, hydrated],
+  )
+  const providerStyle = useMemo(
+    () => (session.provider ? providerChipStyle(session.provider) : null),
+    [session.provider],
+  )
+  const showProvider = useContext(ShowProviderContext)
+
+  useEffect(() => setInbox(session.inbox), [session.inbox])
+
+  const updateInbox = useCallback(async (action: 'pin' | 'unpin' | 'settle' | 'reopen' | 'snooze' | 'unsnooze' | 'unlink-pr') => {
+    const previous = inbox
+    const optimistic = action === 'pin'
+      ? { ...inbox, pinnedAt: Date.now(), pinOrder: inbox?.pinOrder ?? Date.now() }
+      : action === 'unpin'
+        ? { ...inbox, pinnedAt: undefined, pinOrder: undefined }
+        : action === 'settle'
+          ? { ...inbox, settledAt: Date.now(), snoozedUntil: undefined }
+          : action === 'reopen' || action === 'unsnooze'
+            ? { ...inbox, settledAt: action === 'reopen' ? undefined : inbox?.settledAt, snoozedUntil: undefined }
+            : action === 'unlink-pr'
+              ? { ...inbox, linkedPr: undefined }
+              : { ...inbox, snoozedUntil: Date.now() + 60 * 60 * 1000, settledAt: undefined }
+    setInbox(optimistic)
+    try {
+      const response = await fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/inbox`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, provider: session.provider, providerInstanceId: session.providerInstanceId }),
+      })
+      const data = await response.json()
+      if (!response.ok || data.error) throw new Error(data.error ?? 'Inbox update failed')
+      setInbox(data.inbox)
+    } catch {
+      setInbox(previous)
+    }
+  }, [inbox, session.provider, session.providerInstanceId, session.sessionId])
 
   const startEdit = useCallback((kind: 'title' | 'tag', value: string) => (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -154,7 +362,7 @@ function SessionRow({
       await fetch(`/api/sessions/${session.sessionId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: value, provider: session.provider }),
+        body: JSON.stringify({ title: value, provider: session.provider, providerInstanceId: session.providerInstanceId }),
       })
     } catch { /* optimistic — ignore errors */ }
   }, [editValue, onRename, session.sessionId, sessionTitle])
@@ -171,7 +379,7 @@ function SessionRow({
       await fetch(`/api/sessions/${session.sessionId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tag: nextTag, provider: session.provider }),
+        body: JSON.stringify({ tag: nextTag, provider: session.provider, providerInstanceId: session.providerInstanceId }),
       })
     } catch { /* optimistic — ignore errors */ }
   }, [editValue, onTag, session.sessionId, session.tag])
@@ -189,36 +397,24 @@ function SessionRow({
       onClick={() => !editing && onSelect(session)}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
+      className={`av-session-row ${selected ? 'av-selected' : ''}`}
+      data-session-key={sessionTabKey(session)}
       style={{
-        padding: '10px 16px 10px 24px',
+        padding: '9px 16px 9px 24px',
         borderBottom: '1px solid var(--border)',
-        borderLeft: `2px solid ${selected ? 'var(--violet)' : hovered ? 'var(--border-2)' : 'transparent'}`,
-        background: selected
-          ? 'linear-gradient(to right, rgba(139,128,240,0.13) 0%, transparent 65%)'
-          : hovered
-          ? 'rgba(255,255,255,0.028)'
-          : 'transparent',
-        cursor: 'pointer',
-        transition: 'background 0.14s ease, border-left-color 0.14s ease',
+        contentVisibility: 'auto',
+        // `auto 96px` lets the browser remember the real measured row height
+        // after the row has been painted once, instead of forcing the layout
+        // back to a 96px estimate every time the row scrolls off-screen — that
+        // mismatch was the main cause of perceived flicker while scrolling.
+        containIntrinsicSize: 'auto 96px',
       }}
     >
-      {/* Session ID */}
-      <div
-        style={{
-          fontFamily: "'IBM Plex Mono', monospace",
-          fontSize: 12,
-          color: selected ? 'var(--violet)' : hovered ? 'var(--text)' : 'var(--text-2)',
-          letterSpacing: '0.04em',
-          transition: 'color 0.14s ease',
-        }}
-      >
-        {shortId}
-      </div>
-
-      {/* Session title */}
-      <div style={{ marginTop: 5 }}>
+      {/* Title + id */}
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
         {editing === 'title' ? (
-          <input
+          <Input
             ref={inputRef}
             value={editValue}
             onChange={e => setEditValue(e.target.value)}
@@ -227,11 +423,10 @@ function SessionRow({
             onClick={e => e.stopPropagation()}
             autoFocus
             style={{
-              fontFamily: "'Oxanium', monospace",
-              fontSize: 12,
+              fontSize: 13,
               background: 'var(--surface-3)',
               border: '1px solid var(--violet)',
-              borderRadius: 3,
+              borderRadius: 6,
               color: 'var(--text)',
               padding: '4px 7px',
               outline: 'none',
@@ -243,12 +438,10 @@ function SessionRow({
           <div
             onDoubleClick={startEdit('title', sessionTitle)}
             title="Double-click to rename title"
+            className="av-session-title"
             style={{
-              fontFamily: "'Oxanium', monospace",
-              fontSize: 12,
+              fontSize: 13,
               fontWeight: 600,
-              letterSpacing: '0.04em',
-              color: selected ? 'var(--text)' : hovered ? 'var(--text)' : 'var(--text-2)',
               cursor: 'text',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
@@ -257,34 +450,52 @@ function SessionRow({
           >
             {sessionTitle}
           </div>
-        ) : hovered ? (
+        ) : (
           <span
             onDoubleClick={startEdit('title', '')}
             onClick={e => { e.stopPropagation(); startEdit('title', '')(e) }}
             title="Click to add a title"
             style={{
-              fontFamily: "'Oxanium', monospace",
-              fontSize: 12,
+              fontSize: 13,
               color: 'var(--text-3)',
-              padding: '2px 0',
               cursor: 'text',
+              opacity: hovered ? 1 : 0.6,
             }}
           >
-            + title
+            {hovered ? 'Add a title' : 'Untitled'}
           </span>
-        ) : (
-          <div style={{ height: 18 }} />
+        )}
+        </div>
+        {editing !== 'title' && activityTime != null && (
+          <span
+            title={activityTitle}
+            style={{ fontSize: 11, color: 'var(--text-2)', flexShrink: 0 }}
+          >
+            {hydrated ? timeAgo(activityTime) : formatStableTimeLabel(activityTime)}
+          </span>
         )}
       </div>
+      {session.parentSessionId && (
+        <div
+          title={`Subagent of ${session.parentSessionId}`}
+          style={{
+            marginTop: 3,
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 10,
+            color: 'var(--text-3)',
+          }}
+        >
+          ↪ child of {session.parentSessionId.slice(-8)}
+        </div>
+      )}
 
       {sessionPreview && editing !== 'title' && (
         <div
           title={sessionPreview}
           style={{
-            marginTop: 4,
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 11,
-            color: selected ? 'var(--text-2)' : 'var(--text-3)',
+            marginTop: 3,
+            fontSize: 12,
+            color: 'var(--text-2)',
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
@@ -296,24 +507,45 @@ function SessionRow({
 
       {/* Tag + time */}
       <div style={{ marginTop: 5, display: 'flex', alignItems: 'center', gap: 6, minHeight: 18 }}>
-        {session.provider && (
+        <span
+          title={session.sessionId}
+          className="av-session-id"
+          style={{
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 10,
+            color: 'var(--text-2)',
+            flexShrink: 0,
+          }}
+        >
+          {shortId}
+        </span>
+        {session.provider && showProvider && (
           <span
+            title={session.provider}
             style={{
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 10,
-              padding: '1px 6px',
-              borderRadius: 999,
-              letterSpacing: '0.05em',
-              border: `1px solid ${providerChipStyle(session.provider).border}`,
-              background: providerChipStyle(session.provider).background,
-              color: providerChipStyle(session.provider).color,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 5,
+              fontSize: 11,
+              color: 'var(--text-2)',
+              flexShrink: 0,
             }}
           >
-            {session.provider.toUpperCase()}
+            <span
+              aria-hidden
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: 999,
+                background: providerStyle?.color ?? 'var(--text-3)',
+                flexShrink: 0,
+              }}
+            />
+            {providerLabel(session.provider)}
           </span>
         )}
         {editing === 'tag' ? (
-          <input
+          <Input
             ref={inputRef}
             value={editValue}
             onChange={e => setEditValue(e.target.value)}
@@ -345,7 +577,7 @@ function SessionRow({
               minWidth: 0,
             }}
           >
-            {sessionTags.map((tag) => (
+        {sessionTags.map((tag) => (
               <span
                 key={tag}
                 style={{
@@ -362,8 +594,8 @@ function SessionRow({
               >
                 #{tag}
               </span>
-            ))}
-          </div>
+        ))}
+      </div>
         ) : hovered ? (
           <span
             onDoubleClick={startEdit('tag', '')}
@@ -383,29 +615,223 @@ function SessionRow({
             + tags
           </span>
         ) : null}
-        {activityTime != null && (
+        {inbox?.linkedPr ? (
           <span
-            title={activityTitle}
+            title={`${inbox.linkedPr.repo}#${inbox.linkedPr.number}${inbox.linkedPr.state ? ` — ${inbox.linkedPr.state.toLowerCase()}` : ''}\nClick to open, shift-click to unlink`}
+            onClick={(event) => {
+              event.stopPropagation()
+              if (event.shiftKey) { void updateInbox('unlink-pr'); return }
+              if (inbox.linkedPr?.url) window.open(inbox.linkedPr.url, '_blank', 'noopener,noreferrer')
+            }}
             style={{
               fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              color: 'var(--text-3)',
+              fontSize: 10,
+              padding: '1px 5px',
+              borderRadius: 5,
+              cursor: 'pointer',
+              marginLeft: 6,
+              color: inbox.linkedPr.state === 'MERGED' ? 'var(--violet)' : 'var(--text-3)',
+              border: '1px solid var(--border)',
+              background: 'var(--surface-2)',
             }}
           >
-            {timeAgo(activityTime)}
+            #{inbox.linkedPr.number}
           </span>
-        )}
+        ) : null}
+        <div
+          style={{
+            marginLeft: 'auto',
+            display: 'flex',
+            gap: 2,
+            opacity: hovered || inbox ? 1 : 0,
+            pointerEvents: hovered || inbox ? 'auto' : 'none',
+          }}
+        >
+          <button type="button" title={inbox?.pinnedAt ? 'Unpin' : 'Pin'} onClick={(event) => { event.stopPropagation(); void updateInbox(inbox?.pinnedAt ? 'unpin' : 'pin') }} style={inboxButtonStyle(Boolean(inbox?.pinnedAt))}>{inbox?.pinnedAt ? '★' : '☆'}</button>
+          <button type="button" title={inbox?.settledAt ? 'Reopen' : 'Settle'} onClick={(event) => { event.stopPropagation(); void updateInbox(inbox?.settledAt ? 'reopen' : 'settle') }} style={inboxButtonStyle(Boolean(inbox?.settledAt))}>{inbox?.settledAt ? '↺' : '✓'}</button>
+          <button type="button" title={inbox?.snoozedUntil ? 'Unsnooze' : 'Snooze 1h'} onClick={(event) => { event.stopPropagation(); void updateInbox(inbox?.snoozedUntil ? 'unsnooze' : 'snooze') }} style={inboxButtonStyle(Boolean(inbox?.snoozedUntil))}>z</button>
+        </div>
       </div>
     </div>
   )
+})
+
+const EMPTY_SESSIONS: Session[] = []
+
+function formatCompactTokens(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
+  return `${n}`
 }
 
-function ProjectGroup({
+const SubagentSidebarRow = memo(function SubagentSidebarRow({
+  summary,
+  session,
+  onSelect,
+}: {
+  summary: SubagentSummary
+  session: Session
+  onSelect: (session: Session) => void
+}) {
+  const label = summary.taskDescription?.trim() || summary.agentId
+  return (
+    <div
+      onClick={() => onSelect(session)}
+      className="av-session-row av-hover-control"
+      title={summary.taskDescription || summary.agentId}
+      style={{
+        padding: '7px 16px 7px 44px',
+        borderBottom: '1px solid var(--border)',
+        cursor: 'pointer',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 2,
+      }}
+    >
+      <div
+        style={{
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 11,
+          color: 'var(--text-2)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {label}
+      </div>
+      <div style={{ display: 'flex', gap: 8, fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>
+        <span>{summary.agentId.slice(-8)}</span>
+        <span>{summary.messageCount} msgs</span>
+        <span>{formatCompactTokens(summary.usage.inputTokens)} ctx / {formatCompactTokens(summary.usage.outputTokens)} out</span>
+      </div>
+    </div>
+  )
+})
+
+const SessionRowGroup = memo(function SessionRowGroup({
+  session,
+  selected,
+  selectedId,
+  hydrated,
+  knownChildren,
+  onSelect,
+  onRename,
+  onTag,
+}: {
+  session: Session
+  selected: boolean
+  selectedId: string | null
+  hydrated: boolean
+  knownChildren: Session[]
+  onSelect: (session: Session) => void
+  onRename: (sessionId: string, title: string) => void
+  onTag: (sessionId: string, tag: string | null) => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const [claudeSubagents, setClaudeSubagents] = useState<SubagentSummary[] | null>(null)
+  const [loadingSubagents, setLoadingSubagents] = useState(false)
+  const canHaveClaudeSubagents = !session.provider || session.provider === 'claude'
+  const hasKnownChildren = knownChildren.length > 0
+  const showDisclosure = hasKnownChildren || canHaveClaudeSubagents
+
+  useEffect(() => {
+    if (!expanded || !canHaveClaudeSubagents || claudeSubagents !== null || loadingSubagents) return
+    let cancelled = false
+    setLoadingSubagents(true)
+    fetch(`/api/sessions/${session.sessionId}/subagents${session.provider ? `?provider=${session.provider}` : ''}`)
+      .then((res) => (res.ok ? res.json() : { subagents: [] }))
+      .then((data: { subagents?: SubagentSummary[] }) => {
+        if (!cancelled) setClaudeSubagents(data.subagents ?? [])
+      })
+      .catch(() => {
+        if (!cancelled) setClaudeSubagents([])
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingSubagents(false)
+      })
+    return () => { cancelled = true }
+  }, [expanded, canHaveClaudeSubagents, claudeSubagents, loadingSubagents, session.sessionId, session.provider])
+
+  const subagentCount = (claudeSubagents?.length ?? 0) + knownChildren.length
+
+  return (
+    <div>
+      <div style={{ position: 'relative' }}>
+        {showDisclosure && (
+          <span
+            onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v) }}
+            title={expanded ? 'Collapse subagents' : 'Expand subagents'}
+            style={{
+              position: 'absolute',
+              left: 8,
+              top: 12,
+              fontSize: 11,
+              color: 'var(--text-3)',
+              cursor: 'pointer',
+              zIndex: 1,
+              padding: 4,
+            }}
+          >
+            {expanded ? '▾' : '▸'}
+          </span>
+        )}
+        <SessionRow
+          session={session}
+          selected={selected}
+          hydrated={hydrated}
+          onSelect={onSelect}
+          onRename={onRename}
+          onTag={onTag}
+        />
+      </div>
+      {expanded && (
+        <div>
+          {(hasKnownChildren || subagentCount > 0) && (
+            <div
+              style={{
+                padding: '4px 16px 4px 32px',
+                fontSize: 11,
+                color: 'var(--text-3)',
+              }}
+            >
+              Subagents {subagentCount > 0 ? `(${subagentCount})` : ''}
+            </div>
+          )}
+          {knownChildren.map((child) => (
+            <div key={sessionTabKey(child)} style={{ paddingLeft: 20 }}>
+              <SessionRow
+                session={child}
+                selected={sessionTabKey(child) === selectedId}
+                hydrated={hydrated}
+                onSelect={onSelect}
+                onRename={onRename}
+                onTag={onTag}
+              />
+            </div>
+          ))}
+          {loadingSubagents && (
+            <div style={{ padding: '6px 16px 6px 44px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>
+              Loading…
+            </div>
+          )}
+          {claudeSubagents?.map((summary) => (
+            <SubagentSidebarRow key={summary.agentId} summary={summary} session={session} onSelect={onSelect} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+})
+
+const ProjectGroup = memo(function ProjectGroup({
   name,
   projectKey,
   sessions,
   selectedId,
   selectedProject,
+  hydrated,
+  scrollToSessionKey,
+  childrenByParentId,
   onSelect,
   onSelectProject,
   onRename,
@@ -416,6 +842,9 @@ function ProjectGroup({
   sessions: Session[]
   selectedId: string | null
   selectedProject: string | null
+  hydrated: boolean
+  scrollToSessionKey?: string | null
+  childrenByParentId?: Map<string, Session[]>
   onSelect: (session: Session) => void
   onSelectProject: (projectDir: string, projectName: string, sessions: Session[]) => void
   onRename: (sessionId: string, title: string) => void
@@ -424,7 +853,14 @@ function ProjectGroup({
   const [collapsed, setCollapsed] = useState(false)
   const [hovered, setHovered] = useState(false)
   const isProjectSelected = sameProjectPath(selectedProject, projectKey)
-  const hasSelected = isProjectSelected || sessions.some(s => s.sessionId === selectedId)
+  const hasSelected = isProjectSelected || sessions.some((s) => sessionTabKey(s) === selectedId)
+
+  useEffect(() => {
+    if (!scrollToSessionKey) return
+    if (sessions.some((session) => sessionTabKey(session) === scrollToSessionKey)) {
+      setCollapsed(false)
+    }
+  }, [scrollToSessionKey, sessions])
 
   return (
     <div>
@@ -432,6 +868,7 @@ function ProjectGroup({
       <div
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
+        className={`av-project-header ${isProjectSelected ? 'av-selected' : ''}`}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -440,13 +877,8 @@ function ProjectGroup({
           userSelect: 'none',
           position: 'sticky',
           top: 0,
-          background: isProjectSelected
-            ? 'linear-gradient(to right, rgba(139,128,240,0.12) 0%, var(--surface-2) 70%)'
-            : hovered ? 'var(--surface-3)' : 'var(--surface-2)',
           borderBottom: '1px solid var(--border)',
-          borderLeft: `2px solid ${isProjectSelected ? 'var(--violet)' : 'transparent'}`,
           zIndex: 1,
-          transition: 'background 0.14s ease, border-left-color 0.14s ease',
         }}
       >
         {/* Chevron: collapses/expands */}
@@ -459,19 +891,16 @@ function ProjectGroup({
         {/* Name: loads project consolidated view */}
         <span
           onClick={() => onSelectProject(projectKey, name, sessions)}
+          className="av-project-name"
           style={{
-            fontFamily: "'Oxanium', monospace",
             fontSize: 12,
             fontWeight: 600,
-            letterSpacing: '0.08em',
-            textTransform: 'uppercase',
-            color: hasSelected ? 'var(--violet)' : hovered ? 'var(--text-2)' : 'var(--text-3)',
+            letterSpacing: '0.01em',
             flex: 1,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
             cursor: 'pointer',
-            transition: 'color 0.14s ease',
           }}
         >
           {name}
@@ -494,10 +923,13 @@ function ProjectGroup({
 
       {/* Sessions */}
       {!collapsed && sessions.map((session) => (
-        <SessionRow
-          key={session.sessionId}
+        <SessionRowGroup
+          key={sessionTabKey(session)}
           session={session}
-          selected={session.sessionId === selectedId}
+          selected={sessionTabKey(session) === selectedId}
+          selectedId={selectedId}
+          hydrated={hydrated}
+          knownChildren={childrenByParentId?.get(session.sessionId) ?? EMPTY_SESSIONS}
           onSelect={onSelect}
           onRename={onRename}
           onTag={onTag}
@@ -505,18 +937,25 @@ function ProjectGroup({
       ))}
     </div>
   )
-}
+})
 
-export default function SessionList({
+function SessionListInner({
   sessions,
   loading,
   error,
   provider,
+  providerInstanceId,
+  providerInstances,
   switchingProvider,
   selectedId,
   selectedProject,
+  dashboardSelected = false,
+  agentOperationsSelected = false,
+  messagingSelected = false,
+  scrollToSessionRequest,
   onSelect,
   onSelectProject,
+  onOpenDashboard,
   onRename,
   onTag,
   onChangeProvider,
@@ -526,24 +965,149 @@ export default function SessionList({
   includeWorktrees,
   onChangeScope,
   onToggleWorktrees,
+  onOpenCommandPalette,
+  onOpenCoordinator,
+  onOpenCrossSessionMessaging,
+  canOpenGit,
+  onOpenGit,
+  onNewSession,
+  creatingSession = false,
 }: Props) {
+  const { state: sidebarState, width: sidebarWidth, setWidth: setSidebarWidth, applyWidth, setOpen } = useSidebar()
+  const collapsed = sidebarState === 'collapsed'
+  const colorTreatment = useSyncExternalStore<ColorTreatment>(
+    subscribeColorTreatment,
+    getCurrentColorTreatment,
+    () => DEFAULT_COLOR_TREATMENT,
+  )
+  const [resizing, setResizing] = useState(false)
+  const [collapsedPanel, setCollapsedPanel] = useState<CollapsedPanel | null>(null)
+  const providerSelectClassName = colorTreatment === 'flat'
+    ? cn(nativeSelectBaseClassName,
+      'av-hover-control h-9 rounded-[9px] border-[var(--border)] bg-[var(--surface-2)] bg-none px-3 text-[11px] font-medium tracking-[0.04em] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]')
+    : providerNativeSelectClassName
+  const resizeFrameRef = useRef<number | null>(null)
+  const resizeWidthRef = useRef(sidebarWidth)
+  const providerSelectRef = useRef<HTMLSelectElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const previousProviderRef = useRef(provider)
+  useEffect(() => {
+    resizeWidthRef.current = sidebarWidth
+  }, [sidebarWidth])
+  const expandAndFocus = useCallback((target: 'provider' | 'search' | 'project' | 'view') => {
+    setOpen(true)
+    requestAnimationFrame(() => {
+      if (target === 'provider') providerSelectRef.current?.focus()
+      if (target === 'search') searchInputRef.current?.focus()
+    })
+  }, [setOpen])
+  const handleCollapsedAction = useCallback((panel: CollapsedPanel) => {
+    if (!collapsed) {
+      if (panel === 'sessions') {
+        setCollapsedPanel(null)
+        return
+      }
+      if (panel === 'provider') expandAndFocus('provider')
+      else if (panel === 'search') expandAndFocus('search')
+      else expandAndFocus('view')
+      return
+    }
+    setCollapsedPanel((current) => (current === panel ? null : panel))
+  }, [collapsed, expandAndFocus])
+  useEffect(() => {
+    if (!collapsed) setCollapsedPanel(null)
+  }, [collapsed])
+  useEffect(() => {
+    if (!collapsedPanel) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setCollapsedPanel(null)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [collapsedPanel])
+  useEffect(() => {
+    if (!resizing) return
+    const onMove = (e: MouseEvent) => {
+      const next = Math.max(220, Math.min(640, e.clientX))
+      resizeWidthRef.current = next
+      if (resizeFrameRef.current != null) return
+      resizeFrameRef.current = window.requestAnimationFrame(() => {
+        resizeFrameRef.current = null
+        applyWidth(resizeWidthRef.current)
+      })
+    }
+    const onUp = () => {
+      if (resizeFrameRef.current != null) {
+        window.cancelAnimationFrame(resizeFrameRef.current)
+        resizeFrameRef.current = null
+      }
+      setSidebarWidth(resizeWidthRef.current)
+      setResizing(false)
+    }
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      if (resizeFrameRef.current != null) {
+        window.cancelAnimationFrame(resizeFrameRef.current)
+        resizeFrameRef.current = null
+      }
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+  }, [applyWidth, resizing, setSidebarWidth])
   const [searchText, setSearchText] = useState('')
   const [activeTag, setActiveTag] = useState<string | null>(null)
-  const normalizedSearch = searchText.trim().toLowerCase()
+  const [sortMode, setSortMode] = useState<'project' | 'time'>('project')
+  const [hydrated, setHydrated] = useState(false)
+  useEffect(() => {
+    setHydrated(true)
+  }, [])
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem('agentViewer:sessionSort')
+      if (stored === 'time' || stored === 'project') {
+        setSortMode(stored)
+      }
+    } catch {
+      // ignore storage failures
+    }
+  }, [])
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem('agentViewer:sessionSort', sortMode)
+  }, [sortMode])
+  const debouncedSearchText = useDebouncedValue(searchText, 120)
+  const deferredSearchText = useDeferredValue(debouncedSearchText)
+  const normalizedSearch = deferredSearchText.trim().toLowerCase()
+  const indexSessions = useMemo(() => createSessionListIndexer(), [])
+  const indexedSessions = useMemo(() => indexSessions(sessions), [indexSessions, sessions])
   const filteredSessions = useMemo(
-    () => sessions.filter((session) => matchesSessionSearch(session, normalizedSearch, activeTag)),
-    [sessions, normalizedSearch, activeTag],
+    () => indexedSessions.filter((session) => matchesIndexedSessionSearch(session, normalizedSearch, activeTag)),
+    [indexedSessions, normalizedSearch, activeTag],
   )
-  const groups = useMemo(() => groupByProject(filteredSessions), [filteredSessions])
+  const { groups, childrenByParentId } = useMemo(() => groupByProject(filteredSessions), [filteredSessions])
+  const showProviderPerRow = useMemo(
+    () => new Set(filteredSessions.map((entry) => entry.session.provider ?? 'claude')).size > 1,
+    [filteredSessions],
+  )
+  const timeEntries = useMemo(
+    () => sortMode === 'time' ? buildSessionTimeEntries(filteredSessions) : [],
+    [filteredSessions, sortMode],
+  )
   const tagCounts = useMemo(() => {
     const map = new Map<string, number>()
-    for (const session of sessions) {
-      for (const tag of parseStoredSessionTags(session.tag)) {
+    for (const session of indexedSessions) {
+      for (const tag of session.tags) {
         map.set(tag, (map.get(tag) ?? 0) + 1)
       }
     }
     return map
-  }, [sessions])
+  }, [indexedSessions])
   const popularTags = useMemo(
     () => [...tagCounts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 8),
     [tagCounts],
@@ -553,299 +1117,1212 @@ export default function SessionList({
     if (!activeTag) return
     if (tagCounts.has(activeTag)) return
     setActiveTag(null)
-  }, [activeTag, sessions])
+  }, [activeTag, tagCounts])
 
-  return (
-    <div
-      style={{
-        width: 290,
-        minWidth: 290,
-        height: '100vh',
-        display: 'flex',
-        flexDirection: 'column',
-        borderRight: '1px solid var(--border)',
-        background: 'var(--surface)',
-      }}
-    >
-      {/* ── Header ─────────────────────────────────────── */}
+  useEffect(() => {
+    if (previousProviderRef.current === provider) return
+    previousProviderRef.current = provider
+    const frameId = window.requestAnimationFrame(() => {
+      const content = rootRef.current?.querySelector<HTMLElement>('[data-slot="sidebar-content"]')
+      if (content) content.scrollTop = 0
+    })
+    return () => window.cancelAnimationFrame(frameId)
+  }, [provider])
+
+  useEffect(() => {
+    if (!scrollToSessionRequest) return
+    const targetExists = sessions.some((session) => sessionTabKey(session) === scrollToSessionRequest.sessionKey)
+    if (!targetExists) return
+    const targetVisible = filteredSessions.some((indexed) => sessionTabKey(indexed.session) === scrollToSessionRequest.sessionKey)
+    if (targetVisible) return
+    setSearchText('')
+    setActiveTag(null)
+  }, [filteredSessions, scrollToSessionRequest, sessions])
+
+  useEffect(() => {
+    if (!scrollToSessionRequest || collapsed || loading) return
+
+    let frameId: number | null = null
+    let attempts = 0
+    const scrollToRow = () => {
+      const root = rootRef.current
+      const row = root
+        ? Array.from(root.querySelectorAll<HTMLElement>('[data-session-key]'))
+            .find((candidate) => candidate.dataset.sessionKey === scrollToSessionRequest.sessionKey)
+        : null
+
+      if (row) {
+        row.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
+        return
+      }
+
+      attempts += 1
+      if (attempts <= 12) frameId = window.requestAnimationFrame(scrollToRow)
+    }
+
+    frameId = window.requestAnimationFrame(scrollToRow)
+    return () => {
+      if (frameId != null) window.cancelAnimationFrame(frameId)
+    }
+  }, [
+    collapsed,
+    filteredSessions,
+    loading,
+    scrollToSessionRequest,
+    sortMode,
+  ])
+  const summaryText = loading
+    ? 'syncing…'
+    : sortMode === 'time'
+    ? filteredSessions.length === sessions.length
+      ? `${sessions.length} session${sessions.length !== 1 ? 's' : ''} · by time`
+      : `${filteredSessions.length}/${sessions.length} sessions · by time`
+    : filteredSessions.length === sessions.length
+    ? `${groups.length} project${groups.length !== 1 ? 's' : ''} · ${sessions.length} session${sessions.length !== 1 ? 's' : ''}`
+    : `${filteredSessions.length}/${sessions.length} sessions · ${groups.length} projects`
+
+  if (collapsed) {
+    return (
       <div
+        ref={rootRef}
         style={{
-          padding: '18px 18px 15px',
-          borderBottom: '1px solid var(--border)',
+          width: '100%',
+          minWidth: 0,
+          height: '100%',
+          display: 'flex',
+          flexDirection: 'column',
+          minHeight: 0,
+          background: 'var(--surface)',
+          overflow: 'hidden',
           flexShrink: 0,
-          background: 'linear-gradient(160deg, rgba(139,128,240,0.07) 0%, transparent 60%)',
+          position: 'relative',
         }}
       >
         <div
           style={{
-            fontFamily: "'Oxanium', monospace",
-            fontSize: 16,
-            fontWeight: 700,
-            letterSpacing: '0.1em',
-            textTransform: 'uppercase',
-            color: 'var(--text)',
             display: 'flex',
-            alignItems: 'center',
-            gap: 8,
+            flex: 1,
+            minHeight: 0,
+            background: colorTreatment === 'flat' ? 'var(--surface)' : 'linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%)',
           }}
         >
-          <span style={{ color: 'var(--violet)', fontSize: 14, lineHeight: 1 }}>◈</span>
-          <span style={{ flex: 1 }}>Agent Viewer</span>
-          <ThemeToggle />
-        </div>
-        <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span
+          <div
             style={{
-              width: 7,
-              height: 7,
-              borderRadius: '50%',
-              background: 'var(--green)',
-              flexShrink: 0,
-              animation: 'live-pulse 2.5s ease-in-out infinite',
-              display: 'inline-block',
-            }}
-          />
-          <span
-            style={{
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 12,
-              color: 'var(--text-3)',
-              letterSpacing: '0.04em',
+              width: 76,
+              position: 'relative',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 9,
+              padding: '11px 0 13px',
+              borderRight: '1px solid var(--border)',
+              background: 'var(--surface)',
             }}
           >
-            {loading
-              ? 'syncing…'
-              : filteredSessions.length === sessions.length
-              ? `${groups.length} project${groups.length !== 1 ? 's' : ''} · ${sessions.length} session${sessions.length !== 1 ? 's' : ''}`
-              : `${filteredSessions.length}/${sessions.length} sessions · ${groups.length} projects`}
-          </span>
-        </div>
-        <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span
-            style={{
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 10,
-              color: 'var(--text-3)',
-              letterSpacing: '0.08em',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            PROVIDER
-          </span>
-          <select
-            value={provider}
-            onChange={(e) => onChangeProvider(e.target.value as ProviderSelection)}
-            disabled={switchingProvider}
-            style={{
-              flex: 1,
-              height: 30,
-              borderRadius: 6,
-              border: '1px solid var(--border)',
-              background: 'var(--surface-2)',
-              color: 'var(--text)',
-              padding: '0 10px',
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              letterSpacing: '0.06em',
-              outline: 'none',
-              cursor: switchingProvider ? 'not-allowed' : 'pointer',
-              opacity: switchingProvider ? 0.6 : 1,
-            }}
-          >
-            <option value="claude">CLAUDE</option>
-            <option value="codex">CODEX</option>
-            <option value="opencode">OPENCODE</option>
-            <option value="copilot">COPILOT</option>
-            <option value="all">ALL</option>
-          </select>
-        </div>
-        <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
-          <input
-            value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-            placeholder="Search title, tags, path, prompt…"
-            style={{
-              flex: 1,
-              height: 30,
-              borderRadius: 6,
-              border: '1px solid var(--border)',
-              background: 'var(--surface-2)',
-              color: 'var(--text)',
-              padding: '0 10px',
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              outline: 'none',
-            }}
-          />
-          {(searchText || activeTag) && (
             <button
-              onClick={() => {
-                setSearchText('')
-                setActiveTag(null)
-              }}
+              type="button"
+              onClick={() => setOpen(true)}
+              aria-label="Expand sidebar"
+              title="Expand sidebar"
+              className="av-hover-control"
               style={{
-                height: 30,
-                padding: '0 10px',
-                borderRadius: 6,
+                width: 24,
+                height: 24,
+                borderRadius: 8,
                 border: '1px solid var(--border)',
                 background: 'var(--surface-2)',
                 color: 'var(--text-3)',
-                fontFamily: "'IBM Plex Mono', monospace",
-                fontSize: 11,
-                letterSpacing: '0.05em',
+                display: 'grid',
+                placeItems: 'center',
                 cursor: 'pointer',
+                boxShadow: 'none',
+                backdropFilter: 'blur(4px)',
+                marginBottom: 8,
               }}
             >
-              CLEAR
+              <SidebarGlyph size={15} strokeWidth={2} style={{ transform: 'scaleX(-1)' }} />
             </button>
-          )}
+
+            <button
+              type="button"
+              onClick={() => handleCollapsedAction('sessions')}
+              aria-label="Show sessions"
+              title="Show sessions"
+              className="av-hover-control"
+              style={collapsedPrimaryButtonStyle}
+            >
+              <ListTree size={22} strokeWidth={2.3} />
+            </button>
+
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginTop: 8 }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setCollapsedPanel(null)
+                  onOpenDashboard()
+                }}
+                aria-label="Run dashboard"
+                title="Run dashboard"
+                className="av-hover-control"
+                style={collapsedIconButtonStyle(dashboardSelected)}
+              >
+                <LayoutDashboard size={20} strokeWidth={2.2} />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setCollapsedPanel(null)
+                  onOpenCoordinator()
+                }}
+                aria-label="Agent Operations dashboard"
+                title="Agent Operations"
+                className="av-hover-control"
+                style={collapsedIconButtonStyle(agentOperationsSelected)}
+              >
+                <UsersRound size={20} strokeWidth={2.2} />
+              </button>
+              <button
+                type="button"
+                onClick={() => handleCollapsedAction('provider')}
+                aria-label="Provider controls"
+                title="Provider"
+                className="av-hover-control"
+                style={collapsedIconButtonStyle(collapsedPanel === 'provider')}
+              >
+                <Bot size={20} strokeWidth={2.2} />
+              </button>
+              <button
+                type="button"
+                onClick={() => handleCollapsedAction('search')}
+                aria-label="Search"
+                title="Search"
+                className="av-hover-control"
+                style={collapsedIconButtonStyle(collapsedPanel === 'search')}
+              >
+                <Search size={20} strokeWidth={2.2} />
+              </button>
+              <button
+                type="button"
+                onClick={() => handleCollapsedAction('project')}
+                aria-label="Project scope"
+                title="Projects"
+                className="av-hover-control"
+                style={collapsedIconButtonStyle(collapsedPanel === 'project')}
+              >
+                <LayoutDashboard size={20} strokeWidth={2.2} />
+              </button>
+              <button
+                type="button"
+                onClick={() => handleCollapsedAction('filters')}
+                aria-label="Filters"
+                title="Filters"
+                className="av-hover-control"
+                style={collapsedIconButtonStyle(collapsedPanel === 'filters')}
+              >
+                <SlidersHorizontal size={20} strokeWidth={2.2} />
+              </button>
+              <button
+                type="button"
+                onClick={() => handleCollapsedAction('overview')}
+                aria-label="Overview"
+                title="Overview"
+                className="av-hover-control"
+                style={collapsedIconButtonStyle(collapsedPanel === 'overview')}
+              >
+                <BookOpen size={20} strokeWidth={2.2} />
+              </button>
+            </div>
+          </div>
         </div>
-        {popularTags.length > 0 && (
-          <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {popularTags.map(([tag, count]) => {
-              const selected = activeTag?.toLowerCase() === tag.toLowerCase()
-              return (
-                <button
-                  key={tag}
-                  onClick={() => setActiveTag((prev) => prev?.toLowerCase() === tag.toLowerCase() ? null : tag)}
+        {collapsedPanel && (
+          <div
+            onClick={() => setCollapsedPanel(null)}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 40,
+              background: 'transparent',
+            }}
+          >
+            <div
+              onClick={(event) => event.stopPropagation()}
+              style={{
+                position: 'absolute',
+                top: 76,
+                left: 106,
+                width: 318,
+                maxWidth: 'calc(100vw - 114px)',
+                maxHeight: 'calc(100vh - 104px)',
+                borderRadius: 16,
+                border: '1px solid var(--border)',
+                background: colorTreatment === 'flat' ? 'var(--surface)' : 'linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%)',
+                boxShadow: '0 24px 60px var(--shadow, rgba(0,0,0,0.22))',
+                overflow: 'hidden',
+                display: 'flex',
+                flexDirection: 'column',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '9px 12px',
+                  borderBottom: '1px solid var(--border)',
+                  background: 'var(--surface-2)',
+                }}
+              >
+                <div
                   style={{
-                    height: 24,
-                    padding: '0 8px',
-                    borderRadius: 999,
-                    border: `1px solid ${selected ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
-                    background: selected ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
-                    color: selected ? 'var(--violet)' : 'var(--text-3)',
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 10,
-                    letterSpacing: '0.04em',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: 'var(--text-2)',
+                    textTransform: 'capitalize',
+                  }}
+                >
+                  {collapsedPanel}
+                </div>
+                <div style={{ flex: 1 }} />
+                <button
+                  type="button"
+                  onClick={() => setCollapsedPanel(null)}
+                  className="av-hover-control"
+                  style={{
+                    border: '1px solid var(--border)',
+                    background: 'var(--surface)',
+                    color: 'var(--text-2)',
+                    borderRadius: 8,
+                    padding: '4px 8px',
+                    fontSize: 12,
                     cursor: 'pointer',
                   }}
-                  title={`${count} session${count === 1 ? '' : 's'}`}
                 >
-                  #{tag} · {count}
+                  Close
                 </button>
-              )
-            })}
-          </div>
-        )}
-        <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
-          <button
-            onClick={() => onChangeScope('all')}
-            style={{
-              flex: 1,
-              height: 28,
-              borderRadius: 5,
-              border: `1px solid ${scopeMode === 'all' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
-              background: scopeMode === 'all' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
-              color: scopeMode === 'all' ? 'var(--violet)' : 'var(--text-3)',
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              letterSpacing: '0.06em',
-              cursor: 'pointer',
-            }}
-          >
-            ALL PROJECTS
-          </button>
-          <button
-            onClick={() => canScopeToProject && onChangeScope('project')}
-            disabled={!canScopeToProject}
-            title={canScopeToProject ? 'Show only sessions for the current project' : 'Select a session or project first'}
-            style={{
-              flex: 1,
-              height: 28,
-              borderRadius: 5,
-              border: `1px solid ${scopeMode === 'project' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
-              background: scopeMode === 'project' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
-              color: scopeMode === 'project' ? 'var(--violet)' : 'var(--text-3)',
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              letterSpacing: '0.06em',
-              cursor: canScopeToProject ? 'pointer' : 'not-allowed',
-              opacity: canScopeToProject ? 1 : 0.45,
-            }}
-          >
-            THIS PROJECT
-          </button>
-        </div>
-        {scopeMode === 'project' && scopeProjectName && (
-          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span
-              style={{
-                fontFamily: "'IBM Plex Mono', monospace",
-                fontSize: 11,
-                color: 'var(--text-3)',
-                letterSpacing: '0.04em',
-              }}
-            >
-              {scopeProjectName}
-            </span>
-            <label
-              style={{
-                marginLeft: 'auto',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                fontFamily: "'IBM Plex Mono', monospace",
-                fontSize: 11,
-                color: 'var(--text-3)',
-                cursor: 'pointer',
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={includeWorktrees}
-                onChange={(e) => onToggleWorktrees(e.target.checked)}
-              />
-              worktrees
-            </label>
+              </div>
+              <div
+                style={{
+                  flex: 1,
+                  minHeight: 0,
+                  overflowY: 'auto',
+                  padding: 12,
+                  display: 'grid',
+                  gap: 10,
+                }}
+              >
+                {collapsedPanel === 'sessions' && (
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <div
+                        style={{
+                          fontSize: 12,
+                          fontWeight: 600,
+                          color: 'var(--text)',
+                        }}
+                      >
+                        Sessions
+                      </div>
+                      <div style={{ flex: 1 }} />
+                      <div
+                        style={{
+                          fontFamily: "'IBM Plex Mono', monospace",
+                          fontSize: 10,
+                          color: 'var(--text-3)',
+                          background: 'var(--surface-3)',
+                          border: '1px solid var(--border)',
+                          borderRadius: 6,
+                          padding: '3px 8px',
+                        }}
+                      >
+                        {filteredSessions.length}
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        maxHeight: 'min(72vh, 720px)',
+                        overflowY: 'auto',
+                        borderRadius: 12,
+                        border: '1px solid var(--border)',
+                        background: 'var(--surface)',
+                      }}
+                    >
+                      {sortMode === 'project' && groups.map(({ projectDir, projectName, sessions: groupSessions }) => (
+                        <ProjectGroup
+                          key={projectDir}
+                          name={projectName}
+                          projectKey={projectDir}
+                          sessions={groupSessions}
+                          selectedId={selectedId}
+                          selectedProject={selectedProject}
+                          hydrated={hydrated}
+                          childrenByParentId={childrenByParentId}
+                          onSelect={onSelect}
+                          onSelectProject={onSelectProject}
+                          onRename={onRename}
+                          onTag={onTag}
+                        />
+                      ))}
+                      {sortMode === 'time' && timeEntries.map((entry) => {
+                        if (entry.type === 'header') {
+                          const isProjectSelected = sameProjectPath(selectedProject, entry.projectDir)
+                          return (
+                            <div
+                              key={entry.key}
+                              onClick={() => onSelectProject(entry.projectDir, entry.projectName, entry.projectSessions)}
+                              className={`av-project-header ${isProjectSelected ? 'av-selected' : ''}`}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 7,
+                                padding: '8px 12px 8px 14px',
+                                userSelect: 'none',
+                                borderBottom: '1px solid var(--border)',
+                              }}
+                            >
+                              <span
+                                className="av-project-name"
+                                style={{
+                                  fontSize: 12,
+                                  fontWeight: 600,
+                                  letterSpacing: '0.01em',
+                                  flex: 1,
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                }}
+                              >
+                                {entry.projectName}
+                              </span>
+                              <span
+                                style={{
+                                  fontFamily: "'IBM Plex Mono', monospace",
+                                  fontSize: 11,
+                                  color: isProjectSelected ? 'var(--violet)' : 'var(--text-3)',
+                                  background: isProjectSelected ? 'rgba(139,128,240,0.12)' : 'var(--surface-3)',
+                                  border: `1px solid ${isProjectSelected ? 'rgba(139,128,240,0.3)' : 'var(--border)'}`,
+                                  borderRadius: 3,
+                                  padding: '1px 6px',
+                                  flexShrink: 0,
+                                }}
+                              >
+                                {entry.count}
+                              </span>
+                            </div>
+                          )
+                        }
+                        return (
+                          <SessionRow
+                            key={entry.key}
+                            session={entry.session}
+                            selected={sessionTabKey(entry.session) === selectedId}
+                            hydrated={hydrated}
+                            onSelect={onSelect}
+                            onRename={onRename}
+                            onTag={onTag}
+                          />
+                        )
+                      })}
+                    </div>
+                  </>
+                )}
+
+                {collapsedPanel === 'provider' && (
+                  <>
+                    <div style={{ display: 'grid', gap: 6 }}>
+                      <NativeSelect
+                        ref={providerSelectRef}
+                        aria-label="Provider"
+                        value={provider === 'all' ? 'all' : providerInstanceId}
+                        onChange={(event) => {
+                          if (event.target.value === 'all') return onChangeProvider('all')
+                          const instance = providerInstances.find((candidate) => candidate.id === event.target.value)
+                          if (instance) onChangeProvider(instance.provider, instance.id)
+                        }}
+                        disabled={switchingProvider}
+className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed opacity-60' : 'cursor-pointer')}
+                      >
+                        {providerInstances.map((instance) => (
+                          <NativeSelectOption key={instance.id} value={instance.id}>
+                            {instance.displayName}
+                          </NativeSelectOption>
+                        ))}
+                        <NativeSelectOption value="all">All providers</NativeSelectOption>
+                      </NativeSelect>
+                    </div>
+                    <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
+                      Choose the provider to scope the session list. This panel behaves like the shadcn sidebar pop-out pattern.
+                    </div>
+                  </>
+                )}
+
+                {collapsedPanel === 'search' && (
+                  <>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <Input
+                        ref={searchInputRef}
+                        value={searchText}
+                        onChange={(e) => setSearchText(e.target.value)}
+                        placeholder="Search title, tags, path, prompt…"
+                        className="av-hover-control"
+                        style={{
+                          flex: 1,
+                          height: 34,
+                          borderRadius: 8,
+                          border: '1px solid var(--border)',
+                          background: 'var(--surface-2)',
+                          color: 'var(--text)',
+                          padding: '0 10px',
+                          fontSize: 12,
+                          outline: 'none',
+                        }}
+                      />
+                      {(searchText || activeTag) && (
+                        <Button
+                          onClick={() => {
+                            setSearchText('')
+                            setActiveTag(null)
+                          }}
+                          variant="outline"
+                          size="sm"
+                          className="av-hover-control"
+                          style={{
+                            height: 34,
+                            padding: '0 10px',
+                            borderRadius: 8,
+                            border: '1px solid var(--border)',
+                            background: 'var(--surface-2)',
+                            color: 'var(--text-3)',
+                            fontSize: 12,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Clear
+                        </Button>
+                      )}
+                    </div>
+                    <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
+                      Search the current provider and scope. Popular tags stay available in the filter panel.
+                    </div>
+                  </>
+                )}
+
+                {collapsedPanel === 'project' && (
+                  <>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <Button
+                        onClick={() => setSortMode('project')}
+                        variant="outline"
+                        size="sm"
+                        className={sortMode === 'project' ? 'av-control-btn av-hover-control av-active' : 'av-control-btn av-hover-control'}
+                        style={{
+                          flex: 1,
+                          height: 32,
+                          borderRadius: 8,
+                          fontSize: 12,
+                        }}
+                      >
+                        By project
+                      </Button>
+                      <Button
+                        onClick={() => setSortMode('time')}
+                        variant="outline"
+                        size="sm"
+                        className={sortMode === 'time' ? 'av-control-btn av-hover-control av-active' : 'av-control-btn av-hover-control'}
+                        style={{
+                          flex: 1,
+                          height: 32,
+                          borderRadius: 8,
+                          fontSize: 12,
+                        }}
+                      >
+                        By time
+                      </Button>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <Button
+                        onClick={() => onChangeScope('all')}
+                        variant="outline"
+                        size="sm"
+                        className={scopeMode === 'all' ? 'av-control-btn av-hover-control av-active' : 'av-control-btn av-hover-control'}
+                        style={{
+                          flex: 1,
+                          height: 32,
+                          borderRadius: 8,
+                          fontSize: 12,
+                        }}
+                      >
+                        All projects
+                      </Button>
+                      <Button
+                        onClick={() => canScopeToProject && onChangeScope('project')}
+                        disabled={!canScopeToProject}
+                        title={canScopeToProject ? 'Show only sessions for the current project' : 'Select a session or project first'}
+                        variant="outline"
+                        size="sm"
+                        className={scopeMode === 'project' ? 'av-control-btn av-hover-control av-active' : 'av-control-btn av-hover-control'}
+                        style={{
+                          flex: 1,
+                          height: 32,
+                          borderRadius: 8,
+                          fontSize: 12,
+                          opacity: canScopeToProject ? 1 : 0.45,
+                        }}
+                      >
+                        This project
+                      </Button>
+                    </div>
+                    {scopeMode === 'project' && scopeProjectName && (
+                      <Label
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          fontFamily: "'IBM Plex Mono', monospace",
+                          fontSize: 11,
+                          color: 'var(--text-3)',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <Checkbox
+                          checked={includeWorktrees}
+                          onCheckedChange={(checked) => onToggleWorktrees(checked === true)}
+                          style={{
+                            borderColor: 'var(--border)',
+                            background: includeWorktrees ? 'var(--violet)' : 'var(--surface-2)',
+                            color: includeWorktrees ? 'var(--bg)' : 'var(--text)',
+                          }}
+                        />
+                        worktrees
+                      </Label>
+                    )}
+                  </>
+                )}
+
+                {collapsedPanel === 'filters' && (
+                  <>
+                    <div
+                      style={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        gap: 6,
+                      }}
+                    >
+                      {popularTags.length > 0 ? (
+                        popularTags.map(([tag, count]) => {
+                          const selected = activeTag?.toLowerCase() === tag.toLowerCase()
+                          return (
+                            <Button
+                              key={tag}
+                              onClick={() => setActiveTag((prev) => prev?.toLowerCase() === tag.toLowerCase() ? null : tag)}
+                              variant="outline"
+                              size="sm"
+                              className="av-hover-control"
+                              style={{
+                                height: 26,
+                                padding: '0 8px',
+                                borderRadius: 999,
+                                border: `1px solid ${selected ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
+                                background: selected ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
+                                color: selected ? 'var(--violet)' : 'var(--text-3)',
+                                fontFamily: "'IBM Plex Mono', monospace",
+                                fontSize: 10,
+                                letterSpacing: '0.04em',
+                                cursor: 'pointer',
+                              }}
+                              title={`${count} session${count === 1 ? '' : 's'}`}
+                            >
+                              #{tag} · {count}
+                            </Button>
+                          )
+                        })
+                      ) : (
+                        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
+                          No tags available.
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
+                      Filter by the most common tags in the current session set.
+                    </div>
+                  </>
+                )}
+
+                {collapsedPanel === 'overview' && (
+                  <>
+                    <div
+                      style={{
+                        padding: 12,
+                        borderRadius: 12,
+                        border: '1px solid var(--border)',
+                        background: 'var(--surface-2)',
+                        display: 'grid',
+                        gap: 8,
+                      }}
+                    >
+                      <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>
+                        {summaryText}
+                      </div>
+                      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
+                        {provider === 'all' ? 'All providers' : providerLabel(provider)} · {sortMode === 'time' ? 'sorted by time' : 'grouped by project'}
+                        {scopeMode === 'project' && scopeProjectName ? ` · ${scopeProjectName}` : ''}
+                      </div>
+                    </div>
+                    <Button
+                      onClick={() => setOpen(true)}
+                      variant="outline"
+                      size="sm"
+                      className="av-hover-control"
+                      style={{
+                        height: 34,
+                        borderRadius: 8,
+                        border: '1px solid var(--border)',
+                        background: 'var(--surface-2)',
+                        color: 'var(--text)',
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 11,
+                        letterSpacing: '0.06em',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      OPEN FULL SIDEBAR
+                    </Button>
+                  </>
+                )}
+              </div>
+            </div>
           </div>
         )}
       </div>
+    )
+  }
 
-      {/* ── Groups ─────────────────────────────────────── */}
-      <div style={{ overflow: 'auto', flex: 1 }}>
-        {error && (
+  return (
+    <ShowProviderContext.Provider value={showProviderPerRow}>
+    <div
+      ref={rootRef}
+      style={{
+        width: '100%',
+        minWidth: 0,
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        minHeight: 0,
+        background: 'var(--surface)',
+        overflow: 'hidden',
+        flexShrink: 0,
+        position: 'relative',
+      }}
+    >
+      <SidebarRail
+        onMouseDown={(e) => {
+          e.preventDefault()
+          resizeWidthRef.current = Math.max(220, Math.min(640, e.clientX))
+          setResizing(true)
+        }}
+        onDoubleClick={() => {
+          resizeWidthRef.current = 290
+          applyWidth(290)
+          setSidebarWidth(290)
+        }}
+        title="Drag to resize · double-click to reset"
+        style={{
+          background: resizing ? (colorTreatment === 'flat' ? 'color-mix(in srgb, var(--violet) 30%, transparent)' : 'var(--violet-glow)') : 'transparent',
+        }}
+      />
+      <SidebarHeader>
+        <div
+          style={{
+            padding: '12px 14px 10px',
+            borderBottom: '1px solid var(--border)',
+            flexShrink: 0,
+            background: colorTreatment === 'flat' ? 'var(--surface)' : 'linear-gradient(160deg, rgba(139,128,240,0.07) 0%, transparent 60%)',
+          }}
+        >
           <div
             style={{
-              padding: '12px 18px',
-              fontSize: 12,
-              color: 'var(--red)',
-              borderBottom: '1px solid var(--border)',
-              fontFamily: "'IBM Plex Mono', monospace",
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
             }}
           >
-            {error}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                width: '100%',
+                minWidth: 0,
+              }}
+            >
+              {!collapsed && (
+                <div
+                  style={{
+                    fontFamily: "'Oxanium', monospace",
+                    fontSize: 15,
+                    fontWeight: 700,
+                    letterSpacing: '0.08em',
+                    textTransform: 'uppercase',
+                    color: 'var(--text)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    minWidth: 0,
+                    flex: 1,
+                  }}
+                >
+                  <img
+                    src="/icon.png"
+                    alt=""
+                    width={16}
+                    height={16}
+                    style={{ borderRadius: 4, flexShrink: 0 }}
+                  />
+                  <span style={{ flex: 1 }}>Agent Viewer</span>
+                </div>
+              )}
+              <SidebarTrigger
+                title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                className="ml-auto size-7 shrink-0 rounded-md border-border bg-[var(--surface-2)] px-0 text-[var(--text-3)] shadow-none hover:bg-[var(--surface-3)]"
+              />
+            </div>
+            {!collapsed && (
+              <div
+                style={{
+                  display: 'grid',
+                  gap: 8,
+                  width: '100%',
+                  minWidth: 0,
+                }}
+              >
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    width: '100%',
+                    minWidth: 0,
+                  }}
+                >
+                  {onNewSession && (
+                    <Button
+                      onClick={onNewSession}
+                      disabled={creatingSession}
+                      variant="outline"
+                      size="sm"
+                      aria-label="Start a new agent session"
+                      className="av-hover-control"
+                      style={{
+                        ...sidebarHeaderPrimaryActionStyle,
+                        cursor: creatingSession ? 'not-allowed' : 'pointer',
+                        opacity: creatingSession ? 0.55 : 1,
+                      }}
+                    >
+                      <span aria-hidden="true">{creatingSession ? '…' : '+'}</span>
+                      <span>New</span>
+                    </Button>
+                  )}
+                  <div
+                    aria-label="Sidebar shortcuts"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      marginLeft: 'auto',
+                    }}
+                  >
+                    <Button
+                      onClick={onOpenDashboard}
+                      variant="outline"
+                      size="sm"
+                      aria-label="Open run dashboard"
+                      className="av-hover-control"
+                      style={sidebarHeaderIconActionStyle({ active: dashboardSelected, accent: 'cyan' })}
+                    >
+                      <LayoutDashboard size={15} strokeWidth={2.2} />
+                    </Button>
+                    <Button
+                      onClick={onOpenCoordinator}
+                      variant="outline"
+                      size="sm"
+                      aria-label="Open Agent Operations dashboard"
+                      className="av-hover-control"
+                      style={sidebarHeaderIconActionStyle({ active: agentOperationsSelected, accent: 'cyan' })}
+                    >
+                      <UsersRound size={16} strokeWidth={2.2} />
+                    </Button>
+                    <Button
+                      onClick={onOpenCrossSessionMessaging}
+                      variant="outline"
+                      size="sm"
+                      aria-label="Open cross-session messaging"
+                      className="av-hover-control"
+                      style={sidebarHeaderIconActionStyle({ active: messagingSelected, accent: 'cyan' })}
+                    >
+                      <MessageSquare size={15} strokeWidth={2.2} />
+                    </Button>
+                    <Button
+                      onClick={onOpenCommandPalette}
+                      variant="outline"
+                      size="sm"
+                      aria-label="Open command palette"
+                      className="av-hover-control"
+                      style={sidebarHeaderIconActionStyle()}
+                    >
+                      <Command size={15} strokeWidth={2.2} />
+                    </Button>
+                    <Button
+                      onClick={onOpenGit}
+                      disabled={!canOpenGit}
+                      variant="outline"
+                      size="sm"
+                      aria-label={canOpenGit ? 'Open git status' : 'Select a session or project to open git status'}
+                      className="av-hover-control"
+                      style={sidebarHeaderIconActionStyle({ disabled: !canOpenGit })}
+                    >
+                      <GitBranch size={15} strokeWidth={2.2} />
+                    </Button>
+                  </div>
+                </div>
+                <ThemeToggle />
+              </div>
+            )}
           </div>
+        </div>
+        {!collapsed && (
+          <Card
+            style={{
+              margin: '10px 14px 8px',
+              borderRadius: 10,
+              border: '1px solid var(--border)',
+              background: 'var(--surface)',
+              boxShadow: 'none',
+            }}
+          >
+            <CardHeader className="sr-only">
+              <CardTitle>Session filters</CardTitle>
+            </CardHeader>
+            <CardContent style={{ padding: 12 }}>
+              <div style={{ display: 'grid', gap: 5 }}>
+                  <NativeSelect
+                    ref={providerSelectRef}
+                    aria-label="Provider"
+                    value={provider === 'all' ? 'all' : providerInstanceId}
+                    onChange={(event) => {
+                      if (event.target.value === 'all') return onChangeProvider('all')
+                      const instance = providerInstances.find((candidate) => candidate.id === event.target.value)
+                      if (instance) onChangeProvider(instance.provider, instance.id)
+                    }}
+                    disabled={switchingProvider}
+                    className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed opacity-60' : 'cursor-pointer')}
+                  >
+                    {providerInstances.map((instance) => (
+                      <NativeSelectOption key={instance.id} value={instance.id}>
+                        {instance.displayName}
+                      </NativeSelectOption>
+                    ))}
+                    <NativeSelectOption value="all">All providers</NativeSelectOption>
+                  </NativeSelect>
+                </div>
+                <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <Input
+                    ref={searchInputRef}
+                    value={searchText}
+                    onChange={(e) => setSearchText(e.target.value)}
+                    placeholder="Search title, tags, path, prompt…"
+                    className="av-hover-control"
+                    style={{
+                      flex: 1,
+                      height: 30,
+                      borderRadius: 6,
+                      border: '1px solid var(--border)',
+                      background: 'var(--surface-2)',
+                      color: 'var(--text)',
+                      padding: '0 10px',
+                      fontSize: 12,
+                      outline: 'none',
+                    }}
+                  />
+                  {(searchText || activeTag) && (
+                    <Button
+                      onClick={() => {
+                        setSearchText('')
+                        setActiveTag(null)
+                      }}
+                      variant="outline"
+                      size="sm"
+                      className="av-hover-control"
+                      style={{
+                        height: 30,
+                        padding: '0 10px',
+                        borderRadius: 6,
+                        border: '1px solid var(--border)',
+                        background: 'var(--surface-2)',
+                        color: 'var(--text-3)',
+                        fontSize: 12,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Clear
+                    </Button>
+                  )}
+                </div>
+                {popularTags.length > 0 && (
+                  <div style={{ marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {popularTags.map(([tag, count]) => {
+                      const selected = activeTag?.toLowerCase() === tag.toLowerCase()
+                      return (
+                        <Button
+                          key={tag}
+                          onClick={() => setActiveTag((prev) => prev?.toLowerCase() === tag.toLowerCase() ? null : tag)}
+                          variant="outline"
+                          size="sm"
+                          className="av-hover-control"
+                          style={{
+                            height: 24,
+                            padding: '0 8px',
+                            borderRadius: 999,
+                            border: `1px solid ${selected ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
+                            background: selected ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
+                            color: selected ? 'var(--violet)' : 'var(--text-3)',
+                            fontFamily: "'IBM Plex Mono', monospace",
+                            fontSize: 10,
+                            letterSpacing: '0.04em',
+                            cursor: 'pointer',
+                          }}
+                          title={`${count} session${count === 1 ? '' : 's'}`}
+                        >
+                          #{tag} · {count}
+                        </Button>
+                      )
+                    })}
+                  </div>
+                )}
+                <div role="group" aria-label="Sort sessions" style={{ marginTop: 10, display: 'flex' }}>
+                  <Button
+                    onClick={() => setSortMode('project')}
+                    variant="outline"
+                    size="sm"
+                    aria-pressed={sortMode === 'project'}
+                    style={segmentStyle(sortMode === 'project', 'first')}
+                    title="Group sessions by project"
+                  >
+                    By project
+                  </Button>
+                  <Button
+                    onClick={() => setSortMode('time')}
+                    variant="outline"
+                    size="sm"
+                    aria-pressed={sortMode === 'time'}
+                    style={segmentStyle(sortMode === 'time', 'last')}
+                    title="Sort sessions by most recent activity"
+                  >
+                    By time
+                  </Button>
+                </div>
+                <div role="group" aria-label="Session scope" style={{ marginTop: 6, display: 'flex' }}>
+                  <Button
+                    onClick={() => onChangeScope('all')}
+                    variant="outline"
+                    size="sm"
+                    aria-pressed={scopeMode === 'all'}
+                    style={segmentStyle(scopeMode === 'all', 'first')}
+                  >
+                    All projects
+                  </Button>
+                  <Button
+                    onClick={() => canScopeToProject && onChangeScope('project')}
+                    disabled={!canScopeToProject}
+                    title={canScopeToProject ? 'Show only sessions for the current project' : 'Select a session or project first'}
+                    variant="outline"
+                    size="sm"
+                    aria-pressed={scopeMode === 'project'}
+                    style={segmentStyle(scopeMode === 'project', 'last', canScopeToProject)}
+                  >
+                    This project
+                  </Button>
+                </div>
+                {scopeMode === 'project' && scopeProjectName && (
+                  <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span
+                      style={{
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 11,
+                        color: 'var(--text-3)',
+                        letterSpacing: '0.04em',
+                      }}
+                    >
+                      {scopeProjectName}
+                    </span>
+                    <Label
+                      style={{
+                        marginLeft: 'auto',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 11,
+                        color: 'var(--text-3)',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <Checkbox
+                        checked={includeWorktrees}
+                        onCheckedChange={(checked) => onToggleWorktrees(checked === true)}
+                        style={{
+                          borderColor: 'var(--border)',
+                          background: includeWorktrees ? 'var(--violet)' : 'var(--surface-2)',
+                          color: includeWorktrees ? 'var(--bg)' : 'var(--text)',
+                        }}
+                      />
+                      worktrees
+                    </Label>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
         )}
+      </SidebarHeader>
+      {!collapsed && (
+        <SidebarContent>
+          {error && (
+            <div
+              style={{
+                padding: '12px 18px',
+                fontSize: 12,
+                color: 'var(--red)',
+                borderBottom: '1px solid var(--border)',
+                fontFamily: "'IBM Plex Mono', monospace",
+              }}
+            >
+              {error}
+            </div>
+          )}
 
-        {!loading && !error && groups.map(({ projectDir, projectName, sessions: groupSessions }) => (
-          <ProjectGroup
-            key={projectDir}
-            name={projectName}
-            projectKey={projectDir}
-            sessions={groupSessions}
-            selectedId={selectedId}
-            selectedProject={selectedProject}
-            onSelect={onSelect}
-            onSelectProject={onSelectProject}
-            onRename={onRename}
-            onTag={onTag}
-          />
-        ))}
-        {!loading && !error && filteredSessions.length === 0 && (
+            {!loading && !error && sortMode === 'project' && groups.map(({ projectDir, projectName, sessions: groupSessions }) => (
+              <ProjectGroup
+                key={projectDir}
+                name={projectName}
+                projectKey={projectDir}
+                sessions={groupSessions}
+                selectedId={selectedId}
+                selectedProject={selectedProject}
+                hydrated={hydrated}
+                scrollToSessionKey={scrollToSessionRequest?.sessionKey ?? null}
+                childrenByParentId={childrenByParentId}
+                onSelect={onSelect}
+                onSelectProject={onSelectProject}
+                onRename={onRename}
+                onTag={onTag}
+              />
+            ))}
+            {!loading && !error && sortMode === 'time' && timeEntries.map((entry) => {
+              if (entry.type === 'header') {
+                const isProjectSelected = sameProjectPath(selectedProject, entry.projectDir)
+                return (
+                  <div
+                    key={entry.key}
+                    onClick={() => onSelectProject(entry.projectDir, entry.projectName, entry.projectSessions)}
+                    className={`av-project-header ${isProjectSelected ? 'av-selected' : ''}`}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 7,
+                      padding: '8px 14px 8px 16px',
+                      userSelect: 'none',
+                      borderBottom: '1px solid var(--border)',
+                    }}
+                  >
+                    <span
+                      className="av-project-name"
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 600,
+                        letterSpacing: '0.01em',
+                        flex: 1,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {entry.projectName}
+                    </span>
+                    <span
+                      style={{
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 11,
+                        color: isProjectSelected ? 'var(--violet)' : 'var(--text-3)',
+                        background: isProjectSelected ? 'rgba(139,128,240,0.12)' : 'var(--surface-3)',
+                        border: `1px solid ${isProjectSelected ? 'rgba(139,128,240,0.3)' : 'var(--border)'}`,
+                        borderRadius: 3,
+                        padding: '1px 6px',
+                        flexShrink: 0,
+                      }}
+                    >
+                      {entry.count}
+                    </span>
+                  </div>
+                )
+              }
+              return (
+                <SessionRow
+                  key={entry.key}
+                  session={entry.session}
+                  selected={sessionTabKey(entry.session) === selectedId}
+                  hydrated={hydrated}
+                  onSelect={onSelect}
+                  onRename={onRename}
+                  onTag={onTag}
+                />
+              )
+            })}
+          {!loading && !error && filteredSessions.length === 0 && (
+            <div
+              style={{
+                padding: '18px',
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 11,
+                color: 'var(--text-3)',
+                lineHeight: 1.6,
+              }}
+            >
+              No sessions match the current search/filter.
+            </div>
+          )}
+        </SidebarContent>
+      )}
+      {!collapsed && (
+        <SidebarFooter>
           <div
             style={{
-              padding: '18px',
+              padding: '12px 14px 14px',
+              borderTop: '1px solid var(--border)',
               fontFamily: "'IBM Plex Mono', monospace",
               fontSize: 11,
               color: 'var(--text-3)',
-              lineHeight: 1.6,
+              letterSpacing: '0.03em',
             }}
           >
-            No sessions match the current search/filter.
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  background: 'var(--green)',
+                  flexShrink: 0,
+                  animation: 'live-pulse 2.5s ease-in-out infinite',
+                  display: 'inline-block',
+                }}
+              />
+              <span>{summaryText}</span>
+            </div>
           </div>
-        )}
-      </div>
+        </SidebarFooter>
+      )}
     </div>
+    </ShowProviderContext.Provider>
   )
 }
+
+const SessionList = memo(SessionListInner)
+export default SessionList

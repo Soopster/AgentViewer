@@ -1,0 +1,1 @@
+Both give the same correct answer. The new-skill response explicitly cites reading references/protocol-and-hosts.md to answer the capability-surface and client-compatibility questions -- confirming the split structure successfully routes an agent to the right reference file for a situational question instead of requiring the full protocol section to be read on every turn.

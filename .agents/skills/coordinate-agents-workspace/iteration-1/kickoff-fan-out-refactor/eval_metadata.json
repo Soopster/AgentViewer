@@ -1,0 +1,12 @@
+{
+  "eval_id": 0,
+  "eval_name": "kickoff-fan-out-refactor",
+  "prompt": "I want to coordinate 3 agents (Claude, Codex, and OpenCode) to fan out a refactor across independent files in this repo, then have one of them integrate and finalize when everyone's done. Walk me through exactly what you'd do first as the lead -- which coord_* tools you'd call, in what order, with what key arguments -- before any teammate starts editing.",
+  "assertions": [
+    "Plan calls coord_create_run (or coord_status/coord_list_runs first, then coord_create_run) before creating any tasks",
+    "Plan creates a complete task graph -- at least 2 independent teammate lanes plus 1 dependent lead/integration task -- via coord_create_task before starting or joining teammate workers",
+    "Plan explicitly says the lead must NOT claim an umbrella task covering the teammates' work",
+    "Plan calls coord_status to verify the board/roster before considering kickoff complete",
+    "Plan does not fabricate tool names or arguments not present in the skill (no hallucinated coord_* tools)"
+  ]
+}

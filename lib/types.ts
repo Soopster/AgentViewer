@@ -5,6 +5,8 @@ export type ToolResultBlock = {
   tool_use_id: string
   content: string | ContentBlock[]
   is_error?: boolean
+  /** Claude SDK sidecar metadata classifying denied/interrupted/cancelled results. */
+  tool_result_meta?: Record<string, unknown>
 }
 export type ThinkingBlock = { type: 'thinking'; thinking: string; signature?: string }
 export type ImageBlock = {
@@ -37,33 +39,99 @@ export type ApiMessage = {
     cache_read_input_tokens?: number | null
     cache_creation_input_tokens?: number | null
   }
+  /** Claude SDK envelope metadata retained for transcript diagnostics. */
+  aborted?: boolean
+  subagent_type?: string
+  subagent_retry?: Record<string, unknown>
 }
 
-export type AgentProvider = 'claude' | 'codex' | 'opencode' | 'copilot'
+export type SystemMessagePayload = {
+  type: 'system'
+  subtype: string
+  content?: string
+  level?: string
+  [key: string]: unknown
+}
+
+export type AgentProvider = 'claude' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'lmstudio' | 'claude-acp' | 'codex-acp'
 export type ProviderSelection = AgentProvider | 'all'
+export type ProviderInstanceId = string
+
+export type ProviderInstanceSummary = {
+  id: ProviderInstanceId
+  provider: AgentProvider
+  displayName: string
+  accentColor?: string
+  enabled: boolean
+  isDefault: boolean
+  configured: boolean
+}
+
+export type SessionInboxState = {
+  pinnedAt?: number
+  pinOrder?: number
+  settledAt?: number
+  snoozedUntil?: number
+  /** The pull request this session's work became. Recorded so the session can
+   *  settle itself when that PR merges instead of sitting in the active list
+   *  long after the work landed. */
+  linkedPr?: LinkedPullRequest
+}
+
+export type LinkedPullRequest = {
+  /** `owner/repo`, as `gh` reports it. */
+  repo: string
+  number: number
+  url: string
+  /** Working directory to resolve the PR from — `gh` is repo-scoped and a
+   *  session's cwd is the only thing that identifies which checkout it means. */
+  cwd?: string
+  /** Last state observed from the host, uppercase as `gh` reports it
+   *  (OPEN / CLOSED / MERGED). Absent until the first refresh. */
+  state?: string
+  checkedAt?: number
+}
+export type ReasoningEffortLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh'
 
 export type SessionCapabilities = {
   messageFork: boolean
   resumeAtMessage: boolean
   fileRewind: boolean
   rollback: boolean
+  deleteSession: boolean
+  shareSession: boolean
+  unshareSession: boolean
+  summarizeSession: boolean
+  unrevertSession: boolean
+  respondToPermission: boolean
 }
 
 /**
  * A single entry returned by getSessionMessages().
- * The actual message (role + content) is nested under the `message` field —
- * not at the top level. Only 'user' and 'assistant' types are stored here.
+ * The actual provider payload is nested under the `message` field rather than
+ * living at the top level. Claude history can also include `system` entries.
  */
 export type SessionMessage = {
-  type: 'user' | 'assistant'
+  type: 'user' | 'assistant' | 'system'
   uuid: string
   session_id: string
-  message: ApiMessage
+  message: ApiMessage | SystemMessagePayload
   parent_tool_use_id: null
   timestamp?: string
-  origin?: { kind: string }
+  origin?: { kind: string; subkind?: string }
   provider?: AgentProvider
+  /** Configured provider runtime that owns this message/session. */
+  providerInstanceId?: ProviderInstanceId
   turnId?: string
+  taskDescription?: string
+  requestId?: string
+  /** Provider-native durable message/entry id for actions such as message fork. */
+  providerMessageId?: string
+  /**
+   * True when Agent Viewer is surfacing an in-memory live overlay before the
+   * provider has flushed the message into its durable session history.
+   */
+  ephemeral?: boolean
 }
 
 export type Session = {
@@ -76,8 +144,40 @@ export type Session = {
   tag?: string | null
   createdAt?: string | number
   provider?: AgentProvider
+  /** Configured provider runtime; defaults to the provider name for legacy sessions. */
+  providerInstanceId?: ProviderInstanceId
+  providerDisplayName?: string
+  providerAccentColor?: string
+  inbox?: SessionInboxState
   capabilities?: SessionCapabilities
+  /** Provider-native pinned state when the session backend exposes it. */
+  isPinned?: boolean
+  /**
+   * When this session was spawned as a subagent by another session, the id of
+   * the parent. Providers with durable child sessions populate this from their
+   * native hierarchy (for example OpenCode `parentID` and Codex
+   * `parentThreadId`).
+   */
+  parentSessionId?: string
+  /**
+   * Client-only flag set when the session was just created via /api/sessions/new
+   * and the underlying provider has not materialized the transcript yet. The first
+   * send carries isPendingSession so provider backends can skip resume/read paths
+   * that are unavailable before the first user message.
+   */
+  isPending?: boolean
   [key: string]: unknown
+}
+
+/** Lightweight per-subagent summary for sidebar nesting — no message content. */
+export type SubagentSummary = {
+  agentId: string
+  taskDescription?: string
+  messageCount: number
+  usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; totalTokens?: number }
+  startedAt?: string
+  endedAt?: string
+  provider: AgentProvider
 }
 
 export type SendState = 'idle' | 'sending' | 'error'
@@ -95,7 +195,52 @@ export type SessionModelInfo = {
   displayName: string
   description: string
   supportsEffort?: boolean
-  supportedEffortLevels?: ('low' | 'medium' | 'high' | 'max' | 'xhigh')[]
+  supportedEffortLevels?: ReasoningEffortLevel[]
+  supportsLongContext?: boolean
+}
+
+export type SessionComposerAgentOption = {
+  value: string
+  label: string
+  description?: string
+  mode?: string
+  native?: boolean
+}
+
+export type SessionComposerModeOption = {
+  value: string
+  label: string
+  description?: string
+}
+
+export type SessionComposerOptions = {
+  agents?: SessionComposerAgentOption[]
+  mentionAgents?: SessionComposerAgentOption[]
+  currentAgent?: string | null
+  modes?: SessionComposerModeOption[]
+  currentMode?: string | null
+  permissionModes?: SessionComposerModeOption[]
+  currentPermissionMode?: string | null
+}
+
+export type SendAttachment = {
+  id?: string
+  type: 'file' | 'directory' | 'selection' | 'image' | 'mention' | 'skill' | 'blob' | 'agent' | 'extension_context'
+  path?: string
+  filePath?: string
+  displayName?: string
+  text?: string
+  data?: string
+  mimeType?: string
+  extensionId?: string
+  canvasId?: string
+  instanceId?: string
+  capturedAt?: string
+  payload?: Record<string, unknown>
+  selection?: {
+    start: { line: number; character: number }
+    end: { line: number; character: number }
+  }
 }
 
 export type SessionDiagnosticSection = {
@@ -115,6 +260,17 @@ export type SessionInfo = {
   tag?: string
   createdAt?: number
   provider: AgentProvider
+  providerInstanceId?: ProviderInstanceId
+  providerDisplayName?: string
+  providerAccentColor?: string
   capabilities: SessionCapabilities
+  isPinned?: boolean
   currentModel?: string
+  parentSessionId?: string
+}
+
+export type RunningSessionRef = {
+  sessionId: string
+  provider: AgentProvider
+  providerInstanceId?: ProviderInstanceId
 }

@@ -1,12 +1,39 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo, startTransition, ViewTransition } from 'react'
+import dynamic from 'next/dynamic'
 import SessionList from '@/components/SessionList'
 import MessageView from '@/components/MessageView'
 import { CodeThemeProvider } from '@/components/CodeThemeContext'
+import { Sidebar, SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { LayoutDashboard, MessageSquare, UsersRound } from 'lucide-react'
 import { isProviderSelection } from '@/lib/provider'
-import { sameProjectPath } from '@/lib/projectPaths'
-import type { AgentProvider, ProviderSelection, Session, SessionMessage } from '@/lib/types'
+import { pathBasename, sameProjectPath } from '@/lib/projectPaths'
+import { compactStableFingerprint } from '@/lib/compactFingerprint'
+import { startClientPerf, measureAsync } from '@/lib/clientPerf'
+import { readJsonResponse } from '@/lib/httpResponse'
+import { mergeOrderedSessionMessageWindow } from '@/lib/sessionMessageWindow'
+import type { AgentProvider, ProviderInstanceSummary, ProviderSelection, Session, SessionMessage } from '@/lib/types'
+import type { Todo as OpenCodeTodo } from '@opencode-ai/sdk'
+import type { CodexPlanStep } from '@/lib/taskRegistry'
+import { useRightPanel } from '@/components/useRightPanel'
+import { surfaceKindLabel, type RightPanelSurface, type RightPanelSurfaceKind } from '@/lib/rightPanel'
+
+const CommandPalette = dynamic(() => import('@/components/CommandPalette'), { ssr: false })
+const GitPopover = dynamic(() => import('@/components/GitPopover'), { ssr: false })
+const PullRequestView = dynamic(() => import('@/components/PullRequestView'), { ssr: false })
+const FileViewer = dynamic(() => import('@/components/FileViewer'), { ssr: false })
+const BookmarksPanel = dynamic(() => import('@/components/BookmarksPanel'), { ssr: false })
+const ProvenancePopover = dynamic(() => import('@/components/ProvenancePopover'), { ssr: false })
+const RemoteAccessPopover = dynamic(() => import('@/components/RemoteAccessPopover'), { ssr: false })
+const RunDashboard = dynamic(() => import('@/components/RunDashboard'), { ssr: false })
+const AgentTeamCoordinator = dynamic(() => import('@/components/AgentTeamCoordinator'), { ssr: false })
+const CrossSessionMessaging = dynamic(() => import('@/app/agents/page'), { ssr: false })
+const PiActivityPopover = dynamic(() => import('@/components/PiActivityPopover'), { ssr: false })
+const RightPanel = dynamic(() => import('@/components/RightPanel'), { ssr: false })
+const BrowserSurface = dynamic(() => import('@/components/BrowserSurface'), { ssr: false })
+const TerminalView = dynamic(() => import('@/components/TerminalView'), { ssr: false })
 
 type SessionScopeMode = 'all' | 'project'
 type ProjectSelection = {
@@ -15,12 +42,90 @@ type ProjectSelection = {
   sessions: Session[]
 }
 
-const ALL_PROVIDERS: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot']
+type MessageTarget = {
+  messageId: string
+  requestId: number
+}
 
-function withProviderQuery(path: string, provider?: AgentProvider | 'all'): string {
-  if (!provider) return path
+type SessionListScrollRequest = {
+  sessionKey: string
+  requestId: number
+}
+
+type ComposerInsertRequest = {
+  requestId: number
+  text: string
+}
+
+type SessionPlan = {
+  plan: CodexPlanStep[]
+  explanation: string | null
+}
+
+type ProjectMessageBatch = {
+  key: string
+  sessionId: string
+  provider?: AgentProvider
+  offset: number
+  messages: SessionMessage[]
+}
+
+const MESSAGE_POLL_BACKFILL = 20
+const MESSAGE_STREAM_LIMIT = 200 + MESSAGE_POLL_BACKFILL
+// Ceiling on the retained client transcript for a single live session. The
+// streaming merge path otherwise grows without bound (only the project feed is
+// trimmed), and every derivation off `messages` (threaded, row layout) scales
+// with it. Set above the 2000-message initial tail window so normal sessions
+// never trim; only multi-thousand-turn live sessions hit it, and they keep a
+// 3000-message rolling tail (older history stays reachable via the deep-link
+// full-transcript path). Skipped entirely for deep-linked full-transcript
+// loads (see fullTranscriptLoadedRef).
+const SINGLE_SESSION_MESSAGE_MEMORY_LIMIT = 3000
+const MESSAGE_POLL_FALLBACK_MS = 2000
+const MESSAGE_STREAM_RETRY_INITIAL_MS = 2000
+const MESSAGE_STREAM_RETRY_MAX_MS = 30000
+// Project-feed memory caps. The view is recency-skewed and renders a virtual
+// list, so dropping the cross-session ceiling to 2 500 (down from 5 000) plus
+// 200 (from 300) per session removes ~50% of the SessionMessage objects held
+// in browser memory for active dashboards without changing what's on-screen.
+const PROJECT_MESSAGE_TOTAL_MEMORY_LIMIT = 2500
+const PROJECT_MESSAGE_PER_SESSION_MEMORY_LIMIT = 200
+const RUN_DASHBOARD_KEY = '__run-dashboard__'
+type DashboardTab = 'sessions' | 'agents' | 'messaging'
+
+type MessageStreamPayload = {
+  sessionId?: string
+  provider?: AgentProvider
+  offset?: number
+  total?: number
+  messages?: SessionMessage[]
+  replace?: boolean
+  externalWriter?: boolean
+}
+
+function numericOffset(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : fallback
+}
+
+function withProviderQuery(path: string, provider?: AgentProvider | 'all', providerInstanceId?: string): string {
+  if (!provider && !providerInstanceId) return path
+  const params = new URLSearchParams()
+  if (provider) params.set('provider', provider)
+  if (providerInstanceId && provider !== 'all') params.set('providerInstanceId', providerInstanceId)
   const separator = path.includes('?') ? '&' : '?'
-  return `${path}${separator}provider=${provider}`
+  return `${path}${separator}${params.toString()}`
+}
+
+function messageEventsPath(session: Session, offset: number): string {
+  const params = new URLSearchParams()
+  params.set('offset', String(offset))
+  params.set('limit', String(MESSAGE_STREAM_LIMIT))
+  params.set('backfill', String(MESSAGE_POLL_BACKFILL))
+  if (session.provider) params.set('provider', session.provider)
+  if (session.providerInstanceId) params.set('providerInstanceId', session.providerInstanceId)
+  return `/api/sessions/${encodeURIComponent(session.sessionId)}/messages/events?${params.toString()}`
 }
 
 function messageTimestampMs(message: SessionMessage): number {
@@ -32,143 +137,735 @@ function messageTimestampMs(message: SessionMessage): number {
 }
 
 function sessionMessageKey(message: SessionMessage): string {
-  return `${message.provider ?? 'claude'}:${message.uuid}`
+  return `${message.providerInstanceId ?? message.provider ?? 'claude'}:${message.uuid}`
 }
 
-function projectSessionKey(session: Pick<Session, 'sessionId' | 'provider'>): string {
-  return `${session.provider ?? 'claude'}:${session.sessionId}`
+function projectMessageSessionKey(message: SessionMessage): string {
+  return `${message.providerInstanceId ?? message.provider ?? 'claude'}:${message.session_id}`
+}
+
+function projectSessionKey(session: Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'>): string {
+  return `${session.providerInstanceId ?? session.provider ?? 'claude'}:${session.sessionId}`
+}
+
+function dedupeSessionsByKey(sessions: Session[]): Session[] {
+  const seen = new Set<string>()
+  const result: Session[] = []
+  for (const session of sessions) {
+    const key = projectSessionKey(session)
+    if (seen.has(key)) continue
+    seen.add(key)
+    result.push(session)
+  }
+  return result
+}
+
+function sessionsFingerprint(sessions: Session[]): string {
+  return sessions.map((s) => `${s.provider ?? 'claude'}:${s.sessionId}:${s.lastModified ?? s.createdAt ?? ''}`).join('|')
+}
+
+// Per-session fingerprint covering every field that affects how SessionRow
+// renders. When the polled session has the same fingerprint as the one we
+// already have, we reuse the prior object so React.memo on SessionRow can
+// short-circuit — otherwise every 5s sessions poll replaces every Session
+// reference and forces every row to re-render even when nothing visible
+// changed.
+function sessionRenderFingerprint(s: Session): string {
+  return [
+    s.sessionId,
+    s.provider ?? '',
+    s.customTitle ?? '',
+    s.summary ?? '',
+    s.firstPrompt ?? '',
+    s.cwd ?? '',
+    s.lastModified ?? '',
+    s.createdAt ?? '',
+    s.tag ?? '',
+    s.parentSessionId ?? '',
+    s.isPending ? '1' : '0',
+  ].join('|')
+}
+
+function stabilizeSessionIdentities(prev: Session[], next: Session[]): Session[] {
+  if (prev.length === 0) return next
+  const priorByKey = new Map<string, Session>()
+  for (const s of prev) priorByKey.set(`${s.provider ?? 'claude'}:${s.sessionId}`, s)
+  let reusedAll = prev.length === next.length
+  const stabilized = next.map((session) => {
+    const prior = priorByKey.get(`${session.provider ?? 'claude'}:${session.sessionId}`)
+    if (!prior) {
+      reusedAll = false
+      return session
+    }
+    if (sessionRenderFingerprint(prior) === sessionRenderFingerprint(session)) return prior
+    reusedAll = false
+    return session
+  })
+  return reusedAll ? prev : stabilized
+}
+
+// SessionMessage objects are immutable once created (mappers build fresh
+// objects on every change; mergeMessages returns the SAME object when
+// unchanged), so a given reference always hashes to the same signature.
+// Cache by identity so stable existing-side messages aren't deep-hashed on
+// every poll/SSE tick — the bulk of per-tick main-thread CPU during long
+// streaming replies into a ~220-message window. WeakMap self-collects when a
+// session switch drops the references.
+const apiSignatureCache = new WeakMap<SessionMessage, string>()
+function apiMessageSignature(message: SessionMessage): string {
+  const cached = apiSignatureCache.get(message)
+  if (cached !== undefined) return cached
+  const originKind = message.origin?.kind ?? ''
+  const turnId = message.turnId ?? ''
+  const timestamp = message.timestamp ?? ''
+  const payload = compactStableFingerprint(message.message)
+  const signature = [message.type, timestamp, originKind, turnId, payload].join('|')
+  apiSignatureCache.set(message, signature)
+  return signature
+}
+
+function mergeSortedMessages(existing: SessionMessage[], incoming: SessionMessage[]): SessionMessage[] {
+  const merged: SessionMessage[] = []
+  let existingIndex = 0
+  let incomingIndex = 0
+
+  while (existingIndex < existing.length && incomingIndex < incoming.length) {
+    if (messageTimestampMs(existing[existingIndex]) <= messageTimestampMs(incoming[incomingIndex])) {
+      merged.push(existing[existingIndex])
+      existingIndex += 1
+    } else {
+      merged.push(incoming[incomingIndex])
+      incomingIndex += 1
+    }
+  }
+
+  if (existingIndex < existing.length) merged.push(...existing.slice(existingIndex))
+  if (incomingIndex < incoming.length) merged.push(...incoming.slice(incomingIndex))
+  return merged
 }
 
 function mergeMessages(existing: SessionMessage[], incoming: SessionMessage[]): SessionMessage[] {
   if (incoming.length === 0) return existing
-  const deduped = new Map<string, SessionMessage>()
-  for (const message of existing) deduped.set(sessionMessageKey(message), message)
-  for (const message of incoming) deduped.set(sessionMessageKey(message), message)
-  return [...deduped.values()].sort((a, b) => messageTimestampMs(a) - messageTimestampMs(b))
+
+  const latestIncomingByKey = new Map<string, SessionMessage>()
+  for (const message of incoming) latestIncomingByKey.set(sessionMessageKey(message), message)
+
+  let changed = false
+  const appended: SessionMessage[] = []
+  const matchedKeys = new Set<string>()
+
+  // Most stream/poll payloads are an unchanged backfill window. Avoid mapping
+  // the entire retained transcript into a throwaway array on those ticks;
+  // allocate a replacement array lazily only after the first real update.
+  let mergedExisting: SessionMessage[] | null = null
+  for (let index = 0; index < existing.length; index += 1) {
+    const message = existing[index]
+    const key = sessionMessageKey(message)
+    const replacement = latestIncomingByKey.get(key)
+    let nextMessage = message
+    if (replacement) {
+      matchedKeys.add(key)
+      if (apiMessageSignature(message) !== apiMessageSignature(replacement)) {
+        changed = true
+        nextMessage = replacement
+        if (!mergedExisting) mergedExisting = existing.slice(0, index)
+      }
+    }
+    if (mergedExisting) mergedExisting.push(nextMessage)
+  }
+
+  for (const [key, message] of latestIncomingByKey) {
+    if (matchedKeys.has(key)) continue
+    appended.push(message)
+    changed = true
+  }
+
+  if (!changed) return existing
+  if (appended.length === 0) return mergedExisting ?? existing
+
+  const additions = appended.sort((a, b) => messageTimestampMs(a) - messageTimestampMs(b))
+  return mergeSortedMessages(mergedExisting ?? existing, additions)
+}
+
+function trimProjectMessagesForMemory(messages: SessionMessage[]): SessionMessage[] {
+  if (messages.length <= PROJECT_MESSAGE_TOTAL_MEMORY_LIMIT) {
+    const counts = new Map<string, number>()
+    let exceedsPerSessionLimit = false
+    for (const message of messages) {
+      const key = projectMessageSessionKey(message)
+      const next = (counts.get(key) ?? 0) + 1
+      if (next > PROJECT_MESSAGE_PER_SESSION_MEMORY_LIMIT) {
+        exceedsPerSessionLimit = true
+        break
+      }
+      counts.set(key, next)
+    }
+    if (!exceedsPerSessionLimit) return messages
+  }
+
+  const kept: SessionMessage[] = []
+  const counts = new Map<string, number>()
+  for (let i = messages.length - 1; i >= 0 && kept.length < PROJECT_MESSAGE_TOTAL_MEMORY_LIMIT; i -= 1) {
+    const message = messages[i]
+    const key = projectMessageSessionKey(message)
+    const count = counts.get(key) ?? 0
+    if (count >= PROJECT_MESSAGE_PER_SESSION_MEMORY_LIMIT) continue
+    counts.set(key, count + 1)
+    kept.push(message)
+  }
+  kept.reverse()
+  return kept
+}
+
+function useDocumentVisible(): boolean {
+  const [visible, setVisible] = useState(() =>
+    typeof document === 'undefined' ? true : document.visibilityState !== 'hidden',
+  )
+  useEffect(() => {
+    const onChange = () => setVisible(document.visibilityState !== 'hidden')
+    document.addEventListener('visibilitychange', onChange)
+    return () => document.removeEventListener('visibilitychange', onChange)
+  }, [])
+  return visible
 }
 
 export default function Home() {
+  // The server and the browser must hydrate the same tree. Restore this
+  // browser-only preference after hydration instead of branching in the state
+  // initializer (which rendered different pane structures on server/client).
+  const [messagePaneCollapsed, setMessagePaneCollapsed] = useState(false)
+  const [messageViewMaximized, setMessageViewMaximized] = useState(false)
+  const [messageViewFullscreen, setMessageViewFullscreen] = useState(false)
+  const messageViewFullscreenRef = useRef(false)
   const [sessions, setSessions] = useState<Session[]>([])
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [openTabSessions, setOpenTabSessions] = useState<Session[]>([])
+  const [selectedTabKey, setSelectedTabKey] = useState<string | null>(null)
   const [selectedProject, setSelectedProject] = useState<ProjectSelection | null>(null)
+  const [targetMessage, setTargetMessage] = useState<MessageTarget | null>(null)
+  const [sessionListScrollRequest, setSessionListScrollRequest] = useState<SessionListScrollRequest | null>(null)
   const [messages, setMessages] = useState<SessionMessage[]>([])
+  // OpenCode `todo.updated` events arrive via the messages SSE stream and
+  // are surfaced as a pinned card in MessageView. Keyed by sessionId so a
+  // tab swap doesn't show another session's todos.
+  const [sessionTodos, setSessionTodos] = useState<OpenCodeTodo[]>([])
+  const [todosForSessionId, setTodosForSessionId] = useState<string | null>(null)
+  // Codex `turn/plan/updated` mirrors OpenCode todos — structured plan
+  // steps surface in the Tasks panel.
+  const [sessionPlan, setSessionPlan] = useState<SessionPlan>({ plan: [], explanation: null })
+  const [planForSessionId, setPlanForSessionId] = useState<string | null>(null)
+  // Codex only: another Codex client holds the rollout writer lock, so the
+  // transcript below is a stale cached snapshot until that turn finishes.
+  const [codexExternalWriter, setCodexExternalWriter] = useState(false)
   const [loadingSessions, setLoadingSessions] = useState(true)
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [sessionsError, setSessionsError] = useState<string | null>(null)
   const [provider, setProvider] = useState<ProviderSelection>('claude')
+  const [providerInstanceId, setProviderInstanceId] = useState<string>('claude')
+  const [providerInstances, setProviderInstances] = useState<ProviderInstanceSummary[]>([])
   const [switchingProvider, setSwitchingProvider] = useState(false)
   const [sessionScope, setSessionScope] = useState<SessionScopeMode>('all')
   const [includeWorktrees, setIncludeWorktrees] = useState(true)
-  // Tracks how many messages we've already loaded so polling can fetch only new ones
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
+  const [gitPopoverOpen, setGitPopoverOpen] = useState(false)
+  const [pullRequestViewOpen, setPullRequestViewOpen] = useState(false)
+  const [fileViewerOpen, setFileViewerOpen] = useState(false)
+  const [composerInsertRequest, setComposerInsertRequest] = useState<ComposerInsertRequest | null>(null)
+  const composerInsertRequestRef = useRef(0)
+  const [bookmarksPanelOpen, setBookmarksPanelOpen] = useState(false)
+  const [provenanceOpen, setProvenanceOpen] = useState(false)
+  const [remoteAccessOpen, setRemoteAccessOpen] = useState(false)
+  const [dashboardTab, setDashboardTab] = useState<DashboardTab>('sessions')
+  const rightPanel = useRightPanel()
+  const [taskPanelOpenRequest, setTaskPanelOpenRequest] = useState(0)
+  const [promptLibraryOpenRequest, setPromptLibraryOpenRequest] = useState(0)
+  const [channelBridgeOpenRequest, setChannelBridgeOpenRequest] = useState(0)
+  const [channelBridgeRouteToggleRequest, setChannelBridgeRouteToggleRequest] = useState(0)
+  const [channelBridgeRouting, setChannelBridgeRouting] = useState(false)
+  const [ideBridgeOpenRequest, setIdeBridgeOpenRequest] = useState(0)
+  const [ideBridgeRouteToggleRequest, setIdeBridgeRouteToggleRequest] = useState(0)
+  const [ideBridgeRouting, setIdeBridgeRouting] = useState(false)
+  const [dashboardContextSession, setDashboardContextSession] = useState<Session | null>(null)
+  const documentVisible = useDocumentVisible()
+  // Tracks the absolute transcript offset immediately after the latest loaded
+  // message window. This is not always messages.length because session loads
+  // use tail windows for long transcripts.
   const msgCountRef = useRef(0)
-  const projectMessageCountsRef = useRef<Map<string, number>>(new Map())
+  // The uuid the client believes sits at the offset its next poll will ask
+  // from. Offsets are positional indexes into a transcript the server
+  // re-derives each read, so sending this lets the server detect that the
+  // transcript was rewritten underneath us and answer with a replace-tail
+  // instead of a window we would splice into the wrong place.
+  const pollCursorUuidRef = useRef<string | undefined>(undefined)
+  // True when the active transcript was loaded in full via the deep-link
+  // (all=1) path, so the head-trim below must NOT evict the anchored history.
+  const fullTranscriptLoadedRef = useRef(false)
+  const projectMessageCountsRef = useRef<Map<string, number> | null>(null)
   // Guards to prevent concurrent poll ticks from overlapping when a fetch takes > interval
   const pollInFlightRef = useRef(false)
   const projectPollInFlightRef = useRef(false)
-  const selectedSession = sessions.find((s) => s.sessionId === selectedId) ?? null
+  const sessionsFingerprintRef = useRef('')
+  const targetMessageRequestRef = useRef(0)
+  const sessionListScrollRequestRef = useRef(0)
+  // Cancels the previous session-switch fetch so a slow A response can't overwrite B's messages
+  const sessionLoadAbortRef = useRef<AbortController | null>(null)
+  const getProjectMessageCounts = useCallback(() => {
+    if (projectMessageCountsRef.current) return projectMessageCountsRef.current
+    const nextCounts = new Map<string, number>()
+    projectMessageCountsRef.current = nextCounts
+    return nextCounts
+  }, [])
+  // Memoize the selected session lookup so MessageView and effects that
+  // depend on it don't see a new object reference on every render of this
+  // page (which used to fire on every keystroke into the composer).
+  const selectedSession = useMemo(
+    () =>
+      selectedTabKey === RUN_DASHBOARD_KEY ? dashboardContextSession :
+      openTabSessions.find((s) => projectSessionKey(s) === selectedTabKey) ??
+      sessions.find((s) => projectSessionKey(s) === selectedTabKey) ??
+      null,
+    [dashboardContextSession, openTabSessions, sessions, selectedTabKey],
+  )
   const activeProjectDir = selectedProject?.dir ?? selectedSession?.cwd ?? null
-  const activeProjectName = selectedProject?.key ?? activeProjectDir?.split('/').pop() ?? null
+  const activeProjectName = selectedProject?.key ?? (pathBasename(activeProjectDir) || null)
+  const dashboardSelected = selectedTabKey === RUN_DASHBOARD_KEY && !selectedProject
+  const messageAreaKey = dashboardSelected ? RUN_DASHBOARD_KEY : selectedTabKey ?? (selectedProject ? `proj:${selectedProject.dir}` : '')
+  // Bundle the projectView prop so it only gets a new identity when one of
+  // its fields actually changes — otherwise <MessageView /> sees a new object
+  // on every parent render.
+  const projectViewProp = useMemo(
+    () => (selectedProject
+      ? {
+          key: selectedProject.key,
+          sessionCount: selectedProject.sessions.length,
+          providerMode: (provider === 'all' ? 'all' : 'current') as 'all' | 'current',
+        }
+      : undefined),
+    [provider, selectedProject],
+  )
+  const openCodeTodosForView = todosForSessionId === selectedSession?.sessionId ? sessionTodos : undefined
+  const codexPlanForView = planForSessionId === selectedSession?.sessionId && sessionPlan.plan.length > 0
+    ? sessionPlan
+    : undefined
+  const canUseChannelBridge = !selectedProject && !!selectedSession && (selectedSession.provider ?? 'claude') === 'claude'
+  const canUseIdeBridge = canUseChannelBridge
+  const canMaximizeMessageView = !dashboardSelected && !selectedProject && !!selectedSession
+  const isMessageViewMaximized = messageViewMaximized && canMaximizeMessageView
 
-  const fetchAllProviderProjectSessions = useCallback(async (dir: string) => {
-    const results = await Promise.all(
-      ALL_PROVIDERS.map(async (providerName) => {
-        const params = new URLSearchParams()
-        params.set('provider', providerName)
-        params.set('limit', '500')
-        params.set('includeWorktrees', String(includeWorktrees))
-        const response = await fetch(`/api/sessions?${params.toString()}`)
-        const data = await response.json()
-        if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`)
-        const loaded = (data.sessions ?? []) as Session[]
-        return loaded.filter((session) => sameProjectPath(dir, session.cwd))
-      })
-    )
+  const toggleMessagePane = useCallback(() => {
+    const next = !messagePaneCollapsed
+    setMessagePaneCollapsed(next)
+    try { window.localStorage.setItem('agentViewer:messagePaneCollapsed', next ? '1' : '0') } catch { /* ignore */ }
+  }, [messagePaneCollapsed])
 
-    const deduped = new Map<string, Session>()
-    for (const session of results.flat()) {
-      deduped.set(`${session.provider}:${session.sessionId}`, session)
+  const toggleMessageViewMaximized = useCallback(() => {
+    if (messageViewMaximized && document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => {})
     }
+    setMessageViewMaximized((current) => !current)
+    setMessagePaneCollapsed(false)
+  }, [messageViewMaximized])
 
-    return [...deduped.values()].sort((a, b) => {
-      const aTime = Number(a.lastModified ?? a.createdAt ?? 0)
-      const bTime = Number(b.lastModified ?? b.createdAt ?? 0)
-      return bTime - aTime
+  const enterMessageViewFullscreen = useCallback(() => {
+    if (!canMaximizeMessageView) return
+    setMessageViewMaximized(true)
+    setMessagePaneCollapsed(false)
+    if (document.fullscreenElement || !document.documentElement.requestFullscreen) return
+    void document.documentElement.requestFullscreen().catch(() => {
+      // Keep the app-level focus mode as a graceful fallback when the host
+      // browser or embedded webview declines native fullscreen.
     })
-  }, [includeWorktrees])
+  }, [canMaximizeMessageView])
 
-  const fetchProjectSessions = useCallback(async (dir: string, selection: ProviderSelection) => {
-    if (selection === 'all') {
-      return fetchAllProviderProjectSessions(dir)
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      const active = document.fullscreenElement !== null
+      if (!active && messageViewFullscreenRef.current) {
+        setMessageViewMaximized(false)
+      }
+      messageViewFullscreenRef.current = active
+      setMessageViewFullscreen(active)
     }
+    document.addEventListener('fullscreenchange', onFullscreenChange)
+    return () => document.removeEventListener('fullscreenchange', onFullscreenChange)
+  }, [])
 
+  useEffect(() => {
+    if (!isMessageViewMaximized) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      event.preventDefault()
+      setMessageViewMaximized(false)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [isMessageViewMaximized])
+
+  const openGitPopover = useCallback(() => {
+    if (!activeProjectDir) return
+    setGitPopoverOpen(true)
+  }, [activeProjectDir])
+
+  const openPullRequestView = useCallback(() => {
+    if (!activeProjectDir) return
+    setPullRequestViewOpen(true)
+  }, [activeProjectDir])
+
+  const openFileViewer = useCallback(() => {
+    if (!activeProjectDir) return
+    setFileViewerOpen(true)
+  }, [activeProjectDir])
+
+  const consumeComposerInsertRequest = useCallback((requestId: number) => {
+    setComposerInsertRequest((current) => current?.requestId === requestId ? null : current)
+  }, [])
+
+  const insertFilePathToComposer = useCallback((path: string) => {
+    composerInsertRequestRef.current += 1
+    setComposerInsertRequest({
+      requestId: composerInsertRequestRef.current,
+      text: `@${path} `,
+    })
+  }, [])
+
+  const openRunDashboard = useCallback(() => {
+    setDashboardContextSession(selectedSession)
+    setDashboardTab('sessions')
+    setSelectedProject(null)
+    setTargetMessage(null)
+    setSelectedTabKey(RUN_DASHBOARD_KEY)
+  }, [selectedSession])
+
+  const openCommandPalette = useCallback(() => setCommandPaletteOpen(true), [])
+  const openCoordinator = useCallback(() => {
+    setDashboardContextSession(selectedSession)
+    setDashboardTab('agents')
+    setSelectedProject(null)
+    setTargetMessage(null)
+    setSelectedTabKey(RUN_DASHBOARD_KEY)
+  }, [selectedSession])
+  const openCrossSessionMessaging = useCallback(() => {
+    setDashboardContextSession(selectedSession)
+    setDashboardTab('messaging')
+    setSelectedProject(null)
+    setTargetMessage(null)
+    setSelectedTabKey(RUN_DASHBOARD_KEY)
+  }, [selectedSession])
+  const openTaskPanel = useCallback(() => setTaskPanelOpenRequest((value) => value + 1), [])
+  const openPromptLibrary = useCallback(() => setPromptLibraryOpenRequest((value) => value + 1), [])
+  const openChannelBridge = useCallback(() => setChannelBridgeOpenRequest((value) => value + 1), [])
+  const toggleChannelBridgeRoute = useCallback(() => setChannelBridgeRouteToggleRequest((value) => value + 1), [])
+  const openIdeBridge = useCallback(() => setIdeBridgeOpenRequest((value) => value + 1), [])
+  const toggleIdeBridgeRoute = useCallback(() => setIdeBridgeRouteToggleRequest((value) => value + 1), [])
+
+  const fetchProjectSessions = useCallback(async (
+    dir: string,
+    selection: ProviderSelection,
+    selectedProviderInstanceId?: string,
+  ) => {
     const params = new URLSearchParams()
     params.set('dir', dir)
     params.set('includeWorktrees', String(includeWorktrees))
     params.set('limit', '500')
+    params.set('provider', selection)
+    if (selection !== 'all' && selectedProviderInstanceId) {
+      params.set('providerInstanceId', selectedProviderInstanceId)
+    }
     const response = await fetch(`/api/sessions?${params.toString()}`)
     const data = await response.json()
     if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`)
     return (data.sessions ?? []) as Session[]
-  }, [fetchAllProviderProjectSessions, includeWorktrees])
+  }, [includeWorktrees])
 
-  const fetchSessionMessages = useCallback(async (session: Session) => {
-    const response = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}/messages?limit=2000`, session.provider))
+  const fetchSessionMessages = useCallback(async (session: Session, targetMessageId?: string, signal?: AbortSignal) => {
+    const query = targetMessageId
+      ? 'limit=100000&all=1'
+      : 'limit=2000&tail=1'
+    const response = await fetch(
+      withProviderQuery(
+        `/api/sessions/${session.sessionId}/messages?${query}`,
+        session.provider,
+        session.providerInstanceId,
+      ),
+      { signal },
+    )
     const data = await response.json()
     if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`)
-    return (data.messages ?? []) as SessionMessage[]
+    return {
+      offset: numericOffset(data.offset),
+      total: numericOffset(data.total, numericOffset(data.offset) + ((data.messages ?? []) as SessionMessage[]).length),
+      messages: (data.messages ?? []) as SessionMessage[],
+      externalWriter: data.externalWriter === true,
+    }
   }, [])
 
-  const fetchSessions = useCallback(async () => {
-    if (sessionScope === 'project' && activeProjectDir) {
-      const loaded = await fetchProjectSessions(activeProjectDir, provider)
-      setSessions(loaded)
+  const loadSessionsForProvider = useCallback(async (
+    selection: ProviderSelection,
+    scopeMode: SessionScopeMode = sessionScope,
+    projectDir: string | null = activeProjectDir,
+    selectedProviderInstanceId: string = providerInstanceId,
+  ) => {
+    if (scopeMode === 'project' && projectDir) {
+      const loaded = await fetchProjectSessions(projectDir, selection, selectedProviderInstanceId)
+      const fp = sessionsFingerprint(loaded)
+      if (fp !== sessionsFingerprintRef.current) {
+        sessionsFingerprintRef.current = fp
+        startTransition(() => {
+          setSessions((prev) => stabilizeSessionIdentities(prev, loaded))
+        })
+      }
       return
     }
 
     const params = new URLSearchParams()
-    if (provider === 'all') {
-      params.set('provider', 'all')
-      params.set('limit', '500')
+    params.set('provider', selection)
+    if (selection !== 'all' && selectedProviderInstanceId) {
+      params.set('providerInstanceId', selectedProviderInstanceId)
     }
+    params.set('limit', '500')
     const suffix = params.toString() ? `?${params.toString()}` : ''
-    const r = await fetch(`/api/sessions${suffix}`)
-    const data = await r.json()
+    const data = await measureAsync('fetch.sessions', async () => {
+      const r = await fetch(`/api/sessions${suffix}`)
+      return readJsonResponse(r)
+    })
     if (data.error) throw new Error(data.error)
-    setSessions((data.sessions ?? []) as Session[])
-  }, [activeProjectDir, fetchProjectSessions, provider, sessionScope])
+    const loaded = (data.sessions ?? []) as Session[]
+    const fp = sessionsFingerprint(loaded)
+    if (fp !== sessionsFingerprintRef.current) {
+      sessionsFingerprintRef.current = fp
+      startTransition(() => {
+        setSessions((prev) => stabilizeSessionIdentities(prev, loaded))
+      })
+    }
+  }, [activeProjectDir, fetchProjectSessions, providerInstanceId, sessionScope])
+
+  const fetchSessions = useCallback(async () => {
+    await loadSessionsForProvider(provider)
+  }, [loadSessionsForProvider, provider])
+
+  const fetchProjectMessageBatches = useCallback(async (
+    dir: string,
+    selection: ProviderSelection,
+    offsets: Record<string, number>,
+  ): Promise<{ sessions: Session[]; batches: ProjectMessageBatch[] }> => {
+    const response = await fetch('/api/sessions/project/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        dir,
+        includeWorktrees,
+        provider: selection,
+        ...(selection !== 'all' ? { providerInstanceId } : {}),
+        offsets,
+        initialLimit: 300,
+        incrementalLimit: 200,
+      }),
+    })
+    const data = await readJsonResponse(response)
+    if (data.error) throw new Error(data.error)
+    return {
+      sessions: (data.sessions ?? []) as Session[],
+      batches: (data.batches ?? []) as ProjectMessageBatch[],
+    }
+  }, [includeWorktrees, providerInstanceId])
 
   const fetchProvider = useCallback(async () => {
     const r = await fetch('/api/provider')
-    const data = await r.json()
+    const data = await readJsonResponse(r)
     if (data.error) throw new Error(data.error)
-    setProvider(isProviderSelection(data.provider) ? data.provider : 'claude')
+    const nextProvider = isProviderSelection(data.provider) ? data.provider : 'claude'
+    const nextProviderInstanceId = nextProvider === 'all'
+      ? 'all'
+      : typeof data.providerInstanceId === 'string'
+        ? data.providerInstanceId
+        : nextProvider
+    setProvider(nextProvider)
+    setProviderInstanceId(nextProviderInstanceId)
+    setProviderInstances(Array.isArray(data.instances) ? data.instances : [])
+    return { provider: nextProvider, providerInstanceId: nextProviderInstanceId }
   }, [])
 
-  // Keep ref in sync with state (avoids stale closures inside setInterval)
-  useEffect(() => { msgCountRef.current = messages.length }, [messages.length])
+  const applySessionMessagePayload = useCallback((payload: MessageStreamPayload, expectedSession: Session) => {
+    if (selectedTabKey !== projectSessionKey(expectedSession)) return
+    if (payload.sessionId && payload.sessionId !== expectedSession.sessionId) return
+    if (expectedSession.provider === 'codex') setCodexExternalWriter(payload.externalWriter === true)
+    if (payload.provider && payload.provider !== (expectedSession.provider ?? 'claude')) return
+
+    const incoming = Array.isArray(payload.messages)
+      ? payload.messages.map((message) => message.providerInstanceId
+        ? message
+        : { ...message, providerInstanceId: expectedSession.providerInstanceId })
+      : []
+    const previousTotal = msgCountRef.current
+    const offset = numericOffset(payload.offset, Math.max(0, msgCountRef.current - incoming.length))
+    const nextOffset = offset + incoming.length
+    const total = numericOffset(payload.total, nextOffset)
+    const replaceWindow = payload.replace === true || total < msgCountRef.current
+    if (incoming.length === 0) {
+      if (replaceWindow) {
+        msgCountRef.current = total
+        fullTranscriptLoadedRef.current = false
+        setMessages([])
+      }
+      return
+    }
+    // A replacement/shrunk window is a fresh bounded tail — the full-transcript
+    // invariant no longer holds, so trimming may resume.
+    if (replaceWindow) fullTranscriptLoadedRef.current = false
+    msgCountRef.current = replaceWindow ? nextOffset : Math.max(msgCountRef.current, nextOffset)
+    // Only meaningful when this window actually ends where the next poll will
+    // start, and when it reaches back far enough to contain that message.
+    const cursorIndex = incoming.length - MESSAGE_POLL_BACKFILL
+    pollCursorUuidRef.current = msgCountRef.current === nextOffset && cursorIndex >= 0
+      ? incoming[cursorIndex]?.uuid
+      : undefined
+    setMessages((prev) => {
+      if (replaceWindow) return incoming
+      const merged = mergeOrderedSessionMessageWindow(prev, incoming, { offset, previousTotal })
+        ?? mergeMessages(prev, incoming)
+      // Preserve the merge helpers' identity bail-out (unchanged → same array) so
+      // React skips the re-render; only allocate a slice when we actually trim.
+      if (merged === prev) return prev
+      if (fullTranscriptLoadedRef.current || merged.length <= SINGLE_SESSION_MESSAGE_MEMORY_LIMIT) return merged
+      return merged.slice(merged.length - SINGLE_SESSION_MESSAGE_MEMORY_LIMIT)
+    })
+  }, [selectedTabKey])
+
+  const pollSelectedSessionMessages = useCallback(async (session: Session) => {
+    if (pollInFlightRef.current) return
+    pollInFlightRef.current = true
+    const offset = Math.max(0, msgCountRef.current - MESSAGE_POLL_BACKFILL)
+    const expectUuid = pollCursorUuidRef.current
+    try {
+      const r = await fetch(withProviderQuery(
+        `/api/sessions/${session.sessionId}/messages?offset=${offset}&limit=${MESSAGE_STREAM_LIMIT}`
+        + (expectUuid ? `&expectUuid=${encodeURIComponent(expectUuid)}` : ''),
+        session.provider,
+        session.providerInstanceId,
+      ))
+      const data = await readJsonResponse(r)
+      if (!data.error) applySessionMessagePayload(data as MessageStreamPayload, session)
+    } catch { /* ignore transient errors */ } finally {
+      pollInFlightRef.current = false
+    }
+  }, [applySessionMessagePayload])
+
+  useEffect(() => {
+    try {
+      setMessagePaneCollapsed(window.localStorage.getItem('agentViewer:messagePaneCollapsed') === '1')
+    } catch {
+      // Storage can be unavailable in restricted browser contexts; keep the
+      // server-rendered expanded default in that case.
+    }
+  }, [])
+
+  // Opt-in client perf monitor (?perf=1 or localStorage 'agentviewer:perf'=1).
+  // No-op unless enabled. See lib/clientPerf.ts.
+  useEffect(() => startClientPerf(), [])
 
   // Initial session load
   useEffect(() => {
-    Promise.all([fetchProvider(), fetchSessions()])
-      .catch((err) => setSessionsError(err.message))
-      .finally(() => setLoadingSessions(false))
-  }, [fetchProvider, fetchSessions])
+    let cancelled = false
+    setLoadingSessions(true)
+    Promise.resolve()
+      .then(async () => {
+        const target = await fetchProvider()
+        await loadSessionsForProvider(target.provider, undefined, undefined, target.providerInstanceId)
+      })
+      .catch((err) => {
+        if (!cancelled) setSessionsError(err.message)
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingSessions(false)
+      })
+    return () => { cancelled = true }
+  }, [fetchProvider, loadSessionsForProvider])
 
-  // Poll sessions list silently every 5 s
+  // ⌃B toggles the right-hand surface panel, matching the editor convention.
+  const toggleRightPanel = rightPanel.toggle
   useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
+      if (event.key.toLowerCase() !== 'b') return
+      event.preventDefault()
+      toggleRightPanel()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [toggleRightPanel])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
+      if (event.key.toLowerCase() !== 'g') return
+      if (!activeProjectDir) return
+      event.preventDefault()
+      setGitPopoverOpen(true)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [activeProjectDir])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || event.metaKey || event.altKey || !event.shiftKey) return
+      if (event.key.toLowerCase() !== 'g' || !activeProjectDir) return
+      event.preventDefault()
+      setPullRequestViewOpen(true)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [activeProjectDir])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
+      if (event.key.toLowerCase() !== 'f') return
+      if (!activeProjectDir) return
+      event.preventDefault()
+      setFileViewerOpen(true)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [activeProjectDir])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey)) return
+      if (event.key.toLowerCase() !== 'k') return
+      event.preventDefault()
+      setCommandPaletteOpen((prev) => !prev)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
+  // Poll sessions list silently every 5 s while the tab is visible.
+  useEffect(() => {
+    if (!documentVisible) return
     const id = setInterval(() => {
       fetchSessions()
         .catch(() => {})
     }, 5000)
     return () => clearInterval(id)
-  }, [fetchSessions])
+  }, [fetchSessions, documentVisible])
+
+  // Keep open tab metadata (title, tag, etc.) in sync with polled sessions
+  useEffect(() => {
+    setOpenTabSessions((prev) => prev.map((tab) => {
+      const updated = sessions.find((s) =>
+        s.sessionId === tab.sessionId && (s.provider ?? 'claude') === (tab.provider ?? 'claude'),
+      )
+      return updated ?? tab
+    }))
+  }, [sessions])
 
   useEffect(() => {
     setSelectedProject((prev) => {
       if (!prev) return prev
       const nextSessions = sessions.filter((s) => sameProjectPath(prev.dir, s.cwd))
       if (nextSessions.length === 0) return provider === 'all' && sessionScope !== 'project' ? prev : null
-      return { ...prev, sessions: nextSessions }
+      const stabilizedSessions = stabilizeSessionIdentities(prev.sessions, nextSessions)
+      return stabilizedSessions === prev.sessions ? prev : { ...prev, sessions: stabilizedSessions }
     })
   }, [provider, sessionScope, sessions])
 
@@ -179,119 +876,323 @@ export default function Home() {
   }, [activeProjectDir, sessionScope])
 
   useEffect(() => {
-    if (!selectedId) return
-    if (sessions.some((s) => s.sessionId === selectedId)) return
-    setSelectedId(null)
+    if (!selectedTabKey) return
+    if (selectedTabKey === RUN_DASHBOARD_KEY) return
+    if (openTabSessions.some((s) => projectSessionKey(s) === selectedTabKey)) return
+    if (sessions.some((s) => projectSessionKey(s) === selectedTabKey)) return
+    setSelectedTabKey(null)
+    msgCountRef.current = 0
+    pollCursorUuidRef.current = undefined
     setMessages([])
-  }, [selectedId, sessions])
+  }, [openTabSessions, selectedTabKey, sessions])
 
   useEffect(() => {
     if (selectedProject) return
-    projectMessageCountsRef.current.clear()
-  }, [selectedProject])
+    getProjectMessageCounts().clear()
+  }, [getProjectMessageCounts, selectedProject])
 
-  // Poll active single session for new messages every 2 s (incremental via offset)
+  // Drop stale opencode todos when the active session changes — they're
+  // session-scoped and re-emitted by the stream's snapshot replay.
   useEffect(() => {
-    if (!selectedId || loadingMessages) return
-    const id = setInterval(async () => {
-      if (pollInFlightRef.current) return
-      pollInFlightRef.current = true
-      const offset = msgCountRef.current
-      try {
-        const r = await fetch(withProviderQuery(`/api/sessions/${selectedId}/messages?offset=${offset}&limit=200`, selectedSession?.provider))
-        const data = await r.json()
-        if (!data.error && data.messages?.length > 0) {
-          setMessages((prev) => [...prev, ...data.messages])
-        }
-      } catch { /* ignore transient errors */ } finally {
-        pollInFlightRef.current = false
+    const activeSessionId = selectedSession?.sessionId ?? null
+    if (todosForSessionId && todosForSessionId !== activeSessionId) {
+      setSessionTodos([])
+      setTodosForSessionId(null)
+    }
+    if (planForSessionId && planForSessionId !== activeSessionId) {
+      setSessionPlan({ plan: [], explanation: null })
+      setPlanForSessionId(null)
+    }
+  }, [selectedSession?.sessionId, todosForSessionId, planForSessionId])
+
+  // Stream active single-session updates; fall back to the old poll loop if SSE drops.
+  // eslint-disable-next-line react-doctor/effect-needs-cleanup -- cleanup is returned below; it calls eventSource.close(), the canonical EventSource teardown (releases all addEventListener handlers)
+  useEffect(() => {
+    if (!selectedSession || selectedProject || loadingMessages) return
+    if (selectedSession.isPending) return
+    if (!documentVisible) return
+
+    const session = selectedSession
+    let cancelled = false
+    let eventSource: EventSource | null = null
+    let fallbackInterval: number | null = null
+    let retryTimeout: number | null = null
+    let retryDelay = MESSAGE_STREAM_RETRY_INITIAL_MS
+
+    const stopFallbackPolling = () => {
+      if (fallbackInterval == null) return
+      window.clearInterval(fallbackInterval)
+      fallbackInterval = null
+    }
+
+    const startFallbackPolling = () => {
+      if (fallbackInterval != null) return
+      void pollSelectedSessionMessages(session)
+      fallbackInterval = window.setInterval(() => {
+        void pollSelectedSessionMessages(session)
+      }, MESSAGE_POLL_FALLBACK_MS)
+    }
+
+    const scheduleReconnect = (connect: () => void) => {
+      if (retryTimeout != null) return
+      retryTimeout = window.setTimeout(() => {
+        retryTimeout = null
+        connect()
+      }, retryDelay)
+      retryDelay = Math.min(retryDelay * 2, MESSAGE_STREAM_RETRY_MAX_MS)
+    }
+
+    const connect = () => {
+      if (cancelled) return
+      if (typeof EventSource === 'undefined') {
+        startFallbackPolling()
+        return
       }
-    }, 2000)
-    return () => clearInterval(id)
-  }, [loadingMessages, selectedId, selectedSession?.provider])
+
+      const offset = Math.max(0, msgCountRef.current - MESSAGE_POLL_BACKFILL)
+      const source = new EventSource(messageEventsPath(session, offset))
+      eventSource = source
+
+      source.onopen = () => {
+        retryDelay = MESSAGE_STREAM_RETRY_INITIAL_MS
+        stopFallbackPolling()
+      }
+
+      source.addEventListener('messages', (event) => {
+        try {
+          const payload = JSON.parse((event as MessageEvent<string>).data) as MessageStreamPayload
+          applySessionMessagePayload(payload, session)
+        } catch { /* ignore malformed stream payloads */ }
+      })
+
+      source.addEventListener('todos', (event) => {
+        try {
+          const payload = JSON.parse((event as MessageEvent<string>).data) as { sessionId?: string; todos?: OpenCodeTodo[] }
+          if (!payload.sessionId || payload.sessionId !== session.sessionId) return
+          setTodosForSessionId(payload.sessionId)
+          setSessionTodos(Array.isArray(payload.todos) ? payload.todos : [])
+        } catch { /* ignore malformed stream payloads */ }
+      })
+
+      source.addEventListener('plan', (event) => {
+        try {
+          const payload = JSON.parse((event as MessageEvent<string>).data) as {
+            sessionId?: string
+            plan?: CodexPlanStep[]
+            explanation?: string | null
+          }
+          if (!payload.sessionId || payload.sessionId !== session.sessionId) return
+          setPlanForSessionId(payload.sessionId)
+          setSessionPlan({
+            plan: Array.isArray(payload.plan) ? payload.plan : [],
+            explanation: typeof payload.explanation === 'string' ? payload.explanation : null,
+          })
+        } catch { /* ignore malformed stream payloads */ }
+      })
+
+      source.onerror = () => {
+        if (cancelled) return
+        source.close()
+        if (eventSource === source) eventSource = null
+        startFallbackPolling()
+        scheduleReconnect(connect)
+      }
+    }
+
+    connect()
+
+    return () => {
+      cancelled = true
+      eventSource?.close()
+      stopFallbackPolling()
+      if (retryTimeout != null) {
+        window.clearTimeout(retryTimeout)
+      }
+    }
+  }, [
+    loadingMessages,
+    applySessionMessagePayload,
+    pollSelectedSessionMessages,
+    selectedProject,
+    selectedSession?.isPending,
+    selectedSession?.provider,
+    selectedSession?.sessionId,
+    documentVisible,
+  ])
 
   // Poll project view every 2 s using per-session incremental fetches.
   useEffect(() => {
     if (!selectedProject) return
+    if (!documentVisible) return
     const id = setInterval(async () => {
       if (projectPollInFlightRef.current) return
       projectPollInFlightRef.current = true
       try {
-        const projectSessions = await fetchProjectSessions(selectedProject.dir, provider)
-        const results = await Promise.all(
-          projectSessions.map(async (session) => {
-            const key = projectSessionKey(session)
-            const offset = projectMessageCountsRef.current.get(key) ?? 0
-            const limit = offset === 0 ? 2000 : 200
-            const response = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}/messages?offset=${offset}&limit=${limit}`, session.provider))
-            const data = await response.json()
-            if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`)
-            return {
-              key,
-              offset,
-              messages: (data.messages ?? []) as SessionMessage[],
-            }
-          })
+        const offsets = Object.fromEntries(
+          Array.from(getProjectMessageCounts().entries(), ([key, count]) => [
+            key,
+            Math.max(0, count - MESSAGE_POLL_BACKFILL),
+          ])
         )
-        for (const result of results) {
-          projectMessageCountsRef.current.set(result.key, result.offset + result.messages.length)
+        const { sessions: projectSessions, batches } = await fetchProjectMessageBatches(selectedProject.dir, provider, offsets)
+        for (const batch of batches) {
+          const projectMessageCounts = getProjectMessageCounts()
+          const previousCount = projectMessageCounts.get(batch.key) ?? 0
+          projectMessageCounts.set(
+            batch.key,
+            Math.max(previousCount, batch.offset + batch.messages.length)
+          )
         }
-        const incoming = results.flatMap((result) => result.messages)
+        const incoming = batches.flatMap((batch) => batch.messages)
         if (incoming.length > 0) {
-          setMessages((prev) => mergeMessages(prev, incoming))
+          setMessages((prev) => trimProjectMessagesForMemory(mergeMessages(prev, incoming)))
         }
-        setSelectedProject((prev) => prev && prev.dir === selectedProject.dir
-          ? { ...prev, sessions: projectSessions }
-          : prev
-        )
+        setSelectedProject((prev) => {
+          if (!prev || !sameProjectPath(prev.dir, selectedProject.dir)) return prev
+          const nextSessions = stabilizeSessionIdentities(prev.sessions, projectSessions)
+          return nextSessions === prev.sessions ? prev : { ...prev, sessions: nextSessions }
+        })
       } catch { /* ignore transient errors */ } finally {
         projectPollInFlightRef.current = false
       }
     }, 2000)
     return () => clearInterval(id)
-  }, [fetchProjectSessions, provider, selectedProject])
+  }, [fetchProjectMessageBatches, getProjectMessageCounts, provider, selectedProject, documentVisible])
 
-  async function selectSession(session: Session) {
-    setSelectedId(session.sessionId)
-    setSelectedProject(null)
-    projectMessageCountsRef.current.clear()
+  const selectSession = useCallback(async (session: Session, nextTargetMessageId?: string) => {
+    const nextProvider = session.provider ?? 'claude'
+    const nextProviderInstanceId = session.providerInstanceId ?? nextProvider
+    const nextScopeMode: SessionScopeMode = 'all'
+    if (nextProvider !== provider || nextProviderInstanceId !== providerInstanceId) {
+      setProvider(nextProvider)
+      setProviderInstanceId(nextProviderInstanceId)
+      setLoadingSessions(true)
+      void loadSessionsForProvider(nextProvider, nextScopeMode, null, nextProviderInstanceId)
+        .catch((err) => setSessionsError(err instanceof Error ? err.message : 'Failed to sync sessions'))
+        .finally(() => setLoadingSessions(false))
+    }
+    startTransition(() => {
+      setDashboardContextSession(null)
+      setOpenTabSessions((prev) => {
+        const key = projectSessionKey(session)
+        const alreadyOpen = prev.some((s) => projectSessionKey(s) === key)
+        if (!alreadyOpen) return [...prev, session]
+        return prev.map((s) => {
+          if (projectSessionKey(s) !== key) return s
+          const merged: Session = { ...s, ...session }
+          if (session.isPending === undefined) delete merged.isPending
+          return merged
+        })
+      })
+      setSelectedTabKey(projectSessionKey(session))
+      setSelectedProject(null)
+      setTargetMessage(nextTargetMessageId
+        ? { messageId: nextTargetMessageId, requestId: ++targetMessageRequestRef.current }
+        : null
+      )
+    })
+    getProjectMessageCounts().clear()
+    msgCountRef.current = 0
+    pollCursorUuidRef.current = undefined
+    // Clear before the pending-session early-return below so a stale `true`
+    // from a previously deep-linked session can't disable trimming here. The
+    // non-pending path re-sets it from nextTargetMessageId after the load.
+    fullTranscriptLoadedRef.current = false
     setLoadingMessages(true)
     setMessages([])
+    setCodexExternalWriter(false)
+    sessionLoadAbortRef.current?.abort()
+    if (session.isPending) {
+      sessionLoadAbortRef.current = null
+      setLoadingMessages(false)
+      return
+    }
+    const abortController = new AbortController()
+    sessionLoadAbortRef.current = abortController
     try {
-      const loadedMessages = await fetchSessionMessages(session)
-      setMessages(loadedMessages)
+      const loadedWindow = await fetchSessionMessages(session, nextTargetMessageId, abortController.signal)
+      if (abortController.signal.aborted) return
+      msgCountRef.current = loadedWindow.offset + loadedWindow.messages.length
+      fullTranscriptLoadedRef.current = Boolean(nextTargetMessageId)
+      setMessages(loadedWindow.messages)
+      if (session.provider === 'codex') setCodexExternalWriter(loadedWindow.externalWriter)
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return
       console.error('Failed to load messages:', err)
     } finally {
-      setLoadingMessages(false)
+      if (sessionLoadAbortRef.current === abortController) {
+        sessionLoadAbortRef.current = null
+      }
+      if (!abortController.signal.aborted) setLoadingMessages(false)
     }
-  }
+  }, [fetchSessionMessages, getProjectMessageCounts, provider, providerInstanceId, loadSessionsForProvider])
 
-  async function selectProject(projectDir: string, projectName: string, projectSessions: Session[]) {
-    setSelectedProject({ key: projectName, dir: projectDir, sessions: projectSessions })
-    setSelectedId(null)
+  const scrollSessionListToSession = useCallback((session: Session) => {
+    setSessionListScrollRequest({
+      sessionKey: projectSessionKey(session),
+      requestId: ++sessionListScrollRequestRef.current,
+    })
+  }, [])
+
+  const selectOpenTab = useCallback((session: Session) => {
+    scrollSessionListToSession(session)
+    void selectSession(session)
+  }, [scrollSessionListToSession, selectSession])
+
+  const selectCommandPaletteSession = useCallback((session: Session, nextTargetMessageId?: string) => {
+    scrollSessionListToSession(session)
+    void selectSession(session, nextTargetMessageId)
+  }, [scrollSessionListToSession, selectSession])
+
+  const closeTab = useCallback((sessionKey: string) => {
+    const idx = openTabSessions.findIndex((s) => projectSessionKey(s) === sessionKey)
+    const next = openTabSessions.filter((s) => projectSessionKey(s) !== sessionKey)
+    startTransition(() => { setOpenTabSessions(next) })
+    if (sessionKey === selectedTabKey) {
+      if (next.length > 0) {
+        const adjacent = next[Math.min(idx, next.length - 1)]
+        if (adjacent) void selectSession(adjacent)
+      } else {
+        startTransition(() => {
+          setSelectedTabKey(null)
+          setTargetMessage(null)
+          msgCountRef.current = 0
+          pollCursorUuidRef.current = undefined
+          setMessages([])
+        })
+      }
+    }
+  }, [openTabSessions, selectSession, selectedTabKey])
+
+  const selectProject = useCallback(async (projectDir: string, projectName: string, projectSessions: Session[]) => {
+    startTransition(() => {
+      setSelectedProject({ key: projectName, dir: projectDir, sessions: projectSessions })
+      setSelectedTabKey(null)
+      setTargetMessage(null)
+    })
+    msgCountRef.current = 0
+    pollCursorUuidRef.current = undefined
     setLoadingMessages(true)
     setMessages([])
     try {
-      const sessionsForProject = provider === 'all'
-        ? await fetchProjectSessions(projectDir, 'all')
-        : projectSessions
-      const results = await Promise.all(
-        sessionsForProject.map((session) => fetchSessionMessages(session))
+      const { sessions: sessionsForProject, batches } = await fetchProjectMessageBatches(
+        projectDir,
+        provider === 'all' ? 'all' : provider,
+        {},
       )
-      const all = results.flat() as SessionMessage[]
+      const all = batches.flatMap((batch) => batch.messages) as SessionMessage[]
       all.sort((a, b) => messageTimestampMs(a) - messageTimestampMs(b))
       projectMessageCountsRef.current = new Map(
-        sessionsForProject.map((session, index) => [projectSessionKey(session), results[index]?.length ?? 0])
+        batches.map((batch) => [batch.key, batch.offset + batch.messages.length])
       )
-      setMessages(all)
+      setMessages(trimProjectMessagesForMemory(all))
       setSelectedProject({ key: projectName, dir: projectDir, sessions: sessionsForProject })
     } catch (err) {
       console.error('Failed to load project messages:', err)
     } finally {
       setLoadingMessages(false)
     }
-  }
+  }, [provider])
 
   // Optimistically update the session title shown by listSessions().
   const handleRename = useCallback((sessionId: string, title: string) => {
@@ -325,85 +1226,599 @@ export default function Home() {
     })
   }, [])
 
-  // Navigate to a newly forked session
+  // Navigate to a newly forked session, or materialize a provider-created
+  // pending tab after its first streamed session event.
   const handleFork = useCallback((newSessionId: string) => {
     if (!selectedSession?.provider) return
-    void selectSession({ sessionId: newSessionId, provider: selectedSession.provider } as Session)
-  }, [selectedSession?.provider])
+    if (selectedSession.isPending) {
+      const oldKey = projectSessionKey(selectedSession)
+      const materialized: Session = {
+        ...selectedSession,
+        sessionId: newSessionId,
+        isPending: false,
+        lastModified: Date.now(),
+      }
+      const newKey = projectSessionKey(materialized)
+      setOpenTabSessions((prev) => {
+        const replaced = prev.map((session) =>
+          projectSessionKey(session) === oldKey ? materialized : session
+        )
+        const next = replaced.some((session) => projectSessionKey(session) === newKey)
+          ? replaced
+          : [...replaced, materialized]
+        return dedupeSessionsByKey(next)
+      })
+      setSessions((prev) => prev.map((session) =>
+        projectSessionKey(session) === oldKey || projectSessionKey(session) === newKey
+          ? { ...session, ...materialized }
+          : session
+      ))
+      setSelectedProject((prev) => prev
+        ? {
+            ...prev,
+            sessions: prev.sessions.map((session) =>
+              projectSessionKey(session) === oldKey || projectSessionKey(session) === newKey
+                ? { ...session, ...materialized }
+                : session
+            ),
+          }
+        : prev
+      )
+      setSelectedTabKey(newKey)
+      void selectSession(materialized)
+      return
+    }
+    void selectSession({
+      sessionId: newSessionId,
+      provider: selectedSession.provider,
+      providerInstanceId: selectedSession.providerInstanceId,
+      providerDisplayName: selectedSession.providerDisplayName,
+      providerAccentColor: selectedSession.providerAccentColor,
+    } as Session)
+  }, [selectSession, selectedSession])
 
-  const handleChangeProvider = useCallback(async (nextProvider: ProviderSelection) => {
-    if (nextProvider === provider || switchingProvider) return
+  const handleDelete = useCallback((sessionId: string, deletedProvider?: AgentProvider) => {
+    const sameSession = (session: Session) =>
+      session.sessionId === sessionId && (!deletedProvider || (session.provider ?? 'claude') === deletedProvider)
+    const deletedTabKey = deletedProvider ? `${deletedProvider}:${sessionId}` : null
+    setSessions((prev) => prev.filter((session) => !sameSession(session)))
+    setOpenTabSessions((prev) => prev.filter((session) => !sameSession(session)))
+    setSelectedProject((prev) => prev
+      ? { ...prev, sessions: prev.sessions.filter((session) => !sameSession(session)) }
+      : prev
+    )
+    if (selectedTabKey && (deletedTabKey
+      ? (selectedTabKey === deletedTabKey || selectedTabKey.endsWith(`:${sessionId}`))
+      : openTabSessions.some((session) => session.sessionId === sessionId))) {
+      setSelectedTabKey(null)
+      setTargetMessage(null)
+      msgCountRef.current = 0
+      pollCursorUuidRef.current = undefined
+      setMessages([])
+    }
+  }, [openTabSessions, selectedTabKey])
+
+  const [creatingNewSession, setCreatingNewSession] = useState(false)
+  const handleNewSession = useCallback(async () => {
+    if (creatingNewSession) return
+    const activeProvider = provider === 'all' ? (selectedSession?.provider ?? 'claude') : provider
+    setCreatingNewSession(true)
+    setSessionsError(null)
+    try {
+      const cwd = activeProjectDir ?? selectedSession?.cwd ?? undefined
+      const res = await fetch('/api/sessions/new', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider: activeProvider,
+          providerInstanceId: provider === 'all'
+            ? selectedSession?.providerInstanceId ?? activeProvider
+            : providerInstanceId,
+          cwd,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+      const draft: Session = {
+        sessionId: data.sessionId,
+        provider: data.provider ?? activeProvider,
+        providerInstanceId: data.providerInstanceId ?? (provider === 'all'
+          ? selectedSession?.providerInstanceId ?? activeProvider
+          : providerInstanceId),
+        cwd: data.cwd,
+        createdAt: Date.now(),
+        lastModified: Date.now(),
+        summary: 'New session',
+        isPending: Boolean(data.isPending),
+      }
+      await selectSession(draft)
+    } catch (err) {
+      setSessionsError(err instanceof Error ? err.message : 'Failed to create session')
+    } finally {
+      setCreatingNewSession(false)
+    }
+  }, [activeProjectDir, creatingNewSession, provider, providerInstanceId, selectSession, selectedSession?.cwd, selectedSession?.provider, selectedSession?.providerInstanceId])
+
+  const handleChangeProvider = useCallback(async (
+    nextProvider: ProviderSelection,
+    nextProviderInstanceId?: string,
+  ) => {
+    const resolvedInstanceId = nextProvider === 'all' ? 'all' : nextProviderInstanceId ?? nextProvider
+    if ((nextProvider === provider && resolvedInstanceId === providerInstanceId) || switchingProvider) return
+    const nextScopeMode = sessionScope
+    const nextProjectDir = activeProjectDir
     setSwitchingProvider(true)
     setSessionsError(null)
     try {
       const res = await fetch('/api/provider', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: nextProvider }),
+        body: JSON.stringify({
+          provider: nextProvider,
+          ...(nextProvider !== 'all' ? { providerInstanceId: resolvedInstanceId } : {}),
+        }),
       })
       const data = await res.json()
       if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
 
       setProvider(nextProvider)
-      setSelectedId(null)
+      setProviderInstanceId(resolvedInstanceId)
+      setSelectedTabKey(null)
       setSelectedProject(null)
+      setTargetMessage(null)
+      setSessionListScrollRequest(null)
+      msgCountRef.current = 0
+      pollCursorUuidRef.current = undefined
       setMessages([])
       setLoadingMessages(false)
       setLoadingSessions(true)
-      if (sessionScope === 'project' && activeProjectDir) {
-        const loaded = await fetchProjectSessions(activeProjectDir, nextProvider)
-        setSessions(loaded)
-        return
-      }
-      const params = new URLSearchParams()
-      if (nextProvider === 'all') {
-        params.set('provider', 'all')
-        params.set('limit', '500')
-      }
-      const suffix = params.toString() ? `?${params.toString()}` : ''
-      const resessions = await fetch(`/api/sessions${suffix}`)
-      const sessionData = await resessions.json()
-      if (!resessions.ok || sessionData.error) throw new Error(sessionData.error ?? `HTTP ${resessions.status}`)
-      setSessions((sessionData.sessions ?? []) as Session[])
+      await loadSessionsForProvider(nextProvider, nextScopeMode, nextProjectDir, resolvedInstanceId)
     } catch (err) {
       setSessionsError(err instanceof Error ? err.message : 'Failed to switch provider')
     } finally {
       setLoadingSessions(false)
       setSwitchingProvider(false)
     }
-  }, [activeProjectDir, fetchProjectSessions, provider, sessionScope, switchingProvider])
+  }, [activeProjectDir, loadSessionsForProvider, provider, providerInstanceId, sessionScope, switchingProvider])
+
+  // ── Right-hand surface panel ────────────────────────────────────────────────
+  // Additive: every surface here is the same component the full-screen overlay
+  // renders, in a docked shell. The overlay entry points (⌃G, ⌃F, the command
+  // palette) are untouched.
+  const rightPanelAvailability = useMemo<Record<RightPanelSurfaceKind, boolean>>(() => ({
+    browser: true,
+    terminal: true,
+    files: !!activeProjectDir,
+    diff: !!activeProjectDir,
+    'pull-request': !!activeProjectDir,
+    agents: true,
+  }), [activeProjectDir])
+
+  const rightPanelHints = useMemo<Partial<Record<RightPanelSurfaceKind, string>>>(() => ({
+    files: 'Available when a project is open.',
+    diff: 'Available for Git repositories.',
+    'pull-request': 'Available when a project is open.',
+  }), [])
+
+  const rightPanelSurfaceTitle = useCallback((surface: RightPanelSurface) => {
+    if (surface.kind !== 'browser') return surfaceKindLabel(surface.kind)
+    if (!surface.url) return 'Browser'
+    try {
+      return new URL(surface.url).host || 'Browser'
+    } catch {
+      return 'Browser'
+    }
+  }, [])
+
+  const { setBrowserUrl: setRightPanelBrowserUrl, close: closeRightPanelSurface } = rightPanel
+  const renderRightPanelSurface = useCallback((surface: RightPanelSurface) => {
+    switch (surface.kind) {
+      case 'browser':
+        return (
+          <BrowserSurface
+            url={surface.url ?? null}
+            onUrlChange={(url) => setRightPanelBrowserUrl(surface.id, url)}
+          />
+        )
+      case 'terminal':
+        return (
+          <div style={{ display: 'flex', flex: 1, minHeight: 0, minWidth: 0 }}>
+            <TerminalView />
+          </div>
+        )
+      case 'files':
+        return activeProjectDir ? (
+          <FileViewer
+            variant="docked"
+            open
+            cwd={activeProjectDir}
+            canInsert={!selectedProject && !!selectedSession}
+            sessionId={selectedSession && !selectedSession.isPending ? selectedSession.sessionId : undefined}
+            provider={selectedSession && !selectedSession.isPending ? selectedSession.provider : undefined}
+            onOpenChange={(next) => { if (!next) closeRightPanelSurface(surface.id) }}
+            onInsertPath={insertFilePathToComposer}
+          />
+        ) : null
+      case 'diff':
+        return activeProjectDir ? (
+          <GitPopover variant="docked" open cwd={activeProjectDir} sessionId={selectedSession?.sessionId ?? null} onClose={() => closeRightPanelSurface(surface.id)} />
+        ) : null
+      case 'pull-request':
+        return activeProjectDir ? (
+          <PullRequestView
+            variant="docked"
+            open
+            cwd={activeProjectDir}
+            onClose={() => closeRightPanelSurface(surface.id)}
+            onAskAgent={(prompt) => {
+              composerInsertRequestRef.current += 1
+              setComposerInsertRequest({ requestId: composerInsertRequestRef.current, text: prompt })
+            }}
+            linkedPrNumber={selectedSession?.inbox?.linkedPr?.number}
+          />
+        ) : null
+      case 'agents':
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0, overflow: 'auto' }}>
+            <AgentTeamCoordinator
+              provider={provider}
+              selectedSession={selectedSession}
+              onOpenSession={selectCommandPaletteSession}
+              onSessionsChanged={() => {
+                void loadSessionsForProvider(provider).catch(() => {})
+              }}
+            />
+          </div>
+        )
+    }
+  }, [
+    activeProjectDir,
+    closeRightPanelSurface,
+    insertFilePathToComposer,
+    loadSessionsForProvider,
+    provider,
+    selectCommandPaletteSession,
+    selectedProject,
+    selectedSession,
+    setRightPanelBrowserUrl,
+  ])
 
   return (
     <CodeThemeProvider>
-    <div style={{ display: 'flex', height: '100vh' }}>
-      <SessionList
-        sessions={sessions}
-        loading={loadingSessions}
-        error={sessionsError}
-        provider={provider}
-        switchingProvider={switchingProvider}
-        selectedId={selectedId}
-        selectedProject={selectedProject?.dir ?? null}
-        onSelect={selectSession}
-        onSelectProject={selectProject}
-        onRename={handleRename}
-        onTag={handleTag}
-        onChangeProvider={handleChangeProvider}
-        scopeMode={sessionScope}
-        scopeProjectName={activeProjectName}
-        canScopeToProject={!!activeProjectDir}
-        includeWorktrees={includeWorktrees}
-        onChangeScope={setSessionScope}
-        onToggleWorktrees={setIncludeWorktrees}
-      />
-      <MessageView
-        messages={messages}
-        loading={loadingMessages}
-        session={selectedSession}
-        projectView={selectedProject ? { key: selectedProject.key, sessionCount: selectedProject.sessions.length, providerMode: provider === 'all' ? 'all' : 'current' } : undefined}
-        onFork={handleFork}
-      />
-    </div>
+    <SidebarProvider defaultOpen>
+      <div suppressHydrationWarning style={{ display: 'flex', height: '100vh' }}>
+        {!isMessageViewMaximized && <Sidebar variant="inset">
+          <SessionList
+            sessions={sessions}
+            loading={loadingSessions}
+            error={sessionsError}
+            provider={provider}
+            providerInstanceId={providerInstanceId}
+            providerInstances={providerInstances}
+            switchingProvider={switchingProvider}
+            selectedId={selectedTabKey}
+            selectedProject={selectedProject?.dir ?? null}
+            dashboardSelected={dashboardSelected && dashboardTab === 'sessions'}
+            agentOperationsSelected={dashboardSelected && dashboardTab === 'agents'}
+            messagingSelected={dashboardSelected && dashboardTab === 'messaging'}
+            scrollToSessionRequest={sessionListScrollRequest}
+            onSelect={selectSession}
+            onSelectProject={selectProject}
+            onOpenDashboard={openRunDashboard}
+            onRename={handleRename}
+            onTag={handleTag}
+            onChangeProvider={handleChangeProvider}
+            scopeMode={sessionScope}
+            scopeProjectName={activeProjectName}
+            canScopeToProject={!!activeProjectDir}
+            includeWorktrees={includeWorktrees}
+            onChangeScope={setSessionScope}
+            onToggleWorktrees={setIncludeWorktrees}
+            onOpenCommandPalette={openCommandPalette}
+            onOpenCoordinator={openCoordinator}
+            onOpenCrossSessionMessaging={openCrossSessionMessaging}
+            canOpenGit={!!activeProjectDir}
+            onOpenGit={openGitPopover}
+            onNewSession={handleNewSession}
+            creatingSession={creatingNewSession}
+          />
+        </Sidebar>}
+        {rightPanel.open && rightPanel.expanded && !isMessageViewMaximized ? null : messagePaneCollapsed && !isMessageViewMaximized ? (
+          <div
+            style={{
+              width: 32,
+              minWidth: 32,
+              height: '100vh',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              paddingTop: 10,
+              borderLeft: '1px solid var(--border)',
+              background: 'var(--surface)',
+              flexShrink: 0,
+            }}
+          >
+            <button
+              type="button"
+              onClick={toggleMessagePane}
+              title="Expand message pane"
+              className="av-hover-control"
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                color: 'var(--text-3)',
+                padding: '4px 6px',
+                borderRadius: 6,
+                lineHeight: 1,
+                fontSize: 14,
+              }}
+            >
+              ‹
+            </button>
+          </div>
+        ) : (
+          <SidebarInset style={{ position: 'relative' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden', position: 'relative', flex: 1 }}>
+              {!isMessageViewMaximized && (
+                <button
+                  type="button"
+                  onClick={toggleMessagePane}
+                  title="Collapse message pane"
+                  className="av-hover-control"
+                  style={{
+                    position: 'absolute',
+                    top: 6,
+                    right: 8,
+                    zIndex: 10,
+                    background: 'var(--surface-2)',
+                    border: '1px solid var(--border)',
+                    cursor: 'pointer',
+                    color: 'var(--text-3)',
+                    padding: '2px 6px',
+                    borderRadius: 6,
+                    lineHeight: 1,
+                    fontSize: 12,
+                  }}
+                >
+                  ›
+                </button>
+              )}
+              <ViewTransition key={messageAreaKey} enter="fade-in" exit="fade-out" default="none">
+                {dashboardSelected ? (
+                  <Tabs
+                    value={dashboardTab}
+                    onValueChange={(value) => setDashboardTab(value as DashboardTab)}
+                    className="av-dashboard-tabs"
+                  >
+                    <nav className="av-dashboard-tabbar" aria-label="Dashboard views">
+                      <TabsList variant="line" className="av-dashboard-tablist">
+                        <TabsTrigger value="sessions" className="av-dashboard-tab">
+                          <LayoutDashboard aria-hidden="true" /> Session Runs
+                        </TabsTrigger>
+                        <TabsTrigger value="agents" className="av-dashboard-tab">
+                          <UsersRound aria-hidden="true" /> Agent Operations
+                        </TabsTrigger>
+                        <TabsTrigger value="messaging" className="av-dashboard-tab">
+                          <MessageSquare aria-hidden="true" /> Messaging
+                        </TabsTrigger>
+                      </TabsList>
+                    </nav>
+                    <TabsContent value="sessions" className="av-dashboard-tab-content">
+                      <RunDashboard
+                        sessions={sessions}
+                        selectedSession={selectedSession}
+                        messages={messages}
+                        loading={loadingSessions}
+                        providerLabel={provider}
+                        scopeLabel={sessionScope === 'project' ? activeProjectName : null}
+                        onSelectSession={selectSession}
+                      />
+                    </TabsContent>
+                    <TabsContent value="agents" className="av-dashboard-tab-content">
+                      <AgentTeamCoordinator
+                        provider={provider}
+                        selectedSession={selectedSession}
+                        onOpenSession={selectCommandPaletteSession}
+                        onSessionsChanged={() => {
+                          void loadSessionsForProvider(provider).catch((err) => {
+                            setSessionsError(err instanceof Error ? err.message : 'Failed to refresh sessions')
+                          })
+                        }}
+                      />
+                    </TabsContent>
+                    <TabsContent value="messaging" className="av-dashboard-tab-content">
+                      <CrossSessionMessaging />
+                    </TabsContent>
+                  </Tabs>
+                ) : (
+                  <MessageView
+                    messages={messages}
+                    loading={loadingMessages}
+                    session={selectedSession}
+                    targetMessageId={targetMessage?.messageId ?? null}
+                    targetMessageRequestId={targetMessage?.requestId ?? 0}
+                    projectView={projectViewProp}
+                    onFork={handleFork}
+                    onDelete={handleDelete}
+                    openTabs={openTabSessions}
+                    selectedTabId={selectedTabKey}
+                    onSelectTab={selectOpenTab}
+                    onCloseTab={closeTab}
+                    onOpenSession={selectCommandPaletteSession}
+                    taskPanelOpenRequest={taskPanelOpenRequest}
+                    promptLibraryOpenRequest={promptLibraryOpenRequest}
+                    channelBridgeOpenRequest={channelBridgeOpenRequest}
+                    channelBridgeRouteToggleRequest={channelBridgeRouteToggleRequest}
+                    onChannelBridgeRoutingChange={setChannelBridgeRouting}
+                    ideBridgeOpenRequest={ideBridgeOpenRequest}
+                    ideBridgeRouteToggleRequest={ideBridgeRouteToggleRequest}
+                    onIdeBridgeRoutingChange={setIdeBridgeRouting}
+                    composerInsertRequest={composerInsertRequest}
+                    onComposerInsertConsumed={consumeComposerInsertRequest}
+                    openCodeTodos={openCodeTodosForView}
+                    codexPlan={codexPlanForView}
+                    codexExternalWriter={codexExternalWriter}
+                    onOpenGit={openGitPopover}
+                    maximized={isMessageViewMaximized}
+                    onToggleMaximized={toggleMessageViewMaximized}
+                    onEnterFullscreen={enterMessageViewFullscreen}
+                    rightPanelOpen={rightPanel.open}
+                    onToggleRightPanel={rightPanel.toggle}
+                  />
+                )}
+              </ViewTransition>
+              {commandPaletteOpen ? (
+                <CommandPalette
+                  open={commandPaletteOpen}
+                  onOpenChange={setCommandPaletteOpen}
+                  sessions={sessions}
+                  selectedSession={selectedSession}
+                  selectedProject={selectedProject}
+                  provider={provider}
+                  providerInstanceId={providerInstanceId}
+                  providerInstances={providerInstances}
+                  scopeMode={sessionScope}
+                  scopeProjectName={activeProjectName}
+                  includeWorktrees={includeWorktrees}
+                  messagePaneCollapsed={messagePaneCollapsed}
+                  messageViewMaximized={isMessageViewMaximized}
+                  messageViewFullscreen={messageViewFullscreen}
+                  canMaximizeMessageView={canMaximizeMessageView}
+                  canOpenGit={!!activeProjectDir}
+                  canOpenFiles={!!activeProjectDir}
+                  canOpenTasks={!selectedProject && (selectedSession?.provider ?? provider) === 'claude'}
+                  canOpenPromptLibrary={!selectedProject && !!selectedSession}
+                  canOpenChannelBridge={canUseChannelBridge}
+                  channelBridgeRouting={channelBridgeRouting}
+                  canOpenIdeBridge={canUseIdeBridge}
+                  ideBridgeRouting={ideBridgeRouting}
+                  onSelectSession={selectCommandPaletteSession}
+                  onSelectProject={selectProject}
+                  onChangeProvider={handleChangeProvider}
+                  onChangeScope={setSessionScope}
+                  onToggleWorktrees={setIncludeWorktrees}
+                  onToggleMessagePane={toggleMessagePane}
+                  rightPanelOpen={rightPanel.open}
+                  rightPanelAvailability={rightPanelAvailability}
+                  onToggleRightPanel={rightPanel.toggle}
+                  onOpenRightPanelSurface={rightPanel.openSurface}
+                  onToggleMessageViewMaximized={toggleMessageViewMaximized}
+                  onEnterMessageViewFullscreen={enterMessageViewFullscreen}
+                  onOpenGit={openGitPopover}
+                  onOpenPullRequests={openPullRequestView}
+                  onOpenFiles={openFileViewer}
+                  onOpenCoordinator={openCoordinator}
+                  onOpenCrossSessionMessaging={openCrossSessionMessaging}
+                  onOpenTasks={openTaskPanel}
+                  onOpenPromptLibrary={openPromptLibrary}
+                  onOpenChannelBridge={openChannelBridge}
+                  onToggleChannelBridgeRoute={toggleChannelBridgeRoute}
+                  onOpenIdeBridge={openIdeBridge}
+                  onToggleIdeBridgeRoute={toggleIdeBridgeRoute}
+                  onOpenBookmarks={() => setBookmarksPanelOpen(true)}
+                  onOpenProvenance={() => setProvenanceOpen(true)}
+                  onOpenRemoteAccess={() => setRemoteAccessOpen(true)}
+                />
+              ) : null}
+            </div>
+          </SidebarInset>
+        )}
+        {rightPanel.open && !isMessageViewMaximized ? (
+          <RightPanel
+            surfaces={rightPanel.surfaces}
+            activeId={rightPanel.activeId}
+            width={rightPanel.width}
+            expanded={rightPanel.expanded}
+            availability={rightPanelAvailability}
+            unavailableHints={rightPanelHints}
+            onOpenSurface={rightPanel.openSurface}
+            onActivate={rightPanel.activate}
+            onClose={rightPanel.close}
+            onCloseAll={rightPanel.closeAll}
+            onCollapse={rightPanel.collapse}
+            onToggleExpanded={rightPanel.toggleExpanded}
+            onWidthChange={rightPanel.setWidth}
+            surfaceTitle={rightPanelSurfaceTitle}
+            renderSurface={renderRightPanelSurface}
+          />
+        ) : null}
+        {activeProjectDir && gitPopoverOpen ? (
+          <GitPopover
+            open={gitPopoverOpen}
+            onClose={() => setGitPopoverOpen(false)}
+            cwd={activeProjectDir}
+            sessionId={selectedSession?.sessionId ?? null}
+          />
+        ) : null}
+        {activeProjectDir && pullRequestViewOpen ? (
+          <PullRequestView
+            open={pullRequestViewOpen}
+            cwd={activeProjectDir}
+            onClose={() => setPullRequestViewOpen(false)}
+            onAskAgent={(prompt) => {
+              composerInsertRequestRef.current += 1
+              setComposerInsertRequest({ requestId: composerInsertRequestRef.current, text: prompt })
+            }}
+            linkedPrNumber={selectedSession?.inbox?.linkedPr?.number}
+            onLinkToSession={selectedSession ? (pr) => {
+              const target = selectedSession
+              void fetch(`/api/sessions/${encodeURIComponent(target.sessionId)}/inbox`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  action: 'link-pr',
+                  provider: target.provider,
+                  providerInstanceId: target.providerInstanceId,
+                  linkedPr: pr,
+                }),
+              }).then(() => { void fetchSessions() }).catch(() => {})
+            } : undefined}
+          />
+        ) : null}
+        {activeProjectDir && fileViewerOpen ? (
+          <FileViewer
+            open={fileViewerOpen}
+            cwd={activeProjectDir}
+            canInsert={!selectedProject && !!selectedSession}
+            sessionId={selectedSession && !selectedSession.isPending ? selectedSession.sessionId : undefined}
+            provider={selectedSession && !selectedSession.isPending ? selectedSession.provider : undefined}
+            onOpenChange={setFileViewerOpen}
+            onInsertPath={insertFilePathToComposer}
+          />
+        ) : null}
+        {provenanceOpen ? (
+          <ProvenancePopover
+            open={provenanceOpen}
+            onClose={() => setProvenanceOpen(false)}
+                    session={selectedSession && !selectedSession.isPending
+                      ? {
+                          sessionId: selectedSession.sessionId,
+                          provider: selectedSession.provider,
+                          providerInstanceId: selectedSession.providerInstanceId,
+                        }
+                      : null}
+            cwd={activeProjectDir}
+            onOpenSession={({ sessionId, provider: editProvider, uuid }) => {
+              selectCommandPaletteSession({ sessionId, provider: editProvider } as Session, uuid)
+            }}
+          />
+        ) : null}
+        {remoteAccessOpen ? (
+          <RemoteAccessPopover open={remoteAccessOpen} onClose={() => setRemoteAccessOpen(false)} />
+        ) : null}
+        {bookmarksPanelOpen ? (
+          <BookmarksPanel
+            open={bookmarksPanelOpen}
+            onClose={() => setBookmarksPanelOpen(false)}
+            onSelect={({ sessionId, provider: bookmarkProvider, uuid }) => {
+              selectCommandPaletteSession({ sessionId, provider: bookmarkProvider } as Session, uuid)
+            }}
+          />
+        ) : null}
+        {!isMessageViewMaximized ? <PiActivityPopover /> : null}
+      </div>
+    </SidebarProvider>
     </CodeThemeProvider>
   )
 }

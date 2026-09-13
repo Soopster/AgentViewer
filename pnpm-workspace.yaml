@@ -1,0 +1,513 @@
+minimumReleaseAge: 10080
+trustPolicy: no-downgrade
+# pnpm resolves these vulnerable transitive versions independently of npm and
+# Bun. Replace only the affected versions so upstream upgrades supersede the
+# overrides naturally once their dependency ranges move forward.
+overrides:
+  'body-parser@2.2.2': 2.3.0
+  'brace-expansion@5.0.6': 5.0.9
+  'fast-uri@3.1.2': 3.1.5
+  'hono@4.12.25': 4.13.1
+  'ip-address@10.2.0': 10.4.0
+  'js-yaml@3.14.2': 3.15.1
+  'js-yaml@4.2.0': 4.3.1
+  'nanoid@3.3.16': 3.3.18
+  'protobufjs@7.6.4': 7.6.5
+  'shell-quote@1.8.4': 1.10.0
+  'undici@7.28.0': 7.29.0
+# A takeover is by definition a recent publish — minimumReleaseAge (7d) and
+# no-downgrade still screen everything new. Packages that have sat unchanged
+# in the registry for 6+ months keep tripping no-downgrade only because they
+# predate npm provenance (semver@6, undici-types, react-redux, …); skip those.
+trustPolicyIgnoreAfter: 259200
+trustPolicyExclude:
+  # Pre-provenance releases of packages whose newer versions are attested —
+  # no-downgrade flags them as trust downgrades. Each verified 2026-06-12:
+  # lockfile integrity matches the registry dist.integrity byte-for-byte,
+  # not a takeover. semver@6 is Babel's pin; react-redux/reselect come in
+  # via recharts.
+  - semver@6.3.1
+  - react-redux@9.2.0
+  - reselect@5.1.1
+  - effect@4.0.0-beta.70
+  - '@effect/platform-node-shared@4.0.0-beta.70'
+  # 2026-07-02 update-all: @pierre/diffs@1.2.12 pins these exact versions as
+  # its own upstream deps. Same publisher account (pierrecomputer) as prior
+  # attested releases; published by amadeusdemarzi, a maintainer since
+  # 1.0.3/theming@0.0.1 (not a new identity) — Pierre's release pipeline
+  # intermittently skips provenance on manual publishes (theming@0.0.1 hit
+  # this same flag in the 2026-06-12 round). Registry dist.integrity verified
+  # directly, not a takeover.
+  - '@pierre/theme@1.1.0'
+  - '@pierre/theming@0.0.2'
+  # 2026-08-01 update-all: @pierre/diffs@1.3.1 pins @pierre/theme@2.0.0, which
+  # was published 2026-07-24 without provenance. Tarball downloaded and diffed
+  # against attested 1.1.0: only LICENSE (MIT->Apache-2.0), a new NOTICE.md,
+  # and the package.json version/license fields changed - zero code changes.
+  # Local sha512 of the tarball matches registry dist.integrity. A pure
+  # relicensing release from the same manual-publish pipeline, not a takeover.
+  - '@pierre/theme@2.0.0'
+  # 2026-08-09 update-all: @opencode-ai/plugin@1.18.15 pins effect@4.0.0-beta.83.
+  # Same publisher (effect-bot, npmUser unchanged since beta.70) with npm
+  # provenance attestation (publishConfig.provenance:true) rather than the
+  # trusted-publisher marker beta.70 had — a pipeline change, not an identity
+  # change. Registry dist.integrity verified byte-for-byte against
+  # package-lock.json's resolved integrity for effect@4.0.0-beta.83.
+  - 'effect@4.0.0-beta.83'
+  # Pi SDK's clipboard native binaries — all 11 platform packages of 0.3.6
+  # verified against the registry the same way.
+  - '@mariozechner/clipboard@0.3.6'
+  - '@mariozechner/clipboard-darwin-arm64@0.3.6'
+  - '@mariozechner/clipboard-darwin-universal@0.3.6'
+  - '@mariozechner/clipboard-darwin-x64@0.3.6'
+  - '@mariozechner/clipboard-linux-arm64-gnu@0.3.6'
+  - '@mariozechner/clipboard-linux-arm64-musl@0.3.6'
+  - '@mariozechner/clipboard-linux-riscv64-gnu@0.3.6'
+  - '@mariozechner/clipboard-linux-x64-gnu@0.3.6'
+  - '@mariozechner/clipboard-linux-x64-musl@0.3.6'
+  - '@mariozechner/clipboard-win32-arm64-msvc@0.3.6'
+  - '@mariozechner/clipboard-win32-x64-msvc@0.3.6'
+allowBuilds:
+  '@google/genai': set this to true or false
+  esbuild: set this to true or false
+  koffi: set this to true or false
+  msgpackr-extract: set this to true or false
+  protobufjs: set this to true or false
+  sharp: set this to true or false
+minimumReleaseAgeExclude:
+  # 2026-09-01 update-all: exact releases adopted in this pass that are still
+  # inside the 7-day quarantine, including version-locked native companions.
+  # Registry dist.integrity was checked byte-for-byte against package-lock.json
+  # for every entry; exact pins keep any later publishes quarantined.
+  - '@anthropic-ai/claude-agent-sdk@0.3.252'
+  - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.252'
+  - '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.252'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.252'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.252'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.252'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.252'
+  - '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.252'
+  - '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.252'
+  - '@img/sharp-darwin-arm64@0.35.4'
+  - '@img/sharp-darwin-x64@0.35.4'
+  - '@img/sharp-freebsd-wasm32@0.35.4'
+  - '@img/sharp-libvips-darwin-arm64@1.3.3'
+  - '@img/sharp-libvips-darwin-x64@1.3.3'
+  - '@img/sharp-libvips-linux-arm@1.3.3'
+  - '@img/sharp-libvips-linux-arm64@1.3.3'
+  - '@img/sharp-libvips-linux-ppc64@1.3.3'
+  - '@img/sharp-libvips-linux-riscv64@1.3.3'
+  - '@img/sharp-libvips-linux-s390x@1.3.3'
+  - '@img/sharp-libvips-linux-x64@1.3.3'
+  - '@img/sharp-libvips-linuxmusl-arm64@1.3.3'
+  - '@img/sharp-libvips-linuxmusl-x64@1.3.3'
+  - '@img/sharp-linux-arm@0.35.4'
+  - '@img/sharp-linux-arm64@0.35.4'
+  - '@img/sharp-linux-ppc64@0.35.4'
+  - '@img/sharp-linux-riscv64@0.35.4'
+  - '@img/sharp-linux-s390x@0.35.4'
+  - '@img/sharp-linux-x64@0.35.4'
+  - '@img/sharp-linuxmusl-arm64@0.35.4'
+  - '@img/sharp-linuxmusl-x64@0.35.4'
+  - '@img/sharp-wasm32@0.35.4'
+  - '@img/sharp-webcontainers-wasm32@0.35.4'
+  - '@img/sharp-win32-arm64@0.35.4'
+  - '@img/sharp-win32-ia32@0.35.4'
+  - '@img/sharp-win32-x64@0.35.4'
+  - '@next/env@16.3.4'
+  - '@next/swc-darwin-arm64@16.3.4'
+  - '@next/swc-darwin-x64@16.3.4'
+  - '@next/swc-linux-arm64-gnu@16.3.4'
+  - '@next/swc-linux-arm64-musl@16.3.4'
+  - '@next/swc-linux-x64-gnu@16.3.4'
+  - '@next/swc-linux-x64-musl@16.3.4'
+  - '@next/swc-win32-arm64-msvc@16.3.4'
+  - '@next/swc-win32-x64-msvc@16.3.4'
+  - 'lucide-react@1.38.0'
+  - 'next@16.3.4'
+  - 'shadcn@4.19.1'
+  - 'sharp@0.35.4'
+  - 'tsx@4.23.13'
+  # 2026-08-30 update-all: latest stable direct dependencies and their
+  # version-locked native/internal companions are younger than the 7-day
+  # quarantine. Registry dist.integrity matches package-lock.json or bun.lock
+  # byte-for-byte for every entry; exact pins keep later releases quarantined.
+  - '@agentclientprotocol/sdk@1.4.0'
+  - '@anthropic-ai/claude-agent-sdk@0.3.251'
+  - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.251'
+  - '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.251'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.251'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.251'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.251'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.251'
+  - '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.251'
+  - '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.251'
+  - '@anthropic-ai/sdk@0.122.0'
+  - '@earendil-works/pi-agent-core@0.84.4'
+  - '@earendil-works/pi-ai@0.84.4'
+  - '@earendil-works/pi-client@0.84.4'
+  - '@earendil-works/pi-coding-agent@0.84.4'
+  - '@earendil-works/pi-protocol@0.84.4'
+  - '@earendil-works/pi-telemetry@0.84.4'
+  - '@earendil-works/pi-tui@0.84.4'
+  - '@microsoft/agent-host-protocol@0.9.0'
+  - '@opencode-ai/plugin@1.18.25'
+  - '@opencode-ai/sdk@1.18.25'
+  - '@opentui/core@0.5.9'
+  - '@opentui/core-darwin-arm64@0.5.9'
+  - '@opentui/core-darwin-x64@0.5.9'
+  - '@opentui/core-linux-arm64@0.5.9'
+  - '@opentui/core-linux-arm64-musl@0.5.9'
+  - '@opentui/core-linux-x64@0.5.9'
+  - '@opentui/core-linux-x64-musl@0.5.9'
+  - '@opentui/core-win32-arm64@0.5.9'
+  - '@opentui/core-win32-x64@0.5.9'
+  - '@opentui/react@0.5.9'
+  - '@next/env@16.3.3'
+  - '@next/swc-darwin-arm64@16.3.3'
+  - '@next/swc-darwin-x64@16.3.3'
+  - '@next/swc-linux-arm64-gnu@16.3.3'
+  - '@next/swc-linux-arm64-musl@16.3.3'
+  - '@next/swc-linux-x64-gnu@16.3.3'
+  - '@next/swc-linux-x64-musl@16.3.3'
+  - '@next/swc-win32-arm64-msvc@16.3.3'
+  - '@next/swc-win32-x64-msvc@16.3.3'
+  - '@pierre/diffs@1.3.6'
+  - '@types/node@26.4.0'
+  - '@types/react-dom@19.2.5'
+  - 'lucide-react@1.37.0'
+  - 'marked@18.0.11'
+  - 'next@16.3.3'
+  - 'shadcn@4.19.0'
+  - 'zod@4.5.4'
+  # 2026-08-12 update-all: versions adopted by npm/bun this round that are
+  # younger than the 7-day quarantine. Registry dist.integrity verified
+  # byte-for-byte against package-lock.json for each directly-listed package.
+  - '@anthropic-ai/claude-agent-sdk@0.3.228'
+  - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.228'
+  - '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.228'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.228'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.228'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.228'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.228'
+  - '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.228'
+  - '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.228'
+  - '@opencode-ai/plugin@1.18.16'
+  - '@opencode-ai/sdk@1.18.16'
+  - 'lucide-react@1.31.0'
+  - 'shadcn@4.17.0'
+  - 'tsx@4.23.12'
+  # Security floors for the current Hono and nanoid advisories. Both releases
+  # retain their established maintainers, and registry dist.integrity matches
+  # package-lock byte-for-byte; exact pins keep later releases quarantined.
+  - 'hono@4.13.1'
+  - 'nanoid@3.3.18'
+  # 2026-08-09 react-doctor update: the package and its version-locked
+  # companions retain the established maintainer, and registry dist.integrity
+  # was verified byte-for-byte against package-lock. Exact pins keep future
+  # releases inside the 7-day quarantine.
+  - 'react-doctor@0.9.11'
+  - 'deslop-js@0.9.11'
+  - 'oxlint-plugin-react-doctor@0.9.11'
+  # 2026-08-01 update-all: versions adopted by npm/bun this round that are
+  # younger than the 7-day quarantine. Registry dist.integrity verified
+  # byte-for-byte against package-lock for each; version-pinned so future
+  # releases are still quarantined.
+  - '@opencode-ai/sdk@1.18.10'
+  - '@pierre/diffs@1.3.1'
+  - '@types/react-dom@19.2.4'
+  - '@types/react@19.2.18'
+  - 'shadcn@4.16.1'
+  # Security floor for GHSA-frvp-7c67-39w9 (path traversal in serve-static);
+  # published 2026-07-26, integrity verified against package-lock.
+  - '@hono/node-server@2.0.12'
+  # 2026-07-30 update-all: versions adopted by npm/bun this round that are
+  # younger than the 7-day quarantine. Registry dist.integrity verified
+  # byte-for-byte against package-lock for every directly-listed package;
+  # version-pinned so future releases are still quarantined.
+  - 'typebox@1.3.7'
+  - '@earendil-works/pi-agent-core@0.83.0'
+  - '@earendil-works/pi-ai@0.83.0'
+  - '@earendil-works/pi-coding-agent@0.83.0'
+  - '@earendil-works/pi-tui@0.83.0'
+  - '@modelcontextprotocol/sdk@1.30.0'
+  # 2026-08-02 MCP 2026-07-28 adoption: the official v2 SDK packages were
+  # released today. Registry integrity was captured by npm before syncing the
+  # Bun/pnpm lockfiles; pin these exact releases while later versions remain
+  # behind the seven-day quarantine.
+  - '@modelcontextprotocol/client@2.0.0'
+  - '@modelcontextprotocol/core@2.0.0'
+  - '@modelcontextprotocol/server@2.0.0'
+  - '@opencode-ai/sdk@1.18.9'
+  - '@pierre/theming@1.0.0'
+  - '@pierre/trees@1.0.0-beta.6'
+  - '@types/node@26.1.2'
+  - 'next@16.2.12'
+  - '@next/env@16.2.12'
+  - '@next/swc-darwin-arm64@16.2.12'
+  - '@next/swc-darwin-x64@16.2.12'
+  - '@next/swc-linux-arm64-gnu@16.2.12'
+  - '@next/swc-linux-arm64-musl@16.2.12'
+  - '@next/swc-linux-x64-gnu@16.2.12'
+  - '@next/swc-linux-x64-musl@16.2.12'
+  - '@next/swc-win32-arm64-msvc@16.2.12'
+  - '@next/swc-win32-x64-msvc@16.2.12'
+  - 'deslop-js@0.9.2'
+  - 'lucide-react@1.28.0'
+  - 'oxlint-plugin-react-doctor@0.9.2'
+  - 'postcss@8.5.25'
+  - 'react-doctor@0.9.2'
+  - 'recharts@3.10.1'
+  - 'shadcn@4.16.0'
+  # 2026-07-25 AHP integration: official Microsoft protocol client/types.
+  # Version-pinned so later releases remain behind the seven-day quarantine.
+  - '@microsoft/agent-host-protocol@0.6.0'
+  # 2026-07-11 TypeScript 7 upgrade (user-approved): official compiler and
+  # platform binaries, pinned so later releases remain quarantined.
+  - 'typescript@7.0.2'
+  - '@typescript/typescript-aix-ppc64@7.0.2'
+  - '@typescript/typescript-darwin-arm64@7.0.2'
+  - '@typescript/typescript-darwin-x64@7.0.2'
+  - '@typescript/typescript-freebsd-arm64@7.0.2'
+  - '@typescript/typescript-freebsd-x64@7.0.2'
+  - '@typescript/typescript-linux-arm@7.0.2'
+  - '@typescript/typescript-linux-arm64@7.0.2'
+  - '@typescript/typescript-linux-loong64@7.0.2'
+  - '@typescript/typescript-linux-mips64el@7.0.2'
+  - '@typescript/typescript-linux-ppc64@7.0.2'
+  - '@typescript/typescript-linux-riscv64@7.0.2'
+  - '@typescript/typescript-linux-s390x@7.0.2'
+  - '@typescript/typescript-linux-x64@7.0.2'
+  - '@typescript/typescript-netbsd-arm64@7.0.2'
+  - '@typescript/typescript-netbsd-x64@7.0.2'
+  - '@typescript/typescript-openbsd-arm64@7.0.2'
+  - '@typescript/typescript-openbsd-x64@7.0.2'
+  - '@typescript/typescript-sunos-x64@7.0.2'
+  - '@typescript/typescript-win32-arm64@7.0.2'
+  - '@typescript/typescript-win32-x64@7.0.2'
+  - '@anthropic-ai/claude-agent-sdk@0.3.145 || 0.3.149 || 0.3.175 || 0.3.181 || 0.3.183 || 0.3.195 || 0.3.198 || 0.3.201 || 0.3.220'
+  - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.145 || 0.3.149 || 0.3.175 || 0.3.181 || 0.3.183 || 0.3.195 || 0.3.198 || 0.3.201 || 0.3.220'
+  - '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.145 || 0.3.149 || 0.3.175 || 0.3.181 || 0.3.183 || 0.3.195 || 0.3.198 || 0.3.201 || 0.3.220'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.145 || 0.3.149 || 0.3.175 || 0.3.181 || 0.3.183 || 0.3.195 || 0.3.198 || 0.3.201 || 0.3.220'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.145 || 0.3.149 || 0.3.175 || 0.3.181 || 0.3.183 || 0.3.195 || 0.3.198 || 0.3.201 || 0.3.220'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.145 || 0.3.149 || 0.3.175 || 0.3.181 || 0.3.183 || 0.3.195 || 0.3.198 || 0.3.201 || 0.3.220'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.145 || 0.3.149 || 0.3.175 || 0.3.181 || 0.3.183 || 0.3.195 || 0.3.198 || 0.3.201 || 0.3.220'
+  - '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.145 || 0.3.149 || 0.3.175 || 0.3.181 || 0.3.183 || 0.3.195 || 0.3.198 || 0.3.201 || 0.3.220'
+  - '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.145 || 0.3.149 || 0.3.175 || 0.3.181 || 0.3.183 || 0.3.195 || 0.3.198 || 0.3.201 || 0.3.220'
+  - '@anthropic-ai/sdk@0.110.0 || 0.115.0'
+  - '@opentui/core@0.4.1 || 0.4.2 || 0.4.3'
+  - '@opentui/core-darwin-arm64@0.4.1 || 0.4.2 || 0.4.3'
+  - '@opentui/core-darwin-x64@0.4.1 || 0.4.2 || 0.4.3'
+  - '@opentui/core-linux-arm64@0.4.1 || 0.4.2 || 0.4.3'
+  - '@opentui/core-linux-arm64-musl@0.4.1 || 0.4.2 || 0.4.3'
+  - '@opentui/core-linux-x64@0.4.1 || 0.4.2 || 0.4.3'
+  - '@opentui/core-linux-x64-musl@0.4.1 || 0.4.2 || 0.4.3'
+  - '@opentui/core-win32-arm64@0.4.1 || 0.4.2 || 0.4.3'
+  - '@opentui/core-win32-x64@0.4.1 || 0.4.2 || 0.4.3'
+  - '@opentui/react@0.4.1 || 0.4.2 || 0.4.3'
+  - bun-ffi-structs@0.2.4
+  - deslop-js@0.0.21 || 0.6.3 || 0.9.1
+  - oxlint-plugin-react-doctor@0.5.1 || 0.5.6 || 0.5.7 || 0.6.3 || 0.9.1
+  - react-doctor@0.5.1 || 0.5.6 || 0.5.7 || 0.6.3 || 0.9.1
+  - shadcn@4.12.0 || 4.13.0 || 4.14.1
+  - tsx@4.22.3 || 4.23.0
+  - '@earendil-works/pi-agent-core@0.75.3 || 0.79.1 || 0.79.6 || 0.79.8 || 0.80.2 || 0.80.3 || 0.82.0'
+  - '@earendil-works/pi-ai@0.75.3 || 0.79.1 || 0.79.6 || 0.79.8 || 0.80.2 || 0.80.3 || 0.82.0'
+  - '@earendil-works/pi-coding-agent@0.75.3 || 0.79.1 || 0.79.6 || 0.79.8 || 0.80.2 || 0.80.3 || 0.82.0'
+  - '@earendil-works/pi-tui@0.75.3 || 0.79.1 || 0.79.6 || 0.79.8 || 0.80.2 || 0.80.3 || 0.82.0'
+  - '@github/copilot-sdk@1.0.1 || 1.0.2 || 1.0.4 || 1.0.5 || 1.0.8'
+  - '@github/copilot@1.0.61 || 1.0.64-0 || 1.0.65 || 1.0.67 || 1.0.73'
+  - '@github/copilot-darwin-arm64@1.0.61 || 1.0.64-0 || 1.0.65 || 1.0.67 || 1.0.73'
+  - '@github/copilot-darwin-x64@1.0.61 || 1.0.64-0 || 1.0.65 || 1.0.67 || 1.0.73'
+  - '@github/copilot-linux-arm64@1.0.61 || 1.0.64-0 || 1.0.65 || 1.0.67 || 1.0.73'
+  - '@github/copilot-linux-x64@1.0.61 || 1.0.64-0 || 1.0.65 || 1.0.67 || 1.0.73'
+  - '@github/copilot-linuxmusl-arm64@1.0.61 || 1.0.64-0 || 1.0.65 || 1.0.67 || 1.0.73'
+  - '@github/copilot-linuxmusl-x64@1.0.61 || 1.0.64-0 || 1.0.65 || 1.0.67 || 1.0.73'
+  - '@github/copilot-win32-arm64@1.0.61 || 1.0.64-0 || 1.0.65 || 1.0.67 || 1.0.73'
+  - '@github/copilot-win32-x64@1.0.61 || 1.0.64-0 || 1.0.65 || 1.0.67 || 1.0.73'
+  - '@opencode-ai/sdk@1.15.5 || 1.15.9 || 1.17.4 || 1.17.8 || 1.17.11 || 1.17.13 || 1.18.5'
+  - '@pierre/diffs@1.2.10 || 1.2.11 || 1.2.12'
+  - '@pierre/theme@1.1.0'
+  - '@pierre/theming@0.0.1 || 0.0.2'
+  - '@pierre/trees@1.0.0-beta.5'
+  - '@radix-ui/react-accessible-icon@1.1.9 || 1.1.10 || 1.1.11 || 1.1.15'
+  - '@radix-ui/react-accordion@1.2.13 || 1.2.14 || 1.2.15 || 1.2.20'
+  - '@radix-ui/react-alert-dialog@1.1.16 || 1.1.17 || 1.1.18 || 1.1.23'
+  - '@radix-ui/react-arrow@1.1.9 || 1.1.10 || 1.1.11 || 1.1.15'
+  - '@radix-ui/react-aspect-ratio@1.1.9 || 1.1.10 || 1.1.11 || 1.1.15'
+  - '@radix-ui/react-avatar@1.1.12 || 1.2.0 || 1.2.1 || 1.2.6'
+  - '@radix-ui/react-checkbox@1.3.4 || 1.3.5 || 1.3.6 || 1.3.11'
+  - '@radix-ui/react-collapsible@1.1.13 || 1.1.14 || 1.1.15 || 1.1.20'
+  - '@radix-ui/react-collection@1.1.9 || 1.1.10 || 1.1.11 || 1.1.15'
+  - '@radix-ui/react-context-menu@2.3.0 || 2.3.1 || 2.3.2 || 2.3.7'
+  - '@radix-ui/react-dialog@1.1.16 || 1.1.17 || 1.1.18 || 1.1.23'
+  - '@radix-ui/react-dismissable-layer@1.1.12 || 1.1.13 || 1.1.14 || 1.1.19'
+  - '@radix-ui/react-dropdown-menu@2.1.17 || 2.1.18 || 2.1.19 || 2.1.24'
+  - '@radix-ui/react-focus-scope@1.1.9 || 1.1.10 || 1.1.11 || 1.1.16'
+  - '@radix-ui/react-form@0.1.9 || 0.1.10 || 0.1.11 || 0.1.16'
+  - '@radix-ui/react-hover-card@1.1.16 || 1.1.17 || 1.1.18 || 1.1.23'
+  - '@radix-ui/react-label@2.1.9 || 2.1.10 || 2.1.11 || 2.1.15'
+  - '@radix-ui/react-menu@2.1.17 || 2.1.18 || 2.1.19 || 2.1.24'
+  - '@radix-ui/react-menubar@1.1.17 || 1.1.18 || 1.1.19 || 1.1.24'
+  - '@radix-ui/react-navigation-menu@1.2.15 || 1.2.16 || 1.2.17 || 1.2.22'
+  - '@radix-ui/react-one-time-password-field@0.1.9 || 0.1.10 || 0.1.11 || 0.1.16'
+  - '@radix-ui/react-password-toggle-field@0.1.4 || 0.1.5 || 0.1.6 || 0.1.11'
+  - '@radix-ui/react-popover@1.1.16 || 1.1.17 || 1.1.18 || 1.1.23'
+  - '@radix-ui/react-popper@1.3.0 || 1.3.1 || 1.3.2 || 1.3.7'
+  - '@radix-ui/react-portal@1.1.11 || 1.1.12 || 1.1.13 || 1.1.17'
+  - '@radix-ui/react-primitive@2.1.5 || 2.1.6 || 2.1.7 || 2.1.10'
+  - '@radix-ui/react-progress@1.1.9 || 1.1.10 || 1.1.11 || 1.1.16'
+  - '@radix-ui/react-radio-group@1.4.0 || 1.4.1 || 1.4.2 || 1.4.7'
+  - '@radix-ui/react-roving-focus@1.1.12 || 1.1.13 || 1.1.14 || 1.1.19'
+  - '@radix-ui/react-scroll-area@1.2.11 || 1.2.12 || 1.2.13 || 1.2.18'
+  - '@radix-ui/react-select@2.3.0 || 2.3.1 || 2.3.2 || 2.3.7'
+  - '@radix-ui/react-separator@1.1.9 || 1.1.10 || 1.1.11 || 1.1.15'
+  - '@radix-ui/react-slider@1.4.0 || 1.4.1 || 1.4.2 || 1.4.7'
+  - '@radix-ui/react-switch@1.3.0 || 1.3.1 || 1.3.2 || 1.3.7'
+  - '@radix-ui/react-tabs@1.1.14 || 1.1.15 || 1.1.16 || 1.1.21'
+  - '@radix-ui/react-toast@1.2.16 || 1.2.17 || 1.2.18 || 1.2.23'
+  - '@radix-ui/react-toggle-group@1.1.12 || 1.1.13 || 1.1.14 || 1.1.19'
+  - '@radix-ui/react-toggle@1.1.11 || 1.1.12 || 1.1.13 || 1.1.18'
+  - '@radix-ui/react-toolbar@1.1.12 || 1.1.13 || 1.1.14 || 1.1.19'
+  - '@radix-ui/react-tooltip@1.2.9 || 1.2.10 || 1.2.11 || 1.2.16'
+  - '@radix-ui/react-use-escape-keydown@1.1.2 || 1.1.3 || 1.1.5'
+  - '@radix-ui/react-visually-hidden@1.2.5 || 1.2.6 || 1.2.7 || 1.2.11'
+  - '@tailwindcss/node@4.3.2'
+  - '@tailwindcss/oxide@4.3.2'
+  - '@tailwindcss/oxide-android-arm64@4.3.2'
+  - '@tailwindcss/oxide-darwin-arm64@4.3.2'
+  - '@tailwindcss/oxide-darwin-x64@4.3.2'
+  - '@tailwindcss/oxide-freebsd-x64@4.3.2'
+  - '@tailwindcss/oxide-linux-arm-gnueabihf@4.3.2'
+  - '@tailwindcss/oxide-linux-arm64-gnu@4.3.2'
+  - '@tailwindcss/oxide-linux-arm64-musl@4.3.2'
+  - '@tailwindcss/oxide-linux-x64-gnu@4.3.2'
+  - '@tailwindcss/oxide-linux-x64-musl@4.3.2'
+  - '@tailwindcss/oxide-wasm32-wasi@4.3.2'
+  - '@tailwindcss/oxide-win32-arm64-msvc@4.3.2'
+  - '@tailwindcss/oxide-win32-x64-msvc@4.3.2'
+  - '@tailwindcss/postcss@4.3.2'
+  - '@types/node@25.9.1 || 25.9.3 || 26.0.0 || 26.0.1 || 26.1.0'
+  - '@next/env@16.2.10 || 16.2.11'
+  - '@next/swc-darwin-arm64@16.2.10 || 16.2.11'
+  - '@next/swc-darwin-x64@16.2.10 || 16.2.11'
+  - '@next/swc-linux-arm64-gnu@16.2.10 || 16.2.11'
+  - '@next/swc-linux-arm64-musl@16.2.10 || 16.2.11'
+  - '@next/swc-linux-x64-gnu@16.2.10 || 16.2.11'
+  - '@next/swc-linux-x64-musl@16.2.10 || 16.2.11'
+  - '@next/swc-win32-arm64-msvc@16.2.10 || 16.2.11'
+  - '@next/swc-win32-x64-msvc@16.2.10 || 16.2.11'
+  - next@16.2.10 || 16.2.11
+  - lucide-react@1.21.0 || 1.23.0 || 1.26.0
+  - postcss@8.5.15 || 8.5.16 || 8.5.23
+  - radix-ui@1.5.0 || 1.6.0 || 1.6.1 || 1.6.7
+  - recharts@3.9.0 || 3.9.1 || 3.10.0
+  - tailwindcss@4.3.2
+  # 2026-06-20 update-all (user-approved): versions adopted by npm/bun this
+  # round that are younger than the 7-day quarantine. Version-pinned - future
+  # releases are still quarantined.
+  # Transitive deps surfaced when rebuilding pnpm-lock from a fresh resolution
+  # (the stale lock pinned older versions); routine bumps already in the tree.
+  - '@mistralai/mistralai@2.2.6'
+  - undici@8.5.0
+  - '@radix-ui/react-slot@1.2.5 || 1.3.0 || 1.3.3'
+  - ink@7.1.0
+  - '@radix-ui/number@1.1.2 || 1.1.3'
+  - '@radix-ui/primitive@1.1.4 || 1.1.7'
+  - '@radix-ui/react-compose-refs@1.1.3 || 1.1.5'
+  - '@radix-ui/react-context@1.1.4 || 1.2.2'
+  - '@radix-ui/react-direction@1.1.2 || 1.1.4'
+  - '@radix-ui/react-focus-guards@1.1.4 || 1.1.6'
+  - '@radix-ui/react-id@1.1.2 || 1.1.4'
+  - '@radix-ui/react-presence@1.1.6 || 1.1.10'
+  - '@radix-ui/react-use-callback-ref@1.1.2 || 1.1.4'
+  - '@radix-ui/react-use-controllable-state@1.2.3 || 1.2.6'
+  - '@radix-ui/react-use-effect-event@0.0.3 || 0.0.5'
+  - '@radix-ui/react-use-is-hydrated@0.1.1 || 0.1.3'
+  - '@radix-ui/react-use-layout-effect@1.1.2 || 1.1.4'
+  - '@radix-ui/react-use-previous@1.1.2 || 1.1.4'
+  - '@radix-ui/react-use-rect@1.1.2 || 1.1.4'
+  - '@radix-ui/react-use-size@1.1.2 || 1.1.4'
+  - '@radix-ui/rect@1.1.2 || 1.1.3'
+  - '@types/react@19.2.15 || 19.2.17'
+  - marked@18.0.4 || 18.0.7
+  - '@oxc-parser/binding-android-arm-eabi@0.141.0'
+  - '@oxc-parser/binding-android-arm64@0.141.0'
+  - '@oxc-parser/binding-darwin-arm64@0.141.0'
+  - '@oxc-parser/binding-darwin-x64@0.141.0'
+  - '@oxc-parser/binding-freebsd-x64@0.141.0'
+  - '@oxc-parser/binding-linux-arm-gnueabihf@0.141.0'
+  - '@oxc-parser/binding-linux-arm-musleabihf@0.141.0'
+  - '@oxc-parser/binding-linux-arm64-gnu@0.141.0'
+  - '@oxc-parser/binding-linux-arm64-musl@0.141.0'
+  - '@oxc-parser/binding-linux-ppc64-gnu@0.141.0'
+  - '@oxc-parser/binding-linux-riscv64-gnu@0.141.0'
+  - '@oxc-parser/binding-linux-riscv64-musl@0.141.0'
+  - '@oxc-parser/binding-linux-s390x-gnu@0.141.0'
+  - '@oxc-parser/binding-linux-x64-gnu@0.141.0'
+  - '@oxc-parser/binding-linux-x64-musl@0.141.0'
+  - '@oxc-parser/binding-openharmony-arm64@0.141.0'
+  - '@oxc-parser/binding-wasm32-wasi@0.141.0'
+  - '@oxc-parser/binding-win32-arm64-msvc@0.141.0'
+  - '@oxc-parser/binding-win32-ia32-msvc@0.141.0'
+  - '@oxc-parser/binding-win32-x64-msvc@0.141.0'
+  - '@oxc-project/types@0.141.0'
+  - oxc-parser@0.141.0
+  - react-dom@19.2.8
+  - react@19.2.8
+  # 2026-08-09 update-all: versions adopted by npm/bun this round that are
+  # younger than the 7-day quarantine. Registry dist.integrity verified
+  # byte-for-byte against package-lock.json for each directly-listed package;
+  # the rest (older pi/opencode/claude-agent-sdk builds, next.js swc
+  # platform binaries) are transitive resolutions of the same release trains,
+  # not independently-introduced packages. Version-pinned so future releases
+  # remain quarantined.
+  - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.221'
+  - '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.221'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.221'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.221'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.221'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.221'
+  - '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.221'
+  - '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.221'
+  - '@anthropic-ai/claude-agent-sdk@0.3.221'
+  - '@anthropic-ai/sdk@0.116.0'
+  - '@earendil-works/pi-agent-core@0.84.1'
+  - '@earendil-works/pi-ai@0.84.1'
+  - '@earendil-works/pi-client@0.84.1'
+  - '@earendil-works/pi-coding-agent@0.84.1'
+  - '@earendil-works/pi-protocol@0.84.1'
+  - '@earendil-works/pi-telemetry@0.84.1'
+  - '@earendil-works/pi-tui@0.84.1'
+  - '@hono/node-server@2.1.0'
+  - '@microsoft/agent-host-protocol@0.7.0'
+  - '@next/env@16.3.0'
+  - '@next/swc-darwin-arm64@16.3.0'
+  - '@next/swc-darwin-x64@16.3.0'
+  - '@next/swc-linux-arm64-gnu@16.3.0'
+  - '@next/swc-linux-arm64-musl@16.3.0'
+  - '@next/swc-linux-x64-gnu@16.3.0'
+  - '@next/swc-linux-x64-musl@16.3.0'
+  - '@next/swc-win32-arm64-msvc@16.3.0'
+  - '@next/swc-win32-x64-msvc@16.3.0'
+  - '@opencode-ai/plugin@1.18.14'
+  - '@opencode-ai/sdk@1.18.12'
+  - '@opencode-ai/sdk@1.18.14'
+  - '@opentui/core-darwin-arm64@0.5.1'
+  - '@opentui/core-darwin-x64@0.5.1'
+  - '@opentui/core-linux-arm64-musl@0.5.1'
+  - '@opentui/core-linux-arm64@0.5.1'
+  - '@opentui/core-linux-x64-musl@0.5.1'
+  - '@opentui/core-linux-x64@0.5.1'
+  - '@opentui/core-win32-arm64@0.5.1'
+  - '@opentui/core-win32-x64@0.5.1'
+  - '@opentui/core@0.5.1'
+  - '@opentui/react@0.5.1'
+  - '@pierre/diffs@1.3.2'
+  - 'deslop-js@0.9.4'
+  - 'grok-mermaid@0.2.2'
+  - 'marked@18.0.9'
+  - 'next@16.3.0'
+  - 'oxlint-plugin-react-doctor@0.9.4'
+  - 'react-doctor@0.9.4'
+  - 'tsx@4.23.5'
