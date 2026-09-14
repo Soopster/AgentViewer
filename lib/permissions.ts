@@ -37,6 +37,11 @@ export type PendingPermission = {
   title: string
   detail?: string
   canApproveAlways?: boolean
+  // The ask must not be approvable by a single stray keystroke (Claude SDK
+  // 0.3.270's `defaultToNo`): the surface opens on its decline option and
+  // offers no one-key approve shortcut. Advisory about *presentation* only —
+  // the decision itself is still the user's.
+  defaultToDeny?: boolean
   // Structured payload so the approval surface can show the same context the
   // native CLI does — the full command, an edit's diff, the target paths/url,
   // and the model's stated reason — instead of one ellipsized line.
@@ -59,6 +64,30 @@ export type PendingPermission = {
 }
 
 export type PermissionResponse = 'once' | 'always' | 'reject'
+
+export type PermissionOption = { response: PermissionResponse; label: string }
+
+// Ordered decisions for an approval surface. 'always' is hidden when the
+// provider can't offer a session-scoped grant for this request.
+export function permissionOptionsFor(permission: PendingPermission): PermissionOption[] {
+  const options: PermissionOption[] = [{
+    response: 'once',
+    label: permission.elicitation?.mode === 'url' ? 'Open & continue' : 'Allow',
+  }]
+  if (permission.canApproveAlways !== false) options.push({ response: 'always', label: 'Always' })
+  options.push({ response: 'reject', label: 'Reject' })
+  return options
+}
+
+// Where the cursor opens on an approval card. A `defaultToDeny` ask is one the
+// CLI says must not be approvable by a stray keystroke, so it opens on Reject;
+// the digit shortcuts still reach every option, because withholding the
+// decision the user wants is worse than making them confirm it.
+export function defaultPermissionOptionIndex(permission: PendingPermission, options: PermissionOption[]): number {
+  if (!permission.defaultToDeny) return 0
+  const rejectIndex = options.findIndex((option) => option.response === 'reject')
+  return rejectIndex >= 0 ? rejectIndex : 0
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -614,6 +643,12 @@ export function extractClaudePermission(payload: unknown): PendingPermission | n
   const reason = stringField(data, 'description') ?? stringField(data, 'decisionReason') ?? stringField(data, 'blockedPath')
   const detail = reason ?? command ?? path
   const suggestions = data.suggestions
+  // Two presentation constraints the CLI sends with the ask (SDK 0.3.270).
+  // `suppressAlwaysAllowRule` means the always-allow rule this ask would write
+  // grants more than the ask itself, so the affordance must not be offered at
+  // all — it outranks having suggestions to offer. `defaultToNo` means approve
+  // must not be one keystroke away.
+  const suppressAlwaysAllowRule = data.suppressAlwaysAllowRule === true
   return {
     id,
     sessionId: stringField(data, 'sessionId'),
@@ -626,7 +661,8 @@ export function extractClaudePermission(payload: unknown): PendingPermission | n
     diff,
     paths: path ? [path] : undefined,
     reason,
-    canApproveAlways: Array.isArray(suggestions) && suggestions.length > 0,
+    canApproveAlways: !suppressAlwaysAllowRule && Array.isArray(suggestions) && suggestions.length > 0,
+    defaultToDeny: data.defaultToNo === true ? true : undefined,
   }
 }
 

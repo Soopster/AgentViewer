@@ -7,10 +7,12 @@
 // The panel subscribes here, and the root reads `isInteractiveCoordinatorOpen`
 // imperatively from its key dispatcher without subscribing at all.
 //
-// The feed runs only while the panel is open. Unlike the coordinator rail this
-// is deliberately NOT started from boot: reading it reaches
+// Feeds start when a session is first opened here and remain active after the
+// panel closes so background attention stays visible. They do not start at boot:
+// reading reaches
 // lib/agentCoordination.ts, which imports the send path, and a surface the user
 // may never open must not be what loads it.
+import { coordinatorAttentionCount } from '../../lib/coordinatorAttentionCount'
 import { randomUUID } from 'node:crypto'
 import type { AgentProvider } from '../../lib/types'
 import type { CoordinatorInteractiveState } from '../../lib/coordinatorInteractiveState'
@@ -41,20 +43,37 @@ export type InteractiveCoordinatorState = {
    * included — because the server reconciles a replay of the same key instead
    * of repeating the mutation, so retrying is safe and editing is not.
    */
+  readonly reviewed: readonly string[]
   readonly pending: TuiSessionCoordinationRequest | null
 }
 
 const RECONCILE_MS = 5_000
 
 const IDLE: InteractiveCoordinatorState = {
-  open: false, session: null, data: null, loading: false, busy: false, error: null, pending: null,
+  open: false, session: null, data: null, loading: false, busy: false, error: null, pending: null, reviewed: [],
 }
 
 let state: InteractiveCoordinatorState = IDLE
+const retained = new Map<string, InteractiveCoordinatorState>()
+const revisions = new Map<string, number>()
+const sessionKey = (session: InteractiveCoordinatorSession) => `${session.provider}:${session.sessionId}`
+function updateSession(session: InteractiveCoordinatorSession, next: Partial<InteractiveCoordinatorState>): void {
+  const key = sessionKey(session)
+  const current = state.session && sessionKey(state.session) === key
+  const updated = { ...(current ? state : retained.get(key) ?? { ...IDLE, session }), ...next }
+  retained.set(key, updated)
+  if (current) commit(next)
+  else for (const listener of listeners) listener()
+}
+function advanceRevision(session: InteractiveCoordinatorSession): void {
+  const key = sessionKey(session)
+  revisions.set(key, (revisions.get(key) ?? 0) + 1)
+}
 const listeners = new Set<() => void>()
 
 function commit(next: Partial<InteractiveCoordinatorState>): void {
   state = { ...state, ...next }
+  if (state.session) retained.set(sessionKey(state.session), state)
   for (const listener of listeners) listener()
 }
 
@@ -74,13 +93,17 @@ export function isInteractiveCoordinatorOpen(): boolean {
 
 /** Reset for tests; the app opens and closes the panel instead. */
 export function resetInteractiveCoordinatorStore(): void {
-  stopFeed?.()
-  stopFeed = null
+  for (const stop of feeds.values()) stop()
+  feeds.clear()
+  refreshers.clear()
   state = IDLE
+  retained.clear()
+  revisions.clear()
   for (const listener of listeners) listener()
 }
 
-let stopFeed: (() => void) | null = null
+const feeds = new Map<string, () => void>()
+const refreshers = new Map<string, () => void>()
 
 export function openInteractiveCoordinator(session: InteractiveCoordinatorSession): void {
   // Compared against the retained session, not a live one: a close keeps both
@@ -89,19 +112,18 @@ export function openInteractiveCoordinator(session: InteractiveCoordinatorSessio
   const sameSession = state.session?.sessionId === session.sessionId
     && state.session.provider === session.provider
   if (state.open && sameSession) return
-  stopFeed?.()
   // A different conversation's roster must never show under this session's
   // heading, so a switch drops the previous read rather than reusing it.
-  state = { ...IDLE, open: true, session, data: sameSession ? state.data : null, loading: !sameSession }
+  const saved = retained.get(sessionKey(session))
+  state = { ...(saved ?? IDLE), open: true, session, loading: !saved?.data }
   for (const listener of listeners) listener()
-  stopFeed = startFeed(session)
+  if (!feeds.has(sessionKey(session))) feeds.set(sessionKey(session), startFeed(session))
+  else refreshers.get(sessionKey(session))?.()
 }
 
 export function closeInteractiveCoordinator(): void {
   if (!state.open) return
-  stopFeed?.()
-  stopFeed = null
-  commit({ open: false, loading: false, busy: false })
+  commit({ open: false, loading: false })
 }
 
 function startFeed(session: InteractiveCoordinatorSession): () => void {
@@ -116,19 +138,22 @@ function startFeed(session: InteractiveCoordinatorSession): () => void {
     try {
       do {
         queued = false
+        const revision = revisions.get(sessionKey(session)) ?? 0
         const data = await readTuiSessionCoordinator(session.sessionId, session.provider)
           .catch(() => null)
         if (cancelled) return
         // A failed read leaves the last observation on screen: a blank roster
         // and an unreachable one must not look alike.
-        if (data) commit({ data, loading: false })
-        else commit({ loading: false })
+        if (revision !== (revisions.get(sessionKey(session)) ?? 0) || retained.get(sessionKey(session))?.busy) continue
+        if (data) updateSession(session, { data, loading: false, error: retained.get(sessionKey(session))?.pending ? retained.get(sessionKey(session))?.error : null })
+        else updateSession(session, { loading: false, error: retained.get(sessionKey(session))?.pending ? retained.get(sessionKey(session))?.error : 'Could not refresh teammate state; showing the last observation.' })
       } while (queued && !cancelled)
     } finally {
       inFlight = false
     }
   }
 
+  refreshers.set(sessionKey(session), () => { void refresh() })
   void refresh()
   const unsubscribe = subscribeTuiProtocolRunChanges(() => { void refresh() })
   // Pushed run changes cover the ledger; the poll also catches the live-turn
@@ -164,9 +189,14 @@ export async function retryInteractiveCoordinatorAction(): Promise<boolean> {
   return submit(session, state.pending)
 }
 
+/** Review markers affect presentation only; they never acknowledge agent mail. */
+export function reviewInteractiveCoordinatorResult(id: string): void {
+  commit({ reviewed: [...state.reviewed.filter(entry => entry !== id), id].slice(-500) })
+}
+
 /** Drop an unconfirmed request after the user has checked what it did. */
 export function discardInteractiveCoordinatorAction(): void {
-  if (!state.pending) return
+  if (!state.pending || state.busy) return
   commit({ pending: null, error: null })
 }
 
@@ -174,13 +204,26 @@ async function submit(
   session: InteractiveCoordinatorSession,
   request: TuiSessionCoordinationRequest,
 ): Promise<boolean> {
-  commit({ busy: true, pending: request, error: null })
+  advanceRevision(session)
+  updateSession(session, { busy: true, pending: request, error: null })
   try {
     const data = await sendTuiSessionCoordination(session.sessionId, session.provider, request)
-    commit({ data, busy: false, pending: null, error: null, loading: false })
+    advanceRevision(session)
+    updateSession(session, { data, busy: false, pending: null, error: null, loading: false })
     return true
   } catch (error) {
-    commit({ busy: false, error: error instanceof Error ? error.message : 'Request could not be confirmed' })
+    advanceRevision(session)
+    updateSession(session, { busy: false, error: error instanceof Error ? error.message : 'Request could not be confirmed' })
     return false
   }
+}
+
+export function getInteractiveCoordinatorAttention(): string {
+  let total = 0
+  for (const entry of retained.values()) total += coordinatorAttentionCount(entry.data, entry.reviewed) + Number(Boolean(entry.pending && !entry.busy))
+  return total ? `! Teammates: ${total} need attention` : ''
+}
+export function openInteractiveCoordinatorAttention(): void {
+  const target = [...retained.values()].find(entry => entry.session && (coordinatorAttentionCount(entry.data, entry.reviewed) > 0 || entry.pending))
+  if (target?.session) openInteractiveCoordinator(target.session)
 }

@@ -1963,6 +1963,12 @@ export type TuiTranscriptCard = {
   /** Spawn-chain depth for subagent messages (1 = spawned by main loop). */
   subagentDepth?: number
   /**
+   * Why this card's turn is the automatic re-run of a turn a worker restart
+   * interrupted (see SessionMessage.resumeReason). Without it the re-run's reply
+   * reads as the same turn answered twice.
+   */
+  resumeReason?: string
+  /**
    * A tool on this card has been called but hasn't reported a result yet —
    * true only while a turn streams. Renderers use it to mark the card as
    * still running rather than complete.
@@ -2214,6 +2220,7 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
       : undefined,
     hasMermaidDiagrams,
     subagentDepth: subagentDepth > 0 ? subagentDepth : undefined,
+    resumeReason: message.resumeReason,
     pending: blockAnalysis.pending || undefined,
   }
 }

@@ -25,6 +25,7 @@ import { toBmpSafe } from './bmp'
 import { loadBridgeMessagesForSession, addBridgeMessage, channelBridgeFileOutboxStorage } from '../../lib/bridgeMessages'
 import { TaskSidePanel } from './TaskSidePanel'
 import { openExternalUrl } from './terminalBrowser'
+import { hasTuiLinkTarget, parseTuiLineTokens, parseTuiLinkTarget } from '../../lib/tuiLinkTargets'
 import { SurfacePanel } from './SurfacePanel'
 import { BrowserSurfaceView, ShellSurfaceView } from './SurfaceViews'
 import {
@@ -215,6 +216,7 @@ import { CheckpointPopover } from './CheckpointPopover'
 import { CoordinationPopover } from './CoordinationPopover'
 import { TeammatesPopover } from './TeammatesPopover'
 import { MODAL_SCRIM_Z_INDEX } from './layers'
+import { TeammatesAttention } from './TeammatesAttention'
 import {
   closeInteractiveCoordinator,
   isInteractiveCoordinatorOpen,
@@ -233,7 +235,7 @@ import { runGitCommand } from '../../lib/gitNodeProvider'
 import { getSlashCommandSuggestions, filterSlashCommands, normalizeSlashCommandSuggestions, type SlashCommandSuggestion } from '../../lib/slashCommands'
 import { parseCrossSessionComposerCommand } from '../../lib/crossSessionCommands'
 import { getProviderComposer, pickProviderExample } from '../../lib/providerComposer'
-import { extractPendingPermission, extractPendingPermissions, extractPermissionReply, type PendingPermission, type PendingQuestionAnswers, type PermissionResponse } from '../../lib/permissions'
+import { defaultPermissionOptionIndex, extractPendingPermission, extractPendingPermissions, extractPermissionReply, permissionOptionsFor, type PendingPermission, type PendingQuestionAnswers, type PendingQuestionOption, type PermissionOption, type PermissionResponse } from '../../lib/permissions'
 import type { readViewSessionComposerOptions } from '../../lib/sessionBackend'
 import {
   sessionMessageFingerprint,
@@ -1561,7 +1563,15 @@ function hasInlineMarkdown(text: string): boolean {
   return INLINE_MARKDOWN_PATTERN.test(text)
 }
 
-type InlineMarkdownToken = { text: string; kind: 'plain' | 'code' | 'bold' }
+// Whether a line needs span rendering at all. Both renderers below have a
+// fast path that hands the raw string to `fitText`, and the overwhelming
+// majority of transcript lines take it — so this has to stay a pair of regex
+// probes, not tokenization.
+function hasInlineSpans(text: string): boolean {
+  return hasInlineMarkdown(text) || hasTuiLinkTarget(text)
+}
+
+type InlineMarkdownToken = { text: string; kind: 'plain' | 'code' | 'bold'; url?: string }
 
 // Split one line of prose into plain / `code` / **bold** runs. Markers are
 // stripped; anything unmatched stays plain. Shared by the wrapping and
@@ -1581,12 +1591,49 @@ function parseInlineMarkdownTokens(text: string): InlineMarkdownToken[] {
   return tokens
 }
 
+// Link detection runs AFTER markdown tokenization, never before. A path cited
+// in backticks — `lib/a.ts`, by far the most common way an agent names a file —
+// needs its markers stripped by the markdown pass first; linkifying first would
+// leave the backticks on screen as literal text. Splitting each markdown token
+// instead keeps the token's own styling and adds the target to it, so a path in
+// backticks stays `code`-colored and becomes clickable.
+function parseInlineSpanTokens(text: string, linkCwd: string | undefined): InlineMarkdownToken[] {
+  const tokens = parseInlineMarkdownTokens(text)
+  if (!hasTuiLinkTarget(text)) return tokens
+  return tokens.flatMap((token) => parseTuiLineTokens(token.text, linkCwd).map((run) => (
+    run.kind === 'link'
+      ? { text: run.text, kind: token.kind, url: run.url }
+      : { text: run.text, kind: token.kind }
+  )))
+}
+
 function inlineMarkdownTokenFg(token: InlineMarkdownToken, theme: TuiThemePalette, baseFg: string): string {
+  // A link keeps whatever color its markdown token had — recoloring it would
+  // fight the role colors the transcript uses to say who is speaking. The
+  // underline below is what marks it as clickable.
   return token.kind === 'code' ? theme.cyan : baseFg
 }
 
 function inlineMarkdownTokenAttrs(token: InlineMarkdownToken): number | undefined {
-  return token.kind === 'bold' ? TextAttributes.BOLD : undefined
+  const bold = token.kind === 'bold' ? TextAttributes.BOLD : 0
+  const underline = token.url ? TextAttributes.UNDERLINE : 0
+  const attributes = bold | underline
+  return attributes === 0 ? undefined : attributes
+}
+
+// `<a href>` is what paints a link id into the cell attributes, which is the
+// only thing `renderer.getLinkAt(x, y)` can read back — a styled <span> with the
+// same text is not clickable. So the element choice here IS the feature.
+function inlineSpanElement(
+  token: InlineMarkdownToken,
+  key: string,
+  fg: string,
+  attributes: number | undefined,
+  text: string,
+): React.ReactNode {
+  return token.url
+    ? <a key={key} href={token.url} fg={fg} attributes={attributes}>{text}</a>
+    : <span key={key} fg={fg} attributes={attributes}>{text}</span>
 }
 
 // Wrapping context (Stream view, wrapMode="word"): emit sibling <span>s so
@@ -1597,15 +1644,14 @@ function renderInlineMarkdownSpans(
   theme: TuiThemePalette,
   baseFg: string,
   keyPrefix: string,
+  linkCwd?: string,
 ): React.ReactNode[] {
-  return parseInlineMarkdownTokens(text).map((token, index) => (
-    <span
-      key={`${keyPrefix}:${index}`}
-      fg={inlineMarkdownTokenFg(token, theme, baseFg)}
-      attributes={inlineMarkdownTokenAttrs(token)}
-    >
-      {token.text}
-    </span>
+  return parseInlineSpanTokens(text, linkCwd).map((token, index) => inlineSpanElement(
+    token,
+    `${keyPrefix}:${index}`,
+    inlineMarkdownTokenFg(token, theme, baseFg),
+    inlineMarkdownTokenAttrs(token),
+    token.text,
   ))
 }
 
@@ -1618,25 +1664,24 @@ function renderInlineMarkdownClipped(
   baseFg: string,
   width: number,
   keyPrefix: string,
+  linkCwd?: string,
 ): React.ReactNode[] {
   if (width <= 0) return []
   const out: React.ReactNode[] = []
   let remaining = width
-  const tokens = parseInlineMarkdownTokens(text)
+  const tokens = parseInlineSpanTokens(text, linkCwd)
   for (let i = 0; i < tokens.length; i += 1) {
     if (remaining <= 0) break
     const token = tokens[i]
     const clipped = clipText(token.text, remaining)
     if (!clipped) continue
-    out.push(
-      <span
-        key={`${keyPrefix}:${i}`}
-        fg={inlineMarkdownTokenFg(token, theme, baseFg)}
-        attributes={inlineMarkdownTokenAttrs(token)}
-      >
-        {clipped}
-      </span>,
-    )
+    out.push(inlineSpanElement(
+      token,
+      `${keyPrefix}:${i}`,
+      inlineMarkdownTokenFg(token, theme, baseFg),
+      inlineMarkdownTokenAttrs(token),
+      clipped,
+    ))
     remaining -= clipped.length
   }
   return out
@@ -1909,19 +1954,6 @@ type TuiLiveToolActivity = {
   status: 'running' | 'done'
 }
 
-type PermissionOption = { response: PermissionResponse; label: string }
-
-// Ordered decisions for the approval overlay. 'always' is hidden when the
-// provider can't offer a session-scoped grant for this request.
-function permissionOptionsFor(permission: PendingPermission): PermissionOption[] {
-  const options: PermissionOption[] = [{
-    response: 'once',
-    label: permission.elicitation?.mode === 'url' ? 'Open & continue' : 'Allow',
-  }]
-  if (permission.canApproveAlways !== false) options.push({ response: 'always', label: 'Always' })
-  options.push({ response: 'reject', label: 'Reject' })
-  return options
-}
 
 function extractSseFrames(buffer: string): { frames: SseFrame[]; remaining: string } {
   const normalized = buffer.replace(/\r\n/g, '\n')
@@ -3552,6 +3584,16 @@ function formatDiffLineNumber(lineNumber: number | undefined, width: number): st
 
 const EMPTY_LANDMARKS: CardLandmark[] = []
 
+// A turn the CLI re-ran after a worker restart. It is a property of the message,
+// not a position in the list, so it belongs in the card's header meta rather than
+// among the landmarks — and without it the re-run's reply reads as the same turn
+// answered twice. Shares `formatResumeReason`'s open-ended handling: the host's
+// own reason is shown when it set one, 'interrupted_turn' reads as a bare re-run.
+function resumeReasonMeta(reason: string | undefined): string | null {
+  if (!reason) return null
+  return reason === 'interrupted_turn' ? 're-run' : `re-run: ${reason.replace(/_/g, ' ')}`
+}
+
 function landmarksEqual(a: CardLandmark[], b: CardLandmark[]): boolean {
   if (a === b) return true
   if (a.length !== b.length) return false
@@ -4106,7 +4148,7 @@ function nestedAgentToolDisplay(
     codeBlockLineCounts: isExpanded && card.codeBlocks
       ? card.codeBlocks.map((cb) => countCodeBlockLines(cb.content))
       : [],
-    headerMeta: joinMeta([card.timestamp ?? null]),
+    headerMeta: joinMeta([card.timestamp ?? null, resumeReasonMeta(card.resumeReason)]),
     accent: transcriptAccent(card.role, providerKey),
     isThinkingCard,
     categoryEmoji: isInsight ? '✦ ' : isTechnical ? '⚒ ' : isDiff ? '✎ ' : isSystem ? '⚙ ' : '',
@@ -4599,6 +4641,20 @@ function cycleDensityValue(current: TuiDensity): TuiDensity {
 // will not shrink below even on a very short terminal.
 const QUESTION_PICKER_MIN_TRANSCRIPT_ROWS = 8
 const QUESTION_PICKER_MIN_ROWS = 8
+// An AskUserQuestion option may carry a `preview` — an ASCII mockup, a code
+// snippet, a config sample. The SDK's default `previewFormat` is markdown/ASCII
+// described as "rendered in a monospace box", so the TUI is the surface it was
+// authored for; the web picker already shows it behind a toggle and this one
+// dropped it entirely.
+//
+// Only the option under the cursor gets one. Previews are multi-line by nature
+// and the picker is already rationing rows, so drawing one per option would
+// blow the budget on the first question. Capped, because a long preview would
+// otherwise push the option list — the thing the keys act on — off the card.
+const QUESTION_PREVIEW_MAX_LINES = 8
+// Label row + at least one line of content: below this there is no point
+// reserving anything, so the preview is dropped instead.
+const QUESTION_PREVIEW_MIN_ROWS = 2
 
 const TRANSCRIPT_VIEWS: TuiTranscriptView[] = ['conversation', 'full', 'continue', 'stream', 'agents', 'chat', 'transcript']
 
@@ -5300,6 +5356,11 @@ type TranscriptCardProps = {
   diffSelectionAnchorByCardKey: Readonly<Record<string, number>>
   setDiffRowCursor: (cardKey: string, rowIndex: number, preserveSelection?: boolean) => void
   setDiffSelectionAnchor: (cardKey: string, rowIndex: number) => void
+  // The session's working directory, used to resolve a relative path in the
+  // transcript into a clickable target. Per card rather than module-level
+  // because split panes can show two sessions rooted in different repositories,
+  // and a path resolved against the wrong one is a link to nothing.
+  linkCwd?: string
 }
 
 type SelectableMarkdownProps = {
@@ -5354,10 +5415,11 @@ function renderCardMarkdownBody(opts: {
   width: number
   selectionColors: SelectionColors
   keyPrefix: string
+  linkCwd?: string
 }): React.ReactNode | null {
   const {
     markdownContent, markdownFallbackLines, shouldRenderSyntaxMarkdown,
-    syntaxStyle, theme, fg, width, selectionColors, keyPrefix,
+    syntaxStyle, theme, fg, width, selectionColors, keyPrefix, linkCwd,
   } = opts
   if (shouldRenderSyntaxMarkdown && markdownContent && syntaxStyle) {
     return (
@@ -5376,8 +5438,8 @@ function renderCardMarkdownBody(opts: {
       <box flexDirection="column">
         {markdownFallbackLines.map((line, index) => (
           <text key={`${keyPrefix}:mdf:${index}`} fg={fg} wrapMode="none" selectable {...selectionColors}>
-            {hasInlineMarkdown(line)
-              ? renderInlineMarkdownClipped(line, theme, fg, width, `${keyPrefix}:mdf:${index}`)
+            {hasInlineSpans(line)
+              ? renderInlineMarkdownClipped(line, theme, fg, width, `${keyPrefix}:mdf:${index}`, linkCwd)
               : fitText(line, width)}
           </text>
         ))}
@@ -5431,6 +5493,7 @@ function TranscriptCardInner({
   diffSelectionAnchorByCardKey,
   setDiffRowCursor,
   setDiffSelectionAnchor,
+  linkCwd,
 }: TranscriptCardProps) {
   const {
     landmarks,
@@ -5800,13 +5863,14 @@ function TranscriptCardInner({
                           agentBodyWidth,
                           theme.dim,
                         )
-                      : hasInlineMarkdown(line.text)
+                      : hasInlineSpans(line.text)
                         ? renderInlineMarkdownClipped(
                             line.text,
                             theme,
                             transcriptColor(line, theme),
                             agentBodyWidth,
                             `${card.key}:stream-ask-user-md:${lineIndex}`,
+                            linkCwd,
                           )
                         : fitText(line.text, agentBodyWidth)}
                   </text>
@@ -5953,8 +6017,8 @@ function TranscriptCardInner({
                   <text fg={transcriptColor(line, theme)} wrapMode="none" selectable {...selectionColors}>
                     {toolLine
                       ? renderInlineTextSegments(transcriptToolLineSegments(line.text, theme, streamMode ? '  └ ' : '› ', theme.dim, streamMode), agentBodyWidth, theme.dim)
-                      : hasInlineMarkdown(line.text)
-                        ? renderInlineMarkdownClipped(line.text, theme, transcriptColor(line, theme), agentBodyWidth, `${card.key}:agent-md:${lineIndex}`)
+                      : hasInlineSpans(line.text)
+                        ? renderInlineMarkdownClipped(line.text, theme, transcriptColor(line, theme), agentBodyWidth, `${card.key}:agent-md:${lineIndex}`, linkCwd)
                         : fitText(line.text, agentBodyWidth)}
                   </text>
                 </box>
@@ -6165,8 +6229,8 @@ function TranscriptCardInner({
             >
               {firstLine.tone === 'tool'
                 ? renderInlineTextSegments(transcriptToolLineSegments(firstLine.text, theme, '', theme.dim, true), streamTextWidth, theme.dim)
-                : hasInlineMarkdown(firstLine.text)
-                  ? renderInlineMarkdownSpans(firstLine.text, theme, streamFirstLineColor, `${card.key}:f`)
+                : hasInlineSpans(firstLine.text)
+                  ? renderInlineMarkdownSpans(firstLine.text, theme, streamFirstLineColor, `${card.key}:f`, linkCwd)
                   : firstLine.text}
             </text>
           </box>
@@ -6189,8 +6253,8 @@ function TranscriptCardInner({
               >
                 {line.tone === 'tool'
                   ? renderInlineTextSegments(transcriptToolLineSegments(line.text, theme, '', theme.dim, true), streamChildTextWidth, theme.dim)
-                  : hasInlineMarkdown(line.text)
-                    ? renderInlineMarkdownSpans(line.text, theme, transcriptColor(line, theme), `${card.key}:s:${lineIndex}`)
+                  : hasInlineSpans(line.text)
+                    ? renderInlineMarkdownSpans(line.text, theme, transcriptColor(line, theme), `${card.key}:s:${lineIndex}`, linkCwd)
                     : line.text}
               </text>
             </box>
@@ -6349,8 +6413,8 @@ function TranscriptCardInner({
             <box paddingX={1}>
               {markdownFallbackLines.map((line, lineIndex) => (
                 <text key={`${card.key}:markdown-fallback:${lineIndex}`} fg={bubbleTextColor} selectable {...selectionColors}>
-                  {hasInlineMarkdown(line)
-                    ? renderInlineMarkdownClipped(line, theme, bubbleTextColor, markdownWidth, `${card.key}:md-fallback:${lineIndex}`)
+                  {hasInlineSpans(line)
+                    ? renderInlineMarkdownClipped(line, theme, bubbleTextColor, markdownWidth, `${card.key}:md-fallback:${lineIndex}`, linkCwd)
                     : fitText(line, markdownWidth)}
                 </text>
               ))}
@@ -6366,8 +6430,8 @@ function TranscriptCardInner({
                   <text fg={imessageUserBubble ? bubbleTextColor : transcriptColor(line, theme)} wrapMode="none" selectable {...selectionColors}>
                     {line.tone === 'tool' && !imessageUserBubble
                       ? renderInlineTextSegments(transcriptToolLineSegments(line.text, theme), bodyInnerWidth, theme.dim)
-                      : hasInlineMarkdown(line.text)
-                        ? renderInlineMarkdownClipped(line.text, theme, imessageUserBubble ? bubbleTextColor : transcriptColor(line, theme), bodyInnerWidth, `${card.key}:body-md:${lineIndex}`)
+                      : hasInlineSpans(line.text)
+                        ? renderInlineMarkdownClipped(line.text, theme, imessageUserBubble ? bubbleTextColor : transcriptColor(line, theme), bodyInnerWidth, `${card.key}:body-md:${lineIndex}`, linkCwd)
                         : fitText(line.text, bodyInnerWidth)}
                   </text>
                 </box>
@@ -7080,6 +7144,7 @@ function SplitTranscriptPaneInner({
         : [],
       headerMeta: joinMeta([
         card.timestamp ?? null,
+        resumeReasonMeta(card.resumeReason),
         isLatest ? 'latest' : null,
         isExpanded ? 'e collapse' : null,
       ]),
@@ -7318,6 +7383,7 @@ function SplitTranscriptPaneInner({
       diffSelectionAnchorByCardKey: SPLIT_PANE_EMPTY_NUMBERS,
       setDiffRowCursor: noopSetDiffRow,
       setDiffSelectionAnchor: noopSetDiffAnchor,
+      linkCwd: session.cwd ?? undefined,
     })
   }).filter((variant): variant is TranscriptCardSelectionVariants => variant !== null), [
     tailCards,
@@ -7335,6 +7401,7 @@ function SplitTranscriptPaneInner({
     transcriptWidth,
     transcriptView,
     key,
+    session.cwd,
   ])
   const splitCardElements = useMemo(
     () => selectTranscriptCardVariants(splitCardVariants, cursorKey, focused),
@@ -7623,6 +7690,11 @@ export default function OpenTuiApp() {
   const fileViewerKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [editorOpen, setEditorOpen] = useState(false)
   const [editorInitialPath, setEditorInitialPath] = useState<string | null>(null)
+  // 1-based, as every transcript reference and stack trace writes it; the editor
+  // converts to its own 0-based cursor. Null means "no particular line", which
+  // is not the same as line 1 — a file opened with no destination must restore
+  // the reader's remembered place instead.
+  const [editorInitialLine, setEditorInitialLine] = useState<number | null>(null)
   const editorKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; meta?: boolean; option?: boolean; sequence: string }) => boolean) | null>(null)
   // New agent session modal: pick a folder (via the file picker in folder-select
   // mode) and provider before creating, instead of defaulting to the viewed cwd.
@@ -7756,6 +7828,7 @@ export default function OpenTuiApp() {
   const [diagnosticsNotice, setDiagnosticsNotice] = useState<string | null>(null)
   const [diagnosticsBusy, setDiagnosticsBusy] = useState<string | null>(null)
   const [diagnosticsMcpIndex, setDiagnosticsMcpIndex] = useState(0)
+  const diagnosticsScrollRef = useRef<ScrollBoxRenderable | null>(null)
   const [diagnosticsMcpPermissionModes, setDiagnosticsMcpPermissionModes] = useState<Record<string, 'default' | 'auto'>>({})
   const [searchMode, setSearchMode] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -7847,6 +7920,22 @@ export default function OpenTuiApp() {
   const [pendingPermissions, setPendingPermissions] = useState<PendingPermission[]>([])
   const [permissionActionLoading, setPermissionActionLoading] = useState<string | null>(null)
   const [permissionOptionIndex, setPermissionOptionIndex] = useState(0)
+  // Which permission `permissionOptionIndex` was last moved for. The index is
+  // reset to 0 from several places (a turn starting, an answer landing, an
+  // interrupt); that is the wrong opening cursor for a `defaultToDeny` ask, and
+  // chasing every reset site would leave the next one to get it wrong. Reading
+  // the owner instead means an index only counts as the user's choice while the
+  // card it was made on is still the one on screen.
+  const permissionOptionOwnerRef = useRef<string | null>(null)
+  const resolvePermissionOptionIndex = useCallback((permission: PendingPermission, options: PermissionOption[]): number => {
+    if (permissionOptionOwnerRef.current !== permission.id) return defaultPermissionOptionIndex(permission, options)
+    return Math.min(permissionOptionIndex, options.length - 1)
+  }, [permissionOptionIndex])
+  const movePermissionOptionIndex = useCallback((permission: PendingPermission, options: PermissionOption[], delta: number) => {
+    const from = resolvePermissionOptionIndex(permission, options)
+    permissionOptionOwnerRef.current = permission.id
+    setPermissionOptionIndex(Math.max(0, Math.min(options.length - 1, from + delta)))
+  }, [resolvePermissionOptionIndex])
   // A turn is running for the selected session that this composer does not own
   // a stream for — the send stream died but the turn survived (turns are
   // decoupled from their stream), or a turn from another view is still
@@ -9275,6 +9364,12 @@ export default function OpenTuiApp() {
   // null (not 'unknown') so joinMeta drops it — a session whose model we can't
   // resolve shows just its project, never a dangling "· unknown".
   const readerModel = sessionDetail?.info?.currentModel ?? null
+  // Resolves a relative path in the reader's transcript to a clickable target.
+  // It is the TRANSCRIPT's session, not the selection or the composer target: a
+  // path is relative to the repository the messages were written in, and while
+  // scrubbing the reader still shows the committed session's transcript.
+  const transcriptLinkCwd = sessionDetail?.info?.cwd ?? transcriptSession?.cwd ?? undefined
+
   // Git follows the focused split pane when there is one: the popover is
   // cwd-scoped, and the pane you are looking at is the repo you mean.
   const gitRepoCwd = focusedSplitPaneSession?.cwd ?? sessionDetail?.info?.cwd ?? selectedSession?.cwd ?? null
@@ -10286,6 +10381,22 @@ export default function OpenTuiApp() {
     // them even before the turn streams any output.
     || (steeredSendNotice && (visibleComposerSending || reattachedRunning))
   )
+  // The preview lines for one option, already sanitized and bounded. Returned
+  // as an array so the plan can count rows and the render can draw exactly
+  // those — the two must not derive it separately or the card's reserved height
+  // stops matching what is drawn.
+  const questionPreviewLines = useCallback((option: PendingQuestionOption | undefined): string[] => {
+    const raw = option?.preview
+    if (!raw) return []
+    return raw
+      .replace(/\r\n/g, '\n')
+      .split('\n')
+      // Control characters and stray ANSI in a model-authored preview would
+      // corrupt the frame, so they are stripped the way transcript lines are.
+      .map((line) => line.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '').replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, '').replace(/\t/g, '  '))
+      .slice(0, QUESTION_PREVIEW_MAX_LINES)
+  }, [])
+
   // AskUserQuestion picker layout.
   //
   // The picker used to reserve exactly as many rows as a full render needs —
@@ -10313,7 +10424,16 @@ export default function OpenTuiApp() {
     // marginTop row each question after the first carries.
     const chrome = 5 + (questions.length - 1)
     const questionRows = questions.length
-    const fullRows = chrome + questionRows + questions.reduce((total, _, index) => total + optionRowsFor(index), 0)
+    const optionRowTotal = questions.reduce((total, _, index) => total + optionRowsFor(index), 0)
+    // The preview belongs to the option the cursor is on, in the focused
+    // question. The freeform "Other" row has no preview, and neither does an
+    // option that did not carry one — both yield zero rows.
+    const focusedQuestion = questions[focusIndex]!
+    const previewCursor = Math.min(Math.max(questionOptionIndex, 0), Math.max(optionRowsFor(focusIndex) - 1, 0))
+    const previewLines = questionPreviewLines(focusedQuestion.options[previewCursor])
+    // One label row above the content.
+    const previewRows = previewLines.length > 0 ? previewLines.length + 1 : 0
+    const fullRows = chrome + questionRows + optionRowTotal + previewRows
     // Budget derived from the SAME expression mainContentHeight uses, so it is
     // automatically correct per transcript view (chat docks the composer
     // inside the reader box; the others do not). mainContentHeight floors at
@@ -10330,7 +10450,14 @@ export default function OpenTuiApp() {
       QUESTION_PICKER_MIN_ROWS,
     )
     if (fullRows <= budget) {
-      return { questions, focusIndex, collapsed: false, optionStart: 0, optionCount: optionRowsFor(focusIndex), rows: fullRows }
+      return { questions, focusIndex, collapsed: false, optionStart: 0, optionCount: optionRowsFor(focusIndex), previewLines, rows: fullRows }
+    }
+    // Everything fits EXCEPT the preview: drop the preview rather than collapse
+    // the questions. An option list you can act on is worth more than an
+    // illustration of one of its entries.
+    const withoutPreview = fullRows - previewRows
+    if (previewRows > 0 && withoutPreview <= budget) {
+      return { questions, focusIndex, collapsed: false, optionStart: 0, optionCount: optionRowsFor(focusIndex), previewLines: [], rows: withoutPreview }
     }
     // Collapsed: every question keeps its own row, only the focused one shows
     // options, so ←/→ still reaches all of them.
@@ -10342,7 +10469,23 @@ export default function OpenTuiApp() {
       Math.max(cursor - Math.floor(optionCount / 2), 0),
       Math.max(optionRowsFor(focusIndex) - optionCount, 0),
     )
-    return { questions, focusIndex, collapsed: true, optionStart, optionCount, rows: collapsedChrome + optionCount }
+    const collapsedRows = collapsedChrome + optionCount
+    // Once collapsed the card is already short of room, so a preview only
+    // appears if the leftover budget genuinely holds one — and it is trimmed to
+    // what is left rather than pushing options off the bottom.
+    const previewBudget = budget - collapsedRows - 1
+    const collapsedPreview = previewLines.length > 0 && previewBudget + 1 >= QUESTION_PREVIEW_MIN_ROWS
+      ? previewLines.slice(0, Math.max(previewBudget, 0))
+      : []
+    return {
+      questions,
+      focusIndex,
+      collapsed: true,
+      optionStart,
+      optionCount,
+      previewLines: collapsedPreview,
+      rows: collapsedRows + (collapsedPreview.length > 0 ? collapsedPreview.length + 1 : 0),
+    }
   }, [
     composerDockHeight,
     composerPopoverHeight,
@@ -10350,6 +10493,7 @@ export default function OpenTuiApp() {
     pendingPermissions,
     questionFocusIndex,
     questionOptionIndex,
+    questionPreviewLines,
     searchMode,
     sessionSearchMode,
     transcriptView,
@@ -11069,6 +11213,7 @@ export default function OpenTuiApp() {
         diffSelectionAnchorByCardKey: transcriptDiffSelectionAnchorByCardKey,
         setDiffRowCursor: setTranscriptDiffRowCursorForCard,
         setDiffSelectionAnchor: setTranscriptDiffSelectionAnchorForCard,
+        linkCwd: transcriptLinkCwd,
       })
     }).filter((variant): variant is TranscriptCardSelectionVariants => variant !== null), [
     renderedTranscriptCards,
@@ -11107,6 +11252,7 @@ export default function OpenTuiApp() {
     transcriptDiffSelectionAnchorByCardKey,
     setTranscriptDiffSelectionAnchorForCard,
     setTranscriptDiffRowCursorForCard,
+    transcriptLinkCwd,
   ])
   const transcriptChildren = useMemo(() => {
     const cards: React.ReactNode[] = selectTranscriptCardVariants(
@@ -15955,6 +16101,44 @@ export default function OpenTuiApp() {
     else toast.info(text, options)
   }, [])
 
+  // Clicking a link in the transcript.
+  //
+  // `renderer.getLinkAt(x, y)` reads the link id out of the painted cell, so the
+  // handler needs no idea which card or row was hit — the renderer already knows,
+  // cell-precisely, which is why this is one handler rather than one per row.
+  //
+  // It fires on mouse UP and only when the pointer has not moved since the
+  // press. Opening on mouse DOWN would hijack the start of a text selection that
+  // happens to begin on a URL, and selecting a line containing a path is a far
+  // more common thing to want than following it.
+  const linkPressRef = useRef<{ x: number; y: number } | null>(null)
+  const noteTranscriptLinkPress = useEffectEvent((event: MouseEvent) => {
+    linkPressRef.current = event.button === 0 ? { x: event.x, y: event.y } : null
+  })
+  const openTranscriptLinkAt = useEffectEvent((event: MouseEvent): boolean => {
+    const press = linkPressRef.current
+    linkPressRef.current = null
+    if (event.button !== 0 || !press) return false
+    if (press.x !== event.x || press.y !== event.y) return false
+    const url = renderer.getLinkAt(event.x, event.y)
+    if (!url) return false
+    const target = parseTuiLinkTarget(url)
+    if (!target) return false
+    if (target.kind === 'url') {
+      void openExternalUrl(target.url).catch((err) => {
+        showNotice('error', err instanceof Error ? err.message : `Open this URL in a browser: ${target.url}`)
+      })
+      return true
+    }
+    // A file target opens in the project editor rather than externally — the
+    // editor is already the TUI's file surface, and handing the path to the OS
+    // would bounce the user out of the terminal.
+    setEditorInitialPath(target.path)
+    setEditorInitialLine(target.line ?? null)
+    setEditorOpen(true)
+    return true
+  })
+
   const showToggleOutcome = useEffectEvent((label: string, outcome: string | boolean) => {
     const state = typeof outcome === 'boolean' ? (outcome ? 'enabled' : 'disabled') : outcome
     showNotice('info', `${label} ${state}`)
@@ -16262,6 +16446,14 @@ export default function OpenTuiApp() {
   })
 
   usePaste((event) => {
+    if (isInteractiveCoordinatorOpen()) {
+      event.preventDefault()
+      event.stopPropagation()
+      if (!pasteImageMimeType(event.metadata?.mimeType) && !inferPastedImageMimeType(event.bytes)) {
+        teammatesKeyHandlerRef.current?.({ name: 'paste', ctrl: false, shift: false, sequence: Buffer.from(event.bytes).toString('utf8') })
+      }
+      return
+    }
     if (questionFreeformEditing) {
       const activePermission = pendingPermissions[0]
       const questions = activePermission?.questions ?? []
@@ -17226,6 +17418,7 @@ export default function OpenTuiApp() {
         break
       case 'editor':
         setEditorInitialPath(null)
+        setEditorInitialLine(null)
         setEditorOpen(true)
         break
       case 'analytics':
@@ -17680,6 +17873,22 @@ export default function OpenTuiApp() {
           closeDiagnostics()
           return
         }
+        // Scrolling is bound before the Claude-only branch below: the sections
+        // that overflow (context window, permission rules) exist for Claude, but
+        // every provider's diagnostics can outgrow the panel, and a panel that
+        // silently clips is worse than one that scrolls.
+        const scroll = diagnosticsScrollRef.current
+        if (scroll) {
+          const page = Math.max(Math.floor(scroll.height / 2), 1)
+          if (isCtrl('d') || key.name === 'pagedown') {
+            scroll.scrollTo(scroll.scrollTop + page)
+            return
+          }
+          if (isCtrl('u') || key.name === 'pageup') {
+            scroll.scrollTo(Math.max(scroll.scrollTop - page, 0))
+            return
+          }
+        }
         if (selectedSession?.provider !== 'claude') return
         const mcpSection = diagnosticsSections.find((s) => s.id === 'mcp')
         const mcpRows = mcpSection?.items.filter((i) => i !== 'None') ?? []
@@ -18123,15 +18332,15 @@ export default function OpenTuiApp() {
       const activePermission = pendingPermissions[0]!
       const options = permissionOptionsFor(activePermission)
       if (key.name === 'left') {
-        handled(() => setPermissionOptionIndex((i) => Math.max(0, i - 1)))
+        handled(() => movePermissionOptionIndex(activePermission, options, -1))
         return
       }
       if (key.name === 'right' || key.name === 'tab') {
-        handled(() => setPermissionOptionIndex((i) => Math.min(options.length - 1, i + 1)))
+        handled(() => movePermissionOptionIndex(activePermission, options, 1))
         return
       }
       if (key.name === 'return') {
-        const option = options[Math.min(permissionOptionIndex, options.length - 1)]
+        const option = options[resolvePermissionOptionIndex(activePermission, options)]
         if (option) handled(() => { void respondToTuiPermission(activePermission, option.response) })
         return
       }
@@ -18626,6 +18835,7 @@ export default function OpenTuiApp() {
     if (isCtrl('e')) {
       handled(() => {
         setEditorInitialPath(null)
+        setEditorInitialLine(null)
         setEditorOpen(true)
       })
       return
@@ -19893,6 +20103,7 @@ export default function OpenTuiApp() {
 
   return (
     <box width={width} height={height} flexDirection="column" backgroundColor={theme.bg}>
+      <TeammatesAttention theme={theme} width={width} />
       <box
         flexGrow={1}
         paddingX={fullscreenMode ? 0 : 1}
@@ -20213,6 +20424,13 @@ export default function OpenTuiApp() {
                 scrollAcceleration={MESSAGE_SCROLL_ACCEL}
                 viewportCulling
                 scrollbarOptions={transcriptScrollbarOptions}
+                // One handler for the whole transcript: `getLinkAt` resolves a
+                // screen cell, so nothing here needs to know which card or row
+                // was hit. Card-level handlers do not stopPropagation, so their
+                // own select-on-press still runs and the press reaches this
+                // container either way.
+                onMouseDown={noteTranscriptLinkPress}
+                onMouseUp={openTranscriptLinkAt}
                 >
                 <box height={TRANSCRIPT_TOP_MARGIN} />
                 <TuiErrorBoundary>
@@ -21317,8 +21535,8 @@ export default function OpenTuiApp() {
         const innerWidth = Math.max(width - 8, 20)
         // Same plan the height reservation used, so the card is drawn at the
         // size the layout actually gave it.
-        const { collapsed, optionStart, optionCount } = questionPickerPlan
-          ?? { collapsed: false, optionStart: 0, optionCount: Number.MAX_SAFE_INTEGER }
+        const { collapsed, optionStart, optionCount, previewLines } = questionPickerPlan
+          ?? { collapsed: false, optionStart: 0, optionCount: Number.MAX_SAFE_INTEGER, previewLines: [] as string[] }
         const focusIndex = questionPickerPlan?.focusIndex ?? Math.min(questionFocusIndex, questions.length - 1)
         const focusedQuestion = questions[focusIndex]
         const focusedTotalOptions = (focusedQuestion?.options.length ?? 0) + (focusedQuestion?.allowFreeform ? 1 : 0)
@@ -21378,6 +21596,22 @@ export default function OpenTuiApp() {
                         </text>
                       )
                     })() : null}
+                    {/* The cursor option's preview. Drawn from the plan's own
+                        array, never re-derived here: the plan reserved exactly
+                        these rows, and a render that computed its own would be
+                        free to disagree and overflow the card. */}
+                    {focused && showOptions && previewLines.length > 0 ? (
+                      <box flexDirection="column">
+                        <text fg={theme.dim} wrapMode="none">
+                          {fitText(`    ┄ ${q.options[cursorIndex]?.label ?? 'preview'}`, innerWidth)}
+                        </text>
+                        {previewLines.map((line, li) => (
+                          <text key={`q:${qi}:p:${li}`} fg={theme.muted} wrapMode="none">
+                            {fitText(`    ${line}`, innerWidth)}
+                          </text>
+                        ))}
+                      </box>
+                    ) : null}
                   </box>
                 )
               })}
@@ -21434,7 +21668,7 @@ export default function OpenTuiApp() {
       })() : pendingPermissions.length > 0 ? (() => {
         const permission = pendingPermissions[0]!
         const options = permissionOptionsFor(permission)
-        const selectedIndex = Math.min(permissionOptionIndex, options.length - 1)
+        const selectedIndex = resolvePermissionOptionIndex(permission, options)
         const innerWidth = Math.max(width - 8, 20)
         const diffLines = permission.diff ? permission.diff.split('\n').slice(0, 12) : []
         return (
@@ -21792,6 +22026,7 @@ export default function OpenTuiApp() {
         <EditorPopover
           cwd={gitRepoCwd}
           initialPath={editorInitialPath}
+          initialLine={editorInitialLine}
           theme={theme}
           width={width}
           height={height}
@@ -21799,6 +22034,7 @@ export default function OpenTuiApp() {
           onClose={() => {
             setEditorOpen(false)
             setEditorInitialPath(null)
+            setEditorInitialLine(null)
           }}
           onKeyHandlerReady={(handler) => { editorKeyHandlerRef.current = handler }}
           onNotice={(kind, text) => showNotice(kind, text)}
@@ -21853,6 +22089,7 @@ export default function OpenTuiApp() {
           onEditPath={folderPickerForNewSession ? undefined : (path) => {
             setFileViewerOpen(false)
             setEditorInitialPath(path)
+            setEditorInitialLine(null)
             setEditorOpen(true)
           }}
           onInsertPath={folderPickerForNewSession ? undefined : (path) => {
@@ -22272,7 +22509,25 @@ export default function OpenTuiApp() {
                 <text fg={theme.green} wrapMode="none">{fitText(diagnosticsNotice, overlayWidth - 4)}</text>
               </box>
             ) : null}
-            <box flexGrow={1} paddingX={1} paddingBottom={1} flexDirection="column" overflow="hidden">
+            {/* Scrollable, not clipped. Fifteen sections never fitted the 28-row
+                panel, so everything past roughly the MCP list was invisible with
+                nothing on screen to say so — the panel looked complete. */}
+            <scrollbox
+              ref={diagnosticsScrollRef}
+              // An explicit row budget, not flexGrow: a scrollbox measures its
+              // own viewport, and given flexGrow it laid itself over the title
+              // row instead of sitting under it. Border (2) + title block (2) +
+              // footer block (2), plus the error and notice rows when present.
+              style={{ height: Math.max(
+                overlayHeight - 6 - (diagnosticsError ? 1 : 0) - (diagnosticsNotice ? 1 : 0),
+                3,
+              ) }}
+              paddingX={1}
+              paddingBottom={1}
+              backgroundColor={theme.surface}
+              scrollY
+              scrollbarOptions={transcriptScrollbarOptions}
+            >
               {diagnosticsSections.map((section) => (
                 <box key={section.id} flexDirection="column" marginTop={1} flexShrink={0}>
                   <box flexShrink={0} height={1}><text fg={theme.dim}>{section.title}</text></box>
@@ -22298,7 +22553,12 @@ export default function OpenTuiApp() {
                       )
                     })
                   ) : (
-                    section.items.slice(0, 10).map((item, idx) => (
+                    // No slice. This used to cap every section at 10 rows
+                    // because the panel clipped anyway; now that it scrolls, a
+                    // cap here would be a SECOND, silent truncation on top of
+                    // the one the adapter already applies and announces. One
+                    // place truncates, and it says so.
+                    section.items.map((item, idx) => (
                       <box key={idx} flexShrink={0} height={1}>
                         <text fg={theme.text} wrapMode="none">
                           {fitText(`  ${item}`, overlayWidth - 4)}
@@ -22308,13 +22568,13 @@ export default function OpenTuiApp() {
                   )}
                 </box>
               ))}
-            </box>
+            </scrollbox>
             <box paddingX={1} paddingBottom={1}>
               <text fg={theme.dim} wrapMode="none">
                 {fitText(
                   isClaude
-                    ? `${mcpRows.length > 0 ? '↑↓ MCP · r reconnect · t toggle · o policy · d remove · ' : ''}a set MCP JSON · f filter hooks · p/s/g reload · Esc close`
-                    : 'Esc close',
+                    ? `${mcpRows.length > 0 ? '↑↓ MCP · r reconnect · t toggle · o policy · d remove · ' : ''}⌃u/⌃d scroll · a set MCP JSON · f filter hooks · p/s/g reload · Esc close`
+                    : '⌃u/⌃d scroll · Esc close',
                   overlayWidth - 4,
                 )}
               </text>

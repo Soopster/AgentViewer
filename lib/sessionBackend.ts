@@ -1421,6 +1421,11 @@ function createClaudePermissionBridge(
       blockedPath: options.blockedPath,
       decisionReason: options.decisionReason,
       suggestions: options.suggestions,
+      // Presentation constraints the CLI attaches to the ask (SDK 0.3.270).
+      // They must ride the wire or a reattaching surface re-derives the card
+      // without them and offers the affordance the CLI said to withhold.
+      defaultToNo: options.defaultToNo,
+      suppressAlwaysAllowRule: options.suppressAlwaysAllowRule,
     }
     enqueuePermissionEvent('permission.requested', requestData)
 

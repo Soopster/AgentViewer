@@ -174,7 +174,7 @@ const LOCK_LEASE_MS = 20 * 60_000
 // can cancel a teammate's in-flight turn without releasing the task), and
 // respond_to_mode/respond_to_allowlist_json (per-participant mailbox sender
 // gating, mirroring buzz-acp's respond-to modes).
-const SCHEMA_VERSION = 20
+const SCHEMA_VERSION = 21
 const EVENT_WINDOW = 300
 const LOCK_HISTORY_WINDOW = 200
 // Non-terminal tasks (pending/claimed/blocked) are always returned in full —
@@ -597,6 +597,12 @@ function initializeSchema(db: SqliteDatabase): void {
       (run_id, agent_id, action, request_id, state, created_at)
       SELECT run_id, agent_id, action, request_id, 'completed', created_at
       FROM protocol_idempotency;
+
+    CREATE TABLE IF NOT EXISTS protocol_interactive_lifecycle (
+      session_id TEXT NOT NULL, provider TEXT NOT NULL, request_id TEXT NOT NULL,
+      fingerprint TEXT NOT NULL, run_id TEXT, completed INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (session_id, provider, request_id)
+    );
 
     CREATE TABLE IF NOT EXISTS protocol_interactive_sessions (
       session_id TEXT PRIMARY KEY,
@@ -2565,24 +2571,26 @@ async function adoptInteractiveController(identity: ExternalProtocolIdentity): P
 
 export async function readSessionCoordinator(sessionId: string, provider: ProtocolRun['provider']): Promise<ProtocolRunSnapshot | null> {
   const db = await getDatabase()
-  const row = db.prepare(`SELECT run_id FROM protocol_agents WHERE session_id = ? AND provider = ? ORDER BY created_at DESC LIMIT 1`)
+  const row = db.prepare(`SELECT run_id FROM protocol_agents WHERE session_id = ? AND provider = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`)
     .get(sessionId, provider) as Row | undefined
   return row ? readSnapshotSync(db, String(row.run_id)) : null
 }
 
 /** Bind a normal conversation as the human-driven lead. Stable IDs make setup replayable. */
-export async function ensureSessionCoordinator(params: { sessionId: string; provider: ProtocolRun['provider']; cwd: string }): Promise<ProtocolRunSnapshot> {
+export async function ensureSessionCoordinator(params: { sessionId: string; provider: ProtocolRun['provider']; cwd: string; restartRunId?: string }): Promise<ProtocolRunSnapshot> {
   const key = `chat-${createHash('sha256').update(`${params.provider}:${params.sessionId}`).digest('hex').slice(0, 40)}`
   return serializeAutomaticDelegation(key, async () => {
     const existing = await readSessionCoordinator(params.sessionId, params.provider)
-    if (existing) return existing
+    if (existing && (!params.restartRunId || !['completed', 'failed', 'stopped'].includes(existing.run.status))) return existing
+    if (existing && !existing.agents.some(agent => agent.role === 'lead' && agent.sessionId === params.sessionId)) throw new Error('Only the lead conversation can start a new team')
+    const runKey = params.restartRunId ?? key
     const db = await getDatabase()
-    let snapshot = readSnapshotSync(db, key)
-    if (!snapshot) snapshot = (await createExternalProtocolRun({ runId: key, prompt: 'Interactive collaboration in this conversation',
+    let snapshot = readSnapshotSync(db, runKey)
+    if (!snapshot) snapshot = (await createExternalProtocolRun({ runId: runKey, prompt: 'Interactive collaboration in this conversation',
       baseCwd: params.cwd, provider: params.provider, participantName: 'lead', maxAgents: 4 })).snapshot
     const lead = snapshot.agents.find(agent => agent.role === 'lead')!
     await enqueueWrite(tx => {
-      tx.prepare('UPDATE protocol_agents SET session_id = ? WHERE run_id = ? AND id = ?').run(params.sessionId, key, lead.id)
+      tx.prepare('UPDATE protocol_agents SET session_id = ? WHERE run_id = ? AND id = ?').run(params.sessionId, runKey, lead.id)
     })
     anyActiveCoordinatorAgentCache = null
     return (await readSessionCoordinator(params.sessionId, params.provider))!
@@ -5703,7 +5711,7 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
             `${task.id} plan is ready for approval.`,
             event.summary,
             event.detail,
-            'Lead: approve with `plan.approved` or reject with `plan.rejected`.',
+            interactiveRun ? 'Await human review in Teammates.' : 'Lead: approve with `plan.approved` or reject with `plan.rejected`.',
           ].filter(Boolean).join('\n\n')
           for (const recipient of resolveRecipientsSync(db, event.runId, event.agentId, 'lead')) {
             newMessageIds.push(insertMessageSync(db, {
@@ -5712,6 +5720,7 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
               toAgentId: recipient,
               body,
               ts,
+              kind: interactiveRun ? 'status' : 'request',
             }))
           }
         } else if (!event.taskId) {
@@ -6256,6 +6265,9 @@ async function pingLeadIfTeamIdle(runId: string): Promise<void> {
  */
 async function checkpointLeadSupervision(runId: string): Promise<void> {
   const db = await getDatabase()
+  // Interactive readers already observe live state; a healthy checkpoint must
+  // not spend a lead turn or consume the user's continuation allowance.
+  if (db.prepare('SELECT 1 FROM protocol_interactive_sessions WHERE run_id = ?').get(runId)) return
   const agents = listAgentsSync(db, runId)
   const lead = agents.find((agent) => agent.role === 'lead')
   if (!lead) return
@@ -6809,17 +6821,58 @@ export async function drainCooperativeInbox(sessionId: string): Promise<string> 
 
 /** Durable browser-owned collaboration settings and delivery recovery. */
 export async function configureInteractiveCoordinator(params: {
-  sessionId: string; provider: AgentProvider; cwd: string; autoContinue?: boolean
+  sessionId: string; provider: AgentProvider; cwd: string; autoContinue?: boolean; restartRunId?: string
 }): Promise<void> {
   const snapshot = await ensureSessionCoordinator(params)
   await sessionCoordinatorIdentity(params.sessionId, params.provider)
   await enqueueWrite(db => {
     db.prepare(`INSERT INTO protocol_interactive_sessions (session_id, run_id, provider) VALUES (?, ?, ?)
-      ON CONFLICT(session_id) DO NOTHING`).run(params.sessionId, snapshot.run.id, params.provider)
+      ON CONFLICT(session_id) DO UPDATE SET
+        auto_continue = CASE WHEN run_id = excluded.run_id THEN auto_continue ELSE 0 END,
+        remaining_turns = CASE WHEN run_id = excluded.run_id THEN remaining_turns ELSE 4 END,
+        run_id = excluded.run_id, provider = excluded.provider`).run(params.sessionId, snapshot.run.id, params.provider)
     if (params.autoContinue !== undefined) db.prepare(`UPDATE protocol_interactive_sessions
       SET auto_continue = ?, remaining_turns = 4 WHERE session_id = ?`).run(Number(params.autoContinue), params.sessionId)
   })
   notifyRunChanged(snapshot.run.id)
+}
+
+/** Session-scoped lifecycle keys stay bound to their original run across restarts. */
+export async function setInteractiveCoordinatorEnabled(params: {
+  sessionId: string; provider: AgentProvider; requestId: string; enabled: boolean; cwd?: string; autoContinue?: boolean
+}): Promise<void> {
+  if (!params.requestId.trim()) throw new Error('A stable request ID is required')
+  const { sessionId, provider, requestId } = params
+  return serializeAutomaticDelegation(`chat-lifecycle:${provider}:${sessionId}`, async () => {
+    const db = await getDatabase()
+    const fingerprint = JSON.stringify({ enabled: params.enabled, autoContinue: params.autoContinue ?? null })
+    let attempt = db.prepare('SELECT * FROM protocol_interactive_lifecycle WHERE session_id = ? AND provider = ? AND request_id = ?').get(sessionId, provider, requestId) as Row | undefined
+    if (attempt && attempt.fingerprint !== fingerprint) throw new Error('This request ID was already used with different lifecycle settings')
+    if (attempt?.completed) return
+    const existing = await readSessionCoordinator(sessionId, provider)
+    if (existing && !existing.agents.some(agent => agent.role === 'lead' && agent.sessionId === sessionId)) throw new Error('Only the lead conversation can change coordination')
+    if (!attempt) {
+      const terminal = existing && ['completed', 'failed', 'stopped'].includes(existing.run.status)
+      const runId = params.enabled && (!existing || terminal)
+        ? `chat-${createHash('sha256').update(`${provider}:${sessionId}`).digest('hex').slice(0, 40)}${terminal ? `-${createHash('sha256').update(requestId).digest('hex').slice(0, 16)}` : ''}`
+        : existing?.run.id ?? null
+      await enqueueWrite(tx => { tx.prepare('INSERT INTO protocol_interactive_lifecycle (session_id, provider, request_id, fingerprint, run_id) VALUES (?, ?, ?, ?, ?)').run(sessionId, provider, requestId, fingerprint, runId) })
+      attempt = { run_id: runId }
+    }
+    const runId = attempt.run_id ? String(attempt.run_id) : null
+    if (params.enabled) {
+      if (!params.cwd) throw new Error('Open a local project conversation before enabling coordination')
+      if (existing && existing.run.id !== runId && !['completed', 'failed', 'stopped'].includes(existing.run.status)) throw new Error('A newer team is active; this request belongs to an older team')
+      if (existing && existing.run.id !== runId) {
+        if (activeChatDeliveries.has(sessionId) || getRunningSessionInfo(sessionId).running) throw new Error('Wait for the current chat turn to finish before starting a new team')
+        await enqueueWrite(tx => { tx.prepare('DELETE FROM protocol_chat_delivery WHERE session_id = ? AND run_id = ?').run(sessionId, existing.run.id) })
+      }
+      await configureInteractiveCoordinator({ sessionId, provider, cwd: params.cwd, restartRunId: runId ?? undefined, autoContinue: params.autoContinue })
+    } else if (existing?.run.id === runId) {
+      await disableInteractiveCoordinator(sessionId, provider)
+    }
+    await enqueueWrite(tx => { tx.prepare('UPDATE protocol_interactive_lifecycle SET completed = 1 WHERE session_id = ? AND provider = ? AND request_id = ?').run(sessionId, provider, requestId) })
+  })
 }
 
 /** Stop this chat's team without interrupting the user's primary conversation. */
@@ -7760,6 +7813,7 @@ async function dispatchAgentTurn(
     const agentRow = db.prepare('SELECT * FROM protocol_agents WHERE id = ? AND run_id = ?').get(agentId, controller.runId) as Row | undefined
     if (!agentRow) return
     const agent = rowToAgent(agentRow)
+    if (agent.sessionId.startsWith('external:') && !controller.sessionIds.has(agentId)) return
     activeAgent = agent
     const activeTaskRow = agent.taskId
       ? db.prepare('SELECT * FROM protocol_tasks WHERE id = ? AND run_id = ?').get(agent.taskId, controller.runId) as Row | undefined
@@ -7885,7 +7939,7 @@ async function dispatchTeammateWork(controller: RunController, agentId: string):
   const agents = listAgentsSync(db, controller.runId)
   const agentsById = new Map(agents.map((entry) => [entry.id, entry]))
   const agent = agentsById.get(agentId)
-  if (!agent) return
+  if (!agent || (agent.sessionId.startsWith('external:') && !controller.sessionIds.has(agentId))) return
   const tasks = listTasksSync(db, controller.runId)
   // Blocked tasks stay dispatchable: a woken teammate resumes the task its
   // inbox advice is about, rather than being told to claim something else.
@@ -8039,6 +8093,7 @@ async function handleAgentTurnEnd(controller: RunController, agentId: string): P
     type: 'message',
     to: 'lead',
     summary: `${agent.name} finished — no claimable tasks remain.`,
+    payload: { kind: controller.interactiveLeadId ? 'status' : 'request' },
   })
   await dispatchClaimableLeadTask(controller)
   await maybeStartSynthesis(controller)

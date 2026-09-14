@@ -57,6 +57,7 @@ export const ROUTE_SCOPES: Record<string, Partial<Record<HttpMethod, RouteScope>
   '/api/sessions/[sessionId]/interrupt': { POST: 'write' },
   // Spends model tokens, so not a read however much it looks like one.
   '/api/sessions/[sessionId]/insights': { POST: 'write' },
+  '/api/sessions/[sessionId]/coordination': { GET: 'read', POST: 'write' },
   '/api/sessions/[sessionId]/coord-join': { POST: 'write', DELETE: 'write' },
 
   // --- Search and history ------------------------------------------------
@@ -103,6 +104,7 @@ export const ROUTE_SCOPES: Record<string, Partial<Record<HttpMethod, RouteScope>
   '/api/agent-protocol/runs/changes': { GET: 'read' },
   '/api/agent-protocol/runs/[runId]': { GET: 'read', PATCH: 'write', DELETE: 'write' },
   '/api/agent-protocol/runs/[runId]/events': { GET: 'read', POST: 'write' },
+  '/api/agent-protocol/runs/[runId]/delegate': { POST: 'write' },
   '/api/agent-protocol/runs/[runId]/stop': { POST: 'write' },
   '/api/agent-protocol/runs/[runId]/cleanup': { POST: 'write' },
   '/api/agent-protocol/playbooks': { GET: 'read', PUT: 'write', DELETE: 'write' },

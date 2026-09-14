@@ -31,7 +31,7 @@ try {
     else if (url.pathname.endsWith('/coordination')) {
       if (route.request().method() === 'POST') {
         const body = route.request().postDataJSON(); actions.push(body)
-        if (body.action === 'enable') enabled = true
+        if (body.action === 'enable') { enabled = true; stopped = false }
         if (body.action === 'disable') { enabled = false; autoContinue = false; stopped = true }
         if (body.action === 'settings') autoContinue = body.autoContinue
       }
@@ -56,13 +56,16 @@ try {
   await page.locator(`[data-session-key="codex:${lead.sessionId}"]`).click({ timeout: 60000 })
   const dock = page.locator('.av-web-composer-card').first()
   const chatTab = dock.getByRole('tab', { name: 'Chat', exact: true })
-  const teamTab = dock.getByRole('tab', { name: 'Teammates', exact: true })
+  const teamTab = dock.getByRole('tab', { name: /^Teammates/ })
   await chatTab.click()
   const composer = dock.locator('textarea').filter({ visible: true }).first()
   await composer.fill('Preserve this lead draft while inspecting reviewer')
   await teamTab.click()
   await page.getByRole('button', { name: 'Enable coordinator', exact: true }).click()
   await page.getByText('Coordinator on', { exact: true }).waitFor()
+  await chatTab.click()
+  await dock.getByLabel('1 need attention', { exact: true }).waitFor()
+  await teamTab.click()
   assert.equal(await page.getByRole('dialog', { name: 'Conversation teammates' }).count(), 0, 'teammates is docked, not floating')
   const panel = page.getByRole('region', { name: 'Conversation teammates' })
   const cardBounds = await dock.boundingBox()
@@ -93,6 +96,8 @@ try {
   await page.getByText('Coordinator off', { exact: true }).waitFor()
   assert.equal(await page.getByLabel('Task or follow-up', { exact: true }).count(), 0)
   assert.ok(actions.some(action => action.action === 'disable' && action.requestId))
+  await page.getByRole('button', { name: 'Enable coordinator', exact: true }).click()
+  await page.getByText('Coordinator on', { exact: true }).waitFor()
   assert.equal(errors.length, 0, errors.join('\n'))
   console.log('Rendered enablement, continuation preference, native attention, embedded transcript, lead draft preservation, and named follow-up passed')
 } finally { await browser.close() }

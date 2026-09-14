@@ -79,6 +79,8 @@ export type ThreadedMessage = {
   provider?: AgentProvider
   taskDescription?: string
   requestId?: string
+  /** See SessionMessage.resumeReason — marks a turn that is an automatic re-run. */
+  resumeReason?: string
   providerMessageId?: string
   aborted?: boolean
   subagentType?: string
@@ -441,6 +443,7 @@ export function buildThreadedMessages(messages: SessionMessage[]): ThreadedMessa
         provider: msg.provider,
         taskDescription: msg.taskDescription,
         requestId: msg.requestId,
+        resumeReason: msg.resumeReason,
         providerMessageId,
         ...messageTranscriptMetadata(msg),
         blocks: threadedBlocks,

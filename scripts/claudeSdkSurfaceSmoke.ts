@@ -14,7 +14,9 @@ import { normalizeClaudeHistoryMessages, normalizeClaudeStreamThreadedMessage } 
 import { effortToSdk } from '../lib/claudePool'
 import { formatClaudeRuntimeCounts, formatClaudeRuntimeDetailLines } from '../lib/claudeSdkFeatures'
 import { classifyClaudeUsageMessage, isClaudeUsageLimitError } from '../lib/claudeUsageLimits'
+import { defaultPermissionOptionIndex, extractClaudePermission, permissionOptionsFor } from '../lib/permissions'
 import { isTransientSendError } from '../lib/transientError'
+import { buildThreadedMessages } from '../lib/threading'
 import { formatMessageExpanded, formatTranscriptCards } from '../tui/format'
 import type { SystemMessagePayload } from '../lib/types'
 
@@ -141,5 +143,78 @@ for (const [from, to] of [['high', 'low'], ['low', 'max'], ['minimal', 'high']] 
 for (const [from, to] of [['high', 'off'], ['off', 'high'], ['high', 'minimal'], ['high', undefined], [undefined, 'high']] as const) {
   assert.equal(liveApplicable(from, to), false, `effort ${from} -> ${to} must force a respawn`)
 }
+
+// --- permission presentation constraints ----------------------------------
+// SDK 0.3.270 sends two constraints alongside an ask, and both are about what
+// the surface may OFFER rather than what the answer is. Getting either wrong is
+// invisible in a screenshot: the card looks exactly like a correct one, and the
+// only symptom is that the user can approve something with one keystroke that
+// the CLI said needed a deliberate choice.
+const claudeAsk = (data: Record<string, unknown>) => extractClaudePermission({
+  type: 'claude_permission',
+  event: { type: 'permission.requested', data: { requestId: 'req-1', sessionId: 's1', toolName: 'Bash', input: { command: 'rm -rf build' }, ...data } },
+})
+
+// suppressAlwaysAllowRule outranks having suggestions to offer: the rule the
+// affordance would write grants more than this ask's own action, so it must not
+// be offered at all. Deriving canApproveAlways from the suggestions alone —
+// which is what the code did before — shows the button anyway.
+assert.equal(claudeAsk({ suggestions: [{ type: 'addRules' }] })?.canApproveAlways, true)
+assert.equal(claudeAsk({ suggestions: [{ type: 'addRules' }], suppressAlwaysAllowRule: true })?.canApproveAlways, false)
+
+// defaultToNo only changes where the cursor opens; every option stays reachable,
+// because withholding the decision the user wants is worse than a confirm.
+assert.equal(claudeAsk({})?.defaultToDeny, undefined)
+assert.equal(claudeAsk({ defaultToNo: true })?.defaultToDeny, true)
+
+const denyFirst = claudeAsk({ defaultToNo: true, suggestions: [{ type: 'addRules' }] })!
+const denyFirstOptions = permissionOptionsFor(denyFirst)
+assert.equal(defaultPermissionOptionIndex(denyFirst, denyFirstOptions), denyFirstOptions.findIndex((o) => o.response === 'reject'))
+assert.ok(denyFirstOptions.some((o) => o.response === 'once'), 'approve must still be offered on a defaultToNo ask')
+// An ordinary ask is unchanged — this must not become "every card opens on Reject".
+assert.equal(defaultPermissionOptionIndex(claudeAsk({})!, permissionOptionsFor(claudeAsk({})!)), 0)
+
+// --- turn re-runs (resume_reason) ------------------------------------------
+// A worker restart makes the CLI re-run the interrupted turn automatically, and
+// SDK 0.3.270 stamps `resume_reason` on the re-run's first reply frame. Without
+// it a re-run is indistinguishable from the attempt it replaces: the transcript
+// shows what looks like one prompt answered twice, with nothing to say why.
+//
+// It is a WRAPPER-level sibling, never inside message.content — it describes the
+// turn, not what the model said, so it must not be replayed to the model. Both
+// mapping paths have to carry it: the live stream delivers the field flat, the
+// history JSONL nests the payload under `.message`, and a reload that dropped it
+// would lose the explanation while keeping the duplicate-looking turn.
+const rerunFrame = (extra: Record<string, unknown> = {}) => ({
+  type: 'assistant',
+  uuid: 'rerun-1',
+  session_id: 's',
+  resume_reason: 'host_draining',
+  message: { role: 'assistant', content: [{ type: 'text', text: 'picking that back up' }] },
+  ...extra,
+})
+
+const rerunHistory = normalizeClaudeHistoryMessages([rerunFrame()])
+assert.equal(rerunHistory.length, 1)
+assert.equal(rerunHistory[0]!.resumeReason, 'host_draining', 'history path dropped resume_reason')
+// An ordinary turn carries nothing, or every card would claim to be a re-run.
+assert.equal(
+  normalizeClaudeHistoryMessages([{ ...rerunFrame(), resume_reason: undefined }])[0]!.resumeReason,
+  undefined,
+)
+
+// It has to survive threading to reach either renderer, and then the TUI card —
+// the badge and the header meta are both derived from it, not re-read.
+const rerunThreaded = buildThreadedMessages(rerunHistory)
+const rerunAssistant = rerunThreaded.find((message) => message.role === 'assistant')
+assert.ok(rerunAssistant, 'threading dropped the re-run assistant message')
+assert.equal(rerunAssistant!.resumeReason, 'host_draining', 'threading dropped resume_reason')
+assert.equal(formatTranscriptCards(rerunThreaded)[0]!.resumeReason, 'host_draining', 'card dropped resume_reason')
+
+// And it must not leak into the content the model sees on replay.
+assert.ok(
+  !JSON.stringify(rerunHistory[0]!.message).includes('host_draining'),
+  'resume_reason leaked into message content, where it would be replayed to the model',
+)
 
 console.log('Claude SDK surface smoke passed')

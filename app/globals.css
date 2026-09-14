@@ -7795,8 +7795,9 @@ button.av-session-viz-graph-node:disabled {
 .av-web-composer-card:has(.av-composer-dock-tabs [role="tab"]:focus) { border-color: color-mix(in srgb, var(--border-2) 82%, transparent) !important; box-shadow: 0 8px 24px var(--shadow, rgba(0,0,0,.16)) !important; transform: none; }
 .av-composer-dock { gap: 0; }
 .av-composer-dock-tabs { height: 34px; padding: 0 16px; gap: 20px; width: 100%; justify-content: flex-start; border-bottom: 1px solid var(--border); }
-.av-composer-dock-tabs [role="tab"] { flex: 0 0 auto; height: 34px; padding: 0 2px; border: 0; border-radius: 0; font-size: 12px; color: var(--text-3); }
-.av-composer-dock-tabs [role="tab"]::after { bottom: 0; left: 0; right: 0; height: 2px; background: var(--cyan); }
+.av-composer-dock-tabs [role="tab"] { flex: 0 0 auto; height: 34px; padding: 0 2px; border: 0; border-radius: 0; font-size: 12px; color: var(--text-3); transition: none; }
+.av-composer-dock-tabs [role="tab"]::after { bottom: 0; left: 0; right: 0; height: 2px; background: var(--cyan); opacity: 0; transition: none; }
+.av-composer-dock-tabs [role="tab"][data-state="active"]::after { opacity: 1; }
 .av-composer-dock-tabs [role="tab"]:focus-visible { outline: 1px solid var(--cyan); outline-offset: -4px; box-shadow: none; }
 .av-composer-dock-tabs [role="tab"][data-state="active"] { color: var(--cyan); }
 .av-composer-dock-pane[data-state="inactive"] { display: none; }

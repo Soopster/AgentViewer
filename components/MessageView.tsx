@@ -2991,6 +2991,8 @@ function MessageViewInner({
   rightPanelOpen,
   onToggleRightPanel,
 }: Props) {
+  const [teamAttention, setTeamAttention] = useState({ sessionId: '', count: 0 })
+  const updateTeamAttention = useCallback((count: number) => setTeamAttention(previous => previous.sessionId === session?.sessionId && previous.count === count ? previous : { sessionId: session?.sessionId ?? '', count }), [session?.sessionId])
   const [composerDock, setComposerDock] = useState({ sessionId: '', tab: 'chat' })
   const composerTab = composerDock.sessionId === session?.sessionId ? composerDock.tab : 'chat'
   const returnToChat = useCallback(() => setComposerDock({ sessionId: session?.sessionId ?? '', tab: 'chat' }), [session?.sessionId])
@@ -9193,7 +9195,7 @@ function MessageViewInner({
           <Tabs value={hideCoordinator ? 'chat' : composerTab} onValueChange={tab => setComposerDock({ sessionId: session?.sessionId ?? '', tab })} className="av-composer-dock">
             {session && !hideCoordinator ? <TabsList variant="line" aria-label="Composer" className="av-composer-dock-tabs">
               <TabsTrigger value="chat">Chat</TabsTrigger>
-              <TabsTrigger value="teammates">Teammates</TabsTrigger>
+              <TabsTrigger value="teammates">Teammates{teamAttention.sessionId === session.sessionId && teamAttention.count > 0 ? <span aria-label={`${teamAttention.count} need attention`} style={{ color: 'var(--amber)' }}> · {teamAttention.count}</span> : null}</TabsTrigger>
             </TabsList> : null}
             <TabsContent value="chat" forceMount className="av-composer-dock-pane">
           <CardContent className="av-web-composer-content" style={{ padding: '14px 16px 10px' }}>
@@ -9522,7 +9524,13 @@ function MessageViewInner({
                         ) : null}
                       </div>
                       <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                        {(['once', 'always', 'reject'] as const)
+                        {/* `defaultToDeny` asks must not put approve where a
+                            reflex click lands, so Reject leads the row instead
+                            of trailing it. Every option is still offered — the
+                            constraint is on emphasis, not on the decision. */}
+                        {(permission.defaultToDeny
+                          ? (['reject', 'once', 'always'] as const)
+                          : (['once', 'always', 'reject'] as const))
                           .filter((response) => response !== 'always' || permission.canApproveAlways !== false)
                           .map((response) => (
                           <Button
@@ -10292,7 +10300,7 @@ function MessageViewInner({
           </CardContent>
             </TabsContent>
             {session && !hideCoordinator ? <TabsContent value="teammates" forceMount className="av-composer-dock-pane">
-              <CoordinatorConversation key={`${session.provider}:${session.sessionId}`} session={session} onInspect={onInspectTeammate!} onReturnToChat={returnToChat} />
+              <CoordinatorConversation key={`${session.provider}:${session.sessionId}`} session={session} onInspect={onInspectTeammate!} onReturnToChat={returnToChat} onAttentionChange={updateTeamAttention} />
             </TabsContent> : null}
           </Tabs>
         </Card>

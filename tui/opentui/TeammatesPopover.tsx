@@ -16,12 +16,14 @@ import { formatProviderLabel } from '../format'
 import { fitText, joinMeta } from './textLayout'
 import { MODAL_CONTENT_Z_INDEX } from './layers'
 import type { ProtocolAgent } from '../../lib/agentProtocol'
+import { coordinatorAttention, type CoordinatorAttentionItem } from '../../lib/coordinatorAttention'
 import { coordinatorAgentActivity } from '../../lib/coordinatorInteractiveState'
 import {
   closeInteractiveCoordinator,
   discardInteractiveCoordinatorAction,
   getInteractiveCoordinatorState,
   retryInteractiveCoordinatorAction,
+  reviewInteractiveCoordinatorResult,
   runInteractiveCoordinatorAction,
   subscribeInteractiveCoordinator,
 } from './interactiveCoordinatorStore'
@@ -38,7 +40,7 @@ type Props = {
 }
 
 /** Composing a task or a message; `to` is null for "any available teammate". */
-type Draft = { kind: 'delegate' | 'message'; to: string | null; toName: string; text: string }
+type Draft = { kind: 'delegate' | 'message' | 'decision'; to: string | null; toName: string; text: string; taskId?: string; decisionId?: string; inReplyTo?: string }
 
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'stopped'])
 
@@ -46,7 +48,7 @@ const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'stopped'])
 // here rather than letting a focused OpenTUI <input> see them), so the draft
 // field is built from key events like CoordinationPopover's message composer.
 function isPrintable(key: TeammatesKeyEvent): boolean {
-  return !key.ctrl && key.sequence.length === 1 && key.sequence >= ' '
+  return !key.ctrl && Array.from(key.sequence).length === 1 && key.sequence >= ' '
 }
 
 export const TeammatesPopover = memo(function TeammatesPopover({
@@ -56,6 +58,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
     subscribeInteractiveCoordinator, getInteractiveCoordinatorState, getInteractiveCoordinatorState,
   )
   const [index, setIndex] = useState(0)
+  const [attentionIndex, setAttentionIndex] = useState(0)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [confirmOff, setConfirmOff] = useState(false)
 
@@ -84,6 +87,8 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   // An unresolved request is a hard gate, not a warning: a second mutation
   // while the first's outcome is unknown is what the idempotency key cannot
   // protect against.
+  const items = useMemo(() => snapshot ? coordinatorAttention(snapshot).filter(item => item.kind !== 'result' || !state.reviewed.includes(item.id)) : [], [snapshot, state.reviewed])
+  const currentAttention = items[Math.min(attentionIndex, Math.max(items.length - 1, 0))] ?? null
   const locked = busy || Boolean(pending)
   const disabled = locked || terminal || !canLead
 
@@ -98,19 +103,20 @@ export const TeammatesPopover = memo(function TeammatesPopover({
 
   const handleKey = useCallback((key: TeammatesKeyEvent) => {
     if (draft) {
+      if (key.name === 'paste') { setDraft({ ...draft, text: (draft.text + key.sequence.replace(/\r\n?/g, '\n')).slice(0, 8000) }); return }
       if (key.name === 'escape') { setDraft(null); return }
       if (key.name === 'return') {
         const text = draft.text.trim()
         if (!text) { setDraft(null); return }
         act(draft.kind === 'delegate'
           ? { action: 'delegate', detail: text, to: draft.to ?? 'auto' }
-          : { action: 'message', detail: text, to: draft.to ?? undefined },
+          : { action: draft.kind, detail: text, to: draft.to ?? undefined, taskId: draft.taskId, decisionId: draft.decisionId, inReplyTo: draft.inReplyTo },
           draft.kind === 'delegate' ? `Task sent to ${draft.toName}` : `Message sent to ${draft.toName}`)
         setDraft(null)
         return
       }
-      if (key.name === 'backspace') { setDraft({ ...draft, text: draft.text.slice(0, -1) }); return }
-      if (isPrintable(key)) setDraft({ ...draft, text: draft.text + key.sequence })
+      if (key.name === 'backspace') { setDraft({ ...draft, text: Array.from(draft.text).slice(0, -1).join('') }); return }
+      if (isPrintable(key)) setDraft({ ...draft, text: (draft.text + key.sequence).slice(0, 8000) })
       return
     }
     if (confirmOff) {
@@ -130,7 +136,30 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       if (key.name === 'e') { discardInteractiveCoordinatorAction(); return }
       return
     }
-    if (!enabled) {
+    // Inspection stays available after a run ends or coordination is off.
+    if (key.name === 'return' && selected) { onOpenSession(selected); closeInteractiveCoordinator(); return }
+    if (key.name === '[' || key.name === ']') {
+      setAttentionIndex(current => items.length ? (current + (key.name === ']' ? 1 : -1) + items.length) % items.length : 0)
+      return
+    }
+    if (currentAttention?.kind === 'result' && key.name === 's') { reviewInteractiveCoordinatorResult(currentAttention.id); return }
+    if (currentAttention && !disabled) {
+      if (currentAttention.kind === 'plan' && (key.name === 'a' || key.name === 'v')) {
+        const approved = key.name === 'a'
+        act({ action: 'review-plan', taskId: currentAttention.taskId, approved, detail: approved ? 'Plan approved by user' : 'Plan rejected; revise before proceeding' }, approved ? 'Plan approved' : 'Plan revision requested')
+        return
+      }
+      if (key.name === 'b' && ['decision', 'message', 'blocker'].includes(currentAttention.kind)) {
+        setDraft({ kind: currentAttention.kind === 'decision' ? 'decision' : 'message', to: currentAttention.agentId ?? null,
+          toName: currentAttention.title, text: '', taskId: currentAttention.taskId, decisionId: currentAttention.decisionId, inReplyTo: currentAttention.messageId })
+        return
+      }
+    }
+    if ((!enabled || terminal) && key.name === 'e' && !locked && canLead) {
+      act({ action: 'enable', detail: 'Enable interactive coordination' }, 'Coordinator enabled for this conversation')
+      return
+    }
+    if (!enabled && teammates.length === 0) {
       if (key.name === 'e' && !busy && !terminal && canLead) {
         act({ action: 'enable', detail: 'Enable interactive coordination' }, 'Coordinator enabled for this conversation')
       }
@@ -144,7 +173,11 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       setIndex((current) => Math.max(current - 1, 0))
       return
     }
-    if (key.name === 'c' && !disabled) {
+    if (key.name === 'e' && !enabled && !disabled) {
+      act({ action: 'enable', detail: 'Enable interactive coordination' }, 'Coordinator enabled for this conversation')
+      return
+    }
+    if (key.name === 'c' && enabled && !disabled) {
       act({ action: 'settings', detail: 'Update automatic continuation', autoContinue: !data?.interactive.autoContinue },
         data?.interactive.autoContinue ? 'Automatic continuation off' : 'Automatic continuation on')
       return
@@ -157,7 +190,6 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       return
     }
     if (key.name === 'x' && !disabled) { setConfirmOff(true); return }
-    if (key.name === 'return' && selected) { onOpenSession(selected); closeInteractiveCoordinator(); return }
     if (key.name === 'r' && selected && !disabled) {
       if (!recoveries.includes(selected.id)) {
         onNotice('info', `${selected.name} does not need recovery`, 3000)
@@ -175,7 +207,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       setDraft({ kind: 'message', to: selected.id, toName: selected.name, text: '' })
     }
   }, [act, busy, canLead, confirmOff, data, disabled, draft, enabled, locked, onNotice, onOpenSession,
-      pending, recoveries, selected, teammates.length, terminal, unconfirmedDelivery])
+      pending, recoveries, selected, teammates.length, terminal, unconfirmedDelivery, currentAttention, items.length])
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
 
@@ -189,7 +221,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   // appears without being subtracted here pushes the footer off the frame.
   const bodyH = Math.max(popH - 6 - (draft || confirmOff ? 1 : 0), 6)
 
-  const attentionCount = attention.length + recoveries.length + (unconfirmedDelivery ? 1 : 0)
+  const attentionCount = items.length + attention.length + recoveries.length + (unconfirmedDelivery ? 1 : 0)
   // Status and its meta are separate <text>s so only the status carries colour;
   // colouring the whole joined line made every word shout at the same volume.
   const headline = !session ? 'No conversation selected'
@@ -216,7 +248,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       : pending
         ? [['r', 'retry same request'], ['e', 'edit after checking task history']]
         : !enabled
-          ? (canLead && !terminal ? [['e', 'enable coordinator'], ['esc', 'close']] : [['esc', 'close']])
+          ? (teammates.length ? [['j/k', 'move'], ['⏎', 'open transcript'], ['e', 'new team'], ['esc', 'close']] : canLead ? [['e', 'enable coordinator'], ['esc', 'close']] : [['esc', 'close']])
           : [['j/k', 'move'], ['⏎', 'open'], ['d', 'ask'], ['m', 'message'],
              ['r', 'resume'], ['c', 'continuation'], ['x', 'turn off'], ['esc', 'close']]
   // Truncation is by whole entries, not mid-word: a hint cut to "x …" tells the
@@ -294,6 +326,12 @@ export const TeammatesPopover = memo(function TeammatesPopover({
             </box>
           ) : null}
 
+          {currentAttention ? <box flexDirection="column" paddingBottom={1}>
+            <text fg={theme.amber} wrapMode="word" width={innerW}>{`ATTENTION ${Math.min(attentionIndex + 1, items.length)}/${items.length} · ${currentAttention.kind} · ${currentAttention.title}`}</text>
+            <text fg={theme.text} wrapMode="word" width={innerW}>{currentAttention.detail}</text>
+            <text fg={theme.cyan} wrapMode="word" width={innerW}>{attentionHint(currentAttention, disabled)}</text>
+          </box> : null}
+
           {enabled ? (
             <box flexDirection="column">
               <box flexDirection="row">
@@ -321,7 +359,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
             </box>
           ) : null}
 
-          {enabled && teammates.length > 0 ? (
+          {teammates.length > 0 ? (
             <box flexDirection="column" paddingTop={1}>
               <text fg={theme.muted} wrapMode="none">TEAMMATES</text>
               {teammates.map((agent, agentIndex) => {
@@ -426,3 +464,12 @@ export const TeammatesPopover = memo(function TeammatesPopover({
     </box>
   )
 })
+
+function attentionHint(item: CoordinatorAttentionItem, disabled: boolean): string {
+  const action = item.kind === 'result' ? 's mark reviewed'
+    : disabled ? ''
+    : item.kind === 'plan' ? 'a approve plan · v request revision'
+    : ['decision', 'message', 'blocker'].includes(item.kind) ? 'b reply'
+    : 'Review in Agent Operations'
+  return ['[ / ] select attention', action].filter(Boolean).join(' · ')
+}

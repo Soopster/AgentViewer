@@ -165,6 +165,11 @@ export type EditorKeyEvent = {
 type Props = {
   cwd?: string | null
   initialPath?: string | null
+  // 1-based, the way a transcript reference or stack trace writes it. Null means
+  // "no destination", which must stay distinct from line 1: the caret-restore
+  // effect treats a pending jump and an absent one differently, and a file
+  // opened with no target has to land on the reader's remembered place.
+  initialLine?: number | null
   theme: TuiThemePalette
   width: number
   height: number
@@ -1226,6 +1231,7 @@ function smartNewLineInsertion(content: string, offset: number, path: string): {
 export function EditorPopover({
   cwd,
   initialPath,
+  initialLine,
   theme,
   width,
   height,
@@ -1739,14 +1745,21 @@ export function EditorPopover({
       setTreeExpanded(topDirs)
       if (initialPath) {
         const rel = normalizeRelativePath(root, initialPath)
-        if (rel && paths.includes(rel)) void openBuffer(rel)
+        if (rel && paths.includes(rel)) {
+          // Seed the same pending-jump slot an LSP "go to definition" uses, so
+          // the caret lands once the buffer mounts rather than racing it.
+          if (initialLine && initialLine > 0) {
+            pendingJumpRef.current = { path: rel, line: initialLine - 1, character: 0 }
+          }
+          void openBuffer(rel)
+        }
       }
     }).catch((error) => setMessage(error instanceof Error ? error.message : 'Unable to scan project'))
     return () => { cancelled = true }
   // `openBuffer` is event-like and intentionally reads current tabs through a
   // functional update; rescanning should only follow the root/path inputs.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialPath, recoveryLoaded, root])
+  }, [initialPath, initialLine, recoveryLoaded, root])
 
   useEffect(() => {
     let cancelled = false

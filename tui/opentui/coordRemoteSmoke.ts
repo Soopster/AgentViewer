@@ -65,6 +65,8 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
     return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
   }
 
+  if (url.includes('/coordination')) return Response.json({ snapshot, interactive: { enabled: true, autoContinue: false, remainingTurns: 4, delivery: null }, recoveries: [], permissions: [], runningAgentIds: [] })
+
   const payload = url.endsWith('/api/agent-protocol/runs?limit=7')
     ? { runs: [snapshot.run] }
     : method === 'DELETE'
@@ -88,6 +90,8 @@ try {
     listTuiProtocolRuns,
     prewarmTuiSession,
     readTuiProtocolRun,
+    readTuiSessionCoordinator,
+    sendTuiSessionCoordination,
     startTuiProtocolRun,
     stopTuiProtocolRun,
     subscribeTuiProtocolRunChanges,
@@ -146,6 +150,20 @@ try {
   if (JSON.stringify(requests) !== JSON.stringify(expected)) {
     throw new Error(`Coordinator calls did not stay on the daemon:\n${JSON.stringify(requests, null, 2)}`)
   }
+  const interactiveOffset = requests.length
+  const interactive = await readTuiSessionCoordinator('session / remote', 'codex')
+  if (!interactive.interactive.enabled) throw new Error('Interactive state did not return from daemon')
+  const actions = ['enable', 'settings', 'reconcile', 'resume-agent', 'delegate', 'message', 'review-plan', 'decision', 'disable'] as const
+  for (const action of actions) {
+    const request = { action, requestId: `stable-${action}`, detail: 'Fixture request', to: 'agent-1', cwd: smokeCwd, taskId: 'task-1', decisionId: 'choice-1', approved: true, inReplyTo: 'question-1' }
+    await sendTuiSessionCoordination('session / remote', 'codex', request)
+    await sendTuiSessionCoordination('session / remote', 'codex', request)
+    const [first, retry] = requests.slice(-2)
+    if (JSON.stringify(first) !== JSON.stringify(retry)) throw new Error('Interactive retry changed its request')
+    if (first?.method !== 'POST' || first.url !== 'http://daemon.example.test/api/sessions/session%20%2F%20remote/coordination'
+      || JSON.stringify(first.body) !== JSON.stringify({ provider: 'codex', ...request })) throw new Error('Interactive action left the remote session boundary')
+  }
+  if (requests[interactiveOffset]?.url !== 'http://daemon.example.test/api/sessions/session%20%2F%20remote/coordination?provider=codex') throw new Error('Interactive read lost its provider')
   if (existsSync(path.join(smokeCwd, '.agent-viewer-data'))) {
     throw new Error('Attached Coordinator calls created local state instead of remaining daemon-owned')
   }

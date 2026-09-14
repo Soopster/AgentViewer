@@ -263,6 +263,9 @@ function normalizeClaudeHistoryMessage(value: unknown): SessionMessage | null {
 
   const taskDescription = type === 'user' ? readString(record, 'task_description', 'taskDescription') : undefined
   const requestId = type === 'assistant' ? readString(record, 'request_id', 'requestId') : undefined
+  // Wrapper-level sibling, never inside message.content — it describes the turn,
+  // not what the model said, and must not be replayed to the model.
+  const resumeReason = readString(record, 'resume_reason', 'resumeReason')
 
   return {
     type,
@@ -274,6 +277,7 @@ function normalizeClaudeHistoryMessage(value: unknown): SessionMessage | null {
     origin: asOrigin(record.origin),
     taskDescription,
     requestId,
+    resumeReason,
     message: type === 'system'
       ? normalizeSystemMessage(record.message, typeof payload.subtype === 'string' ? payload.subtype : 'system')
       : normalizeApiMessage(type, record.message, record.tool_use_result, record.tool_result_meta, record),

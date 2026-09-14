@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { extractPendingPermissions } from '@/lib/permissions'
 import { isAgentProvider } from '@/lib/provider'
 import { readViewSessionInfo, readViewSessionRunning } from '@/lib/sessionBackend'
-import { disableInteractiveCoordinator, configureInteractiveCoordinator, readInteractiveCoordinator, readInteractiveRecoveries, reconcileInteractiveDelivery, resumeInteractiveAgent, createExternalProtocolTask, readSessionCoordinator, reviewExternalProtocolPlan, runExternalProtocolIdempotent, sendExternalProtocolMessage, sessionCoordinatorIdentity, resolveProtocolDecisionAdmin } from '@/lib/agentCoordination'
+import { setInteractiveCoordinatorEnabled, configureInteractiveCoordinator, readInteractiveCoordinator, readInteractiveRecoveries, reconcileInteractiveDelivery, resumeInteractiveAgent, createExternalProtocolTask, readSessionCoordinator, reviewExternalProtocolPlan, runExternalProtocolIdempotent, sendExternalProtocolMessage, sessionCoordinatorIdentity, resolveProtocolDecisionAdmin } from '@/lib/agentCoordination'
 
 const schema = z.object({
   provider: z.string().refine(isAgentProvider),
@@ -45,12 +45,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ ses
   const body = parsed.data
   const { sessionId } = await params
   try {
-    if (body.action === 'disable') {
-      // Terminal stop is naturally idempotent, including a retry after the identity has ended.
-      await disableInteractiveCoordinator(sessionId, body.provider)
-      return NextResponse.json({ result: { disabled: true }, ...await readState(sessionId, body.provider) }, { headers: { 'Cache-Control': 'no-store' } })
+    if (body.action === 'disable' || body.action === 'enable') {
+      const info = body.action === 'enable' ? await readViewSessionInfo(sessionId, body.provider).catch(() => null) : null
+      await setInteractiveCoordinatorEnabled({ sessionId, provider: body.provider, requestId: body.requestId, enabled: body.action === 'enable', cwd: info?.cwd || body.cwd, autoContinue: body.autoContinue })
+      return NextResponse.json({ result: { configured: true }, ...await readState(sessionId, body.provider) }, { headers: { 'Cache-Control': 'no-store' } })
     }
-    if (body.action === 'delegate' || body.action === 'enable' || body.action === 'settings') {
+    if (body.action === 'delegate' || body.action === 'settings') {
       const info = await readViewSessionInfo(sessionId, body.provider).catch(() => null)
       const cwd = info?.cwd || body.cwd
       if (!cwd) throw new Error('Open a local project conversation before delegating')
@@ -58,7 +58,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ ses
     }
     const identity = await sessionCoordinatorIdentity(sessionId, body.provider)
     const result = await runExternalProtocolIdempotent(identity, `chat_${body.action}`, body.requestId, async () => {
-      if (body.action === 'enable' || body.action === 'settings') {
+      if (body.action === 'settings') {
         const snapshot = await readSessionCoordinator(sessionId, body.provider)
         await configureInteractiveCoordinator({ sessionId, provider: body.provider, cwd: snapshot!.run.baseCwd, autoContinue: body.autoContinue })
         return { configured: true }

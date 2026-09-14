@@ -732,7 +732,7 @@ export async function readTuiSessionCoordinator(
 }
 
 export type TuiSessionCoordinationRequest = {
-  action: 'disable' | 'enable' | 'settings' | 'reconcile' | 'resume-agent' | 'delegate' | 'message'
+  action: 'disable' | 'enable' | 'settings' | 'reconcile' | 'resume-agent' | 'delegate' | 'message' | 'review-plan' | 'decision'
   /** Stable across retries: every mutation below is replayed under this key. */
   requestId: string
   detail: string
@@ -742,6 +742,10 @@ export type TuiSessionCoordinationRequest = {
   received?: boolean
   to?: string
   paths?: string[]
+  taskId?: string
+  decisionId?: string
+  approved?: boolean
+  inReplyTo?: string
 }
 
 /**
@@ -762,19 +766,19 @@ export async function sendTuiSessionCoordination(
     })
   }
   const coord = await coordination()
-  if (request.action === 'disable') {
-    // Terminal stop is naturally idempotent, including after the identity ends.
-    await coord.disableInteractiveCoordinator(sessionId, provider)
+  if (request.action === 'disable' || request.action === 'enable') {
+    const info = request.action === 'enable' ? await readViewSessionInfo(sessionId, provider).catch(() => null) : null
+    await coord.setInteractiveCoordinatorEnabled({ sessionId, provider, requestId: request.requestId, enabled: request.action === 'enable', cwd: info?.cwd || request.cwd, autoContinue: request.autoContinue })
     return readTuiSessionCoordinator(sessionId, provider)
   }
-  if (request.action === 'delegate' || request.action === 'enable' || request.action === 'settings') {
+  if (request.action === 'delegate' || request.action === 'settings') {
     const cwd = (await readViewSessionInfo(sessionId, provider).catch(() => null))?.cwd || request.cwd
     if (!cwd) throw new Error('Open a local project conversation before delegating')
     await coord.configureInteractiveCoordinator({ sessionId, provider, cwd })
   }
   const identity = await coord.sessionCoordinatorIdentity(sessionId, provider)
   await coord.runExternalProtocolIdempotent(identity, `chat_${request.action}`, request.requestId, async () => {
-    if (request.action === 'enable' || request.action === 'settings') {
+    if (request.action === 'settings') {
       const snapshot = await coord.readSessionCoordinator(sessionId, provider)
       await coord.configureInteractiveCoordinator({
         sessionId, provider, cwd: snapshot!.run.baseCwd, autoContinue: request.autoContinue,
@@ -799,8 +803,16 @@ export async function sendTuiSessionCoordination(
         paths: request.paths,
       })
     }
+    if (request.action === 'review-plan') {
+      if (!request.taskId || request.approved === undefined) throw new Error('Choose the task and approve or reject its plan')
+      return coord.reviewExternalProtocolPlan(identity, { taskId: request.taskId, approved: request.approved, summary: request.detail })
+    }
+    if (request.action === 'decision') {
+      if (!request.taskId || !request.decisionId) throw new Error('Choose the decision to answer')
+      return coord.resolveProtocolDecisionAdmin(identity.runId, { taskId: request.taskId, decisionId: request.decisionId, answer: request.detail })
+    }
     if (!request.to) throw new Error('Choose a teammate')
-    return coord.sendExternalProtocolMessage(identity, { to: request.to, body: request.detail, kind: 'request' })
+    return coord.sendExternalProtocolMessage(identity, { to: request.to, body: request.detail, inReplyTo: request.inReplyTo, kind: request.inReplyTo ? 'response' : 'request' })
   })
   return readTuiSessionCoordinator(sessionId, provider)
 }

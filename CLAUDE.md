@@ -80,7 +80,11 @@ Supporting modules split out of `sessionBackend.ts` so both paths can share them
 
 Sibling provider ids that drive `claude-agent-acp`/`codex-acp` over the Agent Client Protocol (`session/new → session/prompt → session/update`) as an alternate transport for the same two SDKs — not a `transport` flag on `'claude'`/`'codex'`, and not something OpenCode/Copilot/Pi get (no upstream ACP agent exists for them). `lib/acpAgentSpawn.ts` resolves the subprocess command (env override `CLAUDE_AGENT_ACP_PATH`/`CODEX_ACP_PATH`, else bare command on `PATH`) — the coordinator's `bin/agent-viewer-acp-client.mjs` hand-duplicates this table rather than importing it, since it runs under vanilla `node` with no TS loader. `lib/acpClientPool.ts` is the singleton subprocess/session pool (modeled on `lib/claudePool.ts`): buffers push-based `session/update` notifications into a monotonically indexed array so `lib/sessionBackend.ts`'s poll+offset message model can slice it, queues `session/request_permission`/`elicitation/create` for a real UI round-trip, and reaps idle/stalled subprocesses. `lib/acpMapper.ts` maps buffered ACP updates to `SessionMessage`. `lib/permissions.ts` bridges the pool's pending-request queue into the same `PendingPermission` UI every other provider uses.
 
-ACP has no session-listing, fork, rewind/rollback, delete, or model-listing RPC — sessions are transient/in-memory only (tracked from creation via `lib/sessionRuntime.ts`'s running-session registry, not persisted history), and `sessionBackend.ts` throws/no-ops those operations explicitly rather than faking support. `createAcpStream` (the send-message path) polls the pool's buffer every ~200ms and emits delta frames until the turn's `stop` update arrives — coarser than native providers' token-level streaming, an accepted v1 trade-off matching `lib/acpAgent.ts`'s own precedent.
+**ACP session persistence is advertised per agent, and the advertisement is a claim rather than a guarantee** (`lib/acpCapabilities.ts`). The protocol gates `session/list`, `session/load`, `session/resume`, `session/delete` and `session/fork` on the agent advertising them in its `initialize` response — which the pool used to discard, so this was long assumed to be "ACP cannot". Measured: claude-agent-acp 0.70.0 advertises `loadSession` plus session `list`/`resume`/`fork`/`delete`/`close`; codex-acp 1.6.2 the same minus `fork`. A capability is read by PRESENCE (`{}` means yes, absent or `null` means no) except `loadSession`, which is a plain boolean — `scripts/acpCapabilitySmoke.ts` pins both rules, since reading either wrong fails silently in one direction or the other.
+
+**Listing is gated on history actually being replayable, not on the advertisement.** codex-acp advertises `loadSession: true` and then fails every `session/load` with `Internal error … thread <id> already has an active writer` — verified across six of its newest threads, on fresh connections that had issued no other request, so the lock is not connection-scoped and no client action releases it. Gating on the advertisement alone would have put 250 codex sessions in the sidebar of which every one opens empty, which is strictly worse than the transient behaviour it replaced. `verifyAcpHistoryReadable` therefore loads the newest listed session once per agent and lists nothing if that fails; the check needs its own connection, because `session/list` itself takes the writer. It is self-correcting in both directions. The remaining ops (delete, fork, resume, model listing) are still absent by design rather than faked.
+
+Reads spawn a short-lived agent — listing is agent-scoped, so it cannot ride the session pool — which is why the answers are cached, single-flighted, and served stale while a refresh runs. Without that the 5s sidebar poll would spawn an agent every five seconds. A live pooled session always wins over a replay: `session/load` returns what the agent has persisted, which lags the turn currently streaming. `createAcpStream` (the send-message path) polls the pool's buffer every ~200ms and emits delta frames until the turn's `stop` update arrives — coarser than native providers' token-level streaming, an accepted v1 trade-off matching `lib/acpAgent.ts`'s own precedent.
 
 `lib/acpClientPool.ts`'s `cleanupChild` kills the full descendant tree on close/reap, not just the direct subprocess: both agents spawn their real worker in its own session that escapes a plain process-group signal — `claude-agent-acp` execs the actual `claude` CLI as a separate-session child, and `codex-acp`'s app-server spawns its sandboxed exec helper the same way, sometimes moments *after* the initial signal (its own reaction to `session/cancel`/shutdown). A `detached: true` spawn + one `process.kill(-pid, sig)` alone verifiably leaves these orphaned. The fix walks the live tree via `pgrep -P` (`collectDescendantPids`, recursive) and re-polls + re-kills every ~500ms across a 3s SIGTERM window before a final SIGKILL sweep, instead of a single snapshot-then-kill. Verified E2E for both providers with the pool's own process kept alive throughout the check (no pipe-close masking a real leak).
 
@@ -92,6 +96,30 @@ ACP has no session-listing, fork, rewind/rollback, delete, or model-listing RPC 
 - **Still respawns:** `cwd`, `taskBudget`, `resumeSessionAt`/`forkSession`, and any effort transition touching `off`/`minimal` — those map to a `thinking` config, and thinking has no live control method. Dropping that distinction would leave a warm entry thinking after the user turned it off.
 - **`worker_shutting_down`** marks the entry doomed (`pendingRecycleReason`) so `acquire`/`peek` never hand it out for a new turn. An in-turn doomed entry is still reused — recycling it there kills the live turn out from under its SSE stream.
 - **The system prompt is recorded for the conversation** (`snapshot: true` on both send paths). That is what keeps the API prompt-cache prefix stable across turns and resumes, and stops a prompt that shifted between launches from discarding extended thinking's earlier reasoning. Its cost is deliberate: a live `setModel` no longer re-renders the prompt, so a mid-session model switch inherits the recorded one until compaction or a new session. **Both paths must pass it** — a cold first turn that records a prompt the pooled turns decline to reuse is worse than neither doing it.
+- **A re-run of an interrupted turn is marked, or it reads as a duplicate.** When
+  a worker restart interrupts a turn the CLI re-runs it automatically, and SDK
+  0.3.270 stamps `resume_reason` on the re-run's first reply frame. Without it the
+  transcript shows one prompt apparently answered twice with nothing to say why,
+  and the reattach path cannot tell which attempt it is watching. It is a
+  **wrapper-level sibling** — never inside `message.content`, so it is not
+  replayed to the model — and rides `SessionMessage.resumeReason` through
+  threading to a badge on the web card and the TUI card's header meta. Both mapper
+  paths must carry it (the live stream delivers it flat, history nests the payload
+  under `.message`), or a reload loses the explanation while keeping the
+  duplicate-looking turn. `claudeSdkSurfaceSmoke.ts` pins each link of that chain
+  independently.
+- **A permission ask carries presentation constraints, and they are not the same thing as the
+  decision.** `canUseTool`'s options include `suppressAlwaysAllowRule` (the always-allow rule this ask
+  would write grants more than the ask's own action, so the affordance must not be offered at all) and
+  `defaultToNo` (approve must not be one stray keystroke away). Both ride the
+  `permission.requested` frame — a reattaching surface re-derives its card from that frame alone, so
+  withholding them server-side would put the button back. `extractClaudePermission` folds
+  `suppressAlwaysAllowRule` into `canApproveAlways` (it **outranks** having suggestions to offer, which
+  is what the old code derived the flag from) and exposes `defaultToNo` as `defaultToDeny`;
+  `defaultPermissionOptionIndex` opens the TUI card on Reject and the web card leads with it. Neither
+  removes an option — withholding the decision the user wants is worse than making them confirm it.
+  Getting either wrong is invisible in a screenshot, so `scripts/claudeSdkSurfaceSmoke.ts` pins both
+  (two mutations verified to fail it).
 - **Read-only queries declare `permissionPrompts: 'none'`** (`lib/sdkControlQuery.ts`, `lib/claudeModels.ts`). They run no tools and install no `canUseTool`, so a prompt there could only park the control queue on a question with no surface to answer it; rules, hooks and the permission mode still decide, and anything that would prompt is denied with a message saying why.
 - **Spawning resumes, and resuming rewrites the transcript** — identical bytes, new mtime, which is what `listSessions` reports as `lastModified`. Since the pool is prewarmed when a session is *selected*, merely navigating to one would jump it to the top of every list ordered by last activity. Read-only control queries dodge this with `persistSession: false` (`lib/sdkControlQuery.ts`); a pool entry cannot, because the turn it is warmed for must persist. `lib/claudeResumeTouch.ts` instead records the touch during prewarm and subtracts it in the Claude adapter's `listSessions`/`readSessionInfo`. The override is pinned to the exact post-resume mtime *and* file size, so any real write drops it on the next read — it can only hide a timestamp we caused. Codex's `thread/resume` was checked and leaves `updatedAt` alone; no other provider needs this.
 
@@ -658,6 +686,87 @@ buffer and a converted line ending both *render perfectly*:
   at all** — the editor renders identically whether every token was painted or
   none was. It asserts colours on open, colours travelling with text when a line
   is inserted above them, and a keyword typed mid-file picking up its own colour.
+
+#### Clickable transcript targets (load-bearing)
+
+OpenTUI 0.5.11's `renderer.getLinkAt(x, y)` reads a link id back out of the
+**painted cell attributes**, so a URL or path is clickable only if the renderer
+emitted an `<a href>` for it — a styled `<span>` with identical text renders
+byte-identically and is completely inert. The element choice *is* the feature,
+and no frame comparison can see the difference.
+
+- **`lib/tuiLinkTargets.ts` is the whole risk surface.** A missed target is
+  invisible; a false one paints ordinary prose as a link. It runs per rendered
+  line on every transcript render, so it does no filesystem access — the
+  detectors are conservative instead. A bare relative path needs a known
+  extension (`and/or`, `w/ the`, `50/50` and `build/test` all have a slash), an
+  absolute path does not, and a relative path with no cwd to resolve against
+  stays plain text rather than becoming a dead link.
+- **Link detection runs AFTER markdown tokenization, never before.** A path cited
+  in backticks is the most common way an agent names a file; linkifying first
+  would leave the backticks on screen as literal text. `parseInlineSpanTokens`
+  splits each markdown token instead, so a path in backticks stays `code`-colored
+  *and* clickable.
+- **The probe and the tokenizer share one pattern.** `hasTuiLinkTarget` is what
+  lets the renderer skip tokenizing most lines. An earlier version short-circuited
+  on `includes('/')`, which a slash-free markdown target (`[mail me](mailto:…)`)
+  has none of — so the probe silently dropped those lines before the tokenizer
+  saw them. Sharing the pattern makes the dangerous direction impossible by
+  construction rather than something a test must keep catching.
+- **A file path travels as a `file://` URL with `#L<n>`**, so one mechanism covers
+  both kinds and `parseTuiLinkTarget` maps it back for the editor.
+- **Opening happens on mouse UP, only when the pointer has not moved.** On mouse
+  down it would hijack the start of a text selection beginning on a path, which
+  is a far more common intent than following it. One handler on the transcript
+  scrollbox covers every card — `getLinkAt` resolves a screen cell, so nothing
+  needs to know which row was hit.
+- `linkTargetSmoke.ts` pins the tokenizer (reassembly, prose false positives,
+  `path:line`, trailing punctuation, probe parity); `transcriptLinkSmoke.tsx`
+  pins the rendered link cells, their boundaries, the click, and the drag guard,
+  against the real App. **Its assertion order is load-bearing**: the editor covers
+  the transcript, so the file-path click must come last or every later click lands
+  on the editor — ordered earlier, the negative assertions passed against a
+  covered transcript *and kept passing with the drag guard deleted*.
+
+#### Session policy diagnostics (load-bearing)
+
+Three sections in the ⇧D diagnostics surface, from Claude SDK 0.3.270
+(`lib/claudeSessionPolicy.ts`). Diagnostics was the right host because both UIs
+already render provider-supplied sections generically — no new chrome.
+
+- **Context rows are classified on `kind`, never on their English name.** The SDK
+  says so explicitly. The names are localized display strings, so a reader that
+  matched on them would count free space as used the first time one was
+  re-worded — a meter reading near-full on an empty session, with no error.
+  `deferred` rows are out-of-window tool schemas and are excluded from usage math;
+  folding them in overstates the meter by every tool the session has not loaded.
+  A row with no `kind` (an older CLI) gets its own heading rather than a guess.
+- **`listPermissionRules` and `getHooksListing` are implemented by the SDK but
+  NOT declared in its public `sdk.d.ts`.** That is why every read here
+  feature-detects and catches: diagnostics fans out a dozen control RPCs and must
+  not lose the other eleven because an undocumented one changed.
+- **A permission rule is stored verbatim and may carry invisible characters by
+  design.** `revealRuleText` escapes them to `\uXXXX` rather than stripping them:
+  two rules differing only by a zero-width space are *different* rules, and an
+  audit of why an allow rule is not matching would otherwise show a rule that
+  looks exactly right. A bidi override can reorder a rule on screen to read as
+  something else entirely.
+- **The rule list is capped, and it says so.** A real project has dozens (112 on
+  this repo). A silent cap is the wrong trade on an audit surface — the reason to
+  open it is usually a rule you cannot find, and a truncated list that does not
+  announce itself answers "that rule is not here" when it is. Deny rules are never
+  withheld: they are the ones that explain a refusal.
+- **The panel scrolls now (`⌃u`/`⌃d`), and the per-section `slice(0, 10)` is
+  gone.** Fifteen sections never fitted the 28-row overlay, so everything past
+  roughly the MCP list was never drawn and the panel looked complete. The slice
+  existed only because the panel clipped anyway; keeping it would be a second,
+  silent truncation on top of the one the adapter announces. A scrollbox needs an
+  explicit row budget — given `flexGrow` it laid itself over the title row.
+  Pinned by `diagnosticsPanelSmoke.tsx`, which first asserts its own fixture does
+  not fit (or scrolling proves nothing).
+  **Known, pre-existing:** the overlay's cells stay painted after it unmounts —
+  React stops rendering it, but the frame still shows it. Reproduces with the
+  original plain box, so it is not the scrollbox.
 
 #### OpenTUI render slots (load-bearing)
 

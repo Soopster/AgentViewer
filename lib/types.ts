@@ -128,6 +128,19 @@ export type SessionMessage = {
   /** Provider-native durable message/entry id for actions such as message fork. */
   providerMessageId?: string
   /**
+   * Why this message's turn is the automatic RE-RUN of a turn a worker restart
+   * interrupted (Claude SDK 0.3.270 `resume_reason`): the host's reason when it
+   * set one (`host_draining`, `checkpoint_restore`, `container_recreated`, …),
+   * else `interrupted_turn`.
+   *
+   * Without it, a re-run's first reply is indistinguishable from the interrupted
+   * attempt's — the transcript shows what looks like the same turn answered
+   * twice, and the reattach path cannot tell which one it is watching. Stamped
+   * only on a turn's first reply frame, so it marks the re-run rather than
+   * every message in it.
+   */
+  resumeReason?: string
+  /**
    * True when Agent Viewer is surfacing an in-memory live overlay before the
    * provider has flushed the message into its durable session history.
    */

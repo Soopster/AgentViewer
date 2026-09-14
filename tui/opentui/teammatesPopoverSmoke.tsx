@@ -6,6 +6,7 @@
 // importing anything that opens it. Full-mount smokes use console.error +
 // process.exit(1) rather than throwing: the app's own timers keep the process
 // alive past an uncaught throw.
+import { createHash } from 'node:crypto'
 import React, { act } from 'react'
 import { testRender } from '@opentui/react/test-utils'
 import { execFileSync } from 'node:child_process'
@@ -21,6 +22,7 @@ execFileSync('git', ['add', '.'])
 execFileSync('git', ['-c', 'user.name=Smoke', '-c', 'user.email=smoke@example.invalid', 'commit', '-qm', 'fixture'])
 
 const { TeammatesPopover } = await import('./TeammatesPopover')
+const { TeammatesAttention } = await import('./TeammatesAttention')
 const store = await import('./interactiveCoordinatorStore')
 const coordination = await import('../../lib/agentCoordination')
 const { LIGHT_THEME } = await import('../theme')
@@ -28,12 +30,15 @@ const { MODAL_SCRIM_Z_INDEX } = await import('./layers')
 
 const SESSION_ID = 'teammates-smoke-chat'
 const PROVIDER = 'codex' as const
+await coordination.createExternalProtocolRun({ runId: `chat-${createHash('sha256').update(`${PROVIDER}:${SESSION_ID}`).digest('hex').slice(0, 40)}`, prompt: 'Interactive fixture', provider: PROVIDER, baseCwd: smokeRoot, participantName: 'lead', requirePlanApproval: true })
 
 let keyHandler: ((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null = null
 const opened: string[] = []
 const notices: string[] = []
 
 const setup = await testRender(
+  <>
+  <TeammatesAttention theme={LIGHT_THEME} width={110} />
   <TeammatesPopover
     theme={LIGHT_THEME}
     width={110}
@@ -41,7 +46,7 @@ const setup = await testRender(
     onOpenSession={(agent) => { opened.push(agent.name) }}
     onNotice={(_tone, text) => { notices.push(text) }}
     onKeyHandlerReady={(handler) => { keyHandler = handler }}
-  />,
+  /></>,
   { width: 110, height: 34, kittyKeyboard: true },
 )
 const { captureCharFrame } = setup
@@ -117,7 +122,7 @@ if ((store.getInteractiveCoordinatorState().data?.snapshot?.tasks.length ?? -1) 
 }
 
 // ── the roster shows what each teammate is actually doing ──────────────────
-await coordination.joinExternalProtocolRun({
+const nova = await coordination.joinExternalProtocolRun({
   runId: runId!, provider: 'claude', cwd: smokeRoot, participantName: 'nova',
 })
 await waitFor('nova to appear in the roster', () => captureCharFrame().includes('nova'))
@@ -177,7 +182,51 @@ if ((store.getInteractiveCoordinatorState().data?.snapshot?.tasks.length ?? -1) 
 }
 await press('m')
 if (!captureCharFrame().includes('Message nova')) fail('m did not compose to the selected teammate')
+await type('😀')
+await press('backspace')
+await press('paste', 'Review café\r\nand report findings')
+await press('return')
+await waitFor('pasted message delivery', () => Boolean(store.getInteractiveCoordinatorState().data?.snapshot?.messages.some(message => message.body === 'Review café\nand report findings')))
+if (store.getInteractiveCoordinatorState().pending) fail('paste submission was not confirmed')
+
+// Shared attention is actionable from the interactive panel, not just a task count.
+await press('c') // Leave provider continuation off during human-gated fixture work.
+const leadIdentity = await coordination.sessionCoordinatorIdentity(SESSION_ID, PROVIDER)
+const planned = await coordination.createExternalProtocolTask(leadIdentity, { assignTo: nova.participant.agentId, title: 'Inspect parser', detail: 'Read parser only' })
+await coordination.submitExternalProtocolPlan(nova.participant, { taskId: planned.task!.id, summary: 'Read-only plan', detail: 'Inspect parser.ts without editing files' })
+await waitFor('plan attention', () => captureCharFrame().includes('approve plan'))
+if (store.getInteractiveCoordinatorState().data?.snapshot?.messages.some(message => message.body.includes('plan is ready for approval') && message.kind !== 'status')) fail('human plan request must not wake the lead')
+if (!captureCharFrame().includes('Inspect parser.ts without editing files')) fail('attention lost the actual submitted plan')
+await press('v')
+await waitFor('plan rejection', () => Boolean(store.getInteractiveCoordinatorState().data?.snapshot?.events.some(event => event.type === 'plan.rejected')))
+await coordination.submitExternalProtocolPlan(nova.participant, { taskId: planned.task!.id, summary: 'Revised plan', detail: 'Inspect parser.ts and its tests' })
+await waitFor('revised plan', () => captureCharFrame().includes('Inspect parser.ts and its tests'))
+await press('a')
+await waitFor('plan approval', () => Boolean(store.getInteractiveCoordinatorState().data?.snapshot?.events.some(event => event.type === 'plan.approved')))
+await coordination.sendExternalProtocolMessage(nova.participant, { to: 'lead', body: 'Which parser should I inspect?', replyRequired: true })
+await waitFor('reply attention', () => captureCharFrame().includes('Which parser should I inspect?'))
 await press('escape')
+if (!store.getInteractiveCoordinatorAttention().includes('need attention')) fail('attention disappeared when the panel closed')
+await waitFor('background attention badge', () => captureCharFrame().includes('need attention'))
+await act(async () => store.openInteractiveCoordinatorAttention())
+await settle(120)
+await press('b')
+await press('paste', 'Use the TypeScript parser')
+await press('return')
+await waitFor('resolved reply', () => Boolean(store.getInteractiveCoordinatorState().data?.snapshot?.messages.some(message => message.body === 'Which parser should I inspect?' && message.resolvedAt)))
+await coordination.completeExternalProtocolTask(nova.participant, { taskId: planned.task!.id, summary: 'Need parser choice', needsDecision: [{ id: 'parser-choice', question: 'Use strict parser mode?', options: ['Strict', 'Compatible'], impactIfWrong: 'Changes accepted syntax', status: 'open' }] })
+await waitFor('decision in ledger', () => Boolean(store.getInteractiveCoordinatorState().data?.snapshot?.tasks.find(task => task.id === planned.task!.id)?.receipt?.needsDecision.some(decision => decision.id === 'parser-choice')))
+// The blocker and its decision are separate attention items; navigate to the decision.
+for (let i = 0; i < 5 && !captureCharFrame().includes('Use strict parser mode?'); i++) await press(']')
+if (!captureCharFrame().includes('Use strict parser mode?')) fail('decision is not navigable in attention')
+await press('b')
+await press('paste', 'Use strict mode')
+await press('return')
+await waitFor('decision answered', () => Boolean(store.getInteractiveCoordinatorState().data?.snapshot?.tasks.find(task => task.id === planned.task!.id)?.receipt?.needsDecision.some(decision => decision.id === 'parser-choice' && decision.status === 'answered' && decision.answer === 'Use strict mode')))
+await coordination.appendProtocolEvent({ version: '1.0', runId: runId!, agentId: nova.participant.agentId, taskId: planned.task!.id, type: 'task.failed', summary: 'Parser fixture result: missing grammar' })
+await waitFor('result summary', () => captureCharFrame().includes('Parser fixture result: missing grammar'))
+await press('s')
+if (captureCharFrame().includes('ATTENTION')) fail('reviewed result stayed in attention')
 
 // ── an unconfirmed request gates the panel ─────────────────────────────────
 // The idempotency key makes a REPLAY safe; it cannot make a second, different
@@ -205,6 +254,10 @@ if (store.getInteractiveCoordinatorState().data?.interactive.autoContinue
 // repeating it.
 const retried = store.getInteractiveCoordinatorState().pending
 if (retried?.requestId !== pending?.requestId) fail('the pending request id changed before it was retried')
+await press('escape')
+await act(async () => store.openInteractiveCoordinator({ sessionId: SESSION_ID, provider: PROVIDER, cwd: smokeRoot, title: 'Smoke chat' }))
+await settle(120)
+if (store.getInteractiveCoordinatorState().pending?.requestId !== pending?.requestId) fail('closing and reopening discarded the unconfirmed request')
 await press('e')
 if (store.getInteractiveCoordinatorState().pending !== null) fail('discarding did not clear the unconfirmed request')
 
@@ -222,6 +275,16 @@ frame = captureCharFrame()
 if (!frame.includes('Coordination is off') && !frame.includes('Run ended')) {
   fail('turning coordination off did not repaint the header')
 }
+
+const inspectedBefore = opened.length
+await press('return')
+if (opened.length !== inspectedBefore + 1) fail('ended-run teammate history cannot be inspected')
+await act(async () => store.openInteractiveCoordinator({ sessionId: SESSION_ID, provider: PROVIDER, cwd: smokeRoot, title: 'Smoke chat' }))
+await settle(120)
+await press('e')
+await waitFor('fresh team in same chat', () => Boolean(store.getInteractiveCoordinatorState().data?.interactive.enabled && store.getInteractiveCoordinatorState().data?.snapshot?.run.id !== runId))
+if (store.getInteractiveCoordinatorState().data?.snapshot?.tasks.length) fail('new team inherited old tasks')
+await coordination.stopProtocolRun(store.getInteractiveCoordinatorState().data!.snapshot!.run.id)
 
 console.log('Teammates popover smoke passed (enable, roster activity, inspect, drafts, continuation, unconfirmed gate, turn off)')
 process.exit(0)

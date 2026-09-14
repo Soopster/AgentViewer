@@ -23,9 +23,12 @@ export function coordinatorAttention(snapshot: ProtocolRunSnapshot): Coordinator
     if (task.status === 'blocked') items.push({ ...base, id: `blocker:${task.id}:${task.updatedAt}`, kind: 'blocker', title: task.title,
       detail: [...snapshot.events].reverse().find(event => event.taskId === task.id && event.type === 'agent.blocked')?.summary || 'Teammate needs help to continue.',
     })
-    if (task.status === 'planned') items.push({ ...base, id: `plan:${task.id}:${task.updatedAt}`, kind: 'plan', title: task.title,
-      detail: [...snapshot.events].reverse().find(event => event.taskId === task.id && event.type === 'plan.completed')?.detail || 'Review the submitted plan before approving work.',
-    })
+    if (task.status === 'planned') {
+      const plan = [...snapshot.events].reverse().find(event => event.taskId === task.id && (event.type === 'task.planned' || event.type === 'plan.completed'))
+      items.push({ ...base, id: `plan:${task.id}:${task.updatedAt}`, kind: 'plan', title: task.title,
+        detail: plan?.detail || plan?.summary || 'Review the submitted plan before approving work.',
+      })
+    }
     for (const decision of task.receipt?.needsDecision ?? []) {
       if (decision.status === 'open') items.push({ ...base, id: `decision:${task.id}:${decision.id}`, kind: 'decision',
         title: decision.question, detail: decision.impactIfWrong, decisionId: decision.id })

@@ -34,6 +34,7 @@ import { deleteClaudeHookEvents, listClaudeHookEvents } from '../claudeHookEvent
 import { claudeProcessTransportStatus } from '../claudeProcessSpawner'
 import { readClaudeSupportedModels } from '../claudeModels'
 import { withoutClaudeResumeTouch } from '../claudeResumeTouch'
+import { claudeContextBreakdown, claudeHooksListingItems, claudePermissionRuleItems } from '../claudeSessionPolicy'
 import {
   claudeListCacheKey,
   readClaudeCorpusToken,
@@ -360,7 +361,7 @@ export const claudeAdapter: SessionAdapter = {
     const q = createSessionControlQuery(sessionId)
     try {
       const init = await q.initializationResult()
-      const [commands, agents, mcpServers, contextUsage, subagents, rawMessages, resolvedSettings, hookEvents, planUsageItems] = await Promise.all([
+      const [commands, agents, mcpServers, contextUsage, subagents, rawMessages, resolvedSettings, hookEvents, planUsageItems, permissionRuleItems, hooksListingItems] = await Promise.all([
         q.supportedCommands(),
         q.supportedAgents(),
         q.mcpServerStatus(),
@@ -379,6 +380,11 @@ export const claudeAdapter: SessionAdapter = {
           .catch(() => null),
         listClaudeHookEvents(sessionId, { limit: 20 }).catch(() => []),
         claudePlanUsageItems(q),
+        // Both go through methods the SDK implements but does not declare, so
+        // each degrades to an empty list on its own rather than failing the
+        // whole read — see lib/claudeSessionPolicy.ts.
+        claudePermissionRuleItems(q),
+        claudeHooksListingItems(q),
       ])
       const accountItems: string[] = []
       if (init.account?.email) accountItems.push(init.account.email)
@@ -406,6 +412,7 @@ export const claudeAdapter: SessionAdapter = {
             `unsandboxed commands · ${sandboxSettings.allowUnsandboxedCommands === true ? 'allowed' : 'blocked'}`,
           ]
         : ['Not configured']
+      const contextBreakdown = claudeContextBreakdown(contextUsage)
       return {
         currentModel: contextUsage?.model ?? null,
         sections: [
@@ -434,6 +441,22 @@ export const claudeAdapter: SessionAdapter = {
             title: 'SUBAGENTS',
             items: subagents.length > 0 ? formatClaudeSubagentTree(subagents, subagentParents).slice(0, 20) : ['None'],
           },
+          // What the window is actually holding. `contextUsage` was already read
+          // above for its model name alone; the categories were thrown away.
+          ...(contextBreakdown.items.length > 0
+            ? [{ id: 'context-window', title: 'CONTEXT WINDOW', items: contextBreakdown.items }]
+            : []),
+          // What this session's permission rules ARE, beside the transcript's
+          // record of what they did. A denial is far easier to understand next to
+          // the rule and settings file that caused it.
+          ...(permissionRuleItems.length > 0
+            ? [{ id: 'permission-rules', title: 'PERMISSION RULES', items: permissionRuleItems }]
+            : []),
+          // Registered hooks, which is a different question from the timeline
+          // below it: this says what WOULD fire, that says what did.
+          ...(hooksListingItems.length > 0
+            ? [{ id: 'hooks-registered', title: 'HOOKS REGISTERED', items: hooksListingItems }]
+            : []),
           {
             id: 'hooks',
             title: 'HOOK TIMELINE',

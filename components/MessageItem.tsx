@@ -4740,6 +4740,10 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
       case 'model_not_found': return 'Model not available — pick a different model'
       case 'authentication_failed': return 'Authentication failed'
       case 'oauth_org_not_allowed': return 'OAuth org not allowed'
+      case 'verification_required': return 'Account verification required'
+      case 'account_on_hold': return 'Account on hold'
+      case 'cloud_credential_error': return 'Cloud credential error'
+      case 'overloaded': return 'Overloaded — retry shortly'
       case 'billing_error': return 'Billing error'
       case 'rate_limit': return 'Rate limited'
       case 'invalid_request': return 'Invalid request'
@@ -5273,6 +5277,15 @@ function renderBlock(block: ThreadedBlock, i: number): React.ReactNode {
 }
 
 // ── Token usage formatting ────────────────────────────────────────────────────
+
+// The SDK sends the host's own CLAUDE_CODE_RESUME_REASON when it set one, and
+// the literal 'interrupted_turn' when it did not — so the set is open-ended and
+// this formats rather than switches. A host reason the badge has never seen still
+// reads as a reason rather than falling through to a generic label.
+function formatResumeReason(reason: string): string {
+  if (reason === 'interrupted_turn') return 'RE-RUN'
+  return `RE-RUN · ${reason.replace(/_/g, ' ').toUpperCase()}`
+}
 
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
@@ -6576,6 +6589,17 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
               style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, fontWeight: 600, color: 'var(--yellow)', background: 'rgba(234,179,8,0.1)', border: '1px solid rgba(234,179,8,0.25)', borderRadius: 3, padding: '1px 5px', letterSpacing: '0.04em' }}
             >
               ABORTED PARTIAL
+            </span>
+          )}
+          {/* A re-run's reply is otherwise indistinguishable from the interrupted
+              attempt's, so the turn reads as answered twice with no explanation.
+              The badge says the CLI restarted it and why. */}
+          {message.resumeReason && (
+            <span
+              title={`This turn was automatically re-run after a worker restart (${message.resumeReason}). The reply above answers the interrupted turn's prompt.`}
+              style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, fontWeight: 600, color: 'var(--cyan, #22d3ee)', background: 'rgba(34,211,238,0.1)', border: '1px solid rgba(34,211,238,0.25)', borderRadius: 3, padding: '1px 5px', letterSpacing: '0.04em' }}
+            >
+              {formatResumeReason(message.resumeReason)}
             </span>
           )}
           {message.subagentRetry && (

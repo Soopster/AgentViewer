@@ -1,5 +1,6 @@
 'use client'
 
+import { coordinatorAttentionCount } from '@/lib/coordinatorAttentionCount'
 import { coordinatorAgentActivity, type CoordinatorInteractiveState } from '@/lib/coordinatorInteractiveState'
 import { useEffect, useId, useRef, useState } from 'react'
 import type { Session } from '@/lib/types'
@@ -16,8 +17,8 @@ type RequestBody = {
   taskId?: string; decisionId?: string; approved?: boolean; inReplyTo?: string
 }
 
-export default function CoordinatorConversation({ session, onInspect, onReturnToChat }: {
-  session: Session; onInspect: (agent: ProtocolAgent) => void; onReturnToChat: () => void
+export default function CoordinatorConversation({ session, onInspect, onReturnToChat, onAttentionChange }: {
+  session: Session; onInspect: (agent: ProtocolAgent) => void; onReturnToChat: () => void; onAttentionChange: (count: number) => void
 }) {
   const id = useId()
   const [state, setState] = useState<CoordinatorInteractiveState | null>(null)
@@ -97,6 +98,8 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
     setSeen(next)
     try { localStorage.setItem(seenKey, JSON.stringify(next)) } catch { /* Optional persistence. */ }
   }
+  const attentionCount = coordinatorAttentionCount(state, seen) + Number(Boolean(error && pending.current))
+  useEffect(() => { onAttentionChange(attentionCount) }, [attentionCount, onAttentionChange])
   const items = snapshot ? coordinatorAttention(snapshot) : []
   const visible = items.filter(item => item.kind !== 'result' || !seen.includes(item.id))
   const locked = busy || Boolean(error && pending.current)
@@ -106,7 +109,8 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
   const nativeAttention = state?.permissions.filter(item => item.agentId !== snapshot?.run.leadAgentId) ?? []
   return <section className="av-coord-conversation" aria-label="Conversation teammates">
     <div className="av-coord-conversation-heading"><strong>Teammates{visible.length + nativeAttention.length ? ` · ${visible.length + nativeAttention.length} need attention` : ''}</strong>
-    {terminal ? <span className="text-sm text-muted-foreground">Coordinator off</span> : !state?.interactive.enabled ? <Button size="sm" variant="outline" disabled={locked || terminal || !canLead} onClick={() => void send({ action: 'enable', detail: 'Enable interactive coordination' })}>Enable coordinator</Button> : <span className="text-sm text-muted-foreground">Coordinator on</span>}
+    {terminal ? <span className="text-sm text-muted-foreground">Coordinator off</span> : null}
+    {terminal || !state?.interactive.enabled ? <Button size="sm" variant="outline" disabled={locked || !canLead} onClick={() => void send({ action: 'enable', detail: 'Enable interactive coordination' })}>Enable coordinator</Button> : <span className="text-sm text-muted-foreground">Coordinator on</span>}
     {state?.interactive.enabled && !terminal ? <Button size="sm" variant="ghost" disabled={locked || !canLead} title="Stop teammate work and automatic continuation; keep conversation history" onClick={() => void send({ action: 'disable', detail: 'Turn off coordination for this conversation' })}>Turn off</Button> : null}
     </div>
     <div id={`${id}-body`} className="av-coord-conversation-body">
