@@ -4,6 +4,7 @@ import type { PendingPermission } from './permissions'
 export type CoordinatorInteractiveState = {
   snapshot: ProtocolRunSnapshot | null
   interactive: {
+    executionElsewhere?: boolean
     enabled: boolean; autoContinue: boolean; remainingTurns: number
     delivery: { batchId: string; state: string; createdAt: string; active: boolean } | null
   }

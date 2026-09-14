@@ -89,7 +89,8 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   // protect against.
   const items = useMemo(() => snapshot ? coordinatorAttention(snapshot).filter(item => item.kind !== 'result' || !state.reviewed.includes(item.id)) : [], [snapshot, state.reviewed])
   const currentAttention = items[Math.min(attentionIndex, Math.max(items.length - 1, 0))] ?? null
-  const locked = busy || Boolean(pending)
+  const elsewhere = data?.interactive.executionElsewhere === true
+  const locked = busy || Boolean(pending) || elsewhere
   const disabled = locked || terminal || !canLead
 
   const act = useCallback((
@@ -225,10 +226,12 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   // Status and its meta are separate <text>s so only the status carries colour;
   // colouring the whole joined line made every word shout at the same volume.
   const headline = !session ? 'No conversation selected'
+    : elsewhere ? 'Running in another host'
     : terminal ? 'Run ended'
     : !enabled ? 'Coordination is off'
     : 'Coordinator on'
-  const headlineMeta = !session || !enabled ? ''
+  const headlineMeta = elsewhere ? 'Use the owning window or connect to its server'
+    : !session || !enabled ? ''
     : terminal ? 'results and teammate transcripts remain'
     : joinMeta([
         `${teammates.length} teammate${teammates.length === 1 ? '' : 's'}`,

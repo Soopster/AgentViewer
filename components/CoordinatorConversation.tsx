@@ -102,12 +102,14 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
   useEffect(() => { onAttentionChange(attentionCount) }, [attentionCount, onAttentionChange])
   const items = snapshot ? coordinatorAttention(snapshot) : []
   const visible = items.filter(item => item.kind !== 'result' || !seen.includes(item.id))
-  const locked = busy || Boolean(error && pending.current)
+  const elsewhere = state?.interactive.executionElsewhere === true
+  const locked = busy || Boolean(error && pending.current) || elsewhere
   const terminal = snapshot ? ['completed', 'failed', 'stopped'].includes(snapshot.run.status) : false
   const canLead = !snapshot || snapshot.agents.some(agent => agent.role === 'lead' && agent.sessionId === session.sessionId)
   const disabled = locked || terminal || !canLead
   const nativeAttention = state?.permissions.filter(item => item.agentId !== snapshot?.run.leadAgentId) ?? []
   return <section className="av-coord-conversation" aria-label="Conversation teammates">
+    {elsewhere ? <p role="status">Running in another host. Use that window or connect the TUI to its server to control this team. Transcripts remain available here.</p> : null}
     <div className="av-coord-conversation-heading"><strong>Teammates{visible.length + nativeAttention.length ? ` · ${visible.length + nativeAttention.length} need attention` : ''}</strong>
     {terminal ? <span className="text-sm text-muted-foreground">Coordinator off</span> : null}
     {terminal || !state?.interactive.enabled ? <Button size="sm" variant="outline" disabled={locked || !canLead} onClick={() => void send({ action: 'enable', detail: 'Enable interactive coordination' })}>Enable coordinator</Button> : <span className="text-sm text-muted-foreground">Coordinator on</span>}

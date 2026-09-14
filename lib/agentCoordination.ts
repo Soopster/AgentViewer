@@ -16,6 +16,7 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { EventEmitter } from 'node:events'
 import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { hostname } from 'node:os'
 import {
   AGENT_PROTOCOL_VERSION,
   EXTERNAL_COORD_PROTOCOL_VERSION,
@@ -174,7 +175,7 @@ const LOCK_LEASE_MS = 20 * 60_000
 // can cancel a teammate's in-flight turn without releasing the task), and
 // respond_to_mode/respond_to_allowlist_json (per-participant mailbox sender
 // gating, mirroring buzz-acp's respond-to modes).
-const SCHEMA_VERSION = 21
+const SCHEMA_VERSION = 22
 const EVENT_WINDOW = 300
 const LOCK_HISTORY_WINDOW = 200
 // Non-terminal tasks (pending/claimed/blocked) are always returned in full —
@@ -602,6 +603,11 @@ function initializeSchema(db: SqliteDatabase): void {
       session_id TEXT NOT NULL, provider TEXT NOT NULL, request_id TEXT NOT NULL,
       fingerprint TEXT NOT NULL, run_id TEXT, completed INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (session_id, provider, request_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS protocol_interactive_hosts (
+      run_id TEXT PRIMARY KEY REFERENCES protocol_runs(id) ON DELETE CASCADE,
+      owner_id TEXT NOT NULL, owner_pid INTEGER NOT NULL, owner_host TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS protocol_interactive_sessions (
@@ -2531,6 +2537,32 @@ export async function runExternalProtocolIdempotent<T>(
   }
 }
 
+declare global { var __agentViewerInteractiveHostId: string | undefined }
+const interactiveHostId = globalThis.__agentViewerInteractiveHostId ??= randomUUID()
+
+function foreignInteractiveHostSync(db: SqliteDatabase, runId: string): boolean {
+  const row = db.prepare('SELECT * FROM protocol_interactive_hosts WHERE run_id = ?').get(runId) as Row | undefined
+  if (!row || row.owner_id === interactiveHostId) return false
+  // A shared filesystem on another machine cannot prove that owner is dead.
+  if (row.owner_host !== hostname()) return true
+  try { process.kill(Number(row.owner_pid), 0); return true }
+  catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH' }
+}
+
+function claimInteractiveHostSync(db: SqliteDatabase, runId: string): void {
+  db.prepare(`INSERT OR IGNORE INTO protocol_interactive_hosts (run_id, owner_id, owner_pid, owner_host)
+    VALUES (?, ?, ?, ?)`).run(runId, interactiveHostId, process.pid, hostname())
+  const row = db.prepare('SELECT * FROM protocol_interactive_hosts WHERE run_id = ?').get(runId) as Row
+  if (row.owner_id === interactiveHostId) return
+  if (!foreignInteractiveHostSync(db, runId)) {
+    // Compare-and-swap prevents two observers taking over a dead owner together.
+    db.prepare(`UPDATE protocol_interactive_hosts SET owner_id = ?, owner_pid = ?, owner_host = ?
+      WHERE run_id = ? AND owner_id = ?`).run(interactiveHostId, process.pid, hostname(), runId, row.owner_id)
+  }
+  const owner = db.prepare('SELECT owner_id FROM protocol_interactive_hosts WHERE run_id = ?').get(runId) as Row
+  if (owner.owner_id !== interactiveHostId) throw new Error('This team is running in another local Agent Viewer host. Use that host or connect the TUI to its server to control it.')
+}
+
 /** Adopt external/chat-led runs without launching or taking over their lead. */
 async function adoptInteractiveController(identity: ExternalProtocolIdentity): Promise<RunController> {
   const existing = controllers.get(identity.runId)
@@ -2538,6 +2570,7 @@ async function adoptInteractiveController(identity: ExternalProtocolIdentity): P
   const db = await getDatabase()
   const lead = requireExternalParticipantSync(db, identity)
   if (lead.role !== 'lead') throw new Error('Only the Coordinator lead can start teammates')
+  await enqueueWrite(tx => claimInteractiveHostSync(tx, identity.runId))
   const snapshot = readSnapshotSync(db, identity.runId)
   if (!snapshot || !['planning', 'running', 'synthesizing'].includes(snapshot.run.status)) throw new Error('Coordinator run is not accepting tasks')
   // Recheck after the asynchronous database open so concurrent callers share one supervisor.
@@ -2609,6 +2642,7 @@ export async function sessionCoordinatorIdentity(sessionId: string, provider: Pr
     const lead = snapshot?.agents.find(agent => agent.sessionId === sessionId && agent.provider === provider && agent.role === 'lead')
     if (!snapshot || !lead) throw new Error('Delegate from the lead conversation')
     if (['completed', 'failed', 'stopped'].includes(snapshot.run.status)) throw new Error('This run has ended')
+    await enqueueWrite(db => claimInteractiveHostSync(db, snapshot.run.id))
     const controller = controllers.get(snapshot.run.id)
     const existing = controller?.sdkIdentities.get('lead')
     if (existing) {
@@ -6322,6 +6356,7 @@ async function sweepMailboxes(): Promise<void> {
   `).all() as Row[]
   for (const row of runs) {
     const runId = String(row.id)
+    if (foreignInteractiveHostSync(db, runId)) continue
     const undelivered = db.prepare('SELECT id FROM protocol_messages WHERE run_id = ? AND delivered_at IS NULL')
       .all(runId) as Row[]
     if (undelivered.length > 0) {
@@ -6850,6 +6885,7 @@ export async function setInteractiveCoordinatorEnabled(params: {
     if (attempt && attempt.fingerprint !== fingerprint) throw new Error('This request ID was already used with different lifecycle settings')
     if (attempt?.completed) return
     const existing = await readSessionCoordinator(sessionId, provider)
+    if (existing) await enqueueWrite(tx => claimInteractiveHostSync(tx, existing.run.id))
     if (existing && !existing.agents.some(agent => agent.role === 'lead' && agent.sessionId === sessionId)) throw new Error('Only the lead conversation can change coordination')
     if (!attempt) {
       const terminal = existing && ['completed', 'failed', 'stopped'].includes(existing.run.status)
@@ -6894,12 +6930,14 @@ export async function disableInteractiveCoordinator(sessionId: string, provider:
 export async function readInteractiveCoordinator(sessionId: string) {
   const db = await getDatabase()
   const settings = db.prepare('SELECT * FROM protocol_interactive_sessions WHERE session_id = ?').get(sessionId) as Row | undefined
-  const delivery = db.prepare('SELECT batch_id, state, created_at FROM protocol_chat_delivery WHERE session_id = ?').get(sessionId) as Row | undefined
+  const delivery = db.prepare('SELECT run_id, batch_id, state, created_at FROM protocol_chat_delivery WHERE session_id = ?').get(sessionId) as Row | undefined
   return {
+    executionElsewhere: Boolean(settings && foreignInteractiveHostSync(db, String(settings.run_id))),
     enabled: Boolean(settings), autoContinue: Boolean(settings?.auto_continue),
     remainingTurns: Number(settings?.remaining_turns ?? 4),
     delivery: delivery ? { batchId: String(delivery.batch_id), state: String(delivery.state), createdAt: String(delivery.created_at),
-      active: activeChatDeliveries.has(sessionId) || getRunningSessionInfo(sessionId).running } : null,
+      active: activeChatDeliveries.has(sessionId) || getRunningSessionInfo(sessionId).running
+        || (delivery.state !== 'uncertain' && foreignInteractiveHostSync(db, String(delivery.run_id))) } : null,
   }
 }
 
@@ -6915,6 +6953,7 @@ export async function reconcileInteractiveDelivery(sessionId: string, batchId: s
   await enqueueWrite(db => {
     const row = db.prepare('SELECT * FROM protocol_chat_delivery WHERE session_id = ? AND batch_id = ?').get(sessionId, batchId) as Row | undefined
     if (!row) return
+    claimInteractiveHostSync(db, String(row.run_id))
     db.exec('BEGIN IMMEDIATE')
     try {
       if (received) acknowledgeInboxSync(db, String(row.run_id), String(row.agent_id), parseJsonArray(row.message_ids))
@@ -7051,6 +7090,7 @@ export async function readInteractiveRecoveries(runId: string): Promise<string[]
   const db = await getDatabase()
   const snapshot = readSnapshotSync(db, runId)
   if (!snapshot || !db.prepare('SELECT 1 FROM protocol_interactive_sessions WHERE run_id = ?').get(runId)) return []
+  if (foreignInteractiveHostSync(db, runId)) return []
   return snapshot.agents.filter(agent => {
     if (agent.role !== 'teammate' || agent.turnActive || agent.sessionId.startsWith('external:')) return false
     const task = snapshot.tasks.find(task => task.id === agent.taskId)
@@ -7061,6 +7101,7 @@ export async function readInteractiveRecoveries(runId: string): Promise<string[]
 
 export async function resumeInteractiveAgent(identity: ExternalProtocolIdentity, agentId: string): Promise<void> {
   if (!(await readInteractiveRecoveries(identity.runId)).includes(agentId)) throw new Error('This teammate does not need recovery or is still running')
+  await enqueueWrite(db => claimInteractiveHostSync(db, identity.runId))
   const controller = await adoptInteractiveController(identity)
   if (!controller.sessionIds.has(agentId)) throw new Error('Only a managed teammate can be resumed')
   await enqueueWrite(db => db.prepare('DELETE FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').run(identity.runId, agentId))
@@ -8642,9 +8683,12 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
 
 /** Stop the run: halt the loop, interrupt every agent's live turn, release locks. */
 export async function stopProtocolRun(runId: string, preserveSessionId?: string): Promise<ProtocolRunSnapshot | null> {
+  const db = await getDatabase()
+  if (db.prepare('SELECT 1 FROM protocol_interactive_hosts WHERE run_id = ?').get(runId)) {
+    await enqueueWrite(tx => claimInteractiveHostSync(tx, runId))
+  }
   const controller = controllers.get(runId)
   if (controller) controller.stopped = true
-  const db = await getDatabase()
   const agents = listAgentsSync(db, runId)
   controllers.delete(runId)
   if (controller) for (const sessionId of controller.sessionIds.values()) unregisterCoordinatorToolsForSession(sessionId)
@@ -8689,9 +8733,12 @@ export async function stopProtocolRun(runId: string, preserveSessionId?: string)
  * cascade-delete the ledger rows (agents/tasks/locks/events/messages).
  */
 export async function deleteProtocolRun(runId: string): Promise<{ deleted: boolean; keptWorktrees: string[] }> {
+  const db = await getDatabase()
+  if (db.prepare('SELECT 1 FROM protocol_interactive_hosts WHERE run_id = ?').get(runId)) {
+    await enqueueWrite(tx => claimInteractiveHostSync(tx, runId))
+  }
   const controller = controllers.get(runId)
   if (controller) controller.stopped = true
-  const db = await getDatabase()
   const agents = listAgentsSync(db, runId)
   controllers.delete(runId)
   if (controller) for (const sessionId of controller.sessionIds.values()) unregisterCoordinatorToolsForSession(sessionId)
