@@ -22107,15 +22107,6 @@ export default function OpenTuiApp() {
             setFolderPickerForNewSession(false)
           }}
           onKeyHandlerReady={(handler) => { fileViewerKeyHandlerRef.current = handler }}
-          readRemoteFile={selectedSession?.provider === 'claude' && !selectedSession.isPending
-            ? async (path) => {
-                const result = await runTuiSessionAction(selectedSession, { action: 'readFile', path, maxBytes: 512 * 1024, encoding: 'utf-8' })
-                const file = result.file && typeof result.file === 'object' ? result.file as Record<string, unknown> : null
-                return file && typeof file.contents === 'string'
-                  ? { contents: file.contents, truncated: file.truncated === true }
-                  : null
-              }
-            : undefined}
           onToggleVelocityScroll={() => {
             setVelocityScrollEnabled((current) => {
               const next = !current
