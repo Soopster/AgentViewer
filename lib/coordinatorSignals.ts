@@ -20,6 +20,7 @@
 // poll that re-reads the same state never does.
 import { coordinatorAttention } from './coordinatorAttention'
 import { coordinatorStalledAgentIds, type CoordinatorInteractiveState } from './coordinatorInteractiveState'
+import type { ProtocolAgent, ProtocolRunSnapshot } from './agentProtocol'
 
 export type CoordinatorSignal = {
   id: string
@@ -98,4 +99,45 @@ export const COORDINATOR_NOTIFICATION_DELAY_MS = 1_000
 /** Herdr's active-tab rule: quiet only when viewing AND not known to be blurred. */
 export function coordinatorSignalSuppressed(viewing: boolean, terminalFocused: boolean | null): boolean {
   return viewing && terminalFocused !== false
+}
+
+/**
+ * Teammates in herdr's agent-panel order (`AgentPanelSort::Priority`): waiting
+ * on the user, then an unreviewed result, then working, then the rest; within a
+ * tier, the most recent task change first. Ties keep roster order, and recency
+ * reads the task — not heartbeats — so a quiet roster does not reshuffle.
+ */
+export function coordinatorRosterOrder(
+  state: CoordinatorInteractiveState | null,
+  reviewed: readonly string[] = [],
+  now = Date.now(),
+): ProtocolAgent[] {
+  const snapshot = state?.snapshot
+  if (!state || !snapshot) return []
+  const signals = coordinatorSignals(state, reviewed, now)
+  const tier = (agent: ProtocolAgent) => {
+    if (agent.status === 'blocked' || signals.some(signal => signal.agentId === agent.id && signal.kind === 'needs-attention')) return 3
+    if (signals.some(signal => signal.agentId === agent.id && signal.kind === 'finished')) return 2
+    if (agent.turnActive || state.runningAgentIds.includes(agent.id)) return 1
+    return 0
+  }
+  const changedAt = (agent: ProtocolAgent) => {
+    const times = snapshot.tasks.filter(task => task.ownerAgentId === agent.id).map(task => Date.parse(task.updatedAt)).filter(Number.isFinite)
+    return times.length ? Math.max(...times) : 0
+  }
+  return snapshot.agents
+    .filter(agent => agent.role === 'teammate')
+    .map((agent, index) => ({ agent, index, tier: tier(agent), changedAt: changedAt(agent) }))
+    .sort((a, b) => b.tier - a.tier || b.changedAt - a.changedAt || a.index - b.index)
+    .map(entry => entry.agent)
+}
+
+/**
+ * Herdr marks an agent's completion seen when the user focuses it. Opening a
+ * teammate's transcript is that focus here, so its results are reviewed by the
+ * act of reading them rather than by a second keystroke.
+ */
+export function coordinatorResultIdsForAgent(snapshot: ProtocolRunSnapshot | null | undefined, agentId: string): string[] {
+  if (!snapshot) return []
+  return coordinatorAttention(snapshot).filter(item => item.kind === 'result' && item.agentId === agentId).map(item => item.id)
 }

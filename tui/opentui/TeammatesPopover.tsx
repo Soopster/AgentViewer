@@ -17,6 +17,7 @@ import { fitText, joinMeta } from './textLayout'
 import { MODAL_CONTENT_Z_INDEX } from './layers'
 import type { ProtocolAgent } from '../../lib/agentProtocol'
 import { coordinatorAttention, type CoordinatorAttentionItem } from '../../lib/coordinatorAttention'
+import { coordinatorResultIdsForAgent, coordinatorRosterOrder } from '../../lib/coordinatorSignals'
 import { coordinatorAgentActivity, coordinatorStalledAgentIds } from '../../lib/coordinatorInteractiveState'
 import {
   closeInteractiveCoordinator,
@@ -24,6 +25,7 @@ import {
   getInteractiveCoordinatorState,
   retryInteractiveCoordinatorAction,
   reviewInteractiveCoordinatorResult,
+  reviewInteractiveCoordinatorResults,
   runInteractiveCoordinatorAction,
   subscribeInteractiveCoordinator,
 } from './interactiveCoordinatorStore'
@@ -57,7 +59,9 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   const state = useSyncExternalStore(
     subscribeInteractiveCoordinator, getInteractiveCoordinatorState, getInteractiveCoordinatorState,
   )
-  const [index, setIndex] = useState(0)
+  // Selection is by teammate id: the roster reorders by attention, and a
+  // positional index would silently retarget `m` or `r` to whoever moved there.
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   const [attentionIndex, setAttentionIndex] = useState(0)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [confirmOff, setConfirmOff] = useState(false)
@@ -71,11 +75,8 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   const canLead = !snapshot
     || snapshot.agents.some((agent) => agent.role === 'lead' && agent.sessionId === session?.sessionId)
 
-  const teammates = useMemo(
-    () => snapshot?.agents.filter((agent) => agent.role === 'teammate') ?? [],
-    [snapshot],
-  )
-  const clamped = teammates.length === 0 ? 0 : Math.min(index, teammates.length - 1)
+  const teammates = useMemo(() => coordinatorRosterOrder(data, state.reviewed), [data, state.reviewed])
+  const clamped = Math.max(teammates.findIndex((agent) => agent.id === selectedId), 0)
   const selected = teammates[clamped] ?? null
   const delivery = data?.interactive.delivery ?? null
   const unconfirmedDelivery = delivery && !delivery.active ? delivery : null
@@ -136,13 +137,16 @@ export const TeammatesPopover = memo(function TeammatesPopover({
 
     // Uncertain delivery requires transcript inspection before retry/discard.
     // Keep reading and roster navigation available while mutations are gated.
-    if (key.name === 'return' && selected) { onOpenSession(selected); closeInteractiveCoordinator(); return }
+    if (key.name === 'return' && selected) {
+      reviewInteractiveCoordinatorResults(coordinatorResultIdsForAgent(snapshot, selected.id))
+      onOpenSession(selected); closeInteractiveCoordinator(); return
+    }
     if (key.name === 'j' || key.name === 'down') {
-      setIndex((current) => Math.min(current + 1, Math.max(teammates.length - 1, 0)))
+      setSelectedId(teammates[Math.min(clamped + 1, Math.max(teammates.length - 1, 0))]?.id ?? null)
       return
     }
     if (key.name === 'k' || key.name === 'up') {
-      setIndex((current) => Math.max(current - 1, 0))
+      setSelectedId(teammates[Math.max(clamped - 1, 0)]?.id ?? null)
       return
     }
 
@@ -213,7 +217,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       setDraft({ kind: 'message', to: selected.id, toName: selected.name, text: '' })
     }
   }, [act, busy, canLead, confirmOff, data, disabled, draft, enabled, locked, onNotice, onOpenSession,
-      pending, recoveries, selected, teammates.length, terminal, unconfirmedDelivery, currentAttention, items.length])
+      pending, recoveries, selected, teammates, clamped, snapshot, terminal, unconfirmedDelivery, currentAttention, items.length])
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
 

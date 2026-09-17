@@ -219,6 +219,10 @@ difference decides most of the verdicts below.
 | `done` vs `idle` via server-side `seen` (SKILL.md, `aggregate.rs`) | Reviewed-result markers, durable in both clients; badge separates finished from waiting | Adopted this pass (TUI durability, badge split) |
 | Attention priority blocked > unseen done > working > seen idle > unknown (`pane_attention_priority`) | `coordinatorAttentionPriority` picks which conversation "jump to attention" opens | Adopted this pass |
 | `agent_blocked`: refuse to type into an approval dialog (SKILL.md) | Follow-ups go to the durable mailbox, never keystrokes, so they cannot answer an approval; delegation already refuses busy teammates | Not needed: the hazard does not exist |
+| Agent panel sorted by attention priority, then latest state change (`AgentPanelSort::Priority`, `agent_view.rs`) | `coordinatorRosterOrder` in both rosters: waiting on user > unreviewed result > working > rest, newest task change first; TUI selection tracks teammate id so a reorder cannot retarget a key | Adopted this pass |
+| Focusing an agent marks its completion seen (`mark_active_tab_seen`) | Opening a teammate's transcript reviews its results (`coordinatorResultIdsForAgent`), web and TUI | Adopted this pass |
+| Metadata tokens with TTL shown per agent (`metadata_tokens.rs`) | Roster activity labels plus provider context/usage in each transcript | Present in substance; no free-form token API needed |
+| Server handoff preserving PTYs (`handoff_runtime.rs`) | Turns run in the daemon and survive client restarts; a daemon replacement does not keep live turns | Not adopted: PTY handoff has no equivalent for SDK subprocess streams |
 | Named agents, unique, validated (SKILL.md) | Protocol names, delegation requires exactly one active match | Present |
 | Detach without stopping work (README) | `agent-viewer web` daemon + `--attach`; turns run server-side | Present |
 | Resume supported agent sessions after restart (`agent_resume.rs`) | Provider sessions are durable by id; interrupted teammate execution waits for explicit recovery rather than auto-resuming | Present, deliberately stricter |
@@ -260,3 +264,17 @@ past 300ms, a question resolved within the delay never notifies, and a blocked
 teammate outranks a finished one regardless of observation order. Removing the
 at-delivery re-check, reverting to first-match jumping, and a zero delay were
 each verified to fail it. The browser smoke passes with the delayed web path.
+
+### Roster order and review on focus
+
+Recency within a tier reads task `updatedAt`, never heartbeats or `lastSeenAt`,
+so a quiet roster does not reshuffle under the cursor. Reordering is only safe
+because TUI selection is held by teammate id: with a positional index, a
+teammate rising above the selected row silently retargets `m` or `r`.
+`teammatesPopoverSmoke.tsx` selects one teammate, has another raise a question
+so the order changes, and asserts `m` still addresses the selected teammate;
+reverting to positional selection was verified to fail it for exactly that
+reason. It also asserts `⏎` on a teammate reviews its result, and the browser
+smoke asserts the web **Transcript** button clears **Mark reviewed**. Removing
+either review path, dropping the priority sort, dropping the result tier, and
+dropping the recency tiebreak were each verified to fail their smokes.

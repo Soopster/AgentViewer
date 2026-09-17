@@ -296,7 +296,13 @@ export async function retryInteractiveCoordinatorAction(): Promise<boolean> {
 
 /** Review markers affect presentation only; they never acknowledge agent mail. */
 export function reviewInteractiveCoordinatorResult(id: string): void {
-  const reviewed = [...state.reviewed.filter(entry => entry !== id), id].slice(-500)
+  reviewInteractiveCoordinatorResults([id])
+}
+
+/** Batch form, for reading a teammate's transcript: every result it holds is reviewed. */
+export function reviewInteractiveCoordinatorResults(ids: readonly string[]): void {
+  if (!ids.length || ids.every(id => state.reviewed.includes(id))) return
+  const reviewed = [...state.reviewed.filter(entry => !ids.includes(entry)), ...ids].slice(-500)
   commit({ reviewed: state.session ? writeCoordinatorReviewed(sessionKey(state.session), reviewed) : reviewed })
 }
 

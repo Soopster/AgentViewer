@@ -6,7 +6,7 @@ import { useEffect, useId, useRef, useState } from 'react'
 import type { Session } from '@/lib/types'
 import type { ProtocolAgent, ProtocolRunSnapshot } from '@/lib/agentProtocol'
 import { coordinatorAttention, type CoordinatorAttentionItem } from '@/lib/coordinatorAttention'
-import { COORDINATOR_NOTIFICATION_DELAY_MS, coordinatorSignals, coordinatorSignalSuppressed, newCoordinatorSignals } from '@/lib/coordinatorSignals'
+import { COORDINATOR_NOTIFICATION_DELAY_MS, coordinatorResultIdsForAgent, coordinatorRosterOrder, coordinatorSignals, coordinatorSignalSuppressed, newCoordinatorSignals } from '@/lib/coordinatorSignals'
 import { Button } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea'
@@ -113,9 +113,12 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
     } catch (error) { setError(error instanceof Error ? error.message : 'Request could not be confirmed') }
     finally { setBusy(false) }
   }
-  function inspect(agent: ProtocolAgent) { onReturnToChat(); onInspect(agent) }
-  function markSeen(item: CoordinatorAttentionItem) {
-    const next = [...seen, item.id].slice(-500)
+  // Herdr marks a completion seen when its agent is focused; reading a teammate's transcript is that focus.
+  function inspect(agent: ProtocolAgent) { markSeenIds(coordinatorResultIdsForAgent(snapshot, agent.id)); onReturnToChat(); onInspect(agent) }
+  function markSeen(item: CoordinatorAttentionItem) { markSeenIds([item.id]) }
+  function markSeenIds(ids: string[]) {
+    if (!ids.length || ids.every(id => seen.includes(id))) return
+    const next = [...seen.filter(id => !ids.includes(id)), ...ids].slice(-500)
     setSeen(next)
     try { localStorage.setItem(seenKey, JSON.stringify(next)) } catch { /* Optional persistence. */ }
   }
@@ -144,7 +147,7 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
       <Button disabled={locked} onClick={() => void send({ action: 'reconcile', detail: 'Confirmed delivery in transcript', batchId: state.interactive.delivery!.batchId, received: true })}>Mail was received</Button>
       <Button variant="outline" disabled={locked} onClick={() => void send({ action: 'reconcile', detail: 'Confirmed mail was not received', batchId: state.interactive.delivery!.batchId, received: false })}>Mail was not received · requeue</Button>
     </div> : null}
-    {snapshot && state ? <TeammateRoster snapshot={snapshot} state={state} observationUnavailable={Boolean(notice)} onOpen={inspect} onFollowup={agent => { setTo(agent.id); setDetail(`Follow up with ${agent.name}: `) }} disabled={disabled} /> : null}
+    {snapshot && state ? <TeammateRoster snapshot={snapshot} state={state} seen={seen} observationUnavailable={Boolean(notice)} onOpen={inspect} onFollowup={agent => { setTo(agent.id); setDetail(`Follow up with ${agent.name}: `) }} disabled={disabled} /> : null}
     {nativeAttention.map(item => <div key={`${item.agentId}:${item.permission.id}`} className="flex items-center justify-between gap-2 rounded border p-2" role="status"><span>{item.agentName}: {item.permission.title}</span><Button variant="outline" size="sm" onClick={() => { const agent = snapshot?.agents.find(agent => agent.id === item.agentId); if (agent) inspect(agent) }}>Inspect and answer</Button></div>)}
     {state?.recoveries.map(agentId => <div key={agentId} className="flex flex-wrap items-center gap-2 rounded border p-2"><span>{snapshot?.agents.find(agent => agent.id === agentId)?.name}: execution needs reconciliation</span><Button variant="outline" size="sm" onClick={() => { const agent = snapshot?.agents.find(agent => agent.id === agentId); if (agent) inspect(agent) }}>Inspect</Button><Button size="sm" disabled={disabled} onClick={() => void send({ action: 'resume-agent', to: agentId, detail: 'Resume after inspecting the teammate transcript' })}>Resume after inspection</Button></div>)}
     {notice ? <p role="status" className="text-sm">{notice}</p> : null}
@@ -177,13 +180,13 @@ function requestTeammateNotifications() {
   try { if (typeof Notification !== 'undefined' && Notification.permission === 'default') void Notification.requestPermission() } catch { /* Unsupported context. */ }
 }
 
-function TeammateRoster({ snapshot, state, observationUnavailable, onOpen, onFollowup, disabled }: {
-  snapshot: ProtocolRunSnapshot; state: CoordinatorInteractiveState; observationUnavailable: boolean; onOpen: (agent: ProtocolAgent) => void; onFollowup: (agent: ProtocolAgent) => void; disabled: boolean
+function TeammateRoster({ snapshot, state, seen, observationUnavailable, onOpen, onFollowup, disabled }: {
+  snapshot: ProtocolRunSnapshot; state: CoordinatorInteractiveState; seen: string[]; observationUnavailable: boolean; onOpen: (agent: ProtocolAgent) => void; onFollowup: (agent: ProtocolAgent) => void; disabled: boolean
 }) {
   if (!snapshot.agents.some(agent => agent.role === 'teammate')) return null
   const stalled = coordinatorStalledAgentIds(state)
   return <div className="flex flex-wrap gap-2" aria-label="Persistent teammate conversations">
-    {snapshot.agents.filter(agent => agent.role === 'teammate').map(agent => <div key={agent.id} className="rounded border p-2">
+    {coordinatorRosterOrder(state, seen).map(agent => <div key={agent.id} className="rounded border p-2">
       <p>{agent.name} · {coordinatorAgentActivity(agent, state, observationUnavailable, stalled.includes(agent.id))}</p>
       {!agent.sessionId.startsWith('external:') ? <Button variant="ghost" size="sm" onClick={() => onOpen(agent)}>Transcript</Button> : null}
       <Button variant="ghost" size="sm" disabled={disabled} onClick={() => onFollowup(agent)}>Follow up</Button>

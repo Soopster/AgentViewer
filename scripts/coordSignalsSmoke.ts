@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import type { ProtocolRunSnapshot } from '../lib/agentProtocol'
 import { coordinatorAttentionCount } from '../lib/coordinatorAttentionCount'
 import { COORDINATOR_START_STALL_MS, coordinatorAgentActivity, coordinatorStalledAgentIds, type CoordinatorInteractiveState } from '../lib/coordinatorInteractiveState'
-import { coordinatorAttentionPriority, coordinatorSignals, coordinatorSignalSuppressed, newCoordinatorSignals } from '../lib/coordinatorSignals'
+import { coordinatorAttentionPriority, coordinatorResultIdsForAgent, coordinatorRosterOrder, coordinatorSignals, coordinatorSignalSuppressed, newCoordinatorSignals } from '../lib/coordinatorSignals'
 
 const claimedAt = '2026-09-17T00:00:00.000Z'
 const t0 = Date.parse(claimedAt)
@@ -76,10 +76,33 @@ assert.equal(coordinatorAttentionPriority(done), 1, 'an unreviewed result is wor
 assert.equal(coordinatorAttentionPriority([...done, ...question]), 2, 'anything waiting on the user outranks results')
 assert.equal(coordinatorAttentionPriority([], true), 2, 'an unconfirmed request waits on the user')
 
+// ── Herdr's agent-panel priority order ──────────────────────────────────────
+function team(): CoordinatorInteractiveState {
+  const base = fixture()
+  const snapshot = base.snapshot!
+  const teammate = (id: string, name: string, taskId: string, status = 'working') => ({ id, name, role: 'teammate', sessionId: `${id}-chat`, status, taskId })
+  const task = (id: string, owner: string, status: string, updatedAt: string) => ({ id, title: id, status, ownerAgentId: owner, updatedAt })
+  snapshot.agents = [snapshot.agents[0], teammate('idle', 'idle', 'T0', 'idle'), teammate('busy', 'busy', 'T1'), teammate('done', 'done', 'T2', 'done'), teammate('asks', 'asks', 'T3')] as never
+  snapshot.tasks = [task('T0', 'idle', 'completed', '2026-09-16T00:00:00Z'), task('T1', 'busy', 'in_progress', '2026-09-17T00:00:00Z'),
+    task('T2', 'done', 'completed', '2026-09-17T00:02:00Z'), task('T3', 'asks', 'in_progress', '2026-09-17T00:01:00Z')] as never
+  snapshot.messages = [{ id: 'mq', fromAgentId: 'asks', toAgentId: 'lead', replyRequired: true, body: '?' }] as never
+  return { ...base, runningAgentIds: ['busy', 'asks'] }
+}
+const roster = team()
+const idleResult = coordinatorResultIdsForAgent(roster.snapshot, 'idle')
+assert.deepEqual(coordinatorRosterOrder(roster, idleResult, t0).map(agent => agent.id), ['asks', 'done', 'busy', 'idle'],
+  'waiting on the user, then unreviewed result, then working, then the rest')
+assert.deepEqual(coordinatorRosterOrder(roster, [], t0).map(agent => agent.id), ['asks', 'done', 'idle', 'busy'],
+  'within a tier the most recent task change leads')
+assert.deepEqual(coordinatorResultIdsForAgent(roster.snapshot, 'done'), ['result:T2:2026-09-17T00:02:00Z'])
+assert.deepEqual(coordinatorResultIdsForAgent(roster.snapshot, 'asks'), [], 'work in progress has no result to mark reviewed')
+assert.deepEqual(coordinatorRosterOrder(roster, coordinatorResultIdsForAgent(roster.snapshot, 'done').concat(idleResult), t0).map(agent => agent.id), ['asks', 'busy', 'done', 'idle'],
+  'reading a teammate\'s results drops it out of the result tier')
+
 // ── Herdr's focus rule ──────────────────────────────────────────────────────
 assert.equal(coordinatorSignalSuppressed(true, true), true, 'looking and focused: quiet')
 assert.equal(coordinatorSignalSuppressed(true, null), true, 'unknown focus counts as focused')
 assert.equal(coordinatorSignalSuppressed(true, false), false, 'looking at a blurred terminal is not looking')
 assert.equal(coordinatorSignalSuppressed(false, true), false, 'another conversation always notifies')
 
-console.log('Coordinator signals: stall window + exclusions, baseline-silent transitions, reviewed results, lead exclusion, attention priority, focus suppression passed')
+console.log('Coordinator signals: stall window + exclusions, baseline-silent transitions, reviewed results, lead exclusion, attention priority, roster order, per-agent results, focus suppression passed')

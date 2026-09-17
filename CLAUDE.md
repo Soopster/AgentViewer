@@ -853,7 +853,9 @@ which mirror `app/api/sessions/[sessionId]/coordination/route.ts` action for act
   touching root state. A claimed task with no observed turn for `COORDINATOR_START_STALL_MS` reads
   as stalled — "nothing observed", never "not delivered". Delivery waits `COORDINATOR_NOTIFICATION_DELAY_MS`
   and re-checks the signal and focus when it fires (herdr's toast delay), so an approval answered
-  within a second never interrupts anyone. Reviewed-result markers persist in
+  within a second never interrupts anyone. Both rosters sort by `coordinatorRosterOrder` (herdr's
+  priority panel), so **TUI selection is by teammate id, never index** — a reorder would otherwise
+  retarget `m`/`r` to whoever moved into the row. Opening a teammate's transcript reviews its results. Reviewed-result markers persist in
   `lib/tui/coordinatorReviewed.ts`; in memory, a restart re-flagged every result. Pinned by
   `scripts/coordSignalsSmoke.ts` and the store smoke.
 - **An unconfirmed request locks the panel.** The idempotency key makes a *replay* safe; it cannot

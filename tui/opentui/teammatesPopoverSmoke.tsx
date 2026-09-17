@@ -228,6 +228,37 @@ await waitFor('result summary', () => captureCharFrame().includes('Parser fixtur
 await press('s')
 if (captureCharFrame().includes('ATTENTION')) fail('reviewed result stayed in attention')
 
+// ── the roster reorders by attention, and selection follows the teammate ────
+// Herdr's agent panel sorts by priority. A positional selection would silently
+// retarget `m` to whoever moved into that row, so selection is by id.
+const orion = await coordination.joinExternalProtocolRun({ runId: runId!, provider: 'claude', cwd: smokeRoot, participantName: 'orion' })
+await waitFor('orion to appear in the roster', () => captureCharFrame().includes('orion'))
+const rosterOrder = () => store.getInteractiveCoordinatorState().data!.snapshot!.agents.filter(agent => agent.role === 'teammate').map(agent => agent.name)
+const rowOf = (name: string) => captureCharFrame().split('\n').findIndex(line => new RegExp(`\\b${name}\\b`).test(line) && !line.includes('Message'))
+if (!(rowOf('nova') < rowOf('orion'))) fail(`expected nova above orion before orion asks anything (${rosterOrder().join(', ')})`)
+await press('j')
+await coordination.sendExternalProtocolMessage(orion.participant, { to: 'lead', body: 'Need a decision from you', replyRequired: true })
+await waitFor('orion to rise above nova', () => rowOf('orion') >= 0 && rowOf('orion') < rowOf('nova'))
+await press('m')
+if (!captureCharFrame().includes('Message orion')) fail('reordering the roster retargeted the selected teammate')
+await press('escape')
+
+// ── reading a teammate's transcript reviews its results ────────────────────
+const orionTask = await coordination.createExternalProtocolTask(leadIdentity, { assignTo: orion.participant.agentId, title: 'Orion lane', detail: 'Fixture result' })
+await coordination.appendProtocolEvent({ version: '1.0', runId: runId!, agentId: orion.participant.agentId, taskId: orionTask.task!.id, type: 'task.failed', summary: 'Orion fixture result' })
+await waitFor('orion result in attention', () => captureCharFrame().includes('Orion fixture result'))
+const orionResults = () => {
+  const snap = store.getInteractiveCoordinatorState().data!.snapshot!
+  const task = snap.tasks.find(entry => entry.id === orionTask.task!.id)!
+  return `result:${task.id}:${task.updatedAt}`
+}
+const openedBefore = opened.length
+await press('return')
+if (opened[openedBefore] !== 'orion') fail(`⏎ opened ${opened[openedBefore] ?? '(none)'} instead of the selected teammate`)
+if (!store.getInteractiveCoordinatorState().reviewed.includes(orionResults())) fail('opening a teammate transcript did not review its result')
+act(() => { store.openInteractiveCoordinator({ sessionId: SESSION_ID, provider: PROVIDER, cwd: smokeRoot, title: 'Smoke chat' }) })
+await settle(200)
+
 // ── an unconfirmed request gates the panel ─────────────────────────────────
 // The idempotency key makes a REPLAY safe; it cannot make a second, different
 // mutation safe while the first's outcome is unknown. So a failed request has
@@ -289,5 +320,5 @@ await waitFor('fresh team in same chat', () => Boolean(store.getInteractiveCoord
 if (store.getInteractiveCoordinatorState().data?.snapshot?.tasks.length) fail('new team inherited old tasks')
 await coordination.stopProtocolRun(store.getInteractiveCoordinatorState().data!.snapshot!.run.id)
 
-console.log('Teammates popover smoke passed (enable, roster activity, inspect, drafts, continuation, unconfirmed gate, turn off)')
+console.log('Teammates popover smoke passed (enable, roster activity, inspect, priority order with id selection, review on open, drafts, continuation, unconfirmed gate, turn off)')
 process.exit(0)

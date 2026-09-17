@@ -12,10 +12,12 @@ let permissionPending = true
 let observationFails = false
 let executionElsewhere = false
 let approvalId = 'approval-1'
+let resultReady = false
 const actions = []
 const state = () => ({
   snapshot: enabled || stopped ? { run: { id: 'browser-run', status: stopped ? 'stopped' : 'running', leadAgentId: 'lead' },
-    agents: [{ id: 'lead', role: 'lead', name: 'lead', ...lead }, worker], tasks: [], messages: [], events: [] } : null,
+    agents: [{ id: 'lead', role: 'lead', name: 'lead', ...lead }, worker],
+    tasks: resultReady ? [{ id: 'T1', title: 'Review alpha', status: 'completed', ownerAgentId: worker.id, updatedAt: '2026-09-17T00:00:00Z', resultSummary: 'Alpha looks good' }] : [], messages: [], events: [] } : null,
   interactive: { enabled, autoContinue, remainingTurns: 4, delivery: null, executionElsewhere }, recoveries: [], runningAgentIds: [worker.id],
   permissions: enabled && permissionPending ? [{ agentId: worker.id, agentName: worker.name, permission: { id: approvalId, sessionId: worker.sessionId, provider: 'codex', title: 'Review command needs approval' } }] : [],
 })
@@ -124,6 +126,15 @@ try {
   assert.match(notification.title, /reviewer is waiting for your answer/)
   await page.evaluate(() => { window.__blurred = false })
   permissionPending = false
+  // Herdr marks a completion seen when its agent is focused: reading the
+  // teammate's transcript reviews its result without a separate click.
+  resultReady = true
+  await page.getByRole('button', { name: 'Mark reviewed', exact: true }).waitFor({ timeout: 15000 })
+  await roster.getByRole('button', { name: 'Transcript', exact: true }).click()
+  await page.getByRole('button', { name: 'Close teammate', exact: true }).click()
+  await teamTab.click()
+  await roster.getByText(/reviewer ·/).waitFor({ timeout: 15000 })
+  assert.equal(await page.getByRole('button', { name: 'Mark reviewed', exact: true }).count(), 0, 'opening the transcript did not review its result')
   await page.screenshot({ path: '/tmp/coordinator-docked-teammates.png', fullPage: true })
   await chatTab.click()
   assert.equal(await composer.inputValue(), 'Preserve this lead draft while inspecting reviewer')
@@ -138,5 +149,5 @@ try {
   await page.getByRole('button', { name: 'Enable coordinator', exact: true }).click()
   await page.getByText('Coordinator on', { exact: true }).waitFor()
   assert.equal(errors.length, 0, errors.join('\n'))
-  console.log('Rendered enablement, continuation preference, native attention, embedded transcript, lead draft preservation, named follow-up, outage recovery, foreign-host activity, and blurred-only teammate notifications passed')
+  console.log('Rendered enablement, continuation preference, native attention, embedded transcript, lead draft preservation, named follow-up, outage recovery, foreign-host activity, blurred-only teammate notifications, and review on transcript open passed')
 } finally { await browser.close() }
