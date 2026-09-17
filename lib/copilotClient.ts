@@ -13,6 +13,7 @@ import {
 } from '@github/copilot-sdk'
 import { getCoordinatorCopilotTools } from './agentCoordinationSdkTools'
 import { selectIdleProviderPoolEvictions } from './providerPoolPolicy'
+import { clearWaitingSession, getRunningSession, setWaitingSession } from './sessionRuntime'
 
 function normalizedEnv(value: string | undefined): string | undefined {
   const trimmed = value?.trim()
@@ -171,6 +172,8 @@ type CopilotPoolEntry = {
   lastUsed: number
   activeUses: number
   timer: ReturnType<typeof setTimeout> | null
+  /** Unsubscribes the background-task watcher; see `refreshCopilotBackgroundTasks`. */
+  stopBackgroundWatch?: () => void
 }
 
 declare global {
@@ -466,6 +469,54 @@ export function peekCopilotSession(sessionId: string): CopilotSession | null {
   return entry.session
 }
 
+/**
+ * Mark a Copilot session "waiting" while background tasks it started are still
+ * running after its turn ended — the counterpart of Claude's Stop-hook
+ * `background_tasks`. Herdr had Copilot panes read as idle while background
+ * agents were still due to report back (herdr #3291), which ended waits early.
+ *
+ * Only an idle session is marked: the waiting registry also feeds the TUI
+ * attention inbox, and a session with a live turn is running, not waiting.
+ * Tasks the session reports `idle` are waiting for input rather than working,
+ * so they do not count.
+ */
+export async function refreshCopilotBackgroundTasks(sessionId: string, session: CopilotSession): Promise<void> {
+  // Fast path: `background_tasks_changed` fires throughout a live turn, and a
+  // running session is never marked waiting. The check after the RPC is the
+  // one that matters, for a turn starting while the list is in flight.
+  if (getRunningSession(sessionId)) return
+  let tasks: Awaited<ReturnType<CopilotSession['rpc']['tasks']['list']>>['tasks']
+  try {
+    tasks = (await session.rpc.tasks.list()).tasks
+  } catch {
+    return
+  }
+  if (getRunningSession(sessionId)) return
+  const live = tasks.filter((task) => task.status === 'running')
+  if (live.length === 0) {
+    clearWaitingSession(sessionId)
+    return
+  }
+  setWaitingSession({
+    sessionId,
+    provider: 'copilot',
+    // Same vocabulary as Claude's summaries, so one classifier reads both.
+    backgroundTasks: live.map((task) => ({ id: task.id, type: task.type === 'agent' ? 'subagent' : task.type, status: task.status, description: task.description })),
+    sessionCrons: [],
+  })
+}
+
+/**
+ * A background task can finish long after the turn that started it, when that
+ * turn's own listener is gone — so the pooled session keeps this one.
+ */
+export function watchCopilotBackgroundTasks(sessionId: string, session: CopilotSession): () => void {
+  return session.on((event) => {
+    if (event.type === 'session.background_tasks_changed') void refreshCopilotBackgroundTasks(sessionId, session)
+    else if (event.type === 'assistant.turn_start') clearWaitingSession(sessionId)
+  })
+}
+
 export async function acquireCopilotSession(sessionId: string): Promise<CopilotSession> {
   const cached = copilotSessionPool.get(sessionId)
   if (cached) {
@@ -485,6 +536,7 @@ export async function acquireCopilotSession(sessionId: string): Promise<CopilotS
       activeUses: 0,
       timer: null,
     }
+    entry.stopBackgroundWatch = watchCopilotBackgroundTasks(sessionId, session)
     copilotSessionPool.set(sessionId, entry)
     scheduleCopilotEviction(sessionId)
     enforceCopilotPoolLimit(sessionId)
@@ -501,6 +553,8 @@ export async function evictCopilotSession(sessionId: string): Promise<void> {
   if (!entry) return
   if (entry.timer) clearTimeout(entry.timer)
   copilotSessionPool.delete(sessionId)
+  entry.stopBackgroundWatch?.()
+  clearWaitingSession(sessionId)
   clearCopilotPermissionHandler(sessionId)
   clearCopilotElicitationHandler(sessionId)
   copilotLastStopReason.delete(sessionId)

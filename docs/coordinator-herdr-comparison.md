@@ -223,7 +223,7 @@ difference decides most of the verdicts below.
 | Focusing an agent marks its completion seen (`mark_active_tab_seen`) | Opening a teammate's transcript reviews its results (`coordinatorResultIdsForAgent`), web and TUI | Adopted this pass |
 | Metadata tokens with TTL shown per agent (`metadata_tokens.rs`) | Roster activity labels plus provider context/usage in each transcript | Present in substance; no free-form token API needed |
 | Server handoff preserving PTYs (`handoff_runtime.rs`) | Turns run in the daemon and survive client restarts; a daemon replacement does not keep live turns | Not adopted: PTY handoff has no equivalent for SDK subprocess streams |
-| Background work keeps an agent working; a background shell alone does not (CHANGELOG #1630, #3090, #3291, #3414, #2851) | `coordinatorBackgroundWork` from Claude's Stop-hook `background_tasks`/`session_crons`: "Working in background · N tasks · N wake-ups", working tier, never stalled | Adopted this pass |
+| Background work keeps an agent working; a background shell alone does not (CHANGELOG #1630, #3090, #3291, #3414, #2851) | `coordinatorBackgroundWork` from Claude's Stop-hook `background_tasks`/`session_crons` and Copilot's `tasks.list()`: "Working in background · N tasks · N wake-ups", working tier, never stalled. OpenCode exposes only a move-to-background mutation, Pi nothing, Codex only background shells (which correctly do not count) | Adopted for Claude and Copilot |
 | Unloadable saved state preserved before replacement (CHANGELOG #4125) | Reviewed markers back up an unreadable file first and leave it untouched if the backup fails | Adopted this pass |
 | Client-side view state tracked per client (0.9.0 #3526; SKILL.md "each TUI client tracks viewed completions independently") | Reviewed markers: per TUI data dir, per browser localStorage | Present |
 | Named agents, unique, validated (SKILL.md) | Protocol names, delegation requires exactly one active match | Present |
@@ -318,3 +318,30 @@ it clear; `coordReviewedMarkersSmoke.ts` pins backup-before-replace and
 untouched-on-failure. Removing the shell filter, the stall exclusion, the
 backup, the abort-on-failed-backup, and either client's wiring were each
 verified to fail.
+
+### Copilot background tasks
+
+Herdr #3291 kept GitHub Copilot CLI "working" while it waited for background
+agents. Copilot SDK 1.0.14 lists a session's tasks (`session.rpc.tasks.list()`:
+agent, shell and client tasks with a status) and announces changes with the
+ephemeral `session.background_tasks_changed` event. `refreshCopilotBackgroundTasks`
+runs when a turn's stream ends and whenever that event fires on a pooled
+session, and records `running` tasks in the same waiting registry Claude's Stop
+hook feeds, translated to Claude's vocabulary (`agent` → `subagent`) so one
+classifier reads both. Tasks Copilot reports `idle` are waiting for input, not
+working, and do not count.
+
+The registry also drives the TUI attention inbox, so two races matter: a
+session with a live turn is never marked waiting, and a turn that starts while
+the task list is in flight wins — the running check after the RPC is the one
+that guards it (the one before is a fast path, since the event fires throughout
+a live turn). A failed RPC leaves the previous marker alone rather than reading
+as "nothing running". Eviction unsubscribes the watcher and clears the marker.
+
+`scripts/copilotBackgroundTasksSmoke.ts` pins all of this with a fake session;
+dropping the post-RPC guard, counting non-running tasks, treating an RPC failure
+as empty, and dropping the turn-start clear were each verified to fail it. A
+live probe against the installed CLI confirmed `tasks.list()` answers on a fresh
+throwaway session (`{"tasks":[]}`, no marker); no background agent was started,
+so the populated path is proven only against the fixture. `copilot:sdk:smoke`
+still passes with the watcher attached to pooled sessions.

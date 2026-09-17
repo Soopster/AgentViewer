@@ -175,7 +175,7 @@ import type {
 type CopilotReasoningEffort = Extract<ReasoningEffortLevel, 'low' | 'medium' | 'high' | 'xhigh'>
 
 import { createSessionControlQuery } from './sdkControlQuery'
-import { acquireCopilotSession, copilotPoolSize, copilotSessionConfigOverrides, evictCopilotSession, getCopilotClient, retainCopilotSession, rewindCopilotSessionFiles, setCopilotElicitationHandler, setCopilotPermissionHandler, steerCopilotSession } from './copilotClient'
+import { acquireCopilotSession, refreshCopilotBackgroundTasks, copilotPoolSize, copilotSessionConfigOverrides, evictCopilotSession, getCopilotClient, retainCopilotSession, rewindCopilotSessionFiles, setCopilotElicitationHandler, setCopilotPermissionHandler, steerCopilotSession } from './copilotClient'
 import { timeAsync } from './perfLog'
 import { registerDiagnosticsReporter } from './runtimeDiagnostics'
 import {
@@ -5535,6 +5535,9 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         }
         clearRunningSession(sessionId, turnRequestId)
         try { unsubscribe?.() } catch { /* ignore */ }
+        // The turn has ended; whatever it left running in the background
+        // decides whether the session is idle or waiting.
+        if (session) void refreshCopilotBackgroundTasks(sessionId, session)
         releasePooledSession?.()
         // Do NOT evict the warm session on a clean turn completion. Evicting
         // here disconnects the JSON-RPC session and forces a full resumeSession

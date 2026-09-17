@@ -860,7 +860,10 @@ which mirror `app/api/sessions/[sessionId]/coordination/route.ts` action for act
   retarget `m`/`r` to whoever moved into the row. Opening a teammate's transcript reviews its results.
   `backgroundAgents` (from the Stop hook's waiting registry) keeps a teammate working after its turn
   ends — background subagents/monitors and scheduled wake-ups count, **a background shell alone does
-  not** (herdr #3414: a dev server would otherwise hold it "working" forever). Reviewed-result markers persist in
+  not** (herdr #3414: a dev server would otherwise hold it "working" forever). Copilot feeds the same
+  registry from `tasks.list()` (`refreshCopilotBackgroundTasks`, on turn end and on
+  `session.background_tasks_changed`); it must never mark a session with a live turn, and the
+  running check **after** the RPC is the load-bearing one. Reviewed-result markers persist in
   `lib/tui/coordinatorReviewed.ts`; in memory, a restart re-flagged every result. Pinned by
   `scripts/coordSignalsSmoke.ts` and the store smoke.
 - **An unconfirmed request locks the panel.** The idempotency key makes a *replay* safe; it cannot
