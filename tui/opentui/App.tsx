@@ -118,6 +118,7 @@ import {
   readTuiSplitPanes,
   readTuiSplitOrientation,
   readTuiSplitReaderShare,
+  readTuiDaemonWarning,
   readTuiTheme,
   readTuiTranscriptView,
   readTuiTranscriptWidth,
@@ -15023,6 +15024,11 @@ export default function OpenTuiApp() {
           readTuiSplitReaderShare(),
         ])
         if (cancelled) return
+        // Attached to a daemon that may be older than this client: say so once,
+        // rather than letting each feature fail with its own HTTP error.
+        void readTuiDaemonWarning().then((warning) => {
+          if (!cancelled && warning) showNotice('error', warning, 10000)
+        }).catch(() => {})
         setThemeMode(configuredTheme)
         setActiveTheme(configuredTheme)
         setProvider(configuredProvider)

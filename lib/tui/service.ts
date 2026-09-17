@@ -123,6 +123,7 @@ import { dismissViewerAttention } from '../viewerAttention'
 import {
   encodeSessionPath,
   isRemoteAttached,
+  readDaemonStatus,
   providerQuery,
   remoteJson,
   remoteStream,
@@ -482,6 +483,16 @@ export async function interruptTuiSessionTurn(session: { sessionId: string; prov
  */
 export async function listTuiRunningSessions(): Promise<Awaited<ReturnType<typeof readTuiRunningSessions>>> {
   return readTuiRunningSessions()
+}
+
+/**
+ * Whether the daemon this TUI is attached to can serve it, or null when it can
+ * (and when running in-process, where there is no daemon to mismatch).
+ */
+export async function readTuiDaemonWarning(): Promise<string | null> {
+  if (!isRemoteAttached()) return null
+  const { daemonCompatibilityWarning } = await import('../daemonProtocol')
+  return daemonCompatibilityWarning(await readDaemonStatus())
 }
 
 export async function readTuiRuntimeActivity(): Promise<TuiRuntimeActivity> {

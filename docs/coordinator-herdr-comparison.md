@@ -227,6 +227,7 @@ difference decides most of the verdicts below.
 | Unloadable saved state preserved before replacement (CHANGELOG #4125) | Reviewed markers back up an unreadable file first and leave it untouched if the backup fails | Adopted this pass |
 | Client-side view state tracked per client (0.9.0 #3526; SKILL.md "each TUI client tracks viewed completions independently") | Reviewed markers: per TUI data dir, per browser localStorage | Present |
 | Agent list carries each agent's `cwd` and branch (`AgentInfo`, sidebar tokens) | `coordinatorAgentWorkspace`: a teammate's own worktree branch beside its activity, blank when it shares the lead's checkout | Adopted this pass |
+| Client/server version handshake before relying on a feature (`herdr status`, `api/status.rs`; SKILL.md: "a missing method is not permission to stop or upgrade a server") | `GET /api/version` (name, version, protocol, features) + `daemonCompatibilityWarning`; the attached TUI reports a mismatch once at startup and never restarts the daemon | Adopted this pass |
 | Named agents, unique, validated (SKILL.md) | Protocol names, delegation requires exactly one active match | Present |
 | Detach without stopping work (README) | `agent-viewer web` daemon + `--attach`; turns run server-side | Present |
 | Resume supported agent sessions after restart (`agent_resume.rs`) | Provider sessions are durable by id; interrupted teammate execution waits for explicit recovery rather than auto-resuming | Present, deliberately stricter |
@@ -397,3 +398,24 @@ Unrelated, found by running the whole TUI suite: `gitReviewStreamSmoke.tsx`
 fails on "clicking the selected file jumps back to its header". It fails the
 same way at `e65ac35`, before any of this work, so it is pre-existing and left
 untouched here.
+
+### The attach handshake
+
+`agent-viewer --attach` routes every backend call through a daemon that can be
+older than the client — the daemon is long-lived by design, and today's session
+found one three and a half hours old. There was no handshake: a route the
+daemon lacks answers 404 with Next's HTML page, so the client reported
+"Daemon request failed (HTTP 404)" with nothing to act on, per feature, every
+time.
+
+`GET /api/version` now answers name, version, protocol and a feature list, and
+`daemonCompatibilityWarning` turns that into one sentence the attached TUI shows
+at startup. A *newer* daemon is fine — this client only asks for what it knows
+about — and a daemon that cannot answer the handshake at all is reported rather
+than assumed good. As in herdr, the client never restarts or upgrades the
+daemon: it may be serving somebody else's turns. The bare 404 message now says
+the daemon may be older, since that is what it almost always means.
+
+`scripts/daemonProtocolSmoke.ts` pins current, newer, older, missing-capability
+and no-handshake cases plus the route's own shape; three mutations were verified
+to fail it.

@@ -69,6 +69,8 @@ export const ROUTE_SCOPES: Record<string, Partial<Record<HttpMethod, RouteScope>
   '/api/provenance/blame': { GET: 'read' },
 
   // --- Providers ---------------------------------------------------------
+  // The version handshake an attached client uses before relying on a route.
+  '/api/version': { GET: 'read' },
   '/api/provider': { GET: 'read', PATCH: 'write' },
   '/api/provider/instances': { GET: 'read' },
 

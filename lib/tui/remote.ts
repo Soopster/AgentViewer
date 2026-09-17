@@ -13,6 +13,8 @@
 // on filesystem paths, so remote attach assumes the daemon shares the machine
 // (or the mounts) with the TUI.
 
+import type { DaemonStatus } from '../daemonProtocol'
+
 export function getAttachBaseUrl(): string | null {
   const raw = process.env.AGENT_VIEWER_ATTACH
   if (!raw || !raw.trim()) return null
@@ -85,7 +87,27 @@ function extractError(payload: unknown, status: number): string {
     const message = (payload as { error?: unknown }).error
     if (typeof message === 'string' && message.trim()) return message
   }
+  // A route the daemon does not have answers 404 with Next's HTML page, so
+  // there is no error to quote. Say what that most likely means rather than
+  // reporting a bare status the user cannot act on (herdr: a missing method is
+  // not permission to restart somebody else's server).
+  if (status === 404) return 'Daemon request failed (HTTP 404). This daemon may be older than the TUI — restart it with the current agent-viewer.'
   return `Daemon request failed (HTTP ${status})`
+}
+
+/** The daemon's version handshake, or null when it cannot answer one. */
+export async function readDaemonStatus(): Promise<DaemonStatus | null> {
+  const base = getAttachBaseUrl()
+  if (!base) return null
+  try {
+    const response = await fetch(`${base}/api/version`, { headers: { Accept: 'application/json' } })
+    if (!response.ok) return null
+    const payload = await response.json() as Partial<DaemonStatus>
+    if (payload?.name !== 'agent-viewer' || typeof payload.protocol !== 'number' || !Array.isArray(payload.features)) return null
+    return { name: 'agent-viewer', version: String(payload.version ?? 'unknown'), protocol: payload.protocol, features: payload.features.map(String) }
+  } catch {
+    return null
+  }
 }
 
 /** JSON request against the daemon; throws with the daemon's error message. */
