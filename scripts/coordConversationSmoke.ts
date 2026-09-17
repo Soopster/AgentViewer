@@ -125,6 +125,16 @@ try {
   const task = await coord.createExternalProtocolTask(external, { assignTo: 'auto', title: 'External review', detail: 'Report findings' })
   assert.ok(task.delegation?.sessionId)
   assert.equal(created, 3)
+  // A run that has ended cannot be resumed, so it must not ask to be: an
+  // interrupted teammate in a stopped room reads Stopped, not "needs recovery".
+  {
+    const { runId } = await coord.sessionCoordinatorIdentity('primary-chat', 'codex')
+    const live = await coord.readInteractiveRecoveries(runId)
+    await coord.stopProtocolRun(runId)
+    assert.deepEqual(await coord.readInteractiveRecoveries(runId), [], 'an ended run offers no recovery it would refuse')
+    void live
+  }
+
   console.log('Chat setup/replay, concurrent asks, attention, mail delivery, persistent follow-up, and external automatic startup passed')
 } finally {
   for (const runId of runs) await coord.stopProtocolRun(runId)

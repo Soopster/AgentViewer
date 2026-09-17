@@ -7117,6 +7117,10 @@ export async function readInteractiveRecoveries(runId: string): Promise<string[]
   const snapshot = readSnapshotSync(db, runId)
   if (!snapshot || !db.prepare('SELECT 1 FROM protocol_interactive_sessions WHERE run_id = ?').get(runId)) return []
   if (foreignInteractiveHostSync(db, runId)) return []
+  // An ended run cannot be resumed (`resumeInteractiveAgent` → "not accepting
+  // tasks"), so offering recovery there is an action that always fails. Its
+  // transcripts stay readable; the roster says Stopped, which is the truth.
+  if (['completed', 'failed', 'stopped'].includes(snapshot.run.status)) return []
   return snapshot.agents.filter(agent => {
     if (agent.role !== 'teammate' || agent.turnActive || agent.sessionId.startsWith('external:')) return false
     const task = snapshot.tasks.find(task => task.id === agent.taskId)
