@@ -18,7 +18,7 @@ import { MODAL_CONTENT_Z_INDEX } from './layers'
 import type { ProtocolAgent } from '../../lib/agentProtocol'
 import { coordinatorAttention, type CoordinatorAttentionItem } from '../../lib/coordinatorAttention'
 import { coordinatorResultIdsForAgent, coordinatorRosterOrder } from '../../lib/coordinatorSignals'
-import { coordinatorAgentActivity, coordinatorStalledAgentIds } from '../../lib/coordinatorInteractiveState'
+import { coordinatorAgentActivity, coordinatorAgentWorkspace, coordinatorStalledAgentIds } from '../../lib/coordinatorInteractiveState'
 import {
   closeInteractiveCoordinator,
   discardInteractiveCoordinatorAction,
@@ -425,7 +425,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
                     <box flexDirection="row">
                       <text fg={theme.dim} wrapMode="none">{'    '}</text>
                       <text fg={needs ? theme.amber : theme.dim} wrapMode="none">
-                        {fitText(activity, innerW - 6)}
+                        {fitText(joinMeta([activity, coordinatorAgentWorkspace(agent, snapshot)]), innerW - 6)}
                       </text>
                     </box>
                   </box>

@@ -1,7 +1,7 @@
 'use client'
 
 import { coordinatorAttentionCount } from '@/lib/coordinatorAttentionCount'
-import { coordinatorAgentActivity, coordinatorStalledAgentIds, type CoordinatorInteractiveState } from '@/lib/coordinatorInteractiveState'
+import { coordinatorAgentActivity, coordinatorAgentWorkspace, coordinatorStalledAgentIds, type CoordinatorInteractiveState } from '@/lib/coordinatorInteractiveState'
 import { useEffect, useId, useRef, useState } from 'react'
 import type { Session } from '@/lib/types'
 import type { ProtocolAgent, ProtocolRunSnapshot } from '@/lib/agentProtocol'
@@ -31,14 +31,22 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [seen, setSeen] = useState<string[]>([])
+  // Herdr's ui.toast.delivery, per browser. Read through a ref so the polling
+  // effect sees a change without being torn down and re-subscribed.
+  const [alerts, setAlerts] = useState<'off' | 'in-app' | 'desktop'>('desktop')
+  const alertsRef = useRef(alerts)
+  alertsRef.current = alerts
   const revision = useRef(0)
   const pending = useRef<RequestBody | null>(null)
   const requestKey = `coordinator:request:v1:${session.provider}:${session.sessionId}`
   const seenKey = `coordinator:seen:v1:${session.provider}:${session.sessionId}`
+  const alertsKey = 'coordinator:alerts:v1'
   const endpoint = `/api/sessions/${encodeURIComponent(session.sessionId)}/coordination`
   useEffect(() => {
     try {
       setSeen(JSON.parse(localStorage.getItem(seenKey) || '[]'))
+      const storedAlerts = localStorage.getItem(alertsKey)
+      if (storedAlerts === 'off' || storedAlerts === 'in-app') setAlerts(storedAlerts)
       const stored = sessionStorage.getItem(requestKey)
       if (stored) {
         pending.current = JSON.parse(stored)
@@ -58,7 +66,8 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
       const signals = coordinatorSignals(data)
       const fresh = newCoordinatorSignals(signalBaseline, signals)
       signalBaseline = new Set(signals.map(signal => signal.id))
-      if (!fresh.length || typeof Notification === 'undefined' || Notification.permission !== 'granted') return
+      if (!fresh.length || alertsRef.current !== 'desktop') return
+      if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
       // Held briefly and dropped if resolved meanwhile; focus is judged at delivery.
       const timer = setTimeout(() => {
         notificationTimers.delete(timer)
@@ -93,7 +102,7 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
     }
     void refresh()
     return () => { disposed = true; changes?.close(); controller.abort(); clearTimeout(timer); for (const pending of notificationTimers) clearTimeout(pending) }
-  }, [endpoint, session.provider, requestKey, seenKey])
+  }, [endpoint, session.provider, requestKey, seenKey, alertsKey])
 
   async function send(body?: Omit<RequestBody, 'provider' | 'requestId'>) {
     if (busy) return
@@ -140,6 +149,18 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
     {state?.interactive.enabled && !terminal ? <Button size="sm" variant="ghost" disabled={locked || !canLead} title="Stop teammate work and automatic continuation; keep conversation history" onClick={() => void send({ action: 'disable', detail: 'Turn off coordination for this conversation' })}>Turn off</Button> : null}
     </div>
     <div id={`${id}-body`} className="av-coord-conversation-body">
+    {state?.interactive.enabled ? <label className="av-coord-alerts">Alerts
+      <NativeSelect value={alerts} aria-label="Teammate alerts" onChange={event => {
+        const next = event.target.value as 'off' | 'in-app' | 'desktop'
+        setAlerts(next)
+        try { localStorage.setItem(alertsKey, next) } catch { /* Optional persistence. */ }
+        if (next === 'desktop') requestTeammateNotifications()
+      }}>
+        <option value="desktop">Desktop notifications</option>
+        <option value="in-app">In the panel only</option>
+        <option value="off">Off</option>
+      </NativeSelect>
+    </label> : null}
     {state?.interactive.enabled ? <label className="av-coord-continuation"><input type="checkbox" checked={pending.current?.action === 'settings' ? pending.current.autoContinue ?? state.interactive.autoContinue : state.interactive.autoContinue} disabled={disabled} onChange={event => void send({ action: 'settings', detail: 'Update automatic continuation', autoContinue: event.target.checked })} />Continue when teammates respond</label> : null}
     {state?.interactive.enabled && snapshot ? <label className="av-coord-continuation" title="Applies to teammates started after the change"><input type="checkbox" checked={pending.current?.action === 'settings' ? pending.current.useWorktrees ?? snapshot.run.useWorktrees !== false : snapshot.run.useWorktrees !== false} disabled={disabled} onChange={event => void send({ action: 'settings', detail: 'Update teammate worktrees', useWorktrees: event.target.checked })} />Give new teammates their own worktree</label> : null}
     {state?.interactive.autoContinue && state.interactive.remainingTurns === 0 ? <p role="status">Automatic continuation paused after four turns. Send a message to continue.</p> : null}
@@ -188,7 +209,7 @@ function TeammateRoster({ snapshot, state, seen, observationUnavailable, onOpen,
   const stalled = coordinatorStalledAgentIds(state)
   return <div className="flex flex-wrap gap-2" aria-label="Persistent teammate conversations">
     {coordinatorRosterOrder(state, seen).map(agent => <div key={agent.id} className="rounded border p-2">
-      <p>{agent.name} · {coordinatorAgentActivity(agent, state, observationUnavailable, stalled.includes(agent.id))}</p>
+      <p>{agent.name} · {coordinatorAgentActivity(agent, state, observationUnavailable, stalled.includes(agent.id))}{coordinatorAgentWorkspace(agent, snapshot) ? ` · ${coordinatorAgentWorkspace(agent, snapshot)}` : ''}</p>
       {!agent.sessionId.startsWith('external:') ? <Button variant="ghost" size="sm" onClick={() => onOpen(agent)}>Transcript</Button> : null}
       <Button variant="ghost" size="sm" disabled={disabled} onClick={() => onFollowup(agent)}>Follow up</Button>
     </div>)}

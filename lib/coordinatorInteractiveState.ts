@@ -19,6 +19,19 @@ export type CoordinatorInteractiveState = {
 }
 
 /**
+ * The teammate's own checkout, when it has one — herdr's agent list carries
+ * each agent's `cwd` and branch, and a team whose members work in separate
+ * worktrees is unreadable without it: every row otherwise looks like the same
+ * place. Empty for a teammate sharing the lead's checkout, where the branch is
+ * the lead's and saying so twice is noise.
+ */
+export function coordinatorAgentWorkspace(agent: ProtocolAgent, snapshot: ProtocolRunSnapshot | null | undefined): string {
+  const lead = snapshot?.agents.find(entry => entry.id === snapshot.run.leadAgentId)
+  if (!agent.worktreeBranch || (lead && agent.worktreePath === lead.worktreePath)) return ''
+  return agent.worktreeBranch
+}
+
+/**
  * How long delegated work may sit claimed with no dispatch before it is
  * reported as stalled — herdr's five-second `agent_prompt_stalled` gate, sized
  * to what this transport actually waits on. Provider spawn time is NOT part of

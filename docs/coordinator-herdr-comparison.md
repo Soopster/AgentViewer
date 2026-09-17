@@ -226,6 +226,7 @@ difference decides most of the verdicts below.
 | Background work keeps an agent working; a background shell alone does not (CHANGELOG #1630, #3090, #3291, #3414, #2851) | `coordinatorBackgroundWork` from Claude's Stop-hook `background_tasks`/`session_crons` and Copilot's `tasks.list()`: "Working in background · N tasks · N wake-ups", working tier, never stalled. OpenCode exposes only a move-to-background mutation, Pi nothing, Codex only background shells (which correctly do not count) | Adopted for Claude and Copilot |
 | Unloadable saved state preserved before replacement (CHANGELOG #4125) | Reviewed markers back up an unreadable file first and leave it untouched if the backup fails | Adopted this pass |
 | Client-side view state tracked per client (0.9.0 #3526; SKILL.md "each TUI client tracks viewed completions independently") | Reviewed markers: per TUI data dir, per browser localStorage | Present |
+| Agent list carries each agent's `cwd` and branch (`AgentInfo`, sidebar tokens) | `coordinatorAgentWorkspace`: a teammate's own worktree branch beside its activity, blank when it shares the lead's checkout | Adopted this pass |
 | Named agents, unique, validated (SKILL.md) | Protocol names, delegation requires exactly one active match | Present |
 | Detach without stopping work (README) | `agent-viewer web` daemon + `--attach`; turns run server-side | Present |
 | Resume supported agent sessions after restart (`agent_resume.rs`) | Provider sessions are durable by id; interrupted teammate execution waits for explicit recovery rather than auto-resuming | Present, deliberately stricter |
@@ -375,3 +376,24 @@ no UI. The sweep now works only runs its process owns, and a dead owner is
 adopted by a UI read. Herdr has no equivalent because its server is the only
 process that executes panes; here several processes can, so which of them may
 own work has to be decided explicitly.
+
+### Which checkout a teammate is in, and the web delivery setting
+
+Herdr's agent list carries each agent's working directory and branch, and its
+sidebar can show them as tokens. A Coordinator team whose members each get
+their own worktree had none of that: every roster row looked like the same
+place. Both rosters now show the teammate's branch beside its activity, and
+nothing when it shares the lead's checkout — repeating the lead's branch on
+every row is noise, not information.
+
+The web panel also gained the alert delivery setting the TUI got (desktop /
+in-app / off, per browser). Its browser smoke sets it to off, raises a new
+approval with the page blurred, and asserts silence, then switches to desktop
+and asserts the notification. That assertion's window is deliberately longer
+than the panel's 5s poll: at 3s it passed no matter what the setting was, and
+the mutation that ignores the setting survived. At 9s the same mutation fails.
+
+Unrelated, found by running the whole TUI suite: `gitReviewStreamSmoke.tsx`
+fails on "clicking the selected file jumps back to its header". It fails the
+same way at `e65ac35`, before any of this work, so it is pre-existing and left
+untouched here.

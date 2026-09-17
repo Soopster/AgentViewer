@@ -120,7 +120,16 @@ try {
   await roster.getByText(/Working · live turn/).waitFor({ timeout: 15000 })
   assert.deepEqual(await page.evaluate(() => window.__notifications), [], 'an approval held at first read, or raised while the user is looking, does not notify')
   await page.evaluate(() => { window.__blurred = true })
+  // Herdr's delivery setting: off means off, even for a background team.
+  await page.getByLabel('Teammate alerts', { exact: true }).selectOption('off')
   approvalId = 'approval-2'; permissionPending = true
+  // Longer than the panel's 5s poll plus the notification delay, or this
+  // assertion passes because nothing had arrived yet, whatever the setting.
+  await page.waitForTimeout(9000)
+  assert.deepEqual(await page.evaluate(() => window.__notifications), [], 'alerts set to off still notified')
+  permissionPending = false
+  await page.getByLabel('Teammate alerts', { exact: true }).selectOption('desktop')
+  approvalId = 'approval-3'; permissionPending = true
   await page.waitForFunction(() => window.__notifications.length > 0, null, { timeout: 15000 })
   const [notification] = await page.evaluate(() => window.__notifications)
   assert.match(notification.title, /reviewer is waiting for your answer/)
@@ -149,5 +158,5 @@ try {
   await page.getByRole('button', { name: 'Enable coordinator', exact: true }).click()
   await page.getByText('Coordinator on', { exact: true }).waitFor()
   assert.equal(errors.length, 0, errors.join('\n'))
-  console.log('Rendered enablement, continuation preference, native attention, embedded transcript, lead draft preservation, named follow-up, outage recovery, foreign-host activity, blurred-only teammate notifications, and review on transcript open passed')
+  console.log('Rendered enablement, continuation preference, native attention, embedded transcript, lead draft preservation, named follow-up, outage recovery, foreign-host activity, blurred-only teammate notifications honouring the delivery setting, and review on transcript open passed')
 } finally { await browser.close() }
