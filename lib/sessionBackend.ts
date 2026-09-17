@@ -1,4 +1,5 @@
 import { classifyClaudeUsageMessage, type ClaudeUsageLimitKind } from './claudeUsageLimits'
+import { installProcessWarningRouting } from './processWarnings'
 
 import { readFile } from 'node:fs/promises'
 import { basename, extname, resolve as resolvePath } from 'node:path'
@@ -328,6 +329,9 @@ import {
   type ListParams,
   type ViewSessionModels,
 } from './sessionReads'
+
+// The cold send path installs canUseTool in every mode; see lib/processWarnings.ts.
+installProcessWarningRouting()
 
 export {
   deleteViewSession,

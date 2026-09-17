@@ -106,6 +106,10 @@ import { currentProviderEnvironment, currentProviderExecutable, currentProviderI
 import { selectIdleProviderPoolEvictions } from './providerPoolPolicy'
 import { providerStartupTimeoutMs } from './providerWarmup'
 import { withTimeout } from './withTimeout'
+import { installProcessWarningRouting } from './processWarnings'
+
+// Every pooled query installs canUseTool on purpose; see lib/processWarnings.ts.
+installProcessWarningRouting()
 
 export function claudeIntegratedMcpServers(context: {
   getSessionId(): string

@@ -4,6 +4,11 @@ import { createCliRenderer } from '@opentui/core'
 import { createRoot } from '@opentui/react'
 import OpenTuiApp from './App'
 import { startRawHeapSampler, reportWorkerHeap } from './workerHeapProbe'
+import { installProcessWarningRouting } from '../../lib/processWarnings'
+
+// A runtime warning prints straight onto the alternate screen; send it to
+// OpenTUI's captured console instead.
+installProcessWarningRouting((text) => console.warn(text))
 
 const renderer = await createCliRenderer({
   exitOnCtrlC: false,
