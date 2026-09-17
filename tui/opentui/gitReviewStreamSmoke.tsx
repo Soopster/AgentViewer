@@ -58,9 +58,17 @@ try {
     await act(async () => { key?.({ name: sequence, sequence, ctrl: false, shift: false }) })
     await flush()
   }
+  // The file tree is the LEFT pane. The sticky header names the file under the
+  // viewport too, so a first-match search finds that instead once the stream has
+  // scrolled into a file, and clicks a header that selects nothing.
+  const TREE_COLUMN_LIMIT = 40
   const select = async (name: string) => {
-    const y = setup.captureCharFrame().split('\n').findIndex(line => line.includes(name))
-    assert(y >= 0, `${name} is in the file tree`)
+    const lines = setup.captureCharFrame().split('\n')
+    const y = lines.findIndex((line) => {
+      const column = line.indexOf(name)
+      return column >= 0 && column < TREE_COLUMN_LIMIT
+    })
+    assert(y >= 0, `${name} is in the file tree:\n${setup.captureCharFrame()}`)
     await act(async () => { await setup.mockMouse.click(10, y) })
     await flush()
   }
