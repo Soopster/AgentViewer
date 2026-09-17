@@ -106,6 +106,15 @@ export function subscribeInteractiveCoordinatorNotifications(listener: (event: I
   return () => { notificationListeners.delete(listener) }
 }
 
+/**
+ * Test seam: whether anything is listening for teammate alerts. The root's
+ * subscription is the one link no pure test covers — delivery rules and store
+ * emission are tested directly — and losing it is invisible in every frame.
+ */
+export function interactiveCoordinatorNotificationListeners(): number {
+  return notificationListeners.size
+}
+
 function emitSignals(session: InteractiveCoordinatorSession, entry: InteractiveCoordinatorState): void {
   const key = sessionKey(session)
   const signals = coordinatorSignals(entry.data, entry.reviewed)

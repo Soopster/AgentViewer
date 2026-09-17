@@ -320,6 +320,15 @@ const commandHint = chordHintText(COMMAND_CHORD_MAP).split('  ')[0]!
 if (!commandChordFrame.includes(commandHint)) {
   throw new Error(`Ctrl+K did not expose the portable command chord (expected ${commandHint}):\n${commandChordFrame}`)
 }
+// Teammate alerts reach the user only if the root subscribed to them. The
+// delivery rules and the store's emission are tested directly; this is the one
+// link nothing else covers, and dropping it changes no frame.
+{
+  const { interactiveCoordinatorNotificationListeners } = await import('./interactiveCoordinatorStore')
+  if (interactiveCoordinatorNotificationListeners() < 1) {
+    throw new Error('the root did not subscribe to teammate alerts')
+  }
+}
 // ⌃K t is the session-scoped half of the same chord: the Teammates panel is a
 // property of the open conversation, where `a` is every run. With no session
 // selected it says so rather than opening over nothing — either answer proves
