@@ -138,20 +138,30 @@ export function buildCoordinatorSdkTools(identity: ExternalProtocolIdentity) {
   ))
 }
 
-const registry = new Map<string, Record<string, McpServerConfig>>()
+const registry = new Map<string, { identity: ExternalProtocolIdentity; servers: Record<string, McpServerConfig> }>()
 
-/** Bind a session id to a Coordinator identity's tool set for its whole lifetime. */
+/**
+ * Bind a session id to a Coordinator identity's tool set for its whole lifetime.
+ * Re-registering the same identity keeps the existing record: the Claude pool
+ * compares this object by identity to decide whether a warm subprocess still
+ * carries the right binding, and a fresh object per turn would respawn it every turn.
+ */
 export function registerCoordinatorMcpServer(sessionId: string, identity: ExternalProtocolIdentity): void {
+  const current = registry.get(sessionId)?.identity
+  if (current && current.runId === identity.runId && current.agentId === identity.agentId && current.token === identity.token) return
   registry.set(sessionId, {
-    'agent-viewer': createSdkMcpServer({
-      name: 'agent-viewer',
-      tools: buildCoordinatorSdkTools(identity),
-    }),
+    identity,
+    servers: {
+      'agent-viewer': createSdkMcpServer({
+        name: 'agent-viewer',
+        tools: buildCoordinatorSdkTools(identity),
+      }),
+    },
   })
 }
 
 export function getCoordinatorMcpServers(sessionId: string): Record<string, McpServerConfig> | undefined {
-  return registry.get(sessionId)
+  return registry.get(sessionId)?.servers
 }
 
 export function unregisterCoordinatorMcpServer(sessionId: string): void {

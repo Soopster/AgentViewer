@@ -11,7 +11,7 @@ const schema = z.object({
   action: z.enum(['disable', 'enable', 'settings', 'reconcile', 'resume-agent', 'delegate', 'message', 'review-plan', 'decision']),
   detail: z.string().trim().min(1).max(8000),
   cwd: z.string().trim().min(1).optional(),
-  autoContinue: z.boolean().optional(), batchId: z.string().optional(), received: z.boolean().optional(),
+  autoContinue: z.boolean().optional(), useWorktrees: z.boolean().optional(), batchId: z.string().optional(), received: z.boolean().optional(),
   to: z.string().min(1).max(160).optional(),
   paths: z.array(z.string().trim().min(1)).max(100).optional(),
   taskId: z.string().min(1).optional(), decisionId: z.string().min(1).optional(),
@@ -60,7 +60,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ ses
     const result = await runExternalProtocolIdempotent(identity, `chat_${body.action}`, body.requestId, async () => {
       if (body.action === 'settings') {
         const snapshot = await readSessionCoordinator(sessionId, body.provider)
-        await configureInteractiveCoordinator({ sessionId, provider: body.provider, cwd: snapshot!.run.baseCwd, autoContinue: body.autoContinue })
+        await configureInteractiveCoordinator({ sessionId, provider: body.provider, cwd: snapshot!.run.baseCwd, autoContinue: body.autoContinue, useWorktrees: body.useWorktrees })
         return { configured: true }
       }
       if (body.action === 'reconcile') {

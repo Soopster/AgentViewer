@@ -192,6 +192,12 @@ export const TeammatesPopover = memo(function TeammatesPopover({
         data?.interactive.autoContinue ? 'Automatic continuation off' : 'Automatic continuation on')
       return
     }
+    if (key.name === 'w' && enabled && !disabled) {
+      const useWorktrees = snapshot?.run.useWorktrees === false
+      act({ action: 'settings', detail: 'Update teammate worktrees', useWorktrees },
+        useWorktrees ? 'New teammates get their own worktree' : 'New teammates share this checkout')
+      return
+    }
     if (unconfirmedDelivery && (key.name === 'y' || key.name === 'n') && !locked) {
       const received = key.name === 'y'
       act({ action: 'reconcile', detail: received ? 'Confirmed delivery in transcript' : 'Confirmed mail was not received',
@@ -262,7 +268,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
         : !enabled
           ? (teammates.length ? [['j/k', 'move'], ['⏎', 'open transcript'], ['e', 'new team'], ['esc', 'close']] : canLead ? [['e', 'enable coordinator'], ['esc', 'close']] : [['esc', 'close']])
           : [['j/k', 'move'], ['⏎', 'open'], ['d', 'ask'], ['m', 'message'],
-             ['r', 'resume'], ['c', 'continuation'], ['x', 'turn off'], ['esc', 'close']]
+             ['r', 'resume'], ['c', 'continuation'], ['w', 'worktrees'], ['x', 'turn off'], ['esc', 'close']]
   // Truncation is by whole entries, not mid-word: a hint cut to "x …" tells the
   // reader a key exists without saying which.
   const footerWidth = (hints: Array<[string, string]>) =>
@@ -352,6 +358,13 @@ export const TeammatesPopover = memo(function TeammatesPopover({
                   {data?.interactive.autoContinue ? '[x]' : '[ ]'}
                 </text>
                 <text fg={theme.text} wrapMode="none">{' Continue when teammates respond'}</text>
+              </box>
+              <box flexDirection="row">
+                <text fg={theme.cyan} wrapMode="none">{'w '}</text>
+                <text fg={snapshot?.run.useWorktrees !== false ? theme.green : theme.muted} wrapMode="none">
+                  {snapshot?.run.useWorktrees !== false ? '[x]' : '[ ]'}
+                </text>
+                <text fg={theme.text} wrapMode="none">{' Give new teammates their own worktree'}</text>
               </box>
               {data?.interactive.autoContinue && data.interactive.remainingTurns === 0 ? (
                 <text fg={theme.amber} wrapMode="word" width={innerW}>

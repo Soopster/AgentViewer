@@ -14,7 +14,7 @@ import { Textarea } from '@/components/ui/textarea'
 type RequestBody = {
   action: 'disable' | 'enable' | 'settings' | 'reconcile' | 'resume-agent' | 'delegate' | 'message' | 'review-plan' | 'decision'
   provider: Session['provider']; requestId: string; detail: string; to?: string; paths?: string[]
-  cwd?: string; autoContinue?: boolean; batchId?: string; received?: boolean
+  cwd?: string; autoContinue?: boolean; useWorktrees?: boolean; batchId?: string; received?: boolean
   taskId?: string; decisionId?: string; approved?: boolean; inReplyTo?: string
 }
 
@@ -140,7 +140,8 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
     {state?.interactive.enabled && !terminal ? <Button size="sm" variant="ghost" disabled={locked || !canLead} title="Stop teammate work and automatic continuation; keep conversation history" onClick={() => void send({ action: 'disable', detail: 'Turn off coordination for this conversation' })}>Turn off</Button> : null}
     </div>
     <div id={`${id}-body`} className="av-coord-conversation-body">
-    {state?.interactive.enabled ? <label className="av-coord-continuation"><input type="checkbox" checked={pending.current?.action === 'settings' ? pending.current.autoContinue : state.interactive.autoContinue} disabled={disabled} onChange={event => void send({ action: 'settings', detail: 'Update automatic continuation', autoContinue: event.target.checked })} />Continue when teammates respond</label> : null}
+    {state?.interactive.enabled ? <label className="av-coord-continuation"><input type="checkbox" checked={pending.current?.action === 'settings' ? pending.current.autoContinue ?? state.interactive.autoContinue : state.interactive.autoContinue} disabled={disabled} onChange={event => void send({ action: 'settings', detail: 'Update automatic continuation', autoContinue: event.target.checked })} />Continue when teammates respond</label> : null}
+    {state?.interactive.enabled && snapshot ? <label className="av-coord-continuation" title="Applies to teammates started after the change"><input type="checkbox" checked={pending.current?.action === 'settings' ? pending.current.useWorktrees ?? snapshot.run.useWorktrees !== false : snapshot.run.useWorktrees !== false} disabled={disabled} onChange={event => void send({ action: 'settings', detail: 'Update teammate worktrees', useWorktrees: event.target.checked })} />Give new teammates their own worktree</label> : null}
     {state?.interactive.autoContinue && state.interactive.remainingTurns === 0 ? <p role="status">Automatic continuation paused after four turns. Send a message to continue.</p> : null}
     {state?.interactive.delivery && !state.interactive.delivery.active ? <div role="alert" className="rounded border p-3">
       <p>A previous lead delivery is unconfirmed. Inspect this conversation before choosing whether its mail arrived.</p>

@@ -94,6 +94,7 @@ Reads spawn a short-lived agent — listing is agent-scoped, so it cannot ride t
 
 - **Live-applied, no respawn:** `model` (`setModel`), `permissionMode` (`setPermissionMode`), and `effort` between two *named levels* (`applyFlagSettings({ effortLevel })` — the only path that accepts the session-scoped `'max'`). A failed live apply sets `pendingRecycleReason` instead of recycling immediately, so it can't kill a live turn.
 - **Still respawns:** `cwd`, `taskBudget`, `resumeSessionAt`/`forkSession`, and any effort transition touching `off`/`minimal` — those map to a `thinking` config, and thinking has no live control method. Dropping that distinction would leave a warm entry thinking after the user turned it off.
+- **A change of Coordinator binding respawns too** (`claudeCoordinatorBindingCurrent`). The run-bound `agent-viewer` MCP server and `strictMcpConfig` are spawn-time options, so a session warmed before it became a lead kept the user's own MCP config — whose agent-viewer bridge has no identity — and every `coord_*` call answered "Join, create, or resume" for the rest of the chat. The registry keeps one record per identity (`registerCoordinatorMcpServer` is a no-op for the same run/agent/token), because every lead delivery re-registers and a fresh object per turn would respawn per turn. Pinned in `scripts/coordClaudeBindingSmoke.ts`.
 - **`worker_shutting_down`** marks the entry doomed (`pendingRecycleReason`) so `acquire`/`peek` never hand it out for a new turn. An in-turn doomed entry is still reused — recycling it there kills the live turn out from under its SSE stream.
 - **The system prompt is recorded for the conversation** (`snapshot: true` on both send paths). That is what keeps the API prompt-cache prefix stable across turns and resumes, and stops a prompt that shifted between launches from discarding extended thinking's earlier reasoning. Its cost is deliberate: a live `setModel` no longer re-renders the prompt, so a mid-session model switch inherits the recorded one until compaction or a new session. **Both paths must pass it** — a cold first turn that records a prompt the pooled turns decline to reuse is worse than neither doing it.
 - **A re-run of an interrupted turn is marked, or it reads as a duplicate.** When
@@ -837,6 +838,7 @@ which mirror `app/api/sessions/[sessionId]/coordination/route.ts` action for act
   the panel subscribes and is `memo`'d, and the root's only subscription is the open/closed boolean
   (`isInteractiveCoordinatorOpen`), which its key dispatcher reads imperatively. A coordinator
   refresh must never reach the root.
+- **Worktrees are a run setting the lead can flip** (`w` in the panel, the checkbox on the web): `configureInteractiveCoordinator({ useWorktrees })` updates the run row and the live controller. It applies to teammates started afterwards; a running teammate keeps its checkout.
 - **The feed starts on open, not at boot.** Reading coordination state loads
   `lib/agentCoordination.ts`, which imports the send path; a surface the user may never open must
   not be what pulls ~56MB in. The read itself is assembled from `lib/sessionActivity.ts` rather than

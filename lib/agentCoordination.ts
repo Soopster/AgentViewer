@@ -6856,7 +6856,7 @@ export async function drainCooperativeInbox(sessionId: string): Promise<string> 
 
 /** Durable browser-owned collaboration settings and delivery recovery. */
 export async function configureInteractiveCoordinator(params: {
-  sessionId: string; provider: AgentProvider; cwd: string; autoContinue?: boolean; restartRunId?: string
+  sessionId: string; provider: AgentProvider; cwd: string; autoContinue?: boolean; useWorktrees?: boolean; restartRunId?: string
 }): Promise<void> {
   const snapshot = await ensureSessionCoordinator(params)
   await sessionCoordinatorIdentity(params.sessionId, params.provider)
@@ -6868,7 +6868,13 @@ export async function configureInteractiveCoordinator(params: {
         run_id = excluded.run_id, provider = excluded.provider`).run(params.sessionId, snapshot.run.id, params.provider)
     if (params.autoContinue !== undefined) db.prepare(`UPDATE protocol_interactive_sessions
       SET auto_continue = ?, remaining_turns = 4 WHERE session_id = ?`).run(Number(params.autoContinue), params.sessionId)
+    // Only teammates started after this read it: a running teammate keeps the
+    // checkout it was launched in rather than being moved out from under its work.
+    if (params.useWorktrees !== undefined) db.prepare('UPDATE protocol_runs SET use_worktrees = ? WHERE id = ?')
+      .run(Number(params.useWorktrees), snapshot.run.id)
   })
+  const controller = controllers.get(snapshot.run.id)
+  if (controller && params.useWorktrees !== undefined) controller.useWorktrees = params.useWorktrees
   notifyRunChanged(snapshot.run.id)
 }
 

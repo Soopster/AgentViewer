@@ -2,11 +2,12 @@ import assert from 'node:assert/strict'
 import {
   buildCoordinatorCodexDynamicTools,
   COORD_FINDING_DETAIL_MAX_CHARS,
+  getCoordinatorMcpServers,
   registerCoordinatorMcpServer,
   resolveCoordinatorToolCall,
   unregisterCoordinatorMcpServer,
 } from '../lib/agentCoordinationSdkTools'
-import { coordinatorClaudeMcpOptions } from '../lib/claudePool'
+import { claudeCoordinatorBindingCurrent, coordinatorClaudeMcpOptions } from '../lib/claudePool'
 
 const sessionId = 'coord-claude-binding-smoke'
 
@@ -102,8 +103,22 @@ try {
   const options = coordinatorClaudeMcpOptions(sessionId)
   assert.equal(options.strictMcpConfig, true)
   assert.deepEqual(Object.keys(options.mcpServers ?? {}), ['agent-viewer'])
+
+  // A warm subprocess spawned before the session became a lead has no binding.
+  assert.equal(claudeCoordinatorBindingCurrent(undefined, sessionId), false,
+    'a session warmed before coordination must respawn to load the bound coord_* tools')
+  const bound = getCoordinatorMcpServers(sessionId)
+  assert.equal(claudeCoordinatorBindingCurrent(bound, sessionId), true)
+  // Every delivery re-registers the lead; the same identity must not respawn per turn.
+  registerCoordinatorMcpServer(sessionId, { runId: 'run-1', agentId: 'lead', token: 'smoke-token' })
+  assert.equal(getCoordinatorMcpServers(sessionId), bound, 're-registering the same identity must keep the record')
+  assert.equal(claudeCoordinatorBindingCurrent(bound, sessionId), true)
+  // A rotated token invalidates the tools baked into the subprocess.
+  registerCoordinatorMcpServer(sessionId, { runId: 'run-1', agentId: 'lead', token: 'rotated-token' })
+  assert.equal(claudeCoordinatorBindingCurrent(bound, sessionId), false, 'a rotated token must respawn the subprocess')
 } finally {
   unregisterCoordinatorMcpServer(sessionId)
 }
+assert.equal(claudeCoordinatorBindingCurrent(undefined, sessionId), true, 'an ordinary session must stay warm')
 
 console.log('Coordinator Claude binding smoke passed')

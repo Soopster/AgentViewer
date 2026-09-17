@@ -161,6 +161,23 @@ if (!captureCharFrame().includes('[x] Continue when teammates respond')) {
   fail('the continuation checkbox did not follow the setting')
 }
 
+// ── w toggles worktrees for teammates started afterwards ───────────────────
+const runWorktrees = () => store.getInteractiveCoordinatorState().data?.snapshot?.run.useWorktrees
+if (runWorktrees() === false) fail('chat teams must default to worktrees')
+await press('w')
+await waitFor('worktrees to turn off', () => runWorktrees() === false)
+if (!captureCharFrame().includes('[ ] Give new teammates their own worktree')) {
+  fail('the worktree checkbox did not follow the setting')
+}
+if ((await coordination.readSessionCoordinator(SESSION_ID, PROVIDER))?.run.useWorktrees !== false) {
+  fail('the worktree setting was not persisted to the run')
+}
+if (store.getInteractiveCoordinatorState().data?.interactive.autoContinue !== true) {
+  fail('changing worktrees reset automatic continuation')
+}
+await press('w')
+await waitFor('worktrees to turn back on', () => runWorktrees() === true)
+
 // ── the footer never truncates away its own escape hatch ───────────────────
 // It drops whole entries from the middle rather than cutting the line, because
 // the last one is how to leave. Same rule the ⌃B/⌃K chord hint follows.
@@ -320,5 +337,5 @@ await waitFor('fresh team in same chat', () => Boolean(store.getInteractiveCoord
 if (store.getInteractiveCoordinatorState().data?.snapshot?.tasks.length) fail('new team inherited old tasks')
 await coordination.stopProtocolRun(store.getInteractiveCoordinatorState().data!.snapshot!.run.id)
 
-console.log('Teammates popover smoke passed (enable, roster activity, inspect, priority order with id selection, review on open, drafts, continuation, unconfirmed gate, turn off)')
+console.log('Teammates popover smoke passed (enable, roster activity, inspect, priority order with id selection, review on open, drafts, continuation, worktrees, unconfirmed gate, turn off)')
 process.exit(0)

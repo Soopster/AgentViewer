@@ -30,6 +30,20 @@ export function coordinatorClaudeMcpOptions(sessionId: string): {
   return mcpServers ? { mcpServers, strictMcpConfig: true } : {}
 }
 
+/**
+ * Coordinator tools are an MCP server plus strictMcpConfig, and neither can be
+ * applied to a running subprocess. A session warmed before it became a
+ * Coordinator lead would otherwise keep the user's own MCP config, whose
+ * agent-viewer bridge has no identity, and answer every coord_* call with
+ * "Join, create, or resume" for the rest of the conversation.
+ */
+export function claudeCoordinatorBindingCurrent(
+  spawnedWith: ReturnType<typeof getCoordinatorMcpServers>,
+  sessionId: string,
+): boolean {
+  return spawnedWith === getCoordinatorMcpServers(sessionId)
+}
+
 // Per-turn MCP elicitation handler. Mirrors the canUseTool bridge: the warm
 // Query's onElicitation delegates to this so the long-lived subprocess can route
 // each turn's elicitation requests through the current turn's SSE controller.
@@ -403,6 +417,8 @@ type EntryState = {
   maxBudgetUsd: number | undefined
   enableWorkflow: boolean | undefined
   agentPolicyKey: string
+  /** The Coordinator MCP binding this subprocess was spawned with, compared by identity. */
+  coordinatorMcpServers: ReturnType<typeof getCoordinatorMcpServers>
 }
 
 type InternalEntry = {
@@ -641,6 +657,7 @@ class ClaudePool {
         maxBudgetUsd: opts.maxBudgetUsd,
         enableWorkflow: opts.enableWorkflow,
         agentPolicyKey: claudeAgentPolicyKey(opts.agentPolicy),
+        coordinatorMcpServers: getCoordinatorMcpServers(opts.sessionId),
       },
       buffer: [],
       subscriber: null,
@@ -777,6 +794,7 @@ class ClaudePool {
     if (state.maxBudgetUsd !== opts.maxBudgetUsd) return false
     if (Boolean(state.enableWorkflow) !== Boolean(opts.enableWorkflow)) return false
     if (state.agentPolicyKey !== claudeAgentPolicyKey(opts.agentPolicy)) return false
+    if (!claudeCoordinatorBindingCurrent(state.coordinatorMcpServers, opts.sessionId)) return false
     // resumeSessionAt / forkSession affect the conversation root; never reuse.
     if (opts.resumeSessionAt) return false
     if (opts.forkSession) return false
@@ -1059,6 +1077,7 @@ class ClaudePool {
         maxBudgetUsd: options.maxBudgetUsd,
         enableWorkflow: options.enableWorkflow,
         agentPolicyKey: claudeAgentPolicyKey(options.agentPolicy),
+        coordinatorMcpServers: getCoordinatorMcpServers(sessionId),
       },
       buffer: [],
       subscriber: null,

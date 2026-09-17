@@ -738,6 +738,7 @@ export type TuiSessionCoordinationRequest = {
   detail: string
   cwd?: string
   autoContinue?: boolean
+  useWorktrees?: boolean
   batchId?: string
   received?: boolean
   to?: string
@@ -782,6 +783,7 @@ export async function sendTuiSessionCoordination(
       const snapshot = await coord.readSessionCoordinator(sessionId, provider)
       await coord.configureInteractiveCoordinator({
         sessionId, provider, cwd: snapshot!.run.baseCwd, autoContinue: request.autoContinue,
+        useWorktrees: request.useWorktrees,
       })
       return { configured: true }
     }
