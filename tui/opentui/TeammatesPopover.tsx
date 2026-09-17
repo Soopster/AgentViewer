@@ -223,6 +223,17 @@ export const TeammatesPopover = memo(function TeammatesPopover({
         `${selected.name} resumed`)
       return
     }
+    // Stop a teammate that is off down the wrong path without taking its task
+    // away — herdr's `agent send-keys <name> ctrl+c`.
+    if (key.name === 'i' && selected && !disabled) {
+      const running = data?.runningAgentIds.includes(selected.id) || selected.turnActive
+      if (!running) {
+        onNotice('info', `${selected.name} has no turn running`, 3000)
+        return
+      }
+      act({ action: 'interrupt-agent', to: selected.id, detail: `Interrupt ${selected.name}` }, `${selected.name} interrupted`)
+      return
+    }
     if (key.name === 'd' && !disabled) {
       setDraft({ kind: 'delegate', to: null, toName: 'an available teammate', text: '' })
       return
@@ -279,7 +290,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
         : !enabled
           ? (teammates.length ? [['j/k', 'move'], ['⏎', 'open transcript'], ['e', 'new team'], ['esc', 'close']] : canLead ? [['e', 'enable coordinator'], ['esc', 'close']] : [['esc', 'close']])
           : [['j/k', 'move'], ['⏎', 'open'], ['d', 'ask'], ['m', 'message'],
-             ['r', 'resume'], ['c', 'continuation'], ['w', 'worktrees'], ['l', `alerts ${state.notifications}`], ['x', 'turn off'], ['esc', 'close']]
+             ['r', 'resume'], ['i', 'interrupt'], ['c', 'continuation'], ['w', 'worktrees'], ['l', `alerts ${state.notifications}`], ['x', 'turn off'], ['esc', 'close']]
   // Truncation is by whole entries, not mid-word: a hint cut to "x …" tells the
   // reader a key exists without saying which.
   const footerWidth = (hints: Array<[string, string]>) =>

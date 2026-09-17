@@ -228,6 +228,7 @@ difference decides most of the verdicts below.
 | Client-side view state tracked per client (0.9.0 #3526; SKILL.md "each TUI client tracks viewed completions independently") | Reviewed markers: per TUI data dir, per browser localStorage | Present |
 | Agent list carries each agent's `cwd` and branch (`AgentInfo`, sidebar tokens) | `coordinatorAgentWorkspace`: a teammate's own worktree branch beside its activity, blank when it shares the lead's checkout | Adopted this pass |
 | Client/server version handshake before relying on a feature (`herdr status`, `api/status.rs`; SKILL.md: "a missing method is not permission to stop or upgrade a server") | `GET /api/version` (name, version, protocol, features) + `daemonCompatibilityWarning`; the attached TUI reports a mismatch once at startup and never restarts the daemon | Adopted this pass |
+| `agent send-keys <name> ctrl+c` to stop an agent going the wrong way (SKILL.md) | `interrupt-agent`: `i` in the Teammates panel, **Interrupt** in the web roster. A managed teammate's live turn is interrupted in this process; an external worker takes the cancel flag and urgent mail `cancelExternalProtocolTurn` already sent. The task stays owned | Adopted this pass |
 | Named agents, unique, validated (SKILL.md) | Protocol names, delegation requires exactly one active match | Present |
 | Detach without stopping work (README) | `agent-viewer web` daemon + `--attach`; turns run server-side | Present |
 | Resume supported agent sessions after restart (`agent_resume.rs`) | Provider sessions are durable by id; interrupted teammate execution waits for explicit recovery rather than auto-resuming | Present, deliberately stricter |
@@ -419,3 +420,21 @@ the daemon may be older, since that is what it almost always means.
 `scripts/daemonProtocolSmoke.ts` pins current, newer, older, missing-capability
 and no-handshake cases plus the route's own shape; three mutations were verified
 to fail it.
+
+### Interrupting a teammate
+
+Herdr stops a runaway agent with `agent send-keys <name> ctrl+c`. Coordinator
+could cancel an *external* worker's turn (`coord_cancel_turn` sets a flag its
+supervisor polls) but had no way to stop a **managed** teammate — the kind the
+interactive panel creates — because that turn streams in the host process,
+where nothing polls that flag. `interruptInteractiveAgent` interrupts the live
+session for a managed teammate and falls back to the flag plus urgent mailbox
+message for an external one, so one control covers both. The task stays owned:
+this stops a turn, it does not take work away.
+
+`coordConversationSmoke.ts` interrupts a real delegated teammate through the
+ledger and asserts the live session's interrupt ran, the task keeps its owner,
+a teammate credential cannot interrupt anyone, and a teammate with no live turn
+here reports that rather than pretending. The TUI smoke presses `i` on an idle
+teammate and asserts it never reaches the server. Removing the live-turn check
+and removing the panel's gate were each verified to fail.

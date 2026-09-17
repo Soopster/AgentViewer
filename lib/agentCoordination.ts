@@ -7125,6 +7125,34 @@ export async function readInteractiveRecoveries(runId: string): Promise<string[]
   }).map(agent => agent.id)
 }
 
+/**
+ * Stop a teammate's in-flight turn without taking its task away — herdr's
+ * `agent send-keys <name> ctrl+c`, which is how a user stops an agent that is
+ * off down the wrong path.
+ *
+ * A managed teammate's turn streams in THIS process, so the cancel flag an
+ * external worker polls would never be read: interrupt the live session
+ * instead. An external worker has no session here, so it takes the flag and
+ * the urgent mailbox message `cancelExternalProtocolTurn` sends.
+ */
+export async function interruptInteractiveAgent(identity: ExternalProtocolIdentity, agentId: string): Promise<void> {
+  const db = await getDatabase()
+  const lead = requireExternalParticipantSync(db, identity)
+  if (lead.role !== 'lead') throw new Error('Only the Coordinator lead can interrupt a teammate')
+  const agent = listAgentsSync(db, identity.runId).find(entry => entry.id === agentId || entry.name === agentId)
+  if (!agent) throw new Error(`Coordinator participant not found: ${agentId}`)
+  if (agent.id === identity.agentId) throw new Error('Interrupt your own turn from the composer, not the roster')
+  const controller = controllers.get(identity.runId)
+  if (!agent.sessionId.startsWith('external:') && (controller?.sessionIds.has(agent.id) || getRunningSessionInfo(agent.sessionId).running)) {
+    await enqueueWrite(tx => claimInteractiveHostSync(tx, identity.runId))
+    const sessionId = controller?.sessionIds.get(agent.id) ?? agent.sessionId
+    if (!getRunningSessionInfo(sessionId).running) throw new Error(`${agent.name} has no turn running here`)
+    await interruptRunningSession(sessionId)
+    return
+  }
+  await cancelExternalProtocolTurn(identity, { agentId: agent.id })
+}
+
 export async function resumeInteractiveAgent(identity: ExternalProtocolIdentity, agentId: string): Promise<void> {
   if (!(await readInteractiveRecoveries(identity.runId)).includes(agentId)) throw new Error('This teammate does not need recovery or is still running')
   await enqueueWrite(db => claimInteractiveHostSync(db, identity.runId))

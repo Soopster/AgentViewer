@@ -57,7 +57,24 @@ try {
   assert.deepEqual(coordinatorStalledAgentIds(starting, Date.now() + 3_600_000), [], 'a dispatched turn awaiting its provider is not a stalled start')
   // The route reports background work from the runtime's waiting registry, so
   // both clients can show a teammate as working after its turn has ended.
-  const { setWaitingSession, clearWaitingSession } = await import('../lib/sessionRuntime')
+  // Interrupting a managed teammate stops its live turn here, rather than
+  // setting the cancel flag only an external worker's supervisor would poll.
+  const { setRunningSession, clearRunningSession, setWaitingSession, clearWaitingSession } = await import('../lib/sessionRuntime')
+  const leadIdentity = await coord.sessionCoordinatorIdentity('primary-chat', 'codex')
+  const interruptTarget = asks[0].result.delegation
+  await assert.rejects(coord.interruptInteractiveAgent(leadIdentity, interruptTarget.agentId), /no turn running here/,
+    'with no live turn in this process there is nothing to interrupt')
+  let interrupted = 0
+  setRunningSession(interruptTarget.sessionId, { provider: 'codex', interrupt: async () => { interrupted += 1 } })
+  await coord.interruptInteractiveAgent(leadIdentity, interruptTarget.agentId)
+  assert.equal(interrupted, 1, 'a managed teammate is interrupted through its live session')
+  const afterInterrupt = (await coord.readSessionCoordinator('primary-chat', 'codex'))!
+  assert.equal(afterInterrupt.tasks.find(task => task.id === asks[0].result.task.id)?.ownerAgentId, interruptTarget.agentId,
+    'interrupting a turn does not take the task away')
+  await assert.rejects(coord.interruptInteractiveAgent({ ...leadIdentity, agentId: interruptTarget.agentId }, interruptTarget.agentId),
+    /lead can interrupt|capability|not found|your own turn/, 'a teammate credential cannot interrupt anyone')
+  clearRunningSession(interruptTarget.sessionId)
+
   const backgroundAsk = asks[0].result.delegation
   setWaitingSession({ sessionId: backgroundAsk.sessionId, provider: 'codex', backgroundTasks: [{ id: 'b1', type: 'subagent', status: 'running', description: 'search' }, { id: 'b2', type: 'shell', status: 'running', description: 'dev server' }], sessionCrons: [] })
   const waiting = await (await GET(new Request('http://localhost/coordination?provider=codex'), context)).json()

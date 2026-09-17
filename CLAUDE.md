@@ -865,7 +865,10 @@ which mirror `app/api/sessions/[sessionId]/coordination/route.ts` action for act
   `session.background_tasks_changed`); it must never mark a session with a live turn, and the
   running check **after** the RPC is the load-bearing one. Alert delivery is herdr's `ui.toast.delivery`:
   `l` in the panel cycles desktop → in-app → off, persisted in `tui.json`, and a non-default mode is
-  stated in the panel header (the footer drops hints when narrow). Reviewed-result markers persist in
+  stated in the panel header (the footer drops hints when narrow). `i` interrupts the selected
+  teammate: a **managed** teammate's turn runs in this process, so the external cancel flag would
+  never be read — `interruptInteractiveAgent` interrupts its live session instead, and the task stays
+  owned. Reviewed-result markers persist in
   `lib/tui/coordinatorReviewed.ts`; in memory, a restart re-flagged every result. Pinned by
   `scripts/coordSignalsSmoke.ts` and the store smoke.
 - **Host ownership comes from a user, never from a sweep.** `sweepMailboxes` starts at module load in

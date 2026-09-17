@@ -5,12 +5,12 @@ import { isAgentProvider } from '@/lib/provider'
 import { coordinatorBackgroundAgents } from '@/lib/coordinatorInteractiveState'
 import { listWaitingSessions } from '@/lib/sessionRuntime'
 import { readViewSessionInfo, readViewSessionRunning } from '@/lib/sessionBackend'
-import { adoptOrphanedInteractiveHost, setInteractiveCoordinatorEnabled, configureInteractiveCoordinator, readInteractiveCoordinator, readInteractiveRecoveries, reconcileInteractiveDelivery, resumeInteractiveAgent, createExternalProtocolTask, readSessionCoordinator, reviewExternalProtocolPlan, runExternalProtocolIdempotent, sendExternalProtocolMessage, sessionCoordinatorIdentity, resolveProtocolDecisionAdmin } from '@/lib/agentCoordination'
+import { adoptOrphanedInteractiveHost, interruptInteractiveAgent, setInteractiveCoordinatorEnabled, configureInteractiveCoordinator, readInteractiveCoordinator, readInteractiveRecoveries, reconcileInteractiveDelivery, resumeInteractiveAgent, createExternalProtocolTask, readSessionCoordinator, reviewExternalProtocolPlan, runExternalProtocolIdempotent, sendExternalProtocolMessage, sessionCoordinatorIdentity, resolveProtocolDecisionAdmin } from '@/lib/agentCoordination'
 
 const schema = z.object({
   provider: z.string().refine(isAgentProvider),
   requestId: z.string().min(1).max(160),
-  action: z.enum(['disable', 'enable', 'settings', 'reconcile', 'resume-agent', 'delegate', 'message', 'review-plan', 'decision']),
+  action: z.enum(['disable', 'enable', 'settings', 'reconcile', 'resume-agent', 'interrupt-agent', 'delegate', 'message', 'review-plan', 'decision']),
   detail: z.string().trim().min(1).max(8000),
   cwd: z.string().trim().min(1).optional(),
   autoContinue: z.boolean().optional(), useWorktrees: z.boolean().optional(), batchId: z.string().optional(), received: z.boolean().optional(),
@@ -71,6 +71,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ ses
         if (!body.batchId || body.received === undefined) throw new Error('Select the delivery batch and its observed outcome')
         await reconcileInteractiveDelivery(sessionId, body.batchId, body.received)
         return { reconciled: true }
+      }
+      if (body.action === 'interrupt-agent') {
+        if (!body.to) throw new Error('Choose the teammate to interrupt')
+        await interruptInteractiveAgent(identity, body.to)
+        return { interrupted: true }
       }
       if (body.action === 'resume-agent') {
         if (!body.to) throw new Error('Choose the teammate to resume')

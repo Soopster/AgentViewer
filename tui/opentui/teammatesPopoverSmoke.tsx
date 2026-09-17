@@ -262,6 +262,11 @@ await waitFor('result summary', () => captureCharFrame().includes('Parser fixtur
 await press('s')
 if (captureCharFrame().includes('ATTENTION')) fail('reviewed result stayed in attention')
 
+// ── i interrupts only a teammate that is actually running ──────────────────
+await press('i')
+if (!notices.some(text => text.includes('has no turn running'))) fail(`i on an idle teammate must say so rather than sending a request: ${notices.join(' | ')}`)
+if (store.getInteractiveCoordinatorState().pending) fail('an idle teammate interrupt must not reach the server')
+
 // ── the roster reorders by attention, and selection follows the teammate ────
 // Herdr's agent panel sorts by priority. A positional selection would silently
 // retarget `m` to whoever moved into that row, so selection is by id.
@@ -354,5 +359,5 @@ await waitFor('fresh team in same chat', () => Boolean(store.getInteractiveCoord
 if (store.getInteractiveCoordinatorState().data?.snapshot?.tasks.length) fail('new team inherited old tasks')
 await coordination.stopProtocolRun(store.getInteractiveCoordinatorState().data!.snapshot!.run.id)
 
-console.log('Teammates popover smoke passed (enable, roster activity, background work, alert delivery, inspect, priority order with id selection, review on open, drafts, continuation, worktrees, unconfirmed gate, turn off)')
+console.log('Teammates popover smoke passed (enable, roster activity, background work, alert delivery, interrupt gating, inspect, priority order with id selection, review on open, drafts, continuation, worktrees, unconfirmed gate, turn off)')
 process.exit(0)

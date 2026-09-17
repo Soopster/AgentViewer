@@ -12,7 +12,7 @@ import { NativeSelect } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea'
 
 type RequestBody = {
-  action: 'disable' | 'enable' | 'settings' | 'reconcile' | 'resume-agent' | 'delegate' | 'message' | 'review-plan' | 'decision'
+  action: 'disable' | 'enable' | 'settings' | 'reconcile' | 'resume-agent' | 'interrupt-agent' | 'delegate' | 'message' | 'review-plan' | 'decision'
   provider: Session['provider']; requestId: string; detail: string; to?: string; paths?: string[]
   cwd?: string; autoContinue?: boolean; useWorktrees?: boolean; batchId?: string; received?: boolean
   taskId?: string; decisionId?: string; approved?: boolean; inReplyTo?: string
@@ -169,7 +169,7 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
       <Button disabled={locked} onClick={() => void send({ action: 'reconcile', detail: 'Confirmed delivery in transcript', batchId: state.interactive.delivery!.batchId, received: true })}>Mail was received</Button>
       <Button variant="outline" disabled={locked} onClick={() => void send({ action: 'reconcile', detail: 'Confirmed mail was not received', batchId: state.interactive.delivery!.batchId, received: false })}>Mail was not received · requeue</Button>
     </div> : null}
-    {snapshot && state ? <TeammateRoster snapshot={snapshot} state={state} seen={seen} observationUnavailable={Boolean(notice)} onOpen={inspect} onFollowup={agent => { setTo(agent.id); setDetail(`Follow up with ${agent.name}: `) }} disabled={disabled} /> : null}
+    {snapshot && state ? <TeammateRoster snapshot={snapshot} state={state} seen={seen} observationUnavailable={Boolean(notice)} onOpen={inspect} onFollowup={agent => { setTo(agent.id); setDetail(`Follow up with ${agent.name}: `) }} onInterrupt={agent => void send({ action: 'interrupt-agent', to: agent.id, detail: `Interrupt ${agent.name}` })} disabled={disabled} /> : null}
     {nativeAttention.map(item => <div key={`${item.agentId}:${item.permission.id}`} className="flex items-center justify-between gap-2 rounded border p-2" role="status"><span>{item.agentName}: {item.permission.title}</span><Button variant="outline" size="sm" onClick={() => { const agent = snapshot?.agents.find(agent => agent.id === item.agentId); if (agent) inspect(agent) }}>Inspect and answer</Button></div>)}
     {state?.recoveries.map(agentId => <div key={agentId} className="flex flex-wrap items-center gap-2 rounded border p-2"><span>{snapshot?.agents.find(agent => agent.id === agentId)?.name}: execution needs reconciliation</span><Button variant="outline" size="sm" onClick={() => { const agent = snapshot?.agents.find(agent => agent.id === agentId); if (agent) inspect(agent) }}>Inspect</Button><Button size="sm" disabled={disabled} onClick={() => void send({ action: 'resume-agent', to: agentId, detail: 'Resume after inspecting the teammate transcript' })}>Resume after inspection</Button></div>)}
     {notice ? <p role="status" className="text-sm">{notice}</p> : null}
@@ -202,8 +202,8 @@ function requestTeammateNotifications() {
   try { if (typeof Notification !== 'undefined' && Notification.permission === 'default') void Notification.requestPermission() } catch { /* Unsupported context. */ }
 }
 
-function TeammateRoster({ snapshot, state, seen, observationUnavailable, onOpen, onFollowup, disabled }: {
-  snapshot: ProtocolRunSnapshot; state: CoordinatorInteractiveState; seen: string[]; observationUnavailable: boolean; onOpen: (agent: ProtocolAgent) => void; onFollowup: (agent: ProtocolAgent) => void; disabled: boolean
+function TeammateRoster({ snapshot, state, seen, observationUnavailable, onOpen, onFollowup, onInterrupt, disabled }: {
+  snapshot: ProtocolRunSnapshot; state: CoordinatorInteractiveState; seen: string[]; onInterrupt: (agent: ProtocolAgent) => void; observationUnavailable: boolean; onOpen: (agent: ProtocolAgent) => void; onFollowup: (agent: ProtocolAgent) => void; disabled: boolean
 }) {
   if (!snapshot.agents.some(agent => agent.role === 'teammate')) return null
   const stalled = coordinatorStalledAgentIds(state)
@@ -211,6 +211,9 @@ function TeammateRoster({ snapshot, state, seen, observationUnavailable, onOpen,
     {coordinatorRosterOrder(state, seen).map(agent => <div key={agent.id} className="rounded border p-2">
       <p>{agent.name} · {coordinatorAgentActivity(agent, state, observationUnavailable, stalled.includes(agent.id))}{coordinatorAgentWorkspace(agent, snapshot) ? ` · ${coordinatorAgentWorkspace(agent, snapshot)}` : ''}</p>
       {!agent.sessionId.startsWith('external:') ? <Button variant="ghost" size="sm" onClick={() => onOpen(agent)}>Transcript</Button> : null}
+      {state.runningAgentIds.includes(agent.id) || agent.turnActive
+        ? <Button variant="ghost" size="sm" disabled={disabled} onClick={() => onInterrupt(agent)}>Interrupt</Button>
+        : null}
       <Button variant="ghost" size="sm" disabled={disabled} onClick={() => onFollowup(agent)}>Follow up</Button>
     </div>)}
   </div>

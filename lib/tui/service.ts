@@ -747,7 +747,7 @@ export async function readTuiSessionCoordinator(
 }
 
 export type TuiSessionCoordinationRequest = {
-  action: 'disable' | 'enable' | 'settings' | 'reconcile' | 'resume-agent' | 'delegate' | 'message' | 'review-plan' | 'decision'
+  action: 'disable' | 'enable' | 'settings' | 'reconcile' | 'resume-agent' | 'interrupt-agent' | 'delegate' | 'message' | 'review-plan' | 'decision'
   /** Stable across retries: every mutation below is replayed under this key. */
   requestId: string
   detail: string
@@ -806,6 +806,11 @@ export async function sendTuiSessionCoordination(
       if (!request.batchId || request.received === undefined) throw new Error('Select the delivery batch and its observed outcome')
       await coord.reconcileInteractiveDelivery(sessionId, request.batchId, request.received)
       return { reconciled: true }
+    }
+    if (request.action === 'interrupt-agent') {
+      if (!request.to) throw new Error('Choose the teammate to interrupt')
+      await coord.interruptInteractiveAgent(identity, request.to)
+      return { interrupted: true }
     }
     if (request.action === 'resume-agent') {
       if (!request.to) throw new Error('Choose the teammate to resume')
