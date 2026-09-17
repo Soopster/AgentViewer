@@ -120,6 +120,12 @@ Reads spawn a short-lived agent — listing is agent-scoped, so it cannot ride t
   removes an option — withholding the decision the user wants is worse than making them confirm it.
   Getting either wrong is invisible in a screenshot, so `scripts/claudeSdkSurfaceSmoke.ts` pins both
   (two mutations verified to fail it).
+- **An MCP ask says which server it came from, and trust keys on `source`, never the name**
+  (SDK 0.3.274 `mcpServer`). `sdk` is a server this host registered in-process; anything else —
+  including a source value we do not recognise — is configuration, and a configured server can pick
+  any name, `agent-viewer` included. The name is untrusted text, so `readMcpServerProvenance` escapes
+  it with `revealRuleText` before `permissionMcpServerLabel` puts it on either card. The same `source`
+  labels the ⇧D MCP rows. Pinned in `claudeSdkSurfaceSmoke.ts` and `permissionMcpSmoke.tsx`.
 - **Read-only queries declare `permissionPrompts: 'none'`** (`lib/sdkControlQuery.ts`, `lib/claudeModels.ts`). They run no tools and install no `canUseTool`, so a prompt there could only park the control queue on a question with no surface to answer it; rules, hooks and the permission mode still decide, and anything that would prompt is denied with a message saying why.
 - **Spawning resumes, and resuming rewrites the transcript** — identical bytes, new mtime, which is what `listSessions` reports as `lastModified`. Since the pool is prewarmed when a session is *selected*, merely navigating to one would jump it to the top of every list ordered by last activity. Read-only control queries dodge this with `persistSession: false` (`lib/sdkControlQuery.ts`); a pool entry cannot, because the turn it is warmed for must persist. `lib/claudeResumeTouch.ts` instead records the touch during prewarm and subtracts it in the Claude adapter's `listSessions`/`readSessionInfo`. The override is pinned to the exact post-resume mtime *and* file size, so any real write drops it on the next read — it can only hide a timestamp we caused. Codex's `thread/resume` was checked and leaves `updatedAt` alone; no other provider needs this.
 

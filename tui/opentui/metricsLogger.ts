@@ -29,7 +29,12 @@
 
 import { appendFile, appendFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { monitorEventLoopDelay, PerformanceObserver, type IntervalHistogram } from 'node:perf_hooks'
+import { monitorEventLoopDelay, PerformanceObserver } from 'node:perf_hooks'
+
+// Derived rather than imported: @types/node 26.6 renamed the exported
+// interface (IntervalHistogram → ELDHistogram), and the return type is the
+// only name both spellings agree on.
+type IntervalHistogram = ReturnType<typeof monitorEventLoopDelay>
 import { PerfStats } from '../../lib/perfStats'
 import type { AgentProvider } from '../../lib/types'
 import { TUI_FRAME_BUDGET_MS } from './performanceBudget'

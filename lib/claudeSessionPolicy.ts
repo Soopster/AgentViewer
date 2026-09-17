@@ -173,6 +173,23 @@ export async function claudeHooksListingItems(query: unknown): Promise<string[]>
   const record = asRecord(response)
   if (!record) return []
 
+  // Policy locks lead: they change what every row below means. A managed
+  // settings source that could not be read (SDK 0.3.274) is the one to never
+  // drop — what the organization configured is then unknown, so an empty or
+  // short list would look authoritative when it is not.
+  const policy = asRecord(record.policy)
+  const locks: string[] = []
+  if (policy) {
+    if (policy.policyUnreadable === true) locks.push('managed policy unreadable · organization hooks unknown, editing locked')
+    if (policy.disabledByPolicy === true) locks.push('all hooks disabled by managed policy')
+    else if (policy.allDisabled === true) locks.push('all hooks disabled (disableAllHooks)')
+    if (policy.managedOnly === true) locks.push('managed hooks only · managed hooks are not listed')
+    if (policy.pluginOnly === true) locks.push('plugin-only customization · hooks surface locked')
+    if (typeof policy.policyHookCount === 'number' && policy.policyHookCount > 0) {
+      locks.push(`${policy.policyHookCount} managed hook${policy.policyHookCount === 1 ? '' : 's'} (run regardless)`)
+    }
+  }
+
   // The response type is not exported, so the two arrays are read structurally
   // and an unrecognized row is skipped rather than printed as "undefined".
   const events = asArray(record.events).flatMap((raw) => {
@@ -183,8 +200,25 @@ export async function claudeHooksListingItems(query: unknown): Promise<string[]>
     const summary = str(event!, 'summary')
     return [`${name}${count != null ? ` · ${count} hook${count === 1 ? '' : 's'}` : ''}${summary ? ` · ${summary}` : ''}`]
   })
-  if (events.length === 0) return ['None']
-  return events
+  if (events.length === 0) return [...locks, 'None']
+  return [...locks, ...events]
+}
+
+/**
+ * One MCP diagnostics row. `source` (SDK 0.3.274) says where the definition came
+ * from — `sdk` is a server this host registered in-process, anything else is
+ * configuration. The name of a configured server is untrusted text, so it is
+ * revealed rather than printed raw.
+ */
+export function formatClaudeMcpServerStatus(
+  server: { name: string; status: string; source?: string },
+  dynamic: boolean,
+): string {
+  const origin = server.source === 'sdk' ? 'built-in' : server.source
+  // A server added through `mcp_set_servers` reports source `dynamic` itself,
+  // so the local flag and the SDK's answer can both say it.
+  const parts = [revealRuleText(server.name), server.status, origin, dynamic ? 'dynamic' : undefined]
+  return [...new Set(parts.filter(Boolean))].join(' · ')
 }
 
 // ── Context window breakdown ────────────────────────────────────────────────

@@ -235,7 +235,7 @@ import { runGitCommand } from '../../lib/gitNodeProvider'
 import { getSlashCommandSuggestions, filterSlashCommands, normalizeSlashCommandSuggestions, type SlashCommandSuggestion } from '../../lib/slashCommands'
 import { parseCrossSessionComposerCommand } from '../../lib/crossSessionCommands'
 import { getProviderComposer, pickProviderExample } from '../../lib/providerComposer'
-import { defaultPermissionOptionIndex, extractPendingPermission, extractPendingPermissions, extractPermissionReply, permissionOptionsFor, type PendingPermission, type PendingQuestionAnswers, type PendingQuestionOption, type PermissionOption, type PermissionResponse } from '../../lib/permissions'
+import { defaultPermissionOptionIndex, extractPendingPermission, permissionMcpServerLabel, extractPendingPermissions, extractPermissionReply, permissionOptionsFor, type PendingPermission, type PendingQuestionAnswers, type PendingQuestionOption, type PermissionOption, type PermissionResponse } from '../../lib/permissions'
 import type { readViewSessionComposerOptions } from '../../lib/sessionBackend'
 import {
   sessionMessageFingerprint,
@@ -10545,6 +10545,7 @@ export default function OpenTuiApp() {
           if (permission.allowedPrompts && permission.allowedPrompts.length > 0) permRows += 1
         } else {
           // The reason renders with word wrap, so it can take several rows.
+          if (permission.mcpServer) permRows += 1
           if (permission.reason) permRows += Math.max(Math.ceil(permission.reason.length / permInnerWidth), 1)
           if (permission.command) permRows += Math.min(permission.command.split('\n').length, 12)
           if (permission.url) permRows += 1
@@ -21675,6 +21676,11 @@ export default function OpenTuiApp() {
           <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
             <box borderStyle="single" borderColor={theme.amber} backgroundColor={theme.surface} flexDirection="column" paddingX={1}>
               <text fg={theme.amber} wrapMode="none">{fitText(`● ${permission.title}`, innerWidth)}</text>
+              {permissionMcpServerLabel(permission) ? (
+                <text fg={permission.mcpServer?.source === 'sdk' ? theme.muted : theme.cyan} wrapMode="none">
+                  {fitText(permissionMcpServerLabel(permission)!, innerWidth)}
+                </text>
+              ) : null}
               {permission.reason ? (
                 <text fg={theme.dim} wrapMode="word">{permission.reason}</text>
               ) : null}

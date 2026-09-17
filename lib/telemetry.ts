@@ -7,7 +7,12 @@
 // in separate module instances — the endpoint must read what the monitor wrote.
 
 import v8 from 'node:v8'
-import { monitorEventLoopDelay, PerformanceObserver, type IntervalHistogram } from 'node:perf_hooks'
+import { monitorEventLoopDelay, PerformanceObserver } from 'node:perf_hooks'
+
+// Derived rather than imported: @types/node 26.6 renamed the exported
+// interface (IntervalHistogram → ELDHistogram), and the return type is the
+// only name both spellings agree on.
+type IntervalHistogram = ReturnType<typeof monitorEventLoopDelay>
 import { Session } from 'node:inspector'
 import { getServerPerfStats } from './perfLog'
 import { collectRuntimeDiagnostics } from './runtimeDiagnostics'

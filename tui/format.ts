@@ -1,5 +1,7 @@
 import { getAssistantLabel } from '../lib/provider'
 import {
+  claudeStartupFailureHint,
+  claudeTaskEndCause,
   extractClaudeReadFileSummary,
   formatClaudeReadKind,
   formatClaudeReadMetadata,
@@ -1821,7 +1823,10 @@ function formatBlock(block: ThreadedBlock, activeForms?: TaskActiveForms, taskRe
         const text = typeof block.payload.summary === 'string' ? block.payload.summary
           : typeof block.payload.description === 'string' ? block.payload.description
           : 'task running'
-        return [line(`● ${subagentPrefix}${truncateLine(withClaudeRuntimeSuffix(text, block.payload))}`, 'thinking')]
+        const taskEndCause = claudeTaskEndCause(block.payload)
+        // Leads rather than trails, so truncating a long summary cannot cut it.
+        const cause = taskEndCause ? `stopped (${taskEndCause}) · ` : ''
+        return [line(`● ${subagentPrefix}${cause}${truncateLine(withClaudeRuntimeSuffix(text, block.payload))}`, 'thinking')]
       }
       if (block.subtype === 'hook_started') {
         const name = typeof block.payload.hook_name === 'string' ? block.payload.hook_name : 'hook'
@@ -2747,7 +2752,10 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
           : typeof block.payload.description === 'string' ? block.payload.description
           : typeof block.payload.content === 'string' ? block.payload.content
           : 'task'
-        const status = typeof block.payload.status === 'string' ? ` · ${block.payload.status}` : ''
+        const taskEndCause = claudeTaskEndCause(block.payload)
+        const status = typeof block.payload.status === 'string'
+          ? ` · ${block.payload.status}${taskEndCause ? ` (${taskEndCause})` : ''}`
+          : ''
         return [
           line(`● ${text}${status}`, 'thinking'),
           ...claudeRuntimeDetailCardLines(block.payload),
@@ -2882,6 +2890,8 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
         for (const e of errors.slice(0, 3)) {
           if (typeof e === 'string' && e.trim()) lines.push(line(`  ${truncateLine(e.trim())}`, 'result_error'))
         }
+        const startupFailureHint = claudeStartupFailureHint(block.payload.startup_failure_reason)
+        if (startupFailureHint) lines.push(line(`  fix: ${truncateLine(startupFailureHint)}`, 'system'))
         return lines
       }
       return [

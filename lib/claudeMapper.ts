@@ -8,6 +8,7 @@ import type {
 } from './types'
 import type { ThreadedMessage } from './threading'
 import { recordRawFrame } from './rawFrames'
+import { claudeStartupFailureHint } from './claudeSdkFeatures'
 
 function asObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -143,6 +144,14 @@ function normalizeSystemMessage(value: unknown, fallbackSubtype: string): System
   return payload
 }
 
+// A startup failure's `errors` repeats the CLI's stderr, which says what went
+// wrong but not what to do about it. Both result paths must append the hint, or
+// the live card offers the fix and the reloaded transcript does not.
+function withStartupFailureHint(content: string, record: Record<string, unknown>): string {
+  const hint = claudeStartupFailureHint(record.startup_failure_reason)
+  return hint && !content.includes(hint) ? `${content}\n${hint}` : content
+}
+
 function normalizeClaudeEventAsSystem(record: Record<string, unknown>): SystemMessagePayload | null {
   if (record.type === 'result' && (
     record.subtype !== 'success'
@@ -158,7 +167,10 @@ function normalizeClaudeEventAsSystem(record: Record<string, unknown>): SystemMe
       ...record,
       subtype: 'result',
       result_subtype: record.subtype,
-      content: errors || (record.api_error_status != null ? `Claude API error (HTTP ${record.api_error_status})` : 'Claude run ended with an error'),
+      content: withStartupFailureHint(
+        errors || (record.api_error_status != null ? `Claude API error (HTTP ${record.api_error_status})` : 'Claude run ended with an error'),
+        record,
+      ),
       level: 'warning',
     }
   }
@@ -384,7 +396,10 @@ function normalizeClaudeStreamMessage(value: unknown): SessionMessage | null {
         ...record,
         subtype: 'result',
         result_subtype: record.subtype,
-        content: Array.isArray(record.errors) ? record.errors.join('\n') : 'Claude run ended with an error',
+        content: withStartupFailureHint(
+          Array.isArray(record.errors) ? record.errors.join('\n') : 'Claude run ended with an error',
+          record,
+        ),
         level: 'warning',
       },
     }

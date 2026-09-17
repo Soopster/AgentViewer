@@ -22,6 +22,7 @@ import {
   claudeContextBreakdown,
   claudeHooksListingItems,
   claudePermissionRuleItems,
+  formatClaudeMcpServerStatus,
   revealRuleText,
 } from '../lib/claudeSessionPolicy'
 
@@ -203,4 +204,36 @@ const short = await claudePermissionRuleItems({
 })
 assert.ok(!short.some((item) => item.startsWith('…')), 'a list that fits was annotated as truncated')
 
-console.log('Claude session policy smoke passed (kind classification, invisible-char reveal, rule provenance, undeclared-method fallback, hooks listing)')
+// --- 7. hook policy locks lead the listing (SDK 0.3.274) -------------------
+// An unreadable managed-settings source means the organization's hooks are
+// unknown. A listing that showed only the events would read as complete.
+const lockedHooks = await claudeHooksListingItems({
+  getHooksListing: async () => ({
+    events: [{ name: 'PreToolUse', hookCount: 1 }],
+    policy: { disabledByPolicy: false, managedOnly: false, pluginOnly: false, allDisabled: false, policyHookCount: 2, policyUnreadable: true },
+  }),
+})
+assert.ok(lockedHooks[0]!.startsWith('managed policy unreadable'), lockedHooks.join('\n'))
+assert.ok(lockedHooks.includes('2 managed hooks (run regardless)'), lockedHooks.join('\n'))
+assert.ok(lockedHooks.some((item) => item.startsWith('PreToolUse')), 'policy lines displaced the events')
+// A listing with no locks is unchanged — no "0 managed hooks" noise.
+assert.deepEqual(
+  await claudeHooksListingItems({
+    getHooksListing: async () => ({
+      events: [{ name: 'Stop', hookCount: 1 }],
+      policy: { disabledByPolicy: false, managedOnly: false, pluginOnly: false, allDisabled: false, policyHookCount: 0 },
+    }),
+  }),
+  ['Stop · 1 hook'],
+)
+
+// --- 8. MCP server rows carry their source (SDK 0.3.274) -------------------
+assert.equal(formatClaudeMcpServerStatus({ name: 'agent-viewer', status: 'connected', source: 'sdk' }, false), 'agent-viewer · connected · built-in')
+assert.equal(formatClaudeMcpServerStatus({ name: 'github', status: 'failed', source: 'project' }, false), 'github · failed · project')
+// An older CLI sends no source; the row must not grow an empty segment.
+assert.equal(formatClaudeMcpServerStatus({ name: 'github', status: 'connected' }, false), 'github · connected')
+assert.equal(formatClaudeMcpServerStatus({ name: 'live', status: 'connected', source: 'dynamic' }, true), 'live · connected · dynamic')
+// The name of a configured server is untrusted text.
+assert.equal(formatClaudeMcpServerStatus({ name: 'git‮hub', status: 'connected', source: 'user' }, false), 'git\\u202ehub · connected · user')
+
+console.log('Claude session policy smoke passed (kind classification, invisible-char reveal, rule provenance, undeclared-method fallback, hooks listing, hook policy locks, MCP source)')

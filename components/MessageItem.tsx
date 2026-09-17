@@ -18,6 +18,8 @@ import type { ThreadedMessage, ThreadedBlock, ToolThread, TaskNotificationBlock,
 import { computeTurnDurationsMs } from '@/lib/threading'
 import type { TextBlock, ThinkingBlock, ToolResultBlock, ImageBlock, Session } from '@/lib/types'
 import {
+  claudeStartupFailureHint,
+  claudeTaskEndCause,
   extractClaudeReadFileSummary,
   formatClaudeReadKind,
   formatClaudeReadMetadata,
@@ -4956,6 +4958,9 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
     if (apiErrorStatus != null) nextBadges.push(`HTTP ${apiErrorStatus}`)
     if (typeof payload.status === 'string') nextBadges.push(payload.status)
     if (typeof payload.task_id === 'string') nextBadges.push(payload.task_id.slice(0, 8))
+    const taskEndCause = claudeTaskEndCause(payload)
+    if (taskEndCause) nextBadges.push(taskEndCause)
+    if (typeof payload.startup_failure_reason === 'string') nextBadges.push(payload.startup_failure_reason.replace(/_/g, ' '))
     if (subtype === 'model_refusal_no_fallback' && typeof payload.api_refusal_category === 'string') {
       nextBadges.push(payload.api_refusal_category)
     }
@@ -5120,6 +5125,7 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
       main = content
     }
     else if (subtype === 'result') {
+      const startupFailureHint = claudeStartupFailureHint(payload.startup_failure_reason)
       const errors = Array.isArray(payload.errors) ? payload.errors.filter((e): e is string => typeof e === 'string') : []
       const lines = [
         isRefusal ? 'Outcome: refused' : typeof payload.result_subtype === 'string' ? `Outcome: ${payload.result_subtype}` : '',
@@ -5129,6 +5135,7 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
         typeof payload.total_cost_usd === 'number' ? `Cost: $${payload.total_cost_usd.toFixed(4)}` : '',
         stopReason ? `Stop: ${stopReason}` : '',
         ...errors,
+        startupFailureHint ? `Fix: ${startupFailureHint}` : '',
       ].filter(Boolean)
       main = lines.join('\n')
     } else {

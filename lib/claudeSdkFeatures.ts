@@ -364,3 +364,43 @@ export function formatClaudeRuntimeDetailLines(payload: SystemMessagePayload): s
 
   return lines
 }
+
+// ── Startup failures (SDK 0.3.274) ──────────────────────────────────────────
+//
+// A CLI that refuses to start now says why in `startup_failure_reason`, so the
+// transcript can offer the fix instead of a bare "run ended with an error" that
+// reads as transient and invites a retry that will fail identically. The
+// reason is an open set upstream: an unknown value gets no hint, never a guess.
+const STARTUP_FAILURE_HINTS: Record<string, string> = {
+  org_pin_api_key_conflict: 'Managed settings require a Claude sign-in, but an API key or auth token is configured. Unset ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN.',
+  org_verify_failed: 'Your organization could not be verified. Check the network, or sign in again with `claude /login`.',
+  org_pin_mismatch: 'This sign-in belongs to an organization your managed settings do not allow. Sign in with the organization account.',
+  managed_settings_invalid: 'Managed policy settings could not be read. Ask your administrator to check them.',
+  remote_settings_required_unavailable: 'Settings your organization requires could not be loaded. Check the network and retry.',
+  gateway_signin_required: 'The Cloud gateway ended this sign-in. Sign in again with `claude /login`.',
+  gateway_access_denied: 'The Cloud gateway refused managed settings for this account.',
+  proxy_invalid: 'A proxy setting (HTTPS_PROXY / HTTP_PROXY) is not a complete URL.',
+  temp_dir_unusable: 'The temp directory is unsafe or could not be created. Check TMPDIR.',
+  cwd_unavailable: "The session's working directory was deleted, moved, or cannot be read.",
+  shell_tool_missing: 'No shell tool is available: install Git Bash, or enable PowerShell.',
+  session_held_by_background: 'This conversation is running as a background session. Stop it there first.',
+  worktree_resume_refused: "The session's worktree failed its safety checks; see the error for whether a re-run continues without it.",
+  worktree_unverified: "The session's worktree could not be verified right now. Retrying may succeed.",
+  cli_version_too_old: 'This Claude Code version is below the minimum required. Update the CLI.',
+  bypass_root: 'Bypass-permissions mode cannot run as root. Pick another permission mode.',
+}
+
+export function claudeStartupFailureHint(reason: unknown): string | null {
+  return typeof reason === 'string' ? STARTUP_FAILURE_HINTS[reason] ?? null : null
+}
+
+// ── Task end cause (SDK 0.3.274) ────────────────────────────────────────────
+//
+// `reason: 'worker_restart'` is set on a task the restarted worker found
+// orphaned. Its status is a plain 'stopped', which otherwise reads as the user
+// or the model having stopped it — the one explanation it is not.
+export function claudeTaskEndCause(payload: SystemMessagePayload): string | null {
+  return payload.subtype === 'task_notification' && payload.reason === 'worker_restart'
+    ? 'worker restart'
+    : null
+}

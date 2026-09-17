@@ -7,6 +7,7 @@
 // Next.js and Bun/OpenTUI bundles.
 
 import type { AgentProvider, SendAttachment } from './types'
+import { revealRuleText } from './claudeSessionPolicy'
 
 // A single AskUserQuestion prompt the user must answer interactively. Mirrors
 // the Claude SDK AskUserQuestionInput shape (one entry per question).
@@ -61,6 +62,21 @@ export type PendingPermission = {
   // needs (pre-approved when the plan is approved). Approving exits plan mode.
   plan?: string
   allowedPrompts?: string[]
+  // For an MCP tool: the server serving it and where its definition came from
+  // (Claude SDK 0.3.274). `name` is already escaped for display — a configured
+  // server's name is untrusted text. Trust is keyed on `source`, never on the
+  // name, so the label below is what a surface shows.
+  mcpServer?: { name: string; source: string }
+}
+
+// "MCP · <name> · <origin>". `sdk` means a server this host registered
+// in-process, which only the host can do; every other source is configuration,
+// and an unknown source is treated as configuration rather than as `sdk`.
+export function permissionMcpServerLabel(permission: PendingPermission): string | null {
+  const server = permission.mcpServer
+  if (!server) return null
+  const origin = server.source === 'sdk' ? 'agent-viewer (built-in)' : `configured · ${server.source}`
+  return `MCP · ${server.name} · ${origin}`
 }
 
 export type PermissionResponse = 'once' | 'always' | 'reject'
@@ -663,7 +679,16 @@ export function extractClaudePermission(payload: unknown): PendingPermission | n
     reason,
     canApproveAlways: !suppressAlwaysAllowRule && Array.isArray(suggestions) && suggestions.length > 0,
     defaultToDeny: data.defaultToNo === true ? true : undefined,
+    mcpServer: readMcpServerProvenance(data.mcpServer),
   }
+}
+
+function readMcpServerProvenance(value: unknown): PendingPermission['mcpServer'] {
+  const record = asRecord(value)
+  const name = record ? stringField(record, 'name') : undefined
+  const source = record ? stringField(record, 'source') : undefined
+  if (!name || !source) return undefined
+  return { name: revealRuleText(name), source: revealRuleText(source) }
 }
 
 export function extractClaudePermissionCompletion(payload: unknown): string | null {

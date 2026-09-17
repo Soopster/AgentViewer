@@ -14,7 +14,7 @@ import { normalizeClaudeHistoryMessages, normalizeClaudeStreamThreadedMessage } 
 import { effortToSdk } from '../lib/claudePool'
 import { formatClaudeRuntimeCounts, formatClaudeRuntimeDetailLines } from '../lib/claudeSdkFeatures'
 import { classifyClaudeUsageMessage, isClaudeUsageLimitError } from '../lib/claudeUsageLimits'
-import { defaultPermissionOptionIndex, extractClaudePermission, permissionOptionsFor } from '../lib/permissions'
+import { defaultPermissionOptionIndex, extractClaudePermission, permissionMcpServerLabel, permissionOptionsFor } from '../lib/permissions'
 import { isTransientSendError } from '../lib/transientError'
 import { buildThreadedMessages } from '../lib/threading'
 import { formatMessageExpanded, formatTranscriptCards } from '../tui/format'
@@ -216,5 +216,71 @@ assert.ok(
   !JSON.stringify(rerunHistory[0]!.message).includes('host_draining'),
   'resume_reason leaked into message content, where it would be replayed to the model',
 )
+
+// --- MCP server provenance on a permission ask (SDK 0.3.274) ---------------
+// A tool-name prefix says which server NAME serves an `mcp__*` tool, not whether
+// that server is one this host registered or a project config that chose the
+// same name. The card must key its label on `source`, and a configured name is
+// untrusted text: an invisible character must be shown, not rendered.
+const mcpAsk = (mcpServer: unknown) => extractClaudePermission({
+  type: 'claude_permission',
+  event: { type: 'permission.requested', data: { requestId: 'req-mcp', sessionId: 's1', toolName: 'mcp__coord__claim', input: {}, mcpServer } },
+})!
+assert.equal(permissionMcpServerLabel(mcpAsk({ name: 'agent-viewer', source: 'sdk' })), 'MCP · agent-viewer · agent-viewer (built-in)')
+assert.equal(permissionMcpServerLabel(mcpAsk({ name: 'agent-viewer', source: 'project' })), 'MCP · agent-viewer · configured · project')
+// An unrecognized source is configuration, never promoted to built-in.
+assert.equal(permissionMcpServerLabel(mcpAsk({ name: 'x', source: 'something-new' })), 'MCP · x · configured · something-new')
+assert.equal(mcpAsk({ name: 'agent​viewer', source: 'user' }).mcpServer?.name, 'agent\\u200bviewer')
+// Non-MCP tools and older CLIs carry nothing, and must not grow an empty row.
+assert.equal(mcpAsk(undefined).mcpServer, undefined)
+assert.equal(permissionMcpServerLabel(mcpAsk({ name: 'x' })), null)
+
+// --- startup failure reasons (SDK 0.3.274) ---------------------------------
+// A CLI that refuses to start names the cause. Both mapping paths must carry the
+// fix, and both renderers must show it — the result card reads `errors`, not
+// `content`, so a mapper-only change would be invisible on screen.
+const startupFailure = {
+  type: 'result',
+  subtype: 'error_during_execution',
+  uuid: 'startup-1',
+  session_id: 's',
+  is_error: true,
+  errors: ['Working directory no longer exists'],
+  startup_failure_reason: 'cwd_unavailable',
+}
+const liveStartup = normalizeClaudeStreamThreadedMessage(startupFailure)
+const historyStartup = normalizeClaudeHistoryMessages([startupFailure])
+for (const [label, content] of [
+  ['live', JSON.stringify(liveStartup)],
+  ['history', JSON.stringify(historyStartup)],
+] as const) {
+  assert.ok(content.includes('working directory was deleted'), `${label} path dropped the startup failure hint`)
+}
+const startupCardText = JSON.stringify(formatTranscriptCards(buildThreadedMessages(historyStartup)).flatMap((card) => (card.expandedLines ?? card.lines).map((cardLine) => cardLine.text)))
+assert.ok(startupCardText.includes('fix: '), 'TUI result card does not show the startup failure fix')
+// An unknown reason gets no invented hint.
+assert.equal(
+  JSON.stringify(normalizeClaudeHistoryMessages([{ ...startupFailure, startup_failure_reason: 'not_a_reason' }])).includes('working directory was deleted'),
+  false,
+)
+
+// --- task stopped by a worker restart (SDK 0.3.274) ------------------------
+// Its status is a plain 'stopped', which reads as someone having stopped it —
+// the one explanation it is not.
+const orphanedTask = normalizeClaudeHistoryMessages([{
+  type: 'system',
+  uuid: 'task-orphan',
+  session_id: 's',
+  message: {
+    subtype: 'task_notification',
+    task_id: 'task-1',
+    status: 'stopped',
+    reason: 'worker_restart',
+    output_file: '/tmp/out',
+    summary: 'Index the repository',
+  },
+}])
+const orphanedCards = JSON.stringify(formatTranscriptCards(buildThreadedMessages(orphanedTask)))
+assert.ok(orphanedCards.includes('worker restart'), 'TUI task card does not say the worker restart stopped it')
 
 console.log('Claude SDK surface smoke passed')

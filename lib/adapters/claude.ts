@@ -34,7 +34,7 @@ import { deleteClaudeHookEvents, listClaudeHookEvents } from '../claudeHookEvent
 import { claudeProcessTransportStatus } from '../claudeProcessSpawner'
 import { readClaudeSupportedModels } from '../claudeModels'
 import { withoutClaudeResumeTouch } from '../claudeResumeTouch'
-import { claudeContextBreakdown, claudeHooksListingItems, claudePermissionRuleItems } from '../claudeSessionPolicy'
+import { claudeContextBreakdown, claudeHooksListingItems, claudePermissionRuleItems, formatClaudeMcpServerStatus } from '../claudeSessionPolicy'
 import {
   claudeListCacheKey,
   readClaudeCorpusToken,
@@ -433,7 +433,7 @@ export const claudeAdapter: SessionAdapter = {
             id: 'mcp',
             title: 'MCP',
             items: mcpServers.length > 0
-              ? mcpServers.map((server) => `${server.name} · ${server.status}${claudeDynamicMcpServerNames(sessionId).includes(server.name) ? ' · dynamic' : ''}`)
+              ? mcpServers.map((server) => formatClaudeMcpServerStatus(server, claudeDynamicMcpServerNames(sessionId).includes(server.name)))
               : ['None'],
           },
           {
