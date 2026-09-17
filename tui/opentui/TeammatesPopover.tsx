@@ -82,7 +82,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   const unconfirmedDelivery = delivery && !delivery.active ? delivery : null
   const recoveries = data?.recoveries ?? []
   // Recomputed per read: the feed re-reads every few seconds, which is as fine
-  // as a 45s stall window needs.
+  // as a 15s stall window needs (the label lands within one read of crossing it).
   const stalled = useMemo(() => coordinatorStalledAgentIds(data), [data])
   const attention = useMemo(
     () => (data?.permissions ?? []).filter((item) => item.agentId !== snapshot?.run.leadAgentId),

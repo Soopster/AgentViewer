@@ -169,8 +169,8 @@ Three more herdr patterns, each chosen because its absence failed silently:
   one.
 - **Stalled starts** (herdr's `agent_prompt_stalled`). "Starting · awaiting
   provider activity" had no deadline. A managed teammate holding a claimed task
-  with no observed turn for `COORDINATOR_START_STALL_MS` (45s; wider than herdr's
-  5s because delegation crosses the maintenance sweep and a provider spawn) now
+  with no observed turn for `COORDINATOR_START_STALL_MS` (now 15s, see the inventory
+  below) now
   reads "Stalled · no provider activity observed · inspect before resending",
   counts as attention, and notifies. As in herdr, the label claims only that
   nothing was observed: recovery-owned teammates, external supervisors, ended
@@ -252,8 +252,15 @@ difference decides most of the verdicts below.
 
 ### Where it is only as effective, or not yet shown
 
-- The stall window (45s) is wider than herdr's 5s, so a genuinely dead start is
-  reported later.
+- The stall window is 15s against herdr's 5s. It was first set at 45s on the
+  assumption that provider spawn time counted against it; it does not
+  (`turnActive` is set when a dispatch starts, before the provider launches), so
+  the window now measures only the dispatch sweep — three missed 5s passes.
+  Herdr's gate can be tighter because a terminal prompt has no sweep in between.
+  `coordConversationSmoke.ts` holds real ledger delegations open with a provider
+  that never answers and asserts no stall an hour past the window; dropping the
+  `turnActive` exclusion was verified to fail it, so the check is exercising a
+  genuinely claimed task rather than passing on its status.
 - No combined multi-machine roster.
 - Every check above is fixture-driven. No live-provider, long-duration or
   side-by-side workflow comparison with herdr has been run.

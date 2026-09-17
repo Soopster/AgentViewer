@@ -14,14 +14,18 @@ export type CoordinatorInteractiveState = {
 }
 
 /**
- * How long delegated work may sit claimed with no provider turn before it is
- * reported as stalled. Herdr gates a prompt on observed activity within five
- * seconds of a terminal submission; a delegation here crosses the maintenance
- * sweep and a provider spawn (a cold Pi session alone has taken 19s), so the
- * gate is wider. Like herdr's `agent_prompt_stalled`, crossing it proves only
- * that nothing was observed — never that the work was not delivered.
+ * How long delegated work may sit claimed with no dispatch before it is
+ * reported as stalled — herdr's five-second `agent_prompt_stalled` gate, sized
+ * to what this transport actually waits on. Provider spawn time is NOT part of
+ * it: `turnActive` is set synchronously when a dispatch starts, before the
+ * durable reservation and before the provider launches, and a reservation left
+ * without a turn is reported as recovery instead. So a claimed task that is
+ * neither in flight nor in recovery is one no dispatch has picked up at all.
+ * Delegation dispatches immediately and the maintenance sweep retries every 5s
+ * (`MAIL_SWEEP_INTERVAL_MS`); 15s is three missed passes. Crossing it proves
+ * only that nothing was observed — never that the work was not delivered.
  */
-export const COORDINATOR_START_STALL_MS = 45_000
+export const COORDINATOR_START_STALL_MS = 15_000
 
 /**
  * Managed teammates holding a claimed task that no provider turn has picked up

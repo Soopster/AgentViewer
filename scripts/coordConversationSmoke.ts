@@ -24,6 +24,7 @@ mock.module(fileURLToPath(new URL('../lib/sessionBackend.ts', import.meta.url)),
 }))
 const coord = await import('../lib/agentCoordination')
 const { coordinatorAttention } = await import('../lib/coordinatorAttention')
+const { coordinatorStalledAgentIds } = await import('../lib/coordinatorInteractiveState')
 const { POST, GET } = await import('../app/api/sessions/[sessionId]/coordination/route')
 const context = { params: Promise.resolve({ sessionId: 'primary-chat' }) }
 async function post(body: Record<string, unknown>) {
@@ -48,6 +49,12 @@ try {
   assert.equal(replay.result.task.id, asks[0].result.task.id)
   assert.equal(created, 2)
   const controller = globalThis.__agentViewerCoordinatorControllers!.get(snapshot.run.id)!
+  // A provider that has not produced anything yet is still a start in
+  // progress, however slow: the stall window must measure only undispatched
+  // work. These turns are held open, so check the real ledger an hour on.
+  for (const ask of asks) await until(() => turns.has(ask.result.delegation.sessionId))
+  const starting = await (await GET(new Request('http://localhost/coordination?provider=codex'), context)).json()
+  assert.deepEqual(coordinatorStalledAgentIds(starting, Date.now() + 3_600_000), [], 'a dispatched turn awaiting its provider is not a stalled start')
   for (const ask of asks) {
     const { agentId, sessionId } = ask.result.delegation
     await until(() => turns.has(sessionId))
