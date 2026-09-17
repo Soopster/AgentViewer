@@ -2563,6 +2563,26 @@ function claimInteractiveHostSync(db: SqliteDatabase, runId: string): void {
   if (owner.owner_id !== interactiveHostId) throw new Error('This team is running in another local Agent Viewer host. Use that host or connect the TUI to its server to control it.')
 }
 
+/**
+ * Take over a conversation's team whose owning host has exited. Called only
+ * from UI reads (the coordination route and the TUI read), never from shared
+ * code a sidecar runs: those are the processes a user is actually driving, and
+ * without this a restarted client would leave queued teammate work unswept
+ * until the user happened to act. A live owner is never displaced, and an
+ * unowned run is left for a user action to claim.
+ */
+export async function adoptOrphanedInteractiveHost(sessionId: string, provider: ProtocolRun['provider']): Promise<void> {
+  const snapshot = await readSessionCoordinator(sessionId, provider)
+  if (!snapshot || ['completed', 'failed', 'stopped'].includes(snapshot.run.status)) return
+  if (!snapshot.agents.some(agent => agent.role === 'lead' && agent.sessionId === sessionId)) return
+  await enqueueWrite(db => {
+    const row = db.prepare('SELECT owner_id FROM protocol_interactive_hosts WHERE run_id = ?').get(snapshot.run.id) as Row | undefined
+    if (!row || row.owner_id === interactiveHostId || foreignInteractiveHostSync(db, snapshot.run.id)) return
+    db.prepare(`UPDATE protocol_interactive_hosts SET owner_id = ?, owner_pid = ?, owner_host = ?
+      WHERE run_id = ? AND owner_id = ?`).run(interactiveHostId, process.pid, hostname(), snapshot.run.id, row.owner_id)
+  })
+}
+
 /** Adopt external/chat-led runs without launching or taking over their lead. */
 async function adoptInteractiveController(identity: ExternalProtocolIdentity): Promise<RunController> {
   const existing = controllers.get(identity.runId)
@@ -7117,6 +7137,15 @@ export async function resumeInteractiveAgent(identity: ExternalProtocolIdentity,
 /** The server batches inbox events and spends at most four automatic lead turns per user turn. */
 async function sweepInteractiveCoordinator(runId: string): Promise<void> {
   const db = await getDatabase()
+  // Only the owning host sweeps, and the sweep never claims. The maintenance
+  // timer runs in every process that loads this module — the AHP sidecar
+  // `agent-viewer web` spawns included — and resolving the lead identity here
+  // claims the run. For an unowned run that let whichever process swept first
+  // take every chat team on the machine: a sidecar with no UI owned them, so
+  // the TUI and the web both showed "Running in another host" with nothing to
+  // act on. Ownership comes from a user action, or `adoptOrphanedInteractiveHost`.
+  const owner = db.prepare('SELECT owner_id FROM protocol_interactive_hosts WHERE run_id = ?').get(runId) as Row | undefined
+  if (owner?.owner_id !== interactiveHostId) return
   const sessions = db.prepare('SELECT * FROM protocol_interactive_sessions WHERE run_id = ?').all(runId) as Row[]
   for (const session of sessions) {
     const identity = await sessionCoordinatorIdentity(String(session.session_id), String(session.provider) as AgentProvider)

@@ -5,7 +5,7 @@ import { isAgentProvider } from '@/lib/provider'
 import { coordinatorBackgroundAgents } from '@/lib/coordinatorInteractiveState'
 import { listWaitingSessions } from '@/lib/sessionRuntime'
 import { readViewSessionInfo, readViewSessionRunning } from '@/lib/sessionBackend'
-import { setInteractiveCoordinatorEnabled, configureInteractiveCoordinator, readInteractiveCoordinator, readInteractiveRecoveries, reconcileInteractiveDelivery, resumeInteractiveAgent, createExternalProtocolTask, readSessionCoordinator, reviewExternalProtocolPlan, runExternalProtocolIdempotent, sendExternalProtocolMessage, sessionCoordinatorIdentity, resolveProtocolDecisionAdmin } from '@/lib/agentCoordination'
+import { adoptOrphanedInteractiveHost, setInteractiveCoordinatorEnabled, configureInteractiveCoordinator, readInteractiveCoordinator, readInteractiveRecoveries, reconcileInteractiveDelivery, resumeInteractiveAgent, createExternalProtocolTask, readSessionCoordinator, reviewExternalProtocolPlan, runExternalProtocolIdempotent, sendExternalProtocolMessage, sessionCoordinatorIdentity, resolveProtocolDecisionAdmin } from '@/lib/agentCoordination'
 
 const schema = z.object({
   provider: z.string().refine(isAgentProvider),
@@ -21,6 +21,7 @@ const schema = z.object({
 })
 
 async function readState(sessionId: string, provider: Parameters<typeof readSessionCoordinator>[1]) {
+  await adoptOrphanedInteractiveHost(sessionId, provider).catch(() => {})
   const snapshot = await readSessionCoordinator(sessionId, provider)
   const interactive = await readInteractiveCoordinator(sessionId)
   const recoveries = snapshot ? await readInteractiveRecoveries(snapshot.run.id) : []

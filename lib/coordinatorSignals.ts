@@ -96,6 +96,20 @@ export function coordinatorAttentionPriority(signals: readonly CoordinatorSignal
  */
 export const COORDINATOR_NOTIFICATION_DELAY_MS = 1_000
 
+/**
+ * Where one alert goes, given herdr's delivery setting and active-tab rule.
+ * The in-app notice is skipped while viewing — the panel already shows it —
+ * but a desktop alert is not: `viewing` with a blurred terminal is not looking.
+ */
+export function coordinatorAlertDelivery(
+  mode: 'off' | 'in-app' | 'desktop',
+  viewing: boolean,
+  terminalFocused: boolean | null,
+): { notice: boolean; desktop: boolean } {
+  if (mode === 'off' || coordinatorSignalSuppressed(viewing, terminalFocused)) return { notice: false, desktop: false }
+  return { notice: !viewing, desktop: mode === 'desktop' }
+}
+
 /** Herdr's active-tab rule: quiet only when viewing AND not known to be blurred. */
 export function coordinatorSignalSuppressed(viewing: boolean, terminalFocused: boolean | null): boolean {
   return viewing && terminalFocused !== false

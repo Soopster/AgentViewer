@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import type { ProtocolRunSnapshot } from '../lib/agentProtocol'
 import { coordinatorAttentionCount } from '../lib/coordinatorAttentionCount'
 import { COORDINATOR_START_STALL_MS, coordinatorAgentActivity, coordinatorBackgroundAgents, coordinatorBackgroundWork, coordinatorStalledAgentIds, type CoordinatorInteractiveState } from '../lib/coordinatorInteractiveState'
-import { coordinatorAttentionPriority, coordinatorResultIdsForAgent, coordinatorRosterOrder, coordinatorSignals, coordinatorSignalSuppressed, newCoordinatorSignals } from '../lib/coordinatorSignals'
+import { coordinatorAlertDelivery, coordinatorAttentionPriority, coordinatorResultIdsForAgent, coordinatorRosterOrder, coordinatorSignals, coordinatorSignalSuppressed, newCoordinatorSignals } from '../lib/coordinatorSignals'
 
 const claimedAt = '2026-09-17T00:00:00.000Z'
 const t0 = Date.parse(claimedAt)
@@ -117,4 +117,11 @@ assert.equal(coordinatorSignalSuppressed(true, null), true, 'unknown focus count
 assert.equal(coordinatorSignalSuppressed(true, false), false, 'looking at a blurred terminal is not looking')
 assert.equal(coordinatorSignalSuppressed(false, true), false, 'another conversation always notifies')
 
-console.log('Coordinator signals: stall window + exclusions, baseline-silent transitions, reviewed results, lead exclusion, attention priority, roster order, per-agent results, background work, focus suppression passed')
+// ── Herdr's delivery setting (ui.toast.delivery) ────────────────────────────
+assert.deepEqual(coordinatorAlertDelivery('off', false, false), { notice: false, desktop: false }, 'off means off, even for a background team')
+assert.deepEqual(coordinatorAlertDelivery('in-app', false, true), { notice: true, desktop: false })
+assert.deepEqual(coordinatorAlertDelivery('desktop', false, true), { notice: true, desktop: true })
+assert.deepEqual(coordinatorAlertDelivery('desktop', true, true), { notice: false, desktop: false }, 'looking at the team with the terminal focused: quiet')
+assert.deepEqual(coordinatorAlertDelivery('desktop', true, false), { notice: false, desktop: true }, 'the panel already shows it, but a blurred terminal still needs the desktop alert')
+
+console.log('Coordinator signals: stall window + exclusions, baseline-silent transitions, reviewed results, lead exclusion, attention priority, roster order, per-agent results, background work, delivery setting, focus suppression passed')

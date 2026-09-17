@@ -160,6 +160,14 @@ act(() => {
 if (!captureCharFrame().includes('nova')) fail('reopening the same conversation flashed an empty roster')
 await settle(200)
 
+// ── l cycles where teammate alerts go (herdr's ui.toast.delivery) ───────────
+await press('l')
+if (store.getInteractiveCoordinatorNotifications() !== 'in-app') fail('l did not move teammate alerts to in-app')
+await settle(60)
+if (!captureCharFrame().includes('alerts in-app')) fail('the panel does not show a non-default alert delivery')
+await press('l'); await press('l')
+if (store.getInteractiveCoordinatorNotifications() !== 'desktop') fail('l did not cycle back to desktop')
+
 // ── c toggles automatic continuation ───────────────────────────────────────
 if (store.getInteractiveCoordinatorState().data?.interactive.autoContinue !== false) {
   fail('automatic continuation must start off')
@@ -346,5 +354,5 @@ await waitFor('fresh team in same chat', () => Boolean(store.getInteractiveCoord
 if (store.getInteractiveCoordinatorState().data?.snapshot?.tasks.length) fail('new team inherited old tasks')
 await coordination.stopProtocolRun(store.getInteractiveCoordinatorState().data!.snapshot!.run.id)
 
-console.log('Teammates popover smoke passed (enable, roster activity, background work, inspect, priority order with id selection, review on open, drafts, continuation, worktrees, unconfirmed gate, turn off)')
+console.log('Teammates popover smoke passed (enable, roster activity, background work, alert delivery, inspect, priority order with id selection, review on open, drafts, continuation, worktrees, unconfirmed gate, turn off)')
 process.exit(0)

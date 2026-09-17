@@ -174,5 +174,24 @@ try {
   store.openInteractiveCoordinatorAttention()
   assert.equal(store.getInteractiveCoordinatorState().session?.sessionId, 'second', 'a blocked teammate outranks a finished one')
   stopFinished(); stopAsking()
+  // Alert delivery persists, and a late-loading saved preference never
+  // overrides a choice the user made before it resolved.
+  store.resetInteractiveCoordinatorStore()
+  assert.equal(store.getInteractiveCoordinatorNotifications(), 'desktop', 'desktop is the default')
+  assert.equal(store.cycleInteractiveCoordinatorNotifications(), 'in-app')
+  assert.equal(store.cycleInteractiveCoordinatorNotifications(), 'off')
+  await new Promise(resolve => setTimeout(resolve, 50))
+  const { getConfiguredTuiTeammateNotifications } = await import('../../lib/tuiState')
+  assert.equal(await getConfiguredTuiTeammateNotifications(), 'off', 'the choice is saved')
+  store.resetInteractiveCoordinatorStore()
+  read = deferred(); const stopPref = store.observeInteractiveCoordinator(first)
+  await new Promise(resolve => setTimeout(resolve, 50))
+  assert.equal(store.getInteractiveCoordinatorNotifications(), 'off', 'a restarted client loads the saved choice')
+  assert.equal(store.getInteractiveCoordinatorState().notifications, 'off', 'the panel state carries it')
+  store.cycleInteractiveCoordinatorNotifications()
+  read.resolve(data(false)); await tick(); stopPref()
+  await new Promise(resolve => setTimeout(resolve, 50))
+  store.cycleInteractiveCoordinatorNotifications()
+
   console.log('Interactive TUI store: close/reopen, session switches, exact retry, stale polls, busy discard, read outage, delayed/cancellable transition notifications, attention priority, and durable review markers passed')
 } finally { store.resetInteractiveCoordinatorStore(); mock.restore(); process.chdir(originalCwd); rmSync(fixture, { recursive: true, force: true }) }

@@ -27,6 +27,7 @@ import {
   reviewInteractiveCoordinatorResult,
   reviewInteractiveCoordinatorResults,
   runInteractiveCoordinatorAction,
+  cycleInteractiveCoordinatorNotifications,
   subscribeInteractiveCoordinator,
 } from './interactiveCoordinatorStore'
 
@@ -141,6 +142,13 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       reviewInteractiveCoordinatorResults(coordinatorResultIdsForAgent(snapshot, selected.id))
       onOpenSession(selected); closeInteractiveCoordinator(); return
     }
+    // Alert delivery is a local preference, not a Coordinator mutation, so it
+    // stays available while a request is unconfirmed.
+    if (key.name === 'l') {
+      const mode = cycleInteractiveCoordinatorNotifications()
+      onNotice('info', mode === 'off' ? 'Teammate alerts off' : mode === 'in-app' ? 'Teammate alerts: in-app only' : 'Teammate alerts: in-app and desktop', 3000)
+      return
+    }
     if (key.name === 'j' || key.name === 'down') {
       setSelectedId(teammates[Math.min(clamped + 1, Math.max(teammates.length - 1, 0))]?.id ?? null)
       return
@@ -251,6 +259,9 @@ export const TeammatesPopover = memo(function TeammatesPopover({
     : joinMeta([
         `${teammates.length} teammate${teammates.length === 1 ? '' : 's'}`,
         attentionCount > 0 ? `${attentionCount} need${attentionCount === 1 ? 's' : ''} attention` : 'nothing waiting',
+        // A non-default alert mode is stated where it cannot be truncated away:
+        // silenced alerts that nothing on screen admits to look like a bug.
+        state.notifications === 'desktop' ? '' : state.notifications === 'off' ? 'alerts off' : 'alerts in-app',
       ])
   const headlineColor = terminal ? theme.dim
     : attentionCount > 0 ? theme.amber
@@ -268,7 +279,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
         : !enabled
           ? (teammates.length ? [['j/k', 'move'], ['⏎', 'open transcript'], ['e', 'new team'], ['esc', 'close']] : canLead ? [['e', 'enable coordinator'], ['esc', 'close']] : [['esc', 'close']])
           : [['j/k', 'move'], ['⏎', 'open'], ['d', 'ask'], ['m', 'message'],
-             ['r', 'resume'], ['c', 'continuation'], ['w', 'worktrees'], ['x', 'turn off'], ['esc', 'close']]
+             ['r', 'resume'], ['c', 'continuation'], ['w', 'worktrees'], ['l', `alerts ${state.notifications}`], ['x', 'turn off'], ['esc', 'close']]
   // Truncation is by whole entries, not mid-word: a hint cut to "x …" tells the
   // reader a key exists without saying which.
   const footerWidth = (hints: Array<[string, string]>) =>

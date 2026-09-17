@@ -345,3 +345,33 @@ live probe against the installed CLI confirmed `tasks.list()` answers on a fresh
 throwaway session (`{"tasks":[]}`, no marker); no background agent was started,
 so the populated path is proven only against the fixture. `copilot:sdk:smoke`
 still passes with the watcher attached to pooled sessions.
+
+### Alert delivery, preference writes, and host ownership
+
+Herdr's `ui.toast.delivery` lets a user choose where agent notifications go
+(off by default, in-app, terminal, or system). Teammate alerts had no switch
+at all. `l` in the Teammates panel now cycles desktop → in-app → off;
+`coordinatorAlertDelivery` combines it with the active-tab rule (a blurred
+terminal still gets a desktop alert while the panel is open; the in-app notice
+is skipped because the panel already shows it). Desktop stays the default: herdr
+paints a state glyph on every pane, where this TUI has one badge.
+
+Testing the setting surfaced a defect in every TUI preference. `tui.json` was
+written by an async, unserialized read-merge-write, so two quick toggles raced
+and the later write erased the earlier change (three of five runs), and a torn
+write read back as `{}`, so the next save wiped every preference. The merge is
+now synchronous (the file is a few hundred bytes), written by temp-and-rename,
+and an unparseable file is backed up before replacement (herdr #4125 again).
+`scripts/tuiStateSmoke.ts` writes five preferences concurrently and restores the
+old writer to confirm it fails.
+
+A user report while this was in progress found the same shape of problem in
+host ownership. The maintenance sweep runs in every process that loads the
+coordination module, including the AHP sidecar `agent-viewer web` spawns, and
+it resolved lead identities, which claims. A team enabled from the TUI was
+taken over by the sidecar once that TUI exited; the restarted TUI and the web
+then showed "Running in another host" for nine teams owned by a process with
+no UI. The sweep now works only runs its process owns, and a dead owner is
+adopted by a UI read. Herdr has no equivalent because its server is the only
+process that executes panes; here several processes can, so which of them may
+own work has to be decided explicitly.

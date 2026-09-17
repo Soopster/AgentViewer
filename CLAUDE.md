@@ -863,9 +863,19 @@ which mirror `app/api/sessions/[sessionId]/coordination/route.ts` action for act
   not** (herdr #3414: a dev server would otherwise hold it "working" forever). Copilot feeds the same
   registry from `tasks.list()` (`refreshCopilotBackgroundTasks`, on turn end and on
   `session.background_tasks_changed`); it must never mark a session with a live turn, and the
-  running check **after** the RPC is the load-bearing one. Reviewed-result markers persist in
+  running check **after** the RPC is the load-bearing one. Alert delivery is herdr's `ui.toast.delivery`:
+  `l` in the panel cycles desktop → in-app → off, persisted in `tui.json`, and a non-default mode is
+  stated in the panel header (the footer drops hints when narrow). Reviewed-result markers persist in
   `lib/tui/coordinatorReviewed.ts`; in memory, a restart re-flagged every result. Pinned by
   `scripts/coordSignalsSmoke.ts` and the store smoke.
+- **Host ownership comes from a user, never from a sweep.** `sweepMailboxes` starts at module load in
+  every process that imports `lib/agentCoordination.ts` — the AHP sidecar `agent-viewer web` spawns
+  included — and resolving a lead identity claims the run. So `sweepInteractiveCoordinator` works only
+  runs this process already owns: a team enabled from the TUI, whose TUI then exited, was taken over
+  by the always-running sidecar, and the restarted TUI and the web both showed "Running in another
+  host" with nothing to act on. A dead owner is adopted by a **UI read** instead
+  (`adoptOrphanedInteractiveHost`, called only from the coordination route and the TUI read), which
+  never displaces a live owner. `coordInteractiveHostsSmoke.ts` runs a real sweeping sidecar process.
 - **An unconfirmed request locks the panel.** The idempotency key makes a *replay* safe; it cannot
   make a second, different mutation safe while the first's outcome is unknown. A failed action is
   kept verbatim and only `r` (replay the same `requestId`) or `e` (discard) may follow it — the

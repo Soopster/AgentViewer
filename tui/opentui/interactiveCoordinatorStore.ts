@@ -19,6 +19,7 @@ import type { AgentProvider } from '../../lib/types'
 import type { CoordinatorInteractiveState } from '../../lib/coordinatorInteractiveState'
 import { COORDINATOR_NOTIFICATION_DELAY_MS, coordinatorAttentionPriority, coordinatorSignals, newCoordinatorSignals, type CoordinatorSignal } from '../../lib/coordinatorSignals'
 import { readCoordinatorReviewed, writeCoordinatorReviewed } from '../../lib/tui/coordinatorReviewed'
+import { getConfiguredTuiTeammateNotifications, setConfiguredTuiTeammateNotifications, type TuiTeammateNotifications } from '../../lib/tuiState'
 import { clearCoordinatorRequest, coordinatorRequestScope, PendingCoordinatorRequestError, readPendingCoordinatorRequest, reserveCoordinatorRequest } from '../../lib/tui/coordinatorRequests'
 import {
   readTuiSessionCoordinator,
@@ -51,12 +52,14 @@ export type InteractiveCoordinatorState = {
    */
   readonly reviewed: readonly string[]
   readonly pending: TuiSessionCoordinationRequest | null
+  /** Global, not per conversation: where teammate alerts are delivered. */
+  readonly notifications: TuiTeammateNotifications
 }
 
 const RECONCILE_MS = 5_000
 
 const IDLE: InteractiveCoordinatorState = {
-  open: false, session: null, data: null, loading: false, busy: false, error: null, pending: null, reviewed: [], observationUnavailable: false, requestStorageError: null,
+  open: false, session: null, data: null, loading: false, busy: false, error: null, pending: null, reviewed: [], observationUnavailable: false, requestStorageError: null, notifications: 'desktop',
 }
 
 let state: InteractiveCoordinatorState = IDLE
@@ -126,8 +129,32 @@ function advanceRevision(session: InteractiveCoordinatorSession): void {
 }
 const listeners = new Set<() => void>()
 
+let notifications: TuiTeammateNotifications = 'desktop'
+let notificationsLoaded: Promise<void> | null = null
+let notificationsChosen = false
+/** Loaded once, on first use — reading preferences must not be a boot cost. */
+function loadNotificationPreference(): void {
+  notificationsLoaded ??= getConfiguredTuiTeammateNotifications()
+    .then((mode) => { if (!notificationsChosen) { notifications = mode; commit({}) } })
+    .catch(() => {})
+}
+
+export function getInteractiveCoordinatorNotifications(): TuiTeammateNotifications {
+  return notifications
+}
+
+const NOTIFICATION_ORDER: readonly TuiTeammateNotifications[] = ['desktop', 'in-app', 'off']
+/** Cycle desktop → in-app → off, persisting the choice. */
+export function cycleInteractiveCoordinatorNotifications(): TuiTeammateNotifications {
+  notificationsChosen = true
+  notifications = NOTIFICATION_ORDER[(NOTIFICATION_ORDER.indexOf(notifications) + 1) % NOTIFICATION_ORDER.length]
+  commit({})
+  void setConfiguredTuiTeammateNotifications(notifications).catch(() => {})
+  return notifications
+}
+
 function commit(next: Partial<InteractiveCoordinatorState>): void {
-  state = { ...state, ...next }
+  state = { ...state, ...next, notifications }
   if (state.session) retained.set(sessionKey(state.session), state)
   for (const listener of listeners) listener()
 }
@@ -153,6 +180,9 @@ export function resetInteractiveCoordinatorStore(): void {
   refreshers.clear()
   observers.clear()
   state = IDLE
+  notifications = 'desktop'
+  notificationsLoaded = null
+  notificationsChosen = false
   retained.clear()
   revisions.clear()
   signalBaselines.clear()
@@ -189,6 +219,7 @@ function releaseUnneededFeed(session: InteractiveCoordinatorSession): void {
 
 /** Observe without opening the panel, changing focus, or sending any work. */
 export function observeInteractiveCoordinator(session: InteractiveCoordinatorSession): () => void {
+  loadNotificationPreference()
   const key = sessionKey(session)
   observers.set(key, (observers.get(key) ?? 0) + 1)
   if (!retained.has(key)) {
@@ -208,6 +239,7 @@ export function observeInteractiveCoordinator(session: InteractiveCoordinatorSes
 }
 
 export function openInteractiveCoordinator(session: InteractiveCoordinatorSession): void {
+  loadNotificationPreference()
   // Compared against the retained session, not a live one: a close keeps both
   // the session and its last read so reopening the same conversation paints
   // its roster immediately and refreshes underneath, rather than flashing empty.
@@ -217,7 +249,7 @@ export function openInteractiveCoordinator(session: InteractiveCoordinatorSessio
   // A different conversation's roster must never show under this session's
   // heading, so a switch drops the previous read rather than reusing it.
   const saved = retained.get(sessionKey(session))
-  state = { ...(saved ?? { ...IDLE, reviewed: readCoordinatorReviewed(sessionKey(session)) }), ...(!saved?.busy ? restorePending(session) : {}), open: true, session, loading: !saved?.data }
+  state = { ...(saved ?? { ...IDLE, reviewed: readCoordinatorReviewed(sessionKey(session)) }), ...(!saved?.busy ? restorePending(session) : {}), open: true, session, loading: !saved?.data, notifications }
   retained.set(sessionKey(session), state)
   for (const listener of listeners) listener()
   ensureFeed(session)

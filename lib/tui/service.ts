@@ -718,6 +718,7 @@ export async function readTuiSessionCoordinator(
     return remoteJson(`${encodeSessionPath(sessionId, '/coordination')}${providerQuery(provider)}`)
   }
   const coord = await coordination()
+  await coord.adoptOrphanedInteractiveHost(sessionId, provider).catch(() => {})
   const snapshot = await coord.readSessionCoordinator(sessionId, provider)
   const interactive = await coord.readInteractiveCoordinator(sessionId)
   const recoveries = snapshot ? await coord.readInteractiveRecoveries(snapshot.run.id) : []

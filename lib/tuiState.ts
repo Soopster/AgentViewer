@@ -1,5 +1,6 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
+import { copyFileSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { PROCEDURAL_THEME_NAMES } from '../tui/theme'
 import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../tui/theme'
@@ -173,6 +174,7 @@ type TuiState = {
   transcriptView?: unknown
   transcriptWidth?: unknown
   tabsEnabled?: unknown
+  teammateNotifications?: unknown
   splitPanes?: unknown
   splitOrientation?: unknown
   splitReaderShare?: unknown
@@ -234,10 +236,42 @@ async function readTuiState(): Promise<TuiState> {
   }
 }
 
+/**
+ * Every preference shares one file, so every write is a read-merge-write — and
+ * that was async and unserialized. Two quick toggles raced: both read the old
+ * file, and whichever write landed last erased the other's change (caught by
+ * cycling the teammate alert setting twice: the file kept the first value). A
+ * torn write was worse, reading back as `{}` so the next save wiped every
+ * preference. The file is a few hundred bytes, so the merge is synchronous —
+ * nothing can interleave inside it — written by temp-and-rename, and a file that
+ * cannot be parsed is backed up before it is replaced (herdr #4125).
+ */
+function mergeTuiStateSync(update: Partial<TuiState>): void {
+  let current: TuiState = {}
+  let unreadable = false
+  try {
+    current = JSON.parse(readFileSync(TUI_STATE_FILE, 'utf8')) as TuiState
+  } catch (error) {
+    unreadable = (error as NodeJS.ErrnoException).code !== 'ENOENT'
+  }
+  mkdirSync(path.dirname(TUI_STATE_FILE), { recursive: true })
+  if (unreadable) {
+    // A backup that fails leaves the original in place rather than replacing
+    // the only copy of the user's settings.
+    copyFileSync(TUI_STATE_FILE, `${TUI_STATE_FILE}.unreadable-${Date.now()}`)
+  }
+  const temporary = `${TUI_STATE_FILE}.${randomUUID()}.tmp`
+  try {
+    writeFileSync(temporary, JSON.stringify({ ...current, ...update }, null, 2), 'utf8')
+    renameSync(temporary, TUI_STATE_FILE)
+  } catch (error) {
+    try { unlinkSync(temporary) } catch { /* nothing was written */ }
+    throw error
+  }
+}
+
 async function writeTuiState(update: Partial<TuiState>): Promise<void> {
-  const current = await readTuiState()
-  await mkdir(path.dirname(TUI_STATE_FILE), { recursive: true })
-  await writeFile(TUI_STATE_FILE, JSON.stringify({ ...current, ...update }, null, 2), 'utf8')
+  mergeTuiStateSync(update)
 }
 
 export async function getConfiguredTuiTheme(): Promise<TuiThemeMode> {
@@ -253,15 +287,7 @@ export async function setConfiguredTuiTheme(theme: TuiThemeMode): Promise<void> 
 }
 
 export function setConfiguredTuiThemeSync(theme: TuiThemeMode): void {
-  let current: TuiState = {}
-  try {
-    const contents = readFileSync(TUI_STATE_FILE, 'utf8')
-    current = JSON.parse(contents) as TuiState
-  } catch {
-    current = {}
-  }
-  mkdirSync(path.dirname(TUI_STATE_FILE), { recursive: true })
-  writeFileSync(TUI_STATE_FILE, JSON.stringify({ ...current, theme }, null, 2), 'utf8')
+  mergeTuiStateSync({ theme })
 }
 
 export async function getConfiguredTuiRailVisible(): Promise<boolean> {
@@ -337,6 +363,23 @@ export async function getConfiguredTuiTranscriptWidth(): Promise<TuiTranscriptWi
 
 export async function setConfiguredTuiTranscriptWidth(transcriptWidth: TuiTranscriptWidth): Promise<void> {
   await writeTuiState({ transcriptWidth })
+}
+
+/**
+ * Where interactive-Coordinator teammate alerts go — herdr's `ui.toast.delivery`.
+ * `desktop` is the default because the alerts are what let a user walk away
+ * from a working team; herdr defaults to off, but it paints a per-pane state
+ * glyph everywhere, where this TUI shows one badge.
+ */
+export type TuiTeammateNotifications = 'off' | 'in-app' | 'desktop'
+
+export async function getConfiguredTuiTeammateNotifications(): Promise<TuiTeammateNotifications> {
+  const parsed = await readTuiState()
+  return parsed.teammateNotifications === 'off' || parsed.teammateNotifications === 'in-app' ? parsed.teammateNotifications : 'desktop'
+}
+
+export async function setConfiguredTuiTeammateNotifications(teammateNotifications: TuiTeammateNotifications): Promise<void> {
+  await writeTuiState({ teammateNotifications })
 }
 
 export async function getConfiguredTuiTabsEnabled(): Promise<boolean> {

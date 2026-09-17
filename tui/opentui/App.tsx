@@ -217,13 +217,14 @@ import { CoordinationPopover } from './CoordinationPopover'
 import { TeammatesPopover } from './TeammatesPopover'
 import { MODAL_SCRIM_Z_INDEX } from './layers'
 import { TeammatesAttention } from './TeammatesAttention'
-import { coordinatorSignalSuppressed } from '../../lib/coordinatorSignals'
+import { coordinatorAlertDelivery } from '../../lib/coordinatorSignals'
 import {
   closeInteractiveCoordinator,
   isInteractiveCoordinatorOpen,
   openInteractiveCoordinator,
   subscribeInteractiveCoordinator,
   subscribeInteractiveCoordinatorNotifications,
+  getInteractiveCoordinatorNotifications,
 } from './interactiveCoordinatorStore'
 import { PlaybookManagerPopover } from './PlaybookManagerPopover'
 import { getContinueInCliCommand } from '../../lib/cliContinue'
@@ -13289,9 +13290,10 @@ export default function OpenTuiApp() {
     renderer.on('focus', onFocus)
     renderer.on('blur', onBlur)
     const unsubscribe = subscribeInteractiveCoordinatorNotifications(({ session, signal, viewing }) => {
-      if (coordinatorSignalSuppressed(viewing, terminalFocusedRef.current)) return
-      if (!viewing) showNotice('info', `Teammates · ${signal.title} — ⌃K t in ${session.title}`, 6000)
-      notifyTeamEvent(signal.kind === 'finished' ? 'teammate finished' : 'teammate needs attention', `${signal.title}: ${signal.detail}`.slice(0, 160))
+      // Herdr's delivery setting: read at delivery, so a change applies at once.
+      const delivery = coordinatorAlertDelivery(getInteractiveCoordinatorNotifications(), viewing, terminalFocusedRef.current)
+      if (delivery.notice) showNotice('info', `Teammates · ${signal.title} — ⌃K t in ${session.title}`, 6000)
+      if (delivery.desktop) notifyTeamEvent(signal.kind === 'finished' ? 'teammate finished' : 'teammate needs attention', `${signal.title}: ${signal.detail}`.slice(0, 160))
     })
     return () => {
       unsubscribe()
