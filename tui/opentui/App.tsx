@@ -15268,7 +15268,7 @@ export default function OpenTuiApp() {
       }
       while (nodes.length > 0) {
         const element = nodes.pop()!
-        if (element.id.startsWith('card:')) {
+        if (element.id?.startsWith('card:')) {
           const offset = element.y - sb.content.y - scrollTop
           if (element.height > 0 && offset + element.height > 0) {
             anchorKey = element.id.slice('card:'.length)
