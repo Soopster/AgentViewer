@@ -17,7 +17,7 @@ import { fitText, joinMeta } from './textLayout'
 import { MODAL_CONTENT_Z_INDEX } from './layers'
 import type { ProtocolAgent } from '../../lib/agentProtocol'
 import { coordinatorAttention, type CoordinatorAttentionItem } from '../../lib/coordinatorAttention'
-import { coordinatorAgentActivity } from '../../lib/coordinatorInteractiveState'
+import { coordinatorAgentActivity, coordinatorStalledAgentIds } from '../../lib/coordinatorInteractiveState'
 import {
   closeInteractiveCoordinator,
   discardInteractiveCoordinatorAction,
@@ -80,6 +80,9 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   const delivery = data?.interactive.delivery ?? null
   const unconfirmedDelivery = delivery && !delivery.active ? delivery : null
   const recoveries = data?.recoveries ?? []
+  // Recomputed per read: the feed re-reads every few seconds, which is as fine
+  // as a 45s stall window needs.
+  const stalled = useMemo(() => coordinatorStalledAgentIds(data), [data])
   const attention = useMemo(
     () => (data?.permissions ?? []).filter((item) => item.agentId !== snapshot?.run.leadAgentId),
     [data, snapshot],
@@ -131,14 +134,24 @@ export const TeammatesPopover = memo(function TeammatesPopover({
     }
     if (key.name === 'escape' || key.name === 'q') { closeInteractiveCoordinator(); return }
 
+    // Uncertain delivery requires transcript inspection before retry/discard.
+    // Keep reading and roster navigation available while mutations are gated.
+    if (key.name === 'return' && selected) { onOpenSession(selected); closeInteractiveCoordinator(); return }
+    if (key.name === 'j' || key.name === 'down') {
+      setIndex((current) => Math.min(current + 1, Math.max(teammates.length - 1, 0)))
+      return
+    }
+    if (key.name === 'k' || key.name === 'up') {
+      setIndex((current) => Math.max(current - 1, 0))
+      return
+    }
+
     // An unconfirmed request owns the panel until it is resolved.
     if (pending) {
       if (key.name === 'r') { void retryInteractiveCoordinatorAction(); return }
       if (key.name === 'e') { discardInteractiveCoordinatorAction(); return }
       return
     }
-    // Inspection stays available after a run ends or coordination is off.
-    if (key.name === 'return' && selected) { onOpenSession(selected); closeInteractiveCoordinator(); return }
     if (key.name === '[' || key.name === ']') {
       setAttentionIndex(current => items.length ? (current + (key.name === ']' ? 1 : -1) + items.length) % items.length : 0)
       return
@@ -164,14 +177,6 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       if (key.name === 'e' && !busy && !terminal && canLead) {
         act({ action: 'enable', detail: 'Enable interactive coordination' }, 'Coordinator enabled for this conversation')
       }
-      return
-    }
-    if (key.name === 'j' || key.name === 'down') {
-      setIndex((current) => Math.min(current + 1, Math.max(teammates.length - 1, 0)))
-      return
-    }
-    if (key.name === 'k' || key.name === 'up') {
-      setIndex((current) => Math.max(current - 1, 0))
       return
     }
     if (key.name === 'e' && !enabled && !disabled) {
@@ -222,7 +227,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   // appears without being subtracted here pushes the footer off the frame.
   const bodyH = Math.max(popH - 6 - (draft || confirmOff ? 1 : 0), 6)
 
-  const attentionCount = items.length + attention.length + recoveries.length + (unconfirmedDelivery ? 1 : 0)
+  const attentionCount = items.length + attention.length + recoveries.length + stalled.length + (unconfirmedDelivery ? 1 : 0)
   // Status and its meta are separate <text>s so only the status carries colour;
   // colouring the whole joined line made every word shout at the same volume.
   const headline = !session ? 'No conversation selected'
@@ -249,7 +254,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
     : confirmOff
       ? [['y/⏎', 'turn off'], ['any other key', 'cancel']]
       : pending
-        ? [['r', 'retry same request'], ['e', 'edit after checking task history']]
+        ? [['r', 'retry same request'], ['⏎', 'inspect'], ['e', 'edit after checking task history'], ['esc', 'close']]
         : !enabled
           ? (teammates.length ? [['j/k', 'move'], ['⏎', 'open transcript'], ['e', 'new team'], ['esc', 'close']] : canLead ? [['e', 'enable coordinator'], ['esc', 'close']] : [['esc', 'close']])
           : [['j/k', 'move'], ['⏎', 'open'], ['d', 'ask'], ['m', 'message'],
@@ -368,10 +373,10 @@ export const TeammatesPopover = memo(function TeammatesPopover({
               {teammates.map((agent, agentIndex) => {
                 const isSelected = agentIndex === clamped
                 const accent = getProviderAccent(agent.provider)
-                const activity = data ? coordinatorAgentActivity(agent, data) : agent.status
-                const live = data?.runningAgentIds.includes(agent.id) || agent.turnActive
+                const activity = data ? coordinatorAgentActivity(agent, data, state.observationUnavailable, stalled.includes(agent.id)) : agent.status
+                const live = !state.observationUnavailable && !elsewhere && (data?.runningAgentIds.includes(agent.id) || agent.turnActive)
                 const needs = data?.permissions.some((item) => item.agentId === agent.id)
-                  || recoveries.includes(agent.id)
+                  || recoveries.includes(agent.id) || stalled.includes(agent.id)
                 return (
                   <box
                     key={agent.id}

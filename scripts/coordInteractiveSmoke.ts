@@ -59,7 +59,7 @@ try {
   async function mail(text: string) { await coord.sendExternalProtocolMessage(worker, { to: 'lead', body: text, kind: 'response' }) }
   await mail('Result A')
   const rejected = await coord.withCooperativeInbox('primary-chat', { message: 'Review it' }, async () => Response.json({ error: 'rejected' }, { status: 503 }))
-  assert.equal(rejected.status, 503)
+  assert.equal(rejected.status, 503, await rejected.clone().text())
   assert.equal((await state()).delivery, null)
   assert.ok((await coord.readExternalProtocolInbox(lead, { acknowledge: false })).messages.some(m => m.body.includes('Result A')), 'HTTP rejection preserves mail')
 

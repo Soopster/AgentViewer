@@ -9,12 +9,15 @@ let enabled = false
 let stopped = false
 let autoContinue = false
 let permissionPending = true
+let observationFails = false
+let executionElsewhere = false
+let approvalId = 'approval-1'
 const actions = []
 const state = () => ({
   snapshot: enabled || stopped ? { run: { id: 'browser-run', status: stopped ? 'stopped' : 'running', leadAgentId: 'lead' },
     agents: [{ id: 'lead', role: 'lead', name: 'lead', ...lead }, worker], tasks: [], messages: [], events: [] } : null,
-  interactive: { enabled, autoContinue, remainingTurns: 4, delivery: null }, recoveries: [], runningAgentIds: [worker.id],
-  permissions: enabled && permissionPending ? [{ agentId: worker.id, agentName: worker.name, permission: { id: 'approval-1', sessionId: worker.sessionId, provider: 'codex', title: 'Review command needs approval' } }] : [],
+  interactive: { enabled, autoContinue, remainingTurns: 4, delivery: null, executionElsewhere }, recoveries: [], runningAgentIds: [worker.id],
+  permissions: enabled && permissionPending ? [{ agentId: worker.id, agentName: worker.name, permission: { id: approvalId, sessionId: worker.sessionId, provider: 'codex', title: 'Review command needs approval' } }] : [],
 })
 const transcript = sessionId => [{ type: 'assistant', uuid: `${sessionId}-message`, session_id: sessionId, parent_tool_use_id: null, provider: 'codex',
   message: { role: 'assistant', content: [{ type: 'text', text: sessionId === worker.sessionId ? 'Reviewer transcript: inspected the requested files.' : 'Lead transcript: ready to coordinate.' }] } }]
@@ -29,6 +32,10 @@ try {
     if (url.pathname === '/api/provider') data = { provider: 'codex', providerInstanceId: 'codex', instances: [] }
     else if (url.pathname === '/api/sessions') data = { sessions: [lead] }
     else if (url.pathname.endsWith('/coordination')) {
+      if (observationFails && route.request().method() === 'GET') {
+        await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Fixture observation outage' }) })
+        return
+      }
       if (route.request().method() === 'POST') {
         const body = route.request().postDataJSON(); actions.push(body)
         if (body.action === 'enable') { enabled = true; stopped = false }
@@ -40,7 +47,7 @@ try {
       const sessionId = url.pathname.split('/')[3]
       data = { messages: transcript(sessionId), offset: 0, total: 1 }
     } else if (url.pathname.endsWith('/running')) {
-      data = { running: url.pathname.includes(worker.sessionId), pendingPermissions: url.pathname.includes(worker.sessionId) && permissionPending ? [{ type: 'codex_approval', event: { type: 'approval.requested', requestId: 'approval-1', threadId: worker.sessionId, method: 'item/commandExecution/requestApproval', params: { command: 'cat alpha.txt', cwd: lead.cwd, reason: 'Read requested code' } } }] : [], pendingPrompts: [] }
+      data = { running: url.pathname.includes(worker.sessionId), pendingPermissions: url.pathname.includes(worker.sessionId) && permissionPending ? [{ type: 'codex_approval', event: { type: 'approval.requested', requestId: approvalId, threadId: worker.sessionId, method: 'item/commandExecution/requestApproval', params: { command: 'cat alpha.txt', cwd: lead.cwd, reason: 'Read requested code' } } }] : [], pendingPrompts: [] }
     } else if (url.pathname.endsWith('/actions')) {
       actions.push(route.request().postDataJSON()); permissionPending = false
       data = { ok: true }
@@ -48,6 +55,17 @@ try {
     else if (url.pathname === `/api/sessions/${lead.sessionId}`) data = { info: lead }
     else if (url.pathname === `/api/sessions/${worker.sessionId}`) data = { info: { ...lead, sessionId: worker.sessionId, summary: worker.name } }
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(data) })
+  })
+  await context.grantPermissions(['notifications'], { origin })
+  // Capture notifications and control focus: herdr's rule is that a user who is
+  // looking at the team is not notified, so the page must be able to "blur".
+  await context.addInitScript(() => {
+    window.__notifications = []
+    window.__blurred = false
+    window.Notification = class { static permission = 'granted'; static requestPermission() { return Promise.resolve('granted') }
+      constructor(title, options) { window.__notifications.push({ title, body: options?.body }) } }
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => window.__blurred })
+    document.hasFocus = () => !window.__blurred
   })
   const page = await context.newPage()
   const errors = []
@@ -85,6 +103,27 @@ try {
   await page.getByRole('button', { name: 'Follow up', exact: true }).click()
   assert.equal(await page.getByLabel('Send to', { exact: true }).inputValue(), worker.id)
   assert.match(await page.getByLabel('Task or follow-up', { exact: true }).inputValue(), /reviewer/)
+  const roster = page.getByLabel('Persistent teammate conversations')
+  await roster.getByText(/Working · live turn/).waitFor({ timeout: 15000 })
+  const actionCount = actions.length
+  observationFails = true
+  await roster.getByText(/Unknown · last observation unavailable/).waitFor({ timeout: 15000 })
+  assert.equal(actions.length, actionCount, 'an observation outage must not submit work')
+  observationFails = false
+  await roster.getByText(/Working · live turn/).waitFor({ timeout: 15000 })
+  executionElsewhere = true
+  await roster.getByText(/Managed by another host/).waitFor({ timeout: 15000 })
+  assert.equal(await page.getByRole('button', { name: 'Ask teammate', exact: true }).isDisabled(), true)
+  executionElsewhere = false
+  await roster.getByText(/Working · live turn/).waitFor({ timeout: 15000 })
+  assert.deepEqual(await page.evaluate(() => window.__notifications), [], 'an approval held at first read, or raised while the user is looking, does not notify')
+  await page.evaluate(() => { window.__blurred = true })
+  approvalId = 'approval-2'; permissionPending = true
+  await page.waitForFunction(() => window.__notifications.length > 0, null, { timeout: 15000 })
+  const [notification] = await page.evaluate(() => window.__notifications)
+  assert.match(notification.title, /reviewer is waiting for your answer/)
+  await page.evaluate(() => { window.__blurred = false })
+  permissionPending = false
   await page.screenshot({ path: '/tmp/coordinator-docked-teammates.png', fullPage: true })
   await chatTab.click()
   assert.equal(await composer.inputValue(), 'Preserve this lead draft while inspecting reviewer')
@@ -99,5 +138,5 @@ try {
   await page.getByRole('button', { name: 'Enable coordinator', exact: true }).click()
   await page.getByText('Coordinator on', { exact: true }).waitFor()
   assert.equal(errors.length, 0, errors.join('\n'))
-  console.log('Rendered enablement, continuation preference, native attention, embedded transcript, lead draft preservation, and named follow-up passed')
+  console.log('Rendered enablement, continuation preference, native attention, embedded transcript, lead draft preservation, named follow-up, outage recovery, foreign-host activity, and blurred-only teammate notifications passed')
 } finally { await browser.close() }

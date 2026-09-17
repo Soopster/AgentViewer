@@ -13,11 +13,41 @@ export type CoordinatorInteractiveState = {
   permissions: { agentId: string; agentName: string; permission: PendingPermission }[]
 }
 
-export function coordinatorAgentActivity(agent: ProtocolAgent, state: Pick<CoordinatorInteractiveState, 'permissions' | 'recoveries' | 'runningAgentIds'>): string {
+/**
+ * How long delegated work may sit claimed with no provider turn before it is
+ * reported as stalled. Herdr gates a prompt on observed activity within five
+ * seconds of a terminal submission; a delegation here crosses the maintenance
+ * sweep and a provider spawn (a cold Pi session alone has taken 19s), so the
+ * gate is wider. Like herdr's `agent_prompt_stalled`, crossing it proves only
+ * that nothing was observed — never that the work was not delivered.
+ */
+export const COORDINATOR_START_STALL_MS = 45_000
+
+/**
+ * Managed teammates holding a claimed task that no provider turn has picked up
+ * within the stall window. External workers are excluded: they run in their
+ * own supervisors, which liveness already describes.
+ */
+export function coordinatorStalledAgentIds(state: CoordinatorInteractiveState | null, now = Date.now()): string[] {
+  const snapshot = state?.snapshot
+  if (!state || !snapshot || state.interactive.executionElsewhere || !['running', 'planning', 'blocked'].includes(snapshot.run.status)) return []
+  return snapshot.agents.filter(agent => {
+    if (agent.role !== 'teammate' || !agent.taskId || agent.turnActive || agent.sessionId.startsWith('external:')) return false
+    if (state.runningAgentIds.includes(agent.id) || state.recoveries.includes(agent.id) || state.permissions.some(item => item.agentId === agent.id)) return false
+    const task = snapshot.tasks.find(entry => entry.id === agent.taskId)
+    const claimedAt = task ? Date.parse(task.updatedAt) : NaN
+    return task?.status === 'claimed' && Number.isFinite(claimedAt) && now - claimedAt >= COORDINATOR_START_STALL_MS
+  }).map(agent => agent.id)
+}
+
+export function coordinatorAgentActivity(agent: ProtocolAgent, state: Pick<CoordinatorInteractiveState, 'permissions' | 'recoveries' | 'runningAgentIds'> & Partial<Pick<CoordinatorInteractiveState, 'interactive'>>, observationUnavailable = false, stalled = false): string {
+  if (observationUnavailable) return 'Unknown · last observation unavailable'
+  if (state.interactive?.executionElsewhere) return 'Managed by another host · inspect there'
   if (state.permissions.some(item => item.agentId === agent.id)) return 'Waiting for your answer'
   if (state.recoveries.includes(agent.id)) return 'Needs recovery · inspect before resuming'
   if (state.runningAgentIds.includes(agent.id)) return agent.status === 'blocked' ? 'Waiting for input' : 'Working · live turn'
   if (agent.turnActive) return 'Starting · awaiting provider activity'
+  if (stalled) return 'Stalled · no provider activity observed · inspect before resending'
   if (agent.status === 'blocked') return 'Blocked'
   if (agent.status === 'done') return 'Finished'
   if (agent.status === 'failed' || agent.status === 'stopped') return agent.status === 'failed' ? 'Failed' : 'Stopped'

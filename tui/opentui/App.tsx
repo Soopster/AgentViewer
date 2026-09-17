@@ -217,11 +217,13 @@ import { CoordinationPopover } from './CoordinationPopover'
 import { TeammatesPopover } from './TeammatesPopover'
 import { MODAL_SCRIM_Z_INDEX } from './layers'
 import { TeammatesAttention } from './TeammatesAttention'
+import { coordinatorSignalSuppressed } from '../../lib/coordinatorSignals'
 import {
   closeInteractiveCoordinator,
   isInteractiveCoordinatorOpen,
   openInteractiveCoordinator,
   subscribeInteractiveCoordinator,
+  subscribeInteractiveCoordinatorNotifications,
 } from './interactiveCoordinatorStore'
 import { PlaybookManagerPopover } from './PlaybookManagerPopover'
 import { getContinueInCliCommand } from '../../lib/cliContinue'
@@ -12955,8 +12957,8 @@ export default function OpenTuiApp() {
       showNotice('info', 'Send a first message before giving this conversation teammates', 4000)
       return
     }
-    // The panel owns its own read and poll; it is started here rather than at
-    // boot because reaching coordination state loads the send path.
+    // The attention badge observes this conversation without opening the panel.
+    // Opening it here reuses that feed and preserves the reader's draft.
     openInteractiveCoordinator({
       sessionId: session.sessionId,
       provider: session.provider ?? 'claude',
@@ -13274,6 +13276,29 @@ export default function OpenTuiApp() {
       }
     }
   })
+
+  // Interactive teammates notify on transitions, not on what a read already
+  // held (the store baselines each conversation's first read). Herdr's rule for
+  // quiet: the user is looking at that team AND the terminal is not known to be
+  // blurred — focus is unknown until the terminal reports it, which counts as
+  // focused so a terminal without focus reporting is not spammed.
+  const terminalFocusedRef = useRef<boolean | null>(null)
+  useEffect(() => {
+    const onFocus = () => { terminalFocusedRef.current = true }
+    const onBlur = () => { terminalFocusedRef.current = false }
+    renderer.on('focus', onFocus)
+    renderer.on('blur', onBlur)
+    const unsubscribe = subscribeInteractiveCoordinatorNotifications(({ session, signal, viewing }) => {
+      if (coordinatorSignalSuppressed(viewing, terminalFocusedRef.current)) return
+      if (!viewing) showNotice('info', `Teammates · ${signal.title} — ⌃K t in ${session.title}`, 6000)
+      notifyTeamEvent(signal.kind === 'finished' ? 'teammate finished' : 'teammate needs attention', `${signal.title}: ${signal.detail}`.slice(0, 160))
+    })
+    return () => {
+      unsubscribe()
+      renderer.off('focus', onFocus)
+      renderer.off('blur', onBlur)
+    }
+  }, [renderer])
 
   // Watch active runs started this session: notify on terminal status and on
   // newly blocked teammates, then drop finished runs from the watch list.
@@ -20104,7 +20129,7 @@ export default function OpenTuiApp() {
 
   return (
     <box width={width} height={height} flexDirection="column" backgroundColor={theme.bg}>
-      <TeammatesAttention theme={theme} width={width} />
+      <TeammatesAttention theme={theme} width={width} session={selectedSession} />
       <box
         flexGrow={1}
         paddingX={fullscreenMode ? 0 : 1}

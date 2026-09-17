@@ -14,12 +14,16 @@ export type CoordinatorAttentionItem = {
 /** Derived from durable state; reading attention never acknowledges model mail. */
 export function coordinatorAttention(snapshot: ProtocolRunSnapshot): CoordinatorAttentionItem[] {
   const items: CoordinatorAttentionItem[] = []
+  const ended = ['completed', 'failed', 'stopped'].includes(snapshot.run.status)
   for (const task of snapshot.tasks) {
     const base = { agentId: task.ownerAgentId, taskId: task.id }
     if (['completed', 'failed', 'cancelled'].includes(task.status)) items.push({ ...base,
       id: `result:${task.id}:${task.updatedAt}`, kind: 'result', title: `${task.title} · ${task.status}`,
       detail: task.resultSummary || task.resultDetail || 'No result summary supplied.',
     })
+    // Ended rooms retain results, but their plans/questions can no longer be
+    // acted on. Keep the original ledger untouched for transcript inspection.
+    if (ended) continue
     if (task.status === 'blocked') items.push({ ...base, id: `blocker:${task.id}:${task.updatedAt}`, kind: 'blocker', title: task.title,
       detail: [...snapshot.events].reverse().find(event => event.taskId === task.id && event.type === 'agent.blocked')?.summary || 'Teammate needs help to continue.',
     })
@@ -34,13 +38,13 @@ export function coordinatorAttention(snapshot: ProtocolRunSnapshot): Coordinator
         title: decision.question, detail: decision.impactIfWrong, decisionId: decision.id })
     }
   }
-  for (const message of snapshot.messages) {
+  for (const message of ended ? [] : snapshot.messages) {
     if (message.toAgentId === snapshot.run.leadAgentId && message.replyRequired && !message.resolvedAt) items.push({
       id: `message:${message.id}`, kind: 'message', title: 'Teammate needs a reply', detail: message.body,
       agentId: message.fromAgentId, messageId: message.id,
     })
   }
-  if (snapshot.run.requireReview && snapshot.run.review.status === 'pending') items.push({
+  if (!ended && snapshot.run.requireReview && snapshot.run.review.status === 'pending') items.push({
     id: `review:${snapshot.run.id}`, kind: 'review', title: 'Run review required', detail: 'Review task results in the Coordinator before finalizing.',
   })
   return items.sort((a, b) => Number(a.kind === 'result') - Number(b.kind === 'result'))

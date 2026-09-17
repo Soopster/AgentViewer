@@ -254,7 +254,10 @@ if (store.getInteractiveCoordinatorState().data?.interactive.autoContinue
 // repeating it.
 const retried = store.getInteractiveCoordinatorState().pending
 if (retried?.requestId !== pending?.requestId) fail('the pending request id changed before it was retried')
-await press('escape')
+const inspectedWhilePending = opened.length
+await press('return')
+if (opened.length !== inspectedWhilePending + 1) fail('an unconfirmed request prevented transcript inspection')
+if (store.getInteractiveCoordinatorState().open) fail('inspection did not return to the transcript')
 await act(async () => store.openInteractiveCoordinator({ sessionId: SESSION_ID, provider: PROVIDER, cwd: smokeRoot, title: 'Smoke chat' }))
 await settle(120)
 if (store.getInteractiveCoordinatorState().pending?.requestId !== pending?.requestId) fail('closing and reopening discarded the unconfirmed request')

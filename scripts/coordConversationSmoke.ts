@@ -72,6 +72,14 @@ try {
   const attention = coordinatorAttention(attentionFixture)
   assert.deepEqual(attention.map(item => item.kind).sort(), ['blocker', 'decision', 'plan'])
   assert.equal(attention.find(item => item.kind === 'plan')!.detail, 'Inspect README only')
+  for (const status of ['completed', 'failed', 'stopped']) {
+    const ended = structuredClone(attentionFixture)
+    ended.run.status = status
+    assert.deepEqual(coordinatorAttention(ended), [], 'ended rooms must not ask for plans, decisions or replies that cannot be submitted')
+    const results = structuredClone(after)
+    results.run.status = status
+    assert.equal(coordinatorAttention(results).filter(item => item.kind === 'result').length, 2, 'ending a room preserves task results for review')
+  }
   // Simulate server restart after all provider streams have settled. Durable
   // sessions should be rebound, without replaying completed provider turns.
   globalThis.__agentViewerCoordinatorControllers!.delete(snapshot.run.id)

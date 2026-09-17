@@ -844,6 +844,18 @@ which mirror `app/api/sessions/[sessionId]/coordination/route.ts` action for act
 - **A close keeps the session and its last read**, so reopening the same conversation paints its
   roster immediately; switching conversations drops the read, because another chat's roster under
   this one's heading is worse than a blank one.
+- **Teammate notifications fire on transitions, never on what a read already held**
+  (`lib/coordinatorSignals.ts`, herdr's rule). The store baselines each conversation's first read,
+  so launching the TUI or selecting an old chat replays nothing; a user taught that notifications
+  are noise stops reading them. Quiet requires positive evidence of looking: the panel open on that
+  conversation AND the terminal not known to be blurred (unknown focus counts as focused). The
+  root subscribes with `subscribeInteractiveCoordinatorNotifications`, which pushes events without
+  touching root state. A claimed task with no observed turn for `COORDINATOR_START_STALL_MS` reads
+  as stalled — "nothing observed", never "not delivered". Delivery waits `COORDINATOR_NOTIFICATION_DELAY_MS`
+  and re-checks the signal and focus when it fires (herdr's toast delay), so an approval answered
+  within a second never interrupts anyone. Reviewed-result markers persist in
+  `lib/tui/coordinatorReviewed.ts`; in memory, a restart re-flagged every result. Pinned by
+  `scripts/coordSignalsSmoke.ts` and the store smoke.
 - **An unconfirmed request locks the panel.** The idempotency key makes a *replay* safe; it cannot
   make a second, different mutation safe while the first's outcome is unknown. A failed action is
   kept verbatim and only `r` (replay the same `requestId`) or `e` (discard) may follow it — the
