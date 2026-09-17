@@ -62,6 +62,8 @@ import {
 // client, so the Coordinator panel's state costs no send-path import.
 import { extractPendingPermissions } from '../permissions'
 import { listViewRunningSessions } from '../sessionActivity'
+import { listWaitingSessions } from '../sessionRuntime'
+import { coordinatorBackgroundAgents } from '../coordinatorInteractiveState'
 import type { CoordinatorInteractiveState } from '../coordinatorInteractiveState'
 
 // The send path is loaded on first use, not at import (load-bearing for
@@ -728,7 +730,8 @@ export async function readTuiSessionCoordinator(
     return extractPendingPermissions(info.pendingPermissions, { sessionId: agent.sessionId, provider: agent.provider })
       .map((permission) => ({ agentId: agent.id, agentName: agent.name, permission }))
   }) ?? []
-  return { snapshot, interactive, recoveries, permissions, runningAgentIds }
+  const backgroundAgents = snapshot ? coordinatorBackgroundAgents(snapshot.agents, listWaitingSessions()) : []
+  return { snapshot, interactive, recoveries, permissions, runningAgentIds, backgroundAgents }
 }
 
 export type TuiSessionCoordinationRequest = {

@@ -131,6 +131,15 @@ if (!frame.includes('TEAMMATES')) fail('the roster heading is missing')
 // `coordinatorAgentActivity` is what the web panel shows too — a bare protocol
 // status ("idle") does not tell the user whether anything is waiting on them.
 if (!frame.includes('Available')) fail('the roster shows a protocol status instead of an activity')
+// Herdr keeps an agent "working" while background work will bring it back; the
+// TUI read assembles that from the runtime's waiting registry.
+const runtime = await import('../../lib/sessionRuntime')
+const novaSessionId = store.getInteractiveCoordinatorState().data!.snapshot!.agents.find(agent => agent.name === 'nova')!.sessionId
+runtime.setWaitingSession({ sessionId: novaSessionId, provider: 'claude',
+  backgroundTasks: [{ id: 'bg', type: 'subagent', status: 'running', description: 'search' }], sessionCrons: [] })
+await waitFor('background work in the roster', () => captureCharFrame().includes('Working in background · 1 background task'))
+runtime.clearWaitingSession(novaSessionId)
+await waitFor('nova available again', () => captureCharFrame().includes('Available'))
 
 if (process.env.DUMP_FRAME === '1') console.log(captureCharFrame())
 
@@ -337,5 +346,5 @@ await waitFor('fresh team in same chat', () => Boolean(store.getInteractiveCoord
 if (store.getInteractiveCoordinatorState().data?.snapshot?.tasks.length) fail('new team inherited old tasks')
 await coordination.stopProtocolRun(store.getInteractiveCoordinatorState().data!.snapshot!.run.id)
 
-console.log('Teammates popover smoke passed (enable, roster activity, inspect, priority order with id selection, review on open, drafts, continuation, worktrees, unconfirmed gate, turn off)')
+console.log('Teammates popover smoke passed (enable, roster activity, background work, inspect, priority order with id selection, review on open, drafts, continuation, worktrees, unconfirmed gate, turn off)')
 process.exit(0)

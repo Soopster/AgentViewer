@@ -857,7 +857,10 @@ which mirror `app/api/sessions/[sessionId]/coordination/route.ts` action for act
   and re-checks the signal and focus when it fires (herdr's toast delay), so an approval answered
   within a second never interrupts anyone. Both rosters sort by `coordinatorRosterOrder` (herdr's
   priority panel), so **TUI selection is by teammate id, never index** — a reorder would otherwise
-  retarget `m`/`r` to whoever moved into the row. Opening a teammate's transcript reviews its results. Reviewed-result markers persist in
+  retarget `m`/`r` to whoever moved into the row. Opening a teammate's transcript reviews its results.
+  `backgroundAgents` (from the Stop hook's waiting registry) keeps a teammate working after its turn
+  ends — background subagents/monitors and scheduled wake-ups count, **a background shell alone does
+  not** (herdr #3414: a dev server would otherwise hold it "working" forever). Reviewed-result markers persist in
   `lib/tui/coordinatorReviewed.ts`; in memory, a restart re-flagged every result. Pinned by
   `scripts/coordSignalsSmoke.ts` and the store smoke.
 - **An unconfirmed request locks the panel.** The idempotency key makes a *replay* safe; it cannot

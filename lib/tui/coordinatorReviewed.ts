@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
 // Which teammate results the user has reviewed, per conversation — herdr's
@@ -9,17 +9,29 @@ import path from 'node:path'
 // The web keeps the same markers in localStorage.
 const DATA_DIR = path.join(process.cwd(), '.agent-viewer-data', 'coordinator-reviewed-v1')
 const LIMIT = 500
+const BACKUP_DIR = path.join(DATA_DIR, 'backups')
 const fileFor = (scope: string) => path.join(DATA_DIR, `${createHash('sha256').update(scope).digest('hex')}.json`)
 
-export function readCoordinatorReviewed(scope: string): string[] {
-  try {
-    const parsed = JSON.parse(readFileSync(fileFor(scope), 'utf8')) as { scope?: string; reviewed?: unknown }
-    if (parsed.scope !== scope || !Array.isArray(parsed.reviewed)) return []
-    return parsed.reviewed.filter((entry): entry is string => typeof entry === 'string').slice(-LIMIT)
-  } catch {
-    // Missing or unreadable markers only re-show results; never block work.
-    return []
+type StoredMarkers = { state: 'missing' } | { state: 'unreadable' } | { state: 'ok'; reviewed: string[] }
+
+function readStored(scope: string): StoredMarkers {
+  let text: string
+  try { text = readFileSync(fileFor(scope), 'utf8') } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? { state: 'missing' } : { state: 'unreadable' }
   }
+  try {
+    const parsed = JSON.parse(text) as { scope?: string; reviewed?: unknown }
+    if (parsed.scope !== scope || !Array.isArray(parsed.reviewed)) return { state: 'unreadable' }
+    return { state: 'ok', reviewed: parsed.reviewed.filter((entry): entry is string => typeof entry === 'string').slice(-LIMIT) }
+  } catch {
+    return { state: 'unreadable' }
+  }
+}
+
+export function readCoordinatorReviewed(scope: string): string[] {
+  // Unreadable markers only re-show results; they never block work.
+  const stored = readStored(scope)
+  return stored.state === 'ok' ? stored.reviewed : []
 }
 
 /**
@@ -28,8 +40,20 @@ export function readCoordinatorReviewed(scope: string): string[] {
  * leave unparseable JSON that reads back as "nothing reviewed".
  */
 export function writeCoordinatorReviewed(scope: string, reviewed: readonly string[]): string[] {
-  const merged = [...new Set([...readCoordinatorReviewed(scope), ...reviewed])].slice(-LIMIT)
+  const stored = readStored(scope)
+  const merged = [...new Set([...(stored.state === 'ok' ? stored.reviewed : []), ...reviewed])].slice(-LIMIT)
   const file = fileFor(scope)
+  // Herdr #4125: state that cannot be loaded is preserved before anything
+  // replaces it, and left untouched if it cannot be preserved. Reading it as
+  // empty and writing over it would destroy the one copy worth recovering.
+  if (stored.state === 'unreadable') {
+    try {
+      mkdirSync(BACKUP_DIR, { recursive: true, mode: 0o700 })
+      copyFileSync(file, path.join(BACKUP_DIR, `${path.basename(file, '.json')}.${Date.now()}.json`))
+    } catch {
+      return merged
+    }
+  }
   const temporary = `${file}.${randomUUID()}.tmp`
   try {
     mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 })

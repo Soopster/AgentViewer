@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { extractPendingPermissions } from '@/lib/permissions'
 import { isAgentProvider } from '@/lib/provider'
+import { coordinatorBackgroundAgents } from '@/lib/coordinatorInteractiveState'
+import { listWaitingSessions } from '@/lib/sessionRuntime'
 import { readViewSessionInfo, readViewSessionRunning } from '@/lib/sessionBackend'
 import { setInteractiveCoordinatorEnabled, configureInteractiveCoordinator, readInteractiveCoordinator, readInteractiveRecoveries, reconcileInteractiveDelivery, resumeInteractiveAgent, createExternalProtocolTask, readSessionCoordinator, reviewExternalProtocolPlan, runExternalProtocolIdempotent, sendExternalProtocolMessage, sessionCoordinatorIdentity, resolveProtocolDecisionAdmin } from '@/lib/agentCoordination'
 
@@ -29,7 +31,8 @@ async function readState(sessionId: string, provider: Parameters<typeof readSess
     return extractPendingPermissions(info.pendingPermissions, { sessionId: agent.sessionId, provider: agent.provider })
       .map(permission => ({ agentId: agent.id, agentName: agent.name, permission }))
   }) ?? []
-  return { snapshot, interactive, recoveries, permissions, runningAgentIds }
+  const backgroundAgents = snapshot ? coordinatorBackgroundAgents(snapshot.agents, listWaitingSessions()) : []
+  return { snapshot, interactive, recoveries, permissions, runningAgentIds, backgroundAgents }
 }
 
 export async function GET(request: Request, { params }: { params: Promise<{ sessionId: string }> }) {

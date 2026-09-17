@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict'
 import type { ProtocolRunSnapshot } from '../lib/agentProtocol'
 import { coordinatorAttentionCount } from '../lib/coordinatorAttentionCount'
-import { COORDINATOR_START_STALL_MS, coordinatorAgentActivity, coordinatorStalledAgentIds, type CoordinatorInteractiveState } from '../lib/coordinatorInteractiveState'
+import { COORDINATOR_START_STALL_MS, coordinatorAgentActivity, coordinatorBackgroundAgents, coordinatorBackgroundWork, coordinatorStalledAgentIds, type CoordinatorInteractiveState } from '../lib/coordinatorInteractiveState'
 import { coordinatorAttentionPriority, coordinatorResultIdsForAgent, coordinatorRosterOrder, coordinatorSignals, coordinatorSignalSuppressed, newCoordinatorSignals } from '../lib/coordinatorSignals'
 
 const claimedAt = '2026-09-17T00:00:00.000Z'
@@ -99,10 +99,22 @@ assert.deepEqual(coordinatorResultIdsForAgent(roster.snapshot, 'asks'), [], 'wor
 assert.deepEqual(coordinatorRosterOrder(roster, coordinatorResultIdsForAgent(roster.snapshot, 'done').concat(idleResult), t0).map(agent => agent.id), ['asks', 'busy', 'done', 'idle'],
   'reading a teammate\'s results drops it out of the result tier')
 
+// ── Herdr's background-work rule (#1630, #3090, #3414) ──────────────────────
+assert.equal(coordinatorBackgroundWork([{ type: 'shell', status: 'running' }], []), null, 'a background shell alone is not the agent working')
+assert.deepEqual(coordinatorBackgroundWork([{ type: 'subagent', status: 'running' }, { type: 'monitor', status: 'pending' }, { type: 'shell', status: 'running' }], []), { tasks: 2, wakeups: 0 })
+assert.equal(coordinatorBackgroundWork([{ type: 'subagent', status: 'completed' }], []), null, 'finished background work does not keep anyone working')
+assert.deepEqual(coordinatorBackgroundWork([], [{ id: 'c1' }]), { tasks: 0, wakeups: 1 }, 'a scheduled wake-up will bring the agent back')
+const background = { ...state, backgroundAgents: coordinatorBackgroundAgents(state.snapshot!.agents, [{ sessionId: 'worker-chat', backgroundTasks: [{ type: 'subagent', status: 'running' }], sessionCrons: [{}] }]) }
+assert.deepEqual(background.backgroundAgents, [{ agentId: 'w1', tasks: 1, wakeups: 1 }])
+assert.equal(coordinatorAgentActivity(state.snapshot!.agents[1], background), 'Working in background · 1 background task · 1 scheduled wake-up')
+assert.deepEqual(coordinatorStalledAgentIds(background, late), [], 'an agent waiting on its own background work has not stalled')
+assert.equal(coordinatorAgentActivity(state.snapshot!.agents[1], { ...background, permissions: [{ agentId: 'w1', agentName: 'reviewer', permission: { id: 'p', title: 't' } as never }] }), 'Waiting for your answer',
+  'a question outranks background work: it is what the user can act on')
+
 // ── Herdr's focus rule ──────────────────────────────────────────────────────
 assert.equal(coordinatorSignalSuppressed(true, true), true, 'looking and focused: quiet')
 assert.equal(coordinatorSignalSuppressed(true, null), true, 'unknown focus counts as focused')
 assert.equal(coordinatorSignalSuppressed(true, false), false, 'looking at a blurred terminal is not looking')
 assert.equal(coordinatorSignalSuppressed(false, true), false, 'another conversation always notifies')
 
-console.log('Coordinator signals: stall window + exclusions, baseline-silent transitions, reviewed results, lead exclusion, attention priority, roster order, per-agent results, focus suppression passed')
+console.log('Coordinator signals: stall window + exclusions, baseline-silent transitions, reviewed results, lead exclusion, attention priority, roster order, per-agent results, background work, focus suppression passed')

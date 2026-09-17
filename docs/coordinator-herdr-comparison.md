@@ -223,6 +223,9 @@ difference decides most of the verdicts below.
 | Focusing an agent marks its completion seen (`mark_active_tab_seen`) | Opening a teammate's transcript reviews its results (`coordinatorResultIdsForAgent`), web and TUI | Adopted this pass |
 | Metadata tokens with TTL shown per agent (`metadata_tokens.rs`) | Roster activity labels plus provider context/usage in each transcript | Present in substance; no free-form token API needed |
 | Server handoff preserving PTYs (`handoff_runtime.rs`) | Turns run in the daemon and survive client restarts; a daemon replacement does not keep live turns | Not adopted: PTY handoff has no equivalent for SDK subprocess streams |
+| Background work keeps an agent working; a background shell alone does not (CHANGELOG #1630, #3090, #3291, #3414, #2851) | `coordinatorBackgroundWork` from Claude's Stop-hook `background_tasks`/`session_crons`: "Working in background · N tasks · N wake-ups", working tier, never stalled | Adopted this pass |
+| Unloadable saved state preserved before replacement (CHANGELOG #4125) | Reviewed markers back up an unreadable file first and leave it untouched if the backup fails | Adopted this pass |
+| Client-side view state tracked per client (0.9.0 #3526; SKILL.md "each TUI client tracks viewed completions independently") | Reviewed markers: per TUI data dir, per browser localStorage | Present |
 | Named agents, unique, validated (SKILL.md) | Protocol names, delegation requires exactly one active match | Present |
 | Detach without stopping work (README) | `agent-viewer web` daemon + `--attach`; turns run server-side | Present |
 | Resume supported agent sessions after restart (`agent_resume.rs`) | Provider sessions are durable by id; interrupted teammate execution waits for explicit recovery rather than auto-resuming | Present, deliberately stricter |
@@ -285,3 +288,33 @@ reason. It also asserts `⏎` on a teammate reviews its result, and the browser
 smoke asserts the web **Transcript** button clears **Mark reviewed**. Removing
 either review path, dropping the priority sort, dropping the result tier, and
 dropping the recency tiebreak were each verified to fail their smokes.
+
+### Background work and preserved state
+
+Herdr's changelog is a record of state it got wrong, and two entries apply
+directly. Claude Code, Copilot and Pi agents read as idle while background
+subagents or scheduled continuations were still due to wake them, which ended
+`agent wait` early; the opposite fix stopped a lone background shell from
+holding an agent "working" forever. Coordinator now reads the same distinction
+from Claude's Stop hook, which records in-flight `background_tasks` and
+`session_crons` into the runtime's waiting registry: running or pending tasks
+other than shells, and any scheduled wake-up, keep a teammate in the working
+tier, label it "Working in background", and exclude it from stalled starts. A
+permission question still outranks it, since that is what the user can act on.
+The field is optional on the wire, so an older daemon simply omits it. Only
+Claude reports background work today; other providers stay as they were.
+
+Herdr #4125 preserves a saved session that cannot be loaded before replacing
+it. The TUI's reviewed-result markers read an unreadable file as "nothing
+reviewed", which is right for display, but the next write then replaced the
+only copy. They now copy it to `backups/` first, and skip the write if the copy
+fails.
+
+`coordSignalsSmoke.ts` pins the shell exclusion, finished tasks, wake-ups, the
+label, the stall exclusion and question precedence; `coordConversationSmoke.ts`
+drives the real route with a subagent and a shell in the waiting registry;
+`teammatesPopoverSmoke.tsx` renders the label through the TUI read and watches
+it clear; `coordReviewedMarkersSmoke.ts` pins backup-before-replace and
+untouched-on-failure. Removing the shell filter, the stall exclusion, the
+backup, the abort-on-failed-backup, and either client's wiring were each
+verified to fail.

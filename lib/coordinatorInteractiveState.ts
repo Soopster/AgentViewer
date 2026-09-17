@@ -10,6 +10,11 @@ export type CoordinatorInteractiveState = {
   }
   runningAgentIds: string[]
   recoveries: string[]
+  /**
+   * Teammates whose turn ended with background work still due to report back.
+   * Optional: a daemon older than this field simply omits it.
+   */
+  backgroundAgents?: { agentId: string; tasks: number; wakeups: number }[]
   permissions: { agentId: string; agentName: string; permission: PendingPermission }[]
 }
 
@@ -25,6 +30,34 @@ export type CoordinatorInteractiveState = {
  * (`MAIL_SWEEP_INTERVAL_MS`); 15s is three missed passes. Crossing it proves
  * only that nothing was observed — never that the work was not delivered.
  */
+/**
+ * Background work that keeps a teammate "working" after its turn ends — herdr's
+ * rule (#1630, #3090, #3414): background subagents, MCP tasks, monitors and
+ * scheduled wakeups will wake the session with more to say, so an idle prompt
+ * there is not done. A background shell alone is not: a dev server can run for
+ * hours without the agent ever coming back to report.
+ */
+export function coordinatorBackgroundWork(
+  tasks: readonly { type: string; status: string }[],
+  wakeups: readonly unknown[],
+): { tasks: number; wakeups: number } | null {
+  const live = tasks.filter(task => task.type !== 'shell' && ['running', 'pending'].includes(task.status)).length
+  return live || wakeups.length ? { tasks: live, wakeups: wakeups.length } : null
+}
+
+/** Assemble `backgroundAgents` from the waiting-session registry (lib/sessionRuntime.ts). */
+export function coordinatorBackgroundAgents(
+  agents: readonly ProtocolAgent[],
+  waiting: readonly { sessionId: string; backgroundTasks: readonly { type: string; status: string }[]; sessionCrons: readonly unknown[] }[],
+): NonNullable<CoordinatorInteractiveState['backgroundAgents']> {
+  const bySession = new Map(waiting.map(entry => [entry.sessionId, entry]))
+  return agents.flatMap(agent => {
+    const entry = bySession.get(agent.sessionId)
+    const work = entry && coordinatorBackgroundWork(entry.backgroundTasks, entry.sessionCrons)
+    return work ? [{ agentId: agent.id, ...work }] : []
+  })
+}
+
 export const COORDINATOR_START_STALL_MS = 15_000
 
 /**
@@ -37,20 +70,25 @@ export function coordinatorStalledAgentIds(state: CoordinatorInteractiveState | 
   if (!state || !snapshot || state.interactive.executionElsewhere || !['running', 'planning', 'blocked'].includes(snapshot.run.status)) return []
   return snapshot.agents.filter(agent => {
     if (agent.role !== 'teammate' || !agent.taskId || agent.turnActive || agent.sessionId.startsWith('external:')) return false
-    if (state.runningAgentIds.includes(agent.id) || state.recoveries.includes(agent.id) || state.permissions.some(item => item.agentId === agent.id)) return false
+    if (state.runningAgentIds.includes(agent.id) || state.backgroundAgents?.some(entry => entry.agentId === agent.id) || state.recoveries.includes(agent.id) || state.permissions.some(item => item.agentId === agent.id)) return false
     const task = snapshot.tasks.find(entry => entry.id === agent.taskId)
     const claimedAt = task ? Date.parse(task.updatedAt) : NaN
     return task?.status === 'claimed' && Number.isFinite(claimedAt) && now - claimedAt >= COORDINATOR_START_STALL_MS
   }).map(agent => agent.id)
 }
 
-export function coordinatorAgentActivity(agent: ProtocolAgent, state: Pick<CoordinatorInteractiveState, 'permissions' | 'recoveries' | 'runningAgentIds'> & Partial<Pick<CoordinatorInteractiveState, 'interactive'>>, observationUnavailable = false, stalled = false): string {
+export function coordinatorAgentActivity(agent: ProtocolAgent, state: Pick<CoordinatorInteractiveState, 'permissions' | 'recoveries' | 'runningAgentIds'> & Partial<Pick<CoordinatorInteractiveState, 'interactive' | 'backgroundAgents'>>, observationUnavailable = false, stalled = false): string {
   if (observationUnavailable) return 'Unknown · last observation unavailable'
   if (state.interactive?.executionElsewhere) return 'Managed by another host · inspect there'
   if (state.permissions.some(item => item.agentId === agent.id)) return 'Waiting for your answer'
   if (state.recoveries.includes(agent.id)) return 'Needs recovery · inspect before resuming'
   if (state.runningAgentIds.includes(agent.id)) return agent.status === 'blocked' ? 'Waiting for input' : 'Working · live turn'
   if (agent.turnActive) return 'Starting · awaiting provider activity'
+  const background = state.backgroundAgents?.find(entry => entry.agentId === agent.id)
+  if (background) {
+    const parts = [background.tasks ? `${background.tasks} background task${background.tasks === 1 ? '' : 's'}` : '', background.wakeups ? `${background.wakeups} scheduled wake-up${background.wakeups === 1 ? '' : 's'}` : ''].filter(Boolean)
+    return `Working in background · ${parts.join(' · ')}`
+  }
   if (stalled) return 'Stalled · no provider activity observed · inspect before resending'
   if (agent.status === 'blocked') return 'Blocked'
   if (agent.status === 'done') return 'Finished'

@@ -118,7 +118,7 @@ export function coordinatorRosterOrder(
   const tier = (agent: ProtocolAgent) => {
     if (agent.status === 'blocked' || signals.some(signal => signal.agentId === agent.id && signal.kind === 'needs-attention')) return 3
     if (signals.some(signal => signal.agentId === agent.id && signal.kind === 'finished')) return 2
-    if (agent.turnActive || state.runningAgentIds.includes(agent.id)) return 1
+    if (agent.turnActive || state.runningAgentIds.includes(agent.id) || state.backgroundAgents?.some(entry => entry.agentId === agent.id)) return 1
     return 0
   }
   const changedAt = (agent: ProtocolAgent) => {

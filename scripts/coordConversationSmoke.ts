@@ -55,6 +55,14 @@ try {
   for (const ask of asks) await until(() => turns.has(ask.result.delegation.sessionId))
   const starting = await (await GET(new Request('http://localhost/coordination?provider=codex'), context)).json()
   assert.deepEqual(coordinatorStalledAgentIds(starting, Date.now() + 3_600_000), [], 'a dispatched turn awaiting its provider is not a stalled start')
+  // The route reports background work from the runtime's waiting registry, so
+  // both clients can show a teammate as working after its turn has ended.
+  const { setWaitingSession, clearWaitingSession } = await import('../lib/sessionRuntime')
+  const backgroundAsk = asks[0].result.delegation
+  setWaitingSession({ sessionId: backgroundAsk.sessionId, provider: 'codex', backgroundTasks: [{ id: 'b1', type: 'subagent', status: 'running', description: 'search' }, { id: 'b2', type: 'shell', status: 'running', description: 'dev server' }], sessionCrons: [] })
+  const waiting = await (await GET(new Request('http://localhost/coordination?provider=codex'), context)).json()
+  assert.deepEqual(waiting.backgroundAgents, [{ agentId: backgroundAsk.agentId, tasks: 1, wakeups: 0 }], 'the route counts background subagents and ignores shells')
+  clearWaitingSession(backgroundAsk.sessionId)
   for (const ask of asks) {
     const { agentId, sessionId } = ask.result.delegation
     await until(() => turns.has(sessionId))
