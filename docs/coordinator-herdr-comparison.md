@@ -233,6 +233,7 @@ difference decides most of the verdicts below.
 | Agent-reported metadata tokens shown in the sidebar (`metadata_tokens.rs`, `pane report-agent`) | `coordinatorAgentNote`: the teammate's own last progress/heartbeat/block/result line, quoted under its activity in both rosters | Adopted this pass |
 | `agent start <name> --kind <agent>`: each pane's agent is chosen per agent, so a workspace mixes kinds freely | A chat's team can now staff teammates from different providers: `p` cycles the next new teammate's provider in the TUI panel, a select in the web panel; the set is durable per conversation | Adopted this pass |
 | Closing a workspace with linked worktree workspaces needs explicit group intent (`workspace_group_close_required`), and a dirty checkout is never removed quietly (`worktree.rs`) | Turning a team off names what it leaves: teammate checkouts with uncommitted work, and turns still running (`readInteractiveTeardown`, read on demand) | Adopted this pass |
+| A name follows the current pane occupant and is cleared when that agent exits, is released or is replaced (SKILL.md, `app/agents.rs`) | `availableTeammateName`: stopped and failed teammates release their name; a `done` one keeps it while its session is live, because that is what a follow-up reuses | Adopted this pass |
 | Named agents, unique, validated (SKILL.md) | Protocol names, delegation requires exactly one active match | Present |
 | Detach without stopping work (README) | `agent-viewer web` daemon + `--attach`; turns run server-side | Present |
 | Resume supported agent sessions after restart (`agent_resume.rs`) | Provider sessions are durable by id; interrupted teammate execution waits for explicit recovery rather than auto-resuming | Present, deliberately stricter |
@@ -609,3 +610,20 @@ lose work. Two of these survived their first mutation — the fixture's teammate
 had their own clean worktrees, so the shared-checkout case was passing for the
 wrong reason, and the unreadable case was not covered at all. Both now fail
 when the rule is removed.
+
+### Teammate names are a pool, not a ledger
+
+Herdr clears an agent's name when that agent exits. Coordinator held a name for
+every teammate a run had ever created, and an interactive chat is long-lived by
+design: the ninth delegation failed with "Teammate name pool exhausted" while
+nothing was running, because eight stopped teammates still owned the pool.
+
+`availableTeammateName` frees a name when its teammate is stopped or failed. A
+`done` teammate keeps its name while its session is still live, because that is
+exactly the teammate a follow-up reuses. `resolveRecipientsSync` already
+preferred "the newest active exact match" for a name — its comment promised
+reuse that allocation never delivered, and now both halves agree.
+
+`scripts/coordTeammateNamesSmoke.ts` pins each status, the done-with-live-session
+case, and that retiring one teammate frees exactly its own name; two mutations
+were verified to fail it.

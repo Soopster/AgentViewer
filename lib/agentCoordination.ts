@@ -272,6 +272,29 @@ const MAX_LEAD_INTERVENTIONS = 3
 const MAX_FORCED_INTERVENTIONS = 2
 const TEAMMATE_NAMES = ['nova', 'orion', 'lyra', 'vega', 'atlas', 'rhea', 'iris', 'flint'] as const
 
+/**
+ * The first free teammate name, or undefined when every one is held.
+ *
+ * A retired participant does not hold its name — herdr's rule, where a name
+ * follows the current pane occupant and is cleared when that agent exits, is
+ * released or is replaced. Without it an interactive chat, which is long-lived
+ * by design, refused its ninth delegation ("Teammate name pool exhausted")
+ * with nothing running: eight stopped teammates still owned the pool.
+ * `resolveRecipientsSync` already prefers the newest active holder of a name,
+ * so mail follows the replacement rather than the retired one.
+ *
+ * A `done` teammate keeps its name while its session is still live, because
+ * that is the teammate a follow-up reuses.
+ */
+export { availableTeammateName as __availableTeammateNameForSmoke }
+function availableTeammateName(agents: readonly ProtocolAgent[], liveSessions?: ReadonlySet<string> | Map<string, string>): typeof TEAMMATE_NAMES[number] | undefined {
+  const has = (id: string) => liveSessions instanceof Map ? liveSessions.has(id) : Boolean(liveSessions?.has(id))
+  const held = new Set(agents
+    .filter(agent => !['failed', 'stopped'].includes(agent.status) && (agent.status !== 'done' || has(agent.id)))
+    .map(agent => agent.name))
+  return TEAMMATE_NAMES.find(name => !held.has(name))
+}
+
 let database: SqliteDatabase | null = null
 let databaseOpenPromise: Promise<SqliteDatabase> | null = null
 let writeQueue: Promise<unknown> = Promise.resolve()
@@ -8618,7 +8641,7 @@ async function beginExecutionPhase(controller: RunController): Promise<void> {
   for (let index = existingTeammates.length; index < teammateCount; index += 1) {
     if (controller.stopped) return
     const roster = listAgentsSync(db, controller.runId)
-    const name = TEAMMATE_NAMES.find(name => !roster.some(agent => agent.name === name))
+    const name = availableTeammateName(roster, controller.sessionIds)
     if (!name) break
     const teammateProvider = controller.teammateProviders[index % controller.teammateProviders.length] ?? controller.provider
     const usedNumbers = roster.map(agent => Number(/^agent-(\d+)$/.exec(agent.id)?.[1]) || 0)
@@ -8665,9 +8688,8 @@ export async function spawnAdditionalTeammate(
   const agent = requireExternalParticipantSync(db, identity)
   if (agent.role !== 'lead') throw new Error('Only the Coordinator lead can spawn teammates')
   const existing = listAgentsSync(db, controller.runId)
-  const usedNames = new Set(existing.map((a) => a.name))
-  const name = TEAMMATE_NAMES.find((candidate) => !usedNames.has(candidate))
-  if (!name) throw new Error(`Teammate name pool exhausted — a run supports at most ${TEAMMATE_NAMES.length} teammates`)
+  const name = availableTeammateName(existing, controller.sessionIds)
+  if (!name) throw new Error(`Teammate name pool exhausted — a run supports at most ${TEAMMATE_NAMES.length} live teammates; stop one before adding another`)
   const teammateNumbers = existing
     .map((a) => /^agent-(\d+)$/.exec(a.id)?.[1])
     .filter((value): value is string => Boolean(value))
