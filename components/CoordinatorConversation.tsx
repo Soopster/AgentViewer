@@ -38,6 +38,8 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  // What turning off would leave behind; read only when the user asks to.
+  const [teardown, setTeardown] = useState<{ worktrees: Array<{ agentName: string; branch: string; path: string; changedFiles: number }>; runningTurns: string[] } | null>(null)
   const [seen, setSeen] = useState<string[]>([])
   // Herdr's ui.toast.delivery, per browser. Read through a ref so the polling
   // effect sees a change without being torn down and re-subscribed.
@@ -154,8 +156,27 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
     <div className="av-coord-conversation-heading"><strong>Teammates{visible.length + nativeAttention.length ? ` · ${visible.length + nativeAttention.length} need attention` : ''}</strong>
     {terminal ? <span className="text-sm text-muted-foreground">Coordinator off</span> : null}
     {terminal || !state?.interactive.enabled ? <Button size="sm" variant="outline" disabled={locked || !canLead} onClick={() => { requestTeammateNotifications(); void send({ action: 'enable', detail: 'Enable interactive coordination' }) }}>Enable coordinator</Button> : <span className="text-sm text-muted-foreground">Coordinator on</span>}
-    {state?.interactive.enabled && !terminal ? <Button size="sm" variant="ghost" disabled={locked || !canLead} title="Stop teammate work and automatic continuation; keep conversation history" onClick={() => void send({ action: 'disable', detail: 'Turn off coordination for this conversation' })}>Turn off</Button> : null}
+    {state?.interactive.enabled && !terminal ? <Button size="sm" variant="ghost" disabled={locked || !canLead} title="Stop teammate work and automatic continuation; keep conversation history" onClick={async () => {
+      // Herdr never closes a workspace group or a dirty checkout silently.
+      // Ending a team leaves its teammate branches on disk, so say so first.
+      if (!teardown) {
+        try {
+          const response = await fetch(`${endpoint}/teardown?provider=${session.provider}`)
+          const data = await response.json()
+          if (response.ok && (data.worktrees?.length || data.runningTurns?.length)) { setTeardown(data); return }
+        } catch { /* fall through: a failed inspection must not block turning off */ }
+      }
+      setTeardown(null)
+      void send({ action: 'disable', detail: 'Turn off coordination for this conversation' })
+    }}>Turn off</Button> : null}
     </div>
+    {teardown ? <div role="alert" className="rounded border p-3">
+      <p>Turning off leaves these behind — the branches stay on disk:</p>
+      {teardown.runningTurns.length ? <p>Still working: {teardown.runningTurns.join(', ')}</p> : null}
+      {teardown.worktrees.map(entry => <p key={entry.path}>{entry.agentName}: {entry.changedFiles < 0 ? `${entry.branch || entry.path} could not be read` : `${entry.changedFiles} uncommitted in ${entry.branch || entry.path}`}</p>)}
+      <Button size="sm" variant="outline" disabled={locked} onClick={() => { setTeardown(null); void send({ action: 'disable', detail: 'Turn off coordination for this conversation' }) }}>Turn off anyway</Button>
+      <Button size="sm" variant="ghost" onClick={() => setTeardown(null)}>Keep coordinating</Button>
+    </div> : null}
     <div id={`${id}-body`} className="av-coord-conversation-body">
     {state?.interactive.enabled ? <label className="av-coord-alerts">Alerts
       <NativeSelect value={alerts} aria-label="Teammate alerts" onChange={event => {

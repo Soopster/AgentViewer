@@ -22,6 +22,7 @@ import { readCoordinatorReviewed, writeCoordinatorReviewed } from '../../lib/tui
 import { getConfiguredTuiTeammateNotifications, setConfiguredTuiTeammateNotifications, type TuiTeammateNotifications } from '../../lib/tuiState'
 import { clearCoordinatorRequest, coordinatorRequestScope, PendingCoordinatorRequestError, readPendingCoordinatorRequest, reserveCoordinatorRequest } from '../../lib/tui/coordinatorRequests'
 import {
+  readTuiInteractiveTeardown,
   readTuiSessionCoordinator,
   sendTuiSessionCoordination,
   subscribeTuiProtocolRunChanges,
@@ -384,6 +385,22 @@ async function submit(
  * an unreviewed result is worth knowing about but is not waiting on anyone, so
  * it must not read as urgent — or the urgent label stops meaning anything.
  */
+export type InteractiveCoordinatorTeardown = Awaited<ReturnType<typeof readTuiInteractiveTeardown>>
+
+/**
+ * What turning the open team off would leave behind. Read on demand — it runs
+ * `git status` per teammate checkout — and never cached across conversations.
+ */
+export async function readInteractiveCoordinatorTeardown(): Promise<InteractiveCoordinatorTeardown | null> {
+  const session = state.session
+  if (!session) return null
+  try {
+    return await readTuiInteractiveTeardown(session.sessionId, session.provider)
+  } catch {
+    return null
+  }
+}
+
 export function getInteractiveCoordinatorAttention(): string {
   let total = 0
   let finished = 0

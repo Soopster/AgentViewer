@@ -7193,6 +7193,46 @@ export async function readInteractiveAttention(limit = 25): Promise<Array<{
   return summary
 }
 
+/**
+ * What turning this team off would leave behind — herdr's group-close rule
+ * (`workspace_group_close_required`: closing a workspace with linked worktree
+ * workspaces needs explicit intent) and its refusal to remove a dirty worktree
+ * without `--force`. Ending a run does not delete a teammate's checkout, so
+ * uncommitted work simply stops being mentioned anywhere; this is what the
+ * confirmation says instead.
+ *
+ * Read on demand, never on a poll: it runs `git status` once per teammate
+ * checkout.
+ */
+export async function readInteractiveTeardown(sessionId: string, provider: AgentProvider): Promise<{
+  worktrees: Array<{ agentName: string; branch: string; path: string; changedFiles: number }>
+  runningTurns: string[]
+}> {
+  const snapshot = await readSessionCoordinator(sessionId, provider)
+  if (!snapshot) return { worktrees: [], runningTurns: [] }
+  const lead = snapshot.agents.find(agent => agent.id === snapshot.run.leadAgentId)
+  const teammates = snapshot.agents.filter(agent => agent.role === 'teammate')
+  const worktrees: Array<{ agentName: string; branch: string; path: string; changedFiles: number }> = []
+  for (const agent of teammates) {
+    // A teammate sharing the lead's checkout has nothing of its own to leave.
+    if (!agent.worktreePath || (lead && agent.worktreePath === lead.worktreePath)) continue
+    const changed = await changedPaths(agent.worktreePath).catch(() => null)
+    // An unreadable checkout is reported as "something may be there" rather
+    // than silently as clean: the point of this is not to lose work.
+    worktrees.push({ agentName: agent.name, branch: agent.worktreeBranch, path: agent.worktreePath, changedFiles: changed ? changed.length : -1 })
+  }
+  return {
+    worktrees: worktrees.filter(entry => entry.changedFiles !== 0),
+    runningTurns: teammates.filter(agent => agent.turnActive || getRunningSessionInfo(agent.sessionId).running).map(agent => agent.name),
+  }
+}
+
+/** Test seam: point a teammate at its own checkout without a worktree run. */
+export async function __setAgentWorktreeForSmoke(runId: string, agentId: string, worktreePath: string, branch: string): Promise<void> {
+  await enqueueWrite(db => db.prepare('UPDATE protocol_agents SET worktree_path = ?, worktree_branch = ? WHERE run_id = ? AND id = ?')
+    .run(worktreePath, branch, runId, agentId))
+}
+
 export async function readInteractiveRecoveries(runId: string): Promise<string[]> {
   const db = await getDatabase()
   const snapshot = readSnapshotSync(db, runId)

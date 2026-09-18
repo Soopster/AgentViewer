@@ -17,6 +17,25 @@ import type { AgentProvider } from '../../lib/types'
 
 /** Providers a chat can staff a NEW teammate from; cycled with `p`. */
 const COORDINATOR_TEAMMATE_PROVIDERS: readonly AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi']
+
+/**
+ * Herdr refuses to close a workspace with linked worktree workspaces without
+ * explicit group intent, and never removes a dirty checkout quietly. Ending a
+ * team leaves its teammate checkouts on disk with nothing pointing at them, so
+ * the confirmation names them instead of asking a bare yes/no.
+ */
+function teardownWarning(teardown: InteractiveCoordinatorTeardown | null): string | null {
+  if (!teardown) return null
+  const parts: string[] = []
+  if (teardown.runningTurns.length > 0) parts.push(`${teardown.runningTurns.join(', ')} still working`)
+  for (const entry of teardown.worktrees) {
+    parts.push(entry.changedFiles < 0
+      ? `${entry.agentName}: ${entry.branch || entry.path} could not be read`
+      : `${entry.agentName}: ${entry.changedFiles} uncommitted in ${entry.branch || entry.path}`)
+  }
+  if (parts.length === 0) return null
+  return `Turn off coordination? ${parts.join(' · ')} — branches stay on disk.`
+}
 import { fitText, joinMeta } from './textLayout'
 import { MODAL_CONTENT_Z_INDEX } from './layers'
 import type { ProtocolAgent } from '../../lib/agentProtocol'
@@ -25,6 +44,8 @@ import { coordinatorResultIdsForAgent, coordinatorRosterOrder } from '../../lib/
 import { coordinatorAgentActivity, coordinatorAgentNote, coordinatorAgentWorkspace, coordinatorStalledAgentIds } from '../../lib/coordinatorInteractiveState'
 import {
   closeInteractiveCoordinator,
+  readInteractiveCoordinatorTeardown,
+  type InteractiveCoordinatorTeardown,
   discardInteractiveCoordinatorAction,
   getInteractiveCoordinatorState,
   retryInteractiveCoordinatorAction,
@@ -70,6 +91,9 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   const [attentionIndex, setAttentionIndex] = useState(0)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [confirmOff, setConfirmOff] = useState(false)
+  // What turning off would leave behind: teammate checkouts with uncommitted
+  // work, and turns still running. Read when the confirm opens, never polled.
+  const [teardown, setTeardown] = useState<InteractiveCoordinatorTeardown | null>(null)
   // Provider for the NEXT new teammate; an existing one keeps its own. `null`
   // means the lead conversation's provider.
   const [newTeammateProvider, setNewTeammateProvider] = useState<AgentProvider | null>(null)
@@ -220,7 +244,12 @@ export const TeammatesPopover = memo(function TeammatesPopover({
         received ? 'Delivery confirmed' : 'Mail requeued for the next message')
       return
     }
-    if (key.name === 'x' && !disabled) { setConfirmOff(true); return }
+    if (key.name === 'x' && !disabled) {
+      setConfirmOff(true)
+      setTeardown(null)
+      void readInteractiveCoordinatorTeardown().then(setTeardown)
+      return
+    }
     if (key.name === 'r' && selected && !disabled) {
       if (!recoveries.includes(selected.id)) {
         onNotice('info', `${selected.name} does not need recovery`, 3000)
@@ -520,7 +549,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       ) : confirmOff ? (
         <box height={1} paddingX={1}>
           <text fg={theme.amber} wrapMode="none">
-            {fitText('Turn off coordination? Teammate work stops; this conversation and its history stay.', innerW)}
+            {fitText(teardownWarning(teardown) ?? 'Turn off coordination? Teammate work stops; this conversation and its history stay.', innerW)}
           </text>
         </box>
       ) : null}

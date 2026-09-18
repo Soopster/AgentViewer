@@ -232,6 +232,7 @@ difference decides most of the verdicts below.
 | Every pane marked in the sidebar, so the stuck one is never hunted for (README, `aggregate.rs`) | `GET /api/agent-protocol/attention` + a per-row mark in the web session list (`! n` amber waiting, `✓ n` green results); the TUI's global badge already did this | Adopted this pass |
 | Agent-reported metadata tokens shown in the sidebar (`metadata_tokens.rs`, `pane report-agent`) | `coordinatorAgentNote`: the teammate's own last progress/heartbeat/block/result line, quoted under its activity in both rosters | Adopted this pass |
 | `agent start <name> --kind <agent>`: each pane's agent is chosen per agent, so a workspace mixes kinds freely | A chat's team can now staff teammates from different providers: `p` cycles the next new teammate's provider in the TUI panel, a select in the web panel; the set is durable per conversation | Adopted this pass |
+| Closing a workspace with linked worktree workspaces needs explicit group intent (`workspace_group_close_required`), and a dirty checkout is never removed quietly (`worktree.rs`) | Turning a team off names what it leaves: teammate checkouts with uncommitted work, and turns still running (`readInteractiveTeardown`, read on demand) | Adopted this pass |
 | Named agents, unique, validated (SKILL.md) | Protocol names, delegation requires exactly one active match | Present |
 | Detach without stopping work (README) | `agent-viewer web` daemon + `--attach`; turns run server-side | Present |
 | Resume supported agent sessions after restart (`agent_resume.rs`) | Provider sessions are durable by id; interrupted teammate execution waits for explicit recovery rather than auto-resuming | Present, deliberately stricter |
@@ -583,3 +584,28 @@ second:
 So four of the five providers can staff an interactive teammate today, and the
 fifth says why it cannot. `npm run opencode:harness:smoke` passes with the new
 spawn path.
+
+### What turning a team off leaves behind
+
+Herdr refuses to close a workspace that has linked worktree workspaces unless
+the user says `--group`, and refuses to remove a checkout with modified or
+untracked files without `--force`. Coordinator's "Turn off" ended a team with a
+bare yes/no, and a worktree-backed team's branches simply stayed on disk with
+nothing pointing at them — the work was not lost, but nothing said where it
+went.
+
+`readInteractiveTeardown` now answers that question and both confirmations ask
+it before turning off: which teammates still have a turn running, and which
+teammate checkouts hold uncommitted files. It runs `git status` once per
+teammate checkout, so it is read when the user asks to turn off and never on a
+poll.
+
+Three rules, each pinned by `coordConversationSmoke.ts` against real worktrees:
+a clean checkout is not mentioned; a checkout **shared with the lead** is never
+mentioned, dirty or not, because that is the user's own working copy and ending
+the team does not strand it; and a checkout that cannot be read is reported as
+unknown rather than assumed clean, since the point of the warning is not to
+lose work. Two of these survived their first mutation — the fixture's teammates
+had their own clean worktrees, so the shared-checkout case was passing for the
+wrong reason, and the unreadable case was not covered at all. Both now fail
+when the rule is removed.

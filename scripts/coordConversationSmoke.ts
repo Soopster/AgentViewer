@@ -144,6 +144,39 @@ try {
     void identity
   }
 
+  // Turning a team off leaves its teammate checkouts on disk, so the
+  // confirmation has to name what it is leaving (herdr's group-close rule and
+  // its refusal to remove a dirty worktree quietly).
+  {
+    const identity = await coord.sessionCoordinatorIdentity('primary-chat', 'codex')
+    const snapshot = (await coord.readSessionCoordinator('primary-chat', 'codex'))!
+    const teammate = snapshot.agents.find(agent => agent.role === 'teammate')!
+    const clean = await coord.readInteractiveTeardown('primary-chat', 'codex')
+    assert.deepEqual(clean.worktrees, [], 'clean teammate checkouts leave nothing behind')
+    // A shared checkout is the user's own: dirty or not, ending the team does
+    // not strand it, so reporting it would be noise. The lead's copy is dirty
+    // here precisely so the exclusion has to be the reason it is not listed.
+    writeFileSync(path.join(cwd, 'lead-scratch.md'), 'lead work in progress\n')
+    const leadPath = snapshot.agents.find(agent => agent.role === 'lead')!.worktreePath
+    await coord.__setAgentWorktreeForSmoke?.(identity.runId, teammate.id, leadPath, 'main')
+    assert.deepEqual((await coord.readInteractiveTeardown('primary-chat', 'codex')).worktrees, [],
+      'a teammate sharing the lead checkout leaves nothing of its own')
+    // Give one teammate its own dirty checkout, the way a worktree run does.
+    const lane = path.join(cwd, 'lane')
+    execFileSync('git', ['-C', cwd, 'worktree', 'add', '-q', '-b', 'coord/lane', lane])
+    writeFileSync(path.join(lane, 'draft.md'), 'work in progress\n')
+    await coord.__setAgentWorktreeForSmoke?.(identity.runId, teammate.id, lane, 'coord/lane')
+    const dirty = await coord.readInteractiveTeardown('primary-chat', 'codex')
+    assert.deepEqual(dirty.worktrees.map(entry => [entry.agentName, entry.branch, entry.changedFiles]), [[teammate.name, 'coord/lane', 1]],
+      'an uncommitted file in a teammate checkout is reported before turning off')
+    // A checkout that cannot be read is reported as unknown, not as clean:
+    // the point of this warning is not to lose work.
+    await coord.__setAgentWorktreeForSmoke?.(identity.runId, teammate.id, path.join(cwd, 'gone'), 'coord/gone')
+    const unreadable = await coord.readInteractiveTeardown('primary-chat', 'codex')
+    assert.deepEqual(unreadable.worktrees.map(entry => entry.changedFiles), [-1], 'an unreadable teammate checkout is reported, not assumed clean')
+    void identity
+  }
+
   // A run that has ended cannot be resumed, so it must not ask to be: an
   // interrupted teammate in a stopped room reads Stopped, not "needs recovery".
   {

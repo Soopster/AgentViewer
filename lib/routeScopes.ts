@@ -69,6 +69,8 @@ export const ROUTE_SCOPES: Record<string, Partial<Record<HttpMethod, RouteScope>
   '/api/provenance/blame': { GET: 'read' },
 
   // --- Providers ---------------------------------------------------------
+  // What turning a team off would leave behind (git status per checkout).
+  '/api/sessions/[sessionId]/coordination/teardown': { GET: 'read' },
   // Teammate attention per conversation, for the session list.
   '/api/agent-protocol/attention': { GET: 'read' },
   // The version handshake an attached client uses before relying on a route.

@@ -489,6 +489,18 @@ export async function listTuiRunningSessions(): Promise<Awaited<ReturnType<typeo
  * Whether the daemon this TUI is attached to can serve it, or null when it can
  * (and when running in-process, where there is no daemon to mismatch).
  */
+/** What turning this team off would leave behind; see readInteractiveTeardown. */
+export async function readTuiInteractiveTeardown(sessionId: string, provider: AgentProvider): Promise<{
+  worktrees: Array<{ agentName: string; branch: string; path: string; changedFiles: number }>
+  runningTurns: string[]
+}> {
+  if (isRemoteAttached()) {
+    return remoteJson(`${encodeSessionPath(sessionId, '/coordination/teardown')}${providerQuery(provider)}`)
+  }
+  const coord = await coordination()
+  return coord.readInteractiveTeardown(sessionId, provider)
+}
+
 export async function readTuiDaemonWarning(): Promise<string | null> {
   if (!isRemoteAttached()) return null
   const { daemonCompatibilityWarning } = await import('../daemonProtocol')
