@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict'
 import type { ProtocolRunSnapshot } from '../lib/agentProtocol'
 import { coordinatorAttentionCount } from '../lib/coordinatorAttentionCount'
-import { COORDINATOR_START_STALL_MS, coordinatorAgentActivity, coordinatorAgentWorkspace, coordinatorBackgroundAgents, coordinatorBackgroundWork, coordinatorStalledAgentIds, type CoordinatorInteractiveState } from '../lib/coordinatorInteractiveState'
+import { COORDINATOR_START_STALL_MS, coordinatorAgentActivity, coordinatorAgentNote, coordinatorAgentWorkspace, coordinatorBackgroundAgents, coordinatorBackgroundWork, coordinatorStalledAgentIds, type CoordinatorInteractiveState } from '../lib/coordinatorInteractiveState'
 import { coordinatorAlertDelivery, coordinatorAttentionPriority, coordinatorResultIdsForAgent, coordinatorRosterOrder, coordinatorSignals, coordinatorSignalSuppressed, newCoordinatorSignals } from '../lib/coordinatorSignals'
 
 const claimedAt = '2026-09-17T00:00:00.000Z'
@@ -99,6 +99,24 @@ assert.deepEqual(coordinatorResultIdsForAgent(roster.snapshot, 'asks'), [], 'wor
 assert.deepEqual(coordinatorRosterOrder(roster, coordinatorResultIdsForAgent(roster.snapshot, 'done').concat(idleResult), t0).map(agent => agent.id), ['asks', 'busy', 'done', 'idle'],
   'reading a teammate\'s results drops it out of the result tier')
 
+// ── The teammate's own last word (herdr's agent-reported tokens) ────────────
+const noteSnapshot = fixture().snapshot!
+const teammateAgent = noteSnapshot.agents[1]!
+assert.equal(coordinatorAgentNote(teammateAgent, noteSnapshot), '', 'no reports, nothing to quote')
+noteSnapshot.events.push(
+  { version: '1.0', runId: 'run', agentId: 'w1', type: 'agent.start_work', summary: 'Reading parser.ts' } as never,
+  { version: '1.0', runId: 'run', agentId: 'lead', type: 'agent.heartbeat', summary: 'lead thinking' } as never,
+  { version: '1.0', runId: 'run', agentId: 'w1', type: 'message', summary: 'asked orion about grammar' } as never,
+)
+assert.equal(coordinatorAgentNote(teammateAgent, noteSnapshot), 'Reading parser.ts', 'mail to a teammate is not a status line, and the lead is not this teammate')
+noteSnapshot.events.push({ version: '1.0', runId: 'run', agentId: 'w1', type: 'agent.heartbeat', summary: '  \n  Half way through the tests  ' } as never)
+assert.equal(coordinatorAgentNote(teammateAgent, noteSnapshot), 'Half way through the tests', 'the newest report wins, trimmed to one line')
+noteSnapshot.events.push({ version: '1.0', runId: 'run', agentId: 'w1', type: 'agent.heartbeat', summary: 'x'.repeat(200) } as never)
+const long = coordinatorAgentNote(teammateAgent, noteSnapshot)
+assert.ok(long.length <= 72 && long.endsWith('…'), `a roster row caps the quote: ${long.length}`)
+noteSnapshot.events.push({ version: '1.0', runId: 'run', agentId: 'w1', type: 'agent.heartbeat', summary: '' } as never)
+assert.equal(coordinatorAgentNote(teammateAgent, noteSnapshot), long, 'a heartbeat with nothing to say does not erase the last word')
+
 // ── Each teammate's own checkout (herdr's agent cwd/branch) ─────────────────
 const worktreeSnapshot = fixture().snapshot!
 const [leadAgent, teammate] = worktreeSnapshot.agents as unknown as Array<{ worktreePath: string; worktreeBranch: string }>
@@ -135,4 +153,4 @@ assert.deepEqual(coordinatorAlertDelivery('desktop', false, true), { notice: tru
 assert.deepEqual(coordinatorAlertDelivery('desktop', true, true), { notice: false, desktop: false }, 'looking at the team with the terminal focused: quiet')
 assert.deepEqual(coordinatorAlertDelivery('desktop', true, false), { notice: false, desktop: true }, 'the panel already shows it, but a blurred terminal still needs the desktop alert')
 
-console.log('Coordinator signals: stall window + exclusions, baseline-silent transitions, reviewed results, lead exclusion, attention priority, roster order, worktree labels, per-agent results, background work, delivery setting, focus suppression passed')
+console.log('Coordinator signals: stall window + exclusions, baseline-silent transitions, reviewed results, lead exclusion, attention priority, roster order, worktree labels, teammate notes, per-agent results, background work, delivery setting, focus suppression passed')

@@ -18,7 +18,7 @@ import { MODAL_CONTENT_Z_INDEX } from './layers'
 import type { ProtocolAgent } from '../../lib/agentProtocol'
 import { coordinatorAttention, type CoordinatorAttentionItem } from '../../lib/coordinatorAttention'
 import { coordinatorResultIdsForAgent, coordinatorRosterOrder } from '../../lib/coordinatorSignals'
-import { coordinatorAgentActivity, coordinatorAgentWorkspace, coordinatorStalledAgentIds } from '../../lib/coordinatorInteractiveState'
+import { coordinatorAgentActivity, coordinatorAgentNote, coordinatorAgentWorkspace, coordinatorStalledAgentIds } from '../../lib/coordinatorInteractiveState'
 import {
   closeInteractiveCoordinator,
   discardInteractiveCoordinatorAction,
@@ -414,6 +414,8 @@ export const TeammatesPopover = memo(function TeammatesPopover({
                 const accent = getProviderAccent(agent.provider)
                 const activity = data ? coordinatorAgentActivity(agent, data, state.observationUnavailable, stalled.includes(agent.id)) : agent.status
                 const live = !state.observationUnavailable && !elsewhere && (data?.runningAgentIds.includes(agent.id) || agent.turnActive)
+                // The teammate's own last word, when it adds to the state label.
+                const note = coordinatorAgentNote(agent, snapshot)
                 const needs = data?.permissions.some((item) => item.agentId === agent.id)
                   || recoveries.includes(agent.id) || stalled.includes(agent.id)
                 return (
@@ -439,6 +441,12 @@ export const TeammatesPopover = memo(function TeammatesPopover({
                         {fitText(joinMeta([activity, coordinatorAgentWorkspace(agent, snapshot)]), innerW - 6)}
                       </text>
                     </box>
+                    {note ? (
+                      <box flexDirection="row">
+                        <text fg={theme.dim} wrapMode="none">{'    '}</text>
+                        <text fg={theme.muted} wrapMode="none">{fitText(`“${note}”`, innerW - 6)}</text>
+                      </box>
+                    ) : null}
                   </box>
                 )
               })}

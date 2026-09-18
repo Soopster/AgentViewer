@@ -262,6 +262,10 @@ await waitFor('result summary', () => captureCharFrame().includes('Parser fixtur
 await press('s')
 if (captureCharFrame().includes('ATTENTION')) fail('reviewed result stayed in attention')
 
+// ── the roster quotes the teammate's own last report ───────────────────────
+await coordination.reportExternalProtocolProgress(nova.participant, { status: 'heartbeat', summary: 'Reading parser.ts and its tests' })
+await waitFor("nova's own words in the roster", () => captureCharFrame().includes('Reading parser.ts and its tests'))
+
 // ── i interrupts only a teammate that is actually running ──────────────────
 await press('i')
 if (!notices.some(text => text.includes('has no turn running'))) fail(`i on an idle teammate must say so rather than sending a request: ${notices.join(' | ')}`)
@@ -359,5 +363,5 @@ await waitFor('fresh team in same chat', () => Boolean(store.getInteractiveCoord
 if (store.getInteractiveCoordinatorState().data?.snapshot?.tasks.length) fail('new team inherited old tasks')
 await coordination.stopProtocolRun(store.getInteractiveCoordinatorState().data!.snapshot!.run.id)
 
-console.log('Teammates popover smoke passed (enable, roster activity, background work, alert delivery, interrupt gating, inspect, priority order with id selection, review on open, drafts, continuation, worktrees, unconfirmed gate, turn off)')
+console.log('Teammates popover smoke passed (enable, roster activity, background work, teammate notes, alert delivery, interrupt gating, inspect, priority order with id selection, review on open, drafts, continuation, worktrees, unconfirmed gate, turn off)')
 process.exit(0)

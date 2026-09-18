@@ -19,6 +19,34 @@ export type CoordinatorInteractiveState = {
 }
 
 /**
+ * What the teammate last said it was doing, in its own words — herdr's
+ * agent-reported sidebar tokens, whose point is that a state label ("working")
+ * does not say what the work IS.
+ *
+ * Only the teammate's own reports count: progress, heartbeats with something to
+ * say, a block, a finding, a result. Mail to other teammates is not a status
+ * line, and the lead's own events are not the teammate's voice. One line, capped,
+ * because this shares a roster row.
+ */
+const COORDINATOR_NOTE_EVENTS = new Set([
+  'agent.start_work', 'agent.heartbeat', 'agent.blocked', 'agent.ready',
+  'task.completed', 'task.failed', 'finding.published', 'plan.completed',
+])
+const COORDINATOR_NOTE_MAX = 72
+
+export function coordinatorAgentNote(agent: ProtocolAgent, snapshot: ProtocolRunSnapshot | null | undefined): string {
+  if (!snapshot) return ''
+  for (let index = snapshot.events.length - 1; index >= 0; index -= 1) {
+    const event = snapshot.events[index]!
+    if (event.agentId !== agent.id || !COORDINATOR_NOTE_EVENTS.has(event.type)) continue
+    const line = (event.summary ?? '').split('\n').map(part => part.trim()).find(Boolean)
+    if (!line) continue
+    return line.length > COORDINATOR_NOTE_MAX ? `${line.slice(0, COORDINATOR_NOTE_MAX - 1)}…` : line
+  }
+  return ''
+}
+
+/**
  * The teammate's own checkout, when it has one — herdr's agent list carries
  * each agent's `cwd` and branch, and a team whose members work in separate
  * worktrees is unreadable without it: every row otherwise looks like the same

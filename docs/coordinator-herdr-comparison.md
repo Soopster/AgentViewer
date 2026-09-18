@@ -230,6 +230,7 @@ difference decides most of the verdicts below.
 | Client/server version handshake before relying on a feature (`herdr status`, `api/status.rs`; SKILL.md: "a missing method is not permission to stop or upgrade a server") | `GET /api/version` (name, version, protocol, features) + `daemonCompatibilityWarning`; the attached TUI reports a mismatch once at startup and never restarts the daemon | Adopted this pass |
 | `agent send-keys <name> ctrl+c` to stop an agent going the wrong way (SKILL.md) | `interrupt-agent`: `i` in the Teammates panel, **Interrupt** in the web roster. A managed teammate's live turn is interrupted in this process; an external worker takes the cancel flag and urgent mail `cancelExternalProtocolTurn` already sent. The task stays owned | Adopted this pass |
 | Every pane marked in the sidebar, so the stuck one is never hunted for (README, `aggregate.rs`) | `GET /api/agent-protocol/attention` + a per-row mark in the web session list (`! n` amber waiting, `✓ n` green results); the TUI's global badge already did this | Adopted this pass |
+| Agent-reported metadata tokens shown in the sidebar (`metadata_tokens.rs`, `pane report-agent`) | `coordinatorAgentNote`: the teammate's own last progress/heartbeat/block/result line, quoted under its activity in both rosters | Adopted this pass |
 | Named agents, unique, validated (SKILL.md) | Protocol names, delegation requires exactly one active match | Present |
 | Detach without stopping work (README) | `agent-viewer web` daemon + `--attach`; turns run server-side | Present |
 | Resume supported agent sessions after restart (`agent_resume.rs`) | Provider sessions are durable by id; interrupted teammate execution waits for explicit recovery rather than auto-resuming | Present, deliberately stricter |
@@ -457,3 +458,20 @@ session row. The page keeps the previous value when nothing changed, so the
 context identity is stable too. Verified against real local data (five teams,
 `✓ 1 | 1 teammate result to review`) and pinned in the browser smoke; making
 the row ignore the context fails it.
+
+### The teammate's own last word
+
+Herdr lets an agent report tokens that its sidebar then shows, because a state
+label says the agent is working, not what the work is. Coordinator teammates
+already report progress, heartbeats, blocks, findings and results with a
+summary — the ledger had it and neither roster showed it. Both now quote the
+teammate's most recent line under its activity.
+
+Only the teammate's own reports count: a `message` to another teammate is
+correspondence, not a status line, and the lead's events are not this
+teammate's voice. The quote is one line and capped at 72 characters, because it
+shares a roster row, and a heartbeat with nothing to say leaves the previous
+line standing rather than blanking it. `coordSignalsSmoke.ts` pins the source
+filter, the newest-wins rule, trimming, the cap and the empty-heartbeat case;
+`teammatesPopoverSmoke.tsx` has a real teammate report a line and asserts the
+roster shows it. Three mutations were verified to fail.

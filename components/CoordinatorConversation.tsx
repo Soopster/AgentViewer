@@ -1,7 +1,7 @@
 'use client'
 
 import { coordinatorAttentionCount } from '@/lib/coordinatorAttentionCount'
-import { coordinatorAgentActivity, coordinatorAgentWorkspace, coordinatorStalledAgentIds, type CoordinatorInteractiveState } from '@/lib/coordinatorInteractiveState'
+import { coordinatorAgentActivity, coordinatorAgentNote, coordinatorAgentWorkspace, coordinatorStalledAgentIds, type CoordinatorInteractiveState } from '@/lib/coordinatorInteractiveState'
 import { useEffect, useId, useRef, useState } from 'react'
 import type { Session } from '@/lib/types'
 import type { ProtocolAgent, ProtocolRunSnapshot } from '@/lib/agentProtocol'
@@ -210,6 +210,7 @@ function TeammateRoster({ snapshot, state, seen, observationUnavailable, onOpen,
   return <div className="flex flex-wrap gap-2" aria-label="Persistent teammate conversations">
     {coordinatorRosterOrder(state, seen).map(agent => <div key={agent.id} className="rounded border p-2">
       <p>{agent.name} · {coordinatorAgentActivity(agent, state, observationUnavailable, stalled.includes(agent.id))}{coordinatorAgentWorkspace(agent, snapshot) ? ` · ${coordinatorAgentWorkspace(agent, snapshot)}` : ''}</p>
+      {coordinatorAgentNote(agent, snapshot) ? <p className="text-sm text-muted-foreground">“{coordinatorAgentNote(agent, snapshot)}”</p> : null}
       {!agent.sessionId.startsWith('external:') ? <Button variant="ghost" size="sm" onClick={() => onOpen(agent)}>Transcript</Button> : null}
       {state.runningAgentIds.includes(agent.id) || agent.turnActive
         ? <Button variant="ghost" size="sm" disabled={disabled} onClick={() => onInterrupt(agent)}>Interrupt</Button>
