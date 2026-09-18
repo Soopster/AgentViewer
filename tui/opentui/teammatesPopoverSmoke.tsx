@@ -271,6 +271,12 @@ await press('return')
 await waitFor('decision answered', () => Boolean(store.getInteractiveCoordinatorState().data?.snapshot?.tasks.find(task => task.id === planned.task!.id)?.receipt?.needsDecision.some(decision => decision.id === 'parser-choice' && decision.status === 'answered' && decision.answer === 'Use strict mode')))
 await coordination.appendProtocolEvent({ version: '1.0', runId: runId!, agentId: nova.participant.agentId, taskId: planned.task!.id, type: 'task.failed', summary: 'Parser fixture result: missing grammar' })
 await waitFor('result summary', () => captureCharFrame().includes('Parser fixture result: missing grammar'))
+// The attention card already carries the sentence; the roster quoting it too
+// put the same fact on screen twice, which reads as two things happening.
+{
+  const occurrences = captureCharFrame().split('Parser fixture result: missing grammar').length - 1
+  if (occurrences !== 1) fail(`the result is on screen ${occurrences} times:\n${captureCharFrame()}`)
+}
 await press('s')
 if (captureCharFrame().includes('ATTENTION')) fail('reviewed result stayed in attention')
 

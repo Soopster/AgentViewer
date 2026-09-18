@@ -436,7 +436,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
           {currentAttention ? <box flexDirection="column" paddingBottom={1}>
             <text fg={theme.amber} wrapMode="word" width={innerW}>{`ATTENTION ${Math.min(attentionIndex + 1, items.length)}/${items.length} · ${currentAttention.kind} · ${currentAttention.title}`}</text>
             <text fg={theme.text} wrapMode="word" width={innerW}>{currentAttention.detail}</text>
-            <text fg={theme.cyan} wrapMode="word" width={innerW}>{attentionHint(currentAttention, disabled)}</text>
+            <text fg={theme.cyan} wrapMode="word" width={innerW}>{attentionHint(currentAttention, disabled, items.length)}</text>
           </box> : null}
 
           {enabled ? (
@@ -482,8 +482,11 @@ export const TeammatesPopover = memo(function TeammatesPopover({
                 const accent = getProviderAccent(agent.provider)
                 const activity = data ? coordinatorAgentActivity(agent, data, state.observationUnavailable, stalled.includes(agent.id)) : agent.status
                 const live = !state.observationUnavailable && !elsewhere && (data?.runningAgentIds.includes(agent.id) || agent.turnActive)
-                // The teammate's own last word, when it adds to the state label.
-                const note = coordinatorAgentNote(agent, snapshot)
+                // The teammate's own last word — dropped when the attention
+                // card above or the task row below already says it. Three
+                // copies of one sentence is not three pieces of information.
+                const rawNote = coordinatorAgentNote(agent, snapshot)
+                const note = rawNote && rawNote !== currentAttention?.detail ? rawNote : ''
                 const needs = data?.permissions.some((item) => item.agentId === agent.id)
                   || recoveries.includes(agent.id) || stalled.includes(agent.id)
                 return (
@@ -590,11 +593,12 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   )
 })
 
-function attentionHint(item: CoordinatorAttentionItem, disabled: boolean): string {
+function attentionHint(item: CoordinatorAttentionItem, disabled: boolean, items: number): string {
   const action = item.kind === 'result' ? 's mark reviewed'
     : disabled ? ''
     : item.kind === 'plan' ? 'a approve plan · v request revision'
     : ['decision', 'message', 'blocker'].includes(item.kind) ? 'b reply'
     : 'Review in Agent Operations'
-  return ['[ / ] select attention', action].filter(Boolean).join(' · ')
+  // `[ / ]` read as an empty checkbox beside the real ones two rows below.
+  return [items > 1 ? '[ or ] for the next' : '', action].filter(Boolean).join(' · ')
 }
