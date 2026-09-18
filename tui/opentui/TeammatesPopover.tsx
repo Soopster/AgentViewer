@@ -294,7 +294,27 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
 
   const popW = Math.min(width - 4, 96)
-  const popH = Math.min(height - 4, 32)
+  // Height follows the content. A fixed 32 rows meant a small team — the
+  // common case — sat in a panel two thirds empty, with its footer stranded at
+  // the bottom of the screen and nothing between. The estimate mirrors the
+  // sections below; being a row out costs a blank line or a scrollbar, where
+  // being fixed cost twenty.
+  const wrapped = (text: string) => Math.max(1, Math.ceil(text.length / Math.max(1, popW - 4)))
+  const bodyRows = (state.loading && !data ? 1 : 0)
+    + (pending ? wrapped('The last request is unconfirmed. Retrying replays the same request, which the server reconciles instead of repeating.') + (error ? 1 : 0) + 1 : error ? 2 : 0)
+    + (!enabled && !terminal ? wrapped('Enable coordination to give this chat a team. Teammates run their own turns; what they send back arrives folded into your next message, and you keep every approval.') + (canLead ? 0 : 2) : 0)
+    + (currentAttention ? 4 + wrapped(currentAttention.detail) : 0)
+    + (enabled ? 3 + (data?.interactive.autoContinue && data.interactive.remainingTurns === 0 ? 2 : 0) : 0)
+    + (unconfirmedDelivery ? 4 : 0)
+    + (teammates.length > 0
+      ? 2 + teammates.reduce((rows, agent) => rows + 2 + (coordinatorAgentNote(agent, snapshot) ? 1 : 0), 0)
+      : enabled ? 3 : 0)
+    + attention.length + recoveries.length
+    + (snapshot && snapshot.tasks.length > 0 ? 2 + Math.min(snapshot.tasks.length, 6) : 0)
+  // 6 = header 2 + footer 2 + border 2, matching bodyH below.
+  // The floor is the scrollbox's own minimum (6) plus header, footer and
+  // border: below it the footer draws outside the box.
+  const popH = Math.max(12, Math.min(height - 4, 32, bodyRows + 6 + (draft || confirmOff ? 1 : 0)))
   const popTop = Math.floor((height - popH) / 2)
   const popLeft = Math.floor((width - popW) / 2)
   const innerW = popW - 4
@@ -421,6 +441,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
 
           {enabled ? (
             <box flexDirection="column">
+              <text fg={theme.muted} wrapMode="none">SETTINGS</text>
               <box flexDirection="row">
                 <text fg={theme.cyan} wrapMode="none">{'c '}</text>
                 <text fg={data?.interactive.autoContinue ? theme.green : theme.muted} wrapMode="none">
@@ -531,7 +552,9 @@ export const TeammatesPopover = memo(function TeammatesPopover({
               {snapshot.tasks.slice(-6).map((task) => (
                 <box key={task.id} flexDirection="row">
                   <text fg={theme.dim} wrapMode="none">{'  '}</text>
-                  <text fg={theme.muted} wrapMode="none">{fitText(joinMeta([task.title, task.status]), innerW - 2).trimEnd()}</text>
+                  <text fg={theme.muted} wrapMode="none">
+                    {fitText(joinMeta([task.title, task.status, snapshot.agents.find(agent => agent.id === task.ownerAgentId)?.name]), innerW - 2).trimEnd()}
+                  </text>
                 </box>
               ))}
             </box>

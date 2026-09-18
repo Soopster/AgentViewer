@@ -897,7 +897,12 @@ which mirror `app/api/sessions/[sessionId]/coordination/route.ts` action for act
   never be read — `interruptInteractiveAgent` interrupts its live session instead, and the task stays
   owned. `p` cycles which provider staffs the **next new** teammate (web: a select); the set is
   durable per conversation (`teammate_providers`, schema v23) because failover after a restart must
-  know what the team may staff, and a provider choice never re-provisions an existing teammate. Reviewed-result markers persist in
+  know what the team may staff, and a provider choice never re-provisions an existing teammate.
+- **The panel's height follows its content**, with a floor of 12: the scrollbox has its own 6-row
+  minimum, and below that the footer draws *outside* the border. `bodyRows` mirrors the sections, so
+  a section added without updating it costs a blank row or a scrollbar — not the twenty empty rows a
+  fixed height cost. Both bounds are pinned in `teammatesPopoverSmoke.tsx`, in the empty state (where
+  the floor bites) and with a roster (where the cap does). Reviewed-result markers persist in
   `lib/tui/coordinatorReviewed.ts`; in memory, a restart re-flagged every result. Pinned by
   `scripts/coordSignalsSmoke.ts` and the store smoke.
 - **Host ownership comes from a user, never from a sweep.** `sweepMailboxes` starts at module load in

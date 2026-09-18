@@ -97,6 +97,18 @@ if (!captureCharFrame().includes('Coordination is off')) {
   fail('a conversation with no run should report coordination off')
 }
 
+// The emptiest state is where a content-fit height can go too far: the
+// scrollbox has its own minimum, and below it the footer draws outside the
+// border — visible only in a frame, never in a type.
+{
+  const rows = captureCharFrame().split('\n')
+  const top = rows.findIndex(line => line.includes('─ Teammates ─'))
+  const bottom = rows.findIndex((line, index) => index > top && line.includes('└'))
+  const footer = rows.findIndex((line, index) => index > top && line.includes('esc close'))
+  if (top < 0 || bottom < 0) fail('the Teammates panel is not on screen')
+  if (footer < 0 || footer > bottom) fail(`the footer drew outside the panel border:\n${captureCharFrame()}`)
+}
+
 if (process.env.DUMP_FRAME === '1') console.log(captureCharFrame())
 
 // ── the panel sits above the root's modal scrim ────────────────────────────
@@ -262,6 +274,22 @@ await waitFor('result summary', () => captureCharFrame().includes('Parser fixtur
 await press('s')
 if (captureCharFrame().includes('ATTENTION')) fail('reviewed result stayed in attention')
 
+// ── the panel is as tall as its content, not a fixed block ─────────────────
+// A fixed 32 rows left a small team in a panel two thirds empty. The floor is
+// the scrollbox's own minimum plus chrome; below it the footer draws outside
+// the border, which is why this asserts both bounds.
+{
+  const frameRows = captureCharFrame().split('\n')
+  const top = frameRows.findIndex(line => line.includes('─ Teammates ─'))
+  const bottom = frameRows.findIndex((line, index) => index > top && line.includes('└'))
+  const panelHeight = bottom - top + 1
+  if (top < 0 || bottom < 0) fail('the Teammates panel is not on screen')
+  if (panelHeight > 20) fail(`the panel is padded well past its content: ${panelHeight} rows`)
+  if (panelHeight < 12) fail(`the panel is below the height its scrollbox needs: ${panelHeight} rows`)
+  const footerRow = frameRows.findIndex((line, index) => index > top && line.includes('esc close'))
+  if (footerRow < 0 || footerRow > bottom) fail('the footer drew outside the panel border')
+}
+
 // ── the roster quotes the teammate's own last report ───────────────────────
 await coordination.reportExternalProtocolProgress(nova.participant, { status: 'heartbeat', summary: 'Reading parser.ts and its tests' })
 await waitFor("nova's own words in the roster", () => captureCharFrame().includes('Reading parser.ts and its tests'))
@@ -363,5 +391,5 @@ await waitFor('fresh team in same chat', () => Boolean(store.getInteractiveCoord
 if (store.getInteractiveCoordinatorState().data?.snapshot?.tasks.length) fail('new team inherited old tasks')
 await coordination.stopProtocolRun(store.getInteractiveCoordinatorState().data!.snapshot!.run.id)
 
-console.log('Teammates popover smoke passed (enable, roster activity, background work, teammate notes, alert delivery, interrupt gating, inspect, priority order with id selection, review on open, drafts, continuation, worktrees, unconfirmed gate, turn off)')
+console.log('Teammates popover smoke passed (enable, roster activity, background work, teammate notes, content-fit height, alert delivery, interrupt gating, inspect, priority order with id selection, review on open, drafts, continuation, worktrees, unconfirmed gate, turn off)')
 process.exit(0)
