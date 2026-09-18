@@ -391,6 +391,7 @@ const controllers = globalThis.__agentViewerCoordinatorControllers
 const runNotifier = new EventEmitter()
 runNotifier.setMaxListeners(0)
 
+export { notifyRunChanged as notifyRunChangedForSmoke }
 function notifyRunChanged(runId: string): void {
   runNotifier.emit(`run:${runId}`)
   runNotifier.emit('run:changed', runId)

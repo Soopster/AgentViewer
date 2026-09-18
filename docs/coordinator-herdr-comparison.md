@@ -234,6 +234,7 @@ difference decides most of the verdicts below.
 | `agent start <name> --kind <agent>`: each pane's agent is chosen per agent, so a workspace mixes kinds freely | A chat's team can now staff teammates from different providers: `p` cycles the next new teammate's provider in the TUI panel, a select in the web panel; the set is durable per conversation | Adopted this pass |
 | Closing a workspace with linked worktree workspaces needs explicit group intent (`workspace_group_close_required`), and a dirty checkout is never removed quietly (`worktree.rs`) | Turning a team off names what it leaves: teammate checkouts with uncommitted work, and turns still running (`readInteractiveTeardown`, read on demand) | Adopted this pass |
 | A name follows the current pane occupant and is cleared when that agent exits, is released or is replaced (SKILL.md, `app/agents.rs`) | `availableTeammateName`: stopped and failed teammates release their name; a `done` one keeps it while its session is live, because that is what a follow-up reuses | Adopted this pass |
+| A terminal observer that stops accepting output is disconnected after 30s without write progress (CHANGELOG #3612) | The Coordinator change stream drops a subscriber whose queue stops draining; the team keeps running and clients reconnect | Adopted this pass |
 | Named agents, unique, validated (SKILL.md) | Protocol names, delegation requires exactly one active match | Present |
 | Detach without stopping work (README) | `agent-viewer web` daemon + `--attach`; turns run server-side | Present |
 | Resume supported agent sessions after restart (`agent_resume.rs`) | Provider sessions are durable by id; interrupted teammate execution waits for explicit recovery rather than auto-resuming | Present, deliberately stricter |
@@ -627,3 +628,24 @@ reuse that allocation never delivered, and now both halves agree.
 `scripts/coordTeammateNamesSmoke.ts` pins each status, the done-with-live-session
 case, and that retiring one teammate frees exactly its own name; two mutations
 were verified to fail it.
+
+### A stalled subscriber is dropped
+
+Herdr disconnects a terminal observer that makes no write progress for thirty
+seconds: one wedged client must not cost the server for the life of the
+process. `/api/agent-protocol/runs/changes` queued every run change and every
+heartbeat for every subscriber with no such rule, so a reader that stopped
+draining and never disconnected — a suspended laptop, a wedged tab — grew that
+stream's buffer without bound.
+
+The stream now watches `controller.desiredSize`: progress clears the timer, so
+a slow reader is fine, and only one that accepts nothing for
+`STALLED_SUBSCRIBER_MS` is closed. As in herdr, what is dropped is the
+observer, not the work: the team keeps running and clients reconnect.
+
+`scripts/coordRunChangesSmoke.ts` drives the real route — fifty changes through
+a draining reader, which is kept, then a reader that stops, which is dropped.
+The drop shows up as the reader reaching `done` after draining, because a
+closed `ReadableStream` still hands over what it buffered; asserting on
+`reader.closed` instead hangs forever, which is how the first version of this
+test failed. Two mutations were verified to fail it.
