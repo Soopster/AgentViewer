@@ -24,6 +24,18 @@ const COORDINATOR_TEAMMATE_PROVIDERS: readonly AgentProvider[] = ['claude', 'cod
  * team leaves its teammate checkouts on disk with nothing pointing at them, so
  * the confirmation names them instead of asking a bare yes/no.
  */
+/**
+ * `@reviewer check the diff` names the teammate the work goes to — herdr's
+ * `agent start reviewer`: the live teammate of that name if there is one, a
+ * new one under that name if not. Without the prefix, any available teammate.
+ * The server validates the name, so this only splits it off.
+ */
+export { delegateTarget as __delegateTargetForSmoke }
+function delegateTarget(text: string, to: string | null): { detail: string; to: string; teammateName?: string } {
+  const named = to ? null : /^@([a-z][a-z0-9_-]{0,31})\s+([\s\S]+)$/i.exec(text)
+  return named ? { detail: named[2]!.trim(), to: 'auto', teammateName: named[1]!.toLowerCase() } : { detail: text, to: to ?? 'auto' }
+}
+
 function teardownWarning(teardown: InteractiveCoordinatorTeardown | null): string | null {
   if (!teardown) return null
   const parts: string[] = []
@@ -146,7 +158,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
         const text = draft.text.trim()
         if (!text) { setDraft(null); return }
         act(draft.kind === 'delegate'
-          ? { action: 'delegate', detail: text, to: draft.to ?? 'auto', teammateProvider: draft.to ? undefined : newTeammateProvider ?? undefined }
+          ? { action: 'delegate', ...delegateTarget(text, draft.to), teammateProvider: draft.to ? undefined : newTeammateProvider ?? undefined }
           : { action: draft.kind, detail: text, to: draft.to ?? undefined, taskId: draft.taskId, decisionId: draft.decisionId, inReplyTo: draft.inReplyTo },
           draft.kind === 'delegate' ? `Task sent to ${draft.toName}` : `Message sent to ${draft.toName}`)
         setDraft(null)
@@ -271,7 +283,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       return
     }
     if (key.name === 'd' && !disabled) {
-      setDraft({ kind: 'delegate', to: null, toName: 'an available teammate', text: '' })
+      setDraft({ kind: 'delegate', to: null, toName: 'an available teammate (@name to choose one)', text: '' })
       return
     }
     // Cycle which provider a NEW teammate is staffed from — a Codex reviewer

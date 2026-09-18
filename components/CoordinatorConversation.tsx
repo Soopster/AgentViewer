@@ -10,6 +10,7 @@ import { COORDINATOR_NOTIFICATION_DELAY_MS, coordinatorResultIdsForAgent, coordi
 import { Button } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea'
+import { Input } from '@/components/ui/input'
 
 /** Providers a chat can staff a new teammate from. */
 const COORDINATOR_TEAMMATE_PROVIDERS = ['claude', 'codex', 'opencode', 'copilot', 'pi'] as const
@@ -21,6 +22,7 @@ type RequestBody = {
   taskId?: string; decisionId?: string; approved?: boolean; inReplyTo?: string
   /** Provider for a NEW teammate; an existing one keeps its own. */
   teammateProvider?: Session['provider']
+  teammateName?: string
 }
 
 export default function CoordinatorConversation({ session, onInspect, onReturnToChat, onAttentionChange }: {
@@ -34,6 +36,8 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
   // Provider for a NEW teammate — an existing one keeps its own, so this only
   // applies when the work goes to a teammate that does not exist yet.
   const [teammateProvider, setTeammateProvider] = useState<'lead' | Session['provider']>('lead')
+  // herdr's `agent start <name>`: name the teammate by its job, e.g. reviewer.
+  const [teammateName, setTeammateName] = useState('')
   const [paths, setPaths] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -214,6 +218,9 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
           <option value="lead">Same provider as this chat</option>
           {COORDINATOR_TEAMMATE_PROVIDERS.map(option => <option key={option} value={option}>{option}</option>)}
         </NativeSelect>
+        <label htmlFor={`${id}-name`}>Teammate name (optional)</label>
+        <Input id={`${id}-name`} value={teammateName} disabled={disabled} maxLength={32} placeholder="reviewer"
+          onChange={event => setTeammateName(event.target.value.toLowerCase())} />
       </> : null}
       <label htmlFor={`${id}-detail`}>Task or follow-up</label>
       <Textarea id={`${id}-detail`} value={detail} maxLength={8000} disabled={disabled} onChange={event => setDetail(event.target.value)} placeholder="Review the changes and report actionable findings." rows={2} />
@@ -221,7 +228,7 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
         <Textarea id={`${id}-paths`} value={paths} disabled={disabled} onChange={event => setPaths(event.target.value)} rows={2} />
       </details>
       <div className="flex flex-wrap gap-2">
-        <Button disabled={disabled || !detail.trim()} onClick={() => void send({ action: 'delegate', detail, to, paths: paths.split('\n').map(value => value.trim()).filter(Boolean), teammateProvider: to === 'auto' && teammateProvider !== 'lead' ? teammateProvider : undefined })}>Ask teammate</Button>
+        <Button disabled={disabled || !detail.trim()} onClick={() => void send({ action: 'delegate', detail, to, paths: paths.split('\n').map(value => value.trim()).filter(Boolean), teammateProvider: to === 'auto' && teammateProvider !== 'lead' ? teammateProvider : undefined, teammateName: to === 'auto' && teammateName.trim() ? teammateName.trim() : undefined })}>Ask teammate</Button>
         <Button variant="outline" disabled={disabled || to === 'auto' || !detail.trim()} onClick={() => void send({ action: 'message', detail, to })}>Message working teammate</Button>
       </div>
       </> : null}

@@ -762,6 +762,8 @@ export type TuiSessionCoordinationRequest = {
   action: 'disable' | 'enable' | 'settings' | 'reconcile' | 'resume-agent' | 'interrupt-agent' | 'delegate' | 'message' | 'review-plan' | 'decision'
   /** Provider for a NEW teammate; an existing one keeps its own. */
   teammateProvider?: AgentProvider
+  /** Name for a NEW teammate (herdr's `agent start <name>`). */
+  teammateName?: string
   /** Stable across retries: every mutation below is replayed under this key. */
   requestId: string
   detail: string
@@ -834,6 +836,7 @@ export async function sendTuiSessionCoordination(
     if (request.action === 'delegate') {
       return coord.createExternalProtocolTask(identity, {
         requestedProvider: request.teammateProvider,
+        teammateName: request.teammateName,
         assignTo: request.to ?? 'auto',
         title: request.detail.split('\n')[0]!.slice(0, 160),
         detail: request.detail,

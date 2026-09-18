@@ -288,11 +288,26 @@ const TEAMMATE_NAMES = ['nova', 'orion', 'lyra', 'vega', 'atlas', 'rhea', 'iris'
  */
 export { availableTeammateName as __availableTeammateNameForSmoke }
 function availableTeammateName(agents: readonly ProtocolAgent[], liveSessions?: ReadonlySet<string> | Map<string, string>): typeof TEAMMATE_NAMES[number] | undefined {
-  const has = (id: string) => liveSessions instanceof Map ? liveSessions.has(id) : Boolean(liveSessions?.has(id))
-  const held = new Set(agents
-    .filter(agent => !['failed', 'stopped'].includes(agent.status) && (agent.status !== 'done' || has(agent.id)))
-    .map(agent => agent.name))
+  const held = new Set(agents.filter(agent => teammateHoldsName(agent, liveSessions)).map(agent => agent.name))
   return TEAMMATE_NAMES.find(name => !held.has(name))
+}
+
+/** Whether this participant still owns its name (see availableTeammateName). */
+function teammateHoldsName(agent: ProtocolAgent, liveSessions?: ReadonlySet<string> | Map<string, string>): boolean {
+  const live = liveSessions instanceof Map ? liveSessions.has(agent.id) : Boolean(liveSessions?.has(agent.id))
+  return !['failed', 'stopped'].includes(agent.status) && (agent.status !== 'done' || live)
+}
+
+/**
+ * Herdr's agent-name rule, `[a-z][a-z0-9_-]{0,31}`: short enough for a roster
+ * row, safe to type after `@` or in `to`, and never mistaken for an agent id
+ * (`agent-3`) or the reserved addresses `lead` and `all`.
+ */
+function normalizeTeammateName(value: string): string {
+  const name = value.trim().toLowerCase()
+  if (!/^[a-z][a-z0-9_-]{0,31}$/.test(name)) throw new Error('A teammate name is a lowercase letter then up to 31 letters, digits, - or _')
+  if (name === 'lead' || name === 'all' || /^agent-\d+$/.test(name)) throw new Error(`${name} is reserved`)
+  return name
 }
 
 let database: SqliteDatabase | null = null
@@ -2803,6 +2818,12 @@ export async function createExternalProtocolTask(
   params: {
     title: string
     assignTo?: string
+    /**
+     * Name a NEW teammate by its job — herdr's `agent start reviewer`. An
+     * existing live holder of the name is reused when free and refused when
+     * busy; otherwise a teammate is created under it. Only with `assignTo: 'auto'`.
+     */
+    teammateName?: string
     detail: string
     paths?: string[]
     dependsOn?: string[]
@@ -2838,7 +2859,16 @@ export async function createExternalProtocolTask(
       controller.teammateProviders = [...new Set([...controller.teammateProviders, params.requestedProvider])]
     }
     const agents = listAgentsSync(db, identity.runId)
-    const available = agents.find(agent => agent.role === 'teammate' && !agent.taskId
+    const requestedName = params.teammateName === undefined ? undefined : normalizeTeammateName(params.teammateName)
+    if (requestedName) {
+      // A name addresses the agent that currently holds it, as in herdr.
+      const holder = agents.findLast(agent => agent.name === requestedName && teammateHoldsName(agent, controller?.sessionIds))
+      if (holder) {
+        if (holder.role !== 'teammate') throw new Error(`${requestedName} is not a teammate`)
+        return createExternalProtocolTask(identity, { ...params, teammateName: undefined, assignTo: holder.id })
+      }
+    }
+    const available = !requestedName && agents.find(agent => agent.role === 'teammate' && !agent.taskId
       && (['idle', 'ready'].includes(agent.status) || (agent.status === 'done' && controller?.sessionIds.has(agent.id)))
       && !controller?.turnInFlight.has(agent.id)
       && !db.prepare('SELECT 1 FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').get(identity.runId, agent.id)
@@ -2848,7 +2878,7 @@ export async function createExternalProtocolTask(
     if (agents.filter(agent => !['failed', 'stopped'].includes(agent.status)).length >= controller.maxAgents) {
       throw new Error('All teammate slots are busy; send a message to steer existing work or wait for a result')
     }
-    const spawned = await spawnAdditionalTeammate(identity, { provider: params.requestedProvider, reserveForDelegation: true })
+    const spawned = await spawnAdditionalTeammate(identity, { provider: params.requestedProvider, reserveForDelegation: true, name: requestedName })
     try {
       return await createExternalProtocolTask(identity, { ...params, assignTo: spawned.agentId })
     } catch (error) {
@@ -7292,6 +7322,11 @@ export async function readInteractiveTeardown(sessionId: string, provider: Agent
   }
 }
 
+/** Test seam: retire a teammate without a provider round-trip. */
+export async function __setAgentStatusForSmoke(runId: string, agentId: string, status: ProtocolAgent['status']): Promise<void> {
+  await enqueueWrite(db => db.prepare('UPDATE protocol_agents SET status = ? WHERE run_id = ? AND id = ?').run(status, runId, agentId))
+}
+
 /** Test seam: point a teammate at its own checkout without a worktree run. */
 export async function __setAgentWorktreeForSmoke(runId: string, agentId: string, worktreePath: string, branch: string): Promise<void> {
   await enqueueWrite(db => db.prepare('UPDATE protocol_agents SET worktree_path = ?, worktree_branch = ? WHERE run_id = ? AND id = ?')
@@ -8719,7 +8754,7 @@ async function beginExecutionPhase(controller: RunController): Promise<void> {
  */
 export async function spawnAdditionalTeammate(
   identity: ExternalProtocolIdentity,
-  params: { provider?: ProtocolRun['provider']; reserveForDelegation?: boolean } = {},
+  params: { provider?: ProtocolRun['provider']; reserveForDelegation?: boolean; name?: string } = {},
 ): Promise<{ agentId: string; name: string }> {
   const controller = controllers.get(identity.runId)
   if (!controller) {
@@ -8730,7 +8765,10 @@ export async function spawnAdditionalTeammate(
   const agent = requireExternalParticipantSync(db, identity)
   if (agent.role !== 'lead') throw new Error('Only the Coordinator lead can spawn teammates')
   const existing = listAgentsSync(db, controller.runId)
-  const name = availableTeammateName(existing, controller.sessionIds)
+  if (params.name && existing.some(entry => entry.name === params.name && teammateHoldsName(entry, controller.sessionIds))) {
+    throw new Error(`${params.name} is already a live teammate in this run`)
+  }
+  const name = params.name ?? availableTeammateName(existing, controller.sessionIds)
   if (!name) throw new Error(`Teammate name pool exhausted — a run supports at most ${TEAMMATE_NAMES.length} live teammates; stop one before adding another`)
   const teammateNumbers = existing
     .map((a) => /^agent-(\d+)$/.exec(a.id)?.[1])

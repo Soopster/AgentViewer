@@ -236,7 +236,7 @@ difference decides most of the verdicts below.
 | A name follows the current pane occupant and is cleared when that agent exits, is released or is replaced (SKILL.md, `app/agents.rs`) | `availableTeammateName`: stopped and failed teammates release their name; a `done` one keeps it while its session is live, because that is what a follow-up reuses | Adopted this pass |
 | A terminal observer that stops accepting output is disconnected after 30s without write progress (CHANGELOG #3612) | The Coordinator change stream drops a subscriber whose queue stops draining; the team keeps running and clients reconnect | Adopted this pass |
 | `agent wait <name> --until <state>`, and `pane.agent_status_changed` subscriptions filtered by pane and status (SKILL.md, `api/schema/events.rs`) | `coord_wait` takes `agent` and `until`: it returns when that teammate settles or reaches a named state, at once if it already has, and whenever mail needs the waiter's reply | Adopted this pass |
-| Named agents, unique, validated (SKILL.md) | Protocol names, delegation requires exactly one active match | Present |
+| Named agents, unique, validated; `agent start <name>` names an agent by its job (SKILL.md) | Protocol names, delegation requires exactly one active match; **a new teammate can now be named** — `name` on `coord_delegate`, `@name` in a TUI draft, a field in the web panel — under herdr's `[a-z][a-z0-9_-]{0,31}` rule | Adopted this pass (naming) |
 | Detach without stopping work (README) | `agent-viewer web` daemon + `--attach`; turns run server-side | Present |
 | Resume supported agent sessions after restart (`agent_resume.rs`) | Provider sessions are durable by id; interrupted teammate execution waits for explicit recovery rather than auto-resuming | Present, deliberately stricter |
 | Worktrees per agent (`worktree.rs`) | Per-teammate worktrees, baselines, path locks, completion gate | Present, stronger (locks and gate) |
@@ -678,3 +678,43 @@ already holds, heartbeats and progress that must not wake the wait, the named
 state that must, reply mail that must, unknown targets and states refused, and
 the unfiltered wait unchanged. Ignoring the filter, swallowing mail, and
 requiring a fresh change before matching were each verified to fail it.
+
+### Naming a teammate by its job, and the API sweep that found it
+
+A final pass mapped every method herdr's socket API exposes against ours. The
+agent-facing set is covered: `agent.start`/`agent.prompt` are delegation and
+follow-up, `agent.wait` is the targeted `coord_wait`, `agent.get`/`agent.list`/
+`session.snapshot` are `coord_status` and the rosters, `agent.read`/`agent.focus`
+open a teammate's transcript (and review its results), `agent.send_keys` for
+Ctrl-C is interrupt, `events.subscribe`/`events.wait` are the MCP resource
+subscription and the change stream, `worktree.*` is per-teammate worktrees and
+the teardown warning, `notification.show` is `post_attention`, `ping` is
+`/api/version`, `pane.report_agent`/`report_metadata` are the teammate's quoted
+reports, and `pane.release_agent` is the name release. What remains unmapped is
+terminal plumbing with no counterpart here — panes, tabs, layout, scrolling,
+graphics, copy mode, plugins, popups, live handoff — plus `agent.rename` and
+`agent.view.set`, below.
+
+The one agent-facing gap was naming. `herdr agent start reviewer --kind codex`
+names an agent by what it is for, and the name is then how every other command
+reaches it; our teammates were always `nova`, `orion` and the rest of a fixed
+pool, so the lead had to remember which star did the review. A new teammate can
+now be named — `name` on `coord_delegate`, `@reviewer check the diff` in a TUI
+draft, a field in the web panel — and the name addresses whoever holds it:
+reused when that teammate is free, refused when it is busy (never a second
+`reviewer`), and created when nobody holds it. Names follow herdr's rule,
+`[a-z][a-z0-9_-]{0,31}`, and `lead`, `all` and `agent-N` are reserved because
+they already mean something to the mailbox.
+
+`coordConversationSmoke.ts` pins creation, the busy refusal, uniqueness and
+the rejected names; the busy assertion first matched "All teammate slots are
+busy" too, which let the reuse path be deleted unnoticed, so it now accepts only
+the messages the reuse path can produce. `coordDelegateTargetSmoke.ts` pins the
+`@name` split, including that an already-addressed follow-up is never
+re-targeted. Four naming mutations were verified to fail.
+
+Not adopted, deliberately: `agent.rename` (a teammate's name is written into
+mail, results and transcripts already sent; renaming a live one would split its
+history under two names) and `agent.view.set` (herdr's saved filters and sorts
+serve a sidebar of many agents across machines; a conversation's team is a
+handful, already ordered by what needs the user).

@@ -221,6 +221,7 @@ await press('d')
 await type('look at the parser')
 if (!captureCharFrame().includes('look at the parser')) fail('the delegate draft did not echo what was typed')
 if (!captureCharFrame().includes('Ask an available teammate')) fail('the delegate draft did not name its target')
+if (!captureCharFrame().includes('@name')) fail('the delegate draft does not say a teammate can be named')
 await press('escape')
 if (captureCharFrame().includes('look at the parser')) fail('escape did not discard the draft')
 if ((store.getInteractiveCoordinatorState().data?.snapshot?.tasks.length ?? -1) !== 0) {

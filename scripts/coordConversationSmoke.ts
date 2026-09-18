@@ -177,6 +177,30 @@ try {
     void identity
   }
 
+  // Herdr's `agent start reviewer`: a teammate named by its job. The name
+  // addresses whoever holds it now — reused when free, refused when busy — and
+  // creates a teammate under it when nobody does.
+  {
+    // The team is full here; retiring a teammate frees both its slot and its name.
+    const before = (await coord.readSessionCoordinator('primary-chat', 'codex'))!
+    const retiring = before.agents.filter(agent => agent.role === 'teammate').at(-1)!
+    await coord.__setAgentStatusForSmoke(before.run.id, retiring.id, 'stopped')
+    const named = await post({ action: 'delegate', requestId: 'named-1', detail: 'Review the parser', teammateName: 'reviewer' })
+    const reviewer = named.snapshot.agents.find((agent: { id: string }) => agent.id === named.result.delegation.agentId)
+    assert.equal(reviewer.name, 'reviewer', 'a new teammate takes the requested name')
+    const identity = await coord.sessionCoordinatorIdentity('primary-chat', 'codex')
+    await assert.rejects(coord.createExternalProtocolTask(identity, { assignTo: 'auto', teammateName: 'reviewer', title: 'x', detail: 'y' }),
+      // Only the reuse path reaches these; "All teammate slots are busy" would
+      // mean it tried to create a second reviewer instead.
+      /Teammate is busy|reconcile the previous teammate execution/, 'a busy holder of the name is refused, not duplicated')
+    const rosterNames = (await coord.readSessionCoordinator('primary-chat', 'codex'))!.agents.filter(agent => agent.name === 'reviewer')
+    assert.equal(rosterNames.length, 1, 'a name is never held by two live teammates')
+    for (const bad of ['Reviewer!', '9lives', 'lead', 'all', 'agent-7', 'x'.repeat(40)]) {
+      await assert.rejects(coord.createExternalProtocolTask(identity, { assignTo: 'auto', teammateName: bad, title: 'x', detail: 'y' }),
+        /teammate name|reserved/, `an invalid name is refused: ${bad}`)
+    }
+  }
+
   // A run that has ended cannot be resumed, so it must not ask to be: an
   // interrupted teammate in a stopped room reads Stopped, not "needs recovery".
   {

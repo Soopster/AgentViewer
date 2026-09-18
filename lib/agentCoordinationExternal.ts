@@ -214,6 +214,7 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
     if (requestedProvider && !isAgentProvider(requestedProvider)) throw new Error('Invalid requested provider')
     return mutate(() => createExternalProtocolTask(participantIdentity!, {
       assignTo: optionalText(body.assignTo),
+      teammateName: optionalText(body.teammateName),
       title: text(body.title),
       detail: text(body.detail),
       paths: strings(body.paths),
