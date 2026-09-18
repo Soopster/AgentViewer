@@ -1,8 +1,8 @@
 import net from 'node:net'
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import {
   createOpencodeClient,
-  createOpencodeServer,
   type OpencodeClient,
   type OpencodeClientConfig,
 } from '@opencode-ai/sdk'
@@ -31,19 +31,30 @@ function normalizeBaseUrl(value: string | undefined): string | null {
   return trimmed ? trimmed.replace(/\/+$/, '') : null
 }
 
-function openCodeClientFor(baseUrl: string): OpencodeClient {
-  const config: OpencodeClientConfig = { baseUrl }
+/**
+ * OpenCode 2.x prints a server password and rejects unauthenticated requests
+ * (HTTP Basic, user `opencode`). 1.x has no password. A managed server captures
+ * its own; an external one is named by `OPENCODE_SERVER_PASSWORD`.
+ */
+function openCodeAuthHeaders(password?: string): Record<string, string> | undefined {
+  const value = password ?? process.env.OPENCODE_SERVER_PASSWORD?.trim()
+  if (!value) return undefined
+  return { Authorization: `Basic ${Buffer.from(`opencode:${value}`).toString('base64')}` }
+}
+
+function openCodeClientFor(baseUrl: string, password?: string): OpencodeClient {
+  const config: OpencodeClientConfig = { baseUrl, headers: openCodeAuthHeaders(password) }
   return createOpencodeClient(config)
 }
 
-function openCodeV2ClientFor(baseUrl: string): OpencodeV2Client {
-  return createOpencodeV2Client({ baseUrl })
+function openCodeV2ClientFor(baseUrl: string, password?: string): OpencodeV2Client {
+  return createOpencodeV2Client({ baseUrl, headers: openCodeAuthHeaders(password) })
 }
 
-async function canReachOpenCode(baseUrl: string): Promise<boolean> {
+async function canReachOpenCode(baseUrl: string, password?: string): Promise<boolean> {
   try {
     const response = await fetch(`${baseUrl}/session`, {
-      headers: { Accept: 'application/json' },
+      headers: { Accept: 'application/json', ...openCodeAuthHeaders(password) },
     })
     return response.ok
   } catch {
@@ -109,26 +120,108 @@ function coordinatorPluginPath(): string {
   return fileURLToPath(new URL('./opencodePlugin/agentViewerCoordinator.mjs', import.meta.url))
 }
 
+/**
+ * Spawn `opencode serve` ourselves rather than through the SDK's
+ * `createOpencodeServer`, which waits for a line reading
+ * `opencode server listening on <url>`. OpenCode 2.x prints `server listening
+ * on <url>` and a following `server password <value>`, so the SDK helper waits
+ * out its timeout against a server that is already up, and every OpenCode
+ * session — teammates included — fails to start. Both spellings are accepted
+ * here, and a password, when one is printed, authenticates every later request.
+ */
+/**
+ * The bundled SDK (1.18.x, the newest published) speaks OpenCode 1.x's REST
+ * API. The 2.x CLI serves a different one — `POST /session` answers 405 — so a
+ * teammate staffed on it fails deep inside session creation with a status code
+ * that says nothing about why. Checked once, and only for a server we spawn:
+ * an external `OPENCODE_BASE_URL` is the user's to choose.
+ */
+let openCodeCliMajor: number | null | undefined
+function unsupportedOpenCodeCliVersion(): string | null {
+  if (openCodeCliMajor === undefined) {
+    try {
+      const output = execFileSync('opencode', ['--version'], { encoding: 'utf8', timeout: 10_000 })
+      openCodeCliMajor = Number(/(\d+)\./.exec(output.trim())?.[1] ?? NaN)
+      if (!Number.isFinite(openCodeCliMajor)) openCodeCliMajor = null
+    } catch {
+      openCodeCliMajor = null
+    }
+  }
+  if (openCodeCliMajor === null || openCodeCliMajor < 2) return null
+  return `This OpenCode CLI is v${openCodeCliMajor}, whose HTTP API the bundled @opencode-ai/sdk (1.18.x, the newest published) does not speak. Install OpenCode 1.x, or point OPENCODE_BASE_URL at a 1.x server.`
+}
+
 async function startManagedServer(): Promise<OpenCodeRuntime> {
+  const unsupported = unsupportedOpenCodeCliVersion()
+  if (unsupported) throw new Error(unsupported)
   const port = Number(process.env.OPENCODE_PORT) || await findFreePort()
   const timeout = Number(process.env.OPENCODE_START_TIMEOUT_MS) || 15_000
-  // createOpencodeServer forwards the current process.env to the spawned
-  // `opencode serve` process (cross-spawn, no env override) — set the bridge
-  // URL here so the plugin file can read it back out on the other side.
+  // The spawned process inherits this environment, so the plugin file can read
+  // the bridge URL back out on the other side.
   process.env.AGENT_VIEWER_COORD_BRIDGE_URL = await getCoordinatorBridgeUrl()
   process.env.AGENT_VIEWER_COORD_BRIDGE_SECRET = await getCoordinatorBridgeSecret()
-  const server = await createOpencodeServer({
-    hostname: '127.0.0.1',
-    port,
-    timeout,
-    config: { plugin: [coordinatorPluginPath()] },
+  const child = spawn('opencode', ['serve', '--hostname=127.0.0.1', `--port=${port}`], {
+    env: { ...process.env, OPENCODE_CONFIG_CONTENT: JSON.stringify({ plugin: [coordinatorPluginPath()] }) },
+    stdio: ['ignore', 'pipe', 'pipe'],
   })
+  const started = await waitForOpenCodeServer(child, timeout)
+  const close = () => { try { child.kill('SIGTERM') } catch { /* already gone */ } }
+  // A server outliving this process would hold the port and its sessions.
+  const onExit = () => close()
+  process.once('exit', onExit)
 
   return {
-    client: openCodeClientFor(server.url),
-    clientV2: openCodeV2ClientFor(server.url),
-    server,
+    client: openCodeClientFor(started.url, started.password),
+    clientV2: openCodeV2ClientFor(started.url, started.password),
+    server: {
+      url: started.url,
+      close: () => { process.removeListener('exit', onExit); close() },
+    },
   }
+}
+
+/** Resolve once the server announces its url; keep reading for a password. */
+function waitForOpenCodeServer(child: ChildProcess, timeoutMs: number): Promise<{ url: string; password?: string }> {
+  return new Promise((resolve, reject) => {
+    let output = ''
+    let url: string | undefined
+    let password: string | undefined
+    let settled = false
+    const finish = () => {
+      if (settled || !url) return
+      settled = true
+      clearTimeout(timer)
+      clearTimeout(passwordGrace)
+      resolve({ url, password })
+    }
+    const fail = (error: Error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      clearTimeout(passwordGrace)
+      try { child.kill('SIGTERM') } catch { /* already gone */ }
+      reject(error)
+    }
+    const timer = setTimeout(() => fail(new Error(`Timeout waiting for OpenCode to start after ${timeoutMs}ms${output.trim() ? `\nServer output: ${output.trim()}` : ''}`)), timeoutMs)
+    let passwordGrace: ReturnType<typeof setTimeout> = setTimeout(() => {}, 0)
+    const read = (chunk: Buffer) => {
+      output += chunk.toString()
+      for (const line of output.split('\n')) {
+        const listening = /server listening on\s+(https?:\/\/[^\s]+)/.exec(line)
+        if (listening) url = listening[1]
+        const secret = /server password\s+(\S+)/.exec(line)
+        if (secret) password = secret[1]
+      }
+      if (url && password) finish()
+      // 2.x prints the password right after the url; 1.x never does, so a short
+      // grace period after the url is what tells the two apart.
+      else if (url) { clearTimeout(passwordGrace); passwordGrace = setTimeout(finish, 250) }
+    }
+    child.stdout?.on('data', read)
+    child.stderr?.on('data', read)
+    child.on('error', error => fail(error instanceof Error ? error : new Error(String(error))))
+    child.on('exit', code => fail(new Error(`OpenCode server exited with code ${code}${output.trim() ? `\nServer output: ${output.trim()}` : ''}`)))
+  })
 }
 
 async function createRuntime(): Promise<OpenCodeRuntime> {

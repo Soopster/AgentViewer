@@ -543,3 +543,43 @@ against the same task, both completing with the right answer (12.8s and 24.9s),
 with `["claude","codex"]` persisted for the conversation.
 `coordConversationSmoke.ts` pins the staffing, the persistence and the
 existing-teammate refusal; three mutations were verified to fail it.
+
+### Which providers can actually staff a teammate
+
+A provider picker that offers an option which cannot work is a trap, so every
+provider was run through the same live task (read a word from README, complete
+the task with it) in its own throwaway repository:
+
+| Provider | Result |
+|---|---|
+| Claude | completed, 10.1s |
+| Codex | completed, 21.2s |
+| Copilot | completed, 15.1s (blocks briefly, then completes) |
+| Pi | completed, 30.2s |
+| OpenCode | cannot staff a teammate here — see below |
+
+OpenCode failed for a reason that had nothing to do with the Coordinator. The
+installed CLI is **v2.0.1**; the newest published `@opencode-ai/sdk` is
+**1.18.31**. Two separate breaks followed from that, and the first hid the
+second:
+
+1. `createOpencodeServer` waits for a line reading `opencode server listening
+   on <url>`. The 2.x CLI prints `server listening on <url>`, so the helper
+   waited out its timeout against a server that was already up, and **every**
+   OpenCode session failed to start, teammates included. `startManagedServer`
+   now spawns `opencode serve` itself, accepts both spellings, and captures the
+   `server password` line 2.x prints — HTTP Basic, user `opencode` — which 1.x
+   never prints. `OPENCODE_SERVER_PASSWORD` does the same for an external
+   server.
+2. With the server up and authenticated, `POST /session` answers 405: the 2.x
+   HTTP API is not the one the 1.18 client speaks, and no SDK 2.x is published.
+   That cannot be fixed here, so a managed spawn now checks the CLI's major
+   version once and fails with what is actually wrong ("This OpenCode CLI is
+   v2, whose HTTP API the bundled @opencode-ai/sdk (1.18.x, the newest
+   published) does not speak. Install OpenCode 1.x, or point
+   OPENCODE_BASE_URL at a 1.x server.") instead of a 405 from deep inside
+   session creation.
+
+So four of the five providers can staff an interactive teammate today, and the
+fifth says why it cannot. `npm run opencode:harness:smoke` passes with the new
+spawn path.
