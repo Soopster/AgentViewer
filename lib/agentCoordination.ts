@@ -2389,14 +2389,50 @@ function recoverStaleExternalParticipantsSync(db: SqliteDatabase, runId: string)
   }
 }
 
+/**
+ * States a targeted wait settles on by default — herdr's `agent wait` default
+ * of the first settled `idle`, `done` or `blocked`, widened to the protocol's
+ * own terminal states, since a failed or stopped teammate is not coming back to
+ * the state the caller was waiting for.
+ */
+const SETTLED_AGENT_STATES = ['idle', 'ready', 'done', 'blocked', 'failed', 'stopped'] as const
+const WAITABLE_AGENT_STATES = new Set<string>([...SETTLED_AGENT_STATES, 'working'])
+
 export async function waitForExternalProtocolChange(
   identity: ExternalProtocolIdentity,
-  params: { cursor?: string; timeoutMs?: number } = {},
+  params: { cursor?: string; timeoutMs?: number; agent?: string; until?: string[] } = {},
 ): Promise<ExternalProtocolWaitResult> {
   const timeoutMs = Math.max(0, Math.min(params.timeoutMs ?? 25_000, 55_000))
   const deadline = Date.now() + timeoutMs
   const cursor = params.cursor?.trim() || null
   const db = await getDatabase()
+  // Herdr's `agent wait <name> --until <state>`: an unfiltered wait wakes on
+  // every heartbeat and mailbox write in the run, so a lead waiting for one
+  // teammate spent a turn per unrelated change. A targeted wait returns when
+  // that teammate reaches a state the caller named — or, never swallowed, when
+  // mail needs the caller's reply, since a teammate blocked on an answer would
+  // otherwise wait on a lead that is waiting on it.
+  const target = params.agent?.trim()
+  const until = params.until?.length ? params.until : [...SETTLED_AGENT_STATES]
+  const unknownState = until.find(state => !WAITABLE_AGENT_STATES.has(state))
+  if (unknownState) throw new Error(`Unknown teammate state for until: ${unknownState}`)
+  const targetAgent = (): ProtocolAgent | undefined => {
+    const roster = listAgentsSync(db, identity.runId)
+    const selector = target!.toLowerCase()
+    // Names are reused after a teammate retires, so prefer the newest holder.
+    return roster.find(agent => agent.id.toLowerCase() === selector)
+      ?? roster.findLast(agent => agent.name.toLowerCase() === selector)
+  }
+  if (target) {
+    const agent = targetAgent()
+    if (!agent) throw new Error(`Coordinator participant not found: ${target}`)
+    if (agent.id === identity.agentId) throw new Error('A participant cannot wait on itself')
+  }
+  const replyWaiting = () => Boolean(db.prepare(`
+    SELECT 1 FROM protocol_messages
+    WHERE run_id = ? AND to_agent_id = ? AND reply_required = 1 AND resolved_at IS NULL
+    LIMIT 1
+  `).get(identity.runId, identity.agentId))
   await enqueueWrite((writeDb) => {
     requireExternalParticipantSync(writeDb, identity)
     recoverStaleExternalParticipantsSync(writeDb, identity.runId)
@@ -2419,7 +2455,12 @@ export async function waitForExternalProtocolChange(
     `).run(leaseIso(), ts, identity.runId, identity.agentId)
   })
   for (;;) {
-    const changed = hasEventAfterCursorSync(db, identity.runId, cursor, identity.agentId)
+    const anyChange = hasEventAfterCursorSync(db, identity.runId, cursor, identity.agentId)
+    // Already in the named state counts at once, as in herdr: waiting for an
+    // agent to become idle when it already is must not sit out the timeout.
+    const changed = target
+      ? until.includes(targetAgent()?.status ?? '') || (anyChange && replyWaiting())
+      : anyChange
     if (changed || Date.now() >= deadline) {
       const page = changed
         ? eventsAfterCursorSync(db, identity.runId, identity.agentId, cursor)

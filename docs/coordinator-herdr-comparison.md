@@ -235,6 +235,7 @@ difference decides most of the verdicts below.
 | Closing a workspace with linked worktree workspaces needs explicit group intent (`workspace_group_close_required`), and a dirty checkout is never removed quietly (`worktree.rs`) | Turning a team off names what it leaves: teammate checkouts with uncommitted work, and turns still running (`readInteractiveTeardown`, read on demand) | Adopted this pass |
 | A name follows the current pane occupant and is cleared when that agent exits, is released or is replaced (SKILL.md, `app/agents.rs`) | `availableTeammateName`: stopped and failed teammates release their name; a `done` one keeps it while its session is live, because that is what a follow-up reuses | Adopted this pass |
 | A terminal observer that stops accepting output is disconnected after 30s without write progress (CHANGELOG #3612) | The Coordinator change stream drops a subscriber whose queue stops draining; the team keeps running and clients reconnect | Adopted this pass |
+| `agent wait <name> --until <state>`, and `pane.agent_status_changed` subscriptions filtered by pane and status (SKILL.md, `api/schema/events.rs`) | `coord_wait` takes `agent` and `until`: it returns when that teammate settles or reaches a named state, at once if it already has, and whenever mail needs the waiter's reply | Adopted this pass |
 | Named agents, unique, validated (SKILL.md) | Protocol names, delegation requires exactly one active match | Present |
 | Detach without stopping work (README) | `agent-viewer web` daemon + `--attach`; turns run server-side | Present |
 | Resume supported agent sessions after restart (`agent_resume.rs`) | Provider sessions are durable by id; interrupted teammate execution waits for explicit recovery rather than auto-resuming | Present, deliberately stricter |
@@ -649,3 +650,31 @@ The drop shows up as the reader reaching `done` after draining, because a
 closed `ReadableStream` still hands over what it buffered; asserting on
 `reader.closed` instead hangs forever, which is how the first version of this
 test failed. Two mutations were verified to fail it.
+
+### Waiting on one teammate
+
+Herdr's `agent wait reviewer --until blocked` returns when that agent reaches
+that state, and its event API lets a client subscribe to status changes for a
+single pane. `coord_wait` woke on any change in the run — every heartbeat, every
+progress line, every message between other teammates — so a lead waiting for
+one teammate spent a model turn per unrelated write, which is exactly the cost
+herdr's filter exists to avoid.
+
+`coord_wait` now takes `agent` and `until` (defaulting, like herdr's settled
+states, to idle/ready/done/blocked plus the protocol's failed and stopped). Two
+rules carry over and one is added:
+
+- A state that already holds returns at once — herdr checks the initial state
+  before waiting, and a wait for "idle" on an idle teammate must not sit out the
+  timeout.
+- The teammate is named by id or by name, and a name resolves to its newest
+  holder, since names are reused after a teammate retires.
+- **Mail that needs the waiter's reply always wakes it.** Herdr has no mailbox,
+  so this one is ours: a filter that swallowed it would leave a teammate blocked
+  on an answer from a lead that is waiting on that teammate.
+
+`scripts/coordTargetedWaitSmoke.ts` runs against a real ledger: a state that
+already holds, heartbeats and progress that must not wake the wait, the named
+state that must, reply mail that must, unknown targets and states refused, and
+the unfiltered wait unchanged. Ignoring the filter, swallowing mail, and
+requiring a fresh change before matching were each verified to fail it.

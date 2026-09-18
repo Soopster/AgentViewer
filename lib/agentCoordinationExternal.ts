@@ -201,6 +201,8 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
       timeoutMs: typeof body.timeoutMs === 'number' && Number.isFinite(body.timeoutMs)
         ? body.timeoutMs
         : undefined,
+      agent: optionalText(body.agent),
+      until: Array.isArray(body.until) ? body.until.filter((entry): entry is string => typeof entry === 'string') : undefined,
     })
   }
   if (action === 'create_task') {
