@@ -493,7 +493,24 @@ its own `.agent-viewer-data`, shared checkout, no worktrees:
    transition, carrying the teammate's actual question ("Which file should I
    review: alpha.ts or beta.ts?"), with the attention list showing `message`.
 
-Both runs were stopped and left nothing behind in this repository's data. What
-this does NOT show: any provider other than Claude, worktree-backed teammates,
-long-running turns, recovery after a host restart with real provider state, or
-any comparative measurement against herdr.
+Repeated with a **Codex** teammate through the identical script, since an
+interactive run staffs teammates with the lead conversation's provider:
+
+| | Claude | Codex |
+|---|---|---|
+| dispatch → `Working · live turn` | 2.1s | 2.7s |
+| task completed with the right word | 10.1s | 21.2s |
+| teammate's own line quoted | `“PARSNIP”` | `“PARSNIP”` |
+| `finished` alert | once, on transition | once, on transition |
+| teammate question → attention | `message`, with its real words | `blocker` + `message`, `Waiting for input` |
+
+Codex reaches the blocked state through both paths at once — the task goes
+`blocked` *and* the reply-required message lands — so its roster row reads
+"Waiting for input" where Claude's read "Working · live turn" while the question
+sat in the mailbox. Both produce the alert; the Codex row is the more accurate
+of the two.
+
+All runs were stopped and left nothing behind in this repository's data. What
+this does NOT show: OpenCode, Copilot or Pi teammates, worktree-backed
+teammates, long-running turns, recovery after a host restart with real provider
+state, or any comparative measurement against herdr.
