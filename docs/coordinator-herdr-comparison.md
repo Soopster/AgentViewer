@@ -270,8 +270,8 @@ difference decides most of the verdicts below.
   `turnActive` exclusion was verified to fail it, so the check is exercising a
   genuinely claimed task rather than passing on its status.
 - No combined multi-machine roster.
-- Every check above is fixture-driven. No live-provider, long-duration or
-  side-by-side workflow comparison with herdr has been run.
+- Live-provider proof now exists for two paths, but only those (below). No
+  long-duration run and no side-by-side comparison with herdr has been made.
 
 Tests added for the second half of this pass: `coordSignalsSmoke.ts` pins
 `coordinatorAttentionPriority`; the TUI store smoke asserts delivery is held
@@ -475,3 +475,25 @@ line standing rather than blanking it. `coordSignalsSmoke.ts` pins the source
 filter, the newest-wins rule, trimming, the cap and the empty-heartbeat case;
 `teammatesPopoverSmoke.tsx` has a real teammate report a line and asserts the
 roster shows it. Three mutations were verified to fail.
+
+### Live-provider check, September 18, 2026
+
+Everything above was fixture-driven until this pass. Two scenarios were run
+against a real Claude teammate, each in its own throwaway git repository with
+its own `.agent-viewer-data`, shared checkout, no worktrees:
+
+1. **Delegate → result.** A task to report a word from README. Observed, in 12
+   seconds: `Starting · awaiting provider activity` → `Working · live turn`
+   (2s) → the teammate's own word quoted in the roster (`“PARSNIP”`), a
+   `finished` signal, and `task=completed` carrying `PARSNIP`. The stall window
+   was never approached, which is the evidence behind 15s that the fixtures
+   could not give.
+2. **Teammate asks → attention.** A task whose instruction was to ask the lead
+   which file to review. Observed: one `needs-attention` alert, fired as a
+   transition, carrying the teammate's actual question ("Which file should I
+   review: alpha.ts or beta.ts?"), with the attention list showing `message`.
+
+Both runs were stopped and left nothing behind in this repository's data. What
+this does NOT show: any provider other than Claude, worktree-backed teammates,
+long-running turns, recovery after a host restart with real provider state, or
+any comparative measurement against herdr.
