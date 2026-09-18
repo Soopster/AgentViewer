@@ -159,6 +159,7 @@ import { createNewViewSession, streamViewSessionTurn } from './sessionBackend'
 import { isOpenCodeManagedServer } from './opencodeClient'
 import { getRunningSessionInfo, interruptRunningSession, steerRunningSession } from './sessionRuntime'
 import { coordinatorAttention } from './coordinatorAttention'
+import { isAgentProvider } from './provider'
 import { createWorktreeTask, findRepoRoot, findWorktreeTaskForCwd, removeWorktreeTask, type WorktreeTask } from './worktreeTasks'
 import type { AgentProvider } from './types'
 
@@ -176,7 +177,7 @@ const LOCK_LEASE_MS = 20 * 60_000
 // can cancel a teammate's in-flight turn without releasing the task), and
 // respond_to_mode/respond_to_allowlist_json (per-participant mailbox sender
 // gating, mirroring buzz-acp's respond-to modes).
-const SCHEMA_VERSION = 22
+const SCHEMA_VERSION = 23
 const EVENT_WINDOW = 300
 const LOCK_HISTORY_WINDOW = 200
 // Non-terminal tasks (pending/claimed/blocked) are always returned in full —
@@ -616,7 +617,10 @@ function initializeSchema(db: SqliteDatabase): void {
       run_id TEXT NOT NULL REFERENCES protocol_runs(id) ON DELETE CASCADE,
       provider TEXT NOT NULL,
       auto_continue INTEGER NOT NULL DEFAULT 0,
-      remaining_turns INTEGER NOT NULL DEFAULT 4
+      remaining_turns INTEGER NOT NULL DEFAULT 4,
+      -- JSON array of providers this chat may staff teammates from, beyond the
+      -- lead's own. Null/absent means "the lead's provider only".
+      teammate_providers TEXT
     );
     CREATE INDEX IF NOT EXISTS protocol_interactive_run_idx ON protocol_interactive_sessions(run_id);
     CREATE TABLE IF NOT EXISTS protocol_interactive_dispatches (
@@ -801,6 +805,8 @@ function migrateSchema(db: SqliteDatabase): void {
     'ALTER TABLE protocol_tasks ADD COLUMN claude_agent_policy_json TEXT',
     "ALTER TABLE protocol_tasks ADD COLUMN verify_commands_json TEXT NOT NULL DEFAULT '[]'",
     'ALTER TABLE protocol_tasks ADD COLUMN receipt_json TEXT',
+    // v23: a chat's team may staff teammates from more than one provider.
+    'ALTER TABLE protocol_interactive_sessions ADD COLUMN teammate_providers TEXT',
   ]) {
     try {
       db.exec(statement)
@@ -2538,6 +2544,30 @@ export async function runExternalProtocolIdempotent<T>(
   }
 }
 
+/**
+ * Which providers a chat's team may staff teammates from: the lead's own,
+ * plus any the user has picked for a delegation. A mixed team is the point of
+ * routing work by provider — a Codex reviewer beside a Claude implementer —
+ * and it has to survive a restart, so the set is durable rather than inferred
+ * from whoever happens to be on the roster.
+ */
+function interactiveTeammateProvidersSync(db: SqliteDatabase, runId: string, leadProvider: ProtocolRun['provider']): ProtocolRun['provider'][] {
+  const row = db.prepare('SELECT teammate_providers FROM protocol_interactive_sessions WHERE run_id = ?').get(runId) as Row | undefined
+  const stored = typeof row?.teammate_providers === 'string' ? parseJsonArray(row.teammate_providers) : []
+  const providers = stored.filter((value): value is ProtocolRun['provider'] => typeof value === 'string' && isAgentProvider(value))
+  return [...new Set([leadProvider, ...providers])]
+}
+
+/** Record a provider this chat may staff from, so the choice survives a restart. */
+function rememberInteractiveTeammateProviderSync(db: SqliteDatabase, runId: string, provider: ProtocolRun['provider']): void {
+  const row = db.prepare('SELECT session_id, provider, teammate_providers FROM protocol_interactive_sessions WHERE run_id = ?').get(runId) as Row | undefined
+  if (!row) return
+  const current = interactiveTeammateProvidersSync(db, runId, String(row.provider) as ProtocolRun['provider'])
+  if (current.includes(provider)) return
+  db.prepare('UPDATE protocol_interactive_sessions SET teammate_providers = ? WHERE run_id = ?')
+    .run(JSON.stringify([...current, provider]), runId)
+}
+
 declare global { var __agentViewerInteractiveHostId: string | undefined }
 const interactiveHostId = globalThis.__agentViewerInteractiveHostId ??= randomUUID()
 
@@ -2600,7 +2630,7 @@ async function adoptInteractiveController(identity: ExternalProtocolIdentity): P
   const run = snapshot.run
   const controller: RunController = {
     interactiveLeadId: lead.id, runId: run.id, prompt: run.prompt, provider: run.provider,
-    teammateProviders: [run.provider], baseCwd: run.baseCwd, maxAgents: run.maxAgents,
+    teammateProviders: interactiveTeammateProvidersSync(db, run.id, run.provider), baseCwd: run.baseCwd, maxAgents: run.maxAgents,
     gateCommand: run.gateCommand, requirePlanApproval: run.requirePlanApproval === true,
     autonomy: run.autonomy, requireReview: run.requireReview, acceptanceContract: run.acceptanceContract,
     budget: run.budget, useWorktrees: run.useWorktrees !== false, stopped: false,
@@ -2734,7 +2764,13 @@ export async function createExternalProtocolTask(
     if (!params.title.trim() || !params.detail.trim()) throw new Error('task title and detail are required')
     const controller = controllers.get(identity.runId) ?? await adoptInteractiveController(identity)
     if (controller && params.requestedProvider && !controller.teammateProviders.includes(params.requestedProvider)) {
-      throw new Error('Requested provider is not configured for this team')
+      // An interactive team is staffed by a user choosing in the panel, so a
+      // provider they pick joins the team rather than being refused — and is
+      // remembered, so a restarted host can still fail that teammate over.
+      if (!controller.interactiveLeadId) throw new Error('Requested provider is not configured for this team')
+      if (!isAgentProvider(params.requestedProvider)) throw new Error(`Unknown provider: ${params.requestedProvider}`)
+      await enqueueWrite(tx => rememberInteractiveTeammateProviderSync(tx, identity.runId, params.requestedProvider!))
+      controller.teammateProviders = [...new Set([...controller.teammateProviders, params.requestedProvider])]
     }
     const agents = listAgentsSync(db, identity.runId)
     const available = agents.find(agent => agent.role === 'teammate' && !agent.taskId
@@ -2804,6 +2840,12 @@ export async function createExternalProtocolTask(
       if (matches.length !== 1) throw new Error('Delegation requires one active teammate; use its agent ID to disambiguate')
       delegate = matches[0]
       if (db.prepare('SELECT 1 FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').get(identity.runId, delegate.id)) throw new Error('Inspect and reconcile the previous teammate execution before assigning more work')
+      // A provider choice staffs a NEW teammate. An existing one already has a
+      // session with its own provider, and silently ignoring the mismatch would
+      // run the work somewhere the user did not choose.
+      if (params.requestedProvider && params.requestedProvider !== delegate.provider) {
+        throw new Error(`${delegate.name} is a ${delegate.provider} teammate; a provider choice only applies to a new teammate`)
+      }
       if (delegate.role !== 'teammate' || (!['idle', 'ready'].includes(delegate.status) && !(delegate.status === 'done' && controllers.get(identity.runId)?.sessionIds.has(delegate.id))) || delegate.taskId) {
         throw new Error('Teammate is busy or unavailable; send a follow-up message or wait for its current task')
       }

@@ -895,7 +895,9 @@ which mirror `app/api/sessions/[sessionId]/coordination/route.ts` action for act
   stated in the panel header (the footer drops hints when narrow). `i` interrupts the selected
   teammate: a **managed** teammate's turn runs in this process, so the external cancel flag would
   never be read — `interruptInteractiveAgent` interrupts its live session instead, and the task stays
-  owned. Reviewed-result markers persist in
+  owned. `p` cycles which provider staffs the **next new** teammate (web: a select); the set is
+  durable per conversation (`teammate_providers`, schema v23) because failover after a restart must
+  know what the team may staff, and a provider choice never re-provisions an existing teammate. Reviewed-result markers persist in
   `lib/tui/coordinatorReviewed.ts`; in memory, a restart re-flagged every result. Pinned by
   `scripts/coordSignalsSmoke.ts` and the store smoke.
 - **Host ownership comes from a user, never from a sweep.** `sweepMailboxes` starts at module load in

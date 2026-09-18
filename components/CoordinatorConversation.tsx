@@ -11,11 +11,16 @@ import { Button } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea'
 
+/** Providers a chat can staff a new teammate from. */
+const COORDINATOR_TEAMMATE_PROVIDERS = ['claude', 'codex', 'opencode', 'copilot', 'pi'] as const
+
 type RequestBody = {
   action: 'disable' | 'enable' | 'settings' | 'reconcile' | 'resume-agent' | 'interrupt-agent' | 'delegate' | 'message' | 'review-plan' | 'decision'
   provider: Session['provider']; requestId: string; detail: string; to?: string; paths?: string[]
   cwd?: string; autoContinue?: boolean; useWorktrees?: boolean; batchId?: string; received?: boolean
   taskId?: string; decisionId?: string; approved?: boolean; inReplyTo?: string
+  /** Provider for a NEW teammate; an existing one keeps its own. */
+  teammateProvider?: Session['provider']
 }
 
 export default function CoordinatorConversation({ session, onInspect, onReturnToChat, onAttentionChange }: {
@@ -26,6 +31,9 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
   const snapshot = state?.snapshot ?? null
   const [detail, setDetail] = useState('')
   const [to, setTo] = useState('auto')
+  // Provider for a NEW teammate — an existing one keeps its own, so this only
+  // applies when the work goes to a teammate that does not exist yet.
+  const [teammateProvider, setTeammateProvider] = useState<'lead' | Session['provider']>('lead')
   const [paths, setPaths] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -179,13 +187,20 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
         <option value="auto">Available teammate or a new one</option>
         {snapshot?.agents.filter(agent => agent.role === 'teammate').map(agent => <option key={agent.id} value={agent.id}>{agent.name} · {agent.status}</option>)}
       </NativeSelect>
+      {to === 'auto' ? <>
+        <label htmlFor={`${id}-provider`}>New teammate uses</label>
+        <NativeSelect id={`${id}-provider`} value={teammateProvider} disabled={disabled} onChange={event => setTeammateProvider(event.target.value as typeof teammateProvider)}>
+          <option value="lead">Same provider as this chat</option>
+          {COORDINATOR_TEAMMATE_PROVIDERS.map(option => <option key={option} value={option}>{option}</option>)}
+        </NativeSelect>
+      </> : null}
       <label htmlFor={`${id}-detail`}>Task or follow-up</label>
       <Textarea id={`${id}-detail`} value={detail} maxLength={8000} disabled={disabled} onChange={event => setDetail(event.target.value)} placeholder="Review the changes and report actionable findings." rows={2} />
       <details><summary>Files the teammate may edit</summary><label htmlFor={`${id}-paths`}>Write paths, one per line</label>
         <Textarea id={`${id}-paths`} value={paths} disabled={disabled} onChange={event => setPaths(event.target.value)} rows={2} />
       </details>
       <div className="flex flex-wrap gap-2">
-        <Button disabled={disabled || !detail.trim()} onClick={() => void send({ action: 'delegate', detail, to, paths: paths.split('\n').map(value => value.trim()).filter(Boolean) })}>Ask teammate</Button>
+        <Button disabled={disabled || !detail.trim()} onClick={() => void send({ action: 'delegate', detail, to, paths: paths.split('\n').map(value => value.trim()).filter(Boolean), teammateProvider: to === 'auto' && teammateProvider !== 'lead' ? teammateProvider : undefined })}>Ask teammate</Button>
         <Button variant="outline" disabled={disabled || to === 'auto' || !detail.trim()} onClick={() => void send({ action: 'message', detail, to })}>Message working teammate</Button>
       </div>
       </> : null}

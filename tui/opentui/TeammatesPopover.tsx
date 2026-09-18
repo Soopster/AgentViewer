@@ -13,6 +13,10 @@ import { memo, useCallback, useEffect, useMemo, useState, useSyncExternalStore }
 import type { TuiThemePalette } from '../theme'
 import { getProviderAccent } from '../theme'
 import { formatProviderLabel } from '../format'
+import type { AgentProvider } from '../../lib/types'
+
+/** Providers a chat can staff a NEW teammate from; cycled with `p`. */
+const COORDINATOR_TEAMMATE_PROVIDERS: readonly AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi']
 import { fitText, joinMeta } from './textLayout'
 import { MODAL_CONTENT_Z_INDEX } from './layers'
 import type { ProtocolAgent } from '../../lib/agentProtocol'
@@ -66,6 +70,9 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   const [attentionIndex, setAttentionIndex] = useState(0)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [confirmOff, setConfirmOff] = useState(false)
+  // Provider for the NEXT new teammate; an existing one keeps its own. `null`
+  // means the lead conversation's provider.
+  const [newTeammateProvider, setNewTeammateProvider] = useState<AgentProvider | null>(null)
 
   const { data, session, busy, pending, error } = state
   const snapshot = data?.snapshot ?? null
@@ -115,7 +122,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
         const text = draft.text.trim()
         if (!text) { setDraft(null); return }
         act(draft.kind === 'delegate'
-          ? { action: 'delegate', detail: text, to: draft.to ?? 'auto' }
+          ? { action: 'delegate', detail: text, to: draft.to ?? 'auto', teammateProvider: draft.to ? undefined : newTeammateProvider ?? undefined }
           : { action: draft.kind, detail: text, to: draft.to ?? undefined, taskId: draft.taskId, decisionId: draft.decisionId, inReplyTo: draft.inReplyTo },
           draft.kind === 'delegate' ? `Task sent to ${draft.toName}` : `Message sent to ${draft.toName}`)
         setDraft(null)
@@ -238,6 +245,17 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       setDraft({ kind: 'delegate', to: null, toName: 'an available teammate', text: '' })
       return
     }
+    // Cycle which provider a NEW teammate is staffed from — a Codex reviewer
+    // beside a Claude implementer is the point of routing work by provider.
+    if (key.name === 'p' && !disabled) {
+      setNewTeammateProvider((current) => {
+        const index = current === null ? 0 : COORDINATOR_TEAMMATE_PROVIDERS.indexOf(current) + 1
+        const next = index >= COORDINATOR_TEAMMATE_PROVIDERS.length ? null : COORDINATOR_TEAMMATE_PROVIDERS[index]!
+        onNotice('info', next ? `New teammates use ${formatProviderLabel(next)}` : 'New teammates use this conversation\'s provider', 3000)
+        return next
+      })
+      return
+    }
     if (key.name === 'm' && selected && !disabled) {
       setDraft({ kind: 'message', to: selected.id, toName: selected.name, text: '' })
     }
@@ -290,7 +308,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
         : !enabled
           ? (teammates.length ? [['j/k', 'move'], ['⏎', 'open transcript'], ['e', 'new team'], ['esc', 'close']] : canLead ? [['e', 'enable coordinator'], ['esc', 'close']] : [['esc', 'close']])
           : [['j/k', 'move'], ['⏎', 'open'], ['d', 'ask'], ['m', 'message'],
-             ['r', 'resume'], ['i', 'interrupt'], ['c', 'continuation'], ['w', 'worktrees'], ['l', `alerts ${state.notifications}`], ['x', 'turn off'], ['esc', 'close']]
+             ['r', 'resume'], ['i', 'interrupt'], ['p', `new: ${newTeammateProvider ? formatProviderLabel(newTeammateProvider) : 'same'}`], ['c', 'continuation'], ['w', 'worktrees'], ['l', `alerts ${state.notifications}`], ['x', 'turn off'], ['esc', 'close']]
   // Truncation is by whole entries, not mid-word: a hint cut to "x …" tells the
   // reader a key exists without saying which.
   const footerWidth = (hints: Array<[string, string]>) =>

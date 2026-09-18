@@ -16,6 +16,8 @@ const schema = z.object({
   autoContinue: z.boolean().optional(), useWorktrees: z.boolean().optional(), batchId: z.string().optional(), received: z.boolean().optional(),
   to: z.string().min(1).max(160).optional(),
   paths: z.array(z.string().trim().min(1)).max(100).optional(),
+  /** Provider for a NEW teammate; an existing one keeps its own. */
+  teammateProvider: z.string().refine(isAgentProvider).optional(),
   taskId: z.string().min(1).optional(), decisionId: z.string().min(1).optional(),
   approved: z.boolean().optional(), inReplyTo: z.string().min(1).optional(),
 })
@@ -84,6 +86,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ ses
       }
       if (body.action === 'delegate') return createExternalProtocolTask(identity, {
         assignTo: body.to ?? 'auto', title: body.detail.split('\n')[0]!.slice(0, 160), detail: body.detail, paths: body.paths,
+        requestedProvider: body.teammateProvider,
       })
       if (body.action === 'message') {
         if (!body.to) throw new Error('Choose a teammate')

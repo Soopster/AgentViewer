@@ -16,7 +16,7 @@ const turns = new Map<string, () => void>()
 mock.module(fileURLToPath(new URL('../lib/sessionBackend.ts', import.meta.url)), () => ({
   readViewSessionRunning: () => ({ running: false, pendingPermissions: [], pendingPrompts: [] }),
   readViewSessionInfo: async () => ({ provider: 'codex', cwd }),
-  createNewViewSession: async () => ({ provider: 'codex', sessionId: `teammate-${++created}`, isPending: false }),
+  createNewViewSession: async ({ provider }: { provider: string }) => ({ provider, sessionId: `teammate-${++created}`, isPending: false }),
   streamViewSessionTurn: async ({ sessionId }: { sessionId: string }) => new Promise<Response>(resolve => {
     assert.notEqual(sessionId, 'primary-chat', 'the supervisor must never run the user conversation')
     turns.set(sessionId, () => resolve(new Response('')))
@@ -125,6 +125,25 @@ try {
   const task = await coord.createExternalProtocolTask(external, { assignTo: 'auto', title: 'External review', detail: 'Report findings' })
   assert.ok(task.delegation?.sessionId)
   assert.equal(created, 3)
+  // A chat may staff teammates from another provider; an existing teammate
+  // keeps its own, and the choice is durable so a restart can still fail over.
+  {
+    const identity = await coord.sessionCoordinatorIdentity('primary-chat', 'codex')
+    const mixed = await post({ action: 'delegate', requestId: 'mixed-1', detail: 'Review with a different provider', teammateProvider: 'claude' })
+    const mixedAgent = mixed.snapshot.agents.find((agent: { id: string }) => agent.id === mixed.result.delegation.agentId)
+    assert.equal(mixedAgent.provider, 'claude', 'the requested provider staffs the new teammate')
+    const { DatabaseSync } = await (0, eval)('import("node:sqlite")')
+    const db = new DatabaseSync(path.join(cwd, '.agent-viewer-data/agent-coordination/coordination.sqlite'), { readOnly: true })
+    const stored = (db.prepare('SELECT teammate_providers FROM protocol_interactive_sessions WHERE session_id = ?').get('primary-chat') as { teammate_providers: string | null }).teammate_providers
+    db.close()
+    assert.deepEqual(JSON.parse(stored ?? '[]'), ['codex', 'claude'], 'the choice is persisted with the lead provider')
+    // A settled teammate keeps its own provider: asking for another one is
+    // refused rather than running the work somewhere the user did not choose.
+    await assert.rejects(coord.createExternalProtocolTask(identity, { assignTo: asks[1].result.delegation.agentId, title: 'x', detail: 'y', requestedProvider: 'claude' }),
+      /is a codex teammate|only applies to a new teammate/, 'an existing teammate is not re-provisioned by a provider request')
+    void identity
+  }
+
   // A run that has ended cannot be resumed, so it must not ask to be: an
   // interrupted teammate in a stopped room reads Stopped, not "needs recovery".
   {

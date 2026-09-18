@@ -23,6 +23,7 @@ function readEntry(file: string, scope: string): RecordEntry {
   if (entry?.version !== 1 || entry.scope !== scope || !Number.isFinite(entry.createdAt)
     || !entry.request || !ACTIONS.has(entry.request.action) || typeof entry.request.detail !== 'string'
     || typeof entry.request.requestId !== 'string' || !entry.request.requestId
+    || (entry.request.teammateProvider !== undefined && typeof entry.request.teammateProvider !== 'string')
     || filename(scope, entry.request.requestId) !== file) {
     throw new Error('Unconfirmed Coordinator request journal is invalid; inspect it before sending more work')
   }

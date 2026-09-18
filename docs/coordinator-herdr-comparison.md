@@ -231,6 +231,7 @@ difference decides most of the verdicts below.
 | `agent send-keys <name> ctrl+c` to stop an agent going the wrong way (SKILL.md) | `interrupt-agent`: `i` in the Teammates panel, **Interrupt** in the web roster. A managed teammate's live turn is interrupted in this process; an external worker takes the cancel flag and urgent mail `cancelExternalProtocolTurn` already sent. The task stays owned | Adopted this pass |
 | Every pane marked in the sidebar, so the stuck one is never hunted for (README, `aggregate.rs`) | `GET /api/agent-protocol/attention` + a per-row mark in the web session list (`! n` amber waiting, `✓ n` green results); the TUI's global badge already did this | Adopted this pass |
 | Agent-reported metadata tokens shown in the sidebar (`metadata_tokens.rs`, `pane report-agent`) | `coordinatorAgentNote`: the teammate's own last progress/heartbeat/block/result line, quoted under its activity in both rosters | Adopted this pass |
+| `agent start <name> --kind <agent>`: each pane's agent is chosen per agent, so a workspace mixes kinds freely | A chat's team can now staff teammates from different providers: `p` cycles the next new teammate's provider in the TUI panel, a select in the web panel; the set is durable per conversation | Adopted this pass |
 | Named agents, unique, validated (SKILL.md) | Protocol names, delegation requires exactly one active match | Present |
 | Detach without stopping work (README) | `agent-viewer web` daemon + `--attach`; turns run server-side | Present |
 | Resume supported agent sessions after restart (`agent_resume.rs`) | Provider sessions are durable by id; interrupted teammate execution waits for explicit recovery rather than auto-resuming | Present, deliberately stricter |
@@ -514,3 +515,31 @@ All runs were stopped and left nothing behind in this repository's data. What
 this does NOT show: OpenCode, Copilot or Pi teammates, worktree-backed
 teammates, long-running turns, recovery after a host restart with real provider
 state, or any comparative measurement against herdr.
+
+### Mixed-provider teams
+
+Herdr picks an agent kind per pane, so one workspace runs Claude and Codex side
+by side. Interactive Coordinator staffed every teammate from the lead
+conversation's provider: the machinery for per-task providers existed
+(`requestedProvider`, provider-aware spawn and failover) but the interactive
+controller pinned `teammateProviders` to `[run.provider]`, so any request was
+refused with "Requested provider is not configured for this team".
+
+A chat's allowed set is now durable (`protocol_interactive_sessions.teammate_providers`,
+schema v23) rather than inferred from whoever is on the roster, because failover
+after a restart has to know what the team may staff. A provider the user picks
+joins the set — the user choosing in the panel *is* the configuration — while a
+non-interactive run keeps the old refusal, where the set came from the run's own
+parameters.
+
+Two rules matter more than the plumbing. A provider choice staffs a **new**
+teammate only: asking for one while assigning to an existing teammate is
+refused, because that teammate already has a session and silently ignoring the
+mismatch would run the work somewhere the user did not choose. And an unknown
+provider string is rejected rather than remembered.
+
+Verified live: a Claude-led chat ran a Claude teammate and a Codex teammate
+against the same task, both completing with the right answer (12.8s and 24.9s),
+with `["claude","codex"]` persisted for the conversation.
+`coordConversationSmoke.ts` pins the staffing, the persistence and the
+existing-teammate refusal; three mutations were verified to fail it.
