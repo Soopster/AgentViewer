@@ -147,6 +147,8 @@ type Props = {
   dashboardSelected?: boolean
   agentOperationsSelected?: boolean
   messagingSelected?: boolean
+  /** Teammate attention per `provider:sessionId`, from /api/agent-protocol/attention. */
+  teamAttention?: Record<string, { waiting: number; finished: number }>
   scrollToSessionRequest?: { sessionKey: string; requestId: number } | null
   onSelect: (session: Session) => void
   onSelectProject: (projectDir: string, projectName: string, sessions: Session[]) => void
@@ -245,6 +247,10 @@ const PROVIDER_LABELS: Partial<Record<AgentProvider, string>> = {
 // holds a single provider — the common case. Provided once per list rather than
 // threaded through ProjectGroup/SessionRowGroup as a prop.
 const ShowProviderContext = createContext(true)
+// Passed by context rather than as a row prop: a new object per poll would
+// break every memoized row, and this changes only when a team does.
+const EMPTY_TEAM_ATTENTION: Record<string, { waiting: number; finished: number }> = {}
+const TeamAttentionContext = createContext<Record<string, { waiting: number; finished: number }>>(EMPTY_TEAM_ATTENTION)
 
 function providerLabel(provider: AgentProvider): string {
   return PROVIDER_LABELS[provider] ?? provider
@@ -314,6 +320,9 @@ const SessionRow = memo(function SessionRow({
     [session.provider],
   )
   const showProvider = useContext(ShowProviderContext)
+  // Waiting outranks a finished result, and a result alone never reads as
+  // urgent — the same split the TUI badge makes.
+  const teammates = useContext(TeamAttentionContext)[sessionTabKey(session)]
 
   useEffect(() => setInbox(session.inbox), [session.inbox])
 
@@ -466,6 +475,25 @@ const SessionRow = memo(function SessionRow({
           </span>
         )}
         </div>
+        {teammates && (teammates.waiting > 0 || teammates.finished > 0) ? (
+          <span
+            title={teammates.waiting > 0
+              ? `${teammates.waiting} teammate item${teammates.waiting === 1 ? '' : 's'} need you${teammates.finished ? `, ${teammates.finished} finished` : ''}`
+              : `${teammates.finished} teammate result${teammates.finished === 1 ? '' : 's'} to review`}
+            style={{
+              flexShrink: 0,
+              fontSize: 11,
+              fontWeight: 600,
+              padding: '1px 6px',
+              borderRadius: 999,
+              color: teammates.waiting > 0 ? 'var(--amber)' : 'var(--green)',
+              border: `1px solid ${teammates.waiting > 0 ? 'var(--amber)' : 'var(--green)'}`,
+              opacity: 0.85,
+            }}
+          >
+            {teammates.waiting > 0 ? `! ${teammates.waiting}` : `✓ ${teammates.finished}`}
+          </span>
+        ) : null}
         {editing !== 'title' && activityTime != null && (
           <span
             title={activityTitle}
@@ -952,6 +980,7 @@ function SessionListInner({
   dashboardSelected = false,
   agentOperationsSelected = false,
   messagingSelected = false,
+  teamAttention,
   scrollToSessionRequest,
   onSelect,
   onSelectProject,
@@ -1797,6 +1826,7 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
   }
 
   return (
+    <TeamAttentionContext.Provider value={teamAttention ?? EMPTY_TEAM_ATTENTION}>
     <ShowProviderContext.Provider value={showProviderPerRow}>
     <div
       ref={rootRef}
@@ -2321,6 +2351,7 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
       )}
     </div>
     </ShowProviderContext.Provider>
+    </TeamAttentionContext.Provider>
   )
 }
 

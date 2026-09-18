@@ -839,6 +839,30 @@ export default function Home() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
+  // Which conversations have teammates needing attention — herdr marks every
+  // pane in its sidebar so the stuck one never has to be hunted for. Ledger
+  // only; the value keeps its identity while nothing changes, so memoized
+  // session rows do not re-render on every poll.
+  const [teamAttention, setTeamAttention] = useState<Record<string, { waiting: number; finished: number }>>({})
+  useEffect(() => {
+    if (!documentVisible) return
+    let disposed = false
+    const read = async () => {
+      try {
+        const response = await fetch('/api/agent-protocol/attention')
+        if (!response.ok) return
+        const data = await response.json() as { attention?: Array<{ sessionId: string; provider: string; waiting: number; finished: number }> }
+        if (disposed) return
+        const next: Record<string, { waiting: number; finished: number }> = {}
+        for (const entry of data.attention ?? []) next[`${entry.provider}:${entry.sessionId}`] = { waiting: entry.waiting, finished: entry.finished }
+        setTeamAttention(previous => JSON.stringify(previous) === JSON.stringify(next) ? previous : next)
+      } catch { /* the sidebar simply shows no teammate marks */ }
+    }
+    void read()
+    const id = setInterval(() => { void read() }, 5000)
+    return () => { disposed = true; clearInterval(id) }
+  }, [documentVisible])
+
   // Poll sessions list silently every 5 s while the tab is visible.
   useEffect(() => {
     if (!documentVisible) return
@@ -1501,6 +1525,7 @@ export default function Home() {
             dashboardSelected={dashboardSelected && dashboardTab === 'sessions'}
             agentOperationsSelected={dashboardSelected && dashboardTab === 'agents'}
             messagingSelected={dashboardSelected && dashboardTab === 'messaging'}
+            teamAttention={teamAttention}
             scrollToSessionRequest={sessionListScrollRequest}
             onSelect={selectSession}
             onSelectProject={selectProject}

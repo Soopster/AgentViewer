@@ -31,7 +31,11 @@ try {
     if (url.origin !== origin) return route.abort()
     if (!url.pathname.startsWith('/api/')) return route.continue()
     let data = {}
-    if (url.pathname === '/api/provider') data = { provider: 'codex', providerInstanceId: 'codex', instances: [] }
+    if (url.pathname === '/api/agent-protocol/attention') {
+      // Herdr marks every pane in its sidebar; this is the session list's copy.
+      data = { attention: enabled && permissionPending ? [{ sessionId: lead.sessionId, provider: 'codex', waiting: 1, finished: 0 }] : [] }
+    }
+    else if (url.pathname === '/api/provider') data = { provider: 'codex', providerInstanceId: 'codex', instances: [] }
     else if (url.pathname === '/api/sessions') data = { sessions: [lead] }
     else if (url.pathname.endsWith('/coordination')) {
       if (observationFails && route.request().method() === 'GET') {
@@ -83,6 +87,10 @@ try {
   await teamTab.click()
   await page.getByRole('button', { name: 'Enable coordinator', exact: true }).click()
   await page.getByText('Coordinator on', { exact: true }).waitFor()
+  // The session list says which conversation needs you, without opening it.
+  const sidebarBadge = page.locator('.av-session-row span', { hasText: /^! 1$/ }).first()
+  await sidebarBadge.waitFor({ timeout: 15000 })
+  assert.match(await sidebarBadge.getAttribute('title') ?? '', /need you/)
   await chatTab.click()
   await dock.getByLabel('1 need attention', { exact: true }).waitFor()
   await teamTab.click()
@@ -158,5 +166,5 @@ try {
   await page.getByRole('button', { name: 'Enable coordinator', exact: true }).click()
   await page.getByText('Coordinator on', { exact: true }).waitFor()
   assert.equal(errors.length, 0, errors.join('\n'))
-  console.log('Rendered enablement, continuation preference, native attention, embedded transcript, lead draft preservation, named follow-up, outage recovery, foreign-host activity, blurred-only teammate notifications honouring the delivery setting, and review on transcript open passed')
+  console.log('Rendered enablement, continuation preference, native attention, embedded transcript, lead draft preservation, named follow-up, outage recovery, foreign-host activity, blurred-only teammate notifications honouring the delivery setting, review on transcript open, and sidebar teammate marks passed')
 } finally { await browser.close() }

@@ -158,6 +158,7 @@ import { getCoordinatorBridgeUrl } from './coordinatorBridgeServer'
 import { createNewViewSession, streamViewSessionTurn } from './sessionBackend'
 import { isOpenCodeManagedServer } from './opencodeClient'
 import { getRunningSessionInfo, interruptRunningSession, steerRunningSession } from './sessionRuntime'
+import { coordinatorAttention } from './coordinatorAttention'
 import { createWorktreeTask, findRepoRoot, findWorktreeTaskForCwd, removeWorktreeTask, type WorktreeTask } from './worktreeTasks'
 import type { AgentProvider } from './types'
 
@@ -7110,6 +7111,44 @@ export async function withCooperativeInbox(
   } finally {
     if (!streamOwned) activeChatDeliveries.delete(sessionId)
   }
+}
+
+/**
+ * Teammate attention per conversation, for surfaces that list conversations —
+ * herdr marks every pane in its sidebar, so the stuck one never has to be
+ * hunted for. The TUI has a global badge; the web knew only about the chat
+ * whose panel was open.
+ *
+ * Derived from the ledger alone: no provider calls, no session activation, and
+ * nothing here acknowledges mail. Bounded by `limit`, newest run first, because
+ * this rides a list poll.
+ */
+export async function readInteractiveAttention(limit = 25): Promise<Array<{
+  sessionId: string
+  provider: AgentProvider
+  runId: string
+  waiting: number
+  finished: number
+}>> {
+  const db = await getDatabase()
+  const rows = db.prepare(`SELECT s.session_id, s.provider, s.run_id FROM protocol_interactive_sessions s
+    JOIN protocol_runs r ON r.id = s.run_id ORDER BY r.updated_at DESC LIMIT ?`).all(Math.max(1, Math.min(limit, 100))) as Row[]
+  const summary: Array<{ sessionId: string; provider: AgentProvider; runId: string; waiting: number; finished: number }> = []
+  for (const row of rows) {
+    const snapshot = readSnapshotSync(db, String(row.run_id))
+    if (!snapshot) continue
+    const items = coordinatorAttention(snapshot)
+    const finished = items.filter(item => item.kind === 'result').length
+    if (items.length === 0) continue
+    summary.push({
+      sessionId: String(row.session_id),
+      provider: String(row.provider) as AgentProvider,
+      runId: String(row.run_id),
+      waiting: items.length - finished,
+      finished,
+    })
+  }
+  return summary
 }
 
 export async function readInteractiveRecoveries(runId: string): Promise<string[]> {

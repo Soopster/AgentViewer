@@ -229,6 +229,7 @@ difference decides most of the verdicts below.
 | Agent list carries each agent's `cwd` and branch (`AgentInfo`, sidebar tokens) | `coordinatorAgentWorkspace`: a teammate's own worktree branch beside its activity, blank when it shares the lead's checkout | Adopted this pass |
 | Client/server version handshake before relying on a feature (`herdr status`, `api/status.rs`; SKILL.md: "a missing method is not permission to stop or upgrade a server") | `GET /api/version` (name, version, protocol, features) + `daemonCompatibilityWarning`; the attached TUI reports a mismatch once at startup and never restarts the daemon | Adopted this pass |
 | `agent send-keys <name> ctrl+c` to stop an agent going the wrong way (SKILL.md) | `interrupt-agent`: `i` in the Teammates panel, **Interrupt** in the web roster. A managed teammate's live turn is interrupted in this process; an external worker takes the cancel flag and urgent mail `cancelExternalProtocolTurn` already sent. The task stays owned | Adopted this pass |
+| Every pane marked in the sidebar, so the stuck one is never hunted for (README, `aggregate.rs`) | `GET /api/agent-protocol/attention` + a per-row mark in the web session list (`! n` amber waiting, `✓ n` green results); the TUI's global badge already did this | Adopted this pass |
 | Named agents, unique, validated (SKILL.md) | Protocol names, delegation requires exactly one active match | Present |
 | Detach without stopping work (README) | `agent-viewer web` daemon + `--attach`; turns run server-side | Present |
 | Resume supported agent sessions after restart (`agent_resume.rs`) | Provider sessions are durable by id; interrupted teammate execution waits for explicit recovery rather than auto-resuming | Present, deliberately stricter |
@@ -438,3 +439,21 @@ a teammate credential cannot interrupt anyone, and a teammate with no live turn
 here reports that rather than pretending. The TUI smoke presses `i` on an idle
 teammate and asserts it never reaches the server. Removing the live-turn check
 and removing the panel's gate were each verified to fail.
+
+### Teammate marks in the session list
+
+Herdr's pitch is that no pane has to be opened to find the stuck one. The TUI
+had a global badge, but the web knew only about the conversation whose panel
+was open: a team needing an answer in another chat was invisible until it was
+selected. `readInteractiveAttention` summarises attention per interactive
+conversation from the ledger alone — no provider calls, no session activation,
+nothing acknowledged — bounded and newest-run-first because it rides the
+session-list poll. Each row shows `! n` (waiting on you, amber) or `✓ n`
+(results to review, green), the same split the TUI badge makes.
+
+It is delivered by context rather than a row prop: the poll produces a fresh
+object every five seconds, and as a prop that would re-render every memoized
+session row. The page keeps the previous value when nothing changed, so the
+context identity is stable too. Verified against real local data (five teams,
+`✓ 1 | 1 teammate result to review`) and pinned in the browser smoke; making
+the row ignore the context fails it.
