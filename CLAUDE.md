@@ -694,6 +694,33 @@ buffer and a converted line ending both *render perfectly*:
   none was. It asserts colours on open, colours travelling with text when a line
   is inserted above them, and a keyword typed mid-file picking up its own colour.
 
+#### Fullscreen rendering: what the renderer already does, and the two escape hatches
+
+Claude Code's "fullscreen" renderer (alternate screen, send only changed cells,
+render only what is visible, in-app mouse) is how this TUI has always drawn —
+check before re-porting it. `createCliRenderer` in `tui/opentui/main.tsx` runs on
+`alternate-screen` with SGR mouse, and OpenTUI's native renderer diffs a double
+buffer and wraps every frame in synchronized output (`?2026h`, probed first).
+Measured in a PTY over 8 sidebar keystrokes: **45KB diffed against 539KB** with
+a forced full repaint. The reader mounts a bounded card window
+(`READER_CARD_WINDOW`) with `viewportCulling`, so the render tree does not grow
+with the conversation; copy-on-select (OSC 52 / host clipboard), the "+N new
+messages" notice and wheel acceleration already exist.
+
+- **`--no-mouse` / `AGENT_VIEWER_DISABLE_MOUSE=1`** hands the mouse back to the
+  terminal so its native selection works in tmux and over SSH.
+- **`--full-repaint` / `AGENT_VIEWER_FULL_REPAINT=1`** repaints every cell each
+  frame, for ConPTY hosts that leave fragments. OpenTUI 0.5.11 has no public
+  switch, so it sets the renderer's own resize/resume repaint flag from a frame
+  callback, feature-detected — an upgrade that renames the field warns rather
+  than silently doing nothing.
+- **`⌃K v` pages the transcript** (`tui/opentui/transcriptPager.ts`): every block
+  expanded (`formatTranscriptExpandedText`), written 0600 to a temp dir, opened
+  in `$VISUAL`/`$EDITOR`/`less` with the renderer suspended, then removed. This
+  is the only way the terminal's own search sees the conversation. The renderer
+  is resumed in `finally` — a failed editor must not leave a frozen app —
+  and `transcriptPagerSmoke.ts` pins that, the expansion, and the cleanup.
+
 #### Clickable transcript targets (load-bearing)
 
 OpenTUI 0.5.11's `renderer.getLinkAt(x, y)` reads a link id back out of the

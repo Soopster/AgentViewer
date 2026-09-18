@@ -71,10 +71,12 @@ import {
   formatSessionTitle,
   buildTaskActiveForms,
   formatTranscriptCard,
+  formatTranscriptExpandedText,
   type TuiTranscriptCard,
   type TuiTranscriptCodeBlock,
   type TuiTranscriptCardLine,
 } from '../format'
+import { openTranscriptInPager } from './transcriptPager'
 import { detectTuiCodeFiletypeFromPath } from '../codeFiletypes'
 import { computeTurnDurationsMs, stripToolCallBlocks, type ThreadedMessage } from '../../lib/threading'
 import { buildTaskRegistry } from '../../lib/taskRegistry'
@@ -5192,6 +5194,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'ide-bridge-route', label: 'Toggle composer → IDE routing', key: '', category: 'Session' },
   { id: 'git',        label: 'Git status',             key: '⌃G', category: 'Session'    },
   { id: 'pull-requests', label: 'Review pull requests', key: '⌃K g / ⌃⇧G', category: 'Session'   },
+  { id: 'transcript-pager', label: 'Open transcript in pager/editor', key: '⌃K v', category: 'Transcript' },
   { id: 'files',      label: 'Browse project files',   key: '⌃F', category: 'Session'    },
   { id: 'editor',     label: 'Open project editor',    key: '⌃E', category: 'Session'    },
   { id: 'analytics',  label: 'Session analytics',      key: '⌃A', category: 'Session'    },
@@ -12949,6 +12952,18 @@ export default function OpenTuiApp() {
     setCoordBoardOpen(true)
   })
 
+  const openSelectedTranscriptInPager = useEffectEvent(() => {
+    const persisted = sessionDetail?.threadedMessages ?? []
+    if (!selectedSession || persisted.length + liveTranscriptMessagesForSession.length === 0) {
+      showNotice('info', 'Open a conversation to page its transcript', 3500)
+      return
+    }
+    const seen = new Set(persisted.map((m) => m.uuid))
+    const messages = [...persisted, ...liveTranscriptMessagesForSession.filter((m) => !seen.has(m.uuid))]
+    const result = openTranscriptInPager(renderer, formatTranscriptExpandedText(messages))
+    if (!result.ok) showNotice('error', `Could not open ${result.command}: ${result.error}`, 5000)
+  })
+
   const openTeammatesPanel = useEffectEvent(() => {
     const session = selectedSession
     if (!session) {
@@ -17071,6 +17086,9 @@ export default function OpenTuiApp() {
         break
       case 'coord-teammates':
         openTeammatesPanel()
+        break
+      case 'transcript-pager':
+        openSelectedTranscriptInPager()
         break
       case 'coord-cleanup':
         void cleanupCompletedCoordinatedRunWorktrees()

@@ -2916,6 +2916,27 @@ export function formatMessageExpanded(messages: ThreadedMessage[], messageUuid: 
     .filter((ln) => ln.text.trim().length > 0)
 }
 
+/**
+ * The whole transcript as plain text with every block expanded — what the
+ * reader would show if every card were opened. It exists to hand the
+ * conversation back to the terminal's own tools (a pager's search, an editor),
+ * which cannot see anything drawn on the alternate screen.
+ */
+export function formatTranscriptExpandedText(messages: ThreadedMessage[]): string {
+  const activeForms = buildTaskActiveForms(messages)
+  const taskRegistry = buildTaskRegistry(messages)
+  return messages.map((message) => {
+    const role = message.role === 'assistant'
+      ? getAssistantLabel(message.provider)
+      : message.role.toUpperCase()
+    const header = `── ${role}${message.timestamp ? ` · ${message.timestamp}` : ''}`
+    const body = message.blocks
+      .flatMap((b) => formatBlockExpanded(b, activeForms, taskRegistry))
+      .map((ln) => ln.text)
+    return [header, ...body, ''].join('\n')
+  }).join('\n')
+}
+
 export function formatSessionMeta(session: Session, info: SessionInfo | null): string[] {
   const title = info?.customTitle ?? info?.summary ?? session.customTitle ?? session.summary ?? '(untitled session)'
   const project = info?.cwd ?? session.cwd ?? 'unknown'

@@ -189,6 +189,12 @@ Options:
   -a, --attach <url>   Connect the TUI or MCP bridge to an \`agent-viewer web\` daemon
                        (e.g. --attach 3000 or --attach http://127.0.0.1:3000).
                        Turns run in the daemon and survive TUI restarts.
+  --no-mouse           Leave the mouse to the terminal, so its native selection
+                       works (tmux, SSH). Keyboard scrolling still works.
+                       Env: AGENT_VIEWER_DISABLE_MOUSE=1
+  --full-repaint       Repaint every cell each frame instead of only changed ones,
+                       for terminals that leave stale fragments (Windows
+                       Terminal / ConPTY). Env: AGENT_VIEWER_FULL_REPAINT=1
 
 Pairing a phone:
   agent-viewer pair                       # against a daemon on port 3000
@@ -626,6 +632,8 @@ Run \`agent-viewer coord <subcommand> --help\` for subcommand-specific options.`
     // React: everything else the app and its dependencies load reads it too.
     const tuiEnv = { ...process.env }
     if (attachUrl) tuiEnv.AGENT_VIEWER_ATTACH = attachUrl
+    if (args.includes('--no-mouse')) tuiEnv.AGENT_VIEWER_DISABLE_MOUSE = '1'
+    if (args.includes('--full-repaint')) tuiEnv.AGENT_VIEWER_FULL_REPAINT = '1'
     const child = spawn(bunLauncher.command, [...bunLauncher.args, 'run', entrypoint, ...forwarded], {
       stdio: 'inherit',
       env: tuiEnv,

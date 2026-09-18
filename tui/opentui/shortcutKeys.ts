@@ -44,6 +44,7 @@ export const PORTABLE_COMMAND_CHORDS = {
   g: { command: 'pull-requests', label: 'Pull requests', short: 'pull requests' },
   n: { command: 'coord-start', label: 'New coordinated run', short: 'coordinated run' },
   t: { command: 'coord-teammates', label: 'Teammates for this conversation', short: 'teammates' },
+  v: { command: 'transcript-pager', label: 'Open transcript in $VISUAL / $EDITOR / pager', short: 'pager' },
 } as const
 
 export type PortableCommandChord = keyof typeof PORTABLE_COMMAND_CHORDS
