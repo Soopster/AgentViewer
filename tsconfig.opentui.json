@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM"],
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "jsxImportSource": "@opentui/react",
+    "types": ["node", "react"],
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": [
+    "tui/opentui/**/*.ts",
+    "tui/opentui/**/*.tsx",
+    "tui/theme.ts",
+    "tui/format.ts",
+    "lib/tui/service.ts"
+  ]
+}

@@ -1,0 +1,136 @@
+minimumReleaseAge: 10080
+trustPolicy: no-downgrade
+# pnpm resolves these vulnerable transitive versions independently of npm and
+# Bun. Replace only the affected versions so upstream upgrades supersede the
+# overrides naturally once their dependency ranges move forward.
+overrides:
+  'body-parser@2.2.2': 2.3.0
+  'brace-expansion@5.0.6': 5.0.9
+  'fast-uri@3.1.2': 3.1.5
+  'hono@4.12.25': 4.13.1
+  'ip-address@10.2.0': 10.4.0
+  'js-yaml@3.14.2': 3.15.1
+  'js-yaml@4.2.0': 4.3.1
+  'nanoid@3.3.16': 3.3.18
+  'protobufjs@7.6.4': 7.6.5
+  'shell-quote@1.8.4': 1.10.0
+  'undici@7.28.0': 7.29.0
+# A takeover is by definition a recent publish — minimumReleaseAge (7d) and
+# no-downgrade still screen everything new. Packages that have sat unchanged
+# in the registry for 6+ months keep tripping no-downgrade only because they
+# predate npm provenance (semver@6, undici-types, react-redux, …); skip those.
+trustPolicyIgnoreAfter: 259200
+trustPolicyExclude:
+  # Pre-provenance releases of packages whose newer versions are attested —
+  # no-downgrade flags them as trust downgrades. Each verified 2026-06-12:
+  # lockfile integrity matches the registry dist.integrity byte-for-byte,
+  # not a takeover. semver@6 is Babel's pin; react-redux/reselect come in
+  # via recharts.
+  - semver@6.3.1
+  - react-redux@9.2.0
+  - reselect@5.1.1
+  - effect@4.0.0-beta.70
+  - '@effect/platform-node-shared@4.0.0-beta.70'
+  # 2026-07-02 update-all: @pierre/diffs@1.2.12 pins these exact versions as
+  # its own upstream deps. Same publisher account (pierrecomputer) as prior
+  # attested releases; published by amadeusdemarzi, a maintainer since
+  # 1.0.3/theming@0.0.1 (not a new identity) — Pierre's release pipeline
+  # intermittently skips provenance on manual publishes (theming@0.0.1 hit
+  # this same flag in the 2026-06-12 round). Registry dist.integrity verified
+  # directly, not a takeover.
+  - '@pierre/theme@1.1.0'
+  - '@pierre/theming@0.0.2'
+  # 2026-08-01 update-all: @pierre/diffs@1.3.1 pins @pierre/theme@2.0.0, which
+  # was published 2026-07-24 without provenance. Tarball downloaded and diffed
+  # against attested 1.1.0: only LICENSE (MIT->Apache-2.0), a new NOTICE.md,
+  # and the package.json version/license fields changed - zero code changes.
+  # Local sha512 of the tarball matches registry dist.integrity. A pure
+  # relicensing release from the same manual-publish pipeline, not a takeover.
+  - '@pierre/theme@2.0.0'
+  # 2026-08-09 update-all: @opencode-ai/plugin@1.18.15 pins effect@4.0.0-beta.83.
+  # Same publisher (effect-bot, npmUser unchanged since beta.70) with npm
+  # provenance attestation (publishConfig.provenance:true) rather than the
+  # trusted-publisher marker beta.70 had — a pipeline change, not an identity
+  # change. Registry dist.integrity verified byte-for-byte against
+  # package-lock.json's resolved integrity for effect@4.0.0-beta.83.
+  - 'effect@4.0.0-beta.83'
+  # Pi SDK's clipboard native binaries — all 11 platform packages of 0.3.6
+  # verified against the registry the same way.
+  - '@mariozechner/clipboard@0.3.6'
+  - '@mariozechner/clipboard-darwin-arm64@0.3.6'
+  - '@mariozechner/clipboard-darwin-universal@0.3.6'
+  - '@mariozechner/clipboard-darwin-x64@0.3.6'
+  - '@mariozechner/clipboard-linux-arm64-gnu@0.3.6'
+  - '@mariozechner/clipboard-linux-arm64-musl@0.3.6'
+  - '@mariozechner/clipboard-linux-riscv64-gnu@0.3.6'
+  - '@mariozechner/clipboard-linux-x64-gnu@0.3.6'
+  - '@mariozechner/clipboard-linux-x64-musl@0.3.6'
+  - '@mariozechner/clipboard-win32-arm64-msvc@0.3.6'
+  - '@mariozechner/clipboard-win32-x64-msvc@0.3.6'
+allowBuilds:
+  '@google/genai': set this to true or false
+  esbuild: set this to true or false
+  koffi: set this to true or false
+  msgpackr-extract: set this to true or false
+  protobufjs: set this to true or false
+  sharp: set this to true or false
+minimumReleaseAgeExclude:
+  # 2026-09-13 / 2026-09-17 update-all: exact releases adopted that are still
+  # inside the 7-day quarantine, including version-locked native companions.
+  # Registry dist.integrity was checked byte-for-byte against package-lock.json
+  # for every entry; exact pins keep any later publishes quarantined.
+  - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.274'
+  - '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.274'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.274'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.274'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.274'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.274'
+  - '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.274'
+  - '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.274'
+  - '@anthropic-ai/claude-agent-sdk@0.3.274'
+  - '@anthropic-ai/sdk@0.126.0'
+  - '@github/copilot-sdk-darwin-arm64@1.0.14'
+  - '@github/copilot-sdk-darwin-x64@1.0.14'
+  - '@github/copilot-sdk-linux-arm64@1.0.14'
+  - '@github/copilot-sdk-linux-x64@1.0.14'
+  - '@github/copilot-sdk-linuxmusl-arm64@1.0.14'
+  - '@github/copilot-sdk-linuxmusl-x64@1.0.14'
+  - '@github/copilot-sdk-win32-arm64@1.0.14'
+  - '@github/copilot-sdk-win32-x64@1.0.14'
+  - '@github/copilot-sdk@1.0.14'
+  - '@next/env@16.3.5'
+  - '@next/swc-darwin-arm64@16.3.5'
+  - '@next/swc-darwin-x64@16.3.5'
+  - '@next/swc-linux-arm64-gnu@16.3.5'
+  - '@next/swc-linux-arm64-musl@16.3.5'
+  - '@next/swc-linux-x64-gnu@16.3.5'
+  - '@next/swc-linux-x64-musl@16.3.5'
+  - '@next/swc-win32-arm64-msvc@16.3.5'
+  - '@next/swc-win32-x64-msvc@16.3.5'
+  - '@opencode-ai/plugin@1.18.31'
+  - '@opencode-ai/sdk@1.18.31'
+  - '@opentui/core-darwin-arm64@0.5.11'
+  - '@opentui/core-darwin-x64@0.5.11'
+  - '@opentui/core-linux-arm64-musl@0.5.11'
+  - '@opentui/core-linux-arm64@0.5.11'
+  - '@opentui/core-linux-x64-musl@0.5.11'
+  - '@opentui/core-linux-x64@0.5.11'
+  - '@opentui/core-win32-arm64@0.5.11'
+  - '@opentui/core-win32-x64@0.5.11'
+  - '@opentui/core@0.5.11'
+  - '@opentui/react@0.5.11'
+  - '@pierre/diffs@1.4.3'
+  - '@types/node@26.6.1'
+  - '@types/react-dom@19.3.0'
+  - '@types/react@19.3.0'
+  - 'lucide-react@1.46.0'
+  - 'marked@18.0.13'
+  - 'next@16.3.5'
+  - 'oxlint-plugin-react-doctor@0.9.14'
+  - 'react-doctor@0.9.14'
+  - 'react-dom@19.3.0'
+  - 'react@19.3.0'
+  - 'scheduler@0.28.0'
+  - 'tailwind-merge@3.7.0'
+  - 'zod@4.6.4'
+  - 'zod@4.6.5'

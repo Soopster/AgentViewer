@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { isAgentProvider } from '@/lib/provider'
+import { withProviderRequest } from '@/lib/providerRequest'
 import { rewindOrRollbackViewSession } from '@/lib/sessionBackend'
 
 export async function POST(
@@ -11,7 +12,8 @@ export async function POST(
   const provider = isAgentProvider(body?.provider) ? body.provider : undefined
 
   try {
-    const result = await rewindOrRollbackViewSession({ sessionId, body, provider })
+    const result = await withProviderRequest(request, provider, body, () =>
+      rewindOrRollbackViewSession({ sessionId, body, provider }))
     return NextResponse.json(result)
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
