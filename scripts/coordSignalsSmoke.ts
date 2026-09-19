@@ -135,7 +135,7 @@ assert.equal(coordinatorBackgroundWork([{ type: 'subagent', status: 'completed' 
 assert.deepEqual(coordinatorBackgroundWork([], [{ id: 'c1' }]), { tasks: 0, wakeups: 1 }, 'a scheduled wake-up will bring the agent back')
 const background = { ...state, backgroundAgents: coordinatorBackgroundAgents(state.snapshot!.agents, [{ sessionId: 'worker-chat', backgroundTasks: [{ type: 'subagent', status: 'running' }], sessionCrons: [{}] }]) }
 assert.deepEqual(background.backgroundAgents, [{ agentId: 'w1', tasks: 1, wakeups: 1 }])
-assert.equal(coordinatorAgentActivity(state.snapshot!.agents[1], background), 'Working in background · 1 background task · 1 scheduled wake-up')
+assert.equal(coordinatorAgentActivity(state.snapshot!.agents[1], background), 'In background · 1 task · 1 wake-up')
 assert.deepEqual(coordinatorStalledAgentIds(background, late), [], 'an agent waiting on its own background work has not stalled')
 assert.equal(coordinatorAgentActivity(state.snapshot!.agents[1], { ...background, permissions: [{ agentId: 'w1', agentName: 'reviewer', permission: { id: 'p', title: 't' } as never }] }), 'Waiting for your answer',
   'a question outranks background work: it is what the user can act on')

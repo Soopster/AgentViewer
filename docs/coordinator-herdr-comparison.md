@@ -223,7 +223,7 @@ difference decides most of the verdicts below.
 | Focusing an agent marks its completion seen (`mark_active_tab_seen`) | Opening a teammate's transcript reviews its results (`coordinatorResultIdsForAgent`), web and TUI | Adopted this pass |
 | Metadata tokens with TTL shown per agent (`metadata_tokens.rs`) | Roster activity labels plus provider context/usage in each transcript | Present in substance; no free-form token API needed |
 | Server handoff preserving PTYs (`handoff_runtime.rs`) | Turns run in the daemon and survive client restarts; a daemon replacement does not keep live turns | Not adopted: PTY handoff has no equivalent for SDK subprocess streams |
-| Background work keeps an agent working; a background shell alone does not (CHANGELOG #1630, #3090, #3291, #3414, #2851) | `coordinatorBackgroundWork` from Claude's Stop-hook `background_tasks`/`session_crons` and Copilot's `tasks.list()`: "Working in background · N tasks · N wake-ups", working tier, never stalled. OpenCode exposes only a move-to-background mutation, Pi nothing, Codex only background shells (which correctly do not count) | Adopted for Claude and Copilot |
+| Background work keeps an agent working; a background shell alone does not (CHANGELOG #1630, #3090, #3291, #3414, #2851) | `coordinatorBackgroundWork` from Claude's Stop-hook `background_tasks`/`session_crons` and Copilot's `tasks.list()`: "In background · N tasks · N wake-ups", working tier, never stalled. OpenCode exposes only a move-to-background mutation, Pi nothing, Codex only background shells (which correctly do not count) | Adopted for Claude and Copilot |
 | Unloadable saved state preserved before replacement (CHANGELOG #4125) | Reviewed markers back up an unreadable file first and leave it untouched if the backup fails | Adopted this pass |
 | Client-side view state tracked per client (0.9.0 #3526; SKILL.md "each TUI client tracks viewed completions independently") | Reviewed markers: per TUI data dir, per browser localStorage | Present |
 | Agent list carries each agent's `cwd` and branch (`AgentInfo`, sidebar tokens) | `coordinatorAgentWorkspace`: a teammate's own worktree branch beside its activity, blank when it shares the lead's checkout | Adopted this pass |
@@ -237,6 +237,7 @@ difference decides most of the verdicts below.
 | A terminal observer that stops accepting output is disconnected after 30s without write progress (CHANGELOG #3612) | The Coordinator change stream drops a subscriber whose queue stops draining; the team keeps running and clients reconnect | Adopted this pass |
 | `agent wait <name> --until <state>`, and `pane.agent_status_changed` subscriptions filtered by pane and status (SKILL.md, `api/schema/events.rs`) | `coord_wait` takes `agent` and `until`: it returns when that teammate settles or reaches a named state, at once if it already has, and whenever mail needs the waiter's reply | Adopted this pass |
 | `agent prompt <name> "…" --wait`: submit, gate on observed activity (`agent_prompt_stalled`), then wait for a settled state (agent-automation docs, `api/wait.rs`) | `coord_delegate` with `wait_ms`: returns `settled.outcome` — completed (with the result), failed, cancelled, blocked, needs_reply, stalled, or timeout; a stall leaves the queued work untouched | Adopted this pass |
+| TUI works on a phone over SSH; "the TUI adapts to narrow screens" (how-to-work docs) | Teammates panel verified at 60×28 and a phone-shaped 44×40 in the suite: meta drops whole entries in importance order, the typed draft text outranks its label, settings labels wrap and are counted | Adopted this pass |
 | Named agents, unique, validated; `agent start <name>` names an agent by its job (SKILL.md) | Protocol names, delegation requires exactly one active match; **a new teammate can now be named** — `name` on `coord_delegate`, `@name` in a TUI draft, a field in the web panel — under herdr's `[a-z][a-z0-9_-]{0,31}` rule | Adopted this pass (naming) |
 | Detach without stopping work (README) | `agent-viewer web` daemon + `--attach`; turns run server-side | Present |
 | Resume supported agent sessions after restart (`agent_resume.rs`) | Provider sessions are durable by id; interrupted teammate execution waits for explicit recovery rather than auto-resuming | Present, deliberately stricter |
@@ -310,7 +311,7 @@ holding an agent "working" forever. Coordinator now reads the same distinction
 from Claude's Stop hook, which records in-flight `background_tasks` and
 `session_crons` into the runtime's waiting registry: running or pending tasks
 other than shells, and any scheduled wake-up, keep a teammate in the working
-tier, label it "Working in background", and exclude it from stalled starts. A
+tier, label it "In background", and exclude it from stalled starts. A
 permission question still outranks it, since that is what the user can act on.
 The field is optional on the wire, so an older daemon simply omits it. Only
 Claude reports background work today; other providers stay as they were.
@@ -752,3 +753,36 @@ counting old mail were each verified to fail it; the targeted-wait smoke pins
 the old-mail rule for `coord_wait` (its first version used a heartbeat as noise,
 which is not a change at all, so it passed for the wrong reason until the noise
 became a real message).
+
+### The panel on a phone
+
+Herdr's workflow docs lead with "work from your phone": SSH in, run the same
+TUI, and it adapts to a narrow screen. The Teammates panel had only ever been
+tested at 110 columns. Running the same smoke at 60×28 and at a phone-shaped
+44×40 found four defects, each of which hid exactly the wrong thing:
+
+- **The header cut the status, not the title.** It reserved sixteen columns for
+  the conversation's title — which the reader already knows — and truncated the
+  status meta instead, so "alerts in-app", the one thing nothing else on screen
+  admits to, was the part lost. The title now yields first, and the meta drops
+  **whole entries** from its least important end, ordered: what needs
+  attention, a silenced alert mode, "nothing waiting", then the head count.
+- **Typing a task overwrote itself.** The draft's label filled the row and the
+  typed text drew over its tail ("…(@name to clook at the par"). The text now
+  gets the width first: the parenthetical hint goes, then the label shortens,
+  and a long draft shows its end, where the caret is.
+- **Settings labels were clipped mid-phrase**, and wrapping them left the height
+  estimate two rows short, which pushed the roster below the fold. They wrap
+  under their checkbox and `bodyRows` counts the wrapped rows.
+- **The background-work label** ("Working in background · 1 background task · 1
+  scheduled wake-up") said "background" twice and could not fit. It reads
+  "In background · 1 task · 1 wake-up".
+
+The narrow runs are in `tui:smoke:run`. Prose assertions read the frame as a
+line of words (`readable()`), since a correct panel wraps text a raw substring
+check would miss, and the few checks that are genuinely width-dependent say so
+(the `@name` hint is asserted from 60 columns up, because below that it gives
+way to the text being typed, by design). The header order, the draft fitting
+and the wrapped-row count were each verified to fail at 44×40; two of them could
+not fail at 60×28, where everything fits either way, which is why the phone size
+is the one registered.

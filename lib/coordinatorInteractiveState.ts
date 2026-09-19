@@ -127,8 +127,9 @@ export function coordinatorAgentActivity(agent: ProtocolAgent, state: Pick<Coord
   if (agent.turnActive) return 'Starting · awaiting provider activity'
   const background = state.backgroundAgents?.find(entry => entry.agentId === agent.id)
   if (background) {
-    const parts = [background.tasks ? `${background.tasks} background task${background.tasks === 1 ? '' : 's'}` : '', background.wakeups ? `${background.wakeups} scheduled wake-up${background.wakeups === 1 ? '' : 's'}` : ''].filter(Boolean)
-    return `Working in background · ${parts.join(' · ')}`
+    // "background" once: the label is read on a phone over SSH as well.
+    const parts = [background.tasks ? `${background.tasks} task${background.tasks === 1 ? '' : 's'}` : '', background.wakeups ? `${background.wakeups} wake-up${background.wakeups === 1 ? '' : 's'}` : ''].filter(Boolean)
+    return `In background · ${parts.join(' · ')}`
   }
   if (stalled) return 'Stalled · no provider activity observed · inspect before resending'
   if (agent.status === 'blocked') return 'Blocked'

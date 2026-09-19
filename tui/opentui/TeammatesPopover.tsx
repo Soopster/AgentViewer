@@ -36,6 +36,37 @@ function delegateTarget(text: string, to: string | null): { detail: string; to: 
   return named ? { detail: named[2]!.trim(), to: 'auto', teammateName: named[1]!.toLowerCase() } : { detail: text, to: to ?? 'auto' }
 }
 
+/**
+ * Fit `a  ·  b  ·  c` by dropping whole entries from the end — the entries are
+ * ordered most important first — rather than cutting a word in half, which is
+ * how "alerts in-app" became "alerts in-ap…" on a 60-column terminal. Only a
+ * first entry that cannot fit on its own is truncated.
+ */
+function fitDraftRow(label: string, text: string, width: number): { label: string; text: string } {
+  const minimumText = Math.min(text.length, Math.max(12, Math.floor(width / 2)))
+  const labelRoom = width - minimumText
+  // A parenthetical hint is the first thing to go, then the label is cut, then
+  // it is dropped — never the text being typed.
+  const withoutHint = label.replace(/\s*\([^)]*\)/, '')
+  const fittedLabel = label.length <= labelRoom ? label
+    : withoutHint.length <= labelRoom ? withoutHint
+    : labelRoom >= 8 ? `${fitText(withoutHint.trimEnd().replace(/:$/, ''), labelRoom - 2).trimEnd()}: `
+    : ''
+  const textRoom = width - fittedLabel.length
+  return { label: fittedLabel, text: text.length <= textRoom ? text : `…${text.slice(text.length - textRoom + 1)}` }
+}
+
+function fitMetaEntries(meta: string, width: number): string {
+  const entries = meta.split('  ·  ')
+  let fitted = entries[0] ?? ''
+  for (const entry of entries.slice(1)) {
+    const next = `${fitted}  ·  ${entry}`
+    if (next.length > width) break
+    fitted = next
+  }
+  return fitted.length > width ? fitText(fitted, width).trimEnd() : fitted
+}
+
 function teardownWarning(teardown: InteractiveCoordinatorTeardown | null): string | null {
   if (!teardown) return null
   const parts: string[] = []
@@ -283,7 +314,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       return
     }
     if (key.name === 'd' && !disabled) {
-      setDraft({ kind: 'delegate', to: null, toName: 'an available teammate (@name to choose one)', text: '' })
+      setDraft({ kind: 'delegate', to: null, toName: '(@name to choose)', text: '' })
       return
     }
     // Cycle which provider a NEW teammate is staffed from — a Codex reviewer
@@ -312,11 +343,15 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   // sections below; being a row out costs a blank line or a scrollbar, where
   // being fixed cost twenty.
   const wrapped = (text: string) => Math.max(1, Math.ceil(text.length / Math.max(1, popW - 4)))
+  const settingRows = (label: string) => Math.max(1, Math.ceil(label.length / Math.max(8, popW - 4 - 6)))
   const bodyRows = (state.loading && !data ? 1 : 0)
     + (pending ? wrapped('The last request is unconfirmed. Retrying replays the same request, which the server reconciles instead of repeating.') + (error ? 1 : 0) + 1 : error ? 2 : 0)
     + (!enabled && !terminal ? wrapped('Enable coordination to give this chat a team. Teammates run their own turns; what they send back arrives folded into your next message, and you keep every approval.') + (canLead ? 0 : 2) : 0)
     + (currentAttention ? 4 + wrapped(currentAttention.detail) : 0)
-    + (enabled ? 3 + (data?.interactive.autoContinue && data.interactive.remainingTurns === 0 ? 2 : 0) : 0)
+    // The settings labels wrap under their checkbox on a narrow terminal, so
+    // count their rows at that width or the roster falls below the fold.
+    + (enabled ? 1 + settingRows(' Continue when teammates respond') + settingRows(' Give new teammates their own worktree')
+      + (data?.interactive.autoContinue && data.interactive.remainingTurns === 0 ? 2 : 0) : 0)
     + (unconfirmedDelivery ? 4 : 0)
     + (teammates.length > 0
       ? 2 + teammates.reduce((rows, agent) => rows + 2 + (coordinatorAgentNote(agent, snapshot) ? 1 : 0), 0)
@@ -346,13 +381,30 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   const headlineMeta = elsewhere ? 'Use the owning window or connect to its server'
     : !session || !enabled ? ''
     : terminal ? 'results and teammate transcripts remain'
+    // Ordered by what the reader must not lose when this is truncated on a
+    // narrow terminal (herdr is used over SSH from a phone): what is waiting,
+    // then a silenced alert mode — which nothing else on screen admits to —
+    // and the head count last, since the roster shows it anyway.
+    // "nothing waiting" is the least informative thing here, so it yields
+    // before a silenced alert mode does.
     : joinMeta([
-        `${teammates.length} teammate${teammates.length === 1 ? '' : 's'}`,
-        attentionCount > 0 ? `${attentionCount} need${attentionCount === 1 ? 's' : ''} attention` : 'nothing waiting',
-        // A non-default alert mode is stated where it cannot be truncated away:
-        // silenced alerts that nothing on screen admits to look like a bug.
+        attentionCount > 0 ? `${attentionCount} need${attentionCount === 1 ? 's' : ''} attention` : '',
         state.notifications === 'desktop' ? '' : state.notifications === 'off' ? 'alerts off' : 'alerts in-app',
+        attentionCount > 0 ? '' : 'nothing waiting',
+        `${teammates.length} teammate${teammates.length === 1 ? '' : 's'}`,
       ])
+  // The status meta wins the header's width over the conversation's title:
+  // the reader knows which chat they opened this from, and on a narrow
+  // terminal the title used to take 16 columns while "alerts in-app" — which
+  // nothing else on screen shows — was the part cut off.
+  const metaWidth = headlineMeta ? headlineMeta.length + 5 : 0
+  const titleRoom = Math.max(0, Math.min(14, innerW - headline.length - metaWidth - 2))
+  const headerTitle = busy ? 'working…' : session && titleRoom >= 6 ? fitText(session.title, titleRoom).trimEnd() : ''
+  // The draft row gives the typed text the width first. On a narrow terminal
+  // the label used to fill the row and the text drew over its tail, so what
+  // the user was typing was the part they could not see. The label shortens,
+  // then drops; the text shows its end, where the caret is.
+  const draftRow = draft ? fitDraftRow(`${draft.kind === 'delegate' ? 'Ask' : 'Message'} ${draft.toName}: `, `${draft.text}▏`, innerW) : { label: '', text: '' }
   const headlineColor = terminal ? theme.dim
     : attentionCount > 0 ? theme.amber
     : enabled ? theme.green
@@ -403,9 +455,9 @@ export const TeammatesPopover = memo(function TeammatesPopover({
     >
       <box height={2} paddingX={1} border={['bottom']} borderStyle="single" borderColor={theme.border} flexDirection="row" alignItems="center">
         <text fg={headlineColor} wrapMode="none">{headline}</text>
-        {headlineMeta ? <text fg={theme.dim} wrapMode="none">{`  ·  ${fitText(headlineMeta, innerW - headline.length - 18).trimEnd()}`}</text> : null}
+        {headlineMeta ? <text fg={theme.dim} wrapMode="none">{`  ·  ${fitMetaEntries(headlineMeta, innerW - headline.length - 5 - headerTitle.length)}`}</text> : null}
         <box flexGrow={1} />
-        <text fg={busy ? theme.cyan : theme.dim} wrapMode="none">{busy ? 'working…' : session ? fitText(session.title, 14).trimEnd() : ''}</text>
+        <text fg={busy ? theme.cyan : theme.dim} wrapMode="none">{headerTitle}</text>
       </box>
 
       <scrollbox
@@ -459,14 +511,14 @@ export const TeammatesPopover = memo(function TeammatesPopover({
                 <text fg={data?.interactive.autoContinue ? theme.green : theme.muted} wrapMode="none">
                   {data?.interactive.autoContinue ? '[x]' : '[ ]'}
                 </text>
-                <text fg={theme.text} wrapMode="none">{' Continue when teammates respond'}</text>
+                <text fg={theme.text} wrapMode="word" width={Math.max(8, innerW - 6)}>{' Continue when teammates respond'}</text>
               </box>
               <box flexDirection="row">
                 <text fg={theme.cyan} wrapMode="none">{'w '}</text>
                 <text fg={snapshot?.run.useWorktrees !== false ? theme.green : theme.muted} wrapMode="none">
                   {snapshot?.run.useWorktrees !== false ? '[x]' : '[ ]'}
                 </text>
-                <text fg={theme.text} wrapMode="none">{' Give new teammates their own worktree'}</text>
+                <text fg={theme.text} wrapMode="word" width={Math.max(8, innerW - 6)}>{' Give new teammates their own worktree'}</text>
               </box>
               {data?.interactive.autoContinue && data.interactive.remainingTurns === 0 ? (
                 <text fg={theme.amber} wrapMode="word" width={innerW}>
@@ -579,10 +631,8 @@ export const TeammatesPopover = memo(function TeammatesPopover({
 
       {draft ? (
         <box height={1} paddingX={1} flexDirection="row">
-          <text fg={theme.violet} wrapMode="none">
-            {`${draft.kind === 'delegate' ? 'Ask' : 'Message'} ${draft.toName}: `}
-          </text>
-          <text fg={theme.text} wrapMode="none">{`${draft.text}▏`}</text>
+          <text fg={theme.violet} wrapMode="none">{draftRow.label}</text>
+          <text fg={theme.text} wrapMode="none">{draftRow.text}</text>
         </box>
       ) : confirmOff ? (
         <box height={1} paddingX={1}>

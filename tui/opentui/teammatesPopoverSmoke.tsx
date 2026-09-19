@@ -36,20 +36,28 @@ let keyHandler: ((key: { name: string; ctrl: boolean; shift: boolean; sequence: 
 const opened: string[] = []
 const notices: string[] = []
 
+// Herdr's TUI is used over SSH from a phone, so the panel is also run narrow:
+// TEAMMATES_SMOKE_SIZE=60x28 (see the narrow run in package.json).
+const [SMOKE_WIDTH, SMOKE_HEIGHT] = (process.env.TEAMMATES_SMOKE_SIZE ?? '110x34').split('x').map(Number) as [number, number]
 const setup = await testRender(
   <>
-  <TeammatesAttention theme={LIGHT_THEME} width={110} />
+  <TeammatesAttention theme={LIGHT_THEME} width={SMOKE_WIDTH} />
   <TeammatesPopover
     theme={LIGHT_THEME}
-    width={110}
-    height={34}
+    width={SMOKE_WIDTH}
+    height={SMOKE_HEIGHT}
     onOpenSession={(agent) => { opened.push(agent.name) }}
     onNotice={(_tone, text) => { notices.push(text) }}
     onKeyHandlerReady={(handler) => { keyHandler = handler }}
   /></>,
-  { width: 110, height: 34, kittyKeyboard: true },
+  { width: SMOKE_WIDTH, height: SMOKE_HEIGHT, kittyKeyboard: true },
 )
 const { captureCharFrame } = setup
+// Prose wraps on a narrow terminal, so text assertions read the frame as one
+// line of words with the box drawing removed. Layout assertions keep using the
+// raw frame.
+const readable = () => captureCharFrame().split('\n')
+  .map(line => line.replace(/[│┌┐└┘├┤─█▀▄▏]/g, ' ').trim()).join(' ').replace(/\s+/g, ' ')
 
 const settle = async (ms: number) => {
   const until = Date.now() + ms
@@ -149,7 +157,7 @@ const runtime = await import('../../lib/sessionRuntime')
 const novaSessionId = store.getInteractiveCoordinatorState().data!.snapshot!.agents.find(agent => agent.name === 'nova')!.sessionId
 runtime.setWaitingSession({ sessionId: novaSessionId, provider: 'claude',
   backgroundTasks: [{ id: 'bg', type: 'subagent', status: 'running', description: 'search' }], sessionCrons: [] })
-await waitFor('background work in the roster', () => captureCharFrame().includes('Working in background · 1 background task'))
+await waitFor('background work in the roster', () => readable().includes('In background · 1 task'))
 runtime.clearWaitingSession(novaSessionId)
 await waitFor('nova available again', () => captureCharFrame().includes('Available'))
 
@@ -176,7 +184,7 @@ await settle(200)
 await press('l')
 if (store.getInteractiveCoordinatorNotifications() !== 'in-app') fail('l did not move teammate alerts to in-app')
 await settle(60)
-if (!captureCharFrame().includes('alerts in-app')) fail('the panel does not show a non-default alert delivery')
+if (!captureCharFrame().includes('alerts in-app')) fail(`the panel does not show a non-default alert delivery:\n${captureCharFrame()}`)
 await press('l'); await press('l')
 if (store.getInteractiveCoordinatorNotifications() !== 'desktop') fail('l did not cycle back to desktop')
 
@@ -186,7 +194,7 @@ if (store.getInteractiveCoordinatorState().data?.interactive.autoContinue !== fa
 }
 await press('c')
 await waitFor('continuation to turn on', () => store.getInteractiveCoordinatorState().data?.interactive.autoContinue === true)
-if (!captureCharFrame().includes('[x] Continue when teammates respond')) {
+if (!captureCharFrame().includes('[x] Continue when')) {
   fail('the continuation checkbox did not follow the setting')
 }
 
@@ -195,7 +203,7 @@ const runWorktrees = () => store.getInteractiveCoordinatorState().data?.snapshot
 if (runWorktrees() === false) fail('chat teams must default to worktrees')
 await press('w')
 await waitFor('worktrees to turn off', () => runWorktrees() === false)
-if (!captureCharFrame().includes('[ ] Give new teammates their own worktree')) {
+if (!readable().includes('[ ] Give new teammates')) {
   fail('the worktree checkbox did not follow the setting')
 }
 if ((await coordination.readSessionCoordinator(SESSION_ID, PROVIDER))?.run.useWorktrees !== false) {
@@ -219,9 +227,11 @@ if (footerLine?.includes('…')) fail('the footer cut a hint mid-word instead of
 // events rather than a focused <input>; nothing is sent until ⏎.
 await press('d')
 await type('look at the parser')
-if (!captureCharFrame().includes('look at the parser')) fail('the delegate draft did not echo what was typed')
-if (!captureCharFrame().includes('Ask an available teammate')) fail('the delegate draft did not name its target')
-if (!captureCharFrame().includes('@name')) fail('the delegate draft does not say a teammate can be named')
+if (!captureCharFrame().includes('look at the parser')) fail(`the delegate draft did not echo what was typed:\n${captureCharFrame()}`)
+// The typed text outranks the label: below ~60 columns the "(@name to
+// choose)" hint gives way so what is being typed stays on screen.
+if (!captureCharFrame().includes('Ask')) fail('the delegate draft did not name its target')
+if (SMOKE_WIDTH >= 60 && !captureCharFrame().includes('Ask (@name')) fail('the delegate draft does not say a teammate can be named')
 await press('escape')
 if (captureCharFrame().includes('look at the parser')) fail('escape did not discard the draft')
 if ((store.getInteractiveCoordinatorState().data?.snapshot?.tasks.length ?? -1) !== 0) {
@@ -243,15 +253,15 @@ const planned = await coordination.createExternalProtocolTask(leadIdentity, { as
 await coordination.submitExternalProtocolPlan(nova.participant, { taskId: planned.task!.id, summary: 'Read-only plan', detail: 'Inspect parser.ts without editing files' })
 await waitFor('plan attention', () => captureCharFrame().includes('approve plan'))
 if (store.getInteractiveCoordinatorState().data?.snapshot?.messages.some(message => message.body.includes('plan is ready for approval') && message.kind !== 'status')) fail('human plan request must not wake the lead')
-if (!captureCharFrame().includes('Inspect parser.ts without editing files')) fail('attention lost the actual submitted plan')
+if (!readable().includes('Inspect parser.ts without editing files')) fail('attention lost the actual submitted plan')
 await press('v')
 await waitFor('plan rejection', () => Boolean(store.getInteractiveCoordinatorState().data?.snapshot?.events.some(event => event.type === 'plan.rejected')))
 await coordination.submitExternalProtocolPlan(nova.participant, { taskId: planned.task!.id, summary: 'Revised plan', detail: 'Inspect parser.ts and its tests' })
-await waitFor('revised plan', () => captureCharFrame().includes('Inspect parser.ts and its tests'))
+await waitFor('revised plan', () => readable().includes('Inspect parser.ts and its tests'))
 await press('a')
 await waitFor('plan approval', () => Boolean(store.getInteractiveCoordinatorState().data?.snapshot?.events.some(event => event.type === 'plan.approved')))
 await coordination.sendExternalProtocolMessage(nova.participant, { to: 'lead', body: 'Which parser should I inspect?', replyRequired: true })
-await waitFor('reply attention', () => captureCharFrame().includes('Which parser should I inspect?'))
+await waitFor('reply attention', () => readable().includes('Which parser should I inspect?'))
 await press('escape')
 if (!store.getInteractiveCoordinatorAttention().includes('need attention')) fail('attention disappeared when the panel closed')
 await waitFor('background attention badge', () => captureCharFrame().includes('need attention'))
@@ -264,18 +274,18 @@ await waitFor('resolved reply', () => Boolean(store.getInteractiveCoordinatorSta
 await coordination.completeExternalProtocolTask(nova.participant, { taskId: planned.task!.id, summary: 'Need parser choice', needsDecision: [{ id: 'parser-choice', question: 'Use strict parser mode?', options: ['Strict', 'Compatible'], impactIfWrong: 'Changes accepted syntax', status: 'open' }] })
 await waitFor('decision in ledger', () => Boolean(store.getInteractiveCoordinatorState().data?.snapshot?.tasks.find(task => task.id === planned.task!.id)?.receipt?.needsDecision.some(decision => decision.id === 'parser-choice')))
 // The blocker and its decision are separate attention items; navigate to the decision.
-for (let i = 0; i < 5 && !captureCharFrame().includes('Use strict parser mode?'); i++) await press(']')
-if (!captureCharFrame().includes('Use strict parser mode?')) fail('decision is not navigable in attention')
+for (let i = 0; i < 5 && !readable().includes('Use strict parser mode?'); i++) await press(']')
+if (!readable().includes('Use strict parser mode?')) fail('decision is not navigable in attention')
 await press('b')
 await press('paste', 'Use strict mode')
 await press('return')
 await waitFor('decision answered', () => Boolean(store.getInteractiveCoordinatorState().data?.snapshot?.tasks.find(task => task.id === planned.task!.id)?.receipt?.needsDecision.some(decision => decision.id === 'parser-choice' && decision.status === 'answered' && decision.answer === 'Use strict mode')))
 await coordination.appendProtocolEvent({ version: '1.0', runId: runId!, agentId: nova.participant.agentId, taskId: planned.task!.id, type: 'task.failed', summary: 'Parser fixture result: missing grammar' })
-await waitFor('result summary', () => captureCharFrame().includes('Parser fixture result: missing grammar'))
+await waitFor('result summary', () => readable().includes('Parser fixture result: missing grammar'))
 // The attention card already carries the sentence; the roster quoting it too
 // put the same fact on screen twice, which reads as two things happening.
 {
-  const occurrences = captureCharFrame().split('Parser fixture result: missing grammar').length - 1
+  const occurrences = readable().split('Parser fixture result: missing grammar').length - 1
   if (occurrences !== 1) fail(`the result is on screen ${occurrences} times:\n${captureCharFrame()}`)
 }
 await press('s')
@@ -299,7 +309,8 @@ if (captureCharFrame().includes('ATTENTION')) fail('reviewed result stayed in at
 
 // ── the roster quotes the teammate's own last report ───────────────────────
 await coordination.reportExternalProtocolProgress(nova.participant, { status: 'heartbeat', summary: 'Reading parser.ts and its tests' })
-await waitFor("nova's own words in the roster", () => captureCharFrame().includes('Reading parser.ts and its tests'))
+// One line, capped to the row, so a narrow terminal shows its start.
+await waitFor("nova's own words in the roster", () => readable().includes('“Reading parser.ts'))
 
 // ── i interrupts only a teammate that is actually running ──────────────────
 await press('i')
@@ -375,7 +386,7 @@ if (store.getInteractiveCoordinatorState().pending !== null) fail('discarding di
 
 // ── x confirms before stopping teammate work ───────────────────────────────
 await press('x')
-if (!captureCharFrame().includes('Turn off coordination?')) fail('x turned coordination off without confirming')
+if (!readable().includes('Turn off coordination?')) fail('x turned coordination off without confirming')
 await press('escape')
 if (store.getInteractiveCoordinatorState().data?.interactive.enabled !== true) {
   fail('cancelling the confirm still turned coordination off')
