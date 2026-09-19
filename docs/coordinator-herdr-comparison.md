@@ -1,5 +1,49 @@
 # Herdr techniques applied to Coordinator
 
+## Status, September 19, 2026
+
+**Effectiveness — herdr's own recipes, run through our tools.**
+`scripts/coordHerdrRecipesSmoke.ts` takes the recipes in herdr's
+agent-automation guide and runs each through Coordinator's MCP tool surface
+(the same argument mapping an agent's `coord_*` call uses) against a real
+ledger. Every one completes, in fewer calls:
+
+| herdr recipe | herdr calls | Coordinator | calls |
+|---|---|---|---|
+| start `reviewer`, `prompt --wait`, `read` the result | 3 | `coord_delegate` with `name` + `wait_ms` — the result comes back with it | 1 |
+| `wait --until blocked`, `read` the question, `send-keys` an answer | 3 | `coord_wait` with `agent`/`until` returns the question itself; `coord_send_message` with `in_reply_to` resolves it in the ledger | 2 |
+| `send-keys ctrl+c` to stop a teammate | 1 | `coord_cancel_turn` (external) / `i` / Interrupt (managed); the task stays owned | 1 |
+
+Live runs with real providers are recorded below: Claude, Codex, Copilot and
+Pi each staff a teammate and complete the same task; a Claude-led chat ran a
+Claude and a Codex teammate side by side.
+
+**Parity.** Every agent-facing method in herdr's socket API has a Coordinator
+counterpart (the sweep is under "Naming a teammate by its job"). Attention
+follows herdr's rules throughout — transition-only notifications with the
+active-tab/focus rule and delivery delay, stalled starts, done-versus-idle
+review marks, priority ordering, background work, alert delivery settings,
+per-agent status lines, worktree visibility, name release, a narrow-terminal
+layout, and the client/daemon version handshake.
+
+**Better than herdr** because state is typed rather than inferred from a
+screen: a teammate's question, plan, decision or approval is a ledger record,
+so attention names what is being asked and a reply *resolves* it rather than
+typing into a dialog; alerts work for teammates on another host or behind the
+daemon; an uncertain submission is replayed safely rather than only flagged;
+and the coordination layer — task ownership and dependencies, path locks and a
+completion gate, plan and decision gates, mixed-provider teams, a durable
+mailbox — has no herdr equivalent.
+
+**Behind, and why.** A stalled start is reported at 15s against herdr's 5s,
+because our window includes the dispatch sweep (measured live: 2-3s to first
+activity, so the gap is headroom, not latency). There is no combined agent
+list across machines. OpenCode 2.x teammates cannot run until an SDK for its
+new HTTP API is published; the failure now says so. Terminal plumbing (panes,
+layout, graphics, plugins, live handoff) is out of scope for an SDK-driven
+coordinator.
+
+
 Source inspection: local `/Users/lukeryan/Documents/src/herdr`, September 8, 2026.
 This is an implementation comparison, not a comparative throughput benchmark.
 
@@ -786,3 +830,13 @@ way to the text being typed, by design). The header order, the draft fitting
 and the wrapped-row count were each verified to fail at 44×40; two of them could
 not fail at 60×28, where everything fits either way, which is why the phone size
 is the one registered.
+
+### Herdr's recipes as an executable check
+
+The status section above is backed by `scripts/coordHerdrRecipesSmoke.ts`,
+which runs herdr's documented recipes through `COORD_TOOL_SPECS` rather than
+calling library functions directly, so a broken argument mapping fails it the
+same way it would fail an agent. Dropping `wait_ms`, `name`, or the `agent`/
+`until` mapping from the contract was each verified to fail it; the `name` case
+first survived because the reviewer was the only teammate, so an idle decoy
+teammate now joins first and an unnamed delegation would go to it.
