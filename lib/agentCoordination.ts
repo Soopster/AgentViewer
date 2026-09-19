@@ -159,6 +159,7 @@ import { createNewViewSession, streamViewSessionTurn } from './sessionBackend'
 import { isOpenCodeManagedServer } from './opencodeClient'
 import { getRunningSessionInfo, interruptRunningSession, steerRunningSession } from './sessionRuntime'
 import { coordinatorAttention } from './coordinatorAttention'
+import { COORDINATOR_START_STALL_MS } from './coordinatorInteractiveState'
 import { isAgentProvider } from './provider'
 import { createWorktreeTask, findRepoRoot, findWorktreeTaskForCwd, removeWorktreeTask, type WorktreeTask } from './worktreeTasks'
 import type { AgentProvider } from './types'
@@ -2405,6 +2406,58 @@ function recoverStaleExternalParticipantsSync(db: SqliteDatabase, runId: string)
 }
 
 /**
+ * Wait for delegated work to settle — herdr's `agent prompt --wait`, in two
+ * phases. First an activity gate: the teammate must be seen working (or the
+ * task seen moving) within `COORDINATOR_START_STALL_MS`, or the answer is
+ * `stalled`; herdr uses the same gate so that an unrelated idle state cannot
+ * complete the wait, and says the same thing about it — a stall does not prove
+ * the prompt was not delivered, so the caller inspects before re-sending. Then
+ * the task must settle: done, failed or cancelled, or stopped on something the
+ * lead must answer. Mail that needs the lead's reply ends the wait too, for the
+ * reason `coord_wait`'s filter never swallows it.
+ */
+export async function awaitDelegatedWork(
+  identity: ExternalProtocolIdentity,
+  params: { taskId: string; agentId: string; timeoutMs: number },
+): Promise<NonNullable<ExternalProtocolTaskCreateResult['settled']>> {
+  const db = await getDatabase()
+  const deadline = Date.now() + Math.max(0, Math.min(params.timeoutMs, 55_000))
+  const startGate = Date.now() + COORDINATOR_START_STALL_MS
+  const read = () => {
+    const task = listTasksSync(db, identity.runId).find(entry => entry.id === params.taskId)
+    const agent = listAgentsSync(db, identity.runId).find(entry => entry.id === params.agentId)
+    return { task, agent }
+  }
+  // Only mail that arrives DURING the wait ends it. An older unanswered
+  // question is already the caller's to handle; counting it made every later
+  // wait return at once, turning a filtered wait into a busy loop.
+  const waitStartedAt = nowIso()
+  const replyWaiting = () => Boolean(db.prepare(`
+    SELECT 1 FROM protocol_messages
+    WHERE run_id = ? AND to_agent_id = ? AND reply_required = 1 AND resolved_at IS NULL AND created_at >= ?
+    LIMIT 1
+  `).get(identity.runId, identity.agentId, waitStartedAt))
+  const settle = (outcome: NonNullable<ExternalProtocolTaskCreateResult['settled']>['outcome']) => {
+    const { task, agent } = read()
+    return { outcome, taskStatus: task?.status ?? 'unknown', agentStatus: agent?.status ?? 'unknown', summary: task?.resultSummary ?? undefined }
+  }
+  let activityObserved = false
+  for (;;) {
+    const { task, agent } = read()
+    if (!task) throw new Error(`Task not found: ${params.taskId}`)
+    if (task.status === 'completed') return settle('completed')
+    if (task.status === 'failed') return settle('failed')
+    if (task.status === 'cancelled') return settle('cancelled')
+    if (task.status === 'blocked' || task.status === 'planned' || agent?.status === 'blocked') return settle('blocked')
+    if (replyWaiting()) return settle('needs_reply')
+    activityObserved ||= agent?.status === 'working' || !['pending', 'claimed'].includes(task.status)
+    if (!activityObserved && Date.now() >= startGate) return settle('stalled')
+    if (Date.now() >= deadline) return settle('timeout')
+    await waitForRunSignal(identity.runId, Math.min(1_000, Math.max(0, deadline - Date.now())))
+  }
+}
+
+/**
  * States a targeted wait settles on by default — herdr's `agent wait` default
  * of the first settled `idle`, `done` or `blocked`, widened to the protocol's
  * own terminal states, since a failed or stopped teammate is not coming back to
@@ -2443,11 +2496,15 @@ export async function waitForExternalProtocolChange(
     if (!agent) throw new Error(`Coordinator participant not found: ${target}`)
     if (agent.id === identity.agentId) throw new Error('A participant cannot wait on itself')
   }
+  // Only mail that arrives DURING the wait ends it. An older unanswered
+  // question is already the caller's to handle; counting it made every later
+  // wait return at once, turning a filtered wait into a busy loop.
+  const waitStartedAt = nowIso()
   const replyWaiting = () => Boolean(db.prepare(`
     SELECT 1 FROM protocol_messages
-    WHERE run_id = ? AND to_agent_id = ? AND reply_required = 1 AND resolved_at IS NULL
+    WHERE run_id = ? AND to_agent_id = ? AND reply_required = 1 AND resolved_at IS NULL AND created_at >= ?
     LIMIT 1
-  `).get(identity.runId, identity.agentId))
+  `).get(identity.runId, identity.agentId, waitStartedAt))
   await enqueueWrite((writeDb) => {
     requireExternalParticipantSync(writeDb, identity)
     recoverStaleExternalParticipantsSync(writeDb, identity.runId)

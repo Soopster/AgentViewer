@@ -63,6 +63,18 @@ const elapsed = async <T>(work: Promise<T>) => { const t0 = Date.now(); const va
   assert.ok(outcome.ms < 4_000, `mail must not wait for the target state: ${outcome.ms}ms`)
 }
 
+// A question that was ALREADY waiting is the caller's to handle. Counting it
+// turned every later filtered wait into a busy loop: any heartbeat woke it.
+{
+  const cursor = (await coord.waitForExternalProtocolChange(lead, { timeoutMs: 0 })).cursor ?? undefined
+  const waiting = elapsed(coord.waitForExternalProtocolChange(lead, { cursor, timeoutMs: 1_500, agent: 'nova', until: ['done'] }))
+  await new Promise(resolve => setTimeout(resolve, 200))
+  // A real event (heartbeats are not changes at all): mail between two teammates.
+  await coord.sendExternalProtocolMessage(orion, { to: 'nova', body: 'noise while an old question is open' })
+  const outcome = await waiting
+  assert.equal(outcome.value.changed, false, 'an old unanswered question must not wake a filtered wait on unrelated noise')
+}
+
 // Bad requests are refused rather than waited out.
 await assert.rejects(coord.waitForExternalProtocolChange(lead, { agent: 'ghost', timeoutMs: 100 }), /not found/)
 await assert.rejects(coord.waitForExternalProtocolChange(lead, { agent: 'nova', until: ['sleeping'], timeoutMs: 100 }), /Unknown teammate state/)

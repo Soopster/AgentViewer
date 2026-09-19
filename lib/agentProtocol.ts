@@ -863,6 +863,17 @@ export type ExternalProtocolClaimResult = ExternalProtocolMutationResult & {
  */
 export type ExternalProtocolTaskCreateResult = ExternalProtocolMutationResult & {
   delegation?: { agentId: string; name: string; provider: AgentProvider; sessionId?: string; delivery: 'queued' }
+  /**
+   * Present when the delegation asked to wait (herdr's `agent prompt --wait`).
+   * `stalled` means no activity was observed within the start window — like
+   * herdr's `agent_prompt_stalled`, it does NOT prove the work was not delivered.
+   */
+  settled?: {
+    outcome: 'completed' | 'failed' | 'cancelled' | 'blocked' | 'needs_reply' | 'stalled' | 'timeout'
+    taskStatus: string
+    agentStatus: string
+    summary?: string
+  }
   similarTasks?: Array<{ taskId: string; title: string; similarity: number }>
 }
 

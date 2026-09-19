@@ -236,6 +236,7 @@ difference decides most of the verdicts below.
 | A name follows the current pane occupant and is cleared when that agent exits, is released or is replaced (SKILL.md, `app/agents.rs`) | `availableTeammateName`: stopped and failed teammates release their name; a `done` one keeps it while its session is live, because that is what a follow-up reuses | Adopted this pass |
 | A terminal observer that stops accepting output is disconnected after 30s without write progress (CHANGELOG #3612) | The Coordinator change stream drops a subscriber whose queue stops draining; the team keeps running and clients reconnect | Adopted this pass |
 | `agent wait <name> --until <state>`, and `pane.agent_status_changed` subscriptions filtered by pane and status (SKILL.md, `api/schema/events.rs`) | `coord_wait` takes `agent` and `until`: it returns when that teammate settles or reaches a named state, at once if it already has, and whenever mail needs the waiter's reply | Adopted this pass |
+| `agent prompt <name> "…" --wait`: submit, gate on observed activity (`agent_prompt_stalled`), then wait for a settled state (agent-automation docs, `api/wait.rs`) | `coord_delegate` with `wait_ms`: returns `settled.outcome` — completed (with the result), failed, cancelled, blocked, needs_reply, stalled, or timeout; a stall leaves the queued work untouched | Adopted this pass |
 | Named agents, unique, validated; `agent start <name>` names an agent by its job (SKILL.md) | Protocol names, delegation requires exactly one active match; **a new teammate can now be named** — `name` on `coord_delegate`, `@name` in a TUI draft, a field in the web panel — under herdr's `[a-z][a-z0-9_-]{0,31}` rule | Adopted this pass (naming) |
 | Detach without stopping work (README) | `agent-viewer web` daemon + `--attach`; turns run server-side | Present |
 | Resume supported agent sessions after restart (`agent_resume.rs`) | Provider sessions are durable by id; interrupted teammate execution waits for explicit recovery rather than auto-resuming | Present, deliberately stricter |
@@ -718,3 +719,36 @@ mail, results and transcripts already sent; renaming a live one would split its
 history under two names) and `agent.view.set` (herdr's saved filters and sorts
 serve a sidebar of many agents across machines; a conversation's team is a
 handful, already ordered by what needs the user).
+
+### Delegate and wait, in one call
+
+Herdr's most-used recipe is `agent prompt reviewer "…" --wait`: submit, then
+wait for the work to settle, in one command. A Coordinator lead needed two —
+`coord_delegate`, then a wait — and got back "queued", which herdr's own
+contract warns is not proof of anything. `coord_delegate` now takes `wait_ms`
+and returns `settled` alongside the delegation.
+
+It keeps herdr's two phases. First an **activity gate**: the teammate has to be
+seen working, or its task seen moving, within `COORDINATOR_START_STALL_MS`, or
+the outcome is `stalled`. Without the gate an idle teammate that never started
+would read as settled — exactly what herdr's gate prevents. A stall, like
+`agent_prompt_stalled`, proves nothing about delivery, so the queued task is
+left alone for inspection, never retried. Then the task has to settle:
+completed (the result comes back with it), failed, cancelled, or stopped on the
+lead (blocked, a plan to approve, a teammate asking). The two carry-overs from
+the targeted wait apply here too — new reply-required mail ends the wait, and
+only new mail does.
+
+That last rule was a bug found by this test, in both waits. Counting *any*
+unanswered question meant one message the lead had not yet answered made every
+later wait return at once: a filtered `coord_wait` degraded into waking on any
+change, and delegate-and-wait returned `needs_reply` without waiting at all.
+Both now count only mail that arrives during the wait.
+
+`scripts/coordDelegateWaitSmoke.ts` covers every outcome against a real ledger,
+including a stall that returns at the start window rather than the caller's
+timeout with the task still `claimed`. Removing the gate, assuming activity, and
+counting old mail were each verified to fail it; the targeted-wait smoke pins
+the old-mail rule for `coord_wait` (its first version used a heartbeat as noise,
+which is not a change at all, so it passed for the wrong reason until the noise
+became a real message).

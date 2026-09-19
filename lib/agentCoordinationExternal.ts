@@ -35,6 +35,7 @@ import {
   sendExternalProtocolMessage,
   submitExternalProtocolPlan,
   waitForExternalProtocolChange,
+  awaitDelegatedWork,
 } from './agentCoordination'
 import {
   PROTOCOL_FAILURE_CLASSES,
@@ -51,6 +52,7 @@ import {
   type ProtocolNeedsDecision,
   type ProtocolSeat,
   type ProtocolUsageReceipt,
+  type ExternalProtocolTaskCreateResult,
 } from './agentProtocol'
 import { isAgentProvider } from './provider'
 import type { AgentProvider } from './types'
@@ -212,7 +214,8 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
     if (!['director', 'executor', 'validator', 'watcher'].includes(seat)) throw new Error('Invalid task seat')
     const requestedProvider = optionalText(body.requestedProvider)
     if (requestedProvider && !isAgentProvider(requestedProvider)) throw new Error('Invalid requested provider')
-    return mutate(() => createExternalProtocolTask(participantIdentity!, {
+    const waitMs = typeof body.waitMs === 'number' && Number.isFinite(body.waitMs) && body.waitMs > 0 ? body.waitMs : 0
+    const created = mutate(() => createExternalProtocolTask(participantIdentity!, {
       assignTo: optionalText(body.assignTo),
       teammateName: optionalText(body.teammateName),
       title: text(body.title),
@@ -229,6 +232,13 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
       requestedEffort: optionalText(body.requestedEffort),
       verifyCommands: strings(body.verifyCommands),
     }))
+    if (!waitMs) return created
+    // Herdr's `agent prompt --wait`: the task is created first and the wait
+    // never retries it, so a timeout or stall reports state and leaves the
+    // (already queued) work alone.
+    const result = await created as ExternalProtocolTaskCreateResult
+    if (!result.delegation || !result.task) return result
+    return { ...result, settled: await awaitDelegatedWork(participantIdentity!, { taskId: result.task.id, agentId: result.delegation.agentId, timeoutMs: waitMs }) }
   }
   if (action === 'claim_task') return mutate(() => claimExternalProtocolTask(participantIdentity!, optionalText(body.taskId)))
   if (action === 'release_task') {

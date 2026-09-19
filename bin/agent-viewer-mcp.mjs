@@ -627,8 +627,8 @@ async function coordinatorRequest(action, payload = {}, requireIdentity = true) 
     ? await requestJson('/api/agent-protocol/external', {
         method: 'POST',
         body: JSON.stringify({ action, ...body }),
-      }, action === 'wait' ? 65_000 : 10_000)
-    : await ahpClient.request(action, body, action === 'wait' ? 65_000 : 10_000)
+      }, action === 'wait' || body.waitMs ? 65_000 : 10_000)
+    : await ahpClient.request(action, body, action === 'wait' || body.waitMs ? 65_000 : 10_000)
   // status/wait return the latest event cursor; remembering it here keeps the
   // next coord_wait from waking on state this bridge has already seen.
   if (result && typeof result.cursor === 'string' && result.cursor) {
