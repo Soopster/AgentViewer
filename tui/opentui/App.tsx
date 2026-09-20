@@ -310,6 +310,11 @@ type SteeredComposerSend = {
 }
 
 const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
+// A tab for a session with a turn in flight spins, so work you are not looking
+// at is still visible. Exported for the smoke, which cannot assert on a glyph
+// it does not share with the renderer.
+export const TAB_SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const
+const TAB_SPINNER_INTERVAL_MS = 100
 const COMPOSER_WAITING_SPINNER_FRAMES = [
   ['|', '/', '-', '\\'],
   ['.', 'o', 'O', 'o'],
@@ -10847,6 +10852,17 @@ export default function OpenTuiApp() {
     return visibleTabSessions.findIndex((s) => sessionKey(s) === selectedSessionKey)
   }, [selectedSessionKey, visibleTabSessions])
 
+  // Which visible tabs have a turn in flight. `running` alone: a tab that is
+  // blocked on an answer is not working, and spinning at the user while it
+  // waits for them is the opposite of what the spinner says.
+  const runningTabKeys = useMemo(() => {
+    const keys = new Set<string>()
+    for (const s of visibleTabSessions) {
+      if (sidebarSessionActivity.get(sessionKey(s)) === 'running') keys.add(sessionKey(s))
+    }
+    return keys
+  }, [visibleTabSessions, sidebarSessionActivity])
+
   const tabOptions = useMemo((): TabSelectOption[] => (
     visibleTabSessions.map((s) => {
       // A tab already mounted in a split pane is marked, so the strip explains
@@ -15798,6 +15814,43 @@ export default function OpenTuiApp() {
     tabSelectRef.current.setSelectedIndex(activeTabIndex)
   }, [activeTabIndex])
 
+  // Animate the running tabs' spinner IMPERATIVELY, through the renderable's
+  // own setOptions. Driving it from state would re-render the root — and the
+  // mounted transcript with it — ten times a second for a one-glyph change;
+  // the root's render is the most expensive thing in this app (see the nav
+  // perf notes). setOptions keeps the selected index and emits nothing, so
+  // this cannot move the active tab.
+  //
+  // React owns the `options` prop, so a root render repaints the plain names;
+  // the next tick puts the frame back. Applying one immediately is what keeps
+  // that invisible.
+  useEffect(() => {
+    const instance = tabSelectRef.current
+    if (!instance) return undefined
+    if (runningTabKeys.size === 0) {
+      // Nothing is running: hand back exactly what React rendered, or the last
+      // frame drawn stays frozen on a tab that has finished.
+      instance.setOptions(tabOptions)
+      return undefined
+    }
+    let frame = 0
+    const paint = () => {
+      const target = tabSelectRef.current
+      if (!target) return
+      target.setOptions(tabOptions.map((option) => (
+        option.value != null && runningTabKeys.has(option.value as string)
+          ? { ...option, name: `${TAB_SPINNER_FRAMES[frame % TAB_SPINNER_FRAMES.length]} ${option.name}` }
+          : option
+      )))
+    }
+    paint()
+    const id = setInterval(() => {
+      frame += 1
+      paint()
+    }, TAB_SPINNER_INTERVAL_MS)
+    return () => clearInterval(id)
+  }, [runningTabKeys, tabOptions, showTabs])
+
   const activeAgentToolCursorKey = groupedToolView
     && transcriptCursorKey
     && resolvedExpandedKeys.has(transcriptCursorKey)
@@ -20309,6 +20362,7 @@ export default function OpenTuiApp() {
               backgroundColor={theme.surface2}
             >
               <tab-select
+                id="session-tabs"
                 ref={tabSelectRef}
                 options={tabOptions}
                 width={readerAreaWidth - 2}
