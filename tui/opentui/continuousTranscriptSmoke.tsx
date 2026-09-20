@@ -1,5 +1,7 @@
 /** @jsxImportSource @opentui/react */
-// TRANSCRIPT view: one continuous column, a rule per message, no markers.
+// TRANSCRIPT view, after opencode's session view: prompts are ruled bands,
+// replies are unmarked prose sharing the prompt's text column, and a turn ends
+// with a footer naming who answered and how long it took.
 //
 // The rendering is the contract here, and it is invisible to a type-checker —
 // the view is a set of prop choices inside the stream branch, so the only way
@@ -49,7 +51,7 @@ const card = (
 
 const USER = card('continuous-user', 'user', 'You', 'Refactor the pool.', 'conversation')
 const ASSISTANT = card('continuous-assistant', 'assistant', 'Assistant', 'Reading the pool now.', 'conversation')
-const TOOL = card('continuous-tool', 'assistant', 'Bash', 'tool Bash: pwd', 'technical')
+const TOOL = { ...card('continuous-tool', 'assistant', 'Bash', 'tool Bash: pwd', 'technical'), durationLabel: '3.2s' }
 
 const DETAIL = {
   info: null,
@@ -127,12 +129,44 @@ try {
   if (process.env.DUMP_FRAME) console.log(frame)
   if (!frame.includes('Reading the pool now.')) fail('TRANSCRIPT did not render the assistant message')
 
-  // ── every message carries a rule ─────────────────────────────────────────
-  // This is the whole view. STREAM gives a rule to user prompts alone, so an
-  // assistant message without one means the continuous branch never ran.
-  for (const key of [USER.key, ASSISTANT.key, TOOL.key]) {
-    if (!hasRule(key)) fail(`TRANSCRIPT left ${key} without its rule`)
+  // ── only the prompt is ruled ─────────────────────────────────────────────
+  // The band is the turn boundary; a rule on every reply is what made the old
+  // view read as a stack of boxes rather than as a conversation.
+  if (!hasRule(USER.key)) fail('TRANSCRIPT left the prompt without its rule')
+  for (const key of [ASSISTANT.key, TOOL.key]) {
+    if (hasRule(key)) fail(`TRANSCRIPT ruled ${key}; only prompts carry a rule`)
   }
+
+  // ── prompts, replies and the turn footer share one text column ──────────
+  if (!frame.includes('Claude · 3.2s')) fail('TRANSCRIPT did not close the turn with its footer')
+  {
+    const lines = frame.split('\n')
+    const column = (needle: string) => {
+      const line = lines.find((row) => row.includes(needle))
+      if (!line) fail(`no row contains ${needle}`)
+      return line!.indexOf(needle)
+    }
+    const promptColumn = column('Refactor the pool.')
+    if (promptColumn !== column('Reading the pool now.')) {
+      fail('TRANSCRIPT reply text does not start in the prompt text column')
+    }
+    if (promptColumn !== column('Claude · 3.2s')) {
+      fail('TRANSCRIPT turn footer does not start in the prompt text column')
+    }
+  }
+
+  // ── the prompt is a padded band ──────────────────────────────────────────
+  // A blank row above and below the text inside the band is what makes it read
+  // as a panel rather than a highlighted line.
+  {
+    const box = cardBox(USER.key)!
+    const lines = frame.split('\n')
+    const textRow = lines.findIndex((row) => row.includes('Refactor the pool.'))
+    if (textRow <= box.y) fail('TRANSCRIPT prompt band has no padding above its text')
+  }
+
+  // Only the turn's last reply carries it.
+  if (frame.split('Claude · ').length !== 2) fail('TRANSCRIPT painted the footer on more than one reply')
 
   // ── two messages never touch ─────────────────────────────────────────────
   // The rule is the only separator, so abutting messages read as one message
@@ -176,7 +210,7 @@ try {
     fail('A stream-like view must keep its per-line markers')
   }
 
-  console.log('Continuous transcript smoke passed (rule per message, no markers, neighbouring view unchanged)')
+  console.log('Continuous transcript smoke passed (ruled prompt band, aligned replies, turn footer, no markers, neighbouring view unchanged)')
 } finally {
   setup.renderer.destroy?.()
 }

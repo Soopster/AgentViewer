@@ -23,6 +23,7 @@ import { PiActivityPopover } from './PiActivityPopover'
 import { toast } from './toastStore'
 import { toBmpSafe } from './bmp'
 import { loadBridgeMessagesForSession, addBridgeMessage, channelBridgeFileOutboxStorage } from '../../lib/bridgeMessages'
+import { getAssistantDisplayName } from '../../lib/provider'
 import { TaskSidePanel } from './TaskSidePanel'
 import { openExternalUrl } from './terminalBrowser'
 import { hasTuiLinkTarget, parseTuiLineTokens, parseTuiLinkTarget } from '../../lib/tuiLinkTargets'
@@ -3164,6 +3165,13 @@ function terminalSelectionColors(theme: TuiThemePalette): SelectionColors {
   }
 }
 
+// opencode sets a prompt on a panel a shade away from the page rather than on a
+// tint of the accent, so the rule carries the colour and the band stays quiet.
+function continuousUserBackground(theme: TuiThemePalette): string {
+  const lightTheme = (relativeLuminance(theme.bg) ?? 0) > 0.5
+  return (lightTheme ? mixHexColor(theme.text, theme.bg, 0.06) : mixHexColor('#000000', theme.bg, 0.35)) ?? theme.userBg
+}
+
 function streamUserBackground(theme: TuiThemePalette): string {
   const lightTheme = (relativeLuminance(theme.bg) ?? relativeLuminance(theme.surface) ?? 0) > 0.5
   return mixHexColor(theme.violet, theme.userBg, lightTheme ? 0.16 : 0.24) ?? theme.userBg
@@ -3406,6 +3414,15 @@ function streamStatusColor(marker: string, theme: TuiThemePalette): string {
   if (marker === '●') return theme.green
   if (marker === '○') return theme.amber
   return theme.dim
+}
+
+// opencode closes each reply with who answered and how long the turn took.
+// Only the turn's last reply carries it, and never while that reply streams —
+// the duration is still growing and the turn may not be over.
+function continuousTurnFooter(card: TuiTranscriptCard, next: TuiTranscriptCard | undefined): string | null {
+  if (card.role === 'user' || card.pending || !card.durationLabel) return null
+  if (next && next.role !== 'user') return null
+  return card.durationLabel
 }
 
 function streamLandmarkText(landmark: CardLandmark, width: number): string {
@@ -5337,8 +5354,14 @@ type TranscriptCardProps = {
   imessageStyle: boolean
   transcriptWidth: TuiTranscriptWidth
   streamMode: boolean
-  /** STREAM, but with the role rule on every message and no line markers. */
+  /** STREAM restyled after opencode's session view: prompts are ruled bands, replies are plain prose. */
   continuousMode: boolean
+  /**
+   * The line under a turn's last reply — who answered and how long it took —
+   * set only on that card and only in the continuous view. A card cannot know
+   * it ends a turn, so the reader decides.
+   */
+  turnFooter?: string | null
   agentsMode: boolean
   agentToolCursorKey: string | null
   agentToolExpandedKeys: ReadonlySet<string>
@@ -5476,6 +5499,7 @@ function TranscriptCardInner({
   transcriptWidth,
   streamMode,
   continuousMode,
+  turnFooter,
   agentsMode,
   agentToolCursorKey,
   agentToolExpandedKeys,
@@ -6061,8 +6085,19 @@ function TranscriptCardInner({
     // that stops a transcript reading as prose. Subagent arrows stay: they say
     // something the rule cannot, and they are why this is not simply zero.
     const streamMarkerWidth = (continuousMode ? 0 : 2) + streamSubagentArrows.length
-    const streamTextWidth = Math.max(streamWidth - streamMarkerWidth, 12)
-    const streamChildTextWidth = Math.max(streamWidth - 4, 10)
+    // Every continuous message starts its text in the column a prompt's text
+    // does (rule + two), so prompts and replies share one left edge the way
+    // opencode's do; only the prompt draws the rule.
+    const continuousInset = 3
+    const streamTextWidth = continuousMode
+      ? Math.max(streamLandmarkWidth - continuousInset - streamMarkerWidth, 12)
+      : Math.max(streamWidth - streamMarkerWidth, 12)
+    const streamChildTextWidth = continuousMode
+      ? Math.max(streamTextWidth - 2, 10)
+      : Math.max(streamWidth - 4, 10)
+    // Turn separators are the rule the band replaces: a prompt on its own
+    // panel already says where a turn starts.
+    const streamLandmarks = continuousMode ? landmarks.filter((landmark) => landmark.kind !== 'turn') : landmarks
     const firstLine = bodyLines[0]
     const streamBaseMarker = continuousMode
       ? ''
@@ -6119,13 +6154,13 @@ function TranscriptCardInner({
       || Boolean(firstLine)
       || remainingLines.length > 0
       || (isExpanded && (card.codeBlocks?.length ?? 0) > 0)
-    const streamRendersSomething = streamHasBody || landmarks.length > 0
+    const streamRendersSomething = streamHasBody || streamLandmarks.length > 0
     // User prompts get a full-width tinted band plus an accent rail so they
     // remain obvious even in palettes whose base user background is subtle.
     const streamBg = card.role === 'user'
-      ? streamUserBackground(theme)
+      ? continuousMode ? continuousUserBackground(theme) : streamUserBackground(theme)
       : hasCursor
-        ? theme.userBg
+        ? continuousMode ? theme.surface2 : theme.userBg
         : undefined
     return (
       <box
@@ -6151,7 +6186,7 @@ function TranscriptCardInner({
           onSelectCard(card.key)
         }}
       >
-        {landmarks.map((landmark, landmarkIndex) => {
+        {streamLandmarks.map((landmark, landmarkIndex) => {
           const lmColor = landmark.kind === 'resume'
             ? theme.cyan
             : landmark.kind === 'unread'
@@ -6176,19 +6211,19 @@ function TranscriptCardInner({
         <box
           flexDirection="column"
           width={streamLandmarkWidth}
-          // The continuous view's only chrome. Every message gets a rule in its
-          // own role colour, so the column reads as one transcript rather than
-          // as a stack of things; STREAM keeps the rule for user prompts alone,
-          // where it is an accent on an otherwise unmarked band.
-          border={continuousMode || card.role === 'user' ? ['left'] : undefined}
-          borderStyle={continuousMode ? 'single' : card.role === 'user' ? 'heavy' : undefined}
-          borderColor={continuousMode
-            ? (card.role === 'user' ? accent : theme.border2)
-            : card.role === 'user' ? theme.violet : undefined}
-          paddingLeft={continuousMode || card.role === 'user'
-            ? Math.max(densityState.bodyIndent - 1, 0)
-            : densityState.bodyIndent}
-          paddingBottom={0}
+          // A prompt is a ruled band; everything else is unmarked prose indented
+          // to the prompt's text column. The band's vertical padding is what
+          // makes it read as a panel rather than a highlighted line.
+          border={card.role === 'user' ? ['left'] : undefined}
+          borderStyle={card.role === 'user' ? 'heavy' : undefined}
+          borderColor={card.role === 'user' ? theme.violet : undefined}
+          paddingLeft={continuousMode
+            ? card.role === 'user' ? continuousInset - 1 : continuousInset
+            : card.role === 'user'
+              ? Math.max(densityState.bodyIndent - 1, 0)
+              : densityState.bodyIndent}
+          paddingTop={continuousMode && card.role === 'user' ? 1 : 0}
+          paddingBottom={continuousMode && card.role === 'user' ? 1 : 0}
           backgroundColor={streamBg}
         >
         {streamDiffPreview && streamDiffHeaderSegments ? (
@@ -6230,7 +6265,7 @@ function TranscriptCardInner({
               fg={streamFirstLineColor}
               width={streamTextWidth}
               wrapMode={firstLine.tone === 'tool' ? 'none' : 'word'}
-              attributes={card.role === 'user' ? TextAttributes.BOLD : undefined}
+              attributes={card.role === 'user' && !continuousMode ? TextAttributes.BOLD : undefined}
               selectable
               {...selectionColors}
             >
@@ -6245,10 +6280,10 @@ function TranscriptCardInner({
           <text fg={theme.dim} selectable {...selectionColors}>{`${streamMarker} (no output)`}</text>
         )}
         {remainingLines.map((line, lineIndex) => {
-          const continuationMarker = streamContinuationMarker(line)
+          const continuationMarker = continuousMode ? '  ' : streamContinuationMarker(line)
           return (
             <box key={`${card.key}:s:${lineIndex}`} flexDirection="row">
-              <text fg={theme.dim} width={4} wrapMode="none" selectable {...selectionColors}>
+              <text fg={theme.dim} width={continuationMarker.length} wrapMode="none" selectable {...selectionColors}>
                 {continuationMarker}
               </text>
               <text
@@ -6299,6 +6334,16 @@ function TranscriptCardInner({
         )}
         </box>
         )}
+        {continuousMode && turnFooter && streamHasBody ? (
+          <box marginTop={1} paddingLeft={continuousInset}>
+            <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
+              {renderInlineTextSegments([
+                { text: getAssistantDisplayName(card.provider), fg: accent },
+                { text: ` · ${turnFooter}`, fg: theme.dim },
+              ], streamTextWidth, theme.dim)}
+            </text>
+          </box>
+        ) : null}
       </box>
     )
   }
@@ -11197,6 +11242,7 @@ export default function OpenTuiApp() {
         transcriptWidth,
         streamMode: isChatLikeView,
         continuousMode: isContinuousView,
+        turnFooter: isContinuousView ? continuousTurnFooter(card, visibleTranscriptCards[absoluteIndex + 1]) : null,
         agentsMode: usesAgentCardPresentation(card, transcriptView),
         agentToolCursorKey: groupedToolView ? agentToolCursorByGroupKey[card.key] ?? null : null,
         agentToolExpandedKeys: groupedToolView ? expandedCardKeys : EMPTY_EXPANDED_KEYS,
@@ -11225,6 +11271,7 @@ export default function OpenTuiApp() {
       })
     }).filter((variant): variant is TranscriptCardSelectionVariants => variant !== null), [
     renderedTranscriptCards,
+    visibleTranscriptCards,
     transcriptRenderStart,
     cardDisplayData,
     expandedKeysForRender,
