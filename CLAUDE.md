@@ -51,7 +51,7 @@ There is no test runner and no lint script. Type-checking is the verification st
 
 ### Multi-provider session backend
 
-The app is a unified UI over five separate agent runtimes: **Claude** (`@anthropic-ai/claude-agent-sdk`), **Codex** (app-server), **OpenCode** (`@opencode-ai/sdk`), **GitHub Copilot** (`@github/copilot-sdk`), and **Pi** (`@mariozechner/pi-coding-agent`). Do not re-introduce direct JSONL parsing — providers are accessed only through their SDKs.
+The app is a unified UI over five separate agent runtimes: **Claude** (`@anthropic-ai/claude-agent-sdk`), **Codex** (app-server), **OpenCode** (`@opencode-ai/sdk` for 1.x, `@opencode/client` for 2.x — see below), **GitHub Copilot** (`@github/copilot-sdk`), and **Pi** (`@mariozechner/pi-coding-agent`). Do not re-introduce direct JSONL parsing — providers are accessed only through their SDKs.
 
 Each provider follows the same pattern in `lib/`:
 
@@ -75,6 +75,52 @@ Adapters must stay stateless — they are resolved per *provider instance* (`lib
 Supporting modules split out of `sessionBackend.ts` so both paths can share them without an import cycle through the registry: `lib/mappedMessagesCache.ts` (LRU transcript cache), `lib/liveTranscripts.ts` (Copilot/Pi in-flight turn buffers), `lib/codexThreads.ts` (thread read/resume/error classification), `lib/opencodeSessions.ts`, `lib/claudeSessionReads.ts`, `lib/claudeModels.ts`, `lib/withTimeout.ts`, and the composer vocabularies in `lib/adapters/shared.ts` / `lib/copilotComposer.ts` / `lib/piComposer.ts`.
 
 `lib/types.ts` defines the canonical wire format. Every provider must produce `SessionMessage { type, uuid, session_id, message: ApiMessage|SystemMessagePayload, parent_tool_use_id, timestamp?, origin?, provider? }`. `lib/threading.ts` `buildThreadedMessages()` then groups tool_use/tool_result pairs and parses XML tags into the renderer-ready blocks consumed by `MessageItem.tsx` and the TUI formatters.
+
+#### OpenCode 1 and OpenCode 2 are one provider over two APIs (load-bearing)
+
+OpenCode 2 ships as a different npm package (`@opencode/cli`, with `@opencode/client` for the
+SDK) serving a different HTTP API: routes moved under `/api`, `POST /session` became `POST
+/api/session`, a session's directory moved to `location.directory`, an assistant message's parts
+became an inline `content[]`, and the event stream turned from cumulative part snapshots into
+lifecycle edges plus deltas. Both majors install side by side and either may be what `opencode`
+resolves to, so **the version is asked of the server, never assumed** — `openCodeApiGeneration`
+in `lib/opencodeClient.ts` reads `GET /api/info`. `/session` cannot be the probe: on a 2.x server
+that path serves the *web app*, so it answers 200 with HTML and a status-code check alone would
+call every 2.x server a 1.x one.
+
+**A 2.x server is adapted at the transport boundary, not at each call site.** `lib/opencode2Client.ts`
+presents the OpenCode 1 client surface this app already calls (~30 operations across the adapter,
+the harness and the send path) backed by `@opencode/client`; `lib/opencode2Mapping.ts` holds the
+shape translation and `lib/opencode2Events.ts` turns the v2 stream into v1 events. Everything
+above keeps one vocabulary, which is what lets the web renderers, the TUI, `lib/permissions.ts`
+and the SSE pumps stay untouched — they all key on v1 event and part shapes.
+
+- **Part ids are derived, and both paths must derive them identically.** v2 content blocks carry
+  no ids, so a text/reasoning block is keyed by its `ordinal` and a tool block by its call id. If
+  the live translator and the history read disagree, a streaming card and the persisted card it
+  settles into are two different cards.
+- **Renamed tools are normalized or they render as raw JSON.** v2's `shell` is v1's `bash`, its
+  `subagent` is `task`, and `read`/`write`/`edit` renamed `filePath` to `path` — the cards select
+  on the v1 names. Sessions migrated from a 1.x install keep the *old* names, so both spellings
+  appear on one server and the mapping must be additive rather than a rename of everything.
+- **A failed turn emits its error before its idle.** The send stream stops at whichever arrives
+  first, so the other order drops the reason and shows a turn that ended for no stated cause.
+- **Sharing is the one op v2 dropped**, so the capability is gated per session (on the server's
+  own `version`, via `capabilitiesFor` in `lib/opencodeMapper.ts`) rather than per provider — a
+  user on 1.x keeps the button.
+- **Todos have no v2 endpoint**: the `todowrite` tool call is the only record, read live off the
+  event and cold off the transcript.
+- **A 2.x server needs the 2.x coordinator plugin.** A 1.x plugin is a file exporting a hook
+  factory; a 2.x plugin is a *directory* whose entrypoint default-exports `{ id, setup }`, and
+  each major refuses the other's shape. `lib/opencodePlugin/agentViewerCoordinator2/` is the 2.x
+  build — its tools declare plain JSON Schema, so unlike the 1.x file it imports no plugin SDK.
+  The choice is made from `opencode --version` because the config is an environment variable on
+  the spawn, decided before the server exists to ask.
+
+`npm run opencode:harness:smoke` ends with `scripts/opencode2CompatSmoke.ts`, which pins the tool
+normalization, the id agreement, the delta channels, the failure ordering and the form/question
+round trip against fixtures recorded from a real 2.0.8 server. Seven mutations were verified to
+fail it; every one of those defects renders as plausible output rather than an error.
 
 #### ACP-transport providers (`claude-acp`, `codex-acp`)
 

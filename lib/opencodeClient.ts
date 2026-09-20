@@ -10,12 +10,15 @@ import {
   createOpencodeClient as createOpencodeV2Client,
   type OpencodeClient as OpencodeV2Client,
 } from '@opencode-ai/sdk/v2'
+import { createOpenCode2Clients } from './opencode2Client'
 import { getCoordinatorBridgeUrl, getCoordinatorBridgeSecret } from './coordinatorBridgeServer'
 
 type OpenCodeRuntime = {
   client: OpencodeClient
   clientV2: OpencodeV2Client
   server: { url: string; close(): void } | null
+  /** Which HTTP API the server on the other end speaks (see openCodeApiGeneration). */
+  generation: 1 | 2
 }
 
 declare global {
@@ -51,14 +54,50 @@ function openCodeV2ClientFor(baseUrl: string, password?: string): OpencodeV2Clie
   return createOpencodeV2Client({ baseUrl, headers: openCodeAuthHeaders(password) })
 }
 
-async function canReachOpenCode(baseUrl: string, password?: string): Promise<boolean> {
+/**
+ * Which OpenCode HTTP API a server speaks, asked of the server rather than of
+ * the CLI on this machine — an external `OPENCODE_BASE_URL` may be any version,
+ * and both are installable side by side (`opencode` and `opencode2` ship as
+ * separate npm packages). OpenCode 2 serves its API under `/api` and answers
+ * `/api/info` with its version; 1.x has no such route.
+ *
+ * **Both probes must check the content type, not just the status.** Each
+ * generation serves its web app as a catch-all, so each answers 200 with HTML
+ * on the *other's* probe path: 1.18.30 returns the app's HTML for `/api/info`,
+ * and 2.0.8 returns it for `/session`. Reading either as a hit would
+ * misidentify every server of that version and fail on the first real request.
+ */
+async function openCodeApiGeneration(baseUrl: string, password?: string): Promise<1 | 2 | null> {
+  const headers = { Accept: 'application/json', ...openCodeAuthHeaders(password) }
   try {
-    const response = await fetch(`${baseUrl}/session`, {
-      headers: { Accept: 'application/json', ...openCodeAuthHeaders(password) },
-    })
-    return response.ok
+    const response = await fetch(`${baseUrl}/api/info`, { headers })
+    if (response.ok && (response.headers.get('content-type') ?? '').includes('application/json')) {
+      const info = await response.json() as { version?: string }
+      const major = Number(/^(\d+)\./.exec(String(info?.version ?? ''))?.[1] ?? NaN)
+      if (Number.isFinite(major) && major >= 2) return 2
+    }
   } catch {
-    return false
+    return null
+  }
+  try {
+    const response = await fetch(`${baseUrl}/session`, { headers })
+    if (!response.ok) return null
+    return (response.headers.get('content-type') ?? '').includes('application/json') ? 1 : null
+  } catch {
+    return null
+  }
+}
+
+function runtimeFor(baseUrl: string, generation: 1 | 2, password?: string): Omit<OpenCodeRuntime, 'server'> {
+  if (generation === 2) {
+    const headers = openCodeAuthHeaders(password)
+    const clients = createOpenCode2Clients({ baseUrl, ...(headers ? { headers } : {}) })
+    return { ...clients, generation }
+  }
+  return {
+    client: openCodeClientFor(baseUrl, password),
+    clientV2: openCodeV2ClientFor(baseUrl, password),
+    generation,
   }
 }
 
@@ -94,12 +133,9 @@ async function connectExistingServer(): Promise<OpenCodeRuntime | null> {
   ].filter((value, index, list): value is string => Boolean(value) && list.indexOf(value) === index)
 
   for (const baseUrl of candidates) {
-    if (!(await canReachOpenCode(baseUrl))) continue
-    return {
-      client: openCodeClientFor(baseUrl),
-      clientV2: openCodeV2ClientFor(baseUrl),
-      server: null,
-    }
+    const generation = await openCodeApiGeneration(baseUrl)
+    if (!generation) continue
+    return { ...runtimeFor(baseUrl, generation), server: null }
   }
 
   return null
@@ -114,10 +150,34 @@ async function connectExistingServer(): Promise<OpenCodeRuntime | null> {
 // externally-managed `opencode serve` (OPENCODE_BASE_URL/OPENCODE_SERVER_URL)
 // never loads it, so OpenCode coordinator agents need the default managed
 // server path.
-function coordinatorPluginPath(): string {
+//
+// The two server generations need two different plugins, and neither can load
+// the other's: a 1.x plugin is a file exporting a hook factory, a 2.x plugin is
+// a directory whose entrypoint default-exports `{ id, setup }`, and each
+// refuses the other's shape outright. Which one to pass has to be decided
+// *before* the server is up — the config is an environment variable on the
+// spawn — so this asks the binary it is about to run, rather than the server it
+// has not started yet (which is what every other decision here asks).
+function coordinatorPluginPath(cliMajor: number): string {
   const override = process.env.AGENT_VIEWER_OPENCODE_PLUGIN_PATH?.trim()
   if (override) return override
-  return fileURLToPath(new URL('./opencodePlugin/agentViewerCoordinator.mjs', import.meta.url))
+  return fileURLToPath(new URL(
+    cliMajor >= 2 ? './opencodePlugin/agentViewerCoordinator2' : './opencodePlugin/agentViewerCoordinator.mjs',
+    import.meta.url,
+  ))
+}
+
+/** The major version of the `opencode` on PATH, or 1 when it cannot be read —
+ *  an unreadable version is not a reason to fail the spawn, and a 2.x server
+ *  handed the 1.x plugin path warns and keeps running without the coord tools. */
+function openCodeCliMajor(): number {
+  try {
+    const output = execFileSync('opencode', ['--version'], { encoding: 'utf8', timeout: 10_000 })
+    const major = Number(/(\d+)\./.exec(output.trim())?.[1] ?? NaN)
+    return Number.isFinite(major) ? major : 1
+  } catch {
+    return 1
+  }
 }
 
 /**
@@ -129,31 +189,7 @@ function coordinatorPluginPath(): string {
  * session — teammates included — fails to start. Both spellings are accepted
  * here, and a password, when one is printed, authenticates every later request.
  */
-/**
- * The bundled SDK (1.18.x, the newest published) speaks OpenCode 1.x's REST
- * API. The 2.x CLI serves a different one — `POST /session` answers 405 — so a
- * teammate staffed on it fails deep inside session creation with a status code
- * that says nothing about why. Checked once, and only for a server we spawn:
- * an external `OPENCODE_BASE_URL` is the user's to choose.
- */
-let openCodeCliMajor: number | null | undefined
-function unsupportedOpenCodeCliVersion(): string | null {
-  if (openCodeCliMajor === undefined) {
-    try {
-      const output = execFileSync('opencode', ['--version'], { encoding: 'utf8', timeout: 10_000 })
-      openCodeCliMajor = Number(/(\d+)\./.exec(output.trim())?.[1] ?? NaN)
-      if (!Number.isFinite(openCodeCliMajor)) openCodeCliMajor = null
-    } catch {
-      openCodeCliMajor = null
-    }
-  }
-  if (openCodeCliMajor === null || openCodeCliMajor < 2) return null
-  return `This OpenCode CLI is v${openCodeCliMajor}, whose HTTP API the bundled @opencode-ai/sdk (1.18.x, the newest published) does not speak. Install OpenCode 1.x, or point OPENCODE_BASE_URL at a 1.x server.`
-}
-
 async function startManagedServer(): Promise<OpenCodeRuntime> {
-  const unsupported = unsupportedOpenCodeCliVersion()
-  if (unsupported) throw new Error(unsupported)
   const port = Number(process.env.OPENCODE_PORT) || await findFreePort()
   const timeout = Number(process.env.OPENCODE_START_TIMEOUT_MS) || 15_000
   // The spawned process inherits this environment, so the plugin file can read
@@ -161,7 +197,7 @@ async function startManagedServer(): Promise<OpenCodeRuntime> {
   process.env.AGENT_VIEWER_COORD_BRIDGE_URL = await getCoordinatorBridgeUrl()
   process.env.AGENT_VIEWER_COORD_BRIDGE_SECRET = await getCoordinatorBridgeSecret()
   const child = spawn('opencode', ['serve', '--hostname=127.0.0.1', `--port=${port}`], {
-    env: { ...process.env, OPENCODE_CONFIG_CONTENT: JSON.stringify({ plugin: [coordinatorPluginPath()] }) },
+    env: { ...process.env, OPENCODE_CONFIG_CONTENT: JSON.stringify({ plugin: [coordinatorPluginPath(openCodeCliMajor())] }) },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   const started = await waitForOpenCodeServer(child, timeout)
@@ -170,9 +206,18 @@ async function startManagedServer(): Promise<OpenCodeRuntime> {
   const onExit = () => close()
   process.once('exit', onExit)
 
+  // A server we spawned is still asked which API it speaks rather than told:
+  // `opencode` on PATH may be either major version, and the answer decides
+  // which client every later request goes through.
+  const generation = await openCodeApiGeneration(started.url, started.password)
+  if (!generation) {
+    close()
+    process.removeListener('exit', onExit)
+    throw new Error(`OpenCode started at ${started.url} but did not answer as an OpenCode server.`)
+  }
+
   return {
-    client: openCodeClientFor(started.url, started.password),
-    clientV2: openCodeV2ClientFor(started.url, started.password),
+    ...runtimeFor(started.url, generation, started.password),
     server: {
       url: started.url,
       close: () => { process.removeListener('exit', onExit); close() },

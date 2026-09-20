@@ -606,12 +606,11 @@ the task with it) in its own throwaway repository:
 | Codex | completed, 21.2s |
 | Copilot | completed, 15.1s (blocks briefly, then completes) |
 | Pi | completed, 30.2s |
-| OpenCode | cannot staff a teammate here — see below |
+| OpenCode | completed, after the OpenCode 2 support below |
 
-OpenCode failed for a reason that had nothing to do with the Coordinator. The
-installed CLI is **v2.0.1**; the newest published `@opencode-ai/sdk` is
-**1.18.31**. Two separate breaks followed from that, and the first hid the
-second:
+OpenCode failed for a reason that had nothing to do with the Coordinator, and
+the first diagnosis of it was half wrong. The installed CLI was **2.x** while
+the client here spoke OpenCode 1's HTTP API, which produced two breaks:
 
 1. `createOpencodeServer` waits for a line reading `opencode server listening
    on <url>`. The 2.x CLI prints `server listening on <url>`, so the helper
@@ -621,18 +620,34 @@ second:
    `server password` line 2.x prints — HTTP Basic, user `opencode` — which 1.x
    never prints. `OPENCODE_SERVER_PASSWORD` does the same for an external
    server.
-2. With the server up and authenticated, `POST /session` answers 405: the 2.x
-   HTTP API is not the one the 1.18 client speaks, and no SDK 2.x is published.
-   That cannot be fixed here, so a managed spawn now checks the CLI's major
-   version once and fails with what is actually wrong ("This OpenCode CLI is
-   v2, whose HTTP API the bundled @opencode-ai/sdk (1.18.x, the newest
-   published) does not speak. Install OpenCode 1.x, or point
-   OPENCODE_BASE_URL at a 1.x server.") instead of a 405 from deep inside
-   session creation.
+2. With the server up and authenticated, `POST /session` answered 405, and the
+   conclusion drawn was that no SDK 2.x existed. **It does**: OpenCode 2 ships
+   under a different npm scope (`@opencode/cli`, `@opencode/client`), so
+   searching `@opencode-ai/*` for a 2.x release found nothing and the provider
+   was left reporting that it could not work. Support for both server
+   generations is now in the provider itself — see CLAUDE.md's "OpenCode 1 and
+   OpenCode 2 are one provider over two APIs". The version is read from the
+   server (`GET /api/info`), and a 2.x server is adapted to the OpenCode 1
+   client surface at the transport boundary rather than branched on at each
+   call site.
 
-So four of the five providers can staff an interactive teammate today, and the
-fifth says why it cannot. `npm run opencode:harness:smoke` passes with the new
-spawn path.
+The Coordinator needed one thing of its own: a 1.x plugin is a file exporting a
+hook factory and a 2.x plugin is a directory default-exporting `{ id, setup }`,
+so each major refuses the other's shape and a 2.x server loaded no `coord_*`
+tools at all. `lib/opencodePlugin/agentViewerCoordinator2/` is the 2.x build.
+
+Verified live end to end against `opencode` 2.0.8 in an isolated git repo: an
+OpenCode-led chat delegated "read README.md and report the secret word" through
+`coord_delegate`, the Coordinator spawned teammate **nova** on OpenCode, and
+nova claimed the task, read the file and completed it with the right word
+(`PARSNIP`) through `coord_complete_task`. Its first turn failed on an upstream
+model error (`AI.Error: Internal server error` from the provider, not from this
+app); the task went `blocked`, and the next turn recovered it — which is the
+recovery path working rather than a clean run.
+
+So all five providers can staff an interactive teammate.
+`npm run opencode:harness:smoke` covers both server generations, ending in
+`scripts/opencode2CompatSmoke.ts`.
 
 ### What turning a team off leaves behind
 

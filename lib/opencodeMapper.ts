@@ -251,6 +251,19 @@ export function decodeOpenCodeModelValue(value: string | null | undefined): Open
   }
 }
 
+/**
+ * OpenCode 2 dropped session sharing, and nothing else this provider advertises.
+ * The reflect is gated per session rather than per provider because both server
+ * generations are supported at once (lib/opencode2Client.ts) — a user with a 1.x
+ * server must keep the button, and one on 2.x must not be offered an action that
+ * can only fail. `version` is the server's own, and the compat client stamps
+ * `OPENCODE_2_VERSION` on every session it maps.
+ */
+function capabilitiesFor(session: OpenCodeSession) {
+  if (!session.version?.startsWith('2')) return OPENCODE_CAPABILITIES
+  return { ...OPENCODE_CAPABILITIES, shareSession: false, unshareSession: false }
+}
+
 export function mapOpenCodeSessionToSession(session: OpenCodeSession, tag: string | null, firstPrompt?: string): Session {
   return {
     sessionId: session.id,
@@ -262,7 +275,7 @@ export function mapOpenCodeSessionToSession(session: OpenCodeSession, tag: strin
     tag,
     createdAt: normalizeTimestamp(session.time.created),
     provider: 'opencode',
-    capabilities: OPENCODE_CAPABILITIES,
+    capabilities: capabilitiesFor(session),
     parentSessionId: session.parentID,
   }
 }
@@ -278,7 +291,7 @@ export function mapOpenCodeSessionToInfo(session: OpenCodeSession, tag: string |
     tag: tag ?? undefined,
     createdAt: normalizeTimestamp(session.time.created),
     provider: 'opencode',
-    capabilities: OPENCODE_CAPABILITIES,
+    capabilities: capabilitiesFor(session),
     currentModel,
     parentSessionId: session.parentID,
   }
