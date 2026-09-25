@@ -19,6 +19,18 @@ import {
   subscribeCoordinator,
   type CoordinatorSidebarEntry,
 } from './coordinatorStore'
+import type { CoordinatorPickerFilter, CoordinatorPickerState } from '../../lib/coordinatorSignals'
+
+// Herdr's Goto-picker states. The label leads the detail line so a filtered
+// list and an unfiltered one read the same way; `idle` says nothing, since an
+// agent with nothing to report is the default.
+const PICKER_STATE_MARKERS: Record<CoordinatorPickerState, { glyph: string; label: string }> = {
+  blocked: { glyph: '!', label: 'needs you' },
+  working: { glyph: '●', label: 'working' },
+  done: { glyph: '✓', label: 'result to review' },
+  idle: { glyph: '○', label: '' },
+  unknown: { glyph: '?', label: 'unknown' },
+}
 
 export type CoordinatorSidebarProps = {
   theme: TuiThemePalette
@@ -53,11 +65,12 @@ function CoordinatorRow({ entry, selected, theme, innerWidth, density }: {
 
   const accent = getProviderAccent(entry.agent.provider)
   const glyph = entry.agent.role === 'lead' ? '◆' : entry.isLast ? '└─' : '├─'
-  const statusColor = entry.agent.turnActive || entry.agent.status === 'working' ? theme.green
-    : entry.agent.status === 'blocked' || entry.agent.status === 'failed' ? theme.amber
+  const marker = PICKER_STATE_MARKERS[entry.state]
+  const statusColor = entry.state === 'blocked' ? theme.amber
+    : entry.state === 'working' || entry.state === 'done' ? theme.green
+    : entry.agent.status === 'failed' ? theme.amber
     : theme.dim
-  const statusDot = entry.agent.turnActive || entry.agent.status === 'working' ? '●' : '○'
-  const detailLine = joinMeta([formatProviderLabel(entry.agent.provider), entry.taskTitle ?? 'unassigned'])
+  const detailLine = joinMeta([marker.label, formatProviderLabel(entry.agent.provider), entry.taskTitle ?? 'unassigned'])
   return (
     <box
       id={`sidebar:${entry.key}`}
@@ -78,7 +91,7 @@ function CoordinatorRow({ entry, selected, theme, innerWidth, density }: {
       </box>
       <box paddingX={1} flexDirection="row" backgroundColor={selected ? theme.surface3 : theme.surface}>
         <text fg={selected ? accent : theme.dim} wrapMode="none">{selected ? '▎' : ' '}</text>
-        <text fg={statusColor} wrapMode="none">{`${statusDot} `}</text>
+        <text fg={statusColor} wrapMode="none">{`${marker.glyph} `}</text>
         <text fg={selected ? theme.text : theme.dim} wrapMode="none">
           {fitText(detailLine, innerWidth - 5)}
         </text>
@@ -95,7 +108,10 @@ export const CoordinatorSidebar = memo(function CoordinatorSidebar(props: Coordi
   const state = useSyncExternalStore(subscribeCoordinator, getCoordinatorState, getCoordinatorState)
 
   if (state.entries.length === 0) {
-    return <text fg={props.theme.dim}>{fitText('No coordinator runs — ⌃K n to start one', props.innerWidth)}</text>
+    const empty = state.filter === 'all'
+      ? 'No coordinator runs — ⌃K n to start one'
+      : `No ${state.filter} agents — f for the next filter`
+    return <text fg={props.theme.dim}>{fitText(empty, props.innerWidth)}</text>
   }
   return (
     <scrollbox
@@ -119,7 +135,21 @@ export const CoordinatorSidebar = memo(function CoordinatorSidebar(props: Coordi
   )
 })
 
-/** Header text for the rail's box title. Kept beside the rows it describes. */
-export function coordinatorSidebarHeaderText(agentCount: number, runCount: number): string {
-  return joinMeta([`COORDINATOR ${agentCount}`, `${runCount} run${runCount === 1 ? '' : 's'}`, 'a sessions'])
+/**
+ * Header text for the rail's box title. Kept beside the rows it describes.
+ * Ordered by importance, because the rail is narrow and the title is cut from
+ * the end: which filter is on (it changes what the list means), then how many
+ * agents wait on the user or hold an unreviewed result — kept under any
+ * filter, since hiding them behind `f working` is how a question sits
+ * unanswered — then the key hints.
+ */
+export function coordinatorSidebarHeaderText(
+  agentCount: number,
+  runCount: number,
+  filter: CoordinatorPickerFilter = 'all',
+  counts: { blocked: number; done: number; total?: number } = { blocked: 0, done: 0 },
+): string {
+  const title = filter === 'all' ? `COORDINATOR ${agentCount}` : `${filter.toUpperCase()} ${agentCount}/${counts.total ?? agentCount}`
+  const attention = [counts.blocked ? `!${counts.blocked}` : '', counts.done ? `✓${counts.done}` : ''].filter(Boolean).join(' ')
+  return joinMeta([title, attention, 'f filter', `${runCount} run${runCount === 1 ? '' : 's'}`, 'a sessions'])
 }

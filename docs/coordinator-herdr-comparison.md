@@ -38,8 +38,7 @@ mailbox — has no herdr equivalent.
 **Behind, and why.** A stalled start is reported at 15s against herdr's 5s,
 because our window includes the dispatch sweep (measured live: 2-3s to first
 activity, so the gap is headroom, not latency). There is no combined agent
-list across machines. OpenCode 2.x teammates cannot run until an SDK for its
-new HTTP API is published; the failure now says so. Terminal plumbing (panes,
+list across machines. Terminal plumbing (panes,
 layout, graphics, plugins, live handoff) is out of scope for an SDK-driven
 coordinator.
 
@@ -282,6 +281,11 @@ difference decides most of the verdicts below.
 | `agent wait <name> --until <state>`, and `pane.agent_status_changed` subscriptions filtered by pane and status (SKILL.md, `api/schema/events.rs`) | `coord_wait` takes `agent` and `until`: it returns when that teammate settles or reaches a named state, at once if it already has, and whenever mail needs the waiter's reply | Adopted this pass |
 | `agent prompt <name> "…" --wait`: submit, gate on observed activity (`agent_prompt_stalled`), then wait for a settled state (agent-automation docs, `api/wait.rs`) | `coord_delegate` with `wait_ms`: returns `settled.outcome` — completed (with the result), failed, cancelled, blocked, needs_reply, stalled, or timeout; a stall leaves the queued work untouched | Adopted this pass |
 | TUI works on a phone over SSH; "the TUI adapts to narrow screens" (how-to-work docs) | Teammates panel verified at 60×28 and a phone-shaped 44×40 in the suite: meta drops whole entries in importance order, the typed draft text outranks its label, settings labels wrap and are counted | Adopted this pass |
+| Goto picker lists every agent across workspaces; `b/w/i/d` filter blocked, working, idle, done (#4384) | The TUI coordinator rail lists every run's agents with herdr's states (`coordinatorPickerState`: needs you / working / result to review / idle / unknown); `f` cycles the filter; blocked and unreviewed counts stay in the header under any filter | Adopted (September 26) |
+| Inherited agent-session and outer-terminal markers removed from new panes (#4461) | `lib/inheritedIdentityEnv.mjs`, scrubbed at every process entry; hosted PTYs also drop terminal markers | Adopted (September 26) |
+| Restored agents start 100ms apart (#4487) | Measured concurrent vs spaced Claude starts; spacing did not help | Not adopted, measured |
+| An evicted event cursor reports `events_lost` instead of silently resuming (#4225) | Events are durable rows paged by rowid; pruning drops only heartbeats and acknowledged status mail | Not needed: no silent gap exists |
+| Startup and session switches do not count as completed work (#4457) | "Finished" comes from a task-result record, never an idle transition | Not needed by construction |
 | Named agents, unique, validated; `agent start <name>` names an agent by its job (SKILL.md) | Protocol names, delegation requires exactly one active match; **a new teammate can now be named** — `name` on `coord_delegate`, `@name` in a TUI draft, a field in the web panel — under herdr's `[a-z][a-z0-9_-]{0,31}` rule | Adopted this pass (naming) |
 | Detach without stopping work (README) | `agent-viewer web` daemon + `--attach`; turns run server-side | Present |
 | Resume supported agent sessions after restart (`agent_resume.rs`) | Provider sessions are durable by id; interrupted teammate execution waits for explicit recovery rather than auto-resuming | Present, deliberately stricter |
@@ -888,3 +892,54 @@ worker carrying a lead's identity and asserts the teammate it spawns sees none
 of it while ordinary variables survive (verified to fail with the scrub
 removed); `inheritedIdentitySmoke.ts` pins the lists and that each entry point
 still scrubs.
+
+### Every team at once: herdr's Goto picker on the coordinator rail
+
+Herdr #4384 (September 19) made its Goto picker list every agent across
+workspaces, each with its state, and filter by `b/w/i/d`. The coordinator rail
+already listed every run's agents but said only `●`/`○` — working or not — so a
+teammate waiting on the lead looked the same as one with nothing to do.
+
+`coordinatorPickerState` (`lib/coordinatorSignals.ts`) reads herdr's states
+from a run snapshot alone, because the rail spans runs whose interactive extras
+(pending permissions, the live-turn registry) are not loaded. The ledger still
+decides it: a question, plan or decision waiting on the lead is **blocked**
+first; **done** is an unreviewed result, using the same markers the Teammates
+panel writes, so reviewing there clears it here; an ended run's results are
+history and never keep a teammate done. Each row leads with the state (`! needs
+you`, `● working`, `✓ result to review`), `f` cycles all → blocked → working →
+done → idle, and the selection moves to the first visible agent when its own row
+is filtered out, so Enter never opens something the list no longer shows. `b`
+and `d` are global toggles here (tab bar, density), which is why one key cycles
+rather than herdr's four.
+
+Two things the rail's width forced: the title names the active filter
+(`BLOCKED 1/3`) and the blocked/unreviewed counts (`!1 ✓1`) come straight after
+it, ahead of the key hints — the first version put them last and a 30-column
+rail cut them off, which the smoke caught. And moving the selection no longer
+re-derives every row: it used to rebuild the list per `j`/`k`, which was
+harmless while rows were cheap and would now have re-read each run's review
+markers per keystroke.
+
+`coordinatorSidebarSmoke.tsx` seeds a teammate asking the lead a question and
+one with a finished task, then drives `f` through every filter. Ignoring the
+filter, dropping the selection follow, and dropping the done state were each
+verified to fail it.
+
+### Herdr changes from September 18-25 that did not need porting
+
+- **Staggered restored startups (#4487).** Six concurrent Claude CLI starts do
+  contend — about 2s alone, 6-13s each together — but spacing them 100ms or
+  400ms apart was slower or no better in both interleaved rounds (the machine's
+  noise was large: the single-start baseline itself read 1.9s and 6.2s). Herdr
+  restores terminals whose first paint competes; ours are headless SDK
+  processes whose total CPU is the same either way.
+- **`events_lost` on an evicted cursor (#4225).** Herdr's event history is a
+  512-entry ring, so a slow cursor silently resumed at the oldest survivor.
+  Coordinator events are durable rows, paged 100 at a time by rowid, and
+  retention prunes only heartbeats and acknowledged status mail — a waiter
+  cannot skip an event that means anything.
+- **Completion distinguished from startup and session changes (#4457).** Herdr
+  infers "done" from a working→idle transition and had to stop crediting an
+  agent's first idle prompt or a conversation switch. A Coordinator result is a
+  task record written by the teammate, so neither can produce one.

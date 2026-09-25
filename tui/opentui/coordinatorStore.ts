@@ -12,15 +12,28 @@
 // subscription.
 import type { ProtocolAgent, ProtocolRun, ProtocolRunSnapshot } from '../../lib/agentProtocol'
 import { listTuiProtocolRuns, readTuiProtocolRun, subscribeTuiProtocolRunChanges } from '../../lib/tui/service'
+import { readCoordinatorReviewed } from '../../lib/tui/coordinatorReviewed'
+import { coordinatorRequestScope } from '../../lib/tui/coordinatorRequests'
+import { coordinatorAttention } from '../../lib/coordinatorAttention'
+import {
+  COORDINATOR_PICKER_FILTERS,
+  coordinatorPickerState,
+  type CoordinatorPickerFilter,
+  type CoordinatorPickerState,
+} from '../../lib/coordinatorSignals'
 
 export type CoordinatorSidebarEntry =
   | { type: 'run'; key: string; runId: string; run: ProtocolRun; agentCount: number }
-  | { type: 'agent'; key: string; runId: string; agent: ProtocolAgent; isLast: boolean; taskTitle: string | null }
+  | { type: 'agent'; key: string; runId: string; agent: ProtocolAgent; isLast: boolean; taskTitle: string | null; state: CoordinatorPickerState }
 
 export type CoordinatorState = {
   readonly runs: readonly ProtocolRun[]
   readonly snapshots: ReadonlyMap<string, ProtocolRunSnapshot>
   readonly selectedKey: string | null
+  /** Herdr's Goto-picker filter: only agents in this state are listed. */
+  readonly filter: CoordinatorPickerFilter
+  /** Every agent's state before filtering, so the header can say what is hidden. */
+  readonly stateCounts: Readonly<Record<CoordinatorPickerState, number>>
   /** Derived here so `getSnapshot` is stable and every reader agrees. */
   readonly entries: readonly CoordinatorSidebarEntry[]
   readonly agentEntries: readonly Extract<CoordinatorSidebarEntry, { type: 'agent' }>[]
@@ -38,29 +51,67 @@ const FALLBACK_POLL_MS = 2_000
 export function buildCoordinatorEntries(
   runs: readonly ProtocolRun[],
   snapshots: ReadonlyMap<string, ProtocolRunSnapshot>,
+  filter: CoordinatorPickerFilter = 'all',
+  reviewedFor: (snapshot: ProtocolRunSnapshot) => readonly string[] = reviewedForRun,
 ): CoordinatorSidebarEntry[] {
   const entries: CoordinatorSidebarEntry[] = []
   for (const run of runs) {
     const snapshot = snapshots.get(run.id)
     const agents = snapshot?.agents ?? []
     const tasksById = new Map((snapshot?.tasks ?? []).map((task) => [task.id, task]))
+    const reviewed = snapshot ? reviewedFor(snapshot) : []
     const ordered = [
       ...agents.filter((agent) => agent.role === 'lead'),
       ...agents.filter((agent) => agent.role !== 'lead'),
     ]
-    entries.push({ type: 'run', key: `run:${run.id}`, runId: run.id, run, agentCount: ordered.length })
-    ordered.forEach((agent, index) => {
+    const attention = snapshot ? coordinatorAttention(snapshot) : []
+    const stated = ordered.map((agent) => ({
+      agent,
+      state: snapshot ? coordinatorPickerState(agent, snapshot, reviewed, attention) : 'unknown' as const,
+    }))
+    const visible = filter === 'all' ? stated : stated.filter((entry) => entry.state === filter)
+    // A filtered list is a list of agents, as herdr's picker is; a run with
+    // none of them is noise between the ones that matter.
+    if (filter !== 'all' && visible.length === 0) continue
+    entries.push({ type: 'run', key: `run:${run.id}`, runId: run.id, run, agentCount: stated.length })
+    visible.forEach(({ agent, state }, index) => {
       entries.push({
         type: 'agent',
         key: `run-agent:${run.id}:${agent.id}`,
         runId: run.id,
         agent,
-        isLast: index === ordered.length - 1,
+        isLast: index === visible.length - 1,
         taskTitle: (agent.taskId ? tasksById.get(agent.taskId)?.title : undefined) ?? null,
+        state,
       })
     })
   }
   return entries
+}
+
+/**
+ * The same reviewed markers the Teammates panel keeps for the lead's
+ * conversation, so a result reviewed there is not still `done` here. Only an
+ * active run is read: an ended run's results do not count as waiting anyway.
+ */
+function reviewedForRun(snapshot: ProtocolRunSnapshot): readonly string[] {
+  if (['completed', 'failed', 'stopped'].includes(snapshot.run.status)) return []
+  const lead = snapshot.agents.find((agent) => agent.id === snapshot.run.leadAgentId)
+  return lead ? readCoordinatorReviewed(coordinatorRequestScope(lead.provider, lead.sessionId)) : []
+}
+
+function countStates(
+  runs: readonly ProtocolRun[],
+  snapshots: ReadonlyMap<string, ProtocolRunSnapshot>,
+  entries: readonly CoordinatorSidebarEntry[],
+  filter: CoordinatorPickerFilter,
+): Record<CoordinatorPickerState, number> {
+  const counts: Record<CoordinatorPickerState, number> = { blocked: 0, working: 0, done: 0, idle: 0, unknown: 0 }
+  // Unfiltered entries already carry every state; a filtered list has to be
+  // rebuilt unfiltered to count what it hides.
+  const all = filter === 'all' ? entries : buildCoordinatorEntries(runs, snapshots, 'all')
+  for (const entry of all) if (entry.type === 'agent') counts[entry.state] += 1
+  return counts
 }
 
 const EMPTY_SNAPSHOTS: ReadonlyMap<string, ProtocolRunSnapshot> = new Map()
@@ -69,12 +120,15 @@ function derive(
   runs: readonly ProtocolRun[],
   snapshots: ReadonlyMap<string, ProtocolRunSnapshot>,
   selectedKey: string | null,
+  filter: CoordinatorPickerFilter = state?.filter ?? 'all',
 ): CoordinatorState {
-  const entries = buildCoordinatorEntries(runs, snapshots)
+  const entries = buildCoordinatorEntries(runs, snapshots, filter)
   return {
     runs,
     snapshots,
     selectedKey,
+    filter,
+    stateCounts: countStates(runs, snapshots, entries, filter),
     entries,
     agentEntries: entries.filter(
       (entry): entry is Extract<CoordinatorSidebarEntry, { type: 'agent' }> => entry.type === 'agent',
@@ -82,7 +136,7 @@ function derive(
   }
 }
 
-let state: CoordinatorState = derive([], EMPTY_SNAPSHOTS, null)
+let state: CoordinatorState = derive([], EMPTY_SNAPSHOTS, null, 'all')
 const listeners = new Set<() => void>()
 
 function commit(next: CoordinatorState) {
@@ -101,12 +155,32 @@ export function subscribeCoordinator(listener: () => void): () => void {
 
 export function setCoordinatorSelectedKey(key: string | null): void {
   if (state.selectedKey === key) return
-  commit(derive(state.runs, state.snapshots, key))
+  // Selection is the only thing that changed: j/k must not re-derive every
+  // row (and re-read every run's review markers) per keystroke.
+  commit({ ...state, selectedKey: key })
+}
+
+/**
+ * Cycle herdr's picker filter (all → blocked → working → done → idle). The
+ * selection follows to the first visible agent when its row is filtered out,
+ * so Enter never opens something the list no longer shows.
+ */
+export function cycleCoordinatorFilter(): CoordinatorPickerFilter {
+  const next = COORDINATOR_PICKER_FILTERS[(COORDINATOR_PICKER_FILTERS.indexOf(state.filter) + 1) % COORDINATOR_PICKER_FILTERS.length]!
+  setCoordinatorFilter(next)
+  return next
+}
+
+export function setCoordinatorFilter(filter: CoordinatorPickerFilter): void {
+  if (state.filter === filter) return
+  const next = derive(state.runs, state.snapshots, state.selectedKey, filter)
+  const selectionVisible = next.agentEntries.some((entry) => entry.key === next.selectedKey)
+  commit(selectionVisible ? next : { ...next, selectedKey: next.agentEntries[0]?.key ?? null })
 }
 
 /** Reset for tests; the app keeps one feed for the process lifetime. */
 export function resetCoordinatorStore(): void {
-  commit(derive([], EMPTY_SNAPSHOTS, null))
+  commit(derive([], EMPTY_SNAPSHOTS, null, 'all'))
 }
 
 let feedHolders = 0

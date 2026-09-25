@@ -155,3 +155,32 @@ export function coordinatorResultIdsForAgent(snapshot: ProtocolRunSnapshot | nul
   if (!snapshot) return []
   return coordinatorAttention(snapshot).filter(item => item.kind === 'result' && item.agentId === agentId).map(item => item.id)
 }
+
+/** Herdr's Goto-picker states (`b/w/i/d`, plus `unknown`), read from a run snapshot alone. */
+export type CoordinatorPickerState = 'blocked' | 'working' | 'done' | 'idle' | 'unknown'
+export const COORDINATOR_PICKER_FILTERS = ['all', 'blocked', 'working', 'done', 'idle'] as const
+export type CoordinatorPickerFilter = typeof COORDINATOR_PICKER_FILTERS[number]
+
+/**
+ * One agent's state for a list of every team at once, where the interactive
+ * extras (pending permissions, live-turn registry) are not loaded. The ledger
+ * still decides it: a question, plan or decision waiting on the lead is
+ * `blocked` before anything else, and `done` is an unreviewed result rather
+ * than an idle agent — herdr's done-versus-idle. An ended run's results are
+ * history, not something waiting to be read, so they do not keep a teammate
+ * `done` forever.
+ */
+export function coordinatorPickerState(
+  agent: ProtocolAgent,
+  snapshot: ProtocolRunSnapshot,
+  reviewed: readonly string[] = [],
+  attention = coordinatorAttention(snapshot),
+): CoordinatorPickerState {
+  const ended = ['completed', 'failed', 'stopped'].includes(snapshot.run.status)
+  const items = attention.filter(item => item.agentId === agent.id)
+  if (!ended && (agent.status === 'blocked' || items.some(item => item.kind !== 'result'))) return 'blocked'
+  if (agent.turnActive || agent.status === 'working') return 'working'
+  if (!ended && items.some(item => item.kind === 'result' && !reviewed.includes(item.id))) return 'done'
+  if (agent.taskId && (agent.liveness?.status === 'dead' || agent.liveness?.status === 'stale')) return 'unknown'
+  return 'idle'
+}

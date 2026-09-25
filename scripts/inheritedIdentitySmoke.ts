@@ -17,7 +17,7 @@ const ordinary = { ANTHROPIC_API_KEY: 'key', DISPLAY: ':42', PATH: '/usr/bin', T
 const outerAgent = Object.fromEntries(INHERITED_AGENT_IDENTITY_KEYS.map((key) => [key, 'outer']))
 const outerTerminal = Object.fromEntries(INHERITED_TERMINAL_IDENTITY_KEYS.map((key) => [key, 'outer']))
 
-const env: NodeJS.ProcessEnv = { ...ordinary, ...outerAgent, ...outerTerminal }
+const env: Record<string, string | undefined> = { ...ordinary, ...outerAgent, ...outerTerminal }
 const removed = scrubInheritedAgentIdentity(env)
 assert(removed.length === INHERITED_AGENT_IDENTITY_KEYS.length, 'scrub did not report every key it removed')
 for (const key of INHERITED_AGENT_IDENTITY_KEYS) assert(!(key in env), `${key} survived the scrub`)

@@ -213,7 +213,9 @@ import {
   getCoordinatorState,
   setCoordinatorSelectedKey,
   subscribeCoordinator,
+  cycleCoordinatorFilter,
 } from './coordinatorStore'
+import type { CoordinatorPickerFilter } from '../../lib/coordinatorSignals'
 import { AttentionInboxPopover, attentionItemNeedsInput, type AttentionItem } from './AttentionInboxPopover'
 import { CrossSessionMessagingPopover } from './CrossSessionMessagingPopover'
 import { CheckpointPopover } from './CheckpointPopover'
@@ -9577,10 +9579,11 @@ export default function OpenTuiApp() {
   const coordinatorHeaderCounts = useSyncExternalStore(
     subscribeCoordinator,
     () => {
-      const { agentEntries, runs } = getCoordinatorState()
-      return `${agentEntries.length}/${runs.length}`
+      const { agentEntries, runs, filter, stateCounts } = getCoordinatorState()
+      const total = Object.values(stateCounts).reduce((sum, count) => sum + count, 0)
+      return `${agentEntries.length}/${runs.length}/${filter}/${stateCounts.blocked}/${stateCounts.done}/${total}`
     },
-    () => '0/0',
+    () => '0/0/all/0/0/0',
   )
   const moveCoordinatorSelection = useEffectEvent((delta: number) => {
     const { agentEntries, selectedKey } = getCoordinatorState()
@@ -10940,8 +10943,15 @@ export default function OpenTuiApp() {
   const sidebarProviderAccent = getProviderAccent(provider)
   const coordinatorSidebarHeader = useMemo(
     () => {
-      const [agents, runs] = coordinatorHeaderCounts.split('/').map((part) => Number(part) || 0)
-      return fitText(coordinatorSidebarHeaderText(agents, runs), Math.max(sidebarInnerWidth - 2, 12))
+      const [agents, runs, filter, blocked, done, total] = coordinatorHeaderCounts.split('/')
+      return fitText(
+        coordinatorSidebarHeaderText(Number(agents) || 0, Number(runs) || 0, filter as CoordinatorPickerFilter, {
+          blocked: Number(blocked) || 0,
+          done: Number(done) || 0,
+          total: Number(total) || 0,
+        }),
+        Math.max(sidebarInnerWidth - 2, 12),
+      )
     },
     [sidebarInnerWidth, coordinatorHeaderCounts],
   )
@@ -19194,6 +19204,13 @@ export default function OpenTuiApp() {
 
     if (effectiveFocus === 'sessions' && sidebarView === 'coordinator' && key.name === 'return') {
       handled(() => openSelectedCoordinatorAgent())
+      return
+    }
+
+    // Herdr's Goto-picker filters (b/w/i/d there; those keys are global
+    // toggles here, so one key cycles them).
+    if (effectiveFocus === 'sessions' && sidebarView === 'coordinator' && key.name === 'f' && !key.ctrl && !key.meta && !key.shift) {
+      handled(() => showToggleOutcome('Agents:', cycleCoordinatorFilter()))
       return
     }
 
