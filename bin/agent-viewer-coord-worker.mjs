@@ -23,6 +23,11 @@ import {
   resolveAcpAgentCommand,
   runAcpProviderTick,
 } from './agent-viewer-acp-client.mjs'
+import { scrubInheritedAgentIdentity } from '../lib/inheritedIdentityEnv.mjs'
+
+// A lead's Bash tool starts this worker, so it arrives carrying the lead's
+// session identity; the teammates it spawns must not claim it.
+scrubInheritedAgentIdentity()
 
 const ahpClients = new Map()
 const shutdownController = new AbortController()

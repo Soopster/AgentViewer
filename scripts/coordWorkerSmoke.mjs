@@ -26,6 +26,20 @@ const smokeDeadline = setTimeout(() => {
   process.exit(1)
 }, 90_000)
 const fakeCodex = path.join(testDir, 'fake-codex.mjs')
+const codexEnvFile = path.join(testDir, 'codex-env.json')
+const leadIdentityEnv = {
+  CLAUDECODE: '1',
+  CLAUDE_CODE_ENTRYPOINT: 'cli',
+  CLAUDE_CODE_SESSION_ID: 'lead-session',
+  CLAUDE_CODE_CHILD_SESSION: '1',
+  CLAUDE_CODE_SESSION_ATTENDED: '1',
+  CLAUDE_CODE_MESSAGING_SOCKET: '/tmp/lead.sock',
+  CLAUDE_CODE_MESSAGING_TOKEN: 'lead-token',
+  CLAUDE_PID: '1',
+  CLAUDE_EFFORT: 'max',
+  CODEX_THREAD_ID: 'lead-thread',
+  IDENTITY_SMOKE_ORDINARY: 'kept',
+}
 const failingCodex = path.join(testDir, 'failing-codex.mjs')
 const rateLimitedCodex = path.join(testDir, 'rate-limited-codex.mjs')
 const zeroExitErrorPi = path.join(testDir, 'zero-exit-error-pi.mjs')
@@ -67,6 +81,7 @@ const activeDeletedMarkerFile = path.join(testDir, 'active-deleted-marker.txt')
 await writeFile(fakeCodex, `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs'
 writeFileSync(process.env.CODEX_ARGS_FILE, JSON.stringify(process.argv.slice(2)))
+if (process.env.CODEX_ENV_FILE) writeFileSync(process.env.CODEX_ENV_FILE, JSON.stringify(process.env))
 console.log(JSON.stringify({ type: 'thread.started', thread_id: '019-worker-smoke' }))
 console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'tick complete' } }))
 `)
@@ -345,7 +360,17 @@ await new Promise((resolve, reject) => {
     '--autonomy', 'low', '--token-budget', '24000', '--duration-budget', '2.5',
     '--acceptance', '{"goal":"Ship the worker","userVisibleAcceptance":["receipt visible"]}',
   ], {
-    env: { ...process.env, AGENT_VIEWER_COORD_HOME: coordHome, CODEX_PATH: fakeCodex, CODEX_ARGS_FILE: codexArgsFile },
+    // A lead's Bash tool starts the worker, so it inherits the lead's session
+    // identity (what Claude Code exports to its tools). None of it may reach
+    // the teammate the worker spawns; ordinary variables must.
+    env: {
+      ...process.env,
+      ...leadIdentityEnv,
+      AGENT_VIEWER_COORD_HOME: coordHome,
+      CODEX_PATH: fakeCodex,
+      CODEX_ARGS_FILE: codexArgsFile,
+      CODEX_ENV_FILE: codexEnvFile,
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let stderr = ''
@@ -353,6 +378,13 @@ await new Promise((resolve, reject) => {
   child.on('error', reject)
   child.on('exit', (code) => code === 0 ? resolve() : reject(new Error(`start worker exited ${code}: ${stderr}`)))
 })
+{
+  const teammateEnv = JSON.parse(await readFile(codexEnvFile, 'utf8'))
+  const leaked = Object.keys(leadIdentityEnv).filter((key) => key !== 'IDENTITY_SMOKE_ORDINARY' && key in teammateEnv)
+  if (leaked.length) throw new Error(`teammate inherited the lead's session identity: ${leaked.join(', ')}`)
+  if (teammateEnv.IDENTITY_SMOKE_ORDINARY !== 'kept') throw new Error('identity scrub removed an ordinary variable')
+  if (teammateEnv.AGENT_VIEWER_COORD_WORKER !== '1') throw new Error('worker-managed variables did not reach the teammate')
+}
 const createRequest = requests.find((request) => request.action === 'create_run')
 if (createRequest?.maxAgents !== 8
   || createRequest?.gateCommand !== 'npm run verify'

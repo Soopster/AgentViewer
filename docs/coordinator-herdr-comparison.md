@@ -855,3 +855,36 @@ same way it would fail an agent. Dropping `wait_ms`, `name`, or the `agent`/
 `until` mapping from the contract was each verified to fail it; the `name` case
 first survived because the reviewer was the only teammate, so an idle decoy
 teammate now joins first and an unnamed delegation would go to it.
+
+### A teammate is not the session that launched Agent Viewer
+
+Herdr #4461 (September 22) removes inherited agent-session and outer-terminal
+markers from every new pane, so a pane cannot claim the session that started
+the server. The same leak existed here, on the paths people actually use: the
+TUI started from a Claude Code shell, and `agent-viewer coord worker` started by
+a lead's Bash tool — which exports `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`,
+`CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_EFFORT` and the
+messaging socket to its tools. Every teammate and pooled session inherited them,
+because the Agent SDK's default environment is `process.env`.
+
+Measured against the bundled CLI, not inferred: a spawn with the inherited
+environment registers as `entrypoint: sdk-cli` (the CLI promotes an inherited
+`cli`), the same spawn scrubbed registers as `sdk-ts`; the child is also marked a
+nested child session, and its hooks and Bash see the launcher's effort level.
+The messaging socket did *not* leak — the CLI allocates its own — so the damage
+is misidentification rather than misdelivery, which is also why nothing had
+visibly failed.
+
+`lib/inheritedIdentityEnv.mjs` holds the list (Claude Code's per-tool exports,
+Codex's `CODEX_THREAD_ID`, OMP's marker). Every process entry scrubs its own
+environment once — `bin/agent-viewer.mjs`, the coord worker, `npm run tui`'s
+`main.tsx`, and the Next server's `instrumentation.ts` for the packaged app —
+which covers every spawn below it, SDK defaults included, rather than chasing
+fifteen call sites. The embedded terminals additionally drop the outer
+terminal's markers (iTerm2, tmux, WezTerm, Kitty, Zellij…) and identify as
+`TERM_PROGRAM=agent-viewer`; our own process keeps those, since OpenTUI reads
+them to talk to the user's real terminal. `coordWorkerSmoke.mjs` launches a
+worker carrying a lead's identity and asserts the teammate it spawns sees none
+of it while ordinary variables survive (verified to fail with the scrub
+removed); `inheritedIdentitySmoke.ts` pins the lists and that each entry point
+still scrubs.

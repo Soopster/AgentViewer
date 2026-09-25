@@ -1,5 +1,9 @@
 export async function register() {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return
+  // The packaged app starts the Next server directly rather than through
+  // bin/agent-viewer.mjs, so the server scrubs its own inherited identity.
+  const { scrubInheritedAgentIdentity } = await import('./lib/inheritedIdentityEnv.mjs')
+  scrubInheritedAgentIdentity()
   try {
     const { startParentWatchdog } = await import('./lib/parentWatchdog')
     startParentWatchdog('web')

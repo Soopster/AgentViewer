@@ -18,6 +18,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { Writable } from 'node:stream'
+import { hostedTerminalEnv } from './inheritedIdentityEnv.mjs'
 
 /** Lifecycle events streamed to SSE clients alongside terminal output. */
 export type TerminalState =
@@ -205,7 +206,7 @@ function spawnSession(id: string, cols: number, rows: number): Session {
   const spawnOptions = {
     detached: true,
     env: {
-      ...process.env,
+      ...hostedTerminalEnv(),
       TERM: 'xterm-256color',
       COLORTERM: 'truecolor',
       LINES: String(clamp2(rows, 24)),

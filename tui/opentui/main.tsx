@@ -5,6 +5,10 @@ import { createRoot } from '@opentui/react'
 import OpenTuiApp from './App'
 import { startRawHeapSampler, reportWorkerHeap } from './workerHeapProbe'
 import { installProcessWarningRouting } from '../../lib/processWarnings'
+import { scrubInheritedAgentIdentity } from '../../lib/inheritedIdentityEnv.mjs'
+
+// `npm run tui` bypasses bin/agent-viewer.mjs, so this entry scrubs too.
+scrubInheritedAgentIdentity()
 
 // A runtime warning prints straight onto the alternate screen; send it to
 // OpenTUI's captured console instead.

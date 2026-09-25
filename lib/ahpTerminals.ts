@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { hostedTerminalEnv } from './inheritedIdentityEnv.mjs'
 import {
   AhpErrorCodes,
   JsonRpcErrorCodes,
@@ -136,7 +137,7 @@ export class AhpTerminalManager {
     const shell = shellCommand()
     const child = spawn(shell.command, shell.args, {
       cwd: resolvedCwd ?? cwd.path,
-      env: process.env,
+      env: hostedTerminalEnv(),
       stdio: ['pipe', 'pipe', 'pipe'],
     })
     const state: TerminalStateValue = {

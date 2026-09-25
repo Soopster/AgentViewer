@@ -4,6 +4,11 @@ import { spawn } from 'node:child_process'
 import { accessSync, constants as fsConstants, existsSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { scrubInheritedAgentIdentity } from '../lib/inheritedIdentityEnv.mjs'
+
+// Agent Viewer is not the agent session it was launched from, and nothing it
+// spawns is either — see lib/inheritedIdentityEnv.mjs.
+scrubInheritedAgentIdentity()
 
 const args = process.argv.slice(2)
 const command = args[0]
