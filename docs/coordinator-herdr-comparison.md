@@ -970,3 +970,17 @@ a model: hydration includes a child's ask and excludes an unrelated session's, a
 grandchild whose parent must be looked up is delivered late rather than never,
 a child's own messages stay out, and a reply or a deleted child clears the
 mirrored ask — three mutations checked to fail it.
+
+The same defect existed for Codex, found by asking the question herdr's fix
+raises for every provider: where does a sub-agent's ask arrive? Codex 0.157
+runs `spawn_agent` sub-agents in their own threads (multi-agent is on by
+default), and the turn claimed approvals for its own thread only, so the
+sub-agent's approval fell through to the client's "method not supported"
+reply: Codex refused the command and the user was never asked (reproduced
+live — the file the sub-agent was told to create never appeared). The client
+now learns thread parentage from the parent's `subAgentActivity` item — the
+record 0.157 actually emits; the schema's `collabAgentToolCall` receivers and a
+child's `thread/started` source are read too — and a turn claims approvals from
+its descendant threads. `npm run codex:subagent:live` passes, and fails with the
+old exact-thread check; `codexThreadParentsSmoke.ts` pins the three records,
+transitivity, and that another chat's sub-agent is not claimed.

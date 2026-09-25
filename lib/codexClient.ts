@@ -45,6 +45,15 @@ class CodexAppServerClient {
   private listeners = new Set<NotificationListener>()
   private requestListeners = new Set<ServerRequestListener>()
   private disconnectListeners = new Set<DisconnectListener>()
+  /**
+   * Spawned sub-agent thread → the thread that spawned it. A sub-agent asks
+   * for approval under its OWN thread id, so a turn that claims approvals only
+   * for its own thread let every sub-agent's ask fall through to the
+   * "unsupported" reply below — the command was refused and the user never
+   * asked (verified on codex-cli 0.157).
+   */
+  private threadParents = new Map<string, string>()
+  private static readonly THREAD_PARENTS_MAX = 4_096
   private stdoutBuffer = ''
   private initializePromise: Promise<void> | null = null
 
@@ -147,6 +156,7 @@ class CodexAppServerClient {
 
       if (message.method) {
         const notification = { method: message.method, params: (message.params ?? {}) as Record<string, unknown> } as CodexNotification
+        this.noteThreadParent(notification.params)
         for (const listener of this.listeners) listener(notification)
       }
     }
@@ -220,6 +230,49 @@ class CodexAppServerClient {
         reject(error)
       })
     })
+  }
+
+  /**
+   * Learn sub-agent parentage from any record of a spawn. codex-cli 0.157
+   * reports it as a `subAgentActivity` item on the parent's thread; the
+   * schema also allows a child's own `thread/started` source and a
+   * `collabAgentToolCall` naming its receivers, so all three are read.
+   */
+  private noteThreadParent(params: Record<string, unknown>): void {
+    const thread = params.thread as { id?: string; source?: unknown } | undefined
+    const spawn = (thread?.source as { subAgent?: { thread_spawn?: { parent_thread_id?: string } } } | undefined)?.subAgent?.thread_spawn
+    if (thread?.id && spawn?.parent_thread_id) this.rememberThreadParent(thread.id, spawn.parent_thread_id)
+    const item = params.item as { type?: string; agentThreadId?: string; senderThreadId?: string; receiverThreadIds?: unknown } | undefined
+    const parentThreadId = typeof params.threadId === 'string' ? params.threadId : undefined
+    if (item?.type === 'subAgentActivity' && item.agentThreadId && parentThreadId && item.agentThreadId !== parentThreadId) {
+      this.rememberThreadParent(item.agentThreadId, parentThreadId)
+    }
+    if (item?.type === 'collabAgentToolCall' && item.senderThreadId && Array.isArray(item.receiverThreadIds)) {
+      for (const receiver of item.receiverThreadIds) {
+        if (typeof receiver === 'string' && receiver !== item.senderThreadId && !this.threadParents.has(receiver)) {
+          this.rememberThreadParent(receiver, item.senderThreadId)
+        }
+      }
+    }
+  }
+
+  private rememberThreadParent(threadId: string, parentThreadId: string): void {
+    this.threadParents.delete(threadId)
+    this.threadParents.set(threadId, parentThreadId)
+    // Oldest spawns first: a sub-agent still asking is one spawned recently.
+    while (this.threadParents.size > CodexAppServerClient.THREAD_PARENTS_MAX) {
+      this.threadParents.delete(this.threadParents.keys().next().value!)
+    }
+  }
+
+  /** True when `threadId` is `rootThreadId` or was spawned, at any depth, beneath it. */
+  threadDescendsFrom(threadId: string, rootThreadId: string): boolean {
+    let current: string | undefined = threadId
+    for (let depth = 0; current && depth < 32; depth += 1) {
+      if (current === rootThreadId) return true
+      current = this.threadParents.get(current)
+    }
+    return false
   }
 
   subscribe(listener: NotificationListener): () => void {

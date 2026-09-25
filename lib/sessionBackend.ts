@@ -4264,7 +4264,9 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
         if (!isCodexApprovalRequest(request.method)) return false
         const params = request.params as Record<string, unknown>
         const approvalThreadId = codexApprovalThreadId(params)
-        if (approvalThreadId && approvalThreadId !== sessionId) return false
+        // A sub-agent this turn spawned asks under its own thread; the user
+        // watching this chat is the only one who can answer it.
+        if (approvalThreadId && !client.threadDescendsFrom(approvalThreadId, sessionId)) return false
         pendingCodexApprovals.set(pendingCodexApprovalKey(sessionId, String(request.id)), {
           rawId: request.id,
           method: request.method,

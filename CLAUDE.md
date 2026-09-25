@@ -133,6 +133,19 @@ normalization, the id agreement, the delta channels, the failure ordering and th
 round trip against fixtures recorded from a real 2.0.8 server. Seven mutations were verified to
 fail it; every one of those defects renders as plausible output rather than an error.
 
+#### Codex sub-agents ask under their own thread (load-bearing)
+
+Codex's `multi_agent` (on by default in codex-cli 0.157) runs each `spawn_agent` sub-agent in its
+own thread, and its approval requests carry **that** thread's id. The send path claims approvals
+per thread, so a sub-agent's ask went unclaimed, `CodexAppServerClient` answered it "method not
+supported", and Codex refused the command without the user ever being asked — verified live.
+The client now learns parentage from every record of a spawn (a `subAgentActivity` item on the
+parent's thread is what 0.157 actually sends; the child's `thread/started` source and a
+`collabAgentToolCall`'s receivers are also read) and a turn claims approvals from any thread
+`threadDescendsFrom` its own. The OpenCode harness has the same rule for child sessions (see
+above). `scripts/codexThreadParentsSmoke.ts` pins the parentage records;
+`npm run codex:subagent:live` drives a real sub-agent through an approval end to end.
+
 #### ACP-transport providers (`claude-acp`, `codex-acp`)
 
 Sibling provider ids that drive `claude-agent-acp`/`codex-acp` over the Agent Client Protocol (`session/new → session/prompt → session/update`) as an alternate transport for the same two SDKs — not a `transport` flag on `'claude'`/`'codex'`, and not something OpenCode/Copilot/Pi get (no upstream ACP agent exists for them). `lib/acpAgentSpawn.ts` resolves the subprocess command (env override `CLAUDE_AGENT_ACP_PATH`/`CODEX_ACP_PATH`, else bare command on `PATH`) — the coordinator's `bin/agent-viewer-acp-client.mjs` hand-duplicates this table rather than importing it, since it runs under vanilla `node` with no TS loader. `lib/acpClientPool.ts` is the singleton subprocess/session pool (modeled on `lib/claudePool.ts`): buffers push-based `session/update` notifications into a monotonically indexed array so `lib/sessionBackend.ts`'s poll+offset message model can slice it, queues `session/request_permission`/`elicitation/create` for a real UI round-trip, and reaps idle/stalled subprocesses. `lib/acpMapper.ts` maps buffered ACP updates to `SessionMessage`. `lib/permissions.ts` bridges the pool's pending-request queue into the same `PendingPermission` UI every other provider uses.
