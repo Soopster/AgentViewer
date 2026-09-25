@@ -286,6 +286,7 @@ difference decides most of the verdicts below.
 | Restored agents start 100ms apart (#4487) | Measured concurrent vs spaced Claude starts; spacing did not help | Not adopted, measured |
 | An evicted event cursor reports `events_lost` instead of silently resuming (#4225) | Events are durable rows paged by rowid; pruning drops only heartbeats and acknowledged status mail | Not needed: no silent gap exists |
 | Startup and session switches do not count as completed work (#4457) | "Finished" comes from a task-result record, never an idle transition | Not needed by construction |
+| OpenCode status follows the selected session and its descendants: blocked while any has a pending permission or question (#4357) | The OpenCode harness forwards a subagent's asks to every ancestor's stream and snapshot, and answers them on the asking session | Adopted (September 26) — this was a hang, not a label |
 | Named agents, unique, validated; `agent start <name>` names an agent by its job (SKILL.md) | Protocol names, delegation requires exactly one active match; **a new teammate can now be named** — `name` on `coord_delegate`, `@name` in a TUI draft, a field in the web panel — under herdr's `[a-z][a-z0-9_-]{0,31}` rule | Adopted this pass (naming) |
 | Detach without stopping work (README) | `agent-viewer web` daemon + `--attach`; turns run server-side | Present |
 | Resume supported agent sessions after restart (`agent_resume.rs`) | Provider sessions are durable by id; interrupted teammate execution waits for explicit recovery rather than auto-resuming | Present, deliberately stricter |
@@ -943,3 +944,29 @@ verified to fail it.
   infers "done" from a working→idle transition and had to stop crediting an
   agent's first idle prompt or a conversation switch. A Coordinator result is a
   task record written by the teammate, so neither can produce one.
+
+### A subagent's question reached nobody
+
+Herdr #4357 (September 22) keeps an OpenCode pane blocked while any
+*descendant* session — a subagent — has a pending permission or question. Ours
+did not track descendants at all, and the consequence was worse than a wrong
+label. Reproduced live on OpenCode 2.0.8 with `bash: ask` and a prompt that
+delegates `echo` to a subagent: the ask arrived on the child session, the chat's
+turn stream (subscribed by the parent's id) never saw it, and the turn sat
+"working" with no card to answer. Answering it anyway failed a second way — the
+reply was keyed by the chat's session and OpenCode returned
+`PermissionNotFoundError`. For a teammate this read as "Working · live turn"
+indefinitely, while it was in fact waiting on the user.
+
+The harness now learns parentage from `session.created`/`session.updated`
+(looking a session up only when it is asking something, as herdr does) and
+mirrors request events — never the child's messages — into every ancestor's
+subscribers and snapshot, so the card appears in the chat, the teammate reads as
+waiting for an answer, and a reattaching client's pending prompts include it.
+The reply goes to the session that asked. Verified end to end through the send
+path (`npm run opencode:subagent:live`); disabling the forwarding and reverting
+the reply each fail it. `opencodeSubagentRequestsSmoke.ts` pins the rest without
+a model: hydration includes a child's ask and excludes an unrelated session's, a
+grandchild whose parent must be looked up is delivered late rather than never,
+a child's own messages stay out, and a reply or a deleted child clears the
+mirrored ask — three mutations checked to fail it.

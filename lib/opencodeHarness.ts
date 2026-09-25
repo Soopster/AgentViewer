@@ -86,6 +86,23 @@ type Subscriber = {
 
 export type OpenCodeHarnessQueuedEvent = { event: OpenCodeEvent; directoryKey: string; key?: string }
 
+// A subagent runs in a child session, so its permission asks and questions
+// arrive under the CHILD's id while the turn the user is watching streams the
+// parent's. Scoped by session alone, those asks reached nobody: the parent's
+// task tool waited on a child that waited on an answer no surface could show.
+// Herdr tracks OpenCode the same way (#4357) — a session is blocked while any
+// descendant has a pending permission or question — so these events are also
+// delivered to every ancestor. Only these: a child's messages are the child's
+// transcript, not the parent's.
+const REQUEST_EVENT_TYPES = new Set([
+  'permission.updated',
+  'permission.replied',
+  'question.asked',
+  'question.replied',
+  'question.rejected',
+])
+const MAX_SESSION_DEPTH = 32
+
 /** Normalize current OpenCode permission events to the compatibility shape
  * consumed by Agent Viewer's shared permission UI. */
 export function normalizeOpenCodeHarnessEvent(event: OpenCodeEvent): OpenCodeEvent {
@@ -280,6 +297,9 @@ class OpenCodeHarness {
   private transcriptVersions = new Map<string, number>()
   private transportEpoch = 0
   private sessionDirectories = new Map<string, string>()
+  /** Session id → parent id (`null` for a root), learned from events and lookups. */
+  private sessionParents = new Map<string, string | null>()
+  private parentLookups = new Map<string, Promise<void>>()
 
   subscribe(options: { sessionId?: string; directory?: string } = {}): {
     snapshot: SessionSnapshot | undefined
@@ -574,11 +594,113 @@ class OpenCodeHarness {
     if (sessionId && directoryKey && directoryKey !== 'global') {
       this.sessionDirectories.set(sessionId, directoryKey)
     }
+    this.noteSessionParent(event)
     this.bumpSnapshotVersion(event)
     this.bumpTranscriptVersion(event)
     this.applyToSnapshot(event)
     this.invalidateProjectStateFromEvent(event)
     this.broadcast(event, directoryKey)
+    if (sessionId && REQUEST_EVENT_TYPES.has(event.type)) this.forwardToAncestors(event, sessionId, directoryKey)
+    if (sessionId && event.type === 'session.deleted') this.clearDescendantRequests(sessionId)
+  }
+
+  private noteSessionParent(event: OpenCodeEvent): void {
+    if (event.type !== 'session.created' && event.type !== 'session.updated') return
+    const info = event.properties.info as { id?: string; parentID?: string }
+    if (info.id) this.sessionParents.set(info.id, info.parentID || null)
+  }
+
+  /**
+   * Ancestors known so far, nearest first, and whether the chain reached a
+   * root. A partial chain is still worth delivering to: an unknown link higher
+   * up must not hide a parent that is already known.
+   */
+  private knownAncestors(sessionId: string): { ancestors: string[]; complete: boolean } {
+    const ancestors: string[] = []
+    let id = sessionId
+    for (let depth = 0; depth < MAX_SESSION_DEPTH; depth += 1) {
+      if (!this.sessionParents.has(id)) return { ancestors, complete: false }
+      const parent = this.sessionParents.get(id)
+      if (!parent || ancestors.includes(parent) || parent === sessionId) break
+      ancestors.push(parent)
+      id = parent
+    }
+    return { ancestors, complete: true }
+  }
+
+  /**
+   * Fill in unknown links by asking the server. Only sessions carrying a
+   * request are looked up (herdr's rule), so an idle history of hundreds of
+   * subagent sessions costs nothing.
+   */
+  private async resolveAncestry(sessionId: string): Promise<void> {
+    let id: string | null = sessionId
+    for (let depth = 0; id && depth < MAX_SESSION_DEPTH; depth += 1) {
+      if (!this.sessionParents.has(id)) {
+        const lookupId: string = id
+        let lookup = this.parentLookups.get(lookupId)
+        if (!lookup) {
+          lookup = (async () => {
+            const client = await getOpenCodeClient()
+            const session = this.responseData<{ id?: string; parentID?: string }>(await client.session.get({
+              responseStyle: 'data',
+              throwOnError: true,
+              path: { id: lookupId },
+            }))
+            // A lookup that returns another session's record says nothing.
+            if (session?.id === lookupId) this.sessionParents.set(lookupId, session.parentID || null)
+          })().finally(() => this.parentLookups.delete(lookupId))
+          this.parentLookups.set(lookupId, lookup)
+        }
+        await lookup
+        if (!this.sessionParents.has(lookupId)) return
+      }
+      id = this.sessionParents.get(id) ?? null
+    }
+  }
+
+  private forwardToAncestors(event: OpenCodeEvent, sessionId: string, directoryKey: string): void {
+    const known = this.knownAncestors(sessionId)
+    this.deliverToAncestors(event, known.ancestors, directoryKey)
+    if (known.complete) return
+    // Late is far better than never: an ask nobody sees hangs the turn.
+    void this.resolveAncestry(sessionId)
+      .catch(() => {})
+      .then(() => {
+        const later = this.knownAncestors(sessionId).ancestors.filter((id) => !known.ancestors.includes(id))
+        this.deliverToAncestors(event, later, directoryKey)
+      })
+  }
+
+  private deliverToAncestors(event: OpenCodeEvent, ancestors: readonly string[], directoryKey: string): void {
+    const sessionId = eventSessionId(event)
+    for (const ancestor of ancestors) {
+      this.bumpSnapshotVersion(event, ancestor)
+      this.applyToSnapshot(event, ancestor)
+      for (const subscriber of this.subscribers) {
+        if (subscriber.sessionId !== ancestor) continue
+        if (directoryKey && directoryKey !== 'global' && subscriber.directoryKey !== directoryKey) continue
+        subscriber.push({ type: 'event', event, sessionId })
+      }
+    }
+  }
+
+  /** A deleted session's pending asks can no longer be answered; drop them wherever they were mirrored. */
+  private clearDescendantRequests(deletedId: string): void {
+    for (const snapshot of this.snapshots.values()) {
+      snapshot.permissions = snapshot.permissions.filter((permission) => permission.sessionID !== deletedId)
+      if (snapshot.questions) snapshot.questions = snapshot.questions.filter((question) => question.sessionID !== deletedId)
+    }
+  }
+
+  private async isSelfOrDescendant(candidate: unknown, root: string): Promise<boolean> {
+    if (typeof candidate !== 'string') return false
+    if (candidate === root) return true
+    const known = this.knownAncestors(candidate)
+    if (known.ancestors.includes(root)) return true
+    if (known.complete) return false
+    await this.resolveAncestry(candidate).catch(() => {})
+    return this.knownAncestors(candidate).ancestors.includes(root)
   }
 
   private bumpTranscriptVersion(event: OpenCodeEvent): void {
@@ -598,7 +720,7 @@ class OpenCodeHarness {
     this.transcriptVersions.set(sessionId, (this.transcriptVersions.get(sessionId) ?? 0) + 1)
   }
 
-  private bumpSnapshotVersion(event: OpenCodeEvent): void {
+  private bumpSnapshotVersion(event: OpenCodeEvent, target = eventSessionId(event)): void {
     const record = event as unknown as { type: string }
     if (![
       'session.status',
@@ -611,9 +733,8 @@ class OpenCodeHarness {
       'question.rejected',
       'session.deleted',
     ].includes(record.type)) return
-    const sessionId = eventSessionId(event)
-    if (!sessionId) return
-    this.snapshotVersions.set(sessionId, (this.snapshotVersions.get(sessionId) ?? 0) + 1)
+    if (!target) return
+    this.snapshotVersions.set(target, (this.snapshotVersions.get(target) ?? 0) + 1)
   }
 
   private async hydrateSessionSnapshot(sessionId: string, directory: string | undefined): Promise<void> {
@@ -652,8 +773,16 @@ class OpenCodeHarness {
       const todos = this.responseData<OpenCodeTodo[]>(todosResult)
       const rawPermissions = this.responseData<Array<Record<string, unknown>>>(permissionsResult)
       const questions = this.responseData<OpenCodeQuestionRequest[]>(questionsResult)
+      // A descendant's pending ask blocks this session as surely as its own.
+      const inTree = new Map<string, boolean>()
+      for (const request of [...(rawPermissions ?? []), ...(questions ?? [])]) {
+        const id = (request as { sessionID?: unknown }).sessionID
+        if (typeof id === 'string' && !inTree.has(id)) inTree.set(id, await this.isSelfOrDescendant(id, sessionId))
+      }
+      if ((this.snapshotVersions.get(sessionId) ?? 0) !== version) return
+      const belongs = (request: { sessionID?: unknown }) => typeof request.sessionID === 'string' && inTree.get(request.sessionID) === true
       const permissions = rawPermissions?.flatMap((permission) => {
-        if (permission.sessionID !== sessionId) return []
+        if (!belongs(permission)) return []
         const normalized = normalizeOpenCodeHarnessEvent({
           type: 'permission.asked',
           properties: permission,
@@ -664,7 +793,7 @@ class OpenCodeHarness {
         status: statuses ? statuses[sessionId] ?? { type: 'idle' } : current.status,
         todos: todos ?? current.todos,
         permissions: permissions ?? current.permissions,
-        questions: questions?.filter((question) => question.sessionID === sessionId) ?? current.questions,
+        questions: questions?.filter(belongs) ?? current.questions,
       }
       this.snapshots.set(sessionId, snapshot)
       for (const subscriber of this.subscribers) {
@@ -709,8 +838,7 @@ class OpenCodeHarness {
     }
   }
 
-  private applyToSnapshot(event: OpenCodeEvent): void {
-    const sessionId = eventSessionId(event)
+  private applyToSnapshot(event: OpenCodeEvent, sessionId = eventSessionId(event)): void {
     if (!sessionId) return
     const existing = this.snapshots.get(sessionId) ?? { permissions: [], questions: [] }
     const eventRecord = event as unknown as { type: string; properties?: Record<string, unknown> }

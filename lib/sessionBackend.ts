@@ -1765,9 +1765,15 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
         }, OPENCODE_OPTIONS)
         return { ok: openCodeData<boolean>(result) }
       }
+      // OpenCode keys a pending permission by the session that asked, and a
+      // subagent asks from its own child session: answering it under the
+      // chat's id fails and leaves the turn waiting (verified on 2.0.8).
+      const askingSessionId = getOpenCodeSessionSnapshot(sessionId)?.permissions.find((entry) => entry.id === permissionID)?.sessionID
+        ?? await openCodePendingPermissionSession(sessionId, permissionID)
+        ?? sessionId
       const result = await client.postSessionIdPermissionsPermissionId({
         ...OPENCODE_OPTIONS,
-        path: { id: sessionId, permissionID },
+        path: { id: askingSessionId, permissionID },
         body: { response },
       })
       return { ok: openCodeData<boolean>(result) }
@@ -1787,9 +1793,9 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
           session.directory ? { directory: session.directory } : undefined,
           OPENCODE_OPTIONS,
         )
-        question = openCodeData<OpenCodeQuestionRequest[]>(pending).find((entry) =>
-          entry.id === permissionID && entry.sessionID === sessionId
-        )
+        // Request ids are unique on the server; a subagent's question carries
+        // its child session's id, not this chat's.
+        question = openCodeData<OpenCodeQuestionRequest[]>(pending).find((entry) => entry.id === permissionID)
       }
       if (!question) throw new Error('Question is no longer pending')
       const orderedAnswers = question.questions.map((entry, index) =>
@@ -6910,3 +6916,14 @@ export { isCodexActiveWriterError, isCodexMissingRolloutError }
 // Re-exported for scripts/reliabilityTimeoutSmoke.ts, which has imported this
 // from sessionBackend since before it moved to its own module.
 export { withTimeout }
+
+/** The session a pending OpenCode permission belongs to, read from the server when the harness has not seen it. */
+async function openCodePendingPermissionSession(sessionId: string, permissionID: string): Promise<string | undefined> {
+  const [clientV2, session] = await Promise.all([getOpenCodeV2Client(), getOpenCodeSession(sessionId).catch(() => null)])
+  const pending = await clientV2.permission.list(session?.directory ? { directory: session.directory } : undefined, {
+    responseStyle: 'data',
+    throwOnError: true,
+  }).catch(() => null)
+  const list = pending ? openCodeData<Array<{ id?: string; sessionID?: string }>>(pending) : []
+  return list.find((entry) => entry.id === permissionID)?.sessionID
+}

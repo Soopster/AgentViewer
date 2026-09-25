@@ -108,6 +108,17 @@ and the SSE pumps stay untouched — they all key on v1 event and part shapes.
 - **Sharing is the one op v2 dropped**, so the capability is gated per session (on the server's
   own `version`, via `capabilitiesFor` in `lib/opencodeMapper.ts`) rather than per provider — a
   user on 1.x keeps the button.
+- **A subagent asks from its own session, and both halves of answering it must know that.** A
+  `task` subagent runs in a child session, so its permission asks and questions carry the
+  child's `sessionID` while the turn the user watches streams the parent's. `lib/opencodeHarness.ts`
+  learns parentage from `session.created`/`session.updated` (and looks it up only for sessions
+  that are asking something) and delivers **request events only** to every ancestor's subscribers
+  and snapshot — a child's messages are its own transcript. The reply is sent on the asking
+  session: under the chat's id OpenCode answers `PermissionNotFoundError` and the turn stays
+  waiting. Before this, the ask reached no surface and the turn hung "working" with nothing to
+  answer (verified live on 2.0.8; herdr tracks OpenCode's session family the same way, #4357).
+  `opencodeSubagentRequestsSmoke.ts` pins it hermetically, `npm run opencode:subagent:live`
+  end to end.
 - **Todos have no v2 endpoint**: the `todowrite` tool call is the only record, read live off the
   event and cold off the transcript.
 - **A 2.x server needs the 2.x coordinator plugin.** A 1.x plugin is a file exporting a hook
