@@ -1907,7 +1907,8 @@ function formatBlock(block: ThreadedBlock, activeForms?: TaskActiveForms, taskRe
       }
       if (block.subtype === 'conversation_reset') {
         const next = typeof block.payload.new_conversation_id === 'string' ? block.payload.new_conversation_id : ''
-        return [line(`conversation reset${next ? ` → ${next.slice(0, 8)}` : ''}`, 'system')]
+        const trigger = typeof block.payload.trigger === 'string' ? block.payload.trigger.replace(/_/g, ' ') : ''
+        return [line(`conversation reset${trigger ? ` (${trigger})` : ''}${next ? ` → ${next.slice(0, 8)}` : ''}`, 'system')]
       }
       if (block.subtype === 'informational') {
         const text = typeof block.payload.content === 'string' && block.payload.content.trim()
@@ -2777,8 +2778,9 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
       }
       if (block.subtype === 'conversation_reset') {
         const next = typeof block.payload.new_conversation_id === 'string' ? block.payload.new_conversation_id : ''
+        const trigger = typeof block.payload.trigger === 'string' ? block.payload.trigger.replace(/_/g, ' ') : ''
         return [
-          line('conversation reset', 'system'),
+          line(`conversation reset${trigger ? ` (${trigger})` : ''}`, 'system'),
           ...(next ? [line(`  continuing as ${next}`, 'dim')] : []),
         ]
       }

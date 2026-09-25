@@ -65,7 +65,7 @@ const RAW = [
     session_id: 's',
   },
   { type: 'system', subtype: 'worker_shutting_down', reason: 'remote_control_disabled', uuid: 'u2', session_id: 's' },
-  { type: 'conversation_reset', new_conversation_id: 'abcdef12-0000-0000-0000-000000000000', uuid: 'u3', session_id: 's' },
+  { type: 'conversation_reset', new_conversation_id: 'abcdef12-0000-0000-0000-000000000000', trigger: 'clear', user_message_uuid: 'clear-1', timestamp: '2026-09-25T00:00:00Z', uuid: 'u3', session_id: 's' },
 ] as ReadonlyArray<Record<string, unknown>>
 
 const EXPECTED: Record<string, { needle: string; level: string }> = {
@@ -92,6 +92,11 @@ for (const raw of RAW) {
   const expanded = JSON.stringify(formatMessageExpanded([threaded], threaded.uuid!)).toLowerCase()
   assert.ok(card.includes(expected.needle), `${block.subtype} missing from TUI card: ${card}`)
   assert.ok(expanded.includes(expected.needle), `${block.subtype} missing from TUI expanded view`)
+  if (block.subtype === 'conversation_reset') {
+    assert.ok(card.includes('(clear)') && expanded.includes('(clear)'), 'reset trigger missing from TUI')
+    assert.match(String(block.payload.content), /after \/clear/, 'reset trigger missing from web content')
+    assert.equal(threaded.timestamp, '2026-09-25T00:00:00Z', 'reset event time was lost')
+  }
 }
 
 // History JSONL nests the system payload under `.message` while the live stream

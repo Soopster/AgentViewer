@@ -260,10 +260,18 @@ function startFeed(): () => void {
     commit(derive(runs, snapshots, state.selectedKey))
   }
 
-  void refresh()
+  // Subscribe before the first read (herdr's bootstrap rule): a change landing
+  // while that read is in flight then queues a refresh instead of being lost
+  // until the 30s reconcile.
   const unsubscribe = subscribeTuiProtocolRunChanges((runId) => {
     if (runId === null) {
       void refresh()
+      return
+    }
+    // A full refresh already reading would commit its older copy of this run
+    // over a newer single-run read; have it read everything once more instead.
+    if (refreshInFlight) {
+      refreshQueued = true
       return
     }
     changedRunIds.add(runId)
@@ -274,6 +282,7 @@ function startFeed(): () => void {
       void Promise.all(ids.map(refreshChangedRun))
     }, PUSH_DEBOUNCE_MS)
   })
+  void refresh()
   const timer = setInterval(() => { void refresh() }, unsubscribe ? RECONCILE_MS : FALLBACK_POLL_MS)
 
   return () => {

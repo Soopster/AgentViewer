@@ -196,13 +196,17 @@ function normalizeClaudeEventAsSystem(record: Record<string, unknown>): SystemMe
   // id in the transcript rather than dropping the event on the floor.
   if (record.type === 'conversation_reset') {
     const next = typeof record.new_conversation_id === 'string' ? record.new_conversation_id : ''
+    const trigger = typeof record.trigger === 'string' ? record.trigger : ''
+    const reason = trigger === 'clear' ? 'after /clear'
+      : trigger === 'plan_mode_exit' ? 'after leaving plan mode'
+      : trigger === 'fresh_session' ? 'for a fresh session'
+      : trigger === 'onboarding' ? 'during onboarding'
+      : ''
     return {
       type: 'system',
       subtype: 'conversation_reset',
       ...record,
-      content: next
-        ? `Conversation was reset — continuing as ${next}`
-        : 'Conversation was reset',
+      content: `Conversation was reset${reason ? ` ${reason}` : ''}${next ? ` — continuing as ${next}` : ''}`,
       level: 'notice',
     }
   }
@@ -327,7 +331,7 @@ function normalizeClaudeStreamMessage(value: unknown): SessionMessage | null {
       session_id: record.session_id,
       parent_tool_use_id: null,
       provider: 'claude',
-      timestamp: new Date().toISOString(),
+      timestamp: normalizeTimestamp(record.timestamp) ?? new Date().toISOString(),
       message: eventPayload,
     }
   }
