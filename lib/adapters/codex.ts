@@ -150,7 +150,9 @@ export const codexAdapter: SessionAdapter = {
     ])
     return {
       models: mapCodexModelsToSessionModels(modelsResponse.data),
-      currentModel: currentCodexModelValue(modelsResponse.data, resume?.model),
+      // Unknown (not learned, and this isolate may not resume) is reported as
+      // null rather than as the default model, which would be a guess.
+      currentModel: resume?.unknown ? null : currentCodexModelValue(modelsResponse.data, resume?.model),
       contextUsage: null,
     }
   },

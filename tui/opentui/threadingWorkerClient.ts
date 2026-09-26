@@ -359,15 +359,24 @@ export type TuiSessionMetadataResult = { currentModel: string | null; contextUsa
  * at its first await rather than queueing behind a detail read.
  */
 export function readTuiSessionMetadataAsync(session: Session): Promise<TuiSessionMetadataResult> {
-  // Codex is the exception, and it must be. Its model is only reported by
-  // thread/resume, and a resume makes that app-server the thread's writer.
-  // Each isolate runs its own app-server, so a resume from this worker took
-  // the writer away from the main isolate, whose composer prewarm and turns
-  // then failed with "already has an active writer". On the main isolate the
-  // read shares the prewarm's resume instead of racing it.
-  if (session.provider === 'codex') {
-    return readTuiSessionMetadata(session).then(({ currentModel, contextUsage }) => ({ currentModel, contextUsage }))
-  }
+  const metadata = readTuiSessionMetadataInWorker(session)
+  if (session.provider !== 'codex') return metadata
+  // Codex's model is only reported by thread/resume, and a resume makes that
+  // app-server the thread's writer. Each isolate runs its own app-server, so a
+  // resume from the worker took the writer away from the main isolate, whose
+  // prewarm and turns then failed with "already has an active writer". The
+  // worker therefore never resumes: it answers from learned models and reports
+  // an unknown one as null, and only then does the main isolate read (and
+  // resume) — so browsing sessions whose models are known starts no app-server
+  // on the main isolate at all (~170MB).
+  return metadata.then((result) => (
+    result.currentModel !== null
+      ? result
+      : readTuiSessionMetadata(session).then(({ currentModel, contextUsage }) => ({ currentModel, contextUsage }))
+  ))
+}
+
+function readTuiSessionMetadataInWorker(session: Session): Promise<TuiSessionMetadataResult> {
   const id = ++requestCounter
   const w = ensureWorker()
   return new Promise<TuiSessionMetadataResult>((resolve, reject) => {

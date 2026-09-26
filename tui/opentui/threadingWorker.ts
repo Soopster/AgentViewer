@@ -28,6 +28,7 @@ import {
 } from '../../lib/tui/reads'
 import { sameSessionMessageContent, threadedMessageFingerprint } from './messageFingerprint'
 import { startRawHeapSampler, reportWorkerHeap } from './workerHeapProbe'
+import { disallowCodexModelResume } from '../../lib/codexThreads'
 
 // Reads the session from disk/SDK *inside the worker*, then threads + formats.
 // Keeping the read here means the full transcript (and the read/normalize/sort
@@ -650,4 +651,8 @@ self.onmessage = async (event) => {
   }
 }
 
+// This isolate runs its own Codex app-server, and a resume would make it the
+// thread's writer — taking the thread from the main isolate's sends. It answers
+// Codex models from what is learned and leaves unknown ones to the main isolate.
+disallowCodexModelResume()
 startRawHeapSampler('threading')

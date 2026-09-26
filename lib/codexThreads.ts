@@ -8,7 +8,7 @@
 // lifetime, so re-paying that RPC on every send would add a serial round-trip
 // ahead of turn/start and show up directly as first-token latency.
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { getCodexClient } from './codexClient'
 import type { CodexResponseFor } from './codexProtocol'
@@ -137,6 +137,15 @@ const CODEX_THREAD_MODELS_LIMIT = 2000
 const CODEX_THREAD_MODELS_FILE = path.join(process.cwd(), '.agent-viewer-data', 'codex-thread-models.json')
 const CODEX_THREAD_MODELS_SAVE_DELAY_MS = 500
 let codexThreadModelsLoaded = false
+let codexThreadModelsFileStamp = ''
+// Off in an isolate that must never become a thread's writer (the TUI's
+// transcript worker): there a model read answers from what has been learned and
+// reports anything else as unknown, for the main isolate to resume.
+let codexModelResumeAllowed = true
+
+export function disallowCodexModelResume(): void {
+  codexModelResumeAllowed = false
+}
 let codexThreadModelsSaveTimer: ReturnType<typeof setTimeout> | null = null
 
 function parseLearnedModels(text: string): Record<string, LearnedCodexModel> {
@@ -155,14 +164,24 @@ function isLearnedModel(value: unknown): value is LearnedCodexModel {
     && (entry.activityAt === undefined || typeof entry.activityAt === 'number')
 }
 
-function loadCodexThreadModels(): void {
-  if (codexThreadModelsLoaded) return
+function loadCodexThreadModels(force = false): void {
+  if (codexThreadModelsLoaded && !force) return
   codexThreadModelsLoaded = true
   let text = ''
-  try { text = readFileSync(CODEX_THREAD_MODELS_FILE, 'utf8') } catch { return }
+  try {
+    // Another isolate or process may have learned models since; a stat says
+    // whether there is anything new to read.
+    const stat = statSync(CODEX_THREAD_MODELS_FILE)
+    const stamp = `${stat.mtimeMs}:${stat.size}`
+    if (stamp === codexThreadModelsFileStamp) return
+    codexThreadModelsFileStamp = stamp
+    text = readFileSync(CODEX_THREAD_MODELS_FILE, 'utf8')
+  } catch { return }
   for (const [key, entry] of Object.entries(parseLearnedModels(text))) {
-    // In-memory knowledge is newer than anything on disk.
-    if (!codexThreadModels.has(key) && isLearnedModel(entry)) codexThreadModels.set(key, entry)
+    if (!isLearnedModel(entry)) continue
+    const current = codexThreadModels.get(key)
+    // Keep what this process learned unless the file knows a later turn.
+    if (!current || (entry.activityAt ?? 0) > (current.activityAt ?? 0)) codexThreadModels.set(key, entry)
   }
 }
 
@@ -193,10 +212,10 @@ function saveCodexThreadModelsSoon(): void {
 
 function learnedCodexModel(key: string, activityAt?: number): LearnedCodexModel | undefined {
   loadCodexThreadModels()
-  const entry = codexThreadModels.get(key)
-  if (!entry) return undefined
-  if (activityAt !== undefined && entry.activityAt !== activityAt) return undefined
-  return entry
+  const matches = (entry: LearnedCodexModel | undefined) => (
+    entry && (activityAt === undefined || entry.activityAt === activityAt) ? entry : undefined
+  )
+  return matches(codexThreadModels.get(key)) ?? (loadCodexThreadModels(true), matches(codexThreadModels.get(key)))
 }
 
 /**
@@ -319,12 +338,13 @@ export function knownCodexThreadModel(sessionId: string, activityAt?: number): s
  * remembers it, and unsubscribes unless a turn or prewarm holds the thread;
  * the app-server then unloads it (about a minute later on codex-cli 0.157).
  */
-export async function readCodexThreadModel(sessionId: string, activityAt?: number): Promise<{ model: string | null }> {
+export async function readCodexThreadModel(sessionId: string, activityAt?: number): Promise<{ model: string | null; unknown?: true }> {
   const key = codexThreadKey(sessionId)
   const live = codexResumedThreads.get(key)
   if (live !== undefined) return { model: live }
   const known = learnedCodexModel(key, activityAt)
   if (known) return { model: known.model }
+  if (!codexModelResumeAllowed) return { model: null, unknown: true }
   const inflight = codexResumeInflight.get(key) ?? codexModelReadInflight.get(key)
   if (inflight) return inflight
   const client = getCodexClient()

@@ -163,8 +163,10 @@ from *holding* a thread:
   releases the previous one; a thread a turn has used is *claimed* and never released by prewarm.
 - **A resume makes that app-server the thread's writer.** In the TUI each isolate runs its own
   app-server, so a resume from the transcript worker made the main isolate's prewarm and turns
-  fail with `already has an active writer`. Codex metadata therefore reads on the main isolate
-  (`readTuiSessionMetadataAsync`), where it shares the prewarm's resume.
+  fail with `already has an active writer`. So the worker never resumes (`disallowCodexModelResume`):
+  it answers Codex metadata from learned models and reports an unknown one as `null`, and only then
+  does the main isolate read — and resume (`readTuiSessionMetadataAsync`). Browsing sessions whose
+  models are known starts no app-server on the main isolate at all (~170MB).
 - **Resume with `excludeTurns: true`.** Callers read only the model; the full response carried the
   transcript — 230KB and ~224ms per resume against 3KB and ~17ms — serially ahead of `turn/start`.
 - **A learned model is persisted and keyed on the thread's last turn** (`codexThreadActivityAt`,
