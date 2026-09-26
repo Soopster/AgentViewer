@@ -138,6 +138,8 @@ await waitFor('both teammates to be watched beside the lead', (frame) =>
   frame.includes(transcriptText('watch-orion')) && frame.includes(transcriptText('watch-nova')))
 
 const frame = setup.captureCharFrame()
+// The rollup reaches the tab strip too, now that the team's chats are tabs.
+if (!frame.split('\n').slice(0, 3).some((line) => line.includes('!1 Lead chat'))) fail('the lead chat\'s tab does not carry its team\'s mark')
 if (!frame.includes(transcriptText('watch-lead'))) fail('watching the team replaced the lead chat in the reader')
 if (frame.includes('─ Teammates ─')) fail('the Teammates panel stayed open over the panes')
 // Attention order: the teammate asking the lead gets the first pane, drawn

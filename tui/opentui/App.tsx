@@ -10879,12 +10879,16 @@ export default function OpenTuiApp() {
       // why selecting it swaps rather than opening a second copy.
       const splitPosition = splitPinnedKeys.indexOf(sessionKey(s))
       const inSplit = splitPosition >= 0 && splitPosition < splitPaneCount
+      // Herdr's rollup reaches the tab too. Leading, so a narrow tab's
+      // truncation cuts the title rather than the mark.
+      const team = teamAttention.get(sessionKey(s))
+      const teamPrefix = team ? (team.waiting > 0 ? `!${team.waiting} ` : `✓${team.finished} `) : ''
       return {
-        name: isPreviewMode && selectedSessionKey === sessionKey(s)
+        name: teamPrefix + (isPreviewMode && selectedSessionKey === sessionKey(s)
           ? `PREVIEW · ${formatSessionTitle(s)}`
           : inSplit
             ? `▏${formatSessionTitle(s)}`
-            : formatSessionTitle(s),
+            : formatSessionTitle(s)),
         description: isPreviewMode && selectedSessionKey === sessionKey(s)
           ? 'Preview tab'
           : inSplit
@@ -10893,7 +10897,7 @@ export default function OpenTuiApp() {
         value: sessionKey(s),
       }
     })
-  ), [isPreviewMode, selectedSessionKey, visibleTabSessions, splitPinnedKeys, splitPaneCount])
+  ), [isPreviewMode, selectedSessionKey, visibleTabSessions, splitPinnedKeys, splitPaneCount, teamAttention])
 
   const tabWidth = useMemo(() => {
     if (visibleTabSessions.length === 0) return 16
