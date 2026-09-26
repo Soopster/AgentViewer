@@ -159,6 +159,21 @@ import { createNewViewSession, streamViewSessionTurn } from './sessionBackend'
 import { isOpenCodeManagedServer } from './opencodeClient'
 import { getRunningSessionInfo, interruptRunningSession, steerRunningSession } from './sessionRuntime'
 import { coordinatorAttention } from './coordinatorAttention'
+import {
+  COORDINATION_DATA_DIR,
+  COORDINATION_DB_FILE,
+  parseJsonArray,
+  parseJsonList,
+  parseJsonObject,
+  readInteractiveAttentionSync,
+  readSnapshotMessagesSync,
+  readSnapshotTasksSync,
+  rowToLock,
+  rowToMessage,
+  rowToRun,
+  rowToTask,
+  type InteractiveAttentionSummary,
+} from './coordinatorLedger'
 import { COORDINATOR_START_STALL_MS } from './coordinatorInteractiveState'
 import { isAgentProvider } from './provider'
 import { createWorktreeTask, findRepoRoot, findWorktreeTaskForCwd, removeWorktreeTask, type WorktreeTask } from './worktreeTasks'
@@ -167,8 +182,8 @@ import type { AgentProvider } from './types'
 type SqliteDatabase = any
 type Row = Record<string, unknown>
 
-const DATA_DIR = path.join(process.cwd(), '.agent-viewer-data', 'agent-coordination')
-const DB_FILE = path.join(DATA_DIR, 'coordination.sqlite')
+const DATA_DIR = COORDINATION_DATA_DIR
+const DB_FILE = COORDINATION_DB_FILE
 const LOCK_LEASE_MS = 20 * 60_000
 // v11 → v12: protocol_push_configs table (A2A tasks/pushNotificationConfig/*)
 // — a new IF-NOT-EXISTS table needs no ALTER migration, but the version bump
@@ -188,7 +203,6 @@ const LOCK_HISTORY_WINDOW = 200
 // long time (heavy discovered-work reuse, an autonomous loop that never
 // finalizes) doesn't grow every coord_status/coord_wait payload — and the
 // per-call DB/serialization cost with it — for the rest of its life.
-const TERMINAL_TASK_HISTORY_WINDOW = 300
 // Bound detailed replay responses per participant. Compact operation records
 // remain until run deletion so response eviction never permits re-execution.
 const IDEMPOTENCY_WINDOW_PER_PARTICIPANT = Math.max(
@@ -1003,69 +1017,6 @@ async function enqueueWrite<T>(fn: (db: SqliteDatabase) => T | Promise<T>): Prom
   return next
 }
 
-function parseJsonArray(value: unknown): string[] {
-  if (typeof value !== 'string') return []
-  try {
-    const parsed = JSON.parse(value) as unknown
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : []
-  } catch {
-    return []
-  }
-}
-
-function parseJsonObject<T>(value: unknown): T | undefined {
-  if (typeof value !== 'string' || !value) return undefined
-  try {
-    const parsed = JSON.parse(value)
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as T : undefined
-  } catch {
-    return undefined
-  }
-}
-
-function parseJsonList<T>(value: unknown): T[] {
-  if (typeof value !== 'string' || !value) return []
-  try {
-    const parsed = JSON.parse(value)
-    return Array.isArray(parsed) ? parsed as T[] : []
-  } catch {
-    return []
-  }
-}
-
-function rowToRun(row: Row): ProtocolRun {
-  const prompt = String(row.prompt)
-  const autonomy: ProtocolAutonomy = row.autonomy === 'low' || row.autonomy === 'high' ? row.autonomy : 'medium'
-  const requireReview = Boolean(Number(row.require_review ?? 0))
-  return {
-    id: String(row.id),
-    prompt,
-    status: String(row.status) as ProtocolRunStatus,
-    provider: String(row.provider) as ProtocolRun['provider'],
-    baseCwd: String(row.base_cwd),
-    maxAgents: Number(row.max_agents) || 1,
-    leadAgentId: typeof row.lead_agent_id === 'string' ? row.lead_agent_id : undefined,
-    summary: typeof row.summary === 'string' ? row.summary : undefined,
-    gateCommand: typeof row.gate_command === 'string' && row.gate_command ? row.gate_command : undefined,
-    requirePlanApproval: Boolean(Number(row.require_plan_approval ?? 0)),
-    autonomy,
-    acceptanceContract: normalizeAcceptanceContract(
-      prompt,
-      parseJsonObject<Partial<ProtocolAcceptanceContract>>(row.acceptance_contract_json),
-    ),
-    requireReview,
-    requireReceipts: Boolean(Number(row.require_receipts ?? 0)),
-    review: parseJsonObject<ProtocolReviewReport>(row.review_json) ?? { status: requireReview ? 'pending' : 'not_required' },
-    budget: parseJsonObject<ProtocolRunBudget>(row.budget_json),
-    phaseReports: parseJsonList<ProtocolPhaseReport>(row.phase_reports_json),
-    resumeCapsule: parseJsonObject<ProtocolResumeCapsule>(row.resume_capsule_json),
-    learningCandidates: parseJsonList<ProtocolLearningCandidate>(row.learning_candidates_json),
-    useWorktrees: row.use_worktrees == null ? true : Boolean(Number(row.use_worktrees)),
-    createdAt: String(row.created_at),
-    updatedAt: String(row.updated_at),
-  }
-}
-
 function rowToAgent(row: Row): ProtocolAgent {
   const protocolVersion = Number(row.protocol_version) || MIN_EXTERNAL_COORD_PROTOCOL_VERSION
   const capabilities = parseJsonObject<ExternalProtocolCapabilities>(row.capabilities_json)
@@ -1153,69 +1104,6 @@ function findSimilarTasksSync(
     .slice(0, 3)
 }
 
-function rowToTask(row: Row): ProtocolTask {
-  return {
-    id: String(row.id),
-    runId: String(row.run_id),
-    title: String(row.title),
-    prompt: String(row.prompt),
-    status: String(row.status) as ProtocolTaskStatus,
-    ownerAgentId: typeof row.owner_agent_id === 'string' ? row.owner_agent_id : undefined,
-    targetRole: row.target_role === 'lead' || row.target_role === 'any' ? row.target_role : 'teammate',
-    roleName: typeof row.role_name === 'string' && row.role_name ? row.role_name : undefined,
-    roleDescription: typeof row.role_description === 'string' && row.role_description ? row.role_description : undefined,
-    paths: parseJsonArray(row.paths_json),
-    blockedBy: parseJsonArray(row.blocked_by_json),
-    phase: typeof row.phase === 'string' && row.phase ? row.phase : undefined,
-    seat: row.seat === 'director' || row.seat === 'validator' || row.seat === 'watcher' ? row.seat : 'executor',
-    requestedProvider: typeof row.requested_provider === 'string' && row.requested_provider ? row.requested_provider as ProtocolTask['requestedProvider'] : undefined,
-    requestedModel: typeof row.requested_model === 'string' && row.requested_model ? row.requested_model : undefined,
-    requestedEffort: typeof row.requested_effort === 'string' && row.requested_effort ? row.requested_effort : undefined,
-    claudeAgentPolicy: parseJsonObject<ProtocolClaudeAgentPolicy>(row.claude_agent_policy_json),
-    verifyCommands: parseJsonArray(row.verify_commands_json),
-    receipt: parseJsonObject<ProtocolTaskReceipt>(row.receipt_json),
-    resultSummary: typeof row.result_summary === 'string' && row.result_summary ? row.result_summary : undefined,
-    resultDetail: typeof row.result_detail === 'string' && row.result_detail ? row.result_detail : undefined,
-    createdAt: String(row.created_at),
-    updatedAt: String(row.updated_at),
-  }
-}
-
-function rowToLock(row: Row): ProtocolLock {
-  return {
-    id: String(row.id),
-    runId: String(row.run_id),
-    agentId: String(row.agent_id),
-    taskId: typeof row.task_id === 'string' ? row.task_id : undefined,
-    path: String(row.path),
-    mode: String(row.mode) as ProtocolLock['mode'],
-    status: String(row.status) as ProtocolLockStatus,
-    leaseExpiresAt: String(row.lease_expires_at),
-    createdAt: String(row.created_at),
-    updatedAt: String(row.updated_at),
-  }
-}
-
-function rowToMessage(row: Row): ProtocolMessage {
-  const kind = typeof row.kind === 'string' ? row.kind as ProtocolMessageKind : 'request'
-  const priority = typeof row.priority === 'string' ? row.priority as ProtocolMessagePriority : 'normal'
-  return {
-    id: String(row.id),
-    runId: String(row.run_id),
-    fromAgentId: String(row.from_agent_id),
-    toAgentId: String(row.to_agent_id),
-    body: String(row.body),
-    kind,
-    priority,
-    replyRequired: row.reply_required === 1 || row.reply_required === true,
-    correlationId: typeof row.correlation_id === 'string' ? row.correlation_id : undefined,
-    inReplyTo: typeof row.in_reply_to === 'string' ? row.in_reply_to : undefined,
-    createdAt: String(row.created_at),
-    deliveredAt: typeof row.delivered_at === 'string' ? row.delivered_at : undefined,
-    resolvedAt: typeof row.resolved_at === 'string' ? row.resolved_at : undefined,
-  }
-}
-
 function rowToEvent(row: Row): AgentProtocolEvent {
   const payload = typeof row.payload_json === 'string'
     ? (() => { try { return JSON.parse(row.payload_json) as Record<string, unknown> } catch { return undefined } })()
@@ -1288,22 +1176,15 @@ function readSnapshotSync(db: SqliteDatabase, runId: string): ProtocolRunSnapsho
   const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(runId) as Row | undefined
   if (!runRow) return null
   const agents = annotateLiveTurns(runId, db.prepare('SELECT * FROM protocol_agents WHERE run_id = ? ORDER BY created_at ASC').all(runId).map(rowToAgent))
-  const activeTasks = db.prepare(`
-    SELECT * FROM protocol_tasks WHERE run_id = ? AND status NOT IN ('completed', 'failed', 'cancelled')
-    ORDER BY created_at ASC
-  `).all(runId).map(rowToTask)
-  const recentTerminalTasks = (db.prepare(`
-    SELECT * FROM protocol_tasks WHERE run_id = ? AND status IN ('completed', 'failed', 'cancelled')
-    ORDER BY created_at DESC LIMIT ?
-  `).all(runId, TERMINAL_TASK_HISTORY_WINDOW) as Row[]).map(rowToTask).reverse()
-  const tasks = [...recentTerminalTasks, ...activeTasks].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  // Shared with the ledger-only attention summary, so both see the same window.
+  const tasks = readSnapshotTasksSync(db, runId)
   const activeLocks = (db.prepare("SELECT * FROM protocol_locks WHERE run_id = ? AND status = 'active' AND lease_expires_at > ? ORDER BY created_at ASC")
     .all(runId, nowIso()) as Row[]).map(rowToLock)
   const recentInactiveLocks = (db.prepare("SELECT * FROM protocol_locks WHERE run_id = ? AND status != 'active' ORDER BY created_at DESC LIMIT ?")
     .all(runId, LOCK_HISTORY_WINDOW) as Row[]).map(rowToLock).reverse()
   const locks = [...recentInactiveLocks, ...activeLocks]
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-  const messages = db.prepare('SELECT * FROM protocol_messages WHERE run_id = ? ORDER BY created_at ASC LIMIT 200').all(runId).map(rowToMessage)
+  const messages = readSnapshotMessagesSync(db, runId)
   // Latest window, chronological — an active run must show its NEWEST events.
   const events = (db.prepare('SELECT * FROM protocol_events WHERE run_id = ? ORDER BY created_at DESC LIMIT ?')
     .all(runId, EVENT_WINDOW) as Row[]).map(rowToEvent).reverse()
@@ -7317,32 +7198,8 @@ export async function withCooperativeInbox(
  * nothing here acknowledges mail. Bounded by `limit`, newest run first, because
  * this rides a list poll.
  */
-export async function readInteractiveAttention(limit = 25): Promise<Array<{
-  sessionId: string
-  provider: AgentProvider
-  runId: string
-  waiting: number
-  finished: number
-}>> {
-  const db = await getDatabase()
-  const rows = db.prepare(`SELECT s.session_id, s.provider, s.run_id FROM protocol_interactive_sessions s
-    JOIN protocol_runs r ON r.id = s.run_id ORDER BY r.updated_at DESC LIMIT ?`).all(Math.max(1, Math.min(limit, 100))) as Row[]
-  const summary: Array<{ sessionId: string; provider: AgentProvider; runId: string; waiting: number; finished: number }> = []
-  for (const row of rows) {
-    const snapshot = readSnapshotSync(db, String(row.run_id))
-    if (!snapshot) continue
-    const items = coordinatorAttention(snapshot)
-    const finished = items.filter(item => item.kind === 'result').length
-    if (items.length === 0) continue
-    summary.push({
-      sessionId: String(row.session_id),
-      provider: String(row.provider) as AgentProvider,
-      runId: String(row.run_id),
-      waiting: items.length - finished,
-      finished,
-    })
-  }
-  return summary
+export async function readInteractiveAttention(limit = 25): Promise<InteractiveAttentionSummary[]> {
+  return readInteractiveAttentionSync(await getDatabase(), limit)
 }
 
 /**

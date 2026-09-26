@@ -940,6 +940,15 @@ which mirror `app/api/sessions/[sessionId]/coordination/route.ts` action for act
   `lib/agentCoordination.ts`, which imports the send path; a surface the user may never open must
   not be what pulls ~56MB in. The read itself is assembled from `lib/sessionActivity.ts` rather than
   `readViewSessionRunning` for the same reason.
+- **Session rows carry their team's mark, read from the ledger alone** (herdr's rollup: the
+  sidebar says which chat's team needs you without opening anything). `tui/opentui/teamAttentionStore.ts`
+  polls `readTuiInteractiveAttention` from boot, so it goes through `lib/coordinatorLedger.ts` — a
+  read-only ledger open plus the row mappers and snapshot windows `agentCoordination.ts` also uses —
+  and **must never reach `coordination()`**: that would load the send path for every browse-only
+  session. `teamAttentionLedgerSmoke.ts` traces module resolution to pin it and checks the light
+  summary agrees with the Coordinator's. Results carry ids, and each client subtracts its own
+  reviewed markers (TUI files, web `coordinator:seen:v1:*`) — counting raw results left a
+  permanent `✓ n` on every team that had ever finished a task.
 - **A close keeps the session and its last read**, so reopening the same conversation paints its
   roster immediately; switching conversations drops the read, because another chat's roster under
   this one's heading is worse than a blank one.

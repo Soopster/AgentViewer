@@ -123,6 +123,10 @@ const waitFor = async (label: string, check: (frame: string) => boolean) => {
 await settle(2500)
 act(() => { setup.mockInput.pressEnter() })
 await waitFor('the lead chat to open', (frame) => frame.includes(transcriptText('watch-lead')))
+// Herdr's rollup: the lead chat's session row says its team needs the user,
+// without opening the Teammates panel.
+await waitFor('the lead chat row to carry its team\'s mark', (frame) =>
+  frame.split('\n').some((line) => line.includes('!1') && line.includes('│') && line.indexOf('!1') < 34))
 
 act(() => { setup.mockInput.pressKey('k', { ctrl: true }) })
 await settle(80)

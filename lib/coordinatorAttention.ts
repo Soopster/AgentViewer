@@ -49,3 +49,19 @@ export function coordinatorAttention(snapshot: ProtocolRunSnapshot): Coordinator
   })
   return items.sort((a, b) => Number(a.kind === 'result') - Number(b.kind === 'result'))
 }
+
+/**
+ * A conversation's team as a session-list mark, after this client's reviewed
+ * markers: herdr's rollup, where a done agent stays marked only until it is
+ * viewed. Counting every result the team ever produced left a permanent
+ * `✓ n` on the row. Null means nothing to mark.
+ */
+export function teamAttentionMark(
+  summary: { waiting: number; resultIds?: readonly string[]; finished?: number },
+  reviewed: readonly string[],
+): { waiting: number; finished: number } | null {
+  const finished = summary.resultIds
+    ? summary.resultIds.filter(id => !reviewed.includes(id)).length
+    : summary.finished ?? 0
+  return summary.waiting > 0 || finished > 0 ? { waiting: summary.waiting, finished } : null
+}

@@ -19,6 +19,7 @@ import type { Todo as OpenCodeTodo } from '@opencode-ai/sdk'
 import type { CodexPlanStep } from '@/lib/taskRegistry'
 import { useRightPanel } from '@/components/useRightPanel'
 import { surfaceKindLabel, type RightPanelSurface, type RightPanelSurfaceKind } from '@/lib/rightPanel'
+import { teamAttentionMark } from '@/lib/coordinatorAttention'
 
 const CommandPalette = dynamic(() => import('@/components/CommandPalette'), { ssr: false })
 const GitPopover = dynamic(() => import('@/components/GitPopover'), { ssr: false })
@@ -851,10 +852,16 @@ export default function Home() {
       try {
         const response = await fetch('/api/agent-protocol/attention')
         if (!response.ok) return
-        const data = await response.json() as { attention?: Array<{ sessionId: string; provider: string; waiting: number; finished: number }> }
+        const data = await response.json() as { attention?: Array<{ sessionId: string; provider: string; waiting: number; finished: number; resultIds?: string[] }> }
         if (disposed) return
         const next: Record<string, { waiting: number; finished: number }> = {}
-        for (const entry of data.attention ?? []) next[`${entry.provider}:${entry.sessionId}`] = { waiting: entry.waiting, finished: entry.finished }
+        for (const entry of data.attention ?? []) {
+          // The same markers the Teammates panel writes when a result is reviewed.
+          let reviewed: string[] = []
+          try { reviewed = JSON.parse(localStorage.getItem(`coordinator:seen:v1:${entry.provider}:${entry.sessionId}`) || '[]') } catch { /* unreadable markers re-show results */ }
+          const mark = teamAttentionMark(entry, Array.isArray(reviewed) ? reviewed : [])
+          if (mark) next[`${entry.provider}:${entry.sessionId}`] = mark
+        }
         setTeamAttention(previous => JSON.stringify(previous) === JSON.stringify(next) ? previous : next)
       } catch { /* the sidebar simply shows no teammate marks */ }
     }

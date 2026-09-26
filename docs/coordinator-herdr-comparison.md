@@ -288,6 +288,7 @@ difference decides most of the verdicts below.
 | Startup and session switches do not count as completed work (#4457) | "Finished" comes from a task-result record, never an idle transition | Not needed by construction |
 | OpenCode status follows the selected session and its descendants: blocked while any has a pending permission or question (#4357) | The OpenCode harness forwards a subagent's asks to every ancestor's stream and snapshot, and answers them on the asking session | Adopted (September 26) — this was a hang, not a label |
 | Every agent's terminal is on screen at once — the pane is the agent (README, layouts) | `o`/`O` in the Teammates panel open the selected teammate, or the team in attention order, in split panes beside the lead's chat | Adopted (September 26) |
+| State rolls up: a blocked agent marks its pane, tab and workspace; a done one stays marked until viewed (agents.mdx "State rollups") | TUI session rows now carry `!n` / `✓n` for their conversation's team, like the web rows; both subtract reviewed results | Adopted (September 26) — the TUI had only a badge for observed chats, and the web's `✓ n` never cleared |
 | Named agents, unique, validated; `agent start <name>` names an agent by its job (SKILL.md) | Protocol names, delegation requires exactly one active match; **a new teammate can now be named** — `name` on `coord_delegate`, `@name` in a TUI draft, a field in the web panel — under herdr's `[a-z][a-z0-9_-]{0,31}` rule | Adopted this pass (naming) |
 | Detach without stopping work (README) | `agent-viewer web` daemon + `--attach`; turns run server-side | Present |
 | Resume supported agent sessions after restart (`agent_resume.rs`) | Provider sessions are durable by id; interrupted teammate execution waits for explicit recovery rather than auto-resuming | Present, deliberately stricter |
@@ -1035,3 +1036,26 @@ own machine. `scripts/machinesSmoke.ts` covers pairing (single use, 0600, never
 echoed), a revoked credential reading as revoked rather than empty, a machine
 that never answers being cut off at its deadline, and the rail's grouping,
 scoped keys and filter.
+
+### The sidebar says which chat's team needs you
+
+Herdr's agents page calls its rollup "the main Herdr workflow": start several
+agents, then read the sidebar to see which project needs a decision, which is
+running and which is ready to review. We had half of it. The web marked session
+rows, but its `✓ n` counted every result a team had ever produced, so a team
+that had finished anything carried the mark forever — herdr's done means *not
+yet viewed*. The TUI had no row marks at all: its badge covered only
+conversations it had already observed, so a team waiting in another chat was
+invisible until that chat was selected.
+
+Both now take the summary with result ids and subtract their own reviewed
+markers (herdr: each client tracks viewed completions independently). The TUI
+reads it on a 5s poll from boot, which is where the memory budget bit: the
+summary lived in `agentCoordination.ts`, which imports the send path. The row
+mappers and snapshot windows moved into `lib/coordinatorLedger.ts` with a
+read-only ledger open, and `agentCoordination.ts` uses the same functions, so
+there is one definition of what a snapshot's window is. `teamAttentionLedgerSmoke.ts`
+traces module resolution during the read (routing it through `coordination()`
+was verified to fail it) and asserts the light summary equals the full
+Coordinator's; the full-App watch smoke asserts the lead chat's row shows `!1`
+(verified to fail with the mark not drawn).

@@ -216,6 +216,7 @@ import {
   subscribeCoordinator,
   cycleCoordinatorFilter,
 } from './coordinatorStore'
+import { getTeamAttention, startTeamAttentionFeed, subscribeTeamAttention } from './teamAttentionStore'
 import type { CoordinatorPickerFilter } from '../../lib/coordinatorSignals'
 import { AttentionInboxPopover, attentionItemNeedsInput, type AttentionItem } from './AttentionInboxPopover'
 import { CrossSessionMessagingPopover } from './CrossSessionMessagingPopover'
@@ -8709,6 +8710,12 @@ export default function OpenTuiApp() {
   // Keep the sidebar's activity marker aligned with the fleet strip. Running
   // sessions are actively receiving transcript events; attention takes
   // precedence so a blocked turn is visible even while its runtime is live.
+  // Teams needing the user in any conversation, not just observed ones. The
+  // store commits only on a changed mark, so this subscription re-renders the
+  // root on a change and never on its 5s poll.
+  useEffect(() => startTeamAttentionFeed(), [])
+  const teamAttention = useSyncExternalStore(subscribeTeamAttention, getTeamAttention, getTeamAttention)
+
   const sidebarSessionActivity = useMemo(() => {
     const needsInputKeys = new Set(
       attentionItems.filter(attentionItemNeedsInput).map((item) => item.sessionKey),
@@ -13703,6 +13710,10 @@ export default function OpenTuiApp() {
       showProviderInSessionRows ? formatProviderLabel(entry.session.provider) : null,
       ago,
     ])
+    // Waiting outranks a result, as on the web row: a question blocks a
+    // teammate, a result only waits to be read.
+    const team = teamAttention.get(sessionKey(entry.session))
+    const teamMark = team ? (team.waiting > 0 ? ` !${team.waiting}` : ` ✓${team.finished}`) : ''
 
     return (
       <box
@@ -13742,13 +13753,14 @@ export default function OpenTuiApp() {
         <box paddingX={1} flexDirection="row" backgroundColor={selected ? theme.surface3 : theme.surface}>
           <text fg={sessionAccent} wrapMode="none">{selected ? '▎' : ' '}</text>
           <text fg={selected ? sessionAccent : theme.dim} wrapMode="none">
-            {fitText(metaLine, sidebarInnerWidth - 3 - (activityGlyph ? 2 : 0))}
+            {fitText(metaLine, sidebarInnerWidth - 3 - (activityGlyph ? 2 : 0) - teamMark.length)}
           </text>
+          {teamMark ? <text fg={team!.waiting > 0 ? theme.amber : theme.green} wrapMode="none">{teamMark}</text> : null}
           {activityGlyph ? <text fg={activityColor} wrapMode="none">{` ${activityGlyph}`}</text> : null}
         </box>
       </box>
     )
-  }, [theme, density, sidebarInnerWidth, renameSessionKey, renameDraft, commitRename, selectSidebarSession, showProviderInSessionRows, sidebarSessionActivity])
+  }, [theme, density, sidebarInnerWidth, renameSessionKey, renameDraft, commitRename, selectSidebarSession, showProviderInSessionRows, sidebarSessionActivity, teamAttention])
 
 
   // Per-row element cache. Moving the selection highlight only changes TWO rows

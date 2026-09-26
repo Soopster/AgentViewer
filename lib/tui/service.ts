@@ -172,6 +172,7 @@ import type { AgentProtocolEvent, PlaybookSummary, ProtocolRun, ProtocolRunSnaps
 import type { AgentProvider, ContextUsage, ProviderSelection, Session, SessionDiagnosticSection, SessionInfo, SessionMessage, SessionModelInfo } from '../types'
 import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../../tui/theme'
 import type { TuiTranscriptCard } from '../../tui/format'
+import { openCoordinationLedgerReadOnly, readInteractiveAttentionSync, type InteractiveAttentionSummary } from '../coordinatorLedger'
 import {
   listAddressableSessions,
   sendCrossSessionMessage,
@@ -490,6 +491,21 @@ export async function listTuiRunningSessions(): Promise<Awaited<ReturnType<typeo
  * (and when running in-process, where there is no daemon to mismatch).
  */
 /** What turning this team off would leave behind; see readInteractiveTeardown. */
+/**
+ * Every interactive conversation whose team has something for the user, for
+ * the session list's marks. Read from the ledger alone (lib/coordinatorLedger.ts)
+ * rather than through coordination(): this runs on a poll from boot, and loading
+ * the send path to answer it would cost a browse-only session its footprint.
+ */
+export async function readTuiInteractiveAttention(): Promise<InteractiveAttentionSummary[]> {
+  if (isRemoteAttached()) {
+    const { attention } = await remoteJson<{ attention: InteractiveAttentionSummary[] }>('/api/agent-protocol/attention')
+    return attention ?? []
+  }
+  const db = await openCoordinationLedgerReadOnly()
+  return db ? readInteractiveAttentionSync(db) : []
+}
+
 export async function readTuiInteractiveTeardown(sessionId: string, provider: AgentProvider): Promise<{
   worktrees: Array<{ agentName: string; branch: string; path: string; changedFiles: number }>
   runningTurns: string[]
