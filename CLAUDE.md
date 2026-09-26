@@ -223,6 +223,15 @@ Reads spawn a short-lived agent — listing is agent-scoped, so it cannot ride t
   it with `revealRuleText` before `permissionMcpServerLabel` puts it on either card. The same `source`
   labels the ⇧D MCP rows. Pinned in `claudeSdkSurfaceSmoke.ts` and `permissionMcpSmoke.tsx`.
 - **Read-only queries declare `permissionPrompts: 'none'`** (`lib/sdkControlQuery.ts`, `lib/claudeModels.ts`). They run no tools and install no `canUseTool`, so a prompt there could only park the control queue on a question with no surface to answer it; rules, hooks and the permission mode still decide, and anything that would prompt is denied with a message saying why.
+- **The model list is cached, and listing starts no MCP servers** (`lib/claudeModels.ts`). It belongs
+  to the install, yet it was read on every session opened; each read spawned a Claude CLI that booted
+  every configured MCP server, and the warm slot re-spawned one after every use — so an idle CLI tree
+  (~1.6GB here) was always alive and browsing Claude sessions spawned another per selection. The list
+  is now cached per instance (`CLAUDE_MODELS_CACHE_TTL_MS`, served stale while refreshing, empty
+  answers never cached), the listing CLI runs with `strictMcpConfig` and no servers (the list is
+  identical), and the warm slot is consumed once, never refilled. Plugin hooks still run on that
+  start — skipping them would mean skipping settings, which can change the list.
+  `npm run claude:models:live` counts processes; three mutations were verified to fail it.
 - **Spawning resumes, and resuming rewrites the transcript** — identical bytes, new mtime, which is what `listSessions` reports as `lastModified`. Since the pool is prewarmed when a session is *selected*, merely navigating to one would jump it to the top of every list ordered by last activity. Read-only control queries dodge this with `persistSession: false` (`lib/sdkControlQuery.ts`); a pool entry cannot, because the turn it is warmed for must persist. `lib/claudeResumeTouch.ts` instead records the touch during prewarm and subtracts it in the Claude adapter's `listSessions`/`readSessionInfo`. The override is pinned to the exact post-resume mtime *and* file size, so any real write drops it on the next read — it can only hide a timestamp we caused. Codex's `thread/resume` was checked and leaves `updatedAt` alone; no other provider needs this.
 
 #### Copilot reads must not activate the session (load-bearing)

@@ -10,6 +10,9 @@ import { claudeProcessSpawnOptions } from './claudeProcessSpawner'
 //
 // Exported so other call sites (e.g. `readClaudeSupportedModels`) can use
 // the same never-yielding prompt pattern without duplicating the helper.
+/** Options that keep a model-listing CLI from starting any MCP server. */
+export const CLAUDE_MODEL_LISTING_MCP_OPTIONS = { mcpServers: {}, strictMcpConfig: true } as const
+
 export function openPrompt(): AsyncIterable<SDKUserMessage> {
   return {
     [Symbol.asyncIterator]() {
@@ -62,9 +65,13 @@ export function createSessionControlQuery(sessionId: string, model?: string): Qu
 // the control-plane RPCs initializationResult() and supportedModels() — so it
 // can fully consume a warm slot.
 //
-// Flow: prime once at app boot via instrumentation.ts → first read consumes
-// the slot (skipping the ~1–3s spawn) → background re-warm refills it so the
-// next call is hot too.
+// Flow: prime once at app boot via instrumentation.ts → the first read
+// consumes the slot (skipping the ~1–3s spawn). It is NOT refilled: the model
+// list is cached (lib/claudeModels.ts), so a refill would be a whole CLI
+// subprocess sitting idle for a call that the cache answers. It used to be
+// refilled on every consumption, which — with the list uncached and read on
+// every session open — kept one idle CLI alive permanently and spawned another
+// per session opened.
 
 const READ_MODELS_WARM_OPTIONS = {
   // Same reasoning as createSessionControlQuery's: a model listing has no
@@ -77,6 +84,10 @@ const READ_MODELS_WARM_OPTIONS = {
   persistSession: false,
   maxTurns: 0,
   enableFileCheckpointing: true,
+  // A model listing uses no tools, so it starts none of the user's MCP
+  // servers: without this every listing CLI booted all of them (a ~1.6GB
+  // process tree here). The list is identical either way.
+  ...CLAUDE_MODEL_LISTING_MCP_OPTIONS,
 } as const
 
 let readModelsWarmSlot: Promise<WarmQuery | null> | null = null
@@ -101,16 +112,13 @@ export function primeReadModelsWarmQuery(): void {
 }
 
 /**
- * Consume the warm slot (returns null if not warmed or warmup failed) and
- * immediately re-warm in the background so the next call also benefits.
- * Callers must construct the Query via `warm.query(openPrompt())` and close
- * it themselves — the slot owner just hands off the pre-spawned subprocess.
+ * Consume the warm slot (null if never primed, already consumed, or warmup
+ * failed). Callers must construct the Query via `warm.query(openPrompt())` and
+ * close it themselves — the slot owner just hands off the pre-spawned
+ * subprocess.
  */
 export async function consumeReadModelsWarmQuery(): Promise<WarmQuery | null> {
   const slot = readModelsWarmSlot
-  // Eagerly re-warm so the *next* readClaudeSupportedModels call is hot too.
-  // Whether the current consumption succeeds or not, the next slot starts
-  // spinning up now.
-  readModelsWarmSlot = spawnReadModelsWarm()
+  readModelsWarmSlot = null
   return slot ? slot : null
 }

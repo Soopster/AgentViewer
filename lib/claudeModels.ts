@@ -11,7 +11,8 @@
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import { claudeProcessSpawnOptions } from './claudeProcessSpawner'
 import { PROVIDER_MODEL_DISCOVERY_TIMEOUT_MS } from './providerWarmup'
-import { consumeReadModelsWarmQuery, openPrompt } from './sdkControlQuery'
+import { currentProviderInstanceId } from './providerInstances'
+import { CLAUDE_MODEL_LISTING_MCP_OPTIONS, consumeReadModelsWarmQuery, openPrompt } from './sdkControlQuery'
 import type { SessionModelInfo } from './types'
 import { withTimeout } from './withTimeout'
 
@@ -61,6 +62,7 @@ export async function readClaudeSupportedModelsOnce(): Promise<SessionModelInfo[
           enableFileCheckpointing: true,
           // No approval surface on a model listing — see sdkControlQuery.ts.
           permissionPrompts: 'none',
+          ...CLAUDE_MODEL_LISTING_MCP_OPTIONS,
           ...claudeProcessSpawnOptions(),
         },
       })
@@ -91,7 +93,7 @@ export async function readClaudeSupportedModelsOnce(): Promise<SessionModelInfo[
 // and retry with backoff rather than caching/returning it as final.
 export const CLAUDE_MODELS_RETRY_DELAYS_MS = [300, 800, 1500, 3000]
 
-export async function readClaudeSupportedModels(): Promise<SessionModelInfo[]> {
+async function readClaudeSupportedModelsWithRetry(): Promise<SessionModelInfo[]> {
   let models = await readClaudeSupportedModelsOnce()
   for (const wait of CLAUDE_MODELS_RETRY_DELAYS_MS) {
     if (models.length > 0) break
@@ -99,4 +101,35 @@ export async function readClaudeSupportedModels(): Promise<SessionModelInfo[]> {
     models = await readClaudeSupportedModelsOnce()
   }
   return models
+}
+
+// The list belongs to the install, not to a session, yet it was re-read on
+// every session opened — a fresh CLI subprocess each time, so browsing Claude
+// sessions spawned one per selection. It is cached per provider instance and
+// served stale while a refresh runs; an empty answer is never cached (see the
+// retry note above).
+export const CLAUDE_MODELS_CACHE_TTL_MS = 10 * 60_000
+const claudeModelsCache = new Map<string, { models: SessionModelInfo[]; at: number }>()
+const claudeModelsInflight = new Map<string, Promise<SessionModelInfo[]>>()
+
+function refreshClaudeSupportedModels(key: string): Promise<SessionModelInfo[]> {
+  const inflight = claudeModelsInflight.get(key)
+  if (inflight) return inflight
+  const read = readClaudeSupportedModelsWithRetry().then((models) => {
+    if (models.length > 0) claudeModelsCache.set(key, { models, at: Date.now() })
+    return models
+  })
+  claudeModelsInflight.set(key, read)
+  read.finally(() => claudeModelsInflight.delete(key)).catch(() => {})
+  return read
+}
+
+export async function readClaudeSupportedModels(): Promise<SessionModelInfo[]> {
+  const key = currentProviderInstanceId('claude')
+  const cached = claudeModelsCache.get(key)
+  if (!cached) return refreshClaudeSupportedModels(key)
+  if (Date.now() - cached.at >= CLAUDE_MODELS_CACHE_TTL_MS) {
+    refreshClaudeSupportedModels(key).catch(() => {})
+  }
+  return cached.models
 }
