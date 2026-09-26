@@ -25,6 +25,8 @@ mock.module('../../lib/tui/service', () => ({
     calls.push({ sessionId, request }); return send.promise
   },
   subscribeTuiProtocolRunChanges: (listener: () => void) => { changeListeners.add(listener); return () => { changeListeners.delete(listener) } },
+  // The store imports this by name, so a mock without it fails to link at all.
+  readTuiInteractiveTeardown: async () => ({ worktrees: [], runningTurns: [] }),
 }))
 const originalCwd = process.cwd()
 const fixture = mkdtempSync(path.join(tmpdir(), 'coord-store-'))
