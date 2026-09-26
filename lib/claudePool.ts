@@ -105,7 +105,7 @@ import {
   broadcastClaudeTurnStart,
 } from './claudeHarness'
 import { noteClaudeCommandsChanged } from './claudeCommandsStore'
-import { createClaudeViewerQueryExtensions } from './claudeViewerIntegration'
+import { createClaudeViewerQueryExtensions, reportClaudePluginLoadFailures } from './claudeViewerIntegration'
 import {
   claudeAgentPolicyKey,
   claudeAgentPolicyOptions,
@@ -425,6 +425,8 @@ type InternalEntry = {
   sessionId: string
   poolKey: string
   query: Query
+  /** Plugin warnings already shown for this SDK process, including its cold first turn. */
+  reportedPluginFailures: Set<string>
   state: EntryState
   /** Buffer of messages received while no subscriber is attached. Capped. */
   buffer: SDKMessage[]
@@ -645,6 +647,7 @@ class ClaudePool {
       sessionId: opts.sessionId,
       poolKey: `${currentProviderInstanceId('claude')}:${opts.sessionId}`,
       query: q,
+      reportedPluginFailures: new Set<string>(),
       state: {
         cwd: opts.cwd,
         model: opts.model,
@@ -731,6 +734,11 @@ class ClaudePool {
         // ordering honest even when no run() subscriber is attached (e.g. a
         // steered follow-up turn the CLI started after the stream detached).
         entry.lastActivityAt = Date.now()
+        // An init frame can repeat on every turn. Surface each distinct load
+        // failure once for this process, including an init received before a
+        // run() subscriber attaches. Keep the original frame in the stream.
+        try { reportClaudePluginLoadFailures(entry.sessionId, message, entry.reportedPluginFailures) }
+        catch { /* attention bookkeeping must not stop the query pump */ }
         // Fan messages out to harness observers (second tabs, a page reloaded
         // mid-turn) so the events SSE can refetch the canonical window in real
         // time — independent of the single turn subscriber. Skip `stream_event`
@@ -1053,6 +1061,7 @@ class ClaudePool {
      * correct per-turn bridge when future pool turns run.
      */
     bridgeBox?: ClaudeBridgeBox
+    reportedPluginFailures?: Set<string>
   }): void {
     const { sessionId, query: q, pushUserMessage, endInput, options } = args
     const poolKey = `${currentProviderInstanceId('claude')}:${sessionId}`
@@ -1062,6 +1071,7 @@ class ClaudePool {
       sessionId,
       poolKey,
       query: q,
+      reportedPluginFailures: args.reportedPluginFailures ?? new Set<string>(),
       state: {
         cwd: options.cwd,
         model: options.model,
@@ -1454,9 +1464,12 @@ export function adoptClaudeSession(args: {
   endInput: () => void
   options: ClaudePoolAcquireOptions
   bridgeBox?: ClaudeBridgeBox
+  reportedPluginFailures?: Set<string>
 }): void {
   return getPool().adopt(args)
 }
+
+export { reportClaudePluginLoadFailures } from './claudeViewerIntegration'
 
 /**
  * Build the wire-format SDKUserMessage from either a plain text prompt or a

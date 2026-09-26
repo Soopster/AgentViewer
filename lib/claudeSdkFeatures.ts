@@ -1,5 +1,30 @@
 import type { SystemMessagePayload, ToolResultBlock } from './types'
 
+export type ClaudePluginLoadFailure = {
+  plugin: string
+  type: string
+  message: string
+  path?: string
+}
+
+/** Extract init-time plugin failures without treating an omitted field as success. */
+export function claudePluginLoadFailures(message: unknown): ClaudePluginLoadFailure[] {
+  if (!isRecord(message) || message.type !== 'system' || message.subtype !== 'init') return []
+  if (!Array.isArray(message.plugin_errors)) return []
+  return message.plugin_errors.flatMap((failure) => {
+    if (!isRecord(failure)
+      || typeof failure.plugin !== 'string'
+      || typeof failure.type !== 'string'
+      || typeof failure.message !== 'string') return []
+    return [{
+      plugin: failure.plugin,
+      type: failure.type,
+      message: failure.message,
+      ...(typeof failure.path === 'string' ? { path: failure.path } : {}),
+    }]
+  })
+}
+
 export type ClaudeReadFileKind = 'text' | 'image' | 'notebook' | 'pdf' | 'parts' | 'file_unchanged' | 'unknown'
 
 export type ClaudeReadFileSummary = {

@@ -36,13 +36,15 @@ function normalizeBaseUrl(value: string | undefined): string | null {
 
 /**
  * OpenCode 2.x prints a server password and rejects unauthenticated requests
- * (HTTP Basic, user `opencode`). 1.x has no password. A managed server captures
- * its own; an external one is named by `OPENCODE_SERVER_PASSWORD`.
+ * (HTTP Basic, user `opencode` by default). 1.x can also enable Basic auth.
+ * A managed server captures its own password; an external one is named by
+ * `OPENCODE_SERVER_PASSWORD` and may override the username.
  */
 function openCodeAuthHeaders(password?: string): Record<string, string> | undefined {
   const value = password ?? process.env.OPENCODE_SERVER_PASSWORD?.trim()
   if (!value) return undefined
-  return { Authorization: `Basic ${Buffer.from(`opencode:${value}`).toString('base64')}` }
+  const username = process.env.OPENCODE_SERVER_USERNAME?.trim() || 'opencode'
+  return { Authorization: `Basic ${Buffer.from(`${username}:${value}`).toString('base64')}` }
 }
 
 function openCodeClientFor(baseUrl: string, password?: string): OpencodeClient {

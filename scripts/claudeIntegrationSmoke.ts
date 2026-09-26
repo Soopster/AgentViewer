@@ -10,7 +10,32 @@ import {
 } from '../lib/claudeDynamicMcp'
 import { deleteClaudeHookEvents, listClaudeHookEvents } from '../lib/claudeHookEvents'
 import { claudeResultHasQueuedTurns, sequenceClaudePoolConfiguration } from '../lib/claudePool'
-import { createClaudeViewerQueryExtensions } from '../lib/claudeViewerIntegration'
+import { createClaudeViewerQueryExtensions, reportClaudePluginLoadFailures } from '../lib/claudeViewerIntegration'
+import { claudePluginLoadFailures } from '../lib/claudeSdkFeatures'
+import { dismissViewerAttention, listViewerAttention } from '../lib/viewerAttention'
+
+assert.deepEqual(claudePluginLoadFailures({ type: 'system', subtype: 'init' }), [])
+assert.deepEqual(claudePluginLoadFailures({
+  type: 'system', subtype: 'init', plugin_errors: [
+    { plugin: 'broken@marketplace', type: 'dependency-unsatisfied', message: 'Dependency missing', path: '/plugins/broken' },
+    { plugin: 42, type: 'generic-error', message: 'Malformed row' },
+  ],
+}), [{ plugin: 'broken@marketplace', type: 'dependency-unsatisfied', message: 'Dependency missing', path: '/plugins/broken' }])
+assert.deepEqual(claudePluginLoadFailures({ type: 'system', subtype: 'informational', plugin_errors: [{ plugin: 'x', type: 'error', message: 'ignore' }] }), [])
+
+const pluginFailureSession = `plugin-failure-smoke-${Date.now()}`
+const pluginFailureFrame = {
+  type: 'system', subtype: 'init', plugin_errors: [
+    { plugin: 'broken@marketplace', type: 'dependency-unsatisfied', message: 'Dependency missing', path: '/plugins/broken' },
+  ],
+}
+const reportedPluginFailures = new Set<string>()
+assert.equal(reportClaudePluginLoadFailures(pluginFailureSession, pluginFailureFrame, reportedPluginFailures), 1)
+assert.equal(reportClaudePluginLoadFailures(pluginFailureSession, pluginFailureFrame, reportedPluginFailures), 0)
+const pluginAttention = listViewerAttention().filter((note) => note.sessionId === pluginFailureSession)
+assert.equal(pluginAttention.length, 1)
+assert.match(pluginAttention[0]!.detail ?? '', /Dependency missing/)
+for (const note of pluginAttention) dismissViewerAttention(note.id)
 
 assert.equal(claudeResultHasQueuedTurns({ type: 'result', queued_turn_count: 2 } as never), true)
 assert.equal(claudeResultHasQueuedTurns({ type: 'result', queued_turn_count: 0 } as never), false)

@@ -13,10 +13,33 @@ import type { AgentProvider } from './types'
 import { postViewerAttention } from './viewerAttention'
 import { appendClaudeHookEvent } from './claudeHookEvents'
 import { drainCooperativeInbox } from './agentCoordination'
+import { claudePluginLoadFailures } from './claudeSdkFeatures'
 
 export type ClaudeViewerContext = {
   getSessionId(): string
   getCwd(): string | undefined
+}
+
+/** Report each distinct init-time plugin failure once per Claude process. */
+export function reportClaudePluginLoadFailures(
+  sessionId: string,
+  message: unknown,
+  reported: Set<string>,
+): number {
+  let count = 0
+  for (const failure of claudePluginLoadFailures(message)) {
+    const key = JSON.stringify(failure)
+    if (reported.has(key)) continue
+    postViewerAttention({
+      sessionId,
+      provider: 'claude',
+      title: `Claude plugin failed to load: ${failure.plugin}`,
+      detail: `${failure.message}${failure.path ? `\nPath: ${failure.path}` : ''}`,
+    })
+    reported.add(key)
+    count++
+  }
+  return count
 }
 
 function textResult(value: unknown) {

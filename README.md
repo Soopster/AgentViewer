@@ -333,6 +333,7 @@ OPENCODE_START_TIMEOUT_MS=15000
 ```
 
 If managed startup fails because provider or model resolution blocks startup, run `opencode serve` yourself and set `OPENCODE_BASE_URL`.
+For a password-protected server, set `OPENCODE_SERVER_PASSWORD`. Set `OPENCODE_SERVER_USERNAME` when its HTTP Basic username differs from the default `opencode`.
 
 ### GitHub Copilot
 
@@ -346,10 +347,11 @@ COPILOT_CLI_PATH=/path/to/copilot
 ```
 
 If the CLI is not available, install `@github/copilot` globally or point `COPILOT_CLI_PATH` at the binary. Copilot title and tag overrides are stored locally because the viewer does not mutate Copilot session metadata on disk.
+Set `COPILOT_AUTO_TIER` to `efficiency`, `balance`, `intelligence`, or `fast` to opt into Copilot's Auto model routing preference for created and resumed sessions. The CLI runtime must support Auto tier routing; an unsupported runtime reports its own error.
 
 ### Pi
 
-Pi uses `@mariozechner/pi-coding-agent` and its session manager.
+Pi uses `@earendil-works/pi-coding-agent` and its session manager.
 
 Use this when Pi sessions live outside the default location:
 

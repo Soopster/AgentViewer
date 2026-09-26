@@ -3012,6 +3012,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
 
   const encoder = new TextEncoder()
   const abortController = new AbortController()
+  const reportedPluginFailures = new Set<string>()
 
   // Snapshot of the options we constructed the Query with — passed to the
   // pool on adopt so future acquires can compatibility-check against it.
@@ -3251,6 +3252,13 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           if (step.done) break
           const msg = step.value
           const messageSessionId = typeof msg.session_id === 'string' && msg.session_id ? msg.session_id : undefined
+          try {
+            claudePoolModule().reportClaudePluginLoadFailures(
+              messageSessionId ?? realizedSessionId ?? sessionId,
+              msg,
+              reportedPluginFailures,
+            )
+          } catch { /* attention bookkeeping must not stop the cold turn */ }
           if (!emittedSessionEvent && messageSessionId) {
             emittedSessionEvent = true
             realizedSessionId = messageSessionId
@@ -3326,6 +3334,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
             endInput,
             options: { ...adoptOptions, sessionId: realizedSessionId },
             bridgeBox,
+            reportedPluginFailures,
           })
           adopted = true
         }

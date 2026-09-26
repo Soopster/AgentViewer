@@ -10,6 +10,7 @@ import {
   type TelemetryConfig,
   type CustomAgentConfig,
   type ElicitationHandler,
+  type AutoTier,
 } from '@github/copilot-sdk'
 import { getCoordinatorCopilotTools } from './agentCoordinationSdkTools'
 import { selectIdleProviderPoolEvictions } from './providerPoolPolicy'
@@ -69,6 +70,12 @@ function readCopilotTelemetry(): TelemetryConfig | undefined {
   }
 }
 
+function readCopilotAutoTier(): AutoTier | undefined {
+  const tier = normalizedEnv(process.env.COPILOT_AUTO_TIER)?.toLowerCase()
+  if (tier === 'efficiency' || tier === 'balance' || tier === 'intelligence' || tier === 'fast') return tier
+  return undefined
+}
+
 function createClientOptions(): CopilotClientOptions {
   const cliUrl = normalizedEnv(process.env.COPILOT_CLI_URL)
   const cliPath = normalizedEnv(process.env.COPILOT_CLI_PATH)
@@ -105,6 +112,15 @@ export function copilotSessionConfigOverrides(sessionId?: string): Partial<Sessi
     // it on resume keeps eligible sessions tracking without breaking older
     // sessions whose pre-upgrade turns have no recoverable baseline.
     enableFileChangeTracking: true,
+  }
+
+  // SDK 1.0.14 adds the latency-focused `fast` tier. The runtime accepts a
+  // tier only with the `auto` model, so the explicit env opt-in selects both
+  // on create and resume. Existing sessions keep their model when unset.
+  const autoTier = readCopilotAutoTier()
+  if (autoTier) {
+    overrides.model = 'auto'
+    overrides.capi = { autoTier }
   }
 
   // Coordinator sessions get their coord_* tools registered by session id
@@ -157,6 +173,8 @@ export function copilotIntegrationDiagnostics(sessionId?: string): string[] {
   if (isEnvFlagEnabled(process.env.COPILOT_AUTO_APPROVE_PLAN)) items.push('Plan exit auto-approval enabled')
   if (isEnvFlagEnabled(process.env.COPILOT_AUTO_MODE_SWITCH)) items.push('Rate-limit auto-mode switching enabled')
   if (normalizedEnv(process.env.COPILOT_ADDITIONAL_DIRECTORIES)) items.push('Additional directories granted')
+  const autoTier = readCopilotAutoTier()
+  if (autoTier) items.push(`Auto model routing tier: ${autoTier}`)
   const stopReason = sessionId ? copilotLastStopReason.get(sessionId) : undefined
   if (stopReason) items.push(`Last agent stop: ${stopReason}`)
   return items
