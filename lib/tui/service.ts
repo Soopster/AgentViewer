@@ -172,7 +172,7 @@ import type { AgentProtocolEvent, PlaybookSummary, ProtocolRun, ProtocolRunSnaps
 import type { AgentProvider, ContextUsage, ProviderSelection, Session, SessionDiagnosticSection, SessionInfo, SessionMessage, SessionModelInfo } from '../types'
 import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../../tui/theme'
 import type { TuiTranscriptCard } from '../../tui/format'
-import { openCoordinationLedgerReadOnly, readInteractiveAttentionSync, type InteractiveAttentionSummary } from '../coordinatorLedger'
+import { openCoordinationLedgerReadOnly, readInteractiveAttentionReadOnly, type InteractiveAttentionSummary } from '../coordinatorLedger'
 import {
   listAddressableSessions,
   sendCrossSessionMessage,
@@ -503,7 +503,7 @@ export async function readTuiInteractiveAttention(): Promise<InteractiveAttentio
     return attention ?? []
   }
   const db = await openCoordinationLedgerReadOnly()
-  return db ? readInteractiveAttentionSync(db) : []
+  return db ? readInteractiveAttentionReadOnly(db) : []
 }
 
 export async function readTuiInteractiveTeardown(sessionId: string, provider: AgentProvider): Promise<{

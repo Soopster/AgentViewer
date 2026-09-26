@@ -53,6 +53,15 @@ assert.deepEqual(byKey(light), byKey(full), 'the ledger-only summary must agree 
 assert.equal(byKey(light)['codex:asks']?.waiting, 1, 'a teammate asking the lead is waiting on the user')
 assert.equal(byKey(light)['claude:done']?.finished, 1, 'a finished task is a result to review')
 
+// The read-only poll answers from its last read until another connection
+// commits — the Coordinator writes through its own, which is what moves it.
+assert.equal(await readTuiInteractiveAttention(), light, 'an unchanged ledger is answered without re-reading it')
+const second = await coord.createExternalProtocolTask(doneLead, { assignTo: worker.agentId, title: 'Follow-up', detail: 'Report' })
+await coord.completeExternalProtocolTask(worker, { taskId: second.task!.id, summary: 'Follow-up done' })
+const after = byKey(await readTuiInteractiveAttention())
+assert.equal(after['claude:done']?.finished, 2, 'a commit from another connection invalidates the cached read')
+assert.deepEqual(after, byKey(await coord.readInteractiveAttention()))
+
 // Reviewing clears a result mark; a question stays until it is answered.
 const { teamAttentionMark } = await import('../lib/coordinatorAttention')
 const done = light.find(entry => entry.sessionId === 'done')!

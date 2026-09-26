@@ -236,6 +236,33 @@ export function readInteractiveAttentionSync(db: LedgerDatabase, limit = 25): In
 }
 
 let readOnlyLedger: LedgerDatabase | null = null
+let readOnlyAttention: { version: number; limit: number; summary: InteractiveAttentionSummary[] } | null = null
+
+/**
+ * readInteractiveAttentionSync for the read-only handle, answered from the
+ * last read while nothing has committed since. The TUI polls this every few
+ * seconds from boot, on the render thread, and a read is up to three queries
+ * per team plus a row mapping of every windowed task and message — for a
+ * ledger that is idle almost all of the time. `PRAGMA data_version` changes
+ * only when ANOTHER connection commits, which is exactly right here (this
+ * handle never writes) and exactly wrong on agentCoordination's own writable
+ * handle, so the gate lives on the read-only path alone.
+ */
+export function readInteractiveAttentionReadOnly(db: LedgerDatabase, limit = 25): InteractiveAttentionSummary[] {
+  let version: number | null = null
+  try {
+    const row = db.prepare('PRAGMA data_version').get() as { data_version?: number } | undefined
+    version = typeof row?.data_version === 'number' ? row.data_version : null
+  } catch {
+    version = null
+  }
+  if (version !== null && readOnlyAttention?.version === version && readOnlyAttention.limit === limit) {
+    return readOnlyAttention.summary
+  }
+  const summary = readInteractiveAttentionSync(db, limit)
+  readOnlyAttention = version === null ? null : { version, limit, summary }
+  return summary
+}
 
 /**
  * A read-only handle on the ledger, or null when there is no ledger yet (the
