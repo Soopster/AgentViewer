@@ -246,7 +246,7 @@ async function readTuiState(): Promise<TuiState> {
  * nothing can interleave inside it — written by temp-and-rename, and a file that
  * cannot be parsed is backed up before it is replaced (herdr #4125).
  */
-function mergeTuiStateSync(update: Partial<TuiState>): void {
+function mergeTuiStateSync(update: Partial<TuiState> | ((current: TuiState) => Partial<TuiState>)): void {
   let current: TuiState = {}
   let unreadable = false
   try {
@@ -262,7 +262,8 @@ function mergeTuiStateSync(update: Partial<TuiState>): void {
   }
   const temporary = `${TUI_STATE_FILE}.${randomUUID()}.tmp`
   try {
-    writeFileSync(temporary, JSON.stringify({ ...current, ...update }, null, 2), 'utf8')
+    const changes = typeof update === 'function' ? update(current) : update
+    writeFileSync(temporary, JSON.stringify({ ...current, ...changes }, null, 2), 'utf8')
     renameSync(temporary, TUI_STATE_FILE)
   } catch (error) {
     try { unlinkSync(temporary) } catch { /* nothing was written */ }
@@ -463,19 +464,45 @@ export async function getConfiguredTuiSessionReaderState(sessionKey: string): Pr
   return normalizeSessionReaderState(record[sessionKey])
 }
 
+/** Sessions whose reader position is remembered, most recently saved last. */
+export const MAX_TUI_SESSION_READER_STATES = 200
+
+/** Following the tail with nothing folded restores exactly like no entry. */
+function isDefaultSessionReaderState(state: TuiSessionReaderState): boolean {
+  return state.followTail
+    && !state.cursorKey
+    && !state.topKey
+    && state.expandedKeys.length === 0
+    && state.collapsedKeys.length === 0
+}
+
+/**
+ * Saved on every session visit and every pause in cursor movement, and every
+ * preference shares this file — so it is kept small rather than trusted to be.
+ * It stored an entry for every session ever opened, almost all of them the
+ * default state: 985 entries and 191KB, parsed twice and re-serialized
+ * synchronously on the render thread per save. A default state is now dropped
+ * (a missing entry restores identically), the rest are capped oldest-first, and
+ * the merge happens inside the synchronous read-modify-write — reading first
+ * and merging later let a save for one session erase a concurrent other's.
+ */
 export async function setConfiguredTuiSessionReaderState(
   sessionKey: string,
   sessionReaderState: TuiSessionReaderState,
 ): Promise<void> {
-  const parsed = await readTuiState()
-  const current = parsed.sessionReaderState && typeof parsed.sessionReaderState === 'object'
-    ? parsed.sessionReaderState as Record<string, unknown>
-    : {}
-
-  await writeTuiState({
-    sessionReaderState: {
-      ...current,
-      [sessionKey]: sessionReaderState,
-    },
+  mergeTuiStateSync((parsed) => {
+    const current = parsed.sessionReaderState && typeof parsed.sessionReaderState === 'object'
+      ? parsed.sessionReaderState as Record<string, unknown>
+      : {}
+    const next: Record<string, TuiSessionReaderState> = {}
+    for (const [key, value] of Object.entries(current)) {
+      if (key === sessionKey) continue
+      const state = normalizeSessionReaderState(value)
+      if (state && !isDefaultSessionReaderState(state)) next[key] = state
+    }
+    if (!isDefaultSessionReaderState(sessionReaderState)) next[sessionKey] = sessionReaderState
+    const keys = Object.keys(next)
+    for (const key of keys.slice(0, Math.max(keys.length - MAX_TUI_SESSION_READER_STATES, 0))) delete next[key]
+    return { sessionReaderState: next }
   })
 }

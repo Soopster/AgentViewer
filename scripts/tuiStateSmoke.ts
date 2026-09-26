@@ -36,7 +36,28 @@ try {
   assert.equal(readFileSync(path.join(dir, backups[0]), 'utf8'), '{"theme":"paper","tabsEnabled":fal')
   JSON.parse(readFileSync(path.join(dir, 'tui.json'), 'utf8'))
 
-  console.log('TUI state: concurrent toggles keep every change, sync writer merges, atomic writes, unreadable file backed up passed')
+  // Reader positions are saved on every session visit, so the file must not
+  // grow with every session ever opened.
+  const paused = (key: string) => ({ followTail: false, cursorKey: key, topKey: null, expandedKeys: [], collapsedKeys: [] })
+  const tail = { followTail: true, cursorKey: null, topKey: null, expandedKeys: [], collapsedKeys: [] }
+  await Promise.all([
+    tui.setConfiguredTuiSessionReaderState('codex:a', paused('card-a')),
+    tui.setConfiguredTuiSessionReaderState('codex:b', paused('card-b')),
+  ])
+  assert.equal((await tui.getConfiguredTuiSessionReaderState('codex:a'))?.cursorKey, 'card-a', 'concurrent saves for two sessions keep both')
+  assert.equal((await tui.getConfiguredTuiSessionReaderState('codex:b'))?.cursorKey, 'card-b')
+  await tui.setConfiguredTuiSessionReaderState('codex:a', tail)
+  assert.equal(await tui.getConfiguredTuiSessionReaderState('codex:a'), null, 'a default state is dropped rather than stored')
+  const stored = () => Object.keys(JSON.parse(readFileSync(path.join(dir, 'tui.json'), 'utf8')).sessionReaderState ?? {})
+  for (let i = 0; i < tui.MAX_TUI_SESSION_READER_STATES + 5; i += 1) {
+    await tui.setConfiguredTuiSessionReaderState(`claude:${i}`, paused(`card-${i}`))
+  }
+  assert.equal(stored().length, tui.MAX_TUI_SESSION_READER_STATES, 'reader states are capped')
+  assert.equal(await tui.getConfiguredTuiSessionReaderState('codex:b'), null, 'the oldest is evicted first')
+  assert.equal((await tui.getConfiguredTuiSessionReaderState(`claude:${tui.MAX_TUI_SESSION_READER_STATES + 4}`))?.cursorKey, `card-${tui.MAX_TUI_SESSION_READER_STATES + 4}`)
+  assert.equal(await tui.getConfiguredTuiDensity(), 'dense', 'reader-state saves keep other preferences')
+
+  console.log('TUI state: concurrent toggles keep every change, sync writer merges, atomic writes, unreadable file backed up, reader states pruned and capped passed')
 } finally {
   process.chdir(originalCwd)
   rmSync(root, { recursive: true, force: true })
