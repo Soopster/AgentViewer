@@ -8,6 +8,8 @@
 // lifetime, so re-paying that RPC on every send would add a serial round-trip
 // ahead of turn/start and show up directly as first-token latency.
 
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
 import { getCodexClient } from './codexClient'
 import type { CodexResponseFor } from './codexProtocol'
 import { getProviderCapabilities } from './provider'
@@ -105,7 +107,7 @@ declare global {
   // eslint-disable-next-line no-var
   var __agentViewerCodexResumedThreads: Map<string, string | null> | undefined
   // eslint-disable-next-line no-var
-  var __agentViewerCodexThreadModels: Map<string, string | null> | undefined
+  var __agentViewerCodexThreadModels: Map<string, LearnedCodexModel> | undefined
   // eslint-disable-next-line no-var
   var __agentViewerCodexIdlePrewarmed: Map<string, IdlePrewarm> | undefined
   // eslint-disable-next-line no-var
@@ -123,10 +125,90 @@ const codexResumeInvalidators = globalThis.__agentViewerCodexResumeInvalidators
   ?? (globalThis.__agentViewerCodexResumeInvalidators = new Set<string>())
 // What each thread's model was the last time anything resumed it. Kept apart
 // from the live set above because knowing a model is not the same as holding
-// the thread loaded — see readCodexThreadModel.
+// the thread loaded — see readCodexThreadModel. `activityAt` is the thread's
+// last-turn timestamp when the model was learned (codexThreadActivityAt): a
+// new turn, possibly on another model and from another client, moves it, and a
+// model learned before that is not trusted. Persisted, so a thread already seen
+// needs no resume to show its model after a restart either.
+type LearnedCodexModel = { model: string | null; activityAt?: number }
 const codexThreadModels = globalThis.__agentViewerCodexThreadModels
-  ?? (globalThis.__agentViewerCodexThreadModels = new Map<string, string | null>())
-const CODEX_THREAD_MODELS_LIMIT = 512
+  ?? (globalThis.__agentViewerCodexThreadModels = new Map<string, LearnedCodexModel>())
+const CODEX_THREAD_MODELS_LIMIT = 2000
+const CODEX_THREAD_MODELS_FILE = path.join(process.cwd(), '.agent-viewer-data', 'codex-thread-models.json')
+const CODEX_THREAD_MODELS_SAVE_DELAY_MS = 500
+let codexThreadModelsLoaded = false
+let codexThreadModelsSaveTimer: ReturnType<typeof setTimeout> | null = null
+
+function parseLearnedModels(text: string): Record<string, LearnedCodexModel> {
+  try {
+    const parsed = JSON.parse(text) as { entries?: Record<string, LearnedCodexModel> }
+    return parsed && typeof parsed.entries === 'object' && parsed.entries ? parsed.entries : {}
+  } catch {
+    return {}
+  }
+}
+
+function isLearnedModel(value: unknown): value is LearnedCodexModel {
+  if (!value || typeof value !== 'object') return false
+  const entry = value as LearnedCodexModel
+  return (entry.model === null || typeof entry.model === 'string')
+    && (entry.activityAt === undefined || typeof entry.activityAt === 'number')
+}
+
+function loadCodexThreadModels(): void {
+  if (codexThreadModelsLoaded) return
+  codexThreadModelsLoaded = true
+  let text = ''
+  try { text = readFileSync(CODEX_THREAD_MODELS_FILE, 'utf8') } catch { return }
+  for (const [key, entry] of Object.entries(parseLearnedModels(text))) {
+    // In-memory knowledge is newer than anything on disk.
+    if (!codexThreadModels.has(key) && isLearnedModel(entry)) codexThreadModels.set(key, entry)
+  }
+}
+
+function saveCodexThreadModelsSoon(): void {
+  if (codexThreadModelsSaveTimer) return
+  codexThreadModelsSaveTimer = setTimeout(() => {
+    codexThreadModelsSaveTimer = null
+    try {
+      // Merge rather than overwrite: another process (the web server, a
+      // second TUI) learns models into the same file.
+      let onDisk: Record<string, LearnedCodexModel> = {}
+      try { onDisk = parseLearnedModels(readFileSync(CODEX_THREAD_MODELS_FILE, 'utf8')) } catch { /* first save */ }
+      const merged = new Map<string, LearnedCodexModel>()
+      for (const [key, entry] of Object.entries(onDisk)) if (isLearnedModel(entry)) merged.set(key, entry)
+      for (const [key, entry] of codexThreadModels) { merged.delete(key); merged.set(key, entry) }
+      const entries = [...merged].slice(-CODEX_THREAD_MODELS_LIMIT)
+      mkdirSync(path.dirname(CODEX_THREAD_MODELS_FILE), { recursive: true })
+      const temporary = `${CODEX_THREAD_MODELS_FILE}.${process.pid}.${Date.now()}.tmp`
+      writeFileSync(temporary, JSON.stringify({ version: 1, entries: Object.fromEntries(entries) }))
+      renameSync(temporary, CODEX_THREAD_MODELS_FILE)
+    } catch {
+      // A cache that fails to persist costs a resume next launch, nothing more.
+    }
+  }, CODEX_THREAD_MODELS_SAVE_DELAY_MS)
+  const timer = codexThreadModelsSaveTimer as { unref?: () => void }
+  timer.unref?.()
+}
+
+function learnedCodexModel(key: string, activityAt?: number): LearnedCodexModel | undefined {
+  loadCodexThreadModels()
+  const entry = codexThreadModels.get(key)
+  if (!entry) return undefined
+  if (activityAt !== undefined && entry.activityAt !== activityAt) return undefined
+  return entry
+}
+
+/**
+ * When a thread last started a turn — the freshness key for a learned model.
+ * Not `updatedAt`: codex-cli 0.157's thread/resume bumps that, so a model read
+ * (which has to resume) would invalidate its own answer on every view.
+ * `recencyAt` is Codex's own ordering timestamp, equal to the last turn's
+ * start, and a resume leaves it alone.
+ */
+export function codexThreadActivityAt(thread: Pick<CodexThread, 'recencyAt' | 'updatedAt'>): number {
+  return thread.recencyAt ?? thread.updatedAt
+}
 const codexModelReadInflight = new Map<string, Promise<{ model: string | null }>>()
 // Threads held live by prewarm alone, oldest first. A turn claims its thread
 // out of this set; see prewarmCodexThread.
@@ -138,13 +220,15 @@ const CODEX_IDLE_PREWARM_LIMIT = 1
 const codexClaimedThreads = globalThis.__agentViewerCodexClaimedThreads
   ?? (globalThis.__agentViewerCodexClaimedThreads = new Set<string>())
 
-function rememberCodexThreadModel(key: string, model: string | null): void {
+function rememberCodexThreadModel(key: string, model: string | null, activityAt?: number): void {
+  loadCodexThreadModels()
   codexThreadModels.delete(key)
-  codexThreadModels.set(key, model)
+  codexThreadModels.set(key, activityAt === undefined ? { model } : { model, activityAt })
   if (codexThreadModels.size > CODEX_THREAD_MODELS_LIMIT) {
     const oldest = codexThreadModels.keys().next().value
     if (oldest !== undefined) codexThreadModels.delete(oldest)
   }
+  saveCodexThreadModelsSoon()
 }
 
 export function codexThreadKey(sessionId: string): string {
@@ -215,11 +299,12 @@ export function forgetCodexThreadResumed(sessionId: string): void {
   codexClaimedThreads.delete(key)
 }
 
-/** The model a thread last resumed on, if this process has learned it —
- *  without resuming. A cold read reports null rather than a guess. */
-export function knownCodexThreadModel(sessionId: string): string | null {
+/** The model a thread last resumed on, if it has been learned and the thread
+ *  has run no turn since (`activityAt`) — without resuming. A cold read reports
+ *  null rather than a guess. */
+export function knownCodexThreadModel(sessionId: string, activityAt?: number): string | null {
   const key = codexThreadKey(sessionId)
-  return codexResumedThreads.get(key) ?? codexThreadModels.get(key) ?? null
+  return codexResumedThreads.get(key) ?? learnedCodexModel(key, activityAt)?.model ?? null
 }
 
 /**
@@ -234,18 +319,18 @@ export function knownCodexThreadModel(sessionId: string): string | null {
  * remembers it, and unsubscribes unless a turn or prewarm holds the thread;
  * the app-server then unloads it (about a minute later on codex-cli 0.157).
  */
-export async function readCodexThreadModel(sessionId: string): Promise<{ model: string | null }> {
+export async function readCodexThreadModel(sessionId: string, activityAt?: number): Promise<{ model: string | null }> {
   const key = codexThreadKey(sessionId)
   const live = codexResumedThreads.get(key)
   if (live !== undefined) return { model: live }
-  const known = codexThreadModels.get(key)
-  if (known !== undefined) return { model: known }
+  const known = learnedCodexModel(key, activityAt)
+  if (known) return { model: known.model }
   const inflight = codexResumeInflight.get(key) ?? codexModelReadInflight.get(key)
   if (inflight) return inflight
   const client = getCodexClient()
   const read = resumeCodexThread(sessionId).then((result) => {
     const model = typeof result?.model === 'string' ? result.model : null
-    rememberCodexThreadModel(key, model)
+    rememberCodexThreadModel(key, model, activityAt)
     // A turn or prewarm that resumed meanwhile owns the subscription now.
     if (!codexResumedThreads.has(key) && !codexResumeInflight.has(key)) {
       client.request('thread/unsubscribe', { threadId: sessionId }).catch(() => {})

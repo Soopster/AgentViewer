@@ -167,6 +167,15 @@ from *holding* a thread:
   (`readTuiSessionMetadataAsync`), where it shares the prewarm's resume.
 - **Resume with `excludeTurns: true`.** Callers read only the model; the full response carried the
   transcript — 230KB and ~224ms per resume against 3KB and ~17ms — serially ahead of `turn/start`.
+- **A learned model is persisted and keyed on the thread's last turn** (`codexThreadActivityAt`,
+  `.agent-viewer-data/codex-thread-models.json`). Even a released resume boots the thread's MCP
+  servers for a minute — ~1.1s of child CPU per selection — so a thread already seen must not be
+  resumed again to show a model it has not changed. **Not `updatedAt`: codex-cli 0.157's
+  `thread/resume` bumps it**, so a key on it made every learning resume invalidate its own answer.
+  `recencyAt` equals the last turn's start and survives resume. Re-browsing: 22 processes / 1.35GB
+  → 10 / 0.74GB. (`lastModified` still maps from `updatedAt`, so a Codex session that was merely
+  resumed reads as recently active; it stays, because the TUI's cached-open fast path needs
+  `lastModified` to move when a turn *finishes*, which `recencyAt` does not.)
 
 `npm run codex:resume:live` asks the app-server itself (`thread/unsubscribe` answers `unsubscribed`
 only for a subscribed thread); four mutations were verified to fail it.
@@ -232,7 +241,7 @@ Reads spawn a short-lived agent — listing is agent-scoped, so it cannot ride t
   identical), and the warm slot is consumed once, never refilled. Plugin hooks still run on that
   start — skipping them would mean skipping settings, which can change the list.
   `npm run claude:models:live` counts processes; three mutations were verified to fail it.
-- **Spawning resumes, and resuming rewrites the transcript** — identical bytes, new mtime, which is what `listSessions` reports as `lastModified`. Since the pool is prewarmed when a session is *selected*, merely navigating to one would jump it to the top of every list ordered by last activity. Read-only control queries dodge this with `persistSession: false` (`lib/sdkControlQuery.ts`); a pool entry cannot, because the turn it is warmed for must persist. `lib/claudeResumeTouch.ts` instead records the touch during prewarm and subtracts it in the Claude adapter's `listSessions`/`readSessionInfo`. The override is pinned to the exact post-resume mtime *and* file size, so any real write drops it on the next read — it can only hide a timestamp we caused. Codex's `thread/resume` was checked and leaves `updatedAt` alone; no other provider needs this.
+- **Spawning resumes, and resuming rewrites the transcript** — identical bytes, new mtime, which is what `listSessions` reports as `lastModified`. Since the pool is prewarmed when a session is *selected*, merely navigating to one would jump it to the top of every list ordered by last activity. Read-only control queries dodge this with `persistSession: false` (`lib/sdkControlQuery.ts`); a pool entry cannot, because the turn it is warmed for must persist. `lib/claudeResumeTouch.ts` instead records the touch during prewarm and subtracts it in the Claude adapter's `listSessions`/`readSessionInfo`. The override is pinned to the exact post-resume mtime *and* file size, so any real write drops it on the next read — it can only hide a timestamp we caused. Codex's `thread/resume` was once checked to leave `updatedAt` alone; on codex-cli 0.157 it bumps it (see *Codex reads must not hold threads loaded*).
 
 #### Copilot reads must not activate the session (load-bearing)
 

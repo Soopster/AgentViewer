@@ -28,6 +28,7 @@ import {
 } from '../codexMapper'
 import { getCodexStoredTag, getCodexStoredTagsForSessions, setCodexStoredTag } from '../codexTags'
 import {
+  codexThreadActivityAt,
   knownCodexThreadModel,
   readCodexThreadModel,
   isCodexActiveWriterError,
@@ -80,7 +81,7 @@ export const codexAdapter: SessionAdapter = {
     // No resume here: this runs for every read, prefetches included, and a
     // resume loads the thread and its MCP servers (see readCodexThreadModel).
     // readModels learns the model when a session is actually opened.
-    return mapCodexThreadToSessionInfo(thread, tag, knownCodexThreadModel(sessionId))
+    return mapCodexThreadToSessionInfo(thread, tag, knownCodexThreadModel(sessionId, codexThreadActivityAt(thread)))
   },
 
   async setTitle(sessionId, title) {
@@ -135,6 +136,9 @@ export const codexAdapter: SessionAdapter = {
     // leave the app-server slow to answer model/list on a cold connection —
     // without a timeout the composer's model picker hangs indefinitely
     // instead of falling back to an empty list the UI can recover from.
+    // The thread's last turn says whether a model learned earlier still holds;
+    // reading it is cheap, and a resume is not (readCodexThreadModel).
+    const activityAt = await readCodexThread(sessionId, false).then(codexThreadActivityAt, () => undefined)
     const [modelsResponse, resume] = await Promise.all([
       withTimeout(
         client.request('model/list', {}),
@@ -142,7 +146,7 @@ export const codexAdapter: SessionAdapter = {
         'Codex model list',
       )
         .catch(() => ({ data: [] as Parameters<typeof mapCodexModelsToSessionModels>[0] })),
-      withTimeout(readCodexThreadModel(sessionId), 8000, 'Codex thread resume').catch(() => null),
+      withTimeout(readCodexThreadModel(sessionId, activityAt), 8000, 'Codex thread resume').catch(() => null),
     ])
     return {
       models: mapCodexModelsToSessionModels(modelsResponse.data),
@@ -162,9 +166,9 @@ export const codexAdapter: SessionAdapter = {
     // Per-thread reads stay direct (they're specific to this sessionId),
     // but the four project-wide reads go through the harness cache so
     // repeated opens of the diagnostics panel share one HTTP round-trip.
-    const [thread, resume, project] = await Promise.all([
-      readCodexThread(sessionId, false),
-      readCodexThreadModel(sessionId).catch((error) => {
+    const thread = await readCodexThread(sessionId, false)
+    const [resume, project] = await Promise.all([
+      readCodexThreadModel(sessionId, codexThreadActivityAt(thread)).catch((error) => {
         if (isCodexActiveWriterError(error)) return { model: null }
         throw error
       }),

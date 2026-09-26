@@ -12,8 +12,11 @@
 // `unsubscribed` only for a thread this connection was subscribed to.
 //
 //   bun run ./scripts/codexResumePolicySmoke.ts   (needs `codex` and >= 6 threads)
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { getCodexClient } from '../lib/codexClient'
 import {
+  codexThreadActivityAt,
   ensureCodexThreadResumed,
   knownCodexThreadModel,
   prewarmCodexThread,
@@ -46,10 +49,21 @@ await adapter.readSessionInfo?.(info)
 check('readSessionInfo leaves the thread unsubscribed', !(await subscribed(info)))
 
 // A model read resumes once to learn the model, then lets go.
-const { model } = await readCodexThreadModel(read)
+const activityAt = codexThreadActivityAt(await client.request('thread/read', { threadId: read, includeTurns: false }).then((response) => response.thread))
+const { model } = await readCodexThreadModel(read, activityAt)
 check('readCodexThreadModel reports a model', typeof model === 'string' && model.length > 0, String(model))
 check('readCodexThreadModel leaves the thread unsubscribed', !(await subscribed(read)))
-check('the learned model is remembered without resuming', knownCodexThreadModel(read) === model)
+check('the learned model is remembered without resuming', knownCodexThreadModel(read, activityAt) === model)
+// A turn moves the thread's timestamp, and possibly its model with it.
+check('a model learned before the thread moved on is not trusted', knownCodexThreadModel(read, activityAt + 1) === null)
+// The resume that learned the model must not itself invalidate it: 0.157's
+// resume bumps updatedAt, which is why the key is the last turn's start.
+const after = await client.request('thread/read', { threadId: read, includeTurns: false }).then((response) => response.thread)
+check('the learning resume does not invalidate what it learned', knownCodexThreadModel(read, codexThreadActivityAt(after)) === model)
+await new Promise((resolve) => setTimeout(resolve, 800)) // the save is debounced
+const persisted = JSON.parse(readFileSync(path.join(process.cwd(), '.agent-viewer-data', 'codex-thread-models.json'), 'utf8'))
+check('learned models persist for the next launch',
+  Object.entries(persisted.entries ?? {}).some(([key, entry]) => key.endsWith(`:${read}`) && (entry as { model?: string }).model === model))
 
 // Prewarm holds only the latest idle thread.
 await prewarmCodexThread(prewarmA)
