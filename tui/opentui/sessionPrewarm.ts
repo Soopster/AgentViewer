@@ -16,6 +16,10 @@ export function shouldPrewarmTuiRuntime(
   composerActive: boolean,
 ): boolean {
   const resolvedProvider = provider ?? 'claude'
+  // OpenCode's prewarm starts a server (~500MB) rather than resuming a
+  // session, and browsing no longer needs one on this isolate — so it waits
+  // for the composer like Claude does.
+  if (resolvedProvider === 'opencode') return composerActive
   if (!isPending) return resolvedProvider !== 'claude' || composerActive
   return resolvedProvider === 'pi'
     || resolvedProvider === 'claude'

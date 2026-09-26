@@ -19,12 +19,15 @@
 import {
   listViewSessionMessageWindow,
   listViewSessions,
+  readViewSessionComposerOptions,
   readViewSessionInfo,
   readViewSessionModels,
+  readViewSessionSlashCommands,
 } from '../sessionReads'
 import { listViewRunningSessions, readViewRuntimeActivity } from '../sessionActivity'
 import { encodeSessionPath, isRemoteAttached, providerQuery, remoteJson } from './remote'
 import type {
+  AgentProvider,
   ContextUsage,
   ProviderSelection,
   Session,
@@ -131,4 +134,27 @@ export async function readTuiRunningSessions(): Promise<ReturnType<typeof listVi
 export async function readTuiRuntimeActivityState(): Promise<TuiRuntimeActivity> {
   if (isRemoteAttached()) return remoteJson<TuiRuntimeActivity>('/api/sessions/running')
   return readViewRuntimeActivity()
+}
+
+export async function readTuiSlashCommands(
+  sessionId: string,
+  provider?: AgentProvider,
+): Promise<Awaited<ReturnType<typeof readViewSessionSlashCommands>>> {
+  if (isRemoteAttached()) {
+    const { commands } = await remoteJson<{ commands: Awaited<ReturnType<typeof readViewSessionSlashCommands>> }>(
+      encodeSessionPath(sessionId, `/commands${providerQuery(provider)}`),
+    )
+    return commands
+  }
+  return readViewSessionSlashCommands(sessionId, provider)
+}
+
+export async function readTuiComposerOptions(
+  sessionId: string,
+  provider?: AgentProvider,
+): Promise<Awaited<ReturnType<typeof readViewSessionComposerOptions>>> {
+  if (isRemoteAttached()) {
+    return remoteJson(encodeSessionPath(sessionId, `/composer${providerQuery(provider)}`))
+  }
+  return readViewSessionComposerOptions(sessionId, provider)
 }

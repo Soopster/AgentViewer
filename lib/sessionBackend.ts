@@ -6182,7 +6182,12 @@ export async function prewarmViewSession(params: {
     )
     return
   }
-  // opencode connects through a long-lived local server — no spawn to hide.
+  if (provider === 'opencode') {
+    // The first call starts this process's managed `opencode serve`; nothing
+    // else on a browse-only path does any more, so the composer warms it.
+    await withTimeout(getOpenCodeClient(), providerStartupTimeoutMs(params.model), 'OpenCode server prewarm')
+    return
+  }
 }
 
 async function createLmstudioStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>): Promise<Response> {

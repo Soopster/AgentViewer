@@ -143,7 +143,6 @@ import {
   readTuiRuntimeActivity,
   dismissTuiViewerAttention,
   createTuiSession,
-  readTuiSlashCommands,
   readTuiComposerOptions,
   listTuiProtocolRuns,
   listTuiRunPlaybooks,
@@ -200,6 +199,7 @@ import {
   attachedTranscriptCardsForVariant,
   readTuiSessionsAsync,
   formatTranscriptCardsAsync,
+  readTuiComposerAffordancesAsync,
   getTranscriptCardsSync,
   warmTranscriptAsync,
 } from './sessionDetailWorkerClient'
@@ -9917,10 +9917,7 @@ export default function OpenTuiApp() {
     if (composerAffordancesInFlightRef.current.has(key)) return
     composerAffordancesInFlightRef.current.add(key)
     try {
-      const [live, composerOptions] = await Promise.all([
-        readTuiSlashCommands(target.sessionId, target.provider),
-        readTuiComposerOptions(target.sessionId, target.provider),
-      ])
+      const { commands: live, options: composerOptions } = await readTuiComposerAffordancesAsync(target)
       const commands = live.map((entry) => ({
         command: entry.command,
         description: entry.description,

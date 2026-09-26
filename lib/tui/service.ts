@@ -52,11 +52,9 @@ import {
   listViewSessionMessageWindow,
   listViewSessions,
   patchViewSession,
-  readViewSessionComposerOptions,
   readViewSessionDiagnostics,
   readViewSessionInfo,
   readViewSessionModels,
-  readViewSessionSlashCommands,
 } from '../sessionReads'
 // Pure parsing plus the live-turn registry read — neither reaches a provider
 // client, so the Coordinator panel's state costs no send-path import.
@@ -112,9 +110,11 @@ import {
 } from './reads'
 
 export {
+  readTuiComposerOptions,
   readTuiSessionDetailSource,
   readTuiSessionMetadata,
   readTuiSessions,
+  readTuiSlashCommands,
   type TuiRuntimeActivity,
   type TuiSessionMetadata,
 } from './reads'
@@ -883,29 +883,6 @@ export async function createTuiSession(params: {
     return remoteJson('/api/sessions/new', { method: 'POST', body: JSON.stringify(params) })
   }
   return (await sendPath()).createNewViewSession(params)
-}
-
-export async function readTuiSlashCommands(
-  sessionId: string,
-  provider?: AgentProvider,
-): Promise<Awaited<ReturnType<typeof readViewSessionSlashCommands>>> {
-  if (isRemoteAttached()) {
-    const { commands } = await remoteJson<{ commands: Awaited<ReturnType<typeof readViewSessionSlashCommands>> }>(
-      encodeSessionPath(sessionId, `/commands${providerQuery(provider)}`),
-    )
-    return commands
-  }
-  return readViewSessionSlashCommands(sessionId, provider)
-}
-
-export async function readTuiComposerOptions(
-  sessionId: string,
-  provider?: AgentProvider,
-): Promise<Awaited<ReturnType<typeof readViewSessionComposerOptions>>> {
-  if (isRemoteAttached()) {
-    return remoteJson(encodeSessionPath(sessionId, `/composer${providerQuery(provider)}`))
-  }
-  return readViewSessionComposerOptions(sessionId, provider)
 }
 
 /** Warm the send path (Claude pool spawn, Codex thread resume) while the user types. */

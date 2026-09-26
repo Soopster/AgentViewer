@@ -19,7 +19,13 @@ import type { ContextUsage, ProviderSelection, Session, SessionInfo, SessionMess
 // that only ever reads, and service.ts's graph reaches the whole send path —
 // every provider client, harness and SDK — for ~72MB of footprint against
 // ~16MB here. Keep this import off service.ts.
-import { readTuiSessionDetailSource, readTuiSessionMetadata, readTuiSessions } from '../../lib/tui/reads'
+import {
+  readTuiComposerOptions,
+  readTuiSessionDetailSource,
+  readTuiSessionMetadata,
+  readTuiSessions,
+  readTuiSlashCommands,
+} from '../../lib/tui/reads'
 import { sameSessionMessageContent, threadedMessageFingerprint } from './messageFingerprint'
 import { startRawHeapSampler, reportWorkerHeap } from './workerHeapProbe'
 
@@ -79,7 +85,14 @@ type MetadataRequest = {
   id: number
   session: Session
 }
-type WorkerRequest = DetailRequest | FormatRequest | SessionsRequest | WarmRequest | MetadataRequest
+// Composer slash commands + options, for providers that warm no runtime on
+// the main isolate (see readTuiComposerAffordancesAsync).
+type AffordancesRequest = {
+  kind: 'affordances'
+  id: number
+  session: Session
+}
+type WorkerRequest = DetailRequest | FormatRequest | SessionsRequest | WarmRequest | MetadataRequest | AffordancesRequest
 
 type WorkerResponse =
   | {
@@ -123,6 +136,10 @@ type WorkerResponse =
   | { id: number; ok: true; sessions: Session[] }
   | { id: number; ok: true; warmed: true }
   | { id: number; ok: true; metadata: { currentModel: string | null; contextUsage: ContextUsage | null } }
+  | { id: number; ok: true; affordances: {
+      commands: Awaited<ReturnType<typeof readTuiSlashCommands>>
+      options: Awaited<ReturnType<typeof readTuiComposerOptions>>
+    } }
   | { id: number; ok: false; error: string }
 
 declare const self: {
@@ -424,6 +441,14 @@ self.onmessage = async (event) => {
         ok: true,
         metadata: { currentModel: metadata.currentModel, contextUsage: metadata.contextUsage },
       })
+      return
+    }
+    if (data.kind === 'affordances') {
+      const [commands, options] = await Promise.all([
+        readTuiSlashCommands(data.session.sessionId, data.session.provider),
+        readTuiComposerOptions(data.session.sessionId, data.session.provider),
+      ])
+      self.postMessage({ id: data.id, ok: true, affordances: { commands, options } })
       return
     }
     if (data.kind === 'warm') {

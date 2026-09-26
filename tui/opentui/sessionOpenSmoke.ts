@@ -10,6 +10,9 @@ assert.equal(shouldPrewarmTuiRuntime('claude', true, false), true)
 assert.equal(shouldPrewarmTuiRuntime('codex', false, false), true)
 assert.equal(shouldPrewarmTuiRuntime('codex', true, false), false)
 assert.equal(shouldPrewarmTuiRuntime('pi', true, false), true)
+// OpenCode's prewarm starts a whole server; browsing must not.
+assert.equal(shouldPrewarmTuiRuntime('opencode', false, false), false)
+assert.equal(shouldPrewarmTuiRuntime('opencode', false, true), true)
 
 const cards = [{} as TuiTranscriptCard]
 const detail = {

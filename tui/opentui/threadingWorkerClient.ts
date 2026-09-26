@@ -2,7 +2,7 @@ import type { ThreadedMessage } from '../../lib/threading'
 import type { TuiTranscriptCard } from '../format'
 import type { TuiDensity } from '../theme'
 import type { ContextUsage, ProviderSelection, Session, SessionInfo, SessionMessage } from '../../lib/types'
-import { readTuiSessionMetadata } from '../../lib/tui/reads'
+import { readTuiComposerOptions, readTuiSessionMetadata, readTuiSlashCommands } from '../../lib/tui/reads'
 import { createKeyedWorkerQueue } from './latestWorkerQueue'
 import { threadedMessageFingerprint } from './messageFingerprint'
 import { tuiWorkerUrl } from './workerUrl'
@@ -55,6 +55,11 @@ type Pending =
       resolve: (metadata: TuiSessionMetadataResult) => void
       reject: (error: Error) => void
     }
+  | {
+      kind: 'affordances'
+      resolve: (affordances: TuiComposerAffordances) => void
+      reject: (error: Error) => void
+    }
 
 type WorkerResponse =
   | {
@@ -93,6 +98,7 @@ type WorkerResponse =
   | { id: number; ok: true; sessions: Session[] }
   | { id: number; ok: true; warmed: true }
   | { id: number; ok: true; metadata: TuiSessionMetadataResult }
+  | { id: number; ok: true; affordances: TuiComposerAffordances }
   | { id: number; ok: false; error: string }
 
 let worker: Worker | null = null
@@ -319,6 +325,8 @@ function ensureWorker(): Worker {
       entry.resolve()
     } else if (entry.kind === 'metadata' && 'metadata' in data) {
       entry.resolve(data.metadata)
+    } else if (entry.kind === 'affordances' && 'affordances' in data) {
+      entry.resolve(data.affordances)
     }
   }
   w.onerror = (event) => {
@@ -365,6 +373,36 @@ export function readTuiSessionMetadataAsync(session: Session): Promise<TuiSessio
   return new Promise<TuiSessionMetadataResult>((resolve, reject) => {
     pending.set(id, { kind: 'metadata', resolve, reject })
     w.postMessage({ kind: 'metadata', id, session })
+  })
+}
+
+export type TuiComposerAffordances = {
+  commands: Awaited<ReturnType<typeof readTuiSlashCommands>>
+  options: Awaited<ReturnType<typeof readTuiComposerOptions>>
+}
+
+/**
+ * The composer's slash commands and options for a session. These read on the
+ * main isolate for providers whose answer comes from a runtime the send path
+ * warms there — Claude's pooled Query, a Copilot or Pi session, Codex's
+ * app-server — so the read shares it. OpenCode warms nothing: its commands come
+ * from a server, and reading them on the main isolate started a second
+ * `opencode serve` (~500MB) beside the worker's merely to browse. They read in
+ * the worker, which already runs one; the main isolate's server starts when the
+ * composer is engaged (see shouldPrewarmTuiRuntime).
+ */
+export function readTuiComposerAffordancesAsync(session: Session): Promise<TuiComposerAffordances> {
+  if (session.provider !== 'opencode') {
+    return Promise.all([
+      readTuiSlashCommands(session.sessionId, session.provider),
+      readTuiComposerOptions(session.sessionId, session.provider),
+    ]).then(([commands, options]) => ({ commands, options }))
+  }
+  const id = ++requestCounter
+  const w = ensureWorker()
+  return new Promise<TuiComposerAffordances>((resolve, reject) => {
+    pending.set(id, { kind: 'affordances', resolve, reject })
+    w.postMessage({ kind: 'affordances', id, session })
   })
 }
 
