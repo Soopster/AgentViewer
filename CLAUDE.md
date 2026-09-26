@@ -1308,8 +1308,15 @@ output, and allocator arenas.
   defaulting the spawn in `bin/agent-viewer.mjs` to `NODE_ENV=production` did buy that back
   (~27MB peak / ~60MB settled, plus the churn). It also broke running the TUI, because `NODE_ENV`
   is not a React flag: every other module the app and its dependencies load reads it too. It has
-  been removed from both `bin/agent-viewer.mjs` and `npm run tui`. Reclaiming React's production
-  build needs a mechanism scoped to React alone, not a process-wide environment variable.
+  been removed from both `bin/agent-viewer.mjs` and `npm run tui`. **React's production build is
+  now reclaimed by a mechanism scoped to React alone:** `tui/opentui/reactProduction.ts` is a Bun
+  runtime plugin that rewrites only the `react`, `react-reconciler` and `scheduler` entry shims to
+  their production builds, and maps `jsxDEV` (which Bun emits, and React's production dev-runtime
+  leaves undefined) onto the production `jsx`. It must run before anything imports React, so
+  `main.tsx` installs it and then dynamically imports `start.tsx`. Measured on real sessions:
+  boot footprint −27 to −63MB, browse −30 to −60MB, main-isolate heap peak ~120MB → ~80MB.
+  Test-renderer smokes and harnesses import `App.tsx` directly and stay on the development build —
+  `act()` does not exist in production React. `AGENT_VIEWER_TUI_REACT_DEV=1` opts out.
 - **Keep the send path out of read-path modules.** `lib/adapters/claude.ts` is a read adapter and
   was importing `claudePool` for a single `peekClaudeSession` — 30MB of send-path pool in every
   isolate that reads a session, the transcript worker included. It now asks through
