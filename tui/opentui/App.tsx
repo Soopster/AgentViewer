@@ -7581,6 +7581,10 @@ const SplitTranscriptPane = React.memo(SplitTranscriptPaneInner)
 // increment here is the only thing that distinguishes the two. It costs one
 // integer add per render.
 let rootRenderCount = 0
+
+function sameJson(a: unknown, b: unknown): boolean {
+  return a === b || JSON.stringify(a) === JSON.stringify(b)
+}
 export function readRootRenderCount(): number {
   return rootRenderCount
 }
@@ -15048,8 +15052,11 @@ export default function OpenTuiApp() {
       }
       const entries = activity.running
       setRunningRegistryReady(true)
-      setWaitingSessions(activity.waiting)
-      setViewerAttentionNotes(activity.attention)
+      // Every poll reads fresh arrays, and storing one re-renders the whole
+      // root — every ~1.5s for as long as the app is open, whether or not
+      // anything changed. They are small; keep the previous array when equal.
+      setWaitingSessions((prev) => (sameJson(prev, activity.waiting) ? prev : activity.waiting))
+      setViewerAttentionNotes((prev) => (sameJson(prev, activity.attention) ? prev : activity.attention))
       const runningByKey = new Map(entries.map((entry) => [
         sessionKey({ sessionId: entry.sessionId, provider: entry.provider }),
         entry,
