@@ -51,7 +51,7 @@ check('a second read is served from the cache', elapsed < 50 && second === first
 primeReadModelsWarmQuery()
 const warm = await consumeReadModelsWarmQuery()
 warm?.query((async function* () {})()).close()
-await Bun.sleep(2500)
+await new Promise((resolve) => setTimeout(resolve, 2500))
 check('nothing is left running after a warm slot is consumed', descendants(process.pid).length === 0,
   `${descendants(process.pid).length} process(es)`)
 

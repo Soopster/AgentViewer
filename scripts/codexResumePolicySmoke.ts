@@ -28,7 +28,7 @@ function check(label: string, ok: boolean, detail = ''): void {
   console.log(`${ok ? 'PASS' : 'FAIL'} ${label}${detail ? ` — ${detail}` : ''}`)
 }
 async function subscribed(threadId: string): Promise<boolean> {
-  const { status } = await client.request('thread/unsubscribe', { threadId })
+  const { status } = await client.request('thread/unsubscribe', { threadId }) as { status?: string }
   return status === 'unsubscribed'
 }
 
@@ -54,7 +54,7 @@ check('the learned model is remembered without resuming', knownCodexThreadModel(
 // Prewarm holds only the latest idle thread.
 await prewarmCodexThread(prewarmA)
 await prewarmCodexThread(prewarmB)
-await Bun.sleep(200) // the eviction's unsubscribe is fire-and-forget
+await new Promise((resolve) => setTimeout(resolve, 200)) // the eviction's unsubscribe is fire-and-forget
 check('an older idle prewarm is released', !(await subscribed(prewarmA)))
 
 // A prewarmed thread that a turn then uses is never released by a later
@@ -62,7 +62,7 @@ check('an older idle prewarm is released', !(await subscribed(prewarmA)))
 await prewarmCodexThread(claimed)
 await ensureCodexThreadResumed(claimed)
 await prewarmCodexThread(prewarmC)
-await Bun.sleep(200)
+await new Promise((resolve) => setTimeout(resolve, 200))
 check('a claimed thread survives later prewarms', await subscribed(claimed))
 check('the newest prewarm is held', await subscribed(prewarmC))
 check('the prewarm it replaced is released', !(await subscribed(prewarmB)))
