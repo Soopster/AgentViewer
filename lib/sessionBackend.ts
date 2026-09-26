@@ -1,3 +1,4 @@
+import { projectComposerContext } from './composerContext'
 import { classifyClaudeUsageMessage, type ClaudeUsageLimitKind } from './claudeUsageLimits'
 import { installProcessWarningRouting } from './processWarnings'
 
@@ -6391,6 +6392,13 @@ async function createAcpStream(
 }
 
 export async function streamViewSessionTurn(params: SendMessageParams): Promise<Response> {
+  try {
+    const raw = Array.isArray(params.body.attachments) ? params.body.attachments.filter((a): a is SendAttachment => !!a && typeof a === 'object') : []
+    const projected = projectComposerContext(String(params.body.message ?? ''), raw)
+    params = { ...params, body: { ...params.body, message: projected.text, attachments: projected.attachments } }
+  } catch (error) {
+    return Response.json({ error: error instanceof Error ? error.message : 'Invalid context' }, { status: 400 })
+  }
   const userMessage = String(params.body.message ?? '').trim()
   if (!userMessage) {
     return Response.json({ error: 'message is required' }, { status: 400 })

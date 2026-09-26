@@ -1,5 +1,8 @@
 'use client'
 
+import ContextMessage from './ContextMessage'
+import { contextReferences, readComposerContext } from '@/lib/composerContext'
+
 import { lazy, memo, Suspense, use, useEffect, useMemo, useSyncExternalStore, useState, createContext } from 'react'
 import {
   DEFAULT_COLOR_TREATMENT,
@@ -4284,6 +4287,8 @@ function RenderMarkdownText({ text }: { text: string }) {
 
 function RenderText({ block }: { block: TextBlock }) {
   const parts = useMemo(() => splitStandaloneDataImages(block.text), [block.text])
+  const context = useMemo(() => readComposerContext(block.text), [block.text])
+  if (context.records.length || contextReferences(context.text).length) return <ContextMessage text={context.text} records={context.records} />
   return (
     <>
       {parts.map((part, i) =>

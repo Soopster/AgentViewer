@@ -7821,3 +7821,16 @@ button.av-session-viz-graph-node:disabled {
   .av-coord-reader-layout:has(.av-coord-teammate-reader) .av-coord-lead-reader > div { height: 55vh !important; }
   .av-coord-teammate-reader { flex: 1 0 65vh; width: 100%; max-width: none; min-width: 0; border-left: 0; border-top: 1px solid var(--border); }
 }
+
+.av-context-editor { display: block; white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; }
+.av-context-editor:empty::before { content: attr(data-placeholder); color: var(--text-3); pointer-events: none; }
+.av-context-chip { display: inline; padding: 2px 7px; margin: 0 2px; border: 1px solid color-mix(in srgb, var(--cyan) 45%, var(--border)); border-radius: 6px; background: color-mix(in srgb, var(--cyan) 10%, var(--surface)); color: var(--cyan); font: inherit; font-size: .88em; cursor: pointer; box-decoration-break: clone; }
+.av-context-chip[data-unavailable="true"] { border-style: dashed; color: var(--amber); }
+.av-context-chip:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.av-context-details { padding: 10px; margin: 6px 0; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); max-height: 260px; overflow: auto; font-size: 12px; overflow-wrap: anywhere; }
+.av-context-details > button { float: right; color: var(--cyan); margin-left: 8px; }
+.av-context-details pre { white-space: pre-wrap; margin-top: 8px; }
+.av-context-details img { max-width: 100%; max-height: 180px; }
+.av-context-source { padding: 6px 10px; font-size: 12px; color: var(--cyan); border-bottom: 1px solid var(--border); }
+.av-context-source input { padding: 6px; margin: 4px; color: var(--text); background: var(--surface-2); }
+.av-context-copy { color: var(--text-3); font-size: 11px; margin-top: 6px; }

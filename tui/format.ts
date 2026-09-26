@@ -1,3 +1,4 @@
+import { readableContextText } from '../lib/composerContext'
 import { getAssistantLabel } from '../lib/provider'
 import {
   claudeStartupFailureHint,
@@ -1779,7 +1780,7 @@ function formatBlock(block: ThreadedBlock, activeForms?: TaskActiveForms, taskRe
       const protocolLines = textLinesForProtocolAwareBlock(block.text, false)
       if (protocolLines) return protocolLines
       return block.text.trim()
-        ? compactLines(block.text.trim()).map((entry) => line(entry))
+        ? compactLines(readableContextText(block.text).trim()).map((entry) => line(entry))
         : []
     }
     case 'thinking':
@@ -2260,7 +2261,7 @@ function extractMarkdownContent(blocks: ThreadedBlock[]): string | undefined {
   const chunks: string[] = []
   for (const block of blocks) {
     if (block.type === 'text' && block.text.trim()) {
-      chunks.push(block.text.trim())
+      chunks.push(readableContextText(block.text).trim())
     }
   }
   return chunks.length > 0 ? chunks.join('\n\n') : undefined
@@ -2410,8 +2411,9 @@ function extractCodeBlocksFromBlocks(blocks: ThreadedBlock[], activeForms?: Task
       lines.push(...protocolLines.filter((l) => l.text.trim()))
       continue
     }
-    const matches = Array.from(block.text.matchAll(CODE_FENCE_RE))
-    let replaced = block.text
+    const contextText = readableContextText(block.text)
+    const matches = Array.from(contextText.matchAll(CODE_FENCE_RE))
+    let replaced = contextText
     for (const match of matches) {
       const lang = ((match[1] ?? '').trim() || 'text').toLowerCase()
       const content = (match[2] ?? '').trimEnd()
@@ -2438,7 +2440,7 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
       const protocolLines = textLinesForProtocolAwareBlock(block.text, true)
       if (protocolLines) return protocolLines
       return block.text.trim()
-        ? sanitizeLine(block.text).trim().split('\n').map((l) => line(l.trimEnd()))
+        ? sanitizeLine(readableContextText(block.text)).trim().split('\n').map((l) => line(l.trimEnd()))
         : []
     }
 

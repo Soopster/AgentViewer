@@ -1447,6 +1447,7 @@ export default function Home() {
       case 'browser':
         return (
           <BrowserSurface
+            canInsert={!selectedProject && !!selectedSession}
             url={surface.url ?? null}
             onUrlChange={(url) => setRightPanelBrowserUrl(surface.id, url)}
           />
@@ -1454,7 +1455,7 @@ export default function Home() {
       case 'terminal':
         return (
           <div style={{ display: 'flex', flex: 1, minHeight: 0, minWidth: 0 }}>
-            <TerminalView />
+            <TerminalView canInsert={!selectedProject && !!selectedSession} />
           </div>
         )
       case 'files':

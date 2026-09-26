@@ -1,5 +1,6 @@
 'use client'
 
+import { createContextAttachment } from '@/lib/composerContext'
 import { WTerm } from '@wterm/dom'
 import { GhosttyCore } from '@wterm/ghostty'
 import '@wterm/dom/css'
@@ -66,7 +67,8 @@ function utf8ToBase64(value: string): string {
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
-export default function TerminalView() {
+export default function TerminalView({ canInsert = false }: { canInsert?: boolean }) {
+  const terminalRef = useRef<WTerm | null>(null)
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState<string | null>(null)
   const [exited, setExited] = useState(false)
@@ -211,6 +213,7 @@ export default function TerminalView() {
           },
         })
         term = instance
+        terminalRef.current = instance
         await instance.init()
         if (disposed) {
           instance.destroy()
@@ -229,6 +232,7 @@ export default function TerminalView() {
       cancelled = true
       controller.abort()
       themeObserver.disconnect()
+      terminalRef.current = null
       term?.destroy()
       void fetch(`/api/terminal/session?session=${sessionId}`, { method: 'DELETE' }).catch(() => {})
     }
@@ -236,6 +240,12 @@ export default function TerminalView() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }}>
+      {canInsert && <button type="button" className="av-context-source" onMouseDown={event => event.preventDefault()} onClick={() => {
+        const text = terminalRef.current?.getSelectionText()
+        if (!text?.trim()) { setError('Select terminal text first, then attach it to the composer.'); return }
+        setError(null)
+        window.dispatchEvent(new CustomEvent('agent-viewer:insert-context', { detail: createContextAttachment('terminal', 'Terminal selection', text) }))
+      }}>Attach selection to message</button>}
       {(error || exited) && (
         <div
           style={{

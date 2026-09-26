@@ -1,5 +1,8 @@
 'use client'
 
+import ContextComposer, { type ContextComposerHandle } from './ContextComposer'
+import { contextReference, contextReferences, createContextAttachment, projectComposerContext, readComposerContext, restoreContextAttachments, referencedComposerAttachments, removeContextReference } from '@/lib/composerContext'
+
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import CoordinatorConversation from './CoordinatorConversation'
 import type { ProtocolAgent } from '@/lib/agentProtocol'
@@ -3235,6 +3238,7 @@ function MessageViewInner({
   const [sessionActionLoading, setSessionActionLoading] = useState<string | null>(null)
   const [sessionActionError, setSessionActionError] = useState<string | null>(null)
   const [sessionActionNotice, setSessionActionNotice] = useState<string | null>(null)
+  const [optimisticContextText, setOptimisticContextText] = useState<string | null>(null)
   const [optimisticUserText, setOptimisticUserText] = useState<string | null>(null)
   // Messages steered INTO the running turn — echoed in the live overlay until
   // the persisted transcript reconciles (same lifecycle as optimisticUserText).
@@ -3360,7 +3364,7 @@ function MessageViewInner({
   const [slashActiveIndex, setSlashActiveIndex] = useState(0)
   const slashItemRefs = useRef<Array<HTMLButtonElement | null>>([])
   const [liveSlashCommands, setLiveSlashCommands] = useState<SlashCommandSuggestion[]>([])
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const textareaRef = useRef<ContextComposerHandle>(null)
   const composerPrewarmInFlightRef = useRef(new Set<string>())
   const isComposingRef = useRef(false)
   const timelineRef = useRef<HTMLDivElement>(null)
@@ -3489,6 +3493,8 @@ function MessageViewInner({
     if (activeProvider === 'codex') return ['low', 'medium', 'high']
     return ['low', 'medium', 'high']
   }, [activeProvider, selectedModelInfo])
+  const [loadedComposerDraftKey, setLoadedComposerDraftKey] = useState<string | null>(null)
+  const attachmentReadsRef = useRef(0)
   const composerDraftKey = useMemo(() => composerDraftStorageKey(session), [session])
 
   useEffect(() => {
@@ -4049,6 +4055,7 @@ function MessageViewInner({
     setInputText(draft.text)
     inputTextRef.current = draft.text
     setAttachments(draft.attachments)
+    setLoadedComposerDraftKey(composerDraftKey)
 
     window.requestAnimationFrame(() => {
       suppressDraftSaveRef.current = false
@@ -4682,12 +4689,26 @@ function MessageViewInner({
     // is fire-and-forget — replies/permission prompts surface in the bridge
     // panel — so we just push the text, clear the composer, and return before
     // any of the provider streaming machinery runs.
+    try {
+      projectComposerContext(retryOverride?.text ?? textareaRef.current?.value ?? inputTextRef.current, retryOverride?.attachments ?? attachments)
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : 'Context is unavailable')
+      return
+    }
+    if (attachmentReadsRef.current > 0) {
+      setSendError('Attachments are still being read. Try sending again in a moment.')
+      return
+    }
     const bridge = channelBridgeRef.current
     if (!retryOverride && canUseChannelBridge && bridge.routeComposer) {
       const text = (textareaRef.current?.value ?? inputTextRef.current).trim()
       if (!text) return
+      if (referencedComposerAttachments(text, attachments).some(a => a.contextKind === 'image' && a.data && !a.path)) {
+        setSendError('Use direct chat to send image data, or attach the image by its local path for the bridge.')
+        return
+      }
       try {
-        await bridge.send(text)
+        await bridge.send(projectComposerContext(text, attachments).text)
         setInputText('')
         inputTextRef.current = ''
         if (textareaRef.current) textareaRef.current.value = ''
@@ -4706,8 +4727,12 @@ function MessageViewInner({
     if (!retryOverride && canUseIdeBridge && ide.routeComposer) {
       const text = (textareaRef.current?.value ?? inputTextRef.current).trim()
       if (!text) return
+      if (referencedComposerAttachments(text, attachments).some(a => a.contextKind === 'image' && a.data && !a.path)) {
+        setSendError('Use direct chat to send image data, or attach the image by its local path for the bridge.')
+        return
+      }
       try {
-        await ide.send(text)
+        await ide.send(projectComposerContext(text, attachments).text)
         setInputText('')
         inputTextRef.current = ''
         if (textareaRef.current) textareaRef.current.value = ''
@@ -4725,7 +4750,7 @@ function MessageViewInner({
     // is never a queue candidate — it only fires after the failed turn settled.
     if (!retryOverride && (sendInFlightRef.current || awaitingPersistedTurnRef.current || reattachedRunningRef.current)) {
       const queueText = (textareaRef.current?.value ?? inputTextRef.current).trim()
-      const queueAttachments = attachments
+      const queueAttachments = referencedComposerAttachments(queueText, attachments)
       if (!queueText && queueAttachments.length === 0) return
       setInputText('')
       inputTextRef.current = ''
@@ -4784,7 +4809,7 @@ function MessageViewInner({
     }
 
     const text = retryOverride ? retryOverride.text : (textareaRef.current?.value ?? inputTextRef.current).trim()
-    const sendAttachments = retryOverride ? retryOverride.attachments : attachments
+    const sendAttachments = referencedComposerAttachments(text, retryOverride ? retryOverride.attachments : attachments)
     if (!text && sendAttachments.length === 0) return
 
     // Reset the retry counter at the start of a fresh (non-retry) send.
@@ -4804,9 +4829,10 @@ function MessageViewInner({
     // newer draft attachments untouched and reuse the captured payload.
     if (!retryOverride) setAttachments([])
     const effort = selectedEffort === 'auto' ? undefined : selectedEffort
+    const historyText = projectComposerContext(text, sendAttachments).text
     const currentSentHistory = sentHistoryRef.current
-    if (text && currentSentHistory[currentSentHistory.length - 1] !== text) {
-      const next = [...currentSentHistory, text]
+    if (text && currentSentHistory[currentSentHistory.length - 1] !== historyText) {
+      const next = [...currentSentHistory, historyText]
       const capped = next.length > SENT_HISTORY_MAX ? next.slice(next.length - SENT_HISTORY_MAX) : next
       sentHistoryRef.current = capped
       setSentHistory(capped)
@@ -4821,6 +4847,7 @@ function MessageViewInner({
     setFailedSend(null)
     setInterrupting(false)
     setOptimisticUserText(text)
+    setOptimisticContextText(historyText)
     setSteeredUserTexts([])
     clearLiveAssistantText()
     setLiveToolActivities([])
@@ -5627,46 +5654,60 @@ function MessageViewInner({
     node?.scrollIntoView({ block: 'nearest' })
   }, [slashActiveIndex, slashOpen])
 
+  const insertContextAttachments = useCallback((incoming: SendAttachment[]) => {
+    if (!incoming.length) return
+    const editor = textareaRef.current
+    const value = editor?.value ?? inputTextRef.current
+    const start = editor?.selectionStart ?? value.length
+    const end = editor?.selectionEnd ?? value.length
+    const insertion = incoming.map(contextReference).join(' ') + ' '
+    const next = value.slice(0, start) + insertion + value.slice(end)
+    setAttachments(prev => mergeComposerAttachments(prev, incoming))
+    setInputText(next)
+    inputTextRef.current = next
+    if (editor) editor.value = next
+    setComposerCollapsed(false)
+    window.requestAnimationFrame(() => {
+      textareaRef.current?.focus()
+      textareaRef.current?.setSelectionRange(start + insertion.length, start + insertion.length)
+      resizeComposer()
+    })
+  }, [resizeComposer])
+
+  useEffect(() => {
+    const receive = (event: Event) => {
+      const attachment = (event as CustomEvent<SendAttachment>).detail
+      if (!session || projectView || !attachment?.contextKind) return
+      insertContextAttachments([attachment])
+    }
+    window.addEventListener('agent-viewer:insert-context', receive)
+    return () => window.removeEventListener('agent-viewer:insert-context', receive)
+  }, [insertContextAttachments, session, projectView])
+
   const insertMention = useCallback((entry: MentionResult) => {
     const mention = mentionQuery
     if (!mention) return
+    if (entry.kind === 'file') {
+      textareaRef.current?.setSelectionRange(mention.start, textareaRef.current?.selectionStart ?? inputTextRef.current.length)
+      insertContextAttachments([{ ...createContextAttachment('file', entry.basename, undefined, entry.path), type: 'mention' }])
+      setMentionQuery(null)
+      setMentionResults([])
+      return
+    }
     const textarea = textareaRef.current
     const value = textarea?.value ?? inputTextRef.current
     const cursor = textarea?.selectionStart ?? value.length
     const before = value.slice(0, mention.start)
     const after = value.slice(cursor)
-    const insertion = entry.kind === 'agent'
-      ? `@${entry.name} `
-      : `@${entry.path} `
+    const insertion = `@${entry.name} `
     const next = `${before}${insertion}${after}`
     setInputText(next)
     inputTextRef.current = next
     setMentionQuery(null)
     setMentionResults([])
-    setAttachments((prev) => {
-      if (entry.kind === 'agent') {
-        if (prev.some((attachment) => attachment.type === 'agent' && attachment.displayName === entry.name)) return prev
-        return [
-          ...prev,
-          {
-            id: `${Date.now()}-agent-${entry.name}`,
-            type: 'agent',
-            displayName: entry.name,
-            text: `@${entry.name}`,
-          },
-        ]
-      }
-      if (prev.some((attachment) => attachment.path === entry.path)) return prev
-      return [
-        ...prev,
-        {
-          id: `${Date.now()}-mention-${entry.path}`,
-          type: 'mention',
-          path: entry.path,
-          displayName: entry.basename,
-        },
-      ]
-    })
+    setAttachments(prev => prev.some(a => a.type === 'agent' && a.displayName === entry.name) ? prev : [...prev, {
+      id: crypto.randomUUID(), type: 'agent', displayName: entry.name, text: `@${entry.name}`,
+    }])
     window.requestAnimationFrame(() => {
       const ta = textareaRef.current
       if (!ta) return
@@ -5675,7 +5716,7 @@ function MessageViewInner({
       ta.focus()
       resizeComposer()
     })
-  }, [mentionQuery, resizeComposer])
+  }, [mentionQuery, resizeComposer, insertContextAttachments])
 
   const insertPromptText = useCallback((text: string) => {
     const trimmed = text.trim()
@@ -5704,9 +5745,15 @@ function MessageViewInner({
   useEffect(() => {
     if (!composerInsertRequest || composerInsertRequest.requestId <= handledComposerInsertRequestRef.current) return
     handledComposerInsertRequestRef.current = composerInsertRequest.requestId
-    insertPromptText(composerInsertRequest.text)
+    const text = composerInsertRequest.text
+    if (text.startsWith('Please follow up on this diff comment.')) {
+      insertContextAttachments([createContextAttachment('diff', /File: (.*)/.exec(text)?.[1] || 'Diff comment', text)])
+    } else if (text.startsWith('@') && !text.trim().includes('\n')) {
+      const path = text.trim().slice(1)
+      insertContextAttachments([createContextAttachment('file', path.split('/').pop() || path, undefined, path)])
+    } else insertPromptText(text)
     onComposerInsertConsumed?.(composerInsertRequest.requestId)
-  }, [composerInsertRequest, insertPromptText, onComposerInsertConsumed])
+  }, [composerInsertRequest, insertPromptText, insertContextAttachments, onComposerInsertConsumed])
 
   const insertSlashCommand = useCallback((command: string) => {
     const remainder = inputText.split('\n').slice(1).join('\n')
@@ -5724,7 +5771,7 @@ function MessageViewInner({
     })
   }, [inputText, resizeComposer])
 
-  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.nativeEvent.isComposing || isComposingRef.current) return
     if (mentionQuery && mentionResults.length > 0) {
       if (e.key === 'ArrowDown') {
@@ -5793,7 +5840,9 @@ function MessageViewInner({
         }
         const nextIndex = sentHistory.length - 1
         setHistoryIndex(nextIndex)
-        const replacement = sentHistory[nextIndex] ?? ''
+        const restoredContext = readComposerContext(sentHistory[nextIndex] ?? '')
+        const replacement = restoredContext.text
+        setAttachments(prev => mergeComposerAttachments(prev, restoreContextAttachments(restoredContext.records)))
         setInputText(replacement)
         inputTextRef.current = replacement
         e.preventDefault()
@@ -5811,7 +5860,9 @@ function MessageViewInner({
         return
       }
       setHistoryIndex(nextIndex)
-      const replacement = sentHistory[nextIndex] ?? ''
+      const restoredContext = readComposerContext(sentHistory[nextIndex] ?? '')
+      const replacement = restoredContext.text
+      setAttachments(prev => mergeComposerAttachments(prev, restoreContextAttachments(restoredContext.records)))
       setInputText(replacement)
       inputTextRef.current = replacement
       e.preventDefault()
@@ -5840,7 +5891,9 @@ function MessageViewInner({
         return
       }
       setHistoryIndex(nextIndex)
-      const replacement = sentHistory[nextIndex] ?? ''
+      const restoredContext = readComposerContext(sentHistory[nextIndex] ?? '')
+      const replacement = restoredContext.text
+      setAttachments(prev => mergeComposerAttachments(prev, restoreContextAttachments(restoredContext.records)))
       setInputText(replacement)
       inputTextRef.current = replacement
       e.preventDefault()
@@ -5897,61 +5950,69 @@ function MessageViewInner({
   const addAttachment = useCallback(() => {
     const path = attachmentPath.trim()
     if (!path) return
-    setAttachments((prev) => [
-      ...prev,
-      {
-        id: `${Date.now()}-${prev.length}`,
-        type: attachmentType,
-        path,
-        displayName: attachmentType === 'agent' ? path.replace(/^@/, '') : undefined,
-        text: attachmentType === 'agent' ? `@${path.replace(/^@/, '')}` : undefined,
-      },
-    ])
+    if (attachmentType === 'agent' || attachmentType === 'extension_context') {
+      setAttachments(prev => [...prev, { id: crypto.randomUUID(), type: attachmentType, path, displayName: path, text: `@${path}` }])
+    } else {
+      insertContextAttachments([{ ...createContextAttachment(attachmentType === 'image' ? 'image' : 'file', path.split('/').pop() || path, undefined, path), type: attachmentType }])
+    }
     setAttachmentPath('')
-  }, [attachmentPath, attachmentType])
+  }, [attachmentPath, attachmentType, insertContextAttachments])
 
+  const activeComposerDraftKeyRef = useRef(composerDraftKey)
+  useLayoutEffect(() => { activeComposerDraftKeyRef.current = composerDraftKey }, [composerDraftKey])
   const ingestFileAttachments = useCallback(async (files: File[]) => {
+    const owner = activeComposerDraftKeyRef.current
     if (files.length === 0) return
     const next: SendAttachment[] = []
-    for (const file of files) {
-      const isImage = file.type.startsWith('image/')
-      if (!isImage) {
-        const path = (file as File & { path?: string }).path
-        if (path) {
+    attachmentReadsRef.current += 1
+    try {
+      for (const file of files) {
+        const isImage = file.type.startsWith('image/')
+        if (!isImage) {
+          const path = (file as File & { path?: string }).path
+          if (path) {
+            next.push({
+              id: `${Date.now()}-${next.length}-${file.name}`,
+              type: 'file',
+              path,
+              displayName: file.name,
+            })
+          } else if (file.size <= 2 * 1024 * 1024 && (file.type.startsWith('text/') || /\.(txt|md|json|csv|tsv|log|js|jsx|ts|tsx|py|css|html|yaml|yml|xml|sh|sql)$/i.test(file.name))) {
+            next.push(createContextAttachment('file', file.name, await file.text()))
+          } else {
+            setSendError(`Attach ${file.name} by its local path; this browser cannot read it as text context.`)
+          }
+          continue
+        }
+        try {
+          const buffer = await file.arrayBuffer()
+          const bytes = new Uint8Array(buffer)
+          let binary = ''
+          const chunk = 0x8000
+          for (let i = 0; i < bytes.length; i += chunk) {
+            binary += String.fromCharCode(...bytes.subarray(i, i + chunk))
+          }
+          const data = typeof window === 'undefined' ? '' : window.btoa(binary)
           next.push({
-            id: `${Date.now()}-${next.length}-${file.name}`,
-            type: 'file',
-            path,
-            displayName: file.name,
+            id: `${Date.now()}-${next.length}-${file.name || 'pasted-image'}`,
+            type: 'blob',
+            mimeType: file.type || 'image/png',
+            data,
+            displayName: file.name || `pasted-image.${(file.type.split('/')[1] ?? 'png')}`,
           })
+        } catch {
+          setSendError(`Unable to read ${file.name || 'the pasted image'}. Attach it again.`)
         }
-        continue
       }
-      try {
-        const buffer = await file.arrayBuffer()
-        const bytes = new Uint8Array(buffer)
-        let binary = ''
-        const chunk = 0x8000
-        for (let i = 0; i < bytes.length; i += chunk) {
-          binary += String.fromCharCode(...bytes.subarray(i, i + chunk))
-        }
-        const data = typeof window === 'undefined' ? '' : window.btoa(binary)
-        next.push({
-          id: `${Date.now()}-${next.length}-${file.name || 'pasted-image'}`,
-          type: 'blob',
-          mimeType: file.type || 'image/png',
-          data,
-          displayName: file.name || `pasted-image.${(file.type.split('/')[1] ?? 'png')}`,
-        })
-      } catch {
-        // skip files that fail to read
-      }
-    }
+    } catch {
+      setSendError('Unable to read the attachment. Attach it again.')
+    } finally { attachmentReadsRef.current -= 1 }
     if (next.length === 0) return
-    setAttachments((prev) => [...prev, ...next])
-  }, [])
+    if (owner !== activeComposerDraftKeyRef.current) return
+    insertContextAttachments(next.map(a => ({ ...a, id: crypto.randomUUID(), contextKind: a.type === 'blob' || a.type === 'image' ? 'image' : 'file' })))
+  }, [insertContextAttachments])
 
-  const handleComposerPaste = useCallback(async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+  const handleComposerPaste = useCallback(async (event: React.ClipboardEvent<HTMLDivElement>) => {
     const items = event.clipboardData?.items
     if (!items || items.length === 0) return
     const files: File[] = []
@@ -5996,6 +6057,11 @@ function MessageViewInner({
   }, [ingestFileAttachments])
 
   const removeAttachment = useCallback((id: string | undefined, index: number) => {
+    if (id) {
+      const next = removeContextReference(inputTextRef.current, id)
+      setInputText(next)
+      inputTextRef.current = next
+    }
     setAttachments((prev) => prev.filter((attachment, attachmentIndex) => (
       id ? attachment.id !== id : attachmentIndex !== index
     )))
@@ -6224,8 +6290,10 @@ function MessageViewInner({
   }, [resizeComposer])
 
   const handleReusePrompt = useCallback((text: string) => {
-    const trimmed = text.trim()
+    const restoredContext = readComposerContext(text)
+    const trimmed = restoredContext.text.trim()
     if (!trimmed) return
+    setAttachments(prev => mergeComposerAttachments(prev, restoreContextAttachments(restoredContext.records)))
     setInputText(trimmed)
     inputTextRef.current = trimmed
     setHistoryIndex(-1)
@@ -6251,21 +6319,16 @@ function MessageViewInner({
   }, [focusComposer])
 
   const handleDiffCommentToComposer = useCallback((prompt: string) => {
-    const trimmed = prompt.trim()
-    if (!trimmed) return
-    const existing = inputTextRef.current
-    const separator = existing.length > 0 ? (existing.endsWith('\n') ? '\n' : '\n\n') : ''
-    const next = `${existing}${separator}${trimmed}\n\n`
-    setInputText(next)
-    inputTextRef.current = next
-    setHistoryIndex(-1)
-    draftBeforeHistoryRef.current = { text: '', cursorPos: 0 }
-    focusComposer()
-  }, [focusComposer])
+    if (!prompt.trim()) return
+    const label = /File: (.*)/.exec(prompt)?.[1] || 'Diff comment'
+    insertContextAttachments([createContextAttachment('diff', label, prompt)])
+  }, [insertContextAttachments])
 
   const handleEditFromMessage = useCallback((messageId: string, text: string) => {
-    const trimmed = text.trim()
+    const restoredContext = readComposerContext(text)
+    const trimmed = restoredContext.text.trim()
     if (!trimmed) return
+    setAttachments(prev => mergeComposerAttachments(prev, restoreContextAttachments(restoredContext.records)))
     setInputText(trimmed)
     inputTextRef.current = trimmed
     setHistoryIndex(-1)
@@ -6700,7 +6763,7 @@ function MessageViewInner({
   // A turn is live (whether we own its stream or reattached to it) — drives the
   // stop button and the "busy" composer presentation.
   const turnRunning = sendBusy || reattachedRunning
-  const canSubmitMessage = Boolean(session && (inputText.trim() || attachments.length > 0))
+  const canSubmitMessage = Boolean(session && (inputText.trim() || referencedComposerAttachments(inputText, attachments).length > 0))
   const composerConfig = useMemo(() => getProviderComposer(session?.provider), [session?.provider])
   const composerPlaceholder = canUseChannelBridge && channelBridge.routeComposer
     ? 'Send to the live CLI bridge… (toggle off in the bridge panel)'
@@ -6808,9 +6871,9 @@ function MessageViewInner({
         uuid: 'live-user',
         sessionId: session?.sessionId,
         provider: session?.provider,
-        blocks: [{ type: 'text', text: optimisticUserText }],
+        blocks: [{ type: 'text', text: optimisticContextText || optimisticUserText }],
       }
-    : null), [optimisticUserText, session?.provider, session?.sessionId, showLiveTimelineOverlay])
+    : null), [optimisticUserText, optimisticContextText, session?.provider, session?.sessionId, showLiveTimelineOverlay])
   const liveAssistantMessage = useMemo<ThreadedMessage | null>(() => (showLiveTimelineOverlay && (sendState === 'sending' || awaitingPersistedTurn)
     ? {
         role: 'assistant',
@@ -9655,6 +9718,7 @@ function MessageViewInner({
                 ADD
               </Button>
               {attachments.map((attachment, index) => {
+                if (attachment.contextKind && !contextReferences(inputText).some(ref => ref.id === attachment.id)) return null
                 const previewSrc = attachmentImagePreviewSrc(attachment)
                 const isImage = previewSrc !== null
                 return (
@@ -9887,13 +9951,15 @@ function MessageViewInner({
                   })}
                 </div>
               )}
-              <Textarea
+              <ContextComposer
+                key={composerDraftKey}
+                attachments={loadedComposerDraftKey === composerDraftKey ? attachments : []}
+                onAttachments={(incoming) => setAttachments(prev => mergeComposerAttachments(prev, incoming))}
                 className="av-web-composer-textarea"
                 ref={textareaRef}
-                value={inputText}
+                value={loadedComposerDraftKey === composerDraftKey ? inputText : ''}
                 onFocus={prewarmComposer}
-                onChange={e => {
-                  const next = e.target.value
+                onValueChange={(next, cursor) => {
                   setInputText(next)
                   inputTextRef.current = next
                   if (historyIndex !== -1 && next !== sentHistory[historyIndex]) {
@@ -9904,17 +9970,15 @@ function MessageViewInner({
                     setSendError(null)
                     setSendState('idle')
                   }
-                  updateComposerHints(next, e.target.selectionStart ?? next.length)
+                  updateComposerHints(next, cursor)
                 }}
-                onKeyUp={(event) => updateComposerHints(event.currentTarget.value, event.currentTarget.selectionStart ?? event.currentTarget.value.length)}
-                onClick={(event) => updateComposerHints(event.currentTarget.value, event.currentTarget.selectionStart ?? event.currentTarget.value.length)}
+                onCaretChange={updateComposerHints}
                 onBlur={() => { setMentionQuery(null); setSlashOpen(false) }}
                 onCompositionStart={() => { isComposingRef.current = true }}
                 onCompositionEnd={() => { isComposingRef.current = false }}
                 onKeyDown={handleKeyDown}
                 onPaste={handleComposerPaste}
                 placeholder={composerPlaceholder}
-                rows={1}
                 style={{
                   width: '100%',
                   minHeight: 66,

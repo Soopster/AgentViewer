@@ -1,5 +1,6 @@
 'use client'
 
+import { createContextAttachment } from '@/lib/composerContext'
 import { ArrowLeft, ArrowRight, ExternalLink, Globe2, RotateCw } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
@@ -29,10 +30,14 @@ function normalizeBrowserUrl(input: string): string | null {
 export default function BrowserSurface({
   url,
   onUrlChange,
+  canInsert = false,
 }: {
+  canInsert?: boolean
   url: string | null
   onUrlChange: (url: string) => void
 }) {
+  const [contextNote, setContextNote] = useState('')
+  const [contextOpen, setContextOpen] = useState(false)
   const [draft, setDraft] = useState(url ?? '')
   const [history, setHistory] = useState<string[]>(url ? [url] : [])
   const [historyIndex, setHistoryIndex] = useState(url ? 0 : -1)
@@ -136,6 +141,16 @@ export default function BrowserSurface({
         </a>
       </div>
 
+      {canInsert && current && <div className="av-context-source">
+        <button type="button" onClick={() => setContextOpen(open => !open)}>Attach page context</button>
+        {contextOpen && <div>
+          <label>Page note<input aria-label="Page note" value={contextNote} onChange={event => setContextNote(event.target.value)} placeholder="What should the agent look at?" /></label>
+          <button type="button" onClick={() => {
+            window.dispatchEvent(new CustomEvent('agent-viewer:insert-context', { detail: createContextAttachment('browser', 'Browser page', contextNote, current) }))
+            setContextNote(''); setContextOpen(false)
+          }}>Insert into message</button>
+        </div>}
+      </div>}
       {current ? (
         <iframe
           key={`${current}#${reloadKey}`}

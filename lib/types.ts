@@ -236,7 +236,11 @@ export type SessionComposerOptions = {
   currentPermissionMode?: string | null
 }
 
+export type ComposerContextKind = 'file' | 'image' | 'terminal' | 'diff' | 'browser'
+
 export type SendAttachment = {
+  /** Inline composer reference; bytes remain on the normal attachment channel. */
+  contextKind?: ComposerContextKind
   id?: string
   type: 'file' | 'directory' | 'selection' | 'image' | 'mention' | 'skill' | 'blob' | 'agent' | 'extension_context'
   path?: string
