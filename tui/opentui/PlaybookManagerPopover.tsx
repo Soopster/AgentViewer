@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import type { TextareaAction, TextareaRenderable } from '@opentui/core'
+import type { ScrollBoxRenderable, TextareaAction, TextareaRenderable } from '@opentui/core'
 import type { PlaybookPhase, PlaybookSummary, PlaybookTask, RunPlaybook } from '../../lib/agentProtocol'
 import {
   deleteTuiRunPlaybook,
@@ -108,6 +108,7 @@ export function PlaybookManagerPopover({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const multilineEditorRef = useRef<TextareaRenderable | null>(null)
+  const editorScrollRef = useRef<ScrollBoxRenderable | null>(null)
 
   const reload = useCallback(async (preferredName?: string) => {
     const listing = await listTuiRunPlaybooks(cwd)
@@ -335,6 +336,12 @@ export function PlaybookManagerPopover({
   const overlayWidth = Math.max(54, Math.min(width - 4, 140))
   const overlayHeight = Math.max(22, Math.min(height - 4, 42))
   const bodyWidth = overlayWidth - 4
+  const bodyHeight = Math.max(overlayHeight - 7 - (error ? 1 : 0), 1)
+  useEffect(() => {
+    if (mode !== 'edit') return
+    const timer = setTimeout(() => editorScrollRef.current?.scrollChildIntoView(`playbook-field:${editorFocus}`), 32)
+    return () => clearTimeout(timer)
+  }, [editorFocus, mode, bodyHeight])
   const listWidth = Math.max(28, Math.min(38, Math.floor(bodyWidth * 0.3)))
   const detailWidth = Math.max(20, bodyWidth - listWidth - 2)
   const editorLeftWidth = Math.floor((bodyWidth - 2) * 0.42)
@@ -352,7 +359,7 @@ export function PlaybookManagerPopover({
     const multiline = MULTILINE_EDITOR_FIELDS.has(focus)
     const focused = editorFocus === focus
     return (
-    <box height={multiline ? 4 : 2} flexDirection="column" backgroundColor={focusBg(focus)}>
+    <box id={`playbook-field:${focus}`} height={multiline ? 4 : 2} flexShrink={0} flexDirection="column" backgroundColor={focusBg(focus)}>
       <text fg={focusFg(focus)} wrapMode="none">{label}</text>
       <box height={multiline ? 3 : 1} width="100%" paddingLeft={1} backgroundColor={focused ? theme.surface3 : theme.surface} overflow="hidden">
         {focused
@@ -378,7 +385,9 @@ export function PlaybookManagerPopover({
 
   return (
     <box
+      id="playbook-manager"
       position="absolute"
+      overflow="hidden"
       top={Math.max(1, Math.floor((height - overlayHeight) / 2))}
       left={Math.max(1, Math.floor((width - overlayWidth) / 2))}
       width={overlayWidth}
@@ -392,44 +401,45 @@ export function PlaybookManagerPopover({
       title="PLAYBOOK MANAGER"
       titleColor={theme.violet}
     >
-      <box height={3} paddingX={1} border={['bottom']} borderStyle="single" borderColor={theme.border} flexDirection="column" justifyContent="center">
+      <box height={3} flexShrink={0} paddingX={1} border={['bottom']} borderStyle="single" borderColor={theme.border} flexDirection="column" justifyContent="center">
         <text fg={theme.text}>REUSABLE COORDINATOR WORKFLOWS</text>
         <text fg={theme.dim} wrapMode="none">{clip(`${cwd}/.agent-viewer/playbooks · ${playbooks.length} valid${invalidCount ? ` · ${invalidCount} invalid` : ''}`, bodyWidth)}</text>
       </box>
 
       {mode === 'edit' ? (
-        <box width={bodyWidth} flexGrow={1} paddingX={1} flexDirection="column" overflow="hidden">
+        <box width={bodyWidth} height={bodyHeight} flexShrink={0} paddingX={1} flexDirection="column" overflow="hidden">
           <box height={2} flexDirection="row" alignItems="center">
             <text fg={theme.cyan} wrapMode="none">{editingName ? clip(`EDIT ${editingName}`, Math.max(16, Math.floor(bodyWidth * 0.55))) : 'NEW PLAYBOOK'}</text>
             <box flexGrow={1} />
             <text fg={theme.dim} wrapMode="none">Tab moves fields</text>
           </box>
-          <box width={bodyWidth - 2} flexGrow={1} flexDirection="row" gap={2} overflow="hidden">
+          <scrollbox ref={editorScrollRef} height={Math.max(bodyHeight - 2, 1)} scrollY>
+          <box width={bodyWidth - 2} flexDirection="row" gap={2}>
             <box width={editorLeftWidth} flexDirection="column">
               <text fg={theme.violet}>PLAYBOOK SETTINGS</text>
               {field('Name', 'name', draft.name, (value) => updateDraft({ name: value }), 'lowercase-slug')}
               {field('Description', 'description', draft.description ?? '', (value) => updateDraft({ description: value || undefined }), 'When should this run?')}
               {field('Argument guidance', 'argsHint', draft.argsHint ?? '', (value) => updateDraft({ argsHint: value || undefined }), 'Optional input hint')}
-              <box height={2} flexDirection="column" backgroundColor={focusBg('maxAgents')}>
+              <box id="playbook-field:maxAgents" height={2} flexShrink={0} flexDirection="column" backgroundColor={focusBg('maxAgents')}>
                 <text fg={focusFg('maxAgents')}>Agent limit</text>
                 <text fg={theme.text}>{`‹ ${draft.maxAgents ?? 3} total ›  ${editorFocus === 'maxAgents' ? '←/→ adjust' : ''}`}</text>
               </box>
               {field('Completion gate', 'gateCommand', draft.gateCommand ?? '', (value) => updateDraft({ gateCommand: value || undefined }), 'Optional command')}
-              <box height={2} flexDirection="column" backgroundColor={focusBg('approval')}>
+              <box id="playbook-field:approval" height={2} flexShrink={0} flexDirection="column" backgroundColor={focusBg('approval')}>
                 <text fg={focusFg('approval')}>Plan approval</text>
                 <text fg={draft.requirePlanApproval ? theme.amber : theme.green}>{draft.requirePlanApproval ? '[x] Required' : '[ ] Automatic'}{editorFocus === 'approval' ? '  Space toggles' : ''}</text>
               </box>
-              <box height={2} flexDirection="column" backgroundColor={focusBg('autonomy')}>
+              <box id="playbook-field:autonomy" height={2} flexShrink={0} flexDirection="column" backgroundColor={focusBg('autonomy')}>
                 <text fg={focusFg('autonomy')}>Autonomy</text>
                 <text fg={theme.cyan}>{`‹ ${(draft.autonomy ?? 'medium').toUpperCase()} ›${editorFocus === 'autonomy' ? '  ←/→ choose' : ''}`}</text>
               </box>
-              <box height={2} flexDirection="column" backgroundColor={focusBg('review')}>
+              <box id="playbook-field:review" height={2} flexShrink={0} flexDirection="column" backgroundColor={focusBg('review')}>
                 <text fg={focusFg('review')}>Judgment review</text>
                 <text fg={draft.requireReview ? theme.amber : theme.green}>{draft.requireReview ? '[x] Required' : '[ ] Automatic'}{editorFocus === 'review' ? '  Space toggles' : ''}</text>
               </box>
             </box>
             <box width={editorRightWidth} flexDirection="column" border={['left']} borderStyle="single" borderColor={theme.border} paddingLeft={1}>
-              <box height={2} flexDirection="column" backgroundColor={focusBg('phaseNav')}>
+              <box id="playbook-field:phaseNav" height={2} flexShrink={0} flexDirection="column" backgroundColor={focusBg('phaseNav')}>
                 <text fg={theme.violet}>WORKFLOW STRUCTURE</text>
                 <box height={1} flexDirection="row">
                   <text fg={focusFg('phaseNav')} wrapMode="none">{`Phase ${phaseIndex + 1}/${draft.phases.length}  ‹ ${clip(phase?.title ?? '', Math.max(10, editorRightWidth - 34))} ›`}</text>
@@ -438,7 +448,7 @@ export function PlaybookManagerPopover({
                 </box>
               </box>
               {field('Phase title', 'phaseTitle', phase?.title ?? '', (value) => updatePhase({ title: value }), 'Phase title')}
-              <box height={2} flexDirection="column" backgroundColor={focusBg('taskNav')}>
+              <box id="playbook-field:taskNav" height={2} flexShrink={0} flexDirection="column" backgroundColor={focusBg('taskNav')}>
                 <text fg={focusFg('taskNav')}>Task</text>
                 <box height={1} flexDirection="row">
                   <text fg={theme.text} wrapMode="none">{`${taskIndex + 1}/${phase?.tasks.length ?? 0}  ‹ ${clip(task?.title ?? '', Math.max(10, editorRightWidth - 34))} ›`}</text>
@@ -449,15 +459,15 @@ export function PlaybookManagerPopover({
               {field('Task key', 'taskKey', task?.key ?? '', (value) => updateTask({ key: value || undefined }), 'stable-key')}
               {field('Task title', 'taskTitle', task?.title ?? '', (value) => updateTask({ title: value }), 'Task outcome')}
               {field('Task instructions', 'taskDetail', task?.detail ?? '', (value) => updateTask({ detail: value }), 'Full instructions')}
-              <box height={2} flexDirection="column" backgroundColor={focusBg('taskRole')}>
+              <box id="playbook-field:taskRole" height={2} flexShrink={0} flexDirection="column" backgroundColor={focusBg('taskRole')}>
                 <text fg={focusFg('taskRole')}>Assigned role</text>
                 <text fg={theme.text}>{`‹ ${task?.role ?? 'teammate'} ›${editorFocus === 'taskRole' ? '  ←/→ change' : ''}`}</text>
               </box>
-              <box height={2} flexDirection="column" backgroundColor={focusBg('taskSeat')}>
+              <box id="playbook-field:taskSeat" height={2} flexShrink={0} flexDirection="column" backgroundColor={focusBg('taskSeat')}>
                 <text fg={focusFg('taskSeat')}>Seat</text>
                 <text fg={theme.text}>{`‹ ${(task?.seat ?? (task?.role === 'lead' ? 'director' : 'executor')).toUpperCase()} ›`}</text>
               </box>
-              <box height={2} flexDirection="column" backgroundColor={focusBg('taskProvider')}>
+              <box id="playbook-field:taskProvider" height={2} flexShrink={0} flexDirection="column" backgroundColor={focusBg('taskProvider')}>
                 <text fg={focusFg('taskProvider')}>Requested provider</text>
                 <text fg={theme.text}>{`‹ ${task?.provider?.toUpperCase() ?? 'ANY'} ›`}</text>
               </box>
@@ -467,9 +477,10 @@ export function PlaybookManagerPopover({
               {field('Verification commands', 'taskVerify', task?.verifyCommands?.join('\n') ?? '', (value) => updateTask({ verifyCommands: value.split('\n').map((entry) => entry.trim()).filter(Boolean) }), 'one command per line')}
             </box>
           </box>
+          </scrollbox>
         </box>
       ) : (
-        <box flexGrow={1} paddingX={1} flexDirection="row" overflow="hidden">
+        <box height={bodyHeight} flexShrink={0} paddingX={1} flexDirection="row" overflow="hidden">
           <box width={listWidth} flexDirection="column" border={['right']} borderStyle="single" borderColor={theme.border} paddingRight={1}>
             <box height={2} flexDirection="column">
               <text fg={theme.cyan}>SAVED PLAYBOOKS</text>
@@ -510,7 +521,7 @@ export function PlaybookManagerPopover({
       )}
 
       {error ? <box height={1} paddingX={1}><text fg={theme.red} wrapMode="none">{clip(error, bodyWidth)}</text></box> : null}
-      <box height={2} paddingX={1} border={['top']} borderStyle="single" borderColor={theme.border} flexDirection="row" alignItems="center">
+      <box id="playbook-manager-footer" height={2} flexShrink={0} backgroundColor={theme.surface2} paddingX={1} border={['top']} borderStyle="single" borderColor={theme.border} flexDirection="row" alignItems="center">
         <text fg={busy ? theme.amber : theme.dim} wrapMode="none">
           {busy ? 'Working…' : mode === 'edit'
             ? `${MULTILINE_EDITOR_FIELDS.has(editorFocus) ? 'Enter newline · ' : ''}Ctrl+S save · Ctrl+P phase · Ctrl+T task · Ctrl+X delete task · Alt+X delete phase · Esc cancel`

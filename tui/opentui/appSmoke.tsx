@@ -510,6 +510,25 @@ if (!coordinationFrame.includes('Second line') || !coordinationFrame.includes('E
   throw new Error(`Structured description did not support multiline editing:\n${coordinationFrame}`)
 }
 
+// A tall editor must scroll inside its frame rather than paint its hints over
+// the app footer. Tab all the way to the last field to prove it stays usable.
+const playbookFrame = setup.renderer.root.findDescendantById('playbook-manager')
+const playbookFooter = setup.renderer.root.findDescendantById('playbook-manager-footer')
+if (!playbookFrame || !playbookFooter
+  || playbookFooter.y + playbookFooter.height >= playbookFrame.y + playbookFrame.height) {
+  throw new Error('Playbook footer escaped its dialog frame')
+}
+for (let index = 0; index < 19; index += 1) {
+  act(() => { setup.mockInput.pressTab() })
+  await act(async () => { await setup.flush() })
+}
+await act(async () => { await new Promise(resolve => setTimeout(resolve, 100)); await setup.flush() })
+const verificationField = setup.renderer.root.findDescendantById('playbook-field:taskVerify')
+if (!verificationField || verificationField.y < playbookFrame.y + 4
+  || verificationField.y + verificationField.height > playbookFooter.y) {
+  throw new Error(`Last playbook field did not scroll into view:\n${captureCharFrame()}`)
+}
+
 console.log('Full App smoke render, playbook manager launch, Agent Operations N launch, Teammates panel, and split chord passed')
 // Boot effects leave live timers (session polls, registry reconcile) — exit
 // explicitly instead of waiting for them.
