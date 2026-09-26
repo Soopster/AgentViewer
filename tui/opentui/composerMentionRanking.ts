@@ -36,8 +36,9 @@ function rank(
   scoreOf: (entry: ComposerMentionFileEntry) => number,
 ): ComposerMentionFileEntry[] {
   return candidates
+    .map((candidate) => ({ ...candidate, score: scoreOf(candidate.entry) }))
     .sort((left, right) => left.tier - right.tier
-      || scoreOf(right.entry) - scoreOf(left.entry)
+      || right.score - left.score
       || left.order - right.order)
     .slice(0, limit)
     .map((candidate) => candidate.entry)
@@ -55,8 +56,8 @@ function filterEntries(
   // what you have been working in.
   if (!query) {
     return entries
-      .map((entry, order) => ({ entry, tier: 0, order }))
-      .sort((left, right) => scoreOf(right.entry) - scoreOf(left.entry) || left.order - right.order)
+      .map((entry, order) => ({ entry, score: scoreOf(entry), order }))
+      .sort((left, right) => right.score - left.score || left.order - right.order)
       .slice(0, limit)
       .map((candidate) => candidate.entry)
   }
@@ -101,6 +102,9 @@ export function filterComposerMentionEntries(
   frecency?: Record<string, number>,
   frecencyPrefix?: string,
 ): ComposerMentionFileEntry[] {
+  // Without a query or history every entry ties; preserve file-walk order
+  // directly instead of allocating and sorting the entire project.
+  if (!query && !frecency) return entries.slice(0, limit)
   const scoreOf = frecency
     ? (entry: ComposerMentionFileEntry) => frecency[frecencyPrefix ? `${frecencyPrefix}/${entry.path}` : entry.path] ?? 0
     : () => 0

@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { createSidebarSessionSearch } from './sidebarSessionSearch'
 import React, { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, startTransition, useState, useSyncExternalStore } from 'react'
 import { spawn } from 'node:child_process'
 import { GitPopover } from './GitPopover'
@@ -9465,19 +9466,11 @@ export default function OpenTuiApp() {
     [syntaxStyle, theme],
   )
   const normalizedSessionQuery = sessionSearchQuery.trim().toLowerCase()
-  const filteredSessionsForSidebar = useMemo(() => {
-    if (!normalizedSessionQuery) return sessions
-    return sessions.filter((session) => {
-      const title = formatSessionTitle(session).toLowerCase()
-      const project = formatSessionProject(session).toLowerCase()
-      const id = (session.sessionId ?? '').toLowerCase()
-      return (
-        title.includes(normalizedSessionQuery)
-        || project.includes(normalizedSessionQuery)
-        || id.includes(normalizedSessionQuery)
-      )
-    })
-  }, [sessions, normalizedSessionQuery])
+  const searchSidebarSessions = useMemo(() => createSidebarSessionSearch(sessions), [sessions])
+  const filteredSessionsForSidebar = useMemo(
+    () => searchSidebarSessions(normalizedSessionQuery),
+    [searchSidebarSessions, normalizedSessionQuery],
+  )
   // Some providers expose subagents inside a parent transcript instead of as
   // durable child sessions. Fetch their lightweight summaries lazily for the
   // currently open session. Providers with real children (OpenCode/Codex) are

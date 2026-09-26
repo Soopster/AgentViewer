@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { buildEditorFileTree as buildTree, compareEditorPaths, type TreeNode } from './editorFileTree'
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { readFile } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
@@ -200,13 +201,6 @@ type BufferTab = {
    * replace the file with the part of it that happened to fit.
    */
   truncated?: { shownChars: number; totalChars: number }
-}
-
-type TreeNode = {
-  name: string
-  path: string
-  kind: 'directory' | 'file'
-  children: TreeNode[]
 }
 
 type TreeRow = TreeNode & { depth: number }
@@ -546,31 +540,6 @@ function normalizeRelativePath(root: string, path: string): string | null {
   const rel = relative(root, absolute)
   if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || resolve(root, rel) !== absolute) return null
   return rel.split(sep).join('/')
-}
-
-function buildTree(paths: string[]): TreeNode[] {
-  const root: TreeNode = { name: '', path: '', kind: 'directory', children: [] }
-  for (const filePath of paths) {
-    const parts = filePath.split('/').filter(Boolean)
-    let parent = root
-    for (let index = 0; index < parts.length; index += 1) {
-      const name = parts[index]!
-      const nodePath = parts.slice(0, index + 1).join('/')
-      const kind: TreeNode['kind'] = index === parts.length - 1 ? 'file' : 'directory'
-      let child = parent.children.find((entry) => entry.name === name)
-      if (!child) {
-        child = { name, path: nodePath, kind, children: [] }
-        parent.children.push(child)
-      }
-      parent = child
-    }
-  }
-  const sort = (nodes: TreeNode[]) => {
-    nodes.sort((a, b) => a.kind === b.kind ? a.name.localeCompare(b.name, undefined, { numeric: true }) : a.kind === 'directory' ? -1 : 1)
-    for (const node of nodes) sort(node.children)
-  }
-  sort(root.children)
-  return root.children
 }
 
 function flattenTree(nodes: TreeNode[], expanded: ReadonlySet<string>, depth = 0): TreeRow[] {
@@ -1467,6 +1436,7 @@ export function EditorPopover({
   }, [quickOpen, quickMode, quickSymbolQuery])
 
   const quickResults = useMemo<QuickResult[]>(() => {
+    if (!quickOpen) return []
     const query = quickModeQuery(quickQuery)
     if (quickMode === 'line') {
       const line = Number.parseInt(query, 10)
@@ -1554,7 +1524,7 @@ export function EditorPopover({
         || a.result.detail.length - b.result.detail.length)
       .slice(0, 50)
       .map((entry) => entry.result)
-  }, [activeTab, outlineSymbols, projectFiles, quickMode, quickQuery, recentFiles, root, tabs, workspaceSymbolResults])
+  }, [activeTab, outlineSymbols, projectFiles, quickMode, quickOpen, quickQuery, recentFiles, root, tabs, workspaceSymbolResults])
   const searchResult = useMemo(() => findEditorSearchMatches(activeTab?.content ?? '', searchQuery, {
     matchCase: searchMatchCase,
     regex: searchRegex,
@@ -2356,7 +2326,7 @@ export function EditorPopover({
     try {
       if (filePrompt.kind === 'create') {
         const path = await createEditorFile(root, filePrompt.value)
-        setProjectFiles((current) => [...new Set([...current, path])].sort((left, right) => left.localeCompare(right, undefined, { numeric: true })))
+        setProjectFiles((current) => [...new Set([...current, path])].sort(compareEditorPaths))
         setFilePrompt(null)
         await openBuffer(path)
         setMessage(`Created ${path}`)
@@ -2366,7 +2336,7 @@ export function EditorPopover({
       if (filePrompt.kind === 'rename') {
         const moved = await renameEditorFile(root, filePrompt.source, filePrompt.value)
         setProjectFiles((current) => current.map((path) => path === moved.from ? moved.to : path)
-          .sort((left, right) => left.localeCompare(right, undefined, { numeric: true })))
+          .sort(compareEditorPaths))
         setTabs((current) => current.map((tab) => tab.path === moved.from ? { ...tab, path: moved.to } : tab))
         setDiskConflicts((current) => {
           if (!current.has(moved.from)) return current
