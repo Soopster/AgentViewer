@@ -17,6 +17,7 @@ import path from 'node:path'
 import { getCodexClient } from '../lib/codexClient'
 import {
   codexThreadActivityAt,
+  disallowCodexModelResume,
   ensureCodexThreadResumed,
   knownCodexThreadModel,
   prewarmCodexThread,
@@ -80,6 +81,14 @@ await new Promise((resolve) => setTimeout(resolve, 200))
 check('a claimed thread survives later prewarms', await subscribed(claimed))
 check('the newest prewarm is held', await subscribed(prewarmC))
 check('the prewarm it replaced is released', !(await subscribed(prewarmB)))
+
+// The TUI's transcript worker must never become a thread's writer: with
+// resume disallowed, an unlearned model is reported unknown and nothing loads.
+disallowCodexModelResume()
+const infoActivity = codexThreadActivityAt(await client.request('thread/read', { threadId: info, includeTurns: false }).then((response) => response.thread))
+const unknown = await readCodexThreadModel(info, infoActivity + 1)
+check('without resume, an unlearned model is reported unknown', unknown.unknown === true && unknown.model === null)
+check('without resume, nothing is loaded', !(await subscribed(info)))
 
 console.log(failures === 0 ? 'codex resume policy: ok' : `codex resume policy: ${failures} failure(s)`)
 process.exit(failures === 0 ? 0 : 1)
