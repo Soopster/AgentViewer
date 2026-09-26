@@ -375,6 +375,24 @@ Both TUIs depend on the same `lib/` provider layer — changes to `sessionBacken
   full on any state change because the root is one very large component. The harnesses here cannot
   resolve a 20-40ms difference against their own run-to-run variance, and bisecting with them
   produces contradictory answers — so use a CPU profile, below.
+- **An idle app must not re-render its root, and must not animate fast.** The live-turn registry
+  poll (every 1.5s from boot) stored fresh `waiting`/`attention` arrays per poll, re-rendering the
+  root — mounted transcript included — 20 times per 30s idle with nothing changing; equal arrays
+  now keep their identity (`idleRenderSmoke.tsx` reads `readRootRenderCount()`). And every spinner
+  step is a whole OpenTUI frame (the full tree is redrawn and diffed), so the "on standby" idle
+  ticker ticks at `IDLE_TICKER_FRAME_MS` (400ms), not an in-progress spinner's 80ms. Together:
+  settled idle CPU 1.45s → 0.49s per 30s. **Before adding a poll or an animation, check it does
+  not commit the root or paint on every tick.**
+- **Browsing must not start send-path runtimes that selection does not need.** Composer
+  affordances (slash commands, options) read on the main isolate where they share a warm runtime
+  (Claude pool, Copilot/Pi session, Codex app-server); OpenCode has none, so its affordances read
+  in the transcript worker (`readTuiComposerAffordancesAsync`) and the main isolate's
+  `opencode serve` (~500MB) starts at composer engagement. Existing Pi sessions likewise warm on
+  composer engagement (`shouldPrewarmTuiRuntime`): warming on selection loaded Pi's SDK into the
+  main isolate (~130MB) for a cold open that now measures 0.2-0.6s.
+- **`tui.json` is on the save path of every session visit**, so reader states are kept small:
+  default states are not stored and the rest are capped (`MAX_TUI_SESSION_READER_STATES`), merged
+  inside the synchronous read-modify-write (`tuiStateSmoke.ts`).
 - **`bun --cpu-prof --cpu-prof-md` is how to attribute a frame, and `inputPerf`'s render/commit
   split is how to decide what to profile.** `INPUT_DEBUG_PROFILE=1` prints every over-budget frame
   as `actual=` (React render CPU) against `commit=` (everything after the commit: OpenTUI's apply,
