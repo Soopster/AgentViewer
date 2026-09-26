@@ -106,6 +106,8 @@ type Props = {
   width: number
   height: number
   onOpenSession: (agent: ProtocolAgent) => void
+  /** Show these teammates' transcripts in split panes beside the reader, in order of priority. */
+  onWatchSessions: (agents: ProtocolAgent[]) => void
   onNotice: (tone: 'info' | 'error', text: string, durationMs?: number) => void
   onKeyHandlerReady: (handler: (key: TeammatesKeyEvent) => void) => void
 }
@@ -123,7 +125,7 @@ function isPrintable(key: TeammatesKeyEvent): boolean {
 }
 
 export const TeammatesPopover = memo(function TeammatesPopover({
-  theme, width, height, onOpenSession, onNotice, onKeyHandlerReady,
+  theme, width, height, onOpenSession, onWatchSessions, onNotice, onKeyHandlerReady,
 }: Props) {
   const state = useSyncExternalStore(
     subscribeInteractiveCoordinator, getInteractiveCoordinatorState, getInteractiveCoordinatorState,
@@ -215,6 +217,15 @@ export const TeammatesPopover = memo(function TeammatesPopover({
     if (key.name === 'return' && selected) {
       reviewInteractiveCoordinatorResults(coordinatorResultIdsForAgent(snapshot, selected.id))
       onOpenSession(selected); closeInteractiveCoordinator(); return
+    }
+    // Herdr keeps every agent on screen at once; `o` puts the selected
+    // teammate beside the lead's chat, `O` the team in attention order. Only
+    // reads, so it stays available while a request is unconfirmed. Watching
+    // is not reviewing: results stay flagged until a transcript is opened.
+    // Terminals disagree on how Shift+O arrives (name `O`, or `o` with shift).
+    const watchTeam = key.sequence === 'O' || (key.name.toLowerCase() === 'o' && key.shift)
+    if ((watchTeam && teammates.length) || (key.name === 'o' && !watchTeam && selected)) {
+      onWatchSessions(watchTeam ? teammates : [selected!]); closeInteractiveCoordinator(); return
     }
     // Alert delivery is a local preference, not a Coordinator mutation, so it
     // stays available while a request is unconfirmed.
@@ -331,7 +342,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
     if (key.name === 'm' && selected && !disabled) {
       setDraft({ kind: 'message', to: selected.id, toName: selected.name, text: '' })
     }
-  }, [act, busy, canLead, confirmOff, data, disabled, draft, enabled, locked, onNotice, onOpenSession,
+  }, [act, busy, canLead, confirmOff, data, disabled, draft, enabled, locked, onNotice, onOpenSession, onWatchSessions,
       pending, recoveries, selected, teammates, clamped, snapshot, terminal, unconfirmedDelivery, currentAttention, items.length])
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
@@ -419,8 +430,8 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       : pending
         ? [['r', 'retry same request'], ['⏎', 'inspect'], ['e', 'edit after checking task history'], ['esc', 'close']]
         : !enabled
-          ? (teammates.length ? [['j/k', 'move'], ['⏎', 'open transcript'], ['e', 'new team'], ['esc', 'close']] : canLead ? [['e', 'enable coordinator'], ['esc', 'close']] : [['esc', 'close']])
-          : [['j/k', 'move'], ['⏎', 'open'], ['d', 'ask'], ['m', 'message'],
+          ? (teammates.length ? [['j/k', 'move'], ['⏎', 'open transcript'], ['o/O', 'watch'], ['e', 'new team'], ['esc', 'close']] : canLead ? [['e', 'enable coordinator'], ['esc', 'close']] : [['esc', 'close']])
+          : [['j/k', 'move'], ['⏎', 'open'], ['o/O', 'watch'], ['d', 'ask'], ['m', 'message'],
              ['r', 'resume'], ['i', 'interrupt'], ['p', `new: ${newTeammateProvider ? formatProviderLabel(newTeammateProvider) : 'same'}`], ['c', 'continuation'], ['w', 'worktrees'], ['l', `alerts ${state.notifications}`], ['x', 'turn off'], ['esc', 'close']]
   // Truncation is by whole entries, not mid-word: a hint cut to "x …" tells the
   // reader a key exists without saying which.

@@ -274,6 +274,7 @@ import {
   SPLIT_SHARE_EVEN,
   SPLIT_SHARE_STEP,
   type SplitPaneOrientation,
+  planTeammateWatch,
 } from './splitPaneState'
 import {
   CHORD_HELP_REVEAL_MS,
@@ -13241,6 +13242,63 @@ export default function OpenTuiApp() {
     setFocusedPane('messages')
   })
 
+  // Herdr's everyday view: the lead's chat in the reader and teammates live
+  // beside it. Each watched teammate becomes an open tab pinned to a split
+  // pane, first in the order given (the panel passes attention order), so the
+  // teammate that needs the user is the one that gets a pane when there are
+  // more teammates than panes.
+  const watchCoordinationAgentSessions = useEffectEvent((agents: ProtocolAgent[]) => {
+    const targets: Array<{ sessionKey: string; session: Session; name: string }> = []
+    let refusal: string | null = null
+    for (const agent of agents) {
+      const target = resolveCoordinationTranscriptTarget(agent, sessionsByKeyRef.current, Date.now())
+      if (target.kind === 'unreadable') refusal ??= target.reason
+      else targets.push({ sessionKey: target.sessionKey, session: target.session, name: agent.name })
+    }
+    const plan = planTeammateWatch({
+      targets,
+      selectedSessionKey,
+      currentPins: splitPinnedKeys,
+      currentCount: splitPaneCount,
+      maxPanes: SPLIT_PANE_MAX,
+    })
+    if (plan.watched.length === 0) {
+      showNotice('info', refusal ?? 'That teammate is already in the reader', 5000)
+      return
+    }
+    setOpenTabSessions((prev) => {
+      const missing = plan.watched.filter((entry) => !prev.some((tab) => sessionKey(tab) === entry.sessionKey))
+      return missing.length ? [...prev, ...missing.map((entry) => entry.session)] : prev
+    })
+    setSplitPinnedKeys(plan.pins)
+    // Set directly rather than through applySplitPaneCount, which projects the
+    // layout from this render's tab list — one that does not hold these tabs yet.
+    if (plan.count !== splitPaneCount) {
+      setSplitPaneCount(plan.count)
+      void writeTuiSplitPanes(plan.count).catch((err) => {
+        setError(err instanceof Error ? err.message : 'Failed to store split view setting')
+      })
+    }
+    // Say what will actually be on screen: a narrow terminal drops panes
+    // before it squeezes the reader, and "watching" a teammate with no pane
+    // would be a claim the frame does not back.
+    const stacked = splitOrientation === 'rows'
+    const visible = calculateSplitPaneLayout({
+      availableExtent: stacked ? Math.max(mainContentHeight - 2, 8) : readerAreaWidth,
+      requestedCount: plan.count,
+      availableCount: plan.count,
+      maxPanes: SPLIT_PANE_MAX,
+      minPaneExtent: stacked ? SPLIT_PANE_MIN_ROWS : SPLIT_PANE_MIN_WIDTH,
+      minReaderExtent: stacked ? MIN_READER_ROWS : MIN_READER_WIDTH,
+      readerShare: splitReaderShare,
+    }).visibleCount
+    const shown = plan.watched.slice(0, Math.max(visible, 0))
+    const hidden = plan.watched.length - shown.length + plan.skipped
+    showNotice('info', shown.length
+      ? `Watching ${shown.map((entry) => entry.name).join(', ')}${hidden > 0 ? ` · ${hidden} more need${hidden === 1 ? 's' : ''} room (${stacked ? 'taller terminal' : '⌃B " to stack'} or ←/→ tabs)` : ''} · ⌃B x close`
+      : `Opened ${plan.watched.map((entry) => entry.name).join(', ')} as tabs · no room for a pane (${stacked ? 'taller terminal' : '⌃B " to stack'})`, 5000)
+  })
+
   const handleCoordContentChange = useEffectEvent(() => {
     setCoordDraft(coordTextareaRef.current?.plainText ?? '')
     if (coordError) setCoordError(null)
@@ -23251,6 +23309,7 @@ export default function OpenTuiApp() {
           width={width}
           height={height}
           onOpenSession={openCoordinationAgentSession}
+          onWatchSessions={watchCoordinationAgentSessions}
           onNotice={showNotice}
           onKeyHandlerReady={(handler) => { teammatesKeyHandlerRef.current = handler }}
         />

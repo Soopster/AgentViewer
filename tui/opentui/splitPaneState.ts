@@ -270,6 +270,40 @@ type ProtocolAgentLike = {
   worktreePath?: string
 }
 
+/**
+ * Which teammates get a split pane when the user asks to watch them. Targets
+ * arrive in priority order (the Teammates panel passes attention order), so
+ * when there are more teammates than panes the ones that need the user win.
+ * The reader's own session never takes a pane, watched sessions go to the
+ * front of the pins so the reconcile effect keeps them, and the pane count only
+ * grows — watching one teammate must not close a pane the user opened.
+ */
+export function planTeammateWatch<T extends { sessionKey: string }>({
+  targets,
+  selectedSessionKey,
+  currentPins,
+  currentCount,
+  maxPanes,
+}: {
+  targets: readonly T[]
+  selectedSessionKey: string | null
+  currentPins: readonly string[]
+  currentCount: number
+  maxPanes: number
+}): { watched: T[]; pins: string[]; count: number; skipped: number } {
+  const eligible = targets.filter((target, index) =>
+    target.sessionKey !== selectedSessionKey
+    && targets.findIndex((other) => other.sessionKey === target.sessionKey) === index)
+  const watched = eligible.slice(0, maxPanes)
+  const keys = watched.map((target) => target.sessionKey)
+  return {
+    watched,
+    pins: [...keys, ...currentPins.filter((key) => !keys.includes(key))].slice(0, maxPanes),
+    count: watched.length ? Math.min(maxPanes, Math.max(currentCount, keys.length)) : currentCount,
+    skipped: eligible.length - watched.length,
+  }
+}
+
 export function resolveSelectedSessionIndex<S>(
   selectedSessionKey: string | null,
   sessions: readonly S[],

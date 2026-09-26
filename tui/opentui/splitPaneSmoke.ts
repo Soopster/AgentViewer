@@ -18,6 +18,7 @@ import {
   SPLIT_SHARE_MAX,
   SPLIT_SHARE_MIN,
   SPLIT_SHARE_STEP,
+  planTeammateWatch,
 } from './splitPaneState'
 
 const paneA = { sessionKey: 'claude:a', text: 'A' }
@@ -236,4 +237,19 @@ await runComposerSessionPreparation({
 })
 assert.equal(preparationStages.at(-1), 'affordances', 'composer affordances must load after runtime and session state')
 
-console.log('Split pane state routing, identity, viewport stability, close targeting, and layout passed')
+// Watching teammates: priority order decides who gets the panes, the reader's
+// own session never takes one, pins keep existing panes behind the watched
+// ones, and the count only grows.
+const team = [{ sessionKey: 'codex:needs-you' }, { sessionKey: 'claude:lead' }, { sessionKey: 'pi:working' }, { sessionKey: 'codex:idle' }]
+const watchTeam = planTeammateWatch({ targets: team, selectedSessionKey: 'claude:lead', currentPins: [], currentCount: 0, maxPanes: 2 })
+assert.deepEqual(watchTeam.watched.map((entry) => entry.sessionKey), ['codex:needs-you', 'pi:working'], 'the first teammates in priority order get the panes, never the reader')
+assert.equal(watchTeam.count, 2)
+assert.equal(watchTeam.skipped, 1)
+const watchOne = planTeammateWatch({ targets: [{ sessionKey: 'pi:working' }], selectedSessionKey: 'claude:lead', currentPins: ['codex:other', 'pi:working'], currentCount: 2, maxPanes: 2 })
+assert.deepEqual(watchOne.pins, ['pi:working', 'codex:other'], 'a watched teammate moves to the front without dropping the other pane')
+assert.equal(watchOne.count, 2, 'watching one teammate must not close a pane the user opened')
+const watchReader = planTeammateWatch({ targets: [{ sessionKey: 'claude:lead' }], selectedSessionKey: 'claude:lead', currentPins: [], currentCount: 0, maxPanes: 2 })
+assert.equal(watchReader.watched.length, 0, 'the reader is already on screen')
+assert.equal(watchReader.count, 0, 'nothing to watch opens no pane')
+
+console.log('Split pane state routing, identity, viewport stability, close targeting, layout, and teammate watching passed')

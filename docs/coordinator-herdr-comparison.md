@@ -287,6 +287,7 @@ difference decides most of the verdicts below.
 | An evicted event cursor reports `events_lost` instead of silently resuming (#4225) | Events are durable rows paged by rowid; pruning drops only heartbeats and acknowledged status mail | Not needed: no silent gap exists |
 | Startup and session switches do not count as completed work (#4457) | "Finished" comes from a task-result record, never an idle transition | Not needed by construction |
 | OpenCode status follows the selected session and its descendants: blocked while any has a pending permission or question (#4357) | The OpenCode harness forwards a subagent's asks to every ancestor's stream and snapshot, and answers them on the asking session | Adopted (September 26) — this was a hang, not a label |
+| Every agent's terminal is on screen at once — the pane is the agent (README, layouts) | `o`/`O` in the Teammates panel open the selected teammate, or the team in attention order, in split panes beside the lead's chat | Adopted (September 26) |
 | Named agents, unique, validated; `agent start <name>` names an agent by its job (SKILL.md) | Protocol names, delegation requires exactly one active match; **a new teammate can now be named** — `name` on `coord_delegate`, `@name` in a TUI draft, a field in the web panel — under herdr's `[a-z][a-z0-9_-]{0,31}` rule | Adopted this pass (naming) |
 | Detach without stopping work (README) | `agent-viewer web` daemon + `--attach`; turns run server-side | Present |
 | Resume supported agent sessions after restart (`agent_resume.rs`) | Provider sessions are durable by id; interrupted teammate execution waits for explicit recovery rather than auto-resuming | Present, deliberately stricter |
@@ -984,3 +985,29 @@ child's `thread/started` source are read too — and a turn claims approvals fro
 its descendant threads. `npm run codex:subagent:live` passes, and fails with the
 old exact-thread check; `codexThreadParentsSmoke.ts` pins the three records,
 transitivity, and that another chat's sub-agent is not claimed.
+
+### Watching the team beside the lead
+
+Herdr's most basic property is also its most effective one: every agent is a
+pane, so the whole team is in view while you talk to one of them. Ours showed a
+teammate only by *replacing* the lead's chat in the reader (`⏎` in the
+Teammates panel), and split panes — which already existed — could only be
+filled from tabs the user had opened by hand.
+
+`o` in the Teammates panel now opens the selected teammate in a split pane
+beside the lead, and `O` the team, in the panel's attention order, so when there
+are more teammates than panes the one waiting on the user gets the first pane.
+The lead's chat stays in the reader; existing panes are kept behind the watched
+ones and the pane count only grows. Watching is deliberately not reviewing — a
+result stays flagged until its transcript is opened. The notice says what
+actually fits: a narrow terminal drops panes before it squeezes the reader, so
+it names the teammates that got a pane and how to see the rest (`⌃B "` to
+stack, or the tabs), rather than claiming all of them are on screen.
+
+`teammatesWatchSmoke.tsx` mounts the real App with a seeded team and asserts
+both teammates' transcripts render in panes beside the lead's, left to right in
+attention order; not raising the pane count and reversing the order each fail
+it (the order check first passed the reversal, because it only compared rows
+holding both panes, and was rewritten to compare columns wherever each landed).
+`splitPaneSmoke.ts` pins `planTeammateWatch`, and the popover smoke the keys at
+all three panel sizes.
