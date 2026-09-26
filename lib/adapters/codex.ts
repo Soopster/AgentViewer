@@ -28,7 +28,8 @@ import {
 } from '../codexMapper'
 import { getCodexStoredTag, getCodexStoredTagsForSessions, setCodexStoredTag } from '../codexTags'
 import {
-  ensureCodexThreadResumed,
+  knownCodexThreadModel,
+  readCodexThreadModel,
   isCodexActiveWriterError,
   isCodexMissingRolloutError,
   pendingCodexSessionInfo,
@@ -67,7 +68,6 @@ export const codexAdapter: SessionAdapter = {
   async readSessionInfo(sessionId) {
     const tag = await getCodexStoredTag(sessionId)
     let thread: CodexThread | null = null
-    let resume: { model: string | null } | null = null
     // A thread that isn't materialized yet, or one another client is writing,
     // is a normal state during a first turn — surface the pending placeholder
     // rather than failing the whole session view.
@@ -76,13 +76,11 @@ export const codexAdapter: SessionAdapter = {
     } catch (err) {
       if (!isCodexMissingRolloutError(err) && !isCodexActiveWriterError(err)) throw err
     }
-    try {
-      resume = await ensureCodexThreadResumed(sessionId)
-    } catch (err) {
-      if (!isCodexMissingRolloutError(err) && !isCodexActiveWriterError(err)) throw err
-    }
     if (!thread) return pendingCodexSessionInfo(sessionId, tag)
-    return mapCodexThreadToSessionInfo(thread, tag, resume?.model ?? null)
+    // No resume here: this runs for every read, prefetches included, and a
+    // resume loads the thread and its MCP servers (see readCodexThreadModel).
+    // readModels learns the model when a session is actually opened.
+    return mapCodexThreadToSessionInfo(thread, tag, knownCodexThreadModel(sessionId))
   },
 
   async setTitle(sessionId, title) {
@@ -144,7 +142,7 @@ export const codexAdapter: SessionAdapter = {
         'Codex model list',
       )
         .catch(() => ({ data: [] as Parameters<typeof mapCodexModelsToSessionModels>[0] })),
-      withTimeout(ensureCodexThreadResumed(sessionId), 8000, 'Codex thread resume').catch(() => null),
+      withTimeout(readCodexThreadModel(sessionId), 8000, 'Codex thread resume').catch(() => null),
     ])
     return {
       models: mapCodexModelsToSessionModels(modelsResponse.data),
@@ -166,7 +164,7 @@ export const codexAdapter: SessionAdapter = {
     // repeated opens of the diagnostics panel share one HTTP round-trip.
     const [thread, resume, project] = await Promise.all([
       readCodexThread(sessionId, false),
-      ensureCodexThreadResumed(sessionId).catch((error) => {
+      readCodexThreadModel(sessionId).catch((error) => {
         if (isCodexActiveWriterError(error)) return { model: null }
         throw error
       }),

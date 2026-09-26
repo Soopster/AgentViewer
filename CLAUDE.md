@@ -146,6 +146,31 @@ parent's thread is what 0.157 actually sends; the child's `thread/started` sourc
 above). `scripts/codexThreadParentsSmoke.ts` pins the parentage records;
 `npm run codex:subagent:live` drives a real sub-agent through an approval end to end.
 
+#### Codex reads must not hold threads loaded (load-bearing)
+
+Codex reports a thread's model only from `thread/resume`, and a resume **loads** the thread: the
+app-server starts every configured MCP server for it (~160MB of child processes per thread on
+codex-cli 0.157) and keeps them until the thread is unsubscribed — measured: never, otherwise. The
+read path used to resume in `readSessionInfo`, which runs for every read and every neighbour
+prefetch, so each Codex session browsed stayed loaded for the app-server's lifetime (1.3GB of
+descendants after browsing eight sessions). `lib/codexThreads.ts` now separates *knowing* a model
+from *holding* a thread:
+
+- **`readSessionInfo` never resumes**; it reports `knownCodexThreadModel` (null until learned).
+- **`readCodexThreadModel`** (models, diagnostics) resumes once, remembers the model, and
+  unsubscribes unless a turn or prewarm holds the thread; the app-server unloads it ~60s later.
+- **Prewarm holds one idle thread** (`CODEX_IDLE_PREWARM_LIMIT`). Selecting another session
+  releases the previous one; a thread a turn has used is *claimed* and never released by prewarm.
+- **A resume makes that app-server the thread's writer.** In the TUI each isolate runs its own
+  app-server, so a resume from the transcript worker made the main isolate's prewarm and turns
+  fail with `already has an active writer`. Codex metadata therefore reads on the main isolate
+  (`readTuiSessionMetadataAsync`), where it shares the prewarm's resume.
+- **Resume with `excludeTurns: true`.** Callers read only the model; the full response carried the
+  transcript — 230KB and ~224ms per resume against 3KB and ~17ms — serially ahead of `turn/start`.
+
+`npm run codex:resume:live` asks the app-server itself (`thread/unsubscribe` answers `unsubscribed`
+only for a subscribed thread); four mutations were verified to fail it.
+
 #### ACP-transport providers (`claude-acp`, `codex-acp`)
 
 Sibling provider ids that drive `claude-agent-acp`/`codex-acp` over the Agent Client Protocol (`session/new → session/prompt → session/update`) as an alternate transport for the same two SDKs — not a `transport` flag on `'claude'`/`'codex'`, and not something OpenCode/Copilot/Pi get (no upstream ACP agent exists for them). `lib/acpAgentSpawn.ts` resolves the subprocess command (env override `CLAUDE_AGENT_ACP_PATH`/`CODEX_ACP_PATH`, else bare command on `PATH`) — the coordinator's `bin/agent-viewer-acp-client.mjs` hand-duplicates this table rather than importing it, since it runs under vanilla `node` with no TS loader. `lib/acpClientPool.ts` is the singleton subprocess/session pool (modeled on `lib/claudePool.ts`): buffers push-based `session/update` notifications into a monotonically indexed array so `lib/sessionBackend.ts`'s poll+offset message model can slice it, queues `session/request_permission`/`elicitation/create` for a real UI round-trip, and reaps idle/stalled subprocesses. `lib/acpMapper.ts` maps buffered ACP updates to `SessionMessage`. `lib/permissions.ts` bridges the pool's pending-request queue into the same `PendingPermission` UI every other provider uses.

@@ -64,6 +64,7 @@ import {
   ensureCodexThreadResumed,
   forgetCodexThreadResumed,
   markCodexThreadResumed,
+  prewarmCodexThread,
   isCodexActiveWriterError,
   isCodexMissingRolloutError,
   readCodexThread,
@@ -6139,7 +6140,7 @@ export async function prewarmViewSession(params: {
   if (provider === 'codex') {
     if (params.isPending) return
     await withTimeout(
-      ensureCodexThreadResumed(params.sessionId),
+      prewarmCodexThread(params.sessionId),
       providerStartupTimeoutMs(params.model),
       'Codex session prewarm',
     )

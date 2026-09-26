@@ -2,6 +2,7 @@ import type { ThreadedMessage } from '../../lib/threading'
 import type { TuiTranscriptCard } from '../format'
 import type { TuiDensity } from '../theme'
 import type { ContextUsage, ProviderSelection, Session, SessionInfo, SessionMessage } from '../../lib/types'
+import { readTuiSessionMetadata } from '../../lib/tui/reads'
 import { createKeyedWorkerQueue } from './latestWorkerQueue'
 import { threadedMessageFingerprint } from './messageFingerprint'
 import { tuiWorkerUrl } from './workerUrl'
@@ -350,6 +351,15 @@ export type TuiSessionMetadataResult = { currentModel: string | null; contextUsa
  * at its first await rather than queueing behind a detail read.
  */
 export function readTuiSessionMetadataAsync(session: Session): Promise<TuiSessionMetadataResult> {
+  // Codex is the exception, and it must be. Its model is only reported by
+  // thread/resume, and a resume makes that app-server the thread's writer.
+  // Each isolate runs its own app-server, so a resume from this worker took
+  // the writer away from the main isolate, whose composer prewarm and turns
+  // then failed with "already has an active writer". On the main isolate the
+  // read shares the prewarm's resume instead of racing it.
+  if (session.provider === 'codex') {
+    return readTuiSessionMetadata(session).then(({ currentModel, contextUsage }) => ({ currentModel, contextUsage }))
+  }
   const id = ++requestCounter
   const w = ensureWorker()
   return new Promise<TuiSessionMetadataResult>((resolve, reject) => {
