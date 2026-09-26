@@ -390,6 +390,13 @@ Both TUIs depend on the same `lib/` provider layer — changes to `sessionBacken
   `opencode serve` (~500MB) starts at composer engagement. Existing Pi sessions likewise warm on
   composer engagement (`shouldPrewarmTuiRuntime`): warming on selection loaded Pi's SDK into the
   main isolate (~130MB) for a cold open that now measures 0.2-0.6s.
+  **Codex too**: its prewarm is the first send-path import, so warming on selection evaluated the
+  whole send-path graph on the render thread at every launch. And the **Teammates badge**
+  (`TeammatesAttention.tsx`) observes a conversation's Coordinator only once the read-only ledger
+  says it has a team (`readTuiHasSessionCoordinator`) — observing loads `agentCoordination.ts`, and
+  it did so for whichever conversation was selected. Together: TUI footprint −35-40MB, boot CPU
+  −0.3-0.7s. `browseSendPathSmoke.tsx` traces module resolution through launch and browsing; each
+  of the two was verified to fail it on its own.
 - **`tui.json` is on the save path of every session visit**, so reader states are kept small:
   default states are not stored and the rest are capped (`MAX_TUI_SESSION_READER_STATES`), merged
   inside the synchronous read-modify-write (`tuiStateSmoke.ts`).

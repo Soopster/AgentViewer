@@ -235,6 +235,18 @@ export function readInteractiveAttentionSync(db: LedgerDatabase, limit = 25): In
   return summary
 }
 
+/**
+ * Whether a conversation has a Coordinator team at all — the same lookup
+ * readSessionCoordinator starts from (any agent bound to this session), plus a
+ * conversation enabled as a lead. One indexed row, from the ledger alone.
+ */
+export function hasSessionCoordinatorSync(db: LedgerDatabase, sessionId: string, provider: AgentProvider): boolean {
+  return Boolean(
+    db.prepare('SELECT 1 FROM protocol_agents WHERE session_id = ? AND provider = ? LIMIT 1').get(sessionId, provider)
+    ?? db.prepare('SELECT 1 FROM protocol_interactive_sessions WHERE session_id = ? LIMIT 1').get(sessionId),
+  )
+}
+
 let readOnlyLedger: LedgerDatabase | null = null
 let readOnlyAttention: { version: number; limit: number; summary: InteractiveAttentionSummary[] } | null = null
 

@@ -21,7 +21,15 @@ export function shouldPrewarmTuiRuntime(
   // costs a browse-only session never needed. Both wait for the composer, as
   // Claude does. Pi's cold open measured 0.2-0.6s (2026-09), which typing
   // covers; pending Pi sessions still warm at once, below.
-  if (!isPending && (resolvedProvider === 'opencode' || resolvedProvider === 'pi')) return composerActive
+  // Codex joins them: its prewarm is the first thing that needs the send path,
+  // so warming on selection evaluated that whole module graph (every provider
+  // SDK, the Coordinator schema) on the render thread at boot — the TUI's
+  // longest frames, 125-135ms — and held a loaded thread (~160MB of MCP
+  // servers) for sessions merely looked at. A resume is ~17ms now, and the
+  // model read has already loaded the selected thread by the time anyone types.
+  if (!isPending && (resolvedProvider === 'opencode' || resolvedProvider === 'pi' || resolvedProvider === 'codex')) {
+    return composerActive
+  }
   if (!isPending) return resolvedProvider !== 'claude' || composerActive
   return resolvedProvider === 'pi'
     || resolvedProvider === 'claude'

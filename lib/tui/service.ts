@@ -172,7 +172,7 @@ import type { AgentProtocolEvent, PlaybookSummary, ProtocolRun, ProtocolRunSnaps
 import type { AgentProvider, ContextUsage, ProviderSelection, Session, SessionDiagnosticSection, SessionInfo, SessionMessage, SessionModelInfo } from '../types'
 import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../../tui/theme'
 import type { TuiTranscriptCard } from '../../tui/format'
-import { openCoordinationLedgerReadOnly, readInteractiveAttentionReadOnly, type InteractiveAttentionSummary } from '../coordinatorLedger'
+import { hasSessionCoordinatorSync, openCoordinationLedgerReadOnly, readInteractiveAttentionReadOnly, type InteractiveAttentionSummary } from '../coordinatorLedger'
 import {
   listAddressableSessions,
   sendCrossSessionMessage,
@@ -504,6 +504,25 @@ export async function readTuiInteractiveAttention(): Promise<InteractiveAttentio
   }
   const db = await openCoordinationLedgerReadOnly()
   return db ? readInteractiveAttentionReadOnly(db) : []
+}
+
+/**
+ * Whether a conversation has a Coordinator team, from the read-only ledger.
+ * Observing a conversation's Coordinator loads lib/agentCoordination.ts — and
+ * through it the whole send path — so a surface that observes the selected
+ * conversation asks this first; most conversations have no team. Attached to a
+ * daemon the observation is an HTTP read, so the answer is simply yes.
+ */
+export async function readTuiHasSessionCoordinator(sessionId: string, provider: AgentProvider): Promise<boolean> {
+  if (isRemoteAttached()) return true
+  const db = await openCoordinationLedgerReadOnly()
+  if (!db) return false
+  try {
+    return hasSessionCoordinatorSync(db, sessionId, provider)
+  } catch {
+    // An unreadable ledger must not hide a team; observe as before.
+    return true
+  }
 }
 
 export async function readTuiInteractiveTeardown(sessionId: string, provider: AgentProvider): Promise<{
