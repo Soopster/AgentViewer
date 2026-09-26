@@ -74,7 +74,7 @@ if (chatStatus.x <= chatDock.x || chatStatus.x + chatStatus.width >= chatDock.x 
 }
 const chatFrame = setup.captureCharFrame().split('\n')
 const chatDrawn = chatFrame[chatBorderRow] ?? ''
-if (!/focus|send/.test(chatDrawn)) {
+if (!/compose|send/.test(chatDrawn)) {
   throw new Error(`Chat bottom border row does not carry the status text:\n${chatDrawn}`)
 }
 // Both dock borders must survive the overlay: the chat dock's and the reader's.
@@ -92,8 +92,8 @@ if (chatTextarea.y + chatTextarea.height + 1 !== chatBorderRow) {
   throw new Error(`Chat draft does not leave one breathing row before border row ${chatBorderRow}`)
 }
 
-// Focused and unfocused carry very different hints (`c focus · click to
-// compose` against the full key list). Both are pushed against the right end of
+// Focused and unfocused carry different hints (`c compose` against the full
+// key list). Both are pushed against the right end of
 // the border run, and neither pads the gap between the two halves with panel
 // background — the border has to show through it.
 const hintEndOf = (needle: string): number => {
@@ -103,12 +103,12 @@ const hintEndOf = (needle: string): number => {
   return index + needle.length
 }
 const statusRight = chatStatus.x + chatStatus.width
-const unfocusedEnd = hintEndOf('click to compose')
+const unfocusedEnd = hintEndOf('c compose')
 if (unfocusedEnd !== statusRight) {
   throw new Error(`Unfocused hint ends at ${unfocusedEnd}, not flush with the border run's end ${statusRight}`)
 }
 const gapRow = setup.captureCharFrame().split('\n')[chatBorderRow] ?? ''
-const gap = gapRow.slice(chatStatus.x + 12, unfocusedEnd - 'click to compose'.length - 4)
+const gap = gapRow.slice(chatStatus.x + 12, unfocusedEnd - 'c compose'.length - 4)
 if (!gap.includes('─')) {
   throw new Error(`Border does not show through between the status halves:\n${gapRow}`)
 }

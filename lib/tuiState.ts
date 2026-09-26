@@ -196,7 +196,7 @@ export const MAX_TUI_SPLIT_READER_SHARE = 0.8
 
 export type TuiSidebarSort = 'project' | 'time'
 export type TuiDiffLayout = 'stack' | 'split'
-export type TuiTranscriptWidth = 'centered' | 'full'
+export type TuiTranscriptWidth = 'readable' | 'centered' | 'full'
 
 export type TuiSessionReaderState = {
   followTail: boolean
@@ -359,7 +359,9 @@ export async function setConfiguredTuiTranscriptView(transcriptView: TuiTranscri
 
 export async function getConfiguredTuiTranscriptWidth(): Promise<TuiTranscriptWidth> {
   const parsed = await readTuiState()
-  return parsed.transcriptWidth === 'full' ? 'full' : 'centered'
+  return parsed.transcriptWidth === 'full' || parsed.transcriptWidth === 'centered'
+    ? parsed.transcriptWidth
+    : 'readable'
 }
 
 export async function setConfiguredTuiTranscriptWidth(transcriptWidth: TuiTranscriptWidth): Promise<void> {

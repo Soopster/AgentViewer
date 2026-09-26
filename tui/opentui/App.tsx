@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import { createSidebarSessionSearch } from './sidebarSessionSearch'
+import { composerProjectLabel, cycleTranscriptWidth, transcriptMeasure } from './engineeringLayout'
 import React, { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, startTransition, useState, useSyncExternalStore } from 'react'
 import { spawn } from 'node:child_process'
 import { GitPopover } from './GitPopover'
@@ -3193,7 +3194,7 @@ function continuousUserBackground(theme: TuiThemePalette): string {
 
 function streamUserBackground(theme: TuiThemePalette): string {
   const lightTheme = (relativeLuminance(theme.bg) ?? relativeLuminance(theme.surface) ?? 0) > 0.5
-  return mixHexColor(theme.violet, theme.userBg, lightTheme ? 0.16 : 0.24) ?? theme.userBg
+  return mixHexColor(theme.cyan, theme.surface, lightTheme ? 0.06 : 0.09) ?? theme.surface2
 }
 
 type SelectionColorTarget = BaseRenderable & {
@@ -5265,7 +5266,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'density',    label: 'Toggle density',         key: 'd',  category: 'View'       },
   { id: 'diff-layout', label: 'Toggle diff layout',    key: 's',  category: 'View'       },
   { id: 'view',       label: 'Switch transcript view', key: 'v',  category: 'View'       },
-  { id: 'width',      label: 'Toggle transcript width', key: '⇧W', category: 'View'       },
+  { id: 'width',      label: 'Cycle layout: readable / centered / full', key: '⇧W', category: 'View' },
   { id: 'split-add',    label: 'Split transcript pane (side by side)', key: splitCommandKey('%', RUNNING_INSIDE_TMUX), category: 'View'  },
   { id: 'split-add-stacked', label: 'Split transcript pane (stacked)', key: splitCommandKey('"', RUNNING_INSIDE_TMUX), category: 'View' },
   { id: 'split-rotate', label: 'Rotate split layout',       key: splitCommandKey('r', RUNNING_INSIDE_TMUX), category: 'View' },
@@ -5351,7 +5352,6 @@ type DensityState = { bodyLines: number; bodyIndent: number; cardGap: number; bo
 // Conversation prose becomes difficult to scan when cards stretch across an
 // ultrawide terminal. Keep normal cards at a readable measure while allowing
 // diffs to use the full reader width for side-by-side content.
-const MAX_TRANSCRIPT_CARD_WIDTH = 144
 const MAX_USER_CARD_WIDTH = 112
 
 type TranscriptCardProps = {
@@ -5589,8 +5589,9 @@ function TranscriptCardInner({
   // as an Agents operation, its outer container should follow the same centered
   // width as every multi-tool group; the nested diff still fills that container.
   const centeredCard = shouldCenterTranscriptCard(card, transcriptWidth, agentsMode)
-  const readableCardWidth = centeredCard
-    ? Math.min(availableCardWidth, MAX_TRANSCRIPT_CARD_WIDTH)
+  const boundedCard = centeredCard || (transcriptWidth === 'readable' && (card.category !== 'diff' || agentsMode))
+  const readableCardWidth = boundedCard
+    ? transcriptMeasure(availableCardWidth, transcriptWidth)
     : availableCardWidth
   const userBubble = centeredCard && card.role === 'user'
   const cardWidth = userBubble
@@ -6092,9 +6093,7 @@ function TranscriptCardInner({
     // The transcript pane spends two columns on its border and two more on
     // the surrounding paddingX={1}; bodyIndent is budgeted separately below.
     const streamAvailableWidth = Math.max(rightPaneWidth - 4, 16)
-    const streamWidth = streamCentered
-      ? Math.max(Math.min(streamAvailableWidth - densityState.bodyIndent, MAX_TRANSCRIPT_CARD_WIDTH), 16)
-      : Math.max(streamAvailableWidth - densityState.bodyIndent, 16)
+    const streamWidth = Math.max(transcriptMeasure(streamAvailableWidth - densityState.bodyIndent, transcriptWidth), 16)
     const streamLandmarkWidth = streamWidth + densityState.bodyIndent
     // Subagent cards prefix the marker with one ↪ per spawn-chain level
     // (`subagent:parent/child` origin), widening the marker gutter to match.
@@ -6179,7 +6178,7 @@ function TranscriptCardInner({
     const streamBg = card.role === 'user'
       ? continuousMode ? continuousUserBackground(theme) : streamUserBackground(theme)
       : hasCursor
-        ? continuousMode ? theme.surface2 : theme.userBg
+        ? theme.surface2
         : undefined
     return (
       <box
@@ -6199,7 +6198,7 @@ function TranscriptCardInner({
             )
           : 0}
         alignSelf={streamCentered ? 'center' : undefined}
-        width={streamCentered ? streamWidth + densityState.bodyIndent : undefined}
+        width={transcriptWidth !== 'full' ? streamWidth + densityState.bodyIndent : undefined}
         onMouseDown={(event) => {
           if (event.button !== 0) return
           onSelectCard(card.key)
@@ -6235,7 +6234,7 @@ function TranscriptCardInner({
           // makes it read as a panel rather than a highlighted line.
           border={card.role === 'user' ? ['left'] : undefined}
           borderStyle={card.role === 'user' ? 'heavy' : undefined}
-          borderColor={card.role === 'user' ? theme.violet : undefined}
+          borderColor={card.role === 'user' ? theme.cyan : undefined}
           paddingLeft={continuousMode
             ? card.role === 'user' ? continuousInset - 1 : continuousInset
             : card.role === 'user'
@@ -7632,7 +7631,7 @@ export default function OpenTuiApp() {
   // on every message rather than only on user prompts. Modelled on opencode's
   // session view, where one left rule per message is the only chrome there is.
   const isContinuousView = transcriptView === 'transcript'
-  const [transcriptWidth, setTranscriptWidth] = useState<TuiTranscriptWidth>('centered')
+  const [transcriptWidth, setTranscriptWidth] = useState<TuiTranscriptWidth>('readable')
   const [focusMode, setFocusMode] = useState(false)
   // Temporary presentation mode, deliberately separate from the persisted
   // focus preference: fullscreen can be entered and restored without changing
@@ -9729,7 +9728,7 @@ export default function OpenTuiApp() {
       parts.push({ text: composerModelLookupSettled ? 'model:auto' : 'model:loading…', fg: theme.dim })
     }
     if (composerContextUsage) parts.push({ text: `ctx:${composerContextUsage}`, fg: theme.green })
-    parts.push({ text: `effort:${tuiEffort}`, fg: theme.amber })
+    parts.push({ text: `effort:${tuiEffort}`, fg: theme.dim })
     if (composerTargetSession?.provider === 'opencode' && tuiOpenCodeAgent) {
       parts.push({ text: `agent:${tuiOpenCodeAgent}`, fg: theme.cyan })
     }
@@ -9824,7 +9823,11 @@ export default function OpenTuiApp() {
     }
     if (composerLocationSegments.length > 0) {
       segments.push({ text: ' · ', fg: theme.dim })
-      segments.push(...composerLocationSegments)
+      segments.push(...composerLocationSegments.map((segment) =>
+        composerWorkingDirectory && segment.text === `${composerWorkingDirectory}  `
+          ? { ...segment, text: `${composerProjectLabel(composerWorkingDirectory)}  ` }
+          : segment,
+      ))
     }
     return segments
   }
@@ -10917,7 +10920,7 @@ export default function OpenTuiApp() {
     // tabs get the full width instead of being squeezed into the reader column.
     const available = Math.max(readerAreaWidth - 6, 20)
     const fill = Math.floor(available / visibleTabSessions.length)
-    return Math.max(10, Math.min(fill, 24))
+    return Math.max(10, Math.min(fill, 40))
   }, [readerAreaWidth, visibleTabSessions.length])
   // The surface panel is the only right-hand column that runs past the composer:
   // a docked diff or file tree is worth the extra rows, and unlike the reader it
@@ -10959,7 +10962,7 @@ export default function OpenTuiApp() {
     0,
   )
   const sidebarHeaderBaseText = `${fitText(sidebarHeaderPrefix, sidebarHeaderPrefixWidth)}${sidebarProviderBadgeText}${
-    sidebarHeaderSuffixWidth > 1 ? fitText(sidebarHeaderSuffix, sidebarHeaderSuffixWidth) : '·'
+    sidebarHeaderSuffixWidth >= sidebarHeaderSuffix.length ? sidebarHeaderSuffix : ''
   }`
   const sidebarProviderAccent = getProviderAccent(provider)
   const coordinatorSidebarHeader = useMemo(
@@ -13630,17 +13633,17 @@ export default function OpenTuiApp() {
   const buildSidebarRow = useCallback((entry: typeof sidebarEntries[number], selected: boolean) => {
     if (entry.type === 'project') {
       const countLabel = `${entry.count}`
-      const dashes = '─'.repeat(Math.max(sidebarInnerWidth - 2 - entry.projectName.length - countLabel.length - 3, 1))
+      const projectLabel = fitText(entry.projectName, Math.max(sidebarInnerWidth - countLabel.length - 5, 1)).trimEnd()
       return (
         <box
           key={entry.key}
           id={`sidebar:${entry.key}`}
           paddingX={1}
           marginTop={1}
-          backgroundColor={theme.surface2}
+          backgroundColor={theme.surface}
         >
-          <text fg={theme.cyan} wrapMode="none">
-            {fitText(`${entry.projectName} ${dashes} ${countLabel}`, sidebarInnerWidth - 2)}
+          <text fg={theme.dim} wrapMode="none">
+            {fitText(`${projectLabel} / ${countLabel}`, sidebarInnerWidth - 2)}
           </text>
         </box>
       )
@@ -13721,6 +13724,9 @@ export default function OpenTuiApp() {
       : theme.dim
 
     const metaLine = joinMeta([
+      activity === 'needs-input' ? 'Needs input'
+        : activity === 'running' ? 'Working'
+        : activity === 'waiting' ? 'Waiting' : null,
       showProviderInSessionRows ? formatProviderLabel(entry.session.provider) : null,
       ago,
     ])
@@ -13756,17 +13762,15 @@ export default function OpenTuiApp() {
         ) : (
           <box paddingX={1} flexDirection="row" backgroundColor={selected ? theme.surface3 : theme.surface}>
             <text fg={sessionAccent} wrapMode="none">{selected ? '▎' : ' '}</text>
-            {/* Selection glows in the provider accent — bar, title, and meta all
-                lit in the session's identity color (accent = identity), matching
-                the focused-pane frame convention. */}
-            <text fg={selected ? sessionAccent : theme.muted} wrapMode="none">
+            {/* Keep the title readable; provider identity belongs to the rail. */}
+            <text fg={theme.text} attributes={selected ? TextAttributes.BOLD : undefined} wrapMode="none">
               {fitText(formatSessionTitle(entry.session), sidebarInnerWidth - 3)}
             </text>
           </box>
         )}
         <box paddingX={1} flexDirection="row" backgroundColor={selected ? theme.surface3 : theme.surface}>
           <text fg={sessionAccent} wrapMode="none">{selected ? '▎' : ' '}</text>
-          <text fg={selected ? sessionAccent : theme.dim} wrapMode="none">
+          <text fg={activity === 'needs-input' ? theme.amber : theme.dim} wrapMode="none">
             {fitText(metaLine, sidebarInnerWidth - 3 - (activityGlyph ? 2 : 0) - teamMark.length)}
           </text>
           {teamMark ? <text fg={team!.waiting > 0 ? theme.amber : theme.green} wrapMode="none">{teamMark}</text> : null}
@@ -16213,25 +16217,18 @@ export default function OpenTuiApp() {
     // ⇧⏎ newline / ⌃O expand are already advertised by the composer's own hint
     // row directly above this bar — repeating them here just duplicated text.
     const groups: Array<Array<[string, string]>> = composerActive
-      ? [[
-          ['Esc', 'transcript'],
-          ...(turnRunningForComposer
-            ? [['⌃C', 'cancel'], ['↵', 'queue']] as Array<[string, string]>
-            : [['↵', 'send']] as Array<[string, string]>),
-        ]]
+      ? [[['Esc', 'transcript'], ...(turnRunningForComposer
+          ? [['⌃C', 'cancel'], ['↵', 'queue']] as Array<[string, string]>
+          : [['↵', 'send']] as Array<[string, string]>)]]
       : [
-          [['j/k', 'move'], ['⌃u/d', 'page'], ['tab', 'focus'], ['←/→', 'tabs'], ['w', 'close']],
-          [['/', 'search'], ['n/N', 'hits'], ['u', 'unread'], ['f', 'live']],
-          [['m', 'mark'], ['[ ]', 'jump'], ['⇧B', 'all'], ['b', effectiveFocus === 'sessions' ? 'tabs' : 'bookmark']],
-          [['()', 'convo'], ['{}', 'tech'], ['e', 'fold'], ['v', transcriptView], ['s', `diff:${diffLayout}`], ['d', density], ['⇧W', transcriptWidth], ['i', 'think'], ['X', showToolCalls ? 'hide tools' : 'tools']],
-          [['h', 'rail'], ['⇧T', 'tasks'], ['⇧O', 'panel'], ['z', 'focus'], ['⇧Z', 'fullscreen'], [
-            RUNNING_INSIDE_TMUX ? '?' : '⌃B',
-            RUNNING_INSIDE_TMUX
-              ? `split palette · tmux captures ⌃B`
-              : visibleSplitPaneCount > 0 ? `split ${visibleSplitPaneCount}` : 'split',
-          ], ['V', velocityScrollEnabled ? 'vel off' : 'vel on']],
-          [['⌃O', 'composer'], ['p', 'provider'], ['y', 'copy'], ['Q', 'reply'], ['r', 'refresh']],
-          [['⌃K', 'commands'], ['?', 'help'], ['q', 'quit']],
+          // Discovery comes first so it survives even the narrowest terminal.
+          [['⌃K', 'commands'], ['?', 'help']],
+          effectiveFocus === 'sessions'
+            ? [['j/k', 'select'], ['↵', 'open'], ['/', 'search'], ['tab', 'focus']]
+            : [['j/k', 'move'], ['e', 'fold'], ['c', 'compose'], ['tab', 'focus']],
+          [['v', transcriptView], ['f', 'live'], ['h', 'sessions']],
+          [['⇧W', transcriptWidth]],
+          [['←/→', 'tabs'], ['y', 'copy'], ['z', 'focus']],
         ]
     const segs: InlineTextSegment[] = []
     // A pending prefix takes over the bar: the chord is modal, so the only keys
@@ -16251,35 +16248,44 @@ export default function OpenTuiApp() {
     // A focused pane owns the keys, so the bar advertises its keys, not the
     // reader's — otherwise it lists bindings that are inert right now.
     if (splitFocusIndex !== null) {
-      return [
-        { text: `split pane ${splitFocusIndex + 1}`, fg: theme.amber },
-        {
-          text: `  j/k card   e fold   y copy   b mark   Q reply   c send   ⌃G git   D diag   ⌃K a ops   ↵ open   ${RUNNING_INSIDE_TMUX ? '? palette' : '⌃B o next'}   esc reader`,
-          fg: theme.muted,
-        },
-      ]
+      groups.splice(0, groups.length,
+        [['esc', 'reader'], ['⌃K', 'commands'], ['?', 'help']],
+        [['j/k', 'card'], ['e', 'fold'], ['c', 'send']],
+        [['y', 'copy'], ['b', 'mark'], ['Q', 'reply']],
+        [['⌃G', 'git'], ['D', 'diagnostics']],
+      )
     }
     // Attention badge leads the bar whenever an agent is blocked on a human —
     // it must be visible regardless of which pane or mode has focus.
     if (attentionNeedsInputCount > 0) {
       segs.push({ text: `⚠ ${attentionNeedsInputCount}`, fg: theme.amber })
       segs.push({ text: ' ! inbox · ⌃N next', fg: theme.muted })
-      segs.push({ text: ' │ ', fg: theme.dim })
     }
-    groups.forEach((group, gi) => {
-      if (gi > 0) segs.push({ text: ' │ ', fg: theme.dim })
+    // Only include complete hints. A clipped key legend is both noisy and
+    // misleading; the command palette retains the full shortcut registry.
+    const hostLabel = ATTACHED_DAEMON_HOST
+      ? fitText(`⇌ ${ATTACHED_DAEMON_HOST}`, Math.max(Math.floor(width / 4), 8)).trimEnd()
+      : ''
+    let remaining = Math.max(width - 2 - segs.reduce((n, segment) => n + segment.text.length, 0)
+      - (hostLabel ? hostLabel.length + 3 : 0), 0)
+    groups.forEach((group) => {
+      const text = group.map(([key, label]) => `${key} ${label}`).join('  ')
+      const separator = segs.length > 0 ? ' │ ' : ''
+      if (text.length + separator.length > remaining) return
+      if (separator) segs.push({ text: separator, fg: theme.dim })
       group.forEach((binding, bi) => {
         if (bi > 0) segs.push({ text: '  ', fg: theme.dim })
-        segs.push({ text: binding[0], fg: theme.cyan })
+        segs.push({ text: binding[0], fg: theme.text })
         segs.push({ text: ` ${binding[1]}`, fg: theme.muted })
       })
+      remaining -= text.length + separator.length
     })
-    if (ATTACHED_DAEMON_HOST) {
+    if (hostLabel) {
       segs.push({ text: ' │ ', fg: theme.dim })
-      segs.push({ text: `⇌ ${ATTACHED_DAEMON_HOST}`, fg: theme.cyan })
+      segs.push({ text: hostLabel, fg: theme.cyan })
     }
     return segs
-  }, [attentionNeedsInputCount, commandChordPending, composerActive, diffLayout, transcriptView, density, transcriptWidth, showToolCalls, velocityScrollEnabled, visibleSplitPaneCount, splitChordPending, splitFocusIndex, effectiveFocus, theme, turnRunningForComposer])
+  }, [width, attentionNeedsInputCount, commandChordPending, composerActive, transcriptView, transcriptWidth, splitChordPending, splitFocusIndex, effectiveFocus, theme, turnRunningForComposer])
 
   const composerStatusMessage = visibleComposerError
     ? visibleComposerError
@@ -17408,7 +17414,7 @@ export default function OpenTuiApp() {
         break
       }
       case 'width': {
-        const next: TuiTranscriptWidth = transcriptWidth === 'centered' ? 'full' : 'centered'
+        const next = cycleTranscriptWidth(transcriptWidth)
         setTranscriptWidth(next)
         showToggleOutcome('Transcript width:', next)
         void writeTuiTranscriptWidth(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store transcript width'))
@@ -19874,7 +19880,7 @@ export default function OpenTuiApp() {
 
     if (isShifted('W')) {
       handled(() => {
-        const next: TuiTranscriptWidth = transcriptWidth === 'centered' ? 'full' : 'centered'
+        const next = cycleTranscriptWidth(transcriptWidth)
         setTranscriptWidth(next)
         showToggleOutcome('Transcript width:', next)
         void writeTuiTranscriptWidth(next).catch((err) => {
@@ -19959,7 +19965,7 @@ export default function OpenTuiApp() {
   const composerAttachmentLabel = attachmentCountLabel(composerActiveAttachments)
   const composerDockStatsSegments = useMemo<InlineTextSegment[]>(
     () => buildComposerStatsSegments(composerVisualLineCount),
-    [composerAccentColor, composerAttachmentLabel, composerConfig.glyph, composerConfig.label, composerDraft.length, composerKnobSegments, composerLocationSegments, composerVisualLineCount, theme.cyan, theme.dim, theme.text],
+    [composerAccentColor, composerAttachmentLabel, composerConfig.glyph, composerConfig.label, composerDraft.length, composerKnobSegments, composerLocationSegments, composerWorkingDirectory, composerVisualLineCount, theme.cyan, theme.dim, theme.text],
   )
   const composerWindowMetaSegments = useMemo<InlineTextSegment[]>(() => {
     const segments: InlineTextSegment[] = []
@@ -20077,7 +20083,7 @@ export default function OpenTuiApp() {
     : null
   const chatComposerFooterHint = chatComposerFocused
     ? composerDockFooterHint
-    : 'c focus · click to compose'
+    : 'c compose'
   // The chat composer's status row is painted into its bottom border, so its
   // budget is that border's horizontal run less a column of inset at each end —
   // the reader's frame, the chat dock's own border, and its padding.
@@ -20085,7 +20091,7 @@ export default function OpenTuiApp() {
   // Both halves are sized to their own content rather than to a fixed share of
   // the row. Both renderers pad to the width they are given, so a fixed share
   // paints a blank band of panel background over the border — and the two
-  // states have very different hints (`c focus · click to compose` against the
+  // states have very different hints (`c compose` against the
   // full key list), so a fixed share left the unfocused hint stranded mid-row
   // instead of against the right end where the focused one sits.
   // Stats take what they need up to their old share of the row; the hint takes
@@ -20095,7 +20101,10 @@ export default function OpenTuiApp() {
   const chatComposerStatsText = composerSlashHint
     || composerDockStatsSegments.map((segment) => segment.text).join('')
   const chatComposerStatsWidth = Math.max(
-    Math.min(chatComposerStatsText.length, Math.floor(chatComposerStatusWidth * 0.55)),
+    Math.min(chatComposerStatsText.length, Math.max(
+      Math.floor(chatComposerStatusWidth * 0.55),
+      chatComposerStatusWidth - chatComposerFooterHint.length - 2,
+    )),
     8,
   )
   const chatComposerHintText = chatComposerFocused && composerDockSendingHintSegments
@@ -20379,7 +20388,7 @@ export default function OpenTuiApp() {
             width={sidebarWidth}
             border={sidebarView === 'sessions' ? ['top', 'left', 'right', 'bottom'] : true}
             borderStyle="single"
-            borderColor={effectiveFocus === 'sessions' ? theme.cyan : theme.border}
+            borderColor={effectiveFocus === 'sessions' ? theme.border2 : theme.border}
             backgroundColor={theme.surface}
             flexDirection="column"
             title={sidebarView === 'coordinator' ? coordinatorSidebarHeader : undefined}
@@ -20520,11 +20529,9 @@ export default function OpenTuiApp() {
             flexGrow={1}
             border={fullscreenMode ? [] : ['top', 'left', 'right', 'bottom']}
             borderStyle="single"
-            // Focused pane lights its frame in its own title color (transcript →
-            // provider accent, like the sidebar → cyan) so it's obvious which
-            // side has focus instead of the frame staying uniformly dim.
+            // One focus color across panes; provider identity stays in metadata.
             borderColor={effectiveFocus === 'messages' && splitFocusIndex === null
-              ? providerAccent
+              ? theme.border2
               : isChatLikeView
                 ? theme.surface
                 : theme.border}
@@ -20555,8 +20562,10 @@ export default function OpenTuiApp() {
             <box paddingX={2} paddingTop={1} flexDirection="row" alignItems="center">
               <text fg={providerAccent} wrapMode="none">{'● '}</text>
               <box flexGrow={1} overflow="hidden">
-                <text fg={theme.text} wrapMode="none">
-                  {fitText(readerTitle, Math.max(rightPaneWidth - readerContextMeta.length - 10, 12))}
+                <text fg={theme.muted} wrapMode="none">
+                  {fitText(showTabs
+                    ? `${TRANSCRIPT_VIEW_LABELS[transcriptView]} · ${followTail ? 'Following latest' : 'Reading history'}`
+                    : readerTitle, Math.max(rightPaneWidth - readerContextMeta.length - 10, 12))}
                 </text>
               </box>
               <box width={readerContextMeta.length} overflow="hidden">
@@ -20821,7 +20830,7 @@ export default function OpenTuiApp() {
               backgroundColor={theme.surface2}
               border={['top', 'left', 'right', 'bottom']}
               borderStyle="single"
-              borderColor={theme.border}
+              borderColor={chatComposerFocused ? theme.border2 : theme.surface2}
             >
               <box
                 flexGrow={1}
