@@ -348,6 +348,12 @@ export const IDLE_TICKER_PHRASES = [
   'keeping watch',
 ] as const
 const IDLE_TICKER_ROTATE_MS = 8000
+// Each spinner step is a whole frame: OpenTUI redraws the full renderable tree
+// and diffs it, so the cost of a tick grows with what is mounted, not with the
+// one glyph that changed. The idle ticker is on screen for as long as the app
+// sits idle — at the 80ms of an in-progress spinner it was most of the TUI's
+// idle CPU. Standby does not need to look urgent.
+const IDLE_TICKER_FRAME_MS = 400
 const IDLE_TICKER_SPINNER_VARIANTS: ReadonlyArray<readonly string[]> = [
   ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'],   // braille circle
   ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'], // braille sweep
@@ -444,15 +450,17 @@ function Spinner({
   fg,
   labelFg = fg,
   frames = SPINNER_FRAMES,
+  intervalMs = 80,
 }: {
   label: string
   fg: string
   labelFg?: string
   frames?: readonly string[]
+  intervalMs?: number
 }) {
   const [frame, setFrame] = useState(0)
   useEffect(() => {
-    const id = setInterval(() => setFrame((f) => (f + 1) % frames.length), 80)
+    const id = setInterval(() => setFrame((f) => (f + 1) % frames.length), intervalMs)
     return () => clearInterval(id)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -481,6 +489,7 @@ function IdleTicker({ seed, theme }: { seed: string; theme: TuiThemePalette }) {
       fg={theme.cyan}
       labelFg={theme.violet}
       frames={spinnerFrames}
+      intervalMs={IDLE_TICKER_FRAME_MS}
     />
   )
 }
