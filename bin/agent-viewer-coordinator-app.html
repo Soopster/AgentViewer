@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    :root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 14px; color: var(--color-text-primary, CanvasText); background: var(--color-background-primary, Canvas); }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+    h1 { margin: 0; font-size: 16px; letter-spacing: .02em; }
+    button { border: 1px solid var(--color-border-primary, ButtonBorder); border-radius: 8px; padding: 7px 11px; color: inherit; background: var(--color-background-secondary, ButtonFace); cursor: pointer; }
+    button:disabled { cursor: wait; opacity: .6; }
+    .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+    .metric, .panel { border: 1px solid var(--color-border-primary, color-mix(in srgb, CanvasText 20%, transparent)); border-radius: 10px; background: var(--color-background-secondary, color-mix(in srgb, Canvas 94%, CanvasText)); }
+    .metric { padding: 10px; }
+    .metric b { display: block; font-size: 20px; }
+    .metric span { font-size: 11px; opacity: .7; text-transform: uppercase; }
+    .panel { margin-top: 10px; overflow: hidden; }
+    .panel h2 { margin: 0; padding: 9px 11px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; border-bottom: 1px solid var(--color-border-primary, color-mix(in srgb, CanvasText 20%, transparent)); }
+    .row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; padding: 9px 11px; border-top: 1px solid color-mix(in srgb, CanvasText 10%, transparent); }
+    .row:first-of-type { border-top: 0; }
+    .title { font-weight: 600; }
+    .detail { margin-top: 3px; font-size: 12px; opacity: .7; white-space: pre-wrap; }
+    .status { align-self: start; border-radius: 99px; padding: 3px 7px; font-size: 11px; background: color-mix(in srgb, Highlight 18%, transparent); }
+    .empty, #error { padding: 12px; font-size: 13px; opacity: .75; }
+    #error { color: #d33; display: none; }
+    @media (max-width: 520px) { .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  </style>
+</head>
+<body>
+  <header><h1>Agent Viewer Coordinator</h1><button id="refresh" type="button">Refresh</button></header>
+  <div id="error"></div>
+  <section class="metrics" id="metrics"></section>
+  <section class="panel"><h2>Tasks</h2><div id="tasks" class="empty">Waiting for Coordinator status…</div></section>
+  <section class="panel"><h2>Agents</h2><div id="agents" class="empty">Waiting for Coordinator status…</div></section>
+  <script>
+    const pending = new Map()
+    let nextId = 1
+    const refresh = document.querySelector('#refresh')
+    const errorBox = document.querySelector('#error')
+
+    function request(method, params) {
+      const id = nextId++
+      parent.postMessage({ jsonrpc: '2.0', id, method, params }, '*')
+      return new Promise((resolve, reject) => pending.set(id, { resolve, reject }))
+    }
+
+    function notify(method, params) {
+      parent.postMessage({ jsonrpc: '2.0', method, params }, '*')
+    }
+
+    function text(value, fallback = '') {
+      return typeof value === 'string' && value ? value : fallback
+    }
+
+    function metric(label, value) {
+      const node = document.createElement('div')
+      node.className = 'metric'
+      const number = document.createElement('b')
+      number.textContent = String(value)
+      const caption = document.createElement('span')
+      caption.textContent = label
+      node.append(number, caption)
+      return node
+    }
+
+    function rows(targetId, values, describe) {
+      const target = document.querySelector(`#${targetId}`)
+      target.replaceChildren()
+      if (!values.length) {
+        target.className = 'empty'
+        target.textContent = 'None'
+        return
+      }
+      target.className = ''
+      for (const value of values) {
+        const info = describe(value)
+        const row = document.createElement('div')
+        row.className = 'row'
+        const body = document.createElement('div')
+        const title = document.createElement('div')
+        title.className = 'title'
+        title.textContent = info.title
+        const detail = document.createElement('div')
+        detail.className = 'detail'
+        detail.textContent = info.detail
+        const status = document.createElement('span')
+        status.className = 'status'
+        status.textContent = info.status
+        body.append(title, detail)
+        row.append(body, status)
+        target.append(row)
+      }
+    }
+
+    function render(result) {
+      const data = result?.structuredContent ?? (() => {
+        const raw = result?.content?.find?.((entry) => entry.type === 'text')?.text
+        try { return raw ? JSON.parse(raw) : {} } catch { return {} }
+      })()
+      const snapshot = data.snapshot ?? data
+      const tasks = Array.isArray(snapshot.tasks) ? snapshot.tasks : []
+      const agents = Array.isArray(snapshot.agents) ? snapshot.agents : []
+      const open = tasks.filter((task) => !['completed', 'failed', 'cancelled'].includes(task.status)).length
+      const inbox = Number(data.actionable?.inboxCount ?? snapshot.messages?.length ?? 0)
+      const locks = Array.isArray(snapshot.locks) ? snapshot.locks.length : 0
+      document.querySelector('#metrics').replaceChildren(
+        metric('Run', text(snapshot.run?.status, 'unknown')),
+        metric('Open tasks', open),
+        metric('Inbox', inbox),
+        metric('Locks', locks),
+      )
+      rows('tasks', tasks, (task) => ({
+        title: text(task.title, task.id ?? 'Untitled task'),
+        detail: text(task.prompt, text(task.detail, task.ownerAgentId ? `Owner: ${task.ownerAgentId}` : 'Unowned')),
+        status: text(task.status, 'unknown'),
+      }))
+      rows('agents', agents, (agent) => ({
+        title: text(agent.name, agent.agentId ?? 'Agent'),
+        detail: [agent.provider, agent.role, agent.currentTaskId].filter(Boolean).join(' · '),
+        status: text(agent.status, 'unknown'),
+      }))
+      errorBox.style.display = 'none'
+    }
+
+    async function reload() {
+      refresh.disabled = true
+      try { render(await request('tools/call', { name: 'coord_status', arguments: {} })) }
+      catch (error) {
+        errorBox.textContent = error instanceof Error ? error.message : String(error)
+        errorBox.style.display = 'block'
+      } finally { refresh.disabled = false }
+    }
+
+    addEventListener('message', (event) => {
+      const message = event.data
+      if (!message || message.jsonrpc !== '2.0') return
+      if (message.id != null && pending.has(message.id)) {
+        const waiter = pending.get(message.id)
+        pending.delete(message.id)
+        if (message.error) waiter.reject(new Error(message.error.message ?? 'MCP request failed'))
+        else waiter.resolve(message.result)
+        return
+      }
+      if (message.method === 'ui/notifications/tool-result') render(message.params)
+      if (message.method === 'ui/resource-teardown' && message.id != null) {
+        parent.postMessage({ jsonrpc: '2.0', id: message.id, result: {} }, '*')
+      }
+    })
+
+    refresh.addEventListener('click', reload)
+    request('ui/initialize', {
+      protocolVersion: '2026-01-26',
+      appCapabilities: { availableDisplayModes: ['inline', 'fullscreen'] },
+      clientInfo: { name: 'agent-viewer-coordinator-dashboard', version: '1.0.0' },
+    }).then(() => notify('ui/notifications/initialized', {})).catch((error) => {
+      errorBox.textContent = error instanceof Error ? error.message : String(error)
+      errorBox.style.display = 'block'
+    })
+  </script>
+</body>
+</html>

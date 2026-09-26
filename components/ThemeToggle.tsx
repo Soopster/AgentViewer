@@ -1,36 +1,15 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
-
-type Theme = 'dark' | 'light' | 'terminal' | 'paper' | 'imessage'
-
-const THEMES: Theme[] = ['dark', 'light', 'terminal', 'paper', 'imessage']
-
-const THEME_META: Record<Theme, { icon: string; label: string }> = {
-  dark:     { icon: '☾', label: 'Dark'     },
-  light:    { icon: '☀', label: 'Light'    },
-  terminal: { icon: '⌨', label: 'Terminal' },
-  paper:    { icon: '✦', label: 'Paper'    },
-  imessage: { icon: '💬', label: 'iMessage' },
-}
-
-const VALID: Set<string> = new Set(THEMES)
-
-function applyTheme(theme: Theme) {
-  document.documentElement.dataset.theme = theme
-  localStorage.setItem('theme', theme)
-}
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { Button } from '@/components/ui/button'
+import { applyTheme, getCurrentTheme, subscribeTheme, THEME_GROUPS, THEME_META, THEMES, type Theme } from '@/lib/themes'
 
 export default function ThemeToggle() {
-  const [theme, setTheme]   = useState<Theme>('dark')
+  const theme = useSyncExternalStore<Theme>(subscribeTheme, getCurrentTheme, () => 'dark')
   const [open, setOpen]     = useState(false)
   const [hovered, setHovered] = useState<Theme | null>(null)
   const ref = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const saved = localStorage.getItem('theme')
-    if (saved && VALID.has(saved)) setTheme(saved as Theme)
-  }, [])
+  const selectedThemeRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     if (!open) return
@@ -41,8 +20,14 @@ export default function ThemeToggle() {
     return () => document.removeEventListener('mousedown', handleOutside)
   }, [open])
 
+  useEffect(() => {
+    if (!open) return
+    requestAnimationFrame(() => {
+      selectedThemeRef.current?.scrollIntoView({ block: 'center' })
+    })
+  }, [open, theme])
+
   function select(t: Theme) {
-    setTheme(t)
     applyTheme(t)
     setOpen(false)
   }
@@ -50,14 +35,18 @@ export default function ThemeToggle() {
   const meta = THEME_META[theme]
 
   return (
-    <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
-      {/* Trigger button */}
-      <button
+    <div ref={ref} style={{ position: 'relative', flex: '1 1 auto', minWidth: 0 }}>
+      <Button
         onClick={() => setOpen(v => !v)}
+        variant="outline"
+        size="sm"
+        className="av-hover-control"
         style={{
           display: 'flex',
           alignItems: 'center',
           gap: 5,
+          width: '100%',
+          height: 24,
           background: open ? 'var(--surface-3)' : 'transparent',
           border: '1px solid var(--border)',
           borderRadius: 5,
@@ -69,70 +58,104 @@ export default function ThemeToggle() {
           letterSpacing: '0.05em',
           transition: 'background 0.14s ease, border-color 0.14s ease',
           whiteSpace: 'nowrap',
+          minWidth: 0,
         }}
         onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface-3)' }}
         onMouseLeave={e => { if (!open) e.currentTarget.style.background = 'transparent' }}
       >
-        <span style={{ fontSize: 12, lineHeight: 1 }}>{meta.icon}</span>
-        <span>{meta.label}</span>
-        <span style={{ fontSize: 9, color: 'var(--text-3)', marginLeft: 1 }}>{open ? '▲' : '▼'}</span>
-      </button>
+        <span style={{ fontSize: 12, lineHeight: 1, flexShrink: 0 }}>{meta.icon}</span>
+        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{meta.label}</span>
+        <span style={{ fontSize: 11, color: 'var(--text-3)', marginLeft: 'auto', flexShrink: 0 }}>{open ? '▲' : '▼'}</span>
+      </Button>
 
-      {/* Dropdown */}
       {open && (
         <div
+          role="listbox"
+          aria-label="Theme"
           style={{
             position: 'absolute',
             top: 'calc(100% + 6px)',
             right: 0,
-            minWidth: 130,
+            minWidth: 180,
+            maxHeight: 360,
+            overflowY: 'auto',
             background: 'var(--surface-2)',
             border: '1px solid var(--border-2)',
             borderRadius: 7,
             boxShadow: '0 8px 24px rgba(0,0,0,0.28)',
             zIndex: 100,
-            overflow: 'hidden',
             padding: '4px 0',
           }}
         >
-          {THEMES.map((t) => {
-            const m = THEME_META[t]
-            const isActive = t === theme
-            const isHov = hovered === t
-            return (
+          {THEME_GROUPS.map((group, groupIndex) => (
+            <div key={group.category}>
+              {groupIndex > 0 && (
+                <div
+                  style={{
+                    margin: '4px 12px',
+                    borderTop: '1px solid var(--border)',
+                  }}
+                />
+              )}
               <div
-                key={t}
-                onClick={() => select(t)}
-                onMouseEnter={() => setHovered(t)}
-                onMouseLeave={() => setHovered(null)}
                 style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 9,
-                  padding: '7px 14px',
-                  cursor: 'pointer',
-                  background: isHov ? 'var(--surface-3)' : 'transparent',
-                  transition: 'background 0.1s ease',
+                  padding: '6px 14px 4px',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 10,
+                  letterSpacing: '0.02em',
+                  textTransform: 'capitalize',
+                  color: 'var(--text-3)',
                 }}
               >
-                <span style={{ fontSize: 13, lineHeight: 1, width: 16, textAlign: 'center' }}>{m.icon}</span>
-                <span
-                  style={{
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 11,
-                    letterSpacing: '0.05em',
-                    color: isActive ? 'var(--violet)' : isHov ? 'var(--text)' : 'var(--text-2)',
-                    flex: 1,
-                  }}
-                >
-                  {m.label}
-                </span>
-                {isActive && (
-                  <span style={{ color: 'var(--violet)', fontSize: 10 }}>✓</span>
-                )}
+                {group.label}
               </div>
-            )
-          })}
+              {group.themes.map((t) => {
+                const m = THEME_META[t]
+                const isActive = t === theme
+                const isHov = hovered === t
+                return (
+                  <div
+                    key={t}
+                    ref={isActive ? selectedThemeRef : undefined}
+                    role="option"
+                    aria-selected={isActive}
+                    onClick={() => select(t)}
+                    onMouseEnter={() => setHovered(t)}
+                    onMouseLeave={() => setHovered(null)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 9,
+                      padding: '6px 14px',
+                      cursor: 'pointer',
+                      background: isActive
+                        ? 'color-mix(in srgb, var(--violet) 14%, var(--surface-3))'
+                        : isHov
+                        ? 'var(--surface-3)'
+                        : 'transparent',
+                      transition: 'background 0.1s ease, color 0.1s ease',
+                    }}
+                  >
+                    <span style={{ fontSize: 13, lineHeight: 1, width: 16, textAlign: 'center' }}>{m.icon}</span>
+                    <span
+                      style={{
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 11,
+                        letterSpacing: '0.05em',
+                        color: isActive ? 'var(--violet)' : isHov ? 'var(--text)' : 'var(--text-2)',
+                        flex: 1,
+                      }}
+                    >
+                      {m.label}
+                    </span>
+                    {isActive && (
+                      <span style={{ color: 'var(--violet)', fontSize: 10 }}>✓</span>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          ))}
         </div>
       )}
     </div>

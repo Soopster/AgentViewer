@@ -1,0 +1,235 @@
+minimumReleaseAge: 10080
+trustPolicy: no-downgrade
+# pnpm resolves these vulnerable transitive versions independently of npm and
+# Bun. Replace only the affected versions so upstream upgrades supersede the
+# overrides naturally once their dependency ranges move forward.
+overrides:
+  'body-parser@2.2.2': 2.3.0
+  'brace-expansion@5.0.6': 5.0.9
+  'fast-uri@3.1.2': 3.1.5
+  'hono@4.12.25': 4.13.1
+  'ip-address@10.2.0': 10.4.0
+  'js-yaml@3.14.2': 3.15.1
+  'js-yaml@4.2.0': 4.3.1
+  'nanoid@3.3.16': 3.3.18
+  'protobufjs@7.6.4': 7.6.5
+  'shell-quote@1.8.4': 1.10.0
+  'undici@7.28.0': 7.29.0
+# A takeover is by definition a recent publish — minimumReleaseAge (7d) and
+# no-downgrade still screen everything new. Packages that have sat unchanged
+# in the registry for 6+ months keep tripping no-downgrade only because they
+# predate npm provenance (semver@6, undici-types, react-redux, …); skip those.
+trustPolicyIgnoreAfter: 259200
+trustPolicyExclude:
+  # Pre-provenance releases of packages whose newer versions are attested —
+  # no-downgrade flags them as trust downgrades. Each verified 2026-06-12:
+  # lockfile integrity matches the registry dist.integrity byte-for-byte,
+  # not a takeover. semver@6 is Babel's pin; react-redux/reselect come in
+  # via recharts.
+  - semver@6.3.1
+  - react-redux@9.2.0
+  - reselect@5.1.1
+  - effect@4.0.0-beta.70
+  - '@effect/platform-node-shared@4.0.0-beta.70'
+  # 2026-07-02 update-all: @pierre/diffs@1.2.12 pins these exact versions as
+  # its own upstream deps. Same publisher account (pierrecomputer) as prior
+  # attested releases; published by amadeusdemarzi, a maintainer since
+  # 1.0.3/theming@0.0.1 (not a new identity) — Pierre's release pipeline
+  # intermittently skips provenance on manual publishes (theming@0.0.1 hit
+  # this same flag in the 2026-06-12 round). Registry dist.integrity verified
+  # directly, not a takeover.
+  - '@pierre/theme@1.1.0'
+  - '@pierre/theming@0.0.2'
+  # 2026-08-01 update-all: @pierre/diffs@1.3.1 pins @pierre/theme@2.0.0, which
+  # was published 2026-07-24 without provenance. Tarball downloaded and diffed
+  # against attested 1.1.0: only LICENSE (MIT->Apache-2.0), a new NOTICE.md,
+  # and the package.json version/license fields changed - zero code changes.
+  # Local sha512 of the tarball matches registry dist.integrity. A pure
+  # relicensing release from the same manual-publish pipeline, not a takeover.
+  - '@pierre/theme@2.0.0'
+  # 2026-08-09 update-all: @opencode-ai/plugin@1.18.15 pins effect@4.0.0-beta.83.
+  # Same publisher (effect-bot, npmUser unchanged since beta.70) with npm
+  # provenance attestation (publishConfig.provenance:true) rather than the
+  # trusted-publisher marker beta.70 had — a pipeline change, not an identity
+  # change. Registry dist.integrity verified byte-for-byte against
+  # package-lock.json's resolved integrity for effect@4.0.0-beta.83.
+  - 'effect@4.0.0-beta.83'
+  # Pi SDK's clipboard native binaries — all 11 platform packages of 0.3.6
+  # verified against the registry the same way.
+  - '@mariozechner/clipboard@0.3.6'
+  - '@mariozechner/clipboard-darwin-arm64@0.3.6'
+  - '@mariozechner/clipboard-darwin-universal@0.3.6'
+  - '@mariozechner/clipboard-darwin-x64@0.3.6'
+  - '@mariozechner/clipboard-linux-arm64-gnu@0.3.6'
+  - '@mariozechner/clipboard-linux-arm64-musl@0.3.6'
+  - '@mariozechner/clipboard-linux-riscv64-gnu@0.3.6'
+  - '@mariozechner/clipboard-linux-x64-gnu@0.3.6'
+  - '@mariozechner/clipboard-linux-x64-musl@0.3.6'
+  - '@mariozechner/clipboard-win32-arm64-msvc@0.3.6'
+  - '@mariozechner/clipboard-win32-x64-msvc@0.3.6'
+allowBuilds:
+  '@google/genai': set this to true or false
+  esbuild: set this to true or false
+  koffi: set this to true or false
+  msgpackr-extract: set this to true or false
+  protobufjs: set this to true or false
+  sharp: set this to true or false
+minimumReleaseAgeExclude:
+  # 2026-09-13 / 2026-09-17 update-all: exact releases adopted that are still
+  # inside the 7-day quarantine, including version-locked native companions.
+  # Registry dist.integrity was checked byte-for-byte against package-lock.json
+  # for every entry; exact pins keep any later publishes quarantined.
+  # 2026-09-20 OpenCode 2 support: the 2.x client and its two runtime
+  # dependencies, all published the same day. Registry dist.integrity checked
+  # byte-for-byte against package-lock.json.
+  - '@opencode/client@2.0.9'
+  - '@opencode/protocol@2.0.9'
+  - '@opencode/schema@2.0.9'
+  - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.274'
+  - '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.274'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.274'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.274'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.274'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.274'
+  - '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.274'
+  - '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.274'
+  - '@anthropic-ai/claude-agent-sdk@0.3.274'
+  - '@anthropic-ai/sdk@0.126.0'
+  - '@github/copilot-sdk-darwin-arm64@1.0.14'
+  - '@github/copilot-sdk-darwin-x64@1.0.14'
+  - '@github/copilot-sdk-linux-arm64@1.0.14'
+  - '@github/copilot-sdk-linux-x64@1.0.14'
+  - '@github/copilot-sdk-linuxmusl-arm64@1.0.14'
+  - '@github/copilot-sdk-linuxmusl-x64@1.0.14'
+  - '@github/copilot-sdk-win32-arm64@1.0.14'
+  - '@github/copilot-sdk-win32-x64@1.0.14'
+  - '@github/copilot-sdk@1.0.14'
+  - '@next/env@16.3.5'
+  - '@next/swc-darwin-arm64@16.3.5'
+  - '@next/swc-darwin-x64@16.3.5'
+  - '@next/swc-linux-arm64-gnu@16.3.5'
+  - '@next/swc-linux-arm64-musl@16.3.5'
+  - '@next/swc-linux-x64-gnu@16.3.5'
+  - '@next/swc-linux-x64-musl@16.3.5'
+  - '@next/swc-win32-arm64-msvc@16.3.5'
+  - '@next/swc-win32-x64-msvc@16.3.5'
+  - '@opencode-ai/plugin@1.18.31'
+  - '@opencode-ai/sdk@1.18.31'
+  - '@opentui/core-darwin-arm64@0.5.11'
+  - '@opentui/core-darwin-x64@0.5.11'
+  - '@opentui/core-linux-arm64-musl@0.5.11'
+  - '@opentui/core-linux-arm64@0.5.11'
+  - '@opentui/core-linux-x64-musl@0.5.11'
+  - '@opentui/core-linux-x64@0.5.11'
+  - '@opentui/core-win32-arm64@0.5.11'
+  - '@opentui/core-win32-x64@0.5.11'
+  - '@opentui/core@0.5.11'
+  - '@opentui/react@0.5.11'
+  - '@pierre/diffs@1.4.3'
+  - '@types/node@26.6.1'
+  - '@types/react-dom@19.3.0'
+  - '@types/react@19.3.0'
+  - 'lucide-react@1.46.0'
+  - 'marked@18.0.13'
+  - 'next@16.3.5'
+  - 'oxlint-plugin-react-doctor@0.9.14'
+  - 'react-doctor@0.9.14'
+  - 'react-dom@19.3.0'
+  - 'react@19.3.0'
+  - 'scheduler@0.28.0'
+  - 'tailwind-merge@3.7.0'
+  - 'zod@4.6.4'
+  - 'zod@4.6.5'
+  # 2026-09-26 update-all: these 87 exact new releases are inside the seven-day window.
+  # Each pnpm-lock.yaml integrity was verified against npm registry dist.integrity.
+  - '@agentclientprotocol/sdk@1.5.0'
+  - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.283'
+  - '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.283'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.283'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.283'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.283'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.283'
+  - '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.283'
+  - '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.283'
+  - '@anthropic-ai/claude-agent-sdk@0.3.283'
+  - '@anthropic-ai/sdk@0.128.0'
+  - '@aws-sdk/core@3.978.1'
+  - '@aws-sdk/credential-provider-env@3.972.72'
+  - '@aws-sdk/credential-provider-http@3.972.74'
+  - '@aws-sdk/credential-provider-ini@3.973.17'
+  - '@aws-sdk/credential-provider-login@3.972.79'
+  - '@aws-sdk/credential-provider-node@3.972.84'
+  - '@aws-sdk/credential-provider-process@3.972.72'
+  - '@aws-sdk/credential-provider-sso@3.973.16'
+  - '@aws-sdk/credential-provider-web-identity@3.972.78'
+  - '@aws-sdk/eventstream-handler-node@3.972.35'
+  - '@aws-sdk/middleware-eventstream@3.972.30'
+  - '@aws-sdk/middleware-websocket@3.972.54'
+  - '@aws-sdk/nested-clients@3.997.46'
+  - '@aws-sdk/signature-v4-multi-region@3.996.47'
+  - '@aws-sdk/token-providers@3.1138.0'
+  - '@aws-sdk/types@3.974.6'
+  - '@aws-sdk/xml-builder@3.972.41'
+  - '@earendil-works/chord@0.87.1'
+  - '@earendil-works/pi-agent-core@0.87.1'
+  - '@earendil-works/pi-ai@0.87.1'
+  - '@earendil-works/pi-coding-agent@0.87.1'
+  - '@earendil-works/pi-protocol@0.87.1'
+  - '@earendil-works/pi-server@0.87.1'
+  - '@earendil-works/pi-telemetry@0.87.1'
+  - '@earendil-works/pi-tui@0.87.1'
+  - '@modelcontextprotocol/client@2.1.0'
+  - '@modelcontextprotocol/core@2.1.0'
+  - '@modelcontextprotocol/server@2.1.0'
+  - '@next/env@16.3.6'
+  - '@next/swc-darwin-arm64@16.3.6'
+  - '@next/swc-darwin-x64@16.3.6'
+  - '@next/swc-linux-arm64-gnu@16.3.6'
+  - '@next/swc-linux-arm64-musl@16.3.6'
+  - '@next/swc-linux-x64-gnu@16.3.6'
+  - '@next/swc-linux-x64-musl@16.3.6'
+  - '@next/swc-win32-arm64-msvc@16.3.6'
+  - '@next/swc-win32-x64-msvc@16.3.6'
+  - '@opencode-ai/plugin@1.18.32'
+  - '@opencode-ai/sdk@1.18.32'
+  - '@opencode/client@2.0.17'
+  - '@opencode/protocol@2.0.17'
+  - '@opencode/schema@2.0.17'
+  - '@opentui/core-darwin-arm64@0.5.12'
+  - '@opentui/core-darwin-x64@0.5.12'
+  - '@opentui/core-linux-arm64-musl@0.5.12'
+  - '@opentui/core-linux-arm64@0.5.12'
+  - '@opentui/core-linux-x64-musl@0.5.12'
+  - '@opentui/core-linux-x64@0.5.12'
+  - '@opentui/core-win32-arm64@0.5.12'
+  - '@opentui/core-win32-x64@0.5.12'
+  - '@opentui/core@0.5.12'
+  - '@opentui/react@0.5.12'
+  - '@pierre/diffs@1.5.1'
+  - '@smithy/core@3.35.0'
+  - '@smithy/signature-v4@5.7.4'
+  - '@smithy/types@4.19.0'
+  - '@tauri-apps/cli-darwin-arm64@2.11.5'
+  - '@tauri-apps/cli-darwin-x64@2.11.5'
+  - '@tauri-apps/cli-linux-arm-gnueabihf@2.11.5'
+  - '@tauri-apps/cli-linux-arm64-gnu@2.11.5'
+  - '@tauri-apps/cli-linux-arm64-musl@2.11.5'
+  - '@tauri-apps/cli-linux-riscv64-gnu@2.11.5'
+  - '@tauri-apps/cli-linux-x64-gnu@2.11.5'
+  - '@tauri-apps/cli-linux-x64-musl@2.11.5'
+  - '@tauri-apps/cli-win32-arm64-msvc@2.11.5'
+  - '@tauri-apps/cli-win32-ia32-msvc@2.11.5'
+  - '@tauri-apps/cli-win32-x64-msvc@2.11.5'
+  - '@tauri-apps/cli@2.11.5'
+  - '@types/node@26.6.3'
+  - '@wterm/core@0.5.1'
+  - '@wterm/dom@0.5.1'
+  - '@wterm/ghostty@0.5.1'
+  - 'lucide-react@1.48.0'
+  - 'marked@18.0.14'
+  - 'next@16.3.6'
+  - 'tsx@4.23.15'
+  # 2026-09-26 OpenCode client update; registry integrity matches pnpm-lock.yaml.
+  - '@opencode/client@2.0.18'
+  - '@opencode/protocol@2.0.18'
+  - '@opencode/schema@2.0.18'

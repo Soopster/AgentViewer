@@ -1,0 +1,29 @@
+{
+  "expectations": [
+    {
+      "text": "coord_join_run with run_id/name/provider/cwd",
+      "passed": true,
+      "evidence": "Both call coord_join_run with the supplied run_id, the given name, provider, and checkout path."
+    },
+    {
+      "text": "coord_status + coord_read_inbox before claiming",
+      "passed": true,
+      "evidence": "Both read status and drain inbox immediately after joining, before coord_claim_task."
+    },
+    {
+      "text": "coord_claim_task for atomic claim",
+      "passed": true,
+      "evidence": "Both explicitly call coord_claim_task on one unblocked task."
+    },
+    {
+      "text": "coord_progress(status=working) after claim",
+      "passed": true,
+      "evidence": "Both call coord_progress with status=working before/while starting the task."
+    },
+    {
+      "text": "Reply-required inbox handled before new work",
+      "passed": true,
+      "evidence": "Both state reply-required mail must be answered before claiming/starting new work."
+    }
+  ]
+}

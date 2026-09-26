@@ -2,7 +2,7 @@
 node_modules/
 .agent-viewer-data/
 memory/
-tsconfig.tsbuildinfo
+*.tsbuildinfo
 .DS_Store
 .env
 .env.local
@@ -13,3 +13,4 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+tmp/
