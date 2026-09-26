@@ -101,7 +101,7 @@
     "@modelcontextprotocol/server": "^2.1.0",
     "@opencode-ai/plugin": "^1.18.32",
     "@opencode-ai/sdk": "^1.18.32",
-    "@opencode/client": "^2.0.17",
+    "@opencode/client": "^2.0.18",
     "@opentui/core": "^0.5.12",
     "@opentui/react": "^0.5.12",
     "@pierre/diffs": "^1.5.1",
