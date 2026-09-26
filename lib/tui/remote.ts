@@ -32,6 +32,20 @@ export function subscribeRemoteProtocolRunChanges(
 ): (() => void) | null {
   const baseUrl = getAttachBaseUrl()
   if (!baseUrl) return null
+  return subscribeProtocolRunChangesAt(baseUrl, {}, onRunChanged, onReconnect)
+}
+
+/**
+ * The same change stream from any daemon — the attached one, or another
+ * machine's (`lib/tui/machines.ts`), which needs its device credential in
+ * `headers`. Reconnects with backoff until stopped.
+ */
+export function subscribeProtocolRunChangesAt(
+  baseUrl: string,
+  headers: Record<string, string>,
+  onRunChanged: (runId: string) => void,
+  onReconnect: () => void,
+): () => void {
   const controller = new AbortController()
   let stopped = false
 
@@ -40,7 +54,7 @@ export function subscribeRemoteProtocolRunChanges(
     while (!stopped) {
       try {
         const response = await fetch(`${baseUrl}/api/agent-protocol/runs/changes`, {
-          headers: { Accept: 'text/event-stream' },
+          headers: { ...headers, Accept: 'text/event-stream' },
           signal: controller.signal,
         })
         if (!response.ok || !response.body) throw new Error(`Coordinator change stream failed: ${response.status}`)

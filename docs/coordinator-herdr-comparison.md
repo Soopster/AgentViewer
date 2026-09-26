@@ -37,8 +37,8 @@ mailbox — has no herdr equivalent.
 
 **Behind, and why.** A stalled start is reported at 15s against herdr's 5s,
 because our window includes the dispatch sweep (measured live: 2-3s to first
-activity, so the gap is headroom, not latency). There is no combined agent
-list across machines. Terminal plumbing (panes,
+activity, so the gap is headroom, not latency). The combined list across
+machines is read-only. Terminal plumbing (panes,
 layout, graphics, plugins, live handoff) is out of scope for an SDK-driven
 coordinator.
 
@@ -292,7 +292,7 @@ difference decides most of the verdicts below.
 | Detach without stopping work (README) | `agent-viewer web` daemon + `--attach`; turns run server-side | Present |
 | Resume supported agent sessions after restart (`agent_resume.rs`) | Provider sessions are durable by id; interrupted teammate execution waits for explicit recovery rather than auto-resuming | Present, deliberately stricter |
 | Worktrees per agent (`worktree.rs`) | Per-teammate worktrees, baselines, path locks, completion gate | Present, stronger (locks and gate) |
-| Several machines, one combined agent list (`--machine`) | `--attach` targets one daemon; remote pairing is per device | Not adopted: a cross-daemon roster is a separate project, not an interactive-mode change |
+| Several machines, one combined agent list (`--machine`) | `agent-viewer machines add` pairs this TUI with another machine's daemon (read-only); the coordinator rail lists each machine's teams under its heading with the same states and filter | Adopted (September 26), read-only |
 | Sounds per state (`sound.rs`) | OSC notifications; the terminal or OS decides whether they sound | Not adopted: bundled audio players are platform surface with no Coordinator value |
 | Terminal output classifier / detection manifests (`detect/`) | Structured SDK events and the live-turn registry | Not needed: state is reported, not inferred |
 | `pane wait-output`, `send-keys`, read sources (SKILL.md) | Transcript APIs and `coord_wait` / resource subscriptions | Not needed for structured transports |
@@ -326,7 +326,7 @@ difference decides most of the verdicts below.
   that never answers and asserts no stall an hour past the window; dropping the
   `turnActive` exclusion was verified to fail it, so the check is exercising a
   genuinely claimed task rather than passing on its status.
-- No combined multi-machine roster.
+- The multi-machine roster is read-only: acting on another machine's teammate happens on that machine.
 - Live-provider proof now exists for two paths, but only those (below). No
   long-duration run and no side-by-side comparison with herdr has been made.
 
@@ -1011,3 +1011,27 @@ it (the order check first passed the reversal, because it only compared rows
 holding both panes, and was rewritten to compare columns wherever each landed).
 `splitPaneSmoke.ts` pins `planTeammateWatch`, and the popover smoke the keys at
 all three panel sizes.
+
+### One list across machines
+
+Herdr's `--machine` gives one agent list spanning machines; `--attach` here
+targets one daemon. `agent-viewer machines add <name> <url>` now pairs this TUI
+with another machine's daemon using a pairing URL from `agent-viewer pair
+--scope read-only` run there — the same single-use exchange a phone makes, so
+the other machine lists the TUI among its paired devices and can revoke it. The
+coordinator rail then shows that machine's teams under a `⌂ NAME` heading, with
+the same needs-you / working / result states and the `f` filter, and its
+counts join the header's.
+
+Two herdr rules shaped it. A machine that is slow or down must not stall the
+local list (#4234), so each machine has its own feed and deadline and a failure
+is written on its heading beside the last good roster. And "unknown is not
+done": an unreadable machine stays visible under every filter, because hiding
+it would say nobody there needs you when the list does not know. Opening a
+remote teammate says which machine it is on rather than attempting a transcript
+this process cannot read — the list is for seeing where attention is needed,
+and the acting happens there, as in herdr, where a remote pane is driven on its
+own machine. `scripts/machinesSmoke.ts` covers pairing (single use, 0600, never
+echoed), a revoked credential reading as revoked rather than empty, a machine
+that never answers being cut off at its deadline, and the rail's grouping,
+scoped keys and filter.

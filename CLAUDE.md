@@ -1372,6 +1372,25 @@ Upgrade path: the pre-per-device state file (`{ enabled, token, createdAt }`) mi
 one device session with a fixed id, so already-paired devices keep working rather than being
 silently signed out.
 
+### Other machines' teams (`agent-viewer machines`)
+
+The TUI's coordinator rail can list other machines' Coordinator teams beside this one's — herdr's
+combined agent list across machines. `agent-viewer machines add <name> <pairing url>` redeems a
+pairing URL from `agent-viewer pair --scope read-only` run on the other machine, once, for the same
+per-device credential a phone gets (so the other machine lists and can revoke it); it is stored in
+`.agent-viewer-data/machines.json`, 0600 via temp-and-rename, and never printed. `lib/machines.mjs`
+is the store (plain JS: the bin CLI shares it), `lib/tui/machines.ts` the read side.
+
+- **A machine never holds up the local list.** Each has its own feed with its own deadline
+  (`MACHINE_READ_TIMEOUT_MS`), separate from the local refresh and from the others; a failed read
+  keeps the last good roster and says why on the machine's heading (herdr #4234). An unreadable
+  machine is shown under every filter — dropping it would read as "nobody there needs you".
+- **Run and agent ids are only unique within one ledger**, so remote entry keys are scoped by
+  machine name. Enter on a remote agent says where it runs rather than opening a transcript this
+  process cannot read.
+- Machines are read at feed start; one added while the TUI runs appears after a restart.
+  `scripts/machinesSmoke.ts` runs against a fake daemon that enforces the credential.
+
 ### Session lifecycle and linked pull requests
 
 `lib/sessionInbox.ts` owns `pin | unpin | settle | reopen | snooze | unsnooze` plus

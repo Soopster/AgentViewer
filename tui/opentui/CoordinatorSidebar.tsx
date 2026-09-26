@@ -47,6 +47,19 @@ function CoordinatorRow({ entry, selected, theme, innerWidth, density }: {
   innerWidth: number
   density: TuiDensity
 }) {
+  if (entry.type === 'machine') {
+    // Another machine's teams sit under its own heading, the way herdr's
+    // combined list groups agents by machine. An unreadable machine says why.
+    const status = entry.error ?? `${entry.agentCount} agent${entry.agentCount === 1 ? '' : 's'}`
+    return (
+      <box id={`sidebar:${entry.key}`} paddingX={1} marginTop={1} backgroundColor={theme.surface2}>
+        <text fg={entry.error ? theme.amber : theme.cyan} wrapMode="none">
+          {fitText(`⌂ ${entry.machine.name.toUpperCase()} · ${status}`, innerWidth - 2)}
+        </text>
+      </box>
+    )
+  }
+
   if (entry.type === 'run') {
     const title = (entry.run.prompt.split('\n')[0]?.trim() || entry.run.id).toUpperCase()
     const countLabel = `${entry.agentCount}`

@@ -173,6 +173,7 @@ Modes:
   (default)  Launch the OpenTUI terminal app via Bun
   web        Launch the Next.js web app
   pair       Mint a pairing code for a phone against a running web daemon
+  machines   List, add or remove other machines whose teams the TUI shows
   mcp        Run the Claude/Codex stdio MCP bridge
   ahp        Run the published AHP JSON-RPC host over stdio, TCP, or WebSocket
   acp        Run an ACP (agentclientprotocol.com) Agent over stdio
@@ -204,6 +205,12 @@ Options:
 Pairing a phone:
   agent-viewer pair                       # against a daemon on port 3000
   agent-viewer pair --attach 4000 --scope read-only
+
+Watching another machine's teams (the Coordinator rail lists them):
+  agent-viewer pair --scope read-only     # on the other machine; copy the URL
+  agent-viewer machines add build-box '<pairing url>'
+  agent-viewer machines                   # list
+  agent-viewer machines remove build-box
 
 CLI MCP:
   claude mcp add agent-viewer -- npx -y agent-viewer mcp --attach 3000
@@ -378,6 +385,33 @@ function failMissingBun() {
 // with `agent-viewer web` has no window to open the settings popover in, so
 // this mints a pairing code over its own HTTP API and prints the URL plus a
 // scannable QR right in the terminal.
+// The credential a machine hands back is never printed: it is a device
+// session, and the other machine is where it can be revoked.
+async function runMachinesCommand(rawArgs) {
+  const { addMachine, readMachines, removeMachine } = await import('../lib/machines.mjs')
+  const [action = 'list', name, pairingUrl] = rawArgs
+  try {
+    if (action === 'list') {
+      const machines = readMachines()
+      if (machines.length === 0) console.log('No machines added. On the other machine run `agent-viewer pair --scope read-only`, then `agent-viewer machines add <name> <url>`.')
+      for (const machine of machines) console.log(`${machine.name}  ${machine.baseUrl}  ${machine.scope}  added ${machine.addedAt}`)
+    } else if (action === 'add') {
+      if (!name || !pairingUrl) throw new Error('Usage: agent-viewer machines add <name> <pairing url>')
+      const added = await addMachine({ name, pairingUrl })
+      console.log(`Added ${added.name} (${added.baseUrl}, ${added.scope}). Its teams appear in the TUI's Coordinator rail.`)
+      if (added.scope === 'full') console.log('Note: this pairing is full scope; the rail only reads, so `--scope read-only` would have been enough.')
+    } else if (action === 'remove') {
+      if (!name) throw new Error('Usage: agent-viewer machines remove <name>')
+      console.log(removeMachine(name) ? `Removed ${name}. Revoke its device on that machine to invalidate the credential.` : `No machine named ${name}.`)
+    } else {
+      throw new Error('Usage: agent-viewer machines [list | add <name> <pairing url> | remove <name>]')
+    }
+  } catch (error) {
+    console.error(error?.message ?? String(error))
+    process.exitCode = 1
+  }
+}
+
 async function runPairCommand(rawArgs) {
   const { attach, scope, port } = parseArgs(rawArgs)
   const base = normalizeAttachUrl(attach || port || process.env.AGENT_VIEWER_ATTACH || '3000')
@@ -451,6 +485,8 @@ if (command === '-h' || command === '--help' || command === 'help') {
   process.exitCode = 0
 } else if (command === 'pair') {
   await runPairCommand(args.slice(1))
+} else if (command === 'machines') {
+  await runMachinesCommand(args.slice(1))
 } else if (command === 'mcp') {
   const { attach, identity } = parseArgs(args.slice(1))
   const entrypoint = fileURLToPath(new URL('./agent-viewer-mcp.mjs', import.meta.url))

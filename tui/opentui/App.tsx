@@ -9601,6 +9601,12 @@ export default function OpenTuiApp() {
   const openSelectedCoordinatorAgent = useEffectEvent(() => {
     const { agentEntries, selectedKey: coordinatorSelectedKey } = getCoordinatorState()
     const selected = agentEntries.find((entry) => entry.key === coordinatorSelectedKey)
+    // Another machine's transcript is not readable from here; say where to go
+    // rather than opening a session this process cannot find.
+    if (selected?.machine) {
+      showNotice('info', `${selected.agent.name} runs on ${selected.machine.name} · open it there (${selected.machine.baseUrl})`, 6000)
+      return
+    }
     if (selected) openCoordinationAgentSession(selected.agent)
   })
   const composerLogicalLineCount = composerEntryLineCount(composerDraft)
