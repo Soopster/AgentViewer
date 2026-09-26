@@ -19845,7 +19845,9 @@ export default function OpenTuiApp() {
       return
     }
 
-    if (key.name === 'd') {
+    // ⌃D is the reader's page-down; with the sidebar focused it must not fall
+    // through to here and cycle density (which re-formats the transcript).
+    if (key.name === 'd' && !key.ctrl && !key.meta && !key.option) {
       handled(() => {
         const next = cycleDensityValue(density)
         setDensity(next)
