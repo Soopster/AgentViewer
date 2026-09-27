@@ -365,10 +365,23 @@ export function mapOpenCodeModelsToSessionModels(config: ConfigProvidersResponse
 
 export function currentOpenCodeModelValue(message?: Message): string | null {
   if (!message) return null
-  if (message.role === 'user') {
-    return encodeOpenCodeModelValue(message.model)
+  const model = message.role === 'user'
+    ? message.model
+    : { providerID: message.providerID, modelID: message.modelID }
+  // A record that ran no model (a user `!command`) carries empty ids; encoding
+  // them put `{"providerID":"","modelID":""}` in the header as the model name.
+  if (!model?.providerID || !model.modelID) return null
+  return encodeOpenCodeModelValue(model)
+}
+
+/** The model the transcript last ran under — the newest message that names
+ *  one, so a trailing record that ran none (a `!command`) does not hide it. */
+export function latestOpenCodeModelValue(messages: Array<{ info?: Message }>): string | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const value = currentOpenCodeModelValue(messages[index]?.info)
+    if (value) return value
   }
-  return encodeOpenCodeModelValue({ providerID: message.providerID, modelID: message.modelID })
+  return null
 }
 
 export function firstOpenCodePrompt(messages: OpenCodeMessageBundle[]): string | undefined {
@@ -391,6 +404,10 @@ export function mapOpenCodeContextUsage(message?: Message): ContextUsage | null 
   const normalizedTotal = (message.tokens as typeof message.tokens & { total?: number }).total
   const totalTokens = normalizedTotal
     ?? message.tokens.input + message.tokens.output + message.tokens.reasoning + message.tokens.cache.read + message.tokens.cache.write
+  // An assistant message is announced before it has any usage (every step
+  // start, and a user `!command`'s record), and zero there means "not known
+  // yet". Reporting it reset the context meter to empty mid-turn.
+  if (!totalTokens) return null
   return {
     totalTokens,
     maxTokens: 0,

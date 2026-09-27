@@ -1797,16 +1797,20 @@ function formatBlock(block: ThreadedBlock, activeForms?: TaskActiveForms, taskRe
     case 'system_reminder':
       return [line(`system reminder: ${truncateLine(block.content)}`, 'system')]
     case 'slash_command':
-      return [line(truncateLine(`/${block.command} ${block.args}`.trim()), 'tool')]
+      return [line(truncateLine(`/${block.command.replace(/^\/+/, '')} ${block.args}`.trim()), 'tool')]
+    // Output the user asked for reads in full, capped by density like a reply
+    // rather than cut to its first line.
     case 'local_command_stdout':
       return block.stdout.trim()
-        ? [line(`❯ ${truncateLine(block.stdout.trim().split('\n')[0])}`, 'dim')]
+        ? sanitizeLine(block.stdout).trim().split('\n').map((l) => line(truncateLine(l.trimEnd()), 'dim'))
         : [line('❯', 'dim')]
     case 'bash_input':
       return [line(`! ${truncateLine(block.command)}`, 'tool')]
     case 'bash_output': {
-      const firstLine = (block.stdout || block.stderr).trim().split('\n')[0] ?? ''
-      return firstLine ? [line(truncateLine(firstLine), 'dim')] : [line('(no output)', 'dim')]
+      const output = (block.stdout || block.stderr).trim()
+      return output
+        ? sanitizeLine(output).split('\n').map((l) => line(truncateLine(l.trimEnd()), 'dim'))
+        : [line('(no output)', 'dim')]
     }
     case 'claude_system': {
       const subagentType = typeof block.payload.subagent_type === 'string' ? block.payload.subagent_type : ''
@@ -2102,12 +2106,12 @@ function analyzeCardBlocks(message: ThreadedMessage): CardBlockAnalysis {
       hasOperationalBlock ||= isAgentProtocolText(block.text)
       continue
     }
+    // A `!command` and a local slash command's output are what the user asked
+    // to see — the native CLIs print them inline — so they are conversation,
+    // not operational chrome folded behind `e` like the agent's own tool calls.
     hasOperationalBlock ||= block.type === 'task_notification'
       || block.type === 'system_reminder'
       || block.type === 'slash_command'
-      || block.type === 'local_command_stdout'
-      || block.type === 'bash_input'
-      || block.type === 'bash_output'
       || block.type === 'claude_system'
   }
 
@@ -2677,7 +2681,7 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
     case 'system_reminder':
       return [line(`system reminder: ${truncateLine(block.content)}`, 'system')]
     case 'slash_command':
-      return [line(truncateLine(`/${block.command} ${block.args}`.trim()), 'tool')]
+      return [line(truncateLine(`/${block.command.replace(/^\/+/, '')} ${block.args}`.trim()), 'tool')]
     case 'local_command_stdout':
       return block.stdout.trim()
         ? sanitizeLine(block.stdout).trim().split('\n').map((l) => line(l.trimEnd(), 'dim'))

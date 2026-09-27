@@ -66,6 +66,11 @@ const MAX_TRACKED_MESSAGES = 256
 export class OpenCode2EventTranslator {
   private messages = new Map<string, MessageState>()
   private directories = new Map<string, string>()
+  /** Sessions between an execution's start and end edge. A user `!command`
+   *  runs outside any execution, which is what tells it apart. */
+  private executing = new Set<string>()
+  /** User shells this translator is rendering, by shell id. */
+  private userShells = new Set<string>()
 
   /** Remember which directory a session belongs to. Most v2 events carry a
    *  `location`, but the execution and step edges do not, and the harness
@@ -120,12 +125,15 @@ export class OpenCode2EventTranslator {
       // the status (for the busy indicator) and the idle edge (which is what
       // ends a send stream).
       case 'session.execution.started':
+        if (sessionId) this.executing.add(sessionId)
         return sessionId ? emit([statusEvent(sessionId, { type: 'busy' })]) : []
       case 'session.execution.succeeded':
       case 'session.execution.interrupted':
+        if (sessionId) this.executing.delete(sessionId)
         return sessionId ? emit([statusEvent(sessionId, { type: 'idle' }), idleEvent(sessionId)]) : []
       case 'session.execution.failed': {
         if (!sessionId) return []
+        this.executing.delete(sessionId)
         const error = data.error as V2StructuredError | undefined
         // The error frame must precede idle: the send stream stops reading at
         // whichever arrives first, and stopping on idle would drop the reason.
@@ -322,6 +330,48 @@ export class OpenCode2EventTranslator {
         }))])
       }
 
+      // A user `!command`. v1 ran it as a busy→idle turn holding one bash
+      // call; v2 runs it outside any execution and queues the output for the
+      // model's next turn, so there is no execution edge at all — a send
+      // stream waiting for idle hung until its watchdog. The card is keyed by
+      // shell id (the persisted message id is not on these events); the live
+      // overlay is dropped once the transcript re-read lands the real row.
+      // A shell that starts inside an execution is the agent's own, rendered
+      // by its tool call, and must neither get a second card nor end a turn.
+      case 'session.shell.started': {
+        const shell = data.shell as V2ShellInfo | undefined
+        if (!sessionId || !shell?.id || this.executing.has(sessionId)) return []
+        this.userShells.add(shell.id)
+        const messageId = userShellMessageId(shell.id)
+        const created = shell.time?.started ?? at
+        return emit([
+          { type: 'message.updated', properties: { info: toV1AssistantInfo({ sessionId, messageId, agent: 'build', model: undefined, created }) } } as OpenCodeEvent,
+          partEvent(toV1ToolPart({
+            sessionId, messageId, callId: messageId, name: 'shell',
+            state: { status: 'running', input: { command: shell.command ?? '' } },
+            time: { created },
+          })),
+        ])
+      }
+      case 'session.shell.ended': {
+        const shell = data.shell as V2ShellInfo | undefined
+        if (!sessionId || !shell?.id || !this.userShells.delete(shell.id)) return []
+        const messageId = userShellMessageId(shell.id)
+        const created = shell.time?.started ?? at
+        const completed = shell.time?.completed ?? at
+        const output = (data.output as { output?: unknown } | undefined)?.output
+        const events: OpenCodeEvent[] = [
+          partEvent(toV1ToolPart({
+            sessionId, messageId, callId: messageId, name: 'shell',
+            state: { status: 'completed', input: { command: shell.command ?? '' }, content: [{ type: 'text', text: typeof output === 'string' ? output : '' }] },
+            time: { created, completed },
+          })),
+          { type: 'message.updated', properties: { info: toV1AssistantInfo({ sessionId, messageId, agent: 'build', model: undefined, created, completed }) } } as OpenCodeEvent,
+        ]
+        if (!this.executing.has(sessionId)) events.push(statusEvent(sessionId, { type: 'idle' }), idleEvent(sessionId))
+        return emit(events)
+      }
+
       case 'session.compaction.ended':
         return sessionId ? emit([{ type: 'session.compacted', properties: { sessionID: sessionId } } as OpenCodeEvent]) : []
 
@@ -374,6 +424,12 @@ export class OpenCode2EventTranslator {
         return []
     }
   }
+}
+
+type V2ShellInfo = { id?: string; command?: string; time?: { started?: number; completed?: number } }
+
+function userShellMessageId(shellId: string): string {
+  return `user-shell:${shellId}`
 }
 
 function stringField(data: Record<string, unknown>, key: string): string | undefined {

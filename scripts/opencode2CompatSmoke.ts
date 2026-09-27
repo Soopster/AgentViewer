@@ -216,6 +216,32 @@ assert.match(
   'the failure reason has to reach the error frame',
 )
 
+// A user `!command` runs outside any execution, so v2 sends no execution edge
+// for it — the send stream, which ends on idle, hung until its watchdog. The
+// shell's own end is the idle, and it renders as a bash card meanwhile. A shell
+// started inside an execution is the agent's: no second card, and it must not
+// end the turn. Payloads are the shapes a 2.0.8 server sent for `!echo second`.
+const userShell = { id: 'sh_user', status: 'running', command: 'echo second', time: { started: 5_000 } }
+const shellTranslator = new OpenCode2EventTranslator()
+const shellStarted = shellTranslator.translate({ type: 'session.shell.started', created: 5_000, data: { sessionID: SESSION, shell: userShell } })
+assert.deepEqual(shellStarted.map((entry) => entry.payload.type), ['message.updated', 'message.part.updated'])
+const shellEnded = shellTranslator.translate({
+  type: 'session.shell.ended',
+  created: 5_006,
+  data: { sessionID: SESSION, shell: { ...userShell, status: 'exited', exit: 0, time: { started: 5_000, completed: 5_006 } }, output: { output: 'second\n' } },
+})
+assert.deepEqual(shellEnded.map((entry) => entry.payload.type), ['message.part.updated', 'message.updated', 'session.status', 'session.idle'],
+  "a user shell's end must be the turn's idle")
+const shellCard = (shellEnded[0]!.payload as { properties: { part: { tool?: string; state?: { status?: string; output?: string } } } }).properties.part
+assert.equal(shellCard.tool, 'bash')
+assert.equal(shellCard.state?.status, 'completed')
+assert.equal(shellCard.state?.output, 'second\n')
+const agentShellTranslator = new OpenCode2EventTranslator()
+agentShellTranslator.translate({ type: 'session.execution.started', created: 6_000, data: { sessionID: SESSION } })
+assert.deepEqual(agentShellTranslator.translate({ type: 'session.shell.started', created: 6_001, data: { sessionID: SESSION, shell: { ...userShell, id: 'sh_agent' } } }), [])
+assert.deepEqual(agentShellTranslator.translate({ type: 'session.shell.ended', created: 6_002, data: { sessionID: SESSION, shell: { ...userShell, id: 'sh_agent' } } }), [],
+  "the agent's own shell must not end its execution's turn")
+
 // v2 has no todo API at all: the tool call is the only record, so the panel is
 // fed from it.
 const todoTranslator = new OpenCode2EventTranslator()

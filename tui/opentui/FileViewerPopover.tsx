@@ -2,7 +2,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable, SyntaxStyle } from '@opentui/core'
 import { open, readdir, stat } from 'node:fs/promises'
-import { basename, dirname, extname, join, parse, resolve } from 'node:path'
+import { basename, dirname, extname, join, resolve } from 'node:path'
 import type { TuiThemePalette } from '../theme'
 import { detectTuiCodeFiletypeFromPath } from '../codeFiletypes'
 
@@ -490,7 +490,9 @@ export function FileViewerPopover({
   const previewW = previewExpanded ? popW - 2 : Math.max(24, popW - leftW - middleW - 4)
   const contentH = popH - 5
   const parentPath = dirname(directory)
-  const parentSegments = directory === parse(directory).root ? [directory] : directory.split('/').filter(Boolean)
+  // The leading `/` is drawn separately; the root itself adds no segment (as
+  // `[directory]` it rendered `///`).
+  const parentSegments = directory.split('/').filter(Boolean)
   const lineNumberWidth = preview.kind === 'text' ? String(preview.lines.length).length : 1
   const previewFiletype = preview.kind === 'text' ? detectTuiCodeFiletypeFromPath(selectedEntry?.path) : undefined
   const previewContent = preview.kind === 'text' ? preview.lines.join('\n') : ''

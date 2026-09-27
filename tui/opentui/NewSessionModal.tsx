@@ -102,7 +102,9 @@ export function NewSessionModal({
         <text wrapMode="none">
           <span fg={active ? theme.cyan : theme.dim}>{`${active ? '›' : ' '} `}</span>
           <span fg={active ? theme.text : theme.muted}>{label.padEnd(labelW)}</span>
-          <span fg={active ? theme.cyan : theme.text}>{fitText(value, valueW)}</span>
+          {/* Leave room for the hint, or it paints over the path's tail — the
+              part that says which folder this is. */}
+          <span fg={active ? theme.cyan : theme.text}>{fitText(value, Math.max(8, valueW - (active ? hint.length + 1 : 0)))}</span>
         </text>
         <box flexGrow={1} />
         <text fg={theme.dim} wrapMode="none">{active ? hint : ''}</text>

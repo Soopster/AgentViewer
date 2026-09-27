@@ -837,6 +837,14 @@ function buildClaudeBashOutputMessage(result: { stdout: string; stderr: string }
   }
 }
 
+// The output entry reaches the transcript only once it is persisted, which is
+// after Claude has started (often finished) responding to it — so the command
+// looked as if it had taken as long as the reply. The native CLI prints it the
+// moment the command exits; this frame lets the surfaces do the same.
+function claudeBashOutputEvent(command: string, result: { stdout: string; stderr: string }): string {
+  return `event: bash-output\ndata: ${JSON.stringify({ command, stdout: result.stdout, stderr: result.stderr })}\n\n`
+}
+
 async function runClaudeBangShellCommand(
   command: string,
   cwd: string | undefined,
@@ -3225,6 +3233,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
             registerKill: (kill) => { killBangShell = kill },
           })
           killBangShell = null
+          safeEnqueue(claudeBashOutputEvent(bangShell, bangResult))
           pushUserMessage(buildClaudeBashOutputMessage(bangResult))
         }
 
@@ -3740,6 +3749,9 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
                 registerKill: (kill) => { killBangShell = kill },
               })
               killBangShell = null
+              try {
+                controller.enqueue(encoder.encode(claudeBashOutputEvent(bangShell, bangResult)))
+              } catch { /* client gone — the persisted entry still lands */ }
               await activeEntry.run(buildClaudeBashOutputMessage(bangResult), {
                 signal: turnAbort.signal,
                 model,
@@ -4210,18 +4222,30 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
       // completion, approval, etc.) is an interaction boundary and flushes
       // the pending delta first so ordering in the transcript stays intact.
       const DELTA_SPILL_CHARS = 4000
+      // The periodic flush the text above promises. Without it, a turn that is
+      // nothing but prose showed no text at all until the item completed —
+      // measured: 18s of Codex streaming a 300-line answer, then all at once.
+      const DELTA_FLUSH_MS = 40
       const DELTA_METHODS = new Set([
         'item/agentMessage/delta',
         'item/reasoning/textDelta',
         'item/reasoning/summaryTextDelta',
       ])
       let pendingDelta: CodexNotification | null = null
+      let deltaFlushTimer: ReturnType<typeof setTimeout> | null = null
 
       const flushPendingDelta = () => {
+        if (deltaFlushTimer) {
+          clearTimeout(deltaFlushTimer)
+          deltaFlushTimer = null
+        }
         if (!pendingDelta) return
         const notification = pendingDelta
         pendingDelta = null
         flushNotification(notification)
+      }
+      const scheduleDeltaFlush = () => {
+        if (!deltaFlushTimer) deltaFlushTimer = setTimeout(flushPendingDelta, DELTA_FLUSH_MS)
       }
 
       const emitNotification = (notification: CodexNotification) => {
@@ -4240,16 +4264,18 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
         if (!pendingDelta || pendingDelta.method !== notification.method || pendingParams?.itemId !== params.itemId) {
           flushPendingDelta()
           pendingDelta = notification
+          scheduleDeltaFlush()
           return
         }
         const mergedDelta = `${pendingParams?.delta ?? ''}${params.delta}`
         const merged = { ...notification, params: { ...params, delta: mergedDelta } } as CodexNotification
         if (mergedDelta.length >= DELTA_SPILL_CHARS) {
-          pendingDelta = null
-          flushNotification(merged)
+          pendingDelta = merged
+          flushPendingDelta()
           return
         }
         pendingDelta = merged
+        scheduleDeltaFlush()
       }
 
       // Prime the SSE stream before Codex startup/resume work so the TUI can

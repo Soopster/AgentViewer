@@ -331,6 +331,7 @@ const COMPOSER_WAITING_SPINNER_FRAMES = [
 // Exported so liveToolStreamSmoke can assert none of them are on screen
 // while a turn runs — the idle ticker and the pinned turn status are mutually
 // exclusive, and a stale "waiting patiently" above a live turn is a lie.
+// Equally, no phrase may claim work is happening: this shows while idle.
 export const IDLE_TICKER_PHRASES = [
   'waiting for new messages',
   'listening for activity',
@@ -343,7 +344,6 @@ export const IDLE_TICKER_PHRASES = [
   'holding position',
   'idle — pinging occasionally',
   'no new messages',
-  'the agent is thinking',
   'biding its time',
   'waiting patiently',
   'keeping watch',
@@ -2703,6 +2703,17 @@ function hasPersistedAssistantAfterBaseline(rawMessages: import('../../lib/types
     durableIndex++
   }
   return false
+}
+
+/**
+ * Whether the persisted rows hold the whole of a turn whose stream has ended.
+ * A reply is the usual sign; a user `!command` (Codex, OpenCode) has none —
+ * its input and output rows are both user rows — so two or more new rows count
+ * too. A lone new row is still only the prompt, and waits for its reply.
+ */
+function persistedTurnSettled(rawMessages: import('../../lib/types').SessionMessage[], baselineCount: number): boolean {
+  return hasPersistedAssistantAfterBaseline(rawMessages, baselineCount)
+    || summarizeDurableSessionMessages(rawMessages).count - baselineCount >= 2
 }
 
 function hasPersistedUserAfterBaseline(rawMessages: import('../../lib/types').SessionMessage[], baselineCount: number): boolean {
@@ -8048,6 +8059,11 @@ export default function OpenTuiApp() {
   // THINKING preview header, reset each turn.
   const [composerThinkingTokens, setComposerThinkingTokens] = useState(0)
   const [liveTranscriptMessages, setLiveTranscriptMessages] = useState<ThreadedMessage[]>([])
+  // Output of a Claude local slash command (/context, /usage, …). The CLI
+  // persists it as a system row the SDK returns without content, so the
+  // transcript re-read can never show it; it is held here — apart from the live
+  // overlay the reconcile clears — until that session's next send.
+  const [localCommandOutputs, setLocalCommandOutputs] = useState<ThreadedMessage[]>([])
   // Queued prompts waiting for the active turn to finish (CLI-style FIFO —
   // a single slot here used to silently overwrite the first queued message).
   const [queuedComposerSends, setQueuedComposerSends] = useState<QueuedComposerSend[]>(() =>
@@ -8381,7 +8397,11 @@ export default function OpenTuiApp() {
   }, [collapsedCardKeys])
 
   useEffect(() => {
-    if (composerActive) setFocusedPane('messages')
+    if (!composerActive) return
+    setFocusedPane('messages')
+    // A focused panel owns keys ahead of the composer and its inputs would
+    // take the one focus slot, so engaging the composer (e.g. by mouse) blurs it.
+    setSurfacePanelFocused(false)
   }, [composerActive])
 
   useEffect(() => {
@@ -8989,13 +9009,16 @@ export default function OpenTuiApp() {
   const liveTranscriptMessagesForSession = useMemo(() => {
     if (!selectedSessionTarget) return []
     const key = sessionKey(selectedSessionTarget)
-    const filtered = liveTranscriptMessages.filter((message) => liveMessageSessionKey(message) === key)
+    const filtered = [
+      ...liveTranscriptMessages.filter((message) => liveMessageSessionKey(message) === key),
+      ...localCommandOutputs.filter((message) => liveMessageSessionKey(message) === key),
+    ]
     const prev = liveTranscriptMessagesCacheRef.current
     if (prev && prev.length === filtered.length && prev.every((m, i) => m === filtered[i])) {
       return prev
     }
     return filtered
-  }, [liveTranscriptMessages, selectedSessionTarget])
+  }, [liveTranscriptMessages, localCommandOutputs, selectedSessionTarget])
   useLayoutEffect(() => {
     liveTranscriptMessagesCacheRef.current = liveTranscriptMessagesForSession
   }, [liveTranscriptMessagesForSession])
@@ -9219,7 +9242,12 @@ export default function OpenTuiApp() {
     if (!persistedTurnArrived) return
     const liveAssistantVisible = Boolean(composerLiveText.trim())
       || hasLiveAssistantMessage(liveTranscriptMessagesForSession, key)
-    if (liveAssistantVisible && !hasPersistedAssistantAfterBaseline(sessionDetail.rawMessages, baseline.count)) {
+    const turnLanded = awaitingPersistedTurn
+      ? persistedTurnSettled(sessionDetail.rawMessages, baseline.count)
+      : hasPersistedAssistantAfterBaseline(sessionDetail.rawMessages, baseline.count)
+    // See refreshSelectedSessionDetail: never finalize under a live stream.
+    const streamStillOwned = ownedTurnKeyRef.current === key && composerAbortRef.current !== null
+    if (streamStillOwned || (liveAssistantVisible && !turnLanded)) {
       // The assistant is still streaming. Swap the live user echo for the real
       // persisted row ONLY once that row has actually landed as a durable
       // message — `persistedTurnArrived` is a coarse change signal (count OR
@@ -9243,7 +9271,7 @@ export default function OpenTuiApp() {
     liveToolInputJsonRef.current.clear()
     setComposerLiveText('')
     setAwaitingPersistedTurn(false)
-  }, [composerLiveText, liveTranscriptMessagesForSession, selectedSessionIdentity, selectedSessionTarget, sessionDetail])
+  }, [awaitingPersistedTurn, composerLiveText, liveTranscriptMessagesForSession, selectedSessionIdentity, selectedSessionTarget, sessionDetail])
 
   // Escape hatch mirroring the web composer: if the persisted rows for a
   // completed turn never arrive, force-reveal the polled transcript after a
@@ -10457,6 +10485,10 @@ export default function OpenTuiApp() {
   // is visible only on its origin tab; reattachedRunning is already scoped to
   // the selected session by reconcileSelectedRunningRegistry.
   const turnRunningForComposer = visibleComposerSending || reattachedRunning || visibleAwaitingPersistedTurn
+  // What ⌃C and ⏎ actually do. The post-turn sync keeps the status row but
+  // ends the turn: ⌃C cancels nothing and ⏎ sends at once, so the key hints
+  // must not go on offering "cancel" and "queue" through it.
+  const composerKeysTargetTurn = visibleComposerSending || reattachedRunning
   const hasComposerStatusMessage = Boolean(
     visibleComposerError
     // Embedded composers render turn activity in a compact in-frame row, so
@@ -11039,11 +11071,17 @@ export default function OpenTuiApp() {
   // conversation card on each focus change invalidated native text buffers and
   // Yoga layout for the whole mounted window. Non-tab sidebar previews remain
   // collapsed, preserving the bounded-cost session-scrubbing path.
-  const expandedKeysForRender = effectiveFocus === 'messages'
-    || (tabsEnabled && !isPreviewMode)
-    || transcriptView === 'agents'
-    ? resolvedExpandedKeys
-    : EMPTY_EXPANDED_KEYS
+  const allVisibleCardKeys = useMemo(
+    () => new Set(renderedTranscriptCards.map((card) => card.key)),
+    [renderedTranscriptCards],
+  )
+  const expandedKeysForRender = transcriptView === 'full'
+    ? allVisibleCardKeys
+    : effectiveFocus === 'messages'
+      || (tabsEnabled && !isPreviewMode)
+      || transcriptView === 'agents'
+      ? resolvedExpandedKeys
+      : EMPTY_EXPANDED_KEYS
   // Stable per-card data: body lines, diffs, code blocks. Cached by card reference so
   // when only one card's expansion toggles (transcriptCards ref unchanged), the other
   // cards reuse their prior StableCardData object — TranscriptCard memo then bails out.
@@ -11781,6 +11819,7 @@ export default function OpenTuiApp() {
       if (foreground && pendingForegroundLoadRef.current) return
       if (requestId !== detailRequestRef.current) return
       const liveBaseline = liveTranscriptBaselineRef.current.get(cacheKeyForGuards)
+      let reconcileLiveOverlay: (() => void) | null = null
       if (liveBaseline) {
         const durableSummary = summarizeDurableSessionMessages(detail.rawMessages)
         const persistedTurnArrived =
@@ -11790,22 +11829,38 @@ export default function OpenTuiApp() {
         if (persistedTurnArrived) {
           const liveAssistantVisible = Boolean(pendingLiveTextRef.current.trim())
             || hasLiveAssistantMessage(liveTranscriptMessagesRef.current, cacheKeyForGuards)
-          if (liveAssistantVisible && !hasPersistedAssistantAfterBaseline(detail.rawMessages, liveBaseline.count)) {
-            setLiveTranscriptMessages((prev) => {
-              const next = prev.filter((message) => !(liveMessageSessionKey(message) === cacheKeyForGuards && message.role === 'user'))
-              return next.length === prev.length ? prev : next
-            })
-          } else {
-            liveTranscriptBaselineRef.current.delete(cacheKeyForGuards)
-            setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== cacheKeyForGuards))
-            liveToolIndexesRef.current.clear()
-            liveToolInputJsonRef.current.clear()
-            setComposerLiveText('')
-            setAwaitingPersistedTurn(false)
-          }
+          // Applied inside the transition below, with the detail that replaces
+          // it: dropping the live overlay as an urgent update committed a frame
+          // before the persisted rows, and the reply blinked out between them.
+          const turnLanded = awaitingPersistedTurnRef.current
+            ? persistedTurnSettled(detail.rawMessages, liveBaseline.count)
+            : hasPersistedAssistantAfterBaseline(detail.rawMessages, liveBaseline.count)
+          // While this client still streams the turn, a read can only ever be
+          // ahead of the prompt, never past the reply: Codex persists the user
+          // row at turn start, and finalizing on it dropped the baseline and
+          // the live overlay mid-turn — so the stream's end had nothing left
+          // to reconcile and sat in Syncing until the escape hatch.
+          const streamStillOwned = ownedTurnKeyRef.current === cacheKeyForGuards && composerAbortRef.current !== null
+          reconcileLiveOverlay = streamStillOwned || (liveAssistantVisible && !turnLanded)
+            ? () => {
+                if (!hasPersistedUserAfterBaseline(detail.rawMessages, liveBaseline.count)) return
+                setLiveTranscriptMessages((prev) => {
+                  const next = prev.filter((message) => !(liveMessageSessionKey(message) === cacheKeyForGuards && message.role === 'user'))
+                  return next.length === prev.length ? prev : next
+                })
+              }
+            : () => {
+                liveTranscriptBaselineRef.current.delete(cacheKeyForGuards)
+                setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== cacheKeyForGuards))
+                liveToolIndexesRef.current.clear()
+                liveToolInputJsonRef.current.clear()
+                setComposerLiveText('')
+                setAwaitingPersistedTurn(false)
+              }
         }
       }
       startTransition(() => {
+        reconcileLiveOverlay?.()
         const displayedDetail = sessionDetailRef.current
         const unchanged = displayedDetail !== null
           && displayedDetail.rawMessages.length === detail.rawMessages.length
@@ -12551,11 +12606,15 @@ export default function OpenTuiApp() {
     // so aborting the local fetch alone leaves the agent running on the server —
     // it would finish in the background and reappear on the next poll. Interrupt
     // the server-side turn too, matching the native CLI's Esc/Ctrl+C behavior.
-    if (target && !target.isPending) {
+    // A pending session included: its first turn registers under the id the
+    // TUI already holds, and an interrupt that lands before registration is
+    // held for the matching turn id — skipping it left the turn running.
+    const interruptTurnRequestId = activeComposerTurnRequestIdRef.current ?? undefined
+    if (target && (!target.isPending || interruptTurnRequestId)) {
       void interruptTuiSessionTurn({
         sessionId: target.sessionId,
         provider: target.provider,
-        turnRequestId: activeComposerTurnRequestIdRef.current ?? undefined,
+        turnRequestId: interruptTurnRequestId,
       }).then((stillQueued) => {
         if (stillQueued) {
           const survivorUuids = new Set(stillQueued)
@@ -14132,8 +14191,17 @@ export default function OpenTuiApp() {
     // the session as reattached while the stream is alive.
     ownedTurnKeyRef.current = targetKey
     setComposerActivitySessionKey(targetKey)
-    const baselineDetail = sessionDetailCacheRef.current.get(targetKey)
-      ?? (selectedSessionKeyRef.current === targetKey ? sessionDetail : null)
+    // A new (pending) session has no history. Nor is the displayed detail
+    // this session's just because this session is selected: a pending session
+    // never loads one, so it still holds whatever was viewed before — and a
+    // baseline of that transcript's length made the new session's rows never
+    // count as "after" it, holding every first turn in Syncing until the 12s
+    // escape hatch (Codex, every time).
+    const displayedDetailIsTarget = selectedSessionKeyRef.current === targetKey
+      && (sessionDetail?.rawMessages ?? []).every((message) => !message.session_id || message.session_id === targetSession.sessionId)
+    const baselineDetail = targetSession.isPending
+      ? null
+      : sessionDetailCacheRef.current.get(targetKey) ?? (displayedDetailIsTarget ? sessionDetail : null)
     const baselineSummary = summarizeDurableSessionMessages(baselineDetail?.rawMessages ?? [])
     liveTranscriptBaselineRef.current.set(targetKey, {
       ...baselineSummary,
@@ -14145,6 +14213,10 @@ export default function OpenTuiApp() {
       ...prev.filter((message) => liveMessageSessionKey(message) !== targetKey),
       makeLiveUserMessage(targetSession, trimmed),
     ])
+    setLocalCommandOutputs((prev) => {
+      const next = prev.filter((message) => liveMessageSessionKey(message) !== targetKey)
+      return next.length === prev.length ? prev : next
+    })
     setFollowTail(true)
     setPendingNewCount(0)
     setUnreadBoundaryKey(null)
@@ -14302,6 +14374,28 @@ export default function OpenTuiApp() {
             setSessions((prev) => prev.map((s) => sessionKey(s) === oldKey ? { ...s, sessionId: realId, isPending: false } : s))
             if (selectedSessionKeyRef.current === oldKey) setSelectedSessionKey(newKey)
           }
+          return
+        }
+        // A `!command` finished: show its output now, in the shape the
+        // persisted entries thread into, in place of the plain echo.
+        if (frame.event === 'bash-output' && parsed && typeof parsed === 'object') {
+          const bash = parsed as { command?: unknown; stdout?: unknown; stderr?: unknown }
+          noteFirstOutput()
+          composerTurnProducedOutputRef.current = true
+          const bashMessage: ThreadedMessage = {
+            role: 'user',
+            uuid: `live-bash:${sendStartedAt}`,
+            sessionId: targetSession.sessionId,
+            provider: targetSession.provider ?? 'claude',
+            blocks: [
+              { type: 'bash_input', command: typeof bash.command === 'string' ? bash.command : trimmed.slice(1).trim() },
+              { type: 'bash_output', stdout: typeof bash.stdout === 'string' ? bash.stdout.trim() : '', stderr: typeof bash.stderr === 'string' ? bash.stderr.trim() : '' },
+            ],
+          }
+          setLiveTranscriptMessages((prev) => upsertThreadedMessage(
+            prev.filter((message) => !(liveMessageSessionKey(message) === targetKey && message.uuid === 'live-user')),
+            bashMessage,
+          ))
           return
         }
         if (frame.event === 'opencode-todos' && Array.isArray(parsed)) {
@@ -14532,6 +14626,27 @@ export default function OpenTuiApp() {
           : null
         const codexCompletionIsText = codexCompletionItem?.type === 'agentMessage' || codexCompletionItem?.type === 'plan'
 
+        if (targetSession.provider === 'claude' && trimmed.startsWith('/') && parsedRecord.type === 'assistant') {
+          const synthetic = parsedRecord.message as { model?: unknown; id?: unknown; content?: unknown } | undefined
+          if (synthetic?.model === '<synthetic>' && Array.isArray(synthetic.content)) {
+            const stdout = synthetic.content
+              .map((block) => (block && typeof block === 'object' && (block as { type?: unknown }).type === 'text' ? String((block as { text?: unknown }).text ?? '') : ''))
+              .join('\n')
+              .trim()
+            if (stdout) {
+              noteFirstOutput()
+              const outputMessage: ThreadedMessage = {
+                role: 'user',
+                uuid: `live-local-command:${typeof synthetic.id === 'string' ? synthetic.id : sendStartedAt}`,
+                sessionId: targetSession.sessionId,
+                provider: 'claude',
+                timestamp: new Date().toISOString(),
+                blocks: [{ type: 'local_command_stdout', stdout }],
+              }
+              setLocalCommandOutputs((prev) => upsertThreadedMessage(prev, outputMessage))
+            }
+          }
+        }
         if (targetSession.provider === 'claude') {
           const threaded = normalizeClaudeStreamThreadedMessage(parsed)
           if (threaded) {
@@ -14700,6 +14815,16 @@ export default function OpenTuiApp() {
 
       if (streamStalled) {
         showNotice('info', 'Live stream stalled — turn still running; syncing transcript.')
+        // The turn is still running server-side, but `finally` clears this
+        // loop's running mark and the registry poll only re-marks it on its
+        // next tick — in between, a queued follow-up would flush as a second
+        // concurrent turn. Hold the queue as for a reattached turn; the poll
+        // takes over the flag from here.
+        if (selectedSessionKeyRef.current === targetKey) {
+          reattachedRunningKeyRef.current = targetKey
+          reattachedRunningRef.current = true
+          setReattachedRunning(true)
+        }
       }
 
       if (sseBuffer.trim()) {
@@ -14867,14 +14992,14 @@ export default function OpenTuiApp() {
       // composer's stall recovery, in-process). Keep the live echo + baseline:
       // the detail poll reconciles them once persisted rows land. Queued sends
       // stay armed; the queue flush is gated on reattachedRunning.
+      // A pending session's turn registers under the id it was sent with, so
+      // its first turn is probed like any other.
       let turnStillRunning = false
-      if (!targetSession.isPending) {
-        try {
-          turnStillRunning = (await listTuiRunningSessions()).some((entry) =>
-            entry.sessionId === targetSession.sessionId
-            && entry.provider === (targetSession.provider ?? 'claude'))
-        } catch { /* registry probe is best-effort */ }
-      }
+      try {
+        turnStillRunning = (await listTuiRunningSessions()).some((entry) =>
+          entry.sessionId === targetSession.sessionId
+          && entry.provider === (targetSession.provider ?? 'claude'))
+      } catch { /* registry probe is best-effort */ }
       if (turnStillRunning) {
         setComposerSendState('idle')
         setComposerError(null)
@@ -16225,7 +16350,7 @@ export default function OpenTuiApp() {
     // ⇧⏎ newline / ⌃O expand are already advertised by the composer's own hint
     // row directly above this bar — repeating them here just duplicated text.
     const groups: Array<Array<[string, string]>> = composerActive
-      ? [[['Esc', 'transcript'], ...(turnRunningForComposer
+      ? [[['Esc', 'transcript'], ...(composerKeysTargetTurn
           ? [['⌃C', 'cancel'], ['↵', 'queue']] as Array<[string, string]>
           : [['↵', 'send']] as Array<[string, string]>)]]
       : [
@@ -16293,7 +16418,7 @@ export default function OpenTuiApp() {
       segs.push({ text: hostLabel, fg: theme.cyan })
     }
     return segs
-  }, [width, attentionNeedsInputCount, commandChordPending, composerActive, transcriptView, transcriptWidth, splitChordPending, splitFocusIndex, effectiveFocus, theme, turnRunningForComposer])
+  }, [width, attentionNeedsInputCount, commandChordPending, composerActive, composerKeysTargetTurn, transcriptView, transcriptWidth, splitChordPending, splitFocusIndex, effectiveFocus, theme])
 
   const composerStatusMessage = visibleComposerError
     ? visibleComposerError
@@ -17997,26 +18122,6 @@ export default function OpenTuiApp() {
       return
     }
 
-    // ⇧O toggles the surface panel and takes focus with it, so the launcher's
-    // letter shortcuts always land somewhere predictable.
-    if (isShifted('O')) {
-      handled(() => {
-        // closed → open and focused → (escaped out) → focused again → closed.
-        if (!surfacePanelOpen) {
-          setSurfacePanelOpen(true)
-          setSurfacePanelFocused(true)
-          return
-        }
-        if (!surfacePanelFocused) {
-          setSurfacePanelFocused(true)
-          return
-        }
-        setSurfacePanelOpen(false)
-        setSurfacePanelFocused(false)
-      })
-      return
-    }
-
     if (surfacePanelVisible && surfacePanelFocused) {
       const surface = activeSurface(surfacePanel)
       // Browser and shell surfaces own a focused <input>; swallowing their keys
@@ -18038,6 +18143,15 @@ export default function OpenTuiApp() {
             SURFACE_PANEL_MIN_WIDTH,
             Math.min(SURFACE_PANEL_MAX_WIDTH, surfacePanelMaxWidth),
           ))
+        })
+        return
+      }
+      // ⇧O closes a focused panel (its surfaces' inputs keep this chord, as
+      // they always have; only the composer and modals now own a capital O).
+      if (isShifted('O')) {
+        handled(() => {
+          setSurfacePanelOpen(false)
+          setSurfacePanelFocused(false)
         })
         return
       }
@@ -18625,9 +18739,33 @@ export default function OpenTuiApp() {
       }
     }
 
+    // ⇧O opens the surface panel, or refocuses it once escaped out of, and
+    // takes focus with it so the launcher's letter shortcuts land somewhere
+    // predictable. It sits after every modal and is skipped while the composer
+    // is up: a capital O in a draft, a rename or a palette filter is text, and
+    // checked first it swallowed the rest of the draft into the panel.
+    if (!composerActive && isShifted('O')) {
+      handled(() => {
+        // closed → open and focused → (escaped out) → focused again → closed.
+        if (!surfacePanelOpen) {
+          setSurfacePanelOpen(true)
+          setSurfacePanelFocused(true)
+          return
+        }
+        if (!surfacePanelFocused) {
+          setSurfacePanelFocused(true)
+          return
+        }
+        setSurfacePanelOpen(false)
+        setSurfacePanelFocused(false)
+      })
+      return
+    }
+
     // Fullscreen's restore binding remains global even when the composer owns
-    // keyboard input. Outside fullscreen, Shift+Z is still ordinary draft text.
-    if (fullscreenMode && isShifted('Z')) {
+    // keyboard input — but only over an empty draft: mid-draft, a capital Z is
+    // text. Outside fullscreen, Shift+Z is always ordinary draft text.
+    if (fullscreenMode && isShifted('Z') && !(composerActive && (composerTextareaRef.current?.plainText ?? composerDraft))) {
       handled(() => toggleFullscreenMode(false))
       return
     }
@@ -18694,9 +18832,10 @@ export default function OpenTuiApp() {
         }
         handled(() => {
           if (interruptPressActive) {
+            // Stay in the composer, as the native CLIs do: an interrupt is
+            // almost always followed by a corrected prompt, and the restored
+            // queue (if any) lands back in this draft.
             cancelComposerSend()
-            setComposerWindowOpen(false)
-            setComposerActive(false)
           } else {
             setInterruptPressActive(true)
             if (interruptPressTimeoutRef.current) clearTimeout(interruptPressTimeoutRef.current)
@@ -20067,12 +20206,12 @@ export default function OpenTuiApp() {
     ? '● → live CLI bridge · ⌃R off · ⇧C panel'
     : canUseIdeBridge && routeComposerToIde
     ? '● → IDE @mentions · ⇧I panel'
-    : turnRunningForComposer
+    : composerKeysTargetTurn
     ? sendingHintBase
     : canUseChannelBridge
     ? `${composerIdleFooterHint}${composerWorkflowFooterHint} · ⌃R bridge · ⌃O expand`
     : `${composerIdleFooterHint}${composerWorkflowFooterHint} · ⌃O expand`
-  const composerDockSendingHintSegments = turnRunningForComposer
+  const composerDockSendingHintSegments = composerKeysTargetTurn
     ? composerSendingHintSegments(composerDockFooterHint, theme)
     : null
   // Size the hint box to exactly fit its text, capped by available width minus
@@ -20083,14 +20222,14 @@ export default function OpenTuiApp() {
     Math.min(composerDockFooterHint.length + 1, composerDockTextareaWidth - 24),
   )
   const composerDockFooterStatsWidth = Math.max(composerDockTextareaWidth - composerDockFooterHintWidth - 1, 8)
-  const composerWindowFooterHint = turnRunningForComposer
+  const composerWindowFooterHint = composerKeysTargetTurn
     ? `${sendingHintBase} · ⌃O dock`
     : `⏎ send · ⌥M settings · ⇧⏎ newline${composerWorkflowFooterHint} · ⌃O dock · Esc close`
-  const composerWindowSendingHintSegments = turnRunningForComposer
+  const composerWindowSendingHintSegments = composerKeysTargetTurn
     ? composerSendingHintSegments(composerWindowFooterHint, theme)
     : null
   const chatComposerFooterHint = chatComposerFocused
-    ? turnRunningForComposer || composerDockRouted
+    ? composerKeysTargetTurn || composerDockRouted
       ? composerDockFooterHint
       : '⏎ send · ⇧⏎ newline · ⌥M settings'
     : 'c compose'
@@ -20682,7 +20821,12 @@ export default function OpenTuiApp() {
                 id="transcript-scroll"
                 ref={transcriptScrollRef}
                 style={{ height: transcriptViewportRows }}
-                focused={effectiveFocus === 'messages' && splitFocusIndex === null}
+                // Never while the composer is up: OpenTUI has one focus slot,
+                // and this scrollbox remounting (a new session's empty state
+                // becoming a transcript after its first turn) would take it
+                // from the textarea — which still read FOCUSED but dropped
+                // every keystroke.
+                focused={effectiveFocus === 'messages' && splitFocusIndex === null && !composerActive}
                 // Match the card surface, not theme.bg: cards render on `surface`,
                 // so when bg is darker than surface (e.g. SENTRY #150f23 vs
                 // #1f1633) the cardGap rows between cards revealed bg as dark

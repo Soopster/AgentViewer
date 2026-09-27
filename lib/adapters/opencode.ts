@@ -18,7 +18,7 @@ import {
 import { getOpenCodeClient } from '../opencodeClient'
 import { getOpenCodeV2Client } from '../opencodeClient'
 import {
-  currentOpenCodeModelValue,
+  latestOpenCodeModelValue,
   firstOpenCodePrompt,
   mapOpenCodeDiagnosticsToSections,
   mapOpenCodeMessagesToSessionMessages,
@@ -108,7 +108,7 @@ export const opencodeAdapter: SessionAdapter = {
       session,
       tag,
       firstOpenCodePrompt(messages),
-      currentOpenCodeModelValue(messages.at(-1)?.info) ?? undefined,
+      latestOpenCodeModelValue(messages) ?? undefined,
     )
   },
 
@@ -189,7 +189,7 @@ export const opencodeAdapter: SessionAdapter = {
     ])
     return {
       models: mapOpenCodeModelsToSessionModels(openCodeData(configResponse)),
-      currentModel: currentOpenCodeModelValue(messages.at(-1)?.info),
+      currentModel: latestOpenCodeModelValue(messages),
       contextUsage: null,
     }
   },
@@ -267,7 +267,7 @@ export const opencodeAdapter: SessionAdapter = {
     ])
 
     return {
-      currentModel: currentOpenCodeModelValue(messages.at(-1)?.info),
+      currentModel: latestOpenCodeModelValue(messages),
       sections: mapOpenCodeDiagnosticsToSections({
         providers: project.providers,
         commands: project.commands,

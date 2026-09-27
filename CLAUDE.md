@@ -119,6 +119,10 @@ and the SSE pumps stay untouched — they all key on v1 event and part shapes.
   answer (verified live on 2.0.8; herdr tracks OpenCode's session family the same way, #4357).
   `opencodeSubagentRequestsSmoke.ts` pins it hermetically, `npm run opencode:subagent:live`
   end to end.
+- **A user `!command` has no execution edge in v2.** It runs outside any execution and queues
+  its output for the model's next turn, so no idle arrived and the send stream hung until its
+  30s watchdog. `session.shell.ended` is the turn's idle — unless an execution is running, since
+  a shell started inside one is the agent's own. Pinned in `opencode2CompatSmoke.ts`.
 - **Todos have no v2 endpoint**: the `todowrite` tool call is the only record, read live off the
   event and cold off the transcript.
 - **A 2.x server needs the 2.x coordinator plugin.** A 1.x plugin is a file exporting a hook
@@ -342,6 +346,11 @@ Both TUIs depend on the same `lib/` provider layer — changes to `sessionBacken
 - **Poll fingerprint bail-out** in `setSessionDetail`: return `prev` when `rawMessages.length`, last UUID, model, and title are unchanged so React's identity bail-out skips a full transcript reformat on idle 2s polls.
 - **`cardDisplayData` useMemo** pre-computes landmarks, bodyLines, diffText, headerMeta for all cards; the render `.map()` reads from this stable cache rather than recomputing per render.
 - **Place static content outside `scrollbox`** — the scrollbox has a fixed `height: transcriptViewportRows` budget. The live-mode spinner intentionally lives outside it.
+- **OpenTUI has one focus slot, and the composer must own it while open.** A renderable mounting
+  with `focused` true takes it: the transcript scrollbox remounting after a new session's first
+  turn left the textarea reading FOCUSED while dropping every key. Nothing else may be `focused`
+  while `composerActive`, and no printable key may be a global shortcut ahead of the composer
+  branch (⇧O swallowed drafts containing "OK" — `composerWrapSmoke.tsx` types a capital O).
 - **Module-level constants** for static option arrays (e.g. `PROVIDER_SELECT_OPTIONS`); not inside the component body.
 - Use **BMP-safe glyphs** (e.g. `●` U+25CF, not `⏺`) — terminal renderers truncate astral chars on Windows.
 - **A prefetch must not compete for the threading worker.** The sidebar neighbour prefetch warms the
@@ -443,6 +452,40 @@ Both TUIs depend on the same `lib/` provider layer — changes to `sessionBacken
   ~210ms. The harness flushes on a frame cadence on purpose: React's scheduler is driven by `act()`
   under the test renderer, so a single flush followed by a long sleep reports every state update as
   taking the whole sleep.
+
+#### Composer turns: live overlay, reconcile, and parity (load-bearing)
+
+A turn renders from the live stream, then hands over to the persisted transcript
+(`awaitingPersistedTurn`, "Syncing transcript…"). Each rule below was a visible
+defect found by driving the real TUI in a PTY against each provider and timing
+it against the native CLI (see the composer flow harness in memory).
+
+- **A read never finalizes a turn this client is still streaming.** Codex persists
+  the user row at turn start; a foreground read that saw it (and no live reply
+  yet) deleted the baseline and cleared the overlay mid-turn, so the stream's end
+  had nothing to reconcile against and every first Codex turn sat in Syncing for
+  the 12s escape hatch. Both reconcile sites check `streamStillOwned`.
+- **A pending session's baseline is empty**, and the displayed detail is used as a
+  baseline only when its rows belong to the target — a pending session never
+  loads detail, so it still shows whatever was viewed before.
+- **A turn with no reply still lands**: once the stream has ended, two or more new
+  persisted rows settle it (`persistedTurnSettled`) — a user `!command` is an
+  input row and an output row, both user-role.
+- **The overlay drop and the persisted detail commit in one transition**, or the
+  reply blinks out for a frame between them.
+- **Codex deltas flush on a timer** (`DELTA_FLUSH_MS`). The coalescer only flushed
+  on a non-delta event or 4000 buffered chars, so plain prose appeared all at once
+  when the item completed (18s of a 300-line answer, then everything).
+- **User command output is conversation, not operational chrome.** `!command`
+  output (Claude `bash-output` frame, Codex `source: 'userShell'` items mapped to
+  bash-mode rows) and Claude local slash-command output render inline like the
+  native CLIs. Claude persists local-command output as a system row the SDK
+  returns *without content*, so `/context`'s output is kept from the stream's
+  `<synthetic>` assistant frame (`localCommandOutputs`) until that session's next
+  send — it does not survive a reload.
+- **Codex item ids are not all v7.** A user shell's id is v4; decoding its random
+  leading bits as a timestamp dated the card year 8979 and sorted it last.
+  `codexSchemaAlignmentSmoke.ts` pins both.
 
 #### Project editor: cost per keystroke and the file boundary (load-bearing)
 

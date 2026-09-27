@@ -49,7 +49,9 @@ const settle = async (ms = 300) => {
   await act(async () => { await setup.flush() })
 }
 
-const draft = 'wrap this long composer text '.repeat(12)
+// Capitals are app shortcuts outside the composer (⇧O opened the surface
+// panel and swallowed the rest of the draft into it), so the draft carries one.
+const draft = 'Reply with exactly OK then wrap this long composer text '.repeat(6)
 
 // Focus the composer, then type: the draft has to arrive the way a user's does.
 // `setText` writes straight into the edit buffer without emitting the

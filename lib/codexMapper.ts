@@ -47,6 +47,16 @@ function stringify(value: unknown): string {
   }
 }
 
+function escapeBashTag(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+/** Codex runs a `!command` as `<shell> -lc '<command>'`; show what was typed. */
+export function unwrapCodexShellCommand(command: string): string {
+  const match = /^\S+ -l?c '([\s\S]*)'$/.exec(command)
+  return match ? match[1]!.replace(/'\\''/g, "'") : command
+}
+
 function msToIsoTimestamp(ms: number | null | undefined): string | undefined {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return undefined
   return new Date(ms).toISOString()
@@ -57,7 +67,10 @@ function uuidV7ToIsoTimestamp(value: string): string | undefined {
   // {Item,Turn}{Started,Completed}AtMs notification fields. UUID v7
   // encodes a unix-ms timestamp in the first 48 bits.
   const compact = value.replace(/-/g, '')
-  if (!/^[0-9a-fA-F]{12,}$/.test(compact)) return undefined
+  // Only a v7 UUID carries a timestamp. A user `!command` item has a v4 id,
+  // whose first 48 bits are random: read as milliseconds they dated the card
+  // thousands of years out and sorted it after every later message.
+  if (!/^[0-9a-fA-F]{32}$/.test(compact) || compact[12] !== '7') return undefined
   const milliseconds = Number.parseInt(compact.slice(0, 12), 16)
   if (!Number.isFinite(milliseconds) || milliseconds <= 0) return undefined
   return new Date(milliseconds).toISOString()
@@ -163,6 +176,20 @@ function mapItemToMessages(
         : []
     }
     case 'commandExecution': {
+      // A user `!command` is the user's own shell, not an agent tool call:
+      // render it as Claude Code's bash mode does (the command, then its
+      // output, both visible) rather than as a folded tool card.
+      if (item.source === 'userShell') {
+        const input = makeMessage(threadId, baseId, 'user',
+          `<bash-input>${escapeBashTag(unwrapCodexShellCommand(item.command))}</bash-input>`, turnId, timestamp)
+        if (!includeToolResults) return [input]
+        const failed = item.status === 'failed' || (item.exitCode != null && item.exitCode !== 0)
+        const stderr = failed && item.exitCode != null ? `Exit code ${item.exitCode}` : ''
+        const output = makeMessage(threadId, `${baseId}:result`, 'user',
+          `<bash-stdout>${escapeBashTag((item.aggregatedOutput ?? '').trimEnd())}</bash-stdout><bash-stderr>${escapeBashTag(stderr)}</bash-stderr>`,
+          turnId, timestamp)
+        return [input, output]
+      }
       const toolUseId = `${baseId}:tool`
       const assistant = makeMessage(threadId, baseId, 'assistant', [{
         type: 'tool_use',
@@ -381,7 +408,8 @@ export function mapCodexThreadToMessages(thread: CodexThread): SessionMessage[] 
     // Turn.startedAt is in seconds (per schema). Fall back to v7-UUID
     // extraction for rollouts from older codex versions that didn't
     // persist the field.
-    const turnTimestamp = msToIsoTimestamp(turn.startedAt != null ? turn.startedAt * 1000 : undefined)
+    // A value already in milliseconds is taken as-is rather than scaled again.
+    const turnTimestamp = msToIsoTimestamp(turn.startedAt != null ? (turn.startedAt > 1e12 ? turn.startedAt : turn.startedAt * 1000) : undefined)
       ?? uuidV7ToIsoTimestamp(turn.id)
     const items = [...turn.items]
     for (const item of items) {

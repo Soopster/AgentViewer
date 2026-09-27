@@ -204,6 +204,44 @@ if (
   throw new Error('Codex command plugin provenance was not preserved by the transcript mapper')
 }
 
+// A user `!command` is the user's shell, not an agent tool: it maps to Claude
+// Code's bash-mode rows (command then output, both visible). Its item id is a
+// v4 UUID, whose random leading bits once decoded as a timestamp thousands of
+// years out and sorted the command after every later message.
+const userShellMessages = mapCodexThreadToMessages({
+  ...thread,
+  turns: [{
+    id: '01999999-0000-7000-8000-000000000000',
+    items: [{
+      ...commandItem,
+      id: 'c92e2de3-f101-47ad-9b9b-efb6a3e6f98e',
+      source: 'userShell',
+      command: "/bin/zsh -lc 'echo it'\\''s'",
+      aggregatedOutput: "it's\n",
+      exitCode: 0,
+      status: 'completed',
+    }],
+    itemsView: 'full',
+    status: 'completed',
+    error: null,
+    startedAt: 1_700_000_000,
+    completedAt: 1_700_000_010,
+    durationMs: 10_000,
+  }],
+} as typeof thread)
+const [shellInput, shellOutput] = userShellMessages
+if (
+  userShellMessages.length !== 2
+  || shellInput?.type !== 'user'
+  || JSON.stringify(shellInput.message) !== JSON.stringify({ role: 'user', content: "<bash-input>echo it's</bash-input>" })
+  || !JSON.stringify(shellOutput?.message).includes("<bash-stdout>it's</bash-stdout>")
+) {
+  throw new Error(`Codex user shell must map to bash-mode rows: ${JSON.stringify(userShellMessages.map((entry) => entry.message))}`)
+}
+if (shellInput.timestamp !== new Date(1_700_000_000_000).toISOString()) {
+  throw new Error(`A v4 item id must not be decoded as a timestamp: ${shellInput.timestamp}`)
+}
+
 void newRequests
 void generatedRequirementAdditions
 console.log('Codex 0.149.0 schema alignment smoke passed')
