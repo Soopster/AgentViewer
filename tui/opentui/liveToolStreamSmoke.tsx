@@ -263,6 +263,24 @@ try {
       + setup.captureCharFrame(),
     )
   }
+  // Agents uses the same pinned status and dock without duplicating activity.
+  act(() => { setup.mockInput.pressKey('v') })
+  await settle(100)
+  act(() => { setup.mockInput.pressArrow('up') })
+  act(() => { setup.mockInput.pressEnter() })
+  await settle(200)
+  const agentsStatus = setup.renderer.root.findDescendantById('chat-turn-status') as unknown as FrameGeometry | null
+  const agentsComposer = setup.renderer.root.findDescendantById('composer-dock') as unknown as FrameGeometry | null
+  if (!agentsStatus || !agentsComposer || agentsStatus.height !== 1
+    || agentsStatus.y + agentsStatus.height !== agentsComposer.y
+    || setup.captureCharFrame().includes('COMPOSER')) {
+    throw new Error(`Agents live status did not stay beside its compact composer:\n${setup.captureCharFrame()}`)
+  }
+  act(() => { setup.mockInput.pressKey('v') })
+  await settle(100)
+  act(() => { setup.mockInput.pressArrow('down') })
+  act(() => { setup.mockInput.pressEnter() })
+  await settle(200)
   const idleChatComposerFrame = setup.captureCharFrame()
   if (!idleChatComposerFrame.includes('› ')
     || idleChatComposerFrame.includes('COMPOSER')

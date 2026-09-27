@@ -1805,7 +1805,7 @@ function timeAgo(value?: string | number): string {
 
 const COMPOSER_MIN_HEIGHT = 6
 const COMPOSER_MAX_HEIGHT = 12
-// Chat mode keeps one deliberate breathing row below the draft. Its height
+// The embedded composer keeps one breathing row below the draft. Its height
 // budget includes that row plus the top and bottom borders.
 // The status/hint row is painted into the bottom border rather than costing a
 // row of its own.
@@ -5770,14 +5770,16 @@ function TranscriptCardInner({
     const streamAskUserLines = streamAskUserCard
       ? isExpanded ? streamAskUserCard.expandedLines : streamAskUserCard.lines
       : []
-    const agentAccent = operationalCard ? theme.amber : accent
+    const streamGroupMarker = operationalCard ? streamToolGroupMarker(toolCards) : '•'
+    const operationFailed = operationalCard && streamGroupMarker === '×'
+    const operationRunning = operationalCard && toolCards.some((tool) => tool.pending)
+    const operationStatus = joinMeta([operationFailed ? 'failed' : null, operationRunning ? 'running' : null])
+    const agentAccent = operationFailed ? theme.red : operationalCard ? theme.amber : accent
     const agentBg = hasCursor
       ? theme.surface3
       : isSelected
         ? theme.surface2
-        : operationalCard
-          ? mixHexColor(theme.amber, theme.surface, 0.08) ?? theme.surface
-          : cardBg
+        : cardBg
     const streamAgentBg = hasCursor
       ? isExpanded && agentToolCursorKey
         ? theme.surface2
@@ -5798,16 +5800,15 @@ function TranscriptCardInner({
     })
     const toolCount = toolCards.length || bodyLines.filter((line) => line.tone === 'tool' && /^tool\s+/i.test(line.text.trim())).length || 1
     const headerLabel = operationalCard
-      ? `${toolCount} tool ${toolCount === 1 ? 'call' : 'calls'}`
+      ? `${toolCount} tool ${toolCount === 1 ? 'call' : 'calls'}${!streamMode && operationStatus ? ` · ${operationStatus}` : ''}`
       : card.label
-    const streamGroupMarker = operationalCard ? streamToolGroupMarker(toolCards) : '•'
-    const agentsMarker = hasCursor ? '>' : operationalCard ? '⚙' : card.role === 'user' ? '▸' : '●'
+    const agentsMarker = hasCursor ? '>' : operationFailed ? '×' : operationRunning ? '○' : operationalCard ? '⚙' : card.role === 'user' ? '▸' : '●'
     const agentsTitleMeta = joinMeta([
       headerMeta,
       isSearchHit ? 'match' : null,
       bookmarked ? 'bookmarked' : null,
-      card.usageSummary ?? null,
-      card.durationLabel ? `⏱ ${card.durationLabel}` : null,
+      hasCursor || isExpanded ? card.usageSummary ?? null : null,
+      (hasCursor || isExpanded) && card.durationLabel ? `⏱ ${card.durationLabel}` : null,
       hasCursor ? 'y copy  b bookmark  Q reply' : null,
     ])
     const agentsMaxTitleWidth = Math.max(agentWidth - 4, 20)
@@ -5877,16 +5878,15 @@ function TranscriptCardInner({
           id={`card:${card.key}`}
           flexDirection="row"
           width={agentWidth}
-          // OpenTUI does not clear an existing native border when the boolean
-          // shorthand changes from true to false. Agents and Chat reuse these
-          // keyed technical-card nodes, so pass an explicit empty edge set to
-          // remove the Agents frame when returning to Chat.
-          border={streamMode ? [] : ['top', 'left', 'right', 'bottom']}
+          // Explicit edges clear native borders when keyed cards change views.
+          // A single separator keeps operational groups distinct without boxing
+          // every message; cursor emphasis does not change the row geometry.
+          border={streamMode ? [] : ['top']}
           borderStyle={streamMode ? undefined : hasCursor ? 'heavy' : 'single'}
-          borderColor={streamMode ? undefined : hasCursor || isSearchHit ? agentAccent : borderColor}
+          borderColor={streamMode ? undefined : hasCursor || isSearchHit || operationFailed ? agentAccent : theme.border}
           backgroundColor={streamMode ? streamAgentBg : agentBg}
           title={streamMode ? undefined : agentsCardTitle}
-          titleColor={agentAccent}
+          titleColor={hasCursor || isSearchHit || operationFailed || operationRunning ? agentAccent : theme.dim}
           onMouseDown={(event) => {
             if (event.button !== 0) return
             onSelectCard(card.key)
@@ -6060,17 +6060,20 @@ function TranscriptCardInner({
               agentMarkdownBody
             ) : bodyLines.map((line, lineIndex) => {
               const toolLine = operationalCard && line.tone === 'tool'
+              const wrapProse = !operationalCard && isExpanded
               return (
                 <box
                   key={`${card.key}:agent-line:${lineIndex}`}
                   backgroundColor={!streamMode && toolLine ? theme.surface2 : undefined}
                 >
-                  <text fg={transcriptColor(line, theme)} wrapMode="none" selectable {...selectionColors}>
+                  <text fg={transcriptColor(line, theme)} width={agentBodyWidth} wrapMode={wrapProse ? 'word' : 'none'} selectable {...selectionColors}>
                     {toolLine
                       ? renderInlineTextSegments(transcriptToolLineSegments(line.text, theme, streamMode ? '  └ ' : '› ', theme.dim, streamMode), agentBodyWidth, theme.dim)
-                      : hasInlineSpans(line.text)
-                        ? renderInlineMarkdownClipped(line.text, theme, transcriptColor(line, theme), agentBodyWidth, `${card.key}:agent-md:${lineIndex}`, linkCwd)
-                        : fitText(line.text, agentBodyWidth)}
+                      : wrapProse
+                        ? renderInlineMarkdownSpans(line.text, theme, transcriptColor(line, theme), `${card.key}:agent-md:${lineIndex}`, linkCwd)
+                        : hasInlineSpans(line.text)
+                          ? renderInlineMarkdownClipped(line.text, theme, transcriptColor(line, theme), agentBodyWidth, `${card.key}:agent-md:${lineIndex}`, linkCwd)
+                          : fitText(line.text, agentBodyWidth)}
                   </text>
                 </box>
               )
@@ -6184,7 +6187,7 @@ function TranscriptCardInner({
       <box
         id={`card:${card.key}`}
         flexDirection="column"
-        // Agents mode uses this same keyed outer card with a full border.
+        // Agents mode uses this same keyed outer card with a top separator.
         // Keep the stream/chat edge set explicit so returning here clears the
         // native frame instead of leaving the previous view's border painted.
         border={[]}
@@ -7627,6 +7630,7 @@ export default function OpenTuiApp() {
   // Chat reuses stream's chronological, borderless card grouping — the two views
   // diverge only in composer placement (docked vs. inline-with-transcript).
   const isChatLikeView = transcriptView === 'stream' || transcriptView === 'chat' || transcriptView === 'transcript'
+  const embeddedComposer = transcriptView === 'chat' || transcriptView === 'agents'
   // TRANSCRIPT is STREAM without the per-line markers, and with the role rule
   // on every message rather than only on user prompts. Modelled on opencode's
   // session view, where one left rule per message is the only chrome there is.
@@ -9622,12 +9626,16 @@ export default function OpenTuiApp() {
     if (selected) openCoordinationAgentSession(selected.agent)
   })
   const composerLogicalLineCount = composerEntryLineCount(composerDraft)
-  const composerDraftLines = composerTextareaRef.current?.plainText === composerDraft
+  const composerDraftLines = composerDraft.length > 0 && composerTextareaRef.current?.plainText === composerDraft
     ? Math.max(composerLogicalLineCount, composerTextareaRef.current.editorView.getTotalVirtualLineCount())
     : composerLogicalLineCount
   const composerDockChromeHeight = fullscreenMode ? 1 : COMPOSER_DOCK_CHROME_HEIGHT
-  const composerHeight = transcriptView === 'chat'
-    ? Math.max(CHAT_COMPOSER_MIN_HEIGHT, composerDraftLines + CHAT_COMPOSER_CHROME_HEIGHT)
+  const composerHeight = embeddedComposer
+    ? Math.max(CHAT_COMPOSER_MIN_HEIGHT, Math.min(
+        composerDraftLines + CHAT_COMPOSER_CHROME_HEIGHT,
+        COMPOSER_MAX_HEIGHT,
+        Math.floor(height * 0.35),
+      ))
     : Math.max(
         fullscreenMode ? COMPOSER_MIN_HEIGHT - 2 : COMPOSER_MIN_HEIGHT,
         Math.min(
@@ -9636,7 +9644,7 @@ export default function OpenTuiApp() {
         ),
       )
   const composerDockHeight = composerWindowOpen || composerHidden ? 0 : composerHeight
-  const composerDockTextareaHeight = transcriptView === 'chat'
+  const composerDockTextareaHeight = embeddedComposer
     ? Math.max(1, composerDockHeight - CHAT_COMPOSER_CHROME_HEIGHT)
     : Math.max(2, composerDockHeight - composerDockChromeHeight)
   const composerTargetSessionInfo = useMemo(() => {
@@ -10451,10 +10459,10 @@ export default function OpenTuiApp() {
   const turnRunningForComposer = visibleComposerSending || reattachedRunning || visibleAwaitingPersistedTurn
   const hasComposerStatusMessage = Boolean(
     visibleComposerError
-    // Chat view renders turn activity in its compact in-frame status row, so
+    // Embedded composers render turn activity in a compact in-frame row, so
     // the sync spinner must not also claim a sibling row here — two spinners
     // for one turn.
-    || (visibleAwaitingPersistedTurn && transcriptView !== 'chat')
+    || (visibleAwaitingPersistedTurn && !embeddedComposer)
     || activeQueuedComposerSends.length > 0
     || (visibleComposerSending && Boolean(visibleComposerLiveText))
     // Steered notices render while a turn runs, owned or reattached — count
@@ -10515,8 +10523,8 @@ export default function OpenTuiApp() {
     const previewRows = previewLines.length > 0 ? previewLines.length + 1 : 0
     const fullRows = chrome + questionRows + optionRowTotal + previewRows
     // Budget derived from the SAME expression mainContentHeight uses, so it is
-    // automatically correct per transcript view (chat docks the composer
-    // inside the reader box; the others do not). mainContentHeight floors at
+    // automatically correct per transcript view (Chat and Agents dock the
+    // composer inside the reader box; the other views do not). mainContentHeight floors at
     // QUESTION_PICKER_MIN_TRANSCRIPT_ROWS, and anything the picker reserves
     // beyond that floor is rows the screen does not have — which is exactly
     // when yoga starts compositing the card's rows onto each other.
@@ -10524,7 +10532,7 @@ export default function OpenTuiApp() {
       height
       - 3
       - (searchMode || sessionSearchMode ? 4 : 1)
-      - (transcriptView === 'chat' ? 0 : composerDockHeight)
+      - (embeddedComposer ? 0 : composerDockHeight)
       - composerPopoverHeight
       - QUESTION_PICKER_MIN_TRANSCRIPT_ROWS,
       QUESTION_PICKER_MIN_ROWS,
@@ -10576,16 +10584,16 @@ export default function OpenTuiApp() {
     questionPreviewLines,
     searchMode,
     sessionSearchMode,
-    transcriptView,
+    embeddedComposer,
   ])
 
   const composerStatusBlockHeight = (() => {
     let rows = 0
     // Keep in sync with the pinned turn-status row below (rendered for the
     // entire turn, not just the pre-output window).
-    // Chat view owns a compact status row inside the reader frame, so it comes
+    // Embedded composers own a compact status row in the reader, so it comes
     // out of transcriptViewportRows rather than this sibling-status budget.
-    if (visibleComposerSending && transcriptView !== 'chat') rows += 2
+    if (visibleComposerSending && !embeddedComposer) rows += 2
     if (composerActivityVisible && hasSubagentTail) rows += 2
     if (visibleLiveToolActivities.length > 0 && visibleRunningToolCount > 0) rows += 2
     if (livePromptSuggestion && composerSendState !== 'sending') rows += 2
@@ -10596,12 +10604,12 @@ export default function OpenTuiApp() {
         ? isChatLikeView || liveAssistantTextCardVisible ? 0 : LIVE_PREVIEW_HEIGHT
         : 2
     }
-    if (visibleAwaitingPersistedTurn && transcriptView !== 'chat') rows += 2
+    if (visibleAwaitingPersistedTurn && !embeddedComposer) rows += 2
     if (composerAutoTargetingRunning && composerTargetSession) rows += 1
     if ((liveStatus === 'retrying' || liveStatus === 'compacting') && visibleComposerSending) rows += 2
     if (visibleComposerSending && composerLiveReasoning.trim() && transcriptView !== 'stream') rows += LIVE_PREVIEW_HEIGHT
     // Reattached-turn banner (rendered when a turn runs without an owned stream).
-    if (!visibleComposerSending && reattachedRunning && !visibleAwaitingPersistedTurn && transcriptView !== 'chat') rows += 2
+    if (!visibleComposerSending && reattachedRunning && !visibleAwaitingPersistedTurn && !embeddedComposer) rows += 2
     // Codex external-writer banner — another Codex client owns the rollout,
     // so this transcript is a stale cached snapshot until it finishes.
     if (composerTargetSession?.provider === 'codex' && sessionDetail?.externalWriter) rows += 2
@@ -10637,14 +10645,14 @@ export default function OpenTuiApp() {
     }
     return rows
   })()
-  // Chat mode renders the composer bar as the reader box's own trailing child
+  // Chat and Agents render the composer bar as the reader box's own trailing child
   // (inside its border) rather than a sibling row below it, so its height comes
   // out of the scrollbox's budget (transcriptViewportRows), not this one.
   const mainContentHeight = Math.max(
     height
     - (fullscreenMode ? 0 : 3)
     - (searchMode || sessionSearchMode ? 4 : fullscreenMode ? 0 : 1)
-    - (transcriptView === 'chat' ? 0 : composerDockHeight)
+    - (embeddedComposer ? 0 : composerDockHeight)
     - composerPopoverHeight
     - composerStatusBlockHeight,
     8,
@@ -10849,8 +10857,8 @@ export default function OpenTuiApp() {
     ) return null
     return streamCompletedTurnHint(visibleTranscriptCards)
   }, [transcriptView, turnRunningForComposer, visibleTranscriptCards])
-  const streamActionFooterRows = isChatLikeView && transcriptView !== 'chat' && visibleTranscriptCards.length > 0 ? 1 : 0
-  const chatTurnStatusRows = transcriptView === 'chat' && turnRunningForComposer && visibleTranscriptCards.length > 0 ? 1 : 0
+  const streamActionFooterRows = isChatLikeView && !embeddedComposer && visibleTranscriptCards.length > 0 ? 1 : 0
+  const chatTurnStatusRows = embeddedComposer && turnRunningForComposer && visibleTranscriptCards.length > 0 ? 1 : 0
   const transcriptViewportRows = Math.max(
     readerRowBudget
     // Fullscreen removes the two-row reader frame, leaving only the compact
@@ -10866,7 +10874,7 @@ export default function OpenTuiApp() {
     - chatTurnStatusRows
     // The chat-mode composer bar lives inside this same bordered box, below
     // the scrollbox, so its rows come out of the viewport budget here.
-    - (transcriptView === 'chat' && !composerWindowOpen && !composerHidden ? composerDockHeight : 0),
+    - (embeddedComposer && !composerWindowOpen && !composerHidden ? composerDockHeight : 0),
     8,
   )
 
@@ -16291,8 +16299,8 @@ export default function OpenTuiApp() {
     ? visibleComposerError
     : activeQueuedComposerSends.length > 0 && !composerQueueDurable
       ? 'Queue persistence failed · keep this TUI open or edit the message back into the composer.'
-    // Chat view shows this in the compact row directly above its composer.
-    : visibleAwaitingPersistedTurn && transcriptView !== 'chat'
+    // Embedded composers show this in the compact row above the draft.
+    : visibleAwaitingPersistedTurn && !embeddedComposer
       ? 'Syncing transcript…'
       : activeQueuedComposerSends.length > 0 && turnRunningForComposer
         ? (activeQueuedComposerSends.length === 1
@@ -20082,7 +20090,9 @@ export default function OpenTuiApp() {
     ? composerSendingHintSegments(composerWindowFooterHint, theme)
     : null
   const chatComposerFooterHint = chatComposerFocused
-    ? composerDockFooterHint
+    ? turnRunningForComposer || composerDockRouted
+      ? composerDockFooterHint
+      : '⏎ send · ⇧⏎ newline · ⌥M settings'
     : 'c compose'
   // The chat composer's status row is painted into its bottom border, so its
   // budget is that border's horizontal run less a column of inset at each end —
@@ -20537,7 +20547,7 @@ export default function OpenTuiApp() {
                 : theme.border}
             backgroundColor={theme.surface}
             flexDirection="column"
-            title={fullscreenMode || isChatLikeView ? undefined : headerStatusRight}
+            title={fullscreenMode || isChatLikeView || embeddedComposer ? undefined : headerStatusRight}
             titleColor={providerAccent}
           >
           {fullscreenMode ? (
@@ -20649,24 +20659,19 @@ export default function OpenTuiApp() {
                   const welcomeAccent = ((theme as unknown as Record<string, string>)[welcome.tuiAccentKey]) ?? theme.cyan
                   const innerWidth = Math.max(rightPaneWidth - 4, 20)
                   return (
-                    <box flexDirection="column" paddingY={1}>
-                      <text fg={welcomeAccent} wrapMode="none">{fitText(welcome.welcomeTitle, innerWidth)}</text>
-                      <text fg={theme.dim} wrapMode="none">{fitText(welcome.welcomeSubtitle, innerWidth)}</text>
-                      {selectedSession.cwd ? (
-                        <box marginTop={1}>
-                          <text fg={theme.dim} wrapMode="none">{fitText(`cwd  ${selectedSession.cwd}`, innerWidth)}</text>
-                        </box>
-                      ) : null}
-                      <box marginTop={1} flexDirection="column">
-                        {welcome.welcomeBullets.map((bullet) => (
-                          <box key={bullet} flexDirection="row" height={1} width={innerWidth}>
+                    <box flexDirection="column" flexShrink={0}>
+                      <text height={1} flexShrink={0} fg={welcomeAccent} wrapMode="none">{fitText('Start an engineering task', innerWidth)}</text>
+                      <text height={1} flexShrink={0} fg={theme.dim} wrapMode="none">{fitText('Inspect code, review a change, or investigate a failure.', innerWidth)}</text>
+                      <box marginTop={1} flexDirection="column" flexShrink={0}>
+                        {welcome.welcomeBullets.slice(0, 3).map((bullet) => (
+                          <box key={bullet} flexDirection="row" height={1} flexShrink={0} width={innerWidth}>
                             <text fg={welcomeAccent} wrapMode="none">{welcome.glyph} </text>
                             <text fg={theme.text} wrapMode="none">{fitText(bullet, innerWidth - 2)}</text>
                           </box>
                         ))}
                       </box>
-                      <box marginTop={1}>
-                        <text fg={theme.dim} wrapMode="none">{fitText('Press c to open the composer and start chatting.', innerWidth)}</text>
+                      <box marginTop={1} height={1} flexShrink={0}>
+                        <text fg={theme.dim} wrapMode="none">{fitText('Press c to compose · ? keyboard help', innerWidth)}</text>
                       </box>
                     </box>
                   )
@@ -20804,20 +20809,17 @@ export default function OpenTuiApp() {
               the next move… 2s". Exactly one spinner is on screen at a time,
               and which one tells you whether a turn is live.
 
-              Chat view drops it entirely: the clause it used to render under
-              was `turnRunningForComposer`, i.e. it existed only as an in-turn
-              activity hint inside the reader box. It is now a compact row
-              immediately above the composer. Chat has no idle ticker rather
-              than gaining a new one it never had. */}
+              Chat and Agents omit the idle ticker. Their single activity row
+              appears immediately above the composer only while a turn runs. */}
           {followTail && visibleTranscriptCards.length > 0
-            && !turnRunningForComposer && transcriptView !== 'chat' ? (
+            && !turnRunningForComposer && !embeddedComposer ? (
             <box paddingX={2} paddingBottom={1}>
               <IdleTicker seed={selectedSessionKey ?? ''} theme={theme} />
             </box>
           ) : null}
 
-          {!composerWindowOpen && !composerHidden && transcriptView === 'chat' ? (
-            // Chat mode: the composer is the reader box's own trailing child —
+          {!composerWindowOpen && !composerHidden && embeddedComposer ? (
+            // Chat and Agents: the composer is the reader box's own trailing child —
             // a full-width highlighted bar in the same style as a user message
             // row, inside the same border as the transcript, so it reads as
             // the next line of the conversation rather than a docked control.
@@ -22018,7 +22020,7 @@ export default function OpenTuiApp() {
       {/* Pinned for the whole turn — elapsed + token counter + interrupt hint
           must not vanish the moment the first delta or tool arrives, which is
           how the native Claude CLI status line behaves. */}
-      {visibleComposerSending && transcriptView !== 'chat' ? (
+      {visibleComposerSending && !embeddedComposer ? (
         <box
           backgroundColor={isChatLikeView ? theme.surface : theme.surface2}
           paddingLeft={isChatLikeView ? densityState.bodyIndent : 1}
@@ -22038,7 +22040,7 @@ export default function OpenTuiApp() {
         </box>
       ) : null}
 
-      {!visibleComposerSending && reattachedRunning && !visibleAwaitingPersistedTurn && transcriptView !== 'chat' ? (
+      {!visibleComposerSending && reattachedRunning && !visibleAwaitingPersistedTurn && !embeddedComposer ? (
         <box backgroundColor={theme.surface2} paddingX={1} paddingTop={1} flexDirection="row">
           <text fg={theme.cyan} wrapMode="none">{'▌ '}</text>
           <text fg={theme.muted} wrapMode="none">
@@ -22161,7 +22163,7 @@ export default function OpenTuiApp() {
       {!composerWindowOpen && !composerHidden ? renderComposerStashPanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
       {!composerWindowOpen && !composerHidden && !composerHistoryOpen && !composerStashOpen ? renderComposerQueuePanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
 
-      {!composerWindowOpen && !composerHidden && transcriptView !== 'chat' ? (
+      {!composerWindowOpen && !composerHidden && !embeddedComposer ? (
         <box
           id="composer-dock"
           marginLeft={composerAreaOffset}

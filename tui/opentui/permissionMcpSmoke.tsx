@@ -9,7 +9,7 @@
 // reservation was checked to still pass.
 import React, { act } from 'react'
 import { testRender } from '@opentui/react/test-utils'
-import { mkdtempSync } from 'fs'
+import { mkdtempSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'
 
@@ -62,6 +62,7 @@ mock.module('./metadataWorkerClient', () => ({
 const service = await import('../../lib/tui/service')
 mock.module('../../lib/tui/service', () => ({
   ...service,
+  readTuiTranscriptView: async () => 'agents',
   readTuiSessions: async () => [SESSION],
   readTuiSessionDetail: async () => EMPTY_DETAIL,
   readTuiSessionMetadata: async () => ({ models: [], currentModel: null, contextUsage: null }),
@@ -97,6 +98,7 @@ try {
     if (!lines.some((line) => line.includes('The tool is not in any allow rule'))) fail('the reason row was displaced')
   }
 
+  writeFileSync('/tmp/engineering-permission-120.json', JSON.stringify(setup.captureSpans(), null, 2))
   console.log('OpenTUI permission MCP provenance smoke passed (label, options row, reason row)')
 } finally {
   act(() => { setup.renderer.destroy() })

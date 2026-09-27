@@ -108,8 +108,8 @@ const assertBorderless = (key: string, phase: string) => {
 }
 const assertBordered = (key: string) => {
   const card = cardBox(key)
-  if (!card || !Array.isArray(card.border) || card.border.length !== 4) {
-    throw new Error(`Agents did not render the expected card border for ${key}:\n${setup.captureCharFrame()}`)
+  if (!card || !Array.isArray(card.border) || card.border.length !== 1 || card.border[0] !== 'top') {
+    throw new Error(`Agents did not render the expected top separator for ${key}:\n${setup.captureCharFrame()}`)
   }
 }
 
@@ -130,8 +130,8 @@ try {
   assertBordered(CARD.key)
   assertBordered(PROSE_CARD.key)
   const agentsToolCard = cardBox(CARD.key)
-  if (!agentsToolCard || !isBorderCorner(cardOrigin(agentsToolCard))) {
-    throw new Error(`Agents card border was not painted:\n${setup.captureCharFrame()}`)
+  if (!agentsToolCard || !['─', '━'].includes(cardOrigin(agentsToolCard) ?? '')) {
+    throw new Error(`Agents separator was not painted:\n${setup.captureCharFrame()}`)
   }
 
   act(() => { setup.mockInput.pressKey('v') })

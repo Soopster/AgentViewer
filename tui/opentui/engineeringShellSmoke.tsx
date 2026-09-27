@@ -96,10 +96,10 @@ mock.module('../../lib/tui/service', () => ({
 }))
 
 const { default: OpenTuiApp } = await import('./App')
-for (const width of [80, 120, 200]) {
+for (const [width, height] of [[80, 40], [120, 40], [200, 40], [100, 24]]) {
   fixtureTheme = width === 80 ? 'light' : 'dark'
   SESSION.sessionId = `engineering-shell-${width}`
-  const setup = await testRender(<OpenTuiApp />, { width, height: 40, kittyKeyboard: true })
+  const setup = await testRender(<OpenTuiApp />, { width, height, kittyKeyboard: true })
   const settle = async () => {
     await act(async () => { await setup.flush(); await new Promise(resolve => setTimeout(resolve, 1200)) })
   }
@@ -124,7 +124,7 @@ for (const width of [80, 120, 200]) {
     writeFileSync(`/tmp/engineering-tui-${width}.json`, JSON.stringify(setup.captureSpans(), null, 2))
     // All three layouts remain reachable; changing width must not lose cards.
     for (const mode of ['centered', 'full', 'readable']) {
-      act(() => { setup.mockInput.pressKey('w', { shift: true }) })
+      act(() => { setup.mockInput.pressKey('W') })
       await settle()
       const card = node(`card:${PROSE_CARD.key}`)
       if (!card) throw new Error(`${mode} lost the transcript`)
@@ -132,19 +132,54 @@ for (const width of [80, 120, 200]) {
         (mode === 'centered' && card.x <= reader.x + 5)
         || (mode === 'full' && card.width <= 144)
         || (mode === 'readable' && (card.width > 114 || card.x > reader.x + 5))
-      )) throw new Error(`${mode} did not apply its layout geometry`)
+      )) throw new Error(`${mode} did not apply its layout geometry: reader=${reader.x}/${reader.width}, card=${card.x}/${card.width}\n${setup.captureCharFrame()}`)
     }
+    // Inspect the reference's Agents presentation at every supported width.
+    act(() => { setup.mockInput.pressKey('v') })
+    await settle()
+    act(() => { setup.mockInput.pressArrow('up') })
+    act(() => { setup.mockInput.pressEnter() })
+    await settle()
+    const agentsFrame = setup.captureCharFrame()
+    for (const card of [USER_CARD, CARD, PROSE_CARD]) {
+      const rendered = node(`card:${card.key}`)
+      if (!rendered || rendered.x < reader.x || rendered.x + rendered.width > reader.x + reader.width) {
+        throw new Error(`Agents card escaped the reader at ${width}: ${card.key}`)
+      }
+    }
+    if (!agentsFrame.includes('pending operation.') || !agentsFrame.includes('pwd')) {
+      throw new Error(`Agents lost conversation or tool content at ${width}:\n${agentsFrame}`)
+    }
+    const agentsDock = node('composer-dock')
+    if (!agentsDock || agentsDock.height !== 4 || agentsDock.x < reader.x
+      || agentsDock.y + agentsDock.height > reader.y + reader.height
+      || agentsFrame.includes('COMPOSER') || agentsFrame.includes('watching the wire')) {
+      throw new Error(`Agents composer was not compact and inside the reader at ${width}x${height}:\n${agentsFrame}`)
+    }
+    writeFileSync(`/tmp/engineering-agents-${width}.txt`, agentsFrame)
+    writeFileSync(`/tmp/engineering-agents-${width}.json`, JSON.stringify(setup.captureSpans(), null, 2))
     act(() => { setup.mockInput.pressKey('c') })
     await settle()
     await act(async () => { await setup.mockInput.typeText('Review the recovery edge cases') })
     await settle()
+    if (height === 24) {
+      await act(async () => { await setup.mockInput.typeText(' long draft'.repeat(100)) })
+      await settle()
+      const dock = node('composer-dock')
+      const scroll = node('transcript-scroll')
+      if (!dock || !scroll || dock.height > Math.floor(height * 0.35)
+        || dock.y + dock.height >= height || scroll.height < 8) {
+        throw new Error(`Long draft displaced the reader at ${width}x${height}:\n${setup.captureCharFrame()}`)
+      }
+      writeFileSync(`/tmp/engineering-composer-${width}.json`, JSON.stringify(setup.captureSpans(), null, 2))
+    }
     const composing = setup.captureCharFrame()
-    if (!composing.includes('Review the recovery') || !composing.includes('send')) {
+    if ((height !== 24 && !composing.includes('Review the recovery')) || !composing.includes('send')) {
       throw new Error(`Composer input or submit hint missing at ${width}:\n${composing}`)
     }
   } finally {
     act(() => { setup.renderer.destroy() })
   }
 }
-console.log('Engineering shell render smoke passed at 80, 120 and 200 columns')
+console.log('Engineering shell render smoke passed at 80, 120 and 200 columns and 100x24 with a long draft')
 process.exit(0)
