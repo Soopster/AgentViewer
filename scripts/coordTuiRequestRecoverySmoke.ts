@@ -33,6 +33,7 @@ if (!phase) {
   let sends = 0
   mock.module(fileURLToPath(new URL('../lib/tui/service.ts', import.meta.url)), () => ({
     readTuiSessionCoordinator: async () => data,
+    readTuiInteractiveTeardown: async () => ({ worktrees: [], runningTurns: [] }),
     subscribeTuiProtocolRunChanges: () => () => {},
     sendTuiSessionCoordination: async (_sessionId: string, _provider: string, request: TuiSessionCoordinationRequest) => {
       sends++

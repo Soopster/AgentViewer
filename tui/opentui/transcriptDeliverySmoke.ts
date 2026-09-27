@@ -19,6 +19,8 @@ mock.module('../../lib/tui/reads', () => ({
   readTuiSessionDetailSource: async () => ({ info: null, rawMessages: structuredClone(raw) }),
   readTuiSessionMetadata: async () => ({}),
   readTuiSessions: async () => [],
+  readTuiSlashCommands: async () => [],
+  readTuiComposerOptions: async () => ({}),
 }))
 
 // Exercise the real worker handler and client together, including actual clone
