@@ -12,6 +12,7 @@ import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { z } from 'zod'
+import { registerReviewTools } from './agent-viewer-review-tools.mjs'
 import {
   CoordinatorAhpClient,
   coordinatorTransport,
@@ -811,6 +812,8 @@ server.registerPrompt('coordinate_agents', {
     },
   }],
 }))
+
+registerReviewTools(server, requestJson, bridgeCwd)
 
 server.registerTool('search_sessions', {
   description: 'Search Agent Viewer\'s persistent cross-provider session index. Returns session IDs and matching transcript snippets.',

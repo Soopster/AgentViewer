@@ -1,6 +1,10 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useReview } from '@/lib/review/useReview'
+import { webReviewTransport } from '@/lib/review/webTransport'
+import { reviewRangeKey, type ReviewTarget, type ReviewNote } from '@/lib/review/types'
+import { ReviewBoard } from './review/ReviewBoard'
 import { isDocked, shouldIgnoreDockedKey, type SurfaceVariant } from './surfaceVariant'
 import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react'
 import { Check, ChevronDown, ChevronRight, Clock3, Columns2, GitBranch, Hash, History, Info, ListTree, Maximize2, Minus, PanelLeftClose, PanelLeftOpen, PencilLine, RefreshCw, Rows3, SlidersHorizontal, X } from 'lucide-react'
@@ -21,6 +25,7 @@ type TreeNode =
   | { kind: 'file'; path: string; name: string; depth: number; x: string; y: string }
 
 type DiffNote = {
+  author?: 'user' | 'agent'
   filePath: string
   range: SelectedLineRange
   text: string
@@ -296,7 +301,7 @@ function formatSelectedRangeForNote(selection: SelectedLineRange): string {
 }
 
 function buildDiffNoteKey(filePath: string, range: SelectedLineRange): string {
-  return [filePath, range.start, range.side ?? '', range.end, range.endSide ?? ''].join('\u0000')
+  return reviewRangeKey(filePath, range)
 }
 
 function buildReplyId(key: string): string {
@@ -774,7 +779,7 @@ export default function GitPopover({ open, onClose, cwd, sessionId, variant }: P
   const [viewOptionsOpen, setViewOptionsOpen] = useState(false)
   const [selectedLines, setSelectedLines] = useState<SelectedLineRange | null>(null)
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null)
-  const [diffNotes, setDiffNotes] = useState<Map<string, DiffNote>>(new Map())
+  const [reviewTarget, setReviewTarget] = useState<(ReviewTarget & { token: string }) | null>(null)
   const [draftNote, setDraftNote] = useState<DraftDiffNote | null>(null)
   const [contentLoading, setContentLoading] = useState(false)
   const [hoveredRow, setHoveredRow] = useState<string | null>(null)
@@ -806,6 +811,24 @@ export default function GitPopover({ open, onClose, cwd, sessionId, variant }: P
     [diffSourceSelection, turns],
   )
   const sourceKey = diffSourceKey(diffSource)
+  const review = useReview(webReviewTransport, cwd, sourceKey, 'Web Git', undefined, open, rightContent)
+  const diffNotes = review.notes as Map<string, DiffNote>
+  const setDiffNotes = useCallback((update: (notes: Map<string, DiffNote>) => Map<string, DiffNote>) => review.setNotes(previous => update(previous as Map<string, DiffNote>)), [review.setNotes])
+  const navigateReview = useCallback((target: ReviewTarget, token = crypto.randomUUID() as string) => {
+    setPane(2); setFocusSide('right'); setSelectedFilePath(target.filePath); setReviewTarget({ ...target, token })
+  }, [])
+  useEffect(() => {
+    const nav = review.navigation
+    if (nav && !nav.appliedAt && !draftNote) navigateReview(nav.target, nav.id)
+  }, [review.navigation, draftNote, navigateReview])
+  const targetHunk = review.state.document.hunks.find(hunk => reviewTarget?.hunkId ? hunk.id === reviewTarget.hunkId : hunk.filePath === reviewTarget?.filePath)
+  const targetLine = targetHunk?.lines.find(line => line.newLine != null) ?? targetHunk?.lines[0]
+  const revealRange = reviewTarget?.range ?? (targetLine ? { start: targetLine.newLine ?? targetLine.oldLine!, end: targetLine.newLine ?? targetLine.oldLine!, side: targetLine.newLine != null ? 'additions' as const : 'deletions' as const } : undefined)
+  const reviewRevealed = useCallback((token: string) => {
+    const nav = review.navigation
+    if (nav?.id === token && !nav.appliedAt) void review.mutate({ type: 'ack', viewId: review.viewId, navigationId: token }).catch(() => {})
+    setReviewTarget(current => current?.token === token ? null : current)
+  }, [review.navigation, review.mutate, review.viewId])
 
   const reloadGitData = useCallback(() => {
     setLoading(true)
@@ -1176,7 +1199,7 @@ export default function GitPopover({ open, onClose, cwd, sessionId, variant }: P
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
               }}>
-                You
+                {(thread as DiffNote & Partial<ReviewNote>).author === 'agent' ? 'Agent' : 'You'}
               </div>
               <div style={{
                 color: 'var(--text-3)',
@@ -1396,8 +1419,8 @@ export default function GitPopover({ open, onClose, cwd, sessionId, variant }: P
       key,
       filePath: selectedFilePath,
       range: selectedLines,
-      text: existing?.text ?? '',
-      replyToKey: null,
+      text: existing?.author === 'agent' ? '' : existing?.text ?? '',
+      replyToKey: existing?.author === 'agent' ? key : null,
     })
   }
 
@@ -1410,8 +1433,8 @@ export default function GitPopover({ open, onClose, cwd, sessionId, variant }: P
       key,
       filePath: selectedFilePath,
       range,
-      text: existing?.text ?? '',
-      replyToKey: null,
+      text: existing?.author === 'agent' ? '' : existing?.text ?? '',
+      replyToKey: existing?.author === 'agent' ? key : null,
     })
     setViewOptionsOpen(false)
   }
@@ -1990,6 +2013,7 @@ export default function GitPopover({ open, onClose, cwd, sessionId, variant }: P
           )}
 
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+            {pane === 2 ? <ReviewBoard review={review} onNavigate={navigateReview} /> : null}
             <div
               style={{
                 padding: '12px 16px',
@@ -2214,6 +2238,8 @@ export default function GitPopover({ open, onClose, cwd, sessionId, variant }: P
                   ) : null}
                   <PierrePatchDiffView
                     patch={rightContent}
+                    reveal={reviewTarget && reviewTarget.filePath === selectedFilePath && !contentLoading ? { token: reviewTarget.token, filePath: reviewTarget.filePath, range: revealRange } : undefined}
+                    onReveal={reviewRevealed}
                     maxHeight={null}
                     presentation={diffPresentation}
                     lineAnnotations={diffAnnotations}

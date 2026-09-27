@@ -1,5 +1,9 @@
 /** @jsxImportSource @opentui/react */
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useReview } from '../../lib/review/useReview'
+import { localReviewTransport } from '../../lib/review/localTransport'
+import { reviewRangeKey, type ReviewTarget, type ReviewNote } from '../../lib/review/types'
+import { ReviewBoard, type ReviewBoardKey } from './ReviewBoard'
 import { useRenderer } from '@opentui/react'
 import type { MouseEvent, ScrollBoxRenderable } from '@opentui/core'
 import type { SelectedLineRange } from '@pierre/diffs'
@@ -325,7 +329,7 @@ function renderSplitSide(
 // ─── Inline note rendering helpers ───────────────────────────────────────────
 
 type DraftNote = { filePath: string; rowKey: string; range: SelectedLineRange; lineLabel: string; text: string }
-type DiffNote = { filePath: string; range: SelectedLineRange; text: string }
+type DiffNote = { filePath: string; range: SelectedLineRange; text: string } & Partial<ReviewNote>
 
 type DiffSelectionPoint = {
   lineNumber: number
@@ -362,7 +366,7 @@ function diffSelectionPointForRow(row: TuiPierreDiffRow | TuiPierreSplitRow): Di
 }
 
 function diffSelectionKey(filePath: string | null, selection: SelectedLineRange): string {
-  return [filePath ?? 'unknown', selection.start, selection.side ?? '', selection.end, selection.endSide ?? ''].join('\u0000')
+  return reviewRangeKey(filePath ?? 'unknown', selection)
 }
 
 function diffSelectionLineLabel(selection: SelectedLineRange): string {
@@ -484,7 +488,7 @@ function renderNoteCard(
     <box width={width} height={3 + note.text.split('\n').length + (onSendToComposer ? 1 : 0)} flexShrink={0} flexDirection="column" border borderStyle="single" borderColor={theme.violet} paddingX={1}>
       <box flexDirection="row">
         <text fg={theme.violet} wrapMode="none">
-          {fitTerminalText(`Note${header ? ` — ${header}` : ''}`, width - 6)}
+          {fitTerminalText(`${note.author === 'agent' ? 'Agent note' : 'Note'}${note.replies?.length ? ` (${note.replies.length} replies · R)` : ''}${header ? ` — ${header}` : ''}`, width - 6)}
         </text>
         <box flexGrow={1} />
         {onSendToComposer ? (
@@ -575,7 +579,9 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
   const [diffSelectionAnchorRow, setDiffSelectionAnchorRow] = useState<number | null>(null)
   const [mouseCellSelection, setMouseCellSelection] = useState<DiffCellSelection | null>(null)
   const mouseCellSelectionRef = useRef<DiffCellSelection | null>(null)
-  const [notesBySource, setNotesBySource] = useState<Map<string, Map<string, DiffNote>>>(new Map())
+  const [reviewBoardOpen, setReviewBoardOpen] = useState(false)
+  const boardKeyRef = useRef<(key: ReviewBoardKey) => void>(() => {})
+  const [reviewTarget, setReviewTarget] = useState<ReviewTarget | null>(null)
   const [draftNote, setDraftNote] = useState<DraftNote | null>(null)
   const openFileFilter = useCallback(() => {
     if (draftNote) return
@@ -631,10 +637,6 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
   const sourceKey = diffSourceKey(diffSource)
   const noteScope = JSON.stringify([repoCwd, sourceKey])
   const reviewStateKey = tuiDiffReviewStorageKey(repoCwd, sourceKey)
-  const diffNotes = notesBySource.get(noteScope) ?? EMPTY_DIFF_NOTES
-  const setDiffNotes = useCallback((update: (notes: Map<string, DiffNote>) => Map<string, DiffNote>) => {
-    setNotesBySource(previous => new Map(previous).set(noteScope, update(previous.get(noteScope) ?? EMPTY_DIFF_NOTES)))
-  }, [noteScope])
   const reviewStateHydratedRef = useRef<string | null>(null)
   useEffect(() => {
     if (reviewStateHydratedRef.current === reviewStateKey) return
@@ -646,17 +648,15 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
     setHorizontalOffset(saved.preferences.horizontalOffset)
     setShowLineNumbers(saved.preferences.showLineNumbers)
     setShowHunkHeaders(saved.preferences.showHunkHeaders)
-    const notes = new Map(saved.notes.map(note => [diffSelectionKey(note.filePath, note.range), note as DiffNote]))
-    setNotesBySource(previous => new Map(previous).set(noteScope, notes))
   }, [noteScope, reviewStateKey])
   useEffect(() => {
     if (reviewStateHydratedRef.current !== reviewStateKey) return
-    const notes: TuiDiffReviewNote[] = [...diffNotes.values()]
+    const notes = readTuiDiffReviewState(reviewStateKey).notes
     writeTuiDiffReviewState(reviewStateKey, { preferences: {
       layoutMode: diffLayoutMode, wrap: wrapDiffLines, tabWidth: diffTabWidth,
       horizontalOffset, showLineNumbers, showHunkHeaders,
     }, notes })
-  }, [diffLayoutMode, diffNotes, diffTabWidth, horizontalOffset, noteScope, reviewStateKey, showHunkHeaders, showLineNumbers, wrapDiffLines])
+  }, [diffLayoutMode, diffTabWidth, horizontalOffset, noteScope, reviewStateKey, showHunkHeaders, showLineNumbers, wrapDiffLines])
   const sourceLabel = diffSourceLabel(sourceSelection, turns)
   // Said once, at the top of the picker: the numbering below is the repo's, not
   // this session's, and reading it as this session's would be wrong.
@@ -765,6 +765,11 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
   const contentKey = JSON.stringify([repoCwd, sourceKey, pane, pane === 3 ? branchIndex : null, pane === 4 ? commitIndex : null])
   const [loadedContentKey, setLoadedContentKey] = useState('')
   const loadedContentKeyRef = useRef('')
+  const review = useReview(localReviewTransport, repoCwd, sourceKey, 'TUI Git', pane === 2 && loadedContentKey === contentKey && rightContent !== 'Loading…' ? rightContent : undefined, pane === 2 && loadedContentKey === contentKey && rightContent !== 'Loading…')
+  const diffNotes = review.notes as Map<string, DiffNote>
+  const setDiffNotes = review.setNotes
+  const navigateReview = useCallback((target: ReviewTarget) => { setFileFilter(''); setPane(2); setFileDiffMode('viewer'); setFocusSide('right'); setReviewBoardOpen(false); setReviewTarget(target) }, [])
+
 
   useEffect(() => {
     const requestId = ++rightContentRequestRef.current
@@ -912,6 +917,8 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
   }
 
   const handleKey = useCallback((key: GitKeyEvent) => {
+    if (reviewBoardOpen) { boardKeyRef.current(key); return }
+    if (key.sequence === 'R' && !draftNote && !filterEditingRef.current) { setReviewBoardOpen(true); return }
     // While a draft note is open, all keyboard input goes to the note editor.
     if (draftNote !== null) {
       if (key.name === 'escape') { setDraftNote(null); return }
@@ -1218,7 +1225,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
         rowKey: span.key,
         range: span.selection,
         lineLabel: span.label,
-        text: diffNotes.get(span.key)?.text ?? '',
+        text: diffNotes.get(span.key)?.author === 'agent' ? '' : diffNotes.get(span.key)?.text ?? '',
       })
       return
     }
@@ -1256,7 +1263,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
       }))
       return
     }
-  }, [data, diffCursorRow, diffLayout, diffNotes, diffSelectionAnchorRow, draftNote, expandedDirs, fileDiffMode, focusSide,
+  }, [reviewBoardOpen, setDiffNotes, data, diffCursorRow, diffLayout, diffNotes, diffSelectionAnchorRow, draftNote, expandedDirs, fileDiffMode, focusSide,
       height, leftPaneMode, onClose, onSendDiffNoteToComposer, pane, repoCwd, rightContent, showHunkHeaders, treeCursor, visibleNodes, sourceKey, diffSource, loadGitData, sessionId, sourceMenuItems, sourceSelection, setDiffNotes, contextExpansions, changeContext, fileFilter, openFileFilter, closeFileFilter])
 
   // Register key handler with parent
@@ -1330,6 +1337,28 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
   const rightDiffRows = rightDiffView?.rows ?? EMPTY_DIFF_ROWS
   const rightSplitRows = rightDiffView?.splitRows ?? EMPTY_SPLIT_ROWS
   const activeDiffRows = diffLayout === 'split' ? rightSplitRows : rightDiffRows
+  useEffect(() => {
+    const nav = review.navigation
+    if (nav && !nav.appliedAt && !draftNote && !reviewSearchEditingRef.current && !filterEditingRef.current) navigateReview(nav.target)
+  }, [review.navigation, draftNote, navigateReview])
+  useEffect(() => {
+    if (!reviewTarget || fileFilter || draftNote) return
+    const hunk = review.state.document.hunks.find(item => item.id === reviewTarget.hunkId)
+    const range = reviewTarget.range
+    let seen = -1
+    const index = activeDiffRows.findIndex(row => {
+      if (row.filePath !== reviewTarget.filePath) return false
+      if (hunk && row.tone === 'hunk') return ++seen === hunk.index
+      if (hunk) return false
+      if (!range) return row.tone === 'file'
+      const line = range.side === 'deletions' ? (row as TuiPierreDiffRow).oldLine ?? (row as TuiPierreSplitRow).left?.lineNum : (row as TuiPierreDiffRow).newLine ?? (row as TuiPierreSplitRow).right?.lineNum
+      return line === range.start
+    })
+    if (index < 0) return
+    setDiffCursorRow(index); setDiffSelectionAnchorRow(null); revealDiffRow(index); setReviewTarget(null)
+    const nav = review.navigation
+    if (nav && !nav.appliedAt) void review.mutate({ type: 'ack', viewId: review.viewId, navigationId: nav.id }).catch(() => {})
+  }, [activeDiffRows, reviewTarget, fileFilter, draftNote, review.navigation, review.mutate, review.viewId, review.state.document])
   const diffSelectionCurrentIndex = activeDiffRows.length > 0
     ? clampNumber(diffCursorRow, 0, activeDiffRows.length - 1)
     : 0
@@ -1426,7 +1455,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
       setMouseCellSelection(null)
     }, wrap: wrapDiffLines, columns: diffLayout === 'split' ? Math.min(splitLeftTextW, splitRightTextW) : rightDiffTextWidth, tabWidth: diffTabWidth })
   useLayoutEffect(() => { reviewSearchEditingRef.current = reviewActions.editing }, [reviewActions.editing])
-  const captureReviewKeys = Boolean(draftNote || filterEditing || fileFilter || reviewActions.editing || reviewActions.query || sourceMenuOpen)
+  const captureReviewKeys = Boolean(reviewBoardOpen || draftNote || filterEditing || fileFilter || reviewActions.editing || reviewActions.query || sourceMenuOpen)
   useLayoutEffect(() => {
     onKeyCaptureChange?.(captureReviewKeys)
     return () => onKeyCaptureChange?.(false)
@@ -1445,7 +1474,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
           ['{}', 'hunk'],
           ['e/c', 'context'],
           ['⇧j/k', 'range'],
-          ['a', 'note'],
+          ['a', 'note'], ['R', 'review checklist'],
           ['A', 'composer'],
           ['x', 'del'],
         ]
@@ -1557,10 +1586,11 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
       backgroundColor={theme.surface}
       zIndex={docked ? undefined : zIndex}
       flexDirection="row"
-      title={scopeLabel ? ` Git · ${fitTerminalText(scopeLabel, Math.max(popW - 10, 8))} ` : ' Git '}
+      title={review.error ? ` Review: ${fitTerminalText(review.error, Math.max(popW - 14, 8))} ` : scopeLabel ? ` Git · ${fitTerminalText(scopeLabel, Math.max(popW - 10, 8))} ` : ' Git '}
       titleColor={theme.cyan}
       titleAlignment="left"
     >
+      {reviewBoardOpen ? <ReviewBoard review={review} theme={theme} width={popW - 2} height={popH - 2} keyRef={boardKeyRef} onClose={() => setReviewBoardOpen(false)} onNavigate={navigateReview} /> : null}
       {/* ── Left column ─────────────────────────────────── */}
       {!leftPaneHidden ? (
       <box width={leftW} flexDirection="column" border={['right']} borderStyle="single" borderColor={theme.border}>
@@ -1894,7 +1924,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
                                 rowKey: key,
                                 range: currentSelectionRange,
                                 lineLabel: diffSelectionLineLabel(currentSelectionRange),
-                                text: diffNotes.get(key)?.text ?? '',
+                                text: diffNotes.get(key)?.author === 'agent' ? '' : diffNotes.get(key)?.text ?? '',
                               })
                             }
                           }}
@@ -2040,7 +2070,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
                                 rowKey: key,
                                 range: currentSelectionRange,
                                 lineLabel: diffSelectionLineLabel(currentSelectionRange),
-                                text: diffNotes.get(key)?.text ?? '',
+                                text: diffNotes.get(key)?.author === 'agent' ? '' : diffNotes.get(key)?.text ?? '',
                               })
                             }
                           }}

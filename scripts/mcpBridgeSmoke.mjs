@@ -9,6 +9,8 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 import { COORDINATOR_MCP_TOOL_NAMES } from '../bin/agent-viewer-coordinator-tools.mjs'
 
 const SESSION_MCP_TOOL_NAMES = Object.freeze([
+  'review_read',
+  'review_apply',
   'search_sessions',
   'list_sessions',
   'message_session',

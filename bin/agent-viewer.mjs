@@ -174,6 +174,7 @@ Modes:
   web        Launch the Next.js web app
   pair       Mint a pairing code for a phone against a running web daemon
   machines   List, add or remove other machines whose teams the TUI shows
+  review     Inspect and annotate live code reviews (read/apply)
   mcp        Run the Claude/Codex stdio MCP bridge
   ahp        Run the published AHP JSON-RPC host over stdio, TCP, or WebSocket
   acp        Run an ACP (agentclientprotocol.com) Agent over stdio
@@ -487,6 +488,12 @@ if (command === '-h' || command === '--help' || command === 'help') {
   await runPairCommand(args.slice(1))
 } else if (command === 'machines') {
   await runMachinesCommand(args.slice(1))
+} else if (command === 'review') {
+  const entrypoint = fileURLToPath(new URL('./agent-viewer-review.ts', import.meta.url))
+  const child = spawn(process.execPath, ['--import', 'tsx', entrypoint, ...args.slice(1)], { stdio: 'inherit', env: process.env })
+  child.on('error', error => { throw error })
+  forwardSignals(child)
+  trackExit(child)
 } else if (command === 'mcp') {
   const { attach, identity } = parseArgs(args.slice(1))
   const entrypoint = fileURLToPath(new URL('./agent-viewer-mcp.mjs', import.meta.url))

@@ -1,5 +1,9 @@
 /** @jsxImportSource @opentui/react */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useReview } from '../../lib/review/useReview'
+import { localReviewTransport } from '../../lib/review/localTransport'
+import { reviewRangeKey, type ReviewTarget } from '../../lib/review/types'
+import { ReviewBoard, type ReviewBoardKey } from './ReviewBoard'
 import { TextAttributes } from '@opentui/core'
 import type { MouseEvent, ScrollBoxRenderable, TextareaAction, TextareaRenderable } from '@opentui/core'
 import type { SelectedLineRange } from '@pierre/diffs'
@@ -137,7 +141,7 @@ function fitText(text: string, width: number): string {
 }
 
 function diffSelectionKey(path: string, selection: SelectedLineRange): string {
-  return [path, selection.start, selection.side ?? '', selection.end, selection.endSide ?? ''].join('\u0000')
+  return reviewRangeKey(path, selection)
 }
 
 function diffSelectionLineLabel(selection: SelectedLineRange): string {
@@ -519,7 +523,9 @@ export function PullRequestPopover({
   const [horizontalOffset, setHorizontalOffset] = useState(0)
   const [diffCursor, setDiffCursor] = useState(0)
   const [diffSelectionAnchor, setDiffSelectionAnchor] = useState<number | null>(null)
-  const [diffNotes, setDiffNotes] = useState<Map<string, DiffNote>>(() => new Map())
+  const [reviewBoardOpen, setReviewBoardOpen] = useState(false)
+  const boardKeyRef = useRef<(key: ReviewBoardKey) => void>(() => {})
+  const [reviewTarget, setReviewTarget] = useState<ReviewTarget | null>(null)
   const [scrollTop, setScrollTop] = useState(0)
   const [collapsed, setCollapsed] = useState<ReadonlySet<number>>(() => new Set())
   const [collapsedDirs, setCollapsedDirs] = useState<ReadonlySet<string>>(() => new Set())
@@ -561,6 +567,14 @@ export function PullRequestPopover({
   const pr = workspace?.selected ?? null
   const pullRequests = workspace?.pullRequests ?? []
   const reviewStateKey = tuiDiffReviewStorageKey(repoCwd, `pr:${pr?.number ?? 'none'}`)
+  const reviewPatch = useMemo(() => pr?.files.map(filePatchText).join('\n'), [pr])
+  const review = useReview(localReviewTransport, repoCwd, `pr:${pr?.number ?? 1}`, 'TUI PR', reviewPatch, !!pr)
+  const diffNotes = useMemo(() => new Map([...review.notes].map(([key, note]) => [key, { ...note, path: note.filePath }])), [review.notes])
+  const setDiffNotes = useCallback((update: (notes: Map<string, DiffNote>) => Map<string, DiffNote>) => review.setNotes(previous => {
+    const next = update(new Map([...previous].map(([key, note]) => [key, { ...note, path: note.filePath }])))
+    return new Map([...next].map(([key, note]) => [key, { ...note, filePath: note.path }]))
+  }), [review.setNotes])
+  const navigateReview = useCallback((target: ReviewTarget) => { setPane(2); setFocusSide('right'); setCollapsed(new Set()); setShowHunkHeaders(true); setReviewBoardOpen(false); setReviewTarget(target) }, [])
 
   useEffect(() => {
     if (!pr || reviewStateHydratedRef.current === reviewStateKey) return
@@ -572,24 +586,21 @@ export function PullRequestPopover({
     setHorizontalOffset(saved.preferences.horizontalOffset)
     setShowLineNumbers(saved.preferences.showLineNumbers)
     setShowHunkHeaders(saved.preferences.showHunkHeaders)
-    setDiffNotes(new Map(saved.notes.map(note => [diffSelectionKey(note.filePath, note.range), {
-      path: note.filePath, range: note.range, text: note.text,
-    }])))
+
   }, [pr, reviewStateKey])
 
   useEffect(() => {
     if (!pr || reviewStateHydratedRef.current !== reviewStateKey) return
-    const notes: TuiDiffReviewNote[] = [...diffNotes.values()].map(note => ({ filePath: note.path, range: note.range, text: note.text }))
+    const notes = readTuiDiffReviewState(reviewStateKey).notes
     writeTuiDiffReviewState(reviewStateKey, { preferences: {
       layoutMode: diffLayout, wrap: wrapDiffLines, tabWidth: diffTabWidth,
       horizontalOffset, showLineNumbers, showHunkHeaders,
     }, notes })
-  }, [diffLayout, diffNotes, diffTabWidth, horizontalOffset, pr, reviewStateKey, showHunkHeaders, showLineNumbers, wrapDiffLines])
+  }, [diffLayout, diffTabWidth, horizontalOffset, pr, reviewStateKey, showHunkHeaders, showLineNumbers, wrapDiffLines])
 
   useEffect(() => {
     const nextNumber = pr?.number ?? null
     if (selectedPrNumberRef.current !== null && nextNumber !== null && selectedPrNumberRef.current !== nextNumber) {
-      setDiffNotes(new Map())
       setDiffSelectionAnchor(null)
       setComposer(null)
     }
@@ -636,6 +647,27 @@ export function PullRequestPopover({
   const splitGutterCols = showLineNumbers ? lineNoWidth + 1 : 0
   const splitTextW = Math.max(splitHalfW - splitGutterCols - 3, 6)
   const splitRightTextW = Math.max(splitRightW - splitGutterCols - 3, 6)
+
+  useEffect(() => {
+    const nav = review.navigation
+    if (nav && !nav.appliedAt && !composer) navigateReview(nav.target)
+  }, [review.navigation, composer, navigateReview])
+  useEffect(() => {
+    if (!reviewTarget || composer || collapsed.size) return
+    const hunk = review.state.document.hunks.find(item => item.id === reviewTarget.hunkId)
+    let seen = -1
+    const index = reviewRows.findIndex(row => {
+      if (pr?.files[row.fileIndex]?.filename !== reviewTarget.filePath) return false
+      if (hunk && row.line?.kind === 'hunk') return ++seen === hunk.index
+      if (hunk) return false
+      if (!reviewTarget.range) return true
+      return reviewRowSelectionPoints(row).some(point => point.lineNumber === reviewTarget.range!.start && point.side === (reviewTarget.range!.side ?? 'additions'))
+    })
+    if (index < 0) return
+    setDiffCursor(index); setScrollTop(index); setDiffSelectionAnchor(null); setReviewTarget(null)
+    const nav = review.navigation
+    if (nav && !nav.appliedAt) void review.mutate({ type: 'ack', viewId: review.viewId, navigationId: nav.id }).catch(() => {})
+  }, [reviewTarget, reviewRows, composer, collapsed, pr, review.state.document, review.navigation, review.mutate, review.viewId])
 
   const treeRows = useMemo(() => buildTreeRows(pr?.files ?? [], collapsedDirs), [collapsedDirs, pr])
 
@@ -862,7 +894,7 @@ export function PullRequestPopover({
       setComposer(null)
       await load(pr.number)
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setLoading(false) }
-  }, [composer, load, onAskAgent, onClose, pr, repoCwd, workspace])
+  }, [setDiffNotes, composer, load, onAskAgent, onClose, pr, repoCwd, workspace])
 
   function clampLeftPaneWidth(nextWidth: number): number {
     return Math.max(minLeftW, Math.min(nextWidth, maxLeftW))
@@ -870,6 +902,8 @@ export function PullRequestPopover({
 
   // ── Key handling ──────────────────────────────────────────────────────────
   const handleKey = useCallback((key: Key) => {
+    if (reviewBoardOpen) { boardKeyRef.current(key); return }
+    if (key.sequence === 'R' && !composer) { setReviewBoardOpen(true); return }
     if (composer !== null) {
       if (key.name === 'escape') setComposer(null)
       return
@@ -1049,7 +1083,7 @@ export function PullRequestPopover({
     if (key.sequence === 'y') { setComposer({ mode: 'approve' }); return }
     if (key.sequence === 'X' || (key.name === 'x' && key.shift)) { setComposer({ mode: 'request' }); return }
     if (key.sequence === '?' || key.name === '?') { setComposer({ mode: 'question' }); return }
-  }, [clampedCursor, composer, defaultLeftW, diffMode, diffNotes, diffRows, discussionCursor, discussionEntries, focusSide,
+  }, [reviewBoardOpen, setDiffNotes, clampedCursor, composer, defaultLeftW, diffMode, diffNotes, diffRows, discussionCursor, discussionEntries, focusSide,
       jumpToComment, jumpToFile, jumpToHunk, leftPaneHidden, leftPaneMode, load, maxLeftW,
       moveCursorTo, onClose, onSendDiffNoteToComposer, openRangeComposer, pane, pr, prCursor, pullRequests, reviewRows.length,
       selectedDiffSpan, setDiffTabWidth, setHorizontalOffset, setWrapDiffLines, toggleFold, treeCursor, treeRows, wrapDiffLines, diffTabWidth])
@@ -1343,6 +1377,7 @@ export function PullRequestPopover({
       titleColor={theme.cyan}
       titleAlignment="left"
     >
+      {reviewBoardOpen ? <ReviewBoard review={review} theme={theme} width={popW - 2} height={popH - 2} keyRef={boardKeyRef} onClose={() => setReviewBoardOpen(false)} onNavigate={navigateReview} /> : null}
       <box height={bodyH} flexDirection="row">
         {/* ── Left column ─────────────────────────────────── */}
         {!leftPaneHidden ? (
@@ -1533,7 +1568,7 @@ export function PullRequestPopover({
                 ['m', showHunkHeaders ? '@@' : 'no@@'],
                 ['{}', 'hunk'],
                 ['⇧j/k', 'range'],
-                ['a', 'note'],
+                ['a', 'note'], ['R', 'review checklist'],
                 ['A', 'composer'],
                 ['x', 'del'],
                 ['z', 'fold'], ['Z', wrapDiffLines ? 'nowrap' : 'wrap'], ['T', `tabs:${diffTabWidth}`],

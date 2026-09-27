@@ -267,6 +267,8 @@ export function PierrePatchDiffView({
   renderAnnotation,
   onGutterUtilityClick,
   loadDiffFiles,
+  reveal,
+  onReveal,
 }: {
   patch: string
   maxHeight?: number | null
@@ -283,8 +285,17 @@ export function PierrePatchDiffView({
    * between them. Omit to keep a diff strictly read-only.
    */
   loadDiffFiles?: FileDiffContentsLoader
+  reveal?: { token: string; filePath: string; range?: SelectedLineRange }
+  onReveal?: (token: string) => void
 }) {
   const files = useMemo(() => parsePatchDiffFiles(patch), [patch])
+  const annotations = useMemo(() => {
+    if (!reveal?.range) return lineAnnotations
+    return [...(lineAnnotations ?? []), {
+      side: reveal.range.side ?? 'additions', lineNumber: reveal.range.start,
+      metadata: { filePath: reveal.filePath, noteId: `reveal:${reveal.token}`, text: '', rangeLabel: '', kind: 'thread' as const },
+    }]
+  }, [lineAnnotations, reveal])
 
   if (files.length === 0) {
     return (
@@ -301,7 +312,7 @@ export function PierrePatchDiffView({
           <FileDiffAny
             key={`${file.prevName ?? ''}:${file.name}:${index}`}
             fileDiff={file}
-            lineAnnotations={lineAnnotations?.filter((annotation) => {
+            lineAnnotations={annotations?.filter((annotation) => {
               if (!annotation.metadata?.filePath) return true
               return annotation.metadata.filePath === displayPath(file)
             })}
@@ -315,12 +326,25 @@ export function PierrePatchDiffView({
               onLineSelected: onSelectedLinesChange,
             }}
             selectedLines={selectedLines}
-            renderAnnotation={renderAnnotation}
+            renderAnnotation={(annotation: PierreDiffAnnotation) => annotation.metadata?.noteId === `reveal:${reveal?.token}` && reveal
+              ? <ReviewRevealMarker token={reveal.token} onReveal={onReveal} />
+              : renderAnnotation?.(annotation)}
           />
         ))}
       </div>
     </PierreDiffFrame>
   )
+}
+
+/** A mounted line annotation is proof the requested source line exists in the rendered diff. */
+function ReviewRevealMarker({ token, onReveal }: { token: string; onReveal?: (token: string) => void }) {
+  const element = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!element.current) return
+    element.current.scrollIntoView({ block: 'center' })
+    onReveal?.(token)
+  }, [onReveal, token])
+  return <div ref={element} aria-label="Requested review location" />
 }
 
 function parsePatchDiffFiles(patch: string): FileDiffMetadata[] {

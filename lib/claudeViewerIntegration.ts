@@ -6,6 +6,9 @@ import {
   type StopHookInput,
 } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
+import { reviewReadShape, reviewApplyShape, reviewReadDescription, reviewApplyDescription, reviewReadProjection } from '../bin/agent-viewer-review-tools.mjs'
+import { listReviews, readReview, mutateReview } from './review/store'
+import type { ReviewOperation } from './review/types'
 import { setMessageBookmark } from './messageBookmarks'
 import { searchPersistedSessions } from './sessionPersistence'
 import { clearWaitingSession, setWaitingSession } from './sessionRuntime'
@@ -65,6 +68,14 @@ function createViewerMcpServer(context: ClaudeViewerContext) {
     version: '1.0.0',
     instructions: 'Tools for searching Agent Viewer session history, bookmarking important transcript messages, and explicitly requesting human attention.',
     tools: [
+      tool('review_read', reviewReadDescription, reviewReadShape, async input => {
+        const cwd = input.cwd ?? context.getCwd() ?? process.cwd()
+        return textResult(input.source ? reviewReadProjection(await readReview(cwd, input.source), input.include_content) : { reviews: await listReviews(cwd) })
+      }, { annotations: { readOnlyHint: true } }),
+      tool('review_apply', reviewApplyDescription, reviewApplyShape, async input => textResult(reviewReadProjection(await mutateReview({
+        cwd: input.cwd ?? context.getCwd() ?? process.cwd(), source: input.source, requestId: input.request_id,
+        operation: { ...input.operation, ...(['note', 'reply'].includes(input.operation.type) ? { author: 'agent' } : {}) } as ReviewOperation,
+      })))),
       tool(
         'search_sessions',
         'Search Agent Viewer\'s persistent cross-provider session index. Returns session IDs and the best matching transcript snippets.',

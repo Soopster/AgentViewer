@@ -85,6 +85,7 @@ export const ROUTE_SCOPES: Record<string, Partial<Record<HttpMethod, RouteScope>
   // the raw allowlisted-command escape hatch and stays write: the allowlist
   // includes `branch`, which creates and deletes branches.
   '/api/git': { GET: 'read', POST: 'write' },
+  '/api/review': { GET: 'read', POST: 'write' },
   // A read that needs a body (the caller's GitData), hence a POST declared
   // read — method is not intent.
   '/api/git/content': { POST: 'read' },
