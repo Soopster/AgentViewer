@@ -36,7 +36,7 @@ const CARD: TuiTranscriptCard = {
   autoFold: true,
   compactSummary: 'tool Bash: pwd',
   lines: [{ text: 'tool Bash: pwd', tone: 'tool' }],
-  expandedLines: [{ text: 'tool Bash: pwd', tone: 'tool' }],
+  expandedLines: [{ text: 'tool Bash: pwd', tone: 'tool' }, { text: 'full-only operation output', tone: 'default' }],
   searchText: 'pwd',
   searchHaystackLower: 'pwd',
 }
@@ -158,6 +158,58 @@ for (const [width, height] of [[80, 40], [120, 40], [200, 40], [100, 24]]) {
     }
     writeFileSync(`/tmp/engineering-agents-${width}.txt`, agentsFrame)
     writeFileSync(`/tmp/engineering-agents-${width}.json`, JSON.stringify(setup.captureSpans(), null, 2))
+    if (width === 120) {
+      // Cycle every presentation from Agents. The modes share the engineering
+      // palette, but keep their own expansion, chronology and composer shape.
+      const viewSteps = [
+        ['chat', 'down', 1],
+        ['transcript', 'down', 1],
+        ['conversation', 'up', 6],
+        ['full', 'down', 1],
+        ['continue', 'down', 1],
+        ['stream', 'down', 1],
+        ['agents', 'down', 1],
+      ] as const
+      for (const [mode, direction, steps] of viewSteps) {
+        act(() => { setup.mockInput.pressKey('v') })
+        await settle()
+        for (let step = 0; step < steps; step++) {
+          act(() => { setup.mockInput.pressArrow(direction) })
+          await settle()
+        }
+        act(() => { setup.mockInput.pressEnter() })
+        await settle()
+        const modeFrame = setup.captureCharFrame()
+        if (!(mode === 'stream' ? modeFrame.includes('STREAM') && modeFrame.includes('LIVE') : modeFrame.includes(`${mode.toUpperCase()} ·`))) {
+          throw new Error(`${mode} label missing from its own view header:\n${modeFrame}`)
+        }
+        const proseCard = node(`card:${PROSE_CARD.key}`)
+        const toolCard = node(`card:${CARD.key}`)
+        if (!proseCard) throw new Error(`${mode} lost the conversation transcript`)
+        if (mode === 'full') {
+          if (!toolCard || !modeFrame.includes('full-only operation output')) {
+            throw new Error(`Full view did not expand technical output:\n${modeFrame}`)
+          }
+        } else if (mode === 'continue' && toolCard) {
+          throw new Error(`Continue view included a folded technical card:\n${modeFrame}`)
+        } else if (mode === 'conversation' && !toolCard) {
+          throw new Error(`Conversation view lost its folded operations:\n${modeFrame}`)
+        }
+        if (mode === 'chat') {
+          const dock = node('composer-dock')
+          if (!dock || dock.y + dock.height > reader.y + reader.height) {
+            throw new Error(`Chat composer left the inline transcript at ${width}:\n${modeFrame}`)
+          }
+        } else if (mode !== 'agents') {
+          const dock = node('composer-dock')
+          if (!dock || dock.y < reader.y + reader.height - 2) {
+            throw new Error(`${mode} lost its distinct docked composer at ${width}:\n${modeFrame}`)
+          }
+        }
+        writeFileSync(`/tmp/engineering-view-${mode}.txt`, modeFrame)
+        writeFileSync(`/tmp/engineering-view-${mode}.json`, JSON.stringify(setup.captureSpans(), null, 2))
+      }
+    }
     act(() => { setup.mockInput.pressKey('c') })
     await settle()
     await act(async () => { await setup.mockInput.typeText('Review the recovery edge cases') })

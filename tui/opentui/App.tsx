@@ -5614,10 +5614,15 @@ function TranscriptCardInner({
     headerMeta,
     card.category === 'diff' ? `s ${diffLayout}` : null,
     isSearchHit ? 'match' : null,
-    card.usageSummary ?? null,
-    card.durationLabel ? `⏱ ${card.durationLabel}` : null,
+    isExpanded || hasCursor ? card.usageSummary ?? null : null,
+    (isExpanded || hasCursor) && card.durationLabel ? `⏱ ${card.durationLabel}` : null,
     hasCursor ? 'y copy  b bookmark  Q reply' : null,
   ])
+  const cardTitleColor = hasCursor || isSearchHit
+    ? accent
+    : isActiveMatch || bookmarked
+      ? theme.amber
+      : theme.dim
   const bookmarkGlyph = bookmarked ? '★ ' : ''
   const cardTitleFull = `${marker} ${bookmarkGlyph}${categoryEmoji}${card.label}${titleMeta ? `  ${titleMeta}` : ''}`
   const cardTitle = cardTitleFull.length > maxTitleWidth
@@ -6475,7 +6480,7 @@ function TranscriptCardInner({
         backgroundColor={cardBg}
         flexDirection="column"
         title={streamMode ? undefined : cardTitle}
-        titleColor={accent}
+        titleColor={streamMode ? undefined : cardTitleColor}
         onMouseDown={(event) => {
           if (event.button !== 0) return
           onSelectCard(card.key)
@@ -20078,6 +20083,9 @@ export default function OpenTuiApp() {
     },
     [statusLabel, visibleTranscriptCards.length, cursorIndex, readerMode, themeMode, pendingNewCount, railVisible, width],
   )
+  const readerFrameTitle = transcriptView === 'stream'
+    ? joinMeta(['STREAM', headerStatusRight])
+    : headerStatusRight
   const readerContextMeta = useMemo(
     () => fitText(
       joinMeta([
@@ -20686,7 +20694,7 @@ export default function OpenTuiApp() {
                 : theme.border}
             backgroundColor={theme.surface}
             flexDirection="column"
-            title={fullscreenMode || isChatLikeView || embeddedComposer ? undefined : headerStatusRight}
+            title={fullscreenMode || embeddedComposer ? undefined : readerFrameTitle}
             titleColor={providerAccent}
           >
           {fullscreenMode ? (
@@ -20714,7 +20722,7 @@ export default function OpenTuiApp() {
                 <text fg={theme.muted} wrapMode="none">
                   {fitText(showTabs
                     ? `${TRANSCRIPT_VIEW_LABELS[transcriptView]} · ${followTail ? 'Following latest' : 'Reading history'}`
-                    : readerTitle, Math.max(rightPaneWidth - readerContextMeta.length - 10, 12))}
+                    : `${TRANSCRIPT_VIEW_LABELS[transcriptView]} · ${readerTitle}`, Math.max(rightPaneWidth - readerContextMeta.length - 10, 12))}
                 </text>
               </box>
               <box width={readerContextMeta.length} overflow="hidden">
