@@ -2927,12 +2927,22 @@ export function createClaudeTurnUsageTracker(enqueue: (chunk: string) => void) {
   }
 }
 
-function createClaudeDeltaCoalescer(enqueue: (chunk: string) => void) {
+// Coalescing is for render cost, not for holding text back: without a timed
+// flush a reply under the spill size appeared only when its block ended, so
+// short and medium answers did not stream at all.
+const CLAUDE_DELTA_FLUSH_MS = 40
+
+export function createClaudeDeltaCoalescer(enqueue: (chunk: string) => void) {
   let pending: SDKMessage | null = null
   let pendingKey: { index: number; kind: 'text_delta' | 'thinking_delta'; text: string } | null = null
+  let flushTimer: ReturnType<typeof setTimeout> | null = null
   const trackTurnUsage = createClaudeTurnUsageTracker(enqueue)
 
   const flush = () => {
+    if (flushTimer) {
+      clearTimeout(flushTimer)
+      flushTimer = null
+    }
     if (!pending) return
     const msg = pending
     pending = null
@@ -2954,6 +2964,7 @@ function createClaudeDeltaCoalescer(enqueue: (chunk: string) => void) {
       flush()
       pending = msg
       pendingKey = key
+      scheduleFlush()
       return
     }
     const mergedText = pendingKey.text + key.text
@@ -2969,14 +2980,22 @@ function createClaudeDeltaCoalescer(enqueue: (chunk: string) => void) {
           : { ...pendingDelta, thinking: mergedText },
       },
     } as unknown as SDKMessage
-    if (mergedText.length >= CLAUDE_DELTA_SPILL_CHARS) {
-      pending = null
-      pendingKey = null
-      enqueue(`data: ${JSON.stringify(merged)}\n\n`)
-      return
-    }
     pending = merged
     pendingKey = { ...key, text: mergedText }
+    if (mergedText.length >= CLAUDE_DELTA_SPILL_CHARS) {
+      flush()
+      return
+    }
+    scheduleFlush()
+  }
+
+  const scheduleFlush = () => {
+    if (flushTimer) return
+    flushTimer = setTimeout(() => {
+      flushTimer = null
+      // The downstream may have closed between scheduling and firing.
+      try { flush() } catch { /* stream already closed */ }
+    }, CLAUDE_DELTA_FLUSH_MS)
   }
 
   return { emit, flush }
@@ -5691,10 +5710,18 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
       // uninterrupted stream still flushes periodically. Any other event is
       // an interaction boundary and flushes the pending delta first.
       const PI_DELTA_SPILL_CHARS = 4000
+      // Without a timed flush a prose-only reply showed nothing until it ended
+      // (one update at 3.9s, the rest at 11.3s) — see DELTA_FLUSH_MS for Codex.
+      const PI_DELTA_FLUSH_MS = 40
       const PI_DELTA_SUBTYPES = new Set(['text_delta', 'thinking_delta', 'toolcall_delta'])
       let pendingPiDelta: { type: 'message_update'; message: PiAgentMessage; assistantMessageEvent: Record<string, unknown> } | null = null
+      let piDeltaFlushTimer: ReturnType<typeof setTimeout> | null = null
 
       const flushPendingPiDelta = () => {
+        if (piDeltaFlushTimer) {
+          clearTimeout(piDeltaFlushTimer)
+          piDeltaFlushTimer = null
+        }
         if (!pendingPiDelta) return
         const event = pendingPiDelta
         pendingPiDelta = null
@@ -5721,16 +5748,18 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
         if (!pendingPiDelta || pendingSub?.type !== subType || pendingSub?.contentIndex !== lightSubEvent.contentIndex) {
           flushPendingPiDelta()
           pendingPiDelta = { type: 'message_update', message: event.message, assistantMessageEvent: lightSubEvent }
+          piDeltaFlushTimer ??= setTimeout(flushPendingPiDelta, PI_DELTA_FLUSH_MS)
           return
         }
         const mergedDelta = `${String(pendingSub.delta ?? '')}${lightSubEvent.delta}`
         const merged = { type: 'message_update' as const, message: event.message, assistantMessageEvent: { ...lightSubEvent, delta: mergedDelta } }
         if (mergedDelta.length >= PI_DELTA_SPILL_CHARS) {
-          pendingPiDelta = null
-          safeEnqueue(`data: ${JSON.stringify({ type: 'pi_event', event: merged })}\n\n`)
+          pendingPiDelta = merged
+          flushPendingPiDelta()
           return
         }
         pendingPiDelta = merged
+        piDeltaFlushTimer ??= setTimeout(flushPendingPiDelta, PI_DELTA_FLUSH_MS)
       }
 
       try {

@@ -336,11 +336,14 @@ export function createOpenCode2Clients(options: { baseUrl: string; headers?: Rec
     global: { event: eventStream(translate, true) },
     app: {
       async agents(input: unknown) {
-        const agents = listOf<{ name: string; description?: string; mode?: string; hidden?: boolean }>(
+        const agents = listOf<{ id?: string; name: string; description?: string; mode?: string; hidden?: boolean }>(
           await v2.agent.list(locationInput(query<{ directory?: string }>(input).directory) as never),
         )
         return agents.map((agent): OpenCodeAgent => ({
-          name: agent.name,
+          // v1's `name` is the identifier every call takes; v2 split it into
+          // `id` ("build") and a display `name` ("Build"), and sending the
+          // display name back fails the turn with `Agent not found: "Build"`.
+          name: agent.id ?? agent.name,
           ...(agent.description ? { description: agent.description } : {}),
           mode: (agent.mode ?? 'primary') as OpenCodeAgent['mode'],
           builtIn: false,

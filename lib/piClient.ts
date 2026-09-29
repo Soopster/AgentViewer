@@ -338,11 +338,24 @@ async function readPiSessionEntriesAtPath(sessionId: string, sessionPath: string
 }
 
 async function readPiSessionEntries(sessionId: string): Promise<SessionEntry[]> {
+  // A pooled session's in-memory branch is not always the newest record. A
+  // pool entry in an isolate that only reads (the TUI's transcript worker opens
+  // one for composer options) never sees turns another isolate appends: its
+  // branch froze at open, so every follow-up "never landed" and the composer
+  // sat in Syncing until the escape hatch. But the pool also holds what is not
+  // on disk yet (a turn streaming now; a new session whose file does not exist
+  // until its first flush). The branch is append-only, so the longer of the
+  // two is the newer; the file read is stat-gated and cached.
   const pooled = piSessionPool.get(sessionId)
   if (pooled) {
     pooled.lastUsed = Date.now()
     schedulePiEviction(sessionId)
-    return pooled.session.sessionManager.getBranch()
+    const pooledBranch = pooled.session.sessionManager.getBranch()
+    if (pooled.session.isStreaming) return pooledBranch
+    const onDisk = await resolvePiSessionPath(sessionId)
+      .then((sessionPath) => readPiSessionEntriesAtPath(sessionId, sessionPath))
+      .catch(() => null)
+    return onDisk && onDisk.length > pooledBranch.length ? onDisk : pooledBranch
   }
 
   for (let attempt = 0; attempt < 2; attempt += 1) {

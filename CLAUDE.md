@@ -473,12 +473,32 @@ it against the native CLI (see the composer flow harness in memory).
   input row and an output row, both user-role.
 - **The overlay drop and the persisted detail commit in one transition**, or the
   reply blinks out for a frame between them.
-- **Codex deltas flush on a timer** (`DELTA_FLUSH_MS`). The coalescer only flushed
-  on a non-delta event or 4000 buffered chars, so plain prose appeared all at once
-  when the item completed (18s of a 300-line answer, then everything).
+- **Every delta coalescer flushes on a timer** (Claude `CLAUDE_DELTA_FLUSH_MS`,
+  Codex `DELTA_FLUSH_MS`, Pi `PI_DELTA_FLUSH_MS`; OpenCode's harness already had
+  one). They only flushed on a non-delta event or 4000 buffered chars, so a reply
+  shorter than that appeared all at once when its block ended — Codex showed
+  nothing for 18s of a 300-line answer. Coalescing is for render cost, never for
+  holding text back. `claudeDeltaFlushSmoke.ts` pins Claude's.
+- **Whatever error follows our own abort is the interrupt.** Claude answers an
+  interrupt with an error frame for the cut-off turn, which can land before the
+  abort does; handled as a failure it restored the old prompt and reattached to
+  the dying turn, so the next prompt waited ~30s. The catch checks
+  `controller.signal.aborted` first.
+- **An `error` frame is the turn's outcome, not a lost stream.** The registry can
+  still list the turn while it tears down; treating the error as a dropped stream
+  "reattached" and hid the reason (OpenCode's `Agent not found`) behind a turn that
+  then produced nothing.
+- **OpenCode 2 agents are sent by `id`** ("build"), never the display `name`
+  ("Build") — v1's `name` was the identifier (`opencode2Client.ts`).
+- **A pooled Pi session is not automatically the newest record.** A pool entry in
+  a read-only isolate (the transcript worker opens one for composer options) froze
+  at open and never saw turns the main isolate appended, so every Pi follow-up sat
+  in Syncing for 12s. Reads take the pooled branch while it streams, otherwise the
+  longer of it and the file (the branch is append-only; a new session has no file
+  until its first flush).
 - **User command output is conversation, not operational chrome.** `!command`
-  output (Claude `bash-output` frame, Codex `source: 'userShell'` items mapped to
-  bash-mode rows) and Claude local slash-command output render inline like the
+  output (Claude `bash-output` frame; Codex `source: 'userShell'` items, OpenCode 2
+  `shell` messages and Pi `bashExecution` records all mapped to two bash-mode rows) and Claude local slash-command output render inline like the
   native CLIs. Claude persists local-command output as a system row the SDK
   returns *without content*, so `/context`'s output is kept from the stream's
   `<synthetic>` assistant frame (`localCommandOutputs`) until that session's next

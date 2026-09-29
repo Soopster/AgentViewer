@@ -320,6 +320,10 @@ function toV1UserInfo(params: {
   }
 }
 
+function escapeBashTag(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
 /**
  * Turn a v2 message list (oldest first) into v1 `{ info, parts }` bundles.
  *
@@ -403,31 +407,36 @@ export function toV1MessageBundles(
         break
       }
       case 'shell': {
-        // `!command` — v1 recorded it as an assistant turn holding one bash
-        // tool call, which is what the bash card renders.
-        const completed = message.time.completed ?? message.time.created
+        // A user `!command`. v1 recorded it as an assistant turn holding one
+        // bash call, which renders as a folded agent tool card; it is the
+        // user's own shell, so it maps to the bash-mode rows Claude and Codex
+        // use (command, then output, both shown). Two rows, as those write
+        // them: a finished turn with no reply settles on two new rows.
         const output = message.output?.output ?? ''
+        const created = message.time.created
         bundles.push({
-          info: toV1AssistantInfo({
-            sessionId: context.sessionId,
-            messageId: message.id,
-            agent,
-            model,
-            created: message.time.created,
-            completed,
-            cwd: context.cwd,
-          }),
-          parts: [toV1ToolPart({
-            sessionId: context.sessionId,
-            messageId: message.id,
-            callId: message.id,
-            name: 'shell',
-            state: message.status === 'running'
-              ? { status: 'running', input: { command: message.command ?? '' } }
-              : { status: 'completed', input: { command: message.command ?? '' }, content: [{ type: 'text', text: output }] },
-            time: { created: message.time.created, completed },
-          })],
+          info: toV1UserInfo({ sessionId: context.sessionId, messageId: message.id, created, agent, model }),
+          parts: [{
+            id: textPartId(message.id, 0),
+            sessionID: context.sessionId,
+            messageID: message.id,
+            type: 'text',
+            text: `<bash-input>${escapeBashTag(message.command ?? '')}</bash-input>`,
+          }],
         })
+        if (message.status !== 'running') {
+          const outputId = `${message.id}:output`
+          bundles.push({
+            info: toV1UserInfo({ sessionId: context.sessionId, messageId: outputId, created: message.time.completed ?? created, agent, model }),
+            parts: [{
+              id: textPartId(outputId, 0),
+              sessionID: context.sessionId,
+              messageID: outputId,
+              type: 'text',
+              text: `<bash-stdout>${escapeBashTag(output.trimEnd())}</bash-stdout><bash-stderr></bash-stderr>`,
+            }],
+          })
+        }
         break
       }
       case 'compaction': {

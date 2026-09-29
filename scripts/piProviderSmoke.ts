@@ -279,12 +279,10 @@ try {
     assert.equal(piSessionOperationCount(), 0, 'direct Pi shell turns must release the turn reservation')
   }
   const afterShellMessages = await listViewSessionMessages(sourceId, { offset: 0, limit: 50 }, 'pi')
+  // A `!command` persists as bash-mode rows; count the input rows.
   const persistedShellEntries = afterShellMessages.filter((message) => {
     const content = (message.message as { content?: unknown }).content
-    return Array.isArray(content) && content.some((block) => (
-      typeof block === 'object' && block !== null && 'type' in block && block.type === 'tool_use'
-      && 'name' in block && block.name === 'bash'
-    ))
+    return typeof content === 'string' && content.startsWith('<bash-input>')
   })
   assert.equal(persistedShellEntries.length, 2, 'identical direct shell commands must persist as distinct entries')
   assert.notEqual(persistedShellEntries[0].uuid, persistedShellEntries[1].uuid)

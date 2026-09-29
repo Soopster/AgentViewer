@@ -153,6 +153,10 @@ export function piAgentMessageDuplicateKey(message: AgentMessage): string {
   return piAgentMessageFingerprint(message)
 }
 
+function escapeBashTag(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
 function mapSingleMessage(
   sessionId: string,
   msg: AgentMessage,
@@ -239,49 +243,30 @@ function mapSingleMessage(
       }]
     }
     case 'bashExecution': {
+      // A user `!`/`!!` command (the agent's own bash is a tool call). It is
+      // the user's shell, so it renders as Claude Code's bash mode does — the
+      // command, then its output, both shown — rather than as a folded agent
+      // tool card. Status that is not output goes in the stderr slot.
       const be = msg as { role: 'bashExecution'; command: string; output: string; exitCode: number | undefined; cancelled: boolean; truncated: boolean; fullOutputPath?: string; timestamp: number; excludeFromContext?: boolean }
-      const bashToolId = `bash-${providerMessageId ?? index}`
-      const output = be.output ? `\n${be.output}` : ''
-      const exitLabel = be.cancelled ? ' (cancelled)' : be.exitCode !== undefined ? ` (exit ${be.exitCode})` : ''
-      const contextLabel = be.excludeFromContext ? ' [excluded from context]' : ''
-      const truncatedNote = be.truncated
-        ? `\n[output truncated${be.fullOutputPath ? ` — full output: ${be.fullOutputPath}` : ''}]`
-        : ''
-      return [{
-        type: 'assistant',
-        uuid: `${uuid}-bash`,
-        session_id: sessionId,
-        parent_tool_use_id: null,
-        provider: 'pi',
-        timestamp: ts,
-        providerMessageId,
-        message: {
-          role: 'assistant',
-          content: [{
-            type: 'tool_use',
-            id: bashToolId,
-            name: 'bash',
-            input: { command: be.command, excludeFromContext: be.excludeFromContext || undefined },
-          }],
-        },
-      }, {
+      const notes = [
+        be.truncated ? `[output truncated${be.fullOutputPath ? ` — full output: ${be.fullOutputPath}` : ''}]` : '',
+        be.cancelled ? 'Cancelled' : be.exitCode !== undefined && be.exitCode !== 0 ? `Exit code ${be.exitCode}` : '',
+        be.excludeFromContext ? '[excluded from context]' : '',
+      ].filter(Boolean).join('\n')
+      const row = (suffix: string, content: string): SessionMessage => ({
         type: 'user',
-        uuid: `${uuid}-bash-result`,
+        uuid: `${uuid}${suffix}`,
         session_id: sessionId,
         parent_tool_use_id: null,
         provider: 'pi',
         timestamp: ts,
         providerMessageId,
-        message: {
-          role: 'user',
-          content: [{
-            type: 'tool_result',
-            tool_use_id: bashToolId,
-            content: `$ ${be.command}${contextLabel}${output}${truncatedNote}${exitLabel}`,
-            is_error: be.cancelled || (be.exitCode !== undefined && be.exitCode !== 0) || undefined,
-          }],
-        },
-      }]
+        message: { role: 'user', content },
+      })
+      return [
+        row('-bash', `<bash-input>${escapeBashTag(be.command)}</bash-input>`),
+        row('-bash-result', `<bash-stdout>${escapeBashTag((be.output ?? '').trimEnd())}</bash-stdout><bash-stderr>${escapeBashTag(notes)}</bash-stderr>`),
+      ]
     }
     case 'branchSummary': {
       const bs = msg as { role: 'branchSummary'; summary: string; fromId: string; timestamp: number }

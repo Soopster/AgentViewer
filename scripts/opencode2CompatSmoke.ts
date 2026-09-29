@@ -67,8 +67,8 @@ const HISTORY: V2Message[] = [
 const bundles = toV1MessageBundles(HISTORY, { sessionId: SESSION })
 assert.deepEqual(
   bundles.map((bundle) => bundle.info.role),
-  ['user', 'assistant', 'user', 'assistant'],
-  'a v2 transcript maps to user/assistant bundles; idle, model-switched and system carry no turn of their own',
+  ['user', 'assistant', 'user', 'user', 'user'],
+  'a v2 transcript maps to user/assistant bundles (a `!command` to two bash-mode user rows); idle, model-switched and system carry no turn of their own',
 )
 
 const assistant = bundles[1]!
@@ -92,13 +92,14 @@ assert.deepEqual(
 const syntheticBundle = bundles[2]!
 assert.equal((syntheticBundle.parts[0] as { synthetic?: boolean }).synthetic, true)
 
-// `!command` was an assistant turn holding a bash call in v1, and stays one.
-const shellBundle = bundles[3]!
-assert.equal(shellBundle.info.role, 'assistant')
-assert.deepEqual(
-  shellBundle.parts.map((part) => (part as { tool?: string }).tool),
-  ['bash'],
-)
+// `!command` is the user's own shell: bash-mode rows (command, then output),
+// shown like Claude's and Codex's rather than folded as an agent tool call.
+const shellInput = bundles[3]!
+const shellOutput = bundles[4]!
+assert.equal(shellInput.info.role, 'user')
+assert.equal((shellInput.parts[0] as { text?: string }).text, '<bash-input>npm run build</bash-input>')
+assert.equal(shellOutput.info.role, 'user')
+assert.equal((shellOutput.parts[0] as { text?: string }).text, '<bash-stdout>built</bash-stdout><bash-stderr></bash-stderr>')
 
 // The existing mapper has to accept the result unchanged — this is the whole
 // point of translating at the client boundary.
@@ -107,7 +108,7 @@ const toolNames = mapped.flatMap((message) =>
   Array.isArray(message.message.content)
     ? message.message.content.filter((block) => block.type === 'tool_use').map((block) => (block as { name: string }).name)
     : [])
-assert.deepEqual(toolNames, ['bash', 'write', 'bash'])
+assert.deepEqual(toolNames, ['bash', 'write'])
 
 // ── Sessions: what a 2.x server cannot do ───────────────────────────────────
 

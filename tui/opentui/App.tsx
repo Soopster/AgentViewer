@@ -14934,7 +14934,12 @@ export default function OpenTuiApp() {
         }
       }
     } catch (err) {
-      if (err instanceof Error && err.name === 'AbortError') {
+      // An interrupt aborts this controller, but the provider's reaction (Claude
+      // sends an error frame for the cut-off turn) can land before the abort
+      // does. Whatever error follows our own abort is the interrupt, not a
+      // failed turn — treating it as one restored the old prompt and reattached
+      // to the dying turn, delaying the next prompt ~30s.
+      if ((err instanceof Error && err.name === 'AbortError') || controller.signal.aborted) {
         // Confirmed interrupt: cancelComposerSend already moved us into the
         // awaitingPersistedTurn reconcile and wants the partial output kept.
         // Don't tear it down here — just clean up the live-text frame plumbing.
@@ -14998,13 +15003,19 @@ export default function OpenTuiApp() {
       // the detail poll reconciles them once persisted rows land. Queued sends
       // stay armed; the queue flush is gated on reattachedRunning.
       // A pending session's turn registers under the id it was sent with, so
-      // its first turn is probed like any other.
+      // its first turn is probed like any other. An error the server sent as a
+      // frame is the turn's own outcome, not a lost stream: the registry can
+      // still list the turn for a moment while it tears down, and "reattaching"
+      // there hid the reason (`Agent not found`) behind a turn that then
+      // quietly produced nothing.
       let turnStillRunning = false
-      try {
-        turnStillRunning = (await listTuiRunningSessions()).some((entry) =>
-          entry.sessionId === targetSession.sessionId
-          && entry.provider === (targetSession.provider ?? 'claude'))
-      } catch { /* registry probe is best-effort */ }
+      if (!(err instanceof TransientAwareSendError)) {
+        try {
+          turnStillRunning = (await listTuiRunningSessions()).some((entry) =>
+            entry.sessionId === targetSession.sessionId
+            && entry.provider === (targetSession.provider ?? 'claude'))
+        } catch { /* registry probe is best-effort */ }
+      }
       if (turnStillRunning) {
         setComposerSendState('idle')
         setComposerError(null)

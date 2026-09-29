@@ -75,15 +75,11 @@ function bashDeltas(frames: Frame[]): Frame[] {
 async function latestBashCard(sessionId: string): Promise<string> {
   const messages = await listViewSessionMessages(sessionId, { limit: 200, offset: 0 }, 'pi')
   const cards: string[] = []
+  // A `!command` persists as bash-mode rows: the output row carries
+  // <bash-stdout> plus status (exit, truncation, cancellation) in <bash-stderr>.
   for (const message of messages) {
     const content = (message.message as { content?: unknown }).content
-    if (!Array.isArray(content)) continue
-    for (const block of content) {
-      const record = block as { type?: string; content?: unknown }
-      if (record.type === 'tool_result' && typeof record.content === 'string' && record.content.startsWith('$ ')) {
-        cards.push(record.content)
-      }
-    }
+    if (typeof content === 'string' && content.includes('<bash-stdout>')) cards.push(content)
   }
   assert.ok(cards.length > 0, 'transcript has a bash card')
   return cards[cards.length - 1]!
@@ -111,7 +107,7 @@ try {
   assert.ok(gapMs >= 500, `expected streamed gap >=500ms across sleep, got ${gapMs}ms`)
   const firstCard = await latestBashCard(first.sessionId!)
   assert.ok(firstCard.includes('first-chunk'), 'persisted card has output')
-  assert.ok(firstCard.includes('(exit 0)'), 'persisted card has exit code')
+  assert.ok(!firstCard.includes('Exit code'), 'a clean exit adds no status')
   console.log(`[pi-bash-smoke] streaming ok (${firstDeltas.length} deltas, ${gapMs}ms gap)`)
 
   // 2) Truncation: >100KB of output must persist truncated with the
@@ -124,7 +120,6 @@ try {
   })
   const secondCard = await latestBashCard(first.sessionId!)
   assert.ok(secondCard.includes('[output truncated — full output: '), 'truncated card names fullOutputPath')
-  assert.ok(secondCard.includes('(exit 0)'), 'truncated card still reports exit code')
   assert.ok(bashDeltas(second.frames).length >= 1, 'truncated run still streamed deltas')
   console.log('[pi-bash-smoke] truncation + fullOutputPath ok')
 
@@ -142,7 +137,7 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 1500))
   const thirdCard = await latestBashCard(first.sessionId!)
   assert.ok(thirdCard.includes('before-cancel'), 'cancelled card kept streamed output')
-  assert.ok(thirdCard.includes('(cancelled)'), 'cancelled card labelled')
+  assert.ok(thirdCard.includes('Cancelled'), 'cancelled card labelled')
   console.log('[pi-bash-smoke] cancellation ok')
 
   console.log('[pi-bash-smoke] all checks passed')
