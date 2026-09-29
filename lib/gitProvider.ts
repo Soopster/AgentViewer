@@ -14,6 +14,15 @@ export type GitData = {
   staged: string
   branches: string[]
   commits: string[]
+  commitGraph: GitCommit[]
+}
+
+export type GitCommit = {
+  sha: string
+  shortSha: string
+  subject: string
+  parents: string[]
+  graph: string
 }
 
 export type GitSummary = {
@@ -59,6 +68,7 @@ export type GitDiffSource =
   | { kind: 'working' }
   | { kind: 'branch' }
   | { kind: 'turn'; sha: string }
+  | { kind: 'commit-range'; base: string; head: string }
 
 export type GitTurnRef = {
   sha: string
@@ -67,9 +77,11 @@ export type GitTurnRef = {
   sessionId?: string
 }
 
-export function parseGitDiffSource(kind: unknown, sha: unknown): GitDiffSource {
+export function parseGitDiffSource(kind: unknown, sha: unknown, base?: unknown, head?: unknown): GitDiffSource {
   if (kind === 'branch') return { kind: 'branch' }
   if (kind === 'turn' && typeof sha === 'string' && /^[0-9a-f]{7,64}$/.test(sha)) return { kind: 'turn', sha }
+  if (kind === 'commit-range' && typeof base === 'string' && /^[0-9a-f]{7,64}$/.test(base)
+    && typeof head === 'string' && /^[0-9a-f]{7,64}$/.test(head)) return { kind: 'commit-range', base, head }
   return { kind: 'working' }
 }
 
@@ -203,12 +215,13 @@ async function fetchReviewPatch(cwd: string, runGit: GitCommandRunner, entry: Gi
 export async function fetchGitData(cwd: string, runGit: GitCommandRunner): Promise<GitData> {
   // Full working-tree diffs are deferred to the per-pane loader so opening the
   // popover stays responsive on large repositories and slower platforms.
-  const [branch, upstreamRaw, statusRaw, branchesRaw, commitsRaw] = await Promise.all([
+  const [branch, upstreamRaw, statusRaw, branchesRaw, commitsRaw, graphRaw] = await Promise.all([
     runGit(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']),
     runGit(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']),
     runGit(cwd, ['status', '--porcelain', '-u']),
     runGit(cwd, ['branch', '-a', '--format=%(refname:short)']),
-    runGit(cwd, ['log', '--oneline', '-30']),
+    runGit(cwd, ['log', '--format=%H%x09%h%x09%s%x09%P', '-30']),
+    runGit(cwd, ['log', '--graph', '--oneline', '--decorate', '-30']),
   ])
 
   const upstream = upstreamRaw.startsWith('fatal') ? null : upstreamRaw || null
@@ -228,7 +241,17 @@ export async function fetchGitData(cwd: string, runGit: GitCommandRunner): Promi
     unstaged: '',
     staged: '',
     branches: branchesRaw ? branchesRaw.split('\n').filter(Boolean) : [],
-    commits: commitsRaw ? commitsRaw.split('\n').filter(Boolean) : [],
+    commits: commitsRaw ? commitsRaw.split('\n').filter(Boolean).map((line) => {
+      const [sha, shortSha, subject] = line.split('\t')
+      return `${shortSha || sha || ''} ${subject ?? ''}`.trim()
+    }) : [],
+    commitGraph: commitsRaw ? commitsRaw.split('\n').filter(Boolean).flatMap((line): GitCommit[] => {
+      const [sha, shortSha, subject, parents = ''] = line.split('\t')
+      if (!sha || !shortSha) return []
+      const graphLine = graphRaw.split('\n').find((candidate) => candidate.includes(shortSha)) ?? ''
+      const graph = graphLine.match(/^([ |/\\*._-]*)([0-9a-f]{7,40})\b/)?.[1]?.trimEnd() ?? '*'
+      return [{ sha, shortSha, subject: subject ?? '', parents: parents ? parents.split(' ') : [], graph }]
+    }) : [],
   }
 }
 

@@ -16,6 +16,7 @@ export type DiffSourceSelection =
   | { kind: 'branch' }
   | { kind: 'latest' }
   | { kind: 'turn'; sha: string }
+  | { kind: 'commit-range'; base: string; head: string }
 
 /** Turns are listed newest first; numbering counts up from the oldest so a
  *  turn keeps its number as newer ones arrive. */
@@ -29,6 +30,7 @@ export function turnNumber(turns: GitTurnRef[], index: number): number {
 export function resolveDiffSource(selection: DiffSourceSelection, turns: GitTurnRef[]): GitDiffSource {
   if (selection.kind === 'branch') return { kind: 'branch' }
   if (selection.kind === 'turn') return { kind: 'turn', sha: selection.sha }
+  if (selection.kind === 'commit-range') return selection
   if (selection.kind === 'latest') {
     const latest = turns[0]
     return latest ? { kind: 'turn', sha: latest.sha } : { kind: 'working' }
@@ -38,10 +40,11 @@ export function resolveDiffSource(selection: DiffSourceSelection, turns: GitTurn
 
 /** Identity of a source, for comparing one read's source against the next. */
 export function diffSourceKey(source: GitDiffSource): string {
-  return source.kind === 'turn' ? `turn:${source.sha}` : source.kind
+  return source.kind === 'turn' ? `turn:${source.sha}` : source.kind === 'commit-range' ? `commit-range:${source.base}..${source.head}` : source.kind
 }
 
 export function diffSourceLabel(selection: DiffSourceSelection, turns: GitTurnRef[]): string {
+  if (selection.kind === 'commit-range') return `Commit range ${selection.base.slice(0, 7)}..${selection.head.slice(0, 7)}`
   if (selection.kind === 'branch') return 'Branch changes'
   if (selection.kind === 'latest') return 'Latest turn'
   if (selection.kind === 'turn') {
@@ -89,5 +92,7 @@ export function turnMenuItems(turns: GitTurnRef[]): DiffSourceMenuItem[] {
 
 export function isSameSelection(left: DiffSourceSelection, right: DiffSourceSelection): boolean {
   if (left.kind !== right.kind) return false
-  return left.kind === 'turn' && right.kind === 'turn' ? left.sha === right.sha : true
+  if (left.kind === 'turn' && right.kind === 'turn') return left.sha === right.sha
+  if (left.kind === 'commit-range' && right.kind === 'commit-range') return left.base === right.base && left.head === right.head
+  return true
 }

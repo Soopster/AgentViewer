@@ -129,6 +129,7 @@ async function fetchGitData(cwd: string, source: GitDiffSource): Promise<GitData
       staged: '',
       branches: [],
       commits: [],
+      commitGraph: [],
     }
   }
 }

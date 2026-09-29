@@ -34,7 +34,7 @@ export async function GET(request: NextRequest) {
       const data = await fetchGitData(cwd, runGitCommand)
       // A non-working source replaces the file list only: branch, upstream and
       // the commit/branch panes describe the repository, not the change set.
-      const source = parseGitDiffSource(searchParams.get('source'), searchParams.get('sha'))
+      const source = parseGitDiffSource(searchParams.get('source'), searchParams.get('sha'), searchParams.get('base'), searchParams.get('head'))
       if (source.kind === 'working') return NextResponse.json({ data })
       return NextResponse.json({ data: { ...data, status: await fetchSourceStatus(cwd, runGitCommand, source) } })
     }

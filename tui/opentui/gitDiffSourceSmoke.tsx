@@ -30,7 +30,7 @@ function press(name: string, sequence = name): Key {
 async function flushEffects(setup: Awaited<ReturnType<typeof testRender>>) {
   await act(async () => {
     await setup.flush()
-    await new Promise((resolve) => setTimeout(resolve, 300))
+    await new Promise((resolve) => setTimeout(resolve, 700))
   })
   await setup.flush()
 }

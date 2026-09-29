@@ -20,7 +20,7 @@ export const reviewOperationSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('navigate'), viewId: id, target: reviewTargetSchema, revision: id }),
   z.object({ type: z.literal('ack'), viewId: id, navigationId: id }),
 ])
-export const reviewSourceSchema = z.string().regex(/^(working|branch|turn:[0-9a-f]{7,64}|pr:[1-9][0-9]*|snapshot:[a-zA-Z0-9_-]{1,160})$/)
+export const reviewSourceSchema = z.string().regex(/^(working|branch|turn:[0-9a-f]{7,64}|commit-range:[0-9a-f]{7,64}\.\.[0-9a-f]{7,64}|pr:[1-9][0-9]*|snapshot:[a-zA-Z0-9_-]{1,160})$/)
 export const reviewRequestSchema = z.object({
   cwd: filePath, source: reviewSourceSchema, requestId: id,
   operation: reviewOperationSchema.optional(),

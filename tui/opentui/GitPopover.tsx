@@ -531,6 +531,7 @@ const LEFT_PANE_DEFAULT_MAX_WIDTH = 40
 const LEFT_PANE_RIGHT_MIN_WIDTH = 44
 const LEFT_PANE_EXPANDED_RATIO = 0.5
 const LEFT_PANE_RESIZE_STEP = 4
+const EMPTY_TREE_SHA = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
 
 type Props = {
   cwd?: string | null
@@ -594,6 +595,8 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set())
   const [branchIndex, setBranchIndex] = useState(0)
   const [commitIndex, setCommitIndex] = useState(0)
+  const [commitRangeAnchorIndex, setCommitRangeAnchorIndex] = useState<number | null>(null)
+  const [watching, setWatching] = useState(false)
   const [sourceSelection, setSourceSelection] = useState<DiffSourceSelection>({ kind: 'working' })
   const [turns, setTurns] = useState<GitTurnRef[]>([])
   const [turnsScoped, setTurnsScoped] = useState(false)
@@ -611,6 +614,9 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
   const branchesScrollRef = useRef<ScrollBoxRenderable>(null)
   const commitsScrollRef = useRef<ScrollBoxRenderable>(null)
   const rightContentRequestRef = useRef(0)
+  const refreshRequestRef = useRef(0)
+  const watchInFlightRef = useRef(false)
+  const watchSignatureRef = useRef('')
   const rightContentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Ref so handleKey can read rightDiffView without a circular dep issue
   const maxHorizontalOffsetRef = useRef(0)
@@ -635,6 +641,8 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
     [sourceSelection, turns],
   )
   const sourceKey = diffSourceKey(diffSource)
+  const activeSourceKeyRef = useRef(sourceKey)
+  useLayoutEffect(() => { activeSourceKeyRef.current = sourceKey }, [sourceKey])
   const noteScope = JSON.stringify([repoCwd, sourceKey])
   const reviewStateKey = tuiDiffReviewStorageKey(repoCwd, sourceKey)
   const reviewStateHydratedRef = useRef<string | null>(null)
@@ -673,6 +681,22 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
     return { ...next, status: await fetchSourceStatus(repoCwd, runGitCommand, source) }
   }, [repoCwd])
 
+  const refreshGitData = useCallback(async () => {
+    const requestId = ++refreshRequestRef.current
+    setLoading(true)
+    try {
+      const next = await loadGitData(diffSource)
+      if (requestId !== refreshRequestRef.current || activeSourceKeyRef.current !== sourceKey) return
+      setData(next)
+    } catch {
+      // Keep the last complete review visible when a transient Git read fails.
+    } finally {
+      if (requestId === refreshRequestRef.current) {
+        setLoading(false)
+      }
+    }
+  }, [diffSource, loadGitData, repoCwd, sourceKey])
+
   // Turn checkpoints are their own list: the menu needs them before a selection
   // can resolve, and they change only when an agent turn starts.
   useEffect(() => {
@@ -687,24 +711,41 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
     return () => { cancelled = true }
   }, [repoCwd, sessionId])
 
-  // Refresh on mount and whenever the diff source changes
+  // Refresh on mount and whenever the diff source changes.
   useEffect(() => {
-    let cancelled = false
-    setLoading(true)
     setData(null)
-    void loadGitData(diffSource)
-      .then((next) => {
-        if (!cancelled) setData(next)
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-
-    return () => {
-      cancelled = true
-    }
+    watchSignatureRef.current = ''
+    void refreshGitData()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sourceKey is diffSource's identity
-  }, [repoCwd, sourceKey, loadGitData])
+  }, [repoCwd, sourceKey, refreshGitData])
+
+  // Watching is opt-in and only runs while the review panel is mounted. The
+  // patch fingerprint catches edits to an already-changed file as well as
+  // changes to Git status, while setData is skipped for unchanged snapshots.
+  useEffect(() => {
+    if (!watching) return
+    let cancelled = false
+    const poll = async () => {
+      if (watchInFlightRef.current) return
+      watchInFlightRef.current = true
+      try {
+        const next = await loadGitData(diffSource)
+        const patch = await fetchGitReviewStream(repoCwd, runGitCommand, diffSource, next.status)
+        const signature = JSON.stringify([next.branch, next.upstream, next.ahead, next.behind, next.status, next.branches, next.commits, patch])
+        if (!cancelled && signature !== watchSignatureRef.current) {
+          watchSignatureRef.current = signature
+          setData(next)
+        }
+      } catch {
+        // A failed observation does not replace the last complete review.
+      } finally {
+        watchInFlightRef.current = false
+      }
+    }
+    void poll()
+    const timer = setInterval(() => { void poll() }, 2000)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [diffSource, loadGitData, repoCwd, watching])
 
   // When data loads, expand all dirs and place cursor on the first file node
   useEffect(() => {
@@ -995,7 +1036,10 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
 
     if (reviewActionKeyRef.current(key)) return
 
-    if (key.name === 'escape') { clearMouseCellSelection(); if (fileFilter) { setFileFilter(''); return }; onClose(); return }
+    if (key.name === 'escape') {
+      if (pane === 4 && commitRangeAnchorIndex !== null) { setCommitRangeAnchorIndex(null); return }
+      clearMouseCellSelection(); if (fileFilter) { setFileFilter(''); return }; onClose(); return
+    }
 
     if (key.sequence === 't') {
       const active = Math.max(0, sourceMenuItems.findIndex((item) => isSameSelection(item.selection, sourceSelection)))
@@ -1072,7 +1116,10 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
       const step = velocityScrollStep(scrollVelocityRef.current, 1, key, Math.max(1, Math.min(8, Math.floor((height - 6) / 3))))
       if (focusSide === 'left' && pane === 2) navigateTreeCursor((i) => Math.min(i + step, visibleNodes.length - 1))
       else if (focusSide === 'left' && pane === 3 && data) setBranchIndex((i) => Math.min(i + step, data.branches.length - 1))
-      else if (focusSide === 'left' && pane === 4 && data) setCommitIndex((i) => Math.min(i + step, data.commits.length - 1))
+      else if (focusSide === 'left' && pane === 4 && data) {
+        if (key.shift && commitRangeAnchorIndex === null) setCommitRangeAnchorIndex(commitIndex)
+        setCommitIndex((i) => Math.min(i + step, data.commits.length - 1))
+      }
       else {
         const rdv = rightDiffViewRef.current
         const totalRows = pane === 2 && fileDiffMode === 'viewer'
@@ -1097,7 +1144,10 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
       const step = velocityScrollStep(scrollVelocityRef.current, -1, key, Math.max(1, Math.min(8, Math.floor((height - 6) / 3))))
       if (focusSide === 'left' && pane === 2) navigateTreeCursor((i) => Math.max(i - step, 0))
       else if (focusSide === 'left' && pane === 3 && data) setBranchIndex((i) => Math.max(i - step, 0))
-      else if (focusSide === 'left' && pane === 4 && data) setCommitIndex((i) => Math.max(i - step, 0))
+      else if (focusSide === 'left' && pane === 4 && data) {
+        if (key.shift && commitRangeAnchorIndex === null) setCommitRangeAnchorIndex(commitIndex)
+        setCommitIndex((i) => Math.max(i - step, 0))
+      }
       else {
         const rdv = rightDiffViewRef.current
         const totalRows = pane === 2 && fileDiffMode === 'viewer'
@@ -1181,13 +1231,28 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
     if (key.name === 'd') { diffScrollRef.current?.scrollBy(10); return }
     if (key.name === 'u') { diffScrollRef.current?.scrollBy(-10); return }
     if (key.name === 'r') {
-      setLoading(true)
-      void loadGitData(diffSource)
-        .then((next) => setData(next))
-        .finally(() => setLoading(false))
+      void refreshGitData()
       void listGitTurnsForMenu(repoCwd, sessionId)
         .then((next) => { setTurns(next.turns); setTurnsScoped(next.scoped) })
         .catch(() => {})
+      return
+    }
+    if (key.sequence === 'W') { setWatching((value) => !value); return }
+    if (pane === 4 && focusSide === 'left' && key.sequence === 'v') {
+      setCommitRangeAnchorIndex((anchor) => anchor === null ? commitIndex : null)
+      return
+    }
+    if (pane === 4 && focusSide === 'left' && key.name === 'return' && data) {
+      const anchor = commitRangeAnchorIndex ?? commitIndex
+      const newer = data.commitGraph[Math.min(anchor, commitIndex)]
+      const older = data.commitGraph[Math.max(anchor, commitIndex)]
+      if (newer && older) {
+        setSourceSelection({ kind: 'commit-range', base: older.parents[0] ?? EMPTY_TREE_SHA, head: newer.sha })
+        setPane(2)
+        setFocusSide('left')
+        setFileDiffMode('viewer')
+        setCommitRangeAnchorIndex(null)
+      }
       return
     }
     if (key.name === 'v' && pane === 2) {
@@ -1263,8 +1328,8 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
       }))
       return
     }
-  }, [reviewBoardOpen, setDiffNotes, data, diffCursorRow, diffLayout, diffNotes, diffSelectionAnchorRow, draftNote, expandedDirs, fileDiffMode, focusSide,
-      height, leftPaneMode, onClose, onSendDiffNoteToComposer, pane, repoCwd, rightContent, showHunkHeaders, treeCursor, visibleNodes, sourceKey, diffSource, loadGitData, sessionId, sourceMenuItems, sourceSelection, setDiffNotes, contextExpansions, changeContext, fileFilter, openFileFilter, closeFileFilter])
+  }, [reviewBoardOpen, setDiffNotes, commitIndex, commitRangeAnchorIndex, data, diffCursorRow, diffLayout, diffNotes, diffSelectionAnchorRow, draftNote, expandedDirs, fileDiffMode, focusSide,
+      height, leftPaneMode, onClose, onSendDiffNoteToComposer, pane, repoCwd, rightContent, showHunkHeaders, treeCursor, visibleNodes, sourceKey, diffSource, refreshGitData, sessionId, sourceMenuItems, sourceSelection, setDiffNotes, contextExpansions, changeContext, fileFilter, openFileFilter, closeFileFilter])
 
   // Register key handler with parent
   useEffect(() => {
@@ -1729,7 +1794,9 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
         {/* [4] Commits */}
         <box height={commitsH} flexDirection="column" backgroundColor={pane === 4 ? theme.surface2 : theme.surface}>
           <box paddingX={1} width={leftW - 2} backgroundColor={pane === 4 ? theme.cyan : 'transparent'} onMouseUp={(event) => activateMousePane(event, 4)}>
-            <text fg={pane === 4 ? theme.surface : theme.muted}>[4] Commits</text>
+            <text fg={pane === 4 ? theme.surface : theme.muted}>
+              {`[4] Commits${watching ? ' · LIVE' : ''}${pane === 4 ? ' · v range · ⇧j/k · ⏎' : ''}`}
+            </text>
           </box>
           <scrollbox
             ref={commitsScrollRef}
@@ -1742,12 +1809,15 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
               const spaceIdx = c.indexOf(' ')
               const hash = spaceIdx > 0 ? c.slice(0, spaceIdx) : c
               const msg = spaceIdx > 0 ? c.slice(spaceIdx + 1) : ''
+              const graph = data?.commitGraph[i]
+              const inRange = commitRangeAnchorIndex !== null && i >= Math.min(commitRangeAnchorIndex, commitIndex) && i <= Math.max(commitRangeAnchorIndex, commitIndex)
               return (
-                <box key={c} paddingX={1} flexDirection="row" backgroundColor={isSel ? theme.surface3 : 'transparent'} onMouseUp={(event) => {
+                <box key={c} paddingX={1} flexDirection="row" backgroundColor={inRange ? theme.surface3 : 'transparent'} onMouseUp={(event) => {
                   if (event.button !== 0) return
                   event.stopPropagation(); setPane(4); setFocusSide('left'); setCommitIndex(i)
                 }}>
-                  <text fg={theme.cyan} wrapMode="none">{isSel ? '▎' : ' '}</text>
+                  <text fg={isSel ? theme.cyan : theme.muted} wrapMode="none">{isSel ? '▎' : ' '}</text>
+                  <text fg={inRange ? theme.green : theme.cyan} wrapMode="none">{`${graph?.graph || '*'} `}</text>
                   <text fg={theme.amber} wrapMode="none">{hash} </text>
                   <text fg={isSel ? theme.text : theme.dim} wrapMode="none">
                     {msg.slice(0, leftW - hash.length - 6)}
@@ -1779,7 +1849,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
         <box paddingX={1} flexDirection="row" backgroundColor={theme.surface2}>
           {(() => {
             const groups: Array<[string, string]> = [
-              ['1-4', 'sections'], ['t', 'source'], ['[ ]', 'resize'], ['w', 'wide'], ['-', 'hide/show'],
+              ['1-4', 'sections'], ['t', 'source'], ['W', watching ? 'pause watch' : 'watch'], ['[ ]', 'resize'], ['w', 'wide'], ['-', 'hide/show'],
               ['j/k', 'move/fast'], ['h/l', 'fold'], ['⏎', 'toggle'], ['p', 'PRs'], ['r', 'refresh'], ['esc', 'close'],
             ]
             const segs: React.ReactNode[] = [

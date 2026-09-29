@@ -108,6 +108,9 @@ export async function fetchSourceStatus(
   runGit: GitCommandRunner,
   source: GitDiffSource,
 ): Promise<GitStatusEntry[]> {
+  if (source.kind === 'commit-range') {
+    return sortEntries(parseNameStatus(await runGit(cwd, ['diff', '--no-renames', '--name-status', source.base, source.head])))
+  }
   if (source.kind === 'turn') {
     const successor = await resolveTurnSuccessor(cwd, source.sha)
     if (successor) {
@@ -143,6 +146,11 @@ export async function fetchSourceDiff(
   source: GitDiffSource,
   filePath?: string | null,
 ): Promise<string> {
+  if (source.kind === 'commit-range') {
+    const args = ['diff', '--no-renames', source.base, source.head]
+    if (filePath) args.push('--', filePath)
+    return await runGit(cwd, args)
+  }
   if (source.kind === 'turn') {
     const successor = await resolveTurnSuccessor(cwd, source.sha)
     if (successor) {
