@@ -130,7 +130,7 @@ const COPILOT: ProviderComposerConfig = {
   placeholderIdle: 'How can Copilot help with this repo?',
   placeholderStreaming: 'Type a follow-up — Enter steers this turn or queues it safely',
   placeholderNoSession: 'Pick a Copilot session to send a message',
-  footerHintIdle: '⏎ send · ⇧⏎ newline · / commands · mode picker · ↑↓ history',
+  footerHintIdle: '⏎ send · ⇧⏎ newline · / commands · ! shell · mode picker · ↑↓ history',
   footerHintSending: 'Esc view transcript · ⌃C cancel · ⏎ steer/queue follow-up',
   sendVerb: 'Ask',
   examples: [

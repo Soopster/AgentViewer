@@ -10,6 +10,7 @@
 // `interactiveCoordinatorStore`, which is what lets the `memo` hold — a
 // coordinator refresh repaints these rows and nothing else.
 import { memo, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { CoordinatorResultReview } from './CoordinatorResultReview'
 import type { TuiThemePalette } from '../theme'
 import { getProviderAccent } from '../theme'
 import { formatProviderLabel } from '../format'
@@ -132,6 +133,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   )
   // Selection is by teammate id: the roster reorders by attention, and a
   // positional index would silently retarget `m` or `r` to whoever moved there.
+  const [resultTaskId, setResultTaskId] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [attentionIndex, setAttentionIndex] = useState(0)
   const [draft, setDraft] = useState<Draft | null>(null)
@@ -253,6 +255,11 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       setAttentionIndex(current => items.length ? (current + (key.name === ']' ? 1 : -1) + items.length) % items.length : 0)
       return
     }
+    if (key.name === 'v' && (!currentAttention || currentAttention.kind !== 'plan')) {
+      const taskId = currentAttention?.kind === 'result' ? currentAttention.taskId : snapshot?.tasks.filter(task => task.ownerAgentId === selected?.id && ['completed', 'failed', 'cancelled'].includes(task.status)).at(-1)?.id
+      if (taskId) setResultTaskId(taskId)
+      return
+    }
     if (currentAttention?.kind === 'result' && key.name === 's') { reviewInteractiveCoordinatorResult(currentAttention.id); return }
     if (currentAttention && !disabled) {
       if (currentAttention.kind === 'plan' && (key.name === 'a' || key.name === 'v')) {
@@ -345,7 +352,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   }, [act, busy, canLead, confirmOff, data, disabled, draft, enabled, locked, onNotice, onOpenSession, onWatchSessions,
       pending, recoveries, selected, teammates, clamped, snapshot, terminal, unconfirmedDelivery, currentAttention, items.length])
 
-  useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
+  useEffect(() => { if (!resultTaskId) onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady, resultTaskId])
 
   const popW = Math.min(width - 4, 96)
   // Height follows the content. A fixed 32 rows meant a small team — the
@@ -430,8 +437,8 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       : pending
         ? [['r', 'retry same request'], ['⏎', 'inspect'], ['e', 'edit after checking task history'], ['esc', 'close']]
         : !enabled
-          ? (teammates.length ? [['j/k', 'move'], ['⏎', 'open transcript'], ['o/O', 'watch'], ['e', 'new team'], ['esc', 'close']] : canLead ? [['e', 'enable coordinator'], ['esc', 'close']] : [['esc', 'close']])
-          : [['j/k', 'move'], ['⏎', 'open'], ['o/O', 'watch'], ['d', 'ask'], ['m', 'message'],
+          ? (teammates.length ? [['j/k', 'move'], ['⏎', 'open transcript'], ['o/O', 'watch'], ['v', 'result review'], ['e', 'new team'], ['esc', 'close']] : canLead ? [['e', 'enable coordinator'], ['esc', 'close']] : [['esc', 'close']])
+          : [['j/k', 'move'], ['⏎', 'open'], ['o/O', 'watch'], ['v', 'result review'], ['d', 'ask'], ['m', 'message'],
              ['r', 'resume'], ['i', 'interrupt'], ['p', `new: ${newTeammateProvider ? formatProviderLabel(newTeammateProvider) : 'same'}`], ['c', 'continuation'], ['w', 'worktrees'], ['l', `alerts ${state.notifications}`], ['x', 'turn off'], ['esc', 'close']]
   // Truncation is by whole entries, not mid-word: a hint cut to "x …" tells the
   // reader a key exists without saying which.
@@ -445,6 +452,8 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   while (visibleHints.length > 2 && footerWidth(visibleHints) > innerW) {
     visibleHints.splice(visibleHints.length - 2, 1)
   }
+
+  if (resultTaskId && session) return <CoordinatorResultReview key={`${session.provider}:${session.sessionId}:${resultTaskId}`} sessionId={session.sessionId} provider={session.provider} taskId={resultTaskId} theme={theme} width={width} height={height} onClose={() => setResultTaskId(null)} onNotice={onNotice} onKeyHandlerReady={onKeyHandlerReady} />
 
   return (
     <box
@@ -667,7 +676,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
 })
 
 function attentionHint(item: CoordinatorAttentionItem, disabled: boolean, items: number): string {
-  const action = item.kind === 'result' ? 's mark reviewed'
+  const action = item.kind === 'result' ? 'v review result · s mark reviewed'
     : disabled ? ''
     : item.kind === 'plan' ? 'a approve plan · v request revision'
     : ['decision', 'message', 'blocker'].includes(item.kind) ? 'b reply'

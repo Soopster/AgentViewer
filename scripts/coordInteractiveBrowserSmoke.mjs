@@ -37,6 +37,10 @@ try {
     }
     else if (url.pathname === '/api/provider') data = { provider: 'codex', providerInstanceId: 'codex', instances: [] }
     else if (url.pathname === '/api/sessions') data = { sessions: [lead] }
+    else if (url.pathname.endsWith('/coordination/results/T1')) {
+      if (route.request().method() === 'POST') { actions.push(route.request().postDataJSON()); data = { staged: true } }
+      else data = { task: { ...state().snapshot.tasks[0], receipt: { recordedAt: '2026-09-29T00:00:00Z', filesChanged: ['alpha.ts'], commandsRun: ['npm run check'], verification: [{ command: 'npm run check', passed: true, exitCode: 0, summary: 'Types checked' }], needsDecision: [] } }, findings: [{ summary: 'Reviewed parser boundary', detail: 'No unchecked input remains.' }], runReview: { status: 'not_required' }, verification: 'current', integrationBlockers: [], checkout: { path: '/tmp/coord-browser/reviewer', branch: 'agent/reviewer', head: 'abc123', base: 'base123', target: '/tmp/coord-browser', files: ['alpha.ts', 'new.ts'], diff: '+validated(input)', diffTruncated: false, revision: 'a'.repeat(64), token: 'b'.repeat(64) } }
+    }
     else if (url.pathname.endsWith('/coordination')) {
       if (observationFails && route.request().method() === 'GET') {
         await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Fixture observation outage' }) })
@@ -82,7 +86,7 @@ try {
   const chatTab = dock.getByRole('tab', { name: 'Chat', exact: true })
   const teamTab = dock.getByRole('tab', { name: /^Teammates/ })
   await chatTab.click()
-  const composer = dock.locator('textarea').filter({ visible: true }).first()
+  const composer = dock.getByRole('textbox', { name: 'Message', exact: true }).filter({ visible: true }).first()
   await composer.fill('Preserve this lead draft while inspecting reviewer')
   await teamTab.click()
   await page.getByRole('button', { name: 'Enable coordinator', exact: true }).click()
@@ -108,7 +112,7 @@ try {
   await inspector.getByRole('button', { name: 'Allow', exact: true }).click()
   assert.equal(permissionPending, false)
   await page.getByRole('button', { name: 'Close teammate', exact: true }).click()
-  assert.equal(await composer.inputValue(), 'Preserve this lead draft while inspecting reviewer')
+  assert.equal(await composer.innerText(), 'Preserve this lead draft while inspecting reviewer')
   await teamTab.click()
   await page.getByRole('button', { name: 'Follow up', exact: true }).click()
   assert.equal(await page.getByLabel('Send to', { exact: true }).inputValue(), worker.id)
@@ -147,6 +151,17 @@ try {
   // teammate's transcript reviews its result without a separate click.
   resultReady = true
   await page.getByRole('button', { name: 'Mark reviewed', exact: true }).waitFor({ timeout: 15000 })
+  const resultCard = panel.getByRole('article', { name: 'result', exact: true })
+  await resultCard.getByRole('button', { name: 'Review result', exact: true }).click()
+  await resultCard.getByText(/Verification: current/).waitFor()
+  await resultCard.getByText('Reviewed parser boundary', { exact: false }).waitFor()
+  assert.equal(await page.getByRole('button', { name: 'Mark reviewed', exact: true }).count(), 1, 'inspection alone must not mark reviewed')
+  await page.screenshot({ path: '/tmp/coordinator-result-review.png', fullPage: true })
+  await resultCard.getByRole('button', { name: 'Stage changes in target checkout…', exact: true }).click()
+  assert.equal(actions.filter(action => action.token).length, 0, 'integration waits for confirmation')
+  await resultCard.getByRole('button', { name: 'Confirm stage changes', exact: true }).click()
+  await resultCard.getByText(/Changes staged in the target checkout/).waitFor()
+  assert.ok(actions.some(action => action.token === 'b'.repeat(64) && action.requestId))
   await roster.getByRole('button', { name: 'Transcript', exact: true }).click()
   await page.getByRole('button', { name: 'Close teammate', exact: true }).click()
   await teamTab.click()
@@ -154,7 +169,7 @@ try {
   assert.equal(await page.getByRole('button', { name: 'Mark reviewed', exact: true }).count(), 0, 'opening the transcript did not review its result')
   await page.screenshot({ path: '/tmp/coordinator-docked-teammates.png', fullPage: true })
   await chatTab.click()
-  assert.equal(await composer.inputValue(), 'Preserve this lead draft while inspecting reviewer')
+  assert.equal(await composer.innerText(), 'Preserve this lead draft while inspecting reviewer')
   await page.screenshot({ path: '/tmp/coordinator-docked-chat.png', fullPage: true })
   await teamTab.click()
   await page.getByRole('button', { name: 'Turn off', exact: true }).click()

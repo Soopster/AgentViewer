@@ -285,6 +285,8 @@ export type ProtocolVerificationReceipt = {
 }
 
 export type ProtocolTaskReceipt = {
+  /** Coordinator-executed checks were run against this unchanged checkout. */
+  verificationRevision?: string
   requestedProvider?: AgentProvider
   requestedModel?: string
   actualProvider: AgentProvider

@@ -110,6 +110,7 @@ import {
   readTuiDensity,
   readTuiDiffLayout,
   readTuiFocusMode,
+  readTuiStickyHeaders,
   readTuiProvider,
   readTuiRailVisible,
   readTuiSessionDetail,
@@ -161,6 +162,7 @@ import {
   writeTuiDensity,
   writeTuiDiffLayout,
   writeTuiFocusMode,
+  writeTuiStickyHeaders,
   writeTuiProvider,
   writeTuiRailVisible,
   writeTuiSessionReaderState,
@@ -501,18 +503,21 @@ function ComposerWaitingStatus({
   suffix,
   theme,
   width,
+  message: messageOverride,
 }: {
   startedAt: number | null
   seed: string
   suffix: string | null
   theme: TuiThemePalette
   width: number
+  /** What the turn is actually waiting on, when that is the user. */
+  message?: string | null
 }) {
   const [frame, setFrame] = useState(0)
   const [now, setNow] = useState(() => Date.now())
   const hash = stableHash(seed)
   const frames = COMPOSER_WAITING_SPINNER_FRAMES[hash % COMPOSER_WAITING_SPINNER_FRAMES.length] ?? COMPOSER_WAITING_SPINNER_FRAMES[0]
-  const message = COMPOSER_WAITING_MESSAGES[hash % COMPOSER_WAITING_MESSAGES.length] ?? COMPOSER_WAITING_MESSAGES[0]
+  const message = messageOverride ?? COMPOSER_WAITING_MESSAGES[hash % COMPOSER_WAITING_MESSAGES.length] ?? COMPOSER_WAITING_MESSAGES[0]
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -5275,6 +5280,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'theme',      label: 'Switch theme',           key: 't',  category: 'View'       },
   { id: 'thinking',   label: 'Toggle thinking mode',   key: 'i',  category: 'View'       },
   { id: 'density',    label: 'Toggle density',         key: 'd',  category: 'View'       },
+  { id: 'sticky-headers', label: 'Toggle sticky prompt headers', key: 'l', category: 'View' },
   { id: 'diff-layout', label: 'Toggle diff layout',    key: 's',  category: 'View'       },
   { id: 'view',       label: 'Switch transcript view', key: 'v',  category: 'View'       },
   { id: 'width',      label: 'Cycle layout: readable / centered / full', key: '⇧W', category: 'View' },
@@ -7653,6 +7659,9 @@ export default function OpenTuiApp() {
   const isContinuousView = transcriptView === 'transcript'
   const [transcriptWidth, setTranscriptWidth] = useState<TuiTranscriptWidth>('readable')
   const [focusMode, setFocusMode] = useState(false)
+  const [stickyHeaders, setStickyHeaders] = useState(false)
+  // Prompt card pinned under the reader's top edge while its turn scrolls past.
+  const [stickyHeaderKey, setStickyHeaderKey] = useState<string | null>(null)
   // Temporary presentation mode, deliberately separate from the persisted
   // focus preference: fullscreen can be entered and restored without changing
   // the user's normal rail/header layout.
@@ -10489,6 +10498,12 @@ export default function OpenTuiApp() {
   // everywhere that reserves or renders the live-turn status row. Owned state
   // is visible only on its origin tab; reattachedRunning is already scoped to
   // the selected session by reconcileSelectedRunningRegistry.
+  // A turn blocked on the user must say so, not keep cycling "Warming the
+  // context…" while a question or an approval waits to be answered.
+  const composerPendingAsk = pendingPermissions.find((entry) => entry.sessionId === composerTargetSession?.sessionId) ?? null
+  const composerWaitingOnUser = composerPendingAsk
+    ? (composerPendingAsk.questions?.length ?? 0) > 0 ? 'Waiting for your answer' : 'Waiting for your approval'
+    : null
   const turnRunningForComposer = visibleComposerSending || reattachedRunning || visibleAwaitingPersistedTurn
   // What ⌃C and ⏎ actually do. The post-turn sync keeps the status row but
   // ends the turn: ⌃C cancels nothing and ⏎ sends at once, so the key hints
@@ -12774,7 +12789,7 @@ export default function OpenTuiApp() {
     }
   })
 
-  const respondToTuiPermission = useEffectEvent(async (permission: PendingPermission, response: PermissionResponse) => {
+  const respondToTuiPermission = useEffectEvent(async (permission: PendingPermission, response: PermissionResponse, permissionMode?: TuiPermissionMode) => {
     const target = composerTargetSession
     if (!target || permissionActionLoading) return
     setPermissionActionLoading(permission.id)
@@ -12784,7 +12799,7 @@ export default function OpenTuiApp() {
       }
       await runTuiSessionAction(
         { ...target, sessionId: permission.sessionId ?? target.sessionId },
-        { action: 'respondPermission', permissionId: permission.id, response, provider: target.provider },
+        { action: 'respondPermission', permissionId: permission.id, response, provider: target.provider, ...(permissionMode ? { permissionMode } : {}) },
       )
       if (permission.provider === 'codex' && permission.questions?.length) {
         setLiveTranscriptMessages((prev) => completeCodexQuestionLiveMessage(prev, permission, null))
@@ -12808,7 +12823,9 @@ export default function OpenTuiApp() {
     }
     const target = composerTargetSession
     if (target) setClaudeComposerPermissionMode(target, decision)
-    await respondToTuiPermission(permission, 'once')
+    // The mode rides the approval itself (see claudePermissionDecision), or
+    // the CLI's exit from plan mode restores the old mode over it.
+    await respondToTuiPermission(permission, 'once', decision)
   })
 
   // Toggle an AskUserQuestion option for the focused question. Single-select
@@ -15332,6 +15349,7 @@ export default function OpenTuiApp() {
           configuredSplitPanes,
           configuredSplitOrientation,
           configuredSplitReaderShare,
+          configuredStickyHeaders,
         ] = await Promise.all([
           readTuiTheme(),
           readTuiProvider(),
@@ -15349,6 +15367,7 @@ export default function OpenTuiApp() {
           readTuiSplitPanes(),
           readTuiSplitOrientation(),
           readTuiSplitReaderShare(),
+          readTuiStickyHeaders(),
         ])
         if (cancelled) return
         // Attached to a daemon that may be older than this client: say so once,
@@ -15361,6 +15380,7 @@ export default function OpenTuiApp() {
         setProvider(configuredProvider)
         setRailVisible(configuredRailVisible)
         setFocusMode(configuredFocusMode)
+        setStickyHeaders(configuredStickyHeaders)
         setDensity(configuredDensity)
         setDiffLayout(configuredDiffLayout)
         setTranscriptView(configuredTranscriptView)
@@ -16217,6 +16237,30 @@ export default function OpenTuiApp() {
     }, READER_SCROLL_POLL_MS)
     return () => clearInterval(interval)
   }, [effectiveFocus, isScrubbing, followTail, totalTranscriptCards, transcriptRenderStart, transcriptRenderEnd, visibleTranscriptCards])
+
+  // Sticky prompt header: the last user prompt whose card has scrolled above
+  // the viewport's top edge. Polled off layout (like the window slide above)
+  // because scroll position is not React state; setState only on a change so an
+  // idle reader does not re-render the root.
+  useEffect(() => {
+    if (!stickyHeaders || isScrubbing) {
+      setStickyHeaderKey(null)
+      return undefined
+    }
+    const userKeys = new Set(visibleTranscriptCards.filter((card) => card.role === 'user').map((card) => `card:${card.key}`))
+    const interval = setInterval(() => {
+      const sb = transcriptScrollRef.current
+      if (!sb || userKeys.size === 0) return
+      const scrollTop = sb.scrollTop
+      let next: string | null = null
+      for (const child of sb.content.getChildren()) {
+        if (child.y - sb.content.y >= scrollTop) break
+        if (userKeys.has(child.id)) next = child.id.slice('card:'.length)
+      }
+      setStickyHeaderKey((prev) => (prev === next ? prev : next))
+    }, READER_SCROLL_POLL_MS)
+    return () => clearInterval(interval)
+  }, [stickyHeaders, isScrubbing, visibleTranscriptCards])
 
   // Fixup executor: runs after the commit that changed the window. Yoga layout
   // happens on the next render frame, not at commit, so retry on a short timer
@@ -17465,6 +17509,13 @@ export default function OpenTuiApp() {
         break
       case 'theme': {
         openThemeMenu()
+        break
+      }
+      case 'sticky-headers': {
+        const next = !stickyHeaders
+        setStickyHeaders(next)
+        showToggleOutcome('Sticky headers', next)
+        void writeTuiStickyHeaders(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store sticky headers'))
         break
       }
       case 'density': {
@@ -19989,6 +20040,18 @@ export default function OpenTuiApp() {
       return
     }
 
+    if (key.name === 'l' && !key.shift && !key.ctrl && !key.meta) {
+      handled(() => {
+        const next = !stickyHeaders
+        setStickyHeaders(next)
+        showToggleOutcome('Sticky headers', next)
+        void writeTuiStickyHeaders(next).catch((err) => {
+          setError(err instanceof Error ? err.message : 'Failed to store sticky headers')
+        })
+      })
+      return
+    }
+
     if (key.name === 'b') {
       handled(() => {
         const next = !tabsEnabled
@@ -20920,6 +20983,26 @@ export default function OpenTuiApp() {
 
               </scrollbox>
             )}
+            {stickyHeaders && stickyHeaderKey ? (() => {
+              const stickyCard = visibleTranscriptCards.find((card) => card.key === stickyHeaderKey)
+              if (!stickyCard) return null
+              const stickyText = (stickyCard.lines.find((line) => line.text.trim())?.text ?? stickyCard.compactSummary).trim()
+              return (
+                <box
+                  id="sticky-header"
+                  position="absolute"
+                  top={0}
+                  left={1}
+                  width={Math.max(rightPaneWidth - 4, 12)}
+                  height={1}
+                  zIndex={5}
+                  backgroundColor={theme.surface2}
+                  overflow="hidden"
+                >
+                  <text fg={theme.text} wrapMode="none">{fitText(`▸ ${stickyText}`, Math.max(rightPaneWidth - 4, 12))}</text>
+                </box>
+              )
+            })() : null}
             {streamActionFooterRows > 0 ? (
               <box height={streamActionFooterRows} paddingLeft={1}>
                 <text fg={theme.dim} wrapMode="none">
@@ -20948,6 +21031,7 @@ export default function OpenTuiApp() {
                     suffix={composerWaitingSuffix}
                     theme={theme}
                     width={Math.max(rightPaneWidth - densityState.bodyIndent - 6, 16)}
+                    message={composerWaitingOnUser}
                   />
                 ) : (
                   <Spinner
@@ -22198,6 +22282,7 @@ export default function OpenTuiApp() {
               suffix={composerWaitingSuffix}
               theme={theme}
               width={Math.max(width - 6, 16)}
+              message={composerWaitingOnUser}
             />
           </box>
         </box>

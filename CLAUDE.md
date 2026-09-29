@@ -479,6 +479,13 @@ it against the native CLI (see the composer flow harness in memory).
   shorter than that appeared all at once when its block ended — Codex showed
   nothing for 18s of a 300-line answer. Coalescing is for render cost, never for
   holding text back. `claudeDeltaFlushSmoke.ts` pins Claude's.
+- **A plan approval carries its mode in the approval itself** (`updatedPermissions:
+  setMode`). Allowing ExitPlanMode leaves plan mode by restoring the pre-plan mode,
+  which overwrote a separately sent `setPermissionMode` — "approve · auto-accept
+  edits" went on asking for every edit. Both composers pass `permissionMode` on
+  `respondPermission`; `claudePlanApprovalSmoke.ts` pins the shape.
+- **A turn blocked on the user says so.** The status row reads "Waiting for your
+  answer/approval" while a question or permission is pending, not a busy phrase.
 - **Whatever error follows our own abort is the interrupt.** Claude answers an
   interrupt with an error frame for the cut-off turn, which can land before the
   abort does; handled as a failure it restored the old prompt and reattached to
@@ -498,7 +505,9 @@ it against the native CLI (see the composer flow harness in memory).
   until its first flush).
 - **User command output is conversation, not operational chrome.** `!command`
   output (Claude `bash-output` frame; Codex `source: 'userShell'` items, OpenCode 2
-  `shell` messages and Pi `bashExecution` records all mapped to two bash-mode rows) and Claude local slash-command output render inline like the
+  `shell` messages, Pi `bashExecution` records and Copilot `tool.user_requested` +
+  `isUserRequested` completions all mapped to two bash-mode rows; Copilot runs `!`
+  through the SDK's `shell.executeUserRequested`, not as prompt text) and Claude local slash-command output render inline like the
   native CLIs. Claude persists local-command output as a system row the SDK
   returns *without content*, so `/context`'s output is kept from the stream's
   `<synthetic>` assistant frame (`localCommandOutputs`) until that session's next

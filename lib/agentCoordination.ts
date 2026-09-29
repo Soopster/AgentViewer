@@ -1,3 +1,4 @@
+import { coordinatorCheckoutRevision } from './coordinatorResultGit'
 // Coordinator for A2A 1.0 multi-agent runs, modeled on Claude Code agent teams:
 // a LEAD session decomposes the prompt into a shared task list, named
 // TEAMMATES (each in an isolated git worktree) self-claim tasks and work a
@@ -3727,8 +3728,10 @@ export async function completeExternalProtocolTask(
     )
   }
   const commands = [...new Set([...task.verifyCommands, ...run.acceptanceContract.verificationCommands, ...(run.gateCommand ? [run.gateCommand] : [])])]
+  const verificationStart = commands.length ? await coordinatorCheckoutRevision(agent.worktreePath).catch(() => undefined) : undefined
   const verification: ProtocolVerificationReceipt[] = []
   for (const command of commands) verification.push(await runVerificationCommand(command, agent.worktreePath))
+  const verificationEnd = verificationStart ? await coordinatorCheckoutRevision(agent.worktreePath).catch(() => undefined) : undefined
   const needsDecision = normalizeNeedsDecisions(params.needsDecision)
   const receipt: ProtocolTaskReceipt = {
     requestedProvider: task.requestedProvider,
@@ -3741,6 +3744,7 @@ export async function completeExternalProtocolTask(
     filesChanged: [...new Set((params.filesChanged ?? []).map((file) => file.trim()).filter(Boolean))],
     commandsRun: [...new Set([...(params.commandsRun ?? []), ...commands].map((command) => command.trim()).filter(Boolean))],
     verification,
+    verificationRevision: verificationStart && verificationStart === verificationEnd ? verificationEnd : undefined,
     needsDecision,
     recordedAt: nowIso(),
   }
@@ -7787,8 +7791,10 @@ async function applyAgentEvent(controller: RunController, agent: ProtocolAgent, 
         return
       }
       const commands = [...new Set([...task.verifyCommands, ...controller.acceptanceContract.verificationCommands, ...(controller.gateCommand ? [controller.gateCommand] : [])])]
+      const verificationStart = commands.length ? await coordinatorCheckoutRevision(agent.worktreePath).catch(() => undefined) : undefined
       const verification: ProtocolVerificationReceipt[] = []
       for (const command of commands) verification.push(await runVerificationCommand(command, agent.worktreePath))
+      const verificationEnd = verificationStart ? await coordinatorCheckoutRevision(agent.worktreePath).catch(() => undefined) : undefined
       const failed = verification.find((entry) => !entry.passed)
       if (failed) {
         const note = `Completion of ${event.taskId} was REJECTED by the quality gate \`${failed.command}\` in your checkout:\n${failed.summary ?? 'command failed'}\nFix the failures, re-run the gate yourself, then complete again.`
@@ -7816,6 +7822,7 @@ async function applyAgentEvent(controller: RunController, agent: ProtocolAgent, 
         filesChanged: Array.isArray(event.payload?.filesChanged) ? event.payload.filesChanged.filter((value): value is string => typeof value === 'string') : [],
         commandsRun: commands,
         verification,
+        verificationRevision: verificationStart && verificationStart === verificationEnd ? verificationEnd : undefined,
         needsDecision,
         recordedAt: nowIso(),
       }
@@ -9134,15 +9141,21 @@ export async function cleanupProtocolRunWorktrees(
   return { results, snapshot: await readProtocolRun(runId) }
 }
 
-export async function validateWorktreeTaskLocks(task: WorktreeTask): Promise<{ ok: true } | { ok: false; message: string; paths: string[] }> {
+export async function validateWorktreeTaskLocks(task: WorktreeTask, result?: { completedTaskId: string; changedFiles: string[] }): Promise<{ ok: true } | { ok: false; message: string; paths: string[] }> {
   const db = await getDatabase()
   const agentRow = db.prepare('SELECT * FROM protocol_agents WHERE worktree_path = ? ORDER BY created_at DESC LIMIT 1').get(task.path) as Row | undefined
-  if (!agentRow) return { ok: true }
+  if (!agentRow) return result ? { ok: false, paths: result.changedFiles, message: 'Cannot identify the completed task checkout owner.' } : { ok: true }
   const agent = rowToAgent(agentRow)
-  const locks = (db.prepare("SELECT * FROM protocol_locks WHERE run_id = ? AND agent_id = ? AND status = 'active'")
-    .all(agent.runId, agent.id) as Row[]).map(rowToLock)
+  const completed = result ? db.prepare("SELECT id FROM protocol_tasks WHERE run_id = ? AND id = ? AND owner_agent_id = ? AND status = 'completed'").get(agent.runId, result.completedTaskId, agent.id) : null
+  if (result && !completed) return { ok: false, paths: [], message: 'Only the completed task owner can integrate this result.' }
+  // Completion releases locks. The reviewed result may use that task's durable
+  // grants, including released grants, rather than requiring it to reclaim work.
+  const locks = ((result
+    ? db.prepare("SELECT * FROM protocol_locks WHERE run_id = ? AND agent_id = ? AND task_id = ? AND status IN ('active', 'released')").all(agent.runId, agent.id, result.completedTaskId)
+    : db.prepare("SELECT * FROM protocol_locks WHERE run_id = ? AND agent_id = ? AND status = 'active'").all(agent.runId, agent.id)
+  ) as Row[]).map(rowToLock)
   if (locks.some((lock) => lock.path === '**' && lock.mode === 'write')) return { ok: true }
-  const files = await changedPaths(task.path)
+  const files = result?.changedFiles ?? await changedPaths(task.path)
   const uncovered = files.filter((file) => !locks.some((lock) => lock.mode === 'write' && lockPathsOverlap(lock.path, file)))
   if (uncovered.length === 0) return { ok: true }
   return {

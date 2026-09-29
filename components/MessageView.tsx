@@ -3174,6 +3174,15 @@ function MessageViewInner({
     setRowMeasurementVersion((version) => version + 1)
     setPersistedMeasurementVersion((version) => version + 1)
   }, [preferencesHydrated, timelineWidth])
+  const [stickyHeaders, setStickyHeaders] = useState(false)
+  useEffect(() => {
+    if (!preferencesHydrated) return
+    writeLocalStorageValue('agentViewer:stickyHeaders', stickyHeaders ? 'true' : 'false')
+  }, [preferencesHydrated, stickyHeaders])
+  // Row index of the last user prompt scrolled above the viewport's top edge.
+  // Set from the live scroll event (not the ≤600px-stale committed scrollTop)
+  // and only when it changes, so scrolling does not re-render per frame.
+  const [stickyHeaderIndex, setStickyHeaderIndex] = useState<number | null>(null)
   const [diffStyle, setDiffStyle] = useState<PierreDiffStyle>('stacked')
   useEffect(() => {
     if (!preferencesHydrated) return
@@ -3202,6 +3211,7 @@ function MessageViewInner({
     const storedDensity = readLocalStorageValue('agentViewer:density')
     if (storedDensity === 'comfortable' || storedDensity === 'dense') setDensity(storedDensity)
     setTimelineWidth(readLocalStorageValue('agentViewer:timelineWidth') === 'full' ? 'full' : 'centered')
+    setStickyHeaders(readLocalStorageValue('agentViewer:stickyHeaders') === 'true')
     setDiffStyle(readLocalStorageValue('agentViewer:diffStyle') === 'split' ? 'split' : 'stacked')
     const changeStyle = readLocalStorageValue('agentViewer:diffChangeStyle')
     const inlineDiffStyle = readLocalStorageValue('agentViewer:diffInlineStyle')
@@ -6131,7 +6141,7 @@ function MessageViewInner({
     }
   }, [session, sessionActionLoading])
 
-  const respondToPermission = useCallback(async (permission: PendingPermission, response: 'once' | 'always' | 'reject') => {
+  const respondToPermission = useCallback(async (permission: PendingPermission, response: 'once' | 'always' | 'reject', permissionMode?: 'acceptEdits' | 'default') => {
     if (response === 'once' && permission.elicitation?.mode === 'url' && permission.url) {
       window.open(permission.url, '_blank', 'noopener,noreferrer')
     }
@@ -6164,6 +6174,7 @@ function MessageViewInner({
           permissionId: permission.id,
           response,
           permissionDecisionReason: response === 'reject' ? permissionDenialReason(permission) : undefined,
+          permissionMode,
           provider: session.provider,
           providerInstanceId: session.providerInstanceId,
         }),
@@ -6227,7 +6238,9 @@ function MessageViewInner({
       return
     }
     commitClaudePermissionSelection(decision)
-    await respondToPermission(permission, 'once')
+    // The mode rides the approval itself: allowing ExitPlanMode restores the
+    // pre-plan mode, overwriting a mode change sent separately.
+    await respondToPermission(permission, 'once', decision)
   }, [respondToPermission, commitClaudePermissionSelection])
 
   const handleFork = useCallback(async () => {
@@ -7485,6 +7498,37 @@ function MessageViewInner({
   // because the 2400px overscan far exceeds the ≤600px stale-window lag.
   const deferredTimelineScrollTop = useDeferredValue(timelineScrollTop)
 
+  useEffect(() => {
+    const node = timelineRef.current
+    if (!stickyHeaders || !node) {
+      setStickyHeaderIndex(null)
+      return undefined
+    }
+    let frame = 0
+    const update = () => {
+      frame = 0
+      const layout = rowLayoutRef.current
+      const rows = timelineRowsRef.current
+      // Row tops are layout-space; the container pads the list above them.
+      const edge = node.scrollTop - TIMELINE_TARGET_TOP_GUTTER_PX
+      let next: number | null = null
+      for (let index = 0; index < rows.length; index += 1) {
+        if (layout.tops[index] >= edge) break
+        if (rows[index].message.role === 'user') next = index
+      }
+      setStickyHeaderIndex((prev) => (prev === next ? prev : next))
+    }
+    const onScroll = () => {
+      if (!frame) frame = requestAnimationFrame(update)
+    }
+    update()
+    node.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      node.removeEventListener('scroll', onScroll)
+      if (frame) cancelAnimationFrame(frame)
+    }
+  }, [stickyHeaders, renderedTimelineRows, rowLayout])
+
   const virtualTimeline = useMemo(() => {
     return getVirtualTimelineWindow({
       layout: rowLayout,
@@ -8134,6 +8178,12 @@ function MessageViewInner({
                 </button>
               ))}
               <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
+              <button type="button" className="av-hover-control"
+                onClick={() => { setStickyHeaders((on) => !on); setViewDropdownOpen(false) }}
+                style={{ padding: '6px 14px', background: stickyHeaders ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: stickyHeaders ? 'var(--cyan)' : 'var(--text-2)', fontSize: 12, textAlign: 'left', whiteSpace: 'nowrap' }}>
+                {stickyHeaders ? '☑' : '☐'} Sticky prompt headers
+              </button>
+              <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
               {/* Color treatment */}
               <div style={{ padding: '4px 14px 2px', fontSize: 11, fontWeight: 600, color: 'var(--text-3)' }}>Color</div>
               {(['gradient', 'flat'] as const).map((c) => (
@@ -8603,6 +8653,27 @@ function MessageViewInner({
                   onSelect={handleJumpToMessage}
                 />
               ) : null}
+              {stickyHeaders && stickyHeaderIndex != null && timelineRowsRef.current[stickyHeaderIndex] ? (() => {
+                const stickyMessage = timelineRowsRef.current[stickyHeaderIndex].message
+                const stickyText = messageToCopyText(stickyMessage).trim().split('\n').find((line) => line.trim()) ?? ''
+                return (
+                  <button
+                    type="button"
+                    className="av-hover-control"
+                    onClick={() => handleJumpToMessage(stickyMessage.uuid)}
+                    title="Jump to this prompt"
+                    style={{
+                      position: 'absolute', top: 0, left: 0, right: 0, zIndex: 5,
+                      display: 'block', width: '100%', padding: '6px 32px', border: 0,
+                      borderBottom: '1px solid var(--border)', background: 'var(--surface-2)',
+                      color: 'var(--text)', fontSize: 12, textAlign: 'left', cursor: 'pointer',
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}
+                  >
+                    <span style={{ color: 'var(--cyan)', marginRight: 8 }}>▸</span>{stickyText}
+                  </button>
+                )
+              })() : null}
               <div
                 ref={timelineRef}
                 onScroll={handleTimelineScroll}

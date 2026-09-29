@@ -1,3 +1,4 @@
+import { integrateCoordinatorResult } from '@/lib/coordinatorResultReviewServer'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { extractPendingPermissions } from '@/lib/permissions'
@@ -10,7 +11,8 @@ import { adoptOrphanedInteractiveHost, interruptInteractiveAgent, setInteractive
 const schema = z.object({
   provider: z.string().refine(isAgentProvider),
   requestId: z.string().min(1).max(160),
-  action: z.enum(['disable', 'enable', 'settings', 'reconcile', 'resume-agent', 'interrupt-agent', 'delegate', 'message', 'review-plan', 'decision']),
+  action: z.enum(['integrate-result', 'disable', 'enable', 'settings', 'reconcile', 'resume-agent', 'interrupt-agent', 'delegate', 'message', 'review-plan', 'decision']),
+  token: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   detail: z.string().trim().min(1).max(8000),
   cwd: z.string().trim().min(1).optional(),
   autoContinue: z.boolean().optional(), useWorktrees: z.boolean().optional(), batchId: z.string().optional(), received: z.boolean().optional(),
@@ -53,6 +55,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ ses
   const body = parsed.data
   const { sessionId } = await params
   try {
+    if (body.action === 'integrate-result') {
+      if (!body.taskId || !body.token) throw new Error('Review the result before integrating')
+      const result = await integrateCoordinatorResult(sessionId, body.provider, body.taskId, body.token, body.requestId)
+      return NextResponse.json({ result, ...await readState(sessionId, body.provider) })
+    }
     if (body.action === 'disable' || body.action === 'enable') {
       const info = body.action === 'enable' ? await readViewSessionInfo(sessionId, body.provider).catch(() => null) : null
       await setInteractiveCoordinatorEnabled({ sessionId, provider: body.provider, requestId: body.requestId, enabled: body.action === 'enable', cwd: info?.cwd || body.cwd, autoContinue: body.autoContinue })

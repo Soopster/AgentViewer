@@ -169,6 +169,7 @@ type TuiState = {
   railVisible?: unknown
   sidebarWidth?: unknown
   focusMode?: unknown
+  stickyHeaders?: unknown
   density?: unknown
   diffLayout?: unknown
   transcriptView?: unknown
@@ -318,6 +319,15 @@ export async function getConfiguredTuiFocusMode(): Promise<boolean> {
 
 export async function setConfiguredTuiFocusMode(focusMode: boolean): Promise<void> {
   await writeTuiState({ focusMode })
+}
+
+export async function getConfiguredTuiStickyHeaders(): Promise<boolean> {
+  const parsed = await readTuiState()
+  return parsed.stickyHeaders === true
+}
+
+export async function setConfiguredTuiStickyHeaders(stickyHeaders: boolean): Promise<void> {
+  await writeTuiState({ stickyHeaders })
 }
 
 export async function getConfiguredTuiDensity(): Promise<TuiDensity> {

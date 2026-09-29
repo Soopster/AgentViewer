@@ -1350,9 +1350,10 @@ function pendingClaudePermissionKey(sessionId: string, permissionId: string): st
   return `${sessionId}:${permissionId}`
 }
 
-function claudePermissionDecision(
+export function claudePermissionDecision(
   response: string,
   pending: Pick<PendingClaudePermission, 'suggestions' | 'input'>,
+  permissionMode?: ClaudePermissionModeValue,
 ): PermissionResult {
   // The SDK always injects toolUseID into the control response itself, so we
   // omit it here. decisionClassification is in the TypeScript types but the
@@ -1364,12 +1365,19 @@ function claudePermissionDecision(
       message: 'User denied permission',
     }
   }
+  // A plan approval carries the mode to continue in. It has to ride the
+  // approval itself: allowing ExitPlanMode leaves plan mode by restoring the
+  // mode from before it, which overwrote a setPermissionMode sent a moment
+  // earlier — so "approve · auto-accept edits" went on asking for every edit.
+  // This is how Claude Code applies the choice.
+  const updatedPermissions = [
+    ...(response === 'always' && pending.suggestions?.length ? pending.suggestions : []),
+    ...(permissionMode ? [{ type: 'setMode' as const, mode: permissionMode, destination: 'session' as const }] : []),
+  ]
   return {
     behavior: 'allow',
     updatedInput: pending.input ?? {},
-    ...(response === 'always' && pending.suggestions?.length
-      ? { updatedPermissions: pending.suggestions }
-      : {}),
+    ...(updatedPermissions.length ? { updatedPermissions } : {}),
   }
 }
 
@@ -1982,7 +1990,10 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
         })
         return { ok: true }
       }
-      pending.resolve(claudePermissionDecision(response, pending))
+      const permissionMode = CLAUDE_PERMISSION_MODES.includes(body.permissionMode as ClaudePermissionModeValue)
+        ? body.permissionMode as ClaudePermissionModeValue
+        : undefined
+      pending.resolve(claudePermissionDecision(response, pending, permissionMode))
       return { ok: true }
     }
     // Answer an AskUserQuestion prompt: allow the tool with the user's selected
@@ -2630,6 +2641,7 @@ export async function listProjectSessionMessageBatches(params: ProjectMessageBat
 }
 
 const CLAUDE_PERMISSION_MODES = ['default', 'acceptEdits', 'plan', 'bypassPermissions', 'dontAsk'] as const
+type ClaudePermissionModeValue = typeof CLAUDE_PERMISSION_MODES[number]
 type ClaudePermissionMode = typeof CLAUDE_PERMISSION_MODES[number]
 
 function parseClaudePermissionMode(body: Record<string, unknown>): ClaudePermissionMode | undefined {
@@ -5436,6 +5448,22 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
               'Copilot model switch',
             )
           }
+        }
+
+        // A user `!command` runs in the session runtime the way the Copilot
+        // CLI's bash mode does (the SDK's user-requested shell), rather than
+        // reaching the model as prompt text it may or may not choose to run.
+        const bangCommand = nativeCommands && parsedAttachments.length === 0 && userMessage.trim().startsWith('!')
+          ? userMessage.trim().slice(1).trim()
+          : null
+        const shellRpc = (session.rpc as typeof session.rpc & {
+          shell?: { executeUserRequested?: (params: { requestId: string; command: string }) => Promise<{ success: boolean; output: string; exitCode?: number | null; error?: string }> }
+        }).shell
+        if (bangCommand && shellRpc?.executeUserRequested) {
+          const result = await shellRpc.executeUserRequested({ requestId: turnRequestId ?? globalThis.crypto.randomUUID(), command: bangCommand })
+          const status = result.error ?? (result.exitCode != null && result.exitCode !== 0 ? `Exit code ${result.exitCode}` : '')
+          safeEnqueue(`event: bash-output\ndata: ${JSON.stringify({ command: bangCommand, stdout: result.output ?? '', stderr: result.success ? '' : status })}\n\n`)
+          return
         }
 
         let promptToSend = composerPrompt

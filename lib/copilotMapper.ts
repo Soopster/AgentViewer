@@ -431,7 +431,43 @@ export function mapCopilotEventsToSessionMessages(sessionId: string, events: Ses
         }
         break
       }
+      // A user `!command` (the SDK's user-requested shell): bash-mode rows,
+      // the command then its output, as Claude Code and the other providers
+      // show them — not an orphaned tool result with no call.
+      case 'tool.user_requested': {
+        const data = event.data as { toolCallId?: string; arguments?: { command?: unknown } }
+        const command = typeof data.arguments?.command === 'string' ? data.arguments.command : ''
+        messages.push({
+          type: 'user',
+          uuid: `${event.id}:bash-input`,
+          session_id: sessionId,
+          parent_tool_use_id: null,
+          provider: 'copilot',
+          turnId: currentTurnId,
+          timestamp: event.timestamp,
+          message: { role: 'user', content: `<bash-input>${escapeBashTag(command)}</bash-input>` },
+        })
+        break
+      }
       case 'tool.execution_complete':
+        if ((event.data as { isUserRequested?: boolean }).isUserRequested) {
+          const exitCode = (event.data as { shellExecution?: { exitCode?: number | null } }).shellExecution?.exitCode
+          const status = event.data.success ? '' : exitCode != null && exitCode !== 0 ? `Exit code ${exitCode}` : 'Failed'
+          messages.push({
+            type: 'user',
+            uuid: `${event.id}:bash-output`,
+            session_id: sessionId,
+            parent_tool_use_id: null,
+            provider: 'copilot',
+            turnId: currentTurnId,
+            timestamp: event.timestamp,
+            message: {
+              role: 'user',
+              content: `<bash-stdout>${escapeBashTag(toolResultContent(event).trimEnd())}</bash-stdout><bash-stderr>${escapeBashTag(status)}</bash-stderr>`,
+            },
+          })
+          break
+        }
         messages.push({
           type: 'user',
           uuid: `${event.id}:tool-result`,
@@ -649,4 +685,8 @@ export function mapCopilotDiagnosticsToSections(params: {
       items: params.integrationItems && params.integrationItems.length > 0 ? params.integrationItems : ['Unavailable'],
     },
   ]
+}
+
+function escapeBashTag(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }

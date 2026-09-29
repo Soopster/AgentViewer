@@ -3,6 +3,7 @@
 import { coordinatorAttentionCount } from '@/lib/coordinatorAttentionCount'
 import { coordinatorAgentActivity, coordinatorAgentNote, coordinatorAgentWorkspace, coordinatorStalledAgentIds, type CoordinatorInteractiveState } from '@/lib/coordinatorInteractiveState'
 import { useEffect, useId, useRef, useState } from 'react'
+import dynamic from 'next/dynamic'
 import type { Session } from '@/lib/types'
 import type { ProtocolAgent, ProtocolRunSnapshot } from '@/lib/agentProtocol'
 import { coordinatorAttention, type CoordinatorAttentionItem } from '@/lib/coordinatorAttention'
@@ -11,6 +12,8 @@ import { Button } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
+
+const CoordinatorResultReview = dynamic(() => import('./CoordinatorResultReview'))
 
 /** Providers a chat can staff a new teammate from. */
 const COORDINATOR_TEAMMATE_PROVIDERS = ['claude', 'codex', 'opencode', 'copilot', 'pi'] as const
@@ -234,8 +237,8 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
       </> : null}
       {error ? <div role="alert"><p>{error}</p><Button disabled={busy} onClick={() => void send()}>Retry same request</Button><Button variant="ghost" disabled={busy} onClick={() => { pending.current = null; setError(''); try { sessionStorage.removeItem(requestKey) } catch { /* Optional persistence. */ } }}>Edit after checking task history</Button></div> : null}
       {terminal ? <p>This run has ended. Its results and teammate transcripts remain available.</p> : null}
-      {visible.map(item => <AttentionCard key={item.id} item={item} disabled={disabled} onSeen={() => markSeen(item)} onAction={body => void send(body)} />)}
-      {snapshot ? <details><summary>Task history ({snapshot.tasks.length})</summary>{snapshot.tasks.map(task => <p key={task.id} className="whitespace-pre-wrap py-2">{task.title} · {task.status}{task.resultSummary ? `\n${task.resultSummary}` : ''}</p>)}</details> : null}
+      {visible.map(item => <AttentionCard key={item.id} session={session} item={item} disabled={disabled} onSeen={() => markSeen(item)} onAction={body => void send(body)} />)}
+      {snapshot ? <details><summary>Task history ({snapshot.tasks.length})</summary>{snapshot.tasks.map(task => <div key={task.id} className="whitespace-pre-wrap py-2">{task.title} · {task.status}{task.resultSummary ? `\n${task.resultSummary}` : ''}{['completed', 'failed', 'cancelled'].includes(task.status) ? <CoordinatorResultReview key={task.id} sessionId={session.sessionId} provider={session.provider ?? 'claude'} taskId={task.id} /> : null}</div>)}</details> : null}
     </div>
   </section>
 }
@@ -263,7 +266,8 @@ function TeammateRoster({ snapshot, state, seen, observationUnavailable, onOpen,
   </div>
 }
 
-function AttentionCard({ item, disabled, onSeen, onAction }: {
+function AttentionCard({ item, session, disabled, onSeen, onAction }: {
+  session: Session
   item: CoordinatorAttentionItem; disabled: boolean; onSeen: () => void
   onAction: (body: Omit<RequestBody, 'provider' | 'requestId'>) => void
 }) {
@@ -272,6 +276,7 @@ function AttentionCard({ item, disabled, onSeen, onAction }: {
   const replyable = ['decision', 'message', 'blocker'].includes(item.kind)
   return <article className="rounded border p-3" aria-label={item.kind}>
     <strong>{item.title}</strong><p className="whitespace-pre-wrap text-sm">{item.detail}</p>
+    {item.kind === 'result' && item.taskId ? <CoordinatorResultReview sessionId={session.sessionId} provider={session.provider ?? 'claude'} taskId={item.taskId} /> : null}
     {item.kind === 'result' ? <Button variant="ghost" size="sm" onClick={onSeen}>Mark reviewed</Button> : null}
     {item.kind === 'plan' ? <div className="flex gap-2">{[true, false].map(approved => <Button key={String(approved)} disabled={disabled} onClick={() => onAction({ action: 'review-plan', taskId: item.taskId, approved, detail: approved ? 'Plan approved by user' : 'Plan rejected; revise before proceeding' })}>{approved ? 'Approve plan' : 'Request revision'}</Button>)}</div> : null}
     {replyable ? <div className="flex flex-col gap-2"><label htmlFor={id}>Your reply</label><Textarea id={id} value={answer} disabled={disabled} onChange={event => setAnswer(event.target.value)} rows={2} />

@@ -10,6 +10,7 @@ import {
   getConfiguredTuiDensity,
   getConfiguredTuiDiffLayout,
   getConfiguredTuiFocusMode,
+  getConfiguredTuiStickyHeaders,
   getConfiguredTuiRailVisible,
   getConfiguredTuiSessionReaderState,
   getConfiguredTuiSidebarSort,
@@ -26,6 +27,7 @@ import {
   setConfiguredTuiDensity,
   setConfiguredTuiDiffLayout,
   setConfiguredTuiFocusMode,
+  setConfiguredTuiStickyHeaders,
   setConfiguredTuiRailVisible,
   setConfiguredTuiSessionReaderState,
   setConfiguredTuiSidebarSort,
@@ -277,6 +279,14 @@ export async function readTuiFocusMode(): Promise<boolean> {
 
 export async function writeTuiFocusMode(focusMode: boolean): Promise<void> {
   await setConfiguredTuiFocusMode(focusMode)
+}
+
+export async function readTuiStickyHeaders(): Promise<boolean> {
+  return getConfiguredTuiStickyHeaders()
+}
+
+export async function writeTuiStickyHeaders(stickyHeaders: boolean): Promise<void> {
+  await setConfiguredTuiStickyHeaders(stickyHeaders)
 }
 
 export async function readTuiDensity(): Promise<TuiDensity> {
@@ -794,7 +804,8 @@ export async function readTuiSessionCoordinator(
 }
 
 export type TuiSessionCoordinationRequest = {
-  action: 'disable' | 'enable' | 'settings' | 'reconcile' | 'resume-agent' | 'interrupt-agent' | 'delegate' | 'message' | 'review-plan' | 'decision'
+  token?: string
+  action: 'integrate-result' | 'disable' | 'enable' | 'settings' | 'reconcile' | 'resume-agent' | 'interrupt-agent' | 'delegate' | 'message' | 'review-plan' | 'decision'
   /** Provider for a NEW teammate; an existing one keeps its own. */
   teammateProvider?: AgentProvider
   /** Name for a NEW teammate (herdr's `agent start <name>`). */
@@ -833,6 +844,11 @@ export async function sendTuiSessionCoordination(
     })
   }
   const coord = await coordination()
+  if (request.action === 'integrate-result') {
+    if (!request.taskId || !request.token) throw new Error('Review the result before integrating')
+    await (await import('../coordinatorResultReviewServer')).integrateCoordinatorResult(sessionId, provider, request.taskId, request.token, request.requestId)
+    return readTuiSessionCoordinator(sessionId, provider)
+  }
   if (request.action === 'disable' || request.action === 'enable') {
     const info = request.action === 'enable' ? await readViewSessionInfo(sessionId, provider).catch(() => null) : null
     await coord.setInteractiveCoordinatorEnabled({ sessionId, provider, requestId: request.requestId, enabled: request.action === 'enable', cwd: info?.cwd || request.cwd, autoContinue: request.autoContinue })
@@ -997,4 +1013,9 @@ export async function saveTuiPrompt(input: SavePromptInput): Promise<PromptRecor
 
 export async function deleteTuiPrompt(slug: string): Promise<boolean> {
   return deletePrompt(slug)
+}
+
+export async function readTuiCoordinatorResult(sessionId: string, provider: AgentProvider, taskId: string): Promise<import('../coordinatorResultReview').CoordinatorResultReview> {
+  if (isRemoteAttached()) return remoteJson(`${encodeSessionPath(sessionId, '/coordination/results/' + encodeURIComponent(taskId))}${providerQuery(provider)}`)
+  return (await import('../coordinatorResultReviewServer')).readCoordinatorResultReview(sessionId, provider, taskId)
 }

@@ -290,6 +290,15 @@ await waitFor('result summary', () => readable().includes('Parser fixture result
   const occurrences = readable().split('Parser fixture result: missing grammar').length - 1
   if (occurrences !== 1) fail(`the result is on screen ${occurrences} times:\n${captureCharFrame()}`)
 }
+const reviewedBeforeInspection = [...store.getInteractiveCoordinatorState().reviewed]
+await press('v')
+await waitFor('result review receipt', () => readable().includes('Verification: missing'))
+writeFileSync(`/tmp/coordinator-result-review-${SMOKE_WIDTH}.txt`, captureCharFrame())
+if (!readable().includes('No executed checks recorded.')) fail('missing verification was hidden')
+if (JSON.stringify(store.getInteractiveCoordinatorState().reviewed) !== JSON.stringify(reviewedBeforeInspection)) fail('inspecting a result marked it reviewed')
+await press('pagedown')
+await press('escape')
+await waitFor('return from result review', () => captureCharFrame().includes('ATTENTION'))
 await press('s')
 if (captureCharFrame().includes('ATTENTION')) fail('reviewed result stayed in attention')
 
