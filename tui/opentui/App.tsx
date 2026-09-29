@@ -258,7 +258,7 @@ import {
   sessionMessageSequenceFingerprint,
   summarizeDurableSessionMessages,
 } from './messageFingerprint'
-import { appendFile, mkdirSync } from 'node:fs'
+import { appendFile, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { readFile, rm, stat } from 'node:fs/promises'
 import { release, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
@@ -13291,10 +13291,15 @@ export default function OpenTuiApp() {
 
   const submitNewSession = useEffectEvent(() => {
     if (newSessionBusy) return
-    const targetProvider = newSessionProvider
-    const cwd = newSessionCwd.trim() || process.cwd()
+    void startFreshSession(newSessionProvider, newSessionCwd.trim() || process.cwd())
+  })
+
+  // Create a session and open it with the composer focused — the New Session
+  // dialog's action, and what /clear and /new do, as in the native CLIs.
+  const startFreshSession = useEffectEvent(async (targetProvider: AgentProvider, cwd: string) => {
+    if (newSessionBusy) return
     setNewSessionBusy(true)
-    void (async () => {
+    {
       try {
         const result = await createTuiSession({ provider: targetProvider, cwd })
         const draft: Session = {
@@ -13320,7 +13325,96 @@ export default function OpenTuiApp() {
       } finally {
         setNewSessionBusy(false)
       }
-    })()
+    }
+  })
+
+  // CLI built-ins that are TUI views rather than agent requests. The Claude SDK
+  // answers these "isn't available in this environment" (or, for /todos, not at
+  // all — it went to the model as prompt text); the native CLIs show them.
+  const runTuiLocalCommand = useEffectEvent((target: Session, text: string): boolean => {
+    const match = /^\/(\S+)\s*([\s\S]*)$/.exec(text.trim())
+    if (!match) return false
+    const command = match[1]!.toLowerCase()
+    const targetProvider = target.provider ?? 'claude'
+    if (command === 'clear' || command === 'new') {
+      void startFreshSession(targetProvider, target.cwd ?? process.cwd())
+      return true
+    }
+    // Views every native CLI has, mapped onto the TUI surface that shows them.
+    if (command === 'diff') {
+      setComposerActive(false)
+      setGitOpen(true)
+      return true
+    }
+    if (command === 'mcp') {
+      setComposerActive(false)
+      openDiagnostics(target)
+      return true
+    }
+    if (command === 'resume') {
+      setComposerActive(false)
+      setFocusedPane('sessions')
+      setSessionSearchMode(true)
+      return true
+    }
+    if (command === 'exit' || command === 'quit') {
+      setComposerActive(false)
+      setExitConfirmOpen(true)
+      return true
+    }
+    if (command === 'copy') {
+      const lastReply = [...(sessionDetail?.threadedMessages ?? [])].reverse()
+        .find((message) => message.role === 'assistant' && message.blocks.some((block) => block.type === 'text' && block.text.trim()))
+      const text = lastReply?.blocks.flatMap((block) => (block.type === 'text' ? [block.text] : [])).join('\n\n').trim()
+      if (!text) {
+        showNotice('info', 'No reply to copy yet', 3500)
+        return true
+      }
+      void writeClipboard(text, renderer)
+        .then(() => showNotice('info', 'Copied the last reply', 3000))
+        .catch((err) => showNotice('error', err instanceof Error ? err.message : 'Copy failed'))
+      return true
+    }
+    if (command === 'export') {
+      const persisted = sessionDetail?.threadedMessages ?? []
+      if (persisted.length === 0) {
+        showNotice('info', 'Nothing to export yet', 3500)
+        return true
+      }
+      const file = match[2]!.trim() || `conversation-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`
+      const destination = resolve(target.cwd ?? process.cwd(), file)
+      try {
+        writeFileSync(destination, formatTranscriptExpandedText(persisted), 'utf8')
+        showNotice('info', `Exported the conversation to ${destination}`, 8000)
+      } catch (err) {
+        showNotice('error', err instanceof Error ? err.message : 'Export failed')
+      }
+      return true
+    }
+    if (targetProvider !== 'claude') return false
+    if (command === 'status') {
+      // The same resolution the composer footer shows.
+      const model = composerCurrentModel ?? 'auto'
+      const usage = contextUsage ? ` · Context: ${Math.round(contextUsage.totalTokens / 1000)}k${contextUsage.maxTokens ? `/${Math.round(contextUsage.maxTokens / 1000)}k` : ''}` : ''
+      showNotice('info', `Model: ${model} · Mode: ${composerPermissionMode} · Directory: ${target.cwd ?? process.cwd()} · Session: ${target.sessionId}${usage}`, 12_000)
+      return true
+    }
+    if (command === 'todos') {
+      setTaskPopoverOpen(true)
+      return true
+    }
+    if (command === 'memory') {
+      const memoryPath = join(target.cwd ?? process.cwd(), 'CLAUDE.md')
+      if (!existsSync(memoryPath)) {
+        showNotice('info', 'This project has no CLAUDE.md yet — /init creates one', 6000)
+        return true
+      }
+      setEditorInitialPath(memoryPath)
+      setEditorInitialLine(null)
+      setEditorOpen(true)
+      return true
+    }
+    return false
   })
 
   const copyCoordinationJoinCommand = useEffectEvent((runId: string) => {
@@ -14015,6 +14109,17 @@ export default function OpenTuiApp() {
       return
     }
 
+    if (!isRetry && submission.attachments.length === 0 && trimmed.startsWith('/') && runTuiLocalCommand(composerTargetSession, trimmed)) {
+      composerTextareaRef.current?.setText('')
+      composerTextareaRef.current?.extmarks.clear()
+      setComposerDraft('')
+      setComposerMentionAttachments([])
+      setComposerPromptParts([])
+      setComposerHistoryOpen(false)
+      setComposerHistoryIndex(0)
+      return
+    }
+
     // Global Channel Bridge binding: divert the send to the live `claude` CLI
     // session instead of the active provider. The durable outbox retains failed
     // sends for reconnect replay; replies and permission prompts surface in the
@@ -14668,6 +14773,10 @@ export default function OpenTuiApp() {
                 blocks: [{ type: 'local_command_stdout', stdout }],
               }
               setLocalCommandOutputs((prev) => upsertThreadedMessage(prev, outputMessage))
+              // A local command runs no model turn and may persist nothing the
+              // SDK returns, so waiting for persisted rows only ever ended at
+              // the 12s escape hatch.
+              commandResultWithoutTranscript = true
             }
           }
         }
@@ -18819,6 +18928,12 @@ export default function OpenTuiApp() {
         })
         return
       }
+      // The native CLIs put their own mode on this key too: Copilot cycles
+      // interactive/plan/autopilot, OpenCode switches primary agent.
+      if (target?.provider === 'copilot' || target?.provider === 'opencode') {
+        handled(() => executeCommandPalette('mode'))
+        return
+      }
     }
 
     // ⇧O opens the surface panel, or refocuses it once escaped out of, and
@@ -20386,7 +20501,10 @@ export default function OpenTuiApp() {
     const typed = composerFirstLine.trim().split(/\s/)[0]?.toLowerCase() ?? ''
     if (composerSlashCommands.some((entry) => entry.command.toLowerCase() === typed)) return false
     const entry = composerSlashCommands[composerSlashIndex] ?? composerSlashCommands[0]
-    if (!entry) return false
+    // Only a completion of what was typed: a full command the menu does not
+    // list (a CLI built-in such as /status) must send as typed, not be swapped
+    // for a fuzzy match like /codex:status.
+    if (!entry || !entry.command.toLowerCase().startsWith(typed)) return false
     insertSlashAtCursor(entry.command)
     return true
   }

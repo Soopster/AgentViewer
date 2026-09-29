@@ -339,7 +339,7 @@ export function createOpenCode2Clients(options: { baseUrl: string; headers?: Rec
         const agents = listOf<{ id?: string; name: string; description?: string; mode?: string; hidden?: boolean }>(
           await v2.agent.list(locationInput(query<{ directory?: string }>(input).directory) as never),
         )
-        return agents.map((agent): OpenCodeAgent => ({
+        const listed = agents.map((agent): OpenCodeAgent => ({
           // v1's `name` is the identifier every call takes; v2 split it into
           // `id` ("build") and a display `name` ("Build"), and sending the
           // display name back fails the turn with `Agent not found: "Build"`.
@@ -349,6 +349,15 @@ export function createOpenCode2Clients(options: { baseUrl: string; headers?: Rec
           builtIn: false,
           ...(agent.hidden ? { hidden: agent.hidden } : {}),
         } as OpenCodeAgent))
+        // 2.0.8 lists only configured agents, yet the built-in primaries run
+        // (a session starts on `build`, and `plan` is accepted by id). Without
+        // them there was nothing to switch between — OpenCode's own Tab cycles
+        // build ↔ plan, and ⇧Tab here did nothing.
+        const builtIns: OpenCodeAgent[] = [
+          { name: 'build', description: 'Default agent with all tools', mode: 'primary', builtIn: true } as OpenCodeAgent,
+          { name: 'plan', description: 'Plans without making changes', mode: 'primary', builtIn: true } as OpenCodeAgent,
+        ]
+        return [...builtIns.filter((agent) => !listed.some((entry) => entry.name === agent.name)), ...listed]
       },
     },
     command: {

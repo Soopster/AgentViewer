@@ -484,6 +484,20 @@ it against the native CLI (see the composer flow harness in memory).
   which overwrote a separately sent `setPermissionMode` — "approve · auto-accept
   edits" went on asking for every edit. Both composers pass `permissionMode` on
   `respondPermission`; `claudePlanApprovalSmoke.ts` pins the shape.
+- **CLI built-ins that are views run in the TUI** (`runTuiLocalCommand`): `/clear`
+  and `/new` open a fresh session in the same folder for every provider; for
+  Claude, `/status`, `/todos`, `/memory` and `/export` open or write what the CLI
+  would, where the SDK only answered "isn't available in this environment" (or,
+  for `/todos`, sent it to the model). A Claude local command's `<synthetic>`
+  output also ends the turn at once — it may persist nothing the SDK returns, so
+  waiting for rows only ended at the 12s escape hatch. The Enter-picks-highlighted
+  rule only completes a prefix of what was typed, or `/status` became `/codex:status`.
+- **Views every CLI has map onto TUI surfaces, for every provider**: `/diff` opens
+  the Git panel, `/mcp` diagnostics, `/copy` copies the last reply, `/export`
+  writes the conversation, `/resume` focuses session search, `/exit` asks to quit.
+  ⇧Tab cycles each provider's own mode — Claude permission modes, Copilot
+  interactive/plan/autopilot, OpenCode primary agents. OpenCode 2.0.8's
+  `agent.list` omits the built-in `build`/`plan` it still runs, so the adapter adds them.
 - **Native slash commands answer, never "cannot run".** Codex `/status` reports the
   thread's model, effort, approvals and directory; `/init` runs its built-in
   AGENTS.md prompt as a normal turn. OpenCode `/help` and `/models` (TUI views, not
