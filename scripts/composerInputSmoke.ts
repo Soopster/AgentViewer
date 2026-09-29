@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { filterSlashCommands } from '../lib/slashCommands'
 import { getCodexClient } from '../lib/codexClient'
 import { buildCodexComposerInput } from '../lib/codexComposerInput'
 import {
@@ -593,5 +594,17 @@ const reloadedPiUrl = new URL(`../lib/piClient.ts?composer-reload=${Date.now()}`
 const reloadedPi = await import(reloadedPiUrl) as typeof import('../lib/piClient')
 assert.equal(piSessionPathCacheSize(), 1)
 assert.equal(reloadedPi.piSessionPathCacheSize(), 1)
+
+// The slash menu ranks by the command name being typed, as the native menus do;
+// a description that merely contains the query sorts after every name match.
+const slashEntries = [
+  { command: '/find-skills', description: 'could help find a skill' },
+  { command: '/cost', description: '' },
+  { command: '/agent-context', description: '' },
+  { command: '/context', description: '' },
+]
+assert.deepEqual(filterSlashCommands(slashEntries, 'co').map((entry) => entry.command), ['/cost', '/context', '/agent-context', '/find-skills'])
+assert.deepEqual(filterSlashCommands(slashEntries, 'context --verbose').map((entry) => entry.command), ['/context', '/agent-context'],
+  'arguments after the command do not stop it matching')
 
 console.log('cross-provider composer attachment and lifecycle conformance passed')

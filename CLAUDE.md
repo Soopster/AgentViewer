@@ -484,6 +484,16 @@ it against the native CLI (see the composer flow harness in memory).
   which overwrote a separately sent `setPermissionMode` — "approve · auto-accept
   edits" went on asking for every edit. Both composers pass `permissionMode` on
   `respondPermission`; `claudePlanApprovalSmoke.ts` pins the shape.
+- **Native slash commands answer, never "cannot run".** Codex `/status` reports the
+  thread's model, effort, approvals and directory; `/init` runs its built-in
+  AGENTS.md prompt as a normal turn. OpenCode `/help` and `/models` (TUI views, not
+  server commands) are answered locally instead of "not available on this server".
+- **The composer's keys follow the native CLIs.** ↑ in an empty prompt opens the
+  prompt history; ↑/↓ move through the `/` and `@` menus; Enter on a partial
+  command name picks the highlighted entry. That last one lives in the textarea's
+  submit callback — the textarea handles Enter before the app's key handler.
+  `filterSlashCommands` ranks name matches (exact, prefix, word, substring) above
+  description mentions, which `composerInputSmoke.ts` pins.
 - **A turn blocked on the user says so.** The status row reads "Waiting for your
   answer/approval" while a question or permission is pending, not a busy phrase.
 - **Whatever error follows our own abort is the interrupt.** Claude answers an

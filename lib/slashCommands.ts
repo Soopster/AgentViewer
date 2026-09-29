@@ -142,9 +142,26 @@ export function getSlashCommandSuggestions(provider: AgentProvider | undefined |
 }
 
 export function filterSlashCommands(entries: SlashCommandSuggestion[], rawQuery: string): SlashCommandSuggestion[] {
-  const query = rawQuery.trim().toLowerCase()
+  const query = rawQuery.trim().toLowerCase().split(/\s/)[0] ?? ''
   if (!query) return entries
-  return entries.filter((entry) => entry.command.toLowerCase().includes(query) || entry.description.toLowerCase().includes(query))
+  // Ranked as the native menus do: a name the query starts is what the user is
+  // typing, so it comes first. A description mention ("co" in "could") is the
+  // weakest signal and sorts last — unranked, `/co` listed skills whose blurbs
+  // happened to contain "co" above /compact, /context and /cost.
+  const tier = (entry: SlashCommandSuggestion): number => {
+    const name = entry.command.toLowerCase().replace(/^\//, '')
+    if (name === query) return 0
+    if (name.startsWith(query)) return 1
+    if (name.split(/[-:_]/).some((part) => part.startsWith(query))) return 2
+    if (name.includes(query)) return 3
+    if (entry.description.toLowerCase().includes(query)) return 4
+    return -1
+  }
+  return entries
+    .map((entry, index) => ({ entry, index, rank: tier(entry) }))
+    .filter((item) => item.rank >= 0)
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map((item) => item.entry)
 }
 
 export function normalizeSlashCommandSuggestions(value: unknown): SlashCommandSuggestion[] | null {

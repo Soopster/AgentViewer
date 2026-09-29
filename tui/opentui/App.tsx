@@ -19033,11 +19033,12 @@ export default function OpenTuiApp() {
           })
           return
         }
-        if (key.name === 'n' && key.ctrl) {
+        // Arrows move through the menu, as in the native CLIs; ⌃N/⌃P too.
+        if ((key.name === 'n' && key.ctrl) || (key.name === 'down' && !key.ctrl && !key.meta && !key.shift)) {
           handled(() => setComposerMentionIndex((i) => Math.min(i + 1, composerMentionResults.length - 1)))
           return
         }
-        if (key.name === 'p' && key.ctrl) {
+        if ((key.name === 'p' && key.ctrl) || (key.name === 'up' && !key.ctrl && !key.meta && !key.shift)) {
           handled(() => setComposerMentionIndex((i) => Math.max(i - 1, 0)))
           return
         }
@@ -19050,11 +19051,11 @@ export default function OpenTuiApp() {
           })
           return
         }
-        if (key.name === 'n' && key.ctrl) {
+        if ((key.name === 'n' && key.ctrl) || (key.name === 'down' && !key.ctrl && !key.meta && !key.shift)) {
           handled(() => setComposerSlashIndex((i) => Math.min(i + 1, composerSlashCommands.length - 1)))
           return
         }
-        if (key.name === 'p' && key.ctrl) {
+        if ((key.name === 'p' && key.ctrl) || (key.name === 'up' && !key.ctrl && !key.meta && !key.shift)) {
           handled(() => setComposerSlashIndex((i) => Math.max(i - 1, 0)))
           return
         }
@@ -19068,6 +19069,13 @@ export default function OpenTuiApp() {
         return
       }
       if (key.name === 'p' && key.ctrl) {
+        handled(() => moveComposerHistory(1))
+        return
+      }
+      // ↑ in an empty prompt recalls earlier prompts, as the native CLIs do.
+      // Only when empty: in a draft, ↑ is cursor movement between its lines.
+      if (key.name === 'up' && !key.ctrl && !key.meta && !key.shift
+        && !(composerTextareaRef.current?.plainText ?? composerDraft)) {
         handled(() => moveComposerHistory(1))
         return
       }
@@ -20354,10 +20362,25 @@ export default function OpenTuiApp() {
     Math.min(composerWindowFooterHint.length + 1, composerWindowContentWidth - 16),
   )
   const composerWindowFooterStatsWidth = Math.max(composerWindowContentWidth - composerWindowFooterHintWidth - 1, 8)
+  // Enter on a partial command name picks the highlighted menu entry, as the
+  // native menus do, instead of sending "/co" as an unknown command. A name
+  // typed in full (with or without arguments) sends as usual. This lives in the
+  // submit path because the textarea handles Enter before the app's key handler.
+  const pickSlashInsteadOfSubmit = (): boolean => {
+    if (!composerSlashOpen || composerSlashCommands.length === 0) return false
+    const typed = composerFirstLine.trim().split(/\s/)[0]?.toLowerCase() ?? ''
+    if (composerSlashCommands.some((entry) => entry.command.toLowerCase() === typed)) return false
+    const entry = composerSlashCommands[composerSlashIndex] ?? composerSlashCommands[0]
+    if (!entry) return false
+    insertSlashAtCursor(entry.command)
+    return true
+  }
   const submitComposerFromDock = () => {
+    if (pickSlashInsteadOfSubmit()) return
     void sendComposerMessage(composerTextareaRef.current?.plainText ?? composerDraft)
   }
   const submitComposerFromWindow = () => {
+    if (pickSlashInsteadOfSubmit()) return
     const draft = composerTextareaRef.current?.plainText ?? composerDraft
     if (draft.trim() && composerTargetSession) {
       rememberComposerCursor()
@@ -20408,7 +20431,7 @@ export default function OpenTuiApp() {
         flexDirection="column"
       >
         <text fg={composerAccentColor} wrapMode="none">
-          {fitText(`${composerConfig.label} ${composerProvider === 'opencode' ? 'files/agents' : 'files'} · ⌃P/⌃N select · tab insert · esc cancel  (${composerMentionIndex + 1}/${total})${hasMoreAbove ? ' ↑' : ''}${hasMoreBelow ? ' ↓' : ''}`, rowWidth)}
+          {fitText(`${composerConfig.label} ${composerProvider === 'opencode' ? 'files/agents' : 'files'} · ↑↓ select · tab insert · esc cancel  (${composerMentionIndex + 1}/${total})${hasMoreAbove ? ' ↑' : ''}${hasMoreBelow ? ' ↓' : ''}`, rowWidth)}
         </text>
         {composerMentionResults.slice(start, end).map((entry, offset) => {
           const index = start + offset
@@ -20453,7 +20476,7 @@ export default function OpenTuiApp() {
         flexDirection="column"
       >
         <text fg={composerAccentColor} wrapMode="none">
-          {fitText(`${composerConfig.label} commands · ⌃P/⌃N select · tab insert · esc cancel  (${composerSlashIndex + 1}/${total})${hasMoreAbove ? ' ↑' : ''}${hasMoreBelow ? ' ↓' : ''}`, rowWidth)}
+          {fitText(`${composerConfig.label} commands · ↑↓ select · tab insert · esc cancel  (${composerSlashIndex + 1}/${total})${hasMoreAbove ? ' ↑' : ''}${hasMoreBelow ? ' ↓' : ''}`, rowWidth)}
         </text>
         {composerSlashCommands.slice(start, end).map((entry, offset) => {
           const index = start + offset

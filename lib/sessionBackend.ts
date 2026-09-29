@@ -4159,6 +4159,12 @@ function parseCodexApprovalPolicy(body: Record<string, unknown>): CodexApprovalP
   return (CODEX_APPROVAL_POLICIES as readonly string[]).includes(value) ? (value as CodexApprovalPolicy) : undefined
 }
 
+const CODEX_INIT_PROMPT = `Generate a file named AGENTS.md that serves as a contributor guide for this repository.
+Keep it concise (200-400 words), well organised under clear headings, and specific to this project:
+project structure and module organisation; build, test and development commands; coding style and
+naming conventions; testing guidelines; commit and pull request guidelines. If an AGENTS.md already
+exists, improve it rather than replacing what is still accurate.`
+
 async function createCodexStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>, checkpoint?: Promise<unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
   const turnRequestId = parseTurnRequestId(body)
@@ -4638,7 +4644,12 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
           safeEnqueue(commandResultEvent('codex', { message: 'Compacting the conversation…' }))
           return
         }
-        if (codexSlash) {
+        // Codex's /init is a built-in prompt, not a control op: it runs as an
+        // ordinary turn that writes AGENTS.md.
+        const codexInitPrompt = codexSlash?.command.toLowerCase() === 'init'
+          ? CODEX_INIT_PROMPT
+          : null
+        if (codexSlash && !codexInitPrompt) {
           const commandName = codexSlash.command.toLowerCase()
           const commandArgs = codexSlash.arguments.trim()
           const finishCommand = (message: string) => {
@@ -4722,6 +4733,19 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
             return
           }
 
+          if (commandName === 'status') {
+            // Codex's /status: what this thread runs with. The TUI shows the
+            // same facts in its footer, but the command must still answer
+            // rather than claim it cannot run.
+            finishCommand([
+              `Model: ${currentModel}${codexEffort ? ` (${codexEffort})` : ''}`,
+              `Approvals: ${approvalPolicy ?? 'config default'}`,
+              `Directory: ${cwdOverride ?? process.cwd()}`,
+              `Thread: ${sessionId}`,
+            ].join(' · '))
+            return
+          }
+
           finishCommand(`/${codexSlash.command} is an interactive Codex command that agent-viewer cannot run yet.`)
           return
         }
@@ -4734,7 +4758,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
           // in the composer (otherwise the configured default is used). This is
           // what makes the exec/patch approval prompts appear interactively.
           ...(approvalPolicy ? { approvalPolicy } : {}),
-          input: buildCodexComposerInput(userMessage, attachments, cwdOverride),
+          input: buildCodexComposerInput(codexInitPrompt ?? userMessage, attachments, cwdOverride),
         } satisfies CodexRequestParams<'turn/start'>
         // No watchdog covers this call yet — it runs before activateTargetTurn
         // sets up startTurnWatchdog above, so a hang here (e.g. the app-server
@@ -5060,6 +5084,36 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
           } else if (commandName === 'unshare') {
             await client.session.unshare({ ...OPENCODE_OPTIONS, path: { id: targetSessionId } })
             safeEnqueue(commandResultEvent('opencode', { message: 'Session sharing disabled.', transcriptExpected: false }))
+            activeSubscription.close()
+          } else if (commandName === 'help' || commandName === 'models') {
+            // OpenCode TUI built-ins that are views, not server commands: answer
+            // them here rather than reporting them "not available".
+            let message: string
+            if (commandName === 'help') {
+              const serverCommands = await client.command.list({
+                ...OPENCODE_OPTIONS,
+                ...(sessionDirectory ? { query: { directory: sessionDirectory } } : {}),
+              }).then((response) => openCodeData<Array<{ name?: string }>>(response)).catch(() => [])
+              const names = serverCommands.map((command) => command?.name).filter((name): name is string => Boolean(name))
+              message = [
+                'OpenCode commands: /compact (/summarize), /share, /unshare, /models, !<shell>',
+                names.length ? `Project commands: ${names.map((name) => `/${name}`).join(', ')}` : '',
+              ].filter(Boolean).join(' · ')
+            } else {
+              const lastModel = selectedModel ?? await client.session.messages({
+                ...OPENCODE_OPTIONS,
+                path: { id: targetSessionId },
+              }).then((response) => {
+                const records = openCodeData<Array<{ info?: { role?: string; providerID?: string; modelID?: string } }>>(response)
+                for (let i = records.length - 1; i >= 0; i -= 1) {
+                  const info = records[i]?.info
+                  if (info?.role === 'assistant' && info.providerID && info.modelID) return { providerID: info.providerID, modelID: info.modelID }
+                }
+                return null
+              }).catch(() => null)
+              message = `${lastModel ? `OpenCode model is ${lastModel.providerID}/${lastModel.modelID}.` : 'No OpenCode model has run in this session yet.'} Switch with ⌥M.`
+            }
+            safeEnqueue(commandResultEvent('opencode', { message, transcriptExpected: false }))
             activeSubscription.close()
           } else {
             // Validate against the server's command list first — an unknown
