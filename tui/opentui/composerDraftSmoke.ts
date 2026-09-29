@@ -9,8 +9,10 @@ const {
   flushComposerQueueWrites,
   flushComposerStashWrites,
   readComposerDraft,
+  readComposerDraftParts,
   readComposerStash,
   scheduleWriteComposerDraft,
+  scheduleWriteComposerDraftParts,
   scheduleWriteComposerQueue,
   scheduleWriteComposerStash,
 } = await import('../../lib/tuiComposerState')
@@ -24,6 +26,18 @@ assert.equal(readComposerDraft('codex:pane-b'), 'pane draft')
 scheduleWriteComposerDraft('claude:reader-a', '')
 assert.equal(readComposerDraft('claude:reader-a'), '')
 assert.equal(readComposerDraft('codex:pane-b'), 'pane draft')
+
+// The content behind a draft's placeholders persists with it, and writing the
+// text alone keeps it: saved text without it restored "[Pasted ~200 lines]"
+// with nothing behind it, which then sent the placeholder literally.
+const pastedPart = { id: 'p1', kind: 'text', marker: '[Pasted ~3 lines]', text: 'a\nb\nc' }
+scheduleWriteComposerDraft('claude:paste', 'see [Pasted ~3 lines]')
+scheduleWriteComposerDraftParts('claude:paste', [pastedPart])
+scheduleWriteComposerDraft('claude:paste', 'see [Pasted ~3 lines] and more')
+assert.deepEqual(readComposerDraftParts('claude:paste'), [pastedPart], 'a text write keeps the parts')
+await new Promise((resolve) => setTimeout(resolve, 400))
+const draftFile = JSON.parse(readFileSync(path.join(process.cwd(), '.agent-viewer-data', 'composer-drafts', 'drafts.json'), 'utf8'))
+assert.deepEqual(draftFile['claude:paste'], { text: 'see [Pasted ~3 lines] and more', parts: [pastedPart] }, 'parts reach the file')
 
 const queued = [{
   id: 'codex:thread-1:1',

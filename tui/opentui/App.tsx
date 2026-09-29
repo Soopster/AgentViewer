@@ -46,10 +46,12 @@ import {
   flushComposerQueueWrites,
   flushComposerStashWrites,
   readComposerDraft,
+  readComposerDraftParts,
   readComposerQueue,
   readComposerSentHistory,
   readComposerStash,
   scheduleWriteComposerDraft,
+  scheduleWriteComposerDraftParts,
   scheduleWriteComposerQueue,
   scheduleWriteComposerStash,
 } from '../../lib/tuiComposerState'
@@ -15519,20 +15521,33 @@ export default function OpenTuiApp() {
     if (previousKey && previousKey !== key) {
       const outgoingDraft = composerTextareaRef.current?.plainText ?? composerDraftRef.current
       scheduleWriteComposerDraft(previousKey, outgoingDraft)
-      // Attachments and structured prompt parts are not persisted, so clear
-      // them rather than leaking them into a different session's composer.
+      scheduleWriteComposerDraftParts(previousKey, composerPromptPartsRef.current)
+      // Attachments are not persisted, so clear them rather than leaking them
+      // into a different session's composer.
       setComposerMentionAttachments([])
-      setComposerPromptParts([])
       composerTextareaRef.current?.extmarks.clear()
     }
     composerDraftStorageKeyRef.current = key
     const saved = readComposerDraft(key)
+    // The content behind the draft's placeholders, restored with it: text
+    // alone brought back "[Pasted ~200 lines]" with nothing behind it.
+    const savedParts = (readComposerDraftParts(key) as ComposerPromptPart[])
+      .filter((part) => part && typeof part.marker === 'string' && saved.includes(part.marker))
+    composerPromptPartsRef.current = savedParts
+    setComposerPromptParts(savedParts)
     if (saved !== composerDraftRef.current) {
       composerDraftRef.current = saved
       setComposerDraft(saved)
       composerTextareaRef.current?.setText(saved)
     }
+    if (savedParts.length > 0) restoreComposerPromptPartExtmarks(savedParts, saved)
   }, [composerTargetSessionIdentity])
+
+  // Persist the placeholder content with the draft whenever it changes.
+  useEffect(() => {
+    const key = composerDraftStorageKeyRef.current
+    if (key) scheduleWriteComposerDraftParts(key, composerPromptParts)
+  }, [composerPromptParts])
 
   useEffect(() => {
     if (selectedSession || sessions.length === 0) return

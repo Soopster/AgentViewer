@@ -7,7 +7,10 @@ const FILE = path.join(DATA_DIR, 'drafts.json')
 const QUEUE_FILE = path.join(DATA_DIR, 'queue-v1.json')
 const STASH_FILE = path.join(DATA_DIR, 'stash-v1.json')
 
-type DraftStore = Record<string, { text: string }>
+// `parts` is the content behind placeholders in `text` (a collapsed paste, an
+// attached file). Saving the text without it restored "[Pasted ~200 lines]"
+// with nothing behind it, and sending that sent the placeholder literally.
+type DraftStore = Record<string, { text: string; parts?: unknown[] }>
 
 function ensureDir(): void {
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true })
@@ -37,7 +40,7 @@ function flushWrites(): void {
     if (!entry) continue
     pendingDrafts.delete(key)
     if (entry.text.trim()) {
-      store[key] = { text: entry.text }
+      store[key] = entry.parts?.length ? { text: entry.text, parts: entry.parts } : { text: entry.text }
     } else {
       delete store[key]
     }
@@ -46,12 +49,23 @@ function flushWrites(): void {
   writeFileSync(FILE, JSON.stringify(store), 'utf-8')
 }
 
-const pendingDrafts = new Map<string, { text: string }>()
+const pendingDrafts = new Map<string, { text: string; parts?: unknown[] }>()
 
-export function scheduleWriteComposerDraft(storageKey: string, text: string): void {
-  pendingDrafts.set(storageKey, { text })
+function scheduleFlush(storageKey: string): void {
   writeQueue.add(storageKey)
   if (!writeTimer) writeTimer = setTimeout(flushWrites, 300)
+}
+
+/** Saves the draft text, keeping whatever parts it already has. */
+export function scheduleWriteComposerDraft(storageKey: string, text: string): void {
+  pendingDrafts.set(storageKey, { text, parts: readComposerDraftParts(storageKey) })
+  scheduleFlush(storageKey)
+}
+
+/** Saves the content behind the draft's placeholders, keeping its text. */
+export function scheduleWriteComposerDraftParts(storageKey: string, parts: unknown[]): void {
+  pendingDrafts.set(storageKey, { text: readComposerDraft(storageKey), parts })
+  scheduleFlush(storageKey)
 }
 
 export function readComposerDraft(storageKey: string): string {
@@ -59,6 +73,14 @@ export function readComposerDraft(storageKey: string): string {
   if (pending) return pending.text
   const store = readStoreSync()
   return store[storageKey]?.text ?? ''
+}
+
+export function readComposerDraftParts(storageKey: string): unknown[] {
+  const pending = pendingDrafts.get(storageKey)
+  if (pending) return pending.parts ?? []
+  const store = readStoreSync()
+  const parts = store[storageKey]?.parts
+  return Array.isArray(parts) ? parts : []
 }
 
 /**

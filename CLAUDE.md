@@ -494,6 +494,11 @@ it against the native CLI (see the composer flow harness in memory).
   submit callback — the textarea handles Enter before the app's key handler.
   `filterSlashCommands` ranks name matches (exact, prefix, word, substring) above
   description mentions, which `composerInputSmoke.ts` pins.
+- **A draft is saved with the content behind its placeholders.** A multi-line
+  paste collapses to `[Pasted ~N lines]`; saving only the text restored that
+  placeholder with nothing behind it (after a restart or a session switch), and
+  sending it sent the placeholder literally. `drafts.json` entries carry `parts`,
+  restored only while their marker is still in the text (`composerDraftSmoke.ts`).
 - **A turn blocked on the user says so.** The status row reads "Waiting for your
   answer/approval" while a question or permission is pending, not a busy phrase.
 - **Whatever error follows our own abort is the interrupt.** Claude answers an
