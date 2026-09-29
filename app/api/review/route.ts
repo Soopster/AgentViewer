@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { listReviews, mutateReview, readReviewIfChanged } from '@/lib/review/store'
 import { reviewRequestSchema } from '@/lib/review/schema'
-import { fetchGitData, parseGitDiffSource } from '@/lib/gitProvider'
-import { fetchSourceStatus } from '@/lib/gitDiffSources'
-import { runGitCommand } from '@/lib/gitNodeProvider'
-import { fetchGitReviewStream } from '@/lib/review/gitStream'
+import { refreshReview } from '@/lib/review/refresh'
 
 export async function GET(request: NextRequest) {
   try {
@@ -20,15 +17,9 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = reviewRequestSchema.parse(await request.json())
-    if (body.publish?.refresh) {
-      if (!/^(working|branch|turn:)/.test(body.source)) throw new Error('This source must publish its own patch')
-      const [kind, sha] = body.source.split(':')
-      const source = parseGitDiffSource(kind, sha)
-      const entries = source.kind === 'working'
-        ? (await fetchGitData(body.cwd, runGitCommand)).status
-        : await fetchSourceStatus(body.cwd, runGitCommand, source)
-      body.publish.patch = await fetchGitReviewStream(body.cwd, runGitCommand, source, entries)
-    }
-    return NextResponse.json(await mutateReview(body), { headers: { 'Cache-Control': 'no-store' } })
+    const result = body.publish?.refresh
+      ? await refreshReview({ cwd: body.cwd, source: body.source, requestId: body.requestId, viewId: body.publish.viewId })
+      : await mutateReview(body)
+    return NextResponse.json(result, { headers: { 'Cache-Control': 'no-store' } })
   } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 409 }) }
 }

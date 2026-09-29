@@ -6,8 +6,9 @@ import {
   type StopHookInput,
 } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
-import { reviewReadShape, reviewApplyShape, reviewReadDescription, reviewApplyDescription, reviewReadProjection } from '../bin/agent-viewer-review-tools.mjs'
+import { reviewReadShape, reviewApplyShape, reviewReloadShape, reviewReadDescription, reviewApplyDescription, reviewReloadDescription, reviewReadProjection } from '../bin/agent-viewer-review-tools.mjs'
 import { listReviews, readReview, mutateReview } from './review/store'
+import { refreshReview } from './review/refresh'
 import type { ReviewOperation } from './review/types'
 import { setMessageBookmark } from './messageBookmarks'
 import { searchPersistedSessions } from './sessionPersistence'
@@ -75,6 +76,9 @@ function createViewerMcpServer(context: ClaudeViewerContext) {
       tool('review_apply', reviewApplyDescription, reviewApplyShape, async input => textResult(reviewReadProjection(await mutateReview({
         cwd: input.cwd ?? context.getCwd() ?? process.cwd(), source: input.source, requestId: input.request_id,
         operation: { ...input.operation, ...(['note', 'reply'].includes(input.operation.type) ? { author: 'agent' } : {}) } as ReviewOperation,
+      })))),
+      tool('review_reload', reviewReloadDescription, reviewReloadShape, async input => textResult(reviewReadProjection(await refreshReview({
+        cwd: input.cwd ?? context.getCwd() ?? process.cwd(), source: input.source, viewId: input.view_id, requestId: input.request_id,
       })))),
       tool(
         'search_sessions',

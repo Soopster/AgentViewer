@@ -11,6 +11,7 @@ import { COORDINATOR_MCP_TOOL_NAMES } from '../bin/agent-viewer-coordinator-tool
 const SESSION_MCP_TOOL_NAMES = Object.freeze([
   'review_read',
   'review_apply',
+  'review_reload',
   'search_sessions',
   'list_sessions',
   'message_session',
@@ -20,6 +21,11 @@ const SESSION_MCP_TOOL_NAMES = Object.freeze([
 ])
 
 const seen = []
+const reviewState = {
+  version: 1, sequence: 1, source: 'working',
+  document: { revision: 'review-rev', files: ['a.ts'], hunks: [] }, notes: [], decisions: [],
+  views: [{ id: 'view-1', surface: 'tui', seenAt: Date.now(), revision: 'review-rev' }], receipts: [],
+}
 let coordinatorTask = null
 let coordinatorMessage = null
 const daemon = createServer(async (request, response) => {
@@ -32,6 +38,14 @@ const daemon = createServer(async (request, response) => {
   seen.push({ method: request.method, url: request.url, body })
   response.setHeader('Content-Type', 'application/json')
 
+  if (request.method === 'GET' && request.url?.startsWith('/api/review?')) {
+    response.end(JSON.stringify(reviewState))
+    return
+  }
+  if (request.method === 'POST' && request.url === '/api/review') {
+    response.end(JSON.stringify(reviewState))
+    return
+  }
   if (request.url?.startsWith('/api/session-index/search?')) {
     response.end(JSON.stringify({
       total: 1,
@@ -238,6 +252,16 @@ try {
     const missing = expectedToolNames.filter((name) => !actual.has(name))
     const unexpected = actualToolNames.filter((name) => !expected.has(name))
     throw new Error(`Bridge tool inventory drifted (missing: ${missing.join(',') || 'none'}; unexpected: ${unexpected.join(',') || 'none'})`)
+  }
+  const reloaded = await client.callTool({ name: 'review_reload', arguments: {
+    source: 'working', view_id: 'view-1', request_id: 'review-reload-1',
+  } })
+  if (reloaded.structuredContent?.document?.revision !== 'review-rev'
+    || !seen.some(entry => entry.method === 'POST' && entry.url === '/api/review'
+      && entry.body?.publish?.refresh === true
+      && entry.body?.publish?.viewId === 'view-1'
+      && entry.body?.publish?.surface === 'tui')) {
+    throw new Error('Live review reload did not target and refresh the active MCP review view')
   }
   const names = new Set(actualToolNames)
   for (const a2aMethod of ['SendMessage', 'SendStreamingMessage', 'GetTask', 'ListTasks', 'CancelTask']) {

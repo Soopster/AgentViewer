@@ -14,8 +14,10 @@ export const reviewApplyShape = {
     z.object({ type: z.literal('decision'), hunkId: id, revision: id, status: z.enum(['approved', 'investigate', 'blocked', 'unreviewed']), rationale: z.string().max(4000).optional() }),
   ]),
 }
+export const reviewReloadShape = { cwd: z.string().optional(), source: z.string().min(1), view_id: id, request_id: id }
 export const reviewReadDescription = 'Inspect a live Agent Viewer code review. Omit source to list comparisons and open view IDs; supply source to read hunks, notes, replies, content revision, and checklist. Content is omitted unless include_content is true. Read before commenting or navigating. Closed views are not valid navigation targets.'
 export const reviewApplyDescription = 'Add an agent note, reply to a human note, mark a hunk, or explicitly navigate an open review view. Use IDs and revision from review_read and a stable request_id for retries. Notes are local review feedback, not GitHub comments. Human notes must be replied to, not edited. A navigation without appliedAt is only requested; use review_read to confirm the UI applied it. Do not move the user’s view unless requested.'
+export const reviewReloadDescription = 'Refresh the Git patch for a currently open working, branch, or turn review view and return its updated revision, notes, and decisions. Read review_read first and pass the exact active view_id and a stable request_id. Closed/stale views and PR/commit comparison sources cannot be reloaded through this tool. This refreshes local Agent Viewer data; it does not change Git files or post comments.'
 
 export function reviewReadProjection(state, includeContent = false) {
   const { receipts, ...result } = state
@@ -36,6 +38,18 @@ export function registerReviewTools(server, requestJson, cwd) {
     const data = await requestJson('/api/review', { method: 'POST', body: JSON.stringify({
       cwd: input.cwd ?? cwd, source: input.source, requestId: input.request_id ?? randomUUID(),
       operation: { ...input.operation, ...(['note', 'reply'].includes(input.operation.type) ? { author: 'agent' } : {}) },
+    }) })
+    return result(reviewReadProjection(data))
+  })
+  server.registerTool('review_reload', { description: reviewReloadDescription, inputSchema: reviewReloadShape }, async input => {
+    const effectiveCwd = input.cwd ?? cwd
+    const query = new URLSearchParams({ cwd: effectiveCwd, source: input.source })
+    const state = await requestJson(`/api/review?${query}`)
+    const view = state.views?.find(view => view.id === input.view_id && Date.now() - view.seenAt < 15_000)
+    if (!view) throw new Error('Review view is closed or no longer active. Read the open reviews again.')
+    const data = await requestJson('/api/review', { method: 'POST', body: JSON.stringify({
+      cwd: effectiveCwd, source: input.source, requestId: input.request_id,
+      publish: { refresh: true, viewId: view.id, surface: view.surface },
     }) })
     return result(reviewReadProjection(data))
   })
