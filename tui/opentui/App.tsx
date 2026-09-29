@@ -1813,12 +1813,12 @@ function timeAgo(value?: string | number): string {
 const COMPOSER_MIN_HEIGHT = 6
 const COMPOSER_MAX_HEIGHT = 12
 // The embedded composer keeps one breathing row below the draft. Its height
-// budget includes that row plus the top and bottom borders.
-// The status/hint row is painted into the bottom border rather than costing a
-// row of its own.
-const CHAT_COMPOSER_CHROME_HEIGHT = 3
-// Two border rows, one line of draft, and the breathing row.
-const CHAT_COMPOSER_MIN_HEIGHT = 4
+// budget includes that row plus the top border. The composer has no bottom
+// border of its own: the status/hint row is painted onto the reader frame's
+// bottom border, so the two never stack.
+const CHAT_COMPOSER_CHROME_HEIGHT = 2
+// Top border, one line of draft, and the breathing row.
+const CHAT_COMPOSER_MIN_HEIGHT = 3
 // Top border + bottom border. The status/hint row costs no height of its own:
 // outside fullscreen it is painted into the bottom border, the way a title is
 // painted into the top one.
@@ -21233,7 +21233,7 @@ export default function OpenTuiApp() {
               flexDirection="column"
               paddingX={1}
               backgroundColor={theme.surface2}
-              border={['top', 'left', 'right', 'bottom']}
+              border={['top', 'left', 'right']}
               borderStyle="single"
               borderColor={chatComposerFocused ? theme.border2 : theme.surface2}
             >

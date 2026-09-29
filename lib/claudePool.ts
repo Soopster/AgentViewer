@@ -217,11 +217,19 @@ const INTERRUPT_FALLBACK_MS = 4000
 // context window), but the coordinator MCP alone can register 40+ tools, so
 // we lower the threshold to activate deferral sooner rather than relying on
 // the default budget.
+// The interactive CLI gives the model its task list (TaskCreate/TaskUpdate/
+// TaskList/TaskGet); an SDK session has none of them unless
+// CLAUDE_CODE_ENABLE_TODO_TOOLS is set — measured on CLI 2.1.283, where the
+// init frame lists only Task and TaskStop without it. Asked to track work, the
+// model then says it has no such tool, which the native CLI never does. Both
+// UIs already render these cards and /todos reads them. A user's own setting
+// wins.
 export const CLAUDE_QUERY_ENV: Record<string, string | undefined> = {
   ...process.env,
   CLAUDE_ENABLE_STREAM_WATCHDOG: '1',
   CLAUDE_STREAM_IDLE_TIMEOUT_MS: '300000',
   ENABLE_TOOL_SEARCH: 'auto:5',
+  CLAUDE_CODE_ENABLE_TODO_TOOLS: process.env.CLAUDE_CODE_ENABLE_TODO_TOOLS ?? '1',
 }
 
 // Surface the Claude CLI subprocess's stderr (otherwise dropped) so a genuinely

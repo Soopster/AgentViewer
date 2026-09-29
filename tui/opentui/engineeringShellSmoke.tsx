@@ -151,7 +151,7 @@ for (const [width, height] of [[80, 40], [120, 40], [200, 40], [100, 24]]) {
       throw new Error(`Agents lost conversation or tool content at ${width}:\n${agentsFrame}`)
     }
     const agentsDock = node('composer-dock')
-    if (!agentsDock || agentsDock.height !== 4 || agentsDock.x < reader.x
+    if (!agentsDock || agentsDock.height !== 3 || agentsDock.x < reader.x
       || agentsDock.y + agentsDock.height > reader.y + reader.height
       || agentsFrame.includes('COMPOSER') || agentsFrame.includes('watching the wire')) {
       throw new Error(`Agents composer was not compact and inside the reader at ${width}x${height}:\n${agentsFrame}`)
