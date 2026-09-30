@@ -518,6 +518,15 @@ it against the native CLI (see the composer flow harness in memory).
   (`rewindTargetsSmoke.ts`). The prompt reaches a fork as that session's draft,
   since opening a session restores its own draft over anything set earlier.
   Files are left alone; ⇧U checkpoints restore code.
+- **Claude `/skills`, `/hooks`, `/permissions`, `/add-dir` answer instead of "isn't
+  available in this environment".** `/skills` lists the non-`builtin` commands the
+  SDK reports (skills, user/plugin/MCP commands — the flag is carried through
+  `readSlashCommands`); `/hooks` and `/permissions` open diagnostics, which lists
+  both. `/add-dir` has no live control, so the directory rides every turn as
+  `additionalDirectories` and a change recycles the warm entry (the CLI gets
+  `--add-dir`). The recorded system prompt does not learn about it mid-conversation,
+  so the model may still decline a path it has not been told about; permissions
+  already allow it.
 - **codex-cli 0.158 removed `thread/rollback`** for `thread/revert { beforeTurnId }`
   (the web's rollback broke with it). Reverting needs the thread loaded in that
   app-server — "thread not found" otherwise — so the backend resumes first, and

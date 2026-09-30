@@ -4,6 +4,8 @@ export type SlashCommandSuggestion = {
   command: string
   description: string
   argumentHint?: string
+  /** Claude Code's own command; absent for a skill, user, plugin or MCP command. */
+  builtin?: boolean
 }
 
 // Per-provider fallback slash command catalogs. These mirror what each
@@ -30,6 +32,7 @@ const SLASH_COMMANDS_BY_PROVIDER: Record<AgentProvider, SlashCommandSuggestion[]
     { command: '/agents', description: 'Manage subagents' },
     { command: '/permissions', description: 'Review or change tool permissions' },
     { command: '/memory', description: 'Edit Claude memory files' },
+    { command: '/add-dir', description: 'Add a working directory', argumentHint: '<path>' },
     { command: '/mcp', description: 'Manage MCP servers' },
     { command: '/skills', description: 'List available skills' },
     { command: '/review', description: 'Review the current diff', argumentHint: '[target]' },

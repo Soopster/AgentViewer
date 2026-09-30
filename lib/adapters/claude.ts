@@ -330,6 +330,7 @@ export const claudeAdapter: SessionAdapter = {
       command: command.name.startsWith('/') ? command.name : `/${command.name}`,
       description: command.description ?? '',
       argumentHint: command.argumentHint && command.argumentHint.trim() ? command.argumentHint : undefined,
+      ...(command.builtin ? { builtin: true } : {}),
     }))
     // A commands_changed push supersedes any RPC fetch: supportedCommands()
     // returns the init-captured list and never reflects mid-session changes.

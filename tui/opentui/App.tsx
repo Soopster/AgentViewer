@@ -261,9 +261,9 @@ import {
   sessionMessageSequenceFingerprint,
   summarizeDurableSessionMessages,
 } from './messageFingerprint'
-import { appendFile, existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { appendFile, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { readFile, rm, stat } from 'node:fs/promises'
-import { release, tmpdir } from 'node:os'
+import { homedir, release, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -8126,6 +8126,10 @@ export default function OpenTuiApp() {
   const [tuiCodexApprovalByKey, setTuiCodexApprovalByKey] = useState<Record<string, TuiCodexApproval>>({})
   // Codex's collaboration mode per session (the CLI's ⇧Tab Plan/Default). Read
   // through the ref at send time, so `/plan <goal>` sends in the mode it just set.
+  // /add-dir roots per Claude session; sent with every turn (spawn-time option).
+  const [tuiAddedDirsByKey, setTuiAddedDirsByKey] = useState<Record<string, string[]>>({})
+  const tuiAddedDirsByKeyRef = useRef(tuiAddedDirsByKey)
+  tuiAddedDirsByKeyRef.current = tuiAddedDirsByKey
   const [tuiCodexModeByKey, setTuiCodexModeByKey] = useState<Record<string, 'plan' | 'default'>>({})
   const tuiCodexModeByKeyRef = useRef(tuiCodexModeByKey)
   const setCodexCollaborationMode = useCallback((target: Session, mode: 'plan' | 'default') => {
@@ -13577,6 +13581,50 @@ export default function OpenTuiApp() {
       showNotice('info', `Model: ${model} · Mode: ${composerPermissionMode} · Directory: ${target.cwd ?? process.cwd()} · Session: ${target.sessionId}${usage}`, 12_000)
       return true
     }
+    if (command === 'add-dir') {
+      const requested = match[2]!.trim()
+      const key = sessionKey(target)
+      const current = tuiAddedDirsByKeyRef.current[key] ?? []
+      if (!requested) {
+        showNotice('info', current.length ? `Added directories: ${current.join(', ')}` : 'Usage: /add-dir <path>', 8000)
+        return true
+      }
+      const directory = resolve(target.cwd ?? process.cwd(), requested.replace(/^~(?=$|\/)/, homedir()))
+      let isDirectory = false
+      try { isDirectory = statSync(directory).isDirectory() } catch { /* reported below */ }
+      if (!isDirectory) {
+        showNotice('error', `Not a directory: ${directory}`)
+        return true
+      }
+      if (!current.includes(directory)) {
+        setTuiAddedDirsByKey((prev) => ({ ...prev, [key]: [...(prev[key] ?? []), directory] }))
+      }
+      showNotice('info', `Added ${directory} — Claude can work there from the next message`, 6000)
+      return true
+    }
+    if (command === 'skills') {
+      // Anything Claude Code does not ship itself: skills, and user, project,
+      // plugin and MCP commands — what the CLI's /skills lists.
+      const skills = composerLiveSlashCommands.filter((entry) => !entry.builtin)
+      const stdout = skills.length === 0
+        ? 'No skills are available in this session.'
+        : ['Skills:', ...skills.map((entry) => `  ${entry.command}${entry.description ? ` — ${entry.description}` : ''}`)].join('\n')
+      setLocalCommandOutputs((prev) => upsertThreadedMessage(prev, {
+        role: 'user',
+        uuid: `live-local-skills:${Date.now()}`,
+        sessionId: target.sessionId,
+        provider: target.provider,
+        timestamp: new Date().toISOString(),
+        blocks: [{ type: 'local_command_stdout', stdout }],
+      }))
+      return true
+    }
+    if (command === 'hooks' || command === 'permissions') {
+      // Diagnostics (⇧D) lists both, read from the session itself.
+      setComposerActive(false)
+      openDiagnostics(target)
+      return true
+    }
     if (command === 'todos') {
       setTaskPopoverOpen(true)
       return true
@@ -14588,6 +14636,9 @@ export default function OpenTuiApp() {
             : targetSession.provider === 'copilot'
               ? composerCopilotPermissionMode
               : undefined,
+          additionalDirectories: targetSession.provider === 'claude'
+            ? tuiAddedDirsByKeyRef.current[sessionKey(targetSession)]
+            : undefined,
           collaborationMode: targetSession.provider === 'codex'
             ? tuiCodexModeByKeyRef.current[sessionKey(targetSession)]
             : undefined,

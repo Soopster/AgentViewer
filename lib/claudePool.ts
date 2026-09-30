@@ -205,6 +205,10 @@ function claudeTurnHardTimeoutMs(model?: string): number {
 // until the 10-min hard timeout while the user stares at a dead spinner.
 const INTERRUPT_FALLBACK_MS = 4000
 
+function additionalDirectoriesKey(directories: string[] | undefined): string | undefined {
+  return directories?.length ? [...directories].sort().join('\n') : undefined
+}
+
 // Environment for the Claude CLI subprocess. Passing `env` to query() REPLACES
 // the subprocess environment, so the process.env spread is mandatory. We enable
 // the SDK's built-in response-body stall watchdog (off by default) so a stalled
@@ -291,6 +295,8 @@ export type ClaudePoolAcquireOptions = {
   maxBudgetUsd?: number
   /** Opt this session into the Workflow tool (settings.enableWorkflows). Recycles on change. */
   enableWorkflow?: boolean
+  /** Extra working-directory roots (/add-dir). No live control, so recycles on change. */
+  additionalDirectories?: string[]
   /** Immutable role-scoped SDK policy. Recycles on change. */
   agentPolicy?: ClaudeAgentPolicy
   /**
@@ -424,6 +430,7 @@ type EntryState = {
   taskBudgetTokens: number | undefined
   maxBudgetUsd: number | undefined
   enableWorkflow: boolean | undefined
+  additionalDirectories: string | undefined
   agentPolicyKey: string
   /** The Coordinator MCP binding this subprocess was spawned with, compared by identity. */
   coordinatorMcpServers: ReturnType<typeof getCoordinatorMcpServers>
@@ -633,6 +640,7 @@ class ClaudePool {
         systemPrompt: { type: 'preset', preset: 'claude_code', excludeDynamicSections: true, snapshot: true },
         ...claudeQueryBudgetOptions(opts.taskBudgetTokens, opts.maxBudgetUsd),
         ...(opts.enableWorkflow ? { settings: { enableWorkflows: true } } : {}),
+        ...(opts.additionalDirectories?.length ? { additionalDirectories: opts.additionalDirectories } : {}),
         // Coordinator-owned sessions get their coord_* tools bound in-process at
         // spawn time (see lib/agentCoordinationSdkTools.ts) — immutable for the
         // session's lifetime, so this needs no entry in compatible()/EntryState;
@@ -667,6 +675,7 @@ class ClaudePool {
         taskBudgetTokens: opts.taskBudgetTokens,
         maxBudgetUsd: opts.maxBudgetUsd,
         enableWorkflow: opts.enableWorkflow,
+        additionalDirectories: additionalDirectoriesKey(opts.additionalDirectories),
         agentPolicyKey: claudeAgentPolicyKey(opts.agentPolicy),
         coordinatorMcpServers: getCoordinatorMcpServers(opts.sessionId),
       },
@@ -809,6 +818,7 @@ class ClaudePool {
     if (state.taskBudgetTokens !== opts.taskBudgetTokens) return false
     if (state.maxBudgetUsd !== opts.maxBudgetUsd) return false
     if (Boolean(state.enableWorkflow) !== Boolean(opts.enableWorkflow)) return false
+    if (state.additionalDirectories !== additionalDirectoriesKey(opts.additionalDirectories)) return false
     if (state.agentPolicyKey !== claudeAgentPolicyKey(opts.agentPolicy)) return false
     if (!claudeCoordinatorBindingCurrent(state.coordinatorMcpServers, opts.sessionId)) return false
     // resumeSessionAt / forkSession affect the conversation root; never reuse.
@@ -1094,6 +1104,7 @@ class ClaudePool {
         taskBudgetTokens: options.taskBudgetTokens,
         maxBudgetUsd: options.maxBudgetUsd,
         enableWorkflow: options.enableWorkflow,
+        additionalDirectories: additionalDirectoriesKey(options.additionalDirectories),
         agentPolicyKey: claudeAgentPolicyKey(options.agentPolicy),
         coordinatorMcpServers: getCoordinatorMcpServers(sessionId),
       },

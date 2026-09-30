@@ -2768,6 +2768,10 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
     ? body.maxBudgetUsd
     : undefined
   const enableWorkflow = body.enableWorkflow === true
+  // /add-dir: extra working-directory roots, fixed at spawn (no live control).
+  const additionalDirectories = Array.isArray(body.additionalDirectories)
+    ? body.additionalDirectories.filter((dir): dir is string => typeof dir === 'string' && dir.trim() !== '')
+    : undefined
 
   // Cold-path conditions: brand-new session (no id yet), fork (creates a new
   // conversation root), or rewind (changes the resume point). These mutate
@@ -2808,6 +2812,7 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
       taskBudgetTotal,
       maxBudgetUsd,
       enableWorkflow,
+      additionalDirectories,
       turnRequestId,
       fallbackModel,
       agentPolicy,
@@ -2829,6 +2834,7 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
     taskBudgetTotal,
     maxBudgetUsd,
     enableWorkflow,
+    additionalDirectories,
     turnRequestId,
     fallbackModel,
     agentPolicy,
@@ -2863,6 +2869,7 @@ type ClaudeStreamColdArgs = {
   taskBudgetTotal: number | undefined
   maxBudgetUsd: number | undefined
   enableWorkflow: boolean
+  additionalDirectories: string[] | undefined
   turnRequestId: string | undefined
   fallbackModel: string | undefined
   agentPolicy: ClaudeAgentPolicy | undefined
@@ -3033,6 +3040,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
     taskBudgetTotal,
     maxBudgetUsd,
     enableWorkflow,
+    additionalDirectories,
     turnRequestId,
     fallbackModel,
     agentPolicy,
@@ -3069,6 +3077,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
     taskBudgetTokens: taskBudgetTotal,
     maxBudgetUsd,
     enableWorkflow,
+    additionalDirectories,
     agentPolicy,
   }
 
@@ -3175,6 +3184,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           systemPrompt: { type: 'preset', preset: 'claude_code', excludeDynamicSections: true, snapshot: true },
           ...claudeQueryBudgetOptions(taskBudgetTotal, maxBudgetUsd),
           ...(enableWorkflow ? { settings: { enableWorkflows: true } } : {}),
+          ...(additionalDirectories?.length ? { additionalDirectories } : {}),
           // See lib/claudePool.ts's spawn() for why this needs no compat-check
           // entry: a Coordinator-owned session's tools are bound once here, on
           // its first (cold) turn, and never change for its lifetime.
@@ -3436,6 +3446,7 @@ type ClaudeStreamPooledArgs = {
   taskBudgetTotal: number | undefined
   maxBudgetUsd: number | undefined
   enableWorkflow: boolean
+  additionalDirectories: string[] | undefined
   turnRequestId: string | undefined
   fallbackModel: string | undefined
   agentPolicy: ClaudeAgentPolicy | undefined
@@ -3459,6 +3470,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
     taskBudgetTotal,
     maxBudgetUsd,
     enableWorkflow,
+    additionalDirectories,
     isPendingSession,
     turnRequestId,
     fallbackModel,
@@ -3587,6 +3599,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
               taskBudgetTokens: taskBudgetTotal,
               maxBudgetUsd,
               enableWorkflow,
+              additionalDirectories,
               agentPolicy,
               isPendingSession,
             })
