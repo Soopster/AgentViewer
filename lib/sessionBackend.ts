@@ -4746,6 +4746,54 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
             return
           }
 
+          const commandCwd = cwdOverride ?? process.cwd()
+          if (commandName === 'skills') {
+            const listed = await client.request('skills/list', { cwds: [commandCwd] })
+            const skills = listed.data.flatMap((entry) => entry.skills)
+            finishCommand(skills.length === 0
+              ? 'No Codex skills are available in this directory.'
+              : ['Skills:', ...skills.map((skill) => `  ${skill.enabled ? '●' : '○'} ${skill.name} — ${skill.shortDescription || skill.description}`)].join('\n'))
+            return
+          }
+
+          if (commandName === 'hooks') {
+            const listed = await client.request('hooks/list', { cwds: [commandCwd] })
+            const hooks = listed.data.flatMap((entry) => entry.hooks)
+            const problems = listed.data.flatMap((entry) => [...entry.warnings, ...entry.errors.map((error) => JSON.stringify(error))])
+            finishCommand(hooks.length === 0 && problems.length === 0
+              ? 'No Codex hooks are configured.'
+              : [
+                  'Hooks:',
+                  ...hooks.map((hook) => {
+                    const handler = hook.handlerType === 'command' ? hook.command
+                      : hook.handlerType === 'mcpTool' ? `${hook.server}/${hook.tool}`
+                      : hook.handlerType
+                    return `  ${hook.enabled ? '●' : '○'} ${hook.eventName}${hook.matcher ? ` (${hook.matcher})` : ''} → ${handler}`
+                  }),
+                  ...problems.map((problem) => `  ! ${problem}`),
+                ].join('\n'))
+            return
+          }
+
+          if (commandName === 'ps') {
+            const listed = await client.request('thread/backgroundTerminals/list', { threadId: sessionId })
+            finishCommand(listed.data.length === 0
+              ? 'No background terminals are running.'
+              : ['Background terminals:', ...listed.data.map((terminal) => `  ${terminal.processId}  ${terminal.command}`)].join('\n'))
+            return
+          }
+
+          if (commandName === 'stop') {
+            if (commandArgs) {
+              await client.request('thread/backgroundTerminals/terminate', { threadId: sessionId, processId: commandArgs })
+              finishCommand(`Stopped background terminal ${commandArgs}.`)
+            } else {
+              await client.request('thread/backgroundTerminals/clean', { threadId: sessionId })
+              finishCommand('Stopped all background terminals.')
+            }
+            return
+          }
+
           finishCommand(`/${codexSlash.command} is an interactive Codex command that agent-viewer cannot run yet.`)
           return
         }

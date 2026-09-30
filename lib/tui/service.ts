@@ -920,6 +920,17 @@ export async function createTuiSession(params: {
   return (await sendPath()).createNewViewSession(params)
 }
 
+/** Fork a whole session into a new one, as the native CLIs' /fork does. */
+export async function forkTuiSession(session: { sessionId: string; provider?: AgentProvider }): Promise<{ sessionId: string }> {
+  if (isRemoteAttached()) {
+    return remoteJson(encodeSessionPath(session.sessionId, '/fork'), {
+      method: 'POST',
+      body: JSON.stringify({ provider: session.provider }),
+    })
+  }
+  return (await sendPath()).forkViewSession({ sessionId: session.sessionId, provider: session.provider, body: {} })
+}
+
 /** Warm the send path (Claude pool spawn, Codex thread resume) while the user types. */
 export async function prewarmTuiSession(
   session: Session,

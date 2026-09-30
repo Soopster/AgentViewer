@@ -147,6 +147,7 @@ import {
   readTuiRuntimeActivity,
   dismissTuiViewerAttention,
   createTuiSession,
+  forkTuiSession,
   readTuiComposerOptions,
   listTuiProtocolRuns,
   listTuiRunPlaybooks,
@@ -12359,6 +12360,28 @@ export default function OpenTuiApp() {
     }
   })
 
+  const switchComposerModel = useEffectEvent(async (target: Session, requested: string) => {
+    let models: Array<{ value?: unknown; displayName?: string }> = []
+    try {
+      models = (await readTuiSessionMetadata(target)).models
+    } catch {
+      // Claude takes aliases itself; the others need a listed model below.
+    }
+    const needle = requested.toLowerCase()
+    const listed = models.filter((m): m is { value: string; displayName?: string } => typeof m.value === 'string' && m.value.length > 0)
+    const found = listed.find((m) => m.value.toLowerCase() === needle || m.displayName?.toLowerCase() === needle)
+      ?? listed.find((m) => m.value.toLowerCase().includes(needle) || m.displayName?.toLowerCase().includes(needle))
+    // Claude resolves its own aliases (haiku, opus[1m], …), as its CLI does.
+    const value = found?.value ?? (target.provider === 'claude' ? requested : null)
+    if (!value) {
+      showNotice('error', `No model matches "${requested}" — /model lists them`, 6000)
+      return
+    }
+    setTuiModelOverride((prev) => ({ ...prev, [sessionKey(target)]: value }))
+    pushClaudeControl(target, { action: 'setModel', model: value })
+    showNotice('info', `Model set to ${found?.displayName || value}`, 4000)
+  })
+
   const applyModelPickerEffort = useEffectEvent((value: string | undefined) => {
     if (value) setTuiEffort(value as TuiEffort)
     if (modelPickerPermissionOptions.length > 0) setModelPickerFocus('permissions')
@@ -13294,6 +13317,37 @@ export default function OpenTuiApp() {
     void startFreshSession(newSessionProvider, newSessionCwd.trim() || process.cwd())
   })
 
+  const openCreatedSession = useEffectEvent(async (draft: Session) => {
+    setOpenTabSessions((prev) => prev.some((s) => sessionKey(s) === sessionKey(draft)) ? prev : [...prev, draft])
+    setSelectedSessionKey(sessionKey(draft))
+    setComposerPreferredTargetKey(sessionKey(draft))
+    await prepareCreatedSessionForComposer(draft)
+    setComposerActive(true)
+  })
+
+  // /fork: continue in a copy of this conversation, leaving the original as it is.
+  const forkIntoNewSession = useEffectEvent(async (target: Session) => {
+    if (target.isPending) {
+      showNotice('info', 'Nothing to fork yet — send a first message')
+      return
+    }
+    try {
+      const forked = await forkTuiSession(target)
+      await openCreatedSession({
+        ...target,
+        sessionId: forked.sessionId,
+        createdAt: Date.now(),
+        lastModified: Date.now(),
+        summary: `Fork of ${target.customTitle?.trim() || target.summary?.trim() || 'session'}`,
+        customTitle: undefined,
+        isPending: false,
+      })
+      showNotice('info', 'Forked — you are now in the copy; the original is unchanged.')
+    } catch (err) {
+      showNotice('error', err instanceof Error ? err.message : 'Fork failed')
+    }
+  })
+
   // Create a session and open it with the composer focused — the New Session
   // dialog's action, and what /clear and /new do, as in the native CLIs.
   const startFreshSession = useEffectEvent(async (targetProvider: AgentProvider, cwd: string) => {
@@ -13302,7 +13356,7 @@ export default function OpenTuiApp() {
     {
       try {
         const result = await createTuiSession({ provider: targetProvider, cwd })
-        const draft: Session = {
+        await openCreatedSession({
           sessionId: result.sessionId,
           provider: result.provider,
           cwd: result.cwd,
@@ -13310,13 +13364,8 @@ export default function OpenTuiApp() {
           lastModified: Date.now(),
           summary: 'New session',
           isPending: result.isPending,
-        }
-        setOpenTabSessions((prev) => prev.some((s) => sessionKey(s) === sessionKey(draft)) ? prev : [...prev, draft])
-        setSelectedSessionKey(sessionKey(draft))
-        setComposerPreferredTargetKey(sessionKey(draft))
-        await prepareCreatedSessionForComposer(draft)
+        })
         setNewSessionModalOpen(false)
-        setComposerActive(true)
         showNotice('info', result.isPending
           ? `New ${formatProviderLabel(result.provider)} session ready — first message will create it.`
           : 'New session created.')
@@ -13341,6 +13390,18 @@ export default function OpenTuiApp() {
       return true
     }
     // Views every native CLI has, mapped onto the TUI surface that shows them.
+    if (command === 'fork') {
+      void forkIntoNewSession(target)
+      return true
+    }
+    if (command === 'mention') {
+      // Codex's /mention starts a file mention; here that is the @ picker.
+      setTimeout(() => {
+        composerTextareaRef.current?.setText('@')
+        setComposerDraft('@')
+      }, 0)
+      return true
+    }
     if (command === 'diff') {
       setComposerActive(false)
       setGitOpen(true)
@@ -13388,6 +13449,18 @@ export default function OpenTuiApp() {
         showNotice('info', `Exported the conversation to ${destination}`, 8000)
       } catch (err) {
         showNotice('error', err instanceof Error ? err.message : 'Export failed')
+      }
+      return true
+    }
+    if (command === 'model') {
+      // The composer sends its own model with every turn, so a switch made
+      // inside the provider (the SDK's own /model) was undone by the next send.
+      const requested = match[2]!.trim()
+      if (!requested) {
+        setComposerActive(false)
+        void openModelPicker()
+      } else {
+        void switchComposerModel(target, requested)
       }
       return true
     }
@@ -14063,6 +14136,30 @@ export default function OpenTuiApp() {
       return
     }
 
+    // Codex's /btw: an aside that waits for the running turn rather than
+    // steering into it; with nothing running it is simply the next prompt.
+    const btwAside = !isRetry && composerTargetSession.provider === 'codex'
+      ? /^\/btw\s+(\S[\s\S]*)$/.exec(visibleText.trim())
+      : null
+    if (btwAside) {
+      if (composerSendState === 'sending' || reattachedRunningRef.current) {
+        composerTextareaRef.current?.setText('')
+        composerTextareaRef.current?.extmarks.clear()
+        setComposerDraft('')
+        setComposerMentionAttachments([])
+        setComposerPromptParts([])
+        commitQueuedComposerSends([...queuedComposerSendsRef.current, {
+          id: createComposerQueueItemId(submissionTargetKey),
+          targetKey: submissionTargetKey,
+          text: btwAside[1]!,
+          attachments: submission.attachments,
+          promptParts: submission.promptParts,
+        }])
+        return
+      }
+      return sendComposerMessage(btwAside[1]!)
+    }
+
     const crossSessionCommand = !isRetry && submission.attachments.length === 0
       ? parseCrossSessionComposerCommand(trimmed)
       : null
@@ -14544,7 +14641,21 @@ export default function OpenTuiApp() {
             setTuiCopilotMode(result.mode)
           }
           if (typeof result.message === 'string' && result.message.trim()) {
-            showNotice('info', result.message.trim())
+            const message = result.message.trim()
+            if (message.includes('\n')) {
+              // A listing (/skills, /hooks, /ps …) is output, not a notice: a
+              // notice is one line, and the native CLIs print it in the transcript.
+              setLocalCommandOutputs((prev) => upsertThreadedMessage(prev, {
+                role: 'user',
+                uuid: `live-command-result:${sendStartedAt}`,
+                sessionId: targetSession.sessionId,
+                provider: targetSession.provider,
+                timestamp: new Date().toISOString(),
+                blocks: [{ type: 'local_command_stdout', stdout: message }],
+              }))
+            } else {
+              showNotice('info', message)
+            }
           }
           return
         }
@@ -15012,27 +15123,6 @@ export default function OpenTuiApp() {
       setUnreadBoundaryKey(null)
       void refreshSessions(provider, true, false)
       void refreshSelectedSessionDetail(targetSession, true)
-
-      // A native `/model X` slash command (any provider) changes the SDK's
-      // live current model out from under a stored override — mirrors web's
-      // post-send refreshSessionModels (components/MessageView.tsx), which
-      // re-fetches and lets the dropdown follow the live model. Without this,
-      // the next TUI send would silently pin back to the stale override
-      // instead of following the session like every other composer knob.
-      // Only fires when an override is actually set — the common case (no
-      // override) already follows the server's live model with no fetch.
-      if (tuiModelOverride[targetKey]) {
-        void readTuiSessionMetadata(targetSession).then((meta) => {
-          if (meta.currentModel && meta.currentModel !== tuiModelOverride[targetKey]) {
-            setTuiModelOverride((prev) => {
-              if (prev[targetKey] !== tuiModelOverride[targetKey]) return prev
-              const next = { ...prev }
-              delete next[targetKey]
-              return next
-            })
-          }
-        }).catch(() => { /* best-effort reconciliation; next explicit pick still wins */ })
-      }
 
       if (liveTextFlushTimerRef.current != null) {
         clearTimeout(liveTextFlushTimerRef.current)

@@ -498,6 +498,25 @@ it against the native CLI (see the composer flow harness in memory).
   ⇧Tab cycles each provider's own mode — Claude permission modes, Copilot
   interactive/plan/autopilot, OpenCode primary agents. OpenCode 2.0.8's
   `agent.list` omits the built-in `build`/`plan` it still runs, so the adapter adds them.
+- **`/model <name>` is the composer's choice, not the provider's.** The composer
+  sends its model with every turn, so the SDK's own `/model` was reverted by the
+  next send; the TUI resolves the name against the listed models (Claude also
+  takes its aliases verbatim) and sets the override. Bare `/model` opens the picker.
+  Nothing may clear that override after a turn: a post-turn "follow the server's
+  model" reconcile, written for the SDK's own `/model`, reverted every local
+  switch the moment a command turn ended.
+- **`/fork` continues in a copy** (`forkTuiSession` → `forkViewSession`) for every
+  provider that can fork; the TUI had no fork at all. Codex's `/skills`, `/hooks`,
+  `/ps` and `/stop` answer from the app-server (`skills/list`, `hooks/list`,
+  `thread/backgroundTerminals/*`); `/mention` opens the `@` picker; `/btw <text>`
+  queues behind the running turn instead of steering into it.
+- **A multi-line command result is transcript output, not a notice.** A notice is
+  one line, so a listing rendered as its first line; it now lands as a
+  `local_command_stdout` row, as the native CLIs print it.
+- **An SDK Claude session gets the task tools the CLI has.** Without
+  `CLAUDE_CODE_ENABLE_TODO_TOOLS` the init frame lists only `Task`/`TaskStop`
+  (CLI 2.1.283) and the model reports it cannot track work; `CLAUDE_QUERY_ENV`
+  sets it unless the user already has.
 - **Native slash commands answer, never "cannot run".** Codex `/status` reports the
   thread's model, effort, approvals and directory; `/init` runs its built-in
   AGENTS.md prompt as a normal turn. OpenCode `/help` and `/models` (TUI views, not
