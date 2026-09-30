@@ -4179,6 +4179,11 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
   const attachments = parseAttachments(body)
   const cwdOverride = typeof body.cwd === 'string' && body.cwd.trim() ? body.cwd.trim() : undefined
   const approvalPolicy = parseCodexApprovalPolicy(body)
+  // Codex's collaboration mode (the CLI's ⇧Tab Plan/Default). Sticky on the
+  // thread once sent, so the composer sends it whenever the user has chosen one.
+  const collaborationMode = body.collaborationMode === 'plan' || body.collaborationMode === 'default'
+    ? body.collaborationMode
+    : undefined
   const bangShell = userMessage.startsWith('!') && attachments.length === 0
     ? userMessage.slice(1).trim()
     : null
@@ -4806,6 +4811,20 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
           // in the composer (otherwise the configured default is used). This is
           // what makes the exec/patch approval prompts appear interactively.
           ...(approvalPolicy ? { approvalPolicy } : {}),
+          // A mode needs a concrete model; `currentModel` is 'codex' only when
+          // none is known, and then the thread keeps whatever mode it had.
+          ...(collaborationMode && currentModel !== 'codex' ? {
+            collaborationMode: {
+              mode: collaborationMode,
+              settings: {
+                model: currentModel,
+                // Plan's preset reasons at medium (collaborationMode/list).
+                reasoning_effort: codexEffort ?? (collaborationMode === 'plan' ? 'medium' : null),
+                // null keeps the preset's own instructions.
+                developer_instructions: null,
+              },
+            },
+          } : {}),
           input: buildCodexComposerInput(codexInitPrompt ?? userMessage, attachments, cwdOverride),
         } satisfies CodexRequestParams<'turn/start'>
         // No watchdog covers this call yet — it runs before activateTargetTurn
@@ -6946,13 +6965,17 @@ export async function rewindOrRollbackViewSession({ sessionId, body, provider }:
   // action would reinstate the cost this deferral exists to avoid.
   if (resolvedProvider === 'claude') await ensureClaudePool()
   if (resolvedProvider === 'codex') {
-    const numTurns = Number(body.numTurns ?? 1)
-    if (!Number.isFinite(numTurns) || numTurns < 1) {
-      throw new Error('numTurns is required')
-    }
-
     const thread = await readCodexThread(sessionId, true)
-    const removedTurns = thread.turns.slice(-numTurns).map((turn) => {
+    // Either a turn to go back to before (exact) or a count from the end.
+    const beforeTurnId = typeof body.beforeTurnId === 'string' ? body.beforeTurnId : undefined
+    const beforeIndex = beforeTurnId
+      ? thread.turns.findIndex((turn) => turn.id === beforeTurnId)
+      : thread.turns.length - Number(body.numTurns ?? 1)
+    if (!Number.isFinite(beforeIndex) || beforeIndex < 0 || beforeIndex >= thread.turns.length) {
+      throw new Error(beforeTurnId ? 'That turn is not in this thread' : 'numTurns is required')
+    }
+    const numTurns = thread.turns.length - beforeIndex
+    const removedTurns = thread.turns.slice(beforeIndex).map((turn) => {
       const firstUserItem = turn.items.find((item) => item.type === 'userMessage')
       const preview = firstUserItem && firstUserItem.type === 'userMessage'
         ? firstUserItem.content
@@ -6976,16 +6999,26 @@ export async function rewindOrRollbackViewSession({ sessionId, body, provider }:
     }
 
     const client = getCodexClient()
-    const result = await client.request('thread/rollback', {
-      threadId: sessionId,
-      numTurns,
-    })
+    // Reverting needs the thread loaded in this app-server ("thread not found"
+    // otherwise); a turn or prewarm usually has it, a cold session does not.
+    await ensureCodexThreadResumed(sessionId)
+    // codex-cli 0.158 removed `thread/rollback` in favour of `thread/revert`;
+    // older app-servers have only the former.
+    try {
+      await client.request('thread/revert', {
+        threadId: sessionId,
+        beforeTurnId: thread.turns[beforeIndex]!.id,
+      })
+    } catch (err) {
+      if (!/unknown variant `thread\/revert`/.test(err instanceof Error ? err.message : String(err))) throw err
+      await client.request('thread/rollback', { threadId: sessionId, numTurns })
+    }
 
     return {
       mode: 'rollback',
       canRollback: true,
       turnsRemoved: removedTurns,
-      remainingTurns: result.thread.turns.length,
+      remainingTurns: beforeIndex,
     }
   }
   if (resolvedProvider === 'opencode') {

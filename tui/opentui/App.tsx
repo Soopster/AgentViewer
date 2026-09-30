@@ -148,6 +148,7 @@ import {
   dismissTuiViewerAttention,
   createTuiSession,
   forkTuiSession,
+  rewindTuiSession,
   readTuiComposerOptions,
   listTuiProtocolRuns,
   listTuiRunPlaybooks,
@@ -244,6 +245,7 @@ import { PlaybookManagerPopover } from './PlaybookManagerPopover'
 import { getContinueInCliCommand } from '../../lib/cliContinue'
 import { commandResultExpectsTranscript, isNativeComposerCommandText } from '../../lib/composerCommands'
 import { deliverComposerSteer } from '../../lib/composerSteering'
+import { claudeForkPoint, rewindCandidates, type RewindCandidate } from './rewindTargets'
 import { parseClaudeCommandLifecycle, type ClaudeCommandLifecycleState } from '../../lib/claudeCommandLifecycle'
 import { isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs, TransientAwareSendError, type UsageLimitKind } from '../../lib/transientError'
 import { listProjectFiles } from '../../lib/projectFiles'
@@ -8005,6 +8007,9 @@ export default function OpenTuiApp() {
   const [composerStash, setComposerStash] = useState<ComposerDraftSnapshot[]>(() =>
     readComposerStash(isComposerDraftSnapshot))
   const [composerStashOpen, setComposerStashOpen] = useState(false)
+  // /rewind's prompt picker: the prompts it lists are frozen when it opens.
+  const [composerRewindItems, setComposerRewindItems] = useState<RewindCandidate[] | null>(null)
+  const [composerRewindIndex, setComposerRewindIndex] = useState(0)
   const [composerStashIndex, setComposerStashIndex] = useState(0)
   const [composerSlashIndex, setComposerSlashIndex] = useState(0)
   const [composerSlashDismissed, setComposerSlashDismissed] = useState(false)
@@ -8119,6 +8124,15 @@ export default function OpenTuiApp() {
   const [tuiPermissionModeByKey, setTuiPermissionModeByKey] = useState<Record<string, TuiPermissionMode>>({})
   const tuiPermissionModeByKeyRef = useRef<Record<string, TuiPermissionMode>>({})
   const [tuiCodexApprovalByKey, setTuiCodexApprovalByKey] = useState<Record<string, TuiCodexApproval>>({})
+  // Codex's collaboration mode per session (the CLI's ⇧Tab Plan/Default). Read
+  // through the ref at send time, so `/plan <goal>` sends in the mode it just set.
+  const [tuiCodexModeByKey, setTuiCodexModeByKey] = useState<Record<string, 'plan' | 'default'>>({})
+  const tuiCodexModeByKeyRef = useRef(tuiCodexModeByKey)
+  const setCodexCollaborationMode = useCallback((target: Session, mode: 'plan' | 'default') => {
+    const next = { ...tuiCodexModeByKeyRef.current, [sessionKey(target)]: mode }
+    tuiCodexModeByKeyRef.current = next
+    setTuiCodexModeByKey(next)
+  }, [])
   const [tuiCopilotPermissionModeByKey, setTuiCopilotPermissionModeByKey] = useState<Record<string, TuiCopilotPermissionMode>>({})
   // Mirrors web's CONTEXT selector (components/MessageView.tsx) — GitHub
   // Copilot's long-context tier. Toggled with ⌃L while the model picker is
@@ -8911,6 +8925,9 @@ export default function OpenTuiApp() {
   const composerCodexApproval = composerTargetSession?.provider === 'codex'
     ? tuiCodexApprovalByKey[sessionKey(composerTargetSession)] ?? 'auto'
     : 'auto'
+  const composerCodexMode = composerTargetSession?.provider === 'codex'
+    ? tuiCodexModeByKey[sessionKey(composerTargetSession)] ?? 'default'
+    : 'default'
   const composerCopilotPermissionMode = composerTargetSession?.provider === 'copilot'
     ? tuiCopilotPermissionModeByKey[sessionKey(composerTargetSession)] ?? 'off'
     : 'off'
@@ -9788,6 +9805,9 @@ export default function OpenTuiApp() {
     if (composerTargetSession?.provider === 'claude' && composerPermissionMode !== 'default') {
       parts.push({ text: `mode:${composerPermissionMode}`, fg: theme.violet })
     }
+    if (composerTargetSession?.provider === 'codex' && composerCodexMode === 'plan') {
+      parts.push({ text: 'mode:plan', fg: theme.cyan })
+    }
     if (composerTargetSession?.provider === 'codex' && composerCodexApproval !== 'auto') {
       parts.push({ text: `approvals:${composerCodexApproval}`, fg: theme.violet })
     }
@@ -9804,7 +9824,7 @@ export default function OpenTuiApp() {
       parts.push({ text: 'workflow:on', fg: theme.cyan })
     }
     return parts
-  }, [composerAccentColor, composerCodexApproval, composerContextUsage, composerCopilotContextTier, composerCopilotPermissionMode, composerCurrentModel, composerEnableWorkflow, composerModelLookupSettled, composerPermissionMode, composerTargetSession?.provider, theme.amber, theme.cyan, theme.dim, theme.green, theme.red, theme.violet, tuiCopilotMode, tuiEffort, tuiOpenCodeAgent])
+  }, [composerAccentColor, composerCodexApproval, composerCodexMode, composerContextUsage, composerCopilotContextTier, composerCopilotPermissionMode, composerCurrentModel, composerEnableWorkflow, composerModelLookupSettled, composerPermissionMode, composerTargetSession?.provider, theme.amber, theme.cyan, theme.dim, theme.green, theme.red, theme.violet, tuiCopilotMode, tuiEffort, tuiOpenCodeAgent])
   const composerKnobsChip = useMemo(
     () => composerKnobSegments.length > 0
       ? `· ${composerKnobSegments.map((part) => part.text).join(' · ')}`
@@ -10464,6 +10484,7 @@ export default function OpenTuiApp() {
   const composerSlashVisibleCount = Math.min(composerSlashCommands.length, 5)
   const composerHistoryVisibleCount = Math.min(sentHistory.length, 6)
   const composerStashVisibleCount = Math.min(composerStash.length, 6)
+  const composerRewindVisibleCount = Math.min(composerRewindItems?.length ?? 0, 6)
   const composerPopoverHeight = (!composerWindowOpen && composerActive && composerMention && composerMentionVisibleCount > 0)
     ? composerMentionVisibleCount + 3
     : (!composerWindowOpen && composerActive && composerSlashOpen && composerSlashVisibleCount > 0 && !composerMention && !composerHistoryOpen && !composerStashOpen)
@@ -10472,6 +10493,8 @@ export default function OpenTuiApp() {
     ? composerHistoryVisibleCount + 3
     : (!composerWindowOpen && composerActive && composerStashOpen && composerStashVisibleCount > 0 && !composerMention)
     ? composerStashVisibleCount + 3
+    : (!composerWindowOpen && composerActive && composerRewindVisibleCount > 0)
+    ? composerRewindVisibleCount + 3
     : 0
   // Status indicators (requesting spinner, subagent tail, live-prompt
   // suggestion, composer status, auto-targeting note) render as siblings
@@ -10864,6 +10887,8 @@ export default function OpenTuiApp() {
     ? composerHistoryVisibleCount + 3
     : (composerActive && composerStashOpen && composerStashVisibleCount > 0 && !composerMention)
     ? composerStashVisibleCount + 3
+    : (composerActive && composerRewindVisibleCount > 0)
+    ? composerRewindVisibleCount + 3
     : 0
   const composerWindowHeaderHeight = 2
   const composerWindowFooterHeight = 2
@@ -13325,6 +13350,64 @@ export default function OpenTuiApp() {
     setComposerActive(true)
   })
 
+  // /rewind: return the conversation to just before an earlier prompt and put
+  // that prompt back in the composer, as Claude Code's rewind and Codex's
+  // backtrack do. Codex and OpenCode rewind in place; the Claude SDK has no
+  // in-place conversation rewind, so Claude continues in a fork taken just
+  // before the prompt. Files are left as they are — ⇧U's checkpoints restore code.
+  const rewindToPrompt = useEffectEvent(async (chosen: RewindCandidate) => {
+    const target = composerTargetSession
+    const raw = sessionDetail?.rawMessages ?? []
+    if (!target) return
+    const restorePrompt = () => setTimeout(() => {
+      composerTextareaRef.current?.setText(chosen.text)
+      setComposerDraft(chosen.text)
+      setComposerActive(true)
+    }, 0)
+    try {
+      if (target.provider === 'codex' || target.provider === 'opencode') {
+        const turnId = raw.find((message) => message.uuid === chosen.uuid)?.turnId
+        if (target.provider === 'codex' && !turnId) throw new Error('Could not find that prompt\'s turn')
+        const body = target.provider === 'codex' ? { beforeTurnId: turnId } : { userMessageId: chosen.uuid }
+        await rewindTuiSession(target, body)
+        // The cached detail predates the revert and the sidebar's lastModified
+        // has not caught up, so the read would otherwise be skipped as unchanged.
+        sessionDetailMtimeRef.current.delete(sessionKey(target))
+        await refreshSelectedSessionDetail(target, true)
+        restorePrompt()
+        showNotice('info', 'Rewound — the prompt is back in the composer; files are unchanged', 6000)
+        return
+      }
+      if (target.provider === 'claude') {
+        const point = claudeForkPoint(raw, chosen.uuid)
+        if (point === undefined) throw new Error('Could not find that prompt in the transcript')
+        if (point === null) {
+          await startFreshSession('claude', target.cwd ?? process.cwd())
+        } else {
+          const forked = await forkTuiSession(target, point)
+          const fork: Session = {
+            ...target,
+            sessionId: forked.sessionId,
+            createdAt: Date.now(),
+            lastModified: Date.now(),
+            summary: `Rewind of ${target.customTitle?.trim() || target.summary?.trim() || 'session'}`,
+            customTitle: undefined,
+            isPending: false,
+          }
+          // Opening the fork restores its own draft, so the prompt goes there.
+          scheduleWriteComposerDraft(sessionKey(fork), chosen.text)
+          await openCreatedSession(fork)
+        }
+        if (point === null) restorePrompt()
+        showNotice('info', 'Rewound in a fork — the original is unchanged; files are unchanged', 6000)
+        return
+      }
+      showNotice('info', `${formatProviderLabel(target.provider ?? 'claude')} sessions cannot be rewound`)
+    } catch (err) {
+      showNotice('error', err instanceof Error ? err.message : 'Rewind failed')
+    }
+  })
+
   // /fork: continue in a copy of this conversation, leaving the original as it is.
   const forkIntoNewSession = useEffectEvent(async (target: Session) => {
     if (target.isPending) {
@@ -13390,6 +13473,28 @@ export default function OpenTuiApp() {
       return true
     }
     // Views every native CLI has, mapped onto the TUI surface that shows them.
+    if (command === 'plan' && targetProvider === 'codex') {
+      setCodexCollaborationMode(target, 'plan')
+      const goal = match[2]!.trim()
+      if (goal) setTimeout(() => { void sendComposerMessage(goal) }, 0)
+      else showNotice('info', 'Codex is in Plan mode — ⇧Tab returns to Default', 4000)
+      return true
+    }
+    if (command === 'rewind' || (command === 'undo' && targetProvider === 'opencode')) {
+      if (composerSendState === 'sending' || reattachedRunningRef.current) {
+        showNotice('info', 'Wait for the turn to finish (or ⌃C it) before rewinding')
+        return true
+      }
+      const detail = sessionDetail && sessionDetail.info?.sessionId === target.sessionId ? sessionDetail : null
+      const items = rewindCandidates(detail?.rawMessages ?? [])
+      if (items.length === 0) {
+        showNotice('info', 'No earlier prompt to rewind to')
+        return true
+      }
+      setComposerRewindIndex(0)
+      setComposerRewindItems(items)
+      return true
+    }
     if (command === 'fork') {
       void forkIntoNewSession(target)
       return true
@@ -14483,6 +14588,9 @@ export default function OpenTuiApp() {
             : targetSession.provider === 'copilot'
               ? composerCopilotPermissionMode
               : undefined,
+          collaborationMode: targetSession.provider === 'codex'
+            ? tuiCodexModeByKeyRef.current[sessionKey(targetSession)]
+            : undefined,
           approvalPolicy: targetSession.provider === 'codex' && composerCodexApproval !== 'auto'
             ? composerCodexApproval
             : undefined,
@@ -15123,6 +15231,11 @@ export default function OpenTuiApp() {
       setUnreadBoundaryKey(null)
       void refreshSessions(provider, true, false)
       void refreshSelectedSessionDetail(targetSession, true)
+      if (targetSession.provider === 'codex' && tuiCodexModeByKeyRef.current[targetKey] === 'plan') {
+        // Codex asks "Implement this plan?" here; Plan mode never edits, so say
+        // how to leave it rather than leave the user waiting on nothing.
+        showNotice('info', 'Plan mode · ⇧Tab to Default, then ask Codex to implement the plan', 10_000)
+      }
 
       if (liveTextFlushTimerRef.current != null) {
         clearTimeout(liveTextFlushTimerRef.current)
@@ -17814,6 +17927,12 @@ export default function OpenTuiApp() {
           })
           break
         }
+        if (target?.provider === 'codex') {
+          const next = tuiCodexModeByKeyRef.current[sessionKey(target)] === 'plan' ? 'default' : 'plan'
+          setCodexCollaborationMode(target, next)
+          showToggleOutcome('Codex mode:', next)
+          break
+        }
         if (target?.provider === 'claude') {
           cycleClaudeComposerPermissionMode(target)
         }
@@ -19019,8 +19138,9 @@ export default function OpenTuiApp() {
         return
       }
       // The native CLIs put their own mode on this key too: Copilot cycles
-      // interactive/plan/autopilot, OpenCode switches primary agent.
-      if (target?.provider === 'copilot' || target?.provider === 'opencode') {
+      // interactive/plan/autopilot, OpenCode switches primary agent, Codex
+      // toggles Plan/Default.
+      if (target?.provider === 'copilot' || target?.provider === 'opencode' || target?.provider === 'codex') {
         handled(() => executeCommandPalette('mode'))
         return
       }
@@ -19087,6 +19207,10 @@ export default function OpenTuiApp() {
             setComposerStashOpen(false)
             setComposerStashIndex(0)
           })
+          return
+        }
+        if (composerRewindItems) {
+          handled(() => setComposerRewindItems(null))
           return
         }
         handled(() => {
@@ -19212,6 +19336,25 @@ export default function OpenTuiApp() {
           setComposerHistoryOpen(false)
           setComposerHistoryIndex(0)
           setHistoryIndex(-1)
+          return
+        }
+      }
+      if (composerRewindItems && composerRewindItems.length > 0) {
+        const last = composerRewindItems.length - 1
+        if (key.name === 'tab') {
+          const chosen = composerRewindItems[composerRewindIndex]
+          handled(() => {
+            setComposerRewindItems(null)
+            if (chosen) void rewindToPrompt(chosen)
+          })
+          return
+        }
+        if (key.name === 'down' || (key.name === 'n' && key.ctrl)) {
+          handled(() => setComposerRewindIndex((index) => Math.min(index + 1, last)))
+          return
+        }
+        if (key.name === 'up' || (key.name === 'p' && key.ctrl)) {
+          handled(() => setComposerRewindIndex((index) => Math.max(index - 1, 0)))
           return
         }
       }
@@ -20587,6 +20730,14 @@ export default function OpenTuiApp() {
   // typed in full (with or without arguments) sends as usual. This lives in the
   // submit path because the textarea handles Enter before the app's key handler.
   const pickSlashInsteadOfSubmit = (): boolean => {
+    // The textarea takes Enter before the key handler, so an open /rewind
+    // picker is answered here.
+    if (composerRewindItems && composerRewindItems.length > 0) {
+      const chosen = composerRewindItems[composerRewindIndex]
+      setComposerRewindItems(null)
+      if (chosen) void rewindToPrompt(chosen)
+      return true
+    }
     if (!composerSlashOpen || composerSlashCommands.length === 0) return false
     const typed = composerFirstLine.trim().split(/\s/)[0]?.toLowerCase() ?? ''
     if (composerSlashCommands.some((entry) => entry.command.toLowerCase() === typed)) return false
@@ -20756,6 +20907,37 @@ export default function OpenTuiApp() {
               <text fg={active ? composerAccentColor : theme.text} wrapMode="none">{fitText(compact, textWidth)}</text>
               <text fg={theme.dim} wrapMode="none">  </text>
               <text fg={theme.dim} wrapMode="none">{fitText(meta, metaWidth)}</text>
+            </box>
+          )
+        })}
+      </box>
+    )
+  }
+  const renderComposerRewindPanel = (panelWidth: number, rowWidth: number) => {
+    if (!composerActive || !composerRewindItems || composerRewindVisibleCount <= 0) return null
+    const total = composerRewindItems.length
+    const start = Math.max(0, Math.min(composerRewindIndex - Math.floor((composerRewindVisibleCount - 1) / 2), total - composerRewindVisibleCount))
+    const end = Math.min(total, start + composerRewindVisibleCount)
+    return (
+      <box
+        width={panelWidth}
+        height={composerRewindVisibleCount + 3}
+        paddingX={1}
+        backgroundColor={theme.surface2}
+        border
+        borderStyle="single"
+        borderColor={theme.border2}
+        flexDirection="column"
+      >
+        <text fg={composerAccentColor} wrapMode="none">
+          {fitText(`rewind to before · ↑↓ choose · enter rewind · esc cancel  (${composerRewindIndex + 1}/${total})${start > 0 ? ' ↑' : ''}${end < total ? ' ↓' : ''}`, rowWidth)}
+        </text>
+        {composerRewindItems.slice(start, end).map((entry, offset) => {
+          const active = start + offset === composerRewindIndex
+          return (
+            <box key={`rewind:${entry.uuid}`} flexDirection="row" height={1} width={rowWidth}>
+              <text fg={active ? composerAccentColor : theme.dim} wrapMode="none">{active ? '▸ ' : '  '}</text>
+              <text fg={active ? composerAccentColor : theme.text} wrapMode="none">{fitText(compactComposerEntryText(entry.text), Math.max(rowWidth - 2, 8))}</text>
             </box>
           )
         })}
@@ -22655,6 +22837,7 @@ export default function OpenTuiApp() {
 
       {!composerWindowOpen && !composerHidden ? renderComposerHistoryPanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
       {!composerWindowOpen && !composerHidden ? renderComposerStashPanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
+      {!composerWindowOpen && !composerHidden ? renderComposerRewindPanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
       {!composerWindowOpen && !composerHidden && !composerHistoryOpen && !composerStashOpen ? renderComposerQueuePanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
 
       {!composerWindowOpen && !composerHidden && !embeddedComposer ? (
@@ -23202,6 +23385,7 @@ export default function OpenTuiApp() {
           {!composerHistoryOpen && !composerStashOpen ? renderComposerSlashPanel(composerWindowContentWidth, Math.max(composerWindowContentWidth - 4, 12)) : null}
           {renderComposerHistoryPanel(composerWindowContentWidth, Math.max(composerWindowContentWidth - 4, 12))}
           {renderComposerStashPanel(composerWindowContentWidth, Math.max(composerWindowContentWidth - 4, 12))}
+          {renderComposerRewindPanel(composerWindowContentWidth, Math.max(composerWindowContentWidth - 4, 12))}
           {!composerHistoryOpen && !composerStashOpen ? renderComposerQueuePanel(composerWindowContentWidth, Math.max(composerWindowContentWidth - 4, 12)) : null}
 
           <box

@@ -920,15 +920,33 @@ export async function createTuiSession(params: {
   return (await sendPath()).createNewViewSession(params)
 }
 
-/** Fork a whole session into a new one, as the native CLIs' /fork does. */
-export async function forkTuiSession(session: { sessionId: string; provider?: AgentProvider }): Promise<{ sessionId: string }> {
+/** Fork a session into a new one — whole, or up to and including `upToMessageId`. */
+export async function forkTuiSession(
+  session: { sessionId: string; provider?: AgentProvider },
+  upToMessageId?: string,
+): Promise<{ sessionId: string }> {
+  const body = upToMessageId ? { upToMessageId } : {}
   if (isRemoteAttached()) {
     return remoteJson(encodeSessionPath(session.sessionId, '/fork'), {
       method: 'POST',
-      body: JSON.stringify({ provider: session.provider }),
+      body: JSON.stringify({ provider: session.provider, ...body }),
     })
   }
-  return (await sendPath()).forkViewSession({ sessionId: session.sessionId, provider: session.provider, body: {} })
+  return (await sendPath()).forkViewSession({ sessionId: session.sessionId, provider: session.provider, body })
+}
+
+/** Codex revert (`beforeTurnId`) or OpenCode revert (`userMessageId`), in place. */
+export async function rewindTuiSession(
+  session: { sessionId: string; provider?: AgentProvider },
+  body: { beforeTurnId?: string; userMessageId?: string },
+): Promise<Record<string, unknown>> {
+  if (isRemoteAttached()) {
+    return remoteJson(encodeSessionPath(session.sessionId, '/rewind'), {
+      method: 'POST',
+      body: JSON.stringify({ provider: session.provider, ...body }),
+    })
+  }
+  return (await sendPath()).rewindOrRollbackViewSession({ sessionId: session.sessionId, provider: session.provider, body })
 }
 
 /** Warm the send path (Claude pool spawn, Codex thread resume) while the user types. */

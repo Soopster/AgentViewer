@@ -510,6 +510,23 @@ it against the native CLI (see the composer flow harness in memory).
   `/ps` and `/stop` answer from the app-server (`skills/list`, `hooks/list`,
   `thread/backgroundTerminals/*`); `/mention` opens the `@` picker; `/btw <text>`
   queues behind the running turn instead of steering into it.
+- **`/rewind` returns the conversation to just before an earlier prompt** and puts
+  that prompt back in the composer (Claude Code's rewind, Codex's backtrack).
+  Codex and OpenCode rewind in place; the Claude SDK has no in-place rewind, so
+  Claude continues in a fork taken at the message *before* the prompt — the fork
+  is inclusive, and forking at the prompt keeps the very turn being rewound
+  (`rewindTargetsSmoke.ts`). The prompt reaches a fork as that session's draft,
+  since opening a session restores its own draft over anything set earlier.
+  Files are left alone; ⇧U checkpoints restore code.
+- **codex-cli 0.158 removed `thread/rollback`** for `thread/revert { beforeTurnId }`
+  (the web's rollback broke with it). Reverting needs the thread loaded in that
+  app-server — "thread not found" otherwise — so the backend resumes first, and
+  the TUI drops its cached mtime or the re-read is skipped as unchanged.
+- **Codex Plan mode is a collaboration mode, sent on the turn.** ⇧Tab toggles
+  Plan/Default and `/plan [goal]` enters it; the composer sends
+  `collaborationMode` whenever one was chosen (it is sticky on the thread), with
+  `developer_instructions: null` to keep the preset's own instructions. A plan
+  turn emits a `plan` item and edits nothing.
 - **A multi-line command result is transcript output, not a notice.** A notice is
   one line, so a listing rendered as its first line; it now lands as a
   `local_command_stdout` row, as the native CLIs print it.

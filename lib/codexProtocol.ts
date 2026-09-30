@@ -28,6 +28,7 @@ import type {
   ThreadListResponse,
   ThreadQueueAddResponse,
   ThreadReadResponse,
+  ThreadRevertResponse,
   ThreadResumeResponse,
   ThreadRollbackResponse,
   ThreadSetNameResponse,
@@ -68,6 +69,7 @@ export type CodexResponseFor<M extends CodexClientMethod> =
   : M extends 'mcpServerStatus/list' ? ListMcpServerStatusResponse
   : M extends 'experimentalFeature/list' ? ExperimentalFeatureListResponse
   : M extends 'skills/list' ? SkillsListResponse
+  : M extends 'thread/revert' ? ThreadRevertResponse
   : M extends 'hooks/list' ? HooksListResponse
   : M extends 'thread/backgroundTerminals/list' ? ThreadBackgroundTerminalsListResponse
   : M extends 'app/list' ? AppsListResponse
