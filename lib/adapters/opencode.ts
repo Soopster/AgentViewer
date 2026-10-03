@@ -34,6 +34,7 @@ import {
   forgetOpenCodeTranscriptVerification,
   getOpenCodeSession,
   getOpenCodeSessionMessages,
+  readOpenCodeRevertMessageId,
   openCodeData,
   openCodeDirectoryQuery,
   readOpenCodeTranscriptVerification,
@@ -146,7 +147,15 @@ export const opencodeAdapter: SessionAdapter = {
       const cached = readMappedMessagesCache(cacheKey, verified.signature)
       if (cached) return { messages: cached }
     }
-    const raw = await getOpenCodeSessionMessages(sessionId)
+    const [stored, revertedFrom] = await Promise.all([
+      getOpenCodeSessionMessages(sessionId),
+      readOpenCodeRevertMessageId(sessionId),
+    ])
+    // A staged revert hides its message and everything after it (see
+    // readOpenCodeRevertMessageId); the cut changes the mutable-tail
+    // signature below, so undo and redo both invalidate the mapped cache.
+    const revertIndex = revertedFrom ? stored.findIndex((bundle) => bundle.info.id === revertedFrom) : -1
+    const raw = revertIndex >= 0 ? stored.slice(0, revertIndex) : stored
     // OpenCode mutates the current assistant bundle in place while streaming:
     // IDs and array lengths stay constant as text grows and tool states advance.
     // Fingerprint that mutable tail so polling cannot return a stale mapped

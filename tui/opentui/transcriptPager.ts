@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -46,6 +46,39 @@ export function openTranscriptInPager(
       return { ok: false, command, error: `exited with status ${result.status}` }
     }
     return { ok: true, command }
+  } finally {
+    renderer.resume()
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+/**
+ * Claude Code's and Codex's ⌃G: the prompt opens in `$VISUAL`/`$EDITOR` (falling
+ * back to vi, not a pager — this one is for writing) and comes back as whatever
+ * was saved. An editor that fails hands back nothing, so the draft is kept.
+ */
+export function editTextInEditor(
+  renderer: TranscriptPagerRenderer,
+  text: string,
+  options: { env?: PagerEnv; platform?: NodeJS.Platform } = {},
+): { ok: true; text: string } | { ok: false; command: string; error: string } {
+  const env = options.env ?? process.env
+  const platform = options.platform ?? process.platform
+  const command = env.VISUAL?.trim() || env.EDITOR?.trim() || (platform === 'win32' ? 'notepad' : 'vi')
+  const dir = mkdtempSync(path.join(tmpdir(), 'agent-viewer-prompt-'))
+  const file = path.join(dir, 'prompt.md')
+  writeFileSync(file, text, { mode: 0o600 })
+  renderer.suspend()
+  try {
+    const result = platform === 'win32'
+      ? spawnSync(`${command} "${file}"`, { stdio: 'inherit', shell: true })
+      : spawnSync('/bin/sh', ['-c', `${command} "$1"`, 'sh', file], { stdio: 'inherit' })
+    if (result.error) return { ok: false, command, error: result.error.message }
+    if (result.status !== 0 && result.status !== null) {
+      return { ok: false, command, error: `exited with status ${result.status}` }
+    }
+    // Editors add a trailing newline on save; a prompt does not want it.
+    return { ok: true, text: readFileSync(file, 'utf8').replace(/\r?\n$/, '') }
   } finally {
     renderer.resume()
     rmSync(dir, { recursive: true, force: true })

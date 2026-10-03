@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { appendProtocolEvent, readProtocolRun } from '@/lib/agentCoordination'
+import { appendProtocolEvent, readProtocolEventsAfter, readProtocolRun } from '@/lib/agentCoordination'
 import { sanitizeProtocolEvent, type AgentProtocolEvent } from '@/lib/agentProtocol'
 
 // Shared sanitizer (accepts any supported protocol version), then pin the
@@ -11,11 +11,16 @@ function sanitizeEvent(runId: string, value: unknown): AgentProtocolEvent | null
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ runId: string }> },
 ) {
   const { runId } = await params
+  const after = new URL(request.url).searchParams.get('after')
   try {
+    if (after !== null) {
+      if (!/^\d+$/.test(after)) return NextResponse.json({ error: 'after must be a snapshot eventCursor' }, { status: 400 })
+      return NextResponse.json(await readProtocolEventsAfter(runId, after), { headers: { 'Cache-Control': 'no-store' } })
+    }
     const snapshot = await readProtocolRun(runId)
     if (!snapshot) return NextResponse.json({ error: 'Run not found' }, { status: 404 })
     return NextResponse.json({ events: snapshot.events }, { headers: { 'Cache-Control': 'no-store' } })

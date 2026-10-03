@@ -1,4 +1,5 @@
 import type { AgentSession } from '@earendil-works/pi-coding-agent'
+import { PendingRequestGoneError } from './pendingRequestGone'
 import type { PendingQuestionAnswers } from './permissions'
 
 type PiUiDialogMethod = 'select' | 'confirm' | 'input' | 'editor'
@@ -204,7 +205,7 @@ export function respondPiUiPermission(
   response: 'once' | 'always' | 'reject',
 ): void {
   const pending = findPendingPiUiRequest(sessionId, requestId)
-  if (!pending) throw new Error('Question is no longer pending')
+  if (!pending) throw new PendingRequestGoneError('Question')
   if (pending.method !== 'confirm') {
     throw new Error('Only Pi confirmation prompts support permission responses')
   }
@@ -213,7 +214,7 @@ export function respondPiUiPermission(
 
 export function respondPiUiQuestion(sessionId: string, requestId: string, answers: PendingQuestionAnswers): void {
   const pending = findPendingPiUiRequest(sessionId, requestId)
-  if (!pending) throw new Error('Question is no longer pending')
+  if (!pending) throw new PendingRequestGoneError('Question')
   const first = answers.value?.[0] ?? Object.values(answers)[0]?.[0]
   if (first == null) throw new Error('answer is required')
   pending.resolve(pending.method === 'confirm' ? first === 'true' : first)

@@ -14,6 +14,7 @@ import type {
   ExperimentalFeature,
   ExperimentalFeatureListResponse,
   HooksListResponse,
+  PluginListResponse,
   ListMcpServerStatusResponse,
   Model,
   ModelListResponse,
@@ -73,6 +74,7 @@ export type CodexResponseFor<M extends CodexClientMethod> =
   : M extends 'hooks/list' ? HooksListResponse
   : M extends 'thread/backgroundTerminals/list' ? ThreadBackgroundTerminalsListResponse
   : M extends 'app/list' ? AppsListResponse
+  : M extends 'plugin/list' ? PluginListResponse
   : M extends 'thread/list' ? ThreadListResponse
   : M extends 'thread/queue/add' ? ThreadQueueAddResponse
   : M extends 'thread/read' ? ThreadReadResponse

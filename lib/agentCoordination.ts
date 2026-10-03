@@ -80,6 +80,7 @@ import {
   type ProtocolAcceptanceContract,
   type ProtocolAutonomy,
   type ProtocolClaudeAgentPolicy,
+  type ProtocolAttempt,
   type ProtocolNeedsDecision,
   type ProtocolLearningCandidate,
   type ProtocolPhaseReport,
@@ -95,6 +96,8 @@ import {
   type StartProtocolRunParams,
   type StartProtocolRunResult,
 } from './agentProtocol'
+import { permissionModeEscalation } from './claudeRuntimePolicy'
+import { recordContextTransfer } from './contextTransfers'
 import {
   registerCoordinatorMcpServer,
   unregisterCoordinatorMcpServer,
@@ -1189,7 +1192,44 @@ function readSnapshotSync(db: SqliteDatabase, runId: string): ProtocolRunSnapsho
   // Latest window, chronological — an active run must show its NEWEST events.
   const events = (db.prepare('SELECT * FROM protocol_events WHERE run_id = ? ORDER BY created_at DESC LIMIT ?')
     .all(runId, EVENT_WINDOW) as Row[]).map(rowToEvent).reverse()
-  return { run: rowToRun(runRow), agents, tasks, locks, messages, events }
+  const eventCursor = (db.prepare('SELECT COALESCE(MAX(rowid), 0) AS cursor FROM protocol_events WHERE run_id = ?').get(runId) as Row).cursor
+  return { run: rowToRun(runRow), agents, tasks, locks, messages, events, eventCursor: String(eventCursor) }
+}
+
+const EVENTS_AFTER_MAX = 500
+
+/** Events committed after `cursor` (a snapshot's `eventCursor`), oldest first; `cursor` in the result resumes from the last one returned. */
+export async function readProtocolEventsAfter(
+  runId: string,
+  cursor: string,
+  limit = 200,
+): Promise<{ events: AgentProtocolEvent[]; cursor: string; hasMore: boolean }> {
+  if (!/^\d+$/.test(cursor)) throw new Error('cursor must be a non-negative integer')
+  const db = await getDatabase()
+  const take = Math.min(Math.max(1, Math.floor(limit)), EVENTS_AFTER_MAX)
+  const rows = db.prepare('SELECT rowid AS cursor, * FROM protocol_events WHERE run_id = ? AND rowid > ? ORDER BY rowid ASC LIMIT ?')
+    .all(runId, Number(cursor), take + 1) as Row[]
+  const page = rows.slice(0, take)
+  const last = page.at(-1)?.cursor
+  return { events: page.map(rowToEvent), cursor: last === undefined ? cursor : String(last), hasMore: rows.length > take }
+}
+
+/** Every re-attempt recorded for a task (or the whole run), oldest first. Attempt 1 is the original dispatch and is not recorded. */
+export async function listProtocolAttempts(runId: string, taskId?: string): Promise<ProtocolAttempt[]> {
+  const db = await getDatabase()
+  const rows = (taskId
+    ? db.prepare("SELECT * FROM protocol_events WHERE run_id = ? AND type = 'agent.attempt' AND task_id = ? ORDER BY rowid ASC").all(runId, taskId)
+    : db.prepare("SELECT * FROM protocol_events WHERE run_id = ? AND type = 'agent.attempt' ORDER BY rowid ASC").all(runId)) as Row[]
+  return rows.map(rowToEvent).map((event) => ({
+    agentId: event.agentId,
+    taskId: event.taskId,
+    reason: event.payload?.reason as ProtocolAttempt['reason'],
+    ordinal: Number(event.payload?.ordinal),
+    provider: String(event.payload?.provider),
+    fromProvider: typeof event.payload?.fromProvider === 'string' ? event.payload.fromProvider : undefined,
+    failureClass: typeof event.payload?.failureClass === 'string' ? event.payload.failureClass : undefined,
+    timestamp: event.timestamp ?? '',
+  }))
 }
 
 export async function readProtocolRun(runId: string): Promise<ProtocolRunSnapshot | null> {
@@ -2778,6 +2818,8 @@ export async function createExternalProtocolTask(
     verifyCommands?: string[]
   },
 ): Promise<ExternalProtocolTaskCreateResult> {
+  const escalation = permissionModeEscalation(params.claudeAgentPolicy?.permissionMode)
+  if (escalation) throw new Error(`Delegation denied: ${escalation}`)
   // Automatic delegation resolves once before the atomic assignment. A newly
   // created session is reserved from the scheduler until its task is committed.
   if (params.assignTo === 'auto') return serializeAutomaticDelegation(identity.runId, async () => {
@@ -3798,6 +3840,17 @@ export async function completeExternalProtocolTask(
     detail: params.detail?.trim() || undefined,
     payload: { receipt },
   })
+  const leadSession = (db.prepare("SELECT session_id FROM protocol_agents WHERE run_id = ? AND role = 'lead' LIMIT 1").get(identity.runId) as Row | undefined)?.session_id
+  if (agent.sessionId && typeof leadSession === 'string') {
+    recordContextTransfer({
+      type: 'delegation_result',
+      source: { provider: agent.provider, sessionId: agent.sessionId },
+      target: { sessionId: leadSession },
+      strategy: 'task_result',
+      runId: identity.runId,
+      taskId: task.id,
+    })
+  }
   await maybeStartExternalSynthesis(identity.runId)
   return { accepted: true, ...await externalMutationResult(identity) }
 }
@@ -7929,6 +7982,15 @@ async function handleProviderTurnFailure(
         detail: failure.detail,
         payload: { failureClass: failure.kind, provider: agent.provider, attempt: used + 1, retryLimit },
       }).catch(() => {})
+      await appendProtocolEvent({
+        version: AGENT_PROTOCOL_VERSION,
+        runId: controller.runId,
+        agentId: agent.id,
+        type: 'agent.attempt',
+        taskId: agent.taskId ?? undefined,
+        summary: `${agent.name} retry ${used + 1}/${retryLimit} on ${agent.provider}`,
+        payload: { reason: 'retry', ordinal: used + 2, provider: agent.provider, failureClass: failure.kind },
+      }).catch(() => {})
       await sleep(delayMs)
       return 'retry'
     }
@@ -7983,6 +8045,24 @@ async function handleProviderTurnFailure(
           payload: { failureClass: failure.kind, fromProvider: agent.provider, toProvider: provider },
           timestamp: ts,
         })
+        const priorAttempts = Number((tx.prepare("SELECT COUNT(*) AS n FROM protocol_events WHERE run_id = ? AND type = 'agent.attempt' AND task_id IS ?")
+          .get(controller.runId, agent.taskId ?? null) as Row).n)
+        insertEventSync(tx, {
+          version: AGENT_PROTOCOL_VERSION,
+          runId: controller.runId,
+          agentId: agent.id,
+          type: 'agent.attempt',
+          taskId: agent.taskId ?? undefined,
+          summary: `${agent.name} recovered on ${provider} after ${agent.provider} ${failure.kind}`,
+          payload: {
+            reason: 'provider_recovery',
+            ordinal: priorAttempts + 2,
+            provider,
+            fromProvider: agent.provider,
+            failureClass: failure.kind,
+          },
+          timestamp: ts,
+        })
         return canUseInProcessTools ? issueParticipantTokenSync(tx, controller.runId, agent.id, undefined, ts) : undefined
       })
       if (token) {
@@ -7990,6 +8070,14 @@ async function handleProviderTurnFailure(
         registerCoordinatorToolsForProvider(provider, session.sessionId, identity)
         controller.sdkIdentities.set(agent.id, identity)
       }
+      recordContextTransfer({
+        type: 'failover',
+        source: { provider: agent.provider, sessionId: oldSessionId ?? agent.sessionId ?? '' },
+        target: { provider, sessionId: session.sessionId },
+        strategy: 'fresh_session',
+        runId: controller.runId,
+        taskId: agent.taskId ?? undefined,
+      })
       controller.sameProviderRetries.delete(agent.id)
       return 'retry'
     } catch (error) {

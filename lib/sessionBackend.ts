@@ -69,6 +69,7 @@ import {
   isCodexActiveWriterError,
   isCodexMissingRolloutError,
   readCodexThread,
+  readCodexThreadWithFullTurns,
 } from './codexThreads'
 import {
   readClaudeSessionMessages,
@@ -118,6 +119,9 @@ import {
   readMappedMessagesCache,
   writeMappedMessagesCache,
 } from './mappedMessagesCache'
+import { recordContextTransfer } from './contextTransfers'
+import { planFeature } from './providerDegradation'
+import { PendingRequestGoneError } from './pendingRequestGone'
 import { backgroundRunningSession, clearRunningSession, getRunningSession, getRunningSessionInfo, getSessionRuntimeDiagnostics, interruptRunningSession, listRunningSessionRefs, listWaitingSessions, setRunningSession, steerRunningSessionIdempotent } from './sessionRuntime'
 import {
   acpPoolSize,
@@ -1727,6 +1731,17 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
     if (isNativeComposerCommandText(message)) return { delivered: false }
     try {
       const steered = await steerRunningSessionIdempotent(sessionId, message, turnRequestId, steerRequestId)
+      if (!steered.delivered && getRunningSession(sessionId)) {
+        // A runtime that cannot take input mid-turn is steered by ending the
+        // turn: the caller queues this message as `delivered: false` already
+        // asks, and the interrupt is what lets that queue run now instead of
+        // after the whole turn.
+        const plan = planFeature(resolvedProvider, 'steer')
+        if (plan.mode === 'fallback' && plan.strategy === 'interrupt_restart') {
+          await interruptRunningSession(sessionId, turnRequestId)
+          return { delivered: false, interrupted: true }
+        }
+      }
       return { delivered: steered.delivered, messageUuid: steered.messageUuid }
     } catch {
       return { delivered: false }
@@ -1815,7 +1830,7 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
         // its child session's id, not this chat's.
         question = openCodeData<OpenCodeQuestionRequest[]>(pending).find((entry) => entry.id === permissionID)
       }
-      if (!question) throw new Error('Question is no longer pending')
+      if (!question) throw new PendingRequestGoneError('Question')
       const orderedAnswers = question.questions.map((entry, index) =>
         answers[String(index)]
           ?? answers[entry.question]
@@ -1911,7 +1926,7 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
           break
         }
       }
-      if (!elicitation) throw new Error('Question is no longer pending')
+      if (!elicitation) throw new PendingRequestGoneError('Question')
       elicitation.resolve({
         action: 'accept',
         content: elicitationContentFromAnswers(
@@ -1983,7 +1998,7 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
             break
           }
         }
-        if (!elicitation) throw new Error('Permission request is no longer pending')
+        if (!elicitation) throw new PendingRequestGoneError('Permission request')
         elicitation.resolve({
           action: response === 'reject' ? 'decline' : 'accept',
           ...(response === 'reject' ? {} : { content: {} }),
@@ -2040,7 +2055,7 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
             break
           }
         }
-        if (!elicitation) throw new Error('Question is no longer pending')
+        if (!elicitation) throw new PendingRequestGoneError('Question')
         elicitation.resolve({
           action: 'accept',
           content: elicitationContentFromAnswers(
@@ -4068,7 +4083,7 @@ function codexApprovalResult(method: string, response: string, params: Record<st
 function respondCodexApproval(threadId: string, permissionId: string, response: string): void {
   const key = pendingCodexApprovalKey(threadId, permissionId)
   const pending = pendingCodexApprovals.get(key)
-  if (!pending) throw new Error('Approval request is no longer pending')
+  if (!pending) throw new PendingRequestGoneError('Approval request')
   pendingCodexApprovals.delete(key)
   const client = getCodexClient()
   const result = codexApprovalResult(pending.method, response, pending.params)
@@ -4121,7 +4136,7 @@ function respondCodexQuestion(threadId: string, permissionId: string, answers: R
   const key = pendingCodexApprovalKey(threadId, permissionId)
   const pending = pendingCodexApprovals.get(key)
   if (!pending || (pending.method !== 'item/tool/requestUserInput' && pending.method !== 'mcpServer/elicitation/request')) {
-    throw new Error('Question is no longer pending')
+    throw new PendingRequestGoneError('Question')
   }
   if (pending.method === 'mcpServer/elicitation/request') {
     pendingCodexApprovals.delete(key)
@@ -4670,8 +4685,8 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
         if (codexSlash && !codexInitPrompt) {
           const commandName = codexSlash.command.toLowerCase()
           const commandArgs = codexSlash.arguments.trim()
-          const finishCommand = (message: string) => {
-            safeEnqueue(commandResultEvent('codex', { message, transcriptExpected: false }))
+          const finishCommand = (message: string, extra: Record<string, unknown> = {}) => {
+            safeEnqueue(commandResultEvent('codex', { message, transcriptExpected: false, ...extra }))
             scheduleCompletionClose(unsubscribe)
           }
 
@@ -4793,6 +4808,125 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
             return
           }
 
+          if (commandName === 'experimental' || commandName === 'rollout') {
+            // /experimental <name> on|off toggles a feature for this app-server;
+            // /rollout shows every gate and its stage.
+            const [featureName, toggle] = commandArgs.split(/\s+/)
+            if (commandName === 'experimental' && featureName && (toggle === 'on' || toggle === 'off')) {
+              await client.request('experimentalFeature/enablement/set', { enablement: { [featureName]: toggle === 'on' } })
+              finishCommand(`Experimental feature ${featureName} is now ${toggle}.`)
+              return
+            }
+            const listed = await client.request('experimentalFeature/list', { threadId: sessionId, limit: 200 })
+            const features = commandName === 'experimental'
+              ? listed.data.filter((feature) => feature.stage === 'beta')
+              : listed.data.filter((feature) => feature.stage !== 'removed')
+            finishCommand(features.length === 0
+              ? 'No experimental features are available.'
+              : [
+                  commandName === 'experimental' ? 'Experimental features (/experimental <name> on|off):' : 'Feature gates:',
+                  ...features.map((feature) => `  ${feature.enabled ? '●' : '○'} ${feature.name}${commandName === 'rollout' ? ` [${feature.stage}]` : ''}${feature.description ? ` — ${feature.description}` : ''}`),
+                ].join('\n'))
+            return
+          }
+
+          if (commandName === 'apps') {
+            const listed = await client.request('app/list', { threadId: sessionId, limit: 200 })
+            finishCommand(listed.data.length === 0
+              ? 'No apps are available.'
+              : ['Apps:', ...listed.data.map((app) => `  ${app.isEnabled && app.isAccessible ? '●' : '○'} ${app.name}${app.description ? ` — ${app.description}` : ''}`)].join('\n'))
+            return
+          }
+
+          if (commandName === 'plugins') {
+            const listed = await client.request('plugin/list', { cwds: [commandCwd] })
+            const plugins = listed.marketplaces.flatMap((marketplace) => marketplace.plugins.map((plugin) => ({ plugin, marketplace: marketplace.name })))
+            const installed = plugins.filter(({ plugin }) => plugin.installedAt != null)
+            finishCommand(plugins.length === 0
+              ? 'No plugins are available.'
+              : [
+                  `Plugins: ${installed.length} installed of ${plugins.length} available`,
+                  ...installed.map(({ plugin, marketplace }) => `  ${plugin.enabled ? '●' : '○'} ${plugin.name} (${marketplace})`),
+                ].join('\n'))
+            return
+          }
+
+          if (commandName === 'memories') {
+            if (commandArgs === 'on' || commandArgs === 'off') {
+              await client.request('thread/memoryMode/set', { threadId: sessionId, mode: commandArgs === 'on' ? 'enabled' : 'disabled' })
+              finishCommand(`Memories ${commandArgs === 'on' ? 'enabled' : 'disabled'} for this thread.`)
+              return
+            }
+            finishCommand('Use /memories on or /memories off to set whether this thread uses and records memories.')
+            return
+          }
+
+          if (commandName === 'personality') {
+            if (commandArgs === 'none' || commandArgs === 'friendly' || commandArgs === 'pragmatic') {
+              await client.request('thread/settings/update', { threadId: sessionId, personality: commandArgs })
+              finishCommand(`Codex personality set to ${commandArgs}.`)
+              return
+            }
+            finishCommand('Use /personality none, /personality friendly, or /personality pragmatic.')
+            return
+          }
+
+          if (commandName === 'feedback') {
+            // Sends to OpenAI, so only with the user's own words and no logs.
+            if (!commandArgs) {
+              finishCommand('Use /feedback <what happened> to send feedback about this thread to the Codex team (logs are not attached).')
+              return
+            }
+            await client.request('feedback/upload', { classification: 'other', reason: commandArgs, threadId: sessionId, includeLogs: false })
+            finishCommand('Sent your feedback to the Codex team.')
+            return
+          }
+
+          if (commandName === 'logout') {
+            await client.request('account/logout', undefined as never)
+            finishCommand('Logged out of Codex. Run `codex login` to sign in again.')
+            return
+          }
+
+          if (commandName === 'subagents' || commandName === 'agent') {
+            // codex-cli 0.158's multi_agent records each spawn as
+            // subAgentActivity items on the parent (those children are not in
+            // thread/list); older thread_spawn children are listed with a
+            // parentThreadId.
+            type SubAgent = { id: string; label: string; status: string }
+            const byId = new Map<string, SubAgent>()
+            const parentThread = await readCodexThreadWithFullTurns(sessionId).catch(() => null)
+            for (const turn of parentThread?.turns ?? []) {
+              for (const item of turn.items) {
+                if (item.type !== 'subAgentActivity') continue
+                const activity = item as { agentThreadId?: string; agentPath?: string | null; kind?: string }
+                if (!activity.agentThreadId) continue
+                const label = activity.agentPath?.split('/').filter(Boolean).pop() ?? activity.agentThreadId
+                byId.set(activity.agentThreadId, { id: activity.agentThreadId, label, status: activity.kind ?? 'started' })
+              }
+            }
+            const listed = await client.request('thread/list', { sourceKinds: ['subAgentThreadSpawn'], limit: 200 }).catch(() => null)
+            for (const thread of listed?.data ?? []) {
+              if (thread.parentThreadId !== sessionId || byId.has(thread.id)) continue
+              byId.set(thread.id, { id: thread.id, label: thread.agentNickname || thread.name || thread.id, status: thread.status.type })
+            }
+            const children = [...byId.values()]
+            if (commandName === 'agent' && commandArgs) {
+              const needle = commandArgs.toLowerCase()
+              const match = children.find((child) => child.id.startsWith(commandArgs) || child.label.toLowerCase().includes(needle))
+              if (!match) {
+                finishCommand(`No sub-agent of this thread matches "${commandArgs}".`)
+                return
+              }
+              finishCommand(`Opening sub-agent ${match.label}.`, { openSession: { sessionId: match.id, provider: 'codex', title: match.label } })
+              return
+            }
+            finishCommand(children.length === 0
+              ? 'This thread has not spawned any sub-agents.'
+              : ['Sub-agents (/agent <name> opens one):', ...children.map((child) => `  ${child.label} [${child.status}] — ${child.id}`)].join('\n'))
+            return
+          }
+
           if (commandName === 'ps') {
             const listed = await client.request('thread/backgroundTerminals/list', { threadId: sessionId })
             finishCommand(listed.data.length === 0
@@ -4812,7 +4946,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
             return
           }
 
-          finishCommand(`/${codexSlash.command} is an interactive Codex command that agent-viewer cannot run yet.`)
+          finishCommand(`/${codexSlash.command} is part of the Codex terminal UI and has no counterpart here — run it in \`codex\` itself.`)
           return
         }
 
@@ -5658,14 +5792,33 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
             }
           }).commands
           if (commandsRpc?.invoke) {
-            const result = await withTimeout(
-              commandsRpc.invoke({
-                name: slashCommand.command,
-                input: slashCommand.arguments || undefined,
-              }),
-              10000,
-              'Copilot slash command',
-            )
+            let result: unknown
+            try {
+              result = await withTimeout(
+                commandsRpc.invoke({
+                  name: slashCommand.command,
+                  input: slashCommand.arguments || undefined,
+                }),
+                10000,
+                'Copilot slash command',
+              )
+            } catch (err) {
+              // The CLI refuses a command it does not have ("Unknown slash
+              // command: /x") or cannot run now (/share before a sync). That is
+              // the command's answer, not a broken session: handled as an
+              // error it evicted the warm session and put the text back in the
+              // composer, where the next command was typed in front of it.
+              const message = (err instanceof Error ? err.message : String(err))
+                .replace(/^Request session\.commands\.invoke failed with message:\s*/, '')
+              // A command that starts work of its own (/fleet with no prompt)
+              // can outlast the wait; it is still running, not failed.
+              safeEnqueue(copilotCommandResultEvent({
+                message: /timed out/i.test(message)
+                  ? `/${slashCommand.command} is still running in Copilot; its output will appear as it lands.`
+                  : message,
+              }))
+              return
+            }
             const resultRecord = result && typeof result === 'object' && !Array.isArray(result)
               ? result as unknown as Record<string, unknown>
               : null
@@ -5683,11 +5836,45 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
                 message: typeof resultRecord.message === 'string' && resultRecord.message.trim()
                   ? resultRecord.message
                   : `/${slashCommand.command} completed.`,
+                ...(parseCopilotMode(resultRecord.mode) ? { mode: parseCopilotMode(resultRecord.mode) } : {}),
               }))
               return
             } else if (resultRecord?.kind === 'select-subcommand') {
+              const options = Array.isArray(resultRecord.options)
+                ? resultRecord.options as Array<{ name?: string; description?: string }>
+                : []
               safeEnqueue(copilotCommandResultEvent({
-                message: `/${slashCommand.command} needs a subcommand in the native Copilot UI.`,
+                message: [
+                  `${typeof resultRecord.title === 'string' ? resultRecord.title : `/${slashCommand.command}`}:`,
+                  ...options.map((option) => `  /${slashCommand.command} ${option.name ?? ''}${option.description ? ` — ${option.description}` : ''}`),
+                ].join('\n'),
+              }))
+              return
+            } else if (resultRecord?.kind === 'add-timeline-entry') {
+              const entry = resultRecord.entry as { text?: string; url?: string } | undefined
+              safeEnqueue(copilotCommandResultEvent({
+                message: [entry?.text, entry?.url].filter(Boolean).join('\n') || `/${slashCommand.command} completed.`,
+                ...(typeof resultRecord.prefillInput === 'string' ? { prefillInput: resultRecord.prefillInput } : {}),
+              }))
+              return
+            } else if (resultRecord?.kind === 'show-dialog') {
+              // The only dialog is the model picker; the composer has its own.
+              safeEnqueue(copilotCommandResultEvent({ message: '', openModelPicker: true }))
+              return
+            } else if (resultRecord?.kind === 'set-model' && typeof resultRecord.model === 'string') {
+              await withTimeout(
+                session.setModel(resultRecord.model, copilotModelOptions({ effort: copilotEffort, contextTier })),
+                providerStartupTimeoutMs(resultRecord.model, 15_000),
+                'Copilot model switch',
+              )
+              safeEnqueue(copilotCommandResultEvent({
+                message: [`Copilot model set to ${resultRecord.model}.`, resultRecord.warning].filter((part) => typeof part === 'string' && part).join(' '),
+                model: resultRecord.model,
+              }))
+              return
+            } else if (resultRecord?.kind === 'set-plan-model') {
+              safeEnqueue(copilotCommandResultEvent({
+                message: typeof resultRecord.message === 'string' ? resultRecord.message : 'Plan model updated.',
               }))
               return
             }
@@ -6676,7 +6863,22 @@ export async function streamViewSessionTurn(params: SendMessageParams): Promise<
   return createClaudeStream(params.sessionId, params.signal, params.body, checkpoint)
 }
 
-export async function forkViewSession({ sessionId, body, provider }: ForkParams): Promise<{ sessionId: string }> {
+export async function forkViewSession(params: ForkParams): Promise<{ sessionId: string }> {
+  const forked = await forkViewSessionUnrecorded(params)
+  recordContextTransfer({
+    type: 'fork',
+    source: {
+      provider: params.provider,
+      sessionId: params.sessionId,
+      point: typeof params.body.upToMessageId === 'string' ? params.body.upToMessageId : undefined,
+    },
+    target: { provider: params.provider, sessionId: forked.sessionId },
+    strategy: 'native',
+  })
+  return forked
+}
+
+async function forkViewSessionUnrecorded({ sessionId, body, provider }: ForkParams): Promise<{ sessionId: string }> {
   const resolvedProvider = await resolveProvider(provider)
   if (resolvedProvider === 'codex') {
     const client = getCodexClient()

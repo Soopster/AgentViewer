@@ -427,6 +427,8 @@ export type ProtocolEventType =
   | 'agent.stop_work'
   | 'agent.blocked'
   | 'agent.unblocked'
+  // A task's execution was re-attempted (same-provider retry or cross-provider recovery); attempt 1 is implicit.
+  | 'agent.attempt'
   // task list
   | 'task.created'
   | 'task.planned'
@@ -666,6 +668,12 @@ export type ProtocolRunSnapshot = {
   locks: ProtocolLock[]
   messages: ProtocolMessage[]
   events: AgentProtocolEvent[]
+  /**
+   * Ledger position this snapshot was read at. Events committed after it are
+   * exactly `readProtocolEventsAfter(runId, eventCursor)` — the snapshot plus
+   * cursor boundary, so a client never splices a window into the wrong place.
+   */
+  eventCursor?: string
 }
 
 export type StartProtocolRunParams = {
@@ -1217,6 +1225,21 @@ export function parseRunPlaybook(value: unknown): RunPlaybook {
   }
 }
 
+/** Why a task is on a further execution attempt; `steering_restart` is reserved for interrupt-and-replace steering. */
+export type ProtocolAttemptReason = 'retry' | 'provider_recovery' | 'steering_restart'
+
+export type ProtocolAttempt = {
+  agentId: string
+  taskId?: string
+  reason: ProtocolAttemptReason
+  /** 2 for the first re-attempt. */
+  ordinal: number
+  provider: string
+  fromProvider?: string
+  failureClass?: string
+  timestamp: string
+}
+
 export type ExternalProtocolCompletionResult = ExternalProtocolMutationResult & {
   accepted: boolean
   reason?: string
@@ -1227,7 +1250,7 @@ const A2A_EXTENSION_KEY = A2A_COORDINATION_EXTENSION_URI
 
 const EVENT_TYPES: ReadonlySet<string> = new Set<ProtocolEventType>([
   'agent.ready', 'agent.heartbeat', 'agent.start_work', 'agent.stop_work',
-  'agent.blocked', 'agent.unblocked',
+  'agent.blocked', 'agent.unblocked', 'agent.attempt',
   'task.created', 'task.planned', 'task.claim', 'task.claimed',
   'task.released', 'task.completed', 'task.failed', 'plan.completed',
   'task.child.started', 'task.child.progress', 'task.child.completed',

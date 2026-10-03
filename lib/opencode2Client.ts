@@ -14,6 +14,7 @@
 // resolving with something that looks like it worked.
 
 import { OpenCode } from '@opencode/client'
+import { PendingRequestGoneError } from './pendingRequestGone'
 import {
   OPENCODE_2_VERSION,
   toV1MessageBundles,
@@ -459,7 +460,7 @@ export function createOpenCode2Clients(options: { baseUrl: string; headers?: Rec
       },
       async reply(input: { requestID: string; directory?: string; answers: string[][] }) {
         const form = (await readForms(input.directory)).find((entry) => entry.id === input.requestID)
-        if (!form) throw new Error('Question is no longer pending')
+        if (!form) throw new PendingRequestGoneError('Question')
         await v2.session.form.reply({
           sessionID: form.sessionID,
           formID: form.id,
@@ -469,7 +470,7 @@ export function createOpenCode2Clients(options: { baseUrl: string; headers?: Rec
       },
       async reject(input: { requestID: string; directory?: string }) {
         const form = (await readForms(input.directory)).find((entry) => entry.id === input.requestID)
-        if (!form) throw new Error('Question is no longer pending')
+        if (!form) throw new PendingRequestGoneError('Question')
         await v2.session.form.cancel({ sessionID: form.sessionID, formID: form.id } as never)
         return true
       },

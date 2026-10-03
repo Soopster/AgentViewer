@@ -44,6 +44,22 @@ export async function getOpenCodeSessionMessages(sessionId: string): Promise<Arr
   return openCodeData<Array<{ info: OpenCodeMessage; parts: OpenCodePart[] }>>(response)
 }
 
+/**
+ * Where a staged revert (/undo) cut the conversation, if one is pending. The
+ * reverted messages stay in the session until the next turn commits the revert,
+ * so `session.messages` still returns them; OpenCode's own TUI hides everything
+ * from this message on, and /redo (unrevert) brings it back.
+ */
+export async function readOpenCodeRevertMessageId(sessionId: string): Promise<string | null> {
+  try {
+    const client = await getOpenCodeClient()
+    const response = await client.session.get({ ...OPENCODE_OPTIONS, path: { id: sessionId } })
+    return openCodeData<OpenCodeSession & { revert?: { messageID?: string } }>(response).revert?.messageID ?? null
+  } catch {
+    return null
+  }
+}
+
 /** OpenCode's event bus is scoped per directory, and a session's directory
  *  comes from the session record itself — not from the client's cwd. */
 export function openCodeDirectoryQuery(session: OpenCodeSession): { directory?: string } | undefined {

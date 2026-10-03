@@ -3,7 +3,7 @@
 // prompt keeps the turn being rewound and the transcript looks unchanged.
 import assert from 'node:assert/strict'
 import type { SessionMessage } from '../lib/types'
-import { claudeForkPoint, rewindCandidates } from '../tui/opentui/rewindTargets'
+import { forkPointBefore, rewindCandidates } from '../tui/opentui/rewindTargets'
 
 const row = (uuid: string, type: 'user' | 'assistant', content: unknown, extra: Partial<SessionMessage> = {}): SessionMessage => ({
   type, uuid, session_id: 's', parent_tool_use_id: null, message: { role: type, content } as SessionMessage['message'], ...extra,
@@ -21,8 +21,8 @@ const raw = [
 
 assert.deepEqual(rewindCandidates(raw).map((c) => c.uuid), ['u2', 'u1'],
   'newest first; tool results, ! rows and subagent prompts are not the user\'s prompts')
-assert.equal(claudeForkPoint(raw, 'u2'), 'b1', 'forks at the main-chain message just before the prompt')
-assert.equal(claudeForkPoint(raw, 'u1'), null, 'the opening prompt rewinds to a fresh session')
-assert.equal(claudeForkPoint(raw, 'missing'), undefined, 'an unknown prompt is reported, not guessed')
+assert.equal(forkPointBefore(raw, 'u2'), 'b1', 'forks at the main-chain message just before the prompt')
+assert.equal(forkPointBefore(raw, 'u1'), null, 'the opening prompt rewinds to a fresh session')
+assert.equal(forkPointBefore(raw, 'missing'), undefined, 'an unknown prompt is reported, not guessed')
 
 console.log('Rewind targets list typed prompts and fork just before them')

@@ -80,7 +80,8 @@ function git(cwd: string, args: string[], opts?: { env?: Record<string, string>;
   })
 }
 
-function sanitizeLabel(message: string): string {
+/** The label a turn's checkpoint is stored under: the prompt's first non-blank line. */
+export function sanitizeLabel(message: string): string {
   const firstLine = message.split('\n').find((line) => line.trim().length > 0) ?? ''
   return firstLine.trim().slice(0, 120) || 'agent turn'
 }

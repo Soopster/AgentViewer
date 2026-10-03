@@ -104,6 +104,10 @@ export type SessionCapabilities = {
   summarizeSession: boolean
   unrevertSession: boolean
   respondToPermission: boolean
+  /** The runtime accepts a user message into a turn already in flight. */
+  activeSteering: boolean
+  /** The runtime returns a conversation to before an earlier prompt without leaving the session. */
+  inPlaceRewind: boolean
 }
 
 /**

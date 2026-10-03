@@ -43,6 +43,7 @@ import {
 import { normalizeCodexStreamThreadedMessage } from '@/lib/codexMapper'
 import { getSlashCommandSuggestions, filterSlashCommands, normalizeSlashCommandSuggestions, type SlashCommandSuggestion } from '@/lib/slashCommands'
 import { getProviderComposer } from '@/lib/providerComposer'
+import { isPendingRequestGone, PENDING_REQUEST_GONE_NOTICE } from '@/lib/pendingRequestGone'
 import { extractCopilotPushedAttachments, extractPendingPermission, extractPendingPermissions, extractPermissionReply, permissionMcpServerLabel, type PendingPermission, type PendingQuestionAnswers } from '@/lib/permissions'
 import { extractClaudeReadFileSummary } from '@/lib/claudeSdkFeatures'
 import { parseClaudeCommandLifecycle, type ClaudeCommandLifecycleState } from '@/lib/claudeCommandLifecycle'
@@ -6180,12 +6181,19 @@ function MessageViewInner({
         }),
       })
       const data = await readOptionalJsonResponse(res, {})
-      if (data.error) throw new Error(data.error)
+      if (data.error) throw Object.assign(new Error(data.error), { code: (data as { code?: string }).code })
       setPendingPermissions((prev) => prev.filter((entry) =>
         entry.id !== permission.id || (permission.sessionId !== undefined && entry.sessionId !== permission.sessionId)
       ))
     } catch (err) {
-      setSessionActionError(err instanceof Error ? err.message : 'Failed to respond to permission')
+      if (isPendingRequestGone(err)) {
+        setPendingPermissions((prev) => prev.filter((entry) =>
+          entry.id !== permission.id || (permission.sessionId !== undefined && entry.sessionId !== permission.sessionId)
+        ))
+        setSessionActionError(PENDING_REQUEST_GONE_NOTICE)
+      } else {
+        setSessionActionError(err instanceof Error ? err.message : 'Failed to respond to permission')
+      }
     } finally {
       setSessionActionLoading(null)
     }
@@ -6215,12 +6223,19 @@ function MessageViewInner({
         }),
       })
       const data = await readOptionalJsonResponse(res, {})
-      if (data.error) throw new Error(data.error)
+      if (data.error) throw Object.assign(new Error(data.error), { code: (data as { code?: string }).code })
       setPendingPermissions((prev) => prev.filter((entry) =>
         entry.id !== permission.id || (permission.sessionId !== undefined && entry.sessionId !== permission.sessionId)
       ))
     } catch (err) {
-      setSessionActionError(err instanceof Error ? err.message : 'Failed to submit answer')
+      if (isPendingRequestGone(err)) {
+        setPendingPermissions((prev) => prev.filter((entry) =>
+          entry.id !== permission.id || (permission.sessionId !== undefined && entry.sessionId !== permission.sessionId)
+        ))
+        setSessionActionError(PENDING_REQUEST_GONE_NOTICE)
+      } else {
+        setSessionActionError(err instanceof Error ? err.message : 'Failed to submit answer')
+      }
     } finally {
       setSessionActionLoading(null)
     }

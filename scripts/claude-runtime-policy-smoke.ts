@@ -58,3 +58,14 @@ assert.deepEqual(claudeQueryBudgetOptions(12_345.9, 1.25), {
 assert.deepEqual(claudeQueryBudgetOptions(0, Number.NaN), {})
 
 console.log('claude runtime policy smoke: ok')
+
+// A delegated policy may narrow a ceiling but never widen it.
+{
+  const { permissionModeEscalation } = await import('../lib/claudeRuntimePolicy')
+  assert.equal(permissionModeEscalation(undefined), null)
+  assert.equal(permissionModeEscalation('plan'), null)
+  assert.equal(permissionModeEscalation('acceptEdits'), null)
+  assert.match(permissionModeEscalation('bypassPermissions') ?? '', /exceeds the delegation ceiling/)
+  assert.equal(permissionModeEscalation('bypassPermissions', 'bypassPermissions'), null)
+  assert.match(permissionModeEscalation('acceptEdits', 'plan') ?? '', /exceeds/)
+}

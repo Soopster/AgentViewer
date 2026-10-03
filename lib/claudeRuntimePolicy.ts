@@ -18,6 +18,27 @@ const PERMISSION_MODES = new Set<ClaudeAgentPermissionMode>([
   'dontAsk',
 ])
 
+/** Least to most privileged: a delegated policy may sit at or below its ceiling, never above. */
+const PERMISSION_MODE_RANK: Record<ClaudeAgentPermissionMode, number> = {
+  plan: 0,
+  default: 1,
+  dontAsk: 2,
+  acceptEdits: 3,
+  bypassPermissions: 4,
+}
+
+/** Ceiling for a policy a lead supplies on a delegated task; bypass needs an explicit grant by the host. */
+export const DELEGATED_PERMISSION_CEILING: ClaudeAgentPermissionMode = 'acceptEdits'
+
+/** Reports the first way `requested` would widen what `ceiling` allows, or null when it stays inside. */
+export function permissionModeEscalation(
+  requested: ClaudeAgentPermissionMode | undefined,
+  ceiling: ClaudeAgentPermissionMode = DELEGATED_PERMISSION_CEILING,
+): string | null {
+  if (!requested || PERMISSION_MODE_RANK[requested] <= PERMISSION_MODE_RANK[ceiling]) return null
+  return `permissionMode '${requested}' exceeds the delegation ceiling '${ceiling}'`
+}
+
 const EFFORTS = new Set<ReasoningEffortLevel>([
   'off',
   'minimal',

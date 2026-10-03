@@ -11,6 +11,8 @@ const CLAUDE_CAPABILITIES: SessionCapabilities = {
   summarizeSession: false,
   unrevertSession: false,
   respondToPermission: true,
+  activeSteering: true,
+  inPlaceRewind: false,
 }
 
 export const CODEX_CAPABILITIES: SessionCapabilities = {
@@ -24,6 +26,8 @@ export const CODEX_CAPABILITIES: SessionCapabilities = {
   summarizeSession: false,
   unrevertSession: false,
   respondToPermission: true,
+  activeSteering: true,
+  inPlaceRewind: true,
 }
 
 export const OPENCODE_CAPABILITIES: SessionCapabilities = {
@@ -37,6 +41,8 @@ export const OPENCODE_CAPABILITIES: SessionCapabilities = {
   summarizeSession: true,
   unrevertSession: true,
   respondToPermission: true,
+  activeSteering: true,
+  inPlaceRewind: true,
 }
 
 export const COPILOT_CAPABILITIES: SessionCapabilities = {
@@ -50,6 +56,8 @@ export const COPILOT_CAPABILITIES: SessionCapabilities = {
   summarizeSession: false,
   unrevertSession: false,
   respondToPermission: true,
+  activeSteering: true,
+  inPlaceRewind: false,
 }
 
 export const PI_CAPABILITIES: SessionCapabilities = {
@@ -63,6 +71,8 @@ export const PI_CAPABILITIES: SessionCapabilities = {
   summarizeSession: true,
   unrevertSession: false,
   respondToPermission: true,
+  activeSteering: true,
+  inPlaceRewind: false,
 }
 
 export const LMSTUDIO_CAPABILITIES: SessionCapabilities = {
@@ -76,6 +86,8 @@ export const LMSTUDIO_CAPABILITIES: SessionCapabilities = {
   summarizeSession: false,
   unrevertSession: false,
   respondToPermission: false,
+  activeSteering: false,
+  inPlaceRewind: false,
 }
 
 // ACP-transport sessions: driven via an external claude-agent-acp/codex-acp
@@ -93,6 +105,8 @@ export const CLAUDE_ACP_CAPABILITIES: SessionCapabilities = {
   summarizeSession: false,
   unrevertSession: false,
   respondToPermission: true,
+  activeSteering: false,
+  inPlaceRewind: false,
 }
 
 export const CODEX_ACP_CAPABILITIES: SessionCapabilities = {

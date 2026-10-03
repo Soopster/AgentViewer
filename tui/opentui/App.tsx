@@ -25,7 +25,7 @@ import { PiActivityPopover } from './PiActivityPopover'
 import { toast } from './toastStore'
 import { toBmpSafe } from './bmp'
 import { loadBridgeMessagesForSession, addBridgeMessage, channelBridgeFileOutboxStorage } from '../../lib/bridgeMessages'
-import { getAssistantDisplayName } from '../../lib/provider'
+import { getAssistantDisplayName, isAgentProvider } from '../../lib/provider'
 import { TaskSidePanel } from './TaskSidePanel'
 import { openExternalUrl } from './terminalBrowser'
 import { hasTuiLinkTarget, parseTuiLineTokens, parseTuiLinkTarget } from '../../lib/tuiLinkTargets'
@@ -81,7 +81,7 @@ import {
   type TuiTranscriptCodeBlock,
   type TuiTranscriptCardLine,
 } from '../format'
-import { openTranscriptInPager } from './transcriptPager'
+import { editTextInEditor, openTranscriptInPager } from './transcriptPager'
 import { detectTuiCodeFiletypeFromPath } from '../codeFiletypes'
 import { computeTurnDurationsMs, stripToolCallBlocks, type ThreadedMessage } from '../../lib/threading'
 import { buildTaskRegistry } from '../../lib/taskRegistry'
@@ -149,6 +149,8 @@ import {
   createTuiSession,
   forkTuiSession,
   rewindTuiSession,
+  listTuiCheckpoints,
+  restoreTuiCheckpoint,
   readTuiComposerOptions,
   listTuiProtocolRuns,
   listTuiRunPlaybooks,
@@ -245,7 +247,11 @@ import { PlaybookManagerPopover } from './PlaybookManagerPopover'
 import { getContinueInCliCommand } from '../../lib/cliContinue'
 import { commandResultExpectsTranscript, isNativeComposerCommandText } from '../../lib/composerCommands'
 import { deliverComposerSteer } from '../../lib/composerSteering'
-import { claudeForkPoint, rewindCandidates, type RewindCandidate } from './rewindTargets'
+import { checkpointForPrompt } from '../../lib/rewindCheckpoint'
+import { buildContextHandoffPrompt } from '../../lib/contextHandoff'
+import { buildHandoffBriefMarkdown } from '../../lib/handoffBrief'
+import { recordContextTransfer } from '../../lib/contextTransfers'
+import { forkPointBefore, rewindCandidates, type RewindCandidate } from './rewindTargets'
 import { parseClaudeCommandLifecycle, type ClaudeCommandLifecycleState } from '../../lib/claudeCommandLifecycle'
 import { isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs, TransientAwareSendError, type UsageLimitKind } from '../../lib/transientError'
 import { listProjectFiles } from '../../lib/projectFiles'
@@ -254,6 +260,7 @@ import { runGitCommand } from '../../lib/gitNodeProvider'
 import { getSlashCommandSuggestions, filterSlashCommands, normalizeSlashCommandSuggestions, type SlashCommandSuggestion } from '../../lib/slashCommands'
 import { parseCrossSessionComposerCommand } from '../../lib/crossSessionCommands'
 import { getProviderComposer, pickProviderExample } from '../../lib/providerComposer'
+import { isPendingRequestGone, PENDING_REQUEST_GONE_NOTICE } from '../../lib/pendingRequestGone'
 import { defaultPermissionOptionIndex, extractPendingPermission, permissionMcpServerLabel, extractPendingPermissions, extractPermissionReply, permissionOptionsFor, type PendingPermission, type PendingQuestionAnswers, type PendingQuestionOption, type PermissionOption, type PermissionResponse } from '../../lib/permissions'
 import type { readViewSessionComposerOptions } from '../../lib/sessionBackend'
 import {
@@ -935,6 +942,13 @@ type CardDisplayData = {
 
 type AgentToolGroupCard = TuiTranscriptCard & {
   agentToolCards?: TuiTranscriptCard[]
+}
+
+// A TUI view, not a provider command: the web composer has no handoff, so it stays out of the shared catalog.
+const TUI_HANDOFF_COMMAND: SlashCommandSuggestion = {
+  command: '/handoff',
+  description: 'Continue this conversation on another provider',
+  argumentHint: '<provider>',
 }
 
 type NoticeTone = 'info' | 'error'
@@ -5247,7 +5261,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'rename',     label: 'Rename session',         key: '⌃R', category: 'Session'    },
   { id: 'cli',        label: 'Copy CLI resume command', key: '',  category: 'Session'    },
   { id: 'channel-bridge', label: 'Channel bridge',      key: '⇧C', category: 'Session'    },
-  { id: 'channel-bridge-route', label: 'Toggle composer → bridge routing', key: 'composer ⌃R', category: 'Session' },
+  { id: 'channel-bridge-route', label: 'Toggle composer → bridge routing', key: '⇧C ⌃R', category: 'Session' },
   { id: 'ide-bridge', label: 'IDE bridge',              key: '⇧I', category: 'Session'    },
   { id: 'ide-bridge-route', label: 'Toggle composer → IDE routing', key: '', category: 'Session' },
   { id: 'git',        label: 'Git status',             key: '⌃G', category: 'Session'    },
@@ -5318,6 +5332,53 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'refresh',    label: 'Refresh sessions',       key: 'r',  category: 'App'        },
   { id: 'quit',       label: 'Quit',                   key: 'q / Esc / ⌃C',  category: 'App'        },
 ]
+
+type TuiCommandEquivalent = { palette: string } | { notice: string }
+
+// Native CLI commands that belong to their terminal UI. Each is answered by the
+// agent-viewer surface that does the same job, or by why there is none, so no
+// command a native user types ends in "cannot run".
+const TUI_COMMAND_EQUIVALENTS: Record<string, { providers?: readonly AgentProvider[]; equivalent: TuiCommandEquivalent }> = {
+  theme: { equivalent: { palette: 'theme' } },
+  keymap: { equivalent: { palette: 'shortcut-guide' } },
+  keybindings: { equivalent: { palette: 'shortcut-guide' } },
+  settings: { providers: ['codex', 'pi'], equivalent: { palette: 'model' } },
+  raw: { providers: ['codex'], equivalent: { palette: 'transcript-pager' } },
+  multiagents: { providers: ['codex'], equivalent: { palette: 'coord-teammates' } },
+  ide: { providers: ['claude'], equivalent: { palette: 'ide-bridge' } },
+  vim: { equivalent: { notice: 'The composer has no Vim mode — ⌃O opens a larger composer window, and ⌃K v opens the transcript in $EDITOR' } },
+  statusline: { equivalent: { notice: 'agent-viewer draws its own status line: the composer footer shows model, context, effort and mode' } },
+  title: { providers: ['codex'], equivalent: { notice: 'agent-viewer names the terminal itself; the tab bar shows each conversation' } },
+  pets: { providers: ['codex'], equivalent: { notice: 'agent-viewer has no companion decorations' } },
+  pet: { providers: ['codex'], equivalent: { notice: 'agent-viewer has no companion decorations' } },
+  realtime: { providers: ['codex'], equivalent: { notice: 'Voice sessions are not available in agent-viewer — use the codex CLI for /realtime' } },
+  'terminal-setup': { providers: ['claude'], equivalent: { notice: 'Not needed here: ⇧⏎ inserts a newline in agent-viewer without terminal setup' } },
+  'privacy-settings': { providers: ['claude'], equivalent: { notice: 'Privacy settings live in your claude.ai account settings (Privacy)' } },
+  'release-notes': { providers: ['claude'], equivalent: { notice: 'Release notes: github.com/anthropics/claude-code/blob/main/CHANGELOG.md' } },
+  'setup-default-sandbox': { providers: ['codex'], equivalent: { notice: 'Sandbox setup is for Codex on Windows — run /setup-default-sandbox in the codex CLI there' } },
+  'sandbox-add-read-dir': { providers: ['codex'], equivalent: { notice: 'Readable directories belong to the Windows sandbox profile — run /sandbox-add-read-dir in the codex CLI there' } },
+  hotkeys: { providers: ['pi'], equivalent: { palette: 'shortcut-guide' } },
+  themes: { providers: ['opencode'], equivalent: { palette: 'theme' } },
+  models: { providers: ['opencode'], equivalent: { palette: 'model' } },
+  details: { providers: ['opencode'], equivalent: { palette: 'tools' } },
+  thinking: { providers: ['opencode'], equivalent: { palette: 'thinking' } },
+  status: { providers: ['opencode'], equivalent: { palette: 'diagnostics' } },
+  agents: { providers: ['opencode'], equivalent: { notice: '⇧Tab switches the OpenCode agent (build, plan, …); the footer shows the current one' } },
+  connect: { providers: ['opencode'], equivalent: { notice: 'Provider sign-in is `opencode auth login` in a terminal; agent-viewer uses the credentials it stores' } },
+  'scoped-models': { providers: ['pi'], equivalent: { palette: 'model' } },
+  changelog: { providers: ['pi'], equivalent: { notice: 'Pi changelog: github.com/badlogic/pi-mono → packages/coding-agent/CHANGELOG.md' } },
+  share: { providers: ['pi'], equivalent: { notice: 'Sharing publishes the session to a public gist — run /share in pi itself to do that deliberately' } },
+  approve: { providers: ['codex'], equivalent: { notice: 'Nothing to approve: agent-viewer does not route Codex commands through auto-review, so none are auto-denied' } },
+}
+
+function tuiCommandEquivalent(provider: AgentProvider, command: string): TuiCommandEquivalent | null {
+  if (provider === 'codex' && command === 'ide') {
+    return { notice: 'Codex has no IDE link in agent-viewer — @ mentions add files to the prompt' }
+  }
+  const entry = TUI_COMMAND_EQUIVALENTS[command]
+  if (!entry || (entry.providers && !entry.providers.includes(provider))) return null
+  return entry.equivalent
+}
 
 function extractDiffText(lines: TuiTranscriptCardLine[]): string | null {
   const diffLines = lines
@@ -9944,7 +10005,7 @@ export default function OpenTuiApp() {
   const composerSlashOpen = composerFirstLine.startsWith('/') && !composerSlashDismissed
   const composerSlashCommands: SlashCommandSuggestion[] = useMemo(() => {
     if (!composerSlashOpen) return []
-    const baseline = getSlashCommandSuggestions(selectedSession?.provider ?? 'claude')
+    const baseline = [...getSlashCommandSuggestions(selectedSession?.provider ?? 'claude'), TUI_HANDOFF_COMMAND]
     const merged: SlashCommandSuggestion[] = [...composerLiveSlashCommands]
     const seen = new Set(merged.map((entry) => entry.command))
     for (const entry of baseline) {
@@ -10412,6 +10473,32 @@ export default function OpenTuiApp() {
     setComposerStashOpen(false)
     setComposerHistoryOpen(true)
     selectComposerHistoryEntry(displayIndex)
+  })
+
+  // ⌃R, as in the native CLIs: the newest earlier prompt containing what was
+  // typed; pressed again, the next older match.
+  const searchComposerHistory = useEffectEvent(() => {
+    const query = (composerHistoryOpen ? composerSnapshotText(draftBeforeHistory) : composerDraft).trim().toLowerCase()
+    for (let display = composerHistoryOpen ? composerHistoryIndex + 1 : 0; display < sentHistory.length; display += 1) {
+      const entry = sentHistory[sentHistory.length - 1 - display]
+      if (entry && (!query || composerSnapshotText(entry).toLowerCase().includes(query))) {
+        openComposerHistory(display)
+        return
+      }
+    }
+    showNotice('info', query ? `No earlier prompt contains "${query}"` : 'No earlier prompts yet')
+  })
+
+  // ⌃G, as in Claude Code and Codex: write the prompt in $VISUAL/$EDITOR.
+  const editComposerInExternalEditor = useEffectEvent(() => {
+    const current = composerTextareaRef.current?.plainText ?? composerDraft
+    const result = editTextInEditor(renderer, current)
+    if (!result.ok) {
+      showNotice('error', `${result.command}: ${result.error}`)
+      return
+    }
+    composerTextareaRef.current?.setText(result.text)
+    setComposerDraft(result.text)
   })
 
   const commitComposerHistory = useCallback(() => {
@@ -12861,7 +12948,13 @@ export default function OpenTuiApp() {
       setPendingPermissions((prev) => prev.filter((entry) => entry.id !== permission.id))
       setPermissionOptionIndex(0)
     } catch (err) {
-      showNotice('error', err instanceof Error ? err.message : 'Failed to respond to permission')
+      if (isPendingRequestGone(err)) {
+        setPendingPermissions((prev) => prev.filter((entry) => entry.id !== permission.id))
+        setPermissionOptionIndex(0)
+        showNotice('info', PENDING_REQUEST_GONE_NOTICE, 6000)
+      } else {
+        showNotice('error', err instanceof Error ? err.message : 'Failed to respond to permission')
+      }
     } finally {
       setPermissionActionLoading(null)
     }
@@ -12936,7 +13029,12 @@ export default function OpenTuiApp() {
       setQuestionFocusIndex(0)
       setQuestionOptionIndex(0)
     } catch (err) {
-      showNotice('error', err instanceof Error ? err.message : 'Failed to submit answer')
+      if (isPendingRequestGone(err)) {
+        setPendingPermissions((prev) => prev.filter((entry) => entry.id !== permission.id))
+        showNotice('info', PENDING_REQUEST_GONE_NOTICE, 6000)
+      } else {
+        showNotice('error', err instanceof Error ? err.message : 'Failed to submit answer')
+      }
     } finally {
       setPermissionActionLoading(null)
     }
@@ -12996,7 +13094,13 @@ export default function OpenTuiApp() {
       setPendingPermissions((prev) => prev.filter((p) => p.id !== permission.id))
       setBackgroundPrompts((prev) => prev.filter((p) => p.id !== permission.id))
     } catch (err) {
-      showNotice('error', err instanceof Error ? err.message : 'Failed to respond to permission')
+      if (isPendingRequestGone(err)) {
+        setPendingPermissions((prev) => prev.filter((p) => p.id !== permission.id))
+        setBackgroundPrompts((prev) => prev.filter((p) => p.id !== permission.id))
+        showNotice('info', PENDING_REQUEST_GONE_NOTICE, 6000)
+      } else {
+        showNotice('error', err instanceof Error ? err.message : 'Failed to respond to permission')
+      }
     } finally {
       setAttentionRespondingId(null)
     }
@@ -13346,6 +13450,7 @@ export default function OpenTuiApp() {
     void startFreshSession(newSessionProvider, newSessionCwd.trim() || process.cwd())
   })
 
+  const pendingForkSendRef = useRef<{ key: string; text: string } | null>(null)
   const openCreatedSession = useEffectEvent(async (draft: Session) => {
     setOpenTabSessions((prev) => prev.some((s) => sessionKey(s) === sessionKey(draft)) ? prev : [...prev, draft])
     setSelectedSessionKey(sessionKey(draft))
@@ -13359,10 +13464,10 @@ export default function OpenTuiApp() {
   // backtrack do. Codex and OpenCode rewind in place; the Claude SDK has no
   // in-place conversation rewind, so Claude continues in a fork taken just
   // before the prompt. Files are left as they are — ⇧U's checkpoints restore code.
-  const rewindToPrompt = useEffectEvent(async (chosen: RewindCandidate) => {
+  const rewindConversationToPrompt = useEffectEvent(async (chosen: RewindCandidate): Promise<boolean> => {
     const target = composerTargetSession
     const raw = sessionDetail?.rawMessages ?? []
-    if (!target) return
+    if (!target) return false
     const restorePrompt = () => setTimeout(() => {
       composerTextareaRef.current?.setText(chosen.text)
       setComposerDraft(chosen.text)
@@ -13380,13 +13485,13 @@ export default function OpenTuiApp() {
         await refreshSelectedSessionDetail(target, true)
         restorePrompt()
         showNotice('info', 'Rewound — the prompt is back in the composer; files are unchanged', 6000)
-        return
+        return true
       }
-      if (target.provider === 'claude') {
-        const point = claudeForkPoint(raw, chosen.uuid)
+      if (target.provider === 'claude' || target.provider === 'pi') {
+        const point = forkPointBefore(raw, chosen.uuid)
         if (point === undefined) throw new Error('Could not find that prompt in the transcript')
         if (point === null) {
-          await startFreshSession('claude', target.cwd ?? process.cwd())
+          await startFreshSession(target.provider, target.cwd ?? process.cwd())
         } else {
           const forked = await forkTuiSession(target, point)
           const fork: Session = {
@@ -13404,32 +13509,62 @@ export default function OpenTuiApp() {
         }
         if (point === null) restorePrompt()
         showNotice('info', 'Rewound in a fork — the original is unchanged; files are unchanged', 6000)
-        return
+        return true
       }
       showNotice('info', `${formatProviderLabel(target.provider ?? 'claude')} sessions cannot be rewound`)
+      return false
     } catch (err) {
       showNotice('error', err instanceof Error ? err.message : 'Rewind failed')
+      return false
+    }
+  })
+
+  // Rewind the conversation, and with `restoreFiles` the working tree too: the
+  // checkpoint taken as that prompt's turn began is the file state to return to.
+  const rewindToPrompt = useEffectEvent(async (chosen: RewindCandidate, options?: { restoreFiles?: boolean }) => {
+    const target = composerTargetSession
+    const checkpoints = options?.restoreFiles && target?.cwd
+      ? await listTuiCheckpoints(target.cwd).catch(() => [])
+      : []
+    const checkpoint = target
+      ? checkpointForPrompt(checkpoints, { sessionId: target.sessionId, text: chosen.text, timestamp: chosen.timestamp })
+      : null
+    if (!(await rewindConversationToPrompt(chosen)) || !options?.restoreFiles || !target?.cwd) return
+    if (!checkpoint) {
+      showNotice('info', 'Rewound the conversation — no checkpoint was taken at that prompt, so files are unchanged', 7000)
+      return
+    }
+    try {
+      const result = await restoreTuiCheckpoint(target.cwd, checkpoint.sha, undefined, { sessionId: target.sessionId, provider: target.provider })
+      showNotice('info', `Rewound conversation and files — ${result.restored} restored, ${result.deleted} removed`, 7000)
+    } catch (err) {
+      showNotice('error', `Rewound the conversation, but restoring files failed: ${err instanceof Error ? err.message : String(err)}`, 8000)
     }
   })
 
   // /fork: continue in a copy of this conversation, leaving the original as it is.
-  const forkIntoNewSession = useEffectEvent(async (target: Session) => {
+  const forkIntoNewSession = useEffectEvent(async (target: Session, sendInFork?: string) => {
     if (target.isPending) {
       showNotice('info', 'Nothing to fork yet — send a first message')
       return
     }
     try {
       const forked = await forkTuiSession(target)
-      await openCreatedSession({
+      const fork: Session = {
         ...target,
         sessionId: forked.sessionId,
         createdAt: Date.now(),
         lastModified: Date.now(),
-        summary: `Fork of ${target.customTitle?.trim() || target.summary?.trim() || 'session'}`,
+        summary: `${sendInFork ? 'Side conversation from' : 'Fork of'} ${target.customTitle?.trim() || target.summary?.trim() || 'session'}`,
         customTitle: undefined,
         isPending: false,
-      })
-      showNotice('info', 'Forked — you are now in the copy; the original is unchanged.')
+      }
+      // Codex /side: the aside is sent in the fork once it is the composer's target.
+      if (sendInFork) pendingForkSendRef.current = { key: sessionKey(fork), text: sendInFork }
+      await openCreatedSession(fork)
+      showNotice('info', sendInFork
+        ? 'Side conversation — a fork of this chat; the original is unchanged.'
+        : 'Forked — you are now in the copy; the original is unchanged.')
     } catch (err) {
       showNotice('error', err instanceof Error ? err.message : 'Fork failed')
     }
@@ -13464,6 +13599,54 @@ export default function OpenTuiApp() {
     }
   })
 
+  // /handoff <provider>: continue this conversation on another provider. A new
+  // session opens in the same folder with the handoff — the brief plus the recent
+  // exchange — as its draft, so the user reads it (and edits it) before it is sent.
+  const handoffToProvider = useEffectEvent(async (target: Session, providerName: string) => {
+    const nextProvider = providerName.trim().toLowerCase()
+    if (!isAgentProvider(nextProvider)) {
+      showNotice('info', 'Usage: /handoff <claude|codex|opencode|copilot|pi>', 5000)
+      return
+    }
+    if (newSessionBusy) return
+    const detail = sessionDetail && sessionDetail.info?.sessionId === target.sessionId ? sessionDetail : null
+    if (!detail) {
+      showNotice('info', 'Nothing to hand off yet — send a first message')
+      return
+    }
+    setNewSessionBusy(true)
+    try {
+      const prompt = buildContextHandoffPrompt({
+        fromProvider: target.provider ?? 'claude',
+        brief: buildHandoffBriefMarkdown({ session: target, detail, git: null, bookmarkIds: new Set() }),
+        raw: detail.rawMessages,
+      })
+      const created = await createTuiSession({ provider: nextProvider, cwd: target.cwd ?? process.cwd() })
+      const next: Session = {
+        sessionId: created.sessionId,
+        provider: created.provider,
+        cwd: created.cwd,
+        createdAt: Date.now(),
+        lastModified: Date.now(),
+        summary: `Handoff from ${target.customTitle?.trim() || target.summary?.trim() || 'session'}`,
+        isPending: created.isPending,
+      }
+      recordContextTransfer({
+        type: 'handoff',
+        source: { provider: target.provider, sessionId: target.sessionId },
+        target: { provider: created.provider, sessionId: created.sessionId },
+        strategy: 'context_handoff',
+      })
+      scheduleWriteComposerDraft(sessionKey(next), prompt)
+      await openCreatedSession(next)
+      showNotice('info', `Continuing on ${formatProviderLabel(created.provider)} — the handoff is in the composer; the original is unchanged`, 6000)
+    } catch (err) {
+      showNotice('error', err instanceof Error ? err.message : 'Handoff failed')
+    } finally {
+      setNewSessionBusy(false)
+    }
+  })
+
   // CLI built-ins that are TUI views rather than agent requests. The Claude SDK
   // answers these "isn't available in this environment" (or, for /todos, not at
   // all — it went to the model as prompt text); the native CLIs show them.
@@ -13484,7 +13667,39 @@ export default function OpenTuiApp() {
       else showNotice('info', 'Codex is in Plan mode — ⇧Tab returns to Default', 4000)
       return true
     }
-    if (command === 'rewind' || (command === 'undo' && targetProvider === 'opencode')) {
+    // Native terminal-UI commands answered by the TUI surface that does the
+    // same job, or by why there is none — never "cannot run".
+    const equivalent = tuiCommandEquivalent(targetProvider, command)
+    if (equivalent) {
+      if ('palette' in equivalent) {
+        setComposerActive(false)
+        executeCommandPalette(equivalent.palette)
+      } else {
+        showNotice('info', equivalent.notice, 8000)
+      }
+      return true
+    }
+    if (targetProvider === 'opencode' && command === 'editor') {
+      // After the caller has cleared "/editor" from the composer.
+      setTimeout(editComposerInExternalEditor, 0)
+      return true
+    }
+    if (targetProvider === 'opencode' && command === 'redo') {
+      // Restores what /undo (a revert) took back; nothing to redo is a no-op.
+      void runTuiSessionAction(target, { action: 'unrevert' })
+        .then(async () => {
+          sessionDetailMtimeRef.current.delete(sessionKey(target))
+          await refreshSelectedSessionDetail(target, true)
+          showNotice('info', 'Restored the reverted messages', 4000)
+        })
+        .catch((err) => showNotice('error', err instanceof Error ? err.message : 'Redo failed'))
+      return true
+    }
+    if (command === 'side' && targetProvider === 'codex') {
+      void forkIntoNewSession(target, match[2]!.trim() || undefined)
+      return true
+    }
+    if (command === 'rewind' || (command === 'undo' && targetProvider === 'opencode') || (command === 'tree' && targetProvider === 'pi')) {
       if (composerSendState === 'sending' || reattachedRunningRef.current) {
         showNotice('info', 'Wait for the turn to finish (or ⌃C it) before rewinding')
         return true
@@ -13497,6 +13712,10 @@ export default function OpenTuiApp() {
       }
       setComposerRewindIndex(0)
       setComposerRewindItems(items)
+      return true
+    }
+    if (command === 'handoff') {
+      void handoffToProvider(target, match[2]!)
       return true
     }
     if (command === 'fork') {
@@ -13625,7 +13844,8 @@ export default function OpenTuiApp() {
       openDiagnostics(target)
       return true
     }
-    if (command === 'todos') {
+    // /bashes: background shells are SDK background tasks, listed with the todos.
+    if (command === 'todos' || command === 'bashes') {
       setTaskPopoverOpen(true)
       return true
     }
@@ -14789,7 +15009,40 @@ export default function OpenTuiApp() {
         }
         if (frame.event === 'command-result' && parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
           noteFirstOutput()
-          const result = parsed as { message?: unknown; mode?: unknown; transcriptExpected?: unknown }
+          const result = parsed as {
+            message?: unknown
+            mode?: unknown
+            transcriptExpected?: unknown
+            openSession?: unknown
+            prefillInput?: unknown
+            openModelPicker?: unknown
+            model?: unknown
+          }
+          // A native command may hand work back to the composer: text to edit
+          // (Copilot's add-timeline-entry), its model picker, or a model it set.
+          if (typeof result.prefillInput === 'string' && result.prefillInput) {
+            const prefill = result.prefillInput
+            setTimeout(() => {
+              composerTextareaRef.current?.setText(prefill)
+              setComposerDraft(prefill)
+            }, 0)
+          }
+          if (result.openModelPicker === true) void openModelPicker()
+          if (typeof result.model === 'string' && result.model) {
+            const pickedModel = result.model
+            setTuiModelOverride((prev) => ({ ...prev, [sessionKey(targetSession)]: pickedModel }))
+          }
+          const opening = result.openSession as { sessionId?: unknown; title?: unknown } | undefined
+          if (opening && typeof opening.sessionId === 'string') {
+            // Codex /agent: switch to a sub-agent's own thread.
+            void openCreatedSession({
+              ...targetSession,
+              sessionId: opening.sessionId,
+              summary: typeof opening.title === 'string' ? opening.title : 'Sub-agent',
+              customTitle: undefined,
+              isPending: false,
+            })
+          }
           if (!commandResultExpectsTranscript(result)) commandResultWithoutTranscript = true
           if (
             result.mode === 'interactive'
@@ -19334,8 +19587,24 @@ export default function OpenTuiApp() {
       // Toggle the Channel Bridge composer routing right from the composer —
       // same key as the bridge popover's ^R, so the binding is consistent
       // whether or not the panel is open.
-      if (isCtrl('r') && canUseChannelBridge) {
+      // ⌃R is the native CLIs' prompt-history search. While the composer is
+      // routed to the bridge it still turns that routing off (the hint says so);
+      // turning it on is the bridge panel's ⌃R or the palette.
+      if (isCtrl('r') && canUseChannelBridge && routeComposerToBridge) {
         handled(toggleComposerBridgeRoute)
+        return
+      }
+      if (isCtrl('r')) {
+        handled(searchComposerHistory)
+        return
+      }
+      if (isCtrl('g')) {
+        handled(editComposerInExternalEditor)
+        return
+      }
+      if (isCtrl('t')) {
+        // Claude Code's ⌃T: the task list.
+        handled(() => setTaskPopoverOpen((open) => !open))
         return
       }
       // Opt this turn into the Workflow tool (settings.enableWorkflows) —
@@ -19396,7 +19665,7 @@ export default function OpenTuiApp() {
           const chosen = composerRewindItems[composerRewindIndex]
           handled(() => {
             setComposerRewindItems(null)
-            if (chosen) void rewindToPrompt(chosen)
+            if (chosen) void rewindToPrompt(chosen, { restoreFiles: true })
           })
           return
         }
@@ -20712,9 +20981,7 @@ export default function OpenTuiApp() {
     ? '● → IDE @mentions · ⇧I panel'
     : composerKeysTargetTurn
     ? sendingHintBase
-    : canUseChannelBridge
-    ? `${composerIdleFooterHint}${composerWorkflowFooterHint} · ⌃R bridge · ⌃O expand`
-    : `${composerIdleFooterHint}${composerWorkflowFooterHint} · ⌃O expand`
+    : `${composerIdleFooterHint}${composerWorkflowFooterHint} · ⌃R search · ⌃G editor · ⌃O expand`
   const composerDockSendingHintSegments = composerKeysTargetTurn
     ? composerSendingHintSegments(composerDockFooterHint, theme)
     : null
@@ -20800,6 +21067,14 @@ export default function OpenTuiApp() {
     insertSlashAtCursor(entry.command)
     return true
   }
+  // Codex /side: send the aside once the fork is the ready composer target.
+  useEffect(() => {
+    const pending = pendingForkSendRef.current
+    if (!pending || composerTargetSessionIdentity !== pending.key || composerPreparingTargetKey) return
+    pendingForkSendRef.current = null
+    void sendComposerMessage(pending.text)
+  }, [composerTargetSessionIdentity, composerPreparingTargetKey, sendComposerMessage])
+
   const submitComposerFromDock = () => {
     if (pickSlashInsteadOfSubmit()) return
     void sendComposerMessage(composerTextareaRef.current?.plainText ?? composerDraft)
@@ -20981,7 +21256,7 @@ export default function OpenTuiApp() {
         flexDirection="column"
       >
         <text fg={composerAccentColor} wrapMode="none">
-          {fitText(`rewind to before · ↑↓ choose · enter rewind · esc cancel  (${composerRewindIndex + 1}/${total})${start > 0 ? ' ↑' : ''}${end < total ? ' ↓' : ''}`, rowWidth)}
+          {fitText(`rewind to before · ↑↓ choose · enter rewind · tab rewind + files · esc cancel  (${composerRewindIndex + 1}/${total})${start > 0 ? ' ↑' : ''}${end < total ? ' ↓' : ''}`, rowWidth)}
         </text>
         {composerRewindItems.slice(start, end).map((entry, offset) => {
           const active = start + offset === composerRewindIndex
