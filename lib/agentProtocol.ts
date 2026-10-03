@@ -671,6 +671,8 @@ export type ProtocolRunRollup = {
   filesTouched: number
   /** Paths two different tasks are both aiming at; `live` when either has not finished. */
   overlaps: Array<{ path: string; taskIds: string[]; owners: string[]; live: boolean }>
+  /** Unfinished tasks that many others are waiting on, most-blocking first: where to look when a complex run stalls. */
+  holdUps: Array<{ taskId: string; title: string; status: ProtocolTaskStatus; owner?: string; holdsUp: number }>
 }
 
 export type ProtocolRunSnapshot = {

@@ -45,6 +45,50 @@ assert.equal(rollup([], { status: 'completed', budget: { maxCostUsd: 10 } }, { c
 assert.equal(formatRunRollup(rollup([task('t1', 'completed', []), task('t2', 'failed', [])], {}, { totalTokens: 42_300, costUsd: 0.834 })), '1/2 done · 1 failed · 42k tok · $0.83 · 12m')
 assert.equal(formatRunRollup(rollup([task('t1', 'pending', [])]), { maxCostUsd: 5 }), '0/1 done · 12m')
 
+// Hold-ups: the unfinished task with the most work stacked behind it, counting through chains.
+{
+  const dep = (id: string, status: ProtocolTask['status'], blockedBy: string[] = []) => task(id, status, [], { blockedBy })
+  const board = [
+    dep('root', 'in_progress'),
+    dep('a', 'pending', ['root']), dep('b', 'pending', ['root']),
+    dep('c', 'pending', ['a']), dep('d', 'pending', ['a', 'b']),
+    dep('lonely', 'in_progress'), dep('onlyChild', 'pending', ['lonely']),
+    dep('done', 'completed'), dep('afterDone', 'pending', ['done']), dep('afterDone2', 'pending', ['done']),
+  ]
+  const out = rollup(board).holdUps
+  assert.deepEqual(out.map((h) => [h.taskId, h.holdsUp]), [['root', 4], ['a', 2]], 'counts distinct dependents through the chain; one dependent is not a hold-up; finished tasks hold nothing up')
+  assert.match(describeRunRollup(rollup(board)).holdUpLines[0]!, /^root “root” \(.*in progress\) holds up 4 tasks$/)
+  // A malformed cycle terminates rather than spinning.
+  const cycle = [dep('x', 'pending', ['z']), dep('y', 'pending', ['x']), dep('z', 'pending', ['y'])]
+  assert.ok(rollup(cycle).holdUps.length <= 3)
+  assert.equal(rollup([dep('r', 'in_progress'), ...Array.from({ length: 10 }, (_, i) => dep(`h${i}`, 'pending', ['r', ...(i ? [`h${i - 1}`] : [])]))]).holdUps.length, 3, 'capped at three lines')
+}
+
+// The indexed overlap finder must agree with the obvious pairwise definition on arbitrary boards.
+{
+  const dirs = ['a', 'a/b', 'a/b/c', 'a/bc', 'd', 'd/e', 'f/g/h', '**', 'a/*', 'a/b/*.ts']
+  let seed = 7
+  const rand = (n: number) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n }
+  const root = (value: string) => { const i = value.search(/[*?[]/); return (i < 0 ? value : value.slice(0, i)).replace(/\/$/, '') }
+  const covers = (a: string, b: string) => a === b || b.startsWith(`${a}/`)
+  for (let round = 0; round < 300; round += 1) {
+    const statuses: ProtocolTask['status'][] = ['pending', 'in_progress', 'completed', 'failed', 'cancelled']
+    const board = Array.from({ length: 2 + rand(9) }, (_, i) => task(`k${i}`, statuses[rand(statuses.length)]!,
+      Array.from({ length: 1 + rand(3) }, () => `${dirs[rand(dirs.length)]}${rand(3) === 0 ? '/x.ts' : ''}`)))
+    const expected = new Set<string>()
+    const relevant = board.filter((t) => t.status !== 'failed' && t.status !== 'cancelled')
+    for (let i = 0; i < relevant.length; i += 1) for (let j = i + 1; j < relevant.length; j += 1) {
+      for (const a of relevant[i]!.paths) for (const b of relevant[j]!.paths) {
+        const x = root(a), y = root(b)
+        if (!x || !y || x === '**' || y === '**') continue
+        if (covers(x, y) || covers(y, x)) expected.add(x.length >= y.length ? x : y)
+      }
+    }
+    const got = new Set(rollup(board).overlaps.map((o) => o.path))
+    assert.deepEqual([...got].sort(), [...expected].sort(), `round ${round}: ${board.map((t) => `${t.status}:${t.paths}`).join(' | ')}`)
+  }
+}
+
 // What surfaces print: only live overlaps are listed, capped, and counted for attention.
 const many = rollup(['a', 'b', 'c', 'd', 'e'].flatMap((name, i) => [task(`x${i}`, 'in_progress', [`${name}.ts`]), task(`y${i}`, 'pending', [`${name}.ts`])]))
 const described = describeRunRollup(many)

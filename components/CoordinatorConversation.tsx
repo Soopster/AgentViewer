@@ -191,6 +191,7 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
       <p><strong>Run</strong> · {runInfo.summary}</p>
       {runInfo.warning ? <p role="status" className="av-coord-run-warn">⚠ {runInfo.warning}</p> : null}
       {runInfo.overlapLines.map(line => <p key={line} role="status" className="av-coord-run-warn">⚠ {line}</p>)}
+      {runInfo.holdUpLines.map(line => <p key={line} className="text-sm text-muted-foreground">⚑ {line}</p>)}
       {runInfo.hiddenOverlaps ? <p className="text-sm text-muted-foreground">+{runInfo.hiddenOverlaps} more overlapping path{runInfo.hiddenOverlaps === 1 ? '' : 's'}</p> : null}
     </div> : null}
     {state?.interactive.enabled ? <label className="av-coord-alerts">Alerts

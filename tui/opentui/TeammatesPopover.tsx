@@ -400,7 +400,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
     + (teammates.length > 0
       ? 2 + teammates.reduce((rows, agent) => rows + 2 + (coordinatorAgentNote(agent, snapshot) ? 1 : 0), 0)
       : enabled ? 3 : 0)
-    + (enabled && runInfo ? 2 + (runInfo.warning ? 1 : 0) + runInfo.overlapLines.length + (runInfo.hiddenOverlaps ? 1 : 0) : 0)
+    + (enabled && runInfo ? 2 + (runInfo.warning ? 1 : 0) + runInfo.overlapLines.length + (runInfo.hiddenOverlaps ? 1 : 0) + runInfo.holdUpLines.length : 0)
     + attention.length + recoveries.length
     + (snapshot && snapshot.tasks.length > 0 ? 2 + Math.min(snapshot.tasks.length, 6) : 0)
   // 6 = header 2 + footer 2 + border 2, matching bodyH below.
@@ -593,6 +593,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
               <text fg={theme.text} wrapMode="none">{fitText(runInfo.summary, innerW)}</text>
               {runInfo.warning ? <text fg={theme.amber} wrapMode="none">{fitText(`⚠ ${runInfo.warning}`, innerW)}</text> : null}
               {runInfo.overlapLines.map((line) => <text key={line} fg={theme.amber} wrapMode="none">{fitText(`⚠ ${line}`, innerW)}</text>)}
+              {runInfo.holdUpLines.map((line) => <text key={line} fg={theme.muted} wrapMode="none">{fitText(`⚑ ${line}`, innerW)}</text>)}
               {runInfo.hiddenOverlaps ? <text fg={theme.dim} wrapMode="none">{`  +${runInfo.hiddenOverlaps} more overlapping path${runInfo.hiddenOverlaps === 1 ? '' : 's'}`}</text> : null}
             </box>
           ) : null}

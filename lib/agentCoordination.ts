@@ -1177,21 +1177,6 @@ function deliveryHintsSync(db: SqliteDatabase, runId: string, recipientIds: stri
   return agents.map((agent) => ({ name: agent.name, ...(agent.liveness ?? classifyAgentLiveness(agent)) }))
 }
 
-// A snapshot is read on every poll, and summing usage walks every usage event
-// the run has ever logged. Usage only changes when an event is appended, so the
-// total is reusable for as long as the run's event cursor has not moved.
-const usageByCursor = new Map<string, { cursor: string; usage: ProtocolUsageReceipt }>()
-const USAGE_CACHE_RUNS = 64
-function cachedBudgetUsageSync(db: SqliteDatabase, runId: string, cursor: string): ProtocolUsageReceipt {
-  const hit = usageByCursor.get(runId)
-  if (hit?.cursor === cursor) return hit.usage
-  const usage = budgetUsageSync(db, runId)
-  usageByCursor.delete(runId)
-  usageByCursor.set(runId, { cursor, usage })
-  if (usageByCursor.size > USAGE_CACHE_RUNS) usageByCursor.delete(usageByCursor.keys().next().value as string)
-  return usage
-}
-
 function readSnapshotSync(db: SqliteDatabase, runId: string): ProtocolRunSnapshot | null {
   const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(runId) as Row | undefined
   if (!runRow) return null
@@ -1215,7 +1200,7 @@ function readSnapshotSync(db: SqliteDatabase, runId: string): ProtocolRunSnapsho
     run,
     tasks: listTasksSync(db, runId),
     agentNames: new Map(agents.map((agent) => [agent.id, agent.name])),
-    usage: cachedBudgetUsageSync(db, runId, String(eventCursor)),
+    usage: budgetUsageSync(db, runId),
   })
   return { run, agents, tasks, locks, messages, events, eventCursor: String(eventCursor), rollup }
 }
@@ -2829,6 +2814,22 @@ async function serializeAutomaticDelegation<T>(runId: string, operation: () => P
   }
 }
 
+/**
+ * How many tasks may be open (not yet completed, failed or cancelled) at once.
+ * A lead that keeps fanning out — a loop, a misread plan — otherwise grows the
+ * board until every read and every dispatch pays for it, with a cost budget as
+ * the only brake and only when one was set. Finished work is not counted: a
+ * long run may complete any number of tasks.
+ */
+export const MAX_OPEN_TASKS = Math.max(1, Number(process.env.AGENT_VIEWER_COORD_MAX_OPEN_TASKS) || 120)
+
+function assertTaskCapacitySync(db: SqliteDatabase, runId: string): void {
+  const open = Number((db.prepare("SELECT COUNT(*) AS n FROM protocol_tasks WHERE run_id = ? AND status NOT IN ('completed', 'failed', 'cancelled')").get(runId) as Row).n)
+  if (open >= MAX_OPEN_TASKS) {
+    throw new Error(`This run already has ${open} open tasks (limit ${MAX_OPEN_TASKS}). Let some finish, or cancel stale ones, before adding more.`)
+  }
+}
+
 export async function createExternalProtocolTask(
   identity: ExternalProtocolIdentity,
   params: {
@@ -2971,6 +2972,7 @@ export async function createExternalProtocolTask(
     try {
       const blockedBy = [...new Set((params.dependsOn ?? []).map((entry) => entry.trim()).filter(Boolean))]
       validateTaskDependenciesSync(db, identity.runId, nextTaskIdSync(db, identity.runId), blockedBy)
+      assertTaskCapacitySync(db, identity.runId)
       const similarTasks = findSimilarTasksSync(db, identity.runId, title, detail)
       const requestedModel = params.requestedModel?.trim() || undefined
       const requestedEffort = params.requestedEffort?.trim() || undefined
@@ -3332,7 +3334,7 @@ export async function sendExternalProtocolMessage(
   // bump (if they happen to be polling this exact instant) can't flatter
   // its own liveness reading.
   const delivery = deliveryHintsSync(db, identity.runId, recipients)
-  await appendProtocolEvent({
+  await recordProtocolEvent({
     version: AGENT_PROTOCOL_VERSION,
     runId: identity.runId,
     agentId: identity.agentId,
@@ -3447,7 +3449,7 @@ export async function reportExternalProtocolProgress(
         : params.status === 'heartbeat'
           ? 'agent.heartbeat'
           : 'agent.ready'
-  await appendProtocolEvent({
+  await recordProtocolEvent({
     version: AGENT_PROTOCOL_VERSION,
     runId: identity.runId,
     agentId: identity.agentId,
@@ -3467,7 +3469,7 @@ export async function publishExternalProtocolFinding(
   const agent = requireExternalParticipantSync(db, identity)
   const summary = params.summary.trim()
   if (!summary) throw new Error('finding summary is required')
-  await appendProtocolEvent({
+  await recordProtocolEvent({
     version: AGENT_PROTOCOL_VERSION,
     runId: identity.runId,
     agentId: identity.agentId,
@@ -3615,7 +3617,7 @@ export async function submitExternalProtocolPlan(
   const task = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?')
     .get(identity.runId, params.taskId) as Row | undefined
   if (!task || rowToTask(task).ownerAgentId !== agent.id) throw new Error('You do not own that task')
-  await appendProtocolEvent({
+  await recordProtocolEvent({
     version: AGENT_PROTOCOL_VERSION,
     runId: identity.runId,
     agentId: identity.agentId,
@@ -3637,7 +3639,7 @@ export async function reviewExternalProtocolPlan(
   const task = db.prepare('SELECT 1 FROM protocol_tasks WHERE run_id = ? AND id = ?')
     .get(identity.runId, params.taskId)
   if (!task) throw new Error('Coordinator task not found')
-  await appendProtocolEvent({
+  await recordProtocolEvent({
     version: AGENT_PROTOCOL_VERSION,
     runId: identity.runId,
     agentId: identity.agentId,
@@ -3654,7 +3656,7 @@ async function rejectExternalCompletion(
   taskId: string,
   reason: string,
 ): Promise<ExternalProtocolCompletionResult> {
-  await appendProtocolEvent({
+  await recordProtocolEvent({
     version: AGENT_PROTOCOL_VERSION,
     runId: identity.runId,
     agentId: identity.agentId,
@@ -3833,7 +3835,7 @@ export async function completeExternalProtocolTask(
     refreshRunArtifactsSync(tx, identity.runId)
   })
   if (receipt.provenance !== 'ok') {
-    await appendProtocolEvent({
+    await recordProtocolEvent({
       version: AGENT_PROTOCOL_VERSION,
       runId: identity.runId,
       agentId: identity.agentId,
@@ -3848,7 +3850,7 @@ export async function completeExternalProtocolTask(
   }
   const openDecisions = needsDecision.filter((decision) => decision.status === 'open')
   if (openDecisions.length > 0) {
-    await appendProtocolEvent({
+    await recordProtocolEvent({
       version: AGENT_PROTOCOL_VERSION,
       runId: identity.runId,
       agentId: identity.agentId,
@@ -3867,7 +3869,7 @@ export async function completeExternalProtocolTask(
   }
   const budgetReason = budgetExceededReasonSync(db, run)
   if (budgetReason) return rejectExternalCompletion(identity, task.id, budgetReason)
-  await appendProtocolEvent({
+  await recordProtocolEvent({
     version: AGENT_PROTOCOL_VERSION,
     runId: identity.runId,
     agentId: identity.agentId,
@@ -3987,7 +3989,7 @@ export async function cancelExternalProtocolTurn(
   // Delivered through the standard message pipeline (appendProtocolEvent),
   // not a bare event row, so it actually lands in the target's inbox and can
   // steer a live session the same as any other urgent status message.
-  await appendProtocolEvent({
+  await recordProtocolEvent({
     version: AGENT_PROTOCOL_VERSION,
     runId: identity.runId,
     agentId: identity.agentId,
@@ -4276,7 +4278,7 @@ export async function failExternalProtocolTask(
   const taskRow = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?')
     .get(identity.runId, params.taskId) as Row | undefined
   if (!taskRow || rowToTask(taskRow).ownerAgentId !== agent.id) throw new Error('You do not own that task')
-  await appendProtocolEvent({
+  await recordProtocolEvent({
     version: AGENT_PROTOCOL_VERSION,
     runId: identity.runId,
     agentId: identity.agentId,
@@ -5226,7 +5228,29 @@ function subtractUsage(current: ProtocolUsageReceipt, prior?: ProtocolUsageRecei
   return delta
 }
 
+// Summing usage walks every usage event the run has ever logged, and it runs on
+// every snapshot, every dispatch and every completion — so its cost grew with the
+// length of the run. The total only changes when an event is appended or a task's
+// receipt is rewritten, and both leave a mark this key reads in O(tasks): the
+// newest event rowid (table-wide, so another run's writes merely cost a miss) and
+// the run's task stamps. A copy is returned so a caller cannot edit the cached one.
+const usageMemo = new Map<string, { key: string; usage: ProtocolUsageReceipt }>()
+const USAGE_MEMO_RUNS = 64
+
 function budgetUsageSync(db: SqliteDatabase, runId: string): ProtocolUsageReceipt {
+  const events = db.prepare('SELECT COALESCE(MAX(rowid), 0) AS n FROM protocol_events').get() as Row
+  const tasks = db.prepare('SELECT COUNT(*) AS n, COALESCE(MAX(updated_at), \'\') AS at, COALESCE(SUM(LENGTH(receipt_json)), 0) AS bytes FROM protocol_tasks WHERE run_id = ?').get(runId) as Row
+  const key = `${events.n}:${tasks.n}:${tasks.at}:${tasks.bytes}`
+  const hit = usageMemo.get(runId)
+  if (hit?.key === key) return { ...hit.usage }
+  const usage = computeBudgetUsageSync(db, runId)
+  usageMemo.delete(runId)
+  usageMemo.set(runId, { key, usage })
+  if (usageMemo.size > USAGE_MEMO_RUNS) usageMemo.delete(usageMemo.keys().next().value as string)
+  return { ...usage }
+}
+
+function computeBudgetUsageSync(db: SqliteDatabase, runId: string): ProtocolUsageReceipt {
   const nativeByTask = new Map<string, ProtocolUsageReceipt>()
   const nativeTotal: ProtocolUsageReceipt = {}
   const rows = db.prepare("SELECT task_id, payload_json FROM protocol_events WHERE run_id = ? AND type = 'usage.observed'")
@@ -5769,7 +5793,29 @@ const REPLY_GUARD_REPORT_EVENT_TYPES = new Set<AgentProtocolEvent['type']>([
  * newly created undelivered messages are then pushed live (steered into the
  * recipient's running turn) outside the transaction.
  */
+/**
+ * Events that cannot change anything the run artifacts (phase reports, resume
+ * capsule, learning candidates) are built from: telemetry, mail, locks, usage.
+ * Rebuilding the artifacts re-reads and re-parses every task, so doing it per
+ * heartbeat or finding made the cost of one event grow with the size of the run.
+ */
+const ARTIFACT_NEUTRAL_EVENTS: ReadonlySet<string> = new Set([
+  'agent.heartbeat', 'finding', 'learning', 'usage.observed', 'message', 'agent.attempt',
+  'lock.requested', 'lock.granted', 'lock.denied', 'lock.released', 'checkpoint.created',
+  'task.child.progress',
+])
+
+/** Append an event and return the run's snapshot after it (the events HTTP route answers with it). */
 export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<ProtocolRunSnapshot | null> {
+  return writeProtocolEvent(event, true)
+}
+
+/** Append an event without reading the snapshot back — every in-process caller that ignores the result. */
+export async function recordProtocolEvent(event: AgentProtocolEvent): Promise<void> {
+  await writeProtocolEvent(event, false)
+}
+
+async function writeProtocolEvent(event: AgentProtocolEvent, wantSnapshot: boolean): Promise<ProtocolRunSnapshot | null> {
   const result = await enqueueWrite((db) => {
     const ts = event.timestamp ?? nowIso()
     db.exec('BEGIN IMMEDIATE')
@@ -6158,11 +6204,12 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
           .run(ts, event.agentId, event.runId)
       }
 
-      pruneLiveNoiseSync(db, event.runId)
+      if (newMessageIds.length > 0 || event.type === 'agent.heartbeat' || event.type === 'message') pruneLiveNoiseSync(db, event.runId)
       db.prepare('UPDATE protocol_runs SET updated_at = ? WHERE id = ?').run(ts, event.runId)
-      refreshRunArtifactsSync(db, event.runId)
+      if (!ARTIFACT_NEUTRAL_EVENTS.has(event.type)) refreshRunArtifactsSync(db, event.runId)
       db.exec('COMMIT')
-      return { snapshot: readSnapshotSync(db, event.runId), newMessageIds }
+      const runStatus = (db.prepare('SELECT status FROM protocol_runs WHERE id = ?').get(event.runId) as Row | undefined)?.status
+      return { snapshot: wantSnapshot ? readSnapshotSync(db, event.runId) : null, runStatus: runStatus === undefined ? undefined : String(runStatus), newMessageIds }
     } catch (err) {
       db.exec('ROLLBACK')
       throw err
@@ -6172,7 +6219,7 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
   if (result.newMessageIds.length > 0) {
     void deliverMessagesLive(event.runId, result.newMessageIds).catch(() => {})
   }
-  if ((event.type === 'task.created' || event.type === 'task.released') && result.snapshot?.run.status === 'running') {
+  if ((event.type === 'task.created' || event.type === 'task.released') && result.runStatus === 'running') {
     const controller = controllers.get(event.runId)
     if (controller?.synthesisStarted) {
       controller.synthesisStarted = false
@@ -6406,7 +6453,7 @@ async function sweepIdleTeammates(runId: string): Promise<void> {
     return
   }
   for (const task of unfinished) {
-    await appendProtocolEvent({
+    await recordProtocolEvent({
       version: AGENT_PROTOCOL_VERSION,
       runId,
       agentId: task.ownerAgentId ?? 'coordinator',
@@ -6518,7 +6565,7 @@ async function checkpointLeadSupervision(runId: string): Promise<void> {
     const turn = controllers.get(runId)?.turnInFlight.has(agent.id) ? ', turn active' : ''
     return `${agent.name}: ${agent.status}${task}${turn}, last update ${agent.lastSeenAt ?? agent.updatedAt}`
   }).join('; ')
-  await appendProtocolEvent({
+  await recordProtocolEvent({
     version: AGENT_PROTOCOL_VERSION,
     runId,
     agentId: 'coordinator',
@@ -6852,7 +6899,7 @@ export async function observeCoordinatorSessionTurn(sessionId: string, response:
           if (event.runId !== agent.runId || event.agentId !== agent.id) continue
           const controller = controllers.get(agent.runId)
           if (controller) await applyAgentEvent(controller, agent, event)
-          else await appendProtocolEvent(event)
+          else await recordProtocolEvent(event)
         }
       }
     } catch {
@@ -7634,7 +7681,7 @@ async function recordClaudeSdkEvidence(
             ? 'task.child.cancelled'
             : 'task.child.completed'
     const childTaskId = typeof evidence.record.task_id === 'string' ? evidence.record.task_id : 'unknown'
-    await appendProtocolEvent({
+    await recordProtocolEvent({
       version: AGENT_PROTOCOL_VERSION,
       runId: controller.runId,
       agentId: agent.id,
@@ -7661,7 +7708,7 @@ async function recordClaudeSdkEvidence(
   const prior = controller.claudeUsageCumulative.get(agent.id)
   const delta = subtractUsage(evidence.usage, prior)
   controller.claudeUsageCumulative.set(agent.id, evidence.usage)
-  await appendProtocolEvent({
+  await recordProtocolEvent({
     version: AGENT_PROTOCOL_VERSION,
     runId: controller.runId,
     agentId: agent.id,
@@ -7785,7 +7832,7 @@ async function drainAgentStream(controller: RunController, agent: ProtocolAgent,
           // A malformed or out-of-order model control event is not a provider
           // outage. Reject that event and keep draining the healthy turn; the
           // normal work loop will redispatch the authoritative board state.
-          await appendProtocolEvent({
+          await recordProtocolEvent({
             version: AGENT_PROTOCOL_VERSION,
             runId: controller.runId,
             agentId: agent.id,
@@ -7839,7 +7886,7 @@ async function applyAgentEvent(controller: RunController, agent: ProtocolAgent, 
       if (!taskPlanApprovedSync(db, controller.runId, event.taskId)) {
         const note = `Completion of ${event.taskId} was REJECTED: this run requires lead plan approval before implementation. Emit \`task.planned\` with your approach and wait for \`plan.approved\` before completing.`
         controller.dispatchNotes.set(agent.id, note)
-        await appendProtocolEvent({
+        await recordProtocolEvent({
           version: AGENT_PROTOCOL_VERSION,
           runId: controller.runId,
           agentId: agent.id,
@@ -7857,7 +7904,7 @@ async function applyAgentEvent(controller: RunController, agent: ProtocolAgent, 
     if (uncovered) {
       const note = `Completion of ${event.taskId} was REJECTED: your worktree has changes outside your locked paths (${uncovered.slice(0, 6).join(', ')}). Request the locks with \`lock.requested\` or revert those files, then complete again.`
       controller.dispatchNotes.set(agent.id, note)
-      await appendProtocolEvent({
+      await recordProtocolEvent({
         version: AGENT_PROTOCOL_VERSION,
         runId: controller.runId,
         agentId: agent.id,
@@ -7879,7 +7926,7 @@ async function applyAgentEvent(controller: RunController, agent: ProtocolAgent, 
       if (provenance !== 'ok') {
         const note = `Completion of ${event.taskId} was REJECTED: model provenance is ${provenance}; requested ${task.requestedProvider ?? agent.provider}/${task.requestedModel ?? 'default'}, actual ${agent.provider}/${actualModel ?? 'unknown'}.`
         controller.dispatchNotes.set(agent.id, note)
-        await appendProtocolEvent({
+        await recordProtocolEvent({
           version: AGENT_PROTOCOL_VERSION,
           runId: controller.runId,
           agentId: agent.id,
@@ -7894,7 +7941,7 @@ async function applyAgentEvent(controller: RunController, agent: ProtocolAgent, 
       if (openDecisions.length > 0 && controller.autonomy !== 'high') {
         const note = `Completion of ${event.taskId} was REJECTED: ${openDecisions.length} open decision${openDecisions.length === 1 ? '' : 's'} must be answered or deferred.`
         controller.dispatchNotes.set(agent.id, note)
-        await appendProtocolEvent({
+        await recordProtocolEvent({
           version: AGENT_PROTOCOL_VERSION,
           runId: controller.runId,
           agentId: agent.id,
@@ -7914,7 +7961,7 @@ async function applyAgentEvent(controller: RunController, agent: ProtocolAgent, 
       if (failed) {
         const note = `Completion of ${event.taskId} was REJECTED by the quality gate \`${failed.command}\` in your checkout:\n${failed.summary ?? 'command failed'}\nFix the failures, re-run the gate yourself, then complete again.`
         controller.dispatchNotes.set(agent.id, note)
-        await appendProtocolEvent({
+        await recordProtocolEvent({
           version: AGENT_PROTOCOL_VERSION,
           runId: controller.runId,
           agentId: agent.id,
@@ -7944,7 +7991,7 @@ async function applyAgentEvent(controller: RunController, agent: ProtocolAgent, 
       appliedEvent = { ...event, payload: { ...event.payload, receipt } }
     }
   }
-  await appendProtocolEvent(appliedEvent)
+  await recordProtocolEvent(appliedEvent)
 }
 
 /** Run the gate in a worktree; null = pass, otherwise the failure output tail. */
@@ -8035,7 +8082,7 @@ async function handleProviderTurnFailure(
     if (used < retryLimit) {
       controller.sameProviderRetries.set(agent.id, used + 1)
       const delayMs = Math.min(30_000, 1_000 * 2 ** used)
-      await appendProtocolEvent({
+      await recordProtocolEvent({
         version: AGENT_PROTOCOL_VERSION,
         runId: controller.runId,
         agentId: agent.id,
@@ -8044,7 +8091,7 @@ async function handleProviderTurnFailure(
         detail: failure.detail,
         payload: { failureClass: failure.kind, provider: agent.provider, attempt: used + 1, retryLimit },
       }).catch(() => {})
-      await appendProtocolEvent({
+      await recordProtocolEvent({
         version: AGENT_PROTOCOL_VERSION,
         runId: controller.runId,
         agentId: agent.id,
@@ -8144,7 +8191,7 @@ async function handleProviderTurnFailure(
       return 'retry'
     } catch (error) {
       failed.add(provider)
-      await appendProtocolEvent({
+      await recordProtocolEvent({
         version: AGENT_PROTOCOL_VERSION,
         runId: controller.runId,
         agentId: agent.id,
@@ -8180,7 +8227,7 @@ async function handleProviderTurnFailure(
     return 'terminal'
   }
 
-  await appendProtocolEvent({
+  await recordProtocolEvent({
     version: AGENT_PROTOCOL_VERSION,
     runId: controller.runId,
     agentId: agent.id,
@@ -8297,7 +8344,7 @@ async function dispatchAgentTurn(
           { allowSameProviderRetry: false },
         ) === 'retry'
       } catch (failoverError) {
-        await appendProtocolEvent({
+        await recordProtocolEvent({
           version: AGENT_PROTOCOL_VERSION,
           runId: controller.runId,
           agentId,
@@ -8321,7 +8368,7 @@ async function dispatchAgentTurn(
 
 async function stopProtocolRunForBudget(controller: RunController, reason: string): Promise<void> {
   if (controller.stopped) return
-  await appendProtocolEvent({
+  await recordProtocolEvent({
     version: AGENT_PROTOCOL_VERSION,
     runId: controller.runId,
     agentId: 'coordinator',
@@ -8442,7 +8489,7 @@ async function handleAgentTurnEnd(controller: RunController, agentId: string): P
     if (controller.interventionsUsed >= MAX_LEAD_INTERVENTIONS) {
       // Intervention budget spent — fail the task so the run can still reach
       // synthesis instead of stalling forever on one stuck teammate.
-      await appendProtocolEvent({
+      await recordProtocolEvent({
         version: AGENT_PROTOCOL_VERSION,
         runId: controller.runId,
         agentId,
@@ -8455,7 +8502,7 @@ async function handleAgentTurnEnd(controller: RunController, agentId: string): P
     }
     // Out of nudges: surface it (doc: idle teammates notify the lead). The
     // message wakes the lead for an intervention turn.
-    await appendProtocolEvent({
+    await recordProtocolEvent({
       version: AGENT_PROTOCOL_VERSION,
       runId: controller.runId,
       agentId,
@@ -8486,7 +8533,7 @@ async function handleAgentTurnEnd(controller: RunController, agentId: string): P
   await enqueueWrite((tx) => {
     setAgentStatusSync(tx, controller.runId, agentId, 'done', nowIso())
   })
-  await appendProtocolEvent({
+  await recordProtocolEvent({
     version: AGENT_PROTOCOL_VERSION,
     runId: controller.runId,
     agentId,
@@ -8618,7 +8665,7 @@ async function handleLeadTurnEnd(controller: RunController): Promise<void> {
         await dispatchTeammateWork(controller, leadId)
         return
       }
-      await appendProtocolEvent({
+      await recordProtocolEvent({
         version: AGENT_PROTOCOL_VERSION,
         runId: controller.runId,
         agentId: leadId,
@@ -8738,7 +8785,7 @@ async function spawnTeammateSession(
       await removeWorktreeTask(workspace, { force: true }).catch(() => {})
     }
     const error = err instanceof Error ? err.message : String(err)
-    await appendProtocolEvent({
+    await recordProtocolEvent({
       version: AGENT_PROTOCOL_VERSION,
       runId: controller.runId,
       agentId: 'lead',
@@ -8859,7 +8906,7 @@ export async function spawnAdditionalTeammate(
   }
   if (!result.ok) controller.turnInFlight.delete(agentId)
   if (!result.ok) throw new Error(`Failed to spawn teammate: ${result.error}`)
-  await appendProtocolEvent({
+  await recordProtocolEvent({
     version: AGENT_PROTOCOL_VERSION,
     runId: controller.runId,
     agentId: name,
@@ -8995,7 +9042,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
 
   if (playbook) {
     void beginExecutionPhase(controller).catch(async (err) => {
-      await appendProtocolEvent({
+      await recordProtocolEvent({
         version: AGENT_PROTOCOL_VERSION,
         runId,
         agentId: 'lead',
@@ -9020,7 +9067,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
           useWorktrees: controller.useWorktrees,
         })
     void dispatchAgentTurn(controller, 'lead', planMessage).catch(async (err) => {
-      await appendProtocolEvent({
+      await recordProtocolEvent({
         version: AGENT_PROTOCOL_VERSION,
         runId,
         agentId: 'lead',

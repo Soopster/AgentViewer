@@ -3,6 +3,10 @@ import type { ProtocolRun, ProtocolRunRollup, ProtocolTask, ProtocolUsageReceipt
 /** A budget at or past this share of its limit is worth saying so before it stops the run. */
 export const BUDGET_WARN_FRACTION = 0.8
 
+/** A task must hold up at least this many others to be worth naming. */
+const HOLD_UP_MIN = 2
+export const MAX_HOLD_UP_LINES = 3
+
 const TERMINAL: ReadonlySet<ProtocolTask['status']> = new Set(['completed', 'failed', 'cancelled'])
 
 function normalizePath(value: string): string {
@@ -95,39 +99,73 @@ export function computeRunRollup(input: {
 
   // Overlap between two different, still-relevant tasks. Cancelled and failed
   // work will not land, so it cannot collide with anything.
+  //
+  // Indexed by path rather than compared pairwise: a run with hundreds of tasks
+  // made the pairwise form the single hottest thing the Coordinator did, on every
+  // snapshot and every lead mutation. Each path is looked up against its own
+  // ancestors only, so the cost follows the number of paths and their depth.
   const relevant = tasks.filter((task) => task.status !== 'cancelled' && task.status !== 'failed')
-  const found = new Map<string, { path: string; taskIds: Set<string>; owners: Set<string>; live: boolean }>()
-  for (let i = 0; i < relevant.length; i += 1) {
-    const first = relevant[i]!
-    const firstPaths = footprint(first)
-    if (firstPaths.length === 0) continue
-    for (let j = i + 1; j < relevant.length; j += 1) {
-      const second = relevant[j]!
-      for (const a of firstPaths) {
-        for (const b of footprint(second)) {
-          if (!pathsOverlap(a, b)) continue
-          // Report the narrower of the two: it is the file or directory actually in contention.
-          const path = globRoot(a).length >= globRoot(b).length ? globRoot(a) : globRoot(b)
-          const entry = found.get(path) ?? { path, taskIds: new Set(), owners: new Set(), live: false }
-          entry.taskIds.add(first.id).add(second.id)
-          for (const task of [first, second]) {
-            const owner = task.ownerAgentId ? input.agentNames.get(task.ownerAgentId) : undefined
-            if (owner) entry.owners.add(owner)
-          }
-          entry.live ||= !TERMINAL.has(first.status) || !TERMINAL.has(second.status)
-          found.set(path, entry)
-        }
-      }
+  const byRoot = new Map<string, Set<string>>()
+  const byId = new Map<string, ProtocolTask>()
+  for (const task of relevant) {
+    byId.set(task.id, task)
+    for (const entry of footprint(task)) {
+      const root = globRoot(entry)
+      if (!root) continue
+      const ids = byRoot.get(root) ?? new Set<string>()
+      ids.add(task.id)
+      byRoot.set(root, ids)
     }
   }
-  const overlaps = [...found.values()]
-    .sort((a, b) => Number(b.live) - Number(a.live) || a.path.localeCompare(b.path))
-    .map((entry) => ({ path: entry.path, taskIds: [...entry.taskIds].sort(), owners: [...entry.owners].sort(), live: entry.live }))
+  const overlaps: ProtocolRunRollup['overlaps'] = []
+  for (const [root, here] of byRoot) {
+    // Every ancestor directory of `root` that some task also claims. The pair is
+    // found from its narrower side, which is also the path reported.
+    const involved = new Set(here)
+    for (let cut = root.lastIndexOf('/'); cut > 0; cut = root.lastIndexOf('/', cut - 1)) {
+      for (const id of byRoot.get(root.slice(0, cut)) ?? []) involved.add(id)
+    }
+    if (involved.size < 2) continue
+    const owners = new Set<string>()
+    let live = false
+    for (const id of involved) {
+      const task = byId.get(id)!
+      const owner = task.ownerAgentId ? input.agentNames.get(task.ownerAgentId) : undefined
+      if (owner) owners.add(owner)
+      live ||= !TERMINAL.has(task.status)
+    }
+    overlaps.push({ path: root, taskIds: [...involved].sort(), owners: [...owners].sort(), live })
+  }
+  overlaps.sort((a, b) => Number(b.live) - Number(a.live) || a.path.localeCompare(b.path))
+
+  // Who is holding the board up. In a dependency graph the task to look at is
+  // not the one that failed loudly but the unfinished one with the most work
+  // stacked behind it, directly or through other tasks.
+  const dependents = new Map<string, string[]>()
+  const open = tasks.filter((task) => !TERMINAL.has(task.status))
+  for (const task of open) for (const dependency of task.blockedBy) dependents.set(dependency, [...(dependents.get(dependency) ?? []), task.id])
+  const holdUps: ProtocolRunRollup['holdUps'] = []
+  for (const task of open) {
+    if (!dependents.has(task.id)) continue
+    const seen = new Set<string>()
+    const queue = [...dependents.get(task.id)!]
+    // `seen` makes a malformed cycle terminate rather than spin; validation rejects them on the way in.
+    while (queue.length) {
+      const next = queue.pop()!
+      if (seen.has(next) || next === task.id) continue
+      seen.add(next)
+      queue.push(...(dependents.get(next) ?? []))
+    }
+    if (seen.size >= HOLD_UP_MIN) {
+      holdUps.push({ taskId: task.id, title: task.title, status: task.status, owner: task.ownerAgentId ? input.agentNames.get(task.ownerAgentId) : undefined, holdsUp: seen.size })
+    }
+  }
+  holdUps.sort((a, b) => b.holdsUp - a.holdsUp || a.taskId.localeCompare(b.taskId))
 
   const touched = new Set<string>()
   for (const task of tasks) for (const file of task.receipt?.filesChanged ?? []) touched.add(normalizePath(file))
 
-  return { elapsedMs, tasks: counts, usage: spent, budgetWarning, filesTouched: touched.size, overlaps }
+  return { elapsedMs, tasks: counts, usage: spent, budgetWarning, filesTouched: touched.size, overlaps, holdUps: holdUps.slice(0, MAX_HOLD_UP_LINES) }
 }
 
 /** "3/7 done · 1 failed · 42k tok · $0.83 · 12m" — one line for a roster header. */
@@ -159,6 +197,8 @@ export function describeRunRollup(rollup: ProtocolRunRollup, budget?: ProtocolRu
   warning?: string
   overlapLines: string[]
   hiddenOverlaps: number
+  /** "task-7 “Parser” (bo, in progress) holds up 12 tasks" — where a stalled DAG is stuck. */
+  holdUpLines: string[]
   /** Things worth interrupting the reader for: a budget nearly spent, and any live overlap. */
   attentionCount: number
 } {
@@ -172,6 +212,7 @@ export function describeRunRollup(rollup: ProtocolRunRollup, budget?: ProtocolRu
     warning: rollup.budgetWarning,
     overlapLines,
     hiddenOverlaps: Math.max(0, live.length - overlapLines.length),
+    holdUpLines: rollup.holdUps.map((entry) => `${entry.taskId} “${entry.title}” (${[entry.owner, entry.status.replace('_', ' ')].filter(Boolean).join(', ')}) holds up ${entry.holdsUp} task${entry.holdsUp === 1 ? '' : 's'}`),
     attentionCount: (rollup.budgetWarning ? 1 : 0) + (live.length > 0 ? 1 : 0),
   }
 }
