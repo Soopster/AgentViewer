@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { CODE_THEMES } from '@/lib/codeThemes'
+import { Button } from '@/components/ui/button'
 import { useCodeTheme } from './CodeThemeContext'
 
 export default function CodeThemeToggle() {
@@ -23,9 +24,12 @@ export default function CodeThemeToggle() {
 
   return (
     <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
-      <button
+      <Button
         onClick={() => setOpen(v => !v)}
         title="Code syntax theme"
+        variant="outline"
+        size="sm"
+        className="av-hover-control"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -47,8 +51,8 @@ export default function CodeThemeToggle() {
       >
         <span style={{ fontSize: 11, lineHeight: 1 }}>{'</>'}</span>
         <span>{current.label}</span>
-        <span style={{ fontSize: 9, color: 'var(--text-3)', marginLeft: 1 }}>{open ? '▲' : '▼'}</span>
-      </button>
+        <span style={{ fontSize: 11, color: 'var(--text-3)', marginLeft: 1 }}>{open ? '▲' : '▼'}</span>
+      </Button>
 
       {open && (
         <div

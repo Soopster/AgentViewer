@@ -1,8 +1,9 @@
 import { marked, Renderer } from 'marked'
-import { diffLines } from 'diff'
+import { parseDiffFromFile, parsePatchFiles, type FileDiffMetadata } from '@pierre/diffs'
 import type { Session, SessionMessage, ToolResultBlock, ImageBlock } from './types'
 import { buildThreadedMessages } from './threading'
 import { getAssistantLabel } from './provider'
+import { pathBasename } from './projectPaths'
 import { getPrimarySessionTag } from './sessionTags'
 import type {
   ThreadedBlock,
@@ -12,8 +13,11 @@ import type {
   SystemReminderBlock,
   SlashCommandBlock,
   LocalCommandStdoutBlock,
+  BashInputBlock,
+  BashOutputBlock,
+  ClaudeSystemBlock,
 } from './threading'
-import type { TextBlock, ThinkingBlock } from './types'
+import type { TextBlock, ThinkingBlock, SystemMessagePayload } from './types'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -41,6 +45,7 @@ const TOOL_COLORS_HEX: Record<string, string> = {
   Bash:         '#eaaa40',
   Edit:         '#2dd4a0',
   MultiEdit:    '#2dd4a0',
+  FileChange:   '#2dd4a0',
   Write:        '#38d9f5',
   Read:         '#60a8ff',
   Grep:         '#ff9048',
@@ -66,7 +71,7 @@ function resultToString(content: string | ToolResultBlock['content']): string {
 }
 
 function truncateLines(text: string, max: number): string {
-  const lines = text.split('\n')
+  const lines = text.replace(/\r\n/g, '\n').split('\n')
   if (lines.length <= max) return text
   return lines.slice(0, max).join('\n') + `\n[… ${lines.length - max} more lines]`
 }
@@ -82,31 +87,52 @@ function formatTimestamp(ts: string): string {
 // ── Diff view ─────────────────────────────────────────────────────────────────
 
 function renderDiffView(oldStr: string, newStr: string): string {
-  const changes = diffLines(oldStr, newStr)
+  const fileDiff = parseDiffFromFile(
+    { name: 'previous', contents: oldStr },
+    { name: 'current', contents: newStr },
+  )
+  return renderFileDiffMetadata(fileDiff)
+}
+
+function renderPatchDiffView(patch: string): string {
+  try {
+    const files = parsePatchFiles(patch, 'export', false).flatMap((entry) => entry.files)
+    if (files.length > 0) return files.map(renderFileDiffMetadata).join('')
+  } catch {
+    // Fall through to escaped plain text for malformed or non-unified snippets.
+  }
+  return `<pre class="result-pre" style="border-top:none;max-height:420px">${escapeHtml(patch)}</pre>`
+}
+
+function renderFileDiffMetadata(fileDiff: FileDiffMetadata): string {
   const MAX_LINES = 500
   let lineCount = 0
   const rows: string[] = []
   let truncated = false
 
-  outer: for (const change of changes) {
-    const lines = change.value.split('\n')
-    if (lines[lines.length - 1] === '') lines.pop()
-
-    const isAdd = !!change.added
-    const isDel = !!change.removed
-    const rowCls  = isAdd ? ' diff-add' : isDel ? ' diff-del' : ''
-    const color   = isAdd ? '#2dd4a0'  : isDel ? '#f06060'  : '#3a4c6a'
-    const gutter  = isAdd ? 'rgba(45,212,160,0.15)' : isDel ? 'rgba(240,96,96,0.15)' : 'transparent'
-    const sign    = isAdd ? '+' : isDel ? '−' : ' '
-
-    for (const line of lines) {
-      if (++lineCount > MAX_LINES) { truncated = true; break outer }
-      rows.push(
-        `<div class="diff-line${rowCls}">` +
-        `<span class="diff-gutter" style="color:${color};background:${gutter}">${sign}</span>` +
-        `<span class="diff-line-content" style="color:${color}">${escapeHtml(line)}</span>` +
-        `</div>`
-      )
+  outer: for (const hunk of fileDiff.hunks) {
+    rows.push(`<div class="diff-hunk">${escapeHtml((hunk.hunkSpecs ?? `@@ -${hunk.deletionStart},${hunk.deletionCount} +${hunk.additionStart},${hunk.additionCount} @@`).trimEnd())}</div>`)
+    let oldLine = hunk.deletionStart
+    let newLine = hunk.additionStart
+    for (const content of hunk.hunkContent) {
+      if (content.type === 'context') {
+        for (let index = 0; index < content.lines; index++) {
+          if (++lineCount > MAX_LINES) { truncated = true; break outer }
+          const text = fileDiff.additionLines[content.additionLineIndex + index]
+            ?? fileDiff.deletionLines[content.deletionLineIndex + index]
+            ?? ''
+          rows.push(renderDiffLine(' ', oldLine++, newLine++, text, ''))
+        }
+      } else {
+        for (let index = 0; index < content.deletions; index++) {
+          if (++lineCount > MAX_LINES) { truncated = true; break outer }
+          rows.push(renderDiffLine('-', oldLine++, null, fileDiff.deletionLines[content.deletionLineIndex + index] ?? '', ' diff-del'))
+        }
+        for (let index = 0; index < content.additions; index++) {
+          if (++lineCount > MAX_LINES) { truncated = true; break outer }
+          rows.push(renderDiffLine('+', null, newLine++, fileDiff.additionLines[content.additionLineIndex + index] ?? '', ' diff-add'))
+        }
+      }
     }
   }
 
@@ -114,7 +140,30 @@ function renderDiffView(oldStr: string, newStr: string): string {
     rows.push(`<div style="padding:4px 10px;font-size:11px;color:#3a4c6a;font-family:'IBM Plex Mono',monospace">[… diff truncated at ${MAX_LINES} lines]</div>`)
   }
 
-  return `<div class="diff-view">${rows.join('')}</div>`
+  const name = (fileDiff.name || fileDiff.prevName || 'diff').replace(/^[ab]\//, '')
+  return (
+    `<div class="diff-view">` +
+    `<div class="diff-file">${escapeHtml(name)}</div>` +
+    rows.join('') +
+    `</div>`
+  )
+}
+
+function renderDiffLine(sign: string, oldLine: number | null, newLine: number | null, text: string, rowCls: string): string {
+  const color = sign === '+' ? '#2dd4a0' : sign === '-' ? '#f06060' : '#dde3f5'
+  const gutter = sign === '+'
+    ? 'rgba(45,212,160,0.15)'
+    : sign === '-'
+    ? 'rgba(240,96,96,0.15)'
+    : 'transparent'
+  return (
+    `<div class="diff-line${rowCls}">` +
+    `<span class="diff-gutter" style="background:${gutter}">${oldLine ?? ''}</span>` +
+    `<span class="diff-gutter" style="background:${gutter}">${newLine ?? ''}</span>` +
+    `<span class="diff-sign" style="color:${color};background:${gutter}">${sign}</span>` +
+    `<span class="diff-line-content" style="color:${color}">${escapeHtml(text.replace(/\r?\n$/, ''))}</span>` +
+    `</div>`
+  )
 }
 
 // ── Tool result section ───────────────────────────────────────────────────────
@@ -218,7 +267,7 @@ function cardHeader(color: string, label: string, preview: string, extra = ''): 
   )
 }
 
-function basename(p: string) { return p.split('/').pop() ?? p }
+const basename = pathBasename
 
 function renderEditCard(thread: ToolThread): string {
   const input = thread.toolUse.input as { file_path?: string; old_string?: string; new_string?: string }
@@ -226,7 +275,7 @@ function renderEditCard(thread: ToolThread): string {
   const filePath = input.file_path ?? ''
   const oldStr   = input.old_string ?? ''
   const newStr   = input.new_string ?? ''
-  const delta    = newStr.split('\n').length - oldStr.split('\n').length
+  const delta    = newStr.replace(/\r\n/g, '\n').split('\n').length - oldStr.replace(/\r\n/g, '\n').split('\n').length
   const sign     = delta > 0 ? `+${delta}` : String(delta)
 
   const header = cardHeader(c, thread.toolUse.name, basename(filePath), `${filePath} · ${sign} lines`)
@@ -249,6 +298,41 @@ function renderWriteCard(thread: ToolThread): string {
 
   const header = cardHeader(c, 'Write', basename(filePath), `${filePath} · ${lines.length} lines`)
   return cardShell(c, header, escapeHtml(preview), thread.result, thread.toolUse.name)
+}
+
+function renderFileChangeCard(thread: ToolThread): string {
+  const input = thread.toolUse.input as {
+    status?: string
+    changes?: Array<{ path?: string; kind?: unknown; diff?: string }>
+  }
+  const c = toolColorHex('FileChange')
+  const changes = input.changes ?? []
+  const preview = changes.length === 1
+    ? basename(changes[0]?.path ?? '')
+    : `${changes.length} files`
+  const header = cardHeader(c, 'File Change', preview, typeof input.status === 'string' ? input.status : '')
+  const body = changes.length === 0
+    ? `<pre class="result-pre">No file changes recorded.</pre>`
+    : changes
+      .map((change) => {
+        const filePath = change.path ?? ''
+        const kind = typeof change.kind === 'string'
+          ? change.kind
+          : change.kind != null
+          ? safeJson(change.kind)
+          : 'change'
+        return (
+          `<div style="border-top:1px solid #1e2a44">` +
+          `<div style="display:flex;align-items:center;gap:8px;padding:6px 12px;background:#151c38;border-bottom:1px solid #1e2a44">` +
+          `<span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:${c};font-weight:500;letter-spacing:0.06em;flex-shrink:0">${escapeHtml(kind)}</span>` +
+          `<span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#dde3f5;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(filePath)}</span>` +
+          `</div>` +
+          renderPatchDiffView(change.diff ?? '') +
+          `</div>`
+        )
+      })
+      .join('')
+  return cardShell(c, header, body, thread.result, thread.toolUse.name)
 }
 
 function renderBashCard(thread: ToolThread): string {
@@ -322,6 +406,7 @@ function renderToolThread(thread: ToolThread): string {
   switch (thread.toolUse.name) {
     case 'Edit':
     case 'MultiEdit':  return renderEditCard(thread)
+    case 'FileChange': return renderFileChangeCard(thread)
     case 'Write':      return renderWriteCard(thread)
     case 'Bash':       return renderBashCard(thread)
     case 'Read':       return renderReadCard(thread)
@@ -392,6 +477,92 @@ function renderLocalCommandStdout(block: LocalCommandStdoutBlock): string {
   )
 }
 
+function renderBashInput(block: BashInputBlock): string {
+  return (
+    `<div class="bash-input">` +
+    `<div style="display:flex;align-items:center;gap:10px;padding:7px 14px;background:#0c1028">` +
+    `<span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#2dd4a0;font-weight:700;flex-shrink:0">!</span>` +
+    `<span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#dde3f5;white-space:pre-wrap;word-break:break-word">${escapeHtml(block.command)}</span>` +
+    `</div>` +
+    `</div>`
+  )
+}
+
+function renderBashOutput(block: BashOutputBlock): string {
+  const stdout = block.stdout
+    ? `<pre style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:12px;line-height:1.6;color:#7b8db0;white-space:pre-wrap;word-break:break-word;max-height:300px;overflow-y:auto">${escapeHtml(block.stdout)}</pre>`
+    : ''
+  const stderr = block.stderr
+    ? `<pre style="margin:${block.stdout ? '6px' : '0'} 0 0;font-family:'IBM Plex Mono',monospace;font-size:12px;line-height:1.6;color:#f87171;white-space:pre-wrap;word-break:break-word;max-height:300px;overflow-y:auto">${escapeHtml(block.stderr)}</pre>`
+    : ''
+  return (
+    `<div class="bash-output">` +
+    `<div style="padding:6px 12px;background:#0c1028">` +
+    (stdout || stderr || `<span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#3a4c6a;font-style:italic">(no output)</span>`) +
+    `</div>` +
+    `</div>`
+  )
+}
+
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+function renderClaudeSystem(block: ClaudeSystemBlock): string {
+  const payload = block.payload as SystemMessagePayload
+  const subtype = block.subtype
+  const patch = payload.patch && typeof payload.patch === 'object' ? payload.patch as Record<string, unknown> : null
+  const content = typeof payload.content === 'string'
+    ? payload.content
+    : subtype === 'task_updated'
+    ? [
+        typeof patch?.description === 'string' ? `Description: ${patch.description}` : '',
+        typeof patch?.status === 'string' ? `Status: ${patch.status}` : '',
+        typeof patch?.error === 'string' ? `Error: ${patch.error}` : '',
+      ].filter(Boolean).join('\n')
+    : ''
+  const tone = payload.level === 'warning'
+    ? '#fbbf24'
+    : subtype === 'compact_boundary'
+    ? '#8b80f0'
+    : subtype.startsWith('task_')
+    ? '#8b80f0'
+    : subtype === 'tool_progress' || subtype === 'tool_use_summary'
+    ? '#38d9f5'
+    : '#7b8db0'
+  const badges = [
+    typeof payload.status === 'string'
+      ? payload.status
+      : typeof patch?.status === 'string'
+      ? patch.status
+      : null,
+    typeof payload.task_id === 'string' ? payload.task_id.slice(0, 8) : null,
+    typeof payload.tool_use_id === 'string' ? payload.tool_use_id.slice(0, 8) : null,
+    typeof payload.tool_name === 'string' ? payload.tool_name : null,
+  ].filter((badge): badge is string => Boolean(badge))
+
+  return (
+    `<details class="claude-system">` +
+    `<summary style="display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;list-style:none;background:linear-gradient(to right,${tone}18,#0c1028)">` +
+    `<span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:${tone};font-weight:600;letter-spacing:0.08em;flex-shrink:0">SYSTEM</span>` +
+    `<span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:${tone};font-weight:500;letter-spacing:0.04em;flex-shrink:0">${escapeHtml(subtype.replace(/_/g, ' ').toUpperCase())}</span>` +
+    `<span style="font-family:'IBM Plex Sans',sans-serif;font-size:13px;color:#dde3f5;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(content || 'Claude system event')}</span>` +
+    `${badges.map((badge) => `<span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:${tone};background:#151c38;border:1px solid ${tone}33;border-radius:999px;padding:1px 7px;flex-shrink:0">${escapeHtml(badge)}</span>`).join('')}` +
+    `</summary>` +
+    `<div style="display:grid;gap:10px;padding:10px 12px;border-top:1px solid #1e2a44;background:#0c1028">` +
+    (content
+      ? `<pre style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:12px;line-height:1.6;color:#7b8db0;white-space:pre-wrap;word-break:break-word;max-height:240px;overflow-y:auto">${escapeHtml(content)}</pre>`
+      : '') +
+    `<pre style="margin:0;padding:10px 12px;background:#151c38;border:1px solid #1e2a44;border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:11px;line-height:1.55;color:#3a4c6a;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow-y:auto">${escapeHtml(safeJson(payload))}</pre>` +
+    `</div>` +
+    `</details>`
+  )
+}
+
 function renderBlock(block: ThreadedBlock): string {
   switch (block.type) {
     case 'tool_thread':           return renderToolThread(block as ToolThread)
@@ -400,17 +571,31 @@ function renderBlock(block: ThreadedBlock): string {
     case 'image':                 return renderImageBlock(block as ImageBlock)
     case 'task_notification':     return renderTaskNotification(block as TaskNotificationBlock)
     case 'system_reminder':       return renderSystemReminder(block as SystemReminderBlock)
+    case 'claude_system':         return renderClaudeSystem(block as ClaudeSystemBlock)
     case 'slash_command':         return renderSlashCommand(block as SlashCommandBlock)
     case 'local_command_stdout':  return renderLocalCommandStdout(block as LocalCommandStdoutBlock)
+    case 'bash_input':            return renderBashInput(block as BashInputBlock)
+    case 'bash_output':           return renderBashOutput(block as BashOutputBlock)
     default:                      return ''
   }
 }
 
 function renderMessage(msg: ThreadedMessage): string {
-  const isAssistant = msg.role === 'assistant'
-  const dotCls  = isAssistant ? 'message-dot-claude' : 'message-dot-user'
-  const labelCls = isAssistant ? 'label-claude' : 'label-user'
-  const label    = isAssistant ? getAssistantLabel(msg.provider) : 'USER'
+  const dotCls = msg.role === 'assistant'
+    ? 'message-dot-claude'
+    : msg.role === 'system'
+    ? 'message-dot-system'
+    : 'message-dot-user'
+  const labelCls = msg.role === 'assistant'
+    ? 'label-claude'
+    : msg.role === 'system'
+    ? 'label-system'
+    : 'label-user'
+  const label = msg.role === 'assistant'
+    ? getAssistantLabel(msg.provider)
+    : msg.role === 'system'
+    ? 'SYSTEM'
+    : 'USER'
 
   const ts = msg.timestamp ? formatTimestamp(msg.timestamp) : ''
 
@@ -531,10 +716,12 @@ body {
 .message-dot { width: 20px; flex-shrink: 0; padding-top: 3px; }
 .message-dot-inner { width: 13px; height: 13px; border-radius: 50%; margin: 0 auto; }
 .message-dot-claude { background: #8b80f0; box-shadow: 0 0 0 2px #07091c, 0 0 10px 3px rgba(139,128,240,0.18); }
+.message-dot-system { background: #fbbf24; box-shadow: 0 0 0 2px #07091c, 0 0 10px 3px rgba(251,191,36,0.16); }
 .message-dot-user   { background: #38d9f5; box-shadow: 0 0 0 2px #07091c, 0 0 10px 3px rgba(56,217,245,0.12); }
 .message-body { flex: 1; min-width: 0; }
 .message-label { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
 .label-claude { font-family: 'Oxanium', monospace; font-size: 11px; font-weight: 700; letter-spacing: 0.12em; color: #8b80f0; }
+.label-system { font-family: 'Oxanium', monospace; font-size: 11px; font-weight: 700; letter-spacing: 0.12em; color: #fbbf24; }
 .label-user   { font-family: 'Oxanium', monospace; font-size: 11px; font-weight: 700; letter-spacing: 0.12em; color: #38d9f5; }
 .label-time   { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #3a4c6a; }
 .message-blocks { display: flex; flex-direction: column; gap: 8px; }
@@ -575,10 +762,13 @@ body {
 }
 
 .diff-view { font-family: 'IBM Plex Mono', monospace; font-size: 13px; line-height: 1.6; overflow-x: auto; background: #0c1028; border-top: 1px solid #1e2a44; }
+.diff-file { padding: 5px 10px; color: #38d9f5; background: #151c38; border-bottom: 1px solid #1e2a44; font-size: 11px; font-weight: 700; }
+.diff-hunk { padding: 3px 10px; color: #38d9f5; background: rgba(56,217,245,0.07); border-bottom: 1px solid #1e2a44; white-space: pre; font-size: 11px; }
 .diff-line { display: flex; }
 .diff-add  { background: rgba(45,212,160,0.07); }
 .diff-del  { background: rgba(240,96,96,0.07); }
 .diff-gutter { width: 26px; flex-shrink: 0; text-align: center; font-size: 11px; line-height: 1.55em; border-right: 1px solid #1e2a44; user-select: none; }
+.diff-sign { width: 20px; flex-shrink: 0; text-align: center; font-size: 11px; line-height: 1.55em; border-right: 1px solid #1e2a44; user-select: none; }
 .diff-line-content { padding: 0 10px; white-space: pre; }
 
 .thinking-block { border: 1px solid rgba(139,128,240,0.2); border-left: 2px solid #8b80f0; border-radius: 6px; overflow: hidden; font-size: 13px; margin-top: 4px; }
@@ -609,6 +799,8 @@ body {
 .text-block pre code { display: block; padding: 12px 16px; background: #0c1028; color: #dde3f5; font-size: 13px; line-height: 1.65; overflow-x: auto; border-radius: 0; }
 
 .task-notification { border: 1px solid #1e2a44; border-left: 2px solid #8b80f0; border-radius: 6px; overflow: hidden; font-size: 13px; margin-top: 4px; }
+.claude-system { border: 1px solid #1e2a44; border-left: 2px solid #7b8db0; border-radius: 6px; overflow: hidden; font-size: 13px; margin-top: 4px; }
+.claude-system summary::-webkit-details-marker { display: none; }
 .system-reminder { border: 1px solid #1e2a44; border-left: 2px solid #3a4c6a; border-radius: 6px; overflow: hidden; font-size: 13px; margin-top: 4px; opacity: 0.7; }
 .system-reminder summary::-webkit-details-marker { display: none; }
 .slash-command { border: 1px solid #1e2a44; border-left: 2px solid #38d9f5; border-radius: 6px; overflow: hidden; font-size: 13px; margin-top: 4px; }
@@ -639,19 +831,9 @@ body {
 
 export function exportSessionToHtml(session: Session, messages: SessionMessage[]): string {
   const threaded = buildThreadedMessages(messages)
-  const dirName  = session.customTitle ?? session.summary ?? getPrimarySessionTag(session.tag) ?? session.cwd?.split('/').pop() ?? session.sessionId
+  const dirName  = session.customTitle ?? session.summary ?? getPrimarySessionTag(session.tag) ?? (session.cwd ? basename(session.cwd) : undefined) ?? session.sessionId
   const messagesHtml = threaded.map(renderMessage).join('\n')
   return buildHtmlDocument(dirName, session, threaded.length, messages.length, messagesHtml)
 }
 
-export function downloadHtml(html: string, filename: string): void {
-  const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
-  const url  = URL.createObjectURL(blob)
-  const a    = document.createElement('a')
-  a.href     = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(url)
-}
+export { downloadHtml } from './downloadHtml'
