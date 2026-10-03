@@ -6,12 +6,12 @@ import { isAgentProvider } from '@/lib/provider'
 import { coordinatorBackgroundAgents } from '@/lib/coordinatorInteractiveState'
 import { listWaitingSessions } from '@/lib/sessionRuntime'
 import { readViewSessionInfo, readViewSessionRunning } from '@/lib/sessionBackend'
-import { adoptOrphanedInteractiveHost, interruptInteractiveAgent, setInteractiveCoordinatorEnabled, configureInteractiveCoordinator, readInteractiveCoordinator, readInteractiveRecoveries, reconcileInteractiveDelivery, resumeInteractiveAgent, createExternalProtocolTask, readSessionCoordinator, reviewExternalProtocolPlan, runExternalProtocolIdempotent, sendExternalProtocolMessage, sessionCoordinatorIdentity, resolveProtocolDecisionAdmin } from '@/lib/agentCoordination'
+import { adoptOrphanedInteractiveHost, cancelInteractiveTask, interruptInteractiveAgent, setInteractiveCoordinatorEnabled, configureInteractiveCoordinator, readInteractiveCoordinator, readInteractiveRecoveries, reconcileInteractiveDelivery, resumeInteractiveAgent, createExternalProtocolTask, readSessionCoordinator, reviewExternalProtocolPlan, runExternalProtocolIdempotent, sendExternalProtocolMessage, sessionCoordinatorIdentity, resolveProtocolDecisionAdmin } from '@/lib/agentCoordination'
 
 const schema = z.object({
   provider: z.string().refine(isAgentProvider),
   requestId: z.string().min(1).max(160),
-  action: z.enum(['integrate-result', 'disable', 'enable', 'settings', 'reconcile', 'resume-agent', 'interrupt-agent', 'delegate', 'message', 'review-plan', 'decision']),
+  action: z.enum(['integrate-result', 'disable', 'enable', 'settings', 'reconcile', 'resume-agent', 'interrupt-agent', 'cancel-task', 'delegate', 'message', 'review-plan', 'decision']),
   token: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   detail: z.string().trim().min(1).max(8000),
   cwd: z.string().trim().min(1).optional(),
@@ -87,6 +87,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ ses
         if (!body.to) throw new Error('Choose the teammate to interrupt')
         await interruptInteractiveAgent(identity, body.to)
         return { interrupted: true }
+      }
+      if (body.action === 'cancel-task') {
+        if (!body.taskId) throw new Error('Choose the task to cancel')
+        return cancelInteractiveTask(identity, body.taskId, body.detail)
       }
       if (body.action === 'resume-agent') {
         if (!body.to) throw new Error('Choose the teammate to resume')

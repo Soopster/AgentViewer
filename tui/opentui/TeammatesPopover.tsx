@@ -83,6 +83,7 @@ function teardownWarning(teardown: InteractiveCoordinatorTeardown | null): strin
 import { fitText, joinMeta } from './textLayout'
 import { MODAL_CONTENT_Z_INDEX } from './layers'
 import type { ProtocolAgent } from '../../lib/agentProtocol'
+import { describeRunRollup } from '../../lib/coordinatorRollup'
 import { coordinatorAttention, type CoordinatorAttentionItem } from '../../lib/coordinatorAttention'
 import { coordinatorResultIdsForAgent, coordinatorRosterOrder } from '../../lib/coordinatorSignals'
 import { coordinatorAgentActivity, coordinatorAgentNote, coordinatorAgentWorkspace, coordinatorStalledAgentIds } from '../../lib/coordinatorInteractiveState'
@@ -143,6 +144,8 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   const [teardown, setTeardown] = useState<InteractiveCoordinatorTeardown | null>(null)
   // Provider for the NEXT new teammate; an existing one keeps its own. `null`
   // means the lead conversation's provider.
+  // Cancelling a task fails what depends on it, so it takes a second press (X, then y).
+  const [confirmCancel, setConfirmCancel] = useState<{ taskId: string; title: string; agentName: string } | null>(null)
   const [newTeammateProvider, setNewTeammateProvider] = useState<AgentProvider | null>(null)
 
   const { data, session, busy, pending, error } = state
@@ -170,6 +173,10 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   // An unresolved request is a hard gate, not a warning: a second mutation
   // while the first's outcome is unknown is what the idempotency key cannot
   // protect against.
+  const runInfo = useMemo(
+    () => snapshot?.rollup && snapshot.rollup.tasks.total > 0 ? describeRunRollup(snapshot.rollup, snapshot.run.budget) : null,
+    [snapshot],
+  )
   const items = useMemo(() => snapshot ? coordinatorAttention(snapshot).filter(item => item.kind !== 'result' || !state.reviewed.includes(item.id)) : [], [snapshot, state.reviewed])
   const currentAttention = items[Math.min(attentionIndex, Math.max(items.length - 1, 0))] ?? null
   const elsewhere = data?.interactive.executionElsewhere === true
@@ -201,6 +208,14 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       }
       if (key.name === 'backspace') { setDraft({ ...draft, text: Array.from(draft.text).slice(0, -1).join('') }); return }
       if (isPrintable(key)) setDraft({ ...draft, text: (draft.text + key.sequence).slice(0, 8000) })
+      return
+    }
+    if (confirmCancel) {
+      const cancelling = confirmCancel
+      setConfirmCancel(null)
+      if (key.name === 'return' || key.name === 'y') {
+        act({ action: 'cancel-task', taskId: cancelling.taskId, detail: `Cancel ${cancelling.taskId} for ${cancelling.agentName}` }, `${cancelling.taskId} cancelled`)
+      }
       return
     }
     if (confirmOff) {
@@ -305,6 +320,17 @@ export const TeammatesPopover = memo(function TeammatesPopover({
         received ? 'Delivery confirmed' : 'Mail requeued for the next message')
       return
     }
+    // Take the selected teammate's task away (⇧X): `i` only stops the turn, and
+    // the teammate starts again. Asks first — it releases locks and fails dependents.
+    if ((key.sequence === 'X' || (key.name.toLowerCase() === 'x' && key.shift)) && selected && !disabled) {
+      const task = snapshot?.tasks.find(entry => entry.id === selected.taskId)
+      if (!task || ['completed', 'failed', 'cancelled'].includes(task.status)) {
+        onNotice('info', `${selected.name} has no open task to cancel`, 3000)
+        return
+      }
+      setConfirmCancel({ taskId: task.id, title: task.title, agentName: selected.name })
+      return
+    }
     if (key.name === 'x' && !disabled) {
       setConfirmOff(true)
       setTeardown(null)
@@ -349,7 +375,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
     if (key.name === 'm' && selected && !disabled) {
       setDraft({ kind: 'message', to: selected.id, toName: selected.name, text: '' })
     }
-  }, [act, busy, canLead, confirmOff, data, disabled, draft, enabled, locked, onNotice, onOpenSession, onWatchSessions,
+  }, [act, busy, canLead, confirmCancel, confirmOff, data, disabled, draft, enabled, locked, onNotice, onOpenSession, onWatchSessions,
       pending, recoveries, selected, teammates, clamped, snapshot, terminal, unconfirmedDelivery, currentAttention, items.length])
 
   useEffect(() => { if (!resultTaskId) onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady, resultTaskId])
@@ -374,21 +400,22 @@ export const TeammatesPopover = memo(function TeammatesPopover({
     + (teammates.length > 0
       ? 2 + teammates.reduce((rows, agent) => rows + 2 + (coordinatorAgentNote(agent, snapshot) ? 1 : 0), 0)
       : enabled ? 3 : 0)
+    + (enabled && runInfo ? 2 + (runInfo.warning ? 1 : 0) + runInfo.overlapLines.length + (runInfo.hiddenOverlaps ? 1 : 0) : 0)
     + attention.length + recoveries.length
     + (snapshot && snapshot.tasks.length > 0 ? 2 + Math.min(snapshot.tasks.length, 6) : 0)
   // 6 = header 2 + footer 2 + border 2, matching bodyH below.
   // The floor is the scrollbox's own minimum (6) plus header, footer and
   // border: below it the footer draws outside the box.
-  const popH = Math.max(12, Math.min(height - 4, 32, bodyRows + 6 + (draft || confirmOff ? 1 : 0)))
+  const popH = Math.max(12, Math.min(height - 4, 32, bodyRows + 6 + (draft || confirmOff || confirmCancel ? 1 : 0)))
   const popTop = Math.floor((height - popH) / 2)
   const popLeft = Math.floor((width - popW) / 2)
   const innerW = popW - 4
   // Header 2 + footer 2 + the box's own border 2, plus the draft/confirm row
   // when it is showing — the scrollbox has a fixed height budget, so a row that
   // appears without being subtracted here pushes the footer off the frame.
-  const bodyH = Math.max(popH - 6 - (draft || confirmOff ? 1 : 0), 6)
+  const bodyH = Math.max(popH - 6 - (draft || confirmOff || confirmCancel ? 1 : 0), 6)
 
-  const attentionCount = items.length + attention.length + recoveries.length + stalled.length + (unconfirmedDelivery ? 1 : 0)
+  const attentionCount = items.length + attention.length + recoveries.length + stalled.length + (unconfirmedDelivery ? 1 : 0) + (enabled && !terminal ? runInfo?.attentionCount ?? 0 : 0)
   // Status and its meta are separate <text>s so only the status carries colour;
   // colouring the whole joined line made every word shout at the same volume.
   const headline = !session ? 'No conversation selected'
@@ -432,6 +459,8 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   // dim string gives the reader nothing to scan for.
   const footerHints: Array<[string, string]> = draft
     ? [['⏎', 'send'], ['esc', 'cancel']]
+    : confirmCancel
+      ? [['y/⏎', 'cancel task'], ['any other key', 'keep it']]
     : confirmOff
       ? [['y/⏎', 'turn off'], ['any other key', 'cancel']]
       : pending
@@ -439,7 +468,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
         : !enabled
           ? (teammates.length ? [['j/k', 'move'], ['⏎', 'open transcript'], ['o/O', 'watch'], ['v', 'result review'], ['e', 'new team'], ['esc', 'close']] : canLead ? [['e', 'enable coordinator'], ['esc', 'close']] : [['esc', 'close']])
           : [['j/k', 'move'], ['⏎', 'open'], ['o/O', 'watch'], ['v', 'result review'], ['d', 'ask'], ['m', 'message'],
-             ['r', 'resume'], ['i', 'interrupt'], ['p', `new: ${newTeammateProvider ? formatProviderLabel(newTeammateProvider) : 'same'}`], ['c', 'continuation'], ['w', 'worktrees'], ['l', `alerts ${state.notifications}`], ['x', 'turn off'], ['esc', 'close']]
+             ['r', 'resume'], ['i', 'interrupt'], ['⇧X', 'cancel task'], ['p', `new: ${newTeammateProvider ? formatProviderLabel(newTeammateProvider) : 'same'}`], ['c', 'continuation'], ['w', 'worktrees'], ['l', `alerts ${state.notifications}`], ['x', 'turn off'], ['esc', 'close']]
   // Truncation is by whole entries, not mid-word: a hint cut to "x …" tells the
   // reader a key exists without saying which.
   const footerWidth = (hints: Array<[string, string]>) =>
@@ -558,6 +587,16 @@ export const TeammatesPopover = memo(function TeammatesPopover({
             </box>
           ) : null}
 
+          {enabled && runInfo ? (
+            <box flexDirection="column" paddingTop={1}>
+              <text fg={theme.muted} wrapMode="none">RUN</text>
+              <text fg={theme.text} wrapMode="none">{fitText(runInfo.summary, innerW)}</text>
+              {runInfo.warning ? <text fg={theme.amber} wrapMode="none">{fitText(`⚠ ${runInfo.warning}`, innerW)}</text> : null}
+              {runInfo.overlapLines.map((line) => <text key={line} fg={theme.amber} wrapMode="none">{fitText(`⚠ ${line}`, innerW)}</text>)}
+              {runInfo.hiddenOverlaps ? <text fg={theme.dim} wrapMode="none">{`  +${runInfo.hiddenOverlaps} more overlapping path${runInfo.hiddenOverlaps === 1 ? '' : 's'}`}</text> : null}
+            </box>
+          ) : null}
+
           {teammates.length > 0 ? (
             <box flexDirection="column" paddingTop={1}>
               <text fg={theme.muted} wrapMode="none">TEAMMATES</text>
@@ -653,6 +692,16 @@ export const TeammatesPopover = memo(function TeammatesPopover({
         <box height={1} paddingX={1} flexDirection="row">
           <text fg={theme.violet} wrapMode="none">{draftRow.label}</text>
           <text fg={theme.text} wrapMode="none">{draftRow.text}</text>
+        </box>
+      ) : confirmCancel ? (
+        <box height={1} paddingX={1}>
+          <text fg={theme.amber} wrapMode="none">
+            {(() => {
+              // The consequence is the part that must survive a narrow terminal, so it is the part that never gets cut.
+              const full = `Cancel ${confirmCancel.taskId} “${confirmCancel.title}” for ${confirmCancel.agentName}? Locks are released and dependents fail.`
+              return full.length <= innerW ? full : fitText(`Cancel ${confirmCancel.taskId}? Locks release; dependents fail.`, innerW)
+            })()}
+          </text>
         </box>
       ) : confirmOff ? (
         <box height={1} paddingX={1}>

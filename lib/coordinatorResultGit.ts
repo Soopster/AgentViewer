@@ -33,3 +33,33 @@ export async function coordinatorCheckoutRevision(cwd: string): Promise<string> 
   }
   return hash.digest('hex')
 }
+
+/**
+ * Files a squash-merge of `branch` into `target`'s HEAD would conflict in,
+ * found without touching either checkout (`git merge-tree --write-tree`, which
+ * only writes objects). Exit 0 is a clean merge, 1 a conflicted one with the
+ * paths listed after the tree id; anything else — an old git, an unrelated
+ * history — is "unknown", never "clean": a preview that guesses clean sends the
+ * engineer into an integration that fails, which is the thing it exists to avoid.
+ */
+export function previewMergeConflicts(target: string, branch: string): Promise<{ conflicts: string[] } | null> {
+  return new Promise((resolve) => execFile(
+    'git', ['merge-tree', '--write-tree', '--name-only', '--no-messages', 'HEAD', branch],
+    { cwd: target, encoding: 'utf8', timeout: 15_000, maxBuffer: 16 * 1024 * 1024 },
+    (error, stdout) => {
+      const code = error ? (error as { code?: unknown }).code : 0
+      // A refused merge (unknown ref, unrelated history) also exits 1, but only
+      // a real result starts with the tree id — that, not the exit code, says
+      // git actually merged.
+      if ((code !== 0 && code !== 1) || !/^[0-9a-f]{40,64}$/.test(stdout.split('\n')[0] ?? '')) return resolve(null)
+      resolve({ conflicts: code === 0 ? [] : parseMergeTreeConflicts(stdout) })
+    },
+  ))
+}
+
+/** `merge-tree --name-only` prints the result tree id, then the conflicted paths one per line. */
+export function parseMergeTreeConflicts(output: string): string[] {
+  const [, ...rest] = output.split('\n')
+  const blank = rest.indexOf('')
+  return [...new Set((blank < 0 ? rest : rest.slice(0, blank)).map((line) => line.trim()).filter(Boolean))]
+}

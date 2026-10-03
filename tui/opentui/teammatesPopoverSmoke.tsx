@@ -328,6 +328,28 @@ await press('i')
 if (!notices.some(text => text.includes('has no turn running'))) fail(`i on an idle teammate must say so rather than sending a request: ${notices.join(' | ')}`)
 if (store.getInteractiveCoordinatorState().pending) fail('an idle teammate interrupt must not reach the server')
 
+// ── the run summary reports progress and spend at a glance ─────────────────
+await waitFor('the run summary', () => readable().includes('RUN') && /\d+\/\d+ done/.test(readable()))
+
+// ── ⇧X takes the selected teammate's task away, after asking ───────────────
+// `i` only stops a turn; cancelling releases locks and fails dependents, so it
+// confirms, and any key but y/⏎ keeps the task.
+{
+  // The earlier task has already ended; cancelling needs one that is still open.
+  const open = await coordination.createExternalProtocolTask(leadIdentity, { assignTo: nova.participant.agentId, title: 'Cancel me', detail: 'A task the lead will take back' })
+  const taskId = open.task!.id
+  const novaTaskStatus = () => store.getInteractiveCoordinatorState().data!.snapshot!.tasks.find(task => task.id === taskId)!.status
+  await waitFor('the open task on the board', () => store.getInteractiveCoordinatorState().data?.snapshot?.tasks.some(task => task.id === taskId) === true)
+  await press('X')
+  await waitFor('the cancel confirmation', () => readable().includes(`Cancel ${taskId}`) && readable().includes('dependents fail'))
+  await press('n')
+  if (readable().includes('dependents fail')) fail('a key other than y/enter must dismiss the cancel confirmation')
+  if (novaTaskStatus() === 'cancelled') fail('declining the confirmation cancelled the task anyway')
+  await press('X')
+  await press('y', 'y')
+  await waitFor('the task to be cancelled', () => novaTaskStatus() === 'cancelled')
+}
+
 // ── the roster reorders by attention, and selection follows the teammate ────
 // Herdr's agent panel sorts by priority. A positional selection would silently
 // retarget `m` to whoever moved into that row, so selection is by id.
@@ -436,5 +458,5 @@ await waitFor('fresh team in same chat', () => Boolean(store.getInteractiveCoord
 if (store.getInteractiveCoordinatorState().data?.snapshot?.tasks.length) fail('new team inherited old tasks')
 await coordination.stopProtocolRun(store.getInteractiveCoordinatorState().data!.snapshot!.run.id)
 
-console.log('Teammates popover smoke passed (enable, roster activity, background work, teammate notes, content-fit height, alert delivery, interrupt gating, inspect, priority order with id selection, review on open, drafts, continuation, worktrees, unconfirmed gate, turn off)')
+console.log('Teammates popover smoke passed (enable, roster activity, background work, teammate notes, content-fit height, alert delivery, interrupt gating, run summary, cancel task, inspect, priority order with id selection, review on open, drafts, continuation, worktrees, unconfirmed gate, turn off)')
 process.exit(0)

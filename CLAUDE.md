@@ -527,6 +527,39 @@ it against the native CLI (see the composer flow harness in memory).
   `--add-dir`). The recorded system prompt does not learn about it mid-conversation,
   so the model may still decline a path it has not been told about; permissions
   already allow it.
+- **No native command ends in "cannot run", and none reaches the model as text.**
+  A sweep of every provider's own command set found three ways one could:
+  the provider has no handler (Codex's ~25 terminal-UI commands; Pi's `/hotkeys`,
+  `/settings`, `/tree`, which were *sent to the model as a prompt*), the SDK says
+  "isn't available", or the call throws. `TUI_COMMAND_EQUIVALENTS` answers a
+  terminal-UI command with the TUI surface that does the same job (theme picker,
+  shortcut guide, composer settings, pager, teammates) or says why there is none.
+  Codex's `/experimental`, `/rollout`, `/apps`, `/plugins`, `/memories`,
+  `/personality`, `/subagents`, `/agent`, `/feedback` and `/logout` call the
+  app-server; `/side` forks and sends the aside there.
+- **Codex 0.158 sub-agents are recorded on the parent, not listed.** `thread/list`
+  returns only legacy `thread_spawn` children; a `multi_agent` child appears as
+  `subAgentActivity` items (`agentThreadId`, `agentPath`) in the parent's own
+  turns, which is what `/subagents` and `/agent <name>` read.
+- **A Copilot command the CLI refuses is that command's answer, not a failed
+  turn.** `commands.invoke` *throws* for "Unknown slash command" and for one that
+  cannot run now; handled as an error it evicted the warm session and put the text
+  back in the composer, where the next command was typed in front of it and the
+  pair went to the model as one prompt. Every result kind is handled
+  (`select-subcommand` lists its options, `add-timeline-entry` may prefill the
+  composer, `show-dialog` opens the model picker, `set-model` applies), and a
+  command that outlasts the wait is reported as still running.
+- **A staged OpenCode revert hides its messages on read.** `/undo` stages a
+  revert that the next turn commits; until then `session.messages` still returns
+  the reverted turn, so the adapter cuts at `session.revert.messageID` as
+  OpenCode's TUI does, and `/redo` (`unrevert`) brings it back.
+- **Pi rewinds like Claude** — its fork is inclusive of an entry, so `/rewind`
+  and `/tree` fork at the entry before the prompt (`providerMessageId`).
+- **⌃R, ⌃G and ⌃T follow the native CLIs**: ⌃R finds the newest earlier prompt
+  containing what is typed (again for the next older), ⌃G opens the prompt in
+  `$VISUAL`/`$EDITOR`, ⌃T toggles the task list. ⌃R used to toggle bridge
+  routing; it still turns routing *off* while routed, and turning it on is the
+  bridge panel's ⌃R or the palette.
 - **codex-cli 0.158 removed `thread/rollback`** for `thread/revert { beforeTurnId }`
   (the web's rollback broke with it). Reverting needs the thread loaded in that
   app-server — "thread not found" otherwise — so the backend resumes first, and
@@ -1229,6 +1262,30 @@ which mirror `app/api/sessions/[sessionId]/coordination/route.ts` action for act
   footer can be scanned, and the header's status is the only coloured word on its line. The footer
   drops whole hint entries **from the middle** when it will not fit, because the last one is how to
   leave — the same escape-hatch rule the ⌃B/⌃K chord hint follows, and the smoke pins it.
+
+#### Coordinator run rollup, overlap, cancel and merge preview (load-bearing)
+
+What an engineer running several agents needs to see before it goes wrong.
+
+- **`snapshot.rollup` (`lib/coordinatorRollup.ts`) is computed server-side over every task**, not the
+  windowed `snapshot.tasks` — totals over a window shrink as the run ages. Usage is the number the
+  budget gate enforces (`budgetUsageSync`), cached per run on the event cursor because a snapshot is
+  read on every poll and summing usage walks every usage event the run ever logged.
+- **Overlap is judged on a finished task's reported `filesChanged`, not its grant.** A completed task's
+  `paths` are usually wider than what it touched; reporting the grant cries wolf. Whole-tree grants
+  (`**`) never count, failed/cancelled work cannot collide, and two *finished* tasks that touched one
+  file are history (`live: false`), not a risk. The lead sees live overlaps in `actionable.overlapWarnings`
+  on every mutation result — it is the one who can still reassign — and the TUI/web show them under RUN.
+- **Cancel task ≠ interrupt.** `i` stops a turn and the teammate starts again; `⇧X` / "Cancel task"
+  (`cancelInteractiveTask`) ends the task, releases its locks, fails its dependents and frees the
+  teammate. It confirms first, cancels *before* interrupting (an interrupt that ends a turn on an open
+  task is what the sweep re-dispatches), and the confirm line keeps its consequence on a narrow
+  terminal. `coordCancelTaskSmoke.ts`, `teammatesPopoverSmoke.tsx` (110 and 60 columns).
+- **Result review previews the merge** (`previewMergeConflicts`: `git merge-tree --write-tree`, which
+  touches neither checkout) and blocks integration with the conflicting file names instead of letting
+  `mergeWorktreeTask` fail and restore. Exit 1 also means "refused to merge" (unknown ref), so only a
+  tree id on the first line proves git actually merged; otherwise the answer is *unknown*, never clean.
+  It reads the branch's committed tip, so uncommitted worktree changes are not in the preview.
 
 #### Frecency, the stash, and the supersede queue (load-bearing)
 

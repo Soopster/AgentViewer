@@ -805,7 +805,7 @@ export async function readTuiSessionCoordinator(
 
 export type TuiSessionCoordinationRequest = {
   token?: string
-  action: 'integrate-result' | 'disable' | 'enable' | 'settings' | 'reconcile' | 'resume-agent' | 'interrupt-agent' | 'delegate' | 'message' | 'review-plan' | 'decision'
+  action: 'integrate-result' | 'disable' | 'enable' | 'settings' | 'reconcile' | 'resume-agent' | 'interrupt-agent' | 'cancel-task' | 'delegate' | 'message' | 'review-plan' | 'decision'
   /** Provider for a NEW teammate; an existing one keeps its own. */
   teammateProvider?: AgentProvider
   /** Name for a NEW teammate (herdr's `agent start <name>`). */
@@ -878,6 +878,10 @@ export async function sendTuiSessionCoordination(
       if (!request.to) throw new Error('Choose the teammate to interrupt')
       await coord.interruptInteractiveAgent(identity, request.to)
       return { interrupted: true }
+    }
+    if (request.action === 'cancel-task') {
+      if (!request.taskId) throw new Error('Choose the task to cancel')
+      return coord.cancelInteractiveTask(identity, request.taskId, request.detail)
     }
     if (request.action === 'resume-agent') {
       if (!request.to) throw new Error('Choose the teammate to resume')

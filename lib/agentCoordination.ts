@@ -98,6 +98,7 @@ import {
 } from './agentProtocol'
 import { permissionModeEscalation } from './claudeRuntimePolicy'
 import { recordContextTransfer } from './contextTransfers'
+import { computeRunRollup, describeRunRollup } from './coordinatorRollup'
 import {
   registerCoordinatorMcpServer,
   unregisterCoordinatorMcpServer,
@@ -1176,6 +1177,21 @@ function deliveryHintsSync(db: SqliteDatabase, runId: string, recipientIds: stri
   return agents.map((agent) => ({ name: agent.name, ...(agent.liveness ?? classifyAgentLiveness(agent)) }))
 }
 
+// A snapshot is read on every poll, and summing usage walks every usage event
+// the run has ever logged. Usage only changes when an event is appended, so the
+// total is reusable for as long as the run's event cursor has not moved.
+const usageByCursor = new Map<string, { cursor: string; usage: ProtocolUsageReceipt }>()
+const USAGE_CACHE_RUNS = 64
+function cachedBudgetUsageSync(db: SqliteDatabase, runId: string, cursor: string): ProtocolUsageReceipt {
+  const hit = usageByCursor.get(runId)
+  if (hit?.cursor === cursor) return hit.usage
+  const usage = budgetUsageSync(db, runId)
+  usageByCursor.delete(runId)
+  usageByCursor.set(runId, { cursor, usage })
+  if (usageByCursor.size > USAGE_CACHE_RUNS) usageByCursor.delete(usageByCursor.keys().next().value as string)
+  return usage
+}
+
 function readSnapshotSync(db: SqliteDatabase, runId: string): ProtocolRunSnapshot | null {
   const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(runId) as Row | undefined
   if (!runRow) return null
@@ -1193,7 +1209,15 @@ function readSnapshotSync(db: SqliteDatabase, runId: string): ProtocolRunSnapsho
   const events = (db.prepare('SELECT * FROM protocol_events WHERE run_id = ? ORDER BY created_at DESC LIMIT ?')
     .all(runId, EVENT_WINDOW) as Row[]).map(rowToEvent).reverse()
   const eventCursor = (db.prepare('SELECT COALESCE(MAX(rowid), 0) AS cursor FROM protocol_events WHERE run_id = ?').get(runId) as Row).cursor
-  return { run: rowToRun(runRow), agents, tasks, locks, messages, events, eventCursor: String(eventCursor) }
+  const run = rowToRun(runRow)
+  // Over every task, not the windowed `tasks` above: totals that forget old terminal work would shrink as the run ages.
+  const rollup = computeRunRollup({
+    run,
+    tasks: listTasksSync(db, runId),
+    agentNames: new Map(agents.map((agent) => [agent.id, agent.name])),
+    usage: cachedBudgetUsageSync(db, runId, String(eventCursor)),
+  })
+  return { run, agents, tasks, locks, messages, events, eventCursor: String(eventCursor), rollup }
 }
 
 const EVENTS_AFTER_MAX = 500
@@ -1462,7 +1486,20 @@ function externalActionableSync(db: SqliteDatabase, runId: string, agentId: stri
       && tasks.every((task) => ['completed', 'failed', 'cancelled'].includes(task.status)),
     replyGuardDue: replyGuard?.due ?? false,
     replyGuardReminder: replyGuard?.reminder,
+    ...(agent?.role === 'lead' ? leadOverlapWarnings(run, tasks, agents) : {}),
   }
+}
+
+/**
+ * The lead decides who works on what, so it is the one who can still fix two
+ * tasks aiming at the same files — which is why this rides every mutation
+ * result it already reads, rather than waiting for someone to open a panel.
+ */
+function leadOverlapWarnings(run: ProtocolRun, tasks: ProtocolTask[], agents: ProtocolAgent[]): { overlapWarnings?: string[] } {
+  const lines = describeRunRollup(computeRunRollup({
+    run, tasks, agentNames: new Map(agents.map((agent) => [agent.id, agent.name])), usage: {},
+  })).overlapLines
+  return lines.length ? { overlapWarnings: lines } : {}
 }
 
 // How long a participant may hold a task while working without telling the
@@ -7347,6 +7384,31 @@ export async function interruptInteractiveAgent(identity: ExternalProtocolIdenti
     return
   }
   await cancelExternalProtocolTurn(identity, { agentId: agent.id })
+}
+
+/**
+ * Take a task away from a teammate: the lead's "stop this work", as opposed to
+ * `interruptInteractiveAgent`, which stops a turn and leaves the task owned (the
+ * teammate simply starts again). Cancelling releases the task's locks, frees the
+ * teammate, and fails whatever depended on it, so it is confirmed by callers.
+ *
+ * The task is cancelled before the turn is interrupted: the interrupt ends the
+ * turn, and a turn that ends on an open task is exactly what the maintenance
+ * sweep re-dispatches.
+ */
+export async function cancelInteractiveTask(identity: ExternalProtocolIdentity, taskId: string, reason?: string): Promise<{ cancelled: true; interruptedAgent?: string }> {
+  const db = await getDatabase()
+  const lead = requireExternalParticipantSync(db, identity)
+  if (lead.role !== 'lead') throw new Error('Only the Coordinator lead can cancel a task')
+  const row = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?').get(identity.runId, taskId) as Row | undefined
+  if (!row) throw new Error('Coordinator task not found')
+  const task = rowToTask(row)
+  const owner = task.ownerAgentId ? listAgentsSync(db, identity.runId).find(entry => entry.id === task.ownerAgentId) : undefined
+  await cancelProtocolTask(identity.runId, taskId, reason?.trim() || `${taskId} cancelled by the lead`)
+  if (!owner || owner.id === identity.agentId) return { cancelled: true }
+  // Best effort: a teammate with no turn running has nothing to interrupt, and the task is already cancelled.
+  const interrupted = await interruptInteractiveAgent(identity, owner.id).then(() => true, () => false)
+  return { cancelled: true, ...(interrupted ? { interruptedAgent: owner.name } : {}) }
 }
 
 export async function resumeInteractiveAgent(identity: ExternalProtocolIdentity, agentId: string): Promise<void> {

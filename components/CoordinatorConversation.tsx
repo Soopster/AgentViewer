@@ -7,6 +7,7 @@ import dynamic from 'next/dynamic'
 import type { Session } from '@/lib/types'
 import type { ProtocolAgent, ProtocolRunSnapshot } from '@/lib/agentProtocol'
 import { coordinatorAttention, type CoordinatorAttentionItem } from '@/lib/coordinatorAttention'
+import { describeRunRollup } from '@/lib/coordinatorRollup'
 import { COORDINATOR_NOTIFICATION_DELAY_MS, coordinatorResultIdsForAgent, coordinatorRosterOrder, coordinatorSignals, coordinatorSignalSuppressed, newCoordinatorSignals } from '@/lib/coordinatorSignals'
 import { Button } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/native-select'
@@ -19,7 +20,7 @@ const CoordinatorResultReview = dynamic(() => import('./CoordinatorResultReview'
 const COORDINATOR_TEAMMATE_PROVIDERS = ['claude', 'codex', 'opencode', 'copilot', 'pi'] as const
 
 type RequestBody = {
-  action: 'disable' | 'enable' | 'settings' | 'reconcile' | 'resume-agent' | 'interrupt-agent' | 'delegate' | 'message' | 'review-plan' | 'decision'
+  action: 'disable' | 'enable' | 'settings' | 'reconcile' | 'resume-agent' | 'interrupt-agent' | 'cancel-task' | 'delegate' | 'message' | 'review-plan' | 'decision'
   provider: Session['provider']; requestId: string; detail: string; to?: string; paths?: string[]
   cwd?: string; autoContinue?: boolean; useWorktrees?: boolean; batchId?: string; received?: boolean
   taskId?: string; decisionId?: string; approved?: boolean; inReplyTo?: string
@@ -158,6 +159,7 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
   const canLead = !snapshot || snapshot.agents.some(agent => agent.role === 'lead' && agent.sessionId === session.sessionId)
   const disabled = locked || terminal || !canLead
   const nativeAttention = state?.permissions.filter(item => item.agentId !== snapshot?.run.leadAgentId) ?? []
+  const runInfo = snapshot?.rollup && snapshot.rollup.tasks.total > 0 ? describeRunRollup(snapshot.rollup, snapshot.run.budget) : null
   return <section className="av-coord-conversation" aria-label="Conversation teammates">
     {elsewhere ? <p role="status">Running in another host. Use that window or connect the TUI to its server to control this team. Transcripts remain available here.</p> : null}
     <div className="av-coord-conversation-heading"><strong>Teammates{visible.length + nativeAttention.length ? ` · ${visible.length + nativeAttention.length} need attention` : ''}</strong>
@@ -185,6 +187,12 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
       <Button size="sm" variant="ghost" onClick={() => setTeardown(null)}>Keep coordinating</Button>
     </div> : null}
     <div id={`${id}-body`} className="av-coord-conversation-body">
+    {state?.interactive.enabled && runInfo ? <div className="av-coord-run" aria-label="Run summary">
+      <p><strong>Run</strong> · {runInfo.summary}</p>
+      {runInfo.warning ? <p role="status" className="av-coord-run-warn">⚠ {runInfo.warning}</p> : null}
+      {runInfo.overlapLines.map(line => <p key={line} role="status" className="av-coord-run-warn">⚠ {line}</p>)}
+      {runInfo.hiddenOverlaps ? <p className="text-sm text-muted-foreground">+{runInfo.hiddenOverlaps} more overlapping path{runInfo.hiddenOverlaps === 1 ? '' : 's'}</p> : null}
+    </div> : null}
     {state?.interactive.enabled ? <label className="av-coord-alerts">Alerts
       <NativeSelect value={alerts} aria-label="Teammate alerts" onChange={event => {
         const next = event.target.value as 'off' | 'in-app' | 'desktop'
@@ -205,7 +213,7 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
       <Button disabled={locked} onClick={() => void send({ action: 'reconcile', detail: 'Confirmed delivery in transcript', batchId: state.interactive.delivery!.batchId, received: true })}>Mail was received</Button>
       <Button variant="outline" disabled={locked} onClick={() => void send({ action: 'reconcile', detail: 'Confirmed mail was not received', batchId: state.interactive.delivery!.batchId, received: false })}>Mail was not received · requeue</Button>
     </div> : null}
-    {snapshot && state ? <TeammateRoster snapshot={snapshot} state={state} seen={seen} observationUnavailable={Boolean(notice)} onOpen={inspect} onFollowup={agent => { setTo(agent.id); setDetail(`Follow up with ${agent.name}: `) }} onInterrupt={agent => void send({ action: 'interrupt-agent', to: agent.id, detail: `Interrupt ${agent.name}` })} disabled={disabled} /> : null}
+    {snapshot && state ? <TeammateRoster snapshot={snapshot} state={state} seen={seen} observationUnavailable={Boolean(notice)} onOpen={inspect} onFollowup={agent => { setTo(agent.id); setDetail(`Follow up with ${agent.name}: `) }} onInterrupt={agent => void send({ action: 'interrupt-agent', to: agent.id, detail: `Interrupt ${agent.name}` })} onCancelTask={(agent, taskId) => void send({ action: 'cancel-task', taskId, to: agent.id, detail: `Cancel ${taskId} for ${agent.name}` })} disabled={disabled} /> : null}
     {nativeAttention.map(item => <div key={`${item.agentId}:${item.permission.id}`} className="flex items-center justify-between gap-2 rounded border p-2" role="status"><span>{item.agentName}: {item.permission.title}</span><Button variant="outline" size="sm" onClick={() => { const agent = snapshot?.agents.find(agent => agent.id === item.agentId); if (agent) inspect(agent) }}>Inspect and answer</Button></div>)}
     {state?.recoveries.map(agentId => <div key={agentId} className="flex flex-wrap items-center gap-2 rounded border p-2"><span>{snapshot?.agents.find(agent => agent.id === agentId)?.name}: execution needs reconciliation</span><Button variant="outline" size="sm" onClick={() => { const agent = snapshot?.agents.find(agent => agent.id === agentId); if (agent) inspect(agent) }}>Inspect</Button><Button size="sm" disabled={disabled} onClick={() => void send({ action: 'resume-agent', to: agentId, detail: 'Resume after inspecting the teammate transcript' })}>Resume after inspection</Button></div>)}
     {notice ? <p role="status" className="text-sm">{notice}</p> : null}
@@ -248,9 +256,11 @@ function requestTeammateNotifications() {
   try { if (typeof Notification !== 'undefined' && Notification.permission === 'default') void Notification.requestPermission() } catch { /* Unsupported context. */ }
 }
 
-function TeammateRoster({ snapshot, state, seen, observationUnavailable, onOpen, onFollowup, onInterrupt, disabled }: {
-  snapshot: ProtocolRunSnapshot; state: CoordinatorInteractiveState; seen: string[]; onInterrupt: (agent: ProtocolAgent) => void; observationUnavailable: boolean; onOpen: (agent: ProtocolAgent) => void; onFollowup: (agent: ProtocolAgent) => void; disabled: boolean
+function TeammateRoster({ snapshot, state, seen, observationUnavailable, onOpen, onFollowup, onInterrupt, onCancelTask, disabled }: {
+  snapshot: ProtocolRunSnapshot; state: CoordinatorInteractiveState; seen: string[]; onInterrupt: (agent: ProtocolAgent) => void; onCancelTask: (agent: ProtocolAgent, taskId: string) => void; observationUnavailable: boolean; onOpen: (agent: ProtocolAgent) => void; onFollowup: (agent: ProtocolAgent) => void; disabled: boolean
 }) {
+  // Cancelling takes the task away and fails what depends on it, so it asks twice.
+  const [confirmingTask, setConfirmingTask] = useState<string | null>(null)
   if (!snapshot.agents.some(agent => agent.role === 'teammate')) return null
   const stalled = coordinatorStalledAgentIds(state)
   return <div className="flex flex-wrap gap-2" aria-label="Persistent teammate conversations">
@@ -262,6 +272,16 @@ function TeammateRoster({ snapshot, state, seen, observationUnavailable, onOpen,
         ? <Button variant="ghost" size="sm" disabled={disabled} onClick={() => onInterrupt(agent)}>Interrupt</Button>
         : null}
       <Button variant="ghost" size="sm" disabled={disabled} onClick={() => onFollowup(agent)}>Follow up</Button>
+      {(() => {
+        const task = snapshot.tasks.find(entry => entry.id === agent.taskId)
+        if (!task || ['completed', 'failed', 'cancelled'].includes(task.status)) return null
+        return confirmingTask === task.id
+          ? <>
+            <Button variant="outline" size="sm" disabled={disabled} title={`Cancel ${task.title}: releases its locks and fails tasks that depend on it`} onClick={() => { setConfirmingTask(null); onCancelTask(agent, task.id) }}>Confirm cancel</Button>
+            <Button variant="ghost" size="sm" onClick={() => setConfirmingTask(null)}>Keep task</Button>
+          </>
+          : <Button variant="ghost" size="sm" disabled={disabled} title="Take this task away from the teammate" onClick={() => setConfirmingTask(task.id)}>Cancel task</Button>
+      })()}
     </div>)}
   </div>
 }

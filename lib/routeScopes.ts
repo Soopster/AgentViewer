@@ -71,6 +71,9 @@ export const ROUTE_SCOPES: Record<string, Partial<Record<HttpMethod, RouteScope>
   // --- Providers ---------------------------------------------------------
   // What turning a team off would leave behind (git status per checkout).
   '/api/sessions/[sessionId]/coordination/teardown': { GET: 'read' },
+  // A teammate result's review carries the checkout's full diff, and POST integrates it:
+  // both are the owner's, so a read-only device gets neither.
+  '/api/sessions/[sessionId]/coordination/results/[taskId]': { GET: 'write', POST: 'write' },
   // Teammate attention per conversation, for the session list.
   '/api/agent-protocol/attention': { GET: 'read' },
   // The version handshake an attached client uses before relying on a route.

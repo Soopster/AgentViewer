@@ -3,7 +3,7 @@ import type { AgentProvider } from './types'
 import { readSessionCoordinator, readInteractiveCoordinator, readInteractiveRecoveries, sessionCoordinatorIdentity, runExternalProtocolIdempotent, validateWorktreeTaskLocks } from './agentCoordination'
 import { findWorktreeTaskForCwd, mergeWorktreeTask } from './worktreeTasks'
 import { readViewSessionRunning } from './sessionBackend'
-import { coordinatorCheckoutRevision, resultGit } from './coordinatorResultGit'
+import { coordinatorCheckoutRevision, previewMergeConflicts, resultGit } from './coordinatorResultGit'
 import { resultVerification, type CoordinatorResultReview } from './coordinatorResultReview'
 
 export async function readCoordinatorResultReview(sessionId: string, provider: AgentProvider, taskId: string): Promise<CoordinatorResultReview> {
@@ -53,6 +53,15 @@ export async function readCoordinatorResultReview(sessionId: string, provider: A
     if (worktree && targetStatus.trim()) block('The target checkout has local changes; commit or stash them before integrating.')
     if (worktree && branch.trim() !== worktree.branch) block('The checkout branch changed; inspect it before integrating.')
     if (['failed', 'stale', 'unbound'].includes(review.verification)) block(`Verification is ${review.verification}; complete the task again with checks against the current checkout.`)
+    // Tell the engineer now, with file names, what integration would otherwise
+    // discover by failing. Skipped while another blocker already stops it.
+    if (worktree && !review.integrationBlockers.length) {
+      const preview = await previewMergeConflicts(target, head.trim())
+      if (preview) {
+        review.mergePreview = preview
+        if (preview.conflicts.length) block(`Merging ${branch.trim()} would conflict in ${preview.conflicts.slice(0, 6).join(', ')}${preview.conflicts.length > 6 ? ` (+${preview.conflicts.length - 6} more)` : ''}; rebase it onto the target's HEAD first.`)
+      }
+    }
     if (worktree) { const validation = await validateWorktreeTaskLocks(worktree, { completedTaskId: task.id, changedFiles: files }); if (!validation.ok) block(validation.message) }
   } catch (error) {
     review.checkout = null

@@ -661,6 +661,18 @@ export type ProtocolWorktreeCleanupResult = {
   aheadCommits?: number
 }
 
+/** Server-computed run summary (`lib/coordinatorRollup.ts`) so every surface reports the same numbers. */
+export type ProtocolRunRollup = {
+  elapsedMs: number
+  tasks: { total: number; done: number; failed: number; active: number; pending: number; blocked: number }
+  usage: { totalTokens: number; costUsd: number }
+  /** Set once a budget is mostly spent, while the run is still going. */
+  budgetWarning?: string
+  filesTouched: number
+  /** Paths two different tasks are both aiming at; `live` when either has not finished. */
+  overlaps: Array<{ path: string; taskIds: string[]; owners: string[]; live: boolean }>
+}
+
 export type ProtocolRunSnapshot = {
   run: ProtocolRun
   agents: ProtocolAgent[]
@@ -674,6 +686,7 @@ export type ProtocolRunSnapshot = {
    * cursor boundary, so a client never splices a window into the wrong place.
    */
   eventCursor?: string
+  rollup?: ProtocolRunRollup
 }
 
 export type StartProtocolRunParams = {
@@ -816,6 +829,8 @@ export type ExternalProtocolActionable = {
   /** Reply guard: owns a task, has been silent past the threshold — see replyGuardReminder for the text to surface. */
   replyGuardDue: boolean
   replyGuardReminder?: string
+  /** Lead only: live task overlaps (two tasks aiming at the same files) it can still reassign. */
+  overlapWarnings?: string[]
 }
 
 export type ExternalProtocolWaitResult = {
