@@ -7,6 +7,14 @@ export const BUDGET_WARN_FRACTION = 0.8
 const HOLD_UP_MIN = 2
 export const MAX_HOLD_UP_LINES = 3
 
+/**
+ * An unfinished run that has shown no sign of life this long is probably not
+ * working: a teammate is wedged, or the server that was driving it restarted
+ * (a server-managed run is not re-driven, and reads as running with nothing
+ * moving). Long enough that one slow turn is not a false alarm.
+ */
+export const IDLE_WARN_MS = Math.max(60_000, Number(process.env.AGENT_VIEWER_COORD_IDLE_WARN_MINUTES || 30) * 60_000)
+
 const TERMINAL: ReadonlySet<ProtocolTask['status']> = new Set(['completed', 'failed', 'cancelled'])
 
 function normalizePath(value: string): string {
@@ -72,6 +80,8 @@ export function computeRunRollup(input: {
   tasks: readonly ProtocolTask[]
   agentNames: ReadonlyMap<string, string>
   usage: ProtocolUsageReceipt
+  /** Newest sign of life anywhere in the run: an event, or an agent seen. */
+  lastActivityAt?: string
   now?: number
 }): ProtocolRunRollup {
   const { run, tasks, usage } = input
@@ -95,6 +105,14 @@ export function computeRunRollup(input: {
   const worst = fractions.sort((a, b) => b.fraction - a.fraction)[0]
   const budgetWarning = worst && worst.fraction >= BUDGET_WARN_FRACTION && !['completed', 'failed', 'cancelled', 'stopped'].includes(run.status)
     ? `${Math.min(999, Math.round(worst.fraction * 100))}% of the ${worst.label} budget is used`
+    : undefined
+
+  const unfinished = counts.active + counts.pending
+  const lastActivity = input.lastActivityAt ? Date.parse(input.lastActivityAt) : NaN
+  const idleMs = Number.isFinite(lastActivity) ? now - lastActivity : 0
+  // `blocked` is a run waiting on a human, which can legitimately sit for a long time.
+  const idleWarning = unfinished > 0 && idleMs >= IDLE_WARN_MS && ['planning', 'running', 'synthesizing'].includes(run.status)
+    ? `nothing has happened for ${formatIdle(idleMs)} with ${unfinished} task${unfinished === 1 ? '' : 's'} unfinished — a teammate may be stuck, or the server driving this run restarted`
     : undefined
 
   // Overlap between two different, still-relevant tasks. Cancelled and failed
@@ -165,7 +183,12 @@ export function computeRunRollup(input: {
   const touched = new Set<string>()
   for (const task of tasks) for (const file of task.receipt?.filesChanged ?? []) touched.add(normalizePath(file))
 
-  return { elapsedMs, tasks: counts, usage: spent, budgetWarning, filesTouched: touched.size, overlaps, holdUps: holdUps.slice(0, MAX_HOLD_UP_LINES) }
+  return { elapsedMs, tasks: counts, usage: spent, budgetWarning, idleWarning, filesTouched: touched.size, overlaps, holdUps: holdUps.slice(0, MAX_HOLD_UP_LINES) }
+}
+
+function formatIdle(ms: number): string {
+  const minutes = Math.floor(ms / 60_000)
+  return minutes >= 120 ? `${Math.floor(minutes / 60)}h` : `${minutes}m`
 }
 
 /** "3/7 done · 1 failed · 42k tok · $0.83 · 12m" — one line for a roster header. */
@@ -195,6 +218,8 @@ export const MAX_OVERLAP_LINES = 3
 export function describeRunRollup(rollup: ProtocolRunRollup, budget?: ProtocolRun['budget']): {
   summary: string
   warning?: string
+  /** Stall notice (idle run), shown beside the budget warning. */
+  idleWarning?: string
   overlapLines: string[]
   hiddenOverlaps: number
   /** "task-7 “Parser” (bo, in progress) holds up 12 tasks" — where a stalled DAG is stuck. */
@@ -210,9 +235,10 @@ export function describeRunRollup(rollup: ProtocolRunRollup, budget?: ProtocolRu
   return {
     summary: formatRunRollup(rollup, budget),
     warning: rollup.budgetWarning,
+    idleWarning: rollup.idleWarning,
     overlapLines,
     hiddenOverlaps: Math.max(0, live.length - overlapLines.length),
     holdUpLines: rollup.holdUps.map((entry) => `${entry.taskId} “${entry.title}” (${[entry.owner, entry.status.replace('_', ' ')].filter(Boolean).join(', ')}) holds up ${entry.holdsUp} task${entry.holdsUp === 1 ? '' : 's'}`),
-    attentionCount: (rollup.budgetWarning ? 1 : 0) + (live.length > 0 ? 1 : 0),
+    attentionCount: (rollup.budgetWarning ? 1 : 0) + (rollup.idleWarning ? 1 : 0) + (live.length > 0 ? 1 : 0),
   }
 }

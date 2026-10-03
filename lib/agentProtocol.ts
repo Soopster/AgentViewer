@@ -668,6 +668,8 @@ export type ProtocolRunRollup = {
   usage: { totalTokens: number; costUsd: number }
   /** Set once a budget is mostly spent, while the run is still going. */
   budgetWarning?: string
+  /** Set when an unfinished run has shown no sign of life for a long while (see `IDLE_WARN_MS`). */
+  idleWarning?: string
   filesTouched: number
   /** Paths two different tasks are both aiming at; `live` when either has not finished. */
   overlaps: Array<{ path: string; taskIds: string[]; owners: string[]; live: boolean }>

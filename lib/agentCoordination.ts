@@ -1177,6 +1177,13 @@ function deliveryHintsSync(db: SqliteDatabase, runId: string, recipientIds: stri
   return agents.map((agent) => ({ name: agent.name, ...(agent.liveness ?? classifyAgentLiveness(agent)) }))
 }
 
+/** Newest sign of life in a run: any event but a bare heartbeat, or any agent last seen. */
+function lastRunActivitySync(db: SqliteDatabase, runId: string, agents: ProtocolAgent[]): string | undefined {
+  const event = (db.prepare("SELECT MAX(created_at) AS at FROM protocol_events WHERE run_id = ? AND type != 'agent.heartbeat'").get(runId) as Row | undefined)?.at
+  const seen = agents.map((agent) => agent.lastSeenAt).filter((at): at is string => typeof at === 'string')
+  return [typeof event === 'string' ? event : undefined, ...seen].filter((at): at is string => Boolean(at)).sort().at(-1)
+}
+
 function readSnapshotSync(db: SqliteDatabase, runId: string): ProtocolRunSnapshot | null {
   const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(runId) as Row | undefined
   if (!runRow) return null
@@ -1201,6 +1208,7 @@ function readSnapshotSync(db: SqliteDatabase, runId: string): ProtocolRunSnapsho
     tasks: listTasksSync(db, runId),
     agentNames: new Map(agents.map((agent) => [agent.id, agent.name])),
     usage: budgetUsageSync(db, runId),
+    lastActivityAt: lastRunActivitySync(db, runId, agents),
   })
   return { run, agents, tasks, locks, messages, events, eventCursor: String(eventCursor), rollup }
 }

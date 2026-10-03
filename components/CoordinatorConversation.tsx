@@ -190,6 +190,7 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
     {state?.interactive.enabled && runInfo ? <div className="av-coord-run" aria-label="Run summary">
       <p><strong>Run</strong> · {runInfo.summary}</p>
       {runInfo.warning ? <p role="status" className="av-coord-run-warn">⚠ {runInfo.warning}</p> : null}
+      {runInfo.idleWarning ? <p role="status" className="av-coord-run-warn">⚠ {runInfo.idleWarning}</p> : null}
       {runInfo.overlapLines.map(line => <p key={line} role="status" className="av-coord-run-warn">⚠ {line}</p>)}
       {runInfo.holdUpLines.map(line => <p key={line} className="text-sm text-muted-foreground">⚑ {line}</p>)}
       {runInfo.hiddenOverlaps ? <p className="text-sm text-muted-foreground">+{runInfo.hiddenOverlaps} more overlapping path{runInfo.hiddenOverlaps === 1 ? '' : 's'}</p> : null}

@@ -89,6 +89,23 @@ assert.equal(formatRunRollup(rollup([task('t1', 'pending', [])]), { maxCostUsd: 
   }
 }
 
+// Idle: an unfinished run with no sign of life for a long while says so; a quiet finished or human-blocked run does not.
+{
+  const open = [task('t1', 'in_progress', []), task('t2', 'pending', [])]
+  const at = (minutesAgo: number) => new Date(T0 + 12 * 60_000 - minutesAgo * 60_000).toISOString()
+  const idle = (minutes: number, tasks = open, run: Partial<Parameters<typeof computeRunRollup>[0]['run']> = {}) =>
+    computeRunRollup({ run: { createdAt: '2026-10-04T09:00:00Z', status: 'running', ...run }, tasks, agentNames: names, usage: {}, lastActivityAt: at(minutes), now: T0 + 12 * 60_000 }).idleWarning
+  assert.equal(idle(5), undefined)
+  assert.equal(idle(29), undefined, 'just under the threshold is quiet')
+  assert.match(idle(47) ?? '', /^nothing has happened for 47m with 2 tasks unfinished — a teammate may be stuck, or the server driving this run restarted$/)
+  assert.match(idle(180) ?? '', /for 3h with/)
+  assert.equal(idle(90, [task('t1', 'completed', [])]), undefined, 'nothing unfinished means nothing is stalled')
+  assert.equal(idle(90, open, { status: 'blocked' }), undefined, 'a run waiting on a human may sit')
+  assert.equal(idle(90, open, { status: 'completed' }), undefined)
+  assert.equal(computeRunRollup({ run: { createdAt: '2026-10-04T09:00:00Z', status: 'running' }, tasks: open, agentNames: names, usage: {}, now: T0 + 12 * 60_000 }).idleWarning, undefined, 'unknown activity is not an alarm')
+  assert.equal(describeRunRollup(computeRunRollup({ run: { createdAt: '2026-10-04T09:00:00Z', status: 'running' }, tasks: open, agentNames: names, usage: {}, lastActivityAt: at(60), now: T0 + 12 * 60_000 })).attentionCount, 1)
+}
+
 // What surfaces print: only live overlaps are listed, capped, and counted for attention.
 const many = rollup(['a', 'b', 'c', 'd', 'e'].flatMap((name, i) => [task(`x${i}`, 'in_progress', [`${name}.ts`]), task(`y${i}`, 'pending', [`${name}.ts`])]))
 const described = describeRunRollup(many)
@@ -108,6 +125,7 @@ await coordination.createExternalProtocolTask(identity, { title: 'one', detail: 
 await coordination.createExternalProtocolTask(identity, { title: 'two', detail: 'two', paths: ['src/shared.ts', 'src/own.ts'] })
 const live = (await coordination.readProtocolRun(identity.runId))!.rollup!
 assert.equal(live.tasks.total, 2)
+assert.equal(live.idleWarning, undefined, 'a run that just did something is not idle')
 assert.deepEqual(live.overlaps.map((o) => [o.path, o.live]), [['src/shared.ts', true]])
 // The lead is told in the result of the very call that created the collision.
 const created = await coordination.createExternalProtocolTask(identity, { title: 'three', detail: 'three', paths: ['src/own.ts'] })

@@ -1311,7 +1311,9 @@ costs below, and each now has a smoke (`coordEventCostSmoke.ts`, `inboxBoundSmok
   longer fit in a context window, hours into a run.
 - **The open-task cap** (`AGENT_VIEWER_COORD_MAX_OPEN_TASKS`, default 120) stops a runaway lead flooding
   the board; finished work is not counted. Known gap: a server-managed (non-chat) run whose process
-  restarts is not re-driven — it reads as running with nothing moving; stop it and start again.
+  restarts is not re-driven — it reads as running with nothing moving. It is not fixed, but it is no longer
+  silent: an unfinished run with no event or agent sign of life for `AGENT_VIEWER_COORD_IDLE_WARN_MINUTES`
+  (30) gets an idle warning under RUN (and counts for attention), so stop it and start again.
 
 #### Frecency, the stash, and the supersede queue (load-bearing)
 
