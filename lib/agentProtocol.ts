@@ -1651,20 +1651,46 @@ function taskRoleLines(task: Pick<ProtocolTask, 'roleName' | 'roleDescription'> 
   ]
 }
 
+/** Finished tasks whose results are still shown in full; older ones are reduced to a count. */
+export const BOARD_RECENT_FINISHED = 12
+
+const TERMINAL_STATUSES: ReadonlySet<string> = new Set(['completed', 'failed', 'cancelled'])
+
+/**
+ * The board as a prompt. Every open task is listed in full — that is the work —
+ * and so is the most recent finished work with its results. Older finished tasks
+ * collapse to a count, except the ones an open task still depends on, which stay
+ * as one line so a dependency never points at nothing.
+ *
+ * Unbounded, this put every task a long run had ever finished, results and all,
+ * into each lead intervention and each teammate preamble: the prompt grew with
+ * the run until it no longer fit.
+ */
 export function formatTaskBoard(tasks: ProtocolTask[]): string {
   if (tasks.length === 0) return '- (no tasks yet)'
-  return tasks.map((task) => {
+  const line = (task: ProtocolTask, withResult: boolean) => {
     const deps = task.blockedBy.length > 0 ? ` deps:[${task.blockedBy.join(',')}]` : ''
     const owner = task.ownerAgentId ? ` owner:${task.ownerAgentId}` : ''
     const resultDetail = task.resultDetail && task.resultDetail.length > 1200
       ? `${task.resultDetail.slice(0, 1199)}…`
       : task.resultDetail
-    const result = task.resultSummary
+    const result = withResult && task.resultSummary
       ? `\n  result: ${task.resultSummary}${resultDetail ? ` — ${resultDetail}` : ''}`
       : ''
     const spec = task.roleName ? ` spec:${task.roleName}` : ''
     return `- ${task.id} [${task.status}] role:${task.targetRole}${spec}${owner}${deps} ${task.title}${result}`
-  }).join('\n')
+  }
+  const finished = tasks.filter((task) => TERMINAL_STATUSES.has(task.status))
+  const recent = new Set(finished.slice(-BOARD_RECENT_FINISHED).map((task) => task.id))
+  const needed = new Set(tasks.filter((task) => !TERMINAL_STATUSES.has(task.status)).flatMap((task) => task.blockedBy))
+  const collapsed = finished.filter((task) => !recent.has(task.id) && !needed.has(task.id))
+  const hidden = new Set(collapsed.map((task) => task.id))
+  const rows = tasks.filter((task) => !hidden.has(task.id)).map((task) => line(task, !TERMINAL_STATUSES.has(task.status) || recent.has(task.id)))
+  if (collapsed.length > 0) {
+    const counts = ['completed', 'failed', 'cancelled'].map((status) => [status, collapsed.filter((task) => task.status === status).length] as const).filter(([, n]) => n > 0)
+    rows.unshift(`- (${collapsed.length} earlier finished task${collapsed.length === 1 ? '' : 's'} not listed: ${counts.map(([status, n]) => `${n} ${status}`).join(', ')} — coord_status has the full board)`)
+  }
+  return rows.join('\n')
 }
 
 export function formatRoster(agents: ProtocolAgent[]): string {
@@ -1684,9 +1710,41 @@ function formatLeadSupervisionRoster(agents: ProtocolAgent[]): string {
   }).join('\n')
 }
 
+/** One message never takes more than this of a recipient's context; the rest stays in the run history. */
+export const MAX_INBOX_MESSAGE_CHARS = 6_000
+/** A whole delivery is bounded too: ten teammates reporting at once must not become the lead's next prompt. */
+export const MAX_INBOX_TOTAL_CHARS = 30_000
+const INBOX_DIGEST_CHARS = 200
+
+/**
+ * The mail a recipient reads before its next turn.
+ *
+ * Bounded, because on a long run this is delivered into a conversation that has
+ * to keep fitting in a context window: a lead folding in every teammate's full
+ * report grows its next message without limit, and the failure is a turn that
+ * errors (or silently drops the start of the conversation) hours in. What a
+ * bound may not do is hide anything — a message that does not fit is cut with
+ * its id, an overflowing one is reduced to a one-line digest, and a reply-
+ * required or urgent message is budgeted first so the cap lands on the FYIs.
+ */
 export function formatInbox(messages: ProtocolMessage[], agentsById: Map<string, ProtocolAgent>): string {
   if (messages.length === 0) return '(empty)'
-  return messages.map((message) => {
+  const must = (message: ProtocolMessage) => message.priority === 'urgent' || message.replyRequired
+  const cut = (message: ProtocolMessage, limit: number) => message.body.length <= limit
+    ? message.body
+    : `${message.body.slice(0, limit).trimEnd()}… [${message.body.length - limit} more characters not shown; message ${message.id} is in the run history]`
+  // Budget in two passes so the messages that need an answer are never the ones squeezed out.
+  const full = new Set<string>()
+  let used = 0
+  for (const priority of [true, false]) {
+    for (const message of messages) {
+      if (must(message) !== priority) continue
+      const cost = Math.min(message.body.length, MAX_INBOX_MESSAGE_CHARS)
+      if (priority || used + cost <= MAX_INBOX_TOTAL_CHARS) { full.add(message.id); used += cost }
+    }
+  }
+  const digested = messages.length - full.size
+  const lines = messages.map((message) => {
     const from = agentsById.get(message.fromAgentId)?.name ?? message.fromAgentId
     // Tag urgency/reply-obligation inline — dropping these left every inbox
     // line looking identical, so an urgent reply-required request read the
@@ -1697,8 +1755,11 @@ export function formatInbox(messages: ProtocolMessage[], agentsById: Map<string,
       message.kind !== 'request' && message.kind !== 'response' ? message.kind : null,
     ].filter(Boolean)
     const tag = tags.length > 0 ? ` [${tags.join(', ')}]` : ''
-    return `- from ${from}${tag}: ${message.body}`
-  }).join('\n')
+    const body = full.has(message.id) ? cut(message, MAX_INBOX_MESSAGE_CHARS) : cut({ ...message, body: message.body.replace(/\s+/g, ' ') }, INBOX_DIGEST_CHARS)
+    return `- from ${from}${tag}: ${body}`
+  })
+  if (digested > 0) lines.unshift(`(${digested} further message${digested === 1 ? '' : 's'} shortened to one line each to fit; the full text of each is in the run history)`)
+  return lines.join('\n')
 }
 
 /**

@@ -1404,6 +1404,27 @@ function readyStatusMessageGroups(rows: Row[], now = Date.now()): Set<string> {
   return ready
 }
 
+/** Finished tasks that keep their full prompt, result and receipt in what an agent reads. */
+const EXTERNAL_RECENT_FINISHED = 20
+
+/**
+ * The board an agent sees through `coord_status` / `coord_wait`. Dispatch policy
+ * is the server's own business and nothing an agent acts on, and a finished
+ * task from long ago is an id, a title and a one-line outcome: its prompt,
+ * detail and receipt are in the run history. Each status call used to carry all
+ * of them — a long run's board alone was six figures of tokens per call.
+ */
+function slimTasksForExternal(tasks: ProtocolTask[]): ProtocolTask[] {
+  const finished = tasks.filter((task) => ['completed', 'failed', 'cancelled'].includes(task.status))
+  const recent = new Set(finished.slice(-EXTERNAL_RECENT_FINISHED).map((task) => task.id))
+  return tasks.map((task) => {
+    const { claudeAgentPolicy: _policy, ...rest } = task
+    if (!finished.includes(task) || recent.has(task.id)) return rest as ProtocolTask
+    const { receipt: _receipt, resultDetail: _detail, ...old } = rest
+    return { ...old, prompt: '', resultSummary: old.resultSummary?.slice(0, 200) } as ProtocolTask
+  })
+}
+
 function externalSnapshotSync(db: SqliteDatabase, runId: string, agentId: string): ProtocolRunSnapshot {
   const snapshot = readSnapshotSync(db, runId)
   if (!snapshot) throw new Error('Coordinator run not found')
@@ -1419,6 +1440,9 @@ function externalSnapshotSync(db: SqliteDatabase, runId: string, agentId: string
     // historical bodies on every status/wait response made context scale with
     // run age without helping the next decision.
     messages: [],
+    // Context in an LLM's hands must not scale with run age either.
+    tasks: slimTasksForExternal(snapshot.tasks),
+    run: { ...snapshot.run, ...(snapshot.run.resumeCapsule ? { resumeCapsule: { ...snapshot.run.resumeCapsule, completedTasks: snapshot.run.resumeCapsule.completedTasks.slice(-EXTERNAL_RECENT_FINISHED) } } : {}) },
     // Keep other agents' direct message text out of the shared event timeline.
     // Findings are durable audit evidence rather than live noise. Preserve a
     // larger bounded finding window alongside the normal recent-event window

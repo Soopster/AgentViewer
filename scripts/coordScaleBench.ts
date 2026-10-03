@@ -9,6 +9,7 @@ const TASKS = Number(process.env.TASKS) || 300
 const EVENTS = Number(process.env.EVENTS) || 6000
 const root = mkdtempSync(path.join(tmpdir(), 'coord-scale-'))
 process.chdir(root)
+process.env.AGENT_VIEWER_COORD_MAX_OPEN_TASKS = String(TASKS + 50) // the board cap is a guard, not what is being measured
 const coord = await import('../lib/agentCoordination')
 const { AGENT_PROTOCOL_VERSION } = await import('../lib/agentProtocol')
 
@@ -64,4 +65,6 @@ await time('createExternalProtocolTask (one more)', () => coord.createExternalPr
 await time('readSessionCoordinator-style attention', () => coord.readProtocolRun(lead.runId), 3)
 const snap = (await coord.readProtocolRun(lead.runId))!
 console.log(`snapshot json: ${(JSON.stringify(snap).length / 1024).toFixed(0)}KB  tasks ${snap.tasks.length}/${TASKS}  events ${snap.events.length}`)
+const status = await coord.readExternalProtocolStatus(lead)
+console.log(`coord_status (what an LLM lead reads): ${(JSON.stringify(status).length / 1024).toFixed(0)}KB, ${status.snapshot.tasks.length} tasks`)
 process.exit(0)

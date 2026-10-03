@@ -58,6 +58,25 @@ const typeCost = async (type: string) => {
 }
 for (const type of ['usage.observed', 'agent.heartbeat', 'task.child.progress', 'agent.ready']) console.log(`  ${type.padEnd(22)} ${(await typeCost(type)).toFixed(2)}ms at ~220 tasks`)
 
+
+// What an agent reads through coord_status stays bounded as finished work piles up.
+{
+  const done: string[] = []
+  for (let i = 0; i < 60; i += 1) done.push((await coord.createExternalProtocolTask(lead, { title: `old ${i}`, detail: `prompt ${i} ${'p'.repeat(2000)}` })).task!.id)
+  for (const id of done) await coord.cancelProtocolTask(lead.runId, id, `cancelled ${id}`)
+  const status = await coord.readExternalProtocolStatus(lead)
+  const board = status.snapshot.tasks
+  assert.ok(board.every((entry) => !('claudeAgentPolicy' in entry)), 'dispatch policy is not part of what an agent reads')
+  const cancelled = board.filter((entry) => entry.status === 'cancelled')
+  assert.ok(cancelled.length >= 60)
+  assert.equal(cancelled.filter((entry) => entry.prompt.length > 0).length, 20, 'only the newest finished tasks keep their prompt')
+  assert.equal(board.find((entry) => entry.id === done[0])!.prompt, '', 'an old finished task is an id, a title and an outcome')
+  assert.ok(board.find((entry) => entry.id === done.at(-1))!.prompt.includes('prompt 59'))
+  assert.ok(board.filter((entry) => !['completed', 'failed', 'cancelled'].includes(entry.status)).every((entry) => entry.prompt.length > 0), 'open work is whole')
+  // …while the human-facing snapshot still has everything.
+  const full = (await coord.readProtocolRun(lead.runId))!.tasks
+  assert.ok(full.find((entry) => entry.id === done[0])!.prompt.includes('prompt 0'))
+}
 // A runaway lead cannot grow the board without bound, and finished work does not count against it.
 await assert.rejects(async () => { for (let i = 0; i < coord.MAX_OPEN_TASKS + 5; i += 1) await coord.createExternalProtocolTask(lead, { title: `flood ${i}`, detail: 'flood' }) }, /open tasks \(limit \d+\)/)
 console.log('coord event cost smoke: ok')

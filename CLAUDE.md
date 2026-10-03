@@ -1287,6 +1287,32 @@ What an engineer running several agents needs to see before it goes wrong.
   tree id on the first line proves git actually merged; otherwise the answer is *unknown*, never clean.
   It reads the branch's committed tip, so uncommitted worktree changes are not in the preview.
 
+#### Long and wide runs: what is bounded, and how to check (load-bearing)
+
+`npm run coord:scalebench` (`TASKS=300 EVENTS=6000`) reports per-call cost on a big run; it found the
+costs below, and each now has a smoke (`coordEventCostSmoke.ts`, `inboxBoundSmoke.ts`).
+
+- **An event costs the same on any run.** `appendProtocolEvent` rebuilt the run artifacts (every task
+  re-read and re-parsed) and read a whole snapshot back per event. Now telemetry types skip the rebuild
+  (`ARTIFACT_NEUTRAL_EVENTS` — add a type there only if nothing the capsule, phase reports or learning
+  candidates read can change), and in-process callers use `recordProtocolEvent`, which returns nothing;
+  only the HTTP route needs `appendProtocolEvent`'s snapshot. 15.7ms → 2.8ms per event at 160 tasks; a
+  heartbeat or finding is ~0.08ms flat.
+- **Usage totals are memoized** on (newest event rowid, the run's task stamps) — `budgetUsageSync` walked
+  every usage event on each snapshot, dispatch and completion.
+- **Overlap detection is indexed by path.** The pairwise form was 41% of CPU on a 160-task board and ran
+  on every snapshot; `coordRollupSmoke.ts` checks the indexed version against the pairwise definition on
+  300 random boards.
+- **What an LLM reads is bounded by run size, not run age.** `formatInbox` caps a message (6k chars) and a
+  delivery (30k) — reply-required and urgent mail is budgeted first and nothing is dropped silently;
+  `formatTaskBoard` lists every open task and the newest 12 finished ones, collapsing the rest to a count
+  (a finished task an open one depends on stays as a line); `coord_status` drops dispatch policy and
+  strips old finished tasks to an id, title and one-line outcome. Unbounded, each of these grew until it no
+  longer fit in a context window, hours into a run.
+- **The open-task cap** (`AGENT_VIEWER_COORD_MAX_OPEN_TASKS`, default 120) stops a runaway lead flooding
+  the board; finished work is not counted. Known gap: a server-managed (non-chat) run whose process
+  restarts is not re-driven — it reads as running with nothing moving; stop it and start again.
+
 #### Frecency, the stash, and the supersede queue (load-bearing)
 
 Three patterns taken from opencode in September 2026 (survey: `docs/opencode-survey-2026-09-12.md`).
