@@ -49,8 +49,8 @@ export default function CoordinatorAskAgent({ snapshot, onOpenSession, onMessage
     }
   }
 
-  return <section className="flex flex-col gap-3 rounded-lg border p-4" aria-label="Ask another agent">
-    <div><strong>Ask another agent</strong><p className="text-sm text-muted-foreground">Delegate a task and keep working here. Results update below.</p></div>
+  return <section className="av-coord-ask" aria-label="Ask another agent">
+    <header><strong>Ask another agent</strong><p>Delegate a task and keep working here. Results update below.</p></header>
     <label htmlFor={`${id}-target`}>Teammate</label>
     <NativeSelect id={`${id}-target`} value={target} onChange={event => setTarget(event.target.value)} disabled={locked || terminal}>
       <option value="auto">Choose an available teammate or create one</option>
@@ -60,15 +60,15 @@ export default function CoordinatorAskAgent({ snapshot, onOpenSession, onMessage
     <label htmlFor={`${id}-task`}>What should they do?</label>
     <Textarea ref={composer} id={`${id}-task`} value={detail} onChange={event => setDetail(event.target.value)} disabled={locked || terminal}
       placeholder="Review the current changes and report actionable findings." rows={3} maxLength={8000} />
-    <details><summary>Files they may edit</summary>
+    <details className="av-coord-ask-paths"><summary>Files they may edit</summary>
       <label htmlFor={`${id}-paths`}>Write paths, one per line</label>
       <Textarea id={`${id}-paths`} value={paths} onChange={event => setPaths(event.target.value)} disabled={locked || terminal} rows={2} />
     </details>
-    <div className="flex flex-wrap gap-2">
+    <div className="av-coord-ask-actions">
       <Button onClick={() => void submit()} disabled={busy || terminal || !detail.trim()}>{busy ? 'Assigning…' : error ? 'Retry same request' : 'Ask agent'}</Button>
       {error ? <Button variant="outline" onClick={() => { request.current = null; setError(null) }}>Edit request after checking the board</Button> : null}
     </div>
-    {error ? <p role="alert">{error} Check the task board before submitting different work.</p> : null}
+    {error ? <p role="alert" className="av-coord-ask-error">{error} Check the task board before submitting different work.</p> : null}
     {task ? <DelegatedTaskResult task={task} agent={agent} name={result?.delegation?.name} terminal={terminal} locked={locked}
       onOpenSession={onOpenSession} onMessage={onMessage} onFollowup={agent => {
         setTarget(agent.id)
@@ -89,11 +89,11 @@ function DelegatedTaskResult({ task, agent, name, terminal, locked, onOpenSessio
   onFollowup: (agent: ProtocolAgent) => void
 }) {
   const taskTerminal = ['completed', 'failed', 'cancelled'].includes(task.status)
-  return <article className="flex flex-col gap-2 border-t pt-3" aria-label="Delegated task">
+  return <article className="av-coord-ask-result" aria-label="Delegated task">
     <p role="status">{agent?.name ?? name}: {task.title} · {task.status === 'claimed' ? 'Queued' : task.status.replaceAll('_', ' ')}</p>
-    {task.resultSummary ? <p className="whitespace-pre-wrap">{task.resultSummary}</p> : null}
-    {task.resultDetail ? <details><summary>Full result</summary><p className="whitespace-pre-wrap">{task.resultDetail}</p></details> : null}
-    <div className="flex flex-wrap gap-2">
+    {task.resultSummary ? <p className="av-coord-ask-text">{task.resultSummary}</p> : null}
+    {task.resultDetail ? <details><summary>Full result</summary><p className="av-coord-ask-text">{task.resultDetail}</p></details> : null}
+    <div className="av-coord-ask-actions">
       {agent?.sessionId ? <Button variant="outline" onClick={() => onOpenSession(agent)}>Open transcript</Button> : null}
       {agent && !terminal ? <Button variant="outline" onClick={() => onMessage(agent.name)}>Message {agent.name}</Button> : null}
       {agent && taskTerminal && !terminal ? <Button variant="outline" disabled={locked} onClick={() => onFollowup(agent)}>Follow up with {agent.name}</Button> : null}

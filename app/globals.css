@@ -7834,3 +7834,75 @@ button.av-session-viz-graph-node:disabled {
 .av-context-source { padding: 6px 10px; font-size: 12px; color: var(--cyan); border-bottom: 1px solid var(--border); }
 .av-context-source input { padding: 6px; margin: 4px; color: var(--text); background: var(--surface-2); }
 .av-context-copy { color: var(--text-3); font-size: 11px; margin-top: 6px; }
+
+/* Ask another agent: delegation form in the Control Center main column */
+.av-coord-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--av-coord-line);
+  border-radius: 8px;
+  background: var(--av-coord-soft);
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.av-coord-ask header strong {
+  color: var(--text);
+  font-family: var(--font-display, inherit);
+  font-size: 13px;
+  letter-spacing: 0.02em;
+}
+
+.av-coord-ask header p {
+  margin-top: 2px;
+  color: var(--text-3);
+}
+
+.av-coord-ask label {
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.av-coord-ask textarea,
+.av-coord-ask select {
+  width: 100%;
+  font-size: 12px;
+}
+
+.av-coord-ask-paths summary {
+  cursor: pointer;
+  color: var(--text-2);
+}
+
+.av-coord-ask-paths[open] summary {
+  margin-bottom: 8px;
+}
+
+.av-coord-ask-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.av-coord-ask-error {
+  color: var(--red);
+}
+
+.av-coord-ask-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--av-coord-line);
+}
+
+.av-coord-ask-text {
+  white-space: pre-wrap;
+}
