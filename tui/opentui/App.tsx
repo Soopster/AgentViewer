@@ -4847,18 +4847,20 @@ function effortPickerOptions(
   ]
 }
 
-const CLAUDE_PERMISSION_MODE_ORDER = ['default', 'acceptEdits', 'plan', 'bypassPermissions'] as const
+const CLAUDE_PERMISSION_MODE_ORDER = ['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'] as const
 type TuiPermissionMode = typeof CLAUDE_PERMISSION_MODE_ORDER[number]
 
 // Permission mode status row — matches Claude Code's shift+tab indicator style.
 const PERMISSION_MODE_GLYPH: Partial<Record<string, string>> = {
   plan: '“',           // " left double quotation mark (read-only/pause)
   acceptEdits: '▶▶',    // ▶▶ (auto-accept edits)
+  auto: '▶▶',           // ▶▶ (classifier decides)
   bypassPermissions: '▶▶', // ▶▶ (bypass all)
 }
 const PERMISSION_MODE_LABEL: Partial<Record<string, string>> = {
   plan: 'plan mode',
   acceptEdits: 'accept edits',
+  auto: 'auto mode',
   bypassPermissions: 'bypass permissions',
 }
 

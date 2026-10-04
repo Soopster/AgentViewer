@@ -2655,7 +2655,7 @@ export async function listProjectSessionMessageBatches(params: ProjectMessageBat
   }
 }
 
-const CLAUDE_PERMISSION_MODES = ['default', 'acceptEdits', 'plan', 'bypassPermissions', 'dontAsk'] as const
+const CLAUDE_PERMISSION_MODES = ['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions', 'dontAsk'] as const
 type ClaudePermissionModeValue = typeof CLAUDE_PERMISSION_MODES[number]
 type ClaudePermissionMode = typeof CLAUDE_PERMISSION_MODES[number]
 
@@ -3157,7 +3157,8 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           ...(cwdOverride ? { cwd: cwdOverride } : {}),
           ...(model ? { model } : {}),
           ...(fallbackModel ? { fallbackModel } : {}),
-          ...(permissionMode ? { permissionMode } : {}),
+          // An omitted mode starts in 'auto' on SDK 0.3.289+; ours means 'default'.
+          permissionMode: permissionMode ?? 'default',
           // The SDK requires allowDangerouslySkipPermissions whenever
           // permissionMode is 'bypassPermissions'; without it the query rejects
           // on send and BYPASS appears broken. Mirror the CLI's

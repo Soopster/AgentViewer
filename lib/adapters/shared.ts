@@ -34,6 +34,7 @@ export function withOriginKind(messages: SessionMessage[], originKind: string): 
 export const CLAUDE_PERMISSION_MODE_OPTIONS = [
   { value: 'default', label: 'DEFAULT', description: 'Use the session permission policy.' },
   { value: 'acceptEdits', label: 'ACCEPT EDITS', description: 'Approve file edits while prompting for other tools.' },
+  { value: 'auto', label: 'AUTO', description: 'A model classifier approves or denies each call, asking you when unsure.' },
   { value: 'plan', label: 'PLAN', description: 'Plan without making changes.' },
   { value: 'bypassPermissions', label: 'BYPASS', description: 'Run tools without permission prompts.' },
 ] satisfies NonNullable<SessionComposerOptions['permissionModes']>

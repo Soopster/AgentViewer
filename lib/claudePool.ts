@@ -594,7 +594,9 @@ class ClaudePool {
         ...(opts.cwd ? { cwd: opts.cwd } : {}),
         ...(opts.model ? { model: opts.model } : {}),
         ...(opts.fallbackModel ? { fallbackModel: opts.fallbackModel } : {}),
-        ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
+        // SDK 0.3.289 starts an omitted mode in 'auto' where available; this app's
+        // contract is that omitted means 'default' (ask through canUseTool).
+        permissionMode: opts.permissionMode ?? 'default',
         // bypassPermissions is a no-op (and the SDK rejects the option) unless we
         // also opt into the dangerous skip. Mirror `claude --dangerously-skip-permissions`.
         ...(opts.permissionMode === 'bypassPermissions' ? { allowDangerouslySkipPermissions: true } : {}),
