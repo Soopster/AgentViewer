@@ -15,3 +15,4 @@ export type ToolSpec = {
 
 export const COORD_TOOL_SPECS: ToolSpec[]
 export const COORD_FINDING_DETAIL_MAX_CHARS: number
+export function validateCoordinatorDecisions(value: unknown): unknown[] | undefined

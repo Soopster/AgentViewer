@@ -29,7 +29,7 @@ export type CoordinatorInteractiveState = {
  * because this shares a roster row.
  */
 const COORDINATOR_NOTE_EVENTS = new Set([
-  'agent.start_work', 'agent.heartbeat', 'agent.blocked', 'agent.ready',
+  'agent.start_work', 'agent.heartbeat', 'agent.blocked', 'agent.unblocked', 'agent.ready',
   'task.completed', 'task.failed', 'finding.published', 'plan.completed',
 ])
 const COORDINATOR_NOTE_MAX = 72

@@ -31,6 +31,25 @@ try {
   assert.equal(first.task.id, replay.task.id)
   assert.equal((await call('coord_status', {})).snapshot.tasks.length, 1)
   await assert.rejects(() => call('coord_create_task', { title: 'Missing key', detail: 'Do not create' }), /request_id/)
+  const transportFixture = path.join(cwd, 'transport-fixture.mjs')
+  for (const [source, expected] of [
+    ["globalThis.fetch = async () => { throw new Error('private-transport-secret') }", /bridge connection failed/],
+    ["globalThis.fetch = async () => new Response('not json', { status: 502 })", /unreadable response \(HTTP 502\)/],
+  ] as const) {
+    await writeFile(transportFixture, source)
+    await assert.rejects(
+      () => exec(process.execPath, ['--import', transportFixture, client, binding, 'coord_create_task', JSON.stringify(args)]),
+      (error: unknown) => {
+        const stderr = (error as { stderr: string }).stderr
+        assert.match(stderr, expected)
+        assert.match(stderr, /may have applied/)
+        assert.match(stderr, /identical arguments and request_id/)
+        assert.ok(!stderr.includes('private-transport-secret'))
+        assert.ok(!stderr.includes(lead.token))
+        return true
+      },
+    )
+  }
   const secret = JSON.parse(await readFile(binding, 'utf8'))
   await writeFile(binding, JSON.stringify({ ...secret, token: 'invalid-participant-token' }))
   await assert.rejects(() => call('coord_status', {}))

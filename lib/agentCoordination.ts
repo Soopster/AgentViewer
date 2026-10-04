@@ -14,6 +14,7 @@ import { coordinatorCheckoutRevision } from './coordinatorResultGit'
 
 import { execFile } from 'node:child_process'
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { EventEmitter } from 'node:events'
 import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -198,7 +199,7 @@ const LOCK_LEASE_MS = 20 * 60_000
 // can cancel a teammate's in-flight turn without releasing the task), and
 // respond_to_mode/respond_to_allowlist_json (per-participant mailbox sender
 // gating, mirroring buzz-acp's respond-to modes).
-const SCHEMA_VERSION = 23
+const SCHEMA_VERSION = 24
 const EVENT_WINDOW = 300
 const LOCK_HISTORY_WINDOW = 200
 // Non-terminal tasks (pending/claimed/blocked) are always returned in full —
@@ -542,6 +543,7 @@ function initializeSchema(db: SqliteDatabase): void {
       prompt TEXT NOT NULL,
       status TEXT NOT NULL,
       owner_agent_id TEXT,
+      claim_generation INTEGER NOT NULL DEFAULT 0,
       target_role TEXT NOT NULL DEFAULT 'teammate',
       role_name TEXT,
       role_description TEXT,
@@ -864,6 +866,7 @@ function migrateSchema(db: SqliteDatabase): void {
     'ALTER TABLE protocol_tasks ADD COLUMN claude_agent_policy_json TEXT',
     "ALTER TABLE protocol_tasks ADD COLUMN verify_commands_json TEXT NOT NULL DEFAULT '[]'",
     'ALTER TABLE protocol_tasks ADD COLUMN receipt_json TEXT',
+    'ALTER TABLE protocol_tasks ADD COLUMN claim_generation INTEGER NOT NULL DEFAULT 0',
     // v23: a chat's team may staff teammates from more than one provider.
     'ALTER TABLE protocol_interactive_sessions ADD COLUMN teammate_providers TEXT',
   ]) {
@@ -1011,7 +1014,21 @@ async function getDatabase(): Promise<SqliteDatabase> {
   return databaseOpenPromise
 }
 
+/**
+ * Whether the keyed operation now running has written anything it cannot take
+ * back. Set at every side-effect site; a keyed attempt that throws with this
+ * unset wrote nothing, so its reservation is released and the same request_id
+ * may be retried after the caller corrects its input.
+ */
+const keyedAttemptScope = new AsyncLocalStorage<{ written: boolean }>()
+export function noteKeyedSideEffect(): void {
+  const attempt = keyedAttemptScope.getStore()
+  if (attempt) attempt.written = true
+}
+
 async function enqueueWrite<T>(fn: (db: SqliteDatabase) => T | Promise<T>): Promise<T> {
+  // Marked at call time: a queued write runs later, outside the operation's context.
+  noteKeyedSideEffect()
   const run = async () => {
     const db = await getDatabase()
     maybePruneExpiredRunsSync(db)
@@ -2144,6 +2161,7 @@ export async function leaveExternalProtocolRun(
   const result = await enqueueWrite((db) => {
     const agent = requireExternalParticipantSync(db, identity)
     if (agent.taskId) throw new Error(`Cannot leave while owning ${agent.taskId}; hand off or release it first`)
+    assertNoReplyObligationsSync(db, identity.runId, identity.agentId)
     const ts = nowIso()
     const summary = reason?.trim() || `${agent.name} left the Coordinator run`
     db.exec('BEGIN IMMEDIATE')
@@ -2285,7 +2303,7 @@ function hasEventAfterCursorSync(db: SqliteDatabase, runId: string, cursor: stri
   if (!/^\d+$/.test(cursor)) return true
   return Boolean(db.prepare(`
     SELECT 1 FROM protocol_events
-    WHERE run_id = ? AND rowid > ? AND type != 'agent.heartbeat' AND agent_id != ?
+    WHERE run_id = ? AND rowid > ? AND type NOT IN ('agent.heartbeat', 'usage.observed') AND agent_id != ?
     LIMIT 1
   `).get(runId, Number(cursor), excludeAgentId ?? ''))
 }
@@ -2598,8 +2616,9 @@ export async function runExternalProtocolIdempotent<T>(
       }
     })
     if (reservation.cached) return reservation.result
+    const attempt = { written: false }
     try {
-      const result = await operation()
+      const result = await keyedAttemptScope.run(attempt, operation)
       // A rejected completion explicitly certifies that the gate did not
       // accept the work. Preserve same-key retries after correcting the gate.
       if (result && typeof result === 'object' && (result as { accepted?: unknown }).accepted === false) {
@@ -2636,6 +2655,16 @@ export async function runExternalProtocolIdempotent<T>(
       })
       return result
     } catch (error) {
+      if (!attempt.written) {
+        // Nothing irreversible happened, so the key stays executable: a
+        // validation failure can be corrected and retried under the same id.
+        await enqueueWrite((db) => {
+          db.prepare(`DELETE FROM protocol_operation_attempts
+            WHERE run_id = ? AND agent_id = ? AND action = ? AND request_id = ?`)
+            .run(identity.runId, identity.agentId, action, key)
+        })
+        throw error
+      }
       // A thrown exception may follow an irreversible side effect. Retain the
       // reservation instead of making the key executable again. If recording
       // failure itself fails, the durable 'running' reservation still fences it.
@@ -3283,7 +3312,8 @@ export async function readExternalProtocolInbox(
       (row.priority !== 'status' && row.kind !== 'status') || readyStatusGroups.has(statusMessageGroupKey(row))
     ))
     const rawMessages = rows.map(rowToMessage)
-    if (params.acknowledge !== false && rawMessages.length > 0) {
+    const acknowledged = params.acknowledge !== false ? rawMessages.map(message => message.id) : []
+    if (acknowledged.length > 0) {
       const acknowledgedAt = nowIso()
       const acknowledge = db.prepare(
         'UPDATE protocol_messages SET delivered_at = COALESCE(delivered_at, ?) WHERE run_id = ? AND id = ? AND to_agent_id = ?',
@@ -3294,6 +3324,7 @@ export async function readExternalProtocolInbox(
     }
     return {
       messages: batchStatusMessages(rawMessages),
+      acknowledged,
       nextCursor: rawMessages.at(-1)?.id ?? params.after ?? null,
     }
   })
@@ -3683,6 +3714,20 @@ export async function reviewExternalProtocolPlan(
   return externalMutationResult(identity)
 }
 
+function assertTaskCompletionCurrentSync(db: SqliteDatabase, runId: string, agentId: string, taskId: string, generation?: number): void {
+  const row = db.prepare('SELECT status, owner_agent_id, claim_generation FROM protocol_tasks WHERE run_id = ? AND id = ?').get(runId, taskId) as Row | undefined
+  if (!row || row.owner_agent_id !== agentId || !['claimed', 'planning', 'planned', 'in_progress', 'blocked'].includes(String(row.status))
+    || (generation !== undefined && Number(row.claim_generation) !== generation)) {
+    throw new Error(`Stale completion rejected for ${taskId}: ownership, active state, or claim generation changed`)
+  }
+}
+
+function assertNoReplyObligationsSync(db: SqliteDatabase, runId: string, agentId: string): void {
+  const rows = db.prepare('SELECT id FROM protocol_messages WHERE run_id = ? AND to_agent_id = ? AND reply_required = 1 AND resolved_at IS NULL ORDER BY created_at, id')
+    .all(runId, agentId) as Row[]
+  if (rows.length) throw new Error(`Unanswered reply-required messages: ${rows.map(row => row.id).join(', ')}. Read coord_read_inbox with unresolved=true and answer using in_reply_to before completing or leaving.`)
+}
+
 async function rejectExternalCompletion(
   identity: ExternalProtocolIdentity,
   taskId: string,
@@ -3826,6 +3871,9 @@ export async function completeExternalProtocolTask(
   if (!taskRow) throw new Error('Coordinator task not found')
   const task = rowToTask(taskRow)
   if (task.ownerAgentId !== agent.id) throw new Error('You do not own that task')
+  const claimGeneration = Number(taskRow.claim_generation)
+  assertTaskCompletionCurrentSync(db, identity.runId, agent.id, task.id, claimGeneration)
+  assertNoReplyObligationsSync(db, identity.runId, agent.id)
   const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(identity.runId) as Row | undefined
   if (!runRow) throw new Error('Coordinator run not found')
   const run = rowToRun(runRow)
@@ -3861,12 +3909,19 @@ export async function completeExternalProtocolTask(
     needsDecision,
     recordedAt: nowIso(),
   }
-  await enqueueWrite((tx) => {
-    tx.prepare('UPDATE protocol_tasks SET receipt_json = ?, updated_at = ? WHERE run_id = ? AND id = ?')
-      .run(JSON.stringify(receipt), nowIso(), identity.runId, task.id)
-    refreshRunArtifactsSync(tx, identity.runId)
+  // Rejected receipts remain inspectable, but only on the exact claim verified.
+  const persistRejectedReceipt = () => enqueueWrite((tx) => {
+    tx.exec('BEGIN IMMEDIATE')
+    try {
+      assertTaskCompletionCurrentSync(tx, identity.runId, agent.id, task.id, claimGeneration)
+      tx.prepare('UPDATE protocol_tasks SET receipt_json = ?, updated_at = ? WHERE run_id = ? AND id = ?')
+        .run(JSON.stringify(receipt), nowIso(), identity.runId, task.id)
+      refreshRunArtifactsSync(tx, identity.runId)
+      tx.exec('COMMIT')
+    } catch (error) { tx.exec('ROLLBACK'); throw error }
   })
   if (receipt.provenance !== 'ok') {
+    await persistRejectedReceipt()
     await recordProtocolEvent({
       version: AGENT_PROTOCOL_VERSION,
       runId: identity.runId,
@@ -3882,6 +3937,7 @@ export async function completeExternalProtocolTask(
   }
   const openDecisions = needsDecision.filter((decision) => decision.status === 'open')
   if (openDecisions.length > 0) {
+    await persistRejectedReceipt()
     await recordProtocolEvent({
       version: AGENT_PROTOCOL_VERSION,
       runId: identity.runId,
@@ -3897,6 +3953,7 @@ export async function completeExternalProtocolTask(
   }
   const failedVerification = verification.find((entry) => !entry.passed)
   if (failedVerification) {
+    await persistRejectedReceipt()
     return rejectExternalCompletion(identity, task.id, `Quality gate failed (${failedVerification.command}):\n${failedVerification.summary ?? 'command failed'}`)
   }
   const budgetReason = budgetExceededReasonSync(db, run)
@@ -3910,7 +3967,7 @@ export async function completeExternalProtocolTask(
     summary: params.summary.trim() || `${task.id} completed`,
     detail: params.detail?.trim() || undefined,
     payload: { receipt },
-  })
+  }, claimGeneration)
   const leadSession = (db.prepare("SELECT session_id FROM protocol_agents WHERE run_id = ? AND role = 'lead' LIMIT 1").get(identity.runId) as Row | undefined)?.session_id
   if (agent.sessionId && typeof leadSession === 'string') {
     recordContextTransfer({
@@ -5524,7 +5581,7 @@ function claimTaskSync(db: SqliteDatabase, runId: string, agentId: string, taskI
     return null
   }
   const ts = nowIso()
-  db.prepare("UPDATE protocol_tasks SET status = 'claimed', owner_agent_id = ?, updated_at = ? WHERE id = ? AND run_id = ? AND status = 'pending' AND owner_agent_id IS NULL")
+  db.prepare("UPDATE protocol_tasks SET status = 'claimed', owner_agent_id = ?, claim_generation = claim_generation + 1, receipt_json = NULL, updated_at = ? WHERE id = ? AND run_id = ? AND status = 'pending' AND owner_agent_id IS NULL")
     .run(agentId, ts, claimable.id, runId)
   db.prepare('UPDATE protocol_agents SET task_id = ?, updated_at = ? WHERE id = ? AND run_id = ?')
     .run(claimable.id, ts, agentId, runId)
@@ -5843,15 +5900,19 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
 }
 
 /** Append an event without reading the snapshot back — every in-process caller that ignores the result. */
-export async function recordProtocolEvent(event: AgentProtocolEvent): Promise<void> {
-  await writeProtocolEvent(event, false)
+export async function recordProtocolEvent(event: AgentProtocolEvent, expectedClaimGeneration?: number): Promise<void> {
+  await writeProtocolEvent(event, false, expectedClaimGeneration)
 }
 
-async function writeProtocolEvent(event: AgentProtocolEvent, wantSnapshot: boolean): Promise<ProtocolRunSnapshot | null> {
+async function writeProtocolEvent(event: AgentProtocolEvent, wantSnapshot: boolean, expectedClaimGeneration?: number): Promise<ProtocolRunSnapshot | null> {
   const result = await enqueueWrite((db) => {
     const ts = event.timestamp ?? nowIso()
     db.exec('BEGIN IMMEDIATE')
     try {
+      if (event.type === 'task.completed' && event.taskId) {
+        assertTaskCompletionCurrentSync(db, event.runId, event.agentId, event.taskId, expectedClaimGeneration)
+        assertNoReplyObligationsSync(db, event.runId, event.agentId)
+      }
       // Progress is descriptive, never an alternate claim primitive. Enforce
       // ownership inside the same transaction that applies the event so a
       // stale or racing participant cannot steal/reopen another agent's task.
@@ -6465,7 +6526,13 @@ async function sweepIdleTeammates(runId: string): Promise<void> {
   for (const agent of agents) {
     if (agent.role !== 'teammate' || agent.taskId || controller.turnInFlight.has(agent.id)) continue
     if (agent.status !== 'done' && agent.status !== 'idle' && agent.status !== 'ready') continue
-    const claimed = await enqueueWrite((tx) => claimTaskSync(tx, runId, agent.id))
+    const claimed = await enqueueWrite((tx) => {
+      if (agent.status === 'done' && controller.sessionIds.has(agent.id)) {
+        tx.prepare("UPDATE protocol_agents SET status = 'idle' WHERE run_id = ? AND id = ? AND status = 'done' AND task_id IS NULL")
+          .run(runId, agent.id)
+      }
+      return claimTaskSync(tx, runId, agent.id)
+    })
     if (claimed) {
       claimedAny = true
       void dispatchTeammateWork(controller, agent.id)
@@ -7912,7 +7979,13 @@ async function drainAgentStream(controller: RunController, agent: ProtocolAgent,
 /** Event application with coordinator-side gating (doc: TaskCompleted hook semantics). */
 async function applyAgentEvent(controller: RunController, agent: ProtocolAgent, event: AgentProtocolEvent): Promise<void> {
   let appliedEvent = event
+  let expectedClaimGeneration: number | undefined
   if (event.type === 'task.completed' && event.taskId) {
+    const completionDb = await getDatabase()
+    const initial = completionDb.prepare('SELECT claim_generation FROM protocol_tasks WHERE run_id = ? AND id = ?').get(controller.runId, event.taskId) as Row | undefined
+    expectedClaimGeneration = Number(initial?.claim_generation)
+    assertTaskCompletionCurrentSync(completionDb, controller.runId, agent.id, event.taskId, expectedClaimGeneration)
+    assertNoReplyObligationsSync(completionDb, controller.runId, agent.id)
     if (agent.role === 'teammate' && controller.requirePlanApproval) {
       const db = await getDatabase()
       if (!taskPlanApprovedSync(db, controller.runId, event.taskId)) {
@@ -8023,7 +8096,7 @@ async function applyAgentEvent(controller: RunController, agent: ProtocolAgent, 
       appliedEvent = { ...event, payload: { ...event.payload, receipt } }
     }
   }
-  await recordProtocolEvent(appliedEvent)
+  await recordProtocolEvent(appliedEvent, expectedClaimGeneration)
 }
 
 /** Run the gate in a worktree; null = pass, otherwise the failure output tail. */
@@ -8144,6 +8217,7 @@ async function handleProviderTurnFailure(
 
   for (const provider of candidates) {
     try {
+      noteKeyedSideEffect()
       const session = await createNewViewSession({
         provider,
         cwd: agent.worktreePath,
@@ -8317,6 +8391,7 @@ async function dispatchAgentTurn(
     }
     const isPending = controller.pendingSessions.has(agent.id)
     controller.pendingSessions.delete(agent.id)
+    noteKeyedSideEffect()
     const response = await streamViewSessionTurn({
       sessionId,
       signal: new AbortController().signal,
@@ -8347,10 +8422,11 @@ async function dispatchAgentTurn(
       ) === 'retry'
       return
     }
-    // The provider accepted the turn containing this exact inbox batch. Only
-    // now is it safe to acknowledge those messages; a failed startup leaves
-    // them durable for the next dispatch instead of silently losing them.
-    if (opts.inboxMessageIds?.length) {
+    // Legacy preambles contain this exact inbox batch, so acceptance delivers
+    // it. SDK tick prompts only instruct the agent to call coord_read_inbox:
+    // leave those messages unread until that tool (or live steering) delivers
+    // them. Keep the in-flight reservation to avoid duplicate startup steers.
+    if (opts.inboxMessageIds?.length && !controller.sdkIdentities.has(agent.id)) {
       await enqueueWrite((tx) => acknowledgeInboxSync(tx, controller.runId, agent.id, opts.inboxMessageIds!))
     }
     const failure = await drainAgentStream(controller, agent, response)
@@ -8508,6 +8584,10 @@ async function handleAgentTurnEnd(controller: RunController, agentId: string): P
     && (task.status === 'claimed' || task.status === 'planning' || task.status === 'in_progress' || task.status === 'blocked'))
 
   if (owned) {
+    // Explicitly waiting for input is not a stalled turn. Mail delivery wakes
+    // this same task when advice arrives; nudging now would spend a turn with
+    // no new information and can eventually replace the real blocker.
+    if (owned.status === 'blocked') return
     const nudgeKey = `${agentId}:${owned.id}`
     const used = controller.nudges.get(nudgeKey) ?? 0
     if (used < MAX_TURN_NUDGES) {
@@ -8799,6 +8879,7 @@ async function spawnTeammateSession(
   let workspace: WorktreeTask | { path: string; branch: string } | null = null
   let session: Awaited<ReturnType<typeof createNewViewSession>>
   try {
+    noteKeyedSideEffect()
     workspace = controller.useWorktrees
       ? await createWorktreeTask(controller.baseCwd, `${controller.title ?? 'coord'}-${name}`)
       : { path: controller.baseCwd, branch: '' }
@@ -8975,6 +9056,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
   const requireReview = (params.requireReview ?? playbook?.requireReview) === true
   const budget = params.budget ?? playbook?.budget
 
+  noteKeyedSideEffect()
   const leadSession = await createNewViewSession({
     provider: params.provider,
     cwd: params.baseCwd,

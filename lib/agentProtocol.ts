@@ -805,6 +805,8 @@ export type ExternalProtocolParticipantResult = {
 
 export type ExternalProtocolInboxResult = {
   messages: ProtocolMessage[]
+  /** Ids this read acknowledged, so a response lost in transit can be reconciled. */
+  acknowledged: string[]
   nextCursor: string | null
 }
 
@@ -1718,6 +1720,19 @@ export const MAX_INBOX_MESSAGE_CHARS = 6_000
 export const MAX_INBOX_TOTAL_CHARS = 30_000
 const INBOX_DIGEST_CHARS = 200
 
+/** Keep reply routing and obligations visible in both live steering and inbox prompts. */
+export function formatProtocolMailboxMessage(message: ProtocolMessage, fromName: string, body = message.body): string {
+  const metadata = [
+    `kind=${message.kind}`,
+    `priority=${message.priority}`,
+    message.priority === 'urgent' ? 'URGENT' : null,
+    message.replyRequired ? 'reply-required' : null,
+    message.correlationId ? `correlation_id=${message.correlationId}` : null,
+    message.inReplyTo ? `in_reply_to=${message.inReplyTo}` : null,
+  ].filter(Boolean).join(' ')
+  return `[team message ${message.id} from ${fromName} ${metadata}] ${body}`
+}
+
 /**
  * The mail a recipient reads before its next turn.
  *
@@ -1748,17 +1763,8 @@ export function formatInbox(messages: ProtocolMessage[], agentsById: Map<string,
   const digested = messages.length - full.size
   const lines = messages.map((message) => {
     const from = agentsById.get(message.fromAgentId)?.name ?? message.fromAgentId
-    // Tag urgency/reply-obligation inline — dropping these left every inbox
-    // line looking identical, so an urgent reply-required request read the
-    // same as an FYI status ping and got the same (non-)priority.
-    const tags = [
-      message.priority === 'urgent' ? 'URGENT' : null,
-      message.replyRequired ? 'reply-required' : null,
-      message.kind !== 'request' && message.kind !== 'response' ? message.kind : null,
-    ].filter(Boolean)
-    const tag = tags.length > 0 ? ` [${tags.join(', ')}]` : ''
     const body = full.has(message.id) ? cut(message, MAX_INBOX_MESSAGE_CHARS) : cut({ ...message, body: message.body.replace(/\s+/g, ' ') }, INBOX_DIGEST_CHARS)
-    return `- from ${from}${tag}: ${body}`
+    return `- ${formatProtocolMailboxMessage(message, from, body)}`
   })
   if (digested > 0) lines.unshift(`(${digested} further message${digested === 1 ? '' : 's'} shortened to one line each to fit; the full text of each is in the run history)`)
   return lines.join('\n')
@@ -2098,6 +2104,7 @@ export function buildSdkToolsTickPrompt(params: {
   return [
     `Continue Coordinator run ${params.runId} as ${params.agent.name} (${params.agent.role}). You are ALREADY bound to this run — start with coord_status and act on the board and your inbox.`,
     skillGroundingLine(params.cwd),
+    'If native coord_* tools are unavailable or report that they are unbound, use the exact session-bound client command supplied by the host for this session, including coord_status and coord_read_inbox with a stable request_id. Tool visibility alone does not establish your run identity. Do not create or join a replacement run, invent a client command, or inspect credential files. If no host-supplied client is available, report the binding obstacle without changing the room.',
     roleGuidance,
     'Drain the inbox with coord_read_inbox, then perform every immediately actionable step, including implementation and verification.',
     'When completing a task, submit an honest structured receipt with the actual model, token usage when available, changed files, commands run, and any unresolved decision. Never claim a requested model was used unless the provider confirms it.',

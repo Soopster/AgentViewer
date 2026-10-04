@@ -116,6 +116,10 @@ const long = coordinatorAgentNote(teammateAgent, noteSnapshot)
 assert.ok(long.length <= 72 && long.endsWith('…'), `a roster row caps the quote: ${long.length}`)
 noteSnapshot.events.push({ version: '1.0', runId: 'run', agentId: 'w1', type: 'agent.heartbeat', summary: '' } as never)
 assert.equal(coordinatorAgentNote(teammateAgent, noteSnapshot), long, 'a heartbeat with nothing to say does not erase the last word')
+noteSnapshot.events.push({ version: '1.0', runId: 'run', agentId: 'w1', type: 'agent.blocked', summary: 'Waiting for the parser contract' } as never)
+assert.equal(coordinatorAgentNote(teammateAgent, noteSnapshot), 'Waiting for the parser contract')
+noteSnapshot.events.push({ version: '1.0', runId: 'run', agentId: 'w1', type: 'agent.unblocked', summary: 'Parser contract received; verifying recovery' } as never)
+assert.equal(coordinatorAgentNote(teammateAgent, noteSnapshot), 'Parser contract received; verifying recovery', 'an explicit unblock replaces the obsolete blocker note')
 
 // ── Each teammate's own checkout (herdr's agent cwd/branch) ─────────────────
 const worktreeSnapshot = fixture().snapshot!

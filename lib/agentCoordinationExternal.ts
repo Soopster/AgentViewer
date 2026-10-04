@@ -56,6 +56,7 @@ import {
 } from './agentProtocol'
 import { isAgentProvider } from './provider'
 import type { AgentProvider } from './types'
+import { validateCoordinatorDecisions } from './coordinatorToolContract.mjs'
 
 function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
@@ -255,6 +256,7 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
       after: optionalText(body.after),
       limit: Number(body.limit) || undefined,
       acknowledge: body.acknowledge !== false,
+      unresolved: body.unresolved === true,
     }))
   }
   if (action === 'send_message') {
@@ -381,7 +383,7 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
   }
   if (action === 'complete_task') {
     const usage = record(body.usage)
-    const decisions = Array.isArray(body.needsDecision) ? body.needsDecision.filter((entry): entry is ProtocolNeedsDecision => Boolean(record(entry))) : undefined
+    const decisions = validateCoordinatorDecisions(body.needsDecision) as ProtocolNeedsDecision[] | undefined
     return mutate(() => completeExternalProtocolTask(participantIdentity!, {
       taskId: text(body.taskId),
       summary: text(body.summary),

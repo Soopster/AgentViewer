@@ -109,6 +109,7 @@ assert.deepEqual(await coordination.runExternalProtocolIdempotent(identity, 'com
 let partialEffects = 0
 await assert.rejects(coordination.runExternalProtocolIdempotent(identity, 'smoke-effect', 'partial-error', async () => {
   partialEffects += 1
+  coordination.noteKeyedSideEffect()
   throw new Error('failure after effect')
 }), /failure after effect/)
 await assert.rejects(coordination.runExternalProtocolIdempotent(identity, 'smoke-effect', 'partial-error', async () => {

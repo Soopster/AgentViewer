@@ -14,11 +14,17 @@ try {
   if (!['coord_status', 'coord_query_context', 'coord_wait', 'coord_list_roles'].includes(tool) && !args.request_id) {
     throw new Error('Supply request_id on the first mutation and reuse it with identical arguments on retry');
   }
-  const response = await fetch(binding.url + '/participant', {
+  let response;
+  try { response = await fetch(binding.url + '/participant', {
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + binding.token },
     body: JSON.stringify({ runId: binding.runId, agentId: binding.agentId, tool, args }),
-  });
-  const result = await response.json();
+  }); } catch {
+    throw new Error('Coordinator bridge connection failed. Check that the existing app/host is running and this shell can access its local network. A submitted mutation may have applied: inspect coord_status and coord_read_inbox before retrying with the identical arguments and request_id. Do not create or join a replacement run.');
+  }
+  let result;
+  try { result = await response.json(); } catch {
+    throw new Error('Coordinator bridge returned an unreadable response (HTTP ' + response.status + '). A submitted mutation may have applied: reconcile coord_status and coord_read_inbox, then retry only with the identical arguments and request_id.');
+  }
   if (!response.ok) throw new Error(result.text || result.error || 'Coordinator request failed');
   process.stdout.write(result.text + '\\n');
 } catch (error) { process.stderr.write(String(error.message) + '\\n'); process.exitCode = 1; }
