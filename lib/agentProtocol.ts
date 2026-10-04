@@ -819,6 +819,8 @@ export type ProtocolTaskPlanState = 'none' | 'awaiting' | 'approved' | 'rejected
  */
 export type ExternalProtocolActionable = {
   runStatus: ProtocolRunStatus
+  /** Host wake mode and the current reason automatic continuation is paused. */
+  continuation?: import('./coordinatorContinuation').CoordinatorContinuationState
   /** Pending, unowned tasks whose dependencies are all completed. */
   claimableTasks: Array<{ id: string; title: string; targetRole: ProtocolTaskTargetRole }>
   /** Undelivered mailbox messages addressed to this participant. */
