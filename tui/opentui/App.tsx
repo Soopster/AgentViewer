@@ -4137,6 +4137,63 @@ function agentToolCardIsExpanded(
   return card.autoFold ? expandedKeys.has(card.key) : !collapsedKeys.has(card.key)
 }
 
+// A Coordinator call's header is `coordinator verb[ → who][ · qualifier…]  said`
+// (`coordinatorHeader` in tui/format.ts). Colour follows what the reader scans
+// for: who it went to, which task, whether it obliges a reply — and the quoted
+// words last and quietest, since the transcript around it already has them.
+const COORDINATOR_BAD = /\b(fail(?:ed)?|reject(?:ed)?|denied|not accepted|interrupt|leave|cut short|stale|dead|stalled|timeout)\b/i
+const COORDINATOR_OWED = /\b(owed|reply required|urgent|unread|to review|blocked|overlaps?|unresolved|needs reply|claimable)\b/i
+const COORDINATOR_GOOD = /\b(accepted|sent|done|granted|claimed|created|completed|approve|complete|finalize|all tasks finished|queued)\b/i
+
+function coordinatorPartColor(part: string, theme: TuiThemePalette, fallback: string): string {
+  return COORDINATOR_BAD.test(part) ? theme.red
+    : COORDINATOR_OWED.test(part) ? theme.amber
+    : COORDINATOR_GOOD.test(part) ? theme.green
+    : fallback
+}
+
+function coordinatorWordSegments(text: string, theme: TuiThemePalette, fg: string, bold = false): InlineTextSegment[] {
+  // Names after an arrow and task ids are what a row is about.
+  return text.split(/(→ \S+|\btask-[\w-]+)/).filter(Boolean).map((piece) => (
+    /^→ |^task-/.test(piece)
+      ? { text: piece, fg: theme.cyan, attributes: TextAttributes.BOLD }
+      : { text: piece, fg, attributes: bold ? TextAttributes.BOLD : undefined }
+  ))
+}
+
+function coordinatorHeaderSegments(cleaned: string, theme: TuiThemePalette, emphasizeName: boolean): InlineTextSegment[] {
+  const rest = cleaned.slice('coordinator '.length)
+  const cut = rest.indexOf('  ')
+  const [verb = '', ...qualifiers] = (cut >= 0 ? rest.slice(0, cut) : rest).split(' · ')
+  const said = cut >= 0 ? rest.slice(cut).trim() : ''
+  return [
+    { text: '⇄ ', fg: theme.violet },
+    ...coordinatorWordSegments(verb, theme, coordinatorPartColor(verb, theme, theme.text), emphasizeName),
+    ...qualifiers.flatMap((part) => [
+      { text: ' · ', fg: theme.dim },
+      ...coordinatorWordSegments(part, theme, coordinatorPartColor(part, theme, theme.muted)),
+    ]),
+    ...(said ? [{ text: `  ${said}`, fg: theme.muted }] : []),
+  ]
+}
+
+/** The result row under a Coordinator call: `✓ part · part  said`, each part in the colour of what it means. */
+function coordinatorResultSegments(text: string, theme: TuiThemePalette): InlineTextSegment[] {
+  const failed = text.startsWith('✗')
+  const body = text.replace(/^[✓✗]\s*/, '')
+  const cut = body.indexOf('  ')
+  const parts = (cut >= 0 ? body.slice(0, cut) : body).split(' · ')
+  const said = cut >= 0 ? body.slice(cut).trim() : ''
+  return [
+    { text: failed ? '✗ ' : '✓ ', fg: failed ? theme.red : theme.green },
+    ...parts.flatMap((part, index) => [
+      ...(index > 0 ? [{ text: ' · ', fg: theme.dim }] : []),
+      ...coordinatorWordSegments(part, theme, failed && index === 0 ? theme.red : coordinatorPartColor(part, theme, theme.muted)),
+    ]),
+    ...(said ? [{ text: `  ${said}`, fg: failed ? theme.text : theme.muted }] : []),
+  ]
+}
+
 function transcriptToolLineSegments(
   text: string,
   theme: TuiThemePalette,
@@ -4145,6 +4202,7 @@ function transcriptToolLineSegments(
   emphasizeName = false,
 ): InlineTextSegment[] {
   const cleaned = text.replace(/^tool\s+/i, '').trim()
+  if (cleaned.startsWith('coordinator ')) return [{ text: marker, fg: markerColor }, ...coordinatorHeaderSegments(cleaned, theme, emphasizeName)]
   const colon = cleaned.indexOf(':')
   const name = colon >= 0
     ? cleaned.slice(0, colon).trim()
@@ -4267,7 +4325,7 @@ function streamToolDetailLine(card: TuiTranscriptCard): TuiTranscriptCardLine | 
     if (!text || text === summaryText || text === 'No visible content' || seen.has(text)) continue
     seen.add(text)
     if (line.tone === 'tool' || line.tone === 'diff_add' || line.tone === 'diff_remove') continue
-    if (/^[└├│─\s]+$/.test(text) || /^[✓✔]️?\s*(?:OK|done)?$/i.test(text)) continue
+    if (/^[└├│─\s]+$/.test(text) || /^[✓✔]️?\s*(?:OK|done|sent)?$/i.test(text)) continue
     return line
   }
   return null
@@ -6158,7 +6216,9 @@ function TranscriptCardInner({
                                 : '  └ ',
                               fg: theme.dim,
                             },
-                            { text: detailLine.text.trim(), fg: transcriptColor(detailLine, theme) },
+                            ...(/^tool\s+coordinator |^coordinator /i.test(agentsToolSummaryLine(toolCard).text.trim()) && /^[✓✗]/.test(detailLine.text.trim())
+                              ? coordinatorResultSegments(detailLine.text.trim(), theme)
+                              : [{ text: detailLine.text.trim(), fg: transcriptColor(detailLine, theme) }]),
                           ], agentBodyWidth, theme.dim)}
                         </text>
                       ) : null}

@@ -341,6 +341,68 @@ function coordinatorActionLabel(toolName: string): string {
   return labels[toolName] ?? toolName.slice('coord_'.length).replace(/_/g, ' ')
 }
 
+// One header per call, shaped as `verb[ → who][ · qualifier…][  what was said]`.
+// Both TUIs print it as text; the OpenTUI renderer also reads that shape back
+// to colour it (`coordinatorHeaderSegments`), so the two spaces before the
+// free text and the ` · ` between qualifiers are part of the format.
+function coordinatorHeader(toolName: string, input: Record<string, unknown>): string | null {
+  const str = (key: string) => typeof input[key] === 'string' && (input[key] as string).trim() ? (input[key] as string).trim() : ''
+  const list = (key: string) => Array.isArray(input[key]) ? (input[key] as unknown[]).filter((entry): entry is string => typeof entry === 'string') : []
+  const said = (keys: string[], max = 110) => {
+    const value = toolStringParam(input, keys)
+    return value ? `  ${compactOneLine(value, max)}` : ''
+  }
+  const meta = (...parts: string[]) => parts.filter(Boolean).map((part) => ` · ${part}`).join('')
+  const task = str('task_id')
+  const verdict = input.approved === false ? 'reject' : 'approve'
+  const model = [str('requested_provider'), str('requested_model'), str('requested_effort')].filter(Boolean).join(' ')
+  switch (toolName) {
+    case 'coord_status': return 'status'
+    case 'coord_read_inbox': return `inbox${meta(input.unresolved === true ? 'unresolved' : '', input.acknowledge === false ? 'peek' : '')}`
+    case 'coord_wait': {
+      const until = list('until')
+      const timeout = typeof input.timeout_ms === 'number' ? `${Math.round(input.timeout_ms / 1000)}s` : ''
+      return `wait${str('agent') ? ` → ${str('agent')}` : ''}${meta(until.length ? `until ${until.join('/')}` : '', timeout)}`
+    }
+    case 'coord_send_message':
+      return `message → ${str('to') || '?'}${meta(str('kind'), input.reply_required === true ? 'reply required' : '', str('priority') === 'urgent' ? 'urgent' : '', str('in_reply_to') ? 'reply' : '')}${said(['message', 'body'])}`
+    case 'coord_delegate':
+      return `delegate → ${str('to') || str('name') || 'a teammate'}${meta(model)}${said(['title', 'detail'])}`
+    case 'coord_create_task':
+      return `create task${str('assign_to') ? ` → ${str('assign_to')}` : ''}${meta(str('phase'), model)}${said(['title', 'detail'])}`
+    case 'coord_claim_task': return `claim ${task || 'next task'}`
+    case 'coord_release_task': return `release ${task}${said(['reason'])}`
+    case 'coord_handoff_task': return `handoff ${task}${meta(str('failure_class').replace(/_/g, ' '))}${said(['summary', 'detail'])}`
+    case 'coord_complete_task': {
+      const files = list('files_changed').length
+      return `complete ${task}${meta(files ? `${files} file${files === 1 ? '' : 's'}` : '')}${said(['summary', 'detail'])}`
+    }
+    case 'coord_fail_task': return `fail ${task}${said(['summary', 'detail'])}`
+    case 'coord_progress': return `progress${meta(str('status'), task)}${said(['summary', 'detail'])}`
+    case 'coord_publish_finding': return `${str('kind') === 'review.requested' ? 'review request' : str('kind') || 'finding'}${meta(task)}${said(['summary', 'detail'])}`
+    case 'coord_query_context': return `query${said(['query'])}`
+    case 'coord_remember': return `remember${said(['summary', 'detail'])}`
+    case 'coord_request_locks': {
+      const paths = list('paths')
+      return `locks${paths.length ? `  ${paths.slice(0, 2).join(', ')}${paths.length > 2 ? ` +${paths.length - 2}` : ''}` : ''}`
+    }
+    case 'coord_submit_plan': return `plan ${task}${said(['summary', 'detail'])}`
+    case 'coord_review_plan': return `${verdict} plan ${task}${said(['summary', 'detail'])}`
+    case 'coord_review_phase': return `${verdict} phase${meta(str('phase'))}${said(['summary', 'detail'])}`
+    case 'coord_review_run': return `${verdict} run${said(['summary', 'detail'])}`
+    case 'coord_resolve_decision': return `${input.deferred === true ? 'defer' : 'decide'} ${task}${said(['answer'])}`
+    case 'coord_finalize_run': return `finalize${said(['summary'])}`
+    case 'coord_spawn_teammate': return `spawn teammate${meta(str('provider'))}`
+    case 'coord_cancel_turn': return `interrupt → ${str('agent_id') || '?'}`
+    case 'coord_leave_run': return `leave${said(['reason'])}`
+    case 'coord_capabilities': return `capabilities${meta(str('provider'))}`
+    case 'coord_read_handoff': return `read handoff ${str('handoff_id')}`
+    case 'coord_save_role': return `save role${said(['name'])}`
+    case 'coord_promote_learning': return `promote learning → ${str('target').replace(/_/g, ' ') || '?'}`
+    default: return null
+  }
+}
+
 function parseJsonValue(value: string): unknown {
   try {
     return JSON.parse(value)
@@ -370,19 +432,6 @@ function coordinatorResultText(thread: ToolThread, shell = false): string {
     return typeof value === 'string' ? [value] : []
   }).join('\n').trim()
   return text || raw
-}
-
-// The two calls that are a sentence to someone read as one: who, then what.
-// "send message · to nova · message Your stanza…" spent half the row on the
-// names of its own arguments.
-function coordinatorAddressedSummary(toolName: string, input: Record<string, unknown>): string | null {
-  if (toolName !== 'coord_send_message' && toolName !== 'coord_delegate') return null
-  const to = typeof input.to === 'string' && input.to.trim()
-    ? input.to.trim()
-    : typeof input.name === 'string' && input.name.trim() ? input.name.trim() : toolName === 'coord_delegate' ? 'a teammate' : ''
-  const body = toolStringParam(input, toolName === 'coord_delegate' ? ['title', 'detail'] : ['message', 'body'])
-  const flags = [input.reply_required === true ? 'reply required' : '', input.priority === 'urgent' ? 'urgent' : ''].filter(Boolean).join(' · ')
-  return `${toolName === 'coord_delegate' ? 'delegate' : 'message'} → ${to || '?'}${flags ? ` · ${flags}` : ''}${body ? `  ${compactOneLine(body, 110)}` : ''}`
 }
 
 function coordinatorInputSummary(input: Record<string, unknown>): string {
@@ -422,10 +471,136 @@ function coordinatorRunDigest(payload: Record<string, unknown>): string {
   return parts.join(' · ')
 }
 
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+
+// What the caller is now on the hook for, from the `actionable` digest every
+// result carries. Ordered by urgency: these are the words the renderer colours.
+function coordinatorObligations(actionable: Record<string, unknown> | null): string[] {
+  if (!actionable) return []
+  const count = (key: string) => typeof actionable[key] === 'number' ? actionable[key] as number : 0
+  const plans = Array.isArray(actionable.plansAwaitingReview) ? actionable.plansAwaitingReview.length : 0
+  const claimable = Array.isArray(actionable.claimableTasks) ? actionable.claimableTasks.length : 0
+  const overlaps = Array.isArray(actionable.overlapWarnings) ? actionable.overlapWarnings.length : 0
+  const mine = record(actionable.myTask)
+  return [
+    count('replyRequiredCount') ? `${count('replyRequiredCount')} repl${count('replyRequiredCount') === 1 ? 'y' : 'ies'} owed` : '',
+    count('urgentCount') ? `${count('urgentCount')} urgent` : '',
+    count('inboxCount') ? `${count('inboxCount')} unread` : '',
+    plans ? `${plans} plan${plans === 1 ? '' : 's'} to review` : '',
+    overlaps ? `${overlaps} overlap${overlaps === 1 ? '' : 's'}` : '',
+    mine && typeof mine.id === 'string' ? `mine ${mine.id}${typeof mine.status === 'string' ? ` ${mine.status.replace(/_/g, ' ')}` : ''}` : '',
+    claimable ? `${claimable} claimable` : '',
+    actionable.allTasksTerminal === true ? 'all tasks finished' : '',
+  ].filter(Boolean)
+}
+
+function coordinatorTaskCounts(payload: Record<string, unknown>, snapshot: Record<string, unknown> | null): string[] {
+  const digest = coordinatorRunDigest(payload)
+  if (digest) return [digest]
+  const run = record(snapshot?.run)
+  const tasks = Array.isArray(snapshot?.tasks) ? snapshot.tasks.map(record).filter((task): task is Record<string, unknown> => Boolean(task)) : []
+  const parts: string[] = []
+  if (run && typeof run.status === 'string') parts.push(run.status)
+  if (tasks.length) {
+    const by = (statuses: string[]) => tasks.filter((task) => statuses.includes(String(task.status))).length
+    parts.push(`${tasks.length} task${tasks.length === 1 ? '' : 's'}`)
+    for (const [label, statuses] of [['active', ['claimed', 'in_progress', 'planned', 'working']], ['blocked', ['blocked']], ['done', ['completed']], ['failed', ['failed']]] as const) {
+      const n = by([...statuses])
+      if (n) parts.push(`${n} ${label}`)
+    }
+  }
+  return parts
+}
+
+function coordinatorMessageLine(message: Record<string, unknown>, max: number): string {
+  const from = [message.fromName, message.from, message.fromAgentId].find((value): value is string => typeof value === 'string' && value.length > 0 && value.length <= 32) ?? ''
+  const flags = [typeof message.kind === 'string' ? message.kind : '', message.priority === 'urgent' ? 'urgent' : '', message.replyRequired === true ? 'reply required' : ''].filter(Boolean)
+  const body = typeof message.body === 'string' ? message.body : typeof message.message === 'string' ? message.message : ''
+  return `${[from, ...flags].filter(Boolean).join(' · ')}${body ? `  ${truncateLine(compactOneLine(body), max)}` : ''}`
+}
+
+// A result too long for its transport arrives cut off, and cut-off JSON does
+// not parse. The run's status is near the front of every shape, so say that
+// much instead of printing the first hundred characters of the envelope.
+function coordinatorTruncatedDigest(raw: string): string | null {
+  if (!/^\s*[[{]/.test(raw)) return null
+  const status = /"runStatus"\s*:\s*"([a-z_]+)"/.exec(raw)?.[1] ?? /"run"\s*:\s*\{[\s\S]{0,4000}?"status"\s*:\s*"([a-z_]+)"/.exec(raw)?.[1]
+  return [status ?? '', 'result cut short'].filter(Boolean).join(' · ')
+}
+
+/** The one line a folded call shows under its header: what came back, and what it obliges. */
+function coordinatorResultDigest(toolName: string, raw: string): string {
+  const payload = record(parseJsonValue(raw))
+  if (!payload) return coordinatorTruncatedDigest(raw) ?? ''
+  const snapshot = record(payload.snapshot)
+  const actionable = record(payload.actionable)
+  const owed = coordinatorObligations(actionable)
+  const task = record(payload.task)
+  const taskId = task && typeof task.id === 'string' ? task.id : ''
+  const join = (parts: Array<string | false | null | undefined>, said = '') =>
+    `${parts.filter(Boolean).join(' · ')}${said ? `  ${truncateLine(compactOneLine(said), 110)}` : ''}`
+  if (payload.accepted === false) return join(['not accepted'], typeof payload.reason === 'string' ? payload.reason : '')
+  switch (toolName) {
+    case 'coord_status':
+      return join([...coordinatorTaskCounts(payload, snapshot), ...owed])
+    case 'coord_wait': {
+      const events = Array.isArray(payload.events) ? payload.events.map(record).filter(Boolean) : []
+      const last = events.at(-1)
+      const lead = payload.timedOut === true && payload.changed !== true ? 'no change' : `${events.length} event${events.length === 1 ? '' : 's'}`
+      return join([lead, ...owed], last && typeof last.summary === 'string' ? last.summary : '')
+    }
+    case 'coord_read_inbox': {
+      const messages = (Array.isArray(payload.messages) ? payload.messages : []).map(record).filter((entry): entry is Record<string, unknown> => Boolean(entry))
+      if (messages.length === 0) return 'inbox empty'
+      if (messages.length === 1) return coordinatorMessageLine(messages[0]!, 110)
+      const replies = messages.filter((message) => message.replyRequired === true).length
+      return join([`${messages.length} messages`, replies ? `${replies} reply required` : ''], coordinatorMessageLine(messages.at(-1)!, 90))
+    }
+    case 'coord_send_message': {
+      const quiet = (Array.isArray(payload.delivery) ? payload.delivery : []).map(record)
+        .filter((hint): hint is Record<string, unknown> => Boolean(hint) && hint!.status !== 'fresh')
+        .map((hint) => `${String(hint.name)} ${String(hint.status)}`)
+      return join(['sent', ...quiet, ...owed.filter((entry) => /owed|urgent/.test(entry))])
+    }
+    case 'coord_create_task':
+    case 'coord_delegate': {
+      const delegation = record(payload.delegation)
+      const settled = record(payload.settled)
+      const similar = Array.isArray(payload.similarTasks) ? payload.similarTasks.map(record).find(Boolean) : null
+      return join([
+        taskId ? `${taskId} created` : 'created',
+        delegation ? `→ ${String(delegation.name)} queued` : '',
+        settled ? String(settled.outcome).replace(/_/g, ' ') : '',
+        similar ? `similar to ${String(similar.taskId)}` : '',
+      ], settled && typeof settled.summary === 'string' ? settled.summary : '')
+    }
+    case 'coord_claim_task':
+      return join([taskId ? `claimed ${taskId}` : 'claimed'], task && typeof task.title === 'string' ? task.title : '')
+    case 'coord_request_locks': {
+      const granted = Array.isArray(payload.granted) ? payload.granted.length : 0
+      const denied = (Array.isArray(payload.denied) ? payload.denied : []).map(record).filter(Boolean)
+      const first = denied[0]
+      return join([granted ? `${granted} granted` : '', denied.length ? `${denied.length} denied` : ''], first ? `${String(first.path)} — ${String(first.reason)}` : '')
+    }
+    case 'coord_query_context': {
+      const results = (Array.isArray(payload.results) ? payload.results : []).map(record).filter(Boolean)
+      const first = results[0]
+      return join([results.length ? `${results.length} match${results.length === 1 ? '' : 'es'}` : 'no matches'], first && typeof first.summary === 'string' ? first.summary : '')
+    }
+    default: {
+      const counts = coordinatorTaskCounts(payload, snapshot)
+      const status = task && typeof task.status === 'string' ? `${taskId} ${task.status.replace(/_/g, ' ')}` : ''
+      return join([payload.accepted === true ? 'accepted' : '', status, ...counts, ...owed.filter((entry) => /owed|urgent|review|finished/.test(entry))])
+    }
+  }
+}
+
 function coordinatorPayloadLines(raw: string, expanded: boolean): TuiTranscriptCardLine[] {
   const parsed = parseJsonValue(raw)
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    const text = raw.split('\n').find((entry) => entry.trim())?.trim() ?? ''
+    const text = coordinatorTruncatedDigest(raw) ?? raw.split('\n').find((entry) => entry.trim())?.trim() ?? ''
     return text ? [line(truncateLine(text, expanded ? MAX_PREVIEW_CHARS : 120), 'muted')] : []
   }
 
@@ -471,15 +646,45 @@ function coordinatorPayloadLines(raw: string, expanded: boolean): TuiTranscriptC
     if (expanded) {
       for (const message of messages.slice(0, MAX_BLOCK_LINES)) {
         if (!message || typeof message !== 'object' || Array.isArray(message)) continue
-        const record = message as Record<string, unknown>
-        const from = typeof record.fromName === 'string' ? record.fromName : typeof record.from === 'string' ? record.from : 'agent'
-        const body = typeof record.body === 'string' ? record.body : typeof record.message === 'string' ? record.message : ''
-        const kind = typeof record.kind === 'string' ? ` · ${record.kind}` : ''
-        if (body) lines.push(line(`  ${from}${kind}: ${truncateLine(compactOneLine(body), 120)}`, 'muted'))
+        const entry = message as Record<string, unknown>
+        lines.push(line(`  ◂ ${coordinatorMessageLine(entry, 140)}`, entry.replyRequired === true || entry.priority === 'urgent' ? 'system' : 'muted'))
       }
     }
   } else if (Array.isArray(payload.messages)) {
     lines.push(line('inbox empty', 'dim'))
+  }
+  if (expanded) {
+    const actionable = record(payload.actionable)
+    const owed = coordinatorObligations(actionable)
+    // 'system' marks the whole call as needing attention, so it is kept for
+    // what does: a reply owed or urgent mail, not a task merely being held.
+    if (owed.length) lines.push(line(owed.join(' · '), owed.some((entry) => /owed|urgent/.test(entry)) ? 'system' : 'agent'))
+    for (const warning of Array.isArray(actionable?.overlapWarnings) ? actionable.overlapWarnings.slice(0, 4) : []) {
+      if (typeof warning === 'string') lines.push(line(`  ⚠ ${truncateLine(warning, 150)}`, 'muted'))
+    }
+    if (typeof actionable?.replyGuardReminder === 'string') lines.push(line(`  ${truncateLine(compactOneLine(actionable.replyGuardReminder), 150)}`, 'system'))
+    const names = new Map(agents.map(record).filter((agent): agent is Record<string, unknown> => Boolean(agent)).map((agent) => [String(agent.id), String(agent.name ?? agent.id)]))
+    const open = tasks.map(record).filter((entry): entry is Record<string, unknown> => Boolean(entry) && !['completed', 'cancelled'].includes(String(entry!.status)))
+    for (const entry of open.slice(0, 12)) {
+      const owner = typeof entry.ownerAgentId === 'string' ? names.get(entry.ownerAgentId) ?? '' : ''
+      const status = String(entry.status ?? '').replace(/_/g, ' ')
+      lines.push(line(`  ${String(entry.id)} · ${status}${owner ? ` · ${owner}` : ''}  ${truncateLine(compactOneLine(String(entry.title ?? '')), 100)}`,
+        'muted'))
+    }
+    if (open.length > 12) lines.push(line(`  … ${open.length - 12} more open tasks`, 'dim'))
+    for (const grant of (Array.isArray(payload.granted) ? payload.granted : []).map(record).slice(0, 8)) {
+      if (grant) lines.push(line(`  granted ${String(grant.path)}`, 'result_ok'))
+    }
+    for (const refusal of (Array.isArray(payload.denied) ? payload.denied : []).map(record).slice(0, 8)) {
+      if (refusal) lines.push(line(`  denied ${String(refusal.path)} — ${truncateLine(String(refusal.reason ?? ''), 110)}`, 'result_error'))
+    }
+    for (const match of (Array.isArray(payload.results) ? payload.results : []).map(record).slice(0, 8)) {
+      if (match) lines.push(line(`  ${String(match.kind ?? 'match')}${typeof match.taskId === 'string' ? ` · ${match.taskId}` : ''}  ${truncateLine(compactOneLine(String(match.summary ?? '')), 120)}`, 'muted'))
+    }
+    for (const event of (Array.isArray(payload.events) ? payload.events : []).map(record).slice(-8)) {
+      if (event) lines.push(line(`  ${String(event.type ?? 'event')}  ${truncateLine(compactOneLine(String(event.summary ?? '')), 120)}`, 'muted'))
+    }
+    if (typeof payload.reason === 'string' && payload.accepted === false) lines.push(line(`  ${truncateLine(compactOneLine(payload.reason), 200)}`, 'result_error'))
   }
   if (lines.length === 0) {
     const keys = Object.keys(payload).filter((key) => !key.startsWith('_')).slice(0, 4)
@@ -493,29 +698,32 @@ function formatCoordinatorTool(thread: ToolThread, expanded: boolean): TuiTransc
   if (!call) return null
   const { toolName, input } = call
   const inputSummary = coordinatorInputSummary(input)
-  const addressed = coordinatorAddressedSummary(toolName, input)
+  const header = coordinatorHeader(toolName, input)
   const lines: TuiTranscriptCardLine[] = [
-    line(addressed
-      ? `coordinator ${addressed}`
+    line(header
+      ? `coordinator ${header}`
       : `coordinator ${coordinatorActionLabel(toolName)}${inputSummary ? ` · ${inputSummary}` : ''}`, 'tool'),
   ]
   if (!thread.result) return [...lines, line('… pending', 'dim')]
 
   const transportFailed = input.status === 'failed'
-  const isError = thread.result.is_error === true || transportFailed
   const resultText = coordinatorResultText(thread, call.shell)
+  // A completion the gate refused is an answer, not a transport error, but it
+  // is the failure the reader is looking for.
+  const refused = /^\s*\{[\s\S]{0,200}"accepted"\s*:\s*false/.test(resultText)
+  const isError = thread.result.is_error === true || transportFailed || refused
   const payloadLines = coordinatorPayloadLines(resultText, expanded)
+  // Each call says what it returned and what that obliges. Every mutation also
+  // carries the run's digest, which after a message is not news — three sends
+  // in a row said "running · 3 tasks · 3 active" three times.
+  const digest = (isError && !refused ? '' : coordinatorResultDigest(toolName, resultText)) || payloadLines[0]?.text
   if (!expanded) {
-    // Every mutation answers with the run's digest. After a message it is not
-    // news — three sends in a row said "running · 3 tasks · 3 active" three
-    // times — so a send that worked says only that it was sent.
-    const detail = toolName === 'coord_send_message' && !isError ? 'sent' : payloadLines[0]?.text
     return [
       ...lines,
-      line(`${isError ? '✗' : '✓'} ${detail || (isError ? 'failed' : 'complete')}`, isError ? 'result_error' : 'result_ok'),
+      line(`${isError ? '✗' : '✓'} ${digest || (isError ? 'failed' : 'complete')}`, isError ? 'result_error' : 'result_ok'),
     ]
   }
-  lines.push(line(isError ? '✗ failed' : '✓ complete', isError ? 'result_error' : 'result_ok'))
+  lines.push(line(`${isError ? '✗' : '✓'} ${digest || (isError ? 'failed' : 'complete')}`, isError ? 'result_error' : 'result_ok'))
   if (isError && payloadLines.length > 0) payloadLines[0] = { ...payloadLines[0], tone: 'result_error' }
   lines.push(...payloadLines)
   return lines
@@ -586,10 +794,12 @@ function coordinatorBriefLines(block: CoordinatorBriefBlock): TuiTranscriptCardL
 function coordinatorMailLines(block: CoordinatorMailBlock, expanded: boolean): TuiTranscriptCardLine[] {
   const senders = [...new Set(block.messages.map((message) => message.from))]
   const count = block.messages.length
-  const lines: TuiTranscriptCardLine[] = [
+  // One message is its own heading: "1 team message · nova" above "◂ nova ·
+  // request" said the sender twice.
+  const lines: TuiTranscriptCardLine[] = count === 1 ? [] : [
     line(count === 0
       ? '⇄ Coordinator · no new mail'
-      : `⇄ ${count} team message${count === 1 ? '' : 's'} · ${senders.join(', ')}`, 'dim'),
+      : `⇄ ${count} team messages · ${senders.join(', ')}`, 'dim'),
   ]
   for (const note of block.notes) lines.push(line(`  ${truncateLine(note, 160)}`, 'dim'))
   // A teammate that answers and then hands its task off sends the answer
@@ -605,7 +815,9 @@ function coordinatorMailLines(block: CoordinatorMailBlock, expanded: boolean): T
     said.set(message.from, [...(said.get(message.from) ?? []), message.body.trim()])
     const bodyLines = sanitizeLine(body).split('\n').map((entry) => entry.trimEnd()).filter((entry, index, all) => entry || (index > 0 && all[index - 1]))
     // A status note is one line of news; it rides the sender's own row.
-    if (message.kind === 'status' || bodyLines.length <= 1) {
+    // Anything else keeps its words off that row: the row's colour says who
+    // and how urgently, and a paragraph in that colour says it about every word.
+    if (message.kind === 'status' || bodyLines.length === 0) {
       const oneLine = bodyLines.join(' ').trim()
       lines.push(line(oneLine ? `${head}  ${expanded ? oneLine : truncateLine(oneLine, 140)}` : head, message.kind === 'status' ? 'muted' : tone))
       continue

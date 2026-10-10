@@ -60,6 +60,15 @@ const toolCall = (uuid: string, name: string, input: unknown, result: unknown): 
 ]
 const DIGEST = { accepted: true, runStatus: 'running', cursor: '618', phases: [{ title: 'Tasks', total: 3, pending: 0, active: 2, completed: 1, failed: 0 }] }
 
+const STATUS = {
+  snapshot: { run: { id: 'chat-1', status: 'running' }, agents: [{ id: 'a-nova', name: 'nova' }], tasks: [
+    { id: 'task-1', title: 'First stanza', status: 'completed', ownerAgentId: 'a-nova' },
+    { id: 'task-2', title: 'Second stanza', status: 'blocked', ownerAgentId: 'a-nova' },
+  ] },
+  actionable: { runStatus: 'running', claimableTasks: [], inboxCount: 2, urgentCount: 0, statusCount: 0, replyRequiredCount: 1, plansAwaitingReview: ['task-2'], myTask: null, allTasksTerminal: false, replyGuardDue: false },
+  cursor: '9', phases: [],
+}
+
 const threaded = buildThreadedMessages([
   user('lead', DELIVERED),
   user('teammate', TEAMMATE_BRIEF),
@@ -74,6 +83,12 @@ const threaded = buildThreadedMessages([
   ...toolCall('shell', 'Bash', { command: `/bin/zsh -lc "'/opt/bun/bin/bun.exe' '/repo/.agent-viewer-data/agent-coordination/session-bindings/client.mjs' '/repo/.agent-viewer-data/agent-coordination/session-bindings/ca205186.json' coord_status '{}'"` },
     JSON.stringify(DIGEST)),
   ...toolCall('mcp', 'mcp__agent-viewer__coord_status', {}, [{ type: 'text', text: JSON.stringify(DIGEST) }]),
+  ...toolCall('status-full', 'mcp__agent-viewer__coord_status', {}, [{ type: 'text', text: JSON.stringify(STATUS) }]),
+  // A shell transport cuts a long result off mid-object.
+  ...toolCall('status-cut', 'mcp__agent-viewer__coord_status', {}, [{ type: 'text', text: JSON.stringify(STATUS).slice(0, 180) }]),
+  ...toolCall('inbox-one', 'mcp__agent-viewer__coord_read_inbox', {}, [{ type: 'text', text: JSON.stringify({ messages: [{ id: 'm-1', fromAgentId: 'a-nova', kind: 'request', priority: 'normal', replyRequired: true, body: 'Which stanza closes it?' }], acknowledged: ['m-1'], nextCursor: null }) }]),
+  ...toolCall('refused', 'mcp__agent-viewer__coord_complete_task', { task_id: 'task-2', summary: 'Done.' }, [{ type: 'text', text: JSON.stringify({ ...DIGEST, accepted: false, reason: 'Changes outside granted paths: lib/x.ts' }) }]),
+  ...toolCall('send', 'mcp__agent-viewer__coord_send_message', { to: 'nova', message: 'Reviewed: keep the guard.', kind: 'response', reply_required: true }, [{ type: 'text', text: JSON.stringify({ ...DIGEST, delivery: [{ name: 'nova', status: 'stale', ageSeconds: 400 }] }) }]),
   ...toolCall('other', 'Bash', { command: 'cat client.mjs binding.json' }, 'plain output'),
 ])
 const blocksOf = (uuid: string) => threaded.find((message) => message.uuid === uuid)!.blocks
@@ -128,9 +143,21 @@ for (const uuid of ['codex-call', 'shell-call', 'mcp-call']) {
   assert(rendered.join('\n').includes('running · 3 tasks · 2 active · 1 done'), `${uuid} does not digest the run:\n${rendered.join('\n')}`)
   assert(!rendered.join('\n').includes('inputText') && !rendered.join('\n').includes('"cursor"'), `${uuid} leaks its JSON envelope:\n${rendered.join('\n')}`)
 }
-assert(lines('codex-call')[0]!.includes('task id task-3'), `Codex's arguments are under \`value\`:\n${lines('codex-call').join('\n')}`)
+assert(lines('codex-call')[0] === 'coordinator complete task-3  Dawn thins the streetlamp.', `Codex's arguments are under \`value\`, and a completion reads as one:\n${lines('codex-call').join('\n')}`)
 assert(lines('shell-call')[0] === 'coordinator status', `a shell call is named for the tool it ran, not the shell:\n${lines('shell-call').join('\n')}`)
 assert(lines('inbox-call').join('\n').includes('inbox empty'), lines('inbox-call').join('\n'))
+// ── each call's result says what came back and what it obliges ──────────────
+const folded = (uuid: string) => cardOf(uuid).lines.map((entry) => entry.text)
+assert.equal(folded('status-full-call')[1], '✓ running · 2 tasks · 1 blocked · 1 done · 1 reply owed · 2 unread · 1 plan to review', folded('status-full-call').join('\n'))
+assert(lines('status-full-call').some((entry) => entry.includes('task-2 · blocked · nova') && entry.includes('Second stanza')), `an expanded status lists open work:\n${lines('status-full-call').join('\n')}`)
+assert(!lines('status-full-call').join('\n').includes('First stanza'), 'and leaves finished tasks to the count')
+assert.equal(folded('status-cut-call')[1], '✓ running · result cut short', `a result cut off mid-object is not printed as JSON:\n${folded('status-cut-call').join('\n')}`)
+assert.equal(folded('inbox-one-call')[1], '✓ a-nova · request · reply required  Which stanza closes it?', folded('inbox-one-call').join('\n'))
+assert.equal(folded('refused-call')[0], 'coordinator complete task-2  Done.')
+assert.equal(folded('refused-call')[1], '✗ not accepted  Changes outside granted paths: lib/x.ts', 'a refused completion is the failure the reader is looking for')
+assert.equal(cardOf('refused-call').lines[1]!.tone, 'result_error')
+assert.equal(folded('send-call')[0], 'coordinator message → nova · response · reply required  Reviewed: keep the guard.')
+assert.equal(folded('send-call')[1], '✓ sent · nova stale', 'a send says who was not there to read it')
 assert(lines('other-call')[0]!.startsWith('tool Bash'), 'an ordinary shell command is still a shell command')
 
-console.log('Coordinator transcript smoke passed (mail round-trip, lead delivery, teammate brief, steered message, Codex / shell / MCP calls)')
+console.log('Coordinator transcript smoke passed (mail round-trip, lead delivery, teammate brief, steered message, Codex / shell / MCP calls, per-call result digests)')

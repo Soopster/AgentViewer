@@ -1302,6 +1302,14 @@ which mirror `app/api/sessions/[sessionId]/coordination/route.ts` action for act
   conversation" marks the agent whose chat the panel was opened from, which is
   a teammate when it was opened from a teammate's transcript. Below 70 columns
   the rows stack instead — a status cut to fit says nothing.
+- **From `SPLIT_MIN_WIDTH` the panel is two panes**: roster and task board on
+  the left, the teammate under the cursor on the right (whole task title, paths,
+  last word, what to press), then the run and settings. Both panes are built as
+  pre-fitted `PaneRow`s (`wrapWords`), so the height is counted rather than
+  estimated. Below that width it is the stacked layout, which is what the
+  smokes drive (110 columns and narrower). The body reserves one column for
+  the scrollbar: laid out to the full width, an overflowing panel shrank each
+  row's first cell — `resumingCODEX`, a warning glyph with no space after it.
 - **A reused box keeps the padding of what it replaced.** The roster box sits in
   the slot the "none asked yet" row occupies until the first teammate exists;
   OpenTUI left that row's `paddingTop` on it, a stray blank row no source line
@@ -1395,6 +1403,16 @@ those regions and `lib/threading.ts` turns them into two blocks both UIs render.
   `inputText`), and a shell command running the session-bound `client.mjs` in a
   conversation that predates its binding. Its result is digested to
   `accepted · running · 3 tasks · 2 active · 1 done`.
+- **A call's header and result are a format the renderer reads back.**
+  `coordinatorHeader` writes `verb[ → who][ · qualifier…]  said` for every tool
+  in the contract and `coordinatorResultDigest` the row under it (what came
+  back, then what it obliges: replies owed, unread, plans to review). OpenTUI's
+  `coordinatorHeaderSegments` / `coordinatorResultSegments` colour those by
+  splitting on the two spaces and the ` · `, so change them together. A result
+  cut off by its transport does not parse and reads `running · result cut
+  short`, never the first hundred characters of JSON. `system` tone on any line
+  of a call marks the whole call `▲`, so it is kept for a reply owed or urgent
+  mail.
 - Not covered: the web still shows `coord_*` calls as generic tool cards, and the
   structured worker preambles (`You are teammate "…" in a coordinated run`) are
   left as prose because they carry the task itself.

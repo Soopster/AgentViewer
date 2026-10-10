@@ -36,13 +36,18 @@ const COORDINATOR_NOTE_EVENTS = new Set([
 ])
 const COORDINATOR_NOTE_MAX = 72
 
-export function coordinatorAgentNote(agent: ProtocolAgent, snapshot: ProtocolRunSnapshot | null | undefined): string {
+const COORDINATOR_NOTE_WHOLE_MAX = 1200
+
+export function coordinatorAgentNote(agent: ProtocolAgent, snapshot: ProtocolRunSnapshot | null | undefined, whole = false): string {
   if (!snapshot) return ''
   for (let index = snapshot.events.length - 1; index >= 0; index -= 1) {
     const event = snapshot.events[index]!
     if (event.agentId !== agent.id || !COORDINATOR_NOTE_EVENTS.has(event.type)) continue
     const line = (event.summary ?? '').split('\n').map(part => part.trim()).find(Boolean)
     if (!line) continue
+    // A surface with room for it (the TUI's detail pane) takes the summary as
+    // written; a roster row takes its first line, cut to fit.
+    if (whole) return (event.summary ?? '').trim().slice(0, COORDINATOR_NOTE_WHOLE_MAX)
     return line.length > COORDINATOR_NOTE_MAX ? `${line.slice(0, COORDINATOR_NOTE_MAX - 1)}…` : line
   }
   return ''
