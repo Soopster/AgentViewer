@@ -837,6 +837,12 @@ function findReaderCard(content: Renderable | undefined | null, id: string): Ren
   }
   return scan(content, READER_CARD_SEARCH_DEPTH) ?? content.findDescendantById(id)
 }
+// A transcript row's card box: the row itself, or — for tool rows, whose keyed
+// box sits inside a centering wrapper — its child.
+function readerRowCard(row: Renderable): Renderable | undefined {
+  if (row.id?.startsWith('card:')) return row
+  return row.getChildren().find((child) => child.id?.startsWith('card:')) as Renderable | undefined
+}
 // Above this many threaded messages, never format cards synchronously on the
 // render thread (the fallback in baseTranscriptCards) — formatTranscriptCard ×
 // N is a multi-second freeze on big sessions. The worker formats instead and
@@ -4019,7 +4025,7 @@ export function usesAgentCardPresentation(
   transcriptView: TuiTranscriptView,
 ): boolean {
   return transcriptView === 'agents'
-    || ((transcriptView === 'stream' || transcriptView === 'chat') && isStreamOperationalCard(card))
+    || ((transcriptView === 'stream' || transcriptView === 'chat' || transcriptView === 'scrollback') && isStreamOperationalCard(card))
 }
 
 export function shouldCenterTranscriptCard(
@@ -4734,7 +4740,7 @@ const QUESTION_PREVIEW_MAX_LINES = 8
 // reserving anything, so the preview is dropped instead.
 const QUESTION_PREVIEW_MIN_ROWS = 2
 
-const TRANSCRIPT_VIEWS: TuiTranscriptView[] = ['conversation', 'full', 'continue', 'stream', 'agents', 'chat', 'transcript']
+const TRANSCRIPT_VIEWS: TuiTranscriptView[] = ['conversation', 'full', 'continue', 'stream', 'agents', 'chat', 'transcript', 'scrollback']
 
 const TRANSCRIPT_VIEW_LABELS: Record<TuiTranscriptView, string> = {
   conversation: 'CONVERSATION',
@@ -4744,6 +4750,7 @@ const TRANSCRIPT_VIEW_LABELS: Record<TuiTranscriptView, string> = {
   agents: 'AGENTS',
   chat: 'CHAT',
   transcript: 'TRANSCRIPT',
+  scrollback: 'SCROLLBACK',
 }
 
 const TRANSCRIPT_VIEW_DESCRIPTIONS: Record<TuiTranscriptView, string> = {
@@ -4754,6 +4761,7 @@ const TRANSCRIPT_VIEW_DESCRIPTIONS: Record<TuiTranscriptView, string> = {
   agents: 'Group tool activity by agent',
   chat: 'Composer flows inline with the conversation, no dock',
   transcript: 'One continuous transcript, a rule per message',
+  scrollback: 'One long text transcript that scrolls by line, no card cursor',
 }
 
 const PROVIDER_SELECT_OPTIONS: SelectOption[] = PROVIDERS.map((provider) => ({
@@ -6085,7 +6093,9 @@ function TranscriptCardInner({
               <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
                 {renderInlineTextSegments([
                   { text: hasCursor ? '❯ ' : `${streamGroupMarker} `, fg: hasCursor ? theme.text : streamStatusColor(streamGroupMarker, theme) },
-                  { text: `${headerLabel}  ·  e collapse  ·  j/k select`, fg: theme.dim },
+                  // Key hints belong to the card the cursor is on, like every
+                  // other hint in this branch; a cursor-less view shows none.
+                  { text: hasCursor ? `${headerLabel}  ·  e collapse  ·  j/k select` : headerLabel, fg: theme.dim },
                 ], agentBodyWidth, theme.dim)}
               </text>
             ) : null}
@@ -7520,7 +7530,7 @@ function SplitTranscriptPaneInner({
       diffLayout,
       imessageStyle,
       transcriptWidth,
-      streamMode: transcriptView === 'stream' || transcriptView === 'chat' || transcriptView === 'transcript',
+      streamMode: transcriptView === 'stream' || transcriptView === 'chat' || transcriptView === 'transcript' || transcriptView === 'scrollback',
       continuousMode: transcriptView === 'transcript',
       agentsMode: false,
       agentToolCursorKey: null,
@@ -7719,7 +7729,21 @@ export default function OpenTuiApp() {
   const [transcriptView, setTranscriptView] = useState<TuiTranscriptView>('conversation')
   // Chat reuses stream's chronological, borderless card grouping — the two views
   // diverge only in composer placement (docked vs. inline-with-transcript).
-  const isChatLikeView = transcriptView === 'stream' || transcriptView === 'chat' || transcriptView === 'transcript'
+  const isChatLikeView = transcriptView === 'stream' || transcriptView === 'chat' || transcriptView === 'transcript' || transcriptView === 'scrollback'
+  // SCROLLBACK is STREAM read the way a terminal scrollback is: the same rows,
+  // but no card cursor — keys and the wheel move the text by lines, and nothing
+  // is ever highlighted as "selected". The cursor key survives as an invisible
+  // position (kept on the top visible message) so jumps and search still have
+  // somewhere to start from.
+  const isScrollbackView = transcriptView === 'scrollback'
+  // Both draw the pane as bare stream: no reader header, no thinking preview.
+  const isStreamView = transcriptView === 'stream' || isScrollbackView
+  // With no cursor there is no card for `e` to act on, so SCROLLBACK expands
+  // or folds everything at once, as Claude Code's ⌃O does.
+  const [scrollbackExpanded, setScrollbackExpanded] = useState(false)
+  // Cards a click flipped away from that all-or-nothing state. `e` clears it:
+  // "everything" has to mean everything.
+  const [scrollbackToggledKeys, setScrollbackToggledKeys] = useState<ReadonlySet<string>>(EMPTY_EXPANDED_KEYS)
   const embeddedComposer = transcriptView === 'chat' || transcriptView === 'agents'
   // TRANSCRIPT is STREAM without the per-line markers, and with the role rule
   // on every message rather than only on user prompts. Modelled on opencode's
@@ -8259,6 +8283,10 @@ export default function OpenTuiApp() {
   const readerBoxRef = useRef<BoxRenderable>(null)
   const [measuredReaderBoxHeight, setMeasuredReaderBoxHeight] = useState(0)
   const pausedTranscriptScrollTopRef = useRef<number | null>(null)
+  // The cursor key SCROLLBACK last placed by scrolling. The reveal and recenter
+  // effects skip a cursor that matches it: scrolling it back into view would
+  // undo the scroll that moved it.
+  const scrollbackSyncedCursorKeyRef = useRef<string | null>(null)
   const tabReaderPositionsRef = useRef(new Map<string, {
     state: TuiSessionReaderState
     windowStart: number
@@ -9476,6 +9504,9 @@ export default function OpenTuiApp() {
     const nextIndex = clamp(index, 0, visibleTranscriptCards.length - 1)
     const nextCard = visibleTranscriptCards[nextIndex]
     if (!nextCard) return
+    // An explicit jump must be revealed, even to the card scrolling left the
+    // cursor on.
+    scrollbackSyncedCursorKeyRef.current = null
     setTranscriptCursorKey(nextCard.key)
     const atTail = nextIndex === visibleTranscriptCards.length - 1
     setFollowTail(atTail)
@@ -9486,11 +9517,14 @@ export default function OpenTuiApp() {
   }, [visibleTranscriptCards])
 
   const selectTranscriptCard = useCallback((cardKey: string) => {
+    setFocusedPane('messages')
+    // A press in SCROLLBACK focuses the pane and starts a text selection; it
+    // has no card to select, and moving the cursor would scroll the text.
+    if (isScrollbackView) return
     const index = transcriptIndexByKey.get(cardKey)
     if (index == null) return
     jumpToTranscriptIndex(index)
-    setFocusedPane('messages')
-  }, [transcriptIndexByKey, jumpToTranscriptIndex])
+  }, [transcriptIndexByKey, jumpToTranscriptIndex, isScrollbackView])
 
   const selectSidebarSession = useCallback((session: Session) => {
     setSelectedSessionKey(sessionKey(session))
@@ -10778,7 +10812,7 @@ export default function OpenTuiApp() {
     if (visibleAwaitingPersistedTurn && !embeddedComposer) rows += 2
     if (composerAutoTargetingRunning && composerTargetSession) rows += 1
     if ((liveStatus === 'retrying' || liveStatus === 'compacting') && visibleComposerSending) rows += 2
-    if (visibleComposerSending && composerLiveReasoning.trim() && transcriptView !== 'stream') rows += LIVE_PREVIEW_HEIGHT
+    if (visibleComposerSending && composerLiveReasoning.trim() && !isStreamView) rows += LIVE_PREVIEW_HEIGHT
     // Reattached-turn banner (rendered when a turn runs without an owned stream).
     if (!visibleComposerSending && reattachedRunning && !visibleAwaitingPersistedTurn && !embeddedComposer) rows += 2
     // Codex external-writer banner — another Codex client owns the rollout,
@@ -11025,7 +11059,7 @@ export default function OpenTuiApp() {
   const TAB_BAR_HEIGHT = 1
   const streamTurnFooterText = useMemo(() => {
     if (
-      transcriptView !== 'stream'
+      !isStreamView
       || turnRunningForComposer
     ) return null
     return streamCompletedTurnHint(visibleTranscriptCards)
@@ -11216,13 +11250,35 @@ export default function OpenTuiApp() {
     () => new Set(renderedTranscriptCards.map((card) => card.key)),
     [renderedTranscriptCards],
   )
+  // SCROLLBACK has no cursor to fold a card with, so a card is expanded when
+  // expand-all or its ordinary default says so, unless a click flipped it.
+  const scrollbackExpandedKeys = useMemo(() => {
+    if (!isScrollbackView) return null
+    const keys = new Set<string>()
+    for (const card of renderedTranscriptCards) {
+      const base = scrollbackExpanded || resolvedExpandedKeys.has(card.key)
+      if (base !== scrollbackToggledKeys.has(card.key)) keys.add(card.key)
+    }
+    return keys
+  }, [isScrollbackView, scrollbackExpanded, scrollbackToggledKeys, resolvedExpandedKeys, renderedTranscriptCards])
   const expandedKeysForRender = transcriptView === 'full'
     ? allVisibleCardKeys
     : effectiveFocus === 'messages'
       || (tabsEnabled && !isPreviewMode)
       || transcriptView === 'agents'
-      ? resolvedExpandedKeys
+      ? scrollbackExpandedKeys ?? resolvedExpandedKeys
       : EMPTY_EXPANDED_KEYS
+  // A tool group expands to its tools, each folded by its own key — which
+  // nothing in SCROLLBACK can press. An expanded group shows its tools' output.
+  const scrollbackExpandedToolKeys = useMemo(() => {
+    if (!scrollbackExpandedKeys) return null
+    const keys = new Set<string>()
+    for (const card of renderedTranscriptCards) {
+      if (!scrollbackExpandedKeys.has(card.key)) continue
+      for (const toolCard of agentToolCardsFor(card)) keys.add(toolCard.key)
+    }
+    return keys
+  }, [scrollbackExpandedKeys, renderedTranscriptCards])
   // Stable per-card data: body lines, diffs, code blocks. Cached by card reference so
   // when only one card's expansion toggles (transcriptCards ref unchanged), the other
   // cards reuse their prior StableCardData object — TranscriptCard memo then bails out.
@@ -11482,7 +11538,7 @@ export default function OpenTuiApp() {
         turnFooter: isContinuousView ? continuousTurnFooter(card, visibleTranscriptCards[absoluteIndex + 1]) : null,
         agentsMode: usesAgentCardPresentation(card, transcriptView),
         agentToolCursorKey: groupedToolView ? agentToolCursorByGroupKey[card.key] ?? null : null,
-        agentToolExpandedKeys: groupedToolView ? expandedCardKeys : EMPTY_EXPANDED_KEYS,
+        agentToolExpandedKeys: scrollbackExpandedToolKeys ?? (groupedToolView ? expandedCardKeys : EMPTY_EXPANDED_KEYS),
         agentToolCollapsedKeys: groupedToolView ? collapsedCardKeys : EMPTY_EXPANDED_KEYS,
         onSelectAgentTool: selectAgentTool,
         noteNamespace: transcriptNoteNamespace,
@@ -11528,6 +11584,7 @@ export default function OpenTuiApp() {
     groupedToolView,
     agentToolCursorByGroupKey,
     expandedCardKeys,
+    scrollbackExpandedToolKeys,
     collapsedCardKeys,
     selectAgentTool,
     transcriptNoteNamespace,
@@ -11549,7 +11606,8 @@ export default function OpenTuiApp() {
   const transcriptChildren = useMemo(() => {
     const cards: React.ReactNode[] = selectTranscriptCardVariants(
       transcriptCardVariants,
-      transcriptCursorKey,
+      // SCROLLBACK highlights nothing: every card renders its idle variant.
+      isScrollbackView ? null : transcriptCursorKey,
       effectiveFocus === 'messages',
     )
     if (transcriptRenderStart > 0) {
@@ -11583,6 +11641,7 @@ export default function OpenTuiApp() {
     transcriptRenderEnd,
     totalTranscriptCards,
     transcriptCursorKey,
+    isScrollbackView,
     effectiveFocus,
     theme,
     rightPaneWidth,
@@ -12139,6 +12198,52 @@ export default function OpenTuiApp() {
       setPendingNewCount(0)
       setUnreadBoundaryKey(null)
     }
+  })
+
+  // SCROLLBACK's scroll position is the reading position. After any scroll —
+  // a key, the wheel — re-engage tail-follow at the bottom, and otherwise park
+  // the invisible cursor on a message the viewport still shows, so a jump
+  // (next prompt, search) starts from what is on screen.
+  const settleScrollbackPosition = useEffectEvent((sb: ScrollBoxRenderable, scrollTop: number, limit: number) => {
+    if (scrollTop >= limit && transcriptRenderEnd >= totalTranscriptCards) {
+      if (!followTail) {
+        setFollowTail(true)
+        setPendingNewCount(0)
+        setUnreadBoundaryKey(null)
+      }
+      return
+    }
+    pausedTranscriptScrollTopRef.current = scrollTop
+    const viewportBottom = scrollTop + sb.viewport.height
+    const cursorId = transcriptCursorKey ? `card:${transcriptCursorKey}` : null
+    let topKey: string | null = null
+    let cursorVisible = false
+    for (const row of sb.content.getChildren()) {
+      const child = readerRowCard(row as Renderable)
+      if (!child || child.height === 0) continue
+      const top = child.y - sb.content.y
+      if (top >= viewportBottom) break
+      if (top + child.height <= scrollTop) continue
+      topKey ??= child.id.slice('card:'.length)
+      if (child.id === cursorId) cursorVisible = true
+    }
+    // A cursor still on screen stays put: moving it to the top on every poll
+    // would walk it backwards off the card a jump just landed on.
+    const nextKey = cursorVisible ? transcriptCursorKey : topKey
+    if (nextKey) {
+      scrollbackSyncedCursorKeyRef.current = nextKey
+      setTranscriptCursorKey(nextKey)
+    }
+    if (followTail) setFollowTail(false)
+  })
+
+  const scrollTranscriptRows = useEffectEvent((rows: number) => {
+    const sb = transcriptScrollRef.current
+    if (!sb) return
+    const limit = Math.max(sb.scrollHeight - sb.viewport.height, 0)
+    const next = clamp(sb.scrollTop + rows, 0, limit)
+    sb.scrollTo(next)
+    settleScrollbackPosition(sb, next, limit)
   })
 
   const moveAgentToolCursor = useEffectEvent((delta: -1 | 1): boolean => {
@@ -16765,6 +16870,7 @@ export default function OpenTuiApp() {
       followTail,
     )
     if (!scrollTargetKey || pendingTabReaderRestoreRef.current) return
+    if (isScrollbackView && scrollTargetKey === scrollbackSyncedCursorKeyRef.current) return
     const timer = setTimeout(() => {
       const scrollbox = transcriptScrollRef.current
       scrollbox?.scrollChildIntoView(`card:${scrollTargetKey}`)
@@ -16774,7 +16880,7 @@ export default function OpenTuiApp() {
       }
     }, 0)
     return () => clearTimeout(timer)
-  }, [activeAgentToolCursorKey, followTail, transcriptCursorKey])
+  }, [activeAgentToolCursorKey, followTail, transcriptCursorKey, isScrollbackView])
 
   // ── Reader window management ───────────────────────────────────────────────
   // Session restoration above owns the detached window. Re-engaging the tail
@@ -16797,6 +16903,9 @@ export default function OpenTuiApp() {
     const cursorMoved = transcriptCursorKey !== recenterCursorKeyRef.current
     recenterCursorKeyRef.current = transcriptCursorKey
     if (!cursorMoved) return
+    // The scroll poll below slides the window under a scrolled SCROLLBACK;
+    // recentering on the cursor it dragged along would yank the text.
+    if (isScrollbackView && transcriptCursorKey === scrollbackSyncedCursorKeyRef.current) return
     if (effectiveFocus !== 'messages' || followTail) return
     if (totalTranscriptCards <= READER_CARD_WINDOW) return
     if (cursorIndex < 0) return
@@ -16814,7 +16923,32 @@ export default function OpenTuiApp() {
     const cursorCard = visibleTranscriptCards[cursorIndex]
     if (cursorCard) readerScrollFixupRef.current = { kind: 'cursor', cardKey: cursorCard.key }
     setReaderWindowStart(nextStart)
-  }, [cursorIndex, transcriptCursorKey, effectiveFocus, followTail, totalTranscriptCards, transcriptRenderStart, transcriptRenderEnd, visibleTranscriptCards])
+  }, [cursorIndex, transcriptCursorKey, effectiveFocus, followTail, totalTranscriptCards, transcriptRenderStart, transcriptRenderEnd, visibleTranscriptCards, isScrollbackView])
+
+  // SCROLLBACK wheel: the scrollbox emits no scroll events, so poll for a
+  // scroll the keys did not make. While following, only scrollTop going DOWN
+  // in value under content that did not shrink is the user — a growing reply
+  // briefly sits above the bottom before sticky scroll catches up, and reading
+  // that as a detach would stop following mid-stream.
+  useEffect(() => {
+    if (!isScrollbackView || isScrubbing) return undefined
+    let lastTop = -1
+    let lastHeight = 0
+    const interval = setInterval(() => {
+      if (pendingTabReaderRestoreRef.current || readerScrollFixupRef.current) return
+      const sb = transcriptScrollRef.current
+      if (!sb) return
+      const scrollTop = sb.scrollTop
+      const scrollHeight = sb.scrollHeight
+      const moved = followTail
+        ? lastTop >= 0 && scrollTop < lastTop && scrollHeight >= lastHeight
+        : scrollTop !== lastTop
+      lastTop = scrollTop
+      lastHeight = scrollHeight
+      if (moved) settleScrollbackPosition(sb, scrollTop, Math.max(scrollHeight - sb.viewport.height, 0))
+    }, READER_SCROLL_POLL_MS)
+    return () => clearInterval(interval)
+  }, [isScrollbackView, isScrubbing, followTail])
 
   // Mouse-scroll slide: the scrollbox emits no scroll events, so while a
   // window is active poll scrollTop and slide when the viewport nears an edge
@@ -17025,7 +17159,7 @@ export default function OpenTuiApp() {
   // When switching to a filtered/grouped transcript mode the cursor may be on a
   // hidden technical card. Snap it to the last visible card so navigation stays coherent.
   useEffect(() => {
-    if (transcriptView !== 'continue' && transcriptView !== 'stream' && transcriptView !== 'agents') return
+    if (transcriptView !== 'continue' && !isStreamView && transcriptView !== 'agents') return
     if (visibleTranscriptCards.length === 0) return
     const isVisible = transcriptCursorKey
       ? visibleTranscriptCards.some((c) => c.key === transcriptCursorKey)
@@ -17051,7 +17185,9 @@ export default function OpenTuiApp() {
           [['⌃K', 'commands'], ['?', 'help']],
           effectiveFocus === 'sessions'
             ? [['j/k', 'select'], ['↵', 'open'], ['/', 'search'], ['tab', 'focus']]
-            : [['j/k', 'move'], ['e', 'fold'], ['c', 'compose'], ['tab', 'focus']],
+            : isScrollbackView
+              ? [['j/k', 'scroll'], ['e', scrollbackExpanded ? 'fold all' : 'expand all'], ['c', 'compose'], ['tab', 'focus']]
+              : [['j/k', 'move'], ['e', 'fold'], ['c', 'compose'], ['tab', 'focus']],
           [['v', transcriptView], ['f', 'live'], ['h', 'sessions']],
           [['⇧W', transcriptWidth]],
           [['←/→', 'tabs'], ['y', 'copy'], ['z', 'focus']],
@@ -17111,7 +17247,7 @@ export default function OpenTuiApp() {
       segs.push({ text: hostLabel, fg: theme.cyan })
     }
     return segs
-  }, [width, attentionNeedsInputCount, commandChordPending, composerActive, composerKeysTargetTurn, transcriptView, transcriptWidth, splitChordPending, splitFocusIndex, effectiveFocus, theme])
+  }, [width, attentionNeedsInputCount, commandChordPending, composerActive, composerKeysTargetTurn, transcriptView, scrollbackExpanded, transcriptWidth, splitChordPending, splitFocusIndex, effectiveFocus, theme])
 
   const composerStatusMessage = visibleComposerError
     ? visibleComposerError
@@ -17214,6 +17350,46 @@ export default function OpenTuiApp() {
     setEditorInitialLine(target.line ?? null)
     setEditorOpen(true)
     return true
+  })
+
+  // SCROLLBACK folds with the mouse: a click on a folded tool row or group
+  // expands it. Like a link it acts on mouse UP with the pointer unmoved, so a
+  // drag is still a text selection. Folding again takes a click on the item's
+  // first row only — an expanded diff has its own click targets below it.
+  const releaseTranscriptPress = useEffectEvent((event: MouseEvent) => {
+    const press = linkPressRef.current
+    if (openTranscriptLinkAt(event)) return
+    if (!isScrollbackView || event.button !== 0 || !press) return
+    if (press.x !== event.x || press.y !== event.y) return
+    const sb = transcriptScrollRef.current
+    if (!sb) return
+    let hit: Renderable | undefined
+    for (const row of sb.content.getChildren()) {
+      const child = readerRowCard(row as Renderable)
+      if (child && event.y >= child.y && event.y < child.y + child.height) {
+        hit = child
+        break
+      }
+    }
+    if (!hit) return
+    const cardKey = hit.id.slice('card:'.length)
+    const index = transcriptIndexByKey.get(cardKey)
+    const card = index == null ? null : visibleTranscriptCards[index]
+    if (!card || !(card.autoFold || agentToolCardsFor(card).length > 0)) return
+    if (scrollbackExpandedKeys?.has(cardKey) && event.y !== hit.y) return
+    // At the tail the view sticks to the bottom, so the rows a click unfolds
+    // would push the clicked row up and away. Let go of the tail first.
+    if (followTail) {
+      pausedTranscriptScrollTopRef.current = sb.scrollTop
+      scrollbackSyncedCursorKeyRef.current = cardKey
+      setTranscriptCursorKey(cardKey)
+      setFollowTail(false)
+    }
+    setScrollbackToggledKeys((current) => {
+      const next = new Set(current)
+      if (!next.delete(cardKey)) next.add(cardKey)
+      return next
+    })
   })
 
   const showToggleOutcome = useEffectEvent((label: string, outcome: string | boolean) => {
@@ -20322,6 +20498,30 @@ export default function OpenTuiApp() {
     // card's row range-select block below; without the !key.shift guard these
     // card-cursor moves would swallow the shifted keys first (same precedence
     // trap as the resume-marker `m`).
+    // SCROLLBACK has no card cursor: the keys that move it elsewhere move the
+    // text here, by rows, and `e`/Enter fold or unfold the whole transcript.
+    if (effectiveFocus === 'messages' && isScrollbackView && !key.shift) {
+      const page = Math.max(transcriptViewportRows - 2, 1)
+      const rows = isCtrl('d') ? Math.ceil(page / 2)
+        : isCtrl('u') ? -Math.ceil(page / 2)
+        : key.name === 'j' || key.name === 'down' ? velocityScrollStep(1)
+        : key.name === 'k' || key.name === 'up' ? -velocityScrollStep(-1)
+        : key.name === 'pagedown' ? page
+        : key.name === 'pageup' ? -page
+        : 0
+      if (rows !== 0) {
+        handled(() => scrollTranscriptRows(rows))
+        return
+      }
+      if (key.name === 'return' || key.name === 'e') {
+        handled(() => {
+          setScrollbackExpanded((current) => !current)
+          setScrollbackToggledKeys(EMPTY_EXPANDED_KEYS)
+        })
+        return
+      }
+    }
+
     if (effectiveFocus === 'messages' && (key.name === 'j' || key.name === 'down') && !key.shift) {
       handled(() => {
         if (!moveAgentToolCursor(1)) moveCursor(velocityScrollStep(1))
@@ -20850,8 +21050,8 @@ export default function OpenTuiApp() {
     },
     [statusLabel, visibleTranscriptCards.length, cursorIndex, readerMode, themeMode, pendingNewCount, railVisible, width],
   )
-  const readerFrameTitle = transcriptView === 'stream'
-    ? joinMeta(['STREAM', headerStatusRight])
+  const readerFrameTitle = isStreamView
+    ? joinMeta([TRANSCRIPT_VIEW_LABELS[transcriptView], headerStatusRight])
     : headerStatusRight
   const readerContextMeta = useMemo(
     () => fitText(
@@ -21545,7 +21745,7 @@ export default function OpenTuiApp() {
             </box>
           ) : null}
 
-          {!presentationFocusMode && transcriptView !== 'stream' ? (
+          {!presentationFocusMode && !isStreamView ? (
             <box paddingX={2} paddingTop={1} flexDirection="row" alignItems="center">
               <text fg={providerAccent} wrapMode="none">{'● '}</text>
               <box flexGrow={1} overflow="hidden">
@@ -21561,7 +21761,7 @@ export default function OpenTuiApp() {
             </box>
           ) : null}
 
-          {!presentationFocusMode && transcriptView !== 'stream' && contextUsage ? (
+          {!presentationFocusMode && !isStreamView && contextUsage ? (
             <box paddingX={1}>
               <text wrapMode="none">
                 {renderInlineTextSegments(
@@ -21571,11 +21771,11 @@ export default function OpenTuiApp() {
                 )}
               </text>
             </box>
-          ) : !presentationFocusMode && transcriptView !== 'stream' && selectedSession?.provider === 'claude' && contextUsageStatus === 'loading' ? (
+          ) : !presentationFocusMode && !isStreamView && selectedSession?.provider === 'claude' && contextUsageStatus === 'loading' ? (
             <box paddingX={1}>
               <text fg={theme.dim}>{fitText('Loading context usage…', rightPaneWidth - 4)}</text>
             </box>
-          ) : !presentationFocusMode && transcriptView !== 'stream' && selectedSession?.provider === 'claude' && contextUsageStatus === 'unavailable' ? (
+          ) : !presentationFocusMode && !isStreamView && selectedSession?.provider === 'claude' && contextUsageStatus === 'unavailable' ? (
             <box paddingX={1}>
               <text fg={theme.dim}>{fitText('Context usage unavailable', rightPaneWidth - 4)}</text>
             </box>
@@ -21595,7 +21795,10 @@ export default function OpenTuiApp() {
             </box>
           ) : null}
 
-          {!followTail ? (
+          {/* Reserved while reading history elsewhere; SCROLLBACK leaves the tail
+              on every scroll, and two rows appearing above the text would jolt
+              it, so there the banner exists only while it has something to say. */}
+          {!followTail && (!isScrollbackView || pendingNewCount > 0) ? (
             <box paddingX={1} marginTop={1}>
               <text fg={theme.amber}>
                 {pendingNewCount > 0
@@ -21684,7 +21887,7 @@ export default function OpenTuiApp() {
                 // own select-on-press still runs and the press reaches this
                 // container either way.
                 onMouseDown={noteTranscriptLinkPress}
-                onMouseUp={openTranscriptLinkAt}
+                onMouseUp={releaseTranscriptPress}
                 >
                 <box height={TRANSCRIPT_TOP_MARGIN} />
                 <TuiErrorBoundary>
@@ -21763,7 +21966,9 @@ export default function OpenTuiApp() {
               <box height={streamActionFooterRows} paddingLeft={1}>
                 <text fg={theme.dim} wrapMode="none">
                   {effectiveFocus === 'messages'
-                    ? fitText('b bookmark   Q quote/reply   y copy', Math.max(rightPaneWidth - 6, 12))
+                    ? fitText(isScrollbackView
+                      ? 'j/k line   ⌃d/⌃u half page   PgUp/PgDn page   g/G ends'
+                      : 'b bookmark   Q quote/reply   y copy', Math.max(rightPaneWidth - 6, 12))
                     : ' '}
                 </text>
               </box>
@@ -23010,7 +23215,7 @@ export default function OpenTuiApp() {
         </box>
       ) : null}
 
-      {visibleComposerSending && composerLiveReasoning.trim() && transcriptView !== 'stream' ? (
+      {visibleComposerSending && composerLiveReasoning.trim() && !isStreamView ? (
         <LivePreviewCard
           title={`✻ THINKING · ${String(composerProvider ?? 'agent').toUpperCase()} · ${tuiEffort.toUpperCase()}${composerThinkingTokens > 0 ? ` · ~${composerThinkingTokens >= 1000 ? `${(composerThinkingTokens / 1000).toFixed(1)}k` : composerThinkingTokens} tok` : ''}`}
           lines={liveReasoningPreviewLines}

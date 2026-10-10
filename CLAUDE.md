@@ -1040,6 +1040,49 @@ messages" notice and wheel acceleration already exist.
   is resumed in `finally` — a failed editor must not leave a frozen app —
   and `transcriptPagerSmoke.ts` pins that, the expansion, and the cleanup.
 
+#### SCROLLBACK view: scrolled text, no card cursor (load-bearing)
+
+`v` → SCROLLBACK is STREAM's rows read the way a terminal scrollback is (Claude
+Code's transcript): nothing is highlighted, `j/k`, `⌃d/⌃u` and PgUp/PgDn move the
+text by rows, the wheel detaches from the tail, and reaching the bottom follows
+it again. It is a mode of the existing stream path (`isScrollbackView`), not a
+second renderer; TRANSCRIPT is the opencode-styled sibling and keeps its cursor.
+
+- **The cursor is hidden, not removed.** Every jump (search `n`, next prompt,
+  bookmarks, `g`/`G`) starts from `transcriptCursorKey`, so scrolling parks it on
+  a message the viewport still shows (`settleScrollbackPosition`). A cursor that
+  is still on screen stays put — re-parking it on the top row every poll walked
+  it backwards off the card a jump had just landed on.
+- **A scroll-parked cursor must never be revealed.** The reveal and recenter
+  effects skip a cursor matching `scrollbackSyncedCursorKeyRef`; revealing it
+  pulls the reply the top edge cuts through fully into view, i.e. undoes the
+  scroll. An explicit jump clears the ref so it *is* revealed.
+- **While following, only `scrollTop` decreasing under content that did not
+  shrink is the user.** A growing reply sits above the bottom for a frame before
+  sticky scroll catches up; reading that as a detach stops following mid-stream.
+- **`e`/Enter expand or fold everything** (Claude Code's ⌃O) — there is no card
+  for them to act on. A tool group expands to its tools, each folded by its own
+  key, so expand-all also names every nested tool (`scrollbackExpandedToolKeys`).
+- **A click expands a folded tool row or group; folding again takes a click on
+  its first row** (`releaseTranscriptPress`). It acts on mouse UP with the
+  pointer unmoved, like a link, so a drag is still a selection, and an expanded
+  item's body stays plain text (an expanded diff has its own click targets). A
+  click is a flip away from the expand-all state (`scrollbackToggledKeys`), which
+  `e` clears. Expanding at the tail lets go of it first — sticking to the bottom
+  would push the clicked row up by what it grew.
+- **A tool row's `card:` id is one level down**, inside a centering wrapper, so
+  anything walking the scrollbox's children for cards goes through
+  `readerRowCard`; reading `child.id` alone silently skips every tool row.
+- **The "new messages" banner is not reserved here.** Elsewhere two rows appear
+  above the transcript whenever the tail is left; SCROLLBACK leaves it on every
+  scroll, and the text jumped by two rows more than was asked for.
+- `scrollbackTranscriptSmoke.tsx` reads the scroll position back row for row.
+  Nine mutations were verified to fail it: showing the cursor, selecting on
+  click, dropping the reveal guard, not re-following, the drag guard, the
+  first-row rule, the tail detach on expand, `e` not clearing clicks, and the
+  reserved banner. The recenter guard needs more than `READER_CARD_WINDOW` cards
+  and is not pinned.
+
 #### Clickable transcript targets (load-bearing)
 
 OpenTUI 0.5.11's `renderer.getLinkAt(x, y)` reads a link id back out of the
