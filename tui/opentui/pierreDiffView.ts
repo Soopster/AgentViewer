@@ -389,13 +389,17 @@ export function buildPierreDiffView(
       }
     }
 
+    // A blank row separates one file's hunks from the next file's header. A
+    // file with no hunks (binary, empty, mode-only) is a header alone, and a
+    // run of those is a list — a blank row after each doubled its length.
+    let previousFileHadBody = true
     for (const [fileIndex, file] of orderedFiles.entries()) {
       const rowStart = rows.length
       const splitStart = splitRows.length
       const filePath = diffDisplayPath(file)
       const fileHighlights = highlights?.get(filePath)
 
-      if (fileIndex > 0 || rows.length > 0) {
+      if (fileIndex > 0 ? previousFileHadBody : rows.length > 0) {
         const spacer: TuiPierreDiffRow = { key: `${cacheKey}:spacer:${fileIndex}`, tone: 'meta', text: '' }
         rows.push(spacer)
         splitRows.push(spacer)
@@ -405,6 +409,7 @@ export function buildPierreDiffView(
         tone: 'file',
         text: diffFileLabel(file),
       }
+      const fileRowIndex = rows.length
       rows.push(fileRow)
       splitRows.push(fileRow)
 
@@ -492,6 +497,7 @@ export function buildPierreDiffView(
       }
       for (let index = rowStart; index < rows.length; index++) rows[index]!.filePath = filePath
       for (let index = splitStart; index < splitRows.length; index++) splitRows[index]!.filePath = filePath
+      previousFileHadBody = rows.length > fileRowIndex + 1
     }
 
     return rows.length > 0 ? { rows, splitRows, files: orderedFiles, patches } : null

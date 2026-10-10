@@ -13,7 +13,7 @@ export function DiffViewControls({ width, theme, mode, layout, wrap, tabWidth, o
     event.stopPropagation(); action()
   }}>{label}</text>
   return <box id="git-diff-controls" width={width} height={1} flexShrink={0} flexDirection="row" backgroundColor={theme.surface2}>
-    {button(` ${mode === 'auto' ? 'auto:' : ''}${layout === 'stack' ? 'unified' : 'split'} `, onLayout)}
+    {button(` s ${mode === 'auto' ? 'auto:' : ''}${layout === 'stack' ? 'unified' : 'split'} `, onLayout)}
     {button(` z wrap:${wrap ? 'on' : 'off'} `, onWrap)}
     {button(` T tabs:${tabWidth} `, onTabs)}
     {button(' h← ', () => onPan(-8))}

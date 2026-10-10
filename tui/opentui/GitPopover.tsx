@@ -552,6 +552,11 @@ type Props = {
   onSendDiffNoteToComposer?: (prompt: string) => void
 }
 
+// The widest the view-controls row gets (`auto:unified`, a four-digit pan
+// offset), and the least the review actions need beside it.
+const DIFF_CONTROLS_WIDTH = 62
+const DIFF_REVIEW_ACTIONS_MIN_WIDTH = 48
+
 export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = false, theme, width, height, onClose, onKeyHandlerReady, onSendDiffNoteToComposer, onClipboardWrite, onKeyCaptureChange }: Props) {
   const reviewSearchEditingRef = useRef(false)
   const reviewActionKeyRef = useRef<(key: ReviewActionKey) => boolean>(() => false)
@@ -940,7 +945,10 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
   // Estimate remaining rows for Commits (used for manual slicing while Commits lacks scrollbox).
   const rightH = popH - 2
   const diffLayout = resolveDiffLayout(diffLayoutMode, rightW)
-  const diffViewportHeight = Math.max(1, rightH - (pane === 2 ? fileDiffMode === 'viewer' ? 4 : 2 : 1))
+  // View controls and review actions share one row when both fit; stacking
+  // them cost a row of diff on every terminal wide enough not to need it.
+  const diffBarsShareRow = fileDiffMode === 'viewer' && rightW >= DIFF_CONTROLS_WIDTH + DIFF_REVIEW_ACTIONS_MIN_WIDTH
+  const diffViewportHeight = Math.max(1, rightH - (pane === 2 ? fileDiffMode === 'viewer' ? (diffBarsShareRow ? 3 : 4) : 2 : 1))
 
   function navigateTreeCursor(next: number | ((index: number) => number)) {
     const index = typeof next === 'function' ? next(treeCursor) : next
@@ -1533,13 +1541,12 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
     ? (() => {
         const controls: Array<[string, string]> = [
           ['v', 'plain'],
-          ['s', diffLayout],
           ['n', showLineNumbers ? '#' : 'no#'],
           ['m', showHunkHeaders ? '@@' : 'no@@'],
           ['{}', 'hunk'],
           ['e/c', 'context'],
           ['⇧j/k', 'range'],
-          ['a', 'note'], ['R', 'review checklist'],
+          ['a', 'note'], ['R', 'checklist'],
           ['A', 'composer'],
           ['x', 'del'],
         ]
@@ -1549,8 +1556,6 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
           nodes.push(<span key={`fd-k${i}`} fg={theme.cyan}>{k}</span>)
           nodes.push(<span key={`fd-l${i}`} fg={theme.muted}>{` ${l}`}</span>)
         })
-        nodes.push(<span key="fd-syn-dot" fg={diffHighlights.size > 0 ? theme.green : theme.dim}>{'   ● '}</span>)
-        nodes.push(<span key="fd-syn" fg={theme.muted}>syntax</span>)
         return nodes
       })()
     : [
@@ -1849,8 +1854,8 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
         <box paddingX={1} flexDirection="row" backgroundColor={theme.surface2}>
           {(() => {
             const groups: Array<[string, string]> = [
-              ['1-4', 'sections'], ['t', 'source'], ['W', watching ? 'pause watch' : 'watch'], ['[ ]', 'resize'], ['w', 'wide'], ['-', 'hide/show'],
-              ['j/k', 'move/fast'], ['h/l', 'fold'], ['⏎', 'toggle'], ['p', 'PRs'], ['r', 'refresh'], ['esc', 'close'],
+              ['1-4', 'sections'], ['t', 'source'], ['W', watching ? 'pause watch' : 'watch'], ['[ ]', 'resize'], ['w', 'wide'], ['-', 'hide'],
+              ['j/k', 'move'], ['h/l', 'fold'], ['⏎', 'toggle'], ['p', 'PRs'], ['r', 'refresh'], ['esc', 'close'],
             ]
             const segs: React.ReactNode[] = [
               <span key="focus" fg={theme.cyan}>{focusLabel}</span>,
@@ -1865,13 +1870,15 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
             return <text wrapMode="none">{segs}</text>
           })()}
         </box>
-        {pane === 2 ? <DiffViewControls width={rightW} theme={theme} mode={diffLayoutMode} layout={diffLayout} wrap={wrapDiffLines} tabWidth={diffTabWidth} offset={visibleHorizontalOffset}
+        <box flexDirection={diffBarsShareRow ? 'row' : 'column'} flexShrink={0} width={rightW}>
+        {pane === 2 ? <DiffViewControls width={diffBarsShareRow ? DIFF_CONTROLS_WIDTH : rightW} theme={theme} mode={diffLayoutMode} layout={diffLayout} wrap={wrapDiffLines} tabWidth={diffTabWidth} offset={visibleHorizontalOffset}
           onLayout={() => setDiffLayoutMode(mode => mode === 'auto' ? 'stack' : mode === 'stack' ? 'split' : 'auto')}
           onWrap={() => setWrapDiffLines(value => !value)} onTabs={() => setDiffTabWidth(value => value === 2 ? 4 : value === 4 ? 8 : 2)}
           onPan={delta => setHorizontalOffset(value => Math.max(0, Math.min(maxHorizontalOffset, value + delta)))} onFilter={openFileFilter} /> : null}
-        {pane === 2 && fileDiffMode === 'viewer' ? <DiffReviewActionsBar theme={theme} width={rightW} {...reviewActions}
+        {pane === 2 && fileDiffMode === 'viewer' ? <DiffReviewActionsBar theme={theme} width={diffBarsShareRow ? rightW - DIFF_CONTROLS_WIDTH : rightW} {...reviewActions}
           onSearch={() => { if (!draftNote && !filterEditing) reviewActions.openSearch() }}
           onNext={reviewActions.next} onCopy={side => { if (!draftNote) void reviewActions.copy(side) }} /> : null}
+        </box>
         {pane === 2 && fileDiffMode === 'viewer' ? <DiffStickyHeader width={rightW} theme={theme} progress={diffProgress} /> : null}
         <scrollbox
           id="git-diff-scroll"
