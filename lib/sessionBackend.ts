@@ -4397,6 +4397,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
       // dynamicTools at thread/start (see createNewViewSession's codex
       // branch) — the model calling one arrives here as a server→client
       // item/tool/call request that blocks the turn until we respond.
+      const coordinatorInstanceId = currentProviderInstanceId('codex')
       const unsubscribeCoordinatorTools = client.subscribeServerRequests((request) => {
         if (consumeAborted) return false
         if (request.method !== 'item/tool/call') return false
@@ -4406,7 +4407,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
           const args = params.arguments && typeof params.arguments === 'object' && !Array.isArray(params.arguments)
             ? params.arguments as Record<string, unknown>
             : {}
-          const result = await dispatchCoordinatorCodexToolCall(sessionId, String(params.tool ?? ''), args)
+          const result = await dispatchCoordinatorCodexToolCall(sessionId, String(params.tool ?? ''), args, coordinatorInstanceId)
           if (!result) {
             client.respondError(request.id, -32601, `Unknown dynamic tool: ${params.tool}`)
             return

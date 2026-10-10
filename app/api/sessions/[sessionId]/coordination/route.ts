@@ -1,3 +1,4 @@
+import { withProviderRequest } from '@/lib/providerRequest'
 import { readCoordinatorCapabilities } from '@/lib/coordinatorCapabilities'
 import { answerCoordinatorNativePermission } from '@/lib/coordinatorNativePermissionServer'
 import { readCoordinatorNativeAnswerReceipt } from '@/lib/agentCoordination'
@@ -14,6 +15,7 @@ import { readSettledInteractiveExecutions, reconcileSettledInteractiveExecution,
 
 const schema = z.object({
   provider: z.string().refine(isAgentProvider),
+  providerInstanceId: z.string().regex(/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/).optional(),
   requestId: z.string().min(1).max(160),
   expectedRunId: z.string().min(1).optional(),
   expectedAgent: z.object({ id: z.string().min(1), sessionId: z.string().min(1), provider: z.string().refine(isAgentProvider) }).optional(),
@@ -36,6 +38,7 @@ const schema = z.object({
   teammateProvider: z.string().refine(isAgentProvider).optional(),
   /** Name for a NEW teammate (herdr's `agent start <name>`). */
   teammateName: z.string().trim().min(1).max(32).optional(),
+  requestedProviderInstanceId: z.string().regex(/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/).optional(),
   requestedModel: z.string().trim().min(1).max(200).optional(),
   requestedEffort: z.string().trim().min(1).max(100).optional(),
   taskId: z.string().min(1).optional(), decisionId: z.string().min(1).optional(),
@@ -59,7 +62,14 @@ async function readState(sessionId: string, provider: Parameters<typeof readSess
   return { snapshot, interactive, recoveries, settledExecutions, permissions, runningAgentIds, backgroundAgents }
 }
 
-export async function GET(request: Request, { params }: { params: Promise<{ sessionId: string }> }) {
+export async function GET(request: Request, context: { params: Promise<{ sessionId: string }> }) {
+  const provider = new URL(request.url).searchParams.get('provider')
+  if (!isAgentProvider(provider)) return NextResponse.json({ error: 'provider is required' }, { status: 400 })
+  try { return await withProviderRequest(request, provider, undefined, () => getCoordination(request, context)) }
+  catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : 'Coordination read failed' }, { status: 409 }) }
+}
+
+async function getCoordination(request: Request, { params }: { params: Promise<{ sessionId: string }> }) {
   const provider = new URL(request.url).searchParams.get('provider')
   if (!isAgentProvider(provider)) return NextResponse.json({ error: 'provider is required' }, { status: 400 })
   const { sessionId } = await params
@@ -68,7 +78,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ sess
     if (!isAgentProvider(target)) return NextResponse.json({ error: 'Invalid target provider' }, { status: 400 })
     const snapshot = await readSessionCoordinator(sessionId, provider)
     if (!snapshot) return NextResponse.json({ error: 'Enable Coordinator first' }, { status: 409 })
-    return NextResponse.json(await readCoordinatorCapabilities(target, snapshot.run.baseCwd), { headers: { 'Cache-Control': 'no-store' } })
+    return NextResponse.json(await readCoordinatorCapabilities(target, snapshot.run.baseCwd, new URL(request.url).searchParams.get('targetProviderInstanceId') ?? snapshot.agents.find(agent => agent.role === 'lead' && agent.provider === target)?.providerInstanceId), { headers: { 'Cache-Control': 'no-store' } })
   }
   const state = await readState(sessionId, provider)
   if (new URL(request.url).searchParams.get('inspect') === 'recovery') {
@@ -84,6 +94,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ ses
   const body = parsed.data
   const { sessionId } = await params
   try {
+    return await withProviderRequest(request, body.provider, body, async () => {
     if (body.expectedRunId) {
       const snapshot = await readSessionCoordinator(sessionId, body.provider)
       if (snapshot?.run.id !== body.expectedRunId) throw new Error('Coordinator team changed; refresh before sending to this conversation')
@@ -154,6 +165,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ ses
       if (body.action === 'delegate') return createExternalProtocolTask(identity, {
         assignTo: body.to ?? 'auto', title: body.detail.split('\n')[0]!.slice(0, 160), detail: body.detail, paths: body.paths,
         requestedProvider: body.teammateProvider,
+        requestedProviderInstanceId: body.requestedProviderInstanceId,
         requestedModel: body.requestedModel, requestedEffort: body.requestedEffort,
         teammateName: body.teammateName,
       })
@@ -170,6 +182,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ ses
       return resolveProtocolDecisionAdmin(identity.runId, { taskId: body.taskId, decisionId: body.decisionId, answer: body.detail })
     })
     return NextResponse.json({ result, ...await readState(sessionId, body.provider) }, { headers: { 'Cache-Control': 'no-store' } })
+    })
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Coordination request failed' }, { status: 409 })
   }

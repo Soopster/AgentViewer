@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { withProviderInstance } from './providerInstances'
 import { realpath, stat } from 'node:fs/promises'
 import type { ProtocolAgent, ProtocolRunSnapshot } from './agentProtocol'
 import { readViewSessionInfo } from './sessionBackend'
@@ -18,9 +19,9 @@ export async function inspectRecoveryAgent(agent: ProtocolAgent): Promise<Recove
   const [directory, conversation] = await Promise.all([
     bounded(stat(agent.worktreePath)).then(info => ({ available: info.isDirectory(), detail: info.isDirectory() ? 'available' : 'saved path is not a directory' }), error => ({ available: false, detail: detail(error) })),
     agent.sessionId.startsWith('external:') ? Promise.resolve({ available: false, detail: 'External participant controls its own conversation; reconnect in its client' })
-      : bounded(readViewSessionInfo(agent.sessionId, agent.provider)).then(async info => {
+      : bounded(withProviderInstance(agent.providerInstanceId ?? agent.provider, agent.provider, () => readViewSessionInfo(agent.sessionId, agent.provider))).then(async info => {
         if (!info) return { available: false, detail: 'native conversation was not found' }
-        if (info.sessionId !== agent.sessionId || (info.provider && info.provider !== agent.provider)) return { available: false, detail: 'provider returned a different conversation identity' }
+        if (info.sessionId !== agent.sessionId || (info.provider && info.provider !== agent.provider) || (info.providerInstanceId && info.providerInstanceId !== (agent.providerInstanceId ?? agent.provider))) return { available: false, detail: 'provider returned a different conversation identity' }
         if (info.cwd && path.resolve(info.cwd) !== path.resolve(agent.worktreePath)) {
           const [native, saved] = await bounded(Promise.all([realpath(info.cwd), realpath(agent.worktreePath)]))
           if (native !== saved) return { available: false, detail: 'native conversation uses a different directory; inspect before reconnecting' }

@@ -121,6 +121,7 @@ export function rowToTask(row: Row): ProtocolTask {
     blockedBy: parseJsonArray(row.blocked_by_json),
     phase: typeof row.phase === 'string' && row.phase ? row.phase : undefined,
     seat: row.seat === 'director' || row.seat === 'validator' || row.seat === 'watcher' ? row.seat : 'executor',
+    requestedProviderInstanceId: typeof row.requested_provider_instance_id === 'string' ? row.requested_provider_instance_id : undefined,
     requestedProvider: typeof row.requested_provider === 'string' && row.requested_provider ? row.requested_provider as ProtocolTask['requestedProvider'] : undefined,
     requestedModel: typeof row.requested_model === 'string' && row.requested_model ? row.requested_model : undefined,
     requestedEffort: typeof row.requested_effort === 'string' && row.requested_effort ? row.requested_effort : undefined,

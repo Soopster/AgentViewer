@@ -10465,7 +10465,7 @@ function MessageViewInner({
           </CardContent>
             </TabsContent>
             {session && !hideCoordinator ? <TabsContent value="teammates" forceMount className="av-composer-dock-pane">
-              <CoordinatorConversation key={`${session.provider}:${session.sessionId}`} session={session} onInspect={onInspectTeammate!} onReturnToChat={returnToChat} onAttentionChange={updateTeamAttention} />
+              <CoordinatorConversation key={`${session.providerInstanceId ?? session.provider}:${session.sessionId}`} session={session} onInspect={onInspectTeammate!} onReturnToChat={returnToChat} onAttentionChange={updateTeamAttention} />
             </TabsContent> : null}
           </Tabs>
         </Card>

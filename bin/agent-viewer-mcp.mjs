@@ -1137,9 +1137,9 @@ server.registerTool('coord_resume', {
 
 server.registerTool('coord_capabilities', {
   description: bridgeDescription('coord_capabilities'),
-  inputSchema: { provider: z.enum(['claude', 'codex', 'opencode', 'copilot', 'pi']).optional() },
+  inputSchema: { provider: z.enum(['claude', 'codex', 'opencode', 'copilot', 'pi']).optional(), provider_instance_id: z.string().min(1).max(64).optional() },
   annotations: { readOnlyHint: true },
-}, async ({ provider }) => textResult(await coordinatorRequest('capabilities', { provider })))
+}, async ({ provider, provider_instance_id }) => textResult(await coordinatorRequest('capabilities', { provider, providerInstanceId: provider_instance_id })))
 
 server.registerTool('coord_status', {
   description: bridgeDescription('coord_status'),
@@ -1239,12 +1239,13 @@ server.registerTool('coord_create_task', {
     role_description: z.string().min(1).max(1000).optional().describe('What this specialization means: scope, approach, constraints. Shown to the teammate when it works this task.'),
     seat: z.enum(['director', 'executor', 'validator', 'watcher']).optional(),
     requested_provider: z.enum(PROVIDERS).optional(),
+    requested_provider_instance_id: z.string().min(1).max(64).optional(),
     requested_model: z.string().min(1).max(200).optional(),
     requested_effort: z.string().min(1).max(100).optional(),
     verify_commands: z.array(z.string().min(1)).max(20).optional(),
     request_id: requestIdField,
   },
-}, async ({ assign_to, title, detail, paths, depends_on, phase, role, role_name, role_description, seat, requested_provider, requested_model, requested_effort, verify_commands, request_id }) => textResult(await coordinatorRequest('create_task', {
+}, async ({ assign_to, title, detail, paths, depends_on, phase, role, role_name, role_description, seat, requested_provider, requested_provider_instance_id, requested_model, requested_effort, verify_commands, request_id }) => textResult(await coordinatorRequest('create_task', {
   assignTo: assign_to,
   title,
   detail,
@@ -1255,7 +1256,7 @@ server.registerTool('coord_create_task', {
   roleName: role_name,
   roleDescription: role_description,
   seat,
-  requestedProvider: requested_provider,
+  requestedProvider: requested_provider, requestedProviderInstanceId: requested_provider_instance_id,
   requestedModel: requested_model,
   requestedEffort: requested_effort,
   verifyCommands: verify_commands,
@@ -1269,6 +1270,7 @@ server.registerTool('coord_delegate', {
     name: z.string().min(1).max(32).optional().describe('Teammate to reuse or create, named for its job: a lowercase letter then letters, digits, - or _ (e.g. reviewer). lead, all and agent-N are reserved.'),
     wait_ms: z.number().int().min(0).max(55_000).optional().describe('Interactive hosts only: also wait this long for the work to settle. Waiting never cancels the work. Managed turns omit it.'),
     requested_provider: z.enum(['claude', 'codex', 'opencode', 'copilot', 'pi']).optional().describe('Provider for a NEW teammate; an existing teammate keeps its own and a mismatch is rejected'),
+    requested_provider_instance_id: z.string().min(1).max(64).optional(),
     requested_model: z.string().min(1).max(200).optional().describe('A models[].value from coord_capabilities; omit for the team default'),
     requested_effort: z.string().min(1).max(100).optional().describe('An effort level coord_capabilities lists for that model; omit for the team default'),
     title: z.string().min(1).max(160),
@@ -1277,8 +1279,8 @@ server.registerTool('coord_delegate', {
     verify_commands: z.array(z.string().min(1)).max(20).optional().describe('Commands the completion gate runs; the task cannot complete while one fails'),
     request_id: requestIdField,
   },
-}, async ({ to, name, wait_ms, requested_provider, requested_model, requested_effort, title, detail, paths, verify_commands, request_id }) => textResult(await coordinatorRequest('create_task', {
-  assignTo: to ?? 'auto', teammateName: to ? undefined : name, waitMs: wait_ms, requestedProvider: requested_provider, requestedModel: requested_model, requestedEffort: requested_effort, title, detail, paths, verifyCommands: verify_commands, targetRole: 'teammate', requestId: request_id,
+}, async ({ to, name, wait_ms, requested_provider, requested_provider_instance_id, requested_model, requested_effort, title, detail, paths, verify_commands, request_id }) => textResult(await coordinatorRequest('create_task', {
+  assignTo: to ?? 'auto', teammateName: to ? undefined : name, waitMs: wait_ms, requestedProvider: requested_provider, requestedProviderInstanceId: requested_provider_instance_id, requestedModel: requested_model, requestedEffort: requested_effort, title, detail, paths, verifyCommands: verify_commands, targetRole: 'teammate', requestId: request_id,
 })))
 
 server.registerTool('coord_claim_task', {

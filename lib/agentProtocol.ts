@@ -288,8 +288,10 @@ export type ProtocolTaskReceipt = {
   /** Coordinator-executed checks were run against this unchanged checkout. */
   verificationRevision?: string
   requestedProvider?: AgentProvider
+  requestedProviderInstanceId?: string
   requestedModel?: string
   actualProvider: AgentProvider
+  actualProviderInstanceId?: string
   actualModel?: string
   provenance: 'ok' | 'drift' | 'unverifiable'
   stopReason: 'completed' | 'failed' | 'blocked' | 'cancelled' | 'needs_decision'
@@ -527,6 +529,8 @@ export type ProtocolAgent = {
   name: string
   role: ProtocolAgentRole
   provider: AgentProvider
+  /** Configured account/endpoint; legacy rows use the provider default. */
+  providerInstanceId?: string
   sessionId: string
   worktreePath: string
   worktreeBranch: string
@@ -584,14 +588,14 @@ export type ProtocolAgentRespondToMode = 'owner-only' | 'allowlist' | 'anyone' |
 /** Immutable portable checkpoint; owner-supplied context, not a transcript replay. */
 export type ProtocolContextHandoff = {
   id: string; runId: string; taskId: string; createdAt: string; digest: string
-  source: { agentId: string; sessionId: string; provider: AgentProvider; claimGeneration: number; taskUpdatedAt: string; checkoutRevision?: string }
+  source: { agentId: string; sessionId: string; provider: AgentProvider; providerInstanceId?: string; claimGeneration: number; taskUpdatedAt: string; checkoutRevision?: string }
   summary: string; detail?: string; taskPrompt: string; paths: string[]
 }
 
 export function formatContextHandoff(handoff?: ProtocolContextHandoff): string {
   if (!handoff) return ''
   return [`Portable checkpoint ${handoff.id} (${handoff.digest})`,
-    `Source: ${handoff.source.provider} / ${handoff.source.sessionId} / claim ${handoff.source.claimGeneration}`,
+    `Source: ${handoff.source.providerInstanceId ?? handoff.source.provider} / ${handoff.source.sessionId} / claim ${handoff.source.claimGeneration}`,
     `Checkout fingerprint: ${handoff.source.checkoutRevision ?? 'unavailable'}`,
     'Owner-supplied context: inspect the current checkout and verify these claims before acting.',
     handoff.summary, handoff.detail ?? ''].join('\n')
@@ -621,6 +625,7 @@ export type ProtocolTask = {
   phase?: string
   seat: ProtocolSeat
   requestedProvider?: AgentProvider
+  requestedProviderInstanceId?: string
   requestedModel?: string
   requestedEffort?: string
   /** Explicit/derived native policy used only for Claude SDK dispatches. */

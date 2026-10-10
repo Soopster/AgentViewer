@@ -202,7 +202,7 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
   if (action === 'capabilities') {
     const provider = optionalText(body.provider)
     if (provider && !isAgentProvider(provider)) throw new Error('Invalid provider')
-    return readExternalCoordinatorCapabilities(participantIdentity!, provider as AgentProvider | undefined)
+    return readExternalCoordinatorCapabilities(participantIdentity!, provider as AgentProvider | undefined, optionalText(body.providerInstanceId))
   }
   if (action === 'status') return readExternalProtocolStatus(participantIdentity!)
   if (action === 'wait') {
@@ -236,6 +236,7 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
       roleDescription: optionalText(body.roleDescription),
       seat: seat as ProtocolSeat,
       requestedProvider: requestedProvider as AgentProvider | undefined,
+      requestedProviderInstanceId: optionalText(body.requestedProviderInstanceId),
       requestedModel: optionalText(body.requestedModel),
       requestedEffort: optionalText(body.requestedEffort),
       verifyCommands: strings(body.verifyCommands),

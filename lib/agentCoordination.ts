@@ -105,6 +105,7 @@ import { permissionModeEscalation } from './claudeRuntimePolicy'
 import { recordContextTransfer } from './contextTransfers'
 import { computeRunRollup, describeRunRollup } from './coordinatorRollup'
 import {
+  unregisterCoordinatorRunTools,
   registerCoordinatorMcpServer,
   unregisterCoordinatorMcpServer,
   registerCoordinatorPiTools,
@@ -129,28 +130,26 @@ import {
 // protocol working exactly as before (no coord_* tools available).
 const IN_PROCESS_TOOL_PROVIDERS = new Set<ProtocolRun['provider']>(['claude', 'pi', 'copilot', 'codex', 'opencode'])
 
-function registerCoordinatorToolsForProvider(provider: ProtocolRun['provider'], sessionId: string, identity: ExternalProtocolIdentity): void {
-  if (provider === 'claude') registerCoordinatorMcpServer(sessionId, identity)
-  else if (provider === 'pi') registerCoordinatorPiTools(sessionId, identity)
-  else if (provider === 'copilot') registerCoordinatorCopilotTools(sessionId, identity)
-  else if (provider === 'codex') registerCoordinatorCodexTools(sessionId, identity)
-  else if (provider === 'opencode') registerCoordinatorOpenCodeTools(sessionId, identity)
+function registerCoordinatorToolsForProvider(provider: ProtocolRun['provider'], sessionId: string, identity: ExternalProtocolIdentity, providerInstanceId?: string): void {
+  if (provider === 'claude') registerCoordinatorMcpServer(sessionId, identity, providerInstanceId)
+  else if (provider === 'pi') registerCoordinatorPiTools(sessionId, identity, providerInstanceId)
+  else if (provider === 'copilot') registerCoordinatorCopilotTools(sessionId, identity, providerInstanceId)
+  else if (provider === 'codex') registerCoordinatorCodexTools(sessionId, identity, providerInstanceId)
+  else if (provider === 'opencode') registerCoordinatorOpenCodeTools(sessionId, identity, providerInstanceId)
 }
 
-function unregisterCoordinatorToolsForProvider(provider: ProtocolRun['provider'], sessionId: string): void {
-  if (provider === 'claude') unregisterCoordinatorMcpServer(sessionId)
-  else if (provider === 'pi') unregisterCoordinatorPiTools(sessionId)
-  else if (provider === 'copilot') unregisterCoordinatorCopilotTools(sessionId)
-  else if (provider === 'codex') unregisterCoordinatorCodexTools(sessionId)
-  else if (provider === 'opencode') unregisterCoordinatorOpenCodeTools(sessionId)
+function unregisterCoordinatorToolsForProvider(provider: ProtocolRun['provider'], sessionId: string, providerInstanceId?: string): void {
+  if (provider === 'claude') unregisterCoordinatorMcpServer(sessionId, providerInstanceId)
+  else if (provider === 'pi') unregisterCoordinatorPiTools(sessionId, providerInstanceId)
+  else if (provider === 'copilot') unregisterCoordinatorCopilotTools(sessionId, providerInstanceId)
+  else if (provider === 'codex') unregisterCoordinatorCodexTools(sessionId, providerInstanceId)
+  else if (provider === 'opencode') unregisterCoordinatorOpenCodeTools(sessionId, providerInstanceId)
 }
 
-// stopProtocolRun/deleteProtocolRun only know session ids, not the provider
-// each belonged to (a failed-over agent may have started as one provider and
-// ended as another) — unregister from every provider's registry to be safe;
-// the ones a given session id was never registered in are cheap no-ops.
-function unregisterCoordinatorToolsForSession(sessionId: string): void {
-  for (const provider of IN_PROCESS_TOOL_PROVIDERS) unregisterCoordinatorToolsForProvider(provider, sessionId)
+// Cleanup uses the durable run identity, so an ambient lead account cannot
+// delete another team's same-native-ID binding or leave teammate aliases behind.
+function unregisterCoordinatorToolsForSession(sessionId: string, runId: string, providerInstanceId?: string): void {
+  unregisterCoordinatorRunTools(runId, sessionId, providerInstanceId)
 }
 
 // OpenCode's coordinator plugin only loads on a server this app spawns and
@@ -165,6 +164,8 @@ async function inProcessToolsAvailable(provider: ProtocolRun['provider']): Promi
 }
 import { writeCoordinatorSessionClient } from './coordinatorSessionClient'
 import { getCoordinatorBridgeUrl } from './coordinatorBridgeServer'
+import { currentProviderInstance, currentProviderInstanceId, resolveProviderInstance, withProviderInstance } from './providerInstances'
+import { readCoordinatorProviderInstances } from './coordinatorCapabilities'
 import { createNewViewSession, streamViewSessionTurn } from './sessionBackend'
 import { isOpenCodeManagedServer } from './opencodeClient'
 import { getRunningSessionInfo, readWaitingSessionObservation, interruptRunningSession, steerRunningSession } from './sessionRuntime'
@@ -203,7 +204,7 @@ const LOCK_LEASE_MS = 20 * 60_000
 // can cancel a teammate's in-flight turn without releasing the task), and
 // respond_to_mode/respond_to_allowlist_json (per-participant mailbox sender
 // gating, mirroring buzz-acp's respond-to modes).
-const SCHEMA_VERSION = 25
+const SCHEMA_VERSION = 26
 const EVENT_WINDOW = 300
 const LOCK_HISTORY_WINDOW = 200
 // Non-terminal tasks (pending/claimed/blocked) are always returned in full —
@@ -352,6 +353,8 @@ type RunController = {
   title?: string
   model?: string
   effort?: string
+  /** Defaults belong to the account that selected them, even after lead failover. */
+  modelSource?: { provider: AgentProvider; providerInstanceId: string }
   gateCommand?: string
   requirePlanApproval: boolean
   autonomy: ProtocolAutonomy
@@ -533,6 +536,7 @@ function initializeSchema(db: SqliteDatabase): void {
       capabilities_json TEXT NOT NULL DEFAULT '{}',
       progress_json TEXT,
       pending_background_json TEXT,
+      provider_instance_id TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       PRIMARY KEY (run_id, id)
@@ -559,6 +563,7 @@ function initializeSchema(db: SqliteDatabase): void {
       result_detail TEXT,
       seat TEXT NOT NULL DEFAULT 'executor',
       requested_provider TEXT,
+      requested_provider_instance_id TEXT,
       requested_model TEXT,
       requested_effort TEXT,
       claude_agent_policy_json TEXT,
@@ -859,6 +864,8 @@ function migrateSchema(db: SqliteDatabase): void {
     'ALTER TABLE protocol_agents ADD COLUMN respond_to_allowlist_json TEXT',
     'ALTER TABLE protocol_agents ADD COLUMN progress_json TEXT',
     'ALTER TABLE protocol_agents ADD COLUMN pending_background_json TEXT',
+    'ALTER TABLE protocol_agents ADD COLUMN provider_instance_id TEXT',
+    'ALTER TABLE protocol_tasks ADD COLUMN requested_provider_instance_id TEXT',
   ]) {
     try {
       db.exec(statement)
@@ -1057,6 +1064,14 @@ async function enqueueWrite<T>(fn: (db: SqliteDatabase) => T | Promise<T>): Prom
   return next
 }
 
+class CoordinatorInstanceCollision extends Error {}
+class CoordinatorRecoverySuperseded extends Error {}
+
+function assertCoordinatorSessionInstanceSync(db: SqliteDatabase, sessionId: string, instanceId: string): void {
+  const conflict = db.prepare(`SELECT 1 FROM protocol_agents WHERE session_id = ? AND COALESCE(provider_instance_id, provider) <> ? LIMIT 1`).get(sessionId, instanceId)
+  if (conflict) throw new CoordinatorInstanceCollision('Coordinator session ID is already bound to another provider instance; refusing an ambiguous runtime binding')
+}
+
 function rowToAgent(row: Row): ProtocolAgent {
   const protocolVersion = Number(row.protocol_version) || MIN_EXTERNAL_COORD_PROTOCOL_VERSION
   const capabilities = parseJsonObject<ExternalProtocolCapabilities>(row.capabilities_json)
@@ -1066,6 +1081,7 @@ function rowToAgent(row: Row): ProtocolAgent {
     name: typeof row.name === 'string' && row.name ? row.name : String(row.id),
     role: row.role === 'lead' ? 'lead' : 'teammate',
     provider: String(row.provider) as ProtocolAgent['provider'],
+    providerInstanceId: typeof row.provider_instance_id === 'string' && row.provider_instance_id ? row.provider_instance_id : String(row.provider),
     sessionId: String(row.session_id),
     worktreePath: String(row.worktree_path),
     worktreeBranch: String(row.worktree_branch),
@@ -1720,6 +1736,7 @@ function issueParticipant(
     summary: `${params.name} joined from an external ${params.provider} CLI`,
     timestamp: ts,
   })
+  db.prepare('UPDATE protocol_agents SET provider_instance_id = ? WHERE run_id = ? AND id = ?').run(currentProviderInstanceId(params.provider), params.runId, agentId)
   return {
     runId: params.runId,
     agentId,
@@ -1752,6 +1769,7 @@ type PlaybookTaskPlan = {
   targetRole: ProtocolTaskTargetRole
   seat: ProtocolSeat
   requestedProvider?: ProtocolRun['provider']
+  requestedProviderInstanceId?: string
   requestedModel?: string
   requestedEffort?: string
   claudeAgentPolicy?: ProtocolClaudeAgentPolicy
@@ -2070,6 +2088,7 @@ function seedPlaybookTasksSync(
         targetRole: task.targetRole,
         seat: task.seat,
         requestedProvider: task.requestedProvider,
+        requestedProviderInstanceId: task.requestedProviderInstanceId,
         requestedModel: task.requestedModel,
         claudeAgentPolicy: task.claudeAgentPolicy,
         verifyCommands: task.verifyCommands,
@@ -2925,7 +2944,7 @@ async function adoptInteractiveController(identity: ExternalProtocolIdentity): P
     const token = rotateSessionParticipantTokenSync(db, run.id, agent.id)
     const worker = { runId: run.id, agentId: agent.id, token }
     controller.sdkIdentities.set(agent.id, worker)
-    registerCoordinatorToolsForProvider(agent.provider, agent.sessionId, worker)
+    registerCoordinatorToolsForProvider(agent.provider, agent.sessionId, worker, agent.providerInstanceId)
   }
   controllers.set(run.id, controller)
   return controller
@@ -2933,6 +2952,7 @@ async function adoptInteractiveController(identity: ExternalProtocolIdentity): P
 
 export async function readSessionCoordinator(sessionId: string, provider: ProtocolRun['provider']): Promise<ProtocolRunSnapshot | null> {
   const db = await getDatabase()
+  if (currentProviderInstance()?.provider === provider) assertCoordinatorSessionInstanceSync(db, sessionId, currentProviderInstanceId(provider))
   const row = db.prepare(`SELECT run_id FROM protocol_agents WHERE session_id = ? AND provider = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`)
     .get(sessionId, provider) as Row | undefined
   return row ? readSnapshotSync(db, String(row.run_id)) : null
@@ -2942,6 +2962,7 @@ export async function readSessionCoordinator(sessionId: string, provider: Protoc
 export async function ensureSessionCoordinator(params: { sessionId: string; provider: ProtocolRun['provider']; cwd: string; restartRunId?: string }): Promise<ProtocolRunSnapshot> {
   const key = `chat-${createHash('sha256').update(`${params.provider}:${params.sessionId}`).digest('hex').slice(0, 40)}`
   return serializeAutomaticDelegation(key, async () => {
+    assertCoordinatorSessionInstanceSync(await getDatabase(), params.sessionId, currentProviderInstanceId(params.provider))
     const existing = await readSessionCoordinator(params.sessionId, params.provider)
     if (existing && (!params.restartRunId || !['completed', 'failed', 'stopped'].includes(existing.run.status))) return existing
     if (existing && !existing.agents.some(agent => agent.role === 'lead' && agent.sessionId === params.sessionId)) throw new Error('Only the lead conversation can start a new team')
@@ -2952,7 +2973,8 @@ export async function ensureSessionCoordinator(params: { sessionId: string; prov
       baseCwd: params.cwd, provider: params.provider, participantName: 'lead', maxAgents: 4 })).snapshot
     const lead = snapshot.agents.find(agent => agent.role === 'lead')!
     await enqueueWrite(tx => {
-      tx.prepare('UPDATE protocol_agents SET session_id = ? WHERE run_id = ? AND id = ?').run(params.sessionId, runKey, lead.id)
+      assertCoordinatorSessionInstanceSync(tx, params.sessionId, currentProviderInstanceId(params.provider))
+      tx.prepare('UPDATE protocol_agents SET session_id = ?, provider_instance_id = ? WHERE run_id = ? AND id = ?').run(params.sessionId, currentProviderInstanceId(params.provider), runKey, lead.id)
     })
     anyActiveCoordinatorAgentCache = null
     return (await readSessionCoordinator(params.sessionId, params.provider))!
@@ -2989,7 +3011,7 @@ export async function sessionCoordinatorIdentity(sessionId: string, provider: Pr
     const controller = controllers.get(snapshot.run.id)
     const existing = controller?.sdkIdentities.get('lead')
     if (existing) {
-      registerCoordinatorToolsForProvider(provider, sessionId, existing)
+      registerCoordinatorToolsForProvider(provider, sessionId, existing, lead.providerInstanceId)
       return existing
     }
     // Only this browser-owned session is rebound. External lead credentials are
@@ -2997,7 +3019,7 @@ export async function sessionCoordinatorIdentity(sessionId: string, provider: Pr
     const token = await enqueueWrite(db => rotateSessionParticipantTokenSync(db, snapshot.run.id, lead.id))
     const identity = { runId: snapshot.run.id, agentId: lead.id, token }
     await adoptInteractiveController(identity)
-    registerCoordinatorToolsForProvider(provider, sessionId, identity)
+    registerCoordinatorToolsForProvider(provider, sessionId, identity, lead.providerInstanceId)
     return identity
   })
 }
@@ -3042,9 +3064,13 @@ function assertTaskCapacitySync(db: SqliteDatabase, runId: string): void {
 }
 
 /** Read-only catalog, bound to an authenticated participant and run directory. */
-export async function readExternalCoordinatorCapabilities(identity: ExternalProtocolIdentity, provider?: ProtocolRun['provider']) {
+export async function readExternalCoordinatorCapabilities(identity: ExternalProtocolIdentity, provider?: ProtocolRun['provider'], providerInstanceId?: string) {
   const snapshot = (await readExternalProtocolStatus(identity)).snapshot
-  return readCoordinatorCapabilities(provider ?? snapshot.run.provider, snapshot.run.baseCwd)
+  const participant = snapshot.agents.find(agent => agent.id === identity.agentId)!
+  const instance = providerInstanceId ? await resolveProviderInstance(providerInstanceId, provider) : undefined
+  const target = provider ?? instance?.provider ?? participant.provider
+  const instanceId = instance?.id ?? (target === participant.provider ? participant.providerInstanceId : target)
+  return { ...await readCoordinatorCapabilities(target, snapshot.run.baseCwd, instanceId), instances: await readCoordinatorProviderInstances() }
 }
 
 export async function createExternalProtocolTask(
@@ -3067,12 +3093,18 @@ export async function createExternalProtocolTask(
     roleDescription?: string
     seat?: ProtocolSeat
     requestedProvider?: ProtocolRun['provider']
+    requestedProviderInstanceId?: string
     requestedModel?: string
     requestedEffort?: string
     claudeAgentPolicy?: Partial<ProtocolClaudeAgentPolicy>
     verifyCommands?: string[]
   },
 ): Promise<ExternalProtocolTaskCreateResult> {
+  if (params.requestedProviderInstanceId) {
+    const instance = await resolveProviderInstance(params.requestedProviderInstanceId, params.requestedProvider)
+    if (!['claude', 'codex', 'opencode', 'copilot', 'pi'].includes(instance.provider)) throw new Error('Provider instance does not support Coordinator teammates')
+    params = { ...params, requestedProvider: instance.provider, requestedProviderInstanceId: instance.id }
+  }
   const escalation = permissionModeEscalation(params.claudeAgentPolicy?.permissionMode)
   if (escalation) throw new Error(`Delegation denied: ${escalation}`)
   // Automatic delegation resolves once before the atomic assignment. A newly
@@ -3110,14 +3142,16 @@ export async function createExternalProtocolTask(
       && (['idle', 'ready'].includes(agent.status) || (agent.status === 'done' && controller?.sessionIds.has(agent.id)))
       && !controller?.turnInFlight.has(agent.id)
       && !db.prepare('SELECT 1 FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').get(identity.runId, agent.id)
-      && (!params.requestedProvider || agent.provider === params.requestedProvider))
+      && (!params.requestedProvider || agent.provider === params.requestedProvider)
+      && (!params.requestedProviderInstanceId || agent.providerInstanceId === params.requestedProviderInstanceId))
     if (available) return createExternalProtocolTask(identity, { ...params, assignTo: available.id })
     if (!controller) throw new Error('No idle teammate is available. Start or join a teammate for this externally managed run, then retry delegation.')
     if (agents.filter(agent => !['failed', 'stopped'].includes(agent.status)).length >= controller.maxAgents) {
       throw new Error('All teammate slots are busy; send a message to steer existing work or wait for a result')
     }
-    await validateCoordinatorSelection(params.requestedProvider ?? controller.teammateProviders[agents.length % controller.teammateProviders.length] ?? controller.provider, rowToRun(run).baseCwd, params.requestedModel, params.requestedEffort)
-    const spawned = await spawnAdditionalTeammate(identity, { provider: params.requestedProvider, reserveForDelegation: true, name: requestedName })
+    const targetProvider = params.requestedProvider ?? controller.teammateProviders[agents.length % controller.teammateProviders.length] ?? controller.provider
+    await validateCoordinatorSelection(targetProvider, rowToRun(run).baseCwd, params.requestedModel, params.requestedEffort, params.requestedProviderInstanceId ?? (lead.provider === targetProvider ? lead.providerInstanceId : targetProvider))
+    const spawned = await spawnAdditionalTeammate(identity, { provider: params.requestedProvider, providerInstanceId: params.requestedProviderInstanceId, reserveForDelegation: true, name: requestedName })
     try {
       return await createExternalProtocolTask(identity, { ...params, assignTo: spawned.agentId })
     } catch (error) {
@@ -3125,7 +3159,7 @@ export async function createExternalProtocolTask(
       // not consume a team slot or pick up an unrelated lane after rejection.
       await enqueueWrite(tx => setAgentStatusSync(tx, identity.runId, spawned.agentId, 'stopped', nowIso()))
       const sessionId = controller.sessionIds.get(spawned.agentId)
-      if (sessionId) unregisterCoordinatorToolsForSession(sessionId)
+      if (sessionId) unregisterCoordinatorToolsForSession(sessionId, identity.runId)
       throw error
     } finally {
       controller.turnInFlight.delete(spawned.agentId)
@@ -3137,7 +3171,7 @@ export async function createExternalProtocolTask(
     const snapshot = (await readExternalProtocolStatus(identity)).snapshot
     const selector = params.assignTo.trim().toLowerCase()
     const target = snapshot.agents.find(entry => entry.id.toLowerCase() === selector || (entry.name.toLowerCase() === selector && !['failed', 'stopped'].includes(entry.status)))
-    if (target) await validateCoordinatorSelection(target.provider, target.worktreePath, params.requestedModel, params.requestedEffort)
+    if (target) await validateCoordinatorSelection(target.provider, target.worktreePath, params.requestedModel, params.requestedEffort, target.providerInstanceId)
   }
   const result = await enqueueWrite(async (db) => {
     const agent = requireExternalParticipantSync(db, identity)
@@ -3179,6 +3213,7 @@ export async function createExternalProtocolTask(
       const matches = byId ? [byId] : roster.filter(entry => entry.name.toLowerCase() === selector && !['failed', 'stopped'].includes(entry.status) && (entry.status !== 'done' || controllers.get(identity.runId)?.sessionIds.has(entry.id)))
       if (matches.length !== 1) throw new Error('Delegation requires one active teammate; use its agent ID to disambiguate')
       delegate = matches[0]
+      if (params.requestedProviderInstanceId && params.requestedProviderInstanceId !== delegate.providerInstanceId) throw new Error(`${delegate.name} uses provider instance ${delegate.providerInstanceId}; choose a new teammate for another instance`)
       if (db.prepare('SELECT 1 FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').get(identity.runId, delegate.id)) throw new Error('Inspect and reconcile the previous teammate execution before assigning more work')
       // A provider choice staffs a NEW teammate. An existing one already has a
       // session with its own provider, and silently ignoring the mismatch would
@@ -3224,6 +3259,7 @@ export async function createExternalProtocolTask(
         roleDescription,
         seat,
         requestedProvider: params.requestedProvider,
+        requestedProviderInstanceId: params.requestedProviderInstanceId,
         requestedModel,
         requestedEffort,
         claudeAgentPolicy: deriveProtocolClaudeAgentPolicy(taskContext, params.claudeAgentPolicy),
@@ -3245,6 +3281,7 @@ export async function createExternalProtocolTask(
           ...(task.roleName ? { roleName: task.roleName, roleDescription: task.roleDescription } : {}),
           seat: task.seat,
           requestedProvider: task.requestedProvider,
+          requestedProviderInstanceId: task.requestedProviderInstanceId,
           requestedModel: task.requestedModel,
           requestedEffort: task.requestedEffort,
           claudeAgentPolicy: task.claudeAgentPolicy,
@@ -4105,8 +4142,10 @@ export async function completeExternalProtocolTask(
   const needsDecision = normalizeNeedsDecisions(params.needsDecision)
   const receipt: ProtocolTaskReceipt = {
     requestedProvider: task.requestedProvider,
+    requestedProviderInstanceId: task.requestedProviderInstanceId,
     requestedModel: task.requestedModel,
     actualProvider: agent.provider,
+    actualProviderInstanceId: agent.providerInstanceId,
     actualModel: params.actualModel?.trim() || undefined,
     provenance: receiptProvenance(task, agent, params.actualModel?.trim() || undefined),
     stopReason: needsDecision.some((decision) => decision.status === 'open') ? 'needs_decision' : 'completed',
@@ -4527,7 +4566,7 @@ export async function handoffExternalProtocolTask(
     const detail = params.detail?.trim() || undefined
     const ts = nowIso()
     const content = { runId: identity.runId, taskId: task.id, createdAt: ts,
-      source: { agentId: agent.id, sessionId: agent.sessionId, provider: agent.provider, claimGeneration: Number(taskRow.claim_generation), taskUpdatedAt: task.updatedAt, checkoutRevision },
+      source: { agentId: agent.id, sessionId: agent.sessionId, provider: agent.provider, providerInstanceId: agent.providerInstanceId, claimGeneration: Number(taskRow.claim_generation), taskUpdatedAt: task.updatedAt, checkoutRevision },
       summary, detail, taskPrompt: task.prompt, paths: task.paths }
     const handoff: ProtocolContextHandoff = { id: randomUUID(), ...content, digest: createHash('sha256').update(JSON.stringify(content)).digest('hex') }
     db.exec('BEGIN IMMEDIATE')
@@ -4898,7 +4937,7 @@ export async function finalizeExternalProtocolRun(
   const controller = controllers.get(identity.runId)
   if (controller) controller.stopped = true
   controllers.delete(identity.runId)
-  if (controller) for (const sessionId of controller.sessionIds.values()) unregisterCoordinatorToolsForSession(sessionId)
+  unregisterCoordinatorRunTools(identity.runId)
   const db = await getDatabase()
   const agents = listAgentsSync(db, identity.runId)
   // Never interrupt the caller's own session. The lead (or teammate) that
@@ -5762,6 +5801,7 @@ function shouldPlanTaskSync(db: SqliteDatabase, run: RunController, task: Protoc
 }
 
 function taskClaimableByAgent(task: ProtocolTask, agent: ProtocolAgent, agents: ProtocolAgent[]): boolean {
+  if (task.requestedProviderInstanceId && task.requestedProviderInstanceId !== agent.providerInstanceId) return false
   if (task.requestedProvider && task.requestedProvider !== agent.provider) return false
   if (task.seat === 'director' && agent.role !== 'lead') return false
   if (task.targetRole === 'any' || task.targetRole === agent.role) return true
@@ -5846,6 +5886,7 @@ function insertTaskSync(db: SqliteDatabase, runId: string, params: {
   roleDescription?: string
   seat?: ProtocolSeat
   requestedProvider?: ProtocolRun['provider']
+  requestedProviderInstanceId?: string
   requestedModel?: string
   requestedEffort?: string
   claudeAgentPolicy?: ProtocolClaudeAgentPolicy
@@ -5877,6 +5918,7 @@ function insertTaskSync(db: SqliteDatabase, runId: string, params: {
     phase: params.phase,
     seat,
     requestedProvider: params.requestedProvider,
+    requestedProviderInstanceId: params.requestedProviderInstanceId,
     requestedModel: params.requestedModel,
     requestedEffort: params.requestedEffort,
     claudeAgentPolicy,
@@ -5887,14 +5929,14 @@ function insertTaskSync(db: SqliteDatabase, runId: string, params: {
   db.prepare(`
     INSERT INTO protocol_tasks (
       id, run_id, title, prompt, status, owner_agent_id, target_role, role_name, role_description,
-      paths_json, blocked_by_json, phase, seat, requested_provider, requested_model, requested_effort,
+      paths_json, blocked_by_json, phase, seat, requested_provider, requested_provider_instance_id, requested_model, requested_effort,
       claude_agent_policy_json, verify_commands_json, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     task.id, runId, task.title, task.prompt, 'pending', null, task.targetRole,
     task.roleName ?? null, task.roleDescription ?? null,
     JSON.stringify(task.paths), JSON.stringify(task.blockedBy), task.phase ?? null,
-    task.seat, task.requestedProvider ?? null, task.requestedModel ?? null, task.requestedEffort ?? null,
+    task.seat, task.requestedProvider ?? null, task.requestedProviderInstanceId ?? null, task.requestedModel ?? null, task.requestedEffort ?? null,
     task.claudeAgentPolicy ? JSON.stringify(task.claudeAgentPolicy) : null,
     JSON.stringify(task.verifyCommands), ts, ts,
   )
@@ -7280,6 +7322,7 @@ export async function joinSessionToCoordinatorRun(params: {
     if (!['planning', 'running', 'synthesizing', 'blocked'].includes(String(runRow.status))) {
       throw new Error('Coordinator run is not accepting new participants')
     }
+    assertCoordinatorSessionInstanceSync(db, params.sessionId, currentProviderInstanceId(params.provider))
     const existing = db.prepare('SELECT id, name FROM protocol_agents WHERE run_id = ? AND session_id = ?')
       .get(params.runId, params.sessionId) as Row | undefined
     if (existing) return { runId: params.runId, agentId: String(existing.id), name: String(existing.name) }
@@ -7298,6 +7341,7 @@ export async function joinSessionToCoordinatorRun(params: {
           task_id, status, last_seen_at, created_at, updated_at
         ) VALUES (?, ?, ?, 'teammate', ?, ?, ?, '', NULL, 'ready', ?, ?, ?)
       `).run(agentId, params.runId, name, params.provider, params.sessionId, params.cwd, ts, ts, ts)
+      db.prepare('UPDATE protocol_agents SET provider_instance_id = ? WHERE run_id = ? AND id = ?').run(currentProviderInstanceId(params.provider), params.runId, agentId)
       insertEventSync(db, {
         version: AGENT_PROTOCOL_VERSION,
         runId: params.runId,
@@ -7526,7 +7570,7 @@ export async function disableInteractiveCoordinator(sessionId: string, provider:
     throw new Error('Only the lead conversation can turn coordination off')
   }
   if (!['completed', 'failed', 'stopped'].includes(snapshot.run.status)) await stopProtocolRun(snapshot.run.id, sessionId)
-  unregisterCoordinatorToolsForSession(sessionId)
+  unregisterCoordinatorToolsForSession(sessionId, snapshot.run.id)
   await enqueueWrite(db => {
     db.prepare('DELETE FROM protocol_interactive_sessions WHERE session_id = ?').run(sessionId)
   })
@@ -7881,7 +7925,7 @@ export async function resumeInteractiveAgent(identity: ExternalProtocolIdentity,
     if (!evidence.conversation.available) throw new Error(`Saved native conversation is unavailable: ${evidence.conversation.detail}`)
     // Provider inspection is asynchronous. Bind the recovery to the same owned work.
     const current = readSnapshotSync(await getDatabase(), identity.runId)!.agents.find(entry => entry.id === agentId)
-    if (!current || current.taskId !== agent.taskId || current.sessionId !== agent.sessionId || current.provider !== agent.provider || current.worktreePath !== agent.worktreePath
+    if (!current || current.taskId !== agent.taskId || current.sessionId !== agent.sessionId || current.provider !== agent.provider || current.providerInstanceId !== agent.providerInstanceId || current.worktreePath !== agent.worktreePath
       || !(await readInteractiveRecoveries(identity.runId)).includes(agentId)) throw new Error('Teammate changed during inspection; refresh before resuming')
     await enqueueWrite(db => claimInteractiveHostSync(db, identity.runId))
     const controller = await adoptInteractiveController(identity)
@@ -7890,7 +7934,7 @@ export async function resumeInteractiveAgent(identity: ExternalProtocolIdentity,
       const final = readSnapshotSync(db, identity.runId)!
       const current = final.agents.find(entry => entry.id === agentId)
       const currentTask = final.tasks.find(entry => entry.id === current?.taskId)
-      if (!current || current.taskId !== agent.taskId || current.sessionId !== agent.sessionId || current.provider !== agent.provider || current.turnActive
+      if (!current || current.taskId !== agent.taskId || current.sessionId !== agent.sessionId || current.provider !== agent.provider || current.providerInstanceId !== agent.providerInstanceId || current.turnActive
         || !currentTask || ['completed', 'failed', 'cancelled', 'blocked', 'planned'].includes(currentTask.status)
         || currentTask.receipt?.needsDecision?.some(decision => decision.status === 'open') || budgetExceededReasonSync(db, final.run)) throw new Error('Recovery state changed; refresh before resuming')
       db.prepare('DELETE FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').run(identity.runId, agentId)
@@ -7950,7 +7994,7 @@ async function sweepInteractiveCoordinator(runId: string): Promise<void> {
       maxBudgetUsd: remainingCostBudgetSync(db, snapshot.run),
       message: 'Teammates have responded. Review their results, continue the user’s current work, and summarize material progress. Leave human approvals and questions pending.',
       provider: lead.provider, cwd: lead.worktreePath, detachOnClientAbort: true,
-    }, body => streamViewSessionTurn({ sessionId, provider: lead.provider, body, signal: new AbortController().signal }), true)
+    }, body => withProviderInstance(lead.providerInstanceId ?? lead.provider, lead.provider, () => streamViewSessionTurn({ sessionId, provider: lead.provider, body, signal: new AbortController().signal })), true)
     // Consume the detached response; the independent audit above owns delivery acknowledgement.
     if (response.body) void response.body.pipeTo(new WritableStream({ write() {} })).catch(() => {})
   }
@@ -8234,11 +8278,12 @@ async function drainAgentStream(controller: RunController, agent: ProtocolAgent,
           try {
             const sessionId = (JSON.parse(match[1]!) as { sessionId?: unknown }).sessionId
             if (typeof sessionId === 'string' && sessionId && sessionId !== agent.sessionId) {
-              controller.sessionIds.set(agent.id, sessionId)
               await enqueueWrite((db) => {
+                assertCoordinatorSessionInstanceSync(db, sessionId, agent.providerInstanceId ?? agent.provider)
                 db.prepare('UPDATE protocol_agents SET session_id = ?, updated_at = ? WHERE id = ? AND run_id = ?')
                   .run(sessionId, nowIso(), agent.id, controller.runId)
               })
+              controller.sessionIds.set(agent.id, sessionId)
               // A lead message can land after the draft session starts but
               // before the provider reports its realized id. The initial
               // steer correctly fails against the draft id and stays queued;
@@ -8246,7 +8291,8 @@ async function drainAgentStream(controller: RunController, agent: ProtocolAgent,
               // agree on the real target instead of waiting for the sweep.
               await deliverQueuedMessagesForAgent(controller.runId, agent.id)
             }
-          } catch {
+          } catch (error) {
+            if (error instanceof CoordinatorInstanceCollision) return classifyProviderTurnFailure(error.message)
             // malformed session frame — keep the draft id
           }
         }
@@ -8412,8 +8458,10 @@ async function applyAgentEvent(controller: RunController, agent: ProtocolAgent, 
       }
       const receipt: ProtocolTaskReceipt = {
         requestedProvider: task.requestedProvider,
+        requestedProviderInstanceId: task.requestedProviderInstanceId,
         requestedModel: task.requestedModel,
         actualProvider: agent.provider,
+        actualProviderInstanceId: agent.providerInstanceId,
         actualModel,
         provenance,
         stopReason: openDecisions.length > 0 ? 'needs_decision' : 'completed',
@@ -8472,6 +8520,7 @@ function runVerificationCommand(command: string, cwd: string): Promise<ProtocolV
 }
 
 function receiptProvenance(task: ProtocolTask, agent: ProtocolAgent, actualModel?: string): ProtocolTaskReceipt['provenance'] {
+  if (task.requestedProviderInstanceId && task.requestedProviderInstanceId !== agent.providerInstanceId) return 'drift'
   if (task.requestedProvider && task.requestedProvider !== agent.provider) return 'drift'
   if (!task.requestedModel) return 'ok'
   if (!actualModel) return 'unverifiable'
@@ -8500,6 +8549,7 @@ async function handleProviderTurnFailure(
   failure: ProviderTurnFailure,
   opts: { allowSameProviderRetry?: boolean } = {},
 ): Promise<'retry' | 'terminal'> {
+  if (controller.stopped) return 'terminal'
   if (failure.kind === 'budget_exhausted') {
     await stopProtocolRunForBudget(controller, failure.detail)
     return 'terminal'
@@ -8545,77 +8595,96 @@ async function handleProviderTurnFailure(
   const failed = controller.failedProviders.get(agent.id) ?? new Set<ProtocolRun['provider']>()
   failed.add(agent.provider)
   controller.failedProviders.set(agent.id, failed)
-  const candidates = [...new Set([...controller.teammateProviders, controller.provider])]
+  const recoveryDb = await getDatabase()
+  const taskRow = agent.taskId ? recoveryDb.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?').get(controller.runId, agent.taskId) as Row | undefined : undefined
+  const task = taskRow ? rowToTask(taskRow) : undefined
+  const recoveryClaimGeneration = Number(taskRow?.claim_generation)
+  const selectionPinned = Boolean(task && (task.requestedProviderInstanceId || task.requestedProvider || task.requestedModel || task.requestedEffort))
+  const candidates = selectionPinned ? [] : [...new Set([...controller.teammateProviders, controller.provider])]
     .filter((provider) => provider !== agent.provider && !failed.has(provider))
 
   for (const provider of candidates) {
     try {
       noteKeyedSideEffect()
-      const session = await createNewViewSession({
+      const session = await withProviderInstance(provider, provider, () => createNewViewSession({
         provider,
         cwd: agent.worktreePath,
         title: `${controller.title ?? 'Coordinated run'} · ${agent.name} failover`,
         codexDynamicTools: provider === 'codex' ? buildCoordinatorCodexDynamicTools() : undefined,
-      })
-      // The old session's coord_* tool binding (if any) is dead the moment its
-      // session id stops being used — candidates always exclude agent.provider,
-      // so failover always lands on a different provider than whatever this
-      // was bound for. Rebind for the new session below instead of leaving a
-      // stale identity that would send a tool-calling tick prompt to a
-      // provider with no coord_* tools actually registered.
+      }))
+      assertCoordinatorSessionInstanceSync(await getDatabase(), session.sessionId, provider)
       const oldSessionId = controller.sessionIds.get(agent.id)
-      if (oldSessionId) unregisterCoordinatorToolsForProvider(agent.provider, oldSessionId)
+      const canUseInProcessTools = await inProcessToolsAvailable(provider)
+      const token = await enqueueWrite((tx) => {
+        tx.exec('BEGIN IMMEDIATE')
+        try {
+          const ts = nowIso()
+          const run = tx.prepare('SELECT status FROM protocol_runs WHERE id = ?').get(controller.runId) as Row | undefined
+          const current = tx.prepare('SELECT * FROM protocol_agents WHERE run_id = ? AND id = ?').get(controller.runId, agent.id) as Row | undefined
+          const currentTask = agent.taskId ? tx.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?').get(controller.runId, agent.taskId) as Row | undefined : undefined
+          if (controller.stopped || !run || !['planning', 'running', 'synthesizing'].includes(String(run.status))
+            || !current || current.session_id !== (oldSessionId ?? agent.sessionId) || current.provider !== agent.provider
+            || (current.provider_instance_id ?? current.provider) !== (agent.providerInstanceId ?? agent.provider)
+            || (current.task_id ?? undefined) !== agent.taskId
+            || (agent.taskId && (!currentTask || currentTask.owner_agent_id !== agent.id
+              || Number(currentTask.claim_generation) !== recoveryClaimGeneration
+              || ['completed', 'failed', 'cancelled', 'blocked', 'planned'].includes(String(currentTask.status))))) {
+            throw new CoordinatorRecoverySuperseded('Recovery no longer owns the current run/session/task')
+          }
+          assertCoordinatorSessionInstanceSync(tx, session.sessionId, provider)
+          tx.prepare('UPDATE protocol_agents SET provider = ?, provider_instance_id = ?, session_id = ?, status = ?, updated_at = ? WHERE id = ? AND run_id = ?')
+            .run(provider, provider, session.sessionId, 'working', ts, agent.id, controller.runId)
+          if (agent.role === 'lead') {
+            tx.prepare('UPDATE protocol_runs SET provider = ?, updated_at = ? WHERE id = ?')
+              .run(provider, ts, controller.runId)
+          }
+          insertEventSync(tx, {
+            version: AGENT_PROTOCOL_VERSION,
+            runId: controller.runId,
+            agentId: agent.id,
+            type: 'learning',
+            summary: `${agent.name} failed over from ${agent.provider} to ${provider}`,
+            detail: failure.detail,
+            payload: { failureClass: failure.kind, fromProvider: agent.provider, toProvider: provider },
+            timestamp: ts,
+          })
+          const priorAttempts = Number((tx.prepare("SELECT COUNT(*) AS n FROM protocol_events WHERE run_id = ? AND type = 'agent.attempt' AND task_id IS ?")
+            .get(controller.runId, agent.taskId ?? null) as Row).n)
+          insertEventSync(tx, {
+            version: AGENT_PROTOCOL_VERSION,
+            runId: controller.runId,
+            agentId: agent.id,
+            type: 'agent.attempt',
+            taskId: agent.taskId ?? undefined,
+            summary: `${agent.name} recovered on ${provider} after ${agent.provider} ${failure.kind}`,
+            payload: {
+              reason: 'provider_recovery',
+              ordinal: priorAttempts + 2,
+              provider,
+              fromProvider: agent.provider,
+              failureClass: failure.kind,
+            },
+            timestamp: ts,
+          })
+          // Replace the old credential in the same transaction as the agent and
+          // attempt records. A duplicate insert used to fail after partial recovery.
+          const token = canUseInProcessTools ? rotateSessionParticipantTokenSync(tx, controller.runId, agent.id) : undefined
+          if (!canUseInProcessTools) tx.prepare('DELETE FROM protocol_participant_tokens WHERE run_id = ? AND agent_id = ?').run(controller.runId, agent.id)
+          tx.exec('COMMIT')
+          return token
+        } catch (error) { tx.exec('ROLLBACK'); throw error }
+      })
+      // Rebind only after the durable handoff committed. Failed credentials
+      // leave the original session, tools, and controller identity intact.
+      if (oldSessionId) unregisterCoordinatorToolsForProvider(agent.provider, oldSessionId, agent.providerInstanceId)
       controller.sdkIdentities.delete(agent.id)
       controller.sessionIds.set(agent.id, session.sessionId)
       if (session.isPending) controller.pendingSessions.add(agent.id)
       else controller.pendingSessions.delete(agent.id)
-      // Provider-specific model/effort identifiers are unsafe after a
-      // cross-provider handoff. Let the replacement use its native defaults.
-      controller.model = undefined
-      controller.effort = undefined
       if (agent.role === 'lead') controller.provider = provider
-      const canUseInProcessTools = await inProcessToolsAvailable(provider)
-      const token = await enqueueWrite((tx) => {
-        const ts = nowIso()
-        tx.prepare('UPDATE protocol_agents SET provider = ?, session_id = ?, status = ?, updated_at = ? WHERE id = ? AND run_id = ?')
-          .run(provider, session.sessionId, 'working', ts, agent.id, controller.runId)
-        if (agent.role === 'lead') {
-          tx.prepare('UPDATE protocol_runs SET provider = ?, updated_at = ? WHERE id = ?')
-            .run(provider, ts, controller.runId)
-        }
-        insertEventSync(tx, {
-          version: AGENT_PROTOCOL_VERSION,
-          runId: controller.runId,
-          agentId: agent.id,
-          type: 'learning',
-          summary: `${agent.name} failed over from ${agent.provider} to ${provider}`,
-          detail: failure.detail,
-          payload: { failureClass: failure.kind, fromProvider: agent.provider, toProvider: provider },
-          timestamp: ts,
-        })
-        const priorAttempts = Number((tx.prepare("SELECT COUNT(*) AS n FROM protocol_events WHERE run_id = ? AND type = 'agent.attempt' AND task_id IS ?")
-          .get(controller.runId, agent.taskId ?? null) as Row).n)
-        insertEventSync(tx, {
-          version: AGENT_PROTOCOL_VERSION,
-          runId: controller.runId,
-          agentId: agent.id,
-          type: 'agent.attempt',
-          taskId: agent.taskId ?? undefined,
-          summary: `${agent.name} recovered on ${provider} after ${agent.provider} ${failure.kind}`,
-          payload: {
-            reason: 'provider_recovery',
-            ordinal: priorAttempts + 2,
-            provider,
-            fromProvider: agent.provider,
-            failureClass: failure.kind,
-          },
-          timestamp: ts,
-        })
-        return canUseInProcessTools ? issueParticipantTokenSync(tx, controller.runId, agent.id, undefined, ts) : undefined
-      })
       if (token) {
         const identity: ExternalProtocolIdentity = { runId: controller.runId, agentId: agent.id, token }
-        registerCoordinatorToolsForProvider(provider, session.sessionId, identity)
+        registerCoordinatorToolsForProvider(provider, session.sessionId, identity, provider)
         controller.sdkIdentities.set(agent.id, identity)
       }
       recordContextTransfer({
@@ -8629,6 +8698,7 @@ async function handleProviderTurnFailure(
       controller.sameProviderRetries.delete(agent.id)
       return 'retry'
     } catch (error) {
+      if (error instanceof CoordinatorRecoverySuperseded) return 'terminal'
       failed.add(provider)
       await recordProtocolEvent({
         version: AGENT_PROTOCOL_VERSION,
@@ -8672,7 +8742,7 @@ async function handleProviderTurnFailure(
     agentId: agent.id,
     type: 'agent.blocked',
     taskId: agent.taskId,
-    summary: `${agent.name} provider failed and no configured failover was available`,
+    summary: selectionPinned ? `${agent.name} provider failed; task has explicit provider/model/effort selection. Explicitly reassign to change that selection.` : `${agent.name} provider failed and no configured failover was available`,
     detail,
     payload: { failureClass: failure.kind },
   })
@@ -8714,6 +8784,10 @@ async function dispatchAgentTurn(
       await stopProtocolRunForBudget(controller, budgetReason)
       return
     }
+    const inheritsSelection = agent.provider === controller.modelSource?.provider
+      && (agent.providerInstanceId ?? agent.provider) === controller.modelSource.providerInstanceId
+    const model = task?.requestedModel ?? (inheritsSelection ? controller.model : undefined)
+    const effort = task?.requestedEffort ?? (inheritsSelection && (!task?.requestedModel || task.requestedModel === controller.model) ? controller.effort : undefined)
     const taskBudgetTokens = remainingTokenBudgetSync(db, run)
     const maxBudgetUsd = remainingCostBudgetSync(db, run)
     const sessionId = controller.sessionIds.get(agent.id) ?? agent.sessionId
@@ -8723,10 +8797,11 @@ async function dispatchAgentTurn(
       if (!reserved.changes) { providerFailureHandled = true; return }
       durableDispatch = true
     }
+    await resolveProviderInstance(agent.providerInstanceId ?? agent.provider, agent.provider)
     const isPending = controller.pendingSessions.has(agent.id)
     controller.pendingSessions.delete(agent.id)
     noteKeyedSideEffect()
-    const response = await streamViewSessionTurn({
+    const response = await withProviderInstance(agent.providerInstanceId ?? agent.provider, agent.provider, () => streamViewSessionTurn({
       sessionId,
       signal: new AbortController().signal,
       provider: agent.provider,
@@ -8735,8 +8810,8 @@ async function dispatchAgentTurn(
         provider: agent.provider,
         cwd: agent.worktreePath,
         isPendingSession: isPending ? true : undefined,
-        model: task?.requestedModel ?? controller.model,
-        effort: task?.requestedEffort ?? controller.effort,
+        model,
+        effort,
         taskBudgetTokens,
         maxBudgetUsd,
         ...(agent.provider === 'claude' && task?.claudeAgentPolicy
@@ -8745,7 +8820,7 @@ async function dispatchAgentTurn(
         detachOnClientAbort: true,
         ...(opts.permissionMode && agent.provider === 'claude' ? { permissionMode: opts.permissionMode } : {}),
       },
-    })
+    }))
     if (!response.ok) {
       dispatchSettled = true
       providerFailureHandled = true
@@ -9241,7 +9316,11 @@ async function spawnTeammateSession(
   agentId: string,
   teammateProvider: ProtocolRun['provider'],
   reserveForDelegation = false,
+  requestedInstanceId?: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  const db = await getDatabase()
+  const lead = listAgentsSync(db, controller.runId).find(agent => agent.role === 'lead')
+  const instance = await resolveProviderInstance(requestedInstanceId ?? (lead?.provider === teammateProvider ? lead.providerInstanceId : teammateProvider), teammateProvider)
   const ts = nowIso()
   let workspace: WorktreeTask | { path: string; branch: string } | null = null
   let session: Awaited<ReturnType<typeof createNewViewSession>>
@@ -9250,12 +9329,13 @@ async function spawnTeammateSession(
     workspace = controller.useWorktrees
       ? await createWorktreeTask(controller.baseCwd, `${controller.title ?? 'coord'}-${name}`)
       : { path: controller.baseCwd, branch: '' }
-    session = await createNewViewSession({
+    session = await withProviderInstance(instance.id, teammateProvider, () => createNewViewSession({
       provider: teammateProvider,
-      cwd: workspace.path,
+      cwd: workspace!.path,
       title: `${controller.title ?? 'Coordinated run'} · ${name}`,
       codexDynamicTools: teammateProvider === 'codex' ? buildCoordinatorCodexDynamicTools() : undefined,
-    })
+    }))
+    assertCoordinatorSessionInstanceSync(db, session.sessionId, instance.id)
   } catch (err) {
     // Session creation happens after the isolated checkout is registered.
     // If the provider cannot create a session, tear that checkout back down
@@ -9277,17 +9357,19 @@ async function spawnTeammateSession(
   if (!workspace) return { ok: false, error: 'No workspace available' }
   const canUseInProcessTools = await inProcessToolsAvailable(session.provider)
   const token = await enqueueWrite((tx) => {
+    assertCoordinatorSessionInstanceSync(tx, session.sessionId, instance.id)
     tx.prepare(`
       INSERT INTO protocol_agents (
         id, run_id, name, role, provider, session_id, worktree_path, worktree_branch, task_id, status, last_seen_at, created_at, updated_at
       ) VALUES (?, ?, ?, 'teammate', ?, ?, ?, ?, NULL, 'idle', NULL, ?, ?)
     `).run(agentId, controller.runId, name, session.provider, session.sessionId, workspace.path, workspace.branch, ts, ts)
+    tx.prepare('UPDATE protocol_agents SET provider_instance_id = ? WHERE run_id = ? AND id = ?').run(instance.id, controller.runId, agentId)
     if (!reserveForDelegation) claimTaskSync(tx, controller.runId, agentId)
     return canUseInProcessTools ? issueParticipantTokenSync(tx, controller.runId, agentId, undefined, ts) : undefined
   })
   if (token) {
     const identity: ExternalProtocolIdentity = { runId: controller.runId, agentId, token }
-    registerCoordinatorToolsForProvider(session.provider, session.sessionId, identity)
+    registerCoordinatorToolsForProvider(session.provider, session.sessionId, identity, instance.id)
     controller.sdkIdentities.set(agentId, identity)
   }
   if (session.isPending) controller.pendingSessions.add(agentId)
@@ -9352,7 +9434,7 @@ async function beginExecutionPhase(controller: RunController): Promise<void> {
  */
 export async function spawnAdditionalTeammate(
   identity: ExternalProtocolIdentity,
-  params: { provider?: ProtocolRun['provider']; reserveForDelegation?: boolean; name?: string } = {},
+  params: { provider?: ProtocolRun['provider']; providerInstanceId?: string; reserveForDelegation?: boolean; name?: string } = {},
 ): Promise<{ agentId: string; name: string }> {
   // Reserved callers already hold the automatic-delegation serialization key.
   if (!params.reserveForDelegation) return serializeAutomaticDelegation(identity.runId, () => spawnAdditionalTeammateReserved(identity, params))
@@ -9361,7 +9443,7 @@ export async function spawnAdditionalTeammate(
 
 async function spawnAdditionalTeammateReserved(
   identity: ExternalProtocolIdentity,
-  params: { provider?: ProtocolRun['provider']; reserveForDelegation?: boolean; name?: string },
+  params: { provider?: ProtocolRun['provider']; providerInstanceId?: string; reserveForDelegation?: boolean; name?: string },
 ): Promise<{ agentId: string; name: string }> {
   const controller = controllers.get(identity.runId)
   if (!controller) {
@@ -9393,7 +9475,7 @@ async function spawnAdditionalTeammateReserved(
   if (params.reserveForDelegation) controller.turnInFlight.add(agentId)
   let result: Awaited<ReturnType<typeof spawnTeammateSession>>
   try {
-    result = await spawnTeammateSession(controller, name, agentId, teammateProvider, params.reserveForDelegation)
+    result = await spawnTeammateSession(controller, name, agentId, teammateProvider, params.reserveForDelegation, params.providerInstanceId)
   } catch (error) {
     controller.turnInFlight.delete(agentId)
     throw error
@@ -9455,6 +9537,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
     title: params.title ?? playbook?.name,
     model: params.model,
     effort: params.effort,
+    modelSource: { provider: params.provider, providerInstanceId: currentProviderInstanceId(params.provider) },
     gateCommand: (params.gateCommand ?? playbook?.gateCommand)?.trim() || undefined,
     requirePlanApproval: (params.requirePlanApproval ?? playbook?.requirePlanApproval) === true,
     autonomy,
@@ -9512,11 +9595,13 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
         ts,
         ts,
       )
+      assertCoordinatorSessionInstanceSync(db, leadSession.sessionId, currentProviderInstanceId(params.provider))
       db.prepare(`
         INSERT INTO protocol_agents (
           id, run_id, name, role, provider, session_id, worktree_path, worktree_branch, task_id, status, last_seen_at, created_at, updated_at
         ) VALUES ('lead', ?, 'lead', 'lead', ?, ?, ?, '', NULL, 'working', NULL, ?, ?)
       `).run(runId, leadSession.provider, leadSession.sessionId, params.baseCwd, ts, ts)
+      db.prepare('UPDATE protocol_agents SET provider_instance_id = ? WHERE run_id = ? AND id = ?').run(currentProviderInstanceId(params.provider), runId, 'lead')
       if (playbook) seedPlaybookTasksSync(db, runId, 'lead', playbook, params.playbookArgs)
       if (leadCanUseInProcessTools) leadToken = issueParticipantTokenSync(db, runId, 'lead', undefined, ts)
       db.exec('COMMIT')
@@ -9531,7 +9616,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
 
   if (leadToken) {
     const identity: ExternalProtocolIdentity = { runId, agentId: 'lead', token: leadToken }
-    registerCoordinatorToolsForProvider(leadSession.provider, leadSession.sessionId, identity)
+    registerCoordinatorToolsForProvider(leadSession.provider, leadSession.sessionId, identity, currentProviderInstanceId(leadSession.provider))
     controller.sdkIdentities.set('lead', identity)
   }
 
@@ -9594,7 +9679,7 @@ export async function stopProtocolRun(runId: string, preserveSessionId?: string)
   if (controller) controller.stopped = true
   const agents = listAgentsSync(db, runId)
   controllers.delete(runId)
-  if (controller) for (const sessionId of controller.sessionIds.values()) unregisterCoordinatorToolsForSession(sessionId)
+  unregisterCoordinatorRunTools(runId)
   const snapshot = await enqueueWrite((tx) => {
     const ts = nowIso()
     const updated = tx.prepare('UPDATE protocol_runs SET status = ?, updated_at = ? WHERE id = ?').run('stopped', ts, runId) as { changes?: number | bigint } | undefined
@@ -9644,7 +9729,7 @@ export async function deleteProtocolRun(runId: string): Promise<{ deleted: boole
   if (controller) controller.stopped = true
   const agents = listAgentsSync(db, runId)
   controllers.delete(runId)
-  if (controller) for (const sessionId of controller.sessionIds.values()) unregisterCoordinatorToolsForSession(sessionId)
+  unregisterCoordinatorRunTools(runId)
   // Remove the durable run first. External supervisors treat the missing run
   // as terminal and can stop their provider process even when an in-process
   // SDK interrupt is wedged. Cleanup below remains bounded and best effort.

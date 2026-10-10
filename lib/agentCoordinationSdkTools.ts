@@ -15,7 +15,7 @@
  * doesn't have an SDK tool type at all — see registerCoordinatorCodexTools
  * for its dynamicTools + server-request flow.
  *
- * A run's controller registers a session id → identity binding per
+ * A run's controller registers a provider instance + session id → identity binding per
  * Claude/Pi/Copilot/Codex agent (see the register* functions below) and each
  * provider's client looks the binding up by session id at the point it
  * actually starts/resumes that session.
@@ -23,6 +23,8 @@
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk'
 import type { McpServerConfig } from '@anthropic-ai/claude-agent-sdk'
 import { randomUUID } from 'node:crypto'
+import { currentProviderInstanceId } from './providerInstances'
+import type { AgentProvider } from './types'
 import { z } from 'zod'
 import { Type, type TSchema } from 'typebox'
 import type { ToolDefinition as PiToolDefinition } from '@earendil-works/pi-coding-agent'
@@ -138,6 +140,11 @@ export function buildCoordinatorSdkTools(identity: ExternalProtocolIdentity) {
   ))
 }
 
+/** Never infer a binding from another account when no scoped binding exists. */
+function bindingKey(provider: AgentProvider, sessionId: string, instanceId = currentProviderInstanceId(provider)): string {
+  return JSON.stringify([provider, instanceId, sessionId])
+}
+
 const registry = new Map<string, { identity: ExternalProtocolIdentity; servers: Record<string, McpServerConfig> }>()
 
 /**
@@ -146,10 +153,10 @@ const registry = new Map<string, { identity: ExternalProtocolIdentity; servers: 
  * compares this object by identity to decide whether a warm subprocess still
  * carries the right binding, and a fresh object per turn would respawn it every turn.
  */
-export function registerCoordinatorMcpServer(sessionId: string, identity: ExternalProtocolIdentity): void {
-  const current = registry.get(sessionId)?.identity
+export function registerCoordinatorMcpServer(sessionId: string, identity: ExternalProtocolIdentity, providerInstanceId?: string): void {
+  const current = registry.get(bindingKey('claude', sessionId, providerInstanceId))?.identity
   if (current && current.runId === identity.runId && current.agentId === identity.agentId && current.token === identity.token) return
-  registry.set(sessionId, {
+  registry.set(bindingKey('claude', sessionId, providerInstanceId), {
     identity,
     servers: {
       'agent-viewer': createSdkMcpServer({
@@ -160,12 +167,12 @@ export function registerCoordinatorMcpServer(sessionId: string, identity: Extern
   })
 }
 
-export function getCoordinatorMcpServers(sessionId: string): Record<string, McpServerConfig> | undefined {
-  return registry.get(sessionId)?.servers
+export function getCoordinatorMcpServers(sessionId: string, providerInstanceId?: string): Record<string, McpServerConfig> | undefined {
+  return registry.get(bindingKey('claude', sessionId, providerInstanceId))?.servers
 }
 
-export function unregisterCoordinatorMcpServer(sessionId: string): void {
-  registry.delete(sessionId)
+export function unregisterCoordinatorMcpServer(sessionId: string, providerInstanceId?: string): void {
+  registry.delete(bindingKey('claude', sessionId, providerInstanceId))
 }
 
 // ---- Pi (TypeBox customTools) ----------------------------------------------
@@ -217,18 +224,18 @@ export function buildCoordinatorPiTools(identity: ExternalProtocolIdentity): PiT
 
 const piRegistry = new Map<string, ExternalProtocolIdentity>()
 
-export function registerCoordinatorPiTools(sessionId: string, identity: ExternalProtocolIdentity): void {
-  piRegistry.set(sessionId, identity)
+export function registerCoordinatorPiTools(sessionId: string, identity: ExternalProtocolIdentity, providerInstanceId?: string): void {
+  piRegistry.set(bindingKey('pi', sessionId, providerInstanceId), identity)
 }
 
 /** Pi's createAgentSession/customTools option needs the built tool array, not just the identity. */
-export function getCoordinatorPiTools(sessionId: string): PiToolDefinition[] | undefined {
-  const identity = piRegistry.get(sessionId)
+export function getCoordinatorPiTools(sessionId: string, providerInstanceId?: string): PiToolDefinition[] | undefined {
+  const identity = piRegistry.get(bindingKey('pi', sessionId, providerInstanceId))
   return identity ? buildCoordinatorPiTools(identity) : undefined
 }
 
-export function unregisterCoordinatorPiTools(sessionId: string): void {
-  piRegistry.delete(sessionId)
+export function unregisterCoordinatorPiTools(sessionId: string, providerInstanceId?: string): void {
+  piRegistry.delete(bindingKey('pi', sessionId, providerInstanceId))
 }
 
 // ---- Copilot (zod-schema Tool[]) -------------------------------------------
@@ -250,17 +257,17 @@ export function buildCoordinatorCopilotTools(identity: ExternalProtocolIdentity)
 
 const copilotRegistry = new Map<string, ExternalProtocolIdentity>()
 
-export function registerCoordinatorCopilotTools(sessionId: string, identity: ExternalProtocolIdentity): void {
-  copilotRegistry.set(sessionId, identity)
+export function registerCoordinatorCopilotTools(sessionId: string, identity: ExternalProtocolIdentity, providerInstanceId?: string): void {
+  copilotRegistry.set(bindingKey('copilot', sessionId, providerInstanceId), identity)
 }
 
-export function getCoordinatorCopilotTools(sessionId: string): unknown[] | undefined {
-  const identity = copilotRegistry.get(sessionId)
+export function getCoordinatorCopilotTools(sessionId: string, providerInstanceId?: string): unknown[] | undefined {
+  const identity = copilotRegistry.get(bindingKey('copilot', sessionId, providerInstanceId))
   return identity ? buildCoordinatorCopilotTools(identity) : undefined
 }
 
-export function unregisterCoordinatorCopilotTools(sessionId: string): void {
-  copilotRegistry.delete(sessionId)
+export function unregisterCoordinatorCopilotTools(sessionId: string, providerInstanceId?: string): void {
+  copilotRegistry.delete(bindingKey('copilot', sessionId, providerInstanceId))
 }
 
 // ---- Codex (JSON-schema dynamicTools + item/tool/call) --------------------
@@ -306,16 +313,16 @@ export function buildCoordinatorCodexDynamicTools(): DynamicToolSpec[] {
 const codexRegistry = new Map<string, ExternalProtocolIdentity>()
 
 /** Bind a Codex thread id to a Coordinator identity so the item/tool/call server-request handler (lib/codexClient.ts) can dispatch by name. */
-export function registerCoordinatorCodexTools(threadId: string, identity: ExternalProtocolIdentity): void {
-  codexRegistry.set(threadId, identity)
+export function registerCoordinatorCodexTools(threadId: string, identity: ExternalProtocolIdentity, providerInstanceId?: string): void {
+  codexRegistry.set(bindingKey('codex', threadId, providerInstanceId), identity)
 }
 
-export function getCoordinatorCodexIdentity(threadId: string): ExternalProtocolIdentity | undefined {
-  return codexRegistry.get(threadId)
+export function getCoordinatorCodexIdentity(threadId: string, providerInstanceId?: string): ExternalProtocolIdentity | undefined {
+  return codexRegistry.get(bindingKey('codex', threadId, providerInstanceId))
 }
 
-export function unregisterCoordinatorCodexTools(threadId: string): void {
-  codexRegistry.delete(threadId)
+export function unregisterCoordinatorCodexTools(threadId: string, providerInstanceId?: string): void {
+  codexRegistry.delete(bindingKey('codex', threadId, providerInstanceId))
 }
 
 async function dispatchByRegistry(
@@ -344,8 +351,9 @@ export function dispatchCoordinatorCodexToolCall(
   threadId: string,
   toolName: string,
   args: Record<string, unknown>,
+  providerInstanceId?: string,
 ): Promise<{ text: string; isError: boolean } | null> {
-  return dispatchByRegistry(codexRegistry, threadId, toolName, args)
+  return dispatchByRegistry(codexRegistry, bindingKey('codex', threadId, providerInstanceId), toolName, args)
 }
 
 // ---- OpenCode (plugin file + local HTTP bridge) ----------------------------
@@ -358,12 +366,12 @@ export function dispatchCoordinatorCodexToolCall(
 // lib/coordinatorBridgeServer.ts and lib/opencodePlugin/agentViewerCoordinator.mjs).
 const opencodeRegistry = new Map<string, ExternalProtocolIdentity>()
 
-export function registerCoordinatorOpenCodeTools(sessionId: string, identity: ExternalProtocolIdentity): void {
-  opencodeRegistry.set(sessionId, identity)
+export function registerCoordinatorOpenCodeTools(sessionId: string, identity: ExternalProtocolIdentity, providerInstanceId?: string): void {
+  opencodeRegistry.set(bindingKey('opencode', sessionId, providerInstanceId), identity)
 }
 
-export function unregisterCoordinatorOpenCodeTools(sessionId: string): void {
-  opencodeRegistry.delete(sessionId)
+export function unregisterCoordinatorOpenCodeTools(sessionId: string, providerInstanceId?: string): void {
+  opencodeRegistry.delete(bindingKey('opencode', sessionId, providerInstanceId))
 }
 
 /** Dispatch an OpenCode coordinator-plugin tool call for a registered session. Returns null if the session isn't a coordinator participant or the tool name isn't one of ours. */
@@ -372,5 +380,20 @@ export function dispatchCoordinatorOpenCodeToolCall(
   toolName: string,
   args: Record<string, unknown>,
 ): Promise<{ text: string; isError: boolean } | null> {
-  return dispatchByRegistry(opencodeRegistry, sessionId, toolName, args)
+  return dispatchByRegistry(opencodeRegistry, bindingKey('opencode', sessionId), toolName, args)
+}
+
+/** Teardown all aliases for this run, including bindings restored without a controller. */
+export function unregisterCoordinatorRunTools(runId: string, sessionId?: string, providerInstanceId?: string): void {
+  function remove<T>(bindings: Map<string, T>, identityFor: (value: T) => ExternalProtocolIdentity) {
+    for (const [key, value] of bindings) {
+      if (identityFor(value).runId !== runId) continue
+      const [, instance, nativeSession] = JSON.parse(key) as string[]
+      if (sessionId !== undefined && nativeSession !== sessionId) continue
+      if (providerInstanceId !== undefined && instance !== providerInstanceId) continue
+      bindings.delete(key)
+    }
+  }
+  remove(registry, value => value.identity)
+  for (const bindings of [piRegistry, copilotRegistry, codexRegistry, opencodeRegistry]) remove(bindings, value => value)
 }

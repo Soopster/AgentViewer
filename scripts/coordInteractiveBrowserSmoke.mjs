@@ -46,7 +46,7 @@ try {
       // Herdr marks every pane in its sidebar; this is the session list's copy.
       data = { attention: enabled && permissionPending ? [{ sessionId: lead.sessionId, provider: 'codex', waiting: 1, finished: 0 }] : [] }
     }
-    else if (url.searchParams.get('inspect') === 'capabilities') data = { provider: url.searchParams.get('targetProvider'), status: 'available', models: [{ value: 'advertised-model', displayName: 'Advertised fixture model', description: 'fixture', supportsEffort: true, supportedEffortLevels: ['low', 'high'] }], checkedAt: new Date().toISOString() }
+    else if (url.searchParams.get('inspect') === 'capabilities') data = { provider: url.searchParams.get('targetProvider'), providerInstanceId: url.searchParams.get('targetProviderInstanceId') || url.searchParams.get('targetProvider'), instances: [{ id: 'codex', provider: 'codex', displayName: 'Default' }, { id: 'codex-work', provider: 'codex', displayName: 'Work' }], status: 'available', models: [{ value: 'advertised-model', displayName: 'Advertised fixture model', description: 'fixture', supportsEffort: true, supportedEffortLevels: ['low', 'high'] }], checkedAt: new Date().toISOString() }
     else if (url.pathname === '/api/agent-protocol/playbooks') {
       if (url.searchParams.get('preview') === 'interactive') {
         const args = JSON.parse(url.searchParams.get('args') || '{}')
@@ -126,6 +126,10 @@ try {
   await page.getByLabel('Send to', { exact: true }).selectOption('auto')
   await panel.getByText('Task model and effort', { exact: true }).click()
   await panel.getByRole('button', { name: 'Refresh model catalog' }).click()
+  await panel.getByLabel('Configured task account').selectOption('codex-work')
+  assert.equal(await panel.getByLabel('Provider instance ID', { exact: true }).inputValue(), 'codex-work')
+  await panel.getByRole('button', { name: 'Refresh model catalog' }).click()
+  await panel.getByText('Account / endpoint: codex-work', { exact: true }).waitFor()
   await panel.getByLabel('Advertised task model').selectOption('advertised-model')
   assert.equal(await panel.getByLabel('Task model ID', { exact: true }).inputValue(), 'advertised-model')
   await panel.getByLabel('Advertised task effort').selectOption('high')
@@ -135,11 +139,13 @@ try {
   await panel.getByLabel('Task or follow-up', { exact: true }).fill('Review using the chosen model')
   await panel.getByRole('button', { name: 'Ask teammate', exact: true }).click()
   const modelDelegation = actions.findLast(action => action.action === 'delegate')
+  assert.equal(modelDelegation.requestedProviderInstanceId, 'codex-work')
   assert.equal(modelDelegation.requestedModel, 'custom-review-model')
   assert.equal(modelDelegation.requestedEffort, 'high')
   await page.getByLabel('New teammate uses', { exact: true }).selectOption('claude')
   assert.equal(await panel.getByLabel('Task model ID', { exact: true }).inputValue(), '', 'changing provider clears an incompatible model')
   assert.equal(await panel.getByLabel('Task effort', { exact: true }).inputValue(), '')
+  assert.equal(await panel.getByLabel('Provider instance ID', { exact: true }).inputValue(), '')
     assert.equal(errors.length, 0, errors.join('\n'))
     console.log('Coordinator browser catalog passed: refresh, advertised model/effort selection, delegate payload, and provider-change reset.')
   } else {

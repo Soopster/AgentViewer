@@ -52,7 +52,7 @@ try {
   migration.close()
   execFileSync(process.execPath, [fileURLToPath(import.meta.url), '--upgrade', cwd], { cwd, stdio: 'pipe' })
   const upgraded = new Database('.agent-viewer-data/agent-coordination/coordination.sqlite')
-  assert.equal(upgraded.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value, '25')
+  assert.ok(Number(upgraded.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value) >= 26)
   assert.ok(upgraded.prepare('PRAGMA table_info(protocol_tasks)').all().some((column: { name: string }) => column.name === 'context_handoff_json'))
   assert.ok(upgraded.prepare('PRAGMA table_info(protocol_agents)').all().some((column: { name: string }) => column.name === 'pending_background_json'))
   upgraded.close()

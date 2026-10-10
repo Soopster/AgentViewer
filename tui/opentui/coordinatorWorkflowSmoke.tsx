@@ -16,7 +16,7 @@ await coord.writeRunPlaybook(process.cwd(), { name: 'feature-team', argsHint: 'F
 const { mock } = await (0, eval)('import("bun:test")')
 const service = await import('../../lib/tui/service')
 mock.module('../../lib/tui/service', () => ({ ...service,
-  readTuiCoordinatorCapabilities: async () => ({ provider: 'codex', status: 'available', checkedAt: new Date().toISOString(), models: [{ value: 'advertised-model', displayName: 'Fixture model', description: '', supportsEffort: true, supportedEffortLevels: ['low', 'high'] }] }),
+  readTuiCoordinatorCapabilities: async () => ({ provider: 'codex', providerInstanceId: 'codex-work', instances: [{ id: 'codex-work', provider: 'codex', displayName: 'Work' }], status: 'available', checkedAt: new Date().toISOString(), models: [{ value: 'advertised-model', displayName: 'Fixture model', description: '', supportsEffort: true, supportedEffortLevels: ['low', 'high'] }] }),
   listTuiRunPlaybooks: coord.listRunPlaybooks,
   previewTuiInteractiveWorkflow: (cwd: string, name: string, provider: 'codex', args: unknown) => coord.previewInteractiveWorkflow({ cwd, name, provider, args }),
 }))
@@ -83,6 +83,8 @@ try {
     await press('n')
     assert.ok(setup.captureCharFrame().includes('Task model and effort'))
     await press('r')
+    await press('i')
+    await press('r')
     await press('m')
     await press('e')
     assert.ok(setup.captureCharFrame().includes('advertised-model'), setup.captureCharFrame())
@@ -104,6 +106,7 @@ try {
     await press('return')
     assert.equal(submitted.at(-1).action, 'delegate')
     assert.equal(submitted.at(-1).teammateName, 'reviewer')
+    assert.equal(submitted.at(-1).requestedProviderInstanceId, 'codex-work')
     assert.equal(submitted.at(-1).requestedModel, 'custom-model')
     assert.equal(submitted.at(-1).requestedEffort, 'high')
     await press('n')
