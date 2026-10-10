@@ -1549,9 +1549,10 @@ function externalActionableSync(db: SqliteDatabase, runId: string, agentId: stri
   const agents = listAgentsSync(db, runId)
   const tasks = listTasksSync(db, runId)
   const tasksById = new Map(tasks.map((task) => [task.id, task]))
+  const recoveryPending = agent ? hasUnobservedDispatchSync(db, runId, agent) : false
   const claimable = tasks.filter((task) => (
     task.status === 'pending' && !task.ownerAgentId && taskDepsCompleted(task, tasksById)
-      && Boolean(agent && taskClaimableByAgent(task, agent, agents))
+      && !recoveryPending && Boolean(agent && taskClaimableByAgent(task, agent, agents))
   ))
   const mailbox = db.prepare(`
     SELECT kind, priority, reply_required, in_reply_to, created_at, from_agent_id, correlation_id FROM protocol_messages
@@ -3466,6 +3467,7 @@ function describeClaimFailureSync(db: SqliteDatabase, runId: string, agentId: st
   }
   const agentRow = db.prepare('SELECT * FROM protocol_agents WHERE run_id = ? AND id = ?').get(runId, agentId) as Row | undefined
   const agent = agentRow ? rowToAgent(agentRow) : null
+  if (agent && hasUnobservedDispatchSync(db, runId, agent)) return `No claimable task: ${agent.name} has a previous execution awaiting inspection and acknowledgement in the owning host`
   const alreadyOwned = listTasksSync(db, runId).find((entry) => (
     entry.ownerAgentId === agentId && !['completed', 'failed', 'cancelled'].includes(entry.status)
   ))
@@ -5859,11 +5861,19 @@ function taskClaimableByAgent(task: ProtocolTask, agent: ProtocolAgent, agents: 
   ))
 }
 
+function hasUnobservedDispatchSync(db: SqliteDatabase, runId: string, agent: ProtocolAgent): boolean {
+  return Boolean(db.prepare('SELECT 1 FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').get(runId, agent.id))
+    && !controllers.get(runId)?.turnInFlight.has(agent.id) && !getRunningSessionInfo(agent.sessionId).running
+}
+
 /** Atomic claim: only a role-compatible pending task with completed deps and no owner can be taken. */
 function claimTaskSync(db: SqliteDatabase, runId: string, agentId: string, taskId?: string): ProtocolTask | null {
   const agentRow = db.prepare('SELECT * FROM protocol_agents WHERE run_id = ? AND id = ?').get(runId, agentId) as Row | undefined
   if (!agentRow) return null
   const agent = rowToAgent(agentRow)
+  // Assignment must pass the same recovery gate as dispatch. Otherwise an
+  // unavailable session repeatedly takes released work it cannot execute.
+  if (hasUnobservedDispatchSync(db, runId, agent)) return null
   const runRow = db.prepare('SELECT status FROM protocol_runs WHERE id = ?').get(runId) as Row | undefined
   if (!runRow || !['planning', 'running'].includes(String(runRow.status))) return null
   if (['done', 'failed', 'stopped'].includes(agent.status)) return null
@@ -7848,39 +7858,52 @@ export async function readInteractiveRecoveries(runId: string): Promise<string[]
     if (agent.role !== 'teammate' || agent.turnActive || agent.sessionId.startsWith('external:')) return false
     const task = snapshot.tasks.find(task => task.id === agent.taskId)
     const reserved = db.prepare('SELECT task_id FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').get(runId, agent.id) as Row | undefined
+    if (acknowledgeableDispatchSync(db, snapshot, agent)) return false
     const dispatchedTask = reserved?.task_id ? snapshot.tasks.find(entry => entry.id === reserved.task_id) : undefined
     if (!agent.taskId && dispatchedTask && ['completed', 'failed', 'cancelled'].includes(dispatchedTask.status)) return false
     return Boolean(reserved) || task?.status === 'in_progress' || task?.status === 'planning'
   }).map(agent => agent.id)
 }
 
-/** Completed work may retain a stream marker after the execution host exits. */
+/** A stale reservation is separate from whatever task the scheduler later assigned. */
+function acknowledgeableDispatchSync(db: SqliteDatabase, snapshot: ProtocolRunSnapshot, agent: ProtocolAgent): Row | undefined {
+  if (agent.turnActive || controllers.get(snapshot.run.id)?.turnInFlight.has(agent.id) || getRunningSessionInfo(agent.sessionId).running) return
+  const row = db.prepare('SELECT task_id, created_at FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').get(snapshot.run.id, agent.id) as Row | undefined
+  const dispatched = row?.task_id ? snapshot.tasks.find(task => task.id === row.task_id) : undefined
+  if (!dispatched) return
+  const current = snapshot.tasks.find(task => task.id === agent.taskId)
+  // Older builds could assign new work behind a terminal reservation. Clearing
+  // that old reservation must leave the new claim, locks and receipt untouched.
+  if (['completed', 'failed', 'cancelled'].includes(dispatched.status)
+    && (!agent.taskId || (current?.id !== dispatched.id && current?.status === 'claimed' && current.ownerAgentId === agent.id))) return row
+  // Release revokes this claim; acknowledgement retires its uncertain stream,
+  // rather than replaying released work or resetting another participant's claim.
+  if (!agent.taskId && dispatched.ownerAgentId !== agent.id) return row
+}
+
+/** Completed or relinquished work may retain a stream marker after a host exits. */
 export async function readSettledInteractiveExecutions(runId: string): Promise<string[]> {
   const db = await getDatabase()
   if (foreignInteractiveHostSync(db, runId)) return []
   const snapshot = readSnapshotSync(db, runId)
   if (!snapshot) return []
-  return snapshot.agents.filter(agent => {
-    if (agent.turnActive || getRunningSessionInfo(agent.sessionId).running) return false
-    const row = db.prepare('SELECT task_id FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').get(runId, agent.id) as Row | undefined
-    const task = row?.task_id ? snapshot.tasks.find(task => task.id === row.task_id) : undefined
-    return task && ['completed', 'failed', 'cancelled'].includes(task.status) && !agent.taskId
-  }).map(agent => agent.id)
+  return snapshot.agents.filter(agent => acknowledgeableDispatchSync(db, snapshot, agent)).map(agent => agent.id)
 }
 
-/** User acknowledgement clears only a marker tied to a durable terminal result. */
+/** User acknowledgement retires a completed/relinquished execution, never an owned unfinished one. */
 export async function reconcileSettledInteractiveExecution(identity: ExternalProtocolIdentity, agentId: string): Promise<void> {
   await serializeAutomaticDelegation(identity.runId, async () => {
     const db = await getDatabase()
     if (requireExternalParticipantSync(db, identity).role !== 'lead') throw new Error('Only the lead conversation can acknowledge a settled execution')
     await enqueueWrite(tx => claimInteractiveHostSync(tx, identity.runId))
-    if (!(await readSettledInteractiveExecutions(identity.runId)).includes(agentId)) throw new Error('Inspect the execution first; only a terminal result without a live turn can be acknowledged')
+    if (!(await readSettledInteractiveExecutions(identity.runId)).includes(agentId)) throw new Error('Inspect the execution first; only completed or relinquished work without a live turn can be acknowledged')
     await enqueueWrite(tx => {
-      if (controllers.get(identity.runId)?.turnInFlight.has(agentId)) throw new Error('Teammate became active; refresh before acknowledging')
-      const result = tx.prepare(`DELETE FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?
-        AND task_id IN (SELECT id FROM protocol_tasks WHERE run_id = ? AND status IN ('completed', 'failed', 'cancelled'))
-        AND NOT EXISTS (SELECT 1 FROM protocol_agents WHERE run_id = ? AND id = ? AND task_id IS NOT NULL)`)
-        .run(identity.runId, agentId, identity.runId, identity.runId, agentId)
+      const snapshot = readSnapshotSync(tx, identity.runId)!
+      const agent = snapshot.agents.find(agent => agent.id === agentId)
+      const reserved = agent && acknowledgeableDispatchSync(tx, snapshot, agent)
+      if (!reserved) throw new Error('Execution changed or teammate became active; refresh before acknowledging')
+      const result = tx.prepare('DELETE FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ? AND task_id = ? AND created_at = ?')
+        .run(identity.runId, agentId, reserved.task_id, reserved.created_at)
       if (!result.changes) throw new Error('Execution changed; refresh before acknowledging')
     })
     notifyRunChanged(identity.runId)

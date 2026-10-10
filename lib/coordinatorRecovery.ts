@@ -30,7 +30,7 @@ export function recoveryOverview(state: CoordinatorInteractiveState | null, insp
       task ? `Owned work: ${task.id} · ${task.title} · ${task.status}` : 'No open task assigned.',
       evidence ? `Directory: ${evidence.directory.detail}` : 'Directory availability has not been checked.',
       evidence ? `Conversation: ${evidence.conversation.detail} · checked ${evidence.checkedAt}` : 'Native conversation availability has not been checked.',
-      ...(settled ? ['A durable result is terminal, but its prior stream marker remains. Inspect the result, then acknowledge it without starting a turn.'] : []),
+      ...(settled ? ['A prior execution was completed or its claim was relinquished, but its stream marker remains. Inspect that execution, then acknowledge it without starting a turn. Any current assignment is retained.'] : []),
       needsRecovery ? 'The ledger retains unfinished execution without a live turn observed here. Inspect the transcript before resuming.' : 'Observation reconnects automatically. Opening a transcript does not resend work.',
       ...(humanGate ? ['Answer the pending question, decision, or approval first.'] : []),
     ], canReconcile: settled && !interactive.executionElsewhere && !pendingRequest, canResume: needsRecovery && Boolean(task) && available && !humanGate && !interactive.executionElsewhere && !interactive.resources?.pausedReason && !pendingRequest })
