@@ -10,11 +10,15 @@
 // `interactiveCoordinatorStore`, which is what lets the `memo` hold — a
 // coordinator refresh repaints these rows and nothing else.
 import { memo, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { CoordinatorRecovery } from './CoordinatorRecovery'
+import { CoordinatorResources } from './CoordinatorResources'
+import { CoordinatorWorkflow } from './CoordinatorWorkflow'
 import { CoordinatorResultReview } from './CoordinatorResultReview'
 import type { TuiThemePalette } from '../theme'
 import { getProviderAccent } from '../theme'
 import { formatProviderLabel } from '../format'
 import type { AgentProvider } from '../../lib/types'
+import { COORDINATOR_ROSTER_FILTERS, COORDINATOR_ROSTER_LABELS, filterCoordinatorRoster, type CoordinatorRosterFilter } from '../../lib/coordinatorRosterFilter'
 
 /** Providers a chat can staff a NEW teammate from; cycled with `p`. */
 const COORDINATOR_TEAMMATE_PROVIDERS: readonly AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi']
@@ -85,7 +89,7 @@ import { MODAL_CONTENT_Z_INDEX } from './layers'
 import type { ProtocolAgent } from '../../lib/agentProtocol'
 import { describeRunRollup } from '../../lib/coordinatorRollup'
 import { coordinatorAttention, type CoordinatorAttentionItem } from '../../lib/coordinatorAttention'
-import { coordinatorResultIdsForAgent, coordinatorRosterOrder } from '../../lib/coordinatorSignals'
+import { coordinatorResultIdsForAgent } from '../../lib/coordinatorSignals'
 import { coordinatorAgentActivity, coordinatorAgentNote, coordinatorAgentWorkspace, coordinatorStalledAgentIds } from '../../lib/coordinatorInteractiveState'
 import {
   closeInteractiveCoordinator,
@@ -134,8 +138,14 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   )
   // Selection is by teammate id: the roster reorders by attention, and a
   // positional index would silently retarget `m` or `r` to whoever moved there.
+  const [recoveryOpen, setRecoveryOpen] = useState(false)
+  const [resourcesOpen, setResourcesOpen] = useState(false)
+  const [workflowOpen, setWorkflowOpen] = useState(false)
   const [resultTaskId, setResultTaskId] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [rosterQuery, setRosterQuery] = useState('')
+  const [rosterFilter, setRosterFilter] = useState<CoordinatorRosterFilter>('all')
+  const [searching, setSearching] = useState(false)
   const [attentionIndex, setAttentionIndex] = useState(0)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [confirmOff, setConfirmOff] = useState(false)
@@ -157,8 +167,11 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   const canLead = !snapshot
     || snapshot.agents.some((agent) => agent.role === 'lead' && agent.sessionId === session?.sessionId)
 
-  const teammates = useMemo(() => coordinatorRosterOrder(data, state.reviewed), [data, state.reviewed])
-  const clamped = Math.max(teammates.findIndex((agent) => agent.id === selectedId), 0)
+  const roster = useMemo(() => filterCoordinatorRoster(data, state.reviewed, rosterQuery, rosterFilter, state.observationUnavailable), [data, state.reviewed, rosterQuery, rosterFilter, state.observationUnavailable])
+  const teammates = roster.agents
+  // A refresh may move the selected agent out of a state filter. Require
+  // another deliberate navigation action rather than silently retargeting it.
+  const clamped = selectedId === null ? 0 : teammates.findIndex((agent) => agent.id === selectedId)
   const selected = teammates[clamped] ?? null
   const delivery = data?.interactive.delivery ?? null
   const unconfirmedDelivery = delivery && !delivery.active ? delivery : null
@@ -193,6 +206,21 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   }, [onNotice])
 
   const handleKey = useCallback((key: TeammatesKeyEvent) => {
+    if (searching) {
+      if (key.name === 'escape' || key.name === 'return') { setSearching(false); return }
+      if (key.ctrl && key.name === 'u') { setRosterQuery(''); setSelectedId(null); return }
+      if (key.name === 'backspace') { setRosterQuery(current => Array.from(current).slice(0, -1).join('')); setSelectedId(null); return }
+      if (key.name === 'paste' || (!key.ctrl && key.sequence && !/[\x00-\x1f\x7f]/.test(key.sequence))) { setRosterQuery(current => (current + key.sequence.replace(/[\r\n]/g, ' ')).slice(0, 200)); setSelectedId(null) }
+      return
+    }
+    if (!draft && !confirmCancel && !confirmOff) {
+      if (key.name === '/') { setSearching(true); return }
+      if (key.name === 't') { setRosterFilter(current => COORDINATOR_ROSTER_FILTERS[(COORDINATOR_ROSTER_FILTERS.indexOf(current) + 1) % COORDINATOR_ROSTER_FILTERS.length]!); setSelectedId(null); return }
+      if (key.ctrl && key.name === 'u') { setRosterQuery(''); setRosterFilter('all'); setSelectedId(null); return }
+    }
+    if (key.name === 'h' && !draft && !confirmCancel && !confirmOff && session) { setRecoveryOpen(true); return }
+    if (key.name === 'g' && !disabled && !draft && !confirmCancel && !confirmOff && data?.interactive.resources) { setResourcesOpen(true); return }
+    if (key.name === 'f' && !disabled && !draft && !confirmCancel && !confirmOff) { setWorkflowOpen(true); return }
     if (draft) {
       if (key.name === 'paste') { setDraft({ ...draft, text: (draft.text + key.sequence.replace(/\r\n?/g, '\n')).slice(0, 8000) }); return }
       if (key.name === 'escape') { setDraft(null); return }
@@ -364,21 +392,19 @@ export const TeammatesPopover = memo(function TeammatesPopover({
     // Cycle which provider a NEW teammate is staffed from — a Codex reviewer
     // beside a Claude implementer is the point of routing work by provider.
     if (key.name === 'p' && !disabled) {
-      setNewTeammateProvider((current) => {
-        const index = current === null ? 0 : COORDINATOR_TEAMMATE_PROVIDERS.indexOf(current) + 1
-        const next = index >= COORDINATOR_TEAMMATE_PROVIDERS.length ? null : COORDINATOR_TEAMMATE_PROVIDERS[index]!
-        onNotice('info', next ? `New teammates use ${formatProviderLabel(next)}` : 'New teammates use this conversation\'s provider', 3000)
-        return next
-      })
+      const index = newTeammateProvider === null ? 0 : COORDINATOR_TEAMMATE_PROVIDERS.indexOf(newTeammateProvider) + 1
+      const next = index >= COORDINATOR_TEAMMATE_PROVIDERS.length ? null : COORDINATOR_TEAMMATE_PROVIDERS[index]!
+      setNewTeammateProvider(next)
+      onNotice('info', next ? `New teammates use ${formatProviderLabel(next)}` : 'New teammates use this conversation\'s provider', 3000)
       return
     }
     if (key.name === 'm' && selected && !disabled) {
       setDraft({ kind: 'message', to: selected.id, toName: selected.name, text: '' })
     }
   }, [act, busy, canLead, confirmCancel, confirmOff, data, disabled, draft, enabled, locked, onNotice, onOpenSession, onWatchSessions,
-      pending, recoveries, selected, teammates, clamped, snapshot, terminal, unconfirmedDelivery, currentAttention, items.length])
+      pending, recoveries, selected, teammates, clamped, newTeammateProvider, snapshot, terminal, unconfirmedDelivery, currentAttention, items.length, session, searching])
 
-  useEffect(() => { if (!resultTaskId) onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady, resultTaskId])
+  useEffect(() => { if (!resultTaskId && !workflowOpen && !resourcesOpen && !recoveryOpen) onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady, resultTaskId, workflowOpen, resourcesOpen, recoveryOpen])
 
   const popW = Math.min(width - 4, 96)
   // Height follows the content. A fixed 32 rows meant a small team — the
@@ -388,7 +414,8 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   // being fixed cost twenty.
   const wrapped = (text: string) => Math.max(1, Math.ceil(text.length / Math.max(1, popW - 4)))
   const settingRows = (label: string) => Math.max(1, Math.ceil(label.length / Math.max(8, popW - 4 - 6)))
-  const bodyRows = (state.loading && !data ? 1 : 0)
+  const controlHints = `f workflow${data?.interactive.resources ? ' · g limits' : ''} · h recovery`
+  const bodyRows = wrapped(controlHints) + (state.loading && !data ? 1 : 0)
     + (pending ? wrapped('The last request is unconfirmed. Retrying replays the same request, which the server reconciles instead of repeating.') + (error ? 1 : 0) + 1 : error ? 2 : 0)
     + (!enabled && !terminal ? wrapped('Enable coordination to give this chat a team. Teammates run their own turns; what they send back arrives folded into your next message, and you keep every approval.') + (canLead ? 0 : 2) : 0)
     + (currentAttention ? 4 + wrapped(currentAttention.detail) : 0)
@@ -415,7 +442,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   // appears without being subtracted here pushes the footer off the frame.
   const bodyH = Math.max(popH - 6 - (draft || confirmOff || confirmCancel ? 1 : 0), 6)
 
-  const attentionCount = items.length + attention.length + recoveries.length + stalled.length + (unconfirmedDelivery ? 1 : 0) + (enabled && !terminal ? runInfo?.attentionCount ?? 0 : 0)
+  const attentionCount = items.length + attention.length + recoveries.length + (data?.settledExecutions?.length ?? 0) + stalled.length + (unconfirmedDelivery ? 1 : 0) + (enabled && !terminal ? runInfo?.attentionCount ?? 0 : 0)
   // Status and its meta are separate <text>s so only the status carries colour;
   // colouring the whole joined line made every word shout at the same volume.
   const headline = !session ? 'No conversation selected'
@@ -482,6 +509,9 @@ export const TeammatesPopover = memo(function TeammatesPopover({
     visibleHints.splice(visibleHints.length - 2, 1)
   }
 
+  if (recoveryOpen && session) return <CoordinatorRecovery state={data} sessionId={session.sessionId} provider={session.provider} pendingRequest={pending ? `${pending.action} · ${pending.requestId}` : null} disabled={disabled} theme={theme} width={width} height={height} onClose={() => setRecoveryOpen(false)} onInspect={agentId => { const agent = snapshot?.agents.find(agent => agent.id === agentId); if (agent) onOpenSession(agent) }} onKeyHandlerReady={onKeyHandlerReady} />
+  if (resourcesOpen && data?.interactive.resources) return <CoordinatorResources resources={data.interactive.resources} theme={theme} width={width} height={height} onClose={() => setResourcesOpen(false)} onKeyHandlerReady={onKeyHandlerReady} />
+  if (workflowOpen && session) return <CoordinatorWorkflow cwd={session.cwd ?? ''} provider={session.provider} theme={theme} width={width} height={height} onClose={() => setWorkflowOpen(false)} onKeyHandlerReady={onKeyHandlerReady} />
   if (resultTaskId && session) return <CoordinatorResultReview key={`${session.provider}:${session.sessionId}:${resultTaskId}`} sessionId={session.sessionId} provider={session.provider} taskId={resultTaskId} theme={theme} width={width} height={height} onClose={() => setResultTaskId(null)} onNotice={onNotice} onKeyHandlerReady={onKeyHandlerReady} />
 
   return (
@@ -517,6 +547,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
         scrollbarOptions={{ trackOptions: { foregroundColor: theme.dim, backgroundColor: theme.surface } }}
       >
         <box paddingX={1} flexDirection="column">
+          <text fg={theme.dim} wrapMode="word">{controlHints}</text>
           {state.loading && !data ? (
             <text fg={theme.dim}>Reading this conversation's coordination state…</text>
           ) : null}
@@ -599,6 +630,11 @@ export const TeammatesPopover = memo(function TeammatesPopover({
             </box>
           ) : null}
 
+          {roster.counts.all > 0 ? <box flexDirection="column" paddingTop={1}>
+            <text fg={searching ? theme.cyan : theme.muted} wrapMode="word" width={innerW}>{`/ find · t state · ctrl+u clear | ${COORDINATOR_ROSTER_LABELS[rosterFilter]} · ${teammates.length}/${roster.counts.all}`}</text>
+            {searching || rosterQuery ? <text fg={theme.text} wrapMode="word" width={innerW}>{`Find: ${rosterQuery}${searching ? '▏ · enter/esc finish' : ''}`}</text> : null}
+            {!teammates.length ? <text fg={theme.dim}>No teammates match these filters.</text> : null}
+          </box> : null}
           {teammates.length > 0 ? (
             <box flexDirection="column" paddingTop={1}>
               <text fg={theme.muted} wrapMode="none">TEAMMATES</text>
@@ -647,7 +683,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
                 )
               })}
             </box>
-          ) : enabled ? (
+          ) : enabled && !roster.counts.all ? (
             <box paddingTop={1} flexDirection="row">
               <text fg={theme.cyan} wrapMode="none">{'d '}</text>
               <text fg={theme.muted} wrapMode="word" width={innerW - 2}>

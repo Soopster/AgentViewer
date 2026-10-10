@@ -4,12 +4,14 @@ import type { PendingPermission } from './permissions'
 export type CoordinatorInteractiveState = {
   snapshot: ProtocolRunSnapshot | null
   interactive: {
+    resources?: import('./coordinatorResources').CoordinatorResources
     executionElsewhere?: boolean
     enabled: boolean; autoContinue: boolean; remainingTurns: number
     delivery: { batchId: string; state: string; createdAt: string; active: boolean } | null
   }
   runningAgentIds: string[]
   recoveries: string[]
+  settledExecutions?: string[]
   /**
    * Teammates whose turn ended with background work still due to report back.
    * Optional: a daemon older than this field simply omits it.
@@ -108,7 +110,7 @@ export const COORDINATOR_START_STALL_MS = 15_000
  */
 export function coordinatorStalledAgentIds(state: CoordinatorInteractiveState | null, now = Date.now()): string[] {
   const snapshot = state?.snapshot
-  if (!state || !snapshot || state.interactive.executionElsewhere || !['running', 'planning', 'blocked'].includes(snapshot.run.status)) return []
+  if (!state || !snapshot || state.interactive.executionElsewhere || state.interactive.resources?.pausedReason || !['running', 'planning', 'blocked'].includes(snapshot.run.status)) return []
   return snapshot.agents.filter(agent => {
     if (agent.role !== 'teammate' || !agent.taskId || agent.turnActive || agent.sessionId.startsWith('external:')) return false
     if (state.runningAgentIds.includes(agent.id) || state.backgroundAgents?.some(entry => entry.agentId === agent.id) || state.recoveries.includes(agent.id) || state.permissions.some(item => item.agentId === agent.id)) return false
@@ -118,7 +120,7 @@ export function coordinatorStalledAgentIds(state: CoordinatorInteractiveState | 
   }).map(agent => agent.id)
 }
 
-export function coordinatorAgentActivity(agent: ProtocolAgent, state: Pick<CoordinatorInteractiveState, 'permissions' | 'recoveries' | 'runningAgentIds'> & Partial<Pick<CoordinatorInteractiveState, 'interactive' | 'backgroundAgents'>>, observationUnavailable = false, stalled = false): string {
+export function coordinatorAgentActivity(agent: ProtocolAgent, state: Pick<CoordinatorInteractiveState, 'permissions' | 'recoveries' | 'runningAgentIds'> & Partial<Pick<CoordinatorInteractiveState, 'interactive' | 'backgroundAgents' | 'settledExecutions'>>, observationUnavailable = false, stalled = false): string {
   if (observationUnavailable) return 'Unknown · last observation unavailable'
   if (state.interactive?.executionElsewhere) return 'Managed by another host · inspect there'
   if (state.permissions.some(item => item.agentId === agent.id)) return 'Waiting for your answer'
@@ -131,6 +133,8 @@ export function coordinatorAgentActivity(agent: ProtocolAgent, state: Pick<Coord
     const parts = [background.tasks ? `${background.tasks} task${background.tasks === 1 ? '' : 's'}` : '', background.wakeups ? `${background.wakeups} wake-up${background.wakeups === 1 ? '' : 's'}` : ''].filter(Boolean)
     return `In background · ${parts.join(' · ')}`
   }
+  if (state.settledExecutions?.includes(agent.id)) return 'Result saved · acknowledge interrupted stream'
+  if (agent.taskId && state.interactive?.resources?.pausedReason && !['blocked', 'done', 'failed', 'stopped'].includes(agent.status)) return 'Paused · team budget limit'
   if (stalled) return 'Stalled · no provider activity observed · inspect before resending'
   if (agent.status === 'blocked') return 'Blocked'
   if (agent.status === 'done') return 'Finished'

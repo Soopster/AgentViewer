@@ -49,10 +49,12 @@ if (!phase) {
   const { mock } = await (0, eval)('import("bun:test")')
   let starts = 0
   mock.module(fileURLToPath(new URL('../lib/sessionBackend.ts', import.meta.url)), () => ({
-    createNewViewSession: async () => {
+    createNewViewSession: async (params: { cwd: string }) => {
+      writeFileSync('native.json', JSON.stringify({ sessionId: 'worker-session', provider: 'codex', cwd: params.cwd }))
       assert.equal(phase, 'owner')
       return { provider: 'codex', sessionId: 'worker-session', isPending: false }
     },
+    readViewSessionInfo: async (sessionId: string) => sessionId === 'worker-session' ? JSON.parse(readFileSync('native.json', 'utf8')) : { sessionId, provider: 'codex', cwd: process.cwd() },
     readViewSessionRunning: () => ({ running: false, pendingPermissions: [], pendingPrompts: [] }),
     streamViewSessionTurn: async () => { starts++; return new Promise<Response>(() => {}) },
   }))

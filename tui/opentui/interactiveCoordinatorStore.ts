@@ -325,7 +325,7 @@ export async function runInteractiveCoordinatorAction(
 ): Promise<boolean> {
   const session = state.session
   if (!state.open || !session || state.busy || state.pending) return false
-  const next: TuiSessionCoordinationRequest = { ...request, cwd: request.cwd ?? session.cwd, requestId: randomUUID() }
+  const next: TuiSessionCoordinationRequest = { ...request, expectedRunId: request.expectedRunId ?? (request.action === 'start-workflow' || request.action === 'settings' ? state.data?.snapshot?.run.id : undefined), cwd: request.cwd ?? session.cwd, requestId: randomUUID() }
   return submit(session, next)
 }
 

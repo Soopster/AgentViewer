@@ -17,7 +17,7 @@ const filename = (scope: string, requestId: string) => path.join(directory(scope
 const isMissing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT'
 
 type RecordEntry = { version: 1; scope: string; createdAt: number; request: TuiSessionCoordinationRequest }
-const ACTIONS = new Set(['integrate-result', 'disable', 'enable', 'settings', 'reconcile', 'resume-agent', 'interrupt-agent', 'cancel-task', 'delegate', 'message', 'review-plan', 'decision'])
+const ACTIONS = new Set(['native-answer', 'start-workflow', 'integrate-result', 'disable', 'enable', 'settings', 'reconcile', 'resume-agent', 'reconcile-agent', 'interrupt-agent', 'cancel-task', 'delegate', 'message', 'review-plan', 'decision'])
 function readEntry(file: string, scope: string): RecordEntry {
   const entry = JSON.parse(readFileSync(file, 'utf8')) as RecordEntry
   if (entry?.version !== 1 || entry.scope !== scope || !Number.isFinite(entry.createdAt)

@@ -1,4 +1,6 @@
 import { projectComposerContext } from './composerContext'
+import { coordinatorPermissionToken } from './coordinatorNativePermission'
+import { extractPendingPermissions } from './permissions'
 import { classifyClaudeUsageMessage, type ClaudeUsageLimitKind } from './claudeUsageLimits'
 import { installProcessWarningRouting } from './processWarnings'
 
@@ -1713,6 +1715,14 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
   // action would reinstate the cost this deferral exists to avoid.
   if (resolvedProvider === 'claude') await ensureClaudePool()
   const action = typeof body.action === 'string' ? body.action : ''
+  // Guard again after provider resolution/pool awaits. Remote confirmation
+  // cannot fall through to a different session's similarly named request.
+  if ((action === 'respondPermission' || action === 'respondQuestion') && typeof body.expectedPermissionToken === 'string') {
+    const pending = extractPendingPermissions(listPendingProviderPermissionPayloads(sessionId, resolvedProvider), { sessionId, provider: resolvedProvider })
+    if (!pending.some(permission => permission.id === body.permissionId && coordinatorPermissionToken(permission) === body.expectedPermissionToken)) {
+      throw new PendingRequestGoneError(action === 'respondQuestion' ? 'Question' : 'Permission request')
+    }
+  }
 
   // Provider-agnostic: deliver a user message into the running turn (native
   // steering). `delivered: false` means no running turn / no steer primitive /

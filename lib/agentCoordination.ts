@@ -31,6 +31,7 @@ import {
   buildTeammateTurnPreamble,
   fallbackTaskTemplates,
   formatInbox,
+  formatProtocolMailboxMessage,
   interpolatePlaybookText,
   isValidPlaybookName,
   parseAgentProtocolEvents,
@@ -1409,10 +1410,22 @@ function statusMessageGroupKey(row: Row): string {
   return `${String(row.from_agent_id ?? '')}\0${String(row.correlation_id ?? '')}`
 }
 
+// Only informational status may be delayed or collapsed. Actionable messages
+// must retain their persisted id so a recipient can answer them after delivery.
+function isBatchableStatusRow(row: Row): boolean {
+  return (row.priority === 'status' || row.kind === 'status')
+    && row.priority !== 'urgent' && !row.reply_required && !row.in_reply_to
+}
+
+function isBatchableStatusMessage(message: ProtocolMessage): boolean {
+  return (message.priority === 'status' || message.kind === 'status')
+    && message.priority !== 'urgent' && !message.replyRequired && !message.inReplyTo
+}
+
 function readyStatusMessageGroups(rows: Row[], now = Date.now()): Set<string> {
   const groups = new Map<string, Row[]>()
   for (const row of rows) {
-    if (row.priority !== 'status' && row.kind !== 'status') continue
+    if (!isBatchableStatusRow(row)) continue
     const key = statusMessageGroupKey(row)
     const group = groups.get(key) ?? []
     group.push(row)
@@ -1491,11 +1504,11 @@ function externalActionableSync(db: SqliteDatabase, runId: string, agentId: stri
       && Boolean(agent && taskClaimableByAgent(task, agent, agents))
   ))
   const mailbox = db.prepare(`
-    SELECT kind, priority, created_at, from_agent_id, correlation_id FROM protocol_messages
+    SELECT kind, priority, reply_required, in_reply_to, created_at, from_agent_id, correlation_id FROM protocol_messages
     WHERE run_id = ? AND to_agent_id = ? AND delivered_at IS NULL
   `).all(runId, agentId) as Row[]
-  const statusRows = mailbox.filter((row) => row.priority === 'status' || row.kind === 'status')
-  const ordinaryRows = mailbox.filter((row) => row.priority !== 'status' && row.kind !== 'status')
+  const statusRows = mailbox.filter(isBatchableStatusRow)
+  const ordinaryRows = mailbox.filter((row) => !isBatchableStatusRow(row))
   const readyStatusGroups = readyStatusMessageGroups(mailbox)
   const replyRequiredCount = Number((db.prepare(`
     SELECT COUNT(*) AS n FROM protocol_messages
@@ -1886,6 +1899,112 @@ export async function previewExternalProtocolPlaybook(
     )
   }
   return { tasks: planPlaybookTasks(playbook, params.args, 0) }
+}
+
+/** Reserve each provider lane, then fill remaining capacity from phase width. */
+function workflowProviders(plans: PlaybookTaskPlan[], provider: AgentProvider, maxAgents: number): AgentProvider[] {
+  const lanes = plans.filter(task => task.targetRole !== 'lead' && task.seat !== 'director')
+  const unique = [...new Set(lanes.map(task => task.requestedProvider ?? provider))]
+  if (unique.length > maxAgents - 1) throw new Error('Workflow needs a teammate slot for each requested provider; increase maxAgents in the recipe')
+  const peak = new Map(unique.map(lane => [lane, Math.max(...[...new Set(lanes.map(task => task.phase))].map(phase => lanes.filter(task => task.phase === phase && (task.requestedProvider ?? provider) === lane).length))]))
+  const result = [...unique]
+  for (const lane of unique) {
+    while (result.length < maxAgents - 1 && result.filter(entry => entry === lane).length < peak.get(lane)!) result.push(lane)
+  }
+  return result
+}
+
+/** Frozen recipe preview shared by ordinary web and terminal conversations. */
+export async function previewInteractiveWorkflow(params: {
+  cwd: string; name: string; args?: unknown; provider: AgentProvider
+}) {
+  const playbook = await loadRunPlaybook(params.cwd, params.name)
+  const { tasks } = await previewExternalProtocolPlaybook({ cwd: params.cwd, playbook, args: params.args })
+  if (!tasks.length || tasks.length > MAX_OPEN_TASKS) throw new Error('Workflow must contain a bounded, nonempty task board')
+  const maxAgents = Math.max(2, Math.min(playbook.maxAgents ?? 3, 16))
+  const providers = workflowProviders(tasks, params.provider, maxAgents)
+  if (tasks.some(task => (task.targetRole === 'lead' || task.seat === 'director') && task.requestedProvider && task.requestedProvider !== params.provider)) {
+    throw new Error('Workflow lead tasks must use the provider of this conversation')
+  }
+  for (const task of tasks) {
+    const escalation = permissionModeEscalation(task.claudeAgentPolicy?.permissionMode)
+    if (escalation) throw new Error(`Workflow denied: ${escalation}`)
+  }
+  return { playbook, args: params.args, tasks, providers, maxAgents }
+}
+
+export type InteractiveWorkflowPreview = Awaited<ReturnType<typeof previewInteractiveWorkflow>>
+
+/** Seed once, then reconcile worker staffing on every explicit same-key retry. */
+export async function startInteractiveWorkflow(identity: ExternalProtocolIdentity, params: {
+  requestId: string; playbook: unknown; args?: unknown
+}) {
+  const playbook = parseRunPlaybook(params.playbook)
+  const seeded = await runExternalProtocolIdempotent(identity, 'chat_start-workflow', params.requestId, async () => {
+    return enqueueWrite(db => {
+      const lead = requireExternalParticipantSync(db, identity)
+      if (lead.role !== 'lead') throw new Error('Only the lead conversation can start a workflow')
+      const snapshot = readSnapshotSync(db, identity.runId)!
+      if (!['planning', 'running', 'synthesizing'].includes(snapshot.run.status)) throw new Error('Coordinator run is not accepting tasks')
+      if (snapshot.tasks.some(task => !['completed', 'failed', 'cancelled'].includes(task.status)) || controllers.get(identity.runId)?.turnInFlight.size) throw new Error('Finish or cancel existing tasks and wait for active turns before starting a workflow')
+      if (params.args === undefined && playbookExpectsArgs(playbook)) throw new Error('Workflow arguments are required')
+      const plans = planPlaybookTasks(playbook, params.args, snapshot.tasks.length)
+      if (!plans.length || plans.length > MAX_OPEN_TASKS) throw new Error('Workflow must contain a bounded, nonempty task board')
+      const maxAgents = Math.max(2, Math.min(playbook.maxAgents ?? 3, 16))
+      const providers = workflowProviders(plans, lead.provider, maxAgents)
+      if (snapshot.agents.filter(agent => !['failed', 'stopped'].includes(agent.status)).length > maxAgents) throw new Error('Existing roster exceeds this workflow capacity; stop unused teammates first')
+      for (const task of plans) {
+        const escalation = permissionModeEscalation(task.claudeAgentPolicy?.permissionMode)
+        if (escalation) throw new Error(`Workflow denied: ${escalation}`)
+        if ((task.targetRole === 'lead' || task.seat === 'director') && task.requestedProvider && task.requestedProvider !== lead.provider) throw new Error('Workflow lead provider differs from this conversation')
+      }
+      db.exec('BEGIN IMMEDIATE')
+      try {
+        seedPlaybookTasksSync(db, identity.runId, lead.id, { ...playbook, phases: playbook.phases.map(phase => ({ ...phase, tasks: phase.tasks.map(task => ({ ...task, provider: task.provider ?? lead.provider })) })) }, params.args)
+        db.prepare(`UPDATE protocol_runs SET status = 'running', max_agents = ?, gate_command = ?, require_plan_approval = ?,
+          require_review = ?, autonomy = ?, acceptance_contract_json = ?, budget_json = ?, updated_at = ? WHERE id = ?`)
+          .run(maxAgents, playbook.gateCommand ?? null, Number(playbook.requirePlanApproval === true), Number(playbook.requireReview === true),
+            playbook.autonomy ?? 'medium', JSON.stringify(normalizeAcceptanceContract(snapshot.run.prompt, playbook.acceptanceContract)),
+            playbook.budget ? JSON.stringify(playbook.budget) : null, nowIso(), identity.runId)
+        db.prepare("UPDATE protocol_agents SET status = 'idle' WHERE run_id = ? AND status = 'done' AND id GLOB 'agent-[0-9]*' AND session_id NOT LIKE 'external:%'").run(identity.runId)
+        for (const provider of providers) rememberInteractiveTeammateProviderSync(db, identity.runId, provider)
+        db.exec('COMMIT')
+        return { taskIds: plans.map(task => task.id), providers, maxAgents }
+      } catch (error) { db.exec('ROLLBACK'); throw error }
+    })
+  })
+  const warnings: string[] = []
+  await serializeAutomaticDelegation(identity.runId, async () => {
+    const controller = await adoptInteractiveController(identity)
+    const snapshot = readSnapshotSync(await getDatabase(), identity.runId)!
+    Object.assign(controller, { maxAgents: snapshot.run.maxAgents, gateCommand: snapshot.run.gateCommand,
+      requirePlanApproval: snapshot.run.requirePlanApproval, requireReview: snapshot.run.requireReview,
+      autonomy: snapshot.run.autonomy, acceptanceContract: snapshot.run.acceptanceContract, budget: snapshot.run.budget })
+    controller.teammateProviders = [...new Set([...controller.teammateProviders, ...seeded.providers])]
+    // Completed/cancelled workflows never restart workers on a delayed retry.
+    const open = snapshot.tasks.filter(task => seeded.taskIds.includes(task.id) && !['completed', 'failed', 'cancelled'].includes(task.status))
+    const staffed = new Map<AgentProvider, number>()
+    for (const provider of seeded.providers) {
+      const needed = (staffed.get(provider) ?? 0) + 1
+      staffed.set(provider, needed)
+      if (!open.some(task => (task.requestedProvider ?? snapshot.run.provider) === provider && task.targetRole !== 'lead' && task.seat !== 'director')) continue
+      const roster = listAgentsSync(await getDatabase(), identity.runId)
+      if (roster.filter(agent => agent.role === 'teammate' && agent.provider === provider && controller.sessionIds.has(agent.id) && !['failed', 'stopped'].includes(agent.status)).length >= needed) continue
+      if (roster.filter(agent => !['failed', 'stopped'].includes(agent.status)).length >= seeded.maxAgents) {
+        warnings.push(`No free slot for ${provider}; stop an unused teammate, then retry this workflow request`); continue
+      }
+      try { const spawned = await spawnAdditionalTeammate(identity, { provider, reserveForDelegation: true }); controller.turnInFlight.delete(spawned.agentId) }
+      catch (error) { warnings.push(error instanceof Error ? error.message : 'Worker startup failed') }
+    }
+    for (const agent of listAgentsSync(await getDatabase(), identity.runId)) {
+      if (!controller.sessionIds.has(agent.id) || controller.turnInFlight.has(agent.id)) continue
+      // Claim through the ordinary dependency/path-lock gate before any turn.
+      const claimed = agent.taskId || await enqueueWrite(db => claimTaskSync(db, identity.runId, agent.id))
+      if (claimed) void dispatchTeammateWork(controller, agent.id).catch(() => {})
+    }
+  })
+  notifyRunChanged(identity.runId)
+  return { ...seeded, warnings }
 }
 
 function seedPlaybookTasksSync(
@@ -2829,9 +2948,23 @@ function rotateSessionParticipantTokenSync(db: SqliteDatabase, runId: string, ag
   return issueParticipantTokenSync(db, runId, agentId, token)
 }
 
-export async function sessionCoordinatorIdentity(sessionId: string, provider: ProtocolRun['provider']): Promise<ExternalProtocolIdentity> {
+/** An answer may finish the team before a lost HTTP response is reconciled. */
+export async function readCoordinatorNativeAnswerReceipt(sessionId: string, provider: ProtocolRun['provider'], expectedRunId: string, requestId: string): Promise<{ answered: true } | null> {
+  const snapshot = await readSessionCoordinator(sessionId, provider)
+  const lead = snapshot?.agents.find(agent => agent.sessionId === sessionId && agent.provider === provider && agent.role === 'lead')
+  if (!snapshot || snapshot.run.id !== expectedRunId || !lead) throw new Error('Coordinator team changed; refresh before reconciling the answer')
+  const row = (await getDatabase()).prepare(`SELECT response_json FROM protocol_idempotency
+    WHERE run_id = ? AND agent_id = ? AND action = 'chat_native-answer' AND request_id = ?`)
+    .get(snapshot.run.id, lead.id, requestId) as Row | undefined
+  if (typeof row?.response_json !== 'string') return null
+  const result = JSON.parse(row.response_json) as { answered?: boolean }
+  return result.answered === true ? { answered: true } : null
+}
+
+export async function sessionCoordinatorIdentity(sessionId: string, provider: ProtocolRun['provider'], expectedRunId?: string): Promise<ExternalProtocolIdentity> {
   return serializeAutomaticDelegation(`identity:${provider}:${sessionId}`, async () => {
     const snapshot = await readSessionCoordinator(sessionId, provider)
+    if (expectedRunId && snapshot?.run.id !== expectedRunId) throw new Error('Coordinator team changed; refresh before sending to this conversation')
     const lead = snapshot?.agents.find(agent => agent.sessionId === sessionId && agent.provider === provider && agent.role === 'lead')
     if (!snapshot || !lead) throw new Error('Delegate from the lead conversation')
     if (['completed', 'failed', 'stopped'].includes(snapshot.run.status)) throw new Error('This run has ended')
@@ -2925,8 +3058,10 @@ export async function createExternalProtocolTask(
     const db = await getDatabase()
     const lead = requireExternalParticipantSync(db, identity)
     if (lead.role !== 'lead') throw new Error('Only the Coordinator lead can delegate work')
-    const run = db.prepare('SELECT status FROM protocol_runs WHERE id = ?').get(identity.runId) as Row | undefined
+    const run = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(identity.runId) as Row | undefined
     if (!run || !['planning', 'running', 'synthesizing'].includes(String(run.status))) throw new Error('Coordinator run is not accepting tasks')
+    const budgetReason = budgetExceededReasonSync(db, rowToRun(run))
+    if (budgetReason) throw new Error(`Cannot delegate more work: ${budgetReason}`)
     if (!params.title.trim() || !params.detail.trim()) throw new Error('task title and detail are required')
     const controller = controllers.get(identity.runId) ?? await adoptInteractiveController(identity)
     if (controller && params.requestedProvider && !controller.teammateProviders.includes(params.requestedProvider)) {
@@ -3273,11 +3408,26 @@ function describeClaimFailureSync(db: SqliteDatabase, runId: string, agentId: st
 
 export async function readExternalProtocolInbox(
   identity: ExternalProtocolIdentity,
-  params: { after?: string; limit?: number; acknowledge?: boolean } = {},
+  params: { after?: string; limit?: number; acknowledge?: boolean; unresolved?: boolean } = {},
 ): Promise<ExternalProtocolInboxResult> {
   return enqueueWrite((db) => {
     requireExternalParticipantSync(db, identity)
     const limit = Math.max(1, Math.min(params.limit ?? 50, 200))
+    if (params.unresolved) {
+      // Delivery (including a reserved chat batch) is separate from resolution.
+      // This read must remain available after a restart and never consume mail.
+      const cursor = params.after ? db.prepare(
+        'SELECT created_at FROM protocol_messages WHERE run_id = ? AND id = ? AND to_agent_id = ?',
+      ).get(identity.runId, params.after, identity.agentId) as Row | undefined : undefined
+      const rows = params.after && !cursor ? [] : db.prepare(`
+        SELECT * FROM protocol_messages
+        WHERE run_id = ? AND to_agent_id = ? AND reply_required = 1 AND resolved_at IS NULL
+          ${cursor ? 'AND (created_at > ? OR (created_at = ? AND id > ?))' : ''}
+        ORDER BY created_at ASC, id ASC LIMIT ?
+      `).all(identity.runId, identity.agentId,
+        ...(cursor ? [cursor.created_at, cursor.created_at, params.after] : []), limit) as Row[]
+      return { messages: rows.map(rowToMessage), acknowledged: [], nextCursor: rows.length ? String(rows.at(-1)!.id) : params.after ?? null }
+    }
     let rows: Row[]
     if (params.after) {
       const cursor = db.prepare(
@@ -3309,7 +3459,7 @@ export async function readExternalProtocolInbox(
     }
     const readyStatusGroups = readyStatusMessageGroups(rows)
     rows = rows.filter((row) => (
-      (row.priority !== 'status' && row.kind !== 'status') || readyStatusGroups.has(statusMessageGroupKey(row))
+      !isBatchableStatusRow(row) || readyStatusGroups.has(statusMessageGroupKey(row))
     ))
     const rawMessages = rows.map(rowToMessage)
     const acknowledged = params.acknowledge !== false ? rawMessages.map(message => message.id) : []
@@ -3333,7 +3483,7 @@ export async function readExternalProtocolInbox(
 function batchStatusMessages(messages: ProtocolMessage[]): ProtocolMessage[] {
   const groups = new Map<string, ProtocolMessage[]>()
   for (const message of messages) {
-    if (message.priority !== 'status' && message.kind !== 'status') continue
+    if (!isBatchableStatusMessage(message)) continue
     const key = `${message.fromAgentId}\0${message.correlationId ?? ''}`
     const group = groups.get(key) ?? []
     group.push(message)
@@ -3342,7 +3492,7 @@ function batchStatusMessages(messages: ProtocolMessage[]): ProtocolMessage[] {
   const emitted = new Set<string>()
   const result: ProtocolMessage[] = []
   for (const message of messages) {
-    if (message.priority !== 'status' && message.kind !== 'status') {
+    if (!isBatchableStatusMessage(message)) {
       result.push(message)
       continue
     }
@@ -5388,7 +5538,9 @@ function budgetExceededReasonSync(db: SqliteDatabase, run: ProtocolRun): string 
   if (run.budget?.maxDurationMinutes && Date.now() - Date.parse(run.createdAt) >= run.budget.maxDurationMinutes * 60_000) {
     return `Run duration budget exhausted (${run.budget.maxDurationMinutes} minutes).`
   }
-  return null
+  const paused = db.prepare("SELECT payload_json FROM protocol_events WHERE run_id = ? AND type = 'run.status' AND json_extract(payload_json, '$.budgetPaused') IS NOT NULL ORDER BY rowid DESC LIMIT 1").get(run.id) as Row | undefined
+  const state = parseJsonObject<{ budgetPaused?: boolean; reason?: string }>(paused?.payload_json)
+  return state?.budgetPaused ? state.reason ?? 'Provider budget limit reached; review the limits before resuming' : null
 }
 
 function remainingTokenBudgetSync(db: SqliteDatabase, run: ProtocolRun): number | undefined {
@@ -6335,10 +6487,6 @@ async function writeProtocolEvent(event: AgentProtocolEvent, wantSnapshot: boole
 // Mailbox delivery: steer live turns; anything undelivered rides the
 // recipient's next dispatched turn (marked delivered at dispatch).
 
-function formatMailboxDelivery(messageId: string, from: ProtocolAgent | undefined, body: string): string {
-  return `[team message ${messageId} from ${from?.name ?? 'coordinator'}] ${body}`
-}
-
 // Initial insert delivery, the mailbox sweep, and pending-session realization
 // can race in the same process. Only one may steer a given durable message at
 // a time; otherwise a slow successful steer can be duplicated before it gets
@@ -6383,7 +6531,7 @@ async function deliverMessagesLive(runId: string, messageIds: string[]): Promise
       const recipient = agentsById.get(message.toAgentId)
       if (!recipient) continue
       const sessionId = controller?.sessionIds.get(recipient.id) ?? recipient.sessionId
-      const text = formatMailboxDelivery(message.id, agentsById.get(message.fromAgentId), message.body)
+      const text = formatProtocolMailboxMessage(message, agentsById.get(message.fromAgentId)?.name ?? message.fromAgentId)
       // External MCP participants do not have a native provider session for the
       // coordinator to steer. Their mailbox stays queued until coord_read_inbox
       // acknowledges it in that CLI's bridge process.
@@ -6525,6 +6673,9 @@ async function sweepIdleTeammates(runId: string): Promise<void> {
   let claimedAny = false
   for (const agent of agents) {
     if (agent.role !== 'teammate' || agent.taskId || controller.turnInFlight.has(agent.id)) continue
+    // Cooperative and external participants own their turns and claims. A
+    // server-managed lead does not grant control of every session in its room.
+    if (!controller.sessionIds.has(agent.id)) continue
     if (agent.status !== 'done' && agent.status !== 'idle' && agent.status !== 'ready') continue
     const claimed = await enqueueWrite((tx) => {
       if (agent.status === 'done' && controller.sessionIds.has(agent.id)) {
@@ -7192,26 +7343,57 @@ export async function drainCooperativeInbox(sessionId: string): Promise<string> 
 
 /** Durable browser-owned collaboration settings and delivery recovery. */
 export async function configureInteractiveCoordinator(params: {
-  sessionId: string; provider: AgentProvider; cwd: string; autoContinue?: boolean; useWorktrees?: boolean; restartRunId?: string
+  sessionId: string; provider: AgentProvider; cwd: string; autoContinue?: boolean; useWorktrees?: boolean; restartRunId?: string; maxAgents?: number; budget?: ProtocolRunBudget | null
 }): Promise<void> {
   const snapshot = await ensureSessionCoordinator(params)
   await sessionCoordinatorIdentity(params.sessionId, params.provider)
-  await enqueueWrite(db => {
-    db.prepare(`INSERT INTO protocol_interactive_sessions (session_id, run_id, provider) VALUES (?, ?, ?)
-      ON CONFLICT(session_id) DO UPDATE SET
-        auto_continue = CASE WHEN run_id = excluded.run_id THEN auto_continue ELSE 0 END,
-        remaining_turns = CASE WHEN run_id = excluded.run_id THEN remaining_turns ELSE 4 END,
-        run_id = excluded.run_id, provider = excluded.provider`).run(params.sessionId, snapshot.run.id, params.provider)
-    if (params.autoContinue !== undefined) db.prepare(`UPDATE protocol_interactive_sessions
-      SET auto_continue = ?, remaining_turns = 4 WHERE session_id = ?`).run(Number(params.autoContinue), params.sessionId)
-    // Only teammates started after this read it: a running teammate keeps the
-    // checkout it was launched in rather than being moved out from under its work.
-    if (params.useWorktrees !== undefined) db.prepare('UPDATE protocol_runs SET use_worktrees = ? WHERE id = ?')
-      .run(Number(params.useWorktrees), snapshot.run.id)
-  })
-  const controller = controllers.get(snapshot.run.id)
-  if (controller && params.useWorktrees !== undefined) controller.useWorktrees = params.useWorktrees
-  notifyRunChanged(snapshot.run.id)
+  const apply = async () => {
+    await enqueueWrite(db => {
+      db.exec('BEGIN IMMEDIATE')
+      try {
+        if (params.maxAgents !== undefined) {
+          if (!Number.isSafeInteger(params.maxAgents) || params.maxAgents < 2 || params.maxAgents > 16) throw new Error('Capacity must be between 2 and 16')
+          const occupied = listAgentsSync(db, snapshot.run.id).filter(agent => !['failed', 'stopped'].includes(agent.status)).length
+          if (params.maxAgents < occupied) throw new Error(`Capacity cannot be lower than the ${occupied} existing agents`)
+        }
+        if (params.budget) for (const [key, value] of Object.entries(params.budget)) {
+          if (!['maxTokens', 'maxCostUsd', 'maxDurationMinutes'].includes(key) || (value !== undefined && (!Number.isFinite(value) || value <= 0 || (key === 'maxTokens' && !Number.isSafeInteger(value))))) throw new Error('Budget limits must be positive finite numbers; tokens must be a whole number')
+        }
+        db.prepare(`INSERT INTO protocol_interactive_sessions (session_id, run_id, provider) VALUES (?, ?, ?)
+          ON CONFLICT(session_id) DO UPDATE SET
+            auto_continue = CASE WHEN run_id = excluded.run_id THEN auto_continue ELSE 0 END,
+            remaining_turns = CASE WHEN run_id = excluded.run_id THEN remaining_turns ELSE 4 END,
+            run_id = excluded.run_id, provider = excluded.provider`).run(params.sessionId, snapshot.run.id, params.provider)
+        if (params.autoContinue !== undefined) db.prepare(`UPDATE protocol_interactive_sessions
+          SET auto_continue = ?, remaining_turns = 4 WHERE session_id = ?`).run(Number(params.autoContinue), params.sessionId)
+        // Only teammates started after this read it: a running teammate keeps the
+        // checkout it was launched in rather than being moved out from under its work.
+        if (params.useWorktrees !== undefined) db.prepare('UPDATE protocol_runs SET use_worktrees = ? WHERE id = ?')
+          .run(Number(params.useWorktrees), snapshot.run.id)
+        if (params.maxAgents !== undefined || params.budget !== undefined) {
+          if (params.maxAgents !== undefined) db.prepare('UPDATE protocol_runs SET max_agents = ? WHERE id = ?').run(params.maxAgents, snapshot.run.id)
+          if (params.budget !== undefined) db.prepare('UPDATE protocol_runs SET budget_json = ? WHERE id = ?').run(params.budget ? JSON.stringify(params.budget) : null, snapshot.run.id)
+          insertEventSync(db, { version: AGENT_PROTOCOL_VERSION, runId: snapshot.run.id, agentId: snapshot.run.leadAgentId ?? 'lead',
+            type: 'run.status', summary: 'Interactive team resource limits updated', payload: params.budget !== undefined ? { budgetPaused: false } : { capacityUpdated: true } })
+        }
+        db.exec('COMMIT')
+      } catch (error) { db.exec('ROLLBACK'); throw error }
+    })
+    const controller = controllers.get(snapshot.run.id) ?? ((params.maxAgents !== undefined || params.budget !== undefined)
+      ? await adoptInteractiveController(await sessionCoordinatorIdentity(params.sessionId, params.provider)) : undefined)
+    if (controller && params.useWorktrees !== undefined) controller.useWorktrees = params.useWorktrees
+    if (controller && (params.maxAgents !== undefined || params.budget !== undefined)) {
+      const run = readSnapshotSync(await getDatabase(), snapshot.run.id)!.run
+      controller.maxAgents = run.maxAgents; controller.budget = run.budget
+      if (!budgetExceededReasonSync(await getDatabase(), run)) void resumeResourceScheduling(controller).catch(error => recordProtocolEvent({
+        version: AGENT_PROTOCOL_VERSION, runId: controller.runId, agentId: 'coordinator', type: 'agent.blocked',
+        summary: `Resource scheduling needs inspection: ${error instanceof Error ? error.message : String(error)}`,
+      }).catch(() => {}))
+    }
+    notifyRunChanged(snapshot.run.id)
+  }
+  if (params.maxAgents !== undefined || params.budget !== undefined) await serializeAutomaticDelegation(snapshot.run.id, apply)
+  else await apply()
 }
 
 /** Session-scoped lifecycle keys stay bound to their original run across restarts. */
@@ -7274,6 +7456,11 @@ export async function readInteractiveCoordinator(sessionId: string) {
   const settings = db.prepare('SELECT * FROM protocol_interactive_sessions WHERE session_id = ?').get(sessionId) as Row | undefined
   const delivery = db.prepare('SELECT run_id, batch_id, state, created_at FROM protocol_chat_delivery WHERE session_id = ?').get(sessionId) as Row | undefined
   return {
+    resources: settings ? (() => {
+      const snapshot = readSnapshotSync(db, String(settings.run_id))!
+      return { maxAgents: snapshot.run.maxAgents, occupiedAgents: snapshot.agents.filter(agent => !['failed', 'stopped'].includes(agent.status)).length,
+        budget: snapshot.run.budget, usage: budgetUsageSync(db, snapshot.run.id), pausedReason: budgetExceededReasonSync(db, snapshot.run) }
+    })() : undefined,
     executionElsewhere: Boolean(settings && foreignInteractiveHostSync(db, String(settings.run_id))),
     enabled: Boolean(settings), autoContinue: Boolean(settings?.auto_continue),
     remainingTurns: Number(settings?.remaining_turns ?? 4),
@@ -7499,9 +7686,44 @@ export async function readInteractiveRecoveries(runId: string): Promise<string[]
   return snapshot.agents.filter(agent => {
     if (agent.role !== 'teammate' || agent.turnActive || agent.sessionId.startsWith('external:')) return false
     const task = snapshot.tasks.find(task => task.id === agent.taskId)
-    const reserved = db.prepare('SELECT 1 FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').get(runId, agent.id)
+    const reserved = db.prepare('SELECT task_id FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').get(runId, agent.id) as Row | undefined
+    const dispatchedTask = reserved?.task_id ? snapshot.tasks.find(entry => entry.id === reserved.task_id) : undefined
+    if (!agent.taskId && dispatchedTask && ['completed', 'failed', 'cancelled'].includes(dispatchedTask.status)) return false
     return Boolean(reserved) || task?.status === 'in_progress' || task?.status === 'planning'
   }).map(agent => agent.id)
+}
+
+/** Completed work may retain a stream marker after the execution host exits. */
+export async function readSettledInteractiveExecutions(runId: string): Promise<string[]> {
+  const db = await getDatabase()
+  if (foreignInteractiveHostSync(db, runId)) return []
+  const snapshot = readSnapshotSync(db, runId)
+  if (!snapshot) return []
+  return snapshot.agents.filter(agent => {
+    if (agent.turnActive || getRunningSessionInfo(agent.sessionId).running) return false
+    const row = db.prepare('SELECT task_id FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').get(runId, agent.id) as Row | undefined
+    const task = row?.task_id ? snapshot.tasks.find(task => task.id === row.task_id) : undefined
+    return task && ['completed', 'failed', 'cancelled'].includes(task.status) && !agent.taskId
+  }).map(agent => agent.id)
+}
+
+/** User acknowledgement clears only a marker tied to a durable terminal result. */
+export async function reconcileSettledInteractiveExecution(identity: ExternalProtocolIdentity, agentId: string): Promise<void> {
+  await serializeAutomaticDelegation(identity.runId, async () => {
+    const db = await getDatabase()
+    if (requireExternalParticipantSync(db, identity).role !== 'lead') throw new Error('Only the lead conversation can acknowledge a settled execution')
+    await enqueueWrite(tx => claimInteractiveHostSync(tx, identity.runId))
+    if (!(await readSettledInteractiveExecutions(identity.runId)).includes(agentId)) throw new Error('Inspect the execution first; only a terminal result without a live turn can be acknowledged')
+    await enqueueWrite(tx => {
+      if (controllers.get(identity.runId)?.turnInFlight.has(agentId)) throw new Error('Teammate became active; refresh before acknowledging')
+      const result = tx.prepare(`DELETE FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?
+        AND task_id IN (SELECT id FROM protocol_tasks WHERE run_id = ? AND status IN ('completed', 'failed', 'cancelled'))
+        AND NOT EXISTS (SELECT 1 FROM protocol_agents WHERE run_id = ? AND id = ? AND task_id IS NOT NULL)`)
+        .run(identity.runId, agentId, identity.runId, identity.runId, agentId)
+      if (!result.changes) throw new Error('Execution changed; refresh before acknowledging')
+    })
+    notifyRunChanged(identity.runId)
+  })
 }
 
 /**
@@ -7558,12 +7780,40 @@ export async function cancelInteractiveTask(identity: ExternalProtocolIdentity, 
 }
 
 export async function resumeInteractiveAgent(identity: ExternalProtocolIdentity, agentId: string): Promise<void> {
-  if (!(await readInteractiveRecoveries(identity.runId)).includes(agentId)) throw new Error('This teammate does not need recovery or is still running')
-  await enqueueWrite(db => claimInteractiveHostSync(db, identity.runId))
-  const controller = await adoptInteractiveController(identity)
-  if (!controller.sessionIds.has(agentId)) throw new Error('Only a managed teammate can be resumed')
-  await enqueueWrite(db => db.prepare('DELETE FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').run(identity.runId, agentId))
-  void dispatchTeammateWork(controller, agentId)
+  await serializeAutomaticDelegation(identity.runId, async () => {
+    if (!(await readInteractiveRecoveries(identity.runId)).includes(agentId)) throw new Error('This teammate does not need recovery or is still running')
+    const db = await getDatabase()
+    const lead = requireExternalParticipantSync(db, identity)
+    if (lead.role !== 'lead') throw new Error('Only the lead conversation can resume a teammate')
+    const before = readSnapshotSync(db, identity.runId)!
+    const agent = before.agents.find(agent => agent.id === agentId)!
+    const task = before.tasks.find(task => task.id === agent.taskId)
+    if (!task || ['completed', 'failed', 'cancelled'].includes(task.status)) throw new Error('This dispatch belongs to settled work; acknowledge its result instead of resuming')
+    const budgetReason = budgetExceededReasonSync(db, before.run)
+    if (budgetReason) throw new Error(`Adjust the team limit before resuming: ${budgetReason}`)
+    if (task && (['planned', 'blocked'].includes(task.status) || task.receipt?.needsDecision?.some(decision => decision.status === 'open'))) throw new Error('Answer the pending question, decision, or approval before resuming')
+    const { inspectRecoveryAgent } = await import('./coordinatorRecoveryServer')
+    const evidence = await inspectRecoveryAgent(agent)
+    if (!evidence.directory.available) throw new Error(`Saved teammate directory is unavailable: ${evidence.directory.detail}`)
+    if (!evidence.conversation.available) throw new Error(`Saved native conversation is unavailable: ${evidence.conversation.detail}`)
+    // Provider inspection is asynchronous. Bind the recovery to the same owned work.
+    const current = readSnapshotSync(await getDatabase(), identity.runId)!.agents.find(entry => entry.id === agentId)
+    if (!current || current.taskId !== agent.taskId || current.sessionId !== agent.sessionId || current.provider !== agent.provider || current.worktreePath !== agent.worktreePath
+      || !(await readInteractiveRecoveries(identity.runId)).includes(agentId)) throw new Error('Teammate changed during inspection; refresh before resuming')
+    await enqueueWrite(db => claimInteractiveHostSync(db, identity.runId))
+    const controller = await adoptInteractiveController(identity)
+    if (!controller.sessionIds.has(agentId)) throw new Error('Only a managed teammate can be resumed')
+    await enqueueWrite(db => {
+      const final = readSnapshotSync(db, identity.runId)!
+      const current = final.agents.find(entry => entry.id === agentId)
+      const currentTask = final.tasks.find(entry => entry.id === current?.taskId)
+      if (!current || current.taskId !== agent.taskId || current.sessionId !== agent.sessionId || current.provider !== agent.provider || current.turnActive
+        || !currentTask || ['completed', 'failed', 'cancelled', 'blocked', 'planned'].includes(currentTask.status)
+        || currentTask.receipt?.needsDecision?.some(decision => decision.status === 'open') || budgetExceededReasonSync(db, final.run)) throw new Error('Recovery state changed; refresh before resuming')
+      db.prepare('DELETE FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').run(identity.runId, agentId)
+    })
+    void dispatchTeammateWork(controller, agentId)
+  })
 }
 
 /** The server batches inbox events and spends at most four automatic lead turns per user turn. */
@@ -8377,6 +8627,7 @@ async function dispatchAgentTurn(
     const run = rowToRun(runRow)
     const budgetReason = budgetExceededReasonSync(db, run)
     if (budgetReason) {
+      providerFailureHandled = true
       await stopProtocolRunForBudget(controller, budgetReason)
       return
     }
@@ -8474,8 +8725,35 @@ async function dispatchAgentTurn(
   }
 }
 
+/** A settings change is explicit permission to resume only safely observed work. */
+async function resumeResourceScheduling(controller: RunController): Promise<void> {
+  if (controller.stopped) return
+  const db = await getDatabase()
+  const run = readSnapshotSync(db, controller.runId)?.run
+  if (!run || budgetExceededReasonSync(db, run)) return
+  for (const agent of listAgentsSync(db, controller.runId)) {
+    if (!controller.sessionIds.has(agent.id) || controller.turnInFlight.has(agent.id)
+      || db.prepare('SELECT 1 FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').get(controller.runId, agent.id)) continue
+    const owned = agent.taskId ? listTasksSync(db, controller.runId).find(task => task.id === agent.taskId) : undefined
+    if (owned && (['blocked', 'planned'].includes(owned.status) || owned.receipt?.needsDecision?.some(decision => decision.status === 'open'))) continue
+    const task = agent.taskId || await enqueueWrite(tx => claimTaskSync(tx, controller.runId, agent.id))
+    if (task) void dispatchTeammateWork(controller, agent.id).catch(() => {})
+  }
+}
+
 async function stopProtocolRunForBudget(controller: RunController, reason: string): Promise<void> {
   if (controller.stopped) return
+  if (controller.interactiveLeadId) {
+    await enqueueWrite(db => {
+      const previous = db.prepare("SELECT payload_json FROM protocol_events WHERE run_id = ? AND type = 'run.status' AND json_extract(payload_json, '$.budgetPaused') IS NOT NULL ORDER BY rowid DESC LIMIT 1").get(controller.runId) as Row | undefined
+      const state = parseJsonObject<{ budgetPaused?: boolean; reason?: string }>(previous?.payload_json)
+      if (state?.budgetPaused && state.reason === reason) return
+      insertEventSync(db, { version: AGENT_PROTOCOL_VERSION, runId: controller.runId, agentId: 'coordinator', type: 'run.status',
+        summary: `Coordinator paused further provider scheduling: ${reason}`, payload: { budgetPaused: true, reason } })
+    })
+    notifyRunChanged(controller.runId)
+    return
+  }
   await recordProtocolEvent({
     version: AGENT_PROTOCOL_VERSION,
     runId: controller.runId,
@@ -8495,6 +8773,7 @@ async function dispatchTeammateWork(controller: RunController, agentId: string):
   const agentsById = new Map(agents.map((entry) => [entry.id, entry]))
   const agent = agentsById.get(agentId)
   if (!agent || (agent.sessionId.startsWith('external:') && !controller.sessionIds.has(agentId))) return
+  if (agent.role === 'teammate' && !controller.sessionIds.has(agentId)) return
   const tasks = listTasksSync(db, controller.runId)
   // Blocked tasks stay dispatchable: a woken teammate resumes the task its
   // inbox advice is about, rather than being told to claim something else.
@@ -8569,6 +8848,11 @@ async function dispatchTeammateWork(controller: RunController, agentId: string):
 async function handleAgentTurnEnd(controller: RunController, agentId: string): Promise<void> {
   if (controller.stopped) return
   const db = await getDatabase()
+  if (controller.interactiveLeadId) {
+    const run = readSnapshotSync(db, controller.runId)?.run
+    const reason = run && budgetExceededReasonSync(db, run)
+    if (reason) { await stopProtocolRunForBudget(controller, reason); return }
+  }
   const agents = listAgentsSync(db, controller.runId)
   const agent = agents.find((entry) => entry.id === agentId)
   if (!agent) return
@@ -8973,8 +9257,8 @@ async function beginExecutionPhase(controller: RunController): Promise<void> {
 
 /**
  * On-demand mid-run teammate spawn — the coord_spawn_teammate tool's
- * implementation. Lets the lead scale the team up when it discovers more
- * parallelizable work than the run's initial `maxAgents` was sized for,
+ * implementation. Lets the lead fill team capacity when it discovers more
+ * parallelizable work within the configured `maxAgents` capacity,
  * instead of only ever getting the fixed roster beginExecutionPhase spawned
  * once at the start of the run.
  *
@@ -8987,6 +9271,15 @@ export async function spawnAdditionalTeammate(
   identity: ExternalProtocolIdentity,
   params: { provider?: ProtocolRun['provider']; reserveForDelegation?: boolean; name?: string } = {},
 ): Promise<{ agentId: string; name: string }> {
+  // Reserved callers already hold the automatic-delegation serialization key.
+  if (!params.reserveForDelegation) return serializeAutomaticDelegation(identity.runId, () => spawnAdditionalTeammateReserved(identity, params))
+  return spawnAdditionalTeammateReserved(identity, params)
+}
+
+async function spawnAdditionalTeammateReserved(
+  identity: ExternalProtocolIdentity,
+  params: { provider?: ProtocolRun['provider']; reserveForDelegation?: boolean; name?: string },
+): Promise<{ agentId: string; name: string }> {
   const controller = controllers.get(identity.runId)
   if (!controller) {
     throw new Error('No in-process controller for this run — externally-run Coordinator sessions must add teammates by starting another CLI and calling coord_join_run')
@@ -8996,6 +9289,11 @@ export async function spawnAdditionalTeammate(
   const agent = requireExternalParticipantSync(db, identity)
   if (agent.role !== 'lead') throw new Error('Only the Coordinator lead can spawn teammates')
   const existing = listAgentsSync(db, controller.runId)
+  const run = readSnapshotSync(db, controller.runId)!.run
+  if (!['planning', 'running', 'synthesizing'].includes(run.status)) throw new Error('Coordinator run is not accepting teammates')
+  const reason = budgetExceededReasonSync(db, run)
+  if (reason) throw new Error(`Cannot start a teammate: ${reason}`)
+  if (existing.filter(entry => !['failed', 'stopped'].includes(entry.status)).length >= run.maxAgents) throw new Error('All teammate slots are busy; adjust team capacity before adding a teammate')
   if (params.name && existing.some(entry => entry.name === params.name && teammateHoldsName(entry, controller.sessionIds))) {
     throw new Error(`${params.name} is already a live teammate in this run`)
   }

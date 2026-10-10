@@ -4,7 +4,72 @@ Source review: September 29, 2026. Agent Viewer `336b424`; local Herdr
 `9dc3a1df`. This reviews the requested local checkout, not an assertion about
 the latest published Herdr release. Recommendations below are proposed work.
 
+October 10 update: remote roster Enter now opens an interactive TUI inspector.
+Transcript/reply, plan review, decisions, interruption, managed recovery, and
+named follow-up use the owning daemon with identity guards and durable retries.
+Two isolated daemon route/ledger/auth hosts and full-root wide/narrow UI smokes
+pass. Native provider permission dialogs and live provider/network comparisons
+remain outside that proof. See the current evidence in
+`docs/coordinator-herdr-comparison.md`; the source descriptions below retain
+their original review date.
+
+October 10 workflow update: ordinary web and TUI conversations can preview and
+start saved typed workflows with the existing conversation as lead. Frozen
+recipe submission, atomic board seeding, provider/phase staffing, dependency
+claims, and same-key startup recovery use the existing Coordinator engine.
+Scripted provider and rendered wide/narrow TUI smokes pass. Browser and live
+provider comparisons remain unverified; recovery/resource controls remain work.
+
+October 10 resource update: web **Team resources** and TUI **g** configure team
+capacity and token/cost/duration limits. Reported usage keeps missing-data labels.
+Interactive exhaustion persists a scheduling pause with owned work retained;
+keyed limit updates resume eligible work while preserving human and uncertainty
+gates. Ledger, route, service, fresh-process observation, and wide/narrow TUI
+fixture proofs pass. Consolidated recovery and live comparisons remain pending.
+
+October 10 recovery update: web recovery overview and TUI **h** consolidate live,
+uncertain, paused, and inaccessible teammate states with saved identities/paths.
+Bounded read-only availability checks and explicit server-checked recovery do
+not replay observation. Terminal stream markers can be acknowledged without a
+new turn. Killed-host, fresh-process, live-host, route, and wide/narrow UI fixtures
+pass. Existing **b** replies and **l** alerts are preserved; workflows use **f**
+and limits **g**. Live-provider/browser comparison and final audit remain pending.
+
+October 10 native-request update: the remote inspector now offers **p** for the
+owning daemon's provider approvals, plans, and structured questions. Full prompt
+binding, provider constraints, read-only inspection, reviewed confirmation,
+secret masking, and durable lost-response/terminal-team receipts are covered by
+two-daemon and wide/narrow keyboard fixtures plus an actual Codex bridge with
+scripted RPC. This closes the implementation gap above; live-provider/browser
+comparison and the final requirement audit remain unverified.
+
+October 10 browser/audit update: the real Next.js UI passes the extended Chrome
+fixture for workflows, resources, recovery, and result review, with the primary
+draft retained. APIs remain fixtures. Current Herdr checkout `2563803d` leaves
+the three referenced guides unchanged; installed client/server are compatible
+0.9.3. See [the acceptance audit](coordinator-herdr-acceptance-audit.md) for each
+original requirement and the live comparisons still needed.
+
 ## Finding
+
+October 10 deep-dive addition: Herdr's Goto picker (`keyboard.mdx`, section
+"Goto") supports name/path/provider search and lifecycle filtering. The
+ordinary conversation roster now exposes **Find teammate** and **Teammate
+state** in the web panel, and **/** search, **t** state filtering, and
+**ctrl+u** reset in the TUI teammate panel. Search matches names, providers,
+session IDs, task titles, task paths, worktree branches, and directories.
+Native requests, recovery, observed turns, background work, and per-client
+review markers drive the filters. An observation outage or foreign execution
+host is explicitly unknown. Navigation cannot submit work or acknowledge a
+completion; opening a transcript retains the existing review behavior.
+`bun tui/opentui/coordinatorRosterSmoke.tsx` covers shared-state classification,
+search keyboard isolation, filtered transcript identity, empty destinations,
+and wide/narrow rendering. This augments the global TUI sidebar's existing
+state picker rather than replacing it.
+The extended Chrome fixture also passes against the actual Next.js UI with
+provider APIs intercepted: search hides nonmatching transcript destinations,
+state filtering narrows live teammates, and clearing restores the roster
+without submitting a Coordinator mutation.
 
 The largest remaining opportunity is making orchestration capabilities usable
 from the primary conversation. Much of the earlier Herdr-inspired work is

@@ -57,7 +57,7 @@ try {
   const lead = await coord.sessionCoordinatorIdentity('primary-chat', 'codex')
   const worker = (await coord.joinExternalProtocolRun({ runId, participantName: 'reviewer', provider: 'codex', cwd })).participant
   async function mail(text: string) { await coord.sendExternalProtocolMessage(worker, { to: 'lead', body: text, kind: 'response' }) }
-  await mail('Result A')
+  await coord.sendExternalProtocolMessage(worker, { to: 'lead', body: 'Result A', kind: 'status', priority: 'urgent', replyRequired: true })
   const rejected = await coord.withCooperativeInbox('primary-chat', { message: 'Review it' }, async () => Response.json({ error: 'rejected' }, { status: 503 }))
   assert.equal(rejected.status, 503, await rejected.clone().text())
   assert.equal((await state()).delivery, null)
@@ -71,12 +71,18 @@ try {
   const duplicate = await coord.withCooperativeInbox('primary-chat', { message: 'retry' }, async () => { duplicateCalls++; return clean() })
   assert.equal(duplicate.status, 409); assert.equal(duplicateCalls, 0)
   assert.equal((await coord.readExternalProtocolInbox(lead, { acknowledge: false })).messages.length, 0, 'reserved mail cannot be read twice by tools')
+  const obligation = (await coord.readExternalProtocolInbox(lead, { unresolved: true })).messages[0]!
+  assert.equal(obligation.body, 'Result A', 'unresolved retrieval includes reserved delivery')
+  assert.equal(obligation.priority, 'urgent')
+  assert.equal(obligation.replyRequired, true)
   await coord.reconcileInteractiveDelivery('primary-chat', uncertainBatch.batchId, false)
 
   let finish!: () => void
   const response = await coord.withCooperativeInbox('primary-chat', { message: 'Review it' }, async outgoing => {
     assert.match(String(outgoing.message), /coord_delegate/)
     assert.match(String(outgoing.message), /Result A/)
+    assert.ok(String(outgoing.message).includes(obligation.id), 'chat injection retains the exact reply target')
+    assert.match(String(outgoing.message), /priority=urgent URGENT reply-required/)
     return new Response(new ReadableStream({ start(controller) { finish = () => { controller.enqueue(new TextEncoder().encode('data: {"type":"assistant","text":"received"}')); controller.close() } } }))
   })
   const concurrent = await coord.withCooperativeInbox('primary-chat', { message: 'race' }, async () => { duplicateCalls++; return clean() })
@@ -87,6 +93,9 @@ try {
   const pending = await coord.readExternalProtocolInbox(lead, { acknowledge: false })
   assert.ok(!pending.messages.some(m => m.body.includes('Result A')))
   assert.ok(pending.messages.some(m => m.body.includes('Result B')), 'acknowledgement only consumes the exact reserved batch')
+  assert.equal((await coord.readExternalProtocolInbox(lead, { unresolved: true })).messages[0]?.id, obligation.id, 'stream completion acknowledges delivery without resolving the question')
+  await coord.sendExternalProtocolMessage(lead, { to: 'reviewer', body: 'Reviewed Result A', kind: 'response', inReplyTo: obligation.id })
+  assert.equal((await coord.readExternalProtocolInbox(lead, { unresolved: true })).messages.length, 0, 'only a correlated reply resolves the question')
 
   // HTTP 200 with an error SSE must not masquerade as successful delivery.
   const failed = await coord.withCooperativeInbox('primary-chat', { message: 'Review B' }, async () => new Response('event: session\ndata: {"sessionId":"primary-chat"}\n\nevent: error\ndata: {"error":"provider disconnected"}\n\n'))

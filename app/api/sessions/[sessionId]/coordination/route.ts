@@ -1,3 +1,6 @@
+import { answerCoordinatorNativePermission } from '@/lib/coordinatorNativePermissionServer'
+import { readCoordinatorNativeAnswerReceipt } from '@/lib/agentCoordination'
+import { inspectCoordinatorRecovery } from '@/lib/coordinatorRecoveryServer'
 import { integrateCoordinatorResult } from '@/lib/coordinatorResultReviewServer'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -6,15 +9,25 @@ import { isAgentProvider } from '@/lib/provider'
 import { coordinatorBackgroundAgents } from '@/lib/coordinatorInteractiveState'
 import { listWaitingSessions } from '@/lib/sessionRuntime'
 import { readViewSessionInfo, readViewSessionRunning } from '@/lib/sessionBackend'
-import { adoptOrphanedInteractiveHost, cancelInteractiveTask, interruptInteractiveAgent, setInteractiveCoordinatorEnabled, configureInteractiveCoordinator, readInteractiveCoordinator, readInteractiveRecoveries, reconcileInteractiveDelivery, resumeInteractiveAgent, createExternalProtocolTask, readSessionCoordinator, reviewExternalProtocolPlan, runExternalProtocolIdempotent, sendExternalProtocolMessage, sessionCoordinatorIdentity, resolveProtocolDecisionAdmin } from '@/lib/agentCoordination'
+import { readSettledInteractiveExecutions, reconcileSettledInteractiveExecution, startInteractiveWorkflow, adoptOrphanedInteractiveHost, cancelInteractiveTask, interruptInteractiveAgent, setInteractiveCoordinatorEnabled, configureInteractiveCoordinator, readInteractiveCoordinator, readInteractiveRecoveries, reconcileInteractiveDelivery, resumeInteractiveAgent, createExternalProtocolTask, readSessionCoordinator, reviewExternalProtocolPlan, runExternalProtocolIdempotent, sendExternalProtocolMessage, sessionCoordinatorIdentity, resolveProtocolDecisionAdmin } from '@/lib/agentCoordination'
 
 const schema = z.object({
   provider: z.string().refine(isAgentProvider),
   requestId: z.string().min(1).max(160),
-  action: z.enum(['integrate-result', 'disable', 'enable', 'settings', 'reconcile', 'resume-agent', 'interrupt-agent', 'cancel-task', 'delegate', 'message', 'review-plan', 'decision']),
+  expectedRunId: z.string().min(1).optional(),
+  expectedAgent: z.object({ id: z.string().min(1), sessionId: z.string().min(1), provider: z.string().refine(isAgentProvider) }).optional(),
+  action: z.enum(['native-answer', 'start-workflow', 'integrate-result', 'disable', 'enable', 'settings', 'reconcile', 'resume-agent', 'reconcile-agent', 'interrupt-agent', 'cancel-task', 'delegate', 'message', 'review-plan', 'decision']),
+  permissionId: z.string().min(1).max(512).optional(),
+  permissionToken: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  response: z.enum(['once', 'always', 'reject']).optional(),
+  answers: z.record(z.string(), z.array(z.string().max(8000)).max(100)).optional(),
+  permissionMode: z.enum(['default', 'acceptEdits']).optional(),
+  playbook: z.unknown().optional(), workflowArgs: z.unknown().optional(),
   token: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   detail: z.string().trim().min(1).max(8000),
   cwd: z.string().trim().min(1).optional(),
+  maxAgents: z.number().int().min(2).max(16).optional(),
+  budget: z.strictObject({ maxTokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(), maxCostUsd: z.number().positive().optional(), maxDurationMinutes: z.number().positive().optional() }).nullable().optional(),
   autoContinue: z.boolean().optional(), useWorktrees: z.boolean().optional(), batchId: z.string().optional(), received: z.boolean().optional(),
   to: z.string().min(1).max(160).optional(),
   paths: z.array(z.string().trim().min(1)).max(100).optional(),
@@ -31,6 +44,7 @@ async function readState(sessionId: string, provider: Parameters<typeof readSess
   const snapshot = await readSessionCoordinator(sessionId, provider)
   const interactive = await readInteractiveCoordinator(sessionId)
   const recoveries = snapshot ? await readInteractiveRecoveries(snapshot.run.id) : []
+  const settledExecutions = snapshot ? await readSettledInteractiveExecutions(snapshot.run.id) : []
   const runningAgentIds: string[] = []
   const permissions = snapshot?.agents.flatMap(agent => {
     const info = readViewSessionRunning(agent.sessionId)
@@ -39,14 +53,19 @@ async function readState(sessionId: string, provider: Parameters<typeof readSess
       .map(permission => ({ agentId: agent.id, agentName: agent.name, permission }))
   }) ?? []
   const backgroundAgents = snapshot ? coordinatorBackgroundAgents(snapshot.agents, listWaitingSessions()) : []
-  return { snapshot, interactive, recoveries, permissions, runningAgentIds, backgroundAgents }
+  return { snapshot, interactive, recoveries, settledExecutions, permissions, runningAgentIds, backgroundAgents }
 }
 
 export async function GET(request: Request, { params }: { params: Promise<{ sessionId: string }> }) {
   const provider = new URL(request.url).searchParams.get('provider')
   if (!isAgentProvider(provider)) return NextResponse.json({ error: 'provider is required' }, { status: 400 })
   const { sessionId } = await params
-  return NextResponse.json(await readState(sessionId, provider), { headers: { 'Cache-Control': 'no-store' } })
+  const state = await readState(sessionId, provider)
+  if (new URL(request.url).searchParams.get('inspect') === 'recovery') {
+    const inspection = state.snapshot ? await inspectCoordinatorRecovery(state.snapshot) : null
+    return NextResponse.json({ inspection }, { headers: { 'Cache-Control': 'no-store' } })
+  }
+  return NextResponse.json(state, { headers: { 'Cache-Control': 'no-store' } })
 }
 
 export async function POST(request: Request, { params }: { params: Promise<{ sessionId: string }> }) {
@@ -55,6 +74,18 @@ export async function POST(request: Request, { params }: { params: Promise<{ ses
   const body = parsed.data
   const { sessionId } = await params
   try {
+    if (body.expectedRunId) {
+      const snapshot = await readSessionCoordinator(sessionId, body.provider)
+      if (snapshot?.run.id !== body.expectedRunId) throw new Error('Coordinator team changed; refresh before sending to this conversation')
+      if (body.expectedAgent && !snapshot.agents.some(agent => agent.id === body.expectedAgent!.id && agent.sessionId === body.expectedAgent!.sessionId && agent.provider === body.expectedAgent!.provider)) {
+        throw new Error('Teammate identity changed; refresh before sending')
+      }
+    }
+    if (body.action === 'native-answer') {
+      if (!body.expectedRunId) throw new Error('Bind the team before answering a native request')
+      const receipt = await readCoordinatorNativeAnswerReceipt(sessionId, body.provider, body.expectedRunId, body.requestId)
+      if (receipt) return NextResponse.json({ result: receipt, ...await readState(sessionId, body.provider) }, { headers: { 'Cache-Control': 'no-store' } })
+    }
     if (body.action === 'integrate-result') {
       if (!body.taskId || !body.token) throw new Error('Review the result before integrating')
       const result = await integrateCoordinatorResult(sessionId, body.provider, body.taskId, body.token, body.requestId)
@@ -65,17 +96,25 @@ export async function POST(request: Request, { params }: { params: Promise<{ ses
       await setInteractiveCoordinatorEnabled({ sessionId, provider: body.provider, requestId: body.requestId, enabled: body.action === 'enable', cwd: info?.cwd || body.cwd, autoContinue: body.autoContinue })
       return NextResponse.json({ result: { configured: true }, ...await readState(sessionId, body.provider) }, { headers: { 'Cache-Control': 'no-store' } })
     }
-    if (body.action === 'delegate' || body.action === 'settings') {
+    if (body.action === 'start-workflow' || body.action === 'delegate' || body.action === 'settings') {
       const info = await readViewSessionInfo(sessionId, body.provider).catch(() => null)
       const cwd = info?.cwd || body.cwd
       if (!cwd) throw new Error('Open a local project conversation before delegating')
       await configureInteractiveCoordinator({ sessionId, provider: body.provider, cwd })
     }
-    const identity = await sessionCoordinatorIdentity(sessionId, body.provider)
+    const identity = await sessionCoordinatorIdentity(sessionId, body.provider, body.expectedRunId)
+    if (body.action === 'start-workflow') {
+      const result = await startInteractiveWorkflow(identity, { requestId: body.requestId, playbook: body.playbook, args: body.workflowArgs })
+      return NextResponse.json({ result, ...await readState(sessionId, body.provider) }, { headers: { 'Cache-Control': 'no-store' } })
+    }
     const result = await runExternalProtocolIdempotent(identity, `chat_${body.action}`, body.requestId, async () => {
+      if (body.action === 'native-answer') {
+        if (!body.expectedRunId) throw new Error('Bind the team before answering a native request')
+        return answerCoordinatorNativePermission(identity, body)
+      }
       if (body.action === 'settings') {
         const snapshot = await readSessionCoordinator(sessionId, body.provider)
-        await configureInteractiveCoordinator({ sessionId, provider: body.provider, cwd: snapshot!.run.baseCwd, autoContinue: body.autoContinue, useWorktrees: body.useWorktrees })
+        await configureInteractiveCoordinator({ sessionId, provider: body.provider, cwd: snapshot!.run.baseCwd, autoContinue: body.autoContinue, useWorktrees: body.useWorktrees, maxAgents: body.maxAgents, budget: body.budget })
         return { configured: true }
       }
       if (body.action === 'reconcile') {
@@ -91,6 +130,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ ses
       if (body.action === 'cancel-task') {
         if (!body.taskId) throw new Error('Choose the task to cancel')
         return cancelInteractiveTask(identity, body.taskId, body.detail)
+      }
+      if (body.action === 'reconcile-agent') {
+        if (!body.to) throw new Error('Choose the settled teammate execution')
+        await reconcileSettledInteractiveExecution(identity, body.to)
+        return { acknowledged: true }
       }
       if (body.action === 'resume-agent') {
         if (!body.to) throw new Error('Choose the teammate to resume')

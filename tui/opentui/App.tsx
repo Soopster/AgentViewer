@@ -232,6 +232,8 @@ import { CrossSessionMessagingPopover } from './CrossSessionMessagingPopover'
 import { CheckpointPopover } from './CheckpointPopover'
 import { CoordinationPopover } from './CoordinationPopover'
 import { TeammatesPopover } from './TeammatesPopover'
+import { RemoteCoordinatorPopover } from './RemoteCoordinatorPopover'
+import type { RemoteCoordinatorTarget } from '../../lib/tui/remoteCoordinator'
 import { MODAL_SCRIM_Z_INDEX } from './layers'
 import { TeammatesAttention } from './TeammatesAttention'
 import { coordinatorAlertDelivery } from '../../lib/coordinatorSignals'
@@ -8400,6 +8402,8 @@ export default function OpenTuiApp() {
     () => false,
   )
   const teammatesKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  const [remoteCoordinatorTarget, setRemoteCoordinatorTarget] = useState<RemoteCoordinatorTarget | null>(null)
+  const remoteCoordinatorKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
 
   const composerFocusBlocked = Boolean(
     exitConfirmOpen
@@ -8419,6 +8423,7 @@ export default function OpenTuiApp() {
     || coordModalOpen
     || coordBoardOpen
     || teammatesOpen
+    || remoteCoordinatorTarget
     || renameSessionKey
     || surfacePanelFocused
     || newSessionModalOpen
@@ -9780,10 +9785,8 @@ export default function OpenTuiApp() {
   const openSelectedCoordinatorAgent = useEffectEvent(() => {
     const { agentEntries, selectedKey: coordinatorSelectedKey } = getCoordinatorState()
     const selected = agentEntries.find((entry) => entry.key === coordinatorSelectedKey)
-    // Another machine's transcript is not readable from here; say where to go
-    // rather than opening a session this process cannot find.
     if (selected?.machine) {
-      showNotice('info', `${selected.agent.name} runs on ${selected.machine.name} · open it there (${selected.machine.baseUrl})`, 6000)
+      setRemoteCoordinatorTarget({ machine: selected.machine, runId: selected.runId, agentId: selected.agent.id, sessionId: selected.agent.sessionId, provider: selected.agent.provider })
       return
     }
     if (selected) openCoordinationAgentSession(selected.agent)
@@ -18936,6 +18939,11 @@ export default function OpenTuiApp() {
       return
     }
 
+    if (remoteCoordinatorTarget) {
+      handled(() => { remoteCoordinatorKeyHandlerRef.current?.(key) })
+      return
+    }
+
     if (teammatesOpen) {
       handled(() => { teammatesKeyHandlerRef.current?.(key) })
       return
@@ -24059,9 +24067,9 @@ export default function OpenTuiApp() {
         )
       })() : null}
 
-      <ToastOverlay toasts={toasts} theme={theme} width={width} height={height} />
+      <ToastOverlay toasts={toasts} theme={theme} width={width} height={height} zIndex={remoteCoordinatorTarget ? MODAL_SCRIM_Z_INDEX - 1 : undefined} />
 
-      {worktreeModalOpen || worktreeConfirm || coordModalOpen || coordBoardOpen || teammatesOpen ? (
+      {worktreeModalOpen || worktreeConfirm || coordModalOpen || coordBoardOpen || teammatesOpen || remoteCoordinatorTarget ? (
         <box
           position="absolute"
           top={0}
@@ -24564,6 +24572,18 @@ export default function OpenTuiApp() {
           onWatchSessions={watchCoordinationAgentSessions}
           onNotice={showNotice}
           onKeyHandlerReady={(handler) => { teammatesKeyHandlerRef.current = handler }}
+        />
+      ) : null}
+
+      {remoteCoordinatorTarget ? (
+        <RemoteCoordinatorPopover
+          key={JSON.stringify(remoteCoordinatorTarget)}
+          target={remoteCoordinatorTarget}
+          theme={theme}
+          width={width}
+          height={height}
+          onClose={() => setRemoteCoordinatorTarget(null)}
+          onKeyHandlerReady={(handler) => { remoteCoordinatorKeyHandlerRef.current = handler }}
         />
       ) : null}
 

@@ -18,6 +18,10 @@ export const DAEMON_FEATURES = [
   'coordination.interactive',
   // That read reports teammates whose turn ended with background work due.
   'coordination.backgroundAgents',
+  // Mutations may bind the expected run and teammate identity across machines.
+  'coordination.identityGuard',
+  // Native provider requests, bound to the inspected ask and durable retry.
+  'coordination.nativeAnswers',
 ] as const
 
 export type DaemonFeature = (typeof DAEMON_FEATURES)[number]

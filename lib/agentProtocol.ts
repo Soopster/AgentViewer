@@ -666,6 +666,7 @@ export type ProtocolRunRollup = {
   elapsedMs: number
   tasks: { total: number; done: number; failed: number; active: number; pending: number; blocked: number }
   usage: { totalTokens: number; costUsd: number }
+  usageAvailability?: { tokens: boolean; cost: boolean }
   /** Set once a budget is mostly spent, while the run is still going. */
   budgetWarning?: string
   /** Set when an unfinished run has shown no sign of life for a long while (see `IDLE_WARN_MS`). */

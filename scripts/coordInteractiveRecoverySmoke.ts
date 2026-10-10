@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -21,10 +21,12 @@ if (!phase) {
   const { mock } = await (0, eval)('import("bun:test")')
   let starts = 0
   mock.module(fileURLToPath(new URL('../lib/sessionBackend.ts', import.meta.url)), () => ({
-    createNewViewSession: async () => {
+    createNewViewSession: async (params: { cwd: string }) => {
+      writeFileSync('native.json', JSON.stringify({ sessionId: 'persistent-reviewer', provider: 'codex', cwd: params.cwd }))
       assert.equal(phase, 'crash', 'recovery must not create a second session')
       return { provider: 'codex', sessionId: 'persistent-reviewer', isPending: false }
     },
+    readViewSessionInfo: async (sessionId: string) => sessionId === 'persistent-reviewer' ? JSON.parse(readFileSync('native.json', 'utf8')) : { sessionId, provider: 'codex', cwd: process.cwd() },
     readViewSessionRunning: () => ({ running: false, pendingPermissions: [], pendingPrompts: [] }),
     streamViewSessionTurn: async ({ sessionId }: { sessionId: string }) => {
       assert.equal(sessionId, 'persistent-reviewer')

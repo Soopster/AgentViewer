@@ -56,7 +56,6 @@ try {
     let data
     let last = ''
     let verified = false
-    const approved = new Set()
     while (Date.now() < deadline) {
       data = await request(`${endpoint}?provider=${provider}`)
       const tasks = data.snapshot.tasks.filter(task => !oldIds.has(task.id))
@@ -69,17 +68,13 @@ try {
         throw new Error(`Live teammate requires recovery: ${failure?.detail ?? failure?.summary ?? data.recoveries.join(', ')}`)
       }
       assert.ok(tasks.length <= 2, 'duplicate task creation')
-      if (approved.size && !tasks.some(task => task.status === 'completed')) {
-        assert.equal(data.interactive.remainingTurns, 4, 'approved plans must not wake the lead before results')
-      }
-      for (const task of tasks.filter(task => task.status === 'planned' && !approved.has(task.id))) {
+      for (const task of tasks.filter(task => task.status === 'planned')) {
         const budget = data.interactive.remainingTurns
         await pause()
         const held = await request(`${endpoint}?provider=${provider}`)
         assert.equal(held.snapshot.tasks.find(item => item.id === task.id)?.status, 'planned', 'plan must wait for human approval')
         assert.equal(held.interactive.remainingTurns, budget, 'plan gate cannot wake the lead')
-        await request(endpoint, { provider, action: 'review-plan', taskId: task.id, approved: true, detail: 'Approved bounded read-only fixture plan', requestId: randomUUID() })
-        approved.add(task.id)
+        throw new Error(`Live smoke reached human-owned plan approval for task ${task.id}; automatic approval is disabled and fixture cleanup will stop this run`)
       }
       if (tasks.length === 2 && tasks.every(task => task.status === 'completed') && initialSettled && !data.interactive.delivery && data.interactive.remainingTurns < 4) {
         const results = tasks.map(task => `${task.resultSummary ?? ''}\n${task.resultDetail ?? ''}`).join('\n')
@@ -105,7 +100,7 @@ try {
       assert.equal(idle.interactive.delivery, null, 'idle started a delivery')
       assert.equal(idle.runningAgentIds.length, 0, 'work continued after completed results')
     }
-    console.log(JSON.stringify({ stage: 'round-passed', provider, round, automaticTurns: 4 - remaining, plansApproved: approved.size, idleSeconds }))
+    console.log(JSON.stringify({ stage: 'round-passed', provider, round, automaticTurns: 4 - remaining, idleSeconds }))
   }
   assert.equal(execFileSync('git', ['-C', cwd, 'status', '--porcelain'], { encoding: 'utf8' }), '')
   console.log(JSON.stringify({ stage: 'passed', provider, rounds, tasks: rounds * 2, elapsedSeconds: Math.round((Date.now() - started) / 1000), fixtureUnchanged: true }))

@@ -13,12 +13,23 @@ let observationFails = false
 let executionElsewhere = false
 let approvalId = 'approval-1'
 let resultReady = false
+let recoveryPending = false
+let directoryAvailable = false
+let conversationAvailable = true
+let settled = false
+let loseWorkflowResponse = true
+const workflowEffects = new Set()
+let recipe = { name: 'review-change', maxAgents: 3, requirePlanApproval: true, requireReview: true, phases: [
+  { title: 'Implement', tasks: [{ key: 'build', title: 'Build {{args.feature}}', detail: 'Implement {{args.feature}}', paths: ['src/search.ts'], provider: 'codex' }] },
+  { title: 'Review', tasks: [{ key: 'review', title: 'Review', detail: 'Check implementation', paths: [], provider: 'claude', dependsOn: ['build'] }] },
+] }
+let resources = { maxAgents: 4, occupiedAgents: 2, usage: {}, pausedReason: null }
 const actions = []
 const state = () => ({
   snapshot: enabled || stopped ? { run: { id: 'browser-run', status: stopped ? 'stopped' : 'running', leadAgentId: 'lead' },
-    agents: [{ id: 'lead', role: 'lead', name: 'lead', ...lead }, worker],
-    tasks: resultReady ? [{ id: 'T1', title: 'Review alpha', status: 'completed', ownerAgentId: worker.id, updatedAt: '2026-09-17T00:00:00Z', resultSummary: 'Alpha looks good' }] : [], messages: [], events: [] } : null,
-  interactive: { enabled, autoContinue, remainingTurns: 4, delivery: null, executionElsewhere }, recoveries: [], runningAgentIds: [worker.id],
+    agents: [{ id: 'lead', role: 'lead', name: 'lead', ...lead, worktreePath: lead.cwd }, { ...worker, taskId: recoveryPending ? 'T2' : null, turnActive: !recoveryPending && !settled }],
+    tasks: [...(recoveryPending ? [{ id: 'T2', title: 'Unfinished review', status: 'in_progress', ownerAgentId: worker.id, updatedAt: '2026-10-10T00:00:00Z' }] : []), ...(resultReady ? [{ id: 'T1', title: 'Review alpha', status: 'completed', ownerAgentId: worker.id, updatedAt: '2026-09-17T00:00:00Z', resultSummary: 'Alpha looks good' }] : [])], messages: [], events: [] } : null,
+  interactive: { enabled, autoContinue, remainingTurns: 4, delivery: null, executionElsewhere, resources }, recoveries: recoveryPending ? [worker.id] : [], settledExecutions: settled ? [worker.id] : [], runningAgentIds: recoveryPending || settled ? [] : [worker.id],
   permissions: enabled && permissionPending ? [{ agentId: worker.id, agentName: worker.name, permission: { id: approvalId, sessionId: worker.sessionId, provider: 'codex', title: 'Review command needs approval' } }] : [],
 })
 const transcript = sessionId => [{ type: 'assistant', uuid: `${sessionId}-message`, session_id: sessionId, parent_tool_use_id: null, provider: 'codex',
@@ -35,6 +46,15 @@ try {
       // Herdr marks every pane in its sidebar; this is the session list's copy.
       data = { attention: enabled && permissionPending ? [{ sessionId: lead.sessionId, provider: 'codex', waiting: 1, finished: 0 }] : [] }
     }
+    else if (url.pathname === '/api/agent-protocol/playbooks') {
+      if (url.searchParams.get('preview') === 'interactive') {
+        const args = JSON.parse(url.searchParams.get('args') || '{}')
+        data = { playbook: recipe, args, maxAgents: 3, providers: ['codex', 'claude'], tasks: [
+          { id: 'task-1', phase: 'Implement', title: `Build ${args.feature}`, prompt: `Implement ${args.feature}`, targetRole: 'teammate', seat: 'implementer', requestedProvider: 'codex', paths: ['src/search.ts'], blockedBy: [], verifyCommands: ['npm run check'] },
+          { id: 'task-2', phase: 'Review', title: 'Review', prompt: 'Check implementation', targetRole: 'teammate', seat: 'validator', requestedProvider: 'claude', paths: [], blockedBy: ['task-1'], verifyCommands: [] },
+        ] }
+      } else data = { playbooks: [{ name: recipe.name, taskCount: 2, argsHint: '{"feature":"search"}' }] }
+    }
     else if (url.pathname === '/api/provider') data = { provider: 'codex', providerInstanceId: 'codex', instances: [] }
     else if (url.pathname === '/api/sessions') data = { sessions: [lead] }
     else if (url.pathname.endsWith('/coordination/results/T1')) {
@@ -50,9 +70,18 @@ try {
         const body = route.request().postDataJSON(); actions.push(body)
         if (body.action === 'enable') { enabled = true; stopped = false }
         if (body.action === 'disable') { enabled = false; autoContinue = false; stopped = true }
-        if (body.action === 'settings') autoContinue = body.autoContinue
+        if (body.action === 'settings') {
+          if (body.autoContinue !== undefined) autoContinue = body.autoContinue
+          if (body.maxAgents !== undefined) resources = { ...resources, maxAgents: body.maxAgents, budget: body.budget, pausedReason: null }
+        }
+        if (body.action === 'resume-agent') recoveryPending = false
+        if (body.action === 'reconcile-agent') settled = false
+        if (body.action === 'start-workflow') {
+          workflowEffects.add(body.requestId)
+          if (loseWorkflowResponse) { loseWorkflowResponse = false; await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Fixture lost workflow acknowledgement' }) }); return }
+        }
       }
-      data = state()
+      data = url.searchParams.get('inspect') === 'recovery' ? { inspection: { runId: 'browser-run', evidence: [{ agentId: worker.id, sessionId: worker.sessionId, provider: worker.provider, worktreePath: worker.worktreePath, checkedAt: new Date().toISOString(), directory: { available: directoryAvailable, detail: directoryAvailable ? 'available' : 'saved directory missing' }, conversation: { available: conversationAvailable, detail: conversationAvailable ? 'native session available' : 'native session unavailable' } }] } } : state()
     } else if (url.pathname.endsWith('/messages')) {
       const sessionId = url.pathname.split('/')[3]
       data = { messages: transcript(sessionId), offset: 0, total: 1 }
@@ -119,6 +148,17 @@ try {
   assert.match(await page.getByLabel('Task or follow-up', { exact: true }).inputValue(), /reviewer/)
   const roster = page.getByLabel('Persistent teammate conversations')
   await roster.getByText(/Working · live turn/).waitFor({ timeout: 15000 })
+  const beforeFiltering = actions.length
+  await roster.getByLabel('Find teammate').fill('codex reviewer')
+  assert.equal(await roster.getByRole('button', { name: 'Transcript', exact: true }).count(), 1)
+  await roster.getByLabel('Find teammate').fill('no-such-teammate')
+  await roster.getByText('No teammates match these filters.').waitFor()
+  assert.equal(await roster.getByRole('button', { name: 'Transcript', exact: true }).count(), 0, 'search hides unavailable destinations')
+  await roster.getByRole('button', { name: 'Clear teammate filters' }).click()
+  await roster.getByLabel('Teammate state').selectOption('working')
+  assert.equal(await roster.getByRole('button', { name: 'Transcript', exact: true }).count(), 1)
+  await roster.getByRole('button', { name: 'Clear teammate filters' }).click()
+  assert.equal(actions.length, beforeFiltering, 'roster navigation sends no coordinator mutations')
   const actionCount = actions.length
   observationFails = true
   await roster.getByText(/Unknown · last observation unavailable/).waitFor({ timeout: 15000 })
@@ -180,6 +220,78 @@ try {
   assert.ok(actions.some(action => action.action === 'disable' && action.requestId))
   await page.getByRole('button', { name: 'Enable coordinator', exact: true }).click()
   await page.getByText('Coordinator on', { exact: true }).waitFor()
+  // Web controls complete the same recipe/resource/recovery flows as the TUI.
+  await panel.locator('summary').filter({ hasText: /^Team resources/ }).click()
+  await panel.getByText(/Reported tokens: unavailable/).waitFor()
+  await panel.getByLabel('Agent capacity (includes lead)', { exact: true }).fill('1')
+  const beforeLimits = actions.length
+  await panel.getByRole('button', { name: 'Apply team limits', exact: true }).click()
+  await panel.getByRole('alert').filter({ hasText: /Capacity must be between/ }).waitFor()
+  assert.equal(actions.length, beforeLimits, 'invalid limits never submit')
+  await panel.getByLabel('Agent capacity (includes lead)', { exact: true }).fill('6')
+  await panel.getByLabel('Run token limit', { exact: true }).fill('20000')
+  await panel.getByRole('button', { name: 'Apply team limits', exact: true }).click()
+  await panel.getByText(/Capacity: 2\/6 agents/).waitFor()
+  const limits = actions.findLast(action => action.maxAgents === 6)
+  assert.deepEqual(limits.budget, { maxTokens: 20000 })
+  assert.equal(limits.expectedRunId, 'browser-run')
+
+  await panel.locator('summary').filter({ hasText: 'Start a saved team workflow' }).click()
+  await panel.getByLabel('Arguments (text or JSON)', { exact: true }).fill('{broken')
+  await panel.getByRole('button', { name: 'Preview workflow', exact: true }).click()
+  await panel.getByRole('alert').filter({ hasText: /SyntaxError/ }).waitFor()
+  assert.equal(await panel.getByRole('button', { name: 'Start this team in chat', exact: true }).count(), 0)
+  await panel.getByLabel('Arguments (text or JSON)', { exact: true }).fill('{"feature":"search"}')
+  await panel.getByRole('button', { name: 'Preview workflow', exact: true }).click()
+  await panel.locator('pre').filter({ hasText: 'Build search' }).waitFor()
+  assert.match(await panel.locator('pre').filter({ hasText: 'Build search' }).innerText(), /Depends on: task-1/)
+  const frozenRecipe = structuredClone(recipe)
+  recipe = { ...recipe, phases: [{ title: 'Changed after preview', tasks: [{ title: 'Unexpected', detail: 'Unexpected' }] }] }
+  await panel.getByRole('button', { name: 'Start this team in chat', exact: true }).click()
+  await panel.getByRole('button', { name: 'Retry same request', exact: true }).waitFor()
+  const firstStart = actions.findLast(action => action.action === 'start-workflow')
+  assert.deepEqual(firstStart.playbook, frozenRecipe)
+  assert.deepEqual(firstStart.workflowArgs, { feature: 'search' })
+  assert.equal(firstStart.expectedRunId, 'browser-run')
+  assert.equal(await panel.getByRole('button', { name: 'Start this team in chat', exact: true }).isDisabled(), true)
+  await panel.getByRole('button', { name: 'Retry same request', exact: true }).click()
+  await panel.getByRole('button', { name: 'Retry same request', exact: true }).waitFor({ state: 'hidden' })
+  assert.deepEqual(actions.findLast(action => action.action === 'start-workflow'), firstStart)
+  assert.equal(workflowEffects.size, 1)
+
+  permissionPending = false; recoveryPending = true
+  await panel.getByText('reviewer: execution needs reconciliation', { exact: true }).waitFor({ timeout: 15000 })
+  const recovery = panel.getByRole('button', { name: /^Team recovery overview/ }).locator('..')
+  const beforeInspect = actions.length
+  await recovery.getByRole('button', { name: /^Team recovery overview/ }).click()
+  await recovery.getByText(/saved directory missing/).waitFor()
+  assert.equal(actions.length, beforeInspect, 'availability inspection does not resume')
+  assert.equal(await recovery.getByRole('button', { name: 'Resume after inspection', exact: true }).count(), 0)
+  directoryAvailable = true; conversationAvailable = false
+  await recovery.getByRole('button', { name: 'Refresh availability', exact: true }).click()
+  await recovery.getByText(/native session unavailable/).waitFor()
+  assert.equal(await recovery.getByRole('button', { name: 'Resume after inspection', exact: true }).count(), 0)
+  conversationAvailable = true
+  await recovery.getByRole('button', { name: 'Refresh availability', exact: true }).click()
+  await recovery.getByRole('button', { name: 'Resume after inspection', exact: true }).click()
+  assert.equal(actions.length, beforeInspect, 'first recovery click only opens confirmation')
+  await recovery.getByRole('button', { name: 'Keep paused', exact: true }).click()
+  assert.equal(actions.length, beforeInspect)
+  await recovery.getByRole('button', { name: 'Resume after inspection', exact: true }).click()
+  await recovery.getByRole('button', { name: 'Confirm resume', exact: true }).click()
+  await recovery.getByRole('button', { name: 'Confirm resume', exact: true }).waitFor({ state: 'hidden' })
+  assert.equal(actions.filter(action => action.action === 'resume-agent').length, 1)
+  assert.equal(actions.findLast(action => action.action === 'resume-agent')?.to, worker.id)
+  settled = true
+  await recovery.getByRole('button', { name: 'Acknowledge inspected result', exact: true }).waitFor({ timeout: 15000 })
+  await recovery.getByRole('button', { name: 'Acknowledge inspected result', exact: true }).click()
+  assert.equal(actions.filter(action => action.action === 'reconcile-agent').length, 0)
+  await recovery.getByRole('button', { name: 'Confirm acknowledgement; no new turn', exact: true }).click()
+  await recovery.getByRole('button', { name: 'Confirm acknowledgement; no new turn', exact: true }).waitFor({ state: 'hidden' })
+  assert.equal(actions.filter(action => action.action === 'reconcile-agent').length, 1)
+  await page.screenshot({ path: '/tmp/coordinator-workflow-recovery.png', fullPage: true })
+  await chatTab.click()
+  assert.equal(await composer.innerText(), 'Preserve this lead draft while inspecting reviewer')
   assert.equal(errors.length, 0, errors.join('\n'))
-  console.log('Rendered enablement, continuation preference, native attention, embedded transcript, lead draft preservation, named follow-up, outage recovery, foreign-host activity, blurred-only teammate notifications honouring the delivery setting, review on transcript open, and sidebar teammate marks passed')
+  console.log('Rendered enablement, continuation preference, native attention, embedded transcript, lead draft preservation, named follow-up, outage recovery, foreign-host activity, blurred-only teammate notifications honouring the delivery setting, review on transcript open, sidebar teammate marks, workflow preview/frozen retry, resource validation/missing usage, and unavailable/explicit recovery/terminal acknowledgement passed')
 } finally { await browser.close() }

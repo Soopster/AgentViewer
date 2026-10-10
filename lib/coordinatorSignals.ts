@@ -58,6 +58,10 @@ export function coordinatorSignals(
     signals.push({ id: `recovery:${agentId}`, kind: 'needs-attention',
       title: `${nameOf(agentId)} needs recovery`, detail: 'Inspect its transcript before resuming.', agentId })
   }
+  for (const agentId of state.settledExecutions ?? []) {
+    signals.push({ id: `settled-execution:${agentId}`, kind: 'needs-attention', title: `${nameOf(agentId)} has a saved result`,
+      detail: 'Inspect and acknowledge the interrupted stream in team recovery; no new turn is needed.', agentId })
+  }
   for (const agentId of coordinatorStalledAgentIds(state, now)) {
     const task = snapshot.tasks.find(entry => entry.id === snapshot.agents.find(agent => agent.id === agentId)?.taskId)
     signals.push({ id: `stalled:${agentId}:${task?.id}:${task?.updatedAt}`, kind: 'needs-attention',

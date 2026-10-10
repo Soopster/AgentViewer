@@ -1,5 +1,286 @@
 # Herdr techniques applied to Coordinator
 
+## Current browser acceptance, October 10, 2026
+
+The extended browser fixture now passes in the actual Next.js UI and Google
+Chrome at 1440x1100. It exercises the new saved workflow, resource, and recovery
+controls alongside existing teammate/native attention and result-review flows.
+Invalid workflow arguments cannot start; the submitted recipe remains the frozen
+preview after a saved-file change. A lost workflow acknowledgement retains the
+exact request/body and blocks competing submission until deliberate retry.
+Missing usage remains unavailable; invalid capacity makes no request. Recovery
+inspection sends no mutation, missing directory or native session prevents
+resume, and resume/terminal acknowledgement each require confirmation. The lead
+draft survives. Provider APIs are fixture responses, so this proves browser
+interaction rather than real model work.
+
+Current Herdr checkout is `2563803d`; the three cited workflow guides have no
+diff from the earlier review. Installed Herdr client/server report matching
+0.9.3/protocol 22. The [current acceptance audit](coordinator-herdr-acceptance-audit.md)
+tracks all five roadmap items, their executed evidence, and missing live
+comparison jobs. The overall objective remains active.
+
+## Remote native requests, October 10, 2026
+
+Remote teammate inspection now includes the owning daemon's pending provider
+requests. **p** opens a frozen request with its command, paths, reason, diff,
+MCP source, plan, URL, or structured questions. The selected decision stays
+visible at narrow width; Enter reviews it and **y** confirms. Provider constraints
+hide persistent approval when unavailable and preserve default-to-deny selection.
+Plan approval carries the chosen continuation mode in the approval itself.
+Questions support required answers, multiple selections, custom values, and
+masked secret input. Confirmation shows the submitted answers; paging remains
+available. URL requests say to open the displayed URL before continuing.
+
+The daemon advertises `coordination.nativeAnswers`. Missing capability or native
+observation leaves ordinary transcript inspection available. Read-only pairing
+can inspect the full native request but cannot answer it. No global attach,
+provider, local conversation, or composer draft changes.
+
+Answers bind the machine address/pairing, run, teammate, native session/provider,
+and a SHA-256 token over the full parsed pending prompt. The daemon validates
+that binding and the provider's offered answers, then the provider backend checks
+the prompt token again after its asynchronous initialization. Changed or resolved
+requests cannot answer another session's similarly named ask. Native answers use
+the existing immutable request journal and durable keyed reservation. A lost
+response can retrieve its recorded receipt after the prompt disappears, including
+when the answer finished the team. Reconciliation does not start a provider turn.
+
+`npm run coord:remote:smoke` passes: two separate auth/route/ledger daemons with
+colliding identities, stale-command rejection through client and server, native
+question routing, lost-answer response and terminal-team receipts, full-root
+keyboard paths at 110x36 and 44x28, read-only native inspection, local draft
+preservation, and structured-form/plan/default-deny rendering. A separate check
+runs the actual Codex pending-approval bridge with scripted RPC and verifies
+full-prompt matching and session isolation. Provider transport in these fixtures
+is scripted; this is not a live-provider or physical-network comparison.
+
+OpenTUI type-check and diff hygiene pass. Full TypeScript retains the four
+pre-existing legacy Ink `WritableStream.rows/columns` errors. The local Doctor
+scan reports the same nine findings and incomplete maintainability analysis;
+no external score was requested. Live-provider/browser comparisons and the final
+requirement audit remain open.
+
+## Team recovery, October 10, 2026
+
+Herdr's local `session-state.mdx` distinguishes live detach, restored layout,
+replayed history, and native conversation restoration. It retains a failed
+restore with its saved directory and session reference. Interactive Coordinator
+now has a consolidated **Team recovery overview** in web and **h** in the TUI.
+It shows the owning host, live/uncertain lead delivery, pending client submission,
+budget pause, and every teammate's saved native identity, directory, branch,
+owned work, and current observation. Inaccessible teammates remain visible.
+
+Opening or refreshing the overview performs bounded read-only directory and
+provider metadata checks. Evidence includes its timestamp and exact binding;
+a result for another run/session/provider/path cannot enable recovery. These
+checks do not restore or recreate missing conversations or directories. Existing
+polling reconnects observation and retains unconfirmed journals without resending.
+
+Unfinished execution requires transcript inspection and deliberate confirmation.
+The server rechecks availability and exact native identity/canonical directory, binds the
+resume to the same owned task, and revalidates after asynchronous provider reads.
+Missing or changed state, live/foreign execution, budget pauses, and human gates
+prevent clearing the dispatch marker. Same-key retry reuses the saved request.
+
+The killed-host fixture found a distinct completion case: a terminal result may
+be durable while its stream marker remains. That now appears as **Result saved**
+with an explicit acknowledgement, rather than a resume action. Acknowledgement
+clears only a marker tied to terminal work with no new owned task or live turn;
+it does not start a provider turn. It participates in attention counts/signals
+and persists across another client/process reopen.
+
+`npm run coord:recovery:smoke` passes. Its execution host is actually killed with
+SIGKILL after provider submission and a persisted completion. Fresh processes
+retain every task/result, perform observation/maintenance without replay, reject
+missing directories/conversations and changed native identity, accept directory
+aliases resolving to the same worktree, resume the saved
+session/task once on keyed confirmation, and acknowledge terminal work without a
+turn. The suite also verifies live-host ownership and dead-host takeover, web
+inspection/acknowledgement routes, and rendered wide/narrow TUI inspection,
+refresh, confirmation, and pending-submission gates. Providers are scripted;
+this is execution-host/ledger proof, not a real-provider restart benchmark.
+
+The TUI key audit preserves **b** blocker replies and **l** alerts. New controls
+use **f** workflow, **g** limits, and **h** recovery; a body hint keeps these
+visible in narrow terminals. Existing teammate and attention smokes pass.
+
+Remaining work includes native remote permission controls, browser/live-provider
+comparisons, and the final requirement-by-requirement comparison audit. None of
+these fixture results establishes broad provider superiority over Herdr.
+
+## Interactive resources, October 10, 2026
+
+The comparison's resource-control gap is now implemented in ordinary chat.
+Web has **Team resources** and the TUI teammate panel uses **g**. Both show
+capacity including the lead, reported tokens/cost with unavailable labels,
+configured token/cost/duration limits, and the precise scheduling-pause reason.
+Usage may be partial; duration is measured from run creation. Empty budget
+fields explicitly remove their limits. The main chat, team, and owned tasks stay
+bound while limits change.
+
+Resource updates are durable and keyed through the existing request journal.
+The ledger transaction validates limits and roster occupancy; updates serialize
+with automatic allocation. Both delegation and explicit teammate creation enforce
+capacity and budget before allocation. Interactive exhaustion pauses further
+scheduling instead of stopping the run. It retains task owners and directories,
+and does not manufacture a failed/completed task when a paused turn settles.
+The pause is persisted as a ledger event, including provider-reported exhaustion
+that lacks a full usage receipt. Raising or clearing a budget is the deliberate
+permission to clear that pause; changing capacity alone does not clear it.
+
+An approved update resumes safely observed eligible work once and passes the
+remaining budget into its provider turn. Running turns may finish; partial or
+missing telemetry cannot establish a strict aggregate monetary ceiling. Uncertain
+dispatches, plan approval, human blockers, and open decisions remain gated. A
+budget pause appears as **Paused**, rather than as a false provider stall.
+Standalone run exhaustion retains its existing stop behavior.
+
+`npm run coord:resources:smoke` passes with scripted provider sessions and real
+ledger/service/coordination-route operations. It covers missing versus reported
+zero usage, competing delegation capacity, direct spawn guards, ownership across
+budget exhaustion, a fresh process observing the persisted pause, remaining
+budget forwarding, same-key resume, capacity-only updates retaining the pause,
+and a human blocker surviving an adjustment. Web route shape/limit validation
+passes. Wide/narrow rendered TUI tests cover **g**, fields, usage labels, explicit
+confirmation, and return to the same teammate panel. Browser and live provider
+resource interactions have not been exercised in this pass.
+
+## Reusable workflows in chat, October 10, 2026
+
+Herdr's local `agent-automation.mdx` makes named helpers and scriptable recipes
+composable from the current terminal. Agent Viewer already had typed playbooks,
+but starting one created a separate lead session. Ordinary web conversations now
+have **Start a saved team workflow**; the TUI teammate panel exposes the same
+flow with **f**. Both keep the current conversation as human-driven lead.
+
+The preview shows interpolated prompts, role/seat/provider/model, edit paths,
+phase and explicit dependencies, verification commands, capacity, gates,
+acceptance criteria, and recipe budget. It submits the frozen recipe and arguments
+that were previewed, so editing the saved file cannot change confirmed work.
+Task numbers in the preview are relative; completed board history shifts them.
+The existing planner seeds the entire board atomically. Existing unfinished work
+or active managed turns must settle before recipe-wide gates can change.
+
+Each provider lane has capacity reserved; parallel phase width fills remaining
+slots. Compatible managed workers are reused, and existing roster occupancy is
+respected. Claiming uses the normal dependency/path-lock gate before dispatch.
+Plan approval launches a read-only planning turn. The human lead is never started
+as a new provider turn by this workflow action. Follow-ups retain the same run
+and ordinary teammate controls.
+
+The stable request key saves tasks once. Explicit same-key retries reconcile
+missing workers after startup failures without duplicating tasks, sessions, or
+active turns. Web, local TUI, and attached TUI keep the request pending when
+staffing warnings remain. Uncertain submissions use their existing journals.
+
+`npm run coord:workflow:smoke` passes with scripted provider sessions: frozen
+preview after file edits, mixed-provider lanes, barriers, plan/review gates,
+failed startup and retry, no duplicate task/turn/session, busy-board rejection,
+and parallel capacity. Rendered wide/narrow TUI tests cover the teammate **f**
+entry, argument editing, scrollable preview, explicit start, return, and cancel.
+OpenTUI clean typecheck passes. Full TypeScript still has the four existing
+Legacy Ink `WritableStream.rows/columns` errors. The web flow is typechecked,
+but has not had a browser or real-provider workflow smoke in this pass.
+
+The local React Doctor changed-file scan is incomplete (maintainability checks
+failed), with nine findings after removing two side effects in the touched UI.
+Seven are complexity warnings in existing large surfaces; the remaining App
+render-time ref assignment predates this pass. The new workflow fetch warning
+was inspected: its effect aborts on unmount and checks the abort signal after
+reading JSON before updating state, preventing a stale response commit. No
+finding was suppressed and no external score is claimed.
+
+Remaining comparison work includes native remote permission dialogs, and live comparative task evidence.
+These fixture results do not establish real-provider superiority over Herdr.
+
+## Remote interaction, October 10, 2026
+
+Herdr's local `connecting-machines.mdx` describes one window whose selected
+machine supplies input and visible content, while other machines keep updating
+independently. Agent Viewer's combined Coordinator roster previously displayed
+remote attention but its Enter handler only said to open the agent elsewhere.
+
+Enter on a remote roster agent now opens an inspector in the same TUI. It shows
+the latest 100 transcript messages, task scope/results, and outstanding questions,
+plans, and decisions. Full-scope pairings can reply, review a plan, answer a
+decision, interrupt a turn, explicitly recover a managed teammate, or assign a
+follow-up to the same teammate. Follow-ups carry the previous task's editable
+paths (or remain read-only). Escape restores the local reader; remote typing
+does not change the local composer or global attach/provider setting.
+
+Every selection is bound to machine name/address, run, agent, provider, and
+session. Before writing, the client rereads the owning daemon. The server also
+checks expected run and teammate identity. Controls require the daemon's
+`coordination.identityGuard` capability; older daemons remain inspectable.
+Read-only pairings cannot send, and the remote Origin header makes the daemon
+enforce its current credential scope and revocation independently of client
+preferences. Failed observation preserves the previous view with writes disabled.
+
+Unconfirmed submissions are journaled before the POST. Closing/reopening or
+restarting restores that exact request without resending it. An explicit retry
+reuses its request id; a successful refresh cannot erase it. After inspecting
+remote history, the user may explicitly discard the retry identity. A failed
+preflight keeps the unsent draft. Native provider permission dialogs are not yet
+operable from this inspector; plan review and ledger decisions are supported.
+
+The transport test exposed another lifecycle gap: mailbox advice to an unmanaged
+cooperative session could start a provider turn and eventually mark it done.
+Dispatch and self-claim sweeps now operate only on the controller's managed
+teammate sessions. Cooperative participants retain their own turn/claim lifecycle.
+
+`npm run coord:remote:smoke` passes against two isolated daemon route hosts with
+real routes, proxy, remote authentication, and separate SQLite ledgers, using
+scripted provider reads. Deliberately colliding run/agent/session ids route
+transcripts and replies correctly. It verifies restart/lost-response replay with
+one accepted effect, follow-up reuse without extra seats, plan approval,
+interruption retaining ownership, server-enforced read-only access, stale identity
+rejection, independent outages, and credential revocation. Full-root rendered
+checks pass at 110x36 and 44x28 for remote selection, transcript/reply, local draft
+preservation, and read-only controls; the wide check exercises journal restoration
+and explicit retry through actual keys. Narrow rendering also exposed and fixed
+a toast covering the remote draft. These checks do not claim live provider or
+two-machine network throughput evidence.
+
+## Current mailbox comparison, October 10, 2026
+
+Re-inspected local Herdr's `README.md` and `src/api/wait.rs`. Herdr keeps
+submission, observed activity, and settled state separate, with an event cursor
+captured before submission and target identity checked through the wait. Its
+product promise is to surface agents needing an answer without hunting through
+panes. Coordinator extends that pattern with durable, explicitly addressed
+questions and correlated replies. That advantage depends on preserving the
+question's identity across every delivery path.
+
+The current checkout violated that contract in three ways: urgent or
+reply-required status could wait for the informational status batch; batching
+replaced its reply target with a synthetic summary id; and live steering omitted
+urgency and reply metadata. The advertised `unresolved=true` tool option also
+lacked its underlying ledger read implementation.
+
+These paths are now corrected. Only informational status is delayed or batched.
+Urgent status, required replies, and correlated status replies retain their
+original ids. Live steering uses the same structured formatter as inbox/chat
+injection. Unresolved reads include reserved and previously delivered questions,
+remain recipient scoped, paginate by persisted cursor, and never acknowledge
+delivery. A successful stream or steering delivery records receipt; a correlated
+reply resolves the obligation.
+
+`npm run coord:collaboration:smoke` covers actual ledger/tool calls, keyed replay,
+a new process recovering acknowledged questions, unresolved pagination and
+recipient isolation, status replies, the live steering callback, completion
+guarding, and interactive uncertain/reserved/settled delivery. It also runs the
+existing wake/ack and completion-contract checks. These are isolated fixtures;
+they do not establish comparative real-provider throughput or full product
+superiority. OpenTUI passes a clean type check. The full clean type check is
+blocked by four legacy Ink `WritableStream.rows/columns` errors in `tui/App.tsx`.
+
+The broader objective remains active. Remote native permission controls,
+starting reusable workflows from chat, team recovery, and interactive resource
+controls from the next-features review still need a current-state acceptance audit. Historical
+parity claims below are dated evidence, not proof that all those outcomes are
+complete today.
+
 ## Status, September 19, 2026
 
 **Effectiveness — herdr's own recipes, run through our tools.**

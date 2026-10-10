@@ -1,5 +1,7 @@
+import { isAgentProvider } from '@/lib/provider'
 import { NextRequest, NextResponse } from 'next/server'
 import {
+  previewInteractiveWorkflow,
   deleteRunPlaybook,
   listRunPlaybooks,
   loadRunPlaybook,
@@ -21,6 +23,11 @@ export async function GET(request: NextRequest) {
   const cwd = cwdFrom(params.get('cwd'))
   const name = params.get('name')?.trim()
   try {
+    if (params.get('preview') === 'interactive') {
+      const provider = params.get('provider')
+      if (!name || !isAgentProvider(provider)) throw new Error('Workflow name and provider are required')
+      return NextResponse.json(await previewInteractiveWorkflow({ cwd, name, provider, args: params.has('args') ? JSON.parse(params.get('args')!) : undefined }), { headers: { 'Cache-Control': 'no-store' } })
+    }
     const result = name
       ? { playbook: await loadRunPlaybook(cwd, name) }
       : await listRunPlaybooks(cwd)

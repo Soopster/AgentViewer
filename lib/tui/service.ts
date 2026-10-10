@@ -666,6 +666,15 @@ export async function listTuiRunPlaybooks(cwd: string): Promise<{ playbooks: Pla
   return (await coordination()).listRunPlaybooks(cwd)
 }
 
+export async function previewTuiInteractiveWorkflow(cwd: string, name: string, provider: AgentProvider, args?: unknown): Promise<import('../agentCoordination').InteractiveWorkflowPreview> {
+  if (isRemoteAttached()) {
+    const query = new URLSearchParams({ cwd, name, provider, preview: 'interactive' })
+    if (args !== undefined) query.set('args', JSON.stringify(args))
+    return remoteJson(`/api/agent-protocol/playbooks?${query}`)
+  }
+  return (await coordination()).previewInteractiveWorkflow({ cwd, name, provider, args })
+}
+
 export async function readTuiRunPlaybook(cwd: string, name: string): Promise<RunPlaybook> {
   if (isRemoteAttached()) {
     const query = new URLSearchParams({ cwd, name }).toString()
@@ -790,6 +799,7 @@ export async function readTuiSessionCoordinator(
   const snapshot = await coord.readSessionCoordinator(sessionId, provider)
   const interactive = await coord.readInteractiveCoordinator(sessionId)
   const recoveries = snapshot ? await coord.readInteractiveRecoveries(snapshot.run.id) : []
+  const settledExecutions = snapshot ? await coord.readSettledInteractiveExecutions(snapshot.run.id) : []
   const running = new Map(listViewRunningSessions().map((entry) => [entry.sessionId, entry]))
   const runningAgentIds: string[] = []
   const permissions = snapshot?.agents.flatMap((agent) => {
@@ -800,20 +810,33 @@ export async function readTuiSessionCoordinator(
       .map((permission) => ({ agentId: agent.id, agentName: agent.name, permission }))
   }) ?? []
   const backgroundAgents = snapshot ? coordinatorBackgroundAgents(snapshot.agents, listWaitingSessions()) : []
-  return { snapshot, interactive, recoveries, permissions, runningAgentIds, backgroundAgents }
+  return { snapshot, interactive, recoveries, settledExecutions, permissions, runningAgentIds, backgroundAgents }
 }
 
-export type TuiSessionCoordinationRequest = {
+export async function inspectTuiCoordinatorRecovery(sessionId: string, provider: AgentProvider): Promise<import('../coordinatorRecovery').RecoveryInspection | null> {
+  if (isRemoteAttached()) {
+    const response = await remoteJson<{ inspection: import('../coordinatorRecovery').RecoveryInspection | null }>(`${encodeSessionPath(sessionId, '/coordination')}${providerQuery(provider)}&inspect=recovery`)
+    return response.inspection
+  }
+  const snapshot = await (await coordination()).readSessionCoordinator(sessionId, provider)
+  return snapshot ? (await import('../coordinatorRecoveryServer')).inspectCoordinatorRecovery(snapshot) : null
+}
+
+export type TuiSessionCoordinationRequest = import('../coordinatorNativePermission').CoordinatorNativeAnswer & {
   token?: string
-  action: 'integrate-result' | 'disable' | 'enable' | 'settings' | 'reconcile' | 'resume-agent' | 'interrupt-agent' | 'cancel-task' | 'delegate' | 'message' | 'review-plan' | 'decision'
+  action: 'native-answer' | 'start-workflow' | 'integrate-result' | 'disable' | 'enable' | 'settings' | 'reconcile' | 'resume-agent' | 'reconcile-agent' | 'interrupt-agent' | 'cancel-task' | 'delegate' | 'message' | 'review-plan' | 'decision'
   /** Provider for a NEW teammate; an existing one keeps its own. */
   teammateProvider?: AgentProvider
   /** Name for a NEW teammate (herdr's `agent start <name>`). */
   teammateName?: string
+  playbook?: RunPlaybook
+  workflowArgs?: unknown
   /** Stable across retries: every mutation below is replayed under this key. */
   requestId: string
   detail: string
   cwd?: string
+  maxAgents?: number
+  budget?: import('../agentProtocol').ProtocolRunBudget | null
   autoContinue?: boolean
   useWorktrees?: boolean
   batchId?: string
@@ -824,6 +847,8 @@ export type TuiSessionCoordinationRequest = {
   decisionId?: string
   approved?: boolean
   inReplyTo?: string
+  expectedRunId?: string
+  expectedAgent?: { id: string; sessionId: string; provider: AgentProvider }
 }
 
 /**
@@ -838,12 +863,25 @@ export async function sendTuiSessionCoordination(
   request: TuiSessionCoordinationRequest,
 ): Promise<CoordinatorInteractiveState> {
   if (isRemoteAttached()) {
-    return remoteJson(encodeSessionPath(sessionId, '/coordination'), {
+    const response = await remoteJson<CoordinatorInteractiveState & { result?: { warnings?: string[] } }>(encodeSessionPath(sessionId, '/coordination'), {
       method: 'POST',
       body: JSON.stringify({ provider, ...request }),
     })
+    if (response.result?.warnings?.length) throw new Error(`Workflow saved; ${response.result.warnings.join('; ')}. Retry the same request to reconcile staffing.`)
+    return response
   }
   const coord = await coordination()
+  if (request.expectedRunId) {
+    const snapshot = await coord.readSessionCoordinator(sessionId, provider)
+    if (snapshot?.run.id !== request.expectedRunId) throw new Error('Coordinator team changed; refresh before sending to this conversation')
+    if (request.expectedAgent && !snapshot.agents.some(agent => agent.id === request.expectedAgent!.id && agent.sessionId === request.expectedAgent!.sessionId && agent.provider === request.expectedAgent!.provider)) {
+      throw new Error('Teammate identity changed; refresh before sending')
+    }
+  }
+  if (request.action === 'native-answer') {
+    if (!request.expectedRunId) throw new Error('Bind the team before answering a native request')
+    if (await coord.readCoordinatorNativeAnswerReceipt(sessionId, provider, request.expectedRunId, request.requestId)) return readTuiSessionCoordinator(sessionId, provider)
+  }
   if (request.action === 'integrate-result') {
     if (!request.taskId || !request.token) throw new Error('Review the result before integrating')
     await (await import('../coordinatorResultReviewServer')).integrateCoordinatorResult(sessionId, provider, request.taskId, request.token, request.requestId)
@@ -854,18 +892,27 @@ export async function sendTuiSessionCoordination(
     await coord.setInteractiveCoordinatorEnabled({ sessionId, provider, requestId: request.requestId, enabled: request.action === 'enable', cwd: info?.cwd || request.cwd, autoContinue: request.autoContinue })
     return readTuiSessionCoordinator(sessionId, provider)
   }
-  if (request.action === 'delegate' || request.action === 'settings') {
+  if (request.action === 'start-workflow' || request.action === 'delegate' || request.action === 'settings') {
     const cwd = (await readViewSessionInfo(sessionId, provider).catch(() => null))?.cwd || request.cwd
     if (!cwd) throw new Error('Open a local project conversation before delegating')
     await coord.configureInteractiveCoordinator({ sessionId, provider, cwd })
   }
-  const identity = await coord.sessionCoordinatorIdentity(sessionId, provider)
+  const identity = await coord.sessionCoordinatorIdentity(sessionId, provider, request.expectedRunId)
+  if (request.action === 'start-workflow') {
+    const result = await coord.startInteractiveWorkflow(identity, { requestId: request.requestId, playbook: request.playbook, args: request.workflowArgs })
+    if (result.warnings.length) throw new Error(`Workflow saved; ${result.warnings.join('; ')}. Retry the same request to reconcile staffing.`)
+    return readTuiSessionCoordinator(sessionId, provider)
+  }
   await coord.runExternalProtocolIdempotent(identity, `chat_${request.action}`, request.requestId, async () => {
+    if (request.action === 'native-answer') {
+      if (!request.expectedRunId) throw new Error('Bind the team before answering a native request')
+      return (await import('../coordinatorNativePermissionServer')).answerCoordinatorNativePermission(identity, request)
+    }
     if (request.action === 'settings') {
       const snapshot = await coord.readSessionCoordinator(sessionId, provider)
       await coord.configureInteractiveCoordinator({
         sessionId, provider, cwd: snapshot!.run.baseCwd, autoContinue: request.autoContinue,
-        useWorktrees: request.useWorktrees,
+        useWorktrees: request.useWorktrees, maxAgents: request.maxAgents, budget: request.budget,
       })
       return { configured: true }
     }
@@ -882,6 +929,11 @@ export async function sendTuiSessionCoordination(
     if (request.action === 'cancel-task') {
       if (!request.taskId) throw new Error('Choose the task to cancel')
       return coord.cancelInteractiveTask(identity, request.taskId, request.detail)
+    }
+    if (request.action === 'reconcile-agent') {
+      if (!request.to) throw new Error('Choose the settled teammate execution')
+      await coord.reconcileSettledInteractiveExecution(identity, request.to)
+      return { acknowledged: true }
     }
     if (request.action === 'resume-agent') {
       if (!request.to) throw new Error('Choose the teammate to resume')

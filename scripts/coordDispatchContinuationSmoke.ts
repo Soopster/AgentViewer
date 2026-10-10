@@ -55,6 +55,8 @@ try {
   const advice = await coord.readExternalProtocolInbox(worker)
   assert.ok(advice.messages.some(message => message.body === 'Fixture input is ready' && message.replyRequired),
     'new advice must wake the blocked worker and remain readable after provider acceptance')
+  const question = advice.messages.find(message => message.body === 'Fixture input is ready')!
+  await coord.sendExternalProtocolMessage(worker, { to: 'lead', body: 'Input received; continuing review', kind: 'response', inReplyTo: question.id })
   await coord.reportExternalProtocolProgress(worker, { status: 'working', taskId: assigned.task!.id })
   assert.equal((await coord.completeExternalProtocolTask(worker, { taskId: assigned.task!.id, summary: 'Fixture reviewed' })).accepted, true)
   finish!()

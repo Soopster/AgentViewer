@@ -2,30 +2,37 @@
 
 import { coordinatorAttentionCount } from '@/lib/coordinatorAttentionCount'
 import { coordinatorAgentActivity, coordinatorAgentNote, coordinatorAgentWorkspace, coordinatorStalledAgentIds, type CoordinatorInteractiveState } from '@/lib/coordinatorInteractiveState'
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { COORDINATOR_ROSTER_FILTERS, COORDINATOR_ROSTER_LABELS, filterCoordinatorRoster, type CoordinatorRosterFilter } from '@/lib/coordinatorRosterFilter'
 import dynamic from 'next/dynamic'
 import type { Session } from '@/lib/types'
-import type { ProtocolAgent, ProtocolRunSnapshot } from '@/lib/agentProtocol'
+import type { ProtocolRunBudget, RunPlaybook, ProtocolAgent, ProtocolRunSnapshot } from '@/lib/agentProtocol'
 import { coordinatorAttention, type CoordinatorAttentionItem } from '@/lib/coordinatorAttention'
 import { describeRunRollup } from '@/lib/coordinatorRollup'
-import { COORDINATOR_NOTIFICATION_DELAY_MS, coordinatorResultIdsForAgent, coordinatorRosterOrder, coordinatorSignals, coordinatorSignalSuppressed, newCoordinatorSignals } from '@/lib/coordinatorSignals'
+import { COORDINATOR_NOTIFICATION_DELAY_MS, coordinatorResultIdsForAgent, coordinatorSignals, coordinatorSignalSuppressed, newCoordinatorSignals } from '@/lib/coordinatorSignals'
 import { Button } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 
+const CoordinatorRecovery = dynamic(() => import('./CoordinatorRecovery'))
+const CoordinatorResources = dynamic(() => import('./CoordinatorResources'))
+const CoordinatorWorkflow = dynamic(() => import('./CoordinatorWorkflow'))
 const CoordinatorResultReview = dynamic(() => import('./CoordinatorResultReview'))
 
 /** Providers a chat can staff a new teammate from. */
 const COORDINATOR_TEAMMATE_PROVIDERS = ['claude', 'codex', 'opencode', 'copilot', 'pi'] as const
 
 type RequestBody = {
-  action: 'disable' | 'enable' | 'settings' | 'reconcile' | 'resume-agent' | 'interrupt-agent' | 'cancel-task' | 'delegate' | 'message' | 'review-plan' | 'decision'
+  action: 'start-workflow' | 'disable' | 'enable' | 'settings' | 'reconcile' | 'resume-agent' | 'reconcile-agent' | 'interrupt-agent' | 'cancel-task' | 'delegate' | 'message' | 'review-plan' | 'decision'
   provider: Session['provider']; requestId: string; detail: string; to?: string; paths?: string[]
+  maxAgents?: number; budget?: ProtocolRunBudget | null
   cwd?: string; autoContinue?: boolean; useWorktrees?: boolean; batchId?: string; received?: boolean
   taskId?: string; decisionId?: string; approved?: boolean; inReplyTo?: string
   /** Provider for a NEW teammate; an existing one keeps its own. */
   teammateProvider?: Session['provider']
+  expectedRunId?: string
+  playbook?: RunPlaybook; workflowArgs?: unknown
   teammateName?: string
 }
 
@@ -53,7 +60,7 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
   // effect sees a change without being torn down and re-subscribed.
   const [alerts, setAlerts] = useState<'off' | 'in-app' | 'desktop'>('desktop')
   const alertsRef = useRef(alerts)
-  alertsRef.current = alerts
+  useEffect(() => { alertsRef.current = alerts }, [alerts])
   const revision = useRef(0)
   const pending = useRef<RequestBody | null>(null)
   const requestKey = `coordinator:request:v1:${session.provider}:${session.sessionId}`
@@ -124,7 +131,7 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
 
   async function send(body?: Omit<RequestBody, 'provider' | 'requestId'>) {
     if (busy) return
-    const request = pending.current ?? (body ? { ...body, cwd: session.cwd, provider: session.provider, requestId: crypto.randomUUID() } : null)
+    const request = pending.current ?? (body ? { ...body, expectedRunId: body.expectedRunId ?? (body.action === 'start-workflow' || body.action === 'settings' ? snapshot?.run.id : undefined), cwd: session.cwd, provider: session.provider, requestId: crypto.randomUUID() } : null)
     if (!request) return
     pending.current = request
     try { sessionStorage.setItem(requestKey, JSON.stringify(request)) } catch { /* Optional persistence. */ }
@@ -134,6 +141,7 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
       const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) })
       const data = await response.json()
       if (!response.ok) throw new Error(data.error || 'Request could not be confirmed')
+      if (data.result?.warnings?.length) { setState(data); throw new Error(`Workflow saved; ${data.result.warnings.join('; ')}. Retry the same request to reconcile staffing.`) }
       revision.current += 1
       setState(data); setNotice(''); if (request.action === 'disable') onReturnToChat(); if (request.action === 'delegate' || request.action === 'message') setDetail(''); pending.current = null
       try { sessionStorage.removeItem(requestKey) } catch { /* Optional persistence. */ }
@@ -187,6 +195,8 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
       <Button size="sm" variant="ghost" onClick={() => setTeardown(null)}>Keep coordinating</Button>
     </div> : null}
     <div id={`${id}-body`} className="av-coord-conversation-body">
+    <CoordinatorRecovery key={`${session.provider}:${session.sessionId}`} state={state} endpoint={endpoint} provider={session.provider ?? 'claude'} disabled={disabled} pendingRequest={pending.current ? `${pending.current.action} · ${pending.current.requestId}` : null} onInspect={agentId => { const agent = snapshot?.agents.find(agent => agent.id === agentId); if (agent) inspect(agent) }} onResume={agentId => void send({ action: 'resume-agent', to: agentId, detail: 'Resume saved conversation after inspecting recovery evidence and transcript' })} onReconcile={agentId => void send({ action: 'reconcile-agent', to: agentId, detail: 'Acknowledge inspected terminal result without restarting work' })} />
+    {state?.interactive.resources ? <CoordinatorResources key={`${session.provider}:${session.sessionId}`} resources={state.interactive.resources} disabled={disabled} onApply={limits => void send({ action: 'settings', detail: 'Apply interactive team resource limits', ...limits })} /> : null}
     {state?.interactive.enabled && runInfo ? <div className="av-coord-run" aria-label="Run summary">
       <p><strong>Run</strong> · {runInfo.summary}</p>
       {runInfo.warning ? <p role="status" className="av-coord-run-warn">⚠ {runInfo.warning}</p> : null}
@@ -220,6 +230,7 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
     {state?.recoveries.map(agentId => <div key={agentId} className="flex flex-wrap items-center gap-2 rounded border p-2"><span>{snapshot?.agents.find(agent => agent.id === agentId)?.name}: execution needs reconciliation</span><Button variant="outline" size="sm" onClick={() => { const agent = snapshot?.agents.find(agent => agent.id === agentId); if (agent) inspect(agent) }}>Inspect</Button><Button size="sm" disabled={disabled} onClick={() => void send({ action: 'resume-agent', to: agentId, detail: 'Resume after inspecting the teammate transcript' })}>Resume after inspection</Button></div>)}
     {notice ? <p role="status" className="text-sm">{notice}</p> : null}
       {!terminal ? <>
+      <CoordinatorWorkflow key={`${session.provider}:${session.sessionId}`} cwd={session.cwd ?? ''} provider={session.provider ?? 'claude'} disabled={disabled} onStart={(playbook, workflowArgs) => void send({ action: 'start-workflow', detail: `Start workflow ${playbook.name}`, playbook, workflowArgs })} />
       <label htmlFor={`${id}-target`}>Send to</label>
       <NativeSelect id={`${id}-target`} value={to} disabled={disabled} onChange={event => setTo(event.target.value)}>
         <option value="auto">Available teammate or a new one</option>
@@ -263,10 +274,22 @@ function TeammateRoster({ snapshot, state, seen, observationUnavailable, onOpen,
 }) {
   // Cancelling takes the task away and fails what depends on it, so it asks twice.
   const [confirmingTask, setConfirmingTask] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  const [filter, setFilter] = useState<CoordinatorRosterFilter>('all')
+  const filterId = useId()
+  const roster = useMemo(() => filterCoordinatorRoster(state, seen, query, filter, observationUnavailable), [state, seen, query, filter, observationUnavailable])
   if (!snapshot.agents.some(agent => agent.role === 'teammate')) return null
   const stalled = coordinatorStalledAgentIds(state)
-  return <div className="flex flex-wrap gap-2" aria-label="Persistent teammate conversations">
-    {coordinatorRosterOrder(state, seen).map(agent => <div key={agent.id} className="rounded border p-2">
+  return <div aria-label="Persistent teammate conversations">
+    <div className="flex flex-wrap items-end gap-2 pb-2">
+      <div><label htmlFor={`${filterId}-query`} className="text-sm">Find teammate</label><Input id={`${filterId}-query`} value={query} onChange={event => setQuery(event.target.value)} placeholder="Name, provider, task, branch or path" /></div>
+      <div><label htmlFor={`${filterId}-state`} className="text-sm">Teammate state</label><NativeSelect id={`${filterId}-state`} value={filter} onChange={event => setFilter(event.target.value as CoordinatorRosterFilter)}>{COORDINATOR_ROSTER_FILTERS.map(value => <option key={value} value={value}>{COORDINATOR_ROSTER_LABELS[value]} ({roster.counts[value]})</option>)}</NativeSelect></div>
+      <span className="text-sm text-muted-foreground" role="status">{roster.agents.length} of {roster.counts.all} teammates</span>
+      {query || filter !== 'all' ? <Button size="sm" variant="ghost" onClick={() => { setQuery(''); setFilter('all') }}>Clear teammate filters</Button> : null}
+    </div>
+    {!roster.agents.length ? <p>No teammates match these filters.</p> : null}
+    <div className="flex flex-wrap gap-2">
+    {roster.agents.map(agent => <div key={agent.id} className="rounded border p-2">
       <p>{agent.name} · {coordinatorAgentActivity(agent, state, observationUnavailable, stalled.includes(agent.id))}{coordinatorAgentWorkspace(agent, snapshot) ? ` · ${coordinatorAgentWorkspace(agent, snapshot)}` : ''}</p>
       {coordinatorAgentNote(agent, snapshot) ? <p className="text-sm text-muted-foreground">“{coordinatorAgentNote(agent, snapshot)}”</p> : null}
       {!agent.sessionId.startsWith('external:') ? <Button variant="ghost" size="sm" onClick={() => onOpen(agent)}>Transcript</Button> : null}
@@ -285,6 +308,7 @@ function TeammateRoster({ snapshot, state, seen, observationUnavailable, onOpen,
           : <Button variant="ghost" size="sm" disabled={disabled} title="Take this task away from the teammate" onClick={() => setConfirmingTask(task.id)}>Cancel task</Button>
       })()}
     </div>)}
+    </div>
   </div>
 }
 

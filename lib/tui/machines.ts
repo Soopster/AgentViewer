@@ -9,7 +9,7 @@ import type { ProtocolRun, ProtocolRunSnapshot } from '../agentProtocol'
 import { machineHeaders, readMachines, type StoredMachine } from '../machines.mjs'
 import { subscribeProtocolRunChangesAt } from './remote'
 
-export type WatchedMachine = Pick<StoredMachine, 'name' | 'baseUrl' | 'credential'>
+export type WatchedMachine = Pick<StoredMachine, 'name' | 'baseUrl' | 'credential'> & { scope?: StoredMachine['scope'] }
 export type MachineRoster = {
   name: string
   baseUrl: string
@@ -22,7 +22,7 @@ export type MachineRoster = {
 export const MACHINE_READ_TIMEOUT_MS = 4_000
 
 export function listWatchedMachines(): WatchedMachine[] {
-  return readMachines().map(({ name, baseUrl, credential }) => ({ name, baseUrl, credential }))
+  return readMachines().map(({ name, baseUrl, credential, scope }) => ({ name, baseUrl, credential, scope }))
 }
 
 async function machineJson<T>(machine: WatchedMachine, route: string, deadline: AbortSignal): Promise<T> {

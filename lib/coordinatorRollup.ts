@@ -183,7 +183,7 @@ export function computeRunRollup(input: {
   const touched = new Set<string>()
   for (const task of tasks) for (const file of task.receipt?.filesChanged ?? []) touched.add(normalizePath(file))
 
-  return { elapsedMs, tasks: counts, usage: spent, budgetWarning, idleWarning, filesTouched: touched.size, overlaps, holdUps: holdUps.slice(0, MAX_HOLD_UP_LINES) }
+  return { elapsedMs, tasks: counts, usage: spent, usageAvailability: { tokens: usage.totalTokens !== undefined, cost: usage.costUsd !== undefined }, budgetWarning, idleWarning, filesTouched: touched.size, overlaps, holdUps: holdUps.slice(0, MAX_HOLD_UP_LINES) }
 }
 
 function formatIdle(ms: number): string {
@@ -202,8 +202,8 @@ export function formatRunRollup(rollup: ProtocolRunRollup, budget?: ProtocolRun[
     `${rollup.tasks.done}/${rollup.tasks.total} done`,
     rollup.tasks.failed ? `${rollup.tasks.failed} failed` : '',
     rollup.tasks.blocked ? `${rollup.tasks.blocked} blocked` : '',
-    rollup.usage.totalTokens || rollup.usage.costUsd ? tokenText : '',
-    rollup.usage.costUsd ? cost : '',
+    rollup.usageAvailability ? rollup.usageAvailability.tokens ? `reported ${tokenText}` : 'tokens unavailable' : rollup.usage.totalTokens || rollup.usage.costUsd ? tokenText : '',
+    rollup.usageAvailability ? rollup.usageAvailability.cost ? `reported ${cost}` : 'cost unavailable' : rollup.usage.costUsd ? cost : '',
     time,
   ].filter(Boolean).join(' · ')
 }

@@ -42,8 +42,10 @@ assert.equal(rollup([], { budget: { maxTokens: 1000, maxCostUsd: 10 } }, { total
 assert.equal(rollup([], { budget: { maxDurationMinutes: 14 } }).budgetWarning, '86% of the time budget is used')
 assert.equal(rollup([], { status: 'completed', budget: { maxCostUsd: 10 } }, { costUsd: 12 }).budgetWarning, undefined)
 
-assert.equal(formatRunRollup(rollup([task('t1', 'completed', []), task('t2', 'failed', [])], {}, { totalTokens: 42_300, costUsd: 0.834 })), '1/2 done · 1 failed · 42k tok · $0.83 · 12m')
-assert.equal(formatRunRollup(rollup([task('t1', 'pending', [])]), { maxCostUsd: 5 }), '0/1 done · 12m')
+assert.equal(formatRunRollup(rollup([task('t1', 'completed', []), task('t2', 'failed', [])], {}, { totalTokens: 42_300, costUsd: 0.834 })), '1/2 done · 1 failed · reported 42k tok · reported $0.83 · 12m')
+assert.equal(formatRunRollup(rollup([task('t1', 'pending', [])]), { maxCostUsd: 5 }), '0/1 done · tokens unavailable · cost unavailable · 12m')
+
+assert.match(formatRunRollup(rollup([], {}, { totalTokens: 0, costUsd: 0 })), /reported 0 tok · reported \$0.00/, 'reported zero differs from unavailable usage')
 
 // Hold-ups: the unfinished task with the most work stacked behind it, counting through chains.
 {
