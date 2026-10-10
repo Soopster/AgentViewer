@@ -42,7 +42,7 @@ export async function ensureTuiMermaidRenderer(): Promise<void> {
   await mermaidLoad
 }
 import { detectTuiCodeFiletypeFromPath, normalizeTuiCodeFiletype } from './codeFiletypes'
-import { computeTurnDurationsMs, type ThreadedBlock, type ThreadedMessage, type ToolThread } from '../lib/threading'
+import { computeTurnDurationsMs, type CoordinatorBriefBlock, type CoordinatorMailBlock, type ThreadedBlock, type ThreadedMessage, type ToolThread } from '../lib/threading'
 import { buildTaskRegistry, parseCreatedTaskId, type TaskRegistry } from '../lib/taskRegistry'
 import type { ContentBlock, Session, SessionInfo, SystemMessagePayload } from '../lib/types'
 import type { TuiDensity } from './theme'
@@ -273,10 +273,45 @@ function mcpToolIdForThread(thread: ToolThread): McpToolId | null {
   return server ? { server, tool: thread.toolUse.name } : null
 }
 
-function coordinatorToolName(thread: ToolThread): string | null {
+// A Coordinator call reaches a transcript three ways: as an MCP tool
+// (`mcp__agent-viewer__coord_status`), as a bare tool where the provider drops
+// the server prefix (Codex: `coord_status`, arguments under `value`), and — in
+// a conversation that predates the binding — as a shell command running the
+// session-bound client (`bun client.mjs <binding>.json coord_status '{}'`).
+// All three are the same call and read as one.
+type CoordinatorCall = { toolName: string; input: Record<string, unknown>; shell: boolean }
+
+const COORDINATOR_SHELL_CALL = /client\.mjs\\?['"]?\s+\\?['"]?[^\s'"]+\.json\\?['"]?\s+(coord_[a-z_]+)\b\s*([\s\S]*)$/
+
+function coordinatorShellArguments(rest: string): Record<string, unknown> {
+  const start = rest.indexOf('{')
+  const end = rest.lastIndexOf('}')
+  if (start < 0 || end <= start) return {}
+  const raw = rest.slice(start, end + 1)
+  // Inside a `zsh -lc "…"` wrapper the argument's own quotes arrive escaped.
+  for (const candidate of [raw, raw.replace(/\\"/g, '"'), raw.replace(/'\\''/g, "'")]) {
+    const parsed = parseJsonValue(candidate)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>
+  }
+  return {}
+}
+
+function coordinatorCall(thread: ToolThread): CoordinatorCall | null {
+  const input = toolInputRecord(thread)
   const id = mcpToolIdForThread(thread)
-  if (!id || !normalizedToolKey(id.tool).startsWith('coord_')) return null
-  return normalizedToolKey(id.tool)
+  const key = normalizedToolKey(id?.tool ?? thread.toolUse.name)
+  if (key.startsWith('coord_')) {
+    const value = input.value
+    return {
+      toolName: key,
+      input: value && typeof value === 'object' && !Array.isArray(value) ? { ...input, ...(value as Record<string, unknown>) } : input,
+      shell: false,
+    }
+  }
+  if (canonicalToolName(thread.toolUse.name) !== 'Bash') return null
+  const command = toolStringParam(input, ['command', 'cmd', 'script'])
+  const match = command ? COORDINATOR_SHELL_CALL.exec(command) : null
+  return match ? { toolName: match[1]!, input: coordinatorShellArguments(match[2] ?? ''), shell: true } : null
 }
 
 function coordinatorActionLabel(toolName: string): string {
@@ -314,11 +349,20 @@ function parseJsonValue(value: string): unknown {
   }
 }
 
-function coordinatorResultText(thread: ToolThread): string {
+function coordinatorResultText(thread: ToolThread, shell = false): string {
   const raw = extractResultText(thread.result?.content).trim()
+  if (shell) {
+    // A shell result is the client's stdout, possibly inside the provider's
+    // own framing; the payload is the JSON object it printed.
+    const start = raw.indexOf('{')
+    const end = raw.lastIndexOf('}')
+    return start >= 0 && end > start ? raw.slice(start, end + 1) : raw
+  }
   const envelope = parseJsonValue(raw)
-  if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) return raw
-  const content = (envelope as Record<string, unknown>).content
+  if (!envelope || typeof envelope !== 'object') return raw
+  // MCP wraps the payload as `{ content: [{ text }] }`; Codex hands back the
+  // content array itself, typed `inputText`.
+  const content = Array.isArray(envelope) ? envelope : (envelope as Record<string, unknown>).content
   if (!Array.isArray(content)) return raw
   const text = content.flatMap((entry): string[] => {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return []
@@ -328,18 +372,54 @@ function coordinatorResultText(thread: ToolThread): string {
   return text || raw
 }
 
+// The two calls that are a sentence to someone read as one: who, then what.
+// "send message · to nova · message Your stanza…" spent half the row on the
+// names of its own arguments.
+function coordinatorAddressedSummary(toolName: string, input: Record<string, unknown>): string | null {
+  if (toolName !== 'coord_send_message' && toolName !== 'coord_delegate') return null
+  const to = typeof input.to === 'string' && input.to.trim()
+    ? input.to.trim()
+    : typeof input.name === 'string' && input.name.trim() ? input.name.trim() : toolName === 'coord_delegate' ? 'a teammate' : ''
+  const body = toolStringParam(input, toolName === 'coord_delegate' ? ['title', 'detail'] : ['message', 'body'])
+  const flags = [input.reply_required === true ? 'reply required' : '', input.priority === 'urgent' ? 'urgent' : ''].filter(Boolean).join(' · ')
+  return `${toolName === 'coord_delegate' ? 'delegate' : 'message'} → ${to || '?'}${flags ? ` · ${flags}` : ''}${body ? `  ${compactOneLine(body, 110)}` : ''}`
+}
+
 function coordinatorInputSummary(input: Record<string, unknown>): string {
   const parts: string[] = []
   for (const [key, value] of Object.entries(input)) {
-    if (key === 'server' || key === 'request_id' || value == null) continue
+    if (key === 'server' || key === 'request_id' || key === 'value' || value == null) continue
     // Codex includes the MCP transport status beside the actual arguments.
     if (key === 'status' && (value === 'completed' || value === 'inProgress' || value === 'failed')) continue
-    if (key === 'value' && typeof value === 'object' && Object.keys(value as object).length === 0) continue
     if (typeof value === 'string') parts.push(`${key.replace(/_/g, ' ')} ${compactOneLine(value, 48)}`)
     else if (typeof value === 'number' || typeof value === 'boolean') parts.push(`${key.replace(/_/g, ' ')} ${String(value)}`)
     else if (Array.isArray(value)) parts.push(`${key.replace(/_/g, ' ')} ${value.length}`)
   }
   return parts.slice(0, 3).join(' · ')
+}
+
+// The digest every mutation answers with: where the run is and how its tasks
+// stand. "running · 3 tasks · 2 active · 1 done" is the whole of what a reader
+// wants from the kilobyte of JSON it arrives in.
+function coordinatorRunDigest(payload: Record<string, unknown>): string {
+  const parts: string[] = []
+  if (typeof payload.runStatus === 'string') parts.push(payload.runStatus)
+  const totals = { total: 0, pending: 0, active: 0, completed: 0, failed: 0 }
+  for (const phase of Array.isArray(payload.phases) ? payload.phases : []) {
+    if (!phase || typeof phase !== 'object') continue
+    for (const key of Object.keys(totals) as Array<keyof typeof totals>) {
+      const value = (phase as Record<string, unknown>)[key]
+      if (typeof value === 'number') totals[key] += value
+    }
+  }
+  if (totals.total > 0) {
+    parts.push(`${totals.total} task${totals.total === 1 ? '' : 's'}`)
+    if (totals.pending) parts.push(`${totals.pending} pending`)
+    if (totals.active) parts.push(`${totals.active} active`)
+    if (totals.completed) parts.push(`${totals.completed} done`)
+    if (totals.failed) parts.push(`${totals.failed} failed`)
+  }
+  return parts.join(' · ')
 }
 
 function coordinatorPayloadLines(raw: string, expanded: boolean): TuiTranscriptCardLine[] {
@@ -367,6 +447,10 @@ function coordinatorPayloadLines(raw: string, expanded: boolean): TuiTranscriptC
   const tasks = Array.isArray(snapshot.tasks) ? snapshot.tasks : []
   const agents = Array.isArray(snapshot.agents) ? snapshot.agents : []
 
+  const digest = coordinatorRunDigest(payload)
+  if (payload.accepted === true || digest) {
+    lines.push(line([payload.accepted === true ? 'accepted' : '', digest].filter(Boolean).join(' · '), payload.accepted === true ? 'result_ok' : 'agent'))
+  }
   if (participant) {
     const name = typeof participant.name === 'string' ? participant.name : participant.agentId
     const role = typeof participant.role === 'string' ? ` · ${participant.role}` : ''
@@ -390,11 +474,13 @@ function coordinatorPayloadLines(raw: string, expanded: boolean): TuiTranscriptC
         const record = message as Record<string, unknown>
         const from = typeof record.fromName === 'string' ? record.fromName : typeof record.from === 'string' ? record.from : 'agent'
         const body = typeof record.body === 'string' ? record.body : typeof record.message === 'string' ? record.message : ''
-        if (body) lines.push(line(`  ${from}: ${truncateLine(compactOneLine(body), 120)}`, 'muted'))
+        const kind = typeof record.kind === 'string' ? ` · ${record.kind}` : ''
+        if (body) lines.push(line(`  ${from}${kind}: ${truncateLine(compactOneLine(body), 120)}`, 'muted'))
       }
     }
+  } else if (Array.isArray(payload.messages)) {
+    lines.push(line('inbox empty', 'dim'))
   }
-  if (payload.accepted === true) lines.push(line('accepted', 'result_ok'))
   if (lines.length === 0) {
     const keys = Object.keys(payload).filter((key) => !key.startsWith('_')).slice(0, 4)
     if (keys.length > 0) lines.push(line(keys.join(' · '), 'dim'))
@@ -403,21 +489,27 @@ function coordinatorPayloadLines(raw: string, expanded: boolean): TuiTranscriptC
 }
 
 function formatCoordinatorTool(thread: ToolThread, expanded: boolean): TuiTranscriptCardLine[] | null {
-  const toolName = coordinatorToolName(thread)
-  if (!toolName) return null
-  const input = toolInputRecord(thread)
+  const call = coordinatorCall(thread)
+  if (!call) return null
+  const { toolName, input } = call
   const inputSummary = coordinatorInputSummary(input)
+  const addressed = coordinatorAddressedSummary(toolName, input)
   const lines: TuiTranscriptCardLine[] = [
-    line(`coordinator ${coordinatorActionLabel(toolName)}${inputSummary ? ` · ${inputSummary}` : ''}`, 'tool'),
+    line(addressed
+      ? `coordinator ${addressed}`
+      : `coordinator ${coordinatorActionLabel(toolName)}${inputSummary ? ` · ${inputSummary}` : ''}`, 'tool'),
   ]
   if (!thread.result) return [...lines, line('… pending', 'dim')]
 
   const transportFailed = input.status === 'failed'
   const isError = thread.result.is_error === true || transportFailed
-  const resultText = coordinatorResultText(thread)
+  const resultText = coordinatorResultText(thread, call.shell)
   const payloadLines = coordinatorPayloadLines(resultText, expanded)
   if (!expanded) {
-    const detail = payloadLines[0]?.text
+    // Every mutation answers with the run's digest. After a message it is not
+    // news — three sends in a row said "running · 3 tasks · 3 active" three
+    // times — so a send that worked says only that it was sent.
+    const detail = toolName === 'coord_send_message' && !isError ? 'sent' : payloadLines[0]?.text
     return [
       ...lines,
       line(`${isError ? '✗' : '✓'} ${detail || (isError ? 'failed' : 'complete')}`, isError ? 'result_error' : 'result_ok'),
@@ -473,6 +565,57 @@ function summarizeMcpInput(input: Record<string, unknown>): string {
   }
   if (firstVal == null) return firstKey
   return `${firstKey}: ${previewJson(firstVal)}`
+}
+
+function coordinatorRunLabel(runId: string | null): string {
+  if (!runId) return ''
+  return ` · run ${runId.length > 18 ? `${runId.slice(0, 17)}…` : runId}`
+}
+
+// The standing brief is the same screen of instructions on every delivered
+// turn. It is named, not printed: the reader wants to know a coordinated turn
+// began and as whom, and the text is one RAW away.
+function coordinatorBriefLines(block: CoordinatorBriefBlock): TuiTranscriptCardLine[] {
+  const who = block.role === 'lead' ? 'lead' : `${block.agentName ?? 'agent'} (${block.role})`
+  return [line(`⇄ Coordinator · ${who}${coordinatorRunLabel(block.runId)} · standing instructions folded`, 'dim')]
+}
+
+// Mail reads as who said what. The uuid and the `kind=… priority=…` header it
+// arrives under are routing detail; what survives is the sender, the kind, and
+// the two flags that oblige the reader to do something.
+function coordinatorMailLines(block: CoordinatorMailBlock, expanded: boolean): TuiTranscriptCardLine[] {
+  const senders = [...new Set(block.messages.map((message) => message.from))]
+  const count = block.messages.length
+  const lines: TuiTranscriptCardLine[] = [
+    line(count === 0
+      ? '⇄ Coordinator · no new mail'
+      : `⇄ ${count} team message${count === 1 ? '' : 's'} · ${senders.join(', ')}`, 'dim'),
+  ]
+  for (const note of block.notes) lines.push(line(`  ${truncateLine(note, 160)}`, 'dim'))
+  // A teammate that answers and then hands its task off sends the answer
+  // twice: once as the reply, once inside the handoff's summary. The second
+  // copy is pointed at rather than printed again.
+  const said = new Map<string, string[]>()
+  for (const message of block.messages) {
+    const flags = [message.urgent ? 'urgent' : '', message.replyRequired ? 'reply required' : ''].filter(Boolean).join(' · ')
+    const head = `◂ ${message.from} · ${message.kind}${flags ? ` · ${flags}` : ''}`
+    const tone: TuiTranscriptLineTone = message.urgent || message.replyRequired ? 'system' : 'agent'
+    const earlier = (said.get(message.from) ?? []).find((body) => body.length >= 40 && message.body.includes(body))
+    const body = earlier ? message.body.replace(earlier, '[as in the message above]') : message.body
+    said.set(message.from, [...(said.get(message.from) ?? []), message.body.trim()])
+    const bodyLines = sanitizeLine(body).split('\n').map((entry) => entry.trimEnd()).filter((entry, index, all) => entry || (index > 0 && all[index - 1]))
+    // A status note is one line of news; it rides the sender's own row.
+    if (message.kind === 'status' || bodyLines.length <= 1) {
+      const oneLine = bodyLines.join(' ').trim()
+      lines.push(line(oneLine ? `${head}  ${expanded ? oneLine : truncateLine(oneLine, 140)}` : head, message.kind === 'status' ? 'muted' : tone))
+      continue
+    }
+    lines.push(line(head, tone))
+    const shown = expanded ? bodyLines : bodyLines.slice(0, 3)
+    for (const entry of shown) lines.push(line(`  ${expanded ? entry : truncateLine(entry, 160)}`, 'default'))
+    if (shown.length < bodyLines.length) lines.push(line(`  … ${bodyLines.length - shown.length} more lines`, 'dim'))
+  }
+  return lines
 }
 
 function line(text: string, tone: TuiTranscriptLineTone = 'default'): TuiTranscriptCardLine {
@@ -1796,6 +1939,10 @@ function formatBlock(block: ThreadedBlock, activeForms?: TaskActiveForms, taskRe
       return [line(`task ${block.status}: ${truncateLine(block.summary || block.taskId)}`, 'thinking')]
     case 'system_reminder':
       return [line(`system reminder: ${truncateLine(block.content)}`, 'system')]
+    case 'coordinator_brief':
+      return coordinatorBriefLines(block)
+    case 'coordinator_mail':
+      return coordinatorMailLines(block, false)
     case 'slash_command':
       return [line(truncateLine(`/${block.command.replace(/^\/+/, '')} ${block.args}`.trim()), 'tool')]
     // Output the user asked for reads in full, capped by density like a reply
@@ -2262,6 +2409,10 @@ export function formatProviderLabel(provider?: Session['provider']): string {
 }
 
 function extractMarkdownContent(blocks: ThreadedBlock[]): string | undefined {
+  // The markdown renderer shows this string in place of a card's lines, and it
+  // is built from the text blocks alone. A coordinated turn's mail lives in its
+  // own blocks, so handing over the prompt's markdown would drop the mail.
+  if (blocks.some((block) => block.type === 'coordinator_mail' || block.type === 'coordinator_brief')) return undefined
   const chunks: string[] = []
   for (const block of blocks) {
     if (block.type === 'text' && block.text.trim()) {
@@ -2680,6 +2831,10 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
       return [line(`task ${block.status}: ${truncateLine(block.summary || block.taskId)}`, 'thinking')]
     case 'system_reminder':
       return [line(`system reminder: ${truncateLine(block.content)}`, 'system')]
+    case 'coordinator_brief':
+      return coordinatorBriefLines(block)
+    case 'coordinator_mail':
+      return coordinatorMailLines(block, true)
     case 'slash_command':
       return [line(truncateLine(`/${block.command.replace(/^\/+/, '')} ${block.args}`.trim()), 'tool')]
     case 'local_command_stdout':

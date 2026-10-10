@@ -1402,6 +1402,13 @@ function threadedBlockEqual(a: ThreadedMessage['blocks'][number], b: ThreadedMes
       return b.type === 'bash_output'
         && a.stdout === b.stdout
         && a.stderr === b.stderr
+    case 'coordinator_brief':
+      return b.type === 'coordinator_brief' && a.text === b.text
+    case 'coordinator_mail':
+      return b.type === 'coordinator_mail'
+        && a.deliveryId === b.deliveryId
+        && a.messages.length === b.messages.length
+        && a.messages.every((message, index) => message.id === b.messages[index]?.id && message.body === b.messages[index]?.body)
     case 'task_notification':
       return b.type === 'task_notification'
         && a.taskId === b.taskId
@@ -1728,6 +1735,10 @@ function estimateThreadedBlockHeight(block: ThreadedBlock): number {
   if (block.type === 'tool_thread') return estimateToolThreadHeight(block)
   if (block.type === 'task_notification') return 96
   if (block.type === 'system_reminder') return 72
+  if (block.type === 'coordinator_brief') return 36
+  if (block.type === 'coordinator_mail') {
+    return 40 + block.messages.reduce((total, message) => total + 30 + Math.min(message.body.split('\n').length, 12) * 19, 0)
+  }
   if (block.type === 'slash_command') return 64
   if (block.type === 'local_command_stdout') {
     return 60 + estimateTextSectionHeight(block.stdout, { lineHeight: 17, padding: 8, min: 20, max: 80 })

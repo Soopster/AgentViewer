@@ -1331,6 +1331,37 @@ which mirror `app/api/sessions/[sessionId]/coordination/route.ts` action for act
   drops whole hint entries **from the middle** when it will not fit, because the last one is how to
   leave — the same escape-hatch rule the ⌃B/⌃K chord hint follows, and the smoke pins it.
 
+#### Coordinated transcripts read as who said what (load-bearing)
+
+A coordinated agent's transcript is mostly text the Coordinator wrote, and raw it
+is a screen of instructions, a run of `[team message <uuid> from … kind=…
+priority=…]` headers, and kilobytes of JSON. `lib/coordinatorTranscript.ts` finds
+those regions and `lib/threading.ts` turns them into two blocks both UIs render.
+
+- **`coordinator_mail`** is teammates' mail: a lead's `--- Coordinator delivery
+  <id> ---` envelope, or a bare header steered into a live turn. It renders as
+  sender · kind and the body; the message id and routing metadata are dropped,
+  and `reply required` / `urgent` are kept because they oblige the reader.
+- **`coordinator_brief`** is the standing instructions at the top of a delivered
+  turn (the lead's, or a teammate's `Continue Coordinator run … as NAME (role).`).
+  It is named and folded, not printed; the web card expands it, the TUI has RAW.
+- **The parser and `formatInbox` are two halves of one wire format.** Change
+  `formatProtocolMailboxMessage` and `MAIL_HEADER_RE` together.
+  `scripts/coordinatorTranscriptSmoke.ts` builds its mail with the real
+  `formatInbox` rather than a typed-out fixture, so it fails when they drift.
+- **A card with these blocks has no `markdownContent`.** An expanded card renders
+  that string *instead of* its lines, and it is built from text blocks alone —
+  it showed the prompt and silently dropped the mail.
+- **A `coord_*` call arrives three ways and reads as one** (`coordinatorCall` in
+  `tui/format.ts`): an MCP tool, a bare tool where the provider drops the server
+  (Codex — arguments under `value`, result the MCP content array itself, typed
+  `inputText`), and a shell command running the session-bound `client.mjs` in a
+  conversation that predates its binding. Its result is digested to
+  `accepted · running · 3 tasks · 2 active · 1 done`.
+- Not covered: the web still shows `coord_*` calls as generic tool cards, and the
+  structured worker preambles (`You are teammate "…" in a coordinated run`) are
+  left as prose because they carry the task itself.
+
 #### Coordinator run rollup, overlap, cancel and merge preview (load-bearing)
 
 What an engineer running several agents needs to see before it goes wrong.

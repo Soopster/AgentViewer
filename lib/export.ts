@@ -576,6 +576,8 @@ function renderBlock(block: ThreadedBlock): string {
     case 'local_command_stdout':  return renderLocalCommandStdout(block as LocalCommandStdoutBlock)
     case 'bash_input':            return renderBashInput(block as BashInputBlock)
     case 'bash_output':           return renderBashOutput(block as BashOutputBlock)
+    case 'coordinator_brief':     return `> Coordinator standing instructions (${block.role}${block.agentName ? ` ${block.agentName}` : ''}) folded\n`
+    case 'coordinator_mail':      return block.messages.map((message) => `**${message.from}** (${message.kind}${message.replyRequired ? ', reply required' : ''}${message.urgent ? ', urgent' : ''})\n\n${message.body}\n`).join('\n')
     default:                      return ''
   }
 }

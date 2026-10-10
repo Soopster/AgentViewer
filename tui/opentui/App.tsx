@@ -6410,7 +6410,16 @@ function TranscriptCardInner({
           <text fg={theme.dim} selectable {...selectionColors}>{`${streamMarker} (no output)`}</text>
         )}
         {remainingLines.map((line, lineIndex) => {
-          const continuationMarker = continuousMode ? '  ' : streamContinuationMarker(line)
+          // A line's own leading spaces join the gutter rather than the text,
+          // so a long indented line wraps under itself. Left in the text, the
+          // wrapped part fell back to the block's edge — a teammate's quoted
+          // reply lost its indent halfway through every long sentence.
+          const hang = line.tone === 'tool'
+            ? 0
+            : Math.min(line.text.length - line.text.trimStart().length, 16, Math.max(streamChildTextWidth - 12, 0))
+          const continuationMarker = `${continuousMode ? '  ' : streamContinuationMarker(line)}${' '.repeat(hang)}`
+          const lineText = hang > 0 ? line.text.slice(hang) : line.text
+          const lineWidth = streamChildTextWidth - hang
           return (
             <box key={`${card.key}:s:${lineIndex}`} flexDirection="row">
               <text fg={theme.dim} width={continuationMarker.length} wrapMode="none" selectable {...selectionColors}>
@@ -6419,15 +6428,15 @@ function TranscriptCardInner({
               <text
                 {...selectionColors}
                 fg={transcriptColor(line, theme)}
-                width={streamChildTextWidth}
+                width={lineWidth}
                 wrapMode={line.tone === 'tool' ? 'none' : 'word'}
                 selectable
               >
                 {line.tone === 'tool'
-                  ? renderInlineTextSegments(transcriptToolLineSegments(line.text, theme, '', theme.dim, true), streamChildTextWidth, theme.dim)
-                  : hasInlineSpans(line.text)
-                    ? renderInlineMarkdownSpans(line.text, theme, transcriptColor(line, theme), `${card.key}:s:${lineIndex}`, linkCwd)
-                    : line.text}
+                  ? renderInlineTextSegments(transcriptToolLineSegments(line.text, theme, '', theme.dim, true), lineWidth, theme.dim)
+                  : hasInlineSpans(lineText)
+                    ? renderInlineMarkdownSpans(lineText, theme, transcriptColor(line, theme), `${card.key}:s:${lineIndex}`, linkCwd)
+                    : lineText}
               </text>
             </box>
           )

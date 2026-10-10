@@ -1,3 +1,4 @@
+import { findCoordinatorRegions, type CoordinatorMailMessage, type CoordinatorTranscriptRegion } from './coordinatorTranscript'
 import type {
   AgentProvider,
   SessionMessage,
@@ -67,7 +68,24 @@ export type BashOutputBlock = {
   stderr: string
 }
 
-export type ThreadedBlock = TextBlock | ThinkingBlock | ImageBlock | ToolThread | TaskNotificationBlock | SystemReminderBlock | SlashCommandBlock | LocalCommandStdoutBlock | BashInputBlock | BashOutputBlock | ClaudeSystemBlock
+/** Teammates' mail the Coordinator delivered into this turn. */
+export type CoordinatorMailBlock = {
+  type: 'coordinator_mail'
+  deliveryId: string | null
+  notes: string[]
+  messages: CoordinatorMailMessage[]
+}
+
+/** The standing instructions the Coordinator opens a coordinated turn with. */
+export type CoordinatorBriefBlock = {
+  type: 'coordinator_brief'
+  role: string
+  agentName: string | null
+  runId: string | null
+  text: string
+}
+
+export type ThreadedBlock = TextBlock | ThinkingBlock | ImageBlock | ToolThread | TaskNotificationBlock | SystemReminderBlock | SlashCommandBlock | LocalCommandStdoutBlock | BashInputBlock | BashOutputBlock | ClaudeSystemBlock | CoordinatorMailBlock | CoordinatorBriefBlock
 
 export type ThreadedMessage = {
   role: 'user' | 'assistant' | 'system'
@@ -166,6 +184,7 @@ type SpecialRegion =
   | { kind: 'slash_command'; start: number; end: number; block: SlashCommandBlock }
   | { kind: 'bash_input'; start: number; end: number; command: string }
   | { kind: 'bash_output'; start: number; end: number; stdout: string; stderr: string }
+  | CoordinatorTranscriptRegion
 
 /** Finds all special XML regions in text and returns them sorted by position. */
 function findSpecialRegions(text: string): SpecialRegion[] {
@@ -222,6 +241,8 @@ function findSpecialRegions(text: string): SpecialRegion[] {
     if (block) regions.push({ kind: 'slash_command', start, end, block })
   }
 
+  regions.push(...findCoordinatorRegions(text))
+
   regions.sort((a, b) => a.start - b.start)
   return regions
 }
@@ -230,11 +251,11 @@ function findSpecialRegions(text: string): SpecialRegion[] {
  * Splits a text string into typed blocks: TextBlock, SystemReminderBlock,
  * SlashCommandBlock, and LocalCommandStdoutBlock.
  */
-function splitSystemReminders(text: string): Array<TextBlock | SystemReminderBlock | SlashCommandBlock | LocalCommandStdoutBlock | BashInputBlock | BashOutputBlock> {
+function splitSystemReminders(text: string): Array<TextBlock | SystemReminderBlock | SlashCommandBlock | LocalCommandStdoutBlock | BashInputBlock | BashOutputBlock | CoordinatorMailBlock | CoordinatorBriefBlock> {
   const regions = findSpecialRegions(text)
   if (regions.length === 0) return [{ type: 'text', text }]
 
-  const out: Array<TextBlock | SystemReminderBlock | SlashCommandBlock | LocalCommandStdoutBlock | BashInputBlock | BashOutputBlock> = []
+  const out: Array<TextBlock | SystemReminderBlock | SlashCommandBlock | LocalCommandStdoutBlock | BashInputBlock | BashOutputBlock | CoordinatorMailBlock | CoordinatorBriefBlock> = []
   let cursor = 0
 
   for (const region of regions) {
@@ -247,6 +268,8 @@ function splitSystemReminders(text: string): Array<TextBlock | SystemReminderBlo
     if (region.kind === 'slash_command')        out.push(region.block)
     if (region.kind === 'bash_input')           out.push({ type: 'bash_input',  command: region.command })
     if (region.kind === 'bash_output')          out.push({ type: 'bash_output', stdout: region.stdout, stderr: region.stderr })
+    if (region.kind === 'coordinator_mail')     out.push({ type: 'coordinator_mail', deliveryId: region.deliveryId, notes: region.notes, messages: region.messages })
+    if (region.kind === 'coordinator_brief')    out.push({ type: 'coordinator_brief', role: region.role, agentName: region.agentName, runId: region.runId, text: region.text })
 
     cursor = region.end
   }

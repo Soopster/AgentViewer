@@ -17,7 +17,7 @@ import remarkGfm from 'remark-gfm'
 import { projectMarkdownBlocks } from '@/lib/markdownStream'
 import type { Components } from 'react-markdown'
 import { CircleHelp, PencilLine } from 'lucide-react'
-import type { ThreadedMessage, ThreadedBlock, ToolThread, TaskNotificationBlock, SystemReminderBlock, SlashCommandBlock, LocalCommandStdoutBlock, BashInputBlock, BashOutputBlock, ClaudeSystemBlock } from '@/lib/threading'
+import type { ThreadedMessage, ThreadedBlock, ToolThread, TaskNotificationBlock, SystemReminderBlock, SlashCommandBlock, LocalCommandStdoutBlock, BashInputBlock, BashOutputBlock, ClaudeSystemBlock, CoordinatorBriefBlock, CoordinatorMailBlock } from '@/lib/threading'
 import { computeTurnDurationsMs } from '@/lib/threading'
 import type { TextBlock, ThinkingBlock, ToolResultBlock, ImageBlock, Session } from '@/lib/types'
 import {
@@ -4395,6 +4395,70 @@ function RenderThinking({ block }: { block: ThinkingBlock }) {
 
 // ── System reminder card ──────────────────────────────────────────────────────
 
+// The Coordinator's standing brief: the same instructions at the top of every
+// delivered turn. Named and folded, so a coordinated turn opens with what was
+// asked rather than with a screen of protocol.
+function CoordinatorBriefCard({ block }: { block: CoordinatorBriefBlock }) {
+  const [open, setOpen] = useState(false)
+  const who = block.role === 'lead' ? 'lead' : `${block.agentName ?? 'agent'} · ${block.role}`
+  return (
+    <div style={{ border: '1px solid var(--border)', borderLeft: '2px solid var(--text-3)', borderRadius: 6, overflow: 'hidden', fontSize: 13, marginTop: 4, opacity: 0.8 }}>
+      <div
+        onClick={() => setOpen(v => !v)}
+        style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 10px', background: 'var(--surface)', cursor: 'pointer', userSelect: 'none' }}
+      >
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', fontWeight: 500, letterSpacing: '0.08em', flexShrink: 0 }}>COORDINATOR</span>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-3)', fontSize: 11, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {who}{block.runId ? ` · run ${block.runId}` : ''} · standing instructions
+        </span>
+        <span style={{ color: 'var(--text-3)', fontSize: 11 }}>{open ? '▲' : '▼'}</span>
+      </div>
+      {open && (
+        <pre style={{ margin: 0, padding: '8px 12px', borderTop: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text-2)', fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+          {block.text}
+        </pre>
+      )}
+    </div>
+  )
+}
+
+// Teammates' mail, as who said what. The message id and the routing header it
+// arrives under stay out of the way; reply-required and urgent are the two
+// things about a message that oblige the reader, so they are the two shown.
+function CoordinatorMailCard({ block }: { block: CoordinatorMailBlock }) {
+  const mono = "'IBM Plex Mono', monospace"
+  if (block.messages.length === 0) {
+    return <div style={{ fontFamily: mono, fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>COORDINATOR · no new mail</div>
+  }
+  return (
+    <div style={{ border: '1px solid var(--border)', borderLeft: '2px solid var(--violet)', borderRadius: 6, overflow: 'hidden', fontSize: 13, marginTop: 4 }}>
+      <div style={{ padding: '4px 10px', background: 'var(--surface)', fontFamily: mono, fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.08em' }}>
+        TEAM MAIL · {block.messages.length}
+      </div>
+      {block.notes.map((note, index) => (
+        <div key={`note-${index}`} style={{ padding: '4px 12px', borderTop: '1px solid var(--border)', color: 'var(--text-3)', fontSize: 12 }}>{note}</div>
+      ))}
+      {block.messages.map((message) => {
+        const status = message.kind === 'status'
+        return (
+          <div key={message.id} title={`message ${message.id}`} style={{ padding: status ? '4px 12px' : '8px 12px', borderTop: '1px solid var(--border)', background: 'var(--surface)' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontFamily: mono, fontSize: 11 }}>
+              <span style={{ color: 'var(--violet)', fontWeight: 600 }}>{message.from}</span>
+              <span style={{ color: 'var(--text-3)' }}>{message.kind}</span>
+              {message.replyRequired && <span style={{ color: 'var(--amber)' }}>reply required</span>}
+              {message.urgent && <span style={{ color: 'var(--red)' }}>urgent</span>}
+              {status && <span style={{ color: 'var(--text-2)', fontFamily: 'inherit', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{message.body}</span>}
+            </div>
+            {!status && message.body && (
+              <div style={{ marginTop: 4, color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{message.body}</div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function SystemReminderCard({ block }: { block: SystemReminderBlock }) {
   const [open, setOpen] = useState(false)
   const [hovered, setHovered] = useState(false)
@@ -5285,6 +5349,8 @@ function renderBlock(block: ThreadedBlock, i: number): React.ReactNode {
   if (block.type === 'local_command_stdout')  return <LocalCommandStdoutCard  key={i} block={block as LocalCommandStdoutBlock} />
   if (block.type === 'bash_input')            return <BashInputCard           key={i} block={block as BashInputBlock} />
   if (block.type === 'bash_output')           return <BashOutputCard          key={i} block={block as BashOutputBlock} />
+  if (block.type === 'coordinator_brief')     return <CoordinatorBriefCard    key={i} block={block} />
+  if (block.type === 'coordinator_mail')      return <CoordinatorMailCard     key={i} block={block} />
   return null
 }
 
