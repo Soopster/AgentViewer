@@ -1343,6 +1343,31 @@ which mirror `app/api/sessions/[sessionId]/coordination/route.ts` action for act
   drops whole hint entries **from the middle** when it will not fit, because the last one is how to
   leave — the same escape-hatch rule the ⌃B/⌃K chord hint follows, and the smoke pins it.
 
+#### The MCP bridge and the tool contract are two definitions of one tool set (load-bearing)
+
+`bin/agent-viewer-mcp.mjs` registers each `coord_*` tool by hand (zod); in-process sessions build
+theirs from `lib/coordinatorToolContract.mjs`. An argument the contract has and the bridge lacks is
+**stripped without an error**, so the call succeeds and does something else: the skill and the
+Coordinator's own rejection both told agents to call `coord_read_inbox(unresolved=true)`, the
+bridge had no such field, and the "recovery" read acknowledged the inbox instead. `coord_wait`'s
+`agent`/`until` filter was lost the same way, and the bridge required receipt-decision fields the
+Coordinator treats as optional. `mcpBridgeSmoke.mjs` now asserts every contract field, string
+limit and enum exists on the bridge tool (the receipt's flattened fields are the one listed
+exception) — add a tool or argument to both, and to `COORDINATOR_MCP_TOOL_NAMES` /
+`COORDINATOR_READ_ACTIONS`. Descriptions have one source: the bridge calls `bridgeDescription(name)`,
+which reads the contract's, so an in-app teammate and a CLI are told the same thing (a suffix
+carries what only a stdio CLI needs). Guidance belongs in the tool description, because the
+contract's field specs carry no per-argument text across its five converters. The skill (`.agents/skills/coordinate-agents/SKILL.md`) is served as
+an MCP resource under a pinned 1,700-word budget; depth goes in `references/`, where
+`protocol-and-hosts.md` maps each rejection message to its fix — keep that table in step with the
+`throw new Error` strings in `lib/agentCoordination.ts`.
+**The skill is in this repository's checkout and nobody else's.** Preambles named
+`<cwd>/.agents/skills/coordinate-agents/SKILL.md` "if it exists" and forbade looking elsewhere, so
+in any other project a coordinated agent ran on the preamble alone. `bin/agent-viewer.mjs` exports
+`AGENT_VIEWER_COORD_SKILL_PATH` (the shipped copy) and `skillGroundingLine` / the worker's
+`tickPrompt` name it as the fallback. Launched outside the bin entrypoint (`npm run dev`) the
+variable is unset and the line is as before.
+
 #### Coordinated transcripts read as who said what (load-bearing)
 
 A coordinated agent's transcript is mostly text the Coordinator wrote, and raw it

@@ -49,6 +49,7 @@ type SteerReceipt = {
 type SessionRuntimeState = {
   runningSessions: Map<string, RunningSession>
   waitingSessions: Map<string, WaitingSession>
+  waitingObservations?: Map<string, WaitingSession>
   pendingInterrupts: Map<string, PendingInterrupt>
   /** Optional for compatibility with state created before a development HMR. */
   steerReceipts?: Map<string, SteerReceipt>
@@ -73,6 +74,7 @@ function getSessionRuntimeState(): SessionRuntimeState {
     }
   }
   globalThis.__agentViewerSessionRuntimeState.steerReceipts ??= new Map()
+  globalThis.__agentViewerSessionRuntimeState.waitingObservations ??= new Map()
   return globalThis.__agentViewerSessionRuntimeState
 }
 
@@ -95,6 +97,10 @@ export function setRunningSession(sessionId: string, session: RunningSession): v
 }
 
 export function setWaitingSession(state: Omit<WaitingSession, 'updatedAt'>): void {
+  const observations = getSessionRuntimeState().waitingObservations!
+  observations.delete(state.sessionId)
+  observations.set(state.sessionId, { ...state, updatedAt: Date.now() })
+  if (observations.size > 1000) observations.delete(observations.keys().next().value!)
   if (state.backgroundTasks.length === 0 && state.sessionCrons.length === 0) {
     waitingSessions.delete(state.sessionId)
     return
@@ -104,6 +110,11 @@ export function setWaitingSession(state: Omit<WaitingSession, 'updatedAt'>): voi
 
 export function clearWaitingSession(sessionId: string): void {
   waitingSessions.delete(sessionId)
+}
+
+/** Latest authoritative background snapshot; foreground start/marker clearing is not proof of completion. */
+export function readWaitingSessionObservation(sessionId: string): WaitingSession | undefined {
+  return getSessionRuntimeState().waitingObservations!.get(sessionId)
 }
 
 export function listWaitingSessions(): WaitingSession[] {

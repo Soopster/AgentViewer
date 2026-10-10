@@ -581,6 +581,22 @@ export type ProtocolAgent = {
  */
 export type ProtocolAgentRespondToMode = 'owner-only' | 'allowlist' | 'anyone' | 'nobody'
 
+/** Immutable portable checkpoint; owner-supplied context, not a transcript replay. */
+export type ProtocolContextHandoff = {
+  id: string; runId: string; taskId: string; createdAt: string; digest: string
+  source: { agentId: string; sessionId: string; provider: AgentProvider; claimGeneration: number; taskUpdatedAt: string; checkoutRevision?: string }
+  summary: string; detail?: string; taskPrompt: string; paths: string[]
+}
+
+export function formatContextHandoff(handoff?: ProtocolContextHandoff): string {
+  if (!handoff) return ''
+  return [`Portable checkpoint ${handoff.id} (${handoff.digest})`,
+    `Source: ${handoff.source.provider} / ${handoff.source.sessionId} / claim ${handoff.source.claimGeneration}`,
+    `Checkout fingerprint: ${handoff.source.checkoutRevision ?? 'unavailable'}`,
+    'Owner-supplied context: inspect the current checkout and verify these claims before acting.',
+    handoff.summary, handoff.detail ?? ''].join('\n')
+}
+
 export type ProtocolTask = {
   id: string
   runId: string
@@ -611,6 +627,7 @@ export type ProtocolTask = {
   claudeAgentPolicy?: ProtocolClaudeAgentPolicy
   verifyCommands: string[]
   receipt?: ProtocolTaskReceipt
+  contextHandoff?: ProtocolContextHandoff
   /** Durable terminal report supplied by the task owner. */
   resultSummary?: string
   resultDetail?: string
@@ -1786,7 +1803,15 @@ export function formatInbox(messages: ProtocolMessage[], agentsById: Map<string,
  */
 function skillGroundingLine(cwd: string): string {
   const skillPath = `${cwd.replace(/\/+$/, '')}/.agents/skills/coordinate-agents/SKILL.md`
-  return `Read and follow the coordinate-agents skill at ${skillPath} if it exists and is not already loaded in this session; reload after context loss or a skill update. Use the agent-viewer coord_* MCP tools now. Do not search outside this checkout for the skill; these instructions are sufficient if the file is absent.`
+  // Only this repository has the skill in its checkout. Anywhere else the
+  // agent used to be pointed at a file that is not there and told not to look
+  // further, so it ran on the preamble alone. bin/agent-viewer.mjs exports
+  // where the shipped copy is; `process` is absent when this loads in a browser.
+  const shipped = typeof process !== 'undefined' ? process.env.AGENT_VIEWER_COORD_SKILL_PATH?.trim() : ''
+  const fallback = shipped && shipped !== skillPath
+    ? ` If that file is absent, read the copy shipped with Agent Viewer at ${shipped} (read-only; its references/ folder sits beside it). Do not search anywhere else for the skill.`
+    : ' Do not search outside this checkout for the skill.'
+  return `Read and follow the coordinate-agents skill at ${skillPath} if it is not already loaded in this session; reload after context loss or a skill update.${fallback} Use the agent-viewer coord_* MCP tools now. These instructions are sufficient if no copy can be read.`
 }
 
 function protocolGrammar(runId: string, agentId: string): string {
@@ -1899,6 +1924,7 @@ export function buildTeammatePlanPreamble(params: {
     `Task to plan: ${params.task.id} — ${params.task.title}`,
     '',
     params.task.prompt,
+    formatContextHandoff(params.task.contextHandoff),
     '',
     'Expected write paths for this task:',
     pathList,
@@ -1959,6 +1985,7 @@ export function buildTeammateTurnPreamble(params: {
           `Your claimed task: ${params.task.id} — ${params.task.title}`,
           '',
           params.task.prompt,
+          formatContextHandoff(params.task.contextHandoff),
           '',
           'Granted paths (your write locks):',
           pathList,

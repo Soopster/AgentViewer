@@ -142,6 +142,8 @@ export interface SessionAdapter {
   /** Omitted → empty model list with a null current model; the composer's
    *  picker degrades to "no choices" rather than failing the whole view. */
   readModels?(sessionId: string): Promise<SessionModels>
+  /** Read the provider catalog without opening, creating, or resuming a session. */
+  readProviderModels?(cwd?: string): Promise<SessionModelInfo[]>
   /** Omitted → the provider-managed default (a `native` permission mode with
    *  no agent or mode picker), which is the honest answer for a provider whose
    *  CLI owns its own approval policy and exposes no knob for us to drive. */

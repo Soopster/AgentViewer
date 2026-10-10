@@ -186,6 +186,11 @@ export const opencodeAdapter: SessionAdapter = {
     return withOriginKind(mapped, `subagent:${agentId}`)
   },
 
+  async readProviderModels(cwd) {
+    const response = await (await getOpenCodeClient()).config.providers({ ...OPENCODE_OPTIONS, query: cwd ? { directory: cwd } : undefined })
+    return mapOpenCodeModelsToSessionModels(openCodeData(response))
+  },
+
   async readModels(sessionId) {
     const client = await getOpenCodeClient()
     const session = await getOpenCodeSession(sessionId)

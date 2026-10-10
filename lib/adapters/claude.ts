@@ -308,6 +308,10 @@ export const claudeAdapter: SessionAdapter = {
     return summaries.filter((s): s is SubagentSummary => s !== null)
   },
 
+  async readProviderModels(cwd) {
+    return readClaudeSupportedModels()
+  },
+
   async readModels() {
     // See the header note: deliberately no getContextUsage() call here.
     const models = await readClaudeSupportedModels().catch(() => [] as SessionModelInfo[])

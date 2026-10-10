@@ -130,6 +130,11 @@ export const codexAdapter: SessionAdapter = {
     return { messages: writeMappedMessagesCache(`codex:${sessionId}`, signature, messages), externalWriter: false }
   },
 
+  async readProviderModels(cwd) {
+    const response = await getCodexClient().request('model/list', {})
+    return mapCodexModelsToSessionModels(response.data)
+  },
+
   async readModels(sessionId) {
     const client = getCodexClient()
     // Custom model providers (proxied base URLs, non-default profiles) can

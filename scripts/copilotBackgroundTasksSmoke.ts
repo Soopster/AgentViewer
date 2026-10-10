@@ -1,3 +1,6 @@
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 // Copilot background tasks → the runtime's waiting registry (herdr #3291: a
 // Copilot agent read as idle while background agents were still running).
 // Each rule fails silently in one direction: a live turn marked "waiting"
@@ -7,6 +10,8 @@ import assert from 'node:assert/strict'
 import { clearRunningSession, clearWaitingSession, listWaitingSessions, setRunningSession } from '../lib/sessionRuntime'
 import { refreshCopilotBackgroundTasks, watchCopilotBackgroundTasks } from '../lib/copilotClient'
 import { coordinatorBackgroundWork } from '../lib/coordinatorInteractiveState'
+
+process.chdir(mkdtempSync(path.join(tmpdir(), 'copilot-background-')))
 
 type Task = { id: string; type: string; status: string; description: string }
 function fakeSession(tasks: () => Task[] | Promise<never>) {

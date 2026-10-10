@@ -9,6 +9,7 @@ export const COORDINATOR_MCP_TOOL_NAMES = Object.freeze([
   'coord_save_playbook',
   'coord_join_run',
   'coord_resume',
+  'coord_capabilities',
   'coord_status',
   'coord_wait',
   'coord_await_run',
@@ -20,6 +21,7 @@ export const COORDINATOR_MCP_TOOL_NAMES = Object.freeze([
   'coord_read_inbox',
   'coord_send_message',
   'coord_handoff_task',
+  'coord_read_handoff',
   'coord_request_locks',
   'coord_progress',
   'coord_publish_finding',
@@ -43,7 +45,7 @@ export const COORDINATOR_MCP_TOOL_NAMES = Object.freeze([
 // Shared by the MCP bridge and AHP client. Keep setup mutations out: create/join
 // allocate participant credentials and have no participant-scoped replay key.
 export const COORDINATOR_READ_ACTIONS = Object.freeze([
-  'list_playbooks', 'list_roles', 'list_runs', 'preview_playbook',
+  'read_handoff', 'capabilities', 'list_playbooks', 'list_roles', 'list_runs', 'preview_playbook',
   'query_context', 'resume', 'status', 'wait',
 ])
 export const COORDINATOR_KEYED_ACTIONS = Object.freeze([

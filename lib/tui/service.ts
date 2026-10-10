@@ -200,6 +200,14 @@ export type TuiSessionDetail = {
 }
 
 
+export async function readTuiCoordinatorCapabilities(sessionId: string, provider: AgentProvider, targetProvider: AgentProvider) {
+  if (isRemoteAttached()) return remoteJson<import('../coordinatorCapabilities').CoordinatorCapabilities>(`/api/sessions/${encodeURIComponent(sessionId)}/coordination?provider=${provider}&inspect=capabilities&targetProvider=${targetProvider}`)
+  const coord = await import('../agentCoordination')
+  const snapshot = await coord.readSessionCoordinator(sessionId, provider)
+  if (!snapshot) throw new Error('Enable Coordinator first')
+  return (await import('../coordinatorCapabilities')).readCoordinatorCapabilities(targetProvider, snapshot.run.baseCwd)
+}
+
 export async function readTuiProvider(): Promise<ProviderSelection> {
   if (isRemoteAttached()) {
     const { provider } = await remoteJson<{ provider: ProviderSelection }>('/api/provider')
@@ -829,6 +837,8 @@ export type TuiSessionCoordinationRequest = import('../coordinatorNativePermissi
   teammateProvider?: AgentProvider
   /** Name for a NEW teammate (herdr's `agent start <name>`). */
   teammateName?: string
+  requestedModel?: string
+  requestedEffort?: string
   playbook?: RunPlaybook
   workflowArgs?: unknown
   /** Stable across retries: every mutation below is replayed under this key. */
@@ -943,6 +953,7 @@ export async function sendTuiSessionCoordination(
     if (request.action === 'delegate') {
       return coord.createExternalProtocolTask(identity, {
         requestedProvider: request.teammateProvider,
+        requestedModel: request.requestedModel, requestedEffort: request.requestedEffort,
         teammateName: request.teammateName,
         assignTo: request.to ?? 'auto',
         title: request.detail.split('\n')[0]!.slice(0, 160),

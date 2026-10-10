@@ -1,3 +1,5 @@
+import { coordinatorBackgroundWork } from './coordinatorInteractiveState'
+import { readCoordinatorCapabilities, validateCoordinatorSelection } from './coordinatorCapabilities'
 import { coordinatorCheckoutRevision } from './coordinatorResultGit'
 // Coordinator for A2A 1.0 multi-agent runs, modeled on Claude Code agent teams:
 // a LEAD session decomposes the prompt into a shared task list, named
@@ -91,6 +93,7 @@ import {
   type ProtocolRunBudget,
   type ProtocolSeat,
   type ProtocolTaskReceipt,
+  type ProtocolContextHandoff,
   type ProtocolUsageReceipt,
   type ProtocolVerificationReceipt,
   type ProtocolWorktreeCleanupResult,
@@ -164,7 +167,7 @@ import { writeCoordinatorSessionClient } from './coordinatorSessionClient'
 import { getCoordinatorBridgeUrl } from './coordinatorBridgeServer'
 import { createNewViewSession, streamViewSessionTurn } from './sessionBackend'
 import { isOpenCodeManagedServer } from './opencodeClient'
-import { getRunningSessionInfo, interruptRunningSession, steerRunningSession } from './sessionRuntime'
+import { getRunningSessionInfo, readWaitingSessionObservation, interruptRunningSession, steerRunningSession } from './sessionRuntime'
 import { coordinatorAttention } from './coordinatorAttention'
 import {
   COORDINATION_DATA_DIR,
@@ -200,7 +203,7 @@ const LOCK_LEASE_MS = 20 * 60_000
 // can cancel a teammate's in-flight turn without releasing the task), and
 // respond_to_mode/respond_to_allowlist_json (per-participant mailbox sender
 // gating, mirroring buzz-acp's respond-to modes).
-const SCHEMA_VERSION = 24
+const SCHEMA_VERSION = 25
 const EVENT_WINDOW = 300
 const LOCK_HISTORY_WINDOW = 200
 // Non-terminal tasks (pending/claimed/blocked) are always returned in full —
@@ -529,6 +532,7 @@ function initializeSchema(db: SqliteDatabase): void {
       protocol_version INTEGER NOT NULL DEFAULT 1,
       capabilities_json TEXT NOT NULL DEFAULT '{}',
       progress_json TEXT,
+      pending_background_json TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       PRIMARY KEY (run_id, id)
@@ -560,12 +564,22 @@ function initializeSchema(db: SqliteDatabase): void {
       claude_agent_policy_json TEXT,
       verify_commands_json TEXT NOT NULL DEFAULT '[]',
       receipt_json TEXT,
+      context_handoff_json TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       PRIMARY KEY (run_id, id)
     );
 
     CREATE INDEX IF NOT EXISTS protocol_tasks_run_idx ON protocol_tasks(run_id);
+
+    CREATE TABLE IF NOT EXISTS protocol_context_handoffs (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL REFERENCES protocol_runs(id) ON DELETE CASCADE,
+      task_id TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS protocol_context_handoffs_run_idx ON protocol_context_handoffs(run_id, task_id);
 
     CREATE TABLE IF NOT EXISTS protocol_locks (
       id TEXT PRIMARY KEY,
@@ -753,6 +767,7 @@ function initializeSchema(db: SqliteDatabase): void {
 // v16 → v17: structured contracts, autonomy/review policy, task receipts,
 // seat/model routing, progress evidence, phase reports, and resume capsules.
 // v18 → v19: durable operation reservations and compact completed-key tombstones.
+// v24 → v25: portable task checkpoints and durable provider background observations.
 function migrateSchema(db: SqliteDatabase): void {
   const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version') as Row | undefined
   const version = row ? Number(row.value) || 0 : 0
@@ -843,6 +858,7 @@ function migrateSchema(db: SqliteDatabase): void {
     'ALTER TABLE protocol_agents ADD COLUMN respond_to_mode TEXT',
     'ALTER TABLE protocol_agents ADD COLUMN respond_to_allowlist_json TEXT',
     'ALTER TABLE protocol_agents ADD COLUMN progress_json TEXT',
+    'ALTER TABLE protocol_agents ADD COLUMN pending_background_json TEXT',
   ]) {
     try {
       db.exec(statement)
@@ -867,6 +883,7 @@ function migrateSchema(db: SqliteDatabase): void {
     'ALTER TABLE protocol_tasks ADD COLUMN claude_agent_policy_json TEXT',
     "ALTER TABLE protocol_tasks ADD COLUMN verify_commands_json TEXT NOT NULL DEFAULT '[]'",
     'ALTER TABLE protocol_tasks ADD COLUMN receipt_json TEXT',
+    'ALTER TABLE protocol_tasks ADD COLUMN context_handoff_json TEXT',
     'ALTER TABLE protocol_tasks ADD COLUMN claim_generation INTEGER NOT NULL DEFAULT 0',
     // v23: a chat's team may staff teammates from more than one provider.
     'ALTER TABLE protocol_interactive_sessions ADD COLUMN teammate_providers TEXT',
@@ -1458,7 +1475,7 @@ function slimTasksForExternal(tasks: ProtocolTask[]): ProtocolTask[] {
   return tasks.map((task) => {
     const { claudeAgentPolicy: _policy, ...rest } = task
     if (!finished.includes(task) || recent.has(task.id)) return rest as ProtocolTask
-    const { receipt: _receipt, resultDetail: _detail, ...old } = rest
+    const { receipt: _receipt, resultDetail: _detail, contextHandoff: _handoff, ...old } = rest
     return { ...old, prompt: '', resultSummary: old.resultSummary?.slice(0, 200) } as ProtocolTask
   })
 }
@@ -3024,6 +3041,12 @@ function assertTaskCapacitySync(db: SqliteDatabase, runId: string): void {
   }
 }
 
+/** Read-only catalog, bound to an authenticated participant and run directory. */
+export async function readExternalCoordinatorCapabilities(identity: ExternalProtocolIdentity, provider?: ProtocolRun['provider']) {
+  const snapshot = (await readExternalProtocolStatus(identity)).snapshot
+  return readCoordinatorCapabilities(provider ?? snapshot.run.provider, snapshot.run.baseCwd)
+}
+
 export async function createExternalProtocolTask(
   identity: ExternalProtocolIdentity,
   params: {
@@ -3093,6 +3116,7 @@ export async function createExternalProtocolTask(
     if (agents.filter(agent => !['failed', 'stopped'].includes(agent.status)).length >= controller.maxAgents) {
       throw new Error('All teammate slots are busy; send a message to steer existing work or wait for a result')
     }
+    await validateCoordinatorSelection(params.requestedProvider ?? controller.teammateProviders[agents.length % controller.teammateProviders.length] ?? controller.provider, rowToRun(run).baseCwd, params.requestedModel, params.requestedEffort)
     const spawned = await spawnAdditionalTeammate(identity, { provider: params.requestedProvider, reserveForDelegation: true, name: requestedName })
     try {
       return await createExternalProtocolTask(identity, { ...params, assignTo: spawned.agentId })
@@ -3109,6 +3133,12 @@ export async function createExternalProtocolTask(
       if (agent?.taskId && agent.status !== 'stopped') void dispatchTeammateWork(controller, spawned.agentId)
     }
   })
+  if (params.assignTo && (params.requestedModel || params.requestedEffort)) {
+    const snapshot = (await readExternalProtocolStatus(identity)).snapshot
+    const selector = params.assignTo.trim().toLowerCase()
+    const target = snapshot.agents.find(entry => entry.id.toLowerCase() === selector || (entry.name.toLowerCase() === selector && !['failed', 'stopped'].includes(entry.status)))
+    if (target) await validateCoordinatorSelection(target.provider, target.worktreePath, params.requestedModel, params.requestedEffort)
+  }
   const result = await enqueueWrite(async (db) => {
     const agent = requireExternalParticipantSync(db, identity)
     const runRow = db.prepare('SELECT status FROM protocol_runs WHERE id = ?').get(identity.runId) as Row | undefined
@@ -3864,12 +3894,41 @@ export async function reviewExternalProtocolPlan(
   return externalMutationResult(identity)
 }
 
+/** Persist authoritative provider observations before a process can lose its registry. */
+export async function recordCoordinatorBackgroundObservation(sessionId: string): Promise<void> {
+  const observation = readWaitingSessionObservation(sessionId)
+  if (!observation) return
+  const work = coordinatorBackgroundWork(observation.backgroundTasks, observation.sessionCrons)
+  await enqueueWrite(db => {
+    if (!db.prepare('SELECT 1 FROM protocol_agents WHERE session_id = ? LIMIT 1').get(sessionId)) return
+    db.prepare(`UPDATE protocol_agents SET pending_background_json = ? WHERE session_id = ? AND provider = ?
+      AND run_id IN (SELECT id FROM protocol_runs WHERE status IN ('planning', 'running', 'synthesizing', 'blocked'))`)
+      .run(work ? JSON.stringify({ sessionId, observedAt: observation.updatedAt, ...work }) : null, sessionId, observation.provider)
+  })
+}
+
+function assertNoPendingBackgroundSync(db: SqliteDatabase, runId: string, agentId: string): void {
+  const agent = db.prepare('SELECT session_id, pending_background_json FROM protocol_agents WHERE run_id = ? AND id = ?').get(runId, agentId) as Row | undefined
+  if (!agent) return
+  const observation = readWaitingSessionObservation(String(agent.session_id))
+  const persisted = parseJsonObject<{ sessionId: string; observedAt: number; tasks: number; wakeups: number }>(agent.pending_background_json)
+  if (observation && (!persisted || observation.updatedAt >= persisted.observedAt)) {
+    const work = coordinatorBackgroundWork(observation.backgroundTasks, observation.sessionCrons)
+    db.prepare('UPDATE protocol_agents SET pending_background_json = ? WHERE run_id = ? AND id = ?')
+      .run(work ? JSON.stringify({ sessionId: observation.sessionId, observedAt: observation.updatedAt, ...work }) : null, runId, agentId)
+    if (!work) return
+    throw new Error(`Completion waits for nested/background work: ${work.tasks} tasks and ${work.wakeups} scheduled wakeups. Await a fresh provider observation before completing.`)
+  }
+  if (persisted?.sessionId === agent.session_id) throw new Error('Completion waits for previously observed nested/background work. Reattach the provider and obtain a fresh settled observation; an empty registry after restart is not completion.')
+}
+
 function assertTaskCompletionCurrentSync(db: SqliteDatabase, runId: string, agentId: string, taskId: string, generation?: number): void {
   const row = db.prepare('SELECT status, owner_agent_id, claim_generation FROM protocol_tasks WHERE run_id = ? AND id = ?').get(runId, taskId) as Row | undefined
   if (!row || row.owner_agent_id !== agentId || !['claimed', 'planning', 'planned', 'in_progress', 'blocked'].includes(String(row.status))
     || (generation !== undefined && Number(row.claim_generation) !== generation)) {
     throw new Error(`Stale completion rejected for ${taskId}: ownership, active state, or claim generation changed`)
   }
+  assertNoPendingBackgroundSync(db, runId, agentId)
 }
 
 function assertNoReplyObligationsSync(db: SqliteDatabase, runId: string, agentId: string): void {
@@ -4450,6 +4509,11 @@ export async function handoffExternalProtocolTask(
     failureClass: ProtocolFailureClass
   },
 ): Promise<ExternalProtocolReleaseResult> {
+  const sourceDb = await getDatabase()
+  const sourceAgent = requireExternalParticipantSync(sourceDb, identity)
+  const sourceTask = sourceDb.prepare('SELECT owner_agent_id, claim_generation FROM protocol_tasks WHERE run_id = ? AND id = ?').get(identity.runId, params.taskId) as Row | undefined
+  if (!sourceTask || sourceTask.owner_agent_id !== sourceAgent.id) throw new Error('You do not own that task')
+  const checkoutRevision = await coordinatorCheckoutRevision(sourceAgent.worktreePath).catch(() => undefined)
   const delivery: { ids: string[] } = { ids: [] }
   const result = await enqueueWrite((db) => {
     const agent = requireExternalParticipantSync(db, identity)
@@ -4458,11 +4522,18 @@ export async function handoffExternalProtocolTask(
     if (!taskRow) throw new Error('Coordinator task not found')
     const task = rowToTask(taskRow)
     if (task.ownerAgentId !== agent.id) throw new Error('You do not own that task')
+    if (Number(taskRow.claim_generation) !== Number(sourceTask.claim_generation)) throw new Error('Task claim changed while preparing the handoff')
     const summary = params.summary.trim() || `${task.id} checkpointed for handoff`
     const detail = params.detail?.trim() || undefined
     const ts = nowIso()
+    const content = { runId: identity.runId, taskId: task.id, createdAt: ts,
+      source: { agentId: agent.id, sessionId: agent.sessionId, provider: agent.provider, claimGeneration: Number(taskRow.claim_generation), taskUpdatedAt: task.updatedAt, checkoutRevision },
+      summary, detail, taskPrompt: task.prompt, paths: task.paths }
+    const handoff: ProtocolContextHandoff = { id: randomUUID(), ...content, digest: createHash('sha256').update(JSON.stringify(content)).digest('hex') }
     db.exec('BEGIN IMMEDIATE')
     try {
+      db.prepare('INSERT INTO protocol_context_handoffs (id, run_id, task_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?)').run(handoff.id, identity.runId, task.id, JSON.stringify(handoff), ts)
+      db.prepare('UPDATE protocol_tasks SET context_handoff_json = ? WHERE run_id = ? AND id = ?').run(JSON.stringify(handoff), identity.runId, task.id)
       db.prepare("UPDATE protocol_tasks SET status = 'pending', owner_agent_id = NULL, result_summary = NULL, result_detail = NULL, updated_at = ? WHERE run_id = ? AND id = ?")
         .run(ts, identity.runId, task.id)
       db.prepare("UPDATE protocol_locks SET status = 'released', updated_at = ? WHERE run_id = ? AND agent_id = ? AND task_id = ? AND status = 'active'")
@@ -4478,7 +4549,7 @@ export async function handoffExternalProtocolTask(
         taskId: task.id,
         summary,
         detail,
-        payload: { failureClass: params.failureClass, provider: agent.provider, checkpoint: true },
+        payload: { failureClass: params.failureClass, provider: agent.provider, checkpoint: true, contextHandoffId: handoff.id, contextDigest: handoff.digest },
         timestamp: ts,
       })
       for (const leadId of resolveRecipientsSync(db, identity.runId, agent.id, 'lead')) {
@@ -4506,6 +4577,16 @@ export async function handoffExternalProtocolTask(
   notifyRunChanged(identity.runId)
   if (delivery.ids.length > 0) void deliverMessagesLive(identity.runId, delivery.ids).catch(() => {})
   return result
+}
+
+/** Immutable history is accessible independently of bounded event/snapshot windows. */
+export async function readExternalContextHandoff(identity: ExternalProtocolIdentity, id: string): Promise<ProtocolContextHandoff> {
+  const db = await getDatabase()
+  requireExternalParticipantSync(db, identity)
+  const row = db.prepare('SELECT payload_json FROM protocol_context_handoffs WHERE id = ? AND run_id = ?').get(id, identity.runId) as Row | undefined
+  const handoff = parseJsonObject<ProtocolContextHandoff>(row?.payload_json)
+  if (!handoff) throw new Error('Context handoff not found in this run')
+  return handoff
 }
 
 export async function failExternalProtocolTask(
@@ -4781,6 +4862,7 @@ export async function finalizeExternalProtocolRun(
       !['completed', 'failed', 'cancelled'].includes(task.status)
     ))
     if (unfinished.length > 0) throw new Error(`Coordinator run still has ${unfinished.length} unfinished task(s)`)
+    for (const participant of listAgentsSync(db, identity.runId)) assertNoPendingBackgroundSync(db, identity.runId, participant.id)
     const run = rowToRun(db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(identity.runId) as Row)
     if (run.requireReview && run.review.status !== 'approved') throw new Error('Coordinator run requires an approved judgment review before finalization')
     const invalidReceipts = run.requireReceipts ? listTasksSync(db, identity.runId).filter((task) => task.status === 'completed' && (
@@ -5744,6 +5826,7 @@ function claimTaskSync(db: SqliteDatabase, runId: string, agentId: string, taskI
     type: 'task.claimed',
     taskId: claimable.id,
     summary: `${agentId} claimed ${claimable.id}`,
+    payload: claimable.contextHandoff ? { contextHandoffId: claimable.contextHandoff.id, contextDigest: claimable.contextHandoff.digest, targetSessionId: agent.sessionId, targetProvider: agent.provider } : undefined,
     timestamp: ts,
   })
   for (const lockPath of claimable.paths) {

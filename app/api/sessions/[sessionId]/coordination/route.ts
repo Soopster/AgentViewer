@@ -1,3 +1,4 @@
+import { readCoordinatorCapabilities } from '@/lib/coordinatorCapabilities'
 import { answerCoordinatorNativePermission } from '@/lib/coordinatorNativePermissionServer'
 import { readCoordinatorNativeAnswerReceipt } from '@/lib/agentCoordination'
 import { inspectCoordinatorRecovery } from '@/lib/coordinatorRecoveryServer'
@@ -35,6 +36,8 @@ const schema = z.object({
   teammateProvider: z.string().refine(isAgentProvider).optional(),
   /** Name for a NEW teammate (herdr's `agent start <name>`). */
   teammateName: z.string().trim().min(1).max(32).optional(),
+  requestedModel: z.string().trim().min(1).max(200).optional(),
+  requestedEffort: z.string().trim().min(1).max(100).optional(),
   taskId: z.string().min(1).optional(), decisionId: z.string().min(1).optional(),
   approved: z.boolean().optional(), inReplyTo: z.string().min(1).optional(),
 })
@@ -60,6 +63,13 @@ export async function GET(request: Request, { params }: { params: Promise<{ sess
   const provider = new URL(request.url).searchParams.get('provider')
   if (!isAgentProvider(provider)) return NextResponse.json({ error: 'provider is required' }, { status: 400 })
   const { sessionId } = await params
+  if (new URL(request.url).searchParams.get('inspect') === 'capabilities') {
+    const target = new URL(request.url).searchParams.get('targetProvider') ?? provider
+    if (!isAgentProvider(target)) return NextResponse.json({ error: 'Invalid target provider' }, { status: 400 })
+    const snapshot = await readSessionCoordinator(sessionId, provider)
+    if (!snapshot) return NextResponse.json({ error: 'Enable Coordinator first' }, { status: 409 })
+    return NextResponse.json(await readCoordinatorCapabilities(target, snapshot.run.baseCwd), { headers: { 'Cache-Control': 'no-store' } })
+  }
   const state = await readState(sessionId, provider)
   if (new URL(request.url).searchParams.get('inspect') === 'recovery') {
     const inspection = state.snapshot ? await inspectCoordinatorRecovery(state.snapshot) : null
@@ -144,6 +154,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ ses
       if (body.action === 'delegate') return createExternalProtocolTask(identity, {
         assignTo: body.to ?? 'auto', title: body.detail.split('\n')[0]!.slice(0, 160), detail: body.detail, paths: body.paths,
         requestedProvider: body.teammateProvider,
+        requestedModel: body.requestedModel, requestedEffort: body.requestedEffort,
         teammateName: body.teammateName,
       })
       if (body.action === 'message') {

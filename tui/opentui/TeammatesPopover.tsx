@@ -14,6 +14,7 @@ import { memo, useCallback, useEffect, useMemo, useState, useSyncExternalStore }
 import { CoordinatorRecovery } from './CoordinatorRecovery'
 import { CoordinatorResources } from './CoordinatorResources'
 import { CoordinatorWorkflow } from './CoordinatorWorkflow'
+import { CoordinatorDelegationOptions, type DelegationOptions } from './CoordinatorDelegationOptions'
 import { CoordinatorResultReview } from './CoordinatorResultReview'
 import type { TuiThemePalette } from '../theme'
 import { getProviderAccent } from '../theme'
@@ -151,6 +152,8 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   const [resourcesOpen, setResourcesOpen] = useState(false)
   const [workflowOpen, setWorkflowOpen] = useState(false)
   const [resultTaskId, setResultTaskId] = useState<string | null>(null)
+  const [delegationOptionsOpen, setDelegationOptionsOpen] = useState(false)
+  const [delegationOptions, setDelegationOptions] = useState<DelegationOptions>({})
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [rosterQuery, setRosterQuery] = useState('')
   const [rosterFilter, setRosterFilter] = useState<CoordinatorRosterFilter>('all')
@@ -242,6 +245,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       if (key.ctrl && key.name === 'u') { setRosterQuery(''); setRosterFilter('all'); setSelectedId(null); return }
     }
     if (key.name === 'h' && !draft && !confirmCancel && !confirmOff && session) { setRecoveryOpen(true); return }
+    if (key.name === 'n' && !disabled && !unconfirmedDelivery && !draft && !confirmCancel && !confirmOff) { setDelegationOptionsOpen(true); return }
     if (key.name === 'g' && !disabled && !draft && !confirmCancel && !confirmOff && data?.interactive.resources) { setResourcesOpen(true); return }
     if (key.name === 'f' && !disabled && !draft && !confirmCancel && !confirmOff) { setWorkflowOpen(true); return }
     if (draft) {
@@ -251,7 +255,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
         const text = draft.text.trim()
         if (!text) { setDraft(null); return }
         act(draft.kind === 'delegate'
-          ? { action: 'delegate', ...delegateTarget(text, draft.to), teammateProvider: draft.to ? undefined : newTeammateProvider ?? undefined }
+          ? { action: 'delegate', ...delegateTarget(text, draft.to), teammateProvider: draft.to ? undefined : newTeammateProvider ?? undefined, ...delegationOptions }
           : { action: draft.kind, detail: text, to: draft.to ?? undefined, taskId: draft.taskId, decisionId: draft.decisionId, inReplyTo: draft.inReplyTo },
           draft.kind === 'delegate' ? `Task sent to ${draft.toName}` : `Message sent to ${draft.toName}`)
         setDraft(null)
@@ -423,6 +427,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       const index = newTeammateProvider === null ? 0 : COORDINATOR_TEAMMATE_PROVIDERS.indexOf(newTeammateProvider) + 1
       const next = index >= COORDINATOR_TEAMMATE_PROVIDERS.length ? null : COORDINATOR_TEAMMATE_PROVIDERS[index]!
       setNewTeammateProvider(next)
+      setDelegationOptions({})
       onNotice('info', next ? `New teammates use ${formatProviderLabel(next)}` : 'New teammates use this conversation\'s provider', 3000)
       return
     }
@@ -430,9 +435,9 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       setDraft({ kind: 'message', to: selected.id, toName: selected.name, text: '' })
     }
   }, [act, busy, canLead, confirmCancel, confirmOff, data, disabled, draft, enabled, locked, onNotice, onOpenSession, onWatchSessions,
-      pending, recoveries, selected, teammates, clamped, leadSelected, rosterLead, viewingAgentId, newTeammateProvider, snapshot, terminal, unconfirmedDelivery, currentAttention, items.length, session, searching])
+      pending, recoveries, selected, teammates, clamped, leadSelected, rosterLead, viewingAgentId, newTeammateProvider, snapshot, terminal, unconfirmedDelivery, currentAttention, items.length, session, searching, delegationOptions])
 
-  useEffect(() => { if (!resultTaskId && !workflowOpen && !resourcesOpen && !recoveryOpen) onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady, resultTaskId, workflowOpen, resourcesOpen, recoveryOpen])
+  useEffect(() => { if (!resultTaskId && !workflowOpen && !resourcesOpen && !recoveryOpen && !delegationOptionsOpen) onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady, resultTaskId, workflowOpen, resourcesOpen, recoveryOpen, delegationOptionsOpen])
 
   // As wide as the terminal allows, up to a line length that still reads. At
   // 96 a teammate's status and its last word were cut on screens with twice
@@ -463,7 +468,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   const rosterNameWidth = Math.min(rosterAgents.reduce((widest, agent) => Math.max(widest, agent.name.length), 4), 18)
   const wrapped = (text: string) => Math.max(1, Math.ceil(text.length / Math.max(1, popW - 4)))
   const settingRows = (label: string) => Math.max(1, Math.ceil(label.length / Math.max(8, popW - 4 - 6)))
-  const controlHints = `f workflow${data?.interactive.resources ? ' · g limits' : ''} · h recovery`
+  const controlHints = `f workflow${data?.interactive.resources ? ' · g limits' : ''} · h recovery · n model`
   // The word yields to the keys on a panel too narrow for both on one row.
   const settingsHeading = `SETTINGS · ${controlHints}`.length <= popW - 4 ? `SETTINGS · ${controlHints}` : controlHints
   // The attention card names what is waiting; the whole of a long result is
@@ -577,6 +582,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   }
 
   if (recoveryOpen && session) return <CoordinatorRecovery state={data} sessionId={session.sessionId} provider={session.provider} pendingRequest={pending ? `${pending.action} · ${pending.requestId}` : null} disabled={disabled} theme={theme} width={width} height={height} onClose={() => setRecoveryOpen(false)} onInspect={agentId => { const agent = snapshot?.agents.find(agent => agent.id === agentId); if (agent) onOpenSession(agent) }} onKeyHandlerReady={onKeyHandlerReady} />
+  if (delegationOptionsOpen) return <CoordinatorDelegationOptions session={session ?? undefined} targetProvider={newTeammateProvider ?? session?.provider} value={delegationOptions} theme={theme} width={width} height={height} onSave={setDelegationOptions} onClose={() => setDelegationOptionsOpen(false)} onKeyHandlerReady={onKeyHandlerReady} />
   if (resourcesOpen && data?.interactive.resources) return <CoordinatorResources resources={data.interactive.resources} theme={theme} width={width} height={height} onClose={() => setResourcesOpen(false)} onKeyHandlerReady={onKeyHandlerReady} />
   if (workflowOpen && session) return <CoordinatorWorkflow cwd={session.cwd ?? ''} provider={session.provider} theme={theme} width={width} height={height} onClose={() => setWorkflowOpen(false)} onKeyHandlerReady={onKeyHandlerReady} />
   if (resultTaskId && session) return <CoordinatorResultReview key={`${session.provider}:${session.sessionId}:${resultTaskId}`} sessionId={session.sessionId} provider={session.provider} taskId={resultTaskId} theme={theme} width={width} height={height} onClose={() => setResultTaskId(null)} onNotice={onNotice} onKeyHandlerReady={onKeyHandlerReady} />

@@ -402,6 +402,11 @@ function gitCommonDir(cwd) {
 
 function tickPrompt(state, actionable) {
   const skillPath = path.join(state.cwd, '.agents', 'skills', 'coordinate-agents', 'SKILL.md')
+  // Only this repository has the skill in its checkout; name the shipped copy too.
+  const shippedSkillPath = fileURLToPath(new URL('../.agents/skills/coordinate-agents/SKILL.md', import.meta.url))
+  const skillFallback = shippedSkillPath !== skillPath
+    ? ` If that file is absent, read the copy shipped with Agent Viewer at ${shippedSkillPath} (read-only; its references/ folder sits beside it). Do not search anywhere else for the skill.`
+    : ' Do not search outside this checkout for the skill.'
   const checkoutGuidance = state.checkoutMode === 'isolated'
     ? `You are working in an isolated git worktree at ${state.cwd}; stay within granted paths and leave integration to the lead.`
     : `You are working in the shared checkout at ${state.cwd}; keep writes inside granted non-overlapping paths, preserve existing changes, and do not reset or clean files owned by another participant.`
@@ -411,7 +416,7 @@ function tickPrompt(state, actionable) {
   return [
     `Continue Coordinator run ${state.runId} as ${state.name || state.agentId} (${state.role || 'participant'}).`,
     'You are ALREADY bound to this run: never call coord_create_run, coord_join_run, or coord_list_runs — start with coord_status and act on its actionable digest.',
-    `Read and follow the coordinate-agents skill at ${skillPath} if it exists and is not already loaded in this session; reload after context loss or a skill update. Use the agent-viewer coord_* MCP tools now. Do not search outside this checkout for the skill; these supervisor instructions are sufficient if the file is absent.`,
+    `Read and follow the coordinate-agents skill at ${skillPath} if it is not already loaded in this session; reload after context loss or a skill update.${skillFallback} Use the agent-viewer coord_* MCP tools now. These supervisor instructions are sufficient if no copy can be read.`,
     checkoutGuidance,
     roleGuidance,
     'Drain the inbox, then perform every immediately actionable role-appropriate step, including implementation and verification.',

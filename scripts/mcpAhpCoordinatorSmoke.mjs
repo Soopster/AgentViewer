@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { Client } from '@modelcontextprotocol/client'
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 import { AhpClient } from '@microsoft/agent-host-protocol/client'
+import { SUPPORTED_PROTOCOL_VERSIONS } from '@microsoft/agent-host-protocol'
 import { WebSocketTransport } from '@microsoft/agent-host-protocol/ws'
 import { COORDINATOR_MCP_TOOL_NAMES } from '../bin/agent-viewer-coordinator-tools.mjs'
 
@@ -273,7 +274,7 @@ try {
   ahpClient.connect()
   await ahpClient.initialize({
     clientId: 'generic-ahp-observer',
-    protocolVersions: ['0.6.0'],
+    protocolVersions: [...SUPPORTED_PROTOCOL_VERSIONS],
     initialSubscriptions: ['ahp-root://'],
   })
   const ahpSession = await ahpClient.subscribe(`ahp-session:/${encodeURIComponent(runId)}`)

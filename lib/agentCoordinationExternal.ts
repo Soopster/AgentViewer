@@ -8,6 +8,7 @@ import {
   finalizeExternalProtocolRun,
   spawnAdditionalTeammate,
   handoffExternalProtocolTask,
+  readExternalContextHandoff,
   joinExternalProtocolRun,
   leaveExternalProtocolRun,
   listProtocolRuns,
@@ -19,6 +20,7 @@ import {
   queryExternalProtocolContext,
   readExternalProtocolInbox,
   readExternalProtocolStatus,
+  readExternalCoordinatorCapabilities,
   releaseExternalProtocolTask,
   rememberExternalProtocolMemory,
   reportExternalProtocolProgress,
@@ -197,6 +199,11 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
   }
   if (action === 'resume') return resumeExternalProtocolParticipant(participantIdentity!, negotiation(body))
   if (action === 'leave_run') return mutate(() => leaveExternalProtocolRun(participantIdentity!, optionalText(body.reason)))
+  if (action === 'capabilities') {
+    const provider = optionalText(body.provider)
+    if (provider && !isAgentProvider(provider)) throw new Error('Invalid provider')
+    return readExternalCoordinatorCapabilities(participantIdentity!, provider as AgentProvider | undefined)
+  }
   if (action === 'status') return readExternalProtocolStatus(participantIdentity!)
   if (action === 'wait') {
     return waitForExternalProtocolChange(participantIdentity!, {
@@ -277,6 +284,7 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
       inReplyTo: optionalText(body.inReplyTo),
     }))
   }
+  if (action === 'read_handoff') return readExternalContextHandoff(participantIdentity!, text(body.handoffId))
   if (action === 'handoff_task') {
     const failureClass = text(body.failureClass)
     if (!PROTOCOL_FAILURE_CLASSES.some((entry) => entry === failureClass)) {

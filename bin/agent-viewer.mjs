@@ -10,6 +10,11 @@ import { scrubInheritedAgentIdentity } from '../lib/inheritedIdentityEnv.mjs'
 // spawns is either — see lib/inheritedIdentityEnv.mjs.
 scrubInheritedAgentIdentity()
 
+// A coordinated agent is told to read the coordinate-agents skill, and the
+// checkout it works in is almost never this repository. Every mode launched
+// from here inherits where the shipped copy lives.
+process.env.AGENT_VIEWER_COORD_SKILL_PATH ||= fileURLToPath(new URL('../.agents/skills/coordinate-agents/SKILL.md', import.meta.url))
+
 const args = process.argv.slice(2)
 const command = args[0]
 

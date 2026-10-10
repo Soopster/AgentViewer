@@ -512,7 +512,8 @@ export async function refreshCopilotBackgroundTasks(sessionId: string, session: 
   if (getRunningSession(sessionId)) return
   const live = tasks.filter((task) => task.status === 'running')
   if (live.length === 0) {
-    clearWaitingSession(sessionId)
+    setWaitingSession({ sessionId, provider: 'copilot', backgroundTasks: [], sessionCrons: [] })
+    await (await import('./agentCoordination')).recordCoordinatorBackgroundObservation(sessionId)
     return
   }
   setWaitingSession({
@@ -522,6 +523,7 @@ export async function refreshCopilotBackgroundTasks(sessionId: string, session: 
     backgroundTasks: live.map((task) => ({ id: task.id, type: task.type === 'agent' ? 'subagent' : task.type, status: task.status, description: task.description })),
     sessionCrons: [],
   })
+  await (await import('./agentCoordination')).recordCoordinatorBackgroundObservation(sessionId)
 }
 
 /**

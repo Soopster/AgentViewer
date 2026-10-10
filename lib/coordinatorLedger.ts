@@ -29,6 +29,7 @@ import {
   type ProtocolRunStatus,
   type ProtocolTask,
   type ProtocolTaskReceipt,
+  type ProtocolContextHandoff,
   type ProtocolTaskStatus,
 } from './agentProtocol'
 import { coordinatorAttention } from './coordinatorAttention'
@@ -126,6 +127,7 @@ export function rowToTask(row: Row): ProtocolTask {
     claudeAgentPolicy: parseJsonObject<ProtocolClaudeAgentPolicy>(row.claude_agent_policy_json),
     verifyCommands: parseJsonArray(row.verify_commands_json),
     receipt: parseJsonObject<ProtocolTaskReceipt>(row.receipt_json),
+    contextHandoff: parseJsonObject<ProtocolContextHandoff>(row.context_handoff_json),
     resultSummary: typeof row.result_summary === 'string' && row.result_summary ? row.result_summary : undefined,
     resultDetail: typeof row.result_detail === 'string' && row.result_detail ? row.result_detail : undefined,
     createdAt: String(row.created_at),

@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { Client } from '@modelcontextprotocol/client'
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 import { COORDINATOR_MCP_TOOL_NAMES } from '../bin/agent-viewer-coordinator-tools.mjs'
+import { COORD_TOOL_SPECS } from '../lib/coordinatorToolContract.mjs'
 
 const SESSION_MCP_TOOL_NAMES = Object.freeze([
   'review_read',
@@ -253,6 +254,43 @@ try {
     const unexpected = actualToolNames.filter((name) => !expected.has(name))
     throw new Error(`Bridge tool inventory drifted (missing: ${missing.join(',') || 'none'}; unexpected: ${unexpected.join(',') || 'none'})`)
   }
+  // The bridge registers each tool by hand while in-process sessions build
+  // theirs from the shared contract. An argument the contract has and the
+  // bridge lacks is stripped without an error, so the skill can tell an agent
+  // to pass it (coord_read_inbox unresolved=true) and the call quietly does
+  // something else. Only the receipt's flattened fields differ by design.
+  const BRIDGE_ONLY_SHAPES = {
+    coord_complete_task: ['needs_decision_json', 'input_tokens', 'output_tokens', 'total_tokens', 'cost_usd', 'duration_ms'],
+  }
+  for (const spec of COORD_TOOL_SPECS) {
+    const tool = listed.tools.find((entry) => entry.name === spec.name)
+    if (!tool) throw new Error(`Bridge does not register the contract tool ${spec.name}`)
+    // One description per tool: a CLI and an in-app teammate must be told the
+    // same thing. Only the receipt differs, because its decision field does.
+    if (spec.name !== 'coord_complete_task' && !tool.description?.startsWith(spec.description)) {
+      throw new Error(`Bridge tool ${spec.name} describes itself differently from the contract`)
+    }
+    const properties = tool.inputSchema?.properties ?? {}
+    for (const [field, shape] of Object.entries(spec.fields)) {
+      if (BRIDGE_ONLY_SHAPES[spec.name]?.includes(field)) continue
+      const property = properties[field]
+      if (!property) throw new Error(`Bridge tool ${spec.name} drops the contract argument ${field}`)
+      if (shape.t === 'string' && shape.max && property.maxLength !== shape.max) {
+        throw new Error(`Bridge tool ${spec.name}.${field} allows ${property.maxLength} characters; the contract allows ${shape.max}`)
+      }
+      const allowed = property.enum ?? property.items?.enum
+      if (shape.t === 'enum' && JSON.stringify([...shape.values].sort()) !== JSON.stringify([...(allowed ?? [])].sort())) {
+        throw new Error(`Bridge tool ${spec.name}.${field} accepts different values from the contract`)
+      }
+    }
+  }
+  const completeTool = listed.tools.find((entry) => entry.name === 'coord_complete_task')
+  if (!completeTool) throw new Error('Completion tool missing from bridge')
+  const receipt = completeTool.inputSchema.properties.needs_decision.items
+  if (JSON.stringify(receipt.required) !== JSON.stringify(['question'])) {
+    throw new Error('A receipt decision must require only its question, as the Coordinator does')
+  }
+
   const reloaded = await client.callTool({ name: 'review_reload', arguments: {
     source: 'working', view_id: 'view-1', request_id: 'review-reload-1',
   } })
@@ -552,6 +590,15 @@ try {
     if (inboxRequests.length !== 2 || inboxRequests.some((entry) => entry.body.requestId !== 'inbox-first-read')) {
       throw new Error('Acknowledging inbox retries did not preserve the caller idempotency key')
     }
+    await secondClient.callTool({ name: 'coord_read_inbox', arguments: { unresolved: true } })
+    if (seen.findLast((entry) => entry.body?.action === 'read_inbox')?.body?.unresolved !== true) {
+      throw new Error('coord_read_inbox dropped unresolved, so recovering unanswered mail acknowledged the inbox instead')
+    }
+    await secondClient.callTool({ name: 'coord_wait', arguments: { agent: 'lead', until: ['idle', 'blocked'], timeout_ms: 0 } })
+    const targetedWait = seen.findLast((entry) => entry.body?.action === 'wait')?.body
+    if (targetedWait?.agent !== 'lead' || targetedWait?.until?.join() !== 'idle,blocked') {
+      throw new Error('coord_wait dropped its teammate filter and would wake on every board change')
+    }
     const inboxPayload = JSON.parse(inbox.content?.[0]?.text ?? '{}')
     if (inboxPayload.messages?.[0]?.body !== 'Please finish task-1') throw new Error('Coordinator mailbox did not cross CLI processes')
 
@@ -586,12 +633,16 @@ try {
   }
 
   const delegated = await client.callTool({ name: 'coord_delegate', arguments: {
-    to: 'reviewer', title: 'Review revision', detail: 'Reuse your prior review context.', request_id: 'delegate-review',
+    to: 'reviewer', title: 'Review revision', detail: 'Reuse your prior review context.', requested_provider: 'codex', requested_model: 'custom-review-model', requested_effort: 'high', wait_ms: 1, request_id: 'delegate-review',
   } })
   if (delegated.isError) throw new Error('MCP bridge rejected direct delegation')
   const delegationRequest = seen.findLast(entry => entry.body?.requestId === 'delegate-review')
   if (delegationRequest?.body?.action !== 'create_task' || delegationRequest?.body?.assignTo !== 'reviewer'
     || delegationRequest?.body?.targetRole !== 'teammate') throw new Error('Delegation lost target or replay identity across MCP')
+  if (delegationRequest.body.requestedProvider !== 'codex' || delegationRequest.body.requestedModel !== 'custom-review-model'
+    || delegationRequest.body.requestedEffort !== 'high' || delegationRequest.body.waitMs !== 1) throw new Error('Delegation lost provider/model/effort or bounded wait across MCP')
+  await client.callTool({ name: 'coord_delegate', arguments: { name: 'named-reviewer', title: 'Named review', detail: 'Use the named teammate', request_id: 'delegate-named-review' } })
+  if (seen.findLast(entry => entry.body?.requestId === 'delegate-named-review')?.body?.teammateName !== 'named-reviewer') throw new Error('MCP delegation lost the teammate name')
 
   await client.callTool({ name: 'coord_review_phase', arguments: { phase: 'implementation', approved: true, summary: 'Receipts reviewed' } })
   await client.callTool({ name: 'coord_review_run', arguments: { approved: true, summary: 'Intent and scope reviewed' } })

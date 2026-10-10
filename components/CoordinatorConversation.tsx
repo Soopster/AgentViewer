@@ -15,6 +15,7 @@ import { NativeSelect } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 
+const CoordinatorModelCatalog = dynamic(() => import('./CoordinatorModelCatalog'))
 const CoordinatorRecovery = dynamic(() => import('./CoordinatorRecovery'))
 const CoordinatorResources = dynamic(() => import('./CoordinatorResources'))
 const CoordinatorWorkflow = dynamic(() => import('./CoordinatorWorkflow'))
@@ -34,6 +35,7 @@ type RequestBody = {
   expectedRunId?: string
   playbook?: RunPlaybook; workflowArgs?: unknown
   teammateName?: string
+  requestedModel?: string; requestedEffort?: string
 }
 
 export default function CoordinatorConversation({ session, onInspect, onReturnToChat, onAttentionChange }: {
@@ -49,6 +51,9 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
   const [teammateProvider, setTeammateProvider] = useState<'lead' | Session['provider']>('lead')
   // herdr's `agent start <name>`: name the teammate by its job, e.g. reviewer.
   const [teammateName, setTeammateName] = useState('')
+  const catalogTarget = snapshot?.agents.find(agent => (agent.id === to || (to === 'auto' && agent.name === teammateName)) && !['failed', 'stopped'].includes(agent.status))?.provider ?? (teammateProvider === 'lead' ? session.provider : teammateProvider) ?? 'claude'
+  const [requestedModel, setRequestedModel] = useState('')
+  const [requestedEffort, setRequestedEffort] = useState('')
   const [paths, setPaths] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -225,20 +230,20 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
       <Button disabled={locked} onClick={() => void send({ action: 'reconcile', detail: 'Confirmed delivery in transcript', batchId: state.interactive.delivery!.batchId, received: true })}>Mail was received</Button>
       <Button variant="outline" disabled={locked} onClick={() => void send({ action: 'reconcile', detail: 'Confirmed mail was not received', batchId: state.interactive.delivery!.batchId, received: false })}>Mail was not received · requeue</Button>
     </div> : null}
-    {snapshot && state ? <TeammateRoster snapshot={snapshot} state={state} seen={seen} observationUnavailable={Boolean(notice)} onOpen={inspect} onFollowup={agent => { setTo(agent.id); setDetail(`Follow up with ${agent.name}: `) }} onInterrupt={agent => void send({ action: 'interrupt-agent', to: agent.id, detail: `Interrupt ${agent.name}` })} onCancelTask={(agent, taskId) => void send({ action: 'cancel-task', taskId, to: agent.id, detail: `Cancel ${taskId} for ${agent.name}` })} disabled={disabled} /> : null}
+    {snapshot && state ? <TeammateRoster snapshot={snapshot} state={state} seen={seen} observationUnavailable={Boolean(notice)} onOpen={inspect} onFollowup={agent => { setTo(agent.id); setRequestedModel(''); setRequestedEffort(''); setDetail(`Follow up with ${agent.name}: `) }} onInterrupt={agent => void send({ action: 'interrupt-agent', to: agent.id, detail: `Interrupt ${agent.name}` })} onCancelTask={(agent, taskId) => void send({ action: 'cancel-task', taskId, to: agent.id, detail: `Cancel ${taskId} for ${agent.name}` })} disabled={disabled} /> : null}
     {nativeAttention.map(item => <div key={`${item.agentId}:${item.permission.id}`} className="flex items-center justify-between gap-2 rounded border p-2" role="status"><span>{item.agentName}: {item.permission.title}</span><Button variant="outline" size="sm" onClick={() => { const agent = snapshot?.agents.find(agent => agent.id === item.agentId); if (agent) inspect(agent) }}>Inspect and answer</Button></div>)}
     {state?.recoveries.map(agentId => <div key={agentId} className="flex flex-wrap items-center gap-2 rounded border p-2"><span>{snapshot?.agents.find(agent => agent.id === agentId)?.name}: execution needs reconciliation</span><Button variant="outline" size="sm" onClick={() => { const agent = snapshot?.agents.find(agent => agent.id === agentId); if (agent) inspect(agent) }}>Inspect</Button><Button size="sm" disabled={disabled} onClick={() => void send({ action: 'resume-agent', to: agentId, detail: 'Resume after inspecting the teammate transcript' })}>Resume after inspection</Button></div>)}
     {notice ? <p role="status" className="text-sm">{notice}</p> : null}
       {!terminal ? <>
       <CoordinatorWorkflow key={`${session.provider}:${session.sessionId}`} cwd={session.cwd ?? ''} provider={session.provider ?? 'claude'} disabled={disabled} onStart={(playbook, workflowArgs) => void send({ action: 'start-workflow', detail: `Start workflow ${playbook.name}`, playbook, workflowArgs })} />
       <label htmlFor={`${id}-target`}>Send to</label>
-      <NativeSelect id={`${id}-target`} value={to} disabled={disabled} onChange={event => setTo(event.target.value)}>
+      <NativeSelect id={`${id}-target`} value={to} disabled={disabled} onChange={event => { setTo(event.target.value); setRequestedModel(''); setRequestedEffort('') }}>
         <option value="auto">Available teammate or a new one</option>
         {snapshot?.agents.filter(agent => agent.role === 'teammate').map(agent => <option key={agent.id} value={agent.id}>{agent.name} · {agent.status}</option>)}
       </NativeSelect>
       {to === 'auto' ? <>
         <label htmlFor={`${id}-provider`}>New teammate uses</label>
-        <NativeSelect id={`${id}-provider`} value={teammateProvider} disabled={disabled} onChange={event => setTeammateProvider(event.target.value as typeof teammateProvider)}>
+        <NativeSelect id={`${id}-provider`} value={teammateProvider} disabled={disabled} onChange={event => { setTeammateProvider(event.target.value as typeof teammateProvider); setRequestedModel(''); setRequestedEffort('') }}>
           <option value="lead">Same provider as this chat</option>
           {COORDINATOR_TEAMMATE_PROVIDERS.map(option => <option key={option} value={option}>{option}</option>)}
         </NativeSelect>
@@ -246,13 +251,19 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
         <Input id={`${id}-name`} value={teammateName} disabled={disabled} maxLength={32} placeholder="reviewer"
           onChange={event => setTeammateName(event.target.value.toLowerCase())} />
       </> : null}
+      <details><summary>Task model and effort</summary>
+        <p className="text-sm text-muted-foreground">Applies to the next delegated task, including follow-ups. Leave blank to use team defaults. Use a model ID and effort supported by the selected teammate’s provider.</p>
+        <CoordinatorModelCatalog key={`${endpoint}:${catalogTarget}`} endpoint={`${endpoint}?provider=${session.provider}&inspect=capabilities&targetProvider=${catalogTarget}`} model={requestedModel} effort={requestedEffort} onModel={setRequestedModel} onEffort={setRequestedEffort} disabled={disabled} />
+        <label htmlFor={`${id}-model`}>Task model ID</label><Input id={`${id}-model`} value={requestedModel} maxLength={200} disabled={disabled} onChange={event => setRequestedModel(event.target.value)} />
+        <label htmlFor={`${id}-effort`}>Task effort</label><Input id={`${id}-effort`} value={requestedEffort} maxLength={100} disabled={disabled} onChange={event => setRequestedEffort(event.target.value)} />
+      </details>
       <label htmlFor={`${id}-detail`}>Task or follow-up</label>
       <Textarea id={`${id}-detail`} value={detail} maxLength={8000} disabled={disabled} onChange={event => setDetail(event.target.value)} placeholder="Review the changes and report actionable findings." rows={2} />
       <details><summary>Files the teammate may edit</summary><label htmlFor={`${id}-paths`}>Write paths, one per line</label>
         <Textarea id={`${id}-paths`} value={paths} disabled={disabled} onChange={event => setPaths(event.target.value)} rows={2} />
       </details>
       <div className="flex flex-wrap gap-2">
-        <Button disabled={disabled || !detail.trim()} onClick={() => void send({ action: 'delegate', detail, to, paths: paths.split('\n').map(value => value.trim()).filter(Boolean), teammateProvider: to === 'auto' && teammateProvider !== 'lead' ? teammateProvider : undefined, teammateName: to === 'auto' && teammateName.trim() ? teammateName.trim() : undefined })}>Ask teammate</Button>
+        <Button disabled={disabled || !detail.trim()} onClick={() => void send({ action: 'delegate', detail, to, paths: paths.split('\n').map(value => value.trim()).filter(Boolean), teammateProvider: to === 'auto' && teammateProvider !== 'lead' ? teammateProvider : undefined, teammateName: to === 'auto' && teammateName.trim() ? teammateName.trim() : undefined, requestedModel: requestedModel.trim() || undefined, requestedEffort: requestedEffort.trim() || undefined })}>Ask teammate</Button>
         <Button variant="outline" disabled={disabled || to === 'auto' || !detail.trim()} onClick={() => void send({ action: 'message', detail, to })}>Message working teammate</Button>
       </div>
       </> : null}

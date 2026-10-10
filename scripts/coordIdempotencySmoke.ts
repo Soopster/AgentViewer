@@ -137,7 +137,9 @@ db.prepare(`INSERT INTO protocol_idempotency
   .run(identity.runId, identity.agentId, 'smoke-effect', 'legacy', JSON.stringify({ legacy: true }), new Date().toISOString())
 const migrated = child('migration')
 assert.equal((await once(migrated, 'exit'))[0], 0)
-assert.equal(db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get()?.value, '23')
+// The ledger's current version moves with every migration; what this pins is
+// that a v18 ledger was carried forward rather than left where it was.
+assert.ok(Number(db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get()?.value) >= 24)
 db.prepare("DELETE FROM protocol_idempotency WHERE request_id = 'legacy'").run()
 await assert.rejects(coordination.runExternalProtocolIdempotent(identity, 'smoke-effect', 'legacy', async () => {
   throw new Error('migrated effect repeated after eviction')

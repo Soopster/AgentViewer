@@ -23,6 +23,7 @@ import {
   taskSeed,
 } from './agent-viewer-mcp-task-store.mjs'
 import { COORDINATOR_MCP_TOOL_NAMES, COORDINATOR_KEYED_ACTIONS } from './agent-viewer-coordinator-tools.mjs'
+import { coordToolDescription } from '../lib/coordinatorToolContract.mjs'
 
 const PROVIDERS = ['claude', 'codex', 'opencode', 'copilot', 'pi']
 const EXTERNAL_COORD_PROTOCOL_VERSION = 2
@@ -294,6 +295,8 @@ async function runCoordinatorWaitTask(store, record) {
   const { snapshot: _snapshot, ...compact } = await coordinatorRequest('wait', {
     cursor: operation.cursor,
     timeoutMs: operation.timeoutMs,
+    agent: operation.agent,
+    until: operation.until,
   })
   await updateTaskIfActive(store, record.taskId, {
     status: 'completed',
@@ -615,7 +618,7 @@ async function requireUnboundBridge(tool) {
 
 async function coordinatorRequest(action, payload = {}, requireIdentity = true) {
   if (requireIdentity && !coordinatorIdentity) {
-    throw new Error('Join, create, or resume a Coordinator run before using participant tools')
+    throw new Error('This CLI is not bound to a Coordinator run. Call coord_join_run (teammate) or coord_create_run (lead) once, or coord_resume with credentials your host supplied; then retry.')
   }
   const body = {
     ...(coordinatorIdentity ?? {}),
@@ -636,6 +639,13 @@ async function coordinatorRequest(action, payload = {}, requireIdentity = true) 
     coordinatorCursor = result.cursor
   }
   return result
+}
+
+// In-process sessions build their tools from the shared contract; taking each
+// description from it keeps what a CLI reads and what an in-app teammate reads
+// the same text. The suffix is for what only a stdio CLI needs to hear.
+function bridgeDescription(name, bridgeOnly) {
+  return bridgeOnly ? `${coordToolDescription(name)} ${bridgeOnly}` : coordToolDescription(name)
 }
 
 function createMcpServer() {
@@ -668,6 +678,7 @@ const server = new McpServer(
       `Read ${COORDINATOR_SKILL_URI} for the workflow. Resume a bound identity; otherwise create or join once. Never disclose capability tokens.`,
       'Read status and inbox, answer reply-required mail with in_reply_to, claim one task, honor locks and approval gates, verify before completing, and release or checkpoint unfinished work.',
       'Send actionable changes to affected teammates; publish reusable findings. Keep mailbox narration concise.',
+      'Leads assign with coord_delegate (coord_capabilities lists valid model and effort IDs). Rejections are specific: fix what the message names.',
       `Prefer coord worker for unattended work. Managed turns must return when idle: never coord_wait. Interactive hosts subscribe to ${COORDINATOR_CURRENT_RUN_URI} and re-read after resources/updated; use coord_wait only without subscriptions.`,
       'The AHP bridge reconnects and retries safe calls once. For retries across tool calls, supply request_id on the FIRST mutation (including acknowledging inbox reads) and reuse it with identical arguments. Generated keys cover only retries within one call.',
       'After a transport error, retry reads or explicitly keyed mutations with the same identity after about 2s. For an unkeyed mutation or create/join with an unknown outcome, reconcile persisted identity and board state before repeating. Fix validation or gate errors instead of blindly retrying. Empty waits are normal.',
@@ -1124,21 +1135,29 @@ server.registerTool('coord_resume', {
   }
 })
 
+server.registerTool('coord_capabilities', {
+  description: bridgeDescription('coord_capabilities'),
+  inputSchema: { provider: z.enum(['claude', 'codex', 'opencode', 'copilot', 'pi']).optional() },
+  annotations: { readOnlyHint: true },
+}, async ({ provider }) => textResult(await coordinatorRequest('capabilities', { provider })))
+
 server.registerTool('coord_status', {
-  description: 'Read the shared task board, roster, locks, recent events, and an `actionable` digest (claimable tasks, inbox count, plans awaiting review, own task state) for this participant.',
+  description: bridgeDescription('coord_status'),
   annotations: { readOnlyHint: true },
   _meta: { ui: { resourceUri: COORDINATOR_APP_URI, visibility: ['model', 'app'] } },
 }, async () => textResult(await coordinatorRequest('status')))
 
 server.registerTool('coord_wait', {
-  description: 'Compatibility wait for an interactive MCP host that cannot subscribe to the current-run resource. Never call this from a managed `coord worker` turn: return control so its supervisor can wait and re-dispatch without spending a model turn. For an unsupervised interactive client, block until another participant changes the run (your own writes do not wake you), then act on the returned events and `actionable` digest instead of polling status. '
-    + 'Tasks-capable MCP clients receive a durable asynchronous handle for non-zero waits; other clients retain the blocking result. An empty/timed-out result is normal for an unsupervised fallback client. If it THROWS instead (network error, timeout), that is a real disconnect: wait ~2s and retry the same call rather than giving up or re-joining.',
+  description: bridgeDescription('coord_wait', 'Tasks-capable MCP clients receive a durable asynchronous handle for non-zero waits; other clients retain the blocking result. If it THROWS instead (network error, timeout), that is a real disconnect: wait ~2s and retry the same call rather than giving up or re-joining.'),
   inputSchema: {
     cursor: z.string().min(1).optional().describe('Opaque cursor from the previous coord_wait; normally omit because this bridge remembers it'),
     timeout_ms: z.number().int().min(0).max(55_000).optional().describe('Defaults to 25000 milliseconds'),
+    agent: z.string().min(1).optional().describe('Teammate name or id to wait on (not yourself). Omit to wake on any board change.'),
+    until: z.array(z.enum(['idle', 'ready', 'done', 'blocked', 'failed', 'stopped', 'working'])).max(7).optional()
+      .describe('States that end a wait on agent; defaults to every settled state (all but working)'),
   },
   annotations: { readOnlyHint: true },
-}, async ({ cursor, timeout_ms }, ctx) => {
+}, async ({ cursor, timeout_ms, agent, until }, ctx) => {
   if (supportsMcpTasks(ctx) && timeout_ms !== 0) {
     return createMcpTask({
       kind: 'coord-wait',
@@ -1146,6 +1165,8 @@ server.registerTool('coord_wait', {
       agentId: coordinatorIdentity?.agentId,
       cursor: cursor ?? coordinatorCursor ?? undefined,
       timeoutMs: timeout_ms,
+      agent,
+      until,
     }, 'Waiting durably for another participant to change the Coordinator run.', {
       // A worker calls this every ~25s for the run's whole lifetime (days for
       // an unattended run); the 7-day default TTL would let the ledger grow
@@ -1159,6 +1180,8 @@ server.registerTool('coord_wait', {
   const wait = () => coordinatorRequest('wait', {
     cursor: cursor ?? coordinatorCursor ?? undefined,
     timeoutMs: timeout_ms,
+    agent,
+    until,
   })
   const { snapshot: _snapshot, ...compact } = effectiveTimeoutMs > 0
     ? await withMcpProgress(ctx, {
@@ -1203,9 +1226,7 @@ server.registerTool('coord_await_run', {
 })
 
 server.registerTool('coord_create_task', {
-  description: 'Add a task with dependencies and expected write paths to the shared board. Any participant may add discovered work; the lead may also add tasks during synthesis, which reopens the run. On playbook boards, pass the phase title the task belongs to so progress rollups stay accurate. '
-    + 'Use role_name/role_description to give the lane a specialization — a persona the claiming teammate should adopt for this task (e.g. "Explorer" / "read-only research, report findings, propose no edits"). This is invented per task as you distribute work, not a fixed role: the same run can have an Explorer lane, a Refactorer lane, and a Reviewer lane at once, and later tasks can define new specializations entirely. '
-    + 'The result includes `similarTasks` when this looks like it may duplicate existing work — not blocking, but check before assuming it\'s new.',
+  description: bridgeDescription('coord_create_task'),
   inputSchema: {
     assign_to: z.string().min(1).max(160).optional().describe('Lead-only: delegate atomically to an idle teammate by name or ID, reusing its session. Busy/conflicting assignments leave no task. Delivery is queued, not proof of execution.'),
     title: z.string().min(1).max(160),
@@ -1219,7 +1240,7 @@ server.registerTool('coord_create_task', {
     seat: z.enum(['director', 'executor', 'validator', 'watcher']).optional(),
     requested_provider: z.enum(PROVIDERS).optional(),
     requested_model: z.string().min(1).max(200).optional(),
-    requested_effort: z.string().min(1).max(80).optional(),
+    requested_effort: z.string().min(1).max(100).optional(),
     verify_commands: z.array(z.string().min(1)).max(20).optional(),
     request_id: requestIdField,
   },
@@ -1242,26 +1263,31 @@ server.registerTool('coord_create_task', {
 })))
 
 server.registerTool('coord_delegate', {
-  description: 'Ask another agent to do a concrete task. Omit to to reuse an idle teammate or create one in a server-managed run; name an agent for follow-ups. Atomically creates and assigns work and queues notification. Returns task and session identity; queued is not proof of execution. Busy or conflicting assignments leave no task. Use coord_send_message to steer work already in progress.',
+  description: bridgeDescription('coord_delegate'),
   inputSchema: {
-    to: z.string().min(1).max(160).optional(),
+    to: z.string().min(1).max(160).optional().describe('Existing teammate name or id for follow-up work in its session. Overrides name.'),
+    name: z.string().min(1).max(32).optional().describe('Teammate to reuse or create, named for its job: a lowercase letter then letters, digits, - or _ (e.g. reviewer). lead, all and agent-N are reserved.'),
+    wait_ms: z.number().int().min(0).max(55_000).optional().describe('Interactive hosts only: also wait this long for the work to settle. Waiting never cancels the work. Managed turns omit it.'),
+    requested_provider: z.enum(['claude', 'codex', 'opencode', 'copilot', 'pi']).optional().describe('Provider for a NEW teammate; an existing teammate keeps its own and a mismatch is rejected'),
+    requested_model: z.string().min(1).max(200).optional().describe('A models[].value from coord_capabilities; omit for the team default'),
+    requested_effort: z.string().min(1).max(100).optional().describe('An effort level coord_capabilities lists for that model; omit for the team default'),
     title: z.string().min(1).max(160),
-    detail: z.string().min(1).max(8000),
-    paths: z.array(z.string().min(1)).max(100).optional(),
-    verify_commands: z.array(z.string().min(1)).max(20).optional(),
+    detail: z.string().min(1).max(8000).describe('Everything the teammate needs: outcome, acceptance evidence, constraints. It does not see your conversation.'),
+    paths: z.array(z.string().min(1)).max(100).optional().describe('Files or globs the task may write; granted as locks. Keep them disjoint from other open tasks.'),
+    verify_commands: z.array(z.string().min(1)).max(20).optional().describe('Commands the completion gate runs; the task cannot complete while one fails'),
     request_id: requestIdField,
   },
-}, async ({ to, title, detail, paths, verify_commands, request_id }) => textResult(await coordinatorRequest('create_task', {
-  assignTo: to ?? 'auto', title, detail, paths, verifyCommands: verify_commands, targetRole: 'teammate', requestId: request_id,
+}, async ({ to, name, wait_ms, requested_provider, requested_model, requested_effort, title, detail, paths, verify_commands, request_id }) => textResult(await coordinatorRequest('create_task', {
+  assignTo: to ?? 'auto', teammateName: to ? undefined : name, waitMs: wait_ms, requestedProvider: requested_provider, requestedModel: requested_model, requestedEffort: requested_effort, title, detail, paths, verifyCommands: verify_commands, targetRole: 'teammate', requestId: request_id,
 })))
 
 server.registerTool('coord_claim_task', {
-  description: 'Atomically claim a specific pending task, or the next unblocked task when task_id is omitted.',
+  description: bridgeDescription('coord_claim_task'),
   inputSchema: { task_id: z.string().min(1).optional(), request_id: requestIdField },
 }, async ({ task_id, request_id }) => textResult(await coordinatorRequest('claim_task', { taskId: task_id, requestId: request_id })))
 
 server.registerTool('coord_release_task', {
-  description: 'Return a claimed task to the board without failing it, releasing its locks so another participant can claim it. Owners hand back work they cannot finish; the lead can also release a wedged or failed task to requeue it.',
+  description: bridgeDescription('coord_release_task'),
   inputSchema: {
     task_id: z.string().min(1),
     reason: z.string().max(1000).optional(),
@@ -1274,8 +1300,7 @@ server.registerTool('coord_release_task', {
 })))
 
 server.registerTool('coord_leave_run', {
-  description: 'Cleanly exit this Coordinator run as the current participant, releasing any active locks. Fails if you still own a claimed task — release_task or hand it off first. '
-    + 'A lead leaving marks the whole run failed and stops every other participant, so only the lead should call this to abort a run outright; teammates use it to step aside once their lane is done and no more work is expected.',
+  description: bridgeDescription('coord_leave_run'),
   inputSchema: {
     reason: z.string().max(1000).optional(),
     request_id: requestIdField,
@@ -1296,31 +1321,24 @@ server.registerTool('coord_leave_run', {
 })
 
 server.registerTool('coord_read_inbox', {
-  description: 'Read and acknowledge direct Coordinator mailbox messages for this participant. '
-    + 'Any message with replyRequired=true needs a coord_send_message reply before you do anything else — '
-    + 'the sender treats silence as dropped, not busy. A status-kind/status-priority message can be held back '
-    + 'up to 15s (or until 3 accumulate) before it appears here — an empty or short result right after someone '
-    + 'says they sent something is not proof nothing arrived; call again shortly before assuming it was lost. '
-    + 'Print one line per message to your own terminal, '
-    + '"<- <fromAgentId>: <body>" — the human watching this terminal cannot see the mailbox otherwise.',
+  description: bridgeDescription('coord_read_inbox', 'Print one line per message to your own terminal, "<- <fromAgentId>: <body>" — the human watching this terminal cannot see the mailbox otherwise.'),
   inputSchema: {
     after: z.string().min(1).optional().describe('Message cursor returned by the previous call'),
     limit: z.number().int().min(1).max(200).optional(),
     acknowledge: z.boolean().optional().describe('Defaults to true'),
+    unresolved: z.boolean().optional().describe('List unanswered reply-required messages instead of unread mail; never acknowledges'),
     request_id: requestIdField,
   },
-}, async ({ after, limit, acknowledge, request_id }) => textResult(await coordinatorRequest('read_inbox', {
+}, async ({ after, limit, acknowledge, unresolved, request_id }) => textResult(await coordinatorRequest('read_inbox', {
   after,
   limit,
   acknowledge,
+  unresolved,
   requestId: request_id,
 })))
 
 server.registerTool('coord_send_message', {
-  description: 'Send a typed direct message. Setting EITHER kind:"status" OR priority:"status" (independently — either one alone is enough) holds the message back from the recipient\'s inbox until 3 such messages accumulate or 15 seconds pass, so a one-off status message can sit invisible for a while; use a different kind/priority for anything the recipient should see right away. Reply-required requests remain actionable until answered with in_reply_to. '
-    + 'The result includes `delivery`: each recipient\'s liveness (fresh/stale/dead) at send time. If stale or dead, do not assume silence means '
-    + 'ignored — escalate to the lead or route around them instead of waiting on a reply that may never come. '
-    + 'Print one line to your own terminal after sending, "-> <to>: <one-line summary>" — this is the only way the human watching this terminal sees you communicating.',
+  description: bridgeDescription('coord_send_message', 'Print one line to your own terminal after sending, "-> <to>: <one-line summary>" — this is the only way the human watching this terminal sees you communicating.'),
   inputSchema: {
     to: z.string().min(1).describe('Agent name or id from coord_status\'s roster, or one of two broadcast aliases: "all" (every other active participant — the lead\'s way to announce a priority change or new context to the whole team at once) or "lead" (the current lead, from any teammate; the lead itself has no "lead" to address). Reused names resolve to whichever active participant holds that name now.'),
     message: z.string().min(1).max(8000),
@@ -1344,8 +1362,13 @@ server.registerTool('coord_send_message', {
   requestId: request_id,
 })))
 
+server.registerTool('coord_read_handoff', {
+  description: bridgeDescription('coord_read_handoff'),
+  inputSchema: { handoff_id: z.string().min(1) }, annotations: { readOnlyHint: true },
+}, async ({ handoff_id }) => textResult(await coordinatorRequest('read_handoff', { handoffId: handoff_id })))
+
 server.registerTool('coord_handoff_task', {
-  description: 'Checkpoint owned work after a provider/CLI failure or bounded supervisor stop, release its locks, and return it to the board. The lead receives an urgent durable handoff.',
+  description: bridgeDescription('coord_handoff_task'),
   inputSchema: {
     task_id: z.string().min(1),
     summary: z.string().min(1).max(1000),
@@ -1362,18 +1385,16 @@ server.registerTool('coord_handoff_task', {
 })))
 
 server.registerTool('coord_request_locks', {
-  description: 'Request write locks for paths needed by the current task. Returns explicit `granted` and `denied` (with the conflicting holder) lists; do not edit paths that were denied.',
+  description: bridgeDescription('coord_request_locks'),
   inputSchema: { paths: z.array(z.string().min(1)).min(1).max(100), request_id: requestIdField },
 }, async ({ paths, request_id }) => textResult(await coordinatorRequest('request_locks', { paths, requestId: request_id })))
 
 server.registerTool('coord_progress', {
-  description: 'Report working, idle, blocked, ready, or heartbeat state for this participant. '
-    + 'On a task running longer than ~2 minutes, call with status="heartbeat" every ~2 minutes — silence past that window '
-    + 'reads to the lead as stalled, not just slow.',
+  description: bridgeDescription('coord_progress'),
   inputSchema: {
     status: z.enum(['ready', 'working', 'idle', 'blocked', 'heartbeat']),
     task_id: z.string().min(1).optional(),
-    summary: z.string().max(1000).optional(),
+    summary: z.string().max(2000).optional(),
     detail: z.string().max(8000).optional(),
     request_id: requestIdField,
   },
@@ -1386,10 +1407,10 @@ server.registerTool('coord_progress', {
 })))
 
 server.registerTool('coord_publish_finding', {
-  description: 'Publish reusable knowledge, a handoff, or a review request into the shared Coordinator event log. Detailed audit evidence may be up to 32,000 characters; split anything larger across focused findings.',
+  description: bridgeDescription('coord_publish_finding'),
   inputSchema: {
     kind: z.enum(['finding', 'learning', 'handoff', 'review.requested']),
-    summary: z.string().min(1).max(1000),
+    summary: z.string().min(1).max(2000),
     detail: z.string().max(COORD_FINDING_DETAIL_MAX_CHARS).optional(),
     task_id: z.string().min(1).optional(),
     request_id: requestIdField,
@@ -1403,7 +1424,7 @@ server.registerTool('coord_publish_finding', {
 })))
 
 server.registerTool('coord_query_context', {
-  description: 'Search this run\'s findings, learnings, and task outcomes for text relevant to a question — a lexical lookup, not full recall. Use this instead of re-reading all of coord_status when you only need context on one topic (e.g. "what did we decide about auth?"), especially after rejoining a long-running run.',
+  description: bridgeDescription('coord_query_context'),
   annotations: { readOnlyHint: true },
   inputSchema: {
     query: z.string().min(1).max(300),
@@ -1412,7 +1433,7 @@ server.registerTool('coord_query_context', {
 }, async ({ query, limit }) => textResult(await coordinatorRequest('query_context', { query, limit })))
 
 server.registerTool('coord_remember', {
-  description: 'Record a durable fact into this project\'s persistent memory (.agent-viewer/memory.md) — unlike coord_publish_finding, this outlives the run: every future coordinator run in this project starts with it in view. Use for genuinely durable context (architecture decisions, gotchas, established patterns), not routine progress.',
+  description: bridgeDescription('coord_remember'),
   inputSchema: {
     summary: z.string().min(1).max(2000),
     detail: z.string().max(8000).optional(),
@@ -1425,7 +1446,7 @@ server.registerTool('coord_remember', {
 })))
 
 server.registerTool('coord_save_role', {
-  description: 'Save a role_name/role_description pairing for reuse across coord_create_task calls (this run and future ones) — invent the persona once, then pass just role_name and it will be filled in automatically. Optionally set a suggested provider/model for the role (persona-pack-style default) — surfaced in the task text for whoever claims it; omitting provider/model on an update keeps whatever was set before.',
+  description: bridgeDescription('coord_save_role', 'Optionally set a suggested provider/model for the role (persona-pack-style default) — surfaced in the task text for whoever claims it; omitting provider/model on an update keeps whatever was set before.'),
   inputSchema: {
     name: z.string().min(1).max(80),
     description: z.string().min(1).max(1000),
@@ -1442,15 +1463,15 @@ server.registerTool('coord_save_role', {
 })))
 
 server.registerTool('coord_list_roles', {
-  description: 'List saved role templates (name + description) available for coord_create_task\'s role_name in this project.',
+  description: bridgeDescription('coord_list_roles'),
   annotations: { readOnlyHint: true },
 }, async () => textResult(await coordinatorRequest('list_roles')))
 
 server.registerTool('coord_submit_plan', {
-  description: 'Submit the plan for a claimed task when the run requires lead approval.',
+  description: bridgeDescription('coord_submit_plan'),
   inputSchema: {
     task_id: z.string().min(1),
-    summary: z.string().min(1).max(1000),
+    summary: z.string().min(1).max(2000),
     detail: z.string().max(8000).optional(),
     request_id: requestIdField,
   },
@@ -1462,11 +1483,11 @@ server.registerTool('coord_submit_plan', {
 })))
 
 server.registerTool('coord_review_plan', {
-  description: 'Lead-only: approve or reject a teammate plan and notify its owner.',
+  description: bridgeDescription('coord_review_plan'),
   inputSchema: {
     task_id: z.string().min(1),
     approved: z.boolean(),
-    summary: z.string().max(1000).optional(),
+    summary: z.string().max(2000).optional(),
     detail: z.string().max(8000).optional(),
     request_id: requestIdField,
   },
@@ -1479,7 +1500,7 @@ server.registerTool('coord_review_plan', {
 })))
 
 server.registerTool('coord_review_phase', {
-  description: 'Lead-only: approve or reject a completed phase gate in a low/medium autonomy run.',
+  description: bridgeDescription('coord_review_phase'),
   inputSchema: {
     phase: z.string().min(1).max(120),
     approved: z.boolean(),
@@ -1492,7 +1513,7 @@ server.registerTool('coord_review_phase', {
 })))
 
 server.registerTool('coord_review_run', {
-  description: 'Lead-only: submit the terminal judgment review after mechanical validation and before synthesis.',
+  description: bridgeDescription('coord_review_run'),
   inputSchema: {
     approved: z.boolean(),
     summary: z.string().min(1).max(2000),
@@ -1504,7 +1525,7 @@ server.registerTool('coord_review_run', {
 })))
 
 server.registerTool('coord_resolve_decision', {
-  description: 'Lead-only: answer or explicitly defer a structured open decision from a task receipt.',
+  description: bridgeDescription('coord_resolve_decision'),
   inputSchema: {
     task_id: z.string().min(1),
     decision_id: z.string().min(1),
@@ -1517,7 +1538,7 @@ server.registerTool('coord_resolve_decision', {
 })))
 
 server.registerTool('coord_promote_learning', {
-  description: 'Lead-only: record a recurring learning candidate for promotion into a playbook, role, or project memory.',
+  description: bridgeDescription('coord_promote_learning'),
   inputSchema: {
     candidate_id: z.string().min(1),
     target: z.enum(['playbook', 'role', 'project_memory']),
@@ -1528,7 +1549,7 @@ server.registerTool('coord_promote_learning', {
 })))
 
 server.registerTool('coord_cancel_turn', {
-  description: 'Lead-only: interrupt a teammate\'s in-flight turn without releasing its owned task. The teammate\'s worker supervisor kills the current turn and starts a fresh one; task ownership and status are untouched. Use this instead of coord_handoff_task when you just want a stuck or looping turn restarted, not the work handed back to the board.',
+  description: bridgeDescription('coord_cancel_turn'),
   inputSchema: {
     agent_id: z.string().min(1).describe('Target participant name or id — not yourself.'),
     request_id: requestIdField,
@@ -1539,7 +1560,7 @@ server.registerTool('coord_cancel_turn', {
 })))
 
 server.registerTool('coord_spawn_teammate', {
-  description: 'Lead-only: spawn one additional teammate mid-run when the board has more parallel work than the current roster can absorb. This requires a run with a live in-process Agent Viewer controller; externally-run Coordinator sessions must start another CLI and use coord_join_run instead.',
+  description: bridgeDescription('coord_spawn_teammate'),
   inputSchema: {
     provider: z.enum(PROVIDERS).optional().describe('Preferred provider for the new teammate; the run provider pool remains authoritative.'),
     request_id: requestIdField,
@@ -1550,10 +1571,13 @@ server.registerTool('coord_spawn_teammate', {
 })))
 
 server.registerTool('coord_complete_task', {
-  description: 'Complete an owned task with a structured receipt through plan, path, provenance, decision, budget, and verification gates.',
+  description: 'Complete your claimed task with an honest receipt. Verify first: the gate runs the task\'s verify_commands and compares the checkout with your granted paths. '
+    + 'A refusal comes back as accepted: false with a reason, not an error — fix what it names (an edit outside your paths, a failing check, an unapproved plan, an open decision at low/medium autonomy) and call again with the same request_id. '
+    + 'An error naming unanswered reply-required messages means answer them first (coord_read_inbox unresolved=true). '
+    + 'Omit actual_model and usage when you cannot observe them; never guess. needs_decision lists questions only the lead or human can settle; omit it when none remain.',
   inputSchema: {
     task_id: z.string().min(1),
-    summary: z.string().min(1).max(1000),
+    summary: z.string().min(1).max(2000),
     detail: z.string().max(8000).optional(),
     actual_model: z.string().min(1).max(200).optional(),
     files_changed: z.array(z.string()).max(200).optional(),
@@ -1568,8 +1592,8 @@ server.registerTool('coord_complete_task', {
       durationMs: z.number().int().nonnegative().optional(),
     }).optional(),
     needs_decision: z.array(z.object({
-      id: z.string(), question: z.string(), options: z.array(z.string()), assumed: z.string().optional(),
-      impactIfWrong: z.string(), status: z.enum(['open', 'answered', 'deferred']).optional(), answer: z.string().optional(),
+      id: z.string().optional(), question: z.string().min(1), options: z.array(z.string()).optional(), assumed: z.string().optional(),
+      impactIfWrong: z.string().optional(), status: z.enum(['open', 'answered', 'deferred']).optional(), answer: z.string().optional(),
     })).max(20).optional(),
     request_id: requestIdField,
   },
@@ -1586,10 +1610,10 @@ server.registerTool('coord_complete_task', {
 })))
 
 server.registerTool('coord_fail_task', {
-  description: 'Mark an owned task failed with a reason so the board can continue to synthesis.',
+  description: bridgeDescription('coord_fail_task'),
   inputSchema: {
     task_id: z.string().min(1),
-    summary: z.string().min(1).max(1000),
+    summary: z.string().min(1).max(2000),
     detail: z.string().max(8000).optional(),
     request_id: requestIdField,
   },
@@ -1601,7 +1625,7 @@ server.registerTool('coord_fail_task', {
 })))
 
 server.registerTool('coord_finalize_run', {
-  description: 'Lead-only: finalize a run after every task is completed, failed, or cancelled.',
+  description: bridgeDescription('coord_finalize_run'),
   inputSchema: { summary: z.string().min(1).max(16000), request_id: requestIdField },
 }, async ({ summary, request_id }) => textResult(await coordinatorRequest('finalize_run', { summary, requestId: request_id })))
 

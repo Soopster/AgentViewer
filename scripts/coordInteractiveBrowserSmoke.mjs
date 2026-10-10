@@ -46,6 +46,7 @@ try {
       // Herdr marks every pane in its sidebar; this is the session list's copy.
       data = { attention: enabled && permissionPending ? [{ sessionId: lead.sessionId, provider: 'codex', waiting: 1, finished: 0 }] : [] }
     }
+    else if (url.searchParams.get('inspect') === 'capabilities') data = { provider: url.searchParams.get('targetProvider'), status: 'available', models: [{ value: 'advertised-model', displayName: 'Advertised fixture model', description: 'fixture', supportsEffort: true, supportedEffortLevels: ['low', 'high'] }], checkedAt: new Date().toISOString() }
     else if (url.pathname === '/api/agent-protocol/playbooks') {
       if (url.searchParams.get('preview') === 'interactive') {
         const args = JSON.parse(url.searchParams.get('args') || '{}')
@@ -120,6 +121,28 @@ try {
   await teamTab.click()
   await page.getByRole('button', { name: 'Enable coordinator', exact: true }).click()
   await page.getByText('Coordinator on', { exact: true }).waitFor()
+  if (process.env.COORD_SMOKE_CATALOG_ONLY === '1') {
+    const panel = page.getByRole('region', { name: 'Conversation teammates' })
+  await page.getByLabel('Send to', { exact: true }).selectOption('auto')
+  await panel.getByText('Task model and effort', { exact: true }).click()
+  await panel.getByRole('button', { name: 'Refresh model catalog' }).click()
+  await panel.getByLabel('Advertised task model').selectOption('advertised-model')
+  assert.equal(await panel.getByLabel('Task model ID', { exact: true }).inputValue(), 'advertised-model')
+  await panel.getByLabel('Advertised task effort').selectOption('high')
+  assert.equal(await panel.getByLabel('Task effort', { exact: true }).inputValue(), 'high')
+  await panel.getByLabel('Task model ID', { exact: true }).fill('custom-review-model')
+  await panel.getByLabel('Task effort', { exact: true }).fill('high')
+  await panel.getByLabel('Task or follow-up', { exact: true }).fill('Review using the chosen model')
+  await panel.getByRole('button', { name: 'Ask teammate', exact: true }).click()
+  const modelDelegation = actions.findLast(action => action.action === 'delegate')
+  assert.equal(modelDelegation.requestedModel, 'custom-review-model')
+  assert.equal(modelDelegation.requestedEffort, 'high')
+  await page.getByLabel('New teammate uses', { exact: true }).selectOption('claude')
+  assert.equal(await panel.getByLabel('Task model ID', { exact: true }).inputValue(), '', 'changing provider clears an incompatible model')
+  assert.equal(await panel.getByLabel('Task effort', { exact: true }).inputValue(), '')
+    assert.equal(errors.length, 0, errors.join('\n'))
+    console.log('Coordinator browser catalog passed: refresh, advertised model/effort selection, delegate payload, and provider-change reset.')
+  } else {
   // The session list says which conversation needs you, without opening it.
   const sidebarBadge = page.locator('.av-session-row span', { hasText: /^! 1$/ }).first()
   await sidebarBadge.waitFor({ timeout: 15000 })
@@ -221,6 +244,23 @@ try {
   await page.getByRole('button', { name: 'Enable coordinator', exact: true }).click()
   await page.getByText('Coordinator on', { exact: true }).waitFor()
   // Web controls complete the same recipe/resource/recovery flows as the TUI.
+  await page.getByLabel('Send to', { exact: true }).selectOption('auto')
+  await panel.getByText('Task model and effort', { exact: true }).click()
+  await panel.getByRole('button', { name: 'Refresh model catalog' }).click()
+  await panel.getByLabel('Advertised task model').selectOption('advertised-model')
+  assert.equal(await panel.getByLabel('Task model ID', { exact: true }).inputValue(), 'advertised-model')
+  await panel.getByLabel('Advertised task effort').selectOption('high')
+  assert.equal(await panel.getByLabel('Task effort', { exact: true }).inputValue(), 'high')
+  await panel.getByLabel('Task model ID', { exact: true }).fill('custom-review-model')
+  await panel.getByLabel('Task effort', { exact: true }).fill('high')
+  await panel.getByLabel('Task or follow-up', { exact: true }).fill('Review using the chosen model')
+  await panel.getByRole('button', { name: 'Ask teammate', exact: true }).click()
+  const modelDelegation = actions.findLast(action => action.action === 'delegate')
+  assert.equal(modelDelegation.requestedModel, 'custom-review-model')
+  assert.equal(modelDelegation.requestedEffort, 'high')
+  await page.getByLabel('New teammate uses', { exact: true }).selectOption('claude')
+  assert.equal(await panel.getByLabel('Task model ID', { exact: true }).inputValue(), '', 'changing provider clears an incompatible model')
+  assert.equal(await panel.getByLabel('Task effort', { exact: true }).inputValue(), '')
   await panel.locator('summary').filter({ hasText: /^Team resources/ }).click()
   await panel.getByText(/Reported tokens: unavailable/).waitFor()
   await panel.getByLabel('Agent capacity (includes lead)', { exact: true }).fill('1')
@@ -294,4 +334,5 @@ try {
   assert.equal(await composer.innerText(), 'Preserve this lead draft while inspecting reviewer')
   assert.equal(errors.length, 0, errors.join('\n'))
   console.log('Rendered enablement, continuation preference, native attention, embedded transcript, lead draft preservation, named follow-up, outage recovery, foreign-host activity, blurred-only teammate notifications honouring the delivery setting, review on transcript open, sidebar teammate marks, workflow preview/frozen retry, resource validation/missing usage, and unavailable/explicit recovery/terminal acknowledgement passed')
+  }
 } finally { await browser.close() }

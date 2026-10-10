@@ -12,11 +12,11 @@ import { refreshReview } from './review/refresh'
 import type { ReviewOperation } from './review/types'
 import { setMessageBookmark } from './messageBookmarks'
 import { searchPersistedSessions } from './sessionPersistence'
-import { clearWaitingSession, setWaitingSession } from './sessionRuntime'
+import { clearWaitingSession, setWaitingSession, readWaitingSessionObservation } from './sessionRuntime'
 import type { AgentProvider } from './types'
 import { postViewerAttention } from './viewerAttention'
 import { appendClaudeHookEvent } from './claudeHookEvents'
-import { drainCooperativeInbox } from './agentCoordination'
+import { drainCooperativeInbox, recordCoordinatorBackgroundObservation } from './agentCoordination'
 import { claudePluginLoadFailures } from './claudeSdkFeatures'
 
 export type ClaudeViewerContext = {
@@ -177,7 +177,7 @@ function normalizeStopTasks(input: StopHookInput) {
   }))
 }
 
-function normalizeSessionCrons(input: StopHookInput) {
+function normalizeSessionCrons(input: Pick<StopHookInput, 'session_crons'>) {
   return (input.session_crons ?? []).map((cron) => ({
     id: cron.id,
     schedule: cron.schedule,
@@ -209,6 +209,7 @@ function createStopHook(context: ClaudeViewerContext): HookCallback {
           backgroundTasks: normalizeStopTasks(stopInput),
           sessionCrons: normalizeSessionCrons(stopInput),
         })
+        await recordCoordinatorBackgroundObservation(sessionId)
       }
     }
     return { continue: true }
@@ -222,15 +223,27 @@ function createLifecycleHook(context: ClaudeViewerContext): HookCallback {
       ? record.session_id
       : context.getSessionId()
     if (!sessionId) return { continue: true }
+    if (input.hook_event_name === 'SubagentStart' || input.hook_event_name === 'SubagentStop') {
+      const previous = readWaitingSessionObservation(sessionId)
+      const id = input.agent_id
+      const siblings = (previous?.backgroundTasks ?? []).filter(task => task.id !== id)
+      const child = input.hook_event_name === 'SubagentStart'
+        ? [{ id, type: 'agent', status: 'running', description: input.agent_type }]
+        : (input.background_tasks ?? []).map(task => ({ id: task.id, type: task.type, status: task.status, description: task.description }))
+      const tasks = [...new Map([...siblings, ...child].map(task => [task.id, task])).values()]
+      const wakeups = input.hook_event_name === 'SubagentStop' ? normalizeSessionCrons(input) : []
+      const crons = [...new Map([...(previous?.sessionCrons ?? []), ...wakeups].map(cron => [cron.id, cron])).values()]
+      setWaitingSession({ sessionId, provider: 'claude', backgroundTasks: tasks, sessionCrons: crons })
+      await recordCoordinatorBackgroundObservation(sessionId)
+      return { continue: true }
+    }
 
-    // Stop is the only hook that marks a session waiting. Any new session/task
-    // activity clears that stale marker; SessionEnd also cannot remain waiting.
+    // Foreground/lifecycle activity clears the UI waiting marker. It does not
+    // clear the authoritative child-work observation or its durable gate.
     if (input.hook_event_name === 'SessionStart'
       || input.hook_event_name === 'SessionEnd'
       || input.hook_event_name === 'TaskCreated'
-      || input.hook_event_name === 'TaskCompleted'
-      || input.hook_event_name === 'SubagentStart'
-      || input.hook_event_name === 'SubagentStop') {
+      || input.hook_event_name === 'TaskCompleted') {
       clearWaitingSession(sessionId)
     }
     if (input.hook_event_name === 'StopFailure') {

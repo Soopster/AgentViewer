@@ -2,6 +2,46 @@
 
 Background reference for how the Coordinator's tools are exposed and what the current contract supports. Read this when something surprising happens — a tool call rejected for a reason you don't recognize, a client not offering `structuredContent`, a dashboard resource, or a question about A2A — not as a prerequisite for entering or running a normal session. The hot-path workflow lives in the main `SKILL.md`.
 
+## Rejections and what to do
+
+Every rejection is a specific message. Match it here before retrying; a retry with the same arguments gets the same answer.
+
+| Message starts with | Meaning | Do this |
+|---|---|---|
+| `This CLI is not bound to a Coordinator run` | No identity on this connection | `coord_join_run` or `coord_create_run` once; with a host-supplied client command, use that instead |
+| `This bridge is already bound to run …` | You called create/join while bound | Continue with `coord_status`; never join a second time |
+| `Only the Coordinator lead can …` | Lead-only tool called by a teammate | Ask the lead by mail; do not retry |
+| `No claimable task: … already owns <task>` | One task at a time | Finish, release, or hand off the task you hold |
+| `No claimable task: … blocked by incomplete dependencies` | Nothing is ready for you | Managed turn: return. Interactive: wait |
+| `No claimable task: … targets the lead role` | Role affinity | Leave it for that role, or ask the lead to retarget it |
+| `No claimable task: … requires a path locked by` | Another task holds the path | Wait for it or tell the lead the lanes overlap |
+| `Cannot report working` / `blocked without owning a Coordinator task` | Progress before a claim | `coord_claim_task` first; use `heartbeat` or `ready` when you own nothing |
+| `Cannot request locks without owning a Coordinator task` | Locks belong to a task | Claim, then request |
+| `Unanswered reply-required messages: <ids>` | Completion or leave blocked by mail you owe | `coord_read_inbox(unresolved=true)`, answer each with `in_reply_to`, then call again |
+| `Stale completion rejected` | Your claim was released or reassigned while you worked | Read the task; do not resend the completion |
+| `Reply target not found or not addressed to this participant` | `in_reply_to` is not a message sent to you | Use the id from your own inbox |
+| `A correlated reply must address exactly one participant` | `in_reply_to` with `to:"all"` | Reply to the original sender |
+| `… is not accepting messages from you right now` | Recipient's respond-to filter | Route through the lead |
+| `Cannot leave while owning <task>` | Leaving would orphan work | Release or hand off first |
+| `Coordinator run still has N unfinished task(s)` | Finalize too early | Finish, fail, or cancel them; then finalize |
+| `Coordinator run requires an approved judgment review` | `requireReview` run | `coord_review_run` first — if that review is the human's, surface it instead |
+| `Completed tasks lack valid receipts` | A completion had no usable receipt | Have its owner complete again with files, commands, and model |
+| `Model … is not advertised by` / `Effort … is not advertised for` | Routing ID the provider does not offer | `coord_capabilities`, then use a listed `value` or omit the field |
+| `… is a <provider> teammate; a provider choice only applies to a new teammate` | `requested_provider` on an existing teammate | Drop it, or delegate under a new `name` |
+| `All teammate slots are busy` / `Teammate is busy or unavailable` | No free teammate; no task was created | Steer by mail or wait for a result, then delegate again |
+| `No idle teammate is available. Start or join a teammate` | Externally managed run cannot create teammates | Start another CLI or `coord worker --join` |
+| `Inspect and reconcile the previous teammate execution` | Its last dispatch is unconfirmed | Check its transcript and task before assigning more |
+| `This run already has N open tasks` | Open-task cap | Let work finish or cancel stale tasks |
+| `Cannot delegate more work:` / `Cannot claim more work:` | Run budget exhausted | Report to the lead or human; do not work around it |
+| `Coordinator participant name already exists` | Name taken on join | Join under a different name |
+| `Coordinator run has reached its participant limit` | Roster full | Ask the lead; do not create another run |
+| `Context handoff not found in this run` | Wrong id, or a checkpoint from another run | Use the task's `contextHandoff.id` from `coord_status` |
+| `Task claim changed while preparing the handoff` | The task was released or reassigned mid-handoff | Read the task; do not resend |
+| `COORDINATOR_OPERATION_UNCERTAIN` | Outcome of a keyed call is unknown | See *Uncertain operation outcomes* below |
+| `accepted: false` (a result, not an error) | Completion gate refused | Fix the named cause; call again with the same `request_id` |
+
+A schema error from the MCP client itself (wrong type, value outside an enum, text over a length limit) never reached the Coordinator: correct the argument. An argument the tool does not declare is dropped silently, so check the tool's schema when a call behaves as if an option was not passed.
+
 ## MCP discovery and host features
 
 The bridge exposes this workflow through ordinary MCP primitives as well as `coord_*` tools. Use the richest representation the host supports, but keep the same Coordinator semantics everywhere.
@@ -36,12 +76,14 @@ This fallback requires an actual host-supplied command, not a guessed binding pa
 Treat `lib/agentProtocol.ts` and the registered MCP schemas as authoritative. The current run contract supports:
 
 - **Run controls:** `autonomy` (`low|medium|high`), `requirePlanApproval`, `requireReview`, `acceptanceContract` (goal, non-goals, user-visible acceptance, verification commands, manual QA, escalation triggers), and `budget` (`maxTokens`, `maxDurationMinutes`).
+- **Discovery:** `coord_capabilities` returns a provider's advertised models and effort levels with `status` `available`, `unavailable` (call again to refresh) or `unsupported` (no read-only catalog; the provider's own dispatcher decides). It never opens a session.
 - **Routing:** task `seat` (`director|executor|validator|watcher`), target role, requested provider/model/effort, verification commands, explicit dependencies, and phase barriers. A requested provider/model is routing intent, not proof of what ran.
 - **Evidence:** task completion requires a structured receipt with requested/actual provider and model, provenance (`ok|drift|unknown`), stop reason, usage, changed files, verification results, summary/detail, and open decisions. Model drift or unverifiable provenance remains attention-blocking.
 - **Gates:** teammate plan approval, phase reports with approve/reject, completion gates, open decision resolution, and post-mechanical judgment review before synthesis. Board state — not approval prose inside a rejection — is authoritative.
+- **Portable checkpoints:** `coord_handoff_task` pins an immutable `contextHandoff` to the task: the previous owner's summary and detail, its provider, session and claim, the task text and paths, a checkout fingerprint, and a digest. The next claimer's prompt includes it, and `coord_read_handoff(handoff_id)` returns it at any time, including after the event window has moved on. It is the previous owner's account, not a transcript replay: compare the fingerprint with the current checkout and verify its claims before building on them.
 - **Recovery and learning:** turn cancellation, provider handoff with failure classification, resume capsules/checkpoints, durable progress evidence, recurring learning candidates, and explicit promotion to playbook, role, or project memory. Promotion is a reviewable decision, not an implicit write.
 
-The unbound MCP bridge currently registers these run/playbook tools: `coord_list_runs`, `coord_create_run`, `coord_preview_playbook`, `coord_list_playbooks`, `coord_save_playbook`, `coord_join_run`, `coord_resume`, `coord_status`, `coord_wait`, and `coord_await_run`. Board and evidence tools are `coord_create_task`, `coord_claim_task`, `coord_release_task`, `coord_leave_run`, `coord_read_inbox`, `coord_send_message`, `coord_handoff_task`, `coord_request_locks`, `coord_progress`, `coord_publish_finding`, `coord_query_context`, `coord_remember`, `coord_save_role`, `coord_list_roles`, `coord_submit_plan`, `coord_review_plan`, `coord_review_phase`, `coord_review_run`, `coord_resolve_decision`, `coord_promote_learning`, `coord_cancel_turn`, `coord_spawn_teammate`, `coord_complete_task`, `coord_fail_task`, and `coord_finalize_run`.
+The unbound MCP bridge currently registers these run/playbook tools: `coord_list_runs`, `coord_create_run`, `coord_preview_playbook`, `coord_list_playbooks`, `coord_save_playbook`, `coord_join_run`, `coord_resume`, `coord_capabilities`, `coord_status`, `coord_wait`, and `coord_await_run`. Board and evidence tools are `coord_create_task`, `coord_delegate`, `coord_claim_task`, `coord_release_task`, `coord_leave_run`, `coord_read_inbox`, `coord_send_message`, `coord_handoff_task`, `coord_read_handoff`, `coord_request_locks`, `coord_progress`, `coord_publish_finding`, `coord_query_context`, `coord_remember`, `coord_save_role`, `coord_list_roles`, `coord_submit_plan`, `coord_review_plan`, `coord_review_phase`, `coord_review_run`, `coord_resolve_decision`, `coord_promote_learning`, `coord_cancel_turn`, `coord_spawn_teammate`, `coord_complete_task`, `coord_fail_task`, and `coord_finalize_run`.
 
 Use `coord_preview_playbook` before launching a saved or inline playbook when interpolation, phase barriers, or requested routing needs checking. Use `coord_review_phase` and `coord_review_run` for explicit operator gates; use `coord_resolve_decision` for task-level open decisions; use `coord_promote_learning` only after inspecting the candidate and intended target.
 

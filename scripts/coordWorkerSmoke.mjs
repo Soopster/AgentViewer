@@ -427,6 +427,12 @@ const codexArgs = JSON.parse(await readFile(codexArgsFile, 'utf8'))
 if (!codexArgs.some((arg) => typeof arg === 'string' && arg.includes(path.join(state.cwd, '.agents', 'skills', 'coordinate-agents', 'SKILL.md')))) {
   throw new Error('worker prompt did not provide the checkout-local coordination skill path')
 }
+// A worker's checkout is a worktree of the user's project, which has no copy of
+// the skill; without the shipped path the prompt names a file that is not there.
+const shippedSkill = fileURLToPath(new URL('../.agents/skills/coordinate-agents/SKILL.md', import.meta.url))
+if (!codexArgs.some((arg) => typeof arg === 'string' && arg.includes(`shipped with Agent Viewer at ${shippedSkill}`))) {
+  throw new Error('worker prompt did not name the shipped coordination skill as the fallback')
+}
 if (!codexArgs.some((arg) => typeof arg === 'string'
   && arg.includes('never call coord_wait')
   && arg.includes('supervisor receives board changes'))) {

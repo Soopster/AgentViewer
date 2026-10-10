@@ -211,6 +211,10 @@ export const copilotAdapter: SessionAdapter = {
     return { messages: writeMappedMessagesCache(`copilot:${sessionId}`, signature, messages) }
   },
 
+  async readProviderModels(cwd) {
+    return mapCopilotModelsToSessionModels(await (await getCopilotClient()).listModels())
+  },
+
   async readModels(sessionId) {
     // Same rule as readSessionInfo: the TUI reads this when a session is
     // merely selected, so a cold session answers from its journal rather than
