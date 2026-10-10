@@ -140,3 +140,25 @@ if (smallest && largest && largest !== smallest) {
     + ` classify ${(largest.classify / Math.max(1e-4, smallest.classify)).toFixed(1)}x`,
   )
 }
+
+// Cold/warm query distributions: no document cache is involved. Include
+// delimiter-dense single-line input as well as ordinary and sparse source.
+for (const lines of [200, 20_000]) {
+  const normal = sourceOfLines(lines)
+  for (const [label, source] of [
+    ['ordinary', normal],
+    ['sparse', 'const name = value + 123;\n'.repeat(Math.ceil(normal.length / 26))],
+    ['dense-minified', 'a/"b"/\'c\'/'.repeat(Math.ceil(normal.length / 10))],
+  ] as const) {
+    for (let i = 0; i < 20; i += 1) classifyEditorOffset(source, source.length - (i % 64), 'main.ts')
+    const samples: number[] = []
+    let sink = ''
+    for (let i = 0; i < 50; i += 1) {
+      const start = performance.now()
+      sink = classifyEditorOffset(source, source.length - (i % 64), 'main.ts')
+      samples.push(performance.now() - start)
+    }
+    samples.sort((a, b) => a - b)
+    console.log(`context ${lines} ${label}: median=${samples[24]!.toFixed(4)}ms p95=${samples[47]!.toFixed(4)}ms (${sink})`)
+  }
+}

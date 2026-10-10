@@ -139,6 +139,13 @@ const daemon = createServer(async (request, response) => {
       response.end(JSON.stringify({ participant, snapshot, instructions: 'lead instructions' }))
       return
     }
+    if (body?.action === 'resume') {
+      // As the Coordinator answers: the participant carries its credential
+      // (the bridge persists it and strips it), the roster never does.
+      const { token: _token, ...rosterEntry } = participant
+      response.end(JSON.stringify({ participant, snapshot: { ...snapshot, agents: [rosterEntry] } }))
+      return
+    }
     if (body?.action === 'list_runs') {
       response.end(JSON.stringify({ runs: [snapshot.run] }))
       return
@@ -653,6 +660,44 @@ try {
     if (!seen.some((entry) => entry.url === '/api/agent-protocol/external' && entry.body?.action === action)) {
       throw new Error(`Coordinator ${action} did not cross the MCP bridge`)
     }
+  }
+
+  // A CLI that restarts comes back unbound. It knows its run and agent ids
+  // (they are in its transcript) but not its token, and it is told not to open
+  // credential files — so the bridge has to be able to find the credential.
+  const { AGENT_VIEWER_COORD_IDENTITY_FILE: _file, AGENT_VIEWER_COORD_RUN_ID: _run, AGENT_VIEWER_COORD_AGENT_ID: _agent, AGENT_VIEWER_COORD_TOKEN: _token, ...unboundEnv } = process.env
+  const restartedTransport = new StdioClientTransport({
+    command: process.execPath,
+    args: [launcher, 'mcp', '--attach', String(address.port)],
+    stderr: 'pipe',
+    env: { ...unboundEnv, AGENT_VIEWER_COORD_TRANSPORT: 'http' },
+  })
+  const restartedClient = new Client({ name: 'agent-viewer-mcp-restarted', version: '1.0.0' })
+  try {
+    await restartedClient.connect(restartedTransport)
+    const unbound = await restartedClient.callTool({ name: 'coord_status', arguments: {} })
+    if (!unbound.isError || !/coord_join_run|coord_resume/.test(unbound.content?.[0]?.text ?? '')) {
+      throw new Error('An unbound bridge did not say how to bind')
+    }
+    const wrong = await restartedClient.callTool({ name: 'coord_resume', arguments: {
+      run_id: 'run-1', agent_id: 'someone-else', identity_file: path.join(identityDir, 'teammate.json'),
+    } })
+    if (!wrong.isError || !/do not join again/.test(wrong.content?.[0]?.text ?? '')) {
+      throw new Error('coord_resume accepted a credential saved for a different participant')
+    }
+    const resumed = await restartedClient.callTool({ name: 'coord_resume', arguments: {
+      run_id: 'run-1', agent_id: 'external-claude', identity_file: path.join(identityDir, 'teammate.json'),
+    } })
+    if (resumed.isError) throw new Error(`coord_resume could not rebind from the saved credential: ${resumed.content?.[0]?.text}`)
+    const resumeRequest = seen.findLast((entry) => entry.body?.action === 'resume')?.body
+    if (resumeRequest?.agentId !== 'external-claude' || resumeRequest?.token !== 'token-claude') {
+      throw new Error('coord_resume did not present the saved credential')
+    }
+    if (JSON.stringify(resumed).includes('token-claude')) throw new Error('coord_resume put the capability token in the tool result')
+    const after = await restartedClient.callTool({ name: 'coord_status', arguments: {} })
+    if (after.isError) throw new Error('The bridge was still unbound after coord_resume')
+  } finally {
+    await restartedClient.close().catch(() => {})
   }
 
   const legacyTransport = new StdioClientTransport({

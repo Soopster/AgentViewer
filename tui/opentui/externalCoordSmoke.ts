@@ -1319,7 +1319,7 @@ await coordination.sendExternalProtocolMessage(deliveryLead.participant, {
 await new Promise((resolve) => setTimeout(resolve, 6_000))
 sessionRuntime.clearRunningSession('live-session')
 assert.equal(steeredMessages.length, 1)
-assert.match(steeredMessages[0]!, /^\[team message [^ ]+ from Delivery lead\] priority changed while you were working$/)
+assert.match(steeredMessages[0]!, /^\[team message [^ ]+ from Delivery lead kind=request priority=normal\] priority changed while you were working$/)
 const deliveredDb = new Database(deliveryDbPath)
 const deliveredRow = deliveredDb.prepare(`
   SELECT delivered_at FROM protocol_messages

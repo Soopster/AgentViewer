@@ -10,6 +10,7 @@ import {
   buildTranscriptTaskContext,
   ensureTuiMermaidRenderer,
   formatTranscriptCard,
+  formatTranscriptCards,
   reformatTranscriptCardDensity,
   textNeedsTuiMermaid,
   type TuiTranscriptCard,
@@ -51,6 +52,7 @@ type FormatRequest = {
   threadedDeleteCount?: number
   threadedPatch?: ThreadedMessage[]
   previousFormatToken?: number
+  threadedBaseVariant?: string
   density: TuiDensity
   showToolCalls: boolean
 }
@@ -126,6 +128,7 @@ type WorkerResponse =
       externalWriter?: boolean
     }
   | { id: number; ok: true; transcriptCards: TuiTranscriptCard[]; formatToken: number }
+  | { id: number; ok: true; densityCards: (TuiTranscriptCard | { sharedCardIndex: number; lines: TuiTranscriptCard['lines']; compactSummary: string })[]; formatToken: number; baseFormatToken: number }
   | {
       id: number
       ok: true
@@ -163,6 +166,7 @@ const threadingCacheByKey = new Map<string, IncrementalThreadingCache>()
 // counts in WorkerResponse. These hold references into threadingCacheByKey /
 // cardCacheByKey content, so the marginal memory is three array spines.
 type LastSentDetail = {
+  requestId: number
   raw: SessionMessage[]
   threaded: ThreadedMessage[]
   cards: TuiTranscriptCard[]
@@ -205,6 +209,7 @@ type LastFormatted = {
 const lastFormattedByKey = new Map<string, LastFormatted>()
 
 function touchLastFormatted(key: string, value: LastFormatted): void {
+  if ((lastFormattedByKey.get(key)?.formatToken ?? -1) > value.formatToken) return
   if (lastFormattedByKey.has(key)) lastFormattedByKey.delete(key)
   lastFormattedByKey.set(key, value)
   while (lastFormattedByKey.size > THREADING_CACHE_LIMIT * 4) {
@@ -429,6 +434,16 @@ function pruneCardCacheRange(sessionCacheKey: string, messages: ThreadedMessage[
   for (const message of messages) perSession.delete(threadedMessageFingerprint(message))
 }
 
+// Density conversion shares all fields except the collapsed preview. Require
+// reference/value equality for every remaining field before sending only that
+// preview; TaskList/context and duration changes naturally fail this check.
+function densityCardDelivery(card: TuiTranscriptCard, previous: TuiTranscriptCard | undefined, index: number): TuiTranscriptCard | { sharedCardIndex: number; lines: TuiTranscriptCard['lines']; compactSummary: string } {
+  if (!previous || card.expandedLines !== previous.expandedLines) return card
+  const keys = Object.keys(card) as (keyof TuiTranscriptCard)[]
+  if (keys.length !== Object.keys(previous).length || keys.some((key) => key !== 'lines' && key !== 'compactSummary' && card[key] !== previous[key])) return card
+  return { sharedCardIndex: index, lines: card.lines, compactSummary: card.compactSummary }
+}
+
 self.onmessage = async (event) => {
   const data = event.data
   reportWorkerHeap('threading')
@@ -469,27 +484,37 @@ self.onmessage = async (event) => {
       const cardsVariant = `${data.density}|${data.showToolCalls ? 1 : 0}`
       const formatKey = `${sessionCacheKey}|${cardsVariant}`
       const prev = lastFormattedByKey.get(formatKey)
+      const inputBaseline = data.threadedBaseVariant
+        ? lastFormattedByKey.get(`${sessionCacheKey}|${data.threadedBaseVariant}`)
+        : prev
       const canApplyPatch = Boolean(
-        prev
-        && data.previousFormatToken === prev.formatToken
+        inputBaseline
+        && data.previousFormatToken === inputBaseline.formatToken
         && Number.isInteger(data.threadedPrefix)
         && Number.isInteger(data.threadedDeleteCount)
         && (data.threadedPrefix ?? -1) >= 0
         && (data.threadedDeleteCount ?? -1) >= 0
-        && (data.threadedPrefix ?? 0) + (data.threadedDeleteCount ?? 0) <= prev.threaded.length
+        && (data.threadedPrefix ?? 0) + (data.threadedDeleteCount ?? 0) <= inputBaseline.threaded.length
         && Array.isArray(data.threadedPatch),
       )
-      const threaded = canApplyPatch && prev
-        ? prev.threaded.slice(0, data.threadedPrefix).concat(
+      const unchangedInput = canApplyPatch && data.threadedDeleteCount === 0 && data.threadedPatch?.length === 0
+      const threaded = canApplyPatch && inputBaseline
+        ? unchangedInput ? inputBaseline.threaded : inputBaseline.threaded.slice(0, data.threadedPrefix).concat(
             data.threadedPatch ?? [],
-            prev.threaded.slice((data.threadedPrefix ?? 0) + (data.threadedDeleteCount ?? 0)),
+            inputBaseline.threaded.slice((data.threadedPrefix ?? 0) + (data.threadedDeleteCount ?? 0)),
           )
         : data.threaded
       if (!threaded) throw new Error('threading worker format delta baseline unavailable')
 
       const patch = canApplyPatch && prev ? data.threadedPatch ?? [] : null
+      const sameVariantPatch = canApplyPatch && inputBaseline === prev
+      if (sameVariantPatch && prev && unchangedInput) {
+        touchLastFormatted(formatKey, { ...prev, formatToken: data.id })
+        self.postMessage({ id: data.id, ok: true, cardsPatch: [], cardsPrefix: prev.cards.length, cardsDeleteCount: 0, formatToken: data.id, baseFormatToken: prev.formatToken })
+        return
+      }
       const patchHasTaskList = patch?.some(hasTaskListBlock) ?? false
-      if (canApplyPatch && prev && patch && data.showToolCalls && !prev.hasTaskList && !patchHasTaskList) {
+      if (sameVariantPatch && prev && patch && data.showToolCalls && !prev.hasTaskList && !patchHasTaskList) {
         const threadedPrefix = data.threadedPrefix ?? 0
         const threadedDeleteCount = data.threadedDeleteCount ?? 0
         const nextRange = changedTurnRange(threaded, threadedPrefix, patch.length, threadedDeleteCount > 0)
@@ -545,7 +570,7 @@ self.onmessage = async (event) => {
         formatToken: data.id,
         hasTaskList: threaded.some(hasTaskListBlock),
       })
-      if (canApplyPatch && prev) {
+      if (sameVariantPatch && prev) {
         const cardsPrefix = sharedIdentityPrefix(transcriptCards, prev.cards)
         const cardsSuffix = sharedIdentitySuffix(transcriptCards, prev.cards, cardsPrefix)
         self.postMessage({
@@ -559,12 +584,25 @@ self.onmessage = async (event) => {
         })
         return
       }
+      if (canApplyPatch && inputBaseline && data.threadedBaseVariant) {
+        self.postMessage({ id: data.id, ok: true, densityCards: transcriptCards.map((card, index) => densityCardDelivery(card, inputBaseline.cards[index], index)), formatToken: data.id, baseFormatToken: inputBaseline.formatToken })
+        return
+      }
       self.postMessage({ id: data.id, ok: true, transcriptCards, formatToken: data.id })
       return
     }
     const { info, rawMessages, externalWriter } = await readTuiSessionDetailSource(data.session)
-    const { threaded: threadedMessages, messages: alignedMessages } = threadMessages(data.session, rawMessages)
     const sessionCacheKey = cacheKey(data.session)
+    if ((lastSentByKey.get(sessionCacheKey)?.requestId ?? -1) > data.id) {
+      // A slow source read still answers its caller, but cannot replace the
+      // newer threading/card baselines (including an unchanged newer read).
+      const threadedMessages = buildThreadedMessages(rawMessages)
+      await ensureMermaidForTranscript(threadedMessages)
+      const transcriptCards = formatTranscriptCards(data.showToolCalls ? threadedMessages : stripToolCallBlocks(threadedMessages), data.density)
+      self.postMessage({ id: data.id, ok: true, info, rawMessages, threadedMessages, transcriptCards, deliveryToken: data.id, rawPrefix: 0, threadedPrefix: 0, cardsPrefix: 0, externalWriter })
+      return
+    }
+    const { threaded: threadedMessages, messages: alignedMessages } = threadMessages(data.session, rawMessages)
     const cardsVariant = `${data.density}|${data.showToolCalls ? 1 : 0}`
     const prev = lastSentByKey.get(sessionCacheKey)
 
@@ -580,6 +618,7 @@ self.onmessage = async (event) => {
       && alignedMessages === prev.raw
       && threadedMessages === prev.threaded
     ) {
+      if (prev.requestId <= data.id) lastSentByKey.set(sessionCacheKey, { ...prev, requestId: data.id })
       self.postMessage({
         id: data.id,
         ok: true,
@@ -614,13 +653,16 @@ self.onmessage = async (event) => {
       && cardsPrefix === transcriptCards.length,
     )
     const deliveryToken = canReusePreviousDelivery && prev ? prev.deliveryToken : data.id
-    lastSentByKey.set(sessionCacheKey, {
-      raw: alignedMessages,
-      threaded: threadedMessages,
-      cards: transcriptCards,
-      cardsVariant,
-      deliveryToken,
-    })
+    if ((lastSentByKey.get(sessionCacheKey)?.requestId ?? -1) <= data.id) {
+      lastSentByKey.set(sessionCacheKey, {
+        requestId: data.id,
+        raw: alignedMessages,
+        threaded: threadedMessages,
+        cards: transcriptCards,
+        cardsVariant,
+        deliveryToken,
+      })
+    }
     if (canReusePreviousDelivery) {
       self.postMessage({ id: data.id, ok: true, info, unchanged: true, deliveryToken, externalWriter })
       return

@@ -1369,6 +1369,16 @@ contract's field specs carry no per-argument text across its five converters. Th
 an MCP resource under a pinned 1,700-word budget; depth goes in `references/`, where
 `protocol-and-hosts.md` maps each rejection message to its fix — keep that table in step with the
 `throw new Error` strings in `lib/agentCoordination.ts`.
+**A tool result is read by a model, so its size is a correctness property.** `coord_status`
+kept 100 findings in view with their full detail, and a finding carries up to 32,000 characters —
+30 of them made every status call 970KB. Event detail is now an excerpt in status (600) and wait
+(2,000), `coord_query_context` returns the best match whole and the rest within a budget, and an
+in-app `coord_wait` drops the board the stdio bridge already dropped. The full text stays reachable
+through a specific query; `coordStatusBoundSmoke.ts` pins both halves (two mutations verified).
+`coord_resume` takes run and agent ids and reads the saved credential itself: a restarted CLI was
+otherwise asked for a token it is told never to read, and a failed resume used to clear a binding
+that was working.
+
 **The skill is in this repository's checkout and nobody else's.** Preambles named
 `<cwd>/.agents/skills/coordinate-agents/SKILL.md` "if it exists" and forbade looking elsewhere, so
 in any other project a coordinated agent ran on the preamble alone. `bin/agent-viewer.mjs` exports

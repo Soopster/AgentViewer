@@ -21,12 +21,16 @@ import { join } from 'node:path'
 import { RGBA, SyntaxStyle, type TextareaRenderable } from '@opentui/core'
 import { testRender } from '@opentui/react/test-utils'
 import { DARK_THEME } from '../theme'
+import { detectTuiCodeFiletypeFromPath } from '../codeFiletypes'
 import { formatTuiFrameBudgetMs, TUI_FRAME_BUDGET_MS, TUI_TARGET_FPS } from './performanceBudget'
 import { EditorPopover, type EditorKeyEvent } from './EditorPopover'
 
 const SIZES = (process.env.EDITOR_TYPING_SIZES ?? '200,2000,6000')
   .split(',').map((value) => Number.parseInt(value.trim(), 10)).filter((value) => value > 0)
 const KEYSTROKES = Number.parseInt(process.env.EDITOR_TYPING_KEYSTROKES ?? '', 10) || 40
+const POSITIONS = (process.env.EDITOR_TYPING_POSITIONS ?? 'end,middle').split(',')
+  .filter((position): position is 'end' | 'middle' => position === 'end' || position === 'middle')
+const percentile = (values: number[], fraction: number) => [...values].sort((a, b) => a - b)[Math.max(0, Math.ceil(values.length * fraction) - 1)] ?? 0
 
 // A minified bundle: few lines, each enormous. Everything that scans "the
 // current line" — occurrence matching, bracket matching, indent detection —
@@ -68,6 +72,7 @@ async function settle(setup: Awaited<ReturnType<typeof testRender>>, durationMs:
 }
 
 async function runSize(lines: number): Promise<void> {
+  const position = process.env.EDITOR_TYPING_POSITION ?? 'end'
   const workspace = await mkdtemp(join(tmpdir(), 'agent-viewer-editor-typing-perf-'))
   // No language server: this measures the editor's own per-keystroke cost, and
   // a real tsserver's latency would swamp it.
@@ -78,18 +83,23 @@ async function runSize(lines: number): Promise<void> {
   // of the editor's per-keystroke work.
   const sourcePath = join(workspace, `main.${process.env.EDITOR_TYPING_EXT ?? 'ts'}`)
   const longLines = process.env.EDITOR_TYPING_LONG_LINES === '1'
-  await writeFile(sourcePath, longLines ? sourceOfLongLines(lines) : sourceOfLines(lines), 'utf8')
+  const source = longLines ? sourceOfLongLines(lines) : sourceOfLines(lines)
+  const expectsHighlight = Boolean(detectTuiCodeFiletypeFromPath(sourcePath))
+    && !source.split('\n').some((line) => line.length > 10_000)
+  await writeFile(sourcePath, source, 'utf8')
   const syntaxStyle = SyntaxStyle.fromStyles({
     keyword: { fg: RGBA.fromHex(DARK_THEME.violet), bold: true },
     string: { fg: RGBA.fromHex(DARK_THEME.green) },
     default: { fg: RGBA.fromHex(DARK_THEME.text) },
   })
   const frames = { commits: 0, over: 0, worst: 0 }
+  const renderDurations: number[] = []
   let recording = false
   const onRender: ProfilerOnRenderCallback = (_id, _phase, actualDuration, _base, _start, commitTime) => {
     if (!recording) return
     const durationMs = actualDuration + Math.max(0, performance.now() - commitTime)
     frames.commits += 1
+    renderDurations.push(actualDuration)
     frames.worst = Math.max(frames.worst, durationMs)
     if (durationMs > TUI_FRAME_BUDGET_MS) frames.over += 1
   }
@@ -119,7 +129,8 @@ async function runSize(lines: number): Promise<void> {
     while (performance.now() < openDeadline) {
       await settle(setup, 24)
       const mounted = setup.renderer.root.findDescendantById('project-editor-textarea') as TextareaRenderable | null
-      if (mounted && mounted.plainText.length > 0 && mounted.getLineHighlights(0).length > 0) {
+      if (mounted && mounted.plainText.length > 0
+        && (!expectsHighlight || mounted.getLineHighlights(0).length > 0)) {
         openMs = performance.now() - openStartedAt
         break
       }
@@ -130,13 +141,16 @@ async function runSize(lines: number): Promise<void> {
     if (editor.plainText.split('\n').length < lines) {
       throw new Error(`Editor loaded ${editor.plainText.split('\n').length} lines, expected ${lines}`)
     }
-    void longLines
-    // Type in the middle of the file, where a real edit happens, not at a
-    // boundary the highlighter might treat cheaply.
-    act(() => { editor.gotoBufferEnd() })
+    act(() => {
+      if (position === 'middle') editor.setCursor(Math.floor(lines / 2), 2)
+      else editor.gotoBufferEnd()
+    })
     await settle(setup, 250)
 
     const keystrokes: number[] = []
+    const handlers: number[] = []
+    const mockInputs: number[] = []
+    const flushes: number[] = []
     // The debounced highlight work runs imperatively on timers and in the
     // tree-sitter worker thread, so a React Profiler cannot see it. Process
     // CPU does: it covers the parse, the highlight application, and the
@@ -151,11 +165,17 @@ async function runSize(lines: number): Promise<void> {
         // only lets the textarea see it if the popover did not consume it.
         // Driving `mockInput` alone skips that handler, and with it the
         // auto-pair and bracket-alignment checks that run on every character.
+        const handlerStart = performance.now()
         const consumed = process.env.EDITOR_TYPING_RAW_INPUT === '1'
           ? false
           : handleKey?.({ name: 'x', ctrl: false, shift: false, sequence: 'x' }) ?? false
+        handlers.push(performance.now() - handlerStart)
+        const inputStart = performance.now()
         if (!consumed) await setup.mockInput.typeText('x')
+        mockInputs.push(performance.now() - inputStart)
+        const flushStart = performance.now()
         await setup.flush()
+        flushes.push(performance.now() - flushStart)
       })
       keystrokes.push(performance.now() - startedAt)
       // Key-repeat cadence: fast enough that debounced work overlaps typing,
@@ -185,8 +205,12 @@ async function runSize(lines: number): Promise<void> {
     const p50 = sorted[Math.ceil(sorted.length * 0.5) - 1]!
     const p95 = sorted[Math.ceil(sorted.length * 0.95) - 1]!
     console.log(JSON.stringify({
-      lines, commits: frames.commits, over: frames.over, worst: frames.worst,
+      lines, position, commits: frames.commits, over: frames.over, worst: frames.worst,
       keyP50: p50, keyP95: p95, settleMs, cpuMsPerKey, openMs,
+      handlerP50: percentile(handlers, .5), handlerP95: percentile(handlers, .95),
+      mockInputP50: percentile(mockInputs, .5), mockInputP95: percentile(mockInputs, .95),
+      flushP50: percentile(flushes, .5), flushP95: percentile(flushes, .95),
+      renderP50: percentile(renderDurations, .5), renderP95: percentile(renderDurations, .95),
     }))
   } finally {
     act(() => setup.renderer.destroy())
@@ -206,10 +230,10 @@ if (childSize > 0) {
 console.log('Editor typing latency by file size')
 console.log(`  target ${TUI_TARGET_FPS}fps (${formatTuiFrameBudgetMs()}ms frame budget), ${KEYSTROKES} keystrokes per size`)
 console.log(`  ${'lines'.padStart(6)} ${'commits'.padStart(8)} ${`over-${formatTuiFrameBudgetMs()}ms`.padStart(12)} ${'worst'.padStart(9)} ${'key p50'.padStart(9)} ${'key p95'.padStart(9)} ${'settle'.padStart(9)} ${'cpu/key'.padStart(9)} ${'open'.padStart(9)}`)
-const rows: Array<{ lines: number; keyP50: number; cpuMsPerKey: number }> = []
-for (const lines of SIZES) {
+const rows: Array<{ position: string; lines: number; keyP50: number; cpuMsPerKey: number }> = []
+for (const position of POSITIONS) for (const lines of SIZES) {
   const child = spawnSync('bun', ['run', fileURLToPath(import.meta.url)], {
-    env: { ...process.env, EDITOR_TYPING_ONE_SIZE: String(lines) },
+    env: { ...process.env, EDITOR_TYPING_ONE_SIZE: String(lines), EDITOR_TYPING_POSITION: position },
     encoding: 'utf8',
     maxBuffer: 32 * 1024 * 1024,
   })
@@ -219,16 +243,17 @@ for (const lines of SIZES) {
     console.error((child.stderr ?? '').split('\n').slice(-20).join('\n'))
     throw new Error(`Typing benchmark for ${lines} lines produced no result: ${line}`)
   }
-  rows.push({ lines, keyP50: parsed.keyP50!, cpuMsPerKey: parsed.cpuMsPerKey! })
+  rows.push({ position, lines, keyP50: parsed.keyP50!, cpuMsPerKey: parsed.cpuMsPerKey! })
   console.log(
-    `  ${String(lines).padStart(6)} ${String(parsed.commits).padStart(8)} ${String(parsed.over).padStart(12)}`
+    `  ${position.padEnd(6)} ${String(lines).padStart(6)} ${String(parsed.commits).padStart(8)} ${String(parsed.over).padStart(12)}`
     + ` ${(parsed.worst!.toFixed(1) + 'ms').padStart(9)} ${(parsed.keyP50!.toFixed(1) + 'ms').padStart(9)}`
     + ` ${(parsed.keyP95!.toFixed(1) + 'ms').padStart(9)} ${(parsed.settleMs!.toFixed(0) + 'ms').padStart(9)}`
     + ` ${(parsed.cpuMsPerKey!.toFixed(1) + 'ms').padStart(9)}`
     + ` ${(parsed.openMs! < 0 ? 'never' : parsed.openMs!.toFixed(0) + 'ms').padStart(9)}`,
   )
+  console.log(`    handler p50/p95=${parsed.handlerP50!.toFixed(3)}/${parsed.handlerP95!.toFixed(3)}ms; mockInput=${parsed.mockInputP50!.toFixed(3)}/${parsed.mockInputP95!.toFixed(3)}ms; flush=${parsed.flushP50!.toFixed(3)}/${parsed.flushP95!.toFixed(3)}ms; React actual=${parsed.renderP50!.toFixed(3)}/${parsed.renderP95!.toFixed(3)}ms`)
 }
-const smallest = rows[0]
+const smallest = rows.find((row) => row.position === rows.at(-1)?.position)
 const largest = rows.at(-1)
 if (smallest && largest && largest !== smallest) {
   console.log(

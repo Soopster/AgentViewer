@@ -8768,7 +8768,7 @@ export default function OpenTuiApp() {
   useEffect(() => {
     setTranscriptDiffDraft(null)
     setHoveredTranscriptDiffAnchor(null)
-    setTranscriptDiffSelectionAnchorByCardKey({})
+    setTranscriptDiffSelectionAnchorByCardKey((current) => Object.keys(current).length === 0 ? current : {})
   }, [selectedSessionIdentity])
   // Reflect the active session in the terminal tab/window title so users with
   // several terminals can tell them apart, with a ● prefix while its turn runs.
@@ -16409,7 +16409,7 @@ export default function OpenTuiApp() {
 
   // Clear stale live todos on session switch
   useEffect(() => {
-    setComposerLiveTodos([])
+    setComposerLiveTodos((current) => current.length === 0 ? current : [])
   }, [selectedSessionIdentity])
 
   // Drafts follow the effective send target, not merely the primary reader.

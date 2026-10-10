@@ -74,30 +74,32 @@ export function editorSyntaxForPath(path: string): LanguageSyntax {
   return (extension ? SYNTAX_BY_EXTENSION[extension] : undefined) ?? PLAIN_TEXT
 }
 
-// Nearly every character in a source file can begin neither a comment nor a
-// string, and the scan below used to prove that the expensive way: three
-// `Array.prototype.find` calls — each allocating a closure — plus a
-// `content[index]` single-character string, for every character of the prefix.
-// A code unit that starts no delimiter in this language cannot enter any
-// branch, so one table lookup retires it and the `startsWith` work runs only
-// where a delimiter could actually begin. Every delimiter here is ASCII, so a
-// 128-entry table covers them and anything above it is a plain character.
-const DELIMITER_STARTS = new WeakMap<LanguageSyntax, Uint8Array>()
+// Let the engine skip ordinary code in one search rather than checking every
+// UTF-16 code unit in JavaScript. Only the finite language configurations are
+// cached: this never retains document text or query results.
+type DelimiterSearch = { table: Uint8Array; expression: RegExp }
+const DELIMITER_STARTS = new WeakMap<LanguageSyntax, DelimiterSearch>()
 
-function delimiterStarts(syntax: LanguageSyntax): Uint8Array {
+function delimiterStarts(syntax: LanguageSyntax): DelimiterSearch {
   const cached = DELIMITER_STARTS.get(syntax)
   if (cached) return cached
+  const codes = new Set<number>()
   const table = new Uint8Array(128)
   const mark = (token: string) => {
     const code = token.charCodeAt(0)
+    codes.add(code)
     if (code < 128) table[code] = 1
   }
   for (const token of syntax.lineComments) mark(token)
   for (const [open] of syntax.blockComments) mark(open)
   for (const token of syntax.tripleQuotes) mark(token)
   for (const token of syntax.quotes) mark(token)
-  DELIMITER_STARTS.set(syntax, table)
-  return table
+  // Hex escapes preserve literal delimiters (including '-' and brackets).
+  // Plain text has no candidates and is handled before this helper is called.
+  const expression = new RegExp(`[${[...codes].map((code) => `\\u${code.toString(16).padStart(4, '0')}`).join('')}]`, 'g')
+  const search = { table, expression }
+  DELIMITER_STARTS.set(syntax, search)
+  return search
 }
 
 const NEWLINE = 10
@@ -110,14 +112,35 @@ const BACKSLASH = 92
  */
 export function classifyEditorOffset(content: string, offset: number, path: string): EditorOffsetKind {
   const syntax = editorSyntaxForPath(path)
+  if (!syntax.lineComments.length && !syntax.blockComments.length
+    && !syntax.tripleQuotes.length && !syntax.quotes.length) return 'code'
   const starts = delimiterStarts(syntax)
+  starts.expression.lastIndex = 0
   const target = Math.max(0, Math.min(content.length, offset))
+  // Candidate search is bounded by the requested prefix; delimiter/quote
+  // lookahead below still reads the full document, preserving its semantics.
+  const prefix = content.slice(0, Math.ceil(target))
   let index = 0
   while (index < target) {
-    const code = content.charCodeAt(index)
-    if (code >= 128 || starts[code] === 0) {
-      index += 1
-      continue
+    let code = content.charCodeAt(index)
+    if (code >= 128 || starts.table[code] === 0) {
+      // Dense/minified input usually has a delimiter within a few characters.
+      // Avoid allocating an exec result for those tiny gaps; sparse code gets
+      // the engine search after a bounded probe.
+      let probe = 0
+      do {
+        index += 1
+        probe += 1
+        code = content.charCodeAt(index)
+      } while (index < target && probe < 16 && (code >= 128 || starts.table[code] === 0))
+      if (index >= target) break
+      if (code >= 128 || starts.table[code] === 0) {
+        starts.expression.lastIndex = index
+        const candidate = starts.expression.exec(prefix)
+        if (!candidate || candidate.index >= target) break
+        index = candidate.index
+        code = content.charCodeAt(index)
+      }
     }
     const character = content[index]!
     const lineComment = syntax.lineComments.find((token) => content.startsWith(token, index))

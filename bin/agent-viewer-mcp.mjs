@@ -580,6 +580,7 @@ async function bindCoordinatorParticipant(result) {
       participant: { ...participant, token: undefined },
       identityFile: coordinatorIdentityFile,
       pushResource: coordinatorTransport() === 'ahp' ? COORDINATOR_CURRENT_RUN_URI : undefined,
+      resume: `If this CLI restarts and reports it is unbound, call coord_resume with run_id ${JSON.stringify(participant.runId)} and agent_id ${JSON.stringify(participant.agentId)}; no token is needed.`,
       autonomy: `Run agent-viewer coord worker --identity ${JSON.stringify(coordinatorIdentityFile)} --attach ${JSON.stringify(baseUrl)} for unattended operation.`,
     }
   }
@@ -1118,19 +1119,41 @@ server.registerTool('coord_join_run', {
 })
 
 server.registerTool('coord_resume', {
-  description: 'Restore this MCP bridge participant identity after reconnecting or restarting a CLI.',
+  description: 'Rebind this CLI to the participant it already is, after a restart or reconnect lost the binding. Pass the run_id and agent_id from your earlier join/create result; the bridge reads the saved credential itself, so you never need to open the identity file or handle the token. Pass token only when your host handed you one. This does not create a participant: use it instead of joining again, which would leave a duplicate.',
   inputSchema: {
     run_id: z.string().min(1),
     agent_id: z.string().min(1),
-    token: z.string().min(1),
+    token: z.string().min(1).optional().describe('Only when the host supplied it; omit to use the credential this machine saved at join'),
+    identity_file: z.string().min(1).optional().describe('The identityFile path from the join/create result, when it is not the default location'),
   },
-}, async ({ run_id, agent_id, token }) => {
-  coordinatorIdentity = { runId: run_id, agentId: agent_id, token }
+}, async ({ run_id, agent_id, token, identity_file }) => {
+  let credential = token
+  let resumedFile = null
+  if (!credential) {
+    const file = identity_file
+      ? path.resolve(identity_file)
+      : path.join(os.homedir(), '.agent-viewer', 'coordinator', run_id, `${agent_id}.json`)
+    let saved = null
+    try { saved = JSON.parse(await readFile(file, 'utf8')) } catch { /* reported below */ }
+    if (saved?.runId !== run_id || saved?.agentId !== agent_id || !saved?.token) {
+      throw new Error(`No saved credential for ${agent_id} in run ${run_id} at ${file}. Check the ids against your join result, pass its identityFile as identity_file, or ask the host/operator for the binding; do not join again as a new participant.`)
+    }
+    credential = saved.token
+    resumedFile = file
+  }
+  // A failed resume must not cost a binding that was working.
+  const previous = coordinatorIdentity
+  const previousFile = coordinatorIdentityFile
+  // Rebinding writes the identity back; it must land in its own file, not the
+  // file of whatever this bridge was bound to before.
+  if (resumedFile && !process.env.AGENT_VIEWER_COORD_IDENTITY_FILE?.trim()) coordinatorIdentityFile = resumedFile
+  coordinatorIdentity = { runId: run_id, agentId: agent_id, token: credential }
   try {
     const result = await bindCoordinatorParticipant(await coordinatorRequest('resume', coordinatorNegotiation()))
     return textResult(result)
   } catch (error) {
-    coordinatorIdentity = null
+    coordinatorIdentity = previous
+    coordinatorIdentityFile = previousFile
     throw error
   }
 })

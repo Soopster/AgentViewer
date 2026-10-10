@@ -21,7 +21,7 @@ Two facts decide most of what follows.
 
 ## Enter the run
 
-- **Already bound:** call `coord_status`, then `coord_read_inbox`. Keep the identity; do not create or join again. Use `coord_resume` only with credentials the host supplied.
+- **Already bound:** call `coord_status`, then `coord_read_inbox`. Keep the identity; do not create or join again. If a restart left you unbound, `coord_resume` with your run and agent IDs; no token needed.
 - **Tools exposed but unbound:** if the host supplied a session-bound client command, use that exact command for `coord_status` and keyed `coord_read_inbox`; see the host reference. Do not join a replacement run or inspect credential files.
 - **Asked to join:** `coord_join_run` with a unique name, your actual `provider` (it defaults to codex when omitted), and the checkout. Pass the requested run ID, or omit it to take the newest joinable run for that checkout.
 - **Asked to lead/start:** `coord_create_run` with the full objective, checkout, actual provider, and a realistic participant limit. Seed tasks before launching teammates.
@@ -44,10 +44,10 @@ Before finalization, verify the requested participation through completed tasks,
 
 While the run is nonterminal:
 
-1. Read inbox and status on entry, then let the `actionable` digest choose the next step: `replyRequiredCount` (answer first), `myTask` (continue it), `claimableTasks`, `plansAwaitingReview`, `allTasksTerminal`. A push or wait response already carries state; skip the extra status call. Use `coord_query_context` for one prior decision instead of reloading the board.
-2. Answer `replyRequired` mail with `coord_send_message(kind="response", in_reply_to=<message-id>)`. Reading acknowledges delivery; it does not answer. `coord_read_inbox(unresolved=true)` lists what you still owe, with original ids, without acknowledging anything. Check mail during multi-step work so changed instructions arrive before more edits.
+1. Read inbox and status on entry, then let the `actionable` digest choose the next step: `replyRequiredCount` (answer first), `myTask` (continue it), `claimableTasks`, `plansAwaitingReview`, `allTasksTerminal`. A push or wait response already carries state; skip the extra status call. Use `coord_query_context` for one prior decision, or a finding's full text, instead of reloading the board.
+2. Answer `replyRequired` mail with `coord_send_message(kind="response", in_reply_to=<message-id>)`. Reading acknowledges delivery; it does not answer. `coord_read_inbox(unresolved=true)` lists what you still owe, with original ids, without acknowledging anything. Check mail during long work so changed instructions arrive before more edits.
 3. Do role-appropriate work. Report new evidence, a blocker, or a changed next action once — through progress, a finding, or mail to those affected — not in every channel, and never mail just to check liveness.
-4. Interactive participants heartbeat about every two minutes of long work. Managed supervisors heartbeat for you; still report meaningful progress. Treat `replyGuardReminder` as a prompt to report real progress or an obstacle, never to invent activity.
+4. Interactive participants heartbeat about every two minutes of long work. Managed supervisors heartbeat for you; still report meaningful progress. On `replyGuardReminder`, report real progress or an obstacle; never invent activity.
 5. When nothing is actionable, wait the way your host waits:
 
 **Managed turn:** return control immediately, including while blocked or awaiting approval. Never call `coord_wait`, shell-sleep, poll, or pass `wait_ms`. The supervisor waits and redispatches.

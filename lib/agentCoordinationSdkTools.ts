@@ -48,6 +48,16 @@ function errorResult(error: unknown) {
   }
 }
 
+// A wait already answers with the events since the cursor and the actionable
+// digest; the whole board rides along for the supervisor that schedules on it.
+// The stdio bridge drops it before a model sees it, and so must this path —
+// it was about half of a 90KB result.
+function forModel(action: string, result: unknown): unknown {
+  if (action !== 'wait' || !result || typeof result !== 'object') return result
+  const { snapshot: _snapshot, ...compact } = result as Record<string, unknown>
+  return compact
+}
+
 // Deferred: agentCoordinationExternal.ts pulls in agentCoordination.ts, which
 // pulls in sessionBackend.ts/claudePool.ts/piClient.ts/copilotClient.ts/codexClient.ts,
 // which import this module at their top level to look up registered tools —
@@ -66,7 +76,7 @@ async function call(identity: ExternalProtocolIdentity, action: string, args: Re
       requestId: randomUUID(),
       ...args,
     })
-    return textResult(result)
+    return textResult(forModel(action, result))
   } catch (error) {
     return errorResult(error)
   }
@@ -83,7 +93,7 @@ async function callJson(identity: ExternalProtocolIdentity, action: string, args
       requestId: randomUUID(),
       ...args,
     })
-    return { text: JSON.stringify(result), isError: false }
+    return { text: JSON.stringify(forModel(action, result)), isError: false }
   } catch (error) {
     return { text: error instanceof Error ? error.message : String(error), isError: true }
   }

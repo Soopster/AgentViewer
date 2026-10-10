@@ -8,7 +8,8 @@ Every rejection is a specific message. Match it here before retrying; a retry wi
 
 | Message starts with | Meaning | Do this |
 |---|---|---|
-| `This CLI is not bound to a Coordinator run` | No identity on this connection | `coord_join_run` or `coord_create_run` once; with a host-supplied client command, use that instead |
+| `This CLI is not bound to a Coordinator run` | No identity on this connection | Were you in this run before a restart? `coord_resume` with your run and agent ids. Otherwise `coord_join_run` or `coord_create_run` once; with a host-supplied client command, use that instead |
+| `No saved credential for <agent> in run <run>` | `coord_resume` found no identity file for those ids | Check the ids against your join result, or pass its `identityFile` as `identity_file` |
 | `This bridge is already bound to run …` | You called create/join while bound | Continue with `coord_status`; never join a second time |
 | `Only the Coordinator lead can …` | Lead-only tool called by a teammate | Ask the lead by mail; do not retry |
 | `No claimable task: … already owns <task>` | One task at a time | Finish, release, or hand off the task you hold |
@@ -41,6 +42,17 @@ Every rejection is a specific message. Match it here before retrying; a retry wi
 | `accepted: false` (a result, not an error) | Completion gate refused | Fix the named cause; call again with the same `request_id` |
 
 A schema error from the MCP client itself (wrong type, value outside an enum, text over a length limit) never reached the Coordinator: correct the argument. An argument the tool does not declare is dropped silently, so check the tool's schema when a call behaves as if an option was not passed.
+
+## What a result contains, and what it leaves out
+
+Results are sized for a model's context, so some text is an excerpt by design:
+
+- `coord_status` lists recent events and up to 100 findings, each with at most 600 characters of `detail`. A cut entry ends with a note saying how much was left out.
+- `coord_wait` returns the events since your cursor with up to 2,000 characters of detail each, plus the `actionable` digest. It does not repeat the board.
+- `coord_query_context` returns the best match whole and further matches in full until about 40,000 characters are spent; later ones are cut to an excerpt. To read one entry completely, query for its distinctive words or pass `limit: 1`.
+- Old finished tasks appear as an id, title and one-line outcome; mail is read through `coord_read_inbox`, never repeated in status.
+
+Write findings accordingly: put the conclusion in `summary` and the first lines of `detail`, since that is what every other participant sees without asking.
 
 ## MCP discovery and host features
 

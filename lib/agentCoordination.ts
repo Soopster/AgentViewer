@@ -1438,6 +1438,22 @@ function requireExternalParticipantSync(db: SqliteDatabase, identity: ExternalPr
 // event window than the UI's keeps every mutation response affordable.
 const EXTERNAL_EVENT_WINDOW = 20
 const EXTERNAL_FINDING_WINDOW = 100
+// A finding may carry 32,000 characters of evidence and a hundred of them stay
+// in view, so a status call could put megabytes in front of a model that needs
+// to know only that the finding exists. The full text is one coord_query_context
+// away. A wait reports what just changed, which is worth reading at more length.
+const EXTERNAL_STATUS_EVENT_DETAIL_CHARS = 600
+const EXTERNAL_WAIT_EVENT_DETAIL_CHARS = 2_000
+const CONTEXT_QUERY_DETAIL_BUDGET_CHARS = 40_000
+
+function boundEventDetail(event: AgentProtocolEvent, limit: number): AgentProtocolEvent {
+  const detail = event.detail
+  if (typeof detail !== 'string' || detail.length <= limit) return event
+  return {
+    ...event,
+    detail: `${detail.slice(0, limit)}… [${detail.length - limit} more characters; coord_query_context returns the full text]`,
+  }
+}
 
 function statusMessageGroupKey(row: Row): string {
   return `${String(row.from_agent_id ?? '')}\0${String(row.correlation_id ?? '')}`
@@ -1518,7 +1534,8 @@ function externalSnapshotSync(db: SqliteDatabase, runId: string, agentId: string
     // Findings are durable audit evidence rather than live noise. Preserve a
     // larger bounded finding window alongside the normal recent-event window
     // so verification lanes can actually inspect every reported issue.
-    events: visibleEvents.filter((event) => retainedEvents.has(event)),
+    events: visibleEvents.filter((event) => retainedEvents.has(event))
+      .map((event) => boundEventDetail(event, EXTERNAL_STATUS_EVENT_DETAIL_CHARS)),
   }
 }
 
@@ -2483,7 +2500,8 @@ function eventsAfterCursorSync(
       `).all(runId) as Row[]).reverse()
   const last = rows.at(-1)?.cursor
   return {
-    events: rows.map(rowToEvent).filter((event) => event.type !== 'message' || event.agentId === agentId),
+    events: rows.map(rowToEvent).filter((event) => event.type !== 'message' || event.agentId === agentId)
+      .map((event) => boundEventDetail(event, EXTERNAL_WAIT_EVENT_DETAIL_CHARS)),
     cursor: typeof last === 'number' || typeof last === 'bigint' ? String(last) : cursor,
   }
 }
@@ -3841,7 +3859,23 @@ export async function queryExternalProtocolContext(
   }
 
   matches.sort((a, b) => b.score - a.score)
-  return { results: matches.slice(0, limit) }
+  // The best match is returned whole — this is where an excerpt in a status
+  // sends its reader — and the rest in full while the budget lasts. Twenty
+  // findings of full evidence would otherwise be 640,000 characters.
+  let budget = CONTEXT_QUERY_DETAIL_BUDGET_CHARS
+  return {
+    results: matches.slice(0, limit).map((match, index) => {
+      const length = match.detail?.length ?? 0
+      if (index === 0 || length <= budget) {
+        budget -= length
+        return match
+      }
+      return {
+        ...match,
+        detail: `${match.detail!.slice(0, EXTERNAL_STATUS_EVENT_DETAIL_CHARS)}… [${length - EXTERNAL_STATUS_EVENT_DETAIL_CHARS} more characters; query for this entry specifically, or with limit 1, for the full text]`,
+      }
+    }),
+  }
 }
 
 /**

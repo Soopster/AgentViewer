@@ -17,6 +17,7 @@ export type SessionDetailPayload = {
 }
 
 type ThreadingClientCache = {
+  requestId: number
   threadedMessages: ThreadedMessage[]
   // LRU card cache keyed by `${density}|${showToolCalls ? 1 : 0}`. Kept tiny
   // because each entry can contain one formatted card per transcript message.
@@ -86,6 +87,7 @@ type WorkerResponse =
       externalWriter?: boolean
     }
   | { id: number; ok: true; transcriptCards: TuiTranscriptCard[]; formatToken: number }
+  | { id: number; ok: true; densityCards: (TuiTranscriptCard | { sharedCardIndex: number; lines: TuiTranscriptCard['lines']; compactSummary: string })[]; formatToken: number; baseFormatToken: number }
   | {
       id: number
       ok: true
@@ -120,6 +122,7 @@ const threadingCacheByKey = new Map<string, ThreadingClientCache>()
 // previously-delivered objects back in for that prefix so unchanged content
 // keeps its main-thread identity across polls.
 type LastDeliveredDetail = {
+  requestId: number
   raw: SessionMessage[]
   threaded: ThreadedMessage[]
   cards: TuiTranscriptCard[]
@@ -136,6 +139,7 @@ type LastFormattedDelivery = {
 const lastFormattedByKey = new Map<string, LastFormattedDelivery>()
 
 function touchLastFormatted(key: string, value: LastFormattedDelivery): void {
+  if ((lastFormattedByKey.get(key)?.formatToken ?? -1) > value.formatToken) return
   if (lastFormattedByKey.has(key)) lastFormattedByKey.delete(key)
   lastFormattedByKey.set(key, value)
   while (lastFormattedByKey.size > FORMAT_DELIVERY_CACHE_LIMIT) {
@@ -157,6 +161,7 @@ function dropLastFormattedForSession(sessionKey: string): void {
 }
 
 function touchLastDelivered(key: string, value: LastDeliveredDetail): void {
+  if ((lastDeliveredByKey.get(key)?.requestId ?? -1) > value.requestId) return
   if (lastDeliveredByKey.has(key)) lastDeliveredByKey.delete(key)
   lastDeliveredByKey.set(key, value)
   while (lastDeliveredByKey.size > THREADING_CACHE_LIMIT) {
@@ -218,6 +223,7 @@ function rememberCardsVariant(
 }
 
 function touchThreadingCache(key: string, cache: ThreadingClientCache): void {
+  if ((threadingCacheByKey.get(key)?.requestId ?? -1) > cache.requestId) return
   if (threadingCacheByKey.has(key)) threadingCacheByKey.delete(key)
   threadingCacheByKey.set(key, cache)
   while (threadingCacheByKey.size > THREADING_CACHE_LIMIT) {
@@ -247,7 +253,7 @@ function ensureWorker(): Worker {
         entry.reject(new Error('threading worker returned an unknown unchanged delivery'))
         return
       }
-      if (lastDeliveredByKey.get(entry.sessionKey) === prev) touchLastDelivered(entry.sessionKey, prev)
+      touchLastDelivered(entry.sessionKey, { ...prev, requestId: data.id })
       entry.resolve({
         info: data.info,
         rawMessages: prev.raw,
@@ -277,6 +283,7 @@ function ensureWorker(): Worker {
         data.suffixOnly,
       )
       touchLastDelivered(entry.sessionKey, {
+        requestId: data.id,
         raw: rawMessages,
         threaded: threadedMessages,
         cards: transcriptCards,
@@ -297,6 +304,17 @@ function ensureWorker(): Worker {
         formatToken: data.formatToken,
       })
       entry.resolve(data.transcriptCards)
+    } else if (entry.kind === 'format' && 'densityCards' in data) {
+      const prev = entry.previousDelivery
+      if (!prev || prev.formatToken !== data.baseFormatToken || data.densityCards.some((card) => 'sharedCardIndex' in card && (!Number.isInteger(card.sharedCardIndex) || card.sharedCardIndex < 0 || card.sharedCardIndex >= prev.cards.length))) {
+        entry.reject(new Error('threading worker returned an unknown density delta baseline'))
+        return
+      }
+      const transcriptCards = data.densityCards.map((card) => 'sharedCardIndex' in card
+        ? { ...prev.cards[card.sharedCardIndex], lines: card.lines, compactSummary: card.compactSummary }
+        : card)
+      touchLastFormatted(entry.formatKey, { threaded: entry.threaded, cards: transcriptCards, formatToken: data.formatToken })
+      entry.resolve(transcriptCards)
     } else if (entry.kind === 'format' && 'cardsPatch' in data) {
       const prev = entry.previousDelivery
       if (
@@ -309,7 +327,7 @@ function ensureWorker(): Worker {
         entry.reject(new Error('threading worker returned an unknown format delta baseline'))
         return
       }
-      const transcriptCards = prev.cards.slice(0, data.cardsPrefix).concat(
+      const transcriptCards = data.cardsDeleteCount === 0 && data.cardsPatch.length === 0 ? prev.cards : prev.cards.slice(0, data.cardsPrefix).concat(
         data.cardsPatch,
         prev.cards.slice(data.cardsPrefix + data.cardsDeleteCount),
       )
@@ -509,6 +527,7 @@ function dispatchDetail(request: DetailRequest): Promise<void> {
       previousDelivery,
       resolve: (payload) => {
         const cacheEntry = {
+          requestId: id,
           threadedMessages: payload.threadedMessages,
           cardsByVariant: new Map<string, TuiTranscriptCard[]>(),
         }
@@ -556,7 +575,19 @@ function dispatchFormat(request: FormatRequest): Promise<void> {
   const formatKey = `${key}|${cardsVariant}`
   const id = ++requestCounter
   const w = ensureWorker()
-  const previousDelivery = lastFormattedByKey.get(formatKey)
+  let previousDelivery = lastFormattedByKey.get(formatKey)
+  let threadedBaseVariant: string | undefined
+  if (!previousDelivery) {
+    // The first format of a density can use another density's exact token as
+    // its input baseline. Output sharing is independently checked in worker.
+    const prefix = `${key}|`
+    for (const [candidateKey, candidate] of lastFormattedByKey) {
+      if (candidateKey.startsWith(prefix) && candidateKey.endsWith(`|${showToolCalls ? 1 : 0}`)) {
+        previousDelivery = candidate
+        threadedBaseVariant = candidateKey.slice(prefix.length)
+      }
+    }
+  }
   const patch = previousDelivery ? threadedPatchBounds(threaded, previousDelivery.threaded) : null
   return new Promise<void>((settle) => {
     let retriedWithFullTranscript = false
@@ -572,9 +603,15 @@ function dispatchFormat(request: FormatRequest): Promise<void> {
         // serve the transcript this format was requested for. A fresher detail
         // read simply re-caches on its own resolve.
         const existing = threadingCacheByKey.get(key)
+        if (existing && existing.requestId > id) {
+          request.resolve(transcriptCards)
+          settle()
+          return
+        }
         const cacheEntry = existing && existing.threadedMessages === threaded
           ? existing
-          : { threadedMessages: threaded, cardsByVariant: new Map<string, TuiTranscriptCard[]>() }
+          : { requestId: id, threadedMessages: threaded, cardsByVariant: new Map<string, TuiTranscriptCard[]>() }
+        cacheEntry.requestId = id
         rememberCardsVariant(cacheEntry, density, showToolCalls, transcriptCards)
         touchThreadingCache(key, cacheEntry)
         request.resolve(transcriptCards)
@@ -604,6 +641,7 @@ function dispatchFormat(request: FormatRequest): Promise<void> {
           threadedDeleteCount: patch.deleteCount,
           threadedPatch: patch.patch,
           previousFormatToken: previousDelivery.formatToken,
+          threadedBaseVariant,
           density,
           showToolCalls,
         }
