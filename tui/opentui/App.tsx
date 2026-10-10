@@ -3038,6 +3038,83 @@ function sidebarEntrySession(entry: SidebarEntry): Session | null {
   return null
 }
 
+// Keep only the current list. Selection moves copy its element array and
+// rebuild the old/new highlights without walking or allocating keys for every
+// row. Multiple rows may represent the same session (including nested rows).
+export function createSidebarRowElements<Entry extends { key: string }, Element>(
+  getSessionKey: (entry: Entry) => string | null,
+) {
+  let previousEntries: readonly Entry[] | null = null
+  let previousBuild: ((entry: Entry, selected: boolean) => Element) | null = null
+  let previousSelection: string | null = null
+  let rows: Element[] = []
+  let sessionKeys: Array<string | null> = []
+  const indicesBySession = new Map<string, number | number[]>()
+  const cache = new Map<string, { entry: Entry; selected: boolean; element: Element; generation: number }>()
+  let generation = 0
+  return (entries: readonly Entry[], selectedKey: string | null, build: (entry: Entry, selected: boolean) => Element): Element[] => {
+    // Polls/filters can replace the array without changing any row. Preserve
+    // the index and cached elements for this case instead of rebuilding Maps.
+    if (entries !== previousEntries && build === previousBuild && previousEntries?.length === entries.length
+      && entries.every((entry, index) => entry === previousEntries![index])) previousEntries = entries
+    if (entries === previousEntries && build === previousBuild) {
+      if (selectedKey === previousSelection) return rows
+      const next = rows.slice()
+      for (const [key, selected] of [[previousSelection, false], [selectedKey, true]] as const) {
+        if (key === null) continue
+        const indices = indicesBySession.get(key)
+        if (indices === undefined) continue
+        for (const index of typeof indices === 'number' ? [indices] : indices) {
+          const entry = entries[index]
+          const element = build(entry, selected)
+          next[index] = element
+          cache.set(entry.key, { entry, selected, element, generation })
+        }
+      }
+      previousSelection = selectedKey
+      rows = next
+      return rows
+    }
+    generation++
+    let indexChanged = sessionKeys.length !== entries.length
+    const nextSessionKeys = new Array<string | null>(entries.length)
+    rows = entries.map((entry, index) => {
+      const key = getSessionKey(entry)
+      nextSessionKeys[index] = key
+      if (key !== sessionKeys[index]) indexChanged = true
+      const selected = key !== null && key === selectedKey
+      const previous = cache.get(entry.key)
+      const reusable = build === previousBuild && previous?.entry === entry && previous.selected === selected
+      const element = reusable ? previous.element : build(entry, selected)
+      if (reusable) previous.generation = generation
+      else cache.set(entry.key, { entry, selected, element, generation })
+      return element
+    })
+    if (indexChanged) {
+      indicesBySession.clear()
+      for (let index = 0; index < nextSessionKeys.length; index++) {
+        const key = nextSessionKeys[index]
+        if (key === null) continue
+        const indices = indicesBySession.get(key)
+        if (typeof indices === 'number') indicesBySession.set(key, [indices, index])
+        else if (indices) indices.push(index)
+        else indicesBySession.set(key, index)
+      }
+    }
+    sessionKeys = nextSessionKeys
+    for (const [key, cached] of cache) if (cached.generation !== generation) cache.delete(key)
+    previousEntries = entries
+    previousBuild = build
+    previousSelection = selectedKey
+    return rows
+  }
+}
+
+function sidebarEntrySessionKey(entry: SidebarEntry): string | null {
+  const session = sidebarEntrySession(entry)
+  return session ? sessionKey(session) : null
+}
+
 function buildSidebarEntries(
   sessions: Session[],
   sort: TuiSidebarSort,
@@ -14593,37 +14670,11 @@ export default function OpenTuiApp() {
   // fast scrubbing through a large list backed the render queue up and got
   // progressively slower. Reuse the cached element for any row whose inputs are
   // unchanged so only the two flipped rows actually rebuild.
-  const sidebarRowCacheRef = useRef(new Map<string, {
-    entry: unknown
-    selected: boolean
-    build: typeof buildSidebarRow
-    element: React.ReactNode
-  }>())
+  const sidebarRowCacheRef = useRef<ReturnType<typeof createSidebarRowElements<SidebarEntry, React.ReactNode>> | null>(null)
+  if (!sidebarRowCacheRef.current) sidebarRowCacheRef.current = createSidebarRowElements(sidebarEntrySessionKey)
   const sidebarRowElements = useMemo(() => {
-    const cache = sidebarRowCacheRef.current
-    const live = new Set<string>()
     const selectedSession = selectedIndex >= 0 ? sessions[selectedIndex] : null
-    const rows = sidebarEntries.map((entry) => {
-      live.add(entry.key)
-      const entrySession = sidebarEntrySession(entry)
-      const selected = Boolean(
-        entrySession
-        && selectedSession
-        && sessionKey(entrySession) === sessionKey(selectedSession),
-      )
-      const prev = cache.get(entry.key)
-      // `entry` identity changes only when the session list polls (new array),
-      // and `build` carries theme/density/width/rename state via its deps — so a
-      // matching (entry, selected, build) triple means the element is identical.
-      if (prev && prev.entry === entry && prev.selected === selected && prev.build === buildSidebarRow) {
-        return prev.element
-      }
-      const element = buildSidebarRow(entry, selected)
-      cache.set(entry.key, { entry, selected, build: buildSidebarRow, element })
-      return element
-    })
-    for (const key of cache.keys()) if (!live.has(key)) cache.delete(key)
-    return rows
+    return sidebarRowCacheRef.current!(sidebarEntries, selectedSession ? sessionKey(selectedSession) : null, buildSidebarRow)
   }, [sidebarEntries, selectedIndex, sessions, buildSidebarRow])
 
 

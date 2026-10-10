@@ -10,6 +10,7 @@ import {
   buildTranscriptTaskContext,
   ensureTuiMermaidRenderer,
   formatTranscriptCard,
+  reformatTranscriptCardDensity,
   textNeedsTuiMermaid,
   type TuiTranscriptCard,
 } from '../format'
@@ -377,7 +378,9 @@ async function formatCards(
     let entry = perSession.get(messageKey)
     if (!entry || entry.density !== density || !Object.is(entry.durationMs, durationMs)) {
       entry = {
-        card: formatTranscriptCard(msg, density, activeForms, taskRegistry, durationMs),
+        card: entry && Object.is(entry.durationMs, durationMs)
+          ? reformatTranscriptCardDensity(msg, density, entry.card, activeForms, taskRegistry)
+          : formatTranscriptCard(msg, density, activeForms, taskRegistry, durationMs),
         durationMs,
         density,
       }

@@ -8,6 +8,7 @@ import type { TuiDensity } from '../theme'
 // sessions (live overlays use this path without a worker-side detail read).
 const messageCount = Number(process.env.TUI_MEMORY_MESSAGES ?? 2000)
 const sessionCount = 40
+const multipleDensities = process.env.TUI_MEMORY_VARIANTS === '1'
 const worker = new Worker(new URL('./workerMemoryProbe.ts', import.meta.url).href)
 type Reply = {
   ok: boolean
@@ -37,7 +38,12 @@ async function format(index: number, density: TuiDensity = 'balanced', showToolC
 try {
   const checkpoints = []
   for (let i = 0; i < sessionCount; i++) {
-    const reply = await format(i)
+    let reply = await format(i)
+    if (multipleDensities) {
+      await format(i, 'dense')
+      await format(i, 'comfortable')
+      reply = await format(i)
+    }
     if ([9, 19, 39].includes(i)) checkpoints.push({ sessions: i + 1, ...reply.workerHeap })
   }
   // Revisit an evicted session: full formatting must still be exact.
@@ -48,7 +54,7 @@ try {
   await format(0, 'balanced')
   await format(0, 'balanced', false)
   const growth = checkpoints[2].heapSize - checkpoints[1].heapSize
-  console.log(JSON.stringify({ benchmark: 'opentui-worker-retention', messageCount, checkpoints, growthBytes: growth, byteIdentical: true }))
+  console.log(JSON.stringify({ benchmark: 'opentui-worker-retention', messageCount, multipleDensities, checkpoints, growthBytes: growth, byteIdentical: true }))
   assert.ok(growth < 4 * 1024 * 1024, `Worker retained ${(growth / 1048576).toFixed(1)} MiB across 20 additional sessions`)
 } finally {
   worker.terminate()

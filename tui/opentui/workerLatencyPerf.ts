@@ -1,6 +1,7 @@
 import { buildThreadedMessages } from '../../lib/threading'
 import type { Session, SessionMessage } from '../../lib/types'
 import { formatTranscriptCards } from '../format'
+import type { TuiDensity } from '../theme'
 import { formatTranscriptCardsAsync } from './threadingWorkerClient'
 
 const MESSAGE_COUNT = Number.parseInt(process.env.TUI_WORKER_PERF_MESSAGES ?? '10000', 10)
@@ -190,6 +191,19 @@ async function main(): Promise<void> {
   const initialExpected = formatTranscriptCards(threaded)
   const streamingExpected = formatTranscriptCards(finalStreamingThreaded)
 
+  const densityRoundTrips: number[] = []
+  let densityByteIdentical = true
+  for (let run = 0; run < RUNS; run += 1) {
+    const densitySession = session(`density-${run}`)
+    await formatTranscriptCardsAsync(densitySession, threaded, 'balanced', true)
+    const density: TuiDensity = run % 2 === 0 ? 'dense' : 'comfortable'
+    // First visit to this density forces a full worker format rather than a
+    // token-bound empty patch against an already-formatted variant.
+    const sample = await timed(() => formatTranscriptCardsAsync(densitySession, [...threaded], density, true))
+    densityRoundTrips.push(sample.durationMs)
+    densityByteIdentical &&= JSON.stringify(sample.value) === JSON.stringify(formatTranscriptCards(threaded, density))
+  }
+
   const mutationSession = session('mutation')
   let mutatedRaw = [...streamingRaw]
   let mutatedThreaded = buildThreadedMessages(mutatedRaw)
@@ -258,6 +272,7 @@ async function main(): Promise<void> {
   }
   const evictionCards = await formatTranscriptCardsAsync(evictionSession, finalStreamingThreaded, 'balanced', true)
   const correctness = {
+    densityByteIdentical,
     evictionRecoveryByteIdentical: JSON.stringify(evictionCards) === JSON.stringify(streamingExpected),
     initialByteIdentical: JSON.stringify(firstWorkerCards) === JSON.stringify(initialExpected),
     streamingByteIdentical: JSON.stringify(finalStreamingCards) === JSON.stringify(streamingExpected),
@@ -271,6 +286,7 @@ async function main(): Promise<void> {
     configuration: { messageCount: MESSAGE_COUNT, runs: RUNS, streamingAppends: RUNS },
     latencyMs: {
       fullRoundTrip: summarize(fullRoundTrips),
+      densityChangeRoundTrip: summarize(densityRoundTrips),
       streamingAppendRoundTrip: summarize(streamingRoundTrips),
       mutationRoundTrip: summarize(mutationRoundTrips),
       truncationRoundTrip: summarize(truncationRoundTrips),

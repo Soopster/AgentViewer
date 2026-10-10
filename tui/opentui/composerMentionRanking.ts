@@ -55,6 +55,28 @@ function filterEntries(
   // and frecency orders the list outright — this is what makes a bare `@` list
   // what you have been working in.
   if (!query) {
+    // Keep only the visible top-k entries. Scores are read once per entry;
+    // ties retain walk order, just as the full stable sort below does.
+    // Unusual slice limits/scores keep the original JavaScript semantics.
+    if (Number.isInteger(limit) && limit > 0 && limit < entries.length) {
+      const best: Array<{ entry: ComposerMentionFileEntry; score: number }> = []
+      let finite = true
+      for (const entry of entries) {
+        const score = scoreOf(entry)
+        if (!Number.isFinite(score)) { finite = false; break }
+        if (best.length === limit && score <= best[best.length - 1]!.score) continue
+        let low = 0
+        let high = best.length
+        while (low < high) {
+          const mid = (low + high) >>> 1
+          if (best[mid]!.score >= score) low = mid + 1
+          else high = mid
+        }
+        if (best.length === limit) best.pop()
+        best.splice(low, 0, { entry, score })
+      }
+      if (finite) return best.map(({ entry }) => entry)
+    }
     return entries
       .map((entry, order) => ({ entry, score: scoreOf(entry), order }))
       .sort((left, right) => right.score - left.score || left.order - right.order)

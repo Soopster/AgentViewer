@@ -6,6 +6,7 @@ import { formatSessionProject, formatSessionTitle } from '../format'
 import { buildEditorFileTree, type TreeNode } from './editorFileTree'
 import { filterComposerMentionEntries } from './composerMentionRanking'
 import { createSidebarSessionSearch } from './sidebarSessionSearch'
+import { searchEditorBuffers } from './editorProjectSearch'
 
 // Pre-optimization algorithm retained as a correctness and timing reference.
 function baselineTree(paths: string[]): TreeNode[] {
@@ -62,6 +63,13 @@ const scores = Object.fromEntries(entries.map((entry, i) => [`${prefix}/${entry.
 compare('composer bare @ 5000', () => entries.map((entry, order) => ({ entry, order }))
   .sort((a, b) => scores[`${prefix}/${b.entry.path}`]! - scores[`${prefix}/${a.entry.path}`]! || a.order - b.order)
   .slice(0, 20).map(({ entry }) => entry), () => filterComposerMentionEntries(entries, '', 20, scores, prefix))
+function originalBareMention() {
+  const scoreOf = (entry: { path: string }) => scores[`${prefix}/${entry.path}`] ?? 0
+  return entries.map((entry, order) => ({ entry, score: scoreOf(entry), order }))
+    .sort((left, right) => right.score - left.score || left.order - right.order)
+    .slice(0, 20).map((candidate) => candidate.entry)
+}
+compare('composer original bare @ 5000', originalBareMention, () => filterComposerMentionEntries(entries, '', 20, scores, prefix))
 assert.deepEqual(filterComposerMentionEntries(entries, '', 20), entries.slice(0, 20), 'No history retains walk order')
 assert.deepEqual(filterComposerMentionEntries(entries, '', 0), [], 'Zero limit remains empty')
 const sessions: Session[] = Array.from({ length: 5000 }, (_, i) => ({
@@ -83,4 +91,23 @@ const queries = ['r', 're', 'ren', 'rend', 'rende', 'render', 'missing', 'projec
 compare('sidebar 8-query sequence 5000', () => queries.map(baselineSearch), () => queries.map(search))
 const renamed = sessions.map((session, i) => i === 0 ? { ...session, customTitle: 'renamed session' } : session)
 assert.equal(createSidebarSessionSearch(renamed)('renamed session')[0], renamed[0], 'Replacement lists refresh indexed titles')
+// Original eager split reference, including both early-limit and full scans.
+const buffer = { path: 'large.ts', content: 'needle needle value\n'.repeat(100_000) }
+function baselineBuffers(query: string) {
+  const results: ReturnType<typeof searchEditorBuffers> = []
+  const pattern = new RegExp(query, 'gu')
+  for (const [line, preview] of buffer.content.split('\n').entries()) {
+    pattern.lastIndex = 0
+    for (let match = pattern.exec(preview); match && results.length < 20; match = pattern.exec(preview)) {
+      results.push({ path: buffer.path, line, character: match.index, preview })
+    }
+    if (results.length >= 20) return results
+  }
+  return results
+}
+for (const query of ['needle', 'missing']) {
+  compare(`editor buffer 100000 lines ${query === 'needle' ? 'early 20 hits' : 'no-match full scan'}`,
+    () => baselineBuffers(query),
+    () => searchEditorBuffers([buffer], query, { regex: true, matchCase: true, wholeWord: false, limit: 20 }))
+}
 console.log('Workflow output parity passed')

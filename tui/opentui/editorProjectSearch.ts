@@ -138,13 +138,23 @@ export function searchEditorBuffers(
   const pattern = new RegExp(options.wholeWord ? `\\b(?:${source})\\b` : source, options.matchCase ? 'gu' : 'giu')
   const results: EditorProjectSearchResult[] = []
   for (const buffer of buffers) {
-    for (const [line, preview] of buffer.content.split('\n').entries()) {
+    // Scan one line at a time: a bounded result near the start of a large
+    // buffer should not allocate strings for every remaining line.
+    let start = 0
+    let line = 0
+    while (start <= buffer.content.length) {
+      const newline = buffer.content.indexOf('\n', start)
+      const end = newline < 0 ? buffer.content.length : newline
+      const preview = buffer.content.slice(start, end)
       pattern.lastIndex = 0
       for (let match = pattern.exec(preview); match && results.length < limit; match = pattern.exec(preview)) {
         results.push({ path: buffer.path, line, character: match.index, preview })
         if (match[0].length === 0) pattern.lastIndex = advanceUnicodeOffset(preview, pattern.lastIndex)
       }
       if (results.length >= limit) return results
+      if (newline < 0) break
+      start = newline + 1
+      line += 1
     }
   }
   return results

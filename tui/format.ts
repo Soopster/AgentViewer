@@ -2383,6 +2383,18 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
   }
 }
 
+// The caller must have validated unchanged message content, task context and
+// turn duration. Only the collapsed conversation preview depends on density;
+// share the expanded lines/code data between variants instead of rebuilding
+// and retaining another copy of that content.
+export function reformatTranscriptCardDensity(message: ThreadedMessage, density: TuiDensity, previous: TuiTranscriptCard, activeForms?: TaskActiveForms, taskRegistry?: TaskRegistry): TuiTranscriptCard {
+  if (previous.autoFold || previous.hasMermaidDiagrams) return previous
+  const previewLines: TuiTranscriptCardLine[] = []
+  for (const block of message.blocks) previewLines.push(...formatBlock(block, activeForms, taskRegistry))
+  const lines = compactCardLines(previewLines, density)
+  return { ...previous, lines, compactSummary: lines.map((entry) => entry.text).join(' · ') }
+}
+
 export function formatTranscriptCards(messages: ThreadedMessage[], density: TuiDensity = 'balanced'): TuiTranscriptCard[] {
   const { activeForms, taskRegistry } = buildTranscriptTaskContext(messages)
   const durations = computeTurnDurationsMs(messages)
