@@ -1294,6 +1294,18 @@ which mirror `app/api/sessions/[sessionId]/coordination/route.ts` action for act
   owned. `p` cycles which provider staffs the **next new** teammate (web: a select); the set is
   durable per conversation (`teammate_providers`, schema v23) because failover after a restart must
   know what the team may staff, and a provider choice never re-provisions an existing teammate.
+- **A roster row is a sentence, and the lead heads the roster.** State glyph in
+  its colour, name, the teammate's task and how that stands, then what the host
+  last saw. With the task on the row the TASKS list keeps only tasks no row
+  shows. The lead's row can be moved onto and opened but is never `selected`:
+  every roster action is something the lead does to a teammate. "this
+  conversation" marks the agent whose chat the panel was opened from, which is
+  a teammate when it was opened from a teammate's transcript. Below 70 columns
+  the rows stack instead — a status cut to fit says nothing.
+- **A reused box keeps the padding of what it replaced.** The roster box sits in
+  the slot the "none asked yet" row occupies until the first teammate exists;
+  OpenTUI left that row's `paddingTop` on it, a stray blank row no source line
+  explains. State the zero.
 - **The panel's height follows its content**, with a floor of 12: the scrollbox has its own 6-row
   minimum, and below that the footer draws *outside* the border. `bodyRows` mirrors the sections, so
   a section added without updating it costs a blank row or a scrollbar — not the twenty empty rows a

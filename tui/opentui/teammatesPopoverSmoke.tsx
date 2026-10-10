@@ -153,6 +153,21 @@ if (!frame.includes('TEAMMATES')) fail('the roster heading is missing')
 // `coordinatorAgentActivity` is what the web panel shows too — a bare protocol
 // status ("idle") does not tell the user whether anything is waiting on them.
 if (!frame.includes('Available')) fail('the roster shows a protocol status instead of an activity')
+
+// ── the lead heads the roster and can be moved onto ────────────────────────
+// It is a member of the team, and the row for the chat the panel was opened
+// from says so — here that is the lead's own.
+if (!/◆ \S+ .*this conversation/.test(readable())) fail(`the lead is not in the roster as this conversation:\n${captureCharFrame()}`)
+await press('k')
+if (!captureCharFrame().includes('▸ ◆')) fail(`k from the first teammate did not move onto the lead:\n${captureCharFrame()}`)
+// No teammate is selected there, so a roster action has nobody to act on.
+await press('m')
+if (captureCharFrame().includes('Message ')) fail('m on the lead row composed a message to someone')
+await press('return')
+if (!notices.some(text => text.includes('conversation you are in'))) fail('⏎ on the lead of this conversation must say so rather than reopening it')
+if (!captureCharFrame().includes('─ Teammates ─')) fail('⏎ on the lead of this conversation closed the panel')
+await press('j')
+if (captureCharFrame().includes('▸ ◆') || !/▸ . nova/.test(captureCharFrame())) fail(`j from the lead did not return to the first teammate:\n${captureCharFrame()}`)
 // Herdr keeps an agent "working" while background work will bring it back; the
 // TUI read assembles that from the runtime's waiting registry.
 const runtime = await import('../../lib/sessionRuntime')
@@ -312,7 +327,8 @@ if (captureCharFrame().includes('ATTENTION')) fail('reviewed result stayed in at
   const bottom = frameRows.findIndex((line, index) => index > top && line.includes('└'))
   const panelHeight = bottom - top + 1
   if (top < 0 || bottom < 0) fail('the Teammates panel is not on screen')
-  if (panelHeight > 20) fail(`the panel is padded well past its content: ${panelHeight} rows`)
+  // 21, not 20: the lead now has a row of its own at the head of the roster.
+  if (panelHeight > 21) fail(`the panel is padded well past its content: ${panelHeight} rows`)
   if (panelHeight < 12) fail(`the panel is below the height its scrollbox needs: ${panelHeight} rows`)
   const footerRow = frameRows.findIndex((line, index) => index > top && line.includes('esc close'))
   if (footerRow < 0 || footerRow > bottom) fail('the footer drew outside the panel border')

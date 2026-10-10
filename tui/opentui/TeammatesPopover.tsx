@@ -9,6 +9,7 @@
 // It takes only layout props and reads everything else from
 // `interactiveCoordinatorStore`, which is what lets the `memo` hold — a
 // coordinator refresh repaints these rows and nothing else.
+import { TextAttributes } from '@opentui/core'
 import { memo, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { CoordinatorRecovery } from './CoordinatorRecovery'
 import { CoordinatorResources } from './CoordinatorResources'
@@ -89,7 +90,7 @@ import { MODAL_CONTENT_Z_INDEX } from './layers'
 import type { ProtocolAgent } from '../../lib/agentProtocol'
 import { describeRunRollup } from '../../lib/coordinatorRollup'
 import { coordinatorAttention, type CoordinatorAttentionItem } from '../../lib/coordinatorAttention'
-import { coordinatorResultIdsForAgent } from '../../lib/coordinatorSignals'
+import { coordinatorPickerState, coordinatorResultIdsForAgent } from '../../lib/coordinatorSignals'
 import { coordinatorAgentActivity, coordinatorAgentNote, coordinatorAgentWorkspace, coordinatorStalledAgentIds } from '../../lib/coordinatorInteractiveState'
 import {
   closeInteractiveCoordinator,
@@ -122,6 +123,14 @@ type Props = {
 type Draft = { kind: 'delegate' | 'message' | 'decision'; to: string | null; toName: string; text: string; taskId?: string; decisionId?: string; inReplyTo?: string }
 
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'stopped'])
+const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'cancelled'])
+// The least of a waiting result the attention card quotes before pointing at
+// the review that shows all of it; a tall terminal shows a third of its rows.
+const ATTENTION_DETAIL_LINES = 6
+// At this inner width a teammate is one row — name, status and its last word.
+// Below it the three stack, because a status cut to fit says nothing. Shared
+// with the height estimate.
+const ROSTER_NOTE_MIN_WIDTH = 70
 
 // The board owns every keystroke while it is open (App.tsx forwards raw keys
 // here rather than letting a focused OpenTUI <input> see them), so the draft
@@ -171,8 +180,22 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   const teammates = roster.agents
   // A refresh may move the selected agent out of a state filter. Require
   // another deliberate navigation action rather than silently retargeting it.
-  const clamped = selectedId === null ? 0 : teammates.findIndex((agent) => agent.id === selectedId)
-  const selected = teammates[clamped] ?? null
+  // The lead heads the roster: it is a member of the team, it can hold tasks,
+  // and a board that lists everyone but the lead reads as if the work happens
+  // somewhere else. It can be moved onto and opened; it is never `selected`,
+  // because every roster action (ask, message, resume, interrupt) is something
+  // the lead does to a teammate.
+  const leadAgent = teammates.length > 0 ? snapshot?.agents.find(agent => agent.id === snapshot.run.leadAgentId) ?? null : null
+  const rosterLead = leadAgent && !teammates.some(agent => agent.id === leadAgent.id) ? leadAgent : null
+  const leadSelected = Boolean(rosterLead) && selectedId === rosterLead!.id
+  const found = selectedId === null ? 0 : teammates.findIndex((agent) => agent.id === selectedId)
+  // A selection that left the roster (filtered out, or a teammate that went
+  // away) falls back to the first row rather than to nobody.
+  const clamped = leadSelected ? -1 : Math.max(found, 0)
+  const selected = leadSelected ? null : teammates[clamped] ?? null
+  // Whichever agent's conversation the panel was opened from. Opened from a
+  // teammate's transcript, that is the teammate — not the lead.
+  const viewingAgentId = session ? snapshot?.agents.find(agent => agent.sessionId === session.sessionId)?.id ?? null : null
   const delivery = data?.interactive.delivery ?? null
   const unconfirmedDelivery = delivery && !delivery.active ? delivery : null
   const recoveries = data?.recoveries ?? []
@@ -259,6 +282,10 @@ export const TeammatesPopover = memo(function TeammatesPopover({
 
     // Uncertain delivery requires transcript inspection before retry/discard.
     // Keep reading and roster navigation available while mutations are gated.
+    if (key.name === 'return' && leadSelected && rosterLead) {
+      if (rosterLead.id === viewingAgentId) { onNotice('info', 'The lead is the conversation you are in', 3000); return }
+      onOpenSession(rosterLead); closeInteractiveCoordinator(); return
+    }
     if (key.name === 'return' && selected) {
       reviewInteractiveCoordinatorResults(coordinatorResultIdsForAgent(snapshot, selected.id))
       onOpenSession(selected); closeInteractiveCoordinator(); return
@@ -284,7 +311,8 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       return
     }
     if (key.name === 'k' || key.name === 'up') {
-      setSelectedId(teammates[Math.max(clamped - 1, 0)]?.id ?? null)
+      // Up from the first teammate is the lead's row.
+      setSelectedId(clamped <= 0 && rosterLead ? rosterLead.id : teammates[Math.max(clamped - 1, 0)]?.id ?? null)
       return
     }
 
@@ -402,38 +430,75 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       setDraft({ kind: 'message', to: selected.id, toName: selected.name, text: '' })
     }
   }, [act, busy, canLead, confirmCancel, confirmOff, data, disabled, draft, enabled, locked, onNotice, onOpenSession, onWatchSessions,
-      pending, recoveries, selected, teammates, clamped, newTeammateProvider, snapshot, terminal, unconfirmedDelivery, currentAttention, items.length, session, searching])
+      pending, recoveries, selected, teammates, clamped, leadSelected, rosterLead, viewingAgentId, newTeammateProvider, snapshot, terminal, unconfirmedDelivery, currentAttention, items.length, session, searching])
 
   useEffect(() => { if (!resultTaskId && !workflowOpen && !resourcesOpen && !recoveryOpen) onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady, resultTaskId, workflowOpen, resourcesOpen, recoveryOpen])
 
-  const popW = Math.min(width - 4, 96)
+  // As wide as the terminal allows, up to a line length that still reads. At
+  // 96 a teammate's status and its last word were cut on screens with twice
+  // that to give.
+  const popW = Math.min(width - 4, 132)
   // Height follows the content. A fixed 32 rows meant a small team — the
   // common case — sat in a panel two thirds empty, with its footer stranded at
   // the bottom of the screen and nothing between. The estimate mirrors the
   // sections below; being a row out costs a blank line or a scrollbar, where
   // being fixed cost twenty.
+  const innerWidthEstimate = popW - 4
+  // A roster row answers "who is doing what" on its own: the teammate, its
+  // task and how that stands. The task it shows is the one it holds now, else
+  // the last it owned. With that on the row, the TASKS list below repeats the
+  // roster with the columns swapped, so it keeps only tasks no row shows.
+  const compactRoster = innerWidthEstimate >= ROSTER_NOTE_MIN_WIDTH
+  const rosterAgents = rosterLead ? [rosterLead, ...teammates] : teammates
+  const rosterTaskByAgent = new Map<string, NonNullable<typeof snapshot>['tasks'][number]>()
+  if (snapshot) {
+    for (const agent of rosterAgents) {
+      const task = snapshot.tasks.find(entry => entry.id === agent.taskId)
+        ?? snapshot.tasks.findLast(entry => entry.ownerAgentId === agent.id)
+      if (task) rosterTaskByAgent.set(agent.id, task)
+    }
+  }
+  const shownTaskIds = new Set(compactRoster ? [...rosterTaskByAgent.values()].map(task => task.id) : [])
+  const listedTasks = snapshot ? snapshot.tasks.filter(task => !shownTaskIds.has(task.id)) : []
+  const rosterNameWidth = Math.min(rosterAgents.reduce((widest, agent) => Math.max(widest, agent.name.length), 4), 18)
   const wrapped = (text: string) => Math.max(1, Math.ceil(text.length / Math.max(1, popW - 4)))
   const settingRows = (label: string) => Math.max(1, Math.ceil(label.length / Math.max(8, popW - 4 - 6)))
   const controlHints = `f workflow${data?.interactive.resources ? ' · g limits' : ''} · h recovery`
-  const bodyRows = wrapped(controlHints) + (state.loading && !data ? 1 : 0)
+  // The word yields to the keys on a panel too narrow for both on one row.
+  const settingsHeading = `SETTINGS · ${controlHints}`.length <= popW - 4 ? `SETTINGS · ${controlHints}` : controlHints
+  // The attention card names what is waiting; the whole of a long result is
+  // one key away, and printing it here pushed the roster off the panel.
+  const attentionDetail = (() => {
+    const all = (currentAttention?.detail ?? '').split('\n').filter((line, index, lines) => line.trim() || (index > 0 && lines[index - 1]!.trim()))
+    // A taller terminal can afford more of the result before the fold.
+    const shown = all.slice(0, Math.max(ATTENTION_DETAIL_LINES, Math.floor((height - 4) / 3)))
+    return { text: shown.join('\n').trimEnd(), hidden: all.length - shown.length }
+  })()
+  const bodyRows = (state.loading && !data ? 1 : 0)
     + (pending ? wrapped('The last request is unconfirmed. Retrying replays the same request, which the server reconciles instead of repeating.') + (error ? 1 : 0) + 1 : error ? 2 : 0)
     + (!enabled && !terminal ? wrapped('Enable coordination to give this chat a team. Teammates run their own turns; what they send back arrives folded into your next message, and you keep every approval.') + (canLead ? 0 : 2) : 0)
-    + (currentAttention ? 4 + wrapped(currentAttention.detail) : 0)
+    + (currentAttention ? 3 + attentionDetail.text.split('\n').reduce((rows, line) => rows + wrapped(line), 0) + (attentionDetail.hidden > 0 ? 1 : 0) : 0)
     // The settings labels wrap under their checkbox on a narrow terminal, so
     // count their rows at that width or the roster falls below the fold.
-    + (enabled ? 1 + settingRows(' Continue when teammates respond') + settingRows(' Give new teammates their own worktree')
+    + (enabled ? 1 + wrapped(settingsHeading) + settingRows(' Continue when teammates respond') + settingRows(' Give new teammates their own worktree')
       + (data?.interactive.autoContinue && data.interactive.remainingTurns === 0 ? 2 : 0) : 0)
     + (unconfirmedDelivery ? 4 : 0)
     + (teammates.length > 0
-      ? 2 + teammates.reduce((rows, agent) => rows + 2 + (coordinatorAgentNote(agent, snapshot) ? 1 : 0), 0)
+      // A heading row, then a row a teammate — two where its note has no room
+      // beside it. Over-counting a note costs a blank row; under-counting one
+      // costs the footer.
+      ? 1 + (rosterAgents.length > teammates.length ? 1 : 0)
+        + teammates.reduce((rows, agent) => rows + (innerWidthEstimate >= ROSTER_NOTE_MIN_WIDTH ? 1 : 2 + (coordinatorAgentNote(agent, snapshot) ? 1 : 0)), 0)
       : enabled ? 3 : 0)
     + (enabled && runInfo ? 2 + (runInfo.warning ? 1 : 0) + (runInfo.idleWarning ? wrapped(`⚠ ${runInfo.idleWarning}`) : 0) + runInfo.overlapLines.length + (runInfo.hiddenOverlaps ? 1 : 0) + runInfo.holdUpLines.length : 0)
     + attention.length + recoveries.length
-    + (snapshot && snapshot.tasks.length > 0 ? 2 + Math.min(snapshot.tasks.length, 6) : 0)
+    + (listedTasks.length > 0 ? (enabled && runInfo ? 1 : 2) + Math.min(listedTasks.length, 6) : 0)
   // 6 = header 2 + footer 2 + border 2, matching bodyH below.
   // The floor is the scrollbox's own minimum (6) plus header, footer and
   // border: below it the footer draws outside the box.
-  const popH = Math.max(12, Math.min(height - 4, 32, bodyRows + 6 + (draft || confirmOff || confirmCancel ? 1 : 0)))
+  // Content decides the height, the terminal bounds it. A fixed ceiling of 32
+  // rows scrolled a team's roster on a screen with room to show all of it.
+  const popH = Math.max(12, Math.min(height - 4, bodyRows + 6 + (draft || confirmOff || confirmCancel ? 1 : 0)))
   const popTop = Math.floor((height - popH) / 2)
   const popLeft = Math.floor((width - popW) / 2)
   const innerW = popW - 4
@@ -470,7 +535,9 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   // terminal the title used to take 16 columns while "alerts in-app" — which
   // nothing else on screen shows — was the part cut off.
   const metaWidth = headlineMeta ? headlineMeta.length + 5 : 0
-  const titleRoom = Math.max(0, Math.min(14, innerW - headline.length - metaWidth - 2))
+  // Still last in line for the width, but no longer capped at 14 cells when
+  // the header has a hundred to spare ("Teammates hav…").
+  const titleRoom = Math.max(0, Math.min(48, innerW - headline.length - metaWidth - 2))
   const headerTitle = busy ? 'working…' : session && titleRoom >= 6 ? fitText(session.title, titleRoom).trimEnd() : ''
   // The draft row gives the typed text the width first. On a narrow terminal
   // the label used to fill the row and the text drew over its tail, so what
@@ -547,7 +614,6 @@ export const TeammatesPopover = memo(function TeammatesPopover({
         scrollbarOptions={{ trackOptions: { foregroundColor: theme.dim, backgroundColor: theme.surface } }}
       >
         <box paddingX={1} flexDirection="column">
-          <text fg={theme.dim} wrapMode="word">{controlHints}</text>
           {state.loading && !data ? (
             <text fg={theme.dim}>Reading this conversation's coordination state…</text>
           ) : null}
@@ -579,34 +645,10 @@ export const TeammatesPopover = memo(function TeammatesPopover({
 
           {currentAttention ? <box flexDirection="column" paddingBottom={1}>
             <text fg={theme.amber} wrapMode="word" width={innerW}>{`ATTENTION ${Math.min(attentionIndex + 1, items.length)}/${items.length} · ${currentAttention.kind} · ${currentAttention.title}`}</text>
-            <text fg={theme.text} wrapMode="word" width={innerW}>{currentAttention.detail}</text>
+            <text fg={theme.text} wrapMode="word" width={innerW}>{attentionDetail.text}</text>
+            {attentionDetail.hidden > 0 ? <text fg={theme.dim} wrapMode="none">{`… ${attentionDetail.hidden} more line${attentionDetail.hidden === 1 ? '' : 's'} · v reads the whole result`}</text> : null}
             <text fg={theme.cyan} wrapMode="word" width={innerW}>{attentionHint(currentAttention, disabled, items.length)}</text>
           </box> : null}
-
-          {enabled ? (
-            <box flexDirection="column">
-              <text fg={theme.muted} wrapMode="none">SETTINGS</text>
-              <box flexDirection="row">
-                <text fg={theme.cyan} wrapMode="none">{'c '}</text>
-                <text fg={data?.interactive.autoContinue ? theme.green : theme.muted} wrapMode="none">
-                  {data?.interactive.autoContinue ? '[x]' : '[ ]'}
-                </text>
-                <text fg={theme.text} wrapMode="word" width={Math.max(8, innerW - 6)}>{' Continue when teammates respond'}</text>
-              </box>
-              <box flexDirection="row">
-                <text fg={theme.cyan} wrapMode="none">{'w '}</text>
-                <text fg={snapshot?.run.useWorktrees !== false ? theme.green : theme.muted} wrapMode="none">
-                  {snapshot?.run.useWorktrees !== false ? '[x]' : '[ ]'}
-                </text>
-                <text fg={theme.text} wrapMode="word" width={Math.max(8, innerW - 6)}>{' Give new teammates their own worktree'}</text>
-              </box>
-              {data?.interactive.autoContinue && data.interactive.remainingTurns === 0 ? (
-                <text fg={theme.amber} wrapMode="word" width={innerW}>
-                  Automatic continuation paused after four turns. Send a message to continue.
-                </text>
-              ) : null}
-            </box>
-          ) : null}
 
           {unconfirmedDelivery ? (
             <box flexDirection="column" paddingTop={1}>
@@ -618,28 +660,21 @@ export const TeammatesPopover = memo(function TeammatesPopover({
             </box>
           ) : null}
 
-          {enabled && runInfo ? (
-            <box flexDirection="column" paddingTop={1}>
-              <text fg={theme.muted} wrapMode="none">RUN</text>
-              <text fg={theme.text} wrapMode="none">{fitText(runInfo.summary, innerW)}</text>
-              {runInfo.warning ? <text fg={theme.amber} wrapMode="none">{fitText(`⚠ ${runInfo.warning}`, innerW)}</text> : null}
-              {runInfo.idleWarning ? <text fg={theme.amber} wrapMode="word" width={innerW}>{`⚠ ${runInfo.idleWarning}`}</text> : null}
-              {runInfo.overlapLines.map((line) => <text key={line} fg={theme.amber} wrapMode="none">{fitText(`⚠ ${line}`, innerW)}</text>)}
-              {runInfo.holdUpLines.map((line) => <text key={line} fg={theme.muted} wrapMode="none">{fitText(`⚑ ${line}`, innerW)}</text>)}
-              {runInfo.hiddenOverlaps ? <text fg={theme.dim} wrapMode="none">{`  +${runInfo.hiddenOverlaps} more overlapping path${runInfo.hiddenOverlaps === 1 ? '' : 's'}`}</text> : null}
-            </box>
-          ) : null}
-
-          {roster.counts.all > 0 ? <box flexDirection="column" paddingTop={1}>
-            <text fg={searching ? theme.cyan : theme.muted} wrapMode="word" width={innerW}>{`/ find · t state · ctrl+u clear | ${COORDINATOR_ROSTER_LABELS[rosterFilter]} · ${teammates.length}/${roster.counts.all}`}</text>
+          {roster.counts.all > 0 ? <box flexDirection="column" paddingTop={0}>
+            <text fg={searching ? theme.cyan : theme.muted} wrapMode="none">
+              {fitText(`TEAMMATES  ${COORDINATOR_ROSTER_LABELS[rosterFilter]} ${teammates.length}/${roster.counts.all} · / find · t state${rosterQuery ? ' · ctrl+u clear' : ''}`, innerW - 1).trimEnd()}
+            </text>
             {searching || rosterQuery ? <text fg={theme.text} wrapMode="word" width={innerW}>{`Find: ${rosterQuery}${searching ? '▏ · enter/esc finish' : ''}`}</text> : null}
             {!teammates.length ? <text fg={theme.dim}>No teammates match these filters.</text> : null}
           </box> : null}
           {teammates.length > 0 ? (
-            <box flexDirection="column" paddingTop={1}>
-              <text fg={theme.muted} wrapMode="none">TEAMMATES</text>
-              {teammates.map((agent, agentIndex) => {
-                const isSelected = agentIndex === clamped
+            // Explicit zero: this slot is the "none asked yet" row until the
+            // first teammate exists, and OpenTUI keeps that row's paddingTop on
+            // the reused box unless the next one states its own.
+            <box flexDirection="column" paddingTop={0}>
+              {rosterAgents.map((agent, rowIndex) => {
+                const isLead = agent.id === rosterLead?.id
+                const isSelected = isLead ? leadSelected : rowIndex - (rosterLead ? 1 : 0) === clamped
                 const accent = getProviderAccent(agent.provider)
                 const activity = data ? coordinatorAgentActivity(agent, data, state.observationUnavailable, stalled.includes(agent.id)) : agent.status
                 const live = !state.observationUnavailable && !elsewhere && (data?.runningAgentIds.includes(agent.id) || agent.turnActive)
@@ -647,9 +682,59 @@ export const TeammatesPopover = memo(function TeammatesPopover({
                 // card above or the task row below already says it. Three
                 // copies of one sentence is not three pieces of information.
                 const rawNote = coordinatorAgentNote(agent, snapshot)
-                const note = rawNote && rawNote !== currentAttention?.detail ? rawNote : ''
+                const note = !isLead && rawNote && rawNote !== currentAttention?.detail ? rawNote : ''
                 const needs = data?.permissions.some((item) => item.agentId === agent.id)
                   || recoveries.includes(agent.id) || stalled.includes(agent.id)
+                // One row a teammate, read left to right as a sentence: how it
+                // stands (the glyph and its colour), who, what task and where
+                // that task is, then what the host last saw of it. Everything
+                // was one dim grey string before, and "Unavailable · last
+                // observation is stale" led a row whose task had finished.
+                const provider = formatProviderLabel(agent.provider).toUpperCase()
+                const compact = compactRoster
+                const task = rosterTaskByAgent.get(agent.id)
+                const taskDone = task ? TERMINAL_TASK_STATUSES.has(task.status) : false
+                const picker = snapshot ? coordinatorPickerState(agent, snapshot, state.reviewed) : 'idle'
+                const mark = isLead ? { glyph: '◆', color: live ? theme.green : accent }
+                  : needs || picker === 'blocked' ? { glyph: '!', color: theme.amber }
+                  : live || picker === 'working' ? { glyph: '●', color: theme.green }
+                  : picker === 'done' ? { glyph: '✓', color: theme.green }
+                  : task?.status === 'failed' ? { glyph: '×', color: theme.red }
+                  : picker === 'unknown' ? { glyph: '?', color: theme.amber }
+                  : { glyph: '○', color: theme.dim }
+                const taskStatus = !task ? ''
+                  : picker === 'done' ? 'to review'
+                  : task.status.replace(/_/g, ' ')
+                const taskStatusColor = !task ? theme.dim
+                  : task.status === 'failed' ? theme.red
+                  : task.status === 'completed' ? theme.green
+                  : task.status === 'blocked' ? theme.amber
+                  : theme.cyan
+                // A session going quiet after its task is done is not news;
+                // the same words on a teammate mid-task are.
+                const quietActivity = taskDone && /^Unavailable|^Available$|^Finished$/.test(activity) ? '' : activity
+                // "this conversation" marks the row for the chat the panel was
+                // opened from, lead or teammate. It replaces a bare "Available",
+                // which says nothing the open chat does not.
+                const here = agent.id === viewingAgentId
+                const shownActivity = compact || isLead ? quietActivity : activity
+                const status = joinMeta([
+                  here && /^Available$|^$/.test(shownActivity) ? '' : shownActivity,
+                  here ? 'this conversation' : '',
+                  coordinatorAgentWorkspace(agent, snapshot),
+                ])
+                const name = compact ? fitText(agent.name, rosterNameWidth) : fitText(agent.name, Math.min(agent.name.length, Math.max(innerW - 30, 10))).trimEnd()
+                const room = Math.max(innerW - 4 - name.length - 2 - provider.length - 1, 0)
+                // The teammate's last word stands in for a task it does not have
+                // and rides beside one that is open or failed — a failure's last
+                // words are the why. A completed task's are its result, which
+                // the attention card already carries.
+                const aside = joinMeta([status, note && task?.status !== 'completed' ? `“${note}”` : ''])
+                const taskTail = task ? ` · ${taskStatus}` : ''
+                const asideText = aside ? `  ${aside}` : ''
+                const titleRoom = Math.max(room - taskTail.length - Math.min(asideText.length, Math.floor(room / 2)), 8)
+                const taskTitle = task ? fitText(task.title, Math.min(task.title.length, titleRoom)).trimEnd() : ''
+                const asideFitted = fitText(asideText, Math.max(room - taskTitle.length - taskTail.length, 0)).trimEnd()
                 return (
                   <box
                     key={agent.id}
@@ -658,22 +743,28 @@ export const TeammatesPopover = memo(function TeammatesPopover({
                   >
                     <box flexDirection="row" alignItems="center">
                       <text fg={isSelected ? accent : theme.dim} wrapMode="none">{isSelected ? '▸ ' : '  '}</text>
-                      <text fg={needs ? theme.amber : live ? theme.green : theme.dim} wrapMode="none">
-                        {`${live ? '●' : '○'} `}
-                      </text>
-                      <text fg={isSelected ? theme.text : theme.muted} wrapMode="none">
-                        {fitText(agent.name, Math.max(innerW - 30, 10))}
-                      </text>
+                      <text fg={mark.color} wrapMode="none">{`${mark.glyph} `}</text>
+                      <text fg={theme.text} attributes={isSelected ? TextAttributes.BOLD : undefined} wrapMode="none">{name}</text>
+                      {compact && task ? (
+                        <>
+                          <text fg={taskDone ? theme.muted : theme.text} wrapMode="none">{`  ${taskTitle}`}</text>
+                          <text fg={taskStatusColor} wrapMode="none">{taskTail}</text>
+                        </>
+                      ) : null}
+                      {compact && asideFitted ? <text fg={needs ? theme.amber : theme.dim} wrapMode="none">{task ? asideFitted : `  ${asideFitted.trimStart()}`}</text> : null}
+                      {!compact && isLead && here ? <text fg={theme.dim} wrapMode="none">{'  this conversation'}</text> : null}
                       <box flexGrow={1} />
-                      <text fg={accent} wrapMode="none">{formatProviderLabel(agent.provider).toUpperCase()}</text>
+                      <text fg={accent} wrapMode="none">{provider}</text>
                     </box>
-                    <box flexDirection="row">
-                      <text fg={theme.dim} wrapMode="none">{'    '}</text>
-                      <text fg={needs ? theme.amber : theme.dim} wrapMode="none">
-                        {fitText(joinMeta([activity, coordinatorAgentWorkspace(agent, snapshot)]), innerW - 6)}
-                      </text>
-                    </box>
-                    {note ? (
+                    {/* The lead is one row at any width: on a narrow panel its
+                        second row would only say "this conversation". */}
+                    {compact || isLead ? null : (
+                      <box flexDirection="row">
+                        <text fg={theme.dim} wrapMode="none">{'    '}</text>
+                        <text fg={needs ? theme.amber : theme.dim} wrapMode="none">{fitText(status, innerW - 6)}</text>
+                      </box>
+                    )}
+                    {note && !compact ? (
                       <box flexDirection="row">
                         <text fg={theme.dim} wrapMode="none">{'    '}</text>
                         <text fg={theme.muted} wrapMode="none">{fitText(`“${note}”`, innerW - 6)}</text>
@@ -710,10 +801,24 @@ export const TeammatesPopover = memo(function TeammatesPopover({
             </box>
           ))}
 
-          {snapshot && snapshot.tasks.length > 0 ? (
+          {enabled && runInfo ? (
             <box flexDirection="column" paddingTop={1}>
-              <text fg={theme.muted} wrapMode="none">{`TASKS (${snapshot.tasks.length})`}</text>
-              {snapshot.tasks.slice(-6).map((task) => (
+              <box flexDirection="row">
+                <text fg={theme.muted} wrapMode="none">{'RUN  '}</text>
+                <text fg={theme.text} wrapMode="none">{fitText(runInfo.summary, innerW - 5).trimEnd()}</text>
+              </box>
+              {runInfo.warning ? <text fg={theme.amber} wrapMode="none">{fitText(`⚠ ${runInfo.warning}`, innerW)}</text> : null}
+              {runInfo.idleWarning ? <text fg={theme.amber} wrapMode="word" width={innerW}>{`⚠ ${runInfo.idleWarning}`}</text> : null}
+              {runInfo.overlapLines.map((line) => <text key={line} fg={theme.amber} wrapMode="none">{fitText(`⚠ ${line}`, innerW)}</text>)}
+              {runInfo.holdUpLines.map((line) => <text key={line} fg={theme.muted} wrapMode="none">{fitText(`⚑ ${line}`, innerW)}</text>)}
+              {runInfo.hiddenOverlaps ? <text fg={theme.dim} wrapMode="none">{`  +${runInfo.hiddenOverlaps} more overlapping path${runInfo.hiddenOverlaps === 1 ? '' : 's'}`}</text> : null}
+            </box>
+          ) : null}
+
+          {snapshot && listedTasks.length > 0 ? (
+            <box flexDirection="column" paddingTop={enabled && runInfo ? 0 : 1}>
+              <text fg={theme.muted} wrapMode="none">{shownTaskIds.size > 0 ? `OTHER TASKS (${listedTasks.length})` : `TASKS (${listedTasks.length})`}</text>
+              {listedTasks.slice(-6).map((task) => (
                 <box key={task.id} flexDirection="row">
                   <text fg={theme.dim} wrapMode="none">{'  '}</text>
                   <text fg={theme.muted} wrapMode="none">
@@ -723,6 +828,31 @@ export const TeammatesPopover = memo(function TeammatesPopover({
               ))}
             </box>
           ) : null}
+          {enabled ? (
+            <box flexDirection="column" paddingTop={1}>
+              <text fg={theme.muted} wrapMode="word" width={innerW}>{settingsHeading}</text>
+              <box flexDirection="row">
+                <text fg={theme.cyan} wrapMode="none">{'c '}</text>
+                <text fg={data?.interactive.autoContinue ? theme.green : theme.muted} wrapMode="none">
+                  {data?.interactive.autoContinue ? '[x]' : '[ ]'}
+                </text>
+                <text fg={theme.text} wrapMode="word" width={Math.max(8, innerW - 6)}>{' Continue when teammates respond'}</text>
+              </box>
+              <box flexDirection="row">
+                <text fg={theme.cyan} wrapMode="none">{'w '}</text>
+                <text fg={snapshot?.run.useWorktrees !== false ? theme.green : theme.muted} wrapMode="none">
+                  {snapshot?.run.useWorktrees !== false ? '[x]' : '[ ]'}
+                </text>
+                <text fg={theme.text} wrapMode="word" width={Math.max(8, innerW - 6)}>{' Give new teammates their own worktree'}</text>
+              </box>
+              {data?.interactive.autoContinue && data.interactive.remainingTurns === 0 ? (
+                <text fg={theme.amber} wrapMode="word" width={innerW}>
+                  Automatic continuation paused after four turns. Send a message to continue.
+                </text>
+              ) : null}
+            </box>
+          ) : null}
+
         </box>
       </scrollbox>
 
@@ -737,7 +867,8 @@ export const TeammatesPopover = memo(function TeammatesPopover({
             {(() => {
               // The consequence is the part that must survive a narrow terminal, so it is the part that never gets cut.
               const full = `Cancel ${confirmCancel.taskId} “${confirmCancel.title}” for ${confirmCancel.agentName}? Locks are released and dependents fail.`
-              return full.length <= innerW ? full : fitText(`Cancel ${confirmCancel.taskId}? Locks release; dependents fail.`, innerW)
+              const medium = `Cancel ${confirmCancel.taskId}? Locks release; dependents fail.`
+              return full.length <= innerW ? full : medium.length <= innerW ? medium : fitText(`Cancel ${confirmCancel.taskId}? dependents fail`, innerW)
             })()}
           </text>
         </box>

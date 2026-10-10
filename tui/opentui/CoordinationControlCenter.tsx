@@ -228,6 +228,9 @@ function eventClassLabel(category: EventClass): string {
 
 function eventTone(event: AgentProtocolEvent, theme: TuiThemePalette): string {
   if (event.type === 'task.failed' || event.type === 'plan.rejected') return theme.red
+  // Telemetry, not news. It fell through to the run colour, a pink that read
+  // as an error on every teammate that reported its token count.
+  if (event.type.startsWith('usage.')) return theme.dim
   if (ATTENTION_EVENTS.has(event.type)) return theme.amber
   const category = eventClass(event)
   if (category === 'message') return theme.violet
@@ -303,6 +306,8 @@ export function CoordinationControlCenter({
   const showTaskColumns = centerW >= 58
   const showInspectorDetails = rightW >= 40 && inspectorH >= 20
   const showActivityColumns = rightW >= 40
+  // Title, four filters and the position are about seventy cells side by side.
+  const activityHeaderOneRow = rightW >= 72
   const run = snapshot?.run ?? null
   const agents = snapshot?.agents ?? []
   const tasks = snapshot?.tasks ?? []
@@ -369,7 +374,7 @@ export function CoordinationControlCenter({
   // to live in, so it overlapped the header — the header vanished and its
   // coloured glyphs bled through the body text ("SupervisionGcheckpoint").
   const activityDetailH = 2 + DETAIL_BODY_ROWS
-  const eventRows = Math.max(bodyH - inspectorH - activityDetailH - 7, 3)
+  const eventRows = Math.max(bodyH - inspectorH - activityDetailH - (activityHeaderOneRow ? 6 : 7), 3)
   const selectedEventIndex = selectedEvent ? filteredEvents.indexOf(selectedEvent) : filteredEvents.length - 1
   const visibleEvents = visibleWindow(filteredEvents, selectedEventIndex, eventRows)
   const latestAgentEvent = inspectedAgent ? [...events].reverse().find((event) => event.agentId === inspectedAgent.id) : undefined
@@ -785,7 +790,7 @@ export function CoordinationControlCenter({
                 <box height={1} flexShrink={0} flexDirection="row" overflow="hidden">
                   <box width={10} flexShrink={0}><text fg={theme.dim} wrapMode="none">State:</text></box>
                   <box flexGrow={1} minWidth={0} overflow="hidden"><text fg={inspectedLiveness === 'dead' ? theme.red : inspectedLiveness === 'stale' ? theme.amber : inspectedAgent.turnActive ? theme.green : theme.cyan} wrapMode="none">
-                    {fit(`${inspectedAgent.status}${inspectedAgent.turnActive ? ' · streaming' : ''} · ${inspectedAgent.progressEvidence?.signal ?? 'heartbeat'} ${age(inspectedAgent.progressEvidence?.observedAt ?? inspectedAgent.lastSeenAt, now)} ago · ${inspectedLiveness}`, rightW - 14)}
+                    {fit(`${inspectedAgent.status}${inspectedAgent.turnActive ? ' · streaming' : ''} · ${(inspectedAgent.progressEvidence?.signal ?? 'heartbeat').replace(/_/g, ' ')} ${age(inspectedAgent.progressEvidence?.observedAt ?? inspectedAgent.lastSeenAt, now)} ago · ${inspectedLiveness}`, rightW - 14)}
                   </text></box>
                 </box>
                 <box height={1} flexShrink={0} flexDirection="row" overflow="hidden"><box width={10} flexShrink={0}><text fg={theme.dim} wrapMode="none">Tasks:</text></box><box flexGrow={1} minWidth={0} overflow="hidden"><text fg={theme.text} wrapMode="none">{fit(`claimed ${inspectedActiveTasks.map((task) => task.id).join(',') || '—'} · completed ${inspectedCompletedTasks.map((task) => task.id).join(',') || '—'}`, rightW - 14)}</text></box></box>
@@ -839,7 +844,8 @@ export function CoordinationControlCenter({
                       <text fg={agent.id === inspectedAgent.id ? theme.cyan : theme.dim} wrapMode="none">{`${agent.id === inspectedAgent.id ? '▶' : ' '} ${branchGlyph} `}</text>
                       <box width={10} flexShrink={0} overflow="hidden"><text fg={getProviderAccent(agent.provider)} wrapMode="none">{fit(agent.name, 10)}</text></box>
                       <text fg={agent.status === 'blocked' || agent.status === 'failed' ? theme.amber : agent.turnActive || agent.status === 'working' ? theme.green : theme.dim} wrapMode="none">{` ${agent.turnActive || agent.status === 'working' ? '●' : '○'} `}</text>
-                      <text fg={theme.violet} wrapMode="none">{`m→${mail.sent}←${mail.received} `}</text>
+                      {/* Mail sent and received. */}
+                      <text fg={theme.violet} wrapMode="none">{`↑${mail.sent} ↓${mail.received} `}</text>
                       <text fg={theme.muted} wrapMode="none">{fit(edge, Math.max(rightW - 29, 8))}</text>
                     </box>
                   )
@@ -852,14 +858,20 @@ export function CoordinationControlCenter({
             onMouseUp={() => onFocusSection?.('events')}
             onMouseScroll={(event) => onScrollSection?.('events', event.scroll?.direction === 'up' ? -1 : 1)}
           >
-            <box height={3} border={['bottom']} borderStyle="single" borderColor={section === 'events' ? theme.cyan : theme.border} backgroundColor={section === 'events' ? theme.surface3 : theme.surface} flexDirection="column" overflow="hidden">
-              <box height={1} flexDirection="row" alignItems="center">
-                <text fg={section === 'events' ? theme.cyan : theme.text} wrapMode="none">ACTIVITY · LIVE</text>
-                <box flexGrow={1} />
-                <text fg={theme.dim} wrapMode="none">{`${events.length} events · ${Math.max(selectedEventIndex + 1, 0)}/${filteredEvents.length}`}</text>
-              </box>
+            {/* One header row: the title, its filters, and the position. It was
+                two — "ACTIVITY · LIVE" over "[4] LIVE ACTIVITY" — which named
+                the pane twice and cost the feed a row. */}
+            <box height={activityHeaderOneRow ? 2 : 3} border={['bottom']} borderStyle="single" borderColor={section === 'events' ? theme.cyan : theme.border} backgroundColor={section === 'events' ? theme.surface3 : theme.surface} flexDirection="column" overflow="hidden">
+              {/* A pane too narrow for the title and the count side by side
+                  keeps the count on a row of its own, where it used to be. */}
+              {activityHeaderOneRow ? null : (
+                <box height={1} flexDirection="row" alignItems="center" overflow="hidden">
+                  <box flexGrow={1} />
+                  <text fg={theme.dim} wrapMode="none">{`${events.length} events · ${Math.max(selectedEventIndex + 1, 0)}/${filteredEvents.length}`}</text>
+                </box>
+              )}
               <box height={1} flexDirection="row" alignItems="center" overflow="hidden">
-                <text fg={section === 'events' ? theme.cyan : theme.dim} wrapMode="none">[4] LIVE ACTIVITY</text>
+                <text flexShrink={0} fg={section === 'events' ? theme.cyan : theme.text} wrapMode="none">[4] LIVE ACTIVITY</text>
                 {showActivityColumns ? (
                   <>
                     {([
@@ -875,6 +887,13 @@ export function CoordinationControlCenter({
                     ))}
                   </>
                 ) : null}
+                {activityHeaderOneRow ? (
+                  <>
+                    <box flexGrow={1} />
+                    {/* "ALL n" beside it is the event count; this is the position. */}
+                    <text flexShrink={0} fg={theme.dim} wrapMode="none">{`  ${Math.max(selectedEventIndex + 1, 0)}/${filteredEvents.length}`}</text>
+                  </>
+                ) : null}
               </box>
             </box>
             <box height={eventRows} flexGrow={0} minHeight={0} flexDirection="column" overflow="hidden">
@@ -883,12 +902,10 @@ export function CoordinationControlCenter({
                 const sender = agentsById.get(event.agentId)?.name ?? event.agentId
                 const recipient = message?.recipient ?? event.to
                 const pair = recipient ? `${sender}→${recipient}` : sender
-                const previousEvent = visibleEvents[index - 1]
-                const previousMessage = previousEvent ? messageMetaByEvent.get(previousEvent) : undefined
-                const previousSender = previousEvent ? agentsById.get(previousEvent.agentId)?.name ?? previousEvent.agentId : ''
-                const previousRecipient = previousMessage?.recipient ?? previousEvent?.to
-                const previousPair = previousEvent ? `${previousSender}${previousRecipient ? `→${previousRecipient}` : ''}` : ''
-                const who = message && showActivityColumns ? `${pair === previousPair ? '│' : '┌'} ${pair}` : pair
+                // Sender→recipient is the whole of it. A `┌`/`│` used to lead a
+                // message row to bracket a run of mail between one pair, but
+                // most runs are a single row, where it was a stray corner.
+                const who = pair
                 // The reply marker outranks the kind: truncate the kind to keep
                 // "!?" (unanswered) visible, never `request…` which hides it.
                 const activityMarker = message?.replyRequired ? message.unanswered ? ' ?' : ' ✓' : ''
@@ -916,13 +933,15 @@ export function CoordinationControlCenter({
                       if (actualIndex >= 0) onSelectEvent?.(actualIndex)
                     }}
                   >
-                    <box width={showActivityColumns ? 9 : 6} overflow="hidden"><text fg={message ? theme.cyan : eventTone(event, theme)} wrapMode="none">{`● ${showActivityColumns ? clock(event.timestamp) : clock(event.timestamp).slice(3)} `}</text></box>
-                    <box width={showActivityColumns ? 18 : 10} paddingLeft={1} overflow="hidden"><text fg={message ? theme.violet : eventTone(event, theme)} wrapMode="none">{fit(who, showActivityColumns ? 16 : 9)}</text></box>
+                    {/* "● HH:MM:SS" is ten cells. Given nine, every row lost the last digit
+                        of its seconds. */}
+                    <box width={showActivityColumns ? 10 : 7} flexShrink={0} overflow="hidden"><text fg={message ? theme.cyan : eventTone(event, theme)} wrapMode="none">{`● ${showActivityColumns ? clock(event.timestamp) : clock(event.timestamp).slice(3)}`}</text></box>
+                    <box width={showActivityColumns ? 15 : 10} paddingLeft={1} overflow="hidden"><text fg={message ? theme.violet : eventTone(event, theme)} wrapMode="none">{fit(who, showActivityColumns ? 14 : 9)}</text></box>
                     {/* paddingLeft must stay on both widths: without it a full-width
                         pair ("lead→nova") butts straight against the kind column
                         and reads as one word ("lead→novaresponse"). */}
                     <box width={showActivityColumns ? 16 : 12} paddingLeft={1} overflow="hidden"><text fg={focused ? theme.text : eventTone(event, theme)} wrapMode="none">{activityType}</text></box>
-                    <box flexGrow={1} minWidth={0} paddingLeft={1} overflow="hidden"><text fg={focused ? theme.text : theme.muted} wrapMode="none">{fit(activityDetail, Math.max(rightW - (showActivityColumns ? 43 : 26), 5))}</text></box>
+                    <box flexGrow={1} minWidth={0} paddingLeft={1} overflow="hidden"><text fg={focused ? theme.text : theme.muted} wrapMode="none">{fit(activityDetail, Math.max(rightW - (showActivityColumns ? 41 : 27), 5))}</text></box>
                   </box>
                 )
               })}
