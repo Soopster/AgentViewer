@@ -345,6 +345,23 @@ Both TUIs depend on the same `lib/` provider layer — changes to `sessionBacken
 
 - **Poll fingerprint bail-out** in `setSessionDetail`: return `prev` when `rawMessages.length`, last UUID, model, and title are unchanged so React's identity bail-out skips a full transcript reformat on idle 2s polls.
 - **`cardDisplayData` useMemo** pre-computes landmarks, bodyLines, diffText, headerMeta for all cards; the render `.map()` reads from this stable cache rather than recomputing per render.
+- **Rows are spent on content, and the defaults are compact.** The empty composer
+  dock is four rows (`COMPOSER_MIN_HEIGHT`: borders plus two of draft) and grows
+  with the draft; a sidebar session is one row outside `comfortable` density,
+  with its age right-aligned and the activity glyph standing in for the word;
+  the pane title carries state (`● LIVE`, `READING`), not the theme's name.
+  The rail's `SESSIONS n · PROVIDER` header is painted into its top border (an
+  absolute box at `top: -1`, because a `title` string cannot carry the badge or
+  the click that toggles the sort), and the first group has no blank row above
+  it. Marks sit before the age so ages form one flush column.
+  The coordinator rail follows the same form: a run is a `TITLE / n` heading in
+  its status colour, and an agent is one row — tree glyph, name in its
+  provider's colour, then state glyph and task. Role and provider are not
+  spelled out, and an idle agent with no task says nothing.
+- **Only the focused surface has a lit border.** The composer dock used the
+  focused-pane border colour whenever it was merely open in a stream view, so
+  two frames looked focused at once; it is accented only when routed or when it
+  can take a key (`composerActive && !composerFocusBlocked`).
 - **Place static content outside `scrollbox`** — the scrollbox has a fixed `height: transcriptViewportRows` budget. The live-mode spinner intentionally lives outside it.
 - **OpenTUI has one focus slot, and the composer must own it while open.** A renderable mounting
   with `focused` true takes it: the transcript scrollbox remounting after a new session's first
@@ -1076,6 +1093,14 @@ second renderer; TRANSCRIPT is the opencode-styled sibling and keeps its cursor.
 - **The "new messages" banner is not reserved here.** Elsewhere two rows appear
   above the transcript whenever the tail is left; SCROLLBACK leaves it on every
   scroll, and the text jumped by two rows more than was asked for.
+- **The stream views budget only the chrome they draw** (`readerChromeRows`).
+  The viewport subtracted seven rows for a reader header, a context row and the
+  idle ticker in every view; STREAM and SCROLLBACK draw none of those, so those
+  rows sat blank under the transcript. The idle ticker is gone from both, the
+  action-hint row from SCROLLBACK (no card for the actions; its keys are in the
+  status bar), and a turn boundary with no duration to report is a blank row
+  rather than a full-width rule (landmark kind `break`). At 120x40 the
+  transcript went from 21 rows to 30.
 - `scrollbackTranscriptSmoke.tsx` reads the scroll position back row for row.
   Nine mutations were verified to fail it: showing the cursor, selecting on
   click, dropping the reveal guard, not re-following, the drag guard, the

@@ -145,9 +145,10 @@ assert.equal(documented.size, DISPATCHED_SPLIT_CHORDS.length, 'the keybinds help
 // Focus styling must never resize a pane's scroll viewport. The action row is
 // permanently reserved, leaving the same body height before and after focus
 // navigation; a live-status row remains the only intentional height change.
-assert.equal(calculateSplitPaneBodyRows(40, 0), 35)
-assert.equal(calculateSplitPaneBodyRows(40, 1), 34)
-assert.equal(calculateSplitPaneBodyRows(6, 0), 3)
+assert.equal(calculateSplitPaneBodyRows(40, 0), 38)
+assert.equal(calculateSplitPaneBodyRows(40, 1), 37)
+// The floor: a pane too short for its frame still gets three rows.
+assert.equal(calculateSplitPaneBodyRows(4, 0), 3)
 
 const composerKey = (session: Pick<Session, 'sessionId' | 'provider'>) => `${session.provider ?? 'claude'}:${session.sessionId}`
 

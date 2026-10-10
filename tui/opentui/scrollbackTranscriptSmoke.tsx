@@ -115,10 +115,9 @@ const scroll = () => {
   return sb
 }
 const limit = () => Math.max(scroll().scrollHeight - scroll().viewport.height, 0)
-// The pane title counts the cursor's message against the total; following the
-// tail is the only state in which it reads as the last one.
-const TOTAL = REPLIES.length + 3
-const followsTail = () => setup.captureCharFrame().includes(`${TOTAL}/${TOTAL}`)
+// The pane title says READING for as long as the tail is not being followed;
+// being scrolled to the bottom is not the same thing.
+const followsTail = () => !setup.captureCharFrame().includes('READING')
 const rowWith = (needle: string) => setup.captureCharFrame().split('\n').find((row) => row.includes(needle))
 
 const fail = (message: string): never => {
@@ -142,6 +141,21 @@ try {
   if (!rowWith('That is the whole pool.')) fail('SCROLLBACK did not open on the tail of the transcript')
   if (limit() < 60) fail('The fixture no longer overflows the viewport; scrolling would prove nothing')
   if (scroll().scrollTop !== limit()) fail('SCROLLBACK did not start at the bottom')
+
+  // ── the pane is the transcript ───────────────────────────────────────────
+  // The stream views draw no reader header, context row or idle ticker; the
+  // rows budgeted for them belong to the text. At 40 rows that is the pane's
+  // frame, the dock and the status bar away from the whole screen.
+  if (scroll().viewport.height < 29) {
+    fail(`SCROLLBACK shows ${scroll().viewport.height} transcript rows of 40; chrome is holding the rest`)
+  }
+  {
+    const { IDLE_TICKER_PHRASES } = await import('./App')
+    const frame = setup.captureCharFrame()
+    if (IDLE_TICKER_PHRASES.some((phrase) => frame.includes(phrase))) fail('SCROLLBACK painted the idle ticker')
+    const title = frame.split('\n').find((row) => row.includes('SCROLLBACK')) ?? ''
+    if (/\d+\/\d+/.test(title)) fail('SCROLLBACK titled the pane with a card position it has no cursor for')
+  }
 
   // ── nothing is highlighted ───────────────────────────────────────────────
   // A stream-like view marks its cursor card with ❯; the tail card is where

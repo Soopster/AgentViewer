@@ -120,7 +120,8 @@ async function settle(until: (frame: string) => boolean, what: string) {
   }
   return current
 }
-frame = await settle((f) => f.includes('! needs you') && f.includes('✓ result to review'),
+// State rides the agent's own row, after its name: glyph, then what it is about.
+frame = await settle((f) => f.includes('Sidebar Nova ! needs') && f.includes('Sidebar Orion ✓'),
   'the rail did not mark a teammate waiting on the lead and one with an unreviewed result')
 if (!frame.includes('COORDINATOR 3') || !frame.includes('!1 ✓1')) {
   console.error(`the rail header did not count blocked and unreviewed agents:\n${frame}`)

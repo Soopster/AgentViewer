@@ -10,7 +10,6 @@
 import { memo, useEffect, useSyncExternalStore } from 'react'
 import { getProviderAccent } from '../theme'
 import type { TuiDensity, TuiThemePalette } from '../theme'
-import { formatProviderLabel } from '../format'
 import { fitText, joinMeta } from './textLayout'
 import {
   acquireCoordinatorFeed,
@@ -21,13 +20,13 @@ import {
 } from './coordinatorStore'
 import type { CoordinatorPickerFilter, CoordinatorPickerState } from '../../lib/coordinatorSignals'
 
-// Herdr's Goto-picker states. The label leads the detail line so a filtered
-// list and an unfiltered one read the same way; `idle` says nothing, since an
-// agent with nothing to report is the default.
+// Herdr's Goto-picker states. The glyph follows the agent's name and the label
+// is what it says when the agent has no task to name instead; `idle` says
+// nothing, since an agent with nothing to report is the default.
 const PICKER_STATE_MARKERS: Record<CoordinatorPickerState, { glyph: string; label: string }> = {
   blocked: { glyph: '!', label: 'needs you' },
   working: { glyph: '●', label: 'working' },
-  done: { glyph: '✓', label: 'result to review' },
+  done: { glyph: '✓', label: 'to review' },
   idle: { glyph: '○', label: '' },
   unknown: { glyph: '?', label: 'unknown' },
 }
@@ -40,9 +39,12 @@ export type CoordinatorSidebarProps = {
   scrollbarOptions: unknown
 }
 
-function CoordinatorRow({ entry, selected, theme, innerWidth, density }: {
+function CoordinatorRow({ entry, selected, first, theme, innerWidth, density }: {
   entry: CoordinatorSidebarEntry
   selected: boolean
+  // The rail's title sits directly above the first heading; a blank row there
+  // separates it from nothing.
+  first: boolean
   theme: TuiThemePalette
   innerWidth: number
   density: TuiDensity
@@ -52,7 +54,7 @@ function CoordinatorRow({ entry, selected, theme, innerWidth, density }: {
     // combined list groups agents by machine. An unreadable machine says why.
     const status = entry.error ?? `${entry.agentCount} agent${entry.agentCount === 1 ? '' : 's'}`
     return (
-      <box id={`sidebar:${entry.key}`} paddingX={1} marginTop={1} backgroundColor={theme.surface2}>
+      <box id={`sidebar:${entry.key}`} paddingX={1} marginTop={first ? 0 : 1} backgroundColor={theme.surface}>
         <text fg={entry.error ? theme.amber : theme.cyan} wrapMode="none">
           {fitText(`⌂ ${entry.machine.name.toUpperCase()} · ${status}`, innerWidth - 2)}
         </text>
@@ -61,21 +63,29 @@ function CoordinatorRow({ entry, selected, theme, innerWidth, density }: {
   }
 
   if (entry.type === 'run') {
+    // A heading in the session rail's own form — `TITLE / n` — with the run's
+    // status in its colour. The band and the rule of dashes it used to carry
+    // were the loudest thing in a list whose content is the agents.
     const title = (entry.run.prompt.split('\n')[0]?.trim() || entry.run.id).toUpperCase()
-    const countLabel = `${entry.agentCount}`
-    const dashes = '─'.repeat(Math.max(innerWidth - 2 - title.length - countLabel.length - 3, 1))
+    const countLabel = ` / ${entry.agentCount}`
     const tone = entry.run.status === 'failed' ? theme.red
       : entry.run.status === 'blocked' ? theme.amber
       : entry.run.status === 'running' || entry.run.status === 'synthesizing' ? theme.green
       : entry.run.status === 'planning' ? theme.cyan
       : theme.dim
     return (
-      <box id={`sidebar:${entry.key}`} paddingX={1} marginTop={1} backgroundColor={theme.surface2}>
-        <text fg={tone} wrapMode="none">{fitText(`${title} ${dashes} ${countLabel}`, innerWidth - 2)}</text>
+      <box id={`sidebar:${entry.key}`} paddingX={1} marginTop={first ? 0 : 1} backgroundColor={theme.surface}>
+        <text fg={tone} wrapMode="none">
+          {`${fitText(title, Math.max(innerWidth - 2 - countLabel.length, 4)).trimEnd()}${countLabel}`}
+        </text>
       </box>
     )
   }
 
+  // One row an agent. The tree glyph already says lead or teammate and the
+  // name's colour says which provider, so neither is spelled out; what follows
+  // is the state and the task it is about. An idle agent with no task says
+  // nothing — "○ CLAUDE · unassigned" on every other row was most of the rail.
   const accent = getProviderAccent(entry.agent.provider)
   const glyph = entry.agent.role === 'lead' ? '◆' : entry.isLast ? '└─' : '├─'
   const marker = PICKER_STATE_MARKERS[entry.state]
@@ -83,11 +93,17 @@ function CoordinatorRow({ entry, selected, theme, innerWidth, density }: {
     : entry.state === 'working' || entry.state === 'done' ? theme.green
     : entry.agent.status === 'failed' ? theme.amber
     : theme.dim
-  const detailLine = joinMeta([marker.label, formatProviderLabel(entry.agent.provider), entry.taskTitle ?? 'unassigned'])
+  const detail = entry.taskTitle ?? marker.label
+  const showState = entry.state !== 'idle' || Boolean(entry.taskTitle)
+  const rowWidth = innerWidth - 3
+  const head = `${glyph} ${entry.agent.name}`
+  const headText = fitText(head, Math.min(head.length, rowWidth)).trimEnd()
+  const detailWidth = Math.max(rowWidth - headText.length - 3, 0)
   return (
     <box
       id={`sidebar:${entry.key}`}
-      flexDirection="column"
+      paddingX={1}
+      flexDirection="row"
       backgroundColor={selected ? theme.surface3 : theme.surface}
       marginBottom={density === 'comfortable' ? 1 : 0}
       onMouseDown={(event) => {
@@ -96,19 +112,15 @@ function CoordinatorRow({ entry, selected, theme, innerWidth, density }: {
         setCoordinatorSelectedKey(entry.key)
       }}
     >
-      <box paddingX={1} flexDirection="row" backgroundColor={selected ? theme.surface3 : theme.surface}>
-        <text fg={selected ? accent : theme.dim} wrapMode="none">{selected ? '▎' : ' '}</text>
-        <text fg={selected ? accent : theme.muted} wrapMode="none">
-          {fitText(`${glyph} ${entry.agent.name} · ${entry.agent.role}`, innerWidth - 3)}
-        </text>
-      </box>
-      <box paddingX={1} flexDirection="row" backgroundColor={selected ? theme.surface3 : theme.surface}>
-        <text fg={selected ? accent : theme.dim} wrapMode="none">{selected ? '▎' : ' '}</text>
-        <text fg={statusColor} wrapMode="none">{`${marker.glyph} `}</text>
-        <text fg={selected ? theme.text : theme.dim} wrapMode="none">
-          {fitText(detailLine, innerWidth - 5)}
-        </text>
-      </box>
+      <text fg={selected ? accent : theme.dim} wrapMode="none">{selected ? '▎' : ' '}</text>
+      <text fg={theme.dim} wrapMode="none">{`${glyph} `}</text>
+      <text fg={accent} wrapMode="none">{headText.slice(glyph.length + 1)}</text>
+      {showState && detailWidth > 0 ? (
+        <>
+          <text fg={statusColor} wrapMode="none">{` ${marker.glyph} `}</text>
+          <text fg={selected ? theme.text : theme.muted} wrapMode="none">{fitText(detail, detailWidth).trimEnd()}</text>
+        </>
+      ) : null}
     </box>
   )
 }
@@ -134,10 +146,11 @@ export const CoordinatorSidebar = memo(function CoordinatorSidebar(props: Coordi
       viewportCulling
       scrollbarOptions={props.scrollbarOptions as never}
     >
-      {state.entries.map((entry) => (
+      {state.entries.map((entry, index) => (
         <CoordinatorRow
           key={entry.key}
           entry={entry}
+          first={index === 0}
           selected={entry.type === 'agent' && entry.key === state.selectedKey}
           theme={props.theme}
           innerWidth={props.innerWidth}

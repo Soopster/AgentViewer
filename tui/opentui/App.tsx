@@ -921,7 +921,8 @@ export function terminalSelectionCopyDestination(options: {
 type PaneFocus = 'sessions' | 'messages'
 
 type CardLandmark = {
-  kind: 'resume' | 'unread' | 'day' | 'gap' | 'turn'
+  // 'break' is a turn boundary with nothing to say: a blank row, not a rule.
+  kind: 'resume' | 'unread' | 'day' | 'gap' | 'turn' | 'break'
   text: string
 }
 
@@ -1835,7 +1836,9 @@ function timeAgo(value?: string | number): string {
   return `${days}d`
 }
 
-const COMPOSER_MIN_HEIGHT = 6
+// Borders plus two rows of draft: an empty prompt is not worth four rows of
+// the transcript, and the dock grows with the draft anyway.
+const COMPOSER_MIN_HEIGHT = 4
 const COMPOSER_MAX_HEIGHT = 12
 // The embedded composer keeps one breathing row below the draft. Its height
 // budget includes that row plus the top border. The composer has no bottom
@@ -3489,6 +3492,7 @@ function continuousTurnFooter(card: TuiTranscriptCard, next: TuiTranscriptCard |
 }
 
 function streamLandmarkText(landmark: CardLandmark, width: number): string {
+  if (landmark.kind === 'break') return ' '
   if (landmark.kind === 'turn') {
     return landmark.text
       ? fitText(`─ ${landmark.text} `, width).padEnd(width, '─')
@@ -3696,6 +3700,7 @@ function computeAllLandmarks(
   pendingNewCount: number,
   previous: CardLandmark[][] | null,
   streamMode: boolean,
+  quietTurns = false,
 ): CardLandmark[][] {
   const result: CardLandmark[][] = new Array(cards.length)
   for (let i = 0; i < cards.length; i++) {
@@ -3728,7 +3733,9 @@ function computeAllLandmarks(
           break
         }
       }
-      landmarks.push({ kind: 'turn', text })
+      // SCROLLBACK keeps a rule only where it carries the turn's duration; a
+      // full-width line between a tool row and the reply after it is chrome.
+      landmarks.push({ kind: quietTurns && !text ? 'break' : 'turn', text })
     }
 
     if (i === resumeMarkerIndex) {
@@ -7272,11 +7279,21 @@ function SplitTranscriptPaneInner({
     }),
     [liveMessages, density],
   )
+  // A pane reads in the reader's own view. For the stream views that means the
+  // reader's shaping too: bookkeeping rows dropped, tool calls grouped into
+  // activity rows, and no "No visible content" stop for every tool-only
+  // message — otherwise the two halves of a split are two different apps.
+  const paneStreamLike = transcriptView === 'stream' || transcriptView === 'chat'
+    || transcriptView === 'transcript' || transcriptView === 'scrollback'
   const tailCards = useMemo(() => {
-    if (liveCards.length === 0) return persistedTailCards
     const liveKeys = new Set(liveCards.map((card) => card.key))
-    return [...persistedTailCards.filter((card) => !liveKeys.has(card.key)), ...liveCards]
-  }, [persistedTailCards, liveCards])
+    const merged = liveCards.length === 0
+      ? persistedTailCards
+      : [...persistedTailCards.filter((card) => !liveKeys.has(card.key)), ...liveCards]
+    if (!paneStreamLike) return merged
+    return groupStreamToolCards(merged.filter((card) => card.category !== 'system'))
+      .filter((card) => !isStreamGhostCard(card))
+  }, [persistedTailCards, liveCards, paneStreamLike])
 
   // Cursor: null means "following the tail". Set once the reader focuses this
   // pane and moves, which is also what detaches tail-follow.
@@ -7292,6 +7309,7 @@ function SplitTranscriptPaneInner({
     bodyLineLimit: number
     providerKey: ProviderSelection | undefined
     isLatest: boolean
+    view: TuiTranscriptView
     value: CardDisplayData
   }>())
   const displayData = useMemo((): CardDisplayData[] => tailCards.map((card, index) => {
@@ -7305,10 +7323,19 @@ function SplitTranscriptPaneInner({
       && previous.bodyLineLimit === densityState.bodyLines
       && previous.providerKey === providerKey
       && previous.isLatest === isLatest
+      && previous.view === transcriptView
     ) {
       return previous.value
     }
-    const bodyLines = renderedBodyLines(card, isExpanded, densityState.bodyLines, false, false, false)
+    const bodyLines = renderedBodyLines(
+      card,
+      isExpanded,
+      densityState.bodyLines,
+      false,
+      usesAgentCardPresentation(card, transcriptView),
+      // Stream prose is the transcript, not a preview of it.
+      paneStreamLike && (card.category === 'conversation' || card.category === 'insight'),
+    )
     const isInsight = card.category === 'insight'
     const value: CardDisplayData = {
       landmarks: EMPTY_LANDMARKS,
@@ -7334,10 +7361,11 @@ function SplitTranscriptPaneInner({
       bodyLineLimit: densityState.bodyLines,
       providerKey,
       isLatest,
+      view: transcriptView,
       value,
     })
     return value
-  }), [tailCards, expandedKeys, densityState.bodyLines, session.provider])
+  }), [tailCards, expandedKeys, densityState.bodyLines, session.provider, transcriptView, paneStreamLike])
 
   const sessionRef = useRef(session)
 
@@ -7532,9 +7560,9 @@ function SplitTranscriptPaneInner({
       diffLayout,
       imessageStyle,
       transcriptWidth,
-      streamMode: transcriptView === 'stream' || transcriptView === 'chat' || transcriptView === 'transcript' || transcriptView === 'scrollback',
+      streamMode: paneStreamLike,
       continuousMode: transcriptView === 'transcript',
-      agentsMode: false,
+      agentsMode: usesAgentCardPresentation(card, transcriptView),
       agentToolCursorKey: null,
       agentToolExpandedKeys: EMPTY_EXPANDED_KEYS,
       agentToolCollapsedKeys: EMPTY_EXPANDED_KEYS,
@@ -7596,31 +7624,22 @@ function SplitTranscriptPaneInner({
       flexDirection="column"
       // Number the frame whenever more than one is mounted: ⌃B 1/⌃B 2 jump
       // straight to a pane, and nothing else on screen says which is which.
+      // The title carries what the pane's own header row used to: which
+      // session, and the state worth knowing without focusing it.
       title={fitText(
-        paneCount > 1 ? `${paneIndex + 1} · ${formatSessionTitle(session)}` : formatSessionTitle(session),
+        joinMeta([
+          paneCount > 1 ? `${paneIndex + 1} · ${formatSessionTitle(session)}` : formatSessionTitle(session),
+          running ? 'running' : null,
+          followTail ? null : 'paused',
+        ]),
         Math.max(width - 4, 8),
       )}
-      titleColor={accent}
+      titleColor={running ? theme.green : accent}
       onMouseDown={(event) => {
         if (event.button === 0) onActivate(paneIndex)
       }}
     >
-      <box paddingX={1} flexDirection="row">
-        <text fg={running ? theme.green : accent} wrapMode="none">{focused ? '▶ ' : running ? '◐ ' : '● '}</text>
-        <text fg={theme.dim} wrapMode="none">
-          {fitText(
-            [
-              formatSessionProject(session),
-              running ? 'running' : null,
-              `${cards.length} card${cards.length === 1 ? '' : 's'}`,
-              hiddenCount > 0 ? `tail ${tailCards.length}` : null,
-              followTail ? null : 'paused',
-            ].filter(Boolean).join('  ·  '),
-            Math.max(innerWidth - 2, 8),
-          )}
-        </text>
-      </box>
-      <box flexGrow={1} paddingX={1} paddingBottom={1} overflow="hidden">
+      <box flexGrow={1} paddingX={1} overflow="hidden">
         {status === 'error' ? (
           <text fg={theme.red} wrapMode="none">{fitText(error ?? 'Failed to load transcript', innerWidth)}</text>
         ) : status === 'loading' && tailCards.length === 0 ? (
@@ -7663,13 +7682,13 @@ function SplitTranscriptPaneInner({
           <Spinner label={fitText('working…', Math.max(innerWidth - 2, 8))} fg={theme.dim} />
         </box>
       ) : null}
-      <box paddingX={1} height={1}>
+      {/* Key hints sit in the bottom border, as the composer's status does. */}
+      <box position="absolute" bottom={-1} left={1} height={1} backgroundColor={theme.surface}>
         <text fg={theme.dim} wrapMode="none">
-          {focused
-            ? fitText(running ? 'j/k card  e fold  y copy  b mark  c send  ⌃C stop  ↵ open  esc reader' : 'j/k card  e fold  y copy  b mark  Q reply  c send  ↵ open  esc reader', innerWidth)
-            // The row is reserved either way (focus must not resize the
-            // viewport), so an unfocused pane spends it saying how to reach it.
-            : fitText(`⌃B ${paneIndex + 1} focus  ·  ⌃B n next session`, innerWidth)}
+          {` ${(focused
+            ? fitText(running ? 'j/k card  e fold  y copy  b mark  c send  ⌃C stop  ↵ open  esc reader' : 'j/k card  e fold  y copy  b mark  Q reply  c send  ↵ open  esc reader', innerWidth - 2)
+            // An unfocused pane says how to reach it.
+            : fitText(`⌃B ${paneIndex + 1} focus  ·  ⌃B n next session`, innerWidth - 2)).trimEnd()} `}
         </text>
       </box>
     </box>
@@ -9803,7 +9822,7 @@ export default function OpenTuiApp() {
         Math.floor(height * 0.35),
       ))
     : Math.max(
-        fullscreenMode ? COMPOSER_MIN_HEIGHT - 2 : COMPOSER_MIN_HEIGHT,
+        fullscreenMode ? COMPOSER_MIN_HEIGHT - 1 : COMPOSER_MIN_HEIGHT,
         Math.min(
           fullscreenMode ? COMPOSER_MAX_HEIGHT - 2 : COMPOSER_MAX_HEIGHT,
           composerDraftLines + composerDockChromeHeight,
@@ -11067,13 +11086,21 @@ export default function OpenTuiApp() {
     ) return null
     return streamCompletedTurnHint(visibleTranscriptCards)
   }, [transcriptView, turnRunningForComposer, visibleTranscriptCards])
-  const streamActionFooterRows = isChatLikeView && !embeddedComposer && visibleTranscriptCards.length > 0 ? 1 : 0
+  // SCROLLBACK has no card for these actions to apply to, and its own keys are
+  // already in the status bar.
+  const streamActionFooterRows = isChatLikeView && !isScrollbackView && !embeddedComposer && visibleTranscriptCards.length > 0 ? 1 : 0
   const chatTurnStatusRows = embeddedComposer && turnRunningForComposer && visibleTranscriptCards.length > 0 ? 1 : 0
+  // Two-row "new messages" banner above the transcript; see where it renders.
+  const tailBannerRows = !followTail && (!isScrollbackView || pendingNewCount > 0) ? 2 : 0
+  // Frame, header, context row and the ticker-or-banner pair. The stream views
+  // draw only the frame and the banner, and were handing the transcript's rows
+  // to chrome they never render.
+  const readerChromeRows = isStreamView ? 1 + tailBannerRows : 7
   const transcriptViewportRows = Math.max(
     readerRowBudget
     // Fullscreen removes the two-row reader frame, leaving only the compact
     // restore affordance plus the transcript's top/bottom content insets.
-    - (fullscreenMode ? 3 : focusMode ? 4 : 7)
+    - (fullscreenMode ? 3 : focusMode ? 4 : readerChromeRows)
     - (showTabs || showPreviewBar ? TAB_BAR_HEIGHT : 0)
     // Fleet strip is one header row when visible.
     - (fleetStripVisible ? 1 : 0)
@@ -11156,7 +11183,7 @@ export default function OpenTuiApp() {
     height - surfacePanelTop - (searchMode || sessionSearchMode ? 4 : fullscreenMode ? 0 : 1),
   )
 
-  const sidebarRowBudget = Math.max(mainContentHeight - 2, 4)
+  const sidebarRowBudget = Math.max(mainContentHeight, 4)
   const sidebarInnerWidth = Math.max(sidebarWidth - 5, 17)
   const showProviderInSessionRows = provider === 'all'
   const sidebarSessionCountLabel = normalizedSessionQuery
@@ -11364,6 +11391,7 @@ export default function OpenTuiApp() {
       pendingNewCount,
       allLandmarksRef.current,
       isChatLikeView,
+      isScrollbackView,
     )
     return next
   }, [renderedTranscriptCards, transcriptRenderStart, resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount, transcriptView])
@@ -14371,6 +14399,7 @@ export default function OpenTuiApp() {
   // array also lets OpenTUI's reconciler bail on the whole subtree when nothing
   // here changed. `timeAgo` output refreshes whenever sidebarEntries does (the
   // 5s sessions poll produces a new array), which is frequent enough.
+  const firstSidebarEntryKey = sidebarEntries[0]?.key ?? null
   const buildSidebarRow = useCallback((entry: typeof sidebarEntries[number], selected: boolean) => {
     if (entry.type === 'project') {
       const countLabel = `${entry.count}`
@@ -14380,7 +14409,9 @@ export default function OpenTuiApp() {
           key={entry.key}
           id={`sidebar:${entry.key}`}
           paddingX={1}
-          marginTop={1}
+          // A blank row separates groups; the first has the rail's own title
+          // above it and nothing to be separated from.
+          marginTop={entry.key === firstSidebarEntryKey ? 0 : 1}
           backgroundColor={theme.surface}
         >
           <text fg={theme.dim} wrapMode="none">
@@ -14475,6 +14506,21 @@ export default function OpenTuiApp() {
     // teammate, a result only waits to be read.
     const team = teamAttention.get(sessionKey(entry.session))
     const teamMark = team ? (team.waiting > 0 ? ` !${team.waiting}` : ` ✓${team.finished}`) : ''
+    // Only the comfortable density spends a second row on the age. Otherwise it
+    // rides the title's row, right-aligned, and the activity glyph stands in
+    // for the word — twice the sessions in the same rail.
+    const singleRow = density !== 'comfortable' && sessionKey(entry.session) !== renameSessionKey
+    const rowMeta = joinMeta([
+      showProviderInSessionRows ? formatProviderLabel(entry.session.provider) : null,
+      ago,
+    ])
+    // "Recently touched" is the age itself on this row; only a turn's state
+    // earns a glyph. Marks sit before the age so the ages stay one flush column.
+    const rowGlyph = activity ? activityGlyph : null
+    const rowTitleWidth = Math.max(
+      sidebarInnerWidth - 3 - (rowMeta ? rowMeta.length + 1 : 0) - teamMark.length - (rowGlyph ? 2 : 0),
+      4,
+    )
 
     return (
       <box
@@ -14505,10 +14551,18 @@ export default function OpenTuiApp() {
             <text fg={sessionAccent} wrapMode="none">{selected ? '▎' : ' '}</text>
             {/* Keep the title readable; provider identity belongs to the rail. */}
             <text fg={theme.text} attributes={selected ? TextAttributes.BOLD : undefined} wrapMode="none">
-              {fitText(formatSessionTitle(entry.session), sidebarInnerWidth - 3)}
+              {fitText(formatSessionTitle(entry.session), singleRow ? rowTitleWidth : sidebarInnerWidth - 3)}
             </text>
+            {singleRow ? (
+              <>
+                {teamMark ? <text fg={team!.waiting > 0 ? theme.amber : theme.green} wrapMode="none">{teamMark}</text> : null}
+                {rowGlyph ? <text fg={activityColor} wrapMode="none">{` ${rowGlyph}`}</text> : null}
+                {rowMeta ? <text fg={activity === 'needs-input' ? theme.amber : theme.dim} wrapMode="none">{` ${rowMeta}`}</text> : null}
+              </>
+            ) : null}
           </box>
         )}
+        {singleRow ? null : (
         <box paddingX={1} flexDirection="row" backgroundColor={selected ? theme.surface3 : theme.surface}>
           <text fg={sessionAccent} wrapMode="none">{selected ? '▎' : ' '}</text>
           <text fg={activity === 'needs-input' ? theme.amber : theme.dim} wrapMode="none">
@@ -14517,9 +14571,10 @@ export default function OpenTuiApp() {
           {teamMark ? <text fg={team!.waiting > 0 ? theme.amber : theme.green} wrapMode="none">{teamMark}</text> : null}
           {activityGlyph ? <text fg={activityColor} wrapMode="none">{` ${activityGlyph}`}</text> : null}
         </box>
+        )}
       </box>
     )
-  }, [theme, density, sidebarInnerWidth, renameSessionKey, renameDraft, commitRename, selectSidebarSession, showProviderInSessionRows, sidebarSessionActivity, teamAttention])
+  }, [theme, density, sidebarInnerWidth, firstSidebarEntryKey, renameSessionKey, renameDraft, commitRename, selectSidebarSession, showProviderInSessionRows, sidebarSessionActivity, teamAttention])
 
 
   // Per-row element cache. Moving the selection highlight only changes TWO rows
@@ -16724,10 +16779,20 @@ export default function OpenTuiApp() {
   // Track the reader box's real height. Reads after every commit (cheap
   // property read) and only setStates when it actually changed, so a resize
   // settles in one extra frame and idle renders don't loop.
+  // No dependency list, deliberately: the box's height moves with the dock,
+  // the tab bar and the status rows as well as with the terminal, and a split
+  // pane sized from a stale reading stops short of the reader beside it. Yoga
+  // lays out on the frame after a commit, so the reading taken at commit can
+  // itself be one layout behind; the timer picks up the settled value.
   useLayoutEffect(() => {
-    const measured = readerBoxRef.current?.height ?? 0
-    if (measured > 0 && measured !== measuredReaderBoxHeight) setMeasuredReaderBoxHeight(measured)
-  }, [height, measuredReaderBoxHeight])
+    const measure = () => {
+      const measured = readerBoxRef.current?.height ?? 0
+      if (measured > 0) setMeasuredReaderBoxHeight((current) => (current === measured ? current : measured))
+    }
+    measure()
+    const timer = setTimeout(measure, 50)
+    return () => clearTimeout(timer)
+  })
 
   // A closed composer drops its pane target, so the next send goes to the
   // reader's session unless the user aims it again.
@@ -21039,7 +21104,9 @@ export default function OpenTuiApp() {
       // Primary group: the live/reader state that actually changes as you work.
       const livePart = joinMeta([
         `${statusGlyph} ${statusLabel.toUpperCase()}`,
-        visibleTranscriptCards.length === 0 ? '0/0' : `${Math.max(cursorIndex, 0) + 1}/${visibleTranscriptCards.length}`,
+        // A position among cards means nothing where no card has the cursor.
+        isScrollbackView ? null
+          : visibleTranscriptCards.length === 0 ? '0/0' : `${Math.max(cursorIndex, 0) + 1}/${visibleTranscriptCards.length}`,
         readerMode?.toUpperCase() ?? null,
         pendingNewCount > 0 ? `+${pendingNewCount} NEW` : null,
       ])
@@ -21047,8 +21114,8 @@ export default function OpenTuiApp() {
       // the footer uses so it stops competing with live status. Density/width
       // are intentionally omitted — the footer already shows their live values
       // (d/⇧W), so repeating them here was pure duplication.
+      // The theme's name is not among them: it is on screen as the theme.
       const settingsPart = joinMeta([
-        themeMode.toUpperCase(),
         !railVisible ? 'h show rail' : null,
       ])
       return fitText(
@@ -21056,7 +21123,7 @@ export default function OpenTuiApp() {
         Math.max(Math.floor(width * 0.45), 20),
       )
     },
-    [statusLabel, visibleTranscriptCards.length, cursorIndex, readerMode, themeMode, pendingNewCount, railVisible, width],
+    [statusLabel, visibleTranscriptCards.length, cursorIndex, readerMode, isScrollbackView, pendingNewCount, railVisible, width],
   )
   const readerFrameTitle = isStreamView
     ? joinMeta([TRANSCRIPT_VIEW_LABELS[transcriptView], headerStatusRight])
@@ -21163,7 +21230,9 @@ export default function OpenTuiApp() {
   const composerDockTitleWidth = Math.max(composerDockTextareaWidth - 2, 12)
   const composerDockTitleGap = composerDockTitleWidth - composerDockTitleLeft.length - composerDockHeaderStatus.length
   const composerDockRouted = routeComposerToBridge || routeComposerToIde
-  const composerDockEmphasized = composerDockRouted || composerActive
+  // Lit only while the composer can actually take a key: an accent border on
+  // an open-but-unfocused prompt reads as a second focused pane.
+  const composerDockEmphasized = composerDockRouted || (composerActive && !composerFocusBlocked)
   const composerDockTitleRule = composerDockRouted ? '━' : '─'
   const composerDockBorderTitle = composerDockTitleGap > 0
     ? `${composerDockTitleLeft}${composerDockTitleRule.repeat(composerDockTitleGap)}${composerDockHeaderStatus}`
@@ -21590,11 +21659,19 @@ export default function OpenTuiApp() {
             titleColor={theme.cyan}
           >
             {sidebarView === 'sessions' ? (
+              // Painted into the top border, where a title goes, rather than
+              // on a row of its own under it: the rail's first row is a session.
+              // It stays a box because the provider badge and the click that
+              // toggles the sort need one; a `title` string can carry neither.
               <box
+                position="absolute"
+                top={-1}
+                left={1}
+                width={sidebarHeaderBaseText.trimEnd().length + 2}
                 height={1}
                 paddingX={1}
                 flexDirection="row"
-                backgroundColor={theme.surface2}
+                backgroundColor={theme.surface}
                 overflow="hidden"
                 onMouseDown={(event) => {
                   if (event.button !== 0) return
@@ -21603,8 +21680,8 @@ export default function OpenTuiApp() {
                   showToggleOutcome('Sidebar sort:', sidebarSort === 'project' ? 'time' : 'project')
                 }}
               >
-                <text width={sidebarHeaderWidth} fg={theme.cyan} bg={theme.surface2} wrapMode="none">
-                  {sidebarHeaderBaseText}
+                <text fg={theme.cyan} bg={theme.surface} wrapMode="none">
+                  {sidebarHeaderBaseText.trimEnd()}
                 </text>
                 <box
                   id="sidebar-provider-badge"
@@ -21937,16 +22014,28 @@ export default function OpenTuiApp() {
                   )
                 ) : null}
 
-                {streamTurnFooterText ? (
-                  <box key="stream-turn-footer" paddingX={1} marginBottom={densityState.cardGap}>
-                    <text fg={theme.dim} width={Math.max(rightPaneWidth - 5, 12)} wrapMode="none" selectable>
-                      {streamLandmarkText(
-                        { kind: 'turn', text: streamTurnFooterText },
-                        Math.max(rightPaneWidth - 5, 12),
-                      )}
-                    </text>
-                  </box>
-                ) : null}
+                {streamTurnFooterText ? (() => {
+                  // The same box a stream card draws its own turn rule in, so
+                  // the closing rule shares the column's edge instead of
+                  // hugging the pane's while the text above it is centered.
+                  const footerWidth = transcriptWidth === 'full'
+                    ? Math.max(rightPaneWidth - 5, 12)
+                    : Math.max(transcriptMeasure(Math.max(rightPaneWidth - 4, 16) - densityState.bodyIndent, transcriptWidth), 16)
+                      + densityState.bodyIndent
+                  return (
+                    <box
+                      key="stream-turn-footer"
+                      paddingX={transcriptWidth === 'full' ? 1 : 0}
+                      marginBottom={densityState.cardGap}
+                      width={transcriptWidth === 'full' ? undefined : footerWidth}
+                      alignSelf={transcriptWidth === 'centered' ? 'center' : undefined}
+                    >
+                      <text fg={theme.dim} width={footerWidth} wrapMode="none" selectable>
+                        {streamLandmarkText({ kind: 'turn', text: streamTurnFooterText }, footerWidth)}
+                      </text>
+                    </box>
+                  )
+                })() : null}
 
               </scrollbox>
             )}
@@ -21974,9 +22063,7 @@ export default function OpenTuiApp() {
               <box height={streamActionFooterRows} paddingLeft={1}>
                 <text fg={theme.dim} wrapMode="none">
                   {effectiveFocus === 'messages'
-                    ? fitText(isScrollbackView
-                      ? 'j/k line   ⌃d/⌃u half page   PgUp/PgDn page   g/G ends'
-                      : 'b bookmark   Q quote/reply   y copy', Math.max(rightPaneWidth - 6, 12))
+                    ? fitText('b bookmark   Q quote/reply   y copy', Math.max(rightPaneWidth - 6, 12))
                     : ' '}
                 </text>
               </box>
@@ -22026,9 +22113,11 @@ export default function OpenTuiApp() {
               and which one tells you whether a turn is live.
 
               Chat and Agents omit the idle ticker. Their single activity row
-              appears immediately above the composer only while a turn runs. */}
+              appears immediately above the composer only while a turn runs.
+              Stream and Scrollback omit it too: they are the bare transcript,
+              and two rows saying nothing is happening are two rows of it. */}
           {followTail && visibleTranscriptCards.length > 0
-            && !turnRunningForComposer && !embeddedComposer ? (
+            && !turnRunningForComposer && !embeddedComposer && !isStreamView ? (
             <box paddingX={2} paddingBottom={1}>
               <IdleTicker seed={selectedSessionKey ?? ''} theme={theme} />
             </box>
@@ -23390,11 +23479,7 @@ export default function OpenTuiApp() {
           backgroundColor={isChatLikeView ? theme.surface : theme.surface2}
           border={fullscreenMode ? [] : ['top', 'left', 'right', 'bottom']}
           borderStyle={composerDockRouted ? 'heavy' : isChatLikeView ? 'single' : 'rounded'}
-          borderColor={composerDockEmphasized
-            ? composerAccentColor
-            : isChatLikeView
-              ? theme.border2
-              : theme.border}
+          borderColor={composerDockEmphasized ? composerAccentColor : theme.border}
           title={fullscreenMode || isChatLikeView ? undefined : composerDockBorderTitle}
           titleColor={composerDockEmphasized ? composerAccentColor : theme.dim}
           titleAlignment="left"

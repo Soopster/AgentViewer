@@ -169,12 +169,13 @@ export function evenSplitReaderShare(visibleCount: number): number {
   return visibleCount <= 0 ? 1 : 1 / (visibleCount + 1)
 }
 
-// Reserve the pane-action row whether or not the pane is focused. Focus must
-// not resize the scroll viewport: changing its height shifts scrollTop and can
-// make the same saved offset show a different set of cards on return.
+// A pane spends rows only on its frame: the session and its state are the top
+// border's title and the key hints are painted into the bottom border, so
+// neither costs a row. That also keeps focus from resizing the scroll viewport
+// — changing its height shifts scrollTop and can make the same saved offset
+// show a different set of cards on return.
 export function calculateSplitPaneBodyRows(height: number, statusRowCount: number): number {
-  const reservedActionRows = 1
-  return Math.max(height - 4 - statusRowCount - reservedActionRows, 3)
+  return Math.max(height - 2 - statusRowCount, 3)
 }
 
 export function preserveArrayIdentity<T>(previous: T[], next: T[]): T[] {
