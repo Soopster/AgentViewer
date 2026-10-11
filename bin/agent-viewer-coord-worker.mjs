@@ -21,6 +21,7 @@ import {
 import {
   ACP_TRANSPORT_PROVIDERS,
   resolveAcpAgentCommand,
+  parseAcpCommand,
   runAcpProviderTick,
 } from './agent-viewer-acp-client.mjs'
 import { scrubInheritedAgentIdentity } from '../lib/inheritedIdentityEnv.mjs'
@@ -122,6 +123,11 @@ Options:
   --model <id>         Provider model override (e.g. sonnet, gpt-5.2-codex, openai-codex/gpt-5.2-codex)
   --transport <cli|acp> Provider transport (default cli). acp drives claude-agent-acp/codex-acp
                        over ACP instead of the raw CLI; only supported for --provider claude or codex.
+  --acp-command <cmd>  Drive ANY agent that speaks ACP (e.g. "gemini --experimental-acp",
+                       "goose acp") instead of a built-in adapter. Implies --transport acp
+                       and, unless --provider is given, --provider acp.
+                       A command line or a JSON argv array; never run through a shell.
+                       --provider then only names the badge the roster shows.
   --playbook <name>    With --start: seed the board from a saved playbook
   --args <value>       With --playbook: args interpolated into task text (JSON or string)
   --max-agents <n>     With --start: participant limit from 2 to 16 (default 6 or playbook value)
@@ -163,6 +169,7 @@ function parseArgs(args) {
     ['--provider', 'provider'],
     ['--model', 'model'],
     ['--transport', 'transport'],
+    ['--acp-command', 'acpCommand'],
     ['--playbook', 'playbook'],
     ['--args', 'args'],
     ['--max-agents', 'maxAgents'],
@@ -746,6 +753,11 @@ async function providerTick(state, baseUrl, actionable) {
  * equivalent of the raw transport's `--add-dir` for isolated-worktree git
  * access.
  */
+/** What to call the ACP agent in an error: the user's own command, else the built-in adapter. */
+function acpAgentLabel(state) {
+  return state.acpCommand?.[0] ?? resolveAcpAgentCommand(state.provider)
+}
+
 async function acpProviderTick(state, baseUrl, config, prompt, additionalDirectories, tickStartedAtIso) {
   const abortController = new AbortController()
   const forwardShutdown = () => abortController.abort(supervisorStoppedError())
@@ -822,6 +834,7 @@ async function acpProviderTick(state, baseUrl, config, prompt, additionalDirecto
   try {
     const result = await runAcpProviderTick({
       providerId: state.provider,
+      ...(state.acpCommand ? { command: state.acpCommand[0], args: state.acpCommand.slice(1) } : {}),
       cwd: state.cwd,
       prompt,
       mcpServer: { name: 'agent-viewer', command: config.command, args: config.args },
@@ -844,14 +857,14 @@ async function acpProviderTick(state, baseUrl, config, prompt, additionalDirecto
       await saveState(state.identityFile, state)
     }
     if (result.stopReason === 'refusal') {
-      const error = new Error(`${resolveAcpAgentCommand(state.provider)} refused the turn`)
+      const error = new Error(`${acpAgentLabel(state)} refused the turn`)
       error.providerOutput = providerOutput
       throw error
     }
   } catch (error) {
-    if (turnCancelled) throw makeTurnCancelledError(resolveAcpAgentCommand(state.provider), providerOutput)
+    if (turnCancelled) throw makeTurnCancelledError(acpAgentLabel(state), providerOutput)
     if (turnTimedOut) {
-      const timeoutError = new Error(`${resolveAcpAgentCommand(state.provider)} ${providerTimeoutDetail}`)
+      const timeoutError = new Error(`${acpAgentLabel(state)} ${providerTimeoutDetail}`)
       timeoutError.code = 'COORDINATOR_PROVIDER_TURN_TIMEOUT'
       timeoutError.providerOutput = providerOutput
       throw timeoutError
@@ -866,7 +879,12 @@ async function acpProviderTick(state, baseUrl, config, prompt, additionalDirecto
 let options
 try { options = parseArgs(process.argv.slice(2)) } catch (error) { usage(error.message) }
 if (!options || options.help) usage()
-if (!['codex', 'claude', 'opencode', 'copilot', 'pi'].includes(options.provider)) usage('--provider must be codex, claude, opencode, copilot, or pi')
+// An agent named only by its command is the `acp` provider, so the roster shows
+// it as what it is rather than as whichever built-in provider was the default.
+if (options.acpCommand !== undefined && !options.providerExplicit) options.provider = 'acp'
+if (options.provider === 'acp' && options.acpCommand === undefined && process.env.AGENT_VIEWER_ACP_COMMAND?.trim()) options.acpCommand = process.env.AGENT_VIEWER_ACP_COMMAND
+if (!['codex', 'claude', 'opencode', 'copilot', 'pi', 'acp'].includes(options.provider)) usage('--provider must be codex, claude, opencode, copilot, pi, or acp')
+if (options.provider === 'acp' && options.acpCommand === undefined && !options.identity) usage('--provider acp needs --acp-command "<cmd>" or AGENT_VIEWER_ACP_COMMAND')
 if (!['cli', 'acp'].includes(options.transport)) usage('--transport must be cli or acp')
 // A fresh --start/--join with an explicit bad combination is a user mistake —
 // reject it up front. A resumed --identity worker is unattended and may not
@@ -874,7 +892,14 @@ if (!['cli', 'acp'].includes(options.transport)) usage('--transport must be cli 
 // which only overrides state.transport when --transport was explicit this
 // invocation), so this check only fires for the combination actually given
 // on this command line, not the persisted state.
-if (options.transportExplicit && options.transport === 'acp' && !ACP_TRANSPORT_PROVIDERS.has(options.provider)) {
+let acpCommand
+if (options.acpCommand !== undefined) {
+  if (options.transportExplicit && options.transport !== 'acp') usage('--acp-command drives the agent over ACP; drop --transport cli')
+  try { acpCommand = parseAcpCommand(options.acpCommand) } catch (error) { usage(error.message) }
+  options.transport = 'acp'
+  options.transportExplicit = true
+}
+if (!acpCommand && options.transportExplicit && options.transport === 'acp' && !ACP_TRANSPORT_PROVIDERS.has(options.provider)) {
   usage(`--transport acp is only supported for --provider ${[...ACP_TRANSPORT_PROVIDERS].join(' or ')}`)
 }
 if (options.maxAgents !== undefined) {
@@ -940,7 +965,13 @@ if (options.identity && !options.start && !options.join) {
   // re-passed this invocation — a bare `--identity <file>` resume (the
   // common restart path, see agent-viewer-coord-admin.mjs) must keep
   // whatever transport the file already records.
-  if (options.transportExplicit) {
+  // A custom ACP agent is its own adapter: it stays on ACP whatever provider
+  // badge it carries, and a resume without the flag keeps the recorded command.
+  if (acpCommand) state.acpCommand = acpCommand
+  else if (options.transportExplicit && options.transport !== 'acp') delete state.acpCommand
+  if (state.acpCommand) {
+    state.transport = 'acp'
+  } else if (options.transportExplicit) {
     state.transport = ACP_TRANSPORT_PROVIDERS.has(state.provider) && options.transport === 'acp' ? 'acp' : undefined
   } else if (state.transport === 'acp' && !ACP_TRANSPORT_PROVIDERS.has(state.provider)) {
     // A --provider failover switched this worker onto a CLI with no ACP
@@ -1005,6 +1036,7 @@ if (options.identity && !options.start && !options.join) {
   }
   if (options.model) state.model = options.model
   if (options.transport === 'acp') state.transport = 'acp'
+  if (acpCommand) state.acpCommand = acpCommand
   state.identityFile = path.resolve(options.identity || identityFileFor(state))
 }
 state.attach = baseUrl

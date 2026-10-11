@@ -3,7 +3,7 @@ import { getProviderCapabilities } from '../lib/provider'
 import { planFeature, type DegradableFeature } from '../lib/providerDegradation'
 import type { AgentProvider } from '../lib/types'
 
-const providers: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'lmstudio', 'claude-acp', 'codex-acp']
+const providers: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'lmstudio', 'claude-acp', 'codex-acp', 'acp']
 const features: DegradableFeature[] = ['steer', 'fork', 'rewind']
 
 // Every provider answers every feature, and "native" always agrees with its flag.

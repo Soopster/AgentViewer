@@ -850,6 +850,7 @@ export type TuiSessionCoordinationRequest = import('../coordinatorNativePermissi
   maxAgents?: number
   budget?: import('../agentProtocol').ProtocolRunBudget | null
   autoContinue?: boolean
+  autoResume?: boolean
   useWorktrees?: boolean
   batchId?: string
   received?: boolean
@@ -928,7 +929,7 @@ async function sendTuiSessionCoordinationScoped(
     if (request.action === 'settings') {
       const snapshot = await coord.readSessionCoordinator(sessionId, provider)
       await coord.configureInteractiveCoordinator({
-        sessionId, provider, cwd: snapshot!.run.baseCwd, autoContinue: request.autoContinue,
+        sessionId, provider, cwd: snapshot!.run.baseCwd, autoContinue: request.autoContinue, autoResume: request.autoResume,
         useWorktrees: request.useWorktrees, maxAgents: request.maxAgents, budget: request.budget,
       })
       return { configured: true }

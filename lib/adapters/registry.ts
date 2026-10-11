@@ -39,6 +39,7 @@ const ADAPTER_LOADERS: Record<AgentProvider, () => Promise<SessionAdapter>> = {
   lmstudio: async () => (await import('./lmstudio')).lmstudioAdapter,
   'claude-acp': async () => (await import('./acp')).claudeAcpAdapter,
   'codex-acp': async () => (await import('./acp')).codexAcpAdapter,
+  acp: async () => (await import('./acp')).customAcpAdapter,
 }
 
 /** Capability flag → the adapter method that has to back it. */

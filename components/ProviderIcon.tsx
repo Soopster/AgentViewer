@@ -83,7 +83,7 @@ export default function ProviderIcon({ provider, size = 18, className }: Props) 
       aria-hidden="true"
       className={className ? `av-provider-icon ${className}` : 'av-provider-icon'}
       data-provider={normalizedProvider}
-      data-acp={provider === 'claude-acp' || provider === 'codex-acp' ? 'true' : 'false'}
+      data-acp={provider === 'claude-acp' || provider === 'codex-acp' || provider === 'acp' ? 'true' : 'false'}
     >
       {mark}
     </span>

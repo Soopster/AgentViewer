@@ -6,6 +6,10 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { scrubInheritedAgentIdentity } from '../lib/inheritedIdentityEnv.mjs'
 
+// Mirrors COORD_CLI_VERBS in agent-viewer-coord-cli.mjs (coordCliSmoke pins it):
+// importing that module here would load the tool contract on every launch.
+const COORD_CLI_VERBS = ['run', 'join', 'runs', 'whoami', 'status', 'delegate', 'send', 'inbox', 'wait', 'tools', 'call']
+
 // Agent Viewer is not the agent session it was launched from, and nothing it
 // spawns is either — see lib/inheritedIdentityEnv.mjs.
 scrubInheritedAgentIdentity()
@@ -198,6 +202,9 @@ Options:
   --host <address>     Bind address in web mode (default: 127.0.0.1, or 0.0.0.0
                        when remote access is already enabled)
   --scope <scope>      Pairing scope for \`pair\`: full (default) or read-only
+  --daemon             Host the work in a background daemon (started if needed) and
+                       attach to it, so turns and teammates outlive this window.
+                       \`agent-viewer daemon [status|start|stop]\` manages it.
   -a, --attach <url>   Connect the TUI or MCP bridge to an \`agent-viewer web\` daemon
                        (e.g. --attach 3000 or --attach http://127.0.0.1:3000).
                        Turns run in the daemon and survive TUI restarts.
@@ -491,6 +498,35 @@ if (command === '-h' || command === '--help' || command === 'help') {
   process.exitCode = 0
 } else if (command === 'pair') {
   await runPairCommand(args.slice(1))
+} else if (command === 'daemon') {
+  const { port } = parseArgs(args.slice(2))
+  const daemonPort = Number(port || process.env.PORT || 3000)
+  const action = args[1] && !args[1].startsWith('-') ? args[1] : 'status'
+  const daemon = await import('./agent-viewer-daemon.mjs')
+  try {
+    if (action === 'start') {
+      const result = await daemon.ensureDaemon({ port: daemonPort, onWait: () => console.error(`Starting the agent-viewer daemon on port ${daemonPort}…`) })
+      console.log(`${result.started ? 'Started' : 'Already running'}: ${result.url}${result.version ? ` (v${result.version})` : ''}`)
+    } else if (action === 'stop') {
+      const result = await daemon.stopDaemon(daemonPort)
+      console.log(result.stopped ? `Stopped the daemon on port ${daemonPort} (pid ${result.pid}).`
+        : result.reason === 'not-managed' ? `A daemon is answering on port ${daemonPort}, but \`agent-viewer daemon start\` did not start it; stop it where it was started.`
+        : `No daemon is running on port ${daemonPort}.`)
+      if (!result.stopped && result.reason === 'not-managed') process.exitCode = 1
+    } else if (action === 'status') {
+      const status = await daemon.daemonStatus(daemonPort)
+      if (args.includes('--json')) console.log(JSON.stringify(status))
+      else console.log(status.state === 'running' ? `Running on port ${daemonPort}${status.version ? ` (v${status.version})` : ''}${status.managed ? `, pid ${status.pid}, log ${status.log}` : ', started by hand'}`
+        : status.state === 'absent' ? `No daemon on port ${daemonPort}. Start one with \`agent-viewer daemon start\`.`
+        : `Port ${daemonPort} is in use by something that is not an agent-viewer daemon.`)
+      if (status.state !== 'running') process.exitCode = 1
+    } else {
+      throw new Error('Usage: agent-viewer daemon [status | start | stop] [--port <n>] [--json]')
+    }
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error))
+    process.exitCode = 1
+  }
 } else if (command === 'machines') {
   await runMachinesCommand(args.slice(1))
 } else if (command === 'review') {
@@ -568,6 +604,12 @@ if (command === '-h' || command === '--help' || command === 'help') {
   child.on('error', (error) => { throw error })
   forwardSignals(child)
   trackExit(child)
+} else if (command === 'coord' && COORD_CLI_VERBS.includes(args[1])) {
+  const entrypoint = fileURLToPath(new URL('./agent-viewer-coord-cli.mjs', import.meta.url))
+  const child = spawn(process.execPath, [entrypoint, ...args.slice(1)], { stdio: 'inherit' })
+  child.on('error', (error) => { throw error })
+  forwardSignals(child)
+  trackExit(child)
 } else if (command === 'coord') {
   const sub = args[1]
   if (sub && sub !== '-h' && sub !== '--help') {
@@ -582,6 +624,12 @@ if (command === '-h' || command === '--help' || command === 'help') {
   agent-viewer coord workers List persistent Coordinator worker registrations
   agent-viewer coord restart Restart a registered worker by name, id, or identity file
   agent-viewer coord logs    Read or follow a registered worker log
+
+Script a run from a shell (JSON out; \`agent-viewer coord run --help\` for all verbs):
+  agent-viewer coord run "<goal>"        Start a run and bind this directory as its lead
+  agent-viewer coord delegate "<title>"  Hand a task to a teammate
+  agent-viewer coord wait --timeout <ms> Block until the board changes
+  agent-viewer coord status | inbox | send | runs | call <tool>
 
 Run \`agent-viewer coord <subcommand> --help\` for subcommand-specific options.`)
 } else if (command === 'web') {
@@ -671,7 +719,21 @@ Run \`agent-viewer coord <subcommand> --help\` for subcommand-specific options.`
   forwardSignals(child)
   trackExit(child)
 } else {
-  const { forwarded, attach } = parseArgs(args)
+  const parsed = parseArgs(args)
+  const forwarded = parsed.forwarded.filter((arg) => arg !== '--daemon')
+  let attach = parsed.attach
+  // `--daemon`: the work is hosted by a background daemon this window only
+  // attaches to, so closing the window leaves turns and teammates running.
+  if (!attach && !process.env.AGENT_VIEWER_ATTACH?.trim() && (args.includes('--daemon') || process.env.AGENT_VIEWER_DAEMON === '1')) {
+    const { ensureDaemon } = await import('./agent-viewer-daemon.mjs')
+    try {
+      const daemonPort = Number(parsed.port || process.env.PORT || 3000)
+      attach = (await ensureDaemon({ port: daemonPort, onWait: () => console.error(`Starting the agent-viewer daemon on port ${daemonPort}…`) })).url
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error))
+      process.exit(1)
+    }
+  }
   const entrypoint = fileURLToPath(new URL('../tui/opentui/main.tsx', import.meta.url))
   const bunLauncher = resolveBunLauncher()
   if (!bunLauncher.command) {

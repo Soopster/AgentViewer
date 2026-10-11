@@ -34,7 +34,8 @@ import {
   type SessionInfo as AcpSessionInfo,
   type SessionNotification,
 } from '@agentclientprotocol/sdk'
-import { resolveAcpAgentCommand, type AcpAgentKind } from './acpAgentSpawn'
+import { acpAgentKey, CUSTOM_ACP_UNCONFIGURED, isAcpAgentConfigured, resolveAcpAgentSpawn, type AcpAgentKind } from './acpAgentSpawn'
+import { currentProviderEnvironment } from './providerInstances'
 import type { AcpBufferedMessage } from './acpClientPool'
 
 // Long enough that the 5s sessions poll reuses the answer rather than spawning,
@@ -112,12 +113,12 @@ type Probe = {
  * subprocess per agent kind would double that cost for a sidebar read.
  */
 async function withProbe<T>(agentKind: AcpAgentKind, use: (probe: Probe) => Promise<T>): Promise<T> {
-  const command = resolveAcpAgentCommand(agentKind)
+  const { command, args } = resolveAcpAgentSpawn(agentKind)
   // detached for the same reason the session pool spawns detached: codex-acp
   // starts its own sandboxed helpers, and only signalling the group reaches
   // them. A probe that leaked helpers on every sidebar poll would be worse than
   // no probe at all.
-  const child = spawn(command, [], { env: process.env, stdio: ['pipe', 'pipe', 'pipe'], detached: true })
+  const child = spawn(command, args, { env: currentProviderEnvironment(), stdio: ['pipe', 'pipe', 'pipe'], detached: true })
   // Nothing reads the agent's stderr here, and a pipe nobody drains fills and
   // blocks the child once it has written enough.
   child.stderr?.resume()
@@ -171,12 +172,13 @@ async function withProbe<T>(agentKind: AcpAgentKind, use: (probe: Probe) => Prom
 
 type Cached<T> = { value: T; at: number; inFlight: Promise<T> | null }
 
-const supportCache = new Map<AcpAgentKind, Cached<AcpAgentSupport>>()
-const capabilityErrors = new Map<AcpAgentKind, string>()
+// Keyed by acpAgentKey, not by kind: two configured `acp` agents are different agents.
+const supportCache = new Map<string, Cached<AcpAgentSupport>>()
+const capabilityErrors = new Map<string, string>()
 // Whether this agent's advertised `loadSession` actually works. See
 // verifyAcpHistoryReadable.
-const historyReadable = new Map<AcpAgentKind, Cached<boolean>>()
-const listCache = new Map<AcpAgentKind, Cached<AcpSessionInfo[]>>()
+const historyReadable = new Map<string, Cached<boolean>>()
+const listCache = new Map<string, Cached<AcpSessionInfo[]>>()
 
 /**
  * Serve `cache` if fresh, refresh behind it if stale, and single-flight the
@@ -184,20 +186,24 @@ const listCache = new Map<AcpAgentKind, Cached<AcpSessionInfo[]>>()
  * concurrent readers must not spawn two agents.
  */
 function cachedRead<T>(
-  cache: Map<AcpAgentKind, Cached<T>>,
+  cache: Map<string, Cached<T>>,
   agentKind: AcpAgentKind,
   ttlMs: number,
   fallback: T,
   read: () => Promise<T>,
 ): Promise<T> {
-  const entry = cache.get(agentKind)
+  // An agent nobody configured has nothing to probe: answering without a spawn
+  // keeps the 5s sidebar poll from failing a spawn every tick.
+  if (!isAcpAgentConfigured(agentKind)) return Promise.resolve(fallback)
+  const key = acpAgentKey(agentKind)
+  const entry = cache.get(key)
   const fresh = entry && Date.now() - entry.at < ttlMs
   if (entry && fresh) return Promise.resolve(entry.value)
   if (entry?.inFlight) return entry.inFlight
   const inFlight = read()
     .then((value) => {
-      capabilityErrors.delete(agentKind)
-      cache.set(agentKind, { value, at: Date.now(), inFlight: null })
+      capabilityErrors.delete(key)
+      cache.set(key, { value, at: Date.now(), inFlight: null })
       return value
     })
     .catch((error: unknown) => {
@@ -213,12 +219,12 @@ function cachedRead<T>(
       // — and during development that hid a plain programming mistake (passing
       // a provider id where an agent kind was expected) as a capability answer.
       // `acpCapabilityError` surfaces it in diagnostics instead.
-      capabilityErrors.set(agentKind, error instanceof Error ? error.message : String(error))
+      capabilityErrors.set(key, error instanceof Error ? error.message : String(error))
       const value = entry?.value ?? fallback
-      cache.set(agentKind, { value, at: Date.now(), inFlight: null })
+      cache.set(key, { value, at: Date.now(), inFlight: null })
       return value
     })
-  cache.set(agentKind, { value: entry?.value ?? fallback, at: entry?.at ?? 0, inFlight })
+  cache.set(key, { value: entry?.value ?? fallback, at: entry?.at ?? 0, inFlight })
   // With no previous answer there is nothing to serve stale, so the first
   // caller waits. Later ones get the cached value while refreshes run behind.
   return entry ? Promise.resolve(entry.value) : inFlight
@@ -302,7 +308,8 @@ export function listAcpAgentSessions(agentKind: AcpAgentKind, cwd?: string): Pro
  * happens to support nothing.
  */
 export function acpCapabilityError(agentKind: AcpAgentKind): string | null {
-  return capabilityErrors.get(agentKind) ?? null
+  if (!isAcpAgentConfigured(agentKind)) return CUSTOM_ACP_UNCONFIGURED
+  return capabilityErrors.get(acpAgentKey(agentKind)) ?? null
 }
 
 /** Test seam: drop every cached answer so the next read re-probes. */
@@ -333,6 +340,7 @@ export async function loadAcpSessionHistory(
   sessionId: string,
   cwd: string,
 ): Promise<AcpBufferedMessage[] | null> {
+  if (!isAcpAgentConfigured(agentKind)) return null
   try {
     return await withProbe(agentKind, async (probe) => {
       if (!readAcpAgentSupport(probe.capabilities).loadSession) return null
@@ -349,7 +357,7 @@ export async function loadAcpSessionHistory(
         }))
     })
   } catch (error) {
-    capabilityErrors.set(agentKind, error instanceof Error ? error.message : String(error))
+    capabilityErrors.set(acpAgentKey(agentKind), error instanceof Error ? error.message : String(error))
     return null
   }
 }

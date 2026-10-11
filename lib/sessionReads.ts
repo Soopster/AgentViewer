@@ -306,9 +306,9 @@ async function listViewSessionsImpl(params: ListParams): Promise<Session[]> {
 
   if (provider === 'all') {
     const combinedLimit = params.limit + params.offset
-    // ACP sessions are transient and unlistable, so they cannot contribute to
-    // an aggregated view; excluding them here keeps the fan-out honest rather
-    // than relying on each adapter to return nothing.
+    // The two built-in ACP transports reach sessions the native Claude and Codex
+    // adapters already list, so they would only duplicate them here. A custom
+    // ACP agent's sessions exist nowhere else and do contribute.
     const instances = (await listProviderInstances()).filter((instance) =>
       instance.provider !== 'claude-acp' && instance.provider !== 'codex-acp'
     )

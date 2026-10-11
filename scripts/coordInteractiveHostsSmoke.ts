@@ -4,6 +4,11 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+// This pins the manual recovery path: inspection and `r`. Adopting a dead host
+// resumes its teammates by default (coordAutoResumeSmoke), which would start
+// the work these assertions say a read must not. Child processes inherit it.
+process.env.AGENT_VIEWER_COORD_AUTO_RESUME = '0'
 const script = fileURLToPath(import.meta.url)
 const phase = process.argv[2]
 async function until(check: () => boolean) {

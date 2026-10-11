@@ -35,4 +35,5 @@ export function shouldPrewarmTuiRuntime(
     || resolvedProvider === 'claude'
     || resolvedProvider === 'claude-acp'
     || resolvedProvider === 'codex-acp'
+    || resolvedProvider === 'acp'
 }

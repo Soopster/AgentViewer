@@ -61,7 +61,7 @@ const EDITOR_FOCUS_ORDER: EditorFocus[] = [
   'phaseNav', 'phaseTitle', 'taskNav', 'taskKey', 'taskTitle', 'taskDetail', 'taskRole', 'taskSeat', 'taskProvider', 'taskModel', 'taskPaths', 'taskDeps', 'taskVerify',
 ]
 const MULTILINE_EDITOR_FIELDS = new Set<EditorFocus>(['description', 'argsHint', 'taskDetail', 'taskVerify'])
-const PLAYBOOK_PROVIDERS: NonNullable<PlaybookTask['provider']>[] = ['codex', 'claude', 'copilot', 'opencode', 'pi']
+const PLAYBOOK_PROVIDERS: NonNullable<PlaybookTask['provider']>[] = ['codex', 'claude', 'copilot', 'opencode', 'pi', 'acp']
 const MULTILINE_KEY_BINDINGS: Array<{ name: string; action: TextareaAction }> = [
   { name: 'return', action: 'newline' },
   { name: 'kpenter', action: 'newline' },

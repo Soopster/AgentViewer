@@ -573,7 +573,7 @@ function ComposerWaitingStatus({
   return <text wrapMode="none">{renderInlineTextSegments(segs, width, theme.dim)}</text>
 }
 
-const PROVIDERS: ProviderSelection[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'lmstudio', 'claude-acp', 'codex-acp', 'all']
+const PROVIDERS: ProviderSelection[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'lmstudio', 'claude-acp', 'codex-acp', 'acp', 'all']
 const TUI_PROVIDER_TAG: Record<string, string> = {
   claude: 'claude',
   codex: 'codex',
@@ -4914,7 +4914,7 @@ const PROVIDER_SELECT_OPTIONS: SelectOption[] = PROVIDERS.map((provider) => ({
   value: provider,
 }))
 
-const COORD_RUN_PROVIDERS: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi']
+const COORD_RUN_PROVIDERS: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'acp']
 const COORD_MODAL_FOCUS_ORDER = [
   'prompt', 'acceptance', 'nonGoals', 'manualQa', 'escalation',
   'playbook', 'playbookArgs', 'provider', 'pool', 'agents', 'tokenBudget',
@@ -10059,7 +10059,7 @@ export default function OpenTuiApp() {
     const parts: InlineTextSegment[] = []
     if (composerCurrentModel) {
       parts.push({ text: `model:${composerCurrentModel}`, fg: composerAccentColor })
-    } else if (composerTargetSession?.provider && composerTargetSession.provider !== 'claude-acp' && composerTargetSession.provider !== 'codex-acp') {
+    } else if (composerTargetSession?.provider && composerTargetSession.provider !== 'claude-acp' && composerTargetSession.provider !== 'codex-acp' && composerTargetSession.provider !== 'acp') {
       // Custom-model providers (LM Studio, opencode/copilot custom endpoints,
       // Claude on a non-default deployment) can take a moment to report their
       // current model on a cold session. Show the in-flight state, then settle
@@ -12066,7 +12066,7 @@ export default function OpenTuiApp() {
     if (!bootstrapped || !targetKey || composerCurrentModel || composerModelLookupSettled) return
     const target = composerTargetSessionRef.current
     if (!target || sessionKey(target) !== targetKey) return
-    if (target.provider === 'claude-acp' || target.provider === 'codex-acp') return
+    if (target.provider === 'claude-acp' || target.provider === 'codex-acp' || target.provider === 'acp') return
     const cached = sessionDetailCacheRef.current.get(targetKey) ?? null
     refreshSessionMetadata(target, false, cached ?? undefined, cached, false)
   }, [bootstrapped, composerCurrentModel, composerModelLookupSettled, composerTargetSessionIdentity, refreshSessionMetadata])
@@ -12639,14 +12639,17 @@ export default function OpenTuiApp() {
 
     void (async () => {
       const cleanupTasks: Promise<unknown>[] = []
-      if (activeTurnTarget && activeTurnRequestId) {
+      // Attached, the turns belong to the daemon: closing this window is a
+      // detach, and interrupting them here would stop work in every other
+      // client's view of it. Only the local stream above is dropped.
+      if (!ATTACHED_DAEMON_HOST && activeTurnTarget && activeTurnRequestId) {
         cleanupTasks.push(interruptTuiSessionTurn({
           sessionId: activeTurnTarget.sessionId,
           provider: activeTurnTarget.provider,
           turnRequestId: activeTurnRequestId,
         }).catch(() => undefined))
       }
-      if (runningRefs.length > 0) {
+      if (!ATTACHED_DAEMON_HOST && runningRefs.length > 0) {
         cleanupTasks.push(Promise.allSettled(runningRefs.map((running) => interruptTuiSessionTurn(running))))
       }
       if (cleanupPromise) {
@@ -24809,11 +24812,16 @@ export default function OpenTuiApp() {
       {exitConfirmOpen ? (() => {
         const overlayWidth = Math.min(Math.max(width - 6, 32), 58)
         const overlayHeight = 8
+        const turnsRunning = composerSendState === 'sending' || runningSessions.length > 0
         const exitBodyText = exitCleanupInProgress
-          ? 'Stopping running turns before closing...'
-          : composerSendState === 'sending' || runningSessions.length > 0
-            ? 'Running turns will be interrupted before quit.'
+          ? ATTACHED_DAEMON_HOST ? 'Detaching...' : 'Stopping running turns before closing...'
+          : turnsRunning
+            ? ATTACHED_DAEMON_HOST ? `Running turns keep going in the daemon (${ATTACHED_DAEMON_HOST}).` : 'Running turns will be interrupted before quit.'
             : 'Close the terminal viewer now?'
+        // The one moment the difference matters is the moment it is too late to choose.
+        const exitHintText = turnsRunning && !ATTACHED_DAEMON_HOST && !exitCleanupInProgress
+          ? 'Start with --daemon next time and they keep running.'
+          : ''
         const exitActionText = exitCleanupInProgress
           ? 'Cleaning up...'
           : 'Enter/Y quit  ·  Esc/N cancel'
@@ -24839,7 +24847,10 @@ export default function OpenTuiApp() {
                 {fitText(exitBodyText, overlayWidth - 4)}
               </text>
             </box>
-            <box paddingX={1} marginTop={2}>
+            <box paddingX={1} height={1}>
+              <text fg={theme.muted} wrapMode="none">{fitText(exitHintText, overlayWidth - 4)}</text>
+            </box>
+            <box paddingX={1} marginTop={1}>
               <text fg={theme.red} wrapMode="none">
                 {fitText(exitActionText, overlayWidth - 4)}
               </text>

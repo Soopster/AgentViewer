@@ -8,6 +8,7 @@
 
 import type { AgentProvider, SendAttachment } from './types'
 import { revealRuleText } from './claudeSessionPolicy'
+import { isAcpProvider } from './provider'
 
 // A single AskUserQuestion prompt the user must answer interactively. Mirrors
 // the Claude SDK AskUserQuestionInput shape (one entry per question).
@@ -811,7 +812,7 @@ export function extractAcpPermission(payload: unknown): PendingPermission | null
   if (!data) return null
   const id = stringField(data, 'requestId')
   if (!id) return null
-  const provider = data.provider === 'codex-acp' ? 'codex-acp' : data.provider === 'claude-acp' ? 'claude-acp' : undefined
+  const provider = isAcpProvider(data.provider) ? data.provider : undefined
   const toolCall = asRecord(data.toolCall)
   const toolName = toolCall ? (stringField(toolCall, 'title') ?? stringField(toolCall, 'name')) : undefined
   const rawInput = toolCall ? asRecord(toolCall.rawInput) : null
@@ -824,7 +825,7 @@ export function extractAcpPermission(payload: unknown): PendingPermission | null
     sessionId: stringField(data, 'sessionId'),
     provider,
     toolName,
-    title: toolName ? `${provider === 'codex-acp' ? 'Codex' : 'Claude'} wants to use ${toolName}` : 'Approve tool use',
+    title: toolName ? `${provider === 'codex-acp' ? 'Codex' : provider === 'acp' ? 'The agent' : 'Claude'} wants to use ${toolName}` : 'Approve tool use',
     command,
     paths: path ? [path] : undefined,
     canApproveAlways,
@@ -850,7 +851,7 @@ export function extractAcpElicitation(payload: unknown): PendingPermission | nul
   if (!data) return null
   const id = stringField(data, 'requestId')
   if (!id) return null
-  const provider = data.provider === 'codex-acp' ? 'codex-acp' : data.provider === 'claude-acp' ? 'claude-acp' : undefined
+  const provider = isAcpProvider(data.provider) ? data.provider : undefined
   const mode = data.mode === 'url' ? 'url' : 'form'
   const questions = mode === 'form' ? parseMcpElicitationQuestions(data.requestedSchema) : undefined
   const message = stringField(data, 'message')

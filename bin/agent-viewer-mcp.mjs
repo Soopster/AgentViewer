@@ -25,7 +25,7 @@ import {
 import { COORDINATOR_MCP_TOOL_NAMES, COORDINATOR_KEYED_ACTIONS } from './agent-viewer-coordinator-tools.mjs'
 import { coordToolDescription } from '../lib/coordinatorToolContract.mjs'
 
-const PROVIDERS = ['claude', 'codex', 'opencode', 'copilot', 'pi']
+const PROVIDERS = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'acp']
 const EXTERNAL_COORD_PROTOCOL_VERSION = 2
 const MCP_UI_EXTENSION = 'io.modelcontextprotocol/ui'
 const MCP_SKILLS_EXTENSION = 'io.modelcontextprotocol/skills'
@@ -1160,7 +1160,7 @@ server.registerTool('coord_resume', {
 
 server.registerTool('coord_capabilities', {
   description: bridgeDescription('coord_capabilities'),
-  inputSchema: { provider: z.enum(['claude', 'codex', 'opencode', 'copilot', 'pi']).optional(), provider_instance_id: z.string().min(1).max(64).optional() },
+  inputSchema: { provider: z.enum(['claude', 'codex', 'opencode', 'copilot', 'pi', 'acp']).optional(), provider_instance_id: z.string().min(1).max(64).optional() },
   annotations: { readOnlyHint: true },
 }, async ({ provider, provider_instance_id }) => textResult(await coordinatorRequest('capabilities', { provider, providerInstanceId: provider_instance_id })))
 
@@ -1292,7 +1292,7 @@ server.registerTool('coord_delegate', {
     to: z.string().min(1).max(160).optional().describe('Existing teammate name or id for follow-up work in its session. Overrides name.'),
     name: z.string().min(1).max(32).optional().describe('Teammate to reuse or create, named for its job: a lowercase letter then letters, digits, - or _ (e.g. reviewer). lead, all and agent-N are reserved.'),
     wait_ms: z.number().int().min(0).max(55_000).optional().describe('Interactive hosts only: also wait this long for the work to settle. Waiting never cancels the work. Managed turns omit it.'),
-    requested_provider: z.enum(['claude', 'codex', 'opencode', 'copilot', 'pi']).optional().describe('Provider for a NEW teammate; an existing teammate keeps its own and a mismatch is rejected'),
+    requested_provider: z.enum(['claude', 'codex', 'opencode', 'copilot', 'pi', 'acp']).optional().describe('Provider for a NEW teammate; an existing teammate keeps its own and a mismatch is rejected'),
     requested_provider_instance_id: z.string().min(1).max(64).optional(),
     requested_model: z.string().min(1).max(200).optional().describe('A models[].value from coord_capabilities; omit for the team default'),
     requested_effort: z.string().min(1).max(100).optional().describe('An effort level coord_capabilities lists for that model; omit for the team default'),

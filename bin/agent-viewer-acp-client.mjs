@@ -39,6 +39,8 @@ import { spawn } from 'node:child_process'
 import { Readable, Writable } from 'node:stream'
 import { client, ndJsonStream, PROTOCOL_VERSION } from '@agentclientprotocol/sdk'
 
+export { parseAcpCommand } from '../lib/acpCommand.mjs'
+
 // This runs under vanilla `node` (see module doc above) so it can't import
 // lib/acpAgentSpawn.ts directly — re-declared here in plain ESM, kept in
 // sync by hand. Any change to the provider set or env var names must be

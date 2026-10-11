@@ -17,9 +17,11 @@
 // claims `loadSession` and then fails every load, so `lib/acpCapabilities.ts`
 // verifies the claim before listing anything. See verifyAcpHistoryReadable.
 //
-// Both ids share one implementation because the protocol, not the underlying
+// Every id shares one implementation because the protocol, not the underlying
 // agent, is what shapes them; per-agent differences come from the capability
-// read at runtime rather than from a branch here.
+// read at runtime rather than from a branch here. That is also what makes `acp`
+// — any agent the user configured a command for — the same adapter: nothing
+// here knows which agent it is talking to.
 
 import {
   acpCapabilityError,
@@ -29,23 +31,13 @@ import {
 } from '../acpCapabilities'
 import { isAcpSessionAlive, peekAcpSession, readAcpMessagesSince } from '../acpClientPool'
 import { mapAcpBufferedMessages } from '../acpMapper'
-import { getProviderCapabilities } from '../provider'
+import { acpAgentKindOf } from '../acpAgentSpawn'
+import { getProviderCapabilities, type AcpProvider } from '../provider'
 import type { AgentProvider, Session } from '../types'
 import type { SessionAdapter } from './types'
 
-type AcpProvider = 'claude-acp' | 'codex-acp'
-
-// The provider id the UI uses and the agent kind the spawner uses are different
-// vocabularies, and conflating them is a real mistake rather than a typo: the
-// spawn table is keyed by 'claude' | 'codex', so passing a provider id resolves
-// nothing and — because a failed capability probe degrades silently — reads back
-// as "this agent supports nothing".
-function agentKindFor(provider: AcpProvider): 'claude' | 'codex' {
-  return provider === 'claude-acp' ? 'claude' : 'codex'
-}
-
 function makeAcpAdapter(provider: AcpProvider): SessionAdapter {
-  const agentKind = agentKindFor(provider)
+  const agentKind = acpAgentKindOf(provider)
 
   return {
     provider,
@@ -162,3 +154,4 @@ function makeAcpAdapter(provider: AcpProvider): SessionAdapter {
 
 export const claudeAcpAdapter = makeAcpAdapter('claude-acp')
 export const codexAcpAdapter = makeAcpAdapter('codex-acp')
+export const customAcpAdapter = makeAcpAdapter('acp')

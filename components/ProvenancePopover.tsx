@@ -33,6 +33,7 @@ const PROVIDER_META: Record<AgentProvider, { label: string; color: string }> = {
   lmstudio: { label: 'LM Studio', color: '#2dd4a7' },
   'claude-acp': { label: 'Claude (ACP)', color: '#d97757' },
   'codex-acp': { label: 'Codex (ACP)', color: '#10a37f' },
+  acp: { label: 'ACP agent', color: '#38bdf8' },
 }
 
 // Distinguishes sessions within the same provider in the blame gutter.

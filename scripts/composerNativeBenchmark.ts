@@ -80,6 +80,7 @@ function commandFor(target: Target): { command: string; args: string[] } {
       throw new Error('LM Studio has no native CLI to benchmark against — it is a local server only.')
     case 'claude-acp':
     case 'codex-acp':
+    case 'acp':
       throw new Error('ACP-transport sessions are driven via claude-agent-acp/codex-acp subprocess RPC, not a native CLI invocation.')
   }
 }

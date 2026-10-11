@@ -65,7 +65,7 @@ const ATTENTION_EVENT_TYPES = new Set(['agent.blocked', 'task.failed', 'lock.den
 const STUCK_AGENT_STATUSES = new Set(['blocked', 'failed', 'stopped'])
 const RERUNNABLE_TASK_STATUSES = new Set(['blocked', 'failed'])
 const MESSAGE_EVENT_TYPES = new Set(['message', 'finding', 'learning', 'handoff'])
-const PROVIDERS = ['codex', 'claude', 'copilot', 'opencode', 'pi'] as const
+const PROVIDERS = ['codex', 'claude', 'copilot', 'opencode', 'pi', 'acp'] as const
 
 function cycleValue<T>(values: readonly T[], current: T, direction: 1 | -1 = 1): T {
   const index = values.indexOf(current)

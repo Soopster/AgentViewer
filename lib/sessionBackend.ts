@@ -45,7 +45,9 @@ import { claudeAgentPolicyOptions, claudeQueryBudgetOptions, parseClaudeAgentPol
 import { claudeSessionPersistenceQueryOptions, claudeSessionStoreOptions } from './claudeSessionStore'
 import { withClaudeResumeTouchRecorded } from './claudeResumeTouch'
 import { claudeProcessSpawnOptions, claudeProcessTransportStatus } from './claudeProcessSpawner'
-import { dispatchCoordinatorCodexToolCall } from './agentCoordinationSdkTools'
+import { dispatchCoordinatorCodexToolCall, getCoordinatorAcpMcpServers } from './agentCoordinationSdkTools'
+import { isAcpProvider, type AcpProvider } from './provider'
+import { COORDINATION_DATA_DIR } from './coordinatorLedger'
 import {
   broadcastLiveSessionActivity,
   broadcastLiveSessionTurnEnd,
@@ -140,6 +142,7 @@ import {
   waitForAcpActivity,
 } from './acpClientPool'
 import { mapAcpBufferedMessages } from './acpMapper'
+import { acpAgentKindOf } from './acpAgentSpawn'
 import { listViewerAttention } from './viewerAttention'
 import {
   listViewRunningSessions,
@@ -1685,9 +1688,6 @@ function findCopilotHistoryCompletion(
     : null
 }
 
-function acpAgentKindOf(provider: 'claude-acp' | 'codex-acp'): 'claude' | 'codex' {
-  return provider === 'codex-acp' ? 'codex' : 'claude'
-}
 
 
 function summarizeResolvedClaudeSettings(resolved: Awaited<ReturnType<typeof resolveSettings>>): Record<string, unknown> {
@@ -2328,7 +2328,7 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
     }
   }
 
-  if (resolvedProvider === 'claude-acp' || resolvedProvider === 'codex-acp') {
+  if (isAcpProvider(resolvedProvider)) {
     if (action === 'respondPermission') {
       const permissionId = typeof body.permissionId === 'string' ? body.permissionId : ''
       const response = typeof body.response === 'string' ? body.response : ''
@@ -2379,7 +2379,7 @@ async function readPiMessagesAll(sessionId: string): Promise<SessionMessage[]> {
   return writeMappedMessagesCache(`pi:${sessionId}`, signature, markedMessages)
 }
 
-function readAcpMessagesAll(sessionId: string, provider: 'claude-acp' | 'codex-acp'): SessionMessage[] {
+function readAcpMessagesAll(sessionId: string, provider: AcpProvider): SessionMessage[] {
   const { messages } = readAcpMessagesSince(sessionId, -1)
   return mapAcpBufferedMessages(sessionId, provider, messages)
 }
@@ -2483,7 +2483,7 @@ export async function getProviderSubagentSummaries(
   else if (provider === 'lmstudio') {
     const record = await getLmstudioSession(sessionId).catch(() => null)
     messages = record ? mapLmstudioSessionToMessages(record) : []
-  } else if (provider === 'claude-acp' || provider === 'codex-acp') {
+  } else if (isAcpProvider(provider)) {
     messages = readAcpMessagesAll(sessionId, provider)
   }
   return toolSubagentSummaries(messages, provider)
@@ -6591,11 +6591,12 @@ export async function prewarmViewSession(params: {
     )
     return
   }
-  if (provider === 'claude-acp' || provider === 'codex-acp') {
+  if (isAcpProvider(provider)) {
     await acquireAcpSession(
       params.sessionId,
       acpAgentKindOf(provider),
       params.cwd ?? process.cwd(),
+      await coordinatorAcpMcpServers(provider, params.sessionId),
     )
     return
   }
@@ -6687,8 +6688,15 @@ async function createLmstudioStream(sessionId: string, signal: AbortSignal, body
 
 const ACP_ACTIVITY_BACKSTOP_MS = 1000
 
+// A Coordinator participant's coord_* tools. Only the configurable `acp`
+// provider can be one; the two built-in transports are not staffed as teammates.
+async function coordinatorAcpMcpServers(provider: AcpProvider, sessionId: string) {
+  if (provider !== 'acp') return undefined
+  return getCoordinatorAcpMcpServers(sessionId, `${COORDINATION_DATA_DIR}/session-bindings`)
+}
+
 async function createAcpStream(
-  provider: 'claude-acp' | 'codex-acp',
+  provider: AcpProvider,
   sessionId: string,
   signal: AbortSignal,
   body: Record<string, unknown>,
@@ -6728,7 +6736,7 @@ async function createAcpStream(
       if (signal.aborted) onAbort()
 
       try {
-        await acquireAcpSession(sessionId, acpAgentKindOf(provider), cwd)
+        await acquireAcpSession(sessionId, acpAgentKindOf(provider), cwd, await coordinatorAcpMcpServers(provider, sessionId))
       } catch (err) {
         safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Failed to start ACP session' })}\n\n`)
         signal.removeEventListener('abort', onAbort)
@@ -6868,7 +6876,7 @@ export async function streamViewSessionTurn(params: SendMessageParams): Promise<
   if (provider === 'lmstudio') {
     return createLmstudioStream(params.sessionId, params.signal, params.body)
   }
-  if (provider === 'claude-acp' || provider === 'codex-acp') {
+  if (isAcpProvider(provider)) {
     return createAcpStream(provider, params.sessionId, params.signal, params.body)
   }
 
@@ -6942,7 +6950,7 @@ async function forkViewSessionUnrecorded({ sessionId, body, provider }: ForkPara
     void body
     throw new Error('Fork is not supported for LM Studio sessions')
   }
-  if (resolvedProvider === 'claude-acp' || resolvedProvider === 'codex-acp') {
+  if (isAcpProvider(resolvedProvider)) {
     void sessionId
     void body
     throw new Error(`Fork is not supported for ${resolvedProvider} sessions`)
@@ -7030,7 +7038,7 @@ export async function createNewViewSession({
     return { sessionId: record.id, provider, cwd: resolvedCwd, isPending: false }
   }
 
-  if (provider === 'claude-acp' || provider === 'codex-acp') {
+  if (isAcpProvider(provider)) {
     // ACP has no listing RPC, so the session is created lazily on first
     // prompt (createAcpStream's acquireAcpSession) — mirrors Claude/Pi's
     // pending-id pattern, just with no durable history behind it.
@@ -7078,7 +7086,7 @@ export async function closeViewSession(sessionId: string, providerOverride?: Age
     await evictPiAgentSession(sessionId)
     return
   }
-  if (provider === 'claude-acp' || provider === 'codex-acp') {
+  if (isAcpProvider(provider)) {
     await closeAcpSession(sessionId)
   }
 }
@@ -7136,7 +7144,7 @@ function listPendingProviderPermissionPayloads(
   if (provider === 'pi') {
     return listPendingPiUiPayloads(sessionId)
   }
-  if (provider === 'claude-acp' || provider === 'codex-acp') {
+  if (isAcpProvider(provider)) {
     return acpPendingRequests(sessionId).map((pending) => {
       const data = { requestId: pending.id, sessionId, provider, ...(pending.params as Record<string, unknown>) }
       return pending.method === 'elicitation/create'
@@ -7305,7 +7313,7 @@ export async function rewindOrRollbackViewSession({ sessionId, body, provider }:
     void body
     throw new Error('Rewind is not supported for LM Studio sessions')
   }
-  if (resolvedProvider === 'claude-acp' || resolvedProvider === 'codex-acp') {
+  if (isAcpProvider(resolvedProvider)) {
     void sessionId
     void body
     throw new Error(`Rewind is not supported for ${resolvedProvider} sessions`)

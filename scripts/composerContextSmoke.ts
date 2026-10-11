@@ -28,7 +28,7 @@ const draft = JSON.parse(storedDraft)
 assert.deepEqual(projectComposerContext(draft.text, draft.attachments), projected, 'draft reload retains records and image bytes')
 const restored = restoreComposerDraftPayload({ text: 'new draft', attachments: [] }, [{ text, attachments }], { text: 'failed', attachments: [diff] })
 assert.equal(readComposerContext(projectComposerContext(restored.text, restored.attachments).text).records.length, 3)
-for (const provider of ['claude', 'codex', 'opencode', 'copilot', 'pi', 'lmstudio', 'claude-acp', 'codex-acp'] as AgentProvider[]) {
+for (const provider of ['claude', 'codex', 'opencode', 'copilot', 'pi', 'lmstudio', 'claude-acp', 'codex-acp', 'acp'] as AgentProvider[]) {
   const plan = planComposerAttachments(provider, projected.attachments)
   assert.equal(plan.native.length + plan.portable.length + plan.unsupported.length, 1, `${provider} only receives native image attachment, no duplicated text context`)
 }

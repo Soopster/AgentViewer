@@ -261,8 +261,8 @@ async function restart() {
   const selector = args[1]
   if (!selector || selector.startsWith('-')) usage('coord restart requires a worker selector')
   const provider = option('--provider')
-  if (provider && !['codex', 'claude', 'opencode', 'copilot', 'pi'].includes(provider)) {
-    usage('--provider must be codex, claude, opencode, copilot, or pi')
+  if (provider && !['codex', 'claude', 'opencode', 'copilot', 'pi', 'acp'].includes(provider)) {
+    usage('--provider must be codex, claude, opencode, copilot, pi, or acp')
   }
   const record = await resolveWorkerRecord(selector)
   if (!record.identityFile) throw new Error('Worker record has no identity file')

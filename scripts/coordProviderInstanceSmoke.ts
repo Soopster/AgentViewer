@@ -56,7 +56,7 @@ if (restarting) {
     assert.ok(snapshot.agents.every(agent => agent.providerInstanceId === agent.provider))
     assert.ok(snapshot.tasks.every(task => !task.requestedProviderInstanceId))
     const db = new Database('.agent-viewer-data/agent-coordination/coordination.sqlite')
-    assert.equal(db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value, '26')
+    assert.equal(db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value, '27')
     assert.ok(db.prepare('PRAGMA table_info(protocol_agents)').all().some((column: { name: string }) => column.name === 'provider_instance_id'))
     assert.ok(db.prepare('PRAGMA table_info(protocol_tasks)').all().some((column: { name: string }) => column.name === 'requested_provider_instance_id'))
     db.close()
@@ -67,7 +67,7 @@ if (restarting) {
   assert.equal(snapshot.tasks.find(task => task.ownerAgentId === worker.id)!.requestedProviderInstanceId, 'claude-work')
   assert.equal((await inspectRecoveryAgent(worker)).conversation.available, true)
   const db = new Database('.agent-viewer-data/agent-coordination/coordination.sqlite')
-  assert.equal(db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value, '26')
+  assert.equal(db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value, '27')
   db.close()
   // Resume requires prior execution reconciliation, but capability reads and
   // recovery inspection must already use the durable account in a fresh host.

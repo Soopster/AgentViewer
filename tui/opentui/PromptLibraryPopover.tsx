@@ -56,6 +56,7 @@ const PROVIDER_LABEL: Record<AgentProvider, string> = {
   lmstudio: 'LM Studio',
   'claude-acp': 'Claude (ACP)',
   'codex-acp': 'Codex (ACP)',
+  acp: 'ACP agent',
 }
 
 function emptyDraft(): Draft {

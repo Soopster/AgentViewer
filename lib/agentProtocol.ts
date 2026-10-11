@@ -1205,7 +1205,7 @@ export function parseRunPlaybook(value: unknown): RunPlaybook {
       if (task.seat !== undefined && !['director', 'executor', 'validator', 'watcher'].includes(String(task.seat))) {
         throw new Error(`task ${taskIndex + 1} in phase "${title}" has invalid seat`)
       }
-      if (task.provider !== undefined && !['claude', 'codex', 'opencode', 'copilot', 'pi'].includes(String(task.provider))) {
+      if (task.provider !== undefined && !['claude', 'codex', 'opencode', 'copilot', 'pi', 'acp'].includes(String(task.provider))) {
         throw new Error(`task ${taskIndex + 1} in phase "${title}" has invalid provider`)
       }
       const key = typeof task.key === 'string' && task.key.trim() ? task.key.trim() : undefined

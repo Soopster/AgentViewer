@@ -23,7 +23,7 @@ import type { AgentProvider } from '../../lib/types'
 import { COORDINATOR_ROSTER_FILTERS, COORDINATOR_ROSTER_LABELS, filterCoordinatorRoster, type CoordinatorRosterFilter } from '../../lib/coordinatorRosterFilter'
 
 /** Providers a chat can staff a NEW teammate from; cycled with `p`. */
-const COORDINATOR_TEAMMATE_PROVIDERS: readonly AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi']
+const COORDINATOR_TEAMMATE_PROVIDERS: readonly AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'acp']
 
 /**
  * Herdr refuses to close a workspace with linked worktree workspaces without
@@ -139,6 +139,8 @@ const ROSTER_NOTE_MIN_WIDTH = 70
 // to the right. One row a teammate had no room for the whole task, the last
 // word and what to do about either, so each was cut to fit beside the others.
 const SPLIT_MIN_WIDTH = 110
+const RESUME_SETTING_LABEL = ' Resume teammates after a restart'
+const UNCONFIRMED_DELIVERY_TEXT = "⚠ A previous lead delivery is unconfirmed. Read this conversation's transcript, then say whether its mail arrived."
 
 /** One pre-fitted row of a pane: cells of text, colour and weight. Empty is a blank row. */
 type PaneCell = [text: string, fg: string, bold?: boolean]
@@ -403,6 +405,12 @@ export const TeammatesPopover = memo(function TeammatesPopover({
         data?.interactive.autoContinue ? 'Automatic continuation off' : 'Automatic continuation on')
       return
     }
+    if (key.name === 'u' && !key.ctrl && enabled && !disabled) {
+      const autoResume = data?.interactive.autoResume === false
+      act({ action: 'settings', detail: 'Update restart recovery', autoResume },
+        autoResume ? 'Teammates resume after a restart' : 'Teammates wait for r after a restart')
+      return
+    }
     if (key.name === 'w' && enabled && !disabled) {
       const useWorktrees = snapshot?.run.useWorktrees === false
       act({ action: 'settings', detail: 'Update teammate worktrees', useWorktrees },
@@ -563,6 +571,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   }
 
   const split = innerW >= SPLIT_MIN_WIDTH && rosterAgents.length > 0
+  const autoResume = data?.interactive.autoResume !== false
   const leftW = Math.min(Math.max(Math.floor(innerW * 0.42), 40), 76)
   // Tasks are named by number wherever the panel has a column to spare for it.
   const shortTaskId = (id: string) => /^task-\d+$/.test(id) ? `#${id.slice(5)}` : id
@@ -576,7 +585,11 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   if (split) {
     const blank = (rows: PaneRow[]) => { if (rows.length && rows[rows.length - 1]!.cells.length) rows.push({ cells: [] }) }
     // ── left: the team, then the board ──
-    leftRows.push({ cells: [[fitText(`TEAMMATES  ${COORDINATOR_ROSTER_LABELS[rosterFilter]} ${teammates.length}/${roster.counts.all} · / find · t state`, leftW).trimEnd(), searching ? theme.cyan : theme.muted]] })
+    const rosterHeading = `TEAMMATES  ${COORDINATOR_ROSTER_LABELS[rosterFilter]} ${teammates.length}/${roster.counts.all}`
+    // The count is the heading; the two keys are what to scan for.
+    leftRows.push(rosterHeading.length + ' · / find · t state'.length <= leftW
+      ? { cells: [[rosterHeading, searching ? theme.cyan : theme.muted], [' · ', theme.dim], ['/', theme.cyan], [' find', theme.dim], [' · ', theme.dim], ['t', theme.cyan], [' state', theme.dim]] }
+      : { cells: [[fitText(`${rosterHeading} · / find · t state`, leftW).trimEnd(), searching ? theme.cyan : theme.muted]] })
     if (searching || rosterQuery) leftRows.push({ cells: [[fitText(`Find: ${rosterQuery}${searching ? '▏ · enter/esc finish' : rosterQuery ? ' · ctrl+u clear' : ''}`, leftW).trimEnd(), theme.text]] })
     if (!teammates.length) leftRows.push({ cells: [['No teammates match these filters.', theme.dim]] })
     const nameW = Math.min(rosterNameWidth, Math.max(leftW - 26, 8))
@@ -684,6 +697,12 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       if (row.activity && !(row.here && /^Available$/.test(row.activity)) && !(recovering && /^Needs recovery/.test(row.activity))) {
         for (const text of wrapWords(row.activity, rightW, 2)) rightRows.push({ cells: [[text, row.needs ? theme.amber : theme.muted]] })
       }
+      if (data?.settledExecutions?.includes(detailAgent.id)) {
+        rightRows.push({ cells: [['h', theme.cyan], [' opens recovery, where the saved result is acknowledged', theme.muted]] })
+      }
+      if (recovering && data?.interactive.autoResumeExhausted?.includes(detailAgent.id)) {
+        rightRows.push({ cells: [[fitText('Resumed automatically twice without finishing; it now waits for you.', rightW).trimEnd(), theme.amber]] })
+      }
       if (recovering) {
         // `r` is the lead's; a teammate's view can only look.
         rightRows.push({ cells: [['⚠ Needs recovery', theme.amber], ['  ·  ', theme.dim], ['⏎', theme.cyan], [' inspect its transcript', theme.muted],
@@ -696,15 +715,34 @@ export const TeammatesPopover = memo(function TeammatesPopover({
         blank(rightRows)
         rightRows.push({ cells: [['TASK  ', theme.muted], [row.task.id, theme.cyan], ['  ·  ', theme.dim], [row.taskStatus, row.taskStatusColor]] })
         for (const text of wrapWords(row.task.title, rightW, 3)) rightRows.push({ cells: [[text, theme.text, true]] })
+        const waits = row.task.blockedBy.filter((id) => !TERMINAL_TASK_STATUSES.has(snapshot?.tasks.find((entry) => entry.id === id)?.status ?? ''))
+        if (waits.length && !row.taskDone) rightRows.push({ cells: [[fitText(`waits on ${waits.map(shortTaskId).join(', ')}`, rightW).trimEnd(), theme.amber]] })
+      }
+      // Newest first: what came back and what was last said are why the panel
+      // was opened. The brief and its paths are reference, and a ten-row brief
+      // above them pushed both off a short terminal.
+      if (row.task && row.taskDone && row.task.resultSummary) {
+        blank(rightRows)
+        rightRows.push({ cells: [['RESULT', theme.muted]] })
+        for (const text of wrapWords(row.task.resultSummary, rightW - 2, 6 * roomy)) rightRows.push({ cells: [[`  ${text}`, theme.text]] })
+      }
+      const lastWord = row.note ? coordinatorAgentNote(detailAgent, snapshot, true) : ''
+      if (lastWord && lastWord !== row.task?.resultSummary) {
+        blank(rightRows)
+        rightRows.push({ cells: [['LAST WORD', theme.muted]] })
+        for (const text of wrapWords(`“${lastWord}”`, rightW - 2, 6 * roomy)) rightRows.push({ cells: [[`  ${text}`, theme.text]] })
+      }
+      if (row.task) {
         // What was asked, in the lead's words — the title is only its name.
         const brief = row.task.prompt.trim()
         if (brief && brief !== row.task.title) {
+          const briefRows = wrapWords(brief, rightW - 2)
+          const shownBrief = briefRows.slice(0, 3 + roomy)
           blank(rightRows)
-          rightRows.push({ cells: [['BRIEF', theme.muted]] })
-          for (const text of wrapWords(brief, rightW - 2, 5 * roomy)) rightRows.push({ cells: [[`  ${text}`, theme.muted]] })
+          rightRows.push({ cells: [['BRIEF', theme.muted], ...(shownBrief.length < briefRows.length
+            ? [[`  first ${shownBrief.length} of ${briefRows.length} lines · `, theme.dim], ['⏎', theme.cyan], [' transcript has the rest', theme.dim]] as PaneCell[] : [])] })
+          for (const text of shownBrief) rightRows.push({ cells: [[`  ${text}`, theme.muted]] })
         }
-        const waits = row.task.blockedBy.filter((id) => !TERMINAL_TASK_STATUSES.has(snapshot?.tasks.find((entry) => entry.id === id)?.status ?? ''))
-        if (waits.length && !row.taskDone) rightRows.push({ cells: [[fitText(`waits on ${waits.join(', ')}`, rightW).trimEnd(), theme.amber]] })
         if (row.task.paths.length) {
           // Nine paths under one directory said the directory nine times and
           // took nine rows; it is said once and the names share rows.
@@ -722,17 +760,6 @@ export const TeammatesPopover = memo(function TeammatesPopover({
           }
           if (shownNames.length < names.length) rightRows.push({ cells: [[`  +${names.length - shownNames.length} more`, theme.dim]] })
         }
-        if (row.taskDone && row.task.resultSummary) {
-          blank(rightRows)
-          rightRows.push({ cells: [['RESULT', theme.muted]] })
-          for (const text of wrapWords(row.task.resultSummary, rightW - 2, 6 * roomy)) rightRows.push({ cells: [[`  ${text}`, theme.text]] })
-        }
-      }
-      const lastWord = row.note ? coordinatorAgentNote(detailAgent, snapshot, true) : ''
-      if (lastWord && lastWord !== row.task?.resultSummary) {
-        blank(rightRows)
-        rightRows.push({ cells: [['LAST WORD', theme.muted]] })
-        for (const text of wrapWords(`“${lastWord}”`, rightW - 2, 6 * roomy)) rightRows.push({ cells: [[`  ${text}`, theme.text]] })
       }
     }
     const elsewhereAsks = attention.filter((entry) => entry.agentId !== detailAgent?.id)
@@ -743,6 +770,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       rightRows.push({ cells: [[fitText(settingsHeading, rightW).trimEnd(), theme.muted]] })
       rightRows.push({ cells: [['c ', theme.cyan], [data?.interactive.autoContinue ? '[x]' : '[ ]', data?.interactive.autoContinue ? theme.green : theme.muted], [' Continue when teammates respond', theme.text]] })
       rightRows.push({ cells: [['w ', theme.cyan], [snapshot?.run.useWorktrees !== false ? '[x]' : '[ ]', snapshot?.run.useWorktrees !== false ? theme.green : theme.muted], [' Give new teammates their own worktree', theme.text]] })
+      rightRows.push({ cells: [['u ', theme.cyan], [autoResume ? '[x]' : '[ ]', autoResume ? theme.green : theme.muted], [RESUME_SETTING_LABEL, theme.text]] })
       if (data?.interactive.autoContinue && data.interactive.remainingTurns === 0) {
         for (const text of wrapWords('Automatic continuation paused after four turns. Send a message to continue.', rightW)) rightRows.push({ cells: [[text, theme.amber]] })
       }
@@ -755,12 +783,12 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   const topRows = (state.loading && !data ? 1 : 0)
     + (pending ? wrapped('The last request is unconfirmed. Retrying replays the same request, which the server reconciles instead of repeating.') + (error ? 1 : 0) + 1 : error ? 2 : 0)
     + (!enabled && !terminal && canLead ? wrapped('Enable coordination to give this chat a team. Teammates run their own turns; what they send back arrives folded into your next message, and you keep every approval.') : 0)
-    + (unconfirmedDelivery ? 4 : 0)
+    + (unconfirmedDelivery ? wrapped(UNCONFIRMED_DELIVERY_TEXT) + 1 + (split ? 0 : 1) : 0)
   const bodyRows = split ? topRows + (topRows ? 1 : 0) + Math.max(leftRows.length, rightRows.length) : topRows
     + (currentAttention ? 3 + attentionDetail.text.split('\n').reduce((rows, line) => rows + wrapped(line), 0) + (attentionDetail.hidden > 0 ? 1 : 0) : 0)
     // The settings labels wrap under their checkbox on a narrow terminal, so
     // count their rows at that width or the roster falls below the fold.
-    + (enabled ? 1 + wrapped(settingsHeading) + settingRows(' Continue when teammates respond') + settingRows(' Give new teammates their own worktree')
+    + (enabled ? 1 + wrapped(settingsHeading) + settingRows(' Continue when teammates respond') + settingRows(' Give new teammates their own worktree') + settingRows(RESUME_SETTING_LABEL)
       + (data?.interactive.autoContinue && data.interactive.remainingTurns === 0 ? 2 : 0) : 0)
     + (teammates.length > 0
       // A heading row, then a row a teammate — two where its note has no room
@@ -841,7 +869,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       : pending
         ? [['r', 'retry same request'], ['⏎', 'inspect'], ['e', 'edit after checking task history'], ['esc', 'close']]
         : !enabled
-          ? (teammates.length ? [['j/k', 'move'], ['⏎', 'open transcript'], ['o/O', 'watch'], ['v', 'result review'], ...(canLead ? [['e', 'new team'] as [string, string]] : []), ['esc', 'close']] : canLead ? [['e', 'enable coordinator'], ['esc', 'close']] : [['esc', 'close']])
+          ? (teammates.length ? [['j/k', 'move'], ['⏎', 'open transcript'], ['o/O', 'watch'], ['v', 'result review'], ...(recoveries.length || data?.settledExecutions?.length ? [['h', 'recovery'] as [string, string]] : []), ...(canLead ? [['e', 'new team'] as [string, string]] : []), ['esc', 'close']] : canLead ? [['e', 'enable coordinator'], ['esc', 'close']] : [['esc', 'close']])
           : [['j/k', 'move'], ['⏎', 'open'], ['o/O', 'watch'], ['v', 'result review'], ['d', 'ask'], ['m', 'message'],
              ['r', 'resume'], ['i', 'interrupt'], ['⇧X', 'cancel task'], ['p', `new: ${newTeammateProvider ? formatProviderLabel(newTeammateProvider) : 'same'}`], ['c', 'continuation'], ['w', 'worktrees'], ['l', `alerts ${state.notifications}`], ['x', 'turn off'], ['esc', 'close']]
   // Truncation is by whole entries, not mid-word: a hint cut to "x …" tells the
@@ -858,12 +886,15 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   }
 
   const unconfirmedBlock = unconfirmedDelivery ? (
-    <box flexDirection="column" paddingTop={1}>
-      <text fg={theme.amber} wrapMode="word" width={innerW}>
-        A previous lead delivery is unconfirmed. Read this conversation's transcript before
-        choosing whether its mail arrived.
-      </text>
-      <text fg={theme.dim} wrapMode="none">{'  y mail arrived   ·   n mail did not arrive — requeue'}</text>
+    <box flexDirection="column" paddingBottom={split ? 0 : 1}>
+      <text fg={theme.amber} wrapMode="word" width={innerW}>{UNCONFIRMED_DELIVERY_TEXT}</text>
+      <box height={1} flexDirection="row">
+        <text fg={theme.cyan} wrapMode="none">{'  y'}</text>
+        <text fg={theme.text} wrapMode="none">{' mail arrived'}</text>
+        <text fg={theme.dim} wrapMode="none">{'  ·  '}</text>
+        <text fg={theme.cyan} wrapMode="none">n</text>
+        <text fg={theme.text} wrapMode="none">{' did not arrive — requeue it'}</text>
+      </box>
     </box>
   ) : null
   // Every cell states its own direction and wrap: a row is exactly one row.
@@ -1115,6 +1146,11 @@ export const TeammatesPopover = memo(function TeammatesPopover({
                   {snapshot?.run.useWorktrees !== false ? '[x]' : '[ ]'}
                 </text>
                 <text fg={theme.text} wrapMode="word" width={Math.max(8, innerW - 6)}>{' Give new teammates their own worktree'}</text>
+              </box>
+              <box flexDirection="row">
+                <text fg={theme.cyan} wrapMode="none">{'u '}</text>
+                <text fg={autoResume ? theme.green : theme.muted} wrapMode="none">{autoResume ? '[x]' : '[ ]'}</text>
+                <text fg={theme.text} wrapMode="word" width={Math.max(8, innerW - 6)}>{RESUME_SETTING_LABEL}</text>
               </box>
               {data?.interactive.autoContinue && data.interactive.remainingTurns === 0 ? (
                 <text fg={theme.amber} wrapMode="word" width={innerW}>

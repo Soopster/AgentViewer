@@ -393,6 +393,33 @@ export function dispatchCoordinatorOpenCodeToolCall(
   return dispatchByRegistry(opencodeRegistry, bindingKey('opencode', sessionId), toolName, args)
 }
 
+// ---- ACP agents (a stdio MCP server the agent spawns) -----------------------
+
+// An ACP agent is its own process and takes tools only as MCP servers named in
+// `session/new`, so binding is two steps: remember the identity here, then the
+// send path asks for the server entry when it starts the session.
+const acpRegistry = new Map<string, ExternalProtocolIdentity>()
+
+export function registerCoordinatorAcpTools(sessionId: string, identity: ExternalProtocolIdentity, providerInstanceId?: string): void {
+  acpRegistry.set(bindingKey('acp', sessionId, providerInstanceId), identity)
+}
+
+export function unregisterCoordinatorAcpTools(sessionId: string, providerInstanceId?: string): void {
+  acpRegistry.delete(bindingKey('acp', sessionId, providerInstanceId))
+}
+
+/** The MCP servers to declare for this session, or none when it is not a Coordinator participant. */
+export async function getCoordinatorAcpMcpServers(sessionId: string, directory: string, providerInstanceId?: string) {
+  const identity = acpRegistry.get(bindingKey('acp', sessionId, providerInstanceId))
+  if (!identity) return undefined
+  const [{ writeCoordinatorAcpMcpServer }, { getCoordinatorBridgeUrl }] = await Promise.all([
+    import('./coordinatorAcpMcp'),
+    import('./coordinatorBridgeServer'),
+  ])
+  const tools = COORD_TOOL_SPECS.map((spec) => ({ name: spec.name, description: spec.description, inputSchema: jsonSchemaParams(spec.fields) }))
+  return [await writeCoordinatorAcpMcpServer(directory, await getCoordinatorBridgeUrl(), identity, tools)]
+}
+
 /** Teardown all aliases for this run, including bindings restored without a controller. */
 export function unregisterCoordinatorRunTools(runId: string, sessionId?: string, providerInstanceId?: string): void {
   function remove<T>(bindings: Map<string, T>, identityFor: (value: T) => ExternalProtocolIdentity) {
@@ -405,5 +432,5 @@ export function unregisterCoordinatorRunTools(runId: string, sessionId?: string,
     }
   }
   remove(registry, value => value.identity)
-  for (const bindings of [piRegistry, copilotRegistry, codexRegistry, opencodeRegistry]) remove(bindings, value => value)
+  for (const bindings of [piRegistry, copilotRegistry, codexRegistry, opencodeRegistry, acpRegistry]) remove(bindings, value => value)
 }

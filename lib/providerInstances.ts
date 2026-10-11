@@ -17,6 +17,7 @@ const DEFAULT_PROVIDER_LABELS: Record<AgentProvider, string> = {
   lmstudio: 'LM Studio',
   'claude-acp': 'Claude (ACP)',
   'codex-acp': 'Codex (ACP)',
+  acp: 'ACP agent',
 }
 
 const DEFAULT_PROVIDER_ORDER = Object.keys(DEFAULT_PROVIDER_LABELS) as AgentProvider[]
@@ -122,8 +123,10 @@ function parseInstanceFile(value: unknown): ProviderInstance[] {
     // The provider SDKs that expose independent account/config roots today
     // are Claude and Codex. Keep the registry honest for the other adapters:
     // their default instance remains selectable, but duplicate configured
-    // labels would otherwise point at the same process/runtime.
-    if (id !== row.provider && row.provider !== 'claude' && row.provider !== 'codex') continue
+    // labels would otherwise point at the same process/runtime. `acp` is the
+    // other exception: each instance names its own agent command, so two of
+    // them are two different agents.
+    if (id !== row.provider && row.provider !== 'claude' && row.provider !== 'codex' && row.provider !== 'acp') continue
     seen.add(id)
     const displayName = typeof row.displayName === 'string' && row.displayName.trim()
       ? row.displayName.trim()

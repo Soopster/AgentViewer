@@ -18,6 +18,7 @@ import type {
   ToolUseBlock,
 } from './types'
 import type { AcpBufferedMessage } from './acpClientPool'
+import type { AcpProvider } from './provider'
 import { recordRawFrame } from './rawFrames'
 
 function stringify(value: unknown): string {
@@ -99,7 +100,7 @@ function toolResultMessage(update: Extract<SessionUpdate, { sessionUpdate: 'tool
  */
 export function mapAcpBufferedMessage(
   sessionId: string,
-  provider: Extract<AgentProvider, 'claude-acp' | 'codex-acp'>,
+  provider: AcpProvider,
   buffered: AcpBufferedMessage,
 ): SessionMessage | null {
   const { message, index, receivedAt } = buffered
@@ -148,7 +149,7 @@ export function mapAcpBufferedMessage(
 
 export function mapAcpBufferedMessages(
   sessionId: string,
-  provider: Extract<AgentProvider, 'claude-acp' | 'codex-acp'>,
+  provider: AcpProvider,
   buffered: AcpBufferedMessage[],
 ): SessionMessage[] {
   return buffered

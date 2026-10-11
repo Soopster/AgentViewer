@@ -238,6 +238,7 @@ const PROVIDER_LABELS: Partial<Record<AgentProvider, string>> = {
   'claude-acp': 'Claude (ACP)',
   codex: 'Codex',
   'codex-acp': 'Codex (ACP)',
+  acp: 'ACP agent',
   opencode: 'OpenCode',
   copilot: 'Copilot',
   pi: 'Pi',

@@ -117,6 +117,8 @@ import {
   buildCoordinatorCodexDynamicTools,
   registerCoordinatorOpenCodeTools,
   unregisterCoordinatorOpenCodeTools,
+  registerCoordinatorAcpTools,
+  unregisterCoordinatorAcpTools,
 } from './agentCoordinationSdkTools'
 
 // Providers whose SDK supports registering real in-process tools for a
@@ -128,7 +130,7 @@ import {
 // attached to an externally-managed `opencode serve` never has the
 // coordinator plugin loaded, so it silently falls back to the fenced-block
 // protocol working exactly as before (no coord_* tools available).
-const IN_PROCESS_TOOL_PROVIDERS = new Set<ProtocolRun['provider']>(['claude', 'pi', 'copilot', 'codex', 'opencode'])
+const IN_PROCESS_TOOL_PROVIDERS = new Set<ProtocolRun['provider']>(['claude', 'pi', 'copilot', 'codex', 'opencode', 'acp'])
 
 function registerCoordinatorToolsForProvider(provider: ProtocolRun['provider'], sessionId: string, identity: ExternalProtocolIdentity, providerInstanceId?: string): void {
   if (provider === 'claude') registerCoordinatorMcpServer(sessionId, identity, providerInstanceId)
@@ -136,6 +138,7 @@ function registerCoordinatorToolsForProvider(provider: ProtocolRun['provider'], 
   else if (provider === 'copilot') registerCoordinatorCopilotTools(sessionId, identity, providerInstanceId)
   else if (provider === 'codex') registerCoordinatorCodexTools(sessionId, identity, providerInstanceId)
   else if (provider === 'opencode') registerCoordinatorOpenCodeTools(sessionId, identity, providerInstanceId)
+  else if (provider === 'acp') registerCoordinatorAcpTools(sessionId, identity, providerInstanceId)
 }
 
 function unregisterCoordinatorToolsForProvider(provider: ProtocolRun['provider'], sessionId: string, providerInstanceId?: string): void {
@@ -144,6 +147,7 @@ function unregisterCoordinatorToolsForProvider(provider: ProtocolRun['provider']
   else if (provider === 'copilot') unregisterCoordinatorCopilotTools(sessionId, providerInstanceId)
   else if (provider === 'codex') unregisterCoordinatorCodexTools(sessionId, providerInstanceId)
   else if (provider === 'opencode') unregisterCoordinatorOpenCodeTools(sessionId, providerInstanceId)
+  else if (provider === 'acp') unregisterCoordinatorAcpTools(sessionId, providerInstanceId)
 }
 
 // Cleanup uses the durable run identity, so an ambient lead account cannot
@@ -204,7 +208,7 @@ const LOCK_LEASE_MS = 20 * 60_000
 // can cancel a teammate's in-flight turn without releasing the task), and
 // respond_to_mode/respond_to_allowlist_json (per-participant mailbox sender
 // gating, mirroring buzz-acp's respond-to modes).
-const SCHEMA_VERSION = 26
+const SCHEMA_VERSION = 27
 const EVENT_WINDOW = 300
 const LOCK_HISTORY_WINDOW = 200
 // Non-terminal tasks (pending/claimed/blocked) are always returned in full —
@@ -894,6 +898,10 @@ function migrateSchema(db: SqliteDatabase): void {
     'ALTER TABLE protocol_tasks ADD COLUMN claim_generation INTEGER NOT NULL DEFAULT 0',
     // v23: a chat's team may staff teammates from more than one provider.
     'ALTER TABLE protocol_interactive_sessions ADD COLUMN teammate_providers TEXT',
+    // v27: resuming a restarted team is a per-conversation setting, and the
+    // number of automatic tries is kept on the task so it survives restarts.
+    'ALTER TABLE protocol_interactive_sessions ADD COLUMN auto_resume INTEGER NOT NULL DEFAULT 1',
+    'ALTER TABLE protocol_tasks ADD COLUMN auto_resume_count INTEGER NOT NULL DEFAULT 0',
   ]) {
     try {
       db.exec(statement)
@@ -2922,12 +2930,65 @@ export async function adoptOrphanedInteractiveHost(sessionId: string, provider: 
   const snapshot = await readSessionCoordinator(sessionId, provider)
   if (!snapshot || ['completed', 'failed', 'stopped'].includes(snapshot.run.status)) return
   if (!snapshot.agents.some(agent => agent.role === 'lead' && agent.sessionId === sessionId)) return
-  await enqueueWrite(db => {
+  const adopted = await enqueueWrite(db => {
     const row = db.prepare('SELECT owner_id FROM protocol_interactive_hosts WHERE run_id = ?').get(snapshot.run.id) as Row | undefined
-    if (!row || row.owner_id === interactiveHostId || foreignInteractiveHostSync(db, snapshot.run.id)) return
-    db.prepare(`UPDATE protocol_interactive_hosts SET owner_id = ?, owner_pid = ?, owner_host = ?
-      WHERE run_id = ? AND owner_id = ?`).run(interactiveHostId, process.pid, hostname(), snapshot.run.id, row.owner_id)
+    if (!row || row.owner_id === interactiveHostId || foreignInteractiveHostSync(db, snapshot.run.id)) return false
+    return Number(db.prepare(`UPDATE protocol_interactive_hosts SET owner_id = ?, owner_pid = ?, owner_host = ?
+      WHERE run_id = ? AND owner_id = ?`).run(interactiveHostId, process.pid, hostname(), snapshot.run.id, row.owner_id).changes) > 0
   })
+  if (adopted) void resumeAdoptedTeammates(sessionId, provider, snapshot.run.id)
+}
+
+// herdr's spacing between restored agents: a team resumed at once is a burst
+// of provider spawns against one machine.
+const INTERACTIVE_AUTO_RESUME_STAGGER_MS = 100
+// Automatic tries per task, counted on the task so a host that dies every time
+// it resumes one cannot replay it on every restart. `r` resets the count: a
+// person has looked.
+export const INTERACTIVE_AUTO_RESUME_CAP = 2
+const autoResumeAttempts = new Set<string>()
+
+/** The machine-wide switch; each conversation also has its own setting (on by default). */
+export function interactiveAutoResumeEnabled(): boolean {
+  return process.env.AGENT_VIEWER_COORD_AUTO_RESUME?.trim() !== '0'
+}
+
+/**
+ * Pick a team's interrupted work back up after its host restarted — herdr
+ * reopens each agent's session on restore; this resumes its task as well.
+ *
+ * Runs only where a user's client has just adopted a dead host's run, never
+ * from the maintenance sweep: a sweep cannot tell a turn that died with its
+ * host from one that is merely between frames. Each teammate goes through the
+ * same checks `r` does (its directory and conversation still exist, no open
+ * decision, budget left), once per task in this process and at most
+ * `INTERACTIVE_AUTO_RESUME_CAP` times across restarts, so a teammate whose
+ * resume keeps failing waits for a person instead of looping.
+ */
+async function resumeAdoptedTeammates(sessionId: string, provider: ProtocolRun['provider'], runId: string): Promise<void> {
+  try {
+    if (!interactiveAutoResumeEnabled()) return
+    const db = await getDatabase()
+    const settings = db.prepare('SELECT auto_resume FROM protocol_interactive_sessions WHERE session_id = ?').get(sessionId) as Row | undefined
+    if (!Number(settings?.auto_resume ?? 1)) return
+    const identity = await sessionCoordinatorIdentity(sessionId, provider as AgentProvider)
+    for (const agentId of await readInteractiveRecoveries(runId)) {
+      const agent = readSnapshotSync(db, runId)?.agents.find(entry => entry.id === agentId)
+      const attempt = `${runId}:${agentId}:${agent?.taskId ?? ''}`
+      if (!agent || autoResumeAttempts.has(attempt)) continue
+      autoResumeAttempts.add(attempt)
+      const tries = db.prepare('SELECT auto_resume_count FROM protocol_tasks WHERE run_id = ? AND id = ?').get(runId, agent.taskId ?? '') as Row | undefined
+      if (Number(tries?.auto_resume_count ?? 0) >= INTERACTIVE_AUTO_RESUME_CAP) continue
+      try {
+        await resumeInteractiveAgent(identity, agentId, true)
+      } catch {
+        // Left in recovery, where the panel says why and offers `r`.
+      }
+      await new Promise(resolve => setTimeout(resolve, INTERACTIVE_AUTO_RESUME_STAGGER_MS))
+    }
+  } catch {
+    // Adoption already succeeded; a failed auto-resume leaves manual recovery intact.
+  }
 }
 
 /** Adopt external/chat-led runs without launching or taking over their lead. */
@@ -3121,7 +3182,7 @@ export async function createExternalProtocolTask(
 ): Promise<ExternalProtocolTaskCreateResult> {
   if (params.requestedProviderInstanceId) {
     const instance = await resolveProviderInstance(params.requestedProviderInstanceId, params.requestedProvider)
-    if (!['claude', 'codex', 'opencode', 'copilot', 'pi'].includes(instance.provider)) throw new Error('Provider instance does not support Coordinator teammates')
+    if (!['claude', 'codex', 'opencode', 'copilot', 'pi', 'acp'].includes(instance.provider)) throw new Error('Provider instance does not support Coordinator teammates')
     params = { ...params, requestedProvider: instance.provider, requestedProviderInstanceId: instance.id }
   }
   const escalation = permissionModeEscalation(params.claudeAgentPolicy?.permissionMode)
@@ -5240,8 +5301,6 @@ async function dispatchNewProjectWebhookEvents(): Promise<void> {
       repoRoot = await projectRepoRoot(String(runRow.base_cwd))
       repoRootByRun.set(event.runId, repoRoot)
     }
-    const webhooks = await readProjectWebhooks(repoRoot)
-    if (!webhooks.length) continue
     const payload = {
       kind,
       runId: event.runId,
@@ -5251,7 +5310,9 @@ async function dispatchNewProjectWebhookEvents(): Promise<void> {
       detail: event.detail,
       timestamp: event.timestamp,
     }
-    for (const webhook of webhooks) void dispatchProjectWebhook(webhook, payload)
+    // The user's own command hooks see the same events as the project's webhooks.
+    void import('./coordinatorCommandHooks').then(({ dispatchCommandHooks }) => dispatchCommandHooks(payload, repoRoot!)).catch(() => {})
+    for (const webhook of await readProjectWebhooks(repoRoot)) void dispatchProjectWebhook(webhook, payload)
   }
 }
 
@@ -7514,7 +7575,7 @@ export async function drainCooperativeInbox(sessionId: string): Promise<string> 
 
 /** Durable browser-owned collaboration settings and delivery recovery. */
 export async function configureInteractiveCoordinator(params: {
-  sessionId: string; provider: AgentProvider; cwd: string; autoContinue?: boolean; useWorktrees?: boolean; restartRunId?: string; maxAgents?: number; budget?: ProtocolRunBudget | null
+  sessionId: string; provider: AgentProvider; cwd: string; autoContinue?: boolean; autoResume?: boolean; useWorktrees?: boolean; restartRunId?: string; maxAgents?: number; budget?: ProtocolRunBudget | null
 }): Promise<void> {
   const snapshot = await ensureSessionCoordinator(params)
   await sessionCoordinatorIdentity(params.sessionId, params.provider)
@@ -7537,6 +7598,8 @@ export async function configureInteractiveCoordinator(params: {
             run_id = excluded.run_id, provider = excluded.provider`).run(params.sessionId, snapshot.run.id, params.provider)
         if (params.autoContinue !== undefined) db.prepare(`UPDATE protocol_interactive_sessions
           SET auto_continue = ?, remaining_turns = 4 WHERE session_id = ?`).run(Number(params.autoContinue), params.sessionId)
+        if (params.autoResume !== undefined) db.prepare('UPDATE protocol_interactive_sessions SET auto_resume = ? WHERE session_id = ?')
+          .run(Number(params.autoResume), params.sessionId)
         // Only teammates started after this read it: a running teammate keeps the
         // checkout it was launched in rather than being moved out from under its work.
         if (params.useWorktrees !== undefined) db.prepare('UPDATE protocol_runs SET use_worktrees = ? WHERE id = ?')
@@ -7634,6 +7697,10 @@ export async function readInteractiveCoordinator(sessionId: string) {
     })() : undefined,
     executionElsewhere: Boolean(settings && foreignInteractiveHostSync(db, String(settings.run_id))),
     enabled: Boolean(settings), autoContinue: Boolean(settings?.auto_continue),
+    autoResume: Boolean(Number(settings?.auto_resume ?? 1)) && interactiveAutoResumeEnabled(),
+    // Teammates whose task has used its automatic tries: they wait for `r`.
+    autoResumeExhausted: settings ? (db.prepare(`SELECT a.id FROM protocol_agents a JOIN protocol_tasks t ON t.run_id = a.run_id AND t.id = a.task_id
+      WHERE a.run_id = ? AND t.auto_resume_count >= ?`).all(String(settings.run_id), INTERACTIVE_AUTO_RESUME_CAP) as Row[]).map(row => String(row.id)) : [],
     remainingTurns: Number(settings?.remaining_turns ?? 4),
     delivery: delivery ? { batchId: String(delivery.batch_id), state: String(delivery.state), createdAt: String(delivery.created_at),
       active: activeChatDeliveries.has(sessionId) || getRunningSessionInfo(sessionId).running
@@ -7712,7 +7779,7 @@ export async function withCooperativeInbox(
     })
     batchId = batch.id
     const roster = listAgentsSync(db, agent.runId)
-    const fallbackCommand = settings && (agent.provider === 'codex' || agent.provider === 'opencode')
+    const fallbackCommand = settings && (agent.provider === 'codex' || agent.provider === 'opencode' || agent.provider === 'acp')
       ? await writeCoordinatorSessionClient(path.join(DATA_DIR, 'session-bindings'), await getCoordinatorBridgeUrl(), await sessionCoordinatorIdentity(sessionId, agent.provider))
       : null
     const context = settings
@@ -7963,7 +8030,7 @@ export async function cancelInteractiveTask(identity: ExternalProtocolIdentity, 
   return { cancelled: true, ...(interrupted ? { interruptedAgent: owner.name } : {}) }
 }
 
-export async function resumeInteractiveAgent(identity: ExternalProtocolIdentity, agentId: string): Promise<void> {
+export async function resumeInteractiveAgent(identity: ExternalProtocolIdentity, agentId: string, automatic = false): Promise<void> {
   await serializeAutomaticDelegation(identity.runId, async () => {
     if (!(await readInteractiveRecoveries(identity.runId)).includes(agentId)) throw new Error('This teammate does not need recovery or is still running')
     const db = await getDatabase()
@@ -7995,6 +8062,8 @@ export async function resumeInteractiveAgent(identity: ExternalProtocolIdentity,
         || !currentTask || ['completed', 'failed', 'cancelled', 'blocked', 'planned'].includes(currentTask.status)
         || currentTask.receipt?.needsDecision?.some(decision => decision.status === 'open') || budgetExceededReasonSync(db, final.run)) throw new Error('Recovery state changed; refresh before resuming')
       db.prepare('DELETE FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').run(identity.runId, agentId)
+      db.prepare(`UPDATE protocol_tasks SET auto_resume_count = ${automatic ? 'auto_resume_count + 1' : '0'} WHERE run_id = ? AND id = ?`)
+        .run(identity.runId, currentTask.id)
     })
     void dispatchTeammateWork(controller, agentId)
   })

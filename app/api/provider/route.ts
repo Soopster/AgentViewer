@@ -21,7 +21,7 @@ export async function PATCH(request: NextRequest) {
   const provider = body?.provider
   if (!isProviderSelection(provider)) {
     return NextResponse.json({
-      error: 'provider must be all, claude, codex, opencode, copilot, pi, lmstudio, claude-acp, or codex-acp',
+      error: 'provider must be all, claude, codex, opencode, copilot, pi, lmstudio, claude-acp, codex-acp, or acp',
     }, { status: 400 })
   }
 

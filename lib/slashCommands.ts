@@ -136,6 +136,7 @@ const SLASH_COMMANDS_BY_PROVIDER: Record<AgentProvider, SlashCommandSuggestion[]
   // dispatch — leave empty until that subprocess's own command set is known.
   'claude-acp': [],
   'codex-acp': [],
+  acp: [],
 }
 
 const AGENT_VIEWER_SESSION_COMMANDS: SlashCommandSuggestion[] = [
@@ -152,6 +153,7 @@ const SLASH_COMMANDS_WITH_SESSION_MESSAGING: Record<AgentProvider, SlashCommandS
   lmstudio: [...AGENT_VIEWER_SESSION_COMMANDS, ...SLASH_COMMANDS_BY_PROVIDER.lmstudio],
   'claude-acp': [...AGENT_VIEWER_SESSION_COMMANDS, ...SLASH_COMMANDS_BY_PROVIDER['claude-acp']],
   'codex-acp': [...AGENT_VIEWER_SESSION_COMMANDS, ...SLASH_COMMANDS_BY_PROVIDER['codex-acp']],
+  acp: [...AGENT_VIEWER_SESSION_COMMANDS, ...SLASH_COMMANDS_BY_PROVIDER.acp],
 }
 
 export function getSlashCommandSuggestions(provider: AgentProvider | undefined | null): SlashCommandSuggestion[] {

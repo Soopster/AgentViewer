@@ -56,7 +56,7 @@ type Props = {
   onActivateSelection?: (section: ControlCenterSection) => void
 }
 
-const PROVIDERS = ['codex', 'claude', 'copilot', 'opencode', 'pi'] as const
+const PROVIDERS = ['codex', 'claude', 'copilot', 'opencode', 'pi', 'acp'] as const
 const ACTIVE_TASKS = new Set(['claimed', 'planning', 'planned', 'in_progress'])
 const TERMINAL_TASKS = new Set(['completed', 'failed', 'cancelled'])
 const ATTENTION_EVENTS = new Set(['agent.blocked', 'task.failed', 'lock.denied', 'plan.rejected', 'review.requested', 'phase.reported', 'phase.rejected', 'decision.raised', 'model.drift'])

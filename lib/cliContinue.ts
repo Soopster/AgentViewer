@@ -13,10 +13,11 @@ function shellQuote(s: string): string {
 //   copilot  --resume=<id>            (copilot --help)
 // LM Studio has no CLI — it's a GUI app with a local REST server, not
 // resumable from a terminal the way the other providers' native CLIs are.
-// ACP-transport sessions (claude-acp/codex-acp) are transient, in-memory
-// only (see lib/acpClientPool.ts) — no native CLI resume path either.
+// ACP-transport sessions (claude-acp/codex-acp/acp) are owned by
+// lib/acpClientPool.ts — no native CLI resume path either, and a configured
+// agent's own resume syntax is not ours to guess.
 const RESUME_COMMAND: Record<
-  Exclude<AgentProvider, 'lmstudio' | 'claude-acp' | 'codex-acp'>,
+  Exclude<AgentProvider, 'lmstudio' | 'claude-acp' | 'codex-acp' | 'acp'>,
   (sessionId: string) => string
 > = {
   claude: (id) => `claude --resume ${id}`,
@@ -31,7 +32,7 @@ export function getContinueInCliCommand(
   sessionId: string,
   cwd?: string | null,
 ): string | null {
-  if (provider === 'lmstudio' || provider === 'claude-acp' || provider === 'codex-acp') return null
+  if (provider === 'lmstudio' || provider === 'claude-acp' || provider === 'codex-acp' || provider === 'acp') return null
   const build = RESUME_COMMAND[provider]
   if (!build) return null
   const resume = build(sessionId)

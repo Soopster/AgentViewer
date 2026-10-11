@@ -326,6 +326,7 @@ const expectedNative: Record<AgentProvider, SendAttachment['type'][]> = {
   lmstudio: [],
   'claude-acp': [],
   'codex-acp': [],
+  acp: [],
 }
 
 for (const provider of providers) {

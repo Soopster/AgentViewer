@@ -3772,6 +3772,7 @@ function MessageViewInner({
       && provider !== 'claude'
       && provider !== 'claude-acp'
       && provider !== 'codex-acp'
+      && provider !== 'acp'
     ) return
     const effort = selectedEffort === 'auto' ? undefined : selectedEffort
     const key = [

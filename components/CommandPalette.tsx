@@ -228,6 +228,8 @@ function providerIconLabel(provider: AgentProvider): string {
       return 'Cl'
     case 'codex-acp':
       return 'Cx'
+    case 'acp':
+      return 'Ac'
     default:
       return 'Ai'
   }

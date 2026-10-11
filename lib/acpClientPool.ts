@@ -26,7 +26,8 @@ import {
   type RequestPermissionRequest,
   type RequestPermissionResponse,
 } from '@agentclientprotocol/sdk'
-import { resolveAcpAgentCommand, type AcpAgentKind } from './acpAgentSpawn'
+import { acpAgentKey, resolveAcpAgentSpawn, type AcpAgentKind } from './acpAgentSpawn'
+import { currentProviderEnvironment } from './providerInstances'
 import { selectIdleProviderPoolEvictions } from './providerPoolPolicy'
 import { DEFAULT_PROVIDER_STARTUP_TIMEOUT_MS } from './providerWarmup'
 
@@ -82,9 +83,14 @@ type PendingResolver =
   | { method: 'session/request_permission'; resolve: (v: RequestPermissionResponse) => void; reject: (e: unknown) => void }
   | { method: 'elicitation/create'; resolve: (v: CreateElicitationResponse) => void; reject: (e: unknown) => void }
 
+/** An MCP server declared to the agent in `session/new` (stdio transport). */
+export type AcpMcpServer = { name: string; command: string; args: string[]; env: Array<{ name: string; value: string }> }
+
 type AcpPoolEntry = {
   sessionId: string
   agentKind: AcpAgentKind
+  /** Which agent this is: two configured `acp` agents share a kind, not a subprocess. */
+  agentKey: string
   cwd: string
   child: ChildProcess
   stderrTail: string
@@ -169,7 +175,7 @@ class AcpClientPool {
     cwd: string,
   ): AcpPoolEntry | null {
     if (!entry.alive) return null
-    if (entry.agentKind === agentKind && entry.cwd === cwd) {
+    if (entry.agentKey === acpAgentKey(agentKind) && entry.cwd === cwd) {
       entry.lastActivityAt = Date.now()
       this.ensureSweep()
       return entry
@@ -208,7 +214,7 @@ class AcpClientPool {
   }
 
   /** Spawn-or-reuse a persistent ACP subprocess+session for sessionId. */
-  async acquire(sessionId: string, agentKind: AcpAgentKind, cwd: string): Promise<AcpPoolEntry> {
+  async acquire(sessionId: string, agentKind: AcpAgentKind, cwd: string, mcpServers: AcpMcpServer[] = []): Promise<AcpPoolEntry> {
     const existing = this.entries.get(sessionId)
     if (existing) {
       const reused = this.reuseCompatibleEntry(existing, agentKind, cwd)
@@ -220,7 +226,7 @@ class AcpClientPool {
       const reused = this.reuseCompatibleEntry(pendingEntry, agentKind, cwd)
       if (reused) return reused
     }
-    const build = this.spawnEntry(sessionId, agentKind, cwd)
+    const build = this.spawnEntry(sessionId, agentKind, cwd, mcpServers)
     this.inflight.set(sessionId, build)
     try {
       return await build
@@ -229,13 +235,14 @@ class AcpClientPool {
     }
   }
 
-  private async spawnEntry(sessionId: string, agentKind: AcpAgentKind, cwd: string): Promise<AcpPoolEntry> {
+  private async spawnEntry(sessionId: string, agentKind: AcpAgentKind, cwd: string, mcpServers: AcpMcpServer[]): Promise<AcpPoolEntry> {
     this.ensureSweep()
-    const command = resolveAcpAgentCommand(agentKind)
+    const { command, args } = resolveAcpAgentSpawn(agentKind)
+    const agentKey = acpAgentKey(agentKind)
     // detached so the agent (codex-acp in particular) gets its own process
     // group — its own sandboxed exec helpers are then reachable by signaling
     // the group, not just the direct child, on close/reap.
-    const child = spawn(command, [], { cwd, env: process.env, stdio: ['pipe', 'pipe', 'pipe'], detached: true })
+    const child = spawn(command, args, { cwd, env: currentProviderEnvironment(), stdio: ['pipe', 'pipe', 'pipe'], detached: true })
     let stderrTail = ''
     child.stderr?.setEncoding('utf8')
     child.stderr?.on('data', (chunk: string) => {
@@ -287,12 +294,15 @@ class AcpClientPool {
         clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
         clientInfo: { name: 'agent-viewer', title: 'Agent Viewer', version: '0.1.0' },
       })
-      const session = await ctx.buildSession(cwd).start()
+      // Servers are declared at session/new and cannot be added later, so a
+      // session that predates its Coordinator binding keeps whatever it had.
+      const session = await (mcpServers.length ? ctx.buildSession({ cwd, mcpServers }) : ctx.buildSession(cwd)).start()
       if (startupCancelled) throw new Error(`ACP startup for ${agentKind} was cancelled`)
 
       const entry: AcpPoolEntry = {
         sessionId,
         agentKind,
+        agentKey,
         cwd,
         child,
         stderrTail,
@@ -628,8 +638,8 @@ function getPool(): AcpClientPool {
   return globalThis.__agentViewerAcpClientPool
 }
 
-export function acquireAcpSession(sessionId: string, agentKind: AcpAgentKind, cwd: string): Promise<AcpPoolEntry> {
-  return getPool().acquire(sessionId, agentKind, cwd)
+export function acquireAcpSession(sessionId: string, agentKind: AcpAgentKind, cwd: string, mcpServers?: AcpMcpServer[]): Promise<AcpPoolEntry> {
+  return getPool().acquire(sessionId, agentKind, cwd, mcpServers)
 }
 
 export function peekAcpSession(sessionId: string): AcpPoolEntry | null {

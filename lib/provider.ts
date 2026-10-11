@@ -113,6 +113,19 @@ export const CODEX_ACP_CAPABILITIES: SessionCapabilities = {
   ...CLAUDE_ACP_CAPABILITIES,
 }
 
+/** A user-configured agent speaking ACP (Gemini CLI, Goose, …). What it can do
+ *  is read from the agent at runtime; nothing beyond a turn is assumed. */
+export const CUSTOM_ACP_CAPABILITIES: SessionCapabilities = {
+  ...CLAUDE_ACP_CAPABILITIES,
+}
+
+/** Every provider id driven through lib/acpClientPool.ts. */
+export type AcpProvider = Extract<AgentProvider, 'claude-acp' | 'codex-acp' | 'acp'>
+
+export function isAcpProvider(provider: unknown): provider is AcpProvider {
+  return provider === 'claude-acp' || provider === 'codex-acp' || provider === 'acp'
+}
+
 export function getProviderCapabilities(provider: AgentProvider): SessionCapabilities {
   if (provider === 'codex') return CODEX_CAPABILITIES
   if (provider === 'opencode') return OPENCODE_CAPABILITIES
@@ -121,6 +134,7 @@ export function getProviderCapabilities(provider: AgentProvider): SessionCapabil
   if (provider === 'lmstudio') return LMSTUDIO_CAPABILITIES
   if (provider === 'claude-acp') return CLAUDE_ACP_CAPABILITIES
   if (provider === 'codex-acp') return CODEX_ACP_CAPABILITIES
+  if (provider === 'acp') return CUSTOM_ACP_CAPABILITIES
   return CLAUDE_CAPABILITIES
 }
 
@@ -132,6 +146,7 @@ export function getAssistantLabel(provider: AgentProvider | undefined): string {
   if (provider === 'lmstudio') return 'LM STUDIO'
   if (provider === 'claude-acp') return 'CLAUDE (ACP)'
   if (provider === 'codex-acp') return 'CODEX (ACP)'
+  if (provider === 'acp') return 'ACP'
   return 'CLAUDE'
 }
 
@@ -144,7 +159,8 @@ export function isAgentProvider(value: unknown): value is AgentProvider {
     value === 'pi' ||
     value === 'lmstudio' ||
     value === 'claude-acp' ||
-    value === 'codex-acp'
+    value === 'codex-acp' ||
+    value === 'acp'
   )
 }
 
@@ -165,5 +181,6 @@ export function getAssistantDisplayName(provider: AgentProvider | undefined): st
   if (provider === 'lmstudio') return 'LM Studio'
   if (provider === 'claude-acp') return 'Claude (ACP)'
   if (provider === 'codex-acp') return 'Codex (ACP)'
+  if (provider === 'acp') return 'ACP agent'
   return 'Claude'
 }

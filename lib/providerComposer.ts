@@ -203,6 +203,32 @@ const LMSTUDIO: ProviderComposerConfig = {
   ],
 }
 
+// Whatever agent the user configured: nothing here may claim a command set or
+// a key binding the agent might not have.
+const CUSTOM_ACP: ProviderComposerConfig = {
+  label: 'ACP agent',
+  glyph: '>',
+  cssAccentVar: '--green',
+  cssAccentRgb: '52,211,153',
+  placeholderIdle: 'Message your ACP agent.',
+  placeholderStreaming: 'Type a follow-up — Enter queues it behind this turn',
+  placeholderNoSession: 'Pick an ACP session to send a message',
+  footerHintIdle: '⏎ send · ⇧⏎ newline · ↑↓ history',
+  footerHintSending: 'Esc view transcript · ⌃C cancel · ⏎ queue follow-up',
+  sendVerb: 'Send',
+  examples: [
+    'Try "summarise this repository"',
+    'Try "explain this error message"',
+  ],
+  tuiAccentKey: 'green',
+  welcomeTitle: '> ACP agent',
+  welcomeSubtitle: 'Any agent that speaks the Agent Client Protocol · set AGENT_VIEWER_ACP_COMMAND',
+  welcomeBullets: [
+    'summarise this repository',
+    'explain this error message',
+  ],
+}
+
 const PROVIDER_COMPOSER: Record<AgentProvider, ProviderComposerConfig> = {
   claude: CLAUDE,
   codex: CODEX,
@@ -212,6 +238,7 @@ const PROVIDER_COMPOSER: Record<AgentProvider, ProviderComposerConfig> = {
   lmstudio: LMSTUDIO,
   'claude-acp': CLAUDE,
   'codex-acp': CODEX,
+  acp: CUSTOM_ACP,
 }
 
 export function getProviderComposer(provider: AgentProvider | undefined | null): ProviderComposerConfig {

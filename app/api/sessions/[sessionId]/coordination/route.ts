@@ -31,7 +31,7 @@ const schema = z.object({
   cwd: z.string().trim().min(1).optional(),
   maxAgents: z.number().int().min(2).max(16).optional(),
   budget: z.strictObject({ maxTokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(), maxCostUsd: z.number().positive().optional(), maxDurationMinutes: z.number().positive().optional() }).nullable().optional(),
-  autoContinue: z.boolean().optional(), useWorktrees: z.boolean().optional(), batchId: z.string().optional(), received: z.boolean().optional(),
+  autoContinue: z.boolean().optional(), autoResume: z.boolean().optional(), useWorktrees: z.boolean().optional(), batchId: z.string().optional(), received: z.boolean().optional(),
   to: z.string().min(1).max(160).optional(),
   paths: z.array(z.string().trim().min(1)).max(100).optional(),
   /** Provider for a NEW teammate; an existing one keeps its own. */
@@ -135,7 +135,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ ses
       }
       if (body.action === 'settings') {
         const snapshot = await readSessionCoordinator(sessionId, body.provider)
-        await configureInteractiveCoordinator({ sessionId, provider: body.provider, cwd: snapshot!.run.baseCwd, autoContinue: body.autoContinue, useWorktrees: body.useWorktrees, maxAgents: body.maxAgents, budget: body.budget })
+        await configureInteractiveCoordinator({ sessionId, provider: body.provider, cwd: snapshot!.run.baseCwd, autoContinue: body.autoContinue, autoResume: body.autoResume, useWorktrees: body.useWorktrees, maxAgents: body.maxAgents, budget: body.budget })
         return { configured: true }
       }
       if (body.action === 'reconcile') {

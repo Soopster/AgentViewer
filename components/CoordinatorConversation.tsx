@@ -22,14 +22,14 @@ const CoordinatorWorkflow = dynamic(() => import('./CoordinatorWorkflow'))
 const CoordinatorResultReview = dynamic(() => import('./CoordinatorResultReview'))
 
 /** Providers a chat can staff a new teammate from. */
-const COORDINATOR_TEAMMATE_PROVIDERS = ['claude', 'codex', 'opencode', 'copilot', 'pi'] as const
+const COORDINATOR_TEAMMATE_PROVIDERS = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'acp'] as const
 
 type RequestBody = {
   providerInstanceId?: string
   action: 'start-workflow' | 'disable' | 'enable' | 'settings' | 'reconcile' | 'resume-agent' | 'reconcile-agent' | 'interrupt-agent' | 'cancel-task' | 'delegate' | 'message' | 'review-plan' | 'decision'
   provider: Session['provider']; requestId: string; detail: string; to?: string; paths?: string[]
   maxAgents?: number; budget?: ProtocolRunBudget | null
-  cwd?: string; autoContinue?: boolean; useWorktrees?: boolean; batchId?: string; received?: boolean
+  cwd?: string; autoContinue?: boolean; autoResume?: boolean; useWorktrees?: boolean; batchId?: string; received?: boolean
   taskId?: string; decisionId?: string; approved?: boolean; inReplyTo?: string
   /** Provider for a NEW teammate; an existing one keeps its own. */
   teammateProvider?: Session['provider']
@@ -227,6 +227,7 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
     </label> : null}
     {state?.interactive.enabled ? <label className="av-coord-continuation"><input type="checkbox" checked={pending.current?.action === 'settings' ? pending.current.autoContinue ?? state.interactive.autoContinue : state.interactive.autoContinue} disabled={disabled} onChange={event => void send({ action: 'settings', detail: 'Update automatic continuation', autoContinue: event.target.checked })} />Continue when teammates respond</label> : null}
     {state?.interactive.enabled && snapshot ? <label className="av-coord-continuation" title="Applies to teammates started after the change"><input type="checkbox" checked={pending.current?.action === 'settings' ? pending.current.useWorktrees ?? snapshot.run.useWorktrees !== false : snapshot.run.useWorktrees !== false} disabled={disabled} onChange={event => void send({ action: 'settings', detail: 'Update teammate worktrees', useWorktrees: event.target.checked })} />Give new teammates their own worktree</label> : null}
+    {state?.interactive.enabled ? <label className="av-coord-continuation" title="Up to two automatic tries per task; after that a teammate waits for Resume"><input type="checkbox" checked={pending.current?.action === 'settings' ? pending.current.autoResume ?? state.interactive.autoResume !== false : state.interactive.autoResume !== false} disabled={disabled} onChange={event => void send({ action: 'settings', detail: 'Update restart recovery', autoResume: event.target.checked })} />Resume teammates after a restart</label> : null}
     {state?.interactive.autoContinue && state.interactive.remainingTurns === 0 ? <p role="status">Automatic continuation paused after four turns. Send a message to continue.</p> : null}
     {state?.interactive.delivery && !state.interactive.delivery.active ? <div role="alert" className="rounded border p-3">
       <p>A previous lead delivery is unconfirmed. Inspect this conversation before choosing whether its mail arrived.</p>

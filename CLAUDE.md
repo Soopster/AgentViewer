@@ -186,9 +186,42 @@ from *holding* a thread:
 `npm run codex:resume:live` asks the app-server itself (`thread/unsubscribe` answers `unsubscribed`
 only for a subscribed thread); four mutations were verified to fail it.
 
-#### ACP-transport providers (`claude-acp`, `codex-acp`)
+#### ACP-transport providers (`claude-acp`, `codex-acp`, `acp`)
 
 Sibling provider ids that drive `claude-agent-acp`/`codex-acp` over the Agent Client Protocol (`session/new → session/prompt → session/update`) as an alternate transport for the same two SDKs — not a `transport` flag on `'claude'`/`'codex'`, and not something OpenCode/Copilot/Pi get (no upstream ACP agent exists for them). `lib/acpAgentSpawn.ts` resolves the subprocess command (env override `CLAUDE_AGENT_ACP_PATH`/`CODEX_ACP_PATH`, else bare command on `PATH`) — the coordinator's `bin/agent-viewer-acp-client.mjs` hand-duplicates this table rather than importing it, since it runs under vanilla `node` with no TS loader. `lib/acpClientPool.ts` is the singleton subprocess/session pool (modeled on `lib/claudePool.ts`): buffers push-based `session/update` notifications into a monotonically indexed array so `lib/sessionBackend.ts`'s poll+offset message model can slice it, queues `session/request_permission`/`elicitation/create` for a real UI round-trip, and reaps idle/stalled subprocesses. `lib/acpMapper.ts` maps buffered ACP updates to `SessionMessage`. `lib/permissions.ts` bridges the pool's pending-request queue into the same `PendingPermission` UI every other provider uses.
+
+**`acp` is the third ACP id: whatever agent the user configured a command for** (Gemini CLI, Goose,
+…). It is the same adapter, pool and mapper as the two built-in transports — nothing in them knows
+which agent it is talking to — with the command resolved in `lib/acpAgentSpawn.ts` instead of from a
+table. The default instance reads `AGENT_VIEWER_ACP_COMMAND`; further agents are provider instances
+(`.agent-viewer-data/provider-instances.json`, `provider: "acp"` with the command as `executable`),
+which is why `acp` joins Claude and Codex as a provider that may have more than one instance.
+
+- **Caches and pooled subprocesses are keyed by `acpAgentKey`, not by agent kind.** Two instances
+  share the kind `custom`; keyed by kind, one agent's session list is served as the other's and
+  every session in it opens empty. The capability probes run under the calling instance's context.
+- **An unconfigured agent is answered without a spawn.** The sidebar polls every 5s, and the `all`
+  view fans out to every instance — `acp` included, unlike the two built-in transports, whose
+  sessions the native adapters already list. A turn against it fails with what to set.
+- **A managed `acp` teammate gets its `coord_*` tools from an MCP server it spawns itself**
+  (`lib/coordinatorAcpMcp.ts`). An ACP agent is a separate process that takes tools only as MCP
+  servers named in `session/new`; the full bridge needs the web API, which a TUI-hosted run does not
+  have, so this is a dependency-free stdio server, materialized beside a 0600 binding, that calls the
+  local Coordinator bridge's `/participant`. The credential is in that file, never in the agent's
+  argv, environment or prompt. **Servers cannot be added to a live session**, so a chat that became
+  a lead after it started keeps what it had and is given the shell fallback client instead, as Codex
+  and OpenCode are.
+- **Its approvals go to the human.** The worker auto-approves because it is unattended; a managed
+  teammate's permission requests queue for the UI like any ACP session's, `coord_*` calls included
+  if the agent asks about MCP tools. Not pre-allowed: the request names a tool by a title the agent
+  writes, which is not something to match an allow rule against.
+- Not done: the roster and the pickers say `ACP` for every instance rather than its display name,
+  the panel's `p` staffs the default instance only (`requested_provider_instance_id` on
+  `coord_delegate` reaches the others), and a pooled session reaped after 15 idle minutes starts a
+  fresh ACP session, as it does for the built-in transports.
+
+`acpProviderSmoke.ts` runs a hand-written agent through a turn, two instances, per-instance listing
+and a staffed teammate that reads the board as itself; four mutations were verified to fail it.
 
 **ACP session persistence is advertised per agent, and the advertisement is a claim rather than a guarantee** (`lib/acpCapabilities.ts`). The protocol gates `session/list`, `session/load`, `session/resume`, `session/delete` and `session/fork` on the agent advertising them in its `initialize` response — which the pool used to discard, so this was long assumed to be "ACP cannot". Measured: claude-agent-acp 0.70.0 advertises `loadSession` plus session `list`/`resume`/`fork`/`delete`/`close`; codex-acp 1.6.2 the same minus `fork`. A capability is read by PRESENCE (`{}` means yes, absent or `null` means no) except `loadSession`, which is a plain boolean — `scripts/acpCapabilitySmoke.ts` pins both rules, since reading either wrong fails silently in one direction or the other.
 
@@ -1385,6 +1418,55 @@ in any other project a coordinated agent ran on the preamble alone. `bin/agent-v
 `AGENT_VIEWER_COORD_SKILL_PATH` (the shipped copy) and `skillGroundingLine` / the worker's
 `tickPrompt` name it as the fallback. Launched outside the bin entrypoint (`npm run dev`) the
 variable is unset and the line is as before.
+
+#### Teams outlive the window, and a script can drive a run (load-bearing)
+
+Two of herdr's promises, measured against its 0.9.3 docs: work survives the client, and the whole
+CLI is the API.
+
+- **`agent-viewer --daemon` hosts the work in a background daemon and attaches to it**
+  (`bin/agent-viewer-daemon.mjs`; `daemon status|start|stop`). The daemon is the ordinary
+  `agent-viewer web`, detached, using the production build when one exists (0.5s to answer, against
+  the dev server's many seconds). A port is classified before anything is started: only a listener
+  answering `GET /api/version` as `agent-viewer` is attached to, and one that answers as anything
+  else is refused rather than started over. `stop` kills only a daemon it has a pid record for — one
+  started by hand is not its to kill. It is **not the default**: attached reads go over HTTP, and the
+  navigation numbers in *OpenTUI performance patterns* were all measured in-process.
+- **Quitting an attached TUI is a detach.** `confirmExit` used to interrupt every running turn on
+  the way out, attached or not, so `--attach` stopped the daemon's work in every other client's view
+  of it. Attached, it drops only its own stream; the dialog says the turns keep going, and unattached
+  it names `--daemon`.
+- **Adopting a dead host's team resumes its teammates** (`resumeAdoptedTeammates`), staggered 100ms
+  as herdr spaces restored agents. It runs only where `adoptOrphanedInteractiveHost` actually took a
+  run over — a UI read — and **never from the maintenance sweep**, which cannot tell a turn that died
+  with its host from one between frames. Each teammate passes the checks `r` does and is tried once
+  per task per process. It is a per-conversation setting (`u` in the panel, a checkbox on the web;
+  `auto_resume`, schema v27, on by default) under a machine-wide switch,
+  `AGENT_VIEWER_COORD_AUTO_RESUME=0`, which the two smokes pinning the manual path set.
+  **The tries are counted on the task** (`auto_resume_count`, cap `INTERACTIVE_AUTO_RESUME_CAP` = 2),
+  not in memory: a host that dies every time it resumes a task would otherwise replay it on every
+  restart. Past the cap the teammate stays in recovery and the panel says why; `r` resets the count,
+  because a person has looked. `coordAutoResumeSmoke.ts` runs each case in real processes.
+- **`agent-viewer coord run|join|status|delegate|send|inbox|wait|runs|whoami|tools|call`**
+  (`bin/agent-viewer-coord-cli.mjs`) is the same `/api/agent-protocol/external` endpoint the MCP
+  bridge uses. `call <tool>` builds its request from `COORD_TOOL_SPECS`, so a tool added to the
+  contract is scriptable without touching the CLI. JSON on stdout; exit 1 with a JSON error, 2 for
+  usage, 3 for a `wait` that timed out. A run binds the **directory** it was started from, so later
+  commands need no identity flag; the token is saved 0600 beside the bridge's and never printed. The
+  launcher keeps its own copy of the verb list (importing the CLI would load the contract on every
+  launch) and `coordCliSmoke.mjs` asserts the two agree.
+- **`coord worker --acp-command "<cmd>"` drives any agent that speaks ACP** (Gemini CLI, Goose, …),
+  not just the two with a built-in adapter. `runAcpProviderTick` already took a command; the worker
+  now passes the user's, records it in the identity file so a bare `--identity` restart keeps it,
+  and holds the worker on ACP whatever its provider says. The command is argv (a command line with
+  simple quoting, or a JSON array — `lib/acpCommand.mjs`, shared with the session pool) and never
+  reaches a shell. Given only a command, the worker joins as provider `acp` (below), so the roster
+  shows it as what it is. `acpCustomAgentSmoke.mjs` runs a whole tick against a hand-written agent.
+- **Command hooks are the user's, never the project's** (`lib/coordinatorCommandHooks.ts`,
+  `<coordinator home>/hooks.json`). The webhooks in `.agent-viewer/hooks.json` can only receive
+  data; a command read from a cloned repository would run its author's code the first time a run
+  finished there. `run` is argv, not a shell string, so event text cannot become syntax; the event
+  arrives on stdin and as `AGENT_VIEWER_HOOK_*`, and a hook is killed after 10s.
 
 #### Coordinated transcripts read as who said what (load-bearing)
 

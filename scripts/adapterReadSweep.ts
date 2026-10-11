@@ -19,7 +19,7 @@ import { assertAllAdapterCapabilities } from '../lib/adapters/registry'
 import type { AgentProvider } from '../lib/types'
 
 const PROVIDERS: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'lmstudio']
-const ACP: AgentProvider[] = ['claude-acp', 'codex-acp']
+const ACP: AgentProvider[] = ['claude-acp', 'codex-acp', 'acp']
 
 let failures = 0
 

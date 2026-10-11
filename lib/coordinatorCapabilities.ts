@@ -52,5 +52,5 @@ export async function validateCoordinatorSelection(provider: AgentProvider, cwd:
 
 /** Public configuration metadata only; never include environment or executable. */
 export async function readCoordinatorProviderInstances() {
-  return (await listProviderInstanceSummaries()).filter(instance => ['claude', 'codex', 'opencode', 'copilot', 'pi'].includes(instance.provider))
+  return (await listProviderInstanceSummaries()).filter(instance => ['claude', 'codex', 'opencode', 'copilot', 'pi', 'acp'].includes(instance.provider))
 }
