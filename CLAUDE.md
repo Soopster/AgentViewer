@@ -211,10 +211,25 @@ which is why `acp` joins Claude and Codex as a provider that may have more than 
   argv, environment or prompt. **Servers cannot be added to a live session**, so a chat that became
   a lead after it started keeps what it had and is given the shell fallback client instead, as Codex
   and OpenCode are.
-- **Its approvals go to the human.** The worker auto-approves because it is unattended; a managed
-  teammate's permission requests queue for the UI like any ACP session's, `coord_*` calls included
-  if the agent asks about MCP tools. Not pre-allowed: the request names a tool by a title the agent
-  writes, which is not something to match an allow rule against.
+- **An agent is free to ignore the MCP server, so a teammate is also given the shell client.**
+  GitHub Copilot's ACP mode never starts a stdio server it is handed (verified: the server was not
+  spawned at all), and its teammate ended every turn saying it had no `coord_*` tools. Each `acp`
+  teammate dispatch therefore also names the session client (`lib/coordinatorSessionClient.ts`),
+  which reaches the same bridge as the same participant.
+- **Its approvals go to the human, except the session client's own calls.** A managed teammate's
+  permission requests queue for the UI like any ACP session's. The one exception is a shell command
+  that is *exactly* one call of that session's client (`isCoordinatorClientInvocation`: the
+  host-supplied prefix, one `coord_*` name, at most one single-quoted argument — nothing can follow
+  or be substituted), which the pool answers `allow_once` through a per-session rule
+  (`setAcpPermissionRule`). The Coordinator authorizes each such call as that participant anyway.
+  **It matches the command, never the title**: the title is the agent's own prose ("Check
+  coordinator run status"). MCP-tool asks are not pre-allowed — no agent tried here asks for them,
+  so there is no real request shape to match.
+- **A session is read and prompted through the agent that listed it** — the rule for every
+  provider instance, see *Provider instances in the TUI* below. Naming `acp` and no agent lists
+  every configured agent's sessions, each row under its agent's name.
+- **In the merged view a session the native adapter also lists is shown once** (`dropAcpDuplicates`):
+  `opencode acp` and `copilot --acp` list the very sessions the OpenCode and Copilot adapters do.
 - **A model is the agent's `model` config option, and it is the only place a model list exists.**
   `session/new` returns `configOptions`; the pool keeps them current (`config_option_update`, and
   the reply to `session/set_config_option`) and the adapter's `readModels` reads the one whose
@@ -230,16 +245,52 @@ which is why `acp` joins Claude and Codex as a provider that may have more than 
   `acp`. An `acp` instance with no command is not offered. `coordinatorInstanceLabel` names a
   teammate after its instance in both rosters and returns null for a default instance, whose
   provider name already says it.
-- Not done: the TUI browses and starts chats on a provider's **default** instance only — it has no
-  instance picker for any provider, so a second ACP agent is reachable there as a teammate but not
-  as a chat (the web's session list has the picker). And a pooled session reaped after 15 idle
-  minutes starts a fresh ACP session, as it does for the built-in transports.
+- Not done: a pooled session reaped after 15 idle minutes starts a fresh ACP session, as it does
+  for the built-in transports.
 
 `acpProviderSmoke.ts` runs a hand-written agent through a turn, a model change, two instances,
-per-instance listing, and a teammate staffed from a named instance that reads the board as itself;
-nine mutations were verified to fail it. `npm run acp:live` does the same against a real agent
-(`ACP_LIVE_COMMAND`, `ACP_LIVE_MODEL`); it passes against `opencode acp` 2.0.8, which asked for no
-approval to call its `coord_*` tools.
+per-instance listing and routing, a teammate staffed from a named instance that reads the board as
+itself, and one that ignores its MCP server and asks before each shell call; 24 mutations were
+verified to fail it. `npm run acp:live` does the same against a real agent (`ACP_LIVE_COMMAND`,
+`ACP_LIVE_MODEL`) and passes against `opencode acp` 2.0.8, `claude-agent-acp` and `copilot --acp`,
+with no approval reaching a person in any of the three. It leaves its sessions in the agent's store.
+
+#### Provider instances in the TUI (load-bearing)
+
+A provider may have further instances (`.agent-viewer-data/provider-instances.json`): a second
+Claude or Codex account, each configured ACP agent. The TUI's provider menu (`p`) lists each under
+its provider. **The bare provider row means all of its instances** (`everyInstance` on the listing;
+rows are then labelled by instance), an instance row only that one, and a new chat goes to the
+instance the list is narrowed to, else the selected session's. The choice is saved in
+`provider.json` beside the provider, which is also what an attached daemon's routes fall back to.
+
+- **A session is read and prompted through the instance that listed it** (`lib/sessionInstances.ts`).
+  Most TUI calls name a provider and a session id, never an instance, so they reached the default
+  instance, which has no such session, and the chat opened empty. The pairing is recorded at
+  listing and creation — in a file, because the transcript worker is another isolate that never ran
+  the listing — and from any session row that carries its instance (`noteTuiSessionInstance`),
+  which covers a session no listing has seen yet. The read path consults it in
+  `lib/sessionReads.ts`; the send path is still a provider switch, so `lib/tui/service.ts` scopes
+  it (`asSessionInstance`). **An instance the caller named is never overridden**, and the key
+  carries the provider, since an id is only unique within one provider's stores.
+- **Claude's store reads run under the instance's environment, not just its listing.** The SDK
+  finds the store from `process.env.CLAUDE_CONFIG_DIR` at call time. Only `listSessions` used to
+  swap it in, so a second account's sessions were listed and then read from the first account's
+  store: every one opened empty, on the web too.
+- **Swapping `process.env` is process-wide, so reads for two accounts must not overlap**
+  (`withProviderProcessEnvironment`). A default-instance read starting while another instance's
+  read held the swap looked in the wrong store and found nothing — 16 of 60 interleaved reads,
+  measured, and the merged listing raced itself the same way. Unswapped reads run freely among
+  themselves, queue only while a swap is waiting or running, and a swap waits for the ones under
+  way. The call is re-entrant: a wrapped read calling another would otherwise queue behind itself.
+  Only callers that go through it are protected; an SDK store call added outside it is not.
+
+`providerInstanceReadsSmoke.ts` runs two hand-written Claude stores through listing, narrowing,
+routing and 80 interleaved reads (six mutations verified to fail it); `acpProviderSmoke.ts` covers
+the picker's choices, the saved selection and a row's own instance on the send path (four more).
+Not done: a turn on a second Claude account was not run (it needs a second login); the Codex
+adapter's reads were not checked against a second `CODEX_HOME`; and under `--attach` a session
+from an instance other than the saved one is read through the saved one.
 
 **ACP session persistence is advertised per agent, and the advertisement is a claim rather than a guarantee** (`lib/acpCapabilities.ts`). The protocol gates `session/list`, `session/load`, `session/resume`, `session/delete` and `session/fork` on the agent advertising them in its `initialize` response — which the pool used to discard, so this was long assumed to be "ACP cannot". Measured: claude-agent-acp 0.70.0 advertises `loadSession` plus session `list`/`resume`/`fork`/`delete`/`close`; codex-acp 1.6.2 the same minus `fork`. A capability is read by PRESENCE (`{}` means yes, absent or `null` means no) except `loadSession`, which is a plain boolean — `scripts/acpCapabilitySmoke.ts` pins both rules, since reading either wrong fails silently in one direction or the other.
 
@@ -1573,6 +1624,13 @@ costs below, and each now has a smoke (`coordEventCostSmoke.ts`, `inboxBoundSmok
   (a finished task an open one depends on stays as a line); `coord_status` drops dispatch policy and
   strips old finished tasks to an id, title and one-line outcome. Unbounded, each of these grew until it no
   longer fit in a context window, hours into a run.
+- **A message wakes its recipient once** (`MAX_MAIL_WAKES`). Mail stays undelivered until the
+  recipient reads its inbox, and an undelivered message woke an idle recipient on every 5s sweep —
+  so a teammate that never reads (an agent with no working way to call `coord_*`) was re-run
+  forever: 12 turns and 190k input tokens in 90 seconds, measured with Copilot. The sweep's wake also
+  reset the turn-end nudge counter, which is why `MAX_TURN_NUDGES` never stopped it. Unread mail
+  now rides whatever turn the recipient gets next. A wake is counted when dispatch is attempted,
+  so one that starts no turn is still spent.
 - **The open-task cap** (`AGENT_VIEWER_COORD_MAX_OPEN_TASKS`, default 120) stops a runaway lead flooding
   the board; finished work is not counted. Known gap: a server-managed (non-chat) run whose process
   restarts is not re-driven — it reads as running with nothing moving. It is not fixed, but it is no longer

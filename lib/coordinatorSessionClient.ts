@@ -31,6 +31,19 @@ try {
 `
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
 
+/**
+ * Whether a shell command is exactly one call of the session client: the
+ * host-supplied prefix, one coord_* tool name, and at most one single-quoted
+ * argument. Nothing can follow or be substituted inside single quotes, so a
+ * command that passes can only do what this participant's own credential
+ * allows — which the Coordinator authorizes on every call anyway. Anything
+ * else (a second command, a redirect, another quoting style) does not match.
+ */
+export function isCoordinatorClientInvocation(command: unknown, clientCommand: string): boolean {
+  if (typeof command !== 'string' || !command.startsWith(`${clientCommand} `)) return false
+  return /^coord_[a-z_]+(?: '(?:[^']|'\\'')*')?$/.test(command.slice(clientCommand.length + 1))
+}
+
 export async function writeCoordinatorSessionClient(directory: string, url: string, identity: ExternalProtocolIdentity): Promise<string> {
   await mkdir(directory, { recursive: true, mode: 0o700 })
   const key = createHash('sha256').update(`${identity.runId}:${identity.agentId}`).digest('hex').slice(0, 32)

@@ -114,6 +114,7 @@ import {
   readTuiFocusMode,
   readTuiStickyHeaders,
   readTuiProvider,
+  readTuiProviderInstances,
   readTuiRailVisible,
   readTuiSessionDetail,
   readTuiSessionDiagnostics,
@@ -185,6 +186,7 @@ import {
   writeTuiTranscriptWidth,
   writeTuiVelocityScroll,
   type TuiSessionDetail,
+  type TuiProviderInstanceChoice,
   type TuiDiffLayout,
   type TuiSidebarSort,
   type TuiTranscriptWidth,
@@ -4908,11 +4910,39 @@ const TRANSCRIPT_VIEW_DESCRIPTIONS: Record<TuiTranscriptView, string> = {
   scrollback: 'One long text transcript that scrolls by line, no card cursor',
 }
 
+// A session from a further provider instance — a configured ACP agent, a second
+// account — goes by the name that instance was given ("GEMINI", "WORK"); every
+// other session by its provider's.
+function sessionProviderLabel(session: Pick<Session, 'provider' | 'providerInstanceId' | 'providerDisplayName'>): string {
+  return session.providerDisplayName && session.providerInstanceId && session.providerInstanceId !== session.provider
+    ? session.providerDisplayName.toUpperCase()
+    : formatProviderLabel(session.provider ?? 'claude')
+}
+
 const PROVIDER_SELECT_OPTIONS: SelectOption[] = PROVIDERS.map((provider) => ({
   name: provider.toUpperCase(),
   description: provider === 'all' ? 'All providers' : `${provider} sessions`,
   value: provider,
 }))
+
+// A provider with further instances lists each under its own row. The bare
+// provider row then means all of them; a value of `provider|instance` one.
+function providerSelectOptions(instances: readonly TuiProviderInstanceChoice[]): SelectOption[] {
+  if (instances.length === 0) return PROVIDER_SELECT_OPTIONS
+  return PROVIDER_SELECT_OPTIONS.flatMap((option) => [
+    option,
+    ...instances.filter((instance) => instance.provider === option.value).map((instance) => ({
+      name: `  ${instance.label.toUpperCase()}`,
+      description: `  ${option.value} · ${instance.label} only`,
+      value: `${instance.provider}|${instance.providerInstanceId}`,
+    })),
+  ])
+}
+
+function providerOptionIndex(options: readonly SelectOption[], provider: ProviderSelection, instanceId: string | null): number {
+  const exact = options.findIndex((option) => option.value === (instanceId ? `${provider}|${instanceId}` : provider))
+  return Math.max(exact >= 0 ? exact : options.findIndex((option) => option.value === provider), 0)
+}
 
 const COORD_RUN_PROVIDERS: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'acp']
 const COORD_MODAL_FOCUS_ORDER = [
@@ -7881,6 +7911,12 @@ export default function OpenTuiApp() {
   }, [renderer])
 
   const [provider, setProvider] = useState<ProviderSelection>('claude')
+  // One instance of `provider` (a second account, one ACP agent), or null for
+  // all of them. The ref is what a refresh reads, so a poll already scheduled
+  // lists what is selected now rather than what was selected when it was queued.
+  const [providerInstanceId, setProviderInstanceId] = useState<string | null>(null)
+  const providerInstanceIdRef = useRef<string | null>(null)
+  const [providerInstances, setProviderInstances] = useState<TuiProviderInstanceChoice[]>([])
   const [themeMode, setThemeMode] = useState<TuiThemeMode>('light')
   const [density, setDensity] = useState<TuiDensity>('balanced')
   const [diffLayout, setDiffLayout] = useState<TuiDiffLayout>('stack')
@@ -8782,7 +8818,7 @@ export default function OpenTuiApp() {
   }, [runningSessions, selectedSession])
   const terminalTitle = useMemo(() => {
     if (!selectedSession) return 'agent-viewer'
-    const label = formatProviderLabel(selectedSession.provider)
+    const label = sessionProviderLabel(selectedSession)
     const name = formatSessionTitle(selectedSession).slice(0, 48)
     return toBmpSafe(`${selectedSessionBusy ? '● ' : ''}agent-viewer · ${label} · ${name}`)
   }, [selectedSession, selectedSessionBusy])
@@ -11297,7 +11333,7 @@ export default function OpenTuiApp() {
           ? 'Preview tab'
           : inSplit
             ? `in split pane ${splitPosition + 1}`
-            : formatProviderLabel(s.provider ?? 'claude'),
+            : sessionProviderLabel(s),
         value: sessionKey(s),
       }
     })
@@ -11331,11 +11367,16 @@ export default function OpenTuiApp() {
 
   const sidebarRowBudget = Math.max(mainContentHeight, 4)
   const sidebarInnerWidth = Math.max(sidebarWidth - 5, 17)
+  // A provider listed across several instances (ACP agents, accounts) is
+  // several stores' sessions, and a row has to say whose it is.
   const showProviderInSessionRows = provider === 'all'
+    || new Set(sessions.map((session) => session.providerInstanceId ?? session.provider)).size > 1
   const sidebarSessionCountLabel = normalizedSessionQuery
     ? `SESSIONS ${filteredSessionsForSidebar.length}/${Math.max(sessions.length, 0)}`
     : `SESSIONS ${Math.max(sessions.length, 0)}`
-  const sidebarProviderLabel = provider === 'all' ? 'ALL' : formatProviderLabel(provider)
+  const sidebarProviderLabel = provider === 'all'
+    ? 'ALL'
+    : providerInstances.find((instance) => instance.providerInstanceId === providerInstanceId)?.label.toUpperCase() ?? formatProviderLabel(provider)
   const sidebarHeaderWidth = Math.max(sidebarInnerWidth, 12)
   const sidebarProviderBadgeText = ` ${fitText(sidebarProviderLabel, Math.max(sidebarHeaderWidth - 11, 3)).trimEnd()} `
   const sidebarHeaderPrefix = `${sidebarSessionCountLabel} · `
@@ -11847,7 +11888,7 @@ export default function OpenTuiApp() {
     if (!providerSwitchRef.current) setError(null)
 
     try {
-      const nextSessions = await readTuiSessionsAsync(nextProvider)
+      const nextSessions = await readTuiSessionsAsync(nextProvider, providerInstanceIdRef.current ?? undefined)
       if (requestId !== sessionRequestRef.current) return
       // Avoid scheduling a transition at all when a background poll returns
       // the same list and the current selection is still valid. React will
@@ -12553,10 +12594,20 @@ export default function OpenTuiApp() {
     })
   })
 
+  // The instance list is re-read on open: one added to provider-instances.json
+  // while the TUI runs is offered without a restart.
+  const openProviderMenu = useEffectEvent(() => {
+    setProviderMenuIndex(providerOptionIndex(providerSelectOptions(providerInstances), provider, providerInstanceId))
+    setProviderMenuOpen(true)
+    void readTuiProviderInstances().then(({ choices }) => {
+      setProviderInstances((current) => (JSON.stringify(current) === JSON.stringify(choices) ? current : choices))
+      setProviderMenuIndex(providerOptionIndex(providerSelectOptions(choices), provider, providerInstanceId))
+    }).catch(() => {})
+  })
+
   const closeProviderMenu = useCallback(() => {
     setProviderMenuOpen(false)
-    setProviderMenuIndex(Math.max(PROVIDERS.indexOf(provider), 0))
-  }, [provider])
+  }, [])
 
   const openThemeMenu = useEffectEvent(() => {
     themeMenuOriginRef.current = themeMode
@@ -12885,8 +12936,9 @@ export default function OpenTuiApp() {
   const chooseProvider = useCallback(async (
     nextProvider: ProviderSelection,
     targetSession: Session | null = null,
+    nextInstanceId: string | null = null,
   ) => {
-    if (nextProvider === provider) {
+    if (nextProvider === provider && nextInstanceId === providerInstanceIdRef.current) {
       closeProviderMenu()
       if (targetSession) setSelectedSessionKey(sessionKey(targetSession))
       return
@@ -12894,6 +12946,8 @@ export default function OpenTuiApp() {
 
     closeProviderMenu()
     providerSwitchRef.current = true
+    providerInstanceIdRef.current = nextInstanceId
+    setProviderInstanceId(nextInstanceId)
     setProvider(nextProvider)
     setSessionDetail(null)
     setSelectedSessionKey(targetSession ? sessionKey(targetSession) : null)
@@ -12911,7 +12965,7 @@ export default function OpenTuiApp() {
     setError(null)
 
     try {
-      await writeTuiProvider(nextProvider)
+      await writeTuiProvider(nextProvider, nextInstanceId ?? undefined)
       await refreshSessions(nextProvider, targetSession !== null, true)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to switch provider')
@@ -12926,7 +12980,10 @@ export default function OpenTuiApp() {
   // tab navigation works without losing the tab's context.
   const selectTabSession = useEffectEvent((session: Session) => {
     const targetProvider: ProviderSelection = session.provider ?? 'claude'
-    if (provider !== 'all' && targetProvider !== provider) {
+    // A tab from another instance than the one the list is narrowed to is not
+    // in that list either; widen to the whole provider.
+    const outsideInstance = providerInstanceId !== null && (session.providerInstanceId ?? targetProvider) !== providerInstanceId
+    if (provider !== 'all' && (targetProvider !== provider || outsideInstance)) {
       void chooseProvider(targetProvider, session)
       return
     }
@@ -13864,10 +13921,16 @@ export default function OpenTuiApp() {
     setNewSessionBusy(true)
     {
       try {
-        const result = await createTuiSession({ provider: targetProvider, cwd })
+        // A new chat goes to the instance the list is narrowed to, else to the
+        // one the selected session belongs to.
+        const fromAgent = selectedSession?.provider === targetProvider ? selectedSession : null
+        const pickedInstance = targetProvider === provider ? providerInstances.find((instance) => instance.providerInstanceId === providerInstanceId) : undefined
+        const result = await createTuiSession({ provider: targetProvider, cwd, providerInstanceId: pickedInstance?.providerInstanceId ?? fromAgent?.providerInstanceId })
         await openCreatedSession({
           sessionId: result.sessionId,
           provider: result.provider,
+          ...(result.providerInstanceId ? { providerInstanceId: result.providerInstanceId } : {}),
+          ...(pickedInstance?.providerInstanceId === result.providerInstanceId ? { providerDisplayName: pickedInstance?.label } : fromAgent && fromAgent.providerInstanceId === result.providerInstanceId ? { providerDisplayName: fromAgent.providerDisplayName } : {}),
           cwd: result.cwd,
           createdAt: Date.now(),
           lastModified: Date.now(),
@@ -14593,7 +14656,7 @@ export default function OpenTuiApp() {
               : isSessionRecentlyTouched(subagentEntry.session) ? '·'
               : null
             return joinMeta([
-              showProviderInSessionRows ? formatProviderLabel(subagentEntry.session.provider) : null,
+              showProviderInSessionRows ? sessionProviderLabel(subagentEntry.session) : null,
               `${timeAgo(subagentEntry.session.lastModified ?? subagentEntry.session.createdAt)}${marker ? ` ${marker}` : ''}`,
             ])
           })()
@@ -14648,7 +14711,7 @@ export default function OpenTuiApp() {
       activity === 'needs-input' ? 'Needs input'
         : activity === 'running' ? 'Working'
         : activity === 'waiting' ? 'Waiting' : null,
-      showProviderInSessionRows ? formatProviderLabel(entry.session.provider) : null,
+      showProviderInSessionRows ? sessionProviderLabel(entry.session) : null,
       ago,
     ])
     // Waiting outranks a result, as on the web row: a question blocks a
@@ -14660,7 +14723,7 @@ export default function OpenTuiApp() {
     // for the word — twice the sessions in the same rail.
     const singleRow = density !== 'comfortable' && sessionKey(entry.session) !== renameSessionKey
     const rowMeta = joinMeta([
-      showProviderInSessionRows ? formatProviderLabel(entry.session.provider) : null,
+      showProviderInSessionRows ? sessionProviderLabel(entry.session) : null,
       ago,
     ])
     // "Recently touched" is the age itself on this row; only a turn's state
@@ -16283,6 +16346,15 @@ export default function OpenTuiApp() {
         }).catch(() => {})
         setThemeMode(configuredTheme)
         setActiveTheme(configuredTheme)
+        // Restore the instance the list was narrowed to, if it is still offered.
+        const instanceState = await readTuiProviderInstances().catch(() => ({ selected: null, choices: [] as TuiProviderInstanceChoice[] }))
+        if (cancelled) return
+        const configuredInstanceId = instanceState.choices.some((choice) => choice.provider === configuredProvider && choice.providerInstanceId === instanceState.selected)
+          ? instanceState.selected
+          : null
+        providerInstanceIdRef.current = configuredInstanceId
+        setProviderInstanceId(configuredInstanceId)
+        setProviderInstances(instanceState.choices)
         setProvider(configuredProvider)
         setRailVisible(configuredRailVisible)
         setFocusMode(configuredFocusMode)
@@ -18445,8 +18517,7 @@ export default function OpenTuiApp() {
         reuseLastPrompt()
         break
       case 'provider':
-        setProviderMenuIndex(Math.max(PROVIDERS.indexOf(provider), 0))
-        setProviderMenuOpen(true)
+        openProviderMenu()
         break
       case 'attention':
         setAttentionOpen(true)
@@ -21116,8 +21187,7 @@ export default function OpenTuiApp() {
 
     if (key.name === 'p') {
       handled(() => {
-        setProviderMenuIndex(Math.max(PROVIDERS.indexOf(provider), 0))
-        setProviderMenuOpen(true)
+        openProviderMenu()
       })
       return
     }
@@ -21271,7 +21341,7 @@ export default function OpenTuiApp() {
     [rightPaneWidth, selectedSession],
   )
 
-  const providerOptions = PROVIDER_SELECT_OPTIONS
+  const providerOptions = useMemo(() => providerSelectOptions(providerInstances), [providerInstances])
   const providerAccent = getProviderAccent(provider)
   const composerPlaceholder = composerTargetSession
     ? (visibleComposerSending
@@ -22603,8 +22673,8 @@ export default function OpenTuiApp() {
                     itemSpacing={0}
                     onChange={(index) => setProviderMenuIndex(index)}
                     onSelect={(_, option) => {
-                      const nextProvider = option?.value as ProviderSelection | undefined
-                      if (nextProvider) void chooseProvider(nextProvider)
+                      const [nextProvider, nextInstanceId] = String(option?.value ?? '').split('|') as [ProviderSelection | '', string | undefined]
+                      if (nextProvider) void chooseProvider(nextProvider, null, nextInstanceId ?? null)
                     }}
                   />
                 </box>

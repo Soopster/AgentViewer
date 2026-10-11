@@ -433,12 +433,12 @@ export function readTuiComposerAffordancesAsync(session: Session): Promise<TuiCo
   })
 }
 
-export function readTuiSessionsAsync(provider: ProviderSelection): Promise<Session[]> {
+export function readTuiSessionsAsync(provider: ProviderSelection, providerInstanceId?: string): Promise<Session[]> {
   const id = ++requestCounter
   const w = ensureWorker()
   return new Promise<Session[]>((resolve, reject) => {
     pending.set(id, { kind: 'sessions', resolve, reject })
-    w.postMessage({ kind: 'sessions', id, provider })
+    w.postMessage({ kind: 'sessions', id, provider, providerInstanceId })
   })
 }
 

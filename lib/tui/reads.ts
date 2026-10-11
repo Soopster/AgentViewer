@@ -24,6 +24,7 @@ import {
   readViewSessionModels,
   readViewSessionSlashCommands,
 } from '../sessionReads'
+import { rememberSessionInstances } from '../sessionInstances'
 import { listViewRunningSessions, readViewRuntimeActivity } from '../sessionActivity'
 import { encodeSessionPath, isRemoteAttached, providerQuery, remoteJson } from './remote'
 import type {
@@ -46,10 +47,15 @@ export type TuiSessionMetadata = {
   contextUsage: ContextUsage | null
 }
 
-export async function readTuiSessions(provider: ProviderSelection): Promise<Session[]> {
+/**
+ * `providerInstanceId` narrows a provider to one of its instances (a second
+ * account, one ACP agent); without it a provider means all of them.
+ */
+export async function readTuiSessions(provider: ProviderSelection, providerInstanceId?: string): Promise<Session[]> {
+  const instanceId = provider === 'all' ? undefined : providerInstanceId
   if (isRemoteAttached()) {
     const { sessions } = await remoteJson<{ sessions: Session[] }>(
-      `/api/sessions?limit=${DEFAULT_SESSION_LIMIT}&offset=0&includeWorktrees=true&provider=${encodeURIComponent(provider)}`,
+      `/api/sessions?limit=${DEFAULT_SESSION_LIMIT}&offset=0&includeWorktrees=true&provider=${encodeURIComponent(provider)}${instanceId ? `&providerInstanceId=${encodeURIComponent(instanceId)}` : ''}`,
     )
     return sessions
   }
@@ -58,7 +64,20 @@ export async function readTuiSessions(provider: ProviderSelection): Promise<Sess
     offset: 0,
     includeWorktrees: true,
     provider,
+    ...(instanceId ? { providerInstanceId: instanceId } : { everyInstance: true }),
   })
+}
+
+/**
+ * A session row says which instance it came from; the reads below name only a
+ * provider and an id. Recording the pairing here covers a session the listing
+ * has not recorded yet — one just created, or one whose pending id just became
+ * a real one.
+ */
+export function noteTuiSessionInstance(session: Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'>): void {
+  if (session.provider && session.providerInstanceId) {
+    rememberSessionInstances(session.provider, [session.sessionId], session.providerInstanceId)
+  }
 }
 
 export async function readTuiSessionDetailSource(session: Session): Promise<{
@@ -83,6 +102,7 @@ export async function readTuiSessionDetailSource(session: Session): Promise<{
     ])
     return { info: infoResult.info, rawMessages: windowResult.messages, externalWriter: windowResult.externalWriter }
   }
+  noteTuiSessionInstance(session)
   const [info, window] = await Promise.all([
     readViewSessionInfo(session.sessionId, session.provider),
     listViewSessionMessageWindow(
@@ -105,6 +125,7 @@ export async function readTuiSessionMetadata(session: Session): Promise<TuiSessi
       encodeSessionPath(session.sessionId, `/models${providerQuery(session.provider)}`),
     )
   }
+  noteTuiSessionInstance(session)
   return readViewSessionModels(session.sessionId, session.provider)
 }
 

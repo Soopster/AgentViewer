@@ -89,7 +89,7 @@ const agentId = delegated.delegation!.agentId
 console.log(`teammate    ${delegated.delegation!.name} (${agentId}) staffed from ${delegated.delegation!.provider}`)
 
 const asked = new Map<string, string>()
-const deadline = Date.now() + 240_000
+const deadline = Date.now() + Number(process.env.ACP_LIVE_WAIT_MS ?? 240_000)
 let outcome = 'timed out'
 while (Date.now() < deadline) {
   const snapshot = (await coord.readProtocolRun(lead.runId))!
@@ -108,6 +108,23 @@ while (Date.now() < deadline) {
   await new Promise((resolve) => setTimeout(resolve, 500))
 }
 console.log(`task        ${outcome}`)
+if (!outcome.startsWith('completed')) {
+  // What the teammate actually did, since "timed out" says nothing.
+  const teammate = (await coord.readProtocolRun(lead.runId))!.agents.find((agent) => agent.id === agentId)
+  const { messages } = pool.readAcpMessagesSince(teammate?.sessionId ?? '', -1)
+  // Message chunks are joined; everything else (tool calls, their results) is one line each.
+  let said = ''
+  const flush = () => { if (said.trim()) console.log(`transcript  said: ${said.trim().slice(-1200)}`); said = '' }
+  for (const entry of messages) {
+    const update = entry.message.kind === 'session_update' ? entry.message.update : null
+    if (update?.sessionUpdate === 'agent_message_chunk' && update.content.type === 'text') { said += update.content.text; continue }
+    if (update?.sessionUpdate === 'agent_thought_chunk' || update?.sessionUpdate === 'available_commands_update') continue
+    flush()
+    console.log(`transcript  ${JSON.stringify(update ?? entry.message).slice(0, 400)}`)
+  }
+  flush()
+  console.log(`session     alive=${pool.isAcpSessionAlive(teammate?.sessionId ?? '')} error=${pool.getAcpSessionError(teammate?.sessionId ?? '')}`)
+}
 console.log(`asked       ${asked.size} permission request(s) reached a person`)
 await coord.stopProtocolRun(lead.runId).catch(() => {})
 process.exit(outcome.startsWith('completed') ? 0 : 1)

@@ -154,6 +154,26 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve }
 }
 
+/**
+ * A rule that answers a session's permission request without a person. The pool
+ * knows nothing about what makes a request safe; whoever owns the session says.
+ * Returning false queues the request for the UI as usual.
+ */
+export type AcpPermissionRule = (request: RequestPermissionRequest) => boolean
+const permissionRules = new Map<string, AcpPermissionRule>()
+
+/** Only ever a single use: a rule never selects an "always" option. */
+function ruleApproval(sessionId: string, request: RequestPermissionRequest): RequestPermissionResponse | null {
+  const rule = permissionRules.get(sessionId)
+  const once = request.options.find((option) => option.kind === 'allow_once')
+  if (!rule || !once) return null
+  try {
+    return rule(request) ? { outcome: { outcome: 'selected', optionId: once.optionId } } : null
+  } catch {
+    return null
+  }
+}
+
 let requestCounter = 0
 function nextRequestId(): string {
   requestCounter += 1
@@ -306,7 +326,7 @@ class AcpClientPool {
     }
 
     const clientApp = client({ name: 'agent-viewer' })
-      .onRequest('session/request_permission', async (reqCtx) => queueClientRequest('session/request_permission', reqCtx.params))
+      .onRequest('session/request_permission', async (reqCtx) => ruleApproval(sessionId, reqCtx.params) ?? queueClientRequest('session/request_permission', reqCtx.params))
       .onRequest('elicitation/create', async (reqCtx) => queueClientRequest('elicitation/create', reqCtx.params))
       .onRequest('fs/read_text_file', async () => {
         throw new Error('agent-viewer does not expose client-side filesystem access over ACP')
@@ -756,6 +776,12 @@ export function resolveAcpElicitation(sessionId: string, requestId: string, resp
 /** The live session's models, else the last list this agent gave, else null. */
 export function acpModelState(sessionId: string, agentKind: AcpAgentKind): AcpModelState | null {
   return getPool().modelState(sessionId) ?? lastModelStateByAgent.get(acpAgentKey(agentKind)) ?? null
+}
+
+/** Sets or, with null, removes the session's permission rule. */
+export function setAcpPermissionRule(sessionId: string, rule: AcpPermissionRule | null): void {
+  if (rule) permissionRules.set(sessionId, rule)
+  else permissionRules.delete(sessionId)
 }
 
 export function setAcpSessionModel(sessionId: string, model: string): Promise<void> {

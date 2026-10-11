@@ -162,6 +162,7 @@ import {
   resolveLocalComposerAttachmentPath,
 } from './composerAttachments'
 import { getConfiguredProvider } from './providerState'
+import { rememberSessionInstances, withSessionInstance } from './sessionInstances'
 import {
   currentProviderInstanceId,
   listProviderInstances,
@@ -6593,12 +6594,12 @@ export async function prewarmViewSession(params: {
     return
   }
   if (isAcpProvider(provider)) {
-    await acquireAcpSession(
+    await withSessionInstance(provider, params.sessionId, async () => acquireAcpSession(
       params.sessionId,
       acpAgentKindOf(provider),
       params.cwd ?? process.cwd(),
       await coordinatorAcpMcpServers(provider, params.sessionId),
-    )
+    ))
     return
   }
   if (provider === 'opencode') {
@@ -6882,7 +6883,7 @@ export async function streamViewSessionTurn(params: SendMessageParams): Promise<
     return createLmstudioStream(params.sessionId, params.signal, params.body)
   }
   if (isAcpProvider(provider)) {
-    return createAcpStream(provider, params.sessionId, params.signal, params.body)
+    return withSessionInstance(provider, params.sessionId, () => createAcpStream(provider, params.sessionId, params.signal, params.body))
   }
 
   return createClaudeStream(params.sessionId, params.signal, params.body, checkpoint)
@@ -7048,7 +7049,10 @@ export async function createNewViewSession({
     // prompt (createAcpStream's acquireAcpSession) — mirrors Claude/Pi's
     // pending-id pattern, just with no durable history behind it.
     const { randomUUID } = await import('node:crypto')
-    return { sessionId: randomUUID(), provider, cwd: resolvedCwd, isPending: true }
+    const sessionId = randomUUID()
+    // Its first turn must reach the agent it was created for.
+    rememberSessionInstances(provider, [sessionId], currentProviderInstanceId(provider))
+    return { sessionId, provider, cwd: resolvedCwd, isPending: true }
   }
 
   throw new Error(`Create is not supported for ${provider} sessions`)

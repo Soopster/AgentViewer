@@ -63,24 +63,50 @@ const instanceStorage = globalThis.__agentViewerProviderInstanceStorage
   ?? (globalThis.__agentViewerProviderInstanceStorage = new AsyncLocalStorage<ProviderInstanceContext>())
 
 let processEnvironmentQueue: Promise<void> = Promise.resolve()
+// Swapping process.env is process-wide, so a read for the default instance
+// that overlapped one would look in the other account's store and find
+// nothing. Unswapped reads run freely among themselves and only queue while a
+// swap is waiting or running; a swap waits for the ones already under way.
+let environmentSwapsPending = 0
+let unswappedReads = 0
+let unswappedDrained: (() => void) | null = null
+const insideEnvironmentSwap = new AsyncLocalStorage<boolean>()
 
 /** Serialize short SDK metadata reads that discover config roots via process.env. */
 export function withProviderProcessEnvironment<T>(run: () => T | Promise<T>): Promise<T> {
+  // Already inside a swap (a wrapped read calling another): the environment
+  // is in place, and queueing behind the swap we are part of would never run.
+  if (insideEnvironmentSwap.getStore()) return Promise.resolve(run())
   const active = currentProviderInstance()
-  if (!active || Object.keys(active.environment).length === 0) return Promise.resolve(run())
+  if (!active || Object.keys(active.environment).length === 0) {
+    if (environmentSwapsPending > 0) {
+      const queued = processEnvironmentQueue.then(run)
+      processEnvironmentQueue = queued.then(() => undefined, () => undefined)
+      return queued
+    }
+    unswappedReads += 1
+    return (async () => run())().finally(() => {
+      unswappedReads -= 1
+      if (unswappedReads === 0) unswappedDrained?.()
+    })
+  }
+  environmentSwapsPending += 1
   const task = processEnvironmentQueue.then(async () => {
+    if (unswappedReads > 0) await new Promise<void>((resolve) => { unswappedDrained = resolve })
+    unswappedDrained = null
     const previous = new Map<string, string | undefined>()
     for (const [name, value] of Object.entries(active.environment)) {
       previous.set(name, process.env[name])
       process.env[name] = value
     }
     try {
-      return await run()
+      return await insideEnvironmentSwap.run(true, run)
     } finally {
       for (const [name, value] of previous) {
         if (value === undefined) delete process.env[name]
         else process.env[name] = value
       }
+      environmentSwapsPending -= 1
     }
   })
   processEnvironmentQueue = task.then(() => undefined, () => undefined)

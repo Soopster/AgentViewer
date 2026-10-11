@@ -1,31 +1,27 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { ProviderSelection } from './types'
+import { isAgentProvider } from './provider'
 import { resolveProviderInstance } from './providerInstances'
 
 const PROVIDER_FILE = path.join(process.cwd(), '.agent-viewer-data', 'provider.json')
 
+// Any provider id is a valid selection. This used to be a list of six, so
+// choosing an ACP provider was saved and then read back as Claude: the choice
+// did not survive a reload or a restart.
+function asProviderSelection(value: unknown): ProviderSelection | null {
+  return value === 'all' || isAgentProvider(value) ? value : null
+}
+
 function getDefaultProvider(): ProviderSelection {
-  if (process.env.AGENT_VIEWER_PROVIDER === 'all') return 'all'
-  if (process.env.AGENT_VIEWER_PROVIDER === 'codex') return 'codex'
-  if (process.env.AGENT_VIEWER_PROVIDER === 'opencode') return 'opencode'
-  if (process.env.AGENT_VIEWER_PROVIDER === 'copilot') return 'copilot'
-  if (process.env.AGENT_VIEWER_PROVIDER === 'pi') return 'pi'
-  if (process.env.AGENT_VIEWER_PROVIDER === 'lmstudio') return 'lmstudio'
-  return 'claude'
+  return asProviderSelection(process.env.AGENT_VIEWER_PROVIDER) ?? 'claude'
 }
 
 export async function getConfiguredProvider(): Promise<ProviderSelection> {
   try {
     const contents = await readFile(PROVIDER_FILE, 'utf8')
     const parsed = JSON.parse(contents) as { provider?: unknown }
-    if (parsed.provider === 'all') return 'all'
-    if (parsed.provider === 'codex') return 'codex'
-    if (parsed.provider === 'opencode') return 'opencode'
-    if (parsed.provider === 'copilot') return 'copilot'
-    if (parsed.provider === 'pi') return 'pi'
-    if (parsed.provider === 'lmstudio') return 'lmstudio'
-    return 'claude'
+    return asProviderSelection(parsed.provider) ?? 'claude'
   } catch {
     return getDefaultProvider()
   }

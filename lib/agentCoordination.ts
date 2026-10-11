@@ -147,7 +147,7 @@ function unregisterCoordinatorToolsForProvider(provider: ProtocolRun['provider']
   else if (provider === 'copilot') unregisterCoordinatorCopilotTools(sessionId, providerInstanceId)
   else if (provider === 'codex') unregisterCoordinatorCodexTools(sessionId, providerInstanceId)
   else if (provider === 'opencode') unregisterCoordinatorOpenCodeTools(sessionId, providerInstanceId)
-  else if (provider === 'acp') unregisterCoordinatorAcpTools(sessionId, providerInstanceId)
+  else if (provider === 'acp') { unregisterCoordinatorAcpTools(sessionId, providerInstanceId); setAcpPermissionRule(sessionId, null) }
 }
 
 // Cleanup uses the durable run identity, so an ambient lead account cannot
@@ -166,11 +166,12 @@ async function inProcessToolsAvailable(provider: ProtocolRun['provider']): Promi
   if (provider === 'opencode') return isOpenCodeManagedServer()
   return true
 }
-import { writeCoordinatorSessionClient } from './coordinatorSessionClient'
+import { isCoordinatorClientInvocation, writeCoordinatorSessionClient } from './coordinatorSessionClient'
 import { getCoordinatorBridgeUrl } from './coordinatorBridgeServer'
 import { currentProviderInstance, currentProviderInstanceId, resolveProviderInstance, withProviderInstance } from './providerInstances'
 import { readCoordinatorProviderInstances } from './coordinatorCapabilities'
 import { createNewViewSession, streamViewSessionTurn } from './sessionBackend'
+import { setAcpPermissionRule } from './acpClientPool'
 import { isOpenCodeManagedServer } from './opencodeClient'
 import { getRunningSessionInfo, readWaitingSessionObservation, interruptRunningSession, steerRunningSession } from './sessionRuntime'
 import { coordinatorAttention } from './coordinatorAttention'
@@ -289,6 +290,11 @@ const SUPERVISION_CHECKPOINT_MS = Math.max(30_000, Number(process.env.AGENT_VIEW
 // the teammate is marked blocked and the lead is notified (doc: teammates may
 // stop on errors; the lead/user nudges or replaces them).
 const MAX_TURN_NUDGES = 1
+// A message wakes an idle recipient, and stays undelivered until the recipient
+// reads its inbox. A teammate that never does — an agent with no working way to
+// call coord_* — was therefore woken by the same message on every five-second
+// sweep, for as long as the host stayed up. A message now buys one turn.
+const MAX_MAIL_WAKES = 1
 // Mid-run lead intervention turns (woken by teammate messages / stuck tasks).
 // Bounded so a stuck teammate ↔ lead exchange can't ping-pong tokens forever;
 // once exhausted, stuck tasks are auto-failed so the run reaches synthesis.
@@ -380,6 +386,8 @@ type RunController = {
   pendingSessions: Set<string>
   /** `${agentId}:${taskId}` → nudges used. */
   nudges: Map<string, number>
+  /** message id → turns it has woken its recipient for. */
+  mailWakes?: Map<string, number>
   /** agentId → coordinator note to prepend to the next dispatched turn. */
   dispatchNotes: Map<string, string>
   /** Providers that failed durably for each agent; prevents failover loops. */
@@ -6740,6 +6748,7 @@ async function deliverMessagesLive(runId: string, messageIds: string[]): Promise
   const agentsById = new Map(agents.map((agent) => [agent.id, agent]))
   const controller = controllers.get(runId)
   const wake = new Set<string>()
+  const wakeMessages = new Map<string, string[]>()
   const supervisionWake = new Set<string>()
   for (const id of messageIds) {
     // A new provider turn already contains this message in its preamble. Do
@@ -6774,8 +6783,12 @@ async function deliverMessagesLive(runId: string, messageIds: string[]): Promise
         await enqueueWrite((tx) => {
           tx.prepare('UPDATE protocol_messages SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL').run(nowIso(), id)
         })
+      } else if (controller && (controller.mailWakes?.get(id) ?? 0) >= MAX_MAIL_WAKES) {
+        // Still unread after the turns it already bought: it rides whatever
+        // turn the recipient gets next, and wakes it for nothing more.
       } else {
         wake.add(recipient.id)
+        wakeMessages.set(recipient.id, [...(wakeMessages.get(recipient.id) ?? []), id])
         if (message.kind === 'handoff' || message.kind === 'review_request' || message.kind === 'review_result') {
           supervisionWake.add(recipient.id)
         }
@@ -6794,6 +6807,8 @@ async function deliverMessagesLive(runId: string, messageIds: string[]): Promise
     if (controller.turnInFlight.has(agentId)) continue
     const recipient = agentsById.get(agentId)
     if (!recipient || recipient.status === 'stopped' || recipient.status === 'failed') continue
+    controller.mailWakes ??= new Map()
+    for (const id of wakeMessages.get(agentId) ?? []) controller.mailWakes.set(id, (controller.mailWakes.get(id) ?? 0) + 1)
     if (recipient.role === 'lead') {
       void dispatchLeadIntervention(controller, { supervision: supervisionWake.has(agentId) })
     } else {
@@ -8924,6 +8939,20 @@ async function dispatchAgentTurn(
       durableDispatch = true
     }
     await resolveProviderInstance(agent.providerInstanceId ?? agent.provider, agent.provider)
+    // An ACP agent is offered its coord_* tools as an MCP server and is free to
+    // ignore it — GitHub Copilot's ACP mode never starts a stdio server it is
+    // handed. The shell client reaches the same bridge as the same participant,
+    // so the teammate has a way in whichever the agent honours.
+    const sdkIdentity = agent.provider === 'acp' ? controller.sdkIdentities.get(agent.id) : undefined
+    if (sdkIdentity) {
+      const client = await writeCoordinatorSessionClient(path.join(DATA_DIR, 'session-bindings'), await getCoordinatorBridgeUrl(), sdkIdentity)
+      // Its calls through that client need no person: each is authorized by the
+      // Coordinator as this participant. Matched on the exact command, never on
+      // a title, which is the agent's own prose ("Check coordinator run status").
+      setAcpPermissionRule(sessionId, request => request.toolCall.kind === 'execute'
+        && isCoordinatorClientInvocation((request.toolCall.rawInput as { command?: unknown } | null | undefined)?.command, client))
+      message += `\nHost-supplied session client, for when coord_* tools are absent from this session: ${client} TOOL_NAME 'JSON_ARGUMENTS'. For example coord_status with {}, or coord_complete_task with {"task_id":"…","summary":"…","request_id":"unique-stable-key"}. Give every mutation a unique request_id and reuse it unchanged after an uncertain result. The binding is private; do not read or print it.`
+    }
     const isPending = controller.pendingSessions.has(agent.id)
     controller.pendingSessions.delete(agent.id)
     noteKeyedSideEffect()

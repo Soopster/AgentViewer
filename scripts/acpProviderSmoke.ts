@@ -19,7 +19,7 @@ if (process.argv[2] !== 'child') {
   delete env.AGENT_VIEWER_ACP_COMMAND
   const child = spawnSync(process.execPath, [fileURLToPath(import.meta.url), 'child', dir], { stdio: 'inherit', env, timeout: 90_000 })
   assert.equal(child.status, 0, 'acp provider smoke child failed')
-  console.log('ACP provider smoke passed (an unconfigured agent lists nothing and says why; a configured one runs a turn; two instances are two agents; a staffed teammate reaches the Coordinator through its own MCP server, as itself)')
+  console.log('ACP provider smoke passed (an unconfigured agent lists nothing and says why; a configured one runs a turn on a chosen model; two instances are two agents, each session routed to its own; a staffed teammate reaches the Coordinator as itself, through its MCP server or the shell client; only an exact call of that client is approved without a person; a stuck teammate is not re-run forever)')
 } else {
   const dir = process.argv[3]!
   process.chdir(dir)
@@ -44,9 +44,21 @@ async function callTool(server, name, args) {
   child.kill()
   return { tools: listed.result.tools.map((tool) => tool.name), result: called.result }
 }
+// An agent that ignores the MCP server it is handed, as GitHub Copilot's ACP
+// mode does: it reaches the Coordinator through the shell client named in its
+// prompt, asking permission for each command first.
+const answers = new Map()
+let prompts = 0
+const ask = (sessionId, command) => new Promise((resolve) => {
+  const id = 'perm-' + answers.size
+  answers.set(id, resolve)
+  out({ id, method: 'session/request_permission', params: { sessionId, toolCall: { toolCallId: id, kind: 'execute', title: 'Check the board', rawInput: { command } }, options: [{ optionId: 'yes', kind: 'allow_once', name: 'Allow' }, { optionId: 'no', kind: 'reject_once', name: 'Reject' }] } })
+})
+const sh = (command) => new Promise((resolve) => { let text = ''; const child = spawn('sh', ['-c', command]); child.stdout.on('data', (chunk) => { text += chunk }); child.on('close', () => resolve(text)) })
 createInterface({ input: process.stdin }).on('line', async (line) => {
   const message = JSON.parse(line)
   if (message.id === undefined) return
+  if (message.method === undefined) { answers.get(message.id)?.(message.result?.outcome?.optionId); return }
   const persists = label === 'gemini' || label === 'goose'
   if (message.method === 'initialize') out({ id: message.id, result: { protocolVersion: message.params.protocolVersion, agentCapabilities: persists ? { loadSession: true, sessionCapabilities: { list: {} } } : {} } })
   else if (message.method === 'session/list') out({ id: message.id, result: { sessions: [{ sessionId: 'saved-' + label, title: label + ' session', cwd: process.cwd(), updatedAt: '2026-01-01T00:00:00Z' }] } })
@@ -60,7 +72,16 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
     const sessionId = message.params.sessionId
     let said = 'hello from ' + label + ' on ' + model
     const record = { label, servers: servers.map((server) => server.name) }
-    if (servers[0]) {
+    const client = /session client[^:]*: (.+?) TOOL_NAME/.exec(message.params.prompt.map((part) => part.text ?? '').join(''))?.[1]
+    if (label === 'asker' && prompts++ > 0) { record.repeat = true; said = 'still stuck' }
+    else if (label === 'asker' && client) {
+      const plain = client + " coord_status '{}'"
+      record.plain = await ask(sessionId, plain)
+      record.status = record.plain === 'yes' ? await sh(plain) : null
+      // The same call with a second command after it is not the client's call.
+      record.chained = await ask(sessionId, plain + '; echo extra')
+      said = 'asked'
+    } else if (servers[0]) {
       const answer = await callTool(servers[0], 'coord_status', {})
       record.tools = answer.tools
       record.status = answer.result
@@ -151,6 +172,60 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
   assert.deepEqual(await instances.withProviderInstance('acp', 'acp', () => adapter.listSessions!({ limit: 10, offset: 0 } as never)), [], 'the default agent advertises no listing and must list nothing')
 
 
+  // --- A caller that names no agent (the TUI) still reaches the right one.
+  // Naming only `acp` lists every configured agent's sessions, each under its
+  // agent's name, and a session is then read and prompted through the agent
+  // that listed it.
+  const reads = await import('../lib/sessionReads')
+  const everyAgent = await reads.listViewSessions({ provider: 'acp', limit: 20, offset: 0 } as never)
+  assert.deepEqual(everyAgent.map((session) => [session.sessionId, session.providerInstanceId, session.providerDisplayName]).sort(),
+    [['saved-gemini', 'gemini', 'Gemini'], ['saved-goose', 'goose', 'Goose']], 'naming no agent did not list every agent\'s sessions')
+  const routed = await reads.listViewSessionMessageWindow('saved-goose', { limit: 10, offset: 0 } as never, 'acp')
+  assert.ok(JSON.stringify(routed.messages).includes('history of goose'), 'a session was not read through the agent that listed it')
+  const routedTurn = await drain(await backend.streamViewSessionTurn({ sessionId: 'saved-gemini', provider: 'acp', signal: new AbortController().signal, body: { message: 'hi', cwd: dir } }))
+  assert.ok(routedTurn.includes('hello from gemini'), `a session was not prompted through the agent that listed it: ${routedTurn}`)
+  // An agent the caller did name is never overridden by what was remembered.
+  // (Goose's saved session has no live turn, so this read can only come from an agent.)
+  const named = await instances.withProviderInstance('gemini', 'acp', () => reads.listViewSessionMessageWindow('saved-goose', { limit: 10, offset: 0 } as never, 'acp'))
+  assert.ok(!JSON.stringify(named.messages).includes('history of goose'), 'a named agent was overridden by the remembered one')
+  // A new chat started for an agent stays with it.
+  const { createTuiSession } = await import('../lib/tui/service')
+  const fresh = await createTuiSession({ provider: 'acp', cwd: dir, providerInstanceId: 'goose' })
+  assert.equal(fresh.providerInstanceId, 'goose')
+  const freshTurn = await drain(await backend.streamViewSessionTurn({ sessionId: fresh.sessionId, provider: 'acp', signal: new AbortController().signal, body: { message: 'hi', cwd: dir } }))
+  assert.ok(freshTurn.includes('hello from goose'), `a new chat did not go to the agent it was created for: ${freshTurn}`)
+
+  // In the merged view a session the native adapter also lists is shown once, natively.
+  assert.deepEqual(reads.dropAcpDuplicates([
+    { sessionId: 'ses_1', provider: 'acp' }, { sessionId: 'ses_1', provider: 'opencode' }, { sessionId: 'only-acp', provider: 'acp' },
+  ]).map((session) => `${session.provider}:${session.sessionId}`), ['opencode:ses_1', 'acp:only-acp'])
+
+  // Choosing an ACP provider survives being saved and read back.
+  const providerState = await import('../lib/providerState')
+  await providerState.setConfiguredProviderTarget({ provider: 'acp', providerInstanceId: 'gemini' })
+  assert.deepEqual(await providerState.getConfiguredProviderTarget(), { provider: 'acp', providerInstanceId: 'gemini' })
+
+  // --- The TUI's instance picker: one row per further instance, the list
+  // narrowed to the one picked, and the choice saved.
+  const tui = await import('../lib/tui/service')
+  assert.deepEqual((await tui.readTuiProviderInstances()).choices.filter((choice) => choice.provider === 'acp'), [
+    { provider: 'acp', providerInstanceId: 'gemini', label: 'Gemini' }, { provider: 'acp', providerInstanceId: 'goose', label: 'Goose' },
+  ], 'the picker did not offer each configured agent')
+  assert.deepEqual((await tui.readTuiSessions('acp', 'goose')).map((session) => session.sessionId), ['saved-goose'], 'a picked agent did not narrow the list to its own sessions')
+  await tui.writeTuiProvider('acp', 'goose')
+  assert.equal((await tui.readTuiProviderInstances()).selected, 'goose', 'the picked agent was not saved')
+  await tui.writeTuiProvider('acp')
+  assert.equal((await tui.readTuiProviderInstances()).selected, null, 'the bare provider row did not clear the picked agent')
+  // A row carries its instance, and a send honours it before any listing has
+  // recorded the session (one just created, or whose pending id just changed).
+  const unlisted = await drain(await tui.streamTuiSessionTurn({ sessionId: 'never-listed', provider: 'acp', providerInstanceId: 'goose' } as never, { message: 'hi', cwd: dir }))
+  assert.ok(unlisted.includes('hello from goose'), `a row's own instance was not used for its turn: ${unlisted}`)
+  // The pairing is per provider: the same id under another provider is another session.
+  const sessionInstances = await import('../lib/sessionInstances')
+  assert.equal(sessionInstances.sessionInstanceId('acp', 'never-listed'), 'goose')
+  assert.equal(sessionInstances.sessionInstanceId('claude', 'never-listed'), undefined, 'an instance was remembered across providers')
+  await providerState.setConfiguredProvider('claude')
+
   // --- The panel can staff one: a managed teammate gets coord_* over MCP, bound to itself.
   const coord = await import('../lib/agentCoordination')
   await coord.configureInteractiveCoordinator({ sessionId: created.sessionId, provider: 'acp', cwd: dir })
@@ -186,13 +261,54 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
   assert.equal(status.run?.id ?? status.snapshot?.run?.id, lead.runId, 'the teammate read a different run')
   assert.ok(JSON.stringify(status).includes(delegated.delegation!.agentId), 'the teammate is not on the board it read')
 
+  // --- An agent that ignores its MCP server still gets in, through the shell
+  // client, and is not asked about that client's own calls — only about those.
+  await instances.writeProviderInstancesFile({ version: 1, instances: [
+    { id: 'gemini', provider: 'acp', displayName: 'Gemini', executable: command('gemini') },
+    { id: 'goose', provider: 'acp', displayName: 'Goose', executable: command('goose') },
+    { id: 'asker', provider: 'acp', displayName: 'Asker', executable: command('asker') },
+  ] })
+  const pool = await import('../lib/acpClientPool')
+  const askerTask = await coord.createExternalProtocolTask(lead, { assignTo: 'auto', requestedProvider: 'acp', requestedProviderInstanceId: 'asker', teammateName: 'asker', title: 'Ask first', detail: 'Read-only review' })
+  const askerId = askerTask.delegation!.agentId
+  const askerSession = () => coord.readProtocolRun(lead.runId).then((snapshot) => snapshot!.agents.find((agent) => agent.id === askerId)!.sessionId)
+  const askDeadline = Date.now() + 30_000
+  let queued: ReturnType<typeof pool.acpPendingRequests> = []
+  while (queued.length === 0 && Date.now() < askDeadline) { await new Promise((resolve) => setTimeout(resolve, 50)); queued = pool.acpPendingRequests(await askerSession()) }
+  assert.equal(queued.length, 1, 'the chained command should be the one request waiting for a person')
+  assert.ok(JSON.stringify(queued[0]!.params).includes('; echo extra'), 'the wrong request reached a person')
+  pool.respondAcpPermissionDecision(await askerSession(), queued[0]!.id, 'reject')
+  const askerRecord = () => seen().find((entry) => entry.label === 'asker')
+  while (!askerRecord() && Date.now() < askDeadline) await new Promise((resolve) => setTimeout(resolve, 50))
+  const asked = askerRecord()
+  assert.ok(asked, 'the asking teammate never finished its turn')
+  assert.equal(asked.plain, 'yes', 'the session client\'s own call was not approved for the teammate')
+  assert.equal(asked.chained, 'no')
+  assert.ok(String(asked.status).includes(askerId), `the shell client did not read the board as the teammate: ${asked.status}`)
+  // It never reads its inbox or finishes its task. That is a turn, one nudge,
+  // and one more turn for the mail still waiting — not a fresh turn on every
+  // five-second sweep for as long as the host is up. Two sweeps pass here.
+  await new Promise((resolve) => setTimeout(resolve, 12_000))
+  const askerTurns = seen().filter((entry) => entry.label === 'asker').length
+  assert.ok(askerTurns <= 3, `a teammate that makes no progress was run ${askerTurns} times`)
+
+  const { isCoordinatorClientInvocation } = await import('../lib/coordinatorSessionClient')
+  for (const tail of [" coord_status '{}' && rm -rf x", ' coord_status "$(id)"', " coord_status '{}' > out", ' other_tool', " coord_status '{}' '{}'", '']) {
+    assert.equal(isCoordinatorClientInvocation(`node c.mjs b.json${tail}`, 'node c.mjs b.json'), false, `matched: ${tail}`)
+  }
+  assert.ok(isCoordinatorClientInvocation(`node c.mjs b.json coord_send_message '{"message":"it'\\''s done"}'`, 'node c.mjs b.json'))
+
   // The credential is in a private file, never in the agent's argv or environment.
   const bindings = path.join(dir, '.agent-viewer-data', 'agent-coordination', 'session-bindings')
   const controller = globalThis.__agentViewerCoordinatorControllers!.get(lead.runId)!
   const token = controller.sdkIdentities.get(delegated.delegation!.agentId)!.token
   const bindingFile = spawnSync('grep', ['-rl', token, bindings], { encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean)
-  assert.equal(bindingFile.length, 1, 'the teammate credential should live in exactly one binding file')
-  assert.equal(statSync(bindingFile[0]!).mode & 0o777, 0o600)
+  // One binding for the MCP server and one for the shell client, both private.
+  // This failed once in many runs and not again; say what was on disk if it does.
+  if (bindingFile.length !== 2) console.error('binding files found:', spawnSync('find', [path.join(dir, '.agent-viewer-data'), path.join(dir, 'coord-home'), '-type', 'f'], { encoding: 'utf8' }).stdout, token.slice(0, 6))
+  assert.equal(bindingFile.length, 2, `the teammate credential should live in its two binding files only: ${bindingFile}`)
+  for (const file of bindingFile) assert.equal(statSync(file).mode & 0o777, 0o600)
+  assert.ok(!readFileSync(seenPath, 'utf8').includes(token), 'the credential reached the agent')
 
   await coord.stopProtocolRun(lead.runId).catch(() => {})
   process.exit(0)

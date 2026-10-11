@@ -38,7 +38,9 @@ import type { MessageListParams, SessionMessageWindow } from './adapters/types'
 import { getSessionAdapter, unsupported } from './adapters/registry'
 import { PROVIDER_MANAGED_PERMISSION_OPTIONS } from './adapters/shared'
 import { getConfiguredProvider } from './providerState'
+import { rememberSessionInstances, withSessionInstance } from './sessionInstances'
 import {
+  currentProviderInstance,
   currentProviderInstanceId,
   listProviderInstances,
   resolveProviderInstance,
@@ -62,6 +64,8 @@ export type ListParams = {
   includeWorktrees?: boolean
   provider?: AgentProvider | 'all'
   providerInstanceId?: string
+  /** A named provider and no instance means all of its instances, not the default one. */
+  everyInstance?: boolean
 }
 
 export type ViewSessionModels = {
@@ -286,6 +290,17 @@ async function applyInboxStates(sessions: Session[]): Promise<Session[]> {
     .map(({ session }) => session)
 }
 
+/**
+ * An `acp` agent may be a CLI this app also reads natively — `opencode acp` and
+ * `copilot --acp` list the very sessions the OpenCode and Copilot adapters do.
+ * In a merged view the native row is the richer one (fork, share, models), so
+ * the ACP copy of the same session id is dropped.
+ */
+export function dropAcpDuplicates(sessions: Session[]): Session[] {
+  const native = new Set(sessions.filter((session) => session.provider !== 'acp').map((session) => session.sessionId))
+  return native.size ? sessions.filter((session) => session.provider !== 'acp' || !native.has(session.sessionId)) : sessions
+}
+
 // ── Read routers ─────────────────────────────────────────────────────────────
 
 export function listViewSessions(params: ListParams): Promise<Session[]> {
@@ -304,13 +319,20 @@ async function listViewSessionsImpl(params: ListParams): Promise<Session[]> {
     return decorated
   }
 
-  if (provider === 'all') {
+  // A caller that names `acp` and no agent (the TUI, which has no instance
+  // picker) is asking for every configured agent's sessions, not the default's.
+  // The TUI asks the same of any provider (`everyInstance`): a second Claude
+  // account's sessions sit beside the first's, each row under its own name.
+  const everyAcpAgent = provider !== 'all' && (provider === 'acp' || params.everyInstance === true)
+    && !params.providerInstanceId && !currentProviderInstance()
+  if (provider === 'all' || everyAcpAgent) {
     const combinedLimit = params.limit + params.offset
     // The two built-in ACP transports reach sessions the native Claude and Codex
     // adapters already list, so they would only duplicate them here. A custom
     // ACP agent's sessions exist nowhere else and do contribute.
-    const instances = (await listProviderInstances()).filter((instance) =>
-      instance.provider !== 'claude-acp' && instance.provider !== 'codex-acp'
+    const instances = (await listProviderInstances()).filter((instance) => everyAcpAgent
+      ? instance.provider === provider
+      : instance.provider !== 'claude-acp' && instance.provider !== 'codex-acp'
     )
     const pages = await Promise.all(instances.map((instance) => withProviderInstance(
       instance.id,
@@ -325,10 +347,11 @@ async function listViewSessionsImpl(params: ListParams): Promise<Session[]> {
           limit: combinedLimit,
           offset: 0,
         })
+        rememberSessionInstances(instance.provider, page.map((session) => session.sessionId), instance.id)
         return page.map((session) => applyProviderInstance(session, instance))
       },
     )))
-    const merged = pages.flat()
+    const merged = dropAcpDuplicates(pages.flat())
       .sort((a, b) => {
         const aTime = Number(a.lastModified ?? a.createdAt ?? 0)
         const bTime = Number(b.lastModified ?? b.createdAt ?? 0)
@@ -350,6 +373,7 @@ async function listViewSessionsImpl(params: ListParams): Promise<Session[]> {
   const adapter = await getSessionAdapter(provider)
   if (!adapter.listSessions) return []
   const page = await adapter.listSessions(params)
+  rememberSessionInstances(provider, page.map((session) => session.sessionId), instance.id)
   return finish(page.map((session) => applyProviderInstance(session, instance)))
 }
 
@@ -357,11 +381,15 @@ export async function readViewSessionInfo(sessionId: string, providerOverride?: 
   const provider = await resolveProvider(providerOverride)
   const adapter = await getSessionAdapter(provider)
   if (!adapter.readSessionInfo) return null
-  return adapter.readSessionInfo(sessionId)
+  return withSessionInstance(provider, sessionId, () => adapter.readSessionInfo!(sessionId))
 }
 
 export async function patchViewSession(sessionId: string, body: Record<string, unknown>, providerOverride?: AgentProvider): Promise<void> {
   const provider = await resolveProvider(providerOverride)
+  return withSessionInstance(provider, sessionId, () => patchSession(provider, sessionId, body))
+}
+
+async function patchSession(provider: AgentProvider, sessionId: string, body: Record<string, unknown>): Promise<void> {
   const adapter = await getSessionAdapter(provider)
   if ('title' in body) {
     if (body.title !== null && body.title !== undefined && typeof body.title !== 'string') {
@@ -384,6 +412,10 @@ export async function patchViewSession(sessionId: string, body: Record<string, u
 
 export async function deleteViewSession(sessionId: string, providerOverride?: AgentProvider): Promise<void> {
   const provider = await resolveProvider(providerOverride)
+  return withSessionInstance(provider, sessionId, () => deleteSession(provider, sessionId))
+}
+
+async function deleteSession(provider: AgentProvider, sessionId: string): Promise<void> {
   const adapter = await getSessionAdapter(provider)
   if (!adapter.deleteSession) unsupported(provider, 'deleteSession')
   await adapter.deleteSession(sessionId)
@@ -398,6 +430,10 @@ export function listViewSessionMessageWindow(sessionId: string, params: MessageL
 
 async function listViewSessionMessageWindowImpl(sessionId: string, params: MessageListParams, providerOverride?: AgentProvider): Promise<SessionMessageWindow> {
   const provider = await resolveProvider(providerOverride)
+  return withSessionInstance(provider, sessionId, () => readMessageWindow(provider, sessionId, params))
+}
+
+async function readMessageWindow(provider: AgentProvider, sessionId: string, params: MessageListParams): Promise<SessionMessageWindow> {
   const adapter = await getSessionAdapter(provider)
   if (!adapter.readAllMessages) unsupported(provider, 'readAllMessages')
   const { messages: raw, externalWriter } = await adapter.readAllMessages(sessionId)
@@ -423,7 +459,7 @@ export async function getViewSubagentMessages(
   // A provider without subagents genuinely has none — empty is the answer, not
   // a failure to look.
   if (!adapter.readSubagentMessages) return []
-  return adapter.readSubagentMessages(sessionId, agentId)
+  return withSessionInstance(provider, sessionId, () => adapter.readSubagentMessages!(sessionId, agentId))
 }
 
 /**
@@ -435,7 +471,7 @@ export async function getClaudeSubagentSummaries(sessionId: string, providerOver
   const provider = await resolveProvider(providerOverride)
   const adapter = await getSessionAdapter(provider)
   if (!adapter.readSubagentSummaries) return []
-  return adapter.readSubagentSummaries(sessionId)
+  return withSessionInstance(provider, sessionId, () => adapter.readSubagentSummaries!(sessionId))
 }
 
 // Model discovery is read-only but can be one of the slowest control-plane
@@ -447,6 +483,10 @@ const sessionModelReadsInFlight = new Map<string, Promise<ViewSessionModels>>()
 
 export async function readViewSessionModels(sessionId: string, providerOverride?: AgentProvider): Promise<ViewSessionModels> {
   const provider = await resolveProvider(providerOverride)
+  return withSessionInstance(provider, sessionId, () => readSessionModels(provider, sessionId))
+}
+
+async function readSessionModels(provider: AgentProvider, sessionId: string): Promise<ViewSessionModels> {
   const adapter = await getSessionAdapter(provider)
   // A provider with no model-listing RPC (ACP) degrades the picker to "no
   // choices" rather than failing the whole session view around it.
@@ -478,19 +518,19 @@ export async function readViewSessionComposerOptions(sessionId: string, provider
       currentPermissionMode: 'native',
     }
   }
-  return adapter.readComposerOptions(sessionId)
+  return withSessionInstance(provider, sessionId, () => adapter.readComposerOptions!(sessionId))
 }
 
 export async function readViewSessionSlashCommands(sessionId: string, providerOverride?: AgentProvider): Promise<Array<{ command: string; description: string; argumentHint?: string }>> {
   const provider = await resolveProvider(providerOverride)
   const adapter = await getSessionAdapter(provider)
   if (!adapter.readSlashCommands) return []
-  return adapter.readSlashCommands(sessionId)
+  return withSessionInstance(provider, sessionId, () => adapter.readSlashCommands!(sessionId))
 }
 
 export async function readViewSessionDiagnostics(sessionId: string, providerOverride?: AgentProvider): Promise<{ sections: SessionDiagnosticSection[]; currentModel: string | null }> {
   const provider = await resolveProvider(providerOverride)
   const adapter = await getSessionAdapter(provider)
   if (!adapter.readDiagnostics) unsupported(provider, 'readDiagnostics')
-  return adapter.readDiagnostics(sessionId)
+  return withSessionInstance(provider, sessionId, () => adapter.readDiagnostics!(sessionId))
 }

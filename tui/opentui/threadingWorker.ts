@@ -60,6 +60,7 @@ type SessionsRequest = {
   kind: 'sessions'
   id: number
   provider: ProviderSelection
+  providerInstanceId?: string
 }
 // A neighbour prefetch. Identical work to `detail` — read, thread, format —
 // but the payload never crosses back: the caller only wants this worker's
@@ -449,7 +450,7 @@ self.onmessage = async (event) => {
   reportWorkerHeap('threading')
   try {
     if (data.kind === 'sessions') {
-      const sessions = await readTuiSessions(data.provider)
+      const sessions = await readTuiSessions(data.provider, data.providerInstanceId)
       self.postMessage({ id: data.id, ok: true, sessions })
       return
     }

@@ -167,6 +167,48 @@ function isCompleteClaudeListEntry(session: { cwd?: unknown; createdAt?: unknown
     && typeof session.firstPrompt === 'string'
 }
 
+async function readClaudeSubagentSummaries(sessionId: string): Promise<SubagentSummary[]> {
+  const subagentIds = await listSubagents(sessionId, claudeSessionStoreOptions()).catch(() => [] as string[])
+  if (subagentIds.length === 0) return []
+
+  const summaries = await mapConcurrent(subagentIds, 4, async (agentId): Promise<SubagentSummary | null> => {
+    const raw = await getSubagentMessages(sessionId, agentId, claudeSessionStoreOptions())
+      .catch(() => [] as SessionMessage[])
+    if (raw.length === 0) return null
+    const messages = normalizeClaudeHistoryMessages(raw as unknown[])
+    let inputTokens = 0
+    let outputTokens = 0
+    let cacheReadTokens = 0
+    let taskDescription: string | undefined
+    let startedAt: string | undefined
+    let endedAt: string | undefined
+    for (const msg of messages) {
+      if (msg.timestamp) {
+        if (!startedAt) startedAt = msg.timestamp
+        endedAt = msg.timestamp
+      }
+      if (!taskDescription && msg.taskDescription) taskDescription = msg.taskDescription
+      const apiMessage = msg.message as { usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number | null } } | undefined
+      const usage = apiMessage?.usage
+      if (usage) {
+        inputTokens += usage.input_tokens ?? 0
+        outputTokens += usage.output_tokens ?? 0
+        cacheReadTokens += usage.cache_read_input_tokens ?? 0
+      }
+    }
+    return {
+      agentId,
+      taskDescription,
+      messageCount: messages.length,
+      usage: { inputTokens, outputTokens, cacheReadTokens },
+      startedAt,
+      endedAt,
+      provider: 'claude',
+    }
+  })
+  return summaries.filter((s): s is SubagentSummary => s !== null)
+}
+
 export const claudeAdapter: SessionAdapter = {
   provider: 'claude',
 
@@ -228,8 +270,11 @@ export const claudeAdapter: SessionAdapter = {
     })
   },
 
+  // Every store read below runs under the instance's environment, as listing
+  // does: with only the listing scoped, a second account's sessions were
+  // listed and then read from the first account's store, where none exist.
   async readSessionInfo(sessionId) {
-    const info = await getSessionInfo(sessionId, claudeSessionStoreOptions())
+    const info = await withProviderProcessEnvironment(() => getSessionInfo(sessionId, claudeSessionStoreOptions()))
     if (!info) return null
     return {
       ...withoutClaudeResumeTouch(info),
@@ -240,15 +285,15 @@ export const claudeAdapter: SessionAdapter = {
 
   async setTitle(sessionId, title) {
     if (title === null) throw new Error('title must be a string')
-    await renameSession(sessionId, title, claudeSessionStoreOptions())
+    await withProviderProcessEnvironment(() => renameSession(sessionId, title, claudeSessionStoreOptions()))
   },
 
   async setTag(sessionId, tag) {
-    await tagSession(sessionId, tag, claudeSessionStoreOptions())
+    await withProviderProcessEnvironment(() => tagSession(sessionId, tag, claudeSessionStoreOptions()))
   },
 
   async deleteSession(sessionId) {
-    await deleteClaudeSession(sessionId, claudeSessionStoreOptions())
+    await withProviderProcessEnvironment(() => deleteClaudeSession(sessionId, claudeSessionStoreOptions()))
     // Everything keyed by this session id goes with it, or the next session to
     // reuse the id inherits stale dynamic MCP servers and hook history.
     clearClaudeDynamicMcpServers(sessionId)
@@ -257,56 +302,19 @@ export const claudeAdapter: SessionAdapter = {
   },
 
   async readAllMessages(sessionId) {
-    return { messages: await readClaudeSessionMessages(sessionId) }
+    return { messages: await withProviderProcessEnvironment(() => readClaudeSessionMessages(sessionId)) }
   },
 
   async readSubagentMessages(sessionId, agentId) {
-    const raw = await getSubagentMessages(sessionId, agentId, claudeSessionStoreOptions())
+    const raw = await withProviderProcessEnvironment(() => getSubagentMessages(sessionId, agentId, claudeSessionStoreOptions()))
       .catch(() => [] as SessionMessage[])
     return withOriginKind(normalizeClaudeHistoryMessages(raw as unknown[]), `subagent:${agentId}`)
   },
 
   async readSubagentSummaries(sessionId) {
-    const subagentIds = await listSubagents(sessionId, claudeSessionStoreOptions()).catch(() => [] as string[])
-    if (subagentIds.length === 0) return []
-
-    const summaries = await mapConcurrent(subagentIds, 4, async (agentId): Promise<SubagentSummary | null> => {
-      const raw = await getSubagentMessages(sessionId, agentId, claudeSessionStoreOptions())
-        .catch(() => [] as SessionMessage[])
-      if (raw.length === 0) return null
-      const messages = normalizeClaudeHistoryMessages(raw as unknown[])
-      let inputTokens = 0
-      let outputTokens = 0
-      let cacheReadTokens = 0
-      let taskDescription: string | undefined
-      let startedAt: string | undefined
-      let endedAt: string | undefined
-      for (const msg of messages) {
-        if (msg.timestamp) {
-          if (!startedAt) startedAt = msg.timestamp
-          endedAt = msg.timestamp
-        }
-        if (!taskDescription && msg.taskDescription) taskDescription = msg.taskDescription
-        const apiMessage = msg.message as { usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number | null } } | undefined
-        const usage = apiMessage?.usage
-        if (usage) {
-          inputTokens += usage.input_tokens ?? 0
-          outputTokens += usage.output_tokens ?? 0
-          cacheReadTokens += usage.cache_read_input_tokens ?? 0
-        }
-      }
-      return {
-        agentId,
-        taskDescription,
-        messageCount: messages.length,
-        usage: { inputTokens, outputTokens, cacheReadTokens },
-        startedAt,
-        endedAt,
-        provider: 'claude',
-      }
-    })
-    return summaries.filter((s): s is SubagentSummary => s !== null)
+    return withProviderProcessEnvironment(() => readClaudeSubagentSummaries(sessionId))
   },
+
 
   async readProviderModels(cwd) {
     return readClaudeSupportedModels()

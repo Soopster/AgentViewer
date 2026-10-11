@@ -4,7 +4,8 @@ import {
   type IncrementalThreadingCache,
   type ThreadedMessage,
 } from '../threading'
-import { getConfiguredProvider, setConfiguredProvider } from '../providerState'
+import { withSessionInstance } from '../sessionInstances'
+import { getConfiguredProvider, getConfiguredProviderTarget, setConfiguredProviderTarget } from '../providerState'
 import { ensureClaudePool } from '../claudePoolHandle'
 import {
   getConfiguredTuiDensity,
@@ -102,6 +103,7 @@ function coordination(): Promise<CoordinationModule> {
 // this file's graph into it cost ~72MB against ~16MB. Re-exported so callers of
 // service.ts are unaffected.
 import {
+  noteTuiSessionInstance,
   readTuiRunningSessions,
   readTuiRuntimeActivityState,
   readTuiSessionDetailSource,
@@ -216,12 +218,41 @@ export async function readTuiProvider(): Promise<ProviderSelection> {
   return getConfiguredProvider()
 }
 
-export async function writeTuiProvider(provider: ProviderSelection): Promise<void> {
+/** `providerInstanceId` narrows the provider to one of its instances; without it the default is saved. */
+export async function writeTuiProvider(provider: ProviderSelection, providerInstanceId?: string): Promise<void> {
+  const target = { provider, ...(provider !== 'all' && providerInstanceId ? { providerInstanceId } : {}) }
   if (isRemoteAttached()) {
-    await remoteJson('/api/provider', { method: 'PATCH', body: JSON.stringify({ provider }) })
+    await remoteJson('/api/provider', { method: 'PATCH', body: JSON.stringify(target) })
     return
   }
-  await setConfiguredProvider(provider)
+  await setConfiguredProviderTarget(target.providerInstanceId ? target : { provider, ...(provider === 'all' ? {} : { providerInstanceId: provider }) })
+}
+
+export type TuiProviderInstanceChoice = { provider: AgentProvider; providerInstanceId: string; label: string }
+
+/**
+ * The saved instance, when it is not the provider's default one, and every
+ * further instance the provider menu can offer. A default instance is what the
+ * bare provider row already means, so it is not listed; neither is an ACP agent
+ * with no command.
+ */
+export async function readTuiProviderInstances(): Promise<{ selected: string | null; choices: TuiProviderInstanceChoice[] }> {
+  if (isRemoteAttached()) {
+    const state = await remoteJson<{ provider: ProviderSelection; providerInstanceId?: string; instances?: import('../types').ProviderInstanceSummary[] }>('/api/provider')
+    return {
+      selected: state.providerInstanceId && state.providerInstanceId !== state.provider ? state.providerInstanceId : null,
+      choices: (state.instances ?? []).filter(instance => !instance.isDefault)
+        .map(instance => ({ provider: instance.provider, providerInstanceId: instance.id, label: instance.displayName })),
+    }
+  }
+  const [target, staffing] = await Promise.all([
+    getConfiguredProviderTarget(),
+    (await import('../coordinatorCapabilities')).readCoordinatorStaffing(),
+  ])
+  return {
+    selected: target.providerInstanceId && target.providerInstanceId !== target.provider ? target.providerInstanceId : null,
+    choices: staffing.filter(choice => !choice.isDefault).map(({ provider, providerInstanceId, label }) => ({ provider, providerInstanceId, label })),
+  }
 }
 
 export async function listTuiAddressableSessions(excludeSessionId?: string): Promise<AddressableSession[]> {
@@ -439,6 +470,20 @@ export async function readTuiSessionDetail(session: Session): Promise<TuiSession
 }
 
 
+/**
+ * Runs a send-path call as the instance the session belongs to. The read path
+ * does this for itself (lib/sessionReads.ts); the send path is still a provider
+ * switch, so the TUI scopes it here, where it has the session in hand.
+ */
+async function asSessionInstance<T>(
+  session: { sessionId: string; provider?: AgentProvider; providerInstanceId?: string },
+  run: () => Promise<T>,
+): Promise<T> {
+  if (!session.provider) return run()
+  noteTuiSessionInstance(session)
+  return withSessionInstance(session.provider, session.sessionId, run)
+}
+
 export async function patchTuiSession(session: Session, body: Record<string, unknown>): Promise<void> {
   if (isRemoteAttached()) {
     await remoteJson(encodeSessionPath(session.sessionId), {
@@ -463,13 +508,13 @@ export async function streamTuiSessionTurn(
       provider: session.provider,
     }, signal)
   }
-  return (await coordination()).withCooperativeInbox(session.sessionId, body, async outgoing =>
+  return asSessionInstance(session, async () => (await coordination()).withCooperativeInbox(session.sessionId, body, async outgoing =>
     (await sendPath()).streamViewSessionTurn({
       sessionId: session.sessionId,
       signal: signal ?? new AbortController().signal,
       body: outgoing,
       provider: session.provider as AgentProvider | undefined,
-    }))
+    })))
 }
 
 /**
@@ -988,18 +1033,38 @@ async function sendTuiSessionCoordinationScoped(
 /** Create a session (or a pending draft) locally or on the attached daemon. */
 export async function createTuiSession(params: {
   provider?: AgentProvider
+  /** Which configured agent, for a provider with more than one (`acp`). */
+  providerInstanceId?: string
   cwd?: string
   title?: string
-}): Promise<{ sessionId: string; provider: AgentProvider; cwd: string; isPending: boolean }> {
+}): Promise<{ sessionId: string; provider: AgentProvider; cwd: string; isPending: boolean; providerInstanceId?: string }> {
   if (isRemoteAttached()) {
     return remoteJson('/api/sessions/new', { method: 'POST', body: JSON.stringify(params) })
   }
-  return (await sendPath()).createNewViewSession(params)
+  const { providerInstanceId, ...rest } = params
+  const { withProviderInstance } = await import('../providerInstances')
+  if (params.provider !== 'acp') {
+    if (!params.provider || !providerInstanceId || providerInstanceId === params.provider) return (await sendPath()).createNewViewSession(rest)
+    // A second account: the session is created in, and remembered as, that instance.
+    const created = await withProviderInstance(providerInstanceId, params.provider, async () => (await sendPath()).createNewViewSession(rest))
+    noteTuiSessionInstance({ ...created, providerInstanceId })
+    return { ...created, providerInstanceId }
+  }
+  // A new ACP chat goes to the agent the caller named (the one picked, else the
+  // selected session's), else the default one, else — when that has no command
+  // — the first agent that does.
+  const staffing = (await (await import('../coordinatorCapabilities')).readCoordinatorStaffing()).filter((choice) => choice.provider === 'acp')
+  const instanceId = staffing.find((choice) => choice.providerInstanceId === providerInstanceId)?.providerInstanceId
+    ?? staffing.find((choice) => choice.isDefault)?.providerInstanceId
+    ?? staffing[0]?.providerInstanceId
+    ?? 'acp'
+  const created = await withProviderInstance(instanceId, 'acp', async () => (await sendPath()).createNewViewSession(rest))
+  return { ...created, providerInstanceId: instanceId }
 }
 
 /** Fork a session into a new one — whole, or up to and including `upToMessageId`. */
 export async function forkTuiSession(
-  session: { sessionId: string; provider?: AgentProvider },
+  session: { sessionId: string; provider?: AgentProvider; providerInstanceId?: string },
   upToMessageId?: string,
 ): Promise<{ sessionId: string }> {
   const body = upToMessageId ? { upToMessageId } : {}
@@ -1009,12 +1074,17 @@ export async function forkTuiSession(
       body: JSON.stringify({ provider: session.provider, ...body }),
     })
   }
-  return (await sendPath()).forkViewSession({ sessionId: session.sessionId, provider: session.provider, body })
+  return asSessionInstance(session, async () => {
+    const forked = await (await sendPath()).forkViewSession({ sessionId: session.sessionId, provider: session.provider, body })
+    // The copy lives where its original does.
+    noteTuiSessionInstance({ ...session, sessionId: forked.sessionId })
+    return forked
+  })
 }
 
 /** Codex revert (`beforeTurnId`) or OpenCode revert (`userMessageId`), in place. */
 export async function rewindTuiSession(
-  session: { sessionId: string; provider?: AgentProvider },
+  session: { sessionId: string; provider?: AgentProvider; providerInstanceId?: string },
   body: { beforeTurnId?: string; userMessageId?: string },
 ): Promise<Record<string, unknown>> {
   if (isRemoteAttached()) {
@@ -1023,7 +1093,7 @@ export async function rewindTuiSession(
       body: JSON.stringify({ provider: session.provider, ...body }),
     })
   }
-  return (await sendPath()).rewindOrRollbackViewSession({ sessionId: session.sessionId, provider: session.provider, body })
+  return asSessionInstance(session, async () => (await sendPath()).rewindOrRollbackViewSession({ sessionId: session.sessionId, provider: session.provider, body }))
 }
 
 /** Warm the send path (Claude pool spawn, Codex thread resume) while the user types. */
@@ -1044,14 +1114,14 @@ export async function prewarmTuiSession(
     })
     return
   }
-  await (await sendPath()).prewarmViewSession({
+  await asSessionInstance(session, async () => (await sendPath()).prewarmViewSession({
     sessionId: session.sessionId,
     provider: session.provider as AgentProvider | undefined,
     cwd: session.cwd ?? undefined,
     model: opts?.model,
     effort: opts?.effort,
     isPending: opts?.isPending,
-  })
+  }))
 }
 
 export async function readTuiSessionDiagnostics(
@@ -1074,11 +1144,11 @@ export async function runTuiSessionAction(
     )
     return result ?? {}
   }
-  return (await sendPath()).runViewSessionAction({
+  return asSessionInstance(session, async () => (await sendPath()).runViewSessionAction({
     sessionId: session.sessionId,
     body,
     provider: session.provider as AgentProvider | undefined,
-  })
+  }))
 }
 
 export async function readTuiSessionBookmarkIds(session: Session): Promise<string[]> {
