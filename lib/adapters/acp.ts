@@ -29,7 +29,7 @@ import {
   loadAcpSessionHistory,
   readAcpAgentCapabilities,
 } from '../acpCapabilities'
-import { isAcpSessionAlive, peekAcpSession, readAcpMessagesSince } from '../acpClientPool'
+import { acpModelState, isAcpSessionAlive, peekAcpSession, readAcpMessagesSince } from '../acpClientPool'
 import { mapAcpBufferedMessages } from '../acpMapper'
 import { acpAgentKindOf } from '../acpAgentSpawn'
 import { getProviderCapabilities, type AcpProvider } from '../provider'
@@ -112,7 +112,19 @@ function makeAcpAdapter(provider: AcpProvider): SessionAdapter {
       return { messages: mapAcpBufferedMessages(sessionId, provider, messages) }
     },
 
-    // No readModels: ACP's session/new carries no model-listing RPC to query.
+    // An agent's models are the `model` config option it returns from
+    // session/new, so there is a list only once it has started a session —
+    // after that the last one it gave is offered for sessions not yet live.
+    async readModels(sessionId) {
+      const state = acpModelState(sessionId, agentKind)
+      return {
+        models: (state?.models ?? []).map((model) => ({ value: model.value, displayName: model.name, description: model.description ?? '' })),
+        // Only a live session has a current model; the remembered list's was
+        // some other session's choice.
+        currentModel: isAcpSessionAlive(sessionId) ? state?.current ?? null : null,
+        contextUsage: null,
+      }
+    },
 
     async readDiagnostics(sessionId) {
       const alive = isAcpSessionAlive(sessionId)
@@ -120,7 +132,7 @@ function makeAcpAdapter(provider: AcpProvider): SessionAdapter {
       const error = acpCapabilityError(agentKind)
       const listed = await listAcpAgentSessions(agentKind)
       return {
-        currentModel: null,
+        currentModel: alive ? acpModelState(sessionId, agentKind)?.current ?? null : null,
         sections: [
           {
             id: 'acp',

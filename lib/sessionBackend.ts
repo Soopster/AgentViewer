@@ -139,6 +139,7 @@ import {
   resolveAcpElicitation,
   respondAcpPermissionDecision,
   sendAcpPrompt,
+  setAcpSessionModel,
   waitForAcpActivity,
 } from './acpClientPool'
 import { mapAcpBufferedMessages } from './acpMapper'
@@ -6737,6 +6738,10 @@ async function createAcpStream(
 
       try {
         await acquireAcpSession(sessionId, acpAgentKindOf(provider), cwd, await coordinatorAcpMcpServers(provider, sessionId))
+        // The composer sends its model with every turn; applying it is a no-op
+        // when the session is already on it.
+        const model = typeof body.model === 'string' ? body.model.trim() : ''
+        if (model) await setAcpSessionModel(sessionId, model)
       } catch (err) {
         safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Failed to start ACP session' })}\n\n`)
         signal.removeEventListener('abort', onAbort)

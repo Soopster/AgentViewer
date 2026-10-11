@@ -10,13 +10,18 @@ import { createHash } from 'node:crypto'
 import React, { act } from 'react'
 import { testRender } from '@opentui/react/test-utils'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'
 
 const smokeRoot = mkdtempSync(path.join(tmpdir(), 'agent-viewer-teammates-smoke-'))
 process.chdir(smokeRoot)
 execFileSync('git', ['init', '-q'])
+// One configured ACP agent, and no command for the default one: `p` must offer
+// the first by its name and not offer the second at all.
+mkdirSync('.agent-viewer-data', { recursive: true })
+writeFileSync('.agent-viewer-data/provider-instances.json', JSON.stringify({ version: 1, instances: [{ id: 'gemini', provider: 'acp', displayName: 'Gemini', executable: 'gemini --experimental-acp' }] }))
+delete process.env.AGENT_VIEWER_ACP_COMMAND
 writeFileSync('README.md', 'fixture\n')
 execFileSync('git', ['add', '.'])
 execFileSync('git', ['-c', 'user.name=Smoke', '-c', 'user.email=smoke@example.invalid', 'commit', '-qm', 'fixture'])
@@ -168,6 +173,13 @@ if (!notices.some(text => text.includes('conversation you are in'))) fail('⏎ o
 if (!captureCharFrame().includes('─ Teammates ─')) fail('⏎ on the lead of this conversation closed the panel')
 await press('j')
 if (captureCharFrame().includes('▸ ◆') || !/▸ . nova/.test(captureCharFrame())) fail(`j from the lead did not return to the first teammate:\n${captureCharFrame()}`)
+// `p` walks the provider instances a new teammate may be staffed from, then
+// back to "same". A configured agent goes by its own name.
+const staffingNotices: string[] = []
+for (let i = 0; i < 7; i++) { await press('p'); staffingNotices.push(notices.at(-1) ?? '') }
+if (staffingNotices.join('|') !== ['CLAUDE', 'CODEX', 'OPENCODE', 'COPILOT', 'PI', 'GEMINI'].map(label => `New teammates use ${label}`).concat("New teammates use this conversation's provider").join('|')) {
+  fail(`p did not walk the staffing choices by name: ${staffingNotices.join(' | ')}`)
+}
 // Herdr keeps an agent "working" while background work will bring it back; the
 // TUI read assembles that from the runtime's waiting registry.
 const runtime = await import('../../lib/sessionRuntime')
@@ -175,7 +187,10 @@ const novaSessionId = store.getInteractiveCoordinatorState().data!.snapshot!.age
 runtime.setWaitingSession({ sessionId: novaSessionId, provider: 'claude',
   backgroundTasks: [{ id: 'bg', type: 'subagent', status: 'running', description: 'search' }], sessionCrons: [] })
 await waitFor('background work in the roster', () => readable().includes('In background · 1 task'))
-runtime.clearWaitingSession(novaSessionId)
+// The background work finishes: a fresh observation with nothing in it. Merely
+// clearing the marker is not proof of completion, and the completion gate
+// would go on refusing nova's results for the rest of this run.
+runtime.setWaitingSession({ sessionId: novaSessionId, provider: 'claude', backgroundTasks: [], sessionCrons: [] })
 await waitFor('nova available again', () => captureCharFrame().includes('Available'))
 
 if (process.env.DUMP_FRAME === '1') console.log(captureCharFrame())

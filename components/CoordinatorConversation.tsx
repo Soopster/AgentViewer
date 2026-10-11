@@ -1,7 +1,7 @@
 'use client'
 
 import { coordinatorAttentionCount } from '@/lib/coordinatorAttentionCount'
-import { coordinatorAgentActivity, coordinatorAgentNote, coordinatorAgentWorkspace, coordinatorStalledAgentIds, type CoordinatorInteractiveState } from '@/lib/coordinatorInteractiveState'
+import { coordinatorAgentActivity, coordinatorAgentNote, coordinatorAgentWorkspace, coordinatorInstanceLabel, coordinatorStalledAgentIds, type CoordinatorInteractiveState } from '@/lib/coordinatorInteractiveState'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { COORDINATOR_ROSTER_FILTERS, COORDINATOR_ROSTER_LABELS, filterCoordinatorRoster, type CoordinatorRosterFilter } from '@/lib/coordinatorRosterFilter'
 import dynamic from 'next/dynamic'
@@ -247,9 +247,14 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
       </NativeSelect>
       {to === 'auto' ? <>
         <label htmlFor={`${id}-provider`}>New teammate uses</label>
-        <NativeSelect id={`${id}-provider`} value={teammateProvider} disabled={disabled} onChange={event => { setTeammateProvider(event.target.value as typeof teammateProvider); setRequestedProviderInstanceId(''); setRequestedModel(''); setRequestedEffort('') }}>
+        {/* One option per provider instance, so a configured ACP agent is chosen by its name. */}
+        <NativeSelect id={`${id}-provider`} value={teammateProvider === 'lead' ? 'lead' : `${teammateProvider}|${requestedProviderInstanceId || teammateProvider}`} disabled={disabled} onChange={event => {
+          const [provider, instanceId] = event.target.value.split('|')
+          setTeammateProvider(provider as typeof teammateProvider); setRequestedProviderInstanceId(instanceId && instanceId !== provider ? instanceId : ''); setRequestedModel(''); setRequestedEffort('')
+        }}>
           <option value="lead">Same provider as this chat</option>
-          {COORDINATOR_TEAMMATE_PROVIDERS.map(option => <option key={option} value={option}>{option}</option>)}
+          {(state?.staffing ?? COORDINATOR_TEAMMATE_PROVIDERS.map(provider => ({ provider, providerInstanceId: provider as string, label: provider as string, isDefault: true })))
+            .map(choice => <option key={`${choice.provider}|${choice.providerInstanceId}`} value={`${choice.provider}|${choice.providerInstanceId}`}>{choice.isDefault ? choice.provider : `${choice.label} (${choice.provider})`}</option>)}
         </NativeSelect>
         <label htmlFor={`${id}-name`}>Teammate name (optional)</label>
         <Input id={`${id}-name`} value={teammateName} disabled={disabled} maxLength={32} placeholder="reviewer"
@@ -306,7 +311,7 @@ function TeammateRoster({ snapshot, state, seen, observationUnavailable, onOpen,
     {!roster.agents.length ? <p>No teammates match these filters.</p> : null}
     <div className="flex flex-wrap gap-2">
     {roster.agents.map(agent => <div key={agent.id} className="rounded border p-2">
-      <p>{agent.name} · {coordinatorAgentActivity(agent, state, observationUnavailable, stalled.includes(agent.id))}{coordinatorAgentWorkspace(agent, snapshot) ? ` · ${coordinatorAgentWorkspace(agent, snapshot)}` : ''}</p>
+      <p>{agent.name}{coordinatorInstanceLabel(agent, state.staffing) ? ` (${coordinatorInstanceLabel(agent, state.staffing)})` : ''} · {coordinatorAgentActivity(agent, state, observationUnavailable, stalled.includes(agent.id))}{coordinatorAgentWorkspace(agent, snapshot) ? ` · ${coordinatorAgentWorkspace(agent, snapshot)}` : ''}</p>
       {coordinatorAgentNote(agent, snapshot) ? <p className="text-sm text-muted-foreground">“{coordinatorAgentNote(agent, snapshot)}”</p> : null}
       {!agent.sessionId.startsWith('external:') ? <Button variant="ghost" size="sm" onClick={() => onOpen(agent)}>Transcript</Button> : null}
       {state.runningAgentIds.includes(agent.id) || agent.turnActive

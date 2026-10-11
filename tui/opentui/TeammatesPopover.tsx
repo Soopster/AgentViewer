@@ -25,6 +25,11 @@ import { COORDINATOR_ROSTER_FILTERS, COORDINATOR_ROSTER_LABELS, filterCoordinato
 /** Providers a chat can staff a NEW teammate from; cycled with `p`. */
 const COORDINATOR_TEAMMATE_PROVIDERS: readonly AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'acp']
 
+// A configured instance goes by the name it was given; a default one by its provider's.
+function staffingLabel(choice: CoordinatorStaffingChoice): string {
+  return choice.isDefault ? formatProviderLabel(choice.provider) : choice.label.toUpperCase()
+}
+
 /**
  * Herdr refuses to close a workspace with linked worktree workspaces without
  * explicit group intent, and never removes a dirty checkout quietly. Ending a
@@ -92,7 +97,7 @@ import type { ProtocolAgent } from '../../lib/agentProtocol'
 import { describeRunRollup } from '../../lib/coordinatorRollup'
 import { coordinatorAttention, type CoordinatorAttentionItem } from '../../lib/coordinatorAttention'
 import { coordinatorPickerState, coordinatorResultIdsForAgent } from '../../lib/coordinatorSignals'
-import { coordinatorAgentActivity, coordinatorAgentNote, coordinatorAgentWorkspace, coordinatorStalledAgentIds } from '../../lib/coordinatorInteractiveState'
+import { coordinatorAgentActivity, coordinatorAgentNote, coordinatorAgentWorkspace, coordinatorInstanceLabel, coordinatorStalledAgentIds, type CoordinatorStaffingChoice } from '../../lib/coordinatorInteractiveState'
 import {
   closeInteractiveCoordinator,
   readInteractiveCoordinatorTeardown,
@@ -206,7 +211,10 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   // means the lead conversation's provider.
   // Cancelling a task fails what depends on it, so it takes a second press (X, then y).
   const [confirmCancel, setConfirmCancel] = useState<{ taskId: string; title: string; agentName: string } | null>(null)
-  const [newTeammateProvider, setNewTeammateProvider] = useState<AgentProvider | null>(null)
+  // What a NEW teammate is staffed from: a provider instance, so a configured
+  // ACP agent is chosen by name. null = this conversation's own.
+  const [newTeammate, setNewTeammate] = useState<CoordinatorStaffingChoice | null>(null)
+  const newTeammateProvider = newTeammate?.provider ?? null
 
   const { data, session, busy, pending, error } = state
   const snapshot = data?.snapshot ?? null
@@ -293,7 +301,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
         const text = draft.text.trim()
         if (!text) { setDraft(null); return }
         act(draft.kind === 'delegate'
-          ? { action: 'delegate', ...delegateTarget(text, draft.to), teammateProvider: draft.to ? undefined : newTeammateProvider ?? undefined, ...delegationOptions }
+          ? { action: 'delegate', ...delegateTarget(text, draft.to), teammateProvider: draft.to ? undefined : newTeammateProvider ?? undefined, ...delegationOptions, requestedProviderInstanceId: delegationOptions.requestedProviderInstanceId ?? (draft.to || !newTeammate || newTeammate.isDefault ? undefined : newTeammate.providerInstanceId) }
           : { action: draft.kind, detail: text, to: draft.to ?? undefined, taskId: draft.taskId, decisionId: draft.decisionId, inReplyTo: draft.inReplyTo },
           draft.kind === 'delegate' ? `Task sent to ${draft.toName}` : `Message sent to ${draft.toName}`)
         setDraft(null)
@@ -468,18 +476,20 @@ export const TeammatesPopover = memo(function TeammatesPopover({
     // Cycle which provider a NEW teammate is staffed from — a Codex reviewer
     // beside a Claude implementer is the point of routing work by provider.
     if (key.name === 'p' && !disabled) {
-      const index = newTeammateProvider === null ? 0 : COORDINATOR_TEAMMATE_PROVIDERS.indexOf(newTeammateProvider) + 1
-      const next = index >= COORDINATOR_TEAMMATE_PROVIDERS.length ? null : COORDINATOR_TEAMMATE_PROVIDERS[index]!
-      setNewTeammateProvider(next)
+      // A daemon older than `staffing` offers each provider's default instance.
+      const choices = data?.staffing ?? COORDINATOR_TEAMMATE_PROVIDERS.map((provider): CoordinatorStaffingChoice => ({ provider, providerInstanceId: provider, label: formatProviderLabel(provider), isDefault: true }))
+      const index = newTeammate === null ? 0 : choices.findIndex((choice) => choice.providerInstanceId === newTeammate.providerInstanceId && choice.provider === newTeammate.provider) + 1
+      const next = index >= choices.length ? null : choices[index]!
+      setNewTeammate(next)
       setDelegationOptions({})
-      onNotice('info', next ? `New teammates use ${formatProviderLabel(next)}` : 'New teammates use this conversation\'s provider', 3000)
+      onNotice('info', next ? `New teammates use ${staffingLabel(next)}` : 'New teammates use this conversation\'s provider', 3000)
       return
     }
     if (key.name === 'm' && selected && !disabled) {
       setDraft({ kind: 'message', to: selected.id, toName: selected.name, text: '' })
     }
   }, [act, busy, canLead, confirmCancel, confirmOff, data, disabled, draft, enabled, locked, onNotice, onOpenSession, onWatchSessions,
-      pending, recoveries, selected, teammates, clamped, leadSelected, rosterLead, viewingAgentId, newTeammateProvider, snapshot, terminal, unconfirmedDelivery, currentAttention, items.length, session, searching, delegationOptions])
+      pending, recoveries, selected, teammates, clamped, leadSelected, rosterLead, viewingAgentId, newTeammate, snapshot, terminal, unconfirmedDelivery, currentAttention, items.length, session, searching, delegationOptions])
 
   useEffect(() => { if (!resultTaskId && !workflowOpen && !resourcesOpen && !recoveryOpen && !delegationOptionsOpen) onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady, resultTaskId, workflowOpen, resourcesOpen, recoveryOpen, delegationOptionsOpen])
 
@@ -541,7 +551,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
     const note = !isLead && rawNote && rawNote !== currentAttention?.detail ? rawNote : ''
     const needs = data?.permissions.some((item) => item.agentId === agent.id)
       || recoveries.includes(agent.id) || stalled.includes(agent.id)
-    const provider = formatProviderLabel(agent.provider).toUpperCase()
+    const provider = (coordinatorInstanceLabel(agent, data?.staffing) ?? formatProviderLabel(agent.provider)).toUpperCase()
     const task = rosterTaskByAgent.get(agent.id)
     const taskDone = task ? TERMINAL_TASK_STATUSES.has(task.status) : false
     const picker = snapshot ? coordinatorPickerState(agent, snapshot, state.reviewed) : 'idle'
@@ -871,7 +881,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
         : !enabled
           ? (teammates.length ? [['j/k', 'move'], ['⏎', 'open transcript'], ['o/O', 'watch'], ['v', 'result review'], ...(recoveries.length || data?.settledExecutions?.length ? [['h', 'recovery'] as [string, string]] : []), ...(canLead ? [['e', 'new team'] as [string, string]] : []), ['esc', 'close']] : canLead ? [['e', 'enable coordinator'], ['esc', 'close']] : [['esc', 'close']])
           : [['j/k', 'move'], ['⏎', 'open'], ['o/O', 'watch'], ['v', 'result review'], ['d', 'ask'], ['m', 'message'],
-             ['r', 'resume'], ['i', 'interrupt'], ['⇧X', 'cancel task'], ['p', `new: ${newTeammateProvider ? formatProviderLabel(newTeammateProvider) : 'same'}`], ['c', 'continuation'], ['w', 'worktrees'], ['l', `alerts ${state.notifications}`], ['x', 'turn off'], ['esc', 'close']]
+             ['r', 'resume'], ['i', 'interrupt'], ['⇧X', 'cancel task'], ['p', `new: ${newTeammate ? staffingLabel(newTeammate) : 'same'}`], ['c', 'continuation'], ['w', 'worktrees'], ['l', `alerts ${state.notifications}`], ['x', 'turn off'], ['esc', 'close']]
   // Truncation is by whole entries, not mid-word: a hint cut to "x …" tells the
   // reader a key exists without saying which.
   const footerWidth = (hints: Array<[string, string]>) =>

@@ -25,6 +25,7 @@ import {
   type CreateElicitationResponse,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
+  type SessionConfigOption,
 } from '@agentclientprotocol/sdk'
 import { acpAgentKey, resolveAcpAgentSpawn, type AcpAgentKind } from './acpAgentSpawn'
 import { currentProviderEnvironment } from './providerInstances'
@@ -107,7 +108,33 @@ type AcpPoolEntry = {
   turnStopFallback: ReturnType<typeof setTimeout> | null
   closedDeferred: { promise: Promise<void>; resolve: () => void }
   lastError: string | null
+  /** What the agent said it can be configured with, kept current as it changes. */
+  configOptions: SessionConfigOption[]
 }
+
+/** A selectable model the agent advertised: `session/new`'s `model` config option. */
+export type AcpModelChoice = { value: string; name: string; description?: string }
+export type AcpModelState = { current: string | null; models: AcpModelChoice[] }
+
+function modelOption(options: SessionConfigOption[]): Extract<SessionConfigOption, { type: 'select' }> | undefined {
+  const selects = options.filter((option): option is Extract<SessionConfigOption, { type: 'select' }> => option.type === 'select')
+  // The category is what the protocol says to key on; the id is the fallback for
+  // an agent that sets none.
+  return selects.find((option) => option.category === 'model') ?? selects.find((option) => option.id === 'model')
+}
+
+function modelStateOf(options: SessionConfigOption[]): AcpModelState | null {
+  const option = modelOption(options)
+  if (!option) return null
+  const models = option.options.flatMap((choice) => 'options' in choice ? choice.options : [choice])
+    .map((choice) => ({ value: choice.value, name: choice.name, ...(choice.description ? { description: choice.description } : {}) }))
+  return { current: option.currentValue ?? null, models }
+}
+
+// The model list belongs to the agent, not to a session, and a session only
+// exists once a turn has started — so the last list an agent gave is kept to
+// offer a choice for the turn that will start one.
+const lastModelStateByAgent = new Map<string, AcpModelState>()
 
 /** Recursively lists live descendant pids of `pid` via pgrep (macOS/Linux only). */
 function collectDescendantPids(pid: number): number[] {
@@ -319,7 +346,9 @@ class AcpClientPool {
         turnStopFallback: null,
         closedDeferred,
         lastError: null,
+        configOptions: session.newSessionResponse.configOptions ?? [],
       }
+      this.rememberModels(entry)
       entryRef.current = entry
       this.entries.set(sessionId, entry)
       this.enforceCapacity(sessionId)
@@ -382,6 +411,10 @@ class AcpClientPool {
         entry.nextIndex += 1
         entry.buffer.push({ index, receivedAt: Date.now(), message })
         if (entry.buffer.length > BUFFER_CAP) entry.buffer.splice(0, entry.buffer.length - BUFFER_CAP)
+        if (message.kind === 'session_update' && message.update.sessionUpdate === 'config_option_update') {
+          entry.configOptions = message.update.configOptions
+          this.rememberModels(entry)
+        }
         if (message.kind === 'stop') {
           if (entry.turnStopFallback) clearTimeout(entry.turnStopFallback)
           entry.turnStopFallback = null
@@ -620,6 +653,35 @@ class AcpClientPool {
   isAlive(sessionId: string): boolean {
     return this.entries.get(sessionId)?.alive ?? false
   }
+
+  private rememberModels(entry: AcpPoolEntry): void {
+    const state = modelStateOf(entry.configOptions)
+    if (state) lastModelStateByAgent.set(entry.agentKey, state)
+  }
+
+  modelState(sessionId: string): AcpModelState | null {
+    const entry = this.entries.get(sessionId)
+    return entry?.alive ? modelStateOf(entry.configOptions) : null
+  }
+
+  /**
+   * Selects a model the agent advertised. A model it did not advertise is
+   * refused here rather than sent: an agent may accept an unknown value and
+   * fail the prompt instead, which reads as the turn breaking for no reason.
+   */
+  async setModel(sessionId: string, model: string): Promise<void> {
+    const entry = this.entries.get(sessionId)
+    if (!entry?.alive) return
+    const option = modelOption(entry.configOptions)
+    if (!option || option.currentValue === model) return
+    const state = modelStateOf(entry.configOptions)!
+    if (!state.models.some((choice) => choice.value === model)) {
+      throw new Error(`This agent does not offer the model "${model}". It offers ${state.models.length} others; pick one from the model list.`)
+    }
+    const response = await entry.ctx.request('session/set_config_option', { sessionId: entry.session.sessionId, configId: option.id, value: model })
+    entry.configOptions = response.configOptions
+    this.rememberModels(entry)
+  }
 }
 
 
@@ -689,6 +751,15 @@ export function declineAcpElicitation(sessionId: string, requestId: string): voi
 
 export function resolveAcpElicitation(sessionId: string, requestId: string, response: CreateElicitationResponse): void {
   getPool().resolveElicitation(sessionId, requestId, response)
+}
+
+/** The live session's models, else the last list this agent gave, else null. */
+export function acpModelState(sessionId: string, agentKind: AcpAgentKind): AcpModelState | null {
+  return getPool().modelState(sessionId) ?? lastModelStateByAgent.get(acpAgentKey(agentKind)) ?? null
+}
+
+export function setAcpSessionModel(sessionId: string, model: string): Promise<void> {
+  return getPool().setModel(sessionId, model)
 }
 
 export function isAcpSessionAlive(sessionId: string): boolean {

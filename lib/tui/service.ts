@@ -818,7 +818,8 @@ export async function readTuiSessionCoordinator(
       .map((permission) => ({ agentId: agent.id, agentName: agent.name, permission }))
   }) ?? []
   const backgroundAgents = snapshot ? coordinatorBackgroundAgents(snapshot.agents, listWaitingSessions()) : []
-  return { snapshot, interactive, recoveries, settledExecutions, permissions, runningAgentIds, backgroundAgents }
+  const staffing = await (await import('../coordinatorCapabilities')).readCoordinatorStaffing()
+  return { snapshot, interactive, recoveries, settledExecutions, permissions, runningAgentIds, backgroundAgents, staffing }
 }
 
 export async function inspectTuiCoordinatorRecovery(sessionId: string, provider: AgentProvider): Promise<import('../coordinatorRecovery').RecoveryInspection | null> {

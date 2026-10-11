@@ -215,13 +215,31 @@ which is why `acp` joins Claude and Codex as a provider that may have more than 
   teammate's permission requests queue for the UI like any ACP session's, `coord_*` calls included
   if the agent asks about MCP tools. Not pre-allowed: the request names a tool by a title the agent
   writes, which is not something to match an allow rule against.
-- Not done: the roster and the pickers say `ACP` for every instance rather than its display name,
-  the panel's `p` staffs the default instance only (`requested_provider_instance_id` on
-  `coord_delegate` reaches the others), and a pooled session reaped after 15 idle minutes starts a
-  fresh ACP session, as it does for the built-in transports.
+- **A model is the agent's `model` config option, and it is the only place a model list exists.**
+  `session/new` returns `configOptions`; the pool keeps them current (`config_option_update`, and
+  the reply to `session/set_config_option`) and the adapter's `readModels` reads the one whose
+  category is `model`, flattening grouped options. The composer's model is applied before each
+  prompt and is a no-op when unchanged. **A model the agent did not offer is refused before it is
+  sent** — an agent may accept an unknown value and fail the prompt instead. A session exists only
+  once a turn has started, so a chat not yet live is offered the agent's last list with no current
+  model. This was found against a real agent: OpenCode's ACP mode starts on a model the account
+  could not use, and with no way to choose another every turn failed.
+- **A teammate is staffed from a provider instance, and named after it.** The interactive state
+  carries `staffing` (`readCoordinatorStaffing`): one choice per instance, which is what the TUI's
+  `p` cycles and the web select lists, so a configured agent is chosen as "Gemini" rather than as
+  `acp`. An `acp` instance with no command is not offered. `coordinatorInstanceLabel` names a
+  teammate after its instance in both rosters and returns null for a default instance, whose
+  provider name already says it.
+- Not done: the TUI browses and starts chats on a provider's **default** instance only — it has no
+  instance picker for any provider, so a second ACP agent is reachable there as a teammate but not
+  as a chat (the web's session list has the picker). And a pooled session reaped after 15 idle
+  minutes starts a fresh ACP session, as it does for the built-in transports.
 
-`acpProviderSmoke.ts` runs a hand-written agent through a turn, two instances, per-instance listing
-and a staffed teammate that reads the board as itself; four mutations were verified to fail it.
+`acpProviderSmoke.ts` runs a hand-written agent through a turn, a model change, two instances,
+per-instance listing, and a teammate staffed from a named instance that reads the board as itself;
+nine mutations were verified to fail it. `npm run acp:live` does the same against a real agent
+(`ACP_LIVE_COMMAND`, `ACP_LIVE_MODEL`); it passes against `opencode acp` 2.0.8, which asked for no
+approval to call its `coord_*` tools.
 
 **ACP session persistence is advertised per agent, and the advertisement is a claim rather than a guarantee** (`lib/acpCapabilities.ts`). The protocol gates `session/list`, `session/load`, `session/resume`, `session/delete` and `session/fork` on the agent advertising them in its `initialize` response — which the pool used to discard, so this was long assumed to be "ACP cannot". Measured: claude-agent-acp 0.70.0 advertises `loadSession` plus session `list`/`resume`/`fork`/`delete`/`close`; codex-acp 1.6.2 the same minus `fork`. A capability is read by PRESENCE (`{}` means yes, absent or `null` means no) except `loadSession`, which is a plain boolean — `scripts/acpCapabilitySmoke.ts` pins both rules, since reading either wrong fails silently in one direction or the other.
 

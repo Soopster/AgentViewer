@@ -1,5 +1,5 @@
 import { withProviderRequest } from '@/lib/providerRequest'
-import { readCoordinatorCapabilities } from '@/lib/coordinatorCapabilities'
+import { readCoordinatorCapabilities, readCoordinatorStaffing } from '@/lib/coordinatorCapabilities'
 import { answerCoordinatorNativePermission } from '@/lib/coordinatorNativePermissionServer'
 import { readCoordinatorNativeAnswerReceipt } from '@/lib/agentCoordination'
 import { inspectCoordinatorRecovery } from '@/lib/coordinatorRecoveryServer'
@@ -59,7 +59,7 @@ async function readState(sessionId: string, provider: Parameters<typeof readSess
       .map(permission => ({ agentId: agent.id, agentName: agent.name, permission }))
   }) ?? []
   const backgroundAgents = snapshot ? coordinatorBackgroundAgents(snapshot.agents, listWaitingSessions()) : []
-  return { snapshot, interactive, recoveries, settledExecutions, permissions, runningAgentIds, backgroundAgents }
+  return { snapshot, interactive, recoveries, settledExecutions, permissions, runningAgentIds, backgroundAgents, staffing: await readCoordinatorStaffing() }
 }
 
 export async function GET(request: Request, context: { params: Promise<{ sessionId: string }> }) {

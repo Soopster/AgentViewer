@@ -31,6 +31,8 @@ import { appendFileSync } from 'node:fs'
 const label = process.argv[2] ?? 'default'
 const out = (message) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...message }) + '\\n')
 let servers = []
+let model = 'm-default'
+const configOptions = () => [{ id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: model, options: [{ group: 'g', name: 'Group', options: [{ value: 'm-default', name: 'Default' }, { value: 'm-fast', name: 'Fast' }] }] }]
 async function callTool(server, name, args) {
   const child = spawn(server.command, server.args, { stdio: ['pipe', 'pipe', 'inherit'] })
   const pending = new Map()
@@ -52,10 +54,11 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
     out({ method: 'session/update', params: { sessionId: message.params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'history of ' + label } } } })
     out({ id: message.id, result: {} })
   }
-  else if (message.method === 'session/new') { servers = message.params.mcpServers ?? []; out({ id: message.id, result: { sessionId: 'native-' + label } }) }
+  else if (message.method === 'session/new') { servers = message.params.mcpServers ?? []; out({ id: message.id, result: { sessionId: 'native-' + label, configOptions: configOptions() } }) }
+  else if (message.method === 'session/set_config_option') { model = message.params.value; out({ id: message.id, result: { configOptions: configOptions() } }) }
   else if (message.method === 'session/prompt') {
     const sessionId = message.params.sessionId
-    let said = 'hello from ' + label
+    let said = 'hello from ' + label + ' on ' + model
     const record = { label, servers: servers.map((server) => server.name) }
     if (servers[0]) {
       const answer = await callTool(servers[0], 'coord_status', {})
@@ -107,6 +110,21 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
   assert.ok(turn.includes('"provider":"acp"'), 'the transcript rows are not attributed to the acp provider')
   assert.deepEqual(seen().at(-1), { label: 'env', servers: [] }, 'an ordinary chat must not be handed Coordinator tools')
 
+  // --- Its models are the ones it advertised, and the composer's choice is applied.
+  const offered = await instances.withProviderInstance('acp', 'acp', () => adapter.readModels!(created.sessionId))
+  assert.deepEqual(offered.models.map((entry) => entry.value), ['m-default', 'm-fast'], 'grouped model options were not flattened into the list')
+  assert.equal(offered.currentModel, 'm-default')
+  const send = (sessionId: string, model: string) => instances.withProviderInstance('acp', 'acp', async () => drain(await backend.streamViewSessionTurn({
+    sessionId, provider: 'acp', signal: new AbortController().signal, body: { message: 'hi', cwd: dir, model },
+  })))
+  assert.ok((await send(created.sessionId, 'm-fast')).includes('hello from env on m-fast'), 'the chosen model was not applied before the prompt')
+  assert.equal((await instances.withProviderInstance('acp', 'acp', () => adapter.readModels!(created.sessionId))).currentModel, 'm-fast')
+  const unknown = await send(created.sessionId, 'm-missing')
+  assert.ok(unknown.includes('does not offer the model') && !unknown.includes('hello from'), `a model the agent never offered was sent anyway: ${unknown}`)
+  // A session not yet started is offered the agent's last list, with no current model.
+  const cold = await instances.withProviderInstance('acp', 'acp', () => adapter.readModels!('not-started'))
+  assert.deepEqual([cold.models.length, cold.currentModel], [2, null])
+
   // --- Two instances are two agents, each with its own command.
   await instances.writeProviderInstancesFile({ version: 1, instances: [
     { id: 'gemini', provider: 'acp', displayName: 'Gemini', executable: command('gemini') },
@@ -132,17 +150,35 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
   }
   assert.deepEqual(await instances.withProviderInstance('acp', 'acp', () => adapter.listSessions!({ limit: 10, offset: 0 } as never)), [], 'the default agent advertises no listing and must list nothing')
 
+
   // --- The panel can staff one: a managed teammate gets coord_* over MCP, bound to itself.
   const coord = await import('../lib/agentCoordination')
   await coord.configureInteractiveCoordinator({ sessionId: created.sessionId, provider: 'acp', cwd: dir })
   const lead = await coord.sessionCoordinatorIdentity(created.sessionId, 'acp')
   const before = seen().length
-  const delegated = await coord.createExternalProtocolTask(lead, { assignTo: 'auto', requestedProvider: 'acp', title: 'Inspect fixture', detail: 'Read-only review' })
+  // Each configured agent is its own staffing choice; one with no command is not offered.
+  const { readCoordinatorStaffing } = await import('../lib/coordinatorCapabilities')
+  const { coordinatorInstanceLabel } = await import('../lib/coordinatorInteractiveState')
+  const staffing = await readCoordinatorStaffing()
+  assert.deepEqual(staffing.filter((choice) => choice.provider === 'acp').map((choice) => choice.label), ['ACP agent', 'Gemini', 'Goose'])
+  const envCommand = process.env.AGENT_VIEWER_ACP_COMMAND
+  delete process.env.AGENT_VIEWER_ACP_COMMAND
+  assert.deepEqual((await readCoordinatorStaffing()).filter((choice) => choice.provider === 'acp').map((choice) => choice.label), ['Gemini', 'Goose'], 'an agent with no command was offered for staffing')
+  process.env.AGENT_VIEWER_ACP_COMMAND = envCommand
+  assert.ok(!JSON.stringify(staffing).includes(agentPath), 'a staffing choice leaked its command')
+
+  // Staffed by instance: the teammate is Goose, runs Goose's command, and is named as Goose.
+  const delegated = await coord.createExternalProtocolTask(lead, { assignTo: 'auto', requestedProvider: 'acp', requestedProviderInstanceId: 'goose', title: 'Inspect fixture', detail: 'Read-only review' })
   assert.equal(delegated.delegation?.provider, 'acp', 'the teammate was not staffed from the acp provider')
+  const staffed = (await coord.readProtocolRun(lead.runId))!.agents.find((agent) => agent.id === delegated.delegation!.agentId)!
+  assert.equal(staffed.providerInstanceId, 'goose')
+  assert.equal(coordinatorInstanceLabel(staffed, staffing), 'Goose', 'the roster cannot name the teammate\'s agent')
+  assert.equal(coordinatorInstanceLabel({ provider: 'acp', providerInstanceId: 'acp' }, staffing), null, 'a default instance already goes by its provider\'s name')
   const deadline = Date.now() + 30_000
   while (seen().length === before && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50))
   const record = seen().at(-1)
   assert.ok(seen().length > before, 'the staffed teammate never ran a turn')
+  assert.equal(record.label, 'goose', 'the teammate ran another instance\'s command')
   assert.deepEqual(record.servers, ['agent-viewer'], 'the teammate was not handed the Coordinator MCP server')
   assert.ok(record.tools.includes('coord_complete_task') && record.tools.includes('coord_read_inbox'), 'the MCP server does not list the tool contract')
   assert.ok(!record.status.isError, `coord_status failed for the teammate: ${JSON.stringify(record.status)}`)

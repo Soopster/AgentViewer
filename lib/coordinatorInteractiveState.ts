@@ -19,6 +19,30 @@ export type CoordinatorInteractiveState = {
    */
   backgroundAgents?: { agentId: string; tasks: number; wakeups: number }[]
   permissions: { agentId: string; agentName: string; permission: PendingPermission }[]
+  /**
+   * What a new teammate may be staffed from: one entry per provider instance,
+   * so two configured ACP agents are two choices rather than one "acp".
+   * Optional: a daemon older than this field simply omits it.
+   */
+  staffing?: CoordinatorStaffingChoice[]
+}
+
+export type CoordinatorStaffingChoice = {
+  provider: ProtocolAgent['provider']
+  providerInstanceId: string
+  /** The instance's display name; the provider's own name for its default instance. */
+  label: string
+  isDefault: boolean
+}
+
+/**
+ * The name a configured instance was given ("Gemini"), or null where the
+ * provider's own name already says it — a default instance, or one this host no
+ * longer has configured.
+ */
+export function coordinatorInstanceLabel(agent: Pick<ProtocolAgent, 'provider' | 'providerInstanceId'>, staffing: readonly CoordinatorStaffingChoice[] | undefined): string | null {
+  if (!agent.providerInstanceId || agent.providerInstanceId === agent.provider) return null
+  return staffing?.find(choice => choice.providerInstanceId === agent.providerInstanceId && choice.provider === agent.provider)?.label ?? null
 }
 
 /**
