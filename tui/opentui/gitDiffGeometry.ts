@@ -70,3 +70,22 @@ export function resolveDiffAnchor(geometry: DiffGeometry, anchor: DiffViewportAn
   }
   return Math.min(anchor.fallbackTop, Math.max(0, geometry.total - 1))
 }
+
+/** Rows of context kept around the cursor while stepping, like Vim's `scrolloff`. */
+export const DIFF_SCROLL_OFF = 5
+
+/** Where the viewport must sit for a row to be visible with a margin around it.
+ *
+ *  Runs on every step key, so it moves the minimum distance and stays put while
+ *  the row already has its margin. A margin that would leave the row no room is
+ *  clamped to half the viewport, so it can never make the target unreachable. */
+export function revealDiffScrollTop(rowTop: number, rowHeight: number, scrollTop: number, viewportHeight: number, scrollOff = DIFF_SCROLL_OFF): number {
+  const height = Math.max(1, rowHeight)
+  const viewport = Math.max(0, viewportHeight)
+  // A wrapped row taller than the viewport cannot fit: show where it starts.
+  if (height >= viewport) return Math.max(0, rowTop)
+  const margin = Math.max(0, Math.min(scrollOff, Math.floor((viewport - height) / 2)))
+  if (rowTop - margin < scrollTop) return Math.max(0, rowTop - margin)
+  if (rowTop + height + margin > scrollTop + viewport) return Math.max(0, rowTop + height + margin - viewport)
+  return scrollTop
+}

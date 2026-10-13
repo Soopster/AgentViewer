@@ -1822,6 +1822,35 @@ reason — a stale branch name for the moment before a refresh lands beats a bla
 `gitSummaryCacheSmoke.ts` asserts the reuse by timing (a cached read must be far under a real ~26ms
 one), because spawn count has no other observable.
 
+#### Git popover: workspace status, conflicts and scroll margin
+
+Taken from hunk 0.24 (`hunk status`, `scroll_off`, compact rename labels). `lib/gitWorkspaceStatus.ts`
+is the one module both popovers read; it has no Node imports, so client components import its helpers.
+
+- **The Status pane is a workspace compass, and it is one text for both UIs.** `fetchGitPaneContent`
+  pane 1 returns `formatGitWorkspaceStatus`: branch and upstream (zero counters omitted), a paused
+  operation, tracked and untracked groups in words (`modified (staged) · modified (unstaged)`), and
+  sibling worktrees. **No line may start with `+`, `-` or `@@`** — both popovers colour that pane's
+  text by diff prefix.
+- **A sibling that cannot be read is never a clean one.** A `prunable` or `bare` worktree is not
+  read at all, and a status with no `## ` header is `unreadable`. Reads use `--no-optional-locks`
+  (a plain `status` refreshes the index and takes the lock an agent in that worktree may be waiting
+  on), four at a time, capped at `WORKTREE_SIBLING_LIMIT` with the remainder counted.
+- **The paused operation is one spawn**: `git log --no-walk --ignore-missing --format=%S` over the
+  operation heads prints exactly the ones that exist. It rides `GitData.operation`.
+- **An unmerged path is checked before "staged"** (`isConflictEntry`). `UU` has a letter in the
+  staged column, so the tree painted a conflict green and showed one letter; `DD`/`AA` read as a
+  deletion and an addition.
+- **Only a rename or copy has an origin.** ` -> ` is a legal part of any other file name, so
+  `previousPath` is split out only when the status letter says so.
+- **Stepping keeps `DIFF_SCROLL_OFF` rows around the cursor** (`revealDiffScrollTop`), moving the
+  minimum distance. The margin is clamped to half the viewport or the row becomes unreachable, and
+  a wrapped row taller than the viewport shows its top.
+
+`gitWorkspaceStatusSmoke.tsx` builds a real repository with a paused merge, a staged rename and two
+sibling worktrees (one deleted from disk); eight mutations were verified to fail it. Not done: a
+sibling cannot be opened from the pane, and the web file tree does not show rename origins.
+
 #### OpenTUI memory patterns (load-bearing)
 
 The TUI's footprint is dominated by **parsed module code across isolates**, not by live objects. A

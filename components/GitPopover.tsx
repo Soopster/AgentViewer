@@ -12,6 +12,7 @@ import type { SelectedLineRange } from '@pierre/diffs'
 import { FileTree, useFileTree } from '@pierre/trees/react'
 import { prepareFileTreeInput, themeToTreeStyles } from '@pierre/trees'
 import type { GitData, GitDiffSource, GitStatusEntry, GitTurnRef } from '@/lib/gitProvider'
+import { describeOperation, isConflictEntry } from '@/lib/gitWorkspaceStatus'
 import { DIFF_SOURCE_HEAD_ITEMS, diffSourceKey, diffSourceLabel, isSameSelection, resolveDiffSource, turnMenuItems, type DiffSourceSelection } from '@/lib/gitDiffSourceMenu'
 import type { GitStatusEntry as TreeGitStatusEntry } from '@pierre/trees'
 import { getCurrentTheme, subscribeTheme, THEME_META, type Theme } from '@/lib/themes'
@@ -1033,6 +1034,10 @@ export default function GitPopover({ open, onClose, cwd, sessionId, variant }: P
 
   const diffLines = rightContent.split('\n')
   const changedFileCount = data?.status.length ?? 0
+  const operationNotice = data ? describeOperation({
+    operation: data.operation ?? null,
+    conflicts: diffSource.kind === 'working' ? data.status.filter((entry) => isConflictEntry(entry.x, entry.y)).length : 0,
+  }) : null
   const selectedEntry = data?.status.find((entry) => entry.path === selectedFilePath)
   const currentSelectionNote = useMemo(() => {
     if (!selectedFilePath || !selectedLines) return null
@@ -1901,6 +1906,7 @@ export default function GitPopover({ open, onClose, cwd, sessionId, variant }: P
               <div style={{ padding: 14, display: 'grid', gap: 10, overflow: 'auto' }}>
                 <InfoCard label="Branch" value={data?.branch ?? 'HEAD'} tone="violet" />
                 <InfoCard label={sourceLabel} value={changedFileCount === 0 ? 'Clean' : `${changedFileCount} changed files`} tone={changedFileCount === 0 ? 'green' : 'amber'} />
+                {operationNotice ? <InfoCard label="In progress" value={operationNotice} tone="amber" /> : null}
                 <InfoCard label="Upstream" value={data?.upstream ?? 'No upstream configured'} tone="muted" />
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                   <InfoCard label="Ahead" value={String(data?.ahead ?? 0)} tone="green" />

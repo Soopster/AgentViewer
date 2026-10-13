@@ -1,7 +1,11 @@
+import { fetchGitOperation, fetchGitWorkspaceStatus, formatGitWorkspaceStatus, isConflictEntry, type GitOperation } from './gitWorkspaceStatus'
+
 export type GitStatusEntry = {
   x: string
   y: string
   path: string
+  /** Where a renamed or copied file came from. */
+  previousPath?: string
 }
 
 export type GitData = {
@@ -15,6 +19,8 @@ export type GitData = {
   branches: string[]
   commits: string[]
   commitGraph: GitCommit[]
+  /** A merge, rebase, cherry-pick, revert or bisect the worktree is paused in. */
+  operation?: GitOperation | null
 }
 
 export type GitCommit = {
@@ -109,11 +115,14 @@ export function isAllowedGitCommand(args: unknown): args is string[] {
 
 function parseGitStatus(statusRaw: string): GitStatusEntry[] {
   return statusRaw
-    ? statusRaw.split('\n').filter(Boolean).map((line) => ({
-        x: line[0] ?? ' ',
-        y: line[1] ?? ' ',
-        path: line.slice(3),
-      }))
+    ? statusRaw.split('\n').filter(Boolean).map((line) => {
+        const x = line[0] ?? ' '
+        const y = line[1] ?? ' '
+        const path = line.slice(3)
+        // `path` keeps porcelain's `old -> new` spelling, which callers already split.
+        const arrow = x === 'R' || y === 'R' || x === 'C' || y === 'C' ? path.indexOf(' -> ') : -1
+        return arrow < 0 ? { x, y, path } : { x, y, path, previousPath: path.slice(0, arrow) }
+      })
     : []
 }
 
@@ -183,11 +192,12 @@ function reviewPath(entry: GitStatusEntry): string {
 
 function statusLabel(entry: GitStatusEntry): string {
   if (entry.x === '?' && entry.y === '?') return 'untracked'
+  // Ahead of the per-letter checks: `DD` and `AA` are conflicts, not a deletion or an addition.
+  if (isConflictEntry(entry.x, entry.y)) return 'conflict'
   if (entry.x === 'D' || entry.y === 'D') return 'deleted'
   if (entry.x === 'A' || entry.y === 'A') return 'added'
   if (entry.x === 'R' || entry.y === 'R') return 'renamed'
   if (entry.x === 'C' || entry.y === 'C') return 'copied'
-  if (entry.x === 'U' || entry.y === 'U') return 'conflict'
   return 'modified'
 }
 
@@ -215,13 +225,14 @@ async function fetchReviewPatch(cwd: string, runGit: GitCommandRunner, entry: Gi
 export async function fetchGitData(cwd: string, runGit: GitCommandRunner): Promise<GitData> {
   // Full working-tree diffs are deferred to the per-pane loader so opening the
   // popover stays responsive on large repositories and slower platforms.
-  const [branch, upstreamRaw, statusRaw, branchesRaw, commitsRaw, graphRaw] = await Promise.all([
+  const [branch, upstreamRaw, statusRaw, branchesRaw, commitsRaw, graphRaw, operation] = await Promise.all([
     runGit(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']),
     runGit(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']),
     runGit(cwd, ['status', '--porcelain', '-u']),
     runGit(cwd, ['branch', '-a', '--format=%(refname:short)']),
     runGit(cwd, ['log', '--format=%H%x09%h%x09%s%x09%P', '-30']),
     runGit(cwd, ['log', '--graph', '--oneline', '--decorate', '-30']),
+    fetchGitOperation(cwd, runGit),
   ])
 
   const upstream = upstreamRaw.startsWith('fatal') ? null : upstreamRaw || null
@@ -237,6 +248,7 @@ export async function fetchGitData(cwd: string, runGit: GitCommandRunner): Promi
     upstream,
     ahead,
     behind,
+    operation,
     status: parseGitStatus(statusRaw),
     unstaged: '',
     staged: '',
@@ -312,6 +324,8 @@ export async function fetchGitPaneContent({
         : '(working tree clean)')
     }
     case 1: {
+      const workspace = await fetchGitWorkspaceStatus(cwd, runGit)
+      if (workspace) return formatGitWorkspaceStatus(workspace)
       const parts = [`Branch:   ${data.branch}`]
       parts.push(data.upstream
         ? `Upstream: ${data.upstream}  ↑${data.ahead}  ↓${data.behind}`

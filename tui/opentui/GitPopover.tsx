@@ -9,6 +9,7 @@ import type { MouseEvent, ScrollBoxRenderable } from '@opentui/core'
 import type { SelectedLineRange } from '@pierre/diffs'
 import type { TuiThemePalette } from '../theme'
 import { prepareFileTreeInput } from '@pierre/trees'
+import { describeOperation, isConflictEntry, renameOriginLabel } from '../../lib/gitWorkspaceStatus'
 import { fetchGitData, fetchGitPaneContent, type GitData, type GitDiffSource, type GitStatusEntry, type GitTurnRef } from '../../lib/gitProvider'
 import { fetchSourceDiff, fetchSourceStatus, listGitTurnsForMenu } from '../../lib/gitDiffSources'
 import { DIFF_SOURCE_HEAD_ITEMS, diffSourceKey, diffSourceLabel, isSameSelection, resolveDiffSource, turnMenuItems, type DiffSourceMenuItem, type DiffSourceSelection } from '../../lib/gitDiffSourceMenu'
@@ -21,7 +22,7 @@ import {
   type TuiPierreSplitRow,
   type TuiSplitRowSide,
 } from './pierreDiffView'
-import { buildDiffGeometry, diffRowAt, diffRowKeys, type DiffGeometry } from './gitDiffGeometry'
+import { buildDiffGeometry, diffRowAt, diffRowKeys, revealDiffScrollTop, type DiffGeometry } from './gitDiffGeometry'
 import { applyDiffContext, nearestDiffContextGap } from './gitDiffContext'
 import { useGitDiffContext } from './useGitDiffContext'
 import { fetchGitReviewStream } from './gitReviewStream'
@@ -46,7 +47,7 @@ import { readTuiDiffReviewState, tuiDiffReviewStorageKey, writeTuiDiffReviewStat
 // merged single-child dir. Used so expand/collapse toggles all segments together.
 type TreeNode =
   | { kind: 'dir'; path: string; name: string; depth: number; expanded: boolean; chainPaths: readonly string[] }
-  | { kind: 'file'; path: string; name: string; depth: number; x: string; y: string }
+  | { kind: 'file'; path: string; name: string; depth: number; x: string; y: string; previousPath?: string }
 
 function buildVisibleNodes(entries: GitStatusEntry[], expandedDirs: Set<string>): TreeNode[] {
   if (entries.length === 0) return []
@@ -106,7 +107,7 @@ function buildVisibleNodes(entries: GitStatusEntry[], expandedDirs: Set<string>)
     }
     for (const entry of dir.files) {
       const name = entry.path.split('/').at(-1) ?? entry.path
-      nodes.push({ kind: 'file', path: entry.path, name, depth, x: entry.x, y: entry.y })
+      nodes.push({ kind: 'file', path: entry.path, name, depth, x: entry.x, y: entry.y, previousPath: entry.previousPath })
     }
   }
 
@@ -671,6 +672,12 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
     }, notes })
   }, [diffLayoutMode, diffTabWidth, horizontalOffset, noteScope, reviewStateKey, showHunkHeaders, showLineNumbers, wrapDiffLines])
   const sourceLabel = diffSourceLabel(sourceSelection, turns)
+  // Conflicts are counted from the working tree alone: another source's file
+  // list has no unmerged entries to count.
+  const operationNotice = useMemo(() => data ? describeOperation({
+    operation: data.operation ?? null,
+    conflicts: sourceSelection.kind === 'working' ? data.status.filter(entry => isConflictEntry(entry.x, entry.y)).length : 0,
+  }) : null, [data, sourceSelection.kind])
   // Said once, at the top of the picker: the numbering below is the repo's, not
   // this session's, and reading it as this session's would be wrong.
   const turnsScopedNotice = sessionId && !turnsScoped && turns.length > 0
@@ -962,7 +969,8 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
     const scroll = diffScrollRef.current
     const row = geometryRef.current.rows[index]
     if (!scroll || !row) return
-    if (row.top < scroll.scrollTop || row.top >= scroll.scrollTop + scroll.viewport.height) scroll.scrollTo(row.top)
+    const top = revealDiffScrollTop(row.top, row.height, scroll.scrollTop, scroll.viewport.height)
+    if (top !== scroll.scrollTop) scroll.scrollTo(Math.min(top, Math.max(0, geometryRef.current.total - scroll.viewport.height)))
   }
 
   const handleKey = useCallback((key: GitKeyEvent) => {
@@ -1356,6 +1364,9 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
 
   function statusColor(x: string, y: string): string {
     if (x === '?' && y === '?') return theme.red  // untracked
+    // Ahead of the staged check: an unmerged path has a letter in the staged
+    // column and would otherwise read as finished work.
+    if (isConflictEntry(x, y)) return theme.red
     if (x.trim()) return theme.green              // staged change
     if (y === 'M') return theme.amber             // unstaged modified
     if (y === 'D') return theme.red               // deleted
@@ -1677,10 +1688,11 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
           <box paddingX={1} width={leftW - 2} flexDirection="row" backgroundColor={pane === 1 ? theme.cyan : 'transparent'}>
             <text fg={pane === 1 ? theme.surface : theme.muted}>[1] Status</text>
           </box>
-          <box paddingX={1}>
+          <box paddingX={1} flexDirection="row" width={leftW - 2} height={1} overflow="hidden">
             <text fg={theme.text} wrapMode="none">
-              {loading ? 'loading…' : data ? `${data.branch}${data.upstream ? `  ↑${data.ahead}↓${data.behind}` : ''}` : '…'}
+              {loading ? 'loading…' : data ? `${data.branch}${data.upstream ? `  ${[data.ahead ? `↑${data.ahead}` : '', data.behind ? `↓${data.behind}` : ''].join('') || '≡'}` : ''}` : '…'}
             </text>
+            {!loading && operationNotice ? <text fg={theme.red} wrapMode="none">{`  ${operationNotice}`}</text> : null}
           </box>
           <box paddingX={1} flexDirection="row">
             <text fg={sourceSelection.kind === 'working' ? theme.muted : theme.cyan} wrapMode="none">
@@ -1723,8 +1735,10 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
                 label = `${indent}${node.expanded ? '▼' : '▶'} ${node.name}`
                 labelColor = isCursor ? theme.text : theme.muted
               } else {
-                const flags = node.x.trim() || node.y.trim() ? (node.x.trim() || node.y) : '??'
-                label = `${indent}${flags} ${node.name}`
+                // A conflict keeps both letters: `UU`, `AA` and `DU` are different jobs.
+                const flags = isConflictEntry(node.x, node.y) ? node.x + node.y : node.x.trim() || node.y.trim() ? (node.x.trim() || node.y) : '??'
+                const origin = node.previousPath ? ` ← ${renameOriginLabel(node.previousPath, node.path)}` : ''
+                label = `${indent}${flags} ${node.name}${origin}`
                 labelColor = isCursor ? theme.text : statusColor(node.x, node.y)
               }
               return (
@@ -2182,7 +2196,12 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
             <>
               {diffLines.slice(window.start, window.end).map((line, localIndex) => {
                 const i = window.start + localIndex
-                const fg = line.startsWith('+') && !line.startsWith('+++')
+                const fg = pane === 1
+                  // The Status pane is prose, not a patch: headings lead, trouble is red, paths recede.
+                  ? /conflict|in progress|missing \(|unreadable|is gone/.test(line) ? theme.red
+                    : line.startsWith('    ') ? theme.dim
+                    : line.startsWith('  ') ? theme.muted : theme.text
+                  : line.startsWith('+') && !line.startsWith('+++')
                   ? theme.green
                   : line.startsWith('-') && !line.startsWith('---')
                     ? theme.red
