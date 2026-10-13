@@ -1,4 +1,6 @@
-import { coordinatorBackgroundWork } from './coordinatorInteractiveState'
+import { coordinatorWaitingPolicy } from './coordinatorWaitingPolicy'
+import { coordinatorBackgroundWork, type CoordinatorDeadAgent } from './coordinatorInteractiveState'
+import { markCoordinatorRejection } from './coordinatorRejection'
 import { readCoordinatorCapabilities, validateCoordinatorSelection } from './coordinatorCapabilities'
 import { coordinatorCheckoutRevision } from './coordinatorResultGit'
 // Coordinator for A2A 1.0 multi-agent runs, modeled on Claude Code agent teams:
@@ -1585,6 +1587,9 @@ function externalActionableSync(db: SqliteDatabase, runId: string, agentId: stri
   const replyGuard = agent && myTaskRow ? replyGuardCheckSync(db, runId, agent, myTaskRow.id) : null
   return {
     runStatus: run.status,
+    ...(agent ? { waitingPolicy: coordinatorWaitingPolicy(agent,
+      Boolean(controllers.get(runId)?.sdkIdentities.has(agent.id)
+        || (!agent.sessionId.startsWith('external:') && db.prepare('SELECT 1 FROM protocol_interactive_sessions WHERE run_id = ?').get(runId)))) } : {}),
     claimableTasks: claimable.map((task) => ({ id: task.id, title: task.title, targetRole: task.targetRole })),
     inboxCount: ordinaryRows.length + readyStatusGroups.size,
     urgentCount: ordinaryRows.filter((row) => row.priority === 'urgent').length,
@@ -2458,6 +2463,121 @@ async function externalMutationResult(
   return externalMutationResultSync(db, identity.runId, identity.agentId, task)
 }
 
+function externalTaskInspectionSync(db: SqliteDatabase, runId: string, taskId: string) {
+  const row = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?').get(runId, taskId) as Row | undefined
+  if (!row) throw new Error('Coordinator task not found')
+  const storedTask = rowToTask(row)
+  // Match ordinary external status: dispatch policy stays private.
+  const { claudeAgentPolicy: _policy, ...task } = storedTask
+  const tasks = listTasksSync(db, runId)
+  const descendantIds = new Set([taskId])
+  // A dependency chain can be arbitrarily ordered; walk to a fixed point.
+  for (let changed = true; changed;) {
+    changed = false
+    for (const candidate of tasks) {
+      if (!descendantIds.has(candidate.id) && candidate.blockedBy.some(id => descendantIds.has(id))) {
+        descendantIds.add(candidate.id); changed = true
+      }
+    }
+  }
+  const generations = new Map((db.prepare('SELECT id, claim_generation FROM protocol_tasks WHERE run_id = ?').all(runId) as Row[]).map(row => [String(row.id), Number(row.claim_generation)]))
+  const dependents = tasks.filter(candidate => candidate.id !== taskId && descendantIds.has(candidate.id))
+    .map(candidate => ({ id: candidate.id, status: candidate.status, ownerAgentId: candidate.ownerAgentId, claimGeneration: generations.get(candidate.id), blockedBy: candidate.blockedBy, updatedAt: candidate.updatedAt }))
+    .sort((a, b) => a.id.localeCompare(b.id))
+  const claimGeneration = Number(row.claim_generation)
+  const revision = createHash('sha256').update(JSON.stringify({ task: storedTask, claimGeneration, dependents })).digest('hex')
+  const unfinished = dependents.filter(candidate => !['completed', 'failed', 'cancelled'].includes(candidate.status))
+  return { task, claimGeneration, revision, cancellationImpact: { dependentTaskCount: unfinished.length, dependentTasks: unfinished.slice(0, 50), truncated: unfinished.length > 50 } }
+}
+
+/** Exact durable task data, including receipts that aged out of ordinary status. */
+export async function readExternalProtocolTask(identity: ExternalProtocolIdentity, taskId: string) {
+  const db = await getDatabase()
+  requireExternalParticipantSync(db, identity)
+  return externalTaskInspectionSync(db, identity.runId, taskId)
+}
+
+/** Keyset pagination by insertion order; updates do not move tasks between pages. */
+export async function listExternalProtocolTasks(identity: ExternalProtocolIdentity, params: { cursor?: string; limit?: number; status?: ProtocolTaskStatus } = {}) {
+  const db = await getDatabase()
+  requireExternalParticipantSync(db, identity)
+  const limit = params.limit ?? 20
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error('Task limit must be an integer between 1 and 100')
+  let after = 0
+  if (params.cursor) {
+    let decoded: { runId?: unknown; rowid?: unknown; status?: unknown }
+    try { decoded = JSON.parse(Buffer.from(params.cursor, 'base64url').toString('utf8')) } catch { throw new Error('Invalid task cursor') }
+    if (decoded?.runId !== identity.runId || decoded.status !== (params.status ?? null) || !Number.isSafeInteger(decoded.rowid) || Number(decoded.rowid) < 0) throw new Error('Task cursor belongs to another run or filter, or is invalid')
+    after = Number(decoded.rowid)
+  }
+  const rows = db.prepare(`SELECT rowid AS page_rowid, * FROM protocol_tasks WHERE run_id = ? AND rowid > ?${params.status ? ' AND status = ?' : ''} ORDER BY rowid ASC LIMIT ?`)
+    .all(identity.runId, after, ...(params.status ? [params.status] : []), limit + 1) as Row[]
+  const page = rows.slice(0, limit)
+  const hasMore = rows.length > limit
+  return {
+    tasks: page.map(row => {
+      const task = rowToTask(row)
+      return { id: task.id, title: task.title, status: task.status, ownerAgentId: task.ownerAgentId, targetRole: task.targetRole, phase: task.phase, blockedBy: task.blockedBy, updatedAt: task.updatedAt, hasReceipt: Boolean(task.receipt), hasHandoff: Boolean(task.contextHandoff) }
+    }),
+    hasMore,
+    nextCursor: hasMore ? Buffer.from(JSON.stringify({ runId: identity.runId, rowid: Number(page.at(-1)!.page_rowid), status: params.status ?? null })).toString('base64url') : null,
+  }
+}
+
+export async function cancelExternalProtocolTask(identity: ExternalProtocolIdentity, params: { taskId: string; expectedRevision: string; reason: string }) {
+  const db = await getDatabase()
+  if (requireExternalParticipantSync(db, identity).role !== 'lead') throw new Error('Only the Coordinator lead can cancel a task')
+  if (foreignInteractiveHostSync(db, identity.runId)) throw new Error('This team is running in another local Agent Viewer host. Use that host to cancel work.')
+  const inspected = externalTaskInspectionSync(db, identity.runId, params.taskId)
+  if (inspected.revision !== params.expectedRevision) throw new Error('Task or dependent work changed since inspection; call coord_read_task before cancelling')
+  const cancelled = await cancelInteractiveTask(identity, params.taskId, params.reason, params.expectedRevision)
+  return { ...cancelled, task: await readExternalProtocolTask(identity, params.taskId), cancellationImpact: inspected.cancellationImpact }
+}
+
+/** Internal authenticated context for result review; independent of chat-session rebinding. */
+export async function readExternalProtocolResultContext(identity: ExternalProtocolIdentity, taskId: string) {
+  const db = await getDatabase()
+  const lead = requireExternalParticipantSync(db, identity)
+  if (lead.role !== 'lead') throw new Error('Only the Coordinator lead can review or integrate a result')
+  return { lead, snapshot: readSnapshotSync(db, identity.runId)!, task: externalTaskInspectionSync(db, identity.runId, taskId).task, executionElsewhere: foreignInteractiveHostSync(db, identity.runId) }
+}
+
+export async function claimExternalProtocolResultHost(identity: ExternalProtocolIdentity): Promise<void> {
+  const db = await getDatabase()
+  if (requireExternalParticipantSync(db, identity).role !== 'lead') throw new Error('Only the Coordinator lead can integrate a result')
+  await enqueueWrite(tx => claimInteractiveHostSync(tx, identity.runId))
+}
+
+/** Look up only this authenticated participant's keyed operation; no replay or cache bodies. */
+export async function inspectExternalProtocolOperation(identity: ExternalProtocolIdentity, action: string, requestId: string) {
+  const db = await getDatabase()
+  requireExternalParticipantSync(db, identity)
+  const attempt = db.prepare('SELECT state, created_at, error_message FROM protocol_operation_attempts WHERE run_id = ? AND agent_id = ? AND action = ? AND request_id = ?')
+    .get(identity.runId, identity.agentId, action, requestId) as Row | undefined
+  const cached = db.prepare('SELECT response_json FROM protocol_idempotency WHERE run_id = ? AND agent_id = ? AND action = ? AND request_id = ?')
+    .get(identity.runId, identity.agentId, action, requestId) as Row | undefined
+  const state = cached ? 'completed' : attempt ? String(attempt.state) : 'not_found'
+  let returnedTaskId: string | undefined
+  let returnedAgentId: string | undefined
+  if (typeof cached?.response_json === 'string') {
+    const result = JSON.parse(cached.response_json)
+    const taskId = result?.task?.task?.id ?? result?.task?.id ?? result?.taskId
+    const agentId = result?.delegation?.agentId ?? result?.agentId
+    if (typeof taskId === 'string') returnedTaskId = taskId
+    if (typeof agentId === 'string') returnedAgentId = agentId
+  }
+  return {
+    runId: identity.runId, agentId: identity.agentId, action, requestId, state,
+    createdAt: attempt?.created_at, hasCachedResult: Boolean(cached), returnedTaskId, returnedAgentId,
+    recordedError: typeof attempt?.error_message === 'string' ? attempt.error_message.split(identity.token).join('[redacted]').slice(0, 500) : undefined,
+    guidance: state === 'completed'
+      ? cached ? 'Retry the original tool with identical arguments and request_id to retrieve its cached receipt; this does not repeat the operation.' : 'The operation completed but its cached receipt expired. Inspect task/status/context; do not repeat it under a new key.'
+      : state === 'running' ? 'The ledger records an in-flight or interrupted attempt, not proof of a live process. Inspect the owning host and task/status/context. Retrying the original key can retrieve a later recorded receipt; do not restart solely because observation timed out.'
+        : state === 'failed' ? 'The prior attempt failed after possible side effects. Inspect task/status/context before further work; do not bypass uncertainty with a new request_id.'
+          : 'No keyed record exists for this participant/tool/key. This does not prove an unkeyed or setup mutation did not apply; reconcile task/status/context before resubmitting.',
+  }
+}
+
 export async function readExternalProtocolStatus(identity: ExternalProtocolIdentity): Promise<ExternalProtocolStatusResult> {
   const db = await getDatabase()
   requireExternalParticipantSync(db, identity)
@@ -2791,7 +2911,7 @@ export async function runExternalProtocolIdempotent<T>(
             : previous.state === 'failed'
               ? `The prior attempt failed: ${String(previous.error_message || 'unknown error')}. Its effects may be partial.`
               : 'The operation is still running in another dispatcher or was interrupted before its result was recorded.'
-          throw new Error(`COORDINATOR_OPERATION_UNCERTAIN: ${detail} Read status/inbox/context to reconcile the outcome. Retrying this key can retrieve a subsequently recorded result; do not repeat the mutation with a new key until its effects are understood.`)
+          throw new Error(`COORDINATOR_OPERATION_UNCERTAIN: ${detail} Inspect the original tool/key with coord_inspect_operation, then read task/status/inbox/context to reconcile the outcome. Retrying this key can retrieve a subsequently recorded result; do not repeat the mutation with a new key until its effects are understood.`)
         }
         db.prepare(`
           INSERT INTO protocol_operation_attempts
@@ -2853,6 +2973,7 @@ export async function runExternalProtocolIdempotent<T>(
             WHERE run_id = ? AND agent_id = ? AND action = ? AND request_id = ?`)
             .run(identity.runId, identity.agentId, action, key)
         })
+        markCoordinatorRejection(error)
         throw error
       }
       // A thrown exception may follow an irreversible side effect. Retain the
@@ -4451,7 +4572,7 @@ export async function cancelExternalProtocolTurn(
  * createProtocolTaskAdmin — an A2A client addresses the board, not a task
  * it owns as a named teammate.
  */
-export async function cancelProtocolTask(runId: string, taskId: string, reason?: string): Promise<ProtocolTask> {
+export async function cancelProtocolTask(runId: string, taskId: string, reason?: string, expectedRevision?: string, actorId = A2A_CLIENT_AGENT_ID): Promise<ProtocolTask> {
   const result = await enqueueWrite((db) => {
     const taskRow = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?')
       .get(runId, taskId) as Row | undefined
@@ -4463,6 +4584,7 @@ export async function cancelProtocolTask(runId: string, taskId: string, reason?:
     const ts = nowIso()
     db.exec('BEGIN IMMEDIATE')
     try {
+      if (expectedRevision && externalTaskInspectionSync(db, runId, taskId).revision !== expectedRevision) throw new Error('Task or dependent work changed since inspection; call coord_read_task before cancelling')
       db.prepare("UPDATE protocol_tasks SET status = 'cancelled', updated_at = ? WHERE run_id = ? AND id = ?")
         .run(ts, runId, task.id)
       if (task.ownerAgentId) {
@@ -4474,13 +4596,13 @@ export async function cancelProtocolTask(runId: string, taskId: string, reason?:
       insertEventSync(db, {
         version: AGENT_PROTOCOL_VERSION,
         runId,
-        agentId: A2A_CLIENT_AGENT_ID,
+        agentId: actorId,
         type: 'task.cancelled',
         taskId: task.id,
         summary: reason?.trim() || `${task.id} cancelled via A2A tasks/cancel`,
         timestamp: ts,
       })
-      failUnfulfillableDependentsSync(db, runId, A2A_CLIENT_AGENT_ID, ts)
+      failUnfulfillableDependentsSync(db, runId, actorId, ts)
       db.prepare('UPDATE protocol_runs SET updated_at = ? WHERE id = ?').run(ts, runId)
       db.exec('COMMIT')
       return rowToTask(db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?').get(runId, task.id) as Row)
@@ -7927,6 +8049,33 @@ export async function __setAgentWorktreeForSmoke(runId: string, agentId: string,
     .run(worktreePath, branch, runId, agentId))
 }
 
+/**
+ * A teammate the Coordinator itself gave up on: its provider failed with no
+ * failover left, or it ran out of nudges. That leaves the task `blocked`, the
+ * same status a teammate asking a person for something has, and the two must
+ * not be confused: a question waits for an answer, while a dead turn waits only
+ * to be started again. The newest block on the task says which — a later block
+ * the teammate raised itself is a question again.
+ */
+function deadTeammateSync(db: SqliteDatabase, runId: string, agent: ProtocolAgent, task: ProtocolTask | undefined): CoordinatorDeadAgent | undefined {
+  if (agent.role !== 'teammate' || task?.status !== 'blocked' || task.ownerAgentId !== agent.id) return
+  const row = db.prepare("SELECT agent_id, detail, payload_json FROM protocol_events WHERE run_id = ? AND task_id = ? AND type = 'agent.blocked' ORDER BY rowid DESC LIMIT 1")
+    .get(runId, task.id) as Row | undefined
+  if (!row || row.agent_id !== agent.id) return
+  const payload = parseJsonObject<Record<string, unknown>>(row.payload_json)
+  const failureClass = typeof payload?.failureClass === 'string' ? payload.failureClass : payload?.stalled === true ? 'stalled' : undefined
+  if (!failureClass) return
+  return { agentId: agent.id, taskId: task.id, failureClass, detail: row.detail ? String(row.detail).replace(/\s+/g, ' ').slice(0, 240) : undefined }
+}
+
+/** Teammates whose turn died under them and can be started again with `resumeInteractiveAgent`. */
+export async function readInteractiveDeadAgents(runId: string): Promise<CoordinatorDeadAgent[]> {
+  const db = await getDatabase()
+  const snapshot = readSnapshotSync(db, runId)
+  if (!snapshot || ['completed', 'failed', 'stopped'].includes(snapshot.run.status)) return []
+  return snapshot.agents.flatMap(agent => deadTeammateSync(db, runId, agent, snapshot.tasks.find(task => task.id === agent.taskId)) ?? [])
+}
+
 export async function readInteractiveRecoveries(runId: string): Promise<string[]> {
   const db = await getDatabase()
   const snapshot = readSnapshotSync(db, runId)
@@ -7943,7 +8092,7 @@ export async function readInteractiveRecoveries(runId: string): Promise<string[]
     if (acknowledgeableDispatchSync(db, snapshot, agent)) return false
     const dispatchedTask = reserved?.task_id ? snapshot.tasks.find(entry => entry.id === reserved.task_id) : undefined
     if (!agent.taskId && dispatchedTask && ['completed', 'failed', 'cancelled'].includes(dispatchedTask.status)) return false
-    return Boolean(reserved) || task?.status === 'in_progress' || task?.status === 'planning'
+    return Boolean(reserved) || task?.status === 'in_progress' || task?.status === 'planning' || Boolean(deadTeammateSync(db, runId, agent, task))
   }).map(agent => agent.id)
 }
 
@@ -7972,11 +8121,44 @@ export async function readSettledInteractiveExecutions(runId: string): Promise<s
   return snapshot.agents.filter(agent => acknowledgeableDispatchSync(db, snapshot, agent)).map(agent => agent.id)
 }
 
+/** Authenticated read-only recovery inspection; never claims a host or submits work. */
+export async function inspectExternalProtocolRecovery(identity: ExternalProtocolIdentity, target?: string) {
+  const db = await getDatabase()
+  if (requireExternalParticipantSync(db, identity).role !== 'lead') throw new Error('Only the Coordinator lead can inspect team recovery')
+  const snapshot = readSnapshotSync(db, identity.runId)!
+  const agents = snapshot.agents.filter(agent => agent.role === 'teammate' && (!target || agent.id === target || agent.name === target))
+  if (target && !agents.length) throw new Error(`Coordinator teammate not found: ${target}`)
+  const executionElsewhere = foreignInteractiveHostSync(db, identity.runId)
+  const recoveries = await readInteractiveRecoveries(identity.runId)
+  const { inspectRecoveryAgent } = await import('./coordinatorRecoveryServer')
+  const executions = await Promise.all(agents.map(async agent => {
+    const reserved = db.prepare('SELECT task_id, created_at FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').get(identity.runId, agent.id) as Row | undefined
+    return {
+      agentId: agent.id, name: agent.name, provider: agent.provider, providerInstanceId: agent.providerInstanceId,
+      taskId: agent.taskId, sessionId: agent.sessionId,
+      recoveryClaim: agent.taskId ? { taskId: agent.taskId, sessionId: agent.sessionId, claimGeneration: Number((db.prepare('SELECT claim_generation FROM protocol_tasks WHERE run_id = ? AND id = ?').get(identity.runId, agent.taskId) as Row | undefined)?.claim_generation) } : null,
+      reservation: reserved ? { taskId: String(reserved.task_id), createdAt: String(reserved.created_at) } : null,
+      // Diagnostic at inspection time; acknowledgement rechecks atomically.
+      canAcknowledge: !executionElsewhere && Boolean(acknowledgeableDispatchSync(db, snapshot, agent)),
+      needsRecovery: recoveries.includes(agent.id),
+      evidence: await inspectRecoveryAgent(agent),
+    }
+  }))
+  return { runId: identity.runId, executionElsewhere, executions,
+    guidance: executionElsewhere ? 'Use the owning Agent Viewer host; this host cannot acknowledge or resume execution.' : 'Inspect the saved transcript before acknowledgement. Only a completed or relinquished reservation can be retired; unfinished work requires transcript inspection and coord_resume_agent in the owning host.' }
+}
+
 /** User acknowledgement retires a completed/relinquished execution, never an owned unfinished one. */
-export async function reconcileSettledInteractiveExecution(identity: ExternalProtocolIdentity, agentId: string): Promise<void> {
+export async function reconcileSettledInteractiveExecution(identity: ExternalProtocolIdentity, agentId: string, expected?: { taskId: string; createdAt: string }): Promise<void> {
   await serializeAutomaticDelegation(identity.runId, async () => {
     const db = await getDatabase()
     if (requireExternalParticipantSync(db, identity).role !== 'lead') throw new Error('Only the lead conversation can acknowledge a settled execution')
+    if (foreignInteractiveHostSync(db, identity.runId)) throw new Error('This team is running in another local Agent Viewer host. Use that host to acknowledge execution.')
+    const initialSnapshot = readSnapshotSync(db, identity.runId)!
+    const initialAgent = initialSnapshot.agents.find(agent => agent.id === agentId)
+    const initialReservation = initialAgent && acknowledgeableDispatchSync(db, initialSnapshot, initialAgent)
+    if (!initialReservation) throw new Error('Inspect the execution first; only completed or relinquished work without a live turn can be acknowledged')
+    if (expected && (initialReservation.task_id !== expected.taskId || initialReservation.created_at !== expected.createdAt)) throw new Error('Execution reservation changed since inspection; inspect recovery again before acknowledging')
     await enqueueWrite(tx => claimInteractiveHostSync(tx, identity.runId))
     if (!(await readSettledInteractiveExecutions(identity.runId)).includes(agentId)) throw new Error('Inspect the execution first; only completed or relinquished work without a live turn can be acknowledged')
     await enqueueWrite(tx => {
@@ -7984,6 +8166,7 @@ export async function reconcileSettledInteractiveExecution(identity: ExternalPro
       const agent = snapshot.agents.find(agent => agent.id === agentId)
       const reserved = agent && acknowledgeableDispatchSync(tx, snapshot, agent)
       if (!reserved) throw new Error('Execution changed or teammate became active; refresh before acknowledging')
+      if (expected && (reserved.task_id !== expected.taskId || reserved.created_at !== expected.createdAt)) throw new Error('Execution reservation changed since inspection; inspect recovery again before acknowledging')
       const result = tx.prepare('DELETE FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ? AND task_id = ? AND created_at = ?')
         .run(identity.runId, agentId, reserved.task_id, reserved.created_at)
       if (!result.changes) throw new Error('Execution changed; refresh before acknowledging')
@@ -8030,7 +8213,7 @@ export async function interruptInteractiveAgent(identity: ExternalProtocolIdenti
  * turn, and a turn that ends on an open task is exactly what the maintenance
  * sweep re-dispatches.
  */
-export async function cancelInteractiveTask(identity: ExternalProtocolIdentity, taskId: string, reason?: string): Promise<{ cancelled: true; interruptedAgent?: string }> {
+export async function cancelInteractiveTask(identity: ExternalProtocolIdentity, taskId: string, reason?: string, expectedRevision?: string): Promise<{ cancelled: true; interruptedAgent?: string }> {
   const db = await getDatabase()
   const lead = requireExternalParticipantSync(db, identity)
   if (lead.role !== 'lead') throw new Error('Only the Coordinator lead can cancel a task')
@@ -8038,26 +8221,40 @@ export async function cancelInteractiveTask(identity: ExternalProtocolIdentity, 
   if (!row) throw new Error('Coordinator task not found')
   const task = rowToTask(row)
   const owner = task.ownerAgentId ? listAgentsSync(db, identity.runId).find(entry => entry.id === task.ownerAgentId) : undefined
-  await cancelProtocolTask(identity.runId, taskId, reason?.trim() || `${taskId} cancelled by the lead`)
+  await cancelProtocolTask(identity.runId, taskId, reason?.trim() || `${taskId} cancelled by the lead`, expectedRevision, identity.agentId)
   if (!owner || owner.id === identity.agentId) return { cancelled: true }
   // Best effort: a teammate with no turn running has nothing to interrupt, and the task is already cancelled.
   const interrupted = await interruptInteractiveAgent(identity, owner.id).then(() => true, () => false)
   return { cancelled: true, ...(interrupted ? { interruptedAgent: owner.name } : {}) }
 }
 
-export async function resumeInteractiveAgent(identity: ExternalProtocolIdentity, agentId: string, automatic = false): Promise<void> {
+export async function resumeInteractiveAgent(identity: ExternalProtocolIdentity, agentId: string, automatic = false, expected?: { taskId: string; sessionId: string; claimGeneration: number }): Promise<void> {
   await serializeAutomaticDelegation(identity.runId, async () => {
-    if (!(await readInteractiveRecoveries(identity.runId)).includes(agentId)) throw new Error('This teammate does not need recovery or is still running')
     const db = await getDatabase()
     const lead = requireExternalParticipantSync(db, identity)
     if (lead.role !== 'lead') throw new Error('Only the lead conversation can resume a teammate')
+    if (foreignInteractiveHostSync(db, identity.runId)) throw new Error('This team is running in another local Agent Viewer host. Use that host to resume execution.')
+    if (!(await readInteractiveRecoveries(identity.runId)).includes(agentId)) throw new Error('This teammate does not need recovery or is still running')
     const before = readSnapshotSync(db, identity.runId)!
     const agent = before.agents.find(agent => agent.id === agentId)!
     const task = before.tasks.find(task => task.id === agent.taskId)
+    const claimGeneration = Number((db.prepare('SELECT claim_generation FROM protocol_tasks WHERE run_id = ? AND id = ?').get(identity.runId, agent.taskId) as Row | undefined)?.claim_generation)
+    if (expected && (agent.taskId !== expected.taskId || agent.sessionId !== expected.sessionId || claimGeneration !== expected.claimGeneration)) throw new Error('Recovery claim changed since inspection; inspect recovery again before resuming')
+    const { readViewSessionRunning } = await import('./sessionBackend')
+    const nativeGate = () => withProviderInstance(agent.providerInstanceId ?? agent.provider, agent.provider, async () => {
+      const runtime = readViewSessionRunning(agent.sessionId)
+      if (runtime.pendingPermissions.length || runtime.pendingPrompts.length) throw new Error('Answer the pending native permission or question in its existing UI before resuming')
+    })
+    await nativeGate()
     if (!task || ['completed', 'failed', 'cancelled'].includes(task.status)) throw new Error('This dispatch belongs to settled work; acknowledge its result instead of resuming')
     const budgetReason = budgetExceededReasonSync(db, before.run)
     if (budgetReason) throw new Error(`Adjust the team limit before resuming: ${budgetReason}`)
-    if (task && (['planned', 'blocked'].includes(task.status) || task.receipt?.needsDecision?.some(decision => decision.status === 'open'))) throw new Error('Answer the pending question, decision, or approval before resuming')
+    // A dead turn is not a question. Only a person revives one: the provider
+    // that failed (a rate limit, a deadline) may well fail again, and an
+    // automatic resume cannot tell.
+    const dead = deadTeammateSync(db, identity.runId, agent, task)
+    if (dead && automatic) throw new Error('A teammate whose provider failed is resumed by the lead, not automatically')
+    if (task && (task.status === 'planned' || (task.status === 'blocked' && !dead) || task.receipt?.needsDecision?.some(decision => decision.status === 'open'))) throw new Error('Answer the pending question, decision, or approval before resuming')
     const { inspectRecoveryAgent } = await import('./coordinatorRecoveryServer')
     const evidence = await inspectRecoveryAgent(agent)
     if (!evidence.directory.available) throw new Error(`Saved teammate directory is unavailable: ${evidence.directory.detail}`)
@@ -8066,6 +8263,7 @@ export async function resumeInteractiveAgent(identity: ExternalProtocolIdentity,
     const current = readSnapshotSync(await getDatabase(), identity.runId)!.agents.find(entry => entry.id === agentId)
     if (!current || current.taskId !== agent.taskId || current.sessionId !== agent.sessionId || current.provider !== agent.provider || current.providerInstanceId !== agent.providerInstanceId || current.worktreePath !== agent.worktreePath
       || !(await readInteractiveRecoveries(identity.runId)).includes(agentId)) throw new Error('Teammate changed during inspection; refresh before resuming')
+    await nativeGate()
     await enqueueWrite(db => claimInteractiveHostSync(db, identity.runId))
     const controller = await adoptInteractiveController(identity)
     if (!controller.sessionIds.has(agentId)) throw new Error('Only a managed teammate can be resumed')
@@ -8073,13 +8271,35 @@ export async function resumeInteractiveAgent(identity: ExternalProtocolIdentity,
       const final = readSnapshotSync(db, identity.runId)!
       const current = final.agents.find(entry => entry.id === agentId)
       const currentTask = final.tasks.find(entry => entry.id === current?.taskId)
+      const finalClaimGeneration = Number((db.prepare('SELECT claim_generation FROM protocol_tasks WHERE run_id = ? AND id = ?').get(identity.runId, agent.taskId) as Row | undefined)?.claim_generation)
+      if (finalClaimGeneration !== claimGeneration) throw new Error('Recovery claim changed during inspection; inspect recovery again before resuming')
       if (!current || current.taskId !== agent.taskId || current.sessionId !== agent.sessionId || current.provider !== agent.provider || current.providerInstanceId !== agent.providerInstanceId || current.turnActive
-        || !currentTask || ['completed', 'failed', 'cancelled', 'blocked', 'planned'].includes(currentTask.status)
+        || !currentTask || ['completed', 'failed', 'cancelled', 'planned'].includes(currentTask.status)
+        || (currentTask.status === 'blocked') !== Boolean(dead) || (dead && !deadTeammateSync(db, identity.runId, current, currentTask))
         || currentTask.receipt?.needsDecision?.some(decision => decision.status === 'open') || budgetExceededReasonSync(db, final.run)) throw new Error('Recovery state changed; refresh before resuming')
       db.prepare('DELETE FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').run(identity.runId, agentId)
+      if (dead) {
+        const ts = nowIso()
+        db.prepare("UPDATE protocol_tasks SET status = 'in_progress', updated_at = ? WHERE run_id = ? AND id = ?").run(ts, identity.runId, currentTask.id)
+        setAgentStatusSync(db, identity.runId, agentId, 'working', ts)
+        insertEventSync(db, {
+          version: AGENT_PROTOCOL_VERSION, runId: identity.runId, agentId, type: 'agent.unblocked', taskId: currentTask.id,
+          summary: `${current.name} resumed by the lead after ${dead.failureClass.replace(/_/g, ' ')}`,
+          payload: { revived: true, failureClass: dead.failureClass }, timestamp: ts,
+        })
+      }
       db.prepare(`UPDATE protocol_tasks SET auto_resume_count = ${automatic ? 'auto_resume_count + 1' : '0'} WHERE run_id = ? AND id = ?`)
         .run(identity.runId, currentTask.id)
     })
+    if (dead) {
+      // The failure exhausted this teammate's retries and marked its provider
+      // failed, both in memory. A person asking again is a fresh attempt.
+      controller.failedProviders.delete(agentId)
+      controller.sameProviderRetries.delete(agentId)
+      controller.nudges.delete(`${agentId}:${task.id}`)
+      controller.dispatchNotes.set(agentId, `Your previous turn on ${task.id} ended early (${dead.failureClass.replace(/_/g, ' ')}) and the lead has resumed you. Edits from that turn may be half-finished: inspect your checkout before continuing, and do not redo work that already landed.`)
+      notifyRunChanged(identity.runId)
+    }
     void dispatchTeammateWork(controller, agentId)
   })
 }
@@ -9218,6 +9438,7 @@ async function handleAgentTurnEnd(controller: RunController, agentId: string): P
       type: 'agent.blocked',
       taskId: owned.id,
       summary: `${agent.name} stalled on ${owned.id} after ${MAX_TURN_NUDGES + 1} turns`,
+      payload: { stalled: true },
     })
     return
   }

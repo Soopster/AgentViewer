@@ -842,6 +842,8 @@ export type ProtocolTaskPlanState = 'none' | 'awaiting' | 'approved' | 'rejected
  */
 export type ExternalProtocolActionable = {
   runStatus: ProtocolRunStatus
+  /** Caller host ownership of idle waits, independent of whether a turn is live. */
+  waitingPolicy?: import('./coordinatorWaitingPolicy').CoordinatorWaitingPolicy
   /** Host wake mode and the current reason automatic continuation is paused. */
   continuation?: import('./coordinatorContinuation').CoordinatorContinuationState
   /** Pending, unowned tasks whose dependencies are all completed. */

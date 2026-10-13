@@ -1,17 +1,32 @@
 /** @jsxImportSource @opentui/react */
 // Render-cost harness for the OpenTUI navigation surfaces. Mounts the real root
-// against a hermetic 10k-message/120-session workload by default, drives one
-// surface at key-repeat speed, and reports what a React Profiler around the
-// real root saw (including child-local pane/editor updates):
-// commits, how many blew the target budget, and the worst one. A frame over
-// budget is a frame the terminal cannot repaint in, which is what
-// unresponsiveness actually is.
+// against a hermetic workload (a realistic 10k-message coding transcript and
+// 120 sessions by default), drives one surface at key-repeat or wheel-flood
+// speed, and reports two independent clocks for the timed window:
+//
+//   frames   every pass of the renderer's own loop — frame callbacks, the tree
+//            pass (Yoga layout + drawing into the buffer) and the native diff.
+//            This is the one that sees scrolling: moving a scrollbox mostly
+//            does not commit React at all.
+//   commits  what a React Profiler around the real root saw, split into render
+//            (actualDuration) and commit (everything after React's mutations).
+//
+// A frame or commit over budget is one the terminal cannot repaint in, which
+// is what unresponsiveness actually is.
 //
 //   bun tui/opentui/inputPerf.tsx                     # every scenario
-//   INPUT_SCENARIO=reader-scroll bun tui/opentui/inputPerf.tsx
+//   INPUT_SCENARIO=stream-wheel bun tui/opentui/inputPerf.tsx
+//   INPUT_SCENARIO=stream- bun tui/opentui/inputPerf.tsx  # trailing - = prefix
+//   INPUT_LIST=1 bun tui/opentui/inputPerf.tsx        # scenario names
 //   INPUT_SECONDS=8 bun tui/opentui/inputPerf.tsx     # longer window each
+//   INPUT_FIXTURE=trivial bun tui/opentui/inputPerf.tsx # the old one-line workload
 //   INPUT_REAL_SESSIONS=1 bun tui/opentui/inputPerf.tsx # field diagnostic
 //   INPUT_MEMORY=1 bun tui/opentui/inputPerf.tsx # forced-GC heap/RSS outside timing
+//   INPUT_JSON=1 bun tui/opentui/inputPerf.tsx   # one JSON line per scenario too
+//   INPUT_CPU_PROFILE=1 INPUT_SCENARIO=stream-wheel bun tui/opentui/inputPerf.tsx
+//       runs that one scenario under `bun --cpu-prof --cpu-prof-md` and prints
+//       where the .cpuprofile and .md were written (INPUT_CPU_PROFILE_DIR to
+//       choose). Rank that output by sample count, never by self-time.
 //
 // INPUT_REAL_SESSIONS is intentionally not deterministic across runs. The
 // reported `cards` column makes that field diagnostic interpretable, but only
@@ -22,29 +37,58 @@
 // landing on the exit confirm, a `/` reaching the composer instead of search)
 // silently mismeasures every scenario after it, and the numbers look like an
 // app regression rather than a harness bug. Each scenario also asserts what it
-// expects to be looking at before timing, so a mis-driven surface fails loudly
-// instead of reporting a suspiciously good number.
+// expects to be looking at before timing — and a scroll scenario that the
+// transcript never moved under is reported as skipped, not as a fast one.
+//
+// What this cannot see: the bytes written to a real terminal and the
+// terminal's own paint. The test renderer diffs into memory, so the native
+// column is the cost of producing a frame, not of a PTY accepting it.
 //
 // Timing keypresses directly does not work here: React 19 renders outside
 // act()'s synchronous scope, and the test renderer's flush waits for a frame,
-// so every scenario reports the same ~17ms. The Profiler measures each commit.
+// so every scenario reports the same ~17ms.
 import { spawnSync } from 'child_process'
+import { mkdirSync, readdirSync } from 'fs'
+import { tmpdir as osTmpdir } from 'os'
+import { join as joinPath } from 'path'
 import { fileURLToPath } from 'url'
 import type { ProfilerOnRenderCallback } from 'react'
-import type { Session, SessionMessage } from '../../lib/types'
-import { formatTuiFrameBudgetMs, TUI_FRAME_BUDGET_MS, TUI_TARGET_FPS } from './performanceBudget'
+import type { Session } from '../../lib/types'
+import type { TuiTranscriptCard } from '../format'
+import type { TuiDensity, TuiTranscriptView } from '../theme'
+import { buildInputPerfMessages, resolveInputPerfFixtureKind } from './inputPerfFixture'
+import { formatTuiFrameBudgetMs, summarizeFrameTimes, TUI_FRAME_BUDGET_MS, TUI_TARGET_FPS } from './performanceBudget'
 
-type Press = { key: string; shift?: boolean; ctrl?: boolean }
+type Press =
+  | { key: string; shift?: boolean; ctrl?: boolean }
+  // One wheel notch over the middle of the transcript.
+  | { wheel: 'up' | 'down' }
+  // Bytes straight to stdin, for keys the mock has no name for (PgUp/PgDn).
+  | { raw: string }
 
 type Scenario = {
   name: string
+  // Transcript view the app boots into (default: the card view).
+  view?: TuiTranscriptView
   // Pressed once before the timed window (focus moves, mode switches).
   setup?: Press[]
-  // Cycled through for the timed window.
+  // Cycled through for the timed window…
   press: Press[]
-  // Substring the frame must contain once setup has run. The guard against
-  // measuring a surface the harness never actually reached.
-  expect?: string
+  // …or, when present, for its second half: scroll away, then scroll back.
+  thenPress?: Press[]
+  // Substring the frame must contain once setup has run (any one of several).
+  // The guard against measuring a surface the harness never actually reached.
+  expect?: string | string[]
+  // The reader must be focused over a transcript taller than its viewport.
+  reader?: boolean
+  // The transcript must actually move during the window.
+  scrolls?: boolean
+  // Events per tick. A trackpad fling delivers several notches per frame.
+  burst?: number
+  intervalMs?: number
+  seconds?: number
+  // Hermetic runs only: the mounted window must travel at least this far.
+  minCardsCrossed?: number
 }
 
 // Keep benchmark clock reads behind a function so React Doctor does not treat
@@ -52,7 +96,7 @@ type Scenario = {
 const monotonicNow = () => performance.now()
 
 const TAB: Press = { key: 'tab' }
-const READER_FOCUSED = 'b bookmark'
+const keys = (text: string): Press[] => text.split('').map((key) => ({ key }))
 const OPEN_THREE_TABS: Press[] = [
   TAB, TAB,
   { key: 'j' }, { key: 'j' }, TAB, TAB,
@@ -60,61 +104,74 @@ const OPEN_THREE_TABS: Press[] = [
 ]
 const ADD_COLUMN_SPLIT: Press[] = [{ key: 'b', ctrl: true }, { key: '%' }]
 const ADD_ROW_SPLIT: Press[] = [{ key: 'b', ctrl: true }, { key: '"' }]
+// An unfocused pane's border says how to reach it — unless the notice that
+// announces the split is still drawn over that border, which says the same.
+const SPLIT_OPEN = ['⌃B 1 focus', 'Split panes: 1']
+// Only a focused pane offers the way back to the reader in the status bar.
+const PANE_FOCUSED = 'esc reader'
+const PAGE_UP: Press = { raw: '\x1b[5~' }
+const PAGE_DOWN: Press = { raw: '\x1b[6~' }
+
+// Every way a transcript is scrolled, once per view. The reader opens on the
+// tail, so each scenario scrolls away for the first half of its window and
+// back for the second; the sustained wheel only ever goes up, far enough to
+// cross the reader's sliding card window many times.
+const SCROLL_VIEWS: Array<{ prefix: string; view: TuiTranscriptView }> = [
+  { prefix: 'card', view: 'conversation' },
+  { prefix: 'stream', view: 'stream' },
+  { prefix: 'scrollback', view: 'scrollback' },
+  { prefix: 'transcript', view: 'transcript' },
+]
+const SUSTAINED_SECONDS = Number.parseInt(process.env.INPUT_SUSTAINED_SECONDS ?? '', 10) || 40
+// The sustained wheel exists to cross the sliding card window repeatedly; a
+// run that did not get that far measured ordinary scrolling under its name.
+const SUSTAINED_MIN_CARDS = Number.parseInt(process.env.INPUT_SUSTAINED_MIN_CARDS ?? '', 10) || 1000
+const scrollScenarios = ({ prefix, view }: { prefix: string; view: TuiTranscriptView }): Scenario[] => {
+  const base = { view, setup: [TAB], reader: true, scrolls: true }
+  return [
+    { ...base, name: `${prefix}-line`, press: [{ key: 'k' }], thenPress: [{ key: 'j' }] },
+    { ...base, name: `${prefix}-halfpage`, press: [{ key: 'u', ctrl: true }], thenPress: [{ key: 'd', ctrl: true }] },
+    { ...base, name: `${prefix}-page`, press: [PAGE_UP], thenPress: [PAGE_DOWN] },
+    { ...base, name: `${prefix}-ends`, press: [{ key: 'g' }, { key: 'G', shift: true }] },
+    { ...base, name: `${prefix}-wheel`, press: [{ wheel: 'up' }], thenPress: [{ wheel: 'down' }], burst: 3, intervalMs: 16 },
+    {
+      ...base,
+      name: `${prefix}-wheel-sustained`,
+      press: [{ wheel: 'up' }],
+      burst: 12,
+      intervalMs: 16,
+      seconds: SUSTAINED_SECONDS,
+      minCardsCrossed: SUSTAINED_MIN_CARDS,
+    },
+  ]
+}
 
 const SCENARIOS: Scenario[] = [
   { name: 'sidebar-scroll', press: [{ key: 'j' }] },
   { name: 'sidebar-scroll-alt', press: [{ key: 'j' }, { key: 'k' }] },
-  { name: 'reader-scroll', setup: [TAB], press: [{ key: 'j' }], expect: READER_FOCUSED },
-  { name: 'reader-scroll-alt', setup: [TAB], press: [{ key: 'j' }, { key: 'k' }], expect: READER_FOCUSED },
-  { name: 'reader-page', setup: [TAB], press: [{ key: 'd', ctrl: true }, { key: 'u', ctrl: true }], expect: READER_FOCUSED },
-  { name: 'reader-jump-ends', setup: [TAB], press: [{ key: 'G', shift: true }, { key: 'g' }], expect: READER_FOCUSED },
-  { name: 'reader-expand', setup: [TAB], press: [{ key: 'return' }], expect: READER_FOCUSED },
+  ...SCROLL_VIEWS.flatMap(scrollScenarios),
+  { name: 'reader-expand', setup: [TAB, { key: 'k' }], press: [{ key: 'return' }], reader: true },
+  // `(`/`)` step between conversation cards, `{`/`}` between technical ones —
+  // jumps that skip whatever lies between. (`[`/`]` are bookmark jumps, which
+  // do nothing in a session with no bookmarks; timing them timed a no-op.)
+  { name: 'conversation-jump', setup: [TAB], press: [{ key: '(' }], thenPress: [{ key: ')' }], reader: true, scrolls: true },
+  { name: 'technical-jump', setup: [TAB], press: [{ key: '{' }], thenPress: [{ key: '}' }], reader: true, scrolls: true },
   { name: 'focus-toggle', press: [TAB] },
   { name: 'view-cycle', press: [{ key: 'v' }] },
-  { name: 'transcript-search', setup: [TAB, { key: '/' }], press: 'session'.split('').map((k) => ({ key: k })), expect: 'SEARCH' },
-  { name: 'sidebar-search', setup: [{ key: '/' }], press: 'agent'.split('').map((k) => ({ key: k })) },
-  {
-    name: 'composer-type',
-    setup: [TAB, { key: 'c' }],
-    press: 'rendering-performance'.split('').map((key) => ({ key })),
-    expect: 'send',
-  },
+  { name: 'transcript-search', setup: [TAB, { key: '/' }], press: keys('session'), expect: 'SEARCH' },
+  { name: 'sidebar-search', setup: [{ key: '/' }], press: keys('agent') },
+  { name: 'composer-type', setup: [TAB, { key: 'c' }], press: keys('rendering-performance'), expect: 'send' },
   {
     name: 'composer-window-type',
     setup: [TAB, { key: 'c' }, { key: 'o', ctrl: true }],
-    press: 'expanded-composer-performance'.split('').map((key) => ({ key })),
+    press: keys('expanded-composer-performance'),
     expect: 'send',
   },
-  {
-    name: 'composer-slash-filter',
-    setup: [TAB, { key: 'c' }],
-    press: '/model'.split('').map((key) => ({ key })),
-    expect: 'send',
-  },
-  {
-    name: 'composer-mention-filter',
-    setup: [TAB, { key: 'c' }],
-    press: '@src'.split('').map((key) => ({ key })),
-    expect: 'send',
-  },
-  {
-    name: 'command-palette-nav',
-    setup: [{ key: '?' }],
-    press: [{ key: 'j' }, { key: 'k' }],
-    expect: 'type to filter',
-  },
-  {
-    name: 'command-palette-filter',
-    setup: [{ key: '?' }],
-    press: 'transcript'.split('').map((key) => ({ key })),
-    expect: 'type to filter',
-  },
-  {
-    name: 'editor-nav',
-    setup: [{ key: 'e', ctrl: true }],
-    press: [{ key: 'j' }, { key: 'k' }],
-    expect: 'EDITOR',
-  },
+  { name: 'composer-slash-filter', setup: [TAB, { key: 'c' }], press: keys('/model'), expect: 'send' },
+  { name: 'composer-mention-filter', setup: [TAB, { key: 'c' }], press: keys('@src'), expect: 'send' },
+  { name: 'command-palette-nav', setup: [{ key: '?' }], press: [{ key: 'j' }, { key: 'k' }], expect: 'type to filter' },
+  { name: 'command-palette-filter', setup: [{ key: '?' }], press: keys('transcript'), expect: 'type to filter' },
+  { name: 'editor-nav', setup: [{ key: 'e', ctrl: true }], press: [{ key: 'j' }, { key: 'k' }], expect: 'EDITOR' },
   // Opening a second tab: Tab into the reader promotes the preview to a tab, so
   // focusing two different sessions leaves two tabs to switch between.
   {
@@ -126,13 +183,13 @@ const SCENARIOS: Scenario[] = [
     name: 'split-reader-columns',
     setup: [...OPEN_THREE_TABS, ...ADD_COLUMN_SPLIT],
     press: [{ key: 'j' }, { key: 'k' }],
-    expect: '⌃B 1 focus',
+    expect: SPLIT_OPEN,
   },
   {
     name: 'split-pane-columns',
     setup: [...OPEN_THREE_TABS, ...ADD_COLUMN_SPLIT, { key: 'b', ctrl: true }, { key: 'o' }],
     press: [{ key: 'j' }, { key: 'k' }],
-    expect: 'split pane 1',
+    expect: PANE_FOCUSED,
   },
   {
     name: 'split-reader-rows',
@@ -144,9 +201,8 @@ const SCENARIOS: Scenario[] = [
     name: 'split-pane-rows',
     setup: [...OPEN_THREE_TABS, ...ADD_ROW_SPLIT, ...ADD_ROW_SPLIT, { key: 'b', ctrl: true }, { key: 'o' }],
     press: [{ key: 'j' }, { key: 'k' }],
-    expect: 'split pane 1',
+    expect: PANE_FOCUSED,
   },
-  { name: 'turn-jump', setup: [TAB], press: [{ key: '[' }, { key: ']' }], expect: READER_FOCUSED },
 ]
 
 const SECONDS = Number.parseInt(process.env.INPUT_SECONDS ?? '', 10) || 5
@@ -154,59 +210,107 @@ const SECONDS = Number.parseInt(process.env.INPUT_SECONDS ?? '', 10) || 5
 const PRESS_INTERVAL_MS = Number.parseInt(process.env.INPUT_PRESS_MS ?? '', 10) || 33
 const only = process.env.INPUT_SCENARIO
 const useRealSessions = process.env.INPUT_REAL_SESSIONS === '1'
+const fixtureKind = resolveInputPerfFixtureKind(process.env.INPUT_FIXTURE)
 const fixtureMessageCount = Number.parseInt(process.env.INPUT_FIXTURE_MESSAGES ?? '', 10) || 10_000
 const fixtureSessionCount = Number.parseInt(process.env.INPUT_FIXTURE_SESSIONS ?? '', 10) || 120
+
+type TimeSummary = { count: number; over: number; p50: number; p95: number; worst: number }
+type ScenarioResult = {
+  frames: TimeSummary
+  // Worst tree pass (Yoga layout + draw) and worst remainder (native diff).
+  treeWorst: number
+  nativeWorst: number
+  commits: number
+  over: number
+  worst: number
+  renderWorst: number
+  commitWorst: number
+  renderTotal: number
+  commitTotal: number
+  cards: number
+  mounted: number
+  moved: number
+  slides: number
+  cardsCrossed: number
+  memory?: unknown
+}
 
 // ── Parent: fan the scenarios out, one child each ────────────────────────────
 if (!process.env.INPUT_CHILD) {
   const selfPath = fileURLToPath(import.meta.url)
+  const selected = SCENARIOS.filter((scenario) => (
+    !only || scenario.name === only || (only.endsWith('-') && scenario.name.startsWith(only))
+  ))
+  if (process.env.INPUT_LIST === '1') {
+    for (const scenario of SCENARIOS) console.log(scenario.name)
+    process.exit(0)
+  }
+  const cpuProfile = process.env.INPUT_CPU_PROFILE === '1'
+  if (cpuProfile && selected.length !== 1) {
+    console.error(`INPUT_CPU_PROFILE=1 profiles exactly one scenario; INPUT_SCENARIO=${only ?? '(unset)'} selects ${selected.length}.`)
+    process.exit(2)
+  }
+  const ms = (value: number) => value.toFixed(1)
+  const columns: Array<[string, number]> = [
+    ['frames', 7], ['f-p50', 6], ['f-p95', 6], ['f-worst', 8], ['f-over', 7],
+    ['commits', 8], ['c-over', 7], ['c-worst', 8], ['render', 7], ['commit', 7],
+    ['cards', 6], ['moved', 6], ['slides', 7],
+  ]
   let measuredScenarios = 0
   let skippedScenarios = 0
   let totalOverBudget = 0
-  console.log(`\nrender cost per navigation surface (${SECONDS}s at ${PRESS_INTERVAL_MS}ms key repeat)`)
-  console.log(`  workload ${useRealSessions ? 'live local sessions' : `hermetic ${fixtureMessageCount}-message/${fixtureSessionCount}-session fixture`}`)
-  console.log(`  target ${TUI_TARGET_FPS}fps (${formatTuiFrameBudgetMs()}ms frame budget)`)
-  console.log(`  ${'scenario'.padEnd(20)} ${'commits'.padStart(8)} ${`over-${formatTuiFrameBudgetMs()}ms`.padStart(12)} ${'worst frame'.padStart(12)} ${'cards'.padStart(7)}`)
-  for (const scenario of SCENARIOS) {
-    if (only && scenario.name !== only) continue
-    const run = spawnSync('bun', [selfPath], {
-      env: { ...process.env, INPUT_CHILD: '1', INPUT_SCENARIO: scenario.name },
-      encoding: 'utf8',
-      timeout: 300_000,
-    })
+  console.log(`\nframe and render cost per navigation surface (${SECONDS}s at ${PRESS_INTERVAL_MS}ms key repeat unless the scenario says otherwise)`)
+  console.log(`  workload ${useRealSessions ? 'live local sessions' : `hermetic ${fixtureKind} ${fixtureMessageCount}-message/${fixtureSessionCount}-session fixture`}`)
+  console.log(`  target ${TUI_TARGET_FPS}fps (${formatTuiFrameBudgetMs()}ms budget) · times in ms`)
+  console.log('  f-* = whole renderer frames (callbacks + Yoga layout + draw + native diff); c-* = React commits;')
+  console.log('  render/commit = worst React render (actualDuration) and worst post-mutation commit; moved = ticks the transcript moved on;')
+  console.log('  slides = times the mounted card window changed')
+  console.log(`  ${'scenario'.padEnd(27)}${columns.map(([label, width]) => label.padStart(width)).join('')}`)
+  for (const scenario of selected) {
+    const profileDir = cpuProfile
+      ? process.env.INPUT_CPU_PROFILE_DIR
+        ?? joinPath(osTmpdir(), 'agent-viewer-input-perf-profiles', `${scenario.name}-${Date.now()}`)
+      : null
+    if (profileDir) mkdirSync(profileDir, { recursive: true })
+    const run = spawnSync(
+      'bun',
+      [...(profileDir ? ['--cpu-prof', '--cpu-prof-md', `--cpu-prof-dir=${profileDir}`] : []), selfPath],
+      {
+        env: { ...process.env, INPUT_CHILD: '1', INPUT_SCENARIO: scenario.name },
+        encoding: 'utf8',
+        timeout: 600_000,
+        maxBuffer: 256 * 1024 * 1024,
+      },
+    )
+    if (profileDir) {
+      const written = readdirSync(profileDir).map((file) => joinPath(profileDir, file))
+      console.log(written.length > 0
+        ? `CPU profile for ${scenario.name}:\n${written.map((file) => `    ${file}`).join('\n')}`
+        : `CPU profile for ${scenario.name}: nothing was written to ${profileDir}`)
+    }
     const line = (run.stdout ?? '').split('\n').find((l) => l.startsWith('RESULT '))
     if (!line) {
-      const why = (run.stdout ?? '').split('\n').find((l) => l.startsWith('SKIP ')) ?? 'no result'
-      console.log(`  ${scenario.name.padEnd(20)} ${why.replace(/^SKIP /, '')}`)
+      const why = (run.stdout ?? '').split('\n').find((l) => l.startsWith('SKIP '))
+        ?? (run.error ? `SKIP ${run.error.message}` : `SKIP no result (exit ${run.status})`)
+      console.log(`  ${scenario.name.padEnd(27)} ${why.replace(/^SKIP /, '')}`)
       skippedScenarios += 1
       continue
     }
-    const parsed: unknown = JSON.parse(line.slice('RESULT '.length))
-    if (
-      typeof parsed !== 'object'
-      || parsed === null
-      || !('commits' in parsed) || typeof parsed.commits !== 'number'
-      || !('over' in parsed) || typeof parsed.over !== 'number'
-      || !('worst' in parsed) || typeof parsed.worst !== 'number'
-      || !('cards' in parsed) || typeof parsed.cards !== 'number'
-    ) {
-      console.log(`  ${scenario.name.padEnd(20)} malformed result`)
-      skippedScenarios += 1
-      continue
-    }
-    const { commits, over, worst, cards } = parsed
+    const result = JSON.parse(line.slice('RESULT '.length)) as ScenarioResult
     measuredScenarios += 1
-    totalOverBudget += over
-    console.log(
-      `  ${scenario.name.padEnd(20)} ${String(commits).padStart(8)} ${String(over).padStart(12)} ${(worst.toFixed(1) + 'ms').padStart(12)} ${String(cards).padStart(7)}`,
-    )
-    if ('memory' in parsed && parsed.memory) {
-      console.log(`MEMORY ${JSON.stringify({ scenario: scenario.name, ...parsed.memory as object })}`)
-    }
+    totalOverBudget += result.over + result.frames.over
+    const cells = [
+      String(result.frames.count), ms(result.frames.p50), ms(result.frames.p95), ms(result.frames.worst), String(result.frames.over),
+      String(result.commits), String(result.over), ms(result.worst), ms(result.renderWorst), ms(result.commitWorst),
+      String(result.cards), String(result.moved), String(result.slides),
+    ]
+    console.log(`  ${scenario.name.padEnd(27)}${cells.map((cell, index) => cell.padStart(columns[index][1])).join('')}`)
+    if (process.env.INPUT_JSON === '1') console.log(`JSON ${JSON.stringify({ scenario: scenario.name, ...result })}`)
+    if (result.memory) console.log(`MEMORY ${JSON.stringify({ scenario: scenario.name, ...result.memory as object })}`)
   }
   if (measuredScenarios === 0 || skippedScenarios > 0 || totalOverBudget > 0) {
     console.error(
-      `Input performance gate failed: ${totalOverBudget} frame(s) exceeded ${formatTuiFrameBudgetMs()}ms; `
+      `Input performance gate failed: ${totalOverBudget} frame(s)/commit(s) exceeded ${formatTuiFrameBudgetMs()}ms; `
       + `${skippedScenarios} scenario(s) skipped.`,
     )
     process.exit(1)
@@ -222,6 +326,12 @@ const path = await import('path')
 const React = (await import('react')).default
 const { act } = await import('react')
 const { testRender } = await import('@opentui/react/test-utils')
+
+const scenario = SCENARIOS.find((s) => s.name === only)
+if (!scenario) {
+  console.log(`SKIP unknown scenario ${only}`)
+  process.exit(0)
+}
 
 async function sampleRetainedMemory() {
   if (process.env.INPUT_MEMORY !== '1') return null
@@ -244,58 +354,73 @@ process.env.AGENT_VIEWER_TUI_METRICS = '1'
 process.env.AGENT_VIEWER_TUI_METRICS_INTERVAL = '5'
 process.env.AGENT_VIEWER_TUI_METRICS_LOG = metricsLog
 
-if (!useRealSessions) {
-  const sessionId = 'input-perf-session-0'
+const bunTestSpecifier = 'bun:test'
+const { mock } = await import(bunTestSpecifier) as {
+  mock: { module(specifier: string, factory: () => unknown): void }
+}
+const service = await import('../../lib/tui/service')
+const scenarioView: TuiTranscriptView = scenario.view ?? 'conversation'
+// The view is a scenario input, never whatever tui.json last held.
+const viewOverrides = {
+  readTuiTranscriptView: async () => scenarioView,
+  writeTuiTranscriptView: async () => {},
+}
+// Card key → transcript index, so the mounted window can be located.
+const cardIndexByKey = new Map<string, number>()
+
+if (useRealSessions) {
+  mock.module('../../lib/tui/service', () => ({ ...service, ...viewOverrides }))
+} else {
   const fixedTimestamp = Date.UTC(2026, 0, 1)
-  const rawMessages: SessionMessage[] = Array.from({ length: fixtureMessageCount }, (_, index) => {
-    const common = {
-      uuid: `input-perf-message-${index}`,
-      session_id: sessionId,
-      parent_tool_use_id: null,
-      timestamp: new Date(fixedTimestamp + index * 1_000).toISOString(),
-      provider: 'codex' as const,
-    }
-    return index % 2 === 0
-      ? { ...common, type: 'user', message: { role: 'user', content: `Inspect deterministic workload ${index}.` } }
-      : {
-          ...common,
-          type: 'assistant',
-          message: {
-            role: 'assistant',
-            content: [{ type: 'text', text: `Deterministic response ${index} keeps the mounted reader window busy.` }],
-          },
-        }
-  })
+  const provider = fixtureKind === 'trivial' ? 'codex' as const : 'claude' as const
+  const rawMessages = buildInputPerfMessages(fixtureKind, fixtureMessageCount, 'input-perf-session-0')
   const { buildThreadedMessages } = await import('../../lib/threading')
   const { formatTranscriptCards } = await import('../format')
   const threadedMessages = buildThreadedMessages(rawMessages)
-  const transcriptCards = formatTranscriptCards(threadedMessages)
+  const cardsByDensity = new Map<TuiDensity, TuiTranscriptCard[]>()
+  const cardsFor = (density: TuiDensity) => {
+    let cards = cardsByDensity.get(density)
+    if (!cards) {
+      cards = formatTranscriptCards(threadedMessages, density)
+      cardsByDensity.set(density, cards)
+    }
+    return cards
+  }
+  cardsFor('balanced').forEach((card, index) => cardIndexByKey.set(card.key, index))
   const sessions: Session[] = Array.from({ length: fixtureSessionCount }, (_, index) => ({
     sessionId: `input-perf-session-${index}`,
-    provider: 'codex' as const,
+    provider,
     cwd: dataDir,
     summary: `Input performance fixture ${index}`,
+    // Distinct per session on purpose: the app's "detail unchanged" bail-out
+    // compares message fingerprints, model and title but not which session the
+    // detail belongs to, and every session here carries the same transcript.
+    customTitle: `Input performance fixture ${index}`,
     firstPrompt: `Inspect deterministic workload ${index}`,
     lastModified: fixedTimestamp - index * 1_000,
   }))
-  const detail = {
-    info: sessions[0],
+  // Every session carries the same transcript, but each must answer as ITSELF:
+  // the reader keeps its transcript unmounted while the displayed detail
+  // belongs to a session other than the selected one (isScrubbing). A detail
+  // that always claimed to be session 0 left every reader scenario timing "…".
+  const detailFor = (session: Session, density: TuiDensity = 'balanced', showToolCalls = true) => ({
+    info: sessions.find((candidate) => candidate.sessionId === session.sessionId) ?? sessions[0],
     rawMessages,
     threadedMessages,
-    transcriptCards,
+    transcriptCards: cardsFor(density),
+    transcriptCardsDensity: density,
+    transcriptCardsShowToolCalls: showToolCalls,
     contextUsage: null,
-  }
-  const bunTestSpecifier = 'bun:test'
-  const { mock } = await import(bunTestSpecifier) as {
-    mock: { module(specifier: string, factory: () => unknown): void }
-  }
+  })
   const detailClient = await import('./sessionDetailWorkerClient')
   mock.module('./sessionDetailWorkerClient', () => ({
     ...detailClient,
     readTuiSessionsAsync: async () => sessions,
-    readTuiSessionDetailAsync: async () => detail,
-    formatTranscriptCardsAsync: async () => transcriptCards,
-    getTranscriptCardsSync: () => transcriptCards,
+    readTuiSessionDetailAsync: async (session: Session, density: TuiDensity, showToolCalls: boolean) => (
+      detailFor(session, density, showToolCalls)
+    ),
+    formatTranscriptCardsAsync: async (_session: Session, _threaded: unknown, density: TuiDensity) => cardsFor(density),
+    getTranscriptCardsSync: (_session: Session, _threaded: unknown, density: TuiDensity) => cardsFor(density),
     warmTranscriptAsync: async () => {},
   }))
   const metadataClient = await import('./metadataWorkerClient')
@@ -303,11 +428,11 @@ if (!useRealSessions) {
     ...metadataClient,
     readTuiSessionMetadataAsync: async () => ({ currentModel: null, contextUsage: null }),
   }))
-  const service = await import('../../lib/tui/service')
   mock.module('../../lib/tui/service', () => ({
     ...service,
+    ...viewOverrides,
     readTuiSessions: async () => sessions,
-    readTuiSessionDetail: async () => detail,
+    readTuiSessionDetail: async (session: Session) => detailFor(session),
     readTuiSessionMetadata: async () => ({ models: [], currentModel: null, contextUsage: null }),
     readTuiRuntimeActivity: async () => ({ running: [], waiting: [], attention: [] }),
     listTuiRunningSessions: async () => [],
@@ -319,13 +444,7 @@ if (!useRealSessions) {
 
 const { default: OpenTuiApp } = await import('./App')
 
-const scenario = SCENARIOS.find((s) => s.name === only)
-if (!scenario) {
-  console.log(`SKIP unknown scenario ${only}`)
-  process.exit(0)
-}
-
-const profiledFrames = { commits: 0, over: 0, worst: 0, actualWorst: 0, commitWorst: 0 }
+const profiled = { commits: 0, over: 0, worst: 0, renderWorst: 0, commitWorst: 0, renderTotal: 0, commitTotal: 0 }
 let profileWindowOpen = false
 const recordProfileFrame: ProfilerOnRenderCallback = (
   _id,
@@ -341,15 +460,18 @@ const recordProfileFrame: ProfilerOnRenderCallback = (
   // are covered. Do not use `now - startTime`: concurrent work may legitimately
   // wait for the test renderer's next flush, which is scheduling latency rather
   // than time spent producing a frame.
-  const durationMs = actualDuration + Math.max(0, performance.now() - commitTime)
-  profiledFrames.actualWorst = Math.max(profiledFrames.actualWorst, actualDuration)
-  profiledFrames.commitWorst = Math.max(profiledFrames.commitWorst, Math.max(0, performance.now() - commitTime))
+  const commitMs = Math.max(0, performance.now() - commitTime)
+  const durationMs = actualDuration + commitMs
+  profiled.renderWorst = Math.max(profiled.renderWorst, actualDuration)
+  profiled.commitWorst = Math.max(profiled.commitWorst, commitMs)
+  profiled.renderTotal += actualDuration
+  profiled.commitTotal += commitMs
   if (process.env.INPUT_DEBUG_PROFILE === '1' && durationMs > TUI_FRAME_BUDGET_MS) {
-    console.error(`OVER frame=${durationMs.toFixed(2)}ms actual=${actualDuration.toFixed(2)}ms commit=${(performance.now() - commitTime).toFixed(2)}ms`)
+    console.error(`OVER commit=${durationMs.toFixed(2)}ms render=${actualDuration.toFixed(2)}ms post-mutation=${commitMs.toFixed(2)}ms`)
   }
-  profiledFrames.commits += 1
-  if (durationMs > TUI_FRAME_BUDGET_MS) profiledFrames.over += 1
-  profiledFrames.worst = Math.max(profiledFrames.worst, durationMs)
+  profiled.commits += 1
+  if (durationMs > TUI_FRAME_BUDGET_MS) profiled.over += 1
+  profiled.worst = Math.max(profiled.worst, durationMs)
 }
 
 const setup = await testRender(
@@ -359,8 +481,83 @@ const setup = await testRender(
   { width: 140, height: 44, kittyKeyboard: true },
 )
 
-const send = (p: Press) => {
-  if (p.key === 'tab') setup.mockInput.pressTab()
+// ── Whole-frame clock ────────────────────────────────────────────────────────
+// `loop` is one pass of the renderer: frame callbacks, then the tree pass
+// (Yoga layout and every renderable drawing into the next buffer), then the
+// native diff. Every frame the app produces goes through it, whether React
+// committed or a scrollbox merely moved, so wrapping it is the only clock that
+// sees native scrolling. A call that returns without advancing the frame id
+// was the re-entrancy guard, not a frame.
+type RendererInternals = {
+  loop(): Promise<void>
+  frameId: number
+  root: { render(buffer: unknown, deltaTime: number): void }
+}
+const rendererInternals = setup.renderer as unknown as RendererInternals
+const frameTimes: number[] = []
+let treeWorst = 0
+let nativeWorst = 0
+let treeMsThisFrame = 0
+const originalLoop = rendererInternals.loop.bind(setup.renderer)
+const originalRootRender = rendererInternals.root.render.bind(rendererInternals.root)
+rendererInternals.root.render = (buffer, deltaTime) => {
+  const startedAt = performance.now()
+  originalRootRender(buffer, deltaTime)
+  treeMsThisFrame = performance.now() - startedAt
+}
+rendererInternals.loop = async () => {
+  const frameBefore = rendererInternals.frameId
+  treeMsThisFrame = 0
+  const startedAt = performance.now()
+  await originalLoop()
+  const durationMs = performance.now() - startedAt
+  if (!profileWindowOpen || rendererInternals.frameId === frameBefore) return
+  frameTimes.push(durationMs)
+  treeWorst = Math.max(treeWorst, treeMsThisFrame)
+  nativeWorst = Math.max(nativeWorst, durationMs - treeMsThisFrame)
+  if (process.env.INPUT_DEBUG_PROFILE === '1' && durationMs > TUI_FRAME_BUDGET_MS) {
+    console.error(`OVER frame=${durationMs.toFixed(2)}ms tree=${treeMsThisFrame.toFixed(2)}ms rest=${(durationMs - treeMsThisFrame).toFixed(2)}ms`)
+  }
+}
+
+// ── Transcript probe ─────────────────────────────────────────────────────────
+type ProbeNode = { id: string; getChildren(): ProbeNode[] }
+type TranscriptScrollbox = {
+  scrollTop: number
+  scrollHeight: number
+  x: number
+  y: number
+  width: number
+  height: number
+  focused: boolean
+  viewport: { height: number }
+  content: ProbeNode
+}
+const transcript = () => (
+  setup.renderer.root.findDescendantById('transcript-scroll') as unknown as TranscriptScrollbox | undefined
+)
+// A tool row's `card:` id sits one level down, inside a centering wrapper.
+const cardKeyOf = (node: ProbeNode): string | null => {
+  if (node.id.startsWith('card:')) return node.id.slice('card:'.length)
+  const inner = node.getChildren()[0]
+  return inner?.id.startsWith('card:') ? inner.id.slice('card:'.length) : null
+}
+const mountedWindow = () => {
+  const keys: string[] = []
+  for (const child of transcript()?.content.getChildren() ?? []) {
+    const key = cardKeyOf(child)
+    if (key) keys.push(key)
+  }
+  return { first: keys[0] ?? null, count: keys.length }
+}
+
+const send = async (p: Press) => {
+  if ('wheel' in p) {
+    const sb = transcript()
+    if (!sb) return
+    await setup.mockMouse.scroll(sb.x + Math.floor(sb.width / 2), sb.y + Math.floor(sb.height / 2), p.wheel)
+  } else if ('raw' in p) setup.renderer.stdin.emit('data', Buffer.from(p.raw))
+  else if (p.key === 'tab') setup.mockInput.pressTab()
   else if (p.key === 'return') setup.mockInput.pressEnter()
   else setup.mockInput.pressKey(p.key, { shift: p.shift, ctrl: p.ctrl })
 }
@@ -370,41 +567,94 @@ const send = (p: Press) => {
 // report as one giant frame that no real render loop would ever produce.
 const settle = async (ms: number) => {
   const until = performance.now() + ms
-  while (performance.now() < until) {
+  do {
     await act(async () => {
       await setup.flush()
       await new Promise((r) => setTimeout(r, 16))
     })
-  }
+  } while (performance.now() < until)
+}
+
+const skip = (why: string): never => {
+  if (process.env.INPUT_DEBUG_FRAME === '1') console.error(setup.captureCharFrame())
+  console.log(`SKIP ${why}`)
+  process.exit(0)
 }
 
 await settle(3000)
 // Open a session so the reader has a real transcript to lay out.
-act(() => { setup.mockInput.pressKey('j') })
+await act(async () => { await send({ key: 'j' }) })
 await settle(2000)
 
 for (const press of scenario.setup ?? []) {
-  act(() => { send(press) })
+  await act(async () => { await send(press) })
   await settle(200)
 }
 await settle(500)
 
-const preconditionFrame = setup.captureCharFrame()
-if (scenario.expect && !preconditionFrame.includes(scenario.expect)) {
-  if (process.env.INPUT_DEBUG_FRAME === '1') console.error(preconditionFrame)
-  console.log(`SKIP precondition not met (frame missing ${JSON.stringify(scenario.expect)})`)
-  process.exit(0)
+if (scenario.expect) {
+  const frame = setup.captureCharFrame()
+  const anyOf = Array.isArray(scenario.expect) ? scenario.expect : [scenario.expect]
+  if (!anyOf.some((marker) => frame.includes(marker))) {
+    skip(`precondition not met (frame missing ${anyOf.map((marker) => JSON.stringify(marker)).join(' or ')})`)
+  }
+}
+if (scenario.reader) {
+  const sb = transcript()
+  if (!sb) skip('precondition not met (no transcript scrollbox)')
+  else if (mountedWindow().count === 0) skip('precondition not met (transcript has no cards mounted)')
+  else if (sb.scrollHeight <= sb.viewport.height) skip('precondition not met (transcript does not overflow its viewport)')
+  else if (!sb.focused) skip('precondition not met (transcript is not focused)')
 }
 
+const seconds = scenario.seconds ?? SECONDS
+const intervalMs = scenario.intervalMs ?? PRESS_INTERVAL_MS
+const burst = scenario.burst ?? 1
 const memoryBefore = await sampleRetainedMemory()
-const until = monotonicNow() + SECONDS * 1000
+let lastScrollTop = transcript()?.scrollTop ?? 0
+let lastWindowFirst = mountedWindow().first
+let minCardIndex = lastWindowFirst == null ? Infinity : cardIndexByKey.get(lastWindowFirst) ?? Infinity
+let maxCardIndex = minCardIndex === Infinity ? -Infinity : minCardIndex
+let moved = 0
+let slides = 0
+let mounted = 0
+const startedAt = monotonicNow()
+const until = startedAt + seconds * 1000
 let i = 0
 profileWindowOpen = true
 while (monotonicNow() < until) {
-  act(() => { send(scenario.press[i++ % scenario.press.length]) })
-  await settle(PRESS_INTERVAL_MS)
+  const presses = scenario.thenPress && monotonicNow() - startedAt > seconds * 500 ? scenario.thenPress : scenario.press
+  await act(async () => {
+    for (let n = 0; n < burst; n += 1) await send(presses[i++ % presses.length])
+  })
+  await settle(intervalMs)
+  // Read between frames, outside both clocks.
+  const sb = transcript()
+  if (sb) {
+    const window = mountedWindow()
+    mounted = Math.max(mounted, window.count)
+    if (window.first !== lastWindowFirst) {
+      slides += 1
+      lastWindowFirst = window.first
+      const index = window.first == null ? undefined : cardIndexByKey.get(window.first)
+      if (index !== undefined) {
+        minCardIndex = Math.min(minCardIndex, index)
+        maxCardIndex = Math.max(maxCardIndex, index)
+      }
+      lastScrollTop = sb.scrollTop
+      moved += 1
+    } else if (sb.scrollTop !== lastScrollTop) {
+      lastScrollTop = sb.scrollTop
+      moved += 1
+    }
+  }
 }
 profileWindowOpen = false
+if (scenario.scrolls && moved === 0) skip('the transcript never moved during the timed window')
+const cardsCrossed = Number.isFinite(minCardIndex) ? maxCardIndex - minCardIndex : 0
+if (!useRealSessions && scenario.minCardsCrossed && cardsCrossed < scenario.minCardsCrossed) {
+  skip(`the card window crossed ${cardsCrossed} cards in ${slides} slides; this scenario needs ${scenario.minCardsCrossed} (raise INPUT_SUSTAINED_SECONDS)`)
+}
 // Let the last metrics sample and any asynchronous logging flush.
 await settle(1500)
 const memoryAfter = await sampleRetainedMemory()
@@ -416,12 +666,25 @@ try {
     if (typeof total === 'number') cards = Math.max(cards, total)
   }
 } catch { /* gauges are a nicety; the frame numbers are the result */ }
-console.log(`RESULT ${JSON.stringify({
-  commits: profiledFrames.commits,
-  over: profiledFrames.over,
-  worst: profiledFrames.worst,
+const result: ScenarioResult = {
+  frames: summarizeFrameTimes(frameTimes),
+  treeWorst,
+  nativeWorst,
+  commits: profiled.commits,
+  over: profiled.over,
+  worst: profiled.worst,
+  renderWorst: profiled.renderWorst,
+  commitWorst: profiled.commitWorst,
+  renderTotal: profiled.renderTotal,
+  commitTotal: profiled.commitTotal,
   cards,
+  mounted,
+  moved,
+  slides,
+  cardsCrossed,
   memory: memoryBefore && memoryAfter ? { before: memoryBefore, after: memoryAfter } : undefined,
-})}`)
-if (process.env.INPUT_DEBUG_PROFILE === '1') console.error(`PROFILE ${JSON.stringify(profiledFrames)}`)
+}
+console.log(`RESULT ${JSON.stringify(result)}`)
+if (process.env.INPUT_DEBUG_PROFILE === '1') console.error(`PROFILE ${JSON.stringify(result)}`)
+if (process.env.INPUT_DEBUG_FRAME === '1') console.error(setup.captureCharFrame())
 process.exit(0)

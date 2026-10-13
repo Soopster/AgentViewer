@@ -14,6 +14,7 @@ const coord = await import('../lib/agentCoordination')
 const { createWorktreeTask } = await import('../lib/worktreeTasks')
 const { readCoordinatorResultReview: read, integrateCoordinatorResult: integrate } = await import('../lib/coordinatorResultReviewServer')
 const { resultVerification, coordinatorResultLines } = await import('../lib/coordinatorResultReview')
+const { executeExternalCoordinatorAction: execute } = await import('../lib/agentCoordinationExternal')
 const { coordinatorCheckoutRevision } = await import('../lib/coordinatorResultGit')
 const sessionId = 'result-review-lead'
 await coord.configureInteractiveCoordinator({ sessionId, provider: 'codex', cwd })
@@ -28,7 +29,9 @@ try {
   writeFileSync(path.join(worktree.path, 'new file.txt'), 'untracked\n')
   await coord.publishExternalProtocolFinding(worker, { kind: 'finding', taskId, summary: 'New file is intentional', detail: 'Review both paths.' })
   assert.equal((await coord.completeExternalProtocolTask(worker, { taskId, summary: 'Change ready', filesChanged: ['file.txt'], commandsRun: ['reported-only'] })).accepted, true)
-  const fresh = await read(sessionId, 'codex', taskId)
+  await assert.rejects(execute({ ...worker, action: 'read_result', taskId }), /Only the Coordinator lead/)
+  await assert.rejects(execute({ ...worker, action: 'integrate_result', taskId, reviewToken: 'anything', requestId: 'teammate-integrate' }), /Only the Coordinator lead/)
+  const fresh = await execute({ ...lead, action: 'read_result', taskId }) as Awaited<ReturnType<typeof read>>
   assert.equal(fresh.verification, 'current')
   assert.deepEqual(fresh.checkout!.files.sort(), ['file.txt', 'new file.txt'])
   assert.match(fresh.checkout!.diff, /after/)
@@ -51,12 +54,16 @@ try {
   writeFileSync('other.txt', 'target moves\n'); git('add', 'other.txt'); git('commit', '-qm', 'target advance')
   await assert.rejects(integrate(sessionId, 'codex', taskId, fresh.checkout!.token, 'target-changed'), /changed since review/)
   const ready = await read(sessionId, 'codex', taskId)
-  const result = await integrate(sessionId, 'codex', taskId, ready.checkout!.token, 'integrate-once')
+  const integrateRequest = { ...lead, action: 'integrate_result', taskId, reviewToken: ready.checkout!.token, requestId: 'integrate-once' }
+  const result = await execute(integrateRequest) as { staged: boolean }
   assert.equal(result.staged, true)
   assert.match(git('diff', '--cached'), /after/)
   assert.equal(git('log', '-1', '--format=%s'), 'target advance', 'integration does not commit target')
-  assert.deepEqual(await integrate(sessionId, 'codex', taskId, ready.checkout!.token, 'integrate-once'), result, 'same request reconciles despite now-dirty target')
+  assert.deepEqual(await execute(integrateRequest), result, 'same request reconciles despite now-dirty target')
   assert.equal(git('diff', '--name-only'), '', 'target has only staged changes')
+  const inspectedOperation = await execute({ ...lead, action: 'inspect_operation', toolName: 'coord_integrate_result', operationRequestId: 'integrate-once' }) as { state: string; hasCachedResult: boolean }
+  assert.equal(inspectedOperation.state, 'completed')
+  assert.equal(inspectedOperation.hasCachedResult, true)
   // Committed changes are subject to the completed task's original path grants.
   git('commit', '-qm', 'user integrates first result')
   const limitedTree = await createWorktreeTask(cwd, 'limited-result')
@@ -70,5 +77,22 @@ try {
   const limitedReview = await read(sessionId, 'codex', limitedTask.id)
   assert.ok(limitedReview.checkout!.files.includes('outside.txt'))
   assert.ok(limitedReview.integrationBlockers.some(reason => reason.includes('outside.txt')), 'committed out-of-scope paths cannot bypass the merge gate')
+  // An external MCP lead need not have a chat-session binding, and inspection
+  // must not approve the human run-review gate on its behalf.
+  const gatedLead = (await coord.createExternalProtocolRun({ prompt: 'Human review remains required', provider: 'codex', baseCwd: cwd, participantName: 'gated-lead', requireReview: true })).participant
+  try {
+    const gatedTree = await createWorktreeTask(cwd, 'human-reviewed-result')
+    const gatedWorker = (await coord.joinExternalProtocolRun({ runId: gatedLead.runId, provider: 'codex', participantName: 'gated-worker', cwd: gatedTree.path })).participant
+    const gatedTask = (await coord.createExternalProtocolTask(gatedLead, { assignTo: gatedWorker.agentId, title: 'Human-gated result', detail: 'Keep the review gate', paths: ['file.txt'], verifyCommands: ['git diff --check'] })).task!
+    writeFileSync(path.join(gatedTree.path, 'file.txt'), 'human-gated change\n')
+    assert.equal((await coord.completeExternalProtocolTask(gatedWorker, { taskId: gatedTask.id, summary: 'Checks passed; human review remains' })).accepted, true)
+    const gated = await execute({ ...gatedLead, action: 'read_result', taskId: gatedTask.id }) as Awaited<ReturnType<typeof read>>
+    assert.ok(gated.integrationBlockers.some(reason => reason.includes('required run review')))
+    const sourceBefore = await coordinatorCheckoutRevision(gatedTree.path)
+    const targetBefore = await coordinatorCheckoutRevision(cwd)
+    await assert.rejects(execute({ ...gatedLead, action: 'integrate_result', taskId: gatedTask.id, reviewToken: gated.checkout!.token, requestId: 'human-gate', reviewApproved: true }), /required run review/)
+    assert.equal(await coordinatorCheckoutRevision(gatedTree.path), sourceBefore)
+    assert.equal(await coordinatorCheckoutRevision(cwd), targetBefore)
+  } finally { await coord.stopProtocolRun(gatedLead.runId) }
   console.log('Result review: real git files/diff, executed receipt, stale evidence, dirty/moved target guards, staging and exact-request replay passed')
 } finally { await coord.stopProtocolRun(lead.runId) }

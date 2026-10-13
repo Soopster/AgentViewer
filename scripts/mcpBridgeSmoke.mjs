@@ -477,6 +477,46 @@ try {
     || createRequest?.body?.acceptanceContract?.goal !== 'Ship the bridge') {
     throw new Error('Coordinator run policy did not cross the MCP bridge')
   }
+  await client.callTool({ name: 'coord_inspect_recovery', arguments: { agent: 'reviewer' } })
+  await client.callTool({ name: 'coord_acknowledge_execution', arguments: { agent_id: 'agent-1', expected_task_id: 'task-old', expected_created_at: '2026-10-13T00:00:00Z', request_id: 'ack-reservation' } })
+  await client.callTool({ name: 'coord_resume_agent', arguments: { agent_id: 'agent-1', expected_task_id: 'task-pending', expected_session_id: 'native-saved', expected_claim_generation: 4, request_id: 'resume-inspected' } })
+  const recoveryResume = seen.find(entry => entry.body?.action === 'resume_agent')?.body
+  if (recoveryResume?.targetAgentId !== 'agent-1' || recoveryResume?.expectedTaskId !== 'task-pending'
+    || recoveryResume?.expectedSessionId !== 'native-saved' || recoveryResume?.expectedClaimGeneration !== 4 || recoveryResume?.requestId !== 'resume-inspected') {
+    throw new Error('MCP resume tool lost its inspected claim or replay key')
+  }
+  await client.callTool({ name: 'coord_read_task', arguments: { task_id: 'old-task' } })
+  await client.callTool({ name: 'coord_list_tasks', arguments: { cursor: 'task-page', limit: 7, status: 'completed' } })
+  await client.callTool({ name: 'coord_cancel_task', arguments: { task_id: 'old-task', expected_revision: 'inspected-revision', reason: 'Obsolete work', request_id: 'cancel-inspected' } })
+  await client.callTool({ name: 'coord_inspect_operation', arguments: { tool_name: 'coord_delegate', operation_request_id: 'lost-delegation' } })
+  const operationRead = seen.find(entry => entry.body?.action === 'inspect_operation')?.body
+  if (operationRead?.toolName !== 'coord_delegate' || operationRead?.operationRequestId !== 'lost-delegation' || operationRead?.runId !== 'run-1') {
+    throw new Error('MCP operation inspection lost original tool/key or participant scope')
+  }
+  await client.callTool({ name: 'coord_read_result', arguments: { task_id: 'completed-result' } })
+  await client.callTool({ name: 'coord_integrate_result', arguments: { task_id: 'completed-result', review_token: 'source-and-target-pin', request_id: 'integrate-reviewed' } })
+  const resultRead = seen.find(entry => entry.body?.action === 'read_result')?.body
+  const resultApply = seen.find(entry => entry.body?.action === 'integrate_result')?.body
+  if (resultRead?.taskId !== 'completed-result' || resultRead?.runId !== 'run-1'
+    || resultApply?.reviewToken !== 'source-and-target-pin' || resultApply?.requestId !== 'integrate-reviewed') {
+    throw new Error('MCP result tools lost task scope, review pin or replay key')
+  }
+  const taskRead = seen.find(entry => entry.body?.action === 'read_task')?.body
+  const taskList = seen.find(entry => entry.body?.action === 'list_tasks')?.body
+  const taskCancel = seen.find(entry => entry.body?.action === 'cancel_task')?.body
+  if (taskRead?.taskId !== 'old-task' || taskRead?.runId !== 'run-1'
+    || taskList?.cursor !== 'task-page' || taskList?.limit !== 7 || taskList?.status !== 'completed'
+    || taskCancel?.expectedRevision !== 'inspected-revision' || taskCancel?.reason !== 'Obsolete work' || taskCancel?.requestId !== 'cancel-inspected') {
+    throw new Error('MCP task tools lost bound scope, cursor, revision or replay key')
+  }
+  const recoveryRead = seen.find(entry => entry.body?.action === 'inspect_recovery')?.body
+  const recoveryAck = seen.find(entry => entry.body?.action === 'acknowledge_execution')?.body
+  if (recoveryRead?.agent !== 'reviewer' || recoveryRead?.runId !== 'run-1'
+    || recoveryAck?.targetAgentId !== 'agent-1' || recoveryAck?.expectedTaskId !== 'task-old'
+    || recoveryAck?.expectedCreatedAt !== '2026-10-13T00:00:00Z' || recoveryAck?.requestId !== 'ack-reservation') {
+    throw new Error('MCP recovery tools lost identity, reservation pin or replay key')
+  }
+
   const runs = await client.callTool({ name: 'coord_list_runs', arguments: { limit: 5 } })
   const runsPayload = JSON.parse(runs.content?.[0]?.text ?? '{}')
   if (runsPayload.runs?.[0]?.id !== 'run-1') throw new Error('Legacy Coordinator run discovery did not round-trip')

@@ -34,11 +34,60 @@ export function sessionMessageFingerprint(message: SessionMessage | undefined): 
   return fingerprint
 }
 
+/** Structural equality with the same notion of "same" as
+ *  compactStableFingerprint: key order, array length, `-0`, and an explicit
+ *  `undefined` all count. Strings compare natively, so nothing is hashed. */
+function sameFingerprintedValue(a: unknown, b: unknown, depth: number): boolean {
+  if (Object.is(a, b)) return true
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
+  // Deeper than any transcript payload: answer "changed" rather than recurse
+  // into a cycle. A false negative only costs a re-thread.
+  if (depth > 64) return false
+  const aIsArray = Array.isArray(a)
+  if (aIsArray !== Array.isArray(b)) return false
+  if (aIsArray) {
+    const left = a as unknown[]
+    const right = b as unknown[]
+    if (left.length !== right.length) return false
+    for (let i = 0; i < left.length; i++) {
+      if (!sameFingerprintedValue(left[i], right[i], depth + 1)) return false
+    }
+    return true
+  }
+  if (a instanceof Date || b instanceof Date) {
+    return a instanceof Date && b instanceof Date && a.getTime() === b.getTime()
+  }
+  const left = a as Record<string, unknown>
+  const right = b as Record<string, unknown>
+  const keys = Object.keys(left)
+  const otherKeys = Object.keys(right)
+  if (keys.length !== otherKeys.length) return false
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i]
+    if (key !== otherKeys[i]) return false
+    if (!sameFingerprintedValue(left[key], right[key], depth + 1)) return false
+  }
+  return true
+}
+
+/** Whether two messages would share a sessionMessageFingerprint, decided by
+ *  comparing them rather than hashing them. A live poll re-reads the transcript
+ *  into fresh objects and asks this of every message; fingerprinting those
+ *  objects hashed the whole session every two seconds (85ms of 114ms per poll
+ *  on a 900-message session) to learn that all but the last were unchanged. */
 export function sameSessionMessageContent(
   message: SessionMessage | undefined,
   previous: SessionMessage | undefined,
 ): boolean {
-  return sessionMessageFingerprint(message) === sessionMessageFingerprint(previous)
+  if (message === previous) return true
+  if (!message || !previous) return false
+  return (message.provider ?? '') === (previous.provider ?? '')
+    && message.type === previous.type
+    && message.uuid === previous.uuid
+    && (message.timestamp ?? '') === (previous.timestamp ?? '')
+    && (message.turnId ?? '') === (previous.turnId ?? '')
+    && (message.origin?.kind ?? '') === (previous.origin?.kind ?? '')
+    && sameFingerprintedValue(message.message, previous.message, 0)
 }
 
 // Hash a message sequence to a fixed-size value instead of joining every

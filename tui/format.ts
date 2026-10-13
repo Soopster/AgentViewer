@@ -100,7 +100,13 @@ function countNonBlankLines(value: string): number {
   return count
 }
 
+// Everything sanitizeLine removes or rewrites is a C0 control other than a
+// newline (ESC opens every ANSI sequence), so one probe decides whether its
+// four replace passes have anything to do. Almost no line does.
+const SANITIZE_PROBE = /[\u0000-\u0009\u000B-\u001F\u007F]/
+
 function sanitizeLine(value: string): string {
+  if (!SANITIZE_PROBE.test(value)) return value
   return value
     .replace(ANSI_ESCAPE_PATTERN, '')
     .replace(/\r/g, '')
@@ -310,7 +316,9 @@ function coordinatorCall(thread: ToolThread): CoordinatorCall | null {
   }
   if (canonicalToolName(thread.toolUse.name) !== 'Bash') return null
   const command = toolStringParam(input, ['command', 'cmd', 'script'])
-  const match = command ? COORDINATOR_SHELL_CALL.exec(command) : null
+  // The pattern ends in `[\s\S]*$`, so it is retried across the whole command;
+  // every match contains the literal it starts with.
+  const match = command && command.includes('client.mjs') ? COORDINATOR_SHELL_CALL.exec(command) : null
   return match ? { toolName: match[1]!, input: coordinatorShellArguments(match[2] ?? ''), shell: true } : null
 }
 
@@ -854,7 +862,21 @@ function normalizedToolKey(name: string): string {
   return name.trim().toLowerCase().replace(/[-\s]/g, '_')
 }
 
+// A transcript uses a few dozen tool names and asks for each one several times
+// per tool call. Bounded, so an unusual stream of names cannot grow it.
+const CANONICAL_TOOL_NAME_CACHE_MAX = 512
+const canonicalToolNameCache = new Map<string, string>()
+
 function canonicalToolName(name: string): string {
+  const cached = canonicalToolNameCache.get(name)
+  if (cached !== undefined) return cached
+  const canonical = resolveCanonicalToolName(name)
+  if (canonicalToolNameCache.size >= CANONICAL_TOOL_NAME_CACHE_MAX) canonicalToolNameCache.clear()
+  canonicalToolNameCache.set(name, canonical)
+  return canonical
+}
+
+function resolveCanonicalToolName(name: string): string {
   const normalized = name.trim()
   const key = normalizedToolKey(normalized)
   if (BASH_TOOL_ALIASES.has(key)) return 'Bash'
@@ -1801,6 +1823,19 @@ function formatOpenCodeTaskTool(thread: ToolThread, expanded: boolean): TuiTrans
 }
 
 function compactOneLine(value: string, maxChars = MAX_PREVIEW_CHARS): string {
+  // Only the first maxChars survive, so a long value (a heredoc command, a
+  // whole file passed as an argument) need not be collapsed end to end.
+  // Collapsing is local, so a prefix collapses to a prefix of the full result;
+  // with no control character in it sanitizeLine leaves it alone, and no ANSI
+  // sequence can begin there to be cut by the window. Anything else — a short
+  // value, a mostly-whitespace prefix, a control character — takes the full path.
+  const window = maxChars * 4 + 64
+  if (value.length > window * 2) {
+    const head = value.slice(0, window).replace(/\s+/g, ' ').trim()
+    if (head.length > maxChars && !SANITIZE_PROBE.test(head)) {
+      return `${head.slice(0, Math.max(maxChars - 1, 1))}…`
+    }
+  }
   return truncateLine(value.replace(/\s+/g, ' ').trim(), maxChars)
 }
 
@@ -1822,7 +1857,11 @@ function parseBashResultMeta(raw: string): { outputLineCount: number; exitCode: 
       exitCode = Number(exitMatch[1])
       continue
     }
-    const parenExitMatch = trimmed.match(/\(exit\s+(-?\d+)\)$/i)
+    // Unanchored at the start, so the pattern is retried from every `(` in the
+    // line; it can only match a line ending in `)`.
+    const parenExitMatch = trimmed.charCodeAt(trimmed.length - 1) === 41
+      ? trimmed.match(/\(exit\s+(-?\d+)\)$/i)
+      : null
     if (parenExitMatch?.[1]) {
       exitCode = Number(parenExitMatch[1])
       const withoutExit = trimmed.replace(/\s*\(exit\s+-?\d+\)$/i, '').trim()
@@ -2363,10 +2402,21 @@ const DAY_LABEL_FORMATTER = new Intl.DateTimeFormat('en-AU', {
   month: 'short',
 })
 
+// The label is a function of the local calendar day alone, and a transcript
+// spans a handful of days — so format each day once rather than once per card.
+const DAY_LABEL_CACHE_MAX = 512
+const dayLabelCache = new Map<number, string>()
+
 function formatDayLabel(parsed: Date | null): string | undefined {
   if (!parsed) return undefined
   if (Number.isNaN(parsed.getTime())) return undefined
-  return DAY_LABEL_FORMATTER.format(parsed)
+  const day = parsed.getFullYear() * 10_000 + parsed.getMonth() * 100 + parsed.getDate()
+  const cached = dayLabelCache.get(day)
+  if (cached !== undefined) return cached
+  const label = DAY_LABEL_FORMATTER.format(parsed)
+  if (dayLabelCache.size >= DAY_LABEL_CACHE_MAX) dayLabelCache.clear()
+  dayLabelCache.set(day, label)
+  return label
 }
 
 function compactPreviewLines(
@@ -2529,7 +2579,71 @@ function synthesizeEditDiff(message: ThreadedMessage): string | undefined {
   return hunks.length > 0 ? hunks.join('\n') : undefined
 }
 
-export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensity = 'balanced', activeForms?: TaskActiveForms, taskRegistry?: TaskRegistry, durationMs?: number): TuiTranscriptCard {
+function cardSearchText(expandedLines: TuiTranscriptCardLine[]): string {
+  return expandedLines.map((entry) => entry.text).join('\n')
+}
+
+function cardSearchHaystack(label: string, searchText: string): string {
+  return `${label}\n${searchText}`.toLowerCase()
+}
+
+// A card's two search strings are its expanded lines over again — 46% of a
+// card's bytes — and nothing reads them until a search runs. A card formatted
+// with `deferSearchText` carries '' in both (so its key order is unchanged),
+// and deferTranscriptCardSearchText makes those two keys derive themselves on
+// first read. Every reader sees exactly what an eager card holds.
+const deferredSearchCards = new WeakSet<TuiTranscriptCard>()
+
+function settleCardSearchText(card: TuiTranscriptCard, searchText?: string, searchHaystackLower?: string): void {
+  deferredSearchCards.delete(card)
+  const text = searchText ?? cardSearchText(card.expandedLines)
+  Object.defineProperty(card, 'searchText', { value: text, writable: true, enumerable: true, configurable: true })
+  Object.defineProperty(card, 'searchHaystackLower', {
+    value: searchHaystackLower ?? cardSearchHaystack(card.label, text),
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  })
+}
+
+const DEFERRED_SEARCH_TEXT: PropertyDescriptor = {
+  get(this: TuiTranscriptCard) { settleCardSearchText(this); return this.searchText },
+  set(this: TuiTranscriptCard, value: string) { settleCardSearchText(this, value) },
+  enumerable: true,
+  configurable: true,
+}
+const DEFERRED_SEARCH_HAYSTACK: PropertyDescriptor = {
+  get(this: TuiTranscriptCard) { settleCardSearchText(this); return this.searchHaystackLower },
+  set(this: TuiTranscriptCard, value: string) { settleCardSearchText(this, undefined, value) },
+  enumerable: true,
+  configurable: true,
+}
+
+/** Makes a card formatted with `deferSearchText` derive its search strings on
+ *  first read. Returns the same card. */
+export function deferTranscriptCardSearchText(card: TuiTranscriptCard): TuiTranscriptCard {
+  deferredSearchCards.add(card)
+  Object.defineProperty(card, 'searchText', DEFERRED_SEARCH_TEXT)
+  Object.defineProperty(card, 'searchHaystackLower', DEFERRED_SEARCH_HAYSTACK)
+  return card
+}
+
+/** `{ ...card, lines, compactSummary }` for a card that may still be deferring
+ *  its search strings: a spread would read them, which derives both for every
+ *  card of a density switch. The copy defers too, and keeps the key order. */
+export function withTranscriptCardPreview(card: TuiTranscriptCard, lines: TuiTranscriptCardLine[], compactSummary: string): TuiTranscriptCard {
+  if (!deferredSearchCards.has(card)) return { ...card, lines, compactSummary }
+  const copy = {} as Record<string, unknown>
+  const source = card as unknown as Record<string, unknown>
+  for (const key of Object.keys(card)) {
+    copy[key] = key === 'searchText' || key === 'searchHaystackLower' ? '' : source[key]
+  }
+  copy.lines = lines
+  copy.compactSummary = compactSummary
+  return deferTranscriptCardSearchText(copy as unknown as TuiTranscriptCard)
+}
+
+export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensity = 'balanced', activeForms?: TaskActiveForms, taskRegistry?: TaskRegistry, durationMs?: number, deferSearchText = false): TuiTranscriptCard {
   const baseLabel = message.role === 'assistant'
     ? getAssistantLabel(message.provider)
     : message.role.toUpperCase()
@@ -2564,7 +2678,7 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
     : compactCardLines(previewSourceLines, density)
   const compactSummary = collapsedLines.map((entry) => entry.text).join(' · ')
 
-  const searchText = expandedLines.map((entry) => entry.text).join('\n')
+  const searchText = deferSearchText ? '' : cardSearchText(expandedLines)
   return {
     key: message.uuid,
     role: message.role,
@@ -2574,7 +2688,7 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
     autoFold,
     compactSummary,
     usageSummary: formatUsageSummary(message),
-    durationLabel: durationMs != null && durationMs > 0 ? formatDurationMs(durationMs) : undefined,
+    durationLabel: turnDurationLabel(durationMs),
     timestamp: message.timestamp ? formatTimestamp(message.timestamp) : undefined,
     timestampMs: parsedTimestamp && !Number.isNaN(parsedTimestamp.getTime()) ? parsedTimestamp.getTime() : undefined,
     dayKey: parsedTimestamp && !Number.isNaN(parsedTimestamp.getTime()) ? parsedTimestamp.toISOString().slice(0, 10) : undefined,
@@ -2582,7 +2696,7 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
     lines: collapsedLines,
     expandedLines,
     searchText,
-    searchHaystackLower: `${label}\n${searchText}`.toLowerCase(),
+    searchHaystackLower: deferSearchText ? '' : cardSearchHaystack(label, searchText),
     codeBlocks: codeBlocks.length > 0 ? codeBlocks : undefined,
     editDiff: blockAnalysis.hasSyntheticEdit ? synthesizeEditDiff(message) : undefined,
     markdownContent: (category === 'conversation' || category === 'insight')
@@ -2605,6 +2719,24 @@ export function reformatTranscriptCardDensity(message: ThreadedMessage, density:
   for (const block of message.blocks) previewLines.push(...formatBlock(block, activeForms, taskRegistry))
   const lines = compactCardLines(previewLines, density)
   return { ...previous, lines, compactSummary: lines.map((entry) => entry.text).join(' · ') }
+}
+
+/** How a turn's elapsed time reads on a card; undefined when there is none to show. */
+export function turnDurationLabel(durationMs: number | undefined): string | undefined {
+  return durationMs != null && durationMs > 0 ? formatDurationMs(durationMs) : undefined
+}
+
+/**
+ * The card for the same message whose turn now has a different elapsed time.
+ * A turn's duration runs to its newest message, so while a turn streams every
+ * card in it gets a new duration on each poll — and nothing else about those
+ * cards has changed. The caller must have validated unchanged message content,
+ * task context and density. Returns `previous` itself when the label reads the
+ * same, so a sub-second step does not mint a new card.
+ */
+export function retimeTranscriptCard(previous: TuiTranscriptCard, durationMs?: number): TuiTranscriptCard {
+  const durationLabel = turnDurationLabel(durationMs)
+  return durationLabel === previous.durationLabel ? previous : { ...previous, durationLabel }
 }
 
 export function formatTranscriptCards(messages: ThreadedMessage[], density: TuiDensity = 'balanced'): TuiTranscriptCard[] {

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { markCoordinatorRejection } from '../../lib/coordinatorRejection'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -86,12 +87,21 @@ try {
   send.reject(new Error('Uncertain outcome')); await action
   assert.equal(store.getInteractiveCoordinatorState().pending, null, 'old submission cannot contaminate another chat')
   store.openInteractiveCoordinator(first)
-  assert.deepEqual(store.getInteractiveCoordinatorState().pending, request, 'switching back retains exact request')
+  assert.deepEqual(store.getInteractiveCoordinatorState().pending, JSON.parse(JSON.stringify(request)), 'switching back retains exact request')
   assert.match(store.getInteractiveCoordinatorState().error!, /unconfirmed/i)
   send = deferred()
   const retry = store.retryInteractiveCoordinatorAction()
-  assert.deepEqual(calls[1], calls[0], 'retry sends identical session and request key')
+  assert.deepEqual(calls[1], JSON.parse(JSON.stringify(calls[0])), 'retry sends identical session and request key')
   send.resolve(data(true)); assert.equal(await retry, true)
+
+  // A rejection the Coordinator certified wrote nothing is an outcome, not an
+  // unknown one: it must report why and leave the panel free for the next action.
+  send = deferred()
+  const refused = store.runInteractiveCoordinatorAction({ action: 'resume-agent', to: 'agent-2', detail: 'Resume' })
+  const refusal = new Error('Answer the pending question before resuming'); markCoordinatorRejection(refusal)
+  send.reject(refusal); assert.equal(await refused, false)
+  assert.equal(store.getInteractiveCoordinatorState().pending, null, 'a certified rejection does not lock the panel')
+  assert.match(store.getInteractiveCoordinatorState().error!, /before resuming/)
 
   // A read begun before the mutation must not roll its result back afterward.
   read = deferred(); changed!()

@@ -1164,6 +1164,66 @@ server.registerTool('coord_capabilities', {
   annotations: { readOnlyHint: true },
 }, async ({ provider, provider_instance_id }) => textResult(await coordinatorRequest('capabilities', { provider, providerInstanceId: provider_instance_id })))
 
+server.registerTool('coord_read_result', {
+  description: bridgeDescription('coord_read_result'),
+  inputSchema: { task_id: z.string().min(1) }, annotations: { readOnlyHint: true },
+}, async ({ task_id }) => textResult(await coordinatorRequest('read_result', { taskId: task_id })))
+
+server.registerTool('coord_integrate_result', {
+  description: bridgeDescription('coord_integrate_result'),
+  inputSchema: { task_id: z.string().min(1), review_token: z.string().min(1), request_id: z.string().min(1).max(160) },
+}, async ({ task_id, review_token, request_id }) => textResult(await coordinatorRequest('integrate_result', { taskId: task_id, reviewToken: review_token, requestId: request_id })))
+
+server.registerTool('coord_inspect_operation', {
+  description: bridgeDescription('coord_inspect_operation'),
+  inputSchema: { tool_name: z.string().min(1), operation_request_id: z.string().min(1).max(160) },
+  annotations: { readOnlyHint: true },
+}, async ({ tool_name, operation_request_id }) => textResult(await coordinatorRequest('inspect_operation', { toolName: tool_name, operationRequestId: operation_request_id })))
+
+server.registerTool('coord_read_task', {
+  description: bridgeDescription('coord_read_task'),
+  inputSchema: { task_id: z.string().min(1) }, annotations: { readOnlyHint: true },
+}, async ({ task_id }) => textResult(await coordinatorRequest('read_task', { taskId: task_id })))
+
+server.registerTool('coord_list_tasks', {
+  description: bridgeDescription('coord_list_tasks'),
+  inputSchema: { cursor: z.string().min(1).optional(), limit: z.number().int().min(1).max(100).optional(), status: z.enum(['pending', 'claimed', 'planning', 'planned', 'in_progress', 'blocked', 'completed', 'failed', 'cancelled']).optional() },
+  annotations: { readOnlyHint: true },
+}, async ({ cursor, limit, status }) => textResult(await coordinatorRequest('list_tasks', { cursor, limit, status })))
+
+server.registerTool('coord_cancel_task', {
+  description: bridgeDescription('coord_cancel_task'),
+  inputSchema: { task_id: z.string().min(1), expected_revision: z.string().min(1), reason: z.string().min(1), request_id: requestIdField },
+  annotations: { destructiveHint: true },
+}, async ({ task_id, expected_revision, reason, request_id }) => textResult(await coordinatorRequest('cancel_task', { taskId: task_id, expectedRevision: expected_revision, reason, requestId: request_id })))
+
+server.registerTool('coord_resume_agent', {
+  description: bridgeDescription('coord_resume_agent'),
+  inputSchema: {
+    agent_id: z.string().min(1), expected_task_id: z.string().min(1), expected_session_id: z.string().min(1),
+    expected_claim_generation: z.number().int().min(0), request_id: requestIdField,
+  },
+}, async ({ agent_id, expected_task_id, expected_session_id, expected_claim_generation, request_id }) => textResult(await coordinatorRequest('resume_agent', {
+  targetAgentId: agent_id, expectedTaskId: expected_task_id, expectedSessionId: expected_session_id,
+  expectedClaimGeneration: expected_claim_generation, requestId: request_id,
+})))
+
+server.registerTool('coord_inspect_recovery', {
+  description: bridgeDescription('coord_inspect_recovery'),
+  inputSchema: { agent: z.string().min(1).optional() },
+  annotations: { readOnlyHint: true },
+}, async ({ agent }) => textResult(await coordinatorRequest('inspect_recovery', { agent })))
+
+server.registerTool('coord_acknowledge_execution', {
+  description: bridgeDescription('coord_acknowledge_execution'),
+  inputSchema: {
+    agent_id: z.string().min(1), expected_task_id: z.string().min(1), expected_created_at: z.string().min(1),
+    request_id: requestIdField,
+  },
+}, async ({ agent_id, expected_task_id, expected_created_at, request_id }) => textResult(await coordinatorRequest('acknowledge_execution', {
+  targetAgentId: agent_id, expectedTaskId: expected_task_id, expectedCreatedAt: expected_created_at, requestId: request_id,
+})))
+
 server.registerTool('coord_status', {
   description: bridgeDescription('coord_status'),
   annotations: { readOnlyHint: true },

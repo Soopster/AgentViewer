@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { buildThreadedMessages, computeTurnDurationsMs, stripToolCallBlocks } from '../../lib/threading'
 import type { SessionMessage } from '../../lib/types'
-import { buildTranscriptTaskContext, ensureTuiMermaidRenderer, formatTranscriptCard, formatTranscriptCards, reformatTranscriptCardDensity } from '../format'
+import { buildTranscriptTaskContext, deferTranscriptCardSearchText, ensureTuiMermaidRenderer, formatTranscriptCard, formatTranscriptCards, reformatTranscriptCardDensity, type TuiTranscriptCard } from '../format'
 import type { TuiDensity } from '../theme'
 
 // Real formatting oracle across repeated density changes: expanded code/text,
@@ -64,14 +64,15 @@ try {
     const nextThreaded = buildThreadedMessages(messages)
     for (const showToolCalls of [true, false]) {
       for (const density of densities) {
-        const reply = await new Promise<{ ok: boolean; error?: string; transcriptCards: unknown }>((resolve, reject) => {
+        const reply = await new Promise<{ ok: boolean; error?: string; transcriptCards: TuiTranscriptCard[] }>((resolve, reject) => {
           const timeout = setTimeout(() => reject(new Error('Density worker smoke timed out')), 30000)
           worker.onmessage = (event) => { clearTimeout(timeout); resolve(event.data) }
           worker.onerror = (event) => { clearTimeout(timeout); reject(new Error(event.message)) }
           worker.postMessage({ kind: 'format', id: ++id, session: { provider: 'codex', sessionId: 'density-smoke' }, threaded: nextThreaded, density, showToolCalls })
         })
         assert.equal(reply.ok, true, reply.error ?? 'Worker density formatting failed')
-        assert.deepEqual(reply.transcriptCards, formatTranscriptCards(showToolCalls ? nextThreaded : stripToolCallBlocks(nextThreaded), density))
+        // Cards cross the wire without their search strings; the client derives them.
+        assert.deepEqual(reply.transcriptCards.map(deferTranscriptCardSearchText), formatTranscriptCards(showToolCalls ? nextThreaded : stripToolCallBlocks(nextThreaded), density))
         comparisons++
       }
     }

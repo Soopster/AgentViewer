@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { buildThreadedMessages, stripToolCallBlocks } from '../../lib/threading'
 import type { SessionMessage } from '../../lib/types'
-import { formatTranscriptCards } from '../format'
+import { deferTranscriptCardSearchText, formatTranscriptCards } from '../format'
 import type { TuiDensity } from '../theme'
 
 // Rotating sessions must plateau after cache warmup, including format-only
@@ -31,7 +31,8 @@ async function format(index: number, density: TuiDensity = 'balanced', showToolC
     worker.postMessage({ kind: 'format', id: ++requestId, session: { provider: 'codex', sessionId: `memory-${index}` }, threaded, density, showToolCalls })
   })
   assert.equal(reply.ok, true, reply.error ?? 'Worker format failed')
-  assert.deepEqual(reply.transcriptCards, formatTranscriptCards(showToolCalls ? threaded : stripToolCallBlocks(threaded), density))
+  // Cards cross the wire without their search strings; the client derives them.
+  assert.deepEqual(reply.transcriptCards.map(deferTranscriptCardSearchText), formatTranscriptCards(showToolCalls ? threaded : stripToolCallBlocks(threaded), density))
   return reply
 }
 

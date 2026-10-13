@@ -3037,7 +3037,7 @@ function MessageViewInner({
   const [selectedAgent, setSelectedAgent] = useState('')
   const [selectedCopilotMode, setSelectedCopilotMode] = useState('interactive')
   // Claude `/permissions` modes — passed through to body.permissionMode on send.
-  const [selectedPermissionMode, setSelectedPermissionMode] = useState<'default' | 'acceptEdits' | 'auto' | 'plan' | 'bypassPermissions'>('default')
+  const [selectedPermissionMode, setSelectedPermissionMode] = useState<'default' | 'acceptEdits' | 'auto' | 'plan' | 'bypassPermissions'>('auto')
   // Codex `/approvals` policy — passed through to body.approvalPolicy on send.
   // 'auto' leaves the app-server's configured default untouched.
   const [selectedCodexApproval, setSelectedCodexApproval] = useState<'auto' | 'untrusted' | 'on-request' | 'never'>('auto')

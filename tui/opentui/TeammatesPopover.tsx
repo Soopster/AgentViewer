@@ -97,7 +97,7 @@ import type { ProtocolAgent } from '../../lib/agentProtocol'
 import { describeRunRollup } from '../../lib/coordinatorRollup'
 import { coordinatorAttention, type CoordinatorAttentionItem } from '../../lib/coordinatorAttention'
 import { coordinatorPickerState, coordinatorResultIdsForAgent } from '../../lib/coordinatorSignals'
-import { coordinatorAgentActivity, coordinatorAgentNote, coordinatorAgentWorkspace, coordinatorInstanceLabel, coordinatorStalledAgentIds, type CoordinatorStaffingChoice } from '../../lib/coordinatorInteractiveState'
+import { coordinatorAgentActivity, coordinatorAgentNote, coordinatorAgentWorkspace, coordinatorDeathReason, coordinatorInstanceLabel, coordinatorStalledAgentIds, type CoordinatorStaffingChoice } from '../../lib/coordinatorInteractiveState'
 import {
   closeInteractiveCoordinator,
   readInteractiveCoordinatorTeardown,
@@ -712,6 +712,10 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       }
       if (recovering && data?.interactive.autoResumeExhausted?.includes(detailAgent.id)) {
         rightRows.push({ cells: [[fitText('Resumed automatically twice without finishing; it now waits for you.', rightW).trimEnd(), theme.amber]] })
+      }
+      const dead = recovering ? data?.deadAgents?.find(entry => entry.agentId === detailAgent.id) : undefined
+      if (dead) {
+        for (const text of wrapWords(`Turn ended: ${coordinatorDeathReason(dead)}${dead.detail ? ` — ${dead.detail}` : ''}`, rightW, 3)) rightRows.push({ cells: [[text, theme.amber]] })
       }
       if (recovering) {
         // `r` is the lead's; a teammate's view can only look.

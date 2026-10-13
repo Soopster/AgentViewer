@@ -106,6 +106,23 @@ if (!phase) {
     assert.equal(starts, 0, 'observer cannot redispatch reserved work')
     if (phase === 'observer') {
       assert.equal((await coord.readInteractiveCoordinator('lead-chat')).executionElsewhere, true)
+      const { executeExternalCoordinatorAction: execute } = await import('../lib/agentCoordinationExternal')
+      const inspected = await execute({ ...lead, action: 'inspect_recovery', agent: 'agent-1' }) as Awaited<ReturnType<typeof coord.inspectExternalProtocolRecovery>>
+      assert.equal(inspected.executionElsewhere, true)
+      const foreignResult = await execute({ ...lead, action: 'read_result', taskId }) as { checkout: unknown; integrationBlockers: string[] }
+      assert.equal(foreignResult.checkout, null, 'foreign result inspection does not inspect local checkout paths')
+      assert.ok(foreignResult.integrationBlockers.some(reason => reason.includes('another host')))
+      await assert.rejects(execute({ ...lead, action: 'integrate_result', taskId, reviewToken: 'foreign-review', requestId: 'foreign-integrate' }), /another host/)
+
+      const taskInspection = await execute({ ...lead, action: 'read_task', taskId }) as Awaited<ReturnType<typeof coord.readExternalProtocolTask>>
+      await assert.rejects(execute({ ...lead, action: 'cancel_task', taskId, expectedRevision: taskInspection.revision, reason: 'Foreign observer must not cancel', requestId: 'foreign-cancel' }), /another local Agent Viewer host/)
+      assert.equal((await coord.readExternalProtocolTask(lead, taskId)).task.status, taskInspection.task.status)
+
+      assert.equal(inspected.executions[0]!.canAcknowledge, false)
+      assert.equal((await hostOwner())[0]?.owner_pid === process.pid, false, 'MCP inspection never claims the host')
+      const reservation = inspected.executions[0]!.reservation!
+      await assert.rejects(execute({ ...lead, action: 'acknowledge_execution', targetAgentId: 'agent-1', expectedTaskId: reservation.taskId, expectedCreatedAt: reservation.createdAt, requestId: 'foreign-host-ack' }), /another local Agent Viewer host/)
+
       await coord.adoptOrphanedInteractiveHost('lead-chat', 'codex')
       assert.notEqual((await hostOwner())[0]?.owner_pid, process.pid, 'a UI read never displaces a live owner')
       await assert.rejects(coord.sessionCoordinatorIdentity('lead-chat', 'codex'), /another local Agent Viewer host/)

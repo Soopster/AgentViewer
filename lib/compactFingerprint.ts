@@ -1,108 +1,132 @@
-type HashState = {
-  a: number
-  b: number
-  chars: number
-}
-
 const HASH_A_INIT = 0x811c9dc5
 const HASH_B_INIT = 0x9e3779b9
 const HASH_A_PRIME = 0x01000193
+const HASH_B_OFFSET = 0x7ed55d16
 
-function mixCode(state: HashState, code: number): void {
-  state.a = Math.imul(state.a ^ code, HASH_A_PRIME) >>> 0
-  state.b = (Math.imul(state.b ^ code, 33) + 0x7ed55d16) >>> 0
-}
+// The two hash lanes and the character count live in module scope as int32s,
+// and each string is mixed through locals. The previous shape kept them as
+// uint32 fields on a state object (`>>> 0` after every step): a value above
+// 2^31 is not an int32, so the engine stored a double per character and the
+// loop ran ~20ns/char — 72% of the transcript worker's CPU on a live poll,
+// which fingerprints every message of the open session. `| 0` keeps the same
+// 32 bits, so the fingerprint is unchanged; only the last step is unsigned.
+let hashA = 0
+let hashB = 0
+let hashChars = 0
 
-function mixSmallNumber(state: HashState, value: number): void {
-  mixCode(state, value & 0xff)
-  mixCode(state, (value >>> 8) & 0xff)
-  mixCode(state, (value >>> 16) & 0xff)
-  mixCode(state, (value >>> 24) & 0xff)
-}
-
-function mixString(state: HashState, value: string): void {
-  state.chars += value.length
-  mixSmallNumber(state, value.length)
-  for (let i = 0; i < value.length; i += 1) {
-    mixCode(state, value.charCodeAt(i))
+/** Mixes a string exactly as before: its length as four little-endian bytes,
+ *  then every UTF-16 code unit. */
+function mixString(value: string): void {
+  const length = value.length
+  let a = hashA
+  let b = hashB
+  let byte = length & 0xff
+  a = Math.imul(a ^ byte, HASH_A_PRIME)
+  b = (Math.imul(b ^ byte, 33) + HASH_B_OFFSET) | 0
+  byte = (length >>> 8) & 0xff
+  a = Math.imul(a ^ byte, HASH_A_PRIME)
+  b = (Math.imul(b ^ byte, 33) + HASH_B_OFFSET) | 0
+  byte = (length >>> 16) & 0xff
+  a = Math.imul(a ^ byte, HASH_A_PRIME)
+  b = (Math.imul(b ^ byte, 33) + HASH_B_OFFSET) | 0
+  byte = (length >>> 24) & 0xff
+  a = Math.imul(a ^ byte, HASH_A_PRIME)
+  b = (Math.imul(b ^ byte, 33) + HASH_B_OFFSET) | 0
+  for (let i = 0; i < length; i += 1) {
+    const code = value.charCodeAt(i)
+    a = Math.imul(a ^ code, HASH_A_PRIME)
+    b = (Math.imul(b ^ code, 33) + HASH_B_OFFSET) | 0
   }
+  hashA = a
+  hashB = b
+  hashChars += length
 }
 
-function hashValue(state: HashState, value: unknown, seen: WeakSet<object>): void {
+function mixSmallNumber(value: number): void {
+  let a = hashA
+  let b = hashB
+  for (let shift = 0; shift < 32; shift += 8) {
+    const byte = (value >>> shift) & 0xff
+    a = Math.imul(a ^ byte, HASH_A_PRIME)
+    b = (Math.imul(b ^ byte, 33) + HASH_B_OFFSET) | 0
+  }
+  hashA = a
+  hashB = b
+}
+
+function hashValue(value: unknown, seen: WeakSet<object>): void {
   if (value === null) {
-    mixString(state, 'null')
+    mixString('null')
     return
   }
 
   switch (typeof value) {
     case 'string':
-      mixString(state, 'string')
-      mixString(state, value)
+      mixString('string')
+      mixString(value)
       return
     case 'number':
-      mixString(state, 'number')
-      mixString(state, Object.is(value, -0) ? '-0' : String(value))
+      mixString('number')
+      mixString(Object.is(value, -0) ? '-0' : String(value))
       return
     case 'boolean':
-      mixString(state, value ? 'true' : 'false')
+      mixString(value ? 'true' : 'false')
       return
     case 'undefined':
-      mixString(state, 'undefined')
+      mixString('undefined')
       return
     case 'bigint':
-      mixString(state, 'bigint')
-      mixString(state, value.toString())
+      mixString('bigint')
+      mixString(value.toString())
       return
     case 'symbol':
-      mixString(state, 'symbol')
-      mixString(state, value.description ?? '')
+      mixString('symbol')
+      mixString(value.description ?? '')
       return
     case 'function':
-      mixString(state, 'function')
-      mixString(state, value.name)
+      mixString('function')
+      mixString(value.name)
       return
     case 'object':
       break
   }
 
   if (seen.has(value)) {
-    mixString(state, 'circular')
+    mixString('circular')
     return
   }
   seen.add(value)
 
   if (Array.isArray(value)) {
-    mixString(state, 'array')
-    mixSmallNumber(state, value.length)
-    for (const item of value) hashValue(state, item, seen)
+    mixString('array')
+    mixSmallNumber(value.length)
+    for (const item of value) hashValue(item, seen)
     seen.delete(value)
     return
   }
 
   if (value instanceof Date) {
-    mixString(state, 'date')
-    mixString(state, value.toISOString())
+    mixString('date')
+    mixString(value.toISOString())
     seen.delete(value)
     return
   }
 
   const record = value as Record<string, unknown>
   const keys = Object.keys(record)
-  mixString(state, 'object')
-  mixSmallNumber(state, keys.length)
+  mixString('object')
+  mixSmallNumber(keys.length)
   for (const key of keys) {
-    mixString(state, key)
-    hashValue(state, record[key], seen)
+    mixString(key)
+    hashValue(record[key], seen)
   }
   seen.delete(value)
 }
 
 export function compactStableFingerprint(value: unknown): string {
-  const state: HashState = {
-    a: HASH_A_INIT,
-    b: HASH_B_INIT,
-    chars: 0,
-  }
-  hashValue(state, value, new WeakSet<object>())
-  return `${state.chars.toString(36)}:${state.a.toString(36)}:${state.b.toString(36)}`
+  hashA = HASH_A_INIT | 0
+  hashB = HASH_B_INIT | 0
+  hashChars = 0
+  hashValue(value, new WeakSet<object>())
+  return `${hashChars.toString(36)}:${(hashA >>> 0).toString(36)}:${(hashB >>> 0).toString(36)}`
 }

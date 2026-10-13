@@ -14,6 +14,13 @@ export type CoordinatorInteractiveState = {
   recoveries: string[]
   settledExecutions?: string[]
   /**
+   * Teammates whose turn the Coordinator gave up on (provider failure with no
+   * failover, or a stall). They are in `recoveries` too; this says why, and
+   * that the block is not a question waiting on a person.
+   * Optional: a daemon older than this field simply omits it.
+   */
+  deadAgents?: CoordinatorDeadAgent[]
+  /**
    * Teammates whose turn ended with background work still due to report back.
    * Optional: a daemon older than this field simply omits it.
    */
@@ -25,6 +32,13 @@ export type CoordinatorInteractiveState = {
    * Optional: a daemon older than this field simply omits it.
    */
   staffing?: CoordinatorStaffingChoice[]
+}
+
+export type CoordinatorDeadAgent = { agentId: string; taskId: string; failureClass: string; detail?: string }
+
+/** "rate limited", "provider failure" — the failure class as a person reads it. */
+export function coordinatorDeathReason(dead: Pick<CoordinatorDeadAgent, 'failureClass'>): string {
+  return dead.failureClass.replace(/_/g, ' ')
 }
 
 export type CoordinatorStaffingChoice = {
@@ -150,10 +164,12 @@ export function coordinatorStalledAgentIds(state: CoordinatorInteractiveState | 
   }).map(agent => agent.id)
 }
 
-export function coordinatorAgentActivity(agent: ProtocolAgent, state: Pick<CoordinatorInteractiveState, 'permissions' | 'recoveries' | 'runningAgentIds'> & Partial<Pick<CoordinatorInteractiveState, 'interactive' | 'backgroundAgents' | 'settledExecutions'>>, observationUnavailable = false, stalled = false): string {
+export function coordinatorAgentActivity(agent: ProtocolAgent, state: Pick<CoordinatorInteractiveState, 'permissions' | 'recoveries' | 'runningAgentIds'> & Partial<Pick<CoordinatorInteractiveState, 'interactive' | 'backgroundAgents' | 'settledExecutions' | 'deadAgents'>>, observationUnavailable = false, stalled = false): string {
   if (observationUnavailable) return 'Unknown · last observation unavailable'
   if (state.interactive?.executionElsewhere) return 'Managed by another host · inspect there'
   if (state.permissions.some(item => item.agentId === agent.id)) return 'Waiting for your answer'
+  const dead = state.deadAgents?.find(entry => entry.agentId === agent.id)
+  if (dead && state.recoveries.includes(agent.id)) return `Needs recovery · turn ended: ${coordinatorDeathReason(dead)}`
   if (state.recoveries.includes(agent.id)) return 'Needs recovery · inspect before resuming'
   if (state.runningAgentIds.includes(agent.id)) return agent.status === 'blocked' ? 'Waiting for input' : 'Working · live turn'
   if (agent.turnActive) return 'Starting · awaiting provider activity'

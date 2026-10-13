@@ -34,7 +34,7 @@ if (!phase) {
 } else {
   process.chdir(process.argv[3]!)
   const { mock } = await (0, eval)('import("bun:test")')
-  let created = 0; let starts = 0; let unavailable = false; let mismatch = false; let alias: string | null = null
+  let created = 0; let starts = 0; let nativeQuestion = false; let unavailable = false; let mismatch = false; let alias: string | null = null
   mock.module(fileURLToPath(new URL('../lib/sessionBackend.ts', import.meta.url)), () => ({
     createNewViewSession: async ({ cwd }: { cwd: string }) => {
       assert.equal(phase, 'owner', 'restoring must not create a replacement session')
@@ -48,7 +48,7 @@ if (!phase) {
       const info = sessionId === 'lead-chat' ? { sessionId, provider: 'codex', cwd: process.cwd() } : JSON.parse(readFileSync(`${sessionId}.json`, 'utf8'))
       return alias && sessionId === 'native-2' ? { ...info, cwd: alias } : info
     },
-    readViewSessionRunning: () => ({ running: false, pendingPermissions: [], pendingPrompts: [] }),
+    readViewSessionRunning: () => ({ running: false, pendingPermissions: [], pendingPrompts: nativeQuestion ? [{ id: "human-question" }] : [] }),
     streamViewSessionTurn: async () => { starts++; return new Promise<Response>(() => {}) },
   }))
   const coord = await import('../lib/agentCoordination')
@@ -90,6 +90,9 @@ if (!phase) {
   assert.equal((await inspectedRoute.json()).inspection.runId, state.snapshot!.run.id)
   assert.equal(starts, 0, 'web recovery inspection never launches work')
   const lead = await coord.sessionCoordinatorIdentity('lead-chat', 'codex')
+  const retainedResult = await (await import('../lib/agentCoordinationExternal')).executeExternalCoordinatorAction({ ...lead, action: 'read_result', taskId: ids.completedTask }) as { integrationBlockers: string[] }
+  assert.ok(retainedResult.integrationBlockers.some(reason => reason.includes('retained teammate execution')), 'a terminal reservation still needs acknowledgement before result integration')
+  assert.equal(starts, 0, 'result inspection never replays the retained native stream')
   let inspection = await inspectCoordinatorRecovery(state.snapshot!)
   let rows = recoveryOverview(state, inspection)
   assert.equal(rows.find(row => row.agentId === ids.completedAgent)!.canResume, false)
@@ -121,10 +124,18 @@ if (!phase) {
   assert.equal(acknowledgedRoute.status, 200, await acknowledgedRoute.clone().text())
   await service.sendTuiSessionCoordination('lead-chat', 'codex', acknowledge)
   assert.equal(starts, 0, 'acknowledging settled execution never starts a provider turn')
-  const request = { action: 'resume-agent' as const, requestId: 'resume-once', to: ids.pendingAgent, detail: 'Inspected saved transcript and owned work' }
-  await service.sendTuiSessionCoordination('lead-chat', 'codex', request)
+  const { executeExternalCoordinatorAction: execute } = await import('../lib/agentCoordinationExternal')
+  const inspected = await execute({ ...lead, action: 'inspect_recovery', agent: agent.id }) as Awaited<ReturnType<typeof coord.inspectExternalProtocolRecovery>>
+  const claim = inspected.executions[0]!.recoveryClaim!
+  const resume = { ...lead, action: 'resume_agent', targetAgentId: agent.id, expectedTaskId: claim.taskId, expectedSessionId: claim.sessionId, expectedClaimGeneration: claim.claimGeneration, requestId: 'mcp-resume-once' }
+  await assert.rejects(execute({ ...resume, expectedClaimGeneration: claim.claimGeneration + 1 }), /claim changed/)
+  nativeQuestion = true
+  await assert.rejects(execute(resume), /pending native permission or question/)
+  assert.equal(starts, 0, 'MCP recovery cannot bypass a native human question')
+  nativeQuestion = false
+  const receipt = await execute(resume)
   await until(() => starts === 1)
-  await service.sendTuiSessionCoordination('lead-chat', 'codex', request)
+  assert.deepEqual(await execute(resume), receipt, 'MCP same-key resume never submits another turn')
   assert.equal(starts, 1)
   assert.equal(created, 0)
   state = await service.readTuiSessionCoordinator('lead-chat', 'codex')

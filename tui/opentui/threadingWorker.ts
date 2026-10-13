@@ -10,9 +10,10 @@ import {
   buildTranscriptTaskContext,
   ensureTuiMermaidRenderer,
   formatTranscriptCard,
-  formatTranscriptCards,
   reformatTranscriptCardDensity,
+  retimeTranscriptCard,
   textNeedsTuiMermaid,
+  turnDurationLabel,
   type TuiTranscriptCard,
 } from '../format'
 import type { TuiDensity } from '../theme'
@@ -41,6 +42,7 @@ type DetailRequest = {
   session: Session
   density: TuiDensity
   showToolCalls: boolean
+  separateTurnDurations?: boolean
   previousDeliveryToken?: number
 }
 type FormatRequest = {
@@ -55,6 +57,7 @@ type FormatRequest = {
   threadedBaseVariant?: string
   density: TuiDensity
   showToolCalls: boolean
+  separateTurnDurations?: boolean
 }
 type SessionsRequest = {
   kind: 'sessions'
@@ -75,6 +78,7 @@ type WarmRequest = {
   session: Session
   density: TuiDensity
   showToolCalls: boolean
+  separateTurnDurations?: boolean
 }
 // A session's current model + context usage. This used to run in a Worker of
 // its own, which bought isolation from a read that can block for over a second
@@ -119,6 +123,8 @@ type WorkerResponse =
       threadedPrefix: number
       cardsPrefix: number
       externalWriter?: boolean
+      turnDurationLabels?: TurnDurationLabels
+      turnDurationPatch?: TurnDurationPatch
     }
   | {
       id: number
@@ -128,8 +134,8 @@ type WorkerResponse =
       deliveryToken: number
       externalWriter?: boolean
     }
-  | { id: number; ok: true; transcriptCards: TuiTranscriptCard[]; formatToken: number }
-  | { id: number; ok: true; densityCards: (TuiTranscriptCard | { sharedCardIndex: number; lines: TuiTranscriptCard['lines']; compactSummary: string })[]; formatToken: number; baseFormatToken: number }
+  | { id: number; ok: true; transcriptCards: TuiTranscriptCard[]; formatToken: number; turnDurationLabels?: TurnDurationLabels }
+  | { id: number; ok: true; densityCards: (TuiTranscriptCard | { sharedCardIndex: number; lines: TuiTranscriptCard['lines']; compactSummary: string })[]; formatToken: number; baseFormatToken: number; turnDurationLabels?: TurnDurationLabels }
   | {
       id: number
       ok: true
@@ -138,6 +144,7 @@ type WorkerResponse =
       cardsDeleteCount: number
       formatToken: number
       baseFormatToken: number
+      turnDurationPatch?: TurnDurationPatch
     }
   | { id: number; ok: true; sessions: Session[] }
   | { id: number; ok: true; warmed: true }
@@ -173,8 +180,50 @@ type LastSentDetail = {
   cards: TuiTranscriptCard[]
   cardsVariant: string
   deliveryToken: number
+  turnDurationLabels?: TurnDurationLabels
 }
 const lastSentByKey = new Map<string, LastSentDetail>()
+
+// With `separateTurnDurations` a card carries no durationLabel: a turn's elapsed
+// time runs to its newest message, so on a card it changes every card of the
+// streaming turn on every poll — 17 to 160 cards per appended message in real
+// sessions — and each one reaches the reader as a new object. The labels travel
+// beside the cards instead, keyed by card key, as a patch against the previous
+// delivery so a poll ships the active turn's entries and not the transcript's.
+type TurnDurationLabels = Record<string, string>
+type TurnDurationPatch = Record<string, string | null>
+
+function cardsVariantKey(density: TuiDensity, showToolCalls: boolean, separateTurnDurations: boolean | undefined): string {
+  return `${density}|${showToolCalls ? 1 : 0}${separateTurnDurations ? '|d' : ''}`
+}
+
+function visibleMessages(threaded: ThreadedMessage[], showToolCalls: boolean): ThreadedMessage[] {
+  return showToolCalls ? threaded : stripToolCallBlocks(threaded)
+}
+
+function turnDurationLabelsFor(threaded: ThreadedMessage[], showToolCalls: boolean): TurnDurationLabels {
+  const labels: TurnDurationLabels = {}
+  for (const [key, durationMs] of computeTurnDurationsMs(visibleMessages(threaded, showToolCalls))) {
+    const label = turnDurationLabel(durationMs)
+    if (label !== undefined) labels[key] = label
+  }
+  return labels
+}
+
+/** What turns `previous` into `next`; undefined when they already agree. */
+function turnDurationPatch(next: TurnDurationLabels, previous: TurnDurationLabels | undefined): TurnDurationPatch | undefined {
+  const patch: TurnDurationPatch = {}
+  let changed = false
+  for (const key in next) {
+    if (previous?.[key] !== next[key]) { patch[key] = next[key]; changed = true }
+  }
+  if (previous) {
+    for (const key in previous) {
+      if (!(key in next)) { patch[key] = null; changed = true }
+    }
+  }
+  return changed ? patch : undefined
+}
 
 function sharedIdentityPrefix<T>(next: readonly T[], prev: readonly T[]): number {
   const limit = Math.min(next.length, prev.length)
@@ -206,6 +255,7 @@ type LastFormatted = {
   cards: TuiTranscriptCard[]
   formatToken: number
   hasTaskList: boolean
+  turnDurationLabels?: TurnDurationLabels
 }
 const lastFormattedByKey = new Map<string, LastFormatted>()
 
@@ -335,9 +385,10 @@ async function formatCards(
   density: TuiDensity,
   showToolCalls: boolean,
   pruneCache = true,
+  separateTurnDurations = false,
 ): Promise<TuiTranscriptCard[]> {
   await ensureMermaidForTranscript(threaded)
-  const messages = showToolCalls ? threaded : stripToolCallBlocks(threaded)
+  const messages = visibleMessages(threaded, showToolCalls)
   let perSession = cardCacheByKey.get(sessionCacheKey)
   if (!perSession) {
     perSession = new Map()
@@ -356,13 +407,13 @@ async function formatCards(
     dropLastFormattedForSession(oldestKey)
   }
   const { activeForms, taskRegistry } = buildTranscriptTaskContext(messages)
-  const durations = computeTurnDurationsMs(messages)
+  const durations = separateTurnDurations ? null : computeTurnDurationsMs(messages)
 
   const cards: TuiTranscriptCard[] = new Array(messages.length)
   const seenMessageKeys = new Set<string>()
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i]
-    const durationMs = durations.get(msg.uuid)
+    const durationMs = durations?.get(msg.uuid)
     const messageKey = threadedMessageFingerprint(msg)
     seenMessageKeys.add(messageKey)
     // TaskList rendering depends on the session-wide activeForms map, which
@@ -371,7 +422,7 @@ async function formatCards(
     // OBJECT — an always-new TaskList card caps the identity prefix at the
     // first TaskList in the transcript and forfeits the downstream cache hits.
     if (hasTaskListBlock(msg)) {
-      const fresh = formatTranscriptCard(msg, density, activeForms, taskRegistry, durationMs)
+      const fresh = formatTranscriptCard(msg, density, activeForms, taskRegistry, durationMs, true)
       const prevEntry = perSession.get(messageKey)
       if (prevEntry?.density === density && Object.is(prevEntry.durationMs, durationMs) && JSON.stringify(prevEntry.card) === JSON.stringify(fresh)) {
         cards[i] = prevEntry.card
@@ -383,10 +434,19 @@ async function formatCards(
     }
     let entry = perSession.get(messageKey)
     if (!entry || entry.density !== density || !Object.is(entry.durationMs, durationMs)) {
+      // The key is the message's content, so a cached entry differs from what
+      // is wanted in at most its density and its turn's duration, and each has
+      // a rewrite that leaves the rest of the card alone. The duration one is
+      // the live-poll path: a turn's elapsed time runs to its newest message,
+      // so every card of the streaming turn lands here on every poll.
       entry = {
-        card: entry && Object.is(entry.durationMs, durationMs)
+        card: !entry
+          ? formatTranscriptCard(msg, density, activeForms, taskRegistry, durationMs, true)
+          : Object.is(entry.durationMs, durationMs)
           ? reformatTranscriptCardDensity(msg, density, entry.card, activeForms, taskRegistry)
-          : formatTranscriptCard(msg, density, activeForms, taskRegistry, durationMs),
+          : entry.density === density
+          ? retimeTranscriptCard(entry.card, durationMs)
+          : formatTranscriptCard(msg, density, activeForms, taskRegistry, durationMs, true),
         durationMs,
         density,
       }
@@ -476,13 +536,14 @@ self.onmessage = async (event) => {
       const { threaded } = threadMessages(data.session, rawMessages)
       // Populates this worker's per-message card cache for the variant the
       // reader will ask for; the cards themselves stay here.
-      await formatCards(cacheKey(data.session), threaded, data.density, data.showToolCalls)
+      await formatCards(cacheKey(data.session), threaded, data.density, data.showToolCalls, true, data.separateTurnDurations)
       self.postMessage({ id: data.id, ok: true, warmed: true })
       return
     }
     if (data.kind === 'format') {
       const sessionCacheKey = cacheKey(data.session)
-      const cardsVariant = `${data.density}|${data.showToolCalls ? 1 : 0}`
+      const separateTurnDurations = data.separateTurnDurations === true
+      const cardsVariant = cardsVariantKey(data.density, data.showToolCalls, separateTurnDurations)
       const formatKey = `${sessionCacheKey}|${cardsVariant}`
       const prev = lastFormattedByKey.get(formatKey)
       const inputBaseline = data.threadedBaseVariant
@@ -506,6 +567,7 @@ self.onmessage = async (event) => {
           )
         : data.threaded
       if (!threaded) throw new Error('threading worker format delta baseline unavailable')
+      const turnDurationLabels = separateTurnDurations ? turnDurationLabelsFor(threaded, data.showToolCalls) : undefined
 
       const patch = canApplyPatch && prev ? data.threadedPatch ?? [] : null
       const sameVariantPatch = canApplyPatch && inputBaseline === prev
@@ -539,6 +601,7 @@ self.onmessage = async (event) => {
           data.density,
           data.showToolCalls,
           false,
+          separateTurnDurations,
         )
         const transcriptCards = prev.cards.slice(0, replaceStart).concat(
           replacementCards,
@@ -549,6 +612,7 @@ self.onmessage = async (event) => {
           cards: transcriptCards,
           formatToken: data.id,
           hasTaskList: false,
+          turnDurationLabels,
         })
         const cardsPrefix = sharedIdentityPrefix(transcriptCards, prev.cards)
         const cardsSuffix = sharedIdentitySuffix(transcriptCards, prev.cards, cardsPrefix)
@@ -560,16 +624,18 @@ self.onmessage = async (event) => {
           cardsDeleteCount: prev.cards.length - cardsPrefix - cardsSuffix,
           formatToken: data.id,
           baseFormatToken: prev.formatToken,
+          turnDurationPatch: turnDurationLabels && turnDurationPatch(turnDurationLabels, prev.turnDurationLabels),
         })
         return
       }
 
-      const transcriptCards = await formatCards(sessionCacheKey, threaded, data.density, data.showToolCalls)
+      const transcriptCards = await formatCards(sessionCacheKey, threaded, data.density, data.showToolCalls, true, separateTurnDurations)
       touchLastFormatted(formatKey, {
         threaded,
         cards: transcriptCards,
         formatToken: data.id,
         hasTaskList: threaded.some(hasTaskListBlock),
+        turnDurationLabels,
       })
       if (sameVariantPatch && prev) {
         const cardsPrefix = sharedIdentityPrefix(transcriptCards, prev.cards)
@@ -582,29 +648,37 @@ self.onmessage = async (event) => {
           cardsDeleteCount: prev.cards.length - cardsPrefix - cardsSuffix,
           formatToken: data.id,
           baseFormatToken: prev.formatToken,
+          turnDurationPatch: turnDurationLabels && turnDurationPatch(turnDurationLabels, prev.turnDurationLabels),
         })
         return
       }
       if (canApplyPatch && inputBaseline && data.threadedBaseVariant) {
-        self.postMessage({ id: data.id, ok: true, densityCards: transcriptCards.map((card, index) => densityCardDelivery(card, inputBaseline.cards[index], index)), formatToken: data.id, baseFormatToken: inputBaseline.formatToken })
+        self.postMessage({ id: data.id, ok: true, densityCards: transcriptCards.map((card, index) => densityCardDelivery(card, inputBaseline.cards[index], index)), formatToken: data.id, baseFormatToken: inputBaseline.formatToken, turnDurationLabels })
         return
       }
-      self.postMessage({ id: data.id, ok: true, transcriptCards, formatToken: data.id })
+      self.postMessage({ id: data.id, ok: true, transcriptCards, formatToken: data.id, turnDurationLabels })
       return
     }
     const { info, rawMessages, externalWriter } = await readTuiSessionDetailSource(data.session)
     const sessionCacheKey = cacheKey(data.session)
+    const separateTurnDurations = data.separateTurnDurations === true
     if ((lastSentByKey.get(sessionCacheKey)?.requestId ?? -1) > data.id) {
       // A slow source read still answers its caller, but cannot replace the
       // newer threading/card baselines (including an unchanged newer read).
       const threadedMessages = buildThreadedMessages(rawMessages)
       await ensureMermaidForTranscript(threadedMessages)
-      const transcriptCards = formatTranscriptCards(data.showToolCalls ? threadedMessages : stripToolCallBlocks(threadedMessages), data.density)
-      self.postMessage({ id: data.id, ok: true, info, rawMessages, threadedMessages, transcriptCards, deliveryToken: data.id, rawPrefix: 0, threadedPrefix: 0, cardsPrefix: 0, externalWriter })
+      const visible = visibleMessages(threadedMessages, data.showToolCalls)
+      const { activeForms, taskRegistry } = buildTranscriptTaskContext(visible)
+      const durations = separateTurnDurations ? null : computeTurnDurationsMs(visible)
+      const transcriptCards = visible.map((message) => formatTranscriptCard(message, data.density, activeForms, taskRegistry, durations?.get(message.uuid), true))
+      self.postMessage({
+        id: data.id, ok: true, info, rawMessages, threadedMessages, transcriptCards, deliveryToken: data.id, rawPrefix: 0, threadedPrefix: 0, cardsPrefix: 0, externalWriter,
+        turnDurationLabels: separateTurnDurations ? turnDurationLabelsFor(threadedMessages, data.showToolCalls) : undefined,
+      })
       return
     }
     const { threaded: threadedMessages, messages: alignedMessages } = threadMessages(data.session, rawMessages)
-    const cardsVariant = `${data.density}|${data.showToolCalls ? 1 : 0}`
+    const cardsVariant = cardsVariantKey(data.density, data.showToolCalls, separateTurnDurations)
     const prev = lastSentByKey.get(sessionCacheKey)
 
     // threadMessages only returns the prior arrays when every freshly-read
@@ -631,7 +705,8 @@ self.onmessage = async (event) => {
       return
     }
 
-    const transcriptCards = await formatCards(sessionCacheKey, threadedMessages, data.density, data.showToolCalls)
+    const transcriptCards = await formatCards(sessionCacheKey, threadedMessages, data.density, data.showToolCalls, true, separateTurnDurations)
+    const turnDurationLabels = separateTurnDurations ? turnDurationLabelsFor(threadedMessages, data.showToolCalls) : undefined
     const rawPrefix = prev ? sharedIdentityPrefix(alignedMessages, prev.raw) : 0
     const threadedPrefix = prev ? sharedIdentityPrefix(threadedMessages, prev.threaded) : 0
     const cardsPrefix = prev && prev.cardsVariant === cardsVariant
@@ -662,6 +737,7 @@ self.onmessage = async (event) => {
         cards: transcriptCards,
         cardsVariant,
         deliveryToken,
+        turnDurationLabels,
       })
     }
     if (canReusePreviousDelivery) {
@@ -687,6 +763,10 @@ self.onmessage = async (event) => {
       threadedPrefix,
       cardsPrefix,
       externalWriter,
+      // A suffix delivery is applied to the client's copy of `prev`, so its
+      // labels can be a patch against prev's; anything else carries them whole.
+      turnDurationLabels: suffixOnly ? undefined : turnDurationLabels,
+      turnDurationPatch: suffixOnly && turnDurationLabels ? turnDurationPatch(turnDurationLabels, prev?.turnDurationLabels) : undefined,
     })
   } catch (err) {
     self.postMessage({

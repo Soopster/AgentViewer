@@ -14,6 +14,7 @@
 // lib/agentCoordination.ts, which imports the send path, and a surface the user
 // may never open must not be what loads it.
 import { coordinatorAttentionCount } from '../../lib/coordinatorAttentionCount'
+import { isCoordinatorRejection } from '../../lib/coordinatorRejection'
 import { randomUUID } from 'node:crypto'
 import type { AgentProvider } from '../../lib/types'
 import type { CoordinatorInteractiveState } from '../../lib/coordinatorInteractiveState'
@@ -375,6 +376,14 @@ async function submit(
     return true
   } catch (error) {
     advanceRevision(session)
+    // The Coordinator certified it wrote nothing, so there is no outcome left
+    // to confirm: report why and release the panel instead of locking it
+    // behind a retry that can only be refused again.
+    if (isCoordinatorRejection(error)) {
+      try { clearCoordinatorRequest(sessionKey(session), request.requestId) } catch { /* the lock below still reports it */ }
+      updateSession(session, { busy: false, pending: null, ...restorePending(session), error: (error as Error).message })
+      return false
+    }
     updateSession(session, { busy: false, ...(error instanceof PendingCoordinatorRequestError ? { pending: error.request } : {}), error: error instanceof Error ? error.message : 'Request could not be confirmed' })
     return false
   }

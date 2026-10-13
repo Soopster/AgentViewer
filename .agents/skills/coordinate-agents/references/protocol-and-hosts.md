@@ -19,7 +19,7 @@ Every rejection is a specific message. Match it here before retrying; a retry wi
 | `Cannot report working` / `blocked without owning a Coordinator task` | Progress before a claim | `coord_claim_task` first; use `heartbeat` or `ready` when you own nothing |
 | `Cannot request locks without owning a Coordinator task` | Locks belong to a task | Claim, then request |
 | `Unanswered reply-required messages: <ids>` | Completion or leave blocked by mail you owe | `coord_read_inbox(unresolved=true)`, answer each with `in_reply_to`, then call again |
-| `Stale completion rejected` | Your claim was released or reassigned while you worked | Read the task; do not resend the completion |
+| `Stale completion rejected` | Your claim was released or reassigned while you worked | `coord_read_task` with its task ID; do not resend the completion |
 | `Reply target not found or not addressed to this participant` | `in_reply_to` is not a message sent to you | Use the id from your own inbox |
 | `A correlated reply must address exactly one participant` | `in_reply_to` with `to:"all"` | Reply to the original sender |
 | `… is not accepting messages from you right now` | Recipient's respond-to filter | Route through the lead |
@@ -143,4 +143,122 @@ The OpenTUI launcher is available at `Ctrl+Shift+N`, or Agent Operations (`Ctrl+
 
 Keyed mutations reserve execution in SQLite before performing effects. A second process cannot run the same key concurrently. Completed results are cached for a bounded window; compact operation records survive for the run's lifetime, so an expired result cannot silently execute again.
 
-`COORDINATOR_OPERATION_UNCERTAIN` means the operation is still running, was interrupted, failed with possible partial effects, or completed but its detailed result expired. Read the board/inbox/context to find the effect before changing anything. The same key may retrieve a result if the original dispatcher subsequently finishes. Do not change keys merely to bypass uncertainty. If the effect is already present, continue from that state; start a new operation only after establishing what remains to be done. Explicit completion-gate results with `accepted:false` remain correctable with the same key. A thrown exception does not prove that no effect occurred.
+`COORDINATOR_OPERATION_UNCERTAIN` means the operation is still running, was interrupted, failed with possible partial effects, or completed but its detailed result expired. Use `coord_inspect_operation` with the original tool name and key, then read the referenced task/board/inbox/context to reconcile the effect before changing anything. The same key may retrieve a result if the original dispatcher subsequently finishes. Do not change keys merely to bypass uncertainty. If the effect is already present, continue from that state; start a new operation only after establishing what remains to be done. Explicit completion-gate results with `accepted:false` remain correctable with the same key. A thrown exception does not prove that no effect occurred.
+
+
+## Waiting ownership in the actionable digest
+
+`coord_status`, `coord_wait` and mutation receipts carry
+`actionable.waitingPolicy` for the caller. It describes model-turn waiting,
+not proof of a live supervisor process or permission to start a native turn.
+
+| Mode | Evidence | Idle action |
+| --- | --- | --- |
+| `managed` | Negotiated `unattended:true`, or a verified managed binding | Return to the supervisor; no model-turn `coord_wait` |
+| `interactive` | External client with no negotiated supervisor | Subscribe if the MCP host supports it; otherwise `coord_wait` |
+| `cooperative` | Existing cooperative session | Return to the human; messages arrive at its next normal send |
+| `unknown` | Native identity without a verified managed binding | Check the host's turn prompt; do not infer supervision from session ID |
+
+`source` reports the evidence and `idleAction` names the action. A false
+`coordWaitAllowed` describes the model turn. A supervisor may still call the
+same wait API for its worker; the participant identity alone cannot distinguish
+supervisor polling from a model tool call. Interactive subscription support
+comes from MCP host discovery, not from provider name or agent status. Older
+hosts may omit waitingPolicy; follow the supplied turn prompt and supervisor
+contract rather than treating a missing field as interactive permission.
+
+## Unattended worker startup
+
+A lead starts with a playbook containing independent teammate tasks and a
+lead integration lane:
+
+```bash
+agent-viewer coord worker --start "<full objective>" --playbook <name> --name <name> --provider <provider> --max-agents <n> --attach <url>
+agent-viewer coord worker --join <run-id|latest> --name <name> --provider <provider> --attach <url>
+```
+
+Joined workers get isolated checkouts unless `--shared`. The supervisor persists
+identity, heartbeats and waits outside model turns. Resume the existing worker
+rather than creating a replacement participant after a disconnect.
+
+## Execution reservation recovery through MCP
+
+`coord_inspect_recovery` is a lead-only read that checks native conversation and
+checkout availability and reports host ownership and retained execution
+reservations. It never claims a host or submits work. Filter by teammate name
+or ID with `agent`.
+
+Inspect the saved transcript. When `canAcknowledge` is true, use
+`coord_acknowledge_execution` with the exact agent ID, reservation `taskId` as
+`expected_task_id`, and reservation `createdAt` as `expected_created_at`.
+Use a stable `request_id`. The server rechecks the reservation, host ownership,
+and execution state. A stale reservation, live turn, or owned unfinished work
+is rejected. Acknowledgement keeps any newer claim and locks and does not
+itself submit a turn; maintenance can subsequently dispatch queued work.
+
+`executionElsewhere` requires the owning host. For unfinished work with
+`needsRecovery`, inspect the saved transcript and call `coord_resume_agent`
+with the exact `recoveryClaim` taskId, sessionId and claimGeneration returned
+by inspection. This starts a new turn in the saved session and checkout. It
+rejects changed claims, native human questions/permissions, task approval/open
+decision gates, unavailable conversations/directories, host conflicts and
+budget gates. Provider failures may recur; inspect their cause first. Supply
+a stable `request_id` and reuse it to retrieve the receipt after a disconnect.
+Do not create a replacement conversation. Do not repeatedly
+release and reclaim tasks to force dispatch, and do not use recovery to answer
+human approvals or provider permission requests.
+
+
+## Exact task and keyed operation inspection
+
+Ordinary `coord_status` is deliberately bounded. `coord_list_tasks` returns
+compact summaries in insertion order, with a status filter and `nextCursor`.
+Keep the filter unchanged while paging; concurrent status changes mean this is
+not a frozen snapshot. `coord_read_task` retrieves one full durable prompt,
+receipt, verification, decisions, handoff and result even after terminal detail
+ages out of ordinary status. Reads stay in the authenticated participant's run.
+
+After a lost keyed mutation response, use `coord_inspect_operation` with the
+original `tool_name` and `operation_request_id`. It maps aliases such as
+`coord_delegate` to their stored action and inspects only your participant.
+`completed` plus `hasCachedResult` means retry the original tool with identical
+arguments/key to retrieve its receipt. Completed records without cached results
+still fence replay. A `running` record does not prove a live process; inspect
+the host and task before deciding what stopped. `failed` may mean partial
+side effects. `not_found` does not prove an unkeyed/setup request never applied.
+Inspection does not clear reservations or replay work under a new key.
+
+## Retiring obsolete tasks
+
+Lead: `coord_read_task` first to inspect `cancellationImpact`. If that work is
+obsolete, pass its `revision` to `coord_cancel_task` as `expected_revision`,
+with the task ID, a reason and stable `request_id`. Cancellation permanently
+ends that task, releases its locks, frees its owner and fails unfinished
+downstream tasks whose dependencies become impossible. A changed task or
+dependency chain invalidates the pin. Cancellation is recorded before
+best-effort interruption; do not infer that the native turn has stopped from
+`cancelled: true`. It does not erase saved edits or clear uncertain execution
+reservations. For achievable work use release/handoff; for restarting an owned
+turn use `coord_cancel_turn`.
+
+
+## Isolated result integration
+
+Lead: use `coord_read_result` to inspect the entire source branch, including
+later task changes, through its actual checkout diff,
+executed verification, merge preview, run review and integration blockers.
+Reading does not approve a human gate. After inspecting it, pass
+`checkout.token` as `review_token` to `coord_integrate_result`, with the task ID
+and a required stable `request_id`. Source or target changes invalidate that
+review. The shared implementation rejects dirty targets, path-grant violations,
+stale verification, open decisions, pending teammate native questions, retained
+execution, unknown/conflicted merge previews, and unapproved required reviews.
+Foreign hosts must integrate in their owning host.
+
+Integration commits any uncommitted source work onto its task branch and
+squash-merges it into the target as staged changes. It never commits the target.
+Keep unrelated edits and ask their owner to resolve a blocked target; do not
+stash or reset another lane to make the gate pass. The operation uses the same
+replay key through UI and MCP. After a lost response retry identical arguments
+and key, or inspect it with `coord_inspect_operation`. A failure after possible
+Git writes remains fenced; inspection does not authorize a new-key replay.

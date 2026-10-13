@@ -19,8 +19,10 @@
 //     misalignment": window bounds stay in range, slides are monotonic with the
 //     scroll direction, and the recenter effect never fires while the cursor is
 //     stationary (the documented slide/recenter livelock gotcha). Native render
-//     cost is covered by inputPerf's hermetic reader-scroll scenarios; this
-//     smoke times only the App-equivalent window slice/state transition.
+//     cost is covered by inputPerf's `<view>-wheel-sustained` scenarios, which
+//     drive the real root's wheel through 1,000+ cards and time whole renderer
+//     frames; this smoke times only the App-equivalent window slice/state
+//     transition and checks the model's invariants.
 //
 // Usage: bun run ./tui/opentui/scrollPerfSmoke.ts
 // Env: AGENT_VIEWER_READER_WINDOW to match a non-default App.tsx window size.

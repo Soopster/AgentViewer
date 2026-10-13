@@ -11,7 +11,7 @@ import { isAgentProvider } from '@/lib/provider'
 import { coordinatorBackgroundAgents } from '@/lib/coordinatorInteractiveState'
 import { listWaitingSessions } from '@/lib/sessionRuntime'
 import { readViewSessionInfo, readViewSessionRunning } from '@/lib/sessionBackend'
-import { readSettledInteractiveExecutions, reconcileSettledInteractiveExecution, startInteractiveWorkflow, adoptOrphanedInteractiveHost, cancelInteractiveTask, interruptInteractiveAgent, setInteractiveCoordinatorEnabled, configureInteractiveCoordinator, readInteractiveCoordinator, readInteractiveRecoveries, reconcileInteractiveDelivery, resumeInteractiveAgent, createExternalProtocolTask, readSessionCoordinator, reviewExternalProtocolPlan, runExternalProtocolIdempotent, sendExternalProtocolMessage, sessionCoordinatorIdentity, resolveProtocolDecisionAdmin } from '@/lib/agentCoordination'
+import { readSettledInteractiveExecutions, readInteractiveDeadAgents, reconcileSettledInteractiveExecution, startInteractiveWorkflow, adoptOrphanedInteractiveHost, cancelInteractiveTask, interruptInteractiveAgent, setInteractiveCoordinatorEnabled, configureInteractiveCoordinator, readInteractiveCoordinator, readInteractiveRecoveries, reconcileInteractiveDelivery, resumeInteractiveAgent, createExternalProtocolTask, readSessionCoordinator, reviewExternalProtocolPlan, runExternalProtocolIdempotent, sendExternalProtocolMessage, sessionCoordinatorIdentity, resolveProtocolDecisionAdmin } from '@/lib/agentCoordination'
 
 const schema = z.object({
   provider: z.string().refine(isAgentProvider),
@@ -51,6 +51,7 @@ async function readState(sessionId: string, provider: Parameters<typeof readSess
   const interactive = await readInteractiveCoordinator(sessionId)
   const recoveries = snapshot ? await readInteractiveRecoveries(snapshot.run.id) : []
   const settledExecutions = snapshot ? await readSettledInteractiveExecutions(snapshot.run.id) : []
+  const deadAgents = snapshot ? await readInteractiveDeadAgents(snapshot.run.id) : []
   const runningAgentIds: string[] = []
   const permissions = snapshot?.agents.flatMap(agent => {
     const info = readViewSessionRunning(agent.sessionId)
@@ -59,7 +60,7 @@ async function readState(sessionId: string, provider: Parameters<typeof readSess
       .map(permission => ({ agentId: agent.id, agentName: agent.name, permission }))
   }) ?? []
   const backgroundAgents = snapshot ? coordinatorBackgroundAgents(snapshot.agents, listWaitingSessions()) : []
-  return { snapshot, interactive, recoveries, settledExecutions, permissions, runningAgentIds, backgroundAgents, staffing: await readCoordinatorStaffing() }
+  return { snapshot, interactive, recoveries, settledExecutions, deadAgents, permissions, runningAgentIds, backgroundAgents, staffing: await readCoordinatorStaffing() }
 }
 
 export async function GET(request: Request, context: { params: Promise<{ sessionId: string }> }) {

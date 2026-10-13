@@ -1,5 +1,5 @@
 import type { ThreadedMessage } from '../../lib/threading'
-import type { TuiTranscriptCard } from '../format'
+import { deferTranscriptCardSearchText, withTranscriptCardPreview, type TuiTranscriptCard } from '../format'
 import type { TuiDensity } from '../theme'
 import type { ContextUsage, ProviderSelection, Session, SessionInfo, SessionMessage } from '../../lib/types'
 import { readTuiComposerOptions, readTuiSessionMetadata, readTuiSlashCommands } from '../../lib/tui/reads'
@@ -13,13 +13,31 @@ export type SessionDetailPayload = {
   rawMessages: SessionMessage[]
   threadedMessages: ThreadedMessage[]
   transcriptCards: TuiTranscriptCard[]
+  /** Present only for a read that asked for `separateTurnDurations`. */
+  turnDurationLabels?: TurnDurationLabels
   externalWriter?: boolean
+}
+
+/** A turn's elapsed time by card key — see TranscriptCardOptions. */
+export type TurnDurationLabels = Readonly<Record<string, string>>
+type TurnDurationPatch = Record<string, string | null>
+
+export type TranscriptCardOptions = {
+  /**
+   * Deliver each turn's elapsed time beside the cards instead of on them.
+   * A turn's duration runs to its newest message, so as `card.durationLabel`
+   * it changes every card of the streaming turn on every poll and each arrives
+   * as a new object, missing every identity-keyed cache in the reader. With
+   * this set, cards carry no durationLabel and keep their identity across an
+   * appended message; read the label from `turnDurationLabelsForCards(cards)`.
+   */
+  separateTurnDurations?: boolean
 }
 
 type ThreadingClientCache = {
   requestId: number
   threadedMessages: ThreadedMessage[]
-  // LRU card cache keyed by `${density}|${showToolCalls ? 1 : 0}`. Kept tiny
+  // LRU card cache keyed by variantKey(). Kept tiny
   // because each entry can contain one formatted card per transcript message.
   cardsByVariant: Map<string, TuiTranscriptCard[]>
 }
@@ -77,6 +95,8 @@ type WorkerResponse =
       threadedPrefix: number
       cardsPrefix: number
       externalWriter?: boolean
+      turnDurationLabels?: TurnDurationLabels
+      turnDurationPatch?: TurnDurationPatch
     }
   | {
       id: number
@@ -86,8 +106,8 @@ type WorkerResponse =
       deliveryToken: number
       externalWriter?: boolean
     }
-  | { id: number; ok: true; transcriptCards: TuiTranscriptCard[]; formatToken: number }
-  | { id: number; ok: true; densityCards: (TuiTranscriptCard | { sharedCardIndex: number; lines: TuiTranscriptCard['lines']; compactSummary: string })[]; formatToken: number; baseFormatToken: number }
+  | { id: number; ok: true; transcriptCards: TuiTranscriptCard[]; formatToken: number; turnDurationLabels?: TurnDurationLabels }
+  | { id: number; ok: true; densityCards: (TuiTranscriptCard | { sharedCardIndex: number; lines: TuiTranscriptCard['lines']; compactSummary: string })[]; formatToken: number; baseFormatToken: number; turnDurationLabels?: TurnDurationLabels }
   | {
       id: number
       ok: true
@@ -96,6 +116,7 @@ type WorkerResponse =
       cardsDeleteCount: number
       formatToken: number
       baseFormatToken: number
+      turnDurationPatch?: TurnDurationPatch
     }
   | { id: number; ok: true; sessions: Session[] }
   | { id: number; ok: true; warmed: true }
@@ -202,17 +223,61 @@ function cacheKey(session: Session): string {
   return `${session.provider ?? 'claude'}:${session.sessionId}`
 }
 
-function variantKey(density: TuiDensity, showToolCalls: boolean): string {
-  return `${density}|${showToolCalls ? 1 : 0}`
+function variantKey(density: TuiDensity, showToolCalls: boolean, options?: TranscriptCardOptions): string {
+  return `${density}|${showToolCalls ? 1 : 0}${options?.separateTurnDurations ? '|d' : ''}`
+}
+
+// Turn durations are a property of a delivered card array, so they are kept
+// against the array rather than threaded through every cache that holds one:
+// whoever has the cards can ask for their labels, and the labels die with them.
+const turnDurationLabelsByCards = new WeakMap<TuiTranscriptCard[], TurnDurationLabels>()
+
+/**
+ * The turn durations for a card array this client delivered with
+ * `separateTurnDurations`; undefined for any other array. The object is the
+ * same one until a label changes, so it is safe as a memo dependency.
+ */
+export function turnDurationLabelsForCards(cards: TuiTranscriptCard[]): TurnDurationLabels | undefined {
+  return turnDurationLabelsByCards.get(cards)
+}
+
+function rememberTurnDurationLabels(
+  cards: TuiTranscriptCard[],
+  labels: TurnDurationLabels | undefined,
+  patch: TurnDurationPatch | undefined,
+  previousCards: TuiTranscriptCard[] | undefined,
+): TurnDurationLabels | undefined {
+  let next = labels
+  if (!next) {
+    const previous = previousCards && turnDurationLabelsByCards.get(previousCards)
+    if (!previous) return undefined
+    next = previous
+    if (patch) {
+      const patched: Record<string, string> = { ...previous }
+      for (const key in patch) {
+        const label = patch[key]
+        if (label === null) delete patched[key]
+        else patched[key] = label
+      }
+      next = patched
+    }
+  }
+  turnDurationLabelsByCards.set(cards, next)
+  return next
+}
+
+/** Cards cross from the worker without their search strings (see
+ *  deferTranscriptCardSearchText); each derives them on first read. */
+function deferSearchText(cards: TuiTranscriptCard[]): TuiTranscriptCard[] {
+  for (const card of cards) deferTranscriptCardSearchText(card)
+  return cards
 }
 
 function rememberCardsVariant(
   cache: ThreadingClientCache,
-  density: TuiDensity,
-  showToolCalls: boolean,
+  key: string,
   cards: TuiTranscriptCard[],
 ): void {
-  const key = variantKey(density, showToolCalls)
   if (cache.cardsByVariant.has(key)) cache.cardsByVariant.delete(key)
   cache.cardsByVariant.set(key, cards)
   while (cache.cardsByVariant.size > CARD_VARIANT_CACHE_LIMIT) {
@@ -259,6 +324,7 @@ function ensureWorker(): Worker {
         rawMessages: prev.raw,
         threadedMessages: prev.threaded,
         transcriptCards: prev.cards,
+        turnDurationLabels: turnDurationLabelsByCards.get(prev.cards),
         externalWriter: data.externalWriter,
       })
     } else if (entry.kind === 'detail' && 'rawMessages' in data) {
@@ -278,9 +344,15 @@ function ensureWorker(): Worker {
       const threadedMessages = restoreDeliveredPrefix(prev?.threaded, data.threadedMessages, data.threadedPrefix ?? 0, data.suffixOnly)
       const transcriptCards = restoreDeliveredPrefix(
         variantMatches ? prev?.cards : undefined,
-        data.transcriptCards,
+        deferSearchText(data.transcriptCards),
         data.cardsPrefix ?? 0,
         data.suffixOnly,
+      )
+      const turnDurationLabels = rememberTurnDurationLabels(
+        transcriptCards,
+        data.turnDurationLabels,
+        data.turnDurationPatch,
+        data.suffixOnly ? prev?.cards : undefined,
       )
       touchLastDelivered(entry.sessionKey, {
         requestId: data.id,
@@ -295,9 +367,12 @@ function ensureWorker(): Worker {
         rawMessages,
         threadedMessages,
         transcriptCards,
+        turnDurationLabels,
         externalWriter: data.externalWriter,
       })
     } else if (entry.kind === 'format' && 'transcriptCards' in data && 'formatToken' in data) {
+      deferSearchText(data.transcriptCards)
+      rememberTurnDurationLabels(data.transcriptCards, data.turnDurationLabels, undefined, undefined)
       touchLastFormatted(entry.formatKey, {
         threaded: entry.threaded,
         cards: data.transcriptCards,
@@ -311,8 +386,9 @@ function ensureWorker(): Worker {
         return
       }
       const transcriptCards = data.densityCards.map((card) => 'sharedCardIndex' in card
-        ? { ...prev.cards[card.sharedCardIndex], lines: card.lines, compactSummary: card.compactSummary }
-        : card)
+        ? withTranscriptCardPreview(prev.cards[card.sharedCardIndex], card.lines, card.compactSummary)
+        : deferTranscriptCardSearchText(card))
+      rememberTurnDurationLabels(transcriptCards, data.turnDurationLabels, undefined, undefined)
       touchLastFormatted(entry.formatKey, { threaded: entry.threaded, cards: transcriptCards, formatToken: data.formatToken })
       entry.resolve(transcriptCards)
     } else if (entry.kind === 'format' && 'cardsPatch' in data) {
@@ -328,9 +404,10 @@ function ensureWorker(): Worker {
         return
       }
       const transcriptCards = data.cardsDeleteCount === 0 && data.cardsPatch.length === 0 ? prev.cards : prev.cards.slice(0, data.cardsPrefix).concat(
-        data.cardsPatch,
+        deferSearchText(data.cardsPatch),
         prev.cards.slice(data.cardsPrefix + data.cardsDeleteCount),
       )
+      rememberTurnDurationLabels(transcriptCards, undefined, data.turnDurationPatch, prev.cards)
       touchLastFormatted(entry.formatKey, {
         threaded: entry.threaded,
         cards: transcriptCards,
@@ -459,6 +536,7 @@ type DetailRequest = {
   session: Session
   density: TuiDensity
   showToolCalls: boolean
+  options?: TranscriptCardOptions
   resolve: (payload: SessionDetailPayload) => void
   reject: (error: Error) => void
 }
@@ -467,6 +545,7 @@ type WarmRequest = {
   session: Session
   density: TuiDensity
   showToolCalls: boolean
+  options?: TranscriptCardOptions
   resolve: () => void
   reject: (error: Error) => void
 }
@@ -476,6 +555,7 @@ type FormatRequest = {
   threaded: ThreadedMessage[]
   density: TuiDensity
   showToolCalls: boolean
+  options?: TranscriptCardOptions
   resolve: (cards: TuiTranscriptCard[]) => void
   reject: (error: Error) => void
 }
@@ -514,7 +594,8 @@ function chainSuperseded<R>(
 function dispatchDetail(request: DetailRequest): Promise<void> {
   const { session, density, showToolCalls } = request
   const key = cacheKey(session)
-  const cardsVariant = variantKey(density, showToolCalls)
+  const cardsVariant = variantKey(density, showToolCalls, request.options)
+  const separateTurnDurations = request.options?.separateTurnDurations === true
   const id = ++requestCounter
   const w = ensureWorker()
   const stored = lastDeliveredByKey.get(key)
@@ -531,7 +612,7 @@ function dispatchDetail(request: DetailRequest): Promise<void> {
           threadedMessages: payload.threadedMessages,
           cardsByVariant: new Map<string, TuiTranscriptCard[]>(),
         }
-        rememberCardsVariant(cacheEntry, density, showToolCalls, payload.transcriptCards)
+        rememberCardsVariant(cacheEntry, cardsVariant, payload.transcriptCards)
         touchThreadingCache(key, cacheEntry)
         request.resolve(payload)
         settle()
@@ -544,6 +625,7 @@ function dispatchDetail(request: DetailRequest): Promise<void> {
       session,
       density,
       showToolCalls,
+      separateTurnDurations,
       previousDeliveryToken: previousDelivery?.deliveryToken,
     })
   })
@@ -564,6 +646,7 @@ function dispatchWarm(request: WarmRequest): Promise<void> {
       session: request.session,
       density: request.density,
       showToolCalls: request.showToolCalls,
+      separateTurnDurations: request.options?.separateTurnDurations === true,
     })
   })
 }
@@ -571,7 +654,10 @@ function dispatchWarm(request: WarmRequest): Promise<void> {
 function dispatchFormat(request: FormatRequest): Promise<void> {
   const { session, threaded, density, showToolCalls } = request
   const key = cacheKey(session)
-  const cardsVariant = variantKey(density, showToolCalls)
+  const cardsVariant = variantKey(density, showToolCalls, request.options)
+  const separateTurnDurations = request.options?.separateTurnDurations === true
+  // Every density of one tool-visibility and duration mode ends the same way.
+  const siblingSuffix = cardsVariant.slice(cardsVariant.indexOf('|'))
   const formatKey = `${key}|${cardsVariant}`
   const id = ++requestCounter
   const w = ensureWorker()
@@ -582,7 +668,7 @@ function dispatchFormat(request: FormatRequest): Promise<void> {
     // its input baseline. Output sharing is independently checked in worker.
     const prefix = `${key}|`
     for (const [candidateKey, candidate] of lastFormattedByKey) {
-      if (candidateKey.startsWith(prefix) && candidateKey.endsWith(`|${showToolCalls ? 1 : 0}`)) {
+      if (candidateKey.startsWith(prefix) && candidateKey.slice(candidateKey.indexOf('|', prefix.length)) === siblingSuffix) {
         previousDelivery = candidate
         threadedBaseVariant = candidateKey.slice(prefix.length)
       }
@@ -612,7 +698,7 @@ function dispatchFormat(request: FormatRequest): Promise<void> {
           ? existing
           : { requestId: id, threadedMessages: threaded, cardsByVariant: new Map<string, TuiTranscriptCard[]>() }
         cacheEntry.requestId = id
-        rememberCardsVariant(cacheEntry, density, showToolCalls, transcriptCards)
+        rememberCardsVariant(cacheEntry, cardsVariant, transcriptCards)
         touchThreadingCache(key, cacheEntry)
         request.resolve(transcriptCards)
         settle()
@@ -624,7 +710,7 @@ function dispatchFormat(request: FormatRequest): Promise<void> {
           retriedWithFullTranscript = true
           entry.previousDelivery = undefined
           pending.set(id, entry)
-          w.postMessage({ kind: 'format', id, session, threaded, density, showToolCalls })
+          w.postMessage({ kind: 'format', id, session, threaded, density, showToolCalls, separateTurnDurations })
           return
         }
         request.reject(error)
@@ -644,8 +730,9 @@ function dispatchFormat(request: FormatRequest): Promise<void> {
           threadedBaseVariant,
           density,
           showToolCalls,
+          separateTurnDurations,
         }
-      : { kind: 'format', id, session, threaded, density, showToolCalls })
+      : { kind: 'format', id, session, threaded, density, showToolCalls, separateTurnDurations })
   })
 }
 
@@ -680,6 +767,7 @@ export function readAndBuildTranscriptAsync(
   session: Session,
   density: TuiDensity,
   showToolCalls: boolean,
+  options?: TranscriptCardOptions,
 ): Promise<SessionDetailPayload> {
   return new Promise<SessionDetailPayload>((resolve, reject) => {
     detailQueue.push({
@@ -687,8 +775,8 @@ export function readAndBuildTranscriptAsync(
       // are not the same request, and answering one with the other's cards
       // would hand back a transcript formatted for a display the caller is not
       // showing.
-      key: `detail:${cacheKey(session)}|${variantKey(density, showToolCalls)}`,
-      request: { session, density, showToolCalls, resolve, reject },
+      key: `detail:${cacheKey(session)}|${variantKey(density, showToolCalls, options)}`,
+      request: { session, density, showToolCalls, options, resolve, reject },
     })
   })
 }
@@ -703,11 +791,12 @@ export function warmTranscriptAsync(
   session: Session,
   density: TuiDensity,
   showToolCalls: boolean,
+  options?: TranscriptCardOptions,
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     warmQueue.push({
-      key: `warm:${cacheKey(session)}|${variantKey(density, showToolCalls)}`,
-      request: { session, density, showToolCalls, resolve, reject },
+      key: `warm:${cacheKey(session)}|${variantKey(density, showToolCalls, options)}`,
+      request: { session, density, showToolCalls, options, resolve, reject },
     })
   })
 }
@@ -723,11 +812,12 @@ export function formatTranscriptCardsAsync(
   threaded: ThreadedMessage[],
   density: TuiDensity,
   showToolCalls: boolean,
+  options?: TranscriptCardOptions,
 ): Promise<TuiTranscriptCard[]> {
   const key = cacheKey(session)
   const cached = threadingCacheByKey.get(key)
   if (cached && cached.threadedMessages === threaded) {
-    const variant = cached.cardsByVariant.get(variantKey(density, showToolCalls))
+    const variant = cached.cardsByVariant.get(variantKey(density, showToolCalls, options))
     if (variant) {
       touchThreadingCache(key, cached)
       return Promise.resolve(variant)
@@ -741,8 +831,8 @@ export function formatTranscriptCardsAsync(
       // other one's cards would render a different number of cards than it has
       // messages. Identity is minted per array rather than derived from its
       // contents: this runs on every density toggle, and the arrays are large.
-      key: `format:${key}|${variantKey(density, showToolCalls)}|${threadedIdentity(threaded)}`,
-      request: { session, threaded, density, showToolCalls, resolve, reject },
+      key: `format:${key}|${variantKey(density, showToolCalls, options)}|${threadedIdentity(threaded)}`,
+      request: { session, threaded, density, showToolCalls, options, resolve, reject },
     })
   })
 }
@@ -758,9 +848,10 @@ export function getTranscriptCardsSync(
   threaded: ThreadedMessage[],
   density: TuiDensity,
   showToolCalls: boolean,
+  options?: TranscriptCardOptions,
 ): TuiTranscriptCard[] | null {
   const key = cacheKey(session)
   const cached = threadingCacheByKey.get(key)
   if (!cached || cached.threadedMessages !== threaded) return null
-  return cached.cardsByVariant.get(variantKey(density, showToolCalls)) ?? null
+  return cached.cardsByVariant.get(variantKey(density, showToolCalls, options)) ?? null
 }

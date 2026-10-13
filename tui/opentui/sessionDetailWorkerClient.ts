@@ -2,12 +2,13 @@ import type { TuiSessionDetail } from '../../lib/tui/service'
 import type { Session } from '../../lib/types'
 import type { TuiTranscriptCard } from '../format'
 import type { TuiDensity } from '../theme'
-import { readAndBuildTranscriptAsync } from './threadingWorkerClient'
+import { readAndBuildTranscriptAsync, type TranscriptCardOptions } from './threadingWorkerClient'
 
 export async function readTuiSessionDetailAsync(
   session: Session,
   density: TuiDensity,
   showToolCalls: boolean,
+  options?: TranscriptCardOptions,
 ): Promise<TuiSessionDetail> {
   // Read + normalize + thread + format all happen in the worker; only the
   // finished payload crosses back to the main thread.
@@ -15,6 +16,7 @@ export async function readTuiSessionDetailAsync(
     session,
     density,
     showToolCalls,
+    options,
   )
   return {
     info,
@@ -44,4 +46,5 @@ export function attachedTranscriptCardsForVariant(
     : null
 }
 
-export { formatTranscriptCardsAsync, getTranscriptCardsSync, readTuiComposerAffordancesAsync, readTuiSessionsAsync, warmTranscriptAsync } from './threadingWorkerClient'
+export { formatTranscriptCardsAsync, getTranscriptCardsSync, readTuiComposerAffordancesAsync, readTuiSessionsAsync, turnDurationLabelsForCards, warmTranscriptAsync } from './threadingWorkerClient'
+export type { TranscriptCardOptions, TurnDurationLabels } from './threadingWorkerClient'

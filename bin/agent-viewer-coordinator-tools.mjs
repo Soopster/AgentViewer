@@ -11,6 +11,15 @@ export const COORDINATOR_MCP_TOOL_NAMES = Object.freeze([
   'coord_resume',
   'coord_capabilities',
   'coord_status',
+  'coord_read_result',
+  'coord_integrate_result',
+  'coord_inspect_operation',
+  'coord_read_task',
+  'coord_list_tasks',
+  'coord_cancel_task',
+  'coord_inspect_recovery',
+  'coord_resume_agent',
+  'coord_acknowledge_execution',
   'coord_wait',
   'coord_await_run',
   'coord_create_task',
@@ -45,11 +54,11 @@ export const COORDINATOR_MCP_TOOL_NAMES = Object.freeze([
 // Shared by the MCP bridge and AHP client. Keep setup mutations out: create/join
 // allocate participant credentials and have no participant-scoped replay key.
 export const COORDINATOR_READ_ACTIONS = Object.freeze([
-  'read_handoff', 'capabilities', 'list_playbooks', 'list_roles', 'list_runs', 'preview_playbook',
+  'read_result', 'inspect_operation', 'read_task', 'list_tasks', 'inspect_recovery', 'read_handoff', 'capabilities', 'list_playbooks', 'list_roles', 'list_runs', 'preview_playbook',
   'query_context', 'resume', 'status', 'wait',
 ])
 export const COORDINATOR_KEYED_ACTIONS = Object.freeze([
-  'cancel_turn', 'claim_task', 'complete_task', 'create_task', 'fail_task',
+  'integrate_result', 'cancel_task', 'resume_agent', 'acknowledge_execution', 'cancel_turn', 'claim_task', 'complete_task', 'create_task', 'fail_task',
   'finalize_run', 'finding', 'handoff_task', 'leave_run', 'progress',
   'promote_learning', 'read_inbox', 'release_task', 'remember', 'request_locks',
   'resolve_decision', 'review_phase', 'review_plan', 'review_run', 'save_playbook',

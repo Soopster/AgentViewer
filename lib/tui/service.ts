@@ -853,6 +853,7 @@ export async function readTuiSessionCoordinator(
   const interactive = await coord.readInteractiveCoordinator(sessionId)
   const recoveries = snapshot ? await coord.readInteractiveRecoveries(snapshot.run.id) : []
   const settledExecutions = snapshot ? await coord.readSettledInteractiveExecutions(snapshot.run.id) : []
+  const deadAgents = snapshot ? await coord.readInteractiveDeadAgents(snapshot.run.id) : []
   const running = new Map(listViewRunningSessions().map((entry) => [entry.sessionId, entry]))
   const runningAgentIds: string[] = []
   const permissions = snapshot?.agents.flatMap((agent) => {
@@ -864,7 +865,7 @@ export async function readTuiSessionCoordinator(
   }) ?? []
   const backgroundAgents = snapshot ? coordinatorBackgroundAgents(snapshot.agents, listWaitingSessions()) : []
   const staffing = await (await import('../coordinatorCapabilities')).readCoordinatorStaffing()
-  return { snapshot, interactive, recoveries, settledExecutions, permissions, runningAgentIds, backgroundAgents, staffing }
+  return { snapshot, interactive, recoveries, settledExecutions, deadAgents, permissions, runningAgentIds, backgroundAgents, staffing }
 }
 
 export async function inspectTuiCoordinatorRecovery(sessionId: string, provider: AgentProvider): Promise<import('../coordinatorRecovery').RecoveryInspection | null> {

@@ -19,6 +19,10 @@ const renderer = await createCliRenderer({
   exitOnCtrlC: false,
   screenMode: 'alternate-screen',
   useMouse: !mouseDisabled,
+  // OpenTUI paces on-demand frames by maxFps (default 60): a scroll that asks
+  // for a frame 4ms after the last one waits out the rest of 16.7ms. Frames
+  // are still only drawn when something asks for one, so idle cost is unchanged.
+  maxFps: 120,
   useKittyKeyboard: {
     disambiguate: true,
     alternateKeys: true,

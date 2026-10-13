@@ -333,7 +333,7 @@ export const claudeAdapter: SessionAdapter = {
   async readComposerOptions() {
     return {
       permissionModes: CLAUDE_PERMISSION_MODE_OPTIONS,
-      currentPermissionMode: 'default',
+      currentPermissionMode: 'auto',
     }
   },
 

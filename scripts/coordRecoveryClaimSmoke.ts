@@ -19,12 +19,17 @@ if (!phase) {
   const { mock } = await (0, eval)('import("bun:test")')
   let starts = 0
   mock.module(fileURLToPath(new URL('../lib/sessionBackend.ts', import.meta.url)), () => ({
-    createNewViewSession: async () => ({ provider: 'codex', sessionId: `native-${starts + 1}`, isPending: false }),
-    readViewSessionInfo: async (sessionId: string) => ({ sessionId, provider: 'codex', cwd: process.cwd() }),
+    createNewViewSession: async ({ cwd }: { cwd: string }) => {
+      const sessionId = `native-${starts + 1}`
+      writeFileSync(`${sessionId}.json`, JSON.stringify({ sessionId, provider: 'codex', cwd }))
+      return { provider: 'codex', sessionId, isPending: false }
+    },
+    readViewSessionInfo: async (sessionId: string) => JSON.parse(readFileSync(`${sessionId}.json`, 'utf8')),
     readViewSessionRunning: () => ({ running: false, pendingPermissions: [], pendingPrompts: [] }),
     streamViewSessionTurn: async () => { starts++; return new Promise<Response>(() => {}) },
   }))
   const coord = await import('../lib/agentCoordination')
+  const { executeExternalCoordinatorAction: execute } = await import('../lib/agentCoordinationExternal')
   const until = async (check: () => boolean) => {
     for (let i = 0; i < 500; i++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 10)) }
     assert.fail('fixture did not settle')
@@ -60,13 +65,24 @@ if (!phase) {
   // completed prior-task marker. Acknowledgement must retire only that marker.
   assert.deepEqual(await coord.readSettledInteractiveExecutions(ids.runId), [ids.firstId])
   const before = (await snapshot()).tasks.find(task => task.id === ids.secondTask)!
-  await coord.reconcileSettledInteractiveExecution(lead, ids.firstId)
+  const inspection = await execute({ ...lead, action: 'inspect_recovery', agent: ids.firstId }) as Awaited<ReturnType<typeof coord.inspectExternalProtocolRecovery>>
+  assert.equal(inspection.executions.length, 1)
+  const inspected = inspection.executions[0]!
+  assert.equal(inspected.canAcknowledge, true)
+  assert.equal(inspected.evidence.conversation.available, true, inspected.evidence.conversation.detail)
+  assert.equal(starts, 0, 'MCP inspection never submits a turn')
+  const acknowledge = { ...lead, action: 'acknowledge_execution', targetAgentId: ids.firstId, expectedTaskId: inspected.reservation!.taskId, expectedCreatedAt: inspected.reservation!.createdAt, requestId: 'ack-old-reservation' }
+  await assert.rejects(execute({ ...acknowledge, expectedCreatedAt: 'stale' }), /reservation changed/)
+  await assert.rejects(execute({ ...acknowledge, expectedTaskId: '', requestId: 'missing-inspection' }), /exact expected/)
+  assert.deepEqual(await execute(acknowledge), await execute(acknowledge), 'keyed acknowledgement replays its accepted receipt')
   assert.deepEqual((await snapshot()).tasks.find(task => task.id === ids.secondTask), before)
   assert.equal(starts, 0, 'acknowledgement does not submit the current task')
   await coord.runProtocolMaintenanceSweep()
   await until(() => starts === 1)
   const controller = globalThis.__agentViewerCoordinatorControllers!.get(ids.runId)!
   const first = controller.sdkIdentities.get(ids.firstId)!
+  await assert.rejects(execute({ ...first, action: 'inspect_recovery' }), /Only the Coordinator lead/)
+  await assert.rejects(execute({ ...first, action: 'acknowledge_execution', targetAgentId: ids.firstId, expectedTaskId: ids.secondTask, expectedCreatedAt: 'anything', requestId: 'teammate-ack' }), /Only the lead/)
   // Simulate native execution disappearing while its durable marker remains.
   controller.turnInFlight.delete(ids.firstId)
   await coord.releaseExternalProtocolTask(lead, { taskId: ids.secondTask, reason: 'Hand saved work to an available teammate' })

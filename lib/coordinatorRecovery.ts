@@ -1,5 +1,5 @@
 import type { CoordinatorInteractiveState } from './coordinatorInteractiveState'
-import { coordinatorAgentActivity } from './coordinatorInteractiveState'
+import { coordinatorAgentActivity, coordinatorDeathReason } from './coordinatorInteractiveState'
 
 export type RecoveryEvidence = {
   agentId: string; sessionId: string; provider: string; worktreePath: string; checkedAt: string
@@ -22,7 +22,8 @@ export function recoveryOverview(state: CoordinatorInteractiveState | null, insp
     const settled = state.settledExecutions?.includes(agent.id) === true
     const needsRecovery = state.recoveries.includes(agent.id) && !settled
     const task = snapshot.tasks.find(task => task.id === agent.taskId)
-    const humanGate = state.permissions.some(item => item.agentId === agent.id) || task?.status === 'planned' || task?.status === 'blocked' || task?.receipt?.needsDecision?.some(decision => decision.status === 'open')
+    const dead = state.deadAgents?.find(entry => entry.agentId === agent.id && entry.taskId === task?.id)
+    const humanGate = state.permissions.some(item => item.agentId === agent.id) || task?.status === 'planned' || (task?.status === 'blocked' && !dead) || task?.receipt?.needsDecision?.some(decision => decision.status === 'open')
     const available = Boolean(evidence?.directory.available && evidence.conversation.available)
     rows.push({ id: agent.id, agentId: agent.id, title: `${agent.name} · ${coordinatorAgentActivity(agent, state)}`, detail: [
       `${agent.provider} · conversation ${agent.sessionId}`,
@@ -31,6 +32,7 @@ export function recoveryOverview(state: CoordinatorInteractiveState | null, insp
       evidence ? `Directory: ${evidence.directory.detail}` : 'Directory availability has not been checked.',
       evidence ? `Conversation: ${evidence.conversation.detail} · checked ${evidence.checkedAt}` : 'Native conversation availability has not been checked.',
       ...(settled ? ['A prior execution was completed or its claim was relinquished, but its stream marker remains. Inspect that execution, then acknowledge it without starting a turn. Any current assignment is retained.'] : []),
+      ...(dead ? [`Its turn ended with ${coordinatorDeathReason(dead)}${dead.detail ? `: ${dead.detail}` : ''}. Resuming starts a new turn in the same conversation and checkout.`] : []),
       needsRecovery ? 'The ledger retains unfinished execution without a live turn observed here. Inspect the transcript before resuming.' : 'Observation reconnects automatically. Opening a transcript does not resend work.',
       ...(humanGate ? ['Answer the pending question, decision, or approval first.'] : []),
     ], canReconcile: settled && !interactive.executionElsewhere && !pendingRequest, canResume: needsRecovery && Boolean(task) && available && !humanGate && !interactive.executionElsewhere && !interactive.resources?.pausedReason && !pendingRequest })

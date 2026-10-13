@@ -1,4 +1,11 @@
 import {
+  inspectExternalProtocolOperation,
+  readExternalProtocolTask,
+  listExternalProtocolTasks,
+  cancelExternalProtocolTask,
+  inspectExternalProtocolRecovery,
+  resumeInteractiveAgent,
+  reconcileSettledInteractiveExecution,
   cancelExternalProtocolTurn,
   claimExternalProtocolTask,
   completeExternalProtocolTask,
@@ -53,12 +60,13 @@ import {
   type ProtocolTaskTargetRole,
   type ProtocolNeedsDecision,
   type ProtocolSeat,
+  type ProtocolTaskStatus,
   type ProtocolUsageReceipt,
   type ExternalProtocolTaskCreateResult,
 } from './agentProtocol'
 import { isAgentProvider } from './provider'
 import type { AgentProvider } from './types'
-import { validateCoordinatorDecisions } from './coordinatorToolContract.mjs'
+import { COORD_TOOL_SPECS, validateCoordinatorDecisions } from './coordinatorToolContract.mjs'
 
 function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
@@ -203,6 +211,63 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
     const provider = optionalText(body.provider)
     if (provider && !isAgentProvider(provider)) throw new Error('Invalid provider')
     return readExternalCoordinatorCapabilities(participantIdentity!, provider as AgentProvider | undefined, optionalText(body.providerInstanceId))
+  }
+  if (action === 'resume_agent') {
+    const agentId = text(body.targetAgentId)
+    const taskId = text(body.expectedTaskId)
+    const sessionId = text(body.expectedSessionId)
+    const claimGeneration = body.expectedClaimGeneration
+    if (!agentId || !taskId || !sessionId || !Number.isSafeInteger(claimGeneration) || Number(claimGeneration) < 0) throw new Error('Pass agent_id and the exact recoveryClaim taskId, sessionId and claimGeneration from coord_inspect_recovery')
+    return mutate(async () => {
+      await resumeInteractiveAgent(participantIdentity!, agentId, false, { taskId, sessionId, claimGeneration: Number(claimGeneration) })
+      return { resumed: true, agentId, taskId, sessionId, claimGeneration }
+    })
+  }
+  if (action === 'inspect_recovery') return inspectExternalProtocolRecovery(participantIdentity!, optionalText(body.agent))
+  if (action === 'acknowledge_execution') {
+    const agentId = text(body.targetAgentId)
+    const taskId = text(body.expectedTaskId)
+    const createdAt = text(body.expectedCreatedAt)
+    if (!agentId || !taskId || !createdAt) throw new Error('Pass agent_id and the exact expected_task_id and expected_created_at from coord_inspect_recovery')
+    return mutate(async () => {
+      await reconcileSettledInteractiveExecution(participantIdentity!, agentId, { taskId, createdAt })
+      return { acknowledged: true, agentId, reservation: { taskId, createdAt } }
+    })
+  }
+  if (action === 'read_result') {
+    const { readExternalCoordinatorResultReview } = await import('./coordinatorResultReviewServer')
+    if (!text(body.taskId)) throw new Error('task_id is required')
+    return readExternalCoordinatorResultReview(participantIdentity!, text(body.taskId))
+  }
+  if (action === 'integrate_result') {
+    const taskId = text(body.taskId)
+    const reviewToken = text(body.reviewToken)
+    if (!taskId || !reviewToken || !requestId) throw new Error('Pass task_id, review_token from coord_read_result and a stable request_id')
+    const { integrateExternalCoordinatorResult } = await import('./coordinatorResultReviewServer')
+    // The shared integration implementation owns the replay key; do not nest it.
+    return integrateExternalCoordinatorResult(participantIdentity!, taskId, reviewToken, requestId)
+  }
+  if (action === 'inspect_operation') {
+    const spec = COORD_TOOL_SPECS.find(spec => spec.name === text(body.toolName))
+    const operationRequestId = text(body.operationRequestId)
+    if (!spec || !operationRequestId || operationRequestId.length > 160) throw new Error('Pass a Coordinator tool_name and its original operation_request_id (at most 160 characters)')
+    return inspectExternalProtocolOperation(participantIdentity!, spec.action, operationRequestId)
+  }
+  if (action === 'read_task') {
+    if (!text(body.taskId)) throw new Error('task_id is required')
+    return readExternalProtocolTask(participantIdentity!, text(body.taskId))
+  }
+  if (action === 'list_tasks') {
+    const status = optionalText(body.status)
+    if (status && !['pending', 'claimed', 'planning', 'planned', 'in_progress', 'blocked', 'completed', 'failed', 'cancelled'].includes(status)) throw new Error('Invalid task status')
+    return listExternalProtocolTasks(participantIdentity!, { cursor: optionalText(body.cursor), limit: body.limit === undefined ? undefined : Number(body.limit), status: status as ProtocolTaskStatus | undefined })
+  }
+  if (action === 'cancel_task') {
+    const taskId = text(body.taskId)
+    const expectedRevision = text(body.expectedRevision)
+    const reason = text(body.reason)
+    if (!taskId || !expectedRevision || !reason) throw new Error('Pass task_id, reason and expected_revision from coord_read_task')
+    return mutate(() => cancelExternalProtocolTask(participantIdentity!, { taskId, expectedRevision, reason }))
   }
   if (action === 'status') return readExternalProtocolStatus(participantIdentity!)
   if (action === 'wait') {
