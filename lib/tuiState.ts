@@ -166,6 +166,9 @@ const VALID_TUI_THEMES: readonly TuiThemeMode[] = [
 
 type TuiState = {
   theme?: unknown
+  themeFollowsTerminal?: unknown
+  themeLight?: unknown
+  themeDark?: unknown
   railVisible?: unknown
   sidebarWidth?: unknown
   focusMode?: unknown
@@ -288,8 +291,38 @@ export async function setConfiguredTuiTheme(theme: TuiThemeMode): Promise<void> 
   await writeTuiState({ theme })
 }
 
-export function setConfiguredTuiThemeSync(theme: TuiThemeMode): void {
-  mergeTuiStateSync({ theme })
+export function setConfiguredTuiThemeSync(theme: TuiThemeMode, followsTerminal?: boolean): void {
+  mergeTuiStateSync(followsTerminal === undefined ? { theme } : { theme, themeFollowsTerminal: followsTerminal })
+}
+
+export type TuiThemeFollow = {
+  /** Switch between `light` and `dark` as the terminal's own background does. */
+  follow: boolean
+  /** The theme last chosen from each side, which is what following switches to. */
+  light: TuiThemeMode | null
+  dark: TuiThemeMode | null
+}
+
+export async function getConfiguredTuiThemeFollow(): Promise<TuiThemeFollow> {
+  const parsed = await readTuiState()
+  const themeOrNull = (value: unknown) => VALID_TUI_THEMES.includes(value as TuiThemeMode) ? value as TuiThemeMode : null
+  return {
+    // Nobody has chosen a theme yet, so match the terminal rather than assume
+    // light. A stored theme with no flag is a choice made before this existed.
+    follow: typeof parsed.themeFollowsTerminal === 'boolean'
+      ? parsed.themeFollowsTerminal
+      : parsed.theme === undefined,
+    light: themeOrNull(parsed.themeLight),
+    dark: themeOrNull(parsed.themeDark),
+  }
+}
+
+export async function setConfiguredTuiThemeFollow(update: Partial<TuiThemeFollow>): Promise<void> {
+  await writeTuiState({
+    ...(update.follow === undefined ? {} : { themeFollowsTerminal: update.follow }),
+    ...(update.light ? { themeLight: update.light } : {}),
+    ...(update.dark ? { themeDark: update.dark } : {}),
+  })
 }
 
 export async function getConfiguredTuiRailVisible(): Promise<boolean> {

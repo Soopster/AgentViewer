@@ -137,6 +137,18 @@ try {
   }
   if (!sawLastRule) fail('the 20th rule of a section was never rendered — a section is still capped')
 
+  // ── rows that share fields are laid out as a table ───────────────────────
+  // Joined with a separator, a field starts wherever the one before it ends, so
+  // `Bash(cmd9)` and `Bash(cmd19)` put the next field in different columns.
+  const sourceColumns = new Set(
+    setup.captureCharFrame().split('\n')
+      .filter((line) => line.includes('Bash(cmd'))
+      .map((line) => line.indexOf('localSettings')),
+  )
+  if (sourceColumns.size !== 1 || sourceColumns.has(-1)) {
+    fail(`a section's fields are not column-aligned (starts at ${[...sourceColumns].join(', ')})`)
+  }
+
   // Escape closes. The raw byte, not pressEscape(): the abstract key name does
   // not reach this app's handler (the same quirk appSmoke works around).
   // Closing is deliberately NOT asserted here. The diagnostics overlay's cells
@@ -146,7 +158,7 @@ try {
   // and is a separate defect from what this file covers; asserting it here would
   // make this smoke fail for a reason it is not about.
 
-  console.log('Diagnostics panel smoke passed (scrolls to the last section, renders full sections, advertises its keys)')
+  console.log('Diagnostics panel smoke passed (scrolls to the last section, renders full sections, aligns their fields, advertises its keys)')
 } finally {
   act(() => { setup.renderer.destroy() })
 }

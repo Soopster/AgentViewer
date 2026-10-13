@@ -22,6 +22,7 @@ import {
   getConfiguredTuiSplitOrientation,
   getConfiguredTuiSplitReaderShare,
   getConfiguredTuiTheme,
+  getConfiguredTuiThemeFollow,
   getConfiguredTuiTranscriptView,
   getConfiguredTuiTranscriptWidth,
   getConfiguredTuiVelocityScroll,
@@ -39,11 +40,13 @@ import {
   setConfiguredTuiSplitOrientation,
   setConfiguredTuiSplitReaderShare,
   setConfiguredTuiTheme,
+  setConfiguredTuiThemeFollow,
   setConfiguredTuiThemeSync,
   setConfiguredTuiTranscriptView,
   setConfiguredTuiTranscriptWidth,
   setConfiguredTuiVelocityScroll,
   type TuiSessionReaderState,
+  type TuiThemeFollow,
   type TuiDiffLayout,
   type TuiSidebarSort,
   type TuiSplitOrientation,
@@ -292,8 +295,16 @@ export async function writeTuiTheme(theme: TuiThemeMode): Promise<void> {
   await setConfiguredTuiTheme(theme)
 }
 
-export function writeTuiThemeSync(theme: TuiThemeMode): void {
-  setConfiguredTuiThemeSync(theme)
+export function writeTuiThemeSync(theme: TuiThemeMode, followsTerminal?: boolean): void {
+  setConfiguredTuiThemeSync(theme, followsTerminal)
+}
+
+export async function readTuiThemeFollow(): Promise<TuiThemeFollow> {
+  return getConfiguredTuiThemeFollow()
+}
+
+export async function writeTuiThemeFollow(update: Partial<TuiThemeFollow>): Promise<void> {
+  await setConfiguredTuiThemeFollow(update)
 }
 
 export async function readTuiRailVisible(): Promise<boolean> {

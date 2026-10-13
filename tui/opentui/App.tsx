@@ -131,6 +131,7 @@ import {
   readTuiSplitReaderShare,
   readTuiDaemonWarning,
   readTuiTheme,
+  readTuiThemeFollow,
   readTuiTranscriptView,
   readTuiTranscriptWidth,
   readTuiVelocityScroll,
@@ -183,6 +184,7 @@ import {
   writeTuiSplitOrientation,
   writeTuiSplitReaderShare,
   writeTuiTheme,
+  writeTuiThemeFollow,
   writeTuiThemeSync,
   writeTuiTranscriptView,
   writeTuiTranscriptWidth,
@@ -238,7 +240,7 @@ import { CoordinationPopover } from './CoordinationPopover'
 import { TeammatesPopover } from './TeammatesPopover'
 import { RemoteCoordinatorPopover } from './RemoteCoordinatorPopover'
 import type { RemoteCoordinatorTarget } from '../../lib/tui/remoteCoordinator'
-import { MODAL_SCRIM_Z_INDEX } from './layers'
+import { MODAL_SCRIM_Z_INDEX, paintModalScrim } from './layers'
 import { TeammatesAttention } from './TeammatesAttention'
 import { coordinatorAlertDelivery } from '../../lib/coordinatorSignals'
 import {
@@ -309,6 +311,7 @@ import {
   SPLIT_CHORD_MAP,
   type ChordMap,
 } from './chordHelp'
+import { DiagnosticsTable, diagnosticRuns } from './DiagnosticsTable'
 import {
   isAltKey,
   isCtrlKey,
@@ -1883,6 +1886,11 @@ function timeAgo(value?: string | number): string {
 // Borders plus two rows of draft: an empty prompt is not worth four rows of
 // the transcript, and the dock grows with the draft anyway.
 const COMPOSER_MIN_HEIGHT = 4
+// The cursor says what Enter will do: a block sends a prompt, an underline runs
+// a `!` shell command. Module-level so the textarea is not handed a new object
+// (and the terminal a new cursor escape) on every render.
+const COMPOSER_PROMPT_CURSOR = { style: 'block', blinking: true } as const
+const COMPOSER_SHELL_CURSOR = { style: 'underline', blinking: true } as const
 const COMPOSER_MAX_HEIGHT = 12
 // The embedded composer keeps one breathing row below the draft. Its height
 // budget includes that row plus the top border. The composer has no bottom
@@ -8577,6 +8585,10 @@ export default function OpenTuiApp() {
   const providerInstanceIdRef = useRef<string | null>(null)
   const [providerInstances, setProviderInstances] = useState<TuiProviderInstanceChoice[]>([])
   const [themeMode, setThemeMode] = useState<TuiThemeMode>('light')
+  const [themeFollowsTerminal, setThemeFollowsTerminal] = useState(false)
+  const themeFollowsTerminalRef = useRef(false)
+  // The theme last chosen from each side; following the terminal switches between them.
+  const themeSlotsRef = useRef<{ light: TuiThemeMode; dark: TuiThemeMode }>({ light: 'light', dark: 'dark' })
   const [density, setDensity] = useState<TuiDensity>('balanced')
   const [diffLayout, setDiffLayout] = useState<TuiDiffLayout>('stack')
   const [transcriptDiffNotes, setTranscriptDiffNotes] = useState<Map<string, TranscriptDiffNote>>(() => new Map())
@@ -12931,11 +12943,54 @@ export default function OpenTuiApp() {
     setThemeMode(nextTheme)
     setThemeMenuIndex(Math.max(THEMES.indexOf(nextTheme), 0))
     themeMenuOriginRef.current = null
-    void writeTuiTheme(nextTheme).catch((err) => {
+    // A theme picked by name is the choice; it is also what following the
+    // terminal will switch to on that side once it is turned back on.
+    const side = LIGHT_MODES.includes(nextTheme) ? 'light' : 'dark'
+    themeSlotsRef.current = { ...themeSlotsRef.current, [side]: nextTheme }
+    themeFollowsTerminalRef.current = false
+    setThemeFollowsTerminal(false)
+    void Promise.all([
+      writeTuiTheme(nextTheme),
+      writeTuiThemeFollow({ follow: false, [side]: nextTheme }),
+    ]).catch((err) => {
       setError(err instanceof Error ? err.message : 'Failed to store theme')
     })
     setThemeMenuOpen(false)
   }, [])
+
+  // The terminal reports its background as light or dark, and reports again
+  // when the OS appearance flips. A terminal that never answers leaves the
+  // theme where it was.
+  const applyTerminalThemeMode = useEffectEvent((mode: 'light' | 'dark' | null) => {
+    if (!mode || !themeFollowsTerminalRef.current) return
+    const target = themeSlotsRef.current[mode]
+    // Mid-preview, closing the menu restores its origin: move that too.
+    if (themeMenuOriginRef.current) themeMenuOriginRef.current = target
+    setThemeMode(target)
+    setThemeMenuIndex(Math.max(THEMES.indexOf(target), 0))
+  })
+
+  useEffect(() => {
+    const onThemeMode = (mode: 'light' | 'dark') => applyTerminalThemeMode(mode)
+    renderer.on('theme_mode', onThemeMode)
+    return () => { renderer.off('theme_mode', onThemeMode) }
+  }, [renderer])
+
+  const toggleThemeFollowsTerminal = useEffectEvent(() => {
+    const next = !themeFollowsTerminalRef.current
+    themeFollowsTerminalRef.current = next
+    setThemeFollowsTerminal(next)
+    void writeTuiThemeFollow({ follow: next }).catch((err) => {
+      setError(err instanceof Error ? err.message : 'Failed to store theme')
+    })
+    if (!next) return
+    if (renderer.themeMode) {
+      applyTerminalThemeMode(renderer.themeMode)
+      setThemeMenuGroup(renderer.themeMode === 'light' ? 'light' : 'dark')
+    } else {
+      showNotice('info', 'This terminal has not reported a light or dark background; the theme stays as it is')
+    }
+  })
 
   const openTranscriptViewMenu = useEffectEvent(() => {
     transcriptViewMenuOriginRef.current = transcriptView
@@ -12966,7 +13021,7 @@ export default function OpenTuiApp() {
   }, [])
 
   const persistTheme = useCallback(() => {
-    try { writeTuiThemeSync(currentThemeRef.current) } catch { /* best-effort */ }
+    try { writeTuiThemeSync(currentThemeRef.current, themeFollowsTerminalRef.current) } catch { /* best-effort */ }
   }, [])
 
   const confirmExit = useCallback(() => {
@@ -16614,6 +16669,7 @@ export default function OpenTuiApp() {
           configuredSplitOrientation,
           configuredSplitReaderShare,
           configuredStickyHeaders,
+          configuredThemeFollow,
         ] = await Promise.all([
           readTuiTheme(),
           readTuiProvider(),
@@ -16632,6 +16688,7 @@ export default function OpenTuiApp() {
           readTuiSplitOrientation(),
           readTuiSplitReaderShare(),
           readTuiStickyHeaders(),
+          readTuiThemeFollow(),
         ])
         if (cancelled) return
         // Attached to a daemon that may be older than this client: say so once,
@@ -16639,8 +16696,19 @@ export default function OpenTuiApp() {
         void readTuiDaemonWarning().then((warning) => {
           if (!cancelled && warning) showNotice('error', warning, 10000)
         }).catch(() => {})
-        setThemeMode(configuredTheme)
-        setActiveTheme(configuredTheme)
+        themeSlotsRef.current = {
+          light: configuredThemeFollow.light ?? 'light',
+          dark: configuredThemeFollow.dark ?? 'dark',
+        }
+        themeFollowsTerminalRef.current = configuredThemeFollow.follow
+        setThemeFollowsTerminal(configuredThemeFollow.follow)
+        // Until the terminal has answered, the stored theme is the last one it
+        // was seen in, which beats a guess.
+        const bootTheme = (configuredThemeFollow.follow && renderer.themeMode
+          ? themeSlotsRef.current[renderer.themeMode]
+          : null) ?? configuredTheme
+        setThemeMode(bootTheme)
+        setActiveTheme(bootTheme)
         // Restore the instance the list was narrowed to, if it is still offered.
         const instanceState = await readTuiProviderInstances().catch(() => ({ selected: null, choices: [] as TuiProviderInstanceChoice[] }))
         if (cancelled) return
@@ -19956,6 +20024,10 @@ export default function OpenTuiApp() {
         handled(closeThemeMenu)
         return
       }
+      if (key.name === 'tab') {
+        handled(toggleThemeFollowsTerminal)
+        return
+      }
       if (isCtrl('c')) {
         handled(requestExit)
       }
@@ -21877,6 +21949,8 @@ export default function OpenTuiApp() {
     }
     void sendComposerMessage(draft)
   }
+  // Same test the send path applies (`bangShell`).
+  const composerShellDraft = composerDraft.startsWith('!')
   const renderComposerTextarea = (
     onSubmit: () => void,
     options?: { height?: number; width?: number; variant?: 'chat' },
@@ -21892,6 +21966,10 @@ export default function OpenTuiApp() {
       initialValue={composerDraft}
       keyBindings={composerKeyBindings}
       syntaxStyle={composerSyntaxStyle}
+      // The default cursor is white whatever the theme, which is no cursor at
+      // all on a light one.
+      cursorColor={composerShellDraft ? theme.amber : theme.text}
+      cursorStyle={composerShellDraft ? COMPOSER_SHELL_CURSOR : COMPOSER_PROMPT_CURSOR}
       onContentChange={handleComposerContentChange}
       onSubmit={onSubmit}
       style={options?.variant === 'chat'
@@ -23228,7 +23306,7 @@ export default function OpenTuiApp() {
                   <text fg={overlayTheme.dim} wrapMode="none">No matching themes</text>
                 ) : (
                   <select
-                    style={{ height: menuHeight - 8 }}
+                    style={{ height: menuHeight - 9 }}
                     focused={false}
                     options={groupOptions}
                     selectedIndex={localIndex}
@@ -23255,6 +23333,12 @@ export default function OpenTuiApp() {
                     }}
                   />
                 )}
+              </box>
+              <box height={1} paddingX={2} flexDirection="row">
+                <text fg={overlayTheme.cyan} wrapMode="none">tab </text>
+                <text fg={themeFollowsTerminal ? overlayTheme.text : overlayTheme.muted} wrapMode="none">
+                  {themeFollowsTerminal ? '● matching terminal' : '○ match terminal'}
+                </text>
               </box>
             </box>
           )
@@ -24633,13 +24717,19 @@ export default function OpenTuiApp() {
                     // cap here would be a SECOND, silent truncation on top of
                     // the one the adapter already applies and announces. One
                     // place truncates, and it says so.
-                    section.items.map((item, idx) => (
-                      <box key={idx} flexShrink={0} height={1}>
+                    // Rows that share fields are a table: aligned columns, and
+                    // a long field wraps instead of being cut at the edge.
+                    diagnosticRuns(section.items).map((run) => (run.kind === 'table' ? (
+                      <box key={run.start} flexShrink={0} paddingLeft={2}>
+                        <DiagnosticsTable rows={run.rows} theme={theme} width={overlayWidth - 7} />
+                      </box>
+                    ) : run.items.map((item, idx) => (
+                      <box key={run.start + idx} flexShrink={0} height={1}>
                         <text fg={theme.text} wrapMode="none">
                           {fitText(`  ${item}`, overlayWidth - 4)}
                         </text>
                       </box>
-                    ))
+                    ))))
                   )}
                 </box>
               ))}
@@ -24667,7 +24757,7 @@ export default function OpenTuiApp() {
           left={0}
           width={width}
           height={height}
-          backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
+          renderAfter={paintModalScrim}
           zIndex={MODAL_SCRIM_Z_INDEX}
         />
       ) : null}

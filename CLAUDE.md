@@ -443,6 +443,21 @@ The TUI is mid-migration from Ink to OpenTUI. Both share the `lib/tui/service.ts
 
 Both TUIs depend on the same `lib/` provider layer — changes to `sessionBackend.ts`, mappers, or `threading.ts` affect web and TUI alike.
 
+#### The TUI theme can follow the terminal
+
+OpenTUI infers `light`/`dark` from the terminal's answer to OSC 10/11 and re-asks when the
+terminal reports an appearance change (`renderer.themeMode`, the `theme_mode` event). With
+`themeFollowsTerminal` set in `tui.json` the root switches between two remembered themes, one per
+side (`themeLight`, `themeDark`: the last theme picked by name from that group).
+
+- **Following is the default only when no theme was ever stored.** A stored theme with no flag is
+  a choice made before this existed, and it is kept.
+- **Picking a theme by name turns following off**; Tab in the theme menu turns it back on.
+- **A terminal that never answers changes nothing.** Until it answers, the stored theme is the
+  last one it was seen in, which is why exit writes the flag together with the theme.
+
+`themeFollowSmoke.tsx` plays the terminal's half on stdin (two mutations verified).
+
 #### OpenTUI performance patterns (load-bearing)
 
 - **Poll fingerprint bail-out** in `setSessionDetail`: return `prev` when `rawMessages.length`, last UUID, model, and title are unchanged so React's identity bail-out skips a full transcript reformat on idle 2s polls.
@@ -1440,9 +1455,11 @@ which mirror `app/api/sessions/[sessionId]/coordination/route.ts` action for act
   `teammatesPopoverSmoke.tsx` pins enable, roster activity, inspect, drafts, continuation, the
   unconfirmed gate and turn-off against a real seeded run.
 - **A modal is a scrim plus a panel, and the panel must sit above it**
-  (`tui/opentui/layers.ts`). The root paints a 35% black scrim over everything while any modal in
-  that list is up; a panel left at a lower z-index is painted *through* it and reads as disabled
-  rather than foregrounded. This shipped once, because the char frame is byte-identical either
+  (`tui/opentui/layers.ts`). While any modal in that list is up the root's scrim box dims and
+  desaturates everything painted below it (`paintModalScrim`, run as the box's `renderAfter`, so
+  it is a pass over the frame so far rather than a colour laid on top); a panel left at a lower
+  z-index is dimmed with the rest and reads as disabled rather than foregrounded.
+  `modalScrimSmoke.tsx` reads the painted colours (three mutations verified). This shipped once, because the char frame is byte-identical either
   way — only the colours differ — so `teammatesPopoverSmoke.tsx` asserts the ORDER, not the pixels
   (verified to fail when the panel is put back below the scrim). Adding a modal to the scrim's
   condition without raising its panel is the whole bug; use the constants rather than a literal.
