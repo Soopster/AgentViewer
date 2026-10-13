@@ -31,8 +31,24 @@ try {
   assert.equal((await coord.completeExternalProtocolTask(worker, { taskId, summary: 'Change ready', filesChanged: ['file.txt'], commandsRun: ['reported-only'] })).accepted, true)
   await assert.rejects(execute({ ...worker, action: 'read_result', taskId }), /Only the Coordinator lead/)
   await assert.rejects(execute({ ...worker, action: 'integrate_result', taskId, reviewToken: 'anything', requestId: 'teammate-integrate' }), /Only the Coordinator lead/)
-  const fresh = await execute({ ...lead, action: 'read_result', taskId }) as Awaited<ReturnType<typeof read>>
+  const fresh = await execute({ ...lead, action: 'read_result', taskId, includeDiff: true }) as Awaited<ReturnType<typeof read>>
   assert.equal(fresh.verification, 'current')
+  const overview = await execute({ ...lead, action: 'read_result', taskId }) as Awaited<ReturnType<typeof read>>
+  assert.equal(overview.checkout!.diffIncluded, false)
+  assert.equal(overview.checkout!.diff, '')
+  assert.equal(overview.checkout!.token, fresh.checkout!.token, 'overview and preview share the integration pin')
+  let offset = 0
+  let untrackedDiff = ''
+  for (;;) {
+    const page = await execute({ ...lead, action: 'read_result_diff', taskId, reviewToken: overview.checkout!.token, file: 'new file.txt', offset, limit: 60 }) as { diff: string; hasMore: boolean; nextOffset: number | null }
+    assert.ok(page.diff.length <= 60)
+    untrackedDiff += page.diff
+    if (!page.hasMore) { assert.equal(page.nextOffset, null); break }
+    offset = page.nextOffset!
+  }
+  assert.match(untrackedDiff, /\+untracked/, 'untracked file content is inspectable, not just its filename')
+  await assert.rejects(execute({ ...lead, action: 'read_result_diff', taskId, reviewToken: overview.checkout!.token, file: '../outside' }), /Choose a changed file/)
+
   assert.deepEqual(fresh.checkout!.files.sort(), ['file.txt', 'new file.txt'])
   assert.match(fresh.checkout!.diff, /after/)
   assert.ok(coordinatorResultLines(fresh).join('\n').includes('New file is intentional'))
@@ -44,6 +60,8 @@ try {
   writeFileSync(path.join(worktree.path, 'new file.txt'), 'changed after verification\n')
   const stale = await read(sessionId, 'codex', taskId)
   assert.equal(stale.verification, 'stale', 'untracked content edits invalidate verification')
+  await assert.rejects(execute({ ...lead, action: 'read_result_diff', taskId, reviewToken: fresh.checkout!.token }), /changed since review/)
+
   await assert.rejects(integrate(sessionId, 'codex', taskId, fresh.checkout!.token, 'stale'), /stale/)
   writeFileSync(path.join(worktree.path, 'new file.txt'), 'untracked\n')
   assert.equal(await coordinatorCheckoutRevision(worktree.path), fresh.checkout!.revision)
@@ -53,6 +71,8 @@ try {
   // A clean target moving after review must also reject the old token.
   writeFileSync('other.txt', 'target moves\n'); git('add', 'other.txt'); git('commit', '-qm', 'target advance')
   await assert.rejects(integrate(sessionId, 'codex', taskId, fresh.checkout!.token, 'target-changed'), /changed since review/)
+  await assert.rejects(execute({ ...lead, action: 'read_result_diff', taskId, reviewToken: fresh.checkout!.token }), /changed since review/)
+
   const ready = await read(sessionId, 'codex', taskId)
   const integrateRequest = { ...lead, action: 'integrate_result', taskId, reviewToken: ready.checkout!.token, requestId: 'integrate-once' }
   const result = await execute(integrateRequest) as { staged: boolean }

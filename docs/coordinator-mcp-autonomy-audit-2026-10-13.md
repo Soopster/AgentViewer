@@ -73,6 +73,16 @@ No receipt is inferred from a finding or a stopped turn.
   pin/key workflow. Detailed host guidance remains progressively disclosed;
   the compatibility entry point forwards to that maintained source. Both
   skill entry points validate, and the canonical hot path stays below 1,700 words.
+- Role-aware discovery now gives teammates 24 of the 40 Coordinator tools,
+  retaining discovered-work creation and execution tools. Verified standalone
+  role changes invalidate discovery once; native bindings and scoped OpenCode
+  prompt masks share the same filter. Unknown roles retain all tools and backend
+  authorization remains authoritative. OpenCode native commands lack a mask field.
+- Result review defaults to a compact overview. Pinned whole-branch/file diff
+  pages include binary and untracked changes, reject source/target drift, and
+  expose complete changes beyond the legacy preview cap. Integration and human
+  review gates remain unchanged. Character measurements are recorded in
+  `coordinator-mcp-token-cost-2026-10-13.md`; billed-token savings are unmeasured.
 
 ## Remaining gaps, ranked
 
@@ -127,10 +137,11 @@ Passing focused evidence in this pass:
   renegotiation and native app binding independent of auto-continue.
 - Skill Creator `quick_validate.py` validates canonical/compatibility entry points;
   MCP bridge smoke verifies shipped skill resources and the hot-path word budget.
-- `git diff --check` passes. Earlier OpenTUI checking passed; the latest check
-  sees a remaining `moved` inference error in concurrently added, unrelated
-  `readerWindowSmoke.tsx` around line 162.
-  Full TypeScript checking additionally retains the four legacy Ink errors.
-
-Full `npx tsc --noEmit` still reports the four pre-existing legacy Ink
-`WritableStream.rows/columns` errors at `tui/App.tsx:569–570,994–995`.
+- `scripts/coordToolDiscoverySmoke.ts`: native provider catalogs, warm/rebind
+  behavior, scoped prompt masks and rejection of forged role hints.
+- `scripts/coordResultDiffSmoke.ts`: complete 265,006-character reconstruction
+  across 17 pages, role/limit/stale-pin rejection; result-review smoke additionally
+  covers untracked file pages and source/target drift.
+- `scripts/mcpBridgeSmoke.mjs`: exactly one discovery invalidation on verified
+  role changes and diff-page mapping. Authenticated shell fallback smoke passes.
+- Full `npx tsc --noEmit`, `npm run tui:check` and `git diff --check` pass.

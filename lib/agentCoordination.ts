@@ -2578,6 +2578,15 @@ export async function inspectExternalProtocolOperation(identity: ExternalProtoco
   }
 }
 
+/** Routine agent polling can read next actions without repeating the board/history. */
+export async function readExternalProtocolActionableStatus(identity: ExternalProtocolIdentity) {
+  const db = await getDatabase()
+  const participant = requireExternalParticipantSync(db, identity)
+  const actionable = externalActionableSync(db, identity.runId, identity.agentId)
+  return { runId: identity.runId, agentId: identity.agentId, role: participant.role, runStatus: actionable.runStatus,
+    actionable, cursor: latestRunCursorSync(db, identity.runId), phases: phaseRollups(listTasksSync(db, identity.runId)) }
+}
+
 export async function readExternalProtocolStatus(identity: ExternalProtocolIdentity): Promise<ExternalProtocolStatusResult> {
   const db = await getDatabase()
   requireExternalParticipantSync(db, identity)
@@ -3151,7 +3160,7 @@ async function adoptInteractiveController(identity: ExternalProtocolIdentity): P
     if (!/^agent-\d+$/.test(agent.id) || agent.sessionId.startsWith('external:')) continue
     controller.sessionIds.set(agent.id, agent.sessionId)
     const token = rotateSessionParticipantTokenSync(db, run.id, agent.id)
-    const worker = { runId: run.id, agentId: agent.id, token }
+    const worker: ExternalProtocolIdentity = { runId: run.id, agentId: agent.id, token, role: agent.role }
     controller.sdkIdentities.set(agent.id, worker)
     registerCoordinatorToolsForProvider(agent.provider, agent.sessionId, worker, agent.providerInstanceId)
   }
@@ -3226,7 +3235,7 @@ export async function sessionCoordinatorIdentity(sessionId: string, provider: Pr
     // Only this browser-owned session is rebound. External lead credentials are
     // never rotated by automatic teammate startup.
     const token = await enqueueWrite(db => rotateSessionParticipantTokenSync(db, snapshot.run.id, lead.id))
-    const identity = { runId: snapshot.run.id, agentId: lead.id, token }
+    const identity: ExternalProtocolIdentity = { runId: snapshot.run.id, agentId: lead.id, token, role: 'lead' }
     await adoptInteractiveController(identity)
     registerCoordinatorToolsForProvider(provider, sessionId, identity, lead.providerInstanceId)
     return identity
@@ -8971,7 +8980,7 @@ async function handleProviderTurnFailure(
         provider,
         cwd: agent.worktreePath,
         title: `${controller.title ?? 'Coordinated run'} · ${agent.name} failover`,
-        codexDynamicTools: provider === 'codex' ? buildCoordinatorCodexDynamicTools() : undefined,
+        codexDynamicTools: provider === 'codex' ? buildCoordinatorCodexDynamicTools(agent.role) : undefined,
       }))
       assertCoordinatorSessionInstanceSync(await getDatabase(), session.sessionId, provider)
       const oldSessionId = controller.sessionIds.get(agent.id)
@@ -9044,7 +9053,7 @@ async function handleProviderTurnFailure(
       else controller.pendingSessions.delete(agent.id)
       if (agent.role === 'lead') controller.provider = provider
       if (token) {
-        const identity: ExternalProtocolIdentity = { runId: controller.runId, agentId: agent.id, token }
+        const identity: ExternalProtocolIdentity = { runId: controller.runId, agentId: agent.id, token, role: agent.role }
         registerCoordinatorToolsForProvider(provider, session.sessionId, identity, provider)
         controller.sdkIdentities.set(agent.id, identity)
       }
@@ -9709,7 +9718,7 @@ async function spawnTeammateSession(
       provider: teammateProvider,
       cwd: workspace!.path,
       title: `${controller.title ?? 'Coordinated run'} · ${name}`,
-      codexDynamicTools: teammateProvider === 'codex' ? buildCoordinatorCodexDynamicTools() : undefined,
+      codexDynamicTools: teammateProvider === 'codex' ? buildCoordinatorCodexDynamicTools('teammate') : undefined,
     }))
     assertCoordinatorSessionInstanceSync(db, session.sessionId, instance.id)
   } catch (err) {
@@ -9744,7 +9753,7 @@ async function spawnTeammateSession(
     return canUseInProcessTools ? issueParticipantTokenSync(tx, controller.runId, agentId, undefined, ts) : undefined
   })
   if (token) {
-    const identity: ExternalProtocolIdentity = { runId: controller.runId, agentId, token }
+    const identity: ExternalProtocolIdentity = { runId: controller.runId, agentId, token, role: 'teammate' }
     registerCoordinatorToolsForProvider(session.provider, session.sessionId, identity, instance.id)
     controller.sdkIdentities.set(agentId, identity)
   }
@@ -9900,7 +9909,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
     provider: params.provider,
     cwd: params.baseCwd,
     title: `${params.title ?? playbook?.name ?? 'Coordinated run'} · lead`,
-    codexDynamicTools: params.provider === 'codex' ? buildCoordinatorCodexDynamicTools() : undefined,
+    codexDynamicTools: params.provider === 'codex' ? buildCoordinatorCodexDynamicTools('lead') : undefined,
   })
 
   const controller: RunController = {
@@ -9991,7 +10000,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
   })
 
   if (leadToken) {
-    const identity: ExternalProtocolIdentity = { runId, agentId: 'lead', token: leadToken }
+    const identity: ExternalProtocolIdentity = { runId, agentId: 'lead', token: leadToken, role: 'lead' }
     registerCoordinatorToolsForProvider(leadSession.provider, leadSession.sessionId, identity, currentProviderInstanceId(leadSession.provider))
     controller.sdkIdentities.set('lead', identity)
   }

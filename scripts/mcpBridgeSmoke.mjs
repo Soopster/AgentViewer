@@ -142,8 +142,9 @@ const daemon = createServer(async (request, response) => {
     if (body?.action === 'resume') {
       // As the Coordinator answers: the participant carries its credential
       // (the bridge persists it and strips it), the roster never does.
-      const { token: _token, ...rosterEntry } = participant
-      response.end(JSON.stringify({ participant, snapshot: { ...snapshot, agents: [rosterEntry] } }))
+      const resumed = body.agentId === 'external-claude' ? { ...participant, agentId: 'external-claude', token: 'token-claude', role: 'teammate', provider: 'claude', name: 'claude-cli' } : participant
+      const { token: _token, ...rosterEntry } = resumed
+      response.end(JSON.stringify({ participant: resumed, snapshot: { ...snapshot, agents: [rosterEntry] } }))
       return
     }
     if (body?.action === 'list_runs') {
@@ -157,7 +158,7 @@ const daemon = createServer(async (request, response) => {
     }
     if (body?.action === 'create_task') {
       coordinatorTask = { id: 'task-1', runId: 'run-1', title: body.title, prompt: body.detail, status: 'pending', paths: body.paths ?? [], blockedBy: [], createdAt: '2026-07-18T00:00:00Z', updatedAt: '2026-07-18T00:00:00Z' }
-      response.end(JSON.stringify({ ...snapshot, tasks: [coordinatorTask] }))
+      response.end(JSON.stringify({ runStatus: 'running', cursor: 'event-1', task: { ...coordinatorTask, claudeAgentPolicy: { detail: 'private-dispatch-policy' } }, actionable: { runStatus: 'running' } }))
       return
     }
     if (body?.action === 'claim_task') {
@@ -220,6 +221,7 @@ const transport = new StdioClientTransport({
     AGENT_VIEWER_COORD_TRANSPORT: 'http',
   },
 })
+const roleCatalogUpdates = []
 const client = new Client(
   { name: 'agent-viewer-mcp-smoke', version: '1.0.0' },
   {
@@ -229,6 +231,7 @@ const client = new Client(
         'io.modelcontextprotocol/skills': {},
       },
     },
+    listChanged: { tools: { autoRefresh: true, debounceMs: 0, onChanged: (error, items) => { if (!error && items) roleCatalogUpdates.push(items.map(tool => tool.name)) } } },
     versionNegotiation: { mode: { pin: '2026-07-28' } },
   },
 )
@@ -495,12 +498,17 @@ try {
   }
   await client.callTool({ name: 'coord_read_result', arguments: { task_id: 'completed-result' } })
   await client.callTool({ name: 'coord_integrate_result', arguments: { task_id: 'completed-result', review_token: 'source-and-target-pin', request_id: 'integrate-reviewed' } })
+  await client.callTool({ name: 'coord_read_result_diff', arguments: { task_id: 'completed-result', review_token: 'source-and-target-pin', file: 'file.txt', offset: 100, limit: 500 } })
+  const diffRead = seen.find(entry => entry.body?.action === 'read_result_diff')?.body
+  if (diffRead?.file !== 'file.txt' || diffRead?.offset !== 100 || diffRead?.limit !== 500 || diffRead?.reviewToken !== 'source-and-target-pin') throw new Error('MCP result diff lost page/filter/revision arguments')
   const resultRead = seen.find(entry => entry.body?.action === 'read_result')?.body
   const resultApply = seen.find(entry => entry.body?.action === 'integrate_result')?.body
   if (resultRead?.taskId !== 'completed-result' || resultRead?.runId !== 'run-1'
     || resultApply?.reviewToken !== 'source-and-target-pin' || resultApply?.requestId !== 'integrate-reviewed') {
     throw new Error('MCP result tools lost task scope, review pin or replay key')
   }
+  await client.callTool({ name: 'coord_status', arguments: { view: 'actionable' } })
+  if (!seen.some(entry => entry.body?.action === 'status' && entry.body?.view === 'actionable')) throw new Error('MCP status lost the actionable view')
   const taskRead = seen.find(entry => entry.body?.action === 'read_task')?.body
   const taskList = seen.find(entry => entry.body?.action === 'list_tasks')?.body
   const taskCancel = seen.find(entry => entry.body?.action === 'cancel_task')?.body
@@ -552,6 +560,9 @@ try {
     })
     const joinedPayload = JSON.parse(joined.content?.[0]?.text ?? '{}')
     if (joinedPayload.participant?.agentId !== 'external-claude') throw new Error('Claude CLI did not bind as Coordinator teammate')
+    const workerCatalog = (await secondClient.listTools()).tools.map(tool => tool.name)
+    if (workerCatalog.includes('coord_delegate') || workerCatalog.includes('coord_read_result_diff') || !workerCatalog.includes('coord_create_task')) throw new Error('MCP teammate discovery did not retain execution/discovered work and hide lead tools')
+
 
     for (const [action, args] of [
       ['review_phase', { phase: 'build', approved: true }],
@@ -565,7 +576,7 @@ try {
       if (!request?.body?.requestId?.startsWith('mcp-')) throw new Error(`${action} omitted its automatic replay key`)
     }
 
-    await client.callTool({
+    const createdReceipt = await client.callTool({
       name: 'coord_create_task',
       arguments: {
         title: 'Implement bridge', detail: 'Add the shared workflow', paths: ['lib/bridge.ts'],
@@ -573,6 +584,9 @@ try {
         requested_effort: 'high', verify_commands: ['npm run smoke'],
       },
     })
+    const createdReceiptPayload = JSON.parse(createdReceipt.content?.[0]?.text ?? '{}')
+    if (createdReceiptPayload.task?.prompt !== undefined || createdReceiptPayload.task?.claudeAgentPolicy !== undefined
+      || createdReceiptPayload.taskDetailTool !== 'coord_read_task') throw new Error('MCP assignment echoed authored context or private dispatch policy')
     const generatedIdempotencyKey = seen.find((entry) => (
       entry.url === '/api/agent-protocol/external'
       && entry.body?.action === 'create_task'
@@ -588,6 +602,7 @@ try {
     }
     const claimed = await secondClient.callTool({ name: 'coord_claim_task', arguments: { task_id: 'task-1' } })
     const claimedPayload = JSON.parse(claimed.content?.[0]?.text ?? '{}')
+    if (claimedPayload.task?.prompt !== 'Add the shared workflow') throw new Error('Compact creator receipt removed claimer context')
     if (claimedPayload.task?.ownerAgentId !== 'external-claude') throw new Error('External teammate did not claim the shared task')
 
     const detailedFinding = 'ranked hotspot evidence\n'.repeat(500)
@@ -678,6 +693,13 @@ try {
   } finally {
     await secondClient.close().catch(() => {})
   }
+
+  const beforeRoleUpdate = roleCatalogUpdates.length
+  await client.callTool({ name: 'coord_resume', arguments: { run_id: 'run-1', agent_id: 'external-claude', token: 'token-claude' } })
+  for (let i = 0; i < 100 && roleCatalogUpdates.length === beforeRoleUpdate; i++) await new Promise(resolve => setTimeout(resolve, 10))
+  if (roleCatalogUpdates.length !== beforeRoleUpdate + 1 || roleCatalogUpdates.at(-1).includes('coord_delegate')) throw new Error('Verified teammate rebind did not publish exactly one smaller catalog invalidation')
+  await client.callTool({ name: 'coord_resume', arguments: { run_id: 'run-1', agent_id: 'external-codex', token: 'token-codex' } })
+  if (!(await client.listTools()).tools.some(tool => tool.name === 'coord_delegate')) throw new Error('Lead rebind did not restore delegation tools')
 
   const delegated = await client.callTool({ name: 'coord_delegate', arguments: {
     to: 'reviewer', title: 'Review revision', detail: 'Reuse your prior review context.', requested_provider: 'codex', requested_model: 'custom-review-model', requested_effort: 'high', wait_ms: 1, request_id: 'delegate-review',

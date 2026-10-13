@@ -30,6 +30,14 @@ try {
   const replay = await call('coord_create_task', args)
   assert.equal(first.task.id, replay.task.id)
   assert.equal((await call('coord_status', {})).snapshot.tasks.length, 1)
+  const light = await call('coord_status', { view: 'actionable' })
+  assert.equal(light.snapshot, undefined)
+  assert.ok(light.actionable)
+  assert.equal((await call('coord_read_task', { task_id: first.task.id })).task.id, first.task.id, 'new read-only tools do not require irrelevant mutation keys')
+  assert.ok((await call('coord_list_tasks', {})).tasks.some((task: { id: string }) => task.id === first.task.id))
+  assert.equal((await call('coord_inspect_operation', { tool_name: 'coord_create_task', operation_request_id: args.request_id })).state, 'completed')
+  assert.equal((await call('coord_read_inbox', { acknowledge: false })).messages.length, 0)
+
   await assert.rejects(() => call('coord_create_task', { title: 'Missing key', detail: 'Do not create' }), /request_id/)
   const transportFixture = path.join(cwd, 'transport-fixture.mjs')
   for (const [source, expected] of [

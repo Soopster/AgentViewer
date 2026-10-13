@@ -1,5 +1,6 @@
 import {
   inspectExternalProtocolOperation,
+  readExternalProtocolActionableStatus,
   readExternalProtocolTask,
   listExternalProtocolTasks,
   cancelExternalProtocolTask,
@@ -234,10 +235,15 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
       return { acknowledged: true, agentId, reservation: { taskId, createdAt } }
     })
   }
+  if (action === 'read_result_diff') {
+    const { readExternalCoordinatorResultDiff } = await import('./coordinatorResultReviewServer')
+    if (!text(body.taskId) || !text(body.reviewToken)) throw new Error('Pass task_id and review_token from coord_read_result')
+    return readExternalCoordinatorResultDiff(participantIdentity!, { taskId: text(body.taskId), reviewToken: text(body.reviewToken), file: optionalText(body.file), offset: body.offset === undefined ? undefined : Number(body.offset), limit: body.limit === undefined ? undefined : Number(body.limit) })
+  }
   if (action === 'read_result') {
     const { readExternalCoordinatorResultReview } = await import('./coordinatorResultReviewServer')
     if (!text(body.taskId)) throw new Error('task_id is required')
-    return readExternalCoordinatorResultReview(participantIdentity!, text(body.taskId))
+    return readExternalCoordinatorResultReview(participantIdentity!, text(body.taskId), body.includeDiff === true)
   }
   if (action === 'integrate_result') {
     const taskId = text(body.taskId)
@@ -269,7 +275,11 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
     if (!taskId || !expectedRevision || !reason) throw new Error('Pass task_id, reason and expected_revision from coord_read_task')
     return mutate(() => cancelExternalProtocolTask(participantIdentity!, { taskId, expectedRevision, reason }))
   }
-  if (action === 'status') return readExternalProtocolStatus(participantIdentity!)
+  if (action === 'status') {
+    const view = optionalText(body.view) ?? 'full'
+    if (!['full', 'actionable'].includes(view)) throw new Error('Status view must be full or actionable')
+    return view === 'actionable' ? readExternalProtocolActionableStatus(participantIdentity!) : readExternalProtocolStatus(participantIdentity!)
+  }
   if (action === 'wait') {
     return waitForExternalProtocolChange(participantIdentity!, {
       cursor: optionalText(body.cursor),

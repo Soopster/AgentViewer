@@ -14,8 +14,6 @@ Read references only when needed:
 
 ## Know your host first
 
-Two facts decide most of what follows.
-
 - **Role:** `coord_status` reports yours. Leads plan, delegate, review and synthesize; teammates own one task at a time. A lead-only rejection belongs to the other role; do not retry it.
 - **Who waits:** `actionable.waitingPolicy` reports ownership. `managed`: return when idle; the supervisor waits. `interactive`: subscribe if supported, otherwise `coord_wait`. `cooperative`: return to the human; there is no independent wake loop. `unknown`: verify the host's turn prompt before waiting. This policy is independent of liveness and automatic-continuation settings. If absent, follow the host prompt.
 
@@ -44,7 +42,7 @@ Before finalization, verify the requested participation through completed tasks,
 
 While the run is nonterminal:
 
-1. Read inbox and status on entry; let `actionable` choose the next step: answer `replyRequiredCount`, continue `myTask`, claim `claimableTasks`, review `plansAwaitingReview`, or inspect `allTasksTerminal`. Push/wait already carries state. `coord_read_task` returns full receipts/handoffs; `coord_list_tasks` finds older task IDs. Use `coord_query_context` for prior decisions or full findings.
+1. Read inbox and status on entry: full for join/recovery, `view="actionable"` for routine turns; let `actionable` choose the next step: answer `replyRequiredCount`, continue `myTask`, claim `claimableTasks`, review `plansAwaitingReview`, or inspect `allTasksTerminal`. Push/wait already carries state. `coord_read_task` returns full receipts/handoffs; `coord_list_tasks` finds older task IDs. Use `coord_query_context` for prior decisions or full findings.
 2. Answer `replyRequired` mail with `coord_send_message(kind="response", in_reply_to=<message-id>)`. Reading acknowledges delivery; it does not answer. `coord_read_inbox(unresolved=true)` lists what you still owe, with original ids, without acknowledging anything. Check mail during long work so changed instructions arrive before more edits.
 3. Do role-appropriate work. Report new evidence, a blocker, or a changed next action once — through progress, a finding, or mail to those affected — not in every channel, and never mail just to check liveness.
 4. Interactive participants heartbeat about every two minutes of long work. Managed supervisors heartbeat for you; still report meaningful progress. On `replyGuardReminder`, report real progress or an obstacle; never invent activity.
@@ -59,14 +57,14 @@ While the run is nonterminal:
 ## Lead workflow
 
 - Query prior context before decomposing. Give each task concrete acceptance evidence, narrow paths, and explicit dependencies. A teammate sees the task, not your conversation: put everything it needs in `detail`. Inspect `similarTasks` before duplicating work.
-- Assign with `coord_delegate` and a stable `request_id`. Omit `to`/`name` for any idle teammate; `name` reuses or creates one; `to` assigns follow-up work in an existing session. Put the full task context in `detail`. Explicit provider/account/model/effort selection prevents cross-provider failover. Call `coord_capabilities` before choosing model/effort IDs. Steer busy teammates with `coord_send_message`, not a competing assignment.
+- Assign with `coord_delegate` and a stable `request_id`. Omit `to`/`name` for any idle teammate; `name` reuses or creates one; `to` assigns follow-up work in an existing session. Put complete task context in `detail`. Explicit provider/account/model/effort selection prevents cross-provider failover. Call `coord_capabilities` before choosing model/effort IDs. Steer busy teammates with `coord_send_message`, not a competing assignment.
 - `delivery: queued` confirms assignment only. Confirm provider activity and the receipt before claiming execution. In an interactive host, `wait_ms` may return `blocked`, `needs_reply`, `stalled`, or `timeout`: inspect the board and inbox. None of them authorizes repeating the assignment.
 - Review plans and phase/run gates promptly. Check agent `liveness` and message `delivery` before waiting on a reply. Cooperative sessions answer at human pace (host reference).
 - Human-owned approvals stay with the human. When a run requests human review, or a provider permission/question is pending, surface it through its existing UI and continue independent work. Do not answer it by mail, impersonate the human, enable automatic continuation, or call review tools to get past it.
 - Inspect recovery with `coord_inspect_recovery`. After reading the saved transcript, `coord_acknowledge_execution` retires a completed/relinquished reservation; `coord_resume_agent` restarts unfinished work in the saved conversation. Use exact inspection pins and a stable key; neither bypasses human gates or another host. Details are in the host reference.
 - Recovery: `coord_cancel_turn` restarts a working teammate's turn and keeps ownership; `coord_release_task` returns work to the board; `coord_handoff_task` also records a failure class and a checkpoint on the task (`contextHandoff`) — read it with `coord_read_handoff` before reassigning. Do not interrupt healthy work.
 - Retire obsolete work with `coord_cancel_task`, using `coord_read_task`'s revision after checking `cancellationImpact`; unfinished dependent work can fail. Cancellation does not erase edits or confirm native interruption.
-- Inspect isolated changes with `coord_read_result`, then `coord_integrate_result` with its review pin and required stable `request_id`. It can commit the source branch and stages a squash merge in the target. Human review, verification, path and dirty-checkout gates remain enforced. Inspect the entire branch, including later tasks; see the host reference.
+- Inspect isolated changes with `coord_read_result` and pinned `coord_read_result_diff` pages, then `coord_integrate_result` with its review pin and required stable `request_id`. It can commit the source branch and stages a squash merge in the target. Human and checkout gates remain enforced. Inspect the entire branch, including later tasks; see the host reference.
 - When all tasks are terminal, inspect results, verify participation and integrated behavior, and resolve open decisions/reviews. For a bounded run whose objective is complete, call `coord_finalize_run` with a concise synthesis. In a persistent interactive room, finishing a batch does not close the room: report results and keep it open unless the user asks. If verification finds remaining work, create a follow-up task; that reopens synthesis. Save only durable discoveries with `coord_remember`.
 
 ## Teammate workflow

@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import type { ExternalProtocolIdentity } from './agentProtocol'
 import { withProviderInstance } from './providerInstances'
@@ -8,7 +9,7 @@ import { readViewSessionRunning } from './sessionBackend'
 import { coordinatorCheckoutRevision, previewMergeConflicts, resultGit } from './coordinatorResultGit'
 import { resultVerification, type CoordinatorResultReview } from './coordinatorResultReview'
 
-export async function readCoordinatorResultReview(sessionId: string, provider: AgentProvider, taskId: string, identity?: ExternalProtocolIdentity): Promise<CoordinatorResultReview> {
+export async function readCoordinatorResultReview(sessionId: string, provider: AgentProvider, taskId: string, identity?: ExternalProtocolIdentity, options: { includeDiff?: boolean } = {}): Promise<CoordinatorResultReview> {
   const context = identity ? await readExternalProtocolResultContext(identity, taskId) : null
   const snapshot = context?.snapshot ?? await readSessionCoordinator(sessionId, provider)
   const task = context?.task ?? snapshot?.tasks.find(task => task.id === taskId)
@@ -48,12 +49,12 @@ export async function readCoordinatorResultReview(sessionId: string, provider: A
     const [changed, untracked, diff, targetStatus] = await Promise.all([
       resultGit(cwd, ['diff', '--name-only', '-z', base.trim(), '--']),
       resultGit(cwd, ['ls-files', '--others', '--exclude-standard', '-z']),
-      resultGit(cwd, ['diff', '--no-ext-diff', '--no-textconv', '--no-color', base.trim(), '--']),
+      options.includeDiff === false ? Promise.resolve('') : resultGit(cwd, ['diff', '--no-ext-diff', '--no-textconv', '--no-color', base.trim(), '--']),
       resultGit(target, ['status', '--porcelain=v1', '--untracked-files=all']),
     ])
     if (revision !== await coordinatorCheckoutRevision(cwd)) throw new Error('Checkout changed while reading; refresh before reviewing.')
     const files = [...new Set([...changed.split('\0'), ...untracked.split('\0')].filter(Boolean))]
-    review.checkout = { path: cwd, branch: branch.trim(), head: head.trim(), base: base.trim(), target, files, diff: diff.slice(0, 200_000), diffTruncated: diff.length > 200_000, revision,
+    review.checkout = { path: cwd, branch: branch.trim(), head: head.trim(), base: base.trim(), target, files, diff: diff.slice(0, 200_000), diffTruncated: diff.length > 200_000, diffIncluded: options.includeDiff !== false, revision,
       token: createHash('sha256').update(JSON.stringify([revision, targetRevision, task.updatedAt, task.receipt, snapshot.run.review])).digest('hex') }
     review.verification = resultVerification(task, revision)
     if (!files.length) block('No changes to integrate.')
@@ -102,12 +103,41 @@ export async function integrateCoordinatorResult(sessionId: string, provider: Ag
 }
 
 
-export async function readExternalCoordinatorResultReview(identity: ExternalProtocolIdentity, taskId: string): Promise<CoordinatorResultReview> {
+export async function readExternalCoordinatorResultReview(identity: ExternalProtocolIdentity, taskId: string, includeDiff = false): Promise<CoordinatorResultReview & { diffTool: string }> {
   const { lead } = await readExternalProtocolResultContext(identity, taskId)
-  return readCoordinatorResultReview(lead.sessionId, lead.provider, taskId, identity)
+  return { ...await readCoordinatorResultReview(lead.sessionId, lead.provider, taskId, identity, { includeDiff }), diffTool: 'coord_read_result_diff' }
 }
 
 export async function integrateExternalCoordinatorResult(identity: ExternalProtocolIdentity, taskId: string, token: string, requestId: string): Promise<{ staged: boolean }> {
   const { lead } = await readExternalProtocolResultContext(identity, taskId)
   return integrateCoordinatorResult(lead.sessionId, lead.provider, taskId, token, requestId, identity)
+}
+
+
+/** Read one bounded diff page pinned to both source and target checkout state. */
+export async function readExternalCoordinatorResultDiff(identity: ExternalProtocolIdentity, params: { taskId: string; reviewToken: string; file?: string; offset?: number; limit?: number }) {
+  const offset = params.offset ?? 0
+  const limit = params.limit ?? 8000
+  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 16000) throw new Error('Diff offset must be a nonnegative integer and limit between 1 and 16000')
+  const before = await readExternalCoordinatorResultReview(identity, params.taskId)
+  const checkout = before.checkout
+  if (!checkout || checkout.token !== params.reviewToken) throw new Error('Result or target changed since review; refresh coord_read_result before reading more diff')
+  if (params.file !== undefined && !checkout.files.includes(params.file)) throw new Error('Choose a changed file from coord_read_result checkout.files')
+  const untracked = (await resultGit(checkout.path, ['ls-files', '--others', '--exclude-standard', '-z'])).split('\0').filter(Boolean)
+  const tracked = await resultGit(checkout.path, ['--literal-pathspecs', 'diff', '--binary', '--no-ext-diff', '--no-textconv', '--no-color', checkout.base, '--', ...(params.file === undefined ? [] : [params.file])])
+  const additions: string[] = []
+  for (const file of untracked.filter(file => params.file === undefined || params.file === file)) {
+    const addition = await new Promise<string>((resolve, reject) => execFile('git', ['diff', '--no-index', '--binary', '--no-ext-diff', '--no-textconv', '--no-color', '--', '/dev/null', file], { cwd: checkout.path, encoding: 'utf8', timeout: 15000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (!error || (error as { code?: unknown }).code === 1) resolve(stdout)
+      else reject(new Error(stderr.trim() || error.message))
+    }))
+    if (tracked.length + additions.reduce((size, part) => size + part.length, 0) + addition.length > 16 * 1024 * 1024) throw new Error('Diff exceeds the read budget; select a changed file and inspect files separately')
+    additions.push(addition)
+  }
+  const diff = tracked + additions.join('')
+  const after = await readExternalCoordinatorResultReview(identity, params.taskId)
+  if (after.checkout?.token !== params.reviewToken) throw new Error('Result or target changed while reading diff; refresh coord_read_result')
+  const text = diff.slice(offset, offset + limit)
+  const nextOffset = offset + text.length
+  return { taskId: params.taskId, reviewToken: params.reviewToken, file: params.file ?? null, offset, diff: text, totalChars: diff.length, hasMore: nextOffset < diff.length, nextOffset: nextOffset < diff.length ? nextOffset : null }
 }

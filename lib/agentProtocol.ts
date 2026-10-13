@@ -769,6 +769,8 @@ export type StartProtocolRunResult = {
 
 /** Capability-bound identity used by an independently launched CLI participant. */
 export type ExternalProtocolIdentity = {
+  /** Discovery hint populated from an authenticated participant; never grants authority. */
+  role?: ProtocolAgentRole
   runId: string
   agentId: string
   token: string

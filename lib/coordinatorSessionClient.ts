@@ -1,17 +1,19 @@
 import { chmod, mkdir, writeFile, rename } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
 import path from 'node:path'
+import { COORD_TOOL_SPECS } from './coordinatorToolContract.mjs'
 import type { ExternalProtocolIdentity } from './agentProtocol'
 
 // Materialized beside a private binding, so installed/standalone builds do not
 // depend on a source-tree bin path. Credentials never enter the model prompt.
+const READ_ONLY_TOOL_NAMES = COORD_TOOL_SPECS.filter(spec => !('request_id' in spec.fields)).map(spec => spec.name)
 const CLIENT_SOURCE = `import { readFile } from 'node:fs/promises';
 const [bindingPath, tool, json = '{}'] = process.argv.slice(2);
 try {
   if (!bindingPath || !tool) throw new Error('Usage: client.mjs binding.json coord_tool JSON_arguments');
   const binding = JSON.parse(await readFile(bindingPath, 'utf8'));
   const args = JSON.parse(json);
-  if (!['coord_status', 'coord_query_context', 'coord_wait', 'coord_list_roles'].includes(tool) && !args.request_id) {
+  if (!${JSON.stringify(READ_ONLY_TOOL_NAMES)}.includes(tool) && !(tool === 'coord_read_inbox' && (args.acknowledge === false || args.unresolved === true)) && !args.request_id) {
     throw new Error('Supply request_id on the first mutation and reuse it with identical arguments on retry');
   }
   let response;

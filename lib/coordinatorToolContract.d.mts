@@ -17,3 +17,6 @@ export const COORD_TOOL_SPECS: ToolSpec[]
 export function coordToolDescription(name: string): string
 export const COORD_FINDING_DETAIL_MAX_CHARS: number
 export function validateCoordinatorDecisions(value: unknown): unknown[] | undefined
+
+export function coordToolAllowedForRole(name: string, role?: string): boolean
+export function coordinatorToolSpecsForRole(role?: string): ToolSpec[]

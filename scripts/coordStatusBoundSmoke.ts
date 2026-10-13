@@ -16,6 +16,7 @@ execFileSync('git', ['add', '.'])
 execFileSync('git', ['-c', 'user.name=Smoke', '-c', 'user.email=smoke@example.test', 'commit', '-qm', 'baseline'])
 const coord = await import('../lib/agentCoordination')
 const { executeExternalCoordinatorAction: execute } = await import('../lib/agentCoordinationExternal')
+const { coordinatorModelResult } = await import('../lib/coordinatorModelResult.mjs')
 const { buildCoordinatorPiTools } = await import('../lib/agentCoordinationSdkTools')
 
 const lead = (await coord.createExternalProtocolRun({ prompt: 'Audit', provider: 'codex', baseCwd: cwd, participantName: 'lead' })).participant
@@ -32,6 +33,34 @@ for (let index = 0; index < FINDINGS; index += 1) {
 }
 
 const status = await execute({ ...lead, action: 'status' }) as { snapshot: { events: Array<{ type: string; detail?: string }> } }
+const actionable = await execute({ ...lead, action: 'status', view: 'actionable' }) as Awaited<ReturnType<typeof coord.readExternalProtocolActionableStatus>>
+const fullStatus = await coord.readExternalProtocolStatus(lead)
+assert.deepEqual(actionable.actionable, fullStatus.actionable, 'cheap reads preserve every next action and waiting-policy field')
+assert.deepEqual(actionable.phases, fullStatus.phases)
+assert.equal(actionable.cursor, fullStatus.cursor)
+assert.equal('snapshot' in actionable, false, 'routine reads do not echo board/history')
+assert.ok(JSON.stringify(actionable).length < JSON.stringify(status).length * 0.1, 'the actionable fixture cuts more than 90% of response characters')
+await assert.rejects(execute({ ...lead, action: 'status', view: 'invented' }), /Status view/)
+const statusTool = buildCoordinatorPiTools(lead).find(tool => tool.name === 'coord_status')!
+const sdkStatus = await (statusTool.execute as unknown as (id: string, args: object) => Promise<{ content: Array<{ text?: string }> }>)('compact-status', { view: 'actionable' })
+assert.deepEqual(JSON.parse(sdkStatus.content[0].text!), JSON.parse(JSON.stringify(actionable)), 'SDK path forwards the view and keeps the same digest')
+const assignment = await coord.createExternalProtocolTask(lead, { title: 'Large assignment', detail: 'Specific context. '.repeat(1000), targetRole: 'teammate' })
+const projected = coordinatorModelResult('create_task', assignment) as typeof assignment
+assert.equal(projected.task!.prompt, undefined, 'the model does not get its authored prompt echoed back')
+assert.equal(assignment.task!.prompt.length > 10_000, true, 'supervisor/backend data stays complete')
+assert.equal((await coord.readExternalProtocolTask(lead, assignment.task!.id)).task.prompt, assignment.task!.prompt)
+assert.equal(coordinatorModelResult('claim_task', assignment), assignment, 'claimer context remains whole')
+const createTool = buildCoordinatorPiTools(lead).find(tool => tool.name === 'coord_create_task')!
+const sdkAssignment = await (createTool.execute as unknown as (id: string, args: object) => Promise<{ content: Array<{ text?: string }> }>)('compact-assignment', { title: 'SDK-authored assignment', detail: 'Caller supplied context. '.repeat(500), role: 'teammate', request_id: 'sdk-compact-assignment' })
+const sdkAssignmentResult = JSON.parse(sdkAssignment.content[0].text!)
+assert.equal(sdkAssignmentResult.task.prompt, undefined)
+assert.equal(sdkAssignmentResult.taskDetailTool, 'coord_read_task')
+assert.ok((await coord.readExternalProtocolTask(lead, sdkAssignmentResult.task.id)).task.prompt.startsWith('Caller supplied context.'))
+
+console.log(`Assignment response characters: backend=${JSON.stringify(assignment).length}, model=${JSON.stringify(projected).length}`)
+
+console.log(`Status response characters: full=${JSON.stringify(status).length}, actionable=${JSON.stringify(actionable).length}; reduction=${(100 * (1 - JSON.stringify(actionable).length / JSON.stringify(status).length)).toFixed(1)}%`)
+
 const findings = status.snapshot.events.filter((event) => event.type === 'finding')
 assert.equal(findings.length, FINDINGS, 'every finding is still listed')
 assert.ok(JSON.stringify(status).length < 60_000, `status stayed small (${JSON.stringify(status).length} chars for ${FINDINGS * EVIDENCE} of evidence)`)

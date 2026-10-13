@@ -45,7 +45,7 @@ import { claudeAgentPolicyOptions, claudeQueryBudgetOptions, parseClaudeAgentPol
 import { claudeSessionPersistenceQueryOptions, claudeSessionStoreOptions } from './claudeSessionStore'
 import { withClaudeResumeTouchRecorded } from './claudeResumeTouch'
 import { claudeProcessSpawnOptions, claudeProcessTransportStatus } from './claudeProcessSpawner'
-import { dispatchCoordinatorCodexToolCall, getCoordinatorAcpMcpServers } from './agentCoordinationSdkTools'
+import { dispatchCoordinatorCodexToolCall, getCoordinatorAcpMcpServers, getCoordinatorOpenCodeToolMask } from './agentCoordinationSdkTools'
 import { isAcpProvider, type AcpProvider } from './provider'
 import { COORDINATION_DATA_DIR } from './coordinatorLedger'
 import {
@@ -5174,6 +5174,7 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
           body: {
             model: selectedModel ?? undefined,
             agent: requestedAgent,
+            tools: getCoordinatorOpenCodeToolMask(sessionId),
             parts: buildOpenCodeParts(text, []),
           },
         })
@@ -5377,6 +5378,7 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
             body: {
               model: selectedModel ?? undefined,
               agent: requestedAgent,
+              tools: getCoordinatorOpenCodeToolMask(sessionId),
             parts: buildOpenCodeParts(userMessage, attachments, sessionDirectory),
             },
           })

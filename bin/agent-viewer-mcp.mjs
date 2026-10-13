@@ -23,7 +23,8 @@ import {
   taskSeed,
 } from './agent-viewer-mcp-task-store.mjs'
 import { COORDINATOR_MCP_TOOL_NAMES, COORDINATOR_KEYED_ACTIONS } from './agent-viewer-coordinator-tools.mjs'
-import { coordToolDescription } from '../lib/coordinatorToolContract.mjs'
+import { coordinatorModelResult } from '../lib/coordinatorModelResult.mjs'
+import { coordToolDescription, coordToolAllowedForRole } from '../lib/coordinatorToolContract.mjs'
 
 const PROVIDERS = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'acp']
 const EXTERNAL_COORD_PROTOCOL_VERSION = 2
@@ -63,6 +64,15 @@ const ahpClient = new CoordinatorAhpClient({
   attachUrl: baseUrl,
   title: 'Agent Viewer MCP bridge',
 })
+let coordinatorDiscoveryRole = null
+const discoveryRefreshes = new Set()
+function updateCoordinatorDiscoveryRole(role) {
+  const next = role === 'lead' || role === 'teammate' ? role : null
+  if (next === coordinatorDiscoveryRole) return
+  coordinatorDiscoveryRole = next
+  for (const refresh of discoveryRefreshes) refresh()
+}
+
 let coordinatorCursor = null
 let coordinatorIdentityFile = process.env.AGENT_VIEWER_COORD_IDENTITY_FILE?.trim() || null
 let coordinatorIdentity = (() => {
@@ -569,6 +579,7 @@ async function bindCoordinatorParticipant(result) {
       token: participant.token,
     }
     coordinatorCursor = null
+    updateCoordinatorDiscoveryRole(participant.role)
     await persistCoordinatorIdentity(participant)
     return {
       ...result,
@@ -634,12 +645,15 @@ async function coordinatorRequest(action, payload = {}, requireIdentity = true) 
         body: JSON.stringify({ action, ...body }),
       }, action === 'wait' || body.waitMs ? 65_000 : 10_000)
     : await ahpClient.request(action, body, action === 'wait' || body.waitMs ? 65_000 : 10_000)
+  const participant = result?.participant ?? result?.snapshot?.agents?.find(agent => agent.id === coordinatorIdentity?.agentId) ?? (result?.agentId === coordinatorIdentity?.agentId && result?.runId === coordinatorIdentity?.runId ? result : null)
+  if (participant?.role) updateCoordinatorDiscoveryRole(participant.role)
+  if (['completed', 'failed', 'stopped'].includes(result?.snapshot?.run?.status ?? result?.runStatus)) updateCoordinatorDiscoveryRole(null)
   // status/wait return the latest event cursor; remembering it here keeps the
   // next coord_wait from waking on state this bridge has already seen.
   if (result && typeof result.cursor === 'string' && result.cursor) {
     coordinatorCursor = result.cursor
   }
-  return result
+  return action === 'create_task' ? coordinatorModelResult(action, result) : result
 }
 
 // In-process sessions build their tools from the shared contract; taking each
@@ -660,6 +674,7 @@ const server = new McpServer(
   },
   {
     capabilities: {
+      tools: { listChanged: true },
       resources: { subscribe: coordinatorTransport() === 'ahp' },
       extensions: {
         [MCP_UI_EXTENSION]: { mimeTypes: ['text/html;profile=mcp-app'] },
@@ -1000,7 +1015,25 @@ server.registerTool('post_attention', {
   return textResult(result.attention)
 })
 
-server.registerTool('coord_list_runs', {
+const coordinatorTools = new Map()
+function refreshCoordinatorTools() {
+  let changed = false
+  for (const [name, handle] of coordinatorTools) {
+    const enabled = coordToolAllowedForRole(name, coordinatorDiscoveryRole)
+    if (enabled !== handle.enabled) { handle.enabled = enabled; changed = true }
+  }
+  // One catalog invalidation per rebind, rather than one per hidden tool.
+  if (changed) server.sendToolListChanged()
+}
+discoveryRefreshes.add(refreshCoordinatorTools)
+function registerCoordinatorTool(name, config, handler) {
+  const handle = server.registerTool(name, config, handler)
+  coordinatorTools.set(name, handle)
+  if (!coordToolAllowedForRole(name, coordinatorDiscoveryRole)) handle.disable()
+  return handle
+}
+
+registerCoordinatorTool('coord_list_runs', {
   description: 'List recent Agent Viewer Coordinator runs that an external CLI can join.',
   inputSchema: { limit: z.number().int().min(1).max(100).optional() },
   annotations: { readOnlyHint: true },
@@ -1009,7 +1042,7 @@ server.registerTool('coord_list_runs', {
   return textResult(result)
 })
 
-server.registerTool('coord_create_run', {
+registerCoordinatorTool('coord_create_run', {
   description: 'Create a Coordinator run and bind this CLI as its lead. Seed the whole board from a saved playbook (playbook_name + args) or an inline playbook object — phases become dependency barriers and no planning turn is needed — or omit both and add tasks with coord_create_task.',
   inputSchema: {
     prompt: z.string().min(1).optional().describe('Run objective; optional when a playbook is supplied'),
@@ -1054,7 +1087,7 @@ server.registerTool('coord_create_run', {
   return textResult(result)
 })
 
-server.registerTool('coord_preview_playbook', {
+registerCoordinatorTool('coord_preview_playbook', {
   description: 'Dry-run a saved or inline playbook + args: returns the exact task ids, titles, prompts, and dependency graph coord_create_run would seed, without creating a run. Use to sanity-check args before committing.',
   inputSchema: {
     playbook_name: z.string().min(1).max(64).optional().describe('Saved playbook in <cwd>/.agent-viewer/playbooks/'),
@@ -1070,7 +1103,7 @@ server.registerTool('coord_preview_playbook', {
   cwd: cwd ?? bridgeCwd,
 }, false)))
 
-server.registerTool('coord_list_playbooks', {
+registerCoordinatorTool('coord_list_playbooks', {
   description: 'List saved Coordinator playbooks (reusable run definitions) for a checkout. Run one with coord_create_run playbook_name + args.',
   inputSchema: {
     cwd: z.string().min(1).optional().describe('Checkout to search; defaults to this CLI project directory'),
@@ -1078,7 +1111,7 @@ server.registerTool('coord_list_playbooks', {
   annotations: { readOnlyHint: true },
 }, async ({ cwd }) => textResult(await coordinatorRequest('list_playbooks', { cwd: cwd ?? bridgeCwd }, false)))
 
-server.registerTool('coord_save_playbook', {
+registerCoordinatorTool('coord_save_playbook', {
   description: 'Lead-only: save the current run\'s task board as a reusable playbook under <run cwd>/.agent-viewer/playbooks/<name>.json, preserving phases and dependencies so the run can be replayed with coord_create_run.',
   inputSchema: {
     playbook_name: z.string().min(1).max(64).describe('Lowercase slug (a-z, 0-9, hyphens)'),
@@ -1093,7 +1126,7 @@ server.registerTool('coord_save_playbook', {
   requestId: request_id,
 })))
 
-server.registerTool('coord_join_run', {
+registerCoordinatorTool('coord_join_run', {
   description: 'Join a Coordinator run and bind this CLI as a named teammate. Omit run_id to auto-join the newest joinable run, preferring one whose checkout matches this CLI\'s project directory; use coord_list_runs first only when you need to pick between several live runs.',
   inputSchema: {
     run_id: z.string().min(1).optional().describe('Explicit run to join; omit to discover the newest joinable run for this checkout'),
@@ -1118,7 +1151,7 @@ server.registerTool('coord_join_run', {
   return textResult(result)
 })
 
-server.registerTool('coord_resume', {
+registerCoordinatorTool('coord_resume', {
   description: 'Rebind this CLI to the participant it already is, after a restart or reconnect lost the binding. Pass the run_id and agent_id from your earlier join/create result; the bridge reads the saved credential itself, so you never need to open the identity file or handle the token. Pass token only when your host handed you one. This does not create a participant: use it instead of joining again, which would leave a duplicate.',
   inputSchema: {
     run_id: z.string().min(1),
@@ -1144,6 +1177,7 @@ server.registerTool('coord_resume', {
   // A failed resume must not cost a binding that was working.
   const previous = coordinatorIdentity
   const previousFile = coordinatorIdentityFile
+  const previousRole = coordinatorDiscoveryRole
   // Rebinding writes the identity back; it must land in its own file, not the
   // file of whatever this bridge was bound to before.
   if (resumedFile && !process.env.AGENT_VIEWER_COORD_IDENTITY_FILE?.trim()) coordinatorIdentityFile = resumedFile
@@ -1153,51 +1187,58 @@ server.registerTool('coord_resume', {
     return textResult(result)
   } catch (error) {
     coordinatorIdentity = previous
+    updateCoordinatorDiscoveryRole(previousRole)
     coordinatorIdentityFile = previousFile
     throw error
   }
 })
 
-server.registerTool('coord_capabilities', {
+registerCoordinatorTool('coord_capabilities', {
   description: bridgeDescription('coord_capabilities'),
   inputSchema: { provider: z.enum(['claude', 'codex', 'opencode', 'copilot', 'pi', 'acp']).optional(), provider_instance_id: z.string().min(1).max(64).optional() },
   annotations: { readOnlyHint: true },
 }, async ({ provider, provider_instance_id }) => textResult(await coordinatorRequest('capabilities', { provider, providerInstanceId: provider_instance_id })))
 
-server.registerTool('coord_read_result', {
-  description: bridgeDescription('coord_read_result'),
-  inputSchema: { task_id: z.string().min(1) }, annotations: { readOnlyHint: true },
-}, async ({ task_id }) => textResult(await coordinatorRequest('read_result', { taskId: task_id })))
+registerCoordinatorTool('coord_read_result_diff', {
+  description: bridgeDescription('coord_read_result_diff'),
+  inputSchema: { task_id: z.string().min(1), review_token: z.string().min(1), file: z.string().min(1).optional(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(16000).optional() },
+  annotations: { readOnlyHint: true },
+}, async ({ task_id, review_token, file, offset, limit }) => textResult(await coordinatorRequest('read_result_diff', { taskId: task_id, reviewToken: review_token, file, offset, limit })))
 
-server.registerTool('coord_integrate_result', {
+registerCoordinatorTool('coord_read_result', {
+  description: bridgeDescription('coord_read_result'),
+  inputSchema: { task_id: z.string().min(1), include_diff: z.boolean().optional() }, annotations: { readOnlyHint: true },
+}, async ({ task_id, include_diff }) => textResult(await coordinatorRequest('read_result', { taskId: task_id, includeDiff: include_diff })))
+
+registerCoordinatorTool('coord_integrate_result', {
   description: bridgeDescription('coord_integrate_result'),
   inputSchema: { task_id: z.string().min(1), review_token: z.string().min(1), request_id: z.string().min(1).max(160) },
 }, async ({ task_id, review_token, request_id }) => textResult(await coordinatorRequest('integrate_result', { taskId: task_id, reviewToken: review_token, requestId: request_id })))
 
-server.registerTool('coord_inspect_operation', {
+registerCoordinatorTool('coord_inspect_operation', {
   description: bridgeDescription('coord_inspect_operation'),
   inputSchema: { tool_name: z.string().min(1), operation_request_id: z.string().min(1).max(160) },
   annotations: { readOnlyHint: true },
 }, async ({ tool_name, operation_request_id }) => textResult(await coordinatorRequest('inspect_operation', { toolName: tool_name, operationRequestId: operation_request_id })))
 
-server.registerTool('coord_read_task', {
+registerCoordinatorTool('coord_read_task', {
   description: bridgeDescription('coord_read_task'),
   inputSchema: { task_id: z.string().min(1) }, annotations: { readOnlyHint: true },
 }, async ({ task_id }) => textResult(await coordinatorRequest('read_task', { taskId: task_id })))
 
-server.registerTool('coord_list_tasks', {
+registerCoordinatorTool('coord_list_tasks', {
   description: bridgeDescription('coord_list_tasks'),
   inputSchema: { cursor: z.string().min(1).optional(), limit: z.number().int().min(1).max(100).optional(), status: z.enum(['pending', 'claimed', 'planning', 'planned', 'in_progress', 'blocked', 'completed', 'failed', 'cancelled']).optional() },
   annotations: { readOnlyHint: true },
 }, async ({ cursor, limit, status }) => textResult(await coordinatorRequest('list_tasks', { cursor, limit, status })))
 
-server.registerTool('coord_cancel_task', {
+registerCoordinatorTool('coord_cancel_task', {
   description: bridgeDescription('coord_cancel_task'),
   inputSchema: { task_id: z.string().min(1), expected_revision: z.string().min(1), reason: z.string().min(1), request_id: requestIdField },
   annotations: { destructiveHint: true },
 }, async ({ task_id, expected_revision, reason, request_id }) => textResult(await coordinatorRequest('cancel_task', { taskId: task_id, expectedRevision: expected_revision, reason, requestId: request_id })))
 
-server.registerTool('coord_resume_agent', {
+registerCoordinatorTool('coord_resume_agent', {
   description: bridgeDescription('coord_resume_agent'),
   inputSchema: {
     agent_id: z.string().min(1), expected_task_id: z.string().min(1), expected_session_id: z.string().min(1),
@@ -1208,13 +1249,13 @@ server.registerTool('coord_resume_agent', {
   expectedClaimGeneration: expected_claim_generation, requestId: request_id,
 })))
 
-server.registerTool('coord_inspect_recovery', {
+registerCoordinatorTool('coord_inspect_recovery', {
   description: bridgeDescription('coord_inspect_recovery'),
   inputSchema: { agent: z.string().min(1).optional() },
   annotations: { readOnlyHint: true },
 }, async ({ agent }) => textResult(await coordinatorRequest('inspect_recovery', { agent })))
 
-server.registerTool('coord_acknowledge_execution', {
+registerCoordinatorTool('coord_acknowledge_execution', {
   description: bridgeDescription('coord_acknowledge_execution'),
   inputSchema: {
     agent_id: z.string().min(1), expected_task_id: z.string().min(1), expected_created_at: z.string().min(1),
@@ -1224,13 +1265,14 @@ server.registerTool('coord_acknowledge_execution', {
   targetAgentId: agent_id, expectedTaskId: expected_task_id, expectedCreatedAt: expected_created_at, requestId: request_id,
 })))
 
-server.registerTool('coord_status', {
+registerCoordinatorTool('coord_status', {
   description: bridgeDescription('coord_status'),
+  inputSchema: { view: z.enum(['full', 'actionable']).optional() },
   annotations: { readOnlyHint: true },
   _meta: { ui: { resourceUri: COORDINATOR_APP_URI, visibility: ['model', 'app'] } },
-}, async () => textResult(await coordinatorRequest('status')))
+}, async ({ view }) => textResult(await coordinatorRequest('status', { view })))
 
-server.registerTool('coord_wait', {
+registerCoordinatorTool('coord_wait', {
   description: bridgeDescription('coord_wait', 'Tasks-capable MCP clients receive a durable asynchronous handle for non-zero waits; other clients retain the blocking result. If it THROWS instead (network error, timeout), that is a real disconnect: wait ~2s and retry the same call rather than giving up or re-joining.'),
   inputSchema: {
     cursor: z.string().min(1).optional().describe('Opaque cursor from the previous coord_wait; normally omit because this bridge remembers it'),
@@ -1276,7 +1318,7 @@ server.registerTool('coord_wait', {
   return textResult(compact)
 })
 
-server.registerTool('coord_await_run', {
+registerCoordinatorTool('coord_await_run', {
   description: 'Create a durable MCP Task that monitors this participant\'s Coordinator run until it reaches completed, failed, or stopped. '
     + 'Pending lead plan reviews surface as input_required elicitations and tasks/update applies the user\'s response. Use this for an unattended run or an external supervisor that continues working independently; interactive leads should keep acting on pushed current-run state, or coord_status/coord_wait only as a non-subscribing fallback, instead of passively awaiting their own work. Requires io.modelcontextprotocol/tasks.',
   inputSchema: {
@@ -1308,7 +1350,7 @@ server.registerTool('coord_await_run', {
   })
 })
 
-server.registerTool('coord_create_task', {
+registerCoordinatorTool('coord_create_task', {
   description: bridgeDescription('coord_create_task'),
   inputSchema: {
     assign_to: z.string().min(1).max(160).optional().describe('Lead-only: delegate atomically to an idle teammate by name or ID, reusing its session. Busy/conflicting assignments leave no task. Delivery is queued, not proof of execution.'),
@@ -1346,7 +1388,7 @@ server.registerTool('coord_create_task', {
   requestId: request_id,
 })))
 
-server.registerTool('coord_delegate', {
+registerCoordinatorTool('coord_delegate', {
   description: bridgeDescription('coord_delegate'),
   inputSchema: {
     to: z.string().min(1).max(160).optional().describe('Existing teammate name or id for follow-up work in its session. Overrides name.'),
@@ -1366,12 +1408,12 @@ server.registerTool('coord_delegate', {
   assignTo: to ?? 'auto', teammateName: to ? undefined : name, waitMs: wait_ms, requestedProvider: requested_provider, requestedProviderInstanceId: requested_provider_instance_id, requestedModel: requested_model, requestedEffort: requested_effort, title, detail, paths, verifyCommands: verify_commands, targetRole: 'teammate', requestId: request_id,
 })))
 
-server.registerTool('coord_claim_task', {
+registerCoordinatorTool('coord_claim_task', {
   description: bridgeDescription('coord_claim_task'),
   inputSchema: { task_id: z.string().min(1).optional(), request_id: requestIdField },
 }, async ({ task_id, request_id }) => textResult(await coordinatorRequest('claim_task', { taskId: task_id, requestId: request_id })))
 
-server.registerTool('coord_release_task', {
+registerCoordinatorTool('coord_release_task', {
   description: bridgeDescription('coord_release_task'),
   inputSchema: {
     task_id: z.string().min(1),
@@ -1384,7 +1426,7 @@ server.registerTool('coord_release_task', {
   requestId: request_id,
 })))
 
-server.registerTool('coord_leave_run', {
+registerCoordinatorTool('coord_leave_run', {
   description: bridgeDescription('coord_leave_run'),
   inputSchema: {
     reason: z.string().max(1000).optional(),
@@ -1400,12 +1442,13 @@ server.registerTool('coord_leave_run', {
   // requireUnboundBridge can't infer this locally — unbind explicitly instead
   // of waiting for a status check that would otherwise still refuse rebinding.
   coordinatorIdentity = null
+  updateCoordinatorDiscoveryRole(null)
   coordinatorCursor = null
   if (!process.env.AGENT_VIEWER_COORD_IDENTITY_FILE?.trim()) coordinatorIdentityFile = null
   return textResult(result)
 })
 
-server.registerTool('coord_read_inbox', {
+registerCoordinatorTool('coord_read_inbox', {
   description: bridgeDescription('coord_read_inbox', 'Print one line per message to your own terminal, "<- <fromAgentId>: <body>" — the human watching this terminal cannot see the mailbox otherwise.'),
   inputSchema: {
     after: z.string().min(1).optional().describe('Message cursor returned by the previous call'),
@@ -1422,7 +1465,7 @@ server.registerTool('coord_read_inbox', {
   requestId: request_id,
 })))
 
-server.registerTool('coord_send_message', {
+registerCoordinatorTool('coord_send_message', {
   description: bridgeDescription('coord_send_message', 'Print one line to your own terminal after sending, "-> <to>: <one-line summary>" — this is the only way the human watching this terminal sees you communicating.'),
   inputSchema: {
     to: z.string().min(1).describe('Agent name or id from coord_status\'s roster, or one of two broadcast aliases: "all" (every other active participant — the lead\'s way to announce a priority change or new context to the whole team at once) or "lead" (the current lead, from any teammate; the lead itself has no "lead" to address). Reused names resolve to whichever active participant holds that name now.'),
@@ -1447,12 +1490,12 @@ server.registerTool('coord_send_message', {
   requestId: request_id,
 })))
 
-server.registerTool('coord_read_handoff', {
+registerCoordinatorTool('coord_read_handoff', {
   description: bridgeDescription('coord_read_handoff'),
   inputSchema: { handoff_id: z.string().min(1) }, annotations: { readOnlyHint: true },
 }, async ({ handoff_id }) => textResult(await coordinatorRequest('read_handoff', { handoffId: handoff_id })))
 
-server.registerTool('coord_handoff_task', {
+registerCoordinatorTool('coord_handoff_task', {
   description: bridgeDescription('coord_handoff_task'),
   inputSchema: {
     task_id: z.string().min(1),
@@ -1469,12 +1512,12 @@ server.registerTool('coord_handoff_task', {
   requestId: request_id,
 })))
 
-server.registerTool('coord_request_locks', {
+registerCoordinatorTool('coord_request_locks', {
   description: bridgeDescription('coord_request_locks'),
   inputSchema: { paths: z.array(z.string().min(1)).min(1).max(100), request_id: requestIdField },
 }, async ({ paths, request_id }) => textResult(await coordinatorRequest('request_locks', { paths, requestId: request_id })))
 
-server.registerTool('coord_progress', {
+registerCoordinatorTool('coord_progress', {
   description: bridgeDescription('coord_progress'),
   inputSchema: {
     status: z.enum(['ready', 'working', 'idle', 'blocked', 'heartbeat']),
@@ -1491,7 +1534,7 @@ server.registerTool('coord_progress', {
   requestId: request_id,
 })))
 
-server.registerTool('coord_publish_finding', {
+registerCoordinatorTool('coord_publish_finding', {
   description: bridgeDescription('coord_publish_finding'),
   inputSchema: {
     kind: z.enum(['finding', 'learning', 'handoff', 'review.requested']),
@@ -1508,7 +1551,7 @@ server.registerTool('coord_publish_finding', {
   requestId: request_id,
 })))
 
-server.registerTool('coord_query_context', {
+registerCoordinatorTool('coord_query_context', {
   description: bridgeDescription('coord_query_context'),
   annotations: { readOnlyHint: true },
   inputSchema: {
@@ -1517,7 +1560,7 @@ server.registerTool('coord_query_context', {
   },
 }, async ({ query, limit }) => textResult(await coordinatorRequest('query_context', { query, limit })))
 
-server.registerTool('coord_remember', {
+registerCoordinatorTool('coord_remember', {
   description: bridgeDescription('coord_remember'),
   inputSchema: {
     summary: z.string().min(1).max(2000),
@@ -1530,7 +1573,7 @@ server.registerTool('coord_remember', {
   requestId: request_id,
 })))
 
-server.registerTool('coord_save_role', {
+registerCoordinatorTool('coord_save_role', {
   description: bridgeDescription('coord_save_role', 'Optionally set a suggested provider/model for the role (persona-pack-style default) — surfaced in the task text for whoever claims it; omitting provider/model on an update keeps whatever was set before.'),
   inputSchema: {
     name: z.string().min(1).max(80),
@@ -1547,12 +1590,12 @@ server.registerTool('coord_save_role', {
   requestId: request_id,
 })))
 
-server.registerTool('coord_list_roles', {
+registerCoordinatorTool('coord_list_roles', {
   description: bridgeDescription('coord_list_roles'),
   annotations: { readOnlyHint: true },
 }, async () => textResult(await coordinatorRequest('list_roles')))
 
-server.registerTool('coord_submit_plan', {
+registerCoordinatorTool('coord_submit_plan', {
   description: bridgeDescription('coord_submit_plan'),
   inputSchema: {
     task_id: z.string().min(1),
@@ -1567,7 +1610,7 @@ server.registerTool('coord_submit_plan', {
   requestId: request_id,
 })))
 
-server.registerTool('coord_review_plan', {
+registerCoordinatorTool('coord_review_plan', {
   description: bridgeDescription('coord_review_plan'),
   inputSchema: {
     task_id: z.string().min(1),
@@ -1584,7 +1627,7 @@ server.registerTool('coord_review_plan', {
   requestId: request_id,
 })))
 
-server.registerTool('coord_review_phase', {
+registerCoordinatorTool('coord_review_phase', {
   description: bridgeDescription('coord_review_phase'),
   inputSchema: {
     phase: z.string().min(1).max(120),
@@ -1597,7 +1640,7 @@ server.registerTool('coord_review_phase', {
   phase, approved, summary, detail, requestId: request_id,
 })))
 
-server.registerTool('coord_review_run', {
+registerCoordinatorTool('coord_review_run', {
   description: bridgeDescription('coord_review_run'),
   inputSchema: {
     approved: z.boolean(),
@@ -1609,7 +1652,7 @@ server.registerTool('coord_review_run', {
   approved, summary, detail, requestId: request_id,
 })))
 
-server.registerTool('coord_resolve_decision', {
+registerCoordinatorTool('coord_resolve_decision', {
   description: bridgeDescription('coord_resolve_decision'),
   inputSchema: {
     task_id: z.string().min(1),
@@ -1622,7 +1665,7 @@ server.registerTool('coord_resolve_decision', {
   taskId: task_id, decisionId: decision_id, answer, deferred, requestId: request_id,
 })))
 
-server.registerTool('coord_promote_learning', {
+registerCoordinatorTool('coord_promote_learning', {
   description: bridgeDescription('coord_promote_learning'),
   inputSchema: {
     candidate_id: z.string().min(1),
@@ -1633,7 +1676,7 @@ server.registerTool('coord_promote_learning', {
   candidateId: candidate_id, target, requestId: request_id,
 })))
 
-server.registerTool('coord_cancel_turn', {
+registerCoordinatorTool('coord_cancel_turn', {
   description: bridgeDescription('coord_cancel_turn'),
   inputSchema: {
     agent_id: z.string().min(1).describe('Target participant name or id — not yourself.'),
@@ -1644,7 +1687,7 @@ server.registerTool('coord_cancel_turn', {
   requestId: request_id,
 })))
 
-server.registerTool('coord_spawn_teammate', {
+registerCoordinatorTool('coord_spawn_teammate', {
   description: bridgeDescription('coord_spawn_teammate'),
   inputSchema: {
     provider: z.enum(PROVIDERS).optional().describe('Preferred provider for the new teammate; the run provider pool remains authoritative.'),
@@ -1655,7 +1698,7 @@ server.registerTool('coord_spawn_teammate', {
   requestId: request_id,
 })))
 
-server.registerTool('coord_complete_task', {
+registerCoordinatorTool('coord_complete_task', {
   description: 'Complete your claimed task with an honest receipt. Verify first: the gate runs the task\'s verify_commands and compares the checkout with your granted paths. '
     + 'A refusal comes back as accepted: false with a reason, not an error — fix what it names (an edit outside your paths, a failing check, an unapproved plan, an open decision at low/medium autonomy) and call again with the same request_id. '
     + 'An error naming unanswered reply-required messages means answer them first (coord_read_inbox unresolved=true). '
@@ -1694,7 +1737,7 @@ server.registerTool('coord_complete_task', {
   requestId: request_id,
 })))
 
-server.registerTool('coord_fail_task', {
+registerCoordinatorTool('coord_fail_task', {
   description: bridgeDescription('coord_fail_task'),
   inputSchema: {
     task_id: z.string().min(1),
@@ -1709,7 +1752,7 @@ server.registerTool('coord_fail_task', {
   requestId: request_id,
 })))
 
-server.registerTool('coord_finalize_run', {
+registerCoordinatorTool('coord_finalize_run', {
   description: bridgeDescription('coord_finalize_run'),
   inputSchema: { summary: z.string().min(1).max(16000), request_id: requestIdField },
 }, async ({ summary, request_id }) => textResult(await coordinatorRequest('finalize_run', { summary, requestId: request_id })))

@@ -209,6 +209,40 @@ release and reclaim tasks to force dispatch, and do not use recovery to answer
 human approvals or provider permission requests.
 
 
+## Role-aware discovery
+
+Known teammates receive execution, mailbox, task/context inspection and
+completion tools, including `coord_create_task` for discovered work. Lead-only
+planning, recovery, cancellation and integration tools are hidden; ask the lead
+when you need them. Leads keep their own task execution tools. Unknown or older
+bindings retain the complete catalog until a role is verified.
+
+Native Claude/Pi/Copilot/Codex/ACP definitions use the bound role. Standalone MCP
+updates discovery after authenticated join/resume/status, sending one catalog
+invalidation per role change; hosts should refresh tools on that notification.
+Roles in local identity metadata are discovery hints, never authorization.
+Backend role/capability checks still apply even to directly invoked hidden tools.
+OpenCode's plugin catalog is server-wide, so ordinary and steering prompts use
+an account/session-scoped mask. Its native command API has no tools-mask field;
+that path retains provider discovery and backend authorization.
+
+## Keeping MCP context small
+
+Read full `coord_status` on first join/recovery or when you need the board/roster/locks.
+For routine next-action checks, use `coord_status(view="actionable")`. It keeps
+the caller identity, run status, cursor, phases and the complete actionable
+digest, including waiting ownership and reply obligations, while omitting the
+snapshot. Mutation and wait receipts already contain next actions: act on them
+without another status read. Use `coord_read_task` for a specific full receipt
+and a focused `coord_query_context` (limit 1 when sufficient) for full findings.
+
+Create/delegate receipts omit the prompt you just supplied and private dispatch
+policy. They still report task identity/status, paths, dependencies, delegation
+and next actions; `taskDetailTool` points to `coord_read_task` if context was lost.
+Claim receipts keep the full task. Supervisor/ledger records remain unchanged.
+The session shell fallback recognizes read-only tools from the shared contract;
+those reads do not require a mutation key. Acknowledging inbox reads still do.
+
 ## Exact task and keyed operation inspection
 
 Ordinary `coord_status` is deliberately bounded. `coord_list_tasks` returns
@@ -244,9 +278,17 @@ turn use `coord_cancel_turn`.
 
 ## Isolated result integration
 
-Lead: use `coord_read_result` to inspect the entire source branch, including
-later task changes, through its actual checkout diff,
-executed verification, merge preview, run review and integration blockers.
+Lead: `coord_read_result` defaults to a small overview: actual changed paths,
+verification, merge preview, run review and integration blockers. It omits diff
+text. Read the whole source branch, including later task changes, with
+`coord_read_result_diff(review_token=checkout.token)`. Select a changed `file`
+or omit it for the branch; follow `nextOffset` while `hasMore`. Pages default
+to 8,000 characters, maximum 16,000, and include untracked/binary changes.
+Offsets use JavaScript string positions; use the returned next offset.
+Source or target changes invalidate all pages. Read all relevant changes before
+integrating. `include_diff=true` on the overview retains the legacy 200,000
+character preview, which can truncate and omits untracked contents; use pages
+for complete inspection. The human UI preview remains unchanged.
 Reading does not approve a human gate. After inspecting it, pass
 `checkout.token` as `review_token` to `coord_integrate_result`, with the task ID
 and a required stable `request_id`. Source or target changes invalidate that

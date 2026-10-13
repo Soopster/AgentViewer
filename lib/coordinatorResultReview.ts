@@ -6,7 +6,7 @@ export type CoordinatorResultReview = {
   runReview: ProtocolRunSnapshot['run']['review']
   checkout: null | {
     path: string; branch: string; head: string; base: string; target: string
-    files: string[]; diff: string; diffTruncated: boolean; revision: string; token: string
+    files: string[]; diff: string; diffTruncated: boolean; diffIncluded?: boolean; revision: string; token: string
   }
   verification: 'current' | 'stale' | 'unbound' | 'missing' | 'failed'
   integrationBlockers: string[]

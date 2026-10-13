@@ -32,7 +32,8 @@ import type { DynamicToolSpec } from './codex-schema/v2'
 import type { JsonValue } from './codex-schema/serde_json/JsonValue'
 import type { ExternalProtocolIdentity } from './agentProtocol'
 
-import { COORD_TOOL_SPECS, type FieldSpec } from './coordinatorToolContract.mjs'
+import { coordinatorModelResult } from './coordinatorModelResult.mjs'
+import { COORD_TOOL_SPECS, coordinatorToolSpecsForRole, type FieldSpec } from './coordinatorToolContract.mjs'
 export { COORD_FINDING_DETAIL_MAX_CHARS } from './coordinatorToolContract.mjs'
 
 function textResult(value: unknown) {
@@ -52,11 +53,7 @@ function errorResult(error: unknown) {
 // digest; the whole board rides along for the supervisor that schedules on it.
 // The stdio bridge drops it before a model sees it, and so must this path —
 // it was about half of a 90KB result.
-function forModel(action: string, result: unknown): unknown {
-  if (action !== 'wait' || !result || typeof result !== 'object') return result
-  const { snapshot: _snapshot, ...compact } = result as Record<string, unknown>
-  return compact
-}
+const forModel = coordinatorModelResult
 
 // Deferred: agentCoordinationExternal.ts pulls in agentCoordination.ts, which
 // pulls in sessionBackend.ts/claudePool.ts/piClient.ts/copilotClient.ts/codexClient.ts,
@@ -142,7 +139,7 @@ function zodShape(fields: Record<string, FieldSpec>): Record<string, z.ZodTypeAn
 
 /** Build the coord_* tool set bound to one participant identity (Claude Agent SDK). */
 export function buildCoordinatorSdkTools(identity: ExternalProtocolIdentity) {
-  return COORD_TOOL_SPECS.map((spec) => tool(
+  return coordinatorToolSpecsForRole(identity.role).map((spec) => tool(
     spec.name,
     spec.description,
     zodShape(spec.fields),
@@ -165,7 +162,7 @@ const registry = new Map<string, { identity: ExternalProtocolIdentity; servers: 
  */
 export function registerCoordinatorMcpServer(sessionId: string, identity: ExternalProtocolIdentity, providerInstanceId?: string): void {
   const current = registry.get(bindingKey('claude', sessionId, providerInstanceId))?.identity
-  if (current && current.runId === identity.runId && current.agentId === identity.agentId && current.token === identity.token) return
+  if (current && current.runId === identity.runId && current.agentId === identity.agentId && current.token === identity.token && current.role === identity.role) return
   registry.set(bindingKey('claude', sessionId, providerInstanceId), {
     identity,
     servers: {
@@ -217,7 +214,7 @@ function typeboxParams(fields: Record<string, FieldSpec>): TSchema {
 
 /** Build the coord_* tool set bound to one participant identity (Pi's customTools). */
 export function buildCoordinatorPiTools(identity: ExternalProtocolIdentity): PiToolDefinition[] {
-  return COORD_TOOL_SPECS.map((spec) => ({
+  return coordinatorToolSpecsForRole(identity.role).map((spec) => ({
     name: spec.name,
     label: spec.name,
     description: spec.description,
@@ -252,7 +249,7 @@ export function unregisterCoordinatorPiTools(sessionId: string, providerInstance
 
 /** Build the coord_* tool set bound to one participant identity (Copilot SDK's Tool[]). */
 export function buildCoordinatorCopilotTools(identity: ExternalProtocolIdentity): unknown[] {
-  return COORD_TOOL_SPECS.map((spec) => ({
+  return coordinatorToolSpecsForRole(identity.role).map((spec) => ({
     name: spec.name,
     description: spec.description,
     parameters: z.object(zodShape(spec.fields)),
@@ -308,8 +305,8 @@ function jsonSchemaParams(fields: Record<string, FieldSpec>): Record<string, unk
 }
 
 /** Codex's ThreadStartParams.dynamicTools shape — {type:'function', name, description, inputSchema}. */
-export function buildCoordinatorCodexDynamicTools(): DynamicToolSpec[] {
-  return COORD_TOOL_SPECS.map((spec) => ({
+export function buildCoordinatorCodexDynamicTools(role?: ExternalProtocolIdentity['role']): DynamicToolSpec[] {
+  return coordinatorToolSpecsForRole(role).map((spec) => ({
     type: 'function' as const,
     name: spec.name,
     description: spec.description,
@@ -380,6 +377,14 @@ export function registerCoordinatorOpenCodeTools(sessionId: string, identity: Ex
   opencodeRegistry.set(bindingKey('opencode', sessionId, providerInstanceId), identity)
 }
 
+/** OpenCode's plugin catalog is server-wide; filter only this session's model tools. */
+export function getCoordinatorOpenCodeToolMask(sessionId: string, providerInstanceId?: string): Record<string, boolean> | undefined {
+  const identity = opencodeRegistry.get(bindingKey('opencode', sessionId, providerInstanceId))
+  if (!identity?.role) return undefined
+  const allowed = new Set(coordinatorToolSpecsForRole(identity.role).map(spec => spec.name))
+  return Object.fromEntries(COORD_TOOL_SPECS.map(spec => [spec.name, allowed.has(spec.name)]))
+}
+
 export function unregisterCoordinatorOpenCodeTools(sessionId: string, providerInstanceId?: string): void {
   opencodeRegistry.delete(bindingKey('opencode', sessionId, providerInstanceId))
 }
@@ -416,7 +421,7 @@ export async function getCoordinatorAcpMcpServers(sessionId: string, directory: 
     import('./coordinatorAcpMcp'),
     import('./coordinatorBridgeServer'),
   ])
-  const tools = COORD_TOOL_SPECS.map((spec) => ({ name: spec.name, description: spec.description, inputSchema: jsonSchemaParams(spec.fields) }))
+  const tools = coordinatorToolSpecsForRole(identity.role).map((spec) => ({ name: spec.name, description: spec.description, inputSchema: jsonSchemaParams(spec.fields) }))
   return [await writeCoordinatorAcpMcpServer(directory, await getCoordinatorBridgeUrl(), identity, tools)]
 }
 
