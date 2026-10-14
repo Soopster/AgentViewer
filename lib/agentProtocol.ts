@@ -844,6 +844,8 @@ export type ProtocolTaskPlanState = 'none' | 'awaiting' | 'approved' | 'rejected
  */
 export type ExternalProtocolActionable = {
   runStatus: ProtocolRunStatus
+  /** Native account reset evidence; unknown external CLI accounts are not inferred. */
+  providerCooldown?: import('./coordinatorProviderCooldowns').ProviderCooldown
   /** Caller host ownership of idle waits, independent of whether a turn is live. */
   waitingPolicy?: import('./coordinatorWaitingPolicy').CoordinatorWaitingPolicy
   /** Host wake mode and the current reason automatic continuation is paused. */

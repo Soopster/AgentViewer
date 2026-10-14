@@ -33,6 +33,8 @@ createInterface({ input: process.stdin }).on('line', (line) => {
 })
 `)
   const argv = parseAcpCommand(JSON.stringify([process.execPath, agent, '--flag']))
+  let spawnedPid
+  let observedClosure
   const result = await runAcpProviderTick({
     providerId: 'opencode', // no built-in ACP adapter: only the custom command can make this work
     command: argv[0],
@@ -41,8 +43,12 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     prompt: 'Start with coord_status.',
     mcpServer: { name: 'agent-viewer', command: 'node', args: ['bridge.mjs'] },
     signal: AbortSignal.timeout(15_000),
+    onSpawn: pid => { assert.ok(Number.isInteger(pid) && pid > 0); spawnedPid = pid },
+    onClose: outcome => { observedClosure = outcome },
   })
   assert.deepEqual(result, { sessionId: 'custom-1', stopReason: 'end_turn' })
+  assert.ok(spawnedPid)
+  assert.ok(observedClosure, 'ACP returns only after observing subprocess closure')
   const recorded = JSON.parse(await readFile(seen, 'utf8'))
   assert.deepEqual(recorded.argv, ['--flag'], 'the command\'s own arguments did not reach the agent')
   assert.deepEqual(recorded.methods.slice(0, 2), ['initialize', 'session/new'])

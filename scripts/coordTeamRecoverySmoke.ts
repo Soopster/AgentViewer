@@ -127,6 +127,7 @@ if (!phase) {
   const { executeExternalCoordinatorAction: execute } = await import('../lib/agentCoordinationExternal')
   const inspected = await execute({ ...lead, action: 'inspect_recovery', agent: agent.id }) as Awaited<ReturnType<typeof coord.inspectExternalProtocolRecovery>>
   const claim = inspected.executions[0]!.recoveryClaim!
+  assert.ok(typeof claim.claimGeneration === 'number', 'owned task recovery carries a claim generation')
   const resume = { ...lead, action: 'resume_agent', targetAgentId: agent.id, expectedTaskId: claim.taskId, expectedSessionId: claim.sessionId, expectedClaimGeneration: claim.claimGeneration, requestId: 'mcp-resume-once' }
   await assert.rejects(execute({ ...resume, expectedClaimGeneration: claim.claimGeneration + 1 }), /claim changed/)
   nativeQuestion = true

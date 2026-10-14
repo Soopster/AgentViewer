@@ -144,6 +144,7 @@ export async function runAcpProviderTick(options) {
     env: { ...process.env, ...options.env },
     stdio: ['pipe', 'pipe', 'pipe'],
   })
+  const closed = new Promise(resolve => child.once('close', (code, signal) => resolve({ code, signal })))
 
   child.stderr.on('data', (chunk) => options.onOutput?.(chunk, 'stderr'))
 
@@ -157,6 +158,7 @@ export async function runAcpProviderTick(options) {
   })
 
   try {
+    await options.onSpawn?.(child.pid ?? null)
     const stream = ndJsonStream(Writable.toWeb(child.stdin), tapStdout(child, options.onOutput))
     const clientApp = buildCoordClientApp()
 
@@ -186,5 +188,9 @@ export async function runAcpProviderTick(options) {
     if (child.exitCode === null && child.signalCode === null) {
       try { child.kill('SIGKILL') } catch { /* already exited */ }
     }
+    let timer
+    const outcome = await Promise.race([closed, new Promise(resolve => { timer = setTimeout(() => resolve(null), 5000) })]).finally(() => clearTimeout(timer))
+    if (outcome) await options.onClose?.(outcome)
+    else throw new Error('ACP child closure is unconfirmed; retain its execution attempt before recovery')
   }
 }

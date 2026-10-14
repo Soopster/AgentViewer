@@ -42,6 +42,12 @@ export type TaskState = {
   owner?: string
   taskType?: string
   subagentType?: string
+  /** task_id of the subagent task whose agent launched this one (SDK 0.3.292+); absent for main-thread launches. Authoritative where present, so it outranks anything inferred from the transcript. */
+  parentTaskId?: string
+  /** Nesting depth of a spawned subagent: 1 for a top-level spawn. */
+  spawnDepth?: number
+  /** Every run of this task seen so far, oldest first. A resumed task keeps its id and gets a new run id. */
+  runIds?: string[]
   workflowName?: string
   /** tool_use id of the Agent/Workflow tool call that started this task — joins task events to transcript tool threads. */
   toolUseId?: string
@@ -386,6 +392,12 @@ function upsertFromSystemEvent(
   if (subagentType) patch.subagentType = subagentType
   const workflowName = readStringField(payload, 'workflow_name', 'workflowName')
   if (workflowName) patch.workflowName = workflowName
+  const parentTaskId = readStringField(payload, 'parent_task_id', 'parentTaskId')
+  if (parentTaskId) patch.parentTaskId = parentTaskId
+  const spawnDepth = readNumberField(payload, 'spawn_depth', 'spawnDepth')
+  if (spawnDepth != null) patch.spawnDepth = spawnDepth
+  const runId = readStringField(payload, 'run_id', 'runId')
+  if (runId && !existing?.runIds?.includes(runId)) patch.runIds = [...(existing?.runIds ?? []), runId]
   const lastToolName = readStringField(payload, 'last_tool_name', 'lastToolName')
   if (lastToolName) patch.lastToolName = lastToolName
   const toolUseId = readStringField(payload, 'tool_use_id', 'toolUseId')

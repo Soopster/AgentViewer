@@ -150,13 +150,14 @@ function freshWorkerHeartbeat(pid, record) {
   return Number.isFinite(heartbeatAt) && Date.now() - heartbeatAt >= 0 && Date.now() - heartbeatAt <= 20_000
 }
 
-export async function listWorkerRecords(root = coordinatorStateRoot()) {
+export async function listWorkerRecords(root = coordinatorStateRoot(), options = {}) {
   const files = []
   await collectRecordFiles(root, files)
   const records = []
   for (const file of files) {
     try {
       const record = JSON.parse(await readFile(file, 'utf8'))
+      if (options.runId && record.runId !== options.runId) continue
       const pid = Number(record.pid)
       const processVerified = managedWorkerProcess(pid, record)
       const heartbeatAlive = processVerified && freshWorkerHeartbeat(pid, record)
@@ -164,7 +165,8 @@ export async function listWorkerRecords(root = coordinatorStateRoot()) {
       const stale = !alive && ['running', 'starting', 'retrying'].includes(record.status)
       const updatedAt = Date.parse(String(record.updatedAt || ''))
       const terminal = ['stopped', 'handed_off', 'failed'].includes(record.status)
-      if ((terminal || stale) && Number.isFinite(updatedAt) && Date.now() - updatedAt > WORKER_RETENTION_MS) {
+      const unresolved = ['prepared', 'submitted', 'uncertain'].includes(record.providerAttempt?.state)
+      if (!options.readOnly && !unresolved && (terminal || stale) && Number.isFinite(updatedAt) && Date.now() - updatedAt > WORKER_RETENTION_MS) {
         const logFile = path.resolve(record.logFile || workerLogPath(record.identityFile))
         const identityFile = typeof record.identityFile === 'string' ? path.resolve(record.identityFile) : null
         const stateRoot = path.resolve(root)

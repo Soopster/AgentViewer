@@ -86,9 +86,41 @@ No receipt is inferred from a finding or a stopped turn.
 
 ## Remaining gaps, ranked
 
+Native dispatch now persists an independent attempt ID with its original task,
+claim generation, session, provider and provider instance before submission.
+`coord_inspect_recovery` returns the newest ten attempts, including unresolved
+submission after restart, rejection and stream outcomes. Explicit HTTP
+Retry-After evidence is retained in a host-local provider-instance ledger and
+gates new native sends across runs. Authored dispatches refused by an active,
+known cooldown are durably queued with session/task/claim pins and released by
+the mailbox sweep after expiry; recovery rechecks the exact queued row, account
+cooldown, session, task claim and host ownership before dispatch. Active
+same-task/session/account cooldowns also reject resume before mutation and again
+after asynchronous recovery inspection. No reset time is inferred from prose.
+Stream settlement is not task completion.
+Accepted-stream failures and ambiguous submission exceptions now retain the
+native conversation and block automatic retries/failover. Both managed leads
+and teammates are inspectable and explicitly recoverable; taskless planning
+turns use exact attempt/session pins. Native-live gates reject recovery, while
+keyed recovery retires uncertainty as `reconciled` and preserves history. A
+finding or task completion no longer hides later transport failure, and an
+uncertain observation cannot reopen completed work.
+Managed recovery also retains saved provider pools, model/effort and their
+provider-instance source. Persisted execution-phase state prevents a recovered
+planning turn from skipping teammate staffing after the lead already created
+tasks and changed the run status to running.
+External supervisors now persist bounded public provider-attempt history,
+including native session and detached child PID. Supervisor restart refuses
+unresolved attempts unless explicitly reconciled by exact ID, and refuses even
+pinned/provider-change restart while the recorded PID remains alive. ACP tracks
+spawn and awaits subprocess closure. `coord_inspect_recovery` reads matching
+local worker records without pruning them or exposing identity/configuration
+contents; absent remote-host observations and unknown accounts stay explicit.
+
 | Priority | Current source evidence | Agent impact and next implementation |
 | --- | --- | --- |
-| 1 | Dispatch reservations identify task + timestamp; claim generation is a separate task column. October 11 audit identifies provider cooldown/reset evidence as unfinished. | Persist independent attempt identity, provider instance, claim generation and quota/reset evidence. Distinguish quota recovery from a human question. Never retry a possibly executed turn solely because observation expired. |
+| 1 | Native ambiguous failures and local external supervisor crashes retain attempt evidence. Ordinary EOF still relies on provider bridge contracts; external records prove subprocess closure, not provider-owned/background settlement. | Verify native settlement evidence, silent EOF and pending-session realization. Inspect provider-owned/background work independently before retrying an uncertain CLI result. |
+| 2 | External worker inspection and the cooldown ledger are local to the daemon host. Native reset evidence currently comes from explicit HTTP `Retry-After`; provider-native events and remote workers are not covered. | Persist authenticated worker/cooldown evidence centrally for remote hosts. Close the launch-before-PID-persistence observation window; never infer absence from missing observation. Add provider-native reset metadata where available and preserve exact account-instance scope. |
 
 Earlier audits describe several issues that have since changed: current external
 status is bounded, actionable unresolved mail survives acknowledgement, targeted
@@ -144,4 +176,24 @@ Passing focused evidence in this pass:
   covers untracked file pages and source/target drift.
 - `scripts/mcpBridgeSmoke.mjs`: exactly one discovery invalidation on verified
   role changes and diff-page mapping. Authenticated shell fallback smoke passes.
+- `scripts/coordExecutionAttemptSmoke.ts`: actual rejected native dispatch,
+  exact binding, explicit Retry-After parsing, cooldown refusal, unknown reset
+  evidence, role rejection, restart persistence and no replay on inspection.
+- `scripts/coordRecoveryClaimSmoke.ts` additionally verifies the original
+  submitted attempt survives later claims and recovery across process restarts.
+- `scripts/coordUncertainExecutionSmoke.ts`: accepted-stream errors and ambiguous
+  submission exceptions for teammates and taskless managed leads, no replacement
+  session or maintenance replay, automatic/native-live/stale-pin rejection,
+  keyed explicit recovery, restored managed-lead controller, finding/error
+  handling, model/effort on the actual resumed send, retained provider pool,
+  staffing the pre-existing planning graph, and completed-work preservation
+  with acknowledgement only.
+- `scripts/coordWorkerAttemptSmoke.mjs`: real killed supervisor with an orphaned
+  detached provider, no duplicate launch through default/provider-change/pinned
+  restart, stale-pin refusal, exact post-stop recovery, native session/history
+  retention and unobserved account metadata.
+- `scripts/coordExternalAttemptInspectionSmoke.ts`: authenticated run/agent
+  matching, bounded public evidence, private configuration exclusion and
+  read-only retention of old records.
+- `scripts/acpCustomAgentSmoke.mjs`: actual ACP spawn and observed process closure.
 - Full `npx tsc --noEmit`, `npm run tui:check` and `git diff --check` pass.

@@ -1241,12 +1241,12 @@ registerCoordinatorTool('coord_cancel_task', {
 registerCoordinatorTool('coord_resume_agent', {
   description: bridgeDescription('coord_resume_agent'),
   inputSchema: {
-    agent_id: z.string().min(1), expected_task_id: z.string().min(1), expected_session_id: z.string().min(1),
-    expected_claim_generation: z.number().int().min(0), request_id: requestIdField,
+    agent_id: z.string().min(1), expected_task_id: z.string().min(1).optional(), expected_session_id: z.string().min(1),
+    expected_claim_generation: z.number().int().min(0).optional(), expected_attempt_id: z.string().min(1).optional(), request_id: requestIdField,
   },
-}, async ({ agent_id, expected_task_id, expected_session_id, expected_claim_generation, request_id }) => textResult(await coordinatorRequest('resume_agent', {
+}, async ({ agent_id, expected_task_id, expected_session_id, expected_claim_generation, expected_attempt_id, request_id }) => textResult(await coordinatorRequest('resume_agent', {
   targetAgentId: agent_id, expectedTaskId: expected_task_id, expectedSessionId: expected_session_id,
-  expectedClaimGeneration: expected_claim_generation, requestId: request_id,
+  expectedClaimGeneration: expected_claim_generation, expectedAttemptId: expected_attempt_id, requestId: request_id,
 })))
 
 registerCoordinatorTool('coord_inspect_recovery', {

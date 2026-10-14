@@ -51,6 +51,10 @@ export type ClaudeBackgroundTaskSummary = {
   description: string
   command?: string
   agent_type?: string
+  /** task_id of the subagent task that launched this one (SDK 0.3.292+). */
+  parent_task_id?: string
+  /** Id of the task's current run; a resumed task keeps its id and gets a new run id. */
+  run_id?: string
   server?: string
   tool?: string
   name?: string
@@ -285,7 +289,7 @@ export function formatClaudeReadRange(summary: ClaudeReadFileSummary): string | 
   return `lines ${summary.startLine}-${endLine}`
 }
 
-function getClaudeBackgroundTasks(payload: SystemMessagePayload): ClaudeBackgroundTaskSummary[] {
+export function getClaudeBackgroundTasks(payload: SystemMessagePayload): ClaudeBackgroundTaskSummary[] {
   const raw = payload.background_tasks
   if (Array.isArray(raw)) {
     return raw.flatMap((entry) => {
@@ -302,6 +306,8 @@ function getClaudeBackgroundTasks(payload: SystemMessagePayload): ClaudeBackgrou
         description,
         command: stringValue(entry.command),
         agent_type: stringValue(entry.agent_type),
+        parent_task_id: stringValue(entry.parent_task_id),
+        run_id: stringValue(entry.run_id),
         server: stringValue(entry.server),
         tool: stringValue(entry.tool),
         name: stringValue(entry.name),
@@ -322,7 +328,11 @@ function getClaudeBackgroundTasks(payload: SystemMessagePayload): ClaudeBackgrou
       const type = stringValue(entry.task_type)
       const description = stringValue(entry.description)
       if (!id || !type || !description) return []
-      return [{ id, type, status: 'running', description }]
+      return [{
+        id, type, status: 'running', description,
+        parent_task_id: stringValue(entry.parent_task_id),
+        run_id: stringValue(entry.run_id),
+      }]
     })
   }
 
@@ -357,7 +367,8 @@ function formatClaudeBackgroundTaskSummary(task: ClaudeBackgroundTaskSummary, in
   const serverTool = [task.server, task.tool].filter(Boolean).join('/')
   const detail = task.command ?? task.agent_type ?? (serverTool || task.name) ?? ''
   const label = [task.type, task.status].filter(Boolean).join(' ')
-  const suffix = detail ? ` - ${detail}` : ''
+  const lineage = task.parent_task_id ? ` (from ${task.parent_task_id})` : ''
+  const suffix = (detail ? ` - ${detail}` : '') + lineage
   return `${prefix}${label}: ${task.description}${suffix}`
 }
 

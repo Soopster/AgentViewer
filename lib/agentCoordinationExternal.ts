@@ -218,10 +218,11 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
     const taskId = text(body.expectedTaskId)
     const sessionId = text(body.expectedSessionId)
     const claimGeneration = body.expectedClaimGeneration
-    if (!agentId || !taskId || !sessionId || !Number.isSafeInteger(claimGeneration) || Number(claimGeneration) < 0) throw new Error('Pass agent_id and the exact recoveryClaim taskId, sessionId and claimGeneration from coord_inspect_recovery')
+    const attemptId = optionalText(body.expectedAttemptId)
+    if (!agentId || !sessionId || (taskId ? !Number.isSafeInteger(claimGeneration) || Number(claimGeneration) < 0 : !attemptId || claimGeneration !== undefined)) throw new Error('Pass agent_id and exact recoveryClaim pins: taskId/sessionId/claimGeneration, or attemptId/sessionId for a taskless lead')
     return mutate(async () => {
-      await resumeInteractiveAgent(participantIdentity!, agentId, false, { taskId, sessionId, claimGeneration: Number(claimGeneration) })
-      return { resumed: true, agentId, taskId, sessionId, claimGeneration }
+      await resumeInteractiveAgent(participantIdentity!, agentId, false, { taskId: taskId || undefined, sessionId, claimGeneration: taskId ? Number(claimGeneration) : undefined, attemptId })
+      return { resumed: true, agentId, taskId: taskId || null, sessionId, claimGeneration: taskId ? Number(claimGeneration) : null, attemptId: attemptId ?? null }
     })
   }
   if (action === 'inspect_recovery') return inspectExternalProtocolRecovery(participantIdentity!, optionalText(body.agent))

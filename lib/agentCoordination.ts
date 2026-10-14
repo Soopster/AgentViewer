@@ -1,4 +1,6 @@
 import { coordinatorWaitingPolicy } from './coordinatorWaitingPolicy'
+import { PROVIDER_COOLDOWN_SCHEMA, readProviderCooldown, deferCooldownDispatch, readCooldownDispatches } from './coordinatorProviderCooldowns'
+import { EXECUTION_ATTEMPT_SCHEMA, beginExecutionAttempt, updateExecutionAttempt, readExecutionAttempts, executionCooldown, providerRetryAt, unresolvedExecutionAttempt, reconcileExecutionAttempts, saveExecutionSettings, readExecutionSettings } from './coordinatorExecutionAttempts'
 import { coordinatorBackgroundWork, type CoordinatorDeadAgent } from './coordinatorInteractiveState'
 import { markCoordinatorRejection } from './coordinatorRejection'
 import { readCoordinatorCapabilities, validateCoordinatorSelection } from './coordinatorCapabilities'
@@ -211,7 +213,7 @@ const LOCK_LEASE_MS = 20 * 60_000
 // can cancel a teammate's in-flight turn without releasing the task), and
 // respond_to_mode/respond_to_allowlist_json (per-participant mailbox sender
 // gating, mirroring buzz-acp's respond-to modes).
-const SCHEMA_VERSION = 27
+const SCHEMA_VERSION = 29
 const EVENT_WINDOW = 300
 const LOCK_HISTORY_WINDOW = 200
 // Non-terminal tasks (pending/claimed/blocked) are always returned in full —
@@ -718,6 +720,8 @@ function initializeSchema(db: SqliteDatabase): void {
       teammate_providers TEXT
     );
     CREATE INDEX IF NOT EXISTS protocol_interactive_run_idx ON protocol_interactive_sessions(run_id);
+    ${EXECUTION_ATTEMPT_SCHEMA}
+    ${PROVIDER_COOLDOWN_SCHEMA}
     CREATE TABLE IF NOT EXISTS protocol_interactive_dispatches (
       run_id TEXT NOT NULL REFERENCES protocol_runs(id) ON DELETE CASCADE,
       agent_id TEXT NOT NULL,
@@ -1587,6 +1591,7 @@ function externalActionableSync(db: SqliteDatabase, runId: string, agentId: stri
   const replyGuard = agent && myTaskRow ? replyGuardCheckSync(db, runId, agent, myTaskRow.id) : null
   return {
     runStatus: run.status,
+    providerCooldown: agent && !agent.sessionId.startsWith('external:') ? readProviderCooldown(db, agent.provider, agent.providerInstanceId ?? agent.provider) : undefined,
     ...(agent ? { waitingPolicy: coordinatorWaitingPolicy(agent,
       Boolean(controllers.get(runId)?.sdkIdentities.has(agent.id)
         || (!agent.sessionId.startsWith('external:') && db.prepare('SELECT 1 FROM protocol_interactive_sessions WHERE run_id = ?').get(runId)))) } : {}),
@@ -3143,23 +3148,28 @@ async function adoptInteractiveController(identity: ExternalProtocolIdentity): P
   const raced = controllers.get(identity.runId)
   if (raced) return raced
   const run = snapshot.run
+  const managedLead = !lead.sessionId.startsWith('external:')
+    && !db.prepare('SELECT 1 FROM protocol_interactive_sessions WHERE run_id = ?').get(run.id)
+    && (readExecutionAttempts(db, run.id, lead.id).length > 0 || Boolean(readExecutionSettings(db, run.id)))
+  const executionSettings = managedLead ? readExecutionSettings(db, run.id) : undefined
   const controller: RunController = {
-    interactiveLeadId: lead.id, runId: run.id, prompt: run.prompt, provider: run.provider,
-    teammateProviders: interactiveTeammateProvidersSync(db, run.id, run.provider), baseCwd: run.baseCwd, maxAgents: run.maxAgents,
+    interactiveLeadId: managedLead ? undefined : lead.id, runId: run.id, prompt: run.prompt, provider: run.provider,
+    teammateProviders: executionSettings?.teammateProviders ?? interactiveTeammateProvidersSync(db, run.id, run.provider), baseCwd: run.baseCwd, maxAgents: run.maxAgents,
+    model: executionSettings?.model, effort: executionSettings?.effort, modelSource: executionSettings?.modelSource,
     gateCommand: run.gateCommand, requirePlanApproval: run.requirePlanApproval === true,
     autonomy: run.autonomy, requireReview: run.requireReview, acceptanceContract: run.acceptanceContract,
     budget: run.budget, useWorktrees: run.useWorktrees !== false, stopped: false,
     synthesisStarted: false, synthesisFindingFloorRowid: 0, interventionsUsed: 0, forcedInterventionsUsed: 0,
     turnInFlight: new Set(), sessionIds: new Map(), pendingSessions: new Set(), nudges: new Map(),
     dispatchNotes: new Map(), failedProviders: new Map(), sdkIdentities: new Map([['lead', identity]]),
-    executionStarted: true, sameProviderRetries: new Map(), claudeUsageCumulative: new Map(),
+    executionStarted: executionSettings?.executionStarted ?? !(managedLead && run.status === 'planning'), sameProviderRetries: new Map(), claudeUsageCumulative: new Map(),
   }
   // Restore only sessions that this server created. External/interactive participants
   // retain control of their own turns; never replay work that was in progress.
   for (const agent of snapshot.agents) {
-    if (!/^agent-\d+$/.test(agent.id) || agent.sessionId.startsWith('external:')) continue
+    if ((!/^agent-\d+$/.test(agent.id) && !(managedLead && agent.id === lead.id)) || agent.sessionId.startsWith('external:')) continue
     controller.sessionIds.set(agent.id, agent.sessionId)
-    const token = rotateSessionParticipantTokenSync(db, run.id, agent.id)
+    const token = managedLead && agent.id === lead.id ? identity.token : rotateSessionParticipantTokenSync(db, run.id, agent.id)
     const worker: ExternalProtocolIdentity = { runId: run.id, agentId: agent.id, token, role: agent.role }
     controller.sdkIdentities.set(agent.id, worker)
     registerCoordinatorToolsForProvider(agent.provider, agent.sessionId, worker, agent.providerInstanceId)
@@ -7213,6 +7223,7 @@ async function checkpointLeadSupervision(runId: string): Promise<void> {
  * instead of message delivery.
  */
 async function sweepMailboxes(): Promise<void> {
+  await flushProviderCooldownDispatches()
   const db = await getDatabase()
   const runs = db.prepare(`
     SELECT id FROM protocol_runs WHERE status IN ('planning', 'running', 'synthesizing', 'blocked')
@@ -7379,6 +7390,7 @@ const SESSION_EVENT_RE = /event: session\s*\ndata: (\{[^\n]*\})/
 export type ProviderTurnFailure = {
   kind: 'budget_exhausted' | 'rate_limited' | 'authentication_failed' | 'context_exhausted' | 'transient_transport' | 'provider_failure'
   detail: string
+  retryAt?: string
 }
 
 export function classifyProviderTurnFailure(detail: string): ProviderTurnFailure {
@@ -8067,7 +8079,7 @@ export async function __setAgentWorktreeForSmoke(runId: string, agentId: string,
  * the teammate raised itself is a question again.
  */
 function deadTeammateSync(db: SqliteDatabase, runId: string, agent: ProtocolAgent, task: ProtocolTask | undefined): CoordinatorDeadAgent | undefined {
-  if (agent.role !== 'teammate' || task?.status !== 'blocked' || task.ownerAgentId !== agent.id) return
+  if (task?.status !== 'blocked' || task.ownerAgentId !== agent.id) return
   const row = db.prepare("SELECT agent_id, detail, payload_json FROM protocol_events WHERE run_id = ? AND task_id = ? AND type = 'agent.blocked' ORDER BY rowid DESC LIMIT 1")
     .get(runId, task.id) as Row | undefined
   if (!row || row.agent_id !== agent.id) return
@@ -8088,20 +8100,23 @@ export async function readInteractiveDeadAgents(runId: string): Promise<Coordina
 export async function readInteractiveRecoveries(runId: string): Promise<string[]> {
   const db = await getDatabase()
   const snapshot = readSnapshotSync(db, runId)
-  if (!snapshot || !db.prepare('SELECT 1 FROM protocol_interactive_sessions WHERE run_id = ?').get(runId)) return []
+  if (!snapshot) return []
+  const interactive = Boolean(db.prepare('SELECT 1 FROM protocol_interactive_sessions WHERE run_id = ?').get(runId))
   if (foreignInteractiveHostSync(db, runId)) return []
   // An ended run cannot be resumed (`resumeInteractiveAgent` → "not accepting
   // tasks"), so offering recovery there is an action that always fails. Its
   // transcripts stay readable; the roster says Stopped, which is the truth.
   if (['completed', 'failed', 'stopped'].includes(snapshot.run.status)) return []
   return snapshot.agents.filter(agent => {
-    if (agent.role !== 'teammate' || agent.turnActive || agent.sessionId.startsWith('external:')) return false
+    if (agent.turnActive || controllers.get(runId)?.turnInFlight.has(agent.id) || agent.sessionId.startsWith('external:')) return false
+    const unresolved = unresolvedExecutionAttempt(db, runId, agent.id)
+    if ((!interactive || agent.role === 'lead') && !unresolved) return false
     const task = snapshot.tasks.find(task => task.id === agent.taskId)
     const reserved = db.prepare('SELECT task_id FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').get(runId, agent.id) as Row | undefined
     if (acknowledgeableDispatchSync(db, snapshot, agent)) return false
     const dispatchedTask = reserved?.task_id ? snapshot.tasks.find(entry => entry.id === reserved.task_id) : undefined
     if (!agent.taskId && dispatchedTask && ['completed', 'failed', 'cancelled'].includes(dispatchedTask.status)) return false
-    return Boolean(reserved) || task?.status === 'in_progress' || task?.status === 'planning' || Boolean(deadTeammateSync(db, runId, agent, task))
+    return unresolved || Boolean(reserved) || task?.status === 'in_progress' || task?.status === 'planning' || Boolean(deadTeammateSync(db, runId, agent, task))
   }).map(agent => agent.id)
 }
 
@@ -8135,18 +8150,35 @@ export async function inspectExternalProtocolRecovery(identity: ExternalProtocol
   const db = await getDatabase()
   if (requireExternalParticipantSync(db, identity).role !== 'lead') throw new Error('Only the Coordinator lead can inspect team recovery')
   const snapshot = readSnapshotSync(db, identity.runId)!
-  const agents = snapshot.agents.filter(agent => agent.role === 'teammate' && (!target || agent.id === target || agent.name === target))
-  if (target && !agents.length) throw new Error(`Coordinator teammate not found: ${target}`)
+  const agents = snapshot.agents.filter(agent => (!target || agent.id === target || agent.name === target))
+  if (target && !agents.length) throw new Error(`Coordinator participant not found: ${target}`)
   const executionElsewhere = foreignInteractiveHostSync(db, identity.runId)
   const recoveries = await readInteractiveRecoveries(identity.runId)
   const { inspectRecoveryAgent } = await import('./coordinatorRecoveryServer')
+  const { listWorkerRecords, processAlive } = await import('../bin/agent-viewer-coord-state.mjs')
+  const { publicWorkerAttempt, workerAttemptUnresolved } = await import('../bin/agent-viewer-coord-attempts.mjs')
+  const workerRecords = await listWorkerRecords(undefined, { readOnly: true, runId: identity.runId })
   const executions = await Promise.all(agents.map(async agent => {
     const reserved = db.prepare('SELECT task_id, created_at FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').get(identity.runId, agent.id) as Row | undefined
     return {
       agentId: agent.id, name: agent.name, provider: agent.provider, providerInstanceId: agent.providerInstanceId,
       taskId: agent.taskId, sessionId: agent.sessionId,
-      recoveryClaim: agent.taskId ? { taskId: agent.taskId, sessionId: agent.sessionId, claimGeneration: Number((db.prepare('SELECT claim_generation FROM protocol_tasks WHERE run_id = ? AND id = ?').get(identity.runId, agent.taskId) as Row | undefined)?.claim_generation) } : null,
+      recoveryClaim: agent.taskId ? { taskId: agent.taskId, sessionId: agent.sessionId, claimGeneration: Number((db.prepare('SELECT claim_generation FROM protocol_tasks WHERE run_id = ? AND id = ?').get(identity.runId, agent.taskId) as Row | undefined)?.claim_generation), attemptId: undefined }
+        : agent.role === 'lead' && unresolvedExecutionAttempt(db, identity.runId, agent.id) ? { taskId: undefined, sessionId: agent.sessionId, claimGeneration: undefined, attemptId: readExecutionAttempts(db, identity.runId, agent.id)[0]?.id } : null,
       reservation: reserved ? { taskId: String(reserved.task_id), createdAt: String(reserved.created_at) } : null,
+      attempts: readExecutionAttempts(db, identity.runId, agent.id),
+      cooldown: executionCooldown(readExecutionAttempts(db, identity.runId, agent.id), agent),
+      providerCooldown: readProviderCooldown(db, agent.provider, agent.providerInstanceId ?? agent.provider),
+      dispatchWaitingForCooldown: Boolean(db.prepare('SELECT 1 FROM protocol_cooldown_dispatches WHERE run_id = ? AND agent_id = ?').get(identity.runId, agent.id)),
+      externalWorkerObservationScope: 'this-host-only',
+      externalWorkers: workerRecords.filter(record => record.runId === identity.runId && record.agentId === agent.id).slice(0, 10).map(record => {
+        const pid = record.providerAttempt?.pid
+        const providerPidAlive = Number.isSafeInteger(pid) && pid > 0 ? processAlive(pid) : null
+        return { name: record.name, status: record.status, alive: record.alive, liveness: record.liveness, providerPidAlive,
+          recoveryAction: record.alive ? 'observe_supervisor' : providerPidAlive ? 'observe_provider' : workerAttemptUnresolved(record.providerAttempt) ? 'inspect_before_pinned_restart' : 'none',
+          attempt: publicWorkerAttempt(record.providerAttempt), attempts: Array.isArray(record.providerAttempts) ? record.providerAttempts.slice(0, 10).map(publicWorkerAttempt) : [],
+        }
+      }),
       // Diagnostic at inspection time; acknowledgement rechecks atomically.
       canAcknowledge: !executionElsewhere && Boolean(acknowledgeableDispatchSync(db, snapshot, agent)),
       needsRecovery: recoveries.includes(agent.id),
@@ -8179,6 +8211,7 @@ export async function reconcileSettledInteractiveExecution(identity: ExternalPro
       const result = tx.prepare('DELETE FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ? AND task_id = ? AND created_at = ?')
         .run(identity.runId, agentId, reserved.task_id, reserved.created_at)
       if (!result.changes) throw new Error('Execution changed; refresh before acknowledging')
+      reconcileExecutionAttempts(tx, identity.runId, agentId)
     })
     notifyRunChanged(identity.runId)
   })
@@ -8237,25 +8270,37 @@ export async function cancelInteractiveTask(identity: ExternalProtocolIdentity, 
   return { cancelled: true, ...(interrupted ? { interruptedAgent: owner.name } : {}) }
 }
 
-export async function resumeInteractiveAgent(identity: ExternalProtocolIdentity, agentId: string, automatic = false, expected?: { taskId: string; sessionId: string; claimGeneration: number }): Promise<void> {
+export async function resumeInteractiveAgent(identity: ExternalProtocolIdentity, agentId: string, automatic = false, expected?: { taskId?: string; sessionId: string; claimGeneration?: number; attemptId?: string }): Promise<void> {
   await serializeAutomaticDelegation(identity.runId, async () => {
     const db = await getDatabase()
     const lead = requireExternalParticipantSync(db, identity)
     if (lead.role !== 'lead') throw new Error('Only the lead conversation can resume a teammate')
     if (foreignInteractiveHostSync(db, identity.runId)) throw new Error('This team is running in another local Agent Viewer host. Use that host to resume execution.')
-    if (!(await readInteractiveRecoveries(identity.runId)).includes(agentId)) throw new Error('This teammate does not need recovery or is still running')
+    if (!(await readInteractiveRecoveries(identity.runId)).includes(agentId)) throw new Error('This participant does not need recovery or is still running')
     const before = readSnapshotSync(db, identity.runId)!
     const agent = before.agents.find(agent => agent.id === agentId)!
     const task = before.tasks.find(task => task.id === agent.taskId)
-    const claimGeneration = Number((db.prepare('SELECT claim_generation FROM protocol_tasks WHERE run_id = ? AND id = ?').get(identity.runId, agent.taskId) as Row | undefined)?.claim_generation)
+    const claimGeneration = agent.taskId ? Number((db.prepare('SELECT claim_generation FROM protocol_tasks WHERE run_id = ? AND id = ?').get(identity.runId, agent.taskId) as Row | undefined)?.claim_generation) : undefined
     if (expected && (agent.taskId !== expected.taskId || agent.sessionId !== expected.sessionId || claimGeneration !== expected.claimGeneration)) throw new Error('Recovery claim changed since inspection; inspect recovery again before resuming')
+    const leaderWithoutTask = agent.role === 'lead' && !task && unresolvedExecutionAttempt(db, identity.runId, agent.id)
+    const attemptId = readExecutionAttempts(db, identity.runId, agent.id)[0]?.id
+    if (leaderWithoutTask && (!expected?.attemptId || expected.attemptId !== attemptId)) throw new Error('Pass the exact recoveryClaim attemptId and sessionId for taskless lead recovery')
+    if (automatic && unresolvedExecutionAttempt(db, identity.runId, agent.id)) throw new Error('Uncertain execution requires explicit transcript reconciliation; automatic resume is not permitted')
+    const cooldownGate = () => {
+      const accountCooldown = readProviderCooldown(db, agent.provider, agent.providerInstanceId ?? agent.provider)
+      if (accountCooldown?.active) throw new Error(`Provider cooldown remains active until ${accountCooldown.retryAt} for ${accountCooldown.providerInstanceId}; inspect recovery after that time without resubmitting work`)
+      const cooldown = executionCooldown(readExecutionAttempts(db, identity.runId, agent.id), agent)
+      if (cooldown?.active) throw new Error(`Provider cooldown remains active until ${cooldown.retryAt}; inspect recovery after that time without resubmitting work`)
+    }
+    cooldownGate()
     const { readViewSessionRunning } = await import('./sessionBackend')
     const nativeGate = () => withProviderInstance(agent.providerInstanceId ?? agent.provider, agent.provider, async () => {
       const runtime = readViewSessionRunning(agent.sessionId)
+      if (runtime.running) throw new Error('The saved native execution is still running; observe it instead of resuming')
       if (runtime.pendingPermissions.length || runtime.pendingPrompts.length) throw new Error('Answer the pending native permission or question in its existing UI before resuming')
     })
     await nativeGate()
-    if (!task || ['completed', 'failed', 'cancelled'].includes(task.status)) throw new Error('This dispatch belongs to settled work; acknowledge its result instead of resuming')
+    if ((!task && !leaderWithoutTask) || (task && ['completed', 'failed', 'cancelled'].includes(task.status))) throw new Error('This dispatch belongs to settled work; acknowledge its result instead of resuming')
     const budgetReason = budgetExceededReasonSync(db, before.run)
     if (budgetReason) throw new Error(`Adjust the team limit before resuming: ${budgetReason}`)
     // A dead turn is not a question. Only a person revives one: the provider
@@ -8275,29 +8320,32 @@ export async function resumeInteractiveAgent(identity: ExternalProtocolIdentity,
     await nativeGate()
     await enqueueWrite(db => claimInteractiveHostSync(db, identity.runId))
     const controller = await adoptInteractiveController(identity)
-    if (!controller.sessionIds.has(agentId)) throw new Error('Only a managed teammate can be resumed')
+    if (!controller.sessionIds.has(agentId)) throw new Error('Only a managed participant can be resumed')
     await enqueueWrite(db => {
       const final = readSnapshotSync(db, identity.runId)!
       const current = final.agents.find(entry => entry.id === agentId)
       const currentTask = final.tasks.find(entry => entry.id === current?.taskId)
-      const finalClaimGeneration = Number((db.prepare('SELECT claim_generation FROM protocol_tasks WHERE run_id = ? AND id = ?').get(identity.runId, agent.taskId) as Row | undefined)?.claim_generation)
+      const finalClaimGeneration = agent.taskId ? Number((db.prepare('SELECT claim_generation FROM protocol_tasks WHERE run_id = ? AND id = ?').get(identity.runId, agent.taskId) as Row | undefined)?.claim_generation) : undefined
       if (finalClaimGeneration !== claimGeneration) throw new Error('Recovery claim changed during inspection; inspect recovery again before resuming')
+      if (leaderWithoutTask && (readExecutionAttempts(db, identity.runId, agentId)[0]?.id !== attemptId || !unresolvedExecutionAttempt(db, identity.runId, agentId))) throw new Error('Lead execution changed during inspection; inspect recovery again')
+      cooldownGate()
       if (!current || current.taskId !== agent.taskId || current.sessionId !== agent.sessionId || current.provider !== agent.provider || current.providerInstanceId !== agent.providerInstanceId || current.turnActive
-        || !currentTask || ['completed', 'failed', 'cancelled', 'planned'].includes(currentTask.status)
-        || (currentTask.status === 'blocked') !== Boolean(dead) || (dead && !deadTeammateSync(db, identity.runId, current, currentTask))
-        || currentTask.receipt?.needsDecision?.some(decision => decision.status === 'open') || budgetExceededReasonSync(db, final.run)) throw new Error('Recovery state changed; refresh before resuming')
+        || (!currentTask && !leaderWithoutTask) || (currentTask && ['completed', 'failed', 'cancelled', 'planned'].includes(currentTask.status))
+        || (currentTask && (currentTask.status === 'blocked') !== Boolean(dead)) || (dead && !deadTeammateSync(db, identity.runId, current, currentTask))
+        || currentTask?.receipt?.needsDecision?.some(decision => decision.status === 'open') || !['planning', 'running', 'synthesizing'].includes(final.run.status) || budgetExceededReasonSync(db, final.run)) throw new Error('Recovery state changed; refresh before resuming')
       db.prepare('DELETE FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').run(identity.runId, agentId)
+      reconcileExecutionAttempts(db, identity.runId, agentId)
       if (dead) {
         const ts = nowIso()
-        db.prepare("UPDATE protocol_tasks SET status = 'in_progress', updated_at = ? WHERE run_id = ? AND id = ?").run(ts, identity.runId, currentTask.id)
+        db.prepare("UPDATE protocol_tasks SET status = 'in_progress', updated_at = ? WHERE run_id = ? AND id = ?").run(ts, identity.runId, currentTask!.id)
         setAgentStatusSync(db, identity.runId, agentId, 'working', ts)
         insertEventSync(db, {
-          version: AGENT_PROTOCOL_VERSION, runId: identity.runId, agentId, type: 'agent.unblocked', taskId: currentTask.id,
+          version: AGENT_PROTOCOL_VERSION, runId: identity.runId, agentId, type: 'agent.unblocked', taskId: currentTask!.id,
           summary: `${current.name} resumed by the lead after ${dead.failureClass.replace(/_/g, ' ')}`,
           payload: { revived: true, failureClass: dead.failureClass }, timestamp: ts,
         })
       }
-      db.prepare(`UPDATE protocol_tasks SET auto_resume_count = ${automatic ? 'auto_resume_count + 1' : '0'} WHERE run_id = ? AND id = ?`)
+      if (currentTask) db.prepare(`UPDATE protocol_tasks SET auto_resume_count = ${automatic ? 'auto_resume_count + 1' : '0'} WHERE run_id = ? AND id = ?`)
         .run(identity.runId, currentTask.id)
     })
     if (dead) {
@@ -8305,11 +8353,13 @@ export async function resumeInteractiveAgent(identity: ExternalProtocolIdentity,
       // failed, both in memory. A person asking again is a fresh attempt.
       controller.failedProviders.delete(agentId)
       controller.sameProviderRetries.delete(agentId)
-      controller.nudges.delete(`${agentId}:${task.id}`)
-      controller.dispatchNotes.set(agentId, `Your previous turn on ${task.id} ended early (${dead.failureClass.replace(/_/g, ' ')}) and the lead has resumed you. Edits from that turn may be half-finished: inspect your checkout before continuing, and do not redo work that already landed.`)
+      controller.nudges.delete(`${agentId}:${task!.id}`)
+      controller.dispatchNotes.set(agentId, `Your previous turn on ${task!.id} ended early (${dead.failureClass.replace(/_/g, ' ')}) and the lead has resumed you. Edits from that turn may be half-finished: inspect your checkout before continuing, and do not redo work that already landed.`)
       notifyRunChanged(identity.runId)
     }
-    void dispatchTeammateWork(controller, agentId)
+    if (agent.role === 'lead') {
+      void dispatchAgentTurn(controller, agentId, `Continue the existing Coordinator objective after explicit execution recovery. Inspect the saved transcript and board first; retain completed work and do not repeat applied operations.`)
+    } else void dispatchTeammateWork(controller, agentId)
   })
 }
 
@@ -8590,7 +8640,6 @@ async function drainAgentStream(controller: RunController, agent: ProtocolAgent,
   let buffer = ''
   let realized = false
   let failure: ProviderTurnFailure | null = null
-  let terminalEventObserved = false
   const seen = new Set<string>()
   const seenSdkEvidence = new Set<string>()
   const coordinatorTaskId = agent.taskId
@@ -8690,9 +8739,6 @@ async function drainAgentStream(controller: RunController, agent: ProtocolAgent,
           }).catch(() => {})
           continue
         }
-        if (event.type === 'task.completed' || event.type === 'task.failed' || event.type === 'finding') {
-          terminalEventObserved = true
-        }
       }
       if (agent.provider === 'claude') {
         for (const evidence of parseClaudeSdkEvidence(buffer)) {
@@ -8706,7 +8752,7 @@ async function drainAgentStream(controller: RunController, agent: ProtocolAgent,
   } catch (err) {
     failure = classifyProviderTurnFailure(err instanceof Error ? err.message : 'Worker stream failed')
   }
-  if (stalled && !terminalEventObserved) {
+  if (stalled) {
     failure ??= classifyProviderTurnFailure(`Provider ${stallReason()}`)
     // The abandoned reader.read() may still resolve later against a stream
     // that never ends; cancel it so the underlying connection actually closes
@@ -8722,7 +8768,7 @@ async function drainAgentStream(controller: RunController, agent: ProtocolAgent,
       ])
     }
   }
-  return terminalEventObserved ? null : failure
+  return failure
 }
 
 /** Event application with coordinator-side gating (doc: TaskCompleted hook semantics). */
@@ -8924,6 +8970,19 @@ async function handleProviderTurnFailure(
     await stopProtocolRunForBudget(controller, failure.detail)
     return 'terminal'
   }
+  if (opts.allowSameProviderRetry === false) {
+    const db = await getDatabase()
+    const current = db.prepare('SELECT task_id FROM protocol_agents WHERE run_id = ? AND id = ?').get(controller.runId, agent.id) as Row | undefined
+    const owned = current?.task_id ? db.prepare('SELECT id, status, owner_agent_id FROM protocol_tasks WHERE run_id = ? AND id = ?').get(controller.runId, current.task_id) as Row | undefined : undefined
+    const taskId = owned?.owner_agent_id === agent.id && !['completed', 'failed', 'cancelled'].includes(String(owned.status)) ? String(owned.id) : undefined
+    await recordProtocolEvent({
+      version: AGENT_PROTOCOL_VERSION, runId: controller.runId, agentId: agent.id, taskId,
+      type: agent.role === 'teammate' && !taskId ? 'learning' : 'agent.blocked', summary: `${agent.name} execution observation is uncertain; inspect and reconcile the saved conversation before recovery`,
+      detail: failure.detail, payload: { failureClass: failure.kind, executionUncertain: true },
+    })
+    if (agent.role !== 'lead') await dispatchLeadIntervention(controller, { force: true })
+    return 'terminal'
+  }
   // Same-provider retry resends the identical message text to the SAME
   // session — safe only when the turn never produced any output, since a
   // coord_* tool call already executes (mutates the board) the moment the
@@ -8932,9 +8991,9 @@ async function handleProviderTurnFailure(
   // ambiguous exception that might be mid-turn) risks the model re-issuing a
   // non-idempotent call like coord_create_task a second time. Only the
   // turn-never-started path (HTTP failed to accept the turn at all) can
-  // prove that didn't happen — every other call site defaults this off and
-  // falls through to the pre-existing failover-with-a-fresh-session behavior.
-  const retryLimit = opts.allowSameProviderRetry !== false ? SAME_PROVIDER_RETRY_LIMITS[failure.kind] : undefined
+  // prove that didn't happen. Ambiguous accepted executions are retained above;
+  // neither a same-provider retry nor a fresh-session failover resolves them.
+  const retryLimit = SAME_PROVIDER_RETRY_LIMITS[failure.kind]
   if (retryLimit !== undefined) {
     const used = controller.sameProviderRetries.get(agent.id) ?? 0
     if (used < retryLimit) {
@@ -9133,6 +9192,7 @@ async function dispatchAgentTurn(
   let activeAgent: ProtocolAgent | null = null
   let durableDispatch = false
   let dispatchSettled = false
+  let executionAttemptId: string | undefined
   for (const messageId of opts.inboxMessageIds ?? []) inboxDispatchInFlight.add(messageId)
   try {
     const db = await getDatabase()
@@ -9141,6 +9201,7 @@ async function dispatchAgentTurn(
     const agent = rowToAgent(agentRow)
     if (agent.sessionId.startsWith('external:') && !controller.sessionIds.has(agentId)) return
     activeAgent = agent
+    if (unresolvedExecutionAttempt(db, controller.runId, agentId)) { providerFailureHandled = true; return }
     const activeTaskRow = agent.taskId
       ? db.prepare('SELECT * FROM protocol_tasks WHERE id = ? AND run_id = ?').get(agent.taskId, controller.runId) as Row | undefined
       : undefined
@@ -9161,7 +9222,22 @@ async function dispatchAgentTurn(
     const taskBudgetTokens = remainingTokenBudgetSync(db, run)
     const maxBudgetUsd = remainingCostBudgetSync(db, run)
     const sessionId = controller.sessionIds.get(agent.id) ?? agent.sessionId
-    if (controller.interactiveLeadId) {
+    const deferForCooldown = async () => {
+      const result = await enqueueWrite(tx => {
+        const cooldown = readProviderCooldown(tx, agent.provider, agent.providerInstanceId ?? agent.provider)
+        if (!cooldown?.active) return null
+        const inserted = deferCooldownDispatch(tx, { runId: controller.runId, agentId, sessionId, taskId: agent.taskId ?? null,
+          claimGeneration: activeTaskRow ? Number(activeTaskRow.claim_generation) : null, provider: agent.provider, providerInstanceId: agent.providerInstanceId ?? agent.provider, message, options: opts })
+        return { cooldown, inserted }
+      })
+      if (!result) return false
+      if (result.inserted) await recordProtocolEvent({ version: AGENT_PROTOCOL_VERSION, runId: controller.runId, agentId, taskId: agent.taskId,
+        type: 'learning', summary: `${agent.name} dispatch deferred until provider cooldown ${result.cooldown.retryAt}`,
+        payload: { providerCooldown: result.cooldown, dispatchDeferred: true } })
+      return true
+    }
+    if (await deferForCooldown()) { providerFailureHandled = true; return }
+    {
       const reserved = await enqueueWrite(tx => tx.prepare(`INSERT OR IGNORE INTO protocol_interactive_dispatches
         (run_id, agent_id, task_id, created_at) VALUES (?, ?, ?, ?)`).run(controller.runId, agentId, agent.taskId ?? null, nowIso()))
       if (!reserved.changes) { providerFailureHandled = true; return }
@@ -9184,7 +9260,15 @@ async function dispatchAgentTurn(
     }
     const isPending = controller.pendingSessions.has(agent.id)
     controller.pendingSessions.delete(agent.id)
+    executionAttemptId = await enqueueWrite(tx => beginExecutionAttempt(tx, {
+      runId: controller.runId, agentId: agent.id, taskId: agent.taskId ?? null, sessionId,
+      provider: agent.provider, providerInstanceId: agent.providerInstanceId ?? agent.provider,
+      claimGeneration: activeTaskRow ? Number(activeTaskRow.claim_generation) : null,
+    }))
     noteKeyedSideEffect()
+    // Persist submission before calling the provider: a crash across this call
+    // is uncertain even when no response was observed locally.
+    await enqueueWrite(tx => updateExecutionAttempt(tx, executionAttemptId!, 'submitted'))
     const response = await withProviderInstance(agent.providerInstanceId ?? agent.provider, agent.provider, () => streamViewSessionTurn({
       sessionId,
       signal: new AbortController().signal,
@@ -9206,12 +9290,15 @@ async function dispatchAgentTurn(
       },
     }))
     if (!response.ok) {
+      const failure = { ...classifyProviderTurnFailure(`Failed to start turn: HTTP ${response.status} ${response.statusText}`), retryAt: providerRetryAt(response.headers.get('retry-after')) }
+      await enqueueWrite(tx => updateExecutionAttempt(tx, executionAttemptId!, 'rejected', failure))
       dispatchSettled = true
       providerFailureHandled = true
+      if (failure.kind === 'rate_limited' && await deferForCooldown()) return
       retryAfterFailover = await handleProviderTurnFailure(
         controller,
         agent,
-        classifyProviderTurnFailure(`Failed to start turn: HTTP ${response.status} ${response.statusText}`),
+        failure,
       ) === 'retry'
       return
     }
@@ -9224,13 +9311,16 @@ async function dispatchAgentTurn(
     }
     const failure = await drainAgentStream(controller, agent, response)
     if (failure) {
+      await enqueueWrite(tx => updateExecutionAttempt(tx, executionAttemptId!, 'uncertain', failure))
       providerFailureHandled = true
       retryAfterFailover = await handleProviderTurnFailure(controller, agent, failure, { allowSameProviderRetry: false }) === 'retry'
     } else {
+      await enqueueWrite(tx => updateExecutionAttempt(tx, executionAttemptId!, 'settled'))
       dispatchSettled = true
       controller.sameProviderRetries.delete(agent.id)
     }
   } catch (error) {
+    if (executionAttemptId) await enqueueWrite(tx => updateExecutionAttempt(tx, executionAttemptId!, 'uncertain', classifyProviderTurnFailure(error instanceof Error ? error.message : String(error)))).catch(() => {})
     if (activeAgent && !providerFailureHandled) {
       providerFailureHandled = true
       try {
@@ -9268,6 +9358,49 @@ async function dispatchAgentTurn(
 }
 
 /** A settings change is explicit permission to resume only safely observed work. */
+async function flushProviderCooldownDispatches(): Promise<void> {
+  const db = await getDatabase()
+  for (const controller of controllers.values()) {
+    if (controller.stopped || foreignInteractiveHostSync(db, controller.runId)) continue
+    for (const deferred of readCooldownDispatches(db, controller.runId)) {
+      if (readProviderCooldown(db, deferred.provider, deferred.providerInstanceId)?.active || controller.turnInFlight.has(deferred.agentId)) continue
+      const run = db.prepare('SELECT status FROM protocol_runs WHERE id = ?').get(controller.runId) as Row | undefined
+      const agent = db.prepare('SELECT * FROM protocol_agents WHERE run_id = ? AND id = ?').get(controller.runId, deferred.agentId) as Row | undefined
+      const task = deferred.taskId ? db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?').get(controller.runId, deferred.taskId) as Row | undefined : undefined
+      const current = run && ['planning', 'running', 'synthesizing'].includes(String(run.status)) && agent
+        && agent.session_id === deferred.sessionId && agent.provider === deferred.provider
+        && (agent.provider_instance_id ?? agent.provider) === deferred.providerInstanceId && (agent.task_id ?? null) === deferred.taskId
+        && (!deferred.taskId || (task && task.owner_agent_id === agent.id && Number(task.claim_generation) === deferred.claimGeneration && !['completed', 'failed', 'cancelled'].includes(String(task.status))))
+      if (!current) {
+        await enqueueWrite(tx => tx.prepare(`DELETE FROM protocol_cooldown_dispatches WHERE run_id = ? AND agent_id = ?
+          AND session_id = ? AND task_id IS ? AND claim_generation IS ? AND provider = ? AND provider_instance_id = ? AND message = ? AND options_json = ?`)
+          .run(controller.runId, deferred.agentId, deferred.sessionId, deferred.taskId, deferred.claimGeneration, deferred.provider, deferred.providerInstanceId, deferred.message, JSON.stringify(deferred.options)))
+        continue
+      }
+      if (agent.turn_active || unresolvedExecutionAttempt(db, controller.runId, deferred.agentId) || (task && ['blocked', 'planned'].includes(String(task.status)))) continue
+      const { readViewSessionRunning } = await import('./sessionBackend')
+      const native = await withProviderInstance(deferred.providerInstanceId, deferred.provider as AgentProvider, () => readViewSessionRunning(deferred.sessionId))
+      if (native.running || native.pendingPermissions.length || native.pendingPrompts.length) continue
+      const removed = await enqueueWrite(tx => {
+        if (readProviderCooldown(tx, deferred.provider, deferred.providerInstanceId)?.active) return false
+        const freshRun = tx.prepare('SELECT status FROM protocol_runs WHERE id = ?').get(controller.runId) as Row | undefined
+        const freshAgent = tx.prepare('SELECT * FROM protocol_agents WHERE run_id = ? AND id = ?').get(controller.runId, deferred.agentId) as Row | undefined
+        const freshTask = deferred.taskId ? tx.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?').get(controller.runId, deferred.taskId) as Row | undefined : undefined
+        const stillCurrent = freshRun && ['planning', 'running', 'synthesizing'].includes(String(freshRun.status)) && freshAgent
+          && freshAgent.session_id === deferred.sessionId && freshAgent.provider === deferred.provider
+          && (freshAgent.provider_instance_id ?? freshAgent.provider) === deferred.providerInstanceId && (freshAgent.task_id ?? null) === deferred.taskId
+          && (!deferred.taskId || (freshTask && freshTask.owner_agent_id === freshAgent.id && Number(freshTask.claim_generation) === deferred.claimGeneration && !['completed', 'failed', 'cancelled', 'blocked', 'planned'].includes(String(freshTask.status))))
+          && !freshAgent.turn_active && !unresolvedExecutionAttempt(tx, controller.runId, deferred.agentId)
+        if (!stillCurrent) return false
+        return Boolean(tx.prepare(`DELETE FROM protocol_cooldown_dispatches WHERE run_id = ? AND agent_id = ?
+          AND session_id = ? AND task_id IS ? AND claim_generation IS ? AND provider = ? AND provider_instance_id = ? AND message = ? AND options_json = ?`)
+          .run(controller.runId, deferred.agentId, deferred.sessionId, deferred.taskId, deferred.claimGeneration, deferred.provider, deferred.providerInstanceId, deferred.message, JSON.stringify(deferred.options)).changes)
+      })
+      if (removed) void dispatchAgentTurn(controller, deferred.agentId, deferred.message, deferred.options)
+    }
+  }
+}
+
 async function resumeResourceScheduling(controller: RunController): Promise<void> {
   if (controller.stopped) return
   const db = await getDatabase()
@@ -9767,6 +9900,9 @@ async function beginExecutionPhase(controller: RunController): Promise<void> {
   if (controller.stopped || controller.executionStarted) return
   controller.executionStarted = true
   const db = await getDatabase()
+  if (readExecutionSettings(db, controller.runId)) await enqueueWrite(tx => saveExecutionSettings(tx, controller.runId, {
+    teammateProviders: controller.teammateProviders, model: controller.model, effort: controller.effort, modelSource: controller.modelSource, executionStarted: true,
+  }))
   let tasks = listTasksSync(db, controller.runId)
   if (tasks.length === 0) {
     // Lead produced nothing usable — fall back to role lanes so the run still works.
@@ -9981,6 +10117,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
         ts,
       )
       assertCoordinatorSessionInstanceSync(db, leadSession.sessionId, currentProviderInstanceId(params.provider))
+      saveExecutionSettings(db, runId, { teammateProviders, model: controller.model, effort: controller.effort, modelSource: controller.modelSource, executionStarted: false })
       db.prepare(`
         INSERT INTO protocol_agents (
           id, run_id, name, role, provider, session_id, worktree_path, worktree_branch, task_id, status, last_seen_at, created_at, updated_at

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { launchDetachedWorker } from './agent-viewer-coord-detached.mjs'
+import { reconcileWorkerAttempt, workerAttemptUnresolved } from './agent-viewer-coord-attempts.mjs'
 import { spawn } from 'node:child_process'
 import { open, readFile, stat, watch } from 'node:fs/promises'
 import path from 'node:path'
@@ -30,7 +31,7 @@ function option(name, fallback) {
 const COMMAND_OPTIONS = {
   doctor: { flags: new Set(['--json']), values: new Set(['--attach', '--identity', '--limit']), positionals: 0 },
   workers: { flags: new Set(['--json']), values: new Set(['--run', '--status', '--activity', '--limit']), positionals: 0 },
-  restart: { flags: new Set(), values: new Set(['--provider']), positionals: 1 },
+  restart: { flags: new Set(), values: new Set(['--provider', '--reconcile-attempt']), positionals: 1 },
   logs: { flags: new Set(['-f', '--follow']), values: new Set(['-n']), positionals: 1 },
 }
 
@@ -80,7 +81,7 @@ function usage(message) {
   console.log(`Usage:
   agent-viewer coord doctor [--json] [--attach <url>] [--identity <file>] [--limit <n>]
   agent-viewer coord workers [--json] [--run <run-id>] [--status <status>] [--activity <activity>] [--limit <n>]
-  agent-viewer coord restart <agent-id|name|identity-file> [--provider codex|claude|opencode|copilot|pi]
+  agent-viewer coord restart <agent-id|name|identity-file> [--provider codex|claude|opencode|copilot|pi] [--reconcile-attempt <id>]
   agent-viewer coord logs <agent-id|name|identity-file> [-n <lines>] [-f]
 `)
   process.exit(message ? 1 : 0)
@@ -221,7 +222,7 @@ async function workers() {
   const status = option('--status')
   const activity = option('--activity')
   if (activity && !WORKER_ACTIVITIES.includes(activity)) usage(`--activity must be one of: ${WORKER_ACTIVITIES.join(', ')}`)
-  const validStatuses = new Set(['running', 'starting', 'retrying', 'stopped', 'handed_off', 'failed', 'corrupt', 'stale'])
+  const validStatuses = new Set(['running', 'starting', 'retrying', 'stopped', 'handed_off', 'failed', 'needs_recovery', 'corrupt', 'stale'])
   if (status && !validStatuses.has(status)) usage(`--status must be one of: ${[...validStatuses].join(', ')}`)
   const limit = boundedIntegerOption('--limit', 100, 1, 1_000)
   const records = (await listWorkerRecords())
@@ -266,6 +267,9 @@ async function restart() {
   }
   const record = await resolveWorkerRecord(selector)
   if (!record.identityFile) throw new Error('Worker record has no identity file')
+  const expectedAttempt = option('--reconcile-attempt')
+  if (expectedAttempt && expectedAttempt !== record.providerAttempt?.id) throw new Error('The inspected provider attempt changed; inspect the worker again before restart')
+  if (!processAlive(Number(record.pid)) && workerAttemptUnresolved(record.providerAttempt)) reconcileWorkerAttempt({ providerAttempt: record.providerAttempt }, expectedAttempt)
   if (processAlive(Number(record.pid))) {
     const verifiedWorker = managedWorkerProcess(Number(record.pid), record)
     if (!verifiedWorker) {
@@ -285,6 +289,7 @@ async function restart() {
   }
   const started = await launchDetachedWorker([
     '--identity', record.identityFile,
+    ...(option('--reconcile-attempt') ? ['--reconcile-attempt', option('--reconcile-attempt')] : []),
     ...(provider ? ['--provider', provider] : []),
   ], {
     cwd: record.cwd || process.cwd(),

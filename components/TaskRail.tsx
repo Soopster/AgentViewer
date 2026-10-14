@@ -99,6 +99,8 @@ function taskMetaParts(task: TaskState, openBlockers: string[]): string[] {
   if (task.subagentType) parts.push(task.subagentType)
   else if (task.taskType) parts.push(task.taskType)
   if (task.workflowName) parts.push(task.workflowName)
+  if (task.parentTaskId) parts.push(`from #${task.parentTaskId}`)
+  if (task.runIds && task.runIds.length > 1) parts.push(`run ${task.runIds.length}`)
   if (task.lastToolName) parts.push(`last ${task.lastToolName}`)
   if (task.toolUses != null) parts.push(`${task.toolUses} tool${task.toolUses === 1 ? '' : 's'}`)
   if (task.durationMs != null) parts.push(formatDuration(task.durationMs))

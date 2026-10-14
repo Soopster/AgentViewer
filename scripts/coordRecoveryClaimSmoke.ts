@@ -54,6 +54,11 @@ if (!phase) {
   await coord.runProtocolMaintenanceSweep()
   const lead = await coord.sessionCoordinatorIdentity('lead-chat', 'codex')
   const snapshot = async () => (await coord.readExternalProtocolStatus(lead)).snapshot
+  const retained = (await coord.inspectExternalProtocolRecovery(lead, ids.firstId)).executions[0]!.attempts.find(attempt => attempt.taskId === ids.oldTask)!
+  assert.equal(retained.state, phase === 'reopen' ? 'reconciled' : 'submitted', 'only explicit acknowledgement retires crashed observation uncertainty')
+  assert.equal(retained.taskId, ids.oldTask, 'attempt retains its original task even if the agent claimed another task in the same turn')
+  assert.equal(retained.providerInstanceId, 'codex')
+  assert.equal(retained.sessionId, 'native-1')
   if (phase === 'reopen') {
     assert.equal(starts, 0)
     assert.deepEqual(await coord.readSettledInteractiveExecutions(ids.runId), [])

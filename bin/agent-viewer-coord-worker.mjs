@@ -25,6 +25,7 @@ import {
   runAcpProviderTick,
 } from './agent-viewer-acp-client.mjs'
 import { scrubInheritedAgentIdentity } from '../lib/inheritedIdentityEnv.mjs'
+import { newWorkerAttempt, reconcileWorkerAttempt, workerAttemptUnresolved, publicWorkerAttempt } from './agent-viewer-coord-attempts.mjs'
 
 // A lead's Bash tool starts this worker, so it arrives carrying the lead's
 // session identity; the teammates it spawns must not claim it.
@@ -120,6 +121,7 @@ Options:
   --once               Run one CLI tick and exit
   --detach             Start in the background and return after worker registration
   --identity <file>    Durable 0600 participant and provider-session state
+  --reconcile-attempt <id> Inspect the retained execution first; refuses a live provider PID
   --model <id>         Provider model override (e.g. sonnet, gpt-5.2-codex, openai-codex/gpt-5.2-codex)
   --transport <cli|acp> Provider transport (default cli). acp drives claude-agent-acp/codex-acp
                        over ACP instead of the raw CLI; only supported for --provider claude or codex.
@@ -163,6 +165,7 @@ function parseArgs(args) {
     ['--attach', 'attach'],
     ['--cwd', 'cwd'],
     ['--identity', 'identity'],
+    ['--reconcile-attempt', 'reconcileAttempt'],
     ['--name', 'name'],
     ['--start', 'start'],
     ['--join', 'join'],
@@ -556,6 +559,8 @@ async function providerTick(state, baseUrl, actionable) {
   }
 
   await new Promise((resolve, reject) => {
+    // Submitted was persisted before entering providerTick. Persisting the PID
+    // narrows observation after launch; a crash before this write stays uncertain.
     const child = spawn(command, args, {
       cwd: state.cwd,
       env: {
@@ -573,7 +578,7 @@ async function providerTick(state, baseUrl, actionable) {
     let droppingOversizedFrame = false
     let providerOutput = ''
     let providerReportedError = null
-    let sessionStateSave = Promise.resolve()
+    let sessionStateSave = persistProviderAttempt({ state: 'submitted', pid: child.pid ?? null })
     let turnTimedOut = false
     let turnCancelled = false
     let providerTimeoutDetail = null
@@ -655,7 +660,7 @@ async function providerTick(state, baseUrl, actionable) {
           state.providerSessionId = sessionId
           // Serialize identity writes because providers can repeat the session
           // id across several events in the same stdout burst.
-          sessionStateSave = sessionStateSave.then(() => saveState(state.identityFile, state))
+          sessionStateSave = sessionStateSave.then(() => persistProviderAttempt({ sessionId }))
         }
       } catch { /* provider text or partial JSON */ }
     }
@@ -707,6 +712,7 @@ async function providerTick(state, baseUrl, actionable) {
       error.providerOutput = providerOutput
       try {
         await sessionStateSave
+        if (['ENOENT', 'EACCES'].includes(error.code)) await persistProviderAttempt({ state: 'rejected', failureClass: 'provider_failure' })
         reject(turnCancelled ? turnCancelledError() : turnTimedOut ? providerTimeoutError() : error)
       } catch (saveError) {
         reject(saveError)
@@ -720,6 +726,7 @@ async function providerTick(state, baseUrl, actionable) {
       try {
         if (!droppingOversizedFrame) consumeProviderLine(buffered)
         await sessionStateSave
+        await persistProviderAttempt({ state: 'closed', exitCode: code, signal, sessionId: state.providerSessionId ?? null })
         if (turnCancelled) reject(turnCancelledError())
         else if (turnTimedOut) reject(providerTimeoutError())
         else if (code === 0 && !providerReportedError) resolve()
@@ -834,6 +841,8 @@ async function acpProviderTick(state, baseUrl, config, prompt, additionalDirecto
   try {
     const result = await runAcpProviderTick({
       providerId: state.provider,
+      onSpawn: pid => persistProviderAttempt({ state: 'submitted', pid }),
+      onClose: ({ code, signal }) => persistProviderAttempt({ state: 'closed', exitCode: code, signal }),
       ...(state.acpCommand ? { command: state.acpCommand[0], args: state.acpCommand.slice(1) } : {}),
       cwd: state.cwd,
       prompt,
@@ -930,6 +939,7 @@ if (!options.start && (options.playbook || options.args !== undefined || options
 if (options.args !== undefined && !options.playbook) usage('--args requires --playbook')
 if (options.shared && !options.join) usage('--shared requires --join; the lead always starts in its current checkout')
 if (options.identity && !options.start && !options.join && options.name) usage('--name cannot rename a resumed --identity worker')
+if (options.reconcileAttempt && (!options.identity || options.start || options.join)) usage('--reconcile-attempt requires resuming an existing --identity worker')
 
 if (options.detach) {
   const started = await launchDetachedWorker(process.argv.slice(2).filter((arg) => arg !== '--detach'))
@@ -947,6 +957,8 @@ if (options.identity && !options.start && !options.join) {
   loadedIdentity = true
   state = JSON.parse(await readFile(path.resolve(options.identity), 'utf8'))
   state.identityFile = path.resolve(options.identity)
+  // Check the old provider before changing provider/session selection.
+  if (reconcileWorkerAttempt(state, options.reconcileAttempt)) await saveState(state.identityFile, state)
   if (options.providerExplicit && state.provider !== options.provider) {
     state.provider = options.provider
     // Session identifiers are provider-native and cannot be resumed by a
@@ -1071,6 +1083,8 @@ await writeWorkerRecord(state.identityFile, {
   status: 'running',
   activity: { state: 'unknown', reason: 'Supervisor starting', observedAt: new Date().toISOString() },
   startedAt: new Date().toISOString(),
+  providerAttempt: publicWorkerAttempt(state.providerAttempt),
+  providerAttempts: (state.providerAttempts ?? []).map(publicWorkerAttempt),
 })
 if (process.connected) {
   await new Promise((resolve) => process.send({
@@ -1097,6 +1111,13 @@ async function retryDelay(delay) {
     shutdownRequestedPromise,
   ])
   if (timer) clearTimeout(timer)
+}
+
+async function persistProviderAttempt(patch) {
+  state.providerAttempt = { ...state.providerAttempt, ...patch, updatedAt: new Date().toISOString() }
+  state.providerAttempts = [state.providerAttempt, ...(state.providerAttempts ?? []).filter(attempt => attempt.id !== state.providerAttempt.id)].slice(0, 10)
+  await saveState(state.identityFile, state)
+  await writeWorkerRecord(state.identityFile, { providerAttempt: publicWorkerAttempt(state.providerAttempt), providerAttempts: state.providerAttempts.map(publicWorkerAttempt) })
 }
 
 function isTerminal(wait) {
@@ -1309,7 +1330,10 @@ outer: for (;;) {
   try {
     const recoveringProvider = providerFailures > 0
     await recordActivity({ state: 'working', reason: 'Provider turn in progress', taskId: lastActionable?.myTask?.id })
+    state.providerAttempt = newWorkerAttempt(state, lastActionable?.myTask?.id)
+    await persistProviderAttempt({ state: 'submitted' })
     await providerTick(state, baseUrl, lastActionable)
+    await persistProviderAttempt({ state: 'closed', sessionId: state.providerSessionId ?? null })
     providerFailures = 0
     if (recoveringProvider) {
       delete state.lastFailureClass
@@ -1324,6 +1348,15 @@ outer: for (;;) {
     }
     await saveState(state.identityFile, state)
   } catch (error) {
+    if (workerAttemptUnresolved(state.providerAttempt)) {
+      await persistProviderAttempt({ state: 'uncertain', failureClass: classifyProviderFailure(error) })
+      state.lastError = error.message
+      state.lastFailureClass = classifyProviderFailure(error)
+      finalStatus = 'needs_recovery'
+      process.exitCode = 1
+      console.error(`Provider attempt ${state.providerAttempt.id} is uncertain; inspect the existing conversation before --reconcile-attempt recovery. Task ownership is retained.`)
+      break
+    }
     if (shutdownRequested) {
       await checkpointForSupervisorStop(`Supervisor received ${shutdownSignal ?? 'a shutdown request'} and stopped the active provider turn.`)
       break

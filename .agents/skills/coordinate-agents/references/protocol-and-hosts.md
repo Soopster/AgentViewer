@@ -185,8 +185,29 @@ rather than creating a replacement participant after a disconnect.
 
 `coord_inspect_recovery` is a lead-only read that checks native conversation and
 checkout availability and reports host ownership and retained execution
-reservations. It never claims a host or submits work. Filter by teammate name
-or ID with `agent`.
+reservations. It never claims a host or submits work. Filter by participant name
+or ID with `agent`; managed leads are inspectable too.
+
+`attempts` lists the last ten native dispatch records, newest first. Each has
+its own ID and the original task, claim generation, conversation, provider and
+provider instance. `submitted` without later settlement means observation is
+unresolved; it does not prove a live process or permit replay. `rejected` means
+the send returned a non-success HTTP response; `settled` records an observed
+stream ending, not task completion. `uncertain` retains stream/transport failure
+evidence. `reconciled` records explicit acknowledgement/recovery, without
+claiming the old attempt completed. Attempts remain distinct from the current claim.
+
+For rate limits, `cooldown` reports explicit provider Retry-After evidence.
+`resetKnown=false` means no reset time was supplied; never guess one from prose.
+An active cooldown prevents resume and new native sends in that provider
+instance. Native dispatches deferred before submission are retained with their
+session, task, claim generation and authored message, then the local mailbox
+sweep releases them after `retryAt`. The sweep rechecks current ownership,
+claim, session activity and cooldown before sending. This host-local queue does
+not cover remote worker hosts or reset signals providers have not exposed as
+HTTP `Retry-After`. Elapsed cooldown alone does not approve replay of an
+uncertain execution, clear a human gate, or prove an earlier execution did not
+run.
 
 Inspect the saved transcript. When `canAcknowledge` is true, use
 `coord_acknowledge_execution` with the exact agent ID, reservation `taskId` as
@@ -199,7 +220,12 @@ itself submit a turn; maintenance can subsequently dispatch queued work.
 `executionElsewhere` requires the owning host. For unfinished work with
 `needsRecovery`, inspect the saved transcript and call `coord_resume_agent`
 with the exact `recoveryClaim` taskId, sessionId and claimGeneration returned
-by inspection. This starts a new turn in the saved session and checkout. It
+by inspection. For a managed lead without a claimed task, pass its
+`recoveryClaim.attemptId` as `expected_attempt_id` and its sessionId; omit task
+and claim-generation pins. Changed attempts are rejected. This starts a new
+turn in the saved session and checkout. Accepted-stream failures never
+automatically retry or fail over to a new conversation. Automatic recovery
+cannot retire unresolved attempts; explicitly inspect and reconcile first. It
 rejects changed claims, native human questions/permissions, task approval/open
 decision gates, unavailable conversations/directories, host conflicts and
 budget gates. Provider failures may recur; inspect their cause first. Supply
@@ -208,6 +234,27 @@ Do not create a replacement conversation. Do not repeatedly
 release and reclaim tasks to force dispatch, and do not use recovery to answer
 human approvals or provider permission requests.
 
+
+## External worker attempt recovery
+
+`coord_inspect_recovery.externalWorkers` reports this daemon host's worker
+process observations and the newest ten public provider attempts for each
+matching run/agent. Attempts retain their ID, task, native conversation,
+provider, transport, PID and process outcome. A missing provider instance stays
+null: it was not observed. Identity/configuration contents are excluded.
+`externalWorkerObservationScope="this-host-only"` means an empty list does not
+prove a remote worker stopped. Inspect/recover it on its existing host.
+
+A crashed supervisor can leave a detached provider running. Neither changing
+provider nor an ordinary restart permits replay of a retained unresolved
+attempt. Inspect its transcript and `coord workers --run <run-id> --json`.
+After confirming the old provider stopped, use `coord restart <exact-worker>`
+with `--reconcile-attempt <attempt-id>` (or that flag on `coord worker --identity`).
+A live recorded PID or changed attempt is rejected; no process is signalled by
+reconciliation. Existing task ownership and native conversation are retained.
+Do not inspect the private identity file to get the pin; use public attempts.
+`closed` reports observed subprocess closure, not task completion or absence of
+provider-owned/background work. Check those independently before recovery.
 
 ## Role-aware discovery
 
