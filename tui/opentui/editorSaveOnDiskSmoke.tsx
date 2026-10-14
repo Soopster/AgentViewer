@@ -1,10 +1,10 @@
 /** @jsxImportSource @opentui/react */
-import React, { act } from 'react'
+import React from 'react'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RGBA, SyntaxStyle, type TextareaRenderable } from '@opentui/core'
-import { testRender } from '@opentui/react/test-utils'
+import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
 import { EditorPopover, type EditorKeyEvent } from './EditorPopover'
 import { disposeAllLspSessions } from './editorLspSession'
@@ -17,7 +17,8 @@ import { disposeAllLspSessions } from './editorLspSession'
 const cwd = await mkdtemp(join(tmpdir(), 'agent-viewer-editor-save-hygiene-'))
 const filePath = join(cwd, 'main.ts')
 
-const syntaxStyle = SyntaxStyle.fromStyles({ default: { fg: RGBA.fromHex(DARK_THEME.text) } })
+const syntaxStyleDefinitions = { default: { fg: RGBA.fromHex(DARK_THEME.text) } }
+let syntaxStyle!: SyntaxStyle
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message)
@@ -29,8 +30,7 @@ try {
   // Trailing whitespace on a line the caret will not be on, and no final newline.
   await writeFile(filePath, 'const a = 1   \nconst b = 2', 'utf8')
 
-  const setup = await testRender(
-    <EditorPopover
+  const setup = await testRenderWithSyntaxStyle(syntaxStyleDefinitions, (style) => { syntaxStyle = style; return (<EditorPopover
       cwd={cwd}
       initialPath={filePath}
       theme={DARK_THEME}
@@ -42,7 +42,7 @@ try {
       onNotice={() => {}}
       onClipboardRead={async () => ''}
       onClipboardWrite={async () => {}}
-    />,
+    />) },
     { width: 110, height: 30 },
   )
 

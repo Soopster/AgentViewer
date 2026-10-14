@@ -458,6 +458,16 @@ side (`themeLight`, `themeDark`: the last theme picked by name from that group).
 
 `themeFollowSmoke.tsx` plays the terminal's half on stdin (two mutations verified).
 
+**`terminal-palette` (TERMINAL in the menu) is made of the terminal's own colours** —
+`terminalPaletteTheme` in `tui/theme.ts`: the ANSI slots carry the accents, the surfaces are mixed
+from the reported default pair, and an unreported slot falls back to the built-in theme of the same
+lightness. It is asked for (`renderer.getPalette`) only once the theme is in use, and the root's
+`palette` listener is what makes OpenTUI re-read the colours when the terminal changes them. Its
+lightness depends on the terminal, so it heads whichever menu group it is on and every light/dark
+test goes through `isLightThemeMode`, never `LIGHT_MODES`. The test renderer refuses palette
+detection, so `terminalPaletteThemeSmoke.tsx` stubs the read and emits the event (two mutations
+verified); the OSC exchange itself is OpenTUI's and is not covered here.
+
 #### OpenTUI performance patterns (load-bearing)
 
 - **Poll fingerprint bail-out** in `setSessionDetail`: return `prev` when `rawMessages.length`, last UUID, model, and title are unchanged so React's identity bail-out skips a full transcript reformat on idle 2s polls.
@@ -1021,6 +1031,24 @@ auto-pair checks nor anything else `handleKey` does per character. Set
   two-project solution: 0 members before, 6 after, and four phantom
   "type not found" diagnostics collapsed to one.
 
+- **The buffer counts display cells; the editor counts string indices.** The
+  cursor column, `cursorOffset`, selections, `setCursor` and `addHighlight` are
+  all in cells, so a tab (two cells), a CJK character or emoji (two) or a
+  control character (version-dependent: zero cells on 0.5, `^L` from 0.6.1)
+  before the cursor put every unconverted crossing a cell off — Ctrl+D after a
+  tab selected `"\tfo"`. `tui/opentui/editorCells.ts` converts, with widths
+  measured from OpenTUI itself (`measureEditText`, or a scratch buffer on
+  builds without it) rather than a table that would drift. **Go through the
+  helpers in `EditorPopover.tsx`** (`editorDocumentOffset`,
+  `setEditorCursorPosition`, `editorSelectionOffsets`,
+  `setEditorSelectionOffsets`, `addEditorHighlight`); a raw `getSelection()`
+  or `setCursor(line, character)` reintroduces the bug only on lines that are
+  not plain ASCII, which no ASCII fixture will show. Remembered tab cursors
+  stay in cells, because they are recorded on every move. A plain-ASCII line
+  costs a regex test and nothing else; typing cost at 6,000 lines is
+  unchanged. `editorCellsSmoke.ts` is differential against a real buffer;
+  `editorWideTextSmoke.tsx` drives the popover (it fails on the old code with
+  exactly the selection above).
 - **Tab is overloaded, and its claimants are ordered.** In one key handler, in
   order: a snippet placeholder, an open completion list, a standing ghost, a
   selection or Shift (indent/outdent lines), and finally plain Tab, which

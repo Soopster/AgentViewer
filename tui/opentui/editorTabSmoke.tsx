@@ -8,12 +8,12 @@
 // without anyone behind it makes the key do nothing at all. Plain Tab with no
 // selection did exactly that — the popover declined it and the textarea has no
 // Tab action, so it silently inserted nothing.
-import React, { act } from 'react'
+import React from 'react'
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RGBA, SyntaxStyle, type TextareaRenderable } from '@opentui/core'
-import { testRender } from '@opentui/react/test-utils'
+import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
 import { EditorPopover, type EditorKeyEvent } from './EditorPopover'
 
@@ -22,7 +22,8 @@ const sourcePath = join(workspace, 'main.ts')
 const serverPath = join(workspace, 'fake-lsp')
 const originalServer = process.env.AGENT_VIEWER_TYPESCRIPT_LSP_BIN
 let handleKey: ((key: EditorKeyEvent) => boolean) | null = null
-const syntaxStyle = SyntaxStyle.fromStyles({ default: { fg: RGBA.fromHex(DARK_THEME.text) } })
+const syntaxStyleDefinitions = { default: { fg: RGBA.fromHex(DARK_THEME.text) } }
+let syntaxStyle!: SyntaxStyle
 
 try {
   // Only answers for `zz`, so every other case here runs with no completions
@@ -52,8 +53,7 @@ process.stdin.on('data', (chunk) => {
   process.env.AGENT_VIEWER_TYPESCRIPT_LSP_BIN = serverPath
   await writeFile(sourcePath, 'alpha\nbravo\n', 'utf8')
 
-  const setup = await testRender(
-    <EditorPopover
+  const setup = await testRenderWithSyntaxStyle(syntaxStyleDefinitions, (style) => { syntaxStyle = style; return (<EditorPopover
       cwd={workspace}
       initialPath={sourcePath}
       theme={DARK_THEME}
@@ -62,7 +62,7 @@ process.stdin.on('data', (chunk) => {
       syntaxStyle={syntaxStyle}
       onClose={() => {}}
       onKeyHandlerReady={(handler) => { handleKey = handler }}
-    />,
+    />) },
     { width: 100, height: 26 },
   )
   const settle = async (durationMs: number) => {

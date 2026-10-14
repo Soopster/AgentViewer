@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/react */
-import React, { act, useState } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React, { useState } from 'react'
+import { testRender, act } from './testRender'
 import { usePaste } from '@opentui/react'
 import { NEW_SESSION_LOADING_FRAMES, NewSessionModal } from './NewSessionModal'
 import { CYBER_THEME } from '../theme'

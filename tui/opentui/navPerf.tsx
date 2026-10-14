@@ -9,8 +9,8 @@
 //   NAV_PATTERN=scrub bun tui/opentui/navPerf.tsx      # fast fly-by scrubbing
 //   NAV_PATTERN=tabs bun tui/opentui/navPerf.tsx       # switching between open tabs
 //   NAV_STEPS=40 AGENT_VIEWER_PROVIDER=all bun tui/opentui/navPerf.tsx
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { mkdtempSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'

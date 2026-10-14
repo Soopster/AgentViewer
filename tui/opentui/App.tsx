@@ -67,7 +67,7 @@ import {
   type TuiSplitRowSide,
 } from './pierreDiffView'
 import type { SelectedLineRange } from '@pierre/diffs'
-import { LayoutEvents, RGBA, SyntaxStyle, MacOSScrollAccel, TextAttributes } from '@opentui/core'
+import { LayoutEvents, RGBA, SyntaxStyle, MacOSScrollAccel, TextAttributes, type NativeResourceOwner } from '@opentui/core'
 import type { BaseRenderable, BoxRenderable, CliRenderer, Renderable, MarkdownRenderable, MouseEvent, ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable, TextareaAction } from '@opentui/core'
 import { deriveReaderWindow, getReaderWindowStart, primeReaderWindowStart, setReaderWindowStart, stepReaderWindow, subscribeReaderWindowStart } from './readerWindowStore'
 import type { ReaderWindow } from './readerWindowStore'
@@ -103,6 +103,10 @@ import {
   THEME,
   getProviderAccent,
   getThemePalette,
+  isTerminalPaletteLight,
+  setTerminalPaletteTheme,
+  terminalPaletteTheme,
+  type TerminalReportedColors,
   setActiveTheme,
   type TuiDensity,
   type TuiThemeMode,
@@ -736,13 +740,23 @@ const OMZ_MODES: TuiThemeMode[] = [
   'pygmalion',
   ...PROCEDURAL_THEME_NAMES,
 ]
-const THEMES: TuiThemeMode[] = [...LIGHT_MODES, ...DARK_MODES, ...OMZ_MODES]
+// The terminal's own colours are light or dark depending on the terminal, so
+// that theme belongs to no fixed group: it heads whichever side it is on.
+const TERMINAL_PALETTE_MODE: TuiThemeMode = 'terminal-palette'
+const THEMES: TuiThemeMode[] = [TERMINAL_PALETTE_MODE, ...LIGHT_MODES, ...DARK_MODES, ...OMZ_MODES]
 type ThemeMenuGroup = 'light' | 'dark' | 'omz'
 const THEME_GROUPS: Array<{ key: ThemeMenuGroup; label: string; themes: TuiThemeMode[] }> = [
   { key: 'light', label: 'LIGHT', themes: LIGHT_MODES },
   { key: 'dark', label: 'DARK', themes: DARK_MODES },
   { key: 'omz', label: 'OMZ', themes: OMZ_MODES },
 ]
+function isLightThemeMode(mode: TuiThemeMode): boolean {
+  return mode === TERMINAL_PALETTE_MODE ? isTerminalPaletteLight() : LIGHT_MODES.includes(mode)
+}
+function themeGroupModes(group: ThemeMenuGroup): TuiThemeMode[] {
+  const themes = THEME_GROUPS.find((g) => g.key === group)?.themes ?? DARK_MODES
+  return group === (isTerminalPaletteLight() ? 'light' : 'dark') ? [TERMINAL_PALETTE_MODE, ...themes] : themes
+}
 function filterThemeModes(modes: TuiThemeMode[], query: string): TuiThemeMode[] {
   const q = query.trim().toLowerCase()
   if (!q) return modes
@@ -881,7 +895,7 @@ function readerLayoutOffset(el: Renderable, content: Renderable): number | null 
   let offset = 0
   let node: Renderable | null = el
   while (node && node !== content) {
-    offset += node.getLayoutNode().getComputedLayout().top
+    offset += node.getLayout().top
     node = node.parent as Renderable | null
   }
   return node === content ? offset : null
@@ -3397,7 +3411,7 @@ function applySelectionColorsToTree(root: BaseRenderable | null, colors: Selecti
   }
 }
 
-function buildSyntaxStyle(theme: TuiThemePalette): SyntaxStyle {
+function buildSyntaxStyle(theme: TuiThemePalette, owner: NativeResourceOwner): SyntaxStyle {
   const keywordColor = chooseSyntaxColor(theme, theme.violet, [theme.amber, theme.pink, theme.cyan])
   const functionColor = chooseSyntaxColor(theme, theme.cyan, [theme.green, theme.amber, theme.violet])
   const memberColor = chooseSyntaxColor(theme, theme.cyan, [theme.green, theme.amber, theme.violet])
@@ -3467,14 +3481,14 @@ function buildSyntaxStyle(theme: TuiThemePalette): SyntaxStyle {
     'markup.list': { fg: RGBA.fromHex(builtinColor) },
     'markup.quote': { fg: RGBA.fromHex(theme.dim), italic: true },
     default: { fg: RGBA.fromHex(theme.text) },
-  })
+  }, owner)
 }
 
-function buildComposerSyntaxStyle(theme: TuiThemePalette): SyntaxStyle {
+function buildComposerSyntaxStyle(theme: TuiThemePalette, owner: NativeResourceOwner): SyntaxStyle {
   return SyntaxStyle.fromStyles({
     'extmark.paste': { fg: RGBA.fromHex(theme.bg), bg: RGBA.fromHex(theme.amber), bold: true },
     default: { fg: RGBA.fromHex(theme.text) },
-  })
+  }, owner)
 }
 
 function transcriptAccent(cardRole: 'user' | 'assistant' | 'system', provider: ProviderSelection | undefined): string {
@@ -5112,6 +5126,7 @@ const PROCEDURAL_THEME_LABELS: Record<string, string> = Object.fromEntries(
 )
 
 const THEME_DESCRIPTIONS_BASE: Record<Exclude<TuiThemeMode, (typeof PROCEDURAL_THEME_NAMES)[number]>, string> = {
+  'terminal-palette': "Your terminal's own colours",
   light: 'Crisp white background',
   alabaster: 'Minimal white with sparse color',
   paper: 'Warm off-white',
@@ -5274,6 +5289,7 @@ const THEME_DESCRIPTIONS: Record<TuiThemeMode, string> = {
 } as Record<TuiThemeMode, string>
 
 const THEME_LABELS_BASE: Record<Exclude<TuiThemeMode, (typeof PROCEDURAL_THEME_NAMES)[number]>, string> = {
+  'terminal-palette': 'TERMINAL',
   light: 'LIGHT',
   alabaster: 'ALABASTER',
   paper: 'PAPER',
@@ -8586,6 +8602,9 @@ export default function OpenTuiApp() {
   const [providerInstances, setProviderInstances] = useState<TuiProviderInstanceChoice[]>([])
   const [themeMode, setThemeMode] = useState<TuiThemeMode>('light')
   const [themeFollowsTerminal, setThemeFollowsTerminal] = useState(false)
+  // Bumped when the terminal's reported colours change, which is what the
+  // terminal-palette theme is made of.
+  const [terminalPaletteEpoch, setTerminalPaletteEpoch] = useState(0)
   const themeFollowsTerminalRef = useRef(false)
   // The theme last chosen from each side; following the terminal switches between them.
   const themeSlotsRef = useRef<{ light: TuiThemeMode; dark: TuiThemeMode }>({ light: 'light', dark: 'dark' })
@@ -9372,7 +9391,7 @@ export default function OpenTuiApp() {
   useEffect(() => { awaitingPersistedTurnRef.current = awaitingPersistedTurn }, [awaitingPersistedTurn])
   useEffect(() => {
     setActiveTheme(themeMode)
-  }, [themeMode])
+  }, [themeMode, terminalPaletteEpoch])
 
   useEffect(() => {
     loadingDetailRef.current = loadingDetail
@@ -9436,8 +9455,9 @@ export default function OpenTuiApp() {
     )
   }, [openTabSessions, selectedSessionKey])
 
-  const theme = useMemo(() => getThemePalette(themeMode), [themeMode])
-  const composerSyntaxStyle = useMemo(() => buildComposerSyntaxStyle(theme), [theme])
+  // The epoch is what changes the terminal theme's colours.
+  const theme = useMemo(() => getThemePalette(themeMode), [themeMode, terminalPaletteEpoch])
+  const composerSyntaxStyle = useMemo(() => buildComposerSyntaxStyle(theme, renderer.nativeScene), [theme, renderer])
   const densityState = useMemo(() => densityConfig(density), [density])
   const presentationFocusMode = focusMode || fullscreenMode
   const showRail = railVisible && !fullscreenMode
@@ -10535,12 +10555,12 @@ export default function OpenTuiApp() {
   )
   const shouldEnableSyntaxHighlighting = liveSyntaxActive || expandedSyntaxActive
   const syntaxStyle = useMemo(
-    () => shouldEnableSyntaxHighlighting ? buildSyntaxStyle(theme) : null,
-    [shouldEnableSyntaxHighlighting, theme],
+    () => shouldEnableSyntaxHighlighting ? buildSyntaxStyle(theme, renderer.nativeScene) : null,
+    [shouldEnableSyntaxHighlighting, theme, renderer],
   )
   const handoffBriefSyntaxStyle = useMemo(
-    () => syntaxStyle ?? buildSyntaxStyle(theme),
-    [syntaxStyle, theme],
+    () => syntaxStyle ?? buildSyntaxStyle(theme, renderer.nativeScene),
+    [syntaxStyle, theme, renderer],
   )
   const normalizedSessionQuery = sessionSearchQuery.trim().toLowerCase()
   const searchSidebarSessions = useMemo(() => createSidebarSessionSearch(sessions), [sessions])
@@ -11417,13 +11437,16 @@ export default function OpenTuiApp() {
   // ⌃G, as in Claude Code and Codex: write the prompt in $VISUAL/$EDITOR.
   const editComposerInExternalEditor = useEffectEvent(() => {
     const current = composerTextareaRef.current?.plainText ?? composerDraft
-    const result = editTextInEditor(renderer, current)
-    if (!result.ok) {
-      showNotice('error', `${result.command}: ${result.error}`)
-      return
-    }
-    composerTextareaRef.current?.setText(result.text)
-    setComposerDraft(result.text)
+    void editTextInEditor(renderer, current).then((result) => {
+      if (!result.ok) {
+        showNotice('error', `${result.command}: ${result.error}`)
+        return
+      }
+      composerTextareaRef.current?.setText(result.text)
+      setComposerDraft(result.text)
+    }, (err) => {
+      showNotice('error', `Could not hand the terminal to the editor: ${err instanceof Error ? err.message : String(err)}`)
+    })
   })
 
   const commitComposerHistory = useCallback(() => {
@@ -12920,7 +12943,7 @@ export default function OpenTuiApp() {
     themeMenuOriginRef.current = themeMode
     setThemeMenuIndex(Math.max(THEMES.indexOf(themeMode), 0))
     setThemeMenuGroup(
-      LIGHT_MODES.includes(themeMode) ? 'light' : OMZ_MODES.includes(themeMode) ? 'omz' : 'dark',
+      isLightThemeMode(themeMode) ? 'light' : OMZ_MODES.includes(themeMode) ? 'omz' : 'dark',
     )
     setThemeMenuQuery('')
     setThemeMenuOpen(true)
@@ -12945,7 +12968,7 @@ export default function OpenTuiApp() {
     themeMenuOriginRef.current = null
     // A theme picked by name is the choice; it is also what following the
     // terminal will switch to on that side once it is turned back on.
-    const side = LIGHT_MODES.includes(nextTheme) ? 'light' : 'dark'
+    const side = isLightThemeMode(nextTheme) ? 'light' : 'dark'
     themeSlotsRef.current = { ...themeSlotsRef.current, [side]: nextTheme }
     themeFollowsTerminalRef.current = false
     setThemeFollowsTerminal(false)
@@ -12975,6 +12998,32 @@ export default function OpenTuiApp() {
     renderer.on('theme_mode', onThemeMode)
     return () => { renderer.off('theme_mode', onThemeMode) }
   }, [renderer])
+
+  // With a listener attached the renderer re-reads the palette itself when the
+  // terminal's appearance changes, and reports only a palette that differs.
+  useEffect(() => {
+    const onPalette = (colors: TerminalReportedColors) => {
+      setTerminalPaletteTheme(terminalPaletteTheme(colors))
+      setTerminalPaletteEpoch((epoch) => epoch + 1)
+    }
+    renderer.on('palette', onPalette)
+    return () => { renderer.off('palette', onPalette) }
+  }, [renderer])
+
+  // Asking costs a round of OSC queries, so it waits until the theme is used —
+  // chosen, restored, or passed over while browsing the theme menu. OpenTUI
+  // caches the answer, so coming back to the theme does not ask again.
+  useEffect(() => {
+    if (themeMode !== TERMINAL_PALETTE_MODE) return
+    void renderer.getPalette({ size: 16 }).then((colors) => {
+      const built = terminalPaletteTheme(colors)
+      setTerminalPaletteTheme(built)
+      setTerminalPaletteEpoch((epoch) => epoch + 1)
+      if (!built) showNotice('info', 'This terminal did not report its colours; showing the dark theme instead')
+    }).catch(() => {
+      showNotice('info', 'This terminal did not report its colours; showing the dark theme instead')
+    })
+  }, [renderer, themeMode])
 
   const toggleThemeFollowsTerminal = useEffectEvent(() => {
     const next = !themeFollowsTerminalRef.current
@@ -13998,8 +14047,11 @@ export default function OpenTuiApp() {
     }
     const seen = new Set(persisted.map((m) => m.uuid))
     const messages = [...persisted, ...liveTranscriptMessagesForSession.filter((m) => !seen.has(m.uuid))]
-    const result = openTranscriptInPager(renderer, formatTranscriptExpandedText(messages))
-    if (!result.ok) showNotice('error', `Could not open ${result.command}: ${result.error}`, 5000)
+    void openTranscriptInPager(renderer, formatTranscriptExpandedText(messages)).then((result) => {
+      if (!result.ok) showNotice('error', `Could not open ${result.command}: ${result.error}`, 5000)
+    }, (err) => {
+      showNotice('error', `Could not hand the terminal to the pager: ${err instanceof Error ? err.message : String(err)}`, 5000)
+    })
   })
 
   const openTeammatesPanel = useEffectEvent(() => {
@@ -17700,7 +17752,7 @@ export default function OpenTuiApp() {
         const offset = el ? readerLayoutOffset(el, content) : null
         if (!el || offset === null) return
         // scrollChildIntoView's rule, against the layout Yoga just produced.
-        const height = el.getLayoutNode().getComputedLayout().height
+        const height = el.getLayout().height
         const viewportRows = sb.viewport.height
         const startsAbove = offset < scrollTop
         const endsBelow = offset + height > scrollTop + viewportRows
@@ -17710,7 +17762,7 @@ export default function OpenTuiApp() {
       }
       // The scrollbar clamps to the content height it last saw, which is the
       // old window's until the content box is positioned later this frame.
-      sb.verticalScrollBar.scrollSize = Math.max(content.getLayoutNode().getComputedLayout().height, 1)
+      sb.verticalScrollBar.scrollSize = Math.max(content.getLayout().height, 1)
       sb.scrollTo(Math.max(0, nextTop))
       readerScrollSeenRef.current.top = sb.scrollTop
       pausedTranscriptScrollTopRef.current = sb.scrollTop
@@ -19978,7 +20030,7 @@ export default function OpenTuiApp() {
             : Math.min(currentGroupIndex + 1, THEME_GROUPS.length - 1)
           const newGroup = THEME_GROUPS[nextGroupIndex].key
           setThemeMenuGroup(newGroup)
-          const groupThemes = filterThemeModes(THEME_GROUPS[nextGroupIndex].themes, themeMenuQuery)
+          const groupThemes = filterThemeModes(themeGroupModes(newGroup), themeMenuQuery)
           const origin = themeMenuOriginRef.current
           const target = (origin && groupThemes.includes(origin)) ? origin : groupThemes[0]
           if (target) {
@@ -19991,7 +20043,7 @@ export default function OpenTuiApp() {
       if (key.name === 'up' || key.name === 'down') {
         handled(() => {
           const groupThemes = filterThemeModes(
-            THEME_GROUPS.find((g) => g.key === themeMenuGroup)?.themes ?? DARK_MODES,
+            themeGroupModes(themeMenuGroup),
             themeMenuQuery,
           )
           if (groupThemes.length === 0) return
@@ -20011,7 +20063,7 @@ export default function OpenTuiApp() {
       if (key.name === 'return') {
         handled(() => {
           const groupThemes = filterThemeModes(
-            THEME_GROUPS.find((g) => g.key === themeMenuGroup)?.themes ?? DARK_MODES,
+            themeGroupModes(themeMenuGroup),
             themeMenuQuery,
           )
           const currentTheme = THEMES[themeMenuIndex]
@@ -23028,7 +23080,7 @@ export default function OpenTuiApp() {
         {(() => {
           // All floating select overlays share this palette so light-themed
           // backgrounds never wash out the overlay text.
-          const ot = LIGHT_MODES.includes(themeMode) ? getThemePalette('dark') : theme
+          const ot = isLightThemeMode(themeMode) ? getThemePalette('dark') : theme
           return (<>
             {providerMenuOpen ? (
               <box
@@ -23239,11 +23291,11 @@ export default function OpenTuiApp() {
           const originTheme = themeMenuOriginRef.current
           // Use the origin palette when it's dark; fall back to 'dark' when the
           // origin is a light theme so the overlay is always readable.
-          const overlayTheme = originTheme && !LIGHT_MODES.includes(originTheme)
+          const overlayTheme = originTheme && !isLightThemeMode(originTheme)
             ? getThemePalette(originTheme)
             : getThemePalette('dark')
           const menuHeight = Math.max(15, Math.min(height - 4, 33))
-          const allGroupThemes = THEME_GROUPS.find((g) => g.key === themeMenuGroup)?.themes ?? DARK_MODES
+          const allGroupThemes = themeGroupModes(themeMenuGroup)
           const groupThemes = filterThemeModes(allGroupThemes, themeMenuQuery)
           const currentTheme = THEMES[themeMenuIndex]
           const localIndex = Math.max(

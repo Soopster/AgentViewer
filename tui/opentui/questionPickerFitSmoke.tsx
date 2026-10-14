@@ -10,8 +10,8 @@
 //
 // This drives the real OpenTUI root once per transcript view at a short
 // height and asserts the focused question stays completely answerable.
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { spawnSync } from 'child_process'
 import { fileURLToPath } from 'url'
 import { mkdtempSync } from 'fs'

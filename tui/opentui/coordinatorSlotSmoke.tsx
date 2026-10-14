@@ -11,8 +11,8 @@
 //
 // Full-App-mounted smokes use console.error + process.exit(1) rather than
 // throwing: the app's own timers keep the process alive past an uncaught throw.
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'

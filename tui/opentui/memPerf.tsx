@@ -7,8 +7,8 @@
 //
 //   bun --expose-gc tui/opentui/memPerf.tsx
 //   MEM_STEPS=40 AGENT_VIEWER_PROVIDER=all bun --expose-gc tui/opentui/memPerf.tsx
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'

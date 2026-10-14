@@ -1,11 +1,11 @@
 /** @jsxImportSource @opentui/react */
-import React, { act, useState } from 'react'
+import React, { useState } from 'react'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { testRender } from '@opentui/react/test-utils'
+import { testRender, act } from './testRender'
 import type { ScrollBoxRenderable } from '@opentui/core'
 import { GitPopover } from './GitPopover'
 import { DARK_THEME } from '../theme'

@@ -7,8 +7,8 @@
 // a single frame either — a cursor-less view and a view whose cursor happens to
 // be off screen paint the same thing — so this drives the real root and reads
 // the scroll position back.
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'

@@ -10,8 +10,8 @@
 // A clipped panel and a scrolled-to-top panel paint an IDENTICAL first frame, so
 // the only way to tell them apart is to scroll and check that content which was
 // off-screen arrives. That is what this does.
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -98,6 +98,11 @@ try {
   act(() => { setup.mockInput.pressKey('d', { shift: true }) })
   await settle(600)
   if (!setup.captureCharFrame().includes('DIAGNOSTICS')) fail('⇧D did not open the diagnostics panel')
+  // OpenTUI 0.6 frames are asynchronous, so a fixed sleep can capture the frame
+  // before the one that painted the loaded sections; wait for that frame.
+  await act(async () => {
+    await setup.waitForFrame((frame) => frame.includes('COMMANDS')).catch(() => undefined)
+  })
   if (!setup.captureCharFrame().includes('COMMANDS')) fail('diagnostics rendered no sections')
 
   // The premise: the content must not fit, or scrolling proves nothing.

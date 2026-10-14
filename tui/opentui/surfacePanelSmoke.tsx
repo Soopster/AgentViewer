@@ -3,8 +3,8 @@
 // surface panel with ⇧O, and drives the launcher's letter shortcuts. It covers
 // the wiring tsc cannot — that the panel actually takes width out of the reader,
 // that the launcher renders every surface, and that a picked surface mounts.
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'

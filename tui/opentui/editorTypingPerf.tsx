@@ -12,14 +12,14 @@
 // Each file size runs in its OWN process: the syntax highlighter, the LSP
 // client and the tree-sitter worker all carry state across a run, so sizes
 // measured in one process are not comparable.
-import React, { act, type ProfilerOnRenderCallback } from 'react'
+import React, { type ProfilerOnRenderCallback } from 'react'
 import { spawnSync } from 'node:child_process'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RGBA, SyntaxStyle, type TextareaRenderable } from '@opentui/core'
-import { testRender } from '@opentui/react/test-utils'
+import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
 import { detectTuiCodeFiletypeFromPath } from '../codeFiletypes'
 import { formatTuiFrameBudgetMs, TUI_FRAME_BUDGET_MS, TUI_TARGET_FPS } from './performanceBudget'
@@ -87,11 +87,12 @@ async function runSize(lines: number): Promise<void> {
   const expectsHighlight = Boolean(detectTuiCodeFiletypeFromPath(sourcePath))
     && !source.split('\n').some((line) => line.length > 10_000)
   await writeFile(sourcePath, source, 'utf8')
-  const syntaxStyle = SyntaxStyle.fromStyles({
+  const syntaxStyleDefinitions = {
     keyword: { fg: RGBA.fromHex(DARK_THEME.violet), bold: true },
     string: { fg: RGBA.fromHex(DARK_THEME.green) },
     default: { fg: RGBA.fromHex(DARK_THEME.text) },
-  })
+  }
+  let syntaxStyle!: SyntaxStyle
   const frames = { commits: 0, over: 0, worst: 0 }
   const renderDurations: number[] = []
   let recording = false
@@ -105,8 +106,7 @@ async function runSize(lines: number): Promise<void> {
   }
   let handleKey: ((key: EditorKeyEvent) => boolean) | null = null
 
-  const setup = await testRender(
-    <React.Profiler id="EditorPopover" onRender={onRender}>
+  const setup = await testRenderWithSyntaxStyle(syntaxStyleDefinitions, (style) => { syntaxStyle = style; return (<React.Profiler id="EditorPopover" onRender={onRender}>
       <EditorPopover
         cwd={workspace}
         initialPath={sourcePath}
@@ -117,7 +117,7 @@ async function runSize(lines: number): Promise<void> {
         onClose={() => {}}
         onKeyHandlerReady={(handler) => { handleKey = handler }}
       />
-    </React.Profiler>,
+    </React.Profiler>) },
     { width: 120, height: 36 },
   )
   try {

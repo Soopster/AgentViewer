@@ -5,8 +5,8 @@
 // flow row one line above it, and the only symptom of getting it wrong is a
 // wasted row of draft area. This pins both halves — the row lands on the
 // border, and the dock spends no height on it.
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'

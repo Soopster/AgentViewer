@@ -10,7 +10,7 @@
 //  2. THE ROOT. The window start lives in readerWindowStore so a slide
 //     re-renders the transcript window alone. The frame is identical if the
 //     root re-rendered too, so the assertion reads readRootRenderCount().
-import React, { act } from 'react'
+import React from 'react'
 import assert from 'node:assert/strict'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -19,7 +19,7 @@ import type { ScrollBoxRenderable } from '@opentui/core'
 import { buildThreadedMessages } from '../../lib/threading'
 import { formatTranscriptCards } from '../format'
 import type { Session, SessionMessage } from '../../lib/types'
-import { testRender } from '@opentui/react/test-utils'
+import { testRender, act } from './testRender'
 
 process.chdir(mkdtempSync(path.join(tmpdir(), 'agent-viewer-reader-window-')))
 const view = process.env.READER_WINDOW_SMOKE_VIEW ?? 'stream'
@@ -120,14 +120,13 @@ type Sample = { row: number; first: number; scrollTop?: number; mounted?: number
 let samples: Sample[] | null = null
 let tracking = false
 let frameNo = 0
-const root = setup.renderer.root as unknown as { render(buffer: unknown, deltaTime: number): void }
-const renderTree = root.render.bind(root)
-root.render = (buffer, deltaTime) => {
-  renderTree(buffer, deltaTime)
+// OpenTUI 0.6 paints natively, so there is no JS tree pass to wrap; the renderer's frame event fires
+// once the frame's layout is final, which is the same moment this sampled.
+setup.renderer.on('frame', () => {
   if (!tracking) return
   const sample = viewportRow()
   if (sample && samples) samples.push({ ...sample, scrollTop: scrollbox().scrollTop, mounted: mountedCards(scrollbox()).length, frame: frameNo++ })
-}
+})
 
 const settle = async (ms = 160) => {
   const until = performance.now() + ms

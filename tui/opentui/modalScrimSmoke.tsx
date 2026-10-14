@@ -2,8 +2,8 @@
 // A modal dims and drains the colour from what is behind it, and leaves itself
 // alone. The character frame is the same with or without a scrim, and the same
 // whether the panel is above it or under it, so this reads painted colours.
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'

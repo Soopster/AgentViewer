@@ -723,13 +723,17 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
     return () => { cancelled = true }
   }, [repoCwd, sessionId])
 
-  // Refresh on mount and whenever the diff source changes.
+  // Refresh on mount and whenever the diff source changes. Keyed on the source's
+  // identity, not on `refreshGitData`'s: that callback is rebuilt when the turn
+  // list arrives, and depending on it blanked a review that had just loaded and
+  // read it all over again.
+  const refreshGitDataRef = useRef(refreshGitData)
+  useLayoutEffect(() => { refreshGitDataRef.current = refreshGitData }, [refreshGitData])
   useEffect(() => {
     setData(null)
     watchSignatureRef.current = ''
-    void refreshGitData()
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- sourceKey is diffSource's identity
-  }, [repoCwd, sourceKey, refreshGitData])
+    void refreshGitDataRef.current()
+  }, [repoCwd, sourceKey])
 
   // Watching is opt-in and only runs while the review panel is mounted. The
   // patch fingerprint catches edits to an already-changed file as well as

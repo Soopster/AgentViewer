@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import assert from 'node:assert/strict'
-import React, { act, useState } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React, { useState } from 'react'
+import { testRender, act } from './testRender'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'

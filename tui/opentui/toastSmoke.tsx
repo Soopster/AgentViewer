@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/react */
-import { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+
+import { testRender, act } from './testRender'
 import { DARK_THEME } from '../theme'
 import { ToastOverlay, useToasts } from './ToastOverlay'
 import { toast, dismissAllToasts } from './toastStore'

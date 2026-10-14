@@ -1,6 +1,7 @@
 import type { ProviderSelection } from '../lib/types'
 
 export type TuiThemeMode =
+  | 'terminal-palette'
   | 'light'
   | 'paper'
   | 'solarized-light'
@@ -3247,8 +3248,67 @@ export const PROCEDURAL_THEMES: Record<ProceduralThemeName, TuiThemePalette> = O
 
 export let THEME: TuiThemePalette = LIGHT_THEME
 
+/** The colours a terminal reports for itself: its 16 ANSI slots and its default pair. */
+export type TerminalReportedColors = {
+  palette: Array<string | null>
+  defaultForeground: string | null
+  defaultBackground: string | null
+}
+
+const HEX_COLOR = /^#[0-9a-f]{6}$/i
+const reported = (value: string | null | undefined) => (value && HEX_COLOR.test(value) ? value.toLowerCase() : null)
+
+function relativeLuminance(hex: string): number {
+  const channel = (offset: number) => {
+    const value = Number.parseInt(hex.slice(offset, offset + 2), 16) / 255
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+  }
+  return 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5)
+}
+
+/**
+ * A theme made of the terminal's own colours, so the TUI looks like the rest
+ * of the terminal rather than like a theme chosen to match it. The ANSI slots
+ * carry the accents (red is slot 1 in every scheme, which is what makes this
+ * work at all); the surfaces are mixed from the default pair, because a scheme
+ * has no colours for raised panels. A slot the terminal did not report falls
+ * back to the built-in theme of the same lightness, and a terminal that
+ * reports no background at all has no theme to build: null.
+ */
+export function terminalPaletteTheme(colors: TerminalReportedColors): TuiThemePalette | null {
+  const slot = (index: number) => reported(colors.palette[index])
+  const bg = reported(colors.defaultBackground) ?? slot(0)
+  if (!bg) return null
+  const light = relativeLuminance(bg) > 0.4
+  const base = light ? LIGHT_THEME : DARK_THEME
+  const text = reported(colors.defaultForeground) ?? slot(light ? 0 : 15) ?? base.text
+  const accent = slot(4) ?? base.violet
+  const theme = swatchTheme(bg, text, mixHex(text, bg, 0.35), accent, slot(3) ?? base.amber, light)
+  return {
+    ...theme,
+    red: slot(1) ?? base.red,
+    green: slot(2) ?? base.green,
+    violet: slot(5) ?? base.violet,
+    cyan: slot(6) ?? base.cyan,
+    pink: slot(13) ?? slot(5) ?? base.pink,
+  }
+}
+
+let terminalTheme: TuiThemePalette | null = null
+
+/** Installs what the terminal reported; null until it has answered. */
+export function setTerminalPaletteTheme(theme: TuiThemePalette | null): void {
+  terminalTheme = theme
+}
+
+export function isTerminalPaletteLight(): boolean {
+  return terminalTheme !== null && relativeLuminance(terminalTheme.bg) > 0.4
+}
+
 export function getThemePalette(mode: TuiThemeMode): TuiThemePalette {
   switch (mode) {
+    // Until the terminal answers there is nothing of its own to show.
+    case 'terminal-palette': return terminalTheme ?? DARK_THEME
     case 'dark': return DARK_THEME
     case 'cyber': return CYBER_THEME
     case 'cyber-wave': return CYBER_WAVE_THEME

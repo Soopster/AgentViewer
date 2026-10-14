@@ -325,7 +325,7 @@ const { tmpdir } = await import('os')
 const path = await import('path')
 const React = (await import('react')).default
 const { act } = await import('react')
-const { testRender } = await import('@opentui/react/test-utils')
+const { testRender } = await import('./testRender')
 
 const scenario = SCENARIOS.find((s) => s.name === only)
 if (!scenario) {

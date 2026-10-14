@@ -5,8 +5,8 @@
 // The terminal answers OSC 10/11 with its colours, which is all OpenTUI infers
 // the mode from, so the smoke plays the terminal's half on stdin. Which palette
 // is active is not in the character frame, so it reads the painted background.
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { mkdtempSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'

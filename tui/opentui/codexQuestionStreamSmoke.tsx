@@ -2,8 +2,8 @@
 // Codex structured-question smoke: drives the native app-server request through
 // a live TUI turn, verifies both the transcript card and picker, then answers it
 // and checks the response payload and resolved card.
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'

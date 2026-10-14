@@ -7,12 +7,12 @@
 // then computed every offset, line number and language-server position against
 // content that was not the file. Nothing else notices — a truncated buffer
 // renders exactly like a short file.
-import React, { act } from 'react'
+import React from 'react'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RGBA, SyntaxStyle, type TextareaRenderable } from '@opentui/core'
-import { testRender } from '@opentui/react/test-utils'
+import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
 import { MAX_EDITOR_BUFFER_CHARS } from './editorLargeFile'
 import { EditorPopover } from './EditorPopover'
@@ -21,7 +21,8 @@ const BUFFER_LIMIT_CHARS = 1024 * 1024
 const workspace = await mkdtemp(join(tmpdir(), 'agent-viewer-editor-large-file-'))
 const originalServer = process.env.AGENT_VIEWER_TYPESCRIPT_LSP_BIN
 process.env.AGENT_VIEWER_TYPESCRIPT_LSP_BIN = join(workspace, 'absent-language-server')
-const syntaxStyle = SyntaxStyle.fromStyles({ default: { fg: RGBA.fromHex(DARK_THEME.text) } })
+const syntaxStyleDefinitions = { default: { fg: RGBA.fromHex(DARK_THEME.text) } }
+let syntaxStyle!: SyntaxStyle
 
 function sourceOfBytes(target: number): string {
   const lines: string[] = []
@@ -35,8 +36,7 @@ function sourceOfBytes(target: number): string {
 }
 
 async function open(path: string): Promise<{ text: string; frame: string; content: string | null }> {
-  const setup = await testRender(
-    <EditorPopover
+  const setup = await testRenderWithSyntaxStyle(syntaxStyleDefinitions, (style) => { syntaxStyle = style; return (<EditorPopover
       cwd={workspace}
       initialPath={path}
       theme={DARK_THEME}
@@ -45,7 +45,7 @@ async function open(path: string): Promise<{ text: string; frame: string; conten
       syntaxStyle={syntaxStyle}
       onClose={() => {}}
       onKeyHandlerReady={() => {}}
-    />,
+    />) },
     { width: 100, height: 28 },
   )
   try {

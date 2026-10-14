@@ -1,10 +1,10 @@
 /** @jsxImportSource @opentui/react */
-import React, { act } from 'react'
+import React from 'react'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RGBA, SyntaxStyle } from '@opentui/core'
-import { testRender } from '@opentui/react/test-utils'
+import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
 import { EditorPopover, type EditorKeyEvent } from './EditorPopover'
 
@@ -19,7 +19,8 @@ function assert(condition: unknown, message: string): asserts condition {
 
 const cwd = await mkdtemp(join(tmpdir(), 'agent-viewer-recent-'))
 let keyHandler: ((key: EditorKeyEvent) => boolean) | null = null
-const syntaxStyle = SyntaxStyle.fromStyles({ default: { fg: RGBA.fromHex(DARK_THEME.text) } })
+const syntaxStyleDefinitions = { default: { fg: RGBA.fromHex(DARK_THEME.text) } }
+let syntaxStyle!: SyntaxStyle
 
 try {
   // Enough files that an unordered list would not put ours near the top, and
@@ -30,11 +31,10 @@ try {
   await writeFile(join(cwd, 'zeta-worked-in.txt'), 'one\n', 'utf8')
   await writeFile(join(cwd, 'yankee-worked-in.txt'), 'two\n', 'utf8')
 
-  const setup = await testRender(
-    <EditorPopover cwd={cwd} initialPath={join(cwd, 'aaa-filler-00.txt')} theme={DARK_THEME}
+  const setup = await testRenderWithSyntaxStyle(syntaxStyleDefinitions, (style) => { syntaxStyle = style; return (<EditorPopover cwd={cwd} initialPath={join(cwd, 'aaa-filler-00.txt')} theme={DARK_THEME}
       width={110} height={30} syntaxStyle={syntaxStyle} onClose={() => {}}
       onKeyHandlerReady={(handler) => { keyHandler = handler }} onNotice={() => {}}
-      onClipboardRead={async () => ''} onClipboardWrite={async () => {}} />,
+      onClipboardRead={async () => ''} onClipboardWrite={async () => {}} />) },
     { width: 110, height: 30 },
   )
   const settle = async (ms = 300) => {

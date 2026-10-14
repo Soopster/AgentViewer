@@ -3,8 +3,8 @@
 // real tool_result) through the composer and asserts the streaming card shows
 // the tool as running until its output arrives, then shows the real outcome —
 // never a synthesized "output will appear when the transcript syncs" filler.
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'

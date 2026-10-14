@@ -7,8 +7,8 @@
 // the view is a set of prop choices inside the stream branch, so the only way
 // to know a message kept its rule or lost its marker is to render it and read
 // the frame back.
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'

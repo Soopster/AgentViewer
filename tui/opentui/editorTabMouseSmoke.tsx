@@ -1,10 +1,10 @@
 /** @jsxImportSource @opentui/react */
-import React, { act } from 'react'
+import React from 'react'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RGBA, SyntaxStyle } from '@opentui/core'
-import { testRender } from '@opentui/react/test-utils'
+import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
 import { EditorPopover } from './EditorPopover'
 import { registerExtraTreeSitterParsers } from './treeSitterParsers'
@@ -20,9 +20,10 @@ const cwd = await mkdtemp(join(tmpdir(), 'agent-viewer-editor-tab-mouse-'))
 const firstPath = join(cwd, 'first.ts')
 const secondPath = join(cwd, 'second.ts')
 
-const syntaxStyle = SyntaxStyle.fromStyles({
+const syntaxStyleDefinitions = {
   default: { fg: RGBA.fromHex(DARK_THEME.text) },
-})
+}
+let syntaxStyle!: SyntaxStyle
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message)
@@ -35,8 +36,7 @@ try {
   // do with the tab bar and would only add seconds of startup.
   process.env.AGENT_VIEWER_LSP_IDLE_MS = '0'
 
-  const setup = await testRender(
-    <EditorPopover
+  const setup = await testRenderWithSyntaxStyle(syntaxStyleDefinitions, (style) => { syntaxStyle = style; return (<EditorPopover
       cwd={cwd}
       initialPath={firstPath}
       theme={DARK_THEME}
@@ -48,7 +48,7 @@ try {
       onNotice={() => {}}
       onClipboardRead={async () => ''}
       onClipboardWrite={async () => {}}
-    />,
+    />) },
     { width: 110, height: 30 },
   )
 

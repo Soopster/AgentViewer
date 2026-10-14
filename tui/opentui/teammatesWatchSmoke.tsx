@@ -8,8 +8,8 @@
 // Teammates join as external participants so no provider runs; the one seam
 // mocked is the transcript resolver, which refuses external participants, so
 // each teammate maps to a fixture session whose transcript names it.
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'

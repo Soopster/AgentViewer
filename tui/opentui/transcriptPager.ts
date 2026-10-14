@@ -8,9 +8,22 @@ import path from 'node:path'
 // written to a temporary file and opened in the user's pager or editor while
 // the renderer is suspended, the way Claude Code's fullscreen `v` does.
 
+// OpenTUI 0.6 hands the terminal back asynchronously: suspend() resolves once
+// the alternate screen, raw mode and mouse reporting are actually off. A child
+// started before that inherits a terminal still in the renderer's modes.
 export type TranscriptPagerRenderer = {
-  suspend(): void
-  resume(): void
+  suspend(): Promise<void>
+  resume(): Promise<void>
+}
+
+async function withTerminalHandedBack<T>(renderer: TranscriptPagerRenderer, run: () => T): Promise<T> {
+  await renderer.suspend()
+  try {
+    return run()
+  } finally {
+    // A failed editor must not leave a frozen app.
+    await renderer.resume()
+  }
 }
 
 export type PagerEnv = Record<string, string | undefined>
@@ -26,28 +39,28 @@ export function transcriptPagerCommand(env: PagerEnv = process.env, platform = p
   return platform === 'win32' ? 'more' : 'less'
 }
 
-export function openTranscriptInPager(
+export async function openTranscriptInPager(
   renderer: TranscriptPagerRenderer,
   text: string,
   options: { env?: PagerEnv; platform?: NodeJS.Platform } = {},
-): { ok: true; command: string } | { ok: false; command: string; error: string } {
+): Promise<{ ok: true; command: string } | { ok: false; command: string; error: string }> {
   const platform = options.platform ?? process.platform
   const command = transcriptPagerCommand(options.env, platform)
   const dir = mkdtempSync(path.join(tmpdir(), 'agent-viewer-transcript-'))
   const file = path.join(dir, 'transcript.txt')
   writeFileSync(file, text, { mode: 0o600 })
-  renderer.suspend()
   try {
-    const result = platform === 'win32'
-      ? spawnSync(`${command} "${file}"`, { stdio: 'inherit', shell: true })
-      : spawnSync('/bin/sh', ['-c', `${command} "$1"`, 'sh', file], { stdio: 'inherit' })
-    if (result.error) return { ok: false, command, error: result.error.message }
-    if (result.status !== 0 && result.status !== null) {
-      return { ok: false, command, error: `exited with status ${result.status}` }
-    }
-    return { ok: true, command }
+    return await withTerminalHandedBack(renderer, () => {
+      const result = platform === 'win32'
+        ? spawnSync(`${command} "${file}"`, { stdio: 'inherit', shell: true })
+        : spawnSync('/bin/sh', ['-c', `${command} "$1"`, 'sh', file], { stdio: 'inherit' })
+      if (result.error) return { ok: false as const, command, error: result.error.message }
+      if (result.status !== 0 && result.status !== null) {
+        return { ok: false as const, command, error: `exited with status ${result.status}` }
+      }
+      return { ok: true as const, command }
+    })
   } finally {
-    renderer.resume()
     rmSync(dir, { recursive: true, force: true })
   }
 }
@@ -57,30 +70,30 @@ export function openTranscriptInPager(
  * back to vi, not a pager — this one is for writing) and comes back as whatever
  * was saved. An editor that fails hands back nothing, so the draft is kept.
  */
-export function editTextInEditor(
+export async function editTextInEditor(
   renderer: TranscriptPagerRenderer,
   text: string,
   options: { env?: PagerEnv; platform?: NodeJS.Platform } = {},
-): { ok: true; text: string } | { ok: false; command: string; error: string } {
+): Promise<{ ok: true; text: string } | { ok: false; command: string; error: string }> {
   const env = options.env ?? process.env
   const platform = options.platform ?? process.platform
   const command = env.VISUAL?.trim() || env.EDITOR?.trim() || (platform === 'win32' ? 'notepad' : 'vi')
   const dir = mkdtempSync(path.join(tmpdir(), 'agent-viewer-prompt-'))
   const file = path.join(dir, 'prompt.md')
   writeFileSync(file, text, { mode: 0o600 })
-  renderer.suspend()
   try {
-    const result = platform === 'win32'
-      ? spawnSync(`${command} "${file}"`, { stdio: 'inherit', shell: true })
-      : spawnSync('/bin/sh', ['-c', `${command} "$1"`, 'sh', file], { stdio: 'inherit' })
-    if (result.error) return { ok: false, command, error: result.error.message }
-    if (result.status !== 0 && result.status !== null) {
-      return { ok: false, command, error: `exited with status ${result.status}` }
-    }
-    // Editors add a trailing newline on save; a prompt does not want it.
-    return { ok: true, text: readFileSync(file, 'utf8').replace(/\r?\n$/, '') }
+    return await withTerminalHandedBack(renderer, () => {
+      const result = platform === 'win32'
+        ? spawnSync(`${command} "${file}"`, { stdio: 'inherit', shell: true })
+        : spawnSync('/bin/sh', ['-c', `${command} "$1"`, 'sh', file], { stdio: 'inherit' })
+      if (result.error) return { ok: false as const, command, error: result.error.message }
+      if (result.status !== 0 && result.status !== null) {
+        return { ok: false as const, command, error: `exited with status ${result.status}` }
+      }
+      // Editors add a trailing newline on save; a prompt does not want it.
+      return { ok: true as const, text: readFileSync(file, 'utf8').replace(/\r?\n$/, '') }
+    })
   } finally {
-    renderer.resume()
     rmSync(dir, { recursive: true, force: true })
   }
 }

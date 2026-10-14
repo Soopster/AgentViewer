@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/react */
-import React, { act } from 'react'
+import React from 'react'
 import assert from 'node:assert/strict'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -8,7 +8,7 @@ import type { ScrollBoxRenderable } from '@opentui/core'
 import { buildThreadedMessages } from '../../lib/threading'
 import { formatTranscriptCards } from '../format'
 import type { Session, SessionMessage } from '../../lib/types'
-import { testRender } from '@opentui/react/test-utils'
+import { testRender, act } from './testRender'
 
 process.chdir(mkdtempSync(path.join(tmpdir(), 'agent-viewer-tab-position-')))
 const count = Number(process.env.TUI_TAB_POSITION_MESSAGES ?? 600)

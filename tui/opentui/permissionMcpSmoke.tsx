@@ -7,8 +7,8 @@
 // options and reason rows survive beside it. It does NOT pin the height plan's
 // extra row: at this terminal size the plan has slack, and dropping the
 // reservation was checked to still pass.
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { mkdtempSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'

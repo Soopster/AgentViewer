@@ -1,10 +1,10 @@
 /** @jsxImportSource @opentui/react */
-import React, { act } from 'react'
+import React from 'react'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RGBA, SyntaxStyle, type TextareaRenderable } from '@opentui/core'
-import { testRender } from '@opentui/react/test-utils'
+import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
 import { EditorPopover, type EditorKeyEvent } from './EditorPopover'
 import { continuesTypingRun, MAX_UNDO_RUN_STEPS, undoTypingRun, type UndoableEditor } from './editorUndoRuns'
@@ -73,15 +73,15 @@ console.log('Editor undo-run detection smoke passed')
 const cwd = await mkdtemp(join(tmpdir(), 'agent-viewer-undo-run-'))
 const filePath = join(cwd, 'main.txt')
 let keyHandler: ((key: EditorKeyEvent) => boolean) | null = null
-const syntaxStyle = SyntaxStyle.fromStyles({ default: { fg: RGBA.fromHex(DARK_THEME.text) } })
+const syntaxStyleDefinitions = { default: { fg: RGBA.fromHex(DARK_THEME.text) } }
+let syntaxStyle!: SyntaxStyle
 
 try {
   await writeFile(filePath, 'start\n', 'utf8')
 
-  const setup = await testRender(
-    <EditorPopover cwd={cwd} initialPath={filePath} theme={DARK_THEME} width={100} height={26}
+  const setup = await testRenderWithSyntaxStyle(syntaxStyleDefinitions, (style) => { syntaxStyle = style; return (<EditorPopover cwd={cwd} initialPath={filePath} theme={DARK_THEME} width={100} height={26}
       syntaxStyle={syntaxStyle} onClose={() => {}} onKeyHandlerReady={(handler) => { keyHandler = handler }}
-      onNotice={() => {}} onClipboardRead={async () => ''} onClipboardWrite={async () => {}} />,
+      onNotice={() => {}} onClipboardRead={async () => ''} onClipboardWrite={async () => {}} />) },
     { width: 100, height: 26 },
   )
   const settle = async (ms = 300) => {

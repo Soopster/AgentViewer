@@ -6,8 +6,8 @@
 // Full-App-mounted smokes use console.error + process.exit(1) instead of
 // throwing (matching coordSmoke.tsx) — the app's own live timers (session
 // polls, heartbeats) keep the process alive past an uncaught throw.
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { execFileSync } from 'child_process'
 import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'

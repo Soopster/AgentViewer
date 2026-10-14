@@ -7,8 +7,8 @@
 // tree says nothing about it — the only way to know the frame is painted, and
 // that it keeps moving, is to render the real app against the real running
 // registry and read the frame back.
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'

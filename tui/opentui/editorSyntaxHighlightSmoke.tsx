@@ -9,12 +9,12 @@
 // answers with only the lines it re-parsed, so if the decoration already on
 // the lines below does not move with the text, inserting one line at the top
 // smears every color in the file down by a row.
-import React, { act } from 'react'
+import React from 'react'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RGBA, SyntaxStyle, type TextareaRenderable } from '@opentui/core'
-import { testRender } from '@opentui/react/test-utils'
+import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
 import { EditorPopover, type EditorKeyEvent } from './EditorPopover'
 
@@ -26,11 +26,12 @@ const originalServer = process.env.AGENT_VIEWER_TYPESCRIPT_LSP_BIN
 process.env.AGENT_VIEWER_TYPESCRIPT_LSP_BIN = join(workspace, 'absent-language-server')
 let handleKey: ((key: EditorKeyEvent) => boolean) | null = null
 
-const syntaxStyle = SyntaxStyle.fromStyles({
+const syntaxStyleDefinitions = {
   keyword: { fg: RGBA.fromHex(KEYWORD_HEX), bold: true },
   string: { fg: RGBA.fromHex(STRING_HEX) },
   default: { fg: RGBA.fromHex(DARK_THEME.text) },
-})
+}
+let syntaxStyle!: SyntaxStyle
 
 async function settle(setup: Awaited<ReturnType<typeof testRender>>, durationMs: number): Promise<void> {
   const deadline = performance.now() + durationMs
@@ -51,8 +52,7 @@ try {
     '',
   ].join('\n'), 'utf8')
 
-  const setup = await testRender(
-    <EditorPopover
+  const setup = await testRenderWithSyntaxStyle(syntaxStyleDefinitions, (style) => { syntaxStyle = style; return (<EditorPopover
       cwd={workspace}
       initialPath={sourcePath}
       theme={DARK_THEME}
@@ -61,7 +61,7 @@ try {
       syntaxStyle={syntaxStyle}
       onClose={() => {}}
       onKeyHandlerReady={(handler) => { handleKey = handler }}
-    />,
+    />) },
     { width: 100, height: 26 },
   )
 

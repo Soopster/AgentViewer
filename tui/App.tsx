@@ -535,7 +535,7 @@ function Scrollbar({
 
 export default function App() {
   const { exit } = useApp()
-  const { stdout } = useStdout()
+  const stdout = useStdout().stdout as NodeJS.WriteStream
 
   const [provider, setProvider] = useState<ProviderSelection>('claude')
   const [themeMode, setThemeMode] = useState<TuiThemeMode>('light')

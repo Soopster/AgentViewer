@@ -1,11 +1,11 @@
 /** @jsxImportSource @opentui/react */
-import React, { act } from 'react'
+import React from 'react'
 import { execFile } from 'node:child_process'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import { testRender } from '@opentui/react/test-utils'
+import { testRender, act } from './testRender'
 import { DARK_THEME } from '../theme'
 import { GitPopover } from './GitPopover'
 

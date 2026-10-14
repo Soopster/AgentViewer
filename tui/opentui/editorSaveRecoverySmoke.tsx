@@ -1,23 +1,24 @@
 /** @jsxImportSource @opentui/react */
-import React, { act } from 'react'
+import React from 'react'
 import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RGBA, SyntaxStyle, type TextareaRenderable } from '@opentui/core'
-import { testRender } from '@opentui/react/test-utils'
+import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
 import { EditorPopover, type EditorKeyEvent } from './EditorPopover'
 import { readEditorRecovery } from './editorRecovery'
 
 const root = await mkdtemp(join(tmpdir(), 'editor-save-recovery-'))
-const syntaxStyle = SyntaxStyle.fromStyles({ default: { fg: RGBA.fromHex(DARK_THEME.text) } })
+const syntaxStyleDefinitions = { default: { fg: RGBA.fromHex(DARK_THEME.text) } }
+let syntaxStyle!: SyntaxStyle
 let handleKey: ((key: EditorKeyEvent) => boolean) | null = null
 try {
   await writeFile(join(root, 'file.txt'), 'original\n')
-  const setup = await testRender(<EditorPopover cwd={root} initialPath="file.txt" theme={DARK_THEME}
+  const setup = await testRenderWithSyntaxStyle(syntaxStyleDefinitions, (style) => { syntaxStyle = style; return (<EditorPopover cwd={root} initialPath="file.txt" theme={DARK_THEME}
     width={100} height={30} syntaxStyle={syntaxStyle} onClose={() => {}}
-    onKeyHandlerReady={(handler) => { handleKey = handler }} />, { width: 100, height: 30 })
+    onKeyHandlerReady={(handler) => { handleKey = handler }} />) }, { width: 100, height: 30 })
   const settle = async () => {
     for (let i = 0; i < 12; i++) await act(async () => {
       await setup.flush()

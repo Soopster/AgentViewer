@@ -1601,7 +1601,12 @@ function formatTaskTool(thread: ToolThread, expanded: boolean, activeForms?: Tas
           const subject = activeForm && activeForm.trim() ? activeForm.trim() : baseSubject
           const owner = t.owner ?? registryTask?.owner
           const ownerTag = owner ? ` @${owner}` : ''
-          const eventCount = registryTask && registryTask.events.length > 1 ? `${registryTask.events.length} events` : ''
+          const taskMeta = [
+            registryTask && registryTask.events.length > 1 ? `${registryTask.events.length} events` : '',
+            registryTask?.parentTaskId ? `from #${registryTask.parentTaskId}` : '',
+            registryTask?.runIds && registryTask.runIds.length > 1 ? `run ${registryTask.runIds.length}` : '',
+          ].filter(Boolean)
+          const eventCount = taskMeta.join(' · ')
           lines.push(line(`${icon} ${idTag}${truncateLine(subject)}${ownerTag}`, tone))
           if (eventCount) lines.push(line(`  ${eventCount}`, 'dim'))
           if (expanded && Array.isArray(t.blockedBy)) {

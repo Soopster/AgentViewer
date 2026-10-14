@@ -1,11 +1,11 @@
 /** @jsxImportSource @opentui/react */
-import React, { act } from 'react'
+import React from 'react'
 import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RGBA, SyntaxStyle } from '@opentui/core'
 import type { ScrollBarRenderable, ScrollBoxRenderable, TextareaRenderable } from '@opentui/core'
-import { testRender } from '@opentui/react/test-utils'
+import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
 import { EditorPopover, type EditorKeyEvent } from './EditorPopover'
 import { registerExtraTreeSitterParsers } from './treeSitterParsers'
@@ -21,13 +21,14 @@ let clipboardText = ''
 const notices: Array<{ kind: 'info' | 'error'; message: string }> = []
 registerExtraTreeSitterParsers()
 
-const syntaxStyle = SyntaxStyle.fromStyles({
+const syntaxStyleDefinitions = {
   keyword: { fg: RGBA.fromHex(DARK_THEME.violet), bold: true },
   string: { fg: RGBA.fromHex(DARK_THEME.green) },
   function: { fg: RGBA.fromHex(DARK_THEME.cyan) },
   variable: { fg: RGBA.fromHex(DARK_THEME.text) },
   default: { fg: RGBA.fromHex(DARK_THEME.text) },
-})
+}
+let syntaxStyle!: SyntaxStyle
 
 function editorPositionInside(editor: TextareaRenderable, offset: number): { line: number; character: number } {
   const before = editor.plainText.slice(0, offset)
@@ -187,8 +188,7 @@ process.stdin.on('data', (chunk) => {
   await Promise.all(Array.from({ length: 36 }, (_, index) => (
     writeFile(join(cwd, `fixture-${String(index).padStart(2, '0')}.ts`), `export const fixture${index} = ${index}\n`, 'utf8')
   )))
-  const setup = await testRender(
-    <EditorPopover
+  const setup = await testRenderWithSyntaxStyle(syntaxStyleDefinitions, (style) => { syntaxStyle = style; return (<EditorPopover
       cwd={cwd}
       initialPath={filePath}
       theme={DARK_THEME}
@@ -200,7 +200,7 @@ process.stdin.on('data', (chunk) => {
       onNotice={(kind, message) => { notices.push({ kind, message }) }}
       onClipboardRead={async () => clipboardText}
       onClipboardWrite={async (text) => { clipboardText = text }}
-    />,
+    />) },
     { width: 110, height: 34 },
   )
 

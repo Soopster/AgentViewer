@@ -1,6 +1,6 @@
 import { mkdir, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import matter from 'gray-matter'
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { isAgentProvider } from './provider'
 import type { AgentProvider } from './types'
 
@@ -115,9 +115,24 @@ function buildPreview(body: string): string {
   return flat.length > PREVIEW_LENGTH ? `${flat.slice(0, PREVIEW_LENGTH).trimEnd()}…` : flat
 }
 
+const FRONTMATTER_PATTERN = /^---[ \t]*\r?\n(?:([\s\S]*?)\r?\n)?---[ \t]*(?:\r?\n|$)/
+
+/** Split a markdown file into its YAML frontmatter and body; a file with none (or unparseable YAML) is all body. */
+function parseFrontmatter(raw: string): { data: Record<string, unknown>; content: string } {
+  const match = FRONTMATTER_PATTERN.exec(raw.replace(/^\uFEFF/, ''))
+  if (!match) return { data: {}, content: raw }
+  try {
+    const data = parseYaml(match[1] ?? '')
+    const isRecord = data !== null && typeof data === 'object' && !Array.isArray(data)
+    return { data: isRecord ? (data as Record<string, unknown>) : {}, content: raw.slice(match[0].length) }
+  } catch {
+    return { data: {}, content: raw }
+  }
+}
+
 function toRecord(slug: string, raw: string): PromptRecord {
-  const parsed = matter(raw)
-  const meta = normalizeMeta(slug, parsed.data as Record<string, unknown>)
+  const parsed = parseFrontmatter(raw)
+  const meta = normalizeMeta(slug, parsed.data)
   const body = parsed.content.trim()
   return { meta, body, placeholders: extractPlaceholders(body) }
 }
@@ -132,7 +147,7 @@ export function serializePrompt(meta: Omit<PromptMeta, 'slug'>, body: string): s
   if (meta.description) data.description = meta.description
   if (meta.tags.length) data.tags = meta.tags
   if (meta.providers.length) data.providers = meta.providers
-  return matter.stringify(`${body.trim()}\n`, data)
+  return `---\n${stringifyYaml(data)}---\n${body.trim()}\n`
 }
 
 async function readPromptFile(slug: string): Promise<PromptRecord | null> {

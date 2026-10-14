@@ -14,8 +14,8 @@
 // unanswerable. So the plan owns the preview lines and the render draws exactly
 // those; this file asserts both halves, including that the preview is the first
 // thing dropped when the card cannot hold everything.
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'

@@ -16,8 +16,8 @@
 // Ordering matters here and is not cosmetic: the editor covers the transcript, so
 // the file-path click has to come last or every later click lands on the editor
 // and the negative assertions pass against nothing.
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'

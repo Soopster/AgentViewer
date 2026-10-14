@@ -6,12 +6,12 @@
 // one character, save, and every line in the file had changed. Nothing else
 // could catch it — the editor renders a CRLF file and an LF file identically,
 // and the diff only appears in git.
-import React, { act } from 'react'
+import React from 'react'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RGBA, SyntaxStyle, type TextareaRenderable } from '@opentui/core'
-import { testRender } from '@opentui/react/test-utils'
+import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
 import {
   applyEditorLineEnding,
@@ -34,15 +34,15 @@ const workspace = await mkdtemp(join(tmpdir(), 'agent-viewer-editor-line-ending-
 const sourcePath = join(workspace, 'main.ts')
 const originalServer = process.env.AGENT_VIEWER_TYPESCRIPT_LSP_BIN
 process.env.AGENT_VIEWER_TYPESCRIPT_LSP_BIN = join(workspace, 'absent-language-server')
-const syntaxStyle = SyntaxStyle.fromStyles({ default: { fg: RGBA.fromHex(DARK_THEME.text) } })
+const syntaxStyleDefinitions = { default: { fg: RGBA.fromHex(DARK_THEME.text) } }
+let syntaxStyle!: SyntaxStyle
 let handleKey: ((key: EditorKeyEvent) => boolean) | null = null
 
 try {
   const original = `const alpha = 1${CRLF}const bravo = 2${CRLF}const charlie = 3${CRLF}`
   await writeFile(sourcePath, original, 'utf8')
 
-  const setup = await testRender(
-    <EditorPopover
+  const setup = await testRenderWithSyntaxStyle(syntaxStyleDefinitions, (style) => { syntaxStyle = style; return (<EditorPopover
       cwd={workspace}
       initialPath={sourcePath}
       theme={DARK_THEME}
@@ -51,7 +51,7 @@ try {
       syntaxStyle={syntaxStyle}
       onClose={() => {}}
       onKeyHandlerReady={(handler) => { handleKey = handler }}
-    />,
+    />) },
     { width: 96, height: 24 },
   )
   const settle = async (durationMs: number) => {

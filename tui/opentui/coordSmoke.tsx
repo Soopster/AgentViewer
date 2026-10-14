@@ -3,8 +3,8 @@
 // dir, then against a seeded ledger, asserting the fleet, work-board, agent,
 // activity, prompt, and keyboard surfaces render together. Hermetic — the coordination DB
 // resolves from process.cwd(), so chdir BEFORE importing anything that opens it.
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'

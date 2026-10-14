@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { formatTranscriptExpandedText } from '../format'
@@ -48,30 +48,43 @@ assert.equal(transcriptPagerCommand({ EDITOR: 'vim' }, 'darwin'), 'vim')
 assert.equal(transcriptPagerCommand({ VISUAL: '  ', EDITOR: '' }, 'darwin'), 'less')
 assert.equal(transcriptPagerCommand({}, 'win32'), 'more')
 
-// A fake editor that records what it was handed, and proves the renderer was
-// suspended while it ran.
+// A fake editor that records what it was handed, and whether the terminal had
+// been handed back when it started. OpenTUI 0.6's suspend() resolves only once
+// the terminal is restored, so this renderer takes a while to resolve and marks
+// the moment it does; an editor started on the call rather than the resolution
+// finds no mark.
 const dir = mkdtempSync(path.join(tmpdir(), 'pager-smoke-'))
 const captured = path.join(dir, 'captured.txt')
 const pathLog = path.join(dir, 'path.txt')
+const handedBack = path.join(dir, 'handed-back')
+const sawTerminal = path.join(dir, 'saw-terminal.txt')
 const editor = path.join(dir, 'fake editor.sh')
-writeFileSync(editor, `#!/bin/sh\ncat "$1" > "${captured}"\nprintf '%s' "$1" > "${pathLog}"\n`)
+writeFileSync(editor, `#!/bin/sh\ncat "$1" > "${captured}"\nprintf '%s' "$1" > "${pathLog}"\nif [ -f "${handedBack}" ]; then echo yes; else echo no; fi > "${sawTerminal}"\n`)
 chmodSync(editor, 0o755)
 
 const events: string[] = []
 const renderer = {
-  suspend: () => events.push('suspend'),
-  resume: () => events.push('resume'),
+  suspend: async () => {
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    writeFileSync(handedBack, '')
+    events.push('suspend')
+  },
+  resume: async () => {
+    rmSync(handedBack, { force: true })
+    events.push('resume')
+  },
 }
 
-const ok = openTranscriptInPager(renderer, text, { env: { VISUAL: `"${editor}"` } })
+const ok = await openTranscriptInPager(renderer, text, { env: { VISUAL: `"${editor}"` } })
 assert.deepEqual(ok, { ok: true, command: `"${editor}"` })
 assert.deepEqual(events, ['suspend', 'resume'])
+assert.equal(readFileSync(sawTerminal, 'utf8').trim(), 'yes', 'the editor started before the terminal was handed back')
 assert.equal(readFileSync(captured, 'utf8'), text, 'the editor must receive the transcript verbatim')
 assert.equal(existsSync(readFileSync(pathLog, 'utf8')), false, 'the temporary transcript must be removed')
 
 // A failing editor still resumes the renderer, and says why.
 events.length = 0
-const failed = openTranscriptInPager(renderer, text, { env: { EDITOR: 'false' } })
+const failed = await openTranscriptInPager(renderer, text, { env: { EDITOR: 'false' } })
 assert.equal(failed.ok, false)
 assert.match(!failed.ok ? failed.error : '', /status 1/)
 assert.deepEqual(events, ['suspend', 'resume'], 'a failed editor must not leave the renderer suspended')

@@ -1,15 +1,16 @@
 /** @jsxImportSource @opentui/react */
-import React, { act, useEffect, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SyntaxStyle } from '@opentui/core'
-import { testRender } from '@opentui/react/test-utils'
+import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
 import { FileViewerPopover, type FileViewerKeyEvent } from './FileViewerPopover'
 
 const workspace = await mkdtemp(join(tmpdir(), 'file-viewer-preview-'))
-const syntaxStyle = SyntaxStyle.fromStyles({})
+const syntaxStyleDefinitions = {}
+let syntaxStyle!: SyntaxStyle
 let handleKey: (key: FileViewerKeyEvent) => void = () => {}
 function Harness() {
   const [tick, setTick] = useState(0)
@@ -27,7 +28,7 @@ function Harness() {
 
 await writeFile(join(workspace, 'a.txt'), 'FIRST_FILE_CONTENTS')
 await writeFile(join(workspace, 'b.txt'), 'SECOND_FILE_CONTENTS')
-const setup = await testRender(<Harness />, { width: 120, height: 30 })
+const setup = await testRenderWithSyntaxStyle(syntaxStyleDefinitions, (style) => { syntaxStyle = style; return (<Harness />) }, { width: 120, height: 30 })
 async function expectContents(contents: string) {
   const deadline = performance.now() + 3000
   while (performance.now() < deadline) {

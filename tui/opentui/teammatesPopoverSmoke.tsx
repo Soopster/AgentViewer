@@ -7,8 +7,8 @@
 // process.exit(1) rather than throwing: the app's own timers keep the process
 // alive past an uncaught throw.
 import { createHash } from 'node:crypto'
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'

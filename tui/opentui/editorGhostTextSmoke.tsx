@@ -8,12 +8,12 @@
 // buffer and — the moment anyone pressed save — the file on disk. So this
 // checks both halves every time: that the ghost is on screen, and that the
 // document does not contain it.
-import React, { act } from 'react'
+import React from 'react'
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RGBA, SyntaxStyle, type TextareaRenderable } from '@opentui/core'
-import { testRender } from '@opentui/react/test-utils'
+import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
 import { EditorPopover, editorGhostCandidate, editorGhostSuffix, type EditorKeyEvent } from './EditorPopover'
 
@@ -85,10 +85,11 @@ const originalServer = process.env.AGENT_VIEWER_TYPESCRIPT_LSP_BIN
 let handleKey: ((key: EditorKeyEvent) => boolean) | null = null
 
 const GHOST_HEX = DARK_THEME.dim
-const syntaxStyle = SyntaxStyle.fromStyles({
+const syntaxStyleDefinitions = {
   keyword: { fg: RGBA.fromHex(DARK_THEME.violet), bold: true },
   default: { fg: RGBA.fromHex(DARK_THEME.text) },
-})
+}
+let syntaxStyle!: SyntaxStyle
 
 try {
   await writeFile(serverPath, String.raw`#!/usr/bin/env node
@@ -125,8 +126,7 @@ process.stdin.on('data', (chunk) => {
   process.env.AGENT_VIEWER_TYPESCRIPT_LSP_BIN = serverPath
   await writeFile(sourcePath, 'const seed = 0\n', 'utf8')
 
-  const setup = await testRender(
-    <EditorPopover
+  const setup = await testRenderWithSyntaxStyle(syntaxStyleDefinitions, (style) => { syntaxStyle = style; return (<EditorPopover
       cwd={workspace}
       initialPath={sourcePath}
       theme={DARK_THEME}
@@ -135,7 +135,7 @@ process.stdin.on('data', (chunk) => {
       syntaxStyle={syntaxStyle}
       onClose={() => {}}
       onKeyHandlerReady={(handler) => { handleKey = handler }}
-    />,
+    />) },
     { width: 110, height: 30 },
   )
   const settle = async (durationMs: number) => {

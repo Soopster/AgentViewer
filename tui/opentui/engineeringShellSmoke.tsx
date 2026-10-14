@@ -1,8 +1,8 @@
 /** @jsxImportSource @opentui/react */
 // Real-root layout and keyboard regression at narrow, standard and wide sizes.
 // Fixture data is deterministic; no provider sends are performed.
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'

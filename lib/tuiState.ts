@@ -8,6 +8,7 @@ import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../tui/theme'
 const TUI_STATE_FILE = path.join(process.cwd(), '.agent-viewer-data', 'tui.json')
 const VALID_TUI_THEMES: readonly TuiThemeMode[] = [
   ...PROCEDURAL_THEME_NAMES,
+  'terminal-palette',
   'light',
   'paper',
   'solarized-light',

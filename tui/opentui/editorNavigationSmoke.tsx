@@ -12,12 +12,12 @@
 // Keys go through the popover's own handleKey first, exactly as App.tsx routes
 // them, and fall through to the focused textarea only when the popover
 // declines — a smoke that types into the textarea alone tests none of this.
-import React, { act } from 'react'
+import React from 'react'
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RGBA, SyntaxStyle, type TextareaRenderable } from '@opentui/core'
-import { testRender } from '@opentui/react/test-utils'
+import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
 import { EditorPopover, type EditorKeyEvent } from './EditorPopover'
 import {
@@ -60,7 +60,8 @@ const betaPath = join(workspace, 'beta.ts')
 const serverPath = join(workspace, 'fake-lsp')
 const originalServer = process.env.AGENT_VIEWER_TYPESCRIPT_LSP_BIN
 let handleKey: ((key: EditorKeyEvent) => boolean) | null = null
-const syntaxStyle = SyntaxStyle.fromStyles({ default: { fg: RGBA.fromHex(DARK_THEME.text) } })
+const syntaxStyleDefinitions = { default: { fg: RGBA.fromHex(DARK_THEME.text) } }
+let syntaxStyle!: SyntaxStyle
 
 const ALPHA = 'const alphaOne = 1\nconst alphaTwo = 2\nconst alphaThree = 3\nconst alphaFour = 4\nconst alphaFive = 5\nconst alphaSix = 6\n'
 const BETA = 'const betaOne = 1\nconst betaTwo = 2\nconst betaThree = 3\nconst betaFour = 4\n'
@@ -98,8 +99,7 @@ process.stdin.on('data', (chunk) => {
   await writeFile(alphaPath, ALPHA, 'utf8')
   await writeFile(betaPath, BETA, 'utf8')
 
-  const setup = await testRender(
-    <EditorPopover
+  const setup = await testRenderWithSyntaxStyle(syntaxStyleDefinitions, (style) => { syntaxStyle = style; return (<EditorPopover
       cwd={workspace}
       initialPath={alphaPath}
       theme={DARK_THEME}
@@ -108,7 +108,7 @@ process.stdin.on('data', (chunk) => {
       syntaxStyle={syntaxStyle}
       onClose={() => {}}
       onKeyHandlerReady={(handler) => { handleKey = handler }}
-    />,
+    />) },
     { width: 110, height: 30 },
   )
   const settle = async (durationMs: number) => {

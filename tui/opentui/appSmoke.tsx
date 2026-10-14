@@ -4,8 +4,8 @@
 // poll), and asserts a frame actually rendered. Catches runtime wiring errors
 // that the component-level smokes and tsc can't — it exercises the same code
 // path `npm run tui` boots, minus the terminal.
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'

@@ -3,12 +3,12 @@
 // real EditorPopover and LSP transport against an immediate local fake server,
 // so the result includes the 160ms automatic-completion debounce, request,
 // React commit, and terminal render.
-import React, { act } from 'react'
+import React from 'react'
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RGBA, SyntaxStyle, type TextareaRenderable } from '@opentui/core'
-import { testRender } from '@opentui/react/test-utils'
+import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
 import { EditorPopover, type EditorKeyEvent } from './EditorPopover'
 
@@ -20,10 +20,11 @@ const serverPath = join(workspace, 'tsc')
 const originalServer = process.env.AGENT_VIEWER_TYPESCRIPT_LSP_BIN
 let handleKey: ((key: EditorKeyEvent) => boolean) | null = null
 
-const syntaxStyle = SyntaxStyle.fromStyles({
+const syntaxStyleDefinitions = {
   keyword: { fg: RGBA.fromHex(DARK_THEME.violet), bold: true },
   default: { fg: RGBA.fromHex(DARK_THEME.text) },
-})
+}
+let syntaxStyle!: SyntaxStyle
 
 async function settle(setup: Awaited<ReturnType<typeof testRender>>, durationMs: number): Promise<void> {
   const deadline = performance.now() + durationMs
@@ -82,8 +83,7 @@ process.stdin.on('data', (chunk) => {
   await writeFile(sourcePath, 'const seed = 0\n', 'utf8')
   process.env.AGENT_VIEWER_TYPESCRIPT_LSP_BIN = serverPath
 
-  const setup = await testRender(
-    <EditorPopover
+  const setup = await testRenderWithSyntaxStyle(syntaxStyleDefinitions, (style) => { syntaxStyle = style; return (<EditorPopover
       cwd={workspace}
       initialPath={sourcePath}
       theme={DARK_THEME}
@@ -92,7 +92,7 @@ process.stdin.on('data', (chunk) => {
       syntaxStyle={syntaxStyle}
       onClose={() => {}}
       onKeyHandlerReady={(handler) => { handleKey = handler }}
-    />,
+    />) },
     { width: 100, height: 30 },
   )
 

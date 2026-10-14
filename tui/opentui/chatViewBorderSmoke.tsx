@@ -2,8 +2,8 @@
 // Chat-card border regression: OpenTUI reuses a technical card when moving
 // between Agents and Chat. The native box must clear the Agents border when
 // that same keyed card returns to Chat.
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'

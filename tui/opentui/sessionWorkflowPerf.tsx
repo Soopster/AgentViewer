@@ -3,7 +3,7 @@
 // separate samples; none includes physical terminal I/O or provider service
 // latency. Run each scenario in a fresh process, e.g.
 // WORKFLOW_SCENARIO=tabs WORKFLOW_SESSIONS=2000 bun tui/opentui/sessionWorkflowPerf.tsx
-import React, { act, type ProfilerOnRenderCallback } from 'react'
+import React, { type ProfilerOnRenderCallback } from 'react'
 import assert from 'node:assert/strict'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -81,20 +81,14 @@ mock.module('../../lib/tui/service', () => ({ ...service,
 try {
 const { default: App, readRootRenderCount } = await import('./App')
 let measuring = false
-const reactRender: number[] = [], reactCommit: number[] = [], rootPaint: number[] = [], rendererFrame: number[] = []
+const reactRender: number[] = [], reactCommit: number[] = [], rendererFrame: number[] = []
 const onRender: ProfilerOnRenderCallback = (_id, _phase, actualDuration, _base, _start, commitTime) => {
   if (!measuring) return
   reactRender.push(actualDuration)
   reactCommit.push(Math.max(0, now() - commitTime))
 }
-const { testRender } = await import('@opentui/react/test-utils')
+const { testRender, act } = await import('./testRender')
 const setup = await testRender(<React.Profiler id="root" onRender={onRender}><App /></React.Profiler>, { width: 140, height: 44, kittyKeyboard: true })
-const originalPaint = setup.renderer.root.render.bind(setup.renderer.root)
-setup.renderer.root.render = (...args) => {
-  const started = now()
-  originalPaint(...args)
-  if (measuring) rootPaint.push(now() - started)
-}
 setup.renderer.on('frame', () => {
   if (!measuring) return
   // FRAME fires before collectStatSample; read after the callback returns.
@@ -241,7 +235,7 @@ const countRows = (node: typeof setup.renderer.root): number => (node.id.startsW
   + node.getChildren().reduce((sum, child) => sum + countRows(child as typeof node), 0)
 const mountedRows = countRows(setup.renderer.root)
 console.log(`WORKFLOW ${JSON.stringify({ runtime: `Bun ${process.versions.bun}`, scenario, sessionCount, messageCount, steps, renders, reads: readCount, mountedRows,
-  reactRender: summary(reactRender), reactCommit: summary(reactCommit), rootPaint: summary(rootPaint), rendererFrame: summary(rendererFrame),
+  reactRender: summary(reactRender), reactCommit: summary(reactCommit), rendererFrame: summary(rendererFrame),
   retainedHeap: { beforeBytes: before.heapSize, afterBytes: after.heapSize }, rss: { beforeBytes: before.rssBytes, afterBytes: after.rssBytes } })}`)
 process.exit(0)
 } catch (error) { console.error(error); process.exit(1) }

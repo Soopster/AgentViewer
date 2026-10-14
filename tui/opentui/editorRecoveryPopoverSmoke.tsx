@@ -1,10 +1,10 @@
 /** @jsxImportSource @opentui/react */
-import React, { act } from 'react'
+import React from 'react'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RGBA, SyntaxStyle, type TextareaRenderable } from '@opentui/core'
-import { testRender } from '@opentui/react/test-utils'
+import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
 import { EditorPopover, type EditorKeyEvent } from './EditorPopover'
 import { readEditorRecovery, writeEditorRecovery } from './editorRecovery'
@@ -15,10 +15,11 @@ const conflictPath = join(root, 'conflict.ts')
 let handleKey: ((key: EditorKeyEvent) => boolean) | null = null
 const closeState: { count: number } = { count: 0 }
 
-const syntaxStyle = SyntaxStyle.fromStyles({
+const syntaxStyleDefinitions = {
   keyword: { fg: RGBA.fromHex(DARK_THEME.violet), bold: true },
   default: { fg: RGBA.fromHex(DARK_THEME.text) },
-})
+}
+let syntaxStyle!: SyntaxStyle
 
 async function flush(setup: Awaited<ReturnType<typeof testRender>>, delay = 200) {
   await act(async () => {
@@ -43,8 +44,7 @@ try {
   })
   await writeFile(conflictPath, 'const conflict = 3\n', 'utf8')
 
-  const setup = await testRender(
-    <EditorPopover
+  const setup = await testRenderWithSyntaxStyle(syntaxStyleDefinitions, (style) => { syntaxStyle = style; return (<EditorPopover
       cwd={root}
       initialPath={null}
       theme={DARK_THEME}
@@ -53,7 +53,7 @@ try {
       syntaxStyle={syntaxStyle}
       onClose={() => { closeState.count += 1 }}
       onKeyHandlerReady={(handler) => { handleKey = handler }}
-    />,
+    />) },
     { width: 100, height: 30 },
   )
 

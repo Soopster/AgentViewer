@@ -5,13 +5,13 @@
 // "the working tree" from "what turn 1 did". This drives the real popover
 // against a repo with real checkpoints and asserts which files each source
 // answers with.
-import React, { act } from 'react'
+import React from 'react'
 import { execFile } from 'node:child_process'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import { testRender } from '@opentui/react/test-utils'
+import { testRender, act } from './testRender'
 import { DARK_THEME } from '../theme'
 import { GitPopover } from './GitPopover'
 import { createTurnCheckpoint } from '../../lib/checkpoints'

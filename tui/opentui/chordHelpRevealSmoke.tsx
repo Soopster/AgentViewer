@@ -3,9 +3,9 @@
 // checked any other way: the panel and the pending chord are both on screen, and
 // whether the next keystroke reaches the chord dispatcher or is eaten by the
 // panel is invisible in the frame until you press one.
-import React, { act } from 'react'
+import React from 'react'
 import assert from 'node:assert/strict'
-import { testRender } from '@opentui/react/test-utils'
+import { testRender, act } from './testRender'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'

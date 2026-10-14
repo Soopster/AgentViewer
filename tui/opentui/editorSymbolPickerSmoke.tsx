@@ -1,10 +1,10 @@
 /** @jsxImportSource @opentui/react */
-import React, { act } from 'react'
+import React from 'react'
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RGBA, SyntaxStyle } from '@opentui/core'
-import { testRender } from '@opentui/react/test-utils'
+import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
 import { EditorPopover, type EditorKeyEvent } from './EditorPopover'
 import { disposeAllLspSessions } from './editorLspSession'
@@ -20,7 +20,8 @@ const otherPath = join(cwd, 'other.ts')
 const fakeLspPath = join(cwd, 'tsc')
 const originalLspBin = process.env.AGENT_VIEWER_TYPESCRIPT_LSP_BIN
 
-const syntaxStyle = SyntaxStyle.fromStyles({ default: { fg: RGBA.fromHex(DARK_THEME.text) } })
+const syntaxStyleDefinitions = { default: { fg: RGBA.fromHex(DARK_THEME.text) } }
+let syntaxStyle!: SyntaxStyle
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message)
@@ -79,8 +80,7 @@ process.stdin.on('data', (chunk) => {
   await chmod(fakeLspPath, 0o755)
   process.env.AGENT_VIEWER_TYPESCRIPT_LSP_BIN = fakeLspPath
 
-  const setup = await testRender(
-    <EditorPopover
+  const setup = await testRenderWithSyntaxStyle(syntaxStyleDefinitions, (style) => { syntaxStyle = style; return (<EditorPopover
       cwd={cwd}
       initialPath={filePath}
       theme={DARK_THEME}
@@ -92,7 +92,7 @@ process.stdin.on('data', (chunk) => {
       onNotice={() => {}}
       onClipboardRead={async () => ''}
       onClipboardWrite={async () => {}}
-    />,
+    />) },
     { width: 110, height: 30 },
   )
 

@@ -8,8 +8,8 @@
 // Runs against a temp data dir (state files resolve from process.cwd()) so the
 // user's persisted TUI preferences — e.g. focusMode, which hides the strip —
 // can't skew the assertions. App must therefore be imported AFTER chdir.
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'

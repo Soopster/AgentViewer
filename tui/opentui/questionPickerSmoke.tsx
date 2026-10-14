@@ -5,8 +5,8 @@
 // composite on top of each other. The composer reserves the picker's height up
 // front (`composerStatusBlockHeight`); when that budget is short, yoga shrinks
 // the card and every option line lands on the question's row.
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'

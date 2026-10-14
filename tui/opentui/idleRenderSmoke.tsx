@@ -11,8 +11,8 @@
 // poll itself (a real session list refreshes on its own schedule and would be
 // a legitimate render). Full-App smokes exit rather than throw: the app's own
 // timers keep the process alive past an uncaught throw.
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'

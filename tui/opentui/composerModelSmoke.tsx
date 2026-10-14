@@ -2,8 +2,8 @@
 // Composer model smoke: the reader may show an idle session while the composer
 // auto-targets the provider's sole running turn. Model metadata belongs to that
 // send target, and an overlapping reader metadata request must not discard it.
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'

@@ -1,10 +1,10 @@
 /** @jsxImportSource @opentui/react */
-import React, { act } from 'react'
+import React from 'react'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RGBA, SyntaxStyle } from '@opentui/core'
-import { testRender } from '@opentui/react/test-utils'
+import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
 import { EditorPopover, type EditorKeyEvent } from './EditorPopover'
 
@@ -13,11 +13,11 @@ const names = Array.from({ length: 14 }, (_, index) => `module-number-${String(i
 for (const name of names) await writeFile(join(cwd, name), `export const x = ${name.length}\n`, 'utf8')
 
 let keyHandler: ((key: EditorKeyEvent) => boolean) | null = null
-const syntaxStyle = SyntaxStyle.fromStyles({ default: { fg: RGBA.fromHex(DARK_THEME.text) } })
-const setup = await testRender(
-  <EditorPopover cwd={cwd} initialPath={join(cwd, names[0]!)} theme={DARK_THEME} width={110} height={28}
+const syntaxStyleDefinitions = { default: { fg: RGBA.fromHex(DARK_THEME.text) } }
+let syntaxStyle!: SyntaxStyle
+const setup = await testRenderWithSyntaxStyle(syntaxStyleDefinitions, (style) => { syntaxStyle = style; return (<EditorPopover cwd={cwd} initialPath={join(cwd, names[0]!)} theme={DARK_THEME} width={110} height={28}
     syntaxStyle={syntaxStyle} onClose={() => {}} onKeyHandlerReady={(h) => { keyHandler = h }}
-    onNotice={() => {}} onClipboardRead={async () => ''} onClipboardWrite={async () => {}} />,
+    onNotice={() => {}} onClipboardRead={async () => ''} onClipboardWrite={async () => {}} />) },
   { width: 110, height: 28 },
 )
 const settle = async (ms = 250) => {

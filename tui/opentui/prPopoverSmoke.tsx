@@ -1,8 +1,8 @@
 /** @jsxImportSource @opentui/react */
 // Manual smoke for the GitPopover-style PR review popover. Non-hermetic: needs
 // `gh` auth and an open PR on this repo, so it is not part of `tui:smoke`.
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { DARK_THEME } from '../theme'
 import { PullRequestPopover } from './PullRequestPopover'
 

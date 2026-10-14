@@ -99,6 +99,14 @@ import {
   indentForClosingBracket,
   matchingBracketAt,
 } from './editorSyntaxContext'
+import {
+  cellColumnAt,
+  displayOffsetAt,
+  editorCellMeasure,
+  indexAtCellColumn,
+  indexAtDisplayOffset,
+  type CellMeasure,
+} from './editorCells'
 
 extend({ editorScrollbar: ScrollBarRenderable })
 
@@ -719,8 +727,8 @@ function occurrenceRanges(
 
 function selectedLineBounds(editor: TextareaRenderable): { start: number; end: number; hadSelection: boolean } {
   const content = editor.plainText
-  const selection = editor.getSelection()
-  const cursorOffset = editorDocumentOffset(editor)
+  const selection = editorSelectionOffsets(editor, content)
+  const cursorOffset = editorDocumentOffset(editor, undefined, content)
   const selectionStart = selection?.start ?? cursorOffset
   const selectionEnd = selection?.end ?? cursorOffset
   const start = content.lastIndexOf('\n', Math.max(0, selectionStart - 1)) + 1
@@ -737,6 +745,8 @@ function lineCommentToken(path: string): string {
   return '//'
 }
 
+// The buffer counts display cells and everything here counts string indices
+// (see editorCells.ts); these helpers are the only crossing between the two.
 // `content` and `lineStarts` are optional only because most callers do not
 // have them. Reading `editor.plainText` materialises the whole buffer, so a
 // caller that already holds the content — the highlight passes, which run on
@@ -748,19 +758,101 @@ function editorDocumentOffset(
   lineStarts?: readonly number[],
 ): number {
   const logicalCursor = cursor ?? { line: editor.logicalCursor.row, visualColumn: editor.logicalCursor.col }
-  const position = { line: logicalCursor.line, character: logicalCursor.visualColumn }
-  if (content != null && lineStarts != null) {
-    if (position.line >= lineStarts.length) return content.length
-    const lineStart = lineStarts[position.line]!
-    const lineEnd = position.line + 1 < lineStarts.length ? lineStarts[position.line + 1]! - 1 : content.length
-    return Math.min(lineEnd, lineStart + Math.max(0, position.character))
-  }
-  return offsetAtEditorPosition(content ?? editor.plainText, position)
+  const text = content ?? editor.plainText
+  const bounds = lineStarts ? lineBoundsFromStarts(text, lineStarts, logicalCursor.line) : lineBoundsByScan(text, logicalCursor.line)
+  if (!bounds) return text.length
+  return bounds.start + indexAtCellColumn(text.slice(bounds.start, bounds.end), logicalCursor.visualColumn, editorCellMeasure(editor))
 }
 
-function setEditorDocumentOffset(editor: TextareaRenderable, offset: number): void {
-  const position = editorPositionAtOffset(editor.plainText, offset)
-  editor.setCursor(position.line, position.character)
+// Without a line table, scan only as far as the line: building a table is a
+// pass over the whole file, and these run on every keystroke.
+function lineBoundsByScan(text: string, line: number): { start: number; end: number } | null {
+  let start = 0
+  for (let row = 0; row < line; row += 1) {
+    const next = text.indexOf('\n', start)
+    if (next < 0) return null
+    start = next + 1
+  }
+  const end = text.indexOf('\n', start)
+  return { start, end: end < 0 ? text.length : end }
+}
+
+function lineBoundsFromStarts(text: string, lineStarts: readonly number[], line: number): { start: number; end: number } | null {
+  if (line >= lineStarts.length) return null
+  return { start: lineStarts[line]!, end: line + 1 < lineStarts.length ? lineStarts[line + 1]! - 1 : text.length }
+}
+
+/** The cursor as a string position: `character` is an index into its line. */
+function editorCursorPosition(editor: TextareaRenderable, content?: string): { line: number; character: number } {
+  const text = content ?? editor.plainText
+  return editorPositionAtOffset(text, editorDocumentOffset(editor, undefined, text))
+}
+
+/** Places the cursor at a string position (an LSP location, a diagnostic). */
+function setEditorCursorPosition(
+  editor: TextareaRenderable,
+  line: number,
+  character: number,
+  content?: string,
+): void {
+  const text = content ?? editor.plainText
+  const row = Math.max(0, line)
+  const bounds = lineBoundsByScan(text, row)
+  // Past the last line the buffer clamps the position itself.
+  if (!bounds) editor.setCursor(row, character)
+  else editor.setCursor(row, cellColumnAt(text.slice(bounds.start, bounds.end), character, editorCellMeasure(editor)))
+}
+
+function setEditorDocumentOffset(editor: TextareaRenderable, offset: number, content?: string): void {
+  const text = content ?? editor.plainText
+  const position = editorPositionAtOffset(text, offset)
+  setEditorCursorPosition(editor, position.line, position.character, text)
+}
+
+/** The selection as string offsets; null when nothing is selected. */
+function editorSelectionOffsets(editor: TextareaRenderable, content?: string): { start: number; end: number } | null {
+  const selection = editor.getSelection()
+  if (!selection) return null
+  const text = content ?? editor.plainText
+  const starts = lineStartsFor(text)
+  const measure = editorCellMeasure(editor)
+  return {
+    start: indexAtDisplayOffset(text, selection.start, starts, measure),
+    end: indexAtDisplayOffset(text, selection.end, starts, measure),
+  }
+}
+
+function editorSelectionOrCursor(editor: TextareaRenderable, content: string): { start: number; end: number } {
+  const selection = editorSelectionOffsets(editor, content)
+  if (selection) return selection
+  const offset = editorDocumentOffset(editor, undefined, content)
+  return { start: offset, end: offset }
+}
+
+function setEditorSelectionOffsets(editor: TextareaRenderable, start: number, end: number, content?: string): void {
+  const text = content ?? editor.plainText
+  const starts = lineStartsFor(text)
+  const measure = editorCellMeasure(editor)
+  editor.setSelection(displayOffsetAt(text, start, starts, measure), displayOffsetAt(text, end, starts, measure))
+}
+
+function editorLineText(content: string, lineStarts: readonly number[], line: number): string {
+  const start = lineStarts[line] ?? content.length
+  const end = line + 1 < lineStarts.length ? lineStarts[line + 1]! - 1 : content.length
+  return content.slice(start, end)
+}
+
+/** A highlight given in string indices of `line`, which is row `row`'s text. */
+function addEditorHighlight(
+  editor: TextareaRenderable,
+  row: number,
+  line: string,
+  start: number,
+  end: number,
+  highlight: Omit<Parameters<TextareaRenderable['addHighlight']>[1], 'start' | 'end'>,
+  measure: CellMeasure = editorCellMeasure(editor),
+): void {
+  editor.addHighlight(row, { ...highlight, start: cellColumnAt(line, start, measure), end: cellColumnAt(line, end, measure) })
 }
 
 function applyCompletion(
@@ -1637,16 +1729,14 @@ export function EditorPopover({
     ]
     recoveryTimerRef.current = setTimeout(() => {
       recoveryTimerRef.current = null
-      const logicalCursor = editorRef.current?.logicalCursor
+      const liveCursor = editorRef.current ? editorCursorPosition(editorRef.current) : null
       const operation = retained.length === 0
         ? clearEditorRecovery(root)
         : writeEditorRecovery(root, {
             version: 1,
             savedAt: Date.now(),
             activePath,
-            cursor: logicalCursor
-              ? { line: logicalCursor.row, character: logicalCursor.col }
-              : { line: cursorRef.current.line, character: cursorRef.current.visualColumn },
+            cursor: liveCursor ?? { line: cursorRef.current.line, character: cursorRef.current.visualColumn },
             buffers: retained,
           })
       void operation.catch((error) => {
@@ -1799,11 +1889,13 @@ export function EditorPopover({
   const captureJumpPoint = useCallback((): EditorJumpEntry | null => {
     const path = activePathRef.current
     if (!path) return null
-    const logical = editorRef.current?.logicalCursor
+    // A string position, because jumps are replayed through the same path as
+    // a language server's locations.
+    const position = editorRef.current ? editorCursorPosition(editorRef.current) : null
     return {
       path,
-      line: logical?.row ?? cursorRef.current.line,
-      character: logical?.col ?? cursorRef.current.visualColumn,
+      line: position?.line ?? cursorRef.current.line,
+      character: position?.character ?? cursorRef.current.visualColumn,
     }
   }, [])
 
@@ -1996,8 +2088,9 @@ export function EditorPopover({
   const addNextOccurrence = useCallback(() => {
     const editor = editorRef.current
     if (!editor || !activeTab) return
-    const selection = editor.getSelection() ?? { start: editor.cursorOffset, end: editor.cursorOffset }
-    const next = addEditorCursorAtNextMatch(editor.plainText, multiCursor, selection, editor.cursorOffset)
+    const content = editor.plainText
+    const selection = editorSelectionOrCursor(editor, content)
+    const next = addEditorCursorAtNextMatch(content, multiCursor, selection, editorDocumentOffset(editor, undefined, content))
     if (!next) {
       setMessage('No identifier or additional occurrence at cursor')
       return
@@ -2005,7 +2098,7 @@ export function EditorPopover({
     setBlockSelection(null)
     setMultiCursor(next)
     const active = next.ranges[next.activeIndex]!
-    editor.setSelection(active.start, active.end)
+    setEditorSelectionOffsets(editor, active.start, active.end, content)
     setMessage(next.ranges.length === 1
       ? 'Selected occurrence · Ctrl+D adds the next match'
       : `${next.ranges.length} cursors · type to edit all · Esc collapses`)
@@ -2014,7 +2107,8 @@ export function EditorPopover({
   const addAdjacentCursor = useCallback((direction: -1 | 1) => {
     const editor = editorRef.current
     if (!editor || !activeTab) return
-    const next = addEditorCursorOnAdjacentLine(editor.plainText, multiCursor, editor.cursorOffset, direction)
+    const content = editor.plainText
+    const next = addEditorCursorOnAdjacentLine(content, multiCursor, editorDocumentOffset(editor, undefined, content), direction)
     if (!next || next === multiCursor) {
       setMessage(direction < 0 ? 'No line above for another cursor' : 'No line below for another cursor')
       return
@@ -2022,30 +2116,31 @@ export function EditorPopover({
     setBlockSelection(null)
     setMultiCursor(next)
     const active = next.ranges[next.activeIndex]!
-    editor.setSelection(active.start, active.end)
+    setEditorSelectionOffsets(editor, active.start, active.end, content)
     setMessage(`${next.ranges.length} cursors · type to edit all · Esc collapses`)
   }, [activeTab, multiCursor])
 
   const addLineEndCursors = useCallback(() => {
     const editor = editorRef.current
     if (!editor || !activeTab) return
-    const selection = editor.getSelection() ?? { start: editor.cursorOffset, end: editor.cursorOffset }
-    const next = splitEditorSelectionIntoLineEndCursors(editor.plainText, selection)
+    const content = editor.plainText
+    const next = splitEditorSelectionIntoLineEndCursors(content, editorSelectionOrCursor(editor, content))
     setBlockSelection(null)
     setMultiCursor(next)
     const active = next.ranges[next.activeIndex]!
-    editor.setSelection(active.start, active.end)
+    setEditorSelectionOffsets(editor, active.start, active.end, content)
     setMessage(`${next.ranges.length} line-end cursor${next.ranges.length === 1 ? '' : 's'} · type to edit all`)
   }, [activeTab])
 
   const extendBlockSelection = useCallback((direction: 'left' | 'right' | 'up' | 'down') => {
     const editor = editorRef.current
     if (!editor || !activeTab) return
-    const next = updateEditorBlockSelection(editor.plainText, blockSelection, editor.cursorOffset, direction)
+    const content = editor.plainText
+    const next = updateEditorBlockSelection(content, blockSelection, editorDocumentOffset(editor, undefined, content), direction)
     setBlockSelection(next.block)
     setMultiCursor(next.cursors)
     const active = next.cursors.ranges[next.cursors.activeIndex]!
-    editor.setSelection(active.start, active.end)
+    setEditorSelectionOffsets(editor, active.start, active.end, content)
     setMessage(`${next.cursors.ranges.length}-line block selection · type to edit columns`)
   }, [activeTab, blockSelection])
 
@@ -2057,7 +2152,7 @@ export function EditorPopover({
     setBlockSelection(null)
     setMultiCursor(result.state)
     const active = result.state.ranges[result.state.activeIndex]!
-    editor.setSelection(active.start, active.end)
+    setEditorSelectionOffsets(editor, active.start, active.end, result.content)
     setMessage(`${result.state.ranges.length} cursors`)
     return true
   }, [multiCursor])
@@ -2070,14 +2165,14 @@ export function EditorPopover({
       setMessage('Clipboard integration is unavailable')
       return
     }
-    const selection = editor.getSelection()
-    const cursorOffset = editorDocumentOffset(editor)
-    const bounds = lineBoundsAtOffset(editor.plainText, cursorOffset)
+    const sourceContent = editor.plainText
+    const selection = editorSelectionOffsets(editor, sourceContent)
+    const cursorOffset = editorDocumentOffset(editor, undefined, sourceContent)
+    const bounds = lineBoundsAtOffset(sourceContent, cursorOffset)
     const range = selection ?? {
       start: bounds.start,
-      end: bounds.end < editor.plainText.length ? bounds.end + 1 : bounds.end,
+      end: bounds.end < sourceContent.length ? bounds.end + 1 : bounds.end,
     }
-    const sourceContent = editor.plainText
     const text = sourceContent.slice(range.start, range.end)
     if (!text) return
     try {
@@ -2087,7 +2182,7 @@ export function EditorPopover({
           setMessage('Copied selection · buffer changed before cut completed')
           return
         }
-        editor.setSelection(range.start, range.end)
+        setEditorSelectionOffsets(editor, range.start, range.end, sourceContent)
         editor.deleteSelection()
       }
       setMessage(`${cut ? 'Cut' : 'Copied'} ${selection ? 'selection' : 'line'} · ${text.length} character${text.length === 1 ? '' : 's'}`)
@@ -2122,14 +2217,15 @@ export function EditorPopover({
   const applyLineTransform = useCallback((transform: EditorLineTransform) => {
     const editor = editorRef.current
     if (!editor || !activeTab) return
-    const selection = editor.getSelection() ?? { start: editor.cursorOffset, end: editor.cursorOffset }
-    const result = transformEditorLines(editor.plainText, selection.start, selection.end, transform)
-    if (result.content === editor.plainText) {
+    const content = editor.plainText
+    const selection = editorSelectionOrCursor(editor, content)
+    const result = transformEditorLines(content, selection.start, selection.end, transform)
+    if (result.content === content) {
       setMessage(transform === 'move-up' ? 'Already at first line' : transform === 'move-down' ? 'Already at last line' : 'No line change')
       return
     }
     editor.replaceText(result.content)
-    editor.setSelection(result.start, result.end)
+    setEditorSelectionOffsets(editor, result.start, result.end, result.content)
     setMultiCursor(null)
     setBlockSelection(null)
     setMessage(`${transform === 'move-up' ? 'Moved lines up' : transform === 'move-down' ? 'Moved lines down' : transform === 'sort' ? 'Sorted lines' : 'Duplicated lines'} · undo with Ctrl+Z`)
@@ -2138,10 +2234,11 @@ export function EditorPopover({
   const applyCaseTransform = useCallback((mode: 'upper' | 'lower') => {
     const editor = editorRef.current
     if (!editor || !activeTab) return
-    const selection = editor.getSelection() ?? { start: editor.cursorOffset, end: editor.cursorOffset }
-    const result = transformEditorCase(editor.plainText, selection.start, selection.end, mode)
+    const content = editor.plainText
+    const selection = editorSelectionOrCursor(editor, content)
+    const result = transformEditorCase(content, selection.start, selection.end, mode)
     editor.replaceText(result.content)
-    editor.setSelection(result.start, result.end)
+    setEditorSelectionOffsets(editor, result.start, result.end, result.content)
     setMultiCursor(null)
     setBlockSelection(null)
     setMessage(mode === 'upper' ? 'Converted selection to uppercase' : 'Converted selection to lowercase')
@@ -2150,11 +2247,12 @@ export function EditorPopover({
   const trimTrailingWhitespace = useCallback(() => {
     const editor = editorRef.current
     if (!editor || !activeTab) return
-    const cursorOffset = editor.cursorOffset
-    const result = trimEditorTrailingWhitespace(editor.plainText)
-    if (result.content === editor.plainText) { setMessage('No trailing whitespace'); return }
+    const content = editor.plainText
+    const cursorOffset = editorDocumentOffset(editor, undefined, content)
+    const result = trimEditorTrailingWhitespace(content)
+    if (result.content === content) { setMessage('No trailing whitespace'); return }
     editor.replaceText(result.content)
-    setEditorDocumentOffset(editor, Math.min(cursorOffset, result.content.length))
+    setEditorDocumentOffset(editor, Math.min(cursorOffset, result.content.length), result.content)
     setMessage('Trimmed trailing whitespace · undo with Ctrl+Z')
   }, [activeTab])
 
@@ -2185,10 +2283,11 @@ export function EditorPopover({
       return `${indent}${token} ${body}`
     }).join('\n')
     if (transformed === original) return
-    const cursorBefore = editor.logicalCursor
-    editor.replaceText(`${content.slice(0, bounds.start)}${transformed}${content.slice(bounds.end)}`)
-    if (bounds.hadSelection) editor.setSelection(bounds.start, bounds.start + transformed.length)
-    else editor.setCursor(cursorBefore.row, Math.max(0, cursorBefore.col + transformed.length - original.length))
+    const cursorBefore = editorDocumentOffset(editor, undefined, content)
+    const next = `${content.slice(0, bounds.start)}${transformed}${content.slice(bounds.end)}`
+    editor.replaceText(next)
+    if (bounds.hadSelection) setEditorSelectionOffsets(editor, bounds.start, bounds.start + transformed.length, next)
+    else setEditorDocumentOffset(editor, Math.max(bounds.start, cursorBefore + transformed.length - original.length), next)
     setMessage(action === 'indent' ? 'Indented lines' : action === 'outdent' ? 'Outdented lines' : allCommented ? 'Uncommented lines' : 'Commented lines')
   }, [activeTab])
 
@@ -2566,9 +2665,7 @@ export function EditorPopover({
     for (const offset of [match.open, match.close]) {
       const line = lineAtOffset(lineStarts, offset)
       const lineStart = lineStarts[line] ?? 0
-      editor.addHighlight(line, {
-        start: offset - lineStart,
-        end: offset - lineStart + 1,
+      addEditorHighlight(editor, line, editorLineText(content, lineStarts, line), offset - lineStart, offset - lineStart + 1, {
         styleId,
         priority: 60,
         hlRef: BRACKET_HIGHLIGHT_REF,
@@ -2602,19 +2699,22 @@ export function EditorPopover({
     const styleId = occurrenceStyleIdRef.current
     if (styleId == null || focusPane !== 'editor' || multiCursor || content.length === 0) return
 
-    const selection = editor.getSelection()
+    const selection = editorSelectionOffsets(editor, content)
     const selected = selection && selection.end > selection.start
       ? content.slice(selection.start, selection.end)
       : null
     const cursorOffset = editorDocumentOffset(editor, undefined, content, lineStarts)
+    const measure = editorCellMeasure(editor)
     const word = selected ? null : wordRangeAt(content, cursorOffset)
     const value = selected ?? word?.value ?? ''
     if (value.length < OCCURRENCE_MIN_LENGTH) return
     if (!selected && word) {
       const tokenLine = lineAtOffset(lineStarts, word.start)
       const tokenLineStart = lineStarts[tokenLine] ?? 0
-      const tokenStart = word.start - tokenLineStart
-      const tokenEnd = word.end - tokenLineStart
+      // Existing highlights are in cells, so the token is compared in cells.
+      const tokenText = editorLineText(content, lineStarts, tokenLine)
+      const tokenStart = cellColumnAt(tokenText, word.start - tokenLineStart, measure)
+      const tokenEnd = cellColumnAt(tokenText, word.end - tokenLineStart, measure)
       const syntaxHighlight = editor.getLineHighlights(tokenLine).find((highlight) => (
         highlight.hlRef !== OCCURRENCE_HIGHLIGHT_REF
         && highlight.start <= tokenStart
@@ -2645,8 +2745,9 @@ export function EditorPopover({
     for (const range of ranges) {
       const startLine = lineAtOffset(lineStarts, range.start)
       const lineStart = lineStarts[startLine] ?? 0
-      const relativeStart = range.start - lineStart
-      const relativeEnd = range.end - lineStart
+      const rangeLine = editorLineText(content, lineStarts, startLine)
+      const relativeStart = cellColumnAt(rangeLine, range.start - lineStart, measure)
+      const relativeEnd = cellColumnAt(rangeLine, range.end - lineStart, measure)
       const baseHighlight = editor.getLineHighlights(startLine).find((highlight) => (
         highlight.hlRef !== OCCURRENCE_HIGHLIGHT_REF
         && highlight.start <= relativeStart
@@ -2700,13 +2801,14 @@ export function EditorPopover({
       for (let line = firstLine; line <= lastLine; line += 1) {
         const lineStart = lineStarts[line] ?? 0
         const lineEnd = line + 1 < lineStarts.length ? lineStarts[line + 1]! - 1 : content.length
-        editor.addHighlight(line, {
-          start: Math.max(0, highlightStart - lineStart),
-          end: Math.max(0, Math.min(highlightEnd, lineEnd) - lineStart),
-          styleId,
-          priority: 80,
-          hlRef: MULTI_CURSOR_HIGHLIGHT_REF,
-        })
+        addEditorHighlight(
+          editor,
+          line,
+          editorLineText(content, lineStarts, line),
+          Math.max(0, highlightStart - lineStart),
+          Math.max(0, Math.min(highlightEnd, lineEnd) - lineStart),
+          { styleId, priority: 80, hlRef: MULTI_CURSOR_HIGHLIGHT_REF },
+        )
       }
     }
   }, [multiCursor])
@@ -2755,17 +2857,23 @@ export function EditorPopover({
         const content = buffer.content
         const lineStarts = lineStartsFor(content)
 
+        const measure = editorCellMeasure(current)
         const applyLine = (entry: EditorSyntaxLine, clearFirst: boolean) => {
           if (clearFirst) current.clearLineHighlights(entry.line)
           const lineStart = lineStarts[entry.line] ?? 0
           const lineEnd = entry.line + 1 < lineStarts.length ? lineStarts[entry.line + 1]! - 1 : content.length
           if (lineEnd - lineStart > MAX_HIGHLIGHTED_LINE_CHARS) return
+          // Tree-sitter columns are string indices; the buffer's are cells.
+          // They agree on a plain-ASCII line, which is most lines, so only the
+          // rest pay for a conversion.
+          const text = content.slice(lineStart, lineEnd)
+          const plain = /^[\x20-\x7e]*$/.test(text)
           for (const range of entry.highlights) {
             const styleId = syntaxStyle.resolveStyleId(range.group) ?? syntaxStyle.resolveStyleId('default')
             if (styleId == null) continue
             current.addHighlight(entry.line, {
-              start: range.startCol,
-              end: range.endCol,
+              start: plain ? range.startCol : cellColumnAt(text, range.startCol, measure),
+              end: plain ? range.endCol : cellColumnAt(text, range.endCol, measure),
               styleId,
               priority: 10,
               hlRef: SYNTAX_HIGHLIGHT_REF,
@@ -2921,7 +3029,7 @@ export function EditorPopover({
     const content = editor.plainText
     const logicalCursor = editor.logicalCursor
     const requestCursor = { line: logicalCursor.row, visualColumn: logicalCursor.col }
-    const documentOffset = editorDocumentOffset(editor, requestCursor)
+    const documentOffset = editorDocumentOffset(editor, requestCursor, content)
     const context = completionContextAt(content, documentOffset)
     const client = lspRef.current
     const serverTrigger = client?.isCompletionTriggerCharacter(context.lastCharacter) ?? false
@@ -3072,12 +3180,10 @@ export function EditorPopover({
     const editor = editorRef.current
     const client = lspRef.current
     if (!activeTab || !editor || !client) return
-    client.change(editor.plainText)
-    const selection = editor.getSelection()
-    const offset = editorDocumentOffset(editor)
-    const range = selection
-      ? { start: editorPositionAtOffset(editor.plainText, selection.start), end: editorPositionAtOffset(editor.plainText, selection.end) }
-      : { start: editorPositionAtOffset(editor.plainText, offset), end: editorPositionAtOffset(editor.plainText, offset) }
+    const content = editor.plainText
+    client.change(content)
+    const selection = editorSelectionOrCursor(editor, content)
+    const range = { start: editorPositionAtOffset(content, selection.start), end: editorPositionAtOffset(content, selection.end) }
     setMessage('Loading code actions…')
     const actions = await client.codeActions(range, diagnostics)
     if (actions.length === 0) {
@@ -3124,7 +3230,7 @@ export function EditorPopover({
     setSymbolNavigationResults([])
     setProjectSearchOpen(false)
     if (path === activePath && editorRef.current) {
-      editorRef.current.setCursor(location.range.start.line, location.range.start.character)
+      setEditorCursorPosition(editorRef.current, location.range.start.line, location.range.start.character)
       pendingJumpRef.current = null
     } else {
       await openBuffer(path)
@@ -3292,7 +3398,7 @@ export function EditorPopover({
       editor.clearSelection()
       setEditorDocumentOffset(editor, range.start)
     } else {
-      editor.setSelection(range.start, range.end)
+      setEditorSelectionOffsets(editor, range.start, range.end)
     }
     const editableCount = session.tabstops.filter((candidate) => candidate.index !== 0).length
     setMessage(`Snippet ${Math.min(session.active + 1, editableCount)}/${editableCount} · Tab next · Shift+Tab previous · Esc exits`)
@@ -3426,7 +3532,7 @@ export function EditorPopover({
   const openSearch = useCallback((replace = false) => {
     const editor = editorRef.current
     const selected = editor?.getSelectedText() ?? ''
-    const selection = editor?.getSelection() ?? null
+    const selection = editor ? editorSelectionOffsets(editor) : null
     setQuickOpen(false)
     setCompletions([])
     setHoverInfo(null)
@@ -3519,7 +3625,7 @@ export function EditorPopover({
     }
     const match = searchMatches[next]!
     setSearchCursor(next)
-    editor.setSelection(match.start, match.end)
+    setEditorSelectionOffsets(editor, match.start, match.end)
     setMessage(`Find ${next + 1} of ${searchMatches.length}${searchMatchCase ? ' · match case' : ''}${searchRegex ? ' · regex' : ''}${searchSelectionOnly ? ' · selection' : ''}`)
   }, [searchCursor, searchMatchCase, searchMatches, searchQuery, searchRegex, searchSelectionOnly])
 
@@ -3534,7 +3640,7 @@ export function EditorPopover({
       : (diagnosticCursor + direction + diagnostics.length) % diagnostics.length
     const diagnostic = diagnostics[next]!
     setDiagnosticCursor(next)
-    editor.setCursor(diagnostic.line, diagnostic.character)
+    setEditorCursorPosition(editor, diagnostic.line, diagnostic.character)
     setMessage(`${next + 1}/${diagnostics.length} ${diagnostic.source ? `${diagnostic.source}: ` : ''}${diagnostic.message}`)
   }, [diagnosticCursor, diagnostics])
 
@@ -3545,7 +3651,7 @@ export function EditorPopover({
     const from = captureJumpPoint()
     if (from) recordEditorJump(jumpListRef.current, from)
     setDiagnosticCursor(index)
-    editor.setCursor(diagnostic.line, diagnostic.character)
+    setEditorCursorPosition(editor, diagnostic.line, diagnostic.character)
     setProblemsOpen(false)
     setFocusPane('editor')
     editor.focus()
@@ -3809,13 +3915,13 @@ export function EditorPopover({
       return true
     }
     if (sequence === 'v') {
-      editor.setSelection(documentOffset, Math.min(editor.plainText.length, documentOffset + 1))
+      setEditorSelectionOffsets(editor, documentOffset, Math.min(editor.plainText.length, documentOffset + 1))
       setVimMode('visual')
       setMessage('Vim VISUAL · y yank · d delete · Esc normal')
       return true
     }
     if (sequence === 'V') {
-      editor.setSelection(bounds.start, Math.min(editor.plainText.length, bounds.end + 1))
+      setEditorSelectionOffsets(editor, bounds.start, Math.min(editor.plainText.length, bounds.end + 1))
       setVimMode('visual')
       setMessage('Vim VISUAL LINE · y yank · d delete · Esc normal')
       return true
@@ -4295,7 +4401,7 @@ export function EditorPopover({
       const documentOffset = editorDocumentOffset(editor)
       const bounds = lineBoundsAtOffset(editor.plainText, documentOffset)
       const target = key.name === 'home' ? smartHomeOffset(editor.plainText, documentOffset) : bounds.end
-      if (key.shift) editor.setSelection(documentOffset, target)
+      if (key.shift) setEditorSelectionOffsets(editor, documentOffset, target)
       else {
         editor.clearSelection()
         setEditorDocumentOffset(editor, target)
@@ -4315,14 +4421,14 @@ export function EditorPopover({
     if (focusPane === 'editor' && velocityScrollEnabled && (key.name === 'up' || key.name === 'down')) {
       const editor = editorRef.current
       if (!editor) return true
-      const lines = editor.plainText.split('\n')
+      const lineCount = editor.lineCount
       const current = editor.logicalCursor
       const direction = key.name === 'up' ? -1 : 1
       const step = velocityScrollStep(velocityScrollStateRef.current ??= createScrollVelocityState(), direction, key, 6)
-      const row = Math.max(0, Math.min(lines.length - 1, current.row + direction * step))
-      let offset = 0
-      for (let index = 0; index < row; index += 1) offset += (lines[index]?.length ?? 0) + 1
-      setEditorDocumentOffset(editor, offset + Math.min(current.col, lines[row]?.length ?? 0))
+      const row = Math.max(0, Math.min(lineCount - 1, current.row + direction * step))
+      // Same column in cells, which is what moving vertically keeps; the
+      // buffer clamps it to the target line.
+      editor.setCursor(row, current.col)
       return true
     }
     if (key.name === 'escape' && closeConfirm) {
@@ -4457,7 +4563,7 @@ export function EditorPopover({
       }
       if (opensPair) {
         const close = AUTO_PAIR_CLOSE[sequence]!
-        const selection = editor.getSelection()
+        const selection = editorSelectionOffsets(editor, content)
         const quote = sequence === '"' || sequence === "'" || sequence === '`'
         if (quote && !selection) {
           const previous = content[offset - 1]
@@ -4468,8 +4574,9 @@ export function EditorPopover({
             || (next != null && !/[\s)\]}>;,.:]/.test(next))) return false
         }
         if (selection) {
-          editor.replaceText(`${content.slice(0, selection.start)}${sequence}${content.slice(selection.start, selection.end)}${close}${content.slice(selection.end)}`)
-          editor.setSelection(selection.start + 1, selection.end + 1)
+          const wrapped = `${content.slice(0, selection.start)}${sequence}${content.slice(selection.start, selection.end)}${close}${content.slice(selection.end)}`
+          editor.replaceText(wrapped)
+          setEditorSelectionOffsets(editor, selection.start + 1, selection.end + 1, wrapped)
         } else {
           editor.insertText(`${sequence}${close}`)
           setEditorDocumentOffset(editor, offset + 1)
@@ -4493,9 +4600,11 @@ export function EditorPopover({
     if (!editor || !activePath) return
     const pending = pendingJumpRef.current
     if (pending && pending.path === activePath) {
-      editor.setCursor(pending.line, pending.character)
+      setEditorCursorPosition(editor, pending.line, pending.character)
       pendingJumpRef.current = null
-      rememberCursorFor(activePath, { line: pending.line, character: pending.character })
+      // Remembered positions are the buffer's own (cells): they are recorded on
+      // every cursor move, where converting would read the whole buffer.
+      rememberCursorFor(activePath, { line: editor.logicalCursor.row, character: editor.logicalCursor.col })
       return
     }
     if (pending) return
@@ -4555,12 +4664,13 @@ export function EditorPopover({
     }
     setCursor(next)
     const editor = editorRef.current
-    const selection = editor?.getSelection()
-    const summary = !editor || !selection || selection.end <= selection.start
+    const content = editor?.getSelection() ? editor.plainText : null
+    const selection = editor && content != null ? editorSelectionOffsets(editor, content) : null
+    const summary = !selection || content == null || selection.end <= selection.start
       ? null
       : {
         characters: selection.end - selection.start,
-        lines: editor.plainText.slice(selection.start, selection.end).split('\n').length,
+        lines: content.slice(selection.start, selection.end).split('\n').length,
       }
     // Caret movement is the hot path; only re-render when the readout changes.
     setSelectionSummary((current) => (
@@ -4731,10 +4841,10 @@ export function EditorPopover({
     if (!activeTab || focusPane !== 'editor' || multiCursor || snippetSessionRef.current) return null
     const lineStarts = lineStartsFor(activeTab.content)
     if (cursor.line >= lineStarts.length) return null
-    const cursorOffset = Math.min(
-      cursor.line + 1 < lineStarts.length ? lineStarts[cursor.line + 1]! - 1 : activeTab.content.length,
-      lineStarts[cursor.line]! + cursor.visualColumn,
-    )
+    const lineStart = lineStarts[cursor.line]!
+    const line = editorLineText(activeTab.content, lineStarts, cursor.line)
+    const measure = editorRef.current ? editorCellMeasure(editorRef.current) : null
+    const cursorOffset = lineStart + (measure ? indexAtCellColumn(line, cursor.visualColumn, measure) : Math.min(cursor.visualColumn, line.length))
     return editorGhostSuffix(activeTab.content, cursorOffset, ghostCandidate)
   }, [activeTab, cursor.line, cursor.visualColumn, focusPane, ghostCandidate, multiCursor])
   // Absolute coordinates here are relative to the popover's frame, one row and

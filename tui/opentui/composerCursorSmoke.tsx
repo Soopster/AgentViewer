@@ -3,8 +3,8 @@
 // white on every theme, which vanishes on a light one — and turns into an
 // underline while the draft is a `!` shell command. Neither is in the character
 // frame, so this reads the renderer's cursor state.
-import React, { act } from 'react'
-import { testRender } from '@opentui/react/test-utils'
+import React from 'react'
+import { testRender, act } from './testRender'
 import { RGBA } from '@opentui/core'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'

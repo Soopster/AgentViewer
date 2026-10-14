@@ -1,10 +1,10 @@
 /** @jsxImportSource @opentui/react */
-import React, { act } from 'react'
+import React from 'react'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RGBA, SyntaxStyle, type TextareaRenderable } from '@opentui/core'
-import { testRender } from '@opentui/react/test-utils'
+import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
 import { EditorPopover, type EditorKeyEvent } from './EditorPopover'
 import { editorTextFromDisk, editorTextToDisk } from './editorLineEndings'
@@ -67,13 +67,13 @@ const originalBytes = Buffer.concat([
 
 let keyHandler: ((key: EditorKeyEvent) => boolean) | null = null
 const notices: Array<{ kind: 'info' | 'error'; message: string }> = []
-const syntaxStyle = SyntaxStyle.fromStyles({ default: { fg: RGBA.fromHex(DARK_THEME.text) } })
+const syntaxStyleDefinitions = { default: { fg: RGBA.fromHex(DARK_THEME.text) } }
+let syntaxStyle!: SyntaxStyle
 
 try {
   await writeFile(filePath, originalBytes)
 
-  const setup = await testRender(
-    <EditorPopover
+  const setup = await testRenderWithSyntaxStyle(syntaxStyleDefinitions, (style) => { syntaxStyle = style; return (<EditorPopover
       cwd={workspace}
       initialPath={filePath}
       theme={DARK_THEME}
@@ -85,7 +85,7 @@ try {
       onNotice={(kind, message) => { notices.push({ kind, message }) }}
       onClipboardRead={async () => ''}
       onClipboardWrite={async () => {}}
-    />,
+    />) },
     { width: 110, height: 28 },
   )
 
