@@ -1,3 +1,4 @@
+import { mcpResourceLinks } from '../lib/mcpArtifacts'
 import { readableContextText } from '../lib/composerContext'
 import { getAssistantLabel } from '../lib/provider'
 import {
@@ -2174,6 +2175,15 @@ function previewTool(thread: ToolThread, activeForms?: TaskActiveForms, taskRegi
 }
 
 function formatBlock(block: ThreadedBlock, activeForms?: TaskActiveForms, taskRegistry?: TaskRegistry): TuiTranscriptCardLine[] {
+  const links = block.type === 'tool_thread'
+    ? mcpResourceLinks(block.result?.resourceLinks, Array.isArray(block.result?.content) ? block.result.content : [])
+    : block.type === 'claude_system' ? mcpResourceLinks(block.payload.resource_links) : []
+  const content = formatBlockContent(block, activeForms, taskRegistry)
+  if (!links.length) return content
+  return [...content, ...links.map(link => line(`artifact: ${sanitizeLine(link.title || link.name)} — ${link.uri}`, 'muted'))]
+}
+
+function formatBlockContent(block: ThreadedBlock, activeForms?: TaskActiveForms, taskRegistry?: TaskRegistry): TuiTranscriptCardLine[] {
   switch (block.type) {
     case 'text': {
       const protocolLines = textLinesForProtocolAwareBlock(block.text, false)
@@ -2272,7 +2282,7 @@ function formatBlock(block: ThreadedBlock, activeForms?: TaskActiveForms, taskRe
           : null
         const status = typeof info?.status === 'string' ? info.status : 'updated'
         const utilization = typeof info?.utilization === 'number' ? ` · ${Math.round(info.utilization * 100)}%` : ''
-        return [line(`rate limit ${status}${utilization}`, status === 'rejected' ? 'result_error' : 'system')]
+        return [line(`rate limit ${status}${utilization}${typeof info?.overageEnabled === 'boolean' ? ` · extra usage ${info.overageEnabled ? 'enabled' : 'disabled'}` : ''}`, status === 'rejected' ? 'result_error' : 'system')]
       }
       if (block.subtype === 'prompt_suggestion' && typeof block.payload.suggestion === 'string') {
         return [line(`suggestion: ${truncateLine(block.payload.suggestion)}`, 'result_ok')]
@@ -2951,6 +2961,15 @@ function extractCodeBlocksFromBlocks(blocks: ThreadedBlock[], activeForms?: Task
 }
 
 function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms, taskRegistry?: TaskRegistry): TuiTranscriptCardLine[] {
+  const links = block.type === 'tool_thread'
+    ? mcpResourceLinks(block.result?.resourceLinks, Array.isArray(block.result?.content) ? block.result.content : [])
+    : block.type === 'claude_system' ? mcpResourceLinks(block.payload.resource_links) : []
+  const content = formatBlockExpandedContent(block, activeForms, taskRegistry)
+  if (!links.length) return content
+  return [...content, ...links.map(link => line(`artifact: ${sanitizeLine(link.title || link.name)} — ${link.uri}`, 'muted'))]
+}
+
+function formatBlockExpandedContent(block: ThreadedBlock, activeForms?: TaskActiveForms, taskRegistry?: TaskRegistry): TuiTranscriptCardLine[] {
   switch (block.type) {
     case 'text': {
       const protocolLines = textLinesForProtocolAwareBlock(block.text, true)
@@ -3315,6 +3334,7 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
         ]
         if (typeof info?.rateLimitType === 'string') lines.push(line(`  limit: ${info.rateLimitType}`, 'dim'))
         if (typeof info?.utilization === 'number') lines.push(line(`  utilization: ${Math.round(info.utilization * 100)}%`, 'dim'))
+        if (typeof info?.overageEnabled === 'boolean') lines.push(line(`  extra usage: ${info.overageEnabled ? 'enabled' : 'disabled'}`, 'dim'))
         if (typeof info?.overageStatus === 'string') lines.push(line(`  overage: ${info.overageStatus}`, 'dim'))
         if (typeof info?.overageDisabledReason === 'string') lines.push(line(`  overage disabled: ${info.overageDisabledReason}`, 'dim'))
         return lines

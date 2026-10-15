@@ -392,7 +392,7 @@ export function extractCopilotElicitation(payload: unknown): PendingPermission |
   const id = stringField(data, 'requestId')
   if (!id) return null
   const mode = data.mode === 'url' ? 'url' : 'form'
-  const questions = mode === 'form' ? parseMcpElicitationQuestions(data.requestedSchema) : undefined
+  const questions = mode === 'form' ? parseMcpElicitationQuestions(data.requestedSchema, data.property_order) : undefined
   const source = stringField(data, 'elicitationSource')
   const message = stringField(data, 'message')
   return {
@@ -557,7 +557,7 @@ function elicitationOption(value: unknown): PendingQuestionOption | null {
   }
 }
 
-export function parseMcpElicitationQuestions(schema: unknown): PendingQuestion[] | undefined {
+export function parseMcpElicitationQuestions(schema: unknown, propertyOrder?: unknown): PendingQuestion[] | undefined {
   const root = asRecord(schema)
   const properties = root ? asRecord(root.properties) : null
   if (!properties) return undefined
@@ -565,7 +565,15 @@ export function parseMcpElicitationQuestions(schema: unknown): PendingQuestion[]
     ? root.required.filter((value): value is string => typeof value === 'string')
     : [])
   const questions: PendingQuestion[] = []
-  for (const [id, rawProperty] of Object.entries(properties)) {
+  const orderedIds = new Set<string>()
+  if (Array.isArray(propertyOrder)) {
+    for (const id of propertyOrder) {
+      if (typeof id === 'string' && Object.hasOwn(properties, id)) orderedIds.add(id)
+    }
+  }
+  for (const id of Object.keys(properties)) orderedIds.add(id)
+  for (const id of orderedIds) {
+    const rawProperty = properties[id]
     const property = asRecord(rawProperty)
     if (!property) continue
     const type = stringField(property, 'type')
@@ -711,7 +719,7 @@ export function extractClaudeElicitation(payload: unknown): PendingPermission | 
   const id = stringField(data, 'requestId')
   if (!id) return null
   const mode = data.mode === 'url' ? 'url' : 'form'
-  const questions = mode === 'form' ? parseMcpElicitationQuestions(data.requestedSchema) : undefined
+  const questions = mode === 'form' ? parseMcpElicitationQuestions(data.requestedSchema, data.property_order) : undefined
   const serverName = stringField(data, 'displayName') ?? stringField(data, 'serverName')
   const message = stringField(data, 'message')
   return {
@@ -853,7 +861,7 @@ export function extractAcpElicitation(payload: unknown): PendingPermission | nul
   if (!id) return null
   const provider = isAcpProvider(data.provider) ? data.provider : undefined
   const mode = data.mode === 'url' ? 'url' : 'form'
-  const questions = mode === 'form' ? parseMcpElicitationQuestions(data.requestedSchema) : undefined
+  const questions = mode === 'form' ? parseMcpElicitationQuestions(data.requestedSchema, data.property_order) : undefined
   const message = stringField(data, 'message')
   return {
     id,

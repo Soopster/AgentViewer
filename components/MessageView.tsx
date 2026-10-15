@@ -35,6 +35,8 @@ import { downloadHtml } from '@/lib/downloadHtml'
 import { pathBasename } from '@/lib/projectPaths'
 import { getPrimarySessionTag } from '@/lib/sessionTags'
 import {
+  applyClaudeLiveToolResults,
+  extractClaudeStreamToolResults,
   extractClaudeStreamToolInputDelta,
   extractClaudeStreamToolUse,
   normalizeClaudeStreamThreadedMessage,
@@ -5303,6 +5305,10 @@ function MessageViewInner({
             const codexCompletionIsText = codexCompletionItem?.type === 'agentMessage' || codexCompletionItem?.type === 'plan'
 
             if (session.provider === 'claude') {
+              const results = extractClaudeStreamToolResults(parsed)
+              if (results.length) {
+                setLiveThreadedMessages(previous => applyClaudeLiveToolResults(previous, results))
+              }
               const threaded = normalizeClaudeStreamThreadedMessage(parsed)
               if (threaded) {
                 setLiveThreadedMessages((prev) => upsertThreadedMessage(prev, threaded))
@@ -9066,7 +9072,7 @@ function MessageViewInner({
                 marginInline: timelineWidth === 'centered' ? 'auto' : undefined,
               }}
             >
-              <MessageDensityProvider density={density} onOpenSession={onOpenSession} turnDurations={turnDurations}>
+              <MessageDensityProvider session={session ?? undefined} density={density} onOpenSession={onOpenSession} turnDurations={turnDurations}>
               <ViewModeProvider mode={viewMode}>
               <DiffStyleProvider diffStyle={diffStyle}>
               <DiffOptionsProvider options={diffOptions}>

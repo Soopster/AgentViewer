@@ -104,6 +104,7 @@ import {
   broadcastClaudeTurnEnd,
   broadcastClaudeTurnStart,
 } from './claudeHarness'
+import { claudeArtifactStore } from './claudeArtifactStore'
 import { noteClaudeCommandsChanged } from './claudeCommandsStore'
 import { createClaudeViewerQueryExtensions, reportClaudePluginLoadFailures } from './claudeViewerIntegration'
 import {
@@ -753,6 +754,7 @@ class ClaudePool {
         // ordering honest even when no run() subscriber is attached (e.g. a
         // steered follow-up turn the CLI started after the stream detached).
         entry.lastActivityAt = Date.now()
+        if (message.type === 'user') await claudeArtifactStore.capture(entry.sessionId, message).catch(() => {})
         // An init frame can repeat on every turn. Surface each distinct load
         // failure once for this process, including an init received before a
         // run() subscriber attaches. Keep the original frame in the stream.

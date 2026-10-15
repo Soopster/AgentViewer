@@ -15,6 +15,8 @@ import {
   listSubagents,
 } from '@anthropic-ai/claude-agent-sdk'
 import { claudeSessionStoreOptions } from './claudeSessionStore'
+import { claudeArtifactStore } from './claudeArtifactStore'
+import { currentProviderInstanceId } from './providerInstances'
 import { normalizeClaudeHistoryMessages } from './claudeMapper'
 import { readMappedMessagesCache, writeMappedMessagesCache } from './mappedMessagesCache'
 import { sortMessagesChronologically, withOriginKind } from './adapters/shared'
@@ -138,7 +140,7 @@ async function readClaudeTranscriptToken(
 }
 
 export async function readClaudeSessionMessages(sessionId: string): Promise<SessionMessage[]> {
-  const cacheKey = `claude:${sessionId}`
+  const cacheKey = `claude:${currentProviderInstanceId('claude')}:${sessionId}`
   const subagentIds = await listSubagents(sessionId, claudeSessionStoreOptions()).catch(() => [] as string[])
 
   // Idle polls dominate this path: the reader re-reads the open session every
@@ -147,7 +149,9 @@ export async function readClaudeSessionMessages(sessionId: string): Promise<Sess
   // the allocator's high-water mark, since a JS engine keeps its arenas mapped
   // long after the garbage in them is collected. Ask what the file *is* before
   // reading what it says, and an unchanged transcript costs a stat.
-  const token = await readClaudeTranscriptToken(sessionId, subagentIds)
+  const transcriptToken = await readClaudeTranscriptToken(sessionId, subagentIds)
+  const artifactToken = await claudeArtifactStore.token(sessionId)
+  const token = transcriptToken ? `${transcriptToken}:artifacts:${artifactToken}` : null
   if (token) {
     const fresh = readMappedMessagesCache(cacheKey, token)
     if (fresh) return fresh
@@ -162,7 +166,7 @@ export async function readClaudeSessionMessages(sessionId: string): Promise<Sess
   // guarantee the cache had before the token existed.
   const lastMain = mainRaw.at(-1) as { uuid?: string } | undefined
   const signature = token
-    ?? `${mainRaw.length}:${lastMain?.uuid ?? ''}:${subagentIds.length}:${subagentIds.at(-1) ?? ''}`
+    ?? `${mainRaw.length}:${lastMain?.uuid ?? ''}:${subagentIds.length}:${subagentIds.at(-1) ?? ''}:artifacts:${artifactToken}`
   const cached = readMappedMessagesCache(cacheKey, signature)
   if (cached) return cached
 
@@ -190,7 +194,7 @@ export async function readClaudeSessionMessages(sessionId: string): Promise<Sess
 
   const deduped = new Map<string, SessionMessage>()
   for (const message of [
-    ...normalizeClaudeHistoryMessages(mainRaw as unknown[]),
+    ...await claudeArtifactStore.hydrate(sessionId, normalizeClaudeHistoryMessages(mainRaw as unknown[])),
     ...subagentMessages.flat(),
   ]) {
     deduped.set(`${message.provider ?? 'claude'}:${message.uuid}`, message)

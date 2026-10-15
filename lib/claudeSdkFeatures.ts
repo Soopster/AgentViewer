@@ -51,6 +51,7 @@ export type ClaudeBackgroundTaskSummary = {
   description: string
   command?: string
   agent_type?: string
+  subagent_type?: string
   /** task_id of the subagent task that launched this one (SDK 0.3.292+). */
   parent_task_id?: string
   /** Id of the task's current run; a resumed task keeps its id and gets a new run id. */
@@ -306,6 +307,7 @@ export function getClaudeBackgroundTasks(payload: SystemMessagePayload): ClaudeB
         description,
         command: stringValue(entry.command),
         agent_type: stringValue(entry.agent_type),
+        subagent_type: stringValue(entry.subagent_type),
         parent_task_id: stringValue(entry.parent_task_id),
         run_id: stringValue(entry.run_id),
         server: stringValue(entry.server),
@@ -330,6 +332,7 @@ export function getClaudeBackgroundTasks(payload: SystemMessagePayload): ClaudeB
       if (!id || !type || !description) return []
       return [{
         id, type, status: 'running', description,
+        subagent_type: stringValue(entry.subagent_type),
         parent_task_id: stringValue(entry.parent_task_id),
         run_id: stringValue(entry.run_id),
       }]
@@ -365,7 +368,7 @@ export function formatClaudeRuntimeCounts(payload: SystemMessagePayload): string
 function formatClaudeBackgroundTaskSummary(task: ClaudeBackgroundTaskSummary, index?: number): string {
   const prefix = index == null ? '' : `${index + 1}. `
   const serverTool = [task.server, task.tool].filter(Boolean).join('/')
-  const detail = task.command ?? task.agent_type ?? (serverTool || task.name) ?? ''
+  const detail = task.command ?? task.subagent_type ?? task.agent_type ?? (serverTool || task.name) ?? ''
   const label = [task.type, task.status].filter(Boolean).join(' ')
   const lineage = task.parent_task_id ? ` (from ${task.parent_task_id})` : ''
   const suffix = (detail ? ` - ${detail}` : '') + lineage

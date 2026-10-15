@@ -10,6 +10,8 @@ import {
   subscribeColorTreatment,
   type ColorTreatment,
 } from '@/lib/colorTreatment'
+import { McpArtifactLinks, McpToolArtifacts } from './McpArtifacts'
+import { mcpResourceLinks } from '@/lib/mcpArtifacts'
 import { pathBasename as basename } from '@/lib/projectPaths'
 import { DEFAULT_DIFF_OPTIONS, DiffCommentComposerContext, LiveSubagentTextContext, TaskActiveFormsContext, type DiffOptions } from './messageItemShared'
 import ReactMarkdown from 'react-markdown'
@@ -672,6 +674,7 @@ function CardShell({
       {header}
       {body}
       {result && <ToolResultSection result={result} toolName={toolName} filePath={resultFilePath} />}
+      {result && <McpArtifactLinks links={mcpResourceLinks(result.resourceLinks, Array.isArray(result.content) ? result.content : [])} />}
     </div>
   )
 }
@@ -1249,6 +1252,8 @@ function McpToolCard({ thread }: { thread: ToolThread }) {
   const [hovered, setHovered] = useState(false)
   const { toolUse, result } = thread
   const id = parseMcpToolName(toolUse.name)!
+  const sessionId = use(SessionContext)
+  const sessionTarget = use(ArtifactSessionContext)
   const c = toolColor(toolUse.name)
   const flat = useColorTreatment() === 'flat'
   const input = (toolUse.input ?? {}) as Record<string, unknown>
@@ -1387,6 +1392,8 @@ function McpToolCard({ thread }: { thread: ToolThread }) {
         </div>
       )}
       {result && <McpResultSection result={result} />}
+      {result && <McpToolArtifacts key={`${sessionTarget?.providerInstanceId ?? ''}:${sessionId}:${toolUse.id}`} result={result} input={input}
+        session={sessionTarget && sessionId ? { ...sessionTarget, sessionId } : undefined} serverName={id.server} toolName={id.tool} />}
     </div>
   )
 }
@@ -4893,7 +4900,7 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
         : null
       const status = typeof info?.status === 'string' ? info.status : 'updated'
       const utilization = typeof info?.utilization === 'number' ? ` · ${Math.round(info.utilization * 100)}%` : ''
-      return `Rate limit ${status}${utilization}`
+      return `Rate limit ${status}${utilization}${typeof info?.overageEnabled === 'boolean' ? ` · extra usage ${info.overageEnabled ? 'enabled' : 'disabled'}` : ''}`
     }
     if (subtype === 'prompt_suggestion' && typeof payload.suggestion === 'string') return payload.suggestion
     if (subtype === 'auth_status') {
@@ -5054,6 +5061,7 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
     if (subtype === 'rate_limit_event' && payload.rate_limit_info && typeof payload.rate_limit_info === 'object') {
       const info = payload.rate_limit_info as Record<string, unknown>
       if (typeof info.rateLimitType === 'string') nextBadges.push(info.rateLimitType)
+      if (typeof info.overageEnabled === 'boolean') nextBadges.push(`extra usage ${info.overageEnabled ? 'enabled' : 'disabled'}`)
       if (typeof info.overageStatus === 'string') nextBadges.push(`overage ${info.overageStatus}`)
       if (info.isUsingOverage === true) nextBadges.push('using overage')
     }
@@ -5128,6 +5136,7 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
         typeof info?.rateLimitType === 'string' ? `Limit: ${info.rateLimitType}` : '',
         typeof info?.utilization === 'number' ? `Utilization: ${Math.round(info.utilization * 100)}%` : '',
         formatClaudeTimestamp(info?.resetsAt) ? `Resets: ${formatClaudeTimestamp(info?.resetsAt)}` : '',
+        typeof info?.overageEnabled === 'boolean' ? `Extra usage: ${info.overageEnabled ? 'enabled' : 'disabled'}` : '',
         typeof info?.overageStatus === 'string' ? `Overage: ${info.overageStatus}` : '',
         formatClaudeTimestamp(info?.overageResetsAt) ? `Overage resets: ${formatClaudeTimestamp(info?.overageResetsAt)}` : '',
         typeof info?.overageDisabledReason === 'string' ? `Overage disabled: ${info.overageDisabledReason}` : '',
@@ -5299,6 +5308,7 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
           display: 'grid',
           gap: 10,
         }}>
+          <McpArtifactLinks links={mcpResourceLinks(payload.resource_links)} />
           {body && (
             <pre style={{
               margin: 0,
@@ -6507,6 +6517,7 @@ function densityConfig(d: MessageDensity): DensityConfig {
 const MessageDensityContext = createContext<DensityConfig>(densityConfig('balanced'))
 const HydrationContext = createContext(false)
 const SessionContext = createContext<string | undefined>(undefined)
+const ArtifactSessionContext = createContext<Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'> | undefined>(undefined)
 const ViewModeContext = createContext<WebViewMode>('conversation')
 const DiffStyleContext = createContext<PierreDiffStyle>('stacked')
 
@@ -6521,9 +6532,11 @@ const NavigateSessionContext = createContext<((session: Session) => void) | unde
  * message uuid, computed once over the full transcript by the host view. */
 const TurnDurationContext = createContext<Map<string, number> | undefined>(undefined)
 
-export function MessageDensityProvider({ density, children, onOpenSession, turnDurations }: { density: MessageDensity; children: React.ReactNode; onOpenSession?: (session: Session) => void; turnDurations?: Map<string, number> }) {
+export function MessageDensityProvider({ density, children, onOpenSession, turnDurations, session }: { session?: Session; density: MessageDensity; children: React.ReactNode; onOpenSession?: (session: Session) => void; turnDurations?: Map<string, number> }) {
   const [hydrated, setHydrated] = useState(false)
   const value = useMemo(() => densityConfig(density), [density])
+  const artifactSession = useMemo(() => session ? { sessionId: session.sessionId, provider: session.provider, providerInstanceId: session.providerInstanceId } : undefined,
+    [session?.sessionId, session?.provider, session?.providerInstanceId])
 
   useEffect(() => {
     setHydrated(true)
@@ -6534,7 +6547,7 @@ export function MessageDensityProvider({ density, children, onOpenSession, turnD
       <HydrationContext.Provider value={hydrated}>
         <NavigateSessionContext.Provider value={onOpenSession}>
           <TurnDurationContext.Provider value={turnDurations}>
-            {children}
+            <ArtifactSessionContext.Provider value={artifactSession}>{children}</ArtifactSessionContext.Provider>
           </TurnDurationContext.Provider>
         </NavigateSessionContext.Provider>
       </HydrationContext.Provider>

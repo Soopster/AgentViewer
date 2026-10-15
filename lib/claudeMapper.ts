@@ -7,6 +7,7 @@ import type {
   ToolUseBlock,
 } from './types'
 import type { ThreadedMessage } from './threading'
+import { attachMcpResultSidecar, mcpResourceLinks } from './mcpArtifacts'
 import { recordRawFrame } from './rawFrames'
 import { claudeStartupFailureHint } from './claudeSdkFeatures'
 
@@ -59,6 +60,9 @@ function toolResultBlock(value: unknown, toolResultMeta?: unknown): ToolResultBl
       ? content as string | ContentBlock[]
       : stringify(content),
     is_error: record.is_error === true || record.isError === true || undefined,
+    resourceLinks: mcpResourceLinks(record.resourceLinks, Array.isArray(content) ? content : []),
+    ...(Object.hasOwn(record, 'structuredContent') ? { structuredContent: record.structuredContent } : {}),
+    ...(record.mcpMeta && typeof record.mcpMeta === 'object' ? { mcpMeta: asObject(record.mcpMeta) } : {}),
     tool_result_meta: Object.keys(meta).length > 0 ? meta : undefined,
   }
 }
@@ -96,7 +100,13 @@ function normalizeApiMessage(
   envelope?: Record<string, unknown>,
 ): ApiMessage {
   const record = asObject(value)
-  const content = appendToolResults(messageContent(record.content), toolResultBlocks(toolUseResult, toolResultMeta))
+  const rawContent = appendToolResults(messageContent(record.content), toolResultBlocks(toolUseResult, toolResultMeta))
+  const results = Array.isArray(rawContent) ? rawContent.filter((block): block is ToolResultBlock => block.type === 'tool_result') : []
+  const enriched = attachMcpResultSidecar(results, toolUseResult)
+  let resultIndex = 0
+  const content = Array.isArray(rawContent)
+    ? rawContent.map(block => block.type === 'tool_result' ? enriched[resultIndex++] : block)
+    : rawContent
   const message: ApiMessage = {
     role: type,
     content,
@@ -470,10 +480,10 @@ export function extractClaudeStreamToolResults(value: unknown): ToolResultBlock[
         .map((entry) => toolResultBlock(entry, record.tool_result_meta))
         .filter((result): result is ToolResultBlock => Boolean(result))
     : []
-  if (contentResults.length > 0) return contentResults
+  if (contentResults.length > 0) return attachMcpResultSidecar(contentResults, record.tool_use_result)
 
   // Some SDK messages expose the result only through the structured sidecar.
-  return toolResultBlocks(record.tool_use_result, record.tool_result_meta)
+  return attachMcpResultSidecar(toolResultBlocks(record.tool_use_result, record.tool_result_meta), record.tool_use_result)
 }
 
 export function extractClaudeStreamToolInputDelta(value: unknown): { index: number; partialJson: string } | null {
@@ -581,4 +591,23 @@ export function parseClaudeStreamToolInput(raw: string): Record<string, unknown>
 
   const withoutComma = withoutClosers.replace(/,\s*$/, '')
   return parseObject(`${withoutComma}${closed.slice(withoutClosers.length)}`)
+}
+
+/** Fill live cards without changing the identity of unrelated transcript rows. */
+export function applyClaudeLiveToolResults(messages: ThreadedMessage[], results: ToolResultBlock[]): ThreadedMessage[] {
+  if (!results.length) return messages
+  const byId = new Map(results.map(result => [result.tool_use_id, result]))
+  let changed = false
+  const updated = messages.map(message => {
+    let rowChanged = false
+    const blocks = message.blocks.map(block => {
+      if (block.type !== 'tool_thread') return block
+      const result = byId.get(block.toolUse.id)
+      if (!result || result === block.result) return block
+      rowChanged = changed = true
+      return { ...block, result }
+    })
+    return rowChanged ? { ...message, blocks } : message
+  })
+  return changed ? updated : messages
 }

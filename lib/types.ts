@@ -1,3 +1,13 @@
+export type McpResourceLink = {
+  type: 'resource_link'
+  uri: string
+  name: string
+  title?: string
+  description?: string
+  mimeType?: string
+  size?: number
+}
+
 export type TextBlock = { type: 'text'; text: string }
 export type ToolUseBlock = { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
 export type ToolResultBlock = {
@@ -5,6 +15,10 @@ export type ToolResultBlock = {
   tool_use_id: string
   content: string | ContentBlock[]
   is_error?: boolean
+  /** MCP result sidecars, preserved independently of model-facing text. */
+  resourceLinks?: McpResourceLink[]
+  structuredContent?: unknown
+  mcpMeta?: Record<string, unknown>
   /** Claude SDK sidecar metadata classifying denied/interrupted/cancelled results. */
   tool_result_meta?: Record<string, unknown>
 }

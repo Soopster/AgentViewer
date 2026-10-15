@@ -1,3 +1,5 @@
+import { claudeArtifactStore } from './claudeArtifactStore'
+import { readClaudeMcpApp } from './claudeMcpApps'
 import { projectComposerContext } from './composerContext'
 import { coordinatorPermissionToken } from './coordinatorNativePermission'
 import { extractPendingPermissions } from './permissions'
@@ -1524,6 +1526,9 @@ function createClaudeElicitationBridge(
       url: request.url,
       elicitationId: request.elicitationId,
       requestedSchema: request.requestedSchema,
+      // 0.3.300 declares this on the wire but drops it from OnElicitation.
+      // Accept it when a future SDK forwards it; schema order remains the fallback.
+      property_order: (request as typeof request & { property_order?: string[] }).property_order,
       title: request.title,
       displayName: request.displayName,
       description: request.description,
@@ -2134,6 +2139,14 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
       // queue the CLI accepts prompts on, and a full read costs ~1.4s there.
       const usage = await warm.query.getContextUsage({ detail: 'summary' })
       return { ok: true, applied: 'live', usage }
+    }
+    if (action === 'getMcpApp') {
+      const serverName = typeof body.serverName === 'string' ? body.serverName : ''
+      const toolName = typeof body.toolName === 'string' ? body.toolName : ''
+      if (!serverName || !toolName) throw new Error('serverName and toolName are required')
+      const warm = claudePoolModule().peekClaudeSession(sessionId)
+      if (!warm) throw new Error('Continue this Claude session before opening its MCP App.')
+      return readClaudeMcpApp(warm.query, serverName, toolName)
     }
     if (action === 'backgroundTasks') {
       const backgrounded = await backgroundRunningSession(sessionId)
@@ -3379,6 +3392,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           if (eventSessionId) {
             try { broadcastClaudeMessage(eventSessionId, msg.type) } catch { /* observer-only signal */ }
           }
+          if (msg.type === 'user') await claudeArtifactStore.capture(messageSessionId ?? sessionId, msg).catch(() => {})
           noteClaudeCommandsChanged(messageSessionId ?? sessionId, msg)
           const resultError = msg.type === 'result'
             ? claudeResultErrorMessage(msg as unknown as Record<string, unknown>)
