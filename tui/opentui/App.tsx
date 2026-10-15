@@ -5100,7 +5100,7 @@ function effortPickerOptions(
 const CLAUDE_PERMISSION_MODE_ORDER = ['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'] as const
 type TuiPermissionMode = typeof CLAUDE_PERMISSION_MODE_ORDER[number]
 
-// Permission mode status row — matches Claude Code's shift+tab indicator style.
+// Permission mode indicator in the composer dock — Claude Code's shift+tab style.
 const PERMISSION_MODE_GLYPH: Partial<Record<string, string>> = {
   plan: '“',           // " left double quotation mark (read-only/pause)
   acceptEdits: '▶▶',    // ▶▶ (auto-accept edits)
@@ -5108,10 +5108,10 @@ const PERMISSION_MODE_GLYPH: Partial<Record<string, string>> = {
   bypassPermissions: '▶▶', // ▶▶ (bypass all)
 }
 const PERMISSION_MODE_LABEL: Partial<Record<string, string>> = {
-  plan: 'plan mode',
+  plan: 'plan',
   acceptEdits: 'accept edits',
-  auto: 'auto mode',
-  bypassPermissions: 'bypass permissions',
+  auto: 'auto',
+  bypassPermissions: 'bypass',
 }
 
 function proceduralThemeLabel(name: string): string {
@@ -10833,6 +10833,15 @@ export default function OpenTuiApp() {
   // provider-specific send knobs.
   const composerKnobSegments = useMemo<InlineTextSegment[]>(() => {
     const parts: InlineTextSegment[] = []
+    // The mode lives here rather than on a row of its own above the dock, and
+    // first: the border fits one or two settings at common widths, and a
+    // hidden bypass is the one that matters. Its colour still warns.
+    if (composerTargetSession?.provider === 'claude' && composerPermissionMode !== 'default') {
+      parts.push({
+        text: `${PERMISSION_MODE_GLYPH[composerPermissionMode] ?? ''} ${PERMISSION_MODE_LABEL[composerPermissionMode] ?? composerPermissionMode}`.trim(),
+        fg: composerPermissionMode === 'bypassPermissions' ? theme.red : composerPermissionMode === 'plan' ? theme.dim : theme.amber,
+      })
+    }
     if (composerCurrentModel) {
       parts.push({ text: `model:${composerCurrentModel}`, fg: composerAccentColor })
     } else if (composerTargetSession?.provider && composerTargetSession.provider !== 'claude-acp' && composerTargetSession.provider !== 'codex-acp' && composerTargetSession.provider !== 'acp') {
@@ -10846,9 +10855,6 @@ export default function OpenTuiApp() {
     parts.push({ text: `effort:${tuiEffort}`, fg: theme.dim })
     if (composerTargetSession?.provider === 'opencode' && tuiOpenCodeAgent) {
       parts.push({ text: `agent:${tuiOpenCodeAgent}`, fg: theme.cyan })
-    }
-    if (composerTargetSession?.provider === 'claude' && composerPermissionMode !== 'default') {
-      parts.push({ text: `mode:${composerPermissionMode}`, fg: theme.violet })
     }
     if (composerTargetSession?.provider === 'codex' && composerCodexMode === 'plan') {
       parts.push({ text: 'mode:plan', fg: theme.cyan })
@@ -11749,7 +11755,6 @@ export default function OpenTuiApp() {
     if (composerActivityVisible && hasSubagentTail) rows += 2
     if (visibleLiveToolActivities.length > 0 && visibleRunningToolCount > 0) rows += 2
     if (livePromptSuggestion && composerSendState !== 'sending') rows += 2
-    if (composerTargetSession?.provider === 'claude' && composerPermissionMode !== 'default') rows += 2
     if (hasComposerStatusMessage) {
       const streamingResponse = visibleComposerSending && visibleComposerLiveText && !visibleComposerError
       rows += streamingResponse
@@ -24078,20 +24083,6 @@ export default function OpenTuiApp() {
         <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
           <text fg={theme.cyan} wrapMode="none">
             {fitText(`Tab → ${livePromptSuggestion}`, Math.max(width - 4, 20))}
-          </text>
-        </box>
-      ) : null}
-
-      {composerTargetSession?.provider === 'claude' && composerPermissionMode !== 'default' ? (
-        <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
-          <text
-            fg={composerPermissionMode === 'bypassPermissions' ? theme.red : composerPermissionMode === 'plan' ? theme.dim : theme.amber}
-            wrapMode="none"
-          >
-            {fitText(
-              `${PERMISSION_MODE_GLYPH[composerPermissionMode] ?? ''} ${PERMISSION_MODE_LABEL[composerPermissionMode] ?? composerPermissionMode} on  (shift+tab to cycle)`,
-              Math.max(width - 4, 20),
-            )}
           </text>
         </box>
       ) : null}

@@ -170,6 +170,13 @@ try {
     if (!body.includes('││')) fail('A gutter separates the sidebar and reader frames')
     if (!body.trimEnd().endsWith('│') || body.trimEnd().length !== body.length) fail('The reader frame stops short of the right edge')
   }
+  // The permission mode is a setting in the dock's border, not a row of its
+  // own between the transcript and the dock (a Claude session starts in auto).
+  {
+    const rows = setup.captureCharFrame().split('\n')
+    if (rows.some((row) => row.includes('shift+tab to cycle'))) fail('The permission mode took a row of its own')
+    if (!rows.some((row) => row.startsWith('└') && row.includes('▶▶ auto'))) fail('The dock border does not show the permission mode')
+  }
 
   // ── nothing is highlighted ───────────────────────────────────────────────
   // A stream-like view marks its cursor card with ❯; the tail card is where
