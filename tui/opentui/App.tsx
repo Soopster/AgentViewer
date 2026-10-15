@@ -69,6 +69,7 @@ import {
 import type { SelectedLineRange } from '@pierre/diffs'
 import { LayoutEvents, RGBA, SyntaxStyle, MacOSScrollAccel, TextAttributes, type NativeResourceOwner } from '@opentui/core'
 import type { BaseRenderable, BoxRenderable, CliRenderer, Renderable, MarkdownRenderable, MouseEvent, ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable, TextareaAction } from '@opentui/core'
+import { appendAssistantReplyToScrollback } from './agentScrollback'
 import { deriveReaderWindow, getReaderWindowStart, primeReaderWindowStart, setReaderWindowStart, stepReaderWindow, subscribeReaderWindowStart } from './readerWindowStore'
 import type { ReaderWindow } from './readerWindowStore'
 import { useKeyboard, usePaste, useRenderer, useSelectionHandler, useTerminalDimensions } from '@opentui/react'
@@ -9497,6 +9498,38 @@ export default function OpenTuiApp() {
     [openTabSessions, selectedIndex, selectedSessionKey, sessions],
   )
   const selectedSessionIdentity = selectedSession ? sessionKey(selectedSession) : null
+  const assistantScrollbackSessionRef = useRef<string | null>(null)
+  const assistantScrollbackMessageIdsRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    if (!selectedSessionIdentity || !sessionDetail) return
+    if (sessionDetailOwnerKeys.get(sessionDetail) !== selectedSessionIdentity) return
+
+    // Opening a session establishes a baseline. Only replies added after that
+    // point are copied, so navigating to an old session does not replay history.
+    if (assistantScrollbackSessionRef.current !== selectedSessionIdentity) {
+      assistantScrollbackSessionRef.current = selectedSessionIdentity
+      assistantScrollbackMessageIdsRef.current = new Set(
+        sessionDetail.threadedMessages
+          .filter((message) => message.role === 'assistant')
+          .map((message) => message.uuid),
+      )
+      return
+    }
+
+    for (const message of sessionDetail.threadedMessages) {
+      if (message.role !== 'assistant' || assistantScrollbackMessageIdsRef.current.has(message.uuid)) continue
+      const text = message.blocks
+        .flatMap((block) => block.type === 'text' ? [block.text] : [])
+        .join('')
+        .trim()
+      // Mark only messages with text. If a provider first persists an empty
+      // assistant envelope and fills it on a later poll, the completed text is
+      // still eligible for output.
+      if (!text) continue
+      assistantScrollbackMessageIdsRef.current.add(message.uuid)
+      appendAssistantReplyToScrollback(renderer, `[Assistant reply]\n${text}`)
+    }
+  }, [renderer, selectedSessionIdentity, sessionDetail?.threadedMessages])
   useEffect(() => {
     setTranscriptDiffDraft(null)
     setHoveredTranscriptDiffAnchor(null)
