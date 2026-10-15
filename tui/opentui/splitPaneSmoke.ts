@@ -54,10 +54,10 @@ const firstPaneLayout = calculateSplitPaneLayout({
 })
 assert.equal(firstPaneLayout.visibleCount, 1)
 assert.ok(firstPaneLayout.paneExtent >= 46)
-// The even split must stay exactly what it was before readerShare existed:
-// one separator per pane, the remainder to the reader.
-assert.equal(firstPaneLayout.paneExtent, Math.floor(129 / 2))
-assert.equal(firstPaneLayout.readerExtent, 129 - firstPaneLayout.paneExtent)
+// Frames sit border to border: the even split divides the whole axis, the
+// remainder to the reader.
+assert.equal(firstPaneLayout.paneExtent, Math.floor(130 / 2))
+assert.equal(firstPaneLayout.readerExtent, 130 - firstPaneLayout.paneExtent)
 
 const twoPaneLayout = calculateSplitPaneLayout({
   availableExtent: 200,
@@ -92,7 +92,7 @@ const narrowStacked = calculateSplitPaneLayout({
 assert.equal(narrowStacked.visibleCount, 1)
 assert.ok(narrowStacked.paneExtent >= 9)
 assert.ok(narrowStacked.readerExtent >= 12)
-assert.equal(narrowStacked.paneExtent + narrowStacked.readerExtent, 37)
+assert.equal(narrowStacked.paneExtent + narrowStacked.readerExtent, 38)
 
 // A manual ratio moves the divider without dropping the pane the user asked
 // for: extreme shares clamp to the minimums instead.
@@ -106,8 +106,8 @@ const wideReader = calculateSplitPaneLayout({
   readerShare: 0.75,
 })
 assert.equal(wideReader.visibleCount, 1)
-assert.ok(wideReader.readerExtent >= Math.round(199 * 0.75))
-assert.equal(wideReader.paneExtent + wideReader.readerExtent, 199)
+assert.ok(wideReader.readerExtent >= Math.round(200 * 0.75))
+assert.equal(wideReader.paneExtent + wideReader.readerExtent, 200)
 const clampedReader = calculateSplitPaneLayout({
   availableExtent: 130,
   requestedCount: 1,

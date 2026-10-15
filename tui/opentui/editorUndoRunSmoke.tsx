@@ -25,6 +25,11 @@ assert(!continuesTypingRun({ row: 3, col: 10 }, { row: 2, col: 40 }), 'A differe
 assert(!continuesTypingRun({ row: 3, col: 10 }, { row: 3, col: 4 }), 'A multi-character step ends the run')
 assert(!continuesTypingRun({ row: 3, col: 10 }, { row: 3, col: 11 }), 'Moving forward ends the run')
 assert(!continuesTypingRun({ row: 3, col: 10 }, { row: 3, col: 10 }), 'Standing still ends the run')
+// The caret counts cells, so a wide character comes off two columns at once —
+// and two columns is only one character when the one before the caret is wide.
+assert(continuesTypingRun({ row: 3, col: 10 }, { row: 3, col: 8 }, 2), 'A wide character continues a run')
+assert(!continuesTypingRun({ row: 3, col: 10 }, { row: 3, col: 8 }, 1), 'Two narrow characters at once end the run')
+assert(!continuesTypingRun({ row: 3, col: 10 }, { row: 3, col: 9 }, 2), 'Half a wide character ends the run')
 
 /** A buffer whose caret walks back over a scripted sequence of positions. */
 function scriptedEditor(positions: Array<{ row: number; col: number }>): UndoableEditor & { undos: number } {
@@ -115,7 +120,30 @@ try {
     await press({ name: 'z', ctrl: true, shift: true, sequence: '' } as EditorKeyEvent)
     assert(editor.plainText !== 'start\n', `Redo did nothing: ${JSON.stringify(editor.plainText)}`)
 
-    console.log('Editor undo-run smoke passed (a typed run undoes in one press)')
+    // Wide characters: the caret moves two cells per character, which a
+    // one-column test read as a paste and undid one character per press.
+    await press({ name: 'z', ctrl: true, sequence: '' } as EditorKeyEvent)
+    assert(editor.plainText === 'start\n', `Undo did not reset: ${JSON.stringify(editor.plainText)}`)
+    await act(async () => { editor.gotoLine(0) })
+    await settle(200)
+    await act(async () => { setup.mockInput.typeText('a中文é日b') })
+    await settle(400)
+    const text = (): string => editor.plainText
+    assert(text().startsWith('a中文é日b'), `Wide typing did not land: ${JSON.stringify(editor.plainText)}`)
+    await press({ name: 'z', ctrl: true, sequence: '' } as EditorKeyEvent)
+    assert(editor.plainText === 'start\n',
+      `One undo must take back a run of wide characters: ${JSON.stringify(editor.plainText)}`)
+
+    // A paste right after typing is still its own step.
+    await act(async () => { setup.mockInput.typeText('ab') })
+    await settle(300)
+    await act(async () => { editor.insertText('中文') })
+    await settle(300)
+    await press({ name: 'z', ctrl: true, sequence: '' } as EditorKeyEvent)
+    assert(text().startsWith('ab') && !text().startsWith('ab中'),
+      `Undo after a paste must take back the paste alone: ${JSON.stringify(editor.plainText)}`)
+
+    console.log('Editor undo-run smoke passed (a typed run undoes in one press, wide characters included)')
     await settle(300)
   } finally {
     setup.renderer?.destroy?.()

@@ -141,8 +141,8 @@ export function calculateSplitPaneLayout({
   let paneExtent = 0
   let readerExtent = Math.max(availableExtent, minReaderExtent)
   while (visibleCount > 0) {
-    // One separator column/row per pane, matching the flex `gap` between frames.
-    const usable = availableExtent - visibleCount
+    // Frames sit border to border, so the whole axis is theirs.
+    const usable = availableExtent
     const maxReader = usable - visibleCount * minPaneExtent
     if (maxReader >= minReaderExtent) {
       if (readerShare === SPLIT_SHARE_EVEN) {

@@ -11767,7 +11767,7 @@ export default function OpenTuiApp() {
   // out of the scrollbox's budget (transcriptViewportRows), not this one.
   const mainContentHeight = Math.max(
     height
-    - (fullscreenMode ? 0 : 3)
+    - (fullscreenMode ? 0 : 2)
     - (searchMode || sessionSearchMode ? 4 : fullscreenMode ? 0 : 1)
     - (embeddedComposer ? 0 : composerDockHeight)
     - composerPopoverHeight
@@ -11781,25 +11781,19 @@ export default function OpenTuiApp() {
   // has to leave the task panel its reservation as well as the reader's minimum.
   const surfacePanelMaxWidth = Math.max(
     SURFACE_PANEL_MIN_WIDTH,
-    width - (fullscreenMode ? 0 : 4) - (showRail ? sidebarWidthPreference + 1 : 0) - MIN_READER_WIDTH - 1
-      - effectiveTaskPanelWidth - (taskPanelVisible ? 1 : 0),
+    width - (showRail ? sidebarWidthPreference : 0) - MIN_READER_WIDTH - effectiveTaskPanelWidth,
   )
   const effectiveSurfacePanelWidth = surfacePanelVisible
     ? (surfacePanelExpanded ? surfacePanelMaxWidth : Math.min(surfacePanelWidth, surfacePanelMaxWidth))
     : 0
   // Both right-hand panels come out of the same budget as the task panel, so
   // the reader keeps its minimum no matter how many are open.
-  // The task panel sits in flow behind the root row's one-column gap, which is
-  // the whole of its reservation beyond its own width.
-  const rightPanelsWidth = effectiveTaskPanelWidth + (taskPanelVisible ? 1 : 0)
-    + effectiveSurfacePanelWidth
-  // Only the root row's `paddingX={1}` sits outside the panes. Reserving four
-  // columns here left two unclaimed on the right, so the reader frame stopped
-  // short of the screen edge while its left border sat against the padding.
-  const outerChromeWidth = fullscreenMode ? 0 : 2
-  const maxSidebarWidth = Math.max(MIN_SIDEBAR_WIDTH, width - outerChromeWidth - 1 - MIN_READER_WIDTH - rightPanelsWidth)
+  // The root row has no padding and no gap: neighbouring frames share the
+  // screen edge and each other's borders, so the panes are the whole width.
+  const rightPanelsWidth = effectiveTaskPanelWidth + effectiveSurfacePanelWidth
+  const maxSidebarWidth = Math.max(MIN_SIDEBAR_WIDTH, width - MIN_READER_WIDTH - rightPanelsWidth)
   const sidebarWidth = showRail ? clamp(sidebarWidthPreference, MIN_SIDEBAR_WIDTH, maxSidebarWidth) : 0
-  const readerAreaWidth = Math.max(width - outerChromeWidth - sidebarWidth - (showRail ? 1 : 0) - rightPanelsWidth, 40)
+  const readerAreaWidth = Math.max(width - sidebarWidth - rightPanelsWidth, 40)
   // Split panes take their width out of the reader area, so `rightPaneWidth`
   // (the primary transcript's layout width, threaded through every card) keeps
   // being the single source of truth for the reader. Panes are dropped one at a
@@ -11816,7 +11810,7 @@ export default function OpenTuiApp() {
   })
   // Stacked splits divide the reader area's ROWS instead of its columns, so the
   // same drop-a-pane-before-shrinking rule runs against a different axis. The
-  // reader area's inner height is the frame minus the main row's padding.
+  // reader area's inner height is the frame minus its own borders.
   const stackedSplit = splitOrientation === 'rows'
   const splitAxisExtent = stackedSplit ? Math.max(mainContentHeight - 2, 8) : readerAreaWidth
   const splitLayout = calculateSplitPaneLayout({
@@ -11878,7 +11872,7 @@ export default function OpenTuiApp() {
   // reader's x/width lets their borders form one continuous message frame down
   // to the footer, parallel to the surface panel's frame.
   const composerAreaOffset = surfacePanelVisible
-    ? (fullscreenMode ? 0 : 1 + (showRail ? sidebarWidth + 1 : 0))
+    ? (showRail ? sidebarWidth : 0)
     : 0
   const composerAreaWidth = Math.max(
     30,
@@ -12062,15 +12056,14 @@ export default function OpenTuiApp() {
   // has no composer of its own to sit above. It therefore renders absolutely,
   // spanning the main row *plus* the composer block, while an in-flow spacer of
   // the same width keeps every other budget (sidebar, reader, splits) honest.
-  const surfacePanelTop = fullscreenMode ? 0 : 1
   // Measured from the window rather than summed from the row budgets: the
   // main row's own arithmetic reserves chrome this column does not use, and
   // adding the composer heights back left the panel two rows short of the
-  // footer. Everything from the top padding to the last row above the footer
+  // footer. Everything from the top row to the last row above the footer
   // hint belongs to the panel.
   const surfacePanelHeight = Math.max(
     8,
-    height - surfacePanelTop - (searchMode || sessionSearchMode ? 4 : fullscreenMode ? 0 : 1),
+    height - (searchMode || sessionSearchMode ? 4 : fullscreenMode ? 0 : 1),
   )
 
   const sidebarRowBudget = Math.max(mainContentHeight, 4)
@@ -22276,13 +22269,8 @@ export default function OpenTuiApp() {
       <TeammatesAttention theme={theme} width={width} session={selectedSession} />
       <box
         flexGrow={1}
-        paddingX={fullscreenMode ? 0 : 1}
-        paddingTop={fullscreenMode ? 0 : 1}
-        // The docked composer immediately follows this row in every non-chat
-        // transcript view. A bottom padding row here showed through as a black
-        // band between the transcript frame and composer.
-        paddingBottom={0}
-        gap={fullscreenMode ? 0 : 1}
+        // No padding or gap: frames meet the screen edge and each other, and
+        // the docked composer follows this row directly.
         height={mainContentHeight}
         flexDirection="row"
         backgroundColor={theme.bg}
@@ -22844,8 +22832,6 @@ export default function OpenTuiApp() {
             flexShrink={0}
             flexDirection="column"
             overflow="hidden"
-            marginLeft={stackedSplit ? 0 : 1}
-            marginTop={stackedSplit ? 1 : 0}
           >
             <SplitTranscriptPane
               session={splitSession}
@@ -22910,19 +22896,15 @@ export default function OpenTuiApp() {
         {/* Width reservation only — the panel itself is positioned absolutely
             below so it can run past the composer to the footer. */}
         {surfacePanelVisible ? (
-          /* The root row's one-column gap is part of this reservation. Give the
-             spacer one fewer column so the absolute panel starts immediately
-             after the transcript/task-panel border instead of leaving a wide
-             black gutter between them. */
-          <box width={Math.max(effectiveSurfacePanelWidth - 1, 0)} />
+          <box width={effectiveSurfacePanelWidth} />
         ) : null}
 
         {surfacePanelVisible ? (
           <box
             id="surface-panel-frame"
             position="absolute"
-            top={surfacePanelTop}
-            right={fullscreenMode ? 0 : 1}
+            top={0}
+            right={0}
             width={effectiveSurfacePanelWidth}
             height={surfacePanelHeight}
             overflow="hidden"

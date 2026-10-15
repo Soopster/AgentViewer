@@ -79,7 +79,16 @@ try {
     assert(editor.getSelectedText() === LINE.slice(1),
       `Shift+End selected ${JSON.stringify(editor.getSelectedText())}, not ${JSON.stringify(LINE.slice(1))}`)
 
-    console.log('Editor wide-text smoke passed (selections and cursor moves agree with the text after a tab and 中)')
+    // The status bar counts characters: the end of the line is after all of
+    // LINE's characters, however many cells the tab and 中 take.
+    await press({ name: 'escape' })
+    await act(async () => { editor.gotoLineTextEnd() })
+    await settle(200)
+    const status = setup.captureCharFrame().match(/Ln (\d+), Col (\d+)/)
+    assert(status && status[1] === '1' && status[2] === String(LINE.length + 1),
+      `The status bar read ${status?.[0] ?? 'nothing'} at the end of line 1, not Ln 1, Col ${LINE.length + 1}`)
+
+    console.log('Editor wide-text smoke passed (selections, cursor moves and the status column agree with the text after a tab and 中)')
     await settle(300)
   } finally {
     setup.renderer?.destroy?.()

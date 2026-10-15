@@ -1044,7 +1044,8 @@ auto-pair checks nor anything else `handleKey` does per character. Set
   `setEditorSelectionOffsets`, `addEditorHighlight`); a raw `getSelection()`
   or `setCursor(line, character)` reintroduces the bug only on lines that are
   not plain ASCII, which no ASCII fixture will show. Remembered tab cursors
-  stay in cells, because they are recorded on every move. A plain-ASCII line
+  stay in cells, because they are recorded on every move. The status bar's `Col`
+  is a character column, like the selection count beside it. A plain-ASCII line
   costs a regex test and nothing else; typing cost at 6,000 lines is
   unchanged. `editorCellsSmoke.ts` is differential against a real buffer;
   `editorWideTextSmoke.tsx` drives the popover (it fails on the old code with
@@ -1123,7 +1124,10 @@ buffer and a converted line ending both *render perfectly*:
   the buffer does not expose: each step removes one character from the same
   line, moving the caret back exactly one column. That test reads only
   `logicalCursor`, which is O(1) — diffing `plainText` per step would cost about
-  a millisecond each on a large file, on a key that has to feel instant. A
+  a millisecond each on a large file, on a key that has to feel instant. "One
+  column" is the width of the character before the caret (read with a
+  two-cell `getTextRangeByCoords`), because the caret counts cells: a run of
+  CJK text moved it two per step and came off one character per press. A
   newline, a paste, a multi-cursor edit or a formatting rewrite all move the
   caret differently, so each stays its own step; the danger of coalescing is
   undoing more than was typed, and every boundary is pinned.

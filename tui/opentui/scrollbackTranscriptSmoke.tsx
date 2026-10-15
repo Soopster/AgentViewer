@@ -157,6 +157,18 @@ try {
     if (/\d+\/\d+/.test(title)) fail('SCROLLBACK titled the pane with a card position it has no cursor for')
   }
 
+  // ── frames meet the edges and each other ─────────────────────────────────
+  // No padding around the panes and no gutter between them: the sidebar's
+  // frame starts in the top-left cell, the reader's left border sits right
+  // against the sidebar's right border, and the reader ends on the last column.
+  {
+    const rows = setup.captureCharFrame().split('\n')
+    if (!rows[0]?.startsWith('┌')) fail('The sidebar frame does not start in the top-left cell')
+    const body = rows[2] ?? ''
+    if (!body.includes('││')) fail('A gutter separates the sidebar and reader frames')
+    if (!body.trimEnd().endsWith('│') || body.trimEnd().length !== body.length) fail('The reader frame stops short of the right edge')
+  }
+
   // ── nothing is highlighted ───────────────────────────────────────────────
   // A stream-like view marks its cursor card with ❯; the tail card is where
   // the cursor sits on open, so it is the one that would carry it.

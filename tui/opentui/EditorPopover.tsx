@@ -36,7 +36,7 @@ import {
 import { getEditorLspServerSpecs, resolveLspWorkspaceRoot } from './editorLspServers'
 import { openEditorSyntaxBuffer, type EditorSyntaxBuffer, type EditorSyntaxLine } from './editorSyntaxBuffer'
 import { formatEditorSize, MAX_EDITOR_BUFFER_CHARS, prepareEditorBuffer } from './editorLargeFile'
-import { undoTypingRun } from './editorUndoRuns'
+import { undoTypingRun, type UndoableEditor } from './editorUndoRuns'
 import {
   applyEditorSaveHygiene,
   applyEditorTextEdits,
@@ -762,6 +762,29 @@ function editorDocumentOffset(
   const bounds = lineStarts ? lineBoundsFromStarts(text, lineStarts, logicalCursor.line) : lineBoundsByScan(text, logicalCursor.line)
   if (!bounds) return text.length
   return bounds.start + indexAtCellColumn(text.slice(bounds.start, bounds.end), logicalCursor.visualColumn, editorCellMeasure(editor))
+}
+
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+
+/**
+ * The editor as `undoTypingRun` sees it, measuring the character before the
+ * caret so a typed run of wide characters comes off together. Two cells back
+ * covers the widest grapheme; a start inside one snaps to its beginning.
+ */
+function undoableEditor(editor: TextareaRenderable): UndoableEditor {
+  const measure = editorCellMeasure(editor)
+  return {
+    undo: () => editor.undo(),
+    get logicalCursor() { return editor.logicalCursor },
+    cellsBeforeCaret: () => {
+      const { row, col } = editor.logicalCursor
+      if (col === 0) return 0
+      const text = editor.getTextRangeByCoords(row, Math.max(0, col - 2), row, col)
+      let last = ''
+      for (const { segment } of graphemeSegmenter.segment(text)) last = segment
+      return last ? measure(last) : 0
+    },
+  }
 }
 
 // Without a line table, scan only as far as the line: building a table is a
@@ -4190,7 +4213,7 @@ export function EditorPopover({
       }
       // The buffer records one step per character, so a plain undo took a line
       // back one letter at a time. A whole typed run comes off together.
-      const run = undoTypingRun(editor)
+      const run = undoTypingRun(undoableEditor(editor))
       setMessage(run.coalesced ? `Undo (${run.steps} characters)` : 'Undo')
       return true
     }
@@ -4766,6 +4789,18 @@ export function EditorPopover({
     const unit = detectEditorIndentUnit(activeTab.content, activeTab.path)
     return unit === '\t' ? 'Tab' : `Spaces: ${unit.length}`
   }, [activeTab])
+  // The caret reports display cells; the status bar counts characters, as the
+  // selection count beside it does, so a tab or a CJK character is one column.
+  const cursorCharacter = useMemo(() => {
+    const content = activeTab?.content
+    const starts = content == null ? null : lineStartsFor(content)
+    const start = starts?.[cursor.line]
+    if (content == null || !starts || start === undefined) return cursor.visualColumn
+    const end = cursor.line + 1 < starts.length ? starts[cursor.line + 1]! - 1 : content.length
+    const editor = editorRef.current
+    if (!editor) return cursor.visualColumn
+    return indexAtCellColumn(content.slice(start, end), cursor.visualColumn, editorCellMeasure(editor))
+  }, [activeTab?.content, cursor.line, cursor.visualColumn])
   const selectedCompletion = completions[completionCursor]
   const projectSearchWindowStart = Math.min(
     Math.max(0, projectSearchCursor - 9),
@@ -5058,7 +5093,7 @@ export function EditorPopover({
           {` ${fitText(lspStatusText(lspStatus), Math.max(18, Math.floor(editorWidth * 0.42)))}`}
         </text>
         <box flexGrow={1} />
-        <text fg={theme.dim}>{`${detectTuiCodeFiletypeFromPath(activeTab?.path) ?? 'text'}  ${indentSummary}${enabledToggles ? `  ${enabledToggles}` : ''}  Ln ${cursor.line + 1}, Col ${cursor.visualColumn + 1}${selectionSummary ? ` (${selectionSummary.characters} sel${selectionSummary.lines > 1 ? `, ${selectionSummary.lines} lines` : ''})` : ''}  ${formatClock(clock)} `}</text>
+        <text fg={theme.dim}>{`${detectTuiCodeFiletypeFromPath(activeTab?.path) ?? 'text'}  ${indentSummary}${enabledToggles ? `  ${enabledToggles}` : ''}  Ln ${cursor.line + 1}, Col ${cursorCharacter + 1}${selectionSummary ? ` (${selectionSummary.characters} sel${selectionSummary.lines > 1 ? `, ${selectionSummary.lines} lines` : ''})` : ''}  ${formatClock(clock)} `}</text>
       </box>
       {zenMode ? null : (
       <box height={footerHeight} paddingX={1} backgroundColor={theme.surface2} flexDirection="column">
