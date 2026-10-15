@@ -77,6 +77,7 @@ const { client } = createOpenCode2Clients({ baseUrl: 'http://opencode-model-smok
     selected = body!.model as typeof selected
   }
   if (url.pathname.endsWith('/prompt')) return Response.json({ data: { id: 'user' } })
+  if (url.pathname.endsWith('/compact')) return Response.json({ data: { id: 'compaction' } })
   return new Response(null, { status: 204 })
 } })
 const catalogue = await client.config.providers({ query: { directory: '/project' } })
@@ -91,8 +92,15 @@ await client.session.command({ path: { id: 'session' }, body: { command: 'review
 assert.equal(selected.variant, 'review', 'commands must apply the full provider/model/variant')
 await client.session.shell({ path: { id: 'session' }, body: { agent: 'build', command: 'pwd', model: decodeOpenCodeModelValue(base.value)! } })
 assert.equal(selected.variant, undefined, 'selecting the base model must clear the old variant')
+await client.session.summarize({ path: { id: 'session' }, body: promptModel })
+assert.equal(selected.variant, 'fast', 'compaction must apply the selected provider/model/variant first')
+assert.ok(requests.at(-1)!.path.endsWith('/compact'))
+await client.session.shell({ path: { id: 'session' }, body: { agent: 'build', command: 'pwd', model: decodeOpenCodeModelValue(base.value)! } })
 failSwitch = true
 const before = requests.length
 await assert.rejects(client.session.promptAsync({ path: { id: 'session' }, body: { model: promptModel, parts: [{ type: 'text', text: 'Do not send' }] } }))
 assert.ok(!requests.slice(before).some(request => request.path.endsWith('/prompt')), 'a failed model switch must not run under the old model')
+const beforeCompact = requests.length
+await assert.rejects(client.session.summarize({ path: { id: 'session' }, body: promptModel }))
+assert.ok(!requests.slice(beforeCompact).some(request => request.path.endsWith('/compact')), 'a failed model switch must not compact under the old model')
 console.log('OpenCode 2 models smoke passed: catalogue, custom variants, metadata, defaults, session/history, prompt/command/shell selection, no-op switches, failure ordering, and v1 compatibility')

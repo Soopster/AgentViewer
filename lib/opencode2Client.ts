@@ -16,6 +16,7 @@
 import { OpenCode, type ModelInfo, type ProviderInfo } from '@opencode/client'
 import { openCode2ModelConfig, type OpenCodeModelRef } from './opencodeModels'
 import { PendingRequestGoneError } from './pendingRequestGone'
+import { OpenCode2History, OPENCODE_HISTORY_PAGE_SIZE, readOpenCodeHistorySignature, rememberOpenCodeHistorySignature } from './opencode2History'
 import {
   OPENCODE_2_VERSION,
   toV1MessageBundles,
@@ -43,8 +44,6 @@ type V2Client = ReturnType<typeof OpenCode.make>
 
 // The server rejects a larger page, and a transcript read follows the cursor
 // until it has the tail it needs.
-const MESSAGE_PAGE_LIMIT = 200
-const MESSAGE_HISTORY_LIMIT = 2000
 const SESSION_PAGE_LIMIT = 200
 
 type RequestOptions = { signal?: AbortSignal }
@@ -93,36 +92,21 @@ export function createOpenCode2Clients(options: { baseUrl: string; headers?: Rec
   const readSession = async (sessionId: string, request?: RequestOptions): Promise<V2SessionInfo> =>
     await v2.session.get({ sessionID: sessionId }, request) as unknown as V2SessionInfo
 
-  /**
-   * Read a transcript newest-page-first and hand it back oldest-first, which is
-   * the order every consumer assumes. Paging from the newest end is what makes
-   * the cap ("the last N messages") mean the same thing it meant in v1 rather
-   * than "the first N", which on a long session would return the opening of a
-   * conversation nobody is looking at.
-   */
-  const readMessages = async (sessionId: string, request?: RequestOptions): Promise<V2Message[]> => {
-    const collected: V2Message[] = []
-    let cursor: string | undefined
-    while (collected.length < MESSAGE_HISTORY_LIMIT) {
-      const page = await v2.message.list({
-        sessionID: sessionId,
-        limit: MESSAGE_PAGE_LIMIT,
-        // The cursor carries the order it was minted with, and the server
-        // rejects a request that states both.
-        ...(cursor ? { cursor } : { order: 'desc' }),
-      } as never, request) as unknown as { data?: V2Message[]; cursor?: { next?: string | null } }
-      const rows = page?.data ?? []
-      collected.push(...rows)
-      const next = page?.cursor?.next
-      if (!next || rows.length === 0) break
-      cursor = next
-    }
-    return collected.reverse()
-  }
-
+  const history = new OpenCode2History(async (sessionId, cursor, request) =>
+    await v2.message.list({ sessionID: sessionId, limit: OPENCODE_HISTORY_PAGE_SIZE,
+      // The server rejects an order alongside a cursor: the cursor encodes it.
+      ...(cursor ? { cursor } : { order: 'desc' }),
+    } as never, request) as unknown as { data?: V2Message[]; cursor?: { next?: string | null } })
+  const bundlesBySnapshot = new WeakMap<V2Message[], OpenCodeMessageBundle[]>()
   const readBundles = async (sessionId: string, request?: RequestOptions): Promise<OpenCodeMessageBundle[]> => {
-    const messages = await readMessages(sessionId, request)
-    return toV1MessageBundles(messages, { sessionId })
+    const messages = await history.read(sessionId, request)
+    const cached = bundlesBySnapshot.get(messages)
+    if (cached) return cached
+    const bundles = toV1MessageBundles(messages, { sessionId })
+    bundlesBySnapshot.set(messages, bundles)
+    const signature = readOpenCodeHistorySignature(messages)
+    if (signature) rememberOpenCodeHistorySignature(bundles, signature)
+    return bundles
   }
 
   const listSessions = async (input: { directory?: string; limit?: number; parentID?: string | null }): Promise<OpenCodeSession[]> => {
@@ -216,7 +200,9 @@ export function createOpenCode2Clients(options: { baseUrl: string; headers?: Rec
       return toV1Session(await readSession(pathId(input)))
     },
     async delete(input: unknown) {
+      history.invalidate(pathId(input))
       await v2.session.remove({ sessionID: pathId(input) } as never)
+      history.invalidate(pathId(input))
       return true
     },
     async fork(input: unknown) {
@@ -265,8 +251,15 @@ export function createOpenCode2Clients(options: { baseUrl: string; headers?: Rec
       return true
     },
     async summarize(input: unknown) {
-      // v1's summarize took an explicit model; v2 compacts with the session's.
+      // v2 compacts with the session model, so apply v1's explicit selection
+      // first, just as prompt/command/shell do. A failed switch must not compact.
+      const model = body<OpenCodeModelRef>(input)
+      if (model.providerID && model.modelID) {
+        await applySessionSelection(pathId(input), { model: model as OpenCodeModelRef })
+      }
+      history.invalidate(pathId(input))
       await v2.session.compact({ sessionID: pathId(input) } as never)
+      history.invalidate(pathId(input))
       return true
     },
     share() { return unsupported('Session sharing') },
@@ -275,14 +268,18 @@ export function createOpenCode2Clients(options: { baseUrl: string; headers?: Rec
       const sessionId = pathId(input)
       const messageID = body<{ messageID?: string }>(input).messageID
       if (!messageID) throw new Error('messageID is required')
+      history.invalidate(sessionId)
       // Staging is v1's revert: reversible until the next turn commits it,
       // which is exactly what `unrevert` undoes.
       await v2.session.revert.stage({ sessionID: sessionId, messageID, files: true } as never)
+      history.invalidate(sessionId)
       return toV1Session(await readSession(sessionId))
     },
     async unrevert(input: unknown) {
       const sessionId = pathId(input)
+      history.invalidate(sessionId)
       await v2.session.revert.clear({ sessionID: sessionId } as never)
+      history.invalidate(sessionId)
       return toV1Session(await readSession(sessionId))
     },
     async diff(input: unknown) {
@@ -316,9 +313,11 @@ export function createOpenCode2Clients(options: { baseUrl: string; headers?: Rec
 
   const eventStream = (translate: (event: unknown) => Array<{ directory: string; payload: unknown }>, wrap: boolean) =>
     (input?: unknown) => {
+      history.invalidate() // a reconnect may have missed historical mutations
       const request = optionsFrom(input)
       const stream = (async function* () {
         for await (const event of v2.event.subscribe(request)) {
+          history.noteEvent(event as never)
           for (const translated of translate(event)) {
             yield wrap ? { directory: translated.directory, payload: translated.payload } : translated.payload
           }

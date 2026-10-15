@@ -21,7 +21,22 @@ export type PendingQuestion = {
   allowFreeform?: boolean
   secret?: boolean
   required?: boolean
+  defaultAnswers?: string[]
+  externalUrl?: string
   options: PendingQuestionOption[]
+}
+
+export function initialQuestionState(questions: PendingQuestion[]) {
+  const selections: Record<number, string[]> = {}
+  const freeformAnswers: Record<number, string> = {}
+  questions.forEach((question, index) => {
+    const defaults = question.defaultAnswers ?? []
+    selections[index] = question.multiSelect ? [...defaults]
+      : defaults.filter((value) => question.options.some((option) => (option.value ?? option.label) === value))
+    const freeform = defaults.filter((value) => !selections[index]!.includes(value))
+    if (question.allowFreeform && freeform.length) freeformAnswers[index] = freeform.join(', ')
+  })
+  return { selections, freeformAnswers }
 }
 
 export type PendingQuestionAnswers = Record<string, string[]>
@@ -327,7 +342,11 @@ export function extractOpenCodeQuestion(payload: unknown): PendingPermission | n
       question: prompt,
       multiSelect: question.multiple === true,
       allowFreeform: question.custom === true,
-      required: true,
+      required: question.required !== false,
+      defaultAnswers: Array.isArray(question.defaultAnswers)
+        ? question.defaultAnswers.filter((value): value is string => typeof value === 'string') : undefined,
+      externalUrl: typeof question.externalUrl === 'string' && /^https?:\/\//i.test(question.externalUrl)
+        ? question.externalUrl : undefined,
       options,
     }]
   })

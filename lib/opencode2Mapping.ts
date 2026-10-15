@@ -122,6 +122,10 @@ export type V2FormField = {
   options?: V2FormOption[]
   custom?: boolean
   default?: unknown
+  required?: boolean
+  minimum?: number
+  maximum?: number
+  url?: string
 }
 export type V2FormInfo = {
   id: string
@@ -145,6 +149,7 @@ export function toV1Session(session: V2SessionInfo): OpenCodeSession {
     ...(session.parentID ? { parentID: session.parentID } : {}),
     title: session.title ?? '',
     version: OPENCODE_2_VERSION,
+    ...(session.agent ? { openCode2Agent: session.agent } : {}),
     ...(session.model ? { openCode2Model: { providerID: session.model.providerID, modelID: session.model.id, ...(session.model.variant ? { variant: session.model.variant } : {}) } } : {}),
     time: { created: session.time.created, updated: session.time.updated },
     ...(session.revert ? { revert: session.revert } : {}),
@@ -193,7 +198,7 @@ export function normalizeOpenCode2ToolInput(name: string, input: unknown): Recor
 export function toolContentToOutput(content: V2ToolContent[] | undefined): string {
   if (!content || content.length === 0) return ''
   return content
-    .map((entry) => entry.type === 'text' ? entry.text : `[file] ${entry.name ?? entry.uri}`)
+    .map((entry) => entry.type === 'text' ? entry.text : `[file] ${entry.name ?? (entry.uri.startsWith('data:') ? 'Inline attachment' : entry.uri)}`)
     .join('\n')
 }
 
@@ -258,6 +263,12 @@ export function toV1ToolPart(params: {
 }): OpenCodeToolPart {
   const tool = normalizeOpenCode2ToolName(params.name)
   const state = toV1ToolState(params.state, params.time)
+  const attachments = params.state.status === 'completed' || params.state.status === 'error'
+    ? (params.state.content ?? []).flatMap((entry, index) => entry.type === 'file' ? [{
+      id: `${toolPartId(params.messageId, params.callId)}:file:${index}`,
+      sessionID: params.sessionId, messageID: params.messageId, type: 'file' as const,
+      url: entry.uri, mime: entry.mime, ...(entry.name ? { filename: entry.name } : {}),
+    }] : []) : []
   const normalizedInput = normalizeOpenCode2ToolInput(params.name, (state as { input?: unknown }).input)
   return {
     id: toolPartId(params.messageId, params.callId),
@@ -266,7 +277,7 @@ export function toV1ToolPart(params: {
     type: 'tool',
     callID: params.callId,
     tool,
-    state: { ...state, input: normalizedInput } as OpenCodeToolState,
+    state: { ...state, input: normalizedInput, ...(attachments.length ? { attachments } : {}) } as OpenCodeToolState,
   }
 }
 
@@ -573,16 +584,30 @@ export function toV1Question(form: V2FormInfo): QuestionRequest {
     id: form.id,
     sessionID: form.sessionID,
     questions: form.fields.map((field) => ({
-      question: field.description || field.title || field.key,
+      question: [field.description || field.title || field.key,
+        field.type === 'number' || field.type === 'integer'
+          ? [field.type === 'integer' ? 'Whole number' : 'Number',
+            field.minimum !== undefined ? `minimum ${field.minimum}` : '',
+            field.maximum !== undefined ? `maximum ${field.maximum}` : ''].filter(Boolean).join(', ')
+          : ''].filter(Boolean).join(' — '),
       header: (field.title || field.key).slice(0, 30),
       options: fieldOptions(field),
+      required: field.type === 'external' ? false : field.required ?? true,
+      ...(field.type === 'external' ? { externalUrl: field.url } : {}),
+      ...(field.default !== undefined ? { defaultAnswers: formDefaultLabels(field) } : {}),
       ...(field.type === 'multiselect' ? { multiple: true } : {}),
-      ...(field.custom || fieldOptions(field).length === 0 ? { custom: true } : {}),
+      ...(field.type !== 'external' && (field.custom || fieldOptions(field).length === 0) ? { custom: true } : {}),
     })),
     ...(form.metadata && typeof form.metadata.messageID === 'string' && typeof form.metadata.callID === 'string'
       ? { tool: { messageID: form.metadata.messageID, callID: form.metadata.callID } }
       : {}),
   }
+}
+
+function formDefaultLabels(field: V2FormField): string[] {
+  const values = Array.isArray(field.default) ? field.default : [field.default]
+  return values.map((value) => field.type === 'boolean' ? (value ? 'Yes' : 'No')
+    : (field.options ?? []).find((option) => option.value === String(value))?.label ?? String(value))
 }
 
 /**
@@ -593,11 +618,27 @@ export function toV1Question(form: V2FormInfo): QuestionRequest {
  * stores, and they are usually not the same string.
  */
 export function toV2FormAnswer(form: V2FormInfo, answers: string[][]): Record<string, unknown> {
-  const answer: Record<string, unknown> = {}
+  const answer: Record<string, unknown> = Object.create(null)
   for (const [index, field] of form.fields.entries()) {
-    const chosen = answers[index] ?? []
+    // External fields are completed at their URL, not by inventing a string
+    // answer. Optional unanswered fields stay absent so server defaults apply.
+    if (field.type === 'external') continue
+    const chosen = answers[index] ?? (field.default !== undefined ? formDefaultLabels(field) : [])
+    if (chosen.length === 0 && field.type === 'multiselect' && field.required !== true && answers[index] !== undefined) {
+      answer[field.key] = []
+      continue
+    }
+    if (chosen.length === 0 || (chosen.length === 1 && chosen[0]!.trim() === '')) {
+      if (field.required === true) throw new Error(`${field.title || field.key} is required.`)
+      continue
+    }
+    if (field.type !== 'multiselect' && chosen.length > 1) throw new Error(`${field.title || field.key} accepts one answer.`)
     const valueFor = (label: string): string => {
-      const option = (field.options ?? []).find((entry) => entry.label === label || entry.value === label)
+      const options = field.options ?? []
+      const matches = options.filter((entry) => entry.label === label || entry.value === label)
+      if (matches.length > 1) throw new Error(`${field.title || field.key} has an ambiguous option: ${label}.`)
+      const option = matches[0]
+      if (options.length && !option && !field.custom) throw new Error(`${field.title || field.key}: choose a listed option.`)
       return option?.value ?? label
     }
     switch (field.type) {
@@ -605,12 +646,18 @@ export function toV2FormAnswer(form: V2FormInfo, answers: string[][]): Record<st
         answer[field.key] = chosen.map(valueFor)
         break
       case 'boolean':
-        answer[field.key] = chosen[0] === undefined ? false : /^(yes|true|1)$/i.test(chosen[0])
+        if (!/^(yes|true|1|no|false|0)$/i.test(chosen[0]!)) throw new Error(`${field.title || field.key} must be Yes or No.`)
+        answer[field.key] = /^(yes|true|1)$/i.test(chosen[0]!)
         break
       case 'number':
       case 'integer': {
         const parsed = Number(chosen[0])
-        answer[field.key] = Number.isFinite(parsed) ? parsed : 0
+        if (!Number.isFinite(parsed) || (field.type === 'integer' && !Number.isInteger(parsed))) {
+          throw new Error(`${field.title || field.key} must be ${field.type === 'integer' ? 'a whole number' : 'a finite number'}.`)
+        }
+        if (field.minimum !== undefined && parsed < field.minimum) throw new Error(`${field.title || field.key} must be at least ${field.minimum}.`)
+        if (field.maximum !== undefined && parsed > field.maximum) throw new Error(`${field.title || field.key} must be at most ${field.maximum}.`)
+        answer[field.key] = parsed
         break
       }
       default:
@@ -618,5 +665,5 @@ export function toV2FormAnswer(form: V2FormInfo, answers: string[][]): Record<st
         break
     }
   }
-  return answer
+  return { ...answer }
 }

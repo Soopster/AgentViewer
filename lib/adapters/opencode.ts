@@ -218,9 +218,12 @@ export const opencodeAdapter: SessionAdapter = {
     try {
       const session = await getOpenCodeSession(sessionId)
       const query = openCodeDirectoryQuery(session)
+      const selectedAgent = (session as OpenCodeSession & { openCode2Agent?: string }).openCode2Agent
+      const authoritativeAgent = typeof selectedAgent === 'string' && selectedAgent.trim() ? selectedAgent : null
       const [project, messages] = await Promise.all([
         getOpenCodeProjectDiagnostics(query?.directory),
-        getOpenCodeSessionMessages(sessionId).catch(() => [] as OpenCodeMessageBundle[]),
+        authoritativeAgent ? Promise.resolve([] as OpenCodeMessageBundle[])
+          : getOpenCodeSessionMessages(sessionId).catch(() => [] as OpenCodeMessageBundle[]),
       ])
       const selectableAgents = project.agents
         .filter((agent) => !isAgentHidden(agent) && agent.mode !== 'subagent')
@@ -228,7 +231,8 @@ export const opencodeAdapter: SessionAdapter = {
       const mentionAgents = project.agents
         .filter((agent) => !isAgentHidden(agent) && agent.mode !== 'primary')
         .map(agentOption)
-      const currentAgent = lastUserAgent(messages)
+      const currentAgent = authoritativeAgent
+        ?? lastUserAgent(messages)
         ?? selectableAgents.find((agent) => agent.value === 'build')?.value
         ?? selectableAgents[0]?.value
         ?? null

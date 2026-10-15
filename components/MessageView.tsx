@@ -46,7 +46,7 @@ import { normalizeCodexStreamThreadedMessage } from '@/lib/codexMapper'
 import { getSlashCommandSuggestions, filterSlashCommands, normalizeSlashCommandSuggestions, type SlashCommandSuggestion } from '@/lib/slashCommands'
 import { getProviderComposer } from '@/lib/providerComposer'
 import { isPendingRequestGone, PENDING_REQUEST_GONE_NOTICE } from '@/lib/pendingRequestGone'
-import { extractCopilotPushedAttachments, extractPendingPermission, extractPendingPermissions, extractPermissionReply, permissionMcpServerLabel, type PendingPermission, type PendingQuestionAnswers } from '@/lib/permissions'
+import { initialQuestionState, extractCopilotPushedAttachments, extractPendingPermission, extractPendingPermissions, extractPermissionReply, permissionMcpServerLabel, type PendingPermission, type PendingQuestionAnswers } from '@/lib/permissions'
 import { extractClaudeReadFileSummary } from '@/lib/claudeSdkFeatures'
 import { parseClaudeCommandLifecycle, type ClaudeCommandLifecycleState } from '@/lib/claudeCommandLifecycle'
 import { isResumeDropsTurnRefusal, isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs, TransientAwareSendError, type UsageLimitKind } from '@/lib/transientError'
@@ -2715,8 +2715,8 @@ function AskUserQuestionPicker({
   onCancel: () => void
 }) {
   const questions = permission.questions ?? []
-  const [selections, setSelections] = useState<Record<number, string[]>>({})
-  const [freeformAnswers, setFreeformAnswers] = useState<Record<number, string>>({})
+  const [selections, setSelections] = useState(() => initialQuestionState(questions).selections)
+  const [freeformAnswers, setFreeformAnswers] = useState(() => initialQuestionState(questions).freeformAnswers)
   const [openPreview, setOpenPreview] = useState<string | null>(null)
   const flat = useSyncExternalStore<ColorTreatment>(subscribeColorTreatment, getCurrentColorTreatment, () => DEFAULT_COLOR_TREATMENT) === 'flat'
 
@@ -2799,6 +2799,7 @@ function AskUserQuestionPicker({
               <span>{q.question}{q.multiSelect ? <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--text-3)', fontWeight: 400 }}>(select all that apply)</span> : null}</span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {q.externalUrl ? <a href={q.externalUrl} target="_blank" rel="noopener noreferrer">Open form in browser ↗</a> : null}
               {q.options.map((opt, oi) => {
                 const optionValue = opt.value ?? opt.label
                 const isSelected = selected.includes(optionValue)

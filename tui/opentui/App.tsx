@@ -89,6 +89,7 @@ import { detectTuiCodeFiletypeFromPath } from '../codeFiletypes'
 import { computeTurnDurationsMs, stripToolCallBlocks, type ThreadedMessage } from '../../lib/threading'
 import { buildTaskRegistry } from '../../lib/taskRegistry'
 import { isOpenCodeAssistantStreamEnvelope } from '../../lib/opencodeStreamEvents'
+import { withOpenCodeAttachments } from '../../lib/opencodeAttachments'
 import { buildDiffCommentComposerPrompt } from '../../lib/diffCommentComposer'
 import {
   clearComposerQueueTarget,
@@ -274,7 +275,7 @@ import { getSlashCommandSuggestions, filterSlashCommands, normalizeSlashCommandS
 import { parseCrossSessionComposerCommand } from '../../lib/crossSessionCommands'
 import { getProviderComposer, pickProviderExample } from '../../lib/providerComposer'
 import { isPendingRequestGone, PENDING_REQUEST_GONE_NOTICE } from '../../lib/pendingRequestGone'
-import { defaultPermissionOptionIndex, extractPendingPermission, permissionMcpServerLabel, extractPendingPermissions, extractPermissionReply, permissionOptionsFor, type PendingPermission, type PendingQuestionAnswers, type PendingQuestionOption, type PermissionOption, type PermissionResponse } from '../../lib/permissions'
+import { initialQuestionState, defaultPermissionOptionIndex, extractPendingPermission, permissionMcpServerLabel, extractPendingPermissions, extractPermissionReply, permissionOptionsFor, type PendingPermission, type PendingQuestionAnswers, type PendingQuestionOption, type PermissionOption, type PermissionResponse } from '../../lib/permissions'
 import type { readViewSessionComposerOptions } from '../../lib/sessionBackend'
 import {
   sessionMessageFingerprint,
@@ -1864,6 +1865,10 @@ function stableHash(value: string): number {
   return hash >>> 0
 }
 
+function formatCopilotTimestamp(timestampMs: number): string {
+  return new Date(timestampMs).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
 function formatElapsedClock(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000))
   const seconds = totalSeconds % 60
@@ -2987,12 +2992,12 @@ function extractOpenCodeLiveToolThread(payload: unknown, session: Session): Thre
     const raw = status === 'error'
       ? (stateRecord.error ?? stateRecord.output)
       : stateRecord.output
-    result = {
+    result = withOpenCodeAttachments({
       type: 'tool_result',
       tool_use_id: toolUseId,
       content: stringifyLiveValue(raw) || status,
       is_error: status === 'error' ? true : undefined,
-    }
+    }, stateRecord.attachments)
   }
 
   return {
@@ -11687,7 +11692,7 @@ export default function OpenTuiApp() {
     // border(2) + outer padding(1) + title(1) + hint(1), plus the blank
     // marginTop row each question after the first carries.
     const chrome = 5 + (questions.length - 1)
-    const questionRows = questions.length
+    const questionRows = questions.length + questions.filter((question) => question.externalUrl).length
     const optionRowTotal = questions.reduce((total, _, index) => total + optionRowsFor(index), 0)
     // The preview belongs to the option the cursor is on, in the focused
     // question. The freeform "Other" row has no preview, and neither does an
@@ -15002,8 +15007,9 @@ export default function OpenTuiApp() {
     const qid = active?.questions && active.questions.length > 0 ? active.id : null
     if (questionPermissionIdRef.current !== qid) {
       questionPermissionIdRef.current = qid
-      setQuestionSelections({})
-      setQuestionFreeformAnswers({})
+      const initial = initialQuestionState(active?.questions ?? [])
+      setQuestionSelections(initial.selections)
+      setQuestionFreeformAnswers(initial.freeformAnswers)
       setQuestionFreeformEditing(false)
       setQuestionFocusIndex(0)
       setQuestionOptionIndex(0)
@@ -20245,6 +20251,10 @@ export default function OpenTuiApp() {
       const questions = activePermission.questions ?? []
       const qi = Math.min(questionFocusIndex, questions.length - 1)
       const question = questions[qi]!
+      if (question.externalUrl && key.name === 'o' && !questionFreeformEditing && !key.ctrl && !key.meta) {
+        handled(() => { void openExternalUrl(question.externalUrl!) })
+        return
+      }
       const freeformIndex = question.allowFreeform ? question.options.length : -1
       const optionCount = question.options.length + (question.allowFreeform ? 1 : 0)
       const optIndex = Math.min(questionOptionIndex, optionCount - 1)
@@ -20290,7 +20300,7 @@ export default function OpenTuiApp() {
         return
       }
       if (sequence === ' ') {
-        if (optIndex === freeformIndex) {
+        if (question.allowFreeform && optIndex === freeformIndex) {
           handled(() => setQuestionFreeformEditing(true))
         } else {
           const opt = question.options[optIndex]
@@ -20315,7 +20325,7 @@ export default function OpenTuiApp() {
         // Single-select advances to the next unanswered question; otherwise
         // submit (submit also jumps to any still-unanswered question).
         handled(() => {
-          if (optIndex === freeformIndex) setQuestionFreeformEditing(true)
+          if (question.allowFreeform && optIndex === freeformIndex && !questionFreeformAnswers[qi]?.trim() && question.required !== false) setQuestionFreeformEditing(true)
           else void submitTuiQuestion(activePermission)
         })
         return
@@ -23890,6 +23900,11 @@ export default function OpenTuiApp() {
                     <text fg={focused ? theme.text : theme.dim} wrapMode="none">
                       {fitText(`${questions.length > 1 ? `${focused ? '▶ ' : '  '}` : ''}${q.header ? `[${q.header}] ` : ''}${q.question}${q.multiSelect ? ' (multi)' : ''}${showOptions ? '' : answered}`, innerWidth)}
                     </text>
+                    {q.externalUrl ? (
+                      <text fg={theme.cyan} wrapMode="none" onMouseDown={() => { void openExternalUrl(q.externalUrl!) }}>
+                        {fitText(`  o open form in browser: ${q.externalUrl}`, innerWidth)}
+                      </text>
+                    ) : null}
                     {showOptions ? q.options.map((opt, oi) => {
                       if (collapsed && (oi < optionStart || oi >= optionStart + optionCount)) return null
                       const isSelected = selected.includes(opt.value ?? opt.label)

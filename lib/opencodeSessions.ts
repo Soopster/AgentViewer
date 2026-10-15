@@ -39,7 +39,8 @@ export async function getOpenCodeSessionMessages(sessionId: string): Promise<Arr
   const response = await client.session.messages({
     ...OPENCODE_OPTIONS,
     path: { id: sessionId },
-    query: { limit: 2000 },
+    // v1 returns the complete history when limit is omitted; v2's compatibility
+    // client follows bounded server pages. The shared reader slices UI windows.
   })
   return openCodeData<Array<{ info: OpenCodeMessage; parts: OpenCodePart[] }>>(response)
 }

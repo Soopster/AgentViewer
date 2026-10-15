@@ -8,6 +8,7 @@ import type {
   McpStatus,
   Message,
   Part,
+  FilePart,
   Session as OpenCodeSession,
 } from '@opencode-ai/sdk'
 import type {
@@ -22,6 +23,8 @@ import { compactStableFingerprint } from './compactFingerprint'
 import { OPENCODE_CAPABILITIES } from './provider'
 import { recordRawFrames } from './rawFrames'
 import { encodeOpenCodeModelValue } from './opencodeModels'
+import { openCodeAttachmentImage, openCodeAttachmentText, withOpenCodeAttachments } from './opencodeAttachments'
+import { readOpenCodeHistorySignature } from './opencode2History'
 
 export { decodeOpenCodeModelValue, mapOpenCodeModelsToSessionModels } from './opencodeModels'
 
@@ -31,6 +34,8 @@ type OpenCodeMessageBundle = {
 }
 
 export function openCodeMessagesSignature(messages: OpenCodeMessageBundle[]): string {
+  const completeSignature = readOpenCodeHistorySignature(messages)
+  if (completeSignature) return completeSignature
   const last = messages.at(-1)
   return `${messages.length}:${last?.info.id ?? ''}:${last ? compactStableFingerprint(last) : ''}`
 }
@@ -64,7 +69,7 @@ function partSummary(part: Part): string | null {
     case 'text':
       return part.text
     case 'file':
-      return `[file] ${part.filename ?? part.url}`
+      return openCodeAttachmentText(part)
     case 'agent':
       return `↪ Switched to agent: ${part.name}`
     case 'subtask':
@@ -81,6 +86,13 @@ function partSummary(part: Part): string | null {
 }
 
 function buildUserContent(parts: Part[]): ApiMessage['content'] {
+  if (parts.some(part => part.type === 'file' && openCodeAttachmentImage(part))) {
+    return parts.flatMap((part): Exclude<ApiMessage['content'], string> => {
+      const summary = partSummary(part)
+      const image = part.type === 'file' ? openCodeAttachmentImage(part) : null
+      return [...(summary ? [textBlock(summary)] : []), ...(image ? [image] : [])]
+    })
+  }
   const blocks = parts
     .map(partSummary)
     .filter((text): text is string => Boolean(text))
@@ -96,6 +108,7 @@ function buildAssistantContent(parts: Part[]) {
     toolUseId: string,
     resultContent: unknown,
     isError = false,
+    attachments: FilePart[] = [],
   ) => {
     syntheticResults.push({
       type: 'user',
@@ -105,12 +118,12 @@ function buildAssistantContent(parts: Part[]) {
       provider: 'opencode',
       message: {
         role: 'user',
-        content: [{
+        content: [withOpenCodeAttachments({
           type: 'tool_result',
           tool_use_id: toolUseId,
           content: stringify(resultContent),
           is_error: isError || undefined,
-        }],
+        }, attachments)],
       },
       timestamp: toIsoTimestamp((part as { state?: { time?: { start?: number } } }).state?.time?.start),
     })
@@ -133,7 +146,8 @@ function buildAssistantContent(parts: Part[]) {
           input: part.state.input ?? {},
         })
         if (part.state.status === 'completed' || part.state.status === 'error') {
-          pushSyntheticResult(part, toolUseId, part.state.status === 'completed' ? part.state.output : part.state.error, part.state.status === 'error')
+          const attachments = (part.state as { attachments?: FilePart[] }).attachments ?? []
+          pushSyntheticResult(part, toolUseId, part.state.status === 'completed' ? part.state.output : part.state.error, part.state.status === 'error', attachments)
         }
         break
       }
@@ -203,9 +217,12 @@ function buildAssistantContent(parts: Part[]) {
         })
         break
       }
-      case 'file':
-        content.push(textBlock(`[file] ${part.filename ?? part.url}`))
+      case 'file': {
+        content.push(textBlock(openCodeAttachmentText(part)))
+        const image = openCodeAttachmentImage(part)
+        if (image) content.push(image)
         break
+      }
       case 'retry':
         content.push(textBlock(`Retry ${part.attempt}: ${part.error.data.message}`))
         break
