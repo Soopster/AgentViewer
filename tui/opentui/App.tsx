@@ -12031,6 +12031,8 @@ export default function OpenTuiApp() {
   const readerChromeRows = isStreamView ? 1 + tailBannerRows : 7
   const transcriptViewportRows = Math.max(
     readerRowBudget
+    // Sticky headers sit directly beneath the pane title; reclaim its inset.
+    + (stickyHeaders ? 1 : 0)
     // Fullscreen removes the two-row reader frame, leaving only the compact
     // restore affordance plus the transcript's top/bottom content insets.
     - (fullscreenMode ? 3 : focusMode ? 4 : readerChromeRows)
@@ -21801,7 +21803,7 @@ export default function OpenTuiApp() {
       return fitText(
         settingsPart ? `${livePart} │ ${settingsPart}` : livePart,
         Math.max(Math.floor(width * 0.45), 20),
-      )
+      ).trimEnd()
     },
     [statusLabel, visibleTranscriptCards.length, cursorIndex, readerMode, isScrollbackView, pendingNewCount, railVisible, width],
   )
@@ -22585,7 +22587,7 @@ export default function OpenTuiApp() {
             </box>
           ) : null}
 
-          <box flexGrow={1} paddingX={1} paddingBottom={1} marginTop={1} overflow="hidden">
+          <box flexGrow={1} paddingX={1} paddingBottom={1} marginTop={stickyHeaders ? 0 : 1} overflow="hidden">
             {(loadingDetail || formattingTranscriptCards) && visibleTranscriptCards.length === 0 ? (
               <Spinner
                 label={fitText(formattingTranscriptCards ? 'Formatting transcript…' : 'Loading transcript…', rightPaneWidth - 6)}
@@ -22728,11 +22730,13 @@ export default function OpenTuiApp() {
                   left={1}
                   width={Math.max(rightPaneWidth - 4, 12)}
                   height={1}
+                  flexDirection="row"
                   zIndex={5}
-                  backgroundColor={theme.surface2}
+                  backgroundColor={theme.userBg}
                   overflow="hidden"
                 >
-                  <text fg={theme.text} wrapMode="none">{fitText(`▸ ${stickyText}`, Math.max(rightPaneWidth - 4, 12))}</text>
+                  <text fg={providerAccent} attributes={TextAttributes.BOLD} wrapMode="none" width={10} flexShrink={0}>{'▌ PROMPT  '}</text>
+                  <text fg={theme.text} attributes={TextAttributes.BOLD} wrapMode="none">{fitText(stickyText, Math.max(rightPaneWidth - 14, 2))}</text>
                 </box>
               )
             })() : null}

@@ -90,6 +90,7 @@ const service = await import('../../lib/tui/service')
 mock.module('../../lib/tui/service', () => ({
   ...service,
   readTuiTranscriptView: async () => 'scrollback',
+  readTuiStickyHeaders: async () => true,
   writeTuiTranscriptView: async () => {},
   readTuiSessions: async () => [SESSION],
   readTuiSessionDetail: async () => DETAIL,
@@ -141,6 +142,19 @@ try {
   if (!rowWith('That is the whole pool.')) fail('SCROLLBACK did not open on the tail of the transcript')
   if (limit() < 60) fail('The fixture no longer overflows the viewport; scrolling would prove nothing')
   if (scroll().scrollTop !== limit()) fail('SCROLLBACK did not start at the bottom')
+  {
+    const rows = setup.captureCharFrame().split('\n')
+    const titleRow = rows.findIndex((row) => row.includes('SCROLLBACK'))
+    const headerRow = rows.findIndex((row) => row.includes('▌ PROMPT  Explain the pool.'))
+    if (headerRow !== titleRow + 1) fail('The sticky header leaves a spare row below the pane title')
+    const borderTitle = rows[titleRow] ?? ''
+    if (!/● LIVE\s{0,2}─/.test(borderTitle)) fail('Trailing title padding hides the top border')
+    if (process.env.STICKY_HEADER_SMOKE_ONLY) {
+      console.log('Sticky header smoke passed (accent marker, prompt label, no spare row above header)')
+      setup.renderer.destroy()
+      process.exit(0)
+    }
+  }
 
   // ── the pane is the transcript ───────────────────────────────────────────
   // The stream views draw no reader header, context row or idle ticker; the
