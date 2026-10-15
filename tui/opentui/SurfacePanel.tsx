@@ -287,12 +287,12 @@ function Launcher({
           </box>
         )
       })}
-      <box height={1} />
+      <box flexGrow={1} />
       <text fg={theme.dim} wrapMode="none">
         {fitTerminalText('⌃N/⌃P switch · ⌃T adds · ⌃W closes', rowWidth)}
       </text>
       <text fg={theme.dim} wrapMode="none">
-        {fitTerminalText('= expands · esc leaves the panel', rowWidth)}
+        {fitTerminalText('+/- width · = expands · esc leaves', rowWidth)}
       </text>
     </box>
   )

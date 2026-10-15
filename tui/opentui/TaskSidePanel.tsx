@@ -318,15 +318,27 @@ export function TaskSidePanel({
         <text fg={tab === 'agents' ? theme.cyan : theme.dim} wrapMode="none">agents</text>
         <text fg={theme.dim} wrapMode="none">  ⇧T cycle</text>
       </box>
-
+      <box paddingX={1}>
+        <text fg={theme.dim} wrapMode="none">+/- width · = expand</text>
+      </box>
       {/* Content */}
-      <box flexGrow={1} paddingX={1} overflow="hidden">
+      <box height={Math.max(height - 7, 1)} flexDirection="column" paddingX={1} overflow="hidden">
         {tab === 'tasks' ? (
           registry.size === 0 ? (
-            <text fg={theme.dim}>no tasks</text>
+            <box flexGrow={1} flexDirection="column" alignItems="center" justifyContent="center" paddingX={1}>
+              <text fg={theme.cyan}>◇</text>
+              <box marginTop={1}>
+                <text fg={theme.text}>No tasks yet</text>
+              </box>
+              <box marginTop={1} width={Math.max(innerW - 2, 1)}>
+                <text fg={theme.dim} wrapMode="word" textAlign="center" width={Math.max(innerW - 2, 1)}>
+                  Tasks from this session will appear here.
+                </text>
+              </box>
+            </box>
           ) : (
             <scrollbox
-              style={{ height: height - 6 }}
+              style={{ height: height - 7 }}
               backgroundColor={theme.surface}
               scrollY
               scrollbarOptions={{
@@ -414,10 +426,20 @@ export function TaskSidePanel({
           )
         ) : (
           agents.length === 0 ? (
-            <text fg={theme.dim}>no agents</text>
+            <box flexGrow={1} flexDirection="column" alignItems="center" justifyContent="center" paddingX={1}>
+              <text fg={theme.violet}>◇</text>
+              <box marginTop={1}>
+                <text fg={theme.text}>No agents yet</text>
+              </box>
+              <box marginTop={1} width={Math.max(innerW - 2, 1)}>
+                <text fg={theme.dim} wrapMode="word" textAlign="center" width={Math.max(innerW - 2, 1)}>
+                  Agents started by this session will appear here.
+                </text>
+              </box>
+            </box>
           ) : (
             <scrollbox
-              style={{ height: height - 6 }}
+              style={{ height: height - 7 }}
               backgroundColor={theme.surface}
               scrollY
               scrollbarOptions={{
@@ -481,6 +503,7 @@ export function TaskSidePanel({
           )
         )}
       </box>
+
     </box>
   )
 }

@@ -38,6 +38,55 @@ const before = captureCharFrame()
 if (!before || before.trim().length === 0) throw new Error('App rendered an empty frame')
 if (before.includes('Open a surface')) throw new Error('Surface panel is visible before ⇧O')
 
+// The task panel shares the full-height side-panel frame, including the rows
+// below the transcript where the docked composer lives. The empty state should
+// use that tall area instead of sticking to its upper-left corner.
+type FrameGeometry = { x: number; y: number; width: number; height: number }
+act(() => { setup.mockInput.pressKey('T', { shift: true }) })
+await settle(700)
+const taskFrame = setup.renderer.root.findDescendantById('task-side-panel-frame') as unknown as FrameGeometry | null
+const taskComposerFrame = setup.renderer.root.findDescendantById('composer-dock') as unknown as FrameGeometry | null
+const taskPanel = captureCharFrame()
+if (!taskFrame || !taskComposerFrame || !taskPanel.includes('No tasks yet') || !taskPanel.includes('= expand') || taskFrame.height < 30
+  || taskFrame.x < taskComposerFrame.x + taskComposerFrame.width
+  || taskFrame.y + taskFrame.height !== taskComposerFrame.y + taskComposerFrame.height) {
+  throw new Error(`Task panel does not sit beside the full-height composer or lost its centered empty state and shortcuts (panel=${taskFrame ? `${taskFrame.x},${taskFrame.y},${taskFrame.width},${taskFrame.height}` : 'missing'}; composer=${taskComposerFrame ? `${taskComposerFrame.x},${taskComposerFrame.y},${taskComposerFrame.width},${taskComposerFrame.height}` : 'missing'}):\n${taskPanel}`)
+}
+const initialTaskWidth = taskFrame.width
+act(() => { setup.mockInput.pressKey('+') })
+await settle(400)
+const widerTaskFrame = setup.renderer.root.findDescendantById('task-side-panel-frame') as unknown as FrameGeometry | null
+if (!widerTaskFrame || widerTaskFrame.width !== initialTaskWidth + 4) {
+  throw new Error(`+ did not gradually widen the task panel:\n${captureCharFrame()}`)
+}
+act(() => { setup.mockInput.pressKey('-') })
+await settle(400)
+const resetTaskFrame = setup.renderer.root.findDescendantById('task-side-panel-frame') as unknown as FrameGeometry | null
+if (!resetTaskFrame || resetTaskFrame.width !== initialTaskWidth) {
+  throw new Error(`- did not restore the task panel width:\n${captureCharFrame()}`)
+}
+act(() => { setup.mockInput.pressKey('=') })
+await settle(500)
+const expandedTaskFrame = setup.renderer.root.findDescendantById('task-side-panel-frame') as unknown as FrameGeometry | null
+if (!expandedTaskFrame || expandedTaskFrame.width <= initialTaskWidth) {
+  throw new Error(`= did not expand the task panel:\n${captureCharFrame()}`)
+}
+act(() => { setup.mockInput.pressKey('=') })
+await settle(500)
+const restoredTaskFrame = setup.renderer.root.findDescendantById('task-side-panel-frame') as unknown as FrameGeometry | null
+if (!restoredTaskFrame || restoredTaskFrame.width !== initialTaskWidth) {
+  throw new Error(`= did not restore the task panel width:\n${captureCharFrame()}`)
+}
+for (let step = 0; step < 1; step += 1) {
+  act(() => { setup.mockInput.pressKey('T', { shift: true }) })
+  await settle(200)
+}
+act(() => { setup.mockInput.pressKey('T', { shift: true }) })
+await settle(300)
+if (setup.renderer.root.findDescendantById('task-side-panel-frame')) {
+  throw new Error('⇧T did not return the task panel to its closed state')
+}
+
 act(() => { setup.mockInput.pressKey('O', { shift: true }) })
 await settle(900)
 
@@ -50,11 +99,28 @@ for (const label of ['Open a surface', 'Browser', 'Terminal', 'Files', 'Diff', '
 if (!launcher.includes('esc leaves')) {
   throw new Error('Surface launcher is missing its key hint row')
 }
+const launcherPanelFrame = setup.renderer.root.findDescendantById('surface-panel-frame') as unknown as FrameGeometry | null
+const launcherHintRow = launcher.split('\n').findIndex((line) => line.includes('= expands'))
+if (!launcherPanelFrame || launcherHintRow < launcherPanelFrame.y + launcherPanelFrame.height - 4) {
+  throw new Error(`Surface launcher shortcuts are not anchored above the panel footer:\n${launcher}`)
+}
+const initialLauncherWidth = launcherPanelFrame.width
+act(() => { setup.mockInput.pressKey('+') })
+await settle(500)
+const widenedLauncher = setup.renderer.root.findDescendantById('surface-panel-frame') as unknown as FrameGeometry | null
+if (!widenedLauncher || widenedLauncher.width !== initialLauncherWidth + 4) {
+  throw new Error(`+ did not gradually widen the panel by one step:\n${captureCharFrame()}`)
+}
+act(() => { setup.mockInput.pressKey('-') })
+await settle(500)
+const restoredLauncher = setup.renderer.root.findDescendantById('surface-panel-frame') as unknown as FrameGeometry | null
+if (!restoredLauncher || restoredLauncher.width !== initialLauncherWidth) {
+  throw new Error(`- did not gradually restore the panel width:\n${captureCharFrame()}`)
+}
 
 // The message column should be one continuous frame down to the footer: the
 // composer docks directly below the transcript at the same x/width, and its
 // bottom lands on the same row as the full-height surface panel.
-type FrameGeometry = { x: number; y: number; width: number; height: number }
 const transcriptFrame = setup.renderer.root.findDescendantById('transcript-reader') as unknown as FrameGeometry | null
 const composerFrame = setup.renderer.root.findDescendantById('composer-dock') as unknown as FrameGeometry | null
 const surfaceFrame = setup.renderer.root.findDescendantById('surface-panel-frame') as unknown as FrameGeometry | null
@@ -72,7 +138,7 @@ if (
   || composerFrame.y - (transcriptFrame.y + transcriptFrame.height) !== statusRowsBetween
   || composerFrame.y + composerFrame.height !== surfaceFrame.y + surfaceFrame.height
 ) {
-  throw new Error(`Message frame does not meet the footer beside the surface panel:\n${launcher}`)
+  throw new Error(`Surface panel does not sit beside the full-height composer or message frame geometry is misaligned:\n${launcher}`)
 }
 
 // = expands the panel to everything the reader's minimum leaves, and back.

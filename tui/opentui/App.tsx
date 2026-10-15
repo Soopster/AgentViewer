@@ -5499,7 +5499,8 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'surface-narrow', label: 'Narrow surface panel', key: '<', category: 'Transcript' },
   { id: 'surface-wide',   label: 'Widen surface panel',  key: '>', category: 'Transcript' },
   { id: 'tasks-full', label: 'Task lineage popover',   key: '⇧L', category: 'Transcript' },
-  { id: 'tasks-narrow', label: 'Narrow task panel',    key: '_', category: 'Transcript' },
+  { id: 'tasks-expand', label: 'Expand/restore task panel', key: '=', category: 'Transcript' },
+  { id: 'tasks-narrow', label: 'Narrow task panel',    key: '-/_', category: 'Transcript' },
   { id: 'tasks-wide', label: 'Widen task panel',       key: '+', category: 'Transcript' },
   // Session
   { id: 'composer',   label: 'Open composer',          key: 'c',  category: 'Session'    },
@@ -8714,6 +8715,7 @@ export default function OpenTuiApp() {
   const [sidebarView, setSidebarView] = useState<'sessions' | 'coordinator'>('sessions')
   const [sidebarWidthPreference, setSidebarWidthPreference] = useState(DEFAULT_SIDEBAR_WIDTH)
   const [taskPanelWidth, setTaskPanelWidth] = useState(TASK_PANEL_DEFAULT_WIDTH)
+  const [taskPanelExpanded, setTaskPanelExpanded] = useState(false)
   // Surface panel: the terminal half of the web's right-hand panel. Open
   // surfaces live here; the panel is only *shown* when it is open, so the
   // reader keeps the full width until the user asks for it (⇧O).
@@ -11775,8 +11777,15 @@ export default function OpenTuiApp() {
     8,
   )
   const taskPanelVisible = taskPanelOpen && !fullscreenMode
-  const effectiveTaskPanelWidth = taskPanelVisible ? taskPanelWidth : 0
   const surfacePanelVisible = surfacePanelOpen && !fullscreenMode
+  const maxTaskPanelWidth = Math.max(
+    TASK_PANEL_MIN_WIDTH,
+    width - 4 - (showRail ? sidebarWidthPreference : 0) - MIN_READER_WIDTH
+      - (surfacePanelVisible ? SURFACE_PANEL_MIN_WIDTH + 1 : 0) - 1,
+  )
+  const effectiveTaskPanelWidth = taskPanelVisible
+    ? (taskPanelExpanded ? maxTaskPanelWidth : taskPanelWidth)
+    : 0
   // Both right-hand panels can be open at once, so the surface panel's ceiling
   // has to leave the task panel its reservation as well as the reader's minimum.
   const surfacePanelMaxWidth = Math.max(
@@ -11867,16 +11876,15 @@ export default function OpenTuiApp() {
   }, [runningSessions])
 
   const textareaInnerWidth = Math.max(rightPaneWidth - 4, 10)
-  // With a full-height surface panel open, dock the composer under the reader
-  // column instead of under the sidebar/task-panel gutters too. Matching the
-  // reader's x/width lets their borders form one continuous message frame down
-  // to the footer, parallel to the surface panel's frame.
-  const composerAreaOffset = surfacePanelVisible
+  // When either right-hand panel is open, dock the composer under the reader
+  // column so it sits beside the panel instead of running underneath it.
+  const rightSidePanelVisible = taskPanelVisible || surfacePanelVisible
+  const composerAreaOffset = rightSidePanelVisible
     ? (showRail ? sidebarWidth : 0)
     : 0
   const composerAreaWidth = Math.max(
     30,
-    surfacePanelVisible ? readerAreaWidth : width,
+    rightSidePanelVisible ? readerAreaWidth : width,
   )
   const composerDockTextareaWidth = Math.max(composerAreaWidth - (fullscreenMode ? 2 : 4), 20)
   const composerWindowWidth = Math.max(
@@ -12051,19 +12059,14 @@ export default function OpenTuiApp() {
     const fill = Math.floor(available / visibleTabSessions.length)
     return Math.max(10, Math.min(fill, 40))
   }, [readerAreaWidth, visibleTabSessions.length])
-  // The surface panel is the only right-hand column that runs past the composer:
-  // a docked diff or file tree is worth the extra rows, and unlike the reader it
-  // has no composer of its own to sit above. It therefore renders absolutely,
-  // spanning the main row *plus* the composer block, while an in-flow spacer of
-  // the same width keeps every other budget (sidebar, reader, splits) honest.
-  // Measured from the window rather than summed from the row budgets: the
-  // main row's own arithmetic reserves chrome this column does not use, and
-  // adding the composer heights back left the panel two rows short of the
-  // footer. Everything from the top row to the last row above the footer
-  // hint belongs to the panel.
+  // The right-hand panels share the full vertical column with the reader and
+  // composer. Add back the rows the main content budget reserves for the
+  // status block, composer popovers, and dock so the panel stays beside the
+  // composer instead of leaving a blank block below itself.
   const surfacePanelHeight = Math.max(
     8,
-    height - (searchMode || sessionSearchMode ? 4 : fullscreenMode ? 0 : 1),
+    mainContentHeight + composerStatusBlockHeight + composerPopoverHeight
+      + (embeddedComposer ? 0 : composerDockHeight) + (fullscreenMode ? 0 : 2),
   )
 
   const sidebarRowBudget = Math.max(mainContentHeight, 4)
@@ -17987,13 +17990,11 @@ export default function OpenTuiApp() {
     })
   })
 
-  const maxTaskPanelWidth = taskPanelOpen
-    ? Math.max(TASK_PANEL_MIN_WIDTH, width - 4 - sidebarWidth - (showRail ? 1 : 0) - MIN_READER_WIDTH - (taskPanelOpen ? 1 : 0) - effectiveSurfacePanelWidth - (surfacePanelVisible ? 1 : 0))
-    : TASK_PANEL_DEFAULT_WIDTH
   const resizeTaskPanel = useEffectEvent((delta: number) => {
     const nextWidth = taskPanelOpen
       ? clamp(taskPanelWidth + delta, TASK_PANEL_MIN_WIDTH, maxTaskPanelWidth)
       : TASK_PANEL_DEFAULT_WIDTH + delta
+    setTaskPanelExpanded(false)
     setTaskPanelWidth(Math.round(nextWidth / TASK_PANEL_RESIZE_STEP) * TASK_PANEL_RESIZE_STEP)
   })
 
@@ -19246,6 +19247,9 @@ export default function OpenTuiApp() {
       case 'tasks-full':
         setTaskPopoverOpen(true)
         break
+      case 'tasks-expand':
+        setTaskPanelExpanded((current) => !current)
+        break
       case 'tasks-narrow':
         resizeTaskPanel(-TASK_PANEL_RESIZE_STEP)
         break
@@ -19715,10 +19719,10 @@ export default function OpenTuiApp() {
         handled(() => setSurfacePanelExpanded((current) => !current))
         return
       }
-      if (!inputOwned && (sequence === '<' || sequence === '>')) {
+      if (!inputOwned && ['<', '>', '+', '-', '_'].includes(sequence)) {
         handled(() => {
           setSurfacePanelWidth((current) => clamp(
-            current + (sequence === '<' ? -SURFACE_PANEL_RESIZE_STEP : SURFACE_PANEL_RESIZE_STEP),
+            current + (sequence === '<' || sequence === '-' || sequence === '_' ? -SURFACE_PANEL_RESIZE_STEP : SURFACE_PANEL_RESIZE_STEP),
             SURFACE_PANEL_MIN_WIDTH,
             Math.min(SURFACE_PANEL_MAX_WIDTH, surfacePanelMaxWidth),
           ))
@@ -21006,12 +21010,16 @@ export default function OpenTuiApp() {
     }
 
     // Task panel resize (only when open)
-    if (taskPanelOpen && sequence === '_') {
+    if (taskPanelOpen && (sequence === '_' || sequence === '-')) {
       handled(() => resizeTaskPanel(-TASK_PANEL_RESIZE_STEP))
       return
     }
     if (taskPanelOpen && sequence === '+') {
       handled(() => resizeTaskPanel(TASK_PANEL_RESIZE_STEP))
+      return
+    }
+    if (taskPanelOpen && sequence === '=') {
+      handled(() => setTaskPanelExpanded((current) => !current))
       return
     }
 
@@ -22871,18 +22879,27 @@ export default function OpenTuiApp() {
           </box>
         </box>
 
-        {/* The task panel is placed ahead of the surface panel's reservation:
-            the surface panel is absolutely positioned against the right edge,
-            so anything after it in flow would render underneath it. */}
+        {/* Reserve the task-panel column in flow, then extend its frame through
+            the docked composer so both share the right-hand column. */}
+        {taskPanelVisible ? <box width={effectiveTaskPanelWidth} /> : null}
         {taskPanelVisible ? (
-          <box width={taskPanelWidth} overflow="hidden">
+          <box
+            id="task-side-panel-frame"
+            position="absolute"
+            top={0}
+            right={effectiveSurfacePanelWidth}
+            width={effectiveTaskPanelWidth}
+            height={surfacePanelHeight}
+            overflow="hidden"
+            zIndex={4}
+          >
             <TaskSidePanel
               messages={taskPanelMessages}
               todos={composerLiveTodos}
               session={selectedSession}
               theme={theme}
-              width={taskPanelWidth}
-              height={mainContentHeight - 2}
+              width={effectiveTaskPanelWidth}
+              height={surfacePanelHeight}
               onSelectTask={(uuid) => {
                 const idx = visibleTranscriptCards.findIndex((c) => c.key === uuid)
                 if (idx >= 0) jumpToTranscriptIndex(idx)
@@ -22894,7 +22911,7 @@ export default function OpenTuiApp() {
         ) : null}
 
         {/* Width reservation only — the panel itself is positioned absolutely
-            below so it can run past the composer to the footer. */}
+            below so it can share the full-height right-hand column. */}
         {surfacePanelVisible ? (
           <box width={effectiveSurfacePanelWidth} />
         ) : null}
