@@ -61,7 +61,7 @@
     "pi:provider:perf": "bun run ./scripts/piProviderPerf.ts",
     "provider:pools:smoke": "bun run ./scripts/providerPoolSmoke.ts",
     "copilot:sdk:smoke": "bun run ./scripts/copilotRewindSmoke.ts && bun run ./scripts/copilotPersistedReadSmoke.ts",
-    "opencode:harness:smoke": "node --import tsx ./scripts/opencodeHarnessSmoke.ts && node --import tsx ./scripts/opencodeHarnessTransportSmoke.ts && node --import tsx ./scripts/opencodeHarnessFallbackSmoke.ts && node --import tsx ./scripts/opencodeHarnessSnapshotSmoke.ts && node --import tsx ./scripts/opencodeProviderListSmoke.ts && node --import tsx ./scripts/opencodeMessageCacheSmoke.ts && node --import tsx ./scripts/opencode2CompatSmoke.ts && node --import tsx ./scripts/opencodeSubagentRequestsSmoke.ts",
+    "opencode:harness:smoke": "node --import tsx ./scripts/opencodeHarnessSmoke.ts && node --import tsx ./scripts/opencodeHarnessTransportSmoke.ts && node --import tsx ./scripts/opencodeHarnessFallbackSmoke.ts && node --import tsx ./scripts/opencodeHarnessSnapshotSmoke.ts && node --import tsx ./scripts/opencodeProviderListSmoke.ts && node --import tsx ./scripts/opencodeMessageCacheSmoke.ts && node --import tsx ./scripts/opencode2CompatSmoke.ts && node --import tsx ./scripts/opencode2ModelsSmoke.ts && node --import tsx ./scripts/opencodeSubagentRequestsSmoke.ts",
     "codex:subagent:live": "bun run ./scripts/codexSubagentApprovalSmoke.ts",
     "codex:resume:live": "bun run ./scripts/codexResumePolicySmoke.ts",
     "claude:models:live": "bun run ./scripts/claudeModelListSmoke.ts",

@@ -17,11 +17,13 @@ import type {
   SessionDiagnosticSection,
   SessionInfo,
   SessionMessage,
-  SessionModelInfo,
 } from './types'
 import { compactStableFingerprint } from './compactFingerprint'
 import { OPENCODE_CAPABILITIES } from './provider'
 import { recordRawFrames } from './rawFrames'
+import { encodeOpenCodeModelValue } from './opencodeModels'
+
+export { decodeOpenCodeModelValue, mapOpenCodeModelsToSessionModels } from './opencodeModels'
 
 type OpenCodeMessageBundle = {
   info: Message
@@ -33,10 +35,6 @@ export function openCodeMessagesSignature(messages: OpenCodeMessageBundle[]): st
   return `${messages.length}:${last?.info.id ?? ''}:${last ? compactStableFingerprint(last) : ''}`
 }
 
-type OpenCodeModelRef = {
-  providerID: string
-  modelID: string
-}
 
 function normalizeTimestamp(value?: number): number | undefined {
   if (!value) return undefined
@@ -235,22 +233,6 @@ function messageUsage(info: Message): ApiMessage['usage'] | undefined {
   }
 }
 
-function encodeOpenCodeModelValue(model: OpenCodeModelRef): string {
-  return JSON.stringify(model)
-}
-
-export function decodeOpenCodeModelValue(value: string | null | undefined): OpenCodeModelRef | null {
-  if (!value) return null
-  try {
-    const parsed = JSON.parse(value) as Partial<OpenCodeModelRef>
-    return typeof parsed.providerID === 'string' && typeof parsed.modelID === 'string'
-      ? { providerID: parsed.providerID, modelID: parsed.modelID }
-      : null
-  } catch {
-    return null
-  }
-}
-
 /**
  * OpenCode 2 dropped session sharing, and nothing else this provider advertises.
  * The reflect is gated per session rather than per provider because both server
@@ -348,26 +330,11 @@ export function mapOpenCodeMessagesToSessionMessages(messages: OpenCodeMessageBu
   return result
 }
 
-export function mapOpenCodeModelsToSessionModels(config: ConfigProvidersResponse): SessionModelInfo[] {
-  const models: SessionModelInfo[] = []
-  for (const provider of config.providers) {
-    for (const model of Object.values(provider.models)) {
-      models.push({
-        value: encodeOpenCodeModelValue({ providerID: provider.id, modelID: model.id }),
-        displayName: `${provider.name} · ${model.name}`,
-        description: `${provider.id}/${model.id}`,
-        supportsEffort: Boolean(model.capabilities.reasoning),
-      })
-    }
-  }
-  return models
-}
-
 export function currentOpenCodeModelValue(message?: Message): string | null {
   if (!message) return null
   const model = message.role === 'user'
     ? message.model
-    : { providerID: message.providerID, modelID: message.modelID }
+    : { providerID: message.providerID, modelID: message.modelID, variant: (message as Message & { variant?: string }).variant }
   // A record that ran no model (a user `!command`) carries empty ids; encoding
   // them put `{"providerID":"","modelID":""}` in the header as the model name.
   if (!model?.providerID || !model.modelID) return null
@@ -396,7 +363,7 @@ export function firstOpenCodePrompt(messages: OpenCodeMessageBundle[]): string |
   return undefined
 }
 
-export function mapOpenCodeContextUsage(message?: Message): ContextUsage | null {
+export function mapOpenCodeContextUsage(message?: Message, maxTokens = 0): ContextUsage | null {
   if (!message || message.role !== 'assistant') return null
   // Newer OpenCode payloads normalize provider-specific cache semantics into
   // `total`. Prefer it because cached tokens are additive for some providers
@@ -410,9 +377,9 @@ export function mapOpenCodeContextUsage(message?: Message): ContextUsage | null 
   if (!totalTokens) return null
   return {
     totalTokens,
-    maxTokens: 0,
-    percentage: 0,
-    model: encodeOpenCodeModelValue({ providerID: message.providerID, modelID: message.modelID }),
+    maxTokens,
+    percentage: maxTokens > 0 ? totalTokens / maxTokens * 100 : 0,
+    model: currentOpenCodeModelValue(message) ?? '',
     categories: [
       { name: 'Input', tokens: message.tokens.input, color: 'var(--cyan)' },
       { name: 'Cached Read', tokens: message.tokens.cache.read, color: 'var(--green)' },

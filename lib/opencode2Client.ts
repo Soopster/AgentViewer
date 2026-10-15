@@ -13,7 +13,8 @@
 // OpenCode 2 genuinely dropped (session sharing) throws saying so, rather than
 // resolving with something that looks like it worked.
 
-import { OpenCode } from '@opencode/client'
+import { OpenCode, type ModelInfo, type ProviderInfo } from '@opencode/client'
+import { openCode2ModelConfig, type OpenCodeModelRef } from './opencodeModels'
 import { PendingRequestGoneError } from './pendingRequestGone'
 import {
   OPENCODE_2_VERSION,
@@ -86,8 +87,8 @@ function unsupported(operation: string): never {
 
 export type OpenCode2Clients = { client: OpencodeClient; clientV2: OpencodeV2Client }
 
-export function createOpenCode2Clients(options: { baseUrl: string; headers?: Record<string, string> }): OpenCode2Clients {
-  const v2 = OpenCode.make({ baseUrl: options.baseUrl, ...(options.headers ? { headers: options.headers } : {}) })
+export function createOpenCode2Clients(options: { baseUrl: string; headers?: Record<string, string>; fetch?: typeof globalThis.fetch }): OpenCode2Clients {
+  const v2 = OpenCode.make({ baseUrl: options.baseUrl, ...(options.headers ? { headers: options.headers } : {}), ...(options.fetch ? { fetch: options.fetch } : {}) })
 
   const readSession = async (sessionId: string, request?: RequestOptions): Promise<V2SessionInfo> =>
     await v2.session.get({ sessionID: sessionId }, request) as unknown as V2SessionInfo
@@ -150,16 +151,16 @@ export function createOpenCode2Clients(options: { baseUrl: string; headers?: Rec
    *  model on each turn would write one of those per message. */
   const applySessionSelection = async (
     sessionId: string,
-    selection: { model?: { providerID: string; modelID: string }; agent?: string },
+    selection: { model?: OpenCodeModelRef; agent?: string },
   ): Promise<void> => {
     if (!selection.model && !selection.agent) return
     const session = await readSession(sessionId).catch(() => null)
     if (selection.model) {
       const current = session?.model
-      if (!current || current.id !== selection.model.modelID || current.providerID !== selection.model.providerID) {
+      if (!current || current.id !== selection.model.modelID || current.providerID !== selection.model.providerID || current.variant !== selection.model.variant) {
         await v2.session.switchModel({
           sessionID: sessionId,
-          model: { id: selection.model.modelID, providerID: selection.model.providerID },
+          model: { id: selection.model.modelID, providerID: selection.model.providerID, ...(selection.model.variant ? { variant: selection.model.variant } : {}) },
         } as never)
       }
     }
@@ -230,7 +231,7 @@ export function createOpenCode2Clients(options: { baseUrl: string; headers?: Rec
     },
     async promptAsync(input: unknown) {
       const sessionId = pathId(input)
-      const request = body<{ model?: { providerID: string; modelID: string }; agent?: string; parts?: unknown }>(input)
+      const request = body<{ model?: OpenCodeModelRef; agent?: string; parts?: unknown }>(input)
       await applySessionSelection(sessionId, { model: request.model, agent: request.agent })
       const prompt = promptInputFrom(request.parts)
       await v2.session.prompt({
@@ -246,16 +247,16 @@ export function createOpenCode2Clients(options: { baseUrl: string; headers?: Rec
       return result?.interrupted !== false
     },
     async shell(input: unknown) {
-      const request = body<{ command?: string; agent?: string; model?: { providerID: string; modelID: string } }>(input)
+      const request = body<{ command?: string; agent?: string; model?: OpenCodeModelRef }>(input)
       const sessionId = pathId(input)
       await applySessionSelection(sessionId, { model: request.model, agent: request.agent })
       await v2.session.shell({ sessionID: sessionId, command: request.command ?? '' } as never)
       return true
     },
     async command(input: unknown) {
-      const request = body<{ command?: string; arguments?: string; agent?: string }>(input)
+      const request = body<{ command?: string; arguments?: string; agent?: string; openCodeModel?: OpenCodeModelRef }>(input)
       const sessionId = pathId(input)
-      await applySessionSelection(sessionId, { agent: request.agent })
+      await applySessionSelection(sessionId, { agent: request.agent, model: request.openCodeModel })
       await v2.session.command({
         sessionID: sessionId,
         name: request.command ?? '',
@@ -381,32 +382,8 @@ export function createOpenCode2Clients(options: { baseUrl: string; headers?: Rec
           v2.model.list(locationInput(directory) as never),
           v2.model.default(locationInput(directory) as never).catch(() => null),
         ])
-        const providers = listOf<{ id: string; name?: string; activation?: string }>(providerList)
-          .filter((provider) => provider.activation !== 'disabled')
-        const models = listOf<{ id: string; providerID: string; name?: string; enabled?: boolean; capabilities?: { reasoning?: boolean } }>(modelList)
-          .filter((model) => model.enabled !== false)
-        const byProvider = new Map<string, Record<string, unknown>>()
-        for (const model of models) {
-          const entry = byProvider.get(model.providerID) ?? {}
-          entry[model.id] = {
-            id: model.id,
-            providerID: model.providerID,
-            name: model.name ?? model.id,
-            capabilities: { reasoning: model.capabilities?.reasoning === true },
-          }
-          byProvider.set(model.providerID, entry)
-        }
-        const defaultModel = ((defaults as { data?: unknown } | null)?.data ?? defaults) as { id?: string; providerID?: string } | null
-        return {
-          providers: providers.map((provider) => ({
-            id: provider.id,
-            name: provider.name ?? provider.id,
-            models: byProvider.get(provider.id) ?? {},
-          })),
-          default: defaultModel?.providerID && defaultModel.id
-            ? { [defaultModel.providerID]: defaultModel.id }
-            : {},
-        }
+        const defaultModel = defaults?.data ?? null
+        return openCode2ModelConfig(listOf<ProviderInfo>(providerList), listOf<ModelInfo>(modelList), defaultModel)
       },
     },
     // v2 reports neither over its API. An empty list is the honest answer for a

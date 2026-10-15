@@ -15,12 +15,14 @@ import {
   ensureOpenCodeEventsStarted,
   getOpenCodeTranscriptCacheVersion,
 } from '../opencodeHarness'
+import { selectedOpenCodeSessionModel } from '../opencodeModels'
 import { getOpenCodeClient } from '../opencodeClient'
 import { getOpenCodeV2Client } from '../opencodeClient'
 import {
   latestOpenCodeModelValue,
   firstOpenCodePrompt,
   mapOpenCodeDiagnosticsToSections,
+  mapOpenCodeContextUsage,
   mapOpenCodeMessagesToSessionMessages,
   mapOpenCodeModelsToSessionModels,
   mapOpenCodeSessionToInfo,
@@ -109,7 +111,7 @@ export const opencodeAdapter: SessionAdapter = {
       session,
       tag,
       firstOpenCodePrompt(messages),
-      latestOpenCodeModelValue(messages) ?? undefined,
+      selectedOpenCodeSessionModel(session) ?? latestOpenCodeModelValue(messages) ?? undefined,
     )
   },
 
@@ -201,10 +203,14 @@ export const opencodeAdapter: SessionAdapter = {
       }),
       getOpenCodeSessionMessages(sessionId),
     ])
+    const models = mapOpenCodeModelsToSessionModels(openCodeData(configResponse))
+    const currentModel = selectedOpenCodeSessionModel(session) ?? latestOpenCodeModelValue(messages)
+    const lastAssistant = messages.findLast(entry => entry.info.role === 'assistant')?.info
+    const contextUsage = mapOpenCodeContextUsage(lastAssistant, models.find(model => model.value === currentModel)?.contextWindowTokens ?? 0)
     return {
-      models: mapOpenCodeModelsToSessionModels(openCodeData(configResponse)),
-      currentModel: latestOpenCodeModelValue(messages),
-      contextUsage: null,
+      models,
+      currentModel,
+      contextUsage: contextUsage?.model === currentModel ? contextUsage : null,
     }
   },
 
@@ -281,7 +287,7 @@ export const opencodeAdapter: SessionAdapter = {
     ])
 
     return {
-      currentModel: latestOpenCodeModelValue(messages),
+      currentModel: selectedOpenCodeSessionModel(session) ?? latestOpenCodeModelValue(messages),
       sections: mapOpenCodeDiagnosticsToSections({
         providers: project.providers,
         commands: project.commands,

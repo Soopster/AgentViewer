@@ -230,6 +230,8 @@ import {
 import { subscribeToCodexEvents } from './codexHarness'
 import {
   decodeOpenCodeModelValue,
+  currentOpenCodeModelValue,
+  mapOpenCodeModelsToSessionModels,
   mapOpenCodeContextUsage,
   summarizeOpenCodeDiffs,
   updateOpenCodeTurnOutputUsage,
@@ -5081,6 +5083,13 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
       let cancelWatchdog: (() => void) | null = null
       const outputTokensByMessageId = new Map<string, number>()
       const messageRoles = new Map<string, OpenCodeMessageRole>()
+      const modelContextLimits = new Map<string, number>()
+      let latestUsageMessage: Parameters<typeof mapOpenCodeContextUsage>[0]
+      const publishContextUsage = () => {
+        const model = currentOpenCodeModelValue(latestUsageMessage)
+        const usage = mapOpenCodeContextUsage(latestUsageMessage, model ? modelContextLimits.get(model) ?? 0 : 0)
+        if (usage) safeEnqueue(codexContextUsageToEventData(usage))
+      }
       let turnOutputTokens = 0
       // safeEnqueue is declared further down this stream body; the arrow defers
       // the lookup so the reporter can live beside the counter it reports.
@@ -5134,13 +5143,28 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
         // The event bus scopes on the session's directory exactly as the
         // server stores it — resolve it from the session record rather than
         // trusting the client-provided cwd (which can be a symlink variant).
+        let isOpenCode2 = false
         const sessionDirectory = await client.session.get({
           ...OPENCODE_OPTIONS,
           path: { id: sessionId },
         }).then((response) => {
           const record = openCodeData<OpenCodeSession & { directory?: string }>(response)
+          isOpenCode2 = record.version === '2'
           return typeof record.directory === 'string' && record.directory ? record.directory : undefined
         }).catch(() => (typeof body.cwd === 'string' && body.cwd.trim() ? body.cwd.trim() : undefined))
+
+        // Load limits alongside turn startup, so model discovery cannot delay
+        // prompt acceptance. When it resolves, refresh only the latest usage.
+        if (isOpenCode2) {
+          void withTimeout(client.config.providers({
+            ...OPENCODE_OPTIONS, query: sessionDirectory ? { directory: sessionDirectory } : undefined,
+          }), 5000, 'OpenCode model limits').then(response => {
+            for (const model of mapOpenCodeModelsToSessionModels(openCodeData(response))) {
+              if (model.contextWindowTokens) modelContextLimits.set(model.value, model.contextWindowTokens)
+            }
+            publishContextUsage()
+          }).catch(() => { /* Usage remains available when the catalogue cannot be read. */ })
+        }
 
         if (resumeSessionAt) {
           const forkedResponse = await client.session.fork({
@@ -5239,10 +5263,8 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
             const event = harnessEvent.event
 
             if (event.type === 'message.updated' && event.properties.info.role === 'assistant') {
-              const usage = mapOpenCodeContextUsage(event.properties.info)
-              if (usage) {
-                safeEnqueue(codexContextUsageToEventData(usage))
-              }
+              latestUsageMessage = event.properties.info
+              publishContextUsage()
               turnOutputTokens = updateOpenCodeTurnOutputUsage(
                 outputTokensByMessageId,
                 event.properties.info,
@@ -5378,7 +5400,9 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
                 path: { id: targetSessionId },
                 body: {
                   agent: requestedAgent,
-                  model: selectedModel?.modelID,
+                  model: selectedModel ? `${selectedModel.providerID}/${selectedModel.modelID}` : undefined,
+                  // v2 selects the session model before invoking a command.
+                  ...(isOpenCode2 ? { openCodeModel: selectedModel ?? undefined } : {}),
                   command: slashCommand.command,
                   arguments: slashCommand.arguments,
                 },

@@ -145,6 +145,7 @@ export function toV1Session(session: V2SessionInfo): OpenCodeSession {
     ...(session.parentID ? { parentID: session.parentID } : {}),
     title: session.title ?? '',
     version: OPENCODE_2_VERSION,
+    ...(session.model ? { openCode2Model: { providerID: session.model.providerID, modelID: session.model.id, ...(session.model.variant ? { variant: session.model.variant } : {}) } } : {}),
     time: { created: session.time.created, updated: session.time.updated },
     ...(session.revert ? { revert: session.revert } : {}),
   }
@@ -289,6 +290,7 @@ export function toV1AssistantInfo(params: {
     time: { created: params.created, ...(params.completed ? { completed: params.completed } : {}) },
     parentID: '',
     modelID: params.model?.id ?? '',
+    ...(params.model?.variant ? { variant: params.model.variant } : {}),
     providerID: params.model?.providerID ?? '',
     mode: params.agent || 'build',
     path: { cwd: params.cwd ?? '', root: params.cwd ?? '' },
@@ -316,7 +318,7 @@ function toV1UserInfo(params: {
     role: 'user',
     time: { created: params.created },
     agent: params.agent,
-    model: { providerID: params.model?.providerID ?? '', modelID: params.model?.id ?? '' },
+    model: { providerID: params.model?.providerID ?? '', modelID: params.model?.id ?? '', ...(params.model?.variant ? { variant: params.model.variant } : {}) },
   }
 }
 

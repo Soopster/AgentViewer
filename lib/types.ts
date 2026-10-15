@@ -222,6 +222,15 @@ export type ContextUsage = {
 }
 
 export type SessionModelInfo = {
+  /** Prices in USD per million tokens; entries may describe context-size tiers. */
+  pricing?: { input: number; output: number; cacheRead?: number; cacheWrite?: number; contextAboveTokens?: number }[]
+  contextWindowTokens?: number
+  maxInputTokens?: number
+  maxOutputTokens?: number
+  inputModalities?: string[]
+  outputModalities?: string[]
+  supportsTools?: boolean
+  modelStatus?: string
   value: string
   displayName: string
   description: string
