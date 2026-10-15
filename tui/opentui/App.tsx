@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import { createSidebarSessionSearch } from './sidebarSessionSearch'
+import { readReaderLayout } from './readerLayout'
 import { composerProjectLabel, cycleTranscriptWidth, transcriptMeasure } from './engineeringLayout'
 import React, { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, startTransition, useState, useSyncExternalStore } from 'react'
 import { spawn } from 'node:child_process'
@@ -896,7 +897,9 @@ function readerLayoutOffset(el: Renderable, content: Renderable): number | null 
   let offset = 0
   let node: Renderable | null = el
   while (node && node !== content) {
-    offset += node.getLayout().top
+    const layout = readReaderLayout(node)
+    if (!layout) return null
+    offset += layout.top
     node = node.parent as Renderable | null
   }
   return node === content ? offset : null
@@ -17774,6 +17777,8 @@ export default function OpenTuiApp() {
       const sb = transcriptScrollRef.current
       if (!sb) return
       const content = sb.content
+      const contentLayout = readReaderLayout(content)
+      if (!contentLayout) return
       const scrollTop = sb.scrollTop
       let nextTop = scrollTop
       if (fixup.kind === 'anchor') {
@@ -17786,7 +17791,9 @@ export default function OpenTuiApp() {
         const offset = el ? readerLayoutOffset(el, content) : null
         if (!el || offset === null) return
         // scrollChildIntoView's rule, against the layout Yoga just produced.
-        const height = el.getLayout().height
+        const layout = readReaderLayout(el)
+        if (!layout) return
+        const height = layout.height
         const viewportRows = sb.viewport.height
         const startsAbove = offset < scrollTop
         const endsBelow = offset + height > scrollTop + viewportRows
@@ -17796,7 +17803,7 @@ export default function OpenTuiApp() {
       }
       // The scrollbar clamps to the content height it last saw, which is the
       // old window's until the content box is positioned later this frame.
-      sb.verticalScrollBar.scrollSize = Math.max(content.getLayout().height, 1)
+      sb.verticalScrollBar.scrollSize = Math.max(contentLayout.height, 1)
       sb.scrollTo(Math.max(0, nextTop))
       readerScrollSeenRef.current.top = sb.scrollTop
       pausedTranscriptScrollTopRef.current = sb.scrollTop
