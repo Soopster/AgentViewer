@@ -4183,7 +4183,7 @@ export function usesAgentCardPresentation(
   transcriptView: TuiTranscriptView,
 ): boolean {
   return transcriptView === 'agents'
-    || ((transcriptView === 'stream' || transcriptView === 'chat' || transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code') && isStreamOperationalCard(card))
+    || ((transcriptView === 'stream' || transcriptView === 'chat' || transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code' || transcriptView === 'copilot' || transcriptView === 'opencode') && isStreamOperationalCard(card))
 }
 
 export function shouldCenterTranscriptCard(
@@ -4956,7 +4956,7 @@ const QUESTION_PREVIEW_MAX_LINES = 8
 // reserving anything, so the preview is dropped instead.
 const QUESTION_PREVIEW_MIN_ROWS = 2
 
-const TRANSCRIPT_VIEWS: TuiTranscriptView[] = ['conversation', 'full', 'continue', 'stream', 'agents', 'chat', 'transcript', 'scrollback', 'codex', 'claude-code']
+const TRANSCRIPT_VIEWS: TuiTranscriptView[] = ['conversation', 'full', 'continue', 'stream', 'agents', 'chat', 'transcript', 'scrollback', 'codex', 'claude-code', 'copilot', 'opencode']
 
 const TRANSCRIPT_VIEW_LABELS: Record<TuiTranscriptView, string> = {
   conversation: 'CONVERSATION',
@@ -4969,6 +4969,8 @@ const TRANSCRIPT_VIEW_LABELS: Record<TuiTranscriptView, string> = {
   scrollback: 'SCROLLBACK',
   codex: 'CODEX',
   'claude-code': 'CLAUDE',
+  copilot: 'COPILOT',
+  opencode: 'OPENCODE',
 }
 
 const TRANSCRIPT_VIEW_DESCRIPTIONS: Record<TuiTranscriptView, string> = {
@@ -4982,6 +4984,8 @@ const TRANSCRIPT_VIEW_DESCRIPTIONS: Record<TuiTranscriptView, string> = {
   scrollback: 'One long text transcript that scrolls by line, no card cursor',
   codex: 'Codex CLI-style scrollback with shaded prompts and compact activity',
   'claude-code': 'Claude Code-style scrollback with slim prompts and muted tool activity',
+  copilot: 'GitHub Copilot CLI-style transcript with app tabs and timestamps',
+  opencode: 'OpenCode-style continuous transcript with context sidebar',
 }
 
 // A session from a further provider instance — a configured ACP agent, a second
@@ -5721,6 +5725,8 @@ type TranscriptCardProps = {
   continuousMode: boolean
   codexMode?: boolean
   claudeCodeMode?: boolean
+  copilotMode?: boolean
+  openCodeMode?: boolean
   /**
    * The line under a turn's last reply — who answered and how long it took —
    * set only on that card and only in the continuous view. A card cannot know
@@ -5866,6 +5872,8 @@ function TranscriptCardInner({
   continuousMode,
   codexMode = false,
   claudeCodeMode = false,
+  copilotMode = false,
+  openCodeMode = false,
   turnFooter,
   agentsMode,
   agentToolCursorKey,
@@ -6298,6 +6306,9 @@ function TranscriptCardInner({
                   if (claudeCodeMode) segments = segments.map((segment, index) => ({
                     ...segment, text: index === 0 ? '  ' : segment.text, fg: theme.dim,
                   }))
+                  if (copilotMode) segments = segments.map((segment, index) => index === 1
+                    ? { ...segment, text: streamToolSummaryName(toolCard) === 'bash' ? 'Shell' : segment.text, fg: theme.text, attributes: TextAttributes.BOLD }
+                    : index > 1 ? { ...segment, fg: theme.dim } : segment)
                   const diffPreview = toolCard.category === 'diff' ? streamDiffPreviewData(toolCard) : null
                   const isActivityTool = Boolean(streamActivitySegments && isStreamActivityToolCard(toolCard))
                   const isSingleActivityTool = hasSingleStreamActivity && isActivityTool
@@ -6456,7 +6467,7 @@ function TranscriptCardInner({
     // The transcript pane spends two columns on its border and two more on
     // the surrounding paddingX={1}; bodyIndent is budgeted separately below.
     const streamAvailableWidth = Math.max(rightPaneWidth - 4, 16)
-    const streamWidth = Math.max(transcriptMeasure(streamAvailableWidth - densityState.bodyIndent, transcriptWidth), 16)
+    const streamWidth = Math.max((copilotMode || openCodeMode) ? streamAvailableWidth - densityState.bodyIndent : transcriptMeasure(streamAvailableWidth - densityState.bodyIndent, transcriptWidth), 16)
     const streamLandmarkWidth = streamWidth + densityState.bodyIndent
     // Subagent cards prefix the marker with one ↪ per spawn-chain level
     // (`subagent:parent/child` origin), widening the marker gutter to match.
@@ -6470,17 +6481,20 @@ function TranscriptCardInner({
     // does (rule + two), so prompts and replies share one left edge the way
     // opencode's do; only the prompt draws the rule.
     const continuousInset = 3
+    const copilotTimeWidth = copilotMode && card.role === 'user' && card.timestampMs ? 8 : 0
     const streamTextWidth = continuousMode
       ? Math.max(streamLandmarkWidth - continuousInset - streamMarkerWidth, 12)
-      : Math.max(streamWidth - streamMarkerWidth, 12)
+      : Math.max(streamWidth - streamMarkerWidth - copilotTimeWidth, 12)
     const streamChildTextWidth = continuousMode
       ? Math.max(streamTextWidth - 2, 10)
       : Math.max(streamWidth - 4, 10)
     // Turn separators are the rule the band replaces: a prompt on its own
     // panel already says where a turn starts.
-    const streamLandmarks = continuousMode || codexMode || claudeCodeMode ? landmarks.filter((landmark) => landmark.kind !== 'turn') : landmarks
+    const streamLandmarks = continuousMode || codexMode || claudeCodeMode || copilotMode || openCodeMode ? landmarks.filter((landmark) => landmark.kind !== 'turn') : landmarks
     const firstLine = bodyLines[0]
-    const streamBaseMarker = claudeCodeMode
+    const streamBaseMarker = copilotMode
+      ? card.role === 'user' ? '❯' : '●'
+      : claudeCodeMode
       ? card.role === 'user' ? '❯' : '•'
       : codexMode
       ? card.role === 'user' ? '›' : '•'
@@ -6496,15 +6510,17 @@ function TranscriptCardInner({
       ? theme.text
       : isSearchHit
         ? theme.cyan
-        : card.role === 'user'
-          ? claudeCodeMode ? theme.text : accent
-          : firstLine && ['tool', 'result_ok', 'result_error', 'system'].includes(firstLine.tone)
-            ? transcriptColor(firstLine, theme)
-            : theme.text
+        : copilotMode
+          ? card.role === 'user' ? theme.text : theme.cyan
+          : card.role === 'user'
+            ? claudeCodeMode ? theme.text : accent
+            : firstLine && ['tool', 'result_ok', 'result_error', 'system'].includes(firstLine.tone)
+              ? transcriptColor(firstLine, theme)
+              : theme.text
     const streamFirstLineColor = hasCursor && firstLine
       ? theme.text
       : firstLine
-        ? transcriptColor(firstLine, theme)
+        ? copilotMode && firstLine.tone === 'thinking' ? theme.muted : openCodeMode && firstLine.tone === 'thinking' ? theme.amber : transcriptColor(firstLine, theme)
         : theme.dim
     const remainingLines = bodyLines.slice(1)
     const streamDiffPreview = card.category === 'diff' ? streamDiffPreviewData(card) : null
@@ -6543,7 +6559,7 @@ function TranscriptCardInner({
     // User prompts get a full-width tinted band plus an accent rail so they
     // remain obvious even in palettes whose base user background is subtle.
     const streamBg = card.role === 'user'
-      ? claudeCodeMode ? mixHexColor(theme.text, theme.bg, 0.20) ?? theme.surface2 : codexMode ? theme.surface2 : continuousMode ? continuousUserBackground(theme) : streamUserBackground(theme)
+      ? copilotMode ? mixHexColor(theme.text, theme.bg, 0.13) ?? theme.surface2 : claudeCodeMode ? mixHexColor(theme.text, theme.bg, 0.20) ?? theme.surface2 : codexMode ? theme.surface2 : continuousMode ? continuousUserBackground(theme) : streamUserBackground(theme)
       : hasCursor
         ? theme.surface2
         : undefined
@@ -6599,10 +6615,10 @@ function TranscriptCardInner({
           // A prompt is a ruled band; everything else is unmarked prose indented
           // to the prompt's text column. The band's vertical padding is what
           // makes it read as a panel rather than a highlighted line.
-          border={card.role === 'user' && !codexMode && !claudeCodeMode ? ['left'] : []}
+          border={card.role === 'user' && !codexMode && !claudeCodeMode && !copilotMode ? ['left'] : []}
           borderStyle={card.role === 'user' ? 'heavy' : undefined}
           borderColor={card.role === 'user' ? theme.cyan : undefined}
-          paddingLeft={codexMode || claudeCodeMode ? 0 : continuousMode
+          paddingLeft={codexMode || claudeCodeMode || copilotMode ? 0 : continuousMode
             ? card.role === 'user' ? continuousInset - 1 : continuousInset
             : card.role === 'user'
               ? Math.max(densityState.bodyIndent - 1, 0)
@@ -6650,7 +6666,7 @@ function TranscriptCardInner({
               fg={streamFirstLineColor}
               width={streamTextWidth}
               wrapMode={firstLine.tone === 'tool' ? 'none' : 'word'}
-              attributes={card.role === 'user' && !continuousMode && !codexMode && !claudeCodeMode ? TextAttributes.BOLD : undefined}
+              attributes={(copilotMode || openCodeMode) && firstLine.tone === 'thinking' ? TextAttributes.ITALIC : card.role === 'user' && !continuousMode && !codexMode && !claudeCodeMode && !copilotMode ? TextAttributes.BOLD : undefined}
               selectable
               {...selectionColors}
             >
@@ -6660,6 +6676,11 @@ function TranscriptCardInner({
                   ? renderInlineMarkdownSpans(firstLine.text, theme, streamFirstLineColor, `${card.key}:f`, linkCwd)
                   : firstLine.text}
             </text>
+            {copilotMode && card.role === 'user' && card.timestampMs ? (
+              <text fg={theme.dim} width={copilotTimeWidth} wrapMode="none" selectable {...selectionColors}>
+                {formatCopilotTimestamp(card.timestampMs)}
+              </text>
+            ) : null}
           </box>
         ) : (
           <text fg={theme.dim} selectable {...selectionColors}>{`${streamMarker} (no output)`}</text>
@@ -6675,6 +6696,7 @@ function TranscriptCardInner({
           const continuationMarker = `${continuousMode ? '  ' : streamContinuationMarker(line)}${' '.repeat(hang)}`
           const lineText = hang > 0 ? line.text.slice(hang) : line.text
           const lineWidth = streamChildTextWidth - hang
+          const lineColor = copilotMode && line.tone === 'thinking' ? theme.muted : openCodeMode && line.tone === 'thinking' ? theme.amber : transcriptColor(line, theme)
           return (
             <box key={`${card.key}:s:${lineIndex}`} flexDirection="row">
               <text fg={theme.dim} width={continuationMarker.length} wrapMode="none" selectable {...selectionColors}>
@@ -6682,7 +6704,8 @@ function TranscriptCardInner({
               </text>
               <text
                 {...selectionColors}
-                fg={transcriptColor(line, theme)}
+                fg={lineColor}
+                attributes={(copilotMode || openCodeMode) && line.tone === 'thinking' ? TextAttributes.ITALIC : undefined}
                 width={lineWidth}
                 wrapMode={line.tone === 'tool' ? 'none' : 'word'}
                 selectable
@@ -6690,7 +6713,7 @@ function TranscriptCardInner({
                 {line.tone === 'tool'
                   ? renderInlineTextSegments(transcriptToolLineSegments(line.text, theme, '', theme.dim, true), lineWidth, theme.dim)
                   : hasInlineSpans(lineText)
-                    ? renderInlineMarkdownSpans(lineText, theme, transcriptColor(line, theme), `${card.key}:s:${lineIndex}`, linkCwd)
+                    ? renderInlineMarkdownSpans(lineText, theme, lineColor, `${card.key}:s:${lineIndex}`, linkCwd)
                     : lineText}
               </text>
             </box>
@@ -7548,7 +7571,7 @@ function SplitTranscriptPaneInner({
   // activity rows, and no "No visible content" stop for every tool-only
   // message — otherwise the two halves of a split are two different apps.
   const paneStreamLike = transcriptView === 'stream' || transcriptView === 'chat'
-    || transcriptView === 'transcript' || transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code'
+    || transcriptView === 'transcript' || transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code' || transcriptView === 'copilot' || transcriptView === 'opencode'
   const tailCards = useMemo(() => {
     const liveKeys = new Set(liveCards.map((card) => card.key))
     const merged = liveCards.length === 0
@@ -7828,6 +7851,8 @@ function SplitTranscriptPaneInner({
       continuousMode: transcriptView === 'transcript',
       codexMode: transcriptView === 'codex',
       claudeCodeMode: transcriptView === 'claude-code',
+      copilotMode: transcriptView === 'copilot',
+      openCodeMode: transcriptView === 'opencode',
       agentsMode: usesAgentCardPresentation(card, transcriptView),
       agentToolCursorKey: null,
       agentToolExpandedKeys: EMPTY_EXPANDED_KEYS,
@@ -8434,6 +8459,8 @@ function ReaderTranscriptWindow({ inputs }: { inputs: ReaderWindowInputs }) {
         continuousMode: isContinuousView,
         codexMode: transcriptView === 'codex',
         claudeCodeMode: transcriptView === 'claude-code',
+        copilotMode: transcriptView === 'copilot',
+      openCodeMode: transcriptView === 'opencode',
         turnFooter: isContinuousView ? continuousTurnFooter(card, visibleTranscriptCards[absoluteIndex + 1]) : null,
         agentsMode: usesAgentCardPresentation(card, transcriptView),
         agentToolCursorKey: groupedToolView ? agentToolCursorByGroupKey[card.key] ?? null : null,
@@ -8645,13 +8672,15 @@ export default function OpenTuiApp() {
   const [transcriptView, setTranscriptView] = useState<TuiTranscriptView>('conversation')
   // Chat reuses stream's chronological, borderless card grouping — the two views
   // diverge only in composer placement (docked vs. inline-with-transcript).
-  const isChatLikeView = transcriptView === 'stream' || transcriptView === 'chat' || transcriptView === 'transcript' || transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code'
+  const isCopilotView = transcriptView === 'copilot'
+  const isOpenCodeView = transcriptView === 'opencode'
+  const isChatLikeView = transcriptView === 'stream' || transcriptView === 'chat' || transcriptView === 'transcript' || transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code' || transcriptView === 'copilot' || transcriptView === 'opencode'
   // SCROLLBACK is STREAM read the way a terminal scrollback is: the same rows,
   // but no card cursor — keys and the wheel move the text by lines, and nothing
   // is ever highlighted as "selected". The cursor key survives as an invisible
   // position (kept on the top visible message) so jumps and search still have
   // somewhere to start from.
-  const isScrollbackView = transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code'
+  const isScrollbackView = transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code' || isCopilotView || isOpenCodeView
   // Both draw the pane as bare stream: no reader header, no thinking preview.
   const isStreamView = transcriptView === 'stream' || isScrollbackView
   // With no cursor there is no card for `e` to act on, so SCROLLBACK expands
@@ -8664,7 +8693,7 @@ export default function OpenTuiApp() {
   // TRANSCRIPT is STREAM without the per-line markers, and with the role rule
   // on every message rather than only on user prompts. Modelled on opencode's
   // session view, where one left rule per message is the only chrome there is.
-  const isContinuousView = transcriptView === 'transcript'
+  const isContinuousView = transcriptView === 'transcript' || isOpenCodeView
   const [transcriptWidth, setTranscriptWidth] = useState<TuiTranscriptWidth>('readable')
   const [focusMode, setFocusMode] = useState(false)
   const [stickyHeaders, setStickyHeaders] = useState(false)
@@ -11866,7 +11895,10 @@ export default function OpenTuiApp() {
   const splitPaneSessions = visibleSplitPaneCount > 0
     ? splitPinnedSessions.slice(0, visibleSplitPaneCount)
     : []
-  const rightPaneWidth = stackedSplit ? readerAreaWidth : splitLayout.readerExtent
+  const openCodeContextWidth = isOpenCodeView && visibleSplitPaneCount === 0
+    ? Math.min(Math.max(24, Math.floor(readerAreaWidth * 0.22)), Math.max(readerAreaWidth - MIN_READER_WIDTH, 0))
+    : 0
+  const rightPaneWidth = (stackedSplit ? readerAreaWidth : splitLayout.readerExtent) - openCodeContextWidth
   // Row budget the reader column actually gets. Stacked panes take theirs out
   // of it, so every downstream height (transcript viewport included) must be
   // measured from this rather than from the whole frame.
@@ -12014,7 +12046,7 @@ export default function OpenTuiApp() {
   // Frame, header, context row and the ticker-or-banner pair. The stream views
   // draw only the frame and the banner, and were handing the transcript's rows
   // to chrome they never render.
-  const readerChromeRows = isStreamView ? 1 + tailBannerRows : 7
+  const readerChromeRows = isStreamView ? 1 + tailBannerRows + (!presentationFocusMode && isCopilotView ? 1 : 0) : 7
   const transcriptViewportRows = Math.max(
     readerRowBudget
     // Sticky headers sit directly beneath the pane title; reclaim its inset.
@@ -12022,6 +12054,7 @@ export default function OpenTuiApp() {
     // Fullscreen removes the two-row reader frame, leaving only the compact
     // restore affordance plus the transcript's top/bottom content insets.
     - (fullscreenMode ? 3 : focusMode ? 4 : readerChromeRows)
+    - (fullscreenMode && !presentationFocusMode && isCopilotView ? 1 : 0)
     - (showTabs || showPreviewBar ? TAB_BAR_HEIGHT : 0)
     // Fleet strip is one header row when visible.
     - (fleetStripVisible ? 1 : 0)
@@ -21793,7 +21826,7 @@ export default function OpenTuiApp() {
     },
     [statusLabel, visibleTranscriptCards.length, cursorIndex, readerMode, isScrollbackView, pendingNewCount, railVisible, width],
   )
-  const readerFrameTitle = isStreamView
+  const readerFrameTitle = isCopilotView || isOpenCodeView ? undefined : isStreamView
     ? joinMeta([TRANSCRIPT_VIEW_LABELS[transcriptView], headerStatusRight])
     : headerStatusRight
   const readerContextMeta = useMemo(
@@ -22499,6 +22532,19 @@ export default function OpenTuiApp() {
             </box>
           ) : null}
 
+          {!presentationFocusMode && isCopilotView ? (
+            <box height={1} paddingX={1} flexDirection="row" alignItems="center">
+              {['Current', 'Sessions', 'Issues', 'Pull requests', 'Gists'].map((tab) => {
+                const active = tab === 'Current'
+                return (
+                  <box key={tab} paddingX={1} backgroundColor={active ? theme.cyan : theme.bg}>
+                    <text fg={active ? theme.bg : theme.muted} attributes={active ? TextAttributes.BOLD : undefined} wrapMode="none">{tab}</text>
+                  </box>
+                )
+              })}
+            </box>
+          ) : null}
+
           {!presentationFocusMode && !isStreamView ? (
             <box paddingX={2} paddingTop={1} flexDirection="row" alignItems="center">
               <text fg={providerAccent} wrapMode="none">{'● '}</text>
@@ -22862,6 +22908,30 @@ export default function OpenTuiApp() {
             </box>
           ) : null}
           </box>
+
+        {openCodeContextWidth > 0 ? (
+          <box
+            id="opencode-context-panel"
+            width={openCodeContextWidth}
+            paddingX={1}
+            paddingTop={2}
+            backgroundColor={theme.bg}
+            flexDirection="column"
+          >
+            <text fg={theme.text} attributes={TextAttributes.BOLD} wrapMode="none">
+              {fitText(selectedSession ? formatSessionTitle(selectedSession) : 'Current session', openCodeContextWidth - 2)}
+            </text>
+            <box marginTop={2} flexDirection="column">
+              <text fg={theme.text} attributes={TextAttributes.BOLD} wrapMode="none">Context</text>
+              <text fg={theme.muted} wrapMode="none">
+                {contextUsage ? `${contextUsage.totalTokens.toLocaleString()} tokens` : 'Context unavailable'}
+              </text>
+              {contextUsage ? (
+                <text fg={theme.muted} wrapMode="none">{`${Math.round(contextUsage.percentage)}% used`}</text>
+              ) : null}
+            </box>
+          </box>
+        ) : null}
 
         {/* Split panes live in the reader's frame area, under the shared tab
             strip, so every frame in here lines up on the axis they share. */}
