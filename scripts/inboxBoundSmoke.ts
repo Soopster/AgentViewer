@@ -9,7 +9,8 @@ const msg = (id: string, body: string, extra: Partial<ProtocolMessage> = {}): Pr
 
 // Small mail is untouched, tags included.
 assert.equal(formatInbox([msg('a1', 'hello'), msg('b1', 'urgent!', { priority: 'urgent', replyRequired: true })], agents),
-  '- from ada: hello\n- from bo [URGENT, reply-required]: urgent!')
+  '- [team message a1 from ada kind=request priority=normal] hello\n'
+  + '- [team message b1 from bo kind=request priority=urgent URGENT reply-required] urgent!')
 assert.equal(formatInbox([], agents), '(empty)')
 
 // One huge message is cut, says how much, and names where the rest lives.
@@ -24,11 +25,11 @@ const flood = [
 ]
 const out = formatInbox(flood, agents)
 assert.ok(out.length < MAX_INBOX_TOTAL_CHARS + 41 * 400 + 200, `bounded: ${out.length}`)
-assert.equal(out.split('\n').filter((line) => line.startsWith('- from')).length, 41, 'every message is still listed')
+assert.equal(out.split('\n').filter((line) => line.startsWith('- [team message ')).length, 41, 'every message is still listed')
 assert.ok(out.includes('z'.repeat(5000)), 'the reply-required message is whole')
 assert.match(out, /^\(\d+ further messages shortened to one line each/)
 assert.ok(out.includes('fyi 0 '), 'earlier mail fits first')
-assert.ok(!out.includes('y'.repeat(3000) + '\n- from ada: fyi 39 '), 'the tail was the part reduced')
+assert.ok(!out.includes('y'.repeat(3000) + '\n- [team message a39 from ada kind=request priority=normal] fyi 39 '), 'the tail was the part reduced')
 
 // The board a prompt carries stays bounded on a long run, and never points a dependency at nothing.
 {

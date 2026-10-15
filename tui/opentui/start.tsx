@@ -37,7 +37,7 @@ const renderer = await createCliRenderer({
 // Some hosts (Windows Terminal and other ConPTY terminals) coalesce those
 // positioned writes wrongly and leave fragments behind until a resize. This
 // asks for a whole-screen repaint every frame instead — more bytes, no residue.
-// The flag is the renderer's own resize/resume repaint request; OpenTUI 0.5.11
+// The flag is the renderer's own resize/resume repaint request; OpenTUI
 // has no public switch for it, so it is feature-detected and reported if gone.
 if (process.env.AGENT_VIEWER_FULL_REPAINT === '1') {
   const repaintable = renderer as unknown as { forceFullRepaintRequested?: boolean }

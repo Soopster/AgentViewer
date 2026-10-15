@@ -343,7 +343,9 @@ if (captureCharFrame().includes('ATTENTION')) fail('reviewed result stayed in at
   const panelHeight = bottom - top + 1
   if (top < 0 || bottom < 0) fail('the Teammates panel is not on screen')
   // 21, not 20: the lead now has a row of its own at the head of the roster.
-  if (panelHeight > 21) fail(`the panel is padded well past its content: ${panelHeight} rows`)
+  // At 44 columns the settings and hint lines wrap onto a second row each (four more rows of content).
+  const maxPanelRows = SMOKE_WIDTH < 50 ? 25 : 21
+  if (panelHeight > maxPanelRows) fail(`the panel is padded well past its content: ${panelHeight} rows`)
   if (panelHeight < 12) fail(`the panel is below the height its scrollbox needs: ${panelHeight} rows`)
   const footerRow = frameRows.findIndex((line, index) => index > top && line.includes('esc close'))
   if (footerRow < 0 || footerRow > bottom) fail('the footer drew outside the panel border')
@@ -438,6 +440,15 @@ const refused = await store.runInteractiveCoordinatorAction({
   action: 'resume-agent', to: 'nobody', detail: 'resume a teammate that needs nothing',
 })
 if (refused) fail('resuming a teammate that needs no recovery should not report success')
+// A refusal the Coordinator certified wrote nothing: it says why and leaves the panel free.
+if (store.getInteractiveCoordinatorState().pending) fail('a certified rejection must not lock the panel')
+if (!store.getInteractiveCoordinatorState().error) fail('a rejection must explain itself')
+// A failure the Coordinator did not certify has an unknown outcome. A stale run id is refused by the
+// service as a plain error (not a certified rejection), which is the shape of a lost reply.
+const unconfirmed = await store.runInteractiveCoordinatorAction({
+  action: 'resume-agent', to: 'nobody', detail: 'resume a teammate that needs nothing', expectedRunId: 'a-run-that-is-gone',
+})
+if (unconfirmed) fail('a request for a run that is gone should not report success')
 const pending = store.getInteractiveCoordinatorState().pending
 if (!pending) fail('a failed request must be kept for retry, not dropped')
 if (!store.getInteractiveCoordinatorState().error) fail('a failed request must explain itself')

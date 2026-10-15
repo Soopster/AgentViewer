@@ -45,8 +45,28 @@ export function noteHunk(document: ReviewDocument, note: Pick<ReviewNote, 'fileP
     && hunk.lines.some(line => lineAt(line, note.range.endSide ?? note.range.side) === note.range.end))
 }
 
+/**
+ * The hunk a note on revealed context belongs to. "Show 20 preceding lines" shows source outside every
+ * hunk, and a note there is still about the change beside it: anchor to the nearest hunk of the file by
+ * line distance. Only a file with no hunks at all leaves the note nowhere to attach.
+ */
+function nearestHunk(document: ReviewDocument, note: Pick<ReviewNote, 'filePath' | 'range'>): ReviewHunk | undefined {
+  let best: ReviewHunk | undefined
+  let bestDistance = Infinity
+  for (const hunk of document.hunks) {
+    if (hunk.filePath !== note.filePath) continue
+    for (const line of hunk.lines) {
+      const at = lineAt(line, note.range.side)
+      if (at == null) continue
+      const distance = Math.abs(at - note.range.start)
+      if (distance < bestDistance) { best = hunk; bestDistance = distance }
+    }
+  }
+  return best
+}
+
 export function anchorNote(document: ReviewDocument, note: ReviewNote): ReviewNote {
-  const hunk = noteHunk(document, note)
+  const hunk = noteHunk(document, note) ?? nearestHunk(document, note)
   if (!hunk) throw new Error('The selected range is not in a current review hunk. Refresh and select it again.')
   return { ...note, resolution: 'active', anchor: {
     hunkId: hunk.id, oldStart: hunk.lines.find(line => line.oldLine != null)?.oldLine ?? 0,

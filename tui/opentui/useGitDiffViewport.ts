@@ -3,6 +3,9 @@ import type { ScrollBoxRenderable } from '@opentui/core'
 import { captureDiffAnchor, diffRowWindow, resolveDiffAnchor, type DiffGeometry, type DiffViewportAnchor } from './gitDiffGeometry'
 
 /** Keep file/source reading anchors while mounting only the current row window. */
+const SCROLL_RESTORE_RETRIES = 12
+const SCROLL_RESTORE_RETRY_MS = 16
+
 export function useGitDiffViewport(
   scrollRef: RefObject<ScrollBoxRenderable | null>,
   geometry: DiffGeometry,
@@ -51,8 +54,19 @@ export function useGitDiffViewport(
     const nextTop = Math.max(0, Math.min(targetTop, geometry.total - viewportHeight))
     current.current = { geometry, key: documentKey, group: anchorGroup, top: nextTop, preferredKey: anchor?.keys[0] }
     setTop(nextTop)
-    // The new spacers must finish layout before ScrollBox can accept their full extent.
-    const timer = setTimeout(() => { scrollRef.current?.scrollTo(nextTop) }, 0)
+    // The new spacers must finish layout before ScrollBox can accept their full extent. Under OpenTUI 0.6
+    // that happens on a later frame than a zero-delay timer, so a restore past the extent laid out so far
+    // is clamped; ask again, only while that is the reason it fell short.
+    let tries = 0
+    let timer: ReturnType<typeof setTimeout>
+    const apply = () => {
+      const scroll = scrollRef.current
+      if (!scroll) return
+      scroll.scrollTo(nextTop)
+      const extentStillShort = scroll.scrollHeight - scroll.viewport.height < nextTop
+      if (extentStillShort && tries++ < SCROLL_RESTORE_RETRIES) timer = setTimeout(apply, SCROLL_RESTORE_RETRY_MS)
+    }
+    timer = setTimeout(apply, 0)
     return () => { clearTimeout(timer) }
   }, [anchorGroup, documentKey, geometry, jumpKey, jumpRevision, onJump, ready, scrollRef, viewportHeight])
 

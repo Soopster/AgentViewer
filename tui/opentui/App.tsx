@@ -23543,7 +23543,7 @@ export default function OpenTuiApp() {
           const overlayTop = 2
           const overlayChromeRows = 4 // two borders, the header, the footer
           const rows = chordHelpRows(map)
-          const maxRows = Math.max(height - overlayTop - composerDockHeight - overlayChromeRows, 6)
+          const maxRows = Math.max(height - overlayTop - composerDockHeight - composerStatusBlockHeight - overlayChromeRows, 6)
           const visible = rows.slice(0, maxRows)
           const hidden = rows.length - visible.length
           return (

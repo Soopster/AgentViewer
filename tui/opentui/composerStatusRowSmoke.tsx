@@ -63,7 +63,9 @@ await settle(1500)
 const chatDock = setup.renderer.root.findDescendantById('composer-dock') as unknown as Geometry | null
 const chatStatus = setup.renderer.root.findDescendantById('chat-composer-status') as unknown as Geometry | null
 if (!chatDock || !chatStatus) throw new Error('Chat composer dock or its status row is missing')
-const chatBorderRow = chatDock.y + chatDock.height - 1
+// The chat dock has no bottom border of its own (it shares the reader frame's), so the border row the
+// status paints into is the one just below the dock.
+const chatBorderRow = chatDock.y + chatDock.height
 if (chatStatus.y !== chatBorderRow) {
   throw new Error(`Chat status row is on row ${chatStatus.y}, not the border row ${chatBorderRow}`)
 }
@@ -83,8 +85,8 @@ if (!/[│┘].*[│┘]\s*$/.test(chatDrawn.trimEnd())) {
 }
 const chatTextarea = setup.renderer.root.findDescendantById('composer-textarea') as unknown as Geometry | null
 if (!chatTextarea) throw new Error('Chat composer textarea is missing')
-if (chatDock.height !== chatTextarea.height + 3) {
-  throw new Error(`Chat dock is ${chatDock.height} rows for a ${chatTextarea.height}-row draft; expected ${chatTextarea.height + 3}`)
+if (chatDock.height !== chatTextarea.height + 2) {
+  throw new Error(`Chat dock is ${chatDock.height} rows for a ${chatTextarea.height}-row draft; expected ${chatTextarea.height + 2}`)
 }
 // Chat keeps one quiet row between the draft and its metadata-bearing bottom
 // border, so the single-line input does not feel pinned between two rules.

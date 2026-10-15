@@ -468,6 +468,32 @@ test goes through `isLightThemeMode`, never `LIGHT_MODES`. The test renderer ref
 detection, so `terminalPaletteThemeSmoke.tsx` stubs the read and emits the event (two mutations
 verified); the OSC exchange itself is OpenTUI's and is not covered here.
 
+#### OpenTUI 0.6: what changed under the smokes (load-bearing)
+
+0.6 paints natively and asynchronously, and binds resources to a native Context. Nothing in the
+app's behaviour changed, but four things in how it is built and tested did:
+
+- **A `SyntaxStyle` belongs to the scene that draws it.** `SyntaxStyle.fromStyles(styles, owner)`
+  takes `renderer.nativeScene`; one built before the renderer exists cannot be attached to it. The
+  root builds its styles from `useRenderer().nativeScene`, and smokes use `testRenderWithSyntaxStyle`.
+- **Every smoke imports `testRender`/`act` from `tui/opentui/testRender.tsx`, not the library.** A
+  commit paints a frame later, so a capture right after `await act(...)` saw the frame before it
+  (an editor that had closed still on screen). The wrapped `act` lets the renderer settle after an
+  async act, `flush` waits for the output to drain (a capture during an in-flight frame throws
+  `OutputBusy`), and a throw exits the process — a 0.6 renderer keeps native handles alive, so a
+  failed smoke otherwise sat until its timeout with the reason buried. **Wait without blocking the
+  thread**: spinning inside the capture blocks the drain it is waiting for.
+- **No JS paint hook.** `root.render` is gone; per-frame sampling listens to the renderer's `frame`
+  event (`readerWindowSmoke.tsx`). Layout reads use `getLayout()`, not `getLayoutNode()`.
+- **A refresh effect keyed on a callback's identity blanks what it just loaded.** `GitPopover`
+  re-ran its load whenever the turn list arrived (the callback is rebuilt), resetting `data` to null
+  right after the first load; 0.5's timing hid it. It now keys on `sourceKey`.
+
+On 0.6.6 the whole `tui:smoke:run` chain (125 smokes) passes. 0.6.6 also changed two things a
+component can lean on: removing a style prop now restores its default (0.6.5 and earlier kept the
+old value, which is the "reused box keeps the padding" trap below), and `visible={null}` now shows
+a node rather than hiding it — hide with `false`. Nothing here sets `visible`.
+
 #### OpenTUI performance patterns (load-bearing)
 
 - **Poll fingerprint bail-out** in `setSessionDetail`: return `prev` when `rawMessages.length`, last UUID, model, and title are unchanged so React's identity bail-out skips a full transcript reformat on idle 2s polls.
@@ -1195,7 +1221,7 @@ messages" notice and wheel acceleration already exist.
 - **`--no-mouse` / `AGENT_VIEWER_DISABLE_MOUSE=1`** hands the mouse back to the
   terminal so its native selection works in tmux and over SSH.
 - **`--full-repaint` / `AGENT_VIEWER_FULL_REPAINT=1`** repaints every cell each
-  frame, for ConPTY hosts that leave fragments. OpenTUI 0.5.11 has no public
+  frame, for ConPTY hosts that leave fragments. OpenTUI (0.5.11 and 0.6 alike) has no public
   switch, so it sets the renderer's own resize/resume repaint flag from a frame
   callback, feature-detected — an upgrade that renames the field warns rather
   than silently doing nothing.
@@ -1259,7 +1285,7 @@ second renderer; TRANSCRIPT is the opencode-styled sibling and keeps its cursor.
 
 #### Clickable transcript targets (load-bearing)
 
-OpenTUI 0.5.11's `renderer.getLinkAt(x, y)` reads a link id back out of the
+OpenTUI's `renderer.getLinkAt(x, y)` (0.5.11 and 0.6) reads a link id back out of the
 **painted cell attributes**, so a URL or path is clickable only if the renderer
 emitted an `<a href>` for it — a styled `<span>` with identical text renders
 byte-identically and is completely inert. The element choice *is* the feature,

@@ -58,6 +58,10 @@ type FrameGeometry = { x: number; y: number; width: number; height: number }
 const transcriptFrame = setup.renderer.root.findDescendantById('transcript-reader') as unknown as FrameGeometry | null
 const composerFrame = setup.renderer.root.findDescendantById('composer-dock') as unknown as FrameGeometry | null
 const surfaceFrame = setup.renderer.root.findDescendantById('surface-panel-frame') as unknown as FrameGeometry | null
+// Whatever sits between the two is the composer's status block (a non-default permission mode adds a
+// two-row banner), which is read from the user's own settings: allow exactly the rows it reports.
+const statusRowsBetween = composerFrame && transcriptFrame ? Math.max(0, composerFrame.y - (transcriptFrame.y + transcriptFrame.height)) : 0
+if (statusRowsBetween > 2) throw new Error(`${statusRowsBetween} rows between the transcript and the composer; the status block is at most 2`)
 if (
   !transcriptFrame
   || !composerFrame
@@ -65,7 +69,7 @@ if (
   || transcriptFrame.x !== composerFrame.x
   || transcriptFrame.width !== composerFrame.width
   || transcriptFrame.x + transcriptFrame.width !== surfaceFrame.x
-  || transcriptFrame.y + transcriptFrame.height !== composerFrame.y
+  || composerFrame.y - (transcriptFrame.y + transcriptFrame.height) !== statusRowsBetween
   || composerFrame.y + composerFrame.height !== surfaceFrame.y + surfaceFrame.height
 ) {
   throw new Error(`Message frame does not meet the footer beside the surface panel:\n${launcher}`)
@@ -234,7 +238,7 @@ const closedComposerFrame = setup.renderer.root.findDescendantById('composer-doc
 if (
   !closedTranscriptFrame
   || !closedComposerFrame
-  || closedTranscriptFrame.y + closedTranscriptFrame.height !== closedComposerFrame.y
+  || closedComposerFrame.y - (closedTranscriptFrame.y + closedTranscriptFrame.height) !== statusRowsBetween
 ) {
   throw new Error(`Transcript left a blank row above the composer after the surface panel closed:\n${closed}`)
 }

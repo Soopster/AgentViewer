@@ -146,7 +146,9 @@ try {
   // The stream views draw no reader header, context row or idle ticker; the
   // rows budgeted for them belong to the text. At 40 rows that is the pane's
   // frame, the dock and the status bar away from the whole screen.
-  if (scroll().viewport.height < 29) {
+  // A Claude session defaults to `auto` mode, whose banner takes two more rows above the dock. The
+  // seven rows of reader chrome this guards against would leave 22, so 27 still tells them apart.
+  if (scroll().viewport.height < 27) {
     fail(`SCROLLBACK shows ${scroll().viewport.height} transcript rows of 40; chrome is holding the rest`)
   }
   {
