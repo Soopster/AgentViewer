@@ -17,11 +17,7 @@ const mouseDisabled = process.env.AGENT_VIEWER_DISABLE_MOUSE === '1'
 
 const renderer = await createCliRenderer({
   exitOnCtrlC: false,
-  // Keep the TUI pinned to the terminal's bottom edge while OpenTUI routes
-  // explicit assistant output into normal terminal scrollback above it.
-  screenMode: 'split-footer',
-  footerHeight: process.stdout.rows || 24,
-  externalOutputMode: 'capture-stdout',
+  screenMode: 'alternate-screen',
   useMouse: !mouseDisabled,
   // OpenTUI paces on-demand frames by maxFps (default 60): a scroll that asks
   // for a frame 4ms after the last one waits out the rest of 16.7ms. Frames
@@ -35,11 +31,6 @@ const renderer = await createCliRenderer({
   onDestroy: () => {
     process.exit(0)
   },
-})
-
-// Keep the split-footer render area full-height after terminal resizes.
-renderer.on('resize', () => {
-  renderer.footerHeight = renderer.terminalHeight
 })
 
 // The native renderer sends only the cells that changed since the last frame.
