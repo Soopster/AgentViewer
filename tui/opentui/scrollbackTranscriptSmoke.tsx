@@ -21,6 +21,10 @@ const { mock } = await import(bunTestSpecifier) as {
   mock: { module(specifier: string, factory: () => unknown): void }
 }
 
+const view = process.env.SCROLLBACK_VIEW === 'claude-code' ? 'claude-code'
+  : process.env.SCROLLBACK_VIEW === 'codex' ? 'codex' : 'scrollback'
+const viewLabel = view === 'claude-code' ? 'CLAUDE' : view.toUpperCase()
+
 const SESSION = {
   sessionId: 'scrollback-smoke-session',
   provider: 'claude' as const,
@@ -89,7 +93,7 @@ mock.module('./metadataWorkerClient', () => ({
 const service = await import('../../lib/tui/service')
 mock.module('../../lib/tui/service', () => ({
   ...service,
-  readTuiTranscriptView: async () => 'scrollback',
+  readTuiTranscriptView: async () => view,
   readTuiStickyHeaders: async () => true,
   writeTuiTranscriptView: async () => {},
   readTuiSessions: async () => [SESSION],
@@ -144,7 +148,7 @@ try {
   if (scroll().scrollTop !== limit()) fail('SCROLLBACK did not start at the bottom')
   {
     const rows = setup.captureCharFrame().split('\n')
-    const titleRow = rows.findIndex((row) => row.includes('SCROLLBACK'))
+    const titleRow = rows.findIndex((row) => row.includes(`${viewLabel}  ·`))
     const headerRow = rows.findIndex((row) => row.includes('▌ PROMPT  Explain the pool.'))
     if (headerRow !== titleRow + 1) fail('The sticky header leaves a spare row below the pane title')
     const borderTitle = rows[titleRow] ?? ''
@@ -169,7 +173,7 @@ try {
     const { IDLE_TICKER_PHRASES } = await import('./App')
     const frame = setup.captureCharFrame()
     if (IDLE_TICKER_PHRASES.some((phrase) => frame.includes(phrase))) fail('SCROLLBACK painted the idle ticker')
-    const title = frame.split('\n').find((row) => row.includes('SCROLLBACK')) ?? ''
+    const title = frame.split('\n').find((row) => row.includes(`${viewLabel}  ·`)) ?? ''
     if (/\d+\/\d+/.test(title)) fail('SCROLLBACK titled the pane with a card position it has no cursor for')
   }
 
@@ -331,12 +335,22 @@ try {
     if (rowWith('second-output-row')) fail('Fold-all left an item a click had opened')
   }
 
+  if (view === 'claude-code' || view === 'codex') {
+    act(() => { scroll().scrollTop = 0 })
+    await settle(400)
+    const expectedMarker = view === 'claude-code' ? '❯' : '›'
+    const prompt = rowWith(`${expectedMarker} Explain the pool.`)
+    if (!prompt?.includes(`${expectedMarker} Explain the pool.`)) fail(`${viewLabel} lost its CLI prompt marker`)
+    if (prompt?.includes('┃') || prompt?.includes('▌')) fail(`${viewLabel} painted an accent rail on the prompt`)
+    if (!rowWith('reply 00 row 0')?.includes('•')) fail(`${viewLabel} lost its assistant bullet`)
+  }
+
   // ── the neighbouring STREAM view still has its cursor ────────────────────
   // SCROLLBACK shares STREAM's render path and its chrome flag; STREAM sits
   // four rows above it in the view menu.
   act(() => { setup.mockInput.pressKey('v') })
   await settle()
-  for (let i = 0; i < 4; i += 1) act(() => { setup.mockInput.pressArrow('up') })
+  for (let i = 0; i < (view === 'claude-code' ? 6 : view === 'codex' ? 5 : 4); i += 1) act(() => { setup.mockInput.pressArrow('up') })
   act(() => { setup.mockInput.pressEnter() })
   await settle(400)
   await press('G')
@@ -345,7 +359,7 @@ try {
   if (!streamRow) fail('STREAM did not render the tail')
   if (!streamRow!.includes('❯')) fail('STREAM lost its card cursor; SCROLLBACK must not redefine it')
 
-  console.log('Scrollback transcript smoke passed (no cursor, row scrolling, stable position, tail re-follow, click does not select, expand all, click to expand, STREAM unchanged)')
+  console.log(`${viewLabel} transcript smoke passed (no cursor, row scrolling, stable position, tail re-follow, click does not select, expand all, click to expand, STREAM unchanged)`)
 } finally {
   setup.renderer.destroy?.()
 }

@@ -4183,7 +4183,7 @@ export function usesAgentCardPresentation(
   transcriptView: TuiTranscriptView,
 ): boolean {
   return transcriptView === 'agents'
-    || ((transcriptView === 'stream' || transcriptView === 'chat' || transcriptView === 'scrollback') && isStreamOperationalCard(card))
+    || ((transcriptView === 'stream' || transcriptView === 'chat' || transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code') && isStreamOperationalCard(card))
 }
 
 export function shouldCenterTranscriptCard(
@@ -4956,7 +4956,7 @@ const QUESTION_PREVIEW_MAX_LINES = 8
 // reserving anything, so the preview is dropped instead.
 const QUESTION_PREVIEW_MIN_ROWS = 2
 
-const TRANSCRIPT_VIEWS: TuiTranscriptView[] = ['conversation', 'full', 'continue', 'stream', 'agents', 'chat', 'transcript', 'scrollback']
+const TRANSCRIPT_VIEWS: TuiTranscriptView[] = ['conversation', 'full', 'continue', 'stream', 'agents', 'chat', 'transcript', 'scrollback', 'codex', 'claude-code']
 
 const TRANSCRIPT_VIEW_LABELS: Record<TuiTranscriptView, string> = {
   conversation: 'CONVERSATION',
@@ -4967,6 +4967,8 @@ const TRANSCRIPT_VIEW_LABELS: Record<TuiTranscriptView, string> = {
   chat: 'CHAT',
   transcript: 'TRANSCRIPT',
   scrollback: 'SCROLLBACK',
+  codex: 'CODEX',
+  'claude-code': 'CLAUDE',
 }
 
 const TRANSCRIPT_VIEW_DESCRIPTIONS: Record<TuiTranscriptView, string> = {
@@ -4978,6 +4980,8 @@ const TRANSCRIPT_VIEW_DESCRIPTIONS: Record<TuiTranscriptView, string> = {
   chat: 'Composer flows inline with the conversation, no dock',
   transcript: 'One continuous transcript, a rule per message',
   scrollback: 'One long text transcript that scrolls by line, no card cursor',
+  codex: 'Codex CLI-style scrollback with shaded prompts and compact activity',
+  'claude-code': 'Claude Code-style scrollback with slim prompts and muted tool activity',
 }
 
 // A session from a further provider instance — a configured ACP agent, a second
@@ -5715,6 +5719,8 @@ type TranscriptCardProps = {
   streamMode: boolean
   /** STREAM restyled after opencode's session view: prompts are ruled bands, replies are plain prose. */
   continuousMode: boolean
+  codexMode?: boolean
+  claudeCodeMode?: boolean
   /**
    * The line under a turn's last reply — who answered and how long it took —
    * set only on that card and only in the continuous view. A card cannot know
@@ -5858,6 +5864,8 @@ function TranscriptCardInner({
   transcriptWidth,
   streamMode,
   continuousMode,
+  codexMode = false,
+  claudeCodeMode = false,
   turnFooter,
   agentsMode,
   agentToolCursorKey,
@@ -6287,6 +6295,9 @@ function TranscriptCardInner({
                 ) : null}
                 {streamDetailToolCards.map((toolCard, toolIndex) => {
                   let segments = streamToolSummarySegments(toolCard, theme)
+                  if (claudeCodeMode) segments = segments.map((segment, index) => ({
+                    ...segment, text: index === 0 ? '  ' : segment.text, fg: theme.dim,
+                  }))
                   const diffPreview = toolCard.category === 'diff' ? streamDiffPreviewData(toolCard) : null
                   const isActivityTool = Boolean(streamActivitySegments && isStreamActivityToolCard(toolCard))
                   const isSingleActivityTool = hasSingleStreamActivity && isActivityTool
@@ -6467,9 +6478,13 @@ function TranscriptCardInner({
       : Math.max(streamWidth - 4, 10)
     // Turn separators are the rule the band replaces: a prompt on its own
     // panel already says where a turn starts.
-    const streamLandmarks = continuousMode ? landmarks.filter((landmark) => landmark.kind !== 'turn') : landmarks
+    const streamLandmarks = continuousMode || codexMode || claudeCodeMode ? landmarks.filter((landmark) => landmark.kind !== 'turn') : landmarks
     const firstLine = bodyLines[0]
-    const streamBaseMarker = continuousMode
+    const streamBaseMarker = claudeCodeMode
+      ? card.role === 'user' ? '❯' : '•'
+      : codexMode
+      ? card.role === 'user' ? '›' : '•'
+      : continuousMode
       ? ''
       : hasCursor
         ? '❯'
@@ -6482,7 +6497,7 @@ function TranscriptCardInner({
       : isSearchHit
         ? theme.cyan
         : card.role === 'user'
-          ? accent
+          ? claudeCodeMode ? theme.text : accent
           : firstLine && ['tool', 'result_ok', 'result_error', 'system'].includes(firstLine.tone)
             ? transcriptColor(firstLine, theme)
             : theme.text
@@ -6528,7 +6543,7 @@ function TranscriptCardInner({
     // User prompts get a full-width tinted band plus an accent rail so they
     // remain obvious even in palettes whose base user background is subtle.
     const streamBg = card.role === 'user'
-      ? continuousMode ? continuousUserBackground(theme) : streamUserBackground(theme)
+      ? claudeCodeMode ? mixHexColor(theme.text, theme.bg, 0.20) ?? theme.surface2 : codexMode ? theme.surface2 : continuousMode ? continuousUserBackground(theme) : streamUserBackground(theme)
       : hasCursor
         ? theme.surface2
         : undefined
@@ -6584,10 +6599,10 @@ function TranscriptCardInner({
           // A prompt is a ruled band; everything else is unmarked prose indented
           // to the prompt's text column. The band's vertical padding is what
           // makes it read as a panel rather than a highlighted line.
-          border={card.role === 'user' ? ['left'] : undefined}
+          border={card.role === 'user' && !codexMode && !claudeCodeMode ? ['left'] : []}
           borderStyle={card.role === 'user' ? 'heavy' : undefined}
           borderColor={card.role === 'user' ? theme.cyan : undefined}
-          paddingLeft={continuousMode
+          paddingLeft={codexMode || claudeCodeMode ? 0 : continuousMode
             ? card.role === 'user' ? continuousInset - 1 : continuousInset
             : card.role === 'user'
               ? Math.max(densityState.bodyIndent - 1, 0)
@@ -6635,7 +6650,7 @@ function TranscriptCardInner({
               fg={streamFirstLineColor}
               width={streamTextWidth}
               wrapMode={firstLine.tone === 'tool' ? 'none' : 'word'}
-              attributes={card.role === 'user' && !continuousMode ? TextAttributes.BOLD : undefined}
+              attributes={card.role === 'user' && !continuousMode && !codexMode && !claudeCodeMode ? TextAttributes.BOLD : undefined}
               selectable
               {...selectionColors}
             >
@@ -7533,7 +7548,7 @@ function SplitTranscriptPaneInner({
   // activity rows, and no "No visible content" stop for every tool-only
   // message — otherwise the two halves of a split are two different apps.
   const paneStreamLike = transcriptView === 'stream' || transcriptView === 'chat'
-    || transcriptView === 'transcript' || transcriptView === 'scrollback'
+    || transcriptView === 'transcript' || transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code'
   const tailCards = useMemo(() => {
     const liveKeys = new Set(liveCards.map((card) => card.key))
     const merged = liveCards.length === 0
@@ -7811,6 +7826,8 @@ function SplitTranscriptPaneInner({
       transcriptWidth,
       streamMode: paneStreamLike,
       continuousMode: transcriptView === 'transcript',
+      codexMode: transcriptView === 'codex',
+      claudeCodeMode: transcriptView === 'claude-code',
       agentsMode: usesAgentCardPresentation(card, transcriptView),
       agentToolCursorKey: null,
       agentToolExpandedKeys: EMPTY_EXPANDED_KEYS,
@@ -8415,6 +8432,8 @@ function ReaderTranscriptWindow({ inputs }: { inputs: ReaderWindowInputs }) {
         transcriptWidth,
         streamMode: isChatLikeView,
         continuousMode: isContinuousView,
+        codexMode: transcriptView === 'codex',
+        claudeCodeMode: transcriptView === 'claude-code',
         turnFooter: isContinuousView ? continuousTurnFooter(card, visibleTranscriptCards[absoluteIndex + 1]) : null,
         agentsMode: usesAgentCardPresentation(card, transcriptView),
         agentToolCursorKey: groupedToolView ? agentToolCursorByGroupKey[card.key] ?? null : null,
@@ -8626,13 +8645,13 @@ export default function OpenTuiApp() {
   const [transcriptView, setTranscriptView] = useState<TuiTranscriptView>('conversation')
   // Chat reuses stream's chronological, borderless card grouping — the two views
   // diverge only in composer placement (docked vs. inline-with-transcript).
-  const isChatLikeView = transcriptView === 'stream' || transcriptView === 'chat' || transcriptView === 'transcript' || transcriptView === 'scrollback'
+  const isChatLikeView = transcriptView === 'stream' || transcriptView === 'chat' || transcriptView === 'transcript' || transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code'
   // SCROLLBACK is STREAM read the way a terminal scrollback is: the same rows,
   // but no card cursor — keys and the wheel move the text by lines, and nothing
   // is ever highlighted as "selected". The cursor key survives as an invisible
   // position (kept on the top visible message) so jumps and search still have
   // somewhere to start from.
-  const isScrollbackView = transcriptView === 'scrollback'
+  const isScrollbackView = transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code'
   // Both draw the pane as bare stream: no reader header, no thinking preview.
   const isStreamView = transcriptView === 'stream' || isScrollbackView
   // With no cursor there is no card for `e` to act on, so SCROLLBACK expands
