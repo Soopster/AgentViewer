@@ -6314,6 +6314,11 @@ function TranscriptCardInner({
                   if (copilotMode) segments = segments.map((segment, index) => index === 1
                     ? { ...segment, text: streamToolSummaryName(toolCard) === 'bash' ? 'Shell' : segment.text, fg: theme.text, attributes: TextAttributes.BOLD }
                     : index > 1 ? { ...segment, fg: theme.dim } : segment)
+                  if (openCodeMode && streamToolSummaryName(toolCard) === 'bash') segments = segments.map((segment, index) => index === 0
+                    ? { ...segment, text: '$ ', fg: theme.amber }
+                    : index === 1
+                      ? { ...segment, text: 'Shell', fg: theme.text, attributes: TextAttributes.BOLD }
+                      : { ...segment, fg: theme.dim })
                   const diffPreview = toolCard.category === 'diff' ? streamDiffPreviewData(toolCard) : null
                   const isActivityTool = Boolean(streamActivitySegments && isStreamActivityToolCard(toolCard))
                   const isSingleActivityTool = hasSingleStreamActivity && isActivityTool
