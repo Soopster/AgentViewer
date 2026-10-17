@@ -7,6 +7,9 @@ import {
 import { withSessionInstance } from '../sessionInstances'
 import { getConfiguredProvider, getConfiguredProviderTarget, setConfiguredProviderTarget } from '../providerState'
 import { ensureClaudePool } from '../claudePoolHandle'
+import { peekClaudePlanLimits, readClaudePlanLimits, type ClaudePlanLimits } from '../claudePlanLimits'
+import { updateSessionInboxState } from '../sessionInbox'
+import type { SessionInboxState } from '../types'
 import {
   getConfiguredTuiDensity,
   getConfiguredTuiDiffLayout,
@@ -35,6 +38,8 @@ import {
   setConfiguredTuiSidebarSort,
   getConfiguredTuiHideScratchSessions,
   setConfiguredTuiHideScratchSessions,
+  getConfiguredTuiShowSettledSessions,
+  setConfiguredTuiShowSettledSessions,
   setConfiguredTuiShowToolCalls,
   setConfiguredTuiSidebarWidth,
   setConfiguredTuiTabsEnabled,
@@ -437,6 +442,33 @@ export async function writeTuiHideScratchSessions(hide: boolean): Promise<void> 
   await setConfiguredTuiHideScratchSessions(hide)
 }
 
+export async function readTuiShowSettledSessions(): Promise<boolean> {
+  return getConfiguredTuiShowSettledSessions()
+}
+
+export async function writeTuiShowSettledSessions(show: boolean): Promise<void> {
+  await setConfiguredTuiShowSettledSessions(show)
+}
+
+/**
+ * Settle a session (done: out of the resting list) or reopen it — the web
+ * rail's ✓/↺, through the same store, so either surface sees the other's.
+ */
+export async function updateTuiSessionInbox(
+  session: Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'>,
+  action: 'settle' | 'reopen',
+): Promise<SessionInboxState> {
+  const provider = session.provider ?? 'claude'
+  if (isRemoteAttached()) {
+    const result = await remoteJson<{ inbox: SessionInboxState }>(encodeSessionPath(session.sessionId, '/inbox'), {
+      method: 'POST',
+      body: JSON.stringify({ provider, action, ...(session.providerInstanceId ? { providerInstanceId: session.providerInstanceId } : {}) }),
+    })
+    return result.inbox
+  }
+  return updateSessionInboxState({ provider, sessionId: session.sessionId, providerInstanceId: session.providerInstanceId, action })
+}
+
 export type { TuiDiffLayout, TuiSidebarSort, TuiTranscriptWidth }
 
 export async function readTuiSessionReaderState(sessionKey: string): Promise<TuiSessionReaderState | null> {
@@ -678,8 +710,23 @@ export async function readTuiCheckpointChanges(cwd: string, sha: string): Promis
   return changesSinceCheckpoint(cwd, sha)
 }
 
-export async function readTuiCheckpointDiff(cwd: string, sha: string, filePath?: string): Promise<string> {
-  return diffSinceCheckpoint(cwd, sha, filePath)
+/**
+ * Claude plan rate-limit windows for the composer's limit meter, read through
+ * the session's warm entry (never a spawn). Attached, the turns run in the
+ * daemon and there is no local entry to ask, so there is no meter.
+ */
+export async function readTuiClaudePlanLimits(session: Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'>): Promise<ClaudePlanLimits | null> {
+  if (isRemoteAttached() || session.provider !== 'claude') return null
+  return readClaudePlanLimits(session.sessionId, session.providerInstanceId ?? 'default')
+}
+
+export function peekTuiClaudePlanLimits(session: Pick<Session, 'provider' | 'providerInstanceId'>): ClaudePlanLimits | null {
+  if (session.provider !== 'claude') return null
+  return peekClaudePlanLimits(session.providerInstanceId ?? 'default')
+}
+
+export async function readTuiCheckpointDiff(cwd: string, sha: string, filePath?: string, untilSha?: string): Promise<string> {
+  return diffSinceCheckpoint(cwd, sha, filePath, untilSha)
 }
 
 export async function restoreTuiCheckpoint(

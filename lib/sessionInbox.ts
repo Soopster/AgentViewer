@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { AgentProvider, LinkedPullRequest, ProviderInstanceId, SessionInboxState } from './types'
 
@@ -19,7 +19,20 @@ export function sessionInboxKey(provider: AgentProvider, sessionId: string, prov
 }
 
 let readPromise: Promise<InboxFile> | null = null
+// The file's mtime when it was last read or written here. Another process (the
+// web daemon) or isolate (the TUI's transcript worker lists sessions, the main
+// isolate settles them) writes the same file, and a cache held for the process
+// lifetime would never see a session settled elsewhere.
+let cachedMtimeMs: number | null = null
 let writeChain: Promise<void> = Promise.resolve()
+
+async function inboxMtimeMs(): Promise<number | null> {
+  try {
+    return (await stat(INBOX_FILE)).mtimeMs
+  } catch {
+    return null
+  }
+}
 
 async function readInboxFile(): Promise<InboxFile> {
   try {
@@ -78,7 +91,12 @@ export async function listLinkedPullRequestSessions(): Promise<Array<{
 }
 
 async function currentInboxFile(): Promise<InboxFile> {
-  if (!readPromise) readPromise = readInboxFile()
+  await writeChain
+  const mtime = await inboxMtimeMs()
+  if (!readPromise || mtime !== cachedMtimeMs) {
+    cachedMtimeMs = mtime
+    readPromise = readInboxFile()
+  }
   return readPromise
 }
 
@@ -87,6 +105,7 @@ function queueWrite(file: InboxFile): Promise<void> {
   writeChain = writeChain.then(async () => {
     await mkdir(DATA_DIR, { recursive: true })
     await writeFile(INBOX_FILE, JSON.stringify(file, null, 2), 'utf8')
+    cachedMtimeMs = await inboxMtimeMs()
   })
   return writeChain
 }

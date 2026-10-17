@@ -48,6 +48,7 @@ import { buildTaskRegistry, parseCreatedTaskId, type TaskRegistry } from '../lib
 import type { ContentBlock, Session, SessionInfo, SystemMessagePayload } from '../lib/types'
 import type { TuiDensity } from './theme'
 import { sanitizeProtocolEvent, type AgentProtocolEvent } from '../lib/agentProtocol'
+import { fileEditStatsFromToolCalls, type FileEditStat } from '../lib/turnEditStats'
 
 const MAX_PREVIEW_CHARS = 160
 const MAX_BLOCK_LINES = 6
@@ -2398,6 +2399,8 @@ export type TuiTranscriptCard = {
    * still running rather than complete.
    */
   pending?: boolean
+  /** Files this card's tool calls changed, with line counts (see lib/turnEditStats.ts). */
+  fileEdits?: FileEditStat[]
 }
 
 function cardLineLimit(density: TuiDensity): number {
@@ -2721,7 +2724,20 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
     subagentDepth: subagentDepth > 0 ? subagentDepth : undefined,
     resumeReason: message.resumeReason,
     pending: blockAnalysis.pending || undefined,
+    fileEdits: cardFileEdits(message),
   }
+}
+
+function cardFileEdits(message: ThreadedMessage): FileEditStat[] | undefined {
+  if (message.role !== 'assistant') return undefined
+  const calls: Array<{ name: string; input: Record<string, unknown>; failed: boolean }> = []
+  for (const block of message.blocks) {
+    if (block.type !== 'tool_thread') continue
+    calls.push({ name: block.toolUse.name, input: block.toolUse.input ?? {}, failed: block.result?.is_error === true })
+  }
+  if (calls.length === 0) return undefined
+  const stats = fileEditStatsFromToolCalls(calls)
+  return stats.length > 0 ? stats : undefined
 }
 
 // The caller must have validated unchanged message content, task context and

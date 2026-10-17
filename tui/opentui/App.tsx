@@ -131,6 +131,9 @@ import {
   readTuiSessionMetadata,
   readTuiSidebarSort,
   readTuiHideScratchSessions,
+  readTuiShowSettledSessions,
+  writeTuiShowSettledSessions,
+  updateTuiSessionInbox,
   readTuiSidebarWidth,
   readTuiShowToolCalls,
   readTuiTabsEnabled,
@@ -204,6 +207,8 @@ import {
   type TuiSidebarSort,
   type TuiTranscriptWidth,
 } from '../../lib/tui/service'
+import { peekTuiClaudePlanLimits, readTuiClaudePlanLimits } from '../../lib/tui/service'
+import { tightestPlanLimit, type ClaudePlanLimits } from '../../lib/claudePlanLimits'
 import type { MessageBookmark } from '../../lib/messageBookmarks'
 import type { PlaybookSummary, ProtocolAgent, ProtocolAutonomy, ProtocolRun, ProtocolRunSnapshot } from '../../lib/agentProtocol'
 import {
@@ -265,6 +270,7 @@ import { getContinueInCliCommand } from '../../lib/cliContinue'
 import { commandResultExpectsTranscript, isNativeComposerCommandText } from '../../lib/composerCommands'
 import { deliverComposerSteer } from '../../lib/composerSteering'
 import { checkpointForPrompt } from '../../lib/rewindCheckpoint'
+import { formatFileEditSummary, mergeFileEditStats } from '../../lib/turnEditStats'
 import { buildContextHandoffPrompt } from '../../lib/contextHandoff'
 import { buildHandoffBriefMarkdown } from '../../lib/handoffBrief'
 import { recordContextTransfer } from '../../lib/contextTransfers'
@@ -997,6 +1003,8 @@ type CardLandmark = {
   // 'break' is a turn boundary with nothing to say: a blank row, not a rule.
   kind: 'resume' | 'unread' | 'day' | 'gap' | 'turn' | 'break'
   text: string
+  /** A turn rule's prompt card: clicking the rule opens that turn's checkpoint. */
+  promptKey?: string
 }
 
 // Stable per-card data: expensive to compute, independent of landmark indices and search.
@@ -1540,6 +1548,30 @@ function contextBarSegments(
   ]
 }
 
+// When a plan window resets, as the clock reads it: `6:50pm` today, `Sat 3pm`
+// otherwise — the screenshot that prompted this said "resets 6:50pm".
+function formatLimitReset(resetsAt: number, now = Date.now()): string {
+  const at = new Date(resetsAt)
+  const hours = at.getHours()
+  const minutes = at.getMinutes()
+  const clock = `${hours % 12 || 12}${minutes ? `:${String(minutes).padStart(2, '0')}` : ''}${hours < 12 ? 'am' : 'pm'}`
+  if (resetsAt - now < 20 * 60 * 60 * 1000 && at.getDate() === new Date(now).getDate()) return clock
+  return `${at.toLocaleDateString('en', { weekday: 'short' })} ${clock}`
+}
+
+// The composer border's limit chip, coloured as it nears the limit; null with
+// no reading, or when the reading's window has already reset.
+function planLimitSegment(limits: ClaudePlanLimits | null, theme: TuiThemePalette, now = Date.now()): InlineTextSegment | null {
+  const window = tightestPlanLimit(limits)
+  if (!window || (window.resetsAt != null && window.resetsAt <= now)) return null
+  const pct = Math.round(window.utilization)
+  const reset = window.resetsAt != null ? ` ↻${formatLimitReset(window.resetsAt, now)}` : ''
+  return {
+    text: `limit:${window.label} ${pct}%${reset}`,
+    fg: pct >= 90 ? theme.red : pct >= 75 ? theme.amber : theme.dim,
+  }
+}
+
 function formatContextUsageChip(usage: Pick<ContextUsage, 'totalTokens' | 'maxTokens' | 'percentage'>): string {
   const total = fmtTokens(usage.totalTokens)
   if (usage.maxTokens <= 0) return total
@@ -1562,6 +1594,10 @@ function formatTuiComposerIdleHint(baseHint: string, historyCount: number): stri
     : '⌃P/⌃N history'
   return `${withSettings} · ${historyHint}`
 }
+
+// Columns the composer dock's bottom border keeps for its own stats when it
+// also carries the key hints.
+const FOOTER_DOCK_STATS_RESERVE = 24
 
 function contextBarColor(percentage: number, theme: TuiThemePalette): string {
   if (percentage >= 80) return theme.red
@@ -3081,6 +3117,25 @@ function sessionKey(session: Pick<Session, 'sessionId' | 'provider'>): string {
 // the entire downstream memo chain (sidebarEntries, projectCount, tabs, …)
 // and, more importantly, avoids rebuilding callbacks/intervals that list
 // `sessions` or `runningSessions` in their deps.
+// A settle the rail has shown but a listing may not yet: a poll that started
+// before the write landed would otherwise put the row back for a cycle.
+type PendingInboxEdit = { settledAt: number | undefined; until: number }
+const PENDING_INBOX_EDIT_MS = 15_000
+
+function withPendingInboxEdits(sessions: Session[], pending: Map<string, PendingInboxEdit>): Session[] {
+  if (pending.size === 0) return sessions
+  const now = Date.now()
+  for (const [key, edit] of pending) if (edit.until <= now) pending.delete(key)
+  if (pending.size === 0) return sessions
+  return sessions.map((session) => {
+    const edit = pending.get(sessionKey(session))
+    if (!edit || session.inbox?.settledAt === edit.settledAt || Boolean(session.inbox?.settledAt) === Boolean(edit.settledAt)) return session
+    const inbox = { ...session.inbox, settledAt: edit.settledAt }
+    if (edit.settledAt === undefined) delete inbox.settledAt
+    return { ...session, inbox }
+  })
+}
+
 function sessionsShallowEqual(a: Session[], b: Session[]): boolean {
   if (a === b) return true
   if (a.length !== b.length) return false
@@ -3096,6 +3151,11 @@ function sessionsShallowEqual(a: Session[], b: Session[]): boolean {
       || prev.cwd !== next.cwd
       || prev.tag !== next.tag
       || prev.parentSessionId !== next.parentSessionId
+      // Settling, pinning and snoozing change only the inbox; ignoring it kept a
+      // session settled on the web (or here, by an earlier poll) as it was.
+      || prev.inbox?.settledAt !== next.inbox?.settledAt
+      || prev.inbox?.pinnedAt !== next.inbox?.pinnedAt
+      || prev.inbox?.snoozedUntil !== next.inbox?.snoozedUntil
     ) return false
   }
   return true
@@ -3653,6 +3713,30 @@ function continuousTurnFooter(card: TuiTranscriptCard, next: TuiTranscriptCard |
   return card.durationLabel
 }
 
+// A turn summary opens that turn's checkpoint diff. The cards that draw it are
+// memoized and cached per selection variant, so the action is reached through
+// one module slot the root fills rather than a prop on every card. Like a link
+// it acts on mouse UP with the pointer unmoved, so a drag stays a selection.
+let turnSummaryOpener: ((promptKey: string) => void) | null = null
+let turnSummaryPress: { promptKey: string; x: number; y: number } | null = null
+
+function turnSummaryMouseProps(landmark: CardLandmark) {
+  const promptKey = landmark.promptKey
+  if (!promptKey) return undefined
+  return {
+    onMouseDown: (event: MouseEvent) => {
+      turnSummaryPress = event.button === 0 ? { promptKey, x: event.x, y: event.y } : null
+    },
+    onMouseUp: (event: MouseEvent) => {
+      const press = turnSummaryPress
+      turnSummaryPress = null
+      if (event.button !== 0 || !press || press.promptKey !== promptKey) return
+      if (press.x !== event.x || press.y !== event.y) return
+      turnSummaryOpener?.(promptKey)
+    },
+  }
+}
+
 function streamLandmarkText(landmark: CardLandmark, width: number): string {
   if (landmark.kind === 'break') return ' '
   if (landmark.kind === 'turn') {
@@ -3673,7 +3757,17 @@ function streamCardLatestTimestampMs(card: TuiTranscriptCard): number | null {
   return latest
 }
 
-function streamCompletedTurnHint(cards: TuiTranscriptCard[]): string | null {
+// `Worked for 16s · 3 files · +42 −7`: how long the turn took and what it did
+// to files, so "what did it actually do" needs no scroll back through tools.
+// Either half stands alone; null when there is nothing to say.
+function turnSummaryText(cards: readonly TuiTranscriptCard[], promptIndex: number, endIndex: number, elapsedMs: number | null): string | null {
+  const edits = formatFileEditSummary(mergeFileEditStats(cards.slice(promptIndex + 1, endIndex).map((card) => card.fileEdits)))
+  const worked = elapsedMs != null && elapsedMs >= 1000 ? `Worked for ${formatElapsedClock(elapsedMs)}` : null
+  if (worked && edits) return `${worked} · ${edits}`
+  return worked ?? edits
+}
+
+function streamCompletedTurnHint(cards: TuiTranscriptCard[]): CardLandmark | null {
   let userIndex = -1
   for (let index = cards.length - 1; index >= 0; index -= 1) {
     if (cards[index].role === 'user') {
@@ -3684,14 +3778,16 @@ function streamCompletedTurnHint(cards: TuiTranscriptCard[]): string | null {
   if (userIndex < 0 || userIndex === cards.length - 1) return null
 
   const startedAt = cards[userIndex].timestampMs
-  if (startedAt == null) return null
-
-  let completedAt = startedAt
-  for (let index = userIndex + 1; index < cards.length; index += 1) {
-    completedAt = Math.max(completedAt, streamCardLatestTimestampMs(cards[index]) ?? completedAt)
+  let elapsedMs: number | null = null
+  if (startedAt != null) {
+    let completedAt = startedAt
+    for (let index = userIndex + 1; index < cards.length; index += 1) {
+      completedAt = Math.max(completedAt, streamCardLatestTimestampMs(cards[index]) ?? completedAt)
+    }
+    elapsedMs = completedAt - startedAt
   }
-  const elapsedMs = completedAt - startedAt
-  return elapsedMs >= 1000 ? `Worked for ${formatElapsedClock(elapsedMs)}` : null
+  const text = turnSummaryText(cards, userIndex, cards.length, elapsedMs)
+  return text ? { kind: 'turn', text, promptKey: cards[userIndex].key } : null
 }
 
 function transcriptBackground(line: TuiTranscriptCardLine, theme: TuiThemePalette): string | undefined {
@@ -3850,7 +3946,7 @@ function landmarksEqual(a: CardLandmark[], b: CardLandmark[]): boolean {
   if (a === b) return true
   if (a.length !== b.length) return false
   for (let i = 0; i < a.length; i++) {
-    if (a[i].kind !== b[i].kind || a[i].text !== b[i].text) return false
+    if (a[i].kind !== b[i].kind || a[i].text !== b[i].text || a[i].promptKey !== b[i].promptKey) return false
   }
   return true
 }
@@ -3884,20 +3980,22 @@ function computeAllLandmarks(
     ) {
       landmarks = landmarks ?? []
       let text = ''
-      if (card.role === 'user' && prev.timestampMs != null) {
+      let promptKey: string | undefined
+      if (card.role === 'user') {
         for (let turnIndex = i - 1; turnIndex >= 0; turnIndex -= 1) {
           const turnCard = cards[turnIndex]
           if (turnCard.role !== 'user') continue
-          if (turnCard.timestampMs != null && prev.timestampMs >= turnCard.timestampMs) {
-            const elapsedMs = prev.timestampMs - turnCard.timestampMs
-            if (elapsedMs >= 1000) text = `Worked for ${formatElapsedClock(elapsedMs)}`
-          }
+          const elapsedMs = prev.timestampMs != null && turnCard.timestampMs != null && prev.timestampMs >= turnCard.timestampMs
+            ? prev.timestampMs - turnCard.timestampMs
+            : null
+          text = turnSummaryText(cards, turnIndex, i, elapsedMs) ?? ''
+          if (text) promptKey = turnCard.key
           break
         }
       }
-      // SCROLLBACK keeps a rule only where it carries the turn's duration; a
+      // SCROLLBACK keeps a rule only where it carries the turn's summary; a
       // full-width line between a tool row and the reply after it is chrome.
-      landmarks.push({ kind: quietTurns && !text ? 'break' : 'turn', text })
+      landmarks.push(promptKey ? { kind: 'turn', text, promptKey } : { kind: quietTurns && !text ? 'break' : 'turn', text })
     }
 
     if (i === resumeMarkerIndex) {
@@ -4154,6 +4252,7 @@ function groupToolCards(
       editDiff: undefined,
       markdownContent: undefined,
       hasMermaidDiagrams: false,
+      fileEdits: pending.some((card) => card.fileEdits) ? mergeFileEditStats(pending.map((card) => card.fileEdits)) : undefined,
     }
     grouped.push(groupCard)
     pending = []
@@ -5573,6 +5672,8 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'provider',   label: 'Switch provider',        key: 'p',  category: 'Session'    },
   { id: 'sort',       label: 'Toggle sidebar sort',    key: '⇧S',  category: 'Session'    },
   { id: 'scratch',    label: 'Hide/show scratch sessions', key: '⇧Y', category: 'Session' },
+  { id: 'settle',     label: 'Settle/reopen session',  key: 'x',   category: 'Session'    },
+  { id: 'settled',    label: 'Show/hide settled sessions', key: '', category: 'Session'  },
   { id: 'sidebar-view', label: 'Switch sidebar view',  key: 'a',  category: 'Session'    },
   // Tabs
   { id: 'tab-toggle', label: 'Toggle tab bar',         key: 'b',  category: 'Tabs'       },
@@ -6246,7 +6347,7 @@ function TranscriptCardInner({
                 : theme.dim
           return (
             <box key={`${card.key}:agent-landmark:${landmarkIndex}`} paddingX={1}>
-              <text fg={color} width={landmarkWidth} wrapMode="none" selectable {...selectionColors}>
+              <text fg={color} width={landmarkWidth} wrapMode="none" selectable {...selectionColors} {...turnSummaryMouseProps(landmark)}>
                 {streamMode
                   ? streamLandmarkText(landmark, landmarkWidth)
                   : fitText(landmark.text, landmarkWidth)}
@@ -6627,6 +6728,7 @@ function TranscriptCardInner({
               width={streamLandmarkWidth}
               wrapMode="none"
               selectable
+              {...turnSummaryMouseProps(landmark)}
             >
               {streamLandmarkText(landmark, streamLandmarkWidth)}
             </text>
@@ -6820,7 +6922,7 @@ function TranscriptCardInner({
                 : theme.dim
           return (
             <box key={`${card.key}:landmark:${landmarkIndex}`} paddingX={1}>
-              <text fg={color} selectable {...selectionColors}>{fitText(landmark.text, landmarkWidth)}</text>
+              <text fg={color} selectable {...selectionColors} {...turnSummaryMouseProps(landmark)}>{fitText(landmark.text, landmarkWidth)}</text>
             </box>
           )
         })}
@@ -6866,7 +6968,7 @@ function TranscriptCardInner({
               : theme.dim
         return (
           <box key={`${card.key}:landmark:${landmarkIndex}`} paddingX={1}>
-            <text fg={color} selectable {...selectionColors}>{fitText(landmark.text, landmarkWidth)}</text>
+            <text fg={color} selectable {...selectionColors} {...turnSummaryMouseProps(landmark)}>{fitText(landmark.text, landmarkWidth)}</text>
           </box>
         )
       })}
@@ -8788,6 +8890,8 @@ export default function OpenTuiApp() {
   const [velocityScrollEnabled, setVelocityScrollEnabled] = useState(false)
   const [sidebarSort, setSidebarSort] = useState<TuiSidebarSort>('project')
   const [hideScratch, setHideScratch] = useState(false)
+  const [showSettled, setShowSettled] = useState(false)
+  const pendingInboxEditsRef = useRef<Map<string, PendingInboxEdit>>(new Map())
   const [sidebarView, setSidebarView] = useState<'sessions' | 'coordinator'>('sessions')
   const [sidebarWidthPreference, setSidebarWidthPreference] = useState(DEFAULT_SIDEBAR_WIDTH)
   const [taskPanelWidth, setTaskPanelWidth] = useState(TASK_PANEL_DEFAULT_WIDTH)
@@ -8981,6 +9085,7 @@ export default function OpenTuiApp() {
   const [fleetPage, setFleetPage] = useState(0)
   // Checkpoints & review popover (⇧U): turn snapshots + per-hunk review.
   const [checkpointOpen, setCheckpointOpen] = useState(false)
+  const [checkpointFocusPrompt, setCheckpointFocusPrompt] = useState<{ sessionId: string; text: string; timestamp?: string } | null>(null)
   const checkpointKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [taskPanelOpen, setTaskPanelOpen] = useState(false)
   const [taskPanelTab, setTaskPanelTab] = useState<'tasks' | 'agents'>('tasks')
@@ -10567,6 +10672,17 @@ export default function OpenTuiApp() {
       return next
     })
   }, [])
+  const toggleShowSettled = useCallback(() => {
+    setShowSettled((current) => {
+      const next = !current
+      showToggleOutcome('Settled sessions', next ? 'shown' : 'hidden')
+      void writeTuiShowSettledSessions(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store settled visibility'))
+      return next
+    })
+  }, [])
+  useEffect(() => {
+    void readTuiShowSettledSessions().then(setShowSettled).catch(() => {})
+  }, [])
   const toggleSidebarSort = useCallback(() => {
     setSidebarSort((current) => {
       const next: TuiSidebarSort = current === 'project' ? 'time' : 'project'
@@ -10704,7 +10820,25 @@ export default function OpenTuiApp() {
         || teamAttention.has(key)
     })
   }, [hideScratch, normalizedSessionQuery, searchedSessionsForSidebar, selectedSessionKey, sidebarSessionActivity, recentlyWrittenSessions, teamAttention])
-  const filteredSessionsForSidebar = scratchFilter.sessions
+  // Settled sessions are done: out of the resting list, like the web rail's ✓,
+  // until shown again or found by a search. The selected one stays, so the row
+  // just settled is still there to reopen with a second `x`; so do live ones.
+  const settledFilter = useMemo(() => {
+    const source = scratchFilter.sessions
+    if (showSettled || normalizedSessionQuery) return { sessions: source, hidden: 0 }
+    let hidden = 0
+    const shown: Session[] = []
+    for (const session of source) {
+      const key = sessionKey(session)
+      if (session.inbox?.settledAt && key !== selectedSessionKey && !sidebarSessionActivity.has(key) && !recentlyWrittenSessions.keys.has(key)) {
+        hidden += 1
+        continue
+      }
+      shown.push(session)
+    }
+    return hidden === 0 ? { sessions: source, hidden: 0 } : { sessions: shown, hidden }
+  }, [normalizedSessionQuery, recentlyWrittenSessions, scratchFilter.sessions, selectedSessionKey, showSettled, sidebarSessionActivity])
+  const filteredSessionsForSidebar = settledFilter.sessions
   // Some providers expose subagents inside a parent transcript instead of as
   // durable child sessions. Fetch their lightweight summaries lazily for the
   // currently open session. Providers with real children (OpenCode/Codex) are
@@ -10929,8 +11063,9 @@ export default function OpenTuiApp() {
     const usage = selectedSessionKey === targetKey
       ? contextUsage
       : sessionContextUsageCacheRef.current.get(targetKey) ?? null
-    return usage ? formatContextUsageChip(usage) : null
+    return usage ?? null
   }, [composerTargetSession, contextUsage, selectedSessionKey])
+  const [composerPlanLimits, setComposerPlanLimits] = useState<ClaudePlanLimits | null>(null)
   // One-line chip summarising the active model, explicit effort, and any
   // provider-specific send knobs.
   const composerKnobSegments = useMemo<InlineTextSegment[]>(() => {
@@ -10944,6 +11079,7 @@ export default function OpenTuiApp() {
         fg: composerPermissionMode === 'bypassPermissions' ? theme.red : composerPermissionMode === 'plan' ? theme.dim : theme.amber,
       })
     }
+    const afterMode = parts.length
     if (composerCurrentModel) {
       parts.push({ text: `model:${composerCurrentModel}`, fg: composerAccentColor })
     } else if (composerTargetSession?.provider && composerTargetSession.provider !== 'claude-acp' && composerTargetSession.provider !== 'codex-acp' && composerTargetSession.provider !== 'acp') {
@@ -10953,7 +11089,23 @@ export default function OpenTuiApp() {
       // on "auto" when the provider intentionally reports no concrete model.
       parts.push({ text: composerModelLookupSettled ? 'model:auto' : 'model:loading…', fg: theme.dim })
     }
-    if (composerContextUsage) parts.push({ text: `ctx:${composerContextUsage}`, fg: theme.green })
+    // Context and plan limit are meters: quiet while there is room, and moved
+    // ahead of the model once either needs attention, since the border cuts
+    // off whatever does not fit.
+    const meters: InlineTextSegment[] = []
+    let metersUrgent = false
+    if (composerContextUsage) {
+      const pct = Number.isFinite(composerContextUsage.percentage) ? composerContextUsage.percentage : 0
+      metersUrgent ||= pct >= 60
+      meters.push({ text: `ctx:${formatContextUsageChip(composerContextUsage)}`, fg: contextBarColor(pct, theme) })
+    }
+    const limitSegment = planLimitSegment(composerPlanLimits, theme)
+    if (limitSegment) {
+      metersUrgent ||= limitSegment.fg !== theme.dim
+      meters.push(limitSegment)
+    }
+    if (metersUrgent) parts.splice(afterMode, 0, ...meters)
+    else parts.push(...meters)
     parts.push({ text: `effort:${tuiEffort}`, fg: theme.dim })
     if (composerTargetSession?.provider === 'opencode' && tuiOpenCodeAgent) {
       parts.push({ text: `agent:${tuiOpenCodeAgent}`, fg: theme.cyan })
@@ -10977,7 +11129,7 @@ export default function OpenTuiApp() {
       parts.push({ text: 'workflow:on', fg: theme.cyan })
     }
     return parts
-  }, [composerAccentColor, composerCodexApproval, composerCodexMode, composerContextUsage, composerCopilotContextTier, composerCopilotPermissionMode, composerCurrentModel, composerEnableWorkflow, composerModelLookupSettled, composerPermissionMode, composerTargetSession?.provider, theme.amber, theme.cyan, theme.dim, theme.green, theme.red, theme.violet, tuiCopilotMode, tuiEffort, tuiOpenCodeAgent])
+  }, [composerAccentColor, composerCodexApproval, composerCodexMode, composerContextUsage, composerPlanLimits, theme, composerCopilotContextTier, composerCopilotPermissionMode, composerCurrentModel, composerEnableWorkflow, composerModelLookupSettled, composerPermissionMode, composerTargetSession?.provider, theme.amber, theme.cyan, theme.dim, theme.green, theme.red, theme.violet, tuiCopilotMode, tuiEffort, tuiOpenCodeAgent])
   const composerKnobsChip = useMemo(
     () => composerKnobSegments.length > 0
       ? `· ${composerKnobSegments.map((part) => part.text).join(' · ')}`
@@ -11713,6 +11865,22 @@ export default function OpenTuiApp() {
     ? (composerPendingAsk.questions?.length ?? 0) > 0 ? 'Waiting for your answer' : 'Waiting for your approval'
     : null
   const turnRunningForComposer = visibleComposerSending || reattachedRunning || visibleAwaitingPersistedTurn
+  // Plan limits are re-read between turns (a turn is what spends them) and as
+  // the composer engages, through the session's warm entry — never a spawn.
+  useEffect(() => {
+    const target = composerTargetSession
+    if (!target || target.provider !== 'claude') {
+      setComposerPlanLimits(null)
+      return
+    }
+    setComposerPlanLimits(peekTuiClaudePlanLimits(target))
+    if (!composerActive || turnRunningForComposer) return
+    let cancelled = false
+    void readTuiClaudePlanLimits(target)
+      .then((limits) => { if (!cancelled && limits) setComposerPlanLimits(limits) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [composerActive, composerTargetSession?.provider, composerTargetSession?.providerInstanceId, composerTargetSession?.sessionId, turnRunningForComposer])
   // What ⌃C and ⏎ actually do. The post-turn sync keeps the status row but
   // ends the turn: ⌃C cancels nothing and ⏎ sends at once, so the key hints
   // must not go on offering "cancel" and "queue" through it.
@@ -11907,10 +12075,14 @@ export default function OpenTuiApp() {
   // Chat and Agents render the composer bar as the reader box's own trailing child
   // (inside its border) rather than a sibling row below it, so its height comes
   // out of the scrollbox's budget (transcriptViewportRows), not this one.
+  // With the composer dock on screen, the status bar's keys move into the
+  // dock's bottom border and its row goes back to the transcript.
+  const statusBarInDock = !composerWindowOpen && !composerHidden && !embeddedComposer && !fullscreenMode
+    && !searchMode && !sessionSearchMode
   const mainContentHeight = Math.max(
     height
     - (fullscreenMode ? 0 : 2)
-    - (searchMode || sessionSearchMode ? 4 : fullscreenMode ? 0 : 1)
+    - (searchMode || sessionSearchMode ? 4 : fullscreenMode || statusBarInDock ? 0 : 1)
     - (embeddedComposer ? 0 : composerDockHeight)
     - composerPopoverHeight
     - composerStatusBlockHeight,
@@ -12114,7 +12286,7 @@ export default function OpenTuiApp() {
       8,
     )
   const TAB_BAR_HEIGHT = 1
-  const streamTurnFooterText = useMemo(() => {
+  const streamTurnFooter = useMemo(() => {
     if (
       !isStreamView
       || turnRunningForComposer
@@ -12169,6 +12341,26 @@ export default function OpenTuiApp() {
     return keys
   }, [visibleTabSessions, sidebarSessionActivity])
 
+  // The sidebar's state glyphs, on the tabs: whether each open conversation is
+  // waiting on you, finished unread, or being written by a CLI elsewhere. A turn
+  // in flight is not here — the spinner below paints that one.
+  const tabStateGlyphs = useMemo(() => {
+    const doneKeys = new Set(attentionDone.map((done) => done.sessionKey))
+    const glyphs = new Map<string, string>()
+    for (const s of visibleTabSessions) {
+      const key = sessionKey(s)
+      const activity = sidebarSessionActivity.get(key)
+      const glyph = activity === 'needs-input' ? '⚠'
+        : activity === 'waiting' ? '◌'
+        : activity === 'running' ? null
+        : recentlyWrittenKeys.has(key) ? '●'
+        : doneKeys.has(key) ? '✓'
+        : null
+      if (glyph) glyphs.set(key, glyph)
+    }
+    return glyphs
+  }, [attentionDone, recentlyWrittenKeys, sidebarSessionActivity, visibleTabSessions])
+
   const tabOptions = useMemo((): TabSelectOption[] => (
     visibleTabSessions.map((s) => {
       // A tab already mounted in a split pane is marked, so the strip explains
@@ -12179,8 +12371,9 @@ export default function OpenTuiApp() {
       // truncation cuts the title rather than the mark.
       const team = teamAttention.get(sessionKey(s))
       const teamPrefix = team ? (team.waiting > 0 ? `!${team.waiting} ` : `✓${team.finished} `) : ''
+      const stateGlyph = tabStateGlyphs.get(sessionKey(s))
       return {
-        name: teamPrefix + (isPreviewMode && selectedSessionKey === sessionKey(s)
+        name: (stateGlyph ? `${stateGlyph} ` : '') + teamPrefix + (isPreviewMode && selectedSessionKey === sessionKey(s)
           ? `PREVIEW · ${formatSessionTitle(s)}`
           : inSplit
             ? `▏${formatSessionTitle(s)}`
@@ -12193,7 +12386,7 @@ export default function OpenTuiApp() {
         value: sessionKey(s),
       }
     })
-  ), [isPreviewMode, selectedSessionKey, visibleTabSessions, splitPinnedKeys, splitPaneCount, teamAttention])
+  ), [isPreviewMode, selectedSessionKey, visibleTabSessions, splitPinnedKeys, splitPaneCount, tabStateGlyphs, teamAttention])
 
   const tabWidth = useMemo(() => {
     if (visibleTabSessions.length === 0) return 16
@@ -12221,7 +12414,7 @@ export default function OpenTuiApp() {
   // several stores' sessions, and a row has to say whose it is.
   const showProviderInSessionRows = provider === 'all'
     || new Set(sessions.map((session) => session.providerInstanceId ?? session.provider)).size > 1
-  const sidebarSessionCountLabel = normalizedSessionQuery || scratchFilter.hidden > 0
+  const sidebarSessionCountLabel = normalizedSessionQuery || scratchFilter.hidden > 0 || settledFilter.hidden > 0
     ? `SESSIONS ${filteredSessionsForSidebar.length}/${Math.max(sessions.length, 0)}`
     : `SESSIONS ${Math.max(sessions.length, 0)}`
   const sidebarProviderLabel = provider === 'all'
@@ -12237,6 +12430,7 @@ export default function OpenTuiApp() {
   const sidebarHeaderSuffix = ` · ${joinMeta([
     `sort ${sidebarSortLabel}`,
     scratchFilter.hidden > 0 ? `${scratchFilter.hidden} scratch hidden` : null,
+    settledFilter.hidden > 0 ? `${settledFilter.hidden} settled` : null,
     normalizedSessionQuery ? `/${sessionSearchQuery}` : '/ search',
     'a agents',
   ])}`
@@ -12355,7 +12549,10 @@ export default function OpenTuiApp() {
     if (!providerSwitchRef.current) setError(null)
 
     try {
-      const nextSessions = await readTuiSessionsAsync(nextProvider, providerInstanceIdRef.current ?? undefined)
+      const nextSessions = withPendingInboxEdits(
+        await readTuiSessionsAsync(nextProvider, providerInstanceIdRef.current ?? undefined),
+        pendingInboxEditsRef.current,
+      )
       if (requestId !== sessionRequestRef.current) return
       // Avoid scheduling a transition at all when a background poll returns
       // the same list and the current selection is still valid. React will
@@ -15284,7 +15481,8 @@ export default function OpenTuiApp() {
     ])
     // "Recently touched" is the age itself on this row; only a turn's state
     // earns a glyph. Marks sit before the age so the ages stay one flush column.
-    const rowGlyph = activity ? activityGlyph : null
+    const settled = Boolean(entry.session.inbox?.settledAt)
+    const rowGlyph = activity ? activityGlyph : settled ? '✓' : null
     const rowTitleWidth = Math.max(
       sidebarInnerWidth - 3 - (rowMeta ? rowMeta.length + 1 : 0) - teamMark.length - (rowGlyph ? 2 : 0),
       4,
@@ -15318,13 +15516,13 @@ export default function OpenTuiApp() {
           <box paddingX={1} flexDirection="row" backgroundColor={rowBg}>
             <text fg={sessionAccent} wrapMode="none">{selected ? '▎' : ' '}</text>
             {/* Keep the title readable; provider identity belongs to the rail. */}
-            <text fg={theme.text} attributes={selected ? TextAttributes.BOLD : undefined} wrapMode="none">
+            <text fg={settled && !activity ? theme.muted : theme.text} attributes={selected ? TextAttributes.BOLD : undefined} wrapMode="none">
               {fitText(formatSessionTitle(entry.session), singleRow ? rowTitleWidth : sidebarInnerWidth - 3)}
             </text>
             {singleRow ? (
               <>
                 {teamMark ? <text fg={team!.waiting > 0 ? theme.amber : theme.green} wrapMode="none">{teamMark}</text> : null}
-                {rowGlyph ? <text fg={activityColor} wrapMode="none">{` ${rowGlyph}`}</text> : null}
+                {rowGlyph ? <text fg={activity ? activityColor : theme.green} wrapMode="none">{` ${rowGlyph}`}</text> : null}
                 {rowMeta ? <text fg={activity === 'needs-input' ? theme.amber : theme.dim} wrapMode="none">{` ${rowMeta}`}</text> : null}
               </>
             ) : null}
@@ -18048,16 +18246,24 @@ export default function OpenTuiApp() {
           ? [['⌃C', 'cancel'], ['↵', 'queue']] as Array<[string, string]>
           : [['↵', 'send']] as Array<[string, string]>)]]
       : [
-          // Discovery comes first so it survives even the narrowest terminal.
+          // Only what changes with the focused pane and view; the fixed keys
+          // (v, f, h, ⇧W, tabs, y, z) are in `?` and the ⌃K palette. Discovery
+          // comes first so it survives even the narrowest terminal.
           [['⌃K', 'commands'], ['?', 'help']],
-          effectiveFocus === 'sessions'
-            ? [['j/k', 'select'], ['↵', 'open'], ['/', 'search'], ['tab', 'focus']]
+          // The rail's own keys, in groups the bar drops whole from the end
+          // when narrow — the least-reached last.
+          ...(effectiveFocus === 'sessions'
+            ? sidebarView === 'coordinator'
+              ? [[['j/k', 'select'], ['↵', 'open'], ['tab', 'focus']], [['a', 'sessions']]] as Array<Array<[string, string]>>
+              : [
+                  [['j/k', 'select'], ['↵', 'open'], ['x', 'settle'], ['tab', 'focus']],
+                  [['/', 'search'], ['⌃R', 'rename']],
+                  [['⇧S', 'sort'], ['⇧Y', 'scratch'], ['a', 'agents']],
+                  [['[/]', 'width']],
+                ] as Array<Array<[string, string]>>
             : isScrollbackView
-              ? [['j/k', 'scroll'], ['e', scrollbackExpanded ? 'fold all' : 'expand all'], ['c', 'compose'], ['tab', 'focus']]
-              : [['j/k', 'move'], ['e', 'fold'], ['c', 'compose'], ['tab', 'focus']],
-          [['v', transcriptView], ['f', 'live'], ['h', 'sessions']],
-          [['⇧W', transcriptWidth]],
-          [['←/→', 'tabs'], ['y', 'copy'], ['z', 'focus']],
+              ? [[['j/k', 'scroll'], ['e', scrollbackExpanded ? 'fold all' : 'expand all'], ['c', 'compose'], ['tab', 'focus']]] as Array<Array<[string, string]>>
+              : [[['j/k', 'move'], ['e', 'fold'], ['c', 'compose'], ['tab', 'focus']]] as Array<Array<[string, string]>>),
         ]
     const segs: InlineTextSegment[] = []
     // A pending prefix takes over the bar: the chord is modal, so the only keys
@@ -18095,12 +18301,22 @@ export default function OpenTuiApp() {
     const hostLabel = ATTACHED_DAEMON_HOST
       ? fitText(`⇌ ${ATTACHED_DAEMON_HOST}`, Math.max(Math.floor(width / 4), 8)).trimEnd()
       : ''
-    let remaining = Math.max(width - 2 - segs.reduce((n, segment) => n + segment.text.length, 0)
+    // In the dock border the bar shares its row with the dock's stats, which
+    // keep at least FOOTER_DOCK_STATS_RESERVE columns.
+    const budget = statusBarInDock ? Math.max(composerDockTextareaWidth - FOOTER_DOCK_STATS_RESERVE, 18) : width - 2
+    let remaining = Math.max(budget - segs.reduce((n, segment) => n + segment.text.length, 0)
       - (hostLabel ? hostLabel.length + 3 : 0), 0)
+    // Groups are in priority order: the first that does not fit ends the bar,
+    // so a small late group never shows while a more useful one was dropped.
+    let full = false
     groups.forEach((group) => {
+      if (full) return
       const text = group.map(([key, label]) => `${key} ${label}`).join('  ')
       const separator = segs.length > 0 ? ' │ ' : ''
-      if (text.length + separator.length > remaining) return
+      if (text.length + separator.length > remaining) {
+        full = true
+        return
+      }
       if (separator) segs.push({ text: separator, fg: theme.dim })
       group.forEach((binding, bi) => {
         if (bi > 0) segs.push({ text: '  ', fg: theme.dim })
@@ -18114,7 +18330,7 @@ export default function OpenTuiApp() {
       segs.push({ text: hostLabel, fg: theme.cyan })
     }
     return segs
-  }, [width, attentionNeedsInputCount, commandChordPending, composerActive, composerKeysTargetTurn, transcriptView, scrollbackExpanded, transcriptWidth, splitChordPending, splitFocusIndex, effectiveFocus, theme])
+  }, [width, attentionNeedsInputCount, commandChordPending, composerActive, composerDockTextareaWidth, composerKeysTargetTurn, isScrollbackView, scrollbackExpanded, splitChordPending, splitFocusIndex, statusBarInDock, effectiveFocus, sidebarView, theme])
 
   const composerStatusMessage = visibleComposerError
     ? visibleComposerError
@@ -18177,6 +18393,51 @@ export default function OpenTuiApp() {
     const options = durationMs != null ? { durationMs } : undefined
     if (tone === 'error') toast.error(text, options)
     else toast.info(text, options)
+  }, [])
+
+  // `x` in the rail: settle the selected session, or reopen a settled one.
+  // Optimistic — the row changes now and the next listing confirms it.
+  const toggleSelectedSessionSettled = useEffectEvent(() => {
+    const target = selectedSession
+    if (!target) return
+    const action = target.inbox?.settledAt ? 'reopen' : 'settle'
+    const key = sessionKey(target)
+    const apply = (settledAt: number | undefined) => setSessions((current) => current.map((session) => {
+      if (sessionKey(session) !== key) return session
+      const inbox = { ...session.inbox, settledAt }
+      if (settledAt === undefined) delete inbox.settledAt
+      else delete inbox.snoozedUntil
+      return { ...session, inbox }
+    }))
+    const settledAt = action === 'settle' ? Date.now() : undefined
+    pendingInboxEditsRef.current.set(key, { settledAt, until: Date.now() + PENDING_INBOX_EDIT_MS })
+    apply(settledAt)
+    showNotice('info', action === 'settle'
+      ? `Settled · ${showSettled ? 'marked ✓' : 'hidden once you move off it'} · x again to reopen`
+      : 'Reopened')
+    void updateTuiSessionInbox(target, action).catch((err) => {
+      pendingInboxEditsRef.current.delete(key)
+      apply(target.inbox?.settledAt)
+      showNotice('error', err instanceof Error ? err.message : 'Failed to update the session')
+    })
+  })
+
+  // A turn summary's click: the checkpoint popover, opened on that turn.
+  const openTurnCheckpoint = useEffectEvent((promptKey: string) => {
+    if (!gitRepoCwd) {
+      showNotice('info', 'Turn diffs need a git repository')
+      return
+    }
+    const sessionId = sessionDetail?.info?.sessionId
+    const prompt = rewindCandidates(sessionDetail?.rawMessages ?? []).find((candidate) => candidate.uuid === promptKey)
+    setCheckpointFocusPrompt(sessionId && prompt ? { sessionId, text: prompt.text, timestamp: prompt.timestamp } : null)
+    setCheckpointOpen(true)
+  })
+  useEffect(() => {
+    turnSummaryOpener = openTurnCheckpoint
+    return () => {
+      if (turnSummaryOpener === openTurnCheckpoint) turnSummaryOpener = null
+    }
   }, [])
 
   // Clicking a link in the transcript.
@@ -19596,6 +19857,12 @@ export default function OpenTuiApp() {
         break
       case 'scratch':
         toggleHideScratch()
+        break
+      case 'settle':
+        toggleSelectedSessionSettled()
+        break
+      case 'settled':
+        toggleShowSettled()
         break
       case 'sidebar-view':
         setSidebarView((current) => {
@@ -21312,6 +21579,11 @@ export default function OpenTuiApp() {
       return
     }
 
+    if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && key.name === 'x' && !key.shift && !key.ctrl && !key.meta) {
+      handled(toggleSelectedSessionSettled)
+      return
+    }
+
     if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && isShifted('S')) {
       handled(() => {
         toggleSidebarSort()
@@ -22086,9 +22358,14 @@ export default function OpenTuiApp() {
   // Size the hint box to exactly fit its text, capped by available width minus
   // 24 chars reserved for the stats side. Avoids the old proportional cap (62
   // chars) that truncated the full idle hint (~72 chars on most terminals).
+  // The dock border carries the status bar whenever the composer is not what
+  // the keys reach: the reader's keys, a pending chord, the attention badge.
+  const dockShowsStatusBar = statusBarInDock
+    && (commandChordPending || splitChordPending || (!composerActive && !composerKeysTargetTurn && !routeComposerToBridge && !routeComposerToIde))
+  const dockStatusBarLength = dockShowsStatusBar ? footerSegments.reduce((n, segment) => n + segment.text.length, 0) : 0
   const composerDockFooterHintWidth = Math.max(
     18,
-    Math.min(composerDockFooterHint.length + 1, composerDockTextareaWidth - 24),
+    Math.min((dockShowsStatusBar ? dockStatusBarLength : composerDockFooterHint.length) + 1, composerDockTextareaWidth - FOOTER_DOCK_STATS_RESERVE),
   )
   const composerDockFooterStatsWidth = Math.max(composerDockTextareaWidth - composerDockFooterHintWidth - 1, 8)
   const composerWindowFooterHint = composerKeysTargetTurn
@@ -22843,7 +23120,7 @@ export default function OpenTuiApp() {
                   )
                 ) : null}
 
-                {streamTurnFooterText ? (() => {
+                {streamTurnFooter ? (() => {
                   // The same box a stream card draws its own turn rule in, so
                   // the closing rule shares the column's edge instead of
                   // hugging the pane's while the text above it is centered.
@@ -22859,8 +23136,8 @@ export default function OpenTuiApp() {
                       width={transcriptWidth === 'full' ? undefined : footerWidth}
                       alignSelf={transcriptWidth === 'centered' ? 'center' : undefined}
                     >
-                      <text fg={theme.dim} width={footerWidth} wrapMode="none" selectable>
-                        {streamLandmarkText({ kind: 'turn', text: streamTurnFooterText }, footerWidth)}
+                      <text fg={theme.dim} width={footerWidth} wrapMode="none" selectable {...turnSummaryMouseProps(streamTurnFooter)}>
+                        {streamLandmarkText(streamTurnFooter, footerWidth)}
                       </text>
                     </box>
                   )
@@ -24369,13 +24646,23 @@ export default function OpenTuiApp() {
               <text fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none">
                 {composerSlashHint
                   ? fitText(composerSlashHint, composerDockFooterStatsWidth)
-                  : renderInlineTextSegments(composerDockStatsSegments, composerDockFooterStatsWidth, theme.dim)}
+                  : renderInlineTextSegments(
+                    // The attention badge rides the stats while the composer
+                    // holds the hint slot: it must stay visible in every mode.
+                    statusBarInDock && !dockShowsStatusBar && attentionNeedsInputCount > 0
+                      ? [{ text: `⚠ ${attentionNeedsInputCount} `, fg: theme.amber }, ...composerDockStatsSegments]
+                      : composerDockStatsSegments,
+                    composerDockFooterStatsWidth,
+                    theme.dim,
+                  )}
               </text>
             </box>
             <box flexGrow={1} />
             <box width={composerDockFooterHintWidth} overflow="hidden" backgroundColor={fullscreenMode ? undefined : theme.surface2}>
               <text fg={composerActive && !visibleComposerSending ? composerAccentColor : theme.dim} wrapMode="none">
-                {composerDockSendingHintSegments
+                {dockShowsStatusBar
+                  ? renderInlineTextSegments(footerSegments, composerDockFooterHintWidth, theme.dim)
+                  : composerDockSendingHintSegments
                   ? renderInlineTextSegments(composerDockSendingHintSegments, composerDockFooterHintWidth, theme.dim)
                   : fitHintText(composerDockFooterHint, composerDockFooterHintWidth)}
               </text>
@@ -24384,7 +24671,7 @@ export default function OpenTuiApp() {
         </box>
       ) : null}
 
-      {!searchMode && !fullscreenMode ? (
+      {!searchMode && !fullscreenMode && !statusBarInDock ? (
         <box backgroundColor={theme.surface2} paddingX={1}>
           <text wrapMode="none">{renderInlineTextSegments(footerSegments, Math.max(width - 2, 20), theme.dim)}</text>
         </box>
@@ -24646,9 +24933,13 @@ export default function OpenTuiApp() {
           accentColor={composerAccentColor}
           width={width}
           height={height}
-          onClose={() => setCheckpointOpen(false)}
+          onClose={() => {
+            setCheckpointOpen(false)
+            setCheckpointFocusPrompt(null)
+          }}
           onNotice={showNotice}
           onKeyHandlerReady={(handler) => { checkpointKeyHandlerRef.current = handler }}
+          focusPrompt={checkpointFocusPrompt}
         />
       ) : null}
 

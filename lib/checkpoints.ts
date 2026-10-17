@@ -229,10 +229,13 @@ export async function changesSinceCheckpoint(cwd: string, sha: string): Promise<
   })
 }
 
-/** Full diff text checkpoint → working tree (optionally one file). */
-export async function diffSinceCheckpoint(cwd: string, sha: string, filePath?: string): Promise<string> {
-  const nowTree = await snapshotWorktreeTree(cwd)
-  const args = ['diff', '--no-renames', sha, nowTree]
+/**
+ * Full diff text checkpoint → working tree (optionally one file), or to a later
+ * checkpoint when `untilSha` is given — the next turn's snapshot bounds one turn.
+ */
+export async function diffSinceCheckpoint(cwd: string, sha: string, filePath?: string, untilSha?: string): Promise<string> {
+  const endTree = untilSha ?? await snapshotWorktreeTree(cwd)
+  const args = ['diff', '--no-renames', sha, endTree]
   if (filePath) args.push('--', filePath)
   return git(cwd, args)
 }

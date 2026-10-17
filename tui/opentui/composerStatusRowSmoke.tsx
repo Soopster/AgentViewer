@@ -40,8 +40,10 @@ if (status.x <= dock.x || status.x + status.width >= dock.x + dock.width) {
 // clipped by the parent would satisfy the geometry check and show nothing.
 const frame = setup.captureCharFrame().split('\n')
 const drawn = frame[borderRow] ?? ''
-if (!drawn.includes('send')) {
-  throw new Error(`Bottom border row does not carry the composer hints:\n${drawn}`)
+// Unfocused, the border carries the status bar's keys (the separate status-bar
+// row is gone); focused, the composer's own.
+if (!drawn.includes('⌃K commands')) {
+  throw new Error(`Bottom border row does not carry the key hints:\n${drawn}`)
 }
 // And it costs the dock no height: outside fullscreen the dock is exactly the
 // draft plus its two border rows. A status row that moved onto the border but

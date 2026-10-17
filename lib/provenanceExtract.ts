@@ -31,9 +31,15 @@ export type ExtractedFileEdit = {
   filePath: string
   /** Lines this edit added, in order ('touch' = file known modified, lines unknown). */
   addedLines: string[]
+  /**
+   * Lines this edit replaced or deleted: the old text of an edit, or a diff's
+   * '-' lines. Empty for a write (the previous content is not in the call).
+   */
+  removedLines: string[]
 }
 
 const PATH_KEYS = ['file_path', 'filePath', 'path', 'notebook_path', 'target_file', 'file']
+const OLD_TEXT_KEYS = ['old_string', 'oldString', 'oldText', 'old_str']
 
 function firstString(input: Record<string, unknown>, keys: string[]): string | null {
   for (const key of keys) {
@@ -66,7 +72,15 @@ function addedLinesFromDiff(diff: string): string[] {
   return capLines(added)
 }
 
-type PatchFileSegment = { path: string; addedLines: string[] }
+function removedLinesFromDiff(diff: string): string[] {
+  const removed: string[] = []
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('-') && !line.startsWith('---')) removed.push(line.slice(1))
+  }
+  return capLines(removed)
+}
+
+type PatchFileSegment = { path: string; addedLines: string[]; removedLines: string[] }
 
 /**
  * Split a multi-file patch into per-file added lines. Understands both plain
@@ -77,10 +91,12 @@ function splitPatchByFile(patch: string): PatchFileSegment[] {
   const segments: PatchFileSegment[] = []
   let currentPath: string | null = null
   let added: string[] = []
+  let removed: string[] = []
   const flush = () => {
-    if (currentPath) segments.push({ path: currentPath, addedLines: capLines(added) })
+    if (currentPath) segments.push({ path: currentPath, addedLines: capLines(added), removedLines: capLines(removed) })
     currentPath = null
     added = []
+    removed = []
   }
   for (const line of patch.split('\n')) {
     const applyPatchHeader = /^\*\*\* (?:Add|Update) File: (.+)$/.exec(line)
@@ -102,23 +118,26 @@ function splitPatchByFile(patch: string): PatchFileSegment[] {
     }
     if (line.startsWith('--- ') || line.startsWith('diff --git ') || line.startsWith('index ') || line.startsWith('@@')) continue
     if (currentPath && line.startsWith('+')) added.push(line.slice(1))
+    else if (currentPath && line.startsWith('-')) removed.push(line.slice(1))
   }
   flush()
   return segments
 }
 
-function extractFromToolUse(
+/** The files one tool call modifies, or nothing when it is not a file-modifying tool. */
+export function extractFileEditsFromToolUse(
   tool: string,
   input: Record<string, unknown>,
   toolUseId: string | null,
 ): ExtractedFileEdit[] {
   const lower = tool.toLowerCase()
-  const make = (filePath: string, kind: FileEditKind, addedLines: string[]): ExtractedFileEdit => ({
+  const make = (filePath: string, kind: FileEditKind, addedLines: string[], removedLines: string[] = []): ExtractedFileEdit => ({
     toolUseId,
     tool,
     kind,
     filePath: filePath.trim(),
     addedLines,
+    removedLines,
   })
 
   if (lower === 'filechange') {
@@ -130,14 +149,14 @@ function extractFromToolUse(
       const changePath = typeof c.path === 'string' && c.path.trim() ? c.path : null
       if (!changePath) return []
       const diff = typeof c.diff === 'string' && c.diff ? c.diff : null
-      return [diff ? make(changePath, 'patch', addedLinesFromDiff(diff)) : make(changePath, 'touch', [])]
+      return [diff ? make(changePath, 'patch', addedLinesFromDiff(diff), removedLinesFromDiff(diff)) : make(changePath, 'touch', [])]
     })
   }
 
   if (lower === 'apply_patch' || lower === 'applypatch' || lower === 'patch') {
     const patch = firstString(input, ['patch', 'diff', 'input', 'content'])
     if (!patch) return []
-    return splitPatchByFile(patch).map((segment) => make(segment.path, 'patch', segment.addedLines))
+    return splitPatchByFile(patch).map((segment) => make(segment.path, 'patch', segment.addedLines, segment.removedLines))
   }
 
   if (lower === 'str_replace_editor' || lower === 'str_replace_based_edit_tool' || lower === 'text_editor') {
@@ -150,7 +169,8 @@ function extractFromToolUse(
     }
     if (command === 'str_replace' || command === 'insert') {
       const text = firstString(input, ['new_str', 'insert_text', 'text'])
-      return [text ? make(editorPath, 'edit', splitAdded(text)) : make(editorPath, 'touch', [])]
+      const old = command === 'str_replace' ? firstString(input, ['old_str']) : null
+      return [text ? make(editorPath, 'edit', splitAdded(text), old ? splitAdded(old) : []) : make(editorPath, 'touch', [])]
     }
     return []
   }
@@ -162,17 +182,21 @@ function extractFromToolUse(
     const rawEdits = input.edits
     if (!Array.isArray(rawEdits)) return []
     const added: string[] = []
+    const removed: string[] = []
     for (const entry of rawEdits) {
       if (!entry || typeof entry !== 'object') continue
       const text = firstString(entry as Record<string, unknown>, ['new_string', 'newString', 'newText', 'new_str'])
       if (text) added.push(...text.split('\n'))
+      const old = firstString(entry as Record<string, unknown>, OLD_TEXT_KEYS)
+      if (old) removed.push(...old.split('\n'))
     }
-    return [make(filePath, 'edit', capLines(added))]
+    return [make(filePath, 'edit', capLines(added), capLines(removed))]
   }
 
   if (lower === 'edit' || lower === 'str_replace' || lower === 'edit_file' || lower === 'replace' || lower === 'notebookedit') {
     const text = firstString(input, ['new_string', 'newString', 'newText', 'new_str', 'new_source', 'newSource', 'replacement'])
-    return [text ? make(filePath, 'edit', splitAdded(text)) : make(filePath, 'touch', [])]
+    const old = firstString(input, OLD_TEXT_KEYS)
+    return [text ? make(filePath, 'edit', splitAdded(text), old ? splitAdded(old) : []) : make(filePath, 'touch', [])]
   }
 
   if (
@@ -199,7 +223,7 @@ export function extractFileEditsFromMessage(message: SessionMessage): ExtractedF
     if (b.type !== 'tool_use' || typeof b.name !== 'string' || !b.name) continue
     if (!b.input || typeof b.input !== 'object') continue
     const toolUseId = typeof b.id === 'string' && b.id ? b.id : null
-    edits.push(...extractFromToolUse(b.name, b.input as Record<string, unknown>, toolUseId))
+    edits.push(...extractFileEditsFromToolUse(b.name, b.input as Record<string, unknown>, toolUseId))
   }
   return edits
 }

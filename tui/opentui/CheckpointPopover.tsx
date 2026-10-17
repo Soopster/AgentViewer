@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
 import type { TuiThemePalette } from '../theme'
+import { checkpointForPrompt } from '../../lib/rewindCheckpoint'
 import {
   commitTuiAllChanges,
   createTuiReviewPullRequest,
@@ -35,6 +36,12 @@ type Props = {
   onClose: () => void
   onNotice: (tone: 'info' | 'error', text: string, durationMs?: number) => void
   onKeyHandlerReady: (handler: (key: CheckpointKeyEvent) => void) => void
+  /**
+   * Open on the turn this prompt started: its checkpoint selected and its diff
+   * shown, bounded by the same session's next checkpoint so later turns are
+   * not folded into it. A turn with no checkpoint says so and lists the rest.
+   */
+  focusPrompt?: { sessionId: string; text: string; timestamp?: string } | null
 }
 
 type TurnsRow =
@@ -75,6 +82,7 @@ export function CheckpointPopover({
   onClose,
   onNotice,
   onKeyHandlerReady,
+  focusPrompt,
 }: Props) {
   const [tab, setTab] = useState<'turns' | 'review'>('turns')
   const [checkpoints, setCheckpoints] = useState<TurnCheckpoint[]>([])
@@ -231,14 +239,35 @@ export function CheckpointPopover({
     }
   }, [busy, commitDraft, cwd, onNotice, reload])
 
-  const openDiff = useCallback(async (sha: string, filePath?: string) => {
+  const openDiff = useCallback(async (sha: string, filePath?: string, untilSha?: string) => {
     try {
-      const diff = await readTuiCheckpointDiff(cwd, sha, filePath)
-      setDiffLines(diff ? diff.split('\n') : ['(no changes since this checkpoint)'])
+      const diff = await readTuiCheckpointDiff(cwd, sha, filePath, untilSha)
+      setDiffLines(diff ? diff.split('\n') : [untilSha ? '(this turn changed no files)' : '(no changes since this checkpoint)'])
     } catch (err) {
       onNotice('error', err instanceof Error ? err.message : 'Failed to read diff')
     }
   }, [cwd, onNotice])
+
+  // Resolved once, on the first load: a reload after a restore must not yank
+  // the cursor back to the turn the popover was opened on.
+  const focusResolvedRef = useRef(false)
+  useEffect(() => {
+    if (!focusPrompt || focusResolvedRef.current || loading) return
+    focusResolvedRef.current = true
+    const match = checkpointForPrompt(checkpoints, focusPrompt)
+    if (!match) {
+      onNotice('info', 'No checkpoint was taken for that turn — it ran outside agent-viewer', 5000)
+      return
+    }
+    let until: TurnCheckpoint | null = null
+    for (const checkpoint of checkpoints) {
+      if (checkpoint.sessionId !== match.sessionId || checkpoint.createdAt <= match.createdAt) continue
+      if (!until || checkpoint.createdAt < until.createdAt) until = checkpoint
+    }
+    setCursor(Math.max(checkpoints.indexOf(match), 0))
+    setExpandedSha(match.sha)
+    void openDiff(match.sha, undefined, until?.sha)
+  }, [checkpoints, focusPrompt, loading, onNotice, openDiff])
 
   const handleKey = useCallback((key: CheckpointKeyEvent) => {
     if (commitMode) {

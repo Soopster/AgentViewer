@@ -187,6 +187,7 @@ type TuiState = {
   velocityScroll?: unknown
   sidebarSort?: unknown
   hideScratchSessions?: unknown
+  showSettledSessions?: unknown
   sessionReaderState?: unknown
 }
 
@@ -511,6 +512,15 @@ export async function getConfiguredTuiHideScratchSessions(): Promise<boolean> {
 
 export async function setConfiguredTuiHideScratchSessions(hideScratchSessions: boolean): Promise<void> {
   await writeTuiState({ hideScratchSessions })
+}
+
+export async function getConfiguredTuiShowSettledSessions(): Promise<boolean> {
+  const parsed = await readTuiState()
+  return parsed.showSettledSessions === true
+}
+
+export async function setConfiguredTuiShowSettledSessions(showSettledSessions: boolean): Promise<void> {
+  await writeTuiState({ showSettledSessions })
 }
 
 export async function getConfiguredTuiSessionReaderState(sessionKey: string): Promise<TuiSessionReaderState | null> {
