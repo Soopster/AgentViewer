@@ -1,0 +1,176 @@
+/** @jsxImportSource @opentui/react */
+// The docked composer's stats/hint row is painted *into* its bottom border,
+// the way the title is painted into the top one. Nothing else can see that:
+// the row renders identically whether it sits on the border or on an ordinary
+// flow row one line above it, and the only symptom of getting it wrong is a
+// wasted row of draft area. This pins both halves — the row lands on the
+// border, and the dock spends no height on it.
+import React from 'react'
+import { testRender, act } from './testRender'
+import { mkdtempSync } from 'fs'
+import { tmpdir } from 'os'
+import path from 'path'
+
+// Hermetic: state files resolve from process.cwd(). Import App AFTER chdir.
+process.chdir(mkdtempSync(path.join(tmpdir(), 'agent-viewer-composer-status-smoke-')))
+const { default: OpenTuiApp } = await import('./App')
+
+const setup = await testRender(<OpenTuiApp />, { width: 140, height: 40, kittyKeyboard: true })
+const settle = async (ms = 700) => {
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, ms)) })
+  await act(async () => { await setup.flush() })
+}
+await settle(2500)
+
+type Geometry = { x: number; y: number; width: number; height: number }
+const dock = setup.renderer.root.findDescendantById('composer-dock') as unknown as Geometry | null
+const status = setup.renderer.root.findDescendantById('composer-dock-status') as unknown as Geometry | null
+if (!dock || !status) throw new Error('Composer dock or its status row is missing')
+
+const borderRow = dock.y + dock.height - 1
+if (status.y !== borderRow) {
+  throw new Error(`Status row is on row ${status.y}, not the dock's bottom border row ${borderRow}`)
+}
+// It has to stay inside the border's horizontal run, or it paints over a corner.
+if (status.x <= dock.x || status.x + status.width >= dock.x + dock.width) {
+  throw new Error(`Status row ${status.x}..${status.x + status.width} overruns the dock's corners`)
+}
+
+// And it must actually be drawn there: an absolutely positioned row that is
+// clipped by the parent would satisfy the geometry check and show nothing.
+const frame = setup.captureCharFrame().split('\n')
+const drawn = frame[borderRow] ?? ''
+// Unfocused, the border carries the status bar's keys (the separate status-bar
+// row is gone); focused, the composer's own.
+if (!drawn.includes('⌃K commands')) {
+  throw new Error(`Bottom border row does not carry the key hints:\n${drawn}`)
+}
+// And it costs the dock no height: outside fullscreen the dock is exactly the
+// draft plus its two border rows. A status row that moved onto the border but
+// left its row reserved renders identically — only this catches that.
+const textarea = setup.renderer.root.findDescendantById('composer-textarea') as unknown as Geometry | null
+if (!textarea) throw new Error('Composer textarea is missing')
+if (dock.height !== textarea.height + 2) {
+  throw new Error(`Dock is ${dock.height} rows for a ${textarea.height}-row draft; expected ${textarea.height + 2}`)
+}
+
+// Fullscreen has no border to hide a mismatch: every cell of the draft rows
+// must be one colour, and the status band must meet both screen edges. The
+// dock used to be a different shade from the textarea, a stripe down each side.
+act(() => { setup.mockInput.pressTab() })
+await settle(300)
+act(() => { setup.mockInput.pressKey('Z', { shift: true }) })
+await settle(500)
+{
+  const fsDock = setup.renderer.root.findDescendantById('composer-dock') as unknown as Geometry | null
+  if (!fsDock) throw new Error('Fullscreen composer dock is missing')
+  const spans = setup.captureSpans().lines
+  const bgsOf = (row: number) => new Set((spans[row]?.spans ?? []).map((span) => span.bg.toInts().slice(0, 3).join(',')))
+  for (let row = fsDock.y; row < fsDock.y + fsDock.height - 1; row += 1) {
+    const bgs = bgsOf(row)
+    if (bgs.size !== 1) throw new Error(`Fullscreen composer row ${row} is painted in ${bgs.size} colours: ${[...bgs].join(' | ')}`)
+  }
+  const statusSpans = spans[fsDock.y + fsDock.height - 1]?.spans ?? []
+  const edge = (span: (typeof statusSpans)[number] | undefined) => span?.bg.toInts().slice(0, 3).join(',')
+  if (edge(statusSpans[0]) !== edge(statusSpans[statusSpans.length - 1]) || edge(statusSpans[0]) === [...bgsOf(fsDock.y)][0]) {
+    throw new Error('The fullscreen status band does not span the screen edge to edge')
+  }
+  // Focused, the composer takes a ground of its own — there is no border to
+  // light up in fullscreen — and stays one colour doing it.
+  const unfocused = [...bgsOf(fsDock.y)][0]
+  act(() => { setup.mockInput.pressKey('c') })
+  await settle(400)
+  const focusedSpans = setup.captureSpans().lines
+  const focusedBgs = new Set<string>()
+  for (let row = fsDock.y; row < fsDock.y + fsDock.height - 1; row += 1) {
+    for (const span of focusedSpans[row]?.spans ?? []) {
+      // The cursor cell is painted in its own colour; it is not the ground.
+      if (span.text.length > 1 || span.text === ' ') focusedBgs.add(span.bg.toInts().slice(0, 3).join(','))
+    }
+  }
+  if (focusedBgs.size !== 1) throw new Error(`Focused fullscreen composer is painted in ${focusedBgs.size} colours: ${[...focusedBgs].join(' | ')}`)
+  if ([...focusedBgs][0] === unfocused) throw new Error('A focused fullscreen composer has the same background as an unfocused one')
+  act(() => { setup.mockInput.pressEscape() })
+  await settle(300)
+}
+act(() => { setup.mockInput.pressKey('Z', { shift: true }) })
+await settle(500)
+
+// Chat view docks its own composer inside the reader's frame, with its own
+// border and its own status row — the same rule, a separate implementation.
+act(() => { setup.mockInput.pressKey('v') })
+await settle(400)
+for (let index = 0; index < 5; index += 1) act(() => { setup.mockInput.pressArrow('down') })
+act(() => { setup.mockInput.pressEnter() })
+await settle(1500)
+
+const chatDock = setup.renderer.root.findDescendantById('composer-dock') as unknown as Geometry | null
+const chatStatus = setup.renderer.root.findDescendantById('chat-composer-status') as unknown as Geometry | null
+if (!chatDock || !chatStatus) throw new Error('Chat composer dock or its status row is missing')
+// The chat dock has no bottom border of its own (it shares the reader frame's), so the border row the
+// status paints into is the one just below the dock.
+const chatBorderRow = chatDock.y + chatDock.height
+if (chatStatus.y !== chatBorderRow) {
+  throw new Error(`Chat status row is on row ${chatStatus.y}, not the border row ${chatBorderRow}`)
+}
+// Overrunning here overwrites the chat dock's own right border, which is inside
+// the reader's — the frame loses a wall rather than merely looking cramped.
+if (chatStatus.x <= chatDock.x || chatStatus.x + chatStatus.width >= chatDock.x + chatDock.width) {
+  throw new Error(`Chat status row ${chatStatus.x}..${chatStatus.x + chatStatus.width} overruns its border`)
+}
+const chatFrame = setup.captureCharFrame().split('\n')
+const chatDrawn = chatFrame[chatBorderRow] ?? ''
+if (!/compose|send/.test(chatDrawn)) {
+  throw new Error(`Chat bottom border row does not carry the status text:\n${chatDrawn}`)
+}
+// Both dock borders must survive the overlay: the chat dock's and the reader's.
+if (!/[│┘].*[│┘]\s*$/.test(chatDrawn.trimEnd())) {
+  throw new Error(`Chat status row painted over a frame wall:\n${chatDrawn}`)
+}
+const chatTextarea = setup.renderer.root.findDescendantById('composer-textarea') as unknown as Geometry | null
+if (!chatTextarea) throw new Error('Chat composer textarea is missing')
+if (chatDock.height !== chatTextarea.height + 2) {
+  throw new Error(`Chat dock is ${chatDock.height} rows for a ${chatTextarea.height}-row draft; expected ${chatTextarea.height + 2}`)
+}
+// Chat keeps one quiet row between the draft and its metadata-bearing bottom
+// border, so the single-line input does not feel pinned between two rules.
+if (chatTextarea.y + chatTextarea.height + 1 !== chatBorderRow) {
+  throw new Error(`Chat draft does not leave one breathing row before border row ${chatBorderRow}`)
+}
+
+// Focused and unfocused carry different hints (`c compose` against the full
+// key list). Both are pushed against the right end of
+// the border run, and neither pads the gap between the two halves with panel
+// background — the border has to show through it.
+const hintEndOf = (needle: string): number => {
+  const row = setup.captureCharFrame().split('\n')[chatBorderRow] ?? ''
+  const index = row.indexOf(needle)
+  if (index === -1) throw new Error(`Chat status row is missing "${needle}":\n${row}`)
+  return index + needle.length
+}
+const statusRight = chatStatus.x + chatStatus.width
+const unfocusedEnd = hintEndOf('c compose')
+if (unfocusedEnd !== statusRight) {
+  throw new Error(`Unfocused hint ends at ${unfocusedEnd}, not flush with the border run's end ${statusRight}`)
+}
+const gapRow = setup.captureCharFrame().split('\n')[chatBorderRow] ?? ''
+const gap = gapRow.slice(chatStatus.x + 12, unfocusedEnd - 'c compose'.length - 4)
+if (!gap.includes('─')) {
+  throw new Error(`Border does not show through between the status halves:\n${gapRow}`)
+}
+// Dashes are not enough on their own: a half padded to a fixed share paints a
+// run of blank panel background over the border and still leaves dashes beyond
+// it. Nothing between the halves may be blank.
+if (/ {4}/.test(gap)) {
+  throw new Error(`Blank panel background is painted over the border between the halves:\n${gapRow}`)
+}
+
+act(() => { setup.mockInput.pressKey('c') })
+await settle(900)
+const focusedEnd = hintEndOf('newline')
+if (focusedEnd > statusRight) {
+  throw new Error(`Focused hint runs past the border run's end ${statusRight} (ends ${focusedEnd})`)
+}
+
+console.log('composerStatusRowSmoke: ok')
+process.exit(0)

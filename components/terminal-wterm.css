@@ -1,0 +1,6 @@
+.wterm {
+  padding: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background: var(--term-bg) !important;
+}

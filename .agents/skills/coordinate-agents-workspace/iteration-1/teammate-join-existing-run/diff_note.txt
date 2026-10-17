@@ -1,0 +1,1 @@
+Near-identical in substance and length; this workflow lives entirely in the un-split main SKILL.md in both versions, so the reference-file split had no effect here, as expected.

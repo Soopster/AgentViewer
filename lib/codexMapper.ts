@@ -18,6 +18,20 @@ import type {
   CodexUserInput,
 } from './codexProtocol'
 import { CODEX_CAPABILITIES } from './provider'
+import { buildThreadedMessages, type ThreadedMessage } from './threading'
+import { mcpResourceLinks } from './mcpArtifacts'
+import { recordRawFrames } from './rawFrames'
+
+function isPendingCodexThread(thread: CodexThread): boolean {
+  return !thread.path && !thread.preview && (thread.turns?.length ?? 0) === 0
+}
+
+function getCodexSpawnParentThreadId(thread: CodexThread): string | undefined {
+  if (typeof thread.source !== 'object' || !('subAgent' in thread.source)) return undefined
+  const source = thread.source.subAgent
+  if (typeof source !== 'object' || !('thread_spawn' in source)) return undefined
+  return source.thread_spawn.parent_thread_id
+}
 
 function asObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -34,9 +48,30 @@ function stringify(value: unknown): string {
   }
 }
 
+function escapeBashTag(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+/** Codex runs a `!command` as `<shell> -lc '<command>'`; show what was typed. */
+export function unwrapCodexShellCommand(command: string): string {
+  const match = /^\S+ -l?c '([\s\S]*)'$/.exec(command)
+  return match ? match[1]!.replace(/'\\''/g, "'") : command
+}
+
+function msToIsoTimestamp(ms: number | null | undefined): string | undefined {
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return undefined
+  return new Date(ms).toISOString()
+}
+
 function uuidV7ToIsoTimestamp(value: string): string | undefined {
+  // Last-resort fallback for records predating Turn.startedAt /
+  // {Item,Turn}{Started,Completed}AtMs notification fields. UUID v7
+  // encodes a unix-ms timestamp in the first 48 bits.
   const compact = value.replace(/-/g, '')
-  if (!/^[0-9a-fA-F]{12,}$/.test(compact)) return undefined
+  // Only a v7 UUID carries a timestamp. A user `!command` item has a v4 id,
+  // whose first 48 bits are random: read as milliseconds they dated the card
+  // thousands of years out and sorted it after every later message.
+  if (!/^[0-9a-fA-F]{32}$/.test(compact) || compact[12] !== '7') return undefined
   const milliseconds = Number.parseInt(compact.slice(0, 12), 16)
   if (!Number.isFinite(milliseconds) || milliseconds <= 0) return undefined
   return new Date(milliseconds).toISOString()
@@ -49,15 +84,19 @@ function codexUserInputToText(input: CodexUserInput[]): string {
         case 'text':
           return entry.text
         case 'image':
-          return `[image] ${entry.url}`
+          return `[image] ${'url' in entry ? entry.url : `file:${entry.fileId}`}`
         case 'localImage':
           return `[local image] ${entry.path}`
+        case 'audio':
+          return `[audio] ${entry.url}`
+        case 'localAudio':
+          return `[local audio] ${entry.path}`
         case 'skill':
           return `[skill] ${entry.name}`
         case 'mention':
           return `[@${entry.name}] ${entry.path}`
         default:
-          return ''
+          return entry satisfies never
       }
     })
     .filter(Boolean)
@@ -96,20 +135,29 @@ function makeToolResult(toolUseId: string, content: string, isError = false) {
   }
 }
 
-function summarizeFileChanges(changes: CodexFileUpdateChange[]): string {
+function summarizeFileChanges(status: string, changes: CodexFileUpdateChange[]): string {
   if (changes.length === 0) return 'No file changes recorded.'
-  return changes
-    .map((change) => `${change.kind}: ${change.path}\n${change.diff}`.trim())
-    .join('\n\n')
+
+  const noun = `${changes.length} file change${changes.length === 1 ? '' : 's'}`
+  if (status === 'failed' || status === 'declined') return `${status} ${noun}`
+  if (status === 'inProgress') return `Applying ${noun}`
+  return `Applied ${noun}`
 }
 
 function toolInput(value: unknown): Record<string, unknown> {
   const objectValue = asObject(value)
-  return Object.keys(objectValue).length > 0 ? objectValue : { value }
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? objectValue : { value }
 }
 
-function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadItem, timestamp?: string): SessionMessage[] {
+function mapItemToMessages(
+  threadId: string,
+  turnId: string,
+  item: CodexThreadItem,
+  timestamp?: string,
+  options: { includeToolResults?: boolean } = {},
+): SessionMessage[] {
   const baseId = `${turnId}:${item.id}`
+  const includeToolResults = options.includeToolResults ?? true
 
   switch (item.type) {
     case 'userMessage': {
@@ -118,8 +166,37 @@ function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadIt
         ? [makeMessage(threadId, baseId, 'user', text, turnId, timestamp)]
         : []
     }
-    case 'agentMessage':
-      return item.text ? [makeMessage(threadId, baseId, 'assistant', item.text, turnId, timestamp)] : []
+    case 'agentMessage': {
+      const content: import('./types').ContentBlock[] = []
+      if (item.text) content.push({ type: 'text', text: item.text })
+      if (item.questions?.length) content.push({
+        type: 'tool_use', id: `${baseId}:questions`, name: 'AskUserQuestion',
+        input: { asyncUserInput: true, sourceItemId: item.id, questions: item.questions.map((question, index) => ({
+          id: `${item.id}:${index}`, question: question.title,
+          allowFreeform: true, options: (question.options ?? []).map(label => ({ label })),
+        })) },
+      })
+      return content.length ? [makeMessage(threadId, baseId, 'assistant', content, turnId, timestamp)] : []
+    }
+    case 'functionCallOutput': {
+      const toolUseId = `${baseId}:tool`
+      const output = typeof item.output === 'string' ? item.output : item.output.map((part) => {
+        switch (part.type) {
+          case 'input_text': return part.text
+          case 'input_image': return `[image] ${'image_url' in part ? part.image_url : `file:${part.file_id}`}`
+          case 'input_audio': return `[audio] ${part.audio_url}`
+          case 'encrypted_content': return '[encrypted tool output]'
+        }
+      }).join('\n')
+      const assistant = makeMessage(threadId, baseId, 'assistant', [{
+        type: 'tool_use', id: toolUseId, name: item.name,
+        input: { namespace: item.namespace },
+      }], turnId, timestamp)
+      const result = makeMessage(threadId, `${baseId}:result`, 'user', [
+        makeToolResult(toolUseId, output || 'No output recorded.'),
+      ], turnId, timestamp)
+      return includeToolResults ? [assistant, result] : [assistant]
+    }
     case 'plan':
       return item.text ? [makeMessage(threadId, baseId, 'assistant', `## Plan\n\n${item.text}`, turnId, timestamp)] : []
     case 'reasoning': {
@@ -129,6 +206,20 @@ function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadIt
         : []
     }
     case 'commandExecution': {
+      // A user `!command` is the user's own shell, not an agent tool call:
+      // render it as Claude Code's bash mode does (the command, then its
+      // output, both visible) rather than as a folded tool card.
+      if (item.source === 'userShell') {
+        const input = makeMessage(threadId, baseId, 'user',
+          `<bash-input>${escapeBashTag(unwrapCodexShellCommand(item.command))}</bash-input>`, turnId, timestamp)
+        if (!includeToolResults) return [input]
+        const failed = item.status === 'failed' || (item.exitCode != null && item.exitCode !== 0)
+        const stderr = failed && item.exitCode != null ? `Exit code ${item.exitCode}` : ''
+        const output = makeMessage(threadId, `${baseId}:result`, 'user',
+          `<bash-stdout>${escapeBashTag((item.aggregatedOutput ?? '').trimEnd())}</bash-stdout><bash-stderr>${escapeBashTag(stderr)}</bash-stderr>`,
+          turnId, timestamp)
+        return [input, output]
+      }
       const toolUseId = `${baseId}:tool`
       const assistant = makeMessage(threadId, baseId, 'assistant', [{
         type: 'tool_use',
@@ -140,6 +231,8 @@ function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadIt
           status: item.status,
           source: item.source,
           processId: item.processId,
+          pluginId: item.pluginId,
+          scriptPath: item.scriptPath,
         },
       }], turnId, timestamp)
       const resultText = [
@@ -150,7 +243,7 @@ function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadIt
       const result = makeMessage(threadId, `${baseId}:result`, 'user', [
         makeToolResult(toolUseId, resultText || 'No output recorded.', item.status === 'failed'),
       ], turnId, timestamp)
-      return [assistant, result]
+      return includeToolResults ? [assistant, result] : [assistant]
     }
     case 'fileChange': {
       const toolUseId = `${baseId}:tool`
@@ -160,24 +253,26 @@ function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadIt
         name: 'FileChange',
         input: {
           status: item.status,
-          changes: item.changes.map((change) => ({ path: change.path, kind: change.kind })),
+          changes: item.changes.map((change) => ({ path: change.path, kind: change.kind, diff: change.diff })),
         },
       }], turnId, timestamp)
       const result = makeMessage(threadId, `${baseId}:result`, 'user', [
-        makeToolResult(toolUseId, summarizeFileChanges(item.changes), item.status === 'failed'),
+        makeToolResult(toolUseId, summarizeFileChanges(item.status, item.changes), item.status === 'failed'),
       ], turnId, timestamp)
-      return [assistant, result]
+      return includeToolResults ? [assistant, result] : [assistant]
     }
     case 'mcpToolCall': {
       const toolUseId = `${baseId}:tool`
       const assistant = makeMessage(threadId, baseId, 'assistant', [{
         type: 'tool_use',
         id: toolUseId,
-        name: item.tool || 'MCP',
-        input: {
-          server: item.server,
-          status: item.status,
-          ...toolInput(item.arguments),
+        name: `mcp__${item.server}__${item.tool || 'MCP'}`,
+        input: toolInput(item.arguments),
+        mcp: { server: item.server, tool: item.tool, originCallId: item.id,
+          status: item.status, pluginId: item.pluginId, readOnlyHint: item.readOnlyHint, appContext: item.appContext,
+          ...(item.mcpAppUi ? { app: item.mcpAppUi } : item.mcpAppResourceUri ? { app: {
+            resourceUri: item.mcpAppResourceUri, preferredModelDisplayMode: 'inline',
+          } } : {}),
         },
       }], turnId, timestamp)
       const resultText = item.error
@@ -186,9 +281,14 @@ function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadIt
         ? stringify(item.result)
         : `${item.server}/${item.tool} completed with no structured result`
       const result = makeMessage(threadId, `${baseId}:result`, 'user', [
-        makeToolResult(toolUseId, resultText, Boolean(item.error)),
+        { ...makeToolResult(toolUseId, resultText, item.status === 'failed' || Boolean(item.error)),
+          ...(item.result ? { content: item.result.content as import('./types').ContentBlock[],
+            structuredContent: item.result.structuredContent,
+            mcpMeta: asObject(item.result._meta), resourceLinks: mcpResourceLinks(item.result.content),
+          } : {}),
+        },
       ], turnId, timestamp)
-      return [assistant, result]
+      return includeToolResults ? [assistant, result] : [assistant]
     }
     case 'dynamicToolCall': {
       const toolUseId = `${baseId}:tool`
@@ -201,7 +301,7 @@ function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadIt
       const result = makeMessage(threadId, `${baseId}:result`, 'user', [
         makeToolResult(toolUseId, stringify(item.contentItems ?? { success: item.success, status: item.status }), item.success === false),
       ], turnId, timestamp)
-      return [assistant, result]
+      return includeToolResults ? [assistant, result] : [assistant]
     }
     case 'collabAgentToolCall': {
       const toolUseId = `${baseId}:tool`
@@ -222,8 +322,17 @@ function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadIt
       const result = makeMessage(threadId, `${baseId}:result`, 'user', [
         makeToolResult(toolUseId, stringify(item.agentsStates)),
       ], turnId, timestamp)
-      return [assistant, result]
+      return includeToolResults ? [assistant, result] : [assistant]
     }
+    case 'subAgentActivity':
+      return [makeMessage(
+        threadId,
+        baseId,
+        'assistant',
+        `Sub-agent ${item.kind}: ${item.agentPath} (${item.agentThreadId})`,
+        turnId,
+        timestamp,
+      )]
     case 'webSearch': {
       const toolUseId = `${baseId}:tool`
       const assistant = makeMessage(threadId, baseId, 'assistant', [{
@@ -238,10 +347,12 @@ function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadIt
       const result = makeMessage(threadId, `${baseId}:result`, 'user', [
         makeToolResult(toolUseId, stringify(item.action ?? { query: item.query })),
       ], turnId, timestamp)
-      return [assistant, result]
+      return includeToolResults ? [assistant, result] : [assistant]
     }
     case 'imageView':
       return [makeMessage(threadId, baseId, 'assistant', `[image view] ${item.path}`, turnId, timestamp)]
+    case 'sleep':
+      return [makeMessage(threadId, baseId, 'assistant', `Paused for ${item.durationMs} ms.`, turnId, timestamp)]
     case 'imageGeneration':
       return [makeMessage(threadId, baseId, 'assistant', `Image generation (${item.status})\n\n${item.result}`, turnId, timestamp)]
     case 'enteredReviewMode':
@@ -251,10 +362,52 @@ function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadIt
     case 'contextCompaction':
       return [makeMessage(threadId, baseId, 'assistant', 'Context compaction completed.', turnId, timestamp)]
     case 'hookPrompt':
-      return [makeMessage(threadId, baseId, 'assistant', `Hook prompt emitted (${item.fragments.length} fragment${item.fragments.length === 1 ? '' : 's'}).`, turnId, timestamp)]
+      return [makeMessage(threadId, baseId, 'assistant', `Hook prompt\n\n${item.fragments.map(fragment => fragment.text).join('\n\n')}`, turnId, timestamp)]
     default:
-      return []
+      return item satisfies never
   }
+}
+
+export function normalizeCodexStreamThreadedMessage(payload: unknown, fallbackSessionId?: string): ThreadedMessage | null {
+  if (!payload || typeof payload !== 'object') return null
+  const record = payload as Record<string, unknown>
+  if (record.type !== 'codex_item_completed' && record.type !== 'codex_item_started') return null
+
+  const item = asObject(record.item)
+  const itemId = typeof item.id === 'string' ? item.id : null
+  const itemType = typeof item.type === 'string' ? item.type : null
+  const turnId = typeof record.turnId === 'string'
+    ? record.turnId
+    : typeof asObject(record.turn).id === 'string'
+    ? asObject(record.turn).id as string
+    : null
+  const threadId = typeof record.threadId === 'string' ? record.threadId : fallbackSessionId ?? null
+
+  if (!itemId || !itemType || !turnId || !threadId) return null
+
+  // ItemStarted/CompletedNotification carry an exact millisecond timestamp;
+  // prefer it, then fall back to v7-UUID extraction for any payload that
+  // somehow lacks the field.
+  const timestampMs = record.type === 'codex_item_completed'
+    ? (typeof record.completedAtMs === 'number' ? record.completedAtMs : undefined)
+    : (typeof record.startedAtMs === 'number' ? record.startedAtMs : undefined)
+  const timestamp = msToIsoTimestamp(timestampMs) ?? uuidV7ToIsoTimestamp(itemId) ?? uuidV7ToIsoTimestamp(turnId)
+  const messages = mapItemToMessages(threadId, turnId, item as CodexThreadItem, timestamp, {
+    includeToolResults: record.type === 'codex_item_completed',
+  })
+  if (messages.length === 0) return null
+
+  return buildThreadedMessages(messages).find((message) => message.role === 'assistant') ?? null
+}
+
+/** Web streams prose separately; retain non-text blocks from agent completions too. */
+export function normalizeCodexStreamArtifactMessage(payload: unknown, fallbackSessionId?: string): ThreadedMessage | null {
+  const message = normalizeCodexStreamThreadedMessage(payload, fallbackSessionId)
+  if (!message) return null
+  const itemType = asObject(asObject(payload).item).type
+  if (itemType !== 'agentMessage' && itemType !== 'plan') return message
+  const blocks = message.blocks.filter(block => block.type !== 'text')
+  return blocks.length ? { ...message, blocks } : null
 }
 
 export function mapCodexThreadToSession(thread: CodexThread, tag: string | null): Session {
@@ -263,12 +416,18 @@ export function mapCodexThreadToSession(thread: CodexThread, tag: string | null)
     summary: thread.preview || thread.name || thread.id,
     customTitle: thread.name ?? undefined,
     firstPrompt: thread.preview || undefined,
+    // Passive reads must not resume the thread: updatedAt then reflects the
+    // latest work, rather than recencyAt's fixed turn-start time.
     lastModified: thread.updatedAt * 1000,
+    transcriptUpdatedAt: thread.updatedAt * 1000,
     cwd: thread.cwd,
     tag,
     createdAt: thread.createdAt * 1000,
     provider: 'codex',
     capabilities: CODEX_CAPABILITIES,
+    isPinned: false,
+    parentSessionId: getCodexSpawnParentThreadId(thread),
+    isPending: isPendingCodexThread(thread) ? true : undefined,
   }
 }
 
@@ -279,27 +438,51 @@ export function mapCodexThreadToSessionInfo(thread: CodexThread, tag: string | n
     customTitle: thread.name ?? undefined,
     firstPrompt: thread.preview || undefined,
     lastModified: thread.updatedAt * 1000,
+    transcriptUpdatedAt: thread.updatedAt * 1000,
     gitBranch: thread.gitInfo?.branch ?? undefined,
     cwd: thread.cwd,
     tag: tag ?? undefined,
     createdAt: thread.createdAt * 1000,
     provider: 'codex',
     capabilities: CODEX_CAPABILITIES,
-    currentModel: currentModel ?? undefined,
+    isPinned: false,
+    currentModel: thread.model ?? currentModel ?? undefined,
+    parentSessionId: getCodexSpawnParentThreadId(thread),
   }
 }
 
 export function mapCodexThreadToMessages(thread: CodexThread): SessionMessage[] {
   const messages: SessionMessage[] = []
+  const turns = [...thread.turns]
 
-  for (const turn of thread.turns) {
-    const timestamp = uuidV7ToIsoTimestamp(turn.id)
-    for (const item of turn.items) {
-      messages.push(...mapItemToMessages(thread.id, turn.id, item, timestamp))
+  for (const turn of turns) {
+    // Turn.startedAt is in seconds (per schema). Fall back to v7-UUID
+    // extraction for rollouts from older codex versions that didn't
+    // persist the field.
+    // A value already in milliseconds is taken as-is rather than scaled again.
+    const turnTimestamp = msToIsoTimestamp(turn.startedAt != null ? (turn.startedAt > 1e12 ? turn.startedAt : turn.startedAt * 1000) : undefined)
+      ?? uuidV7ToIsoTimestamp(turn.id)
+    const items = [...turn.items]
+    for (const item of items) {
+      // ThreadItem has no per-item timestamp in the archive, so its v7
+      // UUID is still the only finer-grained signal we can use; fall
+      // back to the turn timestamp if even that doesn't parse.
+      const itemTimestamp = uuidV7ToIsoTimestamp(item.id) ?? turnTimestamp
+      const itemMessages = mapItemToMessages(thread.id, turn.id, item, itemTimestamp)
+      recordRawFrames(itemMessages, {
+        source: 'codex.thread-event',
+        messageType: (item as { type?: string })?.type,
+        payload: item,
+      })
+      messages.push(...itemMessages)
     }
 
     if (turn.error) {
-      messages.push(makeMessage(thread.id, `${turn.id}:error`, 'assistant', `Turn failed\n\n${turn.error}`, turn.id, timestamp))
+      // turn.error is TurnError { message, additionalDetails, codexErrorInfo },
+      // not a string — stringifying it directly used to render as
+      // "[object Object]".
+      const errorText = [turn.error.message, turn.error.additionalDetails ?? ''].filter(Boolean).join('\n\n')
+      messages.push(makeMessage(thread.id, `${turn.id}:error`, 'assistant', `Turn failed\n\n${errorText}`, turn.id, turnTimestamp))
     }
   }
 
@@ -307,9 +490,12 @@ export function mapCodexThreadToMessages(thread: CodexThread): SessionMessage[] 
 }
 
 export function mapCodexTokenUsageToContextUsage(tokenUsage: CodexThreadTokenUsage, model: string): ContextUsage {
-  const total = tokenUsage.total ?? {}
+  // `total` is lifetime thread usage and can exceed the model window many
+  // times over. `last` is the current request/context snapshot that Codex
+  // itself uses for context-window accounting.
+  const context = tokenUsage.last ?? tokenUsage.total ?? null
   const maxTokens = tokenUsage.modelContextWindow ?? 0
-  const totalTokens = total.totalTokens ?? 0
+  const totalTokens = context?.totalTokens ?? 0
 
   return {
     totalTokens,
@@ -317,11 +503,48 @@ export function mapCodexTokenUsageToContextUsage(tokenUsage: CodexThreadTokenUsa
     percentage: maxTokens > 0 ? Math.min(100, (totalTokens / maxTokens) * 100) : 0,
     model,
     categories: [
-      { name: 'Input', tokens: total.inputTokens ?? 0, color: 'var(--cyan)' },
-      { name: 'Cached', tokens: total.cachedInputTokens ?? 0, color: 'var(--green)' },
-      { name: 'Output', tokens: total.outputTokens ?? 0, color: 'var(--violet)' },
-      { name: 'Reasoning', tokens: total.reasoningOutputTokens ?? 0, color: 'var(--amber)' },
+      { name: 'Input', tokens: context?.inputTokens ?? 0, color: 'var(--cyan)' },
+      { name: 'Cached', tokens: context?.cachedInputTokens ?? 0, color: 'var(--green)' },
+      { name: 'Output', tokens: context?.outputTokens ?? 0, color: 'var(--violet)' },
+      { name: 'Reasoning', tokens: context?.reasoningOutputTokens ?? 0, color: 'var(--amber)' },
     ],
+  }
+}
+
+export type CodexTurnOutputUsageState = {
+  lastTotalOutputTokens: number | null
+  outputTokens: number
+}
+
+export function advanceCodexTurnOutputUsage(
+  state: CodexTurnOutputUsageState,
+  tokenUsage: CodexThreadTokenUsage,
+): CodexTurnOutputUsageState {
+  const totalOutputTokens = tokenUsage.total?.outputTokens
+  const lastOutputTokens = tokenUsage.last?.outputTokens ?? 0
+
+  if (typeof totalOutputTokens !== 'number' || !Number.isFinite(totalOutputTokens)) {
+    return {
+      lastTotalOutputTokens: state.lastTotalOutputTokens,
+      outputTokens: state.outputTokens + Math.max(0, lastOutputTokens),
+    }
+  }
+
+  if (state.lastTotalOutputTokens == null) {
+    return {
+      lastTotalOutputTokens: totalOutputTokens,
+      outputTokens: state.outputTokens + Math.max(0, lastOutputTokens),
+    }
+  }
+
+  const delta = totalOutputTokens - state.lastTotalOutputTokens
+  return {
+    lastTotalOutputTokens: totalOutputTokens,
+    outputTokens: state.outputTokens + (
+      delta >= 0
+        ? delta
+        : Math.max(0, lastOutputTokens)
+    ),
   }
 }
 
@@ -329,17 +552,29 @@ export function mapCodexModelsToSessionModels(models: Array<{
   model: string
   displayName: string
   description: string
-  supportedReasoningEfforts?: string[] | null
+  supportedReasoningEfforts?: Array<string | { reasoningEffort?: string | null }> | null
 }>): SessionModelInfo[] {
+  const reasoningEfforts = (value: Array<string | { reasoningEffort?: string | null }> | null | undefined) =>
+    (value ?? [])
+      .map((entry) => typeof entry === 'string' ? entry : entry.reasoningEffort)
+      .filter((entry): entry is 'low' | 'medium' | 'high' | 'max' | 'xhigh' =>
+        entry === 'low' || entry === 'medium' || entry === 'high' || entry === 'max' || entry === 'xhigh'
+      )
+
   return models.map((model) => ({
     value: model.model,
     displayName: model.displayName || model.model,
     description: model.description || '',
-    supportsEffort: Array.isArray(model.supportedReasoningEfforts) && model.supportedReasoningEfforts.length > 0,
-    supportedEffortLevels: (model.supportedReasoningEfforts ?? []).filter((value): value is 'low' | 'medium' | 'high' | 'max' =>
-      value === 'low' || value === 'medium' || value === 'high' || value === 'max'
-    ),
+    supportsEffort: reasoningEfforts(model.supportedReasoningEfforts).length > 0,
+    supportedEffortLevels: reasoningEfforts(model.supportedReasoningEfforts),
   }))
+}
+
+export function currentCodexModelValue(
+  models: Array<{ model: string; isDefault?: boolean }>,
+  resumedModel: string | null | undefined,
+): string | null {
+  return resumedModel ?? models.find((model) => model.isDefault)?.model ?? null
 }
 
 export function mapCodexDiagnosticsToSections(params: {
@@ -350,12 +585,19 @@ export function mapCodexDiagnosticsToSections(params: {
   skills: CodexSkillsListResponse['data']
   apps: Array<{ name: string }>
 }): SessionDiagnosticSection[] {
+  // Thread.status is a discriminated union ({type:'idle'|'active'|...});
+  // interpolating it directly used to print "[object Object]".
+  const status = params.thread.status
+  const statusLabel = status.type === 'active' && status.activeFlags.length > 0
+    ? `active(${status.activeFlags.join(',')})`
+    : status.type
+
   const sections: SessionDiagnosticSection[] = [
     {
       id: 'runtime',
       title: 'RUNTIME',
       items: [
-        `status · ${params.thread.status}`,
+        `status · ${statusLabel}`,
         `cwd · ${params.thread.cwd}`,
         `model · ${params.currentModel ?? 'unknown'}`,
         `provider · ${params.thread.modelProvider}`,
