@@ -1312,6 +1312,29 @@ function smartNewLineInsertion(content: string, offset: number, path: string): {
   return { text, cursorOffset: offset + 1 + innerIndent.length }
 }
 
+
+// The line-number gutter asks its target for the source line of each visible
+// row. A textarea offers no windowed answer — only `lineInfo`, every line of the
+// buffer decoded from native memory — so OpenTUI's fallback read the whole file
+// on every gutter paint, i.e. every keystroke: 14% of all samples typing at
+// 6,000 lines. Without wrapping a row is its logical line, so the window is just
+// a range; with word wrap on, the full read still answers.
+function installWindowedLineSources(textarea: TextareaRenderable): void {
+  const target = textarea as unknown as {
+    getLineSources?: (startLine: number, lineCount: number) => number[]
+    lineInfo: { lineSources: number[] }
+    lineCount: number
+    wrapMode: string
+  }
+  target.getLineSources = (startLine, lineCount) => {
+    if (target.wrapMode !== 'none') return target.lineInfo.lineSources.slice(startLine, startLine + lineCount)
+    const end = Math.min(target.lineCount, startLine + lineCount)
+    const sources: number[] = []
+    for (let line = Math.max(0, startLine); line < end; line += 1) sources.push(line)
+    return sources
+  }
+}
+
 export function EditorPopover({
   cwd,
   initialPath,
@@ -1488,9 +1511,12 @@ export function EditorPopover({
   // from the loaded content so it's correct from the first paint.
   const gutterMinWidth = useMemo(() => {
     if (!activeTab?.content) return 4
-    // Reuse the editor's cached newline index instead of allocating a full
-    // string array on every editor render and keystroke.
-    const lineCount = lineStartsFor(activeTab.content).length
+    // The buffer knows its line count; scanning the content for it was 8% of
+    // the samples while typing at 6,000 lines, every keystroke, to size a
+    // gutter by its digit count. The scan stays for the first render, before
+    // the buffer is mounted.
+    const editor = editorRef.current
+    const lineCount = editor && !editor.isDestroyed ? editor.lineCount : lineStartsFor(activeTab.content).length
     return Math.max(4, String(lineCount).length + 2)
   }, [activeTab])
   const dirty = activeTab ? activeTab.content !== activeTab.savedContent : false
@@ -2654,10 +2680,11 @@ export function EditorPopover({
     const editor = editorRef.current
     if (!activeTab || !editor || focusPane !== 'editor') return
     const request = ++signatureRequestRef.current
-    // One read, reused. `plainText` materialises the whole buffer on every
+    // No read at all: `plainText` materialises the whole buffer on every
     // access — 1.1ms at 20,000 lines, 6.3ms just after an edit — and this
     // effect runs on every keystroke to inspect a single character.
-    const content = editor.plainText
+    // activeTab.content is the buffer's content (updateActiveContent).
+    const content = activeTab.content
     const offset = editorDocumentOffset(editor, undefined, content)
     const trigger = content[offset - 1]
     if (trigger !== '(' && trigger !== ',') return
@@ -3693,7 +3720,9 @@ export function EditorPopover({
   const syncEditorScrollbar = useCallback(() => {
     const editor = editorRef.current
     const scrollbar = editorScrollbarRef.current
-    if (!editor || !scrollbar) return
+    // A sync can be scheduled by the last frame of a buffer that has since been
+    // destroyed (a tab closed or replaced); its view throws on every read.
+    if (!editor || !scrollbar || editor.isDestroyed || editor.editorView.isDestroyed) return
     syncingEditorScrollbarRef.current = true
     try {
       scrollbar.scrollSize = editor.editorView.getTotalVirtualLineCount()
@@ -4647,7 +4676,10 @@ export function EditorPopover({
 
   const setEditorRef = useCallback((node: TextareaRenderable | null) => {
     editorRef.current = node
-    if (node) cursorRef.current = { line: node.logicalCursor.row, visualColumn: node.logicalCursor.col }
+    if (node) {
+      cursorRef.current = { line: node.logicalCursor.row, visualColumn: node.logicalCursor.col }
+      installWindowedLineSources(node)
+    }
   }, [])
 
   // The size limit above is the buffer's documented capacity, but a limit is a
@@ -4784,11 +4816,15 @@ export function EditorPopover({
     zenMode ? 'Zen (Esc)' : null,
     syntaxSuspended ? 'Syntax off (long lines)' : null,
   ].filter(Boolean).join(' ')
+  // The status bar's indent label follows the file as loaded or last saved:
+  // re-detecting it from the live buffer cost 3% of every keystroke's samples
+  // for a label typing almost never changes.
+  const indentSource = activeTab?.savedContent ?? activeTab?.content
   const indentSummary = useMemo(() => {
-    if (!activeTab) return 'Spaces: 2'
-    const unit = detectEditorIndentUnit(activeTab.content, activeTab.path)
+    if (!activeTab || indentSource == null) return 'Spaces: 2'
+    const unit = detectEditorIndentUnit(indentSource, activeTab.path)
     return unit === '\t' ? 'Tab' : `Spaces: ${unit.length}`
-  }, [activeTab])
+  }, [activeTab?.path, indentSource])
   // The caret reports display cells; the status bar counts characters, as the
   // selection count beside it does, so a tab or a CJK character is one column.
   const cursorCharacter = useMemo(() => {

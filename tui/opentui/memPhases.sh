@@ -32,7 +32,9 @@ PHASES=${PHASES:-"browse-x8:j:8:0.5|reader-tab:$(printf '\t'):1:1.5|scroll:$(pri
 ) | script -q /dev/null bun run "$REPO/tui/opentui/main.tsx" >/dev/null 2>&1 &
 DRIVER=$!
 sleep 6
-PID=$(/bin/ps -Ao pid=,command= | grep "tui/opentui/main.tsx" | grep -v grep | grep -v "script -q" | head -1 | awk '{print $1}')
+# The newest match: an older TUI the user has open matches the same pattern, and
+# measuring it instead reads as a regression (or a win) that never happened.
+PID=$(pgrep -n -f "^bun run $REPO/tui/opentui/main.tsx")
 [ -z "$PID" ] && { echo "TUI not found"; kill $DRIVER 2>/dev/null; exit 1; }
 footprint() {
   /usr/bin/vmmap -summary "$PID" 2>/dev/null \

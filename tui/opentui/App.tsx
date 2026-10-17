@@ -850,6 +850,13 @@ const READER_WINDOW_SLIDE = clamp(
 // remain ahead of the scroll direction. At the old 8 rows a fast wheel reached
 // the end of the mounted content and stopped dead until the slide landed.
 const READER_SLIDE_AHEAD_VIEWPORTS = 3
+// Cards a different session's first commit mounts before growing; enough to
+// fill a tall terminal's viewport with collapsed cards. See ReaderTranscriptWindow.
+const READER_OPEN_WINDOW = Math.min(48, READER_CARD_WINDOW)
+// Cards at the tail expanded in the first commit after leaving the collapsed
+// preview: more than a tall viewport shows. See ReaderTranscriptWindow.
+const READER_EXPAND_FIRST = 16
+const READER_EXPAND_STEP = 40
 // A window still growing toward its target mounts one step per this interval,
 // so the steps interleave with painted frames instead of stacking up.
 const READER_GROW_INTERVAL_MS = 8
@@ -944,6 +951,7 @@ const NOOP_SELECT_AGENT_TOOL = (_groupKey: string, _toolKey: string) => {}
 const COMPOSER_AFFORDANCES_TTL_MS = 5 * 60_000
 const COMPOSER_AFFORDANCES_CACHE_MAX = 64
 const COMPOSER_GIT_SUMMARY_POLL_MS = 5_000
+const COMPOSER_GIT_SUMMARY_IDLE_POLL_MS = 30_000
 // Safety net: max time to wait for a completed turn's persisted rows before
 // force-revealing the polled transcript, so the "Syncing…" state can't hang
 // forever on a lost/delayed write. Generous vs the 2s detail poll.
@@ -1818,7 +1826,7 @@ function inlineSpanElement(
 // Wrapping context (Stream view, wrapMode="word"): emit sibling <span>s so
 // **bold**/`code` render like the native CLIs while the parent <text> keeps
 // flowing/wrapping the assembled StyledText — width stays the caller's job.
-function renderInlineMarkdownSpans(
+export function renderInlineMarkdownSpans(
   text: string,
   theme: TuiThemePalette,
   baseFg: string,
@@ -3498,7 +3506,7 @@ function applySelectionColorsToTree(root: BaseRenderable | null, colors: Selecti
   }
 }
 
-function buildSyntaxStyle(theme: TuiThemePalette, owner: NativeResourceOwner): SyntaxStyle {
+export function buildSyntaxStyle(theme: TuiThemePalette, owner: NativeResourceOwner): SyntaxStyle {
   const keywordColor = chooseSyntaxColor(theme, theme.violet, [theme.amber, theme.pink, theme.cyan])
   const functionColor = chooseSyntaxColor(theme, theme.cyan, [theme.green, theme.amber, theme.violet])
   const memberColor = chooseSyntaxColor(theme, theme.cyan, [theme.green, theme.amber, theme.violet])
@@ -4703,15 +4711,18 @@ function StreamDiffPreview({
         </text>
       ) : null}
       <box flexDirection="row" height={preview.rows.length}>
+        {/* Each column is one text, a span per row — see groupLinesByBackground. */}
         <box width={gutterWidth} flexDirection="column">
-          {preview.rows.map((row) => {
-            const lineNumber = row.newLine ?? row.oldLine
-            return (
-              <text fg={diffRowColor(row, theme)} wrapMode="none" selectable {...selectionColors} key={`${row.key}:gutter`}>
-                {`${formatDiffLineNumber(lineNumber, preview.gutterWidth)} ${row.indicator ?? diffRowIndicator(row)} `}
-              </text>
-            )
-          })}
+          <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
+            {preview.rows.map((row, index) => (
+              <React.Fragment key={`${row.key}:gutter`}>
+                {index > 0 ? '\n' : null}
+                <span fg={diffRowColor(row, theme)}>
+                  {`${formatDiffLineNumber(row.newLine ?? row.oldLine, preview.gutterWidth)} ${row.indicator ?? diffRowIndicator(row)} `}
+                </span>
+              </React.Fragment>
+            ))}
+          </text>
         </box>
         {syntaxStyle ? (
           <code
@@ -4726,11 +4737,14 @@ function StreamDiffPreview({
           />
         ) : (
           <box width={codeWidth} flexDirection="column">
-            {preview.rows.map((row) => (
-              <text fg={diffRowColor(row, theme)} wrapMode="none" selectable {...selectionColors} key={`${row.key}:plain`}>
-                {fitText(row.text, codeWidth)}
-              </text>
-            ))}
+            <text fg={theme.text} wrapMode="none" selectable {...selectionColors}>
+              {preview.rows.map((row, index) => (
+                <React.Fragment key={`${row.key}:plain`}>
+                  {index > 0 ? '\n' : null}
+                  <span fg={diffRowColor(row, theme)}>{fitText(row.text, codeWidth)}</span>
+                </React.Fragment>
+              ))}
+            </text>
           </box>
         )}
       </box>
@@ -5937,6 +5951,23 @@ function SelectableMarkdown({
 // when it isn't, or null so the caller keeps its own bodyLines rendering.
 // Both gated on the same `shouldRenderSyntaxMarkdown`/`markdownFallbackLines`
 // the reader computes, so all views agree on when a card is "markdown".
+// A body that is one paragraph of plain text, **bold** and `code` renders the
+// same through the inline span renderer as through OpenTUI's <markdown> —
+// characters, colours and attributes compared — and costs one text instead of
+// a markdown renderable, a code renderable and a tree-sitter highlight round
+// trip. Most stream cards are exactly that (a prompt, a short reply). Anything
+// the two render differently stays on <markdown>: blocks and blank lines,
+// _ and single * emphasis, ~~, links and anything linkable, entities, HTML.
+const MARKDOWN_BLOCK_START = /^(?: {4}|\t| {0,3}(?:#{1,6}(?:\s|$)|[-*+](?:\s|$)|\d{1,9}[.)](?:\s|$)|>|```|~~~|\||={2,}\s*$|-{2,}\s*$))/m
+const MARKDOWN_NON_PLAIN = /[_~<>\\[\]&|]|``|(?<!\*)\*(?!\*)|\n\s*\n/
+export function isPlainMarkdownParagraph(content: string): boolean {
+  if (content.length > 4000) return false
+  if (MARKDOWN_NON_PLAIN.test(content) || MARKDOWN_BLOCK_START.test(content)) return false
+  if (/\*\*\*/.test(content) || (content.match(/\*\*/g)?.length ?? 0) % 2 !== 0) return false
+  if ((content.match(/`/g)?.length ?? 0) % 2 !== 0) return false
+  return !hasTuiLinkTarget(content)
+}
+
 function renderCardMarkdownBody(opts: {
   markdownContent: string | null | undefined
   markdownFallbackLines: string[] | null
@@ -5953,6 +5984,13 @@ function renderCardMarkdownBody(opts: {
     markdownContent, markdownFallbackLines, shouldRenderSyntaxMarkdown,
     syntaxStyle, theme, fg, width, selectionColors, keyPrefix, linkCwd,
   } = opts
+  if (shouldRenderSyntaxMarkdown && markdownContent && syntaxStyle && isPlainMarkdownParagraph(markdownContent)) {
+    return (
+      <text fg={fg} width={width} wrapMode="word" selectable {...selectionColors}>
+        {renderInlineMarkdownSpans(markdownContent, theme, fg, `${keyPrefix}:plain-md`, linkCwd)}
+      </text>
+    )
+  }
   if (shouldRenderSyntaxMarkdown && markdownContent && syntaxStyle) {
     return (
       <SelectableMarkdown
@@ -5968,17 +6006,38 @@ function renderCardMarkdownBody(opts: {
   if (markdownFallbackLines) {
     return (
       <box flexDirection="column">
-        {markdownFallbackLines.map((line, index) => (
-          <text key={`${keyPrefix}:mdf:${index}`} fg={fg} wrapMode="none" selectable {...selectionColors}>
-            {hasInlineSpans(line)
-              ? renderInlineMarkdownClipped(line, theme, fg, width, `${keyPrefix}:mdf:${index}`, linkCwd)
-              : fitText(line, width)}
-          </text>
-        ))}
+        {/* One text for every line — see groupLinesByBackground. */}
+        <text fg={fg} wrapMode="none" selectable {...selectionColors}>
+          {markdownFallbackLines.map((line, index) => (
+            <React.Fragment key={index}>
+              {index > 0 ? '\n' : null}
+              {hasInlineSpans(line)
+                ? renderInlineMarkdownClipped(line, theme, fg, width, `${keyPrefix}:mdf:${index}`, linkCwd)
+                : fitText(line, width)}
+            </React.Fragment>
+          ))}
+        </text>
       </box>
     )
   }
   return null
+}
+
+// Consecutive body lines that share a background are one <text>, one line per
+// row. A line was a box and a text of its own, so a six-line card mounted twelve
+// renderables for its body alone, and mounting is what a reader window slide or
+// a tab switch spends its time on (createInstance was a quarter of the samples
+// in split-reader scrolling). Spans carry each line's colour, so the rows render
+// exactly as before; a line with its own background still gets its own box.
+function groupLinesByBackground<T>(lines: readonly T[], backgroundOf: (line: T) => string): Array<{ start: number; background: string; lines: T[] }> {
+  const groups: Array<{ start: number; background: string; lines: T[] }> = []
+  for (let index = 0; index < lines.length; index += 1) {
+    const background = backgroundOf(lines[index])
+    const last = groups[groups.length - 1]
+    if (last && last.background === background) last.lines.push(lines[index])
+    else groups.push({ start: index, background, lines: [lines[index]] })
+  }
+  return groups
 }
 
 function TranscriptCardInner({
@@ -7004,7 +7063,14 @@ function TranscriptCardInner({
         }}
       >
         <box flexDirection="column" paddingLeft={densityState.bodyIndent} paddingBottom={densityState.bodyPad}>
-          {shouldRenderSyntaxMarkdown && card.markdownContent && syntaxStyle ? (
+          {shouldRenderSyntaxMarkdown && card.markdownContent && syntaxStyle && isPlainMarkdownParagraph(card.markdownContent) ? (
+            <box paddingX={1}>
+              {/* One plain paragraph: drawn identically without <markdown> — see isPlainMarkdownParagraph. */}
+              <text fg={bubbleTextColor} width={markdownWidth} wrapMode="word" selectable {...selectionColors}>
+                {renderInlineMarkdownSpans(card.markdownContent, theme, bubbleTextColor, `${card.key}:plain-md`, linkCwd)}
+              </text>
+            </box>
+          ) : shouldRenderSyntaxMarkdown && card.markdownContent && syntaxStyle ? (
             <box paddingX={1}>
               <SelectableMarkdown
                 content={card.markdownContent}
@@ -7017,28 +7083,38 @@ function TranscriptCardInner({
             </box>
           ) : markdownFallbackLines ? (
             <box paddingX={1}>
-              {markdownFallbackLines.map((line, lineIndex) => (
-                <text key={`${card.key}:markdown-fallback:${lineIndex}`} fg={bubbleTextColor} selectable {...selectionColors}>
-                  {hasInlineSpans(line)
-                    ? renderInlineMarkdownClipped(line, theme, bubbleTextColor, markdownWidth, `${card.key}:md-fallback:${lineIndex}`, linkCwd)
-                    : fitText(line, markdownWidth)}
-                </text>
-              ))}
+              <text fg={bubbleTextColor} selectable {...selectionColors}>
+                {markdownFallbackLines.map((line, lineIndex) => (
+                  <React.Fragment key={lineIndex}>
+                    {lineIndex > 0 ? '\n' : null}
+                    {hasInlineSpans(line)
+                      ? renderInlineMarkdownClipped(line, theme, bubbleTextColor, markdownWidth, `${card.key}:md-fallback:${lineIndex}`, linkCwd)
+                      : fitText(line, markdownWidth)}
+                  </React.Fragment>
+                ))}
+              </text>
             </box>
           ) : (
             <>
-              {bodyLines.map((line, lineIndex) => (
-                <box
-                  key={`${card.key}:line:${lineIndex}`}
-                  paddingX={1}
-                  backgroundColor={transcriptBackground(line, theme) ?? cardBg}
-                >
-                  <text fg={imessageUserBubble ? bubbleTextColor : transcriptColor(line, theme)} wrapMode="none" selectable {...selectionColors}>
-                    {line.tone === 'tool' && !imessageUserBubble
-                      ? renderInlineTextSegments(transcriptToolLineSegments(line.text, theme), bodyInnerWidth, theme.dim)
-                      : hasInlineSpans(line.text)
-                        ? renderInlineMarkdownClipped(line.text, theme, imessageUserBubble ? bubbleTextColor : transcriptColor(line, theme), bodyInnerWidth, `${card.key}:body-md:${lineIndex}`, linkCwd)
-                        : fitText(line.text, bodyInnerWidth)}
+              {groupLinesByBackground(bodyLines, (line) => transcriptBackground(line, theme) ?? cardBg).map((group) => (
+                <box key={`${card.key}:line:${group.start}`} paddingX={1} backgroundColor={group.background}>
+                  <text fg={bubbleTextColor} wrapMode="none" selectable {...selectionColors}>
+                    {group.lines.map((line, offset) => {
+                      const lineIndex = group.start + offset
+                      const lineColor = imessageUserBubble ? bubbleTextColor : transcriptColor(line, theme)
+                      return (
+                        <React.Fragment key={lineIndex}>
+                          {offset > 0 ? '\n' : null}
+                          <span fg={lineColor}>
+                            {line.tone === 'tool' && !imessageUserBubble
+                              ? renderInlineTextSegments(transcriptToolLineSegments(line.text, theme), bodyInnerWidth, theme.dim)
+                              : hasInlineSpans(line.text)
+                                ? renderInlineMarkdownClipped(line.text, theme, lineColor, bodyInnerWidth, `${card.key}:body-md:${lineIndex}`, linkCwd)
+                                : fitText(line.text, bodyInnerWidth)}
+                          </span>
+                        </React.Fragment>
+                      )
+                    })}
                   </text>
                 </box>
               ))}
@@ -7114,24 +7190,25 @@ function TranscriptCardInner({
 
           {card.category === 'diff' && diffPlain ? (
             <box paddingX={1} marginTop={1}>
-              {rawDiffLines.map((line, index) => {
-                const fg = line.startsWith('+') && !line.startsWith('+++')
-                  ? theme.green
-                  : line.startsWith('-') && !line.startsWith('---')
-                    ? theme.red
-                    : line.startsWith('@@')
-                      ? theme.cyan
-                      : line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++')
-                        ? theme.muted
-                        : theme.text
-                return (
-                  <box key={`${card.key}:raw:${index}`}>
-                    <text fg={fg} wrapMode="none" selectable {...selectionColors}>
-                      {fitText(line, bodyInnerWidth)}
-                    </text>
-                  </box>
-                )
-              })}
+              <text fg={theme.text} wrapMode="none" selectable {...selectionColors}>
+                {rawDiffLines.map((line, index) => {
+                  const fg = line.startsWith('+') && !line.startsWith('+++')
+                    ? theme.green
+                    : line.startsWith('-') && !line.startsWith('---')
+                      ? theme.red
+                      : line.startsWith('@@')
+                        ? theme.cyan
+                        : line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++')
+                          ? theme.muted
+                          : theme.text
+                  return (
+                    <React.Fragment key={`${card.key}:raw:${index}`}>
+                      {index > 0 ? '\n' : null}
+                      <span fg={fg}>{fitText(line, bodyInnerWidth)}</span>
+                    </React.Fragment>
+                  )
+                })}
+              </text>
               {diffFooterSegments ? (
                 <box marginTop={1}>
                   <text fg={theme.cyan} selectable {...selectionColors}>
@@ -7184,21 +7261,15 @@ function TranscriptCardInner({
                         }}
                       >
                         <text fg={diffGutterBar(row, theme)} wrapMode="none">▎</text>
-                        {diffShowLineNumbers ? (
-                          <>
-                            <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
-                              {fitText(formatDiffLineNumber(row.oldLine, diffGutterWidth), diffGutterWidth)}
-                            </text>
-                            <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}> </text>
-                            <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
-                              {fitText(formatDiffLineNumber(row.newLine, diffGutterWidth), diffGutterWidth)}
-                            </text>
-                          </>
-                        ) : null}
+                        {/* Line numbers, indicator and code are one text (spans per part): a
+                            row was seven renderables, and a diff card mounts dozens of rows. */}
                         <text fg={diffRowColor(row, theme)} wrapMode="none" selectable {...selectionColors}>
+                          {diffShowLineNumbers ? (
+                            <span fg={theme.dim}>
+                              {`${fitText(formatDiffLineNumber(row.oldLine, diffGutterWidth), diffGutterWidth)} ${fitText(formatDiffLineNumber(row.newLine, diffGutterWidth), diffGutterWidth)}`}
+                            </span>
+                          ) : null}
                           {fitText(`${isSelectedDiffRow ? '▶' : ' '} ${row.indicator ?? diffRowIndicator(row)} `, 3)}
-                        </text>
-                        <text fg={diffRowColor(row, theme)} wrapMode="none" selectable {...selectionColors}>
                           {fitText(row.text, Math.max(diffTextWidth, 12))}
                         </text>
                         {isHovered ? (
@@ -8250,11 +8321,19 @@ function ReaderTranscriptWindow({ inputs }: { inputs: ReaderWindowInputs }) {
   // render repeated without one derives the same window.
   const committedWindowRef = useRef<{ sessionKey: string | null; window: ReaderWindow } | null>(null)
   const committedWindow = committedWindowRef.current
+  const windowFocus = followTail ? totalTranscriptCards - 1 : cursorIndex >= 0 ? cursorIndex : targetWindow.start + (READER_CARD_WINDOW >> 1)
+  // Another session's cards (a tab switch, an open) are mounted from a seed of
+  // READER_OPEN_WINDOW around the focus and grown to the full window by the
+  // steps below. Taking all READER_CARD_WINDOW in one commit made that commit
+  // the switch's cost: tab-switch rendered 34.6ms with 240 cards, 18.1ms with
+  // 60, so the first paint now waits on the cards it shows rather than on the
+  // whole window; the rest arrives a step at a time, anchored like a slide.
+  const sameSessionWindow = committedWindow && committedWindow.sessionKey === sessionKey ? committedWindow.window : null
   const { start: transcriptRenderStart, end: transcriptRenderEnd } = stepReaderWindow(
-    committedWindow && committedWindow.sessionKey === sessionKey ? committedWindow.window : null,
+    sameSessionWindow ?? { start: windowFocus, end: windowFocus },
     targetWindow,
-    followTail ? totalTranscriptCards - 1 : cursorIndex >= 0 ? cursorIndex : targetWindow.start + (READER_CARD_WINDOW >> 1),
-    READER_WINDOW_SLIDE,
+    windowFocus,
+    sameSessionWindow ? READER_WINDOW_SLIDE : READER_OPEN_WINDOW,
   )
   const windowSettled = transcriptRenderStart === targetWindow.start && transcriptRenderEnd === targetWindow.end
   // Growing toward the target: one step per frame interval, and never while a
@@ -8322,13 +8401,40 @@ function ReaderTranscriptWindow({ inputs }: { inputs: ReaderWindowInputs }) {
     }
     return keys
   }, [isScrollbackView, scrollbackExpanded, scrollbackToggledKeys, resolvedExpandedKeys, visibleTranscriptCards])
-  const expandedKeysForRender = transcriptView === 'full'
+  const fullExpandedKeys = transcriptView === 'full'
     ? allVisibleCardKeys
     : readerFocused
       || (tabsEnabled && !isPreviewMode)
       || transcriptView === 'agents'
       ? scrollbackExpandedKeys ?? resolvedExpandedKeys
       : EMPTY_EXPANDED_KEYS
+  // Leaving the collapsed preview (the reader's first focus) expands every card
+  // with a default expansion at once: ~130 bodies rebuilt in one ~40ms commit.
+  // At the tail only the last cards are on screen, so they expand first and the
+  // rest READER_EXPAND_STEP at a time over the following frames; sticky scroll
+  // holds the bottom while content above grows.
+  // Anywhere else the viewport is anchored to nothing, so it all lands at once.
+  const previewCollapsedRef = useRef(true)
+  const [expansionStage, setExpansionStage] = useState<{ keys: ReadonlySet<string>; cards: number } | null>(null)
+  const stageExpansion = fullExpandedKeys !== EMPTY_EXPANDED_KEYS && followTail
+    && renderedTranscriptCards.length > READER_EXPAND_FIRST
+    && (expansionStage?.keys === fullExpandedKeys
+      ? expansionStage.cards < renderedTranscriptCards.length
+      : previewCollapsedRef.current)
+  const stagedCards = expansionStage?.keys === fullExpandedKeys ? expansionStage.cards : READER_EXPAND_FIRST
+  const stagedExpansion = useMemo(() => {
+    if (!stageExpansion) return null
+    const keys = new Set<string>()
+    for (const card of renderedTranscriptCards.slice(-stagedCards)) if (fullExpandedKeys.has(card.key)) keys.add(card.key)
+    return keys
+  }, [stageExpansion, stagedCards, fullExpandedKeys, renderedTranscriptCards])
+  useEffect(() => {
+    previewCollapsedRef.current = fullExpandedKeys === EMPTY_EXPANDED_KEYS
+    if (!stageExpansion) return undefined
+    const timer = setTimeout(() => setExpansionStage({ keys: fullExpandedKeys, cards: stagedCards + READER_EXPAND_STEP }), READER_GROW_INTERVAL_MS)
+    return () => clearTimeout(timer)
+  }, [stageExpansion, stagedCards, fullExpandedKeys])
+  const expandedKeysForRender = stagedExpansion ?? fullExpandedKeys
   // A tool group expands to its tools, each folded by its own key — which
   // nothing in SCROLLBACK can press. An expanded group shows its tools' output.
   const scrollbackExpandedToolKeys = useMemo(() => {
@@ -11166,11 +11272,21 @@ export default function OpenTuiApp() {
     // every switch made the branch flicker off and back on when moving between
     // two sessions in the same repository.
     setComposerGitSummary(peekGitSummaryCached(composerWorkingDirectory))
+    // Each poll is three `git` processes, one of them a full `status -u`; at a
+    // fixed 5s an idle TUI spawned them all day, and they were a fifth of its
+    // idle samples. An unchanged answer doubles the wait (to
+    // COMPOSER_GIT_SUMMARY_IDLE_POLL_MS); any change — a turn editing files —
+    // snaps it back, so the indicator is current exactly when it is moving.
+    let delay = COMPOSER_GIT_SUMMARY_POLL_MS
+    let lastSignature: string | null = null
     const refresh = async (force: boolean) => {
       const summary = await readGitSummaryCached(composerWorkingDirectory, { force })
       if (cancelled) return
       setComposerGitSummary(summary)
-      timer = setTimeout(() => { void refresh(true) }, COMPOSER_GIT_SUMMARY_POLL_MS)
+      const signature = JSON.stringify(summary)
+      delay = signature === lastSignature ? Math.min(delay * 2, COMPOSER_GIT_SUMMARY_IDLE_POLL_MS) : COMPOSER_GIT_SUMMARY_POLL_MS
+      lastSignature = signature
+      timer = setTimeout(() => { void refresh(true) }, delay)
     }
     void refresh(false)
     return () => {

@@ -23,6 +23,10 @@
 //   INPUT_REAL_SESSIONS=1 bun tui/opentui/inputPerf.tsx # field diagnostic
 //   INPUT_MEMORY=1 bun tui/opentui/inputPerf.tsx # forced-GC heap/RSS outside timing
 //   INPUT_JSON=1 bun tui/opentui/inputPerf.tsx   # one JSON line per scenario too
+//   INPUT_COUNT_NODES=1 INPUT_CHILD=1 INPUT_SCENARIO=card-page bun tui/opentui/inputPerf.tsx
+//       renderables per mounted card by type; INPUT_DUMP_CARD=3,4 also prints those cards' trees
+//   INPUT_FOCUS_TRACE=1 INPUT_CHILD=1 INPUT_SCENARIO=focus-toggle bun tui/opentui/inputPerf.tsx
+//       distance from the bottom per frame through the reader's staged first-focus expansion
 //   INPUT_CPU_PROFILE=1 INPUT_SCENARIO=stream-wheel bun tui/opentui/inputPerf.tsx
 //       runs that one scenario under `bun --cpu-prof --cpu-prof-md` and prints
 //       where the .cpuprofile and .md were written (INPUT_CPU_PROFILE_DIR to
@@ -467,7 +471,7 @@ const recordProfileFrame: ProfilerOnRenderCallback = (
   profiled.renderTotal += actualDuration
   profiled.commitTotal += commitMs
   if (process.env.INPUT_DEBUG_PROFILE === '1' && durationMs > TUI_FRAME_BUDGET_MS) {
-    console.error(`OVER commit=${durationMs.toFixed(2)}ms render=${actualDuration.toFixed(2)}ms post-mutation=${commitMs.toFixed(2)}ms`)
+    console.error(`OVER commit=${durationMs.toFixed(2)}ms render=${actualDuration.toFixed(2)}ms post-mutation=${commitMs.toFixed(2)}ms phase=${_phase} commit#=${profiled.commits}`)
   }
   profiled.commits += 1
   if (durationMs > TUI_FRAME_BUDGET_MS) profiled.over += 1
@@ -488,10 +492,12 @@ const setup = await testRender(
 // committed or a scrollbox merely moved, so wrapping it is the only clock that
 // sees native scrolling. A call that returns without advancing the frame id
 // was the re-entrancy guard, not a frame.
+// OpenTUI 0.6 paints natively and has no JS tree pass to wrap (`root.render` is
+// gone); the renderer reports the scene's layout + paint time itself.
 type RendererInternals = {
   loop(): Promise<void>
   frameId: number
-  root: { render(buffer: unknown, deltaTime: number): void }
+  lastSceneTimeMs: number
 }
 const rendererInternals = setup.renderer as unknown as RendererInternals
 const frameTimes: number[] = []
@@ -499,18 +505,12 @@ let treeWorst = 0
 let nativeWorst = 0
 let treeMsThisFrame = 0
 const originalLoop = rendererInternals.loop.bind(setup.renderer)
-const originalRootRender = rendererInternals.root.render.bind(rendererInternals.root)
-rendererInternals.root.render = (buffer, deltaTime) => {
-  const startedAt = performance.now()
-  originalRootRender(buffer, deltaTime)
-  treeMsThisFrame = performance.now() - startedAt
-}
 rendererInternals.loop = async () => {
   const frameBefore = rendererInternals.frameId
-  treeMsThisFrame = 0
   const startedAt = performance.now()
   await originalLoop()
   const durationMs = performance.now() - startedAt
+  treeMsThisFrame = rendererInternals.frameId === frameBefore ? 0 : rendererInternals.lastSceneTimeMs
   if (!profileWindowOpen || rendererInternals.frameId === frameBefore) return
   frameTimes.push(durationMs)
   treeWorst = Math.max(treeWorst, treeMsThisFrame)
@@ -533,9 +533,16 @@ type TranscriptScrollbox = {
   viewport: { height: number }
   content: ProbeNode
 }
-const transcript = () => (
-  setup.renderer.root.findDescendantById('transcript-scroll') as unknown as TranscriptScrollbox | undefined
-)
+// Cached: a full-tree findDescendantById per press was ~10% of a sustained
+// wheel profile, all of it the harness's own, competing with the app on the
+// same thread. Re-found when the scrollbox is replaced.
+let cachedTranscript: (TranscriptScrollbox & { isDestroyed?: boolean }) | undefined
+const transcript = () => {
+  if (!cachedTranscript || cachedTranscript.isDestroyed) {
+    cachedTranscript = setup.renderer.root.findDescendantById('transcript-scroll') as unknown as typeof cachedTranscript
+  }
+  return cachedTranscript
+}
 // A tool row's `card:` id sits one level down, inside a centering wrapper.
 const cardKeyOf = (node: ProbeNode): string | null => {
   if (node.id.startsWith('card:')) return node.id.slice('card:'.length)
@@ -621,6 +628,32 @@ let mounted = 0
 const startedAt = monotonicNow()
 const until = startedAt + seconds * 1000
 let i = 0
+if (process.env.INPUT_COUNT_NODES === '1') {
+  // What a mounted card is made of: renderables per card, by constructor.
+  const byType = new Map<string, number>()
+  let cards = 0
+  let total = 0
+  const walk = (node: ProbeNode) => { total += 1; const t = (node as unknown as { constructor: { name: string } }).constructor.name; byType.set(t, (byType.get(t) ?? 0) + 1); for (const c of node.getChildren()) walk(c) }
+  for (const child of transcript()?.content.getChildren() ?? []) { if (cardKeyOf(child)) { cards += 1; walk(child) } }
+  if (process.env.INPUT_DUMP_CARD) {
+    const dump = (node: ProbeNode, depth: number): string => { const n = node as unknown as { constructor: { name: string }; id: string; width: number; height: number; flexDirection?: string }; return `${'  '.repeat(depth)}${n.constructor.name.replace(/Renderable2?$/, '')} ${n.id} ${n.width}x${n.height} ${JSON.stringify(String((node as any).plainText ?? '').slice(0, 50))}\n` + node.getChildren().map((c) => dump(c, depth + 1)).join('') }
+    const kids = (transcript()?.content.getChildren() ?? []).filter((c) => cardKeyOf(c))
+    for (const index of process.env.INPUT_DUMP_CARD.split(',').map(Number)) console.log(dump(kids[index], 0))
+  }
+  console.log(`nodes: ${cards} cards, ${total} renderables (${(total / Math.max(cards, 1)).toFixed(1)}/card)`, JSON.stringify([...byType].sort((a, b) => b[1] - a[1])))
+}
+if (process.env.INPUT_FOCUS_TRACE === '1') {
+  // The reader's first focus expands cards in stages at the tail; the viewport
+  // must stay on the bottom through every stage.
+  await act(async () => { await send({ key: 'tab' } as Press) })
+  const samples: string[] = []
+  for (let i = 0; i < 40; i++) {
+    await act(async () => { await setup.flush(); await new Promise((resolve) => setTimeout(resolve, 10)) })
+    const sb = transcript()
+    if (sb) samples.push(`${sb.scrollHeight - sb.viewport.height - sb.scrollTop}`)
+  }
+  console.log('FOCUS TRACE distance-from-bottom per frame:', samples.join(','))
+}
 profileWindowOpen = true
 while (monotonicNow() < until) {
   const presses = scenario.thenPress && monotonicNow() - startedAt > seconds * 500 ? scenario.thenPress : scenario.press

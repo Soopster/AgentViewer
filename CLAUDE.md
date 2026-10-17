@@ -559,16 +559,17 @@ a node rather than hiding it — hide with `false`. Nothing here sets `visible`.
   whichever sessions sit at those positions, and a 12-card session and a 263-card one are not
   comparable. The `cards` column reports what the reader was actually holding — check it before
   believing any before/after, and interleave A/B runs rather than batching them.
-- **Switching to an already-cached session costs ~40-60ms of React render**, and that is the floor
-  on tab switching (`NAV_PATTERN=tabs`) and on cached sidebar revisits alike. Three plausible causes
-  are measured and ruled out, so do not re-try them: the card pipeline (transcriptCards →
-  stableCardData → cardDisplayData) profiles at ~3.5ms across a whole switching run
-  (`AGENT_VIEWER_TUI_CARD_PROFILE=1`); the mounted-window size is not it either — forcing a 5-card
-  window in place of 240 changed nothing; and progressively growing the window after the first
-  commit bought nothing for the same reason. What remains is the wider App render, which re-runs in
-  full on any state change because the root is one very large component. The harnesses here cannot
-  resolve a 20-40ms difference against their own run-to-run variance, and bisecting with them
-  produces contradictory answers — so use a CPU profile, below.
+- **A switch to another session mounts a seed, not the whole window** (`READER_OPEN_WINDOW`, 48
+  cards around the focus, grown to `READER_CARD_WINDOW` by the ordinary 8-card steps, anchored like
+  a slide). An earlier note here said window size did not matter for switching and that growing
+  "bought nothing"; once the card pipeline and root were cheap, the cost *was* the mount —
+  `AGENT_VIEWER_READER_WINDOW` 240/120/60 measured 34.6/25.8/18.1ms of render per switch, with
+  `createInstance` the largest share of samples. With the seed: tab-switch worst render 34.6 → 12.9ms
+  and over-budget commits 67 → 8; `NAV_PATTERN=tabs` select-to-paint p50 32-35 → 13-16ms
+  (interleaved A/B). More, smaller frames follow while the window grows. `tabReaderPositionSmoke` and
+  both `readerWindowSmoke` views pass unchanged, which is what says the restore anchors survive.
+  The harnesses cannot resolve a few ms against their own variance; profile, below, and A/B
+  interleaved.
 - **An idle app must not re-render its root, and must not animate fast.** The live-turn registry
   poll (every 1.5s from boot) stored fresh `waiting`/`attention` arrays per poll, re-rendering the
   root — mounted transcript included — 20 times per 30s idle with nothing changing; equal arrays
@@ -623,6 +624,39 @@ a node rather than hiding it — hide with `false`. Nothing here sets `visible`.
   whole card window, and it was the largest share of main-thread samples while a session sat open.
   It now compares scrollTop, content height, viewport height and child count with its last run
   first. With a transcript growing once a second: 2.28s → 0.99s of process CPU per 31s.
+- **A reader card's body lines share one `<text>` per background** (`groupLinesByBackground`).
+  Each line was a box and a text, and mounting renderables is what a window slide spends its time on
+  (`createInstance` was a quarter of the samples). Spans carry each line's colour and `<a>` links
+  still paint link cells inside them. Worst React render: split-reader 62.9 → 42.1ms, sidebar-scroll-alt
+  41.9 → 32.1ms, card-page 11.5 → 7.0ms. The same rule then went to the reader's diff rows (seven
+  texts a row → three: the bar and note marker stay apart, being unselectable) and the plain-diff,
+  markdown-fallback and stream diff-preview lines: 9.0 → 7.5 renderables a card on the card fixture,
+  card-wheel-sustained over-budget commits 27-35 → 8-10. `INPUT_COUNT_NODES=1` (and
+  `INPUT_DUMP_CARD`) shows what a card is made of. In the stream views a body that is one paragraph of
+  plain text, `**bold**` and `` `code` `` skips `<markdown>` entirely (`isPlainMarkdownParagraph`): the
+  inline span renderer draws it identically, and `plainMarkdownSmoke.tsx` compares the two cell for cell
+  (characters, colours, attributes) on every accepted sample and checks the constructs they draw
+  differently are refused — `_`/single-`*` emphasis, `~~`, links (styled cyan by one, underlined by the
+  other), entities, blocks. The reader card's markdown branch takes the same gate (card fixture: markdown 129 → 22, code 151 → 44,
+  1,797 → 1,690 renderables). Stream fixture: markdown renderables 180 → 30, code renderables 225 → 75,
+  wheel ticks that moved the transcript +8% (stream) / +15% (transcript). The link-target and bracket
+  checks overlap on purpose; removing either alone still refuses links. Per-tool row boxes remain:
+  they are click targets.
+- **Leaving the collapsed preview expands the tail first** (`READER_EXPAND_FIRST` 16 cards, then
+  `READER_EXPAND_STEP` 40 per frame). The reader's first focus flips every default-expanded card at
+  once — ~130 bodies, a 39-43ms commit (counted with a memo comparator: `isExpanded` and `display`
+  are the props that change; giving collapsed cards a null `syntaxStyle` changed nothing, so that
+  is not it). Staged only while following the tail, where sticky scroll holds the bottom:
+  `INPUT_FOCUS_TRACE=1` reads 0 rows from the bottom on every frame through the stages. focus-toggle
+  worst render 42.6 → 15.3ms. Detached, it still lands in one commit, since nothing anchors the
+  viewport against content growing above it.
+- **What is left in sustained stream scrolling is OpenTUI's native frame, not this app.** Profiled
+  after the changes above: `sceneFrameStep` (native layout + paint) is ~40% of samples and React
+  ~19%; the mounted window does not matter (160 and 240 cards measured the same). The harness itself
+  was ~10% (a `findDescendantById` per press, now cached). Further gains here need OpenTUI's paint
+  or fewer cells changing per frame, not a smaller React tree.
+- **`tui:inputperf` samples the scene with `lastSceneTimeMs`**, not by wrapping `root.render`: 0.6
+  removed the JS paint pass, and every scenario had been exiting before measuring anything.
 - **Measure with `npm run tui:navperf`** (`tui/opentui/navPerf.tsx`) before changing any of this. It
   mounts the real root against your local sessions and reports the metrics logger's `nav.*` rollup:
   `select-to-open` (debounce), `open-to-detail` (worker read), `detail-to-paint`, and
@@ -982,6 +1016,19 @@ auto-pair checks nor anything else `handleKey` does per character. Set
   random edits) because a wrong range fails **silently**: the tree diverges and
   later highlights decorate the wrong text with no error.
 
+- **The line-number gutter must be given a windowed `getLineSources`**
+  (`installWindowedLineSources`). A textarea exposes only `lineInfo` — every line decoded from native
+  memory — so OpenTUI's gutter fallback read the whole file on every paint, 14% of all samples while
+  typing at 6,000 lines. Without wrapping a gutter row is its logical line; word wrap still takes the
+  full read. cpu/key at 6,000 lines 20.3-21.3 → 17.8-19.5ms (interleaved). `editorGutterSmoke.tsx`
+  checks every visible number against its row, scrolled deep and wrapped (off-by-one verified to fail).
+  Note cpu/key there is ~18-19ms on OpenTUI 0.6.6 against the 12.1ms recorded below on 0.5, and
+  ~14ms of it does not depend on the file at all (200 lines measures ~14ms): React's development
+  build under `act`, the 0.6 test renderer's frame and flush. What grows with size is the native edit
+  buffer and paint. Three per-keystroke reads were removed after that (the gutter's line count from
+  the buffer instead of a content scan, signature help reading `activeTab.content` instead of
+  `plainText`, the indent label from the saved content); each was real work, but together they are
+  inside this harness's ±1ms, so no number is claimed for them.
 - **One language server per workspace and command, not per buffer.** The server
   process lives in `editorLspSession.ts` and is shared by every buffer that can
   use it; `EditorLspClient` is now just one document's handle on it. It used to
@@ -1906,6 +1953,11 @@ reason — a stale branch name for the moment before a refresh lands beats a bla
 `gitSummaryCacheSmoke.ts` asserts the reuse by timing (a cached read must be far under a real ~26ms
 one), because spawn count has no other observable.
 
+The poll itself backs off while the answer does not change (5s doubling to 30s,
+`COMPOSER_GIT_SUMMARY_IDLE_POLL_MS`), and snaps back to 5s on any change. At a fixed 5s an idle TUI
+spawned three `git` processes every five seconds indefinitely — a fifth of its idle main-thread
+samples — and 90s idle measured 4.56s of CPU with its children against 4.04s with the backoff.
+
 #### Git popover: workspace status, conflicts and scroll margin
 
 Taken from hunk 0.24 (`hunk status`, `scroll_off`, compact rename labels). `lib/gitWorkspaceStatus.ts`
@@ -2035,6 +2087,11 @@ output, and allocator arenas.
   ±40MB — larger than most changes. Copy `~/.claude/projects` (plus `settings.json`) somewhere, point
   `CLAUDE_CONFIG_DIR` at it, reset the cwd's `.agent-viewer-data` from a fixture before each run, and
   alternate base/new. On that setup this round measured settled footprint 236-244MB → 180-192MB.
+- **`memPhases.sh` measures the newest TUI it finds** (`pgrep -n`). With the user's own TUI open it
+  used to measure that one, which produced a run where the old build looked 30MB *smaller*. Final
+  frozen-store A/B for this round (three interleaved pairs, base = the commit before it): boot
+  275-281 → 211-221MB, browse 242-251 → 187-192MB, git 270-285 → 214-225MB, settled 259-267 →
+  211-215MB, and the analytics-close spike (290MB) gone.
 - **Two things that look like levers and are not:** a full `Bun.gc(true)` in both isolates frees
   nothing measurable from the settled footprint (the retained arena is high-water, not garbage), and
   `--smol` changes nothing either. JSC's wasm tier flags (`BUN_JSC_useBBQJIT=0`) do shrink the
