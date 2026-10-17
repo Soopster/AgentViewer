@@ -22,7 +22,7 @@ import {
 } from '../../lib/channelBridgeOutbox'
 import { IdeBridgePopover } from './IdeBridgePopover'
 import { readIdeBridgeConfigFromEnv, sendIdeAtMention } from '../../lib/ideBridge'
-import { ToastOverlay, useToasts } from './ToastOverlay'
+import { ToastOverlay, toastStackTop, useToasts } from './ToastOverlay'
 import { PiActivityPopover } from './PiActivityPopover'
 import { toast } from './toastStore'
 import { toBmpSafe } from './bmp'
@@ -24076,7 +24076,14 @@ export default function OpenTuiApp() {
           const overlayTop = 2
           const overlayChromeRows = 4 // two borders, the header, the footer
           const rows = chordHelpRows(map)
-          const maxRows = Math.max(height - overlayTop - composerDockHeight - composerStatusBlockHeight - overlayChromeRows, 6)
+          // A toast (the "is not bound" notice a hesitated chord leaves behind)
+          // draws over this panel too, and over its last row, which is the one
+          // that says how to close it — so end above the stack while it shows.
+          const panelBottom = Math.min(
+            height - composerDockHeight - composerStatusBlockHeight,
+            toasts.length > 0 ? toastStackTop(toasts.length, height) : height,
+          )
+          const maxRows = Math.max(panelBottom - overlayTop - overlayChromeRows, 6)
           const visible = rows.slice(0, maxRows)
           const hidden = rows.length - visible.length
           return (

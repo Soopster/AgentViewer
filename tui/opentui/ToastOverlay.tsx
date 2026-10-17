@@ -33,6 +33,12 @@ function fit(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`
 }
 
+/** The row the toast stack starts on; overlays that must stay readable end above it. */
+export function toastStackTop(count: number, height: number): number {
+  const stackHeight = count * 3 + Math.max(count - 1, 0)
+  return Math.max(1, height - stackHeight - 3)
+}
+
 // Floating, bottom-right toast stack. Each toast is a single bordered row so the
 // stack height is predictable; the whole overlay is absolutely positioned above
 // the transcript (zIndex below the exit-confirm modal backdrop at 89).
@@ -53,10 +59,9 @@ export function ToastOverlay({
   const toastWidth = Math.min(Math.max(width - 4, 24), 46)
   const left = Math.max(1, width - toastWidth - 2)
   const gap = 1
-  const rowsPerToast = 3 // border (2) + one content row
-  const stackHeight = toasts.length * rowsPerToast + (toasts.length - 1) * gap
-  // Anchor just above the bottom edge, leaving room for the composer/footer.
-  const top = Math.max(1, height - stackHeight - 3)
+  // Each toast is three rows (border + one content row); anchored just above
+  // the bottom edge, leaving room for the composer/footer.
+  const top = toastStackTop(toasts.length, height)
   const innerWidth = toastWidth - 4
   return (
     <box position="absolute" top={top} left={left} width={toastWidth} flexDirection="column" gap={gap} zIndex={zIndex}>
