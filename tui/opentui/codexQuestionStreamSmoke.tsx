@@ -89,6 +89,14 @@ try {
   await settle(400)
 
   await act(async () => {
+    pushFrame({ type: 'codex_agent_message_delta', threadId: SESSION_ID, turnId: 'turn-1', itemId: 'answer-1', delta: 'Streaming before the question' })
+  })
+  await settle(250)
+  if (!setup.captureCharFrame().includes('Streaming before the question')) {
+    throw new Error(`Codex text must render before item/turn completion:\n${setup.captureCharFrame()}`)
+  }
+
+  await act(async () => {
     pushFrame({
       type: 'codex_approval',
       event: {

@@ -1,4 +1,5 @@
 import { getCodexClient } from './codexClient'
+import { currentProviderInstanceId } from './providerInstances'
 import type {
   CodexAppsListResponse,
   CodexExperimentalFeatureListResponse,
@@ -383,14 +384,22 @@ class CodexHarness {
 
 declare global {
   // eslint-disable-next-line no-var
-  var __codexHarness: CodexHarness | undefined
+  var __agentViewerCodexHarnesses: Map<string, CodexHarness> | undefined
 }
 
 function getHarness(): CodexHarness {
-  if (!globalThis.__codexHarness) {
-    globalThis.__codexHarness = new CodexHarness()
+  // Match getCodexClient's instance scope: a process-wide harness would stay
+  // subscribed to whichever account was inspected first, losing live events
+  // for every subsequent account's composer turns.
+  const instanceId = currentProviderInstanceId('codex')
+  const harnesses = globalThis.__agentViewerCodexHarnesses
+    ?? (globalThis.__agentViewerCodexHarnesses = new Map<string, CodexHarness>())
+  let harness = harnesses.get(instanceId)
+  if (!harness) {
+    harness = new CodexHarness()
+    harnesses.set(instanceId, harness)
   }
-  return globalThis.__codexHarness
+  return harness
 }
 
 export function subscribeToCodexEvents(options: { threadId?: string } = {}) {
@@ -398,7 +407,7 @@ export function subscribeToCodexEvents(options: { threadId?: string } = {}) {
 }
 
 function getCodexThreadSnapshot(threadId: string): CodexThreadSnapshot | undefined {
-  return globalThis.__codexHarness?.getSnapshot(threadId)
+  return globalThis.__agentViewerCodexHarnesses?.get(currentProviderInstanceId('codex'))?.getSnapshot(threadId)
 }
 
 export function getCodexProjectDiagnostics(): Promise<CodexProjectDiagnostics> {

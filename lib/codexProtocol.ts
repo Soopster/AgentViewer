@@ -31,7 +31,6 @@ import type {
   ThreadReadResponse,
   ThreadRevertResponse,
   ThreadResumeResponse,
-  ThreadRollbackResponse,
   ThreadSetNameResponse,
   ThreadSettingsUpdateResponse,
   ThreadShellCommandResponse,
@@ -58,8 +57,15 @@ import type {
 import type { ClientRequest, InitializeResponse, ServerNotification, ServerRequest } from './codex-schema'
 
 // JSON-RPC envelope is shared infrastructure, not part of the protocol schema.
-export type CodexClientMethod = ClientRequest['method']
-export type CodexRequestParams<M extends CodexClientMethod> = Extract<ClientRequest, { method: M }>['params']
+// Retain the existing pre-0.158 fallback without putting retired contracts
+// back into the generated schema. Current app-servers use thread/revert.
+type CompatibleCodexClientRequest = ClientRequest | {
+  method: 'thread/rollback'
+  params: { threadId: string; numTurns: number }
+}
+type LegacyCodexThreadRollbackResponse = { thread: Thread }
+export type CodexClientMethod = CompatibleCodexClientRequest['method']
+export type CodexRequestParams<M extends CodexClientMethod> = Extract<CompatibleCodexClientRequest, { method: M }>['params']
 export type CodexRequestArgs<M extends CodexClientMethod> =
   [CodexRequestParams<M>] extends [undefined]
     ? [params?: undefined, skipInitialize?: boolean]
@@ -82,7 +88,7 @@ export type CodexResponseFor<M extends CodexClientMethod> =
   : M extends 'thread/resume' ? ThreadResumeResponse
   : M extends 'thread/start' ? ThreadStartResponse
   : M extends 'thread/fork' ? ThreadForkResponse
-  : M extends 'thread/rollback' ? ThreadRollbackResponse
+  : M extends 'thread/rollback' ? LegacyCodexThreadRollbackResponse
   : M extends 'thread/name/set' ? ThreadSetNameResponse
   : M extends 'thread/settings/update' ? ThreadSettingsUpdateResponse
   : M extends 'thread/shellCommand' ? ThreadShellCommandResponse
@@ -133,7 +139,7 @@ export type CodexPatchApplyStatus = PatchApplyStatus
 export type CodexThreadReadResponse = ThreadReadResponse
 export type CodexThreadResumeResponse = ThreadResumeResponse
 export type CodexThreadForkResponse = ThreadForkResponse
-export type CodexThreadRollbackResponse = ThreadRollbackResponse
+export type CodexThreadRollbackResponse = LegacyCodexThreadRollbackResponse
 export type CodexTurnStartResponse = TurnStartResponse
 export type CodexThreadTurnsListResponse = ThreadTurnsListResponse
 

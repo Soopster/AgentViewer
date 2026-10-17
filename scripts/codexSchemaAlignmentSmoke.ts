@@ -1,4 +1,5 @@
 import type { ClientRequest } from '../lib/codex-schema'
+import type { FunctionCallOutputBody } from '../lib/codex-schema'
 import { CODEX_INITIALIZE_CAPABILITIES } from '../lib/codexClient'
 import { isCodexActiveWriterError, isCodexMissingRolloutError } from '../lib/sessionBackend'
 import type {
@@ -82,6 +83,11 @@ const commandItem = {
 } satisfies ThreadItem
 
 const thread = {
+  environments: null,
+  model: null,
+  reasoningEffort: null,
+  originator: null,
+  daybreakEnabled: null,
   id: 'thread-1',
   extra: null,
   sessionId: 'session-1',
@@ -113,17 +119,21 @@ const thread = {
 
 const session = mapCodexThreadToSession(thread, null)
 const info = mapCodexThreadToSessionInfo(thread, null, 'gpt-5.6-codex')
-// Opening a thread may resume it to read its model. That changes updatedAt,
-// but the sidebar and detail must retain the provider's turn recency time.
+// recencyAt is turn start; updates later in the same turn are actual activity.
+// Passive reads must avoid resume rather than replacing the activity clock.
 for (const [candidate, expected] of [
-  [{ ...thread, updatedAt: thread.updatedAt + 600 }, 1_700_000_100_000],
-  [{ ...thread, updatedAt: thread.updatedAt + 600, recencyAt: 1_700_000_400 }, 1_700_000_400_000],
+  [{ ...thread, updatedAt: thread.updatedAt + 600 }, 1_700_000_700_000],
+  [{ ...thread, updatedAt: thread.updatedAt + 600, recencyAt: 1_700_000_400 }, 1_700_000_700_000],
   [{ ...thread, recencyAt: null }, 1_700_000_100_000],
-  [{ ...thread, recencyAt: 0 }, 0],
+  [{ ...thread, recencyAt: 0 }, 1_700_000_100_000],
 ] as const) {
+  if (mapCodexThreadToSession(candidate, null).transcriptUpdatedAt !== candidate.updatedAt * 1000
+    || mapCodexThreadToSessionInfo(candidate, null, null).transcriptUpdatedAt !== candidate.updatedAt * 1000) {
+    throw new Error('Codex transcript refresh must track updates independently of displayed activity')
+  }
   if (mapCodexThreadToSession(candidate, null).lastModified !== expected
     || mapCodexThreadToSessionInfo(candidate, null, null).lastModified !== expected) {
-    throw new Error('Codex activity must follow turn recency, not a metadata-only resume')
+    throw new Error('Codex activity must advance with work throughout the turn')
   }
 }
 if (session.isPinned !== false || info.isPinned !== false) {
@@ -174,6 +184,7 @@ if (currentCodexModelValue(modelCatalog, null) !== 'gpt-default') {
 const orderedMessages = mapCodexThreadToMessages({
   ...thread,
   turns: [{
+    rootTurnId: null,
     id: '01999999-0000-7000-8000-000000000000',
     items: [{
       type: 'userMessage',
@@ -187,6 +198,7 @@ const orderedMessages = mapCodexThreadToMessages({
       phase: null,
       memoryCitation: null,
       delivery: null,
+      questions: null,
     }],
     itemsView: 'full',
     status: 'completed',
@@ -224,6 +236,7 @@ if (
 const userShellMessages = mapCodexThreadToMessages({
   ...thread,
   turns: [{
+    rootTurnId: null,
     id: '01999999-0000-7000-8000-000000000000',
     items: [{
       ...commandItem,
@@ -255,6 +268,33 @@ if (shellInput.timestamp !== new Date(1_700_000_000_000).toISOString()) {
   throw new Error(`A v4 item id must not be decoded as a timestamp: ${shellInput.timestamp}`)
 }
 
+const functionOutputs: FunctionCallOutputBody[] = [
+  'Plain function output',
+  [{ type: 'input_text', text: 'Rich function output' }, { type: 'input_image', file_id: 'file-tool-image' }],
+]
+for (const output of functionOutputs) {
+  const message = normalizeCodexStreamThreadedMessage({
+    type: 'codex_item_completed', threadId: thread.id, turnId: 'function-output-turn',
+    item: { type: 'functionCallOutput', id: 'function-output', name: 'read_file', namespace: 'files', output } satisfies ThreadItem,
+  })
+  const block = message?.blocks.find(block => block.type === 'tool_thread')
+  if (!block || block.type !== 'tool_thread' || block.toolUse.name !== 'read_file'
+    || block.toolUse.input.namespace !== 'files' || !block.result?.content) {
+    throw new Error('Codex function-call output must retain its tool name, namespace, and result')
+  }
+}
+const fileImageMessages = mapCodexThreadToMessages({
+  ...thread,
+  turns: [{
+    id: 'file-image-turn', rootTurnId: null, itemsView: 'full', status: 'completed', error: null,
+    startedAt: 1_700_000_000, completedAt: 1_700_000_010, durationMs: 10_000,
+    items: [{ type: 'userMessage', id: 'file-image', clientId: null, content: [{ type: 'image', fileId: 'file-user-image' }] }],
+  }],
+})
+if (!JSON.stringify(fileImageMessages).includes('[image] file:file-user-image')) {
+  throw new Error('Codex file-ID image input must retain the image reference')
+}
+
 void newRequests
 void generatedRequirementAdditions
-console.log('Codex 0.149.0 schema alignment smoke passed')
+console.log('Codex 0.163.0 schema alignment smoke passed')

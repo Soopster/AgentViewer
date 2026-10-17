@@ -9,7 +9,7 @@ assert.equal(shouldPrewarmTuiRuntime('claude', false, true), true)
 assert.equal(shouldPrewarmTuiRuntime('claude', true, false), true)
 // Codex's prewarm is what loads the send path; browsing must not.
 assert.equal(shouldPrewarmTuiRuntime('codex', false, false), false)
-assert.equal(shouldPrewarmTuiRuntime('codex', false, true), true)
+assert.equal(shouldPrewarmTuiRuntime('codex', false, true), false)
 assert.equal(shouldPrewarmTuiRuntime('codex', true, false), false)
 assert.equal(shouldPrewarmTuiRuntime('pi', true, false), true)
 // OpenCode's prewarm starts a whole server; browsing must not.

@@ -171,6 +171,8 @@ export type Session = {
   customTitle?: string
   firstPrompt?: string
   lastModified?: number
+  /** Provider update time for transcript cache invalidation; not displayed activity. */
+  transcriptUpdatedAt?: number
   cwd?: string
   tag?: string | null
   createdAt?: string | number
@@ -297,6 +299,7 @@ export type SessionInfo = {
   sessionId: string
   summary: string
   lastModified: number
+  transcriptUpdatedAt?: number
   customTitle?: string
   firstPrompt?: string
   gitBranch?: string

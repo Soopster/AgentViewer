@@ -71,7 +71,6 @@ import {
   ensureCodexThreadResumed,
   forgetCodexThreadResumed,
   markCodexThreadResumed,
-  prewarmCodexThread,
   isCodexActiveWriterError,
   isCodexMissingRolloutError,
   readCodexThread,
@@ -6597,12 +6596,8 @@ export async function prewarmViewSession(params: {
     return
   }
   if (provider === 'codex') {
-    if (params.isPending) return
-    await withTimeout(
-      prewarmCodexThread(params.sessionId),
-      providerStartupTimeoutMs(params.model),
-      'Codex session prewarm',
-    )
+    // A resume advances Codex's activity timestamp even without a message.
+    // Wait for the actual send; composer focus must remain read-only.
     return
   }
   if (provider === 'copilot') {

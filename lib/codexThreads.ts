@@ -140,7 +140,7 @@ let codexThreadModelsLoaded = false
 let codexThreadModelsFileStamp = ''
 // Off in an isolate that must never become a thread's writer (the TUI's
 // transcript worker): there a model read answers from what has been learned and
-// reports anything else as unknown, for the main isolate to resume.
+// reports anything else as unknown, until an actual turn learns the model.
 let codexModelResumeAllowed = true
 
 export function disallowCodexModelResume(): void {
@@ -327,24 +327,27 @@ export function knownCodexThreadModel(sessionId: string, activityAt?: number): s
 }
 
 /**
- * A thread's model for a read, leaving the thread unloaded.
+ * A thread's model for a read, without resuming by default.
  *
- * Codex reports a thread's model only from thread/resume, and resuming loads
- * the thread: the app-server starts every configured MCP server for it
+ * Legacy Codex builds report a thread's model only from thread/resume; newer
+ * thread/read responses expose it directly. Resuming loads the thread and
+ * the app-server starts every configured MCP server for it
  * (measured at ~160MB of child processes per thread) and keeps it all until
  * the thread is unsubscribed. The read paths used to resume and never let go,
  * so each session merely browsed — neighbour prefetches included — stayed
- * loaded for the life of the app-server. A read now learns the model once,
- * remembers it, and unsubscribes unless a turn or prewarm holds the thread;
- * the app-server then unloads it (about a minute later on codex-cli 0.157).
+ * loaded for the life of the app-server. Passive reads now return a learned
+ * model or unknown. Explicit allowResume callers may learn and release the
+ * subscription, but must accept that resume advances the activity timestamp.
  */
-export async function readCodexThreadModel(sessionId: string, activityAt?: number): Promise<{ model: string | null; unknown?: true }> {
+export async function readCodexThreadModel(sessionId: string, activityAt?: number, options: { allowResume?: boolean } = {}): Promise<{ model: string | null; unknown?: true }> {
   const key = codexThreadKey(sessionId)
   const live = codexResumedThreads.get(key)
   if (live !== undefined) return { model: live }
   const known = learnedCodexModel(key, activityAt)
   if (known) return { model: known.model }
-  if (!codexModelResumeAllowed) return { model: null, unknown: true }
+  // Resume rewrites updatedAt, so passive model/diagnostic reads cannot use it
+  // merely to discover a badge. The next real turn learns the current model.
+  if (!options.allowResume || !codexModelResumeAllowed) return { model: null, unknown: true }
   const inflight = codexResumeInflight.get(key) ?? codexModelReadInflight.get(key)
   if (inflight) return inflight
   const client = getCodexClient()

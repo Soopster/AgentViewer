@@ -51,7 +51,7 @@ check('readSessionInfo leaves the thread unsubscribed', !(await subscribed(info)
 
 // A model read resumes once to learn the model, then lets go.
 const activityAt = codexThreadActivityAt(await client.request('thread/read', { threadId: read, includeTurns: false }).then((response) => response.thread))
-const { model } = await readCodexThreadModel(read, activityAt)
+const { model } = await readCodexThreadModel(read, activityAt, { allowResume: true })
 check('readCodexThreadModel reports a model', typeof model === 'string' && model.length > 0, String(model))
 check('readCodexThreadModel leaves the thread unsubscribed', !(await subscribed(read)))
 check('the learned model is remembered without resuming', knownCodexThreadModel(read, activityAt) === model)

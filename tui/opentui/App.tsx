@@ -221,6 +221,7 @@ import {
 import { normalizeCodexStreamThreadedMessage } from '../../lib/codexMapper'
 import { readTuiSessionMetadataAsync } from './metadataWorkerClient'
 import { shouldPrewarmTuiRuntime } from './sessionPrewarm'
+import { sessionTranscriptUpdatedAt } from './sessionRefreshPolicy'
 import { filterComposerMentionFilesAsync } from './composerMentionWorkerClient'
 import { TUI_FRAME_BUDGET_MS } from './performanceBudget'
 import {
@@ -3150,6 +3151,7 @@ function sessionsShallowEqual(a: Session[], b: Session[]): boolean {
       prev.sessionId !== next.sessionId
       || prev.provider !== next.provider
       || prev.lastModified !== next.lastModified
+      || prev.transcriptUpdatedAt !== next.transcriptUpdatedAt
       || prev.customTitle !== next.customTitle
       || prev.summary !== next.summary
       || prev.cwd !== next.cwd
@@ -7631,7 +7633,7 @@ function SplitTranscriptPaneInner({
         timer = setTimeout(() => { void load() }, SPLIT_PANE_YIELD_RETRY_MS)
         return
       }
-      const lastModified = typeof session.lastModified === 'number' ? session.lastModified : undefined
+      const lastModified = sessionTranscriptUpdatedAt(session)
       if (!shouldPollSplitPaneDetail(lastLoadedRef.current, key, variant, lastModified, activityVisible)) {
         timer = setTimeout(() => { void load() }, SPLIT_PANE_POLL_MS)
         return
@@ -9656,7 +9658,7 @@ export default function OpenTuiApp() {
   // Latest sessions list keyed for ref-time lookups. refreshSelectedSessionDetail
   // receives identity-stable SKELETON sessions ({sessionId, provider} — see
   // selectedSessionTarget), so it must resolve list-level metadata like
-  // lastModified here; reading it off the passed session silently disabled the
+  // transcript update time here; reading it off the passed session disabled the
   // mtime guards (typeof undefined !== 'number') and made every 2s poll and
   // every scrub settle re-read the full session file.
   const sessionsByKeyRef = useRef(new Map<string, Session>())
@@ -12319,6 +12321,7 @@ export default function OpenTuiApp() {
     // Fleet strip is one header row when visible.
     - (fleetStripVisible ? 1 : 0)
     - streamActionFooterRows
+    - (showToolCalls ? 0 : 1)
     // Pin Chat's live-turn status directly above its composer. Keeping this
     // outside the scrollbox prevents a short transcript from leaving the
     // spinner at the top of an otherwise empty full-height viewport.
@@ -12788,12 +12791,12 @@ export default function OpenTuiApp() {
 
   const refreshSelectedSessionDetail = useCallback(async (session: Session, foreground = true) => {
     const cacheKeyForGuards = sessionKey(session)
-    // Callers pass identity-stable skeleton sessions; pull lastModified from
+    // Callers pass identity-stable skeleton sessions; pull transcript update time from
     // the latest sessions list (see sessionsByKeyRef) or the guards below
     // never fire and every poll/settle re-reads the full session file.
-    const sessionLastModified = typeof session.lastModified === 'number'
-      ? session.lastModified
-      : sessionsByKeyRef.current.get(cacheKeyForGuards)?.lastModified
+    const sessionLastModified = sessionTranscriptUpdatedAt(session, sessionsByKeyRef.current.get(cacheKeyForGuards))
+    const sessionIsRunning = reattachedRunningKeyRef.current === cacheKeyForGuards
+      || runningSessionsRef.current.some(running => sessionKey(running) === cacheKeyForGuards)
     if (!foreground && (loadingDetailRef.current || backgroundRefreshInFlightRef.current.has(cacheKeyForGuards))) return
     // A live baseline normally means an owned stream is rendering the turn, so
     // background polls pause. Reattached turns have no stream — the poll is the
@@ -12805,12 +12808,12 @@ export default function OpenTuiApp() {
       && reattachedRunningKeyRef.current !== cacheKeyForGuards
     ) return
 
-    // Skip background polls when the session file hasn't changed since the
+    // Skip idle background polls when the provider hasn't changed since the
     // cached detail was populated — avoids re-reading and re-threading the
     // full message file every interval for idle sessions. Worst case the
-    // sidebar's lastModified is stale and we skip one poll; the next sidebar
+    // sidebar's update time is stale and we skip one poll; the next sidebar
     // refresh catches us up.
-    if (!foreground && !awaitingPersistedTurnRef.current && typeof sessionLastModified === 'number') {
+    if (!foreground && !sessionIsRunning && !awaitingPersistedTurnRef.current && typeof sessionLastModified === 'number') {
       const recordedMtime = sessionDetailMtimeRef.current.get(cacheKeyForGuards)
       if (recordedMtime != null && recordedMtime >= sessionLastModified) return
     }
@@ -12854,6 +12857,7 @@ export default function OpenTuiApp() {
           && recordedMtime >= sessionLastModified
           && !awaitingPersistedTurnRef.current
           && !liveTranscriptBaselineRef.current.has(cacheKeyForGuards)
+          && !sessionIsRunning
         ) {
           setError((current) => current?.startsWith('Failed to load session detail') ? null : current)
           foregroundLoadInFlightRef.current = false
@@ -13029,9 +13033,7 @@ export default function OpenTuiApp() {
     if (liveTranscriptBaselineRef.current.has(key)) return
     // Already displayable from the App's own cache and known fresh — the open
     // takes the cached fast path, so there is nothing for the worker to warm.
-    const lastModified = typeof session.lastModified === 'number'
-      ? session.lastModified
-      : sessionsByKeyRef.current.get(key)?.lastModified
+    const lastModified = sessionTranscriptUpdatedAt(session, sessionsByKeyRef.current.get(key))
     if (sessionDetailCacheRef.current.has(key) && typeof lastModified === 'number') {
       const recorded = sessionDetailMtimeRef.current.get(key)
       if (recorded != null && recorded >= lastModified) return
@@ -15447,13 +15449,13 @@ export default function OpenTuiApp() {
 
     const sessionAccent = getProviderAccent(entry.session.provider ?? 'claude')
     const activityTime = entry.session.lastModified ?? entry.session.createdAt
-    const ago = timeAgo(activityTime)
     const recentlyTouched = isSessionRecentlyTouched(entry.session)
     const knownActivity = sidebarSessionActivity.get(sessionKey(entry.session))
     // Written to in the last couple of minutes by something this host is not
     // running — a native CLI in another terminal. Shown as working, in green
     // rather than the provider accent, so the two sources stay tellable apart.
     const activity = knownActivity ?? (recentlyWrittenKeys.has(sessionKey(entry.session)) ? 'active' : undefined)
+    const ago = activity === 'running' ? 'now' : timeAgo(activityTime)
     const activityGlyph = activity === 'needs-input' ? '⚠'
       : activity === 'running' || activity === 'active' ? '●'
       : activity === 'waiting' ? '◌'
@@ -17185,9 +17187,7 @@ export default function OpenTuiApp() {
     const navStartedAt = performance.now()
     const targetKey = sessionKey(target)
     navSelectStartRef.current = { key: targetKey, at: navStartedAt }
-    const targetLastModified = typeof target.lastModified === 'number'
-      ? target.lastModified
-      : sessionsByKeyRef.current.get(targetKey)?.lastModified
+    const targetLastModified = sessionTranscriptUpdatedAt(target, sessionsByKeyRef.current.get(targetKey))
     const recordedMtime = sessionDetailMtimeRef.current.get(targetKey)
     // Mirrors refreshSelectedSessionDetail's cached-and-unchanged fast path: if
     // that branch will fire, this open does no work and deserves no wait.
@@ -23008,6 +23008,22 @@ export default function OpenTuiApp() {
           {error ? (
             <box paddingX={1} marginTop={1}>
               <text fg={theme.red}>{fitText(error, rightPaneWidth - 4)}</text>
+            </box>
+          ) : null}
+
+          {!showToolCalls ? (
+            <box
+              id="show-tool-activity"
+              height={1}
+              paddingX={1}
+              onMouseDown={(event) => {
+                if (event.button !== 0) return
+                event.stopPropagation()
+                setShowToolCalls(true)
+                void writeTuiShowToolCalls(true).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store tool visibility'))
+              }}
+            >
+              <text fg={theme.amber} wrapMode="none">{fitText('TOOLS HIDDEN · Click or Shift+X to show file and tool activity', rightPaneWidth - 4)}</text>
             </box>
           ) : null}
 

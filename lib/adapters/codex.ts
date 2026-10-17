@@ -1,9 +1,8 @@
 // Codex, driven through the `codex app-server` JSON-RPC protocol
 // (lib/codexClient.ts). Two Codex quirks shape almost everything here:
 //
-//  - A thread must be *resumed* before its metadata is readable, and resume
-//    materializes the rollout server-side. lib/codexThreads.ts caches that so
-//    the cost is paid once per app-server lifetime, not once per read.
+//  - A thread must be resumed before sending a turn. Reads stay passive:
+//    resuming just for a model badge changes its activity timestamp.
 //  - Only one client may hold a thread's rollout writer lock. When another
 //    Codex client (the CLI, an editor extension) holds it, a fresh read is
 //    impossible — so the transcript falls back to the last mapped snapshot and
@@ -81,7 +80,7 @@ export const codexAdapter: SessionAdapter = {
     // No resume here: this runs for every read, prefetches included, and a
     // resume loads the thread and its MCP servers (see readCodexThreadModel).
     // readModels learns the model when a session is actually opened.
-    return mapCodexThreadToSessionInfo(thread, tag, knownCodexThreadModel(sessionId, codexThreadActivityAt(thread)))
+    return mapCodexThreadToSessionInfo(thread, tag, thread.model ?? knownCodexThreadModel(sessionId, codexThreadActivityAt(thread)))
   },
 
   async setTitle(sessionId, title) {
@@ -143,7 +142,8 @@ export const codexAdapter: SessionAdapter = {
     // instead of falling back to an empty list the UI can recover from.
     // The thread's last turn says whether a model learned earlier still holds;
     // reading it is cheap, and a resume is not (readCodexThreadModel).
-    const activityAt = await readCodexThread(sessionId, false).then(codexThreadActivityAt, () => undefined)
+    const thread = await readCodexThread(sessionId, false).catch(() => null)
+    const activityAt = thread ? codexThreadActivityAt(thread) : undefined
     const [modelsResponse, resume] = await Promise.all([
       withTimeout(
         client.request('model/list', {}),
@@ -151,7 +151,8 @@ export const codexAdapter: SessionAdapter = {
         'Codex model list',
       )
         .catch(() => ({ data: [] as Parameters<typeof mapCodexModelsToSessionModels>[0] })),
-      withTimeout(readCodexThreadModel(sessionId, activityAt), 8000, 'Codex thread resume').catch(() => null),
+      thread?.model ? Promise.resolve({ model: thread.model, unknown: undefined })
+        : withTimeout(readCodexThreadModel(sessionId, activityAt), 8000, 'Codex model metadata').catch(() => null),
     ])
     return {
       models: mapCodexModelsToSessionModels(modelsResponse.data),
@@ -185,13 +186,13 @@ export const codexAdapter: SessionAdapter = {
     return {
       sections: mapCodexDiagnosticsToSections({
         thread,
-        currentModel: resume.model,
+        currentModel: thread.model ?? resume.model,
         mcpServers: project.mcpServers,
         features: project.features,
         skills: project.skills,
         apps: project.apps,
       }),
-      currentModel: resume.model,
+      currentModel: thread.model ?? resume.model,
     }
   },
 }

@@ -83,7 +83,7 @@ function codexUserInputToText(input: CodexUserInput[]): string {
         case 'text':
           return entry.text
         case 'image':
-          return `[image] ${entry.url}`
+          return `[image] ${'url' in entry ? entry.url : `file:${entry.fileId}`}`
         case 'localImage':
           return `[local image] ${entry.path}`
         case 'audio':
@@ -167,6 +167,25 @@ function mapItemToMessages(
     }
     case 'agentMessage':
       return item.text ? [makeMessage(threadId, baseId, 'assistant', item.text, turnId, timestamp)] : []
+    case 'functionCallOutput': {
+      const toolUseId = `${baseId}:tool`
+      const output = typeof item.output === 'string' ? item.output : item.output.map((part) => {
+        switch (part.type) {
+          case 'input_text': return part.text
+          case 'input_image': return `[image] ${'image_url' in part ? part.image_url : `file:${part.file_id}`}`
+          case 'input_audio': return `[audio] ${part.audio_url}`
+          case 'encrypted_content': return '[encrypted tool output]'
+        }
+      }).join('\n')
+      const assistant = makeMessage(threadId, baseId, 'assistant', [{
+        type: 'tool_use', id: toolUseId, name: item.name,
+        input: { namespace: item.namespace },
+      }], turnId, timestamp)
+      const result = makeMessage(threadId, `${baseId}:result`, 'user', [
+        makeToolResult(toolUseId, output || 'No output recorded.'),
+      ], turnId, timestamp)
+      return includeToolResults ? [assistant, result] : [assistant]
+    }
     case 'plan':
       return item.text ? [makeMessage(threadId, baseId, 'assistant', `## Plan\n\n${item.text}`, turnId, timestamp)] : []
     case 'reasoning': {
@@ -369,8 +388,10 @@ export function mapCodexThreadToSession(thread: CodexThread, tag: string | null)
     summary: thread.preview || thread.name || thread.id,
     customTitle: thread.name ?? undefined,
     firstPrompt: thread.preview || undefined,
-    // Resuming for model metadata advances updatedAt without a turn.
-    lastModified: (thread.recencyAt ?? thread.updatedAt) * 1000,
+    // Passive reads must not resume the thread: updatedAt then reflects the
+    // latest work, rather than recencyAt's fixed turn-start time.
+    lastModified: thread.updatedAt * 1000,
+    transcriptUpdatedAt: thread.updatedAt * 1000,
     cwd: thread.cwd,
     tag,
     createdAt: thread.createdAt * 1000,
@@ -388,7 +409,8 @@ export function mapCodexThreadToSessionInfo(thread: CodexThread, tag: string | n
     summary: thread.preview || thread.name || thread.id,
     customTitle: thread.name ?? undefined,
     firstPrompt: thread.preview || undefined,
-    lastModified: (thread.recencyAt ?? thread.updatedAt) * 1000,
+    lastModified: thread.updatedAt * 1000,
+    transcriptUpdatedAt: thread.updatedAt * 1000,
     gitBranch: thread.gitInfo?.branch ?? undefined,
     cwd: thread.cwd,
     tag: tag ?? undefined,
@@ -396,7 +418,7 @@ export function mapCodexThreadToSessionInfo(thread: CodexThread, tag: string | n
     provider: 'codex',
     capabilities: CODEX_CAPABILITIES,
     isPinned: false,
-    currentModel: currentModel ?? undefined,
+    currentModel: thread.model ?? currentModel ?? undefined,
     parentSessionId: getCodexSpawnParentThreadId(thread),
   }
 }
