@@ -642,6 +642,32 @@ if (process.env.INPUT_COUNT_NODES === '1') {
   }
   console.log(`nodes: ${cards} cards, ${total} renderables (${(total / Math.max(cards, 1)).toFixed(1)}/card)`, JSON.stringify([...byType].sort((a, b) => b[1] - a[1])))
 }
+if (process.env.INPUT_FOCUS_TRACE === 'detached') {
+  // The preview scrolled up under the wheel, then the first focus: what the
+  // reader is looking at must stay where it was while the cards expand.
+  for (let i = 0; i < 60; i++) { await act(async () => { await send({ wheel: 'up' } as Press) }); await settle(20) }
+  let last = ''
+  for (let i = 0; i < 40; i++) { await settle(100); const now = `${transcript()?.scrollTop}`; if (now === last) break; last = now }
+  const topRow = () => {
+    const sb = transcript()
+    if (!sb) return 'none'
+    const contentY = (sb.content as unknown as { y: number }).y
+    for (const child of sb.content.getChildren() as unknown as Array<ProbeNode & { y: number; height: number }>) {
+      const key = cardKeyOf(child)
+      if (!key || child.y - contentY + child.height <= sb.scrollTop) continue
+      return `${key.slice(-6)}@${child.y - contentY - sb.scrollTop}`
+    }
+    return 'none'
+  }
+  const before = topRow()
+  await act(async () => { await send({ key: 'tab' } as Press) })
+  const samples: string[] = []
+  for (let i = 0; i < 40; i++) {
+    await act(async () => { await setup.flush(); await new Promise((resolve) => setTimeout(resolve, 10)) })
+    samples.push(topRow())
+  }
+  console.log('FOCUS TRACE detached before', before, 'frames', [...new Set(samples)].join(' '))
+}
 if (process.env.INPUT_FOCUS_TRACE === '1') {
   // The reader's first focus expands cards in stages at the tail; the viewport
   // must stay on the bottom through every stage.

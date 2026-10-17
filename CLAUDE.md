@@ -648,8 +648,12 @@ a node rather than hiding it — hide with `false`. Nothing here sets `visible`.
   are the props that change; giving collapsed cards a null `syntaxStyle` changed nothing, so that
   is not it). Staged only while following the tail, where sticky scroll holds the bottom:
   `INPUT_FOCUS_TRACE=1` reads 0 rows from the bottom on every frame through the stages. focus-toggle
-  worst render 42.6 → 15.3ms. Detached, it still lands in one commit, since nothing anchors the
-  viewport against content growing above it.
+  worst render 42.6 → 15.3ms. Staging needs the viewport actually at the bottom, not just
+  `followTail`: the preview scrolls under the wheel without clearing it, and staging there drifted
+  the view down over several frames. Scrolled up, the expansion lands in one commit and anchors the
+  first visible row through the slide fixup (`kind: 'anchor'`) — before this the view jumped 132
+  cards on that commit. `readerFirstFocusSmoke.ts` runs both cases through `INPUT_FOCUS_TRACE`
+  (`1` and `detached`); removing the anchor was verified to fail it.
 - **What is left in sustained stream scrolling is OpenTUI's native frame, not this app.** Profiled
   after the changes above: `sceneFrameStep` (native layout + paint) is ~40% of samples and React
   ~19%; the mounted window does not matter (160 and 240 cards measured the same). The harness itself

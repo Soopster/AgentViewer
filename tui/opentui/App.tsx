@@ -8416,7 +8416,16 @@ function ReaderTranscriptWindow({ inputs }: { inputs: ReaderWindowInputs }) {
   // Anywhere else the viewport is anchored to nothing, so it all lands at once.
   const previewCollapsedRef = useRef(true)
   const [expansionStage, setExpansionStage] = useState<{ keys: ReadonlySet<string>; cards: number } | null>(null)
+  // `followTail` alone is not "at the bottom": the preview scrolls under the
+  // wheel without clearing it, and staging there grew cards above a viewport
+  // that sticky scroll was not holding — the view drifted down for a few frames.
+  const leavingPreview = fullExpandedKeys !== EMPTY_EXPANDED_KEYS && previewCollapsedRef.current && expansionStage?.keys !== fullExpandedKeys
+  const viewportAtBottom = (() => {
+    const sb = transcriptScrollRef.current
+    return !sb || sb.scrollTop >= sb.scrollHeight - sb.viewport.height - 1
+  })()
   const stageExpansion = fullExpandedKeys !== EMPTY_EXPANDED_KEYS && followTail
+    && (!leavingPreview || viewportAtBottom)
     && renderedTranscriptCards.length > READER_EXPAND_FIRST
     && (expansionStage?.keys === fullExpandedKeys
       ? expansionStage.cards < renderedTranscriptCards.length
@@ -8854,6 +8863,24 @@ function ReaderTranscriptWindow({ inputs }: { inputs: ReaderWindowInputs }) {
     }
     if (anchor) readerScrollFixupRef.current = { kind: 'anchor', el: anchor, prevOffset: anchor.y - contentY }
   }, [sessionKey, transcriptRenderStart, transcriptRenderEnd])
+  // Leaving the preview anywhere but the bottom expands every card at once, and
+  // the ones above the viewport grow under it. Anchor the first row reaching the
+  // viewport, as a slide does; the root's layout pass applies it in the frame
+  // that shows the expansion.
+  const expandedAnchorRef = useRef<ReadonlySet<string>>(EMPTY_EXPANDED_KEYS)
+  useLayoutEffect(() => {
+    const previous = expandedAnchorRef.current
+    expandedAnchorRef.current = expandedKeysForRender
+    if (previous !== EMPTY_EXPANDED_KEYS || expandedKeysForRender === EMPTY_EXPANDED_KEYS || stagedExpansion) return
+    const sb = transcriptScrollRef.current
+    if (!sb || readerScrollFixupRef.current || sb.scrollTop >= sb.scrollHeight - sb.viewport.height - 1) return
+    const contentY = sb.content.y
+    for (const row of sb.content.getChildren() as Renderable[]) {
+      if (!readerRowKey(row) || row.y - contentY + row.height <= sb.scrollTop) continue
+      readerScrollFixupRef.current = { kind: 'anchor', el: row, prevOffset: row.y - contentY }
+      break
+    }
+  }, [expandedKeysForRender, stagedExpansion])
   if (isScrubbing) {
     return (
       <box paddingX={1}>
