@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { formatAsyncQuestionAnswers } from '../../lib/asyncQuestions'
 import { createSidebarSessionSearch } from './sidebarSessionSearch'
 import { hideScratchSessions } from './scratchSessions'
 import { readReaderLayout } from './readerLayout'
@@ -9196,7 +9197,11 @@ export default function OpenTuiApp() {
   // Pending tool-approval requests surfaced from the live SSE stream (Claude
   // canUseTool, Copilot/OpenCode permission events, Codex approvals). The
   // overlay below the composer lets the user allow/reject them, matching native.
-  const [pendingPermissions, setPendingPermissions] = useState<PendingPermission[]>([])
+  const [nativePendingPermissions, setPendingPermissions] = useState<PendingPermission[]>([])
+  const [asyncQuestionPrompt, setAsyncQuestionPrompt] = useState<PendingPermission | null>(null)
+  const pendingPermissions = useMemo(() => asyncQuestionPrompt
+    ? [...nativePendingPermissions, asyncQuestionPrompt] : nativePendingPermissions,
+  [nativePendingPermissions, asyncQuestionPrompt])
   const [permissionActionLoading, setPermissionActionLoading] = useState<string | null>(null)
   const [permissionOptionIndex, setPermissionOptionIndex] = useState(0)
   // Which permission `permissionOptionIndex` was last moved for. The index is
@@ -14026,6 +14031,7 @@ export default function OpenTuiApp() {
   })
 
   const respondToTuiPermission = useEffectEvent(async (permission: PendingPermission, response: PermissionResponse, permissionMode?: TuiPermissionMode) => {
+    if (permission.asyncQuestion) { setAsyncQuestionPrompt(null); return }
     const target = composerTargetSession
     if (!target || permissionActionLoading) return
     setPermissionActionLoading(permission.id)
@@ -14109,6 +14115,22 @@ export default function OpenTuiApp() {
         return
       }
       answers[question.id ?? question.question] = values
+    }
+    if (permission.asyncQuestion) {
+      if (permission.sessionId !== target.sessionId || permission.provider !== target.provider || permission.providerInstanceId !== target.providerInstanceId) {
+        setAsyncQuestionPrompt(null)
+        showNotice('info', 'Open the original session to answer these questions.')
+        return
+      }
+      const answer = formatAsyncQuestionAnswers(questions, answers)
+      const existing = composerTextareaRef.current?.plainText ?? composerDraft
+      const next = `${existing}${existing ? '\n\n' : ''}${answer}\n`
+      composerTextareaRef.current?.setText(next)
+      setComposerDraft(next)
+      setAsyncQuestionPrompt(null)
+      setComposerActive(true)
+      setFocusedPane('messages')
+      return
     }
     setPermissionActionLoading(permission.id)
     try {
@@ -18492,6 +18514,16 @@ export default function OpenTuiApp() {
   // expands it. Like a link it acts on mouse UP with the pointer unmoved, so a
   // drag is still a text selection. Folding again takes a click on the item's
   // first row only — an expanded diff has its own click targets below it.
+  const openSelectedAsyncQuestionsOrFold = useEffectEvent(() => {
+    const index = transcriptCursorKey ? transcriptIndexByKey.get(transcriptCursorKey) : undefined
+    const card = index == null ? null : visibleTranscriptCards[index]
+    if (card?.asyncQuestions?.length && selectedSession) {
+      setAsyncQuestionPrompt({ id: `async:${card.key}`, sessionId: selectedSession.sessionId,
+        provider: selectedSession.provider, providerInstanceId: selectedSession.providerInstanceId,
+        asyncQuestion: true, title: 'Follow-up questions', questions: card.asyncQuestions })
+    } else toggleExpansion('parent')
+  })
+
   const releaseTranscriptPress = useEffectEvent((event: MouseEvent) => {
     const press = linkPressRef.current
     if (openTranscriptLinkAt(event)) return
@@ -18511,6 +18543,11 @@ export default function OpenTuiApp() {
     const cardKey = hit.id.slice('card:'.length)
     const index = transcriptIndexByKey.get(cardKey)
     const card = index == null ? null : visibleTranscriptCards[index]
+    if (card?.asyncQuestions?.length && selectedSession) {
+      setAsyncQuestionPrompt({ id: `async:${card.key}`, sessionId: selectedSession.sessionId,
+        provider: selectedSession.provider, providerInstanceId: selectedSession.providerInstanceId, asyncQuestion: true, title: 'Follow-up questions', questions: card.asyncQuestions })
+      return
+    }
     if (!card || !(card.autoFold || agentToolCardsFor(card).length > 0)) return
     if (readerWindowOutputRef.current.scrollbackExpandedKeys?.has(cardKey) && event.y !== hit.y) return
     // At the tail the view sticks to the bottom, so the rows a click unfolds
@@ -19658,7 +19695,7 @@ export default function OpenTuiApp() {
         break
       case 'fold-parent':
         setFocusedPane('messages')
-        toggleExpansion('parent')
+        openSelectedAsyncQuestionsOrFold()
         break
       case 'copy':
         setFocusedPane('messages')
@@ -21755,7 +21792,7 @@ export default function OpenTuiApp() {
 
     if (effectiveFocus === 'messages' && key.name === 'return') {
       handled(() => {
-        toggleExpansion('parent')
+        openSelectedAsyncQuestionsOrFold()
       })
       return
     }

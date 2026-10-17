@@ -201,6 +201,7 @@ import {
   setCopilotStoredTag,
   setCopilotStoredTitle,
 } from './copilotMetadata'
+import { readCodexMcpApp } from './codexMcpApps'
 import { getCodexClient } from './codexClient'
 import type {
   CodexNotification,
@@ -2326,6 +2327,12 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
   }
 
   if (resolvedProvider === 'codex') {
+    if (action === 'getMcpApp') {
+      const { serverName, toolName, originCallId } = body
+      if (typeof serverName !== 'string' || typeof toolName !== 'string' || typeof originCallId !== 'string'
+        || !serverName || !toolName || !originCallId) throw new Error('MCP server, tool, and originating call are required')
+      return readCodexMcpApp(sessionId, serverName, toolName, originCallId)
+    }
     if (action === 'respondPermission') {
       const permissionId = typeof body.permissionId === 'string' ? body.permissionId : ''
       const response = typeof body.response === 'string' ? body.response : ''

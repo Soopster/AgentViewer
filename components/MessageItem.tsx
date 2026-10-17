@@ -1,5 +1,6 @@
 'use client'
 
+import { AsyncQuestionCard } from './AsyncQuestionCard'
 import ContextMessage from './ContextMessage'
 import { contextReferences, readComposerContext } from '@/lib/composerContext'
 
@@ -1251,7 +1252,7 @@ function McpToolCard({ thread }: { thread: ToolThread }) {
   const [open, setOpen] = useState(false)
   const [hovered, setHovered] = useState(false)
   const { toolUse, result } = thread
-  const id = parseMcpToolName(toolUse.name)!
+  const id = toolUse.mcp ?? parseMcpToolName(toolUse.name)!
   const sessionId = use(SessionContext)
   const sessionTarget = use(ArtifactSessionContext)
   const c = toolColor(toolUse.name)
@@ -1393,7 +1394,7 @@ function McpToolCard({ thread }: { thread: ToolThread }) {
       )}
       {result && <McpResultSection result={result} />}
       {result && <McpToolArtifacts key={`${sessionTarget?.providerInstanceId ?? ''}:${sessionId}:${toolUse.id}`} result={result} input={input}
-        session={sessionTarget && sessionId ? { ...sessionTarget, sessionId } : undefined} serverName={id.server} toolName={id.tool} />}
+        session={sessionTarget && sessionId ? { ...sessionTarget, sessionId } : undefined} serverName={id.server} toolName={id.tool} originCallId={toolUse.mcp?.originCallId} />}
     </div>
   )
 }
@@ -3781,6 +3782,8 @@ function McpCard({ thread }: { thread: ToolThread }) {
 // ── Dispatcher ────────────────────────────────────────────────────────────────
 
 function ToolThreadCard({ thread }: { thread: ToolThread }) {
+  if (thread.toolUse.input.asyncUserInput === true && thread.toolUse.name === 'AskUserQuestion') return <AsyncQuestionCard toolUse={thread.toolUse} />
+  if (thread.toolUse.mcp) return <McpToolCard thread={thread} />
   const nativeThread = normalizeToolThreadForNativeCard(thread)
   const name = nativeThread.toolUse.name
   if (name === 'Edit')                         return <EditToolCard thread={nativeThread} />

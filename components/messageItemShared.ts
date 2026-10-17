@@ -25,6 +25,8 @@ export const DEFAULT_DIFF_OPTIONS: DiffOptions = {
 
 export type DiffCommentComposerSend = (prompt: string) => void
 
+export const QuestionAnswerComposerContext = createContext<((text: string) => void) | null>(null)
+
 export const DiffCommentComposerContext = createContext<DiffCommentComposerSend | null>(null)
 
 // Mirrors StreamMessageItem's render guard. MessageView uses this to remove

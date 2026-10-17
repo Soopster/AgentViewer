@@ -544,7 +544,7 @@ export function buildThreadedMessagesIncremental(
 export function stripToolCallBlocks(messages: ThreadedMessage[]): ThreadedMessage[] {
   const out: ThreadedMessage[] = []
   for (const msg of messages) {
-    const kept = msg.blocks.filter((b) => b.type !== 'tool_thread')
+    const kept = msg.blocks.filter((b) => b.type !== 'tool_thread' || b.toolUse.input.asyncUserInput === true)
     if (kept.length === 0) continue
     out.push(kept.length === msg.blocks.length ? msg : { ...msg, blocks: kept })
   }

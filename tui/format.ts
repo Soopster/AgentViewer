@@ -1,3 +1,4 @@
+import { readAsyncQuestions } from '../lib/asyncQuestions'
 import { mcpResourceLinks } from '../lib/mcpArtifacts'
 import { readableContextText } from '../lib/composerContext'
 import { getAssistantLabel } from '../lib/provider'
@@ -274,6 +275,7 @@ function parseMcpToolName(name: string): McpToolId | null {
 }
 
 function mcpToolIdForThread(thread: ToolThread): McpToolId | null {
+  if (thread.toolUse.mcp) return thread.toolUse.mcp
   const encoded = parseMcpToolName(thread.toolUse.name)
   if (encoded) return encoded
   const input = toolInputRecord(thread)
@@ -1701,7 +1703,7 @@ function formatAskUserQuestionTool(thread: ToolThread, expanded: boolean): TuiTr
         ? 'dim'
         : 'thinking'
   const stateGlyph = isError ? '✗' : answered ? '✓' : thread.result ? '○' : '◌'
-  const stateLabel = isError ? 'error' : answered ? 'answered' : thread.result ? 'no answer' : 'pending'
+  const stateLabel = thread.toolUse.input.asyncUserInput === true ? 'click to answer · or reply in composer' : isError ? 'error' : answered ? 'answered' : thread.result ? 'no answer' : 'pending'
 
   const headerSummary = questions.length === 0
     ? 'no questions'
@@ -2175,11 +2177,18 @@ function previewTool(thread: ToolThread, activeForms?: TaskActiveForms, taskRegi
   ]
 }
 
+function mcpAppLines(block: ThreadedBlock): TuiTranscriptCardLine[] {
+  if (block.type !== 'tool_thread' || !block.toolUse.mcp?.app) return []
+  const app = block.toolUse.mcp.app
+  return [line(`MCP App (${app.preferredModelDisplayMode}): ${sanitizeLine(app.resourceUri)}`, 'muted'),
+    line('Open this tool in the web app for its interactive preview.', 'dim')]
+}
+
 function formatBlock(block: ThreadedBlock, activeForms?: TaskActiveForms, taskRegistry?: TaskRegistry): TuiTranscriptCardLine[] {
   const links = block.type === 'tool_thread'
     ? mcpResourceLinks(block.result?.resourceLinks, Array.isArray(block.result?.content) ? block.result.content : [])
     : block.type === 'claude_system' ? mcpResourceLinks(block.payload.resource_links) : []
-  const content = formatBlockContent(block, activeForms, taskRegistry)
+  const content = [...formatBlockContent(block, activeForms, taskRegistry), ...mcpAppLines(block)]
   if (!links.length) return content
   return [...content, ...links.map(link => line(`artifact: ${sanitizeLine(link.title || link.name)} — ${link.uri}`, 'muted'))]
 }
@@ -2363,6 +2372,7 @@ export function formatTranscriptLines(messages: ThreadedMessage[]): string[] {
 }
 
 export type TuiTranscriptCard = {
+  asyncQuestions?: import('../lib/permissions').PendingQuestion[]
   key: string
   role: ThreadedMessage['role']
   provider?: ThreadedMessage['provider']
@@ -2686,10 +2696,11 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
   const { processedLines: expandedLines, codeBlocks, hasMermaidDiagrams } = extractCodeBlocksFromBlocks(message.blocks, activeForms, taskRegistry)
   const parsedTimestamp = message.timestamp ? new Date(message.timestamp) : null
   const blockAnalysis = analyzeCardBlocks(message)
-  const category = blockAnalysis.category
+  const asyncQuestions = message.blocks.some(block => block.type === 'tool_thread' && block.toolUse.input.asyncUserInput === true)
+  const category = asyncQuestions ? 'conversation' : blockAnalysis.category
   const autoFold = category !== 'conversation' && category !== 'insight'
   const previewSourceLines = previewLines
-  const collapsedLines = hasMermaidDiagrams
+  const collapsedLines = asyncQuestions ? expandedLines : hasMermaidDiagrams
     ? compactMermaidLines(expandedLines)
     : autoFold
     ? compactAutoFoldLines(previewSourceLines)
@@ -2698,6 +2709,7 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
 
   const searchText = deferSearchText ? '' : cardSearchText(expandedLines)
   return {
+    asyncQuestions: asyncQuestions ? message.blocks.flatMap(block => block.type === 'tool_thread' ? readAsyncQuestions(block.toolUse.input) : []) : undefined,
     key: message.uuid,
     role: message.role,
     provider: message.provider,
@@ -2717,13 +2729,13 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
     searchHaystackLower: deferSearchText ? '' : cardSearchHaystack(label, searchText),
     codeBlocks: codeBlocks.length > 0 ? codeBlocks : undefined,
     editDiff: blockAnalysis.hasSyntheticEdit ? synthesizeEditDiff(message) : undefined,
-    markdownContent: (category === 'conversation' || category === 'insight')
+    markdownContent: !asyncQuestions && (category === 'conversation' || category === 'insight')
       ? extractMarkdownContent(message.blocks)
       : undefined,
     hasMermaidDiagrams,
     subagentDepth: subagentDepth > 0 ? subagentDepth : undefined,
     resumeReason: message.resumeReason,
-    pending: blockAnalysis.pending || undefined,
+    pending: !asyncQuestions && blockAnalysis.pending || undefined,
     fileEdits: cardFileEdits(message),
   }
 }
@@ -2980,7 +2992,7 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
   const links = block.type === 'tool_thread'
     ? mcpResourceLinks(block.result?.resourceLinks, Array.isArray(block.result?.content) ? block.result.content : [])
     : block.type === 'claude_system' ? mcpResourceLinks(block.payload.resource_links) : []
-  const content = formatBlockExpandedContent(block, activeForms, taskRegistry)
+  const content = [...formatBlockExpandedContent(block, activeForms, taskRegistry), ...mcpAppLines(block)]
   if (!links.length) return content
   return [...content, ...links.map(link => line(`artifact: ${sanitizeLine(link.title || link.name)} — ${link.uri}`, 'muted'))]
 }

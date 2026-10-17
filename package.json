@@ -86,6 +86,7 @@
     "tui:ink": "node --import tsx ./tui/main.tsx",
     "tui:ink:dev": "node --watch --import tsx ./tui/main.tsx",
     "regen-codex-schema": "rm -rf lib/codex-schema && codex app-server generate-ts --experimental --out lib/codex-schema",
+    "codex:features:smoke": "bun run ./scripts/codexNewSchemaSupportSmoke.tsx && bun run ./tui/opentui/codexAsyncQuestionSmoke.tsx && bun run ./tui/opentui/codexQuestionStreamSmoke.tsx",
     "codex:schema:smoke": "bun run ./scripts/codexSchemaAlignmentSmoke.ts",
     "claude:storage:smoke": "node --import tsx ./scripts/claudeSessionStoreSmoke.ts",
     "claude:runtime:smoke": "node --import tsx ./scripts/claude-runtime-policy-smoke.ts && node --import tsx ./scripts/claudeIntegrationSmoke.ts && node --import tsx ./scripts/claudeDialogBridgeSmoke.ts",

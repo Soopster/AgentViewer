@@ -48,6 +48,9 @@ export type PendingElicitation = {
 }
 
 export type PendingPermission = {
+  /** Local follow-up picker; answers enter the composer, never an approval RPC. */
+  asyncQuestion?: boolean
+  providerInstanceId?: string
   id: string
   sessionId?: string
   provider?: AgentProvider

@@ -19,6 +19,7 @@ import type {
 } from './codexProtocol'
 import { CODEX_CAPABILITIES } from './provider'
 import { buildThreadedMessages, type ThreadedMessage } from './threading'
+import { mcpResourceLinks } from './mcpArtifacts'
 import { recordRawFrames } from './rawFrames'
 
 function isPendingCodexThread(thread: CodexThread): boolean {
@@ -145,7 +146,7 @@ function summarizeFileChanges(status: string, changes: CodexFileUpdateChange[]):
 
 function toolInput(value: unknown): Record<string, unknown> {
   const objectValue = asObject(value)
-  return Object.keys(objectValue).length > 0 ? objectValue : { value }
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? objectValue : { value }
 }
 
 function mapItemToMessages(
@@ -165,8 +166,18 @@ function mapItemToMessages(
         ? [makeMessage(threadId, baseId, 'user', text, turnId, timestamp)]
         : []
     }
-    case 'agentMessage':
-      return item.text ? [makeMessage(threadId, baseId, 'assistant', item.text, turnId, timestamp)] : []
+    case 'agentMessage': {
+      const content: import('./types').ContentBlock[] = []
+      if (item.text) content.push({ type: 'text', text: item.text })
+      if (item.questions?.length) content.push({
+        type: 'tool_use', id: `${baseId}:questions`, name: 'AskUserQuestion',
+        input: { asyncUserInput: true, sourceItemId: item.id, questions: item.questions.map((question, index) => ({
+          id: `${item.id}:${index}`, question: question.title,
+          allowFreeform: true, options: (question.options ?? []).map(label => ({ label })),
+        })) },
+      })
+      return content.length ? [makeMessage(threadId, baseId, 'assistant', content, turnId, timestamp)] : []
+    }
     case 'functionCallOutput': {
       const toolUseId = `${baseId}:tool`
       const output = typeof item.output === 'string' ? item.output : item.output.map((part) => {
@@ -255,11 +266,13 @@ function mapItemToMessages(
       const assistant = makeMessage(threadId, baseId, 'assistant', [{
         type: 'tool_use',
         id: toolUseId,
-        name: item.tool || 'MCP',
-        input: {
-          server: item.server,
-          status: item.status,
-          ...toolInput(item.arguments),
+        name: `mcp__${item.server}__${item.tool || 'MCP'}`,
+        input: toolInput(item.arguments),
+        mcp: { server: item.server, tool: item.tool, originCallId: item.id,
+          status: item.status, pluginId: item.pluginId, readOnlyHint: item.readOnlyHint, appContext: item.appContext,
+          ...(item.mcpAppUi ? { app: item.mcpAppUi } : item.mcpAppResourceUri ? { app: {
+            resourceUri: item.mcpAppResourceUri, preferredModelDisplayMode: 'inline',
+          } } : {}),
         },
       }], turnId, timestamp)
       const resultText = item.error
@@ -268,7 +281,12 @@ function mapItemToMessages(
         ? stringify(item.result)
         : `${item.server}/${item.tool} completed with no structured result`
       const result = makeMessage(threadId, `${baseId}:result`, 'user', [
-        makeToolResult(toolUseId, resultText, item.status === 'failed' || Boolean(item.error)),
+        { ...makeToolResult(toolUseId, resultText, item.status === 'failed' || Boolean(item.error)),
+          ...(item.result ? { content: item.result.content as import('./types').ContentBlock[],
+            structuredContent: item.result.structuredContent,
+            mcpMeta: asObject(item.result._meta), resourceLinks: mcpResourceLinks(item.result.content),
+          } : {}),
+        },
       ], turnId, timestamp)
       return includeToolResults ? [assistant, result] : [assistant]
     }
@@ -344,7 +362,7 @@ function mapItemToMessages(
     case 'contextCompaction':
       return [makeMessage(threadId, baseId, 'assistant', 'Context compaction completed.', turnId, timestamp)]
     case 'hookPrompt':
-      return [makeMessage(threadId, baseId, 'assistant', `Hook prompt emitted (${item.fragments.length} fragment${item.fragments.length === 1 ? '' : 's'}).`, turnId, timestamp)]
+      return [makeMessage(threadId, baseId, 'assistant', `Hook prompt\n\n${item.fragments.map(fragment => fragment.text).join('\n\n')}`, turnId, timestamp)]
     default:
       return item satisfies never
   }
@@ -380,6 +398,16 @@ export function normalizeCodexStreamThreadedMessage(payload: unknown, fallbackSe
   if (messages.length === 0) return null
 
   return buildThreadedMessages(messages).find((message) => message.role === 'assistant') ?? null
+}
+
+/** Web streams prose separately; retain non-text blocks from agent completions too. */
+export function normalizeCodexStreamArtifactMessage(payload: unknown, fallbackSessionId?: string): ThreadedMessage | null {
+  const message = normalizeCodexStreamThreadedMessage(payload, fallbackSessionId)
+  if (!message) return null
+  const itemType = asObject(asObject(payload).item).type
+  if (itemType !== 'agentMessage' && itemType !== 'plan') return message
+  const blocks = message.blocks.filter(block => block.type !== 'text')
+  return blocks.length ? { ...message, blocks } : null
 }
 
 export function mapCodexThreadToSession(thread: CodexThread, tag: string | null): Session {

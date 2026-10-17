@@ -1,5 +1,6 @@
 'use client'
 
+import { Button } from './ui/button'
 import { useEffect, useRef, useState } from 'react'
 import type { McpResourceLink, Session, ToolResultBlock } from '@/lib/types'
 import { mcpArtifactHref, mcpResourceLinks } from '@/lib/mcpArtifacts'
@@ -20,7 +21,7 @@ export function McpArtifactLinks({ links }: { links: McpResourceLink[] }) {
   </div>
 }
 
-function McpAppFrame({ html, input, result }: { html: string; input: Record<string, unknown>; result: ToolResultBlock }) {
+function McpAppFrame({ html, input, result, fullscreen }: { fullscreen: boolean; html: string; input: Record<string, unknown>; result: ToolResultBlock }) {
   const frame = useRef<HTMLIFrameElement>(null)
   useEffect(() => {
     const listener = (event: MessageEvent) => {
@@ -31,7 +32,7 @@ function McpAppFrame({ html, input, result }: { html: string; input: Record<stri
       if (message.method === 'ui/initialize' && (typeof message.id === 'string' || typeof message.id === 'number')) {
         post({ jsonrpc: '2.0', id: message.id, result: {
           protocolVersion: '2026-01-26', hostInfo: { name: 'Agent Viewer', version: '0.1.0' },
-          hostCapabilities: {}, hostContext: { displayMode: 'inline' },
+          hostCapabilities: {}, hostContext: { displayMode: fullscreen ? 'fullscreen' : 'inline' },
         } })
       } else if (message.method === 'ui/notifications/initialized') {
         post({ jsonrpc: '2.0', method: 'ui/notifications/tool-input', params: { arguments: input } })
@@ -47,23 +48,30 @@ function McpAppFrame({ html, input, result }: { html: string; input: Record<stri
     }
     window.addEventListener('message', listener)
     return () => window.removeEventListener('message', listener)
-  }, [input, result])
+  }, [input, result, fullscreen])
   // Wait until the listener is mounted before loading an app that may initialize immediately.
   const [ready, setReady] = useState(false)
   useEffect(() => { setReady(true) }, [])
   return ready ? <iframe ref={frame} title="MCP App preview" sandbox="allow-scripts" referrerPolicy="no-referrer"
-    srcDoc={html} style={{ width: '100%', height: 360, border: '1px solid var(--border)', background: 'white' }} /> : null
+    srcDoc={html} style={{ width: '100%', height: fullscreen ? 'calc(100vh - 100px)' : 360, border: '1px solid var(--border)', background: 'white' }} /> : null
 }
 
-export function McpToolArtifacts({ result, input, session, serverName, toolName }: {
+export function McpToolArtifacts({ result, input, session, serverName, toolName, originCallId }: {
   result: ToolResultBlock
   input: Record<string, unknown>
   session?: Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'>
   serverName: string
   toolName: string
+  originCallId?: string
 }) {
   const [preview, setPreview] = useState<{ html?: string; error?: string; loading?: boolean }>({})
   const [open, setOpen] = useState(false)
+  const [fullscreen, setFullscreen] = useState(false)
+  const modal = useRef<HTMLDialogElement>(null)
+  useEffect(() => {
+    if (open && fullscreen) modal.current?.showModal()
+    else modal.current?.close()
+  }, [open, fullscreen])
   const links = mcpResourceLinks(result.resourceLinks, Array.isArray(result.content) ? result.content : [])
   async function loadPreview() {
     if (preview.html) { setOpen(value => !value); return }
@@ -72,25 +80,39 @@ export function McpToolArtifacts({ result, input, session, serverName, toolName 
     try {
       const response = await fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/actions`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'getMcpApp', provider: 'claude', providerInstanceId: session.providerInstanceId, serverName, toolName }),
+        body: JSON.stringify({ action: 'getMcpApp', provider: session.provider, originCallId, providerInstanceId: session.providerInstanceId, serverName, toolName }),
       })
       const data = await response.json()
       if (!response.ok) throw new Error(data.error || 'Unable to load MCP App.')
       if (!data.result?.available || typeof data.result.html !== 'string') throw new Error('This tool does not provide an MCP App preview.')
       setPreview({ html: data.result.html })
+      setFullscreen(data.result.preferredModelDisplayMode === 'fullscreen')
       setOpen(true)
     } catch (error) { setPreview({ error: error instanceof Error ? error.message : 'Unable to load MCP App.' }) }
   }
   return <>
     <McpArtifactLinks links={links} />
-    {session?.provider === 'claude' && <div style={{ padding: '6px 12px', display: 'grid', gap: 8 }}>
+    {(session?.provider === 'claude' || (session?.provider === 'codex' && originCallId)) && <div style={{ padding: '6px 12px', display: 'grid', gap: 8 }}>
       <button type="button" onClick={loadPreview} disabled={preview.loading} aria-expanded={open}
         style={{ justifySelf: 'start', border: '1px solid var(--border)', borderRadius: 4, padding: '4px 8px',
           background: 'var(--surface-2)', color: 'var(--text-2)', fontSize: 12, cursor: 'pointer' }}>
         {preview.loading ? 'Loading MCP App…' : open ? 'Hide MCP App preview' : 'Open MCP App preview'}
       </button>
       {preview.error && <span role="status">{preview.error}</span>}
-      {open && preview.html && <McpAppFrame html={preview.html} input={input} result={result} />}
+      {open && preview.html && <>
+        {!fullscreen && <>
+          <Button type="button" variant="outline" onClick={() => setFullscreen(true)}>Fullscreen</Button>
+          <McpAppFrame html={preview.html} input={input} result={result} fullscreen={false} />
+        </>}
+        <dialog ref={modal} aria-label="MCP App preview" onCancel={() => setFullscreen(false)}
+          style={{ width: 'calc(100vw - 32px)', maxWidth: 'none', background: 'var(--surface-2)', color: 'var(--text-1)', padding: 12 }}>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+            <Button type="button" variant="outline" onClick={() => setFullscreen(false)}>Exit fullscreen</Button>
+            <Button type="button" variant="outline" onClick={() => setOpen(false)}>Close preview</Button>
+          </div>
+          {fullscreen && <McpAppFrame html={preview.html} input={input} result={result} fullscreen />}
+        </dialog>
+      </>}
     </div>}
   </>
 }

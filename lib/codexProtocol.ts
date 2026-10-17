@@ -11,6 +11,7 @@
 
 import type {
   AppsListResponse,
+  McpResourceReadResponse,
   ExperimentalFeature,
   ExperimentalFeatureListResponse,
   HooksListResponse,
@@ -73,6 +74,7 @@ export type CodexRequestArgs<M extends CodexClientMethod> =
 
 export type CodexResponseFor<M extends CodexClientMethod> =
   M extends 'initialize' ? InitializeResponse
+  : M extends 'mcpServer/resource/read' ? McpResourceReadResponse
   : M extends 'mcpServerStatus/list' ? ListMcpServerStatusResponse
   : M extends 'experimentalFeature/list' ? ExperimentalFeatureListResponse
   : M extends 'skills/list' ? SkillsListResponse

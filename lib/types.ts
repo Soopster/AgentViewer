@@ -9,7 +9,17 @@ export type McpResourceLink = {
 }
 
 export type TextBlock = { type: 'text'; text: string }
-export type ToolUseBlock = { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
+export type McpInvocation = {
+  server: string
+  tool: string
+  originCallId: string
+  status?: string
+  pluginId?: string | null
+  readOnlyHint?: boolean | null
+  appContext?: { connectorId: string; linkId: string | null; resourceUri: string | null; appName: string | null; actionName: string | null } | null
+  app?: { resourceUri: string; preferredModelDisplayMode: 'inline' | 'fullscreen' }
+}
+export type ToolUseBlock = { type: 'tool_use'; id: string; name: string; input: Record<string, unknown>; mcp?: McpInvocation }
 export type ToolResultBlock = {
   type: 'tool_result'
   tool_use_id: string

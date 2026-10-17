@@ -42,7 +42,7 @@ import {
   normalizeClaudeStreamThreadedMessage,
   parseClaudeStreamToolInput,
 } from '@/lib/claudeMapper'
-import { normalizeCodexStreamThreadedMessage } from '@/lib/codexMapper'
+import { normalizeCodexStreamArtifactMessage } from '@/lib/codexMapper'
 import { getSlashCommandSuggestions, filterSlashCommands, normalizeSlashCommandSuggestions, type SlashCommandSuggestion } from '@/lib/slashCommands'
 import { getProviderComposer } from '@/lib/providerComposer'
 import { isPendingRequestGone, PENDING_REQUEST_GONE_NOTICE } from '@/lib/pendingRequestGone'
@@ -64,7 +64,7 @@ import MessageItem, { MessageDensityProvider, ViewModeProvider, DiffStyleProvide
 import { useChannelBridge } from './useChannelBridge'
 import { useIdeBridge } from './useIdeBridge'
 import type { PierreDiffStyle } from './PierreDiffView'
-import { DEFAULT_DIFF_OPTIONS, DiffCommentComposerContext, LiveSubagentTextContext, TaskActiveFormsContext, buildTaskActiveFormsForWeb, streamMessageHasContent, type DiffOptions } from './messageItemShared'
+import { DEFAULT_DIFF_OPTIONS, QuestionAnswerComposerContext, DiffCommentComposerContext, LiveSubagentTextContext, TaskActiveFormsContext, buildTaskActiveFormsForWeb, streamMessageHasContent, type DiffOptions } from './messageItemShared'
 import { TaskRail } from './TaskRail'
 import ProviderIcon from './ProviderIcon'
 import BranchSwitcher from './BranchSwitcher'
@@ -5300,11 +5300,6 @@ function MessageViewInner({
               clearLiveAssistantText()
             }
 
-            const codexCompletionItem = parsed?.type === 'codex_item_completed' && parsed.item && typeof parsed.item === 'object'
-              ? parsed.item as Record<string, unknown>
-              : null
-            const codexCompletionIsText = codexCompletionItem?.type === 'agentMessage' || codexCompletionItem?.type === 'plan'
-
             if (session.provider === 'claude') {
               const results = extractClaudeStreamToolResults(parsed)
               if (results.length) {
@@ -5314,8 +5309,8 @@ function MessageViewInner({
               if (threaded) {
                 setLiveThreadedMessages((prev) => upsertThreadedMessage(prev, threaded))
               }
-            } else if (session.provider === 'codex' && !codexCompletionIsText) {
-              const threaded = normalizeCodexStreamThreadedMessage(parsed, session.sessionId)
+            } else if (session.provider === 'codex') {
+              const threaded = normalizeCodexStreamArtifactMessage(parsed, session.sessionId)
               if (threaded) {
                 setLiveThreadedMessages((prev) => upsertThreadedMessage(prev, threaded))
               }
@@ -6356,6 +6351,16 @@ function MessageViewInner({
     const existing = inputTextRef.current
     const separator = existing.length > 0 ? (existing.endsWith('\n') ? '' : '\n\n') : ''
     const next = `${existing}${separator}${quoted}\n\n`
+    setInputText(next)
+    inputTextRef.current = next
+    setHistoryIndex(-1)
+    draftBeforeHistoryRef.current = { text: '', cursorPos: 0 }
+    focusComposer()
+  }, [focusComposer])
+
+  const handleQuestionAnswerToComposer = useCallback((answer: string) => {
+    const existing = inputTextRef.current
+    const next = `${existing}${existing ? '\n\n' : ''}${answer}\n`
     setInputText(next)
     inputTextRef.current = next
     setHistoryIndex(-1)
@@ -9077,6 +9082,7 @@ function MessageViewInner({
               <ViewModeProvider mode={viewMode}>
               <DiffStyleProvider diffStyle={diffStyle}>
               <DiffOptionsProvider options={diffOptions}>
+              <QuestionAnswerComposerContext.Provider value={handleQuestionAnswerToComposer}>
               <DiffCommentComposerContext.Provider value={handleDiffCommentToComposer}>
                 <LiveSubagentTextContext.Provider value={liveSubagentText}>
                   <TaskActiveFormsContext.Provider value={taskActiveForms}>
@@ -9084,6 +9090,7 @@ function MessageViewInner({
                   </TaskActiveFormsContext.Provider>
                 </LiveSubagentTextContext.Provider>
               </DiffCommentComposerContext.Provider>
+              </QuestionAnswerComposerContext.Provider>
               </DiffOptionsProvider>
               </DiffStyleProvider>
               </ViewModeProvider>
