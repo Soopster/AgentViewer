@@ -22302,6 +22302,11 @@ export default function OpenTuiApp() {
     flexGrow: 1,
   }
   const chatComposerFocused = composerActive && !composerFocusBlocked
+  // Fullscreen has no border to light up, so a focused composer is told apart
+  // by its ground: a wash of its accent over the surface, dock and draft alike.
+  const composerDockBackground = fullscreenMode && chatComposerFocused
+    ? mixHexColor(composerAccentColor, theme.surface, 0.12) ?? theme.surface3
+    : theme.surface
   // The textarea paints its own background over whatever the parent draws, so
   // chat mode's highlighted bar needs the textarea itself tinted to match —
   // otherwise the bar only shows through the "› " prefix and padding slivers.
@@ -22477,7 +22482,7 @@ export default function OpenTuiApp() {
   const composerShellDraft = composerDraft.startsWith('!')
   const renderComposerTextarea = (
     onSubmit: () => void,
-    options?: { height?: number; width?: number; variant?: 'chat' },
+    options?: { height?: number; width?: number; variant?: 'chat'; background?: string },
   ) => (
     <textarea
       id="composer-textarea"
@@ -22498,6 +22503,8 @@ export default function OpenTuiApp() {
       onSubmit={onSubmit}
       style={options?.variant === 'chat'
         ? composerChatTextareaStyle
+        : options?.background
+        ? { ...composerBaseTextareaStyle, backgroundColor: options.background, focusedBackgroundColor: options.background }
         : options?.height ? composerBaseTextareaStyle : composerDockTextareaStyle}
     />
   )
@@ -24631,7 +24638,10 @@ export default function OpenTuiApp() {
           marginLeft={composerAreaOffset}
           width={composerAreaWidth}
           paddingX={1}
-          backgroundColor={isChatLikeView ? theme.surface : theme.surface2}
+          // The textarea paints theme.surface over its own cells; a dock in any
+          // other shade showed as a padding stripe down each side and, with no
+          // border in fullscreen, a band that did not match the draft.
+          backgroundColor={composerDockBackground}
           border={fullscreenMode ? [] : ['top', 'left', 'right', 'bottom']}
           borderStyle={composerDockRouted ? 'heavy' : isChatLikeView ? 'single' : 'rounded'}
           borderColor={composerDockEmphasized ? composerAccentColor : theme.border}
@@ -24650,6 +24660,7 @@ export default function OpenTuiApp() {
           {renderComposerTextarea(submitComposerFromDock, {
             height: composerDockTextareaHeight,
             width: composerDockTextareaWidth,
+            background: composerDockBackground,
           })}
           {/* Stats and key hints sit *in* the bottom border rather than on a
               row above it — the same trick the top border's title uses, worth
@@ -24658,12 +24669,13 @@ export default function OpenTuiApp() {
           <box
             id="composer-dock-status"
             {...(fullscreenMode
-              ? { height: 1, backgroundColor: theme.surface3 }
+              // Out through the dock's padding, so the band meets both edges.
+              ? { height: 1, backgroundColor: theme.surface3, marginLeft: -1, marginRight: -1, paddingX: 1 }
               : { position: 'absolute' as const, bottom: -1, left: 1, width: composerDockTextareaWidth, height: 1 })}
             flexDirection="row"
             alignItems="center"
           >
-            <box width={composerDockFooterStatsWidth} overflow="hidden" backgroundColor={fullscreenMode ? undefined : theme.surface2}>
+            <box width={composerDockFooterStatsWidth} overflow="hidden" backgroundColor={fullscreenMode ? undefined : theme.surface}>
               <text fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none">
                 {composerSlashHint
                   ? fitText(composerSlashHint, composerDockFooterStatsWidth)
@@ -24679,7 +24691,7 @@ export default function OpenTuiApp() {
               </text>
             </box>
             <box flexGrow={1} />
-            <box width={composerDockFooterHintWidth} overflow="hidden" backgroundColor={fullscreenMode ? undefined : theme.surface2}>
+            <box width={composerDockFooterHintWidth} overflow="hidden" backgroundColor={fullscreenMode ? undefined : theme.surface}>
               <text fg={composerActive && !visibleComposerSending ? composerAccentColor : theme.dim} wrapMode="none">
                 {dockShowsStatusBar
                   ? renderInlineTextSegments(footerSegments, composerDockFooterHintWidth, theme.dim)

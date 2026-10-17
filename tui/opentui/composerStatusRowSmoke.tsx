@@ -54,6 +54,48 @@ if (dock.height !== textarea.height + 2) {
   throw new Error(`Dock is ${dock.height} rows for a ${textarea.height}-row draft; expected ${textarea.height + 2}`)
 }
 
+// Fullscreen has no border to hide a mismatch: every cell of the draft rows
+// must be one colour, and the status band must meet both screen edges. The
+// dock used to be a different shade from the textarea, a stripe down each side.
+act(() => { setup.mockInput.pressTab() })
+await settle(300)
+act(() => { setup.mockInput.pressKey('Z', { shift: true }) })
+await settle(500)
+{
+  const fsDock = setup.renderer.root.findDescendantById('composer-dock') as unknown as Geometry | null
+  if (!fsDock) throw new Error('Fullscreen composer dock is missing')
+  const spans = setup.captureSpans().lines
+  const bgsOf = (row: number) => new Set((spans[row]?.spans ?? []).map((span) => span.bg.toInts().slice(0, 3).join(',')))
+  for (let row = fsDock.y; row < fsDock.y + fsDock.height - 1; row += 1) {
+    const bgs = bgsOf(row)
+    if (bgs.size !== 1) throw new Error(`Fullscreen composer row ${row} is painted in ${bgs.size} colours: ${[...bgs].join(' | ')}`)
+  }
+  const statusSpans = spans[fsDock.y + fsDock.height - 1]?.spans ?? []
+  const edge = (span: (typeof statusSpans)[number] | undefined) => span?.bg.toInts().slice(0, 3).join(',')
+  if (edge(statusSpans[0]) !== edge(statusSpans[statusSpans.length - 1]) || edge(statusSpans[0]) === [...bgsOf(fsDock.y)][0]) {
+    throw new Error('The fullscreen status band does not span the screen edge to edge')
+  }
+  // Focused, the composer takes a ground of its own — there is no border to
+  // light up in fullscreen — and stays one colour doing it.
+  const unfocused = [...bgsOf(fsDock.y)][0]
+  act(() => { setup.mockInput.pressKey('c') })
+  await settle(400)
+  const focusedSpans = setup.captureSpans().lines
+  const focusedBgs = new Set<string>()
+  for (let row = fsDock.y; row < fsDock.y + fsDock.height - 1; row += 1) {
+    for (const span of focusedSpans[row]?.spans ?? []) {
+      // The cursor cell is painted in its own colour; it is not the ground.
+      if (span.text.length > 1 || span.text === ' ') focusedBgs.add(span.bg.toInts().slice(0, 3).join(','))
+    }
+  }
+  if (focusedBgs.size !== 1) throw new Error(`Focused fullscreen composer is painted in ${focusedBgs.size} colours: ${[...focusedBgs].join(' | ')}`)
+  if ([...focusedBgs][0] === unfocused) throw new Error('A focused fullscreen composer has the same background as an unfocused one')
+  act(() => { setup.mockInput.pressEscape() })
+  await settle(300)
+}
+act(() => { setup.mockInput.pressKey('Z', { shift: true }) })
+await settle(500)
+
 // Chat view docks its own composer inside the reader's frame, with its own
 // border and its own status row — the same rule, a separate implementation.
 act(() => { setup.mockInput.pressKey('v') })
