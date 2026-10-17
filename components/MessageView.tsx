@@ -3803,11 +3803,11 @@ function MessageViewInner({
   }, [selectedEffort, selectedModel, session?.cwd, session?.isPending, session?.provider, session?.sessionId])
 
   useEffect(() => {
-    // Prewarm on session selection, not only textarea focus. Native CLIs keep
-    // their provider runtime hot while you browse; waiting until the first
-    // keystroke leaves the cold spawn on the send critical path.
-    prewarmComposer()
-  }, [prewarmComposer])
+    // Resuming an existing provider session can advance its activity timestamp
+    // without a turn. Browsing must stay read-only; warm existing sessions only
+    // when the user engages the composer. New sessions have no activity to move.
+    if (session?.isPending) prewarmComposer()
+  }, [prewarmComposer, session?.isPending])
 
   // Load message bookmarks for the active session. Reset the "bookmarks only"
   // filter on every session switch so a stale focus doesn't carry over.

@@ -369,7 +369,8 @@ export function mapCodexThreadToSession(thread: CodexThread, tag: string | null)
     summary: thread.preview || thread.name || thread.id,
     customTitle: thread.name ?? undefined,
     firstPrompt: thread.preview || undefined,
-    lastModified: thread.updatedAt * 1000,
+    // Resuming for model metadata advances updatedAt without a turn.
+    lastModified: (thread.recencyAt ?? thread.updatedAt) * 1000,
     cwd: thread.cwd,
     tag,
     createdAt: thread.createdAt * 1000,
@@ -387,7 +388,7 @@ export function mapCodexThreadToSessionInfo(thread: CodexThread, tag: string | n
     summary: thread.preview || thread.name || thread.id,
     customTitle: thread.name ?? undefined,
     firstPrompt: thread.preview || undefined,
-    lastModified: thread.updatedAt * 1000,
+    lastModified: (thread.recencyAt ?? thread.updatedAt) * 1000,
     gitBranch: thread.gitInfo?.branch ?? undefined,
     cwd: thread.cwd,
     tag: tag ?? undefined,

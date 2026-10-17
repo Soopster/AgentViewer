@@ -113,6 +113,19 @@ const thread = {
 
 const session = mapCodexThreadToSession(thread, null)
 const info = mapCodexThreadToSessionInfo(thread, null, 'gpt-5.6-codex')
+// Opening a thread may resume it to read its model. That changes updatedAt,
+// but the sidebar and detail must retain the provider's turn recency time.
+for (const [candidate, expected] of [
+  [{ ...thread, updatedAt: thread.updatedAt + 600 }, 1_700_000_100_000],
+  [{ ...thread, updatedAt: thread.updatedAt + 600, recencyAt: 1_700_000_400 }, 1_700_000_400_000],
+  [{ ...thread, recencyAt: null }, 1_700_000_100_000],
+  [{ ...thread, recencyAt: 0 }, 0],
+] as const) {
+  if (mapCodexThreadToSession(candidate, null).lastModified !== expected
+    || mapCodexThreadToSessionInfo(candidate, null, null).lastModified !== expected) {
+    throw new Error('Codex activity must follow turn recency, not a metadata-only resume')
+  }
+}
 if (session.isPinned !== false || info.isPinned !== false) {
   throw new Error('Codex session mapper unexpectedly reported a pin state (isPinned was removed from the app-server protocol)')
 }
