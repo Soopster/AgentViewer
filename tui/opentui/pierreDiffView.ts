@@ -1,16 +1,8 @@
 import { DiffHighlightCache, estimateHighlightBytes } from './diffHighlightCache'
 import { diffContextGap, type DiffContextGap } from './gitDiffContext'
 import { createHash } from 'node:crypto'
-import {
-  cleanLastNewline,
-  getFiletypeFromFileName,
-  getHighlighterOptions,
-  getSharedHighlighter,
-  parsePatchFiles,
-  renderDiffWithHighlighter,
-  type FileDiffMetadata,
-} from '@pierre/diffs'
-import { prepareFileTreeInput } from '@pierre/trees'
+import type { FileDiffMetadata } from '@pierre/diffs'
+import { cleanLastNewline, parsePatchFiles, sortTreePaths } from './pierreLight'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -181,6 +173,9 @@ const RENDER_OPTIONS = {
 
 export async function highlightDiffFile(file: FileDiffMetadata, appearance: 'dark' | 'light'): Promise<TuiFileHighlights> {
   const options = RENDER_OPTIONS[appearance]
+  // The highlighter is the whole package (Shiki and its grammars); building a
+  // card never needs it, so it loads the first time a highlight is asked for.
+  const { getFiletypeFromFileName, getHighlighterOptions, getSharedHighlighter, renderDiffWithHighlighter } = await import('@pierre/diffs')
   const lang = file.lang ?? getFiletypeFromFileName(diffDisplayPath(file)) ?? 'text'
   const highlighter = await getSharedHighlighter({ ...getHighlighterOptions(lang, { theme: options.theme }), preferredHighlighter: 'shiki-wasm' })
   const highlighted = renderDiffWithHighlighter(file, highlighter, options)
@@ -637,11 +632,7 @@ function buildFallbackDiffView(diffText: string, cacheKey: string): TuiPierreDif
 // ─── File ordering ────────────────────────────────────────────────────────────
 
 function orderDiffFiles(files: FileDiffMetadata[]): FileDiffMetadata[] {
-  const prepared = prepareFileTreeInput(
-    files.map((file) => diffDisplayPath(file)),
-    { flattenEmptyDirectories: true, sort: 'default' },
-  )
-  const order = new Map(prepared.paths.map((path, index) => [path, index]))
+  const order = new Map(sortTreePaths(files.map((file) => diffDisplayPath(file))).map((path, index) => [path, index]))
   return [...files].sort((left, right) => {
     const leftOrder = order.get(diffDisplayPath(left)) ?? Number.MAX_SAFE_INTEGER
     const rightOrder = order.get(diffDisplayPath(right)) ?? Number.MAX_SAFE_INTEGER
@@ -650,12 +641,7 @@ function orderDiffFiles(files: FileDiffMetadata[]): FileDiffMetadata[] {
 }
 
 function diffTreePaths(files: FileDiffMetadata[]): string[] {
-  return [
-    ...prepareFileTreeInput(
-      files.map((file) => diffDisplayPath(file)),
-      { flattenEmptyDirectories: true, sort: 'default' },
-    ).paths,
-  ]
+  return sortTreePaths(files.map((file) => diffDisplayPath(file)))
 }
 
 export function diffDisplayPath(file: FileDiffMetadata): string {

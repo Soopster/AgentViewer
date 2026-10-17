@@ -150,15 +150,7 @@ import {
   type MessageBookmark,
   type SetMessageBookmarkInput,
 } from '../messageBookmarks'
-import {
-  deletePrompt,
-  getPrompt,
-  listPrompts,
-  savePrompt,
-  type PromptRecord,
-  type PromptSummary,
-  type SavePromptInput,
-} from '../promptLibrary'
+import type { PromptRecord, PromptSummary, SavePromptInput } from '../promptLibrary'
 import {
   createWorktreeTask,
   findWorktreeTaskForCwd,
@@ -1244,20 +1236,24 @@ export async function readTuiAllBookmarks(): Promise<MessageBookmark[]> {
   return listAllBookmarks()
 }
 
+// The prompt library parses front matter with `yaml`; it loads when the
+// library is first opened, not with every TUI launch.
+const promptLibrary = () => import('../promptLibrary')
+
 export async function readTuiPrompts(): Promise<PromptSummary[]> {
-  return listPrompts()
+  return (await promptLibrary()).listPrompts()
 }
 
 export async function readTuiPrompt(slug: string): Promise<PromptRecord | null> {
-  return getPrompt(slug)
+  return (await promptLibrary()).getPrompt(slug)
 }
 
 export async function saveTuiPrompt(input: SavePromptInput): Promise<PromptRecord> {
-  return savePrompt(input)
+  return (await promptLibrary()).savePrompt(input)
 }
 
 export async function deleteTuiPrompt(slug: string): Promise<boolean> {
-  return deletePrompt(slug)
+  return (await promptLibrary()).deletePrompt(slug)
 }
 
 export async function readTuiCoordinatorResult(sessionId: string, provider: AgentProvider, taskId: string): Promise<import('../coordinatorResultReview').CoordinatorResultReview> {

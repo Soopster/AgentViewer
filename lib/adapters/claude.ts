@@ -35,12 +35,7 @@ import { claudeProcessTransportStatus } from '../claudeProcessSpawner'
 import { readClaudeSupportedModels } from '../claudeModels'
 import { withoutClaudeResumeTouch } from '../claudeResumeTouch'
 import { claudeContextBreakdown, claudeHooksListingItems, claudePermissionRuleItems, formatClaudeMcpServerStatus } from '../claudeSessionPolicy'
-import {
-  claudeListCacheKey,
-  readClaudeCorpusToken,
-  readClaudeListCache,
-  writeClaudeListCache,
-} from '../claudeSessionListCache'
+import { claudeListCacheKey, readClaudeCorpus, readClaudeListPage } from '../claudeSessionListCache'
 import { peekClaudeSessionIfLoaded } from '../claudePoolHandle'
 import { getClaudeCommandsOverride } from '../claudeCommandsStore'
 import {
@@ -209,6 +204,62 @@ async function readClaudeSubagentSummaries(sessionId: string): Promise<SubagentS
   return summaries.filter((s): s is SubagentSummary => s !== null)
 }
 
+async function deriveClaudeListPage({ limit, offset, dir, includeWorktrees }: {
+  limit?: number
+  offset?: number
+  dir?: string
+  includeWorktrees?: boolean
+}) {
+  pruneSessionInfoCache()
+  const sessions = await timeAsync('claude.listSessions', () => listSessions({
+    limit,
+    offset,
+    dir,
+    includeWorktrees: dir ? includeWorktrees : undefined,
+    // SessionStore.listSessions is project-scoped: the SDK has no API for
+    // enumerating project keys. Preserve its true cross-project filesystem
+    // behavior when no directory filter is present. Store mirroring requires
+    // local persistence, so those sessions remain visible in this fallback.
+    ...(dir ? claudeSessionStoreOptions() : {}),
+  }))
+  return timeAsync('claude.sessionInfo', () => mapConcurrent(sessions, 20, async (session) => {
+    // getSessionInfo re-derives the very fields the list entry already
+    // carries, and deriving them means re-reading that session's transcript:
+    // enriching a complete entry costs a full pass over every JSONL in the
+    // corpus on every list poll (~140MB of allocation for 225 sessions here,
+    // measured, against ~60MB for the list itself). A complete entry is
+    // returned as-is; only a sparse one — a store-backed or partially
+    // written session — still pays for the single-session lookup.
+    if (isCompleteClaudeListEntry(session)) return session
+    try {
+      const sessionDir = typeof session.cwd === 'string' && session.cwd ? session.cwd : dir
+      const info = await getCachedSessionInfo(session.sessionId, sessionDir)
+      if (!info) return session
+      return {
+        ...session,
+        ...info,
+        // Keep the list-level working directory when the single-session lookup
+        // can't resolve one, but prefer the stable per-session metadata.
+        cwd: info.cwd ?? session.cwd,
+      }
+    } catch {
+      return session
+    }
+  }))
+}
+
+/** One list entry re-read after its transcript changed: the merge
+ *  deriveClaudeListPage gives an entry it enriches, so an entry the SDK lists
+ *  without a first prompt patches like any other. Exported for the smoke. */
+export async function readClaudeListEntry<T extends { sessionId: string; cwd?: string }>(entry: T) {
+  const info = await getSessionInfo(entry.sessionId, entry.cwd ? { dir: entry.cwd } : {})
+  return info ? { ...entry, ...info, cwd: info.cwd ?? entry.cwd } : null
+}
+
+export async function claudeListHasEntry(sessionId: string): Promise<boolean> {
+  return Boolean(await getSessionInfo(sessionId))
+}
+
 export const claudeAdapter: SessionAdapter = {
   provider: 'claude',
 
@@ -216,57 +267,24 @@ export const claudeAdapter: SessionAdapter = {
     // The per-instance environment (a distinct CLAUDE_CONFIG_DIR, say) has to
     // be in place for the store read, not just for spawned processes.
     return withProviderProcessEnvironment(async () => {
-      // The corpus's own size+mtime sweep decides whether this page has to be
-      // re-derived at all — see lib/claudeSessionListCache.ts. An unchanged
-      // corpus is the common case on a 5s poll, and re-deriving it reads every
-      // listed transcript.
-      const cacheKey = claudeListCacheKey({ limit, offset, dir, includeWorktrees })
-      const corpusToken = await readClaudeCorpusToken()
-      const cachedPage = readClaudeListCache(cacheKey, corpusToken)
-      if (cachedPage) return cachedPage
-
-      pruneSessionInfoCache()
-      const sessions = await timeAsync('claude.listSessions', () => listSessions({
-        limit,
-        offset,
-        dir,
-        includeWorktrees: dir ? includeWorktrees : undefined,
-        // SessionStore.listSessions is project-scoped: the SDK has no API for
-        // enumerating project keys. Preserve its true cross-project filesystem
-        // behavior when no directory filter is present. Store mirroring requires
-        // local persistence, so those sessions remain visible in this fallback.
-        ...(dir ? claudeSessionStoreOptions() : {}),
-      }))
-      const normalized = await timeAsync('claude.sessionInfo', () => mapConcurrent(sessions, 20, async (session) => {
-        // getSessionInfo re-derives the very fields the list entry already
-        // carries, and deriving them means re-reading that session's transcript:
-        // enriching a complete entry costs a full pass over every JSONL in the
-        // corpus on every list poll (~140MB of allocation for 225 sessions here,
-        // measured, against ~60MB for the list itself). A complete entry is
-        // returned as-is; only a sparse one — a store-backed or partially
-        // written session — still pays for the single-session lookup.
-        if (isCompleteClaudeListEntry(session)) return session
-        try {
-          const sessionDir = typeof session.cwd === 'string' && session.cwd ? session.cwd : dir
-          const info = await getCachedSessionInfo(session.sessionId, sessionDir)
-          if (!info) return session
-          return {
-            ...session,
-            ...info,
-            // Keep the list-level working directory when the single-session lookup
-            // can't resolve one, but prefer the stable per-session metadata.
-            cwd: info.cwd ?? session.cwd,
-          }
-        } catch {
-          return session
-        }
-      }))
-
-      return writeClaudeListCache(cacheKey, corpusToken, normalized.map((session) => ({
+      // The corpus's own size+mtime sweep decides how much of this page has to
+      // be re-derived — none, the transcripts that changed, or all of it. See
+      // lib/claudeSessionListCache.ts. A running turn appending to its own
+      // transcript is the common case on a 5s poll, and a full derive reads
+      // every listed transcript.
+      const entries = await readClaudeListPage({
+        key: claudeListCacheKey({ limit, offset, dir, includeWorktrees }),
+        patchable: !offset,
+        corpus: await readClaudeCorpus(),
+        derive: () => deriveClaudeListPage({ limit, offset, dir, includeWorktrees }),
+        readEntry: readClaudeListEntry,
+        hasEntry: claudeListHasEntry,
+      })
+      return entries.map((session) => ({
         ...withoutClaudeResumeTouch(session),
         provider: 'claude' as const,
         capabilities: getProviderCapabilities('claude'),
-      })))
+      }))
     })
   },
 

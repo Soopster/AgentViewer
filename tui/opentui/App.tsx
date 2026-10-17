@@ -6,14 +6,9 @@ import { readReaderLayout } from './readerLayout'
 import { composerProjectLabel, cycleTranscriptWidth, transcriptMeasure } from './engineeringLayout'
 import React, { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, startTransition, useState, useSyncExternalStore } from 'react'
 import { spawn } from 'node:child_process'
-import { GitPopover } from './GitPopover'
-import { PullRequestPopover } from './PullRequestPopover'
-import { FileViewerPopover } from './FileViewerPopover'
-import { EditorPopover } from './EditorPopover'
+import { lazyComponent } from './lazyComponent'
 import { NewSessionModal, NEW_SESSION_PROVIDERS } from './NewSessionModal'
-import { AnalyticsPopover } from './AnalyticsPopover'
 import { HandoffBriefPopover } from './HandoffBriefPopover'
-import { PromptLibraryPopover } from './PromptLibraryPopover'
 import { ChannelBridgePopover } from './ChannelBridgePopover'
 import { readBridgeConfigFromEnv, subscribeToChannelEvents, type ChannelEvent } from '../../lib/channelBridge'
 import {
@@ -251,10 +246,6 @@ import { getTeamAttention, startTeamAttentionFeed, subscribeTeamAttention } from
 import type { CoordinatorPickerFilter } from '../../lib/coordinatorSignals'
 import { AttentionInboxPopover, attentionItemNeedsInput, type AttentionItem } from './AttentionInboxPopover'
 import { CrossSessionMessagingPopover } from './CrossSessionMessagingPopover'
-import { CheckpointPopover } from './CheckpointPopover'
-import { CoordinationPopover } from './CoordinationPopover'
-import { TeammatesPopover } from './TeammatesPopover'
-import { RemoteCoordinatorPopover } from './RemoteCoordinatorPopover'
 import type { RemoteCoordinatorTarget } from '../../lib/tui/remoteCoordinator'
 import { MODAL_SCRIM_Z_INDEX, paintModalScrim } from './layers'
 import { TeammatesAttention } from './TeammatesAttention'
@@ -267,7 +258,6 @@ import {
   subscribeInteractiveCoordinatorNotifications,
   getInteractiveCoordinatorNotifications,
 } from './interactiveCoordinatorStore'
-import { PlaybookManagerPopover } from './PlaybookManagerPopover'
 import { getContinueInCliCommand } from '../../lib/cliContinue'
 import { commandResultExpectsTranscript, isNativeComposerCommandText } from '../../lib/composerCommands'
 import { deliverComposerSteer } from '../../lib/composerSteering'
@@ -418,6 +408,20 @@ const COMPOSER_WAITING_MESSAGES = [
   'Lining up the response',
   'Waiting on the model',
 ] as const
+
+
+// Overlays load when first opened — see lazyComponent.tsx.
+const GitPopover = lazyComponent(() => import('./GitPopover').then((module) => module.GitPopover))
+const PullRequestPopover = lazyComponent(() => import('./PullRequestPopover').then((module) => module.PullRequestPopover))
+const FileViewerPopover = lazyComponent(() => import('./FileViewerPopover').then((module) => module.FileViewerPopover))
+const EditorPopover = lazyComponent(() => import('./EditorPopover').then((module) => module.EditorPopover))
+const AnalyticsPopover = lazyComponent(() => import('./AnalyticsPopover').then((module) => module.AnalyticsPopover))
+const PromptLibraryPopover = lazyComponent(() => import('./PromptLibraryPopover').then((module) => module.PromptLibraryPopover))
+const CheckpointPopover = lazyComponent(() => import('./CheckpointPopover').then((module) => module.CheckpointPopover))
+const CoordinationPopover = lazyComponent(() => import('./CoordinationPopover').then((module) => module.CoordinationPopover))
+const TeammatesPopover = lazyComponent(() => import('./TeammatesPopover').then((module) => module.TeammatesPopover))
+const RemoteCoordinatorPopover = lazyComponent(() => import('./RemoteCoordinatorPopover').then((module) => module.RemoteCoordinatorPopover))
+const PlaybookManagerPopover = lazyComponent(() => import('./PlaybookManagerPopover').then((module) => module.PlaybookManagerPopover))
 
 registerExtraTreeSitterParsers()
 startTuiMetricsLogger()
@@ -18092,18 +18096,29 @@ export default function OpenTuiApp() {
       return undefined
     }
     const userKeys = new Set(visibleTranscriptCards.filter((card) => card.role === 'user').map((card) => `card:${card.key}`))
+    // Each child.y is a native layout read, and at the tail this walk visits
+    // every mounted card — up to READER_CARD_WINDOW of them, eight times a
+    // second, for an answer that cannot change while nothing moves. It was most
+    // of the main thread's CPU while a session sat open. Same geometry, same
+    // header: the walk runs only when the viewport or the content moved.
+    let lastGeometry = ''
     const interval = setInterval(() => {
       const sb = transcriptScrollRef.current
       if (!sb || userKeys.size === 0) return
       const scrollTop = sb.scrollTop
+      const children = sb.content.getChildren()
+      const geometry = `${scrollTop}:${sb.scrollHeight}:${sb.viewport.height}:${children.length}`
+      if (geometry === lastGeometry) return
+      lastGeometry = geometry
       const viewportBottom = scrollTop + sb.viewport.height
       // The newest prompt that has scrolled above the top edge — unless a
       // newer one is already on screen, which then takes over: near the tail
       // the header names the question being answered, not the one before it.
       let next: string | null = null
       let reachedTop = false
-      for (const child of sb.content.getChildren()) {
-        const top = child.y - sb.content.y
+      const contentTop = sb.content.y
+      for (const child of children) {
+        const top = child.y - contentTop
         if (top >= viewportBottom) break
         if (top >= scrollTop) reachedTop = true
         if (userKeys.has(child.id) && (!reachedTop || next !== null)) next = child.id.slice('card:'.length)

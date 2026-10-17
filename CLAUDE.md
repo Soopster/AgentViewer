@@ -618,6 +618,11 @@ a node rather than hiding it — hide with `false`. Nothing here sets `visible`.
   or over-budget count either way, which is what you would expect from work that runs on a timer
   between commits rather than inside one. Do not re-litigate it with those harnesses; the profile is
   the measurement of record.
+- **A poll that reads layout must skip when nothing moved.** The sticky-header poll walked every
+  mounted card's `child.y` (a native layout read each) eight times a second; at the tail that is the
+  whole card window, and it was the largest share of main-thread samples while a session sat open.
+  It now compares scrollTop, content height, viewport height and child count with its last run
+  first. With a transcript growing once a second: 2.28s → 0.99s of process CPU per 31s.
 - **Measure with `npm run tui:navperf`** (`tui/opentui/navPerf.tsx`) before changing any of this. It
   mounts the real root against your local sessions and reports the metrics logger's `nav.*` rollup:
   `select-to-open` (debounce), `open-to-detail` (worker read), `detail-to-paint`, and
@@ -1954,6 +1959,20 @@ output, and allocator arenas.
   any doubt returns null and re-derives. **Before adding a poll, measure what it allocates**, and
   keep any cache's expiry rare: a 15s TTL on the list cache was itself worth a 45MB burst every
   fourth poll, which is the cost it existed to avoid.
+- **The Claude list is patched, not re-derived, when only some transcripts changed**
+  (`readClaudeListPage`). A gate that answers only "changed or not" re-derives on almost every
+  poll in real use: a running turn writes its transcript, and so do transcripts the list never shows
+  (this very session's, a claude-mem observer's) — measured here, the full derive ran on every 5s
+  poll. The sweep keeps per-file stamps; a changed transcript on the page is re-read with
+  `getSessionInfo` (0 differences from the list entry over 157 sessions) and re-sorted in the SDK's
+  order (mtime, then id descending); a changed transcript off the page is asked whether it now has
+  an entry at all (the SDK drops one whose 64KB head/tail yields nothing to show, and that flips as a
+  transcript grows); anything else — added, removed, `continued-in` — re-derives. The page and its
+  sweep are kept in `.agent-viewer-data/claude-session-list.json`, so a new process patches the
+  last one's page: boot listing 237ms / worker heap 63MB → 51ms / 8MB, a live poll 208ms → 12ms.
+  An entry the SDK lists *without* a first prompt must patch too — the first version required one
+  and silently re-derived for exactly the big sessions it was for. `claudeListPatchSmoke.ts` compares
+  every step with the SDK's own `listSessions` and counts derives (seven mutations verified).
 - **`AGENT_VIEWER_TUI_MEM_RAW=1` measures churn; `AGENT_VIEWER_TUI_MEM=1` measures retention.** Both
   live in `tui/opentui/workerHeapProbe.ts` and both write to `AGENT_VIEWER_TUI_MEM_LOG`. The
   retention probe collects before reading, so it can look perfectly flat while resident size climbs
@@ -2000,6 +2019,26 @@ output, and allocator arenas.
   `ensureTuiMermaidRenderer()`, which the worker awaits only for a transcript that actually contains
   a Mermaid fence (`textNeedsTuiMermaid`); formatting itself stays synchronous. The legacy Ink TUI
   bumps a `mermaidEpoch` to re-run its memo once the renderer resolves.
+- **Overlays load when first opened** (`tui/opentui/lazyComponent.tsx`). The root imported every
+  popover, so Shiki (via `@pierre/diffs`), zod (via the review store) and the editor were evaluated
+  on the render thread before the first frame: the App graph was ~150ms and 46MB, now ~65ms and
+  32MB. **Not `React.lazy`**: React 19 throttles revealing Suspense content by ~300ms, so every first
+  open waited on a timer for a module that arrives in milliseconds (appSmoke caught it). Transcript
+  diff cards still need a patch parser and a file order at once; `tui/opentui/pierreLight.ts` loads
+  just those files from beside the packages' entry points (~8MB against ~23MB), falls back to the
+  entry points if a release moves them, and `pierreLightSmoke.ts` asserts it did not fall back and
+  that the order matches `prepareFileTreeInput`. **It loads synchronously** (`require` of ESM): a
+  top-level await there made the Git highlight worker drop the messages posted while its module was
+  still evaluating. Highlighting imports the full package on demand.
+- **Measure memory A/B on a frozen store, interleaved, against a worktree of HEAD.** The live corpus
+  changes under you (other agents create sessions, the open one grows), and run-to-run noise was
+  ±40MB — larger than most changes. Copy `~/.claude/projects` (plus `settings.json`) somewhere, point
+  `CLAUDE_CONFIG_DIR` at it, reset the cwd's `.agent-viewer-data` from a fixture before each run, and
+  alternate base/new. On that setup this round measured settled footprint 236-244MB → 180-192MB.
+- **Two things that look like levers and are not:** a full `Bun.gc(true)` in both isolates frees
+  nothing measurable from the settled footprint (the retained arena is high-water, not garbage), and
+  `--smol` changes nothing either. JSC's wasm tier flags (`BUN_JSC_useBBQJIT=0`) do shrink the
+  tree-sitter grammars (~12MB), but Bun documents `BUN_JSC_*` as an unstable debugging API.
 - **Do not set `NODE_ENV` for the TUI.** Bun leaves it unset, which costs React's development
   build — an `Error` allocated per JSX element for owner stacks, ~6,000 per session opened — and
   defaulting the spawn in `bin/agent-viewer.mjs` to `NODE_ENV=production` did buy that back

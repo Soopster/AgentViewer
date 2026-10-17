@@ -8,7 +8,7 @@ import { useRenderer } from '@opentui/react'
 import type { MouseEvent, ScrollBoxRenderable } from '@opentui/core'
 import type { SelectedLineRange } from '@pierre/diffs'
 import type { TuiThemePalette } from '../theme'
-import { prepareFileTreeInput } from '@pierre/trees'
+import { sortTreePaths } from './pierreLight'
 import { describeOperation, isConflictEntry, renameOriginLabel } from '../../lib/gitWorkspaceStatus'
 import { fetchGitData, fetchGitPaneContent, type GitData, type GitDiffSource, type GitStatusEntry, type GitTurnRef } from '../../lib/gitProvider'
 import { fetchSourceDiff, fetchSourceStatus, listGitTurnsForMenu } from '../../lib/gitDiffSources'
@@ -55,8 +55,7 @@ function buildVisibleNodes(entries: GitStatusEntry[], expandedDirs: Set<string>)
   // Use @pierre/trees for correct tree-aware sorting (dirs before files per level,
   // consistent with the web GitPopover). Map from path → sort index.
   const filePaths = entries.map((e) => e.path)
-  const prepared = prepareFileTreeInput(filePaths, { flattenEmptyDirectories: false, sort: 'default' })
-  const sortedFilePaths = [...prepared.paths]
+  const sortedFilePaths = sortTreePaths(filePaths)
 
   // Build the nested dir/file structure in sorted order.
   interface DirData { subdirs: Map<string, DirData>; files: GitStatusEntry[] }
