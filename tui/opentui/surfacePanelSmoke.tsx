@@ -140,6 +140,12 @@ if (
 ) {
   throw new Error(`Surface panel does not sit beside the full-height composer or message frame geometry is misaligned:\n${launcher}`)
 }
+// The rail runs down beside the docked composer too; stopping at the reader
+// left the dock's rows under it empty.
+const railFrame = setup.renderer.root.findDescendantById('session-rail') as unknown as FrameGeometry | null
+if (railFrame && railFrame.y + railFrame.height !== surfaceFrame.y + surfaceFrame.height) {
+  throw new Error(`The session rail ends on row ${railFrame.y + railFrame.height}, not beside the composer (${surfaceFrame.y + surfaceFrame.height}):\n${launcher}`)
+}
 
 // = expands the panel to everything the reader's minimum leaves, and back.
 const panelWidthOf = (frame: string) => Math.max(

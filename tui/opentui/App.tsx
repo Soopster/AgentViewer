@@ -1597,7 +1597,11 @@ function formatTuiComposerIdleHint(baseHint: string, historyCount: number): stri
 
 // Columns the composer dock's bottom border keeps for its own stats when it
 // also carries the key hints.
+// — less on a narrow dock, where the full reserve would leave the keys no room.
 const FOOTER_DOCK_STATS_RESERVE = 24
+function footerDockStatsReserve(dockWidth: number): number {
+  return Math.min(FOOTER_DOCK_STATS_RESERVE, Math.floor(dockWidth * 0.35))
+}
 
 function contextBarColor(percentage: number, theme: TuiThemePalette): string {
   if (percentage >= 80) return theme.red
@@ -12408,7 +12412,13 @@ export default function OpenTuiApp() {
       + (embeddedComposer ? 0 : composerDockHeight) + (fullscreenMode ? 0 : 2),
   )
 
-  const sidebarRowBudget = Math.max(mainContentHeight, 4)
+  // With a right-hand panel open the composer docks under the reader column
+  // only, so the rail runs down beside it like the panel does — otherwise the
+  // dock's rows under the rail are left empty.
+  const sidebarExtraRows = rightSidePanelVisible ? Math.max(surfacePanelHeight - mainContentHeight, 0) : 0
+  // Extended, the rail outgrows its row, so nothing clips the list to the
+  // frame any more: budget the list to the frame's inside.
+  const sidebarRowBudget = Math.max(sidebarExtraRows > 0 ? mainContentHeight + sidebarExtraRows - 2 : mainContentHeight, 4)
   const sidebarInnerWidth = Math.max(sidebarWidth - 5, 17)
   // A provider listed across several instances (ACP agents, accounts) is
   // several stores' sessions, and a row has to say whose it is.
@@ -18303,7 +18313,7 @@ export default function OpenTuiApp() {
       : ''
     // In the dock border the bar shares its row with the dock's stats, which
     // keep at least FOOTER_DOCK_STATS_RESERVE columns.
-    const budget = statusBarInDock ? Math.max(composerDockTextareaWidth - FOOTER_DOCK_STATS_RESERVE, 18) : width - 2
+    const budget = statusBarInDock ? Math.max(composerDockTextareaWidth - footerDockStatsReserve(composerDockTextareaWidth), 18) : width - 2
     let remaining = Math.max(budget - segs.reduce((n, segment) => n + segment.text.length, 0)
       - (hostLabel ? hostLabel.length + 3 : 0), 0)
     // Groups are in priority order: the first that does not fit ends the bar,
@@ -22365,7 +22375,7 @@ export default function OpenTuiApp() {
   const dockStatusBarLength = dockShowsStatusBar ? footerSegments.reduce((n, segment) => n + segment.text.length, 0) : 0
   const composerDockFooterHintWidth = Math.max(
     18,
-    Math.min((dockShowsStatusBar ? dockStatusBarLength : composerDockFooterHint.length) + 1, composerDockTextareaWidth - FOOTER_DOCK_STATS_RESERVE),
+    Math.min((dockShowsStatusBar ? dockStatusBarLength : composerDockFooterHint.length) + 1, composerDockTextareaWidth - footerDockStatsReserve(composerDockTextareaWidth)),
   )
   const composerDockFooterStatsWidth = Math.max(composerDockTextareaWidth - composerDockFooterHintWidth - 1, 8)
   const composerWindowFooterHint = composerKeysTargetTurn
@@ -22746,7 +22756,11 @@ export default function OpenTuiApp() {
       >
         {showRail ? (
           <box
+            id="session-rail"
             width={sidebarWidth}
+            height={sidebarExtraRows > 0 ? mainContentHeight + sidebarExtraRows : undefined}
+            flexShrink={0}
+            overflow={sidebarExtraRows > 0 ? 'hidden' : undefined}
             border={sidebarView === 'sessions' ? ['top', 'left', 'right', 'bottom'] : true}
             borderStyle="single"
             borderColor={effectiveFocus === 'sessions' ? theme.border2 : theme.border}
