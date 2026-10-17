@@ -2197,7 +2197,13 @@ sweep. A missing or logged-out `gh` yields no state at all and is never an error
 
 - Tailwind v4 + shadcn UI (`components/ui/`); `components.json` is the registry config — use `npx shadcn add <component>` rather than hand-writing.
 - React 19 with View Transitions (stable `ViewTransition` from `'react'`, used directly in `components/RouteTransition.tsx`/`TabBar.tsx`/`app/page.tsx` — no `next.config.ts` flag needed as of Next 16.3, which dropped `experimental.viewTransition`).
-- Fonts: Oxanium (display), IBM Plex Sans (body), IBM Plex Mono (code).
+- Fonts: Oxanium (display), IBM Plex Sans (body), IBM Plex Mono (code), self-hosted from `app/fonts/`
+  under their own family names (`@font-face` at the top of `globals.css`, Google's subsets and
+  unicode ranges). They were a render-blocking `@import` from fonts.googleapis.com, which held the
+  app's scripts and first API calls behind a third-party stylesheet (~0.5s here; a timeout with no
+  network). The optional render fonts are `next/font` with `preload: false`, since they apply only
+  once picked. `lib/export.ts` keeps the remote import on purpose: an exported HTML file has no
+  `app/fonts` to point at.
 - TypeScript path alias: `@/*` → repo root.
 
 ## Working with the large files

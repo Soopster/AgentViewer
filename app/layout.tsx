@@ -6,46 +6,56 @@ import { RouteTransition } from '@/components/RouteTransition'
 import { RENDER_FONT_IDS, RENDER_FONT_STORAGE_KEY } from '@/lib/renderFonts'
 import { COLOR_TREATMENTS, COLOR_TREATMENT_STORAGE_KEY } from '@/lib/colorTreatment'
 
+// The render fonts below apply only once someone picks one (data-render-font), so none is
+// preloaded: preloading put nine font files ahead of the app's scripts on every first load.
 const atkinson = Atkinson_Hyperlegible({
   weight: ['400', '700'],
   subsets: ['latin'],
   variable: '--font-atkinson',
   display: 'swap',
+  preload: false,
 })
 const sourceSans = Source_Sans_3({
   subsets: ['latin'],
   variable: '--font-source-sans',
   display: 'swap',
+  preload: false,
 })
 const merriweather = Merriweather({
   subsets: ['latin'],
   variable: '--font-merriweather',
   display: 'swap',
+  preload: false,
 })
 const lexend = Lexend({
   subsets: ['latin'],
   variable: '--font-lexend',
   display: 'swap',
+  preload: false,
 })
 const inter = Inter({
   subsets: ['latin'],
   variable: '--font-inter',
   display: 'swap',
+  preload: false,
 })
 const openSans = Open_Sans({
   subsets: ['latin'],
   variable: '--font-open-sans',
   display: 'swap',
+  preload: false,
 })
 const notoSans = Noto_Sans({
   subsets: ['latin'],
   variable: '--font-noto-sans',
   display: 'swap',
+  preload: false,
 })
 const roboto = Roboto({
   subsets: ['latin'],
   variable: '--font-roboto',
   display: 'swap',
+  preload: false,
 })
 
 export const metadata: Metadata = {
