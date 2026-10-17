@@ -179,9 +179,13 @@ from *holding* a thread:
   resumed again to show a model it has not changed. **Not `updatedAt`: codex-cli 0.157's
   `thread/resume` bumps it**, so a key on it made every learning resume invalidate its own answer.
   `recencyAt` equals the last turn's start and survives resume. Re-browsing: 22 processes / 1.35GB
-  → 10 / 0.74GB. (`lastModified` still maps from `updatedAt`, so a Codex session that was merely
-  resumed reads as recently active; it stays, because the TUI's cached-open fast path needs
-  `lastModified` to move when a turn *finishes*, which `recencyAt` does not.)
+  → 10 / 0.74GB. (`lastModified` still maps from `updatedAt`, because the TUI's cached-open fast
+  path needs it to move when a turn *finishes*, which `recencyAt` does not — but a resume's own
+  bump is subtracted: `resumeCodexThread` records the `updatedAt` it left in
+  `.agent-viewer-data/codex-resume-touches.json` (`lib/codexResumeTouch.ts`), and a listing that
+  still sees exactly that value reports `recencyAt`. A file, because the TUI resumes in the main
+  isolate and lists in the worker. Before this, opening a Codex session made it read as active a
+  minute ago. `codexResumeTouchSmoke.ts`; verified live against codex-cli.)
 
 `npm run codex:resume:live` asks the app-server itself (`thread/unsubscribe` answers `unsubscribed`
 only for a subscribed thread); four mutations were verified to fail it.

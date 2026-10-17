@@ -14,6 +14,7 @@ import { getCodexClient } from './codexClient'
 import type { CodexResponseFor } from './codexProtocol'
 import { getProviderCapabilities } from './provider'
 import { currentProviderInstanceId } from './providerInstances'
+import { recordCodexResumeTouch } from './codexResumeTouch'
 import type { SessionInfo } from './types'
 import type { Thread as CodexThread, ThreadResumeResponse as CodexThreadResumeResponse } from './codex-schema/v2'
 
@@ -90,10 +91,14 @@ export async function resumeCodexThread(sessionId: string): Promise<CodexThreadR
   const client = getCodexClient()
   // Callers read only the model; without excludeTurns the response carries the
   // whole transcript, parsed and discarded on every resume.
-  return client.request('thread/resume', {
+  const response = await client.request('thread/resume', {
     threadId: sessionId,
     excludeTurns: true,
   })
+  // The resume bumped updatedAt; record it so listings do not read the bump as
+  // the user's activity (lib/codexResumeTouch.ts).
+  recordCodexResumeTouch(`${currentProviderInstanceId('codex')}:${sessionId}`, response.thread.updatedAt)
+  return response
 }
 
 // Threads already resumed on the current app-server process, mapped to the

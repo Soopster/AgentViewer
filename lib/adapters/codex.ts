@@ -16,6 +16,8 @@ import { compactStableFingerprint } from '../compactFingerprint'
 import { getCodexClient } from '../codexClient'
 import { getCodexProjectDiagnostics } from '../codexHarness'
 import { withTimeout } from '../withTimeout'
+import { codexActivityUpdatedAt } from '../codexResumeTouch'
+import { currentProviderInstanceId } from '../providerInstances'
 import { PROVIDER_MODEL_DISCOVERY_TIMEOUT_MS } from '../providerWarmup'
 import {
   currentCodexModelValue,
@@ -41,6 +43,13 @@ import { CODEX_PERMISSION_MODE_OPTIONS } from './shared'
 import type { ThreadSourceKind, Thread as CodexThread } from '../codex-schema/v2'
 import type { SessionAdapter } from './types'
 
+// A resume this app made is not activity: report the thread's last turn while
+// `updatedAt` is still the bump that resume left (lib/codexResumeTouch.ts).
+function withCodexActivityTime<T extends { lastModified?: number }>(thread: CodexThread, session: T): T {
+  const activity = codexActivityUpdatedAt(`${currentProviderInstanceId('codex')}:${thread.id}`, thread)
+  return activity === thread.updatedAt ? session : { ...session, lastModified: activity * 1000 }
+}
+
 const SESSION_LIST_SOURCE_KINDS: ThreadSourceKind[] = [
   'cli',
   'vscode',
@@ -62,7 +71,7 @@ export const codexAdapter: SessionAdapter = {
     })
     const page = response.data.slice(offset, offset + limit)
     const tags = await getCodexStoredTagsForSessions(page.map((thread) => thread.id))
-    return page.map((thread) => mapCodexThreadToSession(thread, tags[thread.id] ?? null))
+    return page.map((thread) => withCodexActivityTime(thread, mapCodexThreadToSession(thread, tags[thread.id] ?? null)))
   },
 
   async readSessionInfo(sessionId) {
@@ -80,7 +89,7 @@ export const codexAdapter: SessionAdapter = {
     // No resume here: this runs for every read, prefetches included, and a
     // resume loads the thread and its MCP servers (see readCodexThreadModel).
     // readModels learns the model when a session is actually opened.
-    return mapCodexThreadToSessionInfo(thread, tag, thread.model ?? knownCodexThreadModel(sessionId, codexThreadActivityAt(thread)))
+    return withCodexActivityTime(thread, mapCodexThreadToSessionInfo(thread, tag, thread.model ?? knownCodexThreadModel(sessionId, codexThreadActivityAt(thread))))
   },
 
   async setTitle(sessionId, title) {
