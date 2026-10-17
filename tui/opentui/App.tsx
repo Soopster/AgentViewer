@@ -416,6 +416,7 @@ const PullRequestPopover = lazyComponent(() => import('./PullRequestPopover').th
 const FileViewerPopover = lazyComponent(() => import('./FileViewerPopover').then((module) => module.FileViewerPopover))
 const EditorPopover = lazyComponent(() => import('./EditorPopover').then((module) => module.EditorPopover))
 const AnalyticsPopover = lazyComponent(() => import('./AnalyticsPopover').then((module) => module.AnalyticsPopover))
+const DeskView = lazyComponent(() => import('./DeskView').then((module) => module.DeskView))
 const PromptLibraryPopover = lazyComponent(() => import('./PromptLibraryPopover').then((module) => module.PromptLibraryPopover))
 const CheckpointPopover = lazyComponent(() => import('./CheckpointPopover').then((module) => module.CheckpointPopover))
 const CoordinationPopover = lazyComponent(() => import('./CoordinationPopover').then((module) => module.CoordinationPopover))
@@ -624,6 +625,7 @@ const LIGHT_MODES: TuiThemeMode[] = [
   'everforest-light',
   'figma',
   'flexoki-light',
+  'bloomberg-light',
   'github-light',
   'gruvbox-light',
   'horizon-light',
@@ -708,6 +710,7 @@ const DARK_MODES: TuiThemeMode[] = [
   'palenight',
   'papercolor-dark',
   'phosphor',
+  'bloomberg-dark',
   'raycast',
   'resend',
   'repo',
@@ -5393,6 +5396,8 @@ const THEME_DESCRIPTIONS_BASE: Record<Exclude<TuiThemeMode, (typeof PROCEDURAL_T
   abyss: 'Cyan on ink',
   orchid: 'Violet, magenta lift',
   phosphor: 'Green CRT glass',
+  'bloomberg-dark': 'Amber on black, market screen',
+  'bloomberg-light': 'Burnt orange on paper, market screen',
   nocturne: 'Slate blue, low glare',
   slate: 'Graphite blue',
   solstice: 'Teal ink, low contrast',
@@ -5556,6 +5561,8 @@ const THEME_LABELS_BASE: Record<Exclude<TuiThemeMode, (typeof PROCEDURAL_THEME_N
   abyss: 'ABYSS',
   orchid: 'ORCHID',
   phosphor: 'PHOSPHOR',
+  'bloomberg-dark': 'BLOOMBERG DARK',
+  'bloomberg-light': 'BLOOMBERG LIGHT',
   nocturne: 'NOCTURNE',
   slate: 'SLATE',
   solstice: 'SOLSTICE',
@@ -5677,6 +5684,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'files',      label: 'Browse project files',   key: '⌃F', category: 'Session'    },
   { id: 'editor',     label: 'Open project editor',    key: '⌃E', category: 'Session'    },
   { id: 'analytics',  label: 'Session analytics',      key: '⌃A', category: 'Session'    },
+  { id: 'desk',       label: 'Bloomberg-style desk',   key: '⌃K b', category: 'View'     },
   { id: 'attention',  label: 'Attention inbox',        key: '!',  category: 'Session'    },
   { id: 'messaging',  label: 'Cross-session messaging', key: '⇧M', category: 'Session'   },
   { id: 'worktree-new',     label: 'New worktree task',              key: '⇧F', category: 'Worktree' },
@@ -9119,6 +9127,8 @@ export default function OpenTuiApp() {
   const [folderPickerForNewSession, setFolderPickerForNewSession] = useState(false)
   const newSessionKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [analyticsOpen, setAnalyticsOpen] = useState(false)
+  const [deskOpen, setDeskOpen] = useState(false)
+  const deskKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; meta?: boolean; sequence: string }) => void) | null>(null)
   const analyticsKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [handoffBriefOpen, setHandoffBriefOpen] = useState(false)
   const handoffBriefKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
@@ -9637,6 +9647,7 @@ export default function OpenTuiApp() {
     || gitOpen
     || pullRequestOpen
     || analyticsOpen
+    || deskOpen
     || crossSessionMessagingOpen
     || handoffBriefOpen
     || promptLibraryOpen
@@ -10177,6 +10188,19 @@ export default function OpenTuiApp() {
     }
     return activity
   }, [attentionItems, runningSessions, waitingSessions, viewerAttentionNotes])
+
+  // The desk's alert book. Derived only while it is open: nothing else reads
+  // it, and the attention items change on every registry poll.
+  const deskAlerts = useMemo(() => (deskOpen ? attentionItems.map((item) => ({
+    key: item.key,
+    sessionKey: item.sessionKey,
+    provider: item.provider,
+    sessionTitle: item.sessionTitle,
+    title: item.title,
+    detail: item.detail,
+    needsInput: attentionItemNeedsInput(item),
+    createdAt: item.createdAt,
+  })) : []), [attentionItems, deskOpen])
 
   // Fleet strip: one cell per live session (running or blocked on input) plus
   // recent background completions — mission-control ambient awareness while
@@ -19618,6 +19642,9 @@ export default function OpenTuiApp() {
       case 'coord-board':
         void openCoordinationBoard()
         break
+      case 'desk':
+        setDeskOpen(true)
+        break
       case 'coord-teammates':
         openTeammatesPanel()
         break
@@ -20145,6 +20172,11 @@ export default function OpenTuiApp() {
         return
       }
       handled(() => {})
+      return
+    }
+
+    if (deskOpen) {
+      handled(() => { deskKeyHandlerRef.current?.(key) })
       return
     }
 
@@ -25106,6 +25138,43 @@ export default function OpenTuiApp() {
           onKeyHandlerReady={(handler) => { analyticsKeyHandlerRef.current = handler }}
         />
       ) : null}
+
+      {deskOpen ? (() => {
+        // The desk links every panel to the selected session; its transcript
+        // counts only once the detail on screen is that session's.
+        const deskDetailOwned = Boolean(sessionDetail && selectedSession && transcriptSession
+          && sessionKey(transcriptSession) === sessionKey(selectedSession))
+        return (
+          <DeskView
+            sessions={sessions}
+            activity={sidebarSessionActivity}
+            alerts={deskAlerts}
+            loaded={selectedSession}
+            loadedCards={deskDetailOwned ? transcriptCards : null}
+            loadedContext={deskDetailOwned ? sessionDetail?.contextUsage ?? null : null}
+            loadedModel={deskDetailOwned ? sessionDetail?.info?.currentModel ?? null : null}
+            loadedMessageCount={deskDetailOwned ? sessionDetail?.rawMessages.length ?? null : null}
+            themeActive={themeMode === 'bloomberg-dark' || themeMode === 'bloomberg-light'}
+            width={width}
+            height={height}
+            onLoadSession={selectTabSession}
+            onOpenSession={(session) => {
+              setDeskOpen(false)
+              selectTabSession(session)
+              setFocusedPane('messages')
+            }}
+            onOpenAlert={(alertKey) => {
+              const item = attentionItems.find((candidate) => candidate.key === alertKey)
+              if (!item) return
+              setDeskOpen(false)
+              openAttentionSession(item)
+            }}
+            onApplyTheme={() => chooseTheme(isLightThemeMode(themeMode) ? 'bloomberg-light' : 'bloomberg-dark')}
+            onClose={() => setDeskOpen(false)}
+            onKeyHandlerReady={(handler) => { deskKeyHandlerRef.current = handler }}
+          />
+        )
+      })() : null}
 
       {attentionOpen ? (
         <box

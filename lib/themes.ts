@@ -103,6 +103,8 @@ export type Theme =
   | 'abyss'
   | 'orchid'
   | 'phosphor'
+  | 'bloomberg-dark'
+  | 'bloomberg-light'
   | 'nocturne'
   | 'slate'
   | 'solstice'
@@ -218,6 +220,8 @@ export const THEME_META: Record<Theme, { category: ThemeCategory; icon: string; 
   abyss:              { category: 'dark', icon: '◆', label: 'Abyss' },
   orchid:             { category: 'dark', icon: '◆', label: 'Orchid' },
   phosphor:           { category: 'dark', icon: '◆', label: 'Phosphor' },
+  'bloomberg-dark':   { category: 'dark', icon: '▲', label: 'Bloomberg Dark' },
+  'bloomberg-light':  { category: 'light', icon: '▲', label: 'Bloomberg Light' },
   nocturne:           { category: 'dark', icon: '◆', label: 'Nocturne' },
   slate:              { category: 'dark', icon: '◆', label: 'Slate' },
   solstice:           { category: 'dark', icon: '◆', label: 'Solstice' },

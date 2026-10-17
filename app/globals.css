@@ -715,6 +715,33 @@ html[data-color-treatment="flat"] .av-hover-control:not(:disabled):hover {
   --t-grep: #f87171; --t-glob: #f472b6; --t-agent: #f472b6; --t-other: #9a9a9a;
 }
 
+/* ── Design tokens ── bloomberg-dark ─────────────────────────────────────── */
+/* Modern Bloomberg Terminal: black field, amber working text, white values,
+   teal-green / red for up and down, blue links, sector-key yellow. */
+[data-theme="bloomberg-dark"] {
+  --bg: #000000; --surface: #0a0a0a; --surface-2: #141414; --surface-3: #1f1f1f;
+  --border: #3a3a3a; --border-2: #fb8b1e;
+  --text: #f2f2f2; --text-2: #fb8b1e; --text-3: #8c6a45;
+  --violet: #fb8b1e; --violet-glow: color-mix(in srgb, #fb8b1e 16%, transparent);
+  --cyan: #4aa8ff; --cyan-glow: color-mix(in srgb, #4aa8ff 12%, transparent);
+  --green: #4af6c3; --red: #ff433d; --amber: #ffd100;
+  --t-bash: #ffd100; --t-edit: #4af6c3; --t-write: #4aa8ff; --t-read: #fb8b1e;
+  --t-grep: #ff433d; --t-glob: #ff6f61; --t-agent: #ff6f61; --t-other: #8c6a45;
+}
+
+/* ── Design tokens ── bloomberg-light ────────────────────────────────────── */
+/* The light scheme: amber darkens to burnt orange so it reads on paper. */
+[data-theme="bloomberg-light"] {
+  --bg: #fbfaf7; --surface: #ffffff; --surface-2: #f3f0ea; --surface-3: #e8e3d9;
+  --border: #d6cfc2; --border-2: #c25400;
+  --text: #121212; --text-2: #b34d00; --text-3: #8a7f70;
+  --violet: #c25400; --violet-glow: color-mix(in srgb, #c25400 12%, transparent);
+  --cyan: #0057d9; --cyan-glow: color-mix(in srgb, #0057d9 10%, transparent);
+  --green: #00875a; --red: #d0021b; --amber: #9a6b00;
+  --t-bash: #9a6b00; --t-edit: #00875a; --t-write: #0057d9; --t-read: #c25400;
+  --t-grep: #d0021b; --t-glob: #c0392b; --t-agent: #c0392b; --t-other: #8a7f70;
+}
+
 /* ── Design tokens ── true-black ─────────────────────────────────────────── */
 /* OLED black: the page itself is #000 so an unlit pixel stays unlit, and the
    panels lift by a few points rather than by hue. Obsidian is the nearest
@@ -1474,7 +1501,7 @@ html[data-color-treatment="flat"] .av-hover-control:not(:disabled):hover {
 [data-theme="smoked-glass"], [data-theme="metalterm"], [data-theme="graphite"], [data-theme="ember"],
 [data-theme="abyss"], [data-theme="orchid"], [data-theme="phosphor"], [data-theme="nocturne"],
 [data-theme="slate"], [data-theme="solstice"], [data-theme="dune"], [data-theme="grape"],
-[data-theme="repo"], [data-theme="cappuccino"] {
+[data-theme="repo"], [data-theme="cappuccino"], [data-theme="bloomberg-dark"] {
   color-scheme: dark;
   --native-color-scheme: dark;
 }
@@ -1494,7 +1521,7 @@ html[data-color-treatment="flat"] .av-hover-control:not(:disabled):hover {
 [data-theme="mongodb"], [data-theme="slack"], [data-theme="cohere"],
 [data-theme="mistral"], [data-theme="cursor"], [data-theme="airbnb"],
 [data-theme="intercom"], [data-theme="bone-china"], [data-theme="cold-pressed"],
-[data-theme="sunlit-alabaster"], [data-theme="brushed-aluminium"] {
+[data-theme="sunlit-alabaster"], [data-theme="brushed-aluminium"], [data-theme="bloomberg-light"] {
   color-scheme: light;
   --native-color-scheme: light;
 }

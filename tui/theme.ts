@@ -94,6 +94,8 @@ export type TuiThemeMode =
   | 'abyss'
   | 'orchid'
   | 'phosphor'
+  | 'bloomberg-dark'
+  | 'bloomberg-light'
   | 'nocturne'
   | 'slate'
   | 'solstice'
@@ -675,6 +677,58 @@ export const OBSIDIAN_THEME: TuiThemePalette = {
   amber: '#fbbf24',
   pink: '#f472b6',
   userBg: '#111111',
+} as const
+
+// Modern Bloomberg Terminal: a black field, amber as the working text colour,
+// white for values, the terminal's teal-green and red for up/down, its blue for
+// links and the yellow of the market-sector keys for focus. Amber is the
+// accent (`violet`) on purpose: on that screen it is what everything is
+// written in, so the app's accented chrome reads as the terminal's own.
+export const BLOOMBERG_THEME: TuiThemePalette = {
+  bg: '#000000',
+  surface: '#0a0a0a',
+  surface2: '#141414',
+  surface3: '#1f1f1f',
+  diffAddBg: '#062a20',
+  diffRemoveBg: '#2e0b0a',
+  diffMetaBg: '#1e1405',
+  border: '#3a3a3a',
+  border2: '#fb8b1e',
+  text: '#f2f2f2',
+  muted: '#fb8b1e',
+  dim: '#8c6a45',
+  violet: '#fb8b1e',
+  cyan: '#4aa8ff',
+  green: '#4af6c3',
+  red: '#ff433d',
+  amber: '#ffd100',
+  pink: '#ff6f61',
+  userBg: '#1e1405',
+} as const
+
+// Bloomberg's light scheme: the same voice on paper. Amber is too pale to read
+// on white, so the working colour darkens to the terminal's burnt orange and
+// the sector-key yellow to an ochre; up/down keep their hues, deepened.
+export const BLOOMBERG_LIGHT_THEME: TuiThemePalette = {
+  bg: '#fbfaf7',
+  surface: '#ffffff',
+  surface2: '#f3f0ea',
+  surface3: '#e8e3d9',
+  diffAddBg: '#e2f5ed',
+  diffRemoveBg: '#fde8e6',
+  diffMetaBg: '#fbeedd',
+  border: '#d6cfc2',
+  border2: '#c25400',
+  text: '#121212',
+  muted: '#b34d00',
+  dim: '#8a7f70',
+  violet: '#c25400',
+  cyan: '#0057d9',
+  green: '#00875a',
+  red: '#d0021b',
+  amber: '#9a6b00',
+  pink: '#c0392b',
+  userBg: '#fbeedd',
 } as const
 
 export const TRUE_BLACK_THEME: TuiThemePalette = {
@@ -3403,6 +3457,8 @@ export function getThemePalette(mode: TuiThemeMode): TuiThemePalette {
     case 'abyss': return ABYSS_THEME
     case 'orchid': return ORCHID_THEME
     case 'phosphor': return PHOSPHOR_THEME
+    case 'bloomberg-dark': return BLOOMBERG_THEME
+    case 'bloomberg-light': return BLOOMBERG_LIGHT_THEME
     case 'nocturne': return NOCTURNE_THEME
     case 'slate': return SLATE_THEME
     case 'solstice': return SOLSTICE_THEME

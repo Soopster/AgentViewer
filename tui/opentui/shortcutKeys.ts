@@ -41,6 +41,7 @@ export function isAltKey(key: ShortcutKeyEvent, char: string): boolean {
 // how three of them end up describing keys the fourth no longer has.
 export const PORTABLE_COMMAND_CHORDS = {
   a: { command: 'coord-board', label: 'Agent Operations', short: 'operations' },
+  b: { command: 'desk', label: 'Bloomberg-style desk', short: 'desk' },
   g: { command: 'pull-requests', label: 'Pull requests', short: 'pull requests' },
   n: { command: 'coord-start', label: 'New coordinated run', short: 'coordinated run' },
   t: { command: 'coord-teammates', label: 'Teammates for this conversation', short: 'teammates' },

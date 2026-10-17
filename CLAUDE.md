@@ -1861,6 +1861,33 @@ uses the keyed one for `detail`, `warm` and `format`.
   queue. The client-side queue is a backstop for the paths that slip past those
   guards, not a replacement for them.
 
+#### The desk: a Bloomberg-style workspace (`⌃K b`)
+
+`tui/opentui/DeskView.tsx` (lazy, full-screen, owns every key while open) over the pure
+`tui/opentui/deskModel.ts`. The terminal's vocabulary: a session is a *security* (ticker
+`CLD 3F9A2C`), the selected session is the *loaded* one every panel links to, a function is a
+mnemonic typed on the command line and run with ⏎ (`<GO>`): `MON TOP DES GP WEI MOST ALRT CN HELP`.
+`N <GO>` picks numbered row N (again on the loaded row opens it), anything that names no function
+is a security search, `LAY 1|2|3|4|6` / ⌃L picks the launchpad layout, ⌫ on an empty line is MENU
+(the panel's previous function), Esc is CANCEL, `THEME <GO>` switches the app to `bloomberg-dark`
+or `bloomberg-light` (whichever side it is on).
+
+- **Letters belong to the command line**, so panel navigation is arrows/PgUp/PgDn/Home/End and
+  Tab, never j/k.
+- **Its colours are fixed**, not the app theme's — that is the point of it. The app-wide themes
+  are `bloomberg-dark`/`bloomberg-light`, registered in both theme registries like any other.
+- **Loading is debounced** (`LOAD_DEBOUNCE_MS`): a load is the root's `selectTabSession`, which
+  re-renders the whole app behind the desk, so holding ↓ must not do it per row.
+- **The clock and the tape own their timers** and re-render only themselves; panels repaint on a
+  30s `now` and their inputs. `⌃T` holds the tape.
+- **The loaded transcript counts only once it is the selected session's**
+  (`transcriptSession` equal to `selectedSession`), or DES/GP/CN would describe the previous one.
+- Columns are cell-aware (`deskFit`): an emoji in a title is two cells.
+
+`deskViewSmoke.tsx` checks the model (every layout tiles exactly), drives the component by key and
+reads its painted colours, boots the App in `bloomberg-light` (un-registering it verified to fail),
+and opens/closes the desk through ⌃K b.
+
 #### Chord help is derived from the chord table (load-bearing)
 
 `tui/opentui/chordHelp.ts` builds every description of a prefix chord — the
