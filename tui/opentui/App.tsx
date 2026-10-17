@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import { createSidebarSessionSearch } from './sidebarSessionSearch'
+import { hideScratchSessions } from './scratchSessions'
 import { readReaderLayout } from './readerLayout'
 import { composerProjectLabel, cycleTranscriptWidth, transcriptMeasure } from './engineeringLayout'
 import React, { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, startTransition, useState, useSyncExternalStore } from 'react'
@@ -129,6 +130,7 @@ import {
   readTuiSessionReaderState,
   readTuiSessionMetadata,
   readTuiSidebarSort,
+  readTuiHideScratchSessions,
   readTuiSidebarWidth,
   readTuiShowToolCalls,
   readTuiTabsEnabled,
@@ -184,6 +186,7 @@ import {
   writeTuiSessionReaderState,
   writeTuiShowToolCalls,
   writeTuiSidebarSort,
+  writeTuiHideScratchSessions,
   writeTuiSidebarWidth,
   writeTuiTabsEnabled,
   writeTuiSplitPanes,
@@ -768,6 +771,11 @@ const SEARCH_MAX_CHARS = 80
 const SESSION_REFRESH_MS = 5000
 const DETAIL_REFRESH_MS = 2000
 const RECENT_SESSION_ACTIVITY_MS = 60 * 60_000
+// How recent a transcript write must be for its row to read as active when no
+// turn this host knows about is running in it. Long enough to span the quiet
+// stretch of a model thinking between writes, short enough to let go soon
+// after the other process stops.
+const RECENT_WRITE_ACTIVE_MS = 2 * 60_000
 // Cadence for reconciling against the in-process running-turn registry (a
 // cheap synchronous read — the TUI and its backend share one process).
 const REATTACH_POLL_MS = 1500
@@ -4348,6 +4356,11 @@ function streamToolSummarySegments(card: TuiTranscriptCard, theme: TuiThemePalet
   ]
 }
 
+function stickyPromptText(card: TuiTranscriptCard): string {
+  const text = card.lines.map((line) => line.text.trim()).filter(Boolean).join(' ')
+  return (text || card.compactSummary).replace(/\s+/g, ' ').trim()
+}
+
 function streamToolSummaryName(card: TuiTranscriptCard): string {
   const summary = agentsToolSummaryLine(card)
   return summary.tone === 'tool' ? toolNameFromTranscriptLine(summary.text).toLowerCase() : ''
@@ -5559,6 +5572,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'diagnostics', label: 'Session diagnostics',   key: '⇧D',  category: 'Session'    },
   { id: 'provider',   label: 'Switch provider',        key: 'p',  category: 'Session'    },
   { id: 'sort',       label: 'Toggle sidebar sort',    key: '⇧S',  category: 'Session'    },
+  { id: 'scratch',    label: 'Hide/show scratch sessions', key: '⇧Y', category: 'Session' },
   { id: 'sidebar-view', label: 'Switch sidebar view',  key: 'a',  category: 'Session'    },
   // Tabs
   { id: 'tab-toggle', label: 'Toggle tab bar',         key: 'b',  category: 'Tabs'       },
@@ -8773,6 +8787,7 @@ export default function OpenTuiApp() {
   const [showToolCalls, setShowToolCalls] = useState(true)
   const [velocityScrollEnabled, setVelocityScrollEnabled] = useState(false)
   const [sidebarSort, setSidebarSort] = useState<TuiSidebarSort>('project')
+  const [hideScratch, setHideScratch] = useState(false)
   const [sidebarView, setSidebarView] = useState<'sessions' | 'coordinator'>('sessions')
   const [sidebarWidthPreference, setSidebarWidthPreference] = useState(DEFAULT_SIDEBAR_WIDTH)
   const [taskPanelWidth, setTaskPanelWidth] = useState(TASK_PANEL_DEFAULT_WIDTH)
@@ -9852,6 +9867,44 @@ export default function OpenTuiApp() {
   useEffect(() => startTeamAttentionFeed(), [])
   const teamAttention = useSyncExternalStore(subscribeTeamAttention, getTeamAttention, getTeamAttention)
 
+  // A session another process is writing right now — a native CLI, a second
+  // agent-viewer — never reaches the running registry, which only knows turns
+  // this host started. Its transcript's mtime is the evidence, so a write in
+  // the last RECENT_WRITE_ACTIVE_MS marks the row as active. The set keeps its
+  // identity while its members do, and the only timer is the one that retires
+  // the next mark, so an idle rail never re-renders the root.
+  const [recentWriteClock, setRecentWriteClock] = useState(0)
+  const recentlyWrittenRef = useRef<{ keys: ReadonlySet<string>; signature: string; nextExpiry: number | null }>({
+    keys: new Set(), signature: '', nextExpiry: null,
+  })
+  const recentlyWrittenSessions = useMemo(() => {
+    void recentWriteClock
+    const now = Date.now()
+    const keys: string[] = []
+    let nextExpiry: number | null = null
+    for (const session of sessions) {
+      const activityMs = sessionActivityMs(session)
+      if (activityMs <= 0 || activityMs < now - RECENT_WRITE_ACTIVE_MS) continue
+      keys.push(sessionKey(session))
+      const expiry = activityMs + RECENT_WRITE_ACTIVE_MS
+      if (nextExpiry === null || expiry < nextExpiry) nextExpiry = expiry
+    }
+    const signature = keys.sort().join('\n')
+    const previous = recentlyWrittenRef.current
+    const next = signature === previous.signature
+      ? { ...previous, nextExpiry }
+      : { keys: new Set(keys), signature, nextExpiry }
+    recentlyWrittenRef.current = next
+    return next.keys === previous.keys && next.nextExpiry === previous.nextExpiry ? previous : next
+  }, [sessions, recentWriteClock])
+  useEffect(() => {
+    const { nextExpiry } = recentlyWrittenSessions
+    if (nextExpiry === null) return
+    const timer = setTimeout(() => setRecentWriteClock((tick) => tick + 1), Math.max(nextExpiry - Date.now(), 0) + 50)
+    return () => clearTimeout(timer)
+  }, [recentlyWrittenSessions])
+  const recentlyWrittenKeys = recentlyWrittenSessions.keys
+
   const sidebarSessionActivity = useMemo(() => {
     const needsInputKeys = new Set(
       attentionItems.filter(attentionItemNeedsInput).map((item) => item.sessionKey),
@@ -10506,6 +10559,14 @@ export default function OpenTuiApp() {
     setFocusedPane('sessions')
   }, [])
 
+  const toggleHideScratch = useCallback(() => {
+    setHideScratch((current) => {
+      const next = !current
+      showToggleOutcome('Scratch sessions', next ? 'hidden' : 'shown')
+      void writeTuiHideScratchSessions(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store scratch visibility'))
+      return next
+    })
+  }, [])
   const toggleSidebarSort = useCallback(() => {
     setSidebarSort((current) => {
       const next: TuiSidebarSort = current === 'project' ? 'time' : 'project'
@@ -10627,10 +10688,23 @@ export default function OpenTuiApp() {
   )
   const normalizedSessionQuery = sessionSearchQuery.trim().toLowerCase()
   const searchSidebarSessions = useMemo(() => createSidebarSessionSearch(sessions), [sessions])
-  const filteredSessionsForSidebar = useMemo(
+  const searchedSessionsForSidebar = useMemo(
     () => searchSidebarSessions(normalizedSessionQuery),
     [searchSidebarSessions, normalizedSessionQuery],
   )
+  // A search looks at everything: hiding scratch is about the resting list,
+  // and a query that names a hidden session should still find it.
+  const scratchFilter = useMemo(() => {
+    if (!hideScratch || normalizedSessionQuery) return { sessions: searchedSessionsForSidebar, hidden: 0 }
+    return hideScratchSessions(searchedSessionsForSidebar, (session) => {
+      const key = sessionKey(session)
+      return key === selectedSessionKey
+        || sidebarSessionActivity.has(key)
+        || recentlyWrittenSessions.keys.has(key)
+        || teamAttention.has(key)
+    })
+  }, [hideScratch, normalizedSessionQuery, searchedSessionsForSidebar, selectedSessionKey, sidebarSessionActivity, recentlyWrittenSessions, teamAttention])
+  const filteredSessionsForSidebar = scratchFilter.sessions
   // Some providers expose subagents inside a parent transcript instead of as
   // durable child sessions. Fetch their lightweight summaries lazily for the
   // currently open session. Providers with real children (OpenCode/Codex) are
@@ -12147,7 +12221,7 @@ export default function OpenTuiApp() {
   // several stores' sessions, and a row has to say whose it is.
   const showProviderInSessionRows = provider === 'all'
     || new Set(sessions.map((session) => session.providerInstanceId ?? session.provider)).size > 1
-  const sidebarSessionCountLabel = normalizedSessionQuery
+  const sidebarSessionCountLabel = normalizedSessionQuery || scratchFilter.hidden > 0
     ? `SESSIONS ${filteredSessionsForSidebar.length}/${Math.max(sessions.length, 0)}`
     : `SESSIONS ${Math.max(sessions.length, 0)}`
   const sidebarProviderLabel = provider === 'all'
@@ -12162,6 +12236,7 @@ export default function OpenTuiApp() {
   )
   const sidebarHeaderSuffix = ` · ${joinMeta([
     `sort ${sidebarSortLabel}`,
+    scratchFilter.hidden > 0 ? `${scratchFilter.hidden} scratch hidden` : null,
     normalizedSessionQuery ? `/${sessionSearchQuery}` : '/ search',
     'a agents',
   ])}`
@@ -15167,20 +15242,30 @@ export default function OpenTuiApp() {
     const activityTime = entry.session.lastModified ?? entry.session.createdAt
     const ago = timeAgo(activityTime)
     const recentlyTouched = isSessionRecentlyTouched(entry.session)
-    const activity = sidebarSessionActivity.get(sessionKey(entry.session))
+    const knownActivity = sidebarSessionActivity.get(sessionKey(entry.session))
+    // Written to in the last couple of minutes by something this host is not
+    // running — a native CLI in another terminal. Shown as working, in green
+    // rather than the provider accent, so the two sources stay tellable apart.
+    const activity = knownActivity ?? (recentlyWrittenKeys.has(sessionKey(entry.session)) ? 'active' : undefined)
     const activityGlyph = activity === 'needs-input' ? '⚠'
-      : activity === 'running' ? '●'
+      : activity === 'running' || activity === 'active' ? '●'
       : activity === 'waiting' ? '◌'
       : recentlyTouched ? '·'
       : null
     const activityColor = activity === 'needs-input' ? theme.amber
       : activity === 'running' ? sessionAccent
+      : activity === 'active' ? theme.green
       : activity === 'waiting' ? theme.cyan
       : theme.dim
+    // The selected row is tinted with its provider's accent across the full
+    // rail width; surface3 alone sits too close to the rail's own surface in
+    // most themes to find at a glance.
+    const selectedRowBg = mixHexColor(sessionAccent, theme.surface, 0.22) ?? theme.surface3
+    const rowBg = selected ? selectedRowBg : theme.surface
 
     const metaLine = joinMeta([
       activity === 'needs-input' ? 'Needs input'
-        : activity === 'running' ? 'Working'
+        : activity === 'running' || activity === 'active' ? 'Working'
         : activity === 'waiting' ? 'Waiting' : null,
       showProviderInSessionRows ? sessionProviderLabel(entry.session) : null,
       ago,
@@ -15210,7 +15295,7 @@ export default function OpenTuiApp() {
         key={entry.key}
         id={`sidebar:${entry.key}`}
         flexDirection="column"
-        backgroundColor={selected ? theme.surface3 : theme.surface}
+        backgroundColor={rowBg}
         marginBottom={density === 'comfortable' ? 1 : 0}
         onMouseDown={(event) => {
           if (event.button !== 0) return
@@ -15230,7 +15315,7 @@ export default function OpenTuiApp() {
             />
           </box>
         ) : (
-          <box paddingX={1} flexDirection="row" backgroundColor={selected ? theme.surface3 : theme.surface}>
+          <box paddingX={1} flexDirection="row" backgroundColor={rowBg}>
             <text fg={sessionAccent} wrapMode="none">{selected ? '▎' : ' '}</text>
             {/* Keep the title readable; provider identity belongs to the rail. */}
             <text fg={theme.text} attributes={selected ? TextAttributes.BOLD : undefined} wrapMode="none">
@@ -15246,7 +15331,7 @@ export default function OpenTuiApp() {
           </box>
         )}
         {singleRow ? null : (
-        <box paddingX={1} flexDirection="row" backgroundColor={selected ? theme.surface3 : theme.surface}>
+        <box paddingX={1} flexDirection="row" backgroundColor={rowBg}>
           <text fg={sessionAccent} wrapMode="none">{selected ? '▎' : ' '}</text>
           <text fg={activity === 'needs-input' ? theme.amber : theme.dim} wrapMode="none">
             {fitText(metaLine, sidebarInnerWidth - 3 - (activityGlyph ? 2 : 0) - teamMark.length)}
@@ -15257,7 +15342,7 @@ export default function OpenTuiApp() {
         )}
       </box>
     )
-  }, [theme, density, sidebarInnerWidth, firstSidebarEntryKey, renameSessionKey, renameDraft, commitRename, selectSidebarSession, showProviderInSessionRows, sidebarSessionActivity, teamAttention])
+  }, [theme, density, sidebarInnerWidth, firstSidebarEntryKey, renameSessionKey, renameDraft, commitRename, selectSidebarSession, showProviderInSessionRows, sidebarSessionActivity, recentlyWrittenKeys, teamAttention])
 
 
   // Per-row element cache. Moving the selection highlight only changes TWO rows
@@ -16783,6 +16868,7 @@ export default function OpenTuiApp() {
           configuredTranscriptWidth,
           configuredTabsEnabled,
           configuredSidebarSort,
+          configuredHideScratch,
           configuredSidebarWidth,
           configuredShowToolCalls,
           configuredVelocityScroll,
@@ -16802,6 +16888,7 @@ export default function OpenTuiApp() {
           readTuiTranscriptWidth(),
           readTuiTabsEnabled(),
           readTuiSidebarSort(),
+          readTuiHideScratchSessions(),
           readTuiSidebarWidth(),
           readTuiShowToolCalls(),
           readTuiVelocityScroll(),
@@ -16849,6 +16936,7 @@ export default function OpenTuiApp() {
         setTranscriptWidth(configuredTranscriptWidth)
         setTabsEnabled(configuredTabsEnabled)
         setSidebarSort(configuredSidebarSort)
+        setHideScratch(configuredHideScratch)
         setSidebarWidthPreference(configuredSidebarWidth)
         setShowToolCalls(configuredShowToolCalls)
         setVelocityScrollEnabled(configuredVelocityScroll)
@@ -17778,10 +17866,17 @@ export default function OpenTuiApp() {
       const sb = transcriptScrollRef.current
       if (!sb || userKeys.size === 0) return
       const scrollTop = sb.scrollTop
+      const viewportBottom = scrollTop + sb.viewport.height
+      // The newest prompt that has scrolled above the top edge — unless a
+      // newer one is already on screen, which then takes over: near the tail
+      // the header names the question being answered, not the one before it.
       let next: string | null = null
+      let reachedTop = false
       for (const child of sb.content.getChildren()) {
-        if (child.y - sb.content.y >= scrollTop) break
-        if (userKeys.has(child.id)) next = child.id.slice('card:'.length)
+        const top = child.y - sb.content.y
+        if (top >= viewportBottom) break
+        if (top >= scrollTop) reachedTop = true
+        if (userKeys.has(child.id) && (!reachedTop || next !== null)) next = child.id.slice('card:'.length)
       }
       setStickyHeaderKey((prev) => (prev === next ? prev : next))
     }, READER_SCROLL_POLL_MS)
@@ -19499,6 +19594,9 @@ export default function OpenTuiApp() {
         toggleSidebarSort()
         showToggleOutcome('Sidebar sort:', sidebarSort === 'project' ? 'time' : 'project')
         break
+      case 'scratch':
+        toggleHideScratch()
+        break
       case 'sidebar-view':
         setSidebarView((current) => {
           const next = current === 'sessions' ? 'coordinator' : 'sessions'
@@ -21209,6 +21307,11 @@ export default function OpenTuiApp() {
       return
     }
 
+    if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && isShifted('Y')) {
+      handled(toggleHideScratch)
+      return
+    }
+
     if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && isShifted('S')) {
       handled(() => {
         toggleSidebarSort()
@@ -22768,7 +22871,9 @@ export default function OpenTuiApp() {
             {stickyHeaders && stickyHeaderKey ? (() => {
               const stickyCard = visibleTranscriptCards.find((card) => card.key === stickyHeaderKey)
               if (!stickyCard) return null
-              const stickyText = (stickyCard.lines.find((line) => line.text.trim())?.text ?? stickyCard.compactSummary).trim()
+              // A prompt's first line can be a single word ("Do") with the
+              // request on the lines below it; the header reads them as one.
+              const stickyText = stickyPromptText(stickyCard)
               return (
                 <box
                   id="sticky-header"

@@ -186,6 +186,7 @@ type TuiState = {
   showToolCalls?: unknown
   velocityScroll?: unknown
   sidebarSort?: unknown
+  hideScratchSessions?: unknown
   sessionReaderState?: unknown
 }
 
@@ -501,6 +502,15 @@ export async function getConfiguredTuiSidebarSort(): Promise<TuiSidebarSort> {
 
 export async function setConfiguredTuiSidebarSort(sidebarSort: TuiSidebarSort): Promise<void> {
   await writeTuiState({ sidebarSort })
+}
+
+export async function getConfiguredTuiHideScratchSessions(): Promise<boolean> {
+  const parsed = await readTuiState()
+  return parsed.hideScratchSessions === true
+}
+
+export async function setConfiguredTuiHideScratchSessions(hideScratchSessions: boolean): Promise<void> {
+  await writeTuiState({ hideScratchSessions })
 }
 
 export async function getConfiguredTuiSessionReaderState(sessionKey: string): Promise<TuiSessionReaderState | null> {

@@ -33,6 +33,8 @@ import {
   setConfiguredTuiRailVisible,
   setConfiguredTuiSessionReaderState,
   setConfiguredTuiSidebarSort,
+  getConfiguredTuiHideScratchSessions,
+  setConfiguredTuiHideScratchSessions,
   setConfiguredTuiShowToolCalls,
   setConfiguredTuiSidebarWidth,
   setConfiguredTuiTabsEnabled,
@@ -425,6 +427,14 @@ export async function readTuiSidebarSort(): Promise<TuiSidebarSort> {
 
 export async function writeTuiSidebarSort(sidebarSort: TuiSidebarSort): Promise<void> {
   await setConfiguredTuiSidebarSort(sidebarSort)
+}
+
+export async function readTuiHideScratchSessions(): Promise<boolean> {
+  return getConfiguredTuiHideScratchSessions()
+}
+
+export async function writeTuiHideScratchSessions(hide: boolean): Promise<void> {
+  await setConfiguredTuiHideScratchSessions(hide)
 }
 
 export type { TuiDiffLayout, TuiSidebarSort, TuiTranscriptWidth }
