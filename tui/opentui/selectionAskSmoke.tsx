@@ -91,12 +91,14 @@ try {
     // "bravo\ncharlie\n": the selection ends at the start of line 4, which it does not claim.
     act(() => { editor.focus(); editor.setSelection(6, 20) })
     await settle(200)
-    await press({ name: 'a', option: true, sequence: 'å' })
+    await press({ name: 'a', ctrl: true, sequence: '\x01' })
+    assert(setup.captureCharFrame().includes('h history'), `^A did not show the ask keys:\n${setup.captureCharFrame()}`)
+    await press({ name: 'return', sequence: '\r' })
     const frame = setup.captureCharFrame()
     for (const label of ['Agent: Explain', 'Agent: Why? (History)', 'Agent: Write Tests', 'Agent: File History']) {
-      assert(frame.includes(label), `Alt+A did not list "${label}":\n${frame}`)
+      assert(frame.includes(label), `^A ⏎ did not list "${label}":\n${frame}`)
     }
-    console.log('Alt+A opens the palette on the Agent commands.')
+    console.log('^A ⏎ opens the palette on the Agent commands.')
     await press({ name: 'return', sequence: '\r' })
     assert(requests.length === 1, `choosing an Agent command sent ${requests.length} requests`)
     const [first] = requests
@@ -109,8 +111,8 @@ try {
     // No selection: the caret's whole line, and unsaved buffers keep the editor open.
     act(() => { editor.clearSelection(); editor.replaceText('alpha\nbravo\ncharlie\nDELTA\necho\n'); editor.setCursor(3, 2) })
     await settle(300)
-    await press({ name: 'a', option: true, sequence: 'å' })
-    await press({ name: 'return', sequence: '\r' })
+    await press({ name: 'a', ctrl: true, sequence: '\x01' })
+    await press({ name: 'e', sequence: 'e' })
     const second = requests[1]
     assert(second, 'the caret-line ask sent nothing')
     assert(second.startLine === 4 && second.endLine === 4 && second.code === 'DELTA', `caret ask was ${JSON.stringify(second)}`)

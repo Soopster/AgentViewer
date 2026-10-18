@@ -2053,8 +2053,8 @@ sibling cannot be opened from the pane, and the web file tree does not show rena
 
 #### Asking about code, and a file's history across turns
 
-`lib/selectionAsk.ts` builds every "ask an agent about these lines" prompt — editor `Alt+A` (the
-palette filtered to `Agent:`), the Git panel's `?` then one key, and a File History step's `a`. The
+`lib/selectionAsk.ts` builds every "ask an agent about these lines" prompt — editor `⌃A` then the menu key
+(`⌃A ⏎` for the palette's `Agent:` commands), the Git panel's `?` then one key, and a File History step's `a`. The
 prompt is the instruction, file, 1-based range, history, then the code in a fence longer than any
 backtick run inside it. `why` asks `readTuiLineHistory` (provenance index, then git blame for lines
 no turn accounts for), loaded on demand because provenance opens the search index.
@@ -2064,7 +2064,7 @@ no turn accounts for), loaded on demand because provenance opens the search inde
 - **The editor closes for the composer only when nothing is unsaved**; closing otherwise asks, and
   confirming discards the buffers. The prompt is already in the composer either way.
 
-`Alt+H` in the editor, or `h` on a file row in ⇧U, opens `FileHistoryPopover` over
+`⌃A h` in the editor, or `h` on a file row in ⇧U, opens `FileHistoryPopover` over
 `readFileCheckpointHistory`: one step per interval between consecutive snapshots in which the file
 changed (one `cat-file --batch-check` decides which; only those are diffed). The interval starting at
 a checkpoint is that turn's work plus any hand edits before the next turn, which nothing can separate.

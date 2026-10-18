@@ -107,7 +107,7 @@ import {
   indexAtDisplayOffset,
   type CellMeasure,
 } from './editorCells'
-import type { SelectionAskIntent } from '../../lib/selectionAsk'
+import { SELECTION_ASK_INTENTS, type SelectionAskIntent } from '../../lib/selectionAsk'
 
 extend({ editorScrollbar: ScrollBarRenderable })
 
@@ -476,13 +476,13 @@ const EDITOR_COMMANDS: readonly EditorCommand[] = [
   { id: 'toggle-velocity', label: 'Editor: Toggle Velocity Scrolling', detail: 'Explorer Shift+V', keywords: 'accelerate navigation scroll' },
   { id: 'command-palette', label: 'View: Command Palette', detail: 'Ctrl+Shift+P', keywords: 'commands run action palette' },
   { id: 'show-shortcuts', label: 'Help: Keyboard Shortcuts', detail: 'F1 / Explorer ?', keywords: 'keys bindings reference cheatsheet help' },
-  { id: 'ask-explain', label: 'Agent: Explain', detail: 'Alt+A', keywords: 'composer prompt describe understand llm send' },
+  { id: 'ask-explain', label: 'Agent: Explain', detail: '^A e', keywords: 'composer prompt describe understand llm send' },
   { id: 'ask-fix', label: 'Agent: Fix', detail: '', keywords: 'composer prompt bug repair' },
   { id: 'ask-test', label: 'Agent: Write Tests', detail: '', keywords: 'composer prompt unit test coverage' },
   { id: 'ask-review', label: 'Agent: Review', detail: '', keywords: 'composer prompt critique bugs' },
   { id: 'ask-why', label: 'Agent: Why? (History)', detail: '', keywords: 'composer prompt provenance blame history reason' },
   { id: 'ask-question', label: 'Agent: Ask a Question', detail: '', keywords: 'composer prompt free form' },
-  { id: 'file-history', label: 'Agent: File History', detail: 'Alt+H', keywords: 'checkpoints timeline scrub restore revert blame turns' },
+  { id: 'file-history', label: 'Agent: File History', detail: '^A h', keywords: 'checkpoints timeline scrub restore revert blame turns' },
 ]
 
 type EditorShortcutGroup = { title: string; entries: readonly (readonly [string, string])[] }
@@ -557,8 +557,8 @@ const EDITOR_SHORTCUT_GROUPS: readonly EditorShortcutGroup[] = [
   {
     title: 'Agent',
     entries: [
-      ['Alt+A', 'Ask about selection (explain, fix, test, why…)'],
-      ['Alt+H', 'File history across turns'],
+      ['^A e/f/t/r/w/a', 'Ask about selection: explain, fix, test, review, why, ask'],
+      ['^A h', 'File history across turns'], ['^A ⏎', 'All Agent commands'],
     ],
   },
 ]
@@ -1519,6 +1519,8 @@ export function EditorPopover({
   const signatureRequestRef = useRef(0)
   const velocityScrollStateRef = useRef<ReturnType<typeof createScrollVelocityState> | null>(null)
   const vimPendingRef = useRef<string | null>(null)
+  // ⌃A was pressed and the next key picks what to ask (or `h` for history).
+  const askChordRef = useRef(false)
   const vimRegisterRef = useRef('')
   const pendingJumpRef = useRef<{ path: string; line: number; character: number } | null>(null)
   const jumpListRef = useRef(createEditorJumpList())
@@ -4133,12 +4135,20 @@ export function EditorPopover({
       toggleVimMode()
       return true
     }
-    if (alt && key.name === 'a' && !key.ctrl) {
-      openQuick('>Agent: ')
+    // ⌃A is a prefix, the Git panel's `?` menu keys after it. Not Alt+letter
+    // or function keys: macOS and terminals claim those before the app sees them.
+    if (askChordRef.current) {
+      askChordRef.current = false
+      const intent = SELECTION_ASK_INTENTS.find((entry) => entry.key === key.name && !key.ctrl && !alt && !key.shift)
+      if (intent) askAgent(intent.intent)
+      else if (key.name === 'h' && !key.ctrl && !alt) openFileHistory()
+      else if (key.name === 'return' || key.name === 'linefeed') openQuick('>Agent: ')
+      else setMessage('Ask cancelled')
       return true
     }
-    if (alt && key.name === 'h' && !key.ctrl) {
-      openFileHistory()
+    if (key.ctrl && !alt && !key.shift && key.name === 'a') {
+      askChordRef.current = true
+      setMessage(`Ask: ${SELECTION_ASK_INTENTS.map(({ key: k, label }) => `${k} ${label.toLowerCase()}`).join(' · ')} · h history · ⏎ all · esc`)
       return true
     }
     if (alt && key.name === 'z') {
