@@ -2051,6 +2051,34 @@ is the one module both popovers read; it has no Node imports, so client componen
 sibling worktrees (one deleted from disk); eight mutations were verified to fail it. Not done: a
 sibling cannot be opened from the pane, and the web file tree does not show rename origins.
 
+#### Asking about code, and a file's history across turns
+
+`lib/selectionAsk.ts` builds every "ask an agent about these lines" prompt — editor `Alt+A` (the
+palette filtered to `Agent:`), the Git panel's `?` then one key, and a File History step's `a`. The
+prompt is the instruction, file, 1-based range, history, then the code in a fence longer than any
+backtick run inside it. `why` asks `readTuiLineHistory` (provenance index, then git blame for lines
+no turn accounts for), loaded on demand because provenance opens the search index.
+
+- **A selection that ends at the start of a line does not claim that line.** Claiming it names a
+  range one longer than what was selected. With nothing selected, the caret's line goes.
+- **The editor closes for the composer only when nothing is unsaved**; closing otherwise asks, and
+  confirming discards the buffers. The prompt is already in the composer either way.
+
+`Alt+H` in the editor, or `h` on a file row in ⇧U, opens `FileHistoryPopover` over
+`readFileCheckpointHistory`: one step per interval between consecutive snapshots in which the file
+changed (one `cat-file --batch-check` decides which; only those are diffed). The interval starting at
+a checkpoint is that turn's work plus any hand edits before the next turn, which nothing can separate.
+
+- **Checkpoints now record their worktree, and history skips other worktrees'.** Checkpoint refs
+  are shared by every worktree of a repository, so without this a history interleaves two checkouts.
+  Checkpoints from before this have no worktree and are kept.
+- **`u` reverses one hunk against the file as it is now and refuses when later edits rewrote its
+  lines** — never a fuzzy apply. A created or deleted file is undone with `R` (restore to before the
+  step), because reversing its hunk alone empties the file instead of removing it.
+
+`selectionAskSmoke.tsx` and `fileHistorySmoke.tsx` (a real repository, plus a foreign-worktree
+checkpoint) pin these; six mutations were verified to fail them. `gitDiffContextSmoke.tsx` covers `?`.
+
 #### OpenTUI memory patterns (load-bearing)
 
 The TUI's footprint is dominated by **parsed module code across isolates**, not by live objects. A

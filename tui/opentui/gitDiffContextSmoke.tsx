@@ -10,6 +10,7 @@ import type { ScrollBoxRenderable } from '@opentui/core'
 import { GitPopover } from './GitPopover'
 import { DARK_THEME } from '../theme'
 import { buildPierreDiffView } from './pierreDiffView'
+import type { SelectionAskInput } from '../../lib/selectionAsk'
 import { applyDiffContext, expandDiffContext, readDiffBaseLines } from './gitDiffContext'
 
 const cwd = await mkdtemp(join(tmpdir(), 'git-diff-context-'))
@@ -20,6 +21,7 @@ original[27] = ''
 original[28] = 'trailing spaces   '
 let key: ((event: { name: string; sequence: string; ctrl: boolean; shift: boolean }) => void) | null = null
 let composed = ''
+let asked: SelectionAskInput | null = null
 try {
   git('init', '-q')
   await writeFile(join(cwd, 'context.ts'), original.join('\n') + '\n')
@@ -59,7 +61,7 @@ try {
 
   const setup = await testRender(<GitPopover cwd={cwd} theme={DARK_THEME} width={140} height={45}
     onClose={() => {}} onKeyHandlerReady={(handler) => { key = handler }}
-    onSendDiffNoteToComposer={text => { composed = text }} />, { width: 140, height: 45 })
+    onSendDiffNoteToComposer={text => { composed = text }} onAskAgent={request => { asked = request }} />, { width: 140, height: 45 })
   const flush = async () => {
     await act(async () => { await setup.flush(); await new Promise(resolve => setTimeout(resolve, 100)) })
     await setup.flush()
@@ -95,6 +97,14 @@ try {
     await press('j'); await press('a'); await press('N'); await press('return'); await press('A')
     assert(composed.includes('File: context.ts') && composed.includes('Range: L27'), composed)
     assert(composed.includes('original-line-27'), 'expanded context reaches composer')
+    // ? arms a one-key ask on the same lines; it owns the next key, then lets go.
+    await press('?')
+    assert(setup.captureCharFrame().includes('e explain'), `? did not offer the ask menu:\n${setup.captureCharFrame()}`)
+    await press('e')
+    const request = asked as SelectionAskInput | null
+    assert(request && request.intent === 'explain' && request.filePath === 'context.ts' && request.isDiff, JSON.stringify(request))
+    assert(request.startLine === 27 && request.code.includes('original-line-27'), `ask carried ${JSON.stringify(request)}`)
+    assert(!setup.captureCharFrame().includes('e explain'), 'the ask menu outlived its choice')
     await press('c')
     assert(!setup.captureCharFrame().includes('Note'), 'collapsed context hides its anchored note')
     await press('e')

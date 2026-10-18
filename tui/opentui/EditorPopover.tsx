@@ -107,6 +107,7 @@ import {
   indexAtDisplayOffset,
   type CellMeasure,
 } from './editorCells'
+import type { SelectionAskIntent } from '../../lib/selectionAsk'
 
 extend({ editorScrollbar: ScrollBarRenderable })
 
@@ -188,6 +189,25 @@ type Props = {
   onNotice?: (kind: 'info' | 'error', message: string) => void
   onClipboardRead?: () => Promise<string>
   onClipboardWrite?: (text: string) => Promise<void>
+  /**
+   * Hand the selection (or the caret's line) to the composer. Returns whether
+   * the editor should close so the composer can be seen — the host says no
+   * when it has nowhere to put the prompt.
+   */
+  onAskAgent?: (request: EditorAskRequest) => boolean
+  onOpenFileHistory?: (path: string) => void
+}
+
+export type EditorAskRequest = {
+  intent: SelectionAskIntent
+  /** Relative to the editor's root, as the tab shows it. */
+  path: string
+  /** 1-based inclusive. */
+  startLine: number
+  endLine: number
+  code: string
+  language?: string
+  unsaved: boolean
 }
 
 type BufferTab = {
@@ -319,6 +339,13 @@ type EditorCommandId =
   | 'toggle-zen'
   | 'command-palette'
   | 'show-shortcuts'
+  | 'ask-explain'
+  | 'ask-fix'
+  | 'ask-test'
+  | 'ask-review'
+  | 'ask-why'
+  | 'ask-question'
+  | 'file-history'
 
 type EditorCommand = {
   id: EditorCommandId
@@ -449,6 +476,13 @@ const EDITOR_COMMANDS: readonly EditorCommand[] = [
   { id: 'toggle-velocity', label: 'Editor: Toggle Velocity Scrolling', detail: 'Explorer Shift+V', keywords: 'accelerate navigation scroll' },
   { id: 'command-palette', label: 'View: Command Palette', detail: 'Ctrl+Shift+P', keywords: 'commands run action palette' },
   { id: 'show-shortcuts', label: 'Help: Keyboard Shortcuts', detail: 'F1 / Explorer ?', keywords: 'keys bindings reference cheatsheet help' },
+  { id: 'ask-explain', label: 'Agent: Explain', detail: 'Alt+A', keywords: 'composer prompt describe understand llm send' },
+  { id: 'ask-fix', label: 'Agent: Fix', detail: '', keywords: 'composer prompt bug repair' },
+  { id: 'ask-test', label: 'Agent: Write Tests', detail: '', keywords: 'composer prompt unit test coverage' },
+  { id: 'ask-review', label: 'Agent: Review', detail: '', keywords: 'composer prompt critique bugs' },
+  { id: 'ask-why', label: 'Agent: Why? (History)', detail: '', keywords: 'composer prompt provenance blame history reason' },
+  { id: 'ask-question', label: 'Agent: Ask a Question', detail: '', keywords: 'composer prompt free form' },
+  { id: 'file-history', label: 'Agent: File History', detail: 'Alt+H', keywords: 'checkpoints timeline scrub restore revert blame turns' },
 ]
 
 type EditorShortcutGroup = { title: string; entries: readonly (readonly [string, string])[] }
@@ -518,6 +552,13 @@ const EDITOR_SHORTCUT_GROUPS: readonly EditorShortcutGroup[] = [
       ['^⇧P / Alt+P', 'Command palette'], ['⇧Z (explorer) / Esc', 'Maximise editor (zen) / restore'],
       ['Alt+Z', 'Word wrap'], ['Alt+V', 'Vim mode'],
       ['⇧V (explorer)', 'Velocity scrolling'], ['F1', 'This reference'],
+    ],
+  },
+  {
+    title: 'Agent',
+    entries: [
+      ['Alt+A', 'Ask about selection (explain, fix, test, why…)'],
+      ['Alt+H', 'File history across turns'],
     ],
   },
 ]
@@ -1348,6 +1389,8 @@ export function EditorPopover({
   onNotice,
   onClipboardRead,
   onClipboardWrite,
+  onAskAgent,
+  onOpenFileHistory,
 }: Props) {
   const root = resolve(cwd || process.cwd())
   const [projectFiles, setProjectFiles] = useState<string[]>([])
@@ -3784,6 +3827,67 @@ export function EditorPopover({
     reportToggle('Editor Vim mode', next)
   }, [reportToggle, vimEnabled])
 
+  // The selection, or the caret's whole line when nothing is selected, goes to
+  // the composer with its location. Lines are 1-based and inclusive, and a
+  // selection that ends at the start of a line does not claim that line.
+  const askAgent = useCallback((intent: SelectionAskIntent) => {
+    const editor = editorRef.current
+    const tab = activeTab
+    if (!editor || !tab) {
+      setMessage('Open a file to ask about it')
+      return
+    }
+    if (!onAskAgent) {
+      setMessage('No conversation to ask')
+      return
+    }
+    const content = tab.content
+    const selection = editorSelectionOffsets(editor, content)
+    let start: number
+    let end: number
+    if (selection && selection.end > selection.start) {
+      start = selection.start
+      end = selection.end
+    } else {
+      const caret = editorDocumentOffset(editor, undefined, content)
+      start = content.lastIndexOf('\n', caret - 1) + 1
+      const newline = content.indexOf('\n', caret)
+      end = newline < 0 ? content.length : newline
+    }
+    const startLine = editorPositionAtOffset(content, start).line + 1
+    const endPosition = editorPositionAtOffset(content, end)
+    const endLine = Math.max(startLine, endPosition.line + (endPosition.character === 0 && end > start ? 0 : 1))
+    const close = onAskAgent({
+      intent,
+      path: tab.path,
+      startLine,
+      endLine,
+      code: content.slice(start, end),
+      language: detectTuiCodeFiletypeFromPath(tab.path) ?? undefined,
+      unsaved: content !== tab.savedContent,
+    })
+    if (!close) return
+    // Closing with unsaved buffers asks first, and would discard them; the
+    // prompt is already in the composer either way.
+    if (tabs.some((entry) => entry.content !== entry.savedContent)) {
+      setMessage('Added to composer — save, then close the editor to send it')
+      return
+    }
+    requestClose()
+  }, [activeTab, onAskAgent, requestClose, tabs])
+
+  const openFileHistory = useCallback(() => {
+    if (!activeTab) {
+      setMessage('Open a file to see its history')
+      return
+    }
+    if (!onOpenFileHistory) {
+      setMessage('File history needs a git repository')
+      return
+    }
+    onOpenFileHistory(activeTab.path)
+  }, [activeTab, onOpenFileHistory])
+
   const executeEditorCommand = useCallback((id: EditorCommandId) => {
     switch (id) {
       case 'save': void saveActive(); break
@@ -3844,8 +3948,15 @@ export function EditorPopover({
       case 'toggle-velocity': toggleVelocityScrolling(); break
       case 'toggle-word-wrap': toggleWordWrap(); break
       case 'toggle-zen': toggleZenMode(); break
+      case 'ask-explain': askAgent('explain'); break
+      case 'ask-fix': askAgent('fix'); break
+      case 'ask-test': askAgent('test'); break
+      case 'ask-review': askAgent('review'); break
+      case 'ask-why': askAgent('why'); break
+      case 'ask-question': askAgent('ask'); break
+      case 'file-history': openFileHistory(); break
     }
-  }, [addAdjacentCursor, addLineEndCursors, addNextOccurrence, applyCaseTransform, applyLineTransform, closeActiveTab, closeOtherTabs, jumpBack, jumpForward, openProblems, reopenClosedTab, editSelectedLines, formatDocument, jumpToMatchingBracket, navigateDiagnostic, openFilePrompt, openProjectSearch, openQuick, openSearch, recoveryConflicts.length, requestCodeActions, requestHover, requestRename, requestSignatureHelp, requestSymbolNavigation, restartLsp, saveActive, saveAll, toggleExplorer, toggleVelocityScrolling, toggleVimMode, toggleWordWrap, toggleZenMode, trimTrailingWhitespace])
+  }, [askAgent, openFileHistory, addAdjacentCursor, addLineEndCursors, addNextOccurrence, applyCaseTransform, applyLineTransform, closeActiveTab, closeOtherTabs, jumpBack, jumpForward, openProblems, reopenClosedTab, editSelectedLines, formatDocument, jumpToMatchingBracket, navigateDiagnostic, openFilePrompt, openProjectSearch, openQuick, openSearch, recoveryConflicts.length, requestCodeActions, requestHover, requestRename, requestSignatureHelp, requestSymbolNavigation, restartLsp, saveActive, saveAll, toggleExplorer, toggleVelocityScrolling, toggleVimMode, toggleWordWrap, toggleZenMode, trimTrailingWhitespace])
 
   const chooseQuickResultAt = useCallback((index: number) => {
     const result = quickResults[index]
@@ -4020,6 +4131,14 @@ export function EditorPopover({
     const alt = Boolean(key.option || key.meta)
     if (alt && key.name === 'v') {
       toggleVimMode()
+      return true
+    }
+    if (alt && key.name === 'a' && !key.ctrl) {
+      openQuick('>Agent: ')
+      return true
+    }
+    if (alt && key.name === 'h' && !key.ctrl) {
+      openFileHistory()
       return true
     }
     if (alt && key.name === 'z') {

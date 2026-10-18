@@ -28,6 +28,13 @@ export type TurnCheckpoint = {
   label: string
   sessionId?: string
   provider?: string
+  /**
+   * The worktree the snapshot was taken in. Checkpoint refs live in the shared
+   * ref namespace, so every worktree of a repository lists every other's; a
+   * per-file history must not interleave two checkouts' contents. Absent on
+   * checkpoints taken before it was recorded.
+   */
+  worktree?: string
 }
 
 export type CheckpointFileChange = {
@@ -108,7 +115,7 @@ export async function createTurnCheckpoint(
       const tree = await git(cwd, ['write-tree'], { env })
       const head = await git(cwd, ['rev-parse', '--verify', 'HEAD']).catch(() => null)
       const label = sanitizeLabel(meta.message ?? '')
-      const body = JSON.stringify({ sessionId: meta.sessionId, provider: meta.provider })
+      const body = JSON.stringify({ sessionId: meta.sessionId, provider: meta.provider, worktree: repoRoot })
       const commitArgs = ['commit-tree', tree, '-m', `${label}\n\n${body}`]
       if (head) commitArgs.push('-p', head)
       const sha = await git(cwd, commitArgs)
@@ -116,7 +123,7 @@ export async function createTurnCheckpoint(
       const ref = `${CHECKPOINT_REF_PREFIX}${createdAt}-${sha.slice(0, 8)}`
       await git(cwd, ['update-ref', ref, sha])
       void pruneCheckpoints(cwd).catch(() => {})
-      return { ref, sha, createdAt, label, sessionId: meta.sessionId, provider: meta.provider }
+      return { ref, sha, createdAt, label, sessionId: meta.sessionId, provider: meta.provider, worktree: repoRoot }
     } finally {
       await fs.rm(path.dirname(indexFile), { recursive: true, force: true }).catch(() => {})
     }
@@ -148,7 +155,7 @@ export async function retagCheckpointSession(
   if (!sessionId || sessionId === checkpoint.sessionId) return checkpoint
   const tree = await git(cwd, ['rev-parse', `${checkpoint.sha}^{tree}`])
   const parent = await git(cwd, ['rev-parse', '--verify', `${checkpoint.sha}^`]).catch(() => null)
-  const body = JSON.stringify({ sessionId, provider: checkpoint.provider })
+  const body = JSON.stringify({ sessionId, provider: checkpoint.provider, worktree: checkpoint.worktree })
   const args = ['commit-tree', tree, '-m', `${checkpoint.label}\n\n${body}`]
   if (parent) args.push('-p', parent)
   const sha = await git(cwd, args)
@@ -173,14 +180,16 @@ export async function listTurnCheckpoints(cwd: string): Promise<TurnCheckpoint[]
     const createdAt = Number(ref.slice(CHECKPOINT_REF_PREFIX.length).split('-')[0]) || 0
     let sessionId: string | undefined
     let provider: string | undefined
+    let worktree: string | undefined
     try {
-      const parsed = JSON.parse((rawBody ?? '').trim() || '{}') as { sessionId?: string; provider?: string }
+      const parsed = JSON.parse((rawBody ?? '').trim() || '{}') as { sessionId?: string; provider?: string; worktree?: string }
       sessionId = parsed.sessionId
       provider = parsed.provider
+      worktree = typeof parsed.worktree === 'string' ? parsed.worktree : undefined
     } catch {
       // pre-metadata checkpoints — label still renders
     }
-    return [{ ref, sha, createdAt, label: subject ?? '', sessionId, provider }]
+    return [{ ref, sha, createdAt, label: subject ?? '', sessionId, provider, worktree }]
   })
 }
 
@@ -203,7 +212,7 @@ export async function deleteTurnCheckpoint(cwd: string, ref: string): Promise<vo
  * files vanish, pre-existing untracked ones read as phantom deletions), so we
  * always compare tree-to-tree.
  */
-async function snapshotWorktreeTree(cwd: string): Promise<string> {
+export async function snapshotWorktreeTree(cwd: string): Promise<string> {
   const indexFile = path.join(await fs.mkdtemp(path.join(tmpdir(), 'agent-viewer-ckpt-')), 'index')
   try {
     const env = { GIT_INDEX_FILE: indexFile }
@@ -275,6 +284,11 @@ export async function listWorkingDiffHunks(cwd: string): Promise<{ hunks: Workin
     git(cwd, ['ls-files', '--others', '--exclude-standard']).catch(() => ''),
   ])
   const untracked = untrackedOut ? untrackedOut.split('\n').filter(Boolean) : []
+  return { hunks: parseDiffHunks(diffText), untracked }
+}
+
+/** Split unified diff text into standalone hunks, each a patch of its own. */
+export function parseDiffHunks(diffText: string): WorkingDiffHunk[] {
   const hunks: WorkingDiffHunk[] = []
   let fileHeader: string[] = []
   let file = ''
@@ -310,7 +324,7 @@ export async function listWorkingDiffHunks(cwd: string): Promise<{ hunks: Workin
     else if (line.startsWith('--- a/') && !file) file = line.slice('--- a/'.length)
   }
   flush()
-  return { hunks, untracked }
+  return hunks
 }
 
 /** Reverse-apply one hunk's patch to the worktree (drop that change). */
@@ -360,4 +374,112 @@ export async function createReviewPullRequest(cwd: string, title: string): Promi
       },
     )
   })
+}
+
+// ---------------------------------------------------------------------------
+// File history: one file's path through the turn checkpoints.
+
+export type FileHistoryStep = {
+  /** The snapshot taken before the turn this change followed. */
+  checkpoint: TurnCheckpoint
+  /** The next snapshot, which bounds the change; null means the working tree now. */
+  until: TurnCheckpoint | null
+  status: 'A' | 'M' | 'D'
+  diff: string
+  hunks: WorkingDiffHunk[]
+  additions: number
+  deletions: number
+}
+
+export type FileHistory = {
+  /** Repository-relative, `/`-separated — the path every patch names. */
+  relPath: string
+  repoRoot: string
+  /** Oldest first. Only the intervals in which the file actually changed. */
+  steps: FileHistoryStep[]
+  checkpointsScanned: number
+}
+
+const FILE_HISTORY_DIFF_CONCURRENCY = 4
+
+/**
+ * Every interval between two snapshots (or the last snapshot and now) in which
+ * this file changed. A checkpoint is taken BEFORE a turn, so the interval that
+ * starts at it is that turn's work — plus anything typed by hand before the
+ * next turn began, which no snapshot can tell apart. One `cat-file` decides
+ * which intervals changed; only those are diffed.
+ */
+export async function readFileCheckpointHistory(cwd: string, filePath: string): Promise<FileHistory> {
+  const repoRoot = await findRepoRoot(cwd)
+  if (!repoRoot) throw new Error('Not a git repository')
+  const absolute = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath)
+  const relPath = path.relative(repoRoot, absolute).split(path.sep).join('/')
+  if (!relPath || relPath.startsWith('..')) throw new Error(`${filePath} is outside the repository`)
+
+  const checkpoints = (await listTurnCheckpoints(repoRoot))
+    .filter((checkpoint) => !checkpoint.worktree || checkpoint.worktree === repoRoot)
+    .sort((a, b) => a.createdAt - b.createdAt)
+  if (checkpoints.length === 0) return { relPath, repoRoot, steps: [], checkpointsScanned: 0 }
+
+  const nowTree = await snapshotWorktreeTree(repoRoot)
+  const points = [...checkpoints.map((checkpoint) => checkpoint.sha), nowTree]
+  const blobs = await readBlobIds(repoRoot, points.map((point) => `${point}:${relPath}`))
+
+  const intervals: Array<{ index: number; status: FileHistoryStep['status'] }> = []
+  for (let index = 0; index < checkpoints.length; index += 1) {
+    const before = blobs[index]
+    const after = blobs[index + 1]
+    if (before === after) continue
+    intervals.push({ index, status: before === null ? 'A' : after === null ? 'D' : 'M' })
+  }
+
+  const steps: FileHistoryStep[] = new Array(intervals.length)
+  let next = 0
+  const worker = async () => {
+    while (next < intervals.length) {
+      const slot = next++
+      const { index, status } = intervals[slot]!
+      const diff = await git(repoRoot, ['diff', '--no-color', '--no-renames', points[index]!, points[index + 1]!, '--', relPath])
+      let additions = 0
+      let deletions = 0
+      for (const line of diff.split('\n')) {
+        if (line.startsWith('+') && !line.startsWith('+++')) additions += 1
+        else if (line.startsWith('-') && !line.startsWith('---')) deletions += 1
+      }
+      steps[slot] = {
+        checkpoint: checkpoints[index]!,
+        until: checkpoints[index + 1] ?? null,
+        status,
+        diff,
+        hunks: parseDiffHunks(diff),
+        additions,
+        deletions,
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(FILE_HISTORY_DIFF_CONCURRENCY, intervals.length) }, worker))
+  return { relPath, repoRoot, steps, checkpointsScanned: checkpoints.length }
+}
+
+/** Blob id for each `<tree-ish>:<path>`, or null where the path does not exist. */
+async function readBlobIds(repoRoot: string, specs: string[]): Promise<Array<string | null>> {
+  const out = await git(repoRoot, ['cat-file', '--batch-check=%(objectname) %(objecttype)'], { input: `${specs.join('\n')}\n` })
+  const lines = out.split('\n')
+  return specs.map((_, index) => {
+    const [oid, type] = (lines[index] ?? '').split(' ')
+    return type === 'blob' && oid ? oid : null
+  })
+}
+
+/**
+ * Undo one hunk of an earlier step against the file as it is now. Applied at
+ * the repository root, because the patch names repository-relative paths. It
+ * fails, rather than guessing, when later edits rewrote the hunk's lines.
+ */
+export async function revertFileHistoryHunk(repoRoot: string, patchText: string): Promise<void> {
+  try {
+    await git(repoRoot, ['apply', '-R', '--whitespace=nowarn', '-'], { input: patchText })
+  } catch {
+    throw new Error('That change no longer applies: the lines were edited after it')
+  }
 }

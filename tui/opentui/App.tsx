@@ -204,7 +204,8 @@ import {
   type TuiSidebarSort,
   type TuiTranscriptWidth,
 } from '../../lib/tui/service'
-import { peekTuiClaudePlanLimits, readTuiClaudePlanLimits } from '../../lib/tui/service'
+import { peekTuiClaudePlanLimits, readTuiClaudePlanLimits, readTuiLineHistory } from '../../lib/tui/service'
+import { buildSelectionAskPrompt, type SelectionAskInput } from '../../lib/selectionAsk'
 import { tightestPlanLimit, type ClaudePlanLimits } from '../../lib/claudePlanLimits'
 import type { MessageBookmark } from '../../lib/messageBookmarks'
 import type { PlaybookSummary, ProtocolAgent, ProtocolAutonomy, ProtocolRun, ProtocolRunSnapshot } from '../../lib/agentProtocol'
@@ -420,6 +421,7 @@ const AnalyticsPopover = lazyComponent(() => import('./AnalyticsPopover').then((
 const DeskView = lazyComponent(() => import('./DeskView').then((module) => module.DeskView))
 const PromptLibraryPopover = lazyComponent(() => import('./PromptLibraryPopover').then((module) => module.PromptLibraryPopover))
 const CheckpointPopover = lazyComponent(() => import('./CheckpointPopover').then((module) => module.CheckpointPopover))
+const FileHistoryPopover = lazyComponent(() => import('./FileHistoryPopover').then((module) => module.FileHistoryPopover))
 const CoordinationPopover = lazyComponent(() => import('./CoordinationPopover').then((module) => module.CoordinationPopover))
 const TeammatesPopover = lazyComponent(() => import('./TeammatesPopover').then((module) => module.TeammatesPopover))
 const RemoteCoordinatorPopover = lazyComponent(() => import('./RemoteCoordinatorPopover').then((module) => module.RemoteCoordinatorPopover))
@@ -9242,6 +9244,9 @@ export default function OpenTuiApp() {
   const [checkpointOpen, setCheckpointOpen] = useState(false)
   const [checkpointFocusPrompt, setCheckpointFocusPrompt] = useState<{ sessionId: string; text: string; timestamp?: string } | null>(null)
   const checkpointKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  // Sits above whichever surface opened it (the editor, the checkpoints popover), which stay mounted beneath.
+  const [fileHistoryPath, setFileHistoryPath] = useState<string | null>(null)
+  const fileHistoryKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [taskPanelOpen, setTaskPanelOpen] = useState(false)
   const [taskPanelTab, setTaskPanelTab] = useState<'tasks' | 'agents'>('tasks')
   const [taskPopoverOpen, setTaskPopoverOpen] = useState(false)
@@ -11724,12 +11729,14 @@ export default function OpenTuiApp() {
     restoreComposerPromptPartExtmarks(snapshot.promptParts, text)
   })
 
-  const appendDiffCommentPromptToComposer = useEffectEvent((prompt: string) => {
-    const trimmed = prompt.trim()
-    if (!trimmed) return
+  // `trailing` follows the prompt, and the cursor lands after it: a prompt that
+  // ends on the line the user is meant to finish passes ''.
+  const appendDiffCommentPromptToComposer = useEffectEvent((prompt: string, trailing = '\n\n') => {
+    const trimmed = trailing ? prompt.trim() : prompt.trimStart()
+    if (!trimmed.trim()) return
     const existing = composerTextareaRef.current?.plainText ?? composerDraft
     const separator = existing.length > 0 ? (existing.endsWith('\n') ? '\n' : '\n\n') : ''
-    const next = `${existing}${separator}${trimmed}\n\n`
+    const next = `${existing}${separator}${trimmed}${trailing}`
     applyComposerSnapshot({
       text: next,
       attachments: [...composerMentionAttachments],
@@ -11737,6 +11744,19 @@ export default function OpenTuiApp() {
       cursorOffset: next.length,
     })
     setComposerActive(true)
+  })
+
+  // A "why" with no history of its own asks the provenance index and git
+  // blame who wrote the lines; every other intent goes straight in.
+  const askAgentAboutSelection = useEffectEvent(async (input: SelectionAskInput) => {
+    let request = input
+    if (input.intent === 'why' && !input.history && gitRepoCwd) {
+      showNotice('info', 'Looking up who wrote these lines…')
+      const history = await readTuiLineHistory(gitRepoCwd, input.filePath, input.startLine, input.endLine).catch(() => [])
+      request = { ...input, history }
+    }
+    appendDiffCommentPromptToComposer(buildSelectionAskPrompt(request), request.intent === 'ask' ? '' : '\n\n')
+    showNotice('info', `${request.filePath.split('/').pop()} ${request.startLine === request.endLine ? `L${request.startLine}` : `L${request.startLine}-${request.endLine}`} added to composer`)
   })
 
   const sendTranscriptDiffNoteToComposer = useEffectEvent((
@@ -20383,6 +20403,11 @@ export default function OpenTuiApp() {
       return
     }
 
+    if (fileHistoryPath) {
+      handled(() => { fileHistoryKeyHandlerRef.current?.(key) })
+      return
+    }
+
     if (editorOpen) {
       const consumed = editorKeyHandlerRef.current?.(key) ?? true
       if (consumed) handled(() => {})
@@ -23833,6 +23858,7 @@ export default function OpenTuiApp() {
                           appendDiffCommentPromptToComposer(prompt)
                           showNotice('info', 'Diff comment added to composer')
                         }}
+                        onAskAgent={(request) => { void askAgentAboutSelection(request) }}
                       />
                     )
                   case 'pull-request':
@@ -25042,6 +25068,11 @@ export default function OpenTuiApp() {
             appendDiffCommentPromptToComposer(prompt)
             showNotice('info', 'Diff comment added to composer')
           }}
+          onAskAgent={(request) => {
+            void askAgentAboutSelection(request)
+            // A full-screen popover hides the composer the prompt just went to.
+            setGitOpen(false)
+          }}
         />
       ) : null}
 
@@ -25075,6 +25106,11 @@ export default function OpenTuiApp() {
           onNotice={(kind, text) => showNotice(kind, text)}
           onClipboardRead={readClipboardText}
           onClipboardWrite={(text) => writeClipboard(text, renderer)}
+          onAskAgent={(request) => {
+            void askAgentAboutSelection({ ...request, filePath: request.path, origin: 'editor selection' })
+            return true
+          }}
+          onOpenFileHistory={gitRepoCwd ? (path) => setFileHistoryPath(path) : undefined}
         />
       ) : null}
 
@@ -25291,6 +25327,27 @@ export default function OpenTuiApp() {
           onNotice={showNotice}
           onKeyHandlerReady={(handler) => { checkpointKeyHandlerRef.current = handler }}
           focusPrompt={checkpointFocusPrompt}
+          onOpenFileHistory={(path) => setFileHistoryPath(path)}
+        />
+      ) : null}
+
+      {fileHistoryPath && gitRepoCwd ? (
+        <FileHistoryPopover
+          cwd={gitRepoCwd}
+          path={fileHistoryPath}
+          theme={theme}
+          accentColor={composerAccentColor}
+          width={width}
+          height={height}
+          onClose={() => setFileHistoryPath(null)}
+          onNotice={showNotice}
+          onKeyHandlerReady={(handler) => { fileHistoryKeyHandlerRef.current = handler }}
+          onAskAgent={(request) => {
+            void askAgentAboutSelection(request)
+            // The editor is left to its own close, which guards unsaved buffers.
+            setFileHistoryPath(null)
+            setCheckpointOpen(false)
+          }}
         />
       ) : null}
 
@@ -25659,7 +25716,7 @@ export default function OpenTuiApp() {
 
       <ToastOverlay toasts={toasts} theme={theme} width={width} height={height} zIndex={remoteCoordinatorTarget ? MODAL_SCRIM_Z_INDEX - 1 : undefined} />
 
-      {worktreeModalOpen || worktreeConfirm || coordModalOpen || coordBoardOpen || teammatesOpen || remoteCoordinatorTarget ? (
+      {worktreeModalOpen || worktreeConfirm || coordModalOpen || coordBoardOpen || teammatesOpen || remoteCoordinatorTarget || (fileHistoryPath && gitRepoCwd) ? (
         <box
           position="absolute"
           top={0}

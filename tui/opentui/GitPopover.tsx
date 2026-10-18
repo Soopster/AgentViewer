@@ -31,6 +31,7 @@ import { useGitDiffViewport } from './useGitDiffViewport'
 import { useGitDiffReviewActions, type ReviewActionKey } from './useGitDiffReviewActions'
 import { type DiffCellSelection, sourceIndexAtCell } from './gitDiffReviewActions'
 import { DiffReviewActionsBar } from './DiffReviewActionsBar'
+import { SELECTION_ASK_INTENTS, type SelectionAskInput } from '../../lib/selectionAsk'
 import { DiffCodeText } from './DiffCodeText'
 import { DiffViewControls } from './DiffViewControls'
 import { DiffStickyHeader } from './DiffStickyHeader'
@@ -444,6 +445,31 @@ function diffSelectionSpanFromSelection(
   }
 }
 
+/** The selected rows as unified-diff lines, whichever layout they were picked in. */
+function diffSpanText(rows: Array<TuiPierreDiffRow | TuiPierreSplitRow>, startIndex: number, endIndex: number): string {
+  const lines: string[] = []
+  for (let index = startIndex; index <= endIndex; index += 1) {
+    const row = rows[index]
+    if (!row) continue
+    if ('left' in row || 'right' in row) {
+      const split = row as TuiPierreSplitRow
+      if (split.left?.kind === 'context') lines.push(` ${split.left.text}`)
+      else {
+        if (split.left?.kind === 'deletion') lines.push(`-${split.left.text}`)
+        if (split.right?.kind === 'addition') lines.push(`+${split.right.text}`)
+      }
+      continue
+    }
+    const tone = row.tone
+    if (tone === 'addition') lines.push(`+${(row as TuiPierreDiffRow).text}`)
+    else if (tone === 'deletion') lines.push(`-${(row as TuiPierreDiffRow).text}`)
+    else if (tone === 'context') lines.push(` ${(row as TuiPierreDiffRow).text}`)
+  }
+  return lines.join('\n')
+}
+
+const ASK_MENU_TEXT = SELECTION_ASK_INTENTS.map(({ key, label }) => `${key} ${label.toLowerCase()}`).join(' · ')
+
 function reviewFileContext(rows: TuiPierreDiffRow[], filePath: string): string {
   return rows.filter(row => row.filePath === filePath)
     .map(row => `${row.indicator ?? ''}${row.text}`).join('\n')
@@ -550,6 +576,8 @@ type Props = {
   onKeyCaptureChange?: (capture: boolean) => void
   onClipboardWrite?: (text: string) => Promise<void>
   onSendDiffNoteToComposer?: (prompt: string) => void
+  /** Hand the lines under the diff cursor to an agent, with what to do with them. */
+  onAskAgent?: (request: SelectionAskInput) => void
 }
 
 // The widest the view-controls row gets (`auto:unified`, a four-digit pan
@@ -557,7 +585,7 @@ type Props = {
 const DIFF_CONTROLS_WIDTH = 62
 const DIFF_REVIEW_ACTIONS_MIN_WIDTH = 48
 
-export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = false, theme, width, height, onClose, onKeyHandlerReady, onSendDiffNoteToComposer, onClipboardWrite, onKeyCaptureChange }: Props) {
+export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = false, theme, width, height, onClose, onKeyHandlerReady, onSendDiffNoteToComposer, onAskAgent, onClipboardWrite, onKeyCaptureChange }: Props) {
   const reviewSearchEditingRef = useRef(false)
   const reviewActionKeyRef = useRef<(key: ReviewActionKey) => boolean>(() => false)
   const focusDiff = useCallback(() => setFocusSide('right'), [])
@@ -589,6 +617,8 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
   const boardKeyRef = useRef<(key: ReviewBoardKey) => void>(() => {})
   const [reviewTarget, setReviewTarget] = useState<ReviewTarget | null>(null)
   const [draftNote, setDraftNote] = useState<DraftNote | null>(null)
+  // `?` arms this with the lines under the diff cursor; the next key says what to ask.
+  const [askSpan, setAskSpan] = useState<Omit<SelectionAskInput, 'intent'> | null>(null)
   const openFileFilter = useCallback(() => {
     if (draftNote) return
     filterEditingRef.current = true; setFilterEditing(true)
@@ -978,6 +1008,12 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
 
   const handleKey = useCallback((key: GitKeyEvent) => {
     if (reviewBoardOpen) { boardKeyRef.current(key); return }
+    if (askSpan) {
+      const choice = SELECTION_ASK_INTENTS.find((entry) => entry.key === key.sequence)
+      if (choice && onAskAgent) onAskAgent({ ...askSpan, intent: choice.intent })
+      if (choice || key.name === 'escape') setAskSpan(null)
+      return
+    }
     if (key.sequence === 'R' && !draftNote && !filterEditingRef.current) { setReviewBoardOpen(true); return }
     // While a draft note is open, all keyboard input goes to the note editor.
     if (draftNote !== null) {
@@ -1327,6 +1363,23 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
       }
       return
     }
+    if (key.sequence === '?' && pane === 2 && fileDiffMode === 'viewer' && focusSide === 'right' && onAskAgent) {
+      const isSplit = diffLayout === 'split'
+      const rows = isSplit ? rightDiffViewRef.current?.splitRows : rightDiffViewRef.current?.rows
+      if (!rows || rows.length === 0) return
+      const currentIndex = clampNumber(diffCursorRow, 0, rows.length - 1)
+      const span = diffSelectionSpanFromRowRange(selectedFilePathRef.current, rows, diffSelectionAnchorRow ?? currentIndex, currentIndex)
+      if (!span) return
+      setAskSpan({
+        filePath: span.filePath,
+        startLine: Math.min(span.selection.start, span.selection.end),
+        endLine: Math.max(span.selection.start, span.selection.end),
+        code: diffSpanText(rows, span.startIndex, span.endIndex),
+        isDiff: true,
+        origin: `${sourceLabel} ${span.label}`,
+      })
+      return
+    }
     if (key.sequence === 'A' && pane === 2 && fileDiffMode === 'viewer' && focusSide === 'right' && onSendDiffNoteToComposer) {
       const rdv = rightDiffViewRef.current
       const fp = selectedFilePathRef.current
@@ -1347,7 +1400,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
       }))
       return
     }
-  }, [reviewBoardOpen, setDiffNotes, commitIndex, commitRangeAnchorIndex, data, diffCursorRow, diffLayout, diffNotes, diffSelectionAnchorRow, draftNote, expandedDirs, fileDiffMode, focusSide,
+  }, [askSpan, onAskAgent, sourceLabel, reviewBoardOpen, setDiffNotes, commitIndex, commitRangeAnchorIndex, data, diffCursorRow, diffLayout, diffNotes, diffSelectionAnchorRow, draftNote, expandedDirs, fileDiffMode, focusSide,
       height, leftPaneMode, onClose, onSendDiffNoteToComposer, pane, repoCwd, rightContent, showHunkHeaders, treeCursor, visibleNodes, sourceKey, diffSource, refreshGitData, sessionId, sourceMenuItems, sourceSelection, setDiffNotes, contextExpansions, changeContext, fileFilter, openFileFilter, closeFileFilter])
 
   // Register key handler with parent
@@ -1542,7 +1595,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
       setMouseCellSelection(null)
     }, wrap: wrapDiffLines, columns: diffLayout === 'split' ? Math.min(splitLeftTextW, splitRightTextW) : rightDiffTextWidth, tabWidth: diffTabWidth })
   useLayoutEffect(() => { reviewSearchEditingRef.current = reviewActions.editing }, [reviewActions.editing])
-  const captureReviewKeys = Boolean(reviewBoardOpen || draftNote || filterEditing || fileFilter || reviewActions.editing || reviewActions.query || sourceMenuOpen)
+  const captureReviewKeys = Boolean(askSpan || reviewBoardOpen || draftNote || filterEditing || fileFilter || reviewActions.editing || reviewActions.query || sourceMenuOpen)
   useLayoutEffect(() => {
     onKeyCaptureChange?.(captureReviewKeys)
     return () => onKeyCaptureChange?.(false)
@@ -1562,6 +1615,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
           ['⇧j/k', 'range'],
           ['a', 'note'], ['R', 'checklist'],
           ['A', 'composer'],
+          ...(onAskAgent ? [['?', 'ask agent'] as [string, string]] : []),
           ['x', 'del'],
         ]
         const nodes: React.ReactNode[] = []
@@ -1893,6 +1947,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
           onWrap={() => setWrapDiffLines(value => !value)} onTabs={() => setDiffTabWidth(value => value === 2 ? 4 : value === 4 ? 8 : 2)}
           onPan={delta => setHorizontalOffset(value => Math.max(0, Math.min(maxHorizontalOffset, value + delta)))} onFilter={openFileFilter} /> : null}
         {pane === 2 && fileDiffMode === 'viewer' ? <DiffReviewActionsBar theme={theme} width={diffBarsShareRow ? rightW - DIFF_CONTROLS_WIDTH : rightW} {...reviewActions}
+          prompt={askSpan ? `ask ${askSpan.filePath.split('/').pop()} L${askSpan.startLine}${askSpan.endLine !== askSpan.startLine ? `-${askSpan.endLine}` : ''}: ${ASK_MENU_TEXT} · esc` : null}
           onSearch={() => { if (!draftNote && !filterEditing) reviewActions.openSearch() }}
           onNext={reviewActions.next} onCopy={side => { if (!draftNote) void reviewActions.copy(side) }} /> : null}
         </box>

@@ -154,6 +154,7 @@ import type { PromptRecord, PromptSummary, SavePromptInput } from '../promptLibr
 import {
   createWorktreeTask,
   findWorktreeTaskForCwd,
+  findRepoRoot,
   listWorktreeTasks,
   mergeWorktreeTask,
   removeWorktreeTask,
@@ -167,12 +168,17 @@ import {
   diffSinceCheckpoint,
   listTurnCheckpoints,
   listWorkingDiffHunks,
+  readFileCheckpointHistory,
   rejectWorkingHunk,
   restoreCheckpoint,
+  revertFileHistoryHunk,
   type CheckpointFileChange,
+  type FileHistory,
+  type FileHistoryStep,
   type TurnCheckpoint,
   type WorkingDiffHunk,
 } from '../checkpoints'
+import type { SelectionHistoryEntry } from '../selectionAsk'
 
 import type { AgentProtocolEvent, PlaybookSummary, ProtocolRun, ProtocolRunSnapshot, RunPlaybook, StartProtocolRunParams, StartProtocolRunResult } from '../agentProtocol'
 import type { AgentProvider, ContextUsage, ProviderSelection, Session, SessionDiagnosticSection, SessionInfo, SessionMessage, SessionModelInfo } from '../types'
@@ -759,7 +765,68 @@ export async function createTuiReviewPullRequest(cwd: string, title: string): Pr
   return createReviewPullRequest(cwd, title)
 }
 
-export type { TurnCheckpoint, CheckpointFileChange, WorkingDiffHunk }
+export async function readTuiFileHistory(cwd: string, filePath: string): Promise<FileHistory> {
+  return readFileCheckpointHistory(cwd, filePath)
+}
+
+export async function revertTuiFileHistoryHunk(repoRoot: string, patchText: string): Promise<void> {
+  return revertFileHistoryHunk(repoRoot, patchText)
+}
+
+/**
+ * Who wrote lines `startLine`..`endLine` (1-based) of a file: the recorded agent
+ * turns from the provenance index, then commits for lines no turn accounts for.
+ * Attribution is against the file on disk, so an editor holding unsaved edits
+ * may be a few lines off — the prompt says the selection includes them.
+ * Loaded on demand: provenance opens the search index, which a session that
+ * never asks "why" should not pay for.
+ */
+export async function readTuiLineHistory(cwd: string, filePath: string, startLine: number, endLine: number): Promise<SelectionHistoryEntry[]> {
+  const [{ blameFileProvenance }, { promises: fs }, path] = await Promise.all([import('../provenance'), import('node:fs'), import('node:path')])
+  // An editor path is relative to the editor's root; a diff's is relative to
+  // the repository's. They differ when the TUI runs in a subdirectory.
+  let base = cwd
+  if (!path.isAbsolute(filePath) && !(await fs.stat(path.resolve(cwd, filePath)).catch(() => null))) {
+    base = (await findRepoRoot(cwd)) ?? cwd
+  }
+  const blame = await blameFileProvenance({ file: filePath, cwd: base })
+  const first = startLine - 1
+  const last = endLine - 1
+  const entries: SelectionHistoryEntry[] = []
+  const covered = new Set<number>()
+  for (const segment of blame.segments) {
+    if (segment.end < first || segment.start > last) continue
+    const start = Math.max(segment.start, first)
+    const end = Math.min(segment.end, last)
+    for (let line = start; line <= end; line += 1) covered.add(line)
+    const title = segment.edit.sessionTitle ? ` "${segment.edit.sessionTitle}"` : ''
+    entries.push({
+      startLine: start + 1,
+      endLine: end + 1,
+      source: `${segment.edit.provider} session ${segment.edit.sessionId.slice(0, 8)}${title}`,
+      text: segment.edit.prompt,
+      timestampMs: segment.edit.timestampMs,
+    })
+  }
+  for (const segment of blame.commitSegments) {
+    if (segment.end < first || segment.start > last) continue
+    const start = Math.max(segment.start, first)
+    const end = Math.min(segment.end, last)
+    let uncovered = false
+    for (let line = start; line <= end && !uncovered; line += 1) uncovered = !covered.has(line)
+    if (!uncovered) continue
+    entries.push({
+      startLine: start + 1,
+      endLine: end + 1,
+      source: `commit ${segment.sha.slice(0, 8)}${segment.author ? ` by ${segment.author}` : ''}`,
+      text: segment.summary,
+      timestampMs: segment.authorTime,
+    })
+  }
+  return entries.sort((a, b) => (a.startLine ?? 0) - (b.startLine ?? 0))
+}
+
+export type { TurnCheckpoint, CheckpointFileChange, WorkingDiffHunk, FileHistory, FileHistoryStep }
 
 export async function startTuiProtocolRun(params: StartProtocolRunParams): Promise<StartProtocolRunResult> {
   if (isRemoteAttached()) {

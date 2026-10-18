@@ -42,6 +42,8 @@ type Props = {
    * not folded into it. A turn with no checkpoint says so and lists the rest.
    */
   focusPrompt?: { sessionId: string; text: string; timestamp?: string } | null
+  /** Scrub one file through every turn (the selected file row's path, repository-relative). */
+  onOpenFileHistory?: (path: string) => void
 }
 
 type TurnsRow =
@@ -83,6 +85,7 @@ export function CheckpointPopover({
   onNotice,
   onKeyHandlerReady,
   focusPrompt,
+  onOpenFileHistory,
 }: Props) {
   const [tab, setTab] = useState<'turns' | 'review'>('turns')
   const [checkpoints, setCheckpoints] = useState<TurnCheckpoint[]>([])
@@ -370,6 +373,12 @@ export function CheckpointPopover({
       }
       return
     }
+    if (key.name === 'h' && onOpenFileHistory) {
+      const row = tab === 'turns' ? turnsRows[clampedCursor] : reviewRows[clampedCursor]
+      const filePath = row?.kind === 'file' ? row.change.path : row?.kind === 'hunk' ? row.hunk.file : row?.kind === 'untracked' ? row.path : null
+      if (filePath) onOpenFileHistory(filePath)
+      return
+    }
     if (key.name === 'x' && tab === 'review') {
       const row = reviewRows[clampedCursor]
       if (row?.kind === 'hunk') setPending({ kind: 'reject-hunk', hunk: row.hunk })
@@ -389,7 +398,7 @@ export function CheckpointPopover({
       setPending({ kind: 'create-pr' })
       return
     }
-  }, [bodyH, busy, checkpoints, clampedCursor, commitMode, diffLines, onClose, onNotice, openDiff, pending, reviewRows, rowsLength, runAction, scrollBody, submitCommit, tab, turnsRows])
+  }, [bodyH, busy, checkpoints, clampedCursor, commitMode, diffLines, onClose, onNotice, onOpenFileHistory, openDiff, pending, reviewRows, rowsLength, runAction, scrollBody, submitCommit, tab, turnsRows])
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
 
@@ -412,8 +421,8 @@ export function CheckpointPopover({
     : pendingLabel
     ? 'y/⏎ confirm · n/Esc cancel'
     : tab === 'turns'
-    ? '⏎ files · d diff · r restore · PgUp/PgDn · ⇥ review · Esc close'
-    : 'x reject · c commit · ⇧P pr · PgUp/PgDn · ⇥ turns · Esc close'
+    ? `⏎ files · d diff · r restore${onOpenFileHistory ? ' · h file history' : ''} · PgUp/PgDn · ⇥ review · Esc close`
+    : `x reject · c commit · ⇧P pr${onOpenFileHistory ? ' · h history' : ''} · PgUp/PgDn · ⇥ turns · Esc close`
 
   return (
     <box
