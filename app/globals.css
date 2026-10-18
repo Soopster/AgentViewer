@@ -719,14 +719,14 @@ html[data-color-treatment="flat"] .av-hover-control:not(:disabled):hover {
 /* Modern Bloomberg Terminal: black field, amber working text, white values,
    teal-green / red for up and down, blue links, sector-key yellow. */
 [data-theme="bloomberg-dark"] {
-  --bg: #000000; --surface: #0a0a0a; --surface-2: #141414; --surface-3: #1f1f1f;
+  --bg: #000000; --surface: #0a0a0a; --surface-2: #171717; --surface-3: #242424;
   --border: #3a3a3a; --border-2: #fb8b1e;
-  --text: #f2f2f2; --text-2: #fb8b1e; --text-3: #8c6a45;
+  --text: #f2f2f2; --text-2: #fb8b1e; --text-3: #b58a58;
   --violet: #fb8b1e; --violet-glow: color-mix(in srgb, #fb8b1e 16%, transparent);
   --cyan: #4aa8ff; --cyan-glow: color-mix(in srgb, #4aa8ff 12%, transparent);
   --green: #4af6c3; --red: #ff433d; --amber: #ffd100;
   --t-bash: #ffd100; --t-edit: #4af6c3; --t-write: #4aa8ff; --t-read: #fb8b1e;
-  --t-grep: #ff433d; --t-glob: #ff6f61; --t-agent: #ff6f61; --t-other: #8c6a45;
+  --t-grep: #ff433d; --t-glob: #ff6f61; --t-agent: #ff6f61; --t-other: #b58a58;
 }
 
 /* ── Design tokens ── bloomberg-light ────────────────────────────────────── */
