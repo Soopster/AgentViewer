@@ -713,6 +713,9 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       if (recovering && data?.interactive.autoResumeExhausted?.includes(detailAgent.id)) {
         rightRows.push({ cells: [[fitText('Resumed automatically twice without finishing; it now waits for you.', rightW).trimEnd(), theme.amber]] })
       }
+      if (recovering && data?.interactive.autoResume && data.interactive.autoResumeUncertain?.includes(detailAgent.id)) {
+        for (const text of wrapWords('Its last turn was cut off and may already have made changes, so it is not resumed automatically. Read the transcript first.', rightW, 3)) rightRows.push({ cells: [[text, theme.amber]] })
+      }
       const dead = recovering ? data?.deadAgents?.find(entry => entry.agentId === detailAgent.id) : undefined
       if (dead) {
         for (const text of wrapWords(`Turn ended: ${coordinatorDeathReason(dead)}${dead.detail ? ` — ${dead.detail}` : ''}`, rightW, 3)) rightRows.push({ cells: [[text, theme.amber]] })

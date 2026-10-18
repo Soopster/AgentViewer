@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 
 const phase = process.argv[2]
 if (!phase) {
-  for (const recover of ['adopt', 'adopt-off', 'adopt-setting-off', 'adopt-capped']) {
+  for (const recover of ['adopt', 'adopt-uncertain', 'adopt-off', 'adopt-setting-off', 'adopt-capped']) {
     const cwd = mkdtempSync(path.join(tmpdir(), 'coord-auto-resume-'))
     execFileSync('git', ['init', '-q', cwd])
     writeFileSync(path.join(cwd, 'README.md'), 'fixture\n')
@@ -25,7 +25,7 @@ if (!phase) {
       })
     }
   }
-  console.log('Coordinator auto-resume smoke passed (adopting a dead host resumes its teammate once, on the same task; the sweep, the env switch, the conversation setting and a task past its cap do not; r resets the count)')
+  console.log('Coordinator auto-resume smoke passed (adopting a dead host resumes a teammate that died between turns once, on the same task; one cut off mid-turn waits for a person and says why; the sweep, the env switch, the conversation setting and a task past its cap do not; r resets the count)')
 } else {
   process.chdir(process.argv[3]!)
   const { mock } = await (0, eval)('import("bun:test")')
@@ -96,6 +96,26 @@ if (!phase) {
       assert.deepEqual((await coord.readInteractiveCoordinator('lead-chat')).autoResumeExhausted, [], 'a manual resume did not reset the count')
     }
     process.exit(0)
+  }
+  if (phase === 'adopt-uncertain') {
+    // The crash cut the turn off mid-flight: it may already have acted, so it
+    // is never replayed unseen. The panel is told why, and `r` still works.
+    await coord.adoptOrphanedInteractiveHost('lead-chat', 'codex')
+    await settle(600)
+    assert.equal(starts, 0, 'a turn cut off mid-flight was replayed automatically')
+    assert.deepEqual(await coord.readInteractiveRecoveries(before.run.id), ['agent-1'], 'the teammate is no longer offered for manual recovery')
+    assert.deepEqual((await coord.readInteractiveCoordinator('lead-chat')).autoResumeUncertain, ['agent-1'], 'the panel is not told why the teammate waits')
+    await coord.resumeInteractiveAgent(await coord.sessionCoordinatorIdentity('lead-chat', 'codex'), 'agent-1')
+    await until(() => starts === 1)
+    process.exit(0)
+  }
+  if (phase === 'adopt') {
+    // The host died between turns: the last one had settled, so nothing is
+    // uncertain and the teammate picks its task back up on its own.
+    const { Database } = await (0, eval)('import("bun:sqlite")')
+    const db = new Database(ledgerPath())
+    db.prepare("UPDATE protocol_execution_attempts SET state = 'settled'").run()
+    db.close()
   }
   await coord.adoptOrphanedInteractiveHost('lead-chat', 'codex')
   if (phase === 'adopt-off') {

@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process'
 import { accessSync, constants as fsConstants, existsSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { scrubInheritedAgentIdentity } from '../lib/inheritedIdentityEnv.mjs'
+import { CALLER_PROVIDER_ENV, callerAgentProvider, scrubInheritedAgentIdentity } from '../lib/inheritedIdentityEnv.mjs'
 
 // Mirrors COORD_CLI_VERBS in agent-viewer-coord-cli.mjs (coordCliSmoke pins it):
 // importing that module here would load the tool contract on every launch.
@@ -12,6 +12,11 @@ const COORD_CLI_VERBS = ['run', 'join', 'runs', 'whoami', 'status', 'delegate', 
 
 // Agent Viewer is not the agent session it was launched from, and nothing it
 // spawns is either — see lib/inheritedIdentityEnv.mjs.
+// Recorded first: scrubbing removes the markers `coord run`/`join` would read.
+const callerProvider = callerAgentProvider()
+// The MCP bridge needs Claude Code's project directory; it decides for itself
+// whether to trust it (see bridgeCwd there).
+const inheritedProjectDir = process.env.CLAUDE_PROJECT_DIR
 scrubInheritedAgentIdentity()
 
 // A coordinated agent is told to read the coordinate-agents skill, and the
@@ -545,6 +550,7 @@ if (command === '-h' || command === '--help' || command === 'help') {
       ...process.env,
       ...(attachUrl ? { AGENT_VIEWER_ATTACH: attachUrl } : {}),
       ...(identity ? { AGENT_VIEWER_COORD_IDENTITY_FILE: path.resolve(identity) } : {}),
+      ...(inheritedProjectDir ? { CLAUDE_PROJECT_DIR: inheritedProjectDir } : {}),
     },
   })
 
@@ -606,7 +612,10 @@ if (command === '-h' || command === '--help' || command === 'help') {
   trackExit(child)
 } else if (command === 'coord' && COORD_CLI_VERBS.includes(args[1])) {
   const entrypoint = fileURLToPath(new URL('./agent-viewer-coord-cli.mjs', import.meta.url))
-  const child = spawn(process.execPath, [entrypoint, ...args.slice(1)], { stdio: 'inherit' })
+  const child = spawn(process.execPath, [entrypoint, ...args.slice(1)], {
+    stdio: 'inherit',
+    env: callerProvider ? { ...process.env, [CALLER_PROVIDER_ENV]: callerProvider } : process.env,
+  })
   child.on('error', (error) => { throw error })
   forwardSignals(child)
   trackExit(child)

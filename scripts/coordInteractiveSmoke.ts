@@ -111,6 +111,12 @@ try {
   await coord.runProtocolMaintenanceSweep()
   assert.equal(autoTurns, 0, 'do not race a user-driven provider turn')
   runtime.clearRunningSession('primary-chat')
+  // Teammates given work together finish together: a lead is woken once the
+  // mail settles, not on the first result and again on the next.
+  await coord.sendExternalProtocolMessage(worker, { to: 'lead', body: 'Result C', kind: 'handoff' })
+  await coord.runProtocolMaintenanceSweep()
+  assert.equal(autoTurns, 0, 'fresh teammate mail must settle before it wakes the lead')
+  await new Promise(resolve => setTimeout(resolve, 2_600))
   nativePermissions.set('primary-chat', [{ type: 'codex_approval', requestId: 'permission', params: {} }])
   await coord.runProtocolMaintenanceSweep()
   assert.equal(autoTurns, 0, 'do not automatically answer a native approval')
@@ -131,7 +137,18 @@ try {
   await coord.reportExternalProtocolProgress(worker, { taskId: task.task!.id, status: 'working', summary: 'Started final work' })
   await coord.runProtocolMaintenanceSweep()
   assert.equal(autoTurns, 1, 'task starts and descriptive heartbeats must not wake the lead')
+  // A second teammate still on its own task: the first result waits for it
+  // rather than waking the lead once per finished teammate.
+  const helper = (await coord.joinExternalProtocolRun({ runId, provider: 'codex', cwd, participantName: 'helper' })).participant
+  const helperTask = await coord.createExternalProtocolTask(await coord.sessionCoordinatorIdentity('primary-chat', 'codex'), { assignTo: 'helper', title: 'Parallel task', detail: 'Still running' })
+  await coord.reportExternalProtocolProgress(helper, { taskId: helperTask.task!.id, status: 'working' })
+  const liveController = globalThis.__agentViewerCoordinatorControllers!.get(runId)!
+  liveController.turnInFlight.add(helper.agentId)
   await coord.completeExternalProtocolTask(worker, { taskId: task.task!.id, summary: 'The final result is ready' })
+  await new Promise(resolve => setTimeout(resolve, 2_600))
+  await coord.runProtocolMaintenanceSweep()
+  assert.equal(autoTurns, 1, 'a result must wait while another teammate is still on its task')
+  liveController.turnInFlight.delete(helper.agentId)
   await coord.runProtocolMaintenanceSweep()
   assert.equal(autoTurns, 2, 'the last completed task must deliver its result even with no unfinished tasks')
   releaseAuto!()

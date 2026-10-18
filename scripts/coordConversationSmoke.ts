@@ -59,7 +59,7 @@ try {
   // both clients can show a teammate as working after its turn has ended.
   // Interrupting a managed teammate stops its live turn here, rather than
   // setting the cancel flag only an external worker's supervisor would poll.
-  const { setRunningSession, clearRunningSession, setWaitingSession, clearWaitingSession } = await import('../lib/sessionRuntime')
+  const { setRunningSession, clearRunningSession, setWaitingSession } = await import('../lib/sessionRuntime')
   const leadIdentity = await coord.sessionCoordinatorIdentity('primary-chat', 'codex')
   const interruptTarget = asks[0].result.delegation
   await assert.rejects(coord.interruptInteractiveAgent(leadIdentity, interruptTarget.agentId), /no turn running here/,
@@ -79,7 +79,9 @@ try {
   setWaitingSession({ sessionId: backgroundAsk.sessionId, provider: 'codex', backgroundTasks: [{ id: 'b1', type: 'subagent', status: 'running', description: 'search' }, { id: 'b2', type: 'shell', status: 'running', description: 'dev server' }], sessionCrons: [] })
   const waiting = await (await GET(new Request('http://localhost/coordination?provider=codex'), context)).json()
   assert.deepEqual(waiting.backgroundAgents, [{ agentId: backgroundAsk.agentId, tasks: 1, wakeups: 0 }], 'the route counts background subagents and ignores shells')
-  clearWaitingSession(backgroundAsk.sessionId)
+  // Clearing the marker is not proof the work ended (a foreground turn start
+  // clears it too); the provider reporting a settled snapshot is.
+  setWaitingSession({ sessionId: backgroundAsk.sessionId, provider: 'codex', backgroundTasks: [], sessionCrons: [] })
   for (const ask of asks) {
     const { agentId, sessionId } = ask.result.delegation
     await until(() => turns.has(sessionId))

@@ -21,7 +21,7 @@ Read references only when needed:
 
 - **Already bound:** call `coord_status`, then `coord_read_inbox`. Keep the identity; do not create or join again. If a restart left you unbound, `coord_resume` with your run and agent IDs; no token needed.
 - **Tools exposed but unbound:** if the host supplied a session-bound client command, use that exact command for `coord_status` and keyed `coord_read_inbox`; see the host reference. Do not join a replacement run or inspect credential files.
-- **Asked to join:** `coord_join_run` with a unique name, your actual `provider` (it defaults to codex when omitted), and the checkout. Pass the requested run ID, or omit it to take the newest joinable run for that checkout.
+- **Asked to join:** `coord_join_run` with a unique name, your actual `provider` (inferred when omitted), and the checkout. Pass the requested run ID, or omit it to take the newest joinable run for that checkout.
 - **Asked to lead/start:** `coord_create_run` with the full objective, checkout, actual provider, and a realistic participant limit. Seed tasks before launching teammates.
 - **Unattended work:** prefer `agent-viewer coord worker`; it persists identity and waits without model tokens. Startup commands are in the host reference. Joined workers use isolated checkouts unless `--shared`.
 

@@ -7,7 +7,7 @@
 // which is what lets them outlive the client.
 
 import { spawn } from 'node:child_process'
-import { existsSync, openSync } from 'node:fs'
+import { existsSync, openSync, readdirSync, statSync } from 'node:fs'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -53,10 +53,33 @@ async function readRecord(port) {
   try { return JSON.parse(await readFile(daemonRecordPath(port), 'utf8')) } catch { return null }
 }
 
+/** The build exists and no source file was changed after it was made. */
+function buildIsCurrent() {
+  const root = fileURLToPath(new URL('..', import.meta.url))
+  let builtAt
+  try { builtAt = statSync(path.join(root, '.next', 'BUILD_ID')).mtimeMs } catch { return false }
+  const newerThanBuild = (dir) => {
+    let entries
+    try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return false }
+    for (const entry of entries) {
+      if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory() ? newerThanBuild(full) : statSync(full).mtimeMs > builtAt) return true
+    }
+    return false
+  }
+  return !['app', 'lib', 'components', 'bin'].some(dir => newerThanBuild(path.join(root, dir)))
+}
+
 function spawnWebDaemon(port) {
   const launcher = fileURLToPath(new URL('./agent-viewer.mjs', import.meta.url))
-  // A built app starts in a fraction of the time and memory of the dev server.
-  const built = existsSync(fileURLToPath(new URL('../.next/BUILD_ID', import.meta.url)))
+  // A built app starts in a fraction of the time and memory of the dev server
+  // — but only a build of the code that is actually here. In a working
+  // checkout an old `.next` silently served the previous build.
+  const built = buildIsCurrent()
+  if (!built && existsSync(fileURLToPath(new URL('../.next/BUILD_ID', import.meta.url)))) {
+    console.error('The production build is older than the source; starting the dev server instead (run `npm run build` to use the build).')
+  }
   const log = openSync(daemonLogPath(port), 'a')
   // The daemon hosts the work itself; an attach target inherited from this
   // shell would make it a client of some other daemon.

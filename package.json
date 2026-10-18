@@ -45,6 +45,7 @@
     "coord:resources:smoke": "bun scripts/coordInteractiveResourcesSmoke.ts && bun scripts/coordRollupSmoke.ts && bun tui/opentui/coordinatorWorkflowSmoke.tsx",
     "coord:workflow:smoke": "bun scripts/coordInteractiveWorkflowSmoke.ts && bun tui/opentui/coordinatorWorkflowSmoke.tsx",
     "coord:scalebench": "bun run ./scripts/coordScaleBench.ts",
+    "coord:agents:live": "node ./scripts/coordRealAgentsLive.mjs",
     "tui:inputperf": "bun run ./tui/opentui/inputPerf.tsx",
     "tui:scrollperf": "bun run ./tui/opentui/scrollPerfSmoke.ts",
     "tui:editorperf": "bun run ./tui/opentui/editorCompletionPerf.tsx",

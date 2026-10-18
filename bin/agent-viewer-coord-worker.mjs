@@ -27,6 +27,15 @@ import {
 import { scrubInheritedAgentIdentity } from '../lib/inheritedIdentityEnv.mjs'
 import { newWorkerAttempt, reconcileWorkerAttempt, workerAttemptUnresolved, publicWorkerAttempt } from './agent-viewer-coord-attempts.mjs'
 
+const openCodeMajors = new Map()
+function openCodeMajor(command) {
+  if (!openCodeMajors.has(command)) {
+    const out = spawnSync(command, ['--version'], { encoding: 'utf8', timeout: 15_000 })
+    openCodeMajors.set(command, Number(/(\d+)\.\d+/.exec(`${out.stdout ?? ''}`)?.[1] ?? 0))
+  }
+  return openCodeMajors.get(command)
+}
+
 // A lead's Bash tool starts this worker, so it arrives carrying the lead's
 // session identity; the teammates it spawns must not claim it.
 scrubInheritedAgentIdentity()
@@ -494,6 +503,11 @@ async function providerTick(state, baseUrl, actionable) {
     // anything not explicitly denied by the user's permission config.
     args = [
       'run', '--format', 'json', '--auto',
+      // OpenCode 2's `run` attaches to a shared background service when one is
+      // up, and that service was configured before OPENCODE_CONFIG existed: the
+      // agent-viewer server was silently missing, so the teammate had no
+      // coord_* tools (measured on 2.0.8). A private server reads this config.
+      ...(openCodeMajor(command) >= 2 ? ['--standalone'] : []),
       ...(state.model ? ['--model', state.model] : []),
       ...(state.providerSessionId ? ['--session', state.providerSessionId] : []),
       prompt,

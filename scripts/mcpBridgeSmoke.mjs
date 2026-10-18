@@ -1,6 +1,7 @@
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { mkdtemp, readFile, stat } from 'node:fs/promises'
+import { mkdtempSync, realpathSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -538,12 +539,23 @@ try {
   if ('snapshot' in waitedPayload) throw new Error('Coordinator wait leaked the full board snapshot into the MCP result')
 
   const teammateIdentityFile = path.join(identityDir, 'teammate.json')
+  const teammateProjectDir = realpathSync(mkdtempSync(path.join(tmpdir(), 'mcp-teammate-project-')))
+  // The host is OpenCode as far as the process tree can tell (node under that
+  // name), so the nearest agent above the bridge is not Claude Code even though
+  // this smoke may itself run under it.
+  const fakeOpenCode = path.join(teammateProjectDir, 'opencode')
+  symlinkSync(process.execPath, fakeOpenCode)
   const secondTransport = new StdioClientTransport({
-    command: process.execPath,
+    command: fakeOpenCode,
     args: [launcher, 'mcp', '--attach', String(address.port)],
     stderr: 'pipe',
+    // Started by a non-Claude host from its own project, carrying a
+    // CLAUDE_PROJECT_DIR inherited from a Claude Code shell: the project is
+    // where the host started it, not the inherited one.
+    cwd: teammateProjectDir,
     env: {
       ...process.env,
+      CLAUDE_PROJECT_DIR: '/tmp/not-this-project',
       AGENT_VIEWER_COORD_IDENTITY_FILE: teammateIdentityFile,
       AGENT_VIEWER_COORD_TRANSPORT: 'http',
     },
@@ -556,8 +568,15 @@ try {
     await secondClient.connect(secondTransport)
     const joined = await secondClient.callTool({
       name: 'coord_join_run',
-      arguments: { run_id: 'run-1', name: 'claude-cli', provider: 'claude', cwd: '/tmp/claude' },
+      // No provider: the bridge must take it from the client's own name.
+      arguments: { run_id: 'run-1', name: 'claude-cli' },
     })
+    if (seen.findLast((entry) => entry.body?.action === 'join_run')?.body?.cwd !== teammateProjectDir) {
+      throw new Error(`An inherited CLAUDE_PROJECT_DIR overrode the host's project: ${seen.findLast((entry) => entry.body?.action === 'join_run')?.body?.cwd}`)
+    }
+    if (seen.findLast((entry) => entry.body?.action === 'join_run')?.body?.provider !== 'claude') {
+      throw new Error(`Bridge did not infer the caller's provider from the MCP client name: ${JSON.stringify(seen.findLast((entry) => entry.body?.action === 'join_run')?.body)}`)
+    }
     const joinedPayload = JSON.parse(joined.content?.[0]?.text ?? '{}')
     if (joinedPayload.participant?.agentId !== 'external-claude') throw new Error('Claude CLI did not bind as Coordinator teammate')
     const workerCatalog = (await secondClient.listTools()).tools.map(tool => tool.name)

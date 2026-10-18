@@ -413,6 +413,33 @@ await new Promise((resolve, reject) => {
   child.on('exit', (code) => code === 0 ? resolve() : reject(new Error(`worker exited ${code}: ${stderr}`)))
 })
 
+{
+  // OpenCode 2's `run` attaches to a shared background service that never read
+  // OPENCODE_CONFIG, so its turns had no coord_* tools. A 2.x worker must run
+  // each turn on a private server; a 1.x CLI has no such flag.
+  for (const [version, expectStandalone] of [['opencode v2.0.8', true], ['1.17.3', false]]) {
+    const fakeOpenCode = path.join(testDir, `fake-opencode-${expectStandalone ? 2 : 1}.mjs`)
+    const argsFile = `${fakeOpenCode}.args.json`
+    await writeFile(fakeOpenCode, `#!/usr/bin/env node
+import { writeFileSync, readFileSync } from 'node:fs'
+if (process.argv[2] === '--version') { console.log(${JSON.stringify(version)}); process.exit(0) }
+writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify({ argv: process.argv.slice(2), config: JSON.parse(readFileSync(process.env.OPENCODE_CONFIG, 'utf8')) }))
+`, { mode: 0o755 })
+    const openCodeIdentity = path.join(testDir, `opencode-${expectStandalone ? 2 : 1}-identity.json`)
+    await new Promise((resolve) => {
+      const child = spawn(process.execPath, [
+        worker, '--join', 'run-worker', '--name', `opencode-worker-${expectStandalone ? 2 : 1}`, '--provider', 'opencode',
+        '--attach', String(address.port), '--cwd', testDir, '--once', '--identity', openCodeIdentity,
+      ], { env: { ...process.env, AGENT_VIEWER_COORD_HOME: coordHome, OPENCODE_PATH: fakeOpenCode }, stdio: 'ignore' })
+      child.on('exit', resolve)
+      child.on('error', resolve)
+    })
+    const seenRun = JSON.parse(await readFile(argsFile, 'utf8'))
+    if (seenRun.argv.includes('--standalone') !== expectStandalone) throw new Error(`OpenCode ${version}: --standalone ${expectStandalone ? 'missing' : 'passed to a CLI without it'}: ${seenRun.argv.join(' ')}`)
+    if (!seenRun.config?.mcp?.['agent-viewer']) throw new Error('OpenCode worker turn was not given the agent-viewer MCP server')
+  }
+}
+
 const state = JSON.parse(await readFile(identityFile, 'utf8'))
 if (state.token !== 'worker-secret') throw new Error('worker did not persist its capability')
 if (state.providerSessionId !== '019-worker-smoke') throw new Error('worker did not persist the Codex session id')

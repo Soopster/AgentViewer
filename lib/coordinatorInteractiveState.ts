@@ -7,7 +7,7 @@ export type CoordinatorInteractiveState = {
     resources?: import('./coordinatorResources').CoordinatorResources
     executionElsewhere?: boolean
     enabled: boolean; autoContinue: boolean; remainingTurns: number
-    autoResume?: boolean; autoResumeExhausted?: string[]
+    autoResume?: boolean; autoResumeExhausted?: string[]; autoResumeUncertain?: string[]
     delivery: { batchId: string; state: string; createdAt: string; active: boolean } | null
   }
   runningAgentIds: string[]

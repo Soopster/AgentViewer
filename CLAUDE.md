@@ -1556,6 +1556,16 @@ which mirror `app/api/sessions/[sessionId]/coordination/route.ts` action for act
   the floor bites) and with a roster (where the cap does). Reviewed-result markers persist in
   `lib/tui/coordinatorReviewed.ts`; in memory, a restart re-flagged every result. Pinned by
   `scripts/coordSignalsSmoke.ts` and the store smoke.
+- **A lead is woken once its teammates' mail settles** (`INTERACTIVE_LEAD_WAKE_SETTLE_MS`, 2.5s
+  after the newest message). Teammates given work together finish together; waking on the first
+  result spent a lead turn on it and a second on the rest half a second later — results the lead had
+  usually already read through `coord_status`. Measured live with a Codex lead: two automatic turns
+  per round became one. A window cannot cover teammates finishing seconds apart, so while another
+  teammate is still on its task the wake also waits for it, at most
+  `INTERACTIVE_LEAD_WAKE_MAX_HOLD_MS` (45s) after the oldest unread result.
+  `coordInteractiveSmoke.ts` pins both. **Verify sweep changes against a fresh
+  process**: `next dev` hot-reloads route code but the old module's sweep timer keeps running, so a
+  live check against a long-running daemon measures the previous build.
 - **Host ownership comes from a user, never from a sweep.** `sweepMailboxes` starts at module load in
   every process that imports `lib/agentCoordination.ts` — the AHP sidecar `agent-viewer web` spawns
   included — and resolving a lead identity claims the run. So `sweepInteractiveCoordinator` works only
@@ -1650,7 +1660,11 @@ CLI is the API.
   **The tries are counted on the task** (`auto_resume_count`, cap `INTERACTIVE_AUTO_RESUME_CAP` = 2),
   not in memory: a host that dies every time it resumes a task would otherwise replay it on every
   restart. Past the cap the teammate stays in recovery and the panel says why; `r` resets the count,
-  because a person has looked. `coordAutoResumeSmoke.ts` runs each case in real processes.
+  because a person has looked. **Only a teammate that died between turns is resumed.** One cut off
+  mid-turn has an unresolved execution attempt — its turn may already have acted — and the recovery
+  hardening forbids replaying that unseen; it waits for `r` and the panel says why
+  (`autoResumeUncertain`). The two rules once contradicted each other and auto-resume silently never
+  fired. `coordAutoResumeSmoke.ts` runs each case in real processes.
 - **`agent-viewer coord run|join|status|delegate|send|inbox|wait|runs|whoami|tools|call`**
   (`bin/agent-viewer-coord-cli.mjs`) is the same `/api/agent-protocol/external` endpoint the MCP
   bridge uses. `call <tool>` builds its request from `COORD_TOOL_SPECS`, so a tool added to the
@@ -1659,6 +1673,25 @@ CLI is the API.
   commands need no identity flag; the token is saved 0600 beside the bridge's and never printed. The
   launcher keeps its own copy of the verb list (importing the CLI would load the contract on every
   launch) and `coordCliSmoke.mjs` asserts the two agree.
+- **An OpenCode 2 worker turn runs `opencode run --standalone`.** Without it `run` attaches to
+  OpenCode's shared background service, which never read the worker's `OPENCODE_CONFIG`, so the
+  teammate silently had no `coord_*` tools whenever that service was up. 1.x has no such flag; the
+  major comes from `opencode --version`. `coordWorkerSmoke.mjs` pins both.
+- **A caller that omits `provider` is identified, not assumed to be Codex.** The bridge reads the
+  MCP client's name (measured: Claude Code, `codex-mcp-client`, `copilot-cli`, `pi-mcp-<server>`,
+  and OpenCode 2.0.8's bare `cli`); the `coord` CLI reads Claude Code's and Codex's shell markers,
+  which the launcher hands on as `AGENT_VIEWER_CALLER_PROVIDER` before scrubbing them. The CLI binds
+  the directory a command was *typed in*, not `--cwd`, and a `join` never takes a directory bound to
+  another participant of the same run.
+- **`npm run coord:agents:live` is the agent-experience check** (`scripts/coordRealAgentsLive.mjs`):
+  real Codex, Copilot and OpenCode CLIs join a run through the stdio bridge, claim, work and
+  complete with no `provider` argument, and each must end by saying no tool result confused it.
+  It spends a little model usage per agent; `COORD_LIVE_AGENTS` narrows it. With
+  `scripts/coordInteractiveLiveSmoke.mjs` (chat-led teams) it is what to run after changing tool
+  descriptions, results or errors — a smoke proves the shape, only an agent proves it was usable.
+- **`daemon start` uses `.next` only when the build is newer than every file in `app/ lib/
+  components/ bin/`**; otherwise it starts the dev server and says why. In a working checkout an
+  old build silently served the previous code to every agent told to start a daemon.
 - **`coord worker --acp-command "<cmd>"` drives any agent that speaks ACP** (Gemini CLI, Goose, …),
   not just the two with a built-in adapter. `runAcpProviderTick` already took a command; the worker
   now passes the user's, records it in the identity file so a bare `--identity` restart keeps it,

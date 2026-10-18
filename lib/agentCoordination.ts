@@ -1469,6 +1469,13 @@ const EXTERNAL_WAIT_EVENT_DETAIL_CHARS = 2_000
 const CONTEXT_QUERY_DETAIL_BUDGET_CHARS = 40_000
 
 function boundEventDetail(event: AgentProtocolEvent, limit: number): AgentProtocolEvent {
+  // A task's dispatch policy rides its task.created payload too; it is the
+  // server's business here for the same reason slimTasksForExternal drops it.
+  const payload = event.payload as Record<string, unknown> | undefined
+  if (payload && typeof payload === 'object' && 'claudeAgentPolicy' in payload) {
+    const { claudeAgentPolicy: _policy, ...rest } = payload
+    event = { ...event, payload: rest }
+  }
   const detail = event.detail
   if (typeof detail !== 'string' || detail.length <= limit) return event
   return {
@@ -1513,6 +1520,50 @@ function readyStatusMessageGroups(rows: Row[], now = Date.now()): Set<string> {
   return ready
 }
 
+/**
+ * The mail a delegated teammate wakes up to. It carries the brief itself: a
+ * notice saying only "read its scope" cost every teammate a round trip to find
+ * out what it had been given, and a CLI teammate was not told which call does it.
+ */
+const DELEGATION_MAIL_DETAIL_CHARS = 1500
+
+function delegationMailBody(taskId: string, title: string, detail: string, paths: string[], verifyCommands?: string[]): string {
+  const brief = detail.length > DELEGATION_MAIL_DETAIL_CHARS
+    ? `${detail.slice(0, DELEGATION_MAIL_DETAIL_CHARS)}… [${detail.length - DELEGATION_MAIL_DETAIL_CHARS} more characters: coord_read_task ${taskId}]`
+    : detail
+  return [
+    `Delegated ${taskId}: ${title}. This task is already yours; continue in this session and report progress and completion through the Coordinator.`,
+    brief === title ? '' : `Brief: ${brief}`,
+    paths.length ? `Paths you may write: ${paths.join(', ')}` : '',
+    verifyCommands?.length ? `Completion runs: ${verifyCommands.join(' && ')}` : '',
+    `Full task (receipt, handoff, decisions): coord_read_task ${taskId}.`,
+  ].filter(Boolean).join('\n')
+}
+
+/** Names the id that missed and where real ones are listed, so the agent can correct it in one step. */
+function taskNotFoundError(taskId: string): Error {
+  return new Error(`Coordinator task not found: ${taskId}. Task ids look like task-3; coord_list_tasks lists this run's tasks`)
+}
+
+/**
+ * An unknown `to` used to answer only "recipient not found", and the agent's
+ * next move was a status call to learn the roster. Say who can be reached, and
+ * say plainly when the name is the sender's own.
+ */
+function recipientNotFoundMessage(db: SqliteDatabase, runId: string, senderId: string, to: string): string {
+  const agents = listAgentsSync(db, runId)
+  const self = agents.find((agent) => agent.id === senderId)
+  const wanted = to.trim().toLowerCase()
+  if (self && (self.name.toLowerCase() === wanted || self.id === to.trim())) {
+    return `Coordinator message recipient not found: ${to} is you. Address another participant, "lead", or "all".`
+  }
+  const reachable = agents
+    .filter((agent) => agent.id !== senderId && !['done', 'failed', 'stopped'].includes(agent.status))
+    .map((agent) => agent.name)
+  const aliases = self?.role === 'lead' ? '"all" also works' : '"lead" and "all" also work'
+  return `Coordinator message recipient not found: ${to}. Active participants: ${reachable.length ? reachable.join(', ') : 'none besides you'}; ${aliases}.`
+}
+
 /** Finished tasks that keep their full prompt, result and receipt in what an agent reads. */
 const EXTERNAL_RECENT_FINISHED = 20
 
@@ -1534,6 +1585,28 @@ function slimTasksForExternal(tasks: ProtocolTask[]): ProtocolTask[] {
   })
 }
 
+/**
+ * A participant's advertised tool list is the client's handshake, not something
+ * another agent acts on: 48 names per roster row, repeated on every status and
+ * wait. Agents see how many it advertised; the full list stays in the ledger.
+ */
+function slimAgentsForExternal(agents: ProtocolAgent[]): ProtocolAgent[] {
+  return agents.map((agent) => {
+    // `status` is what the participant last reported; a managed teammate's turn
+    // can be streaming before it says "working". Agents read the headline, and
+    // "idle" beside turnActive:true read as stalled (a teammate's own friction
+    // report, 2026-10-04). Only this agent-facing view is restated; recovery
+    // and the sweeps keep the reported value.
+    const shown = agent.turnActive && (agent.status === 'idle' || agent.status === 'ready')
+      ? { ...agent, status: 'working' as const, reportedStatus: agent.status }
+      : agent
+    const tools = shown.capabilities?.tools
+    if (!Array.isArray(tools)) return shown
+    const { tools: _tools, ...capabilities } = shown.capabilities!
+    return { ...shown, capabilities: { ...capabilities, toolCount: tools.length } }
+  })
+}
+
 function externalSnapshotSync(db: SqliteDatabase, runId: string, agentId: string): ProtocolRunSnapshot {
   const snapshot = readSnapshotSync(db, runId)
   if (!snapshot) throw new Error('Coordinator run not found')
@@ -1551,6 +1624,7 @@ function externalSnapshotSync(db: SqliteDatabase, runId: string, agentId: string
     messages: [],
     // Context in an LLM's hands must not scale with run age either.
     tasks: slimTasksForExternal(snapshot.tasks),
+    agents: slimAgentsForExternal(snapshot.agents),
     run: { ...snapshot.run, ...(snapshot.run.resumeCapsule ? { resumeCapsule: { ...snapshot.run.resumeCapsule, completedTasks: snapshot.run.resumeCapsule.completedTasks.slice(-EXTERNAL_RECENT_FINISHED) } } : {}) },
     // Keep other agents' direct message text out of the shared event timeline.
     // Findings are durable audit evidence rather than live noise. Preserve a
@@ -2222,6 +2296,27 @@ export async function createExternalProtocolRun(
  * contains — or is contained by — the joiner's cwd or repo root, so a second
  * terminal in the same project lands in that project's run.
  */
+/**
+ * Models copy a 36-character run id by hand and get a digit wrong — measured:
+ * Copilot joined `…4d56bb…` for `…4d56b6…` and spent its turn on "run not
+ * found". Name the closest live run (a few characters off), and the way to
+ * skip the id altogether.
+ */
+function joinRunNotFoundMessage(db: SqliteDatabase, runId: string): string {
+  const live = (db.prepare(`SELECT id, prompt FROM protocol_runs WHERE status IN ('planning', 'running')
+    ORDER BY updated_at DESC LIMIT 50`).all() as Row[]).map(row => ({ id: String(row.id), prompt: String(row.prompt ?? '') }))
+  const distance = (a: string, b: string) => {
+    if (a.length !== b.length) return Number.POSITIVE_INFINITY
+    let diff = 0
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) diff++
+    return diff
+  }
+  const wanted = runId.trim().toLowerCase()
+  const near = live.map(run => ({ ...run, diff: distance(run.id, wanted) })).filter(run => run.diff <= 3).sort((a, b) => a.diff - b.diff)[0]
+  const guess = near ? ` Did you mean ${near.id} ("${near.prompt.slice(0, 60)}")?` : ''
+  return `Coordinator run not found: ${runId}.${guess} Omit run_id to join the newest joinable run for this checkout, or call coord_list_runs.`
+}
+
 function resolveJoinableExternalRunSync(db: SqliteDatabase, joinerPaths: string[]): ProtocolRun {
   const rows = db.prepare(`
     SELECT * FROM protocol_runs
@@ -2258,7 +2353,7 @@ export async function joinExternalProtocolRun(
       const run = params.runId
         ? (() => {
             const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(params.runId) as Row | undefined
-            if (!runRow) throw new Error('Coordinator run not found')
+            if (!runRow) throw new Error(joinRunNotFoundMessage(db, params.runId!))
             return rowToRun(runRow)
           })()
         : resolveJoinableExternalRunSync(db, joinerPaths)
@@ -2470,7 +2565,7 @@ async function externalMutationResult(
 
 function externalTaskInspectionSync(db: SqliteDatabase, runId: string, taskId: string) {
   const row = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?').get(runId, taskId) as Row | undefined
-  if (!row) throw new Error('Coordinator task not found')
+  if (!row) throw taskNotFoundError(taskId)
   const storedTask = rowToTask(row)
   // Match ordinary external status: dispatch policy stays private.
   const { claudeAgentPolicy: _policy, ...task } = storedTask
@@ -3119,6 +3214,11 @@ async function resumeAdoptedTeammates(sessionId: string, provider: ProtocolRun['
       const agent = readSnapshotSync(db, runId)?.agents.find(entry => entry.id === agentId)
       const attempt = `${runId}:${agentId}:${agent?.taskId ?? ''}`
       if (!agent || autoResumeAttempts.has(attempt)) continue
+      // A turn the dead host was still running may already have made its
+      // changes; replaying it unseen could do them twice. That one waits for a
+      // person (`autoResumeUncertain` tells the panel why); a teammate that
+      // died between turns resumes on its own.
+      if (unresolvedExecutionAttempt(db, runId, agentId)) continue
       autoResumeAttempts.add(attempt)
       const tries = db.prepare('SELECT auto_resume_count FROM protocol_tasks WHERE run_id = ? AND id = ?').get(runId, agent.taskId ?? '') as Row | undefined
       if (Number(tries?.auto_resume_count ?? 0) >= INTERACTIVE_AUTO_RESUME_CAP) continue
@@ -3455,7 +3555,11 @@ export async function createExternalProtocolTask(
       if (!respondToAllowsSync(db, identity.runId, delegate.id, identity.agentId)) throw new Error('Teammate does not accept messages from this participant')
       const budget = budgetExceededReasonSync(db, rowToRun(db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(identity.runId) as Row))
       if (budget) throw new Error(`Cannot delegate more work: ${budget}`)
+      // Same rule as a claim: a checkout git cannot describe (a repository
+      // with no commits yet) fails the gate open rather than refusing the
+      // delegation with git's raw "ambiguous argument 'HEAD'".
       delegationBaseline = await worktreeChangeSnapshot(delegate.worktreePath)
+        .catch(() => ({ __baselineUnavailable: '1' } as Record<string, string>))
     }
     db.exec('BEGIN IMMEDIATE')
     try {
@@ -3538,7 +3642,7 @@ export async function createExternalProtocolTask(
           VALUES (?, ?, ?, ?, ?)`).run(identity.runId, task.id, delegate.id, JSON.stringify(delegationBaseline), nowIso())
         insertMessageSync(db, {
           runId: identity.runId, fromAgentId: identity.agentId, toAgentId: delegate.id,
-          body: `Delegated ${task.id}: ${title}. This task is already yours. Read its scope, continue in this session, and report progress and completion through the Coordinator.`,
+          body: delegationMailBody(task.id, title, detail, task.paths, task.verifyCommands),
           kind: 'request', priority: 'normal', ts: nowIso(),
         })
       }
@@ -3657,7 +3761,12 @@ export async function claimExternalProtocolTask(
         })
       }
       db.exec('COMMIT')
-      return { ...externalMutationResultSync(db, identity.runId, identity.agentId, task), task }
+      // Say what the claim already locked. Without it a claimer could not tell
+      // whether it still had to ask, and called coord_request_locks for paths
+      // it held (measured with Codex).
+      const grantedPaths = (db.prepare(`SELECT path FROM protocol_locks WHERE run_id = ? AND agent_id = ? AND task_id = ? AND status = 'active'`)
+        .all(identity.runId, identity.agentId, task.id) as Row[]).map(row => String(row.path))
+      return { ...externalMutationResultSync(db, identity.runId, identity.agentId, task), task, grantedPaths }
     } catch (err) {
       db.exec('ROLLBACK')
       throw err
@@ -3830,7 +3939,7 @@ export async function sendExternalProtocolMessage(
   if (!body) throw new Error('message body is required')
   const resolvedRecipients = resolveRecipientsSync(db, identity.runId, identity.agentId, params.to)
   if (resolvedRecipients.length === 0) {
-    throw new Error(`Coordinator message recipient not found: ${params.to}`)
+    throw new Error(recipientNotFoundMessage(db, identity.runId, identity.agentId, params.to))
   }
   const recipients = resolvedRecipients.filter((recipientId) => respondToAllowsSync(db, identity.runId, recipientId, identity.agentId))
   if (recipients.length === 0) {
@@ -4163,7 +4272,7 @@ export async function reviewExternalProtocolPlan(
   if (agent.role !== 'lead') throw new Error('Only the Coordinator lead can review plans')
   const task = db.prepare('SELECT 1 FROM protocol_tasks WHERE run_id = ? AND id = ?')
     .get(identity.runId, params.taskId)
-  if (!task) throw new Error('Coordinator task not found')
+  if (!task) throw taskNotFoundError(params.taskId)
   await recordProtocolEvent({
     version: AGENT_PROTOCOL_VERSION,
     runId: identity.runId,
@@ -4346,7 +4455,7 @@ export async function completeExternalProtocolTask(
   identity: ExternalProtocolIdentity,
   params: {
     taskId: string
-    summary: string
+    summary?: string
     detail?: string
     actualModel?: string
     usage?: ProtocolUsageReceipt
@@ -4359,7 +4468,7 @@ export async function completeExternalProtocolTask(
   const agent = requireExternalParticipantSync(db, identity)
   const taskRow = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?')
     .get(identity.runId, params.taskId) as Row | undefined
-  if (!taskRow) throw new Error('Coordinator task not found')
+  if (!taskRow) throw taskNotFoundError(params.taskId)
   const task = rowToTask(taskRow)
   if (task.ownerAgentId !== agent.id) throw new Error('You do not own that task')
   const claimGeneration = Number(taskRow.claim_generation)
@@ -4457,7 +4566,9 @@ export async function completeExternalProtocolTask(
     agentId: identity.agentId,
     type: 'task.completed',
     taskId: task.id,
-    summary: params.summary.trim() || `${task.id} completed`,
+    // Optional on purpose: a model that forgot it (OpenCode's, measured twice in
+    // four live runs) was otherwise left holding a task it could not finish.
+    summary: params.summary?.trim() || `${task.id} completed (no summary given)`,
     detail: params.detail?.trim() || undefined,
     payload: { receipt },
   }, claimGeneration)
@@ -4489,7 +4600,7 @@ export async function releaseExternalProtocolTask(
     const agent = requireExternalParticipantSync(db, identity)
     const taskRow = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?')
       .get(identity.runId, params.taskId) as Row | undefined
-    if (!taskRow) throw new Error('Coordinator task not found')
+    if (!taskRow) throw taskNotFoundError(params.taskId)
     const task = rowToTask(taskRow)
     if (task.ownerAgentId !== agent.id && agent.role !== 'lead') {
       throw new Error('Only the task owner or the Coordinator lead can release a task')
@@ -4595,7 +4706,7 @@ export async function cancelProtocolTask(runId: string, taskId: string, reason?:
   const result = await enqueueWrite((db) => {
     const taskRow = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?')
       .get(runId, taskId) as Row | undefined
-    if (!taskRow) throw new Error('Coordinator task not found')
+    if (!taskRow) throw taskNotFoundError(taskId)
     const task = rowToTask(taskRow)
     if (['completed', 'failed', 'cancelled'].includes(task.status)) {
       throw new Error(`Coordinator task is already ${task.status}`)
@@ -4676,7 +4787,7 @@ export async function setProtocolPushConfig(
 ): Promise<ProtocolPushConfig> {
   const db = await getDatabase()
   const taskRow = db.prepare('SELECT id FROM protocol_tasks WHERE run_id = ? AND id = ?').get(runId, taskId) as Row | undefined
-  if (!taskRow) throw new Error('Coordinator task not found')
+  if (!taskRow) throw taskNotFoundError(taskId)
   const url = params.url.trim()
   if (!url) throw new Error('Push notification url is required')
   const id = params.id?.trim() || randomUUID()
@@ -4804,7 +4915,7 @@ export async function handoffExternalProtocolTask(
     const agent = requireExternalParticipantSync(db, identity)
     const taskRow = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?')
       .get(identity.runId, params.taskId) as Row | undefined
-    if (!taskRow) throw new Error('Coordinator task not found')
+    if (!taskRow) throw taskNotFoundError(params.taskId)
     const task = rowToTask(taskRow)
     if (task.ownerAgentId !== agent.id) throw new Error('You do not own that task')
     if (Number(taskRow.claim_generation) !== Number(sourceTask.claim_generation)) throw new Error('Task claim changed while preparing the handoff')
@@ -5025,7 +5136,7 @@ async function setProtocolDecision(
 ): Promise<ExternalProtocolMutationResult> {
   const result = await enqueueWrite((db) => {
     const taskRow = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?').get(runId, params.taskId) as Row | undefined
-    if (!taskRow) throw new Error('Coordinator task not found')
+    if (!taskRow) throw taskNotFoundError(params.taskId)
     const task = rowToTask(taskRow)
     if (!task.receipt) throw new Error('Task has no receipt decisions')
     let found = false
@@ -7859,6 +7970,10 @@ export async function readInteractiveCoordinator(sessionId: string) {
     // Teammates whose task has used its automatic tries: they wait for `r`.
     autoResumeExhausted: settings ? (db.prepare(`SELECT a.id FROM protocol_agents a JOIN protocol_tasks t ON t.run_id = a.run_id AND t.id = a.task_id
       WHERE a.run_id = ? AND t.auto_resume_count >= ?`).all(String(settings.run_id), INTERACTIVE_AUTO_RESUME_CAP) as Row[]).map(row => String(row.id)) : [],
+    // Teammates cut off mid-turn: never resumed automatically (their turn may
+    // have acted), so the panel says that is why they are waiting.
+    autoResumeUncertain: settings ? (db.prepare(`SELECT DISTINCT agent_id FROM protocol_execution_attempts
+      WHERE run_id = ? AND state IN ('prepared', 'submitted', 'uncertain')`).all(String(settings.run_id)) as Row[]).map(row => String(row.agent_id)) : [],
     remainingTurns: Number(settings?.remaining_turns ?? 4),
     delivery: delivery ? { batchId: String(delivery.batch_id), state: String(delivery.state), createdAt: String(delivery.created_at),
       active: activeChatDeliveries.has(sessionId) || getRunningSessionInfo(sessionId).running
@@ -8260,7 +8375,7 @@ export async function cancelInteractiveTask(identity: ExternalProtocolIdentity, 
   const lead = requireExternalParticipantSync(db, identity)
   if (lead.role !== 'lead') throw new Error('Only the Coordinator lead can cancel a task')
   const row = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?').get(identity.runId, taskId) as Row | undefined
-  if (!row) throw new Error('Coordinator task not found')
+  if (!row) throw taskNotFoundError(taskId)
   const task = rowToTask(row)
   const owner = task.ownerAgentId ? listAgentsSync(db, identity.runId).find(entry => entry.id === task.ownerAgentId) : undefined
   await cancelProtocolTask(identity.runId, taskId, reason?.trim() || `${taskId} cancelled by the lead`, expectedRevision, identity.agentId)
@@ -8276,9 +8391,21 @@ export async function resumeInteractiveAgent(identity: ExternalProtocolIdentity,
     const lead = requireExternalParticipantSync(db, identity)
     if (lead.role !== 'lead') throw new Error('Only the lead conversation can resume a teammate')
     if (foreignInteractiveHostSync(db, identity.runId)) throw new Error('This team is running in another local Agent Viewer host. Use that host to resume execution.')
-    if (!(await readInteractiveRecoveries(identity.runId)).includes(agentId)) throw new Error('This participant does not need recovery or is still running')
     const before = readSnapshotSync(db, identity.runId)!
-    const agent = before.agents.find(agent => agent.id === agentId)!
+    const agent = before.agents.find(agent => agent.id === agentId)
+    if (!agent) throw new Error(`No participant ${agentId} in this run; coord_status lists the roster`)
+    const cooldownGate = () => {
+      const accountCooldown = readProviderCooldown(db, agent.provider, agent.providerInstanceId ?? agent.provider)
+      if (accountCooldown?.active) throw new Error(`Provider cooldown remains active until ${accountCooldown.retryAt} for ${accountCooldown.providerInstanceId}; inspect recovery after that time without resubmitting work`)
+      const cooldown = executionCooldown(readExecutionAttempts(db, identity.runId, agent.id), agent)
+      if (cooldown?.active) throw new Error(`Provider cooldown remains active until ${cooldown.retryAt}; inspect recovery after that time without resubmitting work`)
+    }
+    // A rate-limited dispatch is deferred, not abandoned: the task keeps its
+    // claim and is not "in recovery", so the membership check below answered
+    // "does not need recovery" while coord_inspect_recovery reported the
+    // cooldown. Say the real reason first.
+    cooldownGate()
+    if (!(await readInteractiveRecoveries(identity.runId)).includes(agentId)) throw new Error('This participant does not need recovery or is still running')
     const task = before.tasks.find(task => task.id === agent.taskId)
     const claimGeneration = agent.taskId ? Number((db.prepare('SELECT claim_generation FROM protocol_tasks WHERE run_id = ? AND id = ?').get(identity.runId, agent.taskId) as Row | undefined)?.claim_generation) : undefined
     if (expected && (agent.taskId !== expected.taskId || agent.sessionId !== expected.sessionId || claimGeneration !== expected.claimGeneration)) throw new Error('Recovery claim changed since inspection; inspect recovery again before resuming')
@@ -8286,12 +8413,6 @@ export async function resumeInteractiveAgent(identity: ExternalProtocolIdentity,
     const attemptId = readExecutionAttempts(db, identity.runId, agent.id)[0]?.id
     if (leaderWithoutTask && (!expected?.attemptId || expected.attemptId !== attemptId)) throw new Error('Pass the exact recoveryClaim attemptId and sessionId for taskless lead recovery')
     if (automatic && unresolvedExecutionAttempt(db, identity.runId, agent.id)) throw new Error('Uncertain execution requires explicit transcript reconciliation; automatic resume is not permitted')
-    const cooldownGate = () => {
-      const accountCooldown = readProviderCooldown(db, agent.provider, agent.providerInstanceId ?? agent.provider)
-      if (accountCooldown?.active) throw new Error(`Provider cooldown remains active until ${accountCooldown.retryAt} for ${accountCooldown.providerInstanceId}; inspect recovery after that time without resubmitting work`)
-      const cooldown = executionCooldown(readExecutionAttempts(db, identity.runId, agent.id), agent)
-      if (cooldown?.active) throw new Error(`Provider cooldown remains active until ${cooldown.retryAt}; inspect recovery after that time without resubmitting work`)
-    }
     cooldownGate()
     const { readViewSessionRunning } = await import('./sessionBackend')
     const nativeGate = () => withProviderInstance(agent.providerInstanceId ?? agent.provider, agent.provider, async () => {
@@ -8364,6 +8485,11 @@ export async function resumeInteractiveAgent(identity: ExternalProtocolIdentity,
 }
 
 /** The server batches inbox events and spends at most four automatic lead turns per user turn. */
+/** Quiet period after the newest teammate mail before a lead is woken for it. */
+const INTERACTIVE_LEAD_WAKE_SETTLE_MS = 2_500
+/** Longest a result waits for the rest of its batch before the lead is woken anyway. */
+const INTERACTIVE_LEAD_WAKE_MAX_HOLD_MS = 45_000
+
 async function sweepInteractiveCoordinator(runId: string): Promise<void> {
   const db = await getDatabase()
   // Only the owning host sweeps, and the sweep never claims. The maintenance
@@ -8408,6 +8534,21 @@ async function sweepInteractiveCoordinator(runId: string): Promise<void> {
     if (!mail.length || mail.some(message => message.replyRequired)) continue
     // Only results/findings/messages wake a lead; no heartbeat-driven model turns.
     if (!mail.some(message => message.kind !== 'status' && message.kind !== 'status_summary')) continue
+    // Teammates that were given work together finish together. Waking on the
+    // first result spent a whole lead turn on it, and a second on the rest
+    // half a second later — results the lead had usually already read through
+    // coord_status (measured live with a Codex lead). Let the mail settle.
+    const newest = Math.max(...mail.map(message => Date.parse(message.createdAt) || 0))
+    if (Date.now() - newest < INTERACTIVE_LEAD_WAKE_SETTLE_MS) continue
+    // A settle window cannot cover teammates finishing seconds apart (a second
+    // live Codex run woke its lead once per result again). While other
+    // teammates are still on their tasks, wait for them — bounded, so a slow
+    // teammate cannot keep the lead from results that are already in.
+    const oldest = Math.min(...mail.map(message => Date.parse(message.createdAt) || Date.now()))
+    const othersWorking = snapshot.agents.some(agent => agent.role === 'teammate' && agent.taskId
+      && (agent.turnActive || controllers.get(runId)?.turnInFlight.has(agent.id))
+      && ['claimed', 'in_progress', 'planning'].includes(snapshot.tasks.find(task => task.id === agent.taskId)?.status ?? ''))
+    if (othersWorking && Date.now() - oldest < INTERACTIVE_LEAD_WAKE_MAX_HOLD_MS) continue
     if (budgetExceededReasonSync(db, snapshot.run)) continue
     const response = await withCooperativeInbox(sessionId, {
       taskBudgetTokens: remainingTokenBudgetSync(db, snapshot.run),

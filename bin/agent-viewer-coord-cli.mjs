@@ -12,6 +12,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { COORD_TOOL_SPECS } from '../lib/coordinatorToolContract.mjs'
+import { callerAgentProvider } from '../lib/inheritedIdentityEnv.mjs'
 import { COORDINATOR_KEYED_ACTIONS } from './agent-viewer-coordinator-tools.mjs'
 import { coordinatorStateRoot } from './agent-viewer-coord-state.mjs'
 
@@ -53,7 +54,7 @@ Common options:
   --identity <file>      Use this saved participant instead of the directory's
   --compact              One-line JSON (the default when stdout is not a terminal)
 
-A daemon must be running: \`agent-viewer web\`, or \`agent-viewer --daemon\`.`
+A daemon must be running: \`agent-viewer daemon start\` runs one in the background.`
 
 function normalizeUrl(value) {
   if (/^\d+$/.test(value)) return `http://127.0.0.1:${value}`
@@ -155,20 +156,35 @@ async function request(baseUrl, action, body, timeoutMs = 15_000) {
       signal: AbortSignal.timeout(timeoutMs),
     })
   } catch (error) {
-    throw new Error(`Could not reach an agent-viewer daemon at ${baseUrl} (${error instanceof Error ? error.message : String(error)}). Start one with \`agent-viewer web\` or pass --attach <url|port>.`)
+    throw new Error(`Could not reach an agent-viewer daemon at ${baseUrl} (${error instanceof Error ? error.message : String(error)}). Start one in the background with \`agent-viewer daemon start\`, or pass --attach <url|port>.`)
   }
   const payload = await response.json().catch(() => null)
   if (!response.ok) throw new Error(payload?.error || `${response.status} ${response.statusText}`)
   return payload
 }
 
-async function bind(result, baseUrl, cwd) {
+// `bindDir` is where the command was typed, never `--cwd`: that names the
+// checkout the participant works in, and a teammate joining with the lead's
+// checkout as --cwd used to overwrite the lead's binding — every later command
+// the lead typed ran as the teammate.
+async function bind(result, baseUrl, bindDir, { keepSameRun = false } = {}) {
   const participant = result?.participant
   if (!participant?.runId || !participant?.agentId || !participant?.token) return result
   const identityFile = path.join(coordinatorStateRoot(), participant.runId, `${participant.agentId}.json`)
   await writePrivateJson(identityFile, { runId: participant.runId, agentId: participant.agentId, token: participant.token, attach: baseUrl })
-  await writePrivateJson(directoryBindingPath(cwd), { identityFile, attach: baseUrl })
-  return { ...result, participant: { ...participant, token: undefined }, identityFile }
+  const shown = { ...result, participant: { ...participant, token: undefined }, identityFile }
+  // Two agents in one repository is the ordinary case. A join must not take
+  // the directory from another participant of the same run; it is told how to
+  // address itself instead.
+  if (keepSameRun) {
+    const current = await readJson(directoryBindingPath(bindDir))
+    const holder = current?.identityFile ? await readJson(current.identityFile) : null
+    if (holder?.runId === participant.runId && holder.agentId !== participant.agentId) {
+      return { ...shown, directoryBinding: 'kept', hint: `This directory stays bound to ${holder.agentId}. Pass --identity ${JSON.stringify(identityFile)} (or export AGENT_VIEWER_COORD_IDENTITY_FILE) on every command as this participant.` }
+    }
+  }
+  await writePrivateJson(directoryBindingPath(bindDir), { identityFile, attach: baseUrl })
+  return shown
 }
 
 function negotiation() {
@@ -188,11 +204,12 @@ export async function runCoordCli(argv, io = { cwd: process.cwd(), stdout: proce
   for (const key of ['compact', 'help']) delete flags[key]
   const take = (key) => { const value = flags[key]; delete flags[key]; return value }
   const cwd = path.resolve(typeof flags.cwd === 'string' ? flags.cwd : io.cwd)
+  const bindDir = path.resolve(io.cwd)
   const attachFlag = take('attach')
   const identityFlag = take('identity')
   const baseFor = (saved) => normalizeUrl(String(typeof attachFlag === 'string' ? attachFlag : process.env.AGENT_VIEWER_ATTACH?.trim() || saved || '3000'))
   const bound = async () => {
-    const resolved = await resolveIdentity({ identity: identityFlag }, cwd)
+    const resolved = await resolveIdentity({ identity: identityFlag }, bindDir)
     return { ...resolved, baseUrl: baseFor(resolved.attach) }
   }
   const callTool = async (spec, raw) => {
@@ -214,7 +231,8 @@ export async function runCoordCli(argv, io = { cwd: process.cwd(), stdout: proce
     })), compact }
   }
   if (verb === 'run' || verb === 'join') {
-    const provider = take('provider')
+    // Claude Code and Codex mark the shells they run; anything else must say what it is.
+    const provider = take('provider') ?? callerAgentProvider()
     if (provider !== undefined && !PROVIDERS.includes(provider)) throw new UsageError(`--provider must be one of ${PROVIDERS.join(', ')}`)
     const name = take('name')
     take('cwd')
@@ -224,7 +242,7 @@ export async function runCoordCli(argv, io = { cwd: process.cwd(), stdout: proce
       if (typeof name !== 'string') throw new UsageError('join requires --name <n>')
       const payload = { runId: positionals[0], name, provider: provider ?? 'codex', cwd, ...negotiation() }
       if (Object.keys(flags).length) throw new UsageError(`Unknown option: --${Object.keys(flags)[0].replace(/_/g, '-')}`)
-      return { json: await bind(await request(baseUrl, 'join_run', payload), baseUrl, cwd), compact }
+      return { json: await bind(await request(baseUrl, 'join_run', payload), baseUrl, bindDir, { keepSameRun: true }), compact }
     }
     noStray(1)
     const playbookName = take('playbook')
@@ -245,7 +263,7 @@ export async function runCoordCli(argv, io = { cwd: process.cwd(), stdout: proce
       playbookName: typeof playbookName === 'string' ? playbookName : undefined,
       args: playbookArgs,
       ...negotiation(),
-    }), baseUrl, cwd), compact }
+    }), baseUrl, bindDir), compact }
   }
   if (verb === 'runs') {
     noStray()

@@ -7,6 +7,7 @@ import {
   ProtocolErrorCode,
 } from '@modelcontextprotocol/server'
 import { serveStdio } from '@modelcontextprotocol/server/stdio'
+import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import os from 'node:os'
@@ -25,6 +26,7 @@ import {
 import { COORDINATOR_MCP_TOOL_NAMES, COORDINATOR_KEYED_ACTIONS } from './agent-viewer-coordinator-tools.mjs'
 import { coordinatorModelResult } from '../lib/coordinatorModelResult.mjs'
 import { coordToolDescription, coordToolAllowedForRole } from '../lib/coordinatorToolContract.mjs'
+import { callerAgentProvider } from '../lib/inheritedIdentityEnv.mjs'
 
 const PROVIDERS = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'acp']
 const EXTERNAL_COORD_PROTOCOL_VERSION = 2
@@ -59,7 +61,32 @@ const baseUrl = normalizeBaseUrl(
     ?? process.env.AGENT_VIEWER_ATTACH
     ?? 'http://127.0.0.1:3000',
 )
-const bridgeCwd = process.env.CLAUDE_PROJECT_DIR?.trim() || process.cwd()
+// CLAUDE_PROJECT_DIR is Claude Code telling the server it spawned where the
+// project is — but it is an ordinary environment variable, and a CLI started
+// from a Claude Code shell passes it on. OpenCode hands its whole environment
+// to MCP servers, so an OpenCode teammate launched there joined with *that*
+// project as its checkout and wrote its files into the wrong repository
+// (measured). So it is trusted only when the nearest agent CLI above this
+// process is Claude Code — `npx agent-viewer mcp` puts npx and the launcher in
+// between, so the direct parent is not enough.
+const bridgeCwd = (process.env.CLAUDE_PROJECT_DIR?.trim() && nearestAgentAncestor() === 'claude'
+  ? process.env.CLAUDE_PROJECT_DIR.trim() : '') || process.cwd()
+
+function nearestAgentAncestor() {
+  let pid = process.ppid
+  for (let depth = 0; depth < 8 && pid > 1; depth++) {
+    const row = spawnSync('ps', ['-o', 'ppid=,command=', '-p', String(pid)], { encoding: 'utf8', timeout: 2000 })
+    // No `ps` (Windows): keep the variable, as before.
+    if (row.error) return 'claude'
+    const match = /^\s*(\d+)\s+(.*)$/.exec(row.stdout.trim())
+    if (!match) return null
+    const command = match[2].split(/\s+/)[0]
+    const name = path.basename(command).toLowerCase()
+    for (const agent of ['opencode', 'codex', 'copilot', 'claude']) if (name.includes(agent)) return agent
+    pid = Number(match[1])
+  }
+  return null
+}
 const ahpClient = new CoordinatorAhpClient({
   attachUrl: baseUrl,
   title: 'Agent Viewer MCP bridge',
@@ -663,7 +690,39 @@ function bridgeDescription(name, bridgeOnly) {
   return bridgeOnly ? `${coordToolDescription(name)} ${bridgeOnly}` : coordToolDescription(name)
 }
 
+// The MCP client names itself in `initialize`, and that name is the CLI the
+// agent is running in. Defaulting a missing `provider` to codex instead put
+// every Claude/OpenCode/Copilot lead that omitted it on the roster as Codex —
+// mislabelled, and staffed for failover as the wrong provider.
+// Names measured from the real CLIs (2026-10-18): Codex 0.163 `codex-mcp-client`,
+// Copilot 1.0.98 `copilot-cli`, pi-mcp-adapter `pi-mcp-<server>`, and OpenCode
+// 2.0.8 the bare `cli` — matched exactly, since a substring would catch anything.
+const CLIENT_PROVIDER_PATTERNS = [
+  [/claude/i, 'claude'],
+  [/opencode/i, 'opencode'],
+  [/^cli$/i, 'opencode'],
+  [/copilot/i, 'copilot'],
+  [/codex/i, 'codex'],
+  [/^pi(\b|[-_])/i, 'pi'],
+]
+
+function providerFromClientName(name, env = process.env) {
+  const text = String(name ?? '')
+  for (const [pattern, provider] of CLIENT_PROVIDER_PATTERNS) if (pattern.test(text)) return provider
+  return callerAgentProvider(env) ?? null
+}
+
 function createMcpServer() {
+// 2026-07-28 clients name themselves per request (the `_meta` envelope);
+// 2025-era clients only in `initialize`.
+const callerProvider = (explicit, ctx) => {
+  if (explicit) return explicit
+  const envelope = ctx?.mcpReq?.envelope
+  const clientName = envelope?.['io.modelcontextprotocol/clientInfo']?.name
+    ?? envelope?.clientInfo?.name
+    ?? server.server.getClientVersion()?.name
+  return providerFromClientName(clientName) ?? 'codex'
+}
 const server = new McpServer(
   {
     name: 'agent-viewer',
@@ -1047,7 +1106,7 @@ registerCoordinatorTool('coord_create_run', {
   inputSchema: {
     prompt: z.string().min(1).optional().describe('Run objective; optional when a playbook is supplied'),
     name: z.string().min(1).max(80).describe('Human-readable name for this CLI participant'),
-    provider: z.enum(PROVIDERS).optional().describe('Defaults to codex'),
+    provider: z.enum(PROVIDERS).optional().describe('Your own CLI. Inferred from the MCP client when omitted (codex if it cannot tell); pass it when running under a different host'),
     max_agents: z.number().int().min(2).max(16).optional(),
     cwd: z.string().min(1).optional().describe('Working checkout; defaults to this CLI project directory'),
     gate_command: z.string().max(1000).optional(),
@@ -1063,12 +1122,12 @@ registerCoordinatorTool('coord_create_run', {
       .describe('Which senders\' mailbox messages reach this CLI. Defaults to anyone (today\'s behavior). owner-only/allowlist always implicitly include the lead.'),
     respond_to_allowlist: z.array(z.string()).optional().describe('Participant names or ids to accept messages from — required when respond_to_mode is allowlist'),
   },
-}, async ({ prompt, name, provider, max_agents, cwd, gate_command, require_plan_approval, autonomy, acceptance_contract, require_review, budget, playbook_name, playbook, args, respond_to_mode, respond_to_allowlist }) => {
+}, async ({ prompt, name, provider, max_agents, cwd, gate_command, require_plan_approval, autonomy, acceptance_contract, require_review, budget, playbook_name, playbook, args, respond_to_mode, respond_to_allowlist }, ctx) => {
   await requireUnboundBridge('coord_create_run')
   const result = await bindCoordinatorParticipant(await coordinatorRequest('create_run', {
     prompt,
     name,
-    provider: provider ?? 'codex',
+    provider: callerProvider(provider, ctx),
     maxAgents: max_agents,
     cwd: cwd ?? bridgeCwd,
     gateCommand: gate_command,
@@ -1131,18 +1190,18 @@ registerCoordinatorTool('coord_join_run', {
   inputSchema: {
     run_id: z.string().min(1).optional().describe('Explicit run to join; omit to discover the newest joinable run for this checkout'),
     name: z.string().min(1).max(80),
-    provider: z.enum(PROVIDERS).optional().describe('Defaults to codex'),
+    provider: z.enum(PROVIDERS).optional().describe('Your own CLI. Inferred from the MCP client when omitted (codex if it cannot tell); pass it when running under a different host'),
     cwd: z.string().min(1).optional().describe('Working checkout; defaults to this CLI project directory'),
     respond_to_mode: z.enum(['owner-only', 'allowlist', 'anyone', 'nobody']).optional()
       .describe('Which senders\' mailbox messages reach this CLI. Defaults to anyone (today\'s behavior). owner-only/allowlist always implicitly include the lead.'),
     respond_to_allowlist: z.array(z.string()).optional().describe('Participant names or ids to accept messages from — required when respond_to_mode is allowlist'),
   },
-}, async ({ run_id, name, provider, cwd, respond_to_mode, respond_to_allowlist }) => {
+}, async ({ run_id, name, provider, cwd, respond_to_mode, respond_to_allowlist }, ctx) => {
   await requireUnboundBridge('coord_join_run')
   const result = await bindCoordinatorParticipant(await coordinatorRequest('join_run', {
     runId: run_id,
     name,
-    provider: provider ?? 'codex',
+    provider: callerProvider(provider, ctx),
     cwd: cwd ?? bridgeCwd,
     respondToMode: respond_to_mode,
     respondToAllowlist: respond_to_allowlist,
@@ -1705,7 +1764,7 @@ registerCoordinatorTool('coord_complete_task', {
     + 'Omit actual_model and usage when you cannot observe them; never guess. needs_decision lists questions only the lead or human can settle; omit it when none remain.',
   inputSchema: {
     task_id: z.string().min(1),
-    summary: z.string().min(1).max(2000),
+    summary: z.string().min(1).max(2000).optional(),
     detail: z.string().max(8000).optional(),
     actual_model: z.string().min(1).max(200).optional(),
     files_changed: z.array(z.string()).max(200).optional(),

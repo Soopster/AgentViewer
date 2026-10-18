@@ -419,6 +419,8 @@ export type ExternalProtocolCapabilities = {
   browser?: boolean
   maxParallelTasks?: number
   tools?: string[]
+  /** What an agent's view of the roster carries instead of `tools`. */
+  toolCount?: number
 }
 
 export type ProtocolEventType =
@@ -536,6 +538,8 @@ export type ProtocolAgent = {
   worktreeBranch: string
   taskId?: string
   status: ProtocolAgentStatus
+  /** Agent-facing views only: what was reported, when a running turn is shown as `working`. */
+  reportedStatus?: ProtocolAgentStatus
   lastSeenAt?: string
   client?: ExternalProtocolClient
   capabilities?: ExternalProtocolCapabilities
@@ -916,6 +920,8 @@ export type ExternalProtocolReleaseResult = ExternalProtocolMutationResult & {
 
 export type ExternalProtocolClaimResult = ExternalProtocolMutationResult & {
   task: ProtocolTask
+  /** Paths the claim locked for this task; request only further ones. */
+  grantedPaths?: string[]
 }
 
 /**

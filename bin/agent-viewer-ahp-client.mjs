@@ -149,7 +149,7 @@ export class CoordinatorAhpClient {
       }
     }
     throw new Error(
-      `Cannot reach the Agent Viewer AHP host at ${this.url}. Start \`npx agent-viewer web\` first`
+      `Cannot reach the Agent Viewer AHP host at ${this.url}. Start one in the background with \`npx agent-viewer daemon start\` (or \`npx agent-viewer web\` in its own terminal)`
       + ` or set AGENT_VIEWER_COORD_TRANSPORT=http for the legacy transport.`
       + (lastError instanceof Error ? ` ${lastError.message}` : ''),
     )

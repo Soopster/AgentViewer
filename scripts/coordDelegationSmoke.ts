@@ -26,6 +26,10 @@ try {
   assert.equal(JSON.stringify(await act(request)), JSON.stringify(first), 'same-key replay must not repeat assignment or mailbox delivery')
   const inbox = await coord.readExternalProtocolInbox(reviewer, { acknowledge: false })
   assert.equal(inbox.messages.filter(message => message.body.includes(`Delegated ${first.task.id}:`)).length, 1)
+  const notice = inbox.messages.find(message => message.body.includes(`Delegated ${first.task.id}:`))!.body
+  assert.match(notice, /Brief: Read and report findings without editing\./, 'the delegation mail must carry the brief, not just point at it')
+  assert.match(notice, /Paths you may write: README\.md/)
+  assert.match(notice, new RegExp(`coord_read_task ${first.task.id}`), 'the mail must name the call that reads the full task')
   await assert.rejects(act({ ...lead, action: 'create_task', title: 'Busy', detail: 'Must not create a task', assignTo: 'reviewer' }), /busy or unavailable/)
   await assert.rejects(act({ ...lead, action: 'create_task', title: 'Conflicting', detail: 'Must roll back', assignTo: 'other', paths: ['README.md'] }), /lock|path|conflict/i)
   await assert.rejects(act({ ...other, action: 'create_task', title: 'Unauthorized', detail: 'Must not delegate', assignTo: 'reviewer' }), /Only the Coordinator lead/)
@@ -41,6 +45,16 @@ try {
   assert.equal((await coord.completeExternalProtocolTask(reviewer, { taskId: followup.task.id, summary: 'Revision reviewed.' })).accepted, true)
   await coord.finalizeExternalProtocolRun(lead, 'Both reviews completed by the same teammate.')
   assert.equal((await status()).snapshot.run.status, 'completed')
+  {
+    // A repository with no commits yet: git cannot describe HEAD, and
+    // delegation used to fail with its raw "ambiguous argument 'HEAD'".
+    const fresh = mkdtempSync(path.join(tmpdir(), 'coord-delegation-nocommit-'))
+    execFileSync('git', ['init', '-q', fresh])
+    const freshLead = (await coord.createExternalProtocolRun({ prompt: 'Fresh repo', baseCwd: fresh, provider: 'codex', participantName: 'lead' })).participant
+    await coord.joinExternalProtocolRun({ runId: freshLead.runId, cwd: fresh, provider: 'codex', participantName: 'helper' })
+    const delegated = await act({ ...freshLead, action: 'create_task', title: 'First file', detail: 'Write the first file.', assignTo: 'helper', paths: ['a.md'] }) as any
+    assert.equal(delegated.delegation.name, 'helper', 'delegation in a repository with no commits must succeed')
+  }
   console.log('Coordinator delegation, rollback, replay, baseline, follow-up, and finalization smoke passed')
 } finally {
   await coord.stopProtocolRun(lead.runId)

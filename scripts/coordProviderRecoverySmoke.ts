@@ -18,7 +18,11 @@ const bridge = await import('../lib/coordinatorBridgeServer')
 const { AgentViewerCoordinatorPlugin } = await import('../lib/opencodePlugin/agentViewerCoordinator.mjs')
 
 type Invoke = (name: string, args?: Record<string, unknown>) => Promise<any>
+const { coordinatorToolSpecsForRole } = await import('../lib/coordinatorToolContract.mjs')
 const expectedTools = sdk.buildCoordinatorCodexDynamicTools().map((tool) => tool.name).sort()
+// Per-identity catalogs hide lead-only tools from teammates (discovery only;
+// the backend still authorizes every call).
+const expectedToolsFor = (role?: string) => coordinatorToolSpecsForRole(role).map((spec) => spec.name).sort()
 const requiredTools = ['coord_handoff_task', 'coord_leave_run', 'coord_cancel_turn', 'coord_read_inbox']
 
 async function adapter(provider: string, identity: ExternalProtocolIdentity): Promise<Invoke> {
@@ -54,8 +58,8 @@ async function adapter(provider: string, identity: ExternalProtocolIdentity): Pr
   }
   const tools: any[] = provider === 'claude' ? sdk.buildCoordinatorSdkTools(identity)
     : provider === 'pi' ? sdk.buildCoordinatorPiTools(identity) : sdk.buildCoordinatorCopilotTools(identity)
-  assert.deepEqual(tools.map((tool) => tool.name).sort(), expectedTools, `${provider}: full tool inventory`)
-  for (const name of requiredTools) {
+  assert.deepEqual(tools.map((tool) => tool.name).sort(), expectedToolsFor(identity.role), `${provider}: ${identity.role} tool inventory`)
+  for (const name of requiredTools.filter((entry) => expectedToolsFor(identity.role).includes(entry))) {
     const tool = tools.find((entry) => entry.name === name)
     assert.ok(tool, `${provider}: ${name}`)
     assert.ok(provider === 'claude' ? tool.inputSchema.request_id
@@ -64,7 +68,7 @@ async function adapter(provider: string, identity: ExternalProtocolIdentity): Pr
   }
   return async (name, args = {}) => {
     const tool = tools.find((entry) => entry.name === name)
-    assert.ok(tool, `${provider}: ${name}`)
+    if (!tool) throw new Error(`${provider}: ${name} not exposed to ${identity.role}`)
     if (provider === 'copilot') return JSON.parse(await tool.handler(tool.parameters.parse(args)))
     const result = provider === 'claude'
       ? await tool.handler(z.object(tool.inputSchema).parse(args), {})
@@ -93,7 +97,7 @@ try {
     assert.equal(created.task.ownerAgentId, teammate.agentId, `${provider}: direct delegation assigns ownership`)
     assert.equal(created.delegation.delivery, 'queued')
     await teammateCall('coord_progress', { status: 'working', task_id: taskId })
-    await assert.rejects(teammateCall('coord_cancel_turn', { agent_id: lead.agentId }), /Only the Coordinator lead/)
+    await assert.rejects(teammateCall('coord_cancel_turn', { agent_id: lead.agentId }), /Only the Coordinator lead|not exposed to teammate/)
     await leadCall('coord_cancel_turn', { agent_id: teammate.agentId, request_id: 'cancel-turn' })
     const status = await leadCall('coord_status')
     assert.ok(status.snapshot.agents.find((agent: any) => agent.id === teammate.agentId)?.cancelRequestedAt,

@@ -11,7 +11,7 @@ import path from 'node:path'
 
 const home = await mkdtemp(path.join(os.tmpdir(), 'coord-cli-'))
 process.env.AGENT_VIEWER_COORD_HOME = path.join(home, 'state')
-for (const key of ['AGENT_VIEWER_ATTACH', 'AGENT_VIEWER_COORD_IDENTITY_FILE', 'AGENT_VIEWER_COORD_RUN_ID', 'AGENT_VIEWER_COORD_AGENT_ID', 'AGENT_VIEWER_COORD_TOKEN']) delete process.env[key]
+for (const key of ['AGENT_VIEWER_ATTACH', 'AGENT_VIEWER_COORD_IDENTITY_FILE', 'AGENT_VIEWER_COORD_RUN_ID', 'AGENT_VIEWER_COORD_AGENT_ID', 'AGENT_VIEWER_COORD_TOKEN', 'AGENT_VIEWER_CALLER_PROVIDER', 'CLAUDECODE', 'CODEX_THREAD_ID']) delete process.env[key]
 const { runCoordCli, COORD_CLI_VERBS, parseCoordCliArgs } = await import('../bin/agent-viewer-coord-cli.mjs')
 
 const seen = []
@@ -54,10 +54,27 @@ try {
   assert.equal(last().prompt, 'Ship the parser')
   assert.equal(last().cwd, cwd)
   assert.equal(last().client.protocolVersion, 2)
+  assert.equal(last().provider, 'codex', 'an unmarked caller is still recorded as codex')
   assert.ok(!JSON.stringify(created.json).includes('SECRET-TOKEN'), 'the capability token was printed')
   const saved = JSON.parse(await readFile(created.json.identityFile, 'utf8'))
   assert.equal(saved.token, 'SECRET-TOKEN')
   assert.equal((await stat(created.json.identityFile)).mode & 0o777, 0o600, 'the identity file is readable by others')
+
+  // The launcher scrubs Claude Code's markers before spawning the CLI and hands
+  // the caller's provider on instead; without it a Claude agent joined as codex.
+  process.env.AGENT_VIEWER_CALLER_PROVIDER = 'claude'
+  // Joined from its own directory, naming the lead's checkout as --cwd.
+  const helperDir = path.join(home, 'helper')
+  await runCoordCli(['join', 'run-1', '--name', 'helper', '--cwd', cwd, '--attach', attach], { cwd: helperDir })
+  delete process.env.AGENT_VIEWER_CALLER_PROVIDER
+  assert.deepEqual([last().action, last().provider, last().cwd], ['join_run', 'claude', cwd], 'the calling agent\'s provider was not inferred')
+  assert.equal((await runCoordCli(['whoami'], { cwd })).json.agentId, 'agent-1', 'a join naming the lead\'s checkout took the lead\'s directory binding')
+  assert.equal((await runCoordCli(['whoami'], { cwd: helperDir })).json.agentId, 'agent-2', 'the joiner is not bound where it ran')
+  // Joined from the lead's own directory: the lead keeps it, the joiner is told how to address itself.
+  const shared = await runCoordCli(['join', 'run-1', '--name', 'sharer', '--attach', attach], { cwd })
+  assert.equal(shared.json.directoryBinding, 'kept')
+  assert.match(shared.json.hint, /--identity/)
+  assert.equal((await runCoordCli(['whoami'], { cwd })).json.agentId, 'agent-1', 'a teammate joining in the lead\'s directory took its binding')
 
   await cli('status')
   assert.deepEqual([last().action, last().runId, last().agentId, last().token], ['status', 'run-1', 'agent-1', 'SECRET-TOKEN'])
