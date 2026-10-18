@@ -5,6 +5,7 @@ import { hideScratchSessions } from './scratchSessions'
 import { readReaderLayout } from './readerLayout'
 import { composerProjectLabel, cycleTranscriptWidth, transcriptMeasure } from './engineeringLayout'
 import React, { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, startTransition, useState, useSyncExternalStore } from 'react'
+import { recordVoice } from './voiceRecorder'
 import { spawn } from 'node:child_process'
 import { lazyComponent } from './lazyComponent'
 import { NewSessionModal, NEW_SESSION_PROVIDERS } from './NewSessionModal'
@@ -18914,6 +18915,39 @@ export default function OpenTuiApp() {
     setComposerHistoryIndex(0)
   })
 
+  const [voiceStatus, setVoiceStatus] = useState('')
+  const voiceJob = useRef<{ controller: AbortController; stop?: () => void } | null>(null)
+  useEffect(() => () => {
+    voiceJob.current?.controller.abort()
+    voiceJob.current = null
+    setVoiceStatus('')
+  }, [composerTargetSession?.provider, composerTargetSession?.sessionId])
+
+  const toggleVoice = useEffectEvent(() => {
+    if (voiceJob.current) {
+      if (voiceJob.current.stop) voiceJob.current.stop()
+      else { voiceJob.current.controller.abort(); voiceJob.current = null; setVoiceStatus('Voice input cancelled') }
+      return
+    }
+    const job: { controller: AbortController; stop?: () => void } = { controller: new AbortController() }
+    voiceJob.current = job
+    setComposerActive(true)
+    setVoiceStatus('Opening microphone…')
+    void recordVoice(job.controller.signal, (stop) => {
+      job.stop = () => { stop(); job.stop = undefined; setVoiceStatus('Transcribing locally…') }
+      setVoiceStatus('Listening… Ctrl+Shift+V to stop')
+    }).then(text => {
+      if (!job.controller.signal.aborted) insertComposerTextAtCursor(`${text} `)
+    }).catch(error => {
+      if (!job.controller.signal.aborted) setVoiceStatus(error instanceof Error ? error.message : 'Voice input failed')
+    }).finally(() => {
+      if (voiceJob.current === job) {
+        voiceJob.current = null
+        setVoiceStatus(current => /^(Opening|Listening|Transcribing)/.test(current) ? '' : current)
+      }
+    })
+  })
+
   const pasteTextToComposer = useEffectEvent(async (textToInsert: string) => {
     const normalizedText = textToInsert.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
     if (!normalizedText) return
@@ -20128,6 +20162,10 @@ export default function OpenTuiApp() {
       key.preventDefault()
       key.stopPropagation()
       action()
+    }
+    if (isCtrlShift('v') && composerActive && !isKeyRepeat) {
+      handled(() => toggleVoice())
+      return
     }
     const selectedTranscriptCard = cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null
     // cardDisplayData is window-relative (preview cap while browsing, sliding
@@ -24920,7 +24958,7 @@ export default function OpenTuiApp() {
           >
             <box width={composerDockFooterStatsWidth} overflow="hidden" backgroundColor={fullscreenMode ? undefined : theme.surface}>
               <text fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none">
-                {composerSlashHint
+                {voiceStatus ? fitText(voiceStatus, composerDockFooterStatsWidth) : composerSlashHint
                   ? fitText(composerSlashHint, composerDockFooterStatsWidth)
                   : renderInlineTextSegments(
                     // The attention badge rides the stats while the composer

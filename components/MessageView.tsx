@@ -1,5 +1,7 @@
 'use client'
 
+import { VoiceInput } from './VoiceInput'
+
 import ContextComposer, { type ContextComposerHandle } from './ContextComposer'
 import { contextReference, contextReferences, createContextAttachment, projectComposerContext, readComposerContext, restoreContextAttachments, referencedComposerAttachments, removeContextReference } from '@/lib/composerContext'
 
@@ -10115,6 +10117,7 @@ function MessageViewInner({
                 }}
               />
               <div className="av-web-composer-actions">
+              <VoiceInput key={composerQueueTargetKey} onTranscript={(text) => setInputText((current) => current ? `${current} ${text}` : text)} />
               <Button
                 type="button"
                 onClick={() => setAttachmentPanelOpen((open) => !open)}
