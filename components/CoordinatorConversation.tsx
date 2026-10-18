@@ -213,6 +213,7 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
       {runInfo.holdUpLines.map(line => <p key={line} className="text-sm text-muted-foreground">⚑ {line}</p>)}
       {runInfo.hiddenOverlaps ? <p className="text-sm text-muted-foreground">+{runInfo.hiddenOverlaps} more overlapping path{runInfo.hiddenOverlaps === 1 ? '' : 's'}</p> : null}
     </div> : null}
+    {state?.interactive.enabled ? <details className="av-coord-settings"><summary>Team settings</summary><div className="av-coord-settings-content">
     {state?.interactive.enabled ? <label className="av-coord-alerts">Alerts
       <NativeSelect value={alerts} aria-label="Teammate alerts" onChange={event => {
         const next = event.target.value as 'off' | 'in-app' | 'desktop'
@@ -228,6 +229,7 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
     {state?.interactive.enabled ? <label className="av-coord-continuation"><input type="checkbox" checked={pending.current?.action === 'settings' ? pending.current.autoContinue ?? state.interactive.autoContinue : state.interactive.autoContinue} disabled={disabled} onChange={event => void send({ action: 'settings', detail: 'Update automatic continuation', autoContinue: event.target.checked })} />Continue when teammates respond</label> : null}
     {state?.interactive.enabled && snapshot ? <label className="av-coord-continuation" title="Applies to teammates started after the change"><input type="checkbox" checked={pending.current?.action === 'settings' ? pending.current.useWorktrees ?? snapshot.run.useWorktrees !== false : snapshot.run.useWorktrees !== false} disabled={disabled} onChange={event => void send({ action: 'settings', detail: 'Update teammate worktrees', useWorktrees: event.target.checked })} />Give new teammates their own worktree</label> : null}
     {state?.interactive.enabled ? <label className="av-coord-continuation" title="Up to two automatic tries per task; after that a teammate waits for Resume"><input type="checkbox" checked={pending.current?.action === 'settings' ? pending.current.autoResume ?? state.interactive.autoResume !== false : state.interactive.autoResume !== false} disabled={disabled} onChange={event => void send({ action: 'settings', detail: 'Update restart recovery', autoResume: event.target.checked })} />Resume teammates after a restart</label> : null}
+    </div></details> : null}
     {state?.interactive.autoContinue && state.interactive.remainingTurns === 0 ? <p role="status">Automatic continuation paused after four turns. Send a message to continue.</p> : null}
     {state?.interactive.delivery && !state.interactive.delivery.active ? <div role="alert" className="rounded border p-3">
       <p>A previous lead delivery is unconfirmed. Inspect this conversation before choosing whether its mail arrived.</p>
@@ -301,18 +303,21 @@ function TeammateRoster({ snapshot, state, seen, observationUnavailable, onOpen,
   const roster = useMemo(() => filterCoordinatorRoster(state, seen, query, filter, observationUnavailable), [state, seen, query, filter, observationUnavailable])
   if (!snapshot.agents.some(agent => agent.role === 'teammate')) return null
   const stalled = coordinatorStalledAgentIds(state)
-  return <div aria-label="Persistent teammate conversations">
-    <div className="flex flex-wrap items-end gap-2 pb-2">
-      <div><label htmlFor={`${filterId}-query`} className="text-sm">Find teammate</label><Input id={`${filterId}-query`} value={query} onChange={event => setQuery(event.target.value)} placeholder="Name, provider, task, branch or path" /></div>
+  return <div className="av-coord-roster" aria-label="Persistent teammate conversations">
+    <div className="av-coord-roster-filters">
+      <div><label htmlFor={`${filterId}-query`} className="text-sm">Find teammate</label><Input id={`${filterId}-query`} value={query} onChange={event => setQuery(event.target.value)} placeholder="Search teammates…" /></div>
       <div><label htmlFor={`${filterId}-state`} className="text-sm">Teammate state</label><NativeSelect id={`${filterId}-state`} value={filter} onChange={event => setFilter(event.target.value as CoordinatorRosterFilter)}>{COORDINATOR_ROSTER_FILTERS.map(value => <option key={value} value={value}>{COORDINATOR_ROSTER_LABELS[value]} ({roster.counts[value]})</option>)}</NativeSelect></div>
       <span className="text-sm text-muted-foreground" role="status">{roster.agents.length} of {roster.counts.all} teammates</span>
       {query || filter !== 'all' ? <Button size="sm" variant="ghost" onClick={() => { setQuery(''); setFilter('all') }}>Clear teammate filters</Button> : null}
     </div>
     {!roster.agents.length ? <p>No teammates match these filters.</p> : null}
-    <div className="flex flex-wrap gap-2">
-    {roster.agents.map(agent => <div key={agent.id} className="rounded border p-2">
-      <p>{agent.name}{coordinatorInstanceLabel(agent, state.staffing) ? ` (${coordinatorInstanceLabel(agent, state.staffing)})` : ''} · {coordinatorAgentActivity(agent, state, observationUnavailable, stalled.includes(agent.id))}{coordinatorAgentWorkspace(agent, snapshot) ? ` · ${coordinatorAgentWorkspace(agent, snapshot)}` : ''}</p>
+    <div className="av-coord-roster-grid">
+    {roster.agents.map(agent => <div key={agent.id} className="av-coord-teammate">
+      <div className="av-coord-teammate-heading"><strong>{agent.name}</strong><span className="av-coord-teammate-status">{coordinatorAgentActivity(agent, state, observationUnavailable, stalled.includes(agent.id))}</span></div>
+      {coordinatorInstanceLabel(agent, state.staffing) ? <p className="av-coord-teammate-meta">{coordinatorInstanceLabel(agent, state.staffing)}</p> : null}
+      {coordinatorAgentWorkspace(agent, snapshot) ? <p className="av-coord-teammate-meta">{coordinatorAgentWorkspace(agent, snapshot)}</p> : null}
       {coordinatorAgentNote(agent, snapshot) ? <p className="text-sm text-muted-foreground">“{coordinatorAgentNote(agent, snapshot)}”</p> : null}
+      <div className="av-coord-teammate-actions">
       {!agent.sessionId.startsWith('external:') ? <Button variant="ghost" size="sm" onClick={() => onOpen(agent)}>Transcript</Button> : null}
       {state.runningAgentIds.includes(agent.id) || agent.turnActive
         ? <Button variant="ghost" size="sm" disabled={disabled} onClick={() => onInterrupt(agent)}>Interrupt</Button>
@@ -328,6 +333,7 @@ function TeammateRoster({ snapshot, state, seen, observationUnavailable, onOpen,
           </>
           : <Button variant="ghost" size="sm" disabled={disabled} title="Take this task away from the teammate" onClick={() => setConfirmingTask(task.id)}>Cancel task</Button>
       })()}
+      </div>
     </div>)}
     </div>
   </div>

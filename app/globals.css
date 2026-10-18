@@ -7870,7 +7870,7 @@ button.av-session-viz-graph-node:disabled {
 .av-composer-dock-tabs [role="tab"]:focus-visible { outline: 1px solid var(--cyan); outline-offset: -4px; box-shadow: none; }
 .av-composer-dock-tabs [role="tab"][data-state="active"] { color: var(--cyan); }
 .av-composer-dock-pane[data-state="inactive"] { display: none; }
-.av-coord-conversation { width: 100%; max-height: min(360px, 40vh); overflow-y: auto; padding: 12px 16px; font-size: 13px; }
+.av-coord-conversation { width: 100%; min-height: 0; max-height: min(520px, 55dvh); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 16px; font-size: 13px; }
 .av-coord-continuation { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2); }
 .av-coord-run { display: flex; flex-direction: column; gap: 2px; }
 .av-coord-run-warn { color: var(--amber); }
@@ -7884,8 +7884,26 @@ button.av-session-viz-graph-node:disabled {
 .av-coord-conversation .p-2 { padding: 8px; }
 .av-coord-conversation .p-3 { padding: 12px; }
 .av-coord-conversation .pt-3 { padding-top: 12px; }
-.av-coord-conversation [aria-label="Persistent teammate conversations"] { margin-block: 4px; }
-.av-coord-conversation [aria-label="Persistent teammate conversations"] > div { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 2px 6px; }
+.av-coord-settings { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.av-coord-settings summary { width: fit-content; cursor: pointer; color: var(--text-2); font-size: 12px; }
+.av-coord-settings-content { display: grid; gap: 8px; padding-top: 12px; }
+.av-coord-alerts { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; font-size: 12px; color: var(--text-2); }
+.av-coord-continuation input { flex-shrink: 0; accent-color: var(--cyan); }
+.av-coord-roster { display: grid; gap: 12px; min-width: 0; margin-block: 4px; container-type: inline-size; }
+.av-coord-roster-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 10px 12px; }
+.av-coord-roster-filters > div { display: flex; flex: 1 1 180px; flex-direction: column; gap: 4px; min-width: 0; }
+.av-coord-roster-filters > div:first-child { flex: 2 1 240px; }
+.av-coord-roster-filters label { font-size: 11px; color: var(--text-3); }
+.av-coord-roster-filters > [role="status"] { padding-block: 8px; font-size: 11px; }
+.av-coord-roster-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.av-coord-teammate { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 14px; border: 1px solid var(--border); border-radius: 8px; }
+.av-coord-teammate-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; }
+.av-coord-teammate-heading strong { font-size: 13px; overflow-wrap: anywhere; }
+.av-coord-teammate-status { color: var(--text-2); font-size: 11px; }
+.av-coord-teammate p { margin: 0; overflow-wrap: anywhere; line-height: 1.6; }
+.av-coord-teammate-meta { color: var(--text-3); font-size: 11px; }
+.av-coord-teammate-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: auto; padding-top: 4px; }
+@container (max-width: 560px) { .av-coord-roster-grid { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 1000px) {
   .av-coord-reader-layout:has(.av-coord-teammate-reader) { flex-direction: column; overflow-y: auto; }
   .av-coord-reader-layout:has(.av-coord-teammate-reader) .av-coord-lead-reader { flex: 1 0 55vh; overflow: hidden; }
