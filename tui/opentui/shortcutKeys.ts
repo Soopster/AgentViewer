@@ -43,7 +43,9 @@ export const PORTABLE_COMMAND_CHORDS = {
   a: { command: 'coord-board', label: 'Agent Operations', short: 'operations' },
   b: { command: 'desk', label: 'Bloomberg-style desk', short: 'desk' },
   g: { command: 'pull-requests', label: 'Pull requests', short: 'pull requests' },
+  l: { command: 'processes', label: 'Processes and logs', short: 'processes' },
   n: { command: 'coord-start', label: 'New coordinated run', short: 'coordinated run' },
+  s: { command: 'daily-summary', label: 'Daily summary of agent work', short: 'summary' },
   t: { command: 'coord-teammates', label: 'Teammates for this conversation', short: 'teammates' },
   v: { command: 'transcript-pager', label: 'Open transcript in $VISUAL / $EDITOR / pager', short: 'pager' },
 } as const

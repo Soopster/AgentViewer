@@ -29,7 +29,7 @@ import { TaskSidePanel } from './TaskSidePanel'
 import { openExternalUrl } from './terminalBrowser'
 import { hasTuiLinkTarget, parseTuiLineTokens, parseTuiLinkTarget } from '../../lib/tuiLinkTargets'
 import { SurfacePanel } from './SurfacePanel'
-import { BrowserSurfaceView, ShellSurfaceView } from './SurfaceViews'
+import { BrowserSurfaceView } from './SurfaceViews'
 import {
   EMPTY_SURFACE_PANEL,
   activeSurface,
@@ -422,6 +422,8 @@ const DeskView = lazyComponent(() => import('./DeskView').then((module) => modul
 const PromptLibraryPopover = lazyComponent(() => import('./PromptLibraryPopover').then((module) => module.PromptLibraryPopover))
 const CheckpointPopover = lazyComponent(() => import('./CheckpointPopover').then((module) => module.CheckpointPopover))
 const FileHistoryPopover = lazyComponent(() => import('./FileHistoryPopover').then((module) => module.FileHistoryPopover))
+const DailySummaryPopover = lazyComponent(() => import('./DailySummaryPopover').then((module) => module.DailySummaryPopover))
+const ProcessPane = lazyComponent(() => import('./ProcessPane').then((module) => module.ProcessPane))
 const CoordinationPopover = lazyComponent(() => import('./CoordinationPopover').then((module) => module.CoordinationPopover))
 const TeammatesPopover = lazyComponent(() => import('./TeammatesPopover').then((module) => module.TeammatesPopover))
 const RemoteCoordinatorPopover = lazyComponent(() => import('./RemoteCoordinatorPopover').then((module) => module.RemoteCoordinatorPopover))
@@ -5688,6 +5690,8 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'editor',     label: 'Open project editor',    key: '⌃E', category: 'Session'    },
   { id: 'analytics',  label: 'Session analytics',      key: '⌃A', category: 'Session'    },
   { id: 'desk',       label: 'Bloomberg-style desk',   key: '⌃K b', category: 'View'     },
+  { id: 'daily-summary', label: 'Daily summary of agent work', key: '⌃K s', category: 'Session' },
+  { id: 'processes',  label: 'Processes and logs (dev server, watchers)', key: '⌃K l', category: 'Session' },
   { id: 'attention',  label: 'Attention inbox',        key: '!',  category: 'Session'    },
   { id: 'messaging',  label: 'Cross-session messaging', key: '⇧M', category: 'Session'   },
   { id: 'worktree-new',     label: 'New worktree task',              key: '⇧F', category: 'Worktree' },
@@ -9068,6 +9072,11 @@ export default function OpenTuiApp() {
   const surfaceGitKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const surfacePrKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean) | null>(null)
   const surfaceFilesKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  const surfaceProcessKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  // The Terminal tab's claim on keys: `input` while a command is typed (keys
+  // reach its <input>), `terminal` while a shell has the keyboard (every key
+  // goes to the shell, the panel's own chords included, until ⌃]).
+  const surfaceProcessCaptureRef = useRef<'none' | 'input' | 'terminal'>('none')
   const [sessions, setSessions] = useState<Session[]>([])
   const sessionsRef = useRef<Session[]>([])
   const [runningSessions, setRunningSessions] = useState<RunningSessionRef[]>([])
@@ -9246,6 +9255,8 @@ export default function OpenTuiApp() {
   const checkpointKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   // Sits above whichever surface opened it (the editor, the checkpoints popover), which stay mounted beneath.
   const [fileHistoryPath, setFileHistoryPath] = useState<string | null>(null)
+  const [dailySummaryOpen, setDailySummaryOpen] = useState(false)
+  const dailySummaryKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const fileHistoryKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [taskPanelOpen, setTaskPanelOpen] = useState(false)
   const [taskPanelTab, setTaskPanelTab] = useState<'tasks' | 'agents'>('tasks')
@@ -19108,6 +19119,14 @@ export default function OpenTuiApp() {
   })
 
   usePaste((event) => {
+    // A shell with the keyboard takes the paste too, bracketed if it asked.
+    if (surfacePanelOpen && surfacePanelFocused && surfaceProcessCaptureRef.current === 'terminal'
+      && activeSurface(surfacePanel)?.kind === 'terminal') {
+      event.preventDefault()
+      event.stopPropagation()
+      surfaceProcessKeyRef.current?.({ name: 'paste', ctrl: false, shift: false, sequence: Buffer.from(event.bytes).toString('utf8') })
+      return
+    }
     if (isInteractiveCoordinatorOpen()) {
       event.preventDefault()
       event.stopPropagation()
@@ -19698,6 +19717,18 @@ export default function OpenTuiApp() {
         break
       case 'desk':
         setDeskOpen(true)
+        break
+      case 'daily-summary':
+        setDailySummaryOpen(true)
+        break
+      case 'processes':
+        setSurfacePanelOpen(true)
+        setSurfacePanelFocused(true)
+        // Terminal surfaces are multi-instance; this goes to the one already open.
+        setSurfacePanel((current) => {
+          const existing = current.surfaces.find((surface) => surface.kind === 'terminal')
+          return existing ? { ...current, activeId: existing.id } : openSurfaceIn(current, 'terminal')
+        })
         break
       case 'coord-teammates':
         openTeammatesPanel()
@@ -20408,6 +20439,11 @@ export default function OpenTuiApp() {
       return
     }
 
+    if (dailySummaryOpen) {
+      handled(() => { dailySummaryKeyHandlerRef.current?.(key) })
+      return
+    }
+
     if (editorOpen) {
       const consumed = editorKeyHandlerRef.current?.(key) ?? true
       if (consumed) handled(() => {})
@@ -20452,7 +20488,16 @@ export default function OpenTuiApp() {
       // Browser and shell surfaces own a focused <input>; swallowing their keys
       // here would make them untypeable, so only the panel's own chords are
       // intercepted and everything else falls through to the renderer.
-      const inputOwned = surface?.kind === 'browser' || surface?.kind === 'terminal'
+      if (surface?.kind === 'terminal' && surfaceProcessCaptureRef.current === 'terminal') {
+        handled(() => { surfaceProcessKeyRef.current?.(key) })
+        return
+      }
+      const inputOwned = surface?.kind === 'browser' || (surface?.kind === 'terminal' && surfaceProcessCaptureRef.current === 'input')
+      // Escape cancels a command being typed rather than leaving the panel.
+      if (surface?.kind === 'terminal' && surfaceProcessCaptureRef.current === 'input' && key.name === 'escape') {
+        handled(() => { surfaceProcessKeyRef.current?.(key) })
+        return
+      }
       // Tab is deliberately absent: the docked surfaces use it for their own
       // pane switching, so it must reach them rather than cycling panel tabs.
       const panelChord = key.name === 'escape'
@@ -23790,7 +23835,8 @@ export default function OpenTuiApp() {
                 if (surface.kind === 'diff') surfaceGitKeyRef.current?.(key)
                 else if (surface.kind === 'pull-request') surfacePrKeyRef.current?.(key)
                 else if (surface.kind === 'files') surfaceFilesKeyRef.current?.(key)
-                // browser/terminal/agents own their own <input> or are read-only.
+                else if (surface.kind === 'terminal') surfaceProcessKeyRef.current?.(key)
+                // browser/agents own their own <input> or are read-only.
               }}
               renderSurface={(surface: TuiSurface, box) => {
                 switch (surface.kind) {
@@ -23807,12 +23853,26 @@ export default function OpenTuiApp() {
                     )
                   case 'terminal':
                     return (
-                      <ShellSurfaceView
+                      <ProcessPane
                         theme={theme}
                         width={box.width}
                         height={box.height}
                         focused={surfacePanelFocused}
                         cwd={gitRepoCwd || process.cwd()}
+                        onKeyHandlerReady={(handler) => { surfaceProcessKeyRef.current = handler }}
+                        onCaptureChange={(capture) => { surfaceProcessCaptureRef.current = capture }}
+                        onNotice={showNotice}
+                        onOpenFile={(path, line) => {
+                          setEditorInitialPath(path)
+                          setEditorInitialLine(line ?? null)
+                          setEditorOpen(true)
+                        }}
+                        onAskAgent={(prompt) => {
+                          appendDiffCommentPromptToComposer(prompt)
+                          // The composer takes the keys from here; the process keeps running.
+                          setSurfacePanelFocused(false)
+                          showNotice('info', 'Error added to composer')
+                        }}
                       />
                     )
                   case 'files':
@@ -25351,6 +25411,24 @@ export default function OpenTuiApp() {
         />
       ) : null}
 
+      {dailySummaryOpen ? (
+        <DailySummaryPopover
+          theme={theme}
+          accentColor={composerAccentColor}
+          width={width}
+          height={height}
+          waiting={attentionItems.map((item) => ({ provider: item.provider, sessionId: item.sessionId, kind: item.kind, text: item.title }))}
+          onClose={() => setDailySummaryOpen(false)}
+          onNotice={showNotice}
+          onKeyHandlerReady={(handler) => { dailySummaryKeyHandlerRef.current = handler }}
+          onCopy={(text) => { void writeClipboard(text, renderer) }}
+          onSendToComposer={(text) => {
+            appendDiffCommentPromptToComposer(text)
+            setDailySummaryOpen(false)
+          }}
+        />
+      ) : null}
+
       {handoffBriefOpen ? (
         <box
           position="absolute"
@@ -25716,7 +25794,7 @@ export default function OpenTuiApp() {
 
       <ToastOverlay toasts={toasts} theme={theme} width={width} height={height} zIndex={remoteCoordinatorTarget ? MODAL_SCRIM_Z_INDEX - 1 : undefined} />
 
-      {worktreeModalOpen || worktreeConfirm || coordModalOpen || coordBoardOpen || teammatesOpen || remoteCoordinatorTarget || (fileHistoryPath && gitRepoCwd) ? (
+      {worktreeModalOpen || worktreeConfirm || coordModalOpen || coordBoardOpen || teammatesOpen || remoteCoordinatorTarget || (fileHistoryPath && gitRepoCwd) || dailySummaryOpen ? (
         <box
           position="absolute"
           top={0}

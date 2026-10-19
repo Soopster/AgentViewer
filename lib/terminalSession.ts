@@ -13,12 +13,11 @@
 // binary shipped as a Tauri sidecar — passed in via `AGENT_VIEWER_TUI_BIN` by
 // `lib.rs` in packaged desktop builds.
 
-import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import type { ChildProcess } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import path from 'node:path'
-import type { Writable } from 'node:stream'
 import { hostedTerminalEnv } from './inheritedIdentityEnv.mjs'
+import { PTY_SUPPORTED, resizePty, spawnPty } from './ptyBridge'
 
 /** Lifecycle events streamed to SSE clients alongside terminal output. */
 export type TerminalState =
@@ -46,118 +45,6 @@ type Session = {
 const sessions = new Map<string, Session>()
 const MAX_BUFFER_BYTES = 256 * 1024
 const DRAIN_TIMEOUT_MS = 60_000
-const TERM_ENABLED = process.platform !== 'win32'
-
-/** The python3 PTY shim, materialized to the temp dir on first use so neither
- * dev nor packaged builds need to bundle extra resources. Selected forks:
- *   - stdin (fd 0) -> pty master  (keystrokes from the browser)
- *   - pty master   -> stdout      (terminal output back to the browser)
- *   - fd 3 control "R:<rows>:<cols>" lines -> TIOCSWINSZ + SIGWINCH
- *   - closing the control pipe / master EOF tears everything down (master
- *     close also delivers SIGHUP to the TUI's session on POSIX).
- */
-const PTY_SHIM_PYTHON = String.raw`
-#!/usr/bin/env python3
-import fcntl, os, pty, select, signal, struct, sys, termios
-
-def set_winsize(master, rows, cols):
-    fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
-
-def reap(pid):
-    try:
-        os.waitpid(pid, 0)
-    except OSError:
-        pass
-    return 0
-
-def main():
-    if len(sys.argv) < 4:
-        sys.stderr.write('usage: pty.py <cols> <rows> <exec> [args...]\n')
-        return 2
-    cols = int(sys.argv[1]); rows = int(sys.argv[2])
-    exe = sys.argv[3]; args = sys.argv[4:]
-    cmdcol = max(cols, 2); cmdrow = max(rows, 2)
-
-    pid, master = pty.fork()
-    if pid == 0:
-        os.environ.setdefault('TERM', 'xterm-256color')
-        os.environ['COLORTERM'] = 'truecolor'
-        try:
-            # execvp searches PATH, so e.g. "bun" resolves in dev; absolute
-            # sidecar paths (packaged) also work.
-            os.execvp(exe, [exe] + args)
-        except OSError as exc:
-            sys.stderr.write('pty: failed to exec %s: %s\n' % (exe, exc))
-            sys.exit(127)
-
-    set_winsize(master, cmdrow, cmdcol)
-    control = 3
-    try:
-        while True:
-            rlist, _, _ = select.select([master, 0, control], [], [])
-            for fd in rlist:
-                if fd == master:
-                    try:
-                        data = os.read(master, 65536)
-                    except OSError:
-                        data = b''
-                    if not data:
-                        return reap(pid)
-                    try:
-                        os.write(1, data)
-                    except OSError:
-                        return reap(pid)
-                elif fd == 0:
-                    try:
-                        data = os.read(0, 65536)
-                    except OSError:
-                        continue
-                    if not data:
-                        continue
-                    try:
-                        os.write(master, data)
-                    except OSError:
-                        pass
-                elif fd == control:
-                    try:
-                        raw = os.read(control, 256)
-                    except OSError:
-                        raw = b''
-                    if not raw:
-                        return reap(pid)
-                    for line in raw.splitlines():
-                        parts = line.split(b':')
-                        if len(parts) == 3 and parts[0] == b'R':
-                            try:
-                                set_winsize(master, int(parts[1]), int(parts[2]))
-                            except (ValueError, OSError):
-                                pass
-                            try:
-                                os.killpg(pid, signal.SIGWINCH)
-                            except OSError:
-                                pass
-    finally:
-        try:
-            os.close(master)
-        except OSError:
-            pass
-    return 0
-
-if __name__ == '__main__':
-    sys.exit(main())
-`
-
-let shimReady: string | null = null
-
-function ensureShim(): string {
-  if (shimReady && existsSync(shimReady)) return shimReady
-  const dir = path.join(tmpdir(), 'agent-viewer')
-  mkdirSync(dir, { recursive: true })
-  const file = path.join(dir, 'pty-bridge.py')
-  writeFileSync(file, PTY_SHIM_PYTHON, 'utf8')
-  shimReady = file
-  return file
-}
 
 /** Resolve the TUI payload: packaged sidecar binary, or Bun + entrypoint. */
 function resolvePayload(): { exec: string; args: string[] } {
@@ -169,10 +56,6 @@ function resolvePayload(): { exec: string; args: string[] } {
     exec: 'bun',
     args: ['run', path.join(process.cwd(), 'tui', 'opentui', 'main.tsx')],
   }
-}
-
-function clamp2(value: number, fallback: number): number {
-  return Number.isFinite(value) ? Math.max(2, Math.min(500, Math.round(value))) : fallback
 }
 
 function spawnSession(id: string, cols: number, rows: number): Session {
@@ -189,38 +72,19 @@ function spawnSession(id: string, cols: number, rows: number): Session {
   }
   sessions.set(id, session)
 
-  if (!TERM_ENABLED) {
+  if (!PTY_SUPPORTED) {
     session.spawnError = 'The embedded terminal is not supported on Windows yet.'
     return session
   }
 
   const payload = resolvePayload()
-  let shim: string
+  let proc: ChildProcess
   try {
-    shim = ensureShim()
+    proc = spawnPty({ exec: payload.exec, args: payload.args, cols, rows, env: hostedTerminalEnv() })
   } catch (err) {
     session.spawnError = `Could not prep PTY bridge: ${String(err)}`
     return session
   }
-
-  const spawnOptions = {
-    detached: true,
-    env: {
-      ...hostedTerminalEnv(),
-      TERM: 'xterm-256color',
-      COLORTERM: 'truecolor',
-      LINES: String(clamp2(rows, 24)),
-      COLUMNS: String(clamp2(cols, 80)),
-    },
-    stdio: ['pipe', 'pipe', 'pipe', 'pipe'] as const,
-  } as SpawnOptions
-  const proc = spawn('python3', [
-    shim,
-    String(clamp2(cols, 80)),
-    String(clamp2(rows, 24)),
-    payload.exec,
-    ...payload.args,
-  ], spawnOptions)
   proc.on('error', (err: Error) => {
     const message = err && err.message ? err.message : String(err)
     session.spawnError = `Could not start the embedded terminal (${message}).`
@@ -295,10 +159,7 @@ export function writeTerminalInput(id: string, data: Uint8Array): boolean {
 export function resizeTerminal(id: string, cols: number, rows: number): boolean {
   const session = sessions.get(id)
   if (!session?.proc || session.exited) return false
-  const control = session.proc.stdio[3] as Writable | null
-  if (!control) return false
-  control.write(`R:${clamp2(rows, 24)}:${clamp2(cols, 80)}\n`)
-  return true
+  return resizePty(session.proc, cols, rows)
 }
 
 /** Subscribes one SSE client to a session; replays buffered output immediately. */
@@ -361,4 +222,4 @@ export function killTerminalSession(id: string): void {
   sessions.delete(id)
 }
 
-export const terminalEnabled = TERM_ENABLED
+export const terminalEnabled = PTY_SUPPORTED

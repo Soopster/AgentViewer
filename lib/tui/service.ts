@@ -828,6 +828,16 @@ export async function readTuiLineHistory(cwd: string, filePath: string, startLin
 
 export type { TurnCheckpoint, CheckpointFileChange, WorkingDiffHunk, FileHistory, FileHistoryStep }
 
+/**
+ * What every agent did over a day or a week, grouped by repository. Loaded on
+ * demand: it opens the search index and spawns git and `gh` per repository,
+ * which nothing on the browse path should pay for.
+ */
+export async function readTuiDailySummary(options: import('../dailySummaryReader').DailySummaryReadOptions): Promise<import('../dailySummary').DailySummary> {
+  const { readDailySummary } = await import('../dailySummaryReader')
+  return readDailySummary(options)
+}
+
 export async function startTuiProtocolRun(params: StartProtocolRunParams): Promise<StartProtocolRunResult> {
   if (isRemoteAttached()) {
     return remoteJson('/api/agent-protocol/runs', {

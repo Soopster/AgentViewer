@@ -2079,6 +2079,65 @@ a checkpoint is that turn's work plus any hand edits before the next turn, which
 `selectionAskSmoke.tsx` and `fileHistorySmoke.tsx` (a real repository, plus a foreign-worktree
 checkpoint) pin these; six mutations were verified to fail them. `gitDiffContextSmoke.tsx` covers `?`.
 
+#### Processes and logs, and the daily summary
+
+The surface panel's **Terminal** tab is `ProcessPane.tsx` (`⌃K l` opens it): long-running processes
+and their output. A repository declares them in `.agent-viewer/processes.json`
+(`{ "processes": [{ "name", "command", "cwd" }] }`, comments and trailing commas allowed); without
+one, `processConfig.ts` suggests package.json's `dev`/`start`/`serve`/`watch` scripts (runner chosen
+by lockfile), `docker compose logs -f` and Procfile entries. Suggestions are listed, never started.
+
+- **Processes live in `processStore.ts`, not in the view.** Closing the panel or switching its tab
+  must not kill a dev server; the TUI exiting does (`process.once('exit')`).
+- **Each process is its own group, and stop signals the group** (`detached` + `kill(-pid)`, SIGKILL
+  after 3s). `npm run dev` is three processes deep; signalling the shell left the server on its port.
+- **Output is notified at most every 100ms, and lines are copied per notification, not per chunk.**
+  Only the pane subscribes — never the root. ANSI is stripped and a `\r` keeps the line's last state.
+- **A scrolled-back log is anchored to an absolute line** (dropped lines counted), so arriving
+  output does not drag it; reaching the newest line follows again.
+- `e` hands the newest trace to the composer (`lib/stackTraces.ts`: Node/Bun, Python, JVM, Go, Rust,
+  tsc, Ruby frames, or a `path:line` on an error line), with the project's own frames listed first;
+  `t` only finds it. File:line references are `<a>` links into the editor, through the same
+  `parseTuiLineTokens` the transcript uses.
+
+**`o` opens an interactive shell in the same tab**: a login `$SHELL` on a real PTY (the python3
+`pty.fork` shim, now `lib/ptyBridge.ts` and shared with the web terminal) whose output is parsed by
+`@wterm/core` — the headless emulator the web terminal draws — and painted cell for cell
+(`shellScreen.ts`, `ShellView.tsx`). `cd`, `export`, history, colours, `vim` and `less` work.
+
+- **While a shell has the keyboard it gets every key**, the panel's Escape, ⌃W, ⌃N, ⌃P, ⌃T, `=`
+  and ⇧O included, because a shell needs each one. **⌃] hands the keys back** (telnet's escape;
+  bound by no shell or editor). The pane reports `none | input | terminal` and the root routes on it.
+- **Keys are re-encoded, never forwarded.** The TUI asks its terminal for the kitty keyboard
+  protocol, so a raw ⌃A arrives as `CSI 97;5u`; `lib/terminalKeys.ts` turns name + modifiers back
+  into the legacy xterm bytes a shell reads (DECCKM arrows, xterm modifier params, tilde keys).
+  Pastes are bracketed when the program asked, with any end marker inside the paste removed.
+- **The PTY is the pane's size** (`resizeShell` on every layout change) and device queries are
+  answered by the emulator. The core reports no soft wraps, so text read for traces rejoins a row
+  filled to its last column with the next.
+- Shells live in `shellStore.ts` like processes: hiding the panel keeps them; SIGHUP on TUI exit.
+  The test renderer exits on ⌃C unless told not to (`exitOnCtrlC: false`, as `start.tsx` runs).
+
+`⌃K s` opens `DailySummaryPopover`: what every agent did today, yesterday or this week (`t`/`y`/`w`),
+grouped by repository (`findRepoRoot`, so worktrees join their repository), as the markdown `c`
+copies; `a` drafts a status update in the composer. `lib/dailySummary.ts` groups and formats (no Node
+imports); `lib/dailySummaryReader.ts` reads the index, then per repository `git log --all
+--author=<user.email>`, `git status` and `gh pr list --author @me`.
+
+- **The index now records which user rows are prompts** (`messages.is_prompt`, schema v5). A tool
+  result is a user-role row and only the payload tells them apart. The migration forces a re-sync, so
+  older sessions gain it as they are read again; until then an edit's own `prompt` still names its
+  turn.
+- **A session whose store moved past its last indexed message is reported as not indexed**, never
+  as having done nothing. A `gh` that is missing or logged out is stated, never read as "no PRs".
+- Waiting items come from the attention inbox and are filed under their session's repository, with
+  dirty working trees and open PRs (draft, changes requested, approved but unmerged).
+
+`processPaneSmoke.tsx` and `dailySummarySmoke.tsx` (a real index under a temporary cwd, a real
+repository with a colleague's commit) pin these; seven mutations were verified to fail them.
+`shellPaneSmoke.tsx` drives a real `/bin/sh` through the pane and `shellRoutingSmoke.tsx` through the
+App's key routing with kitty-encoded input.
+
 #### OpenTUI memory patterns (load-bearing)
 
 The TUI's footprint is dominated by **parsed module code across isolates**, not by live objects. A

@@ -14,7 +14,7 @@ const MESSAGE_DIR = path.join(INDEX_DIR, 'messages')
 const SESSIONS_FILE = path.join(INDEX_DIR, 'sessions.json')
 const DB_FILE = path.join(INDEX_DIR, 'index.sqlite')
 const STORE_VERSION = 1
-const SCHEMA_VERSION = 4
+const SCHEMA_VERSION = 5
 const MAX_INDEX_TEXT_CHARS = 32_000
 const MAX_FIELD_TEXT_CHARS = 2_000
 const MAX_EDIT_PROMPT_CHARS = 300
@@ -99,6 +99,8 @@ export type PersistedMessageRecord = {
   cacheReadTokens: number
   cacheWriteTokens: number
   model?: string | null
+  /** A prompt the user (or a host on their behalf) sent, not a tool result or a subagent's brief. */
+  isPrompt?: boolean
   fileEdits: PersistedFileEdit[]
 }
 
@@ -324,7 +326,8 @@ function initializeSchema(db: SqliteDatabase): void {
       output_tokens INTEGER NOT NULL DEFAULT 0,
       cache_read_tokens INTEGER NOT NULL DEFAULT 0,
       cache_write_tokens INTEGER NOT NULL DEFAULT 0,
-      model TEXT
+      model TEXT,
+      is_prompt INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE INDEX IF NOT EXISTS messages_session_key_idx ON messages(session_key);
@@ -421,6 +424,18 @@ function applySchemaMigrations(db: SqliteDatabase): void {
     db.prepare("UPDATE sessions SET message_signature = NULL").run()
   } else if (current < 4) {
     // Table already present but version lagging — force the provenance backfill.
+    messageSignatureCache.clear()
+    db.prepare("UPDATE sessions SET message_signature = NULL").run()
+  }
+  // is_prompt on messages — version 5. A user row is a prompt or a tool result,
+  // and only the message payload can tell them apart, so it is decided at index
+  // time; sessions pick it up as they are re-synced.
+  const messageCols = db.prepare("PRAGMA table_info('messages')").all() as Row[]
+  if (!messageCols.some((c) => c.name === 'is_prompt')) {
+    db.exec("ALTER TABLE messages ADD COLUMN is_prompt INTEGER NOT NULL DEFAULT 0")
+    messageSignatureCache.clear()
+    db.prepare("UPDATE sessions SET message_signature = NULL").run()
+  } else if (current < 5) {
     messageSignatureCache.clear()
     db.prepare("UPDATE sessions SET message_signature = NULL").run()
   }
@@ -1186,6 +1201,7 @@ function mapPersistedMessages(provider: AgentProvider, sessionId: string, messag
       timestampMs: timestampMs(message.timestamp),
       turnId: message.turnId,
       originKind: message.origin?.kind,
+      isPrompt: Boolean(promptText) && !isDelegatedOrigin(message.origin?.kind),
       text: d.text,
       toolNames: d.toolNames,
       errorTools: [...errorTools].sort((a, b) => a.localeCompare(b)),
@@ -1194,6 +1210,11 @@ function mapPersistedMessages(provider: AgentProvider, sessionId: string, messag
       ...usage,
     }
   })
+}
+
+// A subagent's brief and a task notification are user-role rows nobody typed.
+function isDelegatedOrigin(kind: string | undefined): boolean {
+  return Boolean(kind && (kind.startsWith('subagent') || kind === 'task-notification'))
 }
 
 function aggregateMessages(messages: PersistedMessageRecord[], indexedAt: number): MessageAggregate {
@@ -1254,9 +1275,10 @@ function insertMessages(db: SqliteDatabase, messages: PersistedMessageRecord[]):
       output_tokens,
       cache_read_tokens,
       cache_write_tokens,
-      model
+      model,
+      is_prompt
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
   const insertTool = db.prepare(`
     INSERT OR IGNORE INTO message_tools(message_key, session_key, name, is_error)
@@ -1298,6 +1320,7 @@ function insertMessages(db: SqliteDatabase, messages: PersistedMessageRecord[]):
       message.cacheReadTokens,
       message.cacheWriteTokens,
       message.model ?? null,
+      message.isPrompt ? 1 : 0,
     )
     const errorSet = new Set(message.errorTools ?? [])
     for (const toolName of message.toolNames) {
@@ -2586,4 +2609,83 @@ export async function readPersistedSessionRecord(
   if (persistenceDisabled()) return null
   const db = await getDatabase()
   return selectSessionByKey(db, persistedSessionKey(provider, sessionId)) ?? null
+}
+
+// ─── Activity in a time range ─────────────────────────────────────────────────
+
+export type PersistedActivityPrompt = {
+  sessionKey: string
+  timestampMs: number
+  text: string
+}
+
+export type PersistedActivityEdit = {
+  sessionKey: string
+  timestampMs: number
+  filePath: string
+  kind: string
+  prompt: string | null
+}
+
+export type PersistedActivity = {
+  /** Sessions with any activity in the range, newest first. */
+  sessions: PersistedSessionRecord[]
+  prompts: PersistedActivityPrompt[]
+  edits: PersistedActivityEdit[]
+}
+
+const MAX_ACTIVITY_SESSIONS = 500
+const MAX_ACTIVITY_PROMPT_CHARS = 600
+
+/**
+ * What every indexed session did between two instants. A session counts when
+ * its last message or its store's mtime lands in the range; prompts and edits
+ * come from the message rows, so a session whose transcript has not been
+ * indexed since it ran contributes its metadata and nothing else.
+ */
+export async function readPersistedActivity(fromMs: number, toMs: number): Promise<PersistedActivity> {
+  if (persistenceDisabled()) return { sessions: [], prompts: [], edits: [] }
+  const db = await getDatabase()
+  const sessionSql = `
+    SELECT * FROM sessions
+    WHERE COALESCE(last_message_at, last_modified, 0) BETWEEN ? AND ?
+       OR COALESCE(last_modified, 0) BETWEEN ? AND ?
+    ORDER BY MAX(COALESCE(last_message_at, 0), COALESCE(last_modified, 0)) DESC
+    LIMIT ${MAX_ACTIVITY_SESSIONS}
+  `
+  const sessionParams = [fromMs, toMs, fromMs, toMs]
+  const sessionRows = await runReadRows(DB_FILE, sessionSql, sessionParams, () => db.prepare(sessionSql).all(...sessionParams) as Row[]) as Row[]
+  const sessions = sessionRows.flatMap((row) => rowToSessionRecord(row) ?? [])
+
+  const promptSql = `
+    SELECT session_key, timestamp_ms, substr(text, 1, ${MAX_ACTIVITY_PROMPT_CHARS}) AS text
+    FROM messages
+    WHERE is_prompt = 1 AND timestamp_ms BETWEEN ? AND ?
+    ORDER BY timestamp_ms ASC
+  `
+  const editSql = `
+    SELECT session_key, timestamp_ms, file_path, kind, substr(prompt, 1, ${MAX_ACTIVITY_PROMPT_CHARS}) AS prompt
+    FROM file_edits
+    WHERE timestamp_ms BETWEEN ? AND ?
+    ORDER BY timestamp_ms ASC
+  `
+  const rangeParams = [fromMs, toMs]
+  const [promptRows, editRows] = await Promise.all([
+    runReadRows(DB_FILE, promptSql, rangeParams, () => db.prepare(promptSql).all(...rangeParams) as Row[]) as Promise<Row[]>,
+    runReadRows(DB_FILE, editSql, rangeParams, () => db.prepare(editSql).all(...rangeParams) as Row[]) as Promise<Row[]>,
+  ])
+  const prompts = promptRows.flatMap((row) => {
+    const sessionKey = optionalString(row.session_key)
+    const timestampMs = toNullableTimestamp(row.timestamp_ms)
+    const text = optionalString(row.text)?.trim()
+    return sessionKey && timestampMs !== null && text ? [{ sessionKey, timestampMs, text }] : []
+  })
+  const edits = editRows.flatMap((row) => {
+    const sessionKey = optionalString(row.session_key)
+    const timestampMs = toNullableTimestamp(row.timestamp_ms)
+    const filePath = optionalString(row.file_path)
+    if (!sessionKey || timestampMs === null || !filePath) return []
+    return [{ sessionKey, timestampMs, filePath, kind: optionalString(row.kind) ?? 'edit', prompt: optionalString(row.prompt) ?? null }]
+  })
+  return { sessions, prompts, edits }
 }
