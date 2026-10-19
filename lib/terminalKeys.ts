@@ -113,3 +113,38 @@ export function encodeTerminalPaste(text: string, bracketed: boolean): string {
   // A paste carrying the end marker would end the bracket early and run the rest.
   return bracketed ? `\x1b[200~${normalized.replaceAll('\x1b[201~', '')}\x1b[201~` : normalized
 }
+
+export type TerminalMouseButton = 'left' | 'middle' | 'right' | 'wheel-up' | 'wheel-down'
+
+export type TerminalMouse = {
+  button: TerminalMouseButton
+  action: 'press' | 'release' | 'drag'
+  /** 1-based cell inside the program's screen. */
+  col: number
+  row: number
+  shift?: boolean
+  alt?: boolean
+  ctrl?: boolean
+}
+
+const BUTTON_CODES: Record<TerminalMouseButton, number> = { left: 0, middle: 1, right: 2, 'wheel-up': 64, 'wheel-down': 65 }
+
+/**
+ * A mouse event for a program that asked for one (DECSET 1000/1002/1003), in
+ * SGR form when it asked for that (1006) and the X10 bytes otherwise. A drag
+ * is a press with the motion bit; X10 cannot say which button was released.
+ */
+export function encodeTerminalMouse(event: TerminalMouse, options: { sgr: boolean }): string | null {
+  const col = Math.max(1, Math.round(event.col))
+  const row = Math.max(1, Math.round(event.row))
+  let code = BUTTON_CODES[event.button]
+  if (event.action === 'drag') code += 32
+  if (event.shift) code += 4
+  if (event.alt) code += 8
+  if (event.ctrl) code += 16
+  if (options.sgr) return `\x1b[<${code};${col};${row}${event.action === 'release' ? 'm' : 'M'}`
+  // X10 caps coordinates at 223 and reports any release as button 3.
+  if (col > 223 || row > 223) return null
+  const x10 = event.action === 'release' && !event.button.startsWith('wheel') ? 3 + (code & ~3) : code
+  return `\x1b[M${String.fromCharCode(32 + x10, 32 + col, 32 + row)}`
+}

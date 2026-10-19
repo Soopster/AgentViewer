@@ -143,6 +143,7 @@ import {
   readTuiTranscriptView,
   readTuiTranscriptWidth,
   readTuiVelocityScroll,
+  readTuiSurfacePanelPlacement,
   readTuiSessionBookmarkIds,
   readTuiAllBookmarks,
   readTuiPrompts,
@@ -198,6 +199,7 @@ import {
   writeTuiTranscriptView,
   writeTuiTranscriptWidth,
   writeTuiVelocityScroll,
+  writeTuiSurfacePanelPlacement,
   type TuiSessionDetail,
   type TuiProviderInstanceChoice,
   type TuiDiffLayout,
@@ -976,6 +978,11 @@ const SURFACE_PANEL_MIN_WIDTH = 34
 const SURFACE_PANEL_DEFAULT_WIDTH = 58
 const SURFACE_PANEL_MAX_WIDTH = 120
 const SURFACE_PANEL_RESIZE_STEP = 4
+// Docked under the reader, the panel is sized in rows and leaves the reader this many.
+const SURFACE_PANEL_MIN_ROWS = 8
+const SURFACE_PANEL_DEFAULT_ROWS = 14
+const SURFACE_PANEL_READER_MIN_ROWS = 10
+const SURFACE_PANEL_ROW_STEP = 2
 // Cached TuiSessionDetail bundles include the full transcript, blocks, and
 // derived landmarks, so this cap bounds the resident footprint on long-running
 // TUI sessions. 8 covers the settled session and the recents around it —
@@ -5661,6 +5668,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'surface-add', label: 'Add a surface tab', key: '⌃T', category: 'Transcript' },
   { id: 'surface-cycle', label: 'Next/previous surface tab', key: '⌃N/⌃P', category: 'Transcript' },
   { id: 'surface-expand', label: 'Expand/restore surface panel', key: '=', category: 'Transcript' },
+  { id: 'surface-placement', label: 'Surface panel beside / under the reader', key: '|', category: 'Transcript' },
   { id: 'surface-narrow', label: 'Narrow surface panel', key: '<', category: 'Transcript' },
   { id: 'surface-wide',   label: 'Widen surface panel',  key: '>', category: 'Transcript' },
   { id: 'tasks-full', label: 'Task lineage popover',   key: '⇧L', category: 'Transcript' },
@@ -9061,6 +9069,12 @@ export default function OpenTuiApp() {
   const [surfacePanelOpen, setSurfacePanelOpen] = useState(false)
   const [surfacePanelFocused, setSurfacePanelFocused] = useState(false)
   const [surfacePanelWidth, setSurfacePanelWidth] = useState(SURFACE_PANEL_DEFAULT_WIDTH)
+  // Beside the reader (a column) or under it (a row), switched with `|` and kept in tui.json.
+  const [surfacePanelPlacement, setSurfacePanelPlacement] = useState<'right' | 'bottom'>('right')
+  const [surfacePanelRows, setSurfacePanelRows] = useState(SURFACE_PANEL_DEFAULT_ROWS)
+  // A border drag in progress, and the last column/row the pointer was at.
+  const [surfacePanelResizing, setSurfacePanelResizing] = useState(false)
+  const surfacePanelResizeFromRef = useRef<number | null>(null)
   // Expanded: the panel takes everything the sidebar and the reader's minimum
   // leave. The reader stays mounted rather than being torn down — it keeps the
   // transcript's scroll position and its live-turn subscriptions alive, so
@@ -12293,7 +12307,10 @@ export default function OpenTuiApp() {
   // dock's bottom border and its row goes back to the transcript.
   const statusBarInDock = !composerWindowOpen && !composerHidden && !embeddedComposer && !fullscreenMode
     && !searchMode && !sessionSearchMode
-  const mainContentHeight = Math.max(
+  const surfacePanelVisible = surfacePanelOpen && !fullscreenMode
+  const surfacePanelOnRight = surfacePanelVisible && surfacePanelPlacement === 'right'
+  const surfacePanelAtBottom = surfacePanelVisible && surfacePanelPlacement === 'bottom'
+  const fullContentHeight = Math.max(
     height
     - (fullscreenMode ? 0 : 2)
     - (searchMode || sessionSearchMode ? 4 : fullscreenMode || statusBarInDock ? 0 : 1)
@@ -12302,12 +12319,18 @@ export default function OpenTuiApp() {
     - composerStatusBlockHeight,
     8,
   )
+  // Under the reader, the panel's rows come out of the reader's own budget. The
+  // main row grows back into them (flexGrow), and the panel is laid over them.
+  const surfacePanelMaxRows = Math.max(SURFACE_PANEL_MIN_ROWS, fullContentHeight - SURFACE_PANEL_READER_MIN_ROWS)
+  const effectiveSurfacePanelRows = surfacePanelAtBottom
+    ? (surfacePanelExpanded ? surfacePanelMaxRows : clamp(surfacePanelRows, SURFACE_PANEL_MIN_ROWS, surfacePanelMaxRows))
+    : 0
+  const mainContentHeight = Math.max(fullContentHeight - effectiveSurfacePanelRows, 8)
   const taskPanelVisible = taskPanelOpen && !fullscreenMode
-  const surfacePanelVisible = surfacePanelOpen && !fullscreenMode
   const maxTaskPanelWidth = Math.max(
     TASK_PANEL_MIN_WIDTH,
     width - 4 - (showRail ? sidebarWidthPreference : 0) - MIN_READER_WIDTH
-      - (surfacePanelVisible ? SURFACE_PANEL_MIN_WIDTH + 1 : 0) - 1,
+      - (surfacePanelOnRight ? SURFACE_PANEL_MIN_WIDTH + 1 : 0) - 1,
   )
   const effectiveTaskPanelWidth = taskPanelVisible
     ? (taskPanelExpanded ? maxTaskPanelWidth : taskPanelWidth)
@@ -12318,7 +12341,7 @@ export default function OpenTuiApp() {
     SURFACE_PANEL_MIN_WIDTH,
     width - (showRail ? sidebarWidthPreference : 0) - MIN_READER_WIDTH - effectiveTaskPanelWidth,
   )
-  const effectiveSurfacePanelWidth = surfacePanelVisible
+  const effectiveSurfacePanelWidth = surfacePanelOnRight
     ? (surfacePanelExpanded ? surfacePanelMaxWidth : Math.min(surfacePanelWidth, surfacePanelMaxWidth))
     : 0
   // Both right-hand panels come out of the same budget as the task panel, so
@@ -12407,7 +12430,7 @@ export default function OpenTuiApp() {
   const textareaInnerWidth = Math.max(rightPaneWidth - 4, 10)
   // When either right-hand panel is open, dock the composer under the reader
   // column so it sits beside the panel instead of running underneath it.
-  const rightSidePanelVisible = taskPanelVisible || surfacePanelVisible
+  const rightSidePanelVisible = taskPanelVisible || surfacePanelOnRight
   const composerAreaOffset = rightSidePanelVisible
     ? (showRail ? sidebarWidth : 0)
     : 0
@@ -12619,14 +12642,15 @@ export default function OpenTuiApp() {
   // composer instead of leaving a blank block below itself.
   const surfacePanelHeight = Math.max(
     8,
-    mainContentHeight + composerStatusBlockHeight + composerPopoverHeight
+    mainContentHeight + effectiveSurfacePanelRows + composerStatusBlockHeight + composerPopoverHeight
       + (embeddedComposer ? 0 : composerDockHeight) + (fullscreenMode ? 0 : 2),
   )
 
   // With a right-hand panel open the composer docks under the reader column
   // only, so the rail runs down beside it like the panel does — otherwise the
   // dock's rows under the rail are left empty.
-  const sidebarExtraRows = rightSidePanelVisible ? Math.max(surfacePanelHeight - mainContentHeight, 0) : 0
+  // A panel docked under the reader leaves the rail running down beside it too.
+  const sidebarExtraRows = rightSidePanelVisible ? Math.max(surfacePanelHeight - mainContentHeight, 0) : effectiveSurfacePanelRows
   // Extended, the rail outgrows its row, so nothing clips the list to the
   // frame any more: budget the list to the frame's inside.
   const sidebarRowBudget = Math.max(sidebarExtraRows > 0 ? mainContentHeight + sidebarExtraRows - 2 : mainContentHeight, 4)
@@ -18779,6 +18803,19 @@ export default function OpenTuiApp() {
     })
   })
 
+  const toggleSurfacePanelPlacement = useEffectEvent(() => {
+    const next = surfacePanelPlacement === 'right' ? 'bottom' : 'right'
+    setSurfacePanelPlacement(next)
+    showNotice('info', next === 'bottom' ? 'Panel under the reader · | moves it back beside' : 'Panel beside the reader · | moves it under')
+    void writeTuiSurfacePanelPlacement(next).catch(() => {})
+  })
+
+  useEffect(() => {
+    let cancelled = false
+    void readTuiSurfacePanelPlacement().then((placement) => { if (!cancelled) setSurfacePanelPlacement(placement) }).catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
   const showToggleOutcome = useEffectEvent((label: string, outcome: string | boolean) => {
     const state = typeof outcome === 'boolean' ? (outcome ? 'enabled' : 'disabled') : outcome
     showNotice('info', `${label} ${state}`)
@@ -19721,6 +19758,9 @@ export default function OpenTuiApp() {
       case 'daily-summary':
         setDailySummaryOpen(true)
         break
+      case 'surface-placement':
+        toggleSurfacePanelPlacement()
+        break
       case 'processes':
         setSurfacePanelOpen(true)
         setSurfacePanelFocused(true)
@@ -20507,13 +20547,26 @@ export default function OpenTuiApp() {
         return
       }
       if (!inputOwned && ['<', '>', '+', '-', '_'].includes(sequence)) {
+        const shrink = sequence === '<' || sequence === '-' || sequence === '_'
         handled(() => {
+          if (surfacePanelAtBottom) {
+            setSurfacePanelRows((current) => clamp(
+              current + (shrink ? -SURFACE_PANEL_ROW_STEP : SURFACE_PANEL_ROW_STEP),
+              SURFACE_PANEL_MIN_ROWS,
+              surfacePanelMaxRows,
+            ))
+            return
+          }
           setSurfacePanelWidth((current) => clamp(
-            current + (sequence === '<' || sequence === '-' || sequence === '_' ? -SURFACE_PANEL_RESIZE_STEP : SURFACE_PANEL_RESIZE_STEP),
+            current + (shrink ? -SURFACE_PANEL_RESIZE_STEP : SURFACE_PANEL_RESIZE_STEP),
             SURFACE_PANEL_MIN_WIDTH,
             Math.min(SURFACE_PANEL_MAX_WIDTH, surfacePanelMaxWidth),
           ))
         })
+        return
+      }
+      if (!inputOwned && sequence === '|') {
+        handled(() => toggleSurfacePanelPlacement())
         return
       }
       // ⇧O closes a focused panel (its surfaces' inputs keep this chord, as
@@ -23085,11 +23138,207 @@ export default function OpenTuiApp() {
     )
   }
 
+  // Dragging the panel's inner border by `delta` cells toward the reader (positive) or away.
+  const resizeSurfacePanelBy = (delta: number) => {
+    // A drag sets a size, so it ends an expansion.
+    setSurfacePanelExpanded(false)
+    if (surfacePanelAtBottom) {
+      setSurfacePanelRows((current) => clamp(
+        (surfacePanelExpanded ? effectiveSurfacePanelRows : current) + delta,
+        SURFACE_PANEL_MIN_ROWS,
+        surfacePanelMaxRows,
+      ))
+    } else {
+      setSurfacePanelWidth((current) => clamp(
+        (surfacePanelExpanded ? effectiveSurfacePanelWidth : current) + delta,
+        SURFACE_PANEL_MIN_WIDTH,
+        Math.min(SURFACE_PANEL_MAX_WIDTH, surfacePanelMaxWidth),
+      ))
+    }
+  }
+
+  // One element for both placements, so the panel keeps its state when it moves.
+  const surfacePanelElement = surfacePanelVisible ? (
+    <SurfacePanel
+      state={surfacePanel}
+      theme={theme}
+      width={surfacePanelAtBottom ? readerAreaWidth : effectiveSurfacePanelWidth}
+      expanded={surfacePanelExpanded}
+      placement={surfacePanelPlacement}
+      height={surfacePanelAtBottom ? effectiveSurfacePanelRows : surfacePanelHeight}
+      focused={surfacePanelFocused}
+      availability={{
+        browser: true,
+        terminal: true,
+        files: !!gitRepoCwd,
+        diff: !!gitRepoCwd,
+        'pull-request': !!gitRepoCwd,
+        agents: true,
+      }}
+      unavailableHints={{
+        files: 'Available when a project is open.',
+        diff: 'Available for Git repositories.',
+        'pull-request': 'Available when a project is open.',
+      }}
+      liveAgentCount={Object.values(liveSubagentText).filter((text) => text.trim().length > 0).length}
+      onOpenSurface={(kind) => setSurfacePanel((current) => openSurfaceIn(current, kind))}
+      onCloseSurface={(id) => setSurfacePanel((current) => closeSurfaceIn(current, id))}
+      onCycleSurface={(delta) => setSurfacePanel((current) => cycleSurfaceIn(current, delta))}
+      onBlur={() => setSurfacePanelFocused(false)}
+      onFocus={() => setSurfacePanelFocused(true)}
+      onActivateSurface={(id) => setSurfacePanel((current) => ({ ...current, activeId: id }))}
+      onTogglePlacement={() => toggleSurfacePanelPlacement()}
+      onToggleExpand={() => setSurfacePanelExpanded((current) => !current)}
+      onClosePanel={() => {
+        setSurfacePanelOpen(false)
+        setSurfacePanelFocused(false)
+      }}
+      onResizeStart={(position) => {
+        surfacePanelResizeFromRef.current = position
+        setSurfacePanelResizing(true)
+      }}
+      onKeyHandlerReady={(handler) => { surfacePanelKeyHandlerRef.current = handler }}
+      surfaceKeyHandler={(key) => {
+        const surface = activeSurface(surfacePanel)
+        if (!surface) return
+        if (surface.kind === 'diff') surfaceGitKeyRef.current?.(key)
+        else if (surface.kind === 'pull-request') surfacePrKeyRef.current?.(key)
+        else if (surface.kind === 'files') surfaceFilesKeyRef.current?.(key)
+        else if (surface.kind === 'terminal') surfaceProcessKeyRef.current?.(key)
+        // browser/agents own their own <input> or are read-only.
+      }}
+      renderSurface={(surface: TuiSurface, box) => {
+        switch (surface.kind) {
+          case 'browser':
+            return (
+              <BrowserSurfaceView
+                theme={theme}
+                width={box.width}
+                height={box.height}
+                focused={surfacePanelFocused}
+                recent={surfaceBrowserRecent}
+                onOpened={(url) => setSurfaceBrowserRecent((current) => [url, ...current.filter((entry) => entry !== url)].slice(0, 12))}
+              />
+            )
+          case 'terminal':
+            return (
+              <ProcessPane
+                theme={theme}
+                width={box.width}
+                height={box.height}
+                focused={surfacePanelFocused}
+                cwd={gitRepoCwd || process.cwd()}
+                onKeyHandlerReady={(handler) => { surfaceProcessKeyRef.current = handler }}
+                onCaptureChange={(capture) => { surfaceProcessCaptureRef.current = capture }}
+                onNotice={showNotice}
+                onOpenFile={(path, line) => {
+                  setEditorInitialPath(path)
+                  setEditorInitialLine(line ?? null)
+                  setEditorOpen(true)
+                }}
+                onAskAgent={(prompt) => {
+                  appendDiffCommentPromptToComposer(prompt)
+                  // The composer takes the keys from here; the process keeps running.
+                  setSurfacePanelFocused(false)
+                  showNotice('info', 'Error added to composer')
+                }}
+              />
+            )
+          case 'files':
+            return (
+              <FileViewerPopover
+                docked
+                cwd={gitRepoCwd}
+                theme={theme}
+                width={box.width}
+                height={box.height}
+                syntaxStyle={handoffBriefSyntaxStyle}
+                velocityScrollEnabled={velocityScrollEnabled}
+                onClose={() => setSurfacePanel((current) => closeSurfaceIn(current, surface.id))}
+                onKeyHandlerReady={(handler) => { surfaceFilesKeyRef.current = handler }}
+                onInsertPath={(path) => {
+                  insertComposerTextAtCursor(path)
+                  setComposerActive(true)
+                }}
+                onToggleVelocityScroll={() => {
+                  setVelocityScrollEnabled((current) => {
+                    const next = !current
+                    showToggleOutcome('Velocity scroll', next)
+                    void writeTuiVelocityScroll(next).catch(() => {})
+                    return next
+                  })
+                }}
+              />
+            )
+          case 'diff':
+            return (
+              <GitPopover
+                docked
+                cwd={gitRepoCwd}
+                sessionId={gitSessionId}
+                onKeyCaptureChange={(capture) => { surfaceGitKeyCaptureRef.current = capture }}
+                onClipboardWrite={(text) => writeClipboard(text, renderer)}
+                theme={theme}
+                width={box.width}
+                height={box.height}
+                onClose={() => setSurfacePanel((current) => closeSurfaceIn(current, surface.id))}
+                onKeyHandlerReady={(handler) => { surfaceGitKeyRef.current = handler }}
+                onSendDiffNoteToComposer={(prompt) => {
+                  appendDiffCommentPromptToComposer(prompt)
+                  showNotice('info', 'Diff comment added to composer')
+                }}
+                onAskAgent={(request) => { void askAgentAboutSelection(request) }}
+              />
+            )
+          case 'pull-request':
+            return (
+              <PullRequestPopover
+                docked
+                cwd={gitRepoCwd}
+                theme={theme}
+                width={box.width}
+                height={box.height}
+                onClose={() => setSurfacePanel((current) => closeSurfaceIn(current, surface.id))}
+                onKeyHandlerReady={(handler) => { surfacePrKeyRef.current = handler }}
+                onAskAgent={(prompt) => {
+                  insertComposerTextAtCursor(prompt)
+                  setComposerActive(true)
+                  showNotice('info', 'PR question added to composer')
+                }}
+                onSendDiffNoteToComposer={(prompt) => {
+                  appendDiffCommentPromptToComposer(prompt)
+                  showNotice('info', 'PR diff comment added to composer')
+                }}
+              />
+            )
+          case 'agents':
+            return (
+              <TaskSidePanel
+                messages={taskPanelMessages}
+                todos={composerLiveTodos}
+                session={selectedSession}
+                theme={theme}
+                width={box.width}
+                height={box.height}
+                onSelectTask={(uuid) => {
+                  const idx = visibleTranscriptCards.findIndex((c) => c.key === uuid)
+                  if (idx >= 0) jumpToTranscriptIndex(idx)
+                }}
+                tab="agents"
+                liveSubagentText={liveSubagentText}
+              />
+            )
+        }
+      }}
+    />
+  ) : null
+
   return (
     <box width={width} height={height} flexDirection="column" backgroundColor={theme.bg}>
       <TeammatesAttention theme={theme} width={width} session={selectedSession} />
       <box
-        flexGrow={1}
+        flexGrow={surfacePanelAtBottom ? 0 : 1}
+        flexShrink={surfacePanelAtBottom ? 0 : undefined}
         // No padding or gap: frames meet the screen edge and each other, and
         // the docked composer follows this row directly.
         height={mainContentHeight}
@@ -23786,11 +24035,12 @@ export default function OpenTuiApp() {
 
         {/* Width reservation only — the panel itself is positioned absolutely
             below so it can share the full-height right-hand column. */}
-        {surfacePanelVisible ? (
+        {surfacePanelOnRight ? (
           <box width={effectiveSurfacePanelWidth} />
         ) : null}
 
-        {surfacePanelVisible ? (
+        {surfacePanelOnRight ? (
+          // Beside the reader it spans the right-hand column, composer rows included.
           <box
             id="surface-panel-frame"
             position="absolute"
@@ -23801,167 +24051,7 @@ export default function OpenTuiApp() {
             overflow="hidden"
             zIndex={5}
           >
-            <SurfacePanel
-              state={surfacePanel}
-              theme={theme}
-              width={effectiveSurfacePanelWidth}
-              expanded={surfacePanelExpanded}
-              height={surfacePanelHeight}
-              focused={surfacePanelFocused}
-              availability={{
-                browser: true,
-                terminal: true,
-                files: !!gitRepoCwd,
-                diff: !!gitRepoCwd,
-                'pull-request': !!gitRepoCwd,
-                agents: true,
-              }}
-              unavailableHints={{
-                files: 'Available when a project is open.',
-                diff: 'Available for Git repositories.',
-                'pull-request': 'Available when a project is open.',
-              }}
-              liveAgentCount={Object.values(liveSubagentText).filter((text) => text.trim().length > 0).length}
-              onOpenSurface={(kind) => setSurfacePanel((current) => openSurfaceIn(current, kind))}
-              onCloseSurface={(id) => setSurfacePanel((current) => closeSurfaceIn(current, id))}
-              onCycleSurface={(delta) => setSurfacePanel((current) => cycleSurfaceIn(current, delta))}
-              onBlur={() => setSurfacePanelFocused(false)}
-              onFocus={() => setSurfacePanelFocused(true)}
-              onActivateSurface={(id) => setSurfacePanel((current) => ({ ...current, activeId: id }))}
-              onKeyHandlerReady={(handler) => { surfacePanelKeyHandlerRef.current = handler }}
-              surfaceKeyHandler={(key) => {
-                const surface = activeSurface(surfacePanel)
-                if (!surface) return
-                if (surface.kind === 'diff') surfaceGitKeyRef.current?.(key)
-                else if (surface.kind === 'pull-request') surfacePrKeyRef.current?.(key)
-                else if (surface.kind === 'files') surfaceFilesKeyRef.current?.(key)
-                else if (surface.kind === 'terminal') surfaceProcessKeyRef.current?.(key)
-                // browser/agents own their own <input> or are read-only.
-              }}
-              renderSurface={(surface: TuiSurface, box) => {
-                switch (surface.kind) {
-                  case 'browser':
-                    return (
-                      <BrowserSurfaceView
-                        theme={theme}
-                        width={box.width}
-                        height={box.height}
-                        focused={surfacePanelFocused}
-                        recent={surfaceBrowserRecent}
-                        onOpened={(url) => setSurfaceBrowserRecent((current) => [url, ...current.filter((entry) => entry !== url)].slice(0, 12))}
-                      />
-                    )
-                  case 'terminal':
-                    return (
-                      <ProcessPane
-                        theme={theme}
-                        width={box.width}
-                        height={box.height}
-                        focused={surfacePanelFocused}
-                        cwd={gitRepoCwd || process.cwd()}
-                        onKeyHandlerReady={(handler) => { surfaceProcessKeyRef.current = handler }}
-                        onCaptureChange={(capture) => { surfaceProcessCaptureRef.current = capture }}
-                        onNotice={showNotice}
-                        onOpenFile={(path, line) => {
-                          setEditorInitialPath(path)
-                          setEditorInitialLine(line ?? null)
-                          setEditorOpen(true)
-                        }}
-                        onAskAgent={(prompt) => {
-                          appendDiffCommentPromptToComposer(prompt)
-                          // The composer takes the keys from here; the process keeps running.
-                          setSurfacePanelFocused(false)
-                          showNotice('info', 'Error added to composer')
-                        }}
-                      />
-                    )
-                  case 'files':
-                    return (
-                      <FileViewerPopover
-                        docked
-                        cwd={gitRepoCwd}
-                        theme={theme}
-                        width={box.width}
-                        height={box.height}
-                        syntaxStyle={handoffBriefSyntaxStyle}
-                        velocityScrollEnabled={velocityScrollEnabled}
-                        onClose={() => setSurfacePanel((current) => closeSurfaceIn(current, surface.id))}
-                        onKeyHandlerReady={(handler) => { surfaceFilesKeyRef.current = handler }}
-                        onInsertPath={(path) => {
-                          insertComposerTextAtCursor(path)
-                          setComposerActive(true)
-                        }}
-                        onToggleVelocityScroll={() => {
-                          setVelocityScrollEnabled((current) => {
-                            const next = !current
-                            showToggleOutcome('Velocity scroll', next)
-                            void writeTuiVelocityScroll(next).catch(() => {})
-                            return next
-                          })
-                        }}
-                      />
-                    )
-                  case 'diff':
-                    return (
-                      <GitPopover
-                        docked
-                        cwd={gitRepoCwd}
-                        sessionId={gitSessionId}
-                        onKeyCaptureChange={(capture) => { surfaceGitKeyCaptureRef.current = capture }}
-                        onClipboardWrite={(text) => writeClipboard(text, renderer)}
-                        theme={theme}
-                        width={box.width}
-                        height={box.height}
-                        onClose={() => setSurfacePanel((current) => closeSurfaceIn(current, surface.id))}
-                        onKeyHandlerReady={(handler) => { surfaceGitKeyRef.current = handler }}
-                        onSendDiffNoteToComposer={(prompt) => {
-                          appendDiffCommentPromptToComposer(prompt)
-                          showNotice('info', 'Diff comment added to composer')
-                        }}
-                        onAskAgent={(request) => { void askAgentAboutSelection(request) }}
-                      />
-                    )
-                  case 'pull-request':
-                    return (
-                      <PullRequestPopover
-                        docked
-                        cwd={gitRepoCwd}
-                        theme={theme}
-                        width={box.width}
-                        height={box.height}
-                        onClose={() => setSurfacePanel((current) => closeSurfaceIn(current, surface.id))}
-                        onKeyHandlerReady={(handler) => { surfacePrKeyRef.current = handler }}
-                        onAskAgent={(prompt) => {
-                          insertComposerTextAtCursor(prompt)
-                          setComposerActive(true)
-                          showNotice('info', 'PR question added to composer')
-                        }}
-                        onSendDiffNoteToComposer={(prompt) => {
-                          appendDiffCommentPromptToComposer(prompt)
-                          showNotice('info', 'PR diff comment added to composer')
-                        }}
-                      />
-                    )
-                  case 'agents':
-                    return (
-                      <TaskSidePanel
-                        messages={taskPanelMessages}
-                        todos={composerLiveTodos}
-                        session={selectedSession}
-                        theme={theme}
-                        width={box.width}
-                        height={box.height}
-                        onSelectTask={(uuid) => {
-                          const idx = visibleTranscriptCards.findIndex((c) => c.key === uuid)
-                          if (idx >= 0) jumpToTranscriptIndex(idx)
-                        }}
-                        tab="agents"
-                        liveSubagentText={liveSubagentText}
-                      />
-                    )
-                }
-              }}
-            />
+            {surfacePanelElement}
           </box>
         ) : null}
 
@@ -24563,6 +24653,24 @@ export default function OpenTuiApp() {
         })() : null}
 
       </box>
+
+      {/* Under the reader the panel takes these rows in flow. The main row above
+          keeps to its height (it would otherwise grow into them, and the
+          reader's frame with it), and the panel must be laid out here rather
+          than positioned out of the main row: a renderable outside its parent's
+          bounds is painted but takes no mouse events. */}
+      {surfacePanelAtBottom ? (
+        <box
+          id="surface-panel-frame"
+          height={effectiveSurfacePanelRows}
+          width={readerAreaWidth}
+          marginLeft={sidebarWidth}
+          flexShrink={0}
+          overflow="hidden"
+        >
+          {surfacePanelElement}
+        </box>
+      ) : null}
 
       {searchMode ? (
         <box paddingX={1}>
@@ -25791,6 +25899,32 @@ export default function OpenTuiApp() {
           </box>
         )
       })() : null}
+
+      {surfacePanelResizing ? (
+        // Takes the whole drag once it leaves the one-cell border: transparent,
+        // but hit-testable, so the first motion event captures this layer.
+        <box
+          position="absolute"
+          top={0}
+          left={0}
+          width={width}
+          height={height}
+          zIndex={1000}
+          backgroundColor={RGBA.fromValues(0, 0, 0, 0)}
+          onMouseDrag={(event: { x: number; y: number }) => {
+            const last = surfacePanelResizeFromRef.current
+            if (last === null) return
+            const position = surfacePanelAtBottom ? event.y : event.x
+            if (position === last) return
+            surfacePanelResizeFromRef.current = position
+            resizeSurfacePanelBy(last - position)
+          }}
+          onMouseUp={() => {
+            surfacePanelResizeFromRef.current = null
+            setSurfacePanelResizing(false)
+          }}
+        />
+      ) : null}
 
       <ToastOverlay toasts={toasts} theme={theme} width={width} height={height} zIndex={remoteCoordinatorTarget ? MODAL_SCRIM_Z_INDEX - 1 : undefined} />
 

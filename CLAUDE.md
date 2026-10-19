@@ -2081,6 +2081,32 @@ checkpoint) pin these; six mutations were verified to fail them. `gitDiffContext
 
 #### Processes and logs, and the daily summary
 
+**The surface panel sits beside the reader or under it** (`|` while it is focused, or the palette;
+kept in `tui.json` as `surfacePanelPlacement`). Under the reader it is sized in rows (`+`/`-`, at
+least `SURFACE_PANEL_READER_MIN_ROWS` left to the reader) taken out of `mainContentHeight`, spans the
+reader's width, and the rail runs down beside it. **The main row must not grow back into those rows**
+(`flexGrow` 0 there, a spacer holds them in flow): the reader's frame stretches with its row, so a
+grown row put the transcript's bottom border under the panel. `surfacePanelPlacementSmoke.tsx` checks
+the laid-out frames, which is the only place an overlap shows.
+
+**The panel and its Terminal tab work with the mouse alone** (`surfacePanelMouseSmoke.tsx`): bar
+buttons (under/beside, expand, close), a draggable inner border, clickable process/shell tabs, and
+every hint is a button. Three OpenTUI facts shaped it:
+
+- **A renderable outside its parent's bounds is painted but takes no mouse events.** That is why the
+  under-the-reader panel is laid out in flow in its reserved rows, not positioned out of the main row.
+- **An empty box is not hit-testable, and a drag is captured by whatever is under the pointer at the
+  first motion event.** A one-cell border is left on that first move, so the handle (which redraws the
+  border glyphs to be hittable at all) only starts the resize; a transparent full-screen layer at the
+  root (`surfacePanelResizing`) takes the rest of the drag. Its text is `selectable={false}`, or the
+  release copies a run of `─` to the clipboard.
+- **In a row of `<text>`s each one's leading space is dropped**, so a label built from two texts reads
+  `❯sh`; one text with spans keeps it.
+
+A shell program that asked for the mouse (DECSET 1000/1002/1003, SGR 1006) is sent clicks, drags and
+the wheel (`encodeTerminalMouse`); otherwise the wheel scrolls back, or sends arrows to a full-screen
+program, and a click gives the shell the keyboard.
+
 The surface panel's **Terminal** tab is `ProcessPane.tsx` (`⌃K l` opens it): long-running processes
 and their output. A repository declares them in `.agent-viewer/processes.json`
 (`{ "processes": [{ "name", "command", "cwd" }] }`, comments and trailing commas allowed); without

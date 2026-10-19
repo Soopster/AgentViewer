@@ -11,11 +11,12 @@
 // keys back (telnet's escape, and bound by no shell or editor by default).
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useRenderer } from '@opentui/react'
+import type { BoxRenderable, MouseEvent as TuiMouseEvent } from '@opentui/core'
 
 import type { TuiThemePalette } from '../theme'
 import { parseTuiLineTokens, parseTuiLinkTarget } from '../../lib/tuiLinkTargets'
 import { buildStackTracePrompt, findLatestStackTrace, type StackTrace } from '../../lib/stackTraces'
-import { encodeTerminalKey, encodeTerminalPaste } from '../../lib/terminalKeys'
+import { encodeTerminalKey, encodeTerminalMouse, encodeTerminalPaste, type TerminalMouseButton } from '../../lib/terminalKeys'
 import { readProcessConfig, PROCESS_CONFIG_PATH } from './processConfig'
 import { ShellView } from './ShellView'
 import { readAllScreenText } from './shellScreen'
@@ -205,6 +206,12 @@ export function ProcessPane({
     startProcess(id)
   }, [cwd, draft])
 
+  // Moving the last shown line of a process's log; reaching the newest one follows again.
+  const scrollTo = useCallback((nextEnd: number) => {
+    const clamped = Math.max(minEnd, Math.min(lines.length, nextEnd))
+    setPinnedEnd(clamped >= lines.length ? null : dropped + clamped - 1)
+  }, [dropped, lines.length, minEnd])
+
   const handleKey = useCallback((key: ProcessPaneKey) => {
     if (terminalMode && selectedShell) {
       if (isTerminalLeaveKey(key)) { setTerminalMode(false); return }
@@ -260,10 +267,6 @@ export function ProcessPane({
       return
     }
     // Moving the last shown line; reaching the newest one follows again.
-    const scrollTo = (nextEnd: number) => {
-      const clamped = Math.max(minEnd, Math.min(lines.length, nextEnd))
-      setPinnedEnd(clamped >= lines.length ? null : dropped + clamped - 1)
-    }
     if (key.name === 'j' || key.name === 'down') { scrollTo(end + 1); return }
     if (key.name === 'k' || key.name === 'up') { scrollTo(end - 1); return }
     if (key.name === 'pagedown' || (key.ctrl && key.name === 'd')) { scrollTo(end + logHeight); return }
@@ -284,7 +287,7 @@ export function ProcessPane({
       if (!removeProcess(selected.id)) onNotice('info', `Stop ${selected.name} before removing it`, 3000)
       return
     }
-  }, [closeArmed, dropped, end, height, lines.length, logHeight, minEnd, onNotice, openShell, select, selected, selectedShell, sendTrace, shellLive, showTrace, terminalMode, typing])
+  }, [closeArmed, end, height, logHeight, onNotice, openShell, scrollTo, select, selected, selectedShell, sendTrace, shellLive, showTrace, terminalMode, typing])
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
 
@@ -317,17 +320,70 @@ export function ProcessPane({
         selected.command,
       ].filter(Boolean).join(' · ')
 
-  const hint = typing
-    ? '⏎ runs it · esc cancels'
+  // Every hint is also a button, so the pane can be driven by the mouse alone.
+  const press = (sequence: string, name = sequence) => handleKey({ name, ctrl: false, shift: sequence !== sequence.toLowerCase(), sequence })
+  type HintAction = { key: string; label: string; run?: () => void }
+  const hintActions: HintAction[] = typing
+    ? [{ key: '⏎', label: 'runs it', run: submit }, { key: 'esc', label: 'cancels', run: () => press('', 'escape') }]
     : terminalMode
-    ? '⌃] leaves the shell (keys go back to the panel)'
+    ? [{ key: '⌃]', label: 'leaves the shell (keys go back to the panel)', run: () => setTerminalMode(false) }]
     : closeArmed && closeArmed === selectedShell?.id
-    ? `x again closes ${selectedShell.name} and ends what runs in it`
+    ? [{ key: 'x', label: `again closes ${selectedShell.name} and ends what runs in it`, run: () => press('x') }, { key: 'esc', label: 'keeps it', run: () => setCloseArmed(null) }]
     : selectedShell
-    ? `${shellLive ? '⏎ type into it · ' : ''}k/j scroll · e send error to agent · o new shell · n new command · [ ] switch · x close`
+    ? [
+        ...(shellLive ? [{ key: '⏎', label: 'type into it', run: () => press('', 'return') }] : []),
+        { key: 'e', label: 'send error to agent', run: () => press('e') },
+        { key: 'o', label: 'new shell', run: () => press('o') },
+        { key: 'n', label: 'new command', run: () => press('n') },
+        { key: 'x', label: 'close', run: () => press('x') },
+        { key: 'k/j', label: 'scroll' },
+      ]
     : selected
-    ? `s ${selected.status === 'running' ? 'stop' : 'start'} · r restart · e send error to agent · t find error · n new · [ ] switch · c clear · x remove`
-    : 'o opens a shell · n runs a command'
+    ? [
+        { key: 's', label: selected.status === 'running' ? 'stop' : 'start', run: () => press('s') },
+        { key: 'r', label: 'restart', run: () => press('r') },
+        { key: 'e', label: 'send error to agent', run: () => press('e') },
+        { key: 'x', label: 'remove', run: () => press('x') },
+        { key: 'c', label: 'clear', run: () => press('c') },
+        { key: 't', label: 'find error', run: () => press('t') },
+        { key: 'o', label: 'shell', run: () => press('o') },
+        { key: 'n', label: 'command', run: () => press('n') },
+      ]
+    : [{ key: 'o', label: 'opens a shell', run: () => press('o') }, { key: 'n', label: 'runs a command', run: () => press('n') }]
+  // Whole entries are dropped from the end rather than cutting one in half.
+  const fittedHints: HintAction[] = []
+  let hintWidth = 0
+  for (const action of hintActions) {
+    const cost = action.key.length + action.label.length + (fittedHints.length > 0 ? 4 : 1)
+    if (hintWidth + cost > innerWidth) break
+    fittedHints.push(action)
+    hintWidth += cost
+  }
+
+  // Mouse into a shell: a program that asked for the mouse (vim, less, htop)
+  // is sent it; otherwise the wheel scrolls back and a click takes the keys.
+  const logBoxRef = useRef<BoxRenderable | null>(null)
+  const forwardShellMouse = (event: TuiMouseEvent, button: TerminalMouseButton, action: 'press' | 'release' | 'drag'): boolean => {
+    if (!selectedShell || !shellLive || shellBack > 0) return false
+    const term = shellTerminal(selectedShell.id)
+    const box = logBoxRef.current
+    const tracking = term?.mouseTracking() ?? 0
+    if (!term || !box || tracking === 0) return false
+    // 1000 reports presses and releases, 1002 adds drags with a button held, 1003 all motion.
+    if (action === 'drag' && tracking === 1000) return true
+    const bytes = encodeTerminalMouse({
+      button,
+      action,
+      col: event.x - box.x + 1,
+      row: event.y - box.y + 1,
+      shift: event.modifiers?.shift,
+      alt: event.modifiers?.alt,
+      ctrl: event.modifiers?.ctrl,
+    }, { sgr: term.mouseSgr() })
+    if (bytes) writeShell(selectedShell.id, bytes)
+    return true
+  }
+  const mouseButton = (button: number): TerminalMouseButton => button === 1 ? 'middle' : button === 2 ? 'right' : 'left'
 
   return (
     <box height={height} flexDirection="column" paddingX={1}>
@@ -335,48 +391,80 @@ export function ProcessPane({
         {itemIds.length === 0 ? (
           <text fg={theme.dim} wrapMode="none">{clip('no processes or shells', innerWidth)}</text>
         ) : (
-          <text wrapMode="none">
-            {processes.map((entry, index) => (
-              <span key={entry.id} fg={entry.id === activeId ? theme.text : theme.dim} bg={entry.id === activeId ? theme.surface3 : undefined}>
-                {index > 0 ? ' ' : ''}
-                <span fg={statusColor(entry)}>{` ${processStatusGlyph(entry)}`}</span>
-                {` ${entry.name} `}
-              </span>
-            ))}
-            {shells.map((entry, index) => (
-              <span key={entry.id} fg={entry.id === activeId ? theme.text : theme.dim} bg={entry.id === activeId ? theme.surface3 : undefined}>
-                {processes.length > 0 || index > 0 ? ' ' : ''}
-                <span fg={entry.status === 'running' ? theme.green : entry.status === 'failed' ? theme.red : theme.dim}>{' ❯'}</span>
-                {` ${entry.name} `}
-              </span>
-            ))}
-          </text>
+          // A box per entry, with a direction, so each is its own click target.
+          [
+            ...processes.map((entry) => ({ id: entry.id, glyph: processStatusGlyph(entry), color: statusColor(entry), name: entry.name })),
+            ...shells.map((entry) => ({ id: entry.id, glyph: '❯', color: entry.status === 'running' ? theme.green : entry.status === 'failed' ? theme.red : theme.dim, name: entry.name })),
+          ].map((entry) => (
+            <box
+              key={entry.id}
+              flexDirection="row"
+              marginRight={1}
+              backgroundColor={entry.id === activeId ? theme.surface3 : undefined}
+              onMouseDown={(event: TuiMouseEvent) => {
+                if (event.button !== 0) return
+                setSelectedId(entry.id)
+                setPinnedEnd(null)
+                setShellBack(0)
+                setCloseArmed(null)
+                if (entry.id !== activeId) setTerminalMode(false)
+              }}
+            >
+              <text wrapMode="none">
+                <span fg={entry.color}>{` ${entry.glyph}`}</span>
+                <span fg={entry.id === activeId ? theme.text : theme.dim}>{` ${entry.name} `}</span>
+              </text>
+            </box>
+          ))
         )}
+        <box flexGrow={1} />
+        <box onMouseDown={(event: TuiMouseEvent) => { if (event.button === 0) press('o') }}>
+          <text fg={theme.cyan} wrapMode="none">{' + shell '}</text>
+        </box>
+        <box onMouseDown={(event: TuiMouseEvent) => { if (event.button === 0) press('n') }}>
+          <text fg={theme.cyan} wrapMode="none">{' + command'}</text>
+        </box>
       </box>
 
       <box
+        ref={logBoxRef}
         height={logHeight}
         flexDirection="column"
         overflow="hidden"
-        onMouseDown={(event: { button: number; x: number; y: number }) => {
+        onMouseDown={(event: TuiMouseEvent) => {
           pressRef.current = event.button === 0 ? { x: event.x, y: event.y } : null
+          // A click on a live shell gives it the keyboard, as clicking a terminal window does.
+          if (selectedShell && shellLive) {
+            setTerminalMode(true)
+            forwardShellMouse(event, mouseButton(event.button), 'press')
+          }
         }}
-        onMouseUp={(event: { button: number; x: number; y: number }) => {
+        onMouseDrag={(event: TuiMouseEvent) => {
+          if (selectedShell) forwardShellMouse(event, mouseButton(event.button), 'drag')
+        }}
+        onMouseUp={(event: TuiMouseEvent) => {
           const press = pressRef.current
           pressRef.current = null
+          if (selectedShell) { forwardShellMouse(event, mouseButton(event.button), 'release'); return }
           if (event.button !== 0 || !press || press.x !== event.x || press.y !== event.y) return
-          // A click on a live shell gives it the keyboard, as clicking a terminal window does.
-          if (selectedShell) { if (shellLive) setTerminalMode(true); return }
           const target = parseTuiLinkTarget(renderer.getLinkAt(event.x, event.y) ?? '')
           if (target?.kind === 'file') onOpenFile(target.path, target.line)
         }}
-        onMouseScroll={(event: { scroll?: { direction?: string } }) => {
+        onMouseScroll={(event: TuiMouseEvent) => {
           const up = event.scroll?.direction === 'up'
           if (selectedShell) {
+            if (forwardShellMouse(event, up ? 'wheel-up' : 'wheel-down', 'press')) return
             const term = shellTerminal(selectedShell.id)
-            const maxBack = term && !term.usingAltScreen() ? term.getScrollbackCount() : 0
+            // A full-screen program that did not ask for the mouse gets arrows, as most terminals do.
+            if (term?.usingAltScreen()) {
+              if (shellLive) writeShell(selectedShell.id, (up ? (term.cursorKeysApp() ? '\x1bOA' : '\x1b[A') : (term.cursorKeysApp() ? '\x1bOB' : '\x1b[B')).repeat(3))
+              return
+            }
+            const maxBack = term ? term.getScrollbackCount() : 0
             setShellBack((value) => Math.max(0, Math.min(maxBack, value + (up ? 3 : -3))))
+            return
           }
+          if (selected) scrollTo(end + (up ? -3 : 3))
         }}
       >
         {selectedShell ? (
@@ -426,7 +514,22 @@ export function ProcessPane({
           <input focused={focused} value={draft} maxLength={500} placeholder="command to run" onInput={setDraft} onSubmit={submit} />
         </box>
       ) : (
-        <text fg={theme.dim} wrapMode="none">{clip(hint, innerWidth)}</text>
+        <box height={1} flexDirection="row" overflow="hidden">
+          {fittedHints.map((action, index) => (
+            <box
+              key={`${action.key}:${action.label}`}
+              flexDirection="row"
+              onMouseDown={(event: TuiMouseEvent) => { if (event.button === 0) action.run?.() }}
+            >
+              {/* One text per entry: a row of texts drops each one's leading space. */}
+              <text wrapMode="none">
+                <span fg={theme.dim}>{index > 0 ? ' · ' : ''}</span>
+                <span fg={action.run ? theme.cyan : theme.dim}>{action.key}</span>
+                <span fg={theme.dim}>{` ${action.label}`}</span>
+              </text>
+            </box>
+          ))}
+        </box>
       )}
     </box>
   )
