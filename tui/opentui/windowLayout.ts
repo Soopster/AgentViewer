@@ -58,6 +58,11 @@ const MAIN_STACK_DEFAULT_SHARE = 0.6
 export function computeWindowLayout(input: WindowLayoutInput): WindowLayout {
   const { arrangement, width, height } = input
   const wanted = Math.max(0, Math.min(input.requestedCount, input.availableCount, input.maxPanes))
+  // The axis calculation alone cannot protect the other dimension.
+  if (height < Math.max(input.minReaderRows, input.minPaneRows)
+    || width < Math.max(input.minReaderWidth, input.minPaneWidth)) {
+    return { arrangement, visibleCount: 0, reader: { width, height }, panes: [], secondary: null, topPanes: 0 }
+  }
   if (arrangement === 'split' || wanted === 0) {
     const stacked = input.orientation === 'rows'
     const layout = calculateSplitPaneLayout({
@@ -173,6 +178,78 @@ export function computeWindowLayout(input: WindowLayoutInput): WindowLayout {
     }
   }
   return oneRow()
+}
+
+/** Reserve one row for overflow only when needed, then fit again in that budget. */
+export function computeResponsiveWindowLayout(input: WindowLayoutInput): { layout: WindowLayout; overflowRows: number } {
+  const layout = computeWindowLayout(input)
+  const wanted = Math.min(input.requestedCount, input.availableCount)
+  if (layout.visibleCount >= wanted || wanted === 0) return { layout, overflowRows: 0 }
+  return { layout: computeWindowLayout({ ...input, height: Math.max(0, input.height - 1) }), overflowRows: 1 }
+}
+
+export type WindowRect = { x: number; y: number; width: number; height: number }
+
+/** The same frames used by the renderer, positioned for operation previews. */
+export function windowLayoutRects(layout: WindowLayout, input: { width: number; height: number; orientation: SplitPaneOrientation; readerLast: boolean }): WindowRect[] {
+  const reader = { x: 0, y: 0, ...layout.reader }
+  const panes: WindowRect[] = []
+  if (layout.arrangement === 'split') {
+    const stacked = input.orientation === 'rows'
+    let offset = stacked ? reader.height : reader.width
+    for (const pane of layout.panes) {
+      panes.push({ x: stacked ? 0 : offset, y: stacked ? offset : 0, ...pane })
+      offset += stacked ? pane.height : pane.width
+    }
+  } else if (layout.arrangement === 'main-stack') {
+    let y = 0
+    for (const pane of layout.panes) {
+      panes.push({ x: reader.width, y, ...pane })
+      y += pane.height
+    }
+  } else {
+    let topX = reader.width
+    let bottomX = 0
+    for (let index = 0; index < layout.panes.length; index += 1) {
+      const pane = layout.panes[index]!
+      const top = index < layout.topPanes
+      panes.push({ x: top ? topX : bottomX, y: top ? 0 : reader.height, ...pane })
+      if (top) topX += pane.width
+      else bottomX += pane.width
+    }
+  }
+  const rects = [reader, ...panes]
+  if (input.readerLast) {
+    for (let index = 0; index < rects.length; index += 1) {
+      const rect = rects[index]!
+      if (layout.arrangement === 'split' && input.orientation === 'rows') rect.y = input.height - rect.y - rect.height
+      // The grid reverses only its top row; the stack reverses its columns.
+      else if (layout.arrangement !== 'grid' || index <= layout.topPanes) rect.x = input.width - rect.x - rect.width
+    }
+  }
+  return rects
+}
+
+/** Scale geometry by sampling cells, retaining the true pane proportions. */
+export function windowPreviewLines(rects: WindowRect[], area: WindowSize, columns = 51, rows = 6): string[] {
+  return Array.from({ length: rows }, (_, row) => {
+    let line = ''
+    for (let column = 0; column < columns; column += 1) {
+      const x = (column + 0.5) * area.width / columns
+      const y = (row + 0.5) * area.height / rows
+      const index = rects.findIndex((rect) => x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height)
+      const rect = rects[index]
+      if (!rect) { line += ' '; continue }
+      const left = Math.floor(rect.x * columns / area.width)
+      const right = Math.ceil((rect.x + rect.width) * columns / area.width) - 1
+      const top = Math.floor(rect.y * rows / area.height)
+      const bottom = Math.ceil((rect.y + rect.height) * rows / area.height) - 1
+      if (row === top || row === bottom) line += column === left || column === right ? '+' : '─'
+      else if (column === left || column === right) line += '│'
+      else line += column === Math.floor((left + right) / 2) && row === Math.floor((top + bottom) / 2) ? (index === 0 ? 'R' : String(index)) : ' '
+    }
+    return line
+  })
 }
 
 function clampExtent(value: number, min: number, max: number): number {

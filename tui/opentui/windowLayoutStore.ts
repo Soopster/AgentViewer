@@ -54,14 +54,42 @@ export function listSavedWindowLayouts(project: string): SavedWindowLayout[] {
 }
 
 /** Saves `layout` under the next free "Layout N" name; the oldest beyond the cap is dropped. */
-export function saveWindowLayout(project: string, layout: Omit<SavedWindowLayout, 'id' | 'name' | 'savedAt'>): SavedWindowLayout {
+export type WindowLayoutContents = Omit<SavedWindowLayout, 'id' | 'name' | 'savedAt'>
+
+export function saveWindowLayout(project: string, layout: WindowLayoutContents, name?: string): SavedWindowLayout {
   const store = readStore()
   const existing = store.projects[project] ?? []
   const taken = new Set(existing.map((entry) => entry.name))
   let number = existing.length + 1
   while (taken.has(`Layout ${number}`)) number += 1
-  const saved: SavedWindowLayout = { ...layout, id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, name: `Layout ${number}`, savedAt: Date.now() }
+  const saved: SavedWindowLayout = { ...layout, id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, name: name === undefined ? `Layout ${number}` : layoutName(name), savedAt: Date.now() }
   store.projects[project] = [...existing, saved].sort((a, b) => b.savedAt - a.savedAt).slice(0, MAX_PER_PROJECT)
+  writeStore(store)
+  return saved
+}
+
+function layoutName(name: string): string {
+  const clean = name.replace(/[\u0000-\u001f\u007f]/g, ' ').trim()
+  if (!clean) throw new Error('Give the layout a name')
+  if (clean.length > 60) throw new Error('Layout names can have up to 60 characters')
+  return clean
+}
+
+/** Preserve identity and name when updating a workspace's windows. */
+export function updateWindowLayout(project: string, id: string, change: { name?: string; layout?: WindowLayoutContents }): SavedWindowLayout {
+  const store = readStore()
+  const existing = store.projects[project] ?? []
+  const index = existing.findIndex((entry) => entry.id === id)
+  if (index < 0) throw new Error('That saved layout no longer exists')
+  const previous = existing[index]!
+  const saved = {
+    ...previous, ...change.layout,
+    id: previous.id,
+    name: change.name === undefined ? previous.name : layoutName(change.name),
+    savedAt: Date.now(),
+  }
+  existing[index] = saved
+  store.projects[project] = existing
   writeStore(store)
   return saved
 }

@@ -3,12 +3,44 @@
 // panes before it shrinks anything below its minimum. The App draws exactly
 // these sizes, so a wrong sum here is a pane drawn over another one.
 import assert from 'node:assert/strict'
-import { computeWindowLayout, readerShareAt, windowDropZone, windowDropZoneRect, windowInDirection, type WindowLayoutInput } from './windowLayout'
+import { computeWindowLayout, computeResponsiveWindowLayout, readerShareAt, windowDropZone, windowDropZoneRect, windowInDirection, type WindowLayoutInput } from './windowLayout'
+import { WindowHistory } from './windowHistory'
 import { SPLIT_SHARE_EVEN } from './splitPaneState'
 
 const base: WindowLayoutInput = {
   arrangement: 'grid', orientation: 'columns', width: 180, height: 40, requestedCount: 3, availableCount: 3, maxPanes: 3,
   readerShare: SPLIT_SHARE_EVEN, minPaneWidth: 46, minPaneRows: 9, minReaderWidth: 40, minReaderRows: 12,
+}
+
+// Reserving the overflow strip can itself push another pane out. Refit once
+// against the smaller budget; never mutate the requested layout to make it fit.
+{
+  const requested = { ...base, arrangement: 'main-stack' as const, height: 18 }
+  const small = computeResponsiveWindowLayout(requested)
+  assert.equal(small.overflowRows, 1)
+  assert.equal(small.layout.visibleCount, 1)
+  assert.equal(small.layout.reader.height, 17)
+  assert.equal(requested.requestedCount, 3)
+  const restored = computeResponsiveWindowLayout({ ...requested, height: 40 })
+  assert.equal(restored.overflowRows, 0)
+  assert.equal(restored.layout.visibleCount, 3)
+  for (const arrangement of ['split', 'grid', 'main-stack'] as const) {
+    assert.equal(computeResponsiveWindowLayout({ ...base, arrangement, height: 8 }).layout.visibleCount, 0)
+    assert.equal(computeResponsiveWindowLayout({ ...base, arrangement, width: 60 }).layout.visibleCount, 0)
+  }
+  const history = new WindowHistory<{ order: string[]; share: number }>(JSON.stringify, 2)
+  const a = { order: ['a', 'b', 'c'], share: 0 }
+  const b = { order: ['a', 'c'], share: 0 }
+  const c = { order: ['c', 'a'], share: 0.6 }
+  history.checkpoint(a)
+  history.checkpoint(a) // nested operation
+  history.checkpoint(b)
+  history.checkpoint(c) // rejected/no-op operation
+  assert.deepEqual(history.undo(c), b, 'skip no-ops, restore the previous logical order')
+  assert.equal(history.undo(b), null, 'history is bounded')
+  history.checkpoint(a)
+  assert.deepEqual(history.undo(c), a)
+  assert.equal(history.undo(a), null)
 }
 
 const grid = computeWindowLayout(base)

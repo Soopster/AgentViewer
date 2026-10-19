@@ -31,10 +31,13 @@ import { hasTuiLinkTarget, parseTuiLineTokens, parseTuiLinkTarget } from '../../
 import { SurfacePanel } from './SurfacePanel'
 import { BrowserSurfaceView } from './SurfaceViews'
 import { WindowButton } from './WindowButton'
-import { computeWindowLayout, readerShareAt, windowDropZone, windowDropZoneRect, windowInDirection, type WindowArrangement, type WindowDirection, type WindowDropZone } from './windowLayout'
+import { computeResponsiveWindowLayout, windowLayoutRects, windowPreviewLines, readerShareAt, windowDropZone, windowDropZoneRect, windowInDirection, type WindowArrangement, type WindowDirection, type WindowDropZone } from './windowLayout'
 import type { WindowLayoutAction } from './WindowLayoutPicker'
 import type { ContextMenuItem } from './ContextMenu'
-import { deleteWindowLayout, describeSavedLayout, listSavedWindowLayouts, saveWindowLayout, type SavedWindowLayout } from './windowLayoutStore'
+import { WindowHistory } from './windowHistory'
+import { nextWindowNeedingAttention, observeWindowAttention, readWindowAttention, windowAttentionBadge, type WindowAttention } from './windowAttention'
+import { planWindowArrangement, planWindowSessionDrop, type WindowSessionDrop } from './windowOperations'
+import { deleteWindowLayout, describeSavedLayout, listSavedWindowLayouts, saveWindowLayout, updateWindowLayout, type SavedWindowLayout } from './windowLayoutStore'
 import {
   EMPTY_SURFACE_PANEL,
   activeSurface,
@@ -5757,6 +5760,8 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'split-grow-reader',   label: 'Grow reader in split',  key: splitCommandKey('>', RUNNING_INSIDE_TMUX), category: 'View' },
   { id: 'split-shrink-reader', label: 'Shrink reader in split', key: splitCommandKey('<', RUNNING_INSIDE_TMUX), category: 'View' },
   { id: 'split-even',   label: 'Even split sizes',          key: splitCommandKey('=', RUNNING_INSIDE_TMUX), category: 'View' },
+  { id: 'window-next-attention', label: 'Next window needing attention', key: splitCommandKey('a', RUNNING_INSIDE_TMUX), category: 'View' },
+  { id: 'window-undo', label: 'Undo window change', key: splitCommandKey('u', RUNNING_INSIDE_TMUX), category: 'View' },
   { id: 'split-help',   label: 'Split pane keybinds',       key: splitCommandKey('?', RUNNING_INSIDE_TMUX), category: 'View' },
   { id: 'split-close',  label: 'Close split pane',         key: splitCommandKey('x', RUNNING_INSIDE_TMUX), category: 'View'  },
   { id: 'split-focus',  label: 'Focus next split pane',    key: splitCommandKey('o', RUNNING_INSIDE_TMUX), category: 'View'  },
@@ -7709,6 +7714,8 @@ type SplitTranscriptPaneProps = {
   // Live overlay for THIS pane's session, sliced from the app-wide live stream.
   liveMessages: ThreadedMessage[]
   running: boolean
+  attentionBadge: string | null
+  onActivity: (key: string, version: string, errorVersion: string | null) => void
   liveText: string | null
   registerHandle: (paneIndex: number, handle: SplitPaneHandle | null) => void
   onActivate: (paneIndex: number) => void
@@ -7747,6 +7754,8 @@ function SplitTranscriptPaneInner({
   focused,
   liveMessages,
   running,
+  attentionBadge,
+  onActivity,
   liveText,
   registerHandle,
   onActivate,
@@ -7866,6 +7875,18 @@ function SplitTranscriptPaneInner({
     return groupStreamToolCards(merged.filter((card) => card.category !== 'system'))
       .filter((card) => !isStreamGhostCard(card))
   }, [persistedTailCards, liveCards, paneStreamLike])
+
+  const activityReport = useMemo(() => {
+    const last = liveCards.at(-1) ?? cards.at(-1)
+    const errorCard = [...persistedTailCards, ...liveCards].findLast((card) => card.lines.some((line) => line.tone === 'result_error'))
+    return {
+      version: JSON.stringify([cards.length, last?.key, last?.searchText, liveText]),
+      errorVersion: status === 'error' ? `load:${error}` : errorCard ? `${errorCard.key}:${errorCard.searchText}` : null,
+    }
+  }, [cards, persistedTailCards, liveCards, liveText, status, error])
+  useEffect(() => {
+    if (status !== 'loading') onActivity(key, activityReport.version, activityReport.errorVersion)
+  }, [onActivity, key, status, activityReport])
 
   // Cursor: null means "following the tail". Set once the reader focuses this
   // pane and moves, which is also what detaches tail-follow.
@@ -8253,6 +8274,7 @@ function SplitTranscriptPaneInner({
       // session, and the state worth knowing without focusing it.
       title={fitText(
         joinMeta([
+          attentionBadge,
           paneCount > 1 ? `${paneIndex + 1} · ${formatSessionTitle(session)}` : formatSessionTitle(session),
           searchLabel,
           running ? 'running' : null,
@@ -8260,7 +8282,7 @@ function SplitTranscriptPaneInner({
         ]),
         Math.max(width - 4, 8),
       )}
-      titleColor={running ? theme.green : accent}
+      titleColor={attentionBadge?.includes('? input') ? theme.amber : attentionBadge?.includes('! error') ? theme.red : attentionBadge ? theme.cyan : running ? theme.green : accent}
       ref={paneFrameRef}
       onMouseDown={(event) => {
         if (event.button === 2) {
@@ -9141,6 +9163,9 @@ export default function OpenTuiApp() {
   const [splitArrangement, setSplitArrangement] = useState<WindowArrangement>('split')
   const [splitReaderLast, setSplitReaderLast] = useState(false)
   const [windowPickerOpen, setWindowPickerOpen] = useState(false)
+  const [windowLayoutPreview, setWindowLayoutPreview] = useState<string | null>(null)
+  const [windowAttention, setWindowAttention] = useState<Map<string, WindowAttention>>(() => new Map())
+  const windowObservedFocusRef = useRef<string | null>(null)
   // This project's saved layouts, read when the menu opens.
   const [savedWindowLayouts, setSavedWindowLayouts] = useState<SavedWindowLayout[]>([])
   // Surfaces (a shell, the diff, files) open as windows in the layout, after
@@ -9155,9 +9180,10 @@ export default function OpenTuiApp() {
   const contextMenuKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   // ⌃B m: one window takes the whole area until it is pressed again ('reader' or a window index).
   const [windowZoom, setWindowZoom] = useState<'reader' | number | null>(null)
-  const windowPickerKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  const windowPickerKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean) | null>(null)
   // The reader-and-panes area, for drop zones and divider drags in screen cells.
   const windowAreaRef = useRef<BoxRenderable | null>(null)
+  const windowOverflowRef = useRef<BoxRenderable | null>(null)
   // A session dragged from the rail or a pane title: what, and where it would land.
   // `pane` is a pane under the pointer (dropping there replaces it); otherwise `zone` is relative to the reader.
   // `insert` is set when the pointer is on a pane's edge: the drop goes beside that pane rather than over it.
@@ -12569,29 +12595,19 @@ export default function OpenTuiApp() {
   // same drop-a-pane-before-shrinking rule runs against a different axis. The
   // reader area's inner height is the frame minus its own borders.
   const splitAxisStacked = splitOrientation === 'rows'
-  const splitAxisExtent = splitAxisStacked ? Math.max(mainContentHeight - 2, 8) : readerAreaWidth
-  const splitLayout = calculateSplitPaneLayout({
-    availableExtent: splitAxisExtent,
-    requestedCount: fullscreenMode ? 0 : splitPaneCount + windowSurfaces.length,
-    availableCount: Math.min(splitPinnedSessions.length, splitPaneCount) + windowSurfaces.length,
-    maxPanes: SPLIT_PANE_MAX,
-    minPaneExtent: splitAxisStacked ? SPLIT_PANE_MIN_ROWS : SPLIT_PANE_MIN_WIDTH,
-    minReaderExtent: splitAxisStacked ? MIN_READER_ROWS : MIN_READER_WIDTH,
-    readerShare: splitReaderShare,
-  })
-  // Main + stack and the grid (windowLayout.ts). The window area sits under the
-  // tab strip, so it has one row less than the main content.
-  const windowAreaHeight = measuredWindowAreaHeight > 0
+  // Measure the area plus its overflow row as one stable budget, so adding
+  // the strip cannot make the next measurement oscillate across a fit boundary.
+  const windowBudgetHeight = measuredWindowAreaHeight > 0
     ? measuredWindowAreaHeight
-    : Math.max(mainContentHeight - (tabsEnabled && !fullscreenMode ? 1 : 0), 8)
-  const arrangedLayout = splitArrangement === 'split' || fullscreenMode ? null : computeWindowLayout({
+    : Math.max(mainContentHeight - (tabsEnabled && !fullscreenMode ? 1 : 0), 1)
+  const responsiveWindows = computeResponsiveWindowLayout({
     arrangement: splitArrangement,
     orientation: splitOrientation,
     width: readerAreaWidth,
-    height: windowAreaHeight,
-    requestedCount: splitPaneCount + windowSurfaces.length,
+    height: windowBudgetHeight,
+    requestedCount: fullscreenMode ? 0 : splitPaneCount + windowSurfaces.length,
     availableCount: Math.min(splitPinnedSessions.length, splitPaneCount) + windowSurfaces.length,
-    maxPanes: SPLIT_PANE_ARRANGED_MAX,
+    maxPanes: splitArrangement === 'split' ? SPLIT_PANE_MAX : SPLIT_PANE_ARRANGED_MAX,
     readerShare: splitReaderShare,
     secondaryShare: splitSecondaryShare,
     bottomShare: splitBottomShare,
@@ -12600,17 +12616,25 @@ export default function OpenTuiApp() {
     minReaderWidth: MIN_READER_WIDTH,
     minReaderRows: MIN_READER_ROWS,
   })
+  const windowOverflowRows = fullscreenMode ? 0 : responsiveWindows.overflowRows
+  const windowAreaHeight = Math.max(1, windowBudgetHeight - windowOverflowRows)
+  const fittedWindows = responsiveWindows.layout
+  const splitLayout = {
+    visibleCount: fittedWindows.visibleCount,
+    paneExtent: splitAxisStacked ? fittedWindows.panes[0]?.height ?? 0 : fittedWindows.panes[0]?.width ?? 0,
+    readerExtent: splitAxisStacked ? fittedWindows.reader.height : fittedWindows.reader.width,
+  }
+  const arrangedLayout = splitArrangement === 'split' || fullscreenMode ? null : fittedWindows
   const arrangedVisible = arrangedLayout !== null && arrangedLayout.visibleCount > 0
   // The split's own axis only applies to the split arrangement; the others lay
   // the reader out side by side with whatever is beside it.
   const stackedSplit = splitAxisStacked && !arrangedVisible
-  const visibleSplitPaneCount = arrangedVisible ? arrangedLayout.visibleCount : splitLayout.visibleCount
+  const visibleSplitPaneCount = fittedWindows.visibleCount
   const stackedPanesVisible = stackedSplit && visibleSplitPaneCount > 0
   // Off-axis, a frame simply spans the reader area: stacked panes are full
   // width, side-by-side panes are full height.
   const splitPaneWidth = stackedSplit ? readerAreaWidth : splitLayout.paneExtent
-  // Session panes first, then surface windows. A layout short of room drops
-  // session panes before surfaces: a surface window was asked for by name.
+  // Keep logical order intact, reserving slots for explicitly opened surfaces.
   const splitPaneSessions = visibleSplitPaneCount > 0
     ? splitPinnedSessions.slice(0, Math.max(0, Math.min(visibleSplitPaneCount - windowSurfaces.length, splitPaneCount)))
     : []
@@ -12623,6 +12647,54 @@ export default function OpenTuiApp() {
     ...splitPaneSessions.map((session): WindowItem => ({ kind: 'session', session })),
     ...visibleWindowSurfaces.map((surface): WindowItem => ({ kind: 'surface', surface })),
   ]
+  const overflowWindowItems: WindowItem[] = [
+    ...splitPinnedSessions.slice(0, splitPaneCount).map((session): WindowItem => ({ kind: 'session', session })),
+    ...windowSurfaces.map((surface): WindowItem => ({ kind: 'surface', surface })),
+  ].filter((item) => item.kind === 'session'
+    ? !splitPaneSessions.some((visible) => sessionKey(visible) === sessionKey(item.session))
+    : !visibleWindowSurfaces.includes(item.surface))
+  const focusedWindowKey = splitFocusIndex === null ? selectedSessionKey
+    : splitPaneSessions[splitFocusIndex] ? sessionKey(splitPaneSessions[splitFocusIndex]!) : null
+  useLayoutEffect(() => { windowObservedFocusRef.current = focusedWindowKey }, [focusedWindowKey])
+  const reportWindowActivity = useCallback((key: string, version: string, errorVersion: string | null) => {
+    setWindowAttention((previous) => {
+      const before = previous.get(key)
+      const next = observeWindowAttention(before, 'transcript', version, errorVersion, key === windowObservedFocusRef.current)
+      if (next === before) return previous
+      return new Map(previous).set(key, next)
+    })
+  }, [])
+  const windowNeedsInputKeys = useMemo(() => new Set(attentionItems.filter(attentionItemNeedsInput).map((item) => item.sessionKey)), [attentionItems])
+  const windowPinSignature = splitPinnedKeys.join('\u0000')
+  useEffect(() => {
+    setWindowAttention((previous) => {
+      let next = previous
+      const keys = new Set([...(selectedSessionKey ? [selectedSessionKey] : []), ...splitPinnedKeys])
+      const replace = (key: string, value: WindowAttention) => {
+        if (next === previous) next = new Map(previous)
+        next.set(key, value)
+      }
+      for (const key of keys) {
+        const session = sessionsByKeyRef.current.get(key)
+        const revision = session ? sessionTranscriptUpdatedAt(session) : undefined
+        const before = next.get(key)
+        if (revision !== undefined) {
+          const value = observeWindowAttention(before, 'metadata', String(revision), null, key === focusedWindowKey)
+          if (value !== before) replace(key, value)
+        } else if (key === focusedWindowKey && before) {
+          const value = readWindowAttention(before)
+          if (value !== before) replace(key, value)
+        }
+      }
+      for (const key of previous.keys()) {
+        if (keys.has(key)) continue
+        if (next === previous) next = new Map(previous)
+        next.delete(key)
+      }
+      return next
+    })
+  }, [sessions, windowPinSignature, selectedSessionKey, focusedWindowKey])
+  const badgeForWindow = (key: string, compact = false) => windowAttentionBadge({ ...windowAttention.get(key), needsInput: windowNeedsInputKeys.has(key) }, compact)
   const openCodeContextWidth = isOpenCodeView && visibleSplitPaneCount === 0
     ? Math.min(Math.max(24, Math.floor(readerAreaWidth * 0.22)), Math.max(readerAreaWidth - MIN_READER_WIDTH, 0))
     : 0
@@ -12633,10 +12705,10 @@ export default function OpenTuiApp() {
   // of it, so every downstream height (transcript viewport included) must be
   // measured from this rather than from the whole frame. In the grid the
   // reader has the top row only.
-  const readerRowBudget = readerZoomed ? mainContentHeight
+  const readerRowBudget = readerZoomed ? mainContentHeight - windowOverflowRows
     : arrangedVisible && arrangedLayout.reader.height < windowAreaHeight
-    ? arrangedLayout.reader.height + (mainContentHeight - windowAreaHeight)
-    : stackedPanesVisible ? splitLayout.readerExtent + 2 : mainContentHeight
+    ? arrangedLayout.reader.height + (mainContentHeight - windowBudgetHeight)
+    : stackedPanesVisible ? splitLayout.readerExtent + (mainContentHeight - windowBudgetHeight) : mainContentHeight - windowOverflowRows
   const splitPaneKeys = splitPaneSessions.map((pane) => sessionKey(pane))
   const splitPaneKeysSignature = splitPaneKeys.join('\u0000')
   // Live slices for the split panes. The app-wide live list is already tagged
@@ -18269,7 +18341,7 @@ export default function OpenTuiApp() {
     const measure = () => {
       const measured = readerBoxRef.current?.height ?? 0
       if (measured > 0) setMeasuredReaderBoxHeight((current) => (current === measured ? current : measured))
-      const area = windowAreaRef.current?.height ?? 0
+      const area = (windowAreaRef.current?.height ?? 0) + (windowOverflowRef.current?.height ?? 0)
       if (area > 0) setMeasuredWindowAreaHeight((current) => (current === area ? current : area))
     }
     measure()
@@ -19421,6 +19493,7 @@ export default function OpenTuiApp() {
   })
 
   usePaste((event) => {
+    if (windowPickerOpen) return // the layout name input owns bracketed paste
     // A shell with the keyboard takes the paste too, bracketed if it asked.
     if (surfaceProcessCaptureRef.current === 'terminal' && (focusedWindowSurface === 'terminal'
       || (surfacePanelOpen && surfacePanelFocused && activeSurface(surfacePanel)?.kind === 'terminal'))) {
@@ -19708,10 +19781,69 @@ export default function OpenTuiApp() {
     }
   })
 
+  // Checkpoint user operations rather than renders: polling, focus changes,
+  // startup hydration and terminal resizes must never fill the undo stack.
+  const captureWindowLayout = useEffectEvent(() => ({
+    layout: {
+      arrangement: splitArrangement, orientation: splitOrientation,
+      readerLast: splitReaderLast, readerShare: splitReaderShare,
+      secondaryShare: splitSecondaryShare, bottomShare: splitBottomShare,
+      count: splitPaneCount, panes: [...splitPinnedKeys], surfaces: [...windowSurfaces],
+      reader: selectedSessionKey, zoom: windowZoom, fullscreen: fullscreenMode,
+    },
+    reader: selectedSession,
+    tabs: openTabSessions,
+    focus: splitFocusIndex,
+    panel: surfacePanel,
+    panelOpen: surfacePanelOpen,
+  }))
+  const [windowHistory] = useState(() => new WindowHistory<ReturnType<typeof captureWindowLayout>>(
+    (snapshot) => JSON.stringify(snapshot.layout),
+  ))
+  const checkpointWindowLayout = useEffectEvent(() => {
+    windowHistory.checkpoint(captureWindowLayout())
+  })
+  const undoWindowLayout = useEffectEvent(() => {
+    const previous = windowHistory.undo(captureWindowLayout())
+    if (!previous) { showNotice('info', 'No window changes to undo'); return }
+    const layout = previous.layout
+    setOpenTabSessions((current) => {
+      const keys = new Set(current.map(sessionKey))
+      return [...current, ...previous.tabs.filter((tab) => !keys.has(sessionKey(tab)))]
+    })
+    // Set the reader before restoring pins; its normal swap plan must not
+    // overwrite the saved order. The reconciler will see valid pins next render.
+    if (previous.reader && layout.reader !== selectedSessionKey) selectTabSession(previous.reader)
+    setSplitPinnedKeys(layout.panes)
+    setSplitPaneCount(layout.count)
+    setSplitArrangement(layout.arrangement)
+    setSplitOrientation(layout.orientation)
+    setSplitReaderLast(layout.readerLast)
+    setSplitReaderShare(layout.readerShare)
+    setSplitSecondaryShare(layout.secondaryShare)
+    setSplitBottomShare(layout.bottomShare)
+    setWindowSurfaces(layout.surfaces)
+    setWindowZoom(layout.zoom)
+    setFullscreenMode(layout.fullscreen)
+    setSplitFocusIndex(previous.focus)
+    setSurfacePanel(previous.panel)
+    setSurfacePanelOpen(previous.panelOpen)
+    setSurfacePanelFocused(false)
+    setPaneSearch(null)
+    void Promise.all([
+      writeTuiSplitPanes(layout.count),
+      writeTuiSplitOrientation(layout.orientation),
+      writeTuiSplitReaderShare(layout.readerShare),
+      writeTuiWindowArrangement({ arrangement: layout.arrangement, readerLast: layout.readerLast, secondaryShare: layout.secondaryShare, bottomShare: layout.bottomShare }),
+    ]).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store restored layout'))
+    showNotice('info', 'Window change undone · ⌃B u undoes the previous change')
+  })
+
   // Split panes are driven by a tmux-style prefix chord (⌃B then a command key),
   // so the reader's single-key namespace stays free. applySplitPaneCount is the
   // one writer of the count — it persists and narrates every change.
   const applySplitPaneCount = useEffectEvent((next: number, label?: string, orientation?: SplitPaneOrientation) => {
+    checkpointWindowLayout()
     setSplitPaneCount(next)
     void writeTuiSplitPanes(next).catch((err) => {
       setError(err instanceof Error ? err.message : 'Failed to store split view setting')
@@ -19756,6 +19888,7 @@ export default function OpenTuiApp() {
   // orientation is the split's, not the pane's, so asking for the other shape
   // re-lays the existing panes rather than mixing two axes in one frame area.
   const addSplitPane = useEffectEvent((orientation: SplitPaneOrientation) => {
+    checkpointWindowLayout()
     if (splitCandidateSessions.length === 0) {
       showNotice('error', 'Open another tab to split the transcript view')
       return
@@ -19775,6 +19908,7 @@ export default function OpenTuiApp() {
   })
 
   const closeSplitPane = useEffectEvent((paneIndex?: number) => {
+    checkpointWindowLayout()
     if (splitPaneCount === 0) {
       showNotice('info', 'No split panes open')
       return
@@ -19792,6 +19926,7 @@ export default function OpenTuiApp() {
 
   // ── Window layouts ─────────────────────────────────────────────────────────
   const setWindowArrangement = useEffectEvent((arrangement: WindowArrangement, readerLast: boolean) => {
+    checkpointWindowLayout()
     setSplitArrangement(arrangement)
     setSplitReaderLast(readerLast)
     void writeTuiWindowArrangement({ arrangement, readerLast, secondaryShare: splitSecondaryShare, bottomShare: splitBottomShare }).catch(() => {})
@@ -19836,7 +19971,7 @@ export default function OpenTuiApp() {
     const items: ContextMenuItem[] = []
     if (source === 'pane' && paneIndex !== undefined) {
       items.push(
-        { label: 'Open in the reader', hint: '⏎', run: () => selectTabSession(session) },
+        { label: 'Open in the reader', hint: '⏎', run: () => { checkpointWindowLayout(); selectTabSession(session) } },
         { label: windowZoom === paneIndex ? 'Restore the layout' : 'Zoom this pane', hint: '⌃B m', run: () => setWindowZoom(windowZoom === paneIndex ? null : paneIndex) },
         { label: 'Close pane', hint: '⌃B x', danger: true, run: () => closeSplitPane(paneIndex) },
       )
@@ -19866,29 +20001,37 @@ export default function OpenTuiApp() {
     try { setSavedWindowLayouts(listSavedWindowLayouts(windowLayoutProject)) } catch { setSavedWindowLayouts([]) }
   }, [windowLayoutProject, windowPickerOpen])
 
-  // Save the windows on screen: the arrangement, the reader, the panes in order, the surface windows.
-  const saveCurrentWindowLayout = useEffectEvent(() => {
+  const currentWindowLayoutContents = useEffectEvent(() => ({
+    arrangement: splitArrangement, orientation: splitOrientation,
+    readerLast: splitReaderLast, readerShare: splitReaderShare,
+    secondaryShare: splitSecondaryShare, bottomShare: splitBottomShare,
+    reader: selectedSessionKey,
+    panes: splitPinnedSessions.slice(0, splitPaneCount).map((pane) => sessionKey(pane)),
+    surfaces: windowSurfaces,
+  }))
+  const saveCurrentWindowLayout = useEffectEvent((name?: string) => {
     try {
-      const saved = saveWindowLayout(windowLayoutProject, {
-        arrangement: splitArrangement,
-        orientation: splitOrientation,
-        readerLast: splitReaderLast,
-        readerShare: splitReaderShare,
-        secondaryShare: splitSecondaryShare,
-        bottomShare: splitBottomShare,
-        reader: selectedSessionKey,
-        panes: splitPaneSessions.map((pane) => sessionKey(pane)),
-        surfaces: visibleWindowSurfaces,
-      })
+      const saved = saveWindowLayout(windowLayoutProject, currentWindowLayoutContents(), name)
       setSavedWindowLayouts(listSavedWindowLayouts(windowLayoutProject))
       showNotice('info', `Saved ${saved.name} · ${describeSavedLayout(saved)}`)
     } catch (err) {
       showNotice('error', err instanceof Error ? err.message : 'Could not save the layout')
     }
   })
+  const editSavedWindowLayout = useEffectEvent((id: string, name?: string) => {
+    try {
+      const saved = updateWindowLayout(windowLayoutProject, id, name === undefined
+        ? { layout: currentWindowLayoutContents() } : { name })
+      setSavedWindowLayouts(listSavedWindowLayouts(windowLayoutProject))
+      showNotice('info', `${name === undefined ? 'Updated' : 'Renamed'} ${saved.name}`)
+    } catch (err) {
+      showNotice('error', err instanceof Error ? err.message : 'Could not edit the layout')
+    }
+  })
 
   // Put a saved layout back. Sessions that no longer exist are skipped and said so.
   const restoreWindowLayout = useEffectEvent((id: string) => {
+    checkpointWindowLayout()
     const saved = savedWindowLayouts.find((entry) => entry.id === id)
     if (!saved) return
     setWindowPickerOpen(false)
@@ -19927,6 +20070,7 @@ export default function OpenTuiApp() {
 
   // A surface into the layout: out of the side panel, into a window, focused.
   const openSurfaceWindow = useEffectEvent((surface: WindowSurfaceKind) => {
+    checkpointWindowLayout()
     const remaining = surfacePanel.surfaces.filter((entry) => entry.kind !== surface)
     setSurfacePanel((current) => current.surfaces
       .filter((entry) => entry.kind === surface)
@@ -19944,6 +20088,7 @@ export default function OpenTuiApp() {
     showNotice('info', `${WINDOW_SURFACE_TITLES[surface]} in a window · ⇥ panel puts it back`)
   })
   const closeSurfaceWindow = useEffectEvent((surface: WindowSurfaceKind) => {
+    checkpointWindowLayout()
     setWindowSurfaces((current) => current.filter((entry) => entry !== surface))
     setSplitFocusIndex(null)
   })
@@ -19963,96 +20108,49 @@ export default function OpenTuiApp() {
     : splitReaderLast ? 'reader-right' : visibleSplitPaneCount === 1 ? 'two' : 'reader-left'
 
   const applyWindowLayout = useEffectEvent((action: WindowLayoutAction) => {
+    checkpointWindowLayout()
     setWindowPickerOpen(false)
-    const keepCount = Math.min(Math.max(splitPaneCount, 1), SPLIT_PANE_MAX)
-    switch (action) {
-      case 'fullscreen':
-        toggleFullscreenMode()
-        return
-      case 'fill':
-        applySplitPaneCount(0, 'Reader only')
-        return
-      case 'reader-left':
-      case 'reader-right':
-        setWindowArrangement('split', action === 'reader-right')
-        applySplitOrientation('columns', true)
-        requestWindowPanes(keepCount, action === 'reader-right' ? 'Reader on the right' : 'Reader on the left')
-        return
-      case 'reader-top':
-      case 'reader-bottom':
-        setWindowArrangement('split', action === 'reader-bottom')
-        applySplitOrientation('rows', true)
-        requestWindowPanes(keepCount, action === 'reader-bottom' ? 'Reader below' : 'Reader on top')
-        return
-      case 'two':
-        setWindowArrangement('split', false)
-        applySplitOrientation('columns', true)
-        requestWindowPanes(1, 'Reader and one pane')
-        return
-      case 'main-stack':
-        setWindowArrangement('main-stack', false)
-        requestWindowPanes(Math.max(2, Math.min(splitPaneCount, 3)), 'Reader and a stack')
-        return
-      case 'grid':
-        setWindowArrangement('grid', false)
-        requestWindowPanes(3, 'Grid of four')
-        return
-      case 'grid-six':
-        setWindowArrangement('grid', false)
-        requestWindowPanes(5, 'Grid of six')
-        return
+    if (action === 'fullscreen') { toggleFullscreenMode(); return }
+    const plan = planWindowArrangement(action, {
+      arrangement: splitArrangement, orientation: splitOrientation,
+      readerLast: splitReaderLast, count: splitPaneCount,
+    }, Number.MAX_SAFE_INTEGER)
+    setWindowZoom(null)
+    setWindowArrangement(plan.arrangement, plan.readerLast)
+    applySplitOrientation(plan.orientation, true)
+    if (action === 'fill') {
+      setWindowSurfaces([])
+      applySplitPaneCount(0, 'Reader only')
+    } else requestWindowPanes(plan.count, action === 'grid-six' ? 'Grid of six' : action === 'grid' ? 'Grid of four' : 'Window layout applied')
+  })
+
+  const applyWindowSessionDrop = useEffectEvent((session: Session, drop: WindowSessionDrop) => {
+    const key = sessionKey(session)
+    if (key === selectedSessionKey) {
+      showNotice('info', 'That session is the reader · open a pane in the reader to swap it')
+      return
     }
+    const plan = planWindowSessionDrop({
+      arrangement: splitArrangement, orientation: splitOrientation,
+      readerLast: splitReaderLast, count: splitPaneCount, pins: splitPinnedKeys,
+    }, key, drop)
+    if (!plan) { showNotice('info', 'The layout is full · drop on a pane’s middle to replace it'); return }
+    checkpointWindowLayout()
+    setOpenTabSessions((prev) => prev.some((tab) => sessionKey(tab) === key) ? prev : [...prev, session])
+    setSplitPinnedKeys(plan.pins)
+    setWindowArrangement(plan.arrangement, plan.readerLast)
+    applySplitOrientation(plan.orientation, true)
+    setSplitPaneCount(plan.count)
+    void writeTuiSplitPanes(plan.count).catch(() => {})
+    showNotice('info', `${fitText(formatSessionTitle(session), 40).trimEnd()} · window moved`)
   })
 
   // Replace pane `index` with `session`; a session already in another pane swaps with it.
   const dropSessionOnPane = useEffectEvent((session: Session, index: number, fromPane: number | null) => {
-    const key = sessionKey(session)
-    if (fromPane === index) return
-    if (key === selectedSessionKey) {
-      showNotice('info', 'That session is the reader · ⤢ on a pane swaps it with the reader')
-      return
-    }
-    setOpenTabSessions((prev) => (prev.some((tab) => sessionKey(tab) === key) ? prev : [...prev, session]))
-    setSplitPinnedKeys((prev) => {
-      const next = splitPaneKeys.length > prev.length ? [...splitPaneKeys] : [...prev]
-      const existing = next.indexOf(key)
-      const displaced = next[index]
-      next[index] = key
-      if (existing >= 0 && existing !== index && displaced) next[existing] = displaced
-      return next
-    })
-    showNotice('info', `${fitText(formatSessionTitle(session), 40)} in pane ${index + 1}`)
+    if (fromPane !== index) applyWindowSessionDrop(session, { kind: 'replace', index })
   })
-
-  // Put `session` beside pane `index` (before it for a left or top edge, after for right or bottom).
   const insertSessionBesidePane = useEffectEvent((session: Session, index: number, edge: WindowDropZone) => {
-    const key = sessionKey(session)
-    if (key === selectedSessionKey) {
-      showNotice('info', 'That session is the reader · ⤢ on a pane swaps it with the reader')
-      return
-    }
-    const max = splitArrangement === 'split' ? SPLIT_PANE_MAX : SPLIT_PANE_ARRANGED_MAX
-    const alreadyShown = splitPaneKeys.includes(key)
-    if (!alreadyShown && visibleSplitPaneCount >= max) {
-      showNotice('info', splitArrangement === 'split'
-        ? 'A split holds two panes · ⊞ layout → a stack or grid holds more'
-        : `The layout is full (${max} panes) · drop on a pane's middle to replace it`)
-      return
-    }
-    setOpenTabSessions((prev) => (prev.some((tab) => sessionKey(tab) === key) ? prev : [...prev, session]))
-    setSplitPinnedKeys(() => {
-      const order = splitPaneKeys.filter((pinnedKey) => pinnedKey !== key)
-      const anchor = splitPaneKeys[index]
-      const at = Math.max(0, order.indexOf(anchor ?? '')) + (edge === 'right' || edge === 'bottom' ? 1 : 0)
-      order.splice(Math.min(at, order.length), 0, key)
-      return order
-    })
-    const count = Math.min(visibleSplitPaneCount + (alreadyShown ? 0 : 1), max)
-    if (count !== splitPaneCount) {
-      setSplitPaneCount(count)
-      void writeTuiSplitPanes(count).catch(() => {})
-    }
-    showNotice('info', `${fitText(formatSessionTitle(session), 40)} beside pane ${index + 1}`)
+    applyWindowSessionDrop(session, { kind: 'insert', index, edge })
   })
 
   const rectOf = (id: string) => {
@@ -20085,45 +20183,75 @@ export default function OpenTuiApp() {
   // A session dropped on the window area: an edge makes it a pane on that
   // side, the middle opens it in the reader.
   const dropSessionInWindow = useEffectEvent((session: Session, zone: WindowDropZone, fromPane: number | null) => {
-    const key = sessionKey(session)
     if (zone === 'center') {
-      // Opening a pinned session in the reader hands its pane the session the reader leaves.
+      checkpointWindowLayout()
       if (fromPane !== null) selectTabSession(session)
       else selectSidebarSession(session)
       return
     }
-    if (key === selectedSessionKey) {
-      showNotice('info', 'That session is the reader · drag another one to an edge to put it beside it')
-      return
-    }
-    const sideways = zone === 'left' || zone === 'right'
-    // In a stack or grid the drop joins that arrangement, as another window
-    // would, and a side drop moves the reader to the other side; only a split
-    // is re-laid along the edge's axis.
-    const arranged = splitArrangement !== 'split' && visibleSplitPaneCount > 0
-    if (arranged) {
-      if (sideways) setWindowArrangement(splitArrangement, zone === 'left')
-    } else {
-      setWindowArrangement('split', zone === 'left' || zone === 'top')
-      applySplitOrientation(sideways ? 'columns' : 'rows', true)
-    }
-    setOpenTabSessions((prev) => (prev.some((tab) => sessionKey(tab) === key) ? prev : [...prev, session]))
-    setSplitPinnedKeys((prev) => [key, ...prev.filter((pinnedKey) => pinnedKey !== key)])
-    const count = arranged
-      ? Math.min(splitPaneCount + (splitPinnedKeys.includes(key) ? 0 : 1), SPLIT_PANE_ARRANGED_MAX)
-      : Math.min(Math.max(splitPaneCount, 1), SPLIT_PANE_MAX)
-    if (count !== splitPaneCount) {
-      // Set directly, as watching a teammate does: applySplitPaneCount projects
-      // the layout from this render's tabs, which do not hold this one yet.
-      setSplitPaneCount(count)
-      void writeTuiSplitPanes(count).catch(() => {})
-    }
-    showNotice('info', `${fitText(formatSessionTitle(session), 40)} · ${zone === 'left' ? 'left of' : zone === 'right' ? 'right of' : zone === 'top' ? 'above' : 'below'} the reader`)
+    applyWindowSessionDrop(session, { kind: 'edge', zone })
   })
+
+  // Preview the same operation plan and geometry that applying it consumes.
+  // This is read-only: hovering and dragging never rewrite the current layout.
+  const projectedWindowGeometry = (() => {
+    if ((!windowPickerOpen || !windowLayoutPreview) && !sessionDrag) return null
+    let plan = { arrangement: splitArrangement, orientation: splitOrientation, readerLast: splitReaderLast, count: splitPaneCount }
+    let readerShare = splitReaderShare
+    let secondaryShare = splitSecondaryShare
+    let bottomShare = splitBottomShare
+    let surfaces = windowSurfaces.length
+    let missing = 0
+    if (sessionDrag) {
+      if (sessionKey(sessionDrag.session) === selectedSessionKey) return null
+      const drop: WindowSessionDrop | null = sessionDrag.pane !== null
+        ? sessionDrag.insert ? { kind: 'insert', index: sessionDrag.pane, edge: sessionDrag.insert } : { kind: 'replace', index: sessionDrag.pane }
+        : sessionDrag.zone && sessionDrag.zone !== 'center' ? { kind: 'edge', zone: sessionDrag.zone } : null
+      if (drop) {
+        const next = planWindowSessionDrop({ ...plan, pins: splitPinnedKeys }, sessionKey(sessionDrag.session), drop)
+        if (!next) return null
+        plan = next
+      } else if (sessionDrag.zone !== 'center') return null
+    } else if (windowLayoutPreview?.startsWith('saved:')) {
+      const saved = savedWindowLayouts.find((entry) => entry.id === windowLayoutPreview.slice(6))
+      if (!saved) return null
+      const known = new Set([...sessions, ...openTabSessions].map(sessionKey))
+      const available = saved.panes.filter((key) => known.has(key)).length
+      missing = saved.panes.length - available + (saved.reader && !known.has(saved.reader) ? 1 : 0)
+      plan = { ...saved, count: available }
+      readerShare = saved.readerShare
+      secondaryShare = saved.secondaryShare
+      bottomShare = saved.bottomShare ?? SPLIT_SHARE_EVEN
+      surfaces = saved.surfaces.filter((surface) => surface === 'terminal' || Boolean(gitRepoCwd)).length
+    } else if (windowLayoutPreview?.startsWith('action:')) {
+      const action = windowLayoutPreview.slice(7) as WindowLayoutAction
+      if (action === 'fullscreen') return null
+      const available = new Set([...sessions, ...openTabSessions].map(sessionKey).filter((key) => key !== selectedSessionKey)).size
+      plan = planWindowArrangement(action, plan, available)
+      if (action === 'fill') surfaces = 0
+    }
+    const input = {
+      ...plan, width: readerAreaWidth, height: windowBudgetHeight,
+      requestedCount: plan.count + surfaces, availableCount: plan.count + surfaces,
+      maxPanes: plan.arrangement === 'split' ? SPLIT_PANE_MAX : SPLIT_PANE_ARRANGED_MAX,
+      readerShare, secondaryShare, bottomShare,
+      minPaneWidth: SPLIT_PANE_MIN_WIDTH, minPaneRows: SPLIT_PANE_MIN_ROWS,
+      minReaderWidth: MIN_READER_WIDTH, minReaderRows: MIN_READER_ROWS,
+    }
+    const result = computeResponsiveWindowLayout(input)
+    const area = { width: input.width, height: Math.max(1, input.height - result.overflowRows) }
+    const rects = windowLayoutRects(result.layout, { ...input, ...area })
+    const hidden = input.availableCount - result.layout.visibleCount
+    return {
+      rects, overflowRows: result.overflowRows,
+      lines: windowPreviewLines(rects, area),
+      detail: `${area.width}×${area.height} · ${rects.length} visible${hidden ? ` · ${hidden} hidden` : ''}${missing ? ` · ${missing} missing` : ''}`,
+    }
+  })()
 
   splitPaneActionsRef.current = {
     close: (paneIndex) => closeSplitPane(paneIndex),
-    promote: (session) => selectTabSession(session),
+    promote: (session) => { checkpointWindowLayout(); selectTabSession(session) },
     fullscreen: () => toggleFullscreenMode(),
     sessionMenu: (session, source, point, paneIndex) => openSessionMenu(session, source, point, paneIndex),
   }
@@ -20160,6 +20288,7 @@ export default function OpenTuiApp() {
 
   // The divider between the reader and its panes, dragged to a new share.
   const dragSplitDivider = useEffectEvent((event: { x: number; y: number }) => {
+    if (splitDividerPoint === null) checkpointWindowLayout()
     const area = windowAreaRect()
     if (!area) return
     setSplitDividerPoint({ x: event.x, y: event.y })
@@ -20211,6 +20340,7 @@ export default function OpenTuiApp() {
   // state: every pane shares them, and both persist so a split comes back the
   // shape you left it.
   const applySplitOrientation = useEffectEvent((next: SplitPaneOrientation, quiet?: boolean) => {
+    checkpointWindowLayout()
     if (next === splitOrientation) {
       if (!quiet) showNotice('info', next === 'rows' ? 'Split panes already stacked' : 'Split panes already side-by-side')
       return
@@ -20227,6 +20357,7 @@ export default function OpenTuiApp() {
   })
 
   const resizeSplitReader = useEffectEvent((direction: 1 | -1 | 0) => {
+    checkpointWindowLayout()
     if (visibleSplitPaneCount === 0) {
       showNotice('error', 'No split panes open (⌃B % to split)')
       return
@@ -20252,20 +20383,6 @@ export default function OpenTuiApp() {
       ? 'Split ratio: even'
       : `Reader ${Math.round(next * 100)}% of the ${splitOrientation === 'rows' ? 'height' : 'width'}`)
   })
-
-  // A terminal that shrinks past the pane minimum drops panes silently — the
-  // layout is doing the right thing, but the user only sees a pane vanish. Say
-  // it once per transition, and name the orientation that would still fit.
-  const splitPanesHiddenRef = useRef(false)
-  useEffect(() => {
-    const hidden = splitPaneCount > 0 && visibleSplitPaneCount === 0 && splitPinnedKeys.length > 0 && !fullscreenMode
-    if (hidden === splitPanesHiddenRef.current) return
-    splitPanesHiddenRef.current = hidden
-    if (!hidden) return
-    showNotice('info', stackedSplit
-      ? 'Split panes hidden — terminal too short (⌃B % for side-by-side)'
-      : 'Split panes hidden — terminal too narrow (⌃B " to stack them instead)')
-  }, [fullscreenMode, splitPaneCount, splitPinnedKeys.length, stackedSplit, visibleSplitPaneCount])
 
   // ── Split pane focus ───────────────────────────────────────────────────────
   // Focus is a third keyboard owner alongside the sidebar and the reader. It is
@@ -20316,6 +20433,7 @@ export default function OpenTuiApp() {
   }, [visibleSplitPaneCount, windowItems.length, windowZoom])
 
   const toggleWindowZoom = useEffectEvent(() => {
+    checkpointWindowLayout()
     if (windowZoom !== null) {
       setWindowZoom(null)
       showNotice('info', 'Layout restored')
@@ -20331,6 +20449,7 @@ export default function OpenTuiApp() {
 
   // ⌃B +/-: the second divider, from the keyboard.
   const resizeSecondaryDivider = useEffectEvent((direction: 1 | -1) => {
+    checkpointWindowLayout()
     if (!arrangedVisible || !(splitArrangement === 'grid' ? arrangedLayout.secondary : visibleSplitPaneCount > 1)) {
       showNotice('info', 'No second divider here · it is the grid\'s row split, or a stack\'s first pane')
       return
@@ -20344,6 +20463,7 @@ export default function OpenTuiApp() {
 
   // ⌃B [ ]: the grid's bottom-row divider, from the keyboard.
   const resizeBottomDivider = useEffectEvent((direction: 1 | -1) => {
+    checkpointWindowLayout()
     if (!arrangedVisible || splitArrangement !== 'grid' || !arrangedLayout.secondary || arrangedLayout.panes.length - arrangedLayout.topPanes < 2) {
       showNotice('info', 'No bottom-row divider here · it is between a grid\'s bottom panes')
       return
@@ -20357,6 +20477,7 @@ export default function OpenTuiApp() {
 
   // ⌃B ⇧arrows: swap the focused window with the one that way; focus moves with it.
   const swapWindowInDirection = useEffectEvent((direction: WindowDirection) => {
+    checkpointWindowLayout()
     if (visibleSplitPaneCount === 0) {
       showNotice('error', 'No split panes open (⌃B % to split)')
       return
@@ -20402,7 +20523,7 @@ export default function OpenTuiApp() {
       })
     } else {
       setSplitPinnedKeys(() => {
-        const next = [...splitPaneKeys]
+        const next = [...splitPinnedKeys]
         ;[next[from], next[to]] = [next[to]!, next[from]!]
         return next
       })
@@ -20471,6 +20592,7 @@ export default function OpenTuiApp() {
   // then hands that pane the session the reader just left, so the pair swaps
   // rather than both showing the same transcript.
   const openFocusedSplitPane = useEffectEvent(() => {
+    checkpointWindowLayout()
     if (splitFocusIndex === null) return
     const target = splitPaneSessions[splitFocusIndex]
     if (!target) return
@@ -20483,6 +20605,7 @@ export default function OpenTuiApp() {
   // pinned sessions, so cycling reads as "flip through the rest" instead of
   // scrambling every pane.
   const cycleSplitPaneSession = useEffectEvent(() => {
+    checkpointWindowLayout()
     if (splitPaneCount === 0) {
       showNotice('error', 'Split transcript view is off (⌃B % to split)')
       return
@@ -20507,6 +20630,21 @@ export default function OpenTuiApp() {
       }
       return current
     })
+  })
+
+  const jumpToNextWindowAttention = useEffectEvent(() => {
+    const order = [...(selectedSessionKey ? [selectedSessionKey] : []), ...splitPinnedKeys]
+    const target = nextWindowNeedingAttention(order, focusedWindowKey, (key) => Boolean(badgeForWindow(key)))
+    if (!target) { showNotice('info', 'No windows need attention'); return }
+    setWindowZoom(null)
+    setFocusedPane('messages')
+    const index = splitPaneSessions.findIndex((session) => sessionKey(session) === target)
+    if (index >= 0) focusSplitPane(index)
+    else {
+      const session = [...openTabSessions, ...sessions].find((entry) => sessionKey(entry) === target)
+      if (session && target !== selectedSessionKey) { checkpointWindowLayout(); selectTabSession(session) }
+      focusReaderFromSplit()
+    }
   })
 
   const executeCommandPalette = useEffectEvent((id: string) => {
@@ -20885,6 +21023,12 @@ export default function OpenTuiApp() {
         break
       case 'split-even':
         resizeSplitReader(0)
+        break
+      case 'window-next-attention':
+        jumpToNextWindowAttention()
+        break
+      case 'window-undo':
+        undoWindowLayout()
         break
       case 'split-help':
         setChordHelp({ map: SPLIT_CHORD_MAP, dismissOnKey: true })
@@ -21305,7 +21449,7 @@ export default function OpenTuiApp() {
     }
 
     if (windowPickerOpen) {
-      handled(() => { windowPickerKeyHandlerRef.current?.(key) })
+      if (windowPickerKeyHandlerRef.current?.(key) !== false) handled(() => {})
       return
     }
 
@@ -22384,7 +22528,9 @@ export default function OpenTuiApp() {
         if (sequence === '<') { resizeSplitReader(-1); return }
         if (sequence === '>') { resizeSplitReader(1); return }
         if (sequence === '=') { resizeSplitReader(0); return }
-        if (sequence === 'x') { closeSplitPane(); return }
+        if (sequence === 'x') { if (focusedWindowSurface) closeSurfaceWindow(focusedWindowSurface); else closeSplitPane(); return }
+        if (sequence === 'u') { undoWindowLayout(); return }
+        if (sequence === 'a') { jumpToNextWindowAttention(); return }
         if (sequence === 'w') { setWindowPickerOpen(true); return }
         if (sequence === 'z') { toggleSplitPanes(); return }
         // Focus movement, tmux-shaped: o/→/tab walk forward, ← walks back,
@@ -24606,6 +24752,8 @@ export default function OpenTuiApp() {
         height={size.height}
         liveMessages={splitPaneLiveMessages.get(sessionKey(splitSession)) ?? SPLIT_PANE_EMPTY_LIVE}
         running={splitPaneRunningKeys.has(sessionKey(splitSession))}
+        attentionBadge={badgeForWindow(sessionKey(splitSession))}
+        onActivity={reportWindowActivity}
         // Streaming text belongs to whichever session the composer is
         // sending to; show it in the pane when that's this pane.
         liveText={
@@ -25008,6 +25156,27 @@ export default function OpenTuiApp() {
               window arrangement: along one axis (the tmux-style split, which
               is the only shape a narrow terminal can take), the reader beside
               a stack, or a grid. */}
+          {windowOverflowRows > 0 ? (
+            <box id="window-overflow" ref={windowOverflowRef} height={1} flexShrink={0} flexDirection="row" overflow="hidden" backgroundColor={theme.surface2}>
+              <text fg={theme.amber} width={` +${overflowWindowItems.length} hidden · `.length} flexShrink={0} wrapMode="none">{` +${overflowWindowItems.length} hidden · `}</text>
+              {overflowWindowItems.map((item, index) => {
+                const title = fitText(item.kind === 'session' ? `${badgeForWindow(sessionKey(item.session)) ? `${badgeForWindow(sessionKey(item.session), true)} · ` : ''}${formatSessionTitle(item.session)}` : WINDOW_SURFACE_TITLES[item.surface], 24).trimEnd()
+                const label = `${index > 0 ? ' · ' : ''}${title}`
+                return (
+                  <box key={item.kind === 'session' ? sessionKey(item.session) : item.surface} width={label.length} flexShrink={0}
+                    onMouseDown={(event) => {
+                      if (event.button !== 0) return
+                      event.stopPropagation()
+                      if (item.kind === 'session') { checkpointWindowLayout(); selectTabSession(item.session) }
+                      else showNotice('info', `${WINDOW_SURFACE_TITLES[item.surface]} is preserved · enlarge the terminal to restore it`)
+                    }}>
+                    <text fg={theme.muted} wrapMode="none" selectable={false}>{label}</text>
+                  </box>
+                )
+              })}
+              <text fg={theme.dim} flexShrink={0} wrapMode="none"> · enlarge to restore</text>
+            </box>
+          ) : null}
           <box
             id="window-area"
             ref={windowAreaRef}
@@ -27058,6 +27227,18 @@ export default function OpenTuiApp() {
         />
       ) : null}
 
+      {projectedWindowGeometry ? (() => {
+        const area = windowAreaRect()
+        if (!area) return null
+        const top = area.y - windowOverflowRows + projectedWindowGeometry.overflowRows
+        return projectedWindowGeometry.rects.map((rect, index) => (
+          <box key={index} id={`window-preview:${index}`} position="absolute"
+            left={area.x + rect.x} top={top + rect.y} width={rect.width} height={rect.height}
+            zIndex={sessionDrag ? 899 : MODAL_CONTENT_Z_INDEX - 2}
+            border borderStyle="double" borderColor={theme.cyan}
+            title={index === 0 ? ' Reader ' : ` ${index} `} titleColor={theme.cyan} />
+        ))
+      })() : null}
       {sessionDrag ? (() => {
         // Where a dragged session would land, and the session itself under the
         // pointer. Drawn only: the press that started the drag holds it, so
@@ -27179,7 +27360,12 @@ export default function OpenTuiApp() {
           current={currentWindowLayoutAction}
           fullscreen={fullscreenMode}
           saved={savedWindowLayouts.map((entry) => ({ id: entry.id, name: entry.name, detail: describeSavedLayout(entry) }))}
-          onSave={() => saveCurrentWindowLayout()}
+          onSave={(name) => saveCurrentWindowLayout(name)}
+          onRename={(id, name) => editSavedWindowLayout(id, name)}
+          onUpdate={(id) => editSavedWindowLayout(id)}
+          onPreview={setWindowLayoutPreview}
+          previewLines={projectedWindowGeometry?.lines}
+          previewDetail={projectedWindowGeometry?.detail}
           onRestore={(id) => restoreWindowLayout(id)}
           onDelete={(id) => deleteSavedWindowLayout(id)}
           onPick={(action) => applyWindowLayout(action)}

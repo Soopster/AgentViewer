@@ -27,10 +27,12 @@ const NAMES = ['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot']
 const SESSIONS: Session[] = NAMES.map((name, index) => ({
   sessionId: `win-${name}`, provider: 'claude', cwd: CWD, summary: `Win ${name}`, firstPrompt: `Win ${name}`, lastModified: 1_700_000_000_000 - index * 1000,
 }))
+const failedWindowSessions = new Set<string>()
+const viewerNotes: Array<{ id: string; sessionId: string; provider: 'claude'; title: string; createdAt: number }> = []
 const marker = (session: Session | string) => `${(typeof session === 'string' ? session : session.sessionId).toUpperCase()}-BODY`
 const card = (session: Session): TuiTranscriptCard => ({
   key: `${session.sessionId}-card`, role: 'assistant', provider: 'claude', label: 'Assistant', category: 'conversation', autoFold: false,
-  compactSummary: marker(session), lines: [{ text: marker(session), tone: 'default' }], expandedLines: [{ text: marker(session), tone: 'default' }],
+  compactSummary: marker(session), lines: [{ text: marker(session), tone: failedWindowSessions.has(session.sessionId) ? 'result_error' : 'default' }], expandedLines: [{ text: marker(session), tone: 'default' }],
   searchText: marker(session), searchHaystackLower: marker(session).toLowerCase(),
 })
 // Bravo's history is longer than a pane loads (80 cards), with one needle near the start.
@@ -47,7 +49,7 @@ const detailFor = (session: Session) => ({
   transcriptCardsDensity: 'balanced' as const, transcriptCardsShowToolCalls: true, contextUsage: null,
 })
 const detailClient = await import('./sessionDetailWorkerClient')
-mock.module('./sessionDetailWorkerClient', () => ({ ...detailClient, readTuiSessionsAsync: async () => SESSIONS, readTuiSessionDetailAsync: async (session: Session) => detailFor(session) }))
+mock.module('./sessionDetailWorkerClient', () => ({ ...detailClient, readTuiSessionsAsync: async () => SESSIONS.map((session) => ({ ...session })), readTuiSessionDetailAsync: async (session: Session) => detailFor(session) }))
 const threadingClient = await import('./threadingWorkerClient')
 mock.module('./threadingWorkerClient', () => ({ ...threadingClient, getTranscriptCardsSync: (session: Session) => cardsFor(session), formatTranscriptCardsAsync: async (session: Session) => cardsFor(session) }))
 const metadataClient = await import('./metadataWorkerClient')
@@ -55,10 +57,10 @@ mock.module('./metadataWorkerClient', () => ({ ...metadataClient, readTuiSession
 const service = await import('../../lib/tui/service')
 mock.module('../../lib/tui/service', () => ({
   ...service,
-  readTuiSessions: async () => SESSIONS,
+  readTuiSessions: async () => SESSIONS.map((session) => ({ ...session })),
   readTuiSessionDetail: async (session: Session) => detailFor(session),
   readTuiSessionMetadata: async () => ({ models: [], currentModel: null, contextUsage: null }),
-  readTuiRuntimeActivity: async () => ({ running: [], waiting: [], attention: [] }),
+  readTuiRuntimeActivity: async () => ({ running: [], waiting: [], attention: [...viewerNotes] }),
   listTuiRunningSessions: async () => [],
   prewarmTuiSession: async () => {},
 }))
@@ -74,7 +76,7 @@ const fail = (message: string): never => {
 }
 const check = (condition: unknown, message: string) => { if (!condition) fail(message) }
 const waitFor = async (label: string, test: () => boolean) => {
-  const deadline = Date.now() + 6_000
+  const deadline = Date.now() + 10_000
   while (Date.now() < deadline) {
     if (test()) return
     await settle(80)
@@ -190,9 +192,24 @@ await settle(2500)
 
 // ── A grid of six ───────────────────────────────────────────────────────────
 await openMenu()
+await waitFor('a geometry preview before applying a layout', () => !!frame('window-layout:preview') && !!frame('window-preview:0'))
+check(panes().length === 0, 'previewing a layout applied it')
 const six = frame('window-layout:grid-six')!
+await act(async () => { await setup.mockMouse.moveTo(six.x + 3, six.y + 1) })
+await settle(100)
+await waitFor('all six frames in the layout preview', () => !!frame('window-preview:5'))
+const predictedGrid = [0, 1, 2, 3, 4, 5].map((index) => {
+  const rect = frame(`window-preview:${index}`)!
+  return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+})
+check(panes().length === 0, 'hovering applied the grid')
 await click(six.x + 3, six.y + 1)
 await waitFor('five panes beside the reader', () => panes().length === 5)
+for (let index = 0; index < 6; index += 1) {
+  const actual = frame(index === 0 ? 'transcript-reader' : `split-pane:${index - 1}`)!
+  const predicted = predictedGrid[index]!
+  check(actual.x === predicted.x && actual.y === predicted.y && actual.width === predicted.width && actual.height === predicted.height, `preview geometry differs from applied window ${index}: ${JSON.stringify(predicted)} / ${JSON.stringify(actual)}`)
+}
 {
   const reader = frame('transcript-reader')!
   const [a, b, c, d, e] = panes() as [Frame, Frame, Frame, Frame, Frame]
@@ -200,6 +217,40 @@ await waitFor('five panes beside the reader', () => panes().length === 5)
   check(e.x + e.width <= frame('window-area')!.x + frame('window-area')!.width, 'the grid runs past the window area')
 }
 console.log('A grid of six: the reader and two panes on top, three below.')
+
+// Window undo restores logical panes even if the terminal changed size since
+// the action. A resize must not become an undo step or rewrite the pane order.
+{
+  await waitFor('all initial pane sessions to load', () => [0, 1, 2, 3, 4].every((index) => paneName(index) !== null))
+  const order = [0, 1, 2, 3, 4].map(paneName)
+  await chordKey('x')
+  await waitFor('one pane closed', () => panes().length === 4)
+  await act(async () => { setup.resize(90, 46) })
+  await settle(300)
+  await waitFor('the overflow strip on a narrow terminal', () => !!frame('window-overflow') && panes().length === 0)
+  check(setup.captureCharFrame().includes('hidden'), 'the hidden panes have no visible overflow indicator')
+  await chordKey('u')
+  await act(async () => { setup.resize(220, 46) })
+  await settle(300)
+  await waitFor('undo to restore all five panes after growing', () => panes().length === 5 && [0, 1, 2, 3, 4].every((index) => paneName(index) !== null))
+  check([0, 1, 2, 3, 4].every((index) => paneName(index) === order[index]), 'undo or resizing changed pane order')
+  check(!frame('window-overflow'), 'the strip remained after all panes fitted')
+  const before = frame('transcript-reader')!.width
+  await chordKey('>')
+  check(frame('transcript-reader')!.width !== before, 'the resize did not change geometry')
+  await chordKey('u')
+  check(frame('transcript-reader')!.width === before, 'undo did not restore the reader ratio')
+  // Height is constrained too, including the row occupied by the strip.
+  await act(async () => { setup.resize(220, 24) })
+  await settle(300)
+  await waitFor('overflow when the terminal is short', () => !!frame('window-overflow') && panes().length < 5)
+  await act(async () => { setup.resize(220, 46) })
+  await settle(300)
+  await waitFor('all panes restored after growing taller', () => panes().length === 5 && !frame('window-overflow') && [0, 1, 2, 3, 4].every((index) => paneName(index) !== null))
+  check([0, 1, 2, 3, 4].every((index) => paneName(index) === order[index]), 'height changes rewrote pane order')
+  console.log('Undo restores closed panes and sizes; narrow and short terminals preserve the full window order.')
+}
+
 {
   // The bottom row's divider: the first bottom pane's right border.
   const first = frame('split-pane:2')!
@@ -215,6 +266,10 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   check(frame('transcript-reader')!.width === readerWidthBefore && frame('split-pane:0')!.width === topPaneWidthBefore, 'the bottom divider moved the top row')
   await chordKey(']')
   check(frame('split-pane:2')!.width > wider.width, '⌃B ] did not widen it further')
+  await chordKey('u')
+  check(frame('split-pane:2')!.width === wider.width, 'undo did not restore the keyboard resize')
+  await chordKey('u')
+  check(frame('split-pane:2')!.width === first.width, 'a divider drag must undo in one step')
   console.log('The bottom row\'s divider drags, and ⌃B [ ] move it from the keyboard.')
 }
 
@@ -247,6 +302,7 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   const row = railRow(hidden)
   await drag({ x: row.x + 1, y: row.y }, { x: first.x + first.width - 2, y: first.y + Math.floor(first.height / 2) }, () => {
     check(setup.captureCharFrame().includes('Beside pane 1'), 'a pane\'s edge does not say it will insert beside it')
+    check(!!frame('window-preview:5'), 'a drop does not preview every resulting window')
   })
   await waitFor(`${hidden} beside pane 1`, () => panes().length === 5 && paneName(1) === hidden)
   console.log('Dropping on a pane\'s edge inserts beside it.')
@@ -262,6 +318,10 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   const right = paneName(1)
   await arrowChord('right', true)
   await waitFor('⌃B ⇧→ to swap the two top panes', () => paneName(0) === right && paneName(1) === left)
+  await chordKey('u')
+  await waitFor('undo to restore the pane positions', () => paneName(0) === left && paneName(1) === right)
+  await arrowChord('right', true)
+  await waitFor('the swap again', () => paneName(0) === right && paneName(1) === left)
   await chordKey('m')
   await waitFor('⌃B m to zoom one window', () => panes().length === 1)
   const area = frame('window-area')!
@@ -272,18 +332,45 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   console.log('⌃B ⇧arrows swap windows; ⌃B m zooms and restores.')
 }
 
+// Dropping in the middle replaces/swaps a pane; undo restores both occupants.
+{
+  await waitFor('pane sessions after zoom', () => [0, 1, 2, 3, 4].every((index) => paneName(index) !== null))
+  const order = [0, 1, 2, 3, 4].map(paneName)
+  const source = frame('split-pane:1')!
+  const target = frame('split-pane:0')!
+  await drag({ x: source.x + 10, y: source.y }, { x: target.x + Math.floor(target.width / 2), y: target.y + Math.floor(target.height / 2) })
+  await waitFor('drop to replace the first pane', () => paneName(0) === order[1])
+  await chordKey('u')
+  await waitFor('undo to restore both replaced sessions', () => [0, 1, 2, 3, 4].every((index) => paneName(index) === order[index]))
+  // Swapping the reader needs to restore its session too, not just the pins.
+  await act(async () => { setup.mockInput.pressEscape() })
+  await settle(100)
+  await arrowChord('right', true)
+  await waitFor('reader swapped with a pane', () => !readerShows('alpha'))
+  await chordKey('u')
+  await waitFor('undo to restore the reader and pane order', () => readerShows('alpha') && [0, 1, 2, 3, 4].every((index) => paneName(index) === order[index]))
+  console.log('Moves and replacements undo together with the reader session and divider geometry.')
+}
+
 // ── Saved layouts ───────────────────────────────────────────────────────────
 {
   // Panes remount after a zoom; read the order once each shows its session again.
   await waitFor('every pane to show its session', () => [0, 1, 2, 3, 4].every((index) => paneName(index) !== null))
   const order = [0, 1, 2, 3, 4].map(paneName)
-  await openMenu()
+  await act(async () => { setup.resize(90, 46) })
+  await settle(300)
+  await chordKey('w')
+  await waitFor('the layout menu while panes are hidden', () => !!frame('window-layout:save'))
   const save = frame('window-layout:save')!
   await click(save.x + 4, save.y)
   await waitFor('the save to be reported', () => setup.captureCharFrame().includes('Saved Layout 1'))
   // The menu stays open after a save, now listing it.
   check(setup.captureCharFrame().includes('Layout 1') && !!frame('window-layout:grid'), 'the menu closed on save, or does not list the saved layout')
+  const { listSavedWindowLayouts } = await import('./windowLayoutStore')
+  check(listSavedWindowLayouts(CWD)[0]?.panes.length === 5, 'saving at a small size discarded hidden panes')
   await act(async () => { setup.mockInput.pressKey('5') })
+  await act(async () => { setup.resize(220, 46) })
+  await settle(300)
   await waitFor('reader only', () => panes().length === 0)
   await openMenu()
   const savedRow = setup.renderer.root.findDescendantById('window-layout:save')
@@ -292,6 +379,74 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   await click(row.x + 1, row.y)
   await waitFor('the saved layout to come back in order', () => panes().length === 5 && [0, 1, 2, 3, 4].every((index) => paneName(index) === order[index]))
   console.log('A saved layout restores the same windows in the same places.')
+}
+
+// Named workspaces: rename and update preserve the saved identity, and the
+// native input owns ordinary keys and bracketed paste while it is being edited.
+{
+  const { listSavedWindowLayouts } = await import('./windowLayoutStore')
+  const saved = listSavedWindowLayouts(CWD)[0]!
+  await openMenu()
+  const rename = frame(`window-layout:rename:${saved.id}`)!
+  check(rename, 'rename is not available beside the saved workspace')
+  await click(rename.x + 1, rename.y)
+  await waitFor('the layout name input', () => !!frame('window-layout:name'))
+  await act(async () => {
+    setup.mockInput.pressKey('END')
+    for (let i = 0; i < saved.name.length; i += 1) setup.mockInput.pressBackspace()
+  })
+  await act(async () => { await setup.mockInput.pasteBracketedText('Review') })
+  await act(async () => { setup.mockInput.pressEnter() })
+  await waitFor('the workspace renamed', () => listSavedWindowLayouts(CWD)[0]?.name === 'Review')
+  check(listSavedWindowLayouts(CWD)[0]?.id === saved.id, 'rename created a replacement layout')
+  const savedRow = frame(`window-layout:saved:${saved.id}`)!
+  await act(async () => { await setup.mockMouse.moveTo(savedRow.x + 5, savedRow.y) })
+  await settle(100)
+  await waitFor('the saved layout geometry preview', () => !!frame('window-layout:preview') && !!frame('window-preview:5'))
+  await act(async () => { setup.mockInput.pressEscape() })
+  await chordKey('x')
+  await waitFor('four panes for the updated workspace', () => panes().length === 4)
+  await openMenu()
+  const update = frame(`window-layout:update:${saved.id}`)!
+  await click(update.x + 1, update.y)
+  const updated = listSavedWindowLayouts(CWD)[0]!
+  check(updated.panes.length === 4 && updated.id === saved.id && updated.name === 'Review', 'update did not replace the contents under the existing name')
+  await act(async () => { setup.mockInput.pressEscape() })
+  await chordKey('u')
+  await waitFor('the original five panes back', () => panes().length === 5)
+  await openMenu()
+  await act(async () => { setup.mockInput.pressKey('n') })
+  await waitFor('the named-save input', () => !!frame('window-layout:name'))
+  await act(async () => { await setup.mockInput.typeText('Debugging') })
+  await act(async () => { setup.mockInput.pressEnter() })
+  await waitFor('the named workspace saved', () => listSavedWindowLayouts(CWD).some((entry) => entry.name === 'Debugging' && entry.panes.length === 5))
+  await act(async () => { setup.mockInput.pressEscape() })
+  console.log('Saved workspaces can be named, renamed with paste, updated in place, and previewed before restoring.')
+}
+
+// Updates mark background panes passively. Only the explicit attention chord
+// moves focus, and looking at a pane acknowledges output/errors, not prompts.
+{
+  await waitFor('pane contents before background activity', () => [0, 1, 2, 3, 4].every((index) => paneName(index) !== null))
+  await settle(100)
+  const targetIndex = [0, 1, 2, 3, 4].find((index) => paneName(index) === 'charlie')!
+  const sessionIndex = SESSIONS.findIndex((session) => session.sessionId === 'win-charlie')
+  failedWindowSessions.add('win-charlie')
+  SESSIONS[sessionIndex] = { ...SESSIONS[sessionIndex]!, lastModified: Date.now() }
+  await waitFor('the background error badge', () => setup.captureCharFrame().includes('! error'))
+  check(readerShows('alpha') && focusedPane() === null, 'background output stole focus')
+  check(setup.captureCharFrame().includes('unread'), 'new background output was not marked unread')
+  await chordKey('a')
+  await waitFor('attention to focus the affected pane', () => !setup.captureCharFrame().includes('! error') && !setup.captureCharFrame().includes('unread'))
+  check(readerShows('alpha'), 'the attention shortcut replaced the reader instead of focusing a visible pane')
+  viewerNotes.push({ id: 'window-input', sessionId: 'win-charlie', provider: 'claude', title: 'Needs a decision', createdAt: Date.now() })
+  await waitFor('the pending-input badge', () => setup.captureCharFrame().includes('? input'))
+  check(paneName(targetIndex) === 'charlie', 'a prompt moved the panes')
+  viewerNotes.length = 0
+  failedWindowSessions.clear()
+  await waitFor('the resolved input badge to disappear', () => !setup.captureCharFrame().includes('? input'))
+  await act(async () => { setup.mockInput.pressEscape() })
+  console.log('Unread output, errors, and pending input are passive; the attention chord acknowledges the chosen window.')
 }
 
 // ── Search a pane's whole history ───────────────────────────────────────────

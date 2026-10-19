@@ -7,6 +7,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import type { TuiThemePalette } from '../theme'
 import { MODAL_CONTENT_Z_INDEX } from './layers'
+import { WindowButton } from './WindowButton'
+import { fitText } from './textLayout'
 
 export type WindowLayoutAction =
   | 'reader-left' | 'reader-right' | 'reader-top' | 'reader-bottom'
@@ -65,6 +67,11 @@ export function WindowLayoutPicker({
   onRestore,
   onSave,
   onDelete,
+  onRename,
+  onUpdate,
+  onPreview,
+  previewLines = [],
+  previewDetail,
   onClose,
   onKeyHandlerReady,
 }: {
@@ -78,10 +85,15 @@ export function WindowLayoutPicker({
   saved?: SavedLayoutRow[]
   onPick: (action: WindowLayoutAction) => void
   onRestore?: (id: string) => void
-  onSave?: () => void
+  onSave?: (name?: string) => void
   onDelete?: (id: string) => void
+  onRename?: (id: string, name: string) => void
+  onUpdate?: (id: string) => void
+  onPreview?: (target: string | null) => void
+  previewLines?: string[]
+  previewDetail?: string
   onClose: () => void
-  onKeyHandlerReady: (handler: (key: Key) => void) => void
+  onKeyHandlerReady: (handler: (key: Key) => boolean) => void
 }) {
   const targets = useMemo<Target[]>(() => [
     ...ICONS,
@@ -92,6 +104,13 @@ export function WindowLayoutPicker({
   const [cursor, setCursor] = useState(() => Math.max(0, ICONS.findIndex((icon) => icon.action === current)))
   const at = Math.min(cursor, targets.length - 1)
   const target = targets[at]
+  const [editing, setEditing] = useState<{ id: string | null; draft: string } | null>(null)
+  const previewKey = target?.kind === 'icon' ? `action:${target.action}` : target?.kind === 'saved' ? `saved:${target.id}` : target?.kind === 'fullscreen' ? 'action:fullscreen' : null
+  useEffect(() => { onPreview?.(previewKey) }, [onPreview, previewKey])
+  const rename = (id: string) => {
+    setCursor(ICONS.length + 1 + Math.max(0, saved.findIndex((row) => row.id === id)))
+    setEditing({ id, draft: saved.find((row) => row.id === id)?.name ?? '' })
+  }
 
   const activate = useCallback((entry: Target | undefined) => {
     if (!entry) return
@@ -102,7 +121,18 @@ export function WindowLayoutPicker({
   }, [onPick, onRestore, onSave])
 
   const handleKey = useCallback((key: Key) => {
-    if (key.name === 'escape' || key.sequence === 'q') { onClose(); return }
+    if (editing) {
+      if (key.name === 'escape') { setEditing(null); return true }
+      if (key.name === 'return') {
+        if (!editing.draft.trim()) return true
+        if (editing.id) onRename?.(editing.id, editing.draft)
+        else onSave?.(editing.draft)
+        setEditing(null)
+        return true
+      }
+      return false // the focused input owns typing, selection, navigation and paste
+    }
+    if (key.name === 'escape' || key.sequence === 'q') { onClose(); return true }
     const current = targets[at]
     const iconAt = (section: number, column: number) => {
       const row = ICONS.filter((icon) => icon.section === section)
@@ -110,40 +140,46 @@ export function WindowLayoutPicker({
     }
     if (key.name === 'right' || key.sequence === 'l') {
       if (current?.kind === 'icon') setCursor(Math.min(ICONS.length - 1, at + 1))
-      return
+      return true
     }
     if (key.name === 'left' || key.sequence === 'h') {
       if (current?.kind === 'icon') setCursor(Math.max(0, at - 1))
-      return
+      return true
     }
     // Up and down move between rows of icons by column, then through the list below.
     if (key.name === 'down' || key.sequence === 'j') {
       if (current?.kind === 'icon' && current.section < WINDOW_LAYOUT_SECTIONS.length - 1) setCursor(iconAt(current.section + 1, current.column))
       else if (current?.kind === 'icon') setCursor(ICONS.length)
       else setCursor(Math.min(targets.length - 1, at + 1))
-      return
+      return true
     }
     if (key.name === 'up' || key.sequence === 'k') {
       if (current?.kind === 'icon' && current.section > 0) setCursor(iconAt(current.section - 1, current.column))
       else if (current?.kind === 'fullscreen') setCursor(iconAt(WINDOW_LAYOUT_SECTIONS.length - 1, 0))
       else if (current?.kind !== 'icon') setCursor(Math.max(0, at - 1))
-      return
+      return true
     }
-    if (key.name === 'return' || key.name === 'space') { activate(current); return }
-    if (key.sequence === 'f') { onPick('fullscreen'); return }
-    if (key.sequence === 'S' || key.sequence === 's') { onSave?.(); return }
-    if ((key.sequence === 'x' || key.name === 'delete') && current?.kind === 'saved') { onDelete?.(current.id); return }
+    if (key.name === 'return' || key.name === 'space') { activate(current); return true }
+    if (key.sequence === 'f') { onPick('fullscreen'); return true }
+    if (key.sequence === 'S' || key.sequence === 's') { onSave?.(); return true }
+    if ((key.sequence === 'x' || key.name === 'delete') && current?.kind === 'saved') { onDelete?.(current.id); return true }
+    if (key.sequence === 'n' && onSave) { setEditing({ id: null, draft: '' }); return true }
+    if (key.sequence === 'r' && current?.kind === 'saved') { setEditing({ id: current.id, draft: saved.find((row) => row.id === current.id)?.name ?? '' }); return true }
+    if (key.sequence === 'u' && current?.kind === 'saved') { onUpdate?.(current.id); return true }
     // 1–9 pick an arrangement by position, as the icons read left to right.
     if (/^[1-9]$/.test(key.sequence)) {
       const icon = ICONS[Number(key.sequence) - 1]
       if (icon) onPick(icon.action)
     }
-  }, [activate, at, onClose, onDelete, onPick, onSave, targets])
+    return true
+  }, [editing, onRename, onUpdate, saved, activate, at, onClose, onDelete, onPick, onSave, targets])
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
 
   const listRows = 1 + (saved.length || onSave ? 1 + saved.length + (onSave ? 1 : 0) : 0)
-  const menuHeight = 2 + 5 + 1 + 5 + 2 + listRows + 1
+  const baseHeight = 2 + 5 + 1 + 5 + 2 + listRows + 1 + (editing ? 2 : 0)
+  const previewHeight = onPreview ? Math.min(8, Math.max(0, height - baseHeight - 2)) : 0
+  const menuHeight = baseHeight + previewHeight
   const left = Math.max(0, Math.floor((width - MENU_WIDTH) / 2))
   const top = Math.max(0, Math.floor((height - menuHeight) / 2))
 
@@ -159,7 +195,7 @@ export function WindowLayoutPicker({
       flexDirection="row"
       height={1}
       backgroundColor={at === index ? theme.surface3 : undefined}
-      onMouseOver={() => setCursor(index)}
+      onMouseOver={() => { if (!editing) setCursor(index) }}
       onMouseDown={(event: { button: number; stopPropagation?: () => void }) => {
         if (event.button !== 0) return
         event.stopPropagation?.()
@@ -172,8 +208,8 @@ export function WindowLayoutPicker({
 
   const hint = target?.kind === 'icon'
     ? `${WINDOW_LAYOUT_SECTIONS[target.section]!.choices[target.column]!.label} · ⏎ applies · esc`
-    : target?.kind === 'saved' ? 'Restore this layout · x deletes it · esc'
-    : target?.kind === 'save' ? 'Save the windows on screen now · esc'
+    : target?.kind === 'saved' ? '⏎ restore · r rename · u update · x delete · esc'
+    : target?.kind === 'save' ? 's save · n named layout · esc'
     : 'Toggle full screen · ⏎ · esc'
 
   return (
@@ -215,7 +251,7 @@ export function WindowLayoutPicker({
                   borderColor={selected || lit ? theme.cyan : theme.border}
                   backgroundColor={lit ? theme.cyan : selected ? theme.surface3 : theme.surface}
                   // Pointing at a choice selects it, so the line below names what a click would do.
-                  onMouseOver={() => setCursor(index)}
+                  onMouseOver={() => { if (!editing) setCursor(index) }}
                   onMouseDown={(event: { button: number; stopPropagation?: () => void }) => {
                     if (event.button !== 0) return
                     event.stopPropagation?.()
@@ -246,13 +282,29 @@ export function WindowLayoutPicker({
       {saved.length > 0 || onSave ? <text fg={theme.dim} wrapMode="none">Saved layouts</text> : null}
       {saved.map((row, index) => listRow(`window-layout:saved:${row.id}`, ICONS.length + 1 + index, (
         <>
-          <text fg={theme.text} wrapMode="none">{`  ${row.name}`}</text>
-          <text fg={theme.dim} wrapMode="none">{`  ${row.detail}`}</text>
+          <text fg={theme.text} width={MENU_WIDTH - 16} flexShrink={0} wrapMode="none">{fitText(`  ${row.name} · ${row.detail}`, MENU_WIDTH - 16)}</text>
+          {onRename ? <WindowButton id={`window-layout:rename:${row.id}`} label=" r " theme={theme} onPress={() => rename(row.id)} /> : null}
+          {onUpdate ? <WindowButton id={`window-layout:update:${row.id}`} label=" u " theme={theme} onPress={() => onUpdate(row.id)} /> : null}
+          {onDelete ? <WindowButton id={`window-layout:delete:${row.id}`} label=" × " theme={theme} tone="danger" onPress={() => onDelete(row.id)} /> : null}
         </>
       ), () => onRestore?.(row.id)))}
       {onSave ? listRow('window-layout:save', ICONS.length + 1 + saved.length, (
         <text fg={theme.cyan} wrapMode="none">{'  + Save this layout'}</text>
       ), () => onSave()) : null}
+      {editing ? (
+        <box height={2} flexShrink={0} flexDirection="column">
+          <text fg={theme.cyan} wrapMode="none">{editing.id ? 'Rename layout · enter saves · esc cancels' : 'Name this layout · enter saves · esc cancels'}</text>
+          <input id="window-layout:name" focused value={editing.draft} maxLength={60} placeholder="Review, Debugging…"
+            onInput={(draft: string) => setEditing((current) => current ? { ...current, draft } : null)} />
+        </box>
+      ) : null}
+      {previewHeight > 0 ? (
+        <box id="window-layout:preview" height={previewHeight} flexShrink={0} flexDirection="column" overflow="hidden">
+          <text fg={theme.dim} wrapMode="none">{previewDetail ?? 'Choose a layout to preview its windows'}</text>
+          <text fg={theme.cyan} wrapMode="none">{previewLines.slice(0, Math.max(0, previewHeight - 2)).join('\n')}</text>
+          <text fg={theme.dim} wrapMode="none">R reader · numbers are panes · ⏎ applies</text>
+        </box>
+      ) : null}
       <text fg={theme.dim} wrapMode="none">{hint}</text>
     </box>
   )
