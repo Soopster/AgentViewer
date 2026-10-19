@@ -75,8 +75,8 @@ export const SPLIT_CHORD_HELP: SplitChordSection[] = [
   {
     title: 'focus',
     entries: [
-      { keys: 'o · → · tab', label: 'focus next pane', short: 'focus' },
-      { keys: '←', label: 'focus previous pane', hint: false },
+      { keys: 'o · tab', label: 'focus next pane', short: 'focus' },
+      { keys: '← · → · ↑ · ↓', label: 'focus the window that way', hint: false },
       { keys: ';', label: 'flip reader ↔ last pane', hint: false },
       { keys: '1 … 9', label: 'focus pane by number', hint: false },
       { keys: '?', label: 'this help', short: 'all keys' },

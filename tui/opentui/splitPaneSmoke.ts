@@ -134,7 +134,7 @@ assert.equal(adjustSplitReaderShare(0.27, -SPLIT_SHARE_STEP, 0.5), SPLIT_SHARE_M
 const DISPATCHED_SPLIT_CHORDS = [
   '%', 'v', '"', 's', 'r', 'n', 'x', 'w', 'z',
   '<', '>', '=',
-  'o', '→', 'tab', '←', ';', '1 … 9', '?', 'esc', '⌃C', '⌃G',
+  'o', 'tab', '←', '→', '↑', '↓', ';', '1 … 9', '?', 'esc', '⌃C', '⌃G',
 ]
 const documented = new Set(documentedSplitChordKeys())
 for (const chord of DISPATCHED_SPLIT_CHORDS) {

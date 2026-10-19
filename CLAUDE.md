@@ -1289,6 +1289,18 @@ drawn in have one source; `windowLayoutSmoke.ts` checks every arrangement tiles 
   reachable when panes fill the rest of the area. A label follows the pointer saying what the drop
   will do, and the divider shows the share and size it is setting.
 - **A layout short of tabs fills from the rail's most recent sessions** rather than leaving holes.
+- **A press starts a gesture layer** (`sessionPressing`): a transparent full-screen box that takes the
+  drag and the release. A tab strip or rail row is one row tall, and OpenTUI captures a drag for
+  whatever is under the pointer at the first motion, so a downward drag was captured by the reader
+  and the tab never saw it. Because the layer may also receive the release of a plain click, the
+  click's action (select the row, open the tab) is registered at press and run by whichever of the
+  row or the layer gets the release — `release` clears the press, so it runs once.
+- **Edge drops join a stack or grid** instead of re-laying everything as a split; a side drop moves
+  the reader to the other side.
+- **A second divider** (`split-secondary-divider`, drawn at the root over the border): the grid's
+  row split, or a stack's first pane (`secondaryShare`, kept in `tui.json`).
+- **`⌃B` arrows focus the window that way** (`windowInDirection`, from the laid-out frames,
+  preferring the frame directly beside); `⌃B o`/Tab still cycle.
 - **Title-bar controls are `WindowButton`s** (dim at rest, lit under the pointer); a double-click on a
   title bar zooms the reader or opens a pane in the reader (`isDoubleClick` — OpenTUI reports
   presses only). A click outside the layout menu closes it; its backdrop sits at the menu's own layer,

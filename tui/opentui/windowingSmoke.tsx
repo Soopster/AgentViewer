@@ -109,6 +109,24 @@ const drag = async (from: { x: number; y: number }, to: { x: number; y: number }
   await settle(300)
 }
 const rail = () => frame('session-rail')!
+// The pane whose frame is lit: the focused one has the accent border, the rest share one colour.
+const focusedPane = (): number | null => {
+  const colours = [0, 1, 2].map((index) => {
+    const wrapper = setup.renderer.root.findDescendantById(`split-pane:${index}`) as unknown as { getChildren(): Array<{ borderColor?: { toString(): string } }> } | null
+    return wrapper ? String(wrapper.getChildren()[0]?.borderColor ?? '') : null
+  })
+  const present = colours.filter((colour): colour is string => colour !== null)
+  const unique = present.filter((colour) => present.filter((other) => other === colour).length === 1)
+  if (unique.length !== 1 || present.length < 2) return null
+  return colours.indexOf(unique[0]!)
+}
+// pressKey types its argument literally ("right" would be ⌃B r, rotate); arrows have their own call.
+const chordArrow = async (direction: 'up' | 'down' | 'left' | 'right') => {
+  await act(async () => { setup.mockInput.pressKey('b', { ctrl: true }) })
+  await settle(60)
+  await act(async () => { setup.mockInput.pressArrow(direction) })
+  await settle(150)
+}
 const paneShows = (index: number, name: string) => {
   const pane = frame(`split-pane:${index}`)
   if (!pane) return false
@@ -212,6 +230,29 @@ console.log('The menu\'s grid puts the reader and three panes two by two.')
   await waitFor('the panes to swap', () => paneShows(2, moving) && paneShows(0, before))
   console.log('Dropping a pane on another swaps them.')
 }
+{
+  // ⌃B arrows move focus to the window that way: right of the reader is pane 1,
+  // below that is pane 3, left of that is pane 2.
+  await chordArrow('right')
+  check(focusedPane() === 0, `⌃B → from the reader did not focus the pane beside it (${focusedPane()})`)
+  await chordArrow('down')
+  check(focusedPane() === 2, `⌃B ↓ did not focus the pane below (${focusedPane()})`)
+  await chordArrow('left')
+  check(focusedPane() === 1, `⌃B ← did not focus the pane to the left (${focusedPane()})`)
+  console.log('⌃B arrows focus the window in that direction.')
+}
+{
+  // The grid's second divider: the row split, dragged down four rows.
+  const readerBefore = frame('transcript-reader')!
+  const handle = frame('split-secondary-divider')
+  check(handle && handle.y === readerBefore.y + readerBefore.height - 1, `the grid's row divider is not on the reader's bottom border: ${JSON.stringify(handle)}`)
+  await drag({ x: handle!.x + 10, y: handle!.y }, { x: handle!.x + 10, y: handle!.y + 4 }, () => {
+    check(/top \d+% · \d+ rows/.test(setup.captureCharFrame()), 'the row divider does not show the size it is setting')
+  })
+  const readerAfter = frame('transcript-reader')!
+  check(readerAfter.height >= readerBefore.height + 3 && panes()[1]!.y === readerAfter.y + readerAfter.height, `the row divider did not move the row split: ${readerBefore.height} → ${readerAfter.height}`)
+  console.log('The grid\'s row divider drags.')
+}
 if (process.env.DUMP_FRAME) console.log(setup.captureCharFrame())
 
 await act(async () => { setup.mockInput.pressKey('b', { ctrl: true }) })
@@ -225,6 +266,30 @@ reader = frame('transcript-reader')!
 const stack = panes()
 check(stack.every((pane) => pane.x === stack[0]!.x && pane.x >= reader.x + reader.width - 1), `the stack is not one column right of the reader: ${JSON.stringify(stack)}`)
 console.log('Main + stack puts the panes in one column beside the reader.')
+{
+  // The stack's divider: the first pane's bottom border, dragged up three rows.
+  const first = panes()[0]!
+  const handle = frame('split-secondary-divider')
+  check(handle && handle.y === first.y + first.height - 1, `the stack's divider is not on the first pane's bottom border: ${JSON.stringify(handle)}`)
+  await drag({ x: handle!.x + 5, y: handle!.y }, { x: handle!.x + 5, y: handle!.y - 3 })
+  check(panes()[0]!.height <= first.height - 2, `the stack's divider did not shrink the first pane: ${first.height} → ${panes()[0]!.height}`)
+  console.log('The stack\'s divider sizes its first pane.')
+}
+{
+  // A tab dragged onto the reader's left edge joins the stack rather than
+  // re-laying everything as a split, and moves the stack to that side.
+  reader = frame('transcript-reader')!
+  const tabs = frame('session-tabs')!
+  const inPane = NAMES.find((name) => paneShows(0, name))!
+  const tab = locate(`Win ${inPane}`, tabs)
+  await drag({ x: tab.x + 2, y: tab.y }, { x: reader.x + 2, y: reader.y + Math.floor(reader.height / 2) })
+  await waitFor('the stack to move left of the reader', () => {
+    const now = panes()
+    const after = frame('transcript-reader')!
+    return now.length >= 2 && now.every((pane) => pane.x === now[0]!.x && pane.x < after.x)
+  })
+  console.log('An edge drop in main + stack keeps the stack; a tab drags like a rail row.')
+}
 
 // ── The divider ─────────────────────────────────────────────────────────────
 const before = frame('transcript-reader')!
@@ -233,7 +298,9 @@ await drag({ x: divider.x, y: divider.y + 4 }, { x: divider.x - 12, y: divider.y
   check(frame('split-divider-readout') && /reader \d+% · \d+×\d+/.test(setup.captureCharFrame()), 'the divider drag does not show the size it is setting')
 })
 const after = frame('transcript-reader')!
-check(after.width < before.width - 6, `dragging the divider left did not narrow the reader: ${before.width} → ${after.width}`)
+// Left narrows a reader whose panes are on its right, and widens one whose panes are on its left.
+const readerOnRight = divider.x <= before.x
+check(readerOnRight ? after.width > before.width + 6 : after.width < before.width - 6, `dragging the divider left did not resize the reader the right way: ${before.width} → ${after.width}`)
 check(!setup.renderer.getSelection()?.getSelectedText?.(), 'the divider drag selected text')
 console.log('The divider drags to resize the reader against its panes.')
 
@@ -264,6 +331,16 @@ console.log('A pane\'s × closes it and ⤢ opens it in the reader.')
   await click(restore.x + 2, restore.y)
   await waitFor('full screen to end', () => !setup.captureCharFrame().includes('FULLSCREEN'))
   console.log('Double-clicking a title opens that pane in the reader, or zooms the reader.')
+}
+
+{
+  // A plain click on a tab still opens it.
+  const tabs = frame('session-tabs')!
+  const name = NAMES.find((entry) => entry !== 'alpha' && !readerShows(entry) && setup.captureCharFrame().split('\n')[tabs.y]?.includes(`Win ${entry}`))!
+  const tab = locate(`Win ${name}`, tabs)
+  await click(tab.x + 2, tab.y)
+  await waitFor(`a tab click to open ${name}`, () => readerShows(name))
+  console.log('A tab click still opens it.')
 }
 
 // ── The menu by keyboard: Reader only ───────────────────────────────────────

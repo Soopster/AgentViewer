@@ -37,6 +37,11 @@ export type WindowLayoutInput = {
   maxPanes: number
   /** Fraction of the main axis the reader keeps; SPLIT_SHARE_EVEN for the arrangement's default. */
   readerShare: number
+  /**
+   * The second divider: the grid's top row, or the first pane of a stack, as a
+   * fraction of the height. SPLIT_SHARE_EVEN (or omitted) splits evenly.
+   */
+  secondaryShare?: number
   minPaneWidth: number
   minPaneRows: number
   minReaderWidth: number
@@ -92,17 +97,25 @@ export function computeWindowLayout(input: WindowLayoutInput): WindowLayout {
   if (arrangement === 'main-stack') {
     // As many panes as the column has rows for.
     const fit = Math.max(1, Math.min(wanted, Math.floor(height / input.minPaneRows)))
-    const base = Math.floor(height / fit)
+    const secondary = input.secondaryShare ?? SPLIT_SHARE_EVEN
+    // The first pane may be sized by its divider; the rest share what is left evenly.
+    const first = fit > 1 && secondary !== SPLIT_SHARE_EVEN
+      ? clampExtent(Math.round(height * secondary), input.minPaneRows, height - (fit - 1) * input.minPaneRows)
+      : Math.floor(height / fit)
+    const rest = fit > 1 ? Math.floor((height - first) / (fit - 1)) : 0
     const panes = Array.from({ length: fit }, (_, index) => ({
       width: otherWidth,
       // The rounding remainder goes to the last pane, so the column ends on the reader's last row.
-      height: index === fit - 1 ? height - base * (fit - 1) : base,
+      height: index === 0 ? (fit === 1 ? height : first) : index === fit - 1 ? height - first - rest * (fit - 2) : rest,
     }))
     return { arrangement, visibleCount: fit, reader: { width: readerWidth, height }, panes, secondary: { width: otherWidth, height } }
   }
 
   // Grid: one pane beside the reader; any others share a row below both.
-  const topHeight = Math.floor(height / 2)
+  const secondary = input.secondaryShare ?? SPLIT_SHARE_EVEN
+  const topHeight = secondary === SPLIT_SHARE_EVEN
+    ? Math.floor(height / 2)
+    : clampExtent(Math.round(height * secondary), input.minReaderRows, height - input.minPaneRows)
   const bottomHeight = height - topHeight
   const roomBelow = topHeight >= input.minReaderRows && bottomHeight >= input.minPaneRows
   if (wanted === 1 || !roomBelow) {
@@ -127,6 +140,10 @@ export function computeWindowLayout(input: WindowLayoutInput): WindowLayout {
     panes,
     secondary: { width, height: bottomHeight },
   }
+}
+
+function clampExtent(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(Math.max(min, max), value))
 }
 
 /** Where a drop lands in the window area: an edge makes a pane there, the middle opens it in the reader. */
@@ -162,4 +179,35 @@ export function readerShareAt(area: { x: number; y: number; width: number; heigh
   const extent = Math.max(1, axis === 'x' ? area.width : area.height)
   const fraction = (position - start) / extent
   return readerLast ? 1 - fraction : fraction
+}
+
+export type WindowDirection = 'left' | 'right' | 'up' | 'down'
+type Rect = { x: number; y: number; width: number; height: number }
+
+/**
+ * The window to move focus to from `current` in `direction`: the nearest one
+ * whose centre lies that way, preferring those that overlap on the other axis
+ * (the pane directly beside, not one diagonally across). Null at an edge.
+ */
+export function windowInDirection<Id>(windows: ReadonlyArray<{ id: Id; rect: Rect }>, current: Id, direction: WindowDirection): Id | null {
+  const from = windows.find((window) => window.id === current)
+  if (!from) return null
+  const centre = (rect: Rect) => ({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 })
+  const origin = centre(from.rect)
+  const horizontal = direction === 'left' || direction === 'right'
+  const sign = direction === 'right' || direction === 'down' ? 1 : -1
+  let best: { id: Id; score: number } | null = null
+  for (const window of windows) {
+    if (window.id === current) continue
+    const point = centre(window.rect)
+    const along = (horizontal ? point.x - origin.x : point.y - origin.y) * sign
+    if (along <= 0) continue
+    const overlaps = horizontal
+      ? window.rect.y < from.rect.y + from.rect.height && window.rect.y + window.rect.height > from.rect.y
+      : window.rect.x < from.rect.x + from.rect.width && window.rect.x + window.rect.width > from.rect.x
+    const across = Math.abs(horizontal ? point.y - origin.y : point.x - origin.x)
+    const score = along + across * 2 + (overlaps ? 0 : 10_000)
+    if (!best || score < best.score) best = { id: window.id, score }
+  }
+  return best?.id ?? null
 }

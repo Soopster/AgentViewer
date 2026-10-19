@@ -56,7 +56,7 @@ import {
   setConfiguredTuiVelocityScroll,
   setConfiguredTuiSurfacePanelPlacement,
   setConfiguredTuiWindowArrangement,
-  type TuiWindowArrangement,
+  type TuiWindowArrangementState,
   type TuiSurfacePanelPlacement,
   type TuiSessionReaderState,
   type TuiThemeFollow,
@@ -438,12 +438,12 @@ export async function writeTuiSurfacePanelPlacement(placement: TuiSurfacePanelPl
   await setConfiguredTuiSurfacePanelPlacement(placement)
 }
 
-export async function readTuiWindowArrangement(): Promise<{ arrangement: TuiWindowArrangement; readerLast: boolean }> {
+export async function readTuiWindowArrangement(): Promise<TuiWindowArrangementState> {
   return getConfiguredTuiWindowArrangement()
 }
 
-export async function writeTuiWindowArrangement(arrangement: TuiWindowArrangement, readerLast: boolean): Promise<void> {
-  await setConfiguredTuiWindowArrangement(arrangement, readerLast)
+export async function writeTuiWindowArrangement(state: TuiWindowArrangementState): Promise<void> {
+  await setConfiguredTuiWindowArrangement(state)
 }
 
 export async function readTuiSidebarSort(): Promise<TuiSidebarSort> {
