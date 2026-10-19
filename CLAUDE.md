@@ -1265,6 +1265,29 @@ buffer and a converted line ending both *render perfectly*:
   none was. It asserts colours on open, colours travelling with text when a line
   is inserted above them, and a keyword typed mid-file picking up its own colour.
 
+#### Window layouts and mouse-driven windows
+
+The reader and its split panes are arranged by `tui/opentui/windowLayout.ts`: `split` (the tmux
+axis, now with `readerLast` for a reader on the right or below), `main-stack` (the reader beside a
+column of panes) and `grid` (reader and three panes, two by two; `SPLIT_PANE_ARRANGED_MAX`). The
+layout menu (`WindowLayoutPicker.tsx`, macOS's Move & Resize / Fill & Arrange) opens from the reader's
+`⊞ layout` title button, `⌃B w` or the palette; the arrangement is kept in `tui.json`. App renders
+from `computeWindowLayout`'s sizes, so the widths cards are laid out at and the frames they are
+drawn in have one source; `windowLayoutSmoke.ts` checks every arrangement tiles the area exactly.
+
+- **Sessions are dragged onto the window area.** A rail row or a pane's title row starts a drag; an
+  edge of the area makes the session a pane on that side, the middle opens it in the reader
+  (`windowDropZone`). **Rail rows select on release now**: selecting on press put the session in the
+  reader before it could be dropped beside it. Their text is `selectable={false}`, because a press on
+  selectable text starts a text selection and the drag never reaches the row.
+- **The divider drags** (`split-divider-handle`, the reader's border on the panes' side, held by a
+  root layer like the surface panel's), and each pane's title carries `⤢` (open in the reader) and `×`.
+- Switching arrangement remounts the reader frame under a different parent; its scroll position is
+  restored like any other remount.
+
+`windowingSmoke.tsx` drives all of it with the mouse against fixture sessions and reads laid-out
+frames; five mutations were verified to fail it.
+
 #### Fullscreen rendering: what the renderer already does, and the two escape hatches
 
 Claude Code's "fullscreen" renderer (alternate screen, send only changed cells,

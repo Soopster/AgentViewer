@@ -30,6 +30,8 @@ import { openExternalUrl } from './terminalBrowser'
 import { hasTuiLinkTarget, parseTuiLineTokens, parseTuiLinkTarget } from '../../lib/tuiLinkTargets'
 import { SurfacePanel } from './SurfacePanel'
 import { BrowserSurfaceView } from './SurfaceViews'
+import { computeWindowLayout, readerShareAt, windowDropZone, windowDropZoneRect, type WindowArrangement, type WindowDropZone } from './windowLayout'
+import type { WindowLayoutAction } from './WindowLayoutPicker'
 import {
   EMPTY_SURFACE_PANEL,
   activeSurface,
@@ -144,6 +146,7 @@ import {
   readTuiTranscriptWidth,
   readTuiVelocityScroll,
   readTuiSurfacePanelPlacement,
+  readTuiWindowArrangement,
   readTuiSessionBookmarkIds,
   readTuiAllBookmarks,
   readTuiPrompts,
@@ -200,6 +203,7 @@ import {
   writeTuiTranscriptWidth,
   writeTuiVelocityScroll,
   writeTuiSurfacePanelPlacement,
+  writeTuiWindowArrangement,
   type TuiSessionDetail,
   type TuiProviderInstanceChoice,
   type TuiDiffLayout,
@@ -308,6 +312,8 @@ import {
   runComposerSessionPreparation,
   splitCommandKey,
   SPLIT_SHARE_EVEN,
+  SPLIT_SHARE_MAX,
+  SPLIT_SHARE_MIN,
   SPLIT_SHARE_STEP,
   type SplitPaneOrientation,
   planTeammateWatch,
@@ -424,6 +430,7 @@ const DeskView = lazyComponent(() => import('./DeskView').then((module) => modul
 const PromptLibraryPopover = lazyComponent(() => import('./PromptLibraryPopover').then((module) => module.PromptLibraryPopover))
 const CheckpointPopover = lazyComponent(() => import('./CheckpointPopover').then((module) => module.CheckpointPopover))
 const FileHistoryPopover = lazyComponent(() => import('./FileHistoryPopover').then((module) => module.FileHistoryPopover))
+const WindowLayoutPicker = lazyComponent(() => import('./WindowLayoutPicker').then((module) => module.WindowLayoutPicker))
 const DailySummaryPopover = lazyComponent(() => import('./DailySummaryPopover').then((module) => module.DailySummaryPopover))
 const ProcessPane = lazyComponent(() => import('./ProcessPane').then((module) => module.ProcessPane))
 const CoordinationPopover = lazyComponent(() => import('./CoordinationPopover').then((module) => module.CoordinationPopover))
@@ -5668,6 +5675,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'surface-add', label: 'Add a surface tab', key: '⌃T', category: 'Transcript' },
   { id: 'surface-cycle', label: 'Next/previous surface tab', key: '⌃N/⌃P', category: 'Transcript' },
   { id: 'surface-expand', label: 'Expand/restore surface panel', key: '=', category: 'Transcript' },
+  { id: 'window-layout', label: 'Window layout (move, arrange, full screen)', key: '⌃B w', category: 'View' },
   { id: 'surface-placement', label: 'Surface panel beside / under the reader', key: '|', category: 'Transcript' },
   { id: 'surface-narrow', label: 'Narrow surface panel', key: '<', category: 'Transcript' },
   { id: 'surface-wide',   label: 'Widen surface panel',  key: '>', category: 'Transcript' },
@@ -7592,6 +7600,8 @@ const SPLIT_PANE_MIN_WIDTH = 46
 const SPLIT_PANE_MIN_ROWS = 9
 const MIN_READER_ROWS = 12
 const SPLIT_PANE_MAX = 2
+// Main + stack and the grid hold one more: the reader and three panes is the grid.
+const SPLIT_PANE_ARRANGED_MAX = 3
 // Tail-only mount budget. OpenTUI's scrollbox lays out every mounted child, so
 // a pane that mounted the whole transcript would cost the same as a second
 // reader; 80 collapsed cards provides deeper scroll-back while retaining the
@@ -7677,6 +7687,11 @@ type SplitTranscriptPaneProps = {
   liveText: string | null
   registerHandle: (paneIndex: number, handle: SplitPaneHandle | null) => void
   onActivate: (paneIndex: number) => void
+  /** The title bar's buttons: close this pane, or open its session in the reader. */
+  onClosePane: (paneIndex: number) => void
+  onPromotePane: () => void
+  /** Dragging the pane by its title onto the window area (App's shared press/move/release). */
+  sessionDrag: { press: (session: Session, fromPane: number | null, event: { x: number; y: number }) => void; move: (event: { x: number; y: number }) => void; release: (event: { x: number; y: number }) => boolean }
   // True while the reader is opening a session. The threading worker is
   // serial, and a pane's poll is a FULL detail read — the same shape the
   // neighbour prefetch was reshaped to avoid — so a pane posted ahead of a
@@ -7707,8 +7722,12 @@ function SplitTranscriptPaneInner({
   liveText,
   registerHandle,
   onActivate,
+  onClosePane,
+  onPromotePane,
+  sessionDrag,
   shouldYieldToForeground,
 }: SplitTranscriptPaneProps) {
+  const paneFrameRef = useRef<BoxRenderable | null>(null)
   const [cards, setCards] = useState<TuiTranscriptCard[]>([])
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [error, setError] = useState<string | null>(null)
@@ -8157,10 +8176,38 @@ function SplitTranscriptPaneInner({
         Math.max(width - 4, 8),
       )}
       titleColor={running ? theme.green : accent}
+      ref={paneFrameRef}
       onMouseDown={(event) => {
-        if (event.button === 0) onActivate(paneIndex)
+        if (event.button !== 0) return
+        onActivate(paneIndex)
+        // The title row is the handle a window is dragged by.
+        if (paneFrameRef.current && event.y === paneFrameRef.current.y) sessionDrag.press(session, paneIndex, event)
       }}
+      onMouseDrag={(event) => sessionDrag.move(event)}
+      onMouseUp={(event) => { sessionDrag.release(event) }}
     >
+      <box position="absolute" top={-1} right={1} height={1} flexDirection="row" zIndex={3}>
+        <box
+          id={`split-pane-promote:${paneIndex}`}
+          onMouseDown={(event) => {
+            if (event.button !== 0) return
+            event.stopPropagation()
+            onPromotePane()
+          }}
+        >
+          <text fg={theme.dim} bg={theme.surface} wrapMode="none" selectable={false}>{' ⤢ '}</text>
+        </box>
+        <box
+          id={`split-pane-close:${paneIndex}`}
+          onMouseDown={(event) => {
+            if (event.button !== 0) return
+            event.stopPropagation()
+            onClosePane(paneIndex)
+          }}
+        >
+          <text fg={theme.dim} bg={theme.surface} wrapMode="none" selectable={false}>{' × '}</text>
+        </box>
+      </box>
       <box flexGrow={1} paddingX={1} overflow="hidden">
         {status === 'error' ? (
           <text fg={theme.red} wrapMode="none">{fitText(error ?? 'Failed to load transcript', innerWidth)}</text>
@@ -9014,6 +9061,32 @@ export default function OpenTuiApp() {
   // Reader's share of that axis. SPLIT_SHARE_EVEN keeps the even split every
   // layout had before the resize keys; anything else is a deliberate ⌃B < / >.
   const [splitReaderShare, setSplitReaderShare] = useState<number>(SPLIT_SHARE_EVEN)
+  // Window arrangement of the reader and its panes (windowLayout.ts), and which
+  // end of the split the reader sits at. Kept in tui.json beside the orientation.
+  const [splitArrangement, setSplitArrangement] = useState<WindowArrangement>('split')
+  const [splitReaderLast, setSplitReaderLast] = useState(false)
+  const [windowPickerOpen, setWindowPickerOpen] = useState(false)
+  const windowPickerKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  // The reader-and-panes area, for drop zones and divider drags in screen cells.
+  const windowAreaRef = useRef<BoxRenderable | null>(null)
+  // A session dragged from the rail or a pane title: what, and where it would land.
+  const [sessionDrag, setSessionDrag] = useState<{ session: Session; fromPane: number | null; zone: WindowDropZone | null } | null>(null)
+  const sessionPressRef = useRef<{ session: Session; fromPane: number | null; x: number; y: number; dragging: boolean } | null>(null)
+  // The divider between the reader and its panes, while it is dragged.
+  const [splitDividerDragging, setSplitDividerDragging] = useState(false)
+  // Press, move, release — shared by every rail row and pane title, through
+  // stable wrappers so the rail's row cache is not rebuilt per render. The
+  // implementation is assigned further down, where what it calls exists.
+  const sessionDragImplRef = useRef({
+    press: (_session: Session, _fromPane: number | null, _event: { x: number; y: number }) => {},
+    move: (_event: { x: number; y: number }) => {},
+    release: (_event: { x: number; y: number }): boolean => false,
+  })
+  const sessionDragHandlers = useMemo(() => ({
+    press: (session: Session, fromPane: number | null, event: { x: number; y: number }) => sessionDragImplRef.current.press(session, fromPane, event),
+    move: (event: { x: number; y: number }) => sessionDragImplRef.current.move(event),
+    release: (event: { x: number; y: number }) => sessionDragImplRef.current.release(event),
+  }), [])
   // tmux-style prefix state: true between ⌃B and the command key that follows.
   const [splitChordPending, setSplitChordPending] = useState(false)
   // ⌃B ? opens the full chord reference. A toast can only ever show one
@@ -12369,18 +12442,39 @@ export default function OpenTuiApp() {
   // Stacked splits divide the reader area's ROWS instead of its columns, so the
   // same drop-a-pane-before-shrinking rule runs against a different axis. The
   // reader area's inner height is the frame minus its own borders.
-  const stackedSplit = splitOrientation === 'rows'
-  const splitAxisExtent = stackedSplit ? Math.max(mainContentHeight - 2, 8) : readerAreaWidth
+  const splitAxisStacked = splitOrientation === 'rows'
+  const splitAxisExtent = splitAxisStacked ? Math.max(mainContentHeight - 2, 8) : readerAreaWidth
   const splitLayout = calculateSplitPaneLayout({
     availableExtent: splitAxisExtent,
     requestedCount: fullscreenMode ? 0 : splitPaneCount,
     availableCount: splitPinnedSessions.length,
     maxPanes: SPLIT_PANE_MAX,
-    minPaneExtent: stackedSplit ? SPLIT_PANE_MIN_ROWS : SPLIT_PANE_MIN_WIDTH,
-    minReaderExtent: stackedSplit ? MIN_READER_ROWS : MIN_READER_WIDTH,
+    minPaneExtent: splitAxisStacked ? SPLIT_PANE_MIN_ROWS : SPLIT_PANE_MIN_WIDTH,
+    minReaderExtent: splitAxisStacked ? MIN_READER_ROWS : MIN_READER_WIDTH,
     readerShare: splitReaderShare,
   })
-  const visibleSplitPaneCount = splitLayout.visibleCount
+  // Main + stack and the grid (windowLayout.ts). The window area sits under the
+  // tab strip, so it has one row less than the main content.
+  const windowAreaHeight = Math.max(mainContentHeight - (tabsEnabled && !fullscreenMode ? 1 : 0), 8)
+  const arrangedLayout = splitArrangement === 'split' || fullscreenMode ? null : computeWindowLayout({
+    arrangement: splitArrangement,
+    orientation: splitOrientation,
+    width: readerAreaWidth,
+    height: windowAreaHeight,
+    requestedCount: splitPaneCount,
+    availableCount: splitPinnedSessions.length,
+    maxPanes: SPLIT_PANE_ARRANGED_MAX,
+    readerShare: splitReaderShare,
+    minPaneWidth: SPLIT_PANE_MIN_WIDTH,
+    minPaneRows: SPLIT_PANE_MIN_ROWS,
+    minReaderWidth: MIN_READER_WIDTH,
+    minReaderRows: MIN_READER_ROWS,
+  })
+  const arrangedVisible = arrangedLayout !== null && arrangedLayout.visibleCount > 0
+  // The split's own axis only applies to the split arrangement; the others lay
+  // the reader out side by side with whatever is beside it.
+  const stackedSplit = splitAxisStacked && !arrangedVisible
+  const visibleSplitPaneCount = arrangedVisible ? arrangedLayout.visibleCount : splitLayout.visibleCount
   const stackedPanesVisible = stackedSplit && visibleSplitPaneCount > 0
   // Off-axis, a frame simply spans the reader area: stacked panes are full
   // width, side-by-side panes are full height.
@@ -12391,11 +12485,14 @@ export default function OpenTuiApp() {
   const openCodeContextWidth = isOpenCodeView && visibleSplitPaneCount === 0
     ? Math.min(Math.max(24, Math.floor(readerAreaWidth * 0.22)), Math.max(readerAreaWidth - MIN_READER_WIDTH, 0))
     : 0
-  const rightPaneWidth = (stackedSplit ? readerAreaWidth : splitLayout.readerExtent) - openCodeContextWidth
+  const rightPaneWidth = (arrangedVisible ? arrangedLayout.reader.width : stackedSplit ? readerAreaWidth : splitLayout.readerExtent) - openCodeContextWidth
   // Row budget the reader column actually gets. Stacked panes take theirs out
   // of it, so every downstream height (transcript viewport included) must be
-  // measured from this rather than from the whole frame.
-  const readerRowBudget = stackedPanesVisible ? splitLayout.readerExtent + 2 : mainContentHeight
+  // measured from this rather than from the whole frame. In the grid the
+  // reader has the top row only.
+  const readerRowBudget = arrangedVisible && arrangedLayout.reader.height < windowAreaHeight
+    ? arrangedLayout.reader.height + (mainContentHeight - windowAreaHeight)
+    : stackedPanesVisible ? splitLayout.readerExtent + 2 : mainContentHeight
   const splitPaneKeys = splitPaneSessions.map((pane) => sessionKey(pane))
   const splitPaneKeysSignature = splitPaneKeys.join('\u0000')
   // Live slices for the split panes. The app-wide live list is already tagged
@@ -15756,9 +15853,21 @@ export default function OpenTuiApp() {
         flexDirection="column"
         backgroundColor={rowBg}
         marginBottom={density === 'comfortable' ? 1 : 0}
+        // Its text is not selectable: a press on selectable text starts a text
+        // selection, which takes the drag away from the row.
+        // Selects on release, not press: a press that moves is a drag onto the
+        // window area, and selecting on press would put the session in the
+        // reader before it could be dropped beside it.
         onMouseDown={(event) => {
           if (event.button !== 0) return
           event.stopPropagation()
+          if (sessionKey(entry.session) === renameSessionKey) return
+          sessionDragHandlers.press(entry.session, null, event)
+        }}
+        onMouseDrag={(event) => sessionDragHandlers.move(event)}
+        onMouseUp={(event) => {
+          if (event.button !== 0) return
+          if (sessionDragHandlers.release(event)) return
           if (sessionKey(entry.session) === renameSessionKey) return
           selectSidebarSession(entry.session)
         }}
@@ -15775,33 +15884,33 @@ export default function OpenTuiApp() {
           </box>
         ) : (
           <box paddingX={1} flexDirection="row" backgroundColor={rowBg}>
-            <text fg={sessionAccent} wrapMode="none">{selected ? '▎' : ' '}</text>
+            <text fg={sessionAccent} wrapMode="none" selectable={false}>{selected ? '▎' : ' '}</text>
             {/* Keep the title readable; provider identity belongs to the rail. */}
-            <text fg={settled && !activity ? theme.muted : theme.text} attributes={selected ? TextAttributes.BOLD : undefined} wrapMode="none">
+            <text fg={settled && !activity ? theme.muted : theme.text} attributes={selected ? TextAttributes.BOLD : undefined} wrapMode="none" selectable={false}>
               {fitText(formatSessionTitle(entry.session), singleRow ? rowTitleWidth : sidebarInnerWidth - 3)}
             </text>
             {singleRow ? (
               <>
-                {teamMark ? <text fg={team!.waiting > 0 ? theme.amber : theme.green} wrapMode="none">{teamMark}</text> : null}
-                {rowGlyph ? <text fg={activity ? activityColor : theme.green} wrapMode="none">{` ${rowGlyph}`}</text> : null}
-                {rowMeta ? <text fg={activity === 'needs-input' ? theme.amber : theme.dim} wrapMode="none">{` ${rowMeta}`}</text> : null}
+                {teamMark ? <text fg={team!.waiting > 0 ? theme.amber : theme.green} wrapMode="none" selectable={false}>{teamMark}</text> : null}
+                {rowGlyph ? <text fg={activity ? activityColor : theme.green} wrapMode="none" selectable={false}>{` ${rowGlyph}`}</text> : null}
+                {rowMeta ? <text fg={activity === 'needs-input' ? theme.amber : theme.dim} wrapMode="none" selectable={false}>{` ${rowMeta}`}</text> : null}
               </>
             ) : null}
           </box>
         )}
         {singleRow ? null : (
         <box paddingX={1} flexDirection="row" backgroundColor={rowBg}>
-          <text fg={sessionAccent} wrapMode="none">{selected ? '▎' : ' '}</text>
-          <text fg={activity === 'needs-input' ? theme.amber : theme.dim} wrapMode="none">
+          <text fg={sessionAccent} wrapMode="none" selectable={false}>{selected ? '▎' : ' '}</text>
+          <text fg={activity === 'needs-input' ? theme.amber : theme.dim} wrapMode="none" selectable={false}>
             {fitText(metaLine, sidebarInnerWidth - 3 - (activityGlyph ? 2 : 0) - teamMark.length)}
           </text>
-          {teamMark ? <text fg={team!.waiting > 0 ? theme.amber : theme.green} wrapMode="none">{teamMark}</text> : null}
-          {activityGlyph ? <text fg={activityColor} wrapMode="none">{` ${activityGlyph}`}</text> : null}
+          {teamMark ? <text fg={team!.waiting > 0 ? theme.amber : theme.green} wrapMode="none" selectable={false}>{teamMark}</text> : null}
+          {activityGlyph ? <text fg={activityColor} wrapMode="none" selectable={false}>{` ${activityGlyph}`}</text> : null}
         </box>
         )}
       </box>
     )
-  }, [theme, density, sidebarInnerWidth, firstSidebarEntryKey, renameSessionKey, renameDraft, commitRename, selectSidebarSession, showProviderInSessionRows, sidebarSessionActivity, recentlyWrittenKeys, teamAttention])
+  }, [theme, density, sidebarInnerWidth, firstSidebarEntryKey, renameSessionKey, renameDraft, commitRename, selectSidebarSession, showProviderInSessionRows, sidebarSessionActivity, recentlyWrittenKeys, teamAttention, sessionDragHandlers])
 
 
   // Per-row element cache. Moving the selection highlight only changes TWO rows
@@ -18813,6 +18922,11 @@ export default function OpenTuiApp() {
   useEffect(() => {
     let cancelled = false
     void readTuiSurfacePanelPlacement().then((placement) => { if (!cancelled) setSurfacePanelPlacement(placement) }).catch(() => {})
+    void readTuiWindowArrangement().then((stored) => {
+      if (cancelled) return
+      setSplitArrangement(stored.arrangement)
+      setSplitReaderLast(stored.readerLast)
+    }).catch(() => {})
     return () => { cancelled = true }
   }, [])
 
@@ -19509,13 +19623,13 @@ export default function OpenTuiApp() {
     applySplitPaneCount(splitPaneCount + 1, undefined, orientation)
   })
 
-  const closeSplitPane = useEffectEvent(() => {
+  const closeSplitPane = useEffectEvent((paneIndex?: number) => {
     if (splitPaneCount === 0) {
       showNotice('info', 'No split panes open')
       return
     }
     const nextCount = splitPaneCount - 1
-    const closeIndex = splitFocusIndex ?? Math.max(splitPaneCount - 1, 0)
+    const closeIndex = paneIndex ?? splitFocusIndex ?? Math.max(splitPaneCount - 1, 0)
     setSplitPinnedKeys((current) => removeSplitPaneKey(current, closeIndex))
     if (splitFocusIndex !== null) {
       const nextFocus = nextCount > 0 ? Math.min(closeIndex, nextCount - 1) : null
@@ -19523,6 +19637,149 @@ export default function OpenTuiApp() {
       if (nextFocus !== null) lastFocusedSplitPaneRef.current = nextFocus
     }
     applySplitPaneCount(nextCount)
+  })
+
+  // ── Window layouts ─────────────────────────────────────────────────────────
+  const setWindowArrangement = useEffectEvent((arrangement: WindowArrangement, readerLast: boolean) => {
+    setSplitArrangement(arrangement)
+    setSplitReaderLast(readerLast)
+    void writeTuiWindowArrangement(arrangement, readerLast).catch(() => {})
+  })
+
+  // Ask for `wanted` panes from the open tabs; say so when there are not enough.
+  const requestWindowPanes = useEffectEvent((wanted: number, label: string) => {
+    const available = splitCandidateSessions.length
+    if (available === 0) {
+      showNotice('error', 'Open another tab first, or drag a session from the sidebar onto the reader')
+      return
+    }
+    const count = Math.min(wanted, available)
+    setSplitPaneCount(count)
+    void writeTuiSplitPanes(count).catch((err) => {
+      setError(err instanceof Error ? err.message : 'Failed to store split view setting')
+    })
+    showNotice('info', count < wanted ? `${label} · ${count} of ${wanted} panes (open more tabs to fill it)` : label)
+  })
+
+  // The choice the window menu shows as current.
+  const currentWindowLayoutAction: WindowLayoutAction = visibleSplitPaneCount === 0
+    ? 'fill'
+    : splitArrangement === 'main-stack' ? 'main-stack'
+    : splitArrangement === 'grid' ? 'grid'
+    : stackedSplit ? (splitReaderLast ? 'reader-bottom' : 'reader-top')
+    : splitReaderLast ? 'reader-right' : visibleSplitPaneCount === 1 ? 'two' : 'reader-left'
+
+  const applyWindowLayout = useEffectEvent((action: WindowLayoutAction) => {
+    setWindowPickerOpen(false)
+    const keepCount = Math.min(Math.max(splitPaneCount, 1), SPLIT_PANE_MAX)
+    switch (action) {
+      case 'fullscreen':
+        toggleFullscreenMode()
+        return
+      case 'fill':
+        applySplitPaneCount(0, 'Reader only')
+        return
+      case 'reader-left':
+      case 'reader-right':
+        setWindowArrangement('split', action === 'reader-right')
+        applySplitOrientation('columns', true)
+        requestWindowPanes(keepCount, action === 'reader-right' ? 'Reader on the right' : 'Reader on the left')
+        return
+      case 'reader-top':
+      case 'reader-bottom':
+        setWindowArrangement('split', action === 'reader-bottom')
+        applySplitOrientation('rows', true)
+        requestWindowPanes(keepCount, action === 'reader-bottom' ? 'Reader below' : 'Reader on top')
+        return
+      case 'two':
+        setWindowArrangement('split', false)
+        applySplitOrientation('columns', true)
+        requestWindowPanes(1, 'Reader and one pane')
+        return
+      case 'main-stack':
+        setWindowArrangement('main-stack', false)
+        requestWindowPanes(Math.max(2, Math.min(splitPaneCount, SPLIT_PANE_ARRANGED_MAX)), 'Reader and a stack')
+        return
+      case 'grid':
+        setWindowArrangement('grid', false)
+        requestWindowPanes(SPLIT_PANE_ARRANGED_MAX, 'Grid of four')
+        return
+    }
+  })
+
+  const windowAreaRect = () => {
+    const box = windowAreaRef.current
+    return box ? { x: box.x, y: box.y, width: box.width, height: box.height } : null
+  }
+
+  // A session dropped on the window area: an edge makes it a pane on that
+  // side, the middle opens it in the reader.
+  const dropSessionInWindow = useEffectEvent((session: Session, zone: WindowDropZone, fromPane: number | null) => {
+    const key = sessionKey(session)
+    if (zone === 'center') {
+      // Opening a pinned session in the reader hands its pane the session the reader leaves.
+      if (fromPane !== null) selectTabSession(session)
+      else selectSidebarSession(session)
+      return
+    }
+    if (key === selectedSessionKey) {
+      showNotice('info', 'That session is the reader · drag another one to an edge to put it beside it')
+      return
+    }
+    const sideways = zone === 'left' || zone === 'right'
+    setWindowArrangement('split', zone === 'left' || zone === 'top')
+    applySplitOrientation(sideways ? 'columns' : 'rows', true)
+    setOpenTabSessions((prev) => (prev.some((tab) => sessionKey(tab) === key) ? prev : [...prev, session]))
+    setSplitPinnedKeys((prev) => [key, ...prev.filter((pinnedKey) => pinnedKey !== key)])
+    const count = Math.min(Math.max(splitPaneCount, 1), SPLIT_PANE_MAX)
+    if (count !== splitPaneCount) {
+      // Set directly, as watching a teammate does: applySplitPaneCount projects
+      // the layout from this render's tabs, which do not hold this one yet.
+      setSplitPaneCount(count)
+      void writeTuiSplitPanes(count).catch(() => {})
+    }
+    showNotice('info', `${fitText(formatSessionTitle(session), 40)} · ${zone === 'left' ? 'left of' : zone === 'right' ? 'right of' : zone === 'top' ? 'above' : 'below'} the reader`)
+  })
+
+  sessionDragImplRef.current = {
+    press: (session, fromPane, event) => {
+      sessionPressRef.current = { session, fromPane, x: event.x, y: event.y, dragging: false }
+    },
+    move: (event) => {
+      const press = sessionPressRef.current
+      if (!press) return
+      // Two cells of travel make it a drag, so a slightly shaky click is still a click.
+      if (!press.dragging && Math.abs(event.x - press.x) + Math.abs(event.y - press.y) < 2) return
+      press.dragging = true
+      const area = windowAreaRect()
+      const zone = area ? windowDropZone(area, event) : null
+      setSessionDrag((current) => (current && current.session === press.session && current.zone === zone
+        ? current
+        : { session: press.session, fromPane: press.fromPane, zone }))
+    },
+    release: (event) => {
+      const press = sessionPressRef.current
+      sessionPressRef.current = null
+      if (!press?.dragging) return false
+      setSessionDrag(null)
+      const area = windowAreaRect()
+      const zone = area ? windowDropZone(area, event) : null
+      if (zone) dropSessionInWindow(press.session, zone, press.fromPane)
+      return true
+    },
+  }
+
+  // The divider between the reader and its panes, dragged to a new share.
+  const dragSplitDivider = useEffectEvent((event: { x: number; y: number }) => {
+    const area = windowAreaRect()
+    if (!area) return
+    const share = readerShareAt(area, stackedSplit ? event.y : event.x, stackedSplit ? 'y' : 'x', splitReaderLast)
+    const next = Math.min(SPLIT_SHARE_MAX, Math.max(SPLIT_SHARE_MIN, Math.round(share * 100) / 100))
+    if (next !== splitReaderShare) setSplitReaderShare(next)
+  })
+  const endSplitDividerDrag = useEffectEvent(() => {
+    setSplitDividerDragging(false)
+    void writeTuiSplitReaderShare(splitReaderShare).catch(() => {})
   })
 
   // ⌃B z is the quick on/off: it restores the pane count you last had open
@@ -19760,6 +20017,9 @@ export default function OpenTuiApp() {
         break
       case 'surface-placement':
         toggleSurfacePanelPlacement()
+        break
+      case 'window-layout':
+        setWindowPickerOpen(true)
         break
       case 'processes':
         setSurfacePanelOpen(true)
@@ -20481,6 +20741,11 @@ export default function OpenTuiApp() {
 
     if (dailySummaryOpen) {
       handled(() => { dailySummaryKeyHandlerRef.current?.(key) })
+      return
+    }
+
+    if (windowPickerOpen) {
+      handled(() => { windowPickerKeyHandlerRef.current?.(key) })
       return
     }
 
@@ -21546,6 +21811,7 @@ export default function OpenTuiApp() {
         if (sequence === '>') { resizeSplitReader(1); return }
         if (sequence === '=') { resizeSplitReader(0); return }
         if (sequence === 'x') { closeSplitPane(); return }
+        if (sequence === 'w') { setWindowPickerOpen(true); return }
         if (sequence === 'z') { toggleSplitPanes(); return }
         // Focus movement, tmux-shaped: o/→/tab walk forward, ← walks back,
         // ; flips reader↔last pane, digits jump straight to a pane.
@@ -23138,6 +23404,571 @@ export default function OpenTuiApp() {
     )
   }
 
+  // The reader's frame (and OpenCode's context column), placed by the arrangement below.
+  const readerFrameNode = (
+    <>
+      <box
+        id="transcript-reader"
+        ref={readerBoxRef}
+        onMouseDown={(event) => {
+          // Clicking the transcript hands focus back from the surface panel,
+          // mirroring the panel's own click-to-focus.
+          if (event.button === 0 && surfacePanelFocused) setSurfacePanelFocused(false)
+        }}
+        flexGrow={1}
+        border={fullscreenMode ? [] : ['top', 'left', 'right', 'bottom']}
+        borderStyle="single"
+        // One focus color across panes; provider identity stays in metadata.
+        borderColor={effectiveFocus === 'messages' && splitFocusIndex === null
+          ? theme.border2
+          : isChatLikeView
+            ? theme.surface
+            : theme.border}
+        backgroundColor={theme.surface}
+        flexDirection="column"
+        title={fullscreenMode || embeddedComposer ? undefined : readerFrameTitle}
+        titleColor={providerAccent}
+      >
+      {!fullscreenMode && !embeddedComposer ? (
+        // Window controls in the top border, where a title bar keeps its buttons.
+        <box id="reader-window-controls" position="absolute" top={-1} right={1} height={1} flexDirection="row" zIndex={3}>
+          <box
+            id="reader-window-layout"
+            onMouseDown={(event) => {
+              if (event.button !== 0) return
+              event.stopPropagation()
+              setWindowPickerOpen(true)
+            }}
+          >
+            <text fg={theme.dim} bg={theme.surface} wrapMode="none" selectable={false}>{' ⊞ layout '}</text>
+          </box>
+          <box
+            id="reader-window-fullscreen"
+            onMouseDown={(event) => {
+              if (event.button !== 0) return
+              event.stopPropagation()
+              toggleFullscreenMode()
+            }}
+          >
+            <text fg={theme.dim} bg={theme.surface} wrapMode="none" selectable={false}>{' ⤢ '}</text>
+          </box>
+        </box>
+      ) : null}
+      {!fullscreenMode && visibleSplitPaneCount > 0 ? (
+        // The divider to the panes: the border on that side, redrawn so it is
+        // hittable, and dragged to resize. Not selectable, or the release would
+        // copy a run of border glyphs.
+        <box
+          id="split-divider-handle"
+          position="absolute"
+          zIndex={3}
+          {...(stackedSplit
+            ? { left: 0, right: 0, height: 1, ...(splitReaderLast ? { top: -1 } : { bottom: -1 }) }
+            : { top: 0, bottom: 0, width: 1, ...(splitReaderLast ? { left: -1 } : { right: -1 }) })}
+          onMouseDown={(event) => {
+            if (event.button !== 0) return
+            event.stopPropagation()
+            setSplitDividerDragging(true)
+          }}
+        >
+          <text fg={theme.border} wrapMode="none" selectable={false}>
+            {stackedSplit
+              ? '─'.repeat(Math.max(1, rightPaneWidth))
+              : Array.from({ length: Math.max(1, readerRowBudget) }, () => '│').join('\n')}
+          </text>
+        </box>
+      ) : null}
+      {fullscreenMode ? (
+        <box height={1} paddingX={1} flexDirection="row" alignItems="center">
+          <box flexGrow={1} />
+          <box
+            id="fullscreen-restore"
+            paddingX={1}
+            backgroundColor={theme.surface2}
+            onMouseDown={(event) => {
+              if (event.button !== 0) return
+              event.stopPropagation()
+              toggleFullscreenMode(false)
+            }}
+          >
+            <text fg={theme.dim} wrapMode="none">FULLSCREEN  Shift+Z restore</text>
+          </box>
+        </box>
+      ) : null}
+
+      {!presentationFocusMode && isCopilotView ? (
+        <box height={1} paddingX={1} flexDirection="row" alignItems="center">
+          {['Current', 'Sessions', 'Issues', 'Pull requests', 'Gists'].map((tab) => {
+            const active = tab === 'Current'
+            return (
+              <box key={tab} paddingX={1} backgroundColor={active ? theme.cyan : theme.bg}>
+                <text fg={active ? theme.bg : theme.muted} attributes={active ? TextAttributes.BOLD : undefined} wrapMode="none">{tab}</text>
+              </box>
+            )
+          })}
+        </box>
+      ) : null}
+
+      {!presentationFocusMode && !isStreamView ? (
+        <box paddingX={2} paddingTop={1} flexDirection="row" alignItems="center">
+          <text fg={providerAccent} wrapMode="none">{'● '}</text>
+          <box flexGrow={1} overflow="hidden">
+            <text fg={theme.muted} wrapMode="none">
+              {fitText(showTabs
+                ? `${TRANSCRIPT_VIEW_LABELS[transcriptView]} · ${followTail ? 'Following latest' : 'Reading history'}`
+                : `${TRANSCRIPT_VIEW_LABELS[transcriptView]} · ${readerTitle}`, Math.max(rightPaneWidth - readerContextMeta.length - 10, 12))}
+            </text>
+          </box>
+          <box width={readerContextMeta.length} overflow="hidden">
+            <text fg={theme.dim} wrapMode="none">{readerContextMeta}</text>
+          </box>
+        </box>
+      ) : null}
+
+      {!presentationFocusMode && !isStreamView && contextUsage ? (
+        <box paddingX={1}>
+          <text wrapMode="none">
+            {renderInlineTextSegments(
+              contextBarSegments(contextUsage.totalTokens, contextUsage.maxTokens, contextUsage.percentage, theme),
+              rightPaneWidth - 4,
+              theme.dim,
+            )}
+          </text>
+        </box>
+      ) : !presentationFocusMode && !isStreamView && selectedSession?.provider === 'claude' && contextUsageStatus === 'loading' ? (
+        <box paddingX={1}>
+          <text fg={theme.dim}>{fitText('Loading context usage…', rightPaneWidth - 4)}</text>
+        </box>
+      ) : !presentationFocusMode && !isStreamView && selectedSession?.provider === 'claude' && contextUsageStatus === 'unavailable' ? (
+        <box paddingX={1}>
+          <text fg={theme.dim}>{fitText('Context usage unavailable', rightPaneWidth - 4)}</text>
+        </box>
+      ) : null}
+
+      {fleetStripVisible ? (
+        <box paddingX={1} flexDirection="row" overflow="hidden">
+          <text wrapMode="none">
+            {renderInlineTextSegments(fleetStripSegments, rightPaneWidth - 4, theme.dim)}
+          </text>
+        </box>
+      ) : null}
+
+      {error ? (
+        <box paddingX={1} marginTop={1}>
+          <text fg={theme.red}>{fitText(error, rightPaneWidth - 4)}</text>
+        </box>
+      ) : null}
+
+      {!showToolCalls ? (
+        <box
+          id="show-tool-activity"
+          height={1}
+          paddingX={1}
+          onMouseDown={(event) => {
+            if (event.button !== 0) return
+            event.stopPropagation()
+            setShowToolCalls(true)
+            void writeTuiShowToolCalls(true).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store tool visibility'))
+          }}
+        >
+          <text fg={theme.amber} wrapMode="none">{fitText('TOOLS HIDDEN · Click or Shift+X to show file and tool activity', rightPaneWidth - 4)}</text>
+        </box>
+      ) : null}
+
+      {/* Reserved while reading history elsewhere; SCROLLBACK leaves the tail
+          on every scroll, and two rows appearing above the text would jolt
+          it, so there the banner exists only while it has something to say. */}
+      {!followTail && (!isScrollbackView || pendingNewCount > 0) ? (
+        <box paddingX={1} marginTop={1}>
+          <text fg={theme.amber}>
+            {pendingNewCount > 0
+              ? fitText(`+${pendingNewCount} new messages waiting. Press u for first unread or f for live tail.`, rightPaneWidth - 4)
+              : ' '}
+          </text>
+        </box>
+      ) : null}
+
+      {normalizedSearchQuery ? (
+        <box paddingX={1} marginTop={1}>
+          <text fg={theme.dim}>
+            {fitText(
+              `/${searchQuery}  ${searchMatches.length === 0 ? 'no matches' : `${searchMatchIndex + 1}/${searchMatches.length} matches`}`,
+              rightPaneWidth - 4,
+            )}
+          </text>
+        </box>
+      ) : null}
+
+      <box flexGrow={1} paddingX={1} paddingBottom={1} marginTop={stickyHeaders ? 0 : 1} overflow="hidden">
+        {(loadingDetail || formattingTranscriptCards) && visibleTranscriptCards.length === 0 ? (
+          <Spinner
+            label={fitText(formattingTranscriptCards ? 'Formatting transcript…' : 'Loading transcript…', rightPaneWidth - 6)}
+            fg={theme.dim}
+          />
+        ) : visibleTranscriptCards.length === 0 ? (
+          !selectedSession ? (
+            <box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1} paddingY={2}>
+              <ascii-font text="AGENT VIEWER" font="tiny" color={theme.dim} />
+              <box marginTop={1}>
+                <text fg={theme.dim}>Select a session to begin reading</text>
+              </box>
+            </box>
+          ) : (
+            (() => {
+              const welcome = getProviderComposer(selectedSession.provider ?? null)
+              const welcomeAccent = ((theme as unknown as Record<string, string>)[welcome.tuiAccentKey]) ?? theme.cyan
+              const innerWidth = Math.max(rightPaneWidth - 4, 20)
+              return (
+                <box flexDirection="column" flexShrink={0}>
+                  <text height={1} flexShrink={0} fg={welcomeAccent} wrapMode="none">{fitText('Start an engineering task', innerWidth)}</text>
+                  <text height={1} flexShrink={0} fg={theme.dim} wrapMode="none">{fitText('Inspect code, review a change, or investigate a failure.', innerWidth)}</text>
+                  <box marginTop={1} flexDirection="column" flexShrink={0}>
+                    {welcome.welcomeBullets.slice(0, 3).map((bullet) => (
+                      <box key={bullet} flexDirection="row" height={1} flexShrink={0} width={innerWidth}>
+                        <text fg={welcomeAccent} wrapMode="none">{welcome.glyph} </text>
+                        <text fg={theme.text} wrapMode="none">{fitText(bullet, innerWidth - 2)}</text>
+                      </box>
+                    ))}
+                  </box>
+                  <box marginTop={1} height={1} flexShrink={0}>
+                    <text fg={theme.dim} wrapMode="none">{fitText('Press c to compose · ? keyboard help', innerWidth)}</text>
+                  </box>
+                </box>
+              )
+            })()
+          )
+        ) : (
+          <scrollbox
+            id="transcript-scroll"
+            ref={transcriptScrollRef}
+            style={{ height: transcriptViewportRows }}
+            // Never while the composer is up: OpenTUI has one focus slot,
+            // and this scrollbox remounting (a new session's empty state
+            // becoming a transcript after its first turn) would take it
+            // from the textarea — which still read FOCUSED but dropped
+            // every keystroke.
+            focused={effectiveFocus === 'messages' && splitFocusIndex === null && !composerActive}
+            // Match the card surface, not theme.bg: cards render on `surface`,
+            // so when bg is darker than surface (e.g. SENTRY #150f23 vs
+            // #1f1633) the cardGap rows between cards revealed bg as dark
+            // bands in comfortable/balanced (dense has cardGap 0, no gaps).
+            // Surfacing the viewport makes the gaps blend; borders still
+            // delineate cards, and cursor/selected cards keep surface2/3.
+            backgroundColor={theme.surface}
+            stickyScroll={followTail}
+            stickyStart="bottom"
+            scrollY
+            scrollAcceleration={MESSAGE_SCROLL_ACCEL}
+            viewportCulling
+            scrollbarOptions={transcriptScrollbarOptions}
+            // One handler for the whole transcript: `getLinkAt` resolves a
+            // screen cell, so nothing here needs to know which card or row
+            // was hit. Card-level handlers do not stopPropagation, so their
+            // own select-on-press still runs and the press reaches this
+            // container either way.
+            onMouseDown={noteTranscriptLinkPress}
+            onMouseUp={releaseTranscriptPress}
+            >
+            <box height={TRANSCRIPT_TOP_MARGIN} />
+            <TuiErrorBoundary>
+              <ReaderTranscriptWindow inputs={readerWindowInputs} />
+            </TuiErrorBoundary>
+
+            {visibleComposerSending && visibleComposerLiveText && !liveAssistantTextCardVisible ? (
+              isChatLikeView ? (
+                <box
+                  key="live-stream-text"
+                  marginBottom={densityState.cardGap}
+                  paddingLeft={densityState.bodyIndent}
+                >
+                  <text fg={theme.text} width={Math.max(rightPaneWidth - densityState.bodyIndent - 4, 16)} wrapMode="word">
+                    {`● ${visibleComposerLiveText}`}
+                  </text>
+                </box>
+              ) : (
+                <box key="live-stream-text" flexDirection="column" marginBottom={densityState.cardGap}>
+                  <box border borderStyle="single" borderColor={providerAccent} backgroundColor={theme.surface}>
+                    <box flexDirection="column" width={rightPaneWidth - 4}>
+                      <box paddingX={1} paddingTop={1}>
+                        <text fg={providerAccent}>
+                          {fitText('● assistant  streaming', rightPaneWidth - 6)}
+                        </text>
+                      </box>
+                      <box paddingX={1} paddingY={1}>
+                        <text fg={theme.text} wrapMode="word">
+                          {visibleComposerLiveText}
+                        </text>
+                      </box>
+                    </box>
+                  </box>
+                </box>
+              )
+            ) : null}
+
+            {streamTurnFooter ? (() => {
+              // The same box a stream card draws its own turn rule in, so
+              // the closing rule shares the column's edge instead of
+              // hugging the pane's while the text above it is centered.
+              const footerWidth = transcriptWidth === 'full'
+                ? Math.max(rightPaneWidth - 5, 12)
+                : Math.max(transcriptMeasure(Math.max(rightPaneWidth - 4, 16) - densityState.bodyIndent, transcriptWidth), 16)
+                  + densityState.bodyIndent
+              return (
+                <box
+                  key="stream-turn-footer"
+                  paddingX={transcriptWidth === 'full' ? 1 : 0}
+                  marginBottom={densityState.cardGap}
+                  width={transcriptWidth === 'full' ? undefined : footerWidth}
+                  alignSelf={transcriptWidth === 'centered' ? 'center' : undefined}
+                >
+                  <text fg={theme.dim} width={footerWidth} wrapMode="none" selectable {...turnSummaryMouseProps(streamTurnFooter)}>
+                    {streamLandmarkText(streamTurnFooter, footerWidth)}
+                  </text>
+                </box>
+              )
+            })() : null}
+
+          </scrollbox>
+        )}
+        {stickyHeaders && stickyHeaderKey ? (() => {
+          const stickyCard = visibleTranscriptCards.find((card) => card.key === stickyHeaderKey)
+          if (!stickyCard) return null
+          // A prompt's first line can be a single word ("Do") with the
+          // request on the lines below it; the header reads them as one.
+          const stickyText = stickyPromptText(stickyCard)
+          return (
+            <box
+              id="sticky-header"
+              position="absolute"
+              top={0}
+              left={1}
+              width={Math.max(rightPaneWidth - 4, 12)}
+              height={1}
+              flexDirection="row"
+              zIndex={5}
+              backgroundColor={theme.userBg}
+              overflow="hidden"
+            >
+              <text fg={providerAccent} attributes={TextAttributes.BOLD} wrapMode="none" width={10} flexShrink={0}>{'▌ PROMPT  '}</text>
+              <text fg={theme.text} attributes={TextAttributes.BOLD} wrapMode="none">{fitText(stickyText, Math.max(rightPaneWidth - 14, 2))}</text>
+            </box>
+          )
+        })() : null}
+        {streamActionFooterRows > 0 ? (
+          <box height={streamActionFooterRows} paddingLeft={1}>
+            <text fg={theme.dim} wrapMode="none">
+              {effectiveFocus === 'messages'
+                ? fitText('b bookmark   Q quote/reply   y copy', Math.max(rightPaneWidth - 6, 12))
+                : ' '}
+            </text>
+          </box>
+        ) : null}
+      </box>
+
+      {chatTurnStatusRows > 0 ? (
+        <box
+          id="chat-turn-status"
+          height={1}
+          flexShrink={0}
+          paddingLeft={densityState.bodyIndent + 1}
+          flexDirection="row"
+        >
+          <text fg={theme.cyan} wrapMode="none">{'● '}</text>
+          <box flexGrow={1}>
+            {visibleComposerSending ? (
+              <ComposerWaitingStatus
+                startedAt={composerSendStartedAt}
+                seed={composerWaitingStatusSeed}
+                suffix={composerWaitingSuffix}
+                theme={theme}
+                width={Math.max(rightPaneWidth - densityState.bodyIndent - 6, 16)}
+                message={composerWaitingOnUser}
+              />
+            ) : (
+              <Spinner
+                label={fitText(
+                  visibleAwaitingPersistedTurn
+                    ? 'Syncing transcript…'
+                    : 'Turn running · reattached — output syncs as it persists · ⌃C interrupt',
+                  Math.max(rightPaneWidth - densityState.bodyIndent - 6, 16),
+                )}
+                fg={theme.cyan}
+                labelFg={theme.dim}
+              />
+            )}
+          </box>
+        </box>
+      ) : null}
+
+      {/* The idle ticker means "nothing is happening — still watching". A
+          running turn has its own pinned status row next to the composer
+          (elapsed, tokens, interrupt hint), so showing both put a spinner
+          reading "waiting patiently" directly above one reading "Shaping
+          the next move… 2s". Exactly one spinner is on screen at a time,
+          and which one tells you whether a turn is live.
+
+          Chat and Agents omit the idle ticker. Their single activity row
+          appears immediately above the composer only while a turn runs.
+          Stream and Scrollback omit it too: they are the bare transcript,
+          and two rows saying nothing is happening are two rows of it. */}
+      {followTail && visibleTranscriptCards.length > 0
+        && !turnRunningForComposer && !embeddedComposer && !isStreamView ? (
+        <box paddingX={2} paddingBottom={1}>
+          <IdleTicker seed={selectedSessionKey ?? ''} theme={theme} />
+        </box>
+      ) : null}
+
+      {!composerWindowOpen && !composerHidden && embeddedComposer ? (
+        // Chat and Agents: the composer is the reader box's own trailing child —
+        // a full-width highlighted bar in the same style as a user message
+        // row, inside the same border as the transcript, so it reads as
+        // the next line of the conversation rather than a docked control.
+        <box
+          id="composer-dock"
+          width="100%"
+          height={composerDockHeight}
+          flexDirection="column"
+          paddingX={1}
+          backgroundColor={theme.surface2}
+          border={['top', 'left', 'right']}
+          borderStyle="single"
+          borderColor={chatComposerFocused ? theme.border2 : theme.surface2}
+        >
+          <box
+            flexGrow={1}
+            overflow="hidden"
+            paddingX={1}
+            paddingBottom={1}
+            // Matches the textarea so the well covers the prompt glyph and
+            // the padding either side of it, not just the text.
+            backgroundColor={chatComposerFocused ? theme.bg : theme.surface2}
+            flexDirection="row"
+            onMouseDown={(event) => {
+              if (event.button !== 0) return
+              if (!composerActive) setComposerActive(true)
+              composerTextareaRef.current?.focus()
+            }}
+          >
+            <text fg={chatComposerFocused ? theme.text : theme.dim} wrapMode="none">
+              {chatComposerFocused ? '❯ ' : '› '}
+            </text>
+            <box flexGrow={1}>
+              {renderComposerTextarea(submitComposerFromDock, {
+                height: composerDockTextareaHeight,
+                width: Math.max(rightPaneWidth - 8, 1),
+                variant: 'chat',
+              })}
+            </box>
+          </box>
+          <box
+            id="chat-composer-status"
+            position="absolute"
+            bottom={-1}
+            left={1}
+            width={chatComposerStatusWidth}
+            height={1}
+            overflow="hidden"
+            flexDirection="row"
+            alignItems="center"
+          >
+            <box width={chatComposerStatsWidth} overflow="hidden" backgroundColor={theme.surface2}>
+              <text id="chat-composer-focus-state" fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none">
+                {composerSlashHint
+                  ? fitText(composerSlashHint, chatComposerStatsWidth)
+                  : renderInlineTextSegments(composerDockStatsSegments, chatComposerStatsWidth, theme.dim)}
+              </text>
+            </box>
+            <box flexGrow={1} />
+            <box width={chatComposerHintWidth} overflow="hidden" backgroundColor={theme.surface2}>
+              <text fg={chatComposerFocused && !visibleComposerSending ? composerAccentColor : theme.dim} wrapMode="none">
+                {chatComposerFocused && composerDockSendingHintSegments
+                  ? renderInlineTextSegments(composerDockSendingHintSegments, chatComposerHintWidth, theme.dim)
+                  : chatComposerHintFitted}
+              </text>
+            </box>
+          </box>
+        </box>
+      ) : null}
+      </box>
+
+    {openCodeContextWidth > 0 ? (
+      <box
+        id="opencode-context-panel"
+        width={openCodeContextWidth}
+        paddingX={1}
+        paddingTop={2}
+        backgroundColor={theme.bg}
+        flexDirection="column"
+      >
+        <text fg={theme.text} attributes={TextAttributes.BOLD} wrapMode="none">
+          {fitText(selectedSession ? formatSessionTitle(selectedSession) : 'Current session', openCodeContextWidth - 2)}
+        </text>
+        <box marginTop={2} flexDirection="column">
+          <text fg={theme.text} attributes={TextAttributes.BOLD} wrapMode="none">Context</text>
+          <text fg={theme.muted} wrapMode="none">
+            {contextUsage ? `${contextUsage.totalTokens.toLocaleString()} tokens` : 'Context unavailable'}
+          </text>
+          {contextUsage ? (
+            <text fg={theme.muted} wrapMode="none">{`${Math.round(contextUsage.percentage)}% used`}</text>
+          ) : null}
+        </box>
+      </box>
+    ) : null}
+    </>
+  )
+
+  // One split pane's frame, at the size its arrangement gives it.
+  const renderSplitPane = (splitSession: Session, splitIndex: number, size: { width: number; height: number; boxHeight: number | undefined }) => (
+    <box
+      key={`split:${sessionKey(splitSession)}`}
+      id={`split-pane:${splitIndex}`}
+      width={size.width}
+      // Stacked panes own a fixed row slice so the reader flex-grows into
+      // exactly what is left; side-by-side panes fill the column height.
+      height={size.boxHeight}
+      flexShrink={0}
+      flexDirection="column"
+      overflow="hidden"
+    >
+      <SplitTranscriptPane
+        session={splitSession}
+        paneIndex={splitIndex}
+        paneCount={visibleSplitPaneCount}
+        focused={splitFocusIndex === splitIndex}
+        registerHandle={registerSplitPaneHandle}
+        theme={theme}
+        densityState={densityState}
+        density={density}
+        showToolCalls={showToolCalls}
+        syntaxStyle={syntaxStyle}
+        thinkingMode={thinkingMode}
+        diffLayout={diffLayout}
+        imessageStyle={imessageStyle}
+        transcriptWidth={transcriptWidth}
+        transcriptView={transcriptView}
+        width={size.width}
+        height={size.height}
+        liveMessages={splitPaneLiveMessages.get(sessionKey(splitSession)) ?? SPLIT_PANE_EMPTY_LIVE}
+        running={splitPaneRunningKeys.has(sessionKey(splitSession))}
+        // Streaming text belongs to whichever session the composer is
+        // sending to; show it in the pane when that's this pane.
+        liveText={
+          composerSendState === 'sending'
+          && composerLiveText
+          && composerActivitySessionKey === sessionKey(splitSession)
+          && !(splitPaneLiveMessages.get(sessionKey(splitSession)) ?? []).some(isLiveAssistantTextMessage)
+            ? composerLiveText
+            : null
+        }
+        onActivate={focusSplitPane}
+        onClosePane={(paneIndex) => closeSplitPane(paneIndex)}
+        onPromotePane={() => selectTabSession(splitSession)}
+        sessionDrag={sessionDragHandlers}
+        shouldYieldToForeground={splitPaneShouldYield}
+      />
+    </box>
+  )
+
   // Dragging the panel's inner border by `delta` cells toward the reader (positive) or away.
   const resizeSurfacePanelBy = (delta: number) => {
     // A drag sets a size, so it ends an expansion.
@@ -23491,514 +24322,49 @@ export default function OpenTuiApp() {
           {/* Reader + split panes share one frame area. Side-by-side lays it
               out as columns; stacked as rows, which is the only shape a split
               can take on a terminal too narrow for two 46-column frames. */}
-          <box flexDirection={stackedSplit ? 'column' : 'row'} flexGrow={1}>
+          {/* Reader + split panes share one frame area, laid out by the
+              window arrangement: along one axis (the tmux-style split, which
+              is the only shape a narrow terminal can take), the reader beside
+              a stack, or a grid. */}
           <box
-            id="transcript-reader"
-            ref={readerBoxRef}
-            onMouseDown={(event) => {
-              // Clicking the transcript hands focus back from the surface panel,
-              // mirroring the panel's own click-to-focus.
-              if (event.button === 0 && surfacePanelFocused) setSurfacePanelFocused(false)
-            }}
+            id="window-area"
+            ref={windowAreaRef}
+            flexDirection={arrangedVisible
+              ? (splitArrangement === 'grid' ? 'column' : splitReaderLast ? 'row-reverse' : 'row')
+              : stackedSplit ? (splitReaderLast ? 'column-reverse' : 'column') : (splitReaderLast ? 'row-reverse' : 'row')}
             flexGrow={1}
-            border={fullscreenMode ? [] : ['top', 'left', 'right', 'bottom']}
-            borderStyle="single"
-            // One focus color across panes; provider identity stays in metadata.
-            borderColor={effectiveFocus === 'messages' && splitFocusIndex === null
-              ? theme.border2
-              : isChatLikeView
-                ? theme.surface
-                : theme.border}
-            backgroundColor={theme.surface}
-            flexDirection="column"
-            title={fullscreenMode || embeddedComposer ? undefined : readerFrameTitle}
-            titleColor={providerAccent}
           >
-          {fullscreenMode ? (
-            <box height={1} paddingX={1} flexDirection="row" alignItems="center">
-              <box flexGrow={1} />
-              <box
-                id="fullscreen-restore"
-                paddingX={1}
-                backgroundColor={theme.surface2}
-                onMouseDown={(event) => {
-                  if (event.button !== 0) return
-                  event.stopPropagation()
-                  toggleFullscreenMode(false)
-                }}
-              >
-                <text fg={theme.dim} wrapMode="none">FULLSCREEN  Shift+Z restore</text>
+          {arrangedVisible && splitArrangement === 'grid' && arrangedLayout.secondary ? (
+            <>
+              <box flexDirection={splitReaderLast ? 'row-reverse' : 'row'} height={arrangedLayout.reader.height} flexShrink={0}>
+                {readerFrameNode}
+                {splitPaneSessions[0] ? renderSplitPane(splitPaneSessions[0], 0, { ...arrangedLayout.panes[0]!, boxHeight: arrangedLayout.panes[0]!.height }) : null}
               </box>
-            </box>
-          ) : null}
-
-          {!presentationFocusMode && isCopilotView ? (
-            <box height={1} paddingX={1} flexDirection="row" alignItems="center">
-              {['Current', 'Sessions', 'Issues', 'Pull requests', 'Gists'].map((tab) => {
-                const active = tab === 'Current'
-                return (
-                  <box key={tab} paddingX={1} backgroundColor={active ? theme.cyan : theme.bg}>
-                    <text fg={active ? theme.bg : theme.muted} attributes={active ? TextAttributes.BOLD : undefined} wrapMode="none">{tab}</text>
-                  </box>
-                )
-              })}
-            </box>
-          ) : null}
-
-          {!presentationFocusMode && !isStreamView ? (
-            <box paddingX={2} paddingTop={1} flexDirection="row" alignItems="center">
-              <text fg={providerAccent} wrapMode="none">{'● '}</text>
-              <box flexGrow={1} overflow="hidden">
-                <text fg={theme.muted} wrapMode="none">
-                  {fitText(showTabs
-                    ? `${TRANSCRIPT_VIEW_LABELS[transcriptView]} · ${followTail ? 'Following latest' : 'Reading history'}`
-                    : `${TRANSCRIPT_VIEW_LABELS[transcriptView]} · ${readerTitle}`, Math.max(rightPaneWidth - readerContextMeta.length - 10, 12))}
-                </text>
+              <box flexDirection="row" height={arrangedLayout.secondary.height} flexShrink={0}>
+                {splitPaneSessions.slice(1).map((pane, index) => renderSplitPane(pane, index + 1, { ...arrangedLayout.panes[index + 1]!, boxHeight: arrangedLayout.panes[index + 1]!.height }))}
               </box>
-              <box width={readerContextMeta.length} overflow="hidden">
-                <text fg={theme.dim} wrapMode="none">{readerContextMeta}</text>
+            </>
+          ) : arrangedVisible ? (
+            <>
+              {readerFrameNode}
+              <box flexDirection="column" width={arrangedLayout.panes[0]!.width} flexShrink={0}>
+                {splitPaneSessions.map((pane, index) => renderSplitPane(pane, index, { ...arrangedLayout.panes[index]!, boxHeight: arrangedLayout.panes[index]!.height }))}
               </box>
-            </box>
-          ) : null}
-
-          {!presentationFocusMode && !isStreamView && contextUsage ? (
-            <box paddingX={1}>
-              <text wrapMode="none">
-                {renderInlineTextSegments(
-                  contextBarSegments(contextUsage.totalTokens, contextUsage.maxTokens, contextUsage.percentage, theme),
-                  rightPaneWidth - 4,
-                  theme.dim,
-                )}
-              </text>
-            </box>
-          ) : !presentationFocusMode && !isStreamView && selectedSession?.provider === 'claude' && contextUsageStatus === 'loading' ? (
-            <box paddingX={1}>
-              <text fg={theme.dim}>{fitText('Loading context usage…', rightPaneWidth - 4)}</text>
-            </box>
-          ) : !presentationFocusMode && !isStreamView && selectedSession?.provider === 'claude' && contextUsageStatus === 'unavailable' ? (
-            <box paddingX={1}>
-              <text fg={theme.dim}>{fitText('Context usage unavailable', rightPaneWidth - 4)}</text>
-            </box>
-          ) : null}
-
-          {fleetStripVisible ? (
-            <box paddingX={1} flexDirection="row" overflow="hidden">
-              <text wrapMode="none">
-                {renderInlineTextSegments(fleetStripSegments, rightPaneWidth - 4, theme.dim)}
-              </text>
-            </box>
-          ) : null}
-
-          {error ? (
-            <box paddingX={1} marginTop={1}>
-              <text fg={theme.red}>{fitText(error, rightPaneWidth - 4)}</text>
-            </box>
-          ) : null}
-
-          {!showToolCalls ? (
-            <box
-              id="show-tool-activity"
-              height={1}
-              paddingX={1}
-              onMouseDown={(event) => {
-                if (event.button !== 0) return
-                event.stopPropagation()
-                setShowToolCalls(true)
-                void writeTuiShowToolCalls(true).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store tool visibility'))
-              }}
-            >
-              <text fg={theme.amber} wrapMode="none">{fitText('TOOLS HIDDEN · Click or Shift+X to show file and tool activity', rightPaneWidth - 4)}</text>
-            </box>
-          ) : null}
-
-          {/* Reserved while reading history elsewhere; SCROLLBACK leaves the tail
-              on every scroll, and two rows appearing above the text would jolt
-              it, so there the banner exists only while it has something to say. */}
-          {!followTail && (!isScrollbackView || pendingNewCount > 0) ? (
-            <box paddingX={1} marginTop={1}>
-              <text fg={theme.amber}>
-                {pendingNewCount > 0
-                  ? fitText(`+${pendingNewCount} new messages waiting. Press u for first unread or f for live tail.`, rightPaneWidth - 4)
-                  : ' '}
-              </text>
-            </box>
-          ) : null}
-
-          {normalizedSearchQuery ? (
-            <box paddingX={1} marginTop={1}>
-              <text fg={theme.dim}>
-                {fitText(
-                  `/${searchQuery}  ${searchMatches.length === 0 ? 'no matches' : `${searchMatchIndex + 1}/${searchMatches.length} matches`}`,
-                  rightPaneWidth - 4,
-                )}
-              </text>
-            </box>
-          ) : null}
-
-          <box flexGrow={1} paddingX={1} paddingBottom={1} marginTop={stickyHeaders ? 0 : 1} overflow="hidden">
-            {(loadingDetail || formattingTranscriptCards) && visibleTranscriptCards.length === 0 ? (
-              <Spinner
-                label={fitText(formattingTranscriptCards ? 'Formatting transcript…' : 'Loading transcript…', rightPaneWidth - 6)}
-                fg={theme.dim}
-              />
-            ) : visibleTranscriptCards.length === 0 ? (
-              !selectedSession ? (
-                <box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1} paddingY={2}>
-                  <ascii-font text="AGENT VIEWER" font="tiny" color={theme.dim} />
-                  <box marginTop={1}>
-                    <text fg={theme.dim}>Select a session to begin reading</text>
-                  </box>
-                </box>
-              ) : (
-                (() => {
-                  const welcome = getProviderComposer(selectedSession.provider ?? null)
-                  const welcomeAccent = ((theme as unknown as Record<string, string>)[welcome.tuiAccentKey]) ?? theme.cyan
-                  const innerWidth = Math.max(rightPaneWidth - 4, 20)
-                  return (
-                    <box flexDirection="column" flexShrink={0}>
-                      <text height={1} flexShrink={0} fg={welcomeAccent} wrapMode="none">{fitText('Start an engineering task', innerWidth)}</text>
-                      <text height={1} flexShrink={0} fg={theme.dim} wrapMode="none">{fitText('Inspect code, review a change, or investigate a failure.', innerWidth)}</text>
-                      <box marginTop={1} flexDirection="column" flexShrink={0}>
-                        {welcome.welcomeBullets.slice(0, 3).map((bullet) => (
-                          <box key={bullet} flexDirection="row" height={1} flexShrink={0} width={innerWidth}>
-                            <text fg={welcomeAccent} wrapMode="none">{welcome.glyph} </text>
-                            <text fg={theme.text} wrapMode="none">{fitText(bullet, innerWidth - 2)}</text>
-                          </box>
-                        ))}
-                      </box>
-                      <box marginTop={1} height={1} flexShrink={0}>
-                        <text fg={theme.dim} wrapMode="none">{fitText('Press c to compose · ? keyboard help', innerWidth)}</text>
-                      </box>
-                    </box>
-                  )
-                })()
-              )
-            ) : (
-              <scrollbox
-                id="transcript-scroll"
-                ref={transcriptScrollRef}
-                style={{ height: transcriptViewportRows }}
-                // Never while the composer is up: OpenTUI has one focus slot,
-                // and this scrollbox remounting (a new session's empty state
-                // becoming a transcript after its first turn) would take it
-                // from the textarea — which still read FOCUSED but dropped
-                // every keystroke.
-                focused={effectiveFocus === 'messages' && splitFocusIndex === null && !composerActive}
-                // Match the card surface, not theme.bg: cards render on `surface`,
-                // so when bg is darker than surface (e.g. SENTRY #150f23 vs
-                // #1f1633) the cardGap rows between cards revealed bg as dark
-                // bands in comfortable/balanced (dense has cardGap 0, no gaps).
-                // Surfacing the viewport makes the gaps blend; borders still
-                // delineate cards, and cursor/selected cards keep surface2/3.
-                backgroundColor={theme.surface}
-                stickyScroll={followTail}
-                stickyStart="bottom"
-                scrollY
-                scrollAcceleration={MESSAGE_SCROLL_ACCEL}
-                viewportCulling
-                scrollbarOptions={transcriptScrollbarOptions}
-                // One handler for the whole transcript: `getLinkAt` resolves a
-                // screen cell, so nothing here needs to know which card or row
-                // was hit. Card-level handlers do not stopPropagation, so their
-                // own select-on-press still runs and the press reaches this
-                // container either way.
-                onMouseDown={noteTranscriptLinkPress}
-                onMouseUp={releaseTranscriptPress}
-                >
-                <box height={TRANSCRIPT_TOP_MARGIN} />
-                <TuiErrorBoundary>
-                  <ReaderTranscriptWindow inputs={readerWindowInputs} />
-                </TuiErrorBoundary>
-
-                {visibleComposerSending && visibleComposerLiveText && !liveAssistantTextCardVisible ? (
-                  isChatLikeView ? (
-                    <box
-                      key="live-stream-text"
-                      marginBottom={densityState.cardGap}
-                      paddingLeft={densityState.bodyIndent}
-                    >
-                      <text fg={theme.text} width={Math.max(rightPaneWidth - densityState.bodyIndent - 4, 16)} wrapMode="word">
-                        {`● ${visibleComposerLiveText}`}
-                      </text>
-                    </box>
-                  ) : (
-                    <box key="live-stream-text" flexDirection="column" marginBottom={densityState.cardGap}>
-                      <box border borderStyle="single" borderColor={providerAccent} backgroundColor={theme.surface}>
-                        <box flexDirection="column" width={rightPaneWidth - 4}>
-                          <box paddingX={1} paddingTop={1}>
-                            <text fg={providerAccent}>
-                              {fitText('● assistant  streaming', rightPaneWidth - 6)}
-                            </text>
-                          </box>
-                          <box paddingX={1} paddingY={1}>
-                            <text fg={theme.text} wrapMode="word">
-                              {visibleComposerLiveText}
-                            </text>
-                          </box>
-                        </box>
-                      </box>
-                    </box>
-                  )
-                ) : null}
-
-                {streamTurnFooter ? (() => {
-                  // The same box a stream card draws its own turn rule in, so
-                  // the closing rule shares the column's edge instead of
-                  // hugging the pane's while the text above it is centered.
-                  const footerWidth = transcriptWidth === 'full'
-                    ? Math.max(rightPaneWidth - 5, 12)
-                    : Math.max(transcriptMeasure(Math.max(rightPaneWidth - 4, 16) - densityState.bodyIndent, transcriptWidth), 16)
-                      + densityState.bodyIndent
-                  return (
-                    <box
-                      key="stream-turn-footer"
-                      paddingX={transcriptWidth === 'full' ? 1 : 0}
-                      marginBottom={densityState.cardGap}
-                      width={transcriptWidth === 'full' ? undefined : footerWidth}
-                      alignSelf={transcriptWidth === 'centered' ? 'center' : undefined}
-                    >
-                      <text fg={theme.dim} width={footerWidth} wrapMode="none" selectable {...turnSummaryMouseProps(streamTurnFooter)}>
-                        {streamLandmarkText(streamTurnFooter, footerWidth)}
-                      </text>
-                    </box>
-                  )
-                })() : null}
-
-              </scrollbox>
-            )}
-            {stickyHeaders && stickyHeaderKey ? (() => {
-              const stickyCard = visibleTranscriptCards.find((card) => card.key === stickyHeaderKey)
-              if (!stickyCard) return null
-              // A prompt's first line can be a single word ("Do") with the
-              // request on the lines below it; the header reads them as one.
-              const stickyText = stickyPromptText(stickyCard)
-              return (
-                <box
-                  id="sticky-header"
-                  position="absolute"
-                  top={0}
-                  left={1}
-                  width={Math.max(rightPaneWidth - 4, 12)}
-                  height={1}
-                  flexDirection="row"
-                  zIndex={5}
-                  backgroundColor={theme.userBg}
-                  overflow="hidden"
-                >
-                  <text fg={providerAccent} attributes={TextAttributes.BOLD} wrapMode="none" width={10} flexShrink={0}>{'▌ PROMPT  '}</text>
-                  <text fg={theme.text} attributes={TextAttributes.BOLD} wrapMode="none">{fitText(stickyText, Math.max(rightPaneWidth - 14, 2))}</text>
-                </box>
-              )
-            })() : null}
-            {streamActionFooterRows > 0 ? (
-              <box height={streamActionFooterRows} paddingLeft={1}>
-                <text fg={theme.dim} wrapMode="none">
-                  {effectiveFocus === 'messages'
-                    ? fitText('b bookmark   Q quote/reply   y copy', Math.max(rightPaneWidth - 6, 12))
-                    : ' '}
-                </text>
-              </box>
-            ) : null}
-          </box>
-
-          {chatTurnStatusRows > 0 ? (
-            <box
-              id="chat-turn-status"
-              height={1}
-              flexShrink={0}
-              paddingLeft={densityState.bodyIndent + 1}
-              flexDirection="row"
-            >
-              <text fg={theme.cyan} wrapMode="none">{'● '}</text>
-              <box flexGrow={1}>
-                {visibleComposerSending ? (
-                  <ComposerWaitingStatus
-                    startedAt={composerSendStartedAt}
-                    seed={composerWaitingStatusSeed}
-                    suffix={composerWaitingSuffix}
-                    theme={theme}
-                    width={Math.max(rightPaneWidth - densityState.bodyIndent - 6, 16)}
-                    message={composerWaitingOnUser}
-                  />
-                ) : (
-                  <Spinner
-                    label={fitText(
-                      visibleAwaitingPersistedTurn
-                        ? 'Syncing transcript…'
-                        : 'Turn running · reattached — output syncs as it persists · ⌃C interrupt',
-                      Math.max(rightPaneWidth - densityState.bodyIndent - 6, 16),
-                    )}
-                    fg={theme.cyan}
-                    labelFg={theme.dim}
-                  />
-                )}
-              </box>
-            </box>
-          ) : null}
-
-          {/* The idle ticker means "nothing is happening — still watching". A
-              running turn has its own pinned status row next to the composer
-              (elapsed, tokens, interrupt hint), so showing both put a spinner
-              reading "waiting patiently" directly above one reading "Shaping
-              the next move… 2s". Exactly one spinner is on screen at a time,
-              and which one tells you whether a turn is live.
-
-              Chat and Agents omit the idle ticker. Their single activity row
-              appears immediately above the composer only while a turn runs.
-              Stream and Scrollback omit it too: they are the bare transcript,
-              and two rows saying nothing is happening are two rows of it. */}
-          {followTail && visibleTranscriptCards.length > 0
-            && !turnRunningForComposer && !embeddedComposer && !isStreamView ? (
-            <box paddingX={2} paddingBottom={1}>
-              <IdleTicker seed={selectedSessionKey ?? ''} theme={theme} />
-            </box>
-          ) : null}
-
-          {!composerWindowOpen && !composerHidden && embeddedComposer ? (
-            // Chat and Agents: the composer is the reader box's own trailing child —
-            // a full-width highlighted bar in the same style as a user message
-            // row, inside the same border as the transcript, so it reads as
-            // the next line of the conversation rather than a docked control.
-            <box
-              id="composer-dock"
-              width="100%"
-              height={composerDockHeight}
-              flexDirection="column"
-              paddingX={1}
-              backgroundColor={theme.surface2}
-              border={['top', 'left', 'right']}
-              borderStyle="single"
-              borderColor={chatComposerFocused ? theme.border2 : theme.surface2}
-            >
-              <box
-                flexGrow={1}
-                overflow="hidden"
-                paddingX={1}
-                paddingBottom={1}
-                // Matches the textarea so the well covers the prompt glyph and
-                // the padding either side of it, not just the text.
-                backgroundColor={chatComposerFocused ? theme.bg : theme.surface2}
-                flexDirection="row"
-                onMouseDown={(event) => {
-                  if (event.button !== 0) return
-                  if (!composerActive) setComposerActive(true)
-                  composerTextareaRef.current?.focus()
-                }}
-              >
-                <text fg={chatComposerFocused ? theme.text : theme.dim} wrapMode="none">
-                  {chatComposerFocused ? '❯ ' : '› '}
-                </text>
-                <box flexGrow={1}>
-                  {renderComposerTextarea(submitComposerFromDock, {
-                    height: composerDockTextareaHeight,
-                    width: Math.max(rightPaneWidth - 8, 1),
-                    variant: 'chat',
-                  })}
-                </box>
-              </box>
-              <box
-                id="chat-composer-status"
-                position="absolute"
-                bottom={-1}
-                left={1}
-                width={chatComposerStatusWidth}
-                height={1}
-                overflow="hidden"
-                flexDirection="row"
-                alignItems="center"
-              >
-                <box width={chatComposerStatsWidth} overflow="hidden" backgroundColor={theme.surface2}>
-                  <text id="chat-composer-focus-state" fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none">
-                    {composerSlashHint
-                      ? fitText(composerSlashHint, chatComposerStatsWidth)
-                      : renderInlineTextSegments(composerDockStatsSegments, chatComposerStatsWidth, theme.dim)}
-                  </text>
-                </box>
-                <box flexGrow={1} />
-                <box width={chatComposerHintWidth} overflow="hidden" backgroundColor={theme.surface2}>
-                  <text fg={chatComposerFocused && !visibleComposerSending ? composerAccentColor : theme.dim} wrapMode="none">
-                    {chatComposerFocused && composerDockSendingHintSegments
-                      ? renderInlineTextSegments(composerDockSendingHintSegments, chatComposerHintWidth, theme.dim)
-                      : chatComposerHintFitted}
-                  </text>
-                </box>
-              </box>
-            </box>
-          ) : null}
-          </box>
-
-        {openCodeContextWidth > 0 ? (
-          <box
-            id="opencode-context-panel"
-            width={openCodeContextWidth}
-            paddingX={1}
-            paddingTop={2}
-            backgroundColor={theme.bg}
-            flexDirection="column"
-          >
-            <text fg={theme.text} attributes={TextAttributes.BOLD} wrapMode="none">
-              {fitText(selectedSession ? formatSessionTitle(selectedSession) : 'Current session', openCodeContextWidth - 2)}
-            </text>
-            <box marginTop={2} flexDirection="column">
-              <text fg={theme.text} attributes={TextAttributes.BOLD} wrapMode="none">Context</text>
-              <text fg={theme.muted} wrapMode="none">
-                {contextUsage ? `${contextUsage.totalTokens.toLocaleString()} tokens` : 'Context unavailable'}
-              </text>
-              {contextUsage ? (
-                <text fg={theme.muted} wrapMode="none">{`${Math.round(contextUsage.percentage)}% used`}</text>
-              ) : null}
-            </box>
-          </box>
-        ) : null}
-
-        {/* Split panes live in the reader's frame area, under the shared tab
-            strip, so every frame in here lines up on the axis they share. */}
-        {splitPaneSessions.map((splitSession, splitIndex) => (
-          <box
-            key={`split:${sessionKey(splitSession)}`}
-            width={splitPaneWidth}
-            // Stacked panes own a fixed row slice so the reader flex-grows into
-            // exactly what is left; side-by-side panes fill the column height.
-            height={stackedSplit ? splitPaneBoxHeight : undefined}
-            flexShrink={0}
-            flexDirection="column"
-            overflow="hidden"
-          >
-            <SplitTranscriptPane
-              session={splitSession}
-              paneIndex={splitIndex}
-              paneCount={visibleSplitPaneCount}
-              focused={splitFocusIndex === splitIndex}
-              registerHandle={registerSplitPaneHandle}
-              theme={theme}
-              densityState={densityState}
-              density={density}
-              showToolCalls={showToolCalls}
-              syntaxStyle={syntaxStyle}
-              thinkingMode={thinkingMode}
-              diffLayout={diffLayout}
-              imessageStyle={imessageStyle}
-              transcriptWidth={transcriptWidth}
-              transcriptView={transcriptView}
-              width={splitPaneWidth}
-              height={splitPaneBoxHeight}
-              liveMessages={splitPaneLiveMessages.get(sessionKey(splitSession)) ?? SPLIT_PANE_EMPTY_LIVE}
-              running={splitPaneRunningKeys.has(sessionKey(splitSession))}
-              // Streaming text belongs to whichever session the composer is
-              // sending to; show it in the pane when that's this pane.
-              liveText={
-                composerSendState === 'sending'
-                && composerLiveText
-                && composerActivitySessionKey === sessionKey(splitSession)
-                && !(splitPaneLiveMessages.get(sessionKey(splitSession)) ?? []).some(isLiveAssistantTextMessage)
-                  ? composerLiveText
-                  : null
-              }
-              onActivate={focusSplitPane}
-              shouldYieldToForeground={splitPaneShouldYield}
-            />
-          </box>
-        ))}
+            </>
+          ) : (
+            <>
+              {readerFrameNode}
+              {/* Split panes live in the reader's frame area, under the shared tab
+                  strip, so every frame in here lines up on the axis they share. */}
+              {splitPaneSessions.map((pane, index) => renderSplitPane(pane, index, {
+                width: splitPaneWidth,
+                height: splitPaneBoxHeight,
+                // Stacked panes own a fixed row slice so the reader flex-grows into
+                // exactly what is left; side-by-side panes fill the column height.
+                boxHeight: stackedSplit ? splitPaneBoxHeight : undefined,
+              }))}
+            </>
+          )}
           </box>
         </box>
 
@@ -25900,6 +26266,74 @@ export default function OpenTuiApp() {
         )
       })() : null}
 
+      {splitDividerDragging ? (
+        // The divider drag, held by a full-screen layer for the same reason as the panel's.
+        <box
+          position="absolute"
+          top={0}
+          left={0}
+          width={width}
+          height={height}
+          zIndex={1000}
+          backgroundColor={RGBA.fromValues(0, 0, 0, 0)}
+          onMouseDrag={(event: { x: number; y: number }) => dragSplitDivider(event)}
+          onMouseUp={() => endSplitDividerDrag()}
+        />
+      ) : null}
+
+      {sessionDrag ? (() => {
+        // Where a dragged session would land. Drawn only: the press that
+        // started the drag holds it, so these boxes take no events of their own.
+        const area = windowAreaRect()
+        if (!area) return null
+        const rect = sessionDrag.zone ? windowDropZoneRect(area, sessionDrag.zone) : null
+        const label = !sessionDrag.zone ? 'Drop on the reader'
+          : sessionDrag.zone === 'center' ? 'Open in the reader'
+          : `Put it ${sessionDrag.zone === 'left' ? 'left of' : sessionDrag.zone === 'right' ? 'right of' : sessionDrag.zone === 'top' ? 'above' : 'below'} the reader`
+        return (
+          <>
+            {rect ? (
+              <box
+                id="window-drop-zone"
+                position="absolute"
+                top={rect.y}
+                left={rect.x}
+                width={rect.width}
+                height={rect.height}
+                zIndex={900}
+                border
+                borderStyle="double"
+                borderColor={theme.cyan}
+              />
+            ) : null}
+            <box
+              position="absolute"
+              top={(rect ?? area).y + Math.floor((rect ?? area).height / 2)}
+              left={(rect ?? area).x + Math.max(1, Math.floor(((rect ?? area).width - label.length - 4) / 2))}
+              height={1}
+              zIndex={901}
+              backgroundColor={theme.cyan}
+              paddingX={1}
+            >
+              <text fg={theme.bg} wrapMode="none" selectable={false}>{`${label} · ${fitText(formatSessionTitle(sessionDrag.session), 30)}`}</text>
+            </box>
+          </>
+        )
+      })() : null}
+
+      {windowPickerOpen ? (
+        <WindowLayoutPicker
+          theme={theme}
+          width={width}
+          height={height}
+          current={currentWindowLayoutAction}
+          fullscreen={fullscreenMode}
+          onPick={(action) => applyWindowLayout(action)}
+          onClose={() => setWindowPickerOpen(false)}
+          onKeyHandlerReady={(handler) => { windowPickerKeyHandlerRef.current = handler }}
+        />
+      ) : null}
+
       {surfacePanelResizing ? (
         // Takes the whole drag once it leaves the one-cell border: transparent,
         // but hit-testable, so the first motion event captures this layer.
@@ -25928,7 +26362,7 @@ export default function OpenTuiApp() {
 
       <ToastOverlay toasts={toasts} theme={theme} width={width} height={height} zIndex={remoteCoordinatorTarget ? MODAL_SCRIM_Z_INDEX - 1 : undefined} />
 
-      {worktreeModalOpen || worktreeConfirm || coordModalOpen || coordBoardOpen || teammatesOpen || remoteCoordinatorTarget || (fileHistoryPath && gitRepoCwd) || dailySummaryOpen ? (
+      {worktreeModalOpen || worktreeConfirm || coordModalOpen || coordBoardOpen || teammatesOpen || remoteCoordinatorTarget || (fileHistoryPath && gitRepoCwd) || dailySummaryOpen || windowPickerOpen ? (
         <box
           position="absolute"
           top={0}

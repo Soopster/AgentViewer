@@ -188,6 +188,8 @@ type TuiState = {
   showToolCalls?: unknown
   velocityScroll?: unknown
   surfacePanelPlacement?: unknown
+  splitArrangement?: unknown
+  splitReaderLast?: unknown
   sidebarSort?: unknown
   hideScratchSessions?: unknown
   showSettledSessions?: unknown
@@ -500,6 +502,18 @@ export async function setConfiguredTuiVelocityScroll(velocityScroll: boolean): P
 }
 
 export type TuiSurfacePanelPlacement = 'right' | 'bottom'
+
+export type TuiWindowArrangement = 'split' | 'main-stack' | 'grid'
+
+export async function getConfiguredTuiWindowArrangement(): Promise<{ arrangement: TuiWindowArrangement; readerLast: boolean }> {
+  const parsed = await readTuiState()
+  const arrangement = parsed.splitArrangement === 'main-stack' || parsed.splitArrangement === 'grid' ? parsed.splitArrangement : 'split'
+  return { arrangement, readerLast: parsed.splitReaderLast === true }
+}
+
+export async function setConfiguredTuiWindowArrangement(arrangement: TuiWindowArrangement, readerLast: boolean): Promise<void> {
+  await writeTuiState({ splitArrangement: arrangement, splitReaderLast: readerLast })
+}
 
 export async function getConfiguredTuiSurfacePanelPlacement(): Promise<TuiSurfacePanelPlacement> {
   const parsed = await readTuiState()

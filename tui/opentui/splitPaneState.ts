@@ -59,6 +59,8 @@ export const SPLIT_CHORD_HELP: SplitChordSection[] = [
       { keys: 'r', label: 'rotate side-by-side ↔ stacked', short: 'rotate' },
       { keys: 'n', label: 'next session in this pane', short: 'next' },
       { keys: 'x', label: 'close pane', short: 'close' },
+      // Out of the one-line hint, which is at its width budget; the reader's ⊞ button and the palette advertise it.
+      { keys: 'w', label: 'window layout menu (move, arrange, full screen)', short: 'layout', hint: false },
       { keys: 'z', label: 'toggle split panes off/on', short: 'toggle' },
     ],
   },
