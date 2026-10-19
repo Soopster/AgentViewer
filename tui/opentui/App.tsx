@@ -7699,7 +7699,7 @@ type SplitTranscriptPaneProps = {
   onActivate: (paneIndex: number) => void
   /** The title bar's buttons: close this pane, or open its session in the reader. */
   onClosePane: (paneIndex: number) => void
-  onPromotePane: () => void
+  onPromotePane: (session: Session) => void
   /** Dragging the pane by its title onto the window area (App's shared press/move/release). */
   sessionDrag: { press: (session: Session, fromPane: number | null, event: { x: number; y: number }, onClick?: () => void) => void; move: (event: { x: number; y: number }) => void; release: (event: { x: number; y: number }) => void }
   // True while the reader is opening a session. The threading worker is
@@ -7739,6 +7739,8 @@ function SplitTranscriptPaneInner({
 }: SplitTranscriptPaneProps) {
   const paneFrameRef = useRef<BoxRenderable | null>(null)
   const titleClickRef = useRef<{ x: number; y: number; at: number } | null>(null)
+  const promoteThisPane = useCallback(() => onPromotePane(session), [onPromotePane, session])
+  const closeThisPane = useCallback(() => onClosePane(paneIndex), [onClosePane, paneIndex])
   const [cards, setCards] = useState<TuiTranscriptCard[]>([])
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [error, setError] = useState<string | null>(null)
@@ -8193,7 +8195,7 @@ function SplitTranscriptPaneInner({
         onActivate(paneIndex)
         // The title row is the handle a window is dragged by; a double-click on it opens the pane in the reader.
         if (paneFrameRef.current && event.y === paneFrameRef.current.y) {
-          if (isDoubleClick(titleClickRef, event)) { onPromotePane(); return }
+          if (isDoubleClick(titleClickRef, event)) { onPromotePane(session); return }
           sessionDrag.press(session, paneIndex, event)
         }
       }}
@@ -8201,8 +8203,8 @@ function SplitTranscriptPaneInner({
       onMouseUp={(event) => sessionDrag.release(event)}
     >
       <box position="absolute" top={-1} right={1} height={1} flexDirection="row" zIndex={3}>
-        <WindowButton id={`split-pane-promote:${paneIndex}`} label=" ⤢ " theme={theme} onPress={onPromotePane} />
-        <WindowButton id={`split-pane-close:${paneIndex}`} label=" × " theme={theme} tone="danger" onPress={() => onClosePane(paneIndex)} />
+        <WindowButton id={`split-pane-promote:${paneIndex}`} label=" ⤢ " theme={theme} onPress={promoteThisPane} />
+        <WindowButton id={`split-pane-close:${paneIndex}`} label=" × " theme={theme} tone="danger" onPress={closeThisPane} />
       </box>
       <box flexGrow={1} paddingX={1} overflow="hidden">
         {status === 'error' ? (
@@ -9089,6 +9091,15 @@ export default function OpenTuiApp() {
     move: (_event: { x: number; y: number }) => {},
     release: (_event: { x: number; y: number }) => {},
   })
+  // A pane's title buttons, stable across renders: the panes are memoized, and
+  // a fresh function per render would re-render every pane with the root.
+  const splitPaneActionsRef = useRef({ close: (_paneIndex: number) => {}, promote: (_session: Session) => {}, fullscreen: () => {} })
+  const splitPaneActions = useMemo(() => ({
+    close: (paneIndex: number) => splitPaneActionsRef.current.close(paneIndex),
+    promote: (session: Session) => splitPaneActionsRef.current.promote(session),
+    openLayout: () => setWindowPickerOpen(true),
+    fullscreen: () => splitPaneActionsRef.current.fullscreen(),
+  }), [])
   const sessionDragHandlers = useMemo(() => ({
     /** `onClick` runs on a release that did not move: whichever of the row or the layer gets it. */
     press: (session: Session, fromPane: number | null, event: { x: number; y: number }, onClick?: () => void) => sessionDragImplRef.current.press(session, fromPane, event, onClick),
@@ -19807,6 +19818,11 @@ export default function OpenTuiApp() {
     showNotice('info', `${fitText(formatSessionTitle(session), 40)} · ${zone === 'left' ? 'left of' : zone === 'right' ? 'right of' : zone === 'top' ? 'above' : 'below'} the reader`)
   })
 
+  splitPaneActionsRef.current = {
+    close: (paneIndex) => closeSplitPane(paneIndex),
+    promote: (session) => selectTabSession(session),
+    fullscreen: () => toggleFullscreenMode(),
+  }
   sessionDragImplRef.current = {
     press: (session, fromPane, event, onClick) => {
       sessionPressRef.current = { session, fromPane, x: event.x, y: event.y, dragging: false, onClick }
@@ -23544,8 +23560,8 @@ export default function OpenTuiApp() {
       {!fullscreenMode && !embeddedComposer ? (
         // Window controls in the top border, where a title bar keeps its buttons.
         <box id="reader-window-controls" position="absolute" top={-1} right={1} height={1} flexDirection="row" zIndex={3}>
-          <WindowButton id="reader-window-layout" label=" ⊞ layout " theme={theme} onPress={() => setWindowPickerOpen(true)} />
-          <WindowButton id="reader-window-fullscreen" label=" ⤢ " theme={theme} onPress={() => toggleFullscreenMode()} />
+          <WindowButton id="reader-window-layout" label=" ⊞ layout " theme={theme} onPress={splitPaneActions.openLayout} />
+          <WindowButton id="reader-window-fullscreen" label=" ⤢ " theme={theme} onPress={splitPaneActions.fullscreen} />
         </box>
       ) : null}
       {!fullscreenMode && visibleSplitPaneCount > 0 ? (
@@ -24058,8 +24074,8 @@ export default function OpenTuiApp() {
             : null
         }
         onActivate={focusSplitPane}
-        onClosePane={(paneIndex) => closeSplitPane(paneIndex)}
-        onPromotePane={() => selectTabSession(splitSession)}
+        onClosePane={splitPaneActions.close}
+        onPromotePane={splitPaneActions.promote}
         sessionDrag={sessionDragHandlers}
         shouldYieldToForeground={splitPaneShouldYield}
       />

@@ -1299,6 +1299,11 @@ drawn in have one source; `windowLayoutSmoke.ts` checks every arrangement tiles 
   the reader to the other side.
 - **A second divider** (`split-secondary-divider`, drawn at the root over the border): the grid's
   row split, or a stack's first pane (`secondaryShare`, kept in `tui.json`).
+- **Every callback handed to a split pane or a `WindowButton` must be stable** (`splitPaneActions`,
+  `sessionDragHandlers`, refs behind `useMemo`). Panes are `React.memo`'d; the first version passed
+  inline arrows for close/promote, which re-rendered every pane with the root — measured A/B
+  against ff6bbea with `tui:inputperf`: split-reader-rows went from 14 to 48 frames over budget, back
+  to level once stable. `WindowButton` is memoized for the same reason.
 - **`⌃B` arrows focus the window that way** (`windowInDirection`, from the laid-out frames,
   preferring the frame directly beside); `⌃B o`/Tab still cycle.
 - **Title-bar controls are `WindowButton`s** (dim at rest, lit under the pointer); a double-click on a

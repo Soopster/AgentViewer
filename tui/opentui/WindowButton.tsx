@@ -1,11 +1,13 @@
 /** @jsxImportSource @opentui/react */
 // A title-bar button: dim at rest, lit under the pointer, acting on press. The
 // hover is what tells a terminal user a glyph in a border is clickable at all.
-import { useState } from 'react'
+import { memo, useState } from 'react'
 
 import type { TuiThemePalette } from '../theme'
 
-export function WindowButton({
+// Memoized: title bars re-render with the root and with every pane, and these
+// sit in every one of them.
+export const WindowButton = memo(function WindowButton({
   id,
   label,
   theme,
@@ -44,4 +46,4 @@ export function WindowButton({
       </text>
     </box>
   )
-}
+})
