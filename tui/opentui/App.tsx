@@ -35,6 +35,8 @@ import { computeResponsiveWindowLayout, windowLayoutRects, windowPreviewLines, r
 import type { WindowLayoutAction } from './WindowLayoutPicker'
 import type { ContextMenuItem } from './ContextMenu'
 import { WindowHistory } from './windowHistory'
+import { windowSessionTarget, type WindowTarget } from './windowTargets'
+import type { BroadcastDelivery } from './windowBroadcast'
 import { nextWindowNeedingAttention, observeWindowAttention, readWindowAttention, windowAttentionBadge, type WindowAttention } from './windowAttention'
 import { planWindowArrangement, planWindowSessionDrop, type WindowSessionDrop } from './windowOperations'
 import { deleteWindowLayout, describeSavedLayout, listSavedWindowLayouts, saveWindowLayout, updateWindowLayout, type SavedWindowLayout } from './windowLayoutStore'
@@ -437,6 +439,8 @@ const PromptLibraryPopover = lazyComponent(() => import('./PromptLibraryPopover'
 const CheckpointPopover = lazyComponent(() => import('./CheckpointPopover').then((module) => module.CheckpointPopover))
 const FileHistoryPopover = lazyComponent(() => import('./FileHistoryPopover').then((module) => module.FileHistoryPopover))
 const ContextMenu = lazyComponent(() => import('./ContextMenu').then((module) => module.ContextMenu))
+const WindowSwitcherPopover = lazyComponent(() => import('./WindowSwitcherPopover').then((module) => module.WindowSwitcherPopover))
+const WindowBroadcastPopover = lazyComponent(() => import('./WindowBroadcastPopover').then((module) => module.WindowBroadcastPopover))
 const WindowLayoutPicker = lazyComponent(() => import('./WindowLayoutPicker').then((module) => module.WindowLayoutPicker))
 const DailySummaryPopover = lazyComponent(() => import('./DailySummaryPopover').then((module) => module.DailySummaryPopover))
 const ProcessPane = lazyComponent(() => import('./ProcessPane').then((module) => module.ProcessPane))
@@ -5761,6 +5765,8 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'split-shrink-reader', label: 'Shrink reader in split', key: splitCommandKey('<', RUNNING_INSIDE_TMUX), category: 'View' },
   { id: 'split-even',   label: 'Even split sizes',          key: splitCommandKey('=', RUNNING_INSIDE_TMUX), category: 'View' },
   { id: 'window-next-attention', label: 'Next window needing attention', key: splitCommandKey('a', RUNNING_INSIDE_TMUX), category: 'View' },
+  { id: 'window-switcher', label: 'Switch window', key: splitCommandKey('p', RUNNING_INSIDE_TMUX), category: 'View' },
+  { id: 'window-broadcast', label: 'Broadcast prompt to session windows', key: splitCommandKey('b', RUNNING_INSIDE_TMUX), category: 'View' },
   { id: 'window-undo', label: 'Undo window change', key: splitCommandKey('u', RUNNING_INSIDE_TMUX), category: 'View' },
   { id: 'split-help',   label: 'Split pane keybinds',       key: splitCommandKey('?', RUNNING_INSIDE_TMUX), category: 'View' },
   { id: 'split-close',  label: 'Close split pane',         key: splitCommandKey('x', RUNNING_INSIDE_TMUX), category: 'View'  },
@@ -9163,6 +9169,11 @@ export default function OpenTuiApp() {
   const [splitArrangement, setSplitArrangement] = useState<WindowArrangement>('split')
   const [splitReaderLast, setSplitReaderLast] = useState(false)
   const [windowPickerOpen, setWindowPickerOpen] = useState(false)
+  const [windowSwitcherOpen, setWindowSwitcherOpen] = useState(false)
+  const [windowBroadcastOpen, setWindowBroadcastOpen] = useState(false)
+  const [windowSurfacePeek, setWindowSurfacePeek] = useState<WindowSurfaceKind | null>(null)
+  const windowSwitcherKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean) | null>(null)
+  const windowBroadcastKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean) | null>(null)
   const [windowLayoutPreview, setWindowLayoutPreview] = useState<string | null>(null)
   const [windowAttention, setWindowAttention] = useState<Map<string, WindowAttention>>(() => new Map())
   const windowObservedFocusRef = useRef<string | null>(null)
@@ -9905,6 +9916,8 @@ export default function OpenTuiApp() {
     || analyticsOpen
     || deskOpen
     || crossSessionMessagingOpen
+    || windowSwitcherOpen
+    || windowBroadcastOpen
     || handoffBriefOpen
     || promptLibraryOpen
     || channelBridgeOpen
@@ -12639,13 +12652,18 @@ export default function OpenTuiApp() {
     ? splitPinnedSessions.slice(0, Math.max(0, Math.min(visibleSplitPaneCount - windowSurfaces.length, splitPaneCount)))
     : []
   const visibleWindowSurfaces = windowSurfaces.slice(0, Math.max(0, visibleSplitPaneCount - splitPaneSessions.length))
-  const focusedWindowSurface: WindowSurfaceKind | null = splitFocusIndex !== null && splitFocusIndex >= splitPaneSessions.length
+  const focusedWindowSurface: WindowSurfaceKind | null = windowSurfacePeek ?? (splitFocusIndex !== null && splitFocusIndex >= splitPaneSessions.length
     ? visibleWindowSurfaces[splitFocusIndex - splitPaneSessions.length] ?? null
-    : null
+    : null)
   type WindowItem = { kind: 'session'; session: Session } | { kind: 'surface'; surface: WindowSurfaceKind }
   const windowItems: WindowItem[] = [
     ...splitPaneSessions.map((session): WindowItem => ({ kind: 'session', session })),
     ...visibleWindowSurfaces.map((surface): WindowItem => ({ kind: 'surface', surface })),
+  ]
+  const windowTargets: WindowTarget[] = [
+    ...(selectedSession ? [windowSessionTarget(selectedSession, false)] : []),
+    ...splitPinnedSessions.slice(0, splitPaneCount).map((session) => windowSessionTarget(session, !splitPaneSessions.some((visible) => sessionKey(visible) === sessionKey(session)))),
+    ...windowSurfaces.map((surface) => ({ key: `surface:${surface}`, title: WINDOW_SURFACE_TITLES[surface], detail: `${gitRepoCwd || process.cwd()} · surface${visibleWindowSurfaces.includes(surface) ? '' : ' · hidden'}`, hidden: !visibleWindowSurfaces.includes(surface), surface })),
   ]
   const overflowWindowItems: WindowItem[] = [
     ...splitPinnedSessions.slice(0, splitPaneCount).map((session): WindowItem => ({ kind: 'session', session })),
@@ -19493,7 +19511,7 @@ export default function OpenTuiApp() {
   })
 
   usePaste((event) => {
-    if (windowPickerOpen) return // the layout name input owns bracketed paste
+    if (windowPickerOpen || windowSwitcherOpen || windowBroadcastOpen) return // the focused window input owns bracketed paste
     // A shell with the keyboard takes the paste too, bracketed if it asked.
     if (surfaceProcessCaptureRef.current === 'terminal' && (focusedWindowSurface === 'terminal'
       || (surfacePanelOpen && surfacePanelFocused && activeSurface(surfacePanel)?.kind === 'terminal'))) {
@@ -19807,6 +19825,7 @@ export default function OpenTuiApp() {
     const previous = windowHistory.undo(captureWindowLayout())
     if (!previous) { showNotice('info', 'No window changes to undo'); return }
     const layout = previous.layout
+    setWindowSurfacePeek(null)
     setOpenTabSessions((current) => {
       const keys = new Set(current.map(sessionKey))
       return [...current, ...previous.tabs.filter((tab) => !keys.has(sessionKey(tab)))]
@@ -19989,7 +20008,7 @@ export default function OpenTuiApp() {
   })
   const openSurfaceWindowMenu = useEffectEvent((surface: WindowSurfaceKind, index: number, point: { x: number; y: number }) => {
     setContextMenu({ ...point, title: WINDOW_SURFACE_TITLES[surface], items: [
-      { label: windowZoom === index ? 'Restore the layout' : 'Zoom this window', hint: '⌃B m', run: () => setWindowZoom(windowZoom === index ? null : index) },
+      { label: windowSurfacePeek || windowZoom === index ? 'Restore the layout' : 'Zoom this window', hint: '⌃B m', run: () => windowSurfacePeek ? toggleWindowZoom() : setWindowZoom(windowZoom === index ? null : index) },
       { label: 'Move to the side panel', run: () => moveSurfaceToPanel(surface) },
       { label: 'Close window', danger: true, run: () => closeSurfaceWindow(surface) },
     ] })
@@ -20031,6 +20050,7 @@ export default function OpenTuiApp() {
 
   // Put a saved layout back. Sessions that no longer exist are skipped and said so.
   const restoreWindowLayout = useEffectEvent((id: string) => {
+    setWindowSurfacePeek(null)
     checkpointWindowLayout()
     const saved = savedWindowLayouts.find((entry) => entry.id === id)
     if (!saved) return
@@ -20088,6 +20108,7 @@ export default function OpenTuiApp() {
     showNotice('info', `${WINDOW_SURFACE_TITLES[surface]} in a window · ⇥ panel puts it back`)
   })
   const closeSurfaceWindow = useEffectEvent((surface: WindowSurfaceKind) => {
+    if (windowSurfacePeek === surface) setWindowSurfacePeek(null)
     checkpointWindowLayout()
     setWindowSurfaces((current) => current.filter((entry) => entry !== surface))
     setSplitFocusIndex(null)
@@ -20108,6 +20129,7 @@ export default function OpenTuiApp() {
     : splitReaderLast ? 'reader-right' : visibleSplitPaneCount === 1 ? 'two' : 'reader-left'
 
   const applyWindowLayout = useEffectEvent((action: WindowLayoutAction) => {
+    setWindowSurfacePeek(null)
     checkpointWindowLayout()
     setWindowPickerOpen(false)
     if (action === 'fullscreen') { toggleFullscreenMode(); return }
@@ -20391,6 +20413,7 @@ export default function OpenTuiApp() {
   const lastFocusedSplitPaneRef = useRef(0)
   const focusSplitPane = useEffectEvent((paneIndex: number) => {
     if (paneIndex < 0 || paneIndex >= visibleSplitPaneCount) return
+    setWindowSurfacePeek(null)
     lastFocusedSplitPaneRef.current = paneIndex
     setSplitFocusIndex(paneIndex)
     // The reader keeps its own cursor, but the sidebar must not look focused
@@ -20399,6 +20422,7 @@ export default function OpenTuiApp() {
   })
 
   const focusReaderFromSplit = useEffectEvent(() => {
+    setWindowSurfacePeek(null)
     setSplitFocusIndex(null)
   })
 
@@ -20433,6 +20457,7 @@ export default function OpenTuiApp() {
   }, [visibleSplitPaneCount, windowItems.length, windowZoom])
 
   const toggleWindowZoom = useEffectEvent(() => {
+    if (windowSurfacePeek) { setWindowSurfacePeek(null); setWindowZoom(null); setSplitFocusIndex(null); return }
     checkpointWindowLayout()
     if (windowZoom !== null) {
       setWindowZoom(null)
@@ -20645,6 +20670,60 @@ export default function OpenTuiApp() {
       if (session && target !== selectedSessionKey) { checkpointWindowLayout(); selectTabSession(session) }
       focusReaderFromSplit()
     }
+  })
+
+  const pickWindowTarget = useEffectEvent((key: string) => {
+    const target = windowTargets.find((entry) => entry.key === key)
+    if (!target) { showNotice('info', 'That window is no longer open'); return }
+    setWindowSwitcherOpen(false)
+    setWindowZoom(null)
+    setWindowSurfacePeek(null)
+    setSurfacePanelFocused(false)
+    setFocusedPane('messages')
+    if (target.session) {
+      const pane = splitPaneSessions.findIndex((session) => sessionKey(session) === key)
+      if (pane >= 0) focusSplitPane(pane)
+      else {
+        if (key !== selectedSessionKey) {
+          checkpointWindowLayout()
+          // The reader may be an unpinned preview tab. Keep it as the hidden
+          // pane's replacement instead of letting reconciliation drop it.
+          const reader = selectedSession
+          setOpenTabSessions((current) => reader && !current.some((tab) => sessionKey(tab) === sessionKey(reader)) ? [...current, reader] : current)
+          if (reader) setSplitPinnedKeys((current) => current.map((pin) => pin === key ? sessionKey(reader) : pin))
+          selectTabSession(target.session)
+        }
+        focusReaderFromSplit()
+      }
+    } else if (target.surface) {
+      const pane = visibleWindowSurfaces.indexOf(target.surface)
+      if (pane >= 0) focusSplitPane(splitPaneSessions.length + pane)
+      else {
+        // A hidden surface can be inspected at full size without changing the
+        // logical layout or mounting it in the side panel at the same time.
+        setWindowSurfacePeek(target.surface)
+        setSplitFocusIndex(-1)
+        showNotice('info', 'Hidden window · Esc or ⌃B m restores the layout')
+      }
+    }
+  })
+  const sendBroadcastPrompt = useEffectEvent(async (session: Session, text: string, requestId: string): Promise<BroadcastDelivery> => {
+    const key = sessionKey(session)
+    const permissionMode = session.provider === 'claude' ? tuiPermissionModeByKey[key] ?? 'auto'
+      : session.provider === 'copilot' ? tuiCopilotPermissionModeByKey[key] ?? 'off' : undefined
+    const { sendWindowBroadcastPrompt } = await import('./windowBroadcastDelivery')
+    return sendWindowBroadcastPrompt(session, text, requestId, {
+      model: tuiModelOverride[key] || undefined,
+      effort: tuiEffort === 'auto' ? undefined : tuiEffort,
+      permissionMode,
+      manualPermissions: session.provider === 'copilot' || (session.provider === 'claude' && permissionMode !== 'bypassPermissions' && permissionMode !== 'plan') ? true : undefined,
+      additionalDirectories: session.provider === 'claude' ? tuiAddedDirsByKeyRef.current[key] : undefined,
+      collaborationMode: session.provider === 'codex' ? tuiCodexModeByKey[key] : undefined,
+      approvalPolicy: session.provider === 'codex' && tuiCodexApprovalByKey[key] !== 'auto' ? tuiCodexApprovalByKey[key] : undefined,
+      agent: session.provider === 'opencode' ? tuiOpenCodeAgent || undefined : undefined,
+      mode: session.provider === 'copilot' ? tuiCopilotMode : undefined,
+      contextTier: session.provider === 'copilot' && tuiCopilotContextTierByKey[key] !== 'default' ? tuiCopilotContextTierByKey[key] : undefined,
+    })
   })
 
   const executeCommandPalette = useEffectEvent((id: string) => {
@@ -21026,6 +21105,12 @@ export default function OpenTuiApp() {
         break
       case 'window-next-attention':
         jumpToNextWindowAttention()
+        break
+      case 'window-switcher':
+        setWindowSwitcherOpen(true)
+        break
+      case 'window-broadcast':
+        setWindowBroadcastOpen(true)
         break
       case 'window-undo':
         undoWindowLayout()
@@ -21448,6 +21533,14 @@ export default function OpenTuiApp() {
       return
     }
 
+    if (windowSwitcherOpen) {
+      if (windowSwitcherKeyRef.current?.(key) !== false) handled(() => {})
+      return
+    }
+    if (windowBroadcastOpen) {
+      if (windowBroadcastKeyRef.current?.(key) !== false) handled(() => {})
+      return
+    }
     if (windowPickerOpen) {
       if (windowPickerKeyHandlerRef.current?.(key) !== false) handled(() => {})
       return
@@ -22531,6 +22624,8 @@ export default function OpenTuiApp() {
         if (sequence === 'x') { if (focusedWindowSurface) closeSurfaceWindow(focusedWindowSurface); else closeSplitPane(); return }
         if (sequence === 'u') { undoWindowLayout(); return }
         if (sequence === 'a') { jumpToNextWindowAttention(); return }
+        if (sequence === 'p') { setWindowSwitcherOpen(true); return }
+        if (sequence === 'b') { setWindowBroadcastOpen(true); return }
         if (sequence === 'w') { setWindowPickerOpen(true); return }
         if (sequence === 'z') { toggleSplitPanes(); return }
         // Focus movement, tmux-shaped: o/→/tab walk forward, ← walks back,
@@ -25185,7 +25280,12 @@ export default function OpenTuiApp() {
               : stackedSplit ? (splitReaderLast ? 'column-reverse' : 'column') : (splitReaderLast ? 'row-reverse' : 'row')}
             flexGrow={1}
           >
-          {windowZoom !== null && visibleSplitPaneCount > 0 ? (
+          {windowSurfacePeek ? (
+            <>
+              <box visible={false}>{readerFrameNode}</box>
+              {renderSurfaceWindow(windowSurfacePeek, -1, { width: readerAreaWidth, height: windowAreaHeight, boxHeight: windowAreaHeight })}
+            </>
+          ) : windowZoom !== null && visibleSplitPaneCount > 0 ? (
             // Zoomed: the reader alone, or one window at the whole area with
             // the reader kept mounted but hidden.
             <>
@@ -27336,6 +27436,19 @@ export default function OpenTuiApp() {
         />
       ) : null}
 
+      {windowSwitcherOpen || windowBroadcastOpen ? (
+        <box position="absolute" top={0} left={0} width={width} height={height} zIndex={MODAL_CONTENT_Z_INDEX - 1} backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)} />
+      ) : null}
+      {windowSwitcherOpen ? (
+        <WindowSwitcherPopover targets={windowTargets} theme={theme} width={width} height={height}
+          onPick={pickWindowTarget} onClose={() => setWindowSwitcherOpen(false)}
+          onKeyHandlerReady={(handler) => { windowSwitcherKeyRef.current = handler }} />
+      ) : null}
+      {windowBroadcastOpen ? (
+        <WindowBroadcastPopover targets={windowTargets.filter((target) => Boolean(target.session))} theme={theme} width={width} height={height}
+          onSend={sendBroadcastPrompt} onClose={() => setWindowBroadcastOpen(false)}
+          onKeyHandlerReady={(handler) => { windowBroadcastKeyRef.current = handler }} />
+      ) : null}
       {windowPickerOpen ? (
         // A click anywhere outside the menu closes it, as a menu does. At the
         // menu's own layer and before it in the tree: one layer down is the

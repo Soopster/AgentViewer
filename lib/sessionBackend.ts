@@ -1750,7 +1750,7 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
     if (isNativeComposerCommandText(message)) return { delivered: false }
     try {
       const steered = await steerRunningSessionIdempotent(sessionId, message, turnRequestId, steerRequestId)
-      if (!steered.delivered && getRunningSession(sessionId)) {
+      if (!steered.delivered && body.allowInterrupt !== false && getRunningSession(sessionId)) {
         // A runtime that cannot take input mid-turn is steered by ending the
         // turn: the caller queues this message as `delivered: false` already
         // asks, and the interrupt is what lets that queue run now instead of
@@ -1763,7 +1763,7 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
       }
       return { delivered: steered.delivered, messageUuid: steered.messageUuid }
     } catch {
-      return { delivered: false }
+      return body.allowInterrupt === false ? { delivered: false, deliveryUncertain: true } : { delivered: false }
     }
   }
 

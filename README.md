@@ -435,6 +435,10 @@ Transcript splits use a tmux-style `Ctrl+B` prefix (`Ctrl+B %` to add, `Ctrl+B o
 
 `Ctrl+B w` opens the window layout menu. Hover or move between choices to preview their geometry before applying; a dragged session also previews the resulting frames. Use `s` to save, `n` to save with a name, and `r`, `u`, or `x` on a saved layout to rename, update from the current windows, or delete it. Session windows show unread output, errors, and pending-input badges; `Ctrl+B a` jumps to the next window needing attention. Background activity leaves focus where it is. The active window prefix shows its shortcuts in the status bar and reveals the full key guide after a short pause.
 
+`Ctrl+B p` opens the quick window switcher. Search by title, provider, or project, then press Enter to focus a match. Hidden session windows swap into the reader; hidden surfaces open temporarily at full size, with Escape returning to the layout.
+
+`Ctrl+B b` opens broadcast input. Select session windows with Space or a click, use Tab to edit the prompt, then press Ctrl+Enter to review the exact targets and text. Enter on the review sends once to each selected session. Each destination keeps its own model and permission settings; running turns accept steering when supported, and idle sessions start a turn. Delivery results are shown separately, and unconfirmed deliveries are never retried automatically.
+
 ### Agent Teams
 
 Press `Ctrl+Shift+N` anywhere in the OpenTUI app to launch a coordinated workflow directly, or `Ctrl+Shift+A` to open Agent Operations first and press `n` from there. The launcher creates a lead that decomposes the request, a shared task board, direct teammate messages, path locks, optional completion gates, and an optional plan-approval guard. Teammates use isolated git worktrees by default; turn off **Isolate teammates in git worktrees** in the launcher only when they should deliberately share the current checkout.

@@ -27,6 +27,7 @@ const NAMES = ['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot']
 const SESSIONS: Session[] = NAMES.map((name, index) => ({
   sessionId: `win-${name}`, provider: 'claude', cwd: CWD, summary: `Win ${name}`, firstPrompt: `Win ${name}`, lastModified: 1_700_000_000_000 - index * 1000,
 }))
+const broadcastSends: Array<{ session: Session; body: Record<string, unknown> }> = []
 const failedWindowSessions = new Set<string>()
 const viewerNotes: Array<{ id: string; sessionId: string; provider: 'claude'; title: string; createdAt: number }> = []
 const marker = (session: Session | string) => `${(typeof session === 'string' ? session : session.sessionId).toUpperCase()}-BODY`
@@ -63,6 +64,10 @@ mock.module('../../lib/tui/service', () => ({
   readTuiRuntimeActivity: async () => ({ running: [], waiting: [], attention: [...viewerNotes] }),
   listTuiRunningSessions: async () => [],
   prewarmTuiSession: async () => {},
+  streamTuiSessionTurn: async (session: Session, body: Record<string, unknown>) => {
+    broadcastSends.push({ session: { ...session }, body })
+    return new Response('event: turn-accepted\ndata: {}\n\n')
+  },
 }))
 
 const { default: OpenTuiApp } = await import('./App')
@@ -352,6 +357,54 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   console.log('Moves and replacements undo together with the reader session and divider geometry.')
 }
 
+// The switcher includes hidden windows and leaves their logical order intact.
+{
+  await waitFor('pane sessions for switching', () => [0, 1, 2, 3, 4].every((index) => paneName(index) !== null))
+  const order = [0, 1, 2, 3, 4].map(paneName)
+  await act(async () => { setup.resize(90, 46) })
+  await settle(300)
+  await chordKey('p')
+  await waitFor('the quick window switcher', () => !!frame('window-switcher'))
+  await act(async () => { await setup.mockInput.pasteBracketedText('claude charlie') })
+  await settle(100)
+  check(setup.captureCharFrame().includes('hidden'), 'the hidden match is not identified')
+  await act(async () => { setup.mockInput.pressEnter() })
+  await waitFor('the hidden session opened in the reader', () => readerShows('charlie') && !frame('window-switcher'))
+  await chordKey('p')
+  await waitFor('the switcher again', () => !!frame('window-switcher'))
+  await act(async () => { await setup.mockInput.typeText('alpha') })
+  await act(async () => { setup.mockInput.pressEnter() })
+  await waitFor('the original reader restored', () => readerShows('alpha'))
+  await act(async () => { setup.resize(220, 46) })
+  await settle(300)
+  await waitFor('every original pane returned in order', () => [0, 1, 2, 3, 4].every((index) => paneName(index) === order[index]))
+  console.log('Quick switching searches provider/title/project and opens hidden session windows without losing their order.')
+}
+
+// Actual App routing: selecting and reviewing does not send. Repeated submit
+// keys send each captured target once and leave the reader/composer alone.
+{
+  await chordKey('b')
+  await waitFor('broadcast input', () => !!frame('window-broadcast'))
+  check(broadcastSends.length === 0, 'opening broadcast sent a prompt')
+  await act(async () => { setup.mockInput.pressKey(' ') })
+  await act(async () => { setup.mockInput.pressArrow('down'); setup.mockInput.pressKey(' ') })
+  await act(async () => { setup.mockInput.pressTab() })
+  await act(async () => { await setup.mockInput.pasteBracketedText('Review this change\nCheck edge cases.') })
+  await act(async () => { setup.mockInput.pressEnter({ ctrl: true }) })
+  await waitFor('the broadcast review', () => !!frame('window-broadcast:review'))
+  check(setup.captureCharFrame().includes('Broadcast to 2 session windows'), 'review does not list the selected target count')
+  check(broadcastSends.length === 0, 'reviewing sent the prompt before confirmation')
+  await act(async () => { setup.mockInput.pressEnter(); setup.mockInput.pressEnter() })
+  await waitFor('both delivery receipts', () => setup.captureCharFrame().includes('Turn started') && broadcastSends.length === 2)
+  check(new Set(broadcastSends.map((send) => send.session.sessionId)).size === 2, 'a target received the broadcast twice')
+  check(broadcastSends.every((send) => send.body.message === 'Review this change\nCheck edge cases.' && send.body.manualPermissions === true), 'broadcast changed the prompt or target permission behavior')
+  await act(async () => { setup.mockInput.pressEnter() })
+  await waitFor('the broadcast result closed', () => !frame('window-broadcast'))
+  check(readerShows('alpha'), 'broadcast replaced the active reader')
+  console.log('Broadcast selects explicit panes, reviews the prompt, and submits once per target without changing the reader.')
+}
+
 // ── Saved layouts ───────────────────────────────────────────────────────────
 {
   // Panes remount after a zoom; read the order once each shows its session again.
@@ -488,7 +541,20 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   await waitFor('the shell to run in the window', () => paneHas(panes().indexOf(window!), 'from-a-window') || setup.captureCharFrame().includes('from-a-window'))
   act(() => { setup.mockInput.pressKey(']', { ctrl: true }) })
   await settle(150)
-  await rightClick(window!.x + 6, window!.y)
+  await act(async () => { setup.resize(65, 46) })
+  await settle(300)
+  await chordKey('p')
+  await waitFor('the switcher for a hidden surface', () => !!frame('window-switcher'))
+  await act(async () => { await setup.mockInput.typeText('terminal') })
+  await act(async () => { setup.mockInput.pressEnter() })
+  await waitFor('the hidden terminal peek', () => !!frame('split-pane:-1') && setup.captureCharFrame().includes('from-a-window'))
+  await act(async () => { setup.mockInput.pressEscape() })
+  await waitFor('the peek dismissed', () => !frame('split-pane:-1'))
+  await act(async () => { setup.resize(220, 46) })
+  await settle(300)
+  await waitFor('the terminal restored to its layout slot', () => !!frame('surface-window-close:terminal'))
+  const restoredTerminal = frame('surface-window-close:terminal')!
+  await rightClick(restoredTerminal.x - 4, restoredTerminal.y)
   await waitFor('the window menu', () => !!frame('context-menu'))
   const close = locate('Close window', frame('context-menu')!)
   await click(close.x + 1, close.y)
