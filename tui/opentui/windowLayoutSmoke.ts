@@ -91,6 +91,49 @@ console.log('Drops land on the nearest edge or the middle; a dragged divider map
   ]
   assert.equal(windowInDirection(stack, 'reader', 'right'), 1)
   assert.equal(windowInDirection(stack, 2, 'left'), 'reader')
+  // Rows that split differently: right from the bottom-right pane is nothing, not the top row's end.
+  const uneven: Window[] = [
+    { id: 'reader', rect: { x: 0, y: 0, width: 60, height: 20 } },
+    { id: 0, rect: { x: 60, y: 0, width: 60, height: 20 } },
+    { id: 1, rect: { x: 120, y: 0, width: 62, height: 20 } },
+    { id: 2, rect: { x: 0, y: 20, width: 60, height: 20 } },
+    { id: 3, rect: { x: 60, y: 20, width: 60, height: 20 } },
+    { id: 4, rect: { x: 120, y: 20, width: 60, height: 20 } },
+  ]
+  assert.equal(windowInDirection(uneven, 4, 'right'), null, 'a slightly wider pane above is not "to the right"')
+  assert.equal(windowInDirection(uneven, 4, 'up'), 1)
   console.log('Focus moves to the window in the direction asked, preferring the one directly beside.')
+}
+
+// Up to five panes: the grid grows a third column, and drops panes the width cannot hold.
+{
+  const five = computeWindowLayout({ ...base, width: 240, requestedCount: 5, availableCount: 5, maxPanes: 5 })
+  assert.equal(five.visibleCount, 5)
+  assert.equal(five.topPanes, 2, 'reader and two panes on top')
+  assert.equal(five.reader.width + five.panes[0]!.width + five.panes[1]!.width, 240, 'the top row fills the width')
+  assert.equal(five.panes[2]!.width + five.panes[3]!.width + five.panes[4]!.width, 240, 'the bottom row fills the width')
+  const four = computeWindowLayout({ ...base, width: 240, requestedCount: 4, availableCount: 4, maxPanes: 5 })
+  assert.equal(four.topPanes, 2)
+  assert.equal(four.panes.length, 4, 'three on top, two below')
+  const cramped = computeWindowLayout({ ...base, width: 120, requestedCount: 5, availableCount: 5, maxPanes: 5 })
+  assert.ok(cramped.visibleCount < 5 && cramped.panes.every((pane) => pane.width >= 46), 'a narrow grid drops panes before any falls below its minimum')
+  const stack5 = computeWindowLayout({ ...base, arrangement: 'main-stack', height: 60, requestedCount: 5, availableCount: 5, maxPanes: 5 })
+  assert.equal(stack5.visibleCount, 5)
+  assert.equal(stack5.panes.reduce((sum, pane) => sum + pane.height, 0), 60)
+  console.log('The grid and the stack take up to five panes, dropping what will not fit.')
+}
+
+// The bottom row's own divider.
+{
+  const wide = computeWindowLayout({ ...base, bottomShare: 0.7 })
+  assert.equal(wide.panes[1]!.width, 126, 'the bottom row\'s first pane follows its divider')
+  assert.equal(wide.panes[1]!.width + wide.panes[2]!.width, 180, 'and the row still fills the width')
+  const squeezed = computeWindowLayout({ ...base, bottomShare: 0.95 })
+  assert.equal(squeezed.panes[2]!.width, 46, 'the last pane keeps its minimum')
+  const six = computeWindowLayout({ ...base, width: 240, requestedCount: 5, availableCount: 5, maxPanes: 5, bottomShare: 0.5 })
+  assert.equal(six.panes[2]!.width, 120, 'with three below, the first takes the share')
+  assert.equal(six.panes[2]!.width + six.panes[3]!.width + six.panes[4]!.width, 240)
+  assert.equal(computeWindowLayout({ ...base, bottomShare: 0.7 }).reader.width, grid.reader.width, 'the bottom divider leaves the top row alone')
+  console.log('The bottom row has its own divider, within its panes\' minimums.')
 }
 console.log('Window layout smoke passed')

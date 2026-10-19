@@ -1311,8 +1311,39 @@ drawn in have one source; `windowLayoutSmoke.ts` checks every arrangement tiles 
   presses only). A click outside the layout menu closes it; its backdrop sits at the menu's own layer,
   because one layer down is the scrim's, which is later in the tree and swallowed the click.
 
+- **Up to five panes** (`SPLIT_PANE_ARRANGED_MAX`): a grid takes the larger half of the windows in
+  its top row (`topPanes`), and drops panes before any falls below its minimum width.
+- **Surfaces are windows too**: the shell, diff and files (`windowSurfaces`), through the same
+  `renderSurfaceBody` the side panel uses. A kind lives in one place — opening it in a window closes
+  it in the panel (and a panel left empty closes) — because both would hand one key-handler ref to
+  two mounted views. They follow the session panes, and **a layout short of room drops session panes
+  first**: a surface window was asked for by name. A terminal window in shell mode is routed ahead of
+  the `⌃B` prefix, like the panel's; other surface windows after it, so `⌃B` arrows leave them.
+  A just-opened surface is focused after the next render (`pendingSurfaceFocusRef`), since opening it
+  may drop a session pane and move its index.
+- **The window area's height is measured** (`measuredWindowAreaHeight`), like the reader's; the
+  budget estimate ran two rows short, leaving empty rows under a grid.
+- **A pane's edges insert beside it** (`insertSessionBesidePane`); its middle replaces it.
+- **The grid's bottom row has its own divider** (`split-bottom-divider`, `bottomShare`, `⌃B [`/`]`): the
+  first bottom pane's right border; the rest of the row shares what is left.
+- **Keyboard**: `⌃B ⇧`arrows swap the focused window with its neighbour, `⌃B +`/`-` move the second
+  divider, `⌃B m` zooms the focused window (the reader stays mounted, hidden) and restores.
+  `windowInDirection` only counts windows *beyond* the current one's edge, or "right" from a grid's
+  bottom-right pane reached the top row's slightly wider end.
+- **Right-click menus** (`ContextMenu.tsx`) on rail rows, tabs, panes, surface windows and the
+  reader's title; backdrop at the menu's own layer, as the layout menu's.
+- **Saved layouts** (`windowLayoutStore.ts`, `.agent-viewer-data/window-layouts.json`, per project):
+  arrangement, shares, reader, panes in order, surface windows. Restoring skips sessions that are
+  gone and says how many.
+- **A pane searches its whole history**: `/` types into its title, Enter and `n`/`N` step older and
+  newer, and a match older than the loaded window pages it in (`search` on the pane handle).
+  Typed keys update the query functionally — keys arriving faster than a render all saw the same
+  closure, and only the last character survived.
+
 `windowingSmoke.tsx` drives all of it with the mouse against fixture sessions and reads laid-out
-frames; five mutations were verified to fail it.
+frames; five mutations were verified to fail it. `windowingMoreSmoke.tsx` covers the grid of six,
+edge inserts, swap, zoom, the menus, saved layouts, pane search and a shell window (seven mutations
+verified, plus the direction rule in `windowLayoutSmoke.ts`).
 
 #### Fullscreen rendering: what the renderer already does, and the two escape hatches
 

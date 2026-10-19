@@ -25,6 +25,8 @@ export type WindowLayout = {
   panes: WindowSize[]
   /** The row (grid) or column (main-stack) the panes beyond the first share. */
   secondary: WindowSize | null
+  /** Grid only: how many panes share the top row with the reader; the rest are below. */
+  topPanes: number
 }
 
 export type WindowLayoutInput = {
@@ -42,6 +44,8 @@ export type WindowLayoutInput = {
    * fraction of the height. SPLIT_SHARE_EVEN (or omitted) splits evenly.
    */
   secondaryShare?: number
+  /** The grid's bottom row: the first pane's share of the width. SPLIT_SHARE_EVEN (or omitted) splits evenly. */
+  bottomShare?: number
   minPaneWidth: number
   minPaneRows: number
   minReaderWidth: number
@@ -72,6 +76,7 @@ export function computeWindowLayout(input: WindowLayoutInput): WindowLayout {
       reader: stacked ? { width, height: layout.readerExtent } : { width: layout.readerExtent, height },
       panes: Array.from({ length: layout.visibleCount }, () => ({ ...pane })),
       secondary: null,
+      topPanes: 0,
     }
   }
 
@@ -89,7 +94,7 @@ export function computeWindowLayout(input: WindowLayoutInput): WindowLayout {
     readerShare: share,
   })
   if (columns.visibleCount === 0) {
-    return { arrangement, visibleCount: 0, reader: { width, height }, panes: [], secondary: null }
+    return { arrangement, visibleCount: 0, reader: { width, height }, panes: [], secondary: null, topPanes: 0 }
   }
   const readerWidth = columns.readerExtent
   const otherWidth = columns.paneExtent
@@ -108,38 +113,66 @@ export function computeWindowLayout(input: WindowLayoutInput): WindowLayout {
       // The rounding remainder goes to the last pane, so the column ends on the reader's last row.
       height: index === 0 ? (fit === 1 ? height : first) : index === fit - 1 ? height - first - rest * (fit - 2) : rest,
     }))
-    return { arrangement, visibleCount: fit, reader: { width: readerWidth, height }, panes, secondary: { width: otherWidth, height } }
+    return { arrangement, visibleCount: fit, reader: { width: readerWidth, height }, panes, secondary: { width: otherWidth, height }, topPanes: 0 }
   }
 
-  // Grid: one pane beside the reader; any others share a row below both.
+  // Grid: two rows, the reader first in the top one. The top row takes the
+  // larger half of the windows, so two panes sit beside and below the reader,
+  // four sit two beside and two below, and so on.
   const secondary = input.secondaryShare ?? SPLIT_SHARE_EVEN
   const topHeight = secondary === SPLIT_SHARE_EVEN
     ? Math.floor(height / 2)
     : clampExtent(Math.round(height * secondary), input.minReaderRows, height - input.minPaneRows)
   const bottomHeight = height - topHeight
   const roomBelow = topHeight >= input.minReaderRows && bottomHeight >= input.minPaneRows
-  if (wanted === 1 || !roomBelow) {
+  const oneRow = (): WindowLayout => ({
+    arrangement,
+    visibleCount: 1,
+    reader: { width: readerWidth, height },
+    panes: [{ width: otherWidth, height }],
+    secondary: null,
+    topPanes: 1,
+  })
+  if (wanted === 1 || !roomBelow) return oneRow()
+  // Drop panes from the end until both rows fit their minimum widths.
+  for (let count = wanted; count >= 2; count -= 1) {
+    const total = count + 1
+    const top = Math.ceil(total / 2)
+    const topPanes = top - 1
+    const bottom = total - top
+    const roomForPanes = width - topPanes * input.minPaneWidth
+    if (roomForPanes < input.minReaderWidth || Math.floor(width / bottom) < input.minPaneWidth) continue
+    const gridReader = input.readerShare === SPLIT_SHARE_EVEN
+      ? Math.floor(width / top)
+      : clampExtent(Math.round(width * input.readerShare), input.minReaderWidth, roomForPanes)
+    const topPaneWidth = Math.floor((width - gridReader) / topPanes)
+    const panes: WindowSize[] = []
+    for (let index = 0; index < topPanes; index += 1) {
+      // The rounding remainder goes to the last frame in each row, so both rows end at the area's edge.
+      panes.push({ width: index === topPanes - 1 ? width - gridReader - topPaneWidth * (topPanes - 1) : topPaneWidth, height: topHeight })
+    }
+    // The bottom row's first pane may be sized by its own divider; the rest share what is left.
+    const bottomShare = input.bottomShare ?? SPLIT_SHARE_EVEN
+    const firstBottom = bottom > 1 && bottomShare !== SPLIT_SHARE_EVEN
+      ? clampExtent(Math.round(width * bottomShare), input.minPaneWidth, width - (bottom - 1) * input.minPaneWidth)
+      : Math.floor(width / bottom)
+    const restBottom = bottom > 1 ? Math.floor((width - firstBottom) / (bottom - 1)) : 0
+    for (let index = 0; index < bottom; index += 1) {
+      const paneWidth = index === 0 ? (bottom === 1 ? width : firstBottom)
+        : index === bottom - 1 ? width - firstBottom - restBottom * (bottom - 2)
+        : restBottom
+      panes.push({ width: paneWidth, height: bottomHeight })
+    }
     return {
       arrangement,
-      visibleCount: 1,
-      reader: { width: readerWidth, height },
-      panes: [{ width: otherWidth, height }],
-      secondary: null,
+      visibleCount: count,
+      reader: { width: gridReader, height: topHeight },
+      panes,
+      secondary: { width, height: bottomHeight },
+      topPanes,
     }
   }
-  const below = Math.max(1, Math.min(wanted - 1, Math.floor(width / input.minPaneWidth)))
-  const belowWidth = Math.floor(width / below)
-  const panes: WindowSize[] = [{ width: otherWidth, height: topHeight }]
-  for (let index = 0; index < below; index += 1) {
-    panes.push({ width: index === below - 1 ? width - belowWidth * (below - 1) : belowWidth, height: bottomHeight })
-  }
-  return {
-    arrangement,
-    visibleCount: 1 + below,
-    reader: { width: readerWidth, height: topHeight },
-    panes,
-    secondary: { width, height: bottomHeight },
-  }
+  return oneRow()
 }
 
 function clampExtent(value: number, min: number, max: number): number {
@@ -201,7 +234,14 @@ export function windowInDirection<Id>(windows: ReadonlyArray<{ id: Id; rect: Rec
     if (window.id === current) continue
     const point = centre(window.rect)
     const along = (horizontal ? point.x - origin.x : point.y - origin.y) * sign
-    if (along <= 0) continue
+    // Beyond this window's edge on that side (frames share a border cell), not
+    // merely a centre a few cells further along: from the bottom-right pane of
+    // a grid whose rows split differently, "right" is nothing, not the top row.
+    const beyond = direction === 'right' ? window.rect.x >= from.rect.x + from.rect.width - 1
+      : direction === 'left' ? window.rect.x + window.rect.width <= from.rect.x + 1
+      : direction === 'down' ? window.rect.y >= from.rect.y + from.rect.height - 1
+      : window.rect.y + window.rect.height <= from.rect.y + 1
+    if (along <= 0 || !beyond) continue
     const overlaps = horizontal
       ? window.rect.y < from.rect.y + from.rect.height && window.rect.y + window.rect.height > from.rect.y
       : window.rect.x < from.rect.x + from.rect.width && window.rect.x + window.rect.width > from.rect.x

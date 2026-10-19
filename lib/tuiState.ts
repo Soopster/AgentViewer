@@ -191,6 +191,7 @@ type TuiState = {
   splitArrangement?: unknown
   splitReaderLast?: unknown
   splitSecondaryShare?: unknown
+  splitBottomShare?: unknown
   sidebarSort?: unknown
   hideScratchSessions?: unknown
   showSettledSessions?: unknown
@@ -506,7 +507,7 @@ export type TuiSurfacePanelPlacement = 'right' | 'bottom'
 
 export type TuiWindowArrangement = 'split' | 'main-stack' | 'grid'
 
-export type TuiWindowArrangementState = { arrangement: TuiWindowArrangement; readerLast: boolean; secondaryShare: number }
+export type TuiWindowArrangementState = { arrangement: TuiWindowArrangement; readerLast: boolean; secondaryShare: number; bottomShare: number }
 
 export async function getConfiguredTuiWindowArrangement(): Promise<TuiWindowArrangementState> {
   const parsed = await readTuiState()
@@ -514,11 +515,14 @@ export async function getConfiguredTuiWindowArrangement(): Promise<TuiWindowArra
   const share = typeof parsed.splitSecondaryShare === 'number' && parsed.splitSecondaryShare >= 0.2 && parsed.splitSecondaryShare <= 0.8
     ? parsed.splitSecondaryShare
     : 0
-  return { arrangement, readerLast: parsed.splitReaderLast === true, secondaryShare: share }
+  const bottom = typeof parsed.splitBottomShare === 'number' && parsed.splitBottomShare >= 0.2 && parsed.splitBottomShare <= 0.8
+    ? parsed.splitBottomShare
+    : 0
+  return { arrangement, readerLast: parsed.splitReaderLast === true, secondaryShare: share, bottomShare: bottom }
 }
 
 export async function setConfiguredTuiWindowArrangement(state: TuiWindowArrangementState): Promise<void> {
-  await writeTuiState({ splitArrangement: state.arrangement, splitReaderLast: state.readerLast, splitSecondaryShare: state.secondaryShare })
+  await writeTuiState({ splitArrangement: state.arrangement, splitReaderLast: state.readerLast, splitSecondaryShare: state.secondaryShare, splitBottomShare: state.bottomShare })
 }
 
 export async function getConfiguredTuiSurfacePanelPlacement(): Promise<TuiSurfacePanelPlacement> {

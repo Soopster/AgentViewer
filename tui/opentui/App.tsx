@@ -33,6 +33,8 @@ import { BrowserSurfaceView } from './SurfaceViews'
 import { WindowButton } from './WindowButton'
 import { computeWindowLayout, readerShareAt, windowDropZone, windowDropZoneRect, windowInDirection, type WindowArrangement, type WindowDirection, type WindowDropZone } from './windowLayout'
 import type { WindowLayoutAction } from './WindowLayoutPicker'
+import type { ContextMenuItem } from './ContextMenu'
+import { deleteWindowLayout, describeSavedLayout, listSavedWindowLayouts, saveWindowLayout, type SavedWindowLayout } from './windowLayoutStore'
 import {
   EMPTY_SURFACE_PANEL,
   activeSurface,
@@ -431,6 +433,7 @@ const DeskView = lazyComponent(() => import('./DeskView').then((module) => modul
 const PromptLibraryPopover = lazyComponent(() => import('./PromptLibraryPopover').then((module) => module.PromptLibraryPopover))
 const CheckpointPopover = lazyComponent(() => import('./CheckpointPopover').then((module) => module.CheckpointPopover))
 const FileHistoryPopover = lazyComponent(() => import('./FileHistoryPopover').then((module) => module.FileHistoryPopover))
+const ContextMenu = lazyComponent(() => import('./ContextMenu').then((module) => module.ContextMenu))
 const WindowLayoutPicker = lazyComponent(() => import('./WindowLayoutPicker').then((module) => module.WindowLayoutPicker))
 const DailySummaryPopover = lazyComponent(() => import('./DailySummaryPopover').then((module) => module.DailySummaryPopover))
 const ProcessPane = lazyComponent(() => import('./ProcessPane').then((module) => module.ProcessPane))
@@ -5677,6 +5680,9 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'surface-cycle', label: 'Next/previous surface tab', key: '⌃N/⌃P', category: 'Transcript' },
   { id: 'surface-expand', label: 'Expand/restore surface panel', key: '=', category: 'Transcript' },
   { id: 'window-layout', label: 'Window layout (move, arrange, full screen)', key: '⌃B w', category: 'View' },
+  { id: 'window-terminal', label: 'Shell and processes in a window', key: '', category: 'View' },
+  { id: 'window-diff', label: 'Diff in a window', key: '', category: 'View' },
+  { id: 'window-files', label: 'Files in a window', key: '', category: 'View' },
   { id: 'surface-placement', label: 'Surface panel beside / under the reader', key: '|', category: 'Transcript' },
   { id: 'surface-narrow', label: 'Narrow surface panel', key: '<', category: 'Transcript' },
   { id: 'surface-wide',   label: 'Widen surface panel',  key: '>', category: 'Transcript' },
@@ -7601,6 +7607,9 @@ const SPLIT_PANE_MIN_WIDTH = 46
 const SPLIT_PANE_MIN_ROWS = 9
 const MIN_READER_ROWS = 12
 const SPLIT_PANE_MAX = 2
+type WindowSurfaceKind = 'terminal' | 'diff' | 'files'
+const WINDOW_SURFACE_TITLES: Record<WindowSurfaceKind, string> = { terminal: '❯ Terminal', diff: '± Diff', files: '▤ Files' }
+
 // Two presses this close in time and place are a double-click; OpenTUI reports presses only.
 const DOUBLE_CLICK_MS = 400
 function isDoubleClick(last: { current: { x: number; y: number; at: number } | null }, event: { x: number; y: number }): boolean {
@@ -7610,8 +7619,8 @@ function isDoubleClick(last: { current: { x: number; y: number; at: number } | n
   last.current = double ? null : { x: event.x, y: event.y, at: now }
   return double
 }
-// Main + stack and the grid hold one more: the reader and three panes is the grid.
-const SPLIT_PANE_ARRANGED_MAX = 3
+// Main + stack and the grid hold more: up to five panes beside the reader.
+const SPLIT_PANE_ARRANGED_MAX = 5
 // Tail-only mount budget. OpenTUI's scrollbox lays out every mounted child, so
 // a pane that mounted the whole transcript would cost the same as a second
 // reader; 80 collapsed cards provides deeper scroll-back while retaining the
@@ -7671,6 +7680,12 @@ type SplitPaneHandle = {
   getCursorCard: () => TuiTranscriptCard | null
   getSession: () => Session
   toggleBookmarkAtCursor: () => Promise<boolean>
+  /**
+   * Move the cursor to the next card containing `query`: older for -1, newer
+   * for 1. Older history outside the loaded window is paged in first, so the
+   * whole transcript is searched. 'loading' means it is being paged in.
+   */
+  search: (query: string, direction: 1 | -1) => 'found' | 'loading' | 'none'
 }
 
 type SplitTranscriptPaneProps = {
@@ -7700,6 +7715,9 @@ type SplitTranscriptPaneProps = {
   /** The title bar's buttons: close this pane, or open its session in the reader. */
   onClosePane: (paneIndex: number) => void
   onPromotePane: (session: Session) => void
+  onContextMenu: (session: Session, source: 'pane', point: { x: number; y: number }, paneIndex: number) => void
+  /** The pane's search, shown in its title while set (`/query`, with a caret while typed). */
+  searchLabel: string | null
   /** Dragging the pane by its title onto the window area (App's shared press/move/release). */
   sessionDrag: { press: (session: Session, fromPane: number | null, event: { x: number; y: number }, onClick?: () => void) => void; move: (event: { x: number; y: number }) => void; release: (event: { x: number; y: number }) => void }
   // True while the reader is opening a session. The threading worker is
@@ -7734,6 +7752,8 @@ function SplitTranscriptPaneInner({
   onActivate,
   onClosePane,
   onPromotePane,
+  onContextMenu,
+  searchLabel,
   sessionDrag,
   shouldYieldToForeground,
 }: SplitTranscriptPaneProps) {
@@ -7809,6 +7829,8 @@ function SplitTranscriptPaneInner({
   // it up front.
   const [windowSize, setWindowSize] = useState(SPLIT_PANE_CARD_WINDOW)
   useEffect(() => { setWindowSize(SPLIT_PANE_CARD_WINDOW) }, [key])
+  const windowSizeRef = useRef(windowSize)
+  windowSizeRef.current = windowSize
   const persistedTailCards = useMemo(
     () => (cards.length > windowSize ? cards.slice(-windowSize) : cards),
     [cards, windowSize],
@@ -7943,6 +7965,31 @@ function SplitTranscriptPaneInner({
     onActivate(paneIndex)
   }, [onActivate, paneIndex])
 
+  // A search hit can sit inside a grouped tool row; the row is what the cursor lands on.
+  const cardMatches = (card: TuiTranscriptCard, query: string): boolean =>
+    card.searchHaystackLower.includes(query)
+    || ((card as AgentToolGroupCard).agentToolCards ?? []).some((tool) => tool.searchHaystackLower.includes(query))
+  const cardsRef = useRef(cards)
+  cardsRef.current = cards
+  // A search waiting for older history to be paged in: older than this card key.
+  const pendingSearchRef = useRef<{ query: string; beforeKey: string | null } | null>(null)
+  useEffect(() => {
+    const pending = pendingSearchRef.current
+    if (!pending) return
+    const list = tailCards
+    const before = pending.beforeKey ? list.findIndex((card) => card.key === pending.beforeKey) : list.length
+    for (let index = (before < 0 ? list.length : before) - 1; index >= 0; index -= 1) {
+      if (cardMatches(list[index]!, pending.query)) {
+        pendingSearchRef.current = null
+        setCursorKey(list[index]!.key)
+        setFollowTail(false)
+        return
+      }
+    }
+    // Still short: the window grows a page per render until the match is in it.
+    if (list.length >= cardsRef.current.length) pendingSearchRef.current = null
+  }, [tailCards])
+
   // The handle is registered once per pane index; every method reads through a
   // ref so it never goes stale as cards stream in.
   useEffect(() => {
@@ -7964,6 +8011,30 @@ function SplitTranscriptPaneInner({
       return found >= 0 ? found : list.length - 1
     }
     const handle: SplitPaneHandle = {
+      search: (rawQuery, direction) => {
+        const query = rawQuery.trim().toLowerCase()
+        if (!query) return 'none'
+        const list = tailCardsRef.current
+        const from = cursorIndexNow()
+        for (let index = from + direction; index >= 0 && index < list.length; index += direction) {
+          if (cardMatches(list[index]!, query)) {
+            setCursorKey(list[index]!.key)
+            setFollowTail(index === list.length - 1)
+            return 'found'
+          }
+        }
+        if (direction === 1) return 'none'
+        // Older than the window: find it in the whole transcript, then page in to it.
+        const all = cardsRef.current
+        const loaded = Math.min(all.length, windowSizeRef.current)
+        for (let index = all.length - loaded - 1; index >= 0; index -= 1) {
+          if (!cardMatches(all[index]!, query)) continue
+          pendingSearchRef.current = { query, beforeKey: list[Math.max(0, Math.min(from, list.length - 1))]?.key ?? null }
+          setWindowSize(all.length - index + 4)
+          return 'loading'
+        }
+        return 'none'
+      },
       scrollByRows: (rows) => {
         const sb = scrollRef.current
         if (!sb) return
@@ -8183,6 +8254,7 @@ function SplitTranscriptPaneInner({
       title={fitText(
         joinMeta([
           paneCount > 1 ? `${paneIndex + 1} · ${formatSessionTitle(session)}` : formatSessionTitle(session),
+          searchLabel,
           running ? 'running' : null,
           followTail ? null : 'paused',
         ]),
@@ -8191,6 +8263,11 @@ function SplitTranscriptPaneInner({
       titleColor={running ? theme.green : accent}
       ref={paneFrameRef}
       onMouseDown={(event) => {
+        if (event.button === 2) {
+          onActivate(paneIndex)
+          onContextMenu(session, 'pane', event, paneIndex)
+          return
+        }
         if (event.button !== 0) return
         onActivate(paneIndex)
         // The title row is the handle a window is dragged by; a double-click on it opens the pane in the reader.
@@ -9064,12 +9141,27 @@ export default function OpenTuiApp() {
   const [splitArrangement, setSplitArrangement] = useState<WindowArrangement>('split')
   const [splitReaderLast, setSplitReaderLast] = useState(false)
   const [windowPickerOpen, setWindowPickerOpen] = useState(false)
+  // This project's saved layouts, read when the menu opens.
+  const [savedWindowLayouts, setSavedWindowLayouts] = useState<SavedWindowLayout[]>([])
+  // Surfaces (a shell, the diff, files) open as windows in the layout, after
+  // the session panes. A kind lives in one place: here or in the side panel,
+  // because both would hand the same key-handler refs to two mounted views.
+  const [windowSurfaces, setWindowSurfaces] = useState<WindowSurfaceKind[]>([])
+  const pendingSurfaceFocusRef = useRef<WindowSurfaceKind | null>(null)
+  // A focused pane's search: the pane, the query, and whether it is being typed.
+  const [paneSearch, setPaneSearch] = useState<{ index: number; query: string; editing: boolean } | null>(null)
+  // A right-click menu: where, and what it offers.
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; title: string; items: ContextMenuItem[] } | null>(null)
+  const contextMenuKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  // ⌃B m: one window takes the whole area until it is pressed again ('reader' or a window index).
+  const [windowZoom, setWindowZoom] = useState<'reader' | number | null>(null)
   const windowPickerKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   // The reader-and-panes area, for drop zones and divider drags in screen cells.
   const windowAreaRef = useRef<BoxRenderable | null>(null)
   // A session dragged from the rail or a pane title: what, and where it would land.
   // `pane` is a pane under the pointer (dropping there replaces it); otherwise `zone` is relative to the reader.
-  const [sessionDrag, setSessionDrag] = useState<{ session: Session; fromPane: number | null; zone: WindowDropZone | null; pane: number | null; x: number; y: number } | null>(null)
+  // `insert` is set when the pointer is on a pane's edge: the drop goes beside that pane rather than over it.
+  const [sessionDrag, setSessionDrag] = useState<{ session: Session; fromPane: number | null; zone: WindowDropZone | null; pane: number | null; insert: WindowDropZone | null; x: number; y: number } | null>(null)
   const sessionPressRef = useRef<{ session: Session; fromPane: number | null; x: number; y: number; dragging: boolean; onClick?: () => void } | null>(null)
   // A press is under way: a full-screen layer takes the rest of the gesture, so
   // a drag that leaves a one-row tab or rail row on its first motion is not
@@ -9077,8 +9169,11 @@ export default function OpenTuiApp() {
   const [sessionPressing, setSessionPressing] = useState(false)
   // The divider between the reader and its panes, while it is dragged.
   // Which divider is being dragged: the reader's, or the second one (the grid's rows, a stack's first pane).
-  const [splitDividerDragging, setSplitDividerDragging] = useState<'primary' | 'secondary' | null>(null)
+  // The third, `bottom`, is between the grid's bottom-row panes.
+  const [splitDividerDragging, setSplitDividerDragging] = useState<'primary' | 'secondary' | 'bottom' | null>(null)
   const [splitSecondaryShare, setSplitSecondaryShare] = useState<number>(SPLIT_SHARE_EVEN)
+  const [splitBottomShare, setSplitBottomShare] = useState<number>(SPLIT_SHARE_EVEN)
+  const [bottomDividerHovered, setBottomDividerHovered] = useState(false)
   const [secondaryDividerHovered, setSecondaryDividerHovered] = useState(false)
   const [splitDividerHovered, setSplitDividerHovered] = useState(false)
   const [splitDividerPoint, setSplitDividerPoint] = useState<{ x: number; y: number } | null>(null)
@@ -9093,12 +9188,21 @@ export default function OpenTuiApp() {
   })
   // A pane's title buttons, stable across renders: the panes are memoized, and
   // a fresh function per render would re-render every pane with the root.
-  const splitPaneActionsRef = useRef({ close: (_paneIndex: number) => {}, promote: (_session: Session) => {}, fullscreen: () => {} })
+  type MenuPoint = { x: number; y: number }
+  const splitPaneActionsRef = useRef({
+    close: (_paneIndex: number) => {},
+    promote: (_session: Session) => {},
+    fullscreen: () => {},
+    sessionMenu: (_session: Session, _source: 'rail' | 'tab' | 'pane', _point: MenuPoint, _paneIndex?: number) => {},
+  })
   const splitPaneActions = useMemo(() => ({
     close: (paneIndex: number) => splitPaneActionsRef.current.close(paneIndex),
     promote: (session: Session) => splitPaneActionsRef.current.promote(session),
     openLayout: () => setWindowPickerOpen(true),
     fullscreen: () => splitPaneActionsRef.current.fullscreen(),
+    /** A right-click on a rail row, a tab or a pane title. */
+    sessionMenu: (session: Session, source: 'rail' | 'tab' | 'pane', point: MenuPoint, paneIndex?: number) =>
+      splitPaneActionsRef.current.sessionMenu(session, source, point, paneIndex),
   }), [])
   const sessionDragHandlers = useMemo(() => ({
     /** `onClick` runs on a release that did not move: whichever of the row or the layer gets it. */
@@ -9642,6 +9746,9 @@ export default function OpenTuiApp() {
   // once per commit and size panes from that instead of recomputing the budget.
   const readerBoxRef = useRef<BoxRenderable>(null)
   const [measuredReaderBoxHeight, setMeasuredReaderBoxHeight] = useState(0)
+  // The window area's real height, measured like the reader's: the estimate
+  // from the content budget runs a couple of rows short of what flex gives it.
+  const [measuredWindowAreaHeight, setMeasuredWindowAreaHeight] = useState(0)
   const pausedTranscriptScrollTopRef = useRef<number | null>(null)
   // The cursor key SCROLLBACK last placed by scrolling. The reveal and recenter
   // effects skip a cursor that matches it: scrolling it back into view would
@@ -12465,8 +12572,8 @@ export default function OpenTuiApp() {
   const splitAxisExtent = splitAxisStacked ? Math.max(mainContentHeight - 2, 8) : readerAreaWidth
   const splitLayout = calculateSplitPaneLayout({
     availableExtent: splitAxisExtent,
-    requestedCount: fullscreenMode ? 0 : splitPaneCount,
-    availableCount: splitPinnedSessions.length,
+    requestedCount: fullscreenMode ? 0 : splitPaneCount + windowSurfaces.length,
+    availableCount: Math.min(splitPinnedSessions.length, splitPaneCount) + windowSurfaces.length,
     maxPanes: SPLIT_PANE_MAX,
     minPaneExtent: splitAxisStacked ? SPLIT_PANE_MIN_ROWS : SPLIT_PANE_MIN_WIDTH,
     minReaderExtent: splitAxisStacked ? MIN_READER_ROWS : MIN_READER_WIDTH,
@@ -12474,17 +12581,20 @@ export default function OpenTuiApp() {
   })
   // Main + stack and the grid (windowLayout.ts). The window area sits under the
   // tab strip, so it has one row less than the main content.
-  const windowAreaHeight = Math.max(mainContentHeight - (tabsEnabled && !fullscreenMode ? 1 : 0), 8)
+  const windowAreaHeight = measuredWindowAreaHeight > 0
+    ? measuredWindowAreaHeight
+    : Math.max(mainContentHeight - (tabsEnabled && !fullscreenMode ? 1 : 0), 8)
   const arrangedLayout = splitArrangement === 'split' || fullscreenMode ? null : computeWindowLayout({
     arrangement: splitArrangement,
     orientation: splitOrientation,
     width: readerAreaWidth,
     height: windowAreaHeight,
-    requestedCount: splitPaneCount,
-    availableCount: splitPinnedSessions.length,
+    requestedCount: splitPaneCount + windowSurfaces.length,
+    availableCount: Math.min(splitPinnedSessions.length, splitPaneCount) + windowSurfaces.length,
     maxPanes: SPLIT_PANE_ARRANGED_MAX,
     readerShare: splitReaderShare,
     secondaryShare: splitSecondaryShare,
+    bottomShare: splitBottomShare,
     minPaneWidth: SPLIT_PANE_MIN_WIDTH,
     minPaneRows: SPLIT_PANE_MIN_ROWS,
     minReaderWidth: MIN_READER_WIDTH,
@@ -12499,18 +12609,32 @@ export default function OpenTuiApp() {
   // Off-axis, a frame simply spans the reader area: stacked panes are full
   // width, side-by-side panes are full height.
   const splitPaneWidth = stackedSplit ? readerAreaWidth : splitLayout.paneExtent
+  // Session panes first, then surface windows. A layout short of room drops
+  // session panes before surfaces: a surface window was asked for by name.
   const splitPaneSessions = visibleSplitPaneCount > 0
-    ? splitPinnedSessions.slice(0, visibleSplitPaneCount)
+    ? splitPinnedSessions.slice(0, Math.max(0, Math.min(visibleSplitPaneCount - windowSurfaces.length, splitPaneCount)))
     : []
+  const visibleWindowSurfaces = windowSurfaces.slice(0, Math.max(0, visibleSplitPaneCount - splitPaneSessions.length))
+  const focusedWindowSurface: WindowSurfaceKind | null = splitFocusIndex !== null && splitFocusIndex >= splitPaneSessions.length
+    ? visibleWindowSurfaces[splitFocusIndex - splitPaneSessions.length] ?? null
+    : null
+  type WindowItem = { kind: 'session'; session: Session } | { kind: 'surface'; surface: WindowSurfaceKind }
+  const windowItems: WindowItem[] = [
+    ...splitPaneSessions.map((session): WindowItem => ({ kind: 'session', session })),
+    ...visibleWindowSurfaces.map((surface): WindowItem => ({ kind: 'surface', surface })),
+  ]
   const openCodeContextWidth = isOpenCodeView && visibleSplitPaneCount === 0
     ? Math.min(Math.max(24, Math.floor(readerAreaWidth * 0.22)), Math.max(readerAreaWidth - MIN_READER_WIDTH, 0))
     : 0
-  const rightPaneWidth = (arrangedVisible ? arrangedLayout.reader.width : stackedSplit ? readerAreaWidth : splitLayout.readerExtent) - openCodeContextWidth
+  // A zoomed reader has the whole area; the other windows are not drawn.
+  const readerZoomed = windowZoom === 'reader' && visibleSplitPaneCount > 0
+  const rightPaneWidth = (readerZoomed ? readerAreaWidth : arrangedVisible ? arrangedLayout.reader.width : stackedSplit ? readerAreaWidth : splitLayout.readerExtent) - openCodeContextWidth
   // Row budget the reader column actually gets. Stacked panes take theirs out
   // of it, so every downstream height (transcript viewport included) must be
   // measured from this rather than from the whole frame. In the grid the
   // reader has the top row only.
-  const readerRowBudget = arrangedVisible && arrangedLayout.reader.height < windowAreaHeight
+  const readerRowBudget = readerZoomed ? mainContentHeight
+    : arrangedVisible && arrangedLayout.reader.height < windowAreaHeight
     ? arrangedLayout.reader.height + (mainContentHeight - windowAreaHeight)
     : stackedPanesVisible ? splitLayout.readerExtent + 2 : mainContentHeight
   const splitPaneKeys = splitPaneSessions.map((pane) => sessionKey(pane))
@@ -15879,6 +16003,11 @@ export default function OpenTuiApp() {
         // window area, and selecting on press would put the session in the
         // reader before it could be dropped beside it.
         onMouseDown={(event) => {
+          if (event.button === 2) {
+            event.stopPropagation()
+            splitPaneActions.sessionMenu(entry.session, 'rail', event)
+            return
+          }
           if (event.button !== 0) return
           event.stopPropagation()
           if (sessionKey(entry.session) === renameSessionKey) return
@@ -15928,7 +16057,7 @@ export default function OpenTuiApp() {
         )}
       </box>
     )
-  }, [theme, density, sidebarInnerWidth, firstSidebarEntryKey, renameSessionKey, renameDraft, commitRename, selectSidebarSession, showProviderInSessionRows, sidebarSessionActivity, recentlyWrittenKeys, teamAttention, sessionDragHandlers])
+  }, [theme, density, sidebarInnerWidth, firstSidebarEntryKey, renameSessionKey, renameDraft, commitRename, selectSidebarSession, showProviderInSessionRows, sidebarSessionActivity, recentlyWrittenKeys, teamAttention, sessionDragHandlers, splitPaneActions])
 
 
   // Per-row element cache. Moving the selection highlight only changes TWO rows
@@ -18140,6 +18269,8 @@ export default function OpenTuiApp() {
     const measure = () => {
       const measured = readerBoxRef.current?.height ?? 0
       if (measured > 0) setMeasuredReaderBoxHeight((current) => (current === measured ? current : measured))
+      const area = windowAreaRef.current?.height ?? 0
+      if (area > 0) setMeasuredWindowAreaHeight((current) => (current === area ? current : area))
     }
     measure()
     const timer = setTimeout(measure, 50)
@@ -18945,6 +19076,7 @@ export default function OpenTuiApp() {
       setSplitArrangement(stored.arrangement)
       setSplitReaderLast(stored.readerLast)
       setSplitSecondaryShare(stored.secondaryShare)
+      setSplitBottomShare(stored.bottomShare)
     }).catch(() => {})
     return () => { cancelled = true }
   }, [])
@@ -19290,8 +19422,8 @@ export default function OpenTuiApp() {
 
   usePaste((event) => {
     // A shell with the keyboard takes the paste too, bracketed if it asked.
-    if (surfacePanelOpen && surfacePanelFocused && surfaceProcessCaptureRef.current === 'terminal'
-      && activeSurface(surfacePanel)?.kind === 'terminal') {
+    if (surfaceProcessCaptureRef.current === 'terminal' && (focusedWindowSurface === 'terminal'
+      || (surfacePanelOpen && surfacePanelFocused && activeSurface(surfacePanel)?.kind === 'terminal'))) {
       event.preventDefault()
       event.stopPropagation()
       surfaceProcessKeyRef.current?.({ name: 'paste', ctrl: false, shift: false, sequence: Buffer.from(event.bytes).toString('utf8') })
@@ -19662,7 +19794,7 @@ export default function OpenTuiApp() {
   const setWindowArrangement = useEffectEvent((arrangement: WindowArrangement, readerLast: boolean) => {
     setSplitArrangement(arrangement)
     setSplitReaderLast(readerLast)
-    void writeTuiWindowArrangement({ arrangement, readerLast, secondaryShare: splitSecondaryShare }).catch(() => {})
+    void writeTuiWindowArrangement({ arrangement, readerLast, secondaryShare: splitSecondaryShare, bottomShare: splitBottomShare }).catch(() => {})
   })
 
   // Ask for `wanted` panes from the open tabs; say so when there are not enough.
@@ -19690,11 +19822,143 @@ export default function OpenTuiApp() {
     showNotice('info', count < wanted ? `${label} · ${count} of ${wanted} panes (no more sessions to fill it)` : label)
   })
 
+  // What a right-click on a session offers, depending on where it is now.
+  const openSessionMenu = useEffectEvent((session: Session, source: 'rail' | 'tab' | 'pane', point: { x: number; y: number }, paneIndex?: number) => {
+    const key = sessionKey(session)
+    const title = fitText(formatSessionTitle(session), 34).trimEnd()
+    if (key === selectedSessionKey) {
+      setContextMenu({ ...point, title, items: [
+        { label: visibleSplitPaneCount > 0 ? (windowZoom !== null ? 'Restore the layout' : 'Zoom the reader') : 'Full screen', hint: visibleSplitPaneCount > 0 ? '⌃B m' : '⇧Z', run: () => (visibleSplitPaneCount > 0 ? (windowZoom !== null ? setWindowZoom(null) : setWindowZoom('reader')) : toggleFullscreenMode()) },
+        { label: 'Window layout…', hint: '⌃B w', run: () => setWindowPickerOpen(true) },
+      ] })
+      return
+    }
+    const items: ContextMenuItem[] = []
+    if (source === 'pane' && paneIndex !== undefined) {
+      items.push(
+        { label: 'Open in the reader', hint: '⏎', run: () => selectTabSession(session) },
+        { label: windowZoom === paneIndex ? 'Restore the layout' : 'Zoom this pane', hint: '⌃B m', run: () => setWindowZoom(windowZoom === paneIndex ? null : paneIndex) },
+        { label: 'Close pane', hint: '⌃B x', danger: true, run: () => closeSplitPane(paneIndex) },
+      )
+    } else {
+      items.push(
+        { label: 'Open in the reader', run: () => (source === 'tab' ? selectTabSession(session) : selectSidebarSession(session)) },
+        { label: 'Open right of the reader', run: () => dropSessionInWindow(session, 'right', null) },
+        { label: 'Open below the reader', run: () => dropSessionInWindow(session, 'bottom', null) },
+      )
+      if (source === 'tab') {
+        items.push({ label: 'Close tab', danger: true, run: () => setOpenTabSessions((prev) => prev.filter((tab) => sessionKey(tab) !== key)) })
+      }
+    }
+    setContextMenu({ ...point, title, items })
+  })
+  const openSurfaceWindowMenu = useEffectEvent((surface: WindowSurfaceKind, index: number, point: { x: number; y: number }) => {
+    setContextMenu({ ...point, title: WINDOW_SURFACE_TITLES[surface], items: [
+      { label: windowZoom === index ? 'Restore the layout' : 'Zoom this window', hint: '⌃B m', run: () => setWindowZoom(windowZoom === index ? null : index) },
+      { label: 'Move to the side panel', run: () => moveSurfaceToPanel(surface) },
+      { label: 'Close window', danger: true, run: () => closeSurfaceWindow(surface) },
+    ] })
+  })
+
+  const windowLayoutProject = gitRepoCwd || process.cwd()
+  useEffect(() => {
+    if (!windowPickerOpen) return
+    try { setSavedWindowLayouts(listSavedWindowLayouts(windowLayoutProject)) } catch { setSavedWindowLayouts([]) }
+  }, [windowLayoutProject, windowPickerOpen])
+
+  // Save the windows on screen: the arrangement, the reader, the panes in order, the surface windows.
+  const saveCurrentWindowLayout = useEffectEvent(() => {
+    try {
+      const saved = saveWindowLayout(windowLayoutProject, {
+        arrangement: splitArrangement,
+        orientation: splitOrientation,
+        readerLast: splitReaderLast,
+        readerShare: splitReaderShare,
+        secondaryShare: splitSecondaryShare,
+        bottomShare: splitBottomShare,
+        reader: selectedSessionKey,
+        panes: splitPaneSessions.map((pane) => sessionKey(pane)),
+        surfaces: visibleWindowSurfaces,
+      })
+      setSavedWindowLayouts(listSavedWindowLayouts(windowLayoutProject))
+      showNotice('info', `Saved ${saved.name} · ${describeSavedLayout(saved)}`)
+    } catch (err) {
+      showNotice('error', err instanceof Error ? err.message : 'Could not save the layout')
+    }
+  })
+
+  // Put a saved layout back. Sessions that no longer exist are skipped and said so.
+  const restoreWindowLayout = useEffectEvent((id: string) => {
+    const saved = savedWindowLayouts.find((entry) => entry.id === id)
+    if (!saved) return
+    setWindowPickerOpen(false)
+    const known = new Map<string, Session>()
+    for (const session of [...sessions, ...openTabSessions]) known.set(sessionKey(session), session)
+    const panes = saved.panes.flatMap((key) => (known.has(key) ? [known.get(key)!] : []))
+    const reader = saved.reader ? known.get(saved.reader) ?? null : null
+    const missing = saved.panes.length - panes.length + (saved.reader && !reader ? 1 : 0)
+    setWindowArrangement(saved.arrangement, saved.readerLast)
+    applySplitOrientation(saved.orientation, true)
+    setSplitReaderShare(saved.readerShare)
+    setSplitSecondaryShare(saved.secondaryShare)
+    setSplitBottomShare(saved.bottomShare ?? SPLIT_SHARE_EVEN)
+    setOpenTabSessions((prev) => {
+      const next = [...prev]
+      for (const session of [...(reader ? [reader] : []), ...panes]) {
+        if (!next.some((tab) => sessionKey(tab) === sessionKey(session))) next.push(session)
+      }
+      return next
+    })
+    setSplitPinnedKeys(panes.map((pane) => sessionKey(pane)))
+    setSplitPaneCount(panes.length)
+    void writeTuiSplitPanes(panes.length).catch(() => {})
+    setWindowSurfaces(saved.surfaces.filter((surface) => surface === 'terminal' || Boolean(gitRepoCwd)))
+    setWindowZoom(null)
+    if (reader && sessionKey(reader) !== selectedSessionKey) selectTabSession(reader)
+    showNotice('info', `${saved.name} restored${missing > 0 ? ` · ${missing} session${missing === 1 ? '' : 's'} no longer here` : ''}`)
+  })
+
+  const deleteSavedWindowLayout = useEffectEvent((id: string) => {
+    try {
+      deleteWindowLayout(windowLayoutProject, id)
+      setSavedWindowLayouts(listSavedWindowLayouts(windowLayoutProject))
+    } catch { /* the list stays as it was */ }
+  })
+
+  // A surface into the layout: out of the side panel, into a window, focused.
+  const openSurfaceWindow = useEffectEvent((surface: WindowSurfaceKind) => {
+    const remaining = surfacePanel.surfaces.filter((entry) => entry.kind !== surface)
+    setSurfacePanel((current) => current.surfaces
+      .filter((entry) => entry.kind === surface)
+      .reduce((state, entry) => closeSurfaceIn(state, entry.id), current))
+    // A panel with nothing left in it would only take width from the windows.
+    if (remaining.length === 0) setSurfacePanelOpen(false)
+    setSurfacePanelFocused(false)
+    setWindowSurfaces((current) => (current.includes(surface) ? current : [...current, surface]))
+    // A split holds two windows; a surface beyond that needs a stack or grid to appear.
+    if (splitArrangement === 'split' && splitPaneCount + windowSurfaces.length + 1 > SPLIT_PANE_MAX) setWindowArrangement('main-stack', splitReaderLast)
+    // Focused once the layout has placed it: until then its index is unknown,
+    // because opening it may drop a session pane to make room.
+    pendingSurfaceFocusRef.current = surface
+    setFocusedPane('messages')
+    showNotice('info', `${WINDOW_SURFACE_TITLES[surface]} in a window · ⇥ panel puts it back`)
+  })
+  const closeSurfaceWindow = useEffectEvent((surface: WindowSurfaceKind) => {
+    setWindowSurfaces((current) => current.filter((entry) => entry !== surface))
+    setSplitFocusIndex(null)
+  })
+  const moveSurfaceToPanel = useEffectEvent((surface: WindowSurfaceKind) => {
+    closeSurfaceWindow(surface)
+    setSurfacePanelOpen(true)
+    setSurfacePanelFocused(true)
+    setSurfacePanel((current) => openSurfaceIn(current, surface))
+  })
+
   // The choice the window menu shows as current.
   const currentWindowLayoutAction: WindowLayoutAction = visibleSplitPaneCount === 0
     ? 'fill'
     : splitArrangement === 'main-stack' ? 'main-stack'
-    : splitArrangement === 'grid' ? 'grid'
+    : splitArrangement === 'grid' ? (visibleSplitPaneCount > 3 ? 'grid-six' : 'grid')
     : stackedSplit ? (splitReaderLast ? 'reader-bottom' : 'reader-top')
     : splitReaderLast ? 'reader-right' : visibleSplitPaneCount === 1 ? 'two' : 'reader-left'
 
@@ -19727,11 +19991,15 @@ export default function OpenTuiApp() {
         return
       case 'main-stack':
         setWindowArrangement('main-stack', false)
-        requestWindowPanes(Math.max(2, Math.min(splitPaneCount, SPLIT_PANE_ARRANGED_MAX)), 'Reader and a stack')
+        requestWindowPanes(Math.max(2, Math.min(splitPaneCount, 3)), 'Reader and a stack')
         return
       case 'grid':
         setWindowArrangement('grid', false)
-        requestWindowPanes(SPLIT_PANE_ARRANGED_MAX, 'Grid of four')
+        requestWindowPanes(3, 'Grid of four')
+        return
+      case 'grid-six':
+        setWindowArrangement('grid', false)
+        requestWindowPanes(5, 'Grid of six')
         return
     }
   })
@@ -19756,6 +20024,37 @@ export default function OpenTuiApp() {
     showNotice('info', `${fitText(formatSessionTitle(session), 40)} in pane ${index + 1}`)
   })
 
+  // Put `session` beside pane `index` (before it for a left or top edge, after for right or bottom).
+  const insertSessionBesidePane = useEffectEvent((session: Session, index: number, edge: WindowDropZone) => {
+    const key = sessionKey(session)
+    if (key === selectedSessionKey) {
+      showNotice('info', 'That session is the reader · ⤢ on a pane swaps it with the reader')
+      return
+    }
+    const max = splitArrangement === 'split' ? SPLIT_PANE_MAX : SPLIT_PANE_ARRANGED_MAX
+    const alreadyShown = splitPaneKeys.includes(key)
+    if (!alreadyShown && visibleSplitPaneCount >= max) {
+      showNotice('info', splitArrangement === 'split'
+        ? 'A split holds two panes · ⊞ layout → a stack or grid holds more'
+        : `The layout is full (${max} panes) · drop on a pane's middle to replace it`)
+      return
+    }
+    setOpenTabSessions((prev) => (prev.some((tab) => sessionKey(tab) === key) ? prev : [...prev, session]))
+    setSplitPinnedKeys(() => {
+      const order = splitPaneKeys.filter((pinnedKey) => pinnedKey !== key)
+      const anchor = splitPaneKeys[index]
+      const at = Math.max(0, order.indexOf(anchor ?? '')) + (edge === 'right' || edge === 'bottom' ? 1 : 0)
+      order.splice(Math.min(at, order.length), 0, key)
+      return order
+    })
+    const count = Math.min(visibleSplitPaneCount + (alreadyShown ? 0 : 1), max)
+    if (count !== splitPaneCount) {
+      setSplitPaneCount(count)
+      void writeTuiSplitPanes(count).catch(() => {})
+    }
+    showNotice('info', `${fitText(formatSessionTitle(session), 40)} beside pane ${index + 1}`)
+  })
+
   const rectOf = (id: string) => {
     const box = renderer.root.findDescendantById(id) as unknown as { x: number; y: number; width: number; height: number } | null
     return box ? { x: box.x, y: box.y, width: box.width, height: box.height } : null
@@ -19765,13 +20064,17 @@ export default function OpenTuiApp() {
   // What a drag would land on: a pane under the pointer, else an edge or the
   // middle of the reader (relative to the reader, so its edges stay reachable
   // when panes fill the rest of the area).
-  const dropTargetAt = (point: { x: number; y: number }): { zone: WindowDropZone | null; pane: number | null } => {
-    for (let index = 0; index < visibleSplitPaneCount; index += 1) {
+  const dropTargetAt = (point: { x: number; y: number }): { zone: WindowDropZone | null; pane: number | null; insert: WindowDropZone | null } => {
+    // Session panes only: a surface window is not somewhere a transcript can be dropped.
+    for (let index = 0; index < splitPaneSessions.length; index += 1) {
       const pane = rectOf(`split-pane:${index}`)
-      if (pane && inside(pane, point)) return { zone: null, pane: index }
+      if (!pane || !inside(pane, point)) continue
+      // A pane's own edges insert beside it; its middle replaces it.
+      const zone = windowDropZone(pane, point)
+      return { zone: null, pane: index, insert: zone && zone !== 'center' ? zone : null }
     }
     const reader = rectOf('transcript-reader')
-    return { zone: reader ? windowDropZone(reader, point) : null, pane: null }
+    return { zone: reader ? windowDropZone(reader, point) : null, pane: null, insert: null }
   }
 
   const windowAreaRect = () => {
@@ -19822,6 +20125,7 @@ export default function OpenTuiApp() {
     close: (paneIndex) => closeSplitPane(paneIndex),
     promote: (session) => selectTabSession(session),
     fullscreen: () => toggleFullscreenMode(),
+    sessionMenu: (session, source, point, paneIndex) => openSessionMenu(session, source, point, paneIndex),
   }
   sessionDragImplRef.current = {
     press: (session, fromPane, event, onClick) => {
@@ -19848,7 +20152,8 @@ export default function OpenTuiApp() {
       }
       setSessionDrag(null)
       const target = dropTargetAt(event)
-      if (target.pane !== null) dropSessionOnPane(press.session, target.pane, press.fromPane)
+      if (target.pane !== null && target.insert) insertSessionBesidePane(press.session, target.pane, target.insert)
+      else if (target.pane !== null) dropSessionOnPane(press.session, target.pane, press.fromPane)
       else if (target.zone) dropSessionInWindow(press.session, target.zone, press.fromPane)
     },
   }
@@ -19858,6 +20163,12 @@ export default function OpenTuiApp() {
     const area = windowAreaRect()
     if (!area) return
     setSplitDividerPoint({ x: event.x, y: event.y })
+    if (splitDividerDragging === 'bottom') {
+      // The column the pointer is on becomes the bottom row's first pane's right border.
+      const next = Math.min(0.8, Math.max(0.2, Math.round(((event.x - area.x + 1) / Math.max(1, area.width)) * 100) / 100))
+      if (next !== splitBottomShare) setSplitBottomShare(next)
+      return
+    }
     if (splitDividerDragging === 'secondary') {
       // The row the pointer is on becomes the first frame's bottom border.
       const next = Math.min(0.8, Math.max(0.2, Math.round(((event.y - area.y + 1) / Math.max(1, area.height)) * 100) / 100))
@@ -19872,8 +20183,8 @@ export default function OpenTuiApp() {
     const kind = splitDividerDragging
     setSplitDividerDragging(null)
     setSplitDividerPoint(null)
-    if (kind === 'secondary') {
-      void writeTuiWindowArrangement({ arrangement: splitArrangement, readerLast: splitReaderLast, secondaryShare: splitSecondaryShare }).catch(() => {})
+    if (kind === 'secondary' || kind === 'bottom') {
+      void writeTuiWindowArrangement({ arrangement: splitArrangement, readerLast: splitReaderLast, secondaryShare: splitSecondaryShare, bottomShare: splitBottomShare }).catch(() => {})
     } else {
       void writeTuiSplitReaderShare(splitReaderShare).catch(() => {})
     }
@@ -19986,6 +20297,117 @@ export default function OpenTuiApp() {
     const next = (current + direction + stops) % stops
     if (next === 0) focusReaderFromSplit()
     else focusSplitPane(next - 1)
+  })
+
+  // A surface window just opened takes focus once it has a place in the layout.
+  useEffect(() => {
+    const pending = pendingSurfaceFocusRef.current
+    if (!pending) return
+    const index = windowItems.findIndex((item) => item.kind === 'surface' && item.surface === pending)
+    if (index < 0) return
+    pendingSurfaceFocusRef.current = null
+    setSplitFocusIndex(index)
+  })
+
+  // A zoom ends when the window it names goes away.
+  useEffect(() => {
+    if (windowZoom === null) return
+    if (visibleSplitPaneCount === 0 || (typeof windowZoom === 'number' && windowZoom >= windowItems.length)) setWindowZoom(null)
+  }, [visibleSplitPaneCount, windowItems.length, windowZoom])
+
+  const toggleWindowZoom = useEffectEvent(() => {
+    if (windowZoom !== null) {
+      setWindowZoom(null)
+      showNotice('info', 'Layout restored')
+      return
+    }
+    if (visibleSplitPaneCount === 0) {
+      showNotice('info', 'Nothing to zoom: the reader already has the whole area')
+      return
+    }
+    setWindowZoom(splitFocusIndex ?? 'reader')
+    showNotice('info', 'Zoomed · ⌃B m restores the layout')
+  })
+
+  // ⌃B +/-: the second divider, from the keyboard.
+  const resizeSecondaryDivider = useEffectEvent((direction: 1 | -1) => {
+    if (!arrangedVisible || !(splitArrangement === 'grid' ? arrangedLayout.secondary : visibleSplitPaneCount > 1)) {
+      showNotice('info', 'No second divider here · it is the grid\'s row split, or a stack\'s first pane')
+      return
+    }
+    const base = splitSecondaryShare === SPLIT_SHARE_EVEN ? 0.5 : splitSecondaryShare
+    const next = Math.min(0.8, Math.max(0.2, Math.round((base + direction * SPLIT_SHARE_STEP) * 100) / 100))
+    setSplitSecondaryShare(next)
+    void writeTuiWindowArrangement({ arrangement: splitArrangement, readerLast: splitReaderLast, secondaryShare: next, bottomShare: splitBottomShare }).catch(() => {})
+    showNotice('info', `${splitArrangement === 'grid' ? 'Top row' : 'First pane'} ${Math.round(next * 100)}% of the height`)
+  })
+
+  // ⌃B [ ]: the grid's bottom-row divider, from the keyboard.
+  const resizeBottomDivider = useEffectEvent((direction: 1 | -1) => {
+    if (!arrangedVisible || splitArrangement !== 'grid' || !arrangedLayout.secondary || arrangedLayout.panes.length - arrangedLayout.topPanes < 2) {
+      showNotice('info', 'No bottom-row divider here · it is between a grid\'s bottom panes')
+      return
+    }
+    const base = splitBottomShare === SPLIT_SHARE_EVEN ? 1 / (arrangedLayout.panes.length - arrangedLayout.topPanes) : splitBottomShare
+    const next = Math.min(0.8, Math.max(0.2, Math.round((base + direction * SPLIT_SHARE_STEP) * 100) / 100))
+    setSplitBottomShare(next)
+    void writeTuiWindowArrangement({ arrangement: splitArrangement, readerLast: splitReaderLast, secondaryShare: splitSecondaryShare, bottomShare: next }).catch(() => {})
+    showNotice('info', `Bottom-left pane ${Math.round(next * 100)}% of the width`)
+  })
+
+  // ⌃B ⇧arrows: swap the focused window with the one that way; focus moves with it.
+  const swapWindowInDirection = useEffectEvent((direction: WindowDirection) => {
+    if (visibleSplitPaneCount === 0) {
+      showNotice('error', 'No split panes open (⌃B % to split)')
+      return
+    }
+    const windows: Array<{ id: number; rect: { x: number; y: number; width: number; height: number } }> = []
+    const reader = rectOf('transcript-reader')
+    if (reader) windows.push({ id: -1, rect: reader })
+    for (let index = 0; index < visibleSplitPaneCount; index += 1) {
+      const pane = rectOf(`split-pane:${index}`)
+      if (pane) windows.push({ id: index, rect: pane })
+    }
+    const from = splitFocusIndex ?? -1
+    const to = windowInDirection(windows, from, direction)
+    if (to === null) {
+      showNotice('info', `No window ${direction === 'up' ? 'above' : direction === 'down' ? 'below' : `to the ${direction}`}`)
+      return
+    }
+    const sessions = splitPaneSessions.length
+    const isSurface = (id: number) => id >= sessions
+    if (isSurface(from) !== isSurface(to) && from !== -1 && to !== -1) {
+      showNotice('info', 'Surface windows keep their place after the session panes')
+      return
+    }
+    if (from === -1 || to === -1) {
+      const pane = from === -1 ? to : from
+      if (isSurface(pane)) {
+        showNotice('info', 'Only a session can be in the reader')
+        return
+      }
+      // Opening the pane's session in the reader hands that pane the reader's session: a swap.
+      selectTabSession(splitPaneSessions[pane]!)
+      if (from === -1) focusSplitPane(pane)
+      else focusReaderFromSplit()
+      return
+    }
+    if (isSurface(from)) {
+      setWindowSurfaces((current) => {
+        const next = [...current]
+        const a = from - sessions
+        const b = to - sessions
+        ;[next[a], next[b]] = [next[b]!, next[a]!]
+        return next
+      })
+    } else {
+      setSplitPinnedKeys(() => {
+        const next = [...splitPaneKeys]
+        ;[next[from], next[to]] = [next[to]!, next[from]!]
+        return next
+      })
+    }
+    focusSplitPane(to)
   })
 
   // ⌃B arrows: the window in that direction, by where the frames actually are.
@@ -20142,9 +20564,21 @@ export default function OpenTuiApp() {
       case 'window-layout':
         setWindowPickerOpen(true)
         break
+      case 'window-terminal':
+        openSurfaceWindow('terminal')
+        break
+      case 'window-diff':
+        if (gitRepoCwd) openSurfaceWindow('diff')
+        else showNotice('info', 'The diff needs a git repository')
+        break
+      case 'window-files':
+        if (gitRepoCwd) openSurfaceWindow('files')
+        else showNotice('info', 'Files need a git repository')
+        break
       case 'processes':
         setSurfacePanelOpen(true)
         setSurfacePanelFocused(true)
+        setWindowSurfaces((current) => current.filter((entry) => entry !== 'terminal'))
         // Terminal surfaces are multi-instance; this goes to the one already open.
         setSurfacePanel((current) => {
           const existing = current.surfaces.find((surface) => surface.kind === 'terminal')
@@ -20865,6 +21299,11 @@ export default function OpenTuiApp() {
       return
     }
 
+    if (contextMenu) {
+      handled(() => { contextMenuKeyHandlerRef.current?.(key) })
+      return
+    }
+
     if (windowPickerOpen) {
       handled(() => { windowPickerKeyHandlerRef.current?.(key) })
       return
@@ -20903,6 +21342,20 @@ export default function OpenTuiApp() {
 
     // Review text inputs and active search/filter escape handling belong to the diff.
     // Keep panel close/cycle/add chords available even while an input is active.
+    // A terminal window with the keyboard gets every key, as in the side panel;
+    // typing a command lets keys reach its input. Ahead of the ⌃B prefix, which
+    // a shell (and tmux inside it) needs too.
+    if (focusedWindowSurface === 'terminal' && surfaceProcessCaptureRef.current !== 'none') {
+      if (surfaceProcessCaptureRef.current === 'terminal' || key.name === 'escape') {
+        handled(() => { surfaceProcessKeyRef.current?.(key) })
+      }
+      return
+    }
+    if (focusedWindowSurface === 'diff' && surfaceGitKeyCaptureRef.current) {
+      handled(() => { surfaceGitKeyRef.current?.(key) })
+      return
+    }
+
     if (surfacePanelVisible && surfacePanelFocused && activeSurface(surfacePanel)?.kind === 'diff'
       && surfaceGitKeyCaptureRef.current && !(key.ctrl && ['w', 'n', 'p', 't'].includes(key.name))) {
       handled(() => { surfaceGitKeyRef.current?.(key) })
@@ -21938,9 +22391,15 @@ export default function OpenTuiApp() {
         // ; flips reader↔last pane, digits jump straight to a pane.
         if (sequence === 'o' || key.name === 'tab') { cycleSplitFocus(1); return }
         if (key.name === 'left' || key.name === 'right' || key.name === 'up' || key.name === 'down') {
-          focusWindowInDirection(key.name)
+          if (key.shift) swapWindowInDirection(key.name)
+          else focusWindowInDirection(key.name)
           return
         }
+        if (sequence === 'm') { toggleWindowZoom(); return }
+        if (sequence === '+') { resizeSecondaryDivider(1); return }
+        if (sequence === '-' || sequence === '_') { resizeSecondaryDivider(-1); return }
+        if (sequence === '[') { resizeBottomDivider(-1); return }
+        if (sequence === ']') { resizeBottomDivider(1); return }
         if (sequence === ';') { toggleSplitFocus(); return }
         if (/^[1-9]$/.test(sequence)) { focusSplitPane(Number(sequence) - 1); return }
         if (sequence === 'n') { cycleSplitPaneSession(); return }
@@ -21965,6 +22424,19 @@ export default function OpenTuiApp() {
       return
     }
 
+    // ── A focused surface window owns the keys ────────────────────────────────
+    // After the ⌃B prefix, so ⌃B arrows still move between windows; Escape goes
+    // back to the reader, as it does from a pane.
+    if (focusedWindowSurface) {
+      if (key.name === 'escape') { handled(focusReaderFromSplit); return }
+      handled(() => {
+        if (focusedWindowSurface === 'terminal') surfaceProcessKeyRef.current?.(key)
+        else if (focusedWindowSurface === 'diff') surfaceGitKeyRef.current?.(key)
+        else surfaceFilesKeyRef.current?.(key)
+      })
+      return
+    }
+
     // ── Focused split pane owns the keys ──────────────────────────────────────
     // A focused pane is a reader, not an editor: it scrolls, it opens, it hands
     // focus back. Everything else is swallowed rather than falling through to
@@ -21974,6 +22446,31 @@ export default function OpenTuiApp() {
       const paneHandle = splitPaneHandlesRef.current.get(splitFocusIndex)
       const paneSession = paneHandle?.getSession() ?? null
       const pageRows = Math.max(Math.floor(transcriptViewportRows * 0.8), 1)
+      // Search: / types a query into the pane's title, Enter looks back for it, n/N step older/newer.
+      const runPaneSearch = (query: string, direction: 1 | -1) => {
+        const outcome = paneHandle?.search(query, direction) ?? 'none'
+        if (outcome === 'none') showNotice('info', `No ${direction === -1 ? 'older' : 'newer'} match for “${query}”`)
+      }
+      if (paneSearch?.editing && paneSearch.index === splitFocusIndex) {
+        handled(() => {
+          if (key.name === 'escape') { setPaneSearch(null); return }
+          if (key.name === 'return') {
+            setPaneSearch({ ...paneSearch, editing: false })
+            if (paneSearch.query) runPaneSearch(paneSearch.query, -1)
+            return
+          }
+          // Functional updates: keys typed faster than a render all see the same closure.
+          if (key.name === 'backspace') { setPaneSearch((current) => (current ? { ...current, query: current.query.slice(0, -1) } : current)); return }
+          if (sequence.length === 1 && sequence >= ' ' && !key.ctrl) setPaneSearch((current) => (current ? { ...current, query: current.query + sequence } : current))
+        })
+        return
+      }
+      if (sequence === '/') { handled(() => setPaneSearch({ index: splitFocusIndex, query: '', editing: true })); return }
+      if (paneSearch && paneSearch.index === splitFocusIndex && paneSearch.query && (sequence === 'n' || sequence === 'N')) {
+        handled(() => runPaneSearch(paneSearch.query, sequence === 'n' ? -1 : 1))
+        return
+      }
+      if (key.name === 'escape' && paneSearch?.index === splitFocusIndex) { handled(() => setPaneSearch(null)); return }
       if (key.name === 'escape') { handled(focusReaderFromSplit); return }
       // Card navigation, not raw scrolling: the pane has a cursor, so j/k move
       // between messages exactly like the reader.
@@ -23538,6 +24035,10 @@ export default function OpenTuiApp() {
           // Clicking the transcript hands focus back from the surface panel,
           // mirroring the panel's own click-to-focus.
           if (event.button === 0 && surfacePanelFocused) setSurfacePanelFocused(false)
+          if (event.button === 2 && readerBoxRef.current && event.y === readerBoxRef.current.y && selectedSession) {
+            splitPaneActions.sessionMenu(selectedSession, 'pane', event)
+            return
+          }
           // A double-click on the title bar zooms, as it does a desktop window.
           if (event.button === 0 && readerBoxRef.current && event.y === readerBoxRef.current.y && isDoubleClick(readerTitleClickRef, event)) {
             toggleFullscreenMode()
@@ -24030,6 +24531,48 @@ export default function OpenTuiApp() {
     </>
   )
 
+  // A surface in the layout: the side panel's view of it, in a window frame.
+  const renderSurfaceWindow = (surface: WindowSurfaceKind, index: number, size: { width: number; height: number; boxHeight: number | undefined }) => {
+    const focused = splitFocusIndex === index
+    const height = size.boxHeight ?? size.height
+    return (
+      <box
+        key={`surface-window:${surface}`}
+        id={`split-pane:${index}`}
+        width={size.width}
+        height={size.boxHeight}
+        flexShrink={0}
+        flexDirection="column"
+        overflow="hidden"
+        border
+        borderStyle="single"
+        borderColor={focused ? theme.cyan : theme.border}
+        backgroundColor={theme.surface}
+        title={` ${WINDOW_SURFACE_TITLES[surface]} `}
+        titleColor={focused ? theme.cyan : theme.dim}
+        onMouseDown={(event) => {
+          if (event.button === 2) {
+            openSurfaceWindowMenu(surface, index, event)
+            return
+          }
+          if (event.button !== 0) return
+          if (surfacePanelFocused) setSurfacePanelFocused(false)
+          focusSplitPane(index)
+        }}
+      >
+        <box position="absolute" top={-1} right={1} height={1} flexDirection="row" zIndex={3}>
+          <WindowButton id={`surface-window-to-panel:${surface}`} label=" ⇥ panel " theme={theme} onPress={() => moveSurfaceToPanel(surface)} />
+          <WindowButton id={`surface-window-close:${surface}`} label=" × " theme={theme} tone="danger" onPress={() => closeSurfaceWindow(surface)} />
+        </box>
+        {renderSurfaceBody(surface, { width: Math.max(10, size.width - 2), height: Math.max(3, height - 2) }, () => closeSurfaceWindow(surface), focused)}
+      </box>
+    )
+  }
+
+  const renderWindowItem = (item: WindowItem, index: number, size: { width: number; height: number; boxHeight: number | undefined }) => (
+    item.kind === 'session' ? renderSplitPane(item.session, index, size) : renderSurfaceWindow(item.surface, index, size)
+  )
+
   // One split pane's frame, at the size its arrangement gives it.
   const renderSplitPane = (splitSession: Session, splitIndex: number, size: { width: number; height: number; boxHeight: number | undefined }) => (
     <box
@@ -24076,6 +24619,8 @@ export default function OpenTuiApp() {
         onActivate={focusSplitPane}
         onClosePane={splitPaneActions.close}
         onPromotePane={splitPaneActions.promote}
+        onContextMenu={splitPaneActions.sessionMenu}
+        searchLabel={paneSearch && paneSearch.index === splitIndex ? `/${paneSearch.query}${paneSearch.editing ? '▏' : ''}` : null}
         sessionDrag={sessionDragHandlers}
         shouldYieldToForeground={splitPaneShouldYield}
       />
@@ -24109,6 +24654,131 @@ export default function OpenTuiApp() {
     return visibleTabSessions[scrollOffset + Math.floor((x - instance.x) / tabWidth)] ?? null
   }
 
+  // One surface's content, for the side panel or a window in the layout.
+  const renderSurfaceBody = (kind: RightPanelSurfaceKind, box: { width: number; height: number }, close: () => void, focused: boolean): React.ReactNode => {
+    switch (kind) {
+      case 'browser':
+        return (
+          <BrowserSurfaceView
+            theme={theme}
+            width={box.width}
+            height={box.height}
+            focused={focused}
+            recent={surfaceBrowserRecent}
+            onOpened={(url) => setSurfaceBrowserRecent((current) => [url, ...current.filter((entry) => entry !== url)].slice(0, 12))}
+          />
+        )
+      case 'terminal':
+        return (
+          <ProcessPane
+            theme={theme}
+            width={box.width}
+            height={box.height}
+            focused={focused}
+            cwd={gitRepoCwd || process.cwd()}
+            onKeyHandlerReady={(handler) => { surfaceProcessKeyRef.current = handler }}
+            onCaptureChange={(capture) => { surfaceProcessCaptureRef.current = capture }}
+            onNotice={showNotice}
+            onOpenFile={(path, line) => {
+              setEditorInitialPath(path)
+              setEditorInitialLine(line ?? null)
+              setEditorOpen(true)
+            }}
+            onAskAgent={(prompt) => {
+              appendDiffCommentPromptToComposer(prompt)
+              // The composer takes the keys from here; the process keeps running.
+              setSurfacePanelFocused(false)
+              showNotice('info', 'Error added to composer')
+            }}
+          />
+        )
+      case 'files':
+        return (
+          <FileViewerPopover
+            docked
+            cwd={gitRepoCwd}
+            theme={theme}
+            width={box.width}
+            height={box.height}
+            syntaxStyle={handoffBriefSyntaxStyle}
+            velocityScrollEnabled={velocityScrollEnabled}
+            onClose={close}
+            onKeyHandlerReady={(handler) => { surfaceFilesKeyRef.current = handler }}
+            onInsertPath={(path) => {
+              insertComposerTextAtCursor(path)
+              setComposerActive(true)
+            }}
+            onToggleVelocityScroll={() => {
+              setVelocityScrollEnabled((current) => {
+                const next = !current
+                showToggleOutcome('Velocity scroll', next)
+                void writeTuiVelocityScroll(next).catch(() => {})
+                return next
+              })
+            }}
+          />
+        )
+      case 'diff':
+        return (
+          <GitPopover
+            docked
+            cwd={gitRepoCwd}
+            sessionId={gitSessionId}
+            onKeyCaptureChange={(capture) => { surfaceGitKeyCaptureRef.current = capture }}
+            onClipboardWrite={(text) => writeClipboard(text, renderer)}
+            theme={theme}
+            width={box.width}
+            height={box.height}
+            onClose={close}
+            onKeyHandlerReady={(handler) => { surfaceGitKeyRef.current = handler }}
+            onSendDiffNoteToComposer={(prompt) => {
+              appendDiffCommentPromptToComposer(prompt)
+              showNotice('info', 'Diff comment added to composer')
+            }}
+            onAskAgent={(request) => { void askAgentAboutSelection(request) }}
+          />
+        )
+      case 'pull-request':
+        return (
+          <PullRequestPopover
+            docked
+            cwd={gitRepoCwd}
+            theme={theme}
+            width={box.width}
+            height={box.height}
+            onClose={close}
+            onKeyHandlerReady={(handler) => { surfacePrKeyRef.current = handler }}
+            onAskAgent={(prompt) => {
+              insertComposerTextAtCursor(prompt)
+              setComposerActive(true)
+              showNotice('info', 'PR question added to composer')
+            }}
+            onSendDiffNoteToComposer={(prompt) => {
+              appendDiffCommentPromptToComposer(prompt)
+              showNotice('info', 'PR diff comment added to composer')
+            }}
+          />
+        )
+      case 'agents':
+        return (
+          <TaskSidePanel
+            messages={taskPanelMessages}
+            todos={composerLiveTodos}
+            session={selectedSession}
+            theme={theme}
+            width={box.width}
+            height={box.height}
+            onSelectTask={(uuid) => {
+              const idx = visibleTranscriptCards.findIndex((c) => c.key === uuid)
+              if (idx >= 0) jumpToTranscriptIndex(idx)
+            }}
+            tab="agents"
+            liveSubagentText={liveSubagentText}
+          />
+        )
+    }
+  }
+
   // One element for both placements, so the panel keeps its state when it moves.
   const surfacePanelElement = surfacePanelVisible ? (
     <SurfacePanel
@@ -24133,13 +24803,19 @@ export default function OpenTuiApp() {
         'pull-request': 'Available when a project is open.',
       }}
       liveAgentCount={Object.values(liveSubagentText).filter((text) => text.trim().length > 0).length}
-      onOpenSurface={(kind) => setSurfacePanel((current) => openSurfaceIn(current, kind))}
+      onOpenSurface={(kind) => {
+        setWindowSurfaces((current) => current.filter((entry) => entry !== kind))
+        setSurfacePanel((current) => openSurfaceIn(current, kind))
+      }}
       onCloseSurface={(id) => setSurfacePanel((current) => closeSurfaceIn(current, id))}
       onCycleSurface={(delta) => setSurfacePanel((current) => cycleSurfaceIn(current, delta))}
       onBlur={() => setSurfacePanelFocused(false)}
       onFocus={() => setSurfacePanelFocused(true)}
       onActivateSurface={(id) => setSurfacePanel((current) => ({ ...current, activeId: id }))}
       onTogglePlacement={() => toggleSurfacePanelPlacement()}
+      onMoveToWindow={(kind) => {
+        if (kind === 'terminal' || kind === 'diff' || kind === 'files') openSurfaceWindow(kind)
+      }}
       onToggleExpand={() => setSurfacePanelExpanded((current) => !current)}
       onClosePanel={() => {
         setSurfacePanelOpen(false)
@@ -24159,129 +24835,7 @@ export default function OpenTuiApp() {
         else if (surface.kind === 'terminal') surfaceProcessKeyRef.current?.(key)
         // browser/agents own their own <input> or are read-only.
       }}
-      renderSurface={(surface: TuiSurface, box) => {
-        switch (surface.kind) {
-          case 'browser':
-            return (
-              <BrowserSurfaceView
-                theme={theme}
-                width={box.width}
-                height={box.height}
-                focused={surfacePanelFocused}
-                recent={surfaceBrowserRecent}
-                onOpened={(url) => setSurfaceBrowserRecent((current) => [url, ...current.filter((entry) => entry !== url)].slice(0, 12))}
-              />
-            )
-          case 'terminal':
-            return (
-              <ProcessPane
-                theme={theme}
-                width={box.width}
-                height={box.height}
-                focused={surfacePanelFocused}
-                cwd={gitRepoCwd || process.cwd()}
-                onKeyHandlerReady={(handler) => { surfaceProcessKeyRef.current = handler }}
-                onCaptureChange={(capture) => { surfaceProcessCaptureRef.current = capture }}
-                onNotice={showNotice}
-                onOpenFile={(path, line) => {
-                  setEditorInitialPath(path)
-                  setEditorInitialLine(line ?? null)
-                  setEditorOpen(true)
-                }}
-                onAskAgent={(prompt) => {
-                  appendDiffCommentPromptToComposer(prompt)
-                  // The composer takes the keys from here; the process keeps running.
-                  setSurfacePanelFocused(false)
-                  showNotice('info', 'Error added to composer')
-                }}
-              />
-            )
-          case 'files':
-            return (
-              <FileViewerPopover
-                docked
-                cwd={gitRepoCwd}
-                theme={theme}
-                width={box.width}
-                height={box.height}
-                syntaxStyle={handoffBriefSyntaxStyle}
-                velocityScrollEnabled={velocityScrollEnabled}
-                onClose={() => setSurfacePanel((current) => closeSurfaceIn(current, surface.id))}
-                onKeyHandlerReady={(handler) => { surfaceFilesKeyRef.current = handler }}
-                onInsertPath={(path) => {
-                  insertComposerTextAtCursor(path)
-                  setComposerActive(true)
-                }}
-                onToggleVelocityScroll={() => {
-                  setVelocityScrollEnabled((current) => {
-                    const next = !current
-                    showToggleOutcome('Velocity scroll', next)
-                    void writeTuiVelocityScroll(next).catch(() => {})
-                    return next
-                  })
-                }}
-              />
-            )
-          case 'diff':
-            return (
-              <GitPopover
-                docked
-                cwd={gitRepoCwd}
-                sessionId={gitSessionId}
-                onKeyCaptureChange={(capture) => { surfaceGitKeyCaptureRef.current = capture }}
-                onClipboardWrite={(text) => writeClipboard(text, renderer)}
-                theme={theme}
-                width={box.width}
-                height={box.height}
-                onClose={() => setSurfacePanel((current) => closeSurfaceIn(current, surface.id))}
-                onKeyHandlerReady={(handler) => { surfaceGitKeyRef.current = handler }}
-                onSendDiffNoteToComposer={(prompt) => {
-                  appendDiffCommentPromptToComposer(prompt)
-                  showNotice('info', 'Diff comment added to composer')
-                }}
-                onAskAgent={(request) => { void askAgentAboutSelection(request) }}
-              />
-            )
-          case 'pull-request':
-            return (
-              <PullRequestPopover
-                docked
-                cwd={gitRepoCwd}
-                theme={theme}
-                width={box.width}
-                height={box.height}
-                onClose={() => setSurfacePanel((current) => closeSurfaceIn(current, surface.id))}
-                onKeyHandlerReady={(handler) => { surfacePrKeyRef.current = handler }}
-                onAskAgent={(prompt) => {
-                  insertComposerTextAtCursor(prompt)
-                  setComposerActive(true)
-                  showNotice('info', 'PR question added to composer')
-                }}
-                onSendDiffNoteToComposer={(prompt) => {
-                  appendDiffCommentPromptToComposer(prompt)
-                  showNotice('info', 'PR diff comment added to composer')
-                }}
-              />
-            )
-          case 'agents':
-            return (
-              <TaskSidePanel
-                messages={taskPanelMessages}
-                todos={composerLiveTodos}
-                session={selectedSession}
-                theme={theme}
-                width={box.width}
-                height={box.height}
-                onSelectTask={(uuid) => {
-                  const idx = visibleTranscriptCards.findIndex((c) => c.key === uuid)
-                  if (idx >= 0) jumpToTranscriptIndex(idx)
-                }}
-                tab="agents"
-                liveSubagentText={liveSubagentText}
-              />
-            )
-        }
-      }}
+      renderSurface={(surface: TuiSurface, box) => renderSurfaceBody(surface.kind, box, () => setSurfacePanel((current) => closeSurfaceIn(current, surface.id)), surfacePanelFocused)}
     />
   ) : null
 
@@ -24421,6 +24975,11 @@ export default function OpenTuiApp() {
                 // A tab opens on release, and a press that moves drags it onto the
                 // window area, as a rail row does.
                 onMouseDown={(event) => {
+                  if (event.button === 2) {
+                    const tab = tabAt(event.x)
+                    if (tab) splitPaneActions.sessionMenu(tab, 'tab', event)
+                    return
+                  }
                   if (event.button !== 0) return
                   const tab = tabAt(event.x)
                   if (tab) sessionDragHandlers.press(tab, null, event, () => selectTabSession(tab))
@@ -24457,21 +25016,33 @@ export default function OpenTuiApp() {
               : stackedSplit ? (splitReaderLast ? 'column-reverse' : 'column') : (splitReaderLast ? 'row-reverse' : 'row')}
             flexGrow={1}
           >
-          {arrangedVisible && splitArrangement === 'grid' && arrangedLayout.secondary ? (
+          {windowZoom !== null && visibleSplitPaneCount > 0 ? (
+            // Zoomed: the reader alone, or one window at the whole area with
+            // the reader kept mounted but hidden.
+            <>
+              {windowZoom === 'reader' ? readerFrameNode : <box visible={false}>{readerFrameNode}</box>}
+              {typeof windowZoom === 'number' && windowItems[windowZoom]
+                ? renderWindowItem(windowItems[windowZoom]!, windowZoom, { width: readerAreaWidth, height: windowAreaHeight, boxHeight: windowAreaHeight })
+                : null}
+            </>
+          ) : arrangedVisible && splitArrangement === 'grid' && arrangedLayout.secondary ? (
             <>
               <box flexDirection={splitReaderLast ? 'row-reverse' : 'row'} height={arrangedLayout.reader.height} flexShrink={0}>
                 {readerFrameNode}
-                {splitPaneSessions[0] ? renderSplitPane(splitPaneSessions[0], 0, { ...arrangedLayout.panes[0]!, boxHeight: arrangedLayout.panes[0]!.height }) : null}
+                {windowItems.slice(0, arrangedLayout.topPanes).map((item, index) => renderWindowItem(item, index, { ...arrangedLayout.panes[index]!, boxHeight: arrangedLayout.panes[index]!.height }))}
               </box>
               <box flexDirection="row" height={arrangedLayout.secondary.height} flexShrink={0}>
-                {splitPaneSessions.slice(1).map((pane, index) => renderSplitPane(pane, index + 1, { ...arrangedLayout.panes[index + 1]!, boxHeight: arrangedLayout.panes[index + 1]!.height }))}
+                {windowItems.slice(arrangedLayout.topPanes).map((item, index) => {
+                  const at = index + arrangedLayout.topPanes
+                  return renderWindowItem(item, at, { ...arrangedLayout.panes[at]!, boxHeight: arrangedLayout.panes[at]!.height })
+                })}
               </box>
             </>
           ) : arrangedVisible ? (
             <>
               {readerFrameNode}
               <box flexDirection="column" width={arrangedLayout.panes[0]!.width} flexShrink={0}>
-                {splitPaneSessions.map((pane, index) => renderSplitPane(pane, index, { ...arrangedLayout.panes[index]!, boxHeight: arrangedLayout.panes[index]!.height }))}
+                {windowItems.map((item, index) => renderWindowItem(item, index, { ...arrangedLayout.panes[index]!, boxHeight: arrangedLayout.panes[index]!.height }))}
               </box>
             </>
           ) : (
@@ -24479,7 +25050,7 @@ export default function OpenTuiApp() {
               {readerFrameNode}
               {/* Split panes live in the reader's frame area, under the shared tab
                   strip, so every frame in here lines up on the axis they share. */}
-              {splitPaneSessions.map((pane, index) => renderSplitPane(pane, index, {
+              {windowItems.map((item, index) => renderWindowItem(item, index, {
                 width: splitPaneWidth,
                 height: splitPaneBoxHeight,
                 // Stacked panes own a fixed row slice so the reader flex-grows into
@@ -26393,7 +26964,7 @@ export default function OpenTuiApp() {
         // The second divider: the grid's row split (the reader's bottom border)
         // or a stack's first boundary (the first pane's bottom border). Drawn at
         // the root over that border, where it is inside its parent's bounds.
-        if (!arrangedVisible || fullscreenMode) return null
+        if (!arrangedVisible || fullscreenMode || windowZoom !== null) return null
         const anchor = splitArrangement === 'grid' && arrangedLayout.secondary
           ? rectOf('transcript-reader')
           : splitArrangement === 'main-stack' && visibleSplitPaneCount > 1 ? rectOf('split-pane:0') : null
@@ -26420,6 +26991,36 @@ export default function OpenTuiApp() {
           >
             <text fg={secondaryDividerHovered || splitDividerDragging === 'secondary' ? theme.cyan : theme.border} wrapMode="none" selectable={false}>
               {'─'.repeat(Math.max(1, span - 2))}
+            </text>
+          </box>
+        )
+      })()}
+
+      {(() => {
+        // The bottom row's divider: the right border of its first pane, in a grid with two or more below.
+        if (!arrangedVisible || fullscreenMode || windowZoom !== null || splitArrangement !== 'grid' || !arrangedLayout.secondary) return null
+        if (arrangedLayout.panes.length - arrangedLayout.topPanes < 2) return null
+        const first = rectOf(`split-pane:${arrangedLayout.topPanes}`)
+        if (!first) return null
+        return (
+          <box
+            id="split-bottom-divider"
+            position="absolute"
+            top={first.y + 1}
+            left={first.x + first.width - 1}
+            width={1}
+            height={Math.max(1, first.height - 2)}
+            zIndex={40}
+            onMouseOver={() => setBottomDividerHovered(true)}
+            onMouseOut={() => setBottomDividerHovered(false)}
+            onMouseDown={(event) => {
+              if (event.button !== 0) return
+              event.stopPropagation()
+              setSplitDividerDragging('bottom')
+            }}
+          >
+            <text fg={bottomDividerHovered || splitDividerDragging === 'bottom' ? theme.cyan : theme.border} wrapMode="none" selectable={false}>
+              {Array.from({ length: Math.max(1, first.height - 2) }, () => '│').join('\n')}
             </text>
           </box>
         )
@@ -26463,8 +27064,11 @@ export default function OpenTuiApp() {
         // these boxes take no events of their own.
         const reader = rectOf('transcript-reader')
         const paneRect = sessionDrag.pane !== null ? rectOf(`split-pane:${sessionDrag.pane}`) : null
-        const rect = paneRect ?? (reader && sessionDrag.zone ? windowDropZoneRect(reader, sessionDrag.zone) : null)
-        const label = sessionDrag.pane !== null ? `Replace pane ${sessionDrag.pane + 1}`
+        const rect = paneRect
+          ? (sessionDrag.insert ? windowDropZoneRect(paneRect, sessionDrag.insert) : paneRect)
+          : (reader && sessionDrag.zone ? windowDropZoneRect(reader, sessionDrag.zone) : null)
+        const label = sessionDrag.pane !== null && sessionDrag.insert ? `Beside pane ${sessionDrag.pane + 1}`
+          : sessionDrag.pane !== null ? `Replace pane ${sessionDrag.pane + 1}`
           : !sessionDrag.zone ? 'Drop on the reader or a pane'
           : sessionDrag.zone === 'center' ? 'Open in the reader'
           : `Put it ${sessionDrag.zone === 'left' ? 'left of' : sessionDrag.zone === 'right' ? 'right of' : sessionDrag.zone === 'top' ? 'above' : 'below'} the reader`
@@ -26515,11 +27119,40 @@ export default function OpenTuiApp() {
           paddingX={1}
         >
           <text fg={theme.bg} wrapMode="none" selectable={false}>
-            {splitDividerDragging === 'secondary'
+            {splitDividerDragging === 'bottom'
+              ? `left ${Math.round((splitBottomShare === SPLIT_SHARE_EVEN ? 0.5 : splitBottomShare) * 100)}% · ${arrangedLayout?.panes[arrangedLayout.topPanes]?.width ?? 0} cols`
+              : splitDividerDragging === 'secondary'
               ? `top ${Math.round((splitSecondaryShare === SPLIT_SHARE_EVEN ? 0.5 : splitSecondaryShare) * 100)}% · ${arrangedLayout?.panes[0]?.height ?? 0} rows`
               : `reader ${Math.round((splitReaderShare === SPLIT_SHARE_EVEN ? 0.5 : splitReaderShare) * 100)}% · ${rightPaneWidth}×${readerRowBudget}`}
           </text>
         </box>
+      ) : null}
+
+      {contextMenu ? (
+        <box
+          id="context-menu-backdrop"
+          position="absolute"
+          top={0}
+          left={0}
+          width={width}
+          height={height}
+          zIndex={MODAL_CONTENT_Z_INDEX}
+          backgroundColor={RGBA.fromValues(0, 0, 0, 0)}
+          onMouseDown={() => setContextMenu(null)}
+        />
+      ) : null}
+      {contextMenu ? (
+        <ContextMenu
+          theme={theme}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          title={contextMenu.title}
+          items={contextMenu.items}
+          screenWidth={width}
+          screenHeight={height}
+          onClose={() => setContextMenu(null)}
+          onKeyHandlerReady={(handler) => { contextMenuKeyHandlerRef.current = handler }}
+        />
       ) : null}
 
       {windowPickerOpen ? (
@@ -26545,6 +27178,10 @@ export default function OpenTuiApp() {
           height={height}
           current={currentWindowLayoutAction}
           fullscreen={fullscreenMode}
+          saved={savedWindowLayouts.map((entry) => ({ id: entry.id, name: entry.name, detail: describeSavedLayout(entry) }))}
+          onSave={() => saveCurrentWindowLayout()}
+          onRestore={(id) => restoreWindowLayout(id)}
+          onDelete={(id) => deleteSavedWindowLayout(id)}
           onPick={(action) => applyWindowLayout(action)}
           onClose={() => setWindowPickerOpen(false)}
           onKeyHandlerReady={(handler) => { windowPickerKeyHandlerRef.current = handler }}

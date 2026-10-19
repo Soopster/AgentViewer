@@ -224,7 +224,8 @@ console.log('The menu\'s grid puts the reader and three panes two by two.')
   const before = NAMES.find((name) => paneShows(2, name))!
   const moving = NAMES.find((name) => name !== before && name !== 'alpha' && paneShows(0, name))!
   const source = frame('split-pane:0')!
-  await drag({ x: source.x + 4, y: source.y }, { x: target.x + 10, y: target.y + 5 }, () => {
+  // The middle of a pane replaces it; its edges insert beside it.
+  await drag({ x: source.x + 4, y: source.y }, { x: target.x + Math.floor(target.width / 2), y: target.y + Math.floor(target.height / 2) }, () => {
     check(setup.captureCharFrame().includes('Replace pane 3'), 'dragging over a pane does not say it will replace it')
   })
   await waitFor('the panes to swap', () => paneShows(2, moving) && paneShows(0, before))

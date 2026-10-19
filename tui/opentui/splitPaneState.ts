@@ -70,6 +70,9 @@ export const SPLIT_CHORD_HELP: SplitChordSection[] = [
       { keys: '<', label: 'shrink the reader', short: 'shrink' },
       { keys: '>', label: 'grow the reader', short: 'grow' },
       { keys: '=', label: 'even sizes', short: 'even' },
+      { keys: '+ · -', label: 'the second divider (grid rows, a stack\'s first pane)', hint: false },
+      { keys: '[ · ]', label: 'the grid\'s bottom-row divider', hint: false },
+      { keys: 'm', label: 'zoom the focused window / restore the layout', hint: false },
     ],
   },
   {
@@ -77,6 +80,7 @@ export const SPLIT_CHORD_HELP: SplitChordSection[] = [
     entries: [
       { keys: 'o · tab', label: 'focus next pane', short: 'focus' },
       { keys: '← · → · ↑ · ↓', label: 'focus the window that way', hint: false },
+      { keys: '⇧← · ⇧→ · ⇧↑ · ⇧↓', label: 'swap the focused window with the one that way', hint: false },
       { keys: ';', label: 'flip reader ↔ last pane', hint: false },
       { keys: '1 … 9', label: 'focus pane by number', hint: false },
       { keys: '?', label: 'this help', short: 'all keys' },
@@ -92,6 +96,7 @@ export const SPLIT_CHORD_HELP: SplitChordSection[] = [
       { keys: 'g · G', label: 'first · last card' },
       { keys: '⌃u · ⌃d', label: 'page up · down' },
       { keys: 'e', label: 'expand / collapse card' },
+      { keys: '/ · n · N', label: 'search this pane (older · newer match)' },
       { keys: 'y', label: 'copy card' },
       { keys: 'b', label: 'bookmark card' },
       { keys: 'Q', label: 'quote and reply' },

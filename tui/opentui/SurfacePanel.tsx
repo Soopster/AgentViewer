@@ -43,6 +43,8 @@ type Props = {
   onActivateSurface: (id: string) => void
   /** Mouse equivalents of `|`, `=` and closing the panel, drawn at the end of the tab strip. */
   onTogglePlacement?: () => void
+  /** Move the active surface into the window layout (shell, diff and files can go there). */
+  onMoveToWindow?: (kind: RightPanelSurfaceKind) => void
   onToggleExpand?: () => void
   onClosePanel?: () => void
   /**
@@ -92,6 +94,7 @@ export function SurfacePanel({
   onFocus,
   onActivateSurface,
   onTogglePlacement,
+  onMoveToWindow,
   onToggleExpand,
   onClosePanel,
   onResizeStart,
@@ -264,6 +267,9 @@ export function SurfacePanel({
           </box>
         ) : null}
         <box flexGrow={1} />
+        {active && onMoveToWindow && (active.kind === 'terminal' || active.kind === 'diff' || active.kind === 'files')
+          ? button(' ⧉ window ', () => onMoveToWindow(active.kind), 'to-window')
+          : null}
         {button(placement === 'bottom' ? ' ⇥ beside ' : ' ⤓ under ', onTogglePlacement, 'placement')}
         {button(expanded ? ' ▭ restore ' : ' ▣ expand ', onToggleExpand, 'expand')}
         {button(' × ', onClosePanel, 'close', 'danger')}
