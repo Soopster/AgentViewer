@@ -19,6 +19,7 @@ export type SavedWindowLayout = {
   /** Absent in layouts saved before the bottom row had its own divider. */
   bottomShare?: number
   /** Session keys: the reader's, then the panes' in order. */
+  coordinatorRunId?: string
   reader: string | null
   panes: string[]
   surfaces: Array<'terminal' | 'diff' | 'files'>

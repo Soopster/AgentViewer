@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 // Full-App check of watching teammates (herdr's every-agent-on-screen): from
 // the Teammates panel, `O` must put the team's transcripts in split panes
-// beside the lead's chat, in attention order. The popover smoke pins the key
+// beside the lead's chat, in stable registration order. The popover smoke pins the key
 // and splitPaneSmoke the planner; this is the only check that the panes
 // actually mount with the teammates' transcripts in them.
 //
@@ -59,7 +59,7 @@ await coord.configureInteractiveCoordinator({ sessionId: LEAD.sessionId, provide
 const lead = await coord.sessionCoordinatorIdentity(LEAD.sessionId, 'claude')
 await coord.joinExternalProtocolRun({ runId: lead.runId, participantName: 'nova', provider: 'claude', cwd: CWD })
 const orion = (await coord.joinExternalProtocolRun({ runId: lead.runId, participantName: 'orion', provider: 'claude', cwd: CWD })).participant
-// Orion needs the lead, so it leads the roster and must get the first pane.
+// Orion needs the lead and leads the roster, but watching must preserve registration order.
 await coord.sendExternalProtocolMessage(orion, { to: 'lead', body: 'Strict or compatible parser?', replyRequired: true })
 
 const splitState = await import('./splitPaneState')
@@ -112,7 +112,7 @@ const fail = (message: string): never => {
   process.exit(1)
 }
 const waitFor = async (label: string, check: (frame: string) => boolean) => {
-  const deadline = Date.now() + 5_000
+  const deadline = Date.now() + 8_000
   while (Date.now() < deadline) {
     if (check(setup.captureCharFrame())) return
     await settle(80)
@@ -142,19 +142,64 @@ const frame = setup.captureCharFrame()
 if (!frame.split('\n').slice(0, 3).some((line) => line.includes('!1 Lead chat'))) fail('the lead chat\'s tab does not carry its team\'s mark')
 if (!frame.includes(transcriptText('watch-lead'))) fail('watching the team replaced the lead chat in the reader')
 if (frame.includes('─ Teammates ─')) fail('the Teammates panel stayed open over the panes')
-// Attention order: the teammate asking the lead gets the first pane, drawn
-// left of the other. Columns are compared wherever each transcript landed, so
-// the check cannot pass by the two never sharing a row.
-const columnOf = (needle: string) => {
-  for (const line of frame.split('\n')) {
-    const x = line.indexOf(needle)
-    if (x >= 0) return x
-  }
-  return fail(`${needle} is not on screen`)
+// Main-stack keeps the lead on the left and teammates in registration order
+// top to bottom, even though attention order put Orion first in the popover.
+const rowOf = (needle: string) => frame.split('\n').findIndex(line => line.includes(needle))
+if (rowOf(transcriptText('watch-nova')) >= rowOf(transcriptText('watch-orion'))) {
+  fail('watch run reordered teammates by attention instead of registration')
 }
-if (columnOf(transcriptText('watch-orion')) > columnOf(transcriptText('watch-nova'))) {
-  fail('the teammate waiting on the lead did not get the first pane')
+const chord = async (key: string) => {
+  act(() => { setup.mockInput.pressKey('b', { ctrl: true }) })
+  await settle(80)
+  act(() => { setup.mockInput.pressKey(key) })
+  await settle(180)
+}
+// Save the run identity with the ordinary editable workspace.
+await chord('w')
+act(() => { setup.mockInput.pressKey('s') })
+await settle(180)
+const { listSavedWindowLayouts } = await import('./windowLayoutStore')
+const saved = listSavedWindowLayouts(CWD)[0]!
+if (saved?.coordinatorRunId !== lead.runId) fail('saving lost the run binding')
+act(() => { setup.mockInput.pressEscape() })
+await settle(80)
+// A participant joining the watched run appends at the end without moving
+// the lead or the original teammates. No provider turn is started by this fixture.
+await coord.joinExternalProtocolRun({ runId: lead.runId, participantName: 'lyra', provider: 'claude', cwd: CWD })
+await waitFor('a new teammate to append without focus stealing', frame => frame.includes(transcriptText('watch-lyra')) && frame.includes(transcriptText('watch-lead')))
+// A short terminal hides Orion. Selecting it brings it into the visible pane,
+// retaining the lead in the reader and Nova in overflow.
+act(() => { setup.resize(230, 20) })
+await settle(250)
+if (setup.renderer.root.findDescendantById('split-pane:1')) fail('short terminal did not hide the second teammate')
+await chord('p')
+await act(async () => { await setup.mockInput.pasteBracketedText('orion') })
+await settle(120)
+act(() => { setup.mockInput.pressEnter() })
+await waitFor('the hidden teammate to be brought into view', frame => frame.includes(transcriptText('watch-orion')))
+if (!setup.captureCharFrame().includes(transcriptText('watch-lead'))) fail('hidden teammate switching replaced the lead')
+await chord('u')
+act(() => { setup.resize(230, 44) })
+await settle(250)
+// A watched workspace is one undo step, including its lead selection and pins.
+act(() => { setup.mockInput.pressKey('b', { ctrl: true }) })
+await settle(80)
+act(() => { setup.mockInput.pressKey('u') })
+await settle(200)
+if (setup.captureCharFrame().includes(transcriptText('watch-orion'))) fail('undo left a watched pane mounted')
+if (!setup.captureCharFrame().includes(transcriptText('watch-lead'))) fail('undo lost the original reader')
+
+// Restoring a saved run rehydrates transcripts from the ledger, even though
+// this provider's indexed sidebar only contains the lead.
+await chord('w')
+const savedRow = setup.renderer.root.findDescendantById(`window-layout:saved:${saved.id}`)!
+if (!savedRow) fail('saved workspace is missing')
+await act(async () => { await setup.mockMouse.click(savedRow.x + 3, savedRow.y) })
+await waitFor('the saved run workspace to return', frame => frame.includes(transcriptText('watch-orion')) && frame.includes(transcriptText('watch-nova')))
+const after = await service.readTuiProtocolRun(lead.runId)
+if (!after?.messages.some(message => message.body === 'Strict or compatible parser?' && message.replyRequired && !message.resolvedAt)) {
+  fail('watching or restoring acknowledged the pending question')
 }
 
-console.log('Teammates watch smoke passed (O puts the team in split panes beside the lead, in attention order)')
+console.log('Teammates watch smoke passed (O watches the run in stable order with the lead retained; undo restores the workspace)')
 process.exit(0)

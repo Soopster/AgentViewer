@@ -40,6 +40,7 @@ await coordination.createExternalProtocolRun({ runId: `chat-${createHash('sha256
 let keyHandler: ((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null = null
 const opened: string[] = []
 const watched: string[][] = []
+const watchedRuns: string[][] = []
 const notices: string[] = []
 
 // Herdr's TUI is used over SSH from a phone, so the panel is also run narrow:
@@ -54,6 +55,7 @@ const setup = await testRender(
     height={SMOKE_HEIGHT}
     onOpenSession={(agent) => { opened.push(agent.name) }}
     onWatchSessions={(agents) => { watched.push(agents.map(agent => agent.name)) }}
+    onWatchRun={(snapshot) => { watchedRuns.push(snapshot.agents.map(agent => agent.name)) }}
     onNotice={(_tone, text) => { notices.push(text) }}
     onKeyHandlerReady={(handler) => { keyHandler = handler }}
   /></>,
@@ -415,17 +417,16 @@ act(() => { store.openInteractiveCoordinator({ sessionId: SESSION_ID, provider: 
 await settle(200)
 
 // ── watching teammates beside the reader (herdr's every-agent-on-screen) ──
-// `o` watches the selected teammate; `O` the whole roster, in the order the
-// panel shows it, so the one that needs the user gets a pane first.
+// `o` watches the selected teammate; `O` passes the whole run, independently
+// of the attention order of the roster.
 await press('o')
 if (JSON.stringify(watched.at(-1)) !== JSON.stringify(['orion'])) fail(`o did not watch the selected teammate: ${JSON.stringify(watched.at(-1))}`)
 act(() => { store.openInteractiveCoordinator({ sessionId: SESSION_ID, provider: PROVIDER, cwd: smokeRoot, title: 'Smoke chat' }) })
 await settle(200)
-const watchOrder = ["orion", "nova"].sort((a, b) => rowOf(a) - rowOf(b))
 await act(async () => { keyHandler?.({ name: 'o', ctrl: false, shift: true, sequence: 'O' }) })
 await settle(120)
-if (JSON.stringify(watched.at(-1)?.filter(name => watchOrder.includes(name))) !== JSON.stringify(watchOrder)) {
-  fail(`O did not watch the team in roster order: ${JSON.stringify(watched.at(-1))} vs ${JSON.stringify(watchOrder)}`)
+if (!['orion', 'nova'].every(name => watchedRuns.at(-1)?.includes(name))) {
+  fail(`O did not watch the full run: ${JSON.stringify(watchedRuns.at(-1))}`)
 }
 act(() => { store.openInteractiveCoordinator({ sessionId: SESSION_ID, provider: PROVIDER, cwd: smokeRoot, title: 'Smoke chat' }) })
 await settle(200)

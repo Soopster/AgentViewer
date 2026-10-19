@@ -32,6 +32,7 @@ type Props = {
   /** Run to show first; latest run when omitted. */
   initialRunId?: string | null
   onOpenSession: (agent: ProtocolAgent) => void
+  onWatchRun?: (snapshot: ProtocolRunSnapshot) => void
   onNewRun: () => void
   onClose: () => void
   onNotice: (tone: 'info' | 'error', text: string, durationMs?: number) => void
@@ -101,6 +102,7 @@ export function CoordinationPopover({
   height,
   initialRunId,
   onOpenSession,
+  onWatchRun,
   onNewRun,
   onClose,
   onNotice,
@@ -592,6 +594,9 @@ export function CoordinationPopover({
       setEventIndex(-1)
       return
     }
+    if ((key.sequence === 'O' || (key.name.toLowerCase() === 'o' && key.shift)) && snapshot && onWatchRun) {
+      onWatchRun(snapshot); onClose(); return
+    }
     if (key.name === 'return') {
       if (section === 'team' && selectedAgent) {
         onOpenSession(selectedAgent)
@@ -716,7 +721,7 @@ export function CoordinationPopover({
     if (key.name === 'n') { onClose(); onNewRun(); return }
     if (key.name === 'g' && section === 'events') { setEventIndex(-1); return }
     if (key.name === 'r') { void refreshAll(); return }
-  }, [agents.length, clampedEvent, clampedTask, clampedTeam, cleanupRun, eventAgent, filteredEvents.length, filteredTasks, firstRerunnableTask, gitAgent, inspectedAgent, interruptAgentTurn, messageTarget, navigableTasks.length, onClose, onCopyJoinCommand, onNewRun, onNotice, onOpenSession, pending, planStates, refreshAll, reviewPlan, run, runId, runPendingAction, section, selectedAgent, selectedOwner, selectedTask, sendTeamMessage, snapshot, stuckAgentTask, switchRun, worktreeStats])
+  }, [agents.length, clampedEvent, clampedTask, clampedTeam, cleanupRun, eventAgent, filteredEvents.length, filteredTasks, firstRerunnableTask, gitAgent, inspectedAgent, interruptAgentTurn, messageTarget, navigableTasks.length, onClose, onCopyJoinCommand, onNewRun, onNotice, onOpenSession, onWatchRun, pending, planStates, refreshAll, reviewPlan, run, runId, runPendingAction, section, selectedAgent, selectedOwner, selectedTask, sendTeamMessage, snapshot, stuckAgentTask, switchRun, worktreeStats])
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
 

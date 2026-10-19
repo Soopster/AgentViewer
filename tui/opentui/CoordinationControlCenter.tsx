@@ -543,8 +543,8 @@ export function CoordinationControlCenter({
         ? `j/k agent${inspectedAgent ? ` · ↵ transcript · x interrupt${run?.useWorktrees === false ? '' : ' · w merge'} · m message${STUCK_AGENT_STATUSES.has(inspectedAgent.status) ? ' · R rerun' : ''}` : ''}`
         : `j/k event${selectedEventAgent ? ' · ↵ transcript' : ''} · g tail · / filter · m ${selectedEventAgent ? 'event agent' : 'lead'}`
   const globalKeys = innerW >= 154
-    ? `1-4 focus · tab next · click/wheel · G agent changes · n new · M broadcast · s stop · D delete${run?.useWorktrees === false ? '' : ' · c cleanup'}${canCopyJoinCommand ? ' · i join cmd' : ''} · r refresh · q close`
-    : '1-4 focus · tab next · click/wheel · G changes · n new · M all · s stop · r refresh · q close'
+    ? `O watch run · 1-4 focus · tab next · click/wheel · G agent changes · n new · M broadcast · s stop · D delete${run?.useWorktrees === false ? '' : ' · c cleanup'}${canCopyJoinCommand ? ' · i join cmd' : ''} · r refresh · q close`
+    : 'O watch run · 1-4 focus · tab · G changes · n new · M all · s stop · r refresh · q close'
   const footerText = `${contextualKeys}  │  ${globalKeys}`
   const promptHint = run?.status === 'blocked' && run.resumeCapsule?.nextAction
     ? fit(`NEXT · ${run.resumeCapsule.nextAction}`, innerW - 2)

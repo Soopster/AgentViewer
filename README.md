@@ -437,6 +437,8 @@ Transcript splits use a tmux-style `Ctrl+B` prefix (`Ctrl+B %` to add, `Ctrl+B o
 
 `Ctrl+B p` opens the quick window switcher. Search by title, provider, or project, then press Enter to focus a match. Hidden session windows swap into the reader; hidden surfaces open temporarily at full size, with Escape returning to the layout.
 
+**Watch this run:** press `O` in the Teammates panel or Agent Operations board to open the lead and teammates as a workspace. Teammates keep their registration order; new readable participants append without taking focus. Board tasks open their owner’s existing pane, and hidden teammates can be brought into view with the quick switcher while retaining the lead. Pending reviews and replies stay badged until resolved in Coordinator. Save the workspace with `Ctrl+B w` to restore its run binding and windows later; `Ctrl+B u` undoes opening it. Use **Stop watching Coordinator run** in the command palette to detach its status feed while keeping the windows. Broadcast prompts remain separate from task-board assignments.
+
 `Ctrl+B b` opens broadcast input. Select session windows with Space or a click, use Tab to edit the prompt, then press Ctrl+Enter to review the exact targets and text. Enter on the review sends once to each selected session. Each destination keeps its own model and permission settings; running turns accept steering when supported, and idle sessions start a turn. Delivery results are shown separately, and unconfirmed deliveries are never retried automatically.
 
 ### Agent Teams

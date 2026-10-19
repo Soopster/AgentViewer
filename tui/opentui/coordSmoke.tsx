@@ -80,6 +80,7 @@ db.close()
 const noop = () => {}
 let openedSessionAgent: string | null = null
 let newRunRequests = 0
+let watchedRunId: string | null = null
 let handleKey: ((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null = null
 const smokeWidth = Number.parseInt(process.env.AGENT_VIEWER_COORD_SMOKE_WIDTH ?? '120', 10)
 const smokeHeight = Number.parseInt(process.env.AGENT_VIEWER_COORD_SMOKE_HEIGHT ?? '40', 10)
@@ -91,6 +92,7 @@ const { captureCharFrame, captureSpans, mockMouse } = await testRender(
     initialRunId={null}
     onOpenSession={(agent) => { openedSessionAgent = agent.name }}
     onNewRun={() => { newRunRequests += 1 }}
+    onWatchRun={(snapshot) => { watchedRunId = snapshot.run.id }}
     onClose={noop}
     onNotice={noop}
     onKeyHandlerReady={(handler) => { handleKey = handler }}
@@ -526,6 +528,12 @@ await act(async () => {
 })
 if (!captureCharFrame().includes('j/k agent')) {
   console.error(`Clicking the agent inspector did not focus it:\n${captureCharFrame()}`)
+  process.exit(1)
+}
+
+await act(async () => { handleKey?.({ name: 'o', ctrl: false, shift: true, sequence: 'O' }) })
+if (watchedRunId !== 'run-smoke') {
+  console.error(`Watch this run opened the wrong workflow: ${watchedRunId}`)
   process.exit(1)
 }
 

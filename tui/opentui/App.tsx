@@ -39,6 +39,8 @@ import { windowSessionTarget, type WindowTarget } from './windowTargets'
 import type { BroadcastDelivery } from './windowBroadcast'
 import { nextWindowNeedingAttention, observeWindowAttention, readWindowAttention, windowAttentionBadge, type WindowAttention } from './windowAttention'
 import { planWindowArrangement, planWindowSessionDrop, type WindowSessionDrop } from './windowOperations'
+import { coordinatorWindowBadges, planCoordinatorWorkspace } from './coordinatorWorkspace'
+import { useCoordinatorWorkspace } from './useCoordinatorWorkspace'
 import { deleteWindowLayout, describeSavedLayout, listSavedWindowLayouts, saveWindowLayout, updateWindowLayout, type SavedWindowLayout } from './windowLayoutStore'
 import {
   EMPTY_SURFACE_PANEL,
@@ -5767,6 +5769,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'window-next-attention', label: 'Next window needing attention', key: splitCommandKey('a', RUNNING_INSIDE_TMUX), category: 'View' },
   { id: 'window-switcher', label: 'Switch window', key: splitCommandKey('p', RUNNING_INSIDE_TMUX), category: 'View' },
   { id: 'window-broadcast', label: 'Broadcast prompt to session windows', key: splitCommandKey('b', RUNNING_INSIDE_TMUX), category: 'View' },
+  { id: 'window-stop-coordinator', label: 'Stop watching Coordinator run', key: '', category: 'View' },
   { id: 'window-undo', label: 'Undo window change', key: splitCommandKey('u', RUNNING_INSIDE_TMUX), category: 'View' },
   { id: 'split-help',   label: 'Split pane keybinds',       key: splitCommandKey('?', RUNNING_INSIDE_TMUX), category: 'View' },
   { id: 'split-close',  label: 'Close split pane',         key: splitCommandKey('x', RUNNING_INSIDE_TMUX), category: 'View'  },
@@ -7721,6 +7724,7 @@ type SplitTranscriptPaneProps = {
   liveMessages: ThreadedMessage[]
   running: boolean
   attentionBadge: string | null
+  coordinatorLabel?: string
   onActivity: (key: string, version: string, errorVersion: string | null) => void
   liveText: string | null
   registerHandle: (paneIndex: number, handle: SplitPaneHandle | null) => void
@@ -7761,6 +7765,7 @@ function SplitTranscriptPaneInner({
   liveMessages,
   running,
   attentionBadge,
+  coordinatorLabel,
   onActivity,
   liveText,
   registerHandle,
@@ -8281,6 +8286,7 @@ function SplitTranscriptPaneInner({
       title={fitText(
         joinMeta([
           attentionBadge,
+          coordinatorLabel,
           paneCount > 1 ? `${paneIndex + 1} · ${formatSessionTitle(session)}` : formatSessionTitle(session),
           searchLabel,
           running ? 'running' : null,
@@ -8288,7 +8294,7 @@ function SplitTranscriptPaneInner({
         ]),
         Math.max(width - 4, 8),
       )}
-      titleColor={attentionBadge?.includes('? input') ? theme.amber : attentionBadge?.includes('! error') ? theme.red : attentionBadge ? theme.cyan : running ? theme.green : accent}
+      titleColor={attentionBadge?.includes('?') ? theme.amber : attentionBadge?.includes('! error') ? theme.red : attentionBadge ? theme.cyan : running ? theme.green : accent}
       ref={paneFrameRef}
       onMouseDown={(event) => {
         if (event.button === 2) {
@@ -9168,12 +9174,18 @@ export default function OpenTuiApp() {
   // end of the split the reader sits at. Kept in tui.json beside the orientation.
   const [splitArrangement, setSplitArrangement] = useState<WindowArrangement>('split')
   const [splitReaderLast, setSplitReaderLast] = useState(false)
+  const [coordinatorWorkspace, setCoordinatorWorkspace] = useState<ProtocolRunSnapshot | null>(null)
+  const [coordinatorWorkspaceRunId, setCoordinatorWorkspaceRunId] = useState<string | null>(null)
+  const watchedRosterRef = useRef<{ runId: string; keys: Set<string> } | null>(null)
+  const watchedCoordinator = useCoordinatorWorkspace(coordinatorWorkspace, coordinatorWorkspaceRunId)
+  const coordinatorBadges = useMemo(() => watchedCoordinator ? coordinatorWindowBadges(watchedCoordinator) : new Map<string, string>(), [watchedCoordinator])
   const [windowPickerOpen, setWindowPickerOpen] = useState(false)
   const [windowSwitcherOpen, setWindowSwitcherOpen] = useState(false)
   const [windowBroadcastOpen, setWindowBroadcastOpen] = useState(false)
   const [windowSurfacePeek, setWindowSurfacePeek] = useState<WindowSurfaceKind | null>(null)
   const windowSwitcherKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean) | null>(null)
   const windowBroadcastKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean) | null>(null)
+  const windowLayoutRestoreRequestRef = useRef(0)
   const [windowLayoutPreview, setWindowLayoutPreview] = useState<string | null>(null)
   const [windowAttention, setWindowAttention] = useState<Map<string, WindowAttention>>(() => new Map())
   const windowObservedFocusRef = useRef<string | null>(null)
@@ -12660,9 +12672,15 @@ export default function OpenTuiApp() {
     ...splitPaneSessions.map((session): WindowItem => ({ kind: 'session', session })),
     ...visibleWindowSurfaces.map((surface): WindowItem => ({ kind: 'surface', surface })),
   ]
+  const describeCoordinatorWindow = (target: WindowTarget): WindowTarget => {
+    const agent = watchedCoordinator?.agents.find(entry => entry.sessionId && `${entry.provider ?? 'claude'}:${entry.sessionId}` === target.key)
+    if (!agent) return target
+    const task = watchedCoordinator?.tasks.find(entry => entry.ownerAgentId === agent.id && !['completed', 'failed', 'cancelled'].includes(entry.status))
+    return { ...target, title: `${agent.name} · ${target.title}`, detail: `${agent.role}${task ? ` · ${task.title}` : ''} · ${target.detail}` }
+  }
   const windowTargets: WindowTarget[] = [
-    ...(selectedSession ? [windowSessionTarget(selectedSession, false)] : []),
-    ...splitPinnedSessions.slice(0, splitPaneCount).map((session) => windowSessionTarget(session, !splitPaneSessions.some((visible) => sessionKey(visible) === sessionKey(session)))),
+    ...(selectedSession ? [describeCoordinatorWindow(windowSessionTarget(selectedSession, false))] : []),
+    ...splitPinnedSessions.slice(0, splitPaneCount).map((session) => describeCoordinatorWindow(windowSessionTarget(session, !splitPaneSessions.some((visible) => sessionKey(visible) === sessionKey(session))))),
     ...windowSurfaces.map((surface) => ({ key: `surface:${surface}`, title: WINDOW_SURFACE_TITLES[surface], detail: `${gitRepoCwd || process.cwd()} · surface${visibleWindowSurfaces.includes(surface) ? '' : ' · hidden'}`, hidden: !visibleWindowSurfaces.includes(surface), surface })),
   ]
   const overflowWindowItems: WindowItem[] = [
@@ -12712,7 +12730,7 @@ export default function OpenTuiApp() {
       return next
     })
   }, [sessions, windowPinSignature, selectedSessionKey, focusedWindowKey])
-  const badgeForWindow = (key: string, compact = false) => windowAttentionBadge({ ...windowAttention.get(key), needsInput: windowNeedsInputKeys.has(key) }, compact)
+  const badgeForWindow = (key: string, compact = false) => [coordinatorBadges.get(key) ? (compact ? '?' : coordinatorBadges.get(key)) : null, windowAttentionBadge({ ...windowAttention.get(key), needsInput: windowNeedsInputKeys.has(key) }, compact)].filter(Boolean).join(' · ') || null
   const openCodeContextWidth = isOpenCodeView && visibleSplitPaneCount === 0
     ? Math.min(Math.max(24, Math.floor(readerAreaWidth * 0.22)), Math.max(readerAreaWidth - MIN_READER_WIDTH, 0))
     : 0
@@ -12939,7 +12957,7 @@ export default function OpenTuiApp() {
       // Herdr's rollup reaches the tab too. Leading, so a narrow tab's
       // truncation cuts the title rather than the mark.
       const team = teamAttention.get(sessionKey(s))
-      const teamPrefix = team ? (team.waiting > 0 ? `!${team.waiting} ` : `✓${team.finished} `) : ''
+      const teamPrefix = (coordinatorBadges.has(sessionKey(s)) ? `${coordinatorBadges.get(sessionKey(s))} ` : '') + (team ? (team.waiting > 0 ? `!${team.waiting} ` : `✓${team.finished} `) : '')
       const stateGlyph = tabStateGlyphs.get(sessionKey(s))
       return {
         name: (stateGlyph ? `${stateGlyph} ` : '') + teamPrefix + (isPreviewMode && selectedSessionKey === sessionKey(s)
@@ -12955,7 +12973,7 @@ export default function OpenTuiApp() {
         value: sessionKey(s),
       }
     })
-  ), [isPreviewMode, selectedSessionKey, visibleTabSessions, splitPinnedKeys, splitPaneCount, tabStateGlyphs, teamAttention])
+  ), [isPreviewMode, selectedSessionKey, visibleTabSessions, splitPinnedKeys, splitPaneCount, tabStateGlyphs, teamAttention, coordinatorBadges])
 
   const tabWidth = useMemo(() => {
     if (visibleTabSessions.length === 0) return 16
@@ -15576,8 +15594,36 @@ export default function OpenTuiApp() {
         ? prev
         : [...prev, target.session])
     }
-    selectTabSession(target.session)
+    if (windowTargets.some(entry => entry.key === target.sessionKey)) pickWindowTarget(target.sessionKey)
+    else { selectTabSession(target.session); setFocusedPane('messages') }
+  })
+
+  const watchCoordinatorRun = useEffectEvent((snapshot: ProtocolRunSnapshot) => {
+    const plan = planCoordinatorWorkspace(snapshot, sessionsByKeyRef.current)
+    if (!plan.lead) { showNotice('info', 'This run has no readable lead transcript', 5000); return }
+    checkpointWindowLayout()
+    watchedRosterRef.current = { runId: snapshot.run.id, keys: new Set(plan.targets.map(target => target.sessionKey)) }
+    setCoordinatorWorkspace(snapshot)
+    setCoordinatorWorkspaceRunId(snapshot.run.id)
+    const lead = plan.lead
+    const panes = plan.targets.filter(target => target.sessionKey !== lead.sessionKey)
+    setOpenTabSessions(current => {
+      const keys = new Set(current.map(sessionKey))
+      return [...current, ...plan.targets.filter(target => !keys.has(target.sessionKey)).map(target => target.session)]
+    })
+    selectTabSession(lead.session)
+    setSplitPinnedKeys(panes.map(target => target.sessionKey))
+    setSplitPaneCount(panes.length)
+    setWindowArrangement('main-stack', false)
+    setSplitOrientation('columns')
+    setSplitReaderShare(0.55)
+    setWindowSurfaces([])
+    setWindowZoom(null)
+    setWindowSurfacePeek(null)
+    setFullscreenMode(false)
+    setSplitFocusIndex(null)
     setFocusedPane('messages')
+    showNotice('info', `Watching this run · lead + ${panes.length} teammate${panes.length === 1 ? '' : 's'} · ⌃B p switch · ⌃B a attention · ⌃B w save${plan.skipped.length ? ` · ${plan.skipped.length} unreadable participant(s) skipped` : ''}`, 7000)
   })
 
   // Herdr's everyday view: the lead's chat in the reader and teammates live
@@ -18436,6 +18482,29 @@ export default function OpenTuiApp() {
     })
   }, [openTabSessions, selectedSessionKey, splitPaneCount])
 
+  // New participants append once; gates/status polls never reorder or focus.
+  // Explicitly closed panes stay closed on subsequent refreshes.
+  const updateWatchedRoster = useEffectEvent((watchedCoordinator: ProtocolRunSnapshot | null) => {
+    if (!watchedCoordinator) { watchedRosterRef.current = null; return }
+    const previous = watchedRosterRef.current
+    if (!previous || previous.runId !== watchedCoordinator.run.id) {
+      watchedRosterRef.current = { runId: watchedCoordinator.run.id, keys: new Set(planCoordinatorWorkspace(watchedCoordinator, sessionsByKeyRef.current).targets.map(target => target.sessionKey)) }
+      return
+    }
+    const readable = planCoordinatorWorkspace(watchedCoordinator, sessionsByKeyRef.current).targets
+    const added = readable.filter(target => !previous.keys.has(target.sessionKey))
+    for (const target of readable) previous.keys.add(target.sessionKey)
+    const targets = added.filter(target => target.sessionKey !== selectedSessionKey && !splitPinnedKeys.includes(target.sessionKey))
+    if (!targets.length) return
+    setOpenTabSessions(current => {
+      const keys = new Set(current.map(sessionKey))
+      return [...current, ...targets.filter(target => !keys.has(target.sessionKey)).map(target => target.session)]
+    })
+    setSplitPinnedKeys(current => [...current, ...targets.map(target => target.sessionKey)])
+    setSplitPaneCount(current => current + targets.length)
+  })
+  useEffect(() => { updateWatchedRoster(watchedCoordinator) }, [watchedCoordinator])
+
   // Keep open-tab metadata in sync when the current provider's sessions list
   // refreshes (e.g. title updates from polling). Tabs for *other* providers
   // are left untouched — they retain whatever snapshot was captured when the
@@ -19808,8 +19877,11 @@ export default function OpenTuiApp() {
       secondaryShare: splitSecondaryShare, bottomShare: splitBottomShare,
       count: splitPaneCount, panes: [...splitPinnedKeys], surfaces: [...windowSurfaces],
       reader: selectedSessionKey, zoom: windowZoom, fullscreen: fullscreenMode,
+      coordinatorRunId: coordinatorWorkspaceRunId,
     },
     reader: selectedSession,
+    workspace: coordinatorWorkspace,
+    workspaceRunId: coordinatorWorkspaceRunId,
     tabs: openTabSessions,
     focus: splitFocusIndex,
     panel: surfacePanel,
@@ -19825,6 +19897,8 @@ export default function OpenTuiApp() {
     const previous = windowHistory.undo(captureWindowLayout())
     if (!previous) { showNotice('info', 'No window changes to undo'); return }
     const layout = previous.layout
+    setCoordinatorWorkspace(previous.workspace)
+    setCoordinatorWorkspaceRunId(previous.workspaceRunId)
     setWindowSurfacePeek(null)
     setOpenTabSessions((current) => {
       const keys = new Set(current.map(sessionKey))
@@ -20025,6 +20099,7 @@ export default function OpenTuiApp() {
     readerLast: splitReaderLast, readerShare: splitReaderShare,
     secondaryShare: splitSecondaryShare, bottomShare: splitBottomShare,
     reader: selectedSessionKey,
+    coordinatorRunId: coordinatorWorkspaceRunId ?? undefined,
     panes: splitPinnedSessions.slice(0, splitPaneCount).map((pane) => sessionKey(pane)),
     surfaces: windowSurfaces,
   }))
@@ -20049,14 +20124,31 @@ export default function OpenTuiApp() {
   })
 
   // Put a saved layout back. Sessions that no longer exist are skipped and said so.
-  const restoreWindowLayout = useEffectEvent((id: string) => {
+  const restoreWindowLayout = useEffectEvent(async (id: string) => {
+    const saved = savedWindowLayouts.find(entry => entry.id === id)
+    if (!saved) return
+    const request = ++windowLayoutRestoreRequestRef.current
+    const project = windowLayoutProject
+    let snapshot: ProtocolRunSnapshot | null = null
+    if (saved.coordinatorRunId) {
+      try { snapshot = await readTuiProtocolRun(saved.coordinatorRunId) } catch { /* Restore known tabs if the ledger is unavailable. */ }
+    }
+    applySavedWindowLayout(id, snapshot, request, project)
+  })
+  const applySavedWindowLayout = useEffectEvent((id: string, snapshot: ProtocolRunSnapshot | null, request: number, project: string) => {
+    if (request !== windowLayoutRestoreRequestRef.current || project !== windowLayoutProject || !windowPickerOpen) return
     setWindowSurfacePeek(null)
     checkpointWindowLayout()
+    setCoordinatorWorkspace(snapshot)
     const saved = savedWindowLayouts.find((entry) => entry.id === id)
     if (!saved) return
+    setCoordinatorWorkspaceRunId(saved.coordinatorRunId ?? null)
     setWindowPickerOpen(false)
     const known = new Map<string, Session>()
     for (const session of [...sessions, ...openTabSessions]) known.set(sessionKey(session), session)
+    if (snapshot && snapshot.run.id === saved.coordinatorRunId) {
+      for (const target of planCoordinatorWorkspace(snapshot, known).targets) known.set(target.sessionKey, target.session)
+    }
     const panes = saved.panes.flatMap((key) => (known.has(key) ? [known.get(key)!] : []))
     const reader = saved.reader ? known.get(saved.reader) ?? null : null
     const missing = saved.panes.length - panes.length + (saved.reader && !reader ? 1 : 0)
@@ -20661,15 +20753,7 @@ export default function OpenTuiApp() {
     const order = [...(selectedSessionKey ? [selectedSessionKey] : []), ...splitPinnedKeys]
     const target = nextWindowNeedingAttention(order, focusedWindowKey, (key) => Boolean(badgeForWindow(key)))
     if (!target) { showNotice('info', 'No windows need attention'); return }
-    setWindowZoom(null)
-    setFocusedPane('messages')
-    const index = splitPaneSessions.findIndex((session) => sessionKey(session) === target)
-    if (index >= 0) focusSplitPane(index)
-    else {
-      const session = [...openTabSessions, ...sessions].find((entry) => sessionKey(entry) === target)
-      if (session && target !== selectedSessionKey) { checkpointWindowLayout(); selectTabSession(session) }
-      focusReaderFromSplit()
-    }
+    pickWindowTarget(target)
   })
 
   const pickWindowTarget = useEffectEvent((key: string) => {
@@ -20684,6 +20768,13 @@ export default function OpenTuiApp() {
       const pane = splitPaneSessions.findIndex((session) => sessionKey(session) === key)
       if (pane >= 0) focusSplitPane(pane)
       else {
+        if (key !== selectedSessionKey && watchedCoordinator && splitPaneSessions.length > 0) {
+          checkpointWindowLayout()
+          const first = sessionKey(splitPaneSessions[0]!)
+          setSplitPinnedKeys(current => current.map(pin => pin === key ? first : pin === first ? key : pin))
+          focusSplitPane(0)
+          return
+        }
         if (key !== selectedSessionKey) {
           checkpointWindowLayout()
           // The reader may be an unpinned preview tab. Keep it as the hidden
@@ -21111,6 +21202,14 @@ export default function OpenTuiApp() {
         break
       case 'window-broadcast':
         setWindowBroadcastOpen(true)
+        break
+      case 'window-stop-coordinator':
+        if (coordinatorWorkspaceRunId) {
+          checkpointWindowLayout()
+          setCoordinatorWorkspace(null)
+          setCoordinatorWorkspaceRunId(null)
+          showNotice('info', 'Stopped watching the run · windows remain open')
+        } else showNotice('info', 'No Coordinator run is being watched')
         break
       case 'window-undo':
         undoWindowLayout()
@@ -24296,7 +24395,7 @@ export default function OpenTuiApp() {
             : theme.border}
         backgroundColor={theme.surface}
         flexDirection="column"
-        title={fullscreenMode || embeddedComposer ? undefined : readerFrameTitle}
+        title={fullscreenMode || embeddedComposer || !readerFrameTitle ? undefined : joinMeta([selectedSessionKey ? coordinatorBadges.get(selectedSessionKey) : null, readerFrameTitle])}
         titleColor={providerAccent}
       >
       {!fullscreenMode && !embeddedComposer ? (
@@ -24848,6 +24947,7 @@ export default function OpenTuiApp() {
         liveMessages={splitPaneLiveMessages.get(sessionKey(splitSession)) ?? SPLIT_PANE_EMPTY_LIVE}
         running={splitPaneRunningKeys.has(sessionKey(splitSession))}
         attentionBadge={badgeForWindow(sessionKey(splitSession))}
+        coordinatorLabel={watchedCoordinator?.agents.find(agent => agent.sessionId === splitSession.sessionId && (agent.provider ?? 'claude') === (splitSession.provider ?? 'claude'))?.name}
         onActivity={reportWindowActivity}
         // Streaming text belongs to whichever session the composer is
         // sending to; show it in the pane when that's this pane.
@@ -25262,7 +25362,7 @@ export default function OpenTuiApp() {
                     onMouseDown={(event) => {
                       if (event.button !== 0) return
                       event.stopPropagation()
-                      if (item.kind === 'session') { checkpointWindowLayout(); selectTabSession(item.session) }
+                      if (item.kind === 'session') pickWindowTarget(sessionKey(item.session))
                       else showNotice('info', `${WINDOW_SURFACE_TITLES[item.surface]} is preserved · enlarge the terminal to restore it`)
                     }}>
                     <text fg={theme.muted} wrapMode="none" selectable={false}>{label}</text>
@@ -27482,7 +27582,7 @@ export default function OpenTuiApp() {
           onRestore={(id) => restoreWindowLayout(id)}
           onDelete={(id) => deleteSavedWindowLayout(id)}
           onPick={(action) => applyWindowLayout(action)}
-          onClose={() => setWindowPickerOpen(false)}
+          onClose={() => { windowLayoutRestoreRequestRef.current += 1; setWindowPickerOpen(false) }}
           onKeyHandlerReady={(handler) => { windowPickerKeyHandlerRef.current = handler }}
         />
       ) : null}
@@ -27985,6 +28085,7 @@ export default function OpenTuiApp() {
           height={height}
           initialRunId={coordBoardRunId}
           onOpenSession={openCoordinationAgentSession}
+          onWatchRun={watchCoordinatorRun}
           onNewRun={() => {
             const baseCwd = selectedSession?.cwd ?? sessionDetail?.info?.cwd ?? process.cwd()
             setCoordDraft('')
@@ -28016,6 +28117,7 @@ export default function OpenTuiApp() {
           height={height}
           onOpenSession={openCoordinationAgentSession}
           onWatchSessions={watchCoordinationAgentSessions}
+          onWatchRun={watchCoordinatorRun}
           onNotice={showNotice}
           onKeyHandlerReady={(handler) => { teammatesKeyHandlerRef.current = handler }}
         />

@@ -93,7 +93,7 @@ function teardownWarning(teardown: InteractiveCoordinatorTeardown | null): strin
 }
 import { fitText, joinMeta } from './textLayout'
 import { MODAL_CONTENT_Z_INDEX } from './layers'
-import type { ProtocolAgent } from '../../lib/agentProtocol'
+import type { ProtocolAgent, ProtocolRunSnapshot } from '../../lib/agentProtocol'
 import { describeRunRollup } from '../../lib/coordinatorRollup'
 import { coordinatorAttention, type CoordinatorAttentionItem } from '../../lib/coordinatorAttention'
 import { coordinatorPickerState, coordinatorResultIdsForAgent } from '../../lib/coordinatorSignals'
@@ -121,6 +121,7 @@ type Props = {
   onOpenSession: (agent: ProtocolAgent) => void
   /** Show these teammates' transcripts in split panes beside the reader, in order of priority. */
   onWatchSessions: (agents: ProtocolAgent[]) => void
+  onWatchRun?: (snapshot: ProtocolRunSnapshot) => void
   onNotice: (tone: 'info' | 'error', text: string, durationMs?: number) => void
   onKeyHandlerReady: (handler: (key: TeammatesKeyEvent) => void) => void
 }
@@ -184,7 +185,7 @@ function isPrintable(key: TeammatesKeyEvent): boolean {
 }
 
 export const TeammatesPopover = memo(function TeammatesPopover({
-  theme, width, height, onOpenSession, onWatchSessions, onNotice, onKeyHandlerReady,
+  theme, width, height, onOpenSession, onWatchSessions, onWatchRun, onNotice, onKeyHandlerReady,
 }: Props) {
   const state = useSyncExternalStore(
     subscribeInteractiveCoordinator, getInteractiveCoordinatorState, getInteractiveCoordinatorState,
@@ -341,13 +342,15 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       onOpenSession(selected); closeInteractiveCoordinator(); return
     }
     // Herdr keeps every agent on screen at once; `o` puts the selected
-    // teammate beside the lead's chat, `O` the team in attention order. Only
+    // teammate beside the lead's chat, `O` the run in stable ledger order. Only
     // reads, so it stays available while a request is unconfirmed. Watching
     // is not reviewing: results stay flagged until a transcript is opened.
     // Terminals disagree on how Shift+O arrives (name `O`, or `o` with shift).
     const watchTeam = key.sequence === 'O' || (key.name.toLowerCase() === 'o' && key.shift)
-    if ((watchTeam && teammates.length) || (key.name === 'o' && !watchTeam && selected)) {
-      onWatchSessions(watchTeam ? teammates : [selected!]); closeInteractiveCoordinator(); return
+    if ((watchTeam && (onWatchRun ? snapshot : teammates.length)) || (key.name === 'o' && !watchTeam && selected)) {
+      if (watchTeam && snapshot && onWatchRun) onWatchRun(snapshot)
+      else onWatchSessions(watchTeam ? teammates : [selected!])
+      closeInteractiveCoordinator(); return
     }
     // Alert delivery is a local preference, not a Coordinator mutation, so it
     // stays available while a request is unconfirmed.
@@ -488,7 +491,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
     if (key.name === 'm' && selected && !disabled) {
       setDraft({ kind: 'message', to: selected.id, toName: selected.name, text: '' })
     }
-  }, [act, busy, canLead, confirmCancel, confirmOff, data, disabled, draft, enabled, locked, onNotice, onOpenSession, onWatchSessions,
+  }, [act, busy, canLead, confirmCancel, confirmOff, data, disabled, draft, enabled, locked, onNotice, onOpenSession, onWatchSessions, onWatchRun,
       pending, recoveries, selected, teammates, clamped, leadSelected, rosterLead, viewingAgentId, newTeammate, snapshot, terminal, unconfirmedDelivery, currentAttention, items.length, session, searching, delegationOptions])
 
   useEffect(() => { if (!resultTaskId && !workflowOpen && !resourcesOpen && !recoveryOpen && !delegationOptionsOpen) onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady, resultTaskId, workflowOpen, resourcesOpen, recoveryOpen, delegationOptionsOpen])
@@ -886,8 +889,8 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       : pending
         ? [['r', 'retry same request'], ['⏎', 'inspect'], ['e', 'edit after checking task history'], ['esc', 'close']]
         : !enabled
-          ? (teammates.length ? [['j/k', 'move'], ['⏎', 'open transcript'], ['o/O', 'watch'], ['v', 'result review'], ...(recoveries.length || data?.settledExecutions?.length ? [['h', 'recovery'] as [string, string]] : []), ...(canLead ? [['e', 'new team'] as [string, string]] : []), ['esc', 'close']] : canLead ? [['e', 'enable coordinator'], ['esc', 'close']] : [['esc', 'close']])
-          : [['j/k', 'move'], ['⏎', 'open'], ['o/O', 'watch'], ['v', 'result review'], ['d', 'ask'], ['m', 'message'],
+          ? (teammates.length ? [['j/k', 'move'], ['⏎', 'open transcript'], ['o', 'watch pane'], ['O', 'watch run'], ['v', 'result review'], ...(recoveries.length || data?.settledExecutions?.length ? [['h', 'recovery'] as [string, string]] : []), ...(canLead ? [['e', 'new team'] as [string, string]] : []), ['esc', 'close']] : canLead ? [['e', 'enable coordinator'], ['esc', 'close']] : [['esc', 'close']])
+          : [['j/k', 'move'], ['⏎', 'open'], ['o', 'watch pane'], ['O', 'watch run'], ['v', 'result review'], ['d', 'ask'], ['m', 'message'],
              ['r', 'resume'], ['i', 'interrupt'], ['⇧X', 'cancel task'], ['p', `new: ${newTeammate ? staffingLabel(newTeammate) : 'same'}`], ['c', 'continuation'], ['w', 'worktrees'], ['l', `alerts ${state.notifications}`], ['x', 'turn off'], ['esc', 'close']]
   // Truncation is by whole entries, not mid-word: a hint cut to "x …" tells the
   // reader a key exists without saying which.
