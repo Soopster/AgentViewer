@@ -57,6 +57,10 @@ type Props = {
   onAskAgent?: (prompt: string) => void
   onOpenFile: (path: string, line?: number) => void
   onNotice: (tone: 'info' | 'error', text: string, durationMs?: number) => void
+  /** The shell or process shown first, and told of each change: a window that
+   * moves to another row of the layout remounts, and must come back on the same one. */
+  initialSelectedId?: string | null
+  onSelectedChange?: (id: string | null) => void
 }
 
 type Highlight = { processId: string; trace: StackTrace; dropped: number }
@@ -94,6 +98,8 @@ export function ProcessPane({
   onAskAgent,
   onOpenFile,
   onNotice,
+  initialSelectedId = null,
+  onSelectedChange,
 }: Props) {
   const renderer = useRenderer()
   const processes = useSyncExternalStore(subscribeProcesses, getProcesses, getProcesses)
@@ -102,7 +108,10 @@ export function ProcessPane({
   const shellIds = shellList.map((entry) => `${entry.id}:${entry.status}:${entry.name}`).join('|')
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const shells = useMemo(() => shellList, [shellIds])
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId)
+  const onSelectedChangeRef = useRef(onSelectedChange)
+  onSelectedChangeRef.current = onSelectedChange
+  useEffect(() => { onSelectedChangeRef.current?.(selectedId) }, [selectedId])
   const [terminalMode, setTerminalMode] = useState(false)
   // Rows into a shell's scrollback; 0 is the live screen.
   const [shellBack, setShellBack] = useState(0)

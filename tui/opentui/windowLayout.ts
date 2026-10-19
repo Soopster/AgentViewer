@@ -27,6 +27,8 @@ export type WindowLayout = {
   secondary: WindowSize | null
   /** Grid only: how many panes share the top row with the reader; the rest are below. */
   topPanes: number
+  /** Runs of two or more panes whose shared borders can be dragged. */
+  groups: WindowGroup[]
 }
 
 export type WindowLayoutInput = {
@@ -46,10 +48,54 @@ export type WindowLayoutInput = {
   secondaryShare?: number
   /** The grid's bottom row: the first pane's share of the width. SPLIT_SHARE_EVEN (or omitted) splits evenly. */
   bottomShare?: number
+  /**
+   * Relative sizes inside each group of panes, so every shared border can be
+   * dragged. A group's weights win over `bottomShare` (the grid's bottom row)
+   * and `secondaryShare` (a stack); missing entries count as 1.
+   */
+  weights?: WindowWeights
   minPaneWidth: number
   minPaneRows: number
   minReaderWidth: number
   minReaderRows: number
+}
+
+/** A run of panes that share one axis, each border between neighbours draggable. */
+export type WindowGroupKey = 'split' | 'stack' | 'gridTop' | 'gridBottom'
+export type WindowWeights = Partial<Record<WindowGroupKey, number[]>>
+export type WindowGroup = { key: WindowGroupKey; axis: 'x' | 'y'; members: number[] }
+
+/**
+ * `total` cells over `count` frames in proportion to `weights`, each at least
+ * `min` where the total allows it, summing to exactly `total`.
+ */
+export function distributeExtent(total: number, count: number, weights: readonly number[] | undefined, min: number): number[] {
+  if (count <= 0) return []
+  const raw = Array.from({ length: count }, (_, index) => {
+    const weight = weights?.[index]
+    return typeof weight === 'number' && Number.isFinite(weight) && weight > 0 ? weight : 1
+  })
+  const floor = Math.min(min, Math.floor(total / count))
+  // Proportional first; a frame that would fall below its minimum is held at
+  // it, and the rest share what is left by weight, until none falls below.
+  const held = new Set<number>()
+  let ideal: number[] = []
+  for (;;) {
+    const free = raw.map((weight, index) => (held.has(index) ? 0 : weight))
+    const freeTotal = total - floor * held.size
+    const sum = free.reduce((acc, weight) => acc + weight, 0) || 1
+    ideal = raw.map((_, index) => (held.has(index) ? floor : (freeTotal * free[index]!) / sum))
+    const under = ideal.findIndex((size, index) => !held.has(index) && size < floor)
+    if (under < 0) break
+    held.add(under)
+  }
+  const sizes = ideal.map((size) => Math.floor(size))
+  let remainder = total - sizes.reduce((acc, size) => acc + size, 0)
+  // Rounding leftovers go to the frames that lost the most to it, last first on ties.
+  const order = ideal.map((size, index) => ({ index, loss: size - Math.floor(size) }))
+    .sort((a, b) => b.loss - a.loss || b.index - a.index)
+  for (let at = 0; remainder > 0; at = (at + 1) % count, remainder -= 1) sizes[order[at]!.index]! += 1
+  return sizes
 }
 
 /** The reader's default share where "even" would make it no larger than a pane. */
@@ -61,7 +107,7 @@ export function computeWindowLayout(input: WindowLayoutInput): WindowLayout {
   // The axis calculation alone cannot protect the other dimension.
   if (height < Math.max(input.minReaderRows, input.minPaneRows)
     || width < Math.max(input.minReaderWidth, input.minPaneWidth)) {
-    return { arrangement, visibleCount: 0, reader: { width, height }, panes: [], secondary: null, topPanes: 0 }
+    return { arrangement, visibleCount: 0, reader: { width, height }, panes: [], secondary: null, topPanes: 0, groups: [] }
   }
   if (arrangement === 'split' || wanted === 0) {
     const stacked = input.orientation === 'rows'
@@ -74,14 +120,16 @@ export function computeWindowLayout(input: WindowLayoutInput): WindowLayout {
       minReaderExtent: stacked ? input.minReaderRows : input.minReaderWidth,
       readerShare: input.readerShare,
     })
-    const pane = stacked ? { width, height: layout.paneExtent } : { width: layout.paneExtent, height }
+    // The panes' share of the axis, divided between them by their weights.
+    const extents = distributeExtent(layout.paneExtent * layout.visibleCount, layout.visibleCount, input.weights?.split, stacked ? input.minPaneRows : input.minPaneWidth)
     return {
       arrangement: 'split',
       visibleCount: layout.visibleCount,
       reader: stacked ? { width, height: layout.readerExtent } : { width: layout.readerExtent, height },
-      panes: Array.from({ length: layout.visibleCount }, () => ({ ...pane })),
+      panes: extents.map((extent) => (stacked ? { width, height: extent } : { width: extent, height })),
       secondary: null,
       topPanes: 0,
+      groups: layout.visibleCount > 1 ? [{ key: 'split', axis: stacked ? 'y' : 'x', members: extents.map((_, index) => index) }] : [],
     }
   }
 
@@ -99,7 +147,7 @@ export function computeWindowLayout(input: WindowLayoutInput): WindowLayout {
     readerShare: share,
   })
   if (columns.visibleCount === 0) {
-    return { arrangement, visibleCount: 0, reader: { width, height }, panes: [], secondary: null, topPanes: 0 }
+    return { arrangement, visibleCount: 0, reader: { width, height }, panes: [], secondary: null, topPanes: 0, groups: [] }
   }
   const readerWidth = columns.readerExtent
   const otherWidth = columns.paneExtent
@@ -108,17 +156,16 @@ export function computeWindowLayout(input: WindowLayoutInput): WindowLayout {
     // As many panes as the column has rows for.
     const fit = Math.max(1, Math.min(wanted, Math.floor(height / input.minPaneRows)))
     const secondary = input.secondaryShare ?? SPLIT_SHARE_EVEN
-    // The first pane may be sized by its divider; the rest share what is left evenly.
-    const first = fit > 1 && secondary !== SPLIT_SHARE_EVEN
-      ? clampExtent(Math.round(height * secondary), input.minPaneRows, height - (fit - 1) * input.minPaneRows)
-      : Math.floor(height / fit)
-    const rest = fit > 1 ? Math.floor((height - first) / (fit - 1)) : 0
-    const panes = Array.from({ length: fit }, (_, index) => ({
-      width: otherWidth,
-      // The rounding remainder goes to the last pane, so the column ends on the reader's last row.
-      height: index === 0 ? (fit === 1 ? height : first) : index === fit - 1 ? height - first - rest * (fit - 2) : rest,
-    }))
-    return { arrangement, visibleCount: fit, reader: { width: readerWidth, height }, panes, secondary: { width: otherWidth, height }, topPanes: 0 }
+    // The stack's own weights, else the older first-pane share, else even.
+    const weights = input.weights?.stack ?? (fit > 1 && secondary !== SPLIT_SHARE_EVEN
+      ? [secondary * (fit - 1), ...Array.from({ length: fit - 1 }, () => 1 - secondary)]
+      : undefined)
+    const heights = distributeExtent(height, fit, weights, input.minPaneRows)
+    const panes = heights.map((paneHeight) => ({ width: otherWidth, height: paneHeight }))
+    return {
+      arrangement, visibleCount: fit, reader: { width: readerWidth, height }, panes, secondary: { width: otherWidth, height }, topPanes: 0,
+      groups: fit > 1 ? [{ key: 'stack', axis: 'y', members: panes.map((_, index) => index) }] : [],
+    }
   }
 
   // Grid: two rows, the reader first in the top one. The top row takes the
@@ -137,6 +184,7 @@ export function computeWindowLayout(input: WindowLayoutInput): WindowLayout {
     panes: [{ width: otherWidth, height }],
     secondary: null,
     topPanes: 1,
+    groups: [],
   })
   if (wanted === 1 || !roomBelow) return oneRow()
   // Drop panes from the end until both rows fit their minimum widths.
@@ -150,24 +198,20 @@ export function computeWindowLayout(input: WindowLayoutInput): WindowLayout {
     const gridReader = input.readerShare === SPLIT_SHARE_EVEN
       ? Math.floor(width / top)
       : clampExtent(Math.round(width * input.readerShare), input.minReaderWidth, roomForPanes)
-    const topPaneWidth = Math.floor((width - gridReader) / topPanes)
-    const panes: WindowSize[] = []
-    for (let index = 0; index < topPanes; index += 1) {
-      // The rounding remainder goes to the last frame in each row, so both rows end at the area's edge.
-      panes.push({ width: index === topPanes - 1 ? width - gridReader - topPaneWidth * (topPanes - 1) : topPaneWidth, height: topHeight })
-    }
-    // The bottom row's first pane may be sized by its own divider; the rest share what is left.
+    // Each row divided by its own weights; the bottom row falls back to the older first-pane share.
+    const topWidths = distributeExtent(width - gridReader, topPanes, input.weights?.gridTop, input.minPaneWidth)
     const bottomShare = input.bottomShare ?? SPLIT_SHARE_EVEN
-    const firstBottom = bottom > 1 && bottomShare !== SPLIT_SHARE_EVEN
-      ? clampExtent(Math.round(width * bottomShare), input.minPaneWidth, width - (bottom - 1) * input.minPaneWidth)
-      : Math.floor(width / bottom)
-    const restBottom = bottom > 1 ? Math.floor((width - firstBottom) / (bottom - 1)) : 0
-    for (let index = 0; index < bottom; index += 1) {
-      const paneWidth = index === 0 ? (bottom === 1 ? width : firstBottom)
-        : index === bottom - 1 ? width - firstBottom - restBottom * (bottom - 2)
-        : restBottom
-      panes.push({ width: paneWidth, height: bottomHeight })
-    }
+    const bottomWeights = input.weights?.gridBottom ?? (bottom > 1 && bottomShare !== SPLIT_SHARE_EVEN
+      ? [bottomShare * (bottom - 1), ...Array.from({ length: bottom - 1 }, () => 1 - bottomShare)]
+      : undefined)
+    const bottomWidths = distributeExtent(width, bottom, bottomWeights, input.minPaneWidth)
+    const panes: WindowSize[] = [
+      ...topWidths.map((paneWidth) => ({ width: paneWidth, height: topHeight })),
+      ...bottomWidths.map((paneWidth) => ({ width: paneWidth, height: bottomHeight })),
+    ]
+    const groups: WindowGroup[] = []
+    if (topPanes > 1) groups.push({ key: 'gridTop', axis: 'x', members: topWidths.map((_, index) => index) })
+    if (bottom > 1) groups.push({ key: 'gridBottom', axis: 'x', members: bottomWidths.map((_, index) => topPanes + index) })
     return {
       arrangement,
       visibleCount: count,
@@ -175,6 +219,7 @@ export function computeWindowLayout(input: WindowLayoutInput): WindowLayout {
       panes,
       secondary: { width, height: bottomHeight },
       topPanes,
+      groups,
     }
   }
   return oneRow()

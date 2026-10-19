@@ -268,9 +268,9 @@ const stack = panes()
 check(stack.every((pane) => pane.x === stack[0]!.x && pane.x >= reader.x + reader.width - 1), `the stack is not one column right of the reader: ${JSON.stringify(stack)}`)
 console.log('Main + stack puts the panes in one column beside the reader.')
 {
-  // The stack's divider: the first pane's bottom border, dragged up three rows.
+  // The border under the stack's first pane, dragged up three rows.
   const first = panes()[0]!
-  const handle = frame('split-secondary-divider')
+  const handle = frame('window-border:stack:0')
   check(handle && handle.y === first.y + first.height - 1, `the stack's divider is not on the first pane's bottom border: ${JSON.stringify(handle)}`)
   await drag({ x: handle!.x + 5, y: handle!.y }, { x: handle!.x + 5, y: handle!.y - 3 })
   check(panes()[0]!.height <= first.height - 2, `the stack's divider did not shrink the first pane: ${first.height} → ${panes()[0]!.height}`)

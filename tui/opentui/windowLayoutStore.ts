@@ -18,11 +18,18 @@ export type SavedWindowLayout = {
   secondaryShare: number
   /** Absent in layouts saved before the bottom row had its own divider. */
   bottomShare?: number
+  /** Relative sizes inside each group of panes; absent in layouts saved before every border dragged. */
+  weights?: Partial<Record<'split' | 'stack' | 'gridTop' | 'gridBottom', number[]>>
   /** Session keys: the reader's, then the panes' in order. */
   coordinatorRunId?: string
   reader: string | null
   panes: string[]
-  surfaces: Array<'terminal' | 'diff' | 'files'>
+  /** Surface window ids (`kind` or `kind#n`). */
+  surfaces: string[]
+  /** Every window's key in display order; absent before surfaces could sit among session panes. */
+  order?: string[]
+  /** Windows sharing a frame as tabs, by window key; absent before tabs. */
+  stacks?: string[][]
 }
 
 type StoreFile = { version: 1; projects: Record<string, SavedWindowLayout[]> }

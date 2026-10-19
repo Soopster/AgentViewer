@@ -133,7 +133,7 @@ assert.equal(adjustSplitReaderShare(0.27, -SPLIT_SHARE_STEP, 0.5), SPLIT_SHARE_M
 // the help overlay's table. Adding a chord without documenting it fails here.
 const DISPATCHED_SPLIT_CHORDS = [
   '%', 'v', '"', 's', 'r', 'n', 'x', 'u', 'a', 'p', 'b', 'w', 'z',
-  '<', '>', '=', '+', '-', '[', ']', 'm',
+  '<', '>', '=', '+', '-', '[', ']', 'm', 't', ',', '.', '!', 'f',
   'o', 'tab', '←', '→', '↑', '↓', '⇧←', '⇧→', '⇧↑', '⇧↓', ';', '1 … 9', '?', 'esc', '⌃C', '⌃G',
 ]
 const documented = new Set(documentedSplitChordKeys())

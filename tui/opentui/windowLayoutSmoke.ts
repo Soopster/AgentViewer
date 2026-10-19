@@ -3,7 +3,7 @@
 // panes before it shrinks anything below its minimum. The App draws exactly
 // these sizes, so a wrong sum here is a pane drawn over another one.
 import assert from 'node:assert/strict'
-import { computeWindowLayout, computeResponsiveWindowLayout, readerShareAt, windowDropZone, windowDropZoneRect, windowInDirection, type WindowLayoutInput } from './windowLayout'
+import { computeWindowLayout, distributeExtent, computeResponsiveWindowLayout, readerShareAt, windowDropZone, windowDropZoneRect, windowInDirection, type WindowLayoutInput } from './windowLayout'
 import { WindowHistory } from './windowHistory'
 import { SPLIT_SHARE_EVEN } from './splitPaneState'
 
@@ -167,5 +167,25 @@ console.log('Drops land on the nearest edge or the middle; a dragged divider map
   assert.equal(six.panes[2]!.width + six.panes[3]!.width + six.panes[4]!.width, 240)
   assert.equal(computeWindowLayout({ ...base, bottomShare: 0.7 }).reader.width, grid.reader.width, 'the bottom divider leaves the top row alone')
   console.log('The bottom row has its own divider, within its panes\' minimums.')
+}
+
+// Every shared border: each group of panes is divided by its own weights.
+{
+  assert.deepEqual(distributeExtent(100, 3, [2, 1, 1], 10), [50, 25, 25], 'weights divide the extent')
+  assert.deepEqual(distributeExtent(100, 3, [10, 1, 1], 20), [60, 20, 20], 'a frame below its minimum is held at it')
+  assert.equal(distributeExtent(101, 3, undefined, 10).reduce((a, b) => a + b, 0), 101, 'rounding still fills the extent')
+  const split = computeWindowLayout({ ...base, arrangement: 'split', width: 240, requestedCount: 2, availableCount: 2, maxPanes: 2, weights: { split: [3, 1] } })
+  assert.ok(split.panes[0]!.width > split.panes[1]!.width && split.groups[0]?.key === 'split', `a split divides its panes by weight: ${JSON.stringify(split.panes)}`)
+  const stack = computeWindowLayout({ ...base, arrangement: 'main-stack', height: 60, weights: { stack: [1, 2, 1] } })
+  assert.deepEqual(stack.panes.map((pane) => pane.height), [15, 30, 15], 'a stack divides its column by weight')
+  assert.deepEqual(stack.groups, [{ key: 'stack', axis: 'y', members: [0, 1, 2] }])
+  const six = computeWindowLayout({ ...base, width: 240, requestedCount: 5, availableCount: 5, maxPanes: 5, weights: { gridTop: [1, 3], gridBottom: [1, 1, 2] } })
+  assert.ok(six.panes[1]!.width > six.panes[0]!.width * 2, 'the grid\'s top row divides by weight')
+  assert.equal(six.panes[4]!.width, 120, 'the bottom row divides by weight')
+  assert.deepEqual(six.groups.map((group) => group.key), ['gridTop', 'gridBottom'])
+  assert.deepEqual(six.groups[1]!.members, [2, 3, 4], 'groups name panes by their index')
+  const legacy = computeWindowLayout({ ...base, bottomShare: 0.7, weights: { gridBottom: [1, 1] } })
+  assert.equal(legacy.panes[1]!.width, 90, 'weights win over the older bottom share')
+  console.log('Every group of panes is divided by its own weights, within minimums.')
 }
 console.log('Window layout smoke passed')

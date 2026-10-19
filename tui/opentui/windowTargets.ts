@@ -7,7 +7,8 @@ export type WindowTarget = {
   detail: string
   hidden: boolean
   session?: Session
-  surface?: 'terminal' | 'diff' | 'files'
+  /** A surface window's id: its kind, or `kind#n` for a further one. */
+  surface?: string
 }
 
 export function windowSessionKey(session: Session): string {

@@ -59,10 +59,12 @@ export const SPLIT_CHORD_HELP: SplitChordSection[] = [
       { keys: 'r', label: 'rotate side-by-side ↔ stacked', short: 'rotate' },
       { keys: 'n', label: 'next session in this pane', short: 'next' },
       { keys: 'x', label: 'close pane', short: 'close' },
-      { keys: 'u', label: 'undo window change', short: 'undo' },
-      { keys: 'a', label: 'next window needing attention', short: 'attention' },
-      { keys: 'p', label: 'search and switch windows (including hidden)', short: 'switch' },
-      { keys: 'b', label: 'broadcast prompt to selected session windows', short: 'broadcast' },
+      // Out of the one-line hint, which these four took past its 120-column
+      // budget (cutting off "cancel"); listed here in ⌃B ?, and in the palette.
+      { keys: 'u', label: 'undo window change', short: 'undo', hint: false },
+      { keys: 'a', label: 'next window needing attention', short: 'attention', hint: false },
+      { keys: 'p', label: 'search and switch windows (including hidden)', short: 'switch', hint: false },
+      { keys: 'b', label: 'broadcast prompt to selected session windows', short: 'broadcast', hint: false },
       // Out of the one-line hint, which is at its width budget; the reader's ⊞ button and the palette advertise it.
       { keys: 'w', label: 'window layout menu (move, arrange, full screen)', short: 'layout', hint: false },
       { keys: 'z', label: 'toggle split panes off/on', short: 'toggle' },
@@ -74,9 +76,13 @@ export const SPLIT_CHORD_HELP: SplitChordSection[] = [
       { keys: '<', label: 'shrink the reader', short: 'shrink' },
       { keys: '>', label: 'grow the reader', short: 'grow' },
       { keys: '=', label: 'even sizes', short: 'even' },
-      { keys: '+ · -', label: 'the second divider (grid rows, a stack\'s first pane)', hint: false },
-      { keys: '[ · ]', label: 'the grid\'s bottom-row divider', hint: false },
+      { keys: '+ · -', label: 'the grid\'s row split', hint: false },
+      { keys: '[ · ]', label: 'shrink · grow the focused pane in its row or column', hint: false },
       { keys: 'm', label: 'zoom the focused window / restore the layout', hint: false },
+      { keys: 't', label: 'make the focused window a tab of the one before', hint: false },
+      { keys: ', · .', label: 'previous · next tab in the focused window', hint: false },
+      { keys: '!', label: 'break the shown tab out into its own window', hint: false },
+      { keys: 'f', label: 'float the focused window over the layout / dock it', hint: false },
     ],
   },
   {

@@ -1313,28 +1313,70 @@ drawn in have one source; `windowLayoutSmoke.ts` checks every arrangement tiles 
 
 - **Up to five panes** (`SPLIT_PANE_ARRANGED_MAX`): a grid takes the larger half of the windows in
   its top row (`topPanes`), and drops panes before any falls below its minimum width.
-- **Surfaces are windows too**: the shell, diff and files (`windowSurfaces`), through the same
-  `renderSurfaceBody` the side panel uses. A kind lives in one place — opening it in a window closes
-  it in the panel (and a panel left empty closes) — because both would hand one key-handler ref to
-  two mounted views. They follow the session panes, and **a layout short of room drops session panes
-  first**: a surface window was asked for by name. A terminal window in shell mode is routed ahead of
-  the `⌃B` prefix, like the panel's; other surface windows after it, so `⌃B` arrows leave them.
+- **Surfaces are windows too**: every side-panel kind (shell, diff, files, browser, pull request,
+  agents), through the same `renderSurfaceBody` the side panel uses. A window's id is its kind, or
+  `kind#n` for a further shell, browser or file view (window menu: "Open another…"). **Each window
+  has its own key handler and capture** (`windowSurfaceKeysRef`/`windowSurfaceCaptureRef`, keyed by
+  window id, via `renderSurfaceBody`'s `slot`); the panel keeps its own refs. A shared ref was why a
+  kind could live in only one place: two shells would have typed into whichever mounted last.
+  **A layout short of room drops session panes first**, by pin order: a surface window was asked
+  for by name. A terminal window in shell mode and a browser window's address field are routed
+  ahead of the `⌃B` prefix (a browser lets `⌃B` itself through); other surface windows after it.
   A just-opened surface is focused after the next render (`pendingSurfaceFocusRef`), since opening it
   may drop a session pane and move its index.
+- **Where surfaces sit among the panes is a slot order** (`windowOrder.ts`): the session pins still
+  say which sessions show and in what order — every drop plan and undo works on them — and
+  `windowOrder` only says which slots are surfaces. Sessions fill session slots in pin order, so a
+  move rewrites both (`applyWindowOrder`). **Window indices count surfaces; pin indices do not** —
+  `split-pane:i`, focus, zoom and `fromPane` are window indices, and `pinIndexOfWindow` converts
+  before anything touches the pins. **Moves are made on the shown windows first, hidden after**
+  (`shownFirstWindowKeys`): with windows overflowing, a hidden session's slot between two visible
+  ones pulled a visible session into the place a swapped window went, and hid another.
+- **A surface window drags by its title**: onto another window's middle it swaps, onto an edge it
+  goes beside; the reader refuses it. A session dropped on a surface window trades places with it,
+  or (from the rail) becomes a pane beside it. A grid move between rows remounts the window, so a
+  terminal window remembers its shell (`windowShellSelectionRef`); diff/files views start over.
 - **The window area's height is measured** (`measuredWindowAreaHeight`), like the reader's; the
   budget estimate ran two rows short, leaving empty rows under a grid.
 - **A pane's edges insert beside it** (`insertSessionBesidePane`); its middle replaces it.
-- **The grid's bottom row has its own divider** (`split-bottom-divider`, `bottomShare`, `⌃B [`/`]`): the
-  first bottom pane's right border; the rest of the row shares what is left.
-- **Keyboard**: `⌃B ⇧`arrows swap the focused window with its neighbour, `⌃B +`/`-` move the second
-  divider, `⌃B m` zooms the focused window (the reader stays mounted, hidden) and restores.
+- **Windows can share a frame as tabs** (`windowTabs.ts`, `windowStacks`): drop a window or a rail
+  session on a window's **title row**, or `⌃B t` (onto the window before). A tab strip replaces the
+  title; click shows a tab, `×` closes it (the frame shows the next), dragging one out makes it a
+  window (onto another window: a tab there), `⌃B ,`/`.` step, `⌃B !` breaks it out. A stack is only
+  window keys; **exactly one member is laid out** (the frame) and the rest are *parked* off the pins
+  and surface list, which is why the pin reconciler skips `parkedWindowKeysRef` — it refilled a
+  short pin list from the open tabs, pulling a background tab into a pane. `liveStacks` drops a
+  stack with no laid-out member and splits off a second one, so a stack can never be wrong for
+  longer than a render. Every move goes through `commitWindowKeys`, which rewrites pins, surfaces,
+  order and count from one key list.
+- **One window can float** (`⌃B f`, palette "Shell in a floating window"): it leaves the layout,
+  draws over the window area (opaque — an unpainted cell shows the frames under it), moves by its
+  title, resizes by `◢`, and docks back into the slot it left (`slot`; appended past the shown
+  windows it docked out of sight). It focuses as pane index `FLOATING_PANE_INDEX`, so focus, the
+  pane handle and key routing need no other path; `windowItems[i]` never contains it, which is why
+  `focusedWindowItem` is the accessor. Not saved in layouts; undo covers both.
+- **Every shared border drags** (`window-border:<group>:<i>`): between the split's panes, a stack's
+  panes, and each grid row's. `computeResponsiveWindowLayout` returns `groups` (members and axis) and
+  divides each by `weights` (relative extents, `distributeExtent`: proportional, then frames held at
+  their minimum and the rest redistributed). Weights win over the older `secondaryShare` (stack) and
+  `bottomShare`, which still convert for layouts saved before. `⌃B [`/`]` move the focused pane's
+  border within its group; the reader's own border stays `split-divider-handle`, and the grid's row
+  split `split-secondary-divider`.
+- **Zoom hides, it does not remount** (`visible={false}` on every other window and row): a zoomed
+  pane re-mounted every other transcript on restore, reloading each.
+- **Keyboard**: `⌃B ⇧`arrows swap the focused window with its neighbour (surface or session),
+  `⌃B +`/`-` move the grid's row split, `⌃B m` zooms the focused window and restores.
   `windowInDirection` only counts windows *beyond* the current one's edge, or "right" from a grid's
   bottom-right pane reached the top row's slightly wider end.
+- **A click anywhere in a window focuses it**: a pane or surface window through its frame's
+  `onMouseDown` (mouse events bubble from the cell hit, selectable text included), the reader
+  through its own — which hands focus back from a pane, a floating window, the surface panel or
+  the rail. Before, the reader took it back only from the surface panel.
 - **Right-click menus** (`ContextMenu.tsx`) on rail rows, tabs, panes, surface windows and the
   reader's title; backdrop at the menu's own layer, as the layout menu's.
 - **Saved layouts** (`windowLayoutStore.ts`, `.agent-viewer-data/window-layouts.json`, per project):
-  arrangement, shares, reader, panes in order, surface windows. Restoring skips sessions that are
-  gone and says how many.
+  arrangement, shares and weights, reader, panes in order, surface windows, the slot order and tabs.
+  Restoring skips sessions that are gone and says how many.
 - **A pane searches its whole history**: `/` types into its title, Enter and `n`/`N` step older and
   newer, and a match older than the loaded window pages it in (`search` on the pane handle).
   Typed keys update the query functionally — keys arriving faster than a render all saw the same
