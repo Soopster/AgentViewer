@@ -1284,6 +1284,15 @@ drawn in have one source; `windowLayoutSmoke.ts` checks every arrangement tiles 
   root layer like the surface panel's), and each pane's title carries `⤢` (open in the reader) and `×`.
 - Switching arrangement remounts the reader frame under a different parent; its scroll position is
   restored like any other remount.
+- **Drops are judged against what is under the pointer**: a pane is replaced (a session already in
+  another pane swaps with it); otherwise the zone is relative to the *reader*, so its edges stay
+  reachable when panes fill the rest of the area. A label follows the pointer saying what the drop
+  will do, and the divider shows the share and size it is setting.
+- **A layout short of tabs fills from the rail's most recent sessions** rather than leaving holes.
+- **Title-bar controls are `WindowButton`s** (dim at rest, lit under the pointer); a double-click on a
+  title bar zooms the reader or opens a pane in the reader (`isDoubleClick` — OpenTUI reports
+  presses only). A click outside the layout menu closes it; its backdrop sits at the menu's own layer,
+  because one layer down is the scrim's, which is later in the tree and swallowed the click.
 
 `windowingSmoke.tsx` drives all of it with the mouse against fixture sessions and reads laid-out
 frames; five mutations were verified to fail it.

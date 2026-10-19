@@ -92,8 +92,9 @@ const click = async (x: number, y: number) => {
   await act(async () => { await setup.mockMouse.click(x, y) })
   await settle(200)
 }
-// A press, then motion a cell at a time, as a terminal reports a drag.
-const drag = async (from: { x: number; y: number }, to: { x: number; y: number }) => {
+// A press, then motion a cell at a time, as a terminal reports a drag; `midway`
+// runs with the button still held, where the drag's own feedback is visible.
+const drag = async (from: { x: number; y: number }, to: { x: number; y: number }, midway?: () => void) => {
   await act(async () => { await setup.mockMouse.pressDown(from.x, from.y) })
   await settle(40)
   const steps = Math.max(Math.abs(to.x - from.x), Math.abs(to.y - from.y), 1)
@@ -103,10 +104,17 @@ const drag = async (from: { x: number; y: number }, to: { x: number; y: number }
     await act(async () => { await setup.mockMouse.emitMouseEvent('drag', x, y) })
   }
   await settle(60)
+  midway?.()
   await act(async () => { await setup.mockMouse.release(to.x, to.y) })
   await settle(300)
 }
 const rail = () => frame('session-rail')!
+const paneShows = (index: number, name: string) => {
+  const pane = frame(`split-pane:${index}`)
+  if (!pane) return false
+  return setup.captureCharFrame().split('\n').slice(pane.y, pane.y + pane.height)
+    .some((line) => line.slice(pane.x, pane.x + pane.width).includes(marker(`win-${name}`)))
+}
 const railRow = (name: string) => locate(`Win ${name}`, rail())
 const readerShows = (name: string) => {
   const reader = frame('transcript-reader')!
@@ -123,10 +131,40 @@ for (const name of ['delta', 'charlie', 'bravo', 'alpha']) {
 }
 console.log('A click on a rail row still opens it.')
 
+// ── Short of tabs, a layout fills from the rail ─────────────────────────────
+{
+  const button = locate('⊞ layout')
+  await click(button.x + 1, button.y)
+  await waitFor('the layout menu', () => !!frame('window-layout:grid'))
+  // Pointing at a choice names it.
+  const icon = frame('window-layout:grid')!
+  await act(async () => { await setup.mockMouse.moveTo(icon.x + 3, icon.y + 1) })
+  await settle(120)
+  check(setup.captureCharFrame().includes('Grid of four · ⏎ applies'), 'hovering a choice does not describe it')
+  // A click outside the menu closes it.
+  await click(2, 2)
+  check(!frame('window-layout:grid'), 'a click outside did not close the menu')
+  await click(button.x + 1, button.y)
+  await waitFor('the layout menu again', () => !!frame('window-layout:grid'))
+  const grid = frame('window-layout:grid')!
+  await click(grid.x + 3, grid.y + 1)
+  await waitFor('the grid to fill from the rail with one tab open', () => panes().length === 3)
+  await act(async () => { setup.mockInput.pressKey('b', { ctrl: true }) })
+  await settle(80)
+  await act(async () => { setup.mockInput.pressKey('w') })
+  await waitFor('the menu', () => !!frame('window-layout:fill'))
+  await act(async () => { setup.mockInput.pressKey('5') })
+  await waitFor('reader only', () => panes().length === 0)
+  console.log('A layout with too few tabs fills from the rail; the menu describes what is pointed at and closes on a click outside.')
+}
+
 // ── Drag a session onto the reader's right edge, then its left ─────────────
 let area = frame('window-area')!
 let row = railRow('bravo')
-await drag({ x: row.x + 1, y: row.y }, { x: area.x + area.width - 3, y: area.y + Math.floor(area.height / 2) })
+await drag({ x: row.x + 1, y: row.y }, { x: area.x + area.width - 3, y: area.y + Math.floor(area.height / 2) }, () => {
+  const ghost = frame('window-drag-ghost')
+  check(ghost && setup.captureCharFrame().includes('⠿ Win bravo · Put it right of the reader'), 'no ghost follows the drag, or it does not say where it lands')
+})
 await waitFor('bravo to open in a pane on the right', () => panes().length === 1)
 let reader = frame('transcript-reader')!
 check(panes()[0]!.x >= reader.x + reader.width - 1 && readerShows('alpha'), `bravo's pane is not right of the reader: pane ${JSON.stringify(panes()[0])}, reader ${JSON.stringify(reader)}`)
@@ -139,8 +177,10 @@ reader = frame('transcript-reader')!
 check(panes()[0]!.x < reader.x, `charlie's pane is not left of the reader: pane ${JSON.stringify(panes()[0])}, reader ${JSON.stringify(reader)}`)
 console.log('Dragging a session to an edge of the reader opens it in a pane on that side.')
 // A third tab to arrange: a rail click only previews a session, a drop opens it as a tab.
+// Edges are the reader's own, so they stay reachable with panes beside it.
 row = railRow('delta')
-await drag({ x: row.x + 1, y: row.y }, { x: area.x + Math.floor(area.width / 2), y: area.y + area.height - 2 })
+reader = frame('transcript-reader')!
+await drag({ x: row.x + 1, y: row.y }, { x: reader.x + Math.floor(reader.width / 2), y: reader.y + reader.height - 2 })
 await waitFor('delta below the reader', () => setup.captureCharFrame().includes(marker('win-delta')))
 reader = frame('transcript-reader')!
 check(panes()[0]!.y >= reader.y + reader.height - 1, `delta's pane is not below the reader: ${JSON.stringify(panes()[0])}`)
@@ -159,6 +199,19 @@ check(topRight.y === reader.y && topRight.x > reader.x, `grid top row: reader ${
 check(bottomLeft.y >= reader.y + reader.height && bottomRight.y === bottomLeft.y && bottomRight.x > bottomLeft.x, `grid bottom row: ${JSON.stringify([bottomLeft, bottomRight])}`)
 check(bottomLeft.y + bottomLeft.height <= area.y + area.height && topRight.x + topRight.width <= area.x + area.width, 'a grid pane runs outside the window area')
 console.log('The menu\'s grid puts the reader and three panes two by two.')
+{
+  // Dropping on a pane replaces that pane, and a session already in another pane swaps with it.
+  await waitFor('every grid pane to show its transcript', () => [0, 1, 2].every((index) => NAMES.some((name) => paneShows(index, name))))
+  const target = panes()[2]!
+  const before = NAMES.find((name) => paneShows(2, name))!
+  const moving = NAMES.find((name) => name !== before && name !== 'alpha' && paneShows(0, name))!
+  const source = frame('split-pane:0')!
+  await drag({ x: source.x + 4, y: source.y }, { x: target.x + 10, y: target.y + 5 }, () => {
+    check(setup.captureCharFrame().includes('Replace pane 3'), 'dragging over a pane does not say it will replace it')
+  })
+  await waitFor('the panes to swap', () => paneShows(2, moving) && paneShows(0, before))
+  console.log('Dropping a pane on another swaps them.')
+}
 if (process.env.DUMP_FRAME) console.log(setup.captureCharFrame())
 
 await act(async () => { setup.mockInput.pressKey('b', { ctrl: true }) })
@@ -176,7 +229,9 @@ console.log('Main + stack puts the panes in one column beside the reader.')
 // ── The divider ─────────────────────────────────────────────────────────────
 const before = frame('transcript-reader')!
 const divider = frame('split-divider-handle')!
-await drag({ x: divider.x, y: divider.y + 4 }, { x: divider.x - 12, y: divider.y + 4 })
+await drag({ x: divider.x, y: divider.y + 4 }, { x: divider.x - 12, y: divider.y + 4 }, () => {
+  check(frame('split-divider-readout') && /reader \d+% · \d+×\d+/.test(setup.captureCharFrame()), 'the divider drag does not show the size it is setting')
+})
 const after = frame('transcript-reader')!
 check(after.width < before.width - 6, `dragging the divider left did not narrow the reader: ${before.width} → ${after.width}`)
 check(!setup.renderer.getSelection()?.getSelectedText?.(), 'the divider drag selected text')
@@ -193,6 +248,23 @@ const promoted = NAMES.find((name) => setup.captureCharFrame().split('\n').slice
 await click(promote.x + 1, promote.y)
 await waitFor(`⤢ to open ${promoted} in the reader`, () => readerShows(promoted))
 console.log('A pane\'s × closes it and ⤢ opens it in the reader.')
+
+// ── Double-clicks on title bars ─────────────────────────────────────────────
+{
+  const pane = frame('split-pane:0')!
+  const name = NAMES.find((entry) => paneShows(0, entry))!
+  await click(pane.x + 6, pane.y)
+  await click(pane.x + 6, pane.y)
+  await waitFor(`a double-click on a pane title to open ${name} in the reader`, () => readerShows(name))
+  const title = frame('transcript-reader')!
+  await click(title.x + 4, title.y)
+  await click(title.x + 4, title.y)
+  await waitFor('a double-click on the reader title to go full screen', () => setup.captureCharFrame().includes('FULLSCREEN'))
+  const restore = locate('FULLSCREEN')
+  await click(restore.x + 2, restore.y)
+  await waitFor('full screen to end', () => !setup.captureCharFrame().includes('FULLSCREEN'))
+  console.log('Double-clicking a title opens that pane in the reader, or zooms the reader.')
+}
 
 // ── The menu by keyboard: Reader only ───────────────────────────────────────
 await act(async () => { setup.mockInput.pressKey('b', { ctrl: true }) })

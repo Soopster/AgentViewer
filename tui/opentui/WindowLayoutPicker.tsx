@@ -106,6 +106,8 @@ export function WindowLayoutPicker({
       paddingX={1}
       title=" Window layout "
       titleColor={theme.cyan}
+      // A press inside the menu is the menu's; the backdrop behind it closes on any other.
+      onMouseDown={(event: { stopPropagation?: () => void }) => event.stopPropagation?.()}
     >
       {WINDOW_LAYOUT_SECTIONS.map((section, sectionIndex) => (
         <box key={section.title} flexDirection="column" marginTop={sectionIndex === 0 ? 0 : 1}>
@@ -127,6 +129,8 @@ export function WindowLayoutPicker({
                   borderStyle="rounded"
                   borderColor={selected ? theme.cyan : active ? theme.cyan : theme.border}
                   backgroundColor={lit ? theme.cyan : selected ? theme.surface3 : theme.surface}
+                  // Pointing at a choice selects it, so the line below names what a click would do.
+                  onMouseOver={() => setCursor(index)}
                   onMouseDown={(event: { button: number; stopPropagation?: () => void }) => {
                     if (event.button !== 0) return
                     event.stopPropagation?.()
@@ -152,6 +156,7 @@ export function WindowLayoutPicker({
         flexDirection="row"
         height={1}
         backgroundColor={FLAT[cursor] === 'fullscreen' ? theme.surface3 : undefined}
+        onMouseOver={() => setCursor(FLAT.indexOf('fullscreen'))}
         onMouseDown={(event: { button: number; stopPropagation?: () => void }) => {
           if (event.button !== 0) return
           event.stopPropagation?.()

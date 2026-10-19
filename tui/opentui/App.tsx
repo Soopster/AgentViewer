@@ -30,6 +30,7 @@ import { openExternalUrl } from './terminalBrowser'
 import { hasTuiLinkTarget, parseTuiLineTokens, parseTuiLinkTarget } from '../../lib/tuiLinkTargets'
 import { SurfacePanel } from './SurfacePanel'
 import { BrowserSurfaceView } from './SurfaceViews'
+import { WindowButton } from './WindowButton'
 import { computeWindowLayout, readerShareAt, windowDropZone, windowDropZoneRect, type WindowArrangement, type WindowDropZone } from './windowLayout'
 import type { WindowLayoutAction } from './WindowLayoutPicker'
 import {
@@ -255,7 +256,7 @@ import type { CoordinatorPickerFilter } from '../../lib/coordinatorSignals'
 import { AttentionInboxPopover, attentionItemNeedsInput, type AttentionItem } from './AttentionInboxPopover'
 import { CrossSessionMessagingPopover } from './CrossSessionMessagingPopover'
 import type { RemoteCoordinatorTarget } from '../../lib/tui/remoteCoordinator'
-import { MODAL_SCRIM_Z_INDEX, paintModalScrim } from './layers'
+import { MODAL_CONTENT_Z_INDEX, MODAL_SCRIM_Z_INDEX, paintModalScrim } from './layers'
 import { TeammatesAttention } from './TeammatesAttention'
 import { coordinatorAlertDelivery } from '../../lib/coordinatorSignals'
 import {
@@ -7600,6 +7601,15 @@ const SPLIT_PANE_MIN_WIDTH = 46
 const SPLIT_PANE_MIN_ROWS = 9
 const MIN_READER_ROWS = 12
 const SPLIT_PANE_MAX = 2
+// Two presses this close in time and place are a double-click; OpenTUI reports presses only.
+const DOUBLE_CLICK_MS = 400
+function isDoubleClick(last: { current: { x: number; y: number; at: number } | null }, event: { x: number; y: number }): boolean {
+  const now = Date.now()
+  const previous = last.current
+  const double = previous !== null && now - previous.at < DOUBLE_CLICK_MS && Math.abs(previous.x - event.x) <= 1 && previous.y === event.y
+  last.current = double ? null : { x: event.x, y: event.y, at: now }
+  return double
+}
 // Main + stack and the grid hold one more: the reader and three panes is the grid.
 const SPLIT_PANE_ARRANGED_MAX = 3
 // Tail-only mount budget. OpenTUI's scrollbox lays out every mounted child, so
@@ -7728,6 +7738,7 @@ function SplitTranscriptPaneInner({
   shouldYieldToForeground,
 }: SplitTranscriptPaneProps) {
   const paneFrameRef = useRef<BoxRenderable | null>(null)
+  const titleClickRef = useRef<{ x: number; y: number; at: number } | null>(null)
   const [cards, setCards] = useState<TuiTranscriptCard[]>([])
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [error, setError] = useState<string | null>(null)
@@ -8180,33 +8191,18 @@ function SplitTranscriptPaneInner({
       onMouseDown={(event) => {
         if (event.button !== 0) return
         onActivate(paneIndex)
-        // The title row is the handle a window is dragged by.
-        if (paneFrameRef.current && event.y === paneFrameRef.current.y) sessionDrag.press(session, paneIndex, event)
+        // The title row is the handle a window is dragged by; a double-click on it opens the pane in the reader.
+        if (paneFrameRef.current && event.y === paneFrameRef.current.y) {
+          if (isDoubleClick(titleClickRef, event)) { onPromotePane(); return }
+          sessionDrag.press(session, paneIndex, event)
+        }
       }}
       onMouseDrag={(event) => sessionDrag.move(event)}
       onMouseUp={(event) => { sessionDrag.release(event) }}
     >
       <box position="absolute" top={-1} right={1} height={1} flexDirection="row" zIndex={3}>
-        <box
-          id={`split-pane-promote:${paneIndex}`}
-          onMouseDown={(event) => {
-            if (event.button !== 0) return
-            event.stopPropagation()
-            onPromotePane()
-          }}
-        >
-          <text fg={theme.dim} bg={theme.surface} wrapMode="none" selectable={false}>{' ⤢ '}</text>
-        </box>
-        <box
-          id={`split-pane-close:${paneIndex}`}
-          onMouseDown={(event) => {
-            if (event.button !== 0) return
-            event.stopPropagation()
-            onClosePane(paneIndex)
-          }}
-        >
-          <text fg={theme.dim} bg={theme.surface} wrapMode="none" selectable={false}>{' × '}</text>
-        </box>
+        <WindowButton id={`split-pane-promote:${paneIndex}`} label=" ⤢ " theme={theme} onPress={onPromotePane} />
+        <WindowButton id={`split-pane-close:${paneIndex}`} label=" × " theme={theme} tone="danger" onPress={() => onClosePane(paneIndex)} />
       </box>
       <box flexGrow={1} paddingX={1} overflow="hidden">
         {status === 'error' ? (
@@ -9070,10 +9066,14 @@ export default function OpenTuiApp() {
   // The reader-and-panes area, for drop zones and divider drags in screen cells.
   const windowAreaRef = useRef<BoxRenderable | null>(null)
   // A session dragged from the rail or a pane title: what, and where it would land.
-  const [sessionDrag, setSessionDrag] = useState<{ session: Session; fromPane: number | null; zone: WindowDropZone | null } | null>(null)
+  // `pane` is a pane under the pointer (dropping there replaces it); otherwise `zone` is relative to the reader.
+  const [sessionDrag, setSessionDrag] = useState<{ session: Session; fromPane: number | null; zone: WindowDropZone | null; pane: number | null; x: number; y: number } | null>(null)
   const sessionPressRef = useRef<{ session: Session; fromPane: number | null; x: number; y: number; dragging: boolean } | null>(null)
   // The divider between the reader and its panes, while it is dragged.
   const [splitDividerDragging, setSplitDividerDragging] = useState(false)
+  const [splitDividerHovered, setSplitDividerHovered] = useState(false)
+  const [splitDividerPoint, setSplitDividerPoint] = useState<{ x: number; y: number } | null>(null)
+  const readerTitleClickRef = useRef<{ x: number; y: number; at: number } | null>(null)
   // Press, move, release — shared by every rail row and pane title, through
   // stable wrappers so the rail's row cache is not rebuilt per render. The
   // implementation is assigned further down, where what it calls exists.
@@ -19648,9 +19648,19 @@ export default function OpenTuiApp() {
 
   // Ask for `wanted` panes from the open tabs; say so when there are not enough.
   const requestWindowPanes = useEffectEvent((wanted: number, label: string) => {
-    const available = splitCandidateSessions.length
+    let available = splitCandidateSessions.length
+    // Short of tabs, the layout fills from the rail's most recent sessions, as
+    // a window manager tiles the windows it has rather than leaving holes.
+    if (available < wanted) {
+      const taken = new Set([...openTabSessions.map((tab) => sessionKey(tab)), selectedSessionKey])
+      const extra = sessions.filter((session) => !taken.has(sessionKey(session))).slice(0, wanted - available)
+      if (extra.length > 0) {
+        setOpenTabSessions((prev) => [...prev, ...extra.filter((session) => !prev.some((tab) => sessionKey(tab) === sessionKey(session)))])
+        available += extra.length
+      }
+    }
     if (available === 0) {
-      showNotice('error', 'Open another tab first, or drag a session from the sidebar onto the reader')
+      showNotice('error', 'No other sessions to arrange · start one, or drag a session from the sidebar onto the reader')
       return
     }
     const count = Math.min(wanted, available)
@@ -19658,7 +19668,7 @@ export default function OpenTuiApp() {
     void writeTuiSplitPanes(count).catch((err) => {
       setError(err instanceof Error ? err.message : 'Failed to store split view setting')
     })
-    showNotice('info', count < wanted ? `${label} · ${count} of ${wanted} panes (open more tabs to fill it)` : label)
+    showNotice('info', count < wanted ? `${label} · ${count} of ${wanted} panes (no more sessions to fill it)` : label)
   })
 
   // The choice the window menu shows as current.
@@ -19707,6 +19717,44 @@ export default function OpenTuiApp() {
     }
   })
 
+  // Replace pane `index` with `session`; a session already in another pane swaps with it.
+  const dropSessionOnPane = useEffectEvent((session: Session, index: number, fromPane: number | null) => {
+    const key = sessionKey(session)
+    if (fromPane === index) return
+    if (key === selectedSessionKey) {
+      showNotice('info', 'That session is the reader · ⤢ on a pane swaps it with the reader')
+      return
+    }
+    setOpenTabSessions((prev) => (prev.some((tab) => sessionKey(tab) === key) ? prev : [...prev, session]))
+    setSplitPinnedKeys((prev) => {
+      const next = splitPaneKeys.length > prev.length ? [...splitPaneKeys] : [...prev]
+      const existing = next.indexOf(key)
+      const displaced = next[index]
+      next[index] = key
+      if (existing >= 0 && existing !== index && displaced) next[existing] = displaced
+      return next
+    })
+    showNotice('info', `${fitText(formatSessionTitle(session), 40)} in pane ${index + 1}`)
+  })
+
+  const rectOf = (id: string) => {
+    const box = renderer.root.findDescendantById(id) as unknown as { x: number; y: number; width: number; height: number } | null
+    return box ? { x: box.x, y: box.y, width: box.width, height: box.height } : null
+  }
+  const inside = (rect: { x: number; y: number; width: number; height: number }, point: { x: number; y: number }) =>
+    point.x >= rect.x && point.x < rect.x + rect.width && point.y >= rect.y && point.y < rect.y + rect.height
+  // What a drag would land on: a pane under the pointer, else an edge or the
+  // middle of the reader (relative to the reader, so its edges stay reachable
+  // when panes fill the rest of the area).
+  const dropTargetAt = (point: { x: number; y: number }): { zone: WindowDropZone | null; pane: number | null } => {
+    for (let index = 0; index < visibleSplitPaneCount; index += 1) {
+      const pane = rectOf(`split-pane:${index}`)
+      if (pane && inside(pane, point)) return { zone: null, pane: index }
+    }
+    const reader = rectOf('transcript-reader')
+    return { zone: reader ? windowDropZone(reader, point) : null, pane: null }
+  }
+
   const windowAreaRect = () => {
     const box = windowAreaRef.current
     return box ? { x: box.x, y: box.y, width: box.width, height: box.height } : null
@@ -19751,20 +19799,17 @@ export default function OpenTuiApp() {
       // Two cells of travel make it a drag, so a slightly shaky click is still a click.
       if (!press.dragging && Math.abs(event.x - press.x) + Math.abs(event.y - press.y) < 2) return
       press.dragging = true
-      const area = windowAreaRect()
-      const zone = area ? windowDropZone(area, event) : null
-      setSessionDrag((current) => (current && current.session === press.session && current.zone === zone
-        ? current
-        : { session: press.session, fromPane: press.fromPane, zone }))
+      const target = dropTargetAt(event)
+      setSessionDrag({ session: press.session, fromPane: press.fromPane, ...target, x: event.x, y: event.y })
     },
     release: (event) => {
       const press = sessionPressRef.current
       sessionPressRef.current = null
       if (!press?.dragging) return false
       setSessionDrag(null)
-      const area = windowAreaRect()
-      const zone = area ? windowDropZone(area, event) : null
-      if (zone) dropSessionInWindow(press.session, zone, press.fromPane)
+      const target = dropTargetAt(event)
+      if (target.pane !== null) dropSessionOnPane(press.session, target.pane, press.fromPane)
+      else if (target.zone) dropSessionInWindow(press.session, target.zone, press.fromPane)
       return true
     },
   }
@@ -19773,12 +19818,14 @@ export default function OpenTuiApp() {
   const dragSplitDivider = useEffectEvent((event: { x: number; y: number }) => {
     const area = windowAreaRect()
     if (!area) return
+    setSplitDividerPoint({ x: event.x, y: event.y })
     const share = readerShareAt(area, stackedSplit ? event.y : event.x, stackedSplit ? 'y' : 'x', splitReaderLast)
     const next = Math.min(SPLIT_SHARE_MAX, Math.max(SPLIT_SHARE_MIN, Math.round(share * 100) / 100))
     if (next !== splitReaderShare) setSplitReaderShare(next)
   })
   const endSplitDividerDrag = useEffectEvent(() => {
     setSplitDividerDragging(false)
+    setSplitDividerPoint(null)
     void writeTuiSplitReaderShare(splitReaderShare).catch(() => {})
   })
 
@@ -23414,6 +23461,10 @@ export default function OpenTuiApp() {
           // Clicking the transcript hands focus back from the surface panel,
           // mirroring the panel's own click-to-focus.
           if (event.button === 0 && surfacePanelFocused) setSurfacePanelFocused(false)
+          // A double-click on the title bar zooms, as it does a desktop window.
+          if (event.button === 0 && readerBoxRef.current && event.y === readerBoxRef.current.y && isDoubleClick(readerTitleClickRef, event)) {
+            toggleFullscreenMode()
+          }
         }}
         flexGrow={1}
         border={fullscreenMode ? [] : ['top', 'left', 'right', 'bottom']}
@@ -23432,26 +23483,8 @@ export default function OpenTuiApp() {
       {!fullscreenMode && !embeddedComposer ? (
         // Window controls in the top border, where a title bar keeps its buttons.
         <box id="reader-window-controls" position="absolute" top={-1} right={1} height={1} flexDirection="row" zIndex={3}>
-          <box
-            id="reader-window-layout"
-            onMouseDown={(event) => {
-              if (event.button !== 0) return
-              event.stopPropagation()
-              setWindowPickerOpen(true)
-            }}
-          >
-            <text fg={theme.dim} bg={theme.surface} wrapMode="none" selectable={false}>{' ⊞ layout '}</text>
-          </box>
-          <box
-            id="reader-window-fullscreen"
-            onMouseDown={(event) => {
-              if (event.button !== 0) return
-              event.stopPropagation()
-              toggleFullscreenMode()
-            }}
-          >
-            <text fg={theme.dim} bg={theme.surface} wrapMode="none" selectable={false}>{' ⤢ '}</text>
-          </box>
+          <WindowButton id="reader-window-layout" label=" ⊞ layout " theme={theme} onPress={() => setWindowPickerOpen(true)} />
+          <WindowButton id="reader-window-fullscreen" label=" ⤢ " theme={theme} onPress={() => toggleFullscreenMode()} />
         </box>
       ) : null}
       {!fullscreenMode && visibleSplitPaneCount > 0 ? (
@@ -23465,13 +23498,16 @@ export default function OpenTuiApp() {
           {...(stackedSplit
             ? { left: 0, right: 0, height: 1, ...(splitReaderLast ? { top: -1 } : { bottom: -1 }) }
             : { top: 0, bottom: 0, width: 1, ...(splitReaderLast ? { left: -1 } : { right: -1 }) })}
+          onMouseOver={() => setSplitDividerHovered(true)}
+          onMouseOut={() => setSplitDividerHovered(false)}
           onMouseDown={(event) => {
             if (event.button !== 0) return
             event.stopPropagation()
             setSplitDividerDragging(true)
           }}
         >
-          <text fg={theme.border} wrapMode="none" selectable={false}>
+          {/* Lit under the pointer and while dragged: a border is not otherwise something you can grab. */}
+          <text fg={splitDividerHovered || splitDividerDragging ? theme.cyan : theme.border} wrapMode="none" selectable={false}>
             {stackedSplit
               ? '─'.repeat(Math.max(1, rightPaneWidth))
               : Array.from({ length: Math.max(1, readerRowBudget) }, () => '│').join('\n')}
@@ -26282,14 +26318,18 @@ export default function OpenTuiApp() {
       ) : null}
 
       {sessionDrag ? (() => {
-        // Where a dragged session would land. Drawn only: the press that
-        // started the drag holds it, so these boxes take no events of their own.
-        const area = windowAreaRect()
-        if (!area) return null
-        const rect = sessionDrag.zone ? windowDropZoneRect(area, sessionDrag.zone) : null
-        const label = !sessionDrag.zone ? 'Drop on the reader'
+        // Where a dragged session would land, and the session itself under the
+        // pointer. Drawn only: the press that started the drag holds it, so
+        // these boxes take no events of their own.
+        const reader = rectOf('transcript-reader')
+        const paneRect = sessionDrag.pane !== null ? rectOf(`split-pane:${sessionDrag.pane}`) : null
+        const rect = paneRect ?? (reader && sessionDrag.zone ? windowDropZoneRect(reader, sessionDrag.zone) : null)
+        const label = sessionDrag.pane !== null ? `Replace pane ${sessionDrag.pane + 1}`
+          : !sessionDrag.zone ? 'Drop on the reader or a pane'
           : sessionDrag.zone === 'center' ? 'Open in the reader'
           : `Put it ${sessionDrag.zone === 'left' ? 'left of' : sessionDrag.zone === 'right' ? 'right of' : sessionDrag.zone === 'top' ? 'above' : 'below'} the reader`
+        // fitText pads to its width; trimmed, so the label is as long as what it says.
+        const ghost = `⠿ ${fitText(formatSessionTitle(sessionDrag.session), 28).trimEnd()} · ${label}`
         return (
           <>
             {rect ? (
@@ -26307,20 +26347,55 @@ export default function OpenTuiApp() {
               />
             ) : null}
             <box
+              id="window-drag-ghost"
               position="absolute"
-              top={(rect ?? area).y + Math.floor((rect ?? area).height / 2)}
-              left={(rect ?? area).x + Math.max(1, Math.floor(((rect ?? area).width - label.length - 4) / 2))}
+              top={Math.min(Math.max(0, sessionDrag.y + 1), height - 1)}
+              // Kept on screen whole: the label plus its padding must fit left of the right edge.
+              left={Math.min(Math.max(0, sessionDrag.x + 2), Math.max(0, width - ghost.length - 3))}
               height={1}
               zIndex={901}
-              backgroundColor={theme.cyan}
+              backgroundColor={rect ? theme.cyan : theme.surface3}
               paddingX={1}
             >
-              <text fg={theme.bg} wrapMode="none" selectable={false}>{`${label} · ${fitText(formatSessionTitle(sessionDrag.session), 30)}`}</text>
+              <text fg={rect ? theme.bg : theme.text} wrapMode="none" selectable={false}>{ghost}</text>
             </box>
           </>
         )
       })() : null}
+      {splitDividerDragging && splitDividerPoint ? (
+        // The size the drag is setting, beside the pointer.
+        <box
+          id="split-divider-readout"
+          position="absolute"
+          top={Math.max(0, splitDividerPoint.y - 1)}
+          left={Math.min(Math.max(0, splitDividerPoint.x + 2), Math.max(0, width - 24))}
+          height={1}
+          zIndex={901}
+          backgroundColor={theme.cyan}
+          paddingX={1}
+        >
+          <text fg={theme.bg} wrapMode="none" selectable={false}>
+            {`reader ${Math.round((splitReaderShare === SPLIT_SHARE_EVEN ? 0.5 : splitReaderShare) * 100)}% · ${rightPaneWidth}×${readerRowBudget}`}
+          </text>
+        </box>
+      ) : null}
 
+      {windowPickerOpen ? (
+        // A click anywhere outside the menu closes it, as a menu does. At the
+        // menu's own layer and before it in the tree: one layer down is the
+        // scrim's, which is later in the tree and would take the click.
+        <box
+          id="window-layout-backdrop"
+          position="absolute"
+          top={0}
+          left={0}
+          width={width}
+          height={height}
+          zIndex={MODAL_CONTENT_Z_INDEX}
+          backgroundColor={RGBA.fromValues(0, 0, 0, 0)}
+          onMouseDown={() => setWindowPickerOpen(false)}
+        />
+      ) : null}
       {windowPickerOpen ? (
         <WindowLayoutPicker
           theme={theme}

@@ -11,6 +11,7 @@ import {
   type RightPanelSurfaceKind,
 } from '../../lib/rightPanel'
 import { activeSurface, type SurfacePanelState, type TuiSurface } from './surfacePanelState'
+import { WindowButton } from './WindowButton'
 
 export type SurfacePanelKey = {
   name: string
@@ -168,17 +169,8 @@ export function SurfacePanel({
     event.stopPropagation?.()
     onResizeStart(placement === 'bottom' ? event.y : event.x)
   }
-  const button = (label: string, run: (() => void) | undefined, key: string) => run ? (
-    <box
-      key={key}
-      onMouseDown={(event: { button: number; stopPropagation?: () => void }) => {
-        if (event.button !== 0) return
-        event.stopPropagation?.()
-        run()
-      }}
-    >
-      <text fg={theme.dim} wrapMode="none">{label}</text>
-    </box>
+  const button = (label: string, run: (() => void) | undefined, key: string, tone?: 'danger') => run ? (
+    <WindowButton key={key} label={label} theme={theme} onPress={run} tone={tone} />
   ) : null
   // Border (2) + tab strip (1) is the chrome the surface does not get.
   const surfaceHeight = Math.max(3, height - 3)
@@ -274,7 +266,7 @@ export function SurfacePanel({
         <box flexGrow={1} />
         {button(placement === 'bottom' ? ' ⇥ beside ' : ' ⤓ under ', onTogglePlacement, 'placement')}
         {button(expanded ? ' ▭ restore ' : ' ▣ expand ', onToggleExpand, 'expand')}
-        {button(' × ', onClosePanel, 'close')}
+        {button(' × ', onClosePanel, 'close', 'danger')}
       </box>
 
       {showLauncher ? (
