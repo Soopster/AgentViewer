@@ -1,3 +1,4 @@
+import { updateWorkspaceResource, forgetWorkspaceResource, isWorkspaceClosed } from './workspaceResources'
 // Long-running processes the TUI hosts for the user — a dev server, a test
 // watcher, `docker compose logs -f` — and the output each has written.
 //
@@ -16,6 +17,7 @@ export type ProcessStatus = 'idle' | 'running' | 'stopping' | 'exited' | 'failed
 
 export type ManagedProcess = {
   id: string
+  ownerId?: string
   name: string
   command: string
   cwd: string
@@ -88,6 +90,7 @@ function notifySoon(): void {
 }
 
 function notifyNow(): void {
+  for (const entry of entries.values()) if (entry.ownerId) updateWorkspaceResource({ id: entry.id, ownerId: entry.ownerId, label: entry.name, running: entry.status === 'running' || entry.status === 'stopping', error: entry.status === 'failed', stop: () => { stopProcess(entry.id); removeProcess(entry.id) } })
   if (notifyTimer) { clearTimeout(notifyTimer); notifyTimer = null }
   rebuildSnapshot()
   for (const listener of listeners) listener()
@@ -144,8 +147,9 @@ function installExitHook(): void {
 }
 
 /** Adds a process without starting it (a suggestion, or one stopped by the user). */
-export function addProcess(definition: { name: string; command: string; cwd: string }): string {
-  const existing = [...entries.values()].find((entry) => entry.command === definition.command && entry.cwd === definition.cwd)
+export function addProcess(definition: { name: string; command: string; cwd: string; ownerId?: string }): string {
+  if (isWorkspaceClosed(definition.ownerId)) throw new Error('Workspace has been closed')
+  const existing = [...entries.values()].find((entry) => entry.command === definition.command && entry.cwd === definition.cwd && entry.ownerId === definition.ownerId)
   if (existing) return existing.id
   counter += 1
   const id = `proc-${counter}`
@@ -218,6 +222,7 @@ export function startProcess(id: string): void {
     entry.endedAt = Date.now()
     entry.status = stopped || code === 0 ? 'exited' : 'failed'
     pushLines(entry, [`— ${stopped ? 'stopped' : signal ? `killed by ${signal}` : `exit ${code ?? 0}`}`])
+    if (isWorkspaceClosed(entry.ownerId)) { entries.delete(entry.id); forgetWorkspaceResource(entry.id) }
     notifyNow()
   })
   notifyNow()
@@ -256,6 +261,7 @@ export function removeProcess(id: string): boolean {
   const entry = entries.get(id)
   if (!entry || entry.child) return false
   entries.delete(id)
+  forgetWorkspaceResource(id)
   notifyNow()
   return true
 }

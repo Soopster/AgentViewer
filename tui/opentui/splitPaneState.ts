@@ -66,6 +66,7 @@ export const SPLIT_CHORD_HELP: SplitChordSection[] = [
       { keys: 'p', label: 'search and switch windows (including hidden)', short: 'switch', hint: false },
       { keys: 'b', label: 'broadcast prompt to selected session windows', short: 'broadcast', hint: false },
       // Out of the one-line hint, which is at its width budget; the reader's ⊞ button and the palette advertise it.
+      { keys: 'S', label: 'spaces and workspaces', hint: false },
       { keys: 'w', label: 'window layout menu (move, arrange, full screen)', short: 'layout', hint: false },
       { keys: 'z', label: 'toggle split panes off/on', short: 'toggle' },
     ],

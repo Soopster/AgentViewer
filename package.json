@@ -39,6 +39,7 @@
     "desktop:build": "npm run build && npm run desktop:prepare && tauri build",
     "tui": "bun run ./tui/opentui/main.tsx",
     "tui:dev": "bun --watch ./tui/opentui/main.tsx",
+    "tui:spaces:smoke": "bun run ./tui/opentui/spacesSmoke.ts && bun run ./tui/opentui/spacesBackgroundSmoke.ts && bun run ./tui/opentui/spacesRenderSmoke.tsx && bun run ./tui/opentui/spacesFloatSmoke.tsx",
     "tui:check": "tsc -p tsconfig.opentui.json --noEmit",
     "tui:navperf": "bun run ./tui/opentui/navPerf.tsx",
     "coord:recovery:smoke": "bun scripts/coordTeamRecoverySmoke.ts && bun scripts/coordInteractiveRecoverySmoke.ts && bun scripts/coordInteractiveHostsSmoke.ts && bun tui/opentui/coordinatorRecoverySmoke.tsx",

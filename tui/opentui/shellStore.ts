@@ -1,3 +1,4 @@
+import { updateWorkspaceResource, forgetWorkspaceResource, isWorkspaceClosed } from './workspaceResources'
 // Interactive shells: a login shell on a real PTY (`lib/ptyBridge.ts`), its
 // output parsed by a headless terminal emulator (`@wterm/core`, the same core
 // the web terminal draws), so the pane can paint the screen cell for cell —
@@ -18,6 +19,7 @@ export type ShellStatus = 'running' | 'exited' | 'failed'
 
 export type ShellSession = {
   id: string
+  ownerId?: string
   name: string
   cwd: string
   status: ShellStatus
@@ -42,6 +44,7 @@ let counter = 0
 let exitHookInstalled = false
 
 function notifyNow(): void {
+  for (const entry of entries.values()) if (entry.meta.ownerId) updateWorkspaceResource({ id: entry.meta.id, ownerId: entry.meta.ownerId, label: entry.meta.name, running: entry.meta.status === 'running', error: entry.meta.status === 'failed', stop: () => closeShell(entry.meta.id) })
   if (notifyTimer) { clearTimeout(notifyTimer); notifyTimer = null }
   snapshot = [...entries.values()].map((entry) => ({ ...entry.meta }))
   for (const listener of listeners) listener()
@@ -87,16 +90,17 @@ function shellCommand(): { exec: string; args: string[]; name: string } {
   return { exec, args: ['-l'], name }
 }
 
-export async function startShell(options: { cwd: string; cols: number; rows: number }): Promise<string> {
+export async function startShell(options: { cwd: string; cols: number; rows: number; ownerId?: string }): Promise<string> {
   counter += 1
   const id = `shell-${counter}`
   const cols = clampPtySize(options.cols, 80)
   const rows = clampPtySize(options.rows, 24)
   const term = await WasmBridge.load()
+  if (isWorkspaceClosed(options.ownerId)) { throw new Error('Workspace has been closed') }
   term.init(cols, rows)
   const { exec, args, name } = shellCommand()
   const entry: Entry = {
-    meta: { id, name, cwd: options.cwd, status: 'running', exitCode: null, error: null, title: null, cols, rows, version: 0 },
+    meta: { id, ownerId: options.ownerId, name, cwd: options.cwd, status: 'running', exitCode: null, error: null, title: null, cols, rows, version: 0 },
     proc: null,
     term,
   }
@@ -182,6 +186,7 @@ export function closeShell(id: string): void {
     timer.unref?.()
   }
   entries.delete(id)
+  forgetWorkspaceResource(id)
   notifyNow()
 }
 

@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { useWorkspaceContext, useWorkspaceState } from './workspaceContext'
 // The surface panel's Terminal tab: long-running processes (a dev server, a
 // watcher, `docker compose logs -f`) and their output, and interactive shells.
 // Both live in stores (`processStore.ts`, `shellStore.ts`), so they keep
@@ -101,27 +102,32 @@ export function ProcessPane({
   initialSelectedId = null,
   onSelectedChange,
 }: Props) {
+  const workspace = useWorkspaceContext()
+  const ownerId = workspace?.runtime.workspace.id
   const renderer = useRenderer()
-  const processes = useSyncExternalStore(subscribeProcesses, getProcesses, getProcesses)
+  const allProcesses = useSyncExternalStore(subscribeProcesses, getProcesses, getProcesses)
   // Only the list; a shell's screen changes are ShellView's to re-render.
-  const shellList = useSyncExternalStore(subscribeShells, getShells, getShells)
+  const allShells = useSyncExternalStore(subscribeShells, getShells, getShells)
+  const processes = useMemo(() => allProcesses.filter(entry => entry.ownerId === ownerId), [allProcesses, ownerId])
+  const shellList = useMemo(() => allShells.filter(entry => entry.ownerId === ownerId), [allShells, ownerId])
   const shellIds = shellList.map((entry) => `${entry.id}:${entry.status}:${entry.name}`).join('|')
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const shells = useMemo(() => shellList, [shellIds])
-  const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId)
+  const [selectedId, setSelectedId] = useWorkspaceState<string | null>('process:selectedId', initialSelectedId, false)
   const onSelectedChangeRef = useRef(onSelectedChange)
   onSelectedChangeRef.current = onSelectedChange
   useEffect(() => { onSelectedChangeRef.current?.(selectedId) }, [selectedId])
+  const [hadShell, setHadShell] = useWorkspaceState('process:hadShell', false)
   const [terminalMode, setTerminalMode] = useState(false)
   // Rows into a shell's scrollback; 0 is the live screen.
-  const [shellBack, setShellBack] = useState(0)
+  const [shellBack, setShellBack] = useWorkspaceState('process:shellBack', 0)
   const [closeArmed, setCloseArmed] = useState<string | null>(null)
   // The absolute number (counting dropped lines) of the last line shown, or
   // null to follow new output. Absolute, so arriving output does not drag a
   // scrolled-back view along with it.
-  const [pinnedEnd, setPinnedEnd] = useState<number | null>(null)
+  const [pinnedEnd, setPinnedEnd] = useWorkspaceState<number | null>('process:pinnedEnd', null)
   const [typing, setTyping] = useState(false)
-  const [draft, setDraft] = useState('')
+  const [draft, setDraft] = useWorkspaceState('process:draft', '')
   const [highlight, setHighlight] = useState<Highlight | null>(null)
   const [configNote, setConfigNote] = useState<string | null>(null)
 
@@ -129,11 +135,11 @@ export function ProcessPane({
     let cancelled = false
     void readProcessConfig(cwd).then((config) => {
       if (cancelled) return
-      for (const definition of config.definitions) addProcess(definition)
+      for (const definition of config.definitions) addProcess({ ...definition, ownerId })
       setConfigNote(config.error ?? (config.source ? null : config.definitions.length > 0 ? `suggested from the repository · declare your own in ${PROCESS_CONFIG_PATH}` : null))
     })
     return () => { cancelled = true }
-  }, [cwd])
+  }, [cwd, ownerId])
 
   const itemIds = useMemo(() => [...processes.map((entry) => entry.id), ...shells.map((entry) => entry.id)], [processes, shells])
   const activeId = selectedId && itemIds.includes(selectedId) ? selectedId : itemIds[0] ?? null
@@ -197,19 +203,30 @@ export function ProcessPane({
   }, [onNotice, sendTrace])
 
   const openShell = useCallback(() => {
-    void startShell({ cwd, cols: Math.max(4, width - 2), rows: Math.max(1, height - 3) }).then((id) => {
+    setHadShell(true)
+    void startShell({ cwd, ownerId, cols: Math.max(4, width - 2), rows: Math.max(1, height - 3) }).then((id) => {
       setSelectedId(id)
       setShellBack(0)
       setTerminalMode(true)
     }).catch((error: unknown) => onNotice('error', error instanceof Error ? error.message : 'Could not start a shell'))
   }, [cwd, height, onNotice, width])
 
+  // Shell windows reopen fresh after a restart; the old command is never replayed.
+  useEffect(() => {
+    if (!ownerId || !hadShell || shells.length || selectedId) return
+    let cancelled = false
+    void startShell({ cwd, ownerId, cols: Math.max(4, width - 2), rows: Math.max(1, height - 3) }).then(id => {
+      if (!cancelled) { setSelectedId(id); setShellBack(0); setPinnedEnd(null) }
+    }).catch((error: unknown) => { if (!cancelled) onNotice('error', error instanceof Error ? error.message : 'Could not restore shell') })
+    return () => { cancelled = true }
+  }, [])
+
   const submit = useCallback(() => {
     const command = draft.trim()
     setTyping(false)
     setDraft('')
     if (!command) return
-    const id = addProcess({ name: command.split(/\s+/).slice(0, 3).join(' '), command, cwd })
+    const id = addProcess({ name: command.split(/\s+/).slice(0, 3).join(' '), command, cwd, ownerId })
     setSelectedId(id)
     setPinnedEnd(null)
     startProcess(id)

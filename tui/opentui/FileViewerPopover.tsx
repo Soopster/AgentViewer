@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { useWorkspaceState } from './workspaceContext'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable, SyntaxStyle } from '@opentui/core'
 import { open, readdir, stat } from 'node:fs/promises'
@@ -241,21 +242,21 @@ export function FileViewerPopover({
 }: Props) {
   const directorySelect = typeof onSelectDirectory === 'function'
   const initialDirectory = resolve(cwd || process.cwd())
-  const [directory, setDirectory] = useState(initialDirectory)
+  const [directory, setDirectory] = useWorkspaceState('files:directory', initialDirectory)
   const [entries, setEntries] = useState<FileEntry[]>([])
   const [parentEntries, setParentEntries] = useState<FileEntry[]>([])
-  const [cursor, setCursor] = useState(0)
+  const [cursor, setCursor] = useWorkspaceState('files:cursor', 0)
   const [loading, setLoading] = useState(true)
   const [preview, setPreview] = useState<Preview>({ kind: 'empty', message: 'Loading…' })
   const [previewLoading, setPreviewLoading] = useState(false)
-  const [showHidden, setShowHidden] = useState(false)
-  const [sortMode, setSortMode] = useState<SortMode>('name')
+  const [showHidden, setShowHidden] = useWorkspaceState('files:showHidden', false)
+  const [sortMode, setSortMode] = useWorkspaceState<SortMode>('files:sortMode', 'name')
   const [refreshVersion, setRefreshVersion] = useState(0)
   const [filterMode, setFilterMode] = useState(false)
-  const [filter, setFilter] = useState('')
+  const [filter, setFilter] = useWorkspaceState('files:filter', '')
   const [previewFocused, setPreviewFocused] = useState(false)
-  const [previewExpanded, setPreviewExpanded] = useState(false)
-  const [previewWindowStart, setPreviewWindowStart] = useState(0)
+  const [previewExpanded, setPreviewExpanded] = useWorkspaceState('files:previewExpanded', false)
+  const [previewWindowStart, setPreviewWindowStart] = useWorkspaceState('files:previewWindowStart', 0)
   const listScrollRef = useRef<ScrollBoxRenderable>(null)
   const previewScrollRef = useRef<ScrollBoxRenderable>(null)
   const requestRef = useRef(0)

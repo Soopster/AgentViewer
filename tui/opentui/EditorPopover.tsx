@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { useWorkspaceContext, useWorkspaceState } from './workspaceContext'
 import { buildEditorFileTree as buildTree, compareEditorPaths, type TreeNode } from './editorFileTree'
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { readFile } from 'node:fs/promises'
@@ -1392,19 +1393,20 @@ export function EditorPopover({
   onAskAgent,
   onOpenFileHistory,
 }: Props) {
+  const workspace = useWorkspaceContext()
   const root = resolve(cwd || process.cwd())
   const [projectFiles, setProjectFiles] = useState<string[]>([])
-  const [treeExpanded, setTreeExpanded] = useState<Set<string>>(() => new Set())
-  const [treeCursor, setTreeCursor] = useState(0)
+  const [treeExpanded, setTreeExpanded] = useWorkspaceState<Set<string>>(`editor:${root}:treeExpanded`, () => new Set())
+  const [treeCursor, setTreeCursor] = useWorkspaceState(`editor:${root}:treeCursor`, 0)
   const explorerScrollRef = useRef<ScrollBoxRenderable>(null)
-  const [tabs, setTabs] = useState<BufferTab[]>([])
-  const [activePath, setActivePath] = useState<string | null>(null)
-  const [focusPane, setFocusPane] = useState<FocusPane>('explorer')
-  const [explorerVisible, setExplorerVisible] = useState(true)
+  const [tabs, setTabs] = useWorkspaceState<BufferTab[]>(`editor:${root}:tabs`, [])
+  const [activePath, setActivePath] = useWorkspaceState<string | null>(`editor:${root}:activePath`, null)
+  const [focusPane, setFocusPane] = useWorkspaceState<FocusPane>(`editor:${root}:focusPane`, 'explorer')
+  const [explorerVisible, setExplorerVisible] = useWorkspaceState(`editor:${root}:explorerVisible`, true)
   const [quickOpen, setQuickOpen] = useState(false)
   // The current buffer's outline, shared by the `@` picker and the breadcrumb
   // so the buffer is only ever asked for once.
-  const [recentFiles, setRecentFiles] = useState<string[]>([])
+  const [recentFiles, setRecentFiles] = useWorkspaceState<string[]>(`editor:${root}:recentFiles`, [])
   const [outlineSymbols, setOutlineSymbols] = useState<EditorSymbol[]>([])
   const [workspaceSymbolResults, setWorkspaceSymbolResults] = useState<EditorSymbol[]>([])
   const [quickQuery, setQuickQuery] = useState('')
@@ -1420,7 +1422,7 @@ export function EditorPopover({
   const [searchSelectionRange, setSearchSelectionRange] = useState<{ start: number; end: number } | null>(null)
   const [searchCursor, setSearchCursor] = useState(-1)
   const [diagnosticCursor, setDiagnosticCursor] = useState(-1)
-  const [cursor, setCursor] = useState({ line: 0, visualColumn: 0 })
+  const [cursor, setCursor] = useWorkspaceState(`editor:${root}:cursor`, { line: 0, visualColumn: 0 })
   const [selectionSummary, setSelectionSummary] = useState<{ characters: number; lines: number } | null>(null)
   const [completions, setCompletions] = useState<Completion[]>([])
   const [completionCursor, setCompletionCursor] = useState(0)
@@ -1446,7 +1448,7 @@ export function EditorPopover({
   const [projectSearchCursor, setProjectSearchCursor] = useState(0)
   const [projectSearchStatus, setProjectSearchStatus] = useState('Type to search project files and unsaved buffers')
   const [recoveryLoaded, setRecoveryLoaded] = useState(false)
-  const [recoveryConflicts, setRecoveryConflicts] = useState<EditorRecoveryBuffer[]>([])
+  const [recoveryConflicts, setRecoveryConflicts] = useWorkspaceState<EditorRecoveryBuffer[]>(`editor:${root}:recoveryConflicts`, [])
   const [recoveryConflictOpen, setRecoveryConflictOpen] = useState(false)
   const [recoveryConflictCursor, setRecoveryConflictCursor] = useState(0)
   const [multiCursor, setMultiCursor] = useState<EditorMultiCursorState | null>(null)
@@ -1480,7 +1482,7 @@ export function EditorPopover({
   const editorRef = useRef<TextareaRenderable | null>(null)
   const tabsRef = useRef(tabs)
   const activePathRef = useRef(activePath)
-  const cursorRef = useRef({ line: 0, visualColumn: 0 })
+  const cursorRef = useRef(cursor)
   const editorScrollbarRef = useRef<ScrollBarRenderable | null>(null)
   const syncingEditorScrollbarRef = useRef(false)
   const lineNumberRef = useRef<LineNumberRenderable | null>(null)
@@ -1784,6 +1786,7 @@ export function EditorPopover({
 
   useEffect(() => {
     let cancelled = false
+    if (workspace && (workspace.runtime.values.get('legacyInitialWorkspace') !== true || workspace.runtime.restoredKeys.has(`editor:${root}:tabs`))) { setRecoveryLoaded(true); return }
     void readEditorRecovery(root).then(({ snapshot, conflicts }) => {
       if (cancelled) return
       setRecoveryConflicts(conflicts)
@@ -1813,7 +1816,7 @@ export function EditorPopover({
   }, [root])
 
   useEffect(() => {
-    if (!recoveryLoaded) return
+    if (!recoveryLoaded || workspace) return
     const dirtyBuffers = tabs.filter((tab) => tab.content !== tab.savedContent)
     const retained = [
       ...dirtyBuffers.map((tab) => ({
@@ -4912,6 +4915,12 @@ export function EditorPopover({
     setCloseConfirm(false)
     setTabs((current) => current.map((tab) => tab.path === activePath ? { ...tab, content } : tab))
   }, [activePath])
+  useLayoutEffect(() => {
+    if (!workspace) return
+    workspace.runtime.flushers.add(updateActiveContent)
+    return () => { workspace.runtime.flushers.delete(updateActiveContent) }
+  }, [workspace?.runtime, updateActiveContent])
+
 
   /**
    * The symbols the caret is inside, outermost first — a class, then the method

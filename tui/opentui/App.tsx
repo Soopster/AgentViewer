@@ -36,6 +36,11 @@ import { fitWindows, isSurfaceWindowKey, moveWindowBeside, orderWindows, surface
 import { computeResponsiveWindowLayout, type WindowGroupKey, type WindowWeights, windowLayoutRects, windowPreviewLines, readerShareAt, windowDropZone, windowDropZoneRect, windowInDirection, type WindowArrangement, type WindowDirection, type WindowDropZone } from './windowLayout'
 import type { WindowLayoutAction } from './WindowLayoutPicker'
 import type { ContextMenuItem } from './ContextMenu'
+import { startSpacesBackground } from './spacesBackground'
+import { SpacesController, canonicalSpacePath } from './spacesStore'
+import { WorkspaceContext, WorkspaceViewContext, useWorkspaceContext, useWorkspaceState, useAppState, useWorkspaceRef, workspaceStorageKey } from './workspaceContext'
+import { SpacesRail, WorkspaceTabs, WorkspaceLauncher, SpacesManager } from './SpacesNavigation'
+import { LIGHT_THEME } from '../theme'
 import { WindowHistory } from './windowHistory'
 import { windowSessionTarget, type WindowTarget } from './windowTargets'
 import type { BroadcastDelivery } from './windowBroadcast'
@@ -56,16 +61,12 @@ import type { RightPanelSurfaceKind } from '../../lib/rightPanel'
 import { TaskPanelPopover } from './TaskPanelPopover'
 import {
   appendComposerSentHistory,
-  flushComposerQueueWrites,
   flushComposerStashWrites,
   readComposerDraft,
   readComposerDraftParts,
   readComposerQueue,
   readComposerSentHistory,
   readComposerStash,
-  scheduleWriteComposerDraft,
-  scheduleWriteComposerDraftParts,
-  scheduleWriteComposerQueue,
   scheduleWriteComposerStash,
 } from '../../lib/tuiComposerState'
 import { frecencyKey, frecencyPrefix, readFrecencyScores, recordFrecencyUse } from '../../lib/tuiFrecency'
@@ -5778,6 +5779,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'window-switcher', label: 'Switch window', key: splitCommandKey('p', RUNNING_INSIDE_TMUX), category: 'View' },
   { id: 'window-broadcast', label: 'Broadcast prompt to session windows', key: splitCommandKey('b', RUNNING_INSIDE_TMUX), category: 'View' },
   { id: 'window-stop-coordinator', label: 'Stop watching Coordinator run', key: '', category: 'View' },
+  { id: 'spaces-switcher', label: 'Spaces and workspaces', key: splitCommandKey('S', RUNNING_INSIDE_TMUX), category: 'View' },
   { id: 'window-undo', label: 'Undo window change', key: splitCommandKey('u', RUNNING_INSIDE_TMUX), category: 'View' },
   { id: 'split-help',   label: 'Split pane keybinds',       key: splitCommandKey('?', RUNNING_INSIDE_TMUX), category: 'View' },
   { id: 'split-close',  label: 'Close split pane',         key: splitCommandKey('x', RUNNING_INSIDE_TMUX), category: 'View'  },
@@ -7807,8 +7809,15 @@ function SplitTranscriptPaneInner({
   const [cards, setCards] = useState<TuiTranscriptCard[]>([])
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [error, setError] = useState<string | null>(null)
-  const [followTail, setFollowTail] = useState(true)
+  const [followTail, setFollowTail] = useWorkspaceState(`pane:${sessionKey(session)}:followTail`, true)
   const scrollRef = useRef<ScrollBoxRenderable>(null)
+  const paneScroll = useWorkspaceRef<number | null>(`pane:${sessionKey(session)}:scroll`, null, true)
+  const paneWorkspace = useWorkspaceContext()
+  useLayoutEffect(() => {
+    const capture = () => { if (scrollRef.current) paneScroll.current = scrollRef.current.scrollTop }
+    paneWorkspace?.runtime.flushers.add(capture)
+    return () => { capture(); paneWorkspace?.runtime.flushers.delete(capture) }
+  }, [session.sessionId, paneWorkspace?.runtime])
   const selectionVariantCacheRef = useRef(new WeakMap<TuiTranscriptCard, TranscriptCardVariantCacheEntry>())
   const key = sessionKey(session)
   const variant = `${density}|${showToolCalls ? 1 : 0}`
@@ -7870,8 +7879,7 @@ function SplitTranscriptPaneInner({
   // mount budget that keeps a pane cheap) and grows a page at a time as the
   // reader walks back, so the whole transcript is reachable without paying for
   // it up front.
-  const [windowSize, setWindowSize] = useState(SPLIT_PANE_CARD_WINDOW)
-  useEffect(() => { setWindowSize(SPLIT_PANE_CARD_WINDOW) }, [key])
+  const [windowSize, setWindowSize] = useWorkspaceState(`pane:${sessionKey(session)}:windowSize`, SPLIT_PANE_CARD_WINDOW)
   const windowSizeRef = useRef(windowSize)
   windowSizeRef.current = windowSize
   const persistedTailCards = useMemo(
@@ -7924,8 +7932,8 @@ function SplitTranscriptPaneInner({
 
   // Cursor: null means "following the tail". Set once the reader focuses this
   // pane and moves, which is also what detaches tail-follow.
-  const [cursorKey, setCursorKey] = useState<string | null>(null)
-  const [expandedKeys, setExpandedKeys] = useState<ReadonlySet<string>>(EMPTY_EXPANDED_KEYS)
+  const [cursorKey, setCursorKey] = useWorkspaceState<string | null>(`pane:${sessionKey(session)}:cursorKey`, null)
+  const [expandedKeys, setExpandedKeys] = useWorkspaceState<ReadonlySet<string>>(`pane:${sessionKey(session)}:expandedKeys`, EMPTY_EXPANDED_KEYS)
   const tailCardsRef = useRef<TuiTranscriptCard[]>(tailCards)
   const cursorKeyRef = useRef<string | null>(cursorKey)
 
@@ -8192,10 +8200,25 @@ function SplitTranscriptPaneInner({
   }, [paneIndex, registerHandle])
 
   // Keep the cursor card in view as the cursor moves or new cards arrive.
+  const paneRenderer = useRenderer()
   useEffect(() => {
     if (!cursorKey) return
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const scroll = () => { paneRenderer.root.off(LayoutEvents.LAYOUT_CHANGED, afterLayout); scrollRef.current?.scrollChildIntoView(`card:${cursorKey}`) }
+    const afterLayout = () => { if (timer) clearTimeout(timer); timer = setTimeout(scroll, 0) }
+    paneRenderer.root.on(LayoutEvents.LAYOUT_CHANGED, afterLayout)
     scrollRef.current?.scrollChildIntoView(`card:${cursorKey}`)
-  }, [cursorKey, tailCards])
+    timer = setTimeout(scroll, 50)
+    return () => { paneRenderer.root.off(LayoutEvents.LAYOUT_CHANGED, afterLayout); if (timer) clearTimeout(timer) }
+  }, [cursorKey, tailCards, paneRenderer])
+
+  const paneRestored = useRef(false)
+  useEffect(() => {
+    if (paneRestored.current || !tailCards.length || paneScroll.current == null || followTail) return
+    const saved = paneScroll.current
+    const timer = setTimeout(() => { scrollRef.current?.scrollTo(saved); paneRestored.current = true }, 0)
+    return () => clearTimeout(timer)
+  }, [tailCards, followTail])
 
   // Focus changes intentionally do not touch cursorKey, followTail, or the
   // scrollbox. Each pane owns its viewport, so cycling reader → pane → pane
@@ -9094,6 +9117,55 @@ function ReaderTranscriptWindow({ inputs }: { inputs: ReaderWindowInputs }) {
 }
 
 export default function OpenTuiApp() {
+  const [controller] = useState(() => new SpacesController())
+  useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
+  useEffect(() => startSpacesBackground(controller), [controller])
+  const space = controller.activeSpace()
+  const workspace = controller.activeWorkspace()
+  useEffect(() => {
+    const save = () => { try { controller.flush() } catch { /* leave previous generation intact */ } }
+    process.on('exit', save)
+    return () => { process.off('exit', save); save() }
+  }, [controller])
+  const { width, height } = useTerminalDimensions()
+  const welcomeKey = useRef<((key: { name: string; sequence: string; ctrl: boolean; shift: boolean }) => boolean) | null>(null)
+  useKeyboard(key => { if (!workspace) { if (welcomeKey.current?.(key)) key.preventDefault(); key.stopPropagation() } })
+  if (!space || !workspace) return <box width={width} height={height}><SpacesManager controller={controller} theme={LIGHT_THEME} width={width} height={height} onClose={() => {}} onKeyHandlerReady={handler => { welcomeKey.current = handler }} /></box>
+  return <WorkspaceContext.Provider value={{ controller, runtime: controller.runtime(workspace), space }}><OpenTuiWorkspace key={workspace.id} /></WorkspaceContext.Provider>
+}
+
+function OpenTuiWorkspace() {
+  const workspaceContext = useWorkspaceContext()!
+  const workspaceId = workspaceContext.runtime.workspace.id
+  const workspaceCwd = workspaceContext.space.cwd
+  const [workspaceLaunched, setWorkspaceLaunched] = useWorkspaceState('workspaceLaunched', false)
+  const [workspaceHasSession, setWorkspaceHasSession] = useWorkspaceState('workspaceHasSession', false)
+  const [spacesMenuOpen, setSpacesMenuOpen] = useState(false)
+  const [spacesMenuSelection, setSpacesMenuSelection] = useState<string | undefined>()
+  const [spacesCloseId, setSpacesCloseId] = useState<string | undefined>()
+  const spacesKeyRef = useRef<((key: { name: string; sequence: string; ctrl: boolean; shift: boolean }) => boolean) | null>(null)
+  const openSpaces = (id?: string, close = false) => { setSpacesMenuSelection(id); setSpacesCloseId(close ? id : undefined); setSpacesMenuOpen(true) }
+  const [allProjects, setAllProjects] = useWorkspaceState('allProjects', false)
+  const draftKey = (key: string) => workspaceStorageKey(workspaceId, key)
+  const readWorkspaceDraft = (key: string) => {
+    const value = workspaceContext.runtime.values.get(`draft:${key}`)
+    return typeof value === 'string' ? value : readComposerDraft(draftKey(key)) || (workspaceContext.runtime.values.get('legacyInitialWorkspace') === true ? readComposerDraft(key) : '')
+  }
+  const writeWorkspaceDraft = (key: string, text: string) => {
+    workspaceContext.runtime.persistent.add(`draft:${key}`)
+    workspaceContext.runtime.set(`draft:${key}`, text)
+  }
+  const readWorkspaceDraftParts = (key: string): unknown[] => {
+    const existing = workspaceContext.runtime.values.get(`draftparts:${key}`)
+    if (Array.isArray(existing)) return existing
+    const parts = readComposerDraftParts(draftKey(key))
+    return parts.length || workspaceContext.runtime.values.get('legacyInitialWorkspace') !== true ? parts : readComposerDraftParts(key)
+  }
+  const writeWorkspaceDraftParts = (key: string, parts: unknown[]) => {
+    workspaceContext.runtime.persistent.add(`draftparts:${key}`)
+    workspaceContext.runtime.set(`draftparts:${key}`, parts)
+  }
+
   rootRenderCount += 1
   const renderer = useRenderer()
   const { width, height } = useTerminalDimensions()
@@ -9115,24 +9187,24 @@ export default function OpenTuiApp() {
     }
   }, [renderer])
 
-  const [provider, setProvider] = useState<ProviderSelection>('claude')
+  const [provider, setProvider] = useWorkspaceState<ProviderSelection>('provider', 'claude')
   // One instance of `provider` (a second account, one ACP agent), or null for
   // all of them. The ref is what a refresh reads, so a poll already scheduled
   // lists what is selected now rather than what was selected when it was queued.
-  const [providerInstanceId, setProviderInstanceId] = useState<string | null>(null)
+  const [providerInstanceId, setProviderInstanceId] = useWorkspaceState<string | null>('providerInstanceId', null)
   const providerInstanceIdRef = useRef<string | null>(null)
   const [providerInstances, setProviderInstances] = useState<TuiProviderInstanceChoice[]>([])
-  const [themeMode, setThemeMode] = useState<TuiThemeMode>('light')
-  const [themeFollowsTerminal, setThemeFollowsTerminal] = useState(false)
+  const [themeMode, setThemeMode] = useAppState<TuiThemeMode>('themeMode', 'light')
+  const [themeFollowsTerminal, setThemeFollowsTerminal] = useAppState('themeFollowsTerminal', false)
   // Bumped when the terminal's reported colours change, which is what the
   // terminal-palette theme is made of.
   const [terminalPaletteEpoch, setTerminalPaletteEpoch] = useState(0)
   const themeFollowsTerminalRef = useRef(false)
   // The theme last chosen from each side; following the terminal switches between them.
   const themeSlotsRef = useRef<{ light: TuiThemeMode; dark: TuiThemeMode }>({ light: 'light', dark: 'dark' })
-  const [density, setDensity] = useState<TuiDensity>('balanced')
-  const [diffLayout, setDiffLayout] = useState<TuiDiffLayout>('stack')
-  const [transcriptDiffNotes, setTranscriptDiffNotes] = useState<Map<string, TranscriptDiffNote>>(() => new Map())
+  const [density, setDensity] = useAppState<TuiDensity>('density', 'balanced')
+  const [diffLayout, setDiffLayout] = useAppState<TuiDiffLayout>('diffLayout', 'stack')
+  const [transcriptDiffNotes, setTranscriptDiffNotes] = useWorkspaceState<Map<string, TranscriptDiffNote>>('transcriptDiffNotes', () => new Map())
   const [transcriptDiffDraft, setTranscriptDiffDraft] = useState<TranscriptDiffNoteDraft | null>(null)
   const [hoveredTranscriptDiffAnchor, setHoveredTranscriptDiffAnchor] = useState<string | null>(null)
   const [transcriptDiffPlainCardKeys, setTranscriptDiffPlainCardKeys] = useState<Set<string>>(() => new Set())
@@ -9141,7 +9213,7 @@ export default function OpenTuiApp() {
   const [transcriptDiffRowCursorByCardKey, setTranscriptDiffRowCursorByCardKey] = useState<Record<string, number>>({})
   const [transcriptDiffSelectionAnchorByCardKey, setTranscriptDiffSelectionAnchorByCardKey] = useState<Record<string, number>>({})
   const [agentToolCursorByGroupKey, setAgentToolCursorByGroupKey] = useState<Record<string, string>>({})
-  const [transcriptView, setTranscriptView] = useState<TuiTranscriptView>('conversation')
+  const [transcriptView, setTranscriptView] = useAppState<TuiTranscriptView>('transcriptView', 'conversation')
   // Chat reuses stream's chronological, borderless card grouping — the two views
   // diverge only in composer placement (docked vs. inline-with-transcript).
   const isCopilotView = transcriptView === 'copilot'
@@ -9157,49 +9229,49 @@ export default function OpenTuiApp() {
   const isStreamView = transcriptView === 'stream' || isScrollbackView
   // With no cursor there is no card for `e` to act on, so SCROLLBACK expands
   // or folds everything at once, as Claude Code's ⌃O does.
-  const [scrollbackExpanded, setScrollbackExpanded] = useState(false)
+  const [scrollbackExpanded, setScrollbackExpanded] = useWorkspaceState('scrollbackExpanded', false)
   // Cards a click flipped away from that all-or-nothing state. `e` clears it:
   // "everything" has to mean everything.
-  const [scrollbackToggledKeys, setScrollbackToggledKeys] = useState<ReadonlySet<string>>(EMPTY_EXPANDED_KEYS)
+  const [scrollbackToggledKeys, setScrollbackToggledKeys] = useWorkspaceState<ReadonlySet<string>>('scrollbackToggledKeys', EMPTY_EXPANDED_KEYS)
   const embeddedComposer = transcriptView === 'chat' || transcriptView === 'agents'
   // TRANSCRIPT is STREAM without the per-line markers, and with the role rule
   // on every message rather than only on user prompts. Modelled on opencode's
   // session view, where one left rule per message is the only chrome there is.
   const isContinuousView = transcriptView === 'transcript' || isOpenCodeView
-  const [transcriptWidth, setTranscriptWidth] = useState<TuiTranscriptWidth>('readable')
-  const [focusMode, setFocusMode] = useState(false)
-  const [stickyHeaders, setStickyHeaders] = useState(false)
+  const [transcriptWidth, setTranscriptWidth] = useAppState<TuiTranscriptWidth>('transcriptWidth', 'readable')
+  const [focusMode, setFocusMode] = useAppState('focusMode', false)
+  const [stickyHeaders, setStickyHeaders] = useAppState('stickyHeaders', false)
   // Prompt card pinned under the reader's top edge while its turn scrolls past.
   const [stickyHeaderKey, setStickyHeaderKey] = useState<string | null>(null)
   // Temporary presentation mode, deliberately separate from the persisted
   // focus preference: fullscreen can be entered and restored without changing
   // the user's normal rail/header layout.
-  const [fullscreenMode, setFullscreenMode] = useState(false)
-  const [railVisible, setRailVisible] = useState(true)
+  const [fullscreenMode, setFullscreenMode] = useWorkspaceState('fullscreenMode', false)
+  const [railVisible, setRailVisible] = useAppState('railVisible', true)
   const [tabsEnabled, setTabsEnabled] = useState(true)
   // Number of read-only split panes mounted beside the reader (0 = off), and
   // which of the other open tabs they start from.
-  const [splitPaneCount, setSplitPaneCount] = useState(0)
+  const [splitPaneCount, setSplitPaneCount] = useWorkspaceState('splitPaneCount', 0)
   // Panes are PINNED to explicit session keys, never derived positionally from
   // "the tabs that aren't active". A positional derivation reshuffles every
   // pane the moment the active tab changes (the candidate list reindexes), which
   // reads as panes randomly swapping while you navigate. The reconcile effect
   // below is the only thing that rewrites these keys.
-  const [splitPinnedKeys, setSplitPinnedKeys] = useState<string[]>([])
+  const [splitPinnedKeys, setSplitPinnedKeys] = useWorkspaceState<string[]>('splitPinnedKeys', [])
   // Which axis the split divides. Columns is the historical layout; rows is
   // what makes the split view reachable at all on a narrow terminal, where two
   // 46-column frames can never sit beside each other.
-  const [splitOrientation, setSplitOrientation] = useState<SplitPaneOrientation>('columns')
+  const [splitOrientation, setSplitOrientation] = useWorkspaceState<SplitPaneOrientation>('splitOrientation', 'columns')
   // Reader's share of that axis. SPLIT_SHARE_EVEN keeps the even split every
   // layout had before the resize keys; anything else is a deliberate ⌃B < / >.
-  const [splitReaderShare, setSplitReaderShare] = useState<number>(SPLIT_SHARE_EVEN)
+  const [splitReaderShare, setSplitReaderShare] = useWorkspaceState<number>('splitReaderShare', SPLIT_SHARE_EVEN)
   // Window arrangement of the reader and its panes (windowLayout.ts), and which
   // end of the split the reader sits at. Kept in tui.json beside the orientation.
-  const [splitArrangement, setSplitArrangement] = useState<WindowArrangement>('split')
-  const [splitReaderLast, setSplitReaderLast] = useState(false)
-  const [coordinatorWorkspace, setCoordinatorWorkspace] = useState<ProtocolRunSnapshot | null>(null)
-  const [coordinatorWorkspaceRunId, setCoordinatorWorkspaceRunId] = useState<string | null>(null)
-  const watchedRosterRef = useRef<{ runId: string; keys: Set<string> } | null>(null)
+  const [splitArrangement, setSplitArrangement] = useWorkspaceState<WindowArrangement>('splitArrangement', 'split')
+  const [splitReaderLast, setSplitReaderLast] = useWorkspaceState('splitReaderLast', false)
+  const [coordinatorWorkspace, setCoordinatorWorkspace] = useWorkspaceState<ProtocolRunSnapshot | null>('coordinatorWorkspace', null, false)
+  const [coordinatorWorkspaceRunId, setCoordinatorWorkspaceRunId] = useWorkspaceState<string | null>('coordinatorWorkspaceRunId', null)
+  const watchedRosterRef = useWorkspaceRef<{ runId: string; keys: Set<string> } | null>('watchedRoster', null, true)
   const watchedCoordinator = useCoordinatorWorkspace(coordinatorWorkspace, coordinatorWorkspaceRunId)
   const coordinatorBadges = useMemo(() => watchedCoordinator ? coordinatorWindowBadges(watchedCoordinator) : new Map<string, string>(), [watchedCoordinator])
   const [windowPickerOpen, setWindowPickerOpen] = useState(false)
@@ -9210,22 +9282,22 @@ export default function OpenTuiApp() {
   const windowBroadcastKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean) | null>(null)
   const windowLayoutRestoreRequestRef = useRef(0)
   const [windowLayoutPreview, setWindowLayoutPreview] = useState<string | null>(null)
-  const [windowAttention, setWindowAttention] = useState<Map<string, WindowAttention>>(() => new Map())
+  const [windowAttention, setWindowAttention] = useWorkspaceState<Map<string, WindowAttention>>('windowAttention', () => new Map())
   const windowObservedFocusRef = useRef<string | null>(null)
   // This project's saved layouts, read when the menu opens.
   const [savedWindowLayouts, setSavedWindowLayouts] = useState<SavedWindowLayout[]>([])
   // Surfaces (a shell, the diff, files) open as windows in the layout, after
   // the session panes. A kind lives in one place: here or in the side panel,
   // because both would hand the same key-handler refs to two mounted views.
-  const [windowSurfaces, setWindowSurfaces] = useState<WindowSurfaceId[]>([])
+  const [windowSurfaces, setWindowSurfaces] = useWorkspaceState<WindowSurfaceId[]>('windowSurfaces', [])
   const pendingSurfaceFocusRef = useRef<WindowSurfaceId | null>(null)
   // Where surface windows sit among the session panes (windowOrder.ts): the
   // session pins still decide the sessions and their order.
-  const [windowOrder, setWindowOrder] = useState<string[]>([])
+  const [windowOrder, setWindowOrder] = useWorkspaceState<string[]>('windowOrder', [])
   // Windows sharing a frame as tabs (windowTabs.ts), and the one floating over the layout.
-  const [windowStacks, setWindowStacks] = useState<WindowStack[]>([])
+  const [windowStacks, setWindowStacks] = useWorkspaceState<WindowStack[]>('windowStacks', [])
   // `slot` is where it sat in the layout, so docking puts it back there.
-  const [floatingWindow, setFloatingWindow] = useState<{ key: string; rect: FloatingRect; slot: number } | null>(null)
+  const [floatingWindow, setFloatingWindow] = useWorkspaceState<{ key: string; rect: FloatingRect; slot: number } | null>('floatingWindow', null)
   const floatGestureRef = useRef<{ mode: 'move' | 'resize'; x: number; y: number; rect: FloatingRect } | null>(null)
   const [floatGesturing, setFloatGesturing] = useState(false)
   // Session keys held off the layout (background tabs, the floating window):
@@ -9237,14 +9309,14 @@ export default function OpenTuiApp() {
   const windowSurfaceKeysRef = useRef(new Map<WindowSurfaceId, (key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => unknown>())
   const windowSurfaceCaptureRef = useRef(new Map<WindowSurfaceId, 'none' | 'input' | 'terminal' | boolean>())
   // The shell each terminal window shows, so moving it (a remount) keeps it.
-  const windowShellSelectionRef = useRef(new Map<WindowSurfaceId, string | null>())
+  const windowShellSelectionRef = useWorkspaceRef('shellSelections', new Map<WindowSurfaceId, string | null>())
   // A focused pane's search: the pane, the query, and whether it is being typed.
-  const [paneSearch, setPaneSearch] = useState<{ index: number; query: string; editing: boolean } | null>(null)
+  const [paneSearch, setPaneSearch] = useWorkspaceState<{ index: number; query: string; editing: boolean } | null>('paneSearch', null)
   // A right-click menu: where, and what it offers.
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; title: string; items: ContextMenuItem[] } | null>(null)
   const contextMenuKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   // ⌃B m: one window takes the whole area until it is pressed again ('reader' or a window index).
-  const [windowZoom, setWindowZoom] = useState<'reader' | number | null>(null)
+  const [windowZoom, setWindowZoom] = useWorkspaceState<'reader' | number | null>('windowZoom', null)
   const windowPickerKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean) | null>(null)
   // The reader-and-panes area, for drop zones and divider drags in screen cells.
   const windowAreaRef = useRef<BoxRenderable | null>(null)
@@ -9267,10 +9339,10 @@ export default function OpenTuiApp() {
   // The third, `bottom`, is between the grid's bottom-row panes.
   // `{ group, index }` is the border after member `index` of a group of panes.
   const [splitDividerDragging, setSplitDividerDragging] = useState<'primary' | 'secondary' | { group: WindowGroupKey; index: number } | null>(null)
-  const [splitSecondaryShare, setSplitSecondaryShare] = useState<number>(SPLIT_SHARE_EVEN)
-  const [splitBottomShare, setSplitBottomShare] = useState<number>(SPLIT_SHARE_EVEN)
+  const [splitSecondaryShare, setSplitSecondaryShare] = useWorkspaceState<number>('splitSecondaryShare', SPLIT_SHARE_EVEN)
+  const [splitBottomShare, setSplitBottomShare] = useWorkspaceState<number>('splitBottomShare', SPLIT_SHARE_EVEN)
   // Every shared border between panes: relative sizes per group (windowLayout.ts).
-  const [splitWeights, setSplitWeights] = useState<WindowWeights>({})
+  const [splitWeights, setSplitWeights] = useWorkspaceState<WindowWeights>('splitWeights', {})
   const [hoveredWindowBorder, setHoveredWindowBorder] = useState<string | null>(null)
 
   const [secondaryDividerHovered, setSecondaryDividerHovered] = useState(false)
@@ -9327,17 +9399,17 @@ export default function OpenTuiApp() {
   // Which split pane owns the keyboard (null = the reader does). Panes register
   // an imperative scroll handle here so the root dispatcher can drive the
   // focused one without every pane subscribing to the key stream.
-  const [splitFocusIndex, setSplitFocusIndex] = useState<number | null>(null)
+  const [splitFocusIndex, setSplitFocusIndex] = useWorkspaceState<number | null>('splitFocusIndex', null)
   // When the composer is opened from a focused pane it talks to THAT session:
   // typing while looking at a pane should reach the agent you're looking at.
   // Declared here (not derived from splitPaneSessions, which the layout
   // computes much later) so the composer target memo can read it.
-  const [composerPaneTargetKey, setComposerPaneTargetKey] = useState<string | null>(null)
+  const [composerPaneTargetKey, setComposerPaneTargetKey] = useWorkspaceState<string | null>('composerPaneTargetKey', null)
   // Creating a session is an explicit routing choice. Keep that target pinned
   // while its composer is open so the sole-running-session convenience fallback
   // cannot redirect the first prompt into an older OpenCode (or other provider)
   // turn.
-  const [composerPreferredTargetKey, setComposerPreferredTargetKey] = useState<string | null>(null)
+  const [composerPreferredTargetKey, setComposerPreferredTargetKey] = useWorkspaceState<string | null>('composerPreferredTargetKey', null)
   const [composerPreparingTargetKey, setComposerPreparingTargetKey] = useState<string | null>(null)
   const composerPreparingTargetKeyRef = useRef<string | null>(null)
   // Stable predicate the panes poll through, so none of them re-subscribes
@@ -9351,25 +9423,25 @@ export default function OpenTuiApp() {
     if (handle) splitPaneHandlesRef.current.set(paneIndex, handle)
     else splitPaneHandlesRef.current.delete(paneIndex)
   })
-  const [showToolCalls, setShowToolCalls] = useState(true)
-  const [velocityScrollEnabled, setVelocityScrollEnabled] = useState(false)
+  const [showToolCalls, setShowToolCalls] = useAppState('showToolCalls', true)
+  const [velocityScrollEnabled, setVelocityScrollEnabled] = useAppState('velocityScrollEnabled', false)
   const [sidebarSort, setSidebarSort] = useState<TuiSidebarSort>('project')
   const [hideScratch, setHideScratch] = useState(false)
   const [showSettled, setShowSettled] = useState(false)
   const pendingInboxEditsRef = useRef<Map<string, PendingInboxEdit>>(new Map())
   const [sidebarView, setSidebarView] = useState<'sessions' | 'coordinator'>('sessions')
-  const [sidebarWidthPreference, setSidebarWidthPreference] = useState(DEFAULT_SIDEBAR_WIDTH)
-  const [taskPanelWidth, setTaskPanelWidth] = useState(TASK_PANEL_DEFAULT_WIDTH)
-  const [taskPanelExpanded, setTaskPanelExpanded] = useState(false)
+  const [sidebarWidthPreference, setSidebarWidthPreference] = useAppState('sidebarWidthPreference', DEFAULT_SIDEBAR_WIDTH)
+  const [taskPanelWidth, setTaskPanelWidth] = useWorkspaceState('taskPanelWidth', TASK_PANEL_DEFAULT_WIDTH)
+  const [taskPanelExpanded, setTaskPanelExpanded] = useWorkspaceState('taskPanelExpanded', false)
   // Surface panel: the terminal half of the web's right-hand panel. Open
   // surfaces live here; the panel is only *shown* when it is open, so the
   // reader keeps the full width until the user asks for it (⇧O).
-  const [surfacePanelOpen, setSurfacePanelOpen] = useState(false)
+  const [surfacePanelOpen, setSurfacePanelOpen] = useWorkspaceState('surfacePanelOpen', false)
   const [surfacePanelFocused, setSurfacePanelFocused] = useState(false)
-  const [surfacePanelWidth, setSurfacePanelWidth] = useState(SURFACE_PANEL_DEFAULT_WIDTH)
+  const [surfacePanelWidth, setSurfacePanelWidth] = useWorkspaceState('surfacePanelWidth', SURFACE_PANEL_DEFAULT_WIDTH)
   // Beside the reader (a column) or under it (a row), switched with `|` and kept in tui.json.
-  const [surfacePanelPlacement, setSurfacePanelPlacement] = useState<'right' | 'bottom'>('right')
-  const [surfacePanelRows, setSurfacePanelRows] = useState(SURFACE_PANEL_DEFAULT_ROWS)
+  const [surfacePanelPlacement, setSurfacePanelPlacement] = useWorkspaceState<'right' | 'bottom'>('surfacePanelPlacement', 'right')
+  const [surfacePanelRows, setSurfacePanelRows] = useWorkspaceState('surfacePanelRows', SURFACE_PANEL_DEFAULT_ROWS)
   // A border drag in progress, and the last column/row the pointer was at.
   const [surfacePanelResizing, setSurfacePanelResizing] = useState(false)
   const surfacePanelResizeFromRef = useRef<number | null>(null)
@@ -9377,9 +9449,9 @@ export default function OpenTuiApp() {
   // leave. The reader stays mounted rather than being torn down — it keeps the
   // transcript's scroll position and its live-turn subscriptions alive, so
   // collapsing the panel again is instant instead of a full re-read.
-  const [surfacePanelExpanded, setSurfacePanelExpanded] = useState(false)
-  const [surfacePanel, setSurfacePanel] = useState(EMPTY_SURFACE_PANEL)
-  const [surfaceBrowserRecent, setSurfaceBrowserRecent] = useState<string[]>([])
+  const [surfacePanelExpanded, setSurfacePanelExpanded] = useWorkspaceState('surfacePanelExpanded', false)
+  const [surfacePanel, setSurfacePanel] = useWorkspaceState('surfacePanel', EMPTY_SURFACE_PANEL)
+  const [surfaceBrowserRecent, setSurfaceBrowserRecent] = useWorkspaceState<string[]>('surfaceBrowserRecent', [])
   const surfacePanelKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const surfaceGitKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const surfacePrKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean) | null>(null)
@@ -9389,12 +9461,12 @@ export default function OpenTuiApp() {
   // reach its <input>), `terminal` while a shell has the keyboard (every key
   // goes to the shell, the panel's own chords included, until ⌃]).
   const surfaceProcessCaptureRef = useRef<'none' | 'input' | 'terminal'>('none')
-  const [sessions, setSessions] = useState<Session[]>([])
+  const [sessions, setSessions] = useWorkspaceState<Session[]>('sessions', [], false)
   const sessionsRef = useRef<Session[]>([])
   const [runningSessions, setRunningSessions] = useState<RunningSessionRef[]>([])
   const [waitingSessions, setWaitingSessions] = useState<Awaited<ReturnType<typeof readTuiRuntimeActivity>>['waiting']>([])
   const [viewerAttentionNotes, setViewerAttentionNotes] = useState<Awaited<ReturnType<typeof readTuiRuntimeActivity>>['attention']>([])
-  const [selectedSessionKey, setSelectedSessionKeyState] = useState<string | null>(null)
+  const [selectedSessionKey, setSelectedSessionKeyState] = useWorkspaceState<string | null>('selectedSessionKey', null)
   const captureReaderPositionRef = useRef<(() => void) | null>(null)
   const setSelectedSessionKey = useCallback((next: React.SetStateAction<string | null>) => {
     // Capture before React replaces the outgoing transcript, including rapid
@@ -9402,7 +9474,7 @@ export default function OpenTuiApp() {
     captureReaderPositionRef.current?.()
     setSelectedSessionKeyState(next)
   }, [])
-  const [sessionDetail, setSessionDetail] = useState<TuiSessionDetail | null>(null)
+  const [sessionDetail, setSessionDetail] = useWorkspaceState<TuiSessionDetail | null>('sessionDetail', null, false)
   const sessionDetailRef = useRef<TuiSessionDetail | null>(sessionDetail)
   useLayoutEffect(() => {
     sessionDetailRef.current = sessionDetail
@@ -9412,7 +9484,7 @@ export default function OpenTuiApp() {
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const toasts = useToasts()
-  const [focusedPane, setFocusedPane] = useState<PaneFocus>('sessions')
+  const [focusedPane, setFocusedPane] = useWorkspaceState<PaneFocus>('focusedPane', 'sessions')
   const [providerMenuOpen, setProviderMenuOpen] = useState(false)
   const [providerMenuIndex, setProviderMenuIndex] = useState(0)
   const [themeMenuOpen, setThemeMenuOpen] = useState(false)
@@ -9435,18 +9507,18 @@ export default function OpenTuiApp() {
   const [fileViewerOpen, setFileViewerOpen] = useState(false)
   const fileViewerKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [editorOpen, setEditorOpen] = useState(false)
-  const [editorInitialPath, setEditorInitialPath] = useState<string | null>(null)
+  const [editorInitialPath, setEditorInitialPath] = useWorkspaceState<string | null>('editorInitialPath', null)
   // 1-based, as every transcript reference and stack trace writes it; the editor
   // converts to its own 0-based cursor. Null means "no particular line", which
   // is not the same as line 1 — a file opened with no destination must restore
   // the reader's remembered place instead.
-  const [editorInitialLine, setEditorInitialLine] = useState<number | null>(null)
+  const [editorInitialLine, setEditorInitialLine] = useWorkspaceState<number | null>('editorInitialLine', null)
   const editorKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; meta?: boolean; option?: boolean; sequence: string }) => boolean) | null>(null)
   // New agent session modal: pick a folder (via the file picker in folder-select
   // mode) and provider before creating, instead of defaulting to the viewed cwd.
   const [newSessionModalOpen, setNewSessionModalOpen] = useState(false)
   const [newSessionProvider, setNewSessionProvider] = useState<AgentProvider>('claude')
-  const [newSessionCwd, setNewSessionCwd] = useState<string>('')
+  const [newSessionCwd, setNewSessionCwd] = useWorkspaceState<string>('newSessionCwd', workspaceCwd)
   const [newSessionBusy, setNewSessionBusy] = useState(false)
   const [folderPickerForNewSession, setFolderPickerForNewSession] = useState(false)
   const newSessionKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
@@ -9585,14 +9657,14 @@ export default function OpenTuiApp() {
   const diagnosticsScrollRef = useRef<ScrollBoxRenderable | null>(null)
   const [diagnosticsMcpPermissionModes, setDiagnosticsMcpPermissionModes] = useState<Record<string, 'default' | 'auto'>>({})
   const [searchMode, setSearchMode] = useState(false)
-  const [searchQuery, setSearchQuery] = useState('')
-  const [searchMatchIndex, setSearchMatchIndex] = useState(0)
+  const [searchQuery, setSearchQuery] = useWorkspaceState('searchQuery', '')
+  const [searchMatchIndex, setSearchMatchIndex] = useWorkspaceState('searchMatchIndex', 0)
   const [sessionSearchMode, setSessionSearchMode] = useState(false)
-  const [sessionSearchQuery, setSessionSearchQuery] = useState('')
+  const [sessionSearchQuery, setSessionSearchQuery] = useWorkspaceState('sessionSearchQuery', '')
 
-  const [transcriptCursorKey, setTranscriptCursorKey] = useState<string | null>(null)
-  const [expandedCardKeys, setExpandedCardKeys] = useState<Set<string>>(() => new Set())
-  const [collapsedCardKeys, setCollapsedCardKeys] = useState<Set<string>>(() => new Set())
+  const [transcriptCursorKey, setTranscriptCursorKey] = useWorkspaceState<string | null>('transcriptCursorKey', null)
+  const [expandedCardKeys, setExpandedCardKeys] = useWorkspaceState<Set<string>>('expandedCardKeys', () => new Set())
+  const [collapsedCardKeys, setCollapsedCardKeys] = useWorkspaceState<Set<string>>('collapsedCardKeys', () => new Set())
   // Bookmarked message uuids (== card keys) for the active session. The ref
   // keeps the toggle handler stable across renders.
   const [bookmarkKeys, setBookmarkKeys] = useState<Set<string>>(() => new Set())
@@ -9607,13 +9679,13 @@ export default function OpenTuiApp() {
   // When jumping to a bookmark in another session, remember where to land once
   // that session's transcript has loaded.
   const pendingBookmarkCursorRef = useRef<{ sessionKey: string; uuid: string } | null>(null)
-  const [followTail, setFollowTail] = useState(true)
+  const [followTail, setFollowTail] = useWorkspaceState('followTail', true)
   // Absolute index (into visibleTranscriptCards) of the first mounted reader
   // card when the window is detached from the tail. null = pinned to the tail
   // (derived), which is also the followTail shape. See READER_CARD_WINDOW.
   const [pendingNewCount, setPendingNewCount] = useState(0)
-  const [unreadBoundaryKey, setUnreadBoundaryKey] = useState<string | null>(null)
-  const [resumeMarkerKey, setResumeMarkerKey] = useState<string | null>(null)
+  const [unreadBoundaryKey, setUnreadBoundaryKey] = useWorkspaceState<string | null>('unreadBoundaryKey', null)
+  const [resumeMarkerKey, setResumeMarkerKey] = useWorkspaceState<string | null>('resumeMarkerKey', null)
   const [bootstrapped, setBootstrapped] = useState(false)
   const [restoredReaderState, setRestoredReaderState] = useState<{
     sessionKey: string | null
@@ -9629,10 +9701,10 @@ export default function OpenTuiApp() {
   const [renameSessionKey, setRenameSessionKey] = useState<string | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
   const renameDraftRef = useRef(renameDraft)
-  const [composerActive, setComposerActive] = useState(false)
-  const [composerWindowOpen, setComposerWindowOpen] = useState(false)
-  const [composerHidden, setComposerHidden] = useState(false)
-  const [composerDraft, setComposerDraft] = useState('')
+  const [composerActive, setComposerActive] = useWorkspaceState('composerActive', false)
+  const [composerWindowOpen, setComposerWindowOpen] = useWorkspaceState('composerWindowOpen', false)
+  const [composerHidden, setComposerHidden] = useWorkspaceState('composerHidden', false)
+  const [composerDraft, setComposerDraft] = useWorkspaceState('composerDraft', '')
   const composerDraftStorageKeyRef = useRef<string | null>(null)
   const [composerLiveTodos, setComposerLiveTodos] = useState<import('../../lib/taskRegistry').OpenCodeTodo[]>([])
   const [composerMention, setComposerMention] = useState<{ start: number; query: string } | null>(null)
@@ -9641,8 +9713,8 @@ export default function OpenTuiApp() {
   const [composerMentionAgents, setComposerMentionAgents] = useState<SessionComposerAgentOption[]>([])
   const [composerMentionIndex, setComposerMentionIndex] = useState(0)
   const [composerMentionDismissedStart, setComposerMentionDismissedStart] = useState<number | null>(null)
-  const [composerMentionAttachments, setComposerMentionAttachments] = useState<SendAttachment[]>([])
-  const [composerPromptParts, setComposerPromptParts] = useState<ComposerPromptPart[]>([])
+  const [composerMentionAttachments, setComposerMentionAttachments] = useWorkspaceState<SendAttachment[]>('composerMentionAttachments', [])
+  const [composerPromptParts, setComposerPromptParts] = useWorkspaceState<ComposerPromptPart[]>('composerPromptParts', [])
   const composerMentionAttachmentsRef = useRef<SendAttachment[]>([])
   const composerPromptPartsRef = useRef<ComposerPromptPart[]>([])
   useEffect(() => { composerMentionAttachmentsRef.current = composerMentionAttachments }, [composerMentionAttachments])
@@ -9737,8 +9809,8 @@ export default function OpenTuiApp() {
   const [localCommandOutputs, setLocalCommandOutputs] = useState<ThreadedMessage[]>([])
   // Queued prompts waiting for the active turn to finish (CLI-style FIFO —
   // a single slot here used to silently overwrite the first queued message).
-  const [queuedComposerSends, setQueuedComposerSends] = useState<QueuedComposerSend[]>(() =>
-    readComposerQueue(isQueuedComposerSend))
+  const [queuedComposerSends, setQueuedComposerSends] = useWorkspaceState<QueuedComposerSend[]>('queuedComposerSends', () =>
+    workspaceContext.runtime.values.get('legacyInitialWorkspace') === true ? readComposerQueue(isQueuedComposerSend) : [])
   const queuedComposerSendsRef = useRef<QueuedComposerSend[]>(queuedComposerSends)
   const [composerQueueDurable, setComposerQueueDurable] = useState(true)
   const [runningRegistryReady, setRunningRegistryReady] = useState(false)
@@ -9748,9 +9820,8 @@ export default function OpenTuiApp() {
   // the newest enqueue/cancel state can be lost or replayed.
   const commitQueuedComposerSends = useEffectEvent((next: QueuedComposerSend[]) => {
     queuedComposerSendsRef.current = next
-    scheduleWriteComposerQueue(next)
-    setComposerQueueDurable(flushComposerQueueWrites())
     setQueuedComposerSends(next)
+    try { workspaceContext.controller.flush(); setComposerQueueDurable(true) } catch { setComposerQueueDurable(false) }
   })
   const activeComposerTurnRequestIdRef = useRef<string | null>(null)
   // Last message delivered INTO the running turn via native steering — shown
@@ -9823,7 +9894,7 @@ export default function OpenTuiApp() {
 
   // Store full Session objects so tabs retain provider context across
   // provider switches (looking them up in `sessions` loses other-provider tabs).
-  const [openTabSessions, setOpenTabSessions] = useState<Session[]>([])
+  const [openTabSessions, setOpenTabSessions] = useWorkspaceState<Session[]>('openTabSessions', [])
 
   const transcriptScrollRef = useRef<ScrollBoxRenderable>(null)
   // Pending scroll correction for a reader window change. 'slide' is a window
@@ -9856,13 +9927,15 @@ export default function OpenTuiApp() {
   // effects skip a cursor that matches it: scrolling it back into view would
   // undo the scroll that moved it.
   const scrollbackSyncedCursorKeyRef = useRef<string | null>(null)
-  const tabReaderPositionsRef = useRef(new Map<string, {
+  const tabReaderPositionsRef = useWorkspaceRef('readerPositions', new Map<string, {
     state: TuiSessionReaderState
     windowStart: number
     scrollTop: number
     anchorKey: string | null
     anchorOffset: number
-  }>())
+    searchQuery?: string
+    searchMatchIndex?: number
+  }>(), true)
   const pendingTabReaderRestoreRef = useRef<{
     sessionKey: string
     position: NonNullable<ReturnType<typeof tabReaderPositionsRef.current.get>>
@@ -9973,7 +10046,8 @@ export default function OpenTuiApp() {
   const remoteCoordinatorKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
 
   const composerFocusBlocked = Boolean(
-    exitConfirmOpen
+    spacesMenuOpen
+    || exitConfirmOpen
     || searchMode
     || sessionSearchMode
     || gitOpen
@@ -10159,17 +10233,19 @@ export default function OpenTuiApp() {
   // `sessions` — that's the case for freshly created pending provider sessions
   // (added to openTabSessions immediately, but only appears in `sessions` once
   // the SDK materialises it on first send).
+  const [workspaceReaderSession, setWorkspaceReaderSession] = useWorkspaceState<Session | null>('readerSession', null)
   const selectedSession = useMemo<Session | null>(
-    () => resolveSelectedSession(
+    () => !workspaceHasSession ? null : resolveSelectedSession(
       selectedSessionKey,
       selectedIndex,
       sessions,
-      openTabSessions,
+      workspaceReaderSession && sessionKey(workspaceReaderSession) === selectedSessionKey ? [...openTabSessions, workspaceReaderSession] : openTabSessions,
       sessionKey,
       (session) => Boolean(session.isPending),
     ),
-    [openTabSessions, selectedIndex, selectedSessionKey, sessions],
+    [openTabSessions, selectedIndex, selectedSessionKey, sessions, workspaceHasSession, workspaceReaderSession],
   )
+  useEffect(() => { if (selectedSession && selectedSession !== workspaceReaderSession) setWorkspaceReaderSession(selectedSession) }, [selectedSession])
   const selectedSessionIdentity = selectedSession ? sessionKey(selectedSession) : null
   useEffect(() => {
     setTranscriptDiffDraft(null)
@@ -11165,6 +11241,7 @@ export default function OpenTuiApp() {
   }, [transcriptIndexByKey, jumpToTranscriptIndex, isScrollbackView])
 
   const selectSidebarSession = useCallback((session: Session) => {
+    setWorkspaceHasSession(true); setWorkspaceLaunched(true)
     setSelectedSessionKey(sessionKey(session))
     setError(null)
     setFocusedPane('sessions')
@@ -11276,7 +11353,7 @@ export default function OpenTuiApp() {
 
   // Git follows the focused split pane when there is one: the popover is
   // cwd-scoped, and the pane you are looking at is the repo you mean.
-  const gitRepoCwd = focusedSplitPaneSession?.cwd ?? sessionDetail?.info?.cwd ?? selectedSession?.cwd ?? null
+  const gitRepoCwd = focusedSplitPaneSession?.cwd ?? sessionDetail?.info?.cwd ?? selectedSession?.cwd ?? workspaceCwd
   // Scopes the git panel's turn list, and follows the same pane-then-selection
   // precedence as the cwd it is read alongside.
   const gitSessionId = focusedSplitPaneSession?.sessionId ?? sessionDetail?.info?.sessionId ?? selectedSession?.sessionId ?? null
@@ -11309,7 +11386,18 @@ export default function OpenTuiApp() {
     [syntaxStyle, theme, renderer],
   )
   const normalizedSessionQuery = sessionSearchQuery.trim().toLowerCase()
-  const searchSidebarSessions = useMemo(() => createSidebarSessionSearch(sessions), [sessions])
+  const spaceSessions = useMemo(() => {
+    if (allProjects) return sessions
+    const paths = new Map<string, string>()
+    const project = canonicalSpacePath(workspaceCwd)
+    return sessions.filter(session => {
+      if (!session.cwd) return false
+      let cwd = paths.get(session.cwd)
+      if (!cwd) { cwd = canonicalSpacePath(session.cwd); paths.set(session.cwd, cwd) }
+      return cwd === project || cwd.startsWith(project + '/')
+    })
+  }, [sessions, allProjects, workspaceCwd])
+  const searchSidebarSessions = useMemo(() => createSidebarSessionSearch(spaceSessions), [spaceSessions])
   const searchedSessionsForSidebar = useMemo(
     () => searchSidebarSessions(normalizedSessionQuery),
     [searchSidebarSessions, normalizedSessionQuery],
@@ -12319,7 +12407,7 @@ export default function OpenTuiApp() {
     const text = renderable?.plainText ?? ''
     const cursor = renderable?.cursorOffset ?? text.length
     setComposerDraft(text)
-    if (composerDraftStorageKeyRef.current) scheduleWriteComposerDraft(composerDraftStorageKeyRef.current, text)
+    if (composerDraftStorageKeyRef.current) writeWorkspaceDraft(composerDraftStorageKeyRef.current, text)
     if (historyIndex !== -1 && text !== (sentHistory[historyIndex]?.text ?? '')) setHistoryIndex(-1)
     if (composerError) setComposerError(null)
     if (composerSendState === 'error') setComposerSendState('idle')
@@ -12614,7 +12702,7 @@ export default function OpenTuiApp() {
   const surfacePanelOnRight = surfacePanelVisible && surfacePanelPlacement === 'right'
   const surfacePanelAtBottom = surfacePanelVisible && surfacePanelPlacement === 'bottom'
   const fullContentHeight = Math.max(
-    height
+    height - 1
     - (fullscreenMode ? 0 : 2)
     - (searchMode || sessionSearchMode ? 4 : fullscreenMode || statusBarInDock ? 0 : 1)
     - (embeddedComposer ? 0 : composerDockHeight)
@@ -13091,15 +13179,15 @@ export default function OpenTuiApp() {
   const sidebarExtraRows = rightSidePanelVisible ? Math.max(surfacePanelHeight - mainContentHeight, 0) : effectiveSurfacePanelRows
   // Extended, the rail outgrows its row, so nothing clips the list to the
   // frame any more: budget the list to the frame's inside.
-  const sidebarRowBudget = Math.max(sidebarExtraRows > 0 ? mainContentHeight + sidebarExtraRows - 2 : mainContentHeight, 4)
+  const sidebarRowBudget = Math.max((sidebarExtraRows > 0 ? mainContentHeight + sidebarExtraRows - 2 : mainContentHeight) - Math.min(4, workspaceContext.controller.getSnapshot().spaces.length) - 3, 4)
   const sidebarInnerWidth = Math.max(sidebarWidth - 5, 17)
   // A provider listed across several instances (ACP agents, accounts) is
   // several stores' sessions, and a row has to say whose it is.
   const showProviderInSessionRows = provider === 'all'
     || new Set(sessions.map((session) => session.providerInstanceId ?? session.provider)).size > 1
   const sidebarSessionCountLabel = normalizedSessionQuery || scratchFilter.hidden > 0 || settledFilter.hidden > 0
-    ? `SESSIONS ${filteredSessionsForSidebar.length}/${Math.max(sessions.length, 0)}`
-    : `SESSIONS ${Math.max(sessions.length, 0)}`
+    ? `SESSIONS ${filteredSessionsForSidebar.length}/${spaceSessions.length}`
+    : `SESSIONS ${spaceSessions.length}`
   const sidebarProviderLabel = provider === 'all'
     ? 'ALL'
     : providerInstances.find((instance) => instance.providerInstanceId === providerInstanceId)?.label.toUpperCase() ?? formatProviderLabel(provider)
@@ -14099,8 +14187,8 @@ export default function OpenTuiApp() {
     if (exitInProgressRef.current) return
     exitInProgressRef.current = true
     setExitCleanupInProgress(true)
-    scheduleWriteComposerQueue(queuedComposerSendsRef.current)
-    flushComposerQueueWrites()
+    setQueuedComposerSends(queuedComposerSendsRef.current)
+    try { workspaceContext.controller.flush() } catch { /* exit reports existing errors */ }
 
     const cleanupPromise = activeComposerSendCleanupRef.current
     const controller = composerAbortRef.current
@@ -14400,6 +14488,7 @@ export default function OpenTuiApp() {
   // providers first (carrying the target session through) so cross-provider
   // tab navigation works without losing the tab's context.
   const selectTabSession = useEffectEvent((session: Session) => {
+    setWorkspaceHasSession(true); setWorkspaceLaunched(true)
     const targetProvider: ProviderSelection = session.provider ?? 'claude'
     // A tab from another instance than the one the list is narrowed to is not
     // in that list either; widen to the whole provider.
@@ -15232,7 +15321,7 @@ export default function OpenTuiApp() {
 
   const submitNewSession = useEffectEvent(() => {
     if (newSessionBusy) return
-    void startFreshSession(newSessionProvider, newSessionCwd.trim() || process.cwd())
+    void startFreshSession(newSessionProvider, newSessionCwd.trim() || workspaceCwd)
   })
 
   const pendingForkSendRef = useRef<{ key: string; text: string } | null>(null)
@@ -15289,7 +15378,7 @@ export default function OpenTuiApp() {
             isPending: false,
           }
           // Opening the fork restores its own draft, so the prompt goes there.
-          scheduleWriteComposerDraft(sessionKey(fork), chosen.text)
+          writeWorkspaceDraft(sessionKey(fork), chosen.text)
           await openCreatedSession(fork)
         }
         if (point === null) restorePrompt()
@@ -15358,6 +15447,7 @@ export default function OpenTuiApp() {
   // Create a session and open it with the composer focused — the New Session
   // dialog's action, and what /clear and /new do, as in the native CLIs.
   const startFreshSession = useEffectEvent(async (targetProvider: AgentProvider, cwd: string) => {
+    setWorkspaceHasSession(true); setWorkspaceLaunched(true)
     if (newSessionBusy) return
     setNewSessionBusy(true)
     {
@@ -15428,7 +15518,7 @@ export default function OpenTuiApp() {
         target: { provider: created.provider, sessionId: created.sessionId },
         strategy: 'context_handoff',
       })
-      scheduleWriteComposerDraft(sessionKey(next), prompt)
+      writeWorkspaceDraft(sessionKey(next), prompt)
       await openCreatedSession(next)
       showNotice('info', `Continuing on ${formatProviderLabel(created.provider)} — the handoff is in the composer; the original is unchanged`, 6000)
     } catch (err) {
@@ -16575,7 +16665,7 @@ export default function OpenTuiApp() {
       composerTextareaRef.current?.setText('')
       composerTextareaRef.current?.extmarks.clear()
       setComposerDraft('')
-      if (composerDraftStorageKeyRef.current) scheduleWriteComposerDraft(composerDraftStorageKeyRef.current, '')
+      if (composerDraftStorageKeyRef.current) writeWorkspaceDraft(composerDraftStorageKeyRef.current, '')
       setComposerMention(null)
       setComposerMentionResults([])
       setComposerMentionDismissedStart(null)
@@ -17863,10 +17953,12 @@ export default function OpenTuiApp() {
         const configuredInstanceId = instanceState.choices.some((choice) => choice.provider === configuredProvider && choice.providerInstanceId === instanceState.selected)
           ? instanceState.selected
           : null
-        providerInstanceIdRef.current = configuredInstanceId
-        setProviderInstanceId(configuredInstanceId)
+        const bootProvider = workspaceContext.runtime.restoredKeys.has('provider') ? provider : configuredProvider
+        const bootInstance = workspaceContext.runtime.restoredKeys.has('providerInstanceId') ? providerInstanceId : configuredInstanceId
+        providerInstanceIdRef.current = bootInstance
+        setProviderInstanceId(bootInstance)
         setProviderInstances(instanceState.choices)
-        setProvider(configuredProvider)
+        setProvider(bootProvider)
         setRailVisible(configuredRailVisible)
         setFocusMode(configuredFocusMode)
         setStickyHeaders(configuredStickyHeaders)
@@ -17880,11 +17972,13 @@ export default function OpenTuiApp() {
         setSidebarWidthPreference(configuredSidebarWidth)
         setShowToolCalls(configuredShowToolCalls)
         setVelocityScrollEnabled(configuredVelocityScroll)
-        setSplitPaneCount(configuredSplitPanes)
-        setSplitOrientation(configuredSplitOrientation)
-        setSplitReaderShare(configuredSplitReaderShare)
+        if (workspaceContext.runtime.values.get('legacyInitialWorkspace') === true && !workspaceContext.runtime.restoredKeys.has('splitPaneCount')) {
+          setSplitPaneCount(configuredSplitPanes)
+          setSplitOrientation(configuredSplitOrientation)
+          setSplitReaderShare(configuredSplitReaderShare)
+        }
         if (!configuredRailVisible || configuredFocusMode) setFocusedPane('messages')
-        await refreshSessions(configuredProvider, false, true)
+        await refreshSessions(bootProvider, true, true)
       } catch (err) {
         if (cancelled) return
         setError(err instanceof Error ? err.message : 'Failed to initialize OpenTUI')
@@ -18006,18 +18100,18 @@ export default function OpenTuiApp() {
     const previousKey = composerDraftStorageKeyRef.current
     if (previousKey && previousKey !== key) {
       const outgoingDraft = composerTextareaRef.current?.plainText ?? composerDraftRef.current
-      scheduleWriteComposerDraft(previousKey, outgoingDraft)
-      scheduleWriteComposerDraftParts(previousKey, composerPromptPartsRef.current)
+      writeWorkspaceDraft(previousKey, outgoingDraft)
+      writeWorkspaceDraftParts(previousKey, composerPromptPartsRef.current)
       // Attachments are not persisted, so clear them rather than leaking them
       // into a different session's composer.
       setComposerMentionAttachments([])
       composerTextareaRef.current?.extmarks.clear()
     }
     composerDraftStorageKeyRef.current = key
-    const saved = readComposerDraft(key)
+    const saved = readWorkspaceDraft(key)
     // The content behind the draft's placeholders, restored with it: text
     // alone brought back "[Pasted ~200 lines]" with nothing behind it.
-    const savedParts = (readComposerDraftParts(key) as ComposerPromptPart[])
+    const savedParts = (readWorkspaceDraftParts(key) as ComposerPromptPart[])
       .filter((part) => part && typeof part.marker === 'string' && saved.includes(part.marker))
     composerPromptPartsRef.current = savedParts
     setComposerPromptParts(savedParts)
@@ -18032,7 +18126,7 @@ export default function OpenTuiApp() {
   // Persist the placeholder content with the draft whenever it changes.
   useEffect(() => {
     const key = composerDraftStorageKeyRef.current
-    if (key) scheduleWriteComposerDraftParts(key, composerPromptParts)
+    if (key) writeWorkspaceDraftParts(key, composerPromptParts)
   }, [composerPromptParts])
 
   useEffect(() => {
@@ -18138,6 +18232,7 @@ export default function OpenTuiApp() {
           expandedKeys: [...expandedCardKeys],
           collapsedKeys: [...collapsedCardKeys],
         },
+        searchQuery, searchMatchIndex,
         windowStart: readerWindowGaugeRef.current.start,
         scrollTop,
         anchorKey,
@@ -18171,8 +18266,8 @@ export default function OpenTuiApp() {
     setUnreadBoundaryKey(null)
     setResumeMarkerKey(null)
     setSearchMode(false)
-    setSearchQuery('')
-    setSearchMatchIndex(0)
+    setSearchQuery(saved?.searchQuery ?? '')
+    setSearchMatchIndex(saved?.searchMatchIndex ?? 0)
     setRestoredReaderState({
       sessionKey: committedSessionKey,
       loaded: saved !== undefined || committedSessionKey == null,
@@ -18191,7 +18286,7 @@ export default function OpenTuiApp() {
 
     void (async () => {
       try {
-        const state = await readTuiSessionReaderState(committedSessionKey)
+        const state = await readTuiSessionReaderState(workspaceStorageKey(workspaceId, committedSessionKey))
         if (cancelled) return
         setRestoredReaderState({
           sessionKey: committedSessionKey,
@@ -18392,7 +18487,7 @@ export default function OpenTuiApp() {
         collapsedKeys: [...collapsedCardKeys].filter((key) => validKeys.has(key)),
       }
       readerStatePersistSignatureRef.current = persistSignature
-      void writeTuiSessionReaderState(selectedSessionKey, persistState).catch((err) => {
+      void writeTuiSessionReaderState(workspaceStorageKey(workspaceId, selectedSessionKey), persistState).catch((err) => {
         setError(err instanceof Error ? err.message : 'Failed to store reader position')
       })
     }, 150)
@@ -18433,14 +18528,13 @@ export default function OpenTuiApp() {
     })
   })
 
-  // A pending prefix must not survive into the composer: overlay and composer
-  // key handlers run before the chord branch, so a chord left dangling there
-  // would swallow the next reader keystroke long after the user moved on.
+  // Entering the composer cancels an outgoing reader chord. A fresh Ctrl+B
+  // while editing can still open the workspace switcher or window commands.
   useEffect(() => {
     if (!composerActive) return
     if (splitChordPending) setSplitChordPending(false)
     if (commandChordPending) setCommandChordPending(false)
-  }, [commandChordPending, composerActive, splitChordPending])
+  }, [composerActive])
 
   // Prefix chords are intentionally short-lived. A dropped key event (remote
   // shell, terminal multiplexer, focus change) must not leave the next ordinary
@@ -19320,9 +19414,10 @@ export default function OpenTuiApp() {
 
   useEffect(() => {
     let cancelled = false
-    void readTuiSurfacePanelPlacement().then((placement) => { if (!cancelled) setSurfacePanelPlacement(placement) }).catch(() => {})
+    void readTuiSurfacePanelPlacement().then((placement) => { if (!cancelled && !workspaceContext.runtime.restoredKeys.has('surfacePanelPlacement')) setSurfacePanelPlacement(placement) }).catch(() => {})
     void readTuiWindowArrangement().then((stored) => {
       if (cancelled) return
+      if (workspaceContext.runtime.restoredKeys.has('splitArrangement') || workspaceContext.runtime.values.get('legacyInitialWorkspace') !== true) return
       setSplitArrangement(stored.arrangement)
       setSplitReaderLast(stored.readerLast)
       setSplitSecondaryShare(stored.secondaryShare)
@@ -19394,7 +19489,7 @@ export default function OpenTuiApp() {
     })
     const next = renderable.plainText
     setComposerDraft(next)
-    if (composerDraftStorageKeyRef.current) scheduleWriteComposerDraft(composerDraftStorageKeyRef.current, next)
+    if (composerDraftStorageKeyRef.current) writeWorkspaceDraft(composerDraftStorageKeyRef.current, next)
     setComposerHistoryOpen(false)
     setComposerHistoryIndex(0)
   })
@@ -19494,7 +19589,7 @@ export default function OpenTuiApp() {
     renderable.setText(next)
     renderable.cursorOffset = cursor + textToInsert.length
     setComposerDraft(next)
-    if (composerDraftStorageKeyRef.current) scheduleWriteComposerDraft(composerDraftStorageKeyRef.current, next)
+    if (composerDraftStorageKeyRef.current) writeWorkspaceDraft(composerDraftStorageKeyRef.current, next)
     setComposerHistoryOpen(false)
     setComposerHistoryIndex(0)
   })
@@ -19578,7 +19673,7 @@ export default function OpenTuiApp() {
     setComposerHistoryIndex(0)
     setComposerStashOpen(false)
     setComposerStashIndex(0)
-    if (composerDraftStorageKeyRef.current) scheduleWriteComposerDraft(composerDraftStorageKeyRef.current, '')
+    if (composerDraftStorageKeyRef.current) writeWorkspaceDraft(composerDraftStorageKeyRef.current, '')
   })
 
   // The stash file is written the way the follow-up queue is: in the
@@ -19672,7 +19767,7 @@ export default function OpenTuiApp() {
   })
 
   usePaste((event) => {
-    if (windowPickerOpen || windowSwitcherOpen || windowBroadcastOpen) return // the focused window input owns bracketed paste
+    if (spacesMenuOpen || windowPickerOpen || windowSwitcherOpen || windowBroadcastOpen) return // the focused window input owns bracketed paste
     // A shell with the keyboard takes the paste too, bracketed if it asked.
     const pasteKey = { name: 'paste', ctrl: false, shift: false, sequence: Buffer.from(event.bytes).toString('utf8') }
     if (focusedWindowSurface && focusedWindowSurfaceKind === 'terminal' && windowSurfaceCaptureRef.current.get(focusedWindowSurface) === 'terminal') {
@@ -19986,9 +20081,9 @@ export default function OpenTuiApp() {
     panel: surfacePanel,
     panelOpen: surfacePanelOpen,
   }))
-  const [windowHistory] = useState(() => new WindowHistory<ReturnType<typeof captureWindowLayout>>(
+  const [windowHistory] = useWorkspaceState('windowHistory', () => new WindowHistory<ReturnType<typeof captureWindowLayout>>(
     (snapshot) => JSON.stringify(snapshot.layout),
-  ))
+  ), false)
   const checkpointWindowLayout = useEffectEvent(() => {
     windowHistory.checkpoint(captureWindowLayout())
   })
@@ -20736,7 +20831,9 @@ export default function OpenTuiApp() {
   // middle of the reader (relative to the reader, so its edges stay reachable
   // when panes fill the rest of the area).
   const dropTargetAt = (point: { x: number; y: number }): { zone: WindowDropZone | null; pane: number | null; insert: WindowDropZone | null; title: boolean } => {
-    for (let index = 0; index < windowItems.length; index += 1) {
+    for (let index = 0; index < visibleSplitPaneCount; index += 1) {
+      const slot = renderer.root.findDescendantById(`split-pane:${index}`)
+      if (!slot || !slot.visible) continue
       const pane = rectOf(`split-pane:${index}`)
       if (!pane || !inside(pane, point)) continue
       // The title row adds a tab; a pane's own edges insert beside it; its middle replaces it.
@@ -21789,6 +21886,9 @@ export default function OpenTuiApp() {
           showNotice('info', 'Stopped watching the run · windows remain open')
         } else showNotice('info', 'No Coordinator run is being watched')
         break
+      case 'spaces-switcher':
+        openSpaces()
+        break
       case 'window-undo':
         undoWindowLayout()
         break
@@ -21976,6 +22076,66 @@ export default function OpenTuiApp() {
       action()
     }
     if (key.name === 'escape' && cancelPointerGesture()) { key.preventDefault(); key.stopPropagation(); showNotice('info', 'Drag cancelled'); return }
+    if (spacesMenuOpen) { if (spacesKeyRef.current?.(key) !== false) { key.preventDefault(); key.stopPropagation() } return }
+    if (!workspaceLaunched && !key.ctrl && (key.name === 'return' || /^[1-4]$/.test(sequence))) {
+      handled(() => {
+        setWorkspaceLaunched(true)
+        if (sequence === '3') openSurfaceWindow('terminal')
+        else if (sequence === '4') setWindowPickerOpen(true)
+        else { setWorkspaceHasSession(true); setFocusedPane('sessions'); if (sequence === '2') { setNewSessionCwd(workspaceCwd); setNewSessionModalOpen(true) } }
+      }); return
+    }
+    if (splitChordPending) {
+      handled(() => {
+        setSplitChordPending(false)
+        if (key.name === 'escape' || isCtrl('c') || isCtrl('g')) {
+          showNotice('info', 'Split chord cancelled')
+          return
+        }
+        // % and " are tmux's split keys; v/s are the vim-shaped aliases.
+        if (sequence === 'S') { openSpaces(); return }
+        if (sequence === '%' || sequence === 'v') { addSplitPane('columns'); return }
+        if (sequence === '"' || sequence === 's') { addSplitPane('rows'); return }
+        if (sequence === 'r') { rotateSplitOrientation(); return }
+        // Ratio keys: < gives the reader less of the shared axis, > more, = even.
+        if (sequence === '<') { resizeSplitReader(-1); return }
+        if (sequence === '>') { resizeSplitReader(1); return }
+        if (sequence === '=') { resizeSplitReader(0); return }
+        if (sequence === 'x') { if (focusedWindowSurface) closeSurfaceWindow(focusedWindowSurface); else closeSplitPane(); return }
+        if (sequence === 'u') { undoWindowLayout(); return }
+        if (sequence === 'a') { jumpToNextWindowAttention(); return }
+        if (sequence === 'p') { setWindowSwitcherOpen(true); return }
+        if (sequence === 'b') { setWindowBroadcastOpen(true); return }
+        if (sequence === 'w') { setWindowPickerOpen(true); return }
+        if (sequence === 'z') { toggleSplitPanes(); return }
+        // Focus movement, tmux-shaped: o/→/tab walk forward, ← walks back,
+        // ; flips reader↔last pane, digits jump straight to a pane.
+        if (sequence === 'o' || key.name === 'tab') { cycleSplitFocus(1); return }
+        if (key.name === 'left' || key.name === 'right' || key.name === 'up' || key.name === 'down') {
+          if (key.shift) swapWindowInDirection(key.name)
+          else focusWindowInDirection(key.name)
+          return
+        }
+        if (sequence === 'm') { toggleWindowZoom(); return }
+        if (sequence === 't') { tabFocusedWindow(); return }
+        if (sequence === ',') { stepWindowTab(-1); return }
+        if (sequence === '.') { stepWindowTab(1); return }
+        if (sequence === '!') { if (focusedWindowItem) breakOutWindowTab(windowItemKey(focusedWindowItem)); else showNotice('info', 'Focus a window that has tabs first'); return }
+        if (sequence === 'f') { toggleFloatingFocused(); return }
+        if (sequence === '+') { resizeSecondaryDivider(1); return }
+        if (sequence === '-' || sequence === '_') { resizeSecondaryDivider(-1); return }
+        if (sequence === '[') { resizeFocusedWindow(-1); return }
+        if (sequence === ']') { resizeFocusedWindow(1); return }
+        if (sequence === ';') { toggleSplitFocus(); return }
+        if (/^[1-9]$/.test(sequence)) { focusSplitPane(Number(sequence) - 1); return }
+        if (sequence === 'n') { cycleSplitPaneSession(); return }
+        if (sequence === '?') { setChordHelp({ map: SPLIT_CHORD_MAP, dismissOnKey: true }); return }
+        showNotice('info', chordUnknownKeyNotice(SPLIT_CHORD_MAP, sequence || key.name))
+      })
+      return
+    }
+
+    if (composerActive && composerSendState !== 'sending' && isCtrl('b')) { handled(() => setSplitChordPending(true)); return }
     if (isCtrlShift('v') && composerActive && !isKeyRepeat) {
       handled(() => toggleVoice())
       return
@@ -23292,55 +23452,6 @@ export default function OpenTuiApp() {
     // Must sit at the very top of the non-composer path: the pending-chord
     // branch swallows the command key, and anything above it (notably the
     // q/Esc quit handler) would otherwise steal `x`, `o` or a cancelling Esc.
-    if (splitChordPending) {
-      handled(() => {
-        setSplitChordPending(false)
-        if (key.name === 'escape' || isCtrl('c') || isCtrl('g')) {
-          showNotice('info', 'Split chord cancelled')
-          return
-        }
-        // % and " are tmux's split keys; v/s are the vim-shaped aliases.
-        if (sequence === '%' || sequence === 'v') { addSplitPane('columns'); return }
-        if (sequence === '"' || sequence === 's') { addSplitPane('rows'); return }
-        if (sequence === 'r') { rotateSplitOrientation(); return }
-        // Ratio keys: < gives the reader less of the shared axis, > more, = even.
-        if (sequence === '<') { resizeSplitReader(-1); return }
-        if (sequence === '>') { resizeSplitReader(1); return }
-        if (sequence === '=') { resizeSplitReader(0); return }
-        if (sequence === 'x') { if (focusedWindowSurface) closeSurfaceWindow(focusedWindowSurface); else closeSplitPane(); return }
-        if (sequence === 'u') { undoWindowLayout(); return }
-        if (sequence === 'a') { jumpToNextWindowAttention(); return }
-        if (sequence === 'p') { setWindowSwitcherOpen(true); return }
-        if (sequence === 'b') { setWindowBroadcastOpen(true); return }
-        if (sequence === 'w') { setWindowPickerOpen(true); return }
-        if (sequence === 'z') { toggleSplitPanes(); return }
-        // Focus movement, tmux-shaped: o/→/tab walk forward, ← walks back,
-        // ; flips reader↔last pane, digits jump straight to a pane.
-        if (sequence === 'o' || key.name === 'tab') { cycleSplitFocus(1); return }
-        if (key.name === 'left' || key.name === 'right' || key.name === 'up' || key.name === 'down') {
-          if (key.shift) swapWindowInDirection(key.name)
-          else focusWindowInDirection(key.name)
-          return
-        }
-        if (sequence === 'm') { toggleWindowZoom(); return }
-        if (sequence === 't') { tabFocusedWindow(); return }
-        if (sequence === ',') { stepWindowTab(-1); return }
-        if (sequence === '.') { stepWindowTab(1); return }
-        if (sequence === '!') { if (focusedWindowItem) breakOutWindowTab(windowItemKey(focusedWindowItem)); else showNotice('info', 'Focus a window that has tabs first'); return }
-        if (sequence === 'f') { toggleFloatingFocused(); return }
-        if (sequence === '+') { resizeSecondaryDivider(1); return }
-        if (sequence === '-' || sequence === '_') { resizeSecondaryDivider(-1); return }
-        if (sequence === '[') { resizeFocusedWindow(-1); return }
-        if (sequence === ']') { resizeFocusedWindow(1); return }
-        if (sequence === ';') { toggleSplitFocus(); return }
-        if (/^[1-9]$/.test(sequence)) { focusSplitPane(Number(sequence) - 1); return }
-        if (sequence === 'n') { cycleSplitPaneSession(); return }
-        if (sequence === '?') { setChordHelp({ map: SPLIT_CHORD_MAP, dismissOnKey: true }); return }
-        showNotice('info', chordUnknownKeyNotice(SPLIT_CHORD_MAP, sequence || key.name))
-      })
-      return
-    }
-
     if (isCtrl('b')) {
       handled(() => {
         setCommandChordPending(false)
@@ -25547,6 +25658,21 @@ export default function OpenTuiApp() {
   // slot, hidden while it is a background tab or past what fits, or floating.
   // React keeps a child mounted while its key stays under the same parent, and
   // a mounted surface keeps its view — the file shown, the diff's cursor, the PR.
+  const [, setSurfaceGeometryEpoch] = useState(0)
+  useLayoutEffect(() => {
+    let signature = ''
+    const measure = () => {
+      const area = rectOf('window-area')
+      const slots = Array.from({ length: visibleSplitPaneCount }, (_, index) => rectOf(`split-pane:${index}`))
+      const next = JSON.stringify([area, slots])
+      if (next === signature) return
+      signature = next
+      setSurfaceGeometryEpoch(epoch => epoch + 1)
+    }
+    renderer.root.on(LayoutEvents.LAYOUT_CHANGED, measure)
+    return () => { renderer.root.off(LayoutEvents.LAYOUT_CHANGED, measure) }
+  }, [renderer, visibleSplitPaneCount])
+
   const renderSurfaceLayer = () => {
     const area = { width: readerAreaWidth, height: windowAreaHeight }
     const rects = windowLayoutRects(fittedWindows, { ...area, orientation: splitOrientation, readerLast: splitReaderLast })
@@ -25554,6 +25680,11 @@ export default function OpenTuiApp() {
       const index = fittedWindowKeys.indexOf(key)
       if (index < 0) return null
       if (zoomedIndex === index) return { index, rect: { x: 0, y: 0, ...area } }
+      const parent = rectOf('window-area')
+      const slot = rectOf(`split-pane:${index}`)
+      if (parent && slot && slot.width > 0 && slot.height > 0) {
+        return { index, rect: { x: slot.x - parent.x, y: slot.y - parent.y, width: slot.width, height: slot.height } }
+      }
       const rect = rects[index + 1]
       return rect ? { index, rect } : null
     }
@@ -25702,10 +25833,34 @@ export default function OpenTuiApp() {
     return visibleTabSessions[scrollOffset + Math.floor((x - instance.x) / tabWidth)] ?? null
   }
 
+  useLayoutEffect(() => {
+    const capture = () => {
+      captureReaderPositionRef.current?.()
+      const text = composerTextareaRef.current?.plainText ?? composerDraftRef.current
+      if (composerDraftStorageKeyRef.current) {
+        writeWorkspaceDraft(composerDraftStorageKeyRef.current, text)
+        writeWorkspaceDraftParts(composerDraftStorageKeyRef.current, composerPromptPartsRef.current)
+      }
+      setComposerDraft(text)
+      if (selectedSession) setOpenTabSessions(current => current.some(tab => sessionKey(tab) === sessionKey(selectedSession)) ? current : [...current, selectedSession])
+    }
+    const leave = () => {
+      capture()
+      surfaceProcessCaptureRef.current = 'none'
+      windowSurfaceCaptureRef.current.clear()
+      composerAbortRef.current?.abort()
+      setComposerSendState('idle')
+      try { workspaceContext.controller.flush() } catch { /* next update retries */ }
+    }
+    workspaceContext.runtime.flushers.add(capture)
+    workspaceContext.runtime.beforeLeave = leave
+    return () => { workspaceContext.runtime.flushers.delete(capture); if (workspaceContext.runtime.beforeLeave === leave) workspaceContext.runtime.beforeLeave = null }
+  })
+
   // One surface's content, for the side panel or a window in the layout.
   // `slot` is the window id when the surface is a window: its key handler and
   // capture are then that window's own, not the side panel's.
-  const renderSurfaceBody = (kind: RightPanelSurfaceKind, box: { width: number; height: number }, close: () => void, focused: boolean, slot?: WindowSurfaceId): React.ReactNode => {
+  const renderSurfaceBodyInner = (kind: RightPanelSurfaceKind, box: { width: number; height: number }, close: () => void, focused: boolean, slot?: WindowSurfaceId): React.ReactNode => {
     type SurfaceKeyHandler = (key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => unknown
     const keysReady = (panelRef: { current: SurfaceKeyHandler | null }) => (handler: SurfaceKeyHandler) => {
       if (slot) windowSurfaceKeysRef.current.set(slot, handler)
@@ -25840,6 +25995,8 @@ export default function OpenTuiApp() {
     }
   }
 
+  const renderSurfaceBody = (kind: RightPanelSurfaceKind, box: { width: number; height: number }, close: () => void, focused: boolean, slot?: WindowSurfaceId) => <WorkspaceViewContext.Provider value={`surface:${slot ?? 'panel'}:${kind}`}>{renderSurfaceBodyInner(kind, box, close, focused, slot)}</WorkspaceViewContext.Provider>
+
   // One element for both placements, so the panel keeps its state when it moves.
   const surfacePanelElement = surfacePanelVisible ? (
     <SurfacePanel
@@ -25897,7 +26054,39 @@ export default function OpenTuiApp() {
 
   return (
     <box width={width} height={height} flexDirection="column" backgroundColor={theme.bg}>
-      <TeammatesAttention theme={theme} width={width} session={selectedSession} />
+      {spacesMenuOpen ? <SpacesManager controller={workspaceContext.controller} theme={theme} width={width} height={height} initialId={spacesMenuSelection} closeId={spacesCloseId} onClose={() => setSpacesMenuOpen(false)} onKeyHandlerReady={handler => { spacesKeyRef.current = handler }} /> : null}
+      <WorkspaceTabs theme={theme} width={width} onManage={openSpaces} />
+      {floatingItem && floatingWindow && !fullscreenMode && !windowSurfacePeek ? (() => {
+            const rect = floatingWindow.rect
+            const size = { width: rect.width, height: rect.height, boxHeight: rect.height }
+            return (
+              <box id="floating-window" position="absolute" left={(windowAreaRef.current?.x ?? sidebarWidth) + rect.x} top={(windowAreaRef.current?.y ?? (tabsEnabled ? 2 : 1)) + rect.y} width={rect.width} height={rect.height}
+                // Over a floating surface (drawn by the surface layer at 41) it is
+                // only its controls; over a session it is the window and opaque —
+                // an unpainted cell would show the windows underneath through it.
+                zIndex={50}
+                backgroundColor={floatingItem.kind === 'surface' ? undefined : theme.bg}
+                onMouseDown={(event) => {
+                  const frame = rectOf('floating-window')
+                  if (floatingItem.kind === 'surface' && event.button === 0 && frame && event.y === frame.y) startFloatGesture('move', event)
+                }}
+                onMouseDrag={(event: { x: number; y: number }) => moveFloatGesture(event)}
+                onMouseUp={(event: { x: number; y: number }) => endFloatGesture(event)}
+              >
+                {floatingItem.kind === 'session' ? <text position="absolute" left={0} top={0} width={rect.width} height={rect.height} fg={theme.bg} bg={theme.bg} selectable={false} wrapMode="none">{Array(rect.height).fill(' '.repeat(rect.width)).join('\n')}</text> : null}
+                {floatingItem.kind === 'session' ? renderSplitPane(floatingItem.session, FLOATING_PANE_INDEX, size) : null}
+                <box position="absolute" top={0} right={floatingItem.kind === 'session' ? 8 : 15} height={1} flexDirection="row" zIndex={46}>
+                  <WindowButton id="floating-dock" label=" ⊞ dock " theme={theme} onPress={() => dockFloatingWindow()} />
+                </box>
+                <box id="floating-resize" position="absolute" bottom={0} right={0} width={1} height={1} zIndex={46}
+                  onMouseDown={(event) => { if (event.button === 0) startFloatGesture('resize', event) }}
+                >
+                  <text fg={theme.cyan} selectable={false}>◢</text>
+                </box>
+              </box>
+            )
+          })() : null}
+      <TeammatesAttention theme={theme} width={width} top={1} session={selectedSession} />
       <box
         flexGrow={surfacePanelAtBottom ? 0 : 1}
         flexShrink={surfacePanelAtBottom ? 0 : undefined}
@@ -25974,6 +26163,8 @@ export default function OpenTuiApp() {
                 </box>
               </box>
             ) : null}
+            <SpacesRail theme={theme} width={sidebarWidth} onManage={openSpaces} />
+            <box height={1} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); setAllProjects(value => !value) } }}><text fg={theme.dim}>{allProjects ? 'All projects · click to scope' : 'Project sessions · click for all'}</text></box>
             <box flexGrow={1} paddingX={1}>
               {sidebarView === 'coordinator' ? (
                 <Slot
@@ -26093,7 +26284,13 @@ export default function OpenTuiApp() {
               : stackedSplit ? (splitReaderLast ? 'column-reverse' : 'column') : (splitReaderLast ? 'row-reverse' : 'row')}
             flexGrow={1}
           >
-          {windowSurfacePeek ? (
+          {!workspaceLaunched ? (
+            <WorkspaceLauncher theme={theme} cwd={workspaceCwd}
+              onOpenSession={() => { setWorkspaceLaunched(true); setWorkspaceHasSession(true); setFocusedPane('sessions') }}
+              onNewAgent={() => { setWorkspaceLaunched(true); setWorkspaceHasSession(true); setNewSessionCwd(workspaceCwd); setNewSessionModalOpen(true) }}
+              onTerminal={() => { setWorkspaceLaunched(true); openSurfaceWindow('terminal') }}
+              onLayout={() => { setWorkspaceLaunched(true); setWindowPickerOpen(true) }} />
+          ) : windowSurfacePeek ? (
             // The surface layer draws the peeked window over the whole area.
             <box visible={false}>{readerFrameNode}</box>
           ) : arrangedVisible && splitArrangement === 'grid' && arrangedLayout.secondary ? (
@@ -26152,31 +26349,7 @@ export default function OpenTuiApp() {
             </>
           )}
           {renderSurfaceLayer()}
-          {floatingItem && floatingWindow && !fullscreenMode && !windowSurfacePeek ? (() => {
-            const rect = floatingWindow.rect
-            const size = { width: rect.width, height: rect.height, boxHeight: rect.height }
-            return (
-              <box id="floating-window" position="absolute" left={rect.x} top={rect.y} width={rect.width} height={rect.height}
-                // Over a floating surface (drawn by the surface layer at 41) it is
-                // only its controls; over a session it is the window and opaque —
-                // an unpainted cell would show the windows underneath through it.
-                zIndex={floatingItem.kind === 'surface' ? 42 : 40}
-                backgroundColor={floatingItem.kind === 'surface' ? undefined : theme.bg}
-                onMouseDrag={(event: { x: number; y: number }) => moveFloatGesture(event)}
-                onMouseUp={(event: { x: number; y: number }) => endFloatGesture(event)}
-              >
-                {floatingItem.kind === 'session' ? renderSplitPane(floatingItem.session, FLOATING_PANE_INDEX, size) : null}
-                <box position="absolute" top={0} right={floatingItem.kind === 'session' ? 8 : 15} height={1} flexDirection="row" zIndex={46}>
-                  <WindowButton id="floating-dock" label=" ⊞ dock " theme={theme} onPress={() => dockFloatingWindow()} />
-                </box>
-                <box id="floating-resize" position="absolute" bottom={0} right={0} width={1} height={1} zIndex={46}
-                  onMouseDown={(event) => { if (event.button === 0) startFloatGesture('resize', event) }}
-                >
-                  <text fg={theme.cyan} selectable={false}>◢</text>
-                </box>
-              </box>
-            )
-          })() : null}
+
           </box>
         </box>
 
