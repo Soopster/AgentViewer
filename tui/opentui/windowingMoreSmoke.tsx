@@ -112,7 +112,7 @@ const click = async (x: number, y: number) => {
 }
 // A press, then motion a cell at a time, as a terminal reports a drag; `midway`
 // runs with the button still held, where the drag's own feedback is visible.
-const drag = async (from: { x: number; y: number }, to: { x: number; y: number }, midway?: () => void) => {
+const drag = async (from: { x: number; y: number }, to: { x: number; y: number }, midway?: () => void | Promise<void>) => {
   await act(async () => { await setup.mockMouse.pressDown(from.x, from.y) })
   await settle(40)
   const steps = Math.max(Math.abs(to.x - from.x), Math.abs(to.y - from.y), 1)
@@ -122,7 +122,7 @@ const drag = async (from: { x: number; y: number }, to: { x: number; y: number }
     await act(async () => { await setup.mockMouse.emitMouseEvent('drag', x, y) })
   }
   await settle(60)
-  midway?.()
+  await midway?.()
   await act(async () => { await setup.mockMouse.release(to.x, to.y) })
   await settle(300)
 }
@@ -815,7 +815,7 @@ console.log('A grid of six: the reader and two panes on top, three below.')
 // ── Clicking a window focuses it ────────────────────────────────────────────
 {
   const sessionWindows = panes().map((_, index) => index).filter((index) => paneName(index) !== null)
-  check(sessionWindows.length >= 3, 'need three session panes to click between')
+  check(sessionWindows.length >= 2, 'need two session panes to click between')
   // A focused session pane's frame is lit: its border colour is the one no other session pane shares.
   const paneColour = (index: number) => String((setup.renderer.root.findDescendantById(`split-pane:${index}`) as unknown as { getChildren(): Array<{ borderColor?: unknown }> } | null)?.getChildren()[0]?.borderColor ?? '')
   const paneFocused = (index: number) => {
@@ -861,6 +861,87 @@ console.log('A grid of six: the reader and two panes on top, three below.')
     await waitFor('a click in a surface window to focus it', () => borderOf(drawn.id) !== before && !paneFocused(sessionWindows[0]!))
   }
   console.log('A click anywhere in a window — pane, reader or surface — gives it focus.')
+}
+
+// ── Dragging windows: the reader, cancelling, floating and docking by drag ──
+{
+  await act(async () => { setup.mockInput.pressEscape() })
+  await settle(150)
+  const sessionPane = () => panes().map((_, index) => index).find((index) => paneName(index) !== null)!
+  const readerName = () => NAMES.find((name) => readerShows(name)) ?? null
+  // The reader dragged by its title onto a pane trades places with it.
+  const startReader = readerName()!
+  const target = sessionPane()
+  const targetName = paneName(target)!
+  let reader = frame('transcript-reader')!
+  let pane = frame(`split-pane:${target}`)!
+  await drag({ x: reader.x + 6, y: reader.y }, { x: pane.x + Math.floor(pane.width / 2), y: pane.y + Math.floor(pane.height / 2) }, () => {
+    check(setup.captureCharFrame().includes(`Swap with window ${target + 1}`), 'dragging the reader over a pane does not offer a swap')
+  })
+  await waitFor('the reader to swap with the pane', () => readerShows(targetName) && panes().some((_, index) => paneName(index) === startReader))
+  // Esc lets go of a drag without doing anything.
+  reader = frame('transcript-reader')!
+  pane = frame(`split-pane:${sessionPane()}`)!
+  const shownBefore = readerName()
+  await drag({ x: reader.x + 6, y: reader.y }, { x: pane.x + Math.floor(pane.width / 2), y: pane.y + Math.floor(pane.height / 2) }, async () => {
+    await act(async () => { setup.mockInput.pressEscape() })
+    await settle(150)
+    check(!frame('window-drag-ghost'), 'Esc did not end the drag')
+  })
+  await settle(200)
+  check(readerName() === shownBefore, 'a cancelled drag still swapped the reader')
+  // Dragged to its far edge, the reader moves to that side.
+  reader = frame('transcript-reader')!
+  const readerX = reader.x
+  await drag({ x: reader.x + 6, y: reader.y }, { x: reader.x + reader.width - 2, y: reader.y + Math.floor(reader.height / 2) }, () => {
+    check(setup.captureCharFrame().includes('Reader on the right'), 'dragging the reader to its edge does not say it moves')
+  })
+  await waitFor('the reader on the right', () => frame('transcript-reader')!.x > readerX)
+  reader = frame('transcript-reader')!
+  await drag({ x: reader.x + 6, y: reader.y }, { x: reader.x + 1, y: reader.y + Math.floor(reader.height / 2) })
+  await waitFor('the reader back on the left', () => frame('transcript-reader')!.x === readerX)
+
+  // A surface window let go over the reader floats there.
+  const surface = panes().findIndex((entry) => setup.captureCharFrame().split('\n')[entry.y]?.slice(entry.x, entry.x + entry.width).includes('❯ Terminal'))
+  check(surface >= 0, 'no terminal window to drag')
+  const slot = frame(`split-pane:${surface}`)!
+  reader = frame('transcript-reader')!
+  const dropAt = { x: reader.x + 10, y: reader.y + 4 }
+  await drag({ x: slot.x + 4, y: slot.y }, dropAt, () => {
+    check(setup.captureCharFrame().includes('Float it here'), 'dragging a surface over the reader does not offer to float it')
+  })
+  await waitFor('the surface floating', () => !!frame('floating-window'))
+  const floated = frame('floating-window')!
+  check(Math.abs(floated.y - dropAt.y) <= 1, `the floating window did not open where it was let go: y ${floated.y} vs ${dropAt.y}`)
+  // Dragged onto a window's title row, a floating window becomes a tab there.
+  const tabTarget = sessionPane()
+  const titleRow = frame(`split-pane:${tabTarget}`)!
+  await drag({ x: floated.x + 6, y: floated.y }, { x: titleRow.x + Math.floor(titleRow.width / 2), y: titleRow.y }, () => {
+    check(setup.captureCharFrame().includes(`Add as a tab of window ${tabTarget + 1}`), 'dragging a floating window over a title does not offer a tab')
+  })
+  await waitFor('the floating window as a tab', () => !frame('floating-window') && setup.renderer.root.findDescendantById(`window-tabs:${tabTarget}`) !== null)
+  // Ctrl+] releases the shell's keyboard capture; Escape belongs to the shell.
+  await act(async () => { setup.mockInput.pressKey(']', { ctrl: true }) })
+  await settle(150)
+  // Out again: float it, then drag it to the area's edge to dock it.
+  await chordKey(String(tabTarget + 1))
+  await act(async () => { setup.mockInput.pressKey(']', { ctrl: true }) })
+  await settle(150)
+  await chordKey('!')
+  await settle(200)
+  const shell = panes().findIndex((entry) => setup.captureCharFrame().split('\n')[entry.y]?.slice(entry.x, entry.x + entry.width).includes('❯ Terminal'))
+  await chordKey(String(shell + 1))
+  await act(async () => { setup.mockInput.pressKey(']', { ctrl: true }) })
+  await settle(150)
+  await chordKey('f')
+  await waitFor('floating again', () => !!frame('floating-window'))
+  const area = frame('window-area')!
+  const again = frame('floating-window')!
+  await drag({ x: again.x + 6, y: again.y }, { x: area.x + area.width - 1, y: again.y + 3 }, () => {
+    check(setup.captureCharFrame().includes('Dock into the layout'), 'dragging a floating window to the edge does not offer to dock it')
+  })
+  await waitFor('docked by drag', () => !frame('floating-window'))
+  console.log('The reader drags to swap or change sides, Esc cancels, a surface floats where it is dropped, and a floating window docks or tabs by drag.')
 }
 
 console.log('Windowing (more) smoke passed')

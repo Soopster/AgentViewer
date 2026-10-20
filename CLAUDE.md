@@ -1342,6 +1342,12 @@ drawn in have one source; `windowLayoutSmoke.ts` checks every arrangement tiles 
   polling like any open one. The flow and the layer must agree cell for cell, which
   `checkSurfaceAlignment` in `windowingMoreSmoke.tsx` asserts after moves. Moving between the side
   panel and a window still remounts (a different parent).
+- **Dragging, beyond panes and tabs**: the reader drags by its title (onto a session pane it swaps,
+  onto its own far edge it changes side — `readerDropAction` labels it), a surface let go over the
+  reader floats there (`floatSurfaceAt`), and a floating window let go on a title row becomes a tab,
+  at the area's outer edge docks (`floatDockTarget`, hinted while it moves). **Esc cancels any drag**
+  (`cancelPointerGesture`, checked first in the key handler): a window or tab drag ends with no drop,
+  a float move or resize returns to its start, and a border drag is undone to its checkpoint.
 - **A surface frame must not clip** (`overflow` is on its body box): its tab strip and title
   buttons sit on the border at `top: -1`, and a clipping frame does not paint them — the `⇥ panel`
   and `×` buttons were invisible (though still clickable) before this.

@@ -9256,8 +9256,8 @@ export default function OpenTuiApp() {
   // surface window (by its title). `pane` and `fromPane` are window indices.
   // `tab` is set when a tab is dragged out of a frame's tab strip; `title` when
   // the pointer is over a window's title row, where a drop adds a tab.
-  const [sessionDrag, setSessionDrag] = useState<{ session: Session | null; surface?: WindowSurfaceId; tab?: string; fromPane: number | null; zone: WindowDropZone | null; pane: number | null; insert: WindowDropZone | null; title?: boolean; x: number; y: number } | null>(null)
-  const sessionPressRef = useRef<{ session: Session | null; surface?: WindowSurfaceId; tab?: string; fromPane: number | null; x: number; y: number; dragging: boolean; onClick?: () => void } | null>(null)
+  const [sessionDrag, setSessionDrag] = useState<{ session: Session | null; surface?: WindowSurfaceId; tab?: string; reader?: boolean; fromPane: number | null; zone: WindowDropZone | null; pane: number | null; insert: WindowDropZone | null; title?: boolean; x: number; y: number } | null>(null)
+  const sessionPressRef = useRef<{ session: Session | null; surface?: WindowSurfaceId; tab?: string; reader?: boolean; fromPane: number | null; x: number; y: number; dragging: boolean; onClick?: () => void } | null>(null)
   // A press is under way: a full-screen layer takes the rest of the gesture, so
   // a drag that leaves a one-row tab or rail row on its first motion is not
   // captured by whatever it moved onto.
@@ -9284,6 +9284,7 @@ export default function OpenTuiApp() {
     press: (_session: Session, _fromPane: number | null, _event: { x: number; y: number }, _onClick?: () => void) => {},
     pressSurface: (_surface: WindowSurfaceId, _fromPane: number, _event: { x: number; y: number }) => {},
     pressTab: (_key: string, _fromPane: number, _event: { x: number; y: number }, _onClick?: () => void) => {},
+    pressReader: (_session: Session, _event: { x: number; y: number }) => {},
     move: (_event: { x: number; y: number }) => {},
     release: (_event: { x: number; y: number }) => {},
   })
@@ -20570,9 +20571,28 @@ export default function OpenTuiApp() {
     floatGestureRef.current = { mode, x: event.x, y: event.y, rect: floatingWindow.rect }
     setFloatGesturing(true)
   }
+  // Where a floating window let go here would dock: a window's title row
+  // makes it a tab there, the window area's outer edge puts it back in the layout.
+  const floatDockTarget = (point: { x: number; y: number }): { kind: 'tab'; pane: number } | { kind: 'edge' } | null => {
+    const area = windowAreaRect()
+    if (!area) return null
+    const target = dropTargetAt(point)
+    if (target.pane !== null && target.title) return { kind: 'tab', pane: target.pane }
+    if (point.x <= area.x || point.x >= area.x + area.width - 1 || point.y >= area.y + area.height - 1) return { kind: 'edge' }
+    return null
+  }
+  const [floatDockHint, setFloatDockHint] = useState<{ label: string; rect: { x: number; y: number; width: number; height: number }; x: number; y: number } | null>(null)
   const moveFloatGesture = (event: { x: number; y: number }) => {
     const gesture = floatGestureRef.current
     if (!gesture || !floatingWindow) return
+    if (gesture.mode === 'move') {
+      const dock = floatDockTarget(event)
+      const area = windowAreaRect()
+      const pane = dock?.kind === 'tab' ? rectOf(`split-pane:${dock.pane}`) : null
+      setFloatDockHint(dock && area
+        ? { label: dock.kind === 'tab' ? `Add as a tab of window ${dock.pane + 1}` : 'Dock into the layout', rect: pane ? { ...pane, height: Math.min(pane.height, 3) } : area, x: event.x, y: event.y }
+        : null)
+    }
     const area = windowAreaRect() ?? { width: readerAreaWidth, height: windowAreaHeight }
     const dx = event.x - gesture.x
     const dy = event.y - gesture.y
@@ -20581,9 +20601,49 @@ export default function OpenTuiApp() {
       : { ...gesture.rect, width: gesture.rect.width + dx, height: gesture.rect.height + dy }
     setFloatingWindow({ ...floatingWindow, rect: clampFloatingRect(rect, area) })
   }
-  const endFloatGesture = () => {
+  const endFloatGesture = (event?: { x: number; y: number }) => {
+    const gesture = floatGestureRef.current
     floatGestureRef.current = null
     setFloatGesturing(false)
+    setFloatDockHint(null)
+    if (!gesture || gesture.mode !== 'move' || !event || !floatingKey) return
+    const dock = floatDockTarget(event)
+    if (dock?.kind === 'tab') {
+      const target = windowItems[dock.pane]
+      if (target) {
+        // Back where it started, so undo returns it to the place it was dragged from.
+        setFloatingWindow((current) => current ? { ...current, rect: gesture.rect } : current)
+        tabWindowOnto(floatingKey, windowItemKey(target))
+      }
+    } else if (dock?.kind === 'edge') {
+      setFloatingWindow((current) => current ? { ...current, rect: gesture.rect } : current)
+      dockFloatingWindow()
+    }
+  }
+  // Esc during a drag puts everything back as it was when the drag started.
+  const cancelPointerGesture = (): boolean => {
+    if (floatGestureRef.current) {
+      const gesture = floatGestureRef.current
+      floatGestureRef.current = null
+      setFloatGesturing(false)
+      setFloatDockHint(null)
+      setFloatingWindow((current) => current ? { ...current, rect: gesture.rect } : current)
+      return true
+    }
+    if (sessionPressRef.current?.dragging) {
+      sessionPressRef.current = null
+      setSessionPressing(false)
+      setSessionDrag(null)
+      return true
+    }
+    if (splitDividerDragging) {
+      const moved = splitDividerPoint !== null
+      setSplitDividerDragging(null)
+      setSplitDividerPoint(null)
+      if (moved) undoWindowLayout()
+      return true
+    }
+    return false
   }
 
   // Set the window order and keep the pins in the same order: sessions fill
@@ -20611,9 +20671,11 @@ export default function OpenTuiApp() {
   })
   // A surface window dragged by its title: the middle of another window swaps
   // the two, an edge puts it beside that window, the reader cannot take it.
-  const dropSurfaceWindow = useEffectEvent((fromPane: number, target: { zone: WindowDropZone | null; pane: number | null; insert: WindowDropZone | null }) => {
+  const dropSurfaceWindow = useEffectEvent((fromPane: number, target: { zone: WindowDropZone | null; pane: number | null; insert: WindowDropZone | null }, point?: { x: number; y: number }) => {
     if (target.pane === null) {
-      if (target.zone) showNotice('info', 'Only a session can be in the reader · drop on a window')
+      // Only a session can be in the reader; a surface let go over it floats there.
+      const moving = windowItems[fromPane]
+      if (target.zone && point && moving?.kind === 'surface') floatSurfaceAt(moving.surface, point)
       return
     }
     if (target.pane === fromPane) return
@@ -20703,6 +20765,46 @@ export default function OpenTuiApp() {
     applyWindowSessionDrop(session, { kind: 'edge', zone })
   })
 
+  // The reader dragged by its title: onto a session pane it trades places with
+  // it; onto the area's far edge it moves to that side.
+  const readerDropAction = (target: { zone: WindowDropZone | null; pane: number | null; title?: boolean }): string | null => {
+    if (target.pane !== null) {
+      const item = windowItems[target.pane]
+      if (item?.kind !== 'session') return 'Only a session can be in the reader'
+      return target.title ? 'The reader cannot be a tab · drop lower to swap' : `Swap with window ${target.pane + 1}`
+    }
+    const side = readerSideForZone(target.zone)
+    if (side === null) return visibleSplitPaneCount > 0 ? 'Drop on a pane, or an edge to move the reader' : 'Split first (⌃B %) to move the reader'
+    return side === splitReaderLast ? 'The reader is already there' : `Reader ${stackedSplit ? (side ? 'below' : 'on top') : (side ? 'on the right' : 'on the left')}`
+  }
+  // readerLast for a zone on the reader's own axis, or null for one that is not.
+  const readerSideForZone = (zone: WindowDropZone | null): boolean | null => {
+    if (visibleSplitPaneCount === 0 || !zone || zone === 'center') return null
+    if (stackedSplit) return zone === 'bottom' ? true : zone === 'top' ? false : null
+    return zone === 'right' ? true : zone === 'left' ? false : null
+  }
+  const dropReaderWindow = useEffectEvent((target: { zone: WindowDropZone | null; pane: number | null; title?: boolean }) => {
+    if (target.pane !== null) {
+      const item = windowItems[target.pane]
+      if (item?.kind !== 'session' || target.title) { showNotice('info', readerDropAction(target) ?? ''); return }
+      checkpointWindowLayout()
+      // The pin reconciler hands the pane the reader's session: a swap.
+      selectTabSession(item.session)
+      return
+    }
+    const side = readerSideForZone(target.zone)
+    if (side === null || side === splitReaderLast) return
+    setWindowArrangement(splitArrangement, side)
+  })
+  // A surface window dropped on the reader floats where it was let go.
+  const floatSurfaceAt = useEffectEvent((surface: WindowSurfaceId, point: { x: number; y: number }) => {
+    const area = windowAreaRect()
+    floatWindowKey(surfaceWindowKey(surface))
+    if (!area) return
+    const rect = defaultFloatingRect(area)
+    setFloatingWindow((current) => current ? { ...current, rect: clampFloatingRect({ ...rect, x: point.x - area.x - 4, y: point.y - area.y }, area) } : current)
+  })
+
   // Preview the same operation plan and geometry that applying it consumes.
   // This is read-only: hovering and dragging never rewrite the current layout.
   const projectedWindowGeometry = (() => {
@@ -20785,6 +20887,10 @@ export default function OpenTuiApp() {
       sessionPressRef.current = { session: null, tab: key, fromPane, x: event.x, y: event.y, dragging: false, onClick }
       setSessionPressing(true)
     },
+    pressReader: (session, event) => {
+      sessionPressRef.current = { session, reader: true, fromPane: null, x: event.x, y: event.y, dragging: false }
+      setSessionPressing(true)
+    },
     move: (event) => {
       const press = sessionPressRef.current
       if (!press) return
@@ -20792,7 +20898,7 @@ export default function OpenTuiApp() {
       if (!press.dragging && Math.abs(event.x - press.x) + Math.abs(event.y - press.y) < 2) return
       press.dragging = true
       const target = dropTargetAt(event)
-      setSessionDrag({ session: press.session, surface: press.surface, tab: press.tab, fromPane: press.fromPane, ...target, x: event.x, y: event.y })
+      setSessionDrag({ session: press.session, surface: press.surface, tab: press.tab, reader: press.reader, fromPane: press.fromPane, ...target, x: event.x, y: event.y })
     },
     release: (event) => {
       const press = sessionPressRef.current
@@ -20808,6 +20914,7 @@ export default function OpenTuiApp() {
       const targetKey = target.pane !== null && windowItems[target.pane] ? windowItemKey(windowItems[target.pane]!) : null
       const movingKey = press.tab ?? (press.session ? sessionKey(press.session) : press.surface ? surfaceWindowKey(press.surface) : null)
       const sameFrame = (key: string | null) => key !== null && movingKey !== null && (key === movingKey || Boolean(windowStackFor(key)?.includes(movingKey)))
+      if (press.reader) { dropReaderWindow(target); return }
       // A tab dragged out of its strip: onto another window it joins that
       // window's tabs, anywhere else it becomes a window of its own.
       if (press.tab) {
@@ -20822,7 +20929,7 @@ export default function OpenTuiApp() {
         return
       }
       if (!press.session) {
-        if (press.surface && press.fromPane !== null) dropSurfaceWindow(press.fromPane, target)
+        if (press.surface && press.fromPane !== null) dropSurfaceWindow(press.fromPane, target, event)
         return
       }
       if (target.pane !== null && windowItems[target.pane]?.kind === 'surface') {
@@ -21868,6 +21975,7 @@ export default function OpenTuiApp() {
       key.stopPropagation()
       action()
     }
+    if (key.name === 'escape' && cancelPointerGesture()) { key.preventDefault(); key.stopPropagation(); showNotice('info', 'Drag cancelled'); return }
     if (isCtrlShift('v') && composerActive && !isKeyRepeat) {
       handled(() => toggleVoice())
       return
@@ -24865,11 +24973,16 @@ export default function OpenTuiApp() {
             splitPaneActions.sessionMenu(selectedSession, 'pane', event)
             return
           }
-          // A double-click on the title bar zooms, as it does a desktop window.
-          if (event.button === 0 && readerBoxRef.current && event.y === readerBoxRef.current.y && isDoubleClick(readerTitleClickRef, event)) {
-            toggleFullscreenMode()
+          // A double-click on the title bar zooms, as it does a desktop window;
+          // a press on it is the handle the reader is dragged by.
+          if (event.button === 0 && readerBoxRef.current && event.y === readerBoxRef.current.y) {
+            if (isDoubleClick(readerTitleClickRef, event)) toggleFullscreenMode()
+            else if (selectedSession && !fullscreenMode) sessionDragImplRef.current.pressReader(selectedSession, event)
           }
         }}
+        // Until the gesture layer exists, the reader itself gets the drag and the release.
+        onMouseDrag={(event) => sessionDragHandlers.move(event)}
+        onMouseUp={(event) => sessionDragHandlers.release(event)}
         flexGrow={1}
         border={fullscreenMode ? [] : ['top', 'left', 'right', 'bottom']}
         borderStyle="single"
@@ -25383,7 +25496,7 @@ export default function OpenTuiApp() {
         {...(place ? { position: 'absolute' as const, left: place.x, top: place.y, zIndex: place.zIndex } : {})}
         {...(index === FLOATING_PANE_INDEX ? {
           onMouseDrag: (event: { x: number; y: number }) => moveFloatGesture(event),
-          onMouseUp: () => endFloatGesture(),
+          onMouseUp: (event: { x: number; y: number }) => endFloatGesture(event),
         } : {})}
         flexShrink={0}
         flexDirection="column"
@@ -26050,7 +26163,7 @@ export default function OpenTuiApp() {
                 zIndex={floatingItem.kind === 'surface' ? 42 : 40}
                 backgroundColor={floatingItem.kind === 'surface' ? undefined : theme.bg}
                 onMouseDrag={(event: { x: number; y: number }) => moveFloatGesture(event)}
-                onMouseUp={() => endFloatGesture()}
+                onMouseUp={(event: { x: number; y: number }) => endFloatGesture(event)}
               >
                 {floatingItem.kind === 'session' ? renderSplitPane(floatingItem.session, FLOATING_PANE_INDEX, size) : null}
                 <box position="absolute" top={0} right={floatingItem.kind === 'session' ? 8 : 15} height={1} flexDirection="row" zIndex={46}>
@@ -28059,7 +28172,7 @@ export default function OpenTuiApp() {
           zIndex={1000}
           backgroundColor={RGBA.fromValues(0, 0, 0, 0)}
           onMouseDrag={(event: { x: number; y: number }) => moveFloatGesture(event)}
-          onMouseUp={() => endFloatGesture()}
+          onMouseUp={(event: { x: number; y: number }) => endFloatGesture(event)}
         />
       ) : null}
       {sessionPressing ? (
@@ -28091,13 +28204,24 @@ export default function OpenTuiApp() {
             title={index === 0 ? ' Reader ' : ` ${index} `} titleColor={theme.cyan} />
         ))
       })() : null}
+      {floatDockHint ? (
+        <>
+          <box id="float-dock-zone" position="absolute" top={floatDockHint.rect.y} left={floatDockHint.rect.x} width={floatDockHint.rect.width} height={floatDockHint.rect.height} zIndex={900} border borderStyle="double" borderColor={theme.cyan} />
+          <box id="float-dock-ghost" position="absolute" top={Math.min(Math.max(0, floatDockHint.y + 1), height - 1)} left={Math.min(Math.max(0, floatDockHint.x + 2), Math.max(0, width - floatDockHint.label.length - 5))} height={1} zIndex={901} backgroundColor={theme.surface3}>
+            <text fg={theme.cyan} wrapMode="none" selectable={false}>{` ⠿ ${floatDockHint.label} `}</text>
+          </box>
+        </>
+      ) : null}
       {sessionDrag ? (() => {
         // Where a dragged session would land, and the session itself under the
         // pointer. Drawn only: the press that started the drag holds it, so
         // these boxes take no events of their own.
         const reader = rectOf('transcript-reader')
         const paneRect = sessionDrag.pane !== null ? rectOf(`split-pane:${sessionDrag.pane}`) : null
-        const rect = paneRect
+        const rect = sessionDrag.reader && !paneRect ? (reader && readerSideForZone(sessionDrag.zone) !== null ? windowDropZoneRect(reader, sessionDrag.zone!) : null)
+          : sessionDrag.reader && paneRect ? (windowItems[sessionDrag.pane!]?.kind === 'session' && !sessionDrag.title ? paneRect : null)
+          : !sessionDrag.session && !sessionDrag.tab && !paneRect && reader && sessionDrag.zone ? reader
+          : paneRect
           ? (sessionDrag.title ? { ...paneRect, height: Math.min(paneRect.height, 3) } : sessionDrag.insert ? windowDropZoneRect(paneRect, sessionDrag.insert) : paneRect)
           : (reader && sessionDrag.zone ? windowDropZoneRect(reader, sessionDrag.zone) : null)
         const label = sessionDrag.pane !== null && sessionDrag.insert ? `Beside pane ${sessionDrag.pane + 1}`
@@ -28108,9 +28232,10 @@ export default function OpenTuiApp() {
         // fitText pads to its width; trimmed, so the label is as long as what it says.
         const dragged = sessionDrag.tab ? windowKeyTitle(sessionDrag.tab) : sessionDrag.session ? formatSessionTitle(sessionDrag.session) : surfaceTitle(sessionDrag.surface ?? '')
         const overSurface = sessionDrag.pane !== null && windowItems[sessionDrag.pane]?.kind === 'surface'
-        const shown = sessionDrag.tab ? (sessionDrag.pane !== null ? `Add as a tab of window ${sessionDrag.pane + 1}` : 'Its own window')
+        const shown = sessionDrag.reader ? readerDropAction(sessionDrag) ?? ''
+          : sessionDrag.tab ? (sessionDrag.pane !== null ? `Add as a tab of window ${sessionDrag.pane + 1}` : 'Its own window')
           : sessionDrag.title && sessionDrag.pane !== null ? `Add as a tab of window ${sessionDrag.pane + 1}`
-          : !sessionDrag.session && sessionDrag.pane === null ? (sessionDrag.zone ? 'Only a session can be in the reader' : 'Drop on a window')
+          : !sessionDrag.session && sessionDrag.pane === null ? (sessionDrag.zone ? 'Float it here' : 'Drop on a window')
           : (overSurface || !sessionDrag.session) && sessionDrag.pane !== null && !sessionDrag.insert ? `Swap with window ${sessionDrag.pane + 1}`
           : label
         const ghost = `⠿ ${fitText(dragged, 28).trimEnd()} · ${shown}`
