@@ -1332,6 +1332,19 @@ drawn in have one source; `windowLayoutSmoke.ts` checks every arrangement tiles 
   before anything touches the pins. **Moves are made on the shown windows first, hidden after**
   (`shownFirstWindowKeys`): with windows overflowing, a hidden session's slot between two visible
   ones pulled a visible session into the place a swapped window went, and hid another.
+- **Surface windows never remount when they move** (`renderSurfaceLayer`). In the flow a surface
+  window is only a slot (`split-pane:i`, empty); its frame (`surface-frame:<id>`) is drawn by one
+  layer inside the window area, keyed by id, at the slot's rect from `windowLayoutRects` (the full
+  area when zoomed or peeked, the floating rect when floating). A move between grid rows, a tab
+  switch, a float or a dock is then a position or visibility change, so the files view, the diff's
+  cursor and the PR keep their state — under the old parent-per-row rendering each was a remount.
+  Background tabs and windows past what fits stay mounted, hidden; a hidden Git surface keeps
+  polling like any open one. The flow and the layer must agree cell for cell, which
+  `checkSurfaceAlignment` in `windowingMoreSmoke.tsx` asserts after moves. Moving between the side
+  panel and a window still remounts (a different parent).
+- **A surface frame must not clip** (`overflow` is on its body box): its tab strip and title
+  buttons sit on the border at `top: -1`, and a clipping frame does not paint them — the `⇥ panel`
+  and `×` buttons were invisible (though still clickable) before this.
 - **A surface window drags by its title**: onto another window's middle it swaps, onto an edge it
   goes beside; the reader refuses it. A session dropped on a surface window trades places with it,
   or (from the rail) becomes a pane beside it. A grid move between rows remounts the window, so a
@@ -1350,7 +1363,8 @@ drawn in have one source; `windowLayoutSmoke.ts` checks every arrangement tiles 
   longer than a render. Every move goes through `commitWindowKeys`, which rewrites pins, surfaces,
   order and count from one key list.
 - **One window can float** (`⌃B f`, palette "Shell in a floating window"): it leaves the layout,
-  draws over the window area (opaque — an unpainted cell shows the frames under it), moves by its
+  draws over the window area (opaque — an unpainted cell shows the frames under it; a floating
+  surface is drawn by the surface layer, and the floating box over it holds only the controls), moves by its
   title, resizes by `◢`, and docks back into the slot it left (`slot`; appended past the shown
   windows it docked out of sight). It focuses as pane index `FLOATING_PANE_INDEX`, so focus, the
   pane handle and key routing need no other path; `windowItems[i]` never contains it, which is why

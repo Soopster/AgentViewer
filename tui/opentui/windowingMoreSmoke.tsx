@@ -127,6 +127,16 @@ const drag = async (from: { x: number; y: number }, to: { x: number; y: number }
   await settle(300)
 }
 const rail = () => frame('session-rail')!
+// A surface window is drawn by the surface layer over its slot: the two must coincide exactly.
+const checkSurfaceAlignment = (when: string) => {
+  for (let index = 0; index < 5; index += 1) {
+    const slot = setup.renderer.root.findDescendantById(`split-pane:${index}`) as unknown as (Frame & { visible?: boolean; getChildren?: () => unknown[] }) | null
+    if (!slot || slot.visible === false || (slot.getChildren?.().length ?? 0) > 0) continue
+    const frames = setup.renderer.root.findDescendantById('window-area') as unknown as { getChildren(): Array<Frame & { id: string; visible?: boolean }> }
+    const drawn = frames.getChildren().find((child) => child.id.startsWith('surface-frame:') && child.visible !== false && child.x === slot.x && child.y === slot.y)
+    check(drawn && drawn.width === slot.width && drawn.height === slot.height, `${when}: surface window ${index + 1} is not drawn over its slot (${JSON.stringify({ x: slot.x, y: slot.y, w: slot.width, h: slot.height })})`)
+  }
+}
 // The pane whose frame is lit: the focused one has the accent border, the rest share one colour.
 const focusedPane = (): number | null => {
   const colours = [0, 1, 2].map((index) => {
@@ -174,7 +184,8 @@ const arrowChord = async (direction: 'up' | 'down' | 'left' | 'right', shift = f
   await settle(200)
 }
 const paneHas = (index: number, text: string) => {
-  const pane = frame(`split-pane:${index}`)
+  // Index 64 is the floating window, whichever kind it holds.
+  const pane = frame(index === 64 ? 'floating-window' : `split-pane:${index}`)
   if (!pane) return false
   return setup.captureCharFrame().split('\n').slice(pane.y, pane.y + pane.height)
     .some((line) => line.slice(pane.x, pane.x + pane.width).includes(text))
@@ -570,9 +581,10 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   await waitFor('the switcher for a hidden surface', () => !!frame('window-switcher'))
   await act(async () => { await setup.mockInput.typeText('terminal') })
   await act(async () => { setup.mockInput.pressEnter() })
-  await waitFor('the hidden terminal peek', () => !!frame('split-pane:-1') && setup.captureCharFrame().includes('from-a-window'))
+  const peekVisible = () => (setup.renderer.root.findDescendantById('surface-frame:terminal') as unknown as { visible?: boolean } | null)?.visible !== false
+  await waitFor('the hidden terminal peek', () => peekVisible() && setup.captureCharFrame().includes('from-a-window'))
   await act(async () => { setup.mockInput.pressEscape() })
-  await waitFor('the peek dismissed', () => !frame('split-pane:-1'))
+  await waitFor('the peek dismissed', () => !peekVisible())
   await act(async () => { setup.resize(220, 46) })
   await settle(300)
   await waitFor('the terminal restored to its layout slot', () => !!frame('surface-window-close:terminal'))
@@ -638,6 +650,8 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   const target = panes().findIndex((pane, index) => index !== from && pane.width > 0 && paneName(index) !== null)
   check(from >= 0 && target >= 0, `no surface/session pair to swap: ${from} ${target}`)
   const sessionBefore = paneName(target)
+  const mountedFrame = setup.renderer.root.findDescendantById('surface-frame:terminal#2')
+  check(mountedFrame, 'the surface layer did not draw the terminal window')
   const source = frame(`split-pane:${from}`)!
   const dest = frame(`split-pane:${target}`)!
   await drag({ x: source.x + 3, y: source.y }, { x: dest.x + Math.floor(dest.width / 2), y: dest.y + Math.floor(dest.height / 2) }, () => {
@@ -646,9 +660,30 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   await waitFor('the swap', () => windowIndexOf('surface-window-close:terminal#2') === target)
   await waitFor(`the session (${sessionBefore}) in the surface's old place`, () => paneName(from) === sessionBefore)
   check(paneHas(target, 'two-window'), 'the moved window no longer shows its own shell')
+  check(setup.renderer.root.findDescendantById('surface-frame:terminal#2') === mountedFrame, 'moving the window to another row remounted it')
+  checkSurfaceAlignment('after a swap across rows')
   check(new Set(panes().map((_, index) => paneName(index)).filter(Boolean)).has(sessionBefore), 'the swap hid the session it swapped with')
   await chordKey('u')
   await waitFor('undo to put the surface back', () => windowIndexOf('surface-window-close:terminal#2') === from)
+  checkSurfaceAlignment('after undo')
+  // As a background tab it stays mounted, hidden; shown again, it is the same window.
+  await chordKey(String(from + 1))
+  await chordKey('t')
+  await waitFor('the terminal as a tab', () => !!frame('window-tab:surface:terminal#2'))
+  const tabs = frame('window-tab:surface:terminal#2')!
+  const strip = panes().findIndex((pane) => pane.y === tabs.y && tabs.x >= pane.x && tabs.x < pane.x + pane.width)
+  const otherTab = (setup.renderer.root.findDescendantById(`window-tabs:${strip}`) as unknown as { getChildren(): Array<Frame & { id: string }> }).getChildren().find((child) => child.id !== 'window-tab:surface:terminal#2')!
+  await click(otherTab.x + 2, otherTab.y)
+  await waitFor('the other tab shown', () => (setup.renderer.root.findDescendantById('surface-frame:terminal#2') as unknown as { visible?: boolean } | null)?.visible === false)
+  check(setup.renderer.root.findDescendantById('surface-frame:terminal#2') === mountedFrame, 'a background tab was unmounted')
+  const back = frame('window-tab:surface:terminal#2')!
+  await click(back.x + 2, back.y)
+  await waitFor('the terminal tab shown again', () => paneHas(strip, 'two-window'))
+  check(setup.renderer.root.findDescendantById('surface-frame:terminal#2') === mountedFrame, 'showing a tab again remounted it')
+  checkSurfaceAlignment('a shown tab')
+  await chordKey(String(strip + 1))
+  await chordKey('!')
+  await waitFor('the terminal broken out again', () => !frame('window-tab:surface:terminal#2') && windowIndexOf('surface-window-close:terminal#2') >= 0)
   console.log('Surface windows open several of a kind, take their own keys, and swap with session panes by drag.')
 }
 
@@ -818,9 +853,12 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   const surface = panes().findIndex((entry) => setup.captureCharFrame().split('\n')[entry.y]?.slice(entry.x, entry.x + entry.width).includes('❯ Terminal'))
   if (surface >= 0) {
     const box = frame(`split-pane:${surface}`)!
-    const before = borderOf(`split-pane:${surface}`)
+    // The surface layer draws the frame over the slot; its id is the surface's.
+    const drawn = (setup.renderer.root.findDescendantById('window-area') as unknown as { getChildren(): Array<Frame & { id: string; visible?: boolean }> })
+      .getChildren().find((child) => child.id.startsWith('surface-frame:') && child.visible !== false && child.x === box.x && child.y === box.y)!
+    const before = borderOf(drawn.id)
     await click(box.x + Math.floor(box.width / 2), box.y + Math.floor(box.height / 2))
-    await waitFor('a click in a surface window to focus it', () => borderOf(`split-pane:${surface}`) !== before && !paneFocused(sessionWindows[0]!))
+    await waitFor('a click in a surface window to focus it', () => borderOf(drawn.id) !== before && !paneFocused(sessionWindows[0]!))
   }
   console.log('A click anywhere in a window — pane, reader or surface — gives it focus.')
 }

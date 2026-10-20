@@ -25368,19 +25368,27 @@ export default function OpenTuiApp() {
   )
 
   // A surface in the layout: the side panel's view of it, in a window frame.
-  const renderSurfaceWindow = (surface: WindowSurfaceId, index: number, size: { width: number; height: number; boxHeight: number | undefined }, hidden = false) => {
+  // `place` puts the frame in the surface layer (absolute, over its slot's
+  // placeholder, which keeps the `split-pane:i` id) rather than in the flow.
+  const renderSurfaceWindow = (surface: WindowSurfaceId, index: number, size: { width: number; height: number; boxHeight: number | undefined }, hidden = false, place?: { x: number; y: number; zIndex: number }) => {
     const focused = splitFocusIndex === index
     const height = size.boxHeight ?? size.height
     return (
       <box
         key={`surface-window:${surface}`}
-        id={`split-pane:${index}`}
+        id={place ? `surface-frame:${surface}` : `split-pane:${index}`}
         visible={!hidden}
         width={size.width}
         height={size.boxHeight}
+        {...(place ? { position: 'absolute' as const, left: place.x, top: place.y, zIndex: place.zIndex } : {})}
+        {...(index === FLOATING_PANE_INDEX ? {
+          onMouseDrag: (event: { x: number; y: number }) => moveFloatGesture(event),
+          onMouseUp: () => endFloatGesture(),
+        } : {})}
         flexShrink={0}
         flexDirection="column"
-        overflow="hidden"
+        // Not clipped here: the tab strip and the title buttons sit on the border,
+        // and a clipping frame does not paint them. The body clips instead.
         border
         borderStyle="single"
         borderColor={focused ? theme.cyan : theme.border}
@@ -25396,24 +25404,70 @@ export default function OpenTuiApp() {
           if (surfacePanelFocused) setSurfacePanelFocused(false)
           focusSplitPane(index)
           // The title row is the handle: dragging it moves the window.
-          const frame = renderer.root.findDescendantById(`split-pane:${index}`) as unknown as { y: number } | null
+          const frame = renderer.root.findDescendantById(index === FLOATING_PANE_INDEX ? 'floating-window' : `split-pane:${index}`) as unknown as { y: number } | null
           if (index === FLOATING_PANE_INDEX) { if (frame && event.y === frame.y) startFloatGesture('move', event); return }
           if (index >= 0 && frame && event.y === frame.y) sessionDragImplRef.current.pressSurface(surface, index, event)
         }}
       >
-        {renderWindowTabs(surfaceWindowKey(surface), index, size.width, -1, 0)}
+        {renderWindowTabs(surfaceWindowKey(surface), index, size.width, -1, 1, 16)}
         <box position="absolute" top={-1} right={1} height={1} flexDirection="row" zIndex={3}>
           <WindowButton id={`surface-window-to-panel:${surface}`} label=" ⇥ panel " theme={theme} onPress={() => moveSurfaceToPanel(surface)} />
           <WindowButton id={`surface-window-close:${surface}`} label=" × " theme={theme} tone="danger" onPress={() => closeSurfaceWindow(surface)} />
         </box>
-        {renderSurfaceBody(surfaceKindOf(surface), { width: Math.max(10, size.width - 2), height: Math.max(3, height - 2) }, () => closeSurfaceWindow(surface), focused && !composerActive, surface)}
+        <box flexGrow={1} overflow="hidden">
+          {renderSurfaceBody(surfaceKindOf(surface), { width: Math.max(10, size.width - 2), height: Math.max(3, height - 2) }, () => closeSurfaceWindow(surface), focused && !composerActive, surface)}
+        </box>
       </box>
     )
   }
 
+  // A surface window in the flow is only its slot: the frame itself is drawn by
+  // the surface layer, so moving it between rows, tabbing it or floating it
+  // never remounts what it is showing.
   const renderWindowItem = (item: WindowItem, index: number, size: { width: number; height: number; boxHeight: number | undefined }, hidden = false) => (
-    item.kind === 'session' ? renderSplitPane(item.session, index, size, hidden) : renderSurfaceWindow(item.surface, index, size, hidden)
+    item.kind === 'session' ? renderSplitPane(item.session, index, size, hidden) : (
+      <box key={`surface-slot:${item.surface}`} id={`split-pane:${index}`} visible={!hidden} width={size.width} height={size.boxHeight} flexShrink={0} />
+    )
   )
+
+  // Every surface the windows own, in one parent keyed by id: laid out over its
+  // slot, hidden while it is a background tab or past what fits, or floating.
+  // React keeps a child mounted while its key stays under the same parent, and
+  // a mounted surface keeps its view — the file shown, the diff's cursor, the PR.
+  const renderSurfaceLayer = () => {
+    const area = { width: readerAreaWidth, height: windowAreaHeight }
+    const rects = windowLayoutRects(fittedWindows, { ...area, orientation: splitOrientation, readerLast: splitReaderLast })
+    const frameOf = (key: string): { index: number; rect: { x: number; y: number; width: number; height: number } } | null => {
+      const index = fittedWindowKeys.indexOf(key)
+      if (index < 0) return null
+      if (zoomedIndex === index) return { index, rect: { x: 0, y: 0, ...area } }
+      const rect = rects[index + 1]
+      return rect ? { index, rect } : null
+    }
+    const owned = new Set<WindowSurfaceId>([
+      ...windowSurfaces,
+      ...liveWindowStacks.flat().filter(isSurfaceWindowKey).map(surfaceIdOfKey),
+      ...(floatingKey && isSurfaceWindowKey(floatingKey) ? [surfaceIdOfKey(floatingKey)] : []),
+    ])
+    return [...owned].sort().map((surface) => {
+      const key = surfaceWindowKey(surface)
+      if (windowSurfacePeek === surface) {
+        return renderSurfaceWindow(surface, -1, { ...area, boxHeight: area.height }, false, { x: 0, y: 0, zIndex: 5 })
+      }
+      if (key === floatingKey && floatingWindow) {
+        const rect = floatingWindow.rect
+        const shown = !fullscreenMode && !windowSurfacePeek
+        return renderSurfaceWindow(surface, FLOATING_PANE_INDEX, { width: rect.width, height: rect.height, boxHeight: rect.height }, !shown, { x: rect.x, y: rect.y, zIndex: 41 })
+      }
+      const own = frameOf(key)
+      // A background tab sits hidden at its frame, so showing it is a visibility change.
+      const frameKey = own ? key : windowStackFor(key)?.find((member) => fittedWindowKeys.includes(member))
+      const at = own ?? (frameKey ? frameOf(frameKey) : null)
+      const rect = at?.rect ?? { x: 0, y: 0, width: Math.max(10, area.width), height: Math.max(3, area.height) }
+      const hidden = !own || Boolean(windowSurfacePeek) || fullscreenMode || (zooming && zoomedIndex !== own.index)
+      return renderSurfaceWindow(surface, own ? own.index : -2, { width: rect.width, height: rect.height, boxHeight: rect.height }, hidden, { x: rect.x, y: rect.y, zIndex: 5 })
+    })
+  }
 
   // One split pane's frame, at the size its arrangement gives it.
   const renderSplitPane = (splitSession: Session, splitIndex: number, size: { width: number; height: number; boxHeight: number | undefined }, hidden = false) => (
@@ -25470,25 +25524,29 @@ export default function OpenTuiApp() {
         sessionDrag={sessionDragHandlers}
         shouldYieldToForeground={splitPaneShouldYield}
       />
-      {renderWindowTabs(sessionKey(splitSession), splitIndex, size.width, 0, 1)}
+      {renderWindowTabs(sessionKey(splitSession), splitIndex, size.width, 0, 1, 10)}
     </box>
   )
 
   // A frame's tab strip, over its title: one tab per member, the shown one lit.
   // A tab is clicked to show it and dragged to move it; × closes it.
-  const renderWindowTabs = (key: string, index: number, frameWidth: number, top: number, left: number) => {
+  // `reserve` is the title bar's right end, where the frame's own buttons are.
+  const renderWindowTabs = (key: string, index: number, frameWidth: number, top: number, left: number, reserve: number) => {
     const stack = windowStackFor(key)
     if (!stack) return null
-    const available = Math.max(8, frameWidth - 10 - left)
+    const available = Math.max(8, frameWidth - reserve - left)
     const each = Math.max(6, Math.floor(available / stack.length))
     return (
       <box id={`window-tabs:${index}`} position="absolute" top={top} left={left} width={available} height={1} flexDirection="row" zIndex={4} backgroundColor={theme.surface} overflow="hidden">
         {stack.map((member) => {
           const active = member === key
           return (
-            <box key={member} id={`window-tab:${member}`} flexDirection="row" flexShrink={0} width={each} backgroundColor={active ? theme.surface3 : theme.surface}
+            <box key={member} id={`window-tab:${member}`} flexDirection="row" flexShrink={0} width={each} height={1} backgroundColor={active ? theme.surface3 : theme.surface}
               onMouseDown={(event) => {
                 if (event.button !== 0) return
+                // Inside a surface frame the frame's own title handler would take
+                // the press over as a drag of the whole window.
+                event.stopPropagation()
                 sessionDragImplRef.current.pressTab(member, index, event, () => activateWindowTab(member))
               }}
               // Until the gesture layer exists, the tab itself gets the drag and the release.
@@ -25923,10 +25981,8 @@ export default function OpenTuiApp() {
             flexGrow={1}
           >
           {windowSurfacePeek ? (
-            <>
-              <box visible={false}>{readerFrameNode}</box>
-              {renderSurfaceWindow(windowSurfacePeek, -1, { width: readerAreaWidth, height: windowAreaHeight, boxHeight: windowAreaHeight })}
-            </>
+            // The surface layer draws the peeked window over the whole area.
+            <box visible={false}>{readerFrameNode}</box>
           ) : arrangedVisible && splitArrangement === 'grid' && arrangedLayout.secondary ? (
             <>
               {/* Zoomed, the row holding the zoomed window takes the area and the other row is hidden. */}
@@ -25982,19 +26038,21 @@ export default function OpenTuiApp() {
               })}
             </>
           )}
+          {renderSurfaceLayer()}
           {floatingItem && floatingWindow && !fullscreenMode && !windowSurfacePeek ? (() => {
             const rect = floatingWindow.rect
             const size = { width: rect.width, height: rect.height, boxHeight: rect.height }
             return (
-              <box id="floating-window" position="absolute" left={rect.x} top={rect.y} width={rect.width} height={rect.height} zIndex={40}
-                // Opaque: an unpainted cell would show the windows underneath through it.
-                backgroundColor={theme.bg}
+              <box id="floating-window" position="absolute" left={rect.x} top={rect.y} width={rect.width} height={rect.height}
+                // Over a floating surface (drawn by the surface layer at 41) it is
+                // only its controls; over a session it is the window and opaque —
+                // an unpainted cell would show the windows underneath through it.
+                zIndex={floatingItem.kind === 'surface' ? 42 : 40}
+                backgroundColor={floatingItem.kind === 'surface' ? undefined : theme.bg}
                 onMouseDrag={(event: { x: number; y: number }) => moveFloatGesture(event)}
                 onMouseUp={() => endFloatGesture()}
               >
-                {floatingItem.kind === 'session'
-                  ? renderSplitPane(floatingItem.session, FLOATING_PANE_INDEX, size)
-                  : renderSurfaceWindow(floatingItem.surface, FLOATING_PANE_INDEX, size)}
+                {floatingItem.kind === 'session' ? renderSplitPane(floatingItem.session, FLOATING_PANE_INDEX, size) : null}
                 <box position="absolute" top={0} right={floatingItem.kind === 'session' ? 8 : 15} height={1} flexDirection="row" zIndex={46}>
                   <WindowButton id="floating-dock" label=" ⊞ dock " theme={theme} onPress={() => dockFloatingWindow()} />
                 </box>
