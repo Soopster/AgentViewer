@@ -160,6 +160,13 @@ export function replacePrimaryWindow(tree: WindowSplitTree, key: string): Window
   return { primary: false, keys, root }
 }
 
+/** The former transcript frame's slot becomes `key`'s window, first in order so it is the last to be hidden. */
+export function adoptPrimaryWindow(tree: WindowSplitTree, key: string): WindowSplitTree {
+  const keys = [key, ...tree.keys.filter(entry => entry !== key)]
+  const root = filterNode(tree.root, slot => slot === -1 ? 0 : tree.keys[slot] === key ? null : keys.indexOf(tree.keys[slot]!))!
+  return { primary: false, keys, root }
+}
+
 export function arrangePaneTree(keys: string[], primary: boolean, style: 'columns' | 'rows' | 'grid' | 'stack', focused = primary ? -1 : 0): WindowSplitTree | null {
   const slots = [...(primary ? [-1] : []), ...keys.map((_, index) => index)]
   if (!slots.length) return null
