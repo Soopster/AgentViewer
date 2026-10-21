@@ -10390,7 +10390,9 @@ function OpenTuiWorkspace() {
     [openTabSessions, selectedIndex, selectedSessionKey, sessions, workspaceHasSession, workspaceReaderSession],
   )
   useEffect(() => { if (selectedSession && selectedSession !== workspaceReaderSession) setWorkspaceReaderSession(selectedSession) }, [selectedSession])
-  const hasPrimaryWindow = primaryWindowOpen && Boolean(selectedSession)
+  // There is no reader frame: every session is shown in a window (a pane), and
+  // the selected session is whichever one the focused window shows.
+  const hasPrimaryWindow = false
   const hasPrimaryFrame = hasPrimaryWindow || Boolean(shownPopoverTab)
   const selectedSessionIdentity = selectedSession ? sessionKey(selectedSession) : null
   useEffect(() => {
@@ -12927,7 +12929,9 @@ function OpenTuiWorkspace() {
   // simply doesn't mount this frame — the reconcile effect repairs the list.
   const splitPinnedSessions = splitPinnedKeys.flatMap((pinnedKey) => {
     if (hasPrimaryWindow && pinnedKey === selectedSessionKey) return []
+    // A previewed session (selected from the rail, not yet a tab) is shown in a window too.
     const tab = openTabSessions.find((candidate) => sessionKey(candidate) === pinnedKey)
+      ?? (pinnedKey === selectedSessionKey ? selectedSession : null)
     return tab ? [tab] : []
   })
   // Stacked splits divide the reader area's ROWS instead of its columns, so the
@@ -13033,6 +13037,33 @@ function OpenTuiWorkspace() {
     : splitFocusIndex === FLOATING_PANE_INDEX ? floatingItem : windowItems[splitFocusIndex] ?? null
   const focusedSessionPaneKey = focusedWindowItem?.kind === 'session' ? sessionKey(focusedWindowItem.session) : splitFocusIndex === null && hasPrimaryWindow && !shownPopoverTab ? selectedSessionKey : null
   useEffect(() => { if (focusedSessionPaneKey) setComposerPaneTargetKey(focusedSessionPaneKey) }, [focusedSessionPaneKey])
+  // The selected session is always on screen: in the focused session window,
+  // else the one focused last, else a new window. Browsing the rail is
+  // debounced, or every j would remount a window.
+  const showSelectedSessionInWindow = useEffectEvent(() => {
+    if (!selectedSession || !selectedSessionKey || shownPopoverTab) return
+    const key = selectedSessionKey
+    if (laidOutWindowKeys.has(key) || floatingKey === key || windowStackFor(key)) return
+    const targetIndex = splitFocusIndex ?? lastFocusedSplitPaneRef.current
+    const target = targetIndex === FLOATING_PANE_INDEX ? null : windowItems[targetIndex] ?? null
+    const old = target?.kind === 'session' ? windowItemKey(target) : null
+    const nextKeys = old ? orderedWindowKeys.map(entry => entry === old ? key : entry) : [...orderedWindowKeys, key]
+    commitWindowKeys(nextKeys)
+    setWindowSplitTree(reconciledSplitTree ? reconcileWindowSplitTree(reconciledSplitTree, nextKeys, false) : arrangePaneTree(nextKeys, false, 'columns'))
+    if (old) setWindowStacks(liveWindowStacks.map(stack => stack.map(entry => entry === old ? key : entry)))
+    setWorkspaceHasSession(true); setWorkspaceLaunched(true)
+  })
+  useEffect(() => {
+    if (effectiveFocus !== 'sessions') { showSelectedSessionInWindow(); return }
+    const timer = setTimeout(showSelectedSessionInWindow, DETAIL_OPEN_DELAY_MS)
+    return () => clearTimeout(timer)
+  }, [selectedSessionIdentity, shownPopoverTab])
+  // Focus with no window under it lands on the window showing the selection.
+  useEffect(() => {
+    if (effectiveFocus !== 'messages' || splitFocusIndex !== null || hasPrimaryFrame || !windowItems.length) return
+    const shown = windowItems.findIndex(item => item.kind === 'session' && sessionKey(item.session) === selectedSessionKey)
+    focusSplitPane(shown >= 0 ? shown : Math.min(lastFocusedSplitPaneRef.current, windowItems.length - 1))
+  })
   // A popover tab in the reader's place takes the keys while the reader is focused.
   const popoverTabFocused = Boolean(shownPopoverTab) && splitFocusIndex === null && !windowSurfacePeek && effectiveFocus === 'messages'
   const focusedWindowSurface: WindowSurfaceId | null = windowSurfacePeek ?? (focusedWindowItem?.kind === 'surface' ? focusedWindowItem.surface : null) ?? (popoverTabFocused ? shownPopoverTab : null)
@@ -13220,7 +13251,7 @@ function OpenTuiWorkspace() {
     [composerLiveReasoning, livePreviewContentWidth],
   )
 
-  const isPreviewMode = tabsEnabled && hasPrimaryWindow && !!selectedSessionKey && !openTabSessions.some((s) => sessionKey(s) === selectedSessionKey)
+  const isPreviewMode = tabsEnabled && !!selectedSessionKey && !openTabSessions.some((s) => sessionKey(s) === selectedSessionKey)
   const visibleTabSessions = useMemo(() => (
     isPreviewMode && selectedSession
       ? [...openTabSessions, selectedSession]
@@ -14716,9 +14747,6 @@ function OpenTuiWorkspace() {
     if (existing >= 0) { focusSplitPane(existing); return }
     if (floatingKey === key) { focusSplitPane(FLOATING_PANE_INDEX); return }
     if (windowStackFor(key)) { activateWindowTab(key); setOverviewPendingTarget(key); return }
-    // A tab is shown in the reader; with the reader closed, choosing one reopens it.
-    if (!hasPrimaryWindow) setSplitFocusIndex(null)
-    setPrimaryWindowOpen(true)
     setWorkspaceHasSession(true); setWorkspaceLaunched(true)
     const targetProvider: ProviderSelection = session.provider ?? 'claude'
     // A tab from another instance than the one the list is narrowed to is not
@@ -18965,42 +18993,19 @@ function OpenTuiWorkspace() {
     }
   }, [composerActive, composerPreferredTargetKey, composerPreparingTargetKey, newSessionModalOpen, selectedSessionKey, worktreeModalOpen])
 
-  // Reconcile split-pane pins against the open tabs. This is the ONLY writer of
-  // splitPinnedKeys besides the explicit \ and | commands, and it holds three
-  // rules:
-  //   · a pin whose tab was closed is dropped
-  //   · navigating INTO a pinned session hands that pane the session the reader
-  //     just left, so the set of visible transcripts stays put instead of every
-  //     pane reshuffling around the new active tab
+  // Reconcile window pins against the open tabs:
+  //   · a pin whose tab was closed is dropped (the previewed session excepted)
   //   · short lists fill from the remaining tabs in tab order
-  const previousSelectedSessionKeyRef = useRef<string | null>(null)
   useEffect(() => {
-    const previousSelected = previousSelectedSessionKeyRef.current
-    if (previousSelected !== selectedSessionKey) previousSelectedSessionKeyRef.current = selectedSessionKey
     if (splitPaneCount === 0) {
       setSplitPinnedKeys((current) => (current.length === 0 ? current : []))
       return
     }
     setSplitPinnedKeys((current) => {
       const parked = parkedWindowKeysRef.current
-      const candidateKeys = openTabSessions
-        .map((tab) => sessionKey(tab))
-        .filter((tabKey) => (!hasPrimaryWindow || tabKey !== selectedSessionKey) && !parked.has(tabKey))
-      const next: string[] = []
-      for (const pinnedKey of current) {
-        if (next.includes(pinnedKey)) continue
-        if (candidateKeys.includes(pinnedKey)) {
-          next.push(pinnedKey)
-        } else if (
-          hasPrimaryWindow && pinnedKey === selectedSessionKey
-          && previousSelected
-          && candidateKeys.includes(previousSelected)
-          && !current.includes(previousSelected)
-          && !next.includes(previousSelected)
-        ) {
-          next.push(previousSelected)
-        }
-      }
+      const candidateKeys = openTabSessions.map((tab) => sessionKey(tab)).filter((tabKey) => !parked.has(tabKey))
+      // A previewed session is a window before it is a tab.
+      const next = [...new Set(current)].filter((pinnedKey) => candidateKeys.includes(pinnedKey) || pinnedKey === selectedSessionKey)
       for (const candidateKey of candidateKeys) {
         if (next.length >= splitPaneCount) break
         if (!next.includes(candidateKey)) next.push(candidateKey)
@@ -19010,7 +19015,7 @@ function OpenTuiWorkspace() {
         && trimmed.every((pinnedKey, i) => pinnedKey === current[i])
       return unchanged ? current : trimmed
     })
-  }, [openTabSessions, selectedSessionKey, splitPaneCount, hasPrimaryWindow])
+  }, [openTabSessions, selectedSessionKey, splitPaneCount])
 
   // New participants append once; gates/status polls never reorder or focus.
   // Explicitly closed panes stay closed on subsequent refreshes.
@@ -21987,7 +21992,7 @@ function OpenTuiWorkspace() {
     lastFocusedSplitPaneRef.current = paneIndex
     setSplitFocusIndex(paneIndex)
     const focused = paneIndex === FLOATING_PANE_INDEX ? floatingItem : windowItems[paneIndex]
-    if (focused?.kind === 'session') setComposerPaneTargetKey(sessionKey(focused.session))
+    if (focused?.kind === 'session') { setComposerPaneTargetKey(sessionKey(focused.session)); setSelectedSessionKey(sessionKey(focused.session)) }
     // The reader keeps its own cursor, but the sidebar must not look focused
     // while a pane owns the keys.
     setFocusedPane('messages')
