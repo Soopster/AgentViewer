@@ -7854,6 +7854,9 @@ type SplitTranscriptPaneProps = {
   onContextMenu: (session: Session, source: 'pane', point: { x: number; y: number }, paneIndex: number) => void
   /** The pane's search, shown in its title while set (`/query`, with a caret while typed). */
   searchLabel: string | null
+  /** Links in the transcript: noted on press, followed on an unmoved release (`renderer.getLinkAt`). */
+  onTranscriptPress: (event: MouseEvent) => void
+  onTranscriptRelease: (event: MouseEvent) => void
   /** Dragging the pane by its title onto the window area (App's shared press/move/release). */
   sessionDrag: { press: (session: Session, fromPane: number | null, event: { x: number; y: number }, onClick?: () => void) => void; move: (event: { x: number; y: number }) => void; release: (event: { x: number; y: number }) => void }
   // True while the reader is opening a session. The threading worker is
@@ -7894,6 +7897,8 @@ function SplitTranscriptPaneInner({
   onPromotePane,
   onContextMenu,
   searchLabel,
+  onTranscriptPress,
+  onTranscriptRelease,
   sessionDrag,
   shouldYieldToForeground,
 }: SplitTranscriptPaneProps) {
@@ -7939,8 +7944,10 @@ function SplitTranscriptPaneInner({
       try {
         const detail = await readTuiSessionDetailAsync(session, density, showToolCalls)
         if (cancelled) return
-        const cached = getTranscriptCardsSync(session, detail.threadedMessages, density, showToolCalls)
-        const next = cached ?? await formatTranscriptCardsAsync(session, detail.threadedMessages, density, showToolCalls)
+        // The read carries the worker's cards for this variant, as the reader's did.
+        const next = attachedTranscriptCardsForVariant(detail, density, showToolCalls)
+          ?? getTranscriptCardsSync(session, detail.threadedMessages, density, showToolCalls)
+          ?? await formatTranscriptCardsAsync(session, detail.threadedMessages, density, showToolCalls)
         if (cancelled) return
         setCards((prev) => {
           // Identity bail-out: an idle session re-reads to the same cached card
@@ -8479,6 +8486,8 @@ function SplitTranscriptPaneInner({
             scrollAcceleration={MESSAGE_SCROLL_ACCEL}
             viewportCulling
             scrollbarOptions={scrollbarOptions}
+            onMouseDown={onTranscriptPress}
+            onMouseUp={onTranscriptRelease}
           >
             <TuiErrorBoundary>
               {hiddenCount > 0 ? (
@@ -26994,6 +27003,8 @@ function OpenTuiWorkspace() {
         onPromotePane={splitPaneActions.promote}
         onContextMenu={splitPaneActions.sessionMenu}
         searchLabel={paneSearch && paneSearch.index === splitIndex ? `/${paneSearch.query}${paneSearch.editing ? '▏' : ''}` : null}
+        onTranscriptPress={noteTranscriptLinkPress}
+        onTranscriptRelease={openTranscriptLinkAt}
         sessionDrag={sessionDragHandlers}
         shouldYieldToForeground={splitPaneShouldYield}
       />
