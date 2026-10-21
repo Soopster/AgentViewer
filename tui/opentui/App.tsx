@@ -11392,8 +11392,9 @@ function OpenTuiWorkspace() {
     if (existing >= 0) { focusSplitPane(existing); return }
     if (floatingItem?.kind === 'session' && sessionKey(floatingItem.session) === sessionKey(session)) { focusSplitPane(FLOATING_PANE_INDEX); return }
     const key = sessionKey(session)
-    if (!hasPrimaryWindow || splitFocusIndex !== null) {
-      if (!hasPrimaryWindow) setPrimaryWindowOpen(false)
+    // A focused pane takes the selection; with no pane focused, a closed
+    // reader reopens on it rather than the session landing in a new, unfocused pane.
+    if (splitFocusIndex !== null) {
       checkpointWindowLayout()
       setWorkspaceLaunched(true)
       setOpenTabSessions(current => current.some(tab => sessionKey(tab) === key) ? current : [...current, session])
@@ -14715,7 +14716,8 @@ function OpenTuiWorkspace() {
     if (existing >= 0) { focusSplitPane(existing); return }
     if (floatingKey === key) { focusSplitPane(FLOATING_PANE_INDEX); return }
     if (windowStackFor(key)) { activateWindowTab(key); setOverviewPendingTarget(key); return }
-    if (!hasPrimaryWindow) { selectSidebarSession(session); return }
+    // A tab is shown in the reader; with the reader closed, choosing one reopens it.
+    if (!hasPrimaryWindow) setSplitFocusIndex(null)
     setPrimaryWindowOpen(true)
     setWorkspaceHasSession(true); setWorkspaceLaunched(true)
     const targetProvider: ProviderSelection = session.provider ?? 'claude'
@@ -22011,6 +22013,27 @@ function OpenTuiWorkspace() {
     if (next === 0 && hasPrimaryFrame) focusReaderFromSplit()
     else focusSplitPane(next - (hasPrimaryFrame ? 1 : 0))
   })
+  // Tab walks the windows and then the rail; the reader is where it reaches
+  // the rail from. With the reader's window closed the cycle has no such stop,
+  // so the last pane hands off to the rail itself — or Tab never leaves panes.
+  const tabFromSplitPane = useEffectEvent(() => {
+    const lastPane = splitFocusIndex === FLOATING_PANE_INDEX || splitFocusIndex === visibleSplitPaneCount - 1
+    if (!hasPrimaryFrame && showRail && lastPane) {
+      setSplitFocusIndex(null)
+      setFocusedPane('sessions')
+      return
+    }
+    cycleSplitFocus(1)
+  })
+  // The rail's Tab returns to the reader, or to a pane when it is closed.
+  const tabFromRail = useEffectEvent(() => {
+    if (!hasPrimaryFrame && windowItems.length) {
+      focusSplitPane(Math.min(lastFocusedSplitPaneRef.current, windowItems.length - 1))
+      return
+    }
+    promotePreviewToTab()
+    setFocusedPane('messages')
+  })
 
   // Opening a popover that already has a window for this pin goes to the window:
   // a singleton must not exist twice, and two copies of one view is a surprise.
@@ -22613,12 +22636,10 @@ function OpenTuiWorkspace() {
         setFocusedPane('messages')
         moveViewport(1)
         break
-      case 'focus-next': {
-        const next: PaneFocus = focusedPane === 'sessions' ? 'messages' : 'sessions'
-        if (next === 'messages') promotePreviewToTab()
-        setFocusedPane(next)
+      case 'focus-next':
+        if (focusedPane === 'sessions') tabFromRail()
+        else setFocusedPane('sessions')
         break
-      }
       case 'live':
         setFocusedPane('messages')
         jumpToTranscriptTail()
@@ -24766,7 +24787,17 @@ function OpenTuiWorkspace() {
         return
       }
       if (key.name === 'return') { handled(openFocusedSplitPane); return }
-      if (key.name === 'tab') { handled(() => cycleSplitFocus(1)); return }
+      if (key.name === 'tab') { handled(tabFromSplitPane); return }
+      // With the reader closed nothing else can switch tabs, so ←/→ step the
+      // strip from this pane's session, as they do from the reader.
+      if (!hasPrimaryFrame && !key.ctrl && !key.shift && (key.name === 'left' || key.name === 'right')) {
+        handled(() => {
+          const from = paneSession ? visibleTabSessions.findIndex(tab => sessionKey(tab) === sessionKey(paneSession)) : -1
+          const at = from >= 0 ? from : activeStripIndex
+          selectStripIndex(key.name === 'left' ? Math.max(at - 1, 0) : Math.min(at + 1, tabStripLength - 1))
+        })
+        return
+      }
       // Session-scoped overlays follow focus, so ⌃G/D/⌃A inspect the pane you
       // are looking at rather than the reader's session.
       if (isCtrl('g')) { handled(() => openSplitPaneOverlay('git', paneSession)); return }
@@ -24823,9 +24854,8 @@ function OpenTuiWorkspace() {
 
     if (key.name === 'tab' && showRail) {
       handled(() => {
-        const next: PaneFocus = focusedPane === 'sessions' ? 'messages' : 'sessions'
-        if (next === 'messages') promotePreviewToTab()
-        setFocusedPane(next)
+        if (focusedPane === 'sessions') tabFromRail()
+        else setFocusedPane('sessions')
       })
       return
     }
