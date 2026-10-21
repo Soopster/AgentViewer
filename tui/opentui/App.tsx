@@ -13036,7 +13036,34 @@ function OpenTuiWorkspace() {
   const focusedWindowItem = splitFocusIndex === null ? null
     : splitFocusIndex === FLOATING_PANE_INDEX ? floatingItem : windowItems[splitFocusIndex] ?? null
   const focusedSessionPaneKey = focusedWindowItem?.kind === 'session' ? sessionKey(focusedWindowItem.session) : splitFocusIndex === null && hasPrimaryWindow && !shownPopoverTab ? selectedSessionKey : null
-  useEffect(() => { if (focusedSessionPaneKey) setComposerPaneTargetKey(focusedSessionPaneKey) }, [focusedSessionPaneKey])
+  // The selection follows the focused window, however focus got there.
+  useEffect(() => {
+    if (!focusedSessionPaneKey) return
+    setComposerPaneTargetKey(focusedSessionPaneKey)
+    setSelectedSessionKey(focusedSessionPaneKey)
+  }, [focusedSessionPaneKey])
+  // `w` closes a window's tab and shows the next one there — the nearest tab
+  // no other window shows — or closes the window when every tab is on screen.
+  const closeWindowSessionTab = useEffectEvent((session: Session) => {
+    const key = sessionKey(session)
+    const index = openTabSessions.findIndex(tab => sessionKey(tab) === key)
+    const rest = openTabSessions.filter(tab => sessionKey(tab) !== key)
+    const at = Math.min(Math.max(index, 0), rest.length)
+    const onScreen = new Set(orderedWindowKeys)
+    const next = [...rest.slice(at), ...rest.slice(0, at).reverse()].find(tab => !onScreen.has(sessionKey(tab)))
+    const windowIndex = windowItems.findIndex(item => item.kind === 'session' && sessionKey(item.session) === key)
+    if (!next || windowIndex < 0) {
+      if (windowIndex >= 0) closeSplitPane(windowIndex)
+      setOpenTabSessions(rest)
+      return
+    }
+    checkpointWindowLayout()
+    const nextKey = sessionKey(next)
+    commitWindowKeys(orderedWindowKeys.map(entry => entry === key ? nextKey : entry))
+    setWindowStacks(liveWindowStacks.map(stack => stack.map(entry => entry === key ? nextKey : entry)))
+    setOpenTabSessions(rest)
+    setSelectedSessionKey(nextKey)
+  })
   // The selected session is always on screen: in the focused session window,
   // else the one focused last, else a new window. Browsing the rail is
   // debounced, or every j would remount a window.
@@ -13060,7 +13087,8 @@ function OpenTuiWorkspace() {
   }, [selectedSessionIdentity, shownPopoverTab])
   // Focus with no window under it lands on the window showing the selection.
   useEffect(() => {
-    if (effectiveFocus !== 'messages' || splitFocusIndex !== null || hasPrimaryFrame || !windowItems.length) return
+    if (effectiveFocus !== 'messages' || splitFocusIndex !== null || hasPrimaryFrame) return
+    if (!windowItems.length) { if (showRail && !floatingKey) setFocusedPane('sessions'); return }
     const shown = windowItems.findIndex(item => item.kind === 'session' && sessionKey(item.session) === selectedSessionKey)
     focusSplitPane(shown >= 0 ? shown : Math.min(lastFocusedSplitPaneRef.current, windowItems.length - 1))
   })
@@ -13251,7 +13279,7 @@ function OpenTuiWorkspace() {
     [composerLiveReasoning, livePreviewContentWidth],
   )
 
-  const isPreviewMode = tabsEnabled && !!selectedSessionKey && !openTabSessions.some((s) => sessionKey(s) === selectedSessionKey)
+  const isPreviewMode = tabsEnabled && !!selectedSessionKey && laidOutWindowKeys.has(selectedSessionKey) && !openTabSessions.some((s) => sessionKey(s) === selectedSessionKey)
   const visibleTabSessions = useMemo(() => (
     isPreviewMode && selectedSession
       ? [...openTabSessions, selectedSession]
@@ -21994,8 +22022,6 @@ function OpenTuiWorkspace() {
     const focused = paneIndex === FLOATING_PANE_INDEX ? floatingItem : windowItems[paneIndex]
     if (focused?.kind === 'session') {
       const key = sessionKey(focused.session)
-      setComposerPaneTargetKey(key)
-      setSelectedSessionKey(key)
       // Entering a previewed session's window keeps it: it becomes a tab.
       setOpenTabSessions(current => current.some(tab => sessionKey(tab) === key) ? current : [...current, focused.session])
     }
@@ -24799,6 +24825,7 @@ function OpenTuiWorkspace() {
       }
       if (key.name === 'return') { handled(openFocusedSplitPane); return }
       if (key.name === 'tab') { handled(tabFromSplitPane); return }
+      if (key.name === 'w' && !key.ctrl && !key.shift && !key.meta && paneSession) { handled(() => closeWindowSessionTab(paneSession)); return }
       // With the reader closed nothing else can switch tabs, so ←/→ step the
       // strip from this pane's session, as they do from the reader.
       if (!hasPrimaryFrame && !key.ctrl && !key.shift && (key.name === 'left' || key.name === 'right')) {
