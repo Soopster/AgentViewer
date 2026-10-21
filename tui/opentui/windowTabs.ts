@@ -58,7 +58,7 @@ export function liveStacks(
   const claimed = new Set<string>()
   const result: WindowStack[] = []
   for (const stack of stacks) {
-    const present = stack.filter((key) => exists(key) && !claimed.has(key))
+    const present = [...new Set(stack)].filter((key) => exists(key) && !claimed.has(key))
     const frame = present.find(laidOut)
     if (!frame) continue
     const members = present.filter((key) => key === frame || !laidOut(key))

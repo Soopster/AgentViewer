@@ -23,6 +23,7 @@ assert.deepEqual(liveStacks([['b', 'c']], () => true, (key) => laid.has(key)), [
 assert.deepEqual(liveStacks([['a', 'x', 'b']], () => true, (key) => laid.has(key)), [['a', 'b']], 'a second laid-out member is a window of its own')
 assert.deepEqual(liveStacks([['a', 'gone']], (key) => key !== 'gone', (key) => laid.has(key)), [], 'a stack down to one live member dissolves')
 assert.deepEqual(liveStacks([['a', 'b'], ['x', 'b']], () => true, (key) => laid.has(key)), [['a', 'b']], 'a key is in one stack only')
+assert.deepEqual(liveStacks([['a', 'a', 'b', 'b']], () => true, (key) => laid.has(key)), [['a', 'b']], 'restored duplicates cannot create repeated tabs in one frame')
 console.log('Only stacks with exactly one frame survive.')
 
 assert.deepEqual(replaceWindowKey(['a', 'T', 'c'], 'T', 'b'), ['a', 'b', 'c'])

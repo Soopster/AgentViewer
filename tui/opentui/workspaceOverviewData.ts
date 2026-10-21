@@ -1,7 +1,8 @@
 import type { Session } from '../../lib/types'
 import { formatSessionTitle } from '../format'
 import { orderWindows, isSurfaceWindowKey, surfaceIdOfKey } from './windowOrder'
-import { surfaceTitle } from './windowSurfaceNames'
+import { surfaceTitle, surfaceKindOf, WINDOW_SURFACE_TITLES } from './windowSurfaceNames'
+import { liveStacks } from './windowTabs'
 import type { WorkspaceRuntime, SpacesController } from './spacesStore'
 
 export type OverviewWindow = { key: string; title: string; detail: string; hidden: boolean; badge?: string; tabs?: OverviewWindow[] }
@@ -32,11 +33,14 @@ export function workspaceWindowOverview(runtime: WorkspaceRuntime): OverviewWind
   }
   const reader = values.primaryWindowOpen === false || values.workspaceHasSession === false ? undefined : values.selectedSessionKey as string | undefined
   const keys = orderWindows((values.windowOrder ?? []) as string[], ((values.splitPinnedKeys ?? []) as string[]).slice(0, Number(values.splitPaneCount ?? 0)), (values.windowSurfaces ?? []) as string[])
-  const stacks = (values.windowStacks ?? []) as string[][]
+  const rawStacks = (values.windowStacks ?? []) as string[][]
   const stripIds = [...new Set((values.popoverTabs ?? []) as string[])]
   const activeStrip = stripIds.includes(String(values.activePopoverTab)) ? values.activePopoverTab as string : null
   const floating = values.floatingWindow as { key?: string } | undefined
   const floatingKey = floating?.key && !keys.includes(floating.key) ? floating.key : null
+  const stacks = liveStacks(rawStacks, key => key !== floatingKey && (isSurfaceWindowKey(key)
+    ? Object.hasOwn(WINDOW_SURFACE_TITLES, surfaceKindOf(surfaceIdOfKey(key))) && !stripIds.includes(surfaceIdOfKey(key))
+    : sessionByKey.has(key) && key !== reader), key => keys.includes(key))
   const zoom = values.windowZoom ?? null
   const meta = (values.windowSurfaceMeta ?? {}) as Record<string, { session?: string; path?: string; cwd?: string }>
   const title = (key: string): string => {

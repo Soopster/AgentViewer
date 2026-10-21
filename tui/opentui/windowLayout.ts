@@ -282,7 +282,8 @@ export function windowPreviewLines(rects: WindowRect[], area: WindowSize, column
     for (let column = 0; column < columns; column += 1) {
       const x = (column + 0.5) * area.width / columns
       const y = (row + 0.5) * area.height / rows
-      const index = rects.findIndex((rect) => x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height)
+      // Later rectangles paint over earlier ones, including floating windows.
+      const index = rects.findLastIndex((rect) => x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height)
       const rect = rects[index]
       if (!rect) { line += ' '; continue }
       const left = Math.floor(rect.x * columns / area.width)

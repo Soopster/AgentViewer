@@ -1003,7 +1003,10 @@ const AWAITING_PERSISTED_TURN_TIMEOUT_MS = 12000
 const DEFAULT_SIDEBAR_WIDTH = 32
 const SIDEBAR_RESIZE_STEP = 2
 const MIN_SIDEBAR_WIDTH = 28
-const MIN_READER_WIDTH = 40
+const MIN_WINDOW_COLUMNS = 46
+const MIN_WINDOW_ROWS = 9
+// Compatibility names for the original frame's renderer and old presets.
+const MIN_READER_WIDTH = MIN_WINDOW_COLUMNS
 const TASK_PANEL_MIN_WIDTH = 24
 const TASK_PANEL_DEFAULT_WIDTH = 32
 const TASK_PANEL_MAX_WIDTH = 60
@@ -7646,12 +7649,12 @@ export function createLazyTranscriptIndexLookup(
 // pipeline, which is entangled with the cursor, search, live overlay and
 // composer. Panes stay collapsed and tail-anchored: they answer "what is that
 // agent doing right now", not "let me read that transcript".
-const SPLIT_PANE_MIN_WIDTH = 46
+const SPLIT_PANE_MIN_WIDTH = MIN_WINDOW_COLUMNS
 // Row minimums for the stacked orientation. A pane needs its two border rows,
 // a meta row, the reserved action row and a few body rows to say anything at
 // all; below that the layout drops the pane rather than render a sliver.
-const SPLIT_PANE_MIN_ROWS = 9
-const MIN_READER_ROWS = 12
+const SPLIT_PANE_MIN_ROWS = MIN_WINDOW_ROWS
+const MIN_READER_ROWS = MIN_WINDOW_ROWS
 const SPLIT_PANE_MAX = 2
 // A side-panel surface, or a popover broken out into a window (popoverWindows.ts).
 // A surface window's id is its kind, or `kind#n` for a further one of a kind
@@ -8414,7 +8417,7 @@ function SplitTranscriptPaneInner({
       borderStyle="single"
       // Focused frame lights in the provider accent, exactly like the reader
       // and sidebar — one visual language for "this pane has the keyboard".
-      borderColor={focused ? accent : theme.border}
+      borderColor={focused ? theme.cyan : theme.border}
       backgroundColor={theme.surface}
       flexDirection="column"
       // Number the frame whenever more than one is mounted: ⌃B 1/⌃B 2 jump
@@ -8442,9 +8445,9 @@ function SplitTranscriptPaneInner({
         }
         if (event.button !== 0) return
         onActivate(paneIndex)
-        // The title row is the handle a window is dragged by; a double-click on it opens the pane in the reader.
+        // The title row drags a window; a double-click zooms a tiled frame.
         if (paneFrameRef.current && event.y === paneFrameRef.current.y) {
-          if (isDoubleClick(titleClickRef, event)) { onPromotePane(session); return }
+          if (paneIndex !== FLOATING_PANE_INDEX && isDoubleClick(titleClickRef, event)) { onPromotePane(session); return }
           sessionDrag.press(session, paneIndex, event)
         }
       }}
@@ -9378,6 +9381,8 @@ function OpenTuiWorkspace() {
   const [splitReaderLast, setSplitReaderLast] = useWorkspaceState('splitReaderLast', false)
   const [windowSplitTree, setWindowSplitTree] = useWorkspaceState<WindowSplitTree | null>('windowSplitTree', null)
   const [treeDividerDrag, setTreeDividerDrag] = useState<string | null>(null)
+  const treeDividerCheckpointedRef = useRef(false)
+  const treeDividerActivePathRef = useRef<string | null>(null)
   const [coordinatorWorkspace, setCoordinatorWorkspace] = useWorkspaceState<ProtocolRunSnapshot | null>('coordinatorWorkspace', null, false)
   const [coordinatorWorkspaceRunId, setCoordinatorWorkspaceRunId] = useWorkspaceState<string | null>('coordinatorWorkspaceRunId', null)
   const watchedRosterRef = useWorkspaceRef<{ runId: string; keys: Set<string> } | null>('watchedRoster', null, true)
@@ -9410,6 +9415,7 @@ function OpenTuiWorkspace() {
   // The reader's place shows a popover tab instead of the transcript.
   const shownPopoverTab = activePopoverTab && popoverTabs.includes(activePopoverTab) ? activePopoverTab : null
   const pendingSurfaceFocusRef = useRef<WindowSurfaceId | null>(null)
+  const surfaceTitleClicksRef = useRef(new Map<string, { current: { x: number; y: number; at: number } | null }>())
   // Where surface windows sit among the session panes (windowOrder.ts): the
   // session pins still decide the sessions and their order.
   const [windowOrder, setWindowOrder] = useWorkspaceState<string[]>('windowOrder', [])
@@ -9417,7 +9423,7 @@ function OpenTuiWorkspace() {
   const [windowStacks, setWindowStacks] = useWorkspaceState<WindowStack[]>('windowStacks', [])
   // `slot` is where it sat in the layout, so docking puts it back there.
   const [floatingWindow, setFloatingWindow] = useWorkspaceState<{ key: string; rect: FloatingRect; slot: number } | null>('floatingWindow', null)
-  const floatGestureRef = useRef<{ mode: 'move' | 'resize'; x: number; y: number; rect: FloatingRect } | null>(null)
+  const floatGestureRef = useRef<{ mode: 'move' | 'resize'; x: number; y: number; rect: FloatingRect; moved?: boolean } | null>(null)
   const [floatGesturing, setFloatGesturing] = useState(false)
   // Session keys held off the layout (background tabs, the floating window):
   // the pin reconciler must not fill a pane with one. Written each render.
@@ -10073,6 +10079,7 @@ function OpenTuiWorkspace() {
   const velocityScrollStateRef = useRef<{ direction: -1 | 1; streakStart: number; lastEventTime: number } | null>(null)
   const prevTranscriptLengthRef = useRef(0)
   const tabSelectRef = useRef<TabSelectRenderable>(null)
+  const syncingTabSelectionRef = useRef(false)
   const sessionRequestRef = useRef(0)
   const detailRequestRef = useRef(0)
   const backgroundMetadataCursorRef = useRef(0)
@@ -12940,7 +12947,10 @@ function OpenTuiWorkspace() {
   } : null
   const reconciledSplitTree = validWindowSplitTree(windowSplitTree) ? reconcileWindowSplitTree(windowSplitTree, orderedWindowKeys, hasPrimaryFrame) : fallbackPaneTree
   const splitTreeLimits = { paneWidth: SPLIT_PANE_MIN_WIDTH, paneRows: SPLIT_PANE_MIN_ROWS, readerWidth: SPLIT_PANE_MIN_WIDTH, readerRows: SPLIT_PANE_MIN_ROWS }
-  let treeGeometry = reconciledSplitTree && !fullscreenMode ? computeWindowSplitTree(reconciledSplitTree, readerAreaWidth, windowBudgetHeight, splitTreeLimits) : null
+  // Zoomed neighbours are hidden, so their minimums must not evict the zoomed
+  // frame or unmount its siblings when the terminal becomes smaller.
+  const splitTreeFitLimits = windowZoom === null ? splitTreeLimits : { paneWidth: 0, paneRows: 0, readerWidth: 0, readerRows: 0 }
+  let treeGeometry = reconciledSplitTree && !fullscreenMode ? computeWindowSplitTree(reconciledSplitTree, readerAreaWidth, windowBudgetHeight, splitTreeFitLimits) : null
   const treeOverflowRows = treeGeometry && treeGeometry.layout.visibleCount < orderedWindowKeys.length ? 1 : 0
   if (treeGeometry && treeOverflowRows) treeGeometry = computeWindowSplitTree(reconciledSplitTree!, readerAreaWidth, Math.max(1, windowBudgetHeight - 1), splitTreeLimits)
   const splitTreeSignature = JSON.stringify(reconciledSplitTree)
@@ -12959,12 +12969,12 @@ function OpenTuiWorkspace() {
     secondaryShare: splitSecondaryShare,
     bottomShare: splitBottomShare,
     weights: splitWeights,
-    minPaneWidth: SPLIT_PANE_MIN_WIDTH,
-    minPaneRows: SPLIT_PANE_MIN_ROWS,
-    minReaderWidth: MIN_READER_WIDTH,
-    minReaderRows: MIN_READER_ROWS,
+    minPaneWidth: windowZoom === null ? SPLIT_PANE_MIN_WIDTH : 0,
+    minPaneRows: windowZoom === null ? SPLIT_PANE_MIN_ROWS : 0,
+    minReaderWidth: windowZoom === null ? MIN_READER_WIDTH : 0,
+    minReaderRows: windowZoom === null ? MIN_READER_ROWS : 0,
   })
-  const windowOverflowRows = fullscreenMode ? 0 : responsiveWindows.overflowRows
+  const windowOverflowRows = fullscreenMode || windowZoom !== null ? 0 : responsiveWindows.overflowRows
   const windowAreaHeight = Math.max(1, windowBudgetHeight - windowOverflowRows)
   const fittedWindows = responsiveWindows.layout
   const splitLayout = {
@@ -13000,7 +13010,7 @@ function OpenTuiWorkspace() {
   // A tab still exists while its session is an open tab other than the reader,
   // or — a surface — while it is not open somewhere else.
   const windowKeyExists = (key: string) => key !== floatingKey && (isSurfaceWindowKey(key)
-    ? true
+    ? Object.hasOwn(WINDOW_SURFACE_TITLES, surfaceKindOf(surfaceIdOfKey(key))) && !popoverTabs.includes(surfaceIdOfKey(key))
     : openTabByKey.has(key) && (!hasPrimaryWindow || key !== selectedSessionKey))
   const liveWindowStacks = liveStacks(windowStacks, windowKeyExists, (key) => laidOutWindowKeys.has(key))
   parkedWindowKeysRef.current = new Set([
@@ -13095,7 +13105,7 @@ function OpenTuiWorkspace() {
     ? Math.min(Math.max(24, Math.floor(readerAreaWidth * 0.22)), Math.max(readerAreaWidth - MIN_READER_WIDTH, 0))
     : 0
   // A zoomed reader has the whole area; the other windows are not drawn.
-  const readerZoomed = windowZoom === 'reader' && visibleSplitPaneCount > 0
+  const readerZoomed = windowZoom === 'reader'
   const rightPaneWidth = (readerZoomed ? readerAreaWidth : treeGeometry ? treeGeometry.layout.reader.width : arrangedVisible ? arrangedLayout.reader.width : stackedSplit ? readerAreaWidth : splitLayout.readerExtent) - openCodeContextWidth
   // Row budget the reader column actually gets. Stacked panes take theirs out
   // of it, so every downstream height (transcript viewport included) must be
@@ -13209,7 +13219,7 @@ function OpenTuiWorkspace() {
     [composerLiveReasoning, livePreviewContentWidth],
   )
 
-  const isPreviewMode = tabsEnabled && !!selectedSessionKey && !openTabSessions.some((s) => sessionKey(s) === selectedSessionKey)
+  const isPreviewMode = tabsEnabled && hasPrimaryWindow && !!selectedSessionKey && !openTabSessions.some((s) => sessionKey(s) === selectedSessionKey)
   const visibleTabSessions = useMemo(() => (
     isPreviewMode && selectedSession
       ? [...openTabSessions, selectedSession]
@@ -18872,7 +18882,7 @@ function OpenTuiWorkspace() {
     if (commandChordPending) setCommandChordPending(false)
   }, [composerActive])
 
-  // Prefix chords are intentionally short-lived. A dropped key event (remote
+  // Prefix chords allow time to read the pop-up. A dropped key event (remote
   // shell, terminal multiplexer, focus change) must not leave the next ordinary
   // key trapped as a command indefinitely.
   useEffect(() => {
@@ -19046,7 +19056,9 @@ function OpenTuiWorkspace() {
   // Sync tab-select visual position when active tab changes
   useEffect(() => {
     if (!tabSelectRef.current || activeStripIndex < 0) return
-    tabSelectRef.current.setSelectedIndex(activeStripIndex)
+    syncingTabSelectionRef.current = true
+    try { tabSelectRef.current.setSelectedIndex(activeStripIndex) }
+    finally { syncingTabSelectionRef.current = false }
   }, [activeStripIndex])
 
   // Animate the running tabs' spinner IMPERATIVELY, through the renderable's
@@ -20573,6 +20585,10 @@ function OpenTuiWorkspace() {
     void writeTuiSplitPanes(next).catch((err) => {
       setError(err instanceof Error ? err.message : 'Failed to store split view setting')
     })
+    if (windowSplitTree) {
+      showNotice('info', label ?? `${next} session pane${next === 1 ? '' : 's'} open`)
+      return
+    }
     if (next === 0) {
       showNotice('info', label ?? 'Split transcript view off')
       return
@@ -21050,6 +21066,7 @@ function OpenTuiWorkspace() {
 
   // The strip's entry at `index`: a session tab or a popover tab.
   const selectStripIndex = useEffectEvent((index: number) => {
+    if (syncingTabSelectionRef.current) return
     if (index < visibleTabSessions.length) { const tab = visibleTabSessions[index]; if (tab) selectTabSession(tab); return }
     const id = popoverTabs[index - visibleTabSessions.length]
     if (id) showPopoverTab(id)
@@ -21186,20 +21203,27 @@ function OpenTuiWorkspace() {
   // `key` becomes a tab of `anchor`'s frame, and the frame shows it.
   const tabWindowOnto = useEffectEvent((key: string, anchor: string, session?: Session) => {
     if (key === anchor) return
-    if (hasPrimaryWindow && key === selectedSessionKey) {
+    const primaryKey = shownPopoverTab ? surfaceWindowKey(shownPopoverTab) : hasPrimaryWindow ? selectedSessionKey : null
+    if (primaryKey && key === primaryKey) {
       checkpointWindowLayout()
       const frame = stackOf(liveWindowStacks, anchor)?.find(member => laidOutWindowKeys.has(member)) ?? anchor
       if (!laidOutWindowKeys.has(frame)) return
-      withdrawPrimaryFrame()
+      const base = removePrimaryWindow(currentPaneTree())
+      if (!base) return
+      if (shownPopoverTab) closePopoverTab(shownPopoverTab, true)
+      if (hasPrimaryWindow) withdrawPrimaryFrame()
+      else { setPrimaryWindowOpen(false); setWindowZoom(null) }
       setWindowStacks(addToStack(liveWindowStacks, anchor, key))
-      commitWindowKeys(replaceWindowKey(orderedWindowKeys, frame, key))
+      const keys = replaceWindowKey(orderedWindowKeys, frame, key)
+      commitWindowKeys(keys, reconcileWindowSplitTree(base, keys, false))
       setOverviewPendingTarget(key)
       return
     }
-    if (hasPrimaryWindow && anchor === selectedSessionKey) {
+    if (primaryKey && anchor === primaryKey) {
       checkpointWindowLayout()
       if (session && !openTabByKey.has(key)) setOpenTabSessions(current => [...current, session])
       const next = replacePrimaryWindow(currentPaneTree(), key)
+      if (shownPopoverTab) closePopoverTab(shownPopoverTab, true)
       setPrimaryWindowOpen(false)
       setWindowStacks(addToStack(liveWindowStacks, anchor, key))
       if (floatingKey === key) setFloatingWindow(null)
@@ -21254,18 +21278,27 @@ function OpenTuiWorkspace() {
   const breakOutWindowTab = useEffectEvent((key: string) => {
     const stack = windowStackFor(key)
     if (!stack) { showNotice('info', 'This window is not one of several tabs'); return }
-    checkpointWindowLayout()
-    setWindowStacks(removeFromStack(liveWindowStacks, key))
-    let keys = shownFirstWindowKeys()
     const frame = stack.find((member) => laidOutWindowKeys.has(member))!
-    let anchor = frame
-    if (frame === key) {
-      anchor = stackSuccessor(stack, key)!
-      keys = replaceWindowKey(keys, key, anchor)
+    const anchor = frame === key ? stackSuccessor(stack, key)! : frame
+    const base = { ...currentPaneTree() }
+    if (frame === key) base.keys = base.keys.map(entry => entry === key ? anchor : entry)
+    const geometry = computeWindowSplitTree(base, readerAreaWidth, windowAreaHeight, splitTreeLimits)
+    const anchorRect = geometry.rects.get(base.keys.indexOf(anchor))
+    for (const edge of ['right', 'bottom'] as const) {
+      const enough = anchorRect && (edge === 'right' ? anchorRect.width >= 2 * SPLIT_PANE_MIN_WIDTH : anchorRect.height >= 2 * SPLIT_PANE_MIN_ROWS)
+      if (!enough) continue
+      const next = placeWindowSplit(base, key, anchor, edge)
+      if (!next || computeWindowSplitTree(next, readerAreaWidth, windowAreaHeight, splitTreeLimits).layout.visibleCount !== next.keys.length) continue
+      checkpointWindowLayout()
+      setWindowStacks(removeFromStack(liveWindowStacks, key))
+      setWindowZoom(null)
+      commitWindowKeys(next.keys, next)
+      setOverviewPendingTarget(key)
+      return
     }
-    keys.splice(keys.indexOf(anchor) + 1, 0, key)
-    commitWindowKeys(keys)
-    pendingSurfaceFocusRef.current = isSurfaceWindowKey(key) ? surfaceIdOfKey(key) : null
+    // A tab must never detach into responsive overflow or squeeze its neighbours.
+    floatWindowKey(key)
+    showNotice('info', 'Detached into a floating window · no room beside this pane')
   })
   // ⌃B t — the focused window becomes a tab of the window before it.
   const tabFocusedWindow = useEffectEvent((target: number | null = splitFocusIndex) => {
@@ -21355,7 +21388,7 @@ function OpenTuiWorkspace() {
     floatWindowKey(surfaceWindowKey(surface))
   })
   const startFloatGesture = (mode: 'move' | 'resize', event: { x: number; y: number }) => {
-    if (!floatingWindow) return
+    if (!floatingWindow || floatGestureRef.current) return
     floatGestureRef.current = { mode, x: event.x, y: event.y, rect: clampFloatingRect(floatingWindow.rect, { width: readerAreaWidth, height: windowAreaHeight }) }
     setFloatGesturing(true)
   }
@@ -21373,6 +21406,11 @@ function OpenTuiWorkspace() {
   const moveFloatGesture = (event: { x: number; y: number }) => {
     const gesture = floatGestureRef.current
     if (!gesture || !floatingWindow) return
+    if (!gesture.moved) {
+      if (Math.abs(event.x - gesture.x) + Math.abs(event.y - gesture.y) < 2) return
+      checkpointWindowLayout()
+      gesture.moved = true
+    }
     if (gesture.mode === 'move') {
       const dock = floatDockTarget(event)
       const area = windowAreaRect()
@@ -21384,7 +21422,7 @@ function OpenTuiWorkspace() {
       setFloatDockHint(splitRect && area
         ? { label: 'Split here', rect: { ...splitRect, x: splitRect.x + area.x, y: splitRect.y + area.y }, x: event.x, y: event.y }
         : dock && area
-        ? { label: dock.kind === 'tab' ? `Add as a tab of window ${dock.pane + 1}` : 'Dock into the layout', rect: pane ? { ...pane, height: Math.min(pane.height, 3) } : area, x: event.x, y: event.y }
+        ? { label: dock.kind === 'tab' ? `Add as a tab of window ${dock.pane + (hasPrimaryFrame ? 2 : 1)}` : 'Dock into the layout', rect: pane ? { ...pane, height: Math.min(pane.height, 3) } : area, x: event.x, y: event.y }
         : null)
     }
     const area = windowAreaRect() ?? { width: readerAreaWidth, height: windowAreaHeight }
@@ -21400,7 +21438,7 @@ function OpenTuiWorkspace() {
     floatGestureRef.current = null
     setFloatGesturing(false)
     setFloatDockHint(null)
-    if (!gesture || gesture.mode !== 'move' || !event || !floatingKey) return
+    if (!gesture?.moved || gesture.mode !== 'move' || !event || !floatingKey) return
     const target = dropTargetAt(event)
     const edge = target.pane === null ? target.zone : target.insert
     if (edge && edge !== 'center' && !target.title && nestedDropPlan(floatingKey, target)) {
@@ -21423,7 +21461,13 @@ function OpenTuiWorkspace() {
   }
   // Esc during a drag puts everything back as it was when the drag started.
   const cancelPointerGesture = (): boolean => {
-    if (treeDividerDrag !== null) { setTreeDividerDrag(null); undoWindowLayout(); return true }
+    if (treeDividerDrag !== null) {
+      setTreeDividerDrag(null)
+      treeDividerActivePathRef.current = null
+      if (treeDividerCheckpointedRef.current) undoWindowLayout()
+      treeDividerCheckpointedRef.current = false
+      return true
+    }
     if (floatGestureRef.current) {
       const gesture = floatGestureRef.current
       floatGestureRef.current = null
@@ -21568,7 +21612,8 @@ function OpenTuiWorkspace() {
       else selectSidebarSession(session)
       return
     }
-    applyWindowSessionDrop(session, { kind: 'edge', zone })
+    const pane = splitFocusIndex !== null && splitFocusIndex >= 0 && splitFocusIndex < windowItems.length ? splitFocusIndex : hasPrimaryFrame ? null : windowItems.length ? 0 : null
+    applyNestedDrop(sessionKey(session), { pane, zone: pane === null ? zone : null, insert: pane === null ? null : zone }, session)
   })
 
   // A surface window dropped on the reader floats where it was let go.
@@ -21592,12 +21637,13 @@ function OpenTuiWorkspace() {
     if (stack?.includes(anchor ?? '')) return null
     const successor = stack && orderedWindowKeys.includes(movingKey) ? stackSuccessor(stack, movingKey) : null
     if (successor) base = { ...base, keys: base.keys.map(key => key === movingKey ? successor : key) }
-    const next = hasPrimaryWindow && movingKey === selectedSessionKey ? placePaneSlot(base, -1, target.pane ?? -1, edge) : placeWindowSplit(base, movingKey, anchor, edge)
+    const primaryKey = shownPopoverTab ? surfaceWindowKey(shownPopoverTab) : hasPrimaryWindow ? selectedSessionKey : null
+    const next = primaryKey && movingKey === primaryKey ? placePaneSlot(base, -1, target.pane ?? -1, edge) : placeWindowSplit(base, movingKey, anchor, edge)
     if (!next) return null
     const geometry = computeWindowSplitTree(next, readerAreaWidth, windowAreaHeight, splitTreeLimits)
     if (geometry.layout.visibleCount !== next.keys.length) return null
     // Refuse a new split that borrows minimum-size space from unrelated panes.
-    if (!orderedWindowKeys.includes(movingKey) && !(hasPrimaryWindow && movingKey === selectedSessionKey)) {
+    if (!orderedWindowKeys.includes(movingKey) && movingKey !== primaryKey) {
       const frame = target.pane === null ? rectOf('transcript-reader') : rectOf(`split-pane:${target.pane}`)
       const horizontal = edge === 'left' || edge === 'right'
       const required = horizontal ? SPLIT_PANE_MIN_WIDTH + (target.pane === null ? MIN_READER_WIDTH : SPLIT_PANE_MIN_WIDTH) : SPLIT_PANE_MIN_ROWS + (target.pane === null ? MIN_READER_ROWS : SPLIT_PANE_MIN_ROWS)
@@ -21624,6 +21670,7 @@ function OpenTuiWorkspace() {
   const projectedWindowGeometry = (() => {
     if ((!windowPickerOpen || !windowLayoutPreview) && !sessionDrag) return null
     let previewSplitTree: WindowSplitTree | null = null
+    let previewPrimary = hasPrimaryFrame
     let plan = { arrangement: splitArrangement, orientation: splitOrientation, readerLast: splitReaderLast, count: splitPaneCount }
     let readerShare = splitReaderShare
     let secondaryShare = splitSecondaryShare
@@ -21631,6 +21678,7 @@ function OpenTuiWorkspace() {
     let weights: WindowWeights = splitWeights
     let surfaces = windowSurfaces.length
     let missing = 0
+    let previewFloating = floatingKey && floatingWindow ? floatingWindow.rect : null
     if (sessionDrag) {
       if (!sessionDrag.session || sessionDrag.title || sessionKey(sessionDrag.session) === selectedSessionKey) return null
       if (sessionDrag.pane !== null && windowItems[sessionDrag.pane]?.kind === 'surface') return null
@@ -21647,13 +21695,20 @@ function OpenTuiWorkspace() {
       const saved = savedWindowLayouts.find((entry) => entry.id === windowLayoutPreview.slice(6))
       if (!saved) return null
       const known = new Set([...sessions, ...openTabSessions].map(sessionKey))
+      const savedFloating = saved.floating
+      previewFloating = savedFloating && (isSurfaceWindowKey(savedFloating.key) ? surfaceRestorable(surfaceIdOfKey(savedFloating.key)) : known.has(savedFloating.key)) ? savedFloating.rect : null
+      previewPrimary = Boolean(saved.reader && known.has(saved.reader) && (saved.primaryOpen ?? saved.splitTree?.primary !== false)) || Boolean(saved.activePopoverTab && saved.popoverTabs?.includes(saved.activePopoverTab) && surfaceRestorable(saved.activePopoverTab))
       if (validWindowSplitTree(saved.splitTree)) {
-        const primary = Boolean(saved.reader && known.has(saved.reader) && (saved.primaryOpen ?? saved.splitTree.primary !== false)) || Boolean(saved.activePopoverTab && saved.popoverTabs?.includes(saved.activePopoverTab) && surfaceRestorable(saved.activePopoverTab))
-        const restoredTree = primary ? saved.splitTree : removePrimaryWindow(saved.splitTree)
-        previewSplitTree = restoredTree ? reconcileWindowSplitTree(restoredTree, restoredTree.keys.filter(key => isSurfaceWindowKey(key) ? surfaceRestorable(surfaceIdOfKey(key)) : known.has(key)), primary) : null
+        const restoredTree = previewPrimary ? saved.splitTree : removePrimaryWindow(saved.splitTree)
+        previewSplitTree = restoredTree ? reconcileWindowSplitTree(restoredTree, restoredTree.keys.filter(key => isSurfaceWindowKey(key) ? surfaceRestorable(surfaceIdOfKey(key)) : known.has(key)), previewPrimary) : null
+      } else if (!previewPrimary) {
+        const keys = orderWindows(saved.order ?? [], saved.panes.filter(key => known.has(key)), saved.surfaces.filter(surfaceRestorable))
+        if (keys.length) previewSplitTree = { primary: false, keys,
+          root: keys.map((_, slot) => ({ slot })).reduce<import('./windowSplitTree').WindowSplitNode>((root, node, index) => index === 0 ? node : ({ axis: saved.orientation === 'columns' ? 'x' : 'y', ratio: index / (index + 1), first: root, second: node }), { slot: 0 }) }
       }
       const available = saved.panes.filter((key) => known.has(key)).length
       missing = saved.panes.length - available + (saved.reader && !known.has(saved.reader) ? 1 : 0)
+      if (savedFloating && !isSurfaceWindowKey(savedFloating.key) && !known.has(savedFloating.key)) missing++
       plan = { ...saved, count: available }
       readerShare = saved.readerShare
       secondaryShare = saved.secondaryShare
@@ -21662,7 +21717,15 @@ function OpenTuiWorkspace() {
       surfaces = saved.surfaces.filter(surfaceRestorable).length
     } else if (windowLayoutPreview?.startsWith('action:')) {
       const action = windowLayoutPreview.slice(7) as WindowLayoutAction
-      if (action === 'fullscreen' || action === 'fill') return { rects: [{ x: 0, y: 0, width: readerAreaWidth, height: windowAreaHeight }], overflowRows: 0, lines: windowPreviewLines([{ x: 0, y: 0, width: readerAreaWidth, height: windowAreaHeight }], { width: readerAreaWidth, height: windowAreaHeight }), detail: 'Focused pane fills the workspace · other panes preserved' }
+      if (action === 'fullscreen' || action === 'fill') {
+        const area = { width: readerAreaWidth, height: windowAreaHeight }
+        if (splitFocusIndex === FLOATING_PANE_INDEX && previewFloating) {
+          const rects = [clampFloatingRect(previewFloating, area)]
+          return { rects, overflowRows: 0, lines: windowPreviewLines(rects, area), detail: 'Floating window · dock it to use a tiled layout' }
+        }
+        const rects = [{ x: 0, y: 0, ...area }, ...(previewFloating ? [clampFloatingRect(previewFloating, area)] : [])]
+        return { rects, overflowRows: 0, lines: windowPreviewLines(rects, area), detail: `Focused pane fills the workspace${previewFloating ? ' · 1 floating' : ' · other panes preserved'}` }
+      }
       previewSplitTree = planPaneArrangement(action)
       if (!previewSplitTree) return null
       plan.count = previewSplitTree.keys.filter(key => !isSurfaceWindowKey(key)).length
@@ -21683,11 +21746,14 @@ function OpenTuiWorkspace() {
     const result = previewGeometry ? { layout: previewGeometry.layout, overflowRows: previewOverflow } : computeResponsiveWindowLayout(input)
     const area = { width: input.width, height: Math.max(1, input.height - result.overflowRows) }
     const rects = previewGeometry ? [...(previewGeometry.rects.has(-1) ? [previewGeometry.rects.get(-1)!] : []), ...Array.from({ length: previewGeometry.layout.visibleCount }, (_, index) => previewGeometry!.rects.get(index)!)] : windowLayoutRects(result.layout, { ...input, ...area })
+    if (!previewGeometry && !previewPrimary) rects.shift()
+    const tiledCount = rects.length
+    if (previewFloating) rects.push(clampFloatingRect(previewFloating, area))
     const hidden = input.availableCount - result.layout.visibleCount
     return {
       rects, overflowRows: result.overflowRows,
       lines: windowPreviewLines(rects, area),
-      detail: `${area.width}×${area.height} · ${rects.length} visible${hidden ? ` · ${hidden} hidden` : ''}${missing ? ` · ${missing} missing` : ''}`,
+      detail: `${area.width}×${area.height} · ${tiledCount} visible${previewFloating ? ' · 1 floating' : ''}${hidden ? ` · ${hidden} hidden` : ''}${missing ? ` · ${missing} missing` : ''}`,
     }
   })()
 
@@ -21745,8 +21811,9 @@ function OpenTuiWorkspace() {
         else if (targetKey) tabWindowOnto(movingKey, targetKey, press.session ?? undefined)
         return
       }
-      if (movingKey && hasPrimaryWindow && selectedSessionKey && target.pane === null && target.zone === 'center') {
-        tabWindowOnto(movingKey, selectedSessionKey, press.session ?? undefined)
+      const primaryKey = shownPopoverTab ? surfaceWindowKey(shownPopoverTab) : hasPrimaryWindow ? selectedSessionKey : null
+      if (movingKey && primaryKey && target.pane === null && target.zone === 'center') {
+        tabWindowOnto(movingKey, primaryKey, press.session ?? undefined)
         return
       }
       const edge = target.pane === null ? target.zone : target.insert
@@ -21986,8 +22053,8 @@ function OpenTuiWorkspace() {
   // A zoom ends when the window it names goes away.
   useEffect(() => {
     if (windowZoom === null) return
-    if (visibleSplitPaneCount === 0 || (typeof windowZoom === 'number' && windowZoom >= windowItems.length)) setWindowZoom(null)
-  }, [visibleSplitPaneCount, windowItems.length, windowZoom])
+    if (windowZoom === 'reader' ? !hasPrimaryFrame : windowZoom >= windowItems.length) setWindowZoom(null)
+  }, [hasPrimaryFrame, windowItems.length, windowZoom])
 
   const toggleWindowZoom = useEffectEvent((target: number | null = splitFocusIndex) => {
     if (windowSurfacePeek) { setWindowSurfacePeek(null); setWindowZoom(null); setSplitFocusIndex(null); return }
@@ -21997,7 +22064,7 @@ function OpenTuiWorkspace() {
       showNotice('info', 'Layout restored')
       return
     }
-    if (visibleSplitPaneCount === 0) {
+    if (orderedWindowKeys.length === 0) {
       showNotice('info', 'The pane already fills the workspace')
       return
     }
@@ -22982,13 +23049,15 @@ function OpenTuiWorkspace() {
     setWindowSplitTree({ ...reconciledSplitTree, root: updateSplitRatio(reconciledSplitTree.root, parent, first / extent) })
   })
   const dragTreeDivider = useEffectEvent((path: string, point: { x: number; y: number }) => {
-    if (!reconciledSplitTree || !treeGeometry) return
+    if (treeDividerActivePathRef.current !== path || !reconciledSplitTree || !treeGeometry) return
     const divider = treeGeometry.dividers.find(divider => divider.path === path)
     const area = rectOf('window-area')
     if (!divider || !area) return
     const extent = divider.axis === 'x' ? divider.rect.width : divider.rect.height
     const offset = divider.axis === 'x' ? point.x - area.x - divider.rect.x + 1 : point.y - area.y - divider.rect.y + 1
     const first = Math.max(divider.minFirst, Math.min(extent - divider.minSecond, offset))
+    if (first === divider.firstExtent) return
+    if (!treeDividerCheckpointedRef.current) { checkpointWindowLayout(); treeDividerCheckpointedRef.current = true }
     setWindowSplitTree({ ...reconciledSplitTree, root: updateSplitRatio(reconciledSplitTree.root, path, first / extent) })
   })
 
@@ -26235,10 +26304,8 @@ function OpenTuiWorkspace() {
         borderStyle="single"
         // One focus color across panes; provider identity stays in metadata.
         borderColor={effectiveFocus === 'messages' && splitFocusIndex === null
-          ? theme.border2
-          : isChatLikeView
-            ? theme.surface
-            : theme.border}
+          ? theme.cyan
+          : theme.border}
         backgroundColor={theme.surface}
         flexDirection="column"
         title={fullscreenMode || embeddedComposer || !readerFrameTitle ? undefined : joinMeta([`1 · ${selectedSession ? formatSessionTitle(selectedSession) : 'Session'}`, selectedSessionKey ? coordinatorBadges.get(selectedSessionKey) : null, readerFrameTitle])}
@@ -26721,7 +26788,7 @@ function OpenTuiWorkspace() {
   // Zoom hides the other windows rather than unmounting them, so nothing
   // reloads on the way in or out: every window keeps its parent, and the
   // zoomed one (and its row or column) is given the whole area.
-  const zooming = windowZoom !== null && visibleSplitPaneCount > 0 && !windowSurfacePeek
+  const zooming = windowZoom !== null && !windowSurfacePeek
   const zoomedIndex = zooming && typeof windowZoom === 'number' ? windowZoom : null
   const windowHiddenByZoom = (index: number) => zooming && index !== zoomedIndex
   const zoomAware = (index: number, size: { width: number; height: number; boxHeight: number | undefined }) => (
@@ -26745,7 +26812,10 @@ function OpenTuiWorkspace() {
         {...(index === FLOATING_PANE_INDEX ? {
           onMouseDrag: (event: { x: number; y: number }) => moveFloatGesture(event),
           onMouseUp: (event: { x: number; y: number }) => endFloatGesture(event),
-        } : {})}
+        } : {
+          onMouseDrag: (event: { x: number; y: number }) => sessionDragHandlers.move(event),
+          onMouseUp: (event: { x: number; y: number }) => sessionDragHandlers.release(event),
+        })}
         flexShrink={0}
         flexDirection="column"
         // Not clipped here: the tab strip and the title buttons sit on the border,
@@ -26767,7 +26837,12 @@ function OpenTuiWorkspace() {
           // The title row is the handle: dragging it moves the window.
           const frame = renderer.root.findDescendantById(index === FLOATING_PANE_INDEX ? 'floating-window' : `split-pane:${index}`) as unknown as { y: number } | null
           if (index === FLOATING_PANE_INDEX) { if (frame && event.y === frame.y) startFloatGesture('move', event); return }
-          if (index >= 0 && frame && event.y === frame.y) sessionDragImplRef.current.pressSurface(surface, index, event)
+          if (index >= 0 && frame && event.y === frame.y) {
+            let clicks = surfaceTitleClicksRef.current.get(surface)
+            if (!clicks) { clicks = { current: null }; surfaceTitleClicksRef.current.set(surface, clicks) }
+            if (isDoubleClick(clicks, event)) toggleWindowZoom(index)
+            else sessionDragImplRef.current.pressSurface(surface, index, event)
+          }
         }}
       >
         {renderWindowTabs(surfaceWindowKey(surface), index, size.width, -1, 1, 16)}
@@ -27503,13 +27578,25 @@ function OpenTuiWorkspace() {
     if (!shownPopoverTab) return null
         // A popover tab in the reader's place: the reader stays mounted, hidden.
         const kind = surfaceKindOf(shownPopoverTab)
-        const tabWidthCells = Math.max(20, fittedWindows.reader.width)
-        const tabHeightCells = Math.max(6, fittedWindows.reader.height)
+        const tabWidthCells = Math.max(1, readerZoomed ? readerAreaWidth : fittedWindows.reader.width)
+        const tabHeightCells = Math.max(1, readerZoomed ? windowAreaHeight : fittedWindows.reader.height)
         return (
           <box id="popover-tab-frame" flexGrow={1} width={tabWidthCells} height={tabHeightCells} flexShrink={0} flexDirection="column"
-            border borderStyle="single" borderColor={popoverTabFocused ? theme.border2 : theme.border}
-            backgroundColor={theme.surface} title={` ${windowSurfaceTitle(shownPopoverTab)} `} titleColor={providerAccent}
-            onMouseDown={(event) => { if (event.button === 0) { if (splitFocusIndex !== null) focusReaderFromSplit(); setFocusedPane('messages') } }}
+            border borderStyle="single" borderColor={popoverTabFocused ? theme.cyan : theme.border}
+            backgroundColor={theme.surface} title={` ${windowSurfaceTitle(shownPopoverTab)} `} titleColor={popoverTabFocused ? theme.cyan : theme.dim}
+            onMouseDrag={(event) => sessionDragHandlers.move(event)}
+            onMouseUp={(event) => sessionDragHandlers.release(event)}
+            onMouseDown={(event) => {
+              if (event.button === 2) { event.stopPropagation(); openWindowControlMenu('reader', event); return }
+              if (event.button !== 0) return
+              if (splitFocusIndex !== null) focusReaderFromSplit()
+              setFocusedPane('messages')
+              const frame = rectOf('transcript-reader')
+              if (frame && event.y === frame.y) {
+                if (isDoubleClick(readerTitleClickRef, event)) toggleWindowZoom(null)
+                else sessionDragImplRef.current.pressSurface(shownPopoverTab, -1, event)
+              }
+            }}
           >
             {/* The reader's title controls: this tab holds the reader's place. */}
             <box id="popover-tab-controls" position="absolute" top={-1} right={1} height={1} flexDirection="row" zIndex={3}>
@@ -29756,14 +29843,29 @@ function OpenTuiWorkspace() {
           left={area.x + divider.rect.x + (vertical ? divider.firstExtent - 1 : 1)}
           top={area.y + divider.rect.y + (vertical ? 1 : divider.firstExtent - 1)}
           width={vertical ? 1 : Math.max(1, divider.rect.width - 2)} height={vertical ? Math.max(1, divider.rect.height - 2) : 1}
-          zIndex={40} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); checkpointWindowLayout(); setTreeDividerDrag(divider.path) } }}>
+          zIndex={40} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); treeDividerActivePathRef.current = divider.path; treeDividerCheckpointedRef.current = false; setTreeDividerDrag(divider.path) } }}
+          onMouseDrag={event => { event.stopPropagation(); dragTreeDivider(divider.path, event) }}
+          onMouseUp={event => { event.stopPropagation(); dragTreeDivider(divider.path, event); treeDividerActivePathRef.current = null; treeDividerCheckpointedRef.current = false; setTreeDividerDrag(null) }}>
           <text fg={treeDividerDrag === divider.path ? theme.cyan : theme.border} selectable={false} wrapMode="none">{vertical ? Array(Math.max(1, divider.rect.height - 2)).fill('│').join('\n') : '─'.repeat(Math.max(1, divider.rect.width - 2))}</text>
         </box>
       }) : null}
       {treeDividerDrag !== null ? <box id="tree-divider-drag" position="absolute" left={0} top={0} width={width} height={height}
         backgroundColor={RGBA.fromValues(0, 0, 0, 0)} zIndex={58}
         onMouseDrag={event => { event.stopPropagation(); dragTreeDivider(treeDividerDrag, event) }}
-        onMouseUp={event => { event.stopPropagation(); dragTreeDivider(treeDividerDrag, event); setTreeDividerDrag(null) }} /> : null}
+        onMouseUp={event => { event.stopPropagation(); dragTreeDivider(treeDividerDrag, event); treeDividerActivePathRef.current = null; treeDividerCheckpointedRef.current = false; setTreeDividerDrag(null) }} /> : null}
+      {treeDividerDrag !== null ? (() => {
+        const divider = treeGeometry?.dividers.find(entry => entry.path === treeDividerDrag)
+        const area = rectOf('window-area')
+        if (!divider || !area) return null
+        const vertical = divider.axis === 'x'
+        const extent = vertical ? divider.rect.width : divider.rect.height
+        return <box id="tree-divider-readout" position="absolute"
+          left={Math.max(0, Math.min(width - 26, area.x + divider.rect.x + (vertical ? divider.firstExtent + 1 : 2)))}
+          top={Math.max(0, Math.min(height - 1, area.y + divider.rect.y + (vertical ? 1 : divider.firstExtent)))}
+          width={Math.min(26, width)} height={1} zIndex={901} backgroundColor={theme.cyan}>
+          <text fg={theme.bg} selectable={false} wrapMode="none">{` ${divider.firstExtent} / ${extent - divider.firstExtent} ${vertical ? 'cols' : 'rows'} `}</text>
+        </box>
+      })() : null}
       {splitDividerDragging ? (
         // The divider drag, held by a full-screen layer for the same reason as the panel's.
         <box
@@ -29843,19 +29945,19 @@ function OpenTuiWorkspace() {
           : paneRect
           ? (sessionDrag.title ? { ...paneRect, height: Math.min(paneRect.height, 3) } : sessionDrag.insert ? windowDropZoneRect(paneRect, sessionDrag.insert) : paneRect)
           : (reader && sessionDrag.zone ? windowDropZoneRect(reader, sessionDrag.zone) : null)
-        const label = sessionDrag.pane !== null && sessionDrag.insert ? `Beside pane ${sessionDrag.pane + 1}`
-          : sessionDrag.pane !== null ? `Replace pane ${sessionDrag.pane + 1}`
+        const label = sessionDrag.pane !== null && sessionDrag.insert ? `Beside pane ${sessionDrag.pane + (hasPrimaryFrame ? 2 : 1)}`
+          : sessionDrag.pane !== null ? `Replace pane ${sessionDrag.pane + (hasPrimaryFrame ? 2 : 1)}`
           : !sessionDrag.zone ? 'Drop on the reader or a pane'
           : sessionDrag.zone === 'center' ? 'Open session'
           : `Put it ${sessionDrag.zone === 'left' ? 'left of' : sessionDrag.zone === 'right' ? 'right of' : sessionDrag.zone === 'top' ? 'above' : 'below'} the reader`
         // fitText pads to its width; trimmed, so the label is as long as what it says.
         const dragged = sessionDrag.tab ? windowKeyTitle(sessionDrag.tab) : sessionDrag.session ? formatSessionTitle(sessionDrag.session) : surfaceTitle(sessionDrag.surface ?? '')
         const overSurface = sessionDrag.pane !== null && windowItems[sessionDrag.pane]?.kind === 'surface'
-        const shown = splitting ? (nestedDragPreview ? 'Split here' : 'Split does not fit') : sessionDrag.reader && sessionDrag.pane !== null ? `Add as a tab of window ${sessionDrag.pane + 1}`
-          : sessionDrag.tab ? (sessionDrag.pane !== null ? `Add as a tab of window ${sessionDrag.pane + 1}` : 'Its own window')
-          : sessionDrag.title && sessionDrag.pane !== null ? `Add as a tab of window ${sessionDrag.pane + 1}`
+        const shown = splitting ? (nestedDragPreview ? 'Split here' : 'Split does not fit') : hasPrimaryFrame && sessionDrag.pane === null && sessionDrag.zone === 'center' ? 'Add as a tab of window 1' : sessionDrag.reader && sessionDrag.pane !== null ? `Add as a tab of window ${sessionDrag.pane + (hasPrimaryFrame ? 2 : 1)}`
+          : sessionDrag.tab ? (sessionDrag.pane !== null ? `Add as a tab of window ${sessionDrag.pane + (hasPrimaryFrame ? 2 : 1)}` : 'Its own window')
+          : sessionDrag.title && sessionDrag.pane !== null ? `Add as a tab of window ${sessionDrag.pane + (hasPrimaryFrame ? 2 : 1)}`
           : !sessionDrag.session && sessionDrag.pane === null ? (sessionDrag.zone ? 'Float it here' : 'Drop on a window')
-          : (overSurface || !sessionDrag.session) && sessionDrag.pane !== null && !sessionDrag.insert ? `Add as a tab of window ${sessionDrag.pane + 1}`
+          : (overSurface || !sessionDrag.session) && sessionDrag.pane !== null && !sessionDrag.insert ? `Add as a tab of window ${sessionDrag.pane + (hasPrimaryFrame ? 2 : 1)}`
           : label
         const ghost = `⠿ ${fitText(dragged, 28).trimEnd()} · ${shown}`
         return (
