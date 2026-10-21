@@ -1,3 +1,4 @@
+import { beginProviderLoading } from '../providerLoading'
 import {
   buildThreadedMessages,
   buildThreadedMessagesIncremental,
@@ -1198,28 +1199,33 @@ export async function createTuiSession(params: {
   cwd?: string
   title?: string
 }): Promise<{ sessionId: string; provider: AgentProvider; cwd: string; isPending: boolean; providerInstanceId?: string }> {
-  if (isRemoteAttached()) {
-    return remoteJson('/api/sessions/new', { method: 'POST', body: JSON.stringify(params) })
+  const finishLoading = beginProviderLoading(params.provider)
+  try {
+    if (isRemoteAttached()) {
+      return await remoteJson('/api/sessions/new', { method: 'POST', body: JSON.stringify(params) })
+    }
+    const { providerInstanceId, ...rest } = params
+    const { withProviderInstance } = await import('../providerInstances')
+    if (params.provider !== 'acp') {
+      if (!params.provider || !providerInstanceId || providerInstanceId === params.provider) return await (await sendPath()).createNewViewSession(rest)
+      // A second account: the session is created in, and remembered as, that instance.
+      const created = await withProviderInstance(providerInstanceId, params.provider, async () => (await sendPath()).createNewViewSession(rest))
+      noteTuiSessionInstance({ ...created, providerInstanceId })
+      return { ...created, providerInstanceId }
+    }
+    // A new ACP chat goes to the agent the caller named (the one picked, else the
+    // selected session's), else the default one, else — when that has no command
+    // — the first agent that does.
+    const staffing = (await (await import('../coordinatorCapabilities')).readCoordinatorStaffing()).filter((choice) => choice.provider === 'acp')
+    const instanceId = staffing.find((choice) => choice.providerInstanceId === providerInstanceId)?.providerInstanceId
+      ?? staffing.find((choice) => choice.isDefault)?.providerInstanceId
+      ?? staffing[0]?.providerInstanceId
+      ?? 'acp'
+    const created = await withProviderInstance(instanceId, 'acp', async () => (await sendPath()).createNewViewSession(rest))
+    return { ...created, providerInstanceId: instanceId }
+  } finally {
+    finishLoading()
   }
-  const { providerInstanceId, ...rest } = params
-  const { withProviderInstance } = await import('../providerInstances')
-  if (params.provider !== 'acp') {
-    if (!params.provider || !providerInstanceId || providerInstanceId === params.provider) return (await sendPath()).createNewViewSession(rest)
-    // A second account: the session is created in, and remembered as, that instance.
-    const created = await withProviderInstance(providerInstanceId, params.provider, async () => (await sendPath()).createNewViewSession(rest))
-    noteTuiSessionInstance({ ...created, providerInstanceId })
-    return { ...created, providerInstanceId }
-  }
-  // A new ACP chat goes to the agent the caller named (the one picked, else the
-  // selected session's), else the default one, else — when that has no command
-  // — the first agent that does.
-  const staffing = (await (await import('../coordinatorCapabilities')).readCoordinatorStaffing()).filter((choice) => choice.provider === 'acp')
-  const instanceId = staffing.find((choice) => choice.providerInstanceId === providerInstanceId)?.providerInstanceId
-    ?? staffing.find((choice) => choice.isDefault)?.providerInstanceId
-    ?? staffing[0]?.providerInstanceId
-    ?? 'acp'
-  const created = await withProviderInstance(instanceId, 'acp', async () => (await sendPath()).createNewViewSession(rest))
-  return { ...created, providerInstanceId: instanceId }
 }
 
 /** Fork a session into a new one — whole, or up to and including `upToMessageId`. */
@@ -1261,27 +1267,32 @@ export async function prewarmTuiSession(
   session: Session,
   opts?: { model?: string; effort?: import('../types').ReasoningEffortLevel; isPending?: boolean },
 ): Promise<void> {
-  if (isRemoteAttached()) {
-    await remoteJson(encodeSessionPath(session.sessionId, '/composer'), {
-      method: 'POST',
-      body: JSON.stringify({
-        provider: session.provider,
-        cwd: session.cwd ?? undefined,
-        model: opts?.model,
-        effort: opts?.effort,
-        isPending: opts?.isPending,
-      }),
-    })
-    return
+  const finishLoading = beginProviderLoading(session.provider)
+  try {
+    if (isRemoteAttached()) {
+      await remoteJson(encodeSessionPath(session.sessionId, '/composer'), {
+        method: 'POST',
+        body: JSON.stringify({
+          provider: session.provider,
+          cwd: session.cwd ?? undefined,
+          model: opts?.model,
+          effort: opts?.effort,
+          isPending: opts?.isPending,
+        }),
+      })
+      return
+    }
+    await asSessionInstance(session, async () => (await sendPath()).prewarmViewSession({
+      sessionId: session.sessionId,
+      provider: session.provider as AgentProvider | undefined,
+      cwd: session.cwd ?? undefined,
+      model: opts?.model,
+      effort: opts?.effort,
+      isPending: opts?.isPending,
+    }))
+  } finally {
+    finishLoading()
   }
-  await asSessionInstance(session, async () => (await sendPath()).prewarmViewSession({
-    sessionId: session.sessionId,
-    provider: session.provider as AgentProvider | undefined,
-    cwd: session.cwd ?? undefined,
-    model: opts?.model,
-    effort: opts?.effort,
-    isPending: opts?.isPending,
-  }))
 }
 
 export async function readTuiSessionDiagnostics(

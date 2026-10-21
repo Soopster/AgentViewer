@@ -3,6 +3,7 @@
 import { testRender, act } from './testRender'
 import { DARK_THEME } from '../theme'
 import { ToastOverlay, useToasts } from './ToastOverlay'
+import { beginProviderLoading, getLoadingProviders } from '../../lib/providerLoading'
 import { toast, dismissAllToasts } from './toastStore'
 
 function SmokeApp() {
@@ -38,7 +39,28 @@ try {
   assertFrameIncludes(frame, 'Send failed')
   assertFrameIncludes(frame, 'New session created')
 
-  console.log('toastSmoke OK — rendered 3 stacked toasts')
+  let finishFirst!: () => void
+  let finishSecond!: () => void
+  await act(async () => {
+    dismissAllToasts()
+    finishFirst = beginProviderLoading('claude')
+    finishSecond = beginProviderLoading('claude')
+  })
+  await setup.flush()
+  assertFrameIncludes(setup.captureCharFrame(), 'Loading Claude…')
+  const firstFrame = setup.captureCharFrame()
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 180)) })
+  await setup.flush()
+  if (setup.captureCharFrame() === firstFrame) throw new Error('Loading spinner did not animate')
+  await act(async () => { finishFirst(); finishFirst() })
+  await setup.flush()
+  assertFrameIncludes(setup.captureCharFrame(), 'Loading Claude…')
+  await act(async () => { finishSecond() })
+  await setup.flush()
+  if (getLoadingProviders().length || setup.captureCharFrame().includes('Loading Claude')) {
+    throw new Error('Loading toast remained after initialization')
+  }
+  console.log('toastSmoke OK — stacked toasts, animated startup, concurrent completion')
 } finally {
   act(() => {
     dismissAllToasts()

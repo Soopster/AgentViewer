@@ -1,5 +1,7 @@
 'use client'
 
+import { beginProviderLoading } from '@/lib/providerLoading'
+
 import { VoiceInput } from './VoiceInput'
 
 import ContextComposer, { type ContextComposerHandle } from './ContextComposer'
@@ -3789,6 +3791,7 @@ function MessageViewInner({
     ].join('\0')
     if (composerPrewarmInFlightRef.current.has(key)) return
     composerPrewarmInFlightRef.current.add(key)
+    const finishLoading = beginProviderLoading(provider)
     void fetch(`/api/sessions/${sessionId}/composer`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -3801,7 +3804,7 @@ function MessageViewInner({
       }),
     })
       .catch(() => { /* best-effort: send pays the usual cold cost */ })
-      .finally(() => { composerPrewarmInFlightRef.current.delete(key) })
+      .finally(() => { composerPrewarmInFlightRef.current.delete(key); finishLoading() })
   }, [selectedEffort, selectedModel, session?.cwd, session?.isPending, session?.provider, session?.sessionId])
 
   useEffect(() => {

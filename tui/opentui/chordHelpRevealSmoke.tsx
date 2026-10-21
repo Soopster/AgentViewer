@@ -35,11 +35,14 @@ await settle(CHORD_HELP_REVEAL_MS)
 assert.ok(captureCharFrame().includes('split pane keybinds'),
   'Holding a prefix must reveal its keys on its own')
 
+await settle(4_100)
+assert.ok(captureCharFrame().includes('split pane keybinds'), 'Ctrl+B help must remain beyond the old four-second timeout')
+
 // ── a self-revealed panel must not swallow the chord's next key ────────────
-// `q` is not a ⌃B chord, so the dispatcher answers with its unknown-key notice.
+// `~` is not a ⌃B chord, so the dispatcher answers with its unknown-key notice.
 // If the panel had consumed the keystroke instead, the notice would be absent
 // and the chord silently cancelled — hesitating would change what a key does.
-await act(async () => { mockInput.pressKey('q') })
+await act(async () => { mockInput.pressKey('~') })
 await settle(300)
 const afterUnbound = captureCharFrame()
 assert.ok(afterUnbound.includes('is not bound'),
@@ -74,6 +77,8 @@ await act(async () => { mockInput.pressKey('k', { ctrl: true }) })
 await settle(CHORD_HELP_REVEAL_MS + 400)
 assert.ok(captureCharFrame().includes('command chords'),
   'The ⌃K prefix reveals its own table, not the split one')
+await settle(4_100)
+assert.ok(captureCharFrame().includes('command chords'), 'Ctrl+K help must remain beyond the old four-second timeout')
 await act(async () => { mockInput.pressEscape() })
 await settle(200)
 assert.ok(!captureCharFrame().includes('command chords'), 'Cancelling the chord closes its panel')

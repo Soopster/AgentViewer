@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { Atkinson_Hyperlegible, Inter, Lexend, Merriweather, Noto_Sans, Open_Sans, Roboto, Source_Sans_3 } from 'next/font/google'
 import './globals.css'
+import { ProviderLoadingToasts } from '@/components/ProviderLoadingToasts'
 import { THEMES } from '@/lib/themes'
 import { RouteTransition } from '@/components/RouteTransition'
 import { RENDER_FONT_IDS, RENDER_FONT_STORAGE_KEY } from '@/lib/renderFonts'
@@ -75,7 +76,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         {/* eslint-disable-next-line react-doctor/no-danger, react-doctor/nextjs-no-native-script */}
         <script suppressHydrationWarning dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
-      <body><RouteTransition>{children}</RouteTransition></body>
+      <body><RouteTransition>{children}</RouteTransition><ProviderLoadingToasts /></body>
     </html>
   )
 }

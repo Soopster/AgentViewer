@@ -127,3 +127,6 @@ export function chordHelpKeyWidth(map: ChordMap): number {
  * long enough that someone typing a chord they know never sees it.
  */
 export const CHORD_HELP_REVEAL_MS = 900
+
+// Leave enough time to read the revealed command table.
+export const CHORD_PENDING_TIMEOUT_MS = 8_000

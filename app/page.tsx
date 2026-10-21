@@ -1,5 +1,7 @@
 'use client'
 
+import { beginProviderLoading } from '@/lib/providerLoading'
+
 import { useState, useEffect, useRef, useCallback, useMemo, startTransition, ViewTransition } from 'react'
 import dynamic from 'next/dynamic'
 import SessionList from '@/components/SessionList'
@@ -1333,6 +1335,7 @@ export default function Home() {
   const handleNewSession = useCallback(async () => {
     if (creatingNewSession) return
     const activeProvider = provider === 'all' ? (selectedSession?.provider ?? 'claude') : provider
+    const finishLoading = beginProviderLoading(activeProvider)
     setCreatingNewSession(true)
     setSessionsError(null)
     try {
@@ -1366,6 +1369,7 @@ export default function Home() {
     } catch (err) {
       setSessionsError(err instanceof Error ? err.message : 'Failed to create session')
     } finally {
+      finishLoading()
       setCreatingNewSession(false)
     }
   }, [activeProjectDir, creatingNewSession, provider, providerInstanceId, selectSession, selectedSession?.cwd, selectedSession?.provider, selectedSession?.providerInstanceId])

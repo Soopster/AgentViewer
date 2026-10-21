@@ -345,6 +345,7 @@ import {
 } from './splitPaneState'
 import {
   CHORD_HELP_REVEAL_MS,
+  CHORD_PENDING_TIMEOUT_MS,
   chordHelpKeyWidth,
   chordHelpRows,
   chordHintText,
@@ -5795,6 +5796,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'window-switcher', label: 'Workspace overview', key: splitCommandKey('p', RUNNING_INSIDE_TMUX), category: 'View' },
   { id: 'window-broadcast', label: 'Broadcast prompt to session windows', key: splitCommandKey('b', RUNNING_INSIDE_TMUX), category: 'View' },
   { id: 'window-stop-coordinator', label: 'Stop watching Coordinator run', key: '', category: 'View' },
+  { id: 'workspaces-toggle', label: 'Toggle workspaces', key: splitCommandKey('W', RUNNING_INSIDE_TMUX), category: 'View' },
   { id: 'spaces-switcher', label: 'Spaces and workspaces', key: splitCommandKey('S', RUNNING_INSIDE_TMUX), category: 'View' },
   { id: 'window-redo', key: splitCommandKey('U', RUNNING_INSIDE_TMUX), label: 'Redo window change', category: 'View' },
   { id: 'window-reopen', key: splitCommandKey('X', RUNNING_INSIDE_TMUX), label: 'Reopen closed pane', category: 'View' },
@@ -9229,6 +9231,14 @@ function OpenTuiWorkspace() {
   const workspaceContext = useWorkspaceContext()!
   const workspaceId = workspaceContext.runtime.workspace.id
   const workspaceCwd = workspaceContext.space.cwd
+  const spacesState = useSyncExternalStore(workspaceContext.controller.subscribe, workspaceContext.controller.getSnapshot, workspaceContext.controller.getSnapshot)
+  const workspacesEnabled = spacesState.workspacesEnabled !== false
+  const toggleWorkspaces = () => {
+    const next = !workspacesEnabled
+    workspaceContext.controller.setWorkspacesEnabled(next)
+    if (!next) { setSpacesMenuOpen(false); setWorkspaceLaunched(true) }
+    toast.info(`Workspaces ${next ? 'enabled' : 'disabled'}`)
+  }
   const [workspaceLaunched, setWorkspaceLaunched] = useWorkspaceState('workspaceLaunched', false)
   const [primaryWindowOpen, setPrimaryWindowOpen] = useWorkspaceState('primaryWindowOpen', true)
   const [workspaceHasSession, setWorkspaceHasSession] = useWorkspaceState('workspaceHasSession', false)
@@ -9236,7 +9246,12 @@ function OpenTuiWorkspace() {
   const [spacesMenuSelection, setSpacesMenuSelection] = useState<string | undefined>()
   const [spacesCloseId, setSpacesCloseId] = useState<string | undefined>()
   const spacesKeyRef = useRef<((key: { name: string; sequence: string; ctrl: boolean; shift: boolean }) => boolean) | null>(null)
-  const openSpaces = (id?: string, close = false) => { setSpacesMenuSelection(id); setSpacesCloseId(close ? id : undefined); setSpacesMenuOpen(true) }
+  const openSpaces = (id?: string, close = false) => {
+    if (!workspacesEnabled) { toast.info('Enable workspaces with Ctrl+B, Shift+W'); return }
+    setSpacesMenuSelection(id)
+    setSpacesCloseId(close ? id : undefined)
+    setSpacesMenuOpen(true)
+  }
   const [allProjects, setAllProjects] = useWorkspaceState('allProjects', false)
   const draftKey = (key: string) => workspaceStorageKey(workspaceId, key)
   const readWorkspaceDraft = (key: string) => {
@@ -12727,7 +12742,7 @@ function OpenTuiWorkspace() {
     // when yoga starts compositing the card's rows onto each other.
     const budget = Math.max(
       height
-      - 3
+      - (workspacesEnabled ? 3 : 2)
       - (searchMode || sessionSearchMode ? 4 : 1)
       - (embeddedComposer ? 0 : composerDockHeight)
       - composerPopoverHeight
@@ -12852,7 +12867,7 @@ function OpenTuiWorkspace() {
   const surfacePanelOnRight = surfacePanelVisible && surfacePanelPlacement === 'right'
   const surfacePanelAtBottom = surfacePanelVisible && surfacePanelPlacement === 'bottom'
   const fullContentHeight = Math.max(
-    height - 1
+    height - (workspacesEnabled ? 1 : 0)
     - (fullscreenMode ? 0 : 2)
     - (searchMode || sessionSearchMode ? 4 : fullscreenMode || statusBarInDock ? 0 : 1)
     - (embeddedComposer ? 0 : composerDockHeight)
@@ -13361,7 +13376,7 @@ function OpenTuiWorkspace() {
   const sidebarExtraRows = rightSidePanelVisible ? Math.max(surfacePanelHeight - mainContentHeight, 0) : effectiveSurfacePanelRows
   // Extended, the rail outgrows its row, so nothing clips the list to the
   // frame any more: budget the list to the frame's inside.
-  const sidebarRowBudget = Math.max((sidebarExtraRows > 0 ? mainContentHeight + sidebarExtraRows - 2 : mainContentHeight) - Math.min(4, workspaceContext.controller.getSnapshot().spaces.length) - 3, 4)
+  const sidebarRowBudget = Math.max((sidebarExtraRows > 0 ? mainContentHeight + sidebarExtraRows - 2 : mainContentHeight) - (workspacesEnabled ? Math.min(4, spacesState.spaces.length) + 3 : 0), 4)
   const sidebarInnerWidth = Math.max(sidebarWidth - 5, 17)
   // A provider listed across several instances (ACP agents, accounts) is
   // several stores' sessions, and a row has to say whose it is.
@@ -18865,7 +18880,7 @@ function OpenTuiWorkspace() {
     const timeout = setTimeout(() => {
       setSplitChordPending(false)
       setCommandChordPending(false)
-    }, 4_000)
+    }, CHORD_PENDING_TIMEOUT_MS)
     return () => clearTimeout(timeout)
   }, [commandChordPending, splitChordPending])
 
@@ -22677,6 +22692,9 @@ function OpenTuiWorkspace() {
           showNotice('info', 'Stopped watching the run · windows remain open')
         } else showNotice('info', 'No Coordinator run is being watched')
         break
+      case 'workspaces-toggle':
+        toggleWorkspaces()
+        break
       case 'spaces-switcher':
         openSpaces()
         break
@@ -23285,7 +23303,7 @@ function OpenTuiWorkspace() {
       }
     }
     if (spacesMenuOpen) { if (spacesKeyRef.current?.(key) !== false) { key.preventDefault(); key.stopPropagation() } return }
-    if (!workspaceLaunched && !windowControlsBlocked && !key.ctrl && (key.name === 'return' || /^[1-4]$/.test(sequence))) {
+    if (workspacesEnabled && !workspaceLaunched && !windowControlsBlocked && !key.ctrl && (key.name === 'return' || /^[1-4]$/.test(sequence))) {
       handled(() => {
         setWorkspaceLaunched(true)
         if (sequence === '3') openSurfaceWindow('terminal')
@@ -23304,6 +23322,7 @@ function OpenTuiWorkspace() {
         if (sequence === 'q') { enterWindowControls('identify'); return }
         if (sequence === 'e') { enterWindowControls('manage'); return }
         if (key.name === 'return') { openWindowControlMenu(focusedControlKey()); return }
+        if (sequence === 'W') { toggleWorkspaces(); return }
         if (sequence === 'S') { openSpaces(); return }
         if (sequence === '%' || sequence === 'v') { addSplitPane('columns'); return }
         if (sequence === '"' || sequence === 's') { addSplitPane('rows'); return }
@@ -27568,7 +27587,7 @@ function OpenTuiWorkspace() {
   return (
     <box width={width} height={height} flexDirection="column" backgroundColor={theme.bg}>
       {spacesMenuOpen ? <SpacesManager controller={workspaceContext.controller} theme={theme} width={width} height={height} initialId={spacesMenuSelection} closeId={spacesCloseId} onClose={() => setSpacesMenuOpen(false)} onKeyHandlerReady={handler => { spacesKeyRef.current = handler }} /> : null}
-      <WorkspaceTabs theme={theme} width={width} onManage={openSpaces} under={fullScreenPopoverOpen} />
+      {workspacesEnabled ? <WorkspaceTabs theme={theme} width={width} onManage={openSpaces} under={fullScreenPopoverOpen} /> : null}
       {floatingItem && floatingWindow && !fullscreenMode && !windowSurfacePeek ? (() => {
             const rect = clampFloatingRect(floatingWindow.rect, { width: readerAreaWidth, height: windowAreaHeight })
             const size = { width: rect.width, height: rect.height, boxHeight: rect.height }
@@ -27676,7 +27695,7 @@ function OpenTuiWorkspace() {
                 </box>
               </box>
             ) : null}
-            <SpacesRail theme={theme} width={sidebarWidth} onManage={openSpaces} under={fullScreenPopoverOpen} />
+            {workspacesEnabled ? <SpacesRail theme={theme} width={sidebarWidth} onManage={openSpaces} under={fullScreenPopoverOpen} /> : null}
             <box height={1} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); setAllProjects(value => !value) } }}><text fg={theme.dim}>{allProjects ? 'All projects · click to scope' : 'Project sessions · click for all'}</text></box>
             <box flexGrow={1} paddingX={1}>
               {sidebarView === 'coordinator' ? (
@@ -27808,7 +27827,7 @@ function OpenTuiWorkspace() {
               : stackedSplit ? (splitReaderLast ? 'column-reverse' : 'column') : (splitReaderLast ? 'row-reverse' : 'row')}
             flexGrow={1}
           >
-          {!workspaceLaunched ? (
+          {workspacesEnabled && !workspaceLaunched ? (
             <WorkspaceLauncher theme={theme} cwd={workspaceCwd}
               onOpenSession={() => { setWorkspaceLaunched(true); setWorkspaceHasSession(true); setFocusedPane('sessions') }}
               onNewAgent={() => { setWorkspaceLaunched(true); setWorkspaceHasSession(true); setNewSessionCwd(workspaceCwd); setNewSessionModalOpen(true) }}

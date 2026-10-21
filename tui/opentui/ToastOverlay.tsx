@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/react */
-import { useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
+import { getLoadingProviders, getServerLoadingProviders, providerLoadingLabel, subscribeLoadingProviders } from '../../lib/providerLoading'
 import type { TuiThemePalette } from '../theme'
 import { getToasts, subscribeToasts, type Toast, type ToastKind } from './toastStore'
 
@@ -55,17 +56,29 @@ export function ToastOverlay({
   height: number
   zIndex?: number
 }) {
-  if (toasts.length === 0) return null
+  const providers = useSyncExternalStore(subscribeLoadingProviders, getLoadingProviders, getServerLoadingProviders)
+  const [frame, setFrame] = useState(0)
+  const loading = providers.length > 0
+  useEffect(() => {
+    if (!loading) return
+    const timer = setInterval(() => setFrame(value => (value + 1) % 4), 160)
+    return () => clearInterval(timer)
+  }, [loading])
+  const items: Toast[] = [
+    ...toasts,
+    ...providers.map((provider, index) => ({ id: -index - 1, kind: 'info' as const, message: providerLoadingLabel(provider) })),
+  ]
+  if (items.length === 0) return null
   const toastWidth = Math.min(Math.max(width - 4, 24), 46)
   const left = Math.max(1, width - toastWidth - 2)
   const gap = 1
   // Each toast is three rows (border + one content row); anchored just above
   // the bottom edge, leaving room for the composer/footer.
-  const top = toastStackTop(toasts.length, height)
+  const top = toastStackTop(items.length, height)
   const innerWidth = toastWidth - 4
   return (
     <box position="absolute" top={top} left={left} width={toastWidth} flexDirection="column" gap={gap} zIndex={zIndex}>
-      {toasts.map((toastItem) => {
+      {items.map((toastItem) => {
         const accent = accentFor(toastItem.kind, theme)
         return (
           <box
@@ -78,7 +91,7 @@ export function ToastOverlay({
             paddingX={1}
           >
             <text fg={accent} wrapMode="none">
-              {fit(`${ICON[toastItem.kind]} ${toastItem.message}`, innerWidth)}
+              {fit(`${toastItem.id < 0 ? ['◐', '◓', '◑', '◒'][frame] : ICON[toastItem.kind]} ${toastItem.message}`, innerWidth)}
             </text>
           </box>
         )

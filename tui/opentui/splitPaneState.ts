@@ -70,6 +70,7 @@ export const SPLIT_CHORD_HELP: SplitChordSection[] = [
       { keys: 'b', label: 'broadcast prompt to selected session windows', short: 'broadcast', hint: false },
       // Out of the one-line hint, which is at its width budget; the reader's ⊞ button and the palette advertise it.
       { keys: 'S', label: 'spaces and workspaces', hint: false },
+      { keys: 'W', label: 'enable or disable workspaces', hint: false },
       { keys: 'q', label: 'identify windows (numbers select panes)', hint: false },
       { keys: 'e', label: 'manage windows until Escape or Enter', hint: false },
       { keys: 'enter', label: 'focused window menu', hint: false },

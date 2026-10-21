@@ -8,7 +8,7 @@ export type SpaceId = string
 export type WorkspaceId = string
 export type Workspace = { id: WorkspaceId; name: string; values: Record<string, unknown> }
 export type Space = { id: SpaceId; name: string; cwd: string; workspaces: Workspace[]; activeWorkspaceId: WorkspaceId }
-export type SpacesState = { version: 1; spaces: Space[]; activeSpaceId: SpaceId | null }
+export type SpacesState = { workspacesEnabled?: boolean; version: 1; spaces: Space[]; activeSpaceId: SpaceId | null }
 const createWorkspace = (name = '1'): Workspace => ({ id: randomUUID(), name, values: { workspaceLaunched: false, workspaceHasSession: false } })
 const encode = (_key: string, value: unknown): unknown => value instanceof Set ? { $spaceType: 'set', values: [...value] } : value instanceof Map ? { $spaceType: 'map', values: [...value] } : value
 const decode = (_key: string, value: any): unknown => value?.$spaceType === 'set' && Array.isArray(value.values) ? new Set(value.values) : value?.$spaceType === 'map' && Array.isArray(value.values) ? new Map(value.values) : value
@@ -66,6 +66,7 @@ export class WorkspaceRuntime {
 }
 
 function validState(value: any): value is SpacesState {
+  if (value?.workspacesEnabled !== undefined && typeof value.workspacesEnabled !== 'boolean') return false
   if (value?.version !== 1 || !Array.isArray(value.spaces)) return false
   const ids = new Set<string>()
   for (const space of value.spaces) {
@@ -122,6 +123,12 @@ export class SpacesController {
     this.state = restored ?? { version: 1, spaces: [space], activeSpaceId: space.id }
   }
   get recoveryWarning(): string | null { return !this.healthy ? 'Spaces could not be restored. Existing files were preserved; changes will not overwrite them.' : this.recoveredFromBackup ? 'Spaces restored from the last known good backup.' : null }
+  get workspacesEnabled(): boolean { return this.state.workspacesEnabled !== false }
+  setWorkspacesEnabled(enabled: boolean): void {
+    if (this.workspacesEnabled === enabled) return
+    this.state.workspacesEnabled = enabled
+    this.publish()
+  }
   getSnapshot = (): SpacesState => this.state
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
   subscribeAttention = (listener: () => void): (() => void) => { this.attentionListeners.add(listener); return () => { this.attentionListeners.delete(listener) } }
