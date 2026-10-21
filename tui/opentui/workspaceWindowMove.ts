@@ -14,7 +14,7 @@ function commit(runtime: WorkspaceRuntime, keys: string[]) {
   write(runtime, 'splitPaneCount', keys.filter(key => !isSurfaceWindowKey(key)).length)
   write(runtime, 'windowSurfaces', keys.filter(isSurfaceWindowKey).map(surfaceIdOfKey))
   const tree = runtime.values.get('windowSplitTree')
-  if (validWindowSplitTree(tree)) write(runtime, 'windowSplitTree', reconcileWindowSplitTree(tree, keys, runtime.values.get('primaryWindowOpen') !== false && runtime.values.get('workspaceHasSession') !== false && Boolean(runtime.values.get('selectedSessionKey'))))
+  if (validWindowSplitTree(tree)) write(runtime, 'windowSplitTree', reconcileWindowSplitTree(tree, keys, runtime.values.get('primaryWindowOpen') !== false && runtime.values.get('workspaceHasSession') !== false && Boolean(runtime.values.get('selectedSessionKey')) || Boolean(runtime.values.get('activePopoverTab'))))
   else if (keys.length > 3 && read(runtime, 'splitArrangement', 'split') === 'split') write(runtime, 'splitArrangement', 'main-stack')
   write(runtime, 'windowZoom', null)
   write(runtime, 'splitFocusIndex', null)
@@ -35,10 +35,11 @@ export function moveWorkspaceWindow(controller: SpacesController, sourceId: stri
   const key = target === 'reader' ? reader : target
   if (!key) throw new Error('This reader has no session to move')
   const sourceKeys = keysOf(source), destinationKeys = keysOf(destination)
+  const sourceTabs = read(source, 'popoverTabs', [] as string[]), destinationTabs = read(destination, 'popoverTabs', [] as string[])
   const stacks = read(source, 'windowStacks', [] as string[][])
   const stack = stacks.find(stack => stack.includes(key))
   const floating = read(source, 'floatingWindow', null as { key: string } | null)
-  if (key !== reader && !sourceKeys.includes(key) && floating?.key !== key && !stack) throw new Error('That window is no longer available')
+  if (key !== reader && !sourceKeys.includes(key) && floating?.key !== key && !stack && !(isSurfaceWindowKey(key) && sourceTabs.includes(surfaceIdOfKey(key)))) throw new Error('That window is no longer available')
   const members = !singleTab && stack ? [...stack] : [key]
   const moved = new Set(members)
   const sourceSessions = read(source, 'openTabSessions', [] as Session[])
@@ -48,7 +49,7 @@ export function moveWorkspaceWindow(controller: SpacesController, sourceId: stri
   const destinationStacks = read(destination, 'windowStacks', [] as string[][])
   const destinationFloating = read(destination, 'floatingWindow', null as { key: string } | null)
   const destinationReader = read(destination, 'primaryWindowOpen', true) && read(destination, 'workspaceHasSession', true) ? read(destination, 'selectedSessionKey', null as string | null) : null
-  const taken = new Set([...destinationKeys, ...destinationStacks.flat(), ...(destinationFloating ? [destinationFloating.key] : []), ...(destinationReader ? [destinationReader] : [])])
+  const taken = new Set([...destinationTabs.map(surfaceWindowKey), ...destinationKeys, ...destinationStacks.flat(), ...(destinationFloating ? [destinationFloating.key] : []), ...(destinationReader ? [destinationReader] : [])])
   if (members.some(member => !isSurfaceWindowKey(member) && taken.has(member))) throw new Error('That session is already displayed in the destination workspace')
   for (const member of members) {
     const incoming = source.values.get(`draft:${member}`), existing = destination.values.get(`draft:${member}`)
@@ -115,6 +116,9 @@ export function moveWorkspaceWindow(controller: SpacesController, sourceId: stri
   for (const member of members) if (sourceAttention.has(member)) { destinationAttention.set(mapping.get(member)!, sourceAttention.get(member)); sourceAttention.delete(member) }
   write(source, 'windowAttention', sourceAttention); write(destination, 'windowAttention', destinationAttention)
   write(source, 'windowSurfaceMeta', sourceMeta); write(destination, 'windowSurfaceMeta', destinationMeta)
+  const remainingTabs = sourceTabs.filter(id => !moved.has(surfaceWindowKey(id)))
+  write(source, 'popoverTabs', remainingTabs)
+  if (!remainingTabs.includes(read(source, 'activePopoverTab', ''))) write(source, 'activePopoverTab', null)
   const sourceRemaining = sourceKeys.flatMap(entry => moved.has(entry) ? stack?.filter(member => !moved.has(member)).slice(0, 1) ?? [] : [entry])
   write(source, 'windowStacks', stacks.map(stack => stack.filter(member => !moved.has(member))).filter(stack => stack.length > 1))
   if (floating && moved.has(floating.key)) write(source, 'floatingWindow', null)

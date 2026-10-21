@@ -1370,7 +1370,14 @@ drawn in have one source; `windowLayoutSmoke.ts` checks every arrangement tiles 
   transcript stays mounted, hidden), and ←/→, `w`, `×`, right-click and clicks treat it like any tab
   (`selectStripIndex`). While the reader is focused a shown popover tab takes the keys, Esc
   included (it is the reader's place, not a window to leave); its own close closes the tab.
-  `readerFrameNode` is a function so the tab frame renders after `renderSurfaceBody` exists.
+  `readerFrameNode` is a function so the tab frame renders after `renderSurfaceBody` exists. The
+  tab frame carries the reader's title controls (`≡` is the tab's own menu, `⊞ layout`, `⤢`, `×`).
+  Git, Files and PR (surface kinds with popovers, `SURFACE_POPOVER_KINDS`) take the same `⧉`
+  placements. Their docked layout counts its own border, so docked they keep it but draw it in the
+  background colour and untitled, instead of a second visible frame.
+  Strip tool tabs use their own surface identity in identification and the workspace overview;
+  keyboard close/float/tab and menu actions target that surface, not the session hidden behind it.
+  Saved layouts and undo retain strip tabs, and workspace moves use the shared atomic transfer.
   Teammates and diagnostics are store-backed: they stay *open* while windowed or tabbed and only
   their modal is suppressed (`windowedPopoverKinds`), so opening one as a window from the palette
   opens the panel first, and closing the window (not returning it) closes the panel.

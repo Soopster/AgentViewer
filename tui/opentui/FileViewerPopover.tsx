@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { PopoverDetachButton } from './dockedPopover'
 import { useWorkspaceState } from './workspaceContext'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable, SyntaxStyle } from '@opentui/core'
@@ -18,6 +19,8 @@ type Props = {
   cwd?: string | null
   /** Docked in the surface panel: fill the given box in flow, no scrim margin. */
   docked?: boolean
+  /** Shows the `⧉ window` button: break the popover out into a window. */
+  onDetach?: () => void
   theme: TuiThemePalette
   width: number
   height: number
@@ -228,6 +231,7 @@ async function loadPreview(
 export function FileViewerPopover({
   cwd,
   docked = false,
+  onDetach,
   theme,
   width,
   height,
@@ -508,12 +512,15 @@ export function FileViewerPopover({
       zIndex={docked ? undefined : 50}
       border
       borderStyle="rounded"
-      borderColor={theme.cyan}
+      // Docked, the window frame is the border: this one stays for the layout
+      // inside it, which counts it, but is drawn in the background and untitled.
+      borderColor={docked ? theme.surface : theme.cyan}
       backgroundColor={theme.surface}
       flexDirection="column"
-      title={directorySelect ? ' Choose folder ' : ' Files '}
+      title={docked ? undefined : directorySelect ? ' Choose folder ' : ' Files '}
       titleColor={theme.cyan}
     >
+      {!docked && onDetach && !directorySelect ? <PopoverDetachButton theme={theme} onPress={onDetach} /> : null}
       <box height={1} paddingX={1} backgroundColor={theme.surface2}>
         <text wrapMode="none">
           <span fg={theme.dim}>/</span>

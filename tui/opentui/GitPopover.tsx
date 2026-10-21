@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { PopoverDetachButton } from './dockedPopover'
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useReview } from '../../lib/review/useReview'
 import { localReviewTransport } from '../../lib/review/localTransport'
@@ -568,6 +569,8 @@ type Props = {
   zIndex?: number
   /** Docked in the surface panel: fill the given box in flow, no scrim margin. */
   docked?: boolean
+  /** Shows the `⧉ window` button: break the popover out into a window. */
+  onDetach?: () => void
   theme: TuiThemePalette
   width: number
   height: number
@@ -585,7 +588,7 @@ type Props = {
 const DIFF_CONTROLS_WIDTH = 62
 const DIFF_REVIEW_ACTIONS_MIN_WIDTH = 48
 
-export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = false, theme, width, height, onClose, onKeyHandlerReady, onSendDiffNoteToComposer, onAskAgent, onClipboardWrite, onKeyCaptureChange }: Props) {
+export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = false, onDetach, theme, width, height, onClose, onKeyHandlerReady, onSendDiffNoteToComposer, onAskAgent, onClipboardWrite, onKeyCaptureChange }: Props) {
   const reviewSearchEditingRef = useRef(false)
   const reviewActionKeyRef = useRef<(key: ReviewActionKey) => boolean>(() => false)
   const focusDiff = useCallback(() => setFocusSide('right'), [])
@@ -1720,14 +1723,17 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
       height={popH}
       border
       borderStyle="single"
-      borderColor={theme.border2}
+      // Docked, the window frame is the border: this one stays for the layout
+      // inside it, which counts it, but is drawn in the background and untitled.
+      borderColor={docked ? theme.surface : theme.border2}
       backgroundColor={theme.surface}
       zIndex={docked ? undefined : zIndex}
       flexDirection="row"
-      title={review.error ? ` Review: ${fitTerminalText(review.error, Math.max(popW - 14, 8))} ` : scopeLabel ? ` Git · ${fitTerminalText(scopeLabel, Math.max(popW - 10, 8))} ` : ' Git '}
+      title={docked ? undefined : review.error ? ` Review: ${fitTerminalText(review.error, Math.max(popW - 14, 8))} ` : scopeLabel ? ` Git · ${fitTerminalText(scopeLabel, Math.max(popW - 10, 8))} ` : ' Git '}
       titleColor={theme.cyan}
       titleAlignment="left"
     >
+      {!docked && onDetach ? <PopoverDetachButton theme={theme} onPress={onDetach} /> : null}
       {reviewBoardOpen ? <ReviewBoard review={review} theme={theme} width={popW - 2} height={popH - 2} keyRef={boardKeyRef} onClose={() => setReviewBoardOpen(false)} onNavigate={navigateReview} /> : null}
       {/* ── Left column ─────────────────────────────────── */}
       {!leftPaneHidden ? (

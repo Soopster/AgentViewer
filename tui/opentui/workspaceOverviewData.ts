@@ -31,6 +31,7 @@ export function workspaceOverview(controller: SpacesController): OverviewNode[] 
         const keys = orderWindows((values.windowOrder ?? []) as string[], ((values.splitPinnedKeys ?? []) as string[]).slice(0, Number(values.splitPaneCount ?? 0)), (values.windowSurfaces ?? []) as string[])
         const floating = values.floatingWindow as { key?: string } | undefined
         if (floating?.key) keys.push(floating.key)
+        for (const id of (values.popoverTabs ?? []) as string[]) keys.push(`surface:${id}`)
         windows = [...(reader ? [{ key: reader, title: title(reader), detail: 'session', hidden: false, badge: badge(reader) }] : []), ...keys.map(key => ({
           key, title: title(key), badge: badge(key), detail: key === floating?.key ? 'floating' : 'window', hidden: true,
           tabs: stacks.find(stack => stack.includes(key))?.map(tab => ({ key: tab, title: title(tab), badge: badge(tab), detail: 'tab', hidden: tab !== key })),

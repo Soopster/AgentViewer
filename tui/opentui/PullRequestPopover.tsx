@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { PopoverDetachButton } from './dockedPopover'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useReview } from '../../lib/review/useReview'
 import { localReviewTransport } from '../../lib/review/localTransport'
@@ -37,6 +38,8 @@ type Props = {
   cwd?: string | null
   /** Docked in the surface panel: fill the given box in flow, no scrim margin. */
   docked?: boolean
+  /** Shows the `⧉ window` button: break the popover out into a window. */
+  onDetach?: () => void
   theme: TuiThemePalette
   width: number
   height: number
@@ -498,6 +501,7 @@ function clampNumber(value: number, min: number, max: number): number {
 export function PullRequestPopover({
   cwd,
   docked = false,
+  onDetach,
   theme,
   width,
   height,
@@ -1369,14 +1373,17 @@ export function PullRequestPopover({
       height={popH}
       border
       borderStyle="single"
-      borderColor={theme.border2}
+      // Docked, the window frame is the border: this one stays for the layout
+      // inside it, which counts it, but is drawn in the background and untitled.
+      borderColor={docked ? theme.surface : theme.border2}
       backgroundColor={theme.surface}
       zIndex={docked ? undefined : 50}
       flexDirection="column"
-      title=" PR review "
+      title={docked ? undefined : ' PR review '}
       titleColor={theme.cyan}
       titleAlignment="left"
     >
+      {!docked && onDetach ? <PopoverDetachButton theme={theme} onPress={onDetach} /> : null}
       {reviewBoardOpen ? <ReviewBoard review={review} theme={theme} width={popW - 2} height={popH - 2} keyRef={boardKeyRef} onClose={() => setReviewBoardOpen(false)} onNavigate={navigateReview} /> : null}
       <box height={bodyH} flexDirection="row">
         {/* ── Left column ─────────────────────────────────── */}

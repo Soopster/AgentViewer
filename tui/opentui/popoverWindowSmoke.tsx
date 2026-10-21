@@ -255,6 +255,33 @@ await waitFor('the reader on alpha', () => readerShows('alpha'))
   const tabFrame = () => setup.renderer.root.findDescendantById('popover-tab-frame') as unknown as { visible?: boolean } | null
   const readerVisible = () => (setup.renderer.root.findDescendantById('transcript-reader') as unknown as { visible?: boolean }).visible !== false
   check(!readerVisible(), 'the transcript still shows under a popover tab')
+  // Identification targets the tool tab, never the hidden session behind it.
+  await key('k', { ctrl: true }); await key('q')
+  await waitFor('popover identification', () => !!frame('window-control:1'))
+  const identified = frame('window-control:1')!
+  const identityText = (screen().split('\n')[identified.y + 1] ?? '').slice(identified.x, identified.x + identified.width)
+  check(identityText.includes('Analytics'), `identification targeted the hidden session: ${identityText}`)
+  await key('escape')
+  // Keyboard close and recovery target the tool, preserving the session behind it.
+  await key('b', { ctrl: true }); await key('x')
+  await waitFor('keyboard closes the tool tab', () => !tabFrame() && readerVisible())
+  await key('b', { ctrl: true }); await key('X')
+  await waitFor('keyboard reopens the tool tab', () => !!tabFrame() && !readerVisible())
+  // It carries the reader's title controls, and ≡ is the tab's own menu.
+  const tabBox = frame('popover-tab-frame')!
+  const titleRow = (screen().split('\n')[tabBox.y] ?? '').slice(tabBox.x, tabBox.x + tabBox.width)
+  check(titleRow.includes('≡') && titleRow.includes('⊞ layout') && titleRow.includes('⤢'), `the popover tab has no title controls: ${titleRow}`)
+  const menu = frame('popover-tab-menu')!
+  await click(menu.x + 1, menu.y)
+  // The same window controls as any window, plus the popover's own moves.
+  await waitFor('the tab menu', () => !!frame('context-menu') && screen().includes('Open as a window'))
+  const menuText = screen().split('\n').slice(frame('context-menu')!.y, frame('context-menu')!.y + frame('context-menu')!.height).join('\n')
+  for (const entry of ['Manage windows', 'Split this window right', 'Zoom window', 'Move to workspace', 'Window layout', 'Close tab']) {
+    check(menuText.includes(entry), `the popover tab menu lacks "${entry}":\n${menuText}`)
+  }
+  check(!menuText.includes('Session actions'), 'a popover tab offers session actions')
+  await key('escape')
+  await waitFor('the menu closed', () => !frame('context-menu'))
   // Like any tab: a session tab shows the reader, the popover tab brings it back, × closes it.
   const sessionTab = locate('Win alpha', frame('session-tabs')!)
   await click(sessionTab.x + 2, sessionTab.y)
@@ -265,6 +292,29 @@ await waitFor('the reader on alpha', () => readerShows('alpha'))
   const closeX = tabRow().indexOf('×', tabRow().indexOf('Analytics'))
   await click(closeX, frame('session-tabs')!.y)
   await waitFor('× to close the popover tab', () => !tabRow().includes('Analytics') && readerVisible())
+  // Its window controls act on the tab: split beside it, then float it.
+  await key('a', { ctrl: true })
+  await waitFor('analytics popover', () => !!frame('popover-detach'))
+  const detachAgain = frame('popover-detach')!
+  await click(detachAgain.x + 2, detachAgain.y)
+  await waitFor('the placement menu', () => screen().includes('As a tab in this workspace'))
+  const asTabAgain = locate('As a tab in this workspace')
+  await click(asTabAgain.x + 1, asTabAgain.y)
+  await waitFor('the popover tab', () => !!tabFrame())
+  const tabWidthBefore = frame('popover-tab-frame')!.width
+  const openMenu = async () => {
+    const button = frame('popover-tab-menu')!
+    await click(button.x + 1, button.y)
+    await waitFor('the tab menu', () => !!frame('context-menu'))
+  }
+  await openMenu()
+  const split = locate('Split this window right', frame('context-menu')!)
+  await click(split.x + 1, split.y)
+  await waitFor('a split beside the popover tab', () => !!tabFrame() && frame('popover-tab-frame')!.width < tabWidthBefore)
+  await openMenu()
+  const float = locate('Float window', frame('context-menu')!)
+  await click(float.x + 1, float.y)
+  await waitFor('the popover tab floating', () => !!frame('floating-window') && !tabFrame() && !tabRow().includes('Analytics'))
   // A new tab of its own: the workspace tab bar gains a tab, and the old tab keeps its windows.
   const tabsBefore = (setup.renderer.root.findDescendantById('workspace-tabs') as unknown as { getChildren(): Array<{ id: string }> }).getChildren().filter((child) => child.id.startsWith('workspace-tab:')).map((child) => child.id)
   // Its window from earlier would take ⌃K s; close it so the popover opens.
@@ -294,6 +344,10 @@ await waitFor('the reader on alpha', () => readerShows('alpha'))
 
 // ── Every other popover kind opens as a window from the palette ─────────────
 {
+  // Earlier placement checks retain several live panes; keep room for each
+  // subsequent kind so responsive hiding does not mask its title assertions.
+  await act(async () => { setup.resize(320, 60) })
+  await settle(250)
   // Queries avoid j and k: the palette takes them as moves even while typing.
   const kinds: Array<[string, string, string]> = [
     ['attention', 'Attention inbox in a window', 'Attention'],
@@ -332,6 +386,41 @@ await waitFor('the reader on alpha', () => readerShows('alpha'))
     if (close) { await click(close.x + 1, close.y); await waitFor(`${id} closed`, () => !windowFrame(id)) }
   }
   console.log('Every popover kind opens as a docked window from the palette.')
+}
+
+// ── Git and Files have the same ⧉ placements ────────────────────────────────
+{
+  const reader = frame('transcript-reader')!
+  await click(reader.x + Math.floor(reader.width / 2), reader.y + Math.floor(reader.height / 2))
+  // Git as a tab in this workspace.
+  await key('g', { ctrl: true })
+  await waitFor('the Git popover', () => !!frame('popover-detach'))
+  const detach = frame('popover-detach')!
+  await click(detach.x + 2, detach.y)
+  await waitFor('the placement menu', () => screen().includes('As a tab in this workspace'))
+  const asTab = locate('As a tab in this workspace')
+  await click(asTab.x + 1, asTab.y)
+  const tabRow = () => screen().split('\n')[frame('session-tabs')!.y] ?? ''
+  await waitFor('Git as a tab of the strip', () => tabRow().includes('Diff') && !!frame('popover-tab-frame'))
+  const tabFrame = frame('popover-tab-frame')!
+  // Docked: its own title is gone (the frame around it names it).
+  const inside = screen().split('\n').slice(tabFrame.y + 1, tabFrame.y + 3).join('\n')
+  check(!inside.includes(' Git '), `the docked Git view still draws its own title:\n${inside}`)
+  const closeX = tabRow().indexOf('×', tabRow().indexOf('Diff'))
+  await click(closeX, frame('session-tabs')!.y)
+  await waitFor('the Git tab closed', () => !tabRow().includes('Diff'))
+  // Files beside the focused pane.
+  const reader2 = frame('transcript-reader')!
+  await click(reader2.x + Math.floor(reader2.width / 2), reader2.y + Math.floor(reader2.height / 2))
+  await key('f', { ctrl: true })
+  await waitFor('the Files popover', () => !!frame('popover-detach'))
+  const detachFiles = frame('popover-detach')!
+  await click(detachFiles.x + 2, detachFiles.y)
+  await waitFor('the placement menu', () => screen().includes('Beside the focused pane'))
+  const beside = locate('Beside the focused pane')
+  await click(beside.x + 1, beside.y)
+  await waitFor('Files as a window', () => !!windowFrame('files') && !frame('popover-detach'))
+  console.log('Git and Files offer the same placements: a tab of this workspace, or a window.')
 }
 
 console.log('Popover window smoke passed')

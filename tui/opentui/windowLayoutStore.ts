@@ -13,6 +13,8 @@ export type SavedWindowLayout = {
   name: string
   savedAt: number
   arrangement: 'split' | 'main-stack' | 'grid'
+  popoverTabs?: string[]
+  activePopoverTab?: string | null
   primaryOpen?: boolean
   splitTree?: WindowSplitTree
   orientation: 'columns' | 'rows'

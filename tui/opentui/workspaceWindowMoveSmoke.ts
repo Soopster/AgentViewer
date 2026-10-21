@@ -53,6 +53,15 @@ assert.throws(() => moveWorkspaceWindow(controller, source.id, source.id, 'reade
 controller.flush()
 const restored = new SpacesController(cwd)
 assert.ok((restored.runtime(restored.activeWorkspace()!).snapshot().windowSurfaces as string[]).includes('terminal#2'))
+// Workspace-strip tool tabs use the same atomic transfer, including hidden tabs.
+set(a, 'popoverTabs', ['files']); set(a, 'activePopoverTab', 'files')
+set(a, 'surface:files:files:query', 'kept search')
+set(b, 'windowSurfaces', [...b.get('windowSurfaces', [] as string[], true), 'files'])
+const movedTab = moveWorkspaceWindow(controller, source.id, destination.id, 'surface:files', true)
+assert.equal(movedTab.key, 'surface:files#2')
+assert.deepEqual(a.values.get('popoverTabs'), [])
+assert.equal(a.values.get('activePopoverTab'), null)
+assert.equal(b.values.get('surface:files#2:files:query'), 'kept search')
 // Redo follows undo order and a new edit invalidates the redo branch.
 const history = new WindowHistory<number>(String)
 history.checkpoint(1); history.checkpoint(2)
