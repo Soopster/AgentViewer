@@ -96,10 +96,10 @@ const frame = (id: string): Frame | null => {
   return box ? { x: box.x, y: box.y, width: box.width, height: box.height } : null
 }
 const screen = () => setup.captureCharFrame()
-const locate = (needle: string): { x: number; y: number } => {
+const locate = (needle: string, within?: Frame): { x: number; y: number } => {
   const lines = screen().split('\n')
-  for (let y = 0; y < lines.length; y += 1) {
-    const x = (lines[y] ?? '').indexOf(needle)
+  for (let y = within?.y ?? 0; y < (within ? within.y + within.height : lines.length); y += 1) {
+    const x = (lines[y] ?? '').indexOf(needle, within?.x ?? 0)
     if (x >= 0) return { x, y }
   }
   return fail(`could not find ${JSON.stringify(needle)}`)
@@ -146,7 +146,13 @@ await waitFor('the reader on alpha', () => readerShows('alpha'))
   await waitFor('analytics in a window', () => !!windowFrame('analytics') && !screen().includes('Session analytics'))
   check(titleOf('analytics').includes('Analytics · Win alpha'), `the window does not name its pinned session: ${titleOf('analytics')}`)
   // The reader moves on; the window keeps its session.
-  const bravo = locate('Win bravo')
+  // From the reader: with a window focused, a rail click opens the session as
+  // a window instead. The rail's row, not a tab of the same name.
+  const readerFrame = frame('transcript-reader')!
+  await click(readerFrame.x + Math.floor(readerFrame.width / 2), readerFrame.y + Math.floor(readerFrame.height / 2))
+  const rail = frame('session-rail')!
+  const bravoRow = screen().split('\n').findIndex((line, y) => y > rail.y && line.slice(rail.x, rail.x + rail.width).includes('Win bravo'))
+  const bravo = { x: rail.x + screen().split('\n')[bravoRow]!.slice(rail.x).indexOf('Win bravo'), y: bravoRow }
   await click(bravo.x + 2, bravo.y)
   await waitFor('the reader on bravo', () => readerShows('bravo'))
   await settle(300)
@@ -240,13 +246,25 @@ await waitFor('the reader on alpha', () => readerShows('alpha'))
   await waitFor('analytics again', () => screen().includes('Session analytics'))
   const detach = frame('popover-detach')!
   await click(detach.x + 2, detach.y)
-  await waitFor('the placement menu', () => !!frame('context-menu') && screen().includes('Fill this tab') && screen().includes('In a new tab'))
-  const fill = locate('Fill this tab')
-  await click(fill.x + 1, fill.y)
-  const filled = () => [...['analytics', 'analytics#2']].map(windowFrame).find((entry) => entry && entry.width === area().width) ?? null
-  await waitFor('the popover window filling the tab', () => filled() !== null && !screen().includes('Session analytics'))
-  await chordKey('m')
-  await waitFor('⌃B m to restore the layout around it', () => filled() === null)
+  await waitFor('the placement menu', () => !!frame('context-menu') && screen().includes('As a tab in this workspace') && screen().includes('In a new workspace'))
+  const asTab = locate('As a tab in this workspace')
+  await click(asTab.x + 1, asTab.y)
+  // A tab of this workspace's strip, shown in the reader's place.
+  const tabRow = () => screen().split('\n')[frame('session-tabs')!.y] ?? ''
+  await waitFor('analytics as a tab in the strip', () => tabRow().includes('Analytics') && !!frame('popover-tab-frame') && !screen().includes('Session analytics'))
+  const tabFrame = () => setup.renderer.root.findDescendantById('popover-tab-frame') as unknown as { visible?: boolean } | null
+  const readerVisible = () => (setup.renderer.root.findDescendantById('transcript-reader') as unknown as { visible?: boolean }).visible !== false
+  check(!readerVisible(), 'the transcript still shows under a popover tab')
+  // Like any tab: a session tab shows the reader, the popover tab brings it back, × closes it.
+  const sessionTab = locate('Win alpha', frame('session-tabs')!)
+  await click(sessionTab.x + 2, sessionTab.y)
+  await waitFor('a session tab to show the reader', () => readerVisible() && !tabFrame())
+  const popoverTab = locate('Analytics', frame('session-tabs')!)
+  await click(popoverTab.x + 2, popoverTab.y)
+  await waitFor('the popover tab again', () => !!tabFrame() && !readerVisible())
+  const closeX = tabRow().indexOf('×', tabRow().indexOf('Analytics'))
+  await click(closeX, frame('session-tabs')!.y)
+  await waitFor('× to close the popover tab', () => !tabRow().includes('Analytics') && readerVisible())
   // A new tab of its own: the workspace tab bar gains a tab, and the old tab keeps its windows.
   const tabsBefore = (setup.renderer.root.findDescendantById('workspace-tabs') as unknown as { getChildren(): Array<{ id: string }> }).getChildren().filter((child) => child.id.startsWith('workspace-tab:')).map((child) => child.id)
   // Its window from earlier would take ⌃K s; close it so the popover opens.
@@ -259,8 +277,8 @@ await waitFor('the reader on alpha', () => readerShows('alpha'))
   await waitFor('the daily summary popover', () => !!frame('popover-detach'))
   const detach2 = frame('popover-detach')!
   await click(detach2.x + 2, detach2.y)
-  await waitFor('the placement menu', () => screen().includes('In a new tab'))
-  const tab = locate('In a new tab')
+  await waitFor('the placement menu', () => screen().includes('In a new workspace'))
+  const tab = locate('In a new workspace')
   await click(tab.x + 1, tab.y)
   const tabsAfter = () => (setup.renderer.root.findDescendantById('workspace-tabs') as unknown as { getChildren(): Array<{ id: string }> }).getChildren().filter((child) => child.id.startsWith('workspace-tab:')).map((child) => child.id)
   await waitFor('a new workspace tab', () => tabsAfter().length === tabsBefore.length + 1)
@@ -271,7 +289,49 @@ await waitFor('the reader on alpha', () => readerShows('alpha'))
   const first = frame(tabsBefore[0]!)!
   await click(first.x + 2, first.y)
   await waitFor('the first tab again', () => !!windowFrame('coordination') && !!windowFrame('editor'))
-  console.log('A popover can fill its tab (⌃B m restores) or open in a new workspace tab, leaving the first tab as it was.')
+  console.log('A popover becomes a tab of this workspace (switched and closed like any tab) or a new workspace of its own.')
+}
+
+// ── Every other popover kind opens as a window from the palette ─────────────
+{
+  // Queries avoid j and k: the palette takes them as moves even while typing.
+  const kinds: Array<[string, string, string]> = [
+    ['attention', 'Attention inbox in a window', 'Attention'],
+    ['prompt-library', 'Prompt library in a window', 'Prompts'],
+    ['playbooks', ' manager in a window', 'Playbooks'],
+    ['messaging', 'Cross-session messaging in a window', 'Messaging'],
+    ['handoff', 'Handoff brief in a window', 'Handoff brief'],
+    ['tasks', 'list in a window', 'Tasks'],
+    ['checkpoints', 'review in a window', 'Checkpoints'],
+    ['desk', '', 'Desk'],
+    ['diagnostics', 'Diagnostics in a window', 'Diagnostics'],
+    ['teammates', 'Teammates in a window', 'Teammates'],
+  ]
+  for (const [id, label, title] of kinds) {
+    const reader = frame('transcript-reader')
+    if (reader && reader.width > 0) await click(reader.x + Math.floor(reader.width / 2), reader.y + Math.floor(reader.height / 2))
+    if (label) {
+      await key('?')
+      await settle(300)
+      await act(async () => { await setup.mockInput.typeText(label) })
+      await settle(200)
+      await key('return')
+    } else {
+      // "Desk" has a k, which the palette eats: open the desk (⌃K b) and break it out.
+      await key('k', { ctrl: true })
+      await key('b')
+      await settle(300)
+      await key('w', { ctrl: true, shift: true })
+    }
+    await waitFor(`${label} as a window`, () => !!windowFrame(id) && titleOf(id).includes(title))
+    const box = windowFrame(id)!
+    // Docked: no second frame inside the window's own.
+    const inner = (screen().split('\n')[box.y + 1] ?? '').slice(box.x + 1, box.x + 3)
+    check(!/^[┌┏╭]/.test(inner), `${id} drew its own frame inside the window: ${JSON.stringify(inner)}`)
+    const close = frame(`surface-window-close:${id}`)
+    if (close) { await click(close.x + 1, close.y); await waitFor(`${id} closed`, () => !windowFrame(id)) }
+  }
+  console.log('Every popover kind opens as a docked window from the palette.')
 }
 
 console.log('Popover window smoke passed')

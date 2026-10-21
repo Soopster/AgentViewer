@@ -55,6 +55,15 @@ function notifySoon(): void {
   notifyTimer = setTimeout(notifyNow, NOTIFY_INTERVAL_MS)
 }
 
+/** Change ownership without touching the running process or its output. */
+export function reassignShell(id: string, sourceId: string, destinationId: string): boolean {
+  const entry = entries.get(id)
+  if (!entry || entry.meta.ownerId !== sourceId || isWorkspaceClosed(destinationId)) return false
+  entry.meta.ownerId = destinationId
+  notifyNow()
+  return true
+}
+
 export function subscribeShells(listener: () => void): () => void {
   listeners.add(listener)
   return () => { listeners.delete(listener) }

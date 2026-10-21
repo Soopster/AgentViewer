@@ -4,6 +4,7 @@
 // plus Stop-hook background-work pauses, explicit viewer attention requests,
 // and turns that finished while the user was elsewhere. Single-key triage:
 // answer permissions inline, jump to a session, dismiss notes/completions.
+import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from './dockedPopover'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { TuiThemePalette } from '../theme'
 import { getProviderAccent } from '../theme'
@@ -41,6 +42,10 @@ type Props = {
   onDismiss: (item: AttentionItem) => void
   onClose: () => void
   onKeyHandlerReady: (handler: (key: AttentionKeyEvent) => void) => void
+  /** Fill the given box inside a window, with no frame of its own. */
+  docked?: boolean
+  /** Shows the `⧉ window` button: break the popover out into a window. */
+  onDetach?: () => void
 }
 
 const KIND_GLYPH: Record<AttentionItemKind, string> = {
@@ -98,6 +103,8 @@ export function AttentionInboxPopover({
   onDismiss,
   onClose,
   onKeyHandlerReady,
+  docked = false,
+  onDetach,
 }: Props) {
   const [index, setIndex] = useState(0)
   const [now, setNow] = useState(() => Date.now())
@@ -152,14 +159,15 @@ export function AttentionInboxPopover({
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
 
-  const popW = Math.min(width - 4, 92)
-  const popH = Math.min(height - 4, 30)
+  const frame = popoverFrameCells(docked)
+  const popW = docked ? width : Math.min(width - 4, 92)
+  const popH = docked ? height : Math.min(height - 4, 30)
   const popTop = Math.floor((height - popH) / 2)
   const popLeft = Math.floor((width - popW) / 2)
-  const innerW = popW - 4
+  const innerW = popW - frame - 2
   const headerH = 2
   const footerH = 2
-  const bodyH = Math.max(popH - headerH - footerH - 2, 6)
+  const bodyH = Math.max(popH - headerH - footerH - frame, 6)
 
   const footerHint = selected?.kind === 'permission'
     ? '⏎ open session · y allow · n deny · j/k move · esc close'
@@ -169,21 +177,16 @@ export function AttentionInboxPopover({
 
   return (
     <box
-      position="absolute"
-      top={popTop}
-      left={popLeft}
-      width={popW}
-      height={popH}
-      border
-      borderStyle="single"
-      borderColor={theme.border2}
+      {...popoverRootProps(docked, { top: popTop, left: popLeft, width: popW, height: popH }, 50)}
+      // borderStyle alone turns a border on, so a docked popover passes none.
+      {...(docked ? {} : { border: true, borderStyle: 'single' as const, borderColor: theme.border2 })}
       backgroundColor={theme.surface}
-      zIndex={50}
       flexDirection="column"
-      title=" Attention inbox "
+      title={docked ? undefined : " Attention inbox "}
       titleColor={theme.amber}
       titleAlignment="left"
     >
+      {!docked && onDetach ? <PopoverDetachButton theme={theme} onPress={onDetach} /> : null}
       <box height={headerH} paddingX={1} border={['bottom']} borderStyle="single" borderColor={theme.border} flexDirection="row" alignItems="center">
         <text fg={needsInputCount > 0 ? theme.amber : theme.dim} wrapMode="none">
           {needsInputCount > 0 ? `${needsInputCount} need${needsInputCount === 1 ? 's' : ''} input` : 'nothing needs input'}
@@ -196,7 +199,7 @@ export function AttentionInboxPopover({
       </box>
 
       <scrollbox
-        width={popW - 2}
+        width={popW - frame}
         height={bodyH}
         scrollY
         backgroundColor={theme.surface}

@@ -5,6 +5,7 @@
 // prompt. Any one hunk of any step can be undone against the file as it is
 // now, the file can be put back to how it was before a step, and a step can be
 // handed to an agent with the prompt that produced it.
+import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from './dockedPopover'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
 import type { TuiThemePalette } from '../theme'
@@ -32,6 +33,10 @@ type Props = {
   onNotice: (tone: 'info' | 'error', text: string, durationMs?: number) => void
   onKeyHandlerReady: (handler: (key: FileHistoryKeyEvent) => void) => void
   onAskAgent?: (request: SelectionAskInput) => void
+  /** Fill the given box inside a window, with no frame of its own. */
+  docked?: boolean
+  /** Shows the `⧉ window` button: break the popover out into a window. */
+  onDetach?: () => void
 }
 
 type Pending =
@@ -114,6 +119,8 @@ export function FileHistoryPopover({
   onNotice,
   onKeyHandlerReady,
   onAskAgent,
+  docked = false,
+  onDetach,
 }: Props) {
   const [history, setHistory] = useState<FileHistory | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -157,14 +164,15 @@ export function FileHistoryPopover({
   }, [bodyLines])
   const now = useMemo(() => Date.now(), [history])
 
-  const popW = Math.min(width - 4, 120)
-  const popH = Math.min(height - 2, 42)
+  const frame = popoverFrameCells(docked)
+  const popW = docked ? width : Math.min(width - 4, 120)
+  const popH = docked ? height : Math.min(height - 2, 42)
   const popTop = Math.max(Math.floor((height - popH) / 2), 0)
   const popLeft = Math.max(Math.floor((width - popW) / 2), 0)
-  const innerW = popW - 4
+  const innerW = popW - frame - 2
   const headerH = 4
   const footerH = 2
-  const bodyH = Math.max(popH - headerH - footerH - 2, 4)
+  const bodyH = Math.max(popH - headerH - footerH - frame, 4)
 
   useEffect(() => {
     setHunkIndex(0)
@@ -288,21 +296,16 @@ export function FileHistoryPopover({
 
   return (
     <box
-      position="absolute"
-      top={popTop}
-      left={popLeft}
-      width={popW}
-      height={popH}
-      border
-      borderStyle="single"
-      borderColor={theme.border2}
+      {...popoverRootProps(docked, { top: popTop, left: popLeft, width: popW, height: popH }, MODAL_CONTENT_Z_INDEX)}
+      // borderStyle alone turns a border on, so a docked popover passes none.
+      {...(docked ? {} : { border: true, borderStyle: 'single' as const, borderColor: theme.border2 })}
       backgroundColor={theme.surface}
-      zIndex={MODAL_CONTENT_Z_INDEX}
       flexDirection="column"
-      title={` File history · ${fit(relPath, Math.max(popW - 20, 10))} `}
+      title={docked ? undefined : ` File history · ${fit(relPath, Math.max(popW - 20, 10))} `}
       titleColor={accentColor}
       titleAlignment="left"
     >
+      {!docked && onDetach ? <PopoverDetachButton theme={theme} onPress={onDetach} /> : null}
       <box height={headerH} paddingX={1} border={['bottom']} borderStyle="single" borderColor={theme.border} flexDirection="column">
         <box flexDirection="row" height={1}>
           <text fg={theme.muted} wrapMode="none">{steps.length > 0 ? `step ${stepIndex + 1}/${steps.length}  ` : ''}</text>
@@ -342,7 +345,7 @@ export function FileHistoryPopover({
 
       <scrollbox
         ref={scrollRef}
-        width={popW - 2}
+        width={popW - frame}
         height={bodyH}
         scrollY
         backgroundColor={theme.surface}

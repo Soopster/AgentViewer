@@ -79,10 +79,10 @@ for (const key of Object.keys(PORTABLE_COMMAND_CHORDS)) {
 assert.ok(commandHint.includes('cancel'), 'A pending chord must always say how to escape it')
 
 // ── the unknown-key notice names the prefix and the alternatives ───────────
-const notice = chordUnknownKeyNotice(SPLIT_CHORD_MAP, 'q')
-assert.ok(notice.startsWith('⌃B q is not bound'), `Unexpected notice: ${notice}`)
+const notice = chordUnknownKeyNotice(SPLIT_CHORD_MAP, '~')
+assert.ok(notice.startsWith('⌃B ~ is not bound'), `Unexpected notice: ${notice}`)
 assert.ok(notice.includes('?'), 'The notice must point at the help key')
-assert.ok(chordUnknownKeyNotice(COMMAND_CHORD_MAP, 'q').startsWith('⌃K q is not bound'))
+assert.ok(chordUnknownKeyNotice(COMMAND_CHORD_MAP, '~').startsWith('⌃K ~ is not bound'))
 
 // ── overlay rows ───────────────────────────────────────────────────────────
 // The overlay shows the unprefixed section too: it is reference, not a menu of

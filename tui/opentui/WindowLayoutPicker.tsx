@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/react */
 // The window layout menu: macOS's "Move & Resize / Fill & Arrange", for the
-// reader and its split panes, plus the layouts saved for this project. Each
+// focused pane and its neighbours, plus the layouts saved for this project. Each
 // arrangement is a small picture of the layout it makes; everything is
 // clickable, lit under the pointer, and reachable by arrows and Enter.
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -17,23 +17,23 @@ export type WindowLayoutAction =
 
 type Choice = { action: WindowLayoutAction; label: string; icon: [string, string] }
 
-// Icon cells: `r` the reader, `p` a pane, `·` empty space beside a moved reader.
+// Icon cells: `r` the focused pane, `p` another pane, `·` free space.
 export const WINDOW_LAYOUT_SECTIONS: ReadonlyArray<{ title: string; choices: Choice[] }> = [
   {
     title: 'Move & Resize',
     choices: [
-      { action: 'reader-left', label: 'Reader on the left', icon: ['rrr··', 'rrr··'] },
-      { action: 'reader-right', label: 'Reader on the right', icon: ['··rrr', '··rrr'] },
-      { action: 'reader-top', label: 'Reader on top', icon: ['rrrrr', '·····'] },
-      { action: 'reader-bottom', label: 'Reader below', icon: ['·····', 'rrrrr'] },
+      { action: 'reader-left', label: 'Focused pane on the left', icon: ['rrr··', 'rrr··'] },
+      { action: 'reader-right', label: 'Focused pane on the right', icon: ['··rrr', '··rrr'] },
+      { action: 'reader-top', label: 'Focused pane on top', icon: ['rrrrr', '·····'] },
+      { action: 'reader-bottom', label: 'Focused pane below', icon: ['·····', 'rrrrr'] },
     ],
   },
   {
     title: 'Fill & Arrange',
     choices: [
-      { action: 'fill', label: 'Reader only', icon: ['rrrrr', 'rrrrr'] },
-      { action: 'two', label: 'Reader and one pane', icon: ['rr pp', 'rr pp'] },
-      { action: 'main-stack', label: 'Reader and a stack', icon: ['rrr p', 'rrr p'] },
+      { action: 'fill', label: 'Fill focused pane', icon: ['rrrrr', 'rrrrr'] },
+      { action: 'two', label: 'Two panes', icon: ['rr pp', 'rr pp'] },
+      { action: 'main-stack', label: 'Focused pane and a stack', icon: ['rrr p', 'rrr p'] },
       { action: 'grid', label: 'Grid of four', icon: ['rr pp', 'pp pp'] },
       { action: 'grid-six', label: 'Grid of six', icon: ['r p p', 'p p p'] },
     ],
@@ -302,7 +302,7 @@ export function WindowLayoutPicker({
         <box id="window-layout:preview" height={previewHeight} flexShrink={0} flexDirection="column" overflow="hidden">
           <text fg={theme.dim} wrapMode="none">{previewDetail ?? 'Choose a layout to preview its windows'}</text>
           <text fg={theme.cyan} wrapMode="none">{previewLines.slice(0, Math.max(0, previewHeight - 2)).join('\n')}</text>
-          <text fg={theme.dim} wrapMode="none">R reader · numbers are panes · ⏎ applies</text>
+          <text fg={theme.dim} wrapMode="none">Numbers identify panes · placement uses focus · ⏎ applies</text>
         </box>
       ) : null}
       <text fg={theme.dim} wrapMode="none">{hint}</text>

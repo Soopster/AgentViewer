@@ -291,7 +291,7 @@ export function windowPreviewLines(rects: WindowRect[], area: WindowSize, column
       const bottom = Math.ceil((rect.y + rect.height) * rows / area.height) - 1
       if (row === top || row === bottom) line += column === left || column === right ? '+' : '─'
       else if (column === left || column === right) line += '│'
-      else line += column === Math.floor((left + right) / 2) && row === Math.floor((top + bottom) / 2) ? (index === 0 ? 'R' : String(index)) : ' '
+      else line += column === Math.floor((left + right) / 2) && row === Math.floor((top + bottom) / 2) ? String(index + 1) : ' '
     }
     return line
   })

@@ -16,6 +16,7 @@
 // What renders here is cheap to re-render and isolated from the root: the clock
 // and the tape own their timers, so neither ticks the root or the panels; the
 // panels repaint on a 30s `now` and on their inputs.
+import { popoverRootProps } from './dockedPopover'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { TextAttributes } from '@opentui/core'
 import type { ContextUsage, Session } from '../../lib/types'
@@ -117,6 +118,8 @@ export type DeskViewProps = {
   onApplyTheme: () => void
   onClose: () => void
   onKeyHandlerReady: (handler: (key: DeskKeyEvent) => void) => void
+  /** Fill the given box inside a window instead of covering the screen. */
+  docked?: boolean
 }
 
 type PanelState = { fn: DeskFunctionId; history: DeskFunctionId[]; cursor: number }
@@ -370,6 +373,7 @@ export function DeskView({
   onApplyTheme,
   onClose,
   onKeyHandlerReady,
+  docked = false,
 }: DeskViewProps) {
   const [layout, setLayout] = useState<DeskLayoutId>(() => defaultDeskLayout(width, height))
   const [panels, setPanels] = useState<PanelState[]>(initialPanels)
@@ -622,7 +626,7 @@ export function DeskView({
   const commandWidth = Math.max(0, width - prompt.length - securityWidth - 1)
 
   return (
-    <box position="absolute" top={0} left={0} width={width} height={height} backgroundColor={DESK_COLORS.bg} zIndex={60} flexDirection="column">
+    <box {...popoverRootProps(docked, { top: 0, left: 0, width, height }, 60)} backgroundColor={DESK_COLORS.bg} flexDirection="column">
       <box height={1} width={width} flexDirection="row" backgroundColor={DESK_COLORS.redBar}>
         <text wrapMode="none" bg={DESK_COLORS.redBar}>
           <span fg={DESK_COLORS.white} attributes={BOLD}>{titleLeft}</span>

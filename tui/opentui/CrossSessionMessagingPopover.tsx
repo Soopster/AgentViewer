@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from './dockedPopover'
 import { useCallback, useEffect, useState } from 'react'
 import type { TuiThemePalette } from '../theme'
 import { getProviderAccent } from '../theme'
@@ -16,6 +17,10 @@ type Props = {
   onClose: () => void
   onNotice: (tone: 'info' | 'error', text: string, durationMs?: number) => void
   onKeyHandlerReady: (handler: (key: MessagingKeyEvent) => boolean) => void
+  /** Fill the given box inside a window, with no frame of its own. */
+  docked?: boolean
+  /** Shows the `⧉ window` button: break the popover out into a window. */
+  onDetach?: () => void
 }
 
 export function CrossSessionMessagingPopover({
@@ -26,6 +31,8 @@ export function CrossSessionMessagingPopover({
   onClose,
   onNotice,
   onKeyHandlerReady,
+  docked = false,
+  onDetach,
 }: Props) {
   const [sessions, setSessions] = useState<AddressableSession[]>([])
   const [index, setIndex] = useState(0)
@@ -120,30 +127,26 @@ export function CrossSessionMessagingPopover({
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
 
-  const popW = Math.min(width - 4, 96)
-  const popH = Math.min(height - 4, 30)
+  const frame = popoverFrameCells(docked)
+  const popW = docked ? width : Math.min(width - 4, 96)
+  const popH = docked ? height : Math.min(height - 4, 30)
   const popTop = Math.floor((height - popH) / 2)
   const popLeft = Math.floor((width - popW) / 2)
-  const innerW = popW - 4
-  const listH = Math.max(popH - 10, 8)
+  const innerW = popW - frame - 2
+  const listH = Math.max(popH - 8 - frame, 8)
 
   return (
     <box
-      position="absolute"
-      top={popTop}
-      left={popLeft}
-      width={popW}
-      height={popH}
-      border
-      borderStyle="single"
-      borderColor={theme.border2}
+      {...popoverRootProps(docked, { top: popTop, left: popLeft, width: popW, height: popH }, 50)}
+      // borderStyle alone turns a border on, so a docked popover passes none.
+      {...(docked ? {} : { border: true, borderStyle: 'single' as const, borderColor: theme.border2 })}
       backgroundColor={theme.surface}
-      zIndex={50}
       flexDirection="column"
-      title=" Cross-session messaging "
+      title={docked ? undefined : " Cross-session messaging "}
       titleColor={theme.cyan}
       titleAlignment="left"
     >
+      {!docked && onDetach ? <PopoverDetachButton theme={theme} onPress={onDetach} /> : null}
       <box height={2} paddingX={1} border={['bottom']} borderStyle="single" borderColor={theme.border} flexDirection="row" alignItems="center">
         <text fg={theme.text} wrapMode="none">{sessions.length} reachable</text>
         <text fg={theme.dim} wrapMode="none">{'  ·  running turns receive live steering'}</text>
@@ -152,7 +155,7 @@ export function CrossSessionMessagingPopover({
       </box>
 
       <scrollbox
-        width={popW - 2}
+        width={popW - frame}
         height={listH}
         scrollY
         backgroundColor={theme.surface}

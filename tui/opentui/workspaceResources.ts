@@ -8,7 +8,7 @@ export function updateWorkspaceResource(resource: WorkspaceResource): void {
   if (closed.has(resource.ownerId)) return
   const previous = resources.get(resource.id)
   resources.set(resource.id, resource)
-  if (previous?.running !== resource.running || previous?.error !== resource.error || !previous) { version++; listeners.forEach(listener => listener()) }
+  if (previous?.ownerId !== resource.ownerId || previous?.running !== resource.running || previous?.error !== resource.error || !previous) { version++; listeners.forEach(listener => listener()) }
 }
 export function forgetWorkspaceResource(id: string): void { if (resources.delete(id)) { version++; listeners.forEach(listener => listener()) } }
 export function workspaceResources(ownerIds: readonly string[]): WorkspaceResource[] { return [...resources.values()].filter(resource => ownerIds.includes(resource.ownerId)) }

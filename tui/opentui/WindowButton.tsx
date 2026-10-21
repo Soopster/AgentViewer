@@ -18,7 +18,7 @@ export const WindowButton = memo(function WindowButton({
   id?: string
   label: string
   theme: TuiThemePalette
-  onPress: () => void
+  onPress: (point: { x: number; y: number }) => void
   /** `danger` lights red, for closing. */
   tone?: 'normal' | 'danger'
   /** The border's own background, which the button sits on. */
@@ -30,10 +30,10 @@ export const WindowButton = memo(function WindowButton({
       id={id}
       onMouseOver={() => setHovered(true)}
       onMouseOut={() => setHovered(false)}
-      onMouseDown={(event: { button: number; stopPropagation?: () => void }) => {
+      onMouseDown={(event: { button: number; x: number; y: number; stopPropagation?: () => void }) => {
         if (event.button !== 0) return
         event.stopPropagation?.()
-        onPress()
+        onPress({ x: event.x, y: event.y })
       }}
     >
       <text

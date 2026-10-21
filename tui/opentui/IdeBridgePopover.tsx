@@ -6,6 +6,7 @@
 // requests (^Y / ^N), and pushes @file mentions into the session. Mirrors
 // ChannelBridgePopover; uses lib/ideBridge.ts. The protocol streams no prose
 // back, so this is a tool-activity feed rather than a chat thread.
+import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from './dockedPopover'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
 import type { TuiThemePalette } from '../theme'
@@ -40,6 +41,10 @@ type Props = {
   onKeyHandlerReady: (handler: (key: IdeBridgeKeyEvent) => void) => void
   // Deliver a diff-review comment (structured prompt) into the composer.
   onSendComment?: (text: string) => void
+  /** Fill the given box inside a window, with no frame of its own. */
+  docked?: boolean
+  /** Shows the `⧉ window` button: break the popover out into a window. */
+  onDetach?: () => void
 }
 
 // Mirror the web buildDiffContext / Edit-card context block.
@@ -160,6 +165,8 @@ export function IdeBridgePopover({
   onNotice,
   onKeyHandlerReady,
   onSendComment,
+  docked = false,
+  onDetach,
 }: Props) {
   const config = useMemo(readIdeBridgeConfigFromEnv, [])
   const [status, setStatus] = useState<IdeBridgeStatus>('idle')
@@ -284,32 +291,28 @@ export function IdeBridgePopover({
 
   const hasPendingDiff = entries.some((e) => e.kind === 'diff' && !e.resolved)
 
-  const popW = Math.min(width - 4, 100)
-  const popH = Math.min(height - 4, 36)
+  const frame = popoverFrameCells(docked)
+  const popW = docked ? width : Math.min(width - 4, 100)
+  const popH = docked ? height : Math.min(height - 4, 36)
   const headerH = 3
   const footerH = 3
-  const bodyH = Math.max(popH - headerH - footerH - 2, 8)
+  const bodyH = Math.max(popH - headerH - footerH - frame, 8)
   const popTop = Math.floor((height - popH) / 2)
   const popLeft = Math.floor((width - popW) / 2)
-  const innerW = popW - 4
+  const innerW = popW - frame - 2
 
   return (
     <box
-      position="absolute"
-      top={popTop}
-      left={popLeft}
-      width={popW}
-      height={popH}
-      border
-      borderStyle="single"
-      borderColor={theme.border2}
+      {...popoverRootProps(docked, { top: popTop, left: popLeft, width: popW, height: popH }, 50)}
+      // borderStyle alone turns a border on, so a docked popover passes none.
+      {...(docked ? {} : { border: true, borderStyle: 'single' as const, borderColor: theme.border2 })}
       backgroundColor={theme.surface}
-      zIndex={50}
       flexDirection="column"
-      title=" IDE bridge "
+      title={docked ? undefined : " IDE bridge "}
       titleColor={accentColor}
       titleAlignment="left"
     >
+      {!docked && onDetach ? <PopoverDetachButton theme={theme} onPress={onDetach} /> : null}
       <box height={headerH} paddingX={1} border={['bottom']} borderStyle="single" borderColor={theme.border} flexDirection="column">
         <box flexDirection="row" alignItems="center">
           <text fg={statusColor(status, claudeConnected, theme)} wrapMode="none">{statusLabel(status, claudeConnected)}</text>
@@ -332,7 +335,7 @@ export function IdeBridgePopover({
 
       <scrollbox
         ref={scrollRef}
-        width={popW - 2}
+        width={popW - frame}
         height={bodyH}
         scrollY
         backgroundColor={theme.surface}

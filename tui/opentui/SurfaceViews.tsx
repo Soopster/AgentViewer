@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/react */
-import { useCallback, useState } from 'react'
+import { useCallback } from 'react'
 
+import { useWorkspaceState } from './workspaceContext'
 import type { TuiThemePalette } from '../theme'
 import { normalizeBrowserUrl, openExternalUrl, terminalBrowserCommand, terminalBrowserEnabled } from './terminalBrowser'
 
@@ -36,8 +37,8 @@ export function BrowserSurfaceView({
   recent: readonly string[]
   onOpened: (url: string) => void
 }) {
-  const [draft, setDraft] = useState('')
-  const [status, setStatus] = useState<string | null>(null)
+  const [draft, setDraft] = useWorkspaceState('browser:draft', '')
+  const [status, setStatus] = useWorkspaceState<string | null>('browser:status', null)
 
   const submit = useCallback((value: string) => {
     const url = normalizeBrowserUrl(value)

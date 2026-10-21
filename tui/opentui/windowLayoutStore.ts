@@ -6,12 +6,15 @@
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import type { WindowSplitTree } from './windowSplitTree'
 
 export type SavedWindowLayout = {
   id: string
   name: string
   savedAt: number
   arrangement: 'split' | 'main-stack' | 'grid'
+  primaryOpen?: boolean
+  splitTree?: WindowSplitTree
   orientation: 'columns' | 'rows'
   readerLast: boolean
   readerShare: number
@@ -31,7 +34,7 @@ export type SavedWindowLayout = {
   /** Windows sharing a frame as tabs, by window key; absent before tabs. */
   stacks?: string[][]
   /** What each popover window is pinned to, by window id; absent before popover windows. */
-  surfaceMeta?: Record<string, { session?: string; path?: string }>
+  surfaceMeta?: Record<string, { cwd?: string; session?: string; path?: string }>
 }
 
 type StoreFile = { version: 1; projects: Record<string, SavedWindowLayout[]> }
@@ -113,6 +116,6 @@ export function deleteWindowLayout(project: string, id: string): void {
 /** One line for the menu: what the layout holds. */
 export function describeSavedLayout(layout: SavedWindowLayout): string {
   const windows = 1 + layout.panes.length + layout.surfaces.length
-  const shape = layout.arrangement === 'grid' ? 'grid' : layout.arrangement === 'main-stack' ? 'stack' : layout.orientation === 'rows' ? 'stacked split' : 'split'
+  const shape = layout.splitTree ? 'mixed splits' : layout.arrangement === 'grid' ? 'grid' : layout.arrangement === 'main-stack' ? 'stack' : layout.orientation === 'rows' ? 'stacked split' : 'split'
   return `${shape} · ${windows} window${windows === 1 ? '' : 's'}${layout.surfaces.length ? ` · ${layout.surfaces.join(', ')}` : ''}`
 }

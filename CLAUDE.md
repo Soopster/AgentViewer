@@ -1348,10 +1348,13 @@ drawn in have one source; `windowLayoutSmoke.ts` checks every arrangement tiles 
   at the area's outer edge docks (`floatDockTarget`, hinted while it moves). **Esc cancels any drag**
   (`cancelPointerGesture`, checked first in the key handler): a window or tab drag ends with no drop,
   a float move or resize returns to its start, and a border drag is undone to its checkpoint.
-- **Popovers break out into windows** (`popoverWindows.ts`; so far analytics, daily summary, the
-  editor and the agent control center). `⌃⇧W` (or the popover's `⧉ window` button: beside the
-  reader, fill this tab, or a new workspace tab) moves an open popover into the layout; `⌃⇧W` on a
-  focused popover window, its `⤢` or "Open full screen" puts it back. Each kind declares:
+- **Popovers break out into windows** (`popoverWindows.ts`: every view popover — analytics, daily
+  summary, editor, control center, attention, prompts, playbooks, messaging, handoff, tasks,
+  checkpoints, file history, CLI/IDE bridges, teammates, desk, diagnostics; Git/Files/PR map onto
+  their existing surface kinds). `⌃⇧W`, the palette (`popwin:<kind>`, one entry per registry kind)
+  or the popover's `⧉ window` button — beside the reader, **as a tab in this workspace**, or in a new
+  workspace — moves an open popover; `⌃⇧W` on a focused popover window or tab, its `⤢` or "Open
+  full screen" puts it back. Each kind declares:
   - `pin` — a session-pinned window (analytics) reads **its own copy** of that session's detail
     (`usePinnedSessionDetail`, the split pane's poll-and-yield loop), so moving the reader never
     changes what it shows; the pin lives in `windowSurfaceMeta` (workspace state, undo, saved
@@ -1362,11 +1365,21 @@ drawn in have one source; `windowLayoutSmoke.ts` checks every arrangement tiles 
   - `keys` — `'capture'` (the editor) is routed ahead of the global shortcuts, like a shell in
     terminal mode, and only the `⌃B` prefix escapes; a key the editor declines reaches its
     textarea, which takes the focus slot only while the window is focused (`active`).
+  **Popover tabs** (`popoverTabs`, `activePopoverTab`, workspace state) are entries of the session
+  tab strip after the session tabs: selecting one shows the popover in the reader's place (the
+  transcript stays mounted, hidden), and ←/→, `w`, `×`, right-click and clicks treat it like any tab
+  (`selectStripIndex`). While the reader is focused a shown popover tab takes the keys, Esc
+  included (it is the reader's place, not a window to leave); its own close closes the tab.
+  `readerFrameNode` is a function so the tab frame renders after `renderSurfaceBody` exists.
+  Teammates and diagnostics are store-backed: they stay *open* while windowed or tabbed and only
+  their modal is suppressed (`windowedPopoverKinds`), so opening one as a window from the palette
+  opens the panel first, and closing the window (not returning it) closes the panel.
   A docked popover (`dockedPopover.tsx`) fills its box and **passes no border props at all** —
   `borderStyle` alone turns a border on, so `border={false}` with a style still drew a second
-  frame inside the window's. "Fill this tab" is that window zoomed (`pendingSurfaceZoomRef`, ⌃B m
-  restores); "a new tab" seeds a new workspace runtime (`windowSurfaces`, meta, zoom, the pinned
-  session) before it mounts. `popoverWindowSmoke.tsx` covers each; seven mutations verified.
+  frame inside the window's. "In a new workspace" seeds a new workspace runtime (`windowSurfaces`, meta, zoom, the pinned
+  session) before it mounts. `popoverWindowSmoke.tsx` covers each, opens every other kind from the
+  palette and checks it is docked (no second frame); eleven mutations verified. The palette eats
+  `j`/`k` typed into its query (they move the selection) — a query must avoid them.
 - **A surface frame must not clip** (`overflow` is on its body box): its tab strip and title
   buttons sit on the border at `top: -1`, and a clipping frame does not paint them — the `⇥ panel`
   and `×` buttons were invisible (though still clickable) before this.

@@ -96,6 +96,15 @@ function notifyNow(): void {
   for (const listener of listeners) listener()
 }
 
+/** Change ownership without touching the running process or its output. */
+export function reassignProcess(id: string, sourceId: string, destinationId: string): boolean {
+  const entry = entries.get(id)
+  if (!entry || entry.ownerId !== sourceId || isWorkspaceClosed(destinationId)) return false
+  entry.ownerId = destinationId
+  notifyNow()
+  return true
+}
+
 export function subscribeProcesses(listener: () => void): () => void {
   listeners.add(listener)
   return () => { listeners.delete(listener) }

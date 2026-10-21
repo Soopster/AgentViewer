@@ -56,17 +56,23 @@ export const SPLIT_CHORD_HELP: SplitChordSection[] = [
     entries: [
       { keys: '% · v', label: 'split side by side', short: 'split' },
       { keys: '" · s', label: 'split stacked', short: 'stacked' },
-      { keys: 'r', label: 'rotate side-by-side ↔ stacked', short: 'rotate' },
+      { keys: 'r', label: 'rotate the focused split: side-by-side ↔ stacked', short: 'rotate' },
       { keys: 'n', label: 'next session in this pane', short: 'next' },
       { keys: 'x', label: 'close pane', short: 'close' },
       // Out of the one-line hint, which these four took past its 120-column
       // budget (cutting off "cancel"); listed here in ⌃B ?, and in the palette.
+      { keys: 'U', label: 'redo window change', hint: false },
+      { keys: 'X', label: 'reopen closed pane', hint: false },
+      { keys: 'L', label: 'recent windows across workspaces', hint: false },
       { keys: 'u', label: 'undo window change', short: 'undo', hint: false },
       { keys: 'a', label: 'next window needing attention', short: 'attention', hint: false },
-      { keys: 'p', label: 'search and switch windows (including hidden)', short: 'switch', hint: false },
+      { keys: 'p', label: 'workspace tree: windows, tabs, and hidden windows', short: 'switch', hint: false },
       { keys: 'b', label: 'broadcast prompt to selected session windows', short: 'broadcast', hint: false },
       // Out of the one-line hint, which is at its width budget; the reader's ⊞ button and the palette advertise it.
       { keys: 'S', label: 'spaces and workspaces', hint: false },
+      { keys: 'q', label: 'identify windows (numbers select panes)', hint: false },
+      { keys: 'e', label: 'manage windows until Escape or Enter', hint: false },
+      { keys: 'enter', label: 'focused window menu', hint: false },
       { keys: 'w', label: 'window layout menu (move, arrange, full screen)', short: 'layout', hint: false },
       { keys: 'z', label: 'toggle split panes off/on', short: 'toggle' },
     ],
@@ -74,8 +80,8 @@ export const SPLIT_CHORD_HELP: SplitChordSection[] = [
   {
     title: 'size',
     entries: [
-      { keys: '<', label: 'shrink the reader', short: 'shrink' },
-      { keys: '>', label: 'grow the reader', short: 'grow' },
+      { keys: '<', label: 'shrink the focused pane', short: 'shrink' },
+      { keys: '>', label: 'grow the focused pane', short: 'grow' },
       { keys: '=', label: 'even sizes', short: 'even' },
       { keys: '+ · -', label: 'the grid\'s row split', hint: false },
       { keys: '[ · ]', label: 'shrink · grow the focused pane in its row or column', hint: false },
@@ -92,7 +98,7 @@ export const SPLIT_CHORD_HELP: SplitChordSection[] = [
       { keys: 'o · tab', label: 'focus next pane', short: 'focus' },
       { keys: '← · → · ↑ · ↓', label: 'focus the window that way', hint: false },
       { keys: '⇧← · ⇧→ · ⇧↑ · ⇧↓', label: 'swap the focused window with the one that way', hint: false },
-      { keys: ';', label: 'flip reader ↔ last pane', hint: false },
+      { keys: ';', label: 'toggle the last two focused panes', hint: false },
       { keys: '1 … 9', label: 'focus pane by number', hint: false },
       { keys: '?', label: 'this help', short: 'all keys' },
       { keys: 'esc · ⌃C · ⌃G', label: 'cancel the chord', short: 'cancel' },
@@ -113,10 +119,10 @@ export const SPLIT_CHORD_HELP: SplitChordSection[] = [
       { keys: 'Q', label: 'quote and reply' },
       { keys: 'c', label: 'compose to this session' },
       { keys: 'i', label: 'toggle thinking mode' },
-      { keys: '↵', label: 'open this pane in the reader' },
+      { keys: '↵', label: 'zoom this pane / restore layout' },
       { keys: '⌃G · D', label: 'git · diagnostics for this session' },
       { keys: '⌃C', label: 'interrupt this session' },
-      { keys: 'esc', label: 'back to the reader' },
+      { keys: 'esc', label: 'focus a session pane' },
     ],
   },
 ]

@@ -337,11 +337,15 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   const first = frame('split-pane:0')!
   const row = railRow(hidden)
   await drag({ x: row.x + 1, y: row.y }, { x: first.x + first.width - 2, y: first.y + Math.floor(first.height / 2) }, () => {
-    check(setup.captureCharFrame().includes('Beside pane 1'), 'a pane\'s edge does not say it will insert beside it')
-    check(!!frame('window-preview:5'), 'a drop does not preview every resulting window')
+    check(setup.captureCharFrame().includes('Split does not fit'), 'an undersized target did not explain why the split is refused')
+    check(!frame('window-drop-zone'), 'an invalid split still shows a destination outline')
   })
-  await waitFor(`${hidden} beside pane 1`, () => panes().length === 5 && paneName(1) === hidden)
-  console.log('Dropping on a pane\'s edge inserts beside it.')
+  check(panes().length === 4, 'an undersized edge drop changed the layout')
+  await rightClick(row.x + 1, row.y)
+  const open = locate('Open right of the reader', frame('context-menu')!)
+  await click(open.x + 1, open.y)
+  await waitFor('five panes restored', () => panes().length === 5)
+  console.log('An undersized edge drop is refused without changing its neighbours.')
 }
 
 // ── ⌃B ⇧→ swaps; ⌃B m zooms ─────────────────────────────────────────────────
@@ -371,14 +375,14 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   console.log('⌃B ⇧arrows swap windows; ⌃B m zooms and restores.')
 }
 
-// Dropping in the middle replaces/swaps a pane; undo restores both occupants.
+// Dropping in the middle groups panes as tabs; undo restores their frames.
 {
   await waitFor('pane sessions after zoom', () => [0, 1, 2, 3, 4].every((index) => paneName(index) !== null))
   const order = [0, 1, 2, 3, 4].map(paneName)
   const source = frame('split-pane:1')!
   const target = frame('split-pane:0')!
   await drag({ x: source.x + 10, y: source.y }, { x: target.x + Math.floor(target.width / 2), y: target.y + Math.floor(target.height / 2) })
-  await waitFor('drop to replace the first pane', () => paneName(0) === order[1])
+  await waitFor('centre drop to group the panes', () => !!frame(`window-tab:claude:win-${order[0]}`) && !!frame(`window-tab:claude:win-${order[1]}`))
   await chordKey('u')
   await waitFor('undo to restore both replaced sessions', () => [0, 1, 2, 3, 4].every((index) => paneName(index) === order[index]))
   // Swapping the reader needs to restore its session too, not just the pins.
@@ -655,14 +659,13 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   const source = frame(`split-pane:${from}`)!
   const dest = frame(`split-pane:${target}`)!
   await drag({ x: source.x + 3, y: source.y }, { x: dest.x + Math.floor(dest.width / 2), y: dest.y + Math.floor(dest.height / 2) }, () => {
-    check(setup.captureCharFrame().includes(`Swap with window ${target + 1}`), 'the drag ghost does not say it swaps')
+    check(setup.captureCharFrame().includes(`Add as a tab of window ${target + 1}`), 'the drag ghost does not offer tabs')
   })
-  await waitFor('the swap', () => windowIndexOf('surface-window-close:terminal#2') === target)
-  await waitFor(`the session (${sessionBefore}) in the surface's old place`, () => paneName(from) === sessionBefore)
-  check(paneHas(target, 'two-window'), 'the moved window no longer shows its own shell')
-  check(setup.renderer.root.findDescendantById('surface-frame:terminal#2') === mountedFrame, 'moving the window to another row remounted it')
-  checkSurfaceAlignment('after a swap across rows')
-  check(new Set(panes().map((_, index) => paneName(index)).filter(Boolean)).has(sessionBefore), 'the swap hid the session it swapped with')
+  await waitFor('the surface grouped as a tab', () => !!frame(`window-tab:claude:win-${sessionBefore}`) && !!frame('window-tab:surface:terminal#2'))
+  const movedIndex = windowIndexOf('surface-window-close:terminal#2')
+  check(paneHas(movedIndex, 'two-window'), 'the moved window no longer shows its own shell')
+  check(setup.renderer.root.findDescendantById('surface-frame:terminal#2') === mountedFrame, 'tabbing the surface remounted it')
+  checkSurfaceAlignment('after grouping as tabs')
   await chordKey('u')
   await waitFor('undo to put the surface back', () => windowIndexOf('surface-window-close:terminal#2') === from)
   checkSurfaceAlignment('after undo')
@@ -906,7 +909,7 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   check(surface >= 0, 'no terminal window to drag')
   const slot = frame(`split-pane:${surface}`)!
   reader = frame('transcript-reader')!
-  const dropAt = { x: reader.x + 10, y: reader.y + 4 }
+  const dropAt = { x: reader.x + Math.floor(reader.width / 2), y: reader.y + Math.floor(reader.height / 2) }
   await drag({ x: slot.x + 4, y: slot.y }, dropAt, () => {
     check(setup.captureCharFrame().includes('Float it here'), 'dragging a surface over the reader does not offer to float it')
   })

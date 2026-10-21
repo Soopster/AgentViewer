@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from './dockedPopover'
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { ScrollBoxRenderable, TextareaAction, TextareaRenderable } from '@opentui/core'
 import type { PlaybookPhase, PlaybookSummary, PlaybookTask, RunPlaybook } from '../../lib/agentProtocol'
@@ -24,6 +25,10 @@ export type PlaybookManagerPopoverProps = {
   onChanged: (playbooks: PlaybookSummary[], selectedName?: string) => void
   onNotice: (kind: 'info' | 'error', message: string, duration?: number) => void
   onKeyHandlerReady?: (handler: (key: ManagerKey) => boolean) => void
+  /** Fill the given box inside a window, with no frame of its own. */
+  docked?: boolean
+  /** Shows the `⧉ window` button: break the popover out into a window. */
+  onDetach?: () => void
 }
 
 const NEW_PLAYBOOK: RunPlaybook = {
@@ -95,6 +100,8 @@ export function PlaybookManagerPopover({
   onChanged,
   onNotice,
   onKeyHandlerReady,
+  docked = false,
+  onDetach,
 }: PlaybookManagerPopoverProps) {
   const [playbooks, setPlaybooks] = useState<PlaybookSummary[]>([])
   const [invalidCount, setInvalidCount] = useState(0)
@@ -333,10 +340,11 @@ export function PlaybookManagerPopover({
     return () => onKeyHandlerReady?.(() => true)
   }, [handleKey, onKeyHandlerReady])
 
-  const overlayWidth = Math.max(54, Math.min(width - 4, 140))
-  const overlayHeight = Math.max(22, Math.min(height - 4, 42))
-  const bodyWidth = overlayWidth - 4
-  const bodyHeight = Math.max(overlayHeight - 7 - (error ? 1 : 0), 1)
+  const frame = popoverFrameCells(docked)
+  const overlayWidth = docked ? width : Math.max(54, Math.min(width - 4, 140))
+  const overlayHeight = docked ? height : Math.max(22, Math.min(height - 4, 42))
+  const bodyWidth = overlayWidth - frame - 2
+  const bodyHeight = Math.max(overlayHeight - 5 - frame - (error ? 1 : 0), 1)
   useEffect(() => {
     if (mode !== 'edit') return
     const timer = setTimeout(() => editorScrollRef.current?.scrollChildIntoView(`playbook-field:${editorFocus}`), 32)
@@ -386,21 +394,16 @@ export function PlaybookManagerPopover({
   return (
     <box
       id="playbook-manager"
-      position="absolute"
-      overflow="hidden"
-      top={Math.max(1, Math.floor((height - overlayHeight) / 2))}
-      left={Math.max(1, Math.floor((width - overlayWidth) / 2))}
-      width={overlayWidth}
-      height={overlayHeight}
-      border
-      borderStyle="heavy"
-      borderColor={theme.violet}
+      {...popoverRootProps(docked, { top: Math.max(1, Math.floor((height - overlayHeight) / 2)), left: Math.max(1, Math.floor((width - overlayWidth) / 2)), width: overlayWidth, height: overlayHeight }, 80)}
+      // borderStyle alone turns a border on, so a docked popover passes none.
+      {...(docked ? {} : { border: true, borderStyle: 'heavy' as const, borderColor: theme.violet })}
+      overflow={docked ? undefined : 'hidden'}
       backgroundColor={theme.surface2}
-      zIndex={80}
       flexDirection="column"
-      title="PLAYBOOK MANAGER"
+      title={docked ? undefined : 'PLAYBOOK MANAGER'}
       titleColor={theme.violet}
     >
+      {!docked && onDetach ? <PopoverDetachButton theme={theme} onPress={onDetach} inside /> : null}
       <box height={3} flexShrink={0} paddingX={1} border={['bottom']} borderStyle="single" borderColor={theme.border} flexDirection="column" justifyContent="center">
         <text fg={theme.text}>REUSABLE COORDINATOR WORKFLOWS</text>
         <text fg={theme.dim} wrapMode="none">{clip(`${cwd}/.agent-viewer/playbooks · ${playbooks.length} valid${invalidCount ? ` · ${invalidCount} invalid` : ''}`, bodyWidth)}</text>

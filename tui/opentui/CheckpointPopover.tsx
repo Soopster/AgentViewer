@@ -6,6 +6,7 @@
 //  REVIEW tab: the current working diff as individually rejectable hunks
 //    (plus untracked files), then commit everything and open a PR — without
 //    leaving the terminal.
+import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from './dockedPopover'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
 import type { TuiThemePalette } from '../theme'
@@ -44,6 +45,10 @@ type Props = {
   focusPrompt?: { sessionId: string; text: string; timestamp?: string } | null
   /** Scrub one file through every turn (the selected file row's path, repository-relative). */
   onOpenFileHistory?: (path: string) => void
+  /** Fill the given box inside a window, with no frame of its own. */
+  docked?: boolean
+  /** Shows the `⧉ window` button: break the popover out into a window. */
+  onDetach?: () => void
 }
 
 type TurnsRow =
@@ -86,6 +91,8 @@ export function CheckpointPopover({
   onKeyHandlerReady,
   focusPrompt,
   onOpenFileHistory,
+  docked = false,
+  onDetach,
 }: Props) {
   const [tab, setTab] = useState<'turns' | 'review'>('turns')
   const [checkpoints, setCheckpoints] = useState<TurnCheckpoint[]>([])
@@ -163,14 +170,15 @@ export function CheckpointPopover({
     return 1 + Math.min(Math.max(row.hunk.lines.length - 1, 0), 12)
   }, [clampedCursor, reviewRows, tab])
 
-  const popW = Math.min(width - 4, 110)
-  const popH = Math.min(height - 4, 38)
+  const frame = popoverFrameCells(docked)
+  const popW = docked ? width : Math.min(width - 4, 110)
+  const popH = docked ? height : Math.min(height - 4, 38)
   const popTop = Math.floor((height - popH) / 2)
   const popLeft = Math.floor((width - popW) / 2)
-  const innerW = popW - 4
+  const innerW = popW - frame - 2
   const headerH = 2
   const footerH = 2
-  const bodyH = Math.max(popH - headerH - footerH - 2, 6)
+  const bodyH = Math.max(popH - headerH - footerH - frame, 6)
 
   const scrollBody = useCallback((delta: number) => {
     const box = scrollRef.current
@@ -426,21 +434,16 @@ export function CheckpointPopover({
 
   return (
     <box
-      position="absolute"
-      top={popTop}
-      left={popLeft}
-      width={popW}
-      height={popH}
-      border
-      borderStyle="single"
-      borderColor={theme.border2}
+      {...popoverRootProps(docked, { top: popTop, left: popLeft, width: popW, height: popH }, 50)}
+      // borderStyle alone turns a border on, so a docked popover passes none.
+      {...(docked ? {} : { border: true, borderStyle: 'single' as const, borderColor: theme.border2 })}
       backgroundColor={theme.surface}
-      zIndex={50}
       flexDirection="column"
-      title=" Checkpoints & review "
+      title={docked ? undefined : " Checkpoints & review "}
       titleColor={accentColor}
       titleAlignment="left"
     >
+      {!docked && onDetach ? <PopoverDetachButton theme={theme} onPress={onDetach} /> : null}
       <box height={headerH} paddingX={1} border={['bottom']} borderStyle="single" borderColor={theme.border} flexDirection="row" alignItems="center">
         <text fg={tab === 'turns' ? accentColor : theme.dim} wrapMode="none">{'TURNS'}</text>
         <text fg={theme.dim} wrapMode="none">{'  ·  '}</text>
@@ -455,7 +458,7 @@ export function CheckpointPopover({
 
       <scrollbox
         ref={scrollRef}
-        width={popW - 2}
+        width={popW - frame}
         height={bodyH}
         scrollY
         backgroundColor={theme.surface}

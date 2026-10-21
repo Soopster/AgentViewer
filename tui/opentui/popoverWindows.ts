@@ -13,7 +13,11 @@
 //           ahead of the global keys, as a shell in terminal mode is — for
 //           views that are editors in their own right.
 
-export type PopoverWindowKind = 'analytics' | 'daily-summary' | 'editor' | 'coordination'
+export type PopoverWindowKind =
+  | 'analytics' | 'daily-summary' | 'editor' | 'coordination'
+  | 'attention' | 'prompt-library' | 'playbooks' | 'messaging' | 'handoff' | 'tasks'
+  | 'checkpoints' | 'file-history' | 'channel-bridge' | 'ide-bridge'
+  | 'teammates' | 'desk' | 'diagnostics'
 
 export type PopoverWindowSpec = {
   title: string
@@ -29,6 +33,22 @@ export const POPOVER_WINDOWS: Record<PopoverWindowKind, PopoverWindowSpec> = {
   editor: { title: '✎ Editor', pin: null, single: true, keys: 'capture', palette: 'Editor in a window' },
   // The agent control center (⌃K a): one coordination store, so one view of it.
   coordination: { title: '◆ Control center', pin: null, single: true, keys: 'window', palette: 'Agent control center in a window' },
+  attention: { title: '! Attention', pin: null, single: true, keys: 'window', palette: 'Attention inbox in a window' },
+  'prompt-library': { title: '❝ Prompts', pin: null, single: true, keys: 'window', palette: 'Prompt library in a window' },
+  playbooks: { title: '▦ Playbooks', pin: null, single: true, keys: 'window', palette: 'Playbook manager in a window' },
+  messaging: { title: '✉ Messaging', pin: 'session', single: false, keys: 'window', palette: 'Cross-session messaging in a window' },
+  handoff: { title: '⇢ Handoff brief', pin: 'session', single: false, keys: 'window', palette: 'Handoff brief in a window' },
+  tasks: { title: '☑ Tasks', pin: 'session', single: false, keys: 'window', palette: 'Task list in a window' },
+  // Checkpoints are the repository's, not a session's.
+  checkpoints: { title: '⟲ Checkpoints', pin: null, single: true, keys: 'window', palette: 'Checkpoints & review in a window' },
+  'file-history': { title: '⌚ File history', pin: 'path', single: false, keys: 'window', palette: 'File history in a window' },
+  'channel-bridge': { title: '⇄ CLI bridge', pin: 'session', single: false, keys: 'window', palette: 'Live CLI bridge in a window' },
+  'ide-bridge': { title: '⌨ IDE bridge', pin: null, single: true, keys: 'window', palette: 'IDE bridge in a window' },
+  // The interactive coordinator's store holds one conversation's team.
+  teammates: { title: '◆ Teammates', pin: null, single: true, keys: 'window', palette: 'Teammates in a window' },
+  // The desk's letters belong to its command line, as the editor's do to its buffer.
+  desk: { title: '▣ Desk', pin: null, single: true, keys: 'capture', palette: 'Desk in a window' },
+  diagnostics: { title: '⚕ Diagnostics', pin: null, single: true, keys: 'window', palette: 'Diagnostics in a window' },
 }
 
 export function isPopoverWindowKind(kind: string): kind is PopoverWindowKind {
@@ -36,7 +56,7 @@ export function isPopoverWindowKind(kind: string): kind is PopoverWindowKind {
 }
 
 /** What a window is pinned to; absent for a window that follows nothing. */
-export type SurfaceMeta = { session?: string; path?: string }
+export type SurfaceMeta = { cwd?: string; session?: string; path?: string }
 
 /** Persisted metadata, with anything malformed dropped rather than trusted. */
 export function readSurfaceMeta(value: unknown): Record<string, SurfaceMeta> {
@@ -44,11 +64,12 @@ export function readSurfaceMeta(value: unknown): Record<string, SurfaceMeta> {
   const result: Record<string, SurfaceMeta> = {}
   for (const [id, entry] of Object.entries(value as Record<string, unknown>)) {
     if (!entry || typeof entry !== 'object') continue
-    const { session, path } = entry as Record<string, unknown>
+    const { session, path, cwd } = entry as Record<string, unknown>
     const meta: SurfaceMeta = {}
     if (typeof session === 'string' && session) meta.session = session
     if (typeof path === 'string' && path) meta.path = path
-    if (meta.session || meta.path) result[id] = meta
+    if (typeof cwd === 'string' && cwd) meta.cwd = cwd
+    if (meta.session || meta.path || meta.cwd) result[id] = meta
   }
   return result
 }

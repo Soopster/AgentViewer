@@ -40,13 +40,16 @@ export function isAltKey(key: ShortcutKeyEvent, char: string): boolean {
 // the ⌃K ? overlay are all one table — four hand-written copies of this set is
 // how three of them end up describing keys the fourth no longer has.
 export const PORTABLE_COMMAND_CHORDS = {
-  a: { command: 'coord-board', label: 'Agent Operations', short: 'operations' },
+  a: { command: 'coord-board', label: 'Agent Operations', short: 'ops' },
   b: { command: 'desk', label: 'Bloomberg-style desk', short: 'desk' },
-  g: { command: 'pull-requests', label: 'Pull requests', short: 'pull requests' },
-  l: { command: 'processes', label: 'Processes and logs', short: 'processes' },
-  n: { command: 'coord-start', label: 'New coordinated run', short: 'coordinated run' },
+  g: { command: 'pull-requests', label: 'Pull requests', short: 'PRs' },
+  l: { command: 'processes', label: 'Processes and logs', short: 'logs' },
+  n: { command: 'coord-start', label: 'New coordinated run', short: 'run' },
   s: { command: 'daily-summary', label: 'Daily summary of agent work', short: 'summary' },
   t: { command: 'coord-teammates', label: 'Teammates for this conversation', short: 'teammates' },
+  o: { command: 'window-switcher', label: 'Workspace overview', short: 'tree' },
+  q: { command: 'window-identify', label: 'Identify windows', short: 'identify' },
+  w: { command: 'window-manage', label: 'Manage windows', short: 'windows' },
   v: { command: 'transcript-pager', label: 'Open transcript in $VISUAL / $EDITOR / pager', short: 'pager' },
 } as const
 

@@ -22,10 +22,14 @@ export function popoverFrameCells(docked: boolean): number {
   return docked ? 0 : 2
 }
 
-/** The `⧉ window` title button that breaks a modal popover out into a window. */
-export function PopoverDetachButton({ theme, onPress }: { theme: TuiThemePalette; onPress: () => void }) {
+/**
+ * The `⧉ window` title button that breaks a modal popover out into a window. It
+ * sits on the top border; `inside` puts it on the first row instead, for a
+ * frame that clips (a clipping frame does not paint what is on its border).
+ */
+export function PopoverDetachButton({ theme, onPress, inside = false }: { theme: TuiThemePalette; onPress: () => void; inside?: boolean }) {
   return (
-    <box position="absolute" top={-1} right={2} height={1} flexDirection="row" zIndex={3}>
+    <box position="absolute" top={inside ? 0 : -1} right={2} height={1} flexDirection="row" zIndex={3}>
       <WindowButton id="popover-detach" label=" ⧉ window " theme={theme} onPress={onPress} />
     </box>
   )

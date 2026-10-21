@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from './dockedPopover'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
 import type { TuiThemePalette } from '../theme'
@@ -38,6 +39,10 @@ type Props = {
   onClose: () => void
   onNotice: (tone: 'info' | 'error', text: string) => void
   onKeyHandlerReady: (handler: (key: ChannelBridgeKeyEvent) => void) => void
+  /** Fill the given box inside a window, with no frame of its own. */
+  docked?: boolean
+  /** Shows the `⧉ window` button: break the popover out into a window. */
+  onDetach?: () => void
 }
 
 let entrySeq = 0
@@ -82,6 +87,8 @@ export function ChannelBridgePopover({
   onClose,
   onNotice,
   onKeyHandlerReady,
+  docked = false,
+  onDetach,
 }: Props) {
   const config = useMemo(readBridgeConfigFromEnv, [])
   const [status, setStatus] = useState<ChannelBridgeStatus>('idle')
@@ -205,32 +212,28 @@ export function ChannelBridgePopover({
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
 
-  const popW = Math.min(width - 4, 100)
-  const popH = Math.min(height - 4, 36)
+  const frame = popoverFrameCells(docked)
+  const popW = docked ? width : Math.min(width - 4, 100)
+  const popH = docked ? height : Math.min(height - 4, 36)
   const headerH = 3
   const footerH = 3
-  const bodyH = Math.max(popH - headerH - footerH - 2, 8)
+  const bodyH = Math.max(popH - headerH - footerH - frame, 8)
   const popTop = Math.floor((height - popH) / 2)
   const popLeft = Math.floor((width - popW) / 2)
-  const innerW = popW - 4
+  const innerW = popW - frame - 2
 
   return (
     <box
-      position="absolute"
-      top={popTop}
-      left={popLeft}
-      width={popW}
-      height={popH}
-      border
-      borderStyle="single"
-      borderColor={theme.border2}
+      {...popoverRootProps(docked, { top: popTop, left: popLeft, width: popW, height: popH }, 50)}
+      // borderStyle alone turns a border on, so a docked popover passes none.
+      {...(docked ? {} : { border: true, borderStyle: 'single' as const, borderColor: theme.border2 })}
       backgroundColor={theme.surface}
-      zIndex={50}
       flexDirection="column"
-      title=" Live CLI bridge "
+      title={docked ? undefined : " Live CLI bridge "}
       titleColor={accentColor}
       titleAlignment="left"
     >
+      {!docked && onDetach ? <PopoverDetachButton theme={theme} onPress={onDetach} /> : null}
       <box height={headerH} paddingX={1} border={['bottom']} borderStyle="single" borderColor={theme.border} flexDirection="column">
         <box flexDirection="row" alignItems="center">
           <text fg={statusColor(status, theme)} wrapMode="none">{statusLabel(status)}</text>
@@ -249,7 +252,7 @@ export function ChannelBridgePopover({
 
       <scrollbox
         ref={scrollRef}
-        width={popW - 2}
+        width={popW - frame}
         height={bodyH}
         scrollY
         backgroundColor={theme.surface}

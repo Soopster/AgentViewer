@@ -9,6 +9,7 @@
 // It takes only layout props and reads everything else from
 // `interactiveCoordinatorStore`, which is what lets the `memo` hold — a
 // coordinator refresh repaints these rows and nothing else.
+import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from './dockedPopover'
 import { TextAttributes } from '@opentui/core'
 import { memo, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { CoordinatorRecovery } from './CoordinatorRecovery'
@@ -124,6 +125,10 @@ type Props = {
   onWatchRun?: (snapshot: ProtocolRunSnapshot) => void
   onNotice: (tone: 'info' | 'error', text: string, durationMs?: number) => void
   onKeyHandlerReady: (handler: (key: TeammatesKeyEvent) => void) => void
+  /** Fill the given box inside a window, with no frame of its own. */
+  docked?: boolean
+  /** Shows the `⧉ window` button: break the popover out into a window. */
+  onDetach?: () => void
 }
 
 /** Composing a task or a message; `to` is null for "any available teammate". */
@@ -186,6 +191,8 @@ function isPrintable(key: TeammatesKeyEvent): boolean {
 
 export const TeammatesPopover = memo(function TeammatesPopover({
   theme, width, height, onOpenSession, onWatchSessions, onWatchRun, onNotice, onKeyHandlerReady,
+  docked = false,
+  onDetach,
 }: Props) {
   const state = useSyncExternalStore(
     subscribeInteractiveCoordinator, getInteractiveCoordinatorState, getInteractiveCoordinatorState,
@@ -501,7 +508,8 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   // that to give.
   // A team gets the two-pane layout, which has a use for every column; prose
   // alone stops at a line length that still reads.
-  const popW = Math.min(width - 4, teammates.length > 0 ? 180 : 132)
+  const frame = popoverFrameCells(docked)
+  const popW = docked ? width : Math.min(width - 4, teammates.length > 0 ? 180 : 132)
   // One column less than the frame leaves: the body's scrollbar takes it when
   // the content overflows, and a row laid out to the full width then shrank its
   // first cell — a warning glyph lost its space, a provider badge its gap.
@@ -825,7 +833,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   // border: below it the footer draws outside the box.
   // Content decides the height, the terminal bounds it. A fixed ceiling of 32
   // rows scrolled a team's roster on a screen with room to show all of it.
-  const popH = Math.max(12, Math.min(height - 4, bodyRows + 6 + (draft || confirmOff || confirmCancel ? 1 : 0)))
+  const popH = docked ? height : Math.max(12, Math.min(height - 4, bodyRows + 6 + (draft || confirmOff || confirmCancel ? 1 : 0)))
   const popTop = Math.floor((height - popH) / 2)
   const popLeft = Math.floor((width - popW) / 2)
   // Header 2 + footer 2 + the box's own border 2, plus the draft/confirm row
@@ -935,21 +943,16 @@ export const TeammatesPopover = memo(function TeammatesPopover({
   return (
     <box
       id="teammates-popover"
-      position="absolute"
-      top={popTop}
-      left={popLeft}
-      width={popW}
-      height={popH}
-      border
-      borderStyle="single"
-      borderColor={theme.border2}
+      {...popoverRootProps(docked, { top: popTop, left: popLeft, width: popW, height: popH }, MODAL_CONTENT_Z_INDEX)}
+      // borderStyle alone turns a border on, so a docked popover passes none.
+      {...(docked ? {} : { border: true, borderStyle: 'single' as const, borderColor: theme.border2 })}
       backgroundColor={theme.surface}
-      zIndex={MODAL_CONTENT_Z_INDEX}
       flexDirection="column"
-      title=" Teammates "
+      title={docked ? undefined : " Teammates "}
       titleColor={theme.violet}
       titleAlignment="left"
     >
+      {!docked && onDetach ? <PopoverDetachButton theme={theme} onPress={onDetach} /> : null}
       <box height={2} paddingX={1} border={['bottom']} borderStyle="single" borderColor={theme.border} flexDirection="row" alignItems="center">
         <text fg={headlineColor} wrapMode="none">{headline}</text>
         {headlineMeta ? <text fg={theme.dim} wrapMode="none">{`  ·  ${fitMetaEntries(headlineMeta, innerW - headline.length - 5 - headerTitle.length)}`}</text> : null}
@@ -958,7 +961,7 @@ export const TeammatesPopover = memo(function TeammatesPopover({
       </box>
 
       <scrollbox
-        width={popW - 2}
+        width={popW - frame}
         height={bodyH}
         scrollY
         backgroundColor={theme.surface}
