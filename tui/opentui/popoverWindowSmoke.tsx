@@ -362,8 +362,8 @@ await waitFor('the reader on alpha', () => readerShows('alpha'))
     ['teammates', 'Teammates in a window', 'Teammates'],
   ]
   for (const [id, label, title] of kinds) {
-    const reader = frame('transcript-reader')
-    if (reader && reader.width > 0) await click(reader.x + Math.floor(reader.width / 2), reader.y + Math.floor(reader.height / 2))
+    // A floating window can cover the transcript's centre; focus explicitly.
+    await key('b', { ctrl: true }); await key('1')
     if (label) {
       await key('?')
       await settle(300)
@@ -390,8 +390,7 @@ await waitFor('the reader on alpha', () => readerShows('alpha'))
 
 // ── Git and Files have the same ⧉ placements ────────────────────────────────
 {
-  const reader = frame('transcript-reader')!
-  await click(reader.x + Math.floor(reader.width / 2), reader.y + Math.floor(reader.height / 2))
+  await key('b', { ctrl: true }); await key('1')
   // Git as a tab in this workspace.
   await key('g', { ctrl: true })
   await waitFor('the Git popover', () => !!frame('popover-detach'))
@@ -410,8 +409,7 @@ await waitFor('the reader on alpha', () => readerShows('alpha'))
   await click(closeX, frame('session-tabs')!.y)
   await waitFor('the Git tab closed', () => !tabRow().includes('Diff'))
   // Files beside the focused pane.
-  const reader2 = frame('transcript-reader')!
-  await click(reader2.x + Math.floor(reader2.width / 2), reader2.y + Math.floor(reader2.height / 2))
+  await key('b', { ctrl: true }); await key('1')
   await key('f', { ctrl: true })
   await waitFor('the Files popover', () => !!frame('popover-detach'))
   const detachFiles = frame('popover-detach')!

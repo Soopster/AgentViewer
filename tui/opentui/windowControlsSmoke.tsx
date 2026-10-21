@@ -123,7 +123,7 @@ const { readAllScreenText } = await import('./shellScreen')
 const chordKey = async (key: string) => {
   await act(async () => { setup.mockInput.pressKey('b', { ctrl: true }) })
   await settle(60)
-  await act(async () => { setup.mockInput.pressKey(key) })
+  await act(async () => { setup.mockInput.pressKey(/^[0-8]$/.test(key) ? String(Number(key) + 1) : key) })
   await settle(200)
 }
 const paneHas = (index: number, text: string) => {
@@ -165,7 +165,7 @@ const portable = async (key: string) => {
   await act(async () => { setup.mockInput.pressKey(key) })
   await settle(160)
 }
-const key = async (value: string) => { await act(async () => { setup.mockInput.pressKey(value) }); await settle(120) }
+const key = async (value: string) => { await act(async () => { setup.mockInput.pressKey(/^[0-8]$/.test(value) && !promptActive ? String(Number(value) + 1) : value) }); await settle(120) }
 const escape = async () => { await act(async () => { setup.mockInput.pressEscape() }); await settle(120) }
 const menuPick = async (label: string) => { const point = locate(label, frame('context-menu')!); await click(point.x + 1, point.y) }
 const guide = () => setup.captureCharFrame().includes('MANAGE WINDOWS')
@@ -190,12 +190,12 @@ checkMenuAnchor(readerPointer)
 await escape()
 
 await portable('q')
-await waitFor('reader identification', () => !!frame('window-control:0'))
-check([1, 2, 3, 4, 5].every(number => !!frame(`window-control:${number}`)), 'visible panes lack identification')
-const identified = frame('window-control:3')!
+await waitFor('reader identification', () => !!frame('window-control:1'))
+check([2, 3, 4, 5, 6].every(number => !!frame(`window-control:${number}`)), 'visible panes lack identification')
+const identified = frame('window-control:4')!
 check(identified.width === frame('split-pane:2')!.width, 'identification changed pane geometry')
 await key('3')
-check(!frame('window-control:0'), 'identification did not dismiss on selection')
+check(!frame('window-control:1'), 'identification did not dismiss on selection')
 await portable('w')
 check(guide(), 'portable management command did not enter the mode')
 const before = geometry()
@@ -210,9 +210,9 @@ check(geometry() !== before, 'undo crossed a focus change and erased the earlier
 await key('u')
 check(geometry() === before, 'second undo did not restore the earlier resize')
 await key('3')
-const swapNames = [paneName(2), paneName(3)]
+const swapRects = [frame('split-pane:2'), frame('split-pane:3')]
 await act(async () => { setup.mockInput.pressArrow('right', { shift: true }) }); await settle(200)
-check(paneName(2) === swapNames[1] && paneName(3) === swapNames[0], 'management swap did not exchange the adjacent windows')
+check(JSON.stringify(frame('split-pane:2')) === JSON.stringify(swapRects[1]) && JSON.stringify(frame('split-pane:3')) === JSON.stringify(swapRects[0]), 'management swap did not exchange the adjacent windows')
 await key('u')
 await key('3'); await key(']'); await key('>'); await key('+'); await key('=')
 check(geometry() === before, 'equalize did not reset all pane weights and dividers')
@@ -232,16 +232,16 @@ checkMenuAnchor(button)
 await menuPick('Zoom window')
 check(paneName(1) === secondName && frame('split-pane:1')!.width > secondWidth, 'menu zoom missed its target')
 await portable('q')
-await waitFor('zoomed identification', () => !!frame('window-control:2'))
-check(!frame('window-control:0') && !frame('window-control:1') && !frame('window-control:3'), 'identification includes zoom-hidden windows')
+await waitFor('zoomed identification', () => !!frame('window-control:3'))
+check(!frame('window-control:1') && !frame('window-control:2') && !frame('window-control:4'), 'identification includes zoom-hidden windows')
 await escape()
 await portable('w'); await key('m'); await escape()
 await portable('q')
-const readerOverlay = frame('window-control:0')!
+const readerOverlay = frame('window-control:1')!
 await click(readerOverlay.x + 3, readerOverlay.y + 2)
-check(!frame('window-control:0'), 'clicking identification did not dismiss it')
+check(!frame('window-control:1'), 'clicking identification did not dismiss it')
 await portable('q')
-await waitFor('identification timeout', () => !frame('window-control:0'))
+await waitFor('identification timeout', () => !frame('window-control:1'))
 // Management must not type into a live composer or send its draft.
 await chordKey('1'); await key('c'); await key('draft stays')
 const textarea = () => setup.renderer.root.findDescendantById('composer-textarea') as unknown as { plainText: string } | null
@@ -256,7 +256,7 @@ await escape()
 // Current geometry must be reflected after a terminal resize, and hidden panes excluded.
 await portable('q')
 await act(async () => { setup.resize(90, 24) }); await settle(300)
-for (let number = 0; number <= 5; number++) {
+for (let number = 1; number <= 6; number++) {
   const overlay = frame(`window-control:${number}`)
   if (overlay) check(overlay.x >= 0 && overlay.y >= 0 && overlay.x + overlay.width <= 90 && overlay.y + overlay.height <= 24, 'identification exceeds terminal bounds')
 }
@@ -273,13 +273,15 @@ await act(async () => { setup.resize(220, 46) }); await settle(200)
 await chordKey('1'); await chordKey('f')
 await waitFor('floating window', () => !!frame('floating-window'))
 await portable('q')
-const floatingNumber = panes().length + 1
+const floatingNumber = panes().length + 2
 await waitFor('floating identification', () => !!frame(`window-control:${floatingNumber}`))
 check(frame(`window-control:${floatingNumber}`)!.width === frame('floating-window')!.width, 'floating identification uses a docked frame')
-await key(String(floatingNumber))
+await act(async () => { setup.mockInput.pressKey(String(floatingNumber)) }); await settle(120)
 await portable('w'); await key(' ')
 await menuPick('Dock window')
 await waitFor('docked window', () => !frame('floating-window'))
+// Make room for the shell and browser checks; presets preserve existing views.
+for (let count = panes().length; count > 1; count--) { await chordKey(String(count)); await chordKey('x') }
 // A shell that owns the keyboard must still yield to the portable controls.
 await openMenu()
 const two = frame('window-layout:two')!

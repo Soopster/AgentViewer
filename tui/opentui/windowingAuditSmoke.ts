@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { focusAfterWindowClose } from './windowControls'
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -14,6 +15,13 @@ assert.deepEqual(listSavedWindowLayouts('project')[0]?.floating, contents.floati
 assert.ok(describeSavedLayout(saved).includes('3 windows'), 'counts actual views, including floating and strip tabs')
 assert.ok(describeSavedLayout({ ...saved, surfaces: [], popoverTabs: [], floating: null }).includes('0 windows'), 'empty layouts have no phantom reader')
 const file = path.join(cwd, '.agent-viewer-data/window-layouts.json')
+for (const invalid of [{ weights: { split: [1, -2] } }, { weights: { split: ['large'] } }, { surfaceMeta: { browser: null } }, { surfaceMeta: { browser: { cwd: 42 } } }, { coordinatorRunId: [] }]) {
+  const bytes = JSON.stringify({ version: 1, projects: { project: [{ ...saved, ...invalid }] } })
+  writeFileSync(file, bytes)
+  assert.deepEqual(listSavedWindowLayouts('project'), [], 'invalid saved metadata is skipped')
+  assert.throws(() => saveWindowLayout('project', contents), /preserved/)
+  assert.equal(readFileSync(file, 'utf8'), bytes, 'invalid metadata is preserved for recovery')
+}
 const damaged = JSON.stringify({ version: 1, projects: { project: [saved, { ...saved, id: 'bad', panes: null }], malformed: {} } })
 writeFileSync(file, damaged)
 assert.deepEqual(listSavedWindowLayouts('project'), [saved], 'bad neighbours do not hide valid layouts')
@@ -25,6 +33,12 @@ assert.deepEqual(listSavedWindowLayouts('project'), [])
 assert.throws(() => saveWindowLayout('project', contents), /preserved/)
 assert.equal(readFileSync(file, 'utf8'), '{broken')
 const controller = new SpacesController(cwd)
+assert.equal(focusAfterWindowClose(2, 0, 4), 1, 'closing an earlier pane preserves the focused view')
+assert.equal(focusAfterWindowClose(1, 3, 4), 1, 'closing a later pane preserves focus')
+assert.equal(focusAfterWindowClose(2, 2, 4), 2, 'closing the focused pane selects its next neighbour')
+assert.equal(focusAfterWindowClose(3, 3, 4), 2, 'closing the last pane selects its previous neighbour')
+assert.equal(focusAfterWindowClose(null, 1, 4), null, 'closing a neighbour preserves primary focus')
+assert.equal(focusAfterWindowClose(64, 1, 4), 64, 'closing a docked pane preserves floating focus')
 const runtime = controller.runtime(controller.activeWorkspace()!)
 const first = surfaceViewNamespace('browser', undefined, 'browser:1'), second = surfaceViewNamespace('browser', undefined, 'browser:2')
 runtime.persistent.add(`${first}:browser:draft`)

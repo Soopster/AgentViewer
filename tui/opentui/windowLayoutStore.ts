@@ -64,6 +64,9 @@ function validLayout(value: unknown): value is SavedWindowLayout {
   if (value.activePopoverTab != null && typeof value.activePopoverTab !== 'string') return false
   if (value.splitTree !== undefined && !validWindowSplitTree(value.splitTree)) return false
   if (value.surfaceMeta !== undefined && !object(value.surfaceMeta)) return false
+  if (value.surfaceMeta && Object.values(value.surfaceMeta).some(meta => !object(meta) || ['cwd', 'session', 'path'].some(field => meta[field] !== undefined && typeof meta[field] !== 'string'))) return false
+  if (value.coordinatorRunId !== undefined && typeof value.coordinatorRunId !== 'string') return false
+  if (value.weights !== undefined && (!object(value.weights) || Object.values(value.weights).some(weights => !Array.isArray(weights) || weights.some(weight => typeof weight !== 'number' || !Number.isFinite(weight) || weight <= 0)))) return false
   if (value.floating != null) {
     const floating = value.floating
     if (!object(floating) || typeof floating.key !== 'string' || !Number.isInteger(floating.slot) || Number(floating.slot) < 0 || !object(floating.rect)) return false

@@ -1,5 +1,12 @@
 import type { WindowDirection } from './windowLayout'
 
+/** Closing another frame preserves the focused view, even as indices shift. */
+export function focusAfterWindowClose(focused: number | null, closing: number, count: number): number | null {
+  if (focused === null || focused >= count || closing < 0 || closing >= count) return focused
+  if (focused !== closing) return focused > closing ? focused - 1 : focused
+  return count > 1 ? Math.min(closing, count - 2) : null
+}
+
 export type WindowControlAction =
   | 'move-workspace' | 'focus' | 'manage' | 'zoom' | 'resize' | 'swap' | 'tab' | 'detach' | 'float' | 'close'
   | 'layout' | 'split-columns' | 'split-rows' | 'shrink' | 'grow' | 'reader-shrink' | 'reader-grow'

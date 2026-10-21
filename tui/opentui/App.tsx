@@ -40,7 +40,7 @@ import { reassignShell } from './shellStore'
 import { reassignProcess } from './processStore'
 import type { OverviewNode, OverviewWindow } from './workspaceOverviewData'
 import { WindowControlOverlay } from './WindowControlOverlay'
-import { WINDOW_CONTROL_ACTIONS, WINDOW_MENU_ACTIONS, WINDOW_RESIZE_ACTIONS, windowManagementKey, type WindowControlAction, type WindowControlContext, type ControlWindow } from './windowControls'
+import { focusAfterWindowClose, WINDOW_CONTROL_ACTIONS, WINDOW_MENU_ACTIONS, WINDOW_RESIZE_ACTIONS, windowManagementKey, type WindowControlAction, type WindowControlContext, type ControlWindow } from './windowControls'
 import { findPopoverWindow, isPopoverWindowKind, nextSurfaceId, pinFor, POPOVER_WINDOWS, readSurfaceMeta, type PopoverWindowKind, type SurfaceMeta } from './popoverWindows'
 import { addToStack, clampFloatingRect, defaultFloatingRect, liveStacks, removeFromStack, replaceWindowKey, stackNeighbour, stackOf, stackSuccessor, type FloatingRect, type WindowStack } from './windowTabs'
 import { popoverRootProps } from './dockedPopover'
@@ -20594,9 +20594,8 @@ function OpenTuiWorkspace() {
     ))
   })
 
-  // tmux shape: % opens a side-by-side pane, " opens a stacked one. The
-  // orientation is the split's, not the pane's, so asking for the other shape
-  // re-lays the existing panes rather than mixing two axes in one frame area.
+  // tmux shape: % splits the focused frame right; " splits it below.
+  // Existing branches retain their orientation, allowing mixed layouts.
   const addSplitPane = useEffectEvent((orientation: SplitPaneOrientation) => splitFocusedWindow(orientation))
 
   const closeSplitPane = useEffectEvent((paneIndex?: number) => {
@@ -20619,8 +20618,7 @@ function OpenTuiWorkspace() {
     if (closingKey) rememberClosedWindow(closingKey)
     setSplitPinnedKeys((current) => removeSplitPaneKey(current, closePin))
     if (splitFocusIndex !== null) {
-      const windowsLeft = windowItems.length - 1
-      const nextFocus = windowsLeft > 0 ? Math.min(closeIndex ?? 0, windowsLeft - 1) : null
+      const nextFocus = focusAfterWindowClose(splitFocusIndex, closeIndex ?? windowItems.length - 1, windowItems.length)
       setSplitFocusIndex(nextFocus)
       if (nextFocus !== null) lastFocusedSplitPaneRef.current = nextFocus
     }
@@ -20689,7 +20687,7 @@ function OpenTuiWorkspace() {
 
   const windowLayoutProject = gitRepoCwd || process.cwd()
   // Diff, files and pull requests need a repository; the rest open anywhere.
-  const surfaceRestorable = (surface: string) => Boolean(gitRepoCwd) || !['diff', 'files', 'pull-request'].includes(surfaceKindOf(surface))
+  const surfaceRestorable = (surface: string) => Object.hasOwn(WINDOW_SURFACE_TITLES, surfaceKindOf(surface)) && (Boolean(gitRepoCwd) || !['diff', 'files', 'pull-request'].includes(surfaceKindOf(surface)))
   useEffect(() => {
     if (!windowPickerOpen) return
     try { setSavedWindowLayouts(listSavedWindowLayouts(windowLayoutProject)) } catch { setSavedWindowLayouts([]) }
@@ -20782,17 +20780,26 @@ function OpenTuiWorkspace() {
     // Background tabs' sessions must be open tabs, or their tab has nothing to show.
     const tabSessions = (saved.stacks ?? []).flat().flatMap((key) => (known.has(key) && !panes.some((pane) => sessionKey(pane) === key) ? [known.get(key)!] : []))
     if (tabSessions.length > 0) setOpenTabSessions((prev) => [...prev, ...tabSessions.filter((session) => !prev.some((tab) => sessionKey(tab) === sessionKey(session)))])
-    setPrimaryWindowOpen(saved.primaryOpen ?? saved.splitTree?.primary !== false)
-    setWindowSplitTree(validWindowSplitTree(saved.splitTree) ? saved.splitTree : null)
+    const restoredPrimaryOpen = Boolean(reader) && (saved.primaryOpen ?? saved.splitTree?.primary !== false)
+    setPrimaryWindowOpen(restoredPrimaryOpen)
+    const restoredTree = validWindowSplitTree(saved.splitTree) ? saved.splitTree : null
     const restoredTabs = (saved.popoverTabs ?? []).filter(surfaceRestorable)
     setPopoverTabs(restoredTabs); setActivePopoverTab(saved.activePopoverTab && restoredTabs.includes(saved.activePopoverTab) ? saved.activePopoverTab : null)
+    const restoredPrimaryFrame = restoredPrimaryOpen || Boolean(saved.activePopoverTab && restoredTabs.includes(saved.activePopoverTab))
+    setWindowSplitTree(restoredTree ? restoredPrimaryFrame ? restoredTree : removePrimaryWindow(restoredTree) : null)
     setWindowStacks(saved.stacks ?? [])
     setWindowSurfaceMeta(readSurfaceMeta(saved.surfaceMeta))
     const restoredFloating = saved.floating && (isSurfaceWindowKey(saved.floating.key) ? surfaceRestorable(surfaceIdOfKey(saved.floating.key)) : Boolean(floatingSession)) ? saved.floating : null
-    setFloatingWindow(restoredFloating ? { ...restoredFloating, rect: clampFloatingRect(restoredFloating.rect, { width: readerAreaWidth, height: windowAreaHeight }) } : null)
+    setFloatingWindow(restoredFloating)
+    setSplitFocusIndex(restoredPrimaryFrame ? null : panes.length + saved.surfaces.filter(surfaceRestorable).length > 0 ? 0 : restoredFloating ? FLOATING_PANE_INDEX : null)
+    setSurfacePanelFocused(false)
+    setFocusedPane('messages')
     setWindowZoom(null)
-    if (reader && sessionKey(reader) !== selectedSessionKey) { setWorkspaceHasSession(true); setWorkspaceReaderSession(reader); setSelectedSessionKey(sessionKey(reader)) }
-    setPrimaryWindowOpen(saved.primaryOpen ?? saved.splitTree?.primary !== false)
+    if (reader) {
+      setWorkspaceHasSession(true)
+      setWorkspaceReaderSession(reader)
+      if (sessionKey(reader) !== selectedSessionKey) setSelectedSessionKey(sessionKey(reader))
+    }
     showNotice('info', `${saved.name} restored${missing > 0 ? ` · ${missing} session${missing === 1 ? '' : 's'} no longer here` : ''}`)
   })
 
@@ -20856,7 +20863,7 @@ function OpenTuiWorkspace() {
     setWindowSurfaceMeta((current) => { if (!(surface in current)) return current; const next = { ...current }; delete next[surface]; return next })
     windowSurfaceKeysRef.current.delete(surface)
     windowSurfaceCaptureRef.current.delete(surface)
-    setSplitFocusIndex(null)
+    setSplitFocusIndex(focusAfterWindowClose(splitFocusIndex, windowItems.findIndex(item => item.kind === 'surface' && item.surface === surface), windowItems.length))
   })
   // A window's title, naming what it is pinned to.
   const windowSurfaceTitle = (surface: WindowSurfaceId): string => {
@@ -21110,8 +21117,7 @@ function OpenTuiWorkspace() {
     setWindowZoom(null)
     const additions = [...openTabSessions, ...sessions].filter(session => next.keys.includes(sessionKey(session)))
     setOpenTabSessions(current => [...current, ...additions.filter(session => !current.some(tab => sessionKey(tab) === sessionKey(session)))])
-    setWindowSplitTree(next)
-    commitWindowKeys(next.keys)
+    commitWindowKeys(next.keys, next)
   })
 
   const applyWindowSessionDrop = useEffectEvent((session: Session, drop: WindowSessionDrop) => {
@@ -21149,14 +21155,15 @@ function OpenTuiWorkspace() {
   // Lay out exactly `keys` (every window in display order): the pins, the
   // surface windows and the slot order all follow from it. Tabs and floating
   // windows are moved by handing this a list with them in or out.
-  const commitWindowKeys = useEffectEvent((keys: string[]) => {
+  const commitWindowKeys = useEffectEvent((keys: string[], tree?: WindowSplitTree) => {
     const sessionKeys = keys.filter((key) => !isSurfaceWindowKey(key))
     setWindowOrder(keys)
     setWindowSurfaces(keys.filter(isSurfaceWindowKey).map(surfaceIdOfKey))
     setSplitPinnedKeys(sessionKeys)
     setSplitPaneCount(sessionKeys.length)
     void writeTuiSplitPanes(sessionKeys.length).catch(() => {})
-    if (!windowSplitTree && splitArrangement === 'split' && keys.length > SPLIT_PANE_MAX) setWindowArrangement('main-stack', splitReaderLast)
+    if (tree) setWindowSplitTree(tree)
+    else if (!windowSplitTree && splitArrangement === 'split' && keys.length > SPLIT_PANE_MAX) setWindowArrangement('main-stack', splitReaderLast)
   })
   const windowKeyTitle = (key: string) => (isSurfaceWindowKey(key)
     ? surfaceTitle(surfaceIdOfKey(key))
@@ -21179,10 +21186,9 @@ function OpenTuiWorkspace() {
       if (session && !openTabByKey.has(key)) setOpenTabSessions(current => [...current, session])
       const next = replacePrimaryWindow(currentPaneTree(), key)
       setPrimaryWindowOpen(false)
-      setWindowSplitTree(next)
       setWindowStacks(addToStack(liveWindowStacks, anchor, key))
       if (floatingKey === key) setFloatingWindow(null)
-      commitWindowKeys(next.keys)
+      commitWindowKeys(next.keys, next)
       setOverviewPendingTarget(key)
       return
     }
@@ -21335,7 +21341,7 @@ function OpenTuiWorkspace() {
   })
   const startFloatGesture = (mode: 'move' | 'resize', event: { x: number; y: number }) => {
     if (!floatingWindow) return
-    floatGestureRef.current = { mode, x: event.x, y: event.y, rect: floatingWindow.rect }
+    floatGestureRef.current = { mode, x: event.x, y: event.y, rect: clampFloatingRect(floatingWindow.rect, { width: readerAreaWidth, height: windowAreaHeight }) }
     setFloatGesturing(true)
   }
   // Where a floating window let go here would dock: a window's title row
@@ -21592,8 +21598,7 @@ function OpenTuiWorkspace() {
     const keys = plan.tree.keys
     if (windowStackFor(movingKey)) setWindowStacks(removeFromStack(liveWindowStacks, movingKey))
     if (floatingKey === movingKey) setFloatingWindow(null)
-    setWindowSplitTree(plan.tree)
-    commitWindowKeys(keys)
+    commitWindowKeys(keys, plan.tree)
     setOverviewPendingTarget(movingKey)
   })
   const dragMovingKey = sessionDrag?.tab ?? (sessionDrag?.surface ? surfaceWindowKey(sessionDrag.surface) : sessionDrag?.session ? sessionKey(sessionDrag.session) : null)
@@ -21627,7 +21632,11 @@ function OpenTuiWorkspace() {
       const saved = savedWindowLayouts.find((entry) => entry.id === windowLayoutPreview.slice(6))
       if (!saved) return null
       const known = new Set([...sessions, ...openTabSessions].map(sessionKey))
-      if (validWindowSplitTree(saved.splitTree)) previewSplitTree = reconcileWindowSplitTree(saved.splitTree, saved.splitTree.keys.filter(key => isSurfaceWindowKey(key) ? surfaceRestorable(surfaceIdOfKey(key)) : known.has(key)))
+      if (validWindowSplitTree(saved.splitTree)) {
+        const primary = Boolean(saved.reader && known.has(saved.reader) && (saved.primaryOpen ?? saved.splitTree.primary !== false)) || Boolean(saved.activePopoverTab && saved.popoverTabs?.includes(saved.activePopoverTab) && surfaceRestorable(saved.activePopoverTab))
+        const restoredTree = primary ? saved.splitTree : removePrimaryWindow(saved.splitTree)
+        previewSplitTree = restoredTree ? reconcileWindowSplitTree(restoredTree, restoredTree.keys.filter(key => isSurfaceWindowKey(key) ? surfaceRestorable(surfaceIdOfKey(key)) : known.has(key)), primary) : null
+      }
       const available = saved.panes.filter((key) => known.has(key)).length
       missing = saved.panes.length - available + (saved.reader && !known.has(saved.reader) ? 1 : 0)
       plan = { ...saved, count: available }
@@ -21945,8 +21954,17 @@ function OpenTuiWorkspace() {
     const pending = pendingSurfaceFocusRef.current
     if (!pending) return
     const index = windowItems.findIndex((item) => item.kind === 'surface' && item.surface === pending)
-    if (index < 0) return
+    if (index < 0) {
+      if (!windowSurfaces.includes(pending)) return
+      pendingSurfaceFocusRef.current = null
+      setWindowSurfacePeek(pending)
+      setSplitFocusIndex(-1)
+      setSurfacePanelFocused(false)
+      showNotice('info', 'Hidden window · Esc or ⌃B m restores the layout')
+      return
+    }
     pendingSurfaceFocusRef.current = null
+    setWindowZoom(null)
     setSplitFocusIndex(index)
   })
 
@@ -26800,7 +26818,7 @@ function OpenTuiWorkspace() {
         return renderSurfaceWindow(surface, -1, { ...area, boxHeight: area.height }, false, { x: 0, y: 0, zIndex: 5 })
       }
       if (key === floatingKey && floatingWindow) {
-        const rect = floatingWindow.rect
+        const rect = clampFloatingRect(floatingWindow.rect, area)
         const shown = !fullscreenMode && !windowSurfacePeek
         return renderSurfaceWindow(surface, FLOATING_PANE_INDEX, { width: rect.width, height: rect.height, boxHeight: rect.height }, !shown, { x: rect.x, y: rect.y, zIndex: 41 })
       }
@@ -27552,7 +27570,7 @@ function OpenTuiWorkspace() {
       {spacesMenuOpen ? <SpacesManager controller={workspaceContext.controller} theme={theme} width={width} height={height} initialId={spacesMenuSelection} closeId={spacesCloseId} onClose={() => setSpacesMenuOpen(false)} onKeyHandlerReady={handler => { spacesKeyRef.current = handler }} /> : null}
       <WorkspaceTabs theme={theme} width={width} onManage={openSpaces} under={fullScreenPopoverOpen} />
       {floatingItem && floatingWindow && !fullscreenMode && !windowSurfacePeek ? (() => {
-            const rect = floatingWindow.rect
+            const rect = clampFloatingRect(floatingWindow.rect, { width: readerAreaWidth, height: windowAreaHeight })
             const size = { width: rect.width, height: rect.height, boxHeight: rect.height }
             return (
               <box id="floating-window" position="absolute" left={(windowAreaRef.current?.x ?? sidebarWidth) + rect.x} top={(windowAreaRef.current?.y ?? (tabsEnabled ? 2 : 1)) + rect.y} width={rect.width} height={rect.height}
