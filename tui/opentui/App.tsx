@@ -13125,6 +13125,16 @@ function OpenTuiWorkspace() {
     return glyphs
   }, [attentionDone, recentlyWrittenKeys, sidebarSessionActivity, visibleTabSessions])
 
+  const tabWidth = useMemo(() => {
+    if (visibleTabSessions.length === 0) return 16
+    // Fill available width proportionally so tabs look natural at any count,
+    // capped to avoid very wide tabs when only a few sessions are open.
+    // The strip spans the reader area (reader box plus any split panes), so
+    // tabs get the full width instead of being squeezed into the reader column.
+    const available = Math.max(readerAreaWidth - 6, 20)
+    const fill = Math.floor(available / visibleTabSessions.length)
+    return Math.max(10, Math.min(fill, 40))
+  }, [readerAreaWidth, visibleTabSessions.length])
   const tabOptions = useMemo((): TabSelectOption[] => (
     visibleTabSessions.map((s) => {
       // A tab already mounted in a split pane is marked, so the strip explains
@@ -13136,12 +13146,15 @@ function OpenTuiWorkspace() {
       const team = teamAttention.get(sessionKey(s))
       const teamPrefix = (coordinatorBadges.has(sessionKey(s)) ? `${coordinatorBadges.get(sessionKey(s))} ` : '') + (team ? (team.waiting > 0 ? `!${team.waiting} ` : `✓${team.finished} `) : '')
       const stateGlyph = tabStateGlyphs.get(sessionKey(s))
+      const label = (stateGlyph ? `${stateGlyph} ` : '') + teamPrefix + (isPreviewMode && selectedSessionKey === sessionKey(s)
+        ? `PREVIEW · ${formatSessionTitle(s)}`
+        : inSplit
+          ? `▏${formatSessionTitle(s)}`
+          : formatSessionTitle(s))
       return {
-        name: (stateGlyph ? `${stateGlyph} ` : '') + teamPrefix + (isPreviewMode && selectedSessionKey === sessionKey(s)
-          ? `PREVIEW · ${formatSessionTitle(s)}`
-          : inSplit
-            ? `▏${formatSessionTitle(s)}`
-            : formatSessionTitle(s)),
+        // tab-select draws a name in tabWidth - 2 cells from its second column,
+        // so a label padded to tabWidth - 4 puts the × at TAB_CLOSE_COLUMN.
+        name: `${fitText(label, Math.max(1, tabWidth - 4))} ×`,
         description: isPreviewMode && selectedSessionKey === sessionKey(s)
           ? 'Preview tab'
           : inSplit
@@ -13150,18 +13163,8 @@ function OpenTuiWorkspace() {
         value: sessionKey(s),
       }
     })
-  ), [isPreviewMode, selectedSessionKey, visibleTabSessions, splitPinnedKeys, splitPaneCount, tabStateGlyphs, teamAttention, coordinatorBadges])
+  ), [isPreviewMode, selectedSessionKey, visibleTabSessions, splitPinnedKeys, splitPaneCount, tabStateGlyphs, teamAttention, coordinatorBadges, tabWidth])
 
-  const tabWidth = useMemo(() => {
-    if (visibleTabSessions.length === 0) return 16
-    // Fill available width proportionally so tabs look natural at any count,
-    // capped to avoid very wide tabs when only a few sessions are open.
-    // The strip spans the reader area (reader box plus any split panes), so
-    // tabs get the full width instead of being squeezed into the reader column.
-    const available = Math.max(readerAreaWidth - 6, 20)
-    const fill = Math.floor(available / visibleTabSessions.length)
-    return Math.max(10, Math.min(fill, 40))
-  }, [readerAreaWidth, visibleTabSessions.length])
   // The right-hand panels share the full vertical column with the reader and
   // composer. Add back the rows the main content budget reserves for the
   // status block, composer popovers, and dock so the panel stays beside the
@@ -14487,6 +14490,22 @@ function OpenTuiWorkspace() {
   // different provider than the one currently active, transparently switch
   // providers first (carrying the target session through) so cross-provider
   // tab navigation works without losing the tab's context.
+  // Close a tab in the strip. Closing the one in the reader opens its neighbour,
+  // as an editor's tab bar does; any other just leaves the strip.
+  const closeSessionTab = useEffectEvent((session: Session) => {
+    const key = sessionKey(session)
+    const idx = openTabSessions.findIndex((tab) => sessionKey(tab) === key)
+    const next = openTabSessions.filter((tab) => sessionKey(tab) !== key)
+    setOpenTabSessions(next)
+    if (key !== selectedSessionKey) return
+    if (next.length > 0) {
+      const newActive = next[Math.min(Math.max(idx, 0), next.length - 1)]
+      if (newActive) selectTabSession(newActive)
+    } else {
+      const first = sessions.find((entry) => sessionKey(entry) !== key) ?? null
+      setSelectedSessionKey(first ? sessionKey(first) : null)
+    }
+  })
   const selectTabSession = useEffectEvent((session: Session) => {
     setWorkspaceHasSession(true); setWorkspaceLaunched(true)
     const targetProvider: ProviderSelection = session.provider ?? 'claude'
@@ -20262,6 +20281,7 @@ function OpenTuiWorkspace() {
     const title = fitText(formatSessionTitle(session), 34).trimEnd()
     if (key === selectedSessionKey) {
       setContextMenu({ ...point, title, items: [
+        ...(source === 'tab' ? [{ label: 'Close tab', hint: '×', danger: true, run: () => closeSessionTab(session) }] : []),
         { label: visibleSplitPaneCount > 0 ? (windowZoom !== null ? 'Restore the layout' : 'Zoom the reader') : 'Full screen', hint: visibleSplitPaneCount > 0 ? '⌃B m' : '⇧Z', run: () => (visibleSplitPaneCount > 0 ? (windowZoom !== null ? setWindowZoom(null) : setWindowZoom('reader')) : toggleFullscreenMode()) },
         { label: 'Window layout…', hint: '⌃B w', run: () => setWindowPickerOpen(true) },
       ] })
@@ -20285,7 +20305,7 @@ function OpenTuiWorkspace() {
         { label: 'Open below the reader', run: () => dropSessionInWindow(session, 'bottom', null) },
       )
       if (source === 'tab') {
-        items.push({ label: 'Close tab', danger: true, run: () => setOpenTabSessions((prev) => prev.filter((tab) => sessionKey(tab) !== key)) })
+        items.push({ label: 'Close tab', hint: '×', danger: true, run: () => closeSessionTab(session) })
       }
     }
     setContextMenu({ ...point, title, items })
@@ -21931,18 +21951,7 @@ function OpenTuiWorkspace() {
         break
       }
       case 'tab-close': {
-        if (selectedSessionKey) {
-          const idx = openTabSessions.findIndex((s) => sessionKey(s) === selectedSessionKey)
-          const next = openTabSessions.filter((s) => sessionKey(s) !== selectedSessionKey)
-          setOpenTabSessions(next)
-          if (next.length > 0) {
-            const newActive = next[Math.min(Math.max(idx, 0), next.length - 1)]
-            if (newActive) selectTabSession(newActive)
-          } else {
-            const first = sessions[0]
-            setSelectedSessionKey(first ? sessionKey(first) : null)
-          }
-        }
+        if (selectedSession) closeSessionTab(selectedSession)
         break
       }
       case 'composer':
@@ -25825,6 +25834,14 @@ function OpenTuiWorkspace() {
     }
   }
 
+  // Whether a column of the tab strip is a tab's ×: the label's last cell,
+  // tabWidth - 2 into the tab (one cell either side, a click is not that exact).
+  const tabCloseHit = (x: number): boolean => {
+    const instance = tabSelectRef.current
+    if (!instance) return false
+    const column = (x - instance.x) % tabWidth
+    return column >= tabWidth - 3 && column <= tabWidth - 1
+  }
   // The open tab under a column of the tab strip.
   const tabAt = (x: number): Session | null => {
     const instance = tabSelectRef.current
@@ -26052,10 +26069,12 @@ function OpenTuiWorkspace() {
     />
   ) : null
 
+  // Popovers that take the whole screen from its top row, which the spaces bars must not paint over.
+  const fullScreenPopoverOpen = editorOpen || gitOpen || pullRequestOpen || fileViewerOpen || deskOpen
   return (
     <box width={width} height={height} flexDirection="column" backgroundColor={theme.bg}>
       {spacesMenuOpen ? <SpacesManager controller={workspaceContext.controller} theme={theme} width={width} height={height} initialId={spacesMenuSelection} closeId={spacesCloseId} onClose={() => setSpacesMenuOpen(false)} onKeyHandlerReady={handler => { spacesKeyRef.current = handler }} /> : null}
-      <WorkspaceTabs theme={theme} width={width} onManage={openSpaces} />
+      <WorkspaceTabs theme={theme} width={width} onManage={openSpaces} under={fullScreenPopoverOpen} />
       {floatingItem && floatingWindow && !fullscreenMode && !windowSurfacePeek ? (() => {
             const rect = floatingWindow.rect
             const size = { width: rect.width, height: rect.height, boxHeight: rect.height }
@@ -26163,7 +26182,7 @@ function OpenTuiWorkspace() {
                 </box>
               </box>
             ) : null}
-            <SpacesRail theme={theme} width={sidebarWidth} onManage={openSpaces} />
+            <SpacesRail theme={theme} width={sidebarWidth} onManage={openSpaces} under={fullScreenPopoverOpen} />
             <box height={1} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); setAllProjects(value => !value) } }}><text fg={theme.dim}>{allProjects ? 'All projects · click to scope' : 'Project sessions · click for all'}</text></box>
             <box flexGrow={1} paddingX={1}>
               {sidebarView === 'coordinator' ? (
@@ -26229,6 +26248,12 @@ function OpenTuiWorkspace() {
                   }
                   if (event.button !== 0) return
                   const tab = tabAt(event.x)
+                  if (tab && tabCloseHit(event.x)) {
+                    event.stopPropagation()
+                    event.preventDefault()
+                    closeSessionTab(tab)
+                    return
+                  }
                   if (tab) sessionDragHandlers.press(tab, null, event, () => selectTabSession(tab))
                 }}
                 onMouseDrag={(event) => sessionDragHandlers.move(event)}

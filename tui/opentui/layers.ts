@@ -11,6 +11,12 @@ import { applyGain, applySaturation, type OptimizedBuffer } from '@opentui/core'
 export const MODAL_SCRIM_Z_INDEX = 69
 export const MODAL_CONTENT_Z_INDEX = MODAL_SCRIM_Z_INDEX + 1
 
+// The spaces rail and workspace tabs: above the composer window (59/60), so a
+// workspace can be switched with a draft open, and below the modal scrim, which
+// must dim every cell behind a modal. Full-screen popovers draw from the top row,
+// so the bars drop beneath them while one is open (`under`).
+export const NAVIGATION_Z_INDEX = MODAL_SCRIM_Z_INDEX - 1
+
 // The scrim is a pass over what has been painted so far, not a colour laid on
 // top of it. It runs as the scrim box's own render step, so it reaches exactly
 // what sits below that box in z-order and nothing drawn after it. A translucent

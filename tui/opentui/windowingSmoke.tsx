@@ -342,6 +342,35 @@ console.log('A pane\'s × closes it and ⤢ opens it in the reader.')
   await click(tab.x + 2, tab.y)
   await waitFor(`a tab click to open ${name}`, () => readerShows(name))
   console.log('A tab click still opens it.')
+  // Each tab has a × at its right end; a click there closes the tab.
+  const tabRow = () => setup.captureCharFrame().split('\n')[frame('session-tabs')!.y] ?? ''
+  const closeOf = (entry: string) => {
+    const row = tabRow()
+    const at = row.indexOf(`Win ${entry}`)
+    check(at >= 0, `no tab for ${entry}`)
+    const x = row.indexOf('×', at)
+    check(x > at, `the ${entry} tab has no ×: ${row}`)
+    return { x, y: frame('session-tabs')!.y }
+  }
+  const other = NAMES.find((entry) => !readerShows(entry) && tabRow().includes(`Win ${entry}`))!
+  const close = closeOf(other)
+  await click(close.x, close.y)
+  await waitFor(`× to close the ${other} tab`, () => !tabRow().includes(`Win ${other}`))
+  check(readerShows(name), 'closing another tab changed the reader')
+  // The reader's own tab closes into its neighbour.
+  const readerClose = closeOf(name)
+  await click(readerClose.x, readerClose.y)
+  await waitFor('closing the reader tab to open a neighbour', () => !tabRow().includes(`Win ${name}`) && !readerShows(name))
+  // A right-click on a tab, the reader's included, offers Close tab.
+  const shown = NAMES.find((entry) => readerShows(entry))!
+  const shownTab = locate(`Win ${shown}`, frame('session-tabs')!)
+  await act(async () => { await setup.mockMouse.pressDown(shownTab.x + 2, shownTab.y, 2 as never) })
+  await act(async () => { await setup.mockMouse.release(shownTab.x + 2, shownTab.y, 2 as never) })
+  await waitFor('the tab menu', () => !!frame('context-menu'))
+  const menuClose = locate('Close tab', frame('context-menu')!)
+  await click(menuClose.x + 1, menuClose.y)
+  await waitFor('Close tab from the menu', () => !tabRow().includes(`Win ${shown}`))
+  console.log('A tab closes from its × or its right-click menu; the reader\'s tab hands over to its neighbour.')
 }
 
 // ── The menu by keyboard: Reader only ───────────────────────────────────────

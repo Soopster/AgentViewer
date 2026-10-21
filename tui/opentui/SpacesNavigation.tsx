@@ -6,7 +6,7 @@ import type { TuiThemePalette } from '../theme'
 import type { SpacesController, Workspace } from './spacesStore'
 import { closeWorkspaceResources, subscribeWorkspaceResources, workspaceResources, workspaceResourceVersion } from './workspaceResources'
 import { useWorkspaceContext } from './workspaceContext'
-import { MODAL_CONTENT_Z_INDEX } from './layers'
+import { MODAL_CONTENT_Z_INDEX, NAVIGATION_Z_INDEX } from './layers'
 
 type Key = { name: string; sequence: string; ctrl: boolean; shift: boolean }
 const fit = (text: string, width: number) => text.length > width ? text.slice(0, Math.max(0, width - 1)) + '…' : text
@@ -18,13 +18,13 @@ export function workspaceBadge(controller: SpacesController, workspace: Workspac
   if (attention.some(mark => mark?.unread)) return '●'
   return ''
 }
-export function SpacesRail({ theme, width, onManage }: { theme: TuiThemePalette; width: number; onManage: (id?: string, close?: boolean) => void }) {
+export function SpacesRail({ theme, width, onManage, under = false }: { theme: TuiThemePalette; width: number; onManage: (id?: string, close?: boolean) => void; under?: boolean }) {
   const context = useWorkspaceContext()!
   useSyncExternalStore(context.controller.subscribeAttention, context.controller.getAttentionVersion, context.controller.getAttentionVersion)
   const state = useSyncExternalStore(context.controller.subscribe, context.controller.getSnapshot, context.controller.getSnapshot)
   useSyncExternalStore(subscribeWorkspaceResources, workspaceResourceVersion, workspaceResourceVersion)
   const spaceCount = Math.min(4, state.spaces.length)
-  return <box id="spaces-rail" zIndex={MODAL_CONTENT_Z_INDEX + 1} height={spaceCount + 2} flexShrink={0} flexDirection="column" border={['bottom']} borderColor={theme.border}>
+  return <box id="spaces-rail" zIndex={under ? 0 : NAVIGATION_Z_INDEX} height={spaceCount + 2} flexShrink={0} flexDirection="column" border={['bottom']} borderColor={theme.border}>
     <box height={1} flexDirection="row" onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); onManage() } }}><text fg={theme.dim}>spaces</text><box flexGrow={1} /><text fg={theme.cyan}>+ · menu</text></box>
     {state.spaces.slice(Math.max(0, state.spaces.findIndex(space => space.id === state.activeSpaceId) - 3), Math.max(4, state.spaces.findIndex(space => space.id === state.activeSpaceId) + 1)).map(space => <box key={space.id} id={`space:${space.id}`} height={1} backgroundColor={space.id === state.activeSpaceId ? theme.surface3 : theme.surface}
       onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); context.controller.activate(space.id) } else if (event.button === 2) { event.stopPropagation(); onManage(space.id) } }}>
@@ -32,7 +32,9 @@ export function SpacesRail({ theme, width, onManage }: { theme: TuiThemePalette;
     </box>)}
   </box>
 }
-export function WorkspaceTabs({ theme, width, onManage }: { theme: TuiThemePalette; width: number; onManage: (id?: string, close?: boolean) => void }) {
+// `under` drops the bar beneath the layer while a full-screen popover covers the
+// screen: above it, the bar painted over the popover's own top border.
+export function WorkspaceTabs({ theme, width, onManage, under = false }: { theme: TuiThemePalette; width: number; onManage: (id?: string, close?: boolean) => void; under?: boolean }) {
   const context = useWorkspaceContext()!
   useSyncExternalStore(context.controller.subscribeAttention, context.controller.getAttentionVersion, context.controller.getAttentionVersion)
   const state = useSyncExternalStore(context.controller.subscribe, context.controller.getSnapshot, context.controller.getSnapshot)
@@ -42,7 +44,7 @@ export function WorkspaceTabs({ theme, width, onManage }: { theme: TuiThemePalet
   const active = Math.max(0, space.workspaces.findIndex(workspace => workspace.id === space.activeWorkspaceId))
   const count = Math.max(1, Math.floor((width - 12) / 18))
   const start = Math.max(0, active - count + 1)
-  return <box id="workspace-tabs" zIndex={MODAL_CONTENT_Z_INDEX + 1} height={1} flexShrink={0} flexDirection="row" backgroundColor={theme.surface}>
+  return <box id="workspace-tabs" zIndex={under ? 0 : NAVIGATION_Z_INDEX} height={1} flexShrink={0} flexDirection="row" backgroundColor={theme.surface}>
     {start > 0 ? <text fg={theme.dim} onMouseDown={() => onManage()}>‹ </text> : null}
     {space.workspaces.slice(start, start + count).map(workspace => <box key={workspace.id} id={`workspace-tab:${workspace.id}`} width={18} height={1} flexDirection="row" backgroundColor={workspace.id === space.activeWorkspaceId ? theme.surface3 : theme.surface} onMouseDown={event => {
       event.stopPropagation(); if (event.button === 0) context.controller.activate(space.id, workspace.id); else if (event.button === 2) onManage(workspace.id)

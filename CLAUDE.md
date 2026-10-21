@@ -1733,6 +1733,11 @@ which mirror `app/api/sessions/[sessionId]/coordination/route.ts` action for act
   way — only the colours differ — so `teammatesPopoverSmoke.tsx` asserts the ORDER, not the pixels
   (verified to fail when the panel is put back below the scrim). Adding a modal to the scrim's
   condition without raising its panel is the whole bug; use the constants rather than a literal.
+- **The spaces bars sit just under the modal scrim** (`NAVIGATION_Z_INDEX`, `layers.ts`): above the
+  composer window, so a workspace can be switched with a draft open, and below the scrim, which
+  must dim every cell behind a modal (`modalScrimSmoke`). Full-screen popovers (editor, Git, pull
+  request, file viewer, desk) draw from the top row, so the bars drop beneath them while one is
+  open (`under`, from `fullScreenPopoverOpen`) — above them they hid the editor's title border.
 - **Contrast is a hierarchy, not a default.** Rendering a whole panel in `theme.dim` is the easy
   mistake here and it reads as broken: content the user acts on is `theme.text`, secondary is
   `theme.muted`, and `dim` is for separators and chrome alone. Key glyphs carry `theme.cyan` so the
