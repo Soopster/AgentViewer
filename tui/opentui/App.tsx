@@ -21992,7 +21992,13 @@ function OpenTuiWorkspace() {
     lastFocusedSplitPaneRef.current = paneIndex
     setSplitFocusIndex(paneIndex)
     const focused = paneIndex === FLOATING_PANE_INDEX ? floatingItem : windowItems[paneIndex]
-    if (focused?.kind === 'session') { setComposerPaneTargetKey(sessionKey(focused.session)); setSelectedSessionKey(sessionKey(focused.session)) }
+    if (focused?.kind === 'session') {
+      const key = sessionKey(focused.session)
+      setComposerPaneTargetKey(key)
+      setSelectedSessionKey(key)
+      // Entering a previewed session's window keeps it: it becomes a tab.
+      setOpenTabSessions(current => current.some(tab => sessionKey(tab) === key) ? current : [...current, focused.session])
+    }
     // The reader keeps its own cursor, but the sidebar must not look focused
     // while a pane owns the keys.
     setFocusedPane('messages')
