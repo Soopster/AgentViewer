@@ -1,0 +1,253 @@
+/** @jsxImportSource @opentui/react */
+// Window controls exercised through the real App keyboard and mouse dispatch.
+import React from 'react'
+import type { SurfacePanelState } from './surfacePanelState'
+import { testRender, act } from './testRender'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import type { Session } from '../../lib/types'
+import type { TuiTranscriptCard } from '../format'
+
+const CWD = mkdtempSync(path.join(tmpdir(), 'agent-viewer-window-audit-'))
+process.env.SHELL = '/bin/sh'
+process.chdir(CWD)
+execFileSync('git', ['init', '-q'])
+writeFileSync('README.md', 'fixture\n')
+execFileSync('git', ['add', '.'])
+execFileSync('git', ['-c', 'user.name=Smoke', '-c', 'user.email=smoke@example.test', 'commit', '-qm', 'fixture'])
+
+const bunTestSpecifier = 'bun:test'
+const { mock } = await import(bunTestSpecifier) as { mock: { module(specifier: string, factory: () => unknown): void } }
+
+const NAMES = ['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot']
+const SESSIONS: Session[] = NAMES.map((name, index) => ({
+  sessionId: `win-${name}`, provider: 'claude', cwd: CWD, summary: `Win ${name}`, firstPrompt: `Win ${name}`, lastModified: 1_700_000_000_000 - index * 1000,
+}))
+const broadcastSends: Array<{ session: Session; body: Record<string, unknown> }> = []
+let promptActive = false
+let permissionResponses = 0
+const running = () => promptActive ? [{
+  sessionId: SESSIONS[0]!.sessionId, provider: 'claude' as const,
+  pendingPermissions: [], pendingPrompts: [{ requestId: 'controls-permission', sessionId: SESSIONS[0]!.sessionId,
+    toolName: 'Bash', title: 'CONTROLS-PERMISSION', input: { command: 'echo fixture' } }],
+}] : []
+const marker = (session: Session | string) => `${(typeof session === 'string' ? session : session.sessionId).toUpperCase()}-BODY`
+const card = (session: Session): TuiTranscriptCard => ({
+  key: `${session.sessionId}-card`, role: 'assistant', provider: 'claude', label: 'Assistant', category: 'conversation', autoFold: false,
+  compactSummary: marker(session), lines: [{ text: marker(session), tone: 'default' }], expandedLines: [{ text: marker(session), tone: 'default' }],
+  searchText: marker(session), searchHaystackLower: marker(session).toLowerCase(),
+})
+const cardsFor = (session: Session) => [card(session)]
+const detailFor = (session: Session) => ({
+  info: { sessionId: session.sessionId, provider: 'claude' as const, cwd: CWD },
+  rawMessages: [], threadedMessages: [], transcriptCards: cardsFor(session),
+  transcriptCardsDensity: 'balanced' as const, transcriptCardsShowToolCalls: true, contextUsage: null,
+})
+const detailClient = await import('./sessionDetailWorkerClient')
+mock.module('./sessionDetailWorkerClient', () => ({ ...detailClient, readTuiSessionsAsync: async () => SESSIONS.map((session) => ({ ...session })), readTuiSessionDetailAsync: async (session: Session) => detailFor(session) }))
+const threadingClient = await import('./threadingWorkerClient')
+mock.module('./threadingWorkerClient', () => ({ ...threadingClient, getTranscriptCardsSync: (session: Session) => cardsFor(session), formatTranscriptCardsAsync: async (session: Session) => cardsFor(session) }))
+const metadataClient = await import('./metadataWorkerClient')
+mock.module('./metadataWorkerClient', () => ({ ...metadataClient, readTuiSessionMetadataAsync: async () => ({ currentModel: null, contextUsage: null }) }))
+const service = await import('../../lib/tui/service')
+mock.module('../../lib/tui/service', () => ({
+  ...service,
+  readTuiSessions: async () => SESSIONS.map((session) => ({ ...session })),
+  readTuiSessionDetail: async (session: Session) => detailFor(session),
+  readTuiSessionMetadata: async () => ({ models: [], currentModel: null, contextUsage: null }),
+  readTuiRuntimeActivity: async () => ({ running: running(), waiting: [], attention: [] }),
+  listTuiRunningSessions: async () => running(),
+  prewarmTuiSession: async () => {},
+  runTuiSessionAction: async (_session: Session, body: Record<string, unknown>) => {
+    if (body.action === 'respondPermission') { permissionResponses++; promptActive = false }
+    return {}
+  },
+  streamTuiSessionTurn: async (session: Session, body: Record<string, unknown>) => {
+    broadcastSends.push({ session: { ...session }, body })
+    return new Response('event: turn-accepted\ndata: {}\n\n')
+  },
+}))
+
+const store = await import('./spacesStore')
+let controller: InstanceType<typeof store.SpacesController> | null = null
+mock.module('./spacesStore', () => ({ ...store, SpacesController: class extends store.SpacesController { constructor() { super(); controller = this } } }))
+const { default: OpenTuiApp } = await import('./App')
+const setup = await testRender(<OpenTuiApp />, { width: 220, height: 46, kittyKeyboard: process.env.AV_WINDOW_CONTROLS_LEGACY !== '1' })
+const settle = async (ms = 150) => {
+  await act(async () => { await setup.flush(); await new Promise((resolve) => setTimeout(resolve, ms)) })
+}
+const fail = (message: string): never => {
+  console.error(`${message}\n${setup.captureCharFrame()}`)
+  process.exit(1)
+}
+const check = (condition: unknown, message: string) => { if (!condition) fail(message) }
+const waitFor = async (label: string, test: () => boolean) => {
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline) {
+    if (test()) return
+    await settle(80)
+  }
+  fail(`Timed out: ${label}`)
+}
+type Frame = { x: number; y: number; width: number; height: number }
+const frame = (id: string): Frame | null => {
+  const box = setup.renderer.root.findDescendantById(id) as unknown as Frame | null
+  return box ? { x: box.x, y: box.y, width: box.width, height: box.height } : null
+}
+// Visible panes only: a zoom hides the others but keeps them mounted.
+const panes = () => [0, 1, 2, 3, 4].map((index) => {
+  const box = setup.renderer.root.findDescendantById(`split-pane:${index}`) as unknown as (Frame & { visible?: boolean }) | null
+  return box && box.visible !== false ? { x: box.x, y: box.y, width: box.width, height: box.height } : null
+}).filter((box): box is Frame => box !== null)
+const locate = (needle: string, within?: Frame): { x: number; y: number } => {
+  const lines = setup.captureCharFrame().split('\n')
+  for (let y = within?.y ?? 0; y < (within ? within.y + within.height : lines.length); y += 1) {
+    const x = (lines[y] ?? '').indexOf(needle, within?.x ?? 0)
+    if (x >= 0 && (!within || x < within.x + within.width)) return { x, y }
+  }
+  return fail(`could not find ${JSON.stringify(needle)}`)
+}
+const click = async (x: number, y: number) => {
+  await act(async () => { await setup.mockMouse.click(x, y) })
+  await settle(200)
+}
+const rail = () => frame('session-rail')!
+const railRow = (name: string) => locate(`Win ${name}`, rail())
+const readerShows = (name: string) => {
+  const reader = frame('transcript-reader')!
+  return setup.captureCharFrame().split('\n').slice(reader.y, reader.y + reader.height)
+    .some((line) => line.slice(reader.x, reader.x + reader.width).includes(marker(`win-${name}`)))
+}
+
+
+const { getShells, shellTerminal, resetShellsForTest } = await import('./shellStore')
+const { readAllScreenText } = await import('./shellScreen')
+const chordKey = async (key: string) => {
+  await act(async () => { setup.mockInput.pressKey('b', { ctrl: true }) })
+  await settle(60)
+  await act(async () => { setup.mockInput.pressKey(key) })
+  await settle(200)
+}
+const paneHas = (index: number, text: string) => {
+  // Index 64 is the floating window, whichever kind it holds.
+  const pane = frame(index === 64 ? 'floating-window' : `split-pane:${index}`)
+  if (!pane) return false
+  return setup.captureCharFrame().split('\n').slice(pane.y, pane.y + pane.height)
+    .some((line) => line.slice(pane.x, pane.x + pane.width).includes(text))
+}
+const paneName = (index: number) => NAMES.find((name) => paneHas(index, marker(`win-${name}`))) ?? null
+const openMenu = async () => {
+  await act(async () => { setup.mockInput.pressKey('b', { ctrl: true }) }); await settle(60)
+  await act(async () => { setup.mockInput.pressKey('w') }); await settle(150)
+  await waitFor('layout picker', () => !!frame('window-layout:grid'))
+}
+
+const rightClick = async (x: number, y: number) => {
+  // MouseButton.RIGHT is 2; the press is what opens the menu, as a terminal reports it.
+  await act(async () => { await setup.mockMouse.pressDown(x, y, 2 as never) })
+  await act(async () => { await setup.mockMouse.release(x, y, 2 as never) })
+  await settle(200)
+}
+
+await settle(2500)
+{
+  const row = railRow('alpha')
+  await click(row.x + 1, row.y)
+  await waitFor('alpha in the reader', () => readerShows('alpha'))
+}
+
+const key = async (value: string) => { await act(async () => { if (value === 'up' || value === 'down') setup.mockInput.pressArrow(value); else setup.mockInput.pressKey(value) }); await settle(120) }
+const escape = async () => { await act(async () => { setup.mockInput.pressEscape() }); await settle(120) }
+const portable = async (value: string) => {
+  await act(async () => { setup.mockInput.pressKey('k', { ctrl: true }) }); await settle(40)
+  await key(value)
+}
+const pickLayout = async (name: string) => { await openMenu(); const rect = frame(`window-layout:${name}`)!; await click(rect.x + 2, rect.y + 1) }
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+
+
+const workspace = controller!.activeWorkspace()!, runtime = controller!.runtime(workspace)
+const { surfaceViewNamespace } = await import('./windowViewState')
+const { activeSurface, openSurface } = await import('./surfacePanelState')
+const { arrangePaneTree } = await import('./windowSplitTree')
+await act(async () => {
+  setup.resize(360, 54)
+  runtime.set('openTabSessions', SESSIONS)
+  runtime.set('surfacePanelWidth', 112)
+  runtime.set('windowSurfaces', ['browser', 'terminal'])
+  runtime.set('windowOrder', ['surface:browser', 'surface:terminal'])
+  runtime.set('windowSplitTree', arrangePaneTree(['surface:browser', 'surface:terminal'], true, 'columns'))
+}); await settle(350)
+const field = (kind: string, id: string | undefined, panelId: string | undefined, key: string) => `${surfaceViewNamespace(kind, id, panelId)}:${key}`
+const draft = (id?: string, panelId?: string) => runtime.values.get(field('browser', id, panelId, 'browser:draft'))
+const menuAction = async (id: string, label: string) => {
+  const button = frame(`surface-window-menu:${id}`)!
+  check(button, `no menu for ${id}`)
+  await click(button.x + 1, button.y)
+  const action = locate(label, frame('context-menu')!)
+  await click(action.x + 2, action.y)
+}
+const toWindow = async () => {
+  const button = locate('⧉ window', frame('surface-panel-frame')!)
+  await click(button.x + 2, button.y)
+}
+await chordKey('2')
+await act(async () => { await setup.mockInput.typeText('http://first.local/draft') }); await settle(120)
+check(draft('browser') === 'http://first.local/draft', 'browser did not receive its draft')
+const closedBefore = (runtime.values.get('closedWindows') as unknown[] | undefined)?.length ?? 0
+await menuAction('browser', 'Move to side panel')
+const panel1 = activeSurface(runtime.values.get('surfacePanel') as SurfacePanelState)!
+check(draft(undefined, panel1.id) === 'http://first.local/draft', 'window-to-panel lost browser input')
+check(((runtime.values.get('closedWindows') as unknown[])?.length ?? 0) === closedBefore, 'moving a pane recorded a closure')
+await act(async () => { runtime.set<SurfacePanelState>('surfacePanel', state => openSurface(state, 'browser')) }); await settle(200)
+const panel2 = activeSurface(runtime.values.get('surfacePanel') as SurfacePanelState)!
+check(panel1.id !== panel2.id && draft(undefined, panel2.id) === '', 'panel instances share the same input')
+await act(async () => { await setup.mockInput.typeText('http://second.local/draft') }); await settle(120)
+check(draft(undefined, panel1.id) === 'http://first.local/draft', 'typing in the second panel changed the first')
+await toWindow()
+check(draft('browser') === 'http://second.local/draft', 'panel-to-window lost browser input')
+check((runtime.values.get('surfacePanel') as { surfaces: unknown[] }).surfaces.length === 1, 'moving one panel closed its sibling')
+await act(async () => { runtime.set('surfacePanel', (state: { surfaces: unknown[] }) => ({ ...state, activeId: panel1.id })); runtime.set('surfacePanelOpen', true) }); await settle(200)
+await toWindow()
+check(draft('browser#2') === 'http://first.local/draft', 'moving into an occupied kind reused the wrong view')
+await act(async () => { runtime.set(field('browser', 'browser#2', undefined, 'browser:draft'), 'edited after relocation') }); await settle(120)
+await chordKey('u')
+check(draft(undefined, panel1.id) === 'edited after relocation', 'undo lost edits made after relocation')
+await chordKey('U')
+check(draft('browser#2') === 'edited after relocation', 'redo lost the relocated view state')
+// Floating views are part of a saved working set, including their geometry.
+await chordKey('4'); await chordKey('f')
+await waitFor('browser floats', () => !!frame('floating-window'))
+const floating = runtime.values.get('floatingWindow') as { key: string; rect: Frame }
+await openMenu(); await key('n')
+await act(async () => { await setup.mockInput.typeText('With floating browser') }); await settle(100)
+await act(async () => { setup.mockInput.pressEnter() }); await settle(150)
+await escape()
+const saved = (await import('./windowLayoutStore')).listSavedWindowLayouts(CWD)[0]!
+check(saved.floating?.key === floating.key, 'saving omitted the floating browser')
+await chordKey('x'); await waitFor('float closed', () => !frame('floating-window'))
+await openMenu(); const row = locate('With floating browser'); await click(row.x + 2, row.y)
+await waitFor('floating view restored', () => !!frame('floating-window'))
+check((runtime.values.get('floatingWindow') as { key: string }).key === floating.key, 'restore changed the floating identity')
+check(draft('browser#2') === 'edited after relocation', 'saved layout changed the browser draft')
+// A terminal move preserves the selected live shell rather than showing the first shell.
+const { startShell, writeShell } = await import('./shellStore')
+let shell1 = '', shell2 = ''
+await act(async () => {
+  shell1 = await startShell({ cwd: CWD, ownerId: workspace.id, cols: 70, rows: 18 })
+  shell2 = await startShell({ cwd: CWD, ownerId: workspace.id, cols: 70, rows: 18 })
+  writeShell(shell1, "echo FIRST_SHELL_ONLY\r"); writeShell(shell2, "echo SELECTED_SHELL_KEPT\r")
+  runtime.set(field('terminal', 'terminal', undefined, 'process:selectedId'), shell2)
+}); await settle(350)
+await menuAction('terminal', 'Move to side panel')
+const terminalPanel = activeSurface(runtime.values.get('surfacePanel') as SurfacePanelState)!
+check(runtime.values.get(field('terminal', undefined, terminalPanel.id, 'process:selectedId')) === shell2, 'terminal relocation changed the selected shell')
+await waitFor('selected shell remains visible', () => setup.captureCharFrame().includes('SELECTED_SHELL_KEPT'))
+await toWindow()
+check(runtime.values.get(field('terminal', 'terminal', undefined, 'process:selectedId')) === shell2, 'returning terminal to a window changed its shell')
+console.log('Windowing audit rendered smoke passed (browser drafts, independent panel instances, relocation undo/redo, floating layouts, live shell selection)')
+act(() => setup.renderer.destroy())
+await resetShellsForTest()
+process.exit(0)

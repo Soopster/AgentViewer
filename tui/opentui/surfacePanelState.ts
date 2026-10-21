@@ -14,6 +14,8 @@ import {
 export type TuiSurface = {
   id: string
   kind: RightPanelSurfaceKind
+  /** A relocated view keeps its project instead of following unrelated session focus. */
+  cwd?: string
 }
 
 export type SurfacePanelState = {

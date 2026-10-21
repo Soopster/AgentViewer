@@ -267,7 +267,7 @@ export function SurfacePanel({
           </box>
         ) : null}
         <box flexGrow={1} />
-        {active && onMoveToWindow && (active.kind === 'terminal' || active.kind === 'diff' || active.kind === 'files')
+        {active && onMoveToWindow
           ? button(' ⧉ window ', () => onMoveToWindow(active.kind), 'to-window')
           : null}
         {button(placement === 'bottom' ? ' ⇥ beside ' : ' ⤓ under ', onTogglePlacement, 'placement')}

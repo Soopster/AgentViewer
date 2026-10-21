@@ -112,7 +112,11 @@ export function splitPath(root: WindowSplitNode, slot: number): string | null {
 }
 
 export function evenWindowSplitTree(root: WindowSplitNode): WindowSplitNode {
-  return 'slot' in root ? root : { ...root, ratio: 0.5, first: evenWindowSplitTree(root.first), second: evenWindowSplitTree(root.second) }
+  if ('slot' in root) return root
+  const weight = (node: WindowSplitNode, axis: 'x' | 'y'): number => 'slot' in node ? 1 : node.axis === axis ? weight(node.first, axis) + weight(node.second, axis) : Math.max(weight(node.first, axis), weight(node.second, axis))
+  const first = evenWindowSplitTree(root.first), second = evenWindowSplitTree(root.second)
+  const left = weight(first, root.axis), right = weight(second, root.axis)
+  return { ...root, ratio: left / (left + right), first, second }
 }
 
 export function rotateWindowSplitTree(root: WindowSplitNode, path: string): WindowSplitNode {

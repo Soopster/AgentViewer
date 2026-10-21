@@ -41,6 +41,9 @@ assert.deepEqual(listSavedWindowLayouts(cwd)[0]!.splitTree, tree, 'saved layouts
 const controller = new SpacesController(cwd)
 const space = controller.getSnapshot().spaces[0]!
 const first = space.workspaces[0]!
+controller.runtime(first).set('windowSurfaces', ['terminal'])
+controller.runtime(first).set('windowStacks', [['surface:terminal', 'surface:files']])
+controller.runtime(first).set('windowAttention', new Map([['surface:terminal', { error: true }]]))
 controller.runtime(first).set('windowOverviewWindows', [{ key: 'reader', title: 'Lead', detail: 'reader', hidden: false }, { key: 'surface:terminal', title: 'Build shell', detail: 'shell', hidden: true, badge: '!', tabs: [{ key: 'surface:files', title: 'Files tab', detail: 'tab', hidden: true }] }])
 const second = controller.addWorkspace(space.id)!
 controller.runtime(second).set('windowOverviewWindows', [{ key: 'reader', title: 'Review', detail: 'reader', hidden: false }])
@@ -61,6 +64,10 @@ console.log('Split tree and workspace overview smoke passed (preset conversion, 
 
 // A layout can consist entirely of ordinary session or surface panes.
 const { arrangePaneTree, removePrimaryWindow, replacePrimaryWindow, movePaneToEdge, swapPaneSlots } = await import('./windowSplitTree')
+const { evenWindowSplitTree } = await import('./windowSplitTree')
+const threeAcross = arrangePaneTree(['a', 'b', 'c'], false, 'columns')!
+const equalized = computeWindowSplitTree({ ...threeAcross, root: evenWindowSplitTree(threeAcross.root) }, 300, 40, limits)
+assert.deepEqual([...equalized.rects.values()].map(rect => rect.width), [100, 100, 100], 'equalize sizes three panes evenly')
 for (const style of ['columns', 'rows', 'grid', 'stack'] as const) {
   const generic = arrangePaneTree(['session:a', 'surface:terminal', 'session:b'], false, style, 1)!
   assert.ok(validWindowSplitTree(generic))
