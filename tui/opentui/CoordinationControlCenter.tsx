@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from './dockedPopover'
 import { useMemo } from 'react'
 import type { AgentProtocolEvent, ProtocolAgent, ProtocolRun, ProtocolRunSnapshot, ProtocolTask } from '../../lib/agentProtocol'
 import type { WorktreeTask } from '../../lib/tui/service'
@@ -18,6 +19,10 @@ type Props = {
   theme: TuiThemePalette
   width: number
   height: number
+  /** Fill the given box inside a window, with no frame of its own. */
+  docked?: boolean
+  /** Shows the `⧉ window` button: break the control center out into a window. */
+  onDetach?: () => void
   runs: ProtocolRun[]
   runId: string | null
   snapshot: ProtocolRunSnapshot | null
@@ -252,6 +257,8 @@ export function CoordinationControlCenter({
   theme,
   width,
   height,
+  docked = false,
+  onDetach,
   runs,
   runId,
   snapshot,
@@ -286,16 +293,17 @@ export function CoordinationControlCenter({
   onScrollSection,
   onActivateSelection,
 }: Props) {
-  const popW = Math.max(width - 2, 1)
-  const popH = Math.max(height - 2, 1)
+  const frame = popoverFrameCells(docked)
+  const popW = docked ? width : Math.max(width - 2, 1)
+  const popH = docked ? height : Math.max(height - 2, 1)
   const popTop = Math.max(Math.floor((height - popH) / 2), 0)
   const popLeft = Math.max(Math.floor((width - popW) / 2), 0)
-  const innerW = Math.max(popW - 2, 1)
+  const innerW = Math.max(popW - frame, 1)
   const headerH = 3
   const metricsH = 4
   const promptH = 2
   const footerH = 2
-  const bodyH = Math.max(popH - headerH - metricsH - promptH - footerH - 2, 8)
+  const bodyH = Math.max(popH - headerH - metricsH - promptH - footerH - frame, 8)
   const leftW = Math.max(24, Math.floor(innerW * 0.27))
   const rightW = Math.max(31, Math.floor(innerW * 0.29))
   const centerW = Math.max(innerW - leftW - rightW - 2, 20)
@@ -564,18 +572,13 @@ export function CoordinationControlCenter({
 
   return (
     <box
-      position="absolute"
-      top={popTop}
-      left={popLeft}
-      width={popW}
-      height={popH}
-      border
-      borderStyle="single"
-      borderColor={theme.border}
+      {...popoverRootProps(docked, { top: popTop, left: popLeft, width: popW, height: popH }, 70)}
+      // borderStyle alone turns a border on, so a docked popover passes none.
+      {...(docked ? {} : { border: true, borderStyle: 'single' as const, borderColor: theme.border })}
       backgroundColor={theme.surface}
-      zIndex={70}
       flexDirection="column"
     >
+      {!docked && onDetach ? <PopoverDetachButton theme={theme} onPress={onDetach} /> : null}
       <box height={headerH} paddingX={1} border={['bottom']} borderStyle="single" borderColor={theme.border} flexDirection="column">
         <box height={1} flexDirection="row" alignItems="center" overflow="hidden">
           <text fg={theme.cyan} wrapMode="none">AGENT CONTROL CENTER</text>

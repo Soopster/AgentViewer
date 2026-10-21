@@ -3,6 +3,7 @@
 // repository — the prompts, files, commits and pull requests, and what is still
 // waiting on the user. It renders the same markdown it copies, so what is on
 // screen is exactly what lands in a standup or a chat.
+import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from './dockedPopover'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
 import type { TuiThemePalette } from '../theme'
@@ -29,6 +30,10 @@ type Props = {
   onClose: () => void
   onNotice: (tone: 'info' | 'error', text: string, durationMs?: number) => void
   onKeyHandlerReady: (handler: (key: DailySummaryKeyEvent) => void) => void
+  /** Fill the given box inside a window, with no frame of its own. */
+  docked?: boolean
+  /** Shows the `⧉ window` button: break the popover out into a window. */
+  onDetach?: () => void
   onCopy: (text: string) => void
   onSendToComposer?: (text: string) => void
   /** Test seam: skip `gh`. */
@@ -68,6 +73,8 @@ export function DailySummaryPopover({
   onCopy,
   onSendToComposer,
   skipPullRequests,
+  docked = false,
+  onDetach,
 }: Props) {
   const [range, setRange] = useState<DailySummaryRange>(initialRange)
   const [summary, setSummary] = useState<DailySummary | null>(null)
@@ -97,14 +104,15 @@ export function DailySummaryPopover({
   const markdown = useMemo(() => (summary ? formatDailySummaryMarkdown(summary) : ''), [summary])
   const lines = useMemo(() => markdown.replace(/\n$/, '').split('\n'), [markdown])
 
-  const popW = Math.min(width - 4, 120)
-  const popH = Math.min(height - 2, 46)
+  const frame = popoverFrameCells(docked)
+  const popW = docked ? width : Math.min(width - 4, 120)
+  const popH = docked ? height : Math.min(height - 2, 46)
   const popTop = Math.max(Math.floor((height - popH) / 2), 0)
   const popLeft = Math.max(Math.floor((width - popW) / 2), 0)
-  const innerW = popW - 4
+  const innerW = popW - frame - 2
   const headerH = 2
   const footerH = 2
-  const bodyH = Math.max(popH - headerH - footerH - 2, 4)
+  const bodyH = Math.max(popH - headerH - footerH - frame, 4)
 
   const scrollBody = useCallback((delta: number) => {
     const box = scrollRef.current
@@ -159,21 +167,16 @@ export function DailySummaryPopover({
 
   return (
     <box
-      position="absolute"
-      top={popTop}
-      left={popLeft}
-      width={popW}
-      height={popH}
-      border
-      borderStyle="single"
-      borderColor={theme.border2}
+      {...popoverRootProps(docked, { top: popTop, left: popLeft, width: popW, height: popH }, MODAL_CONTENT_Z_INDEX)}
+      // borderStyle alone turns a border on, so a docked popover passes none.
+      {...(docked ? {} : { border: true, borderStyle: 'single' as const, borderColor: theme.border2 })}
       backgroundColor={theme.surface}
-      zIndex={MODAL_CONTENT_Z_INDEX}
       flexDirection="column"
-      title=" Daily summary "
+      title={docked ? undefined : ' Daily summary '}
       titleColor={accentColor}
       titleAlignment="left"
     >
+      {!docked && onDetach ? <PopoverDetachButton theme={theme} onPress={onDetach} /> : null}
       <box height={headerH} paddingX={1} border={['bottom']} borderStyle="single" borderColor={theme.border} flexDirection="row">
         <text wrapMode="none">
           {DAILY_SUMMARY_RANGES.map((entry, index) => (
@@ -187,7 +190,7 @@ export function DailySummaryPopover({
 
       <scrollbox
         ref={scrollRef}
-        width={popW - 2}
+        width={popW - frame}
         height={bodyH}
         scrollY
         backgroundColor={theme.surface}

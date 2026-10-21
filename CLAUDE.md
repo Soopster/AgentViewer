@@ -1348,6 +1348,25 @@ drawn in have one source; `windowLayoutSmoke.ts` checks every arrangement tiles 
   at the area's outer edge docks (`floatDockTarget`, hinted while it moves). **Esc cancels any drag**
   (`cancelPointerGesture`, checked first in the key handler): a window or tab drag ends with no drop,
   a float move or resize returns to its start, and a border drag is undone to its checkpoint.
+- **Popovers break out into windows** (`popoverWindows.ts`; so far analytics, daily summary, the
+  editor and the agent control center). `⌃⇧W` (or the popover's `⧉ window` button: beside the
+  reader, fill this tab, or a new workspace tab) moves an open popover into the layout; `⌃⇧W` on a
+  focused popover window, its `⤢` or "Open full screen" puts it back. Each kind declares:
+  - `pin` — a session-pinned window (analytics) reads **its own copy** of that session's detail
+    (`usePinnedSessionDetail`, the split pane's poll-and-yield loop), so moving the reader never
+    changes what it shows; the pin lives in `windowSurfaceMeta` (workspace state, undo, saved
+    layouts) and the title names it. Returning to full screen opens the pinned session first.
+  - `single` — kinds whose state is a singleton exist once: opening the popover while its window
+    exists focuses the window (an effect on the open flags), and the window body keeps the
+    **root** view namespace so the editor's buffers are the same in both forms.
+  - `keys` — `'capture'` (the editor) is routed ahead of the global shortcuts, like a shell in
+    terminal mode, and only the `⌃B` prefix escapes; a key the editor declines reaches its
+    textarea, which takes the focus slot only while the window is focused (`active`).
+  A docked popover (`dockedPopover.tsx`) fills its box and **passes no border props at all** —
+  `borderStyle` alone turns a border on, so `border={false}` with a style still drew a second
+  frame inside the window's. "Fill this tab" is that window zoomed (`pendingSurfaceZoomRef`, ⌃B m
+  restores); "a new tab" seeds a new workspace runtime (`windowSurfaces`, meta, zoom, the pinned
+  session) before it mounts. `popoverWindowSmoke.tsx` covers each; seven mutations verified.
 - **A surface frame must not clip** (`overflow` is on its body box): its tab strip and title
   buttons sit on the border at `top: -1`, and a clipping frame does not paint them — the `⇥ panel`
   and `×` buttons were invisible (though still clickable) before this.

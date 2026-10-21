@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from './dockedPopover'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
 import type { TuiThemePalette } from '../theme'
@@ -69,6 +70,10 @@ type Props = {
   height: number
   onClose: () => void
   onKeyHandlerReady: (handler: (key: AnalyticsKeyEvent) => void) => void
+  /** Fill the given box inside a window, with no frame of its own. */
+  docked?: boolean
+  /** Shows the `⧉ window` button: break the popover out into a window. */
+  onDetach?: () => void
 }
 
 // ---------------------------------------------------------------------------
@@ -118,7 +123,7 @@ function Sparkline({
 // AnalyticsPopover
 // ---------------------------------------------------------------------------
 
-export function AnalyticsPopover({ detail, theme, width, height, onClose, onKeyHandlerReady }: Props) {
+export function AnalyticsPopover({ detail, theme, width, height, onClose, onKeyHandlerReady, docked = false, onDetach }: Props) {
   const [analytics, setAnalytics] = useState<Analytics | null>(null)
   // Health is a cheap single-pass computation, so it stays on the main thread
   // rather than round-tripping through the analytics worker.
@@ -172,30 +177,26 @@ export function AnalyticsPopover({ detail, theme, width, height, onClose, onKeyH
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
 
-  const popW = Math.min(width - 4, 140)
-  const popH = Math.min(height - 4, 44)
+  const frame = popoverFrameCells(docked)
+  const popW = docked ? width : Math.min(width - 4, 140)
+  const popH = docked ? height : Math.min(height - 4, 44)
   const tabsH = 3
-  const bodyH = popH - tabsH - 2
+  const bodyH = popH - tabsH - frame
   const popTop = Math.floor((height - popH) / 2)
   const popLeft = Math.floor((width - popW) / 2)
 
   return (
     <box
-      position="absolute"
-      top={popTop}
-      left={popLeft}
-      width={popW}
-      height={popH}
-      border
-      borderStyle="single"
-      borderColor={theme.border2}
+      {...popoverRootProps(docked, { top: popTop, left: popLeft, width: popW, height: popH }, 50)}
+      // borderStyle alone turns a border on, so a docked popover passes none.
+      {...(docked ? {} : { border: true, borderStyle: 'single' as const, borderColor: theme.border2 })}
       backgroundColor={theme.surface}
-      zIndex={50}
       flexDirection="column"
-      title=" Session analytics "
+      title={docked ? undefined : ' Session analytics '}
       titleColor={theme.cyan}
       titleAlignment="left"
     >
+      {!docked && onDetach ? <PopoverDetachButton theme={theme} onPress={onDetach} /> : null}
       {/* Tabs */}
       <box
         height={tabsH}
@@ -224,7 +225,7 @@ export function AnalyticsPopover({ detail, theme, width, height, onClose, onKeyH
       {/* Body */}
       <scrollbox
         ref={scrollRef}
-        width={popW - 2}
+        width={popW - frame}
         height={bodyH}
         backgroundColor={theme.surface}
         scrollY
@@ -232,13 +233,13 @@ export function AnalyticsPopover({ detail, theme, width, height, onClose, onKeyH
       >
         {analytics ? (
           <>
-            {pane === 0 ? <SummaryPane a={analytics} health={health} theme={theme} width={popW - 4} /> : null}
-            {pane === 1 ? <TokensPane a={analytics} theme={theme} width={popW - 4} /> : null}
-            {pane === 2 ? <ToolsPane a={analytics} theme={theme} width={popW - 4} /> : null}
-            {pane === 3 ? <ActivityPane a={analytics} theme={theme} width={popW - 4} /> : null}
-            {pane === 4 ? <TimelinePane a={analytics} theme={theme} width={popW - 4} /> : null}
-            {pane === 5 ? <InsightsPane a={analytics} theme={theme} width={popW - 4} /> : null}
-            {pane === 6 ? <ProfilePane a={analytics} theme={theme} width={popW - 4} /> : null}
+            {pane === 0 ? <SummaryPane a={analytics} health={health} theme={theme} width={popW - frame - 2} /> : null}
+            {pane === 1 ? <TokensPane a={analytics} theme={theme} width={popW - frame - 2} /> : null}
+            {pane === 2 ? <ToolsPane a={analytics} theme={theme} width={popW - frame - 2} /> : null}
+            {pane === 3 ? <ActivityPane a={analytics} theme={theme} width={popW - frame - 2} /> : null}
+            {pane === 4 ? <TimelinePane a={analytics} theme={theme} width={popW - frame - 2} /> : null}
+            {pane === 5 ? <InsightsPane a={analytics} theme={theme} width={popW - frame - 2} /> : null}
+            {pane === 6 ? <ProfilePane a={analytics} theme={theme} width={popW - frame - 2} /> : null}
           </>
         ) : (
           <box paddingX={1} paddingY={1}>

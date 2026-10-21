@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { PopoverDetachButton, popoverRootProps } from './dockedPopover'
 import { useWorkspaceContext, useWorkspaceState } from './workspaceContext'
 import { buildEditorFileTree as buildTree, compareEditorPaths, type TreeNode } from './editorFileTree'
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -187,6 +188,16 @@ type Props = {
   syntaxStyle: SyntaxStyle
   onClose: () => void
   onKeyHandlerReady: (handler: (key: EditorKeyEvent) => boolean) => void
+  /** Fill the given box inside a window, with no frame of its own. */
+  docked?: boolean
+  /**
+   * Whether this editor may hold the terminal's one focus slot. A docked editor
+   * in a window that is not focused must not take it from the composer or
+   * another window (OpenTUI has a single focus slot).
+   */
+  active?: boolean
+  /** Shows the `⧉ window` button: break the editor out into a window. */
+  onDetach?: () => void
   onNotice?: (kind: 'info' | 'error', message: string) => void
   onClipboardRead?: () => Promise<string>
   onClipboardWrite?: (text: string) => Promise<void>
@@ -1392,6 +1403,9 @@ export function EditorPopover({
   onClipboardWrite,
   onAskAgent,
   onOpenFileHistory,
+  docked = false,
+  active = true,
+  onDetach,
 }: Props) {
   const workspace = useWorkspaceContext()
   const root = resolve(cwd || process.cwd())
@@ -1722,8 +1736,10 @@ export function EditorPopover({
 
   const explorerShown = explorerVisible && !zenMode
   const explorerWidth = explorerShown ? Math.max(24, Math.min(38, Math.floor(width * 0.23))) : 0
-  // Zen mode drops the popover border, so the buffer gets those columns too.
-  const editorWidth = Math.max(24, width - explorerWidth - (zenMode ? 0 : 2))
+  // Zen mode drops the popover border, so the buffer gets those columns too; a
+  // docked editor has none either (the window frame is its border).
+  const framed = !zenMode && !docked
+  const editorWidth = Math.max(24, width - explorerWidth - (framed ? 2 : 0))
   const footerShortcutRows = useMemo(() => packFooterShortcuts([
     '^S save',
     '^P open',
@@ -1739,8 +1755,8 @@ export function EditorPopover({
   const footerHeight = 1 + footerShortcutRows.length
   // Non-zen chrome: 2 border rows + 1 tab row + 1 status row + the footer.
   // Zen keeps only the status row.
-  const contentTop = zenMode ? 0 : 2
-  const contentHeight = zenMode ? Math.max(6, height - 1) : Math.max(6, height - 4 - footerHeight)
+  const contentTop = zenMode ? 0 : docked ? 1 : 2
+  const contentHeight = zenMode ? Math.max(6, height - 1) : Math.max(6, height - (docked ? 2 : 4) - footerHeight)
 
   useEffect(() => {
     const timer = setInterval(() => setClock(new Date()), 30_000)
@@ -5076,20 +5092,15 @@ export function EditorPopover({
     : vimEnabled && vimMode === 'normal' ? theme.amber : vimEnabled && vimMode === 'visual' ? theme.cyan : theme.violet
   return (
     <box
-      position="absolute"
-      top={0}
-      left={0}
-      width={width}
-      height={height}
+      {...popoverRootProps(docked, { top: 0, left: 0, width, height }, 50)}
       backgroundColor={theme.bg}
-      border={!zenMode}
-      borderStyle="heavy"
-      borderColor={theme.violet}
-      title={zenMode ? undefined : "  EDITOR "}
+      // borderStyle alone turns a border on, so a docked editor passes none.
+      {...(framed ? { border: true, borderStyle: 'heavy' as const, borderColor: theme.violet } : {})}
+      title={framed ? "  EDITOR " : undefined}
       titleColor={theme.violet}
-      zIndex={50}
       flexDirection="column"
     >
+      {framed && onDetach ? <PopoverDetachButton theme={theme} onPress={onDetach} /> : null}
       {zenMode ? null : (
       <box height={1} flexDirection="row" backgroundColor={theme.surface3}>
         {tabs.length === 0 ? <text fg={theme.dim}>  No buffers · choose a file from Explorer</text> : null}
@@ -5142,7 +5153,7 @@ export function EditorPopover({
               id="project-editor-explorer-scrollbox"
               ref={explorerScrollRef}
               flexGrow={1}
-              focused={focusPane === 'explorer'}
+              focused={focusPane === 'explorer' && active}
               scrollAcceleration={scrollAcceleration}
               viewportCulling
               scrollbarOptions={paneScrollbarOptions}
@@ -5201,7 +5212,7 @@ export function EditorPopover({
                   id="project-editor-textarea"
                   ref={setEditorRef}
                   initialValue={activeTab.content}
-                  focused={focusPane === 'editor'}
+                  focused={focusPane === 'editor' && active}
                   flexGrow={1}
                   wrapMode={wordWrapEnabled ? 'word' : 'none'}
                   syntaxStyle={syntaxStyle}

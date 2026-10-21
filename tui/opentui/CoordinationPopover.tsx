@@ -39,6 +39,10 @@ type Props = {
   onCopyJoinCommand?: (runId: string) => void
   onSendDiffNoteToComposer?: (prompt: string) => void
   onKeyHandlerReady: (handler: (key: CoordinationKeyEvent) => void) => void
+  /** Fill the given box inside a window, with no frame of its own. */
+  docked?: boolean
+  /** Shows the `⧉ window` button: break the control center out into a window. */
+  onDetach?: () => void
 }
 
 type Section = 'overview' | 'team' | 'tasks' | 'events'
@@ -109,6 +113,8 @@ export function CoordinationPopover({
   onCopyJoinCommand,
   onSendDiffNoteToComposer,
   onKeyHandlerReady,
+  docked = false,
+  onDetach,
 }: Props) {
   const [runs, setRuns] = useState<ProtocolRun[]>([])
   const [fleetSnapshots, setFleetSnapshots] = useState<Map<string, ProtocolRunSnapshot>>(new Map())
@@ -747,6 +753,8 @@ export function CoordinationPopover({
         theme={theme}
         width={width}
         height={height}
+        docked={docked}
+        onDetach={onDetach}
         runs={navigableRuns}
         runId={runId}
         snapshot={snapshot}

@@ -30,6 +30,8 @@ export type SavedWindowLayout = {
   order?: string[]
   /** Windows sharing a frame as tabs, by window key; absent before tabs. */
   stacks?: string[][]
+  /** What each popover window is pinned to, by window id; absent before popover windows. */
+  surfaceMeta?: Record<string, { session?: string; path?: string }>
 }
 
 type StoreFile = { version: 1; projects: Record<string, SavedWindowLayout[]> }

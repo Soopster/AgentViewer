@@ -31,6 +31,7 @@ import { hasTuiLinkTarget, parseTuiLineTokens, parseTuiLinkTarget } from '../../
 import { SurfacePanel } from './SurfacePanel'
 import { BrowserSurfaceView } from './SurfaceViews'
 import { WindowButton } from './WindowButton'
+import { findPopoverWindow, isPopoverWindowKind, nextSurfaceId, pinFor, POPOVER_WINDOWS, readSurfaceMeta, type PopoverWindowKind, type SurfaceMeta } from './popoverWindows'
 import { addToStack, clampFloatingRect, defaultFloatingRect, liveStacks, removeFromStack, replaceWindowKey, stackNeighbour, stackOf, stackSuccessor, type FloatingRect, type WindowStack } from './windowTabs'
 import { fitWindows, isSurfaceWindowKey, moveWindowBeside, orderWindows, surfaceIdOfKey, surfaceWindowKey, swapWindowSlots } from './windowOrder'
 import { computeResponsiveWindowLayout, type WindowGroupKey, type WindowWeights, windowLayoutRects, windowPreviewLines, readerShareAt, windowDropZone, windowDropZoneRect, windowInDirection, type WindowArrangement, type WindowDirection, type WindowDropZone } from './windowLayout'
@@ -5699,6 +5700,12 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'window-browser', label: 'Browser in a window', key: '', category: 'View' },
   { id: 'window-pull-request', label: 'Pull request in a window', key: '', category: 'View' },
   { id: 'window-agents', label: 'Agents in a window', key: '', category: 'View' },
+  { id: 'window-analytics', label: 'Analytics in a window (this session)', key: '⌃⇧W', category: 'View' },
+  { id: 'window-daily-summary', label: 'Daily summary in a window', key: '', category: 'View' },
+  { id: 'window-editor', label: 'Editor in a window', key: '', category: 'View' },
+  { id: 'window-coordination', label: 'Agent control center in a window', key: '', category: 'View' },
+  { id: 'tab-coordination', label: 'Agent control center in a new tab', key: '', category: 'View' },
+  { id: 'tab-editor', label: 'Editor in a new tab', key: '', category: 'View' },
   { id: 'window-float', label: 'Float the focused window (or dock it)', key: '⌃B f', category: 'View' },
   { id: 'window-float-shell', label: 'Shell in a floating window', key: '', category: 'View' },
   { id: 'surface-placement', label: 'Surface panel beside / under the reader', key: '|', category: 'Transcript' },
@@ -7631,9 +7638,11 @@ const SPLIT_PANE_MIN_WIDTH = 46
 const SPLIT_PANE_MIN_ROWS = 9
 const MIN_READER_ROWS = 12
 const SPLIT_PANE_MAX = 2
-type WindowSurfaceKind = RightPanelSurfaceKind
+// A side-panel surface, or a popover broken out into a window (popoverWindows.ts).
+type WindowSurfaceKind = RightPanelSurfaceKind | PopoverWindowKind
 const WINDOW_SURFACE_TITLES: Record<WindowSurfaceKind, string> = {
   terminal: '❯ Terminal', diff: '± Diff', files: '▤ Files', browser: '◍ Browser', 'pull-request': '⑂ Pull request', agents: '◆ Agents',
+  ...Object.fromEntries(Object.entries(POPOVER_WINDOWS).map(([kind, spec]) => [kind, spec.title])) as Record<PopoverWindowKind, string>,
 }
 // A surface window's id is its kind, or `kind#n` for a further one of a kind
 // that can have several (shells, browsers, file views).
@@ -7643,6 +7652,8 @@ type WindowSurfaceId = string
 // any laid-out window, so no window index can collide with it.
 const FLOATING_PANE_INDEX = 64
 const MULTI_INSTANCE_SURFACES: ReadonlySet<WindowSurfaceKind> = new Set(['terminal', 'browser', 'files'])
+// A popover window kind whose windows pin a session or path: one per pin.
+const isPinnedPopoverKind = (kind: WindowSurfaceKind): kind is PopoverWindowKind => isPopoverWindowKind(kind) && POPOVER_WINDOWS[kind].pin !== null
 const surfaceKindOf = (id: WindowSurfaceId): WindowSurfaceKind => id.split('#')[0] as WindowSurfaceKind
 const surfaceTitle = (id: WindowSurfaceId): string => {
   const instance = id.split('#')[1]
@@ -7686,6 +7697,64 @@ const noopOpenDiffNote = () => {}
 const noopSendDiffNote = () => {}
 const noopSetDiffRow = () => {}
 const noopSetDiffAnchor = () => {}
+
+// A session's detail for a window pinned to it, read like a split pane reads
+// its transcript: yielding to the foreground, re-read only when the transcript
+// moved, polled at the pane cadence. A window pinned to the reader's session
+// still reads its own copy, so moving the reader never changes what it shows.
+function usePinnedSessionDetail(session: Session | null, density: TuiDensity, showToolCalls: boolean, shouldYield: () => boolean) {
+  const [detail, setDetail] = useState<TuiSessionDetail | null>(null)
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error' | 'gone'>(session ? 'loading' : 'gone')
+  const key = session ? `${session.provider ?? 'claude'}:${session.sessionId}` : null
+  useEffect(() => {
+    if (!session || !key) { setStatus('gone'); setDetail(null); return }
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let lastModified: number | undefined
+    const load = async () => {
+      if (shouldYield()) { timer = setTimeout(() => { void load() }, SPLIT_PANE_YIELD_RETRY_MS); return }
+      const modified = sessionTranscriptUpdatedAt(session)
+      if (lastModified !== undefined && modified !== undefined && modified <= lastModified) {
+        timer = setTimeout(() => { void load() }, SPLIT_PANE_POLL_MS)
+        return
+      }
+      try {
+        const next = await readTuiSessionDetailAsync(session, density, showToolCalls)
+        if (cancelled) return
+        setDetail(next)
+        setStatus('ready')
+        lastModified = modified
+      } catch {
+        if (!cancelled) setStatus('error')
+      } finally {
+        if (!cancelled) timer = setTimeout(() => { void load() }, SPLIT_PANE_POLL_MS)
+      }
+    }
+    setStatus('loading')
+    void load()
+    return () => { cancelled = true; if (timer) clearTimeout(timer) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, density, showToolCalls])
+  return { detail, status }
+}
+
+// Analytics in a window: the pinned session's numbers, whatever the reader shows.
+function PinnedAnalyticsWindow({ session, density, showToolCalls, shouldYield, theme, width, height, onClose, onKeyHandlerReady }: {
+  session: Session | null
+  density: TuiDensity
+  showToolCalls: boolean
+  shouldYield: () => boolean
+  theme: TuiThemePalette
+  width: number
+  height: number
+  onClose: () => void
+  onKeyHandlerReady: (handler: (key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) => void
+}) {
+  const { detail, status } = usePinnedSessionDetail(session, density, showToolCalls, shouldYield)
+  if (status === 'gone') return <text fg={theme.dim}>  That session is no longer available.</text>
+  if (!detail) return <text fg={theme.dim}>{status === 'error' ? '  Could not read the session.' : '  Loading…'}</text>
+  return <AnalyticsPopover docked detail={detail} theme={theme} width={width} height={height} onClose={onClose} onKeyHandlerReady={onKeyHandlerReady} />
+}
 
 export function shouldPollSplitPaneDetail(
   previous: { key: string; variant: string; lastModified: number } | null,
@@ -9290,7 +9359,11 @@ function OpenTuiWorkspace() {
   // the session panes. A kind lives in one place: here or in the side panel,
   // because both would hand the same key-handler refs to two mounted views.
   const [windowSurfaces, setWindowSurfaces] = useWorkspaceState<WindowSurfaceId[]>('windowSurfaces', [])
+  // What each popover window is pinned to (popoverWindows.ts), by window id.
+  const [windowSurfaceMeta, setWindowSurfaceMeta] = useWorkspaceState<Record<WindowSurfaceId, SurfaceMeta>>('windowSurfaceMeta', {})
   const pendingSurfaceFocusRef = useRef<WindowSurfaceId | null>(null)
+  // Set with a pending focus: once the window has its place, zoom it to the whole area.
+  const pendingSurfaceZoomRef = useRef(false)
   // Where surface windows sit among the session panes (windowOrder.ts): the
   // session pins still decide the sessions and their order.
   const [windowOrder, setWindowOrder] = useWorkspaceState<string[]>('windowOrder', [])
@@ -20088,7 +20161,7 @@ function OpenTuiWorkspace() {
       readerLast: splitReaderLast, readerShare: splitReaderShare,
       secondaryShare: splitSecondaryShare, bottomShare: splitBottomShare, weights: splitWeights,
       count: splitPaneCount, panes: [...splitPinnedKeys], surfaces: [...windowSurfaces], order: [...windowOrder],
-      stacks: windowStacks.map((stack) => [...stack]), floating: floatingWindow,
+      stacks: windowStacks.map((stack) => [...stack]), floating: floatingWindow, surfaceMeta: { ...windowSurfaceMeta },
       reader: selectedSessionKey, zoom: windowZoom, fullscreen: fullscreenMode,
       coordinatorRunId: coordinatorWorkspaceRunId,
     },
@@ -20133,6 +20206,7 @@ function OpenTuiWorkspace() {
     setWindowOrder(layout.order ?? [])
     setWindowStacks(layout.stacks ?? [])
     setFloatingWindow(layout.floating ?? null)
+    setWindowSurfaceMeta(layout.surfaceMeta ?? {})
     setWindowZoom(layout.zoom)
     setFullscreenMode(layout.fullscreen)
     setSplitFocusIndex(previous.focus)
@@ -20312,14 +20386,18 @@ function OpenTuiWorkspace() {
   })
   const openSurfaceWindowMenu = useEffectEvent((surface: WindowSurfaceId, index: number, point: { x: number; y: number }) => {
     const kind = surfaceKindOf(surface)
-    setContextMenu({ ...point, title: surfaceTitle(surface), items: [
+    setContextMenu({ ...point, title: windowSurfaceTitle(surface), items: [
+      ...(isPopoverWindowKind(kind) ? [
+        { label: 'Open full screen', hint: '⌃⇧W', run: () => returnPopoverWindow(surface) },
+        { label: 'Move to a new tab', run: () => { const pin = windowSurfaceMeta[surface] ?? {}; closeSurfaceWindow(surface); openPopoverInNewTab(kind, pin) } },
+      ] : []),
       { label: windowSurfacePeek || windowZoom === index ? 'Restore the layout' : 'Zoom this window', hint: '⌃B m', run: () => windowSurfacePeek ? toggleWindowZoom() : setWindowZoom(windowZoom === index ? null : index) },
-      ...(MULTI_INSTANCE_SURFACES.has(kind) ? [{ label: `Open another ${WINDOW_SURFACE_TITLES[kind].slice(2)} window`, run: () => openSurfaceWindow(kind, { another: true }) }] : []),
+      ...(MULTI_INSTANCE_SURFACES.has(kind) && !isPopoverWindowKind(kind) ? [{ label: `Open another ${WINDOW_SURFACE_TITLES[kind].slice(2)} window`, run: () => openSurfaceWindow(kind, { another: true }) }] : []),
       ...(index === FLOATING_PANE_INDEX
         ? [{ label: 'Dock into the layout', hint: '⌃B f', run: () => dockFloatingWindow() }]
         : [{ label: 'Float this window', hint: '⌃B f', run: () => floatWindowKey(surfaceWindowKey(surface)) }]),
       ...(windowStackFor(surfaceWindowKey(surface)) ? [{ label: 'Break this tab out', hint: '⌃B !', run: () => breakOutWindowTab(surfaceWindowKey(surface)) }] : []),
-      { label: 'Move to the side panel', run: () => moveSurfaceToPanel(surface) },
+      ...(isPopoverWindowKind(kind) ? [] : [{ label: 'Move to the side panel', run: () => moveSurfaceToPanel(surface) }]),
       { label: 'Close window', danger: true, run: () => closeSurfaceWindow(surface) },
     ] })
   })
@@ -20342,6 +20420,7 @@ function OpenTuiWorkspace() {
     surfaces: windowSurfaces,
     order: orderedWindowKeys,
     stacks: liveWindowStacks,
+    surfaceMeta: windowSurfaceMeta,
   }))
   const saveCurrentWindowLayout = useEffectEvent((name?: string) => {
     try {
@@ -20414,6 +20493,7 @@ function OpenTuiWorkspace() {
     const tabSessions = (saved.stacks ?? []).flat().flatMap((key) => (known.has(key) && !panes.some((pane) => sessionKey(pane) === key) ? [known.get(key)!] : []))
     if (tabSessions.length > 0) setOpenTabSessions((prev) => [...prev, ...tabSessions.filter((session) => !prev.some((tab) => sessionKey(tab) === sessionKey(session)))])
     setWindowStacks(saved.stacks ?? [])
+    setWindowSurfaceMeta(readSurfaceMeta(saved.surfaceMeta))
     setFloatingWindow(null)
     setWindowZoom(null)
     if (reader && sessionKey(reader) !== selectedSessionKey) selectTabSession(reader)
@@ -20465,15 +20545,110 @@ function OpenTuiWorkspace() {
     if (windowSurfacePeek === surface) setWindowSurfacePeek(null)
     checkpointWindowLayout()
     setWindowSurfaces((current) => current.filter((entry) => entry !== surface))
+    setWindowSurfaceMeta((current) => { if (!(surface in current)) return current; const next = { ...current }; delete next[surface]; return next })
     windowSurfaceKeysRef.current.delete(surface)
     windowSurfaceCaptureRef.current.delete(surface)
     setSplitFocusIndex(null)
   })
+  // A window's title, naming what it is pinned to.
+  const windowSurfaceTitle = (surface: WindowSurfaceId): string => {
+    const meta = windowSurfaceMeta[surface]
+    const base = WINDOW_SURFACE_TITLES[surfaceKindOf(surface)] ?? surface
+    if (meta?.session) {
+      const session = openTabByKey.get(meta.session) ?? sessions.find((entry) => sessionKey(entry) === meta.session)
+      return `${base} · ${session ? fitText(formatSessionTitle(session), 32).trimEnd() : 'session gone'}`
+    }
+    if (meta?.path) return `${base} · ${meta.path}`
+    return surfaceTitle(surface)
+  }
+  const pinnedSessionOf = (surface: WindowSurfaceId): Session | null => {
+    const key = windowSurfaceMeta[surface]?.session
+    if (!key) return null
+    return openTabByKey.get(key) ?? sessions.find((entry) => sessionKey(entry) === key) ?? null
+  }
+  // The popover of a kind, open or closed: what a window of it replaces.
+  const setPopoverOpen = (kind: PopoverWindowKind, open: boolean) => {
+    if (kind === 'analytics') setAnalyticsOpen(open)
+    else if (kind === 'daily-summary') setDailySummaryOpen(open)
+    else if (kind === 'editor') setEditorOpen(open)
+    else if (kind === 'coordination') setCoordBoardOpen(open)
+  }
+  const openPopoverKind = (): PopoverWindowKind | null => (analyticsOpen ? 'analytics' : dailySummaryOpen ? 'daily-summary' : editorOpen ? 'editor' : coordBoardOpen ? 'coordination' : null)
+  // A popover into a window, pinned to the reader's session (or nothing),
+  // focused. A window already showing it for that pin is focused instead.
+  // `placement`: beside the reader (a window in the layout), filling this tab's
+  // window area (that window zoomed; ⌃B m restores the layout), or a new
+  // workspace tab of its own.
+  const openPopoverWindow = useEffectEvent((kind: PopoverWindowKind, pin: SurfaceMeta = pinFor(kind, { session: selectedSessionKey, path: null }), placement: 'beside' | 'fill' | 'tab' = 'beside') => {
+    setPopoverOpen(kind, false)
+    if (placement === 'tab') { openPopoverInNewTab(kind, pin); return }
+    if (placement === 'fill') pendingSurfaceZoomRef.current = true
+    const parked = [...parkedWindowKeysRef.current].filter(isSurfaceWindowKey).map(surfaceIdOfKey)
+    const existing = findPopoverWindow([...windowSurfaces, ...parked], windowSurfaceMeta, kind, pin)
+    if (existing) {
+      if (parked.includes(existing)) activateWindowTab(surfaceWindowKey(existing))
+      pendingSurfaceFocusRef.current = existing
+      setFocusedPane('messages')
+      setWindowSurfaces((current) => [...current])
+      return
+    }
+    const surface = nextSurfaceId(kind, new Set([...windowSurfaces, ...parked]))
+    checkpointWindowLayout()
+    setWindowSurfaceMeta((current) => ({ ...current, [surface]: pin }))
+    setWindowSurfaces((current) => (current.includes(surface) ? current : [...current, surface]))
+    if (splitArrangement === 'split' && splitPaneCount + windowSurfaces.length + 1 > SPLIT_PANE_MAX) setWindowArrangement('main-stack', splitReaderLast)
+    pendingSurfaceFocusRef.current = surface
+    setFocusedPane('messages')
+    showNotice('info', `${POPOVER_WINDOWS[kind].title.slice(2)} in a window · ⌃⇧W or ⤢ for full screen`)
+  })
+  // A popover in a new workspace tab: the tab's layout is that one window,
+  // filling the area — split, tab or float it there like any other.
+  const openPopoverInNewTab = useEffectEvent((kind: PopoverWindowKind, pin: SurfaceMeta) => {
+    const controller = workspaceContext.controller
+    const pinned = pin.session ? openTabByKey.get(pin.session) ?? sessions.find((entry) => sessionKey(entry) === pin.session) ?? null : null
+    const workspace = controller.addWorkspace(workspaceContext.space.id)
+    if (!workspace) { showNotice('error', 'Could not open a new tab'); return }
+    const runtime = controller.runtime(workspace)
+    runtime.set('workspaceLaunched', true)
+    runtime.set('windowSurfaces', [kind])
+    runtime.set('windowSurfaceMeta', { [kind]: pin })
+    runtime.set('windowZoom', 0)
+    runtime.set('splitFocusIndex', 0)
+    if (pinned) {
+      runtime.set('openTabSessions', [pinned])
+      runtime.set('selectedSessionKey', sessionKey(pinned))
+    }
+    controller.rename(workspace.id, POPOVER_WINDOWS[kind].title.slice(2))
+  })
+  // Where the ⧉ button puts a popover: one menu for every popover.
+  const offerPopoverPlacement = useEffectEvent((kind: PopoverWindowKind) => {
+    setContextMenu({ x: Math.max(0, width - 34), y: 1, title: POPOVER_WINDOWS[kind].title, items: [
+      { label: 'Beside the reader', hint: '⌃⇧W', run: () => openPopoverWindow(kind) },
+      { label: 'Fill this tab', run: () => openPopoverWindow(kind, undefined, 'fill') },
+      { label: 'In a new tab', run: () => openPopoverWindow(kind, undefined, 'tab') },
+    ] })
+  })
+  // A popover window back to full screen: on its pinned session, in the reader.
+  const returnPopoverWindow = useEffectEvent((surface: WindowSurfaceId) => {
+    const kind = surfaceKindOf(surface)
+    if (!isPopoverWindowKind(kind)) return
+    const pinned = pinnedSessionOf(surface)
+    closeSurfaceWindow(surface)
+    // A pinned session may have left the tab strip since; then the rail opens it.
+    if (pinned && sessionKey(pinned) !== selectedSessionKey) {
+      if (openTabByKey.has(sessionKey(pinned))) selectTabSession(pinned)
+      else selectSidebarSession(pinned)
+    }
+    setPopoverOpen(kind, true)
+  })
   const moveSurfaceToPanel = useEffectEvent((surface: WindowSurfaceId) => {
+    const kind = surfaceKindOf(surface)
+    // A popover window goes back to full screen, not to the side panel.
+    if (isPopoverWindowKind(kind)) { returnPopoverWindow(surface); return }
     closeSurfaceWindow(surface)
     setSurfacePanelOpen(true)
     setSurfacePanelFocused(true)
-    setSurfacePanel((current) => openSurfaceIn(current, surfaceKindOf(surface)))
+    setSurfacePanel((current) => openSurfaceIn(current, kind))
   })
 
   // The choice the window menu shows as current.
@@ -21204,6 +21379,17 @@ function OpenTuiWorkspace() {
     else focusSplitPane(next - 1)
   })
 
+  // Opening a popover that already has a window for this pin goes to the window:
+  // a singleton must not exist twice, and two copies of one view is a surprise.
+  useEffect(() => {
+    const kind = openPopoverKind()
+    if (!kind) return
+    const parked = [...parkedWindowKeysRef.current].filter(isSurfaceWindowKey).map(surfaceIdOfKey)
+    const pin = pinFor(kind, { session: selectedSessionKey, path: null })
+    if (!findPopoverWindow([...windowSurfaces, ...parked], windowSurfaceMeta, kind, pin)) return
+    openPopoverWindow(kind, pin)
+  }, [analyticsOpen, dailySummaryOpen, editorOpen, coordBoardOpen])
+
   // A surface window just opened takes focus once it has a place in the layout.
   useEffect(() => {
     const pending = pendingSurfaceFocusRef.current
@@ -21212,6 +21398,7 @@ function OpenTuiWorkspace() {
     if (index < 0) return
     pendingSurfaceFocusRef.current = null
     setSplitFocusIndex(index)
+    if (pendingSurfaceZoomRef.current) { pendingSurfaceZoomRef.current = false; setWindowZoom(index) }
   })
 
   // A zoom ends when the window it names goes away.
@@ -21571,6 +21758,24 @@ function OpenTuiWorkspace() {
         break
       case 'window-agents':
         openSurfaceWindow('agents')
+        break
+      case 'window-analytics':
+        openPopoverWindow('analytics')
+        break
+      case 'window-daily-summary':
+        openPopoverWindow('daily-summary')
+        break
+      case 'window-editor':
+        openPopoverWindow('editor')
+        break
+      case 'window-coordination':
+        openPopoverWindow('coordination')
+        break
+      case 'tab-coordination':
+        openPopoverWindow('coordination', undefined, 'tab')
+        break
+      case 'tab-editor':
+        openPopoverWindow('editor', undefined, 'tab')
         break
       case 'window-float':
         toggleFloatingFocused()
@@ -22085,6 +22290,16 @@ function OpenTuiWorkspace() {
       action()
     }
     if (key.name === 'escape' && cancelPointerGesture()) { key.preventDefault(); key.stopPropagation(); showNotice('info', 'Drag cancelled'); return }
+    // ⌃⇧W: the open popover into a window, or a focused popover window back to full screen.
+    if (isCtrlShift('w')) {
+      const popover = openPopoverKind()
+      if (popover) { handled(() => openPopoverWindow(popover)); return }
+      if (focusedWindowSurfaceKind && isPopoverWindowKind(focusedWindowSurfaceKind) && focusedWindowSurface) {
+        const surface = focusedWindowSurface
+        handled(() => returnPopoverWindow(surface))
+        return
+      }
+    }
     if (spacesMenuOpen) { if (spacesKeyRef.current?.(key) !== false) { key.preventDefault(); key.stopPropagation() } return }
     if (!workspaceLaunched && !key.ctrl && (key.name === 'return' || /^[1-4]$/.test(sequence))) {
       handled(() => {
@@ -22431,6 +22646,15 @@ function OpenTuiWorkspace() {
     // a shell (and tmux inside it) needs too.
     const windowCapture = focusedWindowSurface ? windowSurfaceCaptureRef.current.get(focusedWindowSurface) : undefined
     const windowKeys = focusedWindowSurface ? windowSurfaceKeysRef.current.get(focusedWindowSurface) : undefined
+    // A capturing popover window (the editor) takes every key but the ⌃B prefix,
+    // ahead of the global shortcuts, as a shell in terminal mode does. A key it
+    // declines (false) goes on to its focused input.
+    if (focusedWindowSurfaceKind && isPopoverWindowKind(focusedWindowSurfaceKind) && POPOVER_WINDOWS[focusedWindowSurfaceKind].keys === 'capture'
+      && !splitChordPending && !(key.ctrl && key.name === 'b')) {
+      const consumed = windowKeys?.(key)
+      if (consumed !== false) handled(() => {})
+      return
+    }
     if (focusedWindowSurfaceKind === 'terminal' && windowCapture && windowCapture !== 'none') {
       if (windowCapture === 'terminal' || key.name === 'escape') {
         handled(() => { windowKeys?.(key) })
@@ -25626,7 +25850,7 @@ function OpenTuiWorkspace() {
         borderStyle="single"
         borderColor={focused ? theme.cyan : theme.border}
         backgroundColor={theme.surface}
-        title={` ${surfaceTitle(surface)} `}
+        title={` ${windowSurfaceTitle(surface)} `}
         titleColor={focused ? theme.cyan : theme.dim}
         onMouseDown={(event) => {
           if (event.button === 2) {
@@ -25644,7 +25868,7 @@ function OpenTuiWorkspace() {
       >
         {renderWindowTabs(surfaceWindowKey(surface), index, size.width, -1, 1, 16)}
         <box position="absolute" top={-1} right={1} height={1} flexDirection="row" zIndex={3}>
-          <WindowButton id={`surface-window-to-panel:${surface}`} label=" ⇥ panel " theme={theme} onPress={() => moveSurfaceToPanel(surface)} />
+          <WindowButton id={`surface-window-to-panel:${surface}`} label={isPopoverWindowKind(surfaceKindOf(surface)) ? ' ⤢ ' : ' ⇥ panel '} theme={theme} onPress={() => moveSurfaceToPanel(surface)} />
           <WindowButton id={`surface-window-close:${surface}`} label=" × " theme={theme} tone="danger" onPress={() => closeSurfaceWindow(surface)} />
         </box>
         <box flexGrow={1} overflow="hidden">
@@ -25875,9 +26099,23 @@ function OpenTuiWorkspace() {
   })
 
   // One surface's content, for the side panel or a window in the layout.
+  // The control center's "new run": the same setup from its popover and its window.
+  const startCoordinationRun = () => {
+    const baseCwd = selectedSession?.cwd ?? sessionDetail?.info?.cwd ?? process.cwd()
+    setCoordDraft('')
+    setCoordError(null)
+    setCoordPlaybookName(null)
+    setCoordPlaybookArgsDraft('')
+    setCoordProviderOverride(null)
+    setCoordTeammateProviderOverride(null)
+    setCoordProviderPoolIndex(0)
+    setCoordModalFocus('prompt')
+    setCoordModalOpen(true)
+    void loadCoordPlaybooks(baseCwd)
+  }
   // `slot` is the window id when the surface is a window: its key handler and
   // capture are then that window's own, not the side panel's.
-  const renderSurfaceBodyInner = (kind: RightPanelSurfaceKind, box: { width: number; height: number }, close: () => void, focused: boolean, slot?: WindowSurfaceId): React.ReactNode => {
+  const renderSurfaceBodyInner = (kind: WindowSurfaceKind, box: { width: number; height: number }, close: () => void, focused: boolean, slot?: WindowSurfaceId): React.ReactNode => {
     type SurfaceKeyHandler = (key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => unknown
     const keysReady = (panelRef: { current: SurfaceKeyHandler | null }) => (handler: SurfaceKeyHandler) => {
       if (slot) windowSurfaceKeysRef.current.set(slot, handler)
@@ -26009,10 +26247,89 @@ function OpenTuiWorkspace() {
             liveSubagentText={liveSubagentText}
           />
         )
+      // Popovers in windows: `close` there leaves the window (Esc, q), so the
+      // popover's own close keys hand focus back rather than closing it.
+      case 'analytics':
+        return (
+          <PinnedAnalyticsWindow
+            session={slot ? pinnedSessionOf(slot) : selectedSession}
+            density={density}
+            showToolCalls={showToolCalls}
+            shouldYield={splitPaneShouldYield}
+            theme={theme}
+            width={box.width}
+            height={box.height}
+            onClose={focusReaderFromSplit}
+            onKeyHandlerReady={keysReady({ current: null })}
+          />
+        )
+      case 'coordination':
+        return (
+          <CoordinationPopover
+            docked
+            theme={theme}
+            width={box.width}
+            height={box.height}
+            initialRunId={coordBoardRunId}
+            onOpenSession={openCoordinationAgentSession}
+            onWatchRun={watchCoordinatorRun}
+            onNewRun={startCoordinationRun}
+            onClose={focusReaderFromSplit}
+            onNotice={showNotice}
+            onCopyJoinCommand={copyCoordinationJoinCommand}
+            onSendDiffNoteToComposer={(prompt) => {
+              appendDiffCommentPromptToComposer(prompt)
+              showNotice('info', 'Agent diff comment added to composer')
+            }}
+            onKeyHandlerReady={keysReady({ current: null })}
+          />
+        )
+      case 'daily-summary':
+        return (
+          <DailySummaryPopover
+            docked
+            theme={theme}
+            accentColor={composerAccentColor}
+            width={box.width}
+            height={box.height}
+            waiting={attentionItems.map((item) => ({ provider: item.provider, sessionId: item.sessionId, kind: item.kind, text: item.title }))}
+            onClose={focusReaderFromSplit}
+            onNotice={showNotice}
+            onKeyHandlerReady={keysReady({ current: null })}
+            onCopy={(text) => { void writeClipboard(text, renderer) }}
+            onSendToComposer={(text) => appendDiffCommentPromptToComposer(text)}
+          />
+        )
+      case 'editor':
+        return (
+          <EditorPopover
+            docked
+            active={focused}
+            cwd={gitRepoCwd}
+            initialPath={editorInitialPath}
+            initialLine={editorInitialLine}
+            theme={theme}
+            width={box.width}
+            height={box.height}
+            syntaxStyle={handoffBriefSyntaxStyle}
+            onClose={focusReaderFromSplit}
+            onKeyHandlerReady={keysReady({ current: null })}
+            onNotice={(kind, text) => showNotice(kind, text)}
+            onClipboardRead={readClipboardText}
+            onClipboardWrite={(text) => writeClipboard(text, renderer)}
+            onAskAgent={(request) => {
+              void askAgentAboutSelection({ ...request, filePath: request.path, origin: 'editor selection' })
+              return false
+            }}
+            onOpenFileHistory={gitRepoCwd ? (path) => setFileHistoryPath(path) : undefined}
+          />
+        )
     }
   }
 
-  const renderSurfaceBody = (kind: RightPanelSurfaceKind, box: { width: number; height: number }, close: () => void, focused: boolean, slot?: WindowSurfaceId) => <WorkspaceViewContext.Provider value={`surface:${slot ?? 'panel'}:${kind}`}>{renderSurfaceBodyInner(kind, box, close, focused, slot)}</WorkspaceViewContext.Provider>
+  // A single popover kind keeps the root's state namespace, so its window and its
+  // full-screen form are one view (the editor's buffers survive either move).
+  const renderSurfaceBody = (kind: WindowSurfaceKind, box: { width: number; height: number }, close: () => void, focused: boolean, slot?: WindowSurfaceId) => <WorkspaceViewContext.Provider value={isPopoverWindowKind(kind) && POPOVER_WINDOWS[kind].single ? 'root' : `surface:${slot ?? 'panel'}:${kind}`}>{renderSurfaceBodyInner(kind, box, close, focused, slot)}</WorkspaceViewContext.Provider>
 
   // One element for both placements, so the panel keeps its state when it moves.
   const surfacePanelElement = surfacePanelVisible ? (
@@ -27647,6 +27964,7 @@ function OpenTuiWorkspace() {
             setEditorInitialLine(null)
           }}
           onKeyHandlerReady={(handler) => { editorKeyHandlerRef.current = handler }}
+          onDetach={() => offerPopoverPlacement('editor')}
           onNotice={(kind, text) => showNotice(kind, text)}
           onClipboardRead={readClipboardText}
           onClipboardWrite={(text) => writeClipboard(text, renderer)}
@@ -27754,6 +28072,7 @@ function OpenTuiWorkspace() {
           height={height}
           onClose={() => setAnalyticsOpen(false)}
           onKeyHandlerReady={(handler) => { analyticsKeyHandlerRef.current = handler }}
+          onDetach={() => offerPopoverPlacement('analytics')}
         />
       ) : null}
 
@@ -27905,6 +28224,7 @@ function OpenTuiWorkspace() {
           onClose={() => setDailySummaryOpen(false)}
           onNotice={showNotice}
           onKeyHandlerReady={(handler) => { dailySummaryKeyHandlerRef.current = handler }}
+          onDetach={() => offerPopoverPlacement('daily-summary')}
           onCopy={(text) => { void writeClipboard(text, renderer) }}
           onSendToComposer={(text) => {
             appendDiffCommentPromptToComposer(text)
@@ -29073,19 +29393,7 @@ function OpenTuiWorkspace() {
           initialRunId={coordBoardRunId}
           onOpenSession={openCoordinationAgentSession}
           onWatchRun={watchCoordinatorRun}
-          onNewRun={() => {
-            const baseCwd = selectedSession?.cwd ?? sessionDetail?.info?.cwd ?? process.cwd()
-            setCoordDraft('')
-            setCoordError(null)
-            setCoordPlaybookName(null)
-            setCoordPlaybookArgsDraft('')
-            setCoordProviderOverride(null)
-            setCoordTeammateProviderOverride(null)
-            setCoordProviderPoolIndex(0)
-            setCoordModalFocus('prompt')
-            setCoordModalOpen(true)
-            void loadCoordPlaybooks(baseCwd)
-          }}
+          onNewRun={startCoordinationRun}
           onClose={() => setCoordBoardOpen(false)}
           onNotice={showNotice}
           onCopyJoinCommand={copyCoordinationJoinCommand}
@@ -29094,6 +29402,7 @@ function OpenTuiWorkspace() {
             showNotice('info', 'Agent diff comment added to composer')
           }}
           onKeyHandlerReady={(handler) => { coordBoardKeyHandlerRef.current = handler }}
+          onDetach={() => offerPopoverPlacement('coordination')}
         />
       ) : null}
 
