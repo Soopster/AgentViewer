@@ -7995,3 +7995,55 @@ button.av-session-viz-graph-node:disabled {
 .av-coord-ask-text {
   white-space: pre-wrap;
 }
+
+/* Git workspace */
+.git-workspace-host { position: fixed; inset: 0; z-index: 1000; background: #0008; display: flex; padding: 8px; color: var(--text); }
+.git-workspace-host.docked { position: relative; inset: auto; z-index: auto; padding: 0; flex: 1; min-width: 0; min-height: 0; background: var(--surface); }
+.git-workspace { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; overflow: hidden; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+.git-workspace-header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; flex-shrink: 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.git-workspace-path { flex: 1; min-width: 50px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--text-3); }
+.git-workspace-body { display: flex; flex: 1; min-height: 0; }
+.git-workspace-sidebar { width: clamp(230px, 28%, 420px); min-width: 200px; max-width: 55%; resize: horizontal; overflow: auto; border-right: 1px solid var(--border); flex-shrink: 0; }
+.git-workspace-section { padding: 10px; display: flex; flex-direction: column; gap: 7px; border-bottom: 1px solid var(--border); }
+.git-workspace-section h3 { display: flex; justify-content: space-between; color: var(--cyan); font-size: 12px; font-weight: 600; margin: 0; }
+.git-workspace-section > span { color: var(--text-3); font-size: 11px; }
+.git-workspace-list { display: flex; flex-direction: column; overflow: auto; max-height: 34vh; }
+.git-workspace-list.compact { max-height: 14vh; }
+.git-workspace-list button { text-align: left; padding: 4px 6px; border: 0; background: transparent; color: var(--text-2); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; border-radius: 4px; min-height: 27px; flex-shrink: 0; }
+.git-workspace-list button:hover, .git-workspace-list button[aria-current=true] { background: var(--surface-3); color: var(--cyan); }
+.git-workspace-file { display: flex; align-items: center; gap: 8px; }
+.git-workspace-file code { color: var(--amber); white-space: pre; flex-shrink: 0; }
+.git-workspace-file span { overflow: hidden; text-overflow: ellipsis; }
+.git-workspace-detail { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+.git-workspace-detail-header { padding: 8px 12px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; flex-shrink: 0; }
+.git-workspace-detail-header > strong { flex: 1; overflow-wrap: anywhere; }
+.git-workspace-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.git-workspace-diff { flex: 1; min-height: 80px; overflow: auto; }
+.git-workspace-diff pre { padding: 12px; white-space: pre-wrap; font-size: 12px; }
+.git-workspace-empty { padding: 12px; color: var(--text-3); font-size: 12px; }
+.git-workspace-patch { height: 100%; overflow: auto; position: relative; font-size: 12px; line-height: 24px; font-family: 'IBM Plex Mono', monospace; }
+.git-workspace-patch code, .git-workspace-patch label { white-space: pre; min-height: 22px; }
+.git-workspace-patch label { display: flex; align-items: center; gap: 8px; padding-right: 10px; }
+.git-workspace-patch .addition { color: var(--green); background: color-mix(in srgb, var(--green) 8%, var(--surface)); }
+.git-workspace-patch .deletion { color: var(--red); background: color-mix(in srgb, var(--red) 8%, var(--surface)); }
+.git-workspace-hunk { text-align: left; background: var(--surface-2); color: var(--cyan); border: 1px solid var(--border); cursor: pointer; padding: 0 6px; height: 24px; white-space: nowrap; }
+.git-workspace-commit { padding: 10px 12px; display: flex; flex-direction: column; gap: 7px; border-top: 1px solid var(--border); flex-shrink: 0; font-size: 12px; max-height: 35%; overflow: auto; }
+.git-workspace-commit p { margin: 0; color: var(--amber); font-size: 11px; }
+.git-workspace-amend { display: flex; align-items: center; gap: 6px; margin-right: auto; }
+.git-workspace-error { padding: 8px 12px; color: var(--red); background: var(--surface-2); font-size: 12px; flex-shrink: 0; }
+.git-workspace footer { border-top: 1px solid var(--border); padding: 6px 12px; font-size: 11px; color: var(--text-3); max-height: 90px; overflow: auto; flex-shrink: 0; }
+@media (max-width: 700px) { .git-workspace-sidebar { width: 200px; min-width: 150px; } .git-workspace-header { gap: 5px; } }
+
+/* Git action forms and conflict resolution */
+.git-workflow-panel { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
+.git-workflow-content { padding: 16px; display: flex; flex-direction: column; gap: 14px; overflow: auto; font-size: 13px; }
+.git-workflow-content > p { color: var(--text-2); margin: 0; }
+.git-workflow-content pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; background: var(--surface-2); padding: 12px; border: 1px solid var(--border); border-radius: 6px; }
+.git-workflow-options { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.git-workflow-fields { display: flex; flex-direction: column; gap: 12px; max-width: 620px; }
+.git-workflow-field { display: flex; flex-direction: column; gap: 6px; }
+.git-workflow-check { display: flex; align-items: center; gap: 8px; }
+.git-workflow-paths { display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow: auto; border: 1px solid var(--border); padding: 10px; }
+.git-conflict-version { min-height: 60px; max-height: 220px; overflow: auto; }
+
+.git-workspace-detail-header > strong { min-width: 120px; }

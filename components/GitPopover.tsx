@@ -17,6 +17,7 @@ import { DIFF_SOURCE_HEAD_ITEMS, diffSourceKey, diffSourceLabel, isSameSelection
 import type { GitStatusEntry as TreeGitStatusEntry } from '@pierre/trees'
 import { getCurrentTheme, subscribeTheme, THEME_META, type Theme } from '@/lib/themes'
 import { PierrePatchDiffView, type PierreAnnotationMetadata, type PierreChangeStyle, type PierreDiffAnnotation, type PierreDiffPresentation, type PierreDiffStyle, type PierreInlineDiffStyle } from './PierreDiffView'
+import { GitWorkspace } from './git/GitWorkspace'
 import { readJsonResponse } from '@/lib/httpResponse'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -747,6 +748,7 @@ const PANE_ICONS: Record<PaneId, ReactNode> = {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 type Props = {
+  onWorkspace?: () => void
   open: boolean
   onClose: () => void
   cwd: string
@@ -757,7 +759,18 @@ type Props = {
   variant?: SurfaceVariant
 }
 
-export default function GitPopover({ open, onClose, cwd, sessionId, variant }: Props) {
+export default function GitPopover(props: Props) {
+  if (!props.open) return null
+  return <GitPopupContent {...props} />
+}
+
+function GitPopupContent(props: Props) {
+  const [mode, setMode] = useState<'workspace' | 'review'>('review')
+  if (mode === 'workspace') return <GitWorkspace key={props.cwd} cwd={props.cwd} variant={props.variant} onClose={props.onClose} onReview={() => setMode('review')} />
+  return <GitReviewPopover {...props} onWorkspace={() => setMode('workspace')} />
+}
+
+export function GitReviewPopover({ open, onClose, cwd, sessionId, variant, onWorkspace }: Props) {
   const [data, setData] = useState<GitData | null>(null)
   const [loading, setLoading] = useState(false)
   const [pane, setPane] = useState<PaneId>(2)
@@ -1615,7 +1628,7 @@ export default function GitPopover({ open, onClose, cwd, sessionId, variant }: P
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
               <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)', letterSpacing: '0.01em' }}>
-                Git status
+                Git review
               </div>
               {loading ? (
                 <span style={{ fontSize: 12, color: 'var(--text-3)' }}>Loading…</span>
@@ -1670,6 +1683,7 @@ export default function GitPopover({ open, onClose, cwd, sessionId, variant }: P
               {cwd}
             </div>
           </div>
+          {onWorkspace ? <button type="button" className="av-hover-control" onClick={onWorkspace} style={{ padding: '7px 10px', color: 'var(--cyan)', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer' }}>Git workspace</button> : null}
           <button
             type="button"
             className="av-hover-control"

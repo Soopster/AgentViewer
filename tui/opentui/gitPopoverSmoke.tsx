@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { testRender, act } from './testRender'
 import { DARK_THEME } from '../theme'
-import { GitPopover } from './GitPopover'
+import { GitReviewPopover as GitPopover } from './GitPopover'
 
 const execFileAsync = promisify(execFile)
 const cwd = await mkdtemp(join(tmpdir(), 'agent-viewer-git-popover-'))

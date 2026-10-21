@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { GitWorkspace } from './GitWorkspace'
 import { PopoverDetachButton } from './dockedPopover'
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useReview } from '../../lib/review/useReview'
@@ -543,7 +544,7 @@ function renderNoteCard(
 // GitPopover component
 // ---------------------------------------------------------------------------
 
-type GitKeyEvent = { name: string; ctrl: boolean; shift: boolean; sequence: string; eventType?: string; repeated?: boolean }
+export type GitKeyEvent = { name: string; ctrl: boolean; shift: boolean; sequence: string; eventType?: string; repeated?: boolean }
 type FocusSide = 'left' | 'right'
 type FileDiffMode = 'text' | 'viewer'
 type LeftPaneMode = 'normal' | 'expanded' | 'hidden'
@@ -560,7 +561,8 @@ const LEFT_PANE_EXPANDED_RATIO = 0.5
 const LEFT_PANE_RESIZE_STEP = 4
 const EMPTY_TREE_SHA = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
 
-type Props = {
+export type GitPopoverProps = {
+  onWorkspace?: () => void
   cwd?: string | null
   /** Scopes the turn list to the session being read. Without it the menu offers
    *  every turn taken in the repo, which is what a repo-wide review wants. */
@@ -575,7 +577,7 @@ type Props = {
   width: number
   height: number
   onClose: () => void
-  onKeyHandlerReady: (handler: (key: GitKeyEvent) => void) => void
+  onKeyHandlerReady: (handler: (key: GitKeyEvent) => boolean | void) => void
   onKeyCaptureChange?: (capture: boolean) => void
   onClipboardWrite?: (text: string) => Promise<void>
   onSendDiffNoteToComposer?: (prompt: string) => void
@@ -588,7 +590,13 @@ type Props = {
 const DIFF_CONTROLS_WIDTH = 62
 const DIFF_REVIEW_ACTIONS_MIN_WIDTH = 48
 
-export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = false, onDetach, theme, width, height, onClose, onKeyHandlerReady, onSendDiffNoteToComposer, onAskAgent, onClipboardWrite, onKeyCaptureChange }: Props) {
+export function GitPopover(props: GitPopoverProps) {
+  const [mode, setMode] = useState<'workspace' | 'review'>('review')
+  if (mode === 'workspace') return <GitWorkspace key={props.cwd} {...props} onReview={() => setMode('review')} />
+  return <GitReviewPopover {...props} onWorkspace={() => setMode('workspace')} />
+}
+
+export function GitReviewPopover({ onWorkspace, cwd, sessionId, scopeLabel, zIndex = 50, docked = false, onDetach, theme, width, height, onClose, onKeyHandlerReady, onSendDiffNoteToComposer, onAskAgent, onClipboardWrite, onKeyCaptureChange }: GitPopoverProps) {
   const reviewSearchEditingRef = useRef(false)
   const reviewActionKeyRef = useRef<(key: ReviewActionKey) => boolean>(() => false)
   const focusDiff = useCallback(() => setFocusSide('right'), [])
@@ -1093,6 +1101,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
     }
 
     if (reviewActionKeyRef.current(key)) return
+    if (key.sequence === 'g' && onWorkspace) { onWorkspace(); return }
 
     if (key.name === 'escape') {
       if (pane === 4 && commitRangeAnchorIndex !== null) { setCommitRangeAnchorIndex(null); return }
@@ -1404,7 +1413,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
       return
     }
   }, [askSpan, onAskAgent, sourceLabel, reviewBoardOpen, setDiffNotes, commitIndex, commitRangeAnchorIndex, data, diffCursorRow, diffLayout, diffNotes, diffSelectionAnchorRow, draftNote, expandedDirs, fileDiffMode, focusSide,
-      height, leftPaneMode, onClose, onSendDiffNoteToComposer, pane, repoCwd, rightContent, showHunkHeaders, treeCursor, visibleNodes, sourceKey, diffSource, refreshGitData, sessionId, sourceMenuItems, sourceSelection, setDiffNotes, contextExpansions, changeContext, fileFilter, openFileFilter, closeFileFilter])
+      height, leftPaneMode, onClose, onWorkspace, onSendDiffNoteToComposer, pane, repoCwd, rightContent, showHunkHeaders, treeCursor, visibleNodes, sourceKey, diffSource, refreshGitData, sessionId, sourceMenuItems, sourceSelection, setDiffNotes, contextExpansions, changeContext, fileFilter, openFileFilter, closeFileFilter])
 
   // Register key handler with parent
   useEffect(() => {
@@ -1735,6 +1744,7 @@ export function GitPopover({ cwd, sessionId, scopeLabel, zIndex = 50, docked = f
     >
       {!docked && onDetach ? <PopoverDetachButton theme={theme} onPress={onDetach} /> : null}
       {reviewBoardOpen ? <ReviewBoard review={review} theme={theme} width={popW - 2} height={popH - 2} keyRef={boardKeyRef} onClose={() => setReviewBoardOpen(false)} onNavigate={navigateReview} /> : null}
+      {onWorkspace ? <box position="absolute" top={0} right={3} zIndex={1} onMouseDown={(event) => { event.stopPropagation(); onWorkspace() }}><text fg={theme.cyan}>[g Git workspace]</text></box> : null}
       {/* ── Left column ─────────────────────────────────── */}
       {!leftPaneHidden ? (
       <box width={leftW} flexDirection="column" border={['right']} borderStyle="single" borderColor={theme.border}>

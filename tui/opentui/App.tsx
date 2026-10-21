@@ -9575,7 +9575,7 @@ function OpenTuiWorkspace() {
   const [surfacePanel, setSurfacePanel] = useWorkspaceState('surfacePanel', EMPTY_SURFACE_PANEL)
   const [surfaceBrowserRecent, setSurfaceBrowserRecent] = useWorkspaceState<string[]>('surfaceBrowserRecent', [])
   const surfacePanelKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
-  const surfaceGitKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  const surfaceGitKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) | null>(null)
   const surfacePrKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean) | null>(null)
   const surfaceFilesKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const surfaceProcessKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
@@ -9623,7 +9623,7 @@ function OpenTuiWorkspace() {
   const [gitOpen, setGitOpen] = useState(false)
   const gitKeyCaptureRef = useRef(false)
   const surfaceGitKeyCaptureRef = useRef(false)
-  const gitKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  const gitKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) | null>(null)
   const [pullRequestOpen, setPullRequestOpen] = useState(false)
   const pullRequestKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean) | null>(null)
   const [fileViewerOpen, setFileViewerOpen] = useState(false)
@@ -9750,7 +9750,7 @@ function OpenTuiWorkspace() {
   const [coordBoardRunId, setCoordBoardRunId] = useState<string | null>(null)
   const [coordError, setCoordError] = useState<string | null>(null)
   const coordStartInFlightRef = useRef(false)
-  const coordBoardKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  const coordBoardKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) | null>(null)
   // Fleet strip visibility preference (the strip only renders when it has
   // cells: running sessions or fresh background completions).
   const [fleetStripEnabled, setFleetStripEnabled] = useState(true)
@@ -23566,7 +23566,7 @@ function OpenTuiWorkspace() {
     }
 
     if (coordBoardOpen) {
-      handled(() => { coordBoardKeyHandlerRef.current?.(key) })
+      if (coordBoardKeyHandlerRef.current?.(key) !== false) handled(() => {})
       return
     }
 
@@ -23633,7 +23633,7 @@ function OpenTuiWorkspace() {
         })
         return
       }
-      handled(() => { gitKeyHandlerRef.current?.(key) })
+      if (gitKeyHandlerRef.current?.(key) !== false) handled(() => {})
       return
     }
 
@@ -23671,7 +23671,7 @@ function OpenTuiWorkspace() {
       return
     }
     if (pendingPermissions.length === 0 && focusedWindowSurfaceKind === 'diff' && windowCapture === true) {
-      handled(() => { windowKeys?.(key) })
+      if (windowKeys?.(key) !== false) handled(() => {})
       return
     }
     // A browser window's address field takes typing; Escape and the ⌃B prefix
@@ -23683,7 +23683,7 @@ function OpenTuiWorkspace() {
 
     if (pendingPermissions.length === 0 && surfacePanelVisible && surfacePanelFocused && activeSurface(surfacePanel)?.kind === 'diff'
       && surfaceGitKeyCaptureRef.current && !(key.ctrl && ['w', 'n', 'p', 't'].includes(key.name))) {
-      handled(() => { surfaceGitKeyRef.current?.(key) })
+      if (surfaceGitKeyRef.current?.(key) !== false) handled(() => {})
       return
     }
 

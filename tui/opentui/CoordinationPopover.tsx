@@ -38,7 +38,7 @@ type Props = {
   onNotice: (tone: 'info' | 'error', text: string, durationMs?: number) => void
   onCopyJoinCommand?: (runId: string) => void
   onSendDiffNoteToComposer?: (prompt: string) => void
-  onKeyHandlerReady: (handler: (key: CoordinationKeyEvent) => void) => void
+  onKeyHandlerReady: (handler: (key: CoordinationKeyEvent) => boolean | void) => void
   /** Fill the given box inside a window, with no frame of its own. */
   docked?: boolean
   /** Shows the `⧉ window` button: break the control center out into a window. */
@@ -134,7 +134,7 @@ export function CoordinationPopover({
   const [messageDraft, setMessageDraft] = useState('')
   const [gitAgent, setGitAgent] = useState<ProtocolAgent | null>(null)
   const [now, setNow] = useState(() => Date.now())
-  const gitKeyHandlerRef = useRef<((key: CoordinationKeyEvent) => void) | null>(null)
+  const gitKeyHandlerRef = useRef<((key: CoordinationKeyEvent) => boolean | void) | null>(null)
 
   const refreshRuns = useCallback(async () => {
     const nextRuns = await listTuiProtocolRuns(20)
@@ -545,14 +545,13 @@ export function CoordinationPopover({
     setGitAgent(null)
   }, [])
 
-  const registerAgentGitKeyHandler = useCallback((handler: (key: CoordinationKeyEvent) => void) => {
+  const registerAgentGitKeyHandler = useCallback((handler: (key: CoordinationKeyEvent) => boolean | void) => {
     gitKeyHandlerRef.current = handler
   }, [])
 
   const handleKey = useCallback((key: CoordinationKeyEvent) => {
     if (gitAgent) {
-      gitKeyHandlerRef.current?.(key)
-      return
+      return gitKeyHandlerRef.current?.(key)
     }
     if (messageTarget !== null) {
       if (key.name === 'escape') {
