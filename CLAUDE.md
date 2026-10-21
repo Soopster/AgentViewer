@@ -1985,6 +1985,11 @@ costs below, and each now has a smoke (`coordEventCostSmoke.ts`, `inboxBoundSmok
   reset the turn-end nudge counter, which is why `MAX_TURN_NUDGES` never stopped it. Unread mail
   now rides whatever turn the recipient gets next. A wake is counted when dispatch is attempted,
   so one that starts no turn is still spent.
+- **The mailbox sweep runs on the TUI's render thread** once the send path has loaded (a composer
+  warm-up loads it), and its queries are synchronous. On a long-lived ledger (41 stale runs, 2,350
+  undelivered messages, nearly all to external participants) each 5s sweep stalled the UI ~100ms.
+  A run this process does not host now skips external recipients' mail in SQL (nothing could
+  steer or wake them), and `deliverMessagesLive` yields every `DELIVERY_YIELD_EVERY` messages.
 - **The open-task cap** (`AGENT_VIEWER_COORD_MAX_OPEN_TASKS`, default 120) stops a runaway lead flooding
   the board; finished work is not counted. Known gap: a server-managed (non-chat) run whose process
   restarts is not re-driven — it reads as running with nothing moving. It is not fixed, but it is no longer

@@ -286,6 +286,7 @@ const INTERACTIVE_AGENT_STALE_MS = Math.max(
 // as the dead boundary so the two notions of staleness stay in lockstep.
 const DELIVERY_HINT_FRESH_MS = 90_000
 const MAIL_SWEEP_INTERVAL_MS = 5_000
+const DELIVERY_YIELD_EVERY = 25
 const REPLY_ESCALATION_MS = 3 * 60_000
 const STATUS_BATCH_THRESHOLD = 3
 const STATUS_BATCH_MAX_WAIT_MS = 15_000
@@ -7002,7 +7003,10 @@ async function deliverMessagesLive(runId: string, messageIds: string[]): Promise
   const wake = new Set<string>()
   const wakeMessages = new Map<string, string[]>()
   const supervisionWake = new Set<string>()
-  for (const id of messageIds) {
+  for (const [index, id] of messageIds.entries()) {
+    // Each message is several synchronous queries; a large batch must not
+    // hold the event loop (in the TUI, the render thread) in one piece.
+    if (index > 0 && index % DELIVERY_YIELD_EVERY === 0) await new Promise((resolve) => setImmediate(resolve))
     // A new provider turn already contains this message in its preamble. Do
     // not also steer it into that turn while startup is awaiting acceptance.
     if (liveDeliveryInFlight.has(id) || inboxDispatchInFlight.has(id)) continue
@@ -7342,8 +7346,18 @@ async function sweepMailboxes(): Promise<void> {
   for (const row of runs) {
     const runId = String(row.id)
     if (foreignInteractiveHostSync(db, runId)) continue
-    const undelivered = db.prepare('SELECT id FROM protocol_messages WHERE run_id = ? AND delivered_at IS NULL')
-      .all(runId) as Row[]
+    // Mail to an external participant waits for its coord_read_inbox: there is
+    // no session to steer, and only this run's controller could wake it. A run
+    // this process does not host would walk every such message for nothing —
+    // thousands on a long-lived ledger, synchronously, on the TUI's render
+    // thread every sweep.
+    const undelivered = (controllers.has(runId)
+      ? db.prepare('SELECT id FROM protocol_messages WHERE run_id = ? AND delivered_at IS NULL')
+      : db.prepare(`
+          SELECT m.id FROM protocol_messages m
+          JOIN protocol_agents a ON a.run_id = m.run_id AND a.id = m.to_agent_id
+          WHERE m.run_id = ? AND m.delivered_at IS NULL AND a.session_id NOT LIKE 'external:%'
+        `)).all(runId) as Row[]
     if (undelivered.length > 0) {
       await deliverMessagesLive(runId, undelivered.map((entry) => String(entry.id))).catch(() => {})
     }
