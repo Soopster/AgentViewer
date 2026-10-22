@@ -255,7 +255,14 @@ await waitFor('the reader on alpha', () => readerShows('alpha'))
   const tabRow = () => screen().split('\n')[frame('session-tabs')!.y] ?? ''
   await waitFor('analytics as a tab in the strip', () => tabRow().includes('Analytics') && !!frame('popover-tab-frame') && !screen().includes('Session analytics'))
   const tabFrame = () => setup.renderer.root.findDescendantById('popover-tab-frame') as unknown as { visible?: boolean } | null
-  const readerVisible = () => (setup.renderer.root.findDescendantById('transcript-reader') as unknown as { visible?: boolean }).visible !== false
+  // The tab takes over the selected window, which stays mounted but hidden.
+  const readerVisible = () => {
+    type Node = { visible?: boolean; parent?: Node | null }
+    for (let node = setup.renderer.root.findDescendantById('transcript-reader') as unknown as Node | null; node; node = node.parent ?? null) {
+      if (node.visible === false) return false
+    }
+    return true
+  }
   check(!readerVisible(), 'the transcript still shows under a popover tab')
   // Identification targets the tool tab, never the hidden session behind it.
   await key('k', { ctrl: true }); await key('q')
@@ -303,20 +310,24 @@ await waitFor('the reader on alpha', () => readerShows('alpha'))
   const asTabAgain = locate('As a tab in this workspace')
   await click(asTabAgain.x + 1, asTabAgain.y)
   await waitFor('the popover tab', () => !!tabFrame())
-  const tabWidthBefore = frame('popover-tab-frame')!.width
+  // A split needs every window shown, and the tab took over one of four:
+  // widen the terminal, and split below, as the window is too narrow for right.
+  await act(async () => { setup.resize(320, 46) }); await settle(300)
+  const tabHeightBefore = frame('popover-tab-frame')!.height
   const openMenu = async () => {
     const button = frame('popover-tab-menu')!
     await click(button.x + 1, button.y)
     await waitFor('the tab menu', () => !!frame('context-menu'))
   }
   await openMenu()
-  const split = locate('Split this window right', frame('context-menu')!)
+  const split = locate('Split this window below', frame('context-menu')!)
   await click(split.x + 1, split.y)
-  await waitFor('a split beside the popover tab', () => !!tabFrame() && frame('popover-tab-frame')!.width < tabWidthBefore)
+  await waitFor('a split beside the popover tab', () => !!tabFrame() && frame('popover-tab-frame')!.height < tabHeightBefore)
   await openMenu()
   const float = locate('Float window', frame('context-menu')!)
   await click(float.x + 1, float.y)
   await waitFor('the popover tab floating', () => !!frame('floating-window') && !tabFrame() && !tabRow().includes('Analytics'))
+  await act(async () => { setup.resize(200, 46) }); await settle(300)
   // A new tab of its own: the workspace tab bar gains a tab, and the old tab keeps its windows.
   const tabsBefore = (setup.renderer.root.findDescendantById('workspace-tabs') as unknown as { getChildren(): Array<{ id: string }> }).getChildren().filter((child) => child.id.startsWith('workspace-tab:')).map((child) => child.id)
   // Its window from earlier would take ⌃K s; close it so the popover opens.

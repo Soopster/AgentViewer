@@ -30,10 +30,20 @@ await act(async () => {
 })
 
 const frame = captureCharFrame()
+// The dock node, not its title: the title names a target once one is
+// selected, and the live-turn registry is machine-wide, so a frame can show a
+// transcript (this repository's own) that mentions the word.
+const hasDock = (_frame: string) => {
+  type Node = { visible?: boolean; height?: number; parent?: Node | null }
+  const dock = setup.renderer.root.findDescendantById('composer-dock') as unknown as Node | null
+  if (!dock || !dock.height) return false
+  for (let node: Node | null = dock; node; node = node.parent ?? null) if (node.visible === false) return false
+  return true
+}
 if (!frame || frame.trim().length === 0) {
   throw new Error('Full app rendered an empty frame')
 }
-if (!frame.includes('COMPOSER')) {
+if (!hasDock(frame)) {
   throw new Error('Full app frame missing the composer dock')
 }
 const initialSpans = captureSpans().lines.flatMap((line) => line.spans)
@@ -132,7 +142,7 @@ await act(async () => {
   await new Promise((resolve) => setTimeout(resolve, 100))
 })
 fullscreenFrame = captureCharFrame()
-if (fullscreenFrame.includes('COMPOSER') || !fullscreenFrame.includes('FULLSCREEN  Shift+Z restore')) {
+if (hasDock(fullscreenFrame) || !fullscreenFrame.includes('FULLSCREEN  Shift+Z restore')) {
   throw new Error(`Shift+E did not minimize the composer independently in fullscreen:\n${fullscreenFrame}`)
 }
 act(() => {
@@ -144,7 +154,7 @@ await act(async () => {
   await new Promise((resolve) => setTimeout(resolve, 100))
 })
 const restoredFullscreenFrame = captureCharFrame()
-if (restoredFullscreenFrame.includes('FULLSCREEN  Shift+Z restore') || !restoredFullscreenFrame.includes('COMPOSER')) {
+if (restoredFullscreenFrame.includes('FULLSCREEN  Shift+Z restore') || !hasDock(restoredFullscreenFrame)) {
   throw new Error(`Shift+Z did not restore normal chrome and composer state:\n${restoredFullscreenFrame}`)
 }
 

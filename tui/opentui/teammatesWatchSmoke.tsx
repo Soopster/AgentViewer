@@ -140,7 +140,7 @@ await waitFor('both teammates to be watched beside the lead', (frame) =>
 const frame = setup.captureCharFrame()
 // The rollup reaches the tab strip too, now that the team's chats are tabs.
 if (!frame.split('\n').slice(0, 3).some((line) => line.includes('!1 Lead chat'))) fail('the lead chat\'s tab does not carry its team\'s mark')
-if (!frame.includes(transcriptText('watch-lead'))) fail('watching the team replaced the lead chat in the reader')
+if (!frame.includes(transcriptText('watch-lead'))) fail('watching the team replaced the lead chat')
 if (frame.includes('─ Teammates ─')) fail('the Teammates panel stayed open over the panes')
 // Main-stack keeps the lead on the left and teammates in registration order
 // top to bottom, even though attention order put Orion first in the popover.
@@ -171,7 +171,8 @@ await waitFor('a new teammate to append without focus stealing', frame => frame.
 // retaining the lead in the reader and Nova in overflow.
 act(() => { setup.resize(230, 20) })
 await settle(250)
-if (setup.renderer.root.findDescendantById('split-pane:1')) fail('short terminal did not hide the second teammate')
+// Window 0 is the lead; 1 and 2 are Nova and Orion.
+if (setup.renderer.root.findDescendantById('split-pane:2')) fail('short terminal did not hide the second teammate')
 await chord('p')
 await act(async () => { await setup.mockInput.pasteBracketedText('orion') })
 await settle(120)

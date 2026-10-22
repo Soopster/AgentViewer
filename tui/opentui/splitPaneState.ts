@@ -320,12 +320,15 @@ export function planTeammateWatch<T extends { sessionKey: string }>({
   const eligible = targets.filter((target, index) =>
     target.sessionKey !== selectedSessionKey
     && targets.findIndex((other) => other.sessionKey === target.sessionKey) === index)
-  const watched = eligible.slice(0, maxPanes)
+  // The selected session's own window stays, first: watching a team keeps
+  // the lead's chat on screen beside it.
+  const lead = selectedSessionKey && currentPins.slice(0, currentCount).includes(selectedSessionKey) ? [selectedSessionKey] : []
+  const watched = eligible.slice(0, maxPanes - lead.length)
   const keys = watched.map((target) => target.sessionKey)
   return {
     watched,
-    pins: [...keys, ...currentPins.filter((key) => !keys.includes(key))].slice(0, maxPanes),
-    count: watched.length ? Math.min(maxPanes, Math.max(currentCount, keys.length)) : currentCount,
+    pins: [...lead, ...keys, ...currentPins.filter((key) => !keys.includes(key) && !lead.includes(key))].slice(0, maxPanes),
+    count: watched.length ? Math.min(maxPanes, Math.max(currentCount, lead.length + keys.length)) : currentCount,
     skipped: eligible.length - watched.length,
   }
 }

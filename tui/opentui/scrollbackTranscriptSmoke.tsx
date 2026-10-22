@@ -122,7 +122,11 @@ const scroll = () => {
 const limit = () => Math.max(scroll().scrollHeight - scroll().viewport.height, 0)
 // The pane title says READING for as long as the tail is not being followed;
 // being scrolled to the bottom is not the same thing.
-const followsTail = () => !setup.captureCharFrame().includes('READING')
+// A window that has let go of the tail says so in its title.
+const followsTail = () => {
+  const frame = setup.renderer.root.findDescendantById('transcript-reader') as unknown as { y: number } | null
+  return !frame || !(setup.captureCharFrame().split('\n')[frame.y] ?? '').includes('paused')
+}
 const rowWith = (needle: string) => setup.captureCharFrame().split('\n').find((row) => row.includes(needle))
 
 const fail = (message: string): never => {
@@ -148,11 +152,12 @@ try {
   if (scroll().scrollTop !== limit()) fail('SCROLLBACK did not start at the bottom')
   {
     const rows = setup.captureCharFrame().split('\n')
-    const titleRow = rows.findIndex((row) => row.includes(`${viewLabel}  ·`))
+    // The window's top border is its title row.
+    const titleRow = (setup.renderer.root.findDescendantById('transcript-reader') as unknown as { y: number }).y
     const headerRow = rows.findIndex((row) => row.includes('▌ PROMPT  Explain the pool.'))
     if (headerRow !== titleRow + 1) fail('The sticky header leaves a spare row below the pane title')
     const borderTitle = rows[titleRow] ?? ''
-    if (!/● LIVE\s{0,2}─/.test(borderTitle)) fail('Trailing title padding hides the top border')
+    if (!/smoke\s{0,2}─/.test(borderTitle)) fail('Trailing title padding hides the top border')
     if (process.env.STICKY_HEADER_SMOKE_ONLY) {
       console.log('Sticky header smoke passed (accent marker, prompt label, no spare row above header)')
       setup.renderer.destroy()
@@ -173,7 +178,7 @@ try {
     const { IDLE_TICKER_PHRASES } = await import('./App')
     const frame = setup.captureCharFrame()
     if (IDLE_TICKER_PHRASES.some((phrase) => frame.includes(phrase))) fail('SCROLLBACK painted the idle ticker')
-    const title = frame.split('\n').find((row) => row.includes(`${viewLabel}  ·`)) ?? ''
+    const title = frame.split('\n')[(setup.renderer.root.findDescendantById('transcript-reader') as unknown as { y: number }).y] ?? ''
     if (/\d+\/\d+/.test(title)) fail('SCROLLBACK titled the pane with a card position it has no cursor for')
   }
 
@@ -182,9 +187,11 @@ try {
   // frame starts in the top-left cell, the reader's left border sits right
   // against the sidebar's right border, and the reader ends on the last column.
   {
+    // Below the spaces bar, which spans the top row.
     const rows = setup.captureCharFrame().split('\n')
-    if (!rows[0]?.startsWith('┌')) fail('The sidebar frame does not start in the top-left cell')
-    const body = rows[2] ?? ''
+    const top = rows.findIndex((row) => row.includes('SESSIONS'))
+    if (!rows[top]?.startsWith('┌')) fail('The sidebar frame does not start in the top-left cell')
+    const body = rows[top + 2] ?? ''
     if (!body.includes('││')) fail('A gutter separates the sidebar and reader frames')
     if (!body.trimEnd().endsWith('│') || body.trimEnd().length !== body.length) fail('The reader frame stops short of the right edge')
   }

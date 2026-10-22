@@ -32,7 +32,7 @@ import { SurfacePanel } from './SurfacePanel'
 import { BrowserSurfaceView } from './SurfaceViews'
 import { WindowButton } from './WindowButton'
 import { transcriptViewportPosition, useTranscriptWindowPositions } from './transcriptWindowState'
-import { swapPaneSlots, placePaneSlot, adoptPrimaryWindow, arrangePaneTree, movePaneToEdge, replacePrimaryWindow, removePrimaryWindow, placeWindowSplit, validWindowSplitTree, reconcileWindowSplitTree, computeWindowSplitTree, splitTreeFromRects, splitWindowLeaf, splitPath, updateSplitRatio, evenWindowSplitTree, rotateWindowSplitTree, type WindowSplitTree } from './windowSplitTree'
+import { swapPaneSlots, placePaneSlot, adoptPrimaryWindow, arrangePaneTree, movePaneToEdge, replacePrimaryWindow, removePrimaryWindow, placeWindowSplit, validWindowSplitTree, reconcileWindowSplitTree, computeWindowSplitTree, splitTreeFromRects, splitWindowLeaf, splitPath, updateSplitRatio, evenWindowSplitTree, rotateWindowSplitTree, type WindowSplitTree, type WindowSplitNode } from './windowSplitTree'
 import { WINDOW_SURFACE_TITLES, surfaceKindOf, surfaceTitle, type WindowSurfaceKind } from './windowSurfaceNames'
 import { copySurfaceViewState, migratePanelViewState, surfaceViewNamespace } from './windowViewState'
 import { WorkspaceOverview } from './WorkspaceOverview'
@@ -7850,7 +7850,9 @@ function isTranscriptLocalKey(key: { name?: string; ctrl?: boolean; shift?: bool
   if (key.meta) return false
   if (key.ctrl) return key.name === 'd' || key.name === 'u'
   if (key.name === 'up' || key.name === 'down' || key.name === 'pageup' || key.name === 'pagedown' || key.name === 'home' || key.name === 'end' || key.name === 'return') return true
-  return sequence.length === 1 && 'jkgGefumbQyYnNs()[]{}/'.includes(sequence)
+  // n/N step search matches only while there are some; otherwise they are
+  // the app's own keys (N: new session), so they are not the transcript's.
+  return sequence.length === 1 && 'jkgGefumbQyYs()[]{}/'.includes(sequence)
 }
 
 const subscribeNothing = (_listener: () => void) => () => {}
@@ -7882,6 +7884,8 @@ type SplitPaneHandle = {
   jumpToKey: (cardKey: string, follow: boolean) => void
   /** SCROLLBACK: the text scrolls by rows and has no visible cursor. */
   isScrollback: () => boolean
+  /** A page of this window's own viewport: two rows of overlap, as a pager keeps. */
+  pageRows: () => number
   /** SCROLLBACK's e / Enter: expand or fold everything. */
   toggleScrollbackAll: () => void
 }
@@ -8013,6 +8017,8 @@ type SplitTranscriptPaneProps = {
   onFollowChange?: (follow: boolean) => void
   /** Draws the reader's chrome (header, banners, composer bar): the window showing the selected session, else the focused one. */
   chromeHost: boolean
+  /** Full screen: no frame, title or key hints; the transcript takes the edges. */
+  frameless?: boolean
   /** The transcript search, highlighted in the window showing the selected session. */
   searchQuery: string
   activeSearchKey: string | null
@@ -8077,6 +8083,7 @@ function SplitTranscriptPaneInner({
   onCursorChange,
   onFollowChange,
   chromeHost,
+  frameless = false,
   searchQuery,
   activeSearchKey,
   liveMessages,
@@ -8326,6 +8333,7 @@ function SplitTranscriptPaneInner({
         }
         return 'none'
       },
+      pageRows: () => Math.max((scrollRef.current?.viewport.height ?? 3) - 2, 1),
       scrollByRows: (rows) => {
         const sb = scrollRef.current
         if (!sb) return
@@ -8594,7 +8602,9 @@ function SplitTranscriptPaneInner({
   )
 
   const accent = transcriptAccent('assistant', session.provider ?? undefined)
-  const innerWidth = Math.max(width - 4, 12)
+  // A frameless window lends its border's two columns and rows to the transcript.
+  const frameExtent = frameless ? 0 : 2
+  const innerWidth = Math.max(width - 2 - frameExtent, 12)
   const statusRowCount = (liveText || (running && allPaneCards.length > 0)) ? 1 : 0
   // Exact row budget, or the frame shrinks: border (2) + meta row (1) + the
   // body box's own paddingBottom (1) + the optional live row + one action row.
@@ -8603,7 +8613,7 @@ function SplitTranscriptPaneInner({
   // The reader's trailing chrome (CHAT's composer bar), in the window showing the selected transcript.
   const header = useSyncExternalStore(chromeHost ? selectedWindowHeader.subscribe : subscribeNothing, chromeHost ? selectedWindowHeader.get : getNothing)
   const footer = useSyncExternalStore(chromeHost ? selectedWindowFooter.subscribe : subscribeNothing, chromeHost ? selectedWindowFooter.get : getNothing)
-  const bodyRows = Math.max(calculateSplitPaneBodyRows(height, statusRowCount) - (header?.rows ?? 0) - (footer?.rows ?? 0), 1)
+  const bodyRows = Math.max(calculateSplitPaneBodyRows(height + 2 - frameExtent, statusRowCount) - (header?.rows ?? 0) - (footer?.rows ?? 0), 1)
   const windowGaugeRef = useRef<ReaderWindowGauge>({ start: 0, end: 0, total: 0, settled: true })
   const windowOutputRef = useRef<ReaderWindowOutput>({ start: 0, cardDisplayData: [], scrollbackExpandedKeys: null })
   const scrollFixupRef = useRef<ReaderScrollFixup | null>(null)
@@ -8678,7 +8688,7 @@ function SplitTranscriptPaneInner({
     cursorIndex,
     sessionKey: key, readerWindowGaugeRef: windowGaugeRef, readerWindowOutputRef: windowOutputRef,
     readerScrollFixupRef: scrollFixupRef, transcriptScrollRef: scrollRef,
-    theme, densityState, syntaxStyle, rightPaneWidth: width, onSelectCard: selectPaneCard,
+    theme, densityState, syntaxStyle, rightPaneWidth: width + 2 - frameExtent, onSelectCard: selectPaneCard,
     thinkingMode, diffLayout, imessageStyle, transcriptWidth, onSelectAgentTool,
     ...diffControls, noteNamespace: key,
     activateDiffHover: activatePaneDiffHover, openDiffNote: openPaneDiffNote, sendDiffNoteToComposer: sendPaneDiffNote,
@@ -8689,7 +8699,7 @@ function SplitTranscriptPaneInner({
     <box
       width={width}
       height={height}
-      border
+      border={frameless ? [] : ['top', 'left', 'right', 'bottom']}
       borderStyle="single"
       // Focused frame lights in the provider accent, exactly like the reader
       // and sidebar — one visual language for "this pane has the keyboard".
@@ -8700,7 +8710,7 @@ function SplitTranscriptPaneInner({
       // straight to a pane, and nothing else on screen says which is which.
       // The title carries what the pane's own header row used to: which
       // session, and the state worth knowing without focusing it.
-      title={fitText(
+      title={frameless ? undefined : fitText(
         joinMeta([
           attentionBadge,
           coordinatorLabel,
@@ -8710,7 +8720,8 @@ function SplitTranscriptPaneInner({
           followTail ? null : 'paused',
         ]),
         Math.max(width - 4, 8),
-      )}
+      // fitText pads to width; padding would paint over the border.
+      ).trimEnd()}
       titleColor={attentionBadge?.includes('?') ? theme.amber : attentionBadge?.includes('! error') ? theme.red : attentionBadge ? theme.cyan : running ? theme.green : accent}
       ref={paneFrameRef}
       id={selected ? 'transcript-reader' : undefined}
@@ -8733,7 +8744,7 @@ function SplitTranscriptPaneInner({
       onMouseDrag={(event) => (paneIndex === FLOATING_PANE_INDEX ? floatGesture.move(event) : sessionDrag.move(event))}
       onMouseUp={(event) => (paneIndex === FLOATING_PANE_INDEX ? floatGesture.end(event) : sessionDrag.release(event))}
     >
-      <box position="absolute" top={-1} right={1} height={1} flexDirection="row" zIndex={3}>
+      <box position="absolute" top={-1} right={1} height={1} flexDirection="row" zIndex={3} visible={!frameless}>
         <WindowButton id={selected ? 'reader-window-menu' : `split-pane-menu:${paneIndex}`} label=" ≡ " theme={theme} onPress={point => onContextMenu(session, 'pane', point, paneIndex)} />
         <WindowButton id={selected ? 'reader-window-layout' : `split-pane-layout:${paneIndex}`} label=" ⊞ layout " theme={theme} onPress={onOpenLayout} />
         <WindowButton id={selected ? 'reader-window-fullscreen' : `split-pane-promote:${paneIndex}`} label=" ⤢ " theme={theme} onPress={promoteThisPane} />
@@ -8783,7 +8794,7 @@ function SplitTranscriptPaneInner({
       ) : null}
       {footer ? <box flexDirection="column" flexShrink={0}>{footer.render(width)}</box> : null}
       {/* Key hints sit in the bottom border, as the composer's status does. */}
-      <box position="absolute" bottom={-1} left={1} height={1} backgroundColor={theme.surface}>
+      <box position="absolute" bottom={-1} left={1} height={1} backgroundColor={theme.surface} visible={!frameless}>
         <text fg={theme.dim} wrapMode="none">
           {` ${(focused
             ? fitText(running ? 'j/k card  e fold  y copy  b mark  c send  ⌃C stop  ↵ zoom  esc focus' : 'j/k card  e fold  y copy  b mark  Q reply  c send  ↵ zoom  esc focus', innerWidth - 2)
@@ -9891,6 +9902,8 @@ function OpenTuiWorkspace() {
   const [activePopoverTab, setActivePopoverTab] = useWorkspaceState<WindowSurfaceId | null>('activePopoverTab', null)
   // The reader's place shows a popover tab instead of the transcript.
   const shownPopoverTab = activePopoverTab && popoverTabs.includes(activePopoverTab) ? activePopoverTab : null
+  // The window a shown popover tab takes over: the one focused when it was shown.
+  const [popoverTabHostKey, setPopoverTabHostKey] = useWorkspaceState<string | null>('popoverTabHost', null)
   const pendingSurfaceFocusRef = useRef<WindowSurfaceId | null>(null)
   const surfaceTitleClicksRef = useRef(new Map<string, { current: { x: number; y: number; at: number } | null }>())
   // Where surface windows sit among the session panes (windowOrder.ts): the
@@ -13345,15 +13358,20 @@ function OpenTuiWorkspace() {
   const pinnedWindowSessions = splitPinnedSessions.slice(0, splitPaneCount)
   const sessionsByKey = new Map(pinnedWindowSessions.map((session) => [sessionKey(session), session]))
   const orderedWindowKeys = orderWindows(windowOrder, pinnedWindowSessions.map((session) => sessionKey(session)), windowSurfaces)
-  const fallbackPaneTree: WindowSplitTree | null = !hasPrimaryFrame && orderedWindowKeys.length ? {
+  // A shown popover tab takes over a session window — laid out in its place,
+  // the transcript hidden (still mounted) behind it — and gets a slot of its
+  // own only when there is no session window to take.
+  const popoverTakesWindow = hasPrimaryFrame && orderedWindowKeys.some((key) => !isSurfaceWindowKey(key))
+  const primaryLeaf = hasPrimaryFrame && !popoverTakesWindow
+  const fallbackPaneTree: WindowSplitTree | null = !primaryLeaf && orderedWindowKeys.length ? {
     primary: false, keys: orderedWindowKeys,
     root: orderedWindowKeys.map((_, slot) => ({ slot })).reduce<import('./windowSplitTree').WindowSplitNode>((root, node, index) => index === 0 ? node : ({ axis: splitOrientation === 'columns' ? 'x' : 'y', ratio: index / (index + 1), first: root, second: node }), { slot: 0 }),
   } : null
   // A layout saved while the reader existed keeps its slot (-1) until the
   // selected session moves into it, so upgrading does not displace a pane.
-  const legacyReaderSlot = !hasPrimaryFrame && validWindowSplitTree(windowSplitTree) && windowSplitTree.primary !== false
+  const legacyReaderSlot = !primaryLeaf && validWindowSplitTree(windowSplitTree) && windowSplitTree.primary !== false
     && Boolean(selectedSessionKey) && !orderedWindowKeys.includes(selectedSessionKey!)
-  const reconciledSplitTree = validWindowSplitTree(windowSplitTree) ? reconcileWindowSplitTree(windowSplitTree, orderedWindowKeys, hasPrimaryFrame || legacyReaderSlot) : fallbackPaneTree
+  const reconciledSplitTree = validWindowSplitTree(windowSplitTree) ? reconcileWindowSplitTree(windowSplitTree, orderedWindowKeys, primaryLeaf || legacyReaderSlot) : fallbackPaneTree
   const splitTreeLimits = { paneWidth: SPLIT_PANE_MIN_WIDTH, paneRows: SPLIT_PANE_MIN_ROWS, readerWidth: SPLIT_PANE_MIN_WIDTH, readerRows: SPLIT_PANE_MIN_ROWS }
   // Zoomed neighbours are hidden, so their minimums must not evict the zoomed
   // frame or unmount its siblings when the terminal becomes smaller.
@@ -13361,6 +13379,20 @@ function OpenTuiWorkspace() {
   let treeGeometry = reconciledSplitTree && !fullscreenMode ? computeWindowSplitTree(reconciledSplitTree, readerAreaWidth, windowBudgetHeight, splitTreeFitLimits) : null
   const treeOverflowRows = treeGeometry && treeGeometry.layout.visibleCount < orderedWindowKeys.length ? 1 : 0
   if (treeGeometry && treeOverflowRows) treeGeometry = computeWindowSplitTree(reconciledSplitTree!, readerAreaWidth, Math.max(1, windowBudgetHeight - 1), splitTreeLimits)
+  const popoverHostSlot = (() => {
+    if (!popoverTakesWindow || !treeGeometry) return -1
+    const shown = orderedWindowKeys.slice(0, treeGeometry.layout.visibleCount)
+    const slotOf = (key: string | null) => key && !isSurfaceWindowKey(key) ? shown.indexOf(key) : -1
+    const slot = slotOf(popoverTabHostKey)
+    if (slot >= 0) return slot
+    const selected = slotOf(selectedSessionKey)
+    if (selected >= 0) return selected
+    return Math.max(shown.findIndex((key) => !isSurfaceWindowKey(key)), 0)
+  })()
+  if (treeGeometry && popoverHostSlot >= 0) {
+    const host = treeGeometry.rects.get(popoverHostSlot)!
+    treeGeometry = { ...treeGeometry, rects: new Map(treeGeometry.rects).set(-1, host), layout: { ...treeGeometry.layout, reader: { width: host.width, height: host.height } } }
+  }
   const splitTreeSignature = JSON.stringify(reconciledSplitTree)
   useEffect(() => {
     if (windowSplitTree && splitTreeSignature !== JSON.stringify(windowSplitTree)) setWindowSplitTree(reconciledSplitTree)
@@ -16559,11 +16591,14 @@ function OpenTuiWorkspace() {
       return [...current, ...plan.targets.filter(target => !keys.has(target.sessionKey)).map(target => target.session)]
     })
     selectTabSession(lead.session)
-    setSplitPinnedKeys(panes.map(target => target.sessionKey))
-    setSplitPaneCount(panes.length)
-    setWindowArrangement('main-stack', false)
-    setSplitOrientation('columns')
-    setSplitReaderShare(0.55)
+    // The lead's window on the left, teammates stacked beside it.
+    const keys = [lead.sessionKey, ...panes.map(target => target.sessionKey)]
+    const stack = (first: number, count: number): WindowSplitNode => count <= 1
+      ? { slot: first } : { axis: 'y', ratio: 1 / count, first: { slot: first }, second: stack(first + 1, count - 1) }
+    setSplitPinnedKeys(keys)
+    setSplitPaneCount(keys.length)
+    setWindowOrder(keys)
+    setWindowSplitTree({ primary: false, keys, root: panes.length ? { axis: 'x', ratio: 0.55, first: { slot: 0 }, second: stack(1, panes.length) } : { slot: 0 } })
     setWindowSurfaces([])
     setWindowZoom(null)
     setWindowSurfacePeek(null)
@@ -20931,6 +20966,8 @@ function OpenTuiWorkspace() {
   })
   // A popover as a tab of this workspace's tab strip, shown in the reader's place.
   const showPopoverTab = useEffectEvent((id: WindowSurfaceId) => {
+    const focused = splitFocusIndex !== null && splitFocusIndex >= 0 ? windowItems[splitFocusIndex] : null
+    setPopoverTabHostKey(focused?.kind === 'session' ? sessionKey(focused.session) : selectedSessionKey ?? null)
     setActivePopoverTab(id)
     setSplitFocusIndex(null)
     setWindowSurfacePeek(null)
@@ -21596,7 +21633,7 @@ function OpenTuiWorkspace() {
   const projectedWindowGeometry = (() => {
     if ((!windowPickerOpen || !windowLayoutPreview) && !sessionDrag) return null
     let previewSplitTree: WindowSplitTree | null = null
-    let previewPrimary = hasPrimaryFrame
+    let previewPrimary = primaryLeaf
     let plan = { arrangement: splitArrangement, orientation: splitOrientation, readerLast: splitReaderLast, count: splitPaneCount }
     let readerShare = splitReaderShare
     let secondaryShare = splitSecondaryShare
@@ -22155,14 +22192,11 @@ function OpenTuiWorkspace() {
   })
 
   // Session-scoped overlays, opened for a pane. Git is cwd-scoped and
-  // diagnostics takes a target, so both are honest here; analytics renders the
-  // reader's loaded detail, so it says so rather than showing another session's
-  // numbers under this pane's title.
-  const openSplitPaneOverlay = useEffectEvent((kind: 'git' | 'diagnostics' | 'analytics', target: Session | null) => {
+  // diagnostics takes a target.
+  const openSplitPaneOverlay = useEffectEvent((kind: 'git' | 'diagnostics', target: Session | null) => {
     if (!target) return
     if (kind === 'git') { setGitOpen(true); return }
-    if (kind === 'diagnostics') { openDiagnostics(target); return }
-    openPopoverWindow('analytics', { session: sessionKey(target) })
+    openDiagnostics(target)
   })
 
   // Promote the focused pane's session to the active tab. The pin reconciler
@@ -22231,11 +22265,17 @@ function OpenTuiWorkspace() {
       const pane = windowItems.findIndex((item) => item.kind === 'session' && sessionKey(item.session) === key)
       if (pane >= 0) focusSplitPane(pane)
       else {
-        if (key !== selectedSessionKey && watchedCoordinator && splitPaneSessions.length > 0) {
+        // A watched run keeps its lead's window (the first): a hidden teammate
+        // trades places with the first teammate shown.
+        const lead = splitPinnedKeys[0]
+        const shownTeammate = watchedCoordinator ? splitPaneSessions.find((session) => sessionKey(session) !== lead) : undefined
+        if (key !== selectedSessionKey && shownTeammate) {
           checkpointWindowLayout()
-          const first = sessionKey(splitPaneSessions[0]!)
-          setSplitPinnedKeys(current => current.map(pin => pin === key ? first : pin === first ? key : pin))
-          focusSplitPane(Math.max(0, windowItems.findIndex((item) => item.kind === 'session')))
+          const first = sessionKey(shownTeammate)
+          const swap = (keys: string[]) => keys.map(entry => entry === key ? first : entry === first ? key : entry)
+          setSplitPinnedKeys(swap)
+          setWindowOrder(swap)
+          focusSplitPane(windowItems.findIndex((item) => item.kind === 'session' && sessionKey(item.session) === first))
           return
         }
         if (key !== selectedSessionKey) {
@@ -22973,7 +23013,7 @@ function OpenTuiWorkspace() {
     const keys = [...orderedWindowKeys, key]
     const rects = windowLayoutRects(fittedWindows, { width: readerAreaWidth, height: windowAreaHeight, orientation: splitOrientation, readerLast: splitReaderLast })
     const root = reconciledSplitTree?.root ?? splitTreeFromRects(rects.map((rect, index) => ({ ...rect, slot: index - 1 })))
-    const next: WindowSplitTree = { ...(hasPrimaryFrame ? {} : { primary: false }), keys, root: splitWindowLeaf(root, target ?? -1, orderedWindowKeys.length, axis) }
+    const next: WindowSplitTree = { ...(primaryLeaf ? {} : { primary: false }), keys, root: splitWindowLeaf(root, target ?? popoverHostSlot, orderedWindowKeys.length, axis) }
     const result = computeWindowSplitTree(next, readerAreaWidth, windowAreaHeight, splitTreeLimits)
     if (result.layout.visibleCount !== keys.length) { showNotice('info', `That window is too ${axis === 'x' ? 'narrow' : 'short'} to split · enlarge it first`); return }
     checkpointWindowLayout()
@@ -24661,6 +24701,9 @@ function OpenTuiWorkspace() {
         || (key.shift && (key.name === 'j' || key.name === 'k' || key.name === 'up' || key.name === 'down')))
     if (splitFocusIndex !== null && !diffCardKey) {
       const paneHandle = splitPaneHandlesRef.current.get(splitFocusIndex)
+      // A letter with Ctrl or Meta held is a chord, not the letter: under the
+      // kitty protocol ⌃E arrives with `e` as its sequence.
+      const letter = key.ctrl || key.meta ? '' : sequence
       const paneSession = paneHandle?.getSession() ?? null
       const pageRows = Math.max(Math.floor(transcriptViewportRows * 0.8), 1)
       // The transcript search and the jumps (prompts, tools, bookmarks, the
@@ -24668,48 +24711,48 @@ function OpenTuiWorkspace() {
       // selected transcript — the one this window shows — and land here.
       // { } (Shift+[ ]) page the fleet strip while it has pages, as from the reader.
       const fleetPageKey = fleetStripVisible && fleetPageCount > 1
-        && (sequence === '{' || sequence === '}' || isShifted('[') || isShifted(']'))
+        && (letter === '{' || letter === '}' || isShifted('[') || isShifted(']'))
       if (paneSession && sessionKey(paneSession) === selectedSessionKey && !fleetPageKey) {
-        if (sequence === '/') { handled(() => setSearchMode(true)); return }
-        if (searchMatches.length > 0 && (sequence === 'n' || sequence === 'N')) { handled(() => jumpToSearchMatch(sequence === 'n' ? 1 : -1)); return }
-        if (sequence === '(' || sequence === ')') { handled(() => jumpToMatchingCard(sequence === '(' ? -1 : 1, (card) => card.category === 'conversation')); return }
-        if (sequence === '{' || sequence === '}') { handled(() => jumpToMatchingCard(sequence === '{' ? -1 : 1, (card) => card.category !== 'conversation')); return }
-        if (sequence === '[' || sequence === ']') { handled(() => jumpToBookmark(sequence === '[' ? -1 : 1)); return }
-        if (sequence === 'u') { handled(jumpToUnreadBoundary); return }
-        if (sequence === 'm') { handled(jumpToResumeMarker); return }
+        if (letter === '/') { handled(() => setSearchMode(true)); return }
+        if (searchMatches.length > 0 && (letter === 'n' || letter === 'N')) { handled(() => jumpToSearchMatch(letter === 'n' ? 1 : -1)); return }
+        if (letter === '(' || letter === ')') { handled(() => jumpToMatchingCard(letter === '(' ? -1 : 1, (card) => card.category === 'conversation')); return }
+        if (letter === '{' || letter === '}') { handled(() => jumpToMatchingCard(letter === '{' ? -1 : 1, (card) => card.category !== 'conversation')); return }
+        if (letter === '[' || letter === ']') { handled(() => jumpToBookmark(letter === '[' ? -1 : 1)); return }
+        if (letter === 'u') { handled(jumpToUnreadBoundary); return }
+        if (letter === 'm') { handled(jumpToResumeMarker); return }
       }
       if (key.name === 'escape') { handled(focusReaderFromSplit); return }
       // SCROLLBACK has no card cursor: the keys that move it elsewhere move the
       // text here, by rows, and e / Enter fold or unfold the whole transcript.
       if (paneHandle?.isScrollback() && !key.shift) {
-        const page = Math.max(pageRows, 1)
+        const page = paneHandle.pageRows()
         const rows = isCtrl('d') ? Math.ceil(page / 2)
           : isCtrl('u') ? -Math.ceil(page / 2)
-          : sequence === 'j' || key.name === 'down' ? velocityScrollStep(1)
-          : sequence === 'k' || key.name === 'up' ? -velocityScrollStep(-1)
+          : letter === 'j' || key.name === 'down' ? velocityScrollStep(1)
+          : letter === 'k' || key.name === 'up' ? -velocityScrollStep(-1)
           : key.name === 'pagedown' ? page
           : key.name === 'pageup' ? -page
           : 0
         if (rows !== 0) { handled(() => paneHandle.scrollByRows(rows)); return }
-        if (key.name === 'return' || sequence === 'e') { handled(() => paneHandle.toggleScrollbackAll()); return }
+        if (key.name === 'return' || letter === 'e') { handled(() => paneHandle.toggleScrollbackAll()); return }
       }
       // Card navigation, not raw scrolling: the pane has a cursor, so j/k move
       // between messages exactly like the reader.
-      if (sequence === 'j' || key.name === 'down') { handled(() => paneHandle?.moveCursor(1)); return }
-      if (sequence === 'k' || key.name === 'up') { handled(() => paneHandle?.moveCursor(-1)); return }
+      if (letter === 'j' || key.name === 'down') { handled(() => paneHandle?.moveCursor(1)); return }
+      if (letter === 'k' || key.name === 'up') { handled(() => paneHandle?.moveCursor(-1)); return }
       if (isCtrl('d')) { handled(() => paneHandle?.moveCursor(pageRows)); return }
       if (isCtrl('u')) { handled(() => paneHandle?.moveCursor(-pageRows)); return }
-      if (sequence === 'G') { handled(() => paneHandle?.cursorToEdge('last')); return }
-      if (sequence === 'g') { handled(() => paneHandle?.cursorToEdge('first')); return }
-      if (sequence === 'e') { handled(() => paneHandle?.toggleExpandedAtCursor()); return }
-      if (sequence === 'f') { handled(() => paneHandle?.cursorToEdge('last')); return }
+      if (letter === 'G') { handled(() => paneHandle?.cursorToEdge('last')); return }
+      if (letter === 'g') { handled(() => paneHandle?.cursorToEdge('first')); return }
+      if (letter === 'e') { handled(() => paneHandle?.toggleExpandedAtCursor()); return }
+      if (letter === 'f') { handled(() => paneHandle?.cursorToEdge('last')); return }
       // Card actions reuse the reader's implementations with the pane's own
       // card, so clipboard/bookmark/reply behave identically in both readers.
-      if (sequence === 'y') {
+      if (letter === 'y') {
         handled(() => { void copySelectedMessage(paneHandle?.getCursorCard() ?? undefined) })
         return
       }
-      if (sequence === 'b') {
+      if (letter === 'b') {
         handled(() => {
           void (async () => {
             try {
@@ -24730,11 +24773,11 @@ function OpenTuiWorkspace() {
         return
       }
       // Composer aimed at THIS pane's agent — the point of a live split view.
-      if (sequence === 'c') {
+      if (letter === 'c') {
         handled(() => { if (paneSession) composeToSplitPaneSession(paneSession) })
         return
       }
-      if (sequence === 'i') {
+      if (letter === 'i') {
         handled(() => setThinkingMode((current) => {
           const next = !current
           showToggleOutcome('Thinking mode', next)
@@ -24755,12 +24798,12 @@ function OpenTuiWorkspace() {
         })
         return
       }
-      // Session-scoped overlays follow focus, so ⌃G/D/⌃A inspect the pane you
-      // are looking at rather than the reader's session.
+      // Session-scoped overlays follow focus, so ⌃G/D inspect the window you
+      // are looking at. ⌃A needs nothing here: focusing a window selects its
+      // session, which is what the analytics popover reads.
       if (isCtrl('g')) { handled(() => openSplitPaneOverlay('git', paneSession)); return }
-      if (sequence === 'D') { handled(() => openSplitPaneOverlay('diagnostics', paneSession)); return }
+      if (letter === 'D') { handled(() => openSplitPaneOverlay('diagnostics', paneSession)); return }
       if (isCtrlShift('a')) { handled(openCoordinationBoard); return }
-      if (isCtrl('a')) { handled(() => openSplitPaneOverlay('analytics', paneSession)); return }
       // ⌃C means "stop what I'm watching" when the pane's agent is mid-turn —
       // the same key that quits an idle app must not kill the whole TUI when
       // the obvious intent is to interrupt this run.
@@ -26647,6 +26690,7 @@ function OpenTuiWorkspace() {
         onCursorChange={sessionKey(splitSession) === selectedSessionKey ? reportSelectedWindowCursor : undefined}
         onFollowChange={sessionKey(splitSession) === selectedSessionKey ? setFollowTail : undefined}
         chromeHost={splitIndex === chromeWindowIndex}
+        frameless={fullscreenMode}
         searchQuery={sessionKey(splitSession) === selectedSessionKey ? deferredSearchQuery : ''}
         activeSearchKey={searchMatches.length ? visibleTranscriptCards[searchMatches[searchMatchIndex] ?? -1]?.key ?? null : null}
         registerHandle={registerSplitPaneHandle}
@@ -27635,8 +27679,18 @@ function OpenTuiWorkspace() {
             // The surface layer draws the peeked window over the whole area.
             <box visible={false}>{readerFrameNode()}</box>
           ) : fullscreenMode && selectedSession ? (
-            // Full screen is the selected transcript's window, filling the area.
-            renderSplitPane(selectedSession, Math.max(selectedWindowIndex, 0), { width: readerAreaWidth, height: windowAreaHeight, boxHeight: windowAreaHeight })
+            // Full screen is the selected transcript's window, filling the area
+            // without its frame, under one row that says how to leave.
+            <box flexDirection="column" flexGrow={1}>
+              <box height={1} paddingX={1} flexDirection="row" alignItems="center" flexShrink={0}>
+                <box flexGrow={1} />
+                <box id="fullscreen-restore" paddingX={1} backgroundColor={theme.surface2}
+                  onMouseDown={(event) => { if (event.button !== 0) return; event.stopPropagation(); toggleFullscreenMode(false) }}>
+                  <text fg={theme.dim} wrapMode="none" selectable={false}>FULLSCREEN  Shift+Z restore</text>
+                </box>
+              </box>
+              {renderSplitPane(selectedSession, Math.max(selectedWindowIndex, 0), { width: readerAreaWidth, height: Math.max(windowAreaHeight - 1, 3), boxHeight: Math.max(windowAreaHeight - 1, 3) })}
+            </box>
           ) : !hasPrimaryFrame && orderedWindowKeys.length === 0 ? (
             <box flexGrow={1} alignItems="center" justifyContent="center" flexDirection="column">
               <text fg={theme.dim}>No panes open</text>
@@ -27644,24 +27698,22 @@ function OpenTuiWorkspace() {
             </box>
           ) : treeGeometry ? (
             <>
-              {hasPrimaryFrame ? <box key="tree-tool-tab" position="absolute" left={windowZoom === 'reader' ? 0 : (treeGeometry.rects.get(-1)?.x ?? 0)} top={windowZoom === 'reader' ? 0 : (treeGeometry.rects.get(-1)?.y ?? 0)}
-                width={windowZoom === 'reader' ? readerAreaWidth : treeGeometry.layout.reader.width} height={windowZoom === 'reader' ? windowAreaHeight : treeGeometry.layout.reader.height}
-                visible={!zooming || windowZoom === 'reader'} flexDirection="row">{readerFrameNode()}</box> : null}
               {windowItems.map((item, index) => {
                 const rect = treeGeometry!.rects.get(index)!
                 // The reader draws this window (below, under the window's id).
+                const hidden = windowHiddenByZoom(index) || index === popoverHostSlot
                 return <box key={windowItemKey(item)} position="absolute" left={zoomedIndex === index ? 0 : rect.x} top={zoomedIndex === index ? 0 : rect.y}
                   width={zoomedIndex === index ? readerAreaWidth : rect.width} height={zoomedIndex === index ? windowAreaHeight : rect.height}
-                  visible={!windowHiddenByZoom(index)} flexDirection="column">
-                  {renderWindowItem(item, index, zoomAware(index, { width: rect.width, height: rect.height, boxHeight: rect.height }), windowHiddenByZoom(index))}
+                  visible={!hidden} flexDirection="column">
+                  {renderWindowItem(item, index, zoomAware(index, { width: rect.width, height: rect.height, boxHeight: rect.height }), hidden)}
                 </box>
               })}
               {/* The window the reader draws carries that window's id, so anything that
                   finds a window by id (splits, drops, control mode) finds it here. */}
-              {/* The popover tab, in the slot the split tree keeps for it. */}
-              <box key="tree-reader" position="absolute" left={readerZoomed ? 0 : (treeGeometry.rects.get(-1)?.x ?? 0)} top={readerZoomed ? 0 : (treeGeometry.rects.get(-1)?.y ?? 0)}
-                width={readerZoomed ? readerAreaWidth : treeGeometry.rects.get(-1)?.width ?? 0} height={readerZoomed ? windowAreaHeight : treeGeometry.rects.get(-1)?.height ?? 0}
-                visible={hasPrimaryFrame && (!zooming || readerZoomed)} flexDirection="row">{hasPrimaryFrame ? readerFrameNode() : null}</box>
+              {/* The popover tab, over the window it took (or in its own slot). */}
+              <box key="tree-reader" position="absolute" left={windowZoom === 'reader' ? 0 : (treeGeometry.rects.get(-1)?.x ?? 0)} top={windowZoom === 'reader' ? 0 : (treeGeometry.rects.get(-1)?.y ?? 0)}
+                width={windowZoom === 'reader' ? readerAreaWidth : treeGeometry.rects.get(-1)?.width ?? 0} height={windowZoom === 'reader' ? windowAreaHeight : treeGeometry.rects.get(-1)?.height ?? 0}
+                visible={hasPrimaryFrame && (!zooming || windowZoom === 'reader')} flexDirection="row">{hasPrimaryFrame ? readerFrameNode() : null}</box>
             </>
           ) : arrangedVisible && splitArrangement === 'grid' && arrangedLayout.secondary ? (
             <>
