@@ -8042,6 +8042,8 @@ type SplitTranscriptPaneProps = {
   onTranscriptRelease: (event: MouseEvent) => boolean
   /** A card's follow-up questions, opened by clicking it in SCROLLBACK. */
   onOpenAsyncQuestions: (session: Session, card: TuiTranscriptCard) => void
+  /** A floating window moves by its title (App's float gesture). */
+  floatGesture: { start: (event: { x: number; y: number }) => void; move: (event: { x: number; y: number }) => void; end: (event: { x: number; y: number }) => void }
   /** Dragging the pane by its title onto the window area (App's shared press/move/release). */
   sessionDrag: { press: (session: Session, fromPane: number | null, event: { x: number; y: number }, onClick?: () => void) => void; move: (event: { x: number; y: number }) => void; release: (event: { x: number; y: number }) => void }
   // True while the reader is opening a session. The threading worker is
@@ -8097,6 +8099,7 @@ function SplitTranscriptPaneInner({
   onTranscriptPress,
   onTranscriptRelease,
   onOpenAsyncQuestions,
+  floatGesture,
   sessionDrag,
   shouldYieldToForeground,
 }: SplitTranscriptPaneProps) {
@@ -8480,7 +8483,10 @@ function SplitTranscriptPaneInner({
   // its previous instance has written where it was.
   const paneRestored = useRef(false)
   useEffect(() => {
-    if (paneRestored.current || !allPaneCards.length || followTail) return
+    if (paneRestored.current || !allPaneCards.length) return
+    // Following the tail, the bottom is the position: nothing to restore, and
+    // nothing later — a jump that lets go of the tail must not be undone.
+    if (followTail) { paneRestored.current = true; return }
     const timer = setTimeout(() => {
       const sb = scrollRef.current
       const position = positions.current.get(key) ?? initialPosition
@@ -8718,12 +8724,14 @@ function SplitTranscriptPaneInner({
         onActivate(paneIndex)
         // The title row drags a window; a double-click zooms a tiled frame.
         if (paneFrameRef.current && event.y === paneFrameRef.current.y) {
-          if (paneIndex !== FLOATING_PANE_INDEX && isDoubleClick(titleClickRef, event)) { onPromotePane(session); return }
+          // A floating window's title moves it.
+          if (paneIndex === FLOATING_PANE_INDEX) { floatGesture.start(event); return }
+          if (isDoubleClick(titleClickRef, event)) { onPromotePane(session); return }
           sessionDrag.press(session, paneIndex, event)
         }
       }}
-      onMouseDrag={(event) => sessionDrag.move(event)}
-      onMouseUp={(event) => sessionDrag.release(event)}
+      onMouseDrag={(event) => (paneIndex === FLOATING_PANE_INDEX ? floatGesture.move(event) : sessionDrag.move(event))}
+      onMouseUp={(event) => (paneIndex === FLOATING_PANE_INDEX ? floatGesture.end(event) : sessionDrag.release(event))}
     >
       <box position="absolute" top={-1} right={1} height={1} flexDirection="row" zIndex={3}>
         <WindowButton id={selected ? 'reader-window-menu' : `split-pane-menu:${paneIndex}`} label=" ≡ " theme={theme} onPress={point => onContextMenu(session, 'pane', point, paneIndex)} />
@@ -9974,6 +9982,14 @@ function OpenTuiWorkspace() {
     /** A right-click on a rail row, a tab or a pane title. */
     sessionMenu: (session: Session, source: 'rail' | 'tab' | 'pane', point: MenuPoint, paneIndex?: number) =>
       splitPaneActionsRef.current.sessionMenu(session, source, point, paneIndex),
+  }), [])
+  // The floating window's move gesture, for a transcript window floating: the
+  // drag is captured by the frame under the pointer, so it has to run it.
+  const floatGestureImplRef = useRef({ start: (_event: { x: number; y: number }) => {}, move: (_event: { x: number; y: number }) => {}, end: (_event: { x: number; y: number }) => {} })
+  const floatGestureHandlers = useMemo(() => ({
+    start: (event: { x: number; y: number }) => floatGestureImplRef.current.start(event),
+    move: (event: { x: number; y: number }) => floatGestureImplRef.current.move(event),
+    end: (event: { x: number; y: number }) => floatGestureImplRef.current.end(event),
   }), [])
   const sessionDragHandlers = useMemo(() => ({
     /** `onClick` runs on a release that did not move: whichever of the row or the layer gets it. */
@@ -21301,7 +21317,9 @@ function OpenTuiWorkspace() {
     const area = windowAreaRect()
     if (!area) return null
     const target = dropTargetAt(point)
-    if (target.pane !== null && (target.title || !target.insert)) return { kind: 'tab', pane: target.pane }
+    // A title row, not a window's middle: a float is moved over windows all the
+    // time, and letting go there must leave it floating where it was put.
+    if (target.pane !== null && target.title) return { kind: 'tab', pane: target.pane }
     if (point.x <= area.x || point.x >= area.x + area.width - 1 || point.y >= area.y + area.height - 1) return { kind: 'edge' }
     return null
   }
@@ -21336,6 +21354,7 @@ function OpenTuiWorkspace() {
       : { ...gesture.rect, width: gesture.rect.width + dx, height: gesture.rect.height + dy }
     setFloatingWindow({ ...floatingWindow, rect: clampFloatingRect(rect, area) })
   }
+  floatGestureImplRef.current = { start: (event) => startFloatGesture('move', event), move: (event) => moveFloatGesture(event), end: (event) => endFloatGesture(event) }
   const endFloatGesture = (event?: { x: number; y: number }) => {
     const gesture = floatGestureRef.current
     floatGestureRef.current = null
@@ -21532,7 +21551,7 @@ function OpenTuiWorkspace() {
     if (!edge || edge === 'center' || target.title || windowZoom !== null || fullscreenMode) return null
     if (orderedWindowKeys.length !== fittedWindowKeys.length) return null
     const anchor = target.pane === null ? null : windowItems[target.pane] ? windowItemKey(windowItems[target.pane]!) : undefined
-    if (anchor === undefined || movingKey === anchor) return null
+    if (anchor === undefined) return null
     const rects = windowLayoutRects(fittedWindows, { width: readerAreaWidth, height: windowAreaHeight, orientation: splitOrientation, readerLast: splitReaderLast })
     let base = reconciledSplitTree ?? { keys: orderedWindowKeys, root: splitTreeFromRects(rects.map((rect, index) => ({ ...rect, slot: index - 1 }))) }
     const stack = windowStackFor(movingKey)
@@ -21540,7 +21559,12 @@ function OpenTuiWorkspace() {
     const successor = stack && orderedWindowKeys.includes(movingKey) ? stackSuccessor(stack, movingKey) : null
     if (successor) base = { ...base, keys: base.keys.map(key => key === movingKey ? successor : key) }
     const primaryKey = shownPopoverTab ? surfaceWindowKey(shownPopoverTab) : null
-    const next = primaryKey && movingKey === primaryKey ? placePaneSlot(base, -1, target.pane ?? -1, edge) : placeWindowSplit(base, movingKey, anchor, edge)
+    // Onto its own edge, a window moves to that side of the whole layout.
+    const ownSlot = movingKey === anchor ? base.keys.indexOf(movingKey) : -1
+    const next = primaryKey && movingKey === primaryKey ? placePaneSlot(base, -1, target.pane ?? -1, edge)
+      : ownSlot >= 0 ? movePaneToEdge(base, ownSlot, edge)
+      : movingKey === anchor ? null
+      : placeWindowSplit(base, movingKey, anchor, edge)
     if (!next) return null
     const geometry = computeWindowSplitTree(next, readerAreaWidth, windowAreaHeight, splitTreeLimits)
     if (geometry.layout.visibleCount !== next.keys.length) return null
@@ -22216,11 +22240,18 @@ function OpenTuiWorkspace() {
         }
         if (key !== selectedSessionKey) {
           checkpointWindowLayout()
-          // The reader may be an unpinned preview tab. Keep it as the hidden
-          // pane's replacement instead of letting reconciliation drop it.
-          const reader = selectedSession
-          setOpenTabSessions((current) => reader && !current.some((tab) => sessionKey(tab) === sessionKey(reader)) ? [...current, reader] : current)
-          if (reader) setSplitPinnedKeys((current) => current.map((pin) => pin === key ? sessionKey(reader) : pin))
+          // The hidden window trades places with the selected session's, so it
+          // is shown and the order keeps every window; picking the other back
+          // trades them again. The selection may be an unpinned preview tab:
+          // keep it as a tab instead of letting reconciliation drop it.
+          const current = selectedSession
+          const currentKey = current ? sessionKey(current) : null
+          setOpenTabSessions((tabs) => current && !tabs.some((tab) => sessionKey(tab) === currentKey) ? [...tabs, current] : tabs)
+          if (currentKey) {
+            const swap = (keys: string[]) => keys.map((entry) => entry === key ? currentKey : entry === currentKey ? key : entry)
+            setSplitPinnedKeys(swap)
+            setWindowOrder(swap)
+          }
           selectTabSession(target.session)
         }
         focusReaderFromSplit()
@@ -26660,6 +26691,7 @@ function OpenTuiWorkspace() {
         onTranscriptPress={noteTranscriptLinkPress}
         onTranscriptRelease={openTranscriptLinkAt}
         onOpenAsyncQuestions={openCardAsyncQuestions}
+        floatGesture={floatGestureHandlers}
         sessionDrag={sessionDragHandlers}
         shouldYieldToForeground={splitPaneShouldYield}
       />

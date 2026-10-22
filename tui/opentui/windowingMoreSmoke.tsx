@@ -96,11 +96,42 @@ const frame = (id: string): Frame | null => {
   const box = setup.renderer.root.findDescendantById(id) as unknown as Frame | null
   return box ? { x: box.x, y: box.y, width: box.width, height: box.height } : null
 }
-// Visible panes only: a zoom hides the others but keeps them mounted.
-const panes = () => Array.from({ length: 31 }, (_, index) => index).map((index) => {
+// Every session is in a window. The one showing the selected session is what
+// this smoke calls the reader; the panes are the others, in window order.
+// Visible windows only: a zoom hides the others but keeps them mounted.
+const windowFrames = () => Array.from({ length: 31 }, (_, index) => index).map((index) => {
   const box = setup.renderer.root.findDescendantById(`split-pane:${index}`) as unknown as (Frame & { visible?: boolean }) | null
   return box && box.visible !== false ? { x: box.x, y: box.y, width: box.width, height: box.height } : null
-}).filter((box): box is Frame => box !== null)
+})
+const isReaderWindow = (box: Frame) => {
+  const reader = frame('transcript-reader')
+  return !!reader && reader.x >= box.x && reader.y >= box.y && reader.x + reader.width <= box.x + box.width && reader.y + reader.height <= box.y + box.height
+}
+const paneWindows = () => windowFrames().map((box, index) => ({ box, index })).filter((entry) => entry.box !== null && !isReaderWindow(entry.box)).map((entry) => entry.index)
+const paneIndex = (i: number) => (i === 64 ? 64 : paneWindows()[i] ?? -1)
+const paneFrame = (i: number) => frame(i === 64 ? 'floating-window' : `split-pane:${paneIndex(i)}`)
+const panes = () => paneWindows().map((index) => frame(`split-pane:${index}`)!).filter(Boolean)
+const windowCount = () => windowFrames().filter((box) => box !== null).length
+// By absolute window index (64 is the floating window), with an empty frame for
+// an index that is not laid out, so positions in the list are window indices.
+const allWindows = () => windowFrames().slice(0, Math.max(...windowFrames().map((box, index) => (box ? index + 1 : 0)), 0)).map((box) => box ?? { x: 0, y: 0, width: 0, height: 0 })
+const windowFrame = (i: number) => frame(i === 64 ? 'floating-window' : `split-pane:${i}`)
+const windowHas = (i: number, text: string) => {
+  const box = windowFrame(i)
+  if (!box) return false
+  return setup.captureCharFrame().split('\n').slice(box.y, box.y + box.height).some((line) => line.slice(box.x, box.x + box.width).includes(text))
+}
+const focusedWindow = () => spacesController!.runtime(spacesController!.activeWorkspace()!).values.get('splitFocusIndex') as number | null
+// The session window i shows, by its absolute index (focus moves the reader, not the windows).
+const windowName = (i: number) => {
+  const box = windowFrame(i)
+  if (!box) return null
+  const rows = setup.captureCharFrame().split('\n').slice(box.y, box.y + box.height).map((line) => line.slice(box.x, box.x + box.width))
+  return NAMES.find((name) => rows.some((line) => line.includes(marker(`win-${name}`)))) ?? null
+}
+// Whether any window, the reader's included, shows a session.
+const shownAnywhere = (name: string) => windowFrames().some((box) => box !== null
+  && setup.captureCharFrame().split('\n').slice(box.y, box.y + box.height).some((line) => line.slice(box.x, box.x + box.width).includes(marker(`win-${name}`))))
 const locate = (needle: string, within?: Frame): { x: number; y: number } => {
   const lines = setup.captureCharFrame().split('\n')
   for (let y = within?.y ?? 0; y < (within ? within.y + within.height : lines.length); y += 1) {
@@ -141,7 +172,10 @@ const checkSurfaceAlignment = (when: string) => {
   }
 }
 // Observe the actual workspace focus; frame children may be wrappers or tab strips.
-const focusedPane = (): number | null => spacesController!.runtime(spacesController!.activeWorkspace()!).values.get('splitFocusIndex') as number | null
+const focusedPane = (): number | null => {
+  const focus = spacesController!.runtime(spacesController!.activeWorkspace()!).values.get('splitFocusIndex') as number | null
+  return focus === null || focus === 64 ? focus : paneWindows().indexOf(focus)
+}
 
 const chordArrow = async (direction: 'up' | 'down' | 'left' | 'right') => {
   await act(async () => { setup.mockInput.pressKey('b', { ctrl: true }) })
@@ -150,7 +184,7 @@ const chordArrow = async (direction: 'up' | 'down' | 'left' | 'right') => {
   await settle(150)
 }
 const paneShows = (index: number, name: string) => {
-  const pane = frame(`split-pane:${index}`)
+  const pane = paneFrame(index)
   if (!pane) return false
   return setup.captureCharFrame().split('\n').slice(pane.y, pane.y + pane.height)
     .some((line) => line.slice(pane.x, pane.x + pane.width).includes(marker(`win-${name}`)))
@@ -180,7 +214,7 @@ const arrowChord = async (direction: 'up' | 'down' | 'left' | 'right', shift = f
 }
 const paneHas = (index: number, text: string) => {
   // Index 64 is the floating window, whichever kind it holds.
-  const pane = frame(index === 64 ? 'floating-window' : `split-pane:${index}`)
+  const pane = paneFrame(index)
   if (!pane) return false
   return setup.captureCharFrame().split('\n').slice(pane.y, pane.y + pane.height)
     .some((line) => line.slice(pane.x, pane.x + pane.width).includes(text))
@@ -221,7 +255,7 @@ check(panes().length === 0, 'hovering applied the grid')
 await click(six.x + 3, six.y + 1)
 await waitFor('five panes beside the reader', () => panes().length === 5)
 for (let index = 0; index < 6; index += 1) {
-  const actual = frame(index === 0 ? 'transcript-reader' : `split-pane:${index - 1}`)!
+  const actual = (index === 0 ? frame('transcript-reader') : paneFrame(index - 1))!
   const predicted = predictedGrid[index]!
   check(actual.x === predicted.x && actual.y === predicted.y && actual.width === predicted.width && actual.height === predicted.height, `preview geometry differs from applied window ${index}: ${JSON.stringify(predicted)} / ${JSON.stringify(actual)}`)
 }
@@ -257,8 +291,9 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   check(frame('transcript-reader')!.width !== before, 'the resize did not change geometry')
   await chordKey('u')
   check(frame('transcript-reader')!.width === before, 'undo did not restore the reader ratio')
-  // Height is constrained too, including the row occupied by the strip.
-  await act(async () => { setup.resize(220, 24) })
+  // Height is constrained too, including the row occupied by the strip. Two
+  // rows of minimum-height windows fit 24 rows exactly, so go below that.
+  await act(async () => { setup.resize(220, 22) })
   await settle(300)
   await waitFor('overflow when the terminal is short', () => !!frame('window-overflow') && panes().length < 5)
   await act(async () => { setup.resize(220, 46) })
@@ -270,9 +305,9 @@ console.log('A grid of six: the reader and two panes on top, three below.')
 
 {
   // The bottom row's divider: the first bottom pane's right border.
-  const first = frame('split-pane:2')!
+  const first = paneFrame(2)!
   const readerWidthBefore = frame('transcript-reader')!.width
-  const topPaneWidthBefore = frame('split-pane:0')!.width
+  const topPaneWidthBefore = paneFrame(0)!.width
   const handle = frame('tree-divider:1')
   check(handle && handle.x === first.x + first.width - 1, `the bottom divider is not on the first bottom pane's right border: ${JSON.stringify(handle)} / ${JSON.stringify(first)}`)
   const beforeClick = JSON.stringify(spacesController!.runtime(spacesController!.activeWorkspace()!).values.get('windowSplitTree'))
@@ -281,17 +316,20 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   await drag({ x: handle!.x, y: handle!.y + 3 }, { x: handle!.x + 10, y: handle!.y + 3 }, () => {
     check(!!frame('tree-divider-readout'), 'the bottom divider does not show the width it is setting')
   })
-  const wider = frame('split-pane:2')!
-  check(wider.width >= first.width + 8 && frame('split-pane:3')!.x === wider.x + wider.width, `dragging the bottom divider did not widen the first bottom pane: ${first.width} → ${wider.width}`)
-  check(frame('transcript-reader')!.width === readerWidthBefore && frame('split-pane:0')!.width === topPaneWidthBefore, 'the bottom divider moved the top row')
-  // ⌃B [ ] size the focused pane against its neighbour.
-  await chordKey('3')
+  const wider = paneFrame(2)!
+  check(wider.width >= first.width + 8 && paneFrame(3)!.x === wider.x + wider.width, `dragging the bottom divider did not widen the first bottom pane: ${first.width} → ${wider.width}`)
+  check(frame('transcript-reader')!.width === readerWidthBefore && paneFrame(0)!.width === topPaneWidthBefore, 'the bottom divider moved the top row')
+  // ⌃B [ ] size the focused pane against its neighbour. Focusing it makes it
+  // the selection, so it is followed by window index from here.
+  const firstBottom = paneIndex(2)
+  const bottomFrame = () => frame(`split-pane:${firstBottom}`)!
+  await chordKey(String(firstBottom))
   await chordKey(']')
-  check(frame('split-pane:2')!.width > wider.width, '⌃B ] did not widen the focused pane')
+  check(bottomFrame().width > wider.width, '⌃B ] did not widen the focused pane')
   await chordKey('u')
-  check(frame('split-pane:2')!.width === wider.width, 'undo did not restore the keyboard resize')
+  check(bottomFrame().width === wider.width, 'undo did not restore the keyboard resize')
   await chordKey('u')
-  check(frame('split-pane:2')!.width === first.width, 'a divider drag must undo in one step')
+  check(bottomFrame().width === first.width, 'a divider drag must undo in one step')
   const beforeCancel = JSON.stringify(spacesController!.runtime(spacesController!.activeWorkspace()!).values.get('windowSplitTree'))
   const cancelHandle = frame('tree-divider:1')!
   await drag({ x: cancelHandle.x, y: cancelHandle.y + 3 }, { x: cancelHandle.x + 6, y: cancelHandle.y + 3 }, async () => {
@@ -302,22 +340,22 @@ console.log('A grid of six: the reader and two panes on top, three below.')
 }
 {
   // Every border: the one between the top row's two panes drags too, and leaves the reader alone.
-  const left = frame('split-pane:0')!
-  const right = frame('split-pane:1')!
+  const left = paneFrame(0)!
+  const right = paneFrame(1)!
   const readerWidth = frame('transcript-reader')!.width
   const handle = frame('tree-divider:01')
   check(handle && handle.x === left.x + left.width - 1, `no border handle between the top panes: ${JSON.stringify(handle)}`)
   await drag({ x: handle!.x, y: handle!.y + 2 }, { x: handle!.x - 8, y: handle!.y + 2 })
-  check(frame('split-pane:0')!.width <= left.width - 6 && frame('split-pane:1')!.width >= right.width + 6, `the top border did not move: ${left.width}/${right.width} → ${frame('split-pane:0')!.width}/${frame('split-pane:1')!.width}`)
+  check(paneFrame(0)!.width <= left.width - 6 && paneFrame(1)!.width >= right.width + 6, `the top border did not move: ${left.width}/${right.width} → ${paneFrame(0)!.width}/${paneFrame(1)!.width}`)
   check(frame('transcript-reader')!.width === readerWidth, 'the top border moved the reader')
   await chordKey('u')
-  check(frame('split-pane:0')!.width === left.width, 'the border drag did not undo')
+  check(paneFrame(0)!.width === left.width, 'the border drag did not undo')
   console.log('The border between any two panes drags.')
 }
 
 // ── Right-click a pane: close it ────────────────────────────────────────────
 {
-  const last = frame('split-pane:4')!
+  const last = paneFrame(4)!
   await rightClick(last.x + 6, last.y)
   await waitFor('the pane menu', () => !!frame('context-menu'))
   const item = locate('Close pane', frame('context-menu')!)
@@ -325,13 +363,13 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   await waitFor('the pane to close', () => panes().length === 4)
   check(!frame('context-menu'), 'the menu stayed open after picking')
   // Right-click a rail row: open right of the reader (it joins the grid).
-  const hidden = NAMES.find((name) => name !== 'alpha' && ![0, 1, 2, 3].some((index) => paneName(index) === name))!
+  const hidden = NAMES.find((name) => !shownAnywhere(name))!
   const row = railRow(hidden)
   await rightClick(row.x + 1, row.y)
   await waitFor('the rail menu', () => !!frame('context-menu'))
   const open = locate('Open as a pane on the right', frame('context-menu')!)
   await click(open.x + 1, open.y)
-  await waitFor(`${hidden} to join the grid`, () => panes().length === 5 && [0, 1, 2, 3, 4].some(index => paneName(index) === hidden))
+  await waitFor(`${hidden} to join the grid`, () => windowCount() === 6 && shownAnywhere(hidden))
   await openMenu(); const grid = frame('window-layout:grid-six')!; await click(grid.x + 3, grid.y + 1)
   console.log('Right-click menus close a pane and split the focused pane for a rail session.')
 }
@@ -341,8 +379,8 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   await chordKey('5')
   await chordKey('x')
   await waitFor('four panes', () => panes().length === 4)
-  const hidden = NAMES.find((name) => name !== 'alpha' && ![0, 1, 2, 3].some((index) => paneName(index) === name))!
-  const first = frame('split-pane:0')!
+  const hidden = NAMES.find((name) => !shownAnywhere(name))!
+  const first = paneFrame(0)!
   const row = railRow(hidden)
   await drag({ x: row.x + 1, y: row.y }, { x: first.x + first.width - 2, y: first.y + Math.floor(first.height / 2) }, () => {
     check(setup.captureCharFrame().includes('Split does not fit'), 'an undersized target did not explain why the split is refused')
@@ -360,54 +398,59 @@ console.log('A grid of six: the reader and two panes on top, three below.')
 // ── ⌃B ⇧→ swaps; ⌃B m zooms ─────────────────────────────────────────────────
 {
   // Focus explicitly: Escape on an already-focused transcript requests exit.
+  // Windows are followed by absolute index: focusing one makes it the reader.
   await chordKey('0')
   await arrowChord('right')
-  check(focusedPane() === 0, `directional focus did not reach the first adjacent pane: ${focusedPane()}`)
-  const left = frame('split-pane:0')!
-  const right = frame('split-pane:1')!
+  check(focusedWindow() === 1, `directional focus did not reach the first adjacent window: ${focusedWindow()}`)
+  // A swap trades the two windows' places; each keeps its session.
+  const at = (i: number) => JSON.stringify(frame(`split-pane:${i}`))
+  const left = at(1), right = at(2)
   await arrowChord('right', true)
-  await waitFor('⌃B ⇧→ to swap the two top panes', () => JSON.stringify(frame('split-pane:0')) === JSON.stringify(right) && JSON.stringify(frame('split-pane:1')) === JSON.stringify(left))
+  await waitFor('⌃B ⇧→ to swap the two top windows', () => at(1) === right && at(2) === left)
   await chordKey('u')
-  await waitFor('undo to restore the pane positions', () => JSON.stringify(frame('split-pane:0')) === JSON.stringify(left) && JSON.stringify(frame('split-pane:1')) === JSON.stringify(right))
+  await waitFor('undo to restore the window positions', () => at(1) === left && at(2) === right)
   await arrowChord('right', true)
-  await waitFor('the swap again', () => JSON.stringify(frame('split-pane:0')) === JSON.stringify(right) && JSON.stringify(frame('split-pane:1')) === JSON.stringify(left))
-  const before = [0, 1, 2, 3, 4].map(paneName)
+  await waitFor('the swap again', () => at(1) === right && at(2) === left)
+  const before = [0, 1, 2, 3, 4, 5].map(windowName)
   await chordKey('m')
-  await waitFor('⌃B m to zoom one window', () => panes().length === 1)
+  await waitFor('⌃B m to zoom one window', () => windowCount() === 1)
   const area = frame('window-area')!
-  check(panes()[0]!.width === area.width && panes()[0]!.height === area.height, `the zoomed window is not the whole area: ${JSON.stringify(panes())} in ${JSON.stringify(area)}`)
+  const zoomed = windowFrames().find((box) => box !== null)!
+  check(zoomed.width === area.width && zoomed.height === area.height, `the zoomed window is not the whole area: ${JSON.stringify(zoomed)} in ${JSON.stringify(area)}`)
   check(!frame('split-secondary-divider'), 'the second divider is still drawn over a zoomed window')
   await chordKey('m')
-  await waitFor('⌃B m to restore the layout', () => panes().length === 5)
-  // Kept mounted: every pane shows its session on the first frame back, with no reload.
-  check([0, 1, 2, 3, 4].every((index) => paneName(index) === before[index]), `panes reloaded after the zoom: ${JSON.stringify([0, 1, 2, 3, 4].map(paneName))} vs ${JSON.stringify(before)}`)
+  await waitFor('⌃B m to restore the layout', () => windowCount() === 6)
+  // Kept mounted: every window shows its session on the first frame back, with no reload.
+  check([0, 1, 2, 3, 4, 5].every((index) => windowName(index) === before[index]), `windows reloaded after the zoom: ${JSON.stringify([0, 1, 2, 3, 4, 5].map(windowName))} vs ${JSON.stringify(before)}`)
   console.log('⌃B ⇧arrows swap windows; ⌃B m zooms and restores.')
 }
 
 // Dropping in the middle groups panes as tabs; undo restores their frames.
 {
-  await waitFor('pane sessions after zoom', () => [0, 1, 2, 3, 4].every((index) => paneName(index) !== null))
-  const order = [0, 1, 2, 3, 4].map(paneName)
-  const source = frame('split-pane:1')!
-  const target = frame('split-pane:0')!
+  const all = [0, 1, 2, 3, 4, 5]
+  await waitFor('window sessions after zoom', () => all.every((index) => windowName(index) !== null))
+  const order = all.map(windowName)
+  const source = frame('split-pane:2')!
+  const target = frame('split-pane:1')!
   await drag({ x: source.x + 10, y: source.y }, { x: target.x + Math.floor(target.width / 2), y: target.y + Math.floor(target.height / 2) })
-  await waitFor('centre drop to group the panes', () => !!frame(`window-tab:claude:win-${order[0]}`) && !!frame(`window-tab:claude:win-${order[1]}`))
+  await waitFor('centre drop to group the windows', () => !!frame(`window-tab:claude:win-${order[1]}`) && !!frame(`window-tab:claude:win-${order[2]}`))
   await chordKey('u')
-  await waitFor('undo to restore both replaced sessions', () => [0, 1, 2, 3, 4].every((index) => paneName(index) === order[index]))
+  await waitFor('undo to restore both replaced sessions', () => all.every((index) => windowName(index) === order[index]))
   // The original frame keeps its session while its geometry moves.
   await chordKey('0')
-  const originalFrame = frame('transcript-reader')!
+  const originalFrame = frame('split-pane:0')!
   await arrowChord('right', true)
-  await waitFor('original frame swapped with a pane', () => JSON.stringify(frame('transcript-reader')) !== JSON.stringify(originalFrame))
+  await waitFor('original frame swapped with a window', () => JSON.stringify(frame('split-pane:0')) !== JSON.stringify(originalFrame) && windowName(0) === order[0])
   await chordKey('u')
-  await waitFor('undo to restore the reader and pane order', () => readerShows('alpha') && [0, 1, 2, 3, 4].every((index) => paneName(index) === order[index]))
+  await waitFor('undo to restore the window order', () => JSON.stringify(frame('split-pane:0')) === JSON.stringify(originalFrame) && all.every((index) => windowName(index) === order[index]))
   console.log('Moves and replacements undo together with the reader session and divider geometry.')
 }
 
 // The switcher includes hidden windows and leaves their logical order intact.
 {
-  await waitFor('pane sessions for switching', () => [0, 1, 2, 3, 4].every((index) => paneName(index) !== null))
-  const order = [0, 1, 2, 3, 4].map(paneName)
+  const all = [0, 1, 2, 3, 4, 5]
+  await waitFor('window sessions for switching', () => all.every((index) => windowName(index) !== null))
+  const order = all.map(windowName)
   await act(async () => { setup.resize(90, 46) })
   await settle(300)
   await chordKey('p')
@@ -424,7 +467,7 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   await waitFor('the original reader restored', () => readerShows('alpha'))
   await act(async () => { setup.resize(220, 46) })
   await settle(300)
-  await waitFor('every original pane returned in order', () => [0, 1, 2, 3, 4].every((index) => paneName(index) === order[index]))
+  await waitFor('every original window returned in order', () => all.every((index) => windowName(index) === order[index]))
   console.log('Quick switching searches provider/title/project and opens hidden session windows without losing their order.')
 }
 
@@ -454,9 +497,10 @@ console.log('A grid of six: the reader and two panes on top, three below.')
 
 // ── Saved layouts ───────────────────────────────────────────────────────────
 {
-  // Panes remount after a zoom; read the order once each shows its session again.
-  await waitFor('every pane to show its session', () => [0, 1, 2, 3, 4].every((index) => paneName(index) !== null))
-  const order = [0, 1, 2, 3, 4].map(paneName)
+  // Windows remount after a zoom; read the order once each shows its session again.
+  const all = [0, 1, 2, 3, 4, 5]
+  await waitFor('every window to show its session', () => all.every((index) => windowName(index) !== null))
+  const order = all.map(windowName)
   await act(async () => { setup.resize(90, 46) })
   await settle(300)
   await chordKey('w')
@@ -467,17 +511,18 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   // The menu stays open after a save, now listing it.
   check(setup.captureCharFrame().includes('Layout 1') && !!frame('window-layout:grid'), 'the menu closed on save, or does not list the saved layout')
   const { listSavedWindowLayouts } = await import('./windowLayoutStore')
-  check(listSavedWindowLayouts(CWD)[0]?.panes.length === 5, 'saving at a small size discarded hidden panes')
+  // Every window is saved, the selected session's included.
+  check(listSavedWindowLayouts(CWD)[0]?.panes.length === 6, 'saving at a small size discarded hidden windows')
   await act(async () => { setup.mockInput.pressKey('5') })
   await act(async () => { setup.resize(220, 46) })
   await settle(300)
-  await waitFor('reader only', () => panes().length === 0)
+  await waitFor('one window filling the area', () => windowCount() === 1)
   await openMenu()
   const savedRow = setup.renderer.root.findDescendantById('window-layout:save')
   check(savedRow, 'the save row is gone')
   const row = locate('Layout 1')
   await click(row.x + 1, row.y)
-  await waitFor('the saved layout to come back in order', () => panes().length === 5 && [0, 1, 2, 3, 4].every((index) => paneName(index) === order[index]))
+  await waitFor('the saved layout to come back in order', () => windowCount() === 6 && all.every((index) => windowName(index) === order[index]))
   console.log('A saved layout restores the same windows in the same places.')
 }
 
@@ -506,21 +551,21 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   await act(async () => { setup.mockInput.pressEscape() })
   await chordKey('5')
   await chordKey('x')
-  await waitFor('four panes for the updated workspace', () => panes().length === 4)
+  await waitFor('five windows for the updated workspace', () => windowCount() === 5)
   await openMenu()
   const update = frame(`window-layout:update:${saved.id}`)!
   await click(update.x + 1, update.y)
   const updated = listSavedWindowLayouts(CWD)[0]!
-  check(updated.panes.length === 4 && updated.id === saved.id && updated.name === 'Review', 'update did not replace the contents under the existing name')
+  check(updated.panes.length === 5 && updated.id === saved.id && updated.name === 'Review', 'update did not replace the contents under the existing name')
   await act(async () => { setup.mockInput.pressEscape() })
   await chordKey('u')
-  await waitFor('the original five panes back', () => panes().length === 5)
+  await waitFor('the original six windows back', () => windowCount() === 6)
   await openMenu()
   await act(async () => { setup.mockInput.pressKey('n') })
   await waitFor('the named-save input', () => !!frame('window-layout:name'))
   await act(async () => { await setup.mockInput.typeText('Debugging') })
   await act(async () => { setup.mockInput.pressEnter() })
-  await waitFor('the named workspace saved', () => listSavedWindowLayouts(CWD).some((entry) => entry.name === 'Debugging' && entry.panes.length === 5))
+  await waitFor('the named workspace saved', () => listSavedWindowLayouts(CWD).some((entry) => entry.name === 'Debugging' && entry.panes.length === 6))
   await act(async () => { setup.mockInput.pressEscape() })
   console.log('Saved workspaces can be named, renamed with paste, updated in place, and previewed before restoring.')
 }
@@ -528,21 +573,24 @@ console.log('A grid of six: the reader and two panes on top, three below.')
 // Updates mark background panes passively. Only the explicit attention chord
 // moves focus, and looking at a pane acknowledges output/errors, not prompts.
 {
-  await waitFor('pane contents before background activity', () => [0, 1, 2, 3, 4].every((index) => paneName(index) !== null))
+  const all = [0, 1, 2, 3, 4, 5]
+  await waitFor('window contents before background activity', () => all.every((index) => windowName(index) !== null))
   await settle(100)
-  const targetIndex = [0, 1, 2, 3, 4].find((index) => paneName(index) === 'charlie')!
+  const targetIndex = all.find((index) => windowName(index) === 'charlie')!
+  const focusBefore = focusedWindow(), orderBefore = all.map(windowName)
   const sessionIndex = SESSIONS.findIndex((session) => session.sessionId === 'win-charlie')
   failedWindowSessions.add('win-charlie')
   SESSIONS[sessionIndex] = { ...SESSIONS[sessionIndex]!, lastModified: Date.now() }
   await waitFor('the background error badge', () => setup.captureCharFrame().includes('! error'))
-  check(readerShows('alpha') && focusedPane() === null, 'background output stole focus')
+  check(focusedWindow() === focusBefore, 'background output stole focus')
   check(setup.captureCharFrame().includes('unread'), 'new background output was not marked unread')
   await chordKey('a')
   await waitFor('attention to focus the affected pane', () => !setup.captureCharFrame().includes('! error') && !setup.captureCharFrame().includes('unread'))
-  check(readerShows('alpha'), 'the attention shortcut replaced the reader instead of focusing a visible pane')
+  check(focusedWindow() === targetIndex && all.every((index) => windowName(index) === orderBefore[index]),
+    'the attention shortcut replaced a window instead of focusing the visible one')
   viewerNotes.push({ id: 'window-input', sessionId: 'win-charlie', provider: 'claude', title: 'Needs a decision', createdAt: Date.now() })
   await waitFor('the pending-input badge', () => setup.captureCharFrame().includes('? input'))
-  check(paneName(targetIndex) === 'charlie', 'a prompt moved the panes')
+  check(windowName(targetIndex) === 'charlie', 'a prompt moved the windows')
   viewerNotes.length = 0
   failedWindowSessions.clear()
   await waitFor('the resolved input badge to disappear', () => !setup.captureCharFrame().includes('? input'))
@@ -552,16 +600,19 @@ console.log('A grid of six: the reader and two panes on top, three below.')
 
 // ── Search a pane's whole history ───────────────────────────────────────────
 {
-  const index = [0, 1, 2, 3, 4].find((at) => paneName(at) === 'bravo')!
-  await chordKey(String(index + 1))
-  check(!paneHas(index, 'NEEDLE-IN-BRAVO'), 'the needle is already on screen; the test proves nothing')
+  // A window's search is the transcript search: / opens its bar, the window
+  // highlights the matches, and Enter jumps to one, sliding older history in.
+  const index = [0, 1, 2, 3, 4, 5].find((at) => windowName(at) === 'bravo')!
+  const shows = (text: string) => { const box = frame(`split-pane:${index}`)!; return setup.captureCharFrame().split('\n').slice(box.y, box.y + box.height).some((line) => line.slice(box.x, box.x + box.width).includes(text)) }
+  await chordKey(String(index))
+  check(!shows('NEEDLE-IN-BRAVO'), 'the needle is already on screen; the test proves nothing')
   await act(async () => { setup.mockInput.pressKey('/') })
   await settle(80)
   await act(async () => { await setup.mockInput.typeText('needle') })
-  await settle(80)
-  check(setup.captureCharFrame().includes('/needle▏'), 'the pane title does not show the query being typed')
+  await settle(200)
+  check(setup.captureCharFrame().includes('SEARCH') && /1\/1 matches|1 match/.test(setup.captureCharFrame()), 'the search bar does not count the match')
   act(() => { setup.mockInput.pressEnter() })
-  await waitFor('the search to page back to the needle', () => paneHas(index, 'NEEDLE-IN-BRAVO'))
+  await waitFor('the search to page back to the needle', () => shows('NEEDLE-IN-BRAVO'))
   await act(async () => { setup.mockInput.pressEscape() })
   await settle(100)
   console.log('Searching a pane pages its older history in to reach the match.')
@@ -580,13 +631,13 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   const toWindow = locate('⧉ window')
   await click(toWindow.x + 2, toWindow.y)
   await waitFor('the terminal to become a window', () => setup.captureCharFrame().includes('❯ Terminal') && !frame('surface-panel-frame')?.width || setup.captureCharFrame().includes('❯ Terminal'))
-  const window = panes().find((pane) => setup.captureCharFrame().split('\n')[pane.y]?.slice(pane.x, pane.x + pane.width).includes('❯ Terminal'))
-  check(window, `no terminal window in the layout: ${JSON.stringify(panes())}`)
+  const window = allWindows().find((pane) => setup.captureCharFrame().split('\n')[pane.y]?.slice(pane.x, pane.x + pane.width).includes('❯ Terminal'))
+  check(window, `no terminal window in the layout: ${JSON.stringify(allWindows())}`)
   await act(async () => { setup.mockInput.pressKey('o') })
   await waitFor('a shell in the window', () => /[$#%>] ?$/m.test((() => { const shell = getShells()[0]; const term = shell ? shellTerminal(shell.id) : null; return term ? readAllScreenText(term).join('\n') : '' })()))
   await act(async () => { await setup.mockInput.typeText('echo from-a-window') })
   act(() => { setup.mockInput.pressEnter() })
-  await waitFor('the shell to run in the window', () => paneHas(panes().indexOf(window!), 'from-a-window') || setup.captureCharFrame().includes('from-a-window'))
+  await waitFor('the shell to run in the window', () => windowHas(allWindows().indexOf(window!), 'from-a-window') || setup.captureCharFrame().includes('from-a-window'))
   act(() => { setup.mockInput.pressKey(']', { ctrl: true }) })
   await settle(150)
   await act(async () => { setup.resize(65, 46) })
@@ -616,7 +667,7 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   const windowIndexOf = (buttonId: string): number => {
     const button = frame(buttonId)
     if (!button) return -1
-    return panes().findIndex((pane) => pane.width > 0 && button.y === pane.y && button.x >= pane.x && button.x < pane.x + pane.width)
+    return allWindows().findIndex((pane) => pane.width > 0 && button.y === pane.y && button.x >= pane.x && button.x < pane.x + pane.width)
   }
   act(() => { setup.mockInput.pressKey('O', { shift: true }) })
   await settle(400)
@@ -639,7 +690,7 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   // Each window's shell takes its own keys.
   const shellText = (index: number) => { const shell = getShells()[index]; const term = shell ? shellTerminal(shell.id) : null; return term ? readAllScreenText(term).join('\n') : '' }
   const before = getShells().length
-  await chordKey(String(windowIndexOf('surface-window-close:terminal') + 1))
+  await chordKey(String(windowIndexOf('surface-window-close:terminal')))
   await act(async () => { setup.mockInput.pressKey('o') })
   await waitFor('a shell in the first window', () => getShells().length === before + 1 && /[$#%>] ?$/m.test(shellText(before)))
   await act(async () => { await setup.mockInput.typeText('echo one-window') })
@@ -647,15 +698,15 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   await waitFor('the first shell to run', () => shellText(before).includes('one-window'))
   act(() => { setup.mockInput.pressKey(']', { ctrl: true }) })
   await settle(150)
-  await chordKey(String(windowIndexOf('surface-window-close:terminal#2') + 1))
+  await chordKey(String(windowIndexOf('surface-window-close:terminal#2')))
   await act(async () => { setup.mockInput.pressKey('o') })
   await waitFor('a shell in the second window', () => getShells().length === before + 2 && /[$#%>] ?$/m.test(shellText(before + 1)))
   await act(async () => { await setup.mockInput.typeText('echo two-window') })
   act(() => { setup.mockInput.pressEnter() })
   await waitFor('the second shell to run', () => shellText(before + 1).includes('two-window'))
   check(!shellText(before).includes('two-window'), 'typing in the second window reached the first window’s shell')
-  check(paneHas(windowIndexOf('surface-window-close:terminal'), 'one-window'), 'the first window does not show the shell typed into it')
-  check(!paneHas(windowIndexOf('surface-window-close:terminal'), 'two-window'), 'the first window shows the second window’s shell')
+  check(windowHas(windowIndexOf('surface-window-close:terminal'), 'one-window'), 'the first window does not show the shell typed into it')
+  check(!windowHas(windowIndexOf('surface-window-close:terminal'), 'two-window'), 'the first window shows the second window’s shell')
   act(() => { setup.mockInput.pressKey(']', { ctrl: true }) })
   await settle(150)
   await act(async () => { setup.mockInput.pressEscape() })
@@ -663,40 +714,40 @@ console.log('A grid of six: the reader and two panes on top, three below.')
 
   // Dragging a surface window's title onto a session pane swaps the two.
   const from = windowIndexOf('surface-window-close:terminal#2')
-  const target = panes().findIndex((pane, index) => index !== from && pane.width > 0 && paneName(index) !== null)
+  const target = allWindows().findIndex((pane, index) => index !== from && pane.width > 0 && windowName(index) !== null)
   check(from >= 0 && target >= 0, `no surface/session pair to swap: ${from} ${target}`)
-  const sessionBefore = paneName(target)
+  const sessionBefore = windowName(target)
   const mountedFrame = setup.renderer.root.findDescendantById('surface-frame:terminal#2')
   check(mountedFrame, 'the surface layer did not draw the terminal window')
-  const source = frame(`split-pane:${from}`)!
-  const dest = frame(`split-pane:${target}`)!
+  const source = windowFrame(from)!
+  const dest = windowFrame(target)!
   await drag({ x: source.x + 3, y: source.y }, { x: dest.x + Math.floor(dest.width / 2), y: dest.y + Math.floor(dest.height / 2) }, () => {
-    check(setup.captureCharFrame().includes(`Add as a tab of window ${target + 2}`), 'the drag ghost does not offer tabs')
+    check(setup.captureCharFrame().includes(`Add as a tab of window ${target + 1}`), 'the drag ghost does not offer tabs')
   })
   await waitFor('the surface grouped as a tab', () => !!frame(`window-tab:claude:win-${sessionBefore}`) && !!frame('window-tab:surface:terminal#2'))
   const movedIndex = windowIndexOf('surface-window-close:terminal#2')
-  check(paneHas(movedIndex, 'two-window'), 'the moved window no longer shows its own shell')
+  check(windowHas(movedIndex, 'two-window'), 'the moved window no longer shows its own shell')
   check(setup.renderer.root.findDescendantById('surface-frame:terminal#2') === mountedFrame, 'tabbing the surface remounted it')
   checkSurfaceAlignment('after grouping as tabs')
   await chordKey('u')
   await waitFor('undo to put the surface back', () => windowIndexOf('surface-window-close:terminal#2') === from)
   checkSurfaceAlignment('after undo')
   // As a background tab it stays mounted, hidden; shown again, it is the same window.
-  await chordKey(String(from + 1))
+  await chordKey(String(from))
   await chordKey('t')
   await waitFor('the terminal as a tab', () => !!frame('window-tab:surface:terminal#2'))
   const tabs = frame('window-tab:surface:terminal#2')!
-  const strip = panes().findIndex((pane) => pane.y === tabs.y && tabs.x >= pane.x && tabs.x < pane.x + pane.width)
+  const strip = allWindows().findIndex((pane) => pane.y === tabs.y && tabs.x >= pane.x && tabs.x < pane.x + pane.width)
   const otherTab = (setup.renderer.root.findDescendantById(`window-tabs:${strip}`) as unknown as { getChildren(): Array<Frame & { id: string }> }).getChildren().find((child) => child.id !== 'window-tab:surface:terminal#2')!
   await click(otherTab.x + 2, otherTab.y)
   await waitFor('the other tab shown', () => (setup.renderer.root.findDescendantById('surface-frame:terminal#2') as unknown as { visible?: boolean } | null)?.visible === false)
   check(setup.renderer.root.findDescendantById('surface-frame:terminal#2') === mountedFrame, 'a background tab was unmounted')
   const back = frame('window-tab:surface:terminal#2')!
   await click(back.x + 2, back.y)
-  await waitFor('the terminal tab shown again', () => paneHas(strip, 'two-window'))
+  await waitFor('the terminal tab shown again', () => windowHas(strip, 'two-window'))
   check(setup.renderer.root.findDescendantById('surface-frame:terminal#2') === mountedFrame, 'showing a tab again remounted it')
   checkSurfaceAlignment('a shown tab')
-  await chordKey(String(strip + 1))
+  await chordKey(String(strip))
   await chordKey('!')
   await waitFor('the terminal broken out again', () => !frame('window-tab:surface:terminal#2') && windowIndexOf('surface-window-close:terminal#2') >= 0)
   console.log('Surface windows open several of a kind, take their own keys, and swap with session panes by drag.')
@@ -704,26 +755,26 @@ console.log('A grid of six: the reader and two panes on top, three below.')
 
 // ── Tabbed windows ──────────────────────────────────────────────────────────
 {
-  const sessionPanes = () => panes().map((_, index) => index).filter((index) => paneName(index) !== null)
+  const sessionPanes = () => allWindows().map((_, index) => index).filter((index) => windowName(index) !== null)
   await waitFor('two session panes to tab together', () => sessionPanes().length >= 2)
-  const framesBefore = panes().length
+  const framesBefore = allWindows().length
   const [anchorIndex, movingIndex] = sessionPanes()
-  const anchorName = paneName(anchorIndex!)!
-  const movingName = paneName(movingIndex!)!
+  const anchorName = windowName(anchorIndex!)!
+  const movingName = windowName(movingIndex!)!
   // Drag one pane's title onto another's: it becomes a tab there.
-  const source = frame(`split-pane:${movingIndex}`)!
-  const dest = frame(`split-pane:${anchorIndex}`)!
+  const source = windowFrame(movingIndex)!
+  const dest = windowFrame(anchorIndex)!
   await drag({ x: source.x + 6, y: source.y }, { x: dest.x + Math.floor(dest.width / 2), y: dest.y }, () => {
-    check(setup.captureCharFrame().includes(`Add as a tab of window ${anchorIndex! + 2}`), 'the drag ghost does not offer a tab')
+    check(setup.captureCharFrame().includes(`Add as a tab of window ${anchorIndex! + 1}`), 'the drag ghost does not offer a tab')
   })
   await waitFor('the tab strip', () => !!frame('window-tab:claude:win-' + anchorName) && !!frame('window-tab:claude:win-' + movingName))
   // More windows than fit: the freed frame goes to a hidden one, so count where each name shows.
-  const framesShowing = (name: string) => panes().filter((_, index) => paneName(index) === name).length
+  const framesShowing = (name: string) => allWindows().filter((_, index) => windowName(index) === name).length
   check(framesShowing(movingName) === 1 && framesShowing(anchorName) === 0, `the two tabs are not one frame: ${movingName}=${framesShowing(movingName)} ${anchorName}=${framesShowing(anchorName)} (${framesBefore} frames)`)
   // Closing some other pane's tab leaves a pin to refill: a background tab must not be what fills it.
-  const others = panes().map((_, index) => index).filter((index) => paneName(index) !== null && paneName(index) !== movingName)
+  const others = allWindows().map((_, index) => index).filter((index) => windowName(index) !== null && windowName(index) !== movingName)
   if (others.length > 0) {
-    const victim = paneName(others[others.length - 1]!)!
+    const victim = windowName(others[others.length - 1]!)!
     const tabBarEntry = locate(`Win ${victim}`, frame('session-tabs')!)
     await rightClick(tabBarEntry.x + 1, tabBarEntry.y)
     await waitFor('the tab menu', () => !!frame('context-menu'))
@@ -733,35 +784,35 @@ console.log('A grid of six: the reader and two panes on top, three below.')
     await settle(300)
     check(framesShowing(anchorName) === 0 && !!frame('window-tab:claude:win-' + anchorName), `a background tab was pulled into a pane: ${anchorName}`)
   }
-  const tabFrame = panes().findIndex((_, index) => paneName(index) === movingName)
+  const tabFrame = allWindows().findIndex((_, index) => windowName(index) === movingName)
   check(tabFrame >= 0, 'the dropped tab is not the one shown')
   // Clicking the other tab shows it in the same frame.
   const otherTab = frame('window-tab:claude:win-' + anchorName)!
   await click(otherTab.x + 2, otherTab.y)
-  await waitFor('the clicked tab shown', () => paneName(tabFrame) === anchorName)
+  await waitFor('the clicked tab shown', () => windowName(tabFrame) === anchorName)
   // ⌃B . steps tabs in the focused window.
-  await chordKey(String(tabFrame + 1))
+  await chordKey(String(tabFrame))
   await chordKey('.')
-  await waitFor('⌃B . to step to the next tab', () => paneName(tabFrame) === movingName)
+  await waitFor('⌃B . to step to the next tab', () => windowName(tabFrame) === movingName)
   // Closing a tab leaves the frame showing the other.
   const close = frame('window-tab-close:claude:win-' + movingName)!
   await click(close.x, close.y)
-  await waitFor('closing a tab to show the other', () => paneName(tabFrame) === anchorName && !frame('window-tabs:' + tabFrame))
+  await waitFor('closing a tab to show the other', () => windowName(tabFrame) === anchorName && !frame('window-tabs:' + tabFrame))
   check(framesShowing(anchorName) === 1 && framesShowing(movingName) === 0, 'closing a tab closed the frame, or left the closed tab in a window')
   // ⌃B t tabs the focused window onto the one before; ⌃B ! breaks it back out.
   await waitFor('another session pane', () => sessionPanes().length >= 2)
   const second = sessionPanes()[1]!
-  const secondName = paneName(second)!
-  await chordKey(String(second + 1))
+  const secondName = windowName(second)!
+  await chordKey(String(second))
   await chordKey('t')
   await waitFor('⌃B t to make a tab', () => !!frame('window-tab:claude:win-' + secondName))
-  const shownAt = panes().findIndex((_, index) => paneName(index) === secondName)
-  await chordKey(String(shownAt + 1))
+  const shownAt = allWindows().findIndex((_, index) => windowName(index) === secondName)
+  await chordKey(String(shownAt))
   await chordKey('!')
   await waitFor('⌃B ! to break the tab out', () => !frame('window-tab:claude:win-' + secondName))
-  check(panes().some((_, index) => paneName(index) === secondName) || !!frame('floating-window'), 'the broken-out tab has no visible window')
+  check(allWindows().some((_, index) => windowName(index) === secondName) || !!frame('floating-window'), 'the broken-out tab has no visible window')
   // A tab dragged out of its strip onto empty space is its own window.
-  await chordKey(String(panes().findIndex((_, index) => paneName(index) === secondName) + 1))
+  await chordKey(String(allWindows().findIndex((_, index) => windowName(index) === secondName)))
   await chordKey('t')
   await waitFor('tabbed again', () => !!frame('window-tab:claude:win-' + secondName))
   const tab = frame('window-tab:claude:win-' + secondName)!
@@ -776,10 +827,11 @@ console.log('A grid of six: the reader and two panes on top, three below.')
     await chordKey('f')
     await waitFor('previously detached window docked', () => !frame('floating-window'))
   }
-  const session = panes().map((_, index) => index).find((index) => paneName(index) !== null)!
-  const name = paneName(session)!
-  const inLayout = () => panes().some((_, index) => paneName(index) === name)
-  await chordKey(String(session + 1))
+  const session = allWindows().map((_, index) => index).find((index) => windowName(index) !== null)!
+  const name = windowName(session)!
+  // From the layout, not the screen: the floating window is drawn over tiled ones.
+  const inLayout = () => ((spacesController!.runtime(spacesController!.activeWorkspace()!).values.get('windowOrder') ?? []) as string[]).includes(`claude:win-${name}`)
+  await chordKey(String(session))
   await chordKey('f')
   await waitFor('the floating window', () => !!frame('floating-window'))
   check(!inLayout(), 'floating the window left it in the layout too')
@@ -789,12 +841,12 @@ console.log('A grid of six: the reader and two panes on top, three below.')
     const box = floating()
     const inside = setup.captureCharFrame().split('\n').slice(box.y + 1, box.y + box.height - 1).map((line) => line.slice(box.x + 1, box.x + box.width - 1))
     // An underlying frame's border column, inside the floating box, must not show its │ down the rows.
-    const borderColumns = panes().flatMap((pane) => [pane.x, pane.x + pane.width - 1]).map((x) => x - box.x - 1).filter((x) => x > 2 && x < box.width - 4)
+    const borderColumns = allWindows().flatMap((pane) => [pane.x, pane.x + pane.width - 1]).map((x) => x - box.x - 1).filter((x) => x > 2 && x < box.width - 4)
     const showing = borderColumns.filter((x) => inside.filter((line) => line[x] === '│').length > inside.length * 0.6)
     check(showing.length === 0, `the windows underneath show through the floating one ${when}:\n${inside.join('\n')}`)
   }
   checkOpaque('while it loads')
-  await waitFor('the floating window to show its session', () => paneHas(64, marker(`win-${name}`)))
+  await waitFor('the floating window to show its session', () => windowHas(64, marker(`win-${name}`)))
   checkOpaque('once loaded')
   // Its title moves it; ◢ resizes it.
   const start = floating()
@@ -809,7 +861,7 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   check(setup.captureCharFrame().includes('⊞ dock'), 'no dock button on the floating window')
   await chordKey('f')
   await waitFor('docking it back', () => !frame('floating-window') && inLayout())
-  check(paneName(session) === name, `docking did not put it back in its slot: window ${session + 1} shows ${paneName(session)}`)
+  check(windowName(session) === name, `docking did not put it back in its slot: window ${session + 1} shows ${windowName(session)}`)
   await chordKey('u')
   await waitFor('undo to float it again', () => !!frame('floating-window'))
   await chordKey('u')
@@ -819,16 +871,16 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   await chordKey('u')
   await waitFor('undo floating to restore its pane', () => !frame('floating-window') && inLayout())
   // A surface window floats too, and its shell keeps its keys there.
-  const shellWindow = panes().findIndex((pane) => setup.captureCharFrame().split('\n')[pane.y]?.slice(pane.x, pane.x + pane.width).includes('❯ Terminal'))
+  const shellWindow = allWindows().findIndex((pane) => setup.captureCharFrame().split('\n')[pane.y]?.slice(pane.x, pane.x + pane.width).includes('❯ Terminal'))
   check(shellWindow >= 0, 'no terminal window left to float')
-  await chordKey(String(shellWindow + 1))
+  await chordKey(String(shellWindow))
   await chordKey('f')
-  await waitFor('the floating terminal', () => !!frame('floating-window') && paneHas(64, 'Terminal'))
+  await waitFor('the floating terminal', () => !!frame('floating-window') && windowHas(64, 'Terminal'))
   await act(async () => { setup.mockInput.pressKey('o') })
   await settle(400)
   await act(async () => { await setup.mockInput.typeText('echo from-a-float') })
   act(() => { setup.mockInput.pressEnter() })
-  await waitFor('the floating shell to run', () => paneHas(64, 'from-a-float'))
+  await waitFor('the floating shell to run', () => windowHas(64, 'from-a-float'))
   act(() => { setup.mockInput.pressKey(']', { ctrl: true }) })
   await settle(150)
   await chordKey('f')
@@ -839,20 +891,25 @@ console.log('A grid of six: the reader and two panes on top, three below.')
 // ── Clicking a window focuses it ────────────────────────────────────────────
 {
   await chordKey('0')
-  const sessionWindows = panes().map((_, index) => index).filter((index) => paneName(index) !== null)
+  const sessionWindows = allWindows().map((_, index) => index).filter((index) => windowName(index) !== null)
   check(sessionWindows.length >= 2, 'need two session panes to click between')
   // A focused session pane's frame is lit: its border colour is the one no other session pane shares.
-  const paneFocused = (index: number) => focusedPane() === index
+  const paneFocused = (index: number) => focusedWindow() === index
   const borderOf = (id: string) => String((setup.renderer.root.findDescendantById(id) as unknown as { borderColor?: unknown } | null)?.borderColor ?? '')
 
   for (const index of sessionWindows.slice(0, 2)) {
-    const pane = frame(`split-pane:${index}`)!
+    const pane = windowFrame(index)!
     await click(pane.x + Math.floor(pane.width / 2), pane.y + Math.floor(pane.height / 2))
     await waitFor(`a click in pane ${index + 1}'s body to focus it`, () => paneFocused(index))
   }
+  // The reader is the selected session's window: a click in it focuses that window.
+  const readerIndex = () => allWindows().findIndex((box) => box.width > 0 && isReaderWindow(box))
+  const firstFocused = sessionWindows[0]!
+  await click(windowFrame(firstFocused)!.x + 4, windowFrame(firstFocused)!.y + 4)
+  await waitFor('the first window focused again', () => paneFocused(firstFocused))
   const reader = frame('transcript-reader')!
   await click(reader.x + Math.floor(reader.width / 2), reader.y + Math.floor(reader.height / 2))
-  await waitFor('a click in the reader to take focus back from the pane', () => sessionWindows.every((index) => !paneFocused(index)))
+  await waitFor('a click in the reader focuses its window', () => focusedWindow() === readerIndex())
   // From the rail, a click in the reader moves the keys there: j then scrolls
   // the transcript instead of moving the rail's selection.
   const railAlpha = locate('Win alpha', rail())
@@ -867,13 +924,13 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   const row = locate('Win alpha', rail())
   await click(row.x + 2, row.y)
   await settle(200)
-  const pane = frame(`split-pane:${sessionWindows[0]}`)!
+  const pane = windowFrame(sessionWindows[0])!
   await click(pane.x + Math.floor(pane.width / 2), pane.y + Math.floor(pane.height / 2))
   await waitFor('a click in a pane after the rail to focus the pane', () => paneFocused(sessionWindows[0]!))
   // A surface window's body focuses it too.
-  const surface = panes().findIndex((entry) => setup.captureCharFrame().split('\n')[entry.y]?.slice(entry.x, entry.x + entry.width).includes('❯ Terminal'))
+  const surface = allWindows().findIndex((entry) => setup.captureCharFrame().split('\n')[entry.y]?.slice(entry.x, entry.x + entry.width).includes('❯ Terminal'))
   if (surface >= 0) {
-    const box = frame(`split-pane:${surface}`)!
+    const box = windowFrame(surface)!
     // The surface layer draws the frame over the slot; its id is the surface's.
     const drawn = (setup.renderer.root.findDescendantById('window-area') as unknown as { getChildren(): Array<Frame & { id: string; visible?: boolean }> })
       .getChildren().find((child) => child.id.startsWith('surface-frame:') && child.visible !== false && child.x === box.x && child.y === box.y)!
@@ -889,28 +946,29 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   const runtime = spacesController!.runtime(spacesController!.activeWorkspace()!)
   const { arrangePaneTree } = await import('./windowSplitTree')
   await act(async () => {
-    runtime.set('primaryWindowOpen', true); runtime.set('workspaceHasSession', true)
+    // Window 0 is alpha (the selected session, the "reader"), 1 bravo, 2 the terminal.
+    runtime.set('workspaceHasSession', true)
     runtime.set('selectedSessionKey', 'claude:win-alpha'); runtime.set('readerSession', SESSIONS[0])
-    runtime.set('openTabSessions', SESSIONS); runtime.set('splitPinnedKeys', ['claude:win-bravo']); runtime.set('splitPaneCount', 1)
-    runtime.set('windowSurfaces', ['terminal']); runtime.set('windowOrder', ['claude:win-bravo', 'surface:terminal'])
+    runtime.set('openTabSessions', SESSIONS); runtime.set('splitPinnedKeys', ['claude:win-alpha', 'claude:win-bravo']); runtime.set('splitPaneCount', 2)
+    runtime.set('windowSurfaces', ['terminal']); runtime.set('windowOrder', ['claude:win-alpha', 'claude:win-bravo', 'surface:terminal'])
     runtime.set('windowStacks', []); runtime.set('floatingWindow', null); runtime.set('windowZoom', null)
-    runtime.set('windowSplitTree', arrangePaneTree(['claude:win-bravo', 'surface:terminal'], true, 'columns'))
+    runtime.set('windowSplitTree', arrangePaneTree(['claude:win-alpha', 'claude:win-bravo', 'surface:terminal'], false, 'columns'))
     runtime.set('splitFocusIndex', null); runtime.set('surfacePanelOpen', false)
     setup.resize(360, 54)
   }); await settle(300)
   await act(async () => { setup.mockInput.pressKey(']', { ctrl: true }) }); await settle(100)
   const bravoVisible = () => {
-    const pane = frame('split-pane:0')
+    const pane = windowFrame(1)
     return !!pane && (setup.captureCharFrame().split('\n')[pane.y] ?? '').slice(pane.x, pane.x + pane.width).includes('Win bravo')
   }
   await waitFor('mixed frames for drag checks', () => readerShows('alpha') && bravoVisible() && !!frame('surface-window-close:terminal'))
   let reader = frame('transcript-reader')!
-  let pane = frame('split-pane:0')!
+  let pane = windowFrame(1)!
   await drag({ x: reader.x + 6, y: reader.y }, { x: pane.x + Math.floor(pane.width / 2), y: pane.y + Math.floor(pane.height / 2) })
-  await waitFor('original frame joins the same tab model', () => !frame('transcript-reader') && !!frame('window-tab:claude:win-alpha') && !!frame('window-tab:claude:win-bravo'))
+  await waitFor('original frame joins the same tab model', () => !!frame('window-tab:claude:win-alpha') && !!frame('window-tab:claude:win-bravo'))
   await chordKey('u')
   await waitFor('undo restores original and ordinary frames', () => readerShows('alpha') && bravoVisible())
-  reader = frame('transcript-reader')!; pane = frame('split-pane:0')!
+  reader = frame('transcript-reader')!; pane = windowFrame(1)!
   const beforeCancel = JSON.stringify(runtime.values.get('windowSplitTree'))
   await drag({ x: reader.x + 6, y: reader.y }, { x: pane.x + Math.floor(pane.width / 2), y: pane.y + Math.floor(pane.height / 2) }, async () => {
     await act(async () => { setup.mockInput.pressEscape() }); await settle(100)
@@ -924,7 +982,7 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   await chordKey('u')
   await waitFor('undo restores original frame geometry', () => frame('transcript-reader')!.x === originalX)
   reader = frame('transcript-reader')!
-  const surfaceSlot = frame('split-pane:1')!
+  const surfaceSlot = windowFrame(2)!
   await drag({ x: surfaceSlot.x + 4, y: surfaceSlot.y }, { x: reader.x + Math.floor(reader.width / 2), y: reader.y + Math.floor(reader.height / 2) }, () => {
     check(setup.captureCharFrame().includes('Add as a tab of window 1'), 'surface-to-original drag describes the wrong action')
   })
@@ -933,10 +991,13 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   await act(async () => { setup.mockInput.pressKey(']', { ctrl: true }) }); await settle(100)
   await chordKey('u')
   await waitFor('undo restores surface and original session', () => readerShows('alpha') && !!frame('surface-window-close:terminal'))
-  await chordKey('2'); await chordKey('f')
+  await chordKey('2')
+  // A focused shell owns ⌃B: hand the keys back before the chord.
+  await act(async () => { setup.mockInput.pressKey(']', { ctrl: true }) }); await settle(100)
+  await chordKey('f')
   await waitFor('surface floats', () => !!frame('floating-window'))
   const floated = frame('floating-window')!
-  const target = frame('split-pane:0')!
+  const target = windowFrame(0)!
   await drag({ x: floated.x + 6, y: floated.y }, { x: target.x + Math.floor(target.width / 2), y: target.y })
   await waitFor('floating surface becomes a tab', () => !frame('floating-window') && !!frame('window-tab:surface:terminal'))
   await act(async () => { setup.mockInput.pressKey(']', { ctrl: true }) }); await settle(100)
@@ -945,7 +1006,7 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   if (!frame('floating-window')) {
     const index = (runtime.values.get('windowOrder') as string[]).indexOf('surface:terminal')
     check(index >= 0, 'detached surface disappeared')
-    await chordKey(String(index + 1)); await chordKey('f')
+    await chordKey(String(index)); await chordKey('f')
   }
   await waitFor('detached surface floats again', () => !!frame('floating-window'))
   const area = frame('window-area')!, again = frame('floating-window')!

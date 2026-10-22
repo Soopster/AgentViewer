@@ -9,7 +9,7 @@ export type OverviewWindow = { key: string; title: string; detail: string; hidde
 export type OverviewNode = { id: string; title: string; detail: string; spaceId: string; workspaceId?: string; target?: string; children: OverviewNode[] }
 export type OverviewRow = OverviewNode & { depth: number; parent?: string; matched: boolean }
 
-const OVERVIEW_FIELDS = ['windowOverviewWindows', 'windowAttention', 'openTabSessions', 'readerSession', 'splitPinnedKeys', 'splitPaneCount', 'windowSurfaces', 'windowOrder', 'windowStacks', 'floatingWindow', 'popoverTabs', 'activePopoverTab', 'selectedSessionKey', 'primaryWindowOpen', 'workspaceHasSession', 'windowZoom'] as const
+const OVERVIEW_FIELDS = ['windowOverviewWindows', 'windowAttention', 'openTabSessions', 'readerSession', 'splitPinnedKeys', 'splitPaneCount', 'windowSurfaces', 'windowOrder', 'windowStacks', 'floatingWindow', 'popoverTabs', 'activePopoverTab', 'selectedSessionKey', 'workspaceHasSession', 'windowZoom'] as const
 export function subscribeWorkspaceOverview(controller: SpacesController, listener: () => void): () => void {
   let active = true, queued = false
   const changed = () => {
@@ -31,7 +31,6 @@ export function workspaceWindowOverview(runtime: WorkspaceRuntime): OverviewWind
     cached.set(window.key, window)
     for (const tab of window.tabs ?? []) cached.set(tab.key, tab)
   }
-  const reader = values.primaryWindowOpen === false || values.workspaceHasSession === false ? undefined : values.selectedSessionKey as string | undefined
   const keys = orderWindows((values.windowOrder ?? []) as string[], ((values.splitPinnedKeys ?? []) as string[]).slice(0, Number(values.splitPaneCount ?? 0)), (values.windowSurfaces ?? []) as string[])
   const rawStacks = (values.windowStacks ?? []) as string[][]
   const stripIds = [...new Set((values.popoverTabs ?? []) as string[])]
@@ -40,7 +39,7 @@ export function workspaceWindowOverview(runtime: WorkspaceRuntime): OverviewWind
   const floatingKey = floating?.key && !keys.includes(floating.key) ? floating.key : null
   const stacks = liveStacks(rawStacks, key => key !== floatingKey && (isSurfaceWindowKey(key)
     ? Object.hasOwn(WINDOW_SURFACE_TITLES, surfaceKindOf(surfaceIdOfKey(key))) && !stripIds.includes(surfaceIdOfKey(key))
-    : sessionByKey.has(key) && key !== reader), key => keys.includes(key))
+    : sessionByKey.has(key)), key => keys.includes(key))
   const zoom = values.windowZoom ?? null
   const meta = (values.windowSurfaceMeta ?? {}) as Record<string, { session?: string; path?: string; cwd?: string }>
   const title = (key: string): string => {
@@ -59,7 +58,6 @@ export function workspaceWindowOverview(runtime: WorkspaceRuntime): OverviewWind
     tabs: tabs ? stacks.find(stack => stack.includes(key))?.map(member => describe(member, hidden || member !== key, 'tab', false)) : undefined,
   })
   return [
-    ...(reader ? [describe(reader, Boolean(activeStrip) || zoom !== null && zoom !== 'reader', 'session')] : []),
     ...keys.map((key, index) => describe(key, zoom !== null ? zoom !== index : cached.get(key)?.hidden ?? false, 'window')),
     ...stripIds.map(id => describe(`surface:${id}`, id !== activeStrip || zoom !== null && zoom !== 'reader', 'workspace tab')),
     ...(floatingKey ? [describe(floatingKey, false, 'floating')] : []),
