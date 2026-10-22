@@ -13187,7 +13187,6 @@ function OpenTuiWorkspace() {
         : 2
     }
     if (visibleAwaitingPersistedTurn && !embeddedComposer) rows += 2
-    if (composerAutoTargetingRunning && composerTargetSession) rows += 1
     if ((liveStatus === 'retrying' || liveStatus === 'compacting') && visibleComposerSending) rows += 2
     if (visibleComposerSending && composerLiveReasoning.trim() && !isStreamView) rows += LIVE_PREVIEW_HEIGHT
     // Reattached-turn banner (rendered when a turn runs without an owned stream).
@@ -29325,14 +29324,6 @@ function OpenTuiWorkspace() {
         )
       ) : null}
 
-      {composerTargetMessage ? (
-        <box backgroundColor={theme.surface} paddingX={1}>
-          <text fg={theme.cyan} wrapMode="none">
-            {fitText(composerTargetMessage, Math.max(width - 4, 20))}
-          </text>
-        </box>
-      ) : null}
-
       {!composerWindowOpen && !composerHidden ? renderComposerMentionPanel(width, Math.max(width - 4, 20)) : null}
 
       {!composerWindowOpen && !composerHidden && !composerHistoryOpen && !composerStashOpen ? renderComposerSlashPanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
@@ -29355,8 +29346,10 @@ function OpenTuiWorkspace() {
           border={fullscreenMode ? [] : ['top', 'left', 'right', 'bottom']}
           borderStyle={composerDockRouted ? 'heavy' : isChatLikeView ? 'single' : 'rounded'}
           borderColor={composerDockEmphasized ? composerAccentColor : theme.border}
-          title={fullscreenMode || isChatLikeView ? undefined : composerDockBorderTitle}
-          titleColor={composerDockEmphasized ? composerAccentColor : theme.dim}
+          title={fullscreenMode ? undefined : composerTargetMessage
+            ? fitText(composerTargetMessage, composerDockTitleWidth)
+            : isChatLikeView ? undefined : composerDockBorderTitle}
+          titleColor={composerTargetMessage ? theme.cyan : composerDockEmphasized ? composerAccentColor : theme.dim}
           titleAlignment="left"
           height={composerDockHeight}
           flexDirection="column"
