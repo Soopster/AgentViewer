@@ -96,8 +96,8 @@ import {
 import type { SelectedLineRange } from '@pierre/diffs'
 import { LayoutEvents, RGBA, SyntaxStyle, MacOSScrollAccel, TextAttributes, type NativeResourceOwner } from '@opentui/core'
 import type { BaseRenderable, BoxRenderable, CliRenderer, Renderable, MarkdownRenderable, MouseEvent, ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable, TextareaAction } from '@opentui/core'
-import { deriveReaderWindow, getReaderWindowStart, primeReaderWindowStart, setReaderWindowStart, stepReaderWindow, subscribeReaderWindowStart } from './readerWindowStore'
-import type { ReaderWindow } from './readerWindowStore'
+import { createReaderWindowStore, deriveReaderWindow, getReaderWindowStart, primeReaderWindowStart, rootReaderWindowStore, setReaderWindowStart, stepReaderWindow, subscribeReaderWindowStart } from './readerWindowStore'
+import type { ReaderWindow, ReaderWindowStore } from './readerWindowStore'
 import { useKeyboard, usePaste, useRenderer, useSelectionHandler, useTerminalDimensions } from '@opentui/react'
 import {
   formatProviderLabel,
@@ -8681,6 +8681,200 @@ type TranscriptWindowInputs = Pick<TranscriptCardVariantInputs,
 const subscribeControlledTranscriptWindow = (_listener: () => void) => () => {}
 const getControlledTranscriptWindowStart = () => null
 
+type ReaderWindowSlidingOptions = {
+  store: ReaderWindowStore
+  scrollRef: React.RefObject<ScrollBoxRenderable | null>
+  gaugeRef: React.RefObject<ReaderWindowGauge>
+  fixupRef: React.MutableRefObject<ReaderScrollFixup | null>
+  cards: TuiTranscriptCard[]
+  cursorKey: string | null
+  cursorIndex: number
+  followTail: boolean
+  setFollowTail: (follow: boolean) => void
+  /** The window is being read: it slides under scrolling and recenters on its cursor. */
+  active: boolean
+  /** Set while a saved position is being restored; nothing moves the window until it is. */
+  holdRef?: React.RefObject<unknown>
+  /** SCROLLBACK: a cursor the scroll poll parked must not recenter the window it was parked in. */
+  scrollbackSyncedKeyRef?: React.RefObject<string | null>
+  onScrolled?: (scrollTop: number) => void
+  /** The cursor the window last recentered for. A restore sets it, so the restored cursor is not a move. */
+  recenterKeyRef?: React.MutableRefObject<string | null>
+}
+
+// The mounted card window of one transcript window: it follows the tail,
+// recenters on a cursor that leaves its middle, slides under scrolling, and
+// keeps the text still across each of those (the scroll fixups). Every
+// transcript window runs its own, against its own store.
+function useReaderWindowSliding({
+  store, scrollRef, gaugeRef, fixupRef, cards, cursorKey, cursorIndex, followTail, setFollowTail,
+  active, holdRef, scrollbackSyncedKeyRef, onScrolled, recenterKeyRef,
+}: ReaderWindowSlidingOptions): void {
+  const renderer = useRenderer()
+  const totalCards = cards.length
+  // Re-engaging the tail lets the derived tail window take over again.
+  // Silent: the tail-pinned derivation ignores the stored start anyway.
+  useEffect(() => {
+    if (followTail) store.prime(null)
+  }, [followTail, store])
+
+  // Keyboard recenter: when the cursor (absolute index) leaves the comfortable
+  // middle of the mounted window — within READER_WINDOW_MARGIN of an edge that
+  // has more cards beyond it, or outside the window entirely (search jump,
+  // bookmark jump, g) — recenter the window on the cursor. The fixup scrolls
+  // the cursor card into view once the new window has mounted and laid out.
+  // Gated on the cursor actually MOVING: wheel-scrolling slides the window
+  // away from a stationary cursor, and recentering on it then would yank the
+  // window straight back — a slide/recenter livelock against the scroll poll.
+  const ownRecenterKeyRef = useRef<string | null>(null)
+  const recenterCursorKeyRef = recenterKeyRef ?? ownRecenterKeyRef
+  useEffect(() => {
+    if (holdRef?.current) return
+    const cursorMoved = cursorKey !== recenterCursorKeyRef.current
+    recenterCursorKeyRef.current = cursorKey
+    if (!cursorMoved) return
+    // The scroll poll slides the window under a scrolled SCROLLBACK;
+    // recentering on the cursor it dragged along would yank the text.
+    if (scrollbackSyncedKeyRef && cursorKey === scrollbackSyncedKeyRef.current) return
+    if (!active || followTail) return
+    if (totalCards <= READER_CARD_WINDOW) return
+    if (cursorIndex < 0) return
+    const { start, end } = gaugeRef.current
+    const nearStart = start > 0 && cursorIndex < start + READER_WINDOW_MARGIN
+    const nearEnd = end < totalCards && cursorIndex >= end - READER_WINDOW_MARGIN
+    if (!nearStart && !nearEnd) return
+    const nextStart = clamp(cursorIndex - Math.floor(READER_CARD_WINDOW / 2), 0, totalCards - READER_CARD_WINDOW)
+    if (nextStart === start) return
+    const cursorCard = cards[cursorIndex]
+    if (cursorCard) fixupRef.current = { kind: 'cursor', cardKey: cursorCard.key, committed: false }
+    store.set(nextStart)
+  }, [cursorIndex, cursorKey, active, followTail, totalCards, cards, store])
+
+  // Window slide. A frame callback reads scrollTop before each painted frame
+  // (two property reads; no frame, no read) and requests a slide once the
+  // viewport is within READER_SLIDE_AHEAD_VIEWPORTS of the mounted content's
+  // edge in the direction the user is scrolling. Direction matters: a slide
+  // moves scrollTop by the rows it added or removed above, and without it a
+  // tall card could land the viewport inside the opposite threshold and slide
+  // straight back.
+  const seenRef = useRef<{ top: number; direction: -1 | 0 | 1 }>({ top: -1, direction: 0 })
+  const requestSlide = useEffectEvent((direction: -1 | 1) => {
+    const start = gaugeRef.current.start
+    const nextStart = direction < 0
+      ? Math.max(0, start - READER_WINDOW_SLIDE)
+      : Math.min(start + READER_WINDOW_SLIDE, totalCards - READER_CARD_WINDOW)
+    if (nextStart === start) return
+    fixupRef.current = { kind: 'slide', at: performance.now() }
+    // Out of the frame that noticed the scroll: a store update renders
+    // synchronously, and inside a frame callback that render would be part of
+    // the frame the user is waiting on.
+    setTimeout(() => {
+      store.set(nextStart)
+      // Scrolling far up off the tail means reading history; the tail-pinned
+      // derivation (and its scroll-to-bottom effects) must let go.
+      if (direction < 0 && followTail) setFollowTail(false)
+    }, 0)
+  })
+  const slides = totalCards > READER_CARD_WINDOW
+  useEffect(() => {
+    if (!active || !slides) return undefined
+    const seen = seenRef.current
+    seen.top = -1
+    seen.direction = 0
+    const onFrame = async () => {
+      const sb = scrollRef.current
+      if (!sb) return
+      const scrollTop = sb.scrollTop
+      if (seen.top >= 0 && scrollTop !== seen.top) seen.direction = scrollTop > seen.top ? 1 : -1
+      seen.top = scrollTop
+      if (holdRef?.current) return
+      const pending = fixupRef.current
+      if (pending) {
+        if (pending.kind !== 'slide' || performance.now() - pending.at < READER_SLIDE_REQUEST_TTL_MS) return
+        fixupRef.current = null
+      }
+      // Content not laid out yet (fresh mount) or shorter than the viewport —
+      // scrollTop reads 0 and would spuriously trigger a top-edge slide.
+      const viewportRows = sb.viewport.height
+      const maxScroll = sb.scrollHeight - viewportRows
+      if (maxScroll <= 0) return
+      // Never more than a third of the mounted rows, so the two thresholds
+      // cannot overlap however short the window's content is.
+      const ahead = Math.min(READER_SLIDE_AHEAD_VIEWPORTS * viewportRows, Math.floor(maxScroll / 3))
+      const { start, end, total, settled } = gaugeRef.current
+      // Still growing toward the last target: the rows are already on their way.
+      if (!settled) return
+      if (start > 0 && (scrollTop <= READER_EDGE_ROWS || (seen.direction < 0 && scrollTop <= ahead))) {
+        requestSlide(-1)
+      } else if (end < total
+        && (maxScroll - scrollTop <= READER_EDGE_ROWS || (seen.direction > 0 && maxScroll - scrollTop <= ahead))) {
+        requestSlide(1)
+      }
+    }
+    renderer.setFrameCallback(onFrame)
+    return () => renderer.removeFrameCallback(onFrame)
+  }, [active, slides, renderer])
+
+  // Scroll fixup, in two halves, so the corrected scrollTop reaches the screen
+  // in the SAME frame as the new window's content. A frame painted between the
+  // two showed the wrong rows — the visible jump of the old timer-based fixup.
+  // 1. At the commit that changed the window, TranscriptWindowBody picks an
+  //    anchor row mounted in both windows and records where it sat.
+  // 2. In the next frame's layout pass. The root emits `layout-changed` after
+  //    Yoga has computed the new tree and before any renderable is positioned
+  //    or drawn, and a scrollbox applies scrollTop to its content's screen
+  //    position immediately — so a scrollTop set here is the one this frame
+  //    paints. The anchor moved by exactly the rows added or removed above it;
+  //    scrollTop moves by the same, applied to wherever the user has scrolled
+  //    to since the commit.
+  const onScrolledEvent = useEffectEvent((top: number) => { onScrolled?.(top) })
+  useEffect(() => {
+    const root = renderer.root
+    const onLayout = () => {
+      const fixup = fixupRef.current
+      if (!fixup || fixup.kind === 'slide' || (fixup.kind === 'cursor' && !fixup.committed)) return
+      fixupRef.current = null
+      const sb = scrollRef.current
+      if (!sb) return
+      const content = sb.content
+      const contentLayout = readReaderLayout(content)
+      if (!contentLayout) return
+      const scrollTop = sb.scrollTop
+      let nextTop = scrollTop
+      if (fixup.kind === 'anchor') {
+        if (fixup.el.isDestroyed) return // session switched mid-slide — drop
+        const offset = readerLayoutOffset(fixup.el, content)
+        if (offset === null) return
+        nextTop = scrollTop + offset - fixup.prevOffset
+      } else {
+        const el = findReaderCard(content, `card:${fixup.cardKey}`)
+        const offset = el ? readerLayoutOffset(el, content) : null
+        if (!el || offset === null) return
+        // scrollChildIntoView's rule, against the layout Yoga just produced.
+        const layout = readReaderLayout(el)
+        if (!layout) return
+        const height = layout.height
+        const viewportRows = sb.viewport.height
+        const startsAbove = offset < scrollTop
+        const endsBelow = offset + height > scrollTop + viewportRows
+        if (startsAbove !== endsBelow) {
+          nextTop = startsAbove === height < viewportRows ? offset : offset + height - viewportRows
+        }
+      }
+      // The scrollbar clamps to the content height it last saw, which is the
+      // old window's until the content box is positioned later this frame.
+      sb.verticalScrollBar.scrollSize = Math.max(contentLayout.height, 1)
+      sb.scrollTo(Math.max(0, nextTop))
+      seenRef.current.top = sb.scrollTop
+      onScrolledEvent(sb.scrollTop)
+    }
+    root.on(LayoutEvents.LAYOUT_CHANGED, onLayout)
+    return () => {
+      root.off(LayoutEvents.LAYOUT_CHANGED, onLayout)
+    }
+  }, [renderer])
+}
+
 function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInputs }) {
   const {
     visibleTranscriptCards, followTail, isScrubbing, isScrollbackView, scrollbackExpanded, scrollbackToggledKeys,
@@ -10128,7 +10322,6 @@ function OpenTuiWorkspace() {
   // has committed and laid out.
   const readerScrollFixupRef = useRef<ReaderScrollFixup | null>(null)
   // Last scrollTop the slide detector saw, and which way the user last moved.
-  const readerScrollSeenRef = useRef<{ top: number; direction: -1 | 0 | 1 }>({ top: -1, direction: 0 })
   // What the transcript window last committed, for the root's handlers.
   const readerWindowOutputRef = useRef<ReaderWindowOutput>({ start: 0, cardDisplayData: [], scrollbackExpandedKeys: null })
   // Bumped when the window start is primed silently, to carry it on a render.
@@ -10152,6 +10345,7 @@ function OpenTuiWorkspace() {
   // undo the scroll that moved it.
   const scrollbackSyncedCursorKeyRef = useRef<string | null>(null)
   const tabReaderPositionsRef = useTranscriptWindowPositions()
+  const recenterCursorKeyRef = useRef<string | null>(null)
   const pendingTabReaderRestoreRef = useRef<{
     sessionKey: string
     position: NonNullable<ReturnType<typeof tabReaderPositionsRef.current.get>>
@@ -19305,51 +19499,6 @@ function OpenTuiWorkspace() {
     return () => clearTimeout(timer)
   }, [activeAgentToolCursorKey, followTail, transcriptCursorKey, isScrollbackView])
 
-  // ── Reader window management ───────────────────────────────────────────────
-  // Session restoration above owns the detached window. Re-engaging the tail
-  // lets the derived tail window take over again.
-  useEffect(() => {
-    // Silent: the tail-pinned derivation ignores the stored start anyway.
-    if (followTail) primeReaderWindowStart(null)
-  }, [followTail])
-
-  // Keyboard recenter: when the cursor (absolute index) leaves the comfortable
-  // middle of the mounted window — within READER_WINDOW_MARGIN of an edge that
-  // has more cards beyond it, or outside the window entirely (search jump,
-  // bookmark jump, g) — recenter the window on the cursor. The fixup scrolls
-  // the cursor card into view once the new window has mounted and laid out.
-  // Gated on the cursor actually MOVING: wheel-scrolling slides the window
-  // away from a stationary cursor, and recentering on it then would yank the
-  // window straight back — a slide/recenter livelock against the scroll poll.
-  const recenterCursorKeyRef = useRef<string | null>(null)
-  useEffect(() => {
-    if (pendingTabReaderRestoreRef.current) return
-    const cursorMoved = transcriptCursorKey !== recenterCursorKeyRef.current
-    recenterCursorKeyRef.current = transcriptCursorKey
-    if (!cursorMoved) return
-    // The scroll poll below slides the window under a scrolled SCROLLBACK;
-    // recentering on the cursor it dragged along would yank the text.
-    if (isScrollbackView && transcriptCursorKey === scrollbackSyncedCursorKeyRef.current) return
-    if (effectiveFocus !== 'messages' || followTail) return
-    if (totalTranscriptCards <= READER_CARD_WINDOW) return
-    if (cursorIndex < 0) return
-    const { start: transcriptRenderStart, end: transcriptRenderEnd } = readerWindowGaugeRef.current
-    const nearStart = transcriptRenderStart > 0
-      && cursorIndex < transcriptRenderStart + READER_WINDOW_MARGIN
-    const nearEnd = transcriptRenderEnd < totalTranscriptCards
-      && cursorIndex >= transcriptRenderEnd - READER_WINDOW_MARGIN
-    if (!nearStart && !nearEnd) return
-    const nextStart = clamp(
-      cursorIndex - Math.floor(READER_CARD_WINDOW / 2),
-      0,
-      totalTranscriptCards - READER_CARD_WINDOW,
-    )
-    if (nextStart === transcriptRenderStart) return
-    const cursorCard = visibleTranscriptCards[cursorIndex]
-    if (cursorCard) readerScrollFixupRef.current = { kind: 'cursor', cardKey: cursorCard.key, committed: false }
-    setReaderWindowStart(nextStart)
-  }, [cursorIndex, transcriptCursorKey, effectiveFocus, followTail, totalTranscriptCards, visibleTranscriptCards, isScrollbackView])
-
   // SCROLLBACK wheel: the scrollbox emits no scroll events, so poll for a
   // scroll the keys did not make. While following, only scrollTop going DOWN
   // in value under content that did not shrink is the user — a growing reply
@@ -19375,129 +19524,17 @@ function OpenTuiWorkspace() {
     return () => clearInterval(interval)
   }, [isScrollbackView, isScrubbing, followTail])
 
-  // Window slide. A frame callback reads scrollTop before each painted frame
-  // (two property reads; no frame, no read) and requests a slide once the
-  // viewport is within READER_SLIDE_AHEAD_VIEWPORTS of the mounted content's
-  // edge in the direction the user is scrolling. Direction matters: a slide
-  // moves scrollTop by the rows it added or removed above, and without it a
-  // tall card could land the viewport inside the opposite threshold and slide
-  // straight back.
-  const requestReaderSlide = useEffectEvent((direction: -1 | 1) => {
-    const transcriptRenderStart = readerWindowGaugeRef.current.start
-    const nextStart = direction < 0
-      ? Math.max(0, transcriptRenderStart - READER_WINDOW_SLIDE)
-      : Math.min(transcriptRenderStart + READER_WINDOW_SLIDE, totalTranscriptCards - READER_CARD_WINDOW)
-    if (nextStart === transcriptRenderStart) return
-    readerScrollFixupRef.current = { kind: 'slide', at: performance.now() }
-    // Out of the frame that noticed the scroll: a store update renders
-    // synchronously, and inside a frame callback that render would be part of
-    // the frame the user is waiting on.
-    setTimeout(() => {
-      setReaderWindowStart(nextStart)
-      // Scrolling far up off the tail means reading history; the tail-pinned
-      // derivation (and its scroll-to-bottom effects) must let go.
-      if (direction < 0 && followTail) setFollowTail(false)
-    }, 0)
-  })
-  const readerWindowSlides = totalTranscriptCards > READER_CARD_WINDOW
-  useEffect(() => {
-    if (effectiveFocus !== 'messages' || isScrubbing || !readerWindowSlides) return undefined
-    const seen = readerScrollSeenRef.current
-    seen.top = -1
-    seen.direction = 0
-    const onFrame = async () => {
-      const sb = transcriptScrollRef.current
-      if (!sb) return
-      const scrollTop = sb.scrollTop
-      if (seen.top >= 0 && scrollTop !== seen.top) seen.direction = scrollTop > seen.top ? 1 : -1
-      seen.top = scrollTop
-      if (pendingTabReaderRestoreRef.current) return
-      const pending = readerScrollFixupRef.current
-      if (pending) {
-        if (pending.kind !== 'slide' || performance.now() - pending.at < READER_SLIDE_REQUEST_TTL_MS) return
-        readerScrollFixupRef.current = null
-      }
-      // Content not laid out yet (fresh mount) or shorter than the viewport —
-      // scrollTop reads 0 and would spuriously trigger a top-edge slide.
-      const viewportRows = sb.viewport.height
-      const maxScroll = sb.scrollHeight - viewportRows
-      if (maxScroll <= 0) return
-      // Never more than a third of the mounted rows, so the two thresholds
-      // cannot overlap however short the window's content is.
-      const ahead = Math.min(READER_SLIDE_AHEAD_VIEWPORTS * viewportRows, Math.floor(maxScroll / 3))
-      const { start, end, total, settled } = readerWindowGaugeRef.current
-      // Still growing toward the last target: the rows are already on their way.
-      if (!settled) return
-      if (start > 0 && (scrollTop <= READER_EDGE_ROWS || (seen.direction < 0 && scrollTop <= ahead))) {
-        requestReaderSlide(-1)
-      } else if (end < total
-        && (maxScroll - scrollTop <= READER_EDGE_ROWS || (seen.direction > 0 && maxScroll - scrollTop <= ahead))) {
-        requestReaderSlide(1)
-      }
-    }
-    renderer.setFrameCallback(onFrame)
-    return () => renderer.removeFrameCallback(onFrame)
-  }, [effectiveFocus, isScrubbing, readerWindowSlides, renderer])
-
   const stickyHeaderKey = useStickyPromptKey(transcriptScrollRef, visibleTranscriptCards, stickyHeaders && !isScrubbing)
 
-  // Scroll fixup, in two halves, so the corrected scrollTop reaches the screen
-  // in the SAME frame as the new window's content. A frame painted between the
-  // two showed the wrong rows — the visible jump of the old timer-based fixup.
-  // 1. At the commit that changed the window, TranscriptWindowBody picks an
-  //    anchor row mounted in both windows and records where it sat.
-  // 2. In the next frame's layout pass. The root emits `layout-changed` after
-  //    Yoga has computed the new tree and before any renderable is positioned
-  //    or drawn, and a scrollbox applies scrollTop to its content's screen
-  //    position immediately — so a scrollTop set here is the one this frame
-  //    paints. The anchor moved by exactly the rows added or removed above it;
-  //    scrollTop moves by the same, applied to wherever the user has scrolled
-  //    to since the commit.
-  useEffect(() => {
-    const root = renderer.root
-    const onLayout = () => {
-      const fixup = readerScrollFixupRef.current
-      if (!fixup || fixup.kind === 'slide' || (fixup.kind === 'cursor' && !fixup.committed)) return
-      readerScrollFixupRef.current = null
-      const sb = transcriptScrollRef.current
-      if (!sb) return
-      const content = sb.content
-      const contentLayout = readReaderLayout(content)
-      if (!contentLayout) return
-      const scrollTop = sb.scrollTop
-      let nextTop = scrollTop
-      if (fixup.kind === 'anchor') {
-        if (fixup.el.isDestroyed) return // session switched mid-slide — drop
-        const offset = readerLayoutOffset(fixup.el, content)
-        if (offset === null) return
-        nextTop = scrollTop + offset - fixup.prevOffset
-      } else {
-        const el = findReaderCard(content, `card:${fixup.cardKey}`)
-        const offset = el ? readerLayoutOffset(el, content) : null
-        if (!el || offset === null) return
-        // scrollChildIntoView's rule, against the layout Yoga just produced.
-        const layout = readReaderLayout(el)
-        if (!layout) return
-        const height = layout.height
-        const viewportRows = sb.viewport.height
-        const startsAbove = offset < scrollTop
-        const endsBelow = offset + height > scrollTop + viewportRows
-        if (startsAbove !== endsBelow) {
-          nextTop = startsAbove === height < viewportRows ? offset : offset + height - viewportRows
-        }
-      }
-      // The scrollbar clamps to the content height it last saw, which is the
-      // old window's until the content box is positioned later this frame.
-      sb.verticalScrollBar.scrollSize = Math.max(contentLayout.height, 1)
-      sb.scrollTo(Math.max(0, nextTop))
-      readerScrollSeenRef.current.top = sb.scrollTop
-      pausedTranscriptScrollTopRef.current = sb.scrollTop
-    }
-    root.on(LayoutEvents.LAYOUT_CHANGED, onLayout)
-    return () => {
-      root.off(LayoutEvents.LAYOUT_CHANGED, onLayout)
-    }
-  }, [renderer])
+  // ── Reader window management ───────────────────────────────────────────────
+  useReaderWindowSliding({
+    recenterKeyRef: recenterCursorKeyRef,
+    store: rootReaderWindowStore, scrollRef: transcriptScrollRef, gaugeRef: readerWindowGaugeRef, fixupRef: readerScrollFixupRef,
+    cards: visibleTranscriptCards, cursorKey: transcriptCursorKey, cursorIndex, followTail, setFollowTail,
+    active: effectiveFocus === 'messages' && !isScrubbing,
+    holdRef: pendingTabReaderRestoreRef, scrollbackSyncedKeyRef: isScrollbackView ? scrollbackSyncedCursorKeyRef : undefined,
+    onScrolled: (top) => { pausedTranscriptScrollTopRef.current = top },
+  })
 
   // Native layout happens after the React commit. Restore by the visible card
   // and its row offset once that card has laid out, rather than scrolling the

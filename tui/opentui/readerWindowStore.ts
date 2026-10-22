@@ -41,11 +41,11 @@ export function createReaderWindowStore(): ReaderWindowStore {
 }
 
 // The window the root's reader draws in.
-const readerStore = createReaderWindowStore()
-export const getReaderWindowStart = readerStore.get
-export const subscribeReaderWindowStart = readerStore.subscribe
-export const setReaderWindowStart = readerStore.set
-export const primeReaderWindowStart = readerStore.prime
+export const rootReaderWindowStore = createReaderWindowStore()
+export const getReaderWindowStart = rootReaderWindowStore.get
+export const subscribeReaderWindowStart = rootReaderWindowStore.subscribe
+export const setReaderWindowStart = rootReaderWindowStore.set
+export const primeReaderWindowStart = rootReaderWindowStore.prime
 
 export type ReaderWindow = { start: number; end: number }
 
