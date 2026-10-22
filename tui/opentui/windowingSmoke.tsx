@@ -82,7 +82,19 @@ const frame = (id: string): Frame | null => {
   const box = setup.renderer.root.findDescendantById(id) as unknown as Frame | null
   return box ? { x: box.x, y: box.y, width: box.width, height: box.height } : null
 }
-const panes = () => Array.from({ length: 31 }, (_, index) => { const box = setup.renderer.root.findDescendantById(`split-pane:${index}`) as unknown as (Frame & { visible?: boolean }) | null; return box && box.visible !== false ? { x: box.x, y: box.y, width: box.width, height: box.height } : null }).filter((box): box is Frame => box !== null)
+// Every session is in a window; the one showing the selected session is what
+// this smoke calls the reader, and `panes()` are the windows beside it.
+const windowFrames = () => Array.from({ length: 31 }, (_, index) => { const box = setup.renderer.root.findDescendantById(`split-pane:${index}`) as unknown as (Frame & { visible?: boolean }) | null; return box && box.visible !== false ? { x: box.x, y: box.y, width: box.width, height: box.height } : null })
+const isReaderWindow = (box: Frame) => { const reader = frame('transcript-reader'); return !!reader && reader.x >= box.x && reader.y >= box.y && reader.x + reader.width <= box.x + box.width && reader.y + reader.height <= box.y + box.height }
+const panes = () => windowFrames().filter((box): box is Frame => box !== null && !isReaderWindow(box))
+// Pane i is the i-th window, in window order, that is not the reader's.
+const paneWindows = () => windowFrames().map((box, index) => ({ box, index })).filter((entry) => entry.box !== null && !isReaderWindow(entry.box)).map((entry) => entry.index)
+const paneIndex = (i: number) => paneWindows()[i] ?? -1
+const paneFrame = (i: number) => frame(`split-pane:${paneIndex(i)}`)
+const windowCount = () => windowFrames().filter((box) => box !== null).length
+// The window showing a session, whichever it is.
+const windowWith = (name: string) => windowFrames().find((box): box is Frame => box !== null
+  && setup.captureCharFrame().split('\n').slice(box.y, box.y + box.height).some((line) => line.slice(box.x, box.x + box.width).includes(marker(`win-${name}`)))) ?? null
 const locate = (needle: string, within?: Frame): { x: number; y: number } => {
   const lines = setup.captureCharFrame().split('\n')
   for (let y = within?.y ?? 0; y < (within ? within.y + within.height : lines.length); y += 1) {
@@ -113,7 +125,7 @@ const drag = async (from: { x: number; y: number }, to: { x: number; y: number }
 }
 const rail = () => frame('session-rail')!
 const runtime = () => controller!.runtime(controller!.activeWorkspace()!)
-const focusedPane = (): number | null => runtime().values.get('splitFocusIndex') as number | null
+const focusedPane = (): number | null => { const focus = runtime().values.get('splitFocusIndex') as number | null; return focus === null ? null : paneWindows().indexOf(focus) }
 // pressKey types its argument literally ("right" would be ⌃B r, rotate); arrows have their own call.
 const chordArrow = async (direction: 'up' | 'down' | 'left' | 'right') => {
   await act(async () => { setup.mockInput.pressKey('b', { ctrl: true }) })
@@ -122,7 +134,7 @@ const chordArrow = async (direction: 'up' | 'down' | 'left' | 'right') => {
   await settle(150)
 }
 const paneShows = (index: number, name: string) => {
-  const pane = frame(`split-pane:${index}`)
+  const pane = paneFrame(index)
   if (!pane) return false
   return setup.captureCharFrame().split('\n').slice(pane.y, pane.y + pane.height)
     .some((line) => line.slice(pane.x, pane.x + pane.width).includes(marker(`win-${name}`)))
@@ -162,7 +174,7 @@ await waitFor('grid fills from available sessions', () => panes().length === 3)
 const logicalBeforeFill = JSON.stringify(runtime().values.get('windowSplitTree'))
 await chord('1'); await openLayout()
 await act(async () => { setup.mockInput.pressKey('5') }); await settle(150)
-check(panes().length === 0 && runtime().values.get('windowZoom') === 'reader', 'Fill did not zoom the focused frame')
+check(panes().length === 0 && typeof runtime().values.get('windowZoom') === 'number', 'Fill did not zoom the focused frame')
 check(JSON.stringify(runtime().values.get('windowSplitTree')) === logicalBeforeFill, 'Fill discarded the other views')
 await chord('m')
 for (let count = 3; count > 0; count--) { await chord('2'); await chord('x') }
@@ -170,17 +182,18 @@ await chord('1')
 check(panes().length === 0 && readerShows('alpha'), 'closing neighbours replaced the original session')
 
 // Splits are local to the target frame and may mix axes.
+// A drop focuses the new window, and focus is the selection, so the frame
+// dropped on is found by the session it shows.
 for (const [name, edge] of [['bravo', 'right'], ['charlie', 'left'], ['delta', 'bottom']] as const) {
-  const row = railRow(name), reader = frame('transcript-reader')!
-  const point = edge === 'right' ? { x: reader.x + reader.width - 3, y: reader.y + Math.floor(reader.height / 2) }
-    : edge === 'left' ? { x: reader.x + 2, y: reader.y + Math.floor(reader.height / 2) }
-    : { x: reader.x + Math.floor(reader.width / 2), y: reader.y + reader.height - 2 }
-  const count = panes().length
+  const row = railRow(name), target = windowWith('alpha')!
+  const point = edge === 'right' ? { x: target.x + target.width - 3, y: target.y + Math.floor(target.height / 2) }
+    : edge === 'left' ? { x: target.x + 2, y: target.y + Math.floor(target.height / 2) }
+    : { x: target.x + Math.floor(target.width / 2), y: target.y + target.height - 2 }
+  const count = windowCount()
   await drag({ x: row.x + 1, y: row.y }, point, () => check(setup.captureCharFrame().includes('Split here'), 'valid split has no drag feedback'))
-  await waitFor(`${name} split ${edge}`, () => panes().length === count + 1 && paneShows(count, name))
-  const pane = frame(`split-pane:${count}`)!, original = frame('transcript-reader')!
+  await waitFor(`${name} split ${edge}`, () => windowCount() === count + 1 && !!windowWith(name))
+  const pane = windowWith(name)!, original = windowWith('alpha')!
   check(edge === 'right' ? pane.x >= original.x + original.width : edge === 'left' ? pane.x + pane.width <= original.x : pane.y >= original.y + original.height, 'split landed on the wrong side')
-  check(readerShows('alpha'), 'splitting a frame changed its session')
 }
 console.log('Rail drops create local mixed-axis splits without replacing neighbouring sessions.')
 await chord('1'); await arrange('grid')
@@ -188,55 +201,66 @@ let reader = frame('transcript-reader')!, area = frame('window-area')!
 const [topRight, bottomLeft, bottomRight] = panes() as [Frame, Frame, Frame]
 check(topRight.y === reader.y && topRight.x > reader.x && bottomLeft.y >= reader.y + reader.height && bottomRight.y === bottomLeft.y, 'grid is not two by two')
 check(bottomRight.x + bottomRight.width <= area.x + area.width, 'grid exceeds the window area')
-const moving = frame('split-pane:0')!, target = frame('split-pane:2')!
+const moving = paneFrame(0)!, target = paneFrame(2)!
 await drag({ x: moving.x + 4, y: moving.y }, { x: target.x + Math.floor(target.width / 2), y: target.y + Math.floor(target.height / 2) })
 await waitFor('centre drop groups tabs', () => !!frame('window-tab:claude:win-bravo') && !!frame('window-tab:claude:win-delta'))
 await chord('u')
-await waitFor('undo restores both frames', () => panes().length === 3 && paneShows(0, 'bravo') && paneShows(2, 'delta'))
-await chord('1'); await chordArrow('right'); check(focusedPane() === 0, 'right did not focus the adjacent pane')
-await chordArrow('down'); check(focusedPane() === 2, 'down did not focus the pane below')
-await chordArrow('left'); check(focusedPane() === 1, 'left did not focus the adjacent pane')
-const rowBefore = frame('transcript-reader')!, rowDivider = frame('tree-divider:')!
+await waitFor('undo restores both frames', () => windowCount() === 4 && !!windowWith('bravo') && !!windowWith('delta')
+  && windowWith('bravo')!.x > windowWith('alpha')!.x && windowWith('delta')!.y > windowWith('bravo')!.y)
+// Focus is the selection: the focused window is the selected session's.
+const focusedSession = () => runtime().values.get('selectedSessionKey')
+await chord('1'); await chordArrow('right'); check(focusedSession() === 'claude:win-bravo', 'right did not focus the adjacent pane')
+await chordArrow('down'); check(focusedSession() === 'claude:win-delta', 'down did not focus the pane below')
+await chordArrow('left'); check(focusedSession() === 'claude:win-charlie', 'left did not focus the adjacent pane')
+const rowBefore = windowWith('alpha')!, rowDivider = frame('tree-divider:')!
 await drag({ x: rowDivider.x + 10, y: rowDivider.y }, { x: rowDivider.x + 10, y: rowDivider.y + 3 }, () => check(!!frame('tree-divider-readout'), 'row divider has no size readout'))
-check(frame('transcript-reader')!.height >= rowBefore.height + 2, 'row divider did not resize both rows')
+check(windowWith('alpha')!.height >= rowBefore.height + 2, 'row divider did not resize both rows')
 await chord('u')
 await chord('1'); await arrange('main-stack')
 reader = frame('transcript-reader')!
 check(panes().length === 3 && panes().every(pane => pane.x === panes()[0]!.x && pane.x >= reader.x + reader.width), 'focused frame and stack arrangement is wrong')
-const stackFirst = frame('split-pane:0')!, stackDivider = frame('tree-divider:1')!
+const stackFirst = paneFrame(0)!, stackDivider = frame('tree-divider:1')!
 await drag({ x: stackDivider.x + 5, y: stackDivider.y }, { x: stackDivider.x + 5, y: stackDivider.y - 2 })
-check(frame('split-pane:0')!.height <= stackFirst.height - 1, 'stack divider did not resize its first pane')
-reader = frame('transcript-reader')!
-const oldNeighbour = frame('split-pane:1')!, tab = locate('Win bravo', frame('session-tabs')!)
+check(paneFrame(0)!.height <= stackFirst.height - 1, 'stack divider did not resize its first pane')
+reader = windowWith('alpha')!
+const oldNeighbour = windowWith('charlie')!, tab = locate('Win bravo', frame('session-tabs')!)
 await drag({ x: tab.x + 2, y: tab.y }, { x: reader.x + 2, y: reader.y + Math.floor(reader.height / 2) })
-await waitFor('strip tab moves beside the target frame', () => frame('split-pane:0')!.x < frame('transcript-reader')!.x)
-check(frame('split-pane:1')!.x === oldNeighbour.x && frame('split-pane:1')!.width === oldNeighbour.width, 'moving a tab rearranged an unrelated column')
-const widthBefore = frame('transcript-reader')!.width, mainDivider = frame('tree-divider:')!
+await waitFor('strip tab moves beside the target frame', () => windowWith('bravo')!.x < windowWith('alpha')!.x)
+check(windowWith('charlie')!.x === oldNeighbour.x && windowWith('charlie')!.width === oldNeighbour.width, 'moving a tab rearranged an unrelated column')
+const widthBefore = windowWith('alpha')!.width, mainDivider = frame('tree-divider:')!
 await drag({ x: mainDivider.x, y: mainDivider.y + 3 }, { x: mainDivider.x + 12, y: mainDivider.y + 3 }, () => check(!!frame('tree-divider-readout'), 'main divider has no size readout'))
-check(frame('transcript-reader')!.width >= widthBefore + 4, 'main divider did not resize its neighbouring frames')
+check(windowWith('alpha')!.width >= widthBefore + 4, 'main divider did not resize its neighbouring frames')
 check(!setup.renderer.getSelection()?.getSelectedText?.(), 'divider dragging selected transcript text')
 console.log('Grid, focused-frame stack, every shared divider, and strip-tab movement preserve local geometry.')
 
-// Every title control acts on that frame and never promotes its contents.
-const count = panes().length, close = frame('split-pane-close:1')!
+// Every title control acts on that frame and never promotes its contents. A
+// click on a window focuses it, and focus is the selection.
+const sameFrame = (a: Frame | null, b: Frame | null) => !!a && !!b && a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
+const nameOf = (box: Frame) => ['alpha', 'bravo', 'charlie', 'delta'].find((name) => sameFrame(windowWith(name), box)) ?? null
+const count = windowCount(), closing = paneFrame(1)!, closingName = nameOf(closing)!
+const close = frame(`split-pane-close:${paneIndex(1)}`)!
 await click(close.x + 1, close.y)
-await waitFor('title close removes its frame', () => panes().length === count - 1)
-const zoom = frame('split-pane-promote:0')!
+await waitFor('title close removes its frame', () => windowCount() === count - 1 && !windowWith(closingName))
+const zoomedName = nameOf(paneFrame(0)!)!
+const zoom = frame(`split-pane-promote:${paneIndex(0)}`)!
 await click(zoom.x + 1, zoom.y)
-await waitFor('title zoom fills the workspace', () => panes().length === 1 && frame('split-pane:0')!.width === frame('window-area')!.width)
-check(runtime().values.get('selectedSessionKey') === 'claude:win-alpha', 'title zoom replaced the original session')
+await waitFor('title zoom fills the workspace', () => windowCount() === 1 && windowWith(zoomedName)?.width === frame('window-area')!.width)
 await chord('m'); await settle(450)
-const pane = frame('split-pane:0')!
+check(windowCount() === count - 1 && !!windowWith('alpha'), 'title zoom replaced another session')
+const pane = paneFrame(0)!, zoomedPaneIndex = paneIndex(0)
 await click(pane.x + 6, pane.y); await click(pane.x + 6, pane.y)
-check(runtime().values.get('windowZoom') === 0, 'double-click did not zoom its own frame')
+check(runtime().values.get('windowZoom') === zoomedPaneIndex, 'double-click did not zoom its own frame')
 await chord('m'); await settle(450)
 reader = frame('transcript-reader')!
 await click(reader.x + 4, reader.y); await click(reader.x + 4, reader.y)
-check(runtime().values.get('windowZoom') === 'reader', 'double-click on the original frame behaves differently')
+// The selected session's window zooms like any other: by its index.
+check(typeof runtime().values.get('windowZoom') === 'number', 'double-click on the original frame behaves differently')
 await chord('m')
 const bravoTab = locate('Win bravo', frame('session-tabs')!)
+const bravoBefore = windowWith('bravo')!
 await click(bravoTab.x + 2, bravoTab.y)
-check(focusedPane() === 0 && readerShows('alpha'), 'clicking a tab replaced another visible frame')
+check(runtime().values.get('selectedSessionKey') === 'claude:win-bravo' && sameFrame(windowWith('bravo'), bravoBefore) && !!windowWith('alpha'),
+  'clicking a tab replaced another visible frame instead of focusing its own')
 const tabRow = () => setup.captureCharFrame().split('\n')[frame('session-tabs')!.y] ?? ''
 const closeTab = async (name: string) => {
   const at = tabRow().indexOf(`Win ${name}`), x = tabRow().indexOf('×', at)
@@ -245,14 +269,14 @@ const closeTab = async (name: string) => {
   await waitFor(`${name} closes from the strip`, () => !tabRow().includes(`Win ${name}`))
 }
 await closeTab('delta')
-check(paneShows(0, 'bravo') && readerShows('alpha'), 'closing another tab changed the surviving views')
+check(!!windowWith('bravo') && !!windowWith('alpha'), 'closing another tab changed the surviving views')
 await closeTab('alpha')
-check(!frame('transcript-reader') && paneShows(0, 'bravo'), 'closing the original tab opened an unrelated session')
+check(!windowWith('alpha') && !!windowWith('bravo') && windowCount() === 1, 'closing the original tab opened an unrelated session')
 const bravo = locate('Win bravo', frame('session-tabs')!)
 await act(async () => { await setup.mockMouse.pressDown(bravo.x + 2, bravo.y, 2 as never); await setup.mockMouse.release(bravo.x + 2, bravo.y, 2 as never) }); await settle(100)
 const menuClose = locate('Close tab', frame('context-menu')!)
 await click(menuClose.x + 1, menuClose.y)
-check(!tabRow().includes('Win bravo') && panes().length === 0, 'closing the last visible tab did not leave an empty layout')
+check(!tabRow().includes('Win bravo') && windowCount() === 0, 'closing the last visible tab did not leave an empty layout')
 console.log('Title controls, double-clicks, strip selection and closing use shared frame semantics.')
 console.log('Windowing smoke passed')
 act(() => setup.renderer.destroy())
