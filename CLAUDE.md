@@ -1265,6 +1265,28 @@ buffer and a converted line ending both *render perfectly*:
   none was. It asserts colours on open, colours travelling with text when a line
   is inserted above them, and a keyword typed mid-file picking up its own colour.
 
+#### Every window is a transcript window (load-bearing)
+
+There is no reader frame. Every session window is `SplitTranscriptPane` running the reader's card
+pipeline (`TranscriptWindowBody`, `useReaderWindowSliding`, `transcriptWindowState.ts`), so a split
+is never two different apps. "The reader" in older notes below means **the selected window**:
+focusing a window selects its session, and that window carries the `transcript-reader` /
+`transcript-scroll` ids, the view header and CHAT bar (`windowChrome.ts`, `chromeHost`), and
+receives the root's search, jumps and diff keys through its handle (`selectedWindowHandleRef`).
+Window numbers are indices + 1 (`windowNumberOffset`). Full screen draws the selected window
+frameless under the restore row.
+
+- **A letter with Ctrl or Meta is a chord in the window branch** (`letter`): under the kitty
+  protocol ⌃E arrives with `e` as its sequence, and the window's `e` folded a card instead of
+  opening the editor. `isTranscriptLocalKey` must not claim `n`/`N` without search matches
+  (Shift+N is new session).
+- **Watching a team keeps the lead's window first** (`planTeammateWatch`, `watchCoordinatorRun`).
+- **PANE (`v`) is the lightweight view**: compact cards, plain cursor, no header or sticky prompt,
+  and only the last `SPLIT_PANE_CARD_WINDOW` cards mounted, with `↑ N earlier messages — k/g to
+  load`; `jumpCursor` pages in an older target. `paneViewSmoke.tsx`.
+- Smokes from before the change read row 0 (now the spaces bar), `READING` (a window title says
+  `paused`) and the view label in the title; find the window by id instead.
+
 #### Window layouts and mouse-driven windows
 
 The reader and its split panes are arranged by `tui/opentui/windowLayout.ts`: `split` (the tmux
@@ -1366,10 +1388,14 @@ drawn in have one source; `windowLayoutSmoke.ts` checks every arrangement tiles 
     terminal mode, and only the `⌃B` prefix escapes; a key the editor declines reaches its
     textarea, which takes the focus slot only while the window is focused (`active`).
   **Popover tabs** (`popoverTabs`, `activePopoverTab`, workspace state) are entries of the session
-  tab strip after the session tabs: selecting one shows the popover in the reader's place (the
-  transcript stays mounted, hidden), and ←/→, `w`, `×`, right-click and clicks treat it like any tab
-  (`selectStripIndex`). While the reader is focused a shown popover tab takes the keys, Esc
-  included (it is the reader's place, not a window to leave); its own close closes the tab.
+  tab strip after the session tabs: selecting one shows the popover **in the window that was focused**
+  (`popoverTabHost`; laid out in that window's rect, the transcript mounted but hidden), and ←/→,
+  `w`, `×`, right-click and clicks treat it like any tab (`selectStripIndex`). It takes that window's
+  number, and the window behind it is not a focus stop: `⌃B <n>` on it focuses the tab. Only with no
+  session window to take does it get a slot of its own (`primaryLeaf`). **The host is recorded**,
+  or a tab would follow the selection — focus is selection — from window to window. While focused
+  (`splitFocusIndex === null`) a shown popover tab takes the keys, Esc included; its own close
+  closes the tab.
   `readerFrameNode` is a function so the tab frame renders after `renderSurfaceBody` exists. The
   tab frame carries the reader's title controls (`≡` is the tab's own menu, `⊞ layout`, `⤢`, `×`).
   Git, Files and PR (surface kinds with popovers, `SURFACE_POPOVER_KINDS`) take the same `⧉`
