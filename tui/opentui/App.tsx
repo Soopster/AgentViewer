@@ -7820,6 +7820,64 @@ type SplitPaneHandle = {
   search: (query: string, direction: 1 | -1) => 'found' | 'loading' | 'none'
 }
 
+// Sticky prompt header: the last user prompt whose card has scrolled above the
+// viewport's top edge. Polled off layout because scroll position is not React
+// state; it sets state only on a change, so an idle window does not re-render.
+function useStickyPromptKey(scrollRef: React.RefObject<ScrollBoxRenderable | null>, cards: TuiTranscriptCard[], enabled: boolean): string | null {
+  const [stickyKey, setStickyKey] = useState<string | null>(null)
+  useEffect(() => {
+    if (!enabled) {
+      setStickyKey(null)
+      return undefined
+    }
+    const userKeys = new Set(cards.filter((card) => card.role === 'user').map((card) => `card:${card.key}`))
+    // Each child.y is a native layout read, and at the tail this walk visits
+    // every mounted card, eight times a second, for an answer that cannot
+    // change while nothing moves. It was most of the main thread's CPU while a
+    // session sat open. Same geometry, same header: the walk runs only when the
+    // viewport or the content moved.
+    let lastGeometry = ''
+    const interval = setInterval(() => {
+      const sb = scrollRef.current
+      if (!sb || userKeys.size === 0) return
+      const scrollTop = sb.scrollTop
+      const children = sb.content.getChildren()
+      const geometry = `${scrollTop}:${sb.scrollHeight}:${sb.viewport.height}:${children.length}`
+      if (geometry === lastGeometry) return
+      lastGeometry = geometry
+      const viewportBottom = scrollTop + sb.viewport.height
+      // The newest prompt that has scrolled above the top edge — unless a
+      // newer one is already on screen, which then takes over: near the tail
+      // the header names the question being answered, not the one before it.
+      let next: string | null = null
+      let reachedTop = false
+      const contentTop = sb.content.y
+      for (const child of children) {
+        const row = readerRowCard(child as Renderable) ?? child
+        const top = child.y - contentTop
+        if (top >= viewportBottom) break
+        if (top >= scrollTop) reachedTop = true
+        if (userKeys.has(row.id) && (!reachedTop || next !== null)) next = row.id.slice('card:'.length)
+      }
+      setStickyKey((prev) => (prev === next ? prev : next))
+    }, READER_SCROLL_POLL_MS)
+    return () => clearInterval(interval)
+  }, [enabled, cards, scrollRef])
+  return stickyKey
+}
+
+function StickyPromptHeader({ card, theme, accent, width }: { card: TuiTranscriptCard; theme: TuiThemePalette; accent: string; width: number }) {
+  // A prompt's first line can be a single word ("Do") with the request on the
+  // lines below it; the header reads them as one.
+  return (
+    <box id="sticky-header" position="absolute" top={0} left={1} width={Math.max(width - 4, 12)} height={1}
+      flexDirection="row" zIndex={5} backgroundColor={theme.userBg} overflow="hidden">
+      <text fg={accent} attributes={TextAttributes.BOLD} wrapMode="none" width={10} flexShrink={0}>{'▌ PROMPT  '}</text>
+      <text fg={theme.text} attributes={TextAttributes.BOLD} wrapMode="none">{fitText(stickyPromptText(card), Math.max(width - 14, 2))}</text>
+    </box>
+  )
+}
+
 type SplitTranscriptPaneProps = {
   session: Session
   theme: TuiThemePalette
@@ -7854,6 +7912,7 @@ type SplitTranscriptPaneProps = {
   onContextMenu: (session: Session, source: 'pane', point: { x: number; y: number }, paneIndex: number) => void
   /** The pane's search, shown in its title while set (`/query`, with a caret while typed). */
   searchLabel: string | null
+  stickyHeaders: boolean
   /** Links in the transcript: noted on press, followed on an unmoved release (`renderer.getLinkAt`). */
   onTranscriptPress: (event: MouseEvent) => void
   onTranscriptRelease: (event: MouseEvent) => void
@@ -7897,6 +7956,7 @@ function SplitTranscriptPaneInner({
   onPromotePane,
   onContextMenu,
   searchLabel,
+  stickyHeaders,
   onTranscriptPress,
   onTranscriptRelease,
   sessionDrag,
@@ -8322,6 +8382,9 @@ function SplitTranscriptPaneInner({
     return () => clearTimeout(timer)
   }, [tailCards, followTail])
 
+  const stickyKey = useStickyPromptKey(scrollRef, tailCards, stickyHeaders)
+  const stickyCard = stickyKey ? tailCards.find((card) => card.key === stickyKey) ?? null : null
+
   // Focus changes intentionally do not touch cursorKey, followTail, or the
   // scrollbox. Each pane owns its viewport, so cycling reader → pane → pane
   // returns to the exact card and offset that pane had before losing focus.
@@ -8476,6 +8539,7 @@ function SplitTranscriptPaneInner({
         ) : (
           <scrollbox
             ref={scrollRef}
+            id={`split-scroll:${paneIndex}`}
             style={{ height: bodyRows }}
             backgroundColor={theme.surface}
             // Sticky only while the pane is still following: once the reader
@@ -8501,6 +8565,7 @@ function SplitTranscriptPaneInner({
             </TuiErrorBoundary>
           </scrollbox>
         )}
+        {stickyCard ? <StickyPromptHeader card={stickyCard} theme={theme} accent={accent} width={width} /> : null}
       </box>
       {liveText ? (
         <box paddingX={1} height={1}>
@@ -9360,7 +9425,6 @@ function OpenTuiWorkspace() {
   const [focusMode, setFocusMode] = useAppState('focusMode', false)
   const [stickyHeaders, setStickyHeaders] = useAppState('stickyHeaders', false)
   // Prompt card pinned under the reader's top edge while its turn scrolls past.
-  const [stickyHeaderKey, setStickyHeaderKey] = useState<string | null>(null)
   // Temporary presentation mode, deliberately separate from the persisted
   // focus preference: fullscreen can be entered and restored without changing
   // the user's normal rail/header layout.
@@ -19303,47 +19367,7 @@ function OpenTuiWorkspace() {
     return () => renderer.removeFrameCallback(onFrame)
   }, [effectiveFocus, isScrubbing, readerWindowSlides, renderer])
 
-  // Sticky prompt header: the last user prompt whose card has scrolled above
-  // the viewport's top edge. Polled off layout (like the window slide above)
-  // because scroll position is not React state; setState only on a change so an
-  // idle reader does not re-render the root.
-  useEffect(() => {
-    if (!stickyHeaders || isScrubbing) {
-      setStickyHeaderKey(null)
-      return undefined
-    }
-    const userKeys = new Set(visibleTranscriptCards.filter((card) => card.role === 'user').map((card) => `card:${card.key}`))
-    // Each child.y is a native layout read, and at the tail this walk visits
-    // every mounted card — up to READER_CARD_WINDOW of them, eight times a
-    // second, for an answer that cannot change while nothing moves. It was most
-    // of the main thread's CPU while a session sat open. Same geometry, same
-    // header: the walk runs only when the viewport or the content moved.
-    let lastGeometry = ''
-    const interval = setInterval(() => {
-      const sb = transcriptScrollRef.current
-      if (!sb || userKeys.size === 0) return
-      const scrollTop = sb.scrollTop
-      const children = sb.content.getChildren()
-      const geometry = `${scrollTop}:${sb.scrollHeight}:${sb.viewport.height}:${children.length}`
-      if (geometry === lastGeometry) return
-      lastGeometry = geometry
-      const viewportBottom = scrollTop + sb.viewport.height
-      // The newest prompt that has scrolled above the top edge — unless a
-      // newer one is already on screen, which then takes over: near the tail
-      // the header names the question being answered, not the one before it.
-      let next: string | null = null
-      let reachedTop = false
-      const contentTop = sb.content.y
-      for (const child of children) {
-        const top = child.y - contentTop
-        if (top >= viewportBottom) break
-        if (top >= scrollTop) reachedTop = true
-        if (userKeys.has(child.id) && (!reachedTop || next !== null)) next = child.id.slice('card:'.length)
-      }
-      setStickyHeaderKey((prev) => (prev === next ? prev : next))
-    }, READER_SCROLL_POLL_MS)
-    return () => clearInterval(interval)
-  }, [stickyHeaders, isScrubbing, visibleTranscriptCards])
+  const stickyHeaderKey = useStickyPromptKey(transcriptScrollRef, visibleTranscriptCards, stickyHeaders && !isScrubbing)
 
   // Scroll fixup, in two halves, so the corrected scrollTop reaches the screen
   // in the SAME frame as the new window's content. A frame painted between the
@@ -26624,27 +26648,7 @@ function OpenTuiWorkspace() {
         )}
         {stickyHeaders && stickyHeaderKey ? (() => {
           const stickyCard = visibleTranscriptCards.find((card) => card.key === stickyHeaderKey)
-          if (!stickyCard) return null
-          // A prompt's first line can be a single word ("Do") with the
-          // request on the lines below it; the header reads them as one.
-          const stickyText = stickyPromptText(stickyCard)
-          return (
-            <box
-              id="sticky-header"
-              position="absolute"
-              top={0}
-              left={1}
-              width={Math.max(rightPaneWidth - 4, 12)}
-              height={1}
-              flexDirection="row"
-              zIndex={5}
-              backgroundColor={theme.userBg}
-              overflow="hidden"
-            >
-              <text fg={providerAccent} attributes={TextAttributes.BOLD} wrapMode="none" width={10} flexShrink={0}>{'▌ PROMPT  '}</text>
-              <text fg={theme.text} attributes={TextAttributes.BOLD} wrapMode="none">{fitText(stickyText, Math.max(rightPaneWidth - 14, 2))}</text>
-            </box>
-          )
+          return stickyCard ? <StickyPromptHeader card={stickyCard} theme={theme} accent={providerAccent} width={rightPaneWidth} /> : null
         })() : null}
         {streamActionFooterRows > 0 ? (
           <box height={streamActionFooterRows} paddingLeft={1}>
@@ -27003,6 +27007,7 @@ function OpenTuiWorkspace() {
         onPromotePane={splitPaneActions.promote}
         onContextMenu={splitPaneActions.sessionMenu}
         searchLabel={paneSearch && paneSearch.index === splitIndex ? `/${paneSearch.query}${paneSearch.editing ? '▏' : ''}` : null}
+        stickyHeaders={stickyHeaders}
         onTranscriptPress={noteTranscriptLinkPress}
         onTranscriptRelease={openTranscriptLinkAt}
         sessionDrag={sessionDragHandlers}

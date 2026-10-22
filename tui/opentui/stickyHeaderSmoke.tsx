@@ -98,7 +98,8 @@ const fail = (message: string): never => {
 }
 const headerRow = () => setup.captureCharFrame().split('\n').find((row) => row.includes('▌ PROMPT')) ?? null
 type Scroll = { scrollTop: number; scrollHeight: number; viewport: { height: number } }
-const scroll = () => setup.renderer.root.findDescendantById('transcript-scroll') as unknown as Scroll
+// The focused window's transcript (every session is shown in a window).
+const scroll = () => setup.renderer.root.findDescendantById('split-scroll:0') as unknown as Scroll
 
 try {
   await settle(2500)
