@@ -252,6 +252,7 @@ import { normalizeCodexStreamThreadedMessage } from '../../lib/codexMapper'
 import { readTuiSessionMetadataAsync } from './metadataWorkerClient'
 import { shouldPrewarmTuiRuntime } from './sessionPrewarm'
 import { useTranscriptSessionLoader } from './useTranscriptSessionLoader'
+import { selectedWindowFooter, type WindowChrome } from './windowChrome'
 import { sessionTranscriptUpdatedAt } from './sessionRefreshPolicy'
 import { filterComposerMentionFilesAsync } from './composerMentionWorkerClient'
 import { TUI_FRAME_BUDGET_MS } from './performanceBudget'
@@ -7856,6 +7857,9 @@ function isTranscriptLocalKey(key: { name?: string; ctrl?: boolean; shift?: bool
   return sequence.length === 1 && 'jkgGefumbQyYnNs()[]{}/'.includes(sequence)
 }
 
+const subscribeNothing = (_listener: () => void) => () => {}
+const getNothing = () => null
+
 type SplitPaneHandle = {
   scrollByRows: (rows: number) => void
   scrollToTop: () => void
@@ -8539,7 +8543,9 @@ function SplitTranscriptPaneInner({
   // body box's own paddingBottom (1) + the optional live row + one action row.
   // The action row is reserved in every pane so focus never changes viewport
   // height or the meaning of its stored scrollTop.
-  const bodyRows = calculateSplitPaneBodyRows(height, statusRowCount)
+  // The reader's trailing chrome (CHAT's composer bar), in the window showing the selected transcript.
+  const footer = useSyncExternalStore(selected ? selectedWindowFooter.subscribe : subscribeNothing, selected ? selectedWindowFooter.get : getNothing)
+  const bodyRows = Math.max(calculateSplitPaneBodyRows(height, statusRowCount) - (footer?.rows ?? 0), 1)
   const windowGaugeRef = useRef<ReaderWindowGauge>({ start: 0, end: 0, total: 0, settled: true })
   const windowOutputRef = useRef<ReaderWindowOutput>({ start: 0, cardDisplayData: [], scrollbackExpandedKeys: null })
   const scrollFixupRef = useRef<ReaderScrollFixup | null>(null)
@@ -8713,6 +8719,7 @@ function SplitTranscriptPaneInner({
           <Spinner label={fitText('working…', Math.max(innerWidth - 2, 8))} fg={theme.dim} />
         </box>
       ) : null}
+      {footer ? footer.render(width) : null}
       {/* Key hints sit in the bottom border, as the composer's status does. */}
       <box position="absolute" bottom={-1} left={1} height={1} backgroundColor={theme.surface}>
         <text fg={theme.dim} wrapMode="none">
@@ -13612,12 +13619,16 @@ function OpenTuiWorkspace() {
   const badgeForWindow = (key: string, compact = false) => [coordinatorBadges.get(key) ? (compact ? '?' : coordinatorBadges.get(key)) : null, windowAttentionBadge({ ...windowAttention.get(key), needsInput: windowNeedsInputKeys.has(key) }, compact)].filter(Boolean).join(' · ') || null
   // A zoomed reader has the whole area; the other windows are not drawn.
   const readerZoomed = (windowZoom === 'reader' && !hasPrimaryFrame) || (readerWindowIndex >= 0 && windowZoom === readerWindowIndex)
-  const treeReaderRect = readerWindowFloating && floatingWindow && !fullscreenMode
+  // The window holding the transcript being read, whichever renderer draws it:
+  // the reader's own chrome (composer bar, status widths) is sized to it.
+  const transcriptWindowIndex = readerWindowIndex >= 0 ? readerWindowIndex : shownReaderWindowIndex
+  const transcriptWindowFloating = transcriptWindowIndex === FLOATING_PANE_INDEX
+  const treeReaderRect = transcriptWindowFloating && floatingWindow && !fullscreenMode
     ? clampFloatingRect(floatingWindow.rect, { width: readerAreaWidth, height: windowAreaHeight })
     : treeGeometry
-    ? (readerWindowIndex >= 0 ? treeGeometry.rects.get(readerWindowIndex) : treeGeometry.rects.get(-1)) ?? { x: 0, y: 0, ...treeGeometry.layout.reader }
-    : readerWindowIndex >= 0 && !readerWindowFloating && !fullscreenMode && fittedWindows.panes[readerWindowIndex]
-    ? { x: 0, y: 0, ...fittedWindows.panes[readerWindowIndex]! }
+    ? (transcriptWindowIndex >= 0 ? treeGeometry.rects.get(transcriptWindowIndex) : treeGeometry.rects.get(-1)) ?? { x: 0, y: 0, ...treeGeometry.layout.reader }
+    : transcriptWindowIndex >= 0 && !transcriptWindowFloating && !fullscreenMode && fittedWindows.panes[transcriptWindowIndex]
+    ? { x: 0, y: 0, ...fittedWindows.panes[transcriptWindowIndex]! }
     : null
   const activeTranscriptWidth = readerZoomed ? readerAreaWidth : treeReaderRect ? treeReaderRect.width : arrangedVisible ? arrangedLayout.reader.width : stackedSplit ? readerAreaWidth : splitLayout.readerExtent
   const openCodeContextWidth = isOpenCodeView && visibleSplitPaneCount === 0
@@ -14340,6 +14351,11 @@ function OpenTuiWorkspace() {
         navDetailSetAtRef.current = { key: cacheKeyForGuards, at: performance.now() }
         setSessionDetail(cached)
         setLoadingDetail(false)
+        // A window that read this session first leaves its usage here too.
+        if (cached.contextUsage && cacheKeyForGuards === selectedSessionKeyRef.current) {
+          setContextUsage(cached.contextUsage)
+          setContextUsageStatus('ready')
+        }
         if (!cached.info?.currentModel) {
           setTimeout(() => {
             refreshSessionMetadata(session, false, cached, cached, false)
@@ -26538,6 +26554,86 @@ function OpenTuiWorkspace() {
 
   // The active transcript uses the same controls in a tiled or floating window,
   // independently of the tool tab displayed elsewhere in the layout.
+  // Chat and Agents: the composer is the transcript window's own trailing child
+  // — a full-width highlighted bar in the same style as a user message row,
+  // inside the same border as the transcript, so it reads as the next line of
+  // the conversation rather than a docked control.
+  const embeddedComposerChrome: WindowChrome | null = !composerWindowOpen && !composerHidden && embeddedComposer ? {
+    rows: composerDockHeight,
+    render: (chromeWidth: number) => (
+        // Chat and Agents: the composer is the reader box's own trailing child —
+        // a full-width highlighted bar in the same style as a user message
+        // row, inside the same border as the transcript, so it reads as
+        // the next line of the conversation rather than a docked control.
+        <box
+          id="composer-dock"
+          width="100%"
+          height={composerDockHeight}
+          flexDirection="column"
+          paddingX={1}
+          backgroundColor={theme.surface2}
+          border={['top', 'left', 'right']}
+          borderStyle="single"
+          borderColor={chatComposerFocused ? theme.border2 : theme.surface2}
+        >
+          <box
+            flexGrow={1}
+            overflow="hidden"
+            paddingX={1}
+            paddingBottom={1}
+            // Matches the textarea so the well covers the prompt glyph and
+            // the padding either side of it, not just the text.
+            backgroundColor={chatComposerFocused ? theme.bg : theme.surface2}
+            flexDirection="row"
+            onMouseDown={(event) => {
+              if (event.button !== 0) return
+              if (!composerActive) setComposerActive(true)
+              composerTextareaRef.current?.focus()
+            }}
+          >
+            <text fg={chatComposerFocused ? theme.text : theme.dim} wrapMode="none">
+              {chatComposerFocused ? '❯ ' : '› '}
+            </text>
+            <box flexGrow={1}>
+              {renderComposerTextarea(submitComposerFromDock, {
+                height: composerDockTextareaHeight,
+                width: Math.max(chromeWidth - 8, 1),
+                variant: 'chat',
+              })}
+            </box>
+          </box>
+          <box
+            id="chat-composer-status"
+            position="absolute"
+            bottom={-1}
+            left={1}
+            width={chatComposerStatusWidth}
+            height={1}
+            overflow="hidden"
+            flexDirection="row"
+            alignItems="center"
+          >
+            <box width={chatComposerStatsWidth} overflow="hidden" backgroundColor={theme.surface2}>
+              <text id="chat-composer-focus-state" fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none">
+                {composerSlashHint
+                  ? fitText(composerSlashHint, chatComposerStatsWidth)
+                  : renderInlineTextSegments(composerDockStatsSegments, chatComposerStatsWidth, theme.dim)}
+              </text>
+            </box>
+            <box flexGrow={1} />
+            <box width={chatComposerHintWidth} overflow="hidden" backgroundColor={theme.surface2}>
+              <text fg={chatComposerFocused && !visibleComposerSending ? composerAccentColor : theme.dim} wrapMode="none">
+                {chatComposerFocused && composerDockSendingHintSegments
+                  ? renderInlineTextSegments(composerDockSendingHintSegments, chatComposerHintWidth, theme.dim)
+                  : chatComposerHintFitted}
+              </text>
+            </box>
+          </box>
+        </box>
+    ),
+  } : null
+  // A window drawing the selected transcript as a pane takes it from here.
+  useLayoutEffect(() => { selectedWindowFooter.set(readerWindowIndex < 0 ? embeddedComposerChrome : null) })
   const transcriptWindowNode = () => (
     <>
       <box
@@ -26919,77 +27015,7 @@ function OpenTuiWorkspace() {
         </box>
       ) : null}
 
-      {!composerWindowOpen && !composerHidden && embeddedComposer ? (
-        // Chat and Agents: the composer is the reader box's own trailing child —
-        // a full-width highlighted bar in the same style as a user message
-        // row, inside the same border as the transcript, so it reads as
-        // the next line of the conversation rather than a docked control.
-        <box
-          id="composer-dock"
-          width="100%"
-          height={composerDockHeight}
-          flexDirection="column"
-          paddingX={1}
-          backgroundColor={theme.surface2}
-          border={['top', 'left', 'right']}
-          borderStyle="single"
-          borderColor={chatComposerFocused ? theme.border2 : theme.surface2}
-        >
-          <box
-            flexGrow={1}
-            overflow="hidden"
-            paddingX={1}
-            paddingBottom={1}
-            // Matches the textarea so the well covers the prompt glyph and
-            // the padding either side of it, not just the text.
-            backgroundColor={chatComposerFocused ? theme.bg : theme.surface2}
-            flexDirection="row"
-            onMouseDown={(event) => {
-              if (event.button !== 0) return
-              if (!composerActive) setComposerActive(true)
-              composerTextareaRef.current?.focus()
-            }}
-          >
-            <text fg={chatComposerFocused ? theme.text : theme.dim} wrapMode="none">
-              {chatComposerFocused ? '❯ ' : '› '}
-            </text>
-            <box flexGrow={1}>
-              {renderComposerTextarea(submitComposerFromDock, {
-                height: composerDockTextareaHeight,
-                width: Math.max(rightPaneWidth - 8, 1),
-                variant: 'chat',
-              })}
-            </box>
-          </box>
-          <box
-            id="chat-composer-status"
-            position="absolute"
-            bottom={-1}
-            left={1}
-            width={chatComposerStatusWidth}
-            height={1}
-            overflow="hidden"
-            flexDirection="row"
-            alignItems="center"
-          >
-            <box width={chatComposerStatsWidth} overflow="hidden" backgroundColor={theme.surface2}>
-              <text id="chat-composer-focus-state" fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none">
-                {composerSlashHint
-                  ? fitText(composerSlashHint, chatComposerStatsWidth)
-                  : renderInlineTextSegments(composerDockStatsSegments, chatComposerStatsWidth, theme.dim)}
-              </text>
-            </box>
-            <box flexGrow={1} />
-            <box width={chatComposerHintWidth} overflow="hidden" backgroundColor={theme.surface2}>
-              <text fg={chatComposerFocused && !visibleComposerSending ? composerAccentColor : theme.dim} wrapMode="none">
-                {chatComposerFocused && composerDockSendingHintSegments
-                  ? renderInlineTextSegments(composerDockSendingHintSegments, chatComposerHintWidth, theme.dim)
-                  : chatComposerHintFitted}
-              </text>
-            </box>
-          </box>
-        </box>
-      ) : null}
+      {embeddedComposerChrome?.render(rightPaneWidth)}
       </box>
 
     {openCodeContextWidth > 0 ? (
