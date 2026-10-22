@@ -13446,26 +13446,10 @@ function OpenTuiWorkspace() {
   // pipeline (card window, view modes, every reader key); the rest are drawn
   // as panes. Selection follows focus, so that is the window in use.
   const lastFocusedSplitPaneRef = useRef(0)
-  const shownReaderWindowIndex = floatingItem?.kind === 'session' && sessionKey(floatingItem.session) === selectedSessionKey ? FLOATING_PANE_INDEX
+  const selectedWindowIndex = floatingItem?.kind === 'session' && sessionKey(floatingItem.session) === selectedSessionKey ? FLOATING_PANE_INDEX
     : windowItems.findIndex(item => item.kind === 'session' && sessionKey(item.session) === selectedSessionKey)
-  // A new selection is put in the focused session window by an effect, a
-  // commit later. Until then the reader already draws it in that window:
-  // otherwise that commit mounts the window's old session as a pane for one
-  // frame and unmounts it again — a 30ms render on every tab switch.
-  const adoptingWindowIndex = (() => {
-    if (shownReaderWindowIndex >= 0 || shownPopoverTab || !selectedSession || windowStackFor(selectedSessionKey ?? '')) return -1
-    const index = splitFocusIndex ?? lastFocusedSplitPaneRef.current
-    return index !== FLOATING_PANE_INDEX && windowItems[index]?.kind === 'session' ? index : -1
-  })()
-  // AV_PANE_ONLY draws every window, the focused one included, as a pane: the
-  // end state of moving the reader into windows. Temporary, while the port is
-  // checked against the smokes in both modes.
-  const readerWindowIndex = process.env.AV_PANE_ONLY ? -1 : shownReaderWindowIndex >= 0 ? shownReaderWindowIndex : adoptingWindowIndex
-  // The window drawing the selected transcript as a pane, when the reader draws none.
-  selectedWindowHandleRef.current = () => (readerWindowIndex < 0 && shownReaderWindowIndex !== -1
-    ? splitPaneHandlesRef.current.get(shownReaderWindowIndex) : undefined)
-  const readerWindowFloating = readerWindowIndex === FLOATING_PANE_INDEX
-  const readerWindowFocused = splitFocusIndex !== null && splitFocusIndex === readerWindowIndex
+  // The window showing the selected session, if any.
+  selectedWindowHandleRef.current = () => (selectedWindowIndex !== -1 ? splitPaneHandlesRef.current.get(selectedWindowIndex) : undefined)
   const focusedWindowItem = splitFocusIndex === null ? null
     : splitFocusIndex === FLOATING_PANE_INDEX ? floatingItem : windowItems[splitFocusIndex] ?? null
   const focusedSessionPaneKey = focusedWindowItem?.kind === 'session' ? sessionKey(focusedWindowItem.session) : null
@@ -13553,7 +13537,7 @@ function OpenTuiWorkspace() {
   // Focus with no window under it lands on the window showing the selection.
   useEffect(() => {
     if (effectiveFocus !== 'messages' || splitFocusIndex !== null || hasPrimaryFrame || composerActive) return
-    if (shownReaderWindowIndex === FLOATING_PANE_INDEX) { focusSplitPane(FLOATING_PANE_INDEX); return }
+    if (selectedWindowIndex === FLOATING_PANE_INDEX) { focusSplitPane(FLOATING_PANE_INDEX); return }
     if (!windowItems.length) { if (showRail && !floatingKey) setFocusedPane('sessions'); return }
     const shown = windowItems.findIndex(item => item.kind === 'session' && sessionKey(item.session) === selectedSessionKey)
     focusSplitPane(shown >= 0 ? shown : Math.min(lastFocusedSplitPaneRef.current, windowItems.length - 1))
@@ -13627,14 +13611,14 @@ function OpenTuiWorkspace() {
   }, [sessions, windowPinSignature, selectedSessionKey, focusedWindowKey])
   const badgeForWindow = (key: string, compact = false) => [coordinatorBadges.get(key) ? (compact ? '?' : coordinatorBadges.get(key)) : null, windowAttentionBadge({ ...windowAttention.get(key), needsInput: windowNeedsInputKeys.has(key) }, compact)].filter(Boolean).join(' · ') || null
   // A zoomed reader has the whole area; the other windows are not drawn.
-  const readerZoomed = (windowZoom === 'reader' && !hasPrimaryFrame) || (readerWindowIndex >= 0 && windowZoom === readerWindowIndex)
+  const readerZoomed = windowZoom === 'reader' && !hasPrimaryFrame
   // The window holding the transcript being read, whichever renderer draws it:
   // the reader's own chrome (composer bar, status widths) is sized to it.
-  const transcriptWindowIndex = readerWindowIndex >= 0 ? readerWindowIndex : shownReaderWindowIndex
+  const transcriptWindowIndex = selectedWindowIndex
   const transcriptWindowFloating = transcriptWindowIndex === FLOATING_PANE_INDEX
   // Where the reader's chrome goes when panes draw the transcript: the window
   // showing the selected session, else the focused (or last focused) one.
-  const chromeWindowIndex = readerWindowIndex >= 0 ? -1 : shownReaderWindowIndex !== -1 ? shownReaderWindowIndex : splitFocusIndex ?? lastFocusedSplitPaneRef.current
+  const chromeWindowIndex = selectedWindowIndex !== -1 ? selectedWindowIndex : splitFocusIndex ?? lastFocusedSplitPaneRef.current
   const treeReaderRect = transcriptWindowFloating && floatingWindow && !fullscreenMode
     ? clampFloatingRect(floatingWindow.rect, { width: readerAreaWidth, height: windowAreaHeight })
     : treeGeometry
@@ -14007,7 +13991,7 @@ function OpenTuiWorkspace() {
     expandedCardKeys,
     collapsedCardKeys,
     transcriptView,
-    focused: effectiveFocus === 'messages' && (readerWindowFocused || (readerWindowIndex < 0 && splitFocusIndex === null && !hasPrimaryFrame)),
+    focused: effectiveFocus === 'messages' && splitFocusIndex === null && !hasPrimaryFrame,
     isPreviewMode,
     isChatLikeView,
     isContinuousView,
@@ -22255,8 +22239,8 @@ function OpenTuiWorkspace() {
 
   const focusReaderFromSplit = useEffectEvent(() => {
     setWindowSurfacePeek(null)
-    if (!hasPrimaryFrame && readerWindowFloating) { focusSplitPane(FLOATING_PANE_INDEX); return }
-    if (!hasPrimaryFrame && windowItems.length) { focusSplitPane(readerWindowIndex >= 0 ? readerWindowIndex : 0); return }
+    if (!hasPrimaryFrame && selectedWindowIndex === FLOATING_PANE_INDEX) { focusSplitPane(FLOATING_PANE_INDEX); return }
+    if (!hasPrimaryFrame && windowItems.length) { focusSplitPane(Math.max(selectedWindowIndex, 0)); return }
     setSplitFocusIndex(null)
   })
 
@@ -24979,7 +24963,7 @@ function OpenTuiWorkspace() {
     // focus back. Everything else is swallowed rather than falling through to
     // the primary reader — a j that scrolled the pane must not also move the
     // reader's cursor behind it.
-    if (splitFocusIndex !== null && !readerWindowFocused) {
+    if (splitFocusIndex !== null) {
       const paneHandle = splitPaneHandlesRef.current.get(splitFocusIndex)
       const paneSession = paneHandle?.getSession() ?? null
       const pageRows = Math.max(Math.floor(transcriptViewportRows * 0.8), 1)
@@ -26830,265 +26814,12 @@ function OpenTuiWorkspace() {
   }
   // A window drawing the selected transcript as a pane takes it from here.
   useLayoutEffect(() => {
-    selectedWindowHeader.set(readerWindowIndex < 0 && readerHeaderChrome.rows > 0 ? readerHeaderChrome : null)
-    selectedWindowFooter.set(readerWindowIndex < 0 && readerFooterChrome.rows > 0 ? readerFooterChrome : null)
+    selectedWindowHeader.set(readerHeaderChrome.rows > 0 ? readerHeaderChrome : null)
+    selectedWindowFooter.set(readerFooterChrome.rows > 0 ? readerFooterChrome : null)
   })
-  const transcriptWindowNode = () => (
-    <>
-      <box
-        id="transcript-reader"
-        ref={readerBoxRef}
-        // Hidden, not unmounted, while another window is zoomed.
-        visible={!(windowZoom !== null && !(windowZoom === 'reader' && !hasPrimaryFrame) && windowZoom !== readerWindowIndex && !windowSurfacePeek)}
-        onMouseDown={(event) => {
-          // A click in the reader focuses it, as a click in any window does:
-          // from the surface panel, a pane, a floating window or the rail.
-          if (event.button === 0) {
-            if (surfacePanelFocused) setSurfacePanelFocused(false)
-            if (readerWindowIndex >= 0 ? splitFocusIndex !== readerWindowIndex : splitFocusIndex !== null) focusReaderFromSplit()
-            if (focusedPane !== 'messages') setFocusedPane('messages')
-          }
-          if (event.button === 2 && readerBoxRef.current && event.y === readerBoxRef.current.y) {
-            openWindowControlMenu(readerWindowIndex >= 0 && selectedSessionKey ? selectedSessionKey : 'reader', event)
-            return
-          }
-          // A double-click on the title bar zooms, as it does a desktop window;
-          // a press on it is the handle the reader is dragged by.
-          if (event.button === 0 && readerBoxRef.current && event.y === readerBoxRef.current.y) {
-            if (readerWindowFloating) startFloatGesture('move', event)
-            else if (isDoubleClick(readerTitleClickRef, event)) toggleWindowZoom(readerWindowIndex >= 0 ? readerWindowIndex : null)
-            else if (selectedSession && !fullscreenMode) {
-              // Dragged by its title like any window.
-              if (readerWindowIndex >= 0) sessionDragHandlers.press(selectedSession, readerWindowIndex, event)
-              else sessionDragImplRef.current.pressReader(selectedSession, event)
-            }
-          }
-        }}
-        // Until the gesture layer exists, the reader itself gets the drag and the release.
-        onMouseDrag={(event) => readerWindowFloating ? moveFloatGesture(event) : sessionDragHandlers.move(event)}
-        onMouseUp={(event) => readerWindowFloating ? endFloatGesture(event) : sessionDragHandlers.release(event)}
-        flexGrow={1}
-        border={fullscreenMode ? [] : ['top', 'left', 'right', 'bottom']}
-        borderStyle="single"
-        // One focus color across panes; provider identity stays in metadata.
-        borderColor={effectiveFocus === 'messages' && (splitFocusIndex === null || readerWindowFocused)
-          ? theme.cyan
-          : theme.border}
-        backgroundColor={theme.surface}
-        flexDirection="column"
-        title={fullscreenMode || embeddedComposer || !readerFrameTitle ? undefined : joinMeta([`${readerWindowIndex >= 0 && visibleSplitPaneCount + (floatingKey ? 1 : 0) + (hasPrimaryFrame ? 1 : 0) > 1 ? `${readerWindowFloating ? visibleSplitPaneCount + (hasPrimaryFrame ? 2 : 1) : readerWindowIndex + (hasPrimaryFrame ? 2 : 1)} · ` : ''}${selectedSession ? formatSessionTitle(selectedSession) : 'Session'}`, selectedSessionKey ? coordinatorBadges.get(selectedSessionKey) : null, readerFrameTitle])}
-        titleColor={providerAccent}
-      >
-      {!fullscreenMode && !embeddedComposer ? (
-        // Window controls in the top border, where a title bar keeps its buttons.
-        <box id="reader-window-controls" position="absolute" top={-1} right={1} height={1} flexDirection="row" zIndex={3}>
-          <WindowButton id="reader-window-menu" label=" ≡ " theme={theme} onPress={point => openWindowControlMenu(readerWindowIndex >= 0 && selectedSessionKey ? selectedSessionKey : 'reader', point)} />
-          <WindowButton id="reader-window-layout" label=" ⊞ layout " theme={theme} onPress={splitPaneActions.openLayout} />
-          <WindowButton id="reader-window-fullscreen" label=" ⤢ " theme={theme} onPress={() => toggleWindowZoom(readerWindowIndex >= 0 ? readerWindowIndex : null)} />
-          {readerWindowIndex >= 0 ? <WindowButton id="reader-window-close" label=" × " theme={theme} tone="danger" onPress={() => closeSplitPane(readerWindowIndex)} /> : null}
-        </box>
-      ) : null}
-      {!treeGeometry && !fullscreenMode && visibleSplitPaneCount > 0 ? (
-        // The divider to the panes: the border on that side, redrawn so it is
-        // hittable, and dragged to resize. Not selectable, or the release would
-        // copy a run of border glyphs.
-        <box
-          id="split-divider-handle"
-          position="absolute"
-          zIndex={3}
-          {...(stackedSplit
-            ? { left: 0, right: 0, height: 1, ...(splitReaderLast ? { top: -1 } : { bottom: -1 }) }
-            : { top: 0, bottom: 0, width: 1, ...(splitReaderLast ? { left: -1 } : { right: -1 }) })}
-          onMouseOver={() => setSplitDividerHovered(true)}
-          onMouseOut={() => setSplitDividerHovered(false)}
-          onMouseDown={(event) => {
-            if (event.button !== 0) return
-            event.stopPropagation()
-            setSplitDividerDragging('primary')
-          }}
-        >
-          {/* Lit under the pointer and while dragged: a border is not otherwise something you can grab. */}
-          <text fg={splitDividerHovered || splitDividerDragging === 'primary' ? theme.cyan : theme.border} wrapMode="none" selectable={false}>
-            {stackedSplit
-              ? '─'.repeat(Math.max(1, rightPaneWidth))
-              : Array.from({ length: Math.max(1, readerRowBudget) }, () => '│').join('\n')}
-          </text>
-        </box>
-      ) : null}
-      {fullscreenMode ? (
-        <box height={1} paddingX={1} flexDirection="row" alignItems="center">
-          <box flexGrow={1} />
-          <box
-            id="fullscreen-restore"
-            paddingX={1}
-            backgroundColor={theme.surface2}
-            onMouseDown={(event) => {
-              if (event.button !== 0) return
-              event.stopPropagation()
-              toggleFullscreenMode(false)
-            }}
-          >
-            <text fg={theme.dim} wrapMode="none">FULLSCREEN  Shift+Z restore</text>
-          </box>
-        </box>
-      ) : null}
 
-      {readerHeaderChrome.render(rightPaneWidth)}
-      <box ref={transcriptViewportBoxRef} flexGrow={1} paddingX={1} paddingBottom={1} marginTop={stickyHeaders ? 0 : 1} overflow="hidden">
-        {(loadingDetail || formattingTranscriptCards) && visibleTranscriptCards.length === 0 ? (
-          <Spinner
-            label={fitText(formattingTranscriptCards ? 'Formatting transcript…' : 'Loading transcript…', rightPaneWidth - 6)}
-            fg={theme.dim}
-          />
-        ) : visibleTranscriptCards.length === 0 ? (
-          !selectedSession ? (
-            <box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1} paddingY={2}>
-              <ascii-font text="AGENT VIEWER" font="tiny" color={theme.dim} />
-              <box marginTop={1}>
-                <text fg={theme.dim}>Select a session to begin reading</text>
-              </box>
-            </box>
-          ) : (
-            (() => {
-              const welcome = getProviderComposer(selectedSession.provider ?? null)
-              const welcomeAccent = ((theme as unknown as Record<string, string>)[welcome.tuiAccentKey]) ?? theme.cyan
-              const innerWidth = Math.max(rightPaneWidth - 4, 20)
-              return (
-                <box flexDirection="column" flexShrink={0}>
-                  <text height={1} flexShrink={0} fg={welcomeAccent} wrapMode="none">{fitText('Start an engineering task', innerWidth)}</text>
-                  <text height={1} flexShrink={0} fg={theme.dim} wrapMode="none">{fitText('Inspect code, review a change, or investigate a failure.', innerWidth)}</text>
-                  <box marginTop={1} flexDirection="column" flexShrink={0}>
-                    {welcome.welcomeBullets.slice(0, 3).map((bullet) => (
-                      <box key={bullet} flexDirection="row" height={1} flexShrink={0} width={innerWidth}>
-                        <text fg={welcomeAccent} wrapMode="none">{welcome.glyph} </text>
-                        <text fg={theme.text} wrapMode="none">{fitText(bullet, innerWidth - 2)}</text>
-                      </box>
-                    ))}
-                  </box>
-                  <box marginTop={1} height={1} flexShrink={0}>
-                    <text fg={theme.dim} wrapMode="none">{fitText('Press c to compose · ? keyboard help', innerWidth)}</text>
-                  </box>
-                </box>
-              )
-            })()
-          )
-        ) : (
-          <scrollbox
-            id="transcript-scroll"
-            ref={attachTranscriptScroll}
-            style={{ height: transcriptViewportRows }}
-            // Never while the composer is up: OpenTUI has one focus slot,
-            // and this scrollbox remounting (a new session's empty state
-            // becoming a transcript after its first turn) would take it
-            // from the textarea — which still read FOCUSED but dropped
-            // every keystroke.
-            focused={effectiveFocus === 'messages' && (splitFocusIndex === null || readerWindowFocused) && !composerActive}
-            // Match the card surface, not theme.bg: cards render on `surface`,
-            // so when bg is darker than surface (e.g. SENTRY #150f23 vs
-            // #1f1633) the cardGap rows between cards revealed bg as dark
-            // bands in comfortable/balanced (dense has cardGap 0, no gaps).
-            // Surfacing the viewport makes the gaps blend; borders still
-            // delineate cards, and cursor/selected cards keep surface2/3.
-            backgroundColor={theme.surface}
-            stickyScroll={followTail}
-            stickyStart="bottom"
-            scrollY
-            scrollAcceleration={MESSAGE_SCROLL_ACCEL}
-            viewportCulling
-            scrollbarOptions={transcriptScrollbarOptions}
-            // One handler for the whole transcript: `getLinkAt` resolves a
-            // screen cell, so nothing here needs to know which card or row
-            // was hit. Card-level handlers do not stopPropagation, so their
-            // own select-on-press still runs and the press reaches this
-            // container either way.
-            onMouseDown={noteTranscriptLinkPress}
-            onMouseUp={releaseTranscriptPress}
-            >
-            <box height={TRANSCRIPT_TOP_MARGIN} />
-            <TuiErrorBoundary>
-              <TranscriptWindowBody inputs={readerWindowInputs} />
-            </TuiErrorBoundary>
-
-            {visibleComposerSending && visibleComposerLiveText && !liveAssistantTextCardVisible ? (
-              isChatLikeView ? (
-                <box
-                  key="live-stream-text"
-                  marginBottom={densityState.cardGap}
-                  paddingLeft={densityState.bodyIndent}
-                >
-                  <text fg={theme.text} width={Math.max(rightPaneWidth - densityState.bodyIndent - 4, 16)} wrapMode="word">
-                    {`● ${visibleComposerLiveText}`}
-                  </text>
-                </box>
-              ) : (
-                <box key="live-stream-text" flexDirection="column" marginBottom={densityState.cardGap}>
-                  <box border borderStyle="single" borderColor={providerAccent} backgroundColor={theme.surface}>
-                    <box flexDirection="column" width={rightPaneWidth - 4}>
-                      <box paddingX={1} paddingTop={1}>
-                        <text fg={providerAccent}>
-                          {fitText('● assistant  streaming', rightPaneWidth - 6)}
-                        </text>
-                      </box>
-                      <box paddingX={1} paddingY={1}>
-                        <text fg={theme.text} wrapMode="word">
-                          {visibleComposerLiveText}
-                        </text>
-                      </box>
-                    </box>
-                  </box>
-                </box>
-              )
-            ) : null}
-
-            {streamTurnFooter ? <StreamTurnFooter landmark={streamTurnFooter} theme={theme} densityState={densityState} transcriptWidth={transcriptWidth} width={rightPaneWidth} /> : null}
-
-          </scrollbox>
-        )}
-        {stickyHeaders && stickyHeaderKey ? (() => {
-          const stickyCard = visibleTranscriptCards.find((card) => card.key === stickyHeaderKey)
-          return stickyCard ? <StickyPromptHeader card={stickyCard} theme={theme} accent={providerAccent} width={rightPaneWidth} /> : null
-        })() : null}
-        {streamActionFooterRows > 0 ? (
-          <box height={streamActionFooterRows} paddingLeft={1}>
-            <text fg={theme.dim} wrapMode="none">
-              {effectiveFocus === 'messages'
-                ? fitText('b bookmark   Q quote/reply   y copy', Math.max(rightPaneWidth - 6, 12))
-                : ' '}
-            </text>
-          </box>
-        ) : null}
-      </box>
-
-      {readerFooterChrome.render(rightPaneWidth)}
-      </box>
-
-    {openCodeContextWidth > 0 ? (
-      <box
-        id="opencode-context-panel"
-        width={openCodeContextWidth}
-        paddingX={1}
-        paddingTop={2}
-        backgroundColor={theme.bg}
-        flexDirection="column"
-      >
-        <text fg={theme.text} attributes={TextAttributes.BOLD} wrapMode="none">
-          {fitText(selectedSession ? formatSessionTitle(selectedSession) : 'Current session', openCodeContextWidth - 2)}
-        </text>
-        <box marginTop={2} flexDirection="column">
-          <text fg={theme.text} attributes={TextAttributes.BOLD} wrapMode="none">Context</text>
-          <text fg={theme.muted} wrapMode="none">
-            {contextUsage ? `${contextUsage.totalTokens.toLocaleString()} tokens` : 'Context unavailable'}
-          </text>
-          {contextUsage ? (
-            <text fg={theme.muted} wrapMode="none">{`${Math.round(contextUsage.percentage)}% used`}</text>
-          ) : null}
-        </box>
-      </box>
-    ) : null}
-    </>
-  )
-
-  const readerFrameNode = () => shownPopoverTab ? popoverTabFrameRef.current?.() ?? null : transcriptWindowNode()
+  // The frame drawn outside the windows: a popover tab, when one is shown.
+  const readerFrameNode = () => shownPopoverTab ? popoverTabFrameRef.current?.() ?? null : null
 
   // Zoom hides the other windows rather than unmounting them, so nothing
   // reloads on the way in or out: every window keeps its parent, and the
@@ -27167,9 +26898,7 @@ function OpenTuiWorkspace() {
   // the surface layer, so moving it between rows, tabbing it or floating it
   // never remounts what it is showing.
   const renderWindowItem = (item: WindowItem, index: number, size: { width: number; height: number; boxHeight: number | undefined }, hidden = false) => (
-    item.kind === 'session' ? index === readerWindowIndex ? (
-      <box key={`split:${sessionKey(item.session)}`} id={`split-pane:${index}`} visible={!hidden} width={size.width} height={size.boxHeight} flexShrink={0} flexDirection="row">{transcriptWindowNode()}</box>
-    ) : renderSplitPane(item.session, index, size, hidden) : (
+    item.kind === 'session' ? renderSplitPane(item.session, index, size, hidden) : (
       <box key={`surface-slot:${item.surface}`} id={`split-pane:${index}`} visible={!hidden} width={size.width} height={size.boxHeight} flexShrink={0} />
     )
   )
@@ -28013,7 +27742,7 @@ function OpenTuiWorkspace() {
                 onMouseUp={(event: { x: number; y: number }) => endFloatGesture(event)}
               >
                 {floatingItem.kind === 'session' ? <text position="absolute" left={0} top={0} width={rect.width} height={rect.height} fg={theme.bg} bg={theme.bg} selectable={false} wrapMode="none">{Array(rect.height).fill(' '.repeat(rect.width)).join('\n')}</text> : null}
-                {floatingItem.kind === 'session' ? readerWindowFloating ? <box width={rect.width} height={rect.height} flexDirection="row">{transcriptWindowNode()}</box> : renderSplitPane(floatingItem.session, FLOATING_PANE_INDEX, size) : null}
+                {floatingItem.kind === 'session' ? renderSplitPane(floatingItem.session, FLOATING_PANE_INDEX, size) : null}
                 <box position="absolute" top={0} right={20} height={1} flexDirection="row" zIndex={46}>
                   <WindowButton id="floating-dock" label=" ⊞ dock " theme={theme} onPress={() => dockFloatingWindow()} />
                 </box>
@@ -28243,14 +27972,14 @@ function OpenTuiWorkspace() {
           ) : windowSurfacePeek ? (
             // The surface layer draws the peeked window over the whole area.
             <box visible={false}>{readerFrameNode()}</box>
-          ) : fullscreenMode ? transcriptWindowNode() : !hasPrimaryFrame && orderedWindowKeys.length === 0 ? (
+          ) : fullscreenMode && selectedSession ? (
+            // Full screen is the selected transcript's window, filling the area.
+            renderSplitPane(selectedSession, Math.max(selectedWindowIndex, 0), { width: readerAreaWidth, height: windowAreaHeight, boxHeight: windowAreaHeight })
+          ) : !hasPrimaryFrame && orderedWindowKeys.length === 0 ? (
             <box flexGrow={1} alignItems="center" justifyContent="center" flexDirection="column">
               <text fg={theme.dim}>No panes open</text>
               <box onMouseDown={event => { if (event.button !== 0) return; event.stopPropagation(); setWorkspaceHasSession(true); setFocusedPane('sessions') }}><text fg={theme.cyan} selectable={false}>Open session from the sidebar</text></box>
             </box>
-          ) : fullscreenMode && readerWindowIndex < 0 && !hasPrimaryFrame && selectedSession ? (
-            // Full screen is the selected transcript's window, filling the area.
-            renderSplitPane(selectedSession, Math.max(shownReaderWindowIndex, 0), { width: readerAreaWidth, height: windowAreaHeight, boxHeight: windowAreaHeight })
           ) : treeGeometry ? (
             <>
               {hasPrimaryFrame ? <box key="tree-tool-tab" position="absolute" left={windowZoom === 'reader' ? 0 : (treeGeometry.rects.get(-1)?.x ?? 0)} top={windowZoom === 'reader' ? 0 : (treeGeometry.rects.get(-1)?.y ?? 0)}
@@ -28259,7 +27988,6 @@ function OpenTuiWorkspace() {
               {windowItems.map((item, index) => {
                 const rect = treeGeometry!.rects.get(index)!
                 // The reader draws this window (below, under the window's id).
-                if (index === readerWindowIndex) return null
                 return <box key={windowItemKey(item)} position="absolute" left={zoomedIndex === index ? 0 : rect.x} top={zoomedIndex === index ? 0 : rect.y}
                   width={zoomedIndex === index ? readerAreaWidth : rect.width} height={zoomedIndex === index ? windowAreaHeight : rect.height}
                   visible={!windowHiddenByZoom(index)} flexDirection="column">
@@ -28268,9 +27996,10 @@ function OpenTuiWorkspace() {
               })}
               {/* The window the reader draws carries that window's id, so anything that
                   finds a window by id (splits, drops, control mode) finds it here. */}
-              <box key="tree-reader" id={readerWindowIndex >= 0 && !readerWindowFloating ? `split-pane:${readerWindowIndex}` : undefined} position="absolute" left={readerZoomed ? 0 : (treeReaderRect?.x ?? 0)} top={readerZoomed ? 0 : (treeReaderRect?.y ?? 0)}
-                width={readerZoomed ? readerAreaWidth : treeReaderRect?.width ?? 0} height={readerZoomed ? windowAreaHeight : treeReaderRect?.height ?? 0}
-                visible={!readerWindowFloating && readerWindowIndex >= 0 && (!zooming || readerZoomed)} flexDirection="row">{!readerWindowFloating && readerWindowIndex >= 0 ? transcriptWindowNode() : null}</box>
+              {/* The popover tab, in the slot the split tree keeps for it. */}
+              <box key="tree-reader" position="absolute" left={readerZoomed ? 0 : (treeGeometry.rects.get(-1)?.x ?? 0)} top={readerZoomed ? 0 : (treeGeometry.rects.get(-1)?.y ?? 0)}
+                width={readerZoomed ? readerAreaWidth : treeGeometry.rects.get(-1)?.width ?? 0} height={readerZoomed ? windowAreaHeight : treeGeometry.rects.get(-1)?.height ?? 0}
+                visible={hasPrimaryFrame && (!zooming || readerZoomed)} flexDirection="row">{hasPrimaryFrame ? readerFrameNode() : null}</box>
             </>
           ) : arrangedVisible && splitArrangement === 'grid' && arrangedLayout.secondary ? (
             <>
