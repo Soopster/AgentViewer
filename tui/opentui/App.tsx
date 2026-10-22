@@ -7940,6 +7940,8 @@ type SplitTranscriptPaneProps = {
   /** The title bar's buttons: close this pane, or open its session in the reader. */
   onClosePane: (paneIndex: number) => void
   onPromotePane: (session: Session) => void
+  /** The title bar's ⊞ layout: the window layout menu. */
+  onOpenLayout: () => void
   onContextMenu: (session: Session, source: 'pane', point: { x: number; y: number }, paneIndex: number) => void
   /** The pane's search, shown in its title while set (`/query`, with a caret while typed). */
   searchLabel: string | null
@@ -7985,6 +7987,7 @@ function SplitTranscriptPaneInner({
   onActivate,
   onClosePane,
   onPromotePane,
+  onOpenLayout,
   onContextMenu,
   searchLabel,
   stickyHeaders,
@@ -8576,6 +8579,7 @@ function SplitTranscriptPaneInner({
     >
       <box position="absolute" top={-1} right={1} height={1} flexDirection="row" zIndex={3}>
         <WindowButton id={`split-pane-menu:${paneIndex}`} label=" ≡ " theme={theme} onPress={point => onContextMenu(session, 'pane', point, paneIndex)} />
+        <WindowButton id={`split-pane-layout:${paneIndex}`} label=" ⊞ layout " theme={theme} onPress={onOpenLayout} />
         <WindowButton id={`split-pane-promote:${paneIndex}`} label=" ⤢ " theme={theme} onPress={promoteThisPane} />
         <WindowButton id={`split-pane-close:${paneIndex}`} label=" × " theme={theme} tone="danger" onPress={closeThisPane} />
       </box>
@@ -9623,7 +9627,7 @@ function OpenTuiWorkspace() {
   const splitPaneActions = useMemo(() => ({
     close: (paneIndex: number) => splitPaneActionsRef.current.close(paneIndex),
     promote: (session: Session) => splitPaneActionsRef.current.promote(session),
-    openLayout: () => { focusReaderFromSplit(); setWindowPickerOpen(true) },
+    openLayout: () => setWindowPickerOpen(true),
     fullscreen: () => splitPaneActionsRef.current.fullscreen(),
     /** A right-click on a rail row, a tab or a pane title. */
     sessionMenu: (session: Session, source: 'rail' | 'tab' | 'pane', point: MenuPoint, paneIndex?: number) =>
@@ -27023,6 +27027,7 @@ function OpenTuiWorkspace() {
         onActivate={focusSplitPane}
         onClosePane={splitPaneActions.close}
         onPromotePane={splitPaneActions.promote}
+        onOpenLayout={splitPaneActions.openLayout}
         onContextMenu={splitPaneActions.sessionMenu}
         searchLabel={paneSearch && paneSearch.index === splitIndex ? `/${paneSearch.query}${paneSearch.editing ? '▏' : ''}` : null}
         stickyHeaders={stickyHeaders}
