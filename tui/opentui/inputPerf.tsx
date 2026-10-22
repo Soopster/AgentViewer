@@ -195,6 +195,14 @@ const SCENARIOS: Scenario[] = [
     press: [{ key: 'j' }, { key: 'k' }],
     expect: PANE_FOCUSED,
   },
+  // ⌃B o between two session windows: the focused one is drawn by the reader
+  // pipeline, so each press moves that renderer to the other window.
+  {
+    name: 'split-focus-cycle',
+    setup: [...OPEN_THREE_TABS, ...ADD_COLUMN_SPLIT],
+    press: [{ key: 'b', ctrl: true }, { key: 'o' }],
+    expect: SPLIT_OPEN,
+  },
   {
     name: 'split-reader-rows',
     setup: [...OPEN_THREE_TABS, ...ADD_ROW_SPLIT, ...ADD_ROW_SPLIT],

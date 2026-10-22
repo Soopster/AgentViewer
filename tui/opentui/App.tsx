@@ -13116,8 +13116,19 @@ function OpenTuiWorkspace() {
   // The window showing the selected session is drawn by the reader's own
   // pipeline (card window, view modes, every reader key); the rest are drawn
   // as panes. Selection follows focus, so that is the window in use.
-  const readerWindowIndex = floatingItem?.kind === 'session' && sessionKey(floatingItem.session) === selectedSessionKey ? FLOATING_PANE_INDEX
+  const lastFocusedSplitPaneRef = useRef(0)
+  const shownReaderWindowIndex = floatingItem?.kind === 'session' && sessionKey(floatingItem.session) === selectedSessionKey ? FLOATING_PANE_INDEX
     : windowItems.findIndex(item => item.kind === 'session' && sessionKey(item.session) === selectedSessionKey)
+  // A new selection is put in the focused session window by an effect, a
+  // commit later. Until then the reader already draws it in that window:
+  // otherwise that commit mounts the window's old session as a pane for one
+  // frame and unmounts it again — a 30ms render on every tab switch.
+  const adoptingWindowIndex = (() => {
+    if (shownReaderWindowIndex >= 0 || shownPopoverTab || !selectedSession || windowStackFor(selectedSessionKey ?? '')) return -1
+    const index = splitFocusIndex ?? lastFocusedSplitPaneRef.current
+    return index !== FLOATING_PANE_INDEX && windowItems[index]?.kind === 'session' ? index : -1
+  })()
+  const readerWindowIndex = shownReaderWindowIndex >= 0 ? shownReaderWindowIndex : adoptingWindowIndex
   const readerWindowFloating = readerWindowIndex === FLOATING_PANE_INDEX
   const readerWindowFocused = splitFocusIndex !== null && splitFocusIndex === readerWindowIndex
   const focusedWindowItem = splitFocusIndex === null ? null
@@ -22053,7 +22064,6 @@ function OpenTuiWorkspace() {
   // Focus is a third keyboard owner alongside the sidebar and the reader. It is
   // an index rather than a session key so a pane keeps focus when its pinned
   // session changes under it (⌃B n).
-  const lastFocusedSplitPaneRef = useRef(0)
   const focusSplitPane = useEffectEvent((paneIndex: number) => {
     if (paneIndex < 0 || (paneIndex >= visibleSplitPaneCount && !(paneIndex === FLOATING_PANE_INDEX && floatingKey))) return
     setWindowSurfacePeek(null)
