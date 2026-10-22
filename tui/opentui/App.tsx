@@ -7876,6 +7876,8 @@ type SplitPaneHandle = {
    * whole transcript is searched. 'loading' means it is being paged in.
    */
   search: (query: string, direction: 1 | -1) => 'found' | 'loading' | 'none'
+  /** A jump made elsewhere (search, bookmarks, markers) lands on this card. */
+  jumpToKey: (cardKey: string, follow: boolean) => void
   /** SCROLLBACK: the text scrolls by rows and has no visible cursor. */
   isScrollback: () => boolean
   /** SCROLLBACK's e / Enter: expand or fold everything. */
@@ -8003,6 +8005,11 @@ type SplitTranscriptPaneProps = {
   focused: boolean
   /** Shows the selected session: the transcript being read, under the reader's ids. */
   selected: boolean
+  /** The selected transcript's cursor is the reader's: jumps and search start from it. */
+  onCursorChange?: (cardKey: string | null) => void
+  /** The transcript search, highlighted in the window showing the selected session. */
+  searchQuery: string
+  activeSearchKey: string | null
   // Live overlay for THIS pane's session, sliced from the app-wide live stream.
   liveMessages: ThreadedMessage[]
   running: boolean
@@ -8057,6 +8064,9 @@ function SplitTranscriptPaneInner({
   paneCount,
   focused,
   selected,
+  onCursorChange,
+  searchQuery,
+  activeSearchKey,
   liveMessages,
   running,
   attentionBadge,
@@ -8363,6 +8373,10 @@ function SplitTranscriptPaneInner({
         }
       },
       isScrollback: () => scrollbackRef.current,
+      jumpToKey: (cardKey, follow) => {
+        jumpCursor(cardKey)
+        setFollowTail(follow)
+      },
       toggleScrollbackAll: () => {
         setScrollbackExpanded((current) => !current)
         setScrollbackToggledKeys(EMPTY_EXPANDED_KEYS)
@@ -8530,6 +8544,14 @@ function SplitTranscriptPaneInner({
   const windowOutputRef = useRef<ReaderWindowOutput>({ start: 0, cardDisplayData: [], scrollbackExpandedKeys: null })
   const scrollFixupRef = useRef<ReaderScrollFixup | null>(null)
   const cursorIndex = useMemo(() => cursorKey ? allPaneCards.findIndex(card => card.key === cursorKey) : allPaneCards.length - 1, [allPaneCards, cursorKey])
+  useEffect(() => { onCursorChange?.(cursorKey) }, [onCursorChange, cursorKey])
+  const searchMatchIndexes = useMemo(() => {
+    if (!searchQuery) return EMPTY_SEARCH_MATCHES
+    const matches: number[] = []
+    allPaneCards.forEach((card, index) => { if (card.searchHaystackLower.includes(searchQuery)) matches.push(index) })
+    return matches
+  }, [allPaneCards, searchQuery])
+  const activeMatch = activeSearchKey ? searchMatchIndexes.findIndex(index => allPaneCards[index]?.key === activeSearchKey) : -1
   // A scroll is the reading position: at the bottom it follows the tail again,
   // elsewhere it parks the invisible cursor on what is on screen.
   const settleScrollRef = useRef((_sb: ScrollBoxRenderable, _top: number, _limit: number) => {})
@@ -8586,7 +8608,7 @@ function SplitTranscriptPaneInner({
     groupedToolView: transcriptView === 'agents' || paneStreamLike, liveCardCount: liveCards.length,
     resumeMarkerIndex: -1, unreadBoundaryIndex: -1, pendingNewCount: 0,
     provider: session.provider ?? 'claude', shouldEnableSyntaxHighlighting,
-    searchMatches: EMPTY_SEARCH_MATCHES, searchMatchIndex: 0, bookmarkKeys: bookmarkedKeys,
+    searchMatches: searchMatchIndexes, searchMatchIndex: Math.max(activeMatch, 0), bookmarkKeys: bookmarkedKeys,
     agentToolCursorByGroupKey, transcriptCursorKey: cursorKey,
     cursorIndex,
     sessionKey: key, readerWindowGaugeRef: windowGaugeRef, readerWindowOutputRef: windowOutputRef,
@@ -8645,10 +8667,10 @@ function SplitTranscriptPaneInner({
       onMouseUp={(event) => sessionDrag.release(event)}
     >
       <box position="absolute" top={-1} right={1} height={1} flexDirection="row" zIndex={3}>
-        <WindowButton id={`split-pane-menu:${paneIndex}`} label=" ≡ " theme={theme} onPress={point => onContextMenu(session, 'pane', point, paneIndex)} />
-        <WindowButton id={`split-pane-layout:${paneIndex}`} label=" ⊞ layout " theme={theme} onPress={onOpenLayout} />
-        <WindowButton id={`split-pane-promote:${paneIndex}`} label=" ⤢ " theme={theme} onPress={promoteThisPane} />
-        <WindowButton id={`split-pane-close:${paneIndex}`} label=" × " theme={theme} tone="danger" onPress={closeThisPane} />
+        <WindowButton id={selected ? 'reader-window-menu' : `split-pane-menu:${paneIndex}`} label=" ≡ " theme={theme} onPress={point => onContextMenu(session, 'pane', point, paneIndex)} />
+        <WindowButton id={selected ? 'reader-window-layout' : `split-pane-layout:${paneIndex}`} label=" ⊞ layout " theme={theme} onPress={onOpenLayout} />
+        <WindowButton id={selected ? 'reader-window-fullscreen' : `split-pane-promote:${paneIndex}`} label=" ⤢ " theme={theme} onPress={promoteThisPane} />
+        <WindowButton id={selected ? 'reader-window-close' : `split-pane-close:${paneIndex}`} label=" × " theme={theme} tone="danger" onPress={closeThisPane} />
       </box>
       <box flexGrow={1} paddingX={1} overflow="hidden">
         {status === 'error' ? (
@@ -11734,6 +11756,12 @@ function OpenTuiWorkspace() {
     [baseTranscriptIndexByKey, stableVisiblePrefixLength, visibleTranscriptCards],
   )
 
+  const selectedWindowHandleRef = useRef<(() => SplitPaneHandle | undefined) | null>(null)
+  // The selected transcript's window reports its cursor here; a null one
+  // (following, nothing chosen) leaves the reader's as it is.
+  const reportSelectedWindowCursor = useCallback((cardKey: string | null) => {
+    if (cardKey) setTranscriptCursorKey((current) => (current === cardKey ? current : cardKey))
+  }, [])
   const jumpToTranscriptIndex = useCallback((index: number) => {
     if (visibleTranscriptCards.length === 0) return
     const nextIndex = clamp(index, 0, visibleTranscriptCards.length - 1)
@@ -11745,6 +11773,8 @@ function OpenTuiWorkspace() {
     setTranscriptCursorKey(nextCard.key)
     const atTail = nextIndex === visibleTranscriptCards.length - 1
     setFollowTail(atTail)
+    // A window drawing the selected transcript takes the jump.
+    selectedWindowHandleRef.current?.()?.jumpToKey(nextCard.key, atTail)
     if (atTail) {
       setPendingNewCount(0)
       setUnreadBoundaryKey(null)
@@ -13415,6 +13445,9 @@ function OpenTuiWorkspace() {
   // end state of moving the reader into windows. Temporary, while the port is
   // checked against the smokes in both modes.
   const readerWindowIndex = process.env.AV_PANE_ONLY ? -1 : shownReaderWindowIndex >= 0 ? shownReaderWindowIndex : adoptingWindowIndex
+  // The window drawing the selected transcript as a pane, when the reader draws none.
+  selectedWindowHandleRef.current = () => (readerWindowIndex < 0 && shownReaderWindowIndex !== -1
+    ? splitPaneHandlesRef.current.get(shownReaderWindowIndex) : undefined)
   const readerWindowFloating = readerWindowIndex === FLOATING_PANE_INDEX
   const readerWindowFocused = splitFocusIndex !== null && splitFocusIndex === readerWindowIndex
   const focusedWindowItem = splitFocusIndex === null ? null
@@ -13504,7 +13537,7 @@ function OpenTuiWorkspace() {
   // Focus with no window under it lands on the window showing the selection.
   useEffect(() => {
     if (effectiveFocus !== 'messages' || splitFocusIndex !== null || hasPrimaryFrame || composerActive) return
-    if (readerWindowFloating) { focusSplitPane(FLOATING_PANE_INDEX); return }
+    if (shownReaderWindowIndex === FLOATING_PANE_INDEX) { focusSplitPane(FLOATING_PANE_INDEX); return }
     if (!windowItems.length) { if (showRail && !floatingKey) setFocusedPane('sessions'); return }
     const shown = windowItems.findIndex(item => item.kind === 'session' && sessionKey(item.session) === selectedSessionKey)
     focusSplitPane(shown >= 0 ? shown : Math.min(lastFocusedSplitPaneRef.current, windowItems.length - 1))
@@ -13723,10 +13756,8 @@ function OpenTuiWorkspace() {
   // panes own an explicit row slice instead, so they never chase that measure.
   const splitPaneBoxHeight = stackedSplit
     ? Math.max(splitLayout.paneExtent, SPLIT_PANE_MIN_ROWS)
-    : Math.max(
-      measuredReaderBoxHeight > 0 ? measuredReaderBoxHeight : mainContentHeight - 2 - splitPaneTopOffset,
-      8,
-    )
+    // Side by side, a window fills the window area's height.
+    : Math.max(measuredWindowAreaHeight > 0 ? windowAreaHeight : measuredReaderBoxHeight > 0 ? measuredReaderBoxHeight : mainContentHeight - 2 - splitPaneTopOffset, 8)
   const TAB_BAR_HEIGHT = 1
   const streamTurnFooter = useMemo(() => {
     if (
@@ -22221,7 +22252,7 @@ function OpenTuiWorkspace() {
   // Tab moves between the rail and the transcript, as it always did from the
   // reader; ⌃B o cycles windows. Without a rail it cycles windows.
   const tabFromSplitPane = useEffectEvent(() => {
-    if (!hasPrimaryFrame && showRail) {
+    if (showRail) {
       setSplitFocusIndex(null)
       setFocusedPane('sessions')
       return
@@ -24922,31 +24953,18 @@ function OpenTuiWorkspace() {
       const paneHandle = splitPaneHandlesRef.current.get(splitFocusIndex)
       const paneSession = paneHandle?.getSession() ?? null
       const pageRows = Math.max(Math.floor(transcriptViewportRows * 0.8), 1)
-      // Search: / types a query into the pane's title, Enter looks back for it, n/N step older/newer.
-      const runPaneSearch = (query: string, direction: 1 | -1) => {
-        const outcome = paneHandle?.search(query, direction) ?? 'none'
-        if (outcome === 'none') showNotice('info', `No ${direction === -1 ? 'older' : 'newer'} match for “${query}”`)
+      // The transcript search and the jumps (prompts, tools, bookmarks, the
+      // unread boundary, the resume marker) are the reader's, run against the
+      // selected transcript — the one this window shows — and land here.
+      if (paneSession && sessionKey(paneSession) === selectedSessionKey) {
+        if (sequence === '/') { handled(() => setSearchMode(true)); return }
+        if (searchMatches.length > 0 && (sequence === 'n' || sequence === 'N')) { handled(() => jumpToSearchMatch(sequence === 'n' ? 1 : -1)); return }
+        if (sequence === '(' || sequence === ')') { handled(() => jumpToMatchingCard(sequence === '(' ? -1 : 1, (card) => card.category === 'conversation')); return }
+        if (sequence === '{' || sequence === '}') { handled(() => jumpToMatchingCard(sequence === '{' ? -1 : 1, (card) => card.category !== 'conversation')); return }
+        if (sequence === '[' || sequence === ']') { handled(() => jumpToBookmark(sequence === '[' ? -1 : 1)); return }
+        if (sequence === 'u') { handled(jumpToUnreadBoundary); return }
+        if (sequence === 'm') { handled(jumpToResumeMarker); return }
       }
-      if (paneSearch?.editing && paneSearch.index === splitFocusIndex) {
-        handled(() => {
-          if (key.name === 'escape') { setPaneSearch(null); return }
-          if (key.name === 'return') {
-            setPaneSearch({ ...paneSearch, editing: false })
-            if (paneSearch.query) runPaneSearch(paneSearch.query, -1)
-            return
-          }
-          // Functional updates: keys typed faster than a render all see the same closure.
-          if (key.name === 'backspace') { setPaneSearch((current) => (current ? { ...current, query: current.query.slice(0, -1) } : current)); return }
-          if (sequence.length === 1 && sequence >= ' ' && !key.ctrl) setPaneSearch((current) => (current ? { ...current, query: current.query + sequence } : current))
-        })
-        return
-      }
-      if (sequence === '/') { handled(() => setPaneSearch({ index: splitFocusIndex, query: '', editing: true })); return }
-      if (paneSearch && paneSearch.index === splitFocusIndex && paneSearch.query && (sequence === 'n' || sequence === 'N')) {
-        handled(() => runPaneSearch(paneSearch.query, sequence === 'n' ? -1 : 1))
-        return
-      }
-      if (key.name === 'escape' && paneSearch?.index === splitFocusIndex) { handled(() => setPaneSearch(null)); return }
       if (key.name === 'escape') { handled(focusReaderFromSplit); return }
       // SCROLLBACK has no card cursor: the keys that move it elsewhere move the
       // text here, by rows, and e / Enter fold or unfold the whole transcript.
@@ -27165,7 +27183,10 @@ function OpenTuiWorkspace() {
         paneNumber={splitIndex === FLOATING_PANE_INDEX ? visibleSplitPaneCount + (hasPrimaryFrame ? 2 : 1) : splitIndex + (hasPrimaryFrame ? 2 : 1)}
         paneCount={visibleSplitPaneCount + (hasPrimaryFrame ? 1 : 0) + (floatingKey ? 1 : 0)}
         focused={effectiveFocus === 'messages' && splitFocusIndex === splitIndex && !composerActive}
-        selected={!hasPrimaryFrame && sessionKey(splitSession) === selectedSessionKey}
+        selected={sessionKey(splitSession) === selectedSessionKey}
+        onCursorChange={sessionKey(splitSession) === selectedSessionKey ? reportSelectedWindowCursor : undefined}
+        searchQuery={sessionKey(splitSession) === selectedSessionKey ? deferredSearchQuery : ''}
+        activeSearchKey={searchMatches.length ? visibleTranscriptCards[searchMatches[searchMatchIndex] ?? -1]?.key ?? null : null}
         registerHandle={registerSplitPaneHandle}
         theme={theme}
         densityState={densityState}
@@ -28155,6 +28176,9 @@ function OpenTuiWorkspace() {
               <text fg={theme.dim}>No panes open</text>
               <box onMouseDown={event => { if (event.button !== 0) return; event.stopPropagation(); setWorkspaceHasSession(true); setFocusedPane('sessions') }}><text fg={theme.cyan} selectable={false}>Open session from the sidebar</text></box>
             </box>
+          ) : fullscreenMode && readerWindowIndex < 0 && !hasPrimaryFrame && selectedSession ? (
+            // Full screen is the selected transcript's window, filling the area.
+            renderSplitPane(selectedSession, Math.max(shownReaderWindowIndex, 0), { width: readerAreaWidth, height: windowAreaHeight, boxHeight: windowAreaHeight })
           ) : treeGeometry ? (
             <>
               {hasPrimaryFrame ? <box key="tree-tool-tab" position="absolute" left={windowZoom === 'reader' ? 0 : (treeGeometry.rects.get(-1)?.x ?? 0)} top={windowZoom === 'reader' ? 0 : (treeGeometry.rects.get(-1)?.y ?? 0)}
