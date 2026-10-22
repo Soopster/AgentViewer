@@ -7878,6 +7878,37 @@ function StickyPromptHeader({ card, theme, accent, width }: { card: TuiTranscrip
   )
 }
 
+// The rule under a finished turn at the tail of a stream view: the closing
+// "Worked for … · n files" summary, clickable like the ones between turns.
+function StreamTurnFooter({ landmark, theme, densityState, transcriptWidth, width }: {
+  landmark: CardLandmark
+  theme: TuiThemePalette
+  densityState: DensityState
+  transcriptWidth: TuiTranscriptWidth
+  width: number
+}) {
+  // The same box a stream card draws its own turn rule in, so the closing rule
+  // shares the column's edge instead of hugging the pane's while the text
+  // above it is centered.
+  const footerWidth = transcriptWidth === 'full'
+    ? Math.max(width - 5, 12)
+    : Math.max(transcriptMeasure(Math.max(width - 4, 16) - densityState.bodyIndent, transcriptWidth), 16)
+      + densityState.bodyIndent
+  return (
+    <box
+      key="stream-turn-footer"
+      paddingX={transcriptWidth === 'full' ? 1 : 0}
+      marginBottom={densityState.cardGap}
+      width={transcriptWidth === 'full' ? undefined : footerWidth}
+      alignSelf={transcriptWidth === 'centered' ? 'center' : undefined}
+    >
+      <text fg={theme.dim} width={footerWidth} wrapMode="none" selectable {...turnSummaryMouseProps(landmark)}>
+        {streamLandmarkText(landmark, footerWidth)}
+      </text>
+    </box>
+  )
+}
+
 type SplitTranscriptPaneProps = {
   session: Session
   theme: TuiThemePalette
@@ -8107,15 +8138,29 @@ function SplitTranscriptPaneInner({
     providerKey: ProviderSelection | undefined
     isLatest: boolean
     view: TuiTranscriptView
+    landmarks: CardLandmark[]
     value: CardDisplayData
   }>())
+  // Turn boundaries and their summaries ("Worked for 16s · 2 files"), as the
+  // reader drew them. Reused per card, so a poll that changes nothing keeps
+  // every card's display object.
+  const paneScrollbackLike = transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code' || transcriptView === 'copilot' || transcriptView === 'opencode'
+  const landmarksByCardRef = useRef(new WeakMap<TuiTranscriptCard, CardLandmark[]>())
+  const paneLandmarks = useMemo(() => {
+    const byCard = landmarksByCardRef.current
+    const next = computeAllLandmarks(tailCards, -1, -1, 0, tailCards.map((card) => byCard.get(card) ?? EMPTY_LANDMARKS), paneStreamLike, paneScrollbackLike)
+    tailCards.forEach((card, index) => byCard.set(card, next[index]!))
+    return next
+  }, [tailCards, paneStreamLike, paneScrollbackLike])
   const displayData = useMemo((): CardDisplayData[] => tailCards.map((card, index) => {
     const isExpanded = expandedKeys.has(card.key)
     const providerKey = card.provider ?? session.provider ?? undefined
     const isLatest = index === tailCards.length - 1
+    const landmarks = paneLandmarks[index] ?? EMPTY_LANDMARKS
     const previous = displayDataCacheRef.current.get(card)
     if (
       previous
+      && previous.landmarks === landmarks
       && previous.isExpanded === isExpanded
       && previous.bodyLineLimit === densityState.bodyLines
       && previous.providerKey === providerKey
@@ -8135,7 +8180,7 @@ function SplitTranscriptPaneInner({
     )
     const isInsight = card.category === 'insight'
     const value: CardDisplayData = {
-      landmarks: EMPTY_LANDMARKS,
+      landmarks,
       bodyLines,
       diffView: cardDiffView(card, isExpanded),
       codeBlockLineCounts: (isExpanded && card.codeBlocks)
@@ -8159,10 +8204,11 @@ function SplitTranscriptPaneInner({
       providerKey,
       isLatest,
       view: transcriptView,
+      landmarks,
       value,
     })
     return value
-  }), [tailCards, expandedKeys, densityState.bodyLines, session.provider, transcriptView, paneStreamLike])
+  }), [tailCards, paneLandmarks, expandedKeys, densityState.bodyLines, session.provider, transcriptView, paneStreamLike])
 
   const sessionRef = useRef(session)
 
@@ -8383,6 +8429,10 @@ function SplitTranscriptPaneInner({
   }, [tailCards, followTail])
 
   const stickyKey = useStickyPromptKey(scrollRef, tailCards, stickyHeaders)
+  const turnFooter = useMemo(
+    () => (!running && (transcriptView === 'stream' || paneScrollbackLike) ? streamCompletedTurnHint(tailCards) : null),
+    [running, transcriptView, paneScrollbackLike, tailCards],
+  )
   const stickyCard = stickyKey ? tailCards.find((card) => card.key === stickyKey) ?? null : null
 
   // Focus changes intentionally do not touch cursorKey, followTail, or the
@@ -8562,6 +8612,7 @@ function SplitTranscriptPaneInner({
                 </box>
               ) : null}
               {splitCardElements}
+              {turnFooter ? <StreamTurnFooter landmark={turnFooter} theme={theme} densityState={densityState} transcriptWidth={transcriptWidth} width={width} /> : null}
             </TuiErrorBoundary>
           </scrollbox>
         )}
@@ -13470,8 +13521,8 @@ function OpenTuiWorkspace() {
   }, [readerAreaWidth, visibleTabSessions.length, popoverTabs.length])
   const tabOptions = useMemo((): TabSelectOption[] => (
     visibleTabSessions.map((s) => {
-      // A tab already mounted in a split pane is marked, so the strip explains
-      // why selecting it swaps rather than opening a second copy.
+      // Every open session can be on screen, so the strip marks none of them;
+      // its description says which window shows it.
       const splitPosition = splitPinnedKeys.indexOf(sessionKey(s))
       const inSplit = splitPosition >= 0 && splitPosition < splitPaneCount
       // Herdr's rollup reaches the tab too. Leading, so a narrow tab's
@@ -13481,9 +13532,7 @@ function OpenTuiWorkspace() {
       const stateGlyph = tabStateGlyphs.get(sessionKey(s))
       const label = (stateGlyph ? `${stateGlyph} ` : '') + teamPrefix + (isPreviewMode && selectedSessionKey === sessionKey(s)
         ? `PREVIEW · ${formatSessionTitle(s)}`
-        : inSplit
-          ? `▏${formatSessionTitle(s)}`
-          : formatSessionTitle(s))
+        : formatSessionTitle(s))
       return {
         // tab-select draws a name in tabWidth - 2 cells from its second column,
         // so a label padded to tabWidth - 4 puts the × at TAB_CLOSE_COLUMN.
@@ -13491,7 +13540,7 @@ function OpenTuiWorkspace() {
         description: isPreviewMode && selectedSessionKey === sessionKey(s)
           ? 'Preview tab'
           : inSplit
-            ? `in split pane ${splitPosition + 1}`
+            ? `in window ${splitPosition + 1}`
             : sessionProviderLabel(s),
         value: sessionKey(s),
       }
@@ -19567,16 +19616,6 @@ function OpenTuiWorkspace() {
         { text: SPLIT_CHORD_MAP.prefix, fg: theme.amber },
         { text: `  ${chordHintText(SPLIT_CHORD_MAP)}`, fg: theme.muted },
       ]
-    }
-    // A focused pane owns the keys, so the bar advertises its keys, not the
-    // reader's — otherwise it lists bindings that are inert right now.
-    if (splitFocusIndex !== null) {
-      groups.splice(0, groups.length,
-        [['esc', 'reader'], ['⌃K', 'commands'], ['?', 'help']],
-        [['j/k', 'card'], ['e', 'fold'], ['c', 'send']],
-        [['y', 'copy'], ['b', 'mark'], ['Q', 'reply']],
-        [['⌃G', 'git'], ['D', 'diagnostics']],
-      )
     }
     // Attention badge leads the bar whenever an agent is blocked on a human —
     // it must be visible regardless of which pane or mode has focus.
@@ -26621,28 +26660,7 @@ function OpenTuiWorkspace() {
               )
             ) : null}
 
-            {streamTurnFooter ? (() => {
-              // The same box a stream card draws its own turn rule in, so
-              // the closing rule shares the column's edge instead of
-              // hugging the pane's while the text above it is centered.
-              const footerWidth = transcriptWidth === 'full'
-                ? Math.max(rightPaneWidth - 5, 12)
-                : Math.max(transcriptMeasure(Math.max(rightPaneWidth - 4, 16) - densityState.bodyIndent, transcriptWidth), 16)
-                  + densityState.bodyIndent
-              return (
-                <box
-                  key="stream-turn-footer"
-                  paddingX={transcriptWidth === 'full' ? 1 : 0}
-                  marginBottom={densityState.cardGap}
-                  width={transcriptWidth === 'full' ? undefined : footerWidth}
-                  alignSelf={transcriptWidth === 'centered' ? 'center' : undefined}
-                >
-                  <text fg={theme.dim} width={footerWidth} wrapMode="none" selectable {...turnSummaryMouseProps(streamTurnFooter)}>
-                    {streamLandmarkText(streamTurnFooter, footerWidth)}
-                  </text>
-                </box>
-              )
-            })() : null}
+            {streamTurnFooter ? <StreamTurnFooter landmark={streamTurnFooter} theme={theme} densityState={densityState} transcriptWidth={transcriptWidth} width={rightPaneWidth} /> : null}
 
           </scrollbox>
         )}
