@@ -4395,6 +4395,44 @@ function agentToolCardsFor(card: TuiTranscriptCard): TuiTranscriptCard[] {
   return isAgentsToolOnlyCard(card) ? [card] : []
 }
 
+// A card's expansion is its view's default — technical cards fold in the
+// conversation, agents and stream views — overridden per card: `expanded`
+// opens a folding card, `collapsed` closes any other.
+function cardFoldsByDefault(card: TuiTranscriptCard, transcriptView: TuiTranscriptView, chatLike: boolean): boolean {
+  return (transcriptView === 'conversation' || chatLike || transcriptView === 'agents') && Boolean(card.autoFold)
+}
+function resolveExpandedCardKeys(
+  cards: TuiTranscriptCard[], transcriptView: TuiTranscriptView, chatLike: boolean,
+  expanded: ReadonlySet<string>, collapsed: ReadonlySet<string>,
+): Set<string> {
+  const next = new Set<string>()
+  for (const card of cards) {
+    if (cardFoldsByDefault(card, transcriptView, chatLike) ? expanded.has(card.key) : !collapsed.has(card.key)) next.add(card.key)
+  }
+  return next
+}
+
+// SCROLLBACK parks its invisible cursor on what the viewport shows, so a jump
+// starts from the screen: the cursor itself while still visible, else the
+// first message the viewport reaches.
+function scrollbackParkedCursorKey(sb: ScrollBoxRenderable, scrollTop: number, cursorKey: string | null): string | null {
+  const viewportBottom = scrollTop + sb.viewport.height
+  const cursorId = cursorKey ? `card:${cursorKey}` : null
+  let topKey: string | null = null
+  for (const row of sb.content.getChildren()) {
+    const child = readerRowCard(row as Renderable)
+    if (!child || child.height === 0) continue
+    const top = child.y - sb.content.y
+    if (top >= viewportBottom) break
+    if (top + child.height <= scrollTop) continue
+    // A cursor still on screen stays put: moving it to the top on every poll
+    // would walk it backwards off the card a jump just landed on.
+    if (child.id === cursorId) return cursorKey
+    topKey ??= child.id.slice('card:'.length)
+  }
+  return topKey
+}
+
 function agentToolCardIsExpanded(
   card: TuiTranscriptCard,
   expandedKeys: ReadonlySet<string>,
@@ -7809,6 +7847,15 @@ export function shouldPollSplitPaneDetail(
 // Imperative scroll surface a focused pane hands to the root key dispatcher.
 // The pane keeps its own tail-follow flag inside these methods, so scrolling up
 // detaches from the live tail and G re-attaches — the root never has to know.
+// Keys the reader binds to its transcript (cursor, scroll, folds, marks,
+// jumps, search, the selected card's diff); a focused window keeps them.
+function isTranscriptLocalKey(key: { name?: string; ctrl?: boolean; shift?: boolean; meta?: boolean }, sequence: string): boolean {
+  if (key.meta) return false
+  if (key.ctrl) return key.name === 'd' || key.name === 'u'
+  if (key.name === 'up' || key.name === 'down' || key.name === 'pageup' || key.name === 'pagedown' || key.name === 'home' || key.name === 'end' || key.name === 'return') return true
+  return sequence.length === 1 && 'jkgGefumbQyYnNs()[]{}/'.includes(sequence)
+}
+
 type SplitPaneHandle = {
   scrollByRows: (rows: number) => void
   scrollToTop: () => void
@@ -7829,6 +7876,10 @@ type SplitPaneHandle = {
    * whole transcript is searched. 'loading' means it is being paged in.
    */
   search: (query: string, direction: 1 | -1) => 'found' | 'loading' | 'none'
+  /** SCROLLBACK: the text scrolls by rows and has no visible cursor. */
+  isScrollback: () => boolean
+  /** SCROLLBACK's e / Enter: expand or fold everything. */
+  toggleScrollbackAll: () => void
 }
 
 // Sticky prompt header: the last user prompt whose card has scrolled above the
@@ -7950,6 +8001,8 @@ type SplitTranscriptPaneProps = {
   /** Total mounted panes — drives the ⌃B <digit> hint in the frame title. */
   paneCount: number
   focused: boolean
+  /** Shows the selected session: the transcript being read, under the reader's ids. */
+  selected: boolean
   // Live overlay for THIS pane's session, sliced from the app-wide live stream.
   liveMessages: ThreadedMessage[]
   running: boolean
@@ -8003,6 +8056,7 @@ function SplitTranscriptPaneInner({
   paneNumber,
   paneCount,
   focused,
+  selected,
   liveMessages,
   running,
   attentionBadge,
@@ -8161,26 +8215,26 @@ function SplitTranscriptPaneInner({
   // Cursor: null means "following the tail". Set once the reader focuses this
   // pane and moves, which is also what detaches tail-follow.
   const [cursorKey, setCursorKey] = useState<string | null>(initialPosition?.state.cursorKey ?? (legacy?.get(`pane:${key}:cursorKey`) as string | null | undefined) ?? null)
-  const [expandedKeys, setExpandedKeys] = useState<ReadonlySet<string>>(() => initialPosition
-    ? new Set(initialPosition.presentationExpandedKeys ?? initialPosition.state.expandedKeys)
-    : (legacy?.get(`pane:${key}:expandedKeys`) as ReadonlySet<string> | undefined) ?? EMPTY_EXPANDED_KEYS)
-  const expansionInitializedRef = useRef(Boolean(initialPosition?.presentationExpandedKeys || legacy?.has(`pane:${key}:expandedKeys`)))
-  useLayoutEffect(() => {
-    if (expansionInitializedRef.current || !allPaneCards.length) return
-    expansionInitializedRef.current = true
-    const foldsTechnical = transcriptView === 'conversation' || transcriptView === 'agents' || paneStreamLike
-    const expanded = new Set(initialPosition?.state.expandedKeys)
-    const collapsed = new Set(initialPosition?.state.collapsedKeys)
-    setExpandedKeys(new Set(allPaneCards.filter(card => transcriptView === 'full'
-      || (foldsTechnical && card.autoFold ? expanded.has(card.key) : !collapsed.has(card.key))).map(card => card.key)))
-  }, [allPaneCards, paneStreamLike, transcriptView])
-  const toolExpandedKeys = useMemo(() => new Set(initialPosition?.scrollbackExpanded
-    ? cards.map(card => card.key) : initialPosition?.state.expandedKeys), [cards])
-  const toolCollapsedKeys = useMemo(() => new Set(initialPosition?.state.collapsedKeys), [])
+  // Expansion as the reader keeps it: per-card overrides of the view's
+  // default, so cards that arrive later fold or open by that default.
+  const [expandedCardKeys, setExpandedCardKeys] = useState<ReadonlySet<string>>(() => new Set(initialPosition?.state.expandedKeys))
+  const [collapsedCardKeys, setCollapsedCardKeys] = useState<ReadonlySet<string>>(() => new Set(initialPosition?.state.collapsedKeys))
+  const expandedKeys = useMemo(
+    () => resolveExpandedCardKeys(allPaneCards, transcriptView, paneStreamLike, expandedCardKeys, collapsedCardKeys),
+    [allPaneCards, transcriptView, paneStreamLike, expandedCardKeys, collapsedCardKeys],
+  )
+  // SCROLLBACK folds everything or nothing (e), with clicked exceptions.
+  const [scrollbackExpanded, setScrollbackExpanded] = useState(initialPosition?.scrollbackExpanded ?? false)
+  const [scrollbackToggledKeys, setScrollbackToggledKeys] = useState<ReadonlySet<string>>(() => new Set(initialPosition?.scrollbackToggledKeys))
+  const scrollbackSyncedCursorKeyRef = useRef<string | null>(null)
+  const expansionRef = useRef({ expandedKeys, view: transcriptView, chatLike: paneStreamLike })
+  expansionRef.current = { expandedKeys, view: transcriptView, chatLike: paneStreamLike }
   const cardsRef = useRef(allPaneCards)
   const cursorKeyRef = useRef<string | null>(cursorKey)
 
   const paneScrollbackLike = transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code' || transcriptView === 'copilot' || transcriptView === 'opencode'
+  const scrollbackRef = useRef(paneScrollbackLike)
+  scrollbackRef.current = paneScrollbackLike
   const sessionRef = useRef(session)
 
   // Bookmarks are per session, so a pane loads its own set rather than
@@ -8227,6 +8281,11 @@ function SplitTranscriptPaneInner({
       const found = list.findIndex((card) => card.key === current)
       return found >= 0 ? found : list.length - 1
     }
+    // An explicit move is revealed, even onto the card scrolling parked it on.
+    const jumpCursor = (cardKey: string) => {
+      scrollbackSyncedCursorKeyRef.current = null
+      setCursorKey(cardKey)
+    }
     const handle: SplitPaneHandle = {
       search: (rawQuery, direction) => {
         const query = rawQuery.trim().toLowerCase()
@@ -8236,7 +8295,7 @@ function SplitTranscriptPaneInner({
         const from = cursorIndexNow()
         for (let index = from + direction; index >= 0 && index < list.length; index += direction) {
           if (cardMatches(list[index]!, query)) {
-            setCursorKey(list[index]!.key)
+            jumpCursor(list[index]!.key)
             setFollowTail(index === list.length - 1)
             return 'found'
           }
@@ -8248,7 +8307,8 @@ function SplitTranscriptPaneInner({
         if (!sb) return
         const limit = maxScroll(sb)
         const next = clamp(sb.scrollTop + rows, 0, limit)
-        scrollTo(next, next >= limit)
+        sb.scrollTop = next
+        settleScrollRef.current(sb, next, limit)
       },
       scrollToTop: () => {
         const sb = scrollRef.current
@@ -8266,7 +8326,7 @@ function SplitTranscriptPaneInner({
         const next = clamp(cursorIndexNow() + delta, 0, list.length - 1)
         const nextCard = list[next]
         if (!nextCard) return
-        setCursorKey(nextCard.key)
+        jumpCursor(nextCard.key)
         // Cursor at the last card means the reader is watching the tail again.
         setFollowTail(next === list.length - 1)
       },
@@ -8275,7 +8335,7 @@ function SplitTranscriptPaneInner({
         if (list.length === 0) return
         const target = edge === 'first' ? list[0] : list[list.length - 1]
         if (!target) return
-        setCursorKey(target.key)
+        jumpCursor(target.key)
         setFollowTail(edge === 'last')
         const sb = scrollRef.current
         if (sb) scrollTo(edge === 'first' ? 0 : maxScroll(sb), edge === 'last')
@@ -8284,15 +8344,33 @@ function SplitTranscriptPaneInner({
         const list = cardsRef.current
         const card = list[cursorIndexNow()]
         if (!card) return
-        setCursorKey(card.key)
-        setExpandedKeys((current) => {
+        jumpCursor(card.key)
+        const { expandedKeys: open, view, chatLike } = expansionRef.current
+        const isExpanded = open.has(card.key)
+        const toggle = (current: ReadonlySet<string>, add: boolean) => {
+          if (current.has(card.key) === add) return current
           const next = new Set(current)
-          if (next.has(card.key)) next.delete(card.key)
-          else next.add(card.key)
+          if (add) next.add(card.key)
+          else next.delete(card.key)
           return next
-        })
+        }
+        if (cardFoldsByDefault(card, view, chatLike)) {
+          setCollapsedCardKeys((current) => toggle(current, false))
+          setExpandedCardKeys((current) => toggle(current, !isExpanded))
+        } else {
+          setExpandedCardKeys((current) => toggle(current, false))
+          setCollapsedCardKeys((current) => toggle(current, isExpanded))
+        }
       },
-      collapseAll: () => setExpandedKeys(EMPTY_EXPANDED_KEYS),
+      isScrollback: () => scrollbackRef.current,
+      toggleScrollbackAll: () => {
+        setScrollbackExpanded((current) => !current)
+        setScrollbackToggledKeys(EMPTY_EXPANDED_KEYS)
+      },
+      collapseAll: () => {
+        setExpandedCardKeys(EMPTY_EXPANDED_KEYS)
+        setCollapsedCardKeys(new Set(cardsRef.current.map((card) => card.key)))
+      },
       getCursorCard: () => cardsRef.current[cursorIndexNow()] ?? null,
       getSession: () => sessionRef.current,
       toggleBookmarkAtCursor: async () => {
@@ -8340,10 +8418,28 @@ function SplitTranscriptPaneInner({
     return () => registerHandle(paneIndex, null)
   }, [paneIndex, registerHandle])
 
+  // Following the tail pins the bottom once the tail window has mounted — on
+  // starting to follow and as cards arrive — as the reader does. Scrolling in
+  // the key handler alone lands in the window that was mounted before.
+  const prevFollowTailRef = useRef(followTail)
+  const prevCardCountRef = useRef(allPaneCards.length)
+  useLayoutEffect(() => {
+    if (followTail && allPaneCards.length > 0 && (prevCardCountRef.current !== allPaneCards.length || !prevFollowTailRef.current)) {
+      const sb = scrollRef.current
+      sb?.scrollTo(sb.scrollHeight)
+    }
+    prevFollowTailRef.current = followTail
+    prevCardCountRef.current = allPaneCards.length
+  }, [followTail, allPaneCards.length])
+
   // Keep the cursor card in view as the cursor moves or new cards arrive.
   const paneRenderer = useRenderer()
   useEffect(() => {
-    if (!cursorKey) return
+    // Following, the bottom is pinned; a card not laid out yet would scroll to
+    // where it was last measured, which for a freshly mounted tail is the top.
+    if (!cursorKey || followTail) return
+    // A cursor the scroll parked must not be revealed: that undoes the scroll.
+    if (cursorKey === scrollbackSyncedCursorKeyRef.current) return
     let timer: ReturnType<typeof setTimeout> | null = null
     const scroll = () => { paneRenderer.root.off(LayoutEvents.LAYOUT_CHANGED, afterLayout); scrollRef.current?.scrollChildIntoView(`card:${cursorKey}`) }
     const afterLayout = () => { if (timer) clearTimeout(timer); timer = setTimeout(scroll, 0) }
@@ -8351,42 +8447,57 @@ function SplitTranscriptPaneInner({
     scrollRef.current?.scrollChildIntoView(`card:${cursorKey}`)
     timer = setTimeout(scroll, 50)
     return () => { paneRenderer.root.off(LayoutEvents.LAYOUT_CHANGED, afterLayout); if (timer) clearTimeout(timer) }
-  }, [cursorKey, allPaneCards, paneRenderer])
+  }, [cursorKey, allPaneCards, paneRenderer, followTail])
 
+  // The viewport is restored from the store as it is when this runs, not as
+  // it was at mount: a window that moved (floated, docked) remounts before
+  // its previous instance has written where it was.
   const paneRestored = useRef(false)
   useEffect(() => {
-    if (paneRestored.current || !allPaneCards.length || initialScrollTop == null || followTail) return
-    const saved = initialScrollTop
+    if (paneRestored.current || !allPaneCards.length || followTail) return
     const timer = setTimeout(() => {
       const sb = scrollRef.current
-      if (!sb) return
-      const position = initialPosition
+      const position = positions.current.get(key) ?? initialPosition
+      const saved = position?.scrollTop ?? initialScrollTop
+      if (!sb || saved == null) return
       const anchor = position?.anchorKey ? findReaderCard(sb.content, `card:${position.anchorKey}`) : null
       sb.scrollTo(anchor && anchor.height > 0 ? Math.max(0, anchor.y - sb.content.y - position!.anchorOffset) : saved)
       paneRestored.current = true
     }, READER_FIXUP_RETRY_MS)
     return () => clearTimeout(timer)
   }, [allPaneCards, followTail])
+  // What the reader keeps about a transcript is written through as it
+  // changes, so a remount (a window moving) starts from it.
+  useEffect(() => {
+    const sb = scrollRef.current
+    const previous = positions.current.get(key)
+      ?? (sb ? { ...transcriptViewportPosition(sb), windowStart: windowGaugeRef.current.start, state: { followTail, cursorKey, topKey: null, expandedKeys: [], collapsedKeys: [] } } : null)
+    if (!previous) return
+    positions.current.set(key, {
+      ...previous,
+      state: { ...previous.state, followTail, cursorKey, expandedKeys: [...expandedCardKeys], collapsedKeys: [...collapsedCardKeys] },
+      scrollbackExpanded,
+      scrollbackToggledKeys: [...scrollbackToggledKeys],
+    })
+  }, [followTail, cursorKey, expandedCardKeys, collapsedCardKeys, scrollbackExpanded, scrollbackToggledKeys])
 
   useLayoutEffect(() => {
     capturePanePositionRef.current = () => {
       const sb = scrollRef.current
       if (!sb || status === 'loading' || !cards.length || (!followTail && !paneRestored.current && initialScrollTop !== null)) return
       const viewport = transcriptViewportPosition(sb)
-      const expanded = [...expandedKeys]
       const previous = positions.current.get(key)
       positions.current.set(key, {
         ...previous, ...viewport,
         state: {
           followTail: followTail && sb.scrollTop >= Math.max(0, sb.scrollHeight - sb.viewport.height) - 1,
           cursorKey, topKey: viewport.anchorKey,
-          expandedKeys: previous?.state.expandedKeys ?? expanded,
-          collapsedKeys: previous?.state.collapsedKeys ?? allPaneCards.filter(card => !expandedKeys.has(card.key)).map(card => card.key),
+          expandedKeys: [...expandedCardKeys],
+          collapsedKeys: [...collapsedCardKeys],
         },
         windowStart: windowGaugeRef.current.start,
-        presentationExpandedKeys: expanded,
-        scrollbackExpanded: previous?.scrollbackExpanded ?? false,
-        scrollbackToggledKeys: previous?.scrollbackToggledKeys ?? [],
+        scrollbackExpanded,
+        scrollbackToggledKeys: [...scrollbackToggledKeys],
       })
     }
   })
@@ -8419,9 +8530,46 @@ function SplitTranscriptPaneInner({
   const windowOutputRef = useRef<ReaderWindowOutput>({ start: 0, cardDisplayData: [], scrollbackExpandedKeys: null })
   const scrollFixupRef = useRef<ReaderScrollFixup | null>(null)
   const cursorIndex = useMemo(() => cursorKey ? allPaneCards.findIndex(card => card.key === cursorKey) : allPaneCards.length - 1, [allPaneCards, cursorKey])
+  // A scroll is the reading position: at the bottom it follows the tail again,
+  // elsewhere it parks the invisible cursor on what is on screen.
+  const settleScrollRef = useRef((_sb: ScrollBoxRenderable, _top: number, _limit: number) => {})
+  settleScrollRef.current = (sb, scrollTop, limit) => {
+    if (scrollTop >= limit && windowGaugeRef.current.end >= allPaneCards.length) {
+      setFollowTail(true)
+      return
+    }
+    setFollowTail(false)
+    if (!paneScrollbackLike) return
+    const parked = scrollbackParkedCursorKey(sb, scrollTop, cursorKey)
+    if (parked) {
+      scrollbackSyncedCursorKeyRef.current = parked
+      setCursorKey(parked)
+    }
+  }
+  // SCROLLBACK wheel: the scrollbox emits no scroll events, so poll for a
+  // scroll the keys did not make. While following, only scrollTop going DOWN
+  // in value under content that did not shrink is the user — a growing reply
+  // sits above the bottom for a frame before sticky scroll catches up.
+  useEffect(() => {
+    if (!paneScrollbackLike) return undefined
+    let lastTop = -1
+    let lastHeight = 0
+    const interval = setInterval(() => {
+      if (scrollFixupRef.current) return
+      const sb = scrollRef.current
+      if (!sb) return
+      const { scrollTop, scrollHeight } = sb
+      const moved = followTail ? lastTop >= 0 && scrollTop < lastTop && scrollHeight >= lastHeight : scrollTop !== lastTop
+      lastTop = scrollTop
+      lastHeight = scrollHeight
+      if (moved) settleScrollRef.current(sb, scrollTop, Math.max(scrollHeight - sb.viewport.height, 0))
+    }, READER_SCROLL_POLL_MS)
+    return () => clearInterval(interval)
+  }, [paneScrollbackLike, followTail])
   useReaderWindowSliding({
     store: windowStore, scrollRef, gaugeRef: windowGaugeRef, fixupRef: scrollFixupRef,
     cards: allPaneCards, cursorKey, cursorIndex, followTail, setFollowTail, active: true,
+    scrollbackSyncedKeyRef: paneScrollbackLike ? scrollbackSyncedCursorKeyRef : undefined,
   })
   const thinkingFullKeys = useMemo(() => thinkingMode
     ? new Set(allPaneCards.filter(card => card.lines.some(line => line.tone === 'thinking')).map(card => card.key))
@@ -8431,8 +8579,8 @@ function SplitTranscriptPaneInner({
   const sendPaneDiffNote = useCallback((...args: Parameters<TranscriptWindowInputs['sendDiffNoteToComposer']>) => diffControls.sendDiffNoteToComposer(key, ...args), [diffControls.sendDiffNoteToComposer, key])
   const windowInputs: TranscriptWindowInputs = {
     visibleTranscriptCards: allPaneCards, windowStore, followTail, isScrubbing: false,
-    isScrollbackView: paneScrollbackLike, scrollbackExpanded: false, scrollbackToggledKeys: EMPTY_EXPANDED_KEYS,
-    resolvedExpandedKeys: expandedKeys, thinkingFullKeys, expandedCardKeys: toolExpandedKeys, collapsedCardKeys: toolCollapsedKeys,
+    isScrollbackView: paneScrollbackLike, scrollbackExpanded, scrollbackToggledKeys,
+    resolvedExpandedKeys: expandedKeys, thinkingFullKeys, expandedCardKeys, collapsedCardKeys,
     transcriptView, focused, isPreviewMode: false,
     isChatLikeView: paneStreamLike, isContinuousView: transcriptView === 'transcript' || transcriptView === 'opencode',
     groupedToolView: transcriptView === 'agents' || paneStreamLike, liveCardCount: liveCards.length,
@@ -8478,6 +8626,7 @@ function SplitTranscriptPaneInner({
       )}
       titleColor={attentionBadge?.includes('?') ? theme.amber : attentionBadge?.includes('! error') ? theme.red : attentionBadge ? theme.cyan : running ? theme.green : accent}
       ref={paneFrameRef}
+      id={selected ? 'transcript-reader' : undefined}
       onMouseDown={(event) => {
         if (event.button === 2) {
           onActivate(paneIndex)
@@ -8511,7 +8660,7 @@ function SplitTranscriptPaneInner({
         ) : (
           <scrollbox
             ref={scrollRef}
-            id={`split-scroll:${paneIndex}`}
+            id={selected ? 'transcript-scroll' : `split-scroll:${paneIndex}`}
             style={{ height: bodyRows }}
             backgroundColor={theme.surface}
             // Sticky only while the pane is still following: once the reader
@@ -11681,21 +11830,10 @@ function OpenTuiWorkspace() {
     return next
   }, [thinkingMode, visibleTranscriptCards])
 
-  const resolvedExpandedKeys = useMemo(() => {
-    const next = new Set<string>()
-    for (const card of visibleTranscriptCards) {
-      const shouldAutoFold = (
-        transcriptView === 'conversation'
-        || isChatLikeView
-        || transcriptView === 'agents'
-      ) && card.autoFold
-      const isExpanded = shouldAutoFold
-        ? expandedCardKeys.has(card.key)
-        : !collapsedCardKeys.has(card.key)
-      if (isExpanded) next.add(card.key)
-    }
-    return next
-  }, [collapsedCardKeys, expandedCardKeys, visibleTranscriptCards, transcriptView])
+  const resolvedExpandedKeys = useMemo(
+    () => resolveExpandedCardKeys(visibleTranscriptCards, transcriptView, isChatLikeView, expandedCardKeys, collapsedCardKeys),
+    [collapsedCardKeys, expandedCardKeys, visibleTranscriptCards, transcriptView],
+  )
 
   const normalizedSearchQuery = searchQuery.trim().toLowerCase()
   // Deferred: search computation runs after user interactions, so typing stays instant.
@@ -13274,7 +13412,10 @@ function OpenTuiWorkspace() {
     const index = splitFocusIndex ?? lastFocusedSplitPaneRef.current
     return index !== FLOATING_PANE_INDEX && windowItems[index]?.kind === 'session' ? index : -1
   })()
-  const readerWindowIndex = shownReaderWindowIndex >= 0 ? shownReaderWindowIndex : adoptingWindowIndex
+  // AV_PANE_ONLY draws every window, the focused one included, as a pane: the
+  // end state of moving the reader into windows. Temporary, while the port is
+  // checked against the smokes in both modes.
+  const readerWindowIndex = process.env.AV_PANE_ONLY ? -1 : shownReaderWindowIndex >= 0 ? shownReaderWindowIndex : adoptingWindowIndex
   const readerWindowFloating = readerWindowIndex === FLOATING_PANE_INDEX
   const readerWindowFocused = splitFocusIndex !== null && splitFocusIndex === readerWindowIndex
   const focusedWindowItem = splitFocusIndex === null ? null
@@ -14443,22 +14584,7 @@ function OpenTuiWorkspace() {
       return
     }
     pausedTranscriptScrollTopRef.current = scrollTop
-    const viewportBottom = scrollTop + sb.viewport.height
-    const cursorId = transcriptCursorKey ? `card:${transcriptCursorKey}` : null
-    let topKey: string | null = null
-    let cursorVisible = false
-    for (const row of sb.content.getChildren()) {
-      const child = readerRowCard(row as Renderable)
-      if (!child || child.height === 0) continue
-      const top = child.y - sb.content.y
-      if (top >= viewportBottom) break
-      if (top + child.height <= scrollTop) continue
-      topKey ??= child.id.slice('card:'.length)
-      if (child.id === cursorId) cursorVisible = true
-    }
-    // A cursor still on screen stays put: moving it to the top on every poll
-    // would walk it backwards off the card a jump just landed on.
-    const nextKey = cursorVisible ? transcriptCursorKey : topKey
+    const nextKey = scrollbackParkedCursorKey(sb, scrollTop, transcriptCursorKey)
     if (nextKey) {
       scrollbackSyncedCursorKeyRef.current = nextKey
       setTranscriptCursorKey(nextKey)
@@ -22093,12 +22219,10 @@ function OpenTuiWorkspace() {
     if (next === null) { setWindowSurfacePeek(null); setSplitFocusIndex(null); setFocusedPane('messages') }
     else focusSplitPane(next)
   })
-  // Tab walks the windows and then the rail; the reader is where it reaches
-  // the rail from. With the reader's window closed the cycle has no such stop,
-  // so the last pane hands off to the rail itself — or Tab never leaves panes.
+  // Tab moves between the rail and the transcript, as it always did from the
+  // reader; ⌃B o cycles windows. Without a rail it cycles windows.
   const tabFromSplitPane = useEffectEvent(() => {
-    const lastPane = floatingKey ? splitFocusIndex === FLOATING_PANE_INDEX : splitFocusIndex === visibleSplitPaneCount - 1
-    if (!hasPrimaryFrame && showRail && lastPane) {
+    if (!hasPrimaryFrame && showRail) {
       setSplitFocusIndex(null)
       setFocusedPane('sessions')
       return
@@ -24825,6 +24949,20 @@ function OpenTuiWorkspace() {
       }
       if (key.name === 'escape' && paneSearch?.index === splitFocusIndex) { handled(() => setPaneSearch(null)); return }
       if (key.name === 'escape') { handled(focusReaderFromSplit); return }
+      // SCROLLBACK has no card cursor: the keys that move it elsewhere move the
+      // text here, by rows, and e / Enter fold or unfold the whole transcript.
+      if (paneHandle?.isScrollback() && !key.shift) {
+        const page = Math.max(pageRows, 1)
+        const rows = isCtrl('d') ? Math.ceil(page / 2)
+          : isCtrl('u') ? -Math.ceil(page / 2)
+          : sequence === 'j' || key.name === 'down' ? velocityScrollStep(1)
+          : sequence === 'k' || key.name === 'up' ? -velocityScrollStep(-1)
+          : key.name === 'pagedown' ? page
+          : key.name === 'pageup' ? -page
+          : 0
+        if (rows !== 0) { handled(() => paneHandle.scrollByRows(rows)); return }
+        if (key.name === 'return' || sequence === 'e') { handled(() => paneHandle.toggleScrollbackAll()); return }
+      }
       // Card navigation, not raw scrolling: the pane has a cursor, so j/k move
       // between messages exactly like the reader.
       if (sequence === 'j' || key.name === 'down') { handled(() => paneHandle?.moveCursor(1)); return }
@@ -24908,19 +25046,11 @@ function OpenTuiWorkspace() {
         })
         return
       }
-      // Quit and the help palette stay reachable; the rest is inert while a
-      // pane holds focus, so no reader state changes invisibly behind it.
-      if (key.name === 'q' && !key.shift) { handled(requestExit); return }
-      if (sequence === '?') {
-        handled(() => {
-          setCommandPaletteIndex(0)
-          setCommandPaletteQuery('')
-          setCommandPaletteOpen(true)
-        })
-        return
-      }
-      handled(() => {})
-      return
+      // Keys that act on a transcript are this window's: the root's own
+      // handlers for them act on the selected session's reader state, which
+      // is not what this window draws. Everything else — view, theme, panels,
+      // the composer — is the app's, and falls through to its handlers.
+      if (isTranscriptLocalKey(key, sequence)) { handled(() => {}); return }
     }
 
     if (isCtrl('v')) {
@@ -27036,6 +27166,7 @@ function OpenTuiWorkspace() {
         paneNumber={splitIndex === FLOATING_PANE_INDEX ? visibleSplitPaneCount + (hasPrimaryFrame ? 2 : 1) : splitIndex + (hasPrimaryFrame ? 2 : 1)}
         paneCount={visibleSplitPaneCount + (hasPrimaryFrame ? 1 : 0) + (floatingKey ? 1 : 0)}
         focused={effectiveFocus === 'messages' && splitFocusIndex === splitIndex && !composerActive}
+        selected={!hasPrimaryFrame && sessionKey(splitSession) === selectedSessionKey}
         registerHandle={registerSplitPaneHandle}
         theme={theme}
         densityState={densityState}

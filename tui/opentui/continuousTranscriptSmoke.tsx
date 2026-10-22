@@ -185,7 +185,10 @@ try {
   // only the transcript region is searched.
   const transcriptTop = cardBox(USER.key)!.y
   const transcriptBottom = cardBox(TOOL.key)!.y + cardBox(TOOL.key)!.height
-  const transcriptRegion = frame.split('\n').slice(transcriptTop, transcriptBottom).join('\n')
+  // Columns too: the rail beside the transcript draws its own ▸.
+  const { x: transcriptLeft, width: transcriptWidth } = cardBox(USER.key)!
+  const transcriptRegion = frame.split('\n').slice(transcriptTop, transcriptBottom)
+    .map((row) => row.slice(transcriptLeft, transcriptLeft + transcriptWidth)).join('\n')
   for (const marker of ['❯', '•', '▸']) {
     if (transcriptRegion.includes(marker)) {
       fail(`TRANSCRIPT painted a ${marker} marker; the rule is meant to be the only chrome`)
