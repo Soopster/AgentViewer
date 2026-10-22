@@ -4396,7 +4396,7 @@ function agentToolCardsFor(card: TuiTranscriptCard): TuiTranscriptCard[] {
 // conversation, agents and stream views — overridden per card: `expanded`
 // opens a folding card, `collapsed` closes any other.
 function cardFoldsByDefault(card: TuiTranscriptCard, transcriptView: TuiTranscriptView, chatLike: boolean): boolean {
-  return (transcriptView === 'conversation' || chatLike || transcriptView === 'agents') && Boolean(card.autoFold)
+  return (transcriptView === 'conversation' || transcriptView === 'pane' || chatLike || transcriptView === 'agents') && Boolean(card.autoFold)
 }
 function resolveExpandedCardKeys(
   cards: TuiTranscriptCard[], transcriptView: TuiTranscriptView, chatLike: boolean,
@@ -5201,7 +5201,7 @@ const QUESTION_PREVIEW_MAX_LINES = 8
 // reserving anything, so the preview is dropped instead.
 const QUESTION_PREVIEW_MIN_ROWS = 2
 
-const TRANSCRIPT_VIEWS: TuiTranscriptView[] = ['conversation', 'full', 'continue', 'stream', 'agents', 'chat', 'transcript', 'scrollback', 'codex', 'claude-code', 'copilot', 'opencode']
+const TRANSCRIPT_VIEWS: TuiTranscriptView[] = ['conversation', 'full', 'continue', 'stream', 'agents', 'chat', 'transcript', 'scrollback', 'codex', 'claude-code', 'copilot', 'opencode', 'pane']
 
 const TRANSCRIPT_VIEW_LABELS: Record<TuiTranscriptView, string> = {
   conversation: 'CONVERSATION',
@@ -5216,6 +5216,7 @@ const TRANSCRIPT_VIEW_LABELS: Record<TuiTranscriptView, string> = {
   'claude-code': 'CLAUDE',
   copilot: 'COPILOT',
   opencode: 'OPENCODE',
+  pane: 'PANE',
 }
 
 const TRANSCRIPT_VIEW_DESCRIPTIONS: Record<TuiTranscriptView, string> = {
@@ -5231,6 +5232,7 @@ const TRANSCRIPT_VIEW_DESCRIPTIONS: Record<TuiTranscriptView, string> = {
   'claude-code': 'Claude Code-style scrollback with slim prompts and muted tool activity',
   copilot: 'GitHub Copilot CLI-style transcript with app tabs and timestamps',
   opencode: 'OpenCode-style continuous transcript with context sidebar',
+  pane: 'Lightweight windows: compact cards, a plain cursor, no header; long transcripts load a page at a time',
 }
 
 // A session from a further provider instance — a configured ACP agent, a second
@@ -7703,6 +7705,8 @@ export function createLazyTranscriptIndexLookup(
 // Each pane owns its session data, viewport and saved state. All panes render
 // their cards through TranscriptWindowBody, including the selected transcript.
 const SPLIT_PANE_MIN_WIDTH = MIN_WINDOW_COLUMNS
+// PANE view: cards a window mounts from the tail, and loads per page walking back.
+const SPLIT_PANE_CARD_WINDOW = 80
 // Row minimums for the stacked orientation. A pane needs its two border rows,
 // a meta row, the reserved action row and a few body rows to say anything at
 // all; below that the layout drops the pane rather than render a sliver.
@@ -8225,11 +8229,23 @@ function SplitTranscriptPaneInner({
   // message — otherwise the two halves of a split are two different apps.
   const paneStreamLike = transcriptView === 'stream' || transcriptView === 'chat'
     || transcriptView === 'transcript' || transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code' || transcriptView === 'copilot' || transcriptView === 'opencode'
-  const allPaneCards = useMemo(() => {
+  const fullPaneCards = useMemo(() => {
     const liveKeys = new Set(liveCards.map(card => card.key))
     const merged = liveCards.length ? [...cards.filter(card => !liveKeys.has(card.key)), ...liveCards] : cards
     return visibleCardsForTranscriptView(merged, transcriptView)
   }, [cards, liveCards, transcriptView])
+  // PANE: the lightweight view mounts the tail and loads a page at a time as
+  // the cursor walks back, so a long transcript costs nothing it is not showing.
+  // Counted against the persisted cards: live cards are additions and must not
+  // push history out of the window while a turn streams.
+  const lightView = transcriptView === 'pane'
+  const [loadedCount, setLoadedCount] = useState(SPLIT_PANE_CARD_WINDOW)
+  const lightStart = lightView ? Math.max(0, fullPaneCards.length - liveCards.length - loadedCount) : 0
+  const allPaneCards = useMemo(() => lightStart > 0 ? fullPaneCards.slice(lightStart) : fullPaneCards, [fullPaneCards, lightStart])
+  const fullCardsRef = useRef(fullPaneCards)
+  fullCardsRef.current = fullPaneCards
+  const lightRef = useRef({ light: lightView, start: lightStart })
+  lightRef.current = { light: lightView, start: lightStart }
 
   const activityReport = useMemo(() => {
     const last = liveCards.at(-1) ?? cards.at(-1)
@@ -8315,15 +8331,25 @@ function SplitTranscriptPaneInner({
     // An explicit move is revealed, even onto the card scrolling parked it on.
     const jumpCursor = (cardKey: string) => {
       scrollbackSyncedCursorKeyRef.current = null
+      // PANE: a card older than what is loaded pages in, with a little above it.
+      const { light, start } = lightRef.current
+      if (light && start > 0) {
+        const index = fullCardsRef.current.findIndex((card) => card.key === cardKey)
+        if (index >= 0 && index < start) setLoadedCount((count) => count + start - index + 4)
+      }
       setCursorKey(cardKey)
+    }
+    const loadEarlier = () => {
+      if (lightRef.current.light && lightRef.current.start > 0) setLoadedCount((count) => count + SPLIT_PANE_CARD_WINDOW)
     }
     const handle: SplitPaneHandle = {
       search: (rawQuery, direction) => {
         const query = rawQuery.trim().toLowerCase()
         if (!query) return 'none'
         // The whole transcript: a match outside the mounted window recenters it.
-        const list = cardsRef.current
-        const from = cursorIndexNow()
+        const list = fullCardsRef.current
+        const cursorAt = cursorKeyRef.current ? list.findIndex((card) => card.key === cursorKeyRef.current) : -1
+        const from = cursorAt >= 0 ? cursorAt : list.length - 1
         for (let index = from + direction; index >= 0 && index < list.length; index += direction) {
           if (cardMatches(list[index]!, query)) {
             jumpCursor(list[index]!.key)
@@ -8361,6 +8387,8 @@ function SplitTranscriptPaneInner({
         jumpCursor(nextCard.key)
         // Cursor at the last card means the reader is watching the tail again.
         setFollowTail(next === list.length - 1)
+        // Walking onto the first loaded card loads the page before it.
+        if (next === 0) loadEarlier()
       },
       cursorToEdge: (edge) => {
         const list = cardsRef.current
@@ -8371,6 +8399,7 @@ function SplitTranscriptPaneInner({
         setFollowTail(edge === 'last')
         const sb = scrollRef.current
         if (sb) scrollTo(edge === 'first' ? 0 : maxScroll(sb), edge === 'last')
+        if (edge === 'first') loadEarlier()
       },
       toggleExpandedAtCursor: () => {
         const list = cardsRef.current
@@ -8585,7 +8614,7 @@ function SplitTranscriptPaneInner({
       return next
     })
   }
-  const stickyKey = useStickyPromptKey(scrollRef, allPaneCards, stickyHeaders)
+  const stickyKey = useStickyPromptKey(scrollRef, allPaneCards, stickyHeaders && !lightView)
   const turnFooter = useMemo(
     () => (!running && (transcriptView === 'stream' || paneScrollbackLike) ? streamCompletedTurnHint(allPaneCards) : null),
     [running, transcriptView, paneScrollbackLike, allPaneCards],
@@ -8611,9 +8640,11 @@ function SplitTranscriptPaneInner({
   // The action row is reserved in every pane so focus never changes viewport
   // height or the meaning of its stored scrollTop.
   // The reader's trailing chrome (CHAT's composer bar), in the window showing the selected transcript.
-  const header = useSyncExternalStore(chromeHost ? selectedWindowHeader.subscribe : subscribeNothing, chromeHost ? selectedWindowHeader.get : getNothing)
+  // PANE draws no view header: the title already names the session.
+  const header = useSyncExternalStore(chromeHost && !lightView ? selectedWindowHeader.subscribe : subscribeNothing, chromeHost && !lightView ? selectedWindowHeader.get : getNothing)
   const footer = useSyncExternalStore(chromeHost ? selectedWindowFooter.subscribe : subscribeNothing, chromeHost ? selectedWindowFooter.get : getNothing)
   const bodyRows = Math.max(calculateSplitPaneBodyRows(height + 2 - frameExtent, statusRowCount) - (header?.rows ?? 0) - (footer?.rows ?? 0), 1)
+  const hiddenCount = lightStart
   const windowGaugeRef = useRef<ReaderWindowGauge>({ start: 0, end: 0, total: 0, settled: true })
   const windowOutputRef = useRef<ReaderWindowOutput>({ start: 0, cardDisplayData: [], scrollbackExpandedKeys: null })
   const scrollFixupRef = useRef<ReaderScrollFixup | null>(null)
@@ -8776,6 +8807,13 @@ function SplitTranscriptPaneInner({
             onMouseUp={releaseTranscript}
           >
             <TuiErrorBoundary>
+              {hiddenCount > 0 ? (
+                <box key="split-earlier-hint" paddingX={1}>
+                  <text fg={theme.dim} wrapMode="none">
+                    {fitText(`↑ ${hiddenCount} earlier message${hiddenCount === 1 ? '' : 's'} — k/g to load`, Math.max(innerWidth - 2, 8))}
+                  </text>
+                </box>
+              ) : null}
               <TranscriptWindowBody inputs={windowInputs} />
               {turnFooter ? <StreamTurnFooter landmark={turnFooter} theme={theme} densityState={densityState} transcriptWidth={transcriptWidth} width={width} /> : null}
             </TuiErrorBoundary>
@@ -9379,7 +9417,7 @@ function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInputs }) {
       // Latest = last card of the FULL transcript; a detached reader window
       // may end before it.
       const isLatest = transcriptRenderStart + index === totalTranscriptCards - 1
-      const isAutoFoldedTechnical = (transcriptView === 'conversation' || transcriptView === 'agents') && card.autoFold && !isExpanded
+      const isAutoFoldedTechnical = (transcriptView === 'conversation' || transcriptView === 'pane' || transcriptView === 'agents') && card.autoFold && !isExpanded
       const landmarks = allLandmarks[index] ?? EMPTY_LANDMARKS
       const stable = stableCardData[index] ?? {
         bodyLines: [],
@@ -13389,6 +13427,15 @@ function OpenTuiWorkspace() {
     if (selected >= 0) return selected
     return Math.max(shown.findIndex((key) => !isSurfaceWindowKey(key)), 0)
   })()
+  // A tab shown without a recorded host (restored, or set as state) keeps the
+  // window it first took, or it would follow the selection from window to window.
+  const resolvedPopoverHostKey = popoverHostSlot >= 0 ? orderedWindowKeys[popoverHostSlot]! : null
+  useEffect(() => {
+    if (resolvedPopoverHostKey && popoverTabHostKey !== resolvedPopoverHostKey && !(popoverTabHostKey && orderedWindowKeys.includes(popoverTabHostKey))) setPopoverTabHostKey(resolvedPopoverHostKey)
+  }, [resolvedPopoverHostKey, popoverTabHostKey, orderedWindowKeys, setPopoverTabHostKey])
+  // Windows are numbered in order; a popover tab in a slot of its own is 1,
+  // one that took a window has that window's number.
+  const windowNumberOffset = primaryLeaf ? 2 : 1
   if (treeGeometry && popoverHostSlot >= 0) {
     const host = treeGeometry.rects.get(popoverHostSlot)!
     treeGeometry = { ...treeGeometry, rects: new Map(treeGeometry.rects).set(-1, host), layout: { ...treeGeometry.layout, reader: { width: host.width, height: host.height } } }
@@ -14649,6 +14696,7 @@ function OpenTuiWorkspace() {
     const isAgentToolTarget = selectedAgentTool !== null
     const shouldAutoFold = (
       transcriptView === 'conversation'
+      || transcriptView === 'pane'
       || isChatLikeView
       || transcriptView === 'agents'
     ) && targetCard.autoFold
@@ -21380,7 +21428,7 @@ function OpenTuiWorkspace() {
       setFloatDockHint(splitRect && area
         ? { label: 'Split here', rect: { ...splitRect, x: splitRect.x + area.x, y: splitRect.y + area.y }, x: event.x, y: event.y }
         : dock && area
-        ? { label: dock.kind === 'tab' ? `Add as a tab of window ${dock.pane + (hasPrimaryFrame ? 2 : 1)}` : 'Dock into the layout', rect: pane ? { ...pane, height: Math.min(pane.height, 3) } : area, x: event.x, y: event.y }
+        ? { label: dock.kind === 'tab' ? `Add as a tab of window ${dock.pane + windowNumberOffset}` : 'Dock into the layout', rect: pane ? { ...pane, height: Math.min(pane.height, 3) } : area, x: event.x, y: event.y }
         : null)
     }
     const area = windowAreaRect() ?? { width: readerAreaWidth, height: windowAreaHeight }
@@ -21942,6 +21990,8 @@ function OpenTuiWorkspace() {
   // an index rather than a session key so a pane keeps focus when its pinned
   // session changes under it (⌃B n).
   const focusSplitPane = useEffectEvent((paneIndex: number) => {
+    // The window a popover tab took shows the tab: focusing it focuses the tab.
+    if (paneIndex >= 0 && paneIndex === popoverHostSlot) { setWindowSurfacePeek(null); setSplitFocusIndex(null); setFocusedPane('messages'); return }
     if (paneIndex < 0 || (paneIndex >= visibleSplitPaneCount && !(paneIndex === FLOATING_PANE_INDEX && floatingKey))) return
     setWindowSurfacePeek(null)
     lastFocusedSplitPaneRef.current = paneIndex
@@ -21968,7 +22018,7 @@ function OpenTuiWorkspace() {
   const cycleSplitFocus = useEffectEvent((direction: 1 | -1) => {
     const stops: Array<number | null> = [
       ...(hasPrimaryFrame ? [null] : []),
-      ...Array.from({ length: visibleSplitPaneCount }, (_, index) => index),
+      ...Array.from({ length: visibleSplitPaneCount }, (_, index) => index).filter((index) => index !== popoverHostSlot),
       ...(floatingKey ? [FLOATING_PANE_INDEX] : []),
     ]
     if (!stops.length) {
@@ -23129,9 +23179,9 @@ function OpenTuiWorkspace() {
       windows.push({ key, number, title, focused: focusedControlKey() === key,
         rect: { x, y, width: clippedWidth, height: clippedHeight } })
     }
-    if (shownPopoverTab) add(surfaceWindowKey(shownPopoverTab), 1, windowSurfaceTitle(shownPopoverTab), 'popover-tab-frame')
-    windowItems.slice(0, visibleSplitPaneCount).forEach((item, index) => add(windowItemKey(item), index + (hasPrimaryFrame ? 2 : 1), windowKeyTitle(windowItemKey(item)), `split-pane:${index}`))
-    if (floatingItem && !fullscreenMode && !windowSurfacePeek) add(windowItemKey(floatingItem), visibleSplitPaneCount + (hasPrimaryFrame ? 2 : 1), windowKeyTitle(windowItemKey(floatingItem)), 'floating-window')
+    if (shownPopoverTab) add(surfaceWindowKey(shownPopoverTab), popoverHostSlot >= 0 ? popoverHostSlot + 1 : 1, windowSurfaceTitle(shownPopoverTab), 'popover-tab-frame')
+    windowItems.slice(0, visibleSplitPaneCount).forEach((item, index) => index !== popoverHostSlot && add(windowItemKey(item), index + windowNumberOffset, windowKeyTitle(windowItemKey(item)), `split-pane:${index}`))
+    if (floatingItem && !fullscreenMode && !windowSurfacePeek) add(windowItemKey(floatingItem), visibleSplitPaneCount + windowNumberOffset, windowKeyTitle(windowItemKey(floatingItem)), 'floating-window')
     return windows
   })
   const focusControlWindow = useEffectEvent((key: string) => {
@@ -23430,8 +23480,8 @@ function OpenTuiWorkspace() {
         // while another window is peeked over it.
         if (/^[0-9]$/.test(sequence)) {
           const number = Number(sequence)
-          if (hasPrimaryFrame && number === 1) { focusReaderFromSplit(); return }
-          const index = number - (hasPrimaryFrame ? 2 : 1)
+          if (primaryLeaf && number === 1) { focusReaderFromSplit(); return }
+          const index = number - windowNumberOffset
           if (index >= 0 && index < windowItems.length) focusSplitPane(index)
           else { const target = readControlWindows().find(window => window.number === number); if (target) focusControlWindow(target.key) }
           return
@@ -26683,8 +26733,8 @@ function OpenTuiWorkspace() {
       <SplitTranscriptPane
         session={splitSession}
         paneIndex={splitIndex}
-        paneNumber={splitIndex === FLOATING_PANE_INDEX ? visibleSplitPaneCount + (hasPrimaryFrame ? 2 : 1) : splitIndex + (hasPrimaryFrame ? 2 : 1)}
-        paneCount={visibleSplitPaneCount + (hasPrimaryFrame ? 1 : 0) + (floatingKey ? 1 : 0)}
+        paneNumber={splitIndex === FLOATING_PANE_INDEX ? visibleSplitPaneCount + windowNumberOffset : splitIndex + windowNumberOffset}
+        paneCount={visibleSplitPaneCount + (primaryLeaf ? 1 : 0) + (floatingKey ? 1 : 0)}
         focused={effectiveFocus === 'messages' && splitFocusIndex === splitIndex && !composerActive}
         selected={sessionKey(splitSession) === selectedSessionKey}
         onCursorChange={sessionKey(splitSession) === selectedSessionKey ? reportSelectedWindowCursor : undefined}
@@ -29712,19 +29762,19 @@ function OpenTuiWorkspace() {
           : paneRect
           ? (sessionDrag.title ? { ...paneRect, height: Math.min(paneRect.height, 3) } : sessionDrag.insert ? windowDropZoneRect(paneRect, sessionDrag.insert) : paneRect)
           : (reader && sessionDrag.zone ? windowDropZoneRect(reader, sessionDrag.zone) : null)
-        const label = sessionDrag.pane !== null && sessionDrag.insert ? `Beside pane ${sessionDrag.pane + (hasPrimaryFrame ? 2 : 1)}`
-          : sessionDrag.pane !== null ? `Replace pane ${sessionDrag.pane + (hasPrimaryFrame ? 2 : 1)}`
+        const label = sessionDrag.pane !== null && sessionDrag.insert ? `Beside pane ${sessionDrag.pane + windowNumberOffset}`
+          : sessionDrag.pane !== null ? `Replace pane ${sessionDrag.pane + windowNumberOffset}`
           : !sessionDrag.zone ? 'Drop on the reader or a pane'
           : sessionDrag.zone === 'center' ? 'Open session'
           : `Put it ${sessionDrag.zone === 'left' ? 'left of' : sessionDrag.zone === 'right' ? 'right of' : sessionDrag.zone === 'top' ? 'above' : 'below'} the reader`
         // fitText pads to its width; trimmed, so the label is as long as what it says.
         const dragged = sessionDrag.tab ? windowKeyTitle(sessionDrag.tab) : sessionDrag.session ? formatSessionTitle(sessionDrag.session) : surfaceTitle(sessionDrag.surface ?? '')
         const overSurface = sessionDrag.pane !== null && windowItems[sessionDrag.pane]?.kind === 'surface'
-        const shown = splitting ? (nestedDragPreview ? 'Split here' : 'Split does not fit') : hasPrimaryFrame && sessionDrag.pane === null && sessionDrag.zone === 'center' ? 'Add as a tab of window 1' : sessionDrag.reader && sessionDrag.pane !== null ? `Add as a tab of window ${sessionDrag.pane + (hasPrimaryFrame ? 2 : 1)}`
-          : sessionDrag.tab ? (sessionDrag.pane !== null ? `Add as a tab of window ${sessionDrag.pane + (hasPrimaryFrame ? 2 : 1)}` : 'Its own window')
-          : sessionDrag.title && sessionDrag.pane !== null ? `Add as a tab of window ${sessionDrag.pane + (hasPrimaryFrame ? 2 : 1)}`
+        const shown = splitting ? (nestedDragPreview ? 'Split here' : 'Split does not fit') : hasPrimaryFrame && sessionDrag.pane === null && sessionDrag.zone === 'center' ? 'Add as a tab of window 1' : sessionDrag.reader && sessionDrag.pane !== null ? `Add as a tab of window ${sessionDrag.pane + windowNumberOffset}`
+          : sessionDrag.tab ? (sessionDrag.pane !== null ? `Add as a tab of window ${sessionDrag.pane + windowNumberOffset}` : 'Its own window')
+          : sessionDrag.title && sessionDrag.pane !== null ? `Add as a tab of window ${sessionDrag.pane + windowNumberOffset}`
           : !sessionDrag.session && sessionDrag.pane === null ? (sessionDrag.zone ? 'Float it here' : 'Drop on a window')
-          : (overSurface || !sessionDrag.session) && sessionDrag.pane !== null && !sessionDrag.insert ? `Add as a tab of window ${sessionDrag.pane + (hasPrimaryFrame ? 2 : 1)}`
+          : (overSurface || !sessionDrag.session) && sessionDrag.pane !== null && !sessionDrag.insert ? `Add as a tab of window ${sessionDrag.pane + windowNumberOffset}`
           : label
         const ghost = `⠿ ${fitText(dragged, 28).trimEnd()} · ${shown}`
         return (

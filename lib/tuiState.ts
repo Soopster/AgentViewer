@@ -394,7 +394,7 @@ export async function setConfiguredTuiDiffLayout(diffLayout: TuiDiffLayout): Pro
 }
 
 const VALID_TUI_TRANSCRIPT_VIEWS: readonly TuiTranscriptView[] = [
-  'conversation', 'full', 'continue', 'stream', 'agents', 'chat', 'transcript', 'scrollback', 'codex', 'claude-code', 'copilot', 'opencode',
+  'conversation', 'full', 'continue', 'stream', 'agents', 'chat', 'transcript', 'scrollback', 'codex', 'claude-code', 'copilot', 'opencode', 'pane',
 ]
 
 export async function getConfiguredTuiTranscriptView(): Promise<TuiTranscriptView> {
