@@ -9,32 +9,43 @@
 //
 // `null` means "follow the tail": the window is derived from the card count.
 
-let start: number | null = null
-const listeners = new Set<() => void>()
-
-export function getReaderWindowStart(): number | null {
-  return start
+export type ReaderWindowStore = {
+  get: () => number | null
+  subscribe: (listener: () => void) => () => void
+  // A slide or a recenter: the window component re-renders on its own.
+  set: (next: number | null) => void
+  // For a change that rides a root render already on its way (a session switch
+  // restoring its saved window alongside its cursor and expansion state).
+  // Notifying there would render the window twice: once for the new start under
+  // the old state, then again with the rest.
+  prime: (next: number | null) => void
 }
 
-export function subscribeReaderWindowStart(listener: () => void): () => void {
-  listeners.add(listener)
-  return () => { listeners.delete(listener) }
+/** One per transcript window: each slides its own mounted card window. */
+export function createReaderWindowStore(): ReaderWindowStore {
+  let start: number | null = null
+  const listeners = new Set<() => void>()
+  return {
+    get: () => start,
+    subscribe: (listener) => {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    },
+    set: (next) => {
+      if (next === start) return
+      start = next
+      for (const listener of listeners) listener()
+    },
+    prime: (next) => { start = next },
+  }
 }
 
-// A slide or a recenter: the window component re-renders on its own.
-export function setReaderWindowStart(next: number | null): void {
-  if (next === start) return
-  start = next
-  for (const listener of listeners) listener()
-}
-
-// For a change that rides a root render already on its way (a session switch
-// restoring its saved window alongside its cursor and expansion state).
-// Notifying there would render the window twice: once for the new start under
-// the old state, then again with the rest.
-export function primeReaderWindowStart(next: number | null): void {
-  start = next
-}
+// The window the root's reader draws in.
+const readerStore = createReaderWindowStore()
+export const getReaderWindowStart = readerStore.get
+export const subscribeReaderWindowStart = readerStore.subscribe
+export const setReaderWindowStart = readerStore.set
+export const primeReaderWindowStart = readerStore.prime
 
 export type ReaderWindow = { start: number; end: number }
 
