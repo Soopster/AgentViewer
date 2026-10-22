@@ -7702,7 +7702,6 @@ const SPLIT_PANE_ARRANGED_MAX = 5
 // a pane that mounted the whole transcript would cost the same as a second
 // reader; 80 collapsed cards provides deeper scroll-back while retaining the
 // existing paged growth behavior for older history.
-const SPLIT_PANE_CARD_WINDOW = 80
 const SPLIT_PANE_POLL_MS = 2500
 // A yielded poll retries soon rather than waiting out the full interval — the
 // open it stepped aside for is usually done in well under a second.
@@ -8113,14 +8112,13 @@ function SplitTranscriptPaneInner({
     }
   }, [activityVisible, key, session, density, showToolCalls, variant, paneIndex, shouldYieldToForeground])
 
-  // Tail window. A pane starts at the last SPLIT_PANE_CARD_WINDOW cards (the
-  // mount budget that keeps a pane cheap) and grows a page at a time as the
-  // reader walks back, so the whole transcript is reachable without paying for
-  // it up front.
-  const [windowSize, setWindowSize] = useState(initialPosition?.state.followTail === false ? READER_CARD_WINDOW : SPLIT_PANE_CARD_WINDOW)
-  const windowSizeRef = useRef(windowSize)
-  windowSizeRef.current = windowSize
-  const cardCountRef = useRef(0)
+  // The mounted card window slides like the reader's, from this window's own
+  // store, starting where the transcript was last read.
+  const [windowStore] = useState(() => {
+    const store = createReaderWindowStore()
+    store.prime(initialPosition && initialPosition.state.followTail === false ? initialPosition.windowStart : null)
+    return store
+  })
 
   // Live overlay: the pane polls persisted state every few seconds, but a
   // running turn streams through the app-wide live list — formatting that here
@@ -8147,11 +8145,6 @@ function SplitTranscriptPaneInner({
     const merged = liveCards.length ? [...cards.filter(card => !liveKeys.has(card.key)), ...liveCards] : cards
     return visibleCardsForTranscriptView(merged, transcriptView)
   }, [cards, liveCards, transcriptView])
-  const windowBounds = useMemo(() => {
-    const end = !followTail && initialPosition ? Math.min(allPaneCards.length, initialPosition.windowStart + READER_CARD_WINDOW) : allPaneCards.length
-    return { start: Math.max(0, end - windowSize), end }
-  }, [allPaneCards.length, windowSize, followTail, initialPosition])
-  const tailCards = useMemo(() => allPaneCards.slice(windowBounds.start, windowBounds.end), [allPaneCards, windowBounds])
 
   const activityReport = useMemo(() => {
     const last = liveCards.at(-1) ?? cards.at(-1)
@@ -8185,7 +8178,6 @@ function SplitTranscriptPaneInner({
     ? cards.map(card => card.key) : initialPosition?.state.expandedKeys), [cards])
   const toolCollapsedKeys = useMemo(() => new Set(initialPosition?.state.collapsedKeys), [])
   const cardsRef = useRef(allPaneCards)
-  const tailCardsRef = useRef<TuiTranscriptCard[]>(tailCards)
   const cursorKeyRef = useRef<string | null>(cursorKey)
 
   const paneScrollbackLike = transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code' || transcriptView === 'copilot' || transcriptView === 'opencode'
@@ -8197,12 +8189,10 @@ function SplitTranscriptPaneInner({
   const bookmarkedKeysRef = useRef<ReadonlySet<string>>(bookmarkedKeys)
   useLayoutEffect(() => {
     cardsRef.current = allPaneCards
-    cardCountRef.current = allPaneCards.length
-    tailCardsRef.current = tailCards
     cursorKeyRef.current = cursorKey
     sessionRef.current = session
     bookmarkedKeysRef.current = bookmarkedKeys
-  }, [bookmarkedKeys, allPaneCards, cursorKey, session, tailCards])
+  }, [bookmarkedKeys, allPaneCards, cursorKey, session])
   useEffect(() => {
     let cancelled = false
     void readTuiSessionBookmarkIds({ sessionId: session.sessionId, provider: session.provider } as Session)
@@ -8220,25 +8210,6 @@ function SplitTranscriptPaneInner({
   const cardMatches = (card: TuiTranscriptCard, query: string): boolean =>
     card.searchHaystackLower.includes(query)
     || ((card as AgentToolGroupCard).agentToolCards ?? []).some((tool) => tool.searchHaystackLower.includes(query))
-  // A search waiting for older history to be paged in: older than this card key.
-  const pendingSearchRef = useRef<{ query: string; beforeKey: string | null } | null>(null)
-  useEffect(() => {
-    const pending = pendingSearchRef.current
-    if (!pending) return
-    const list = tailCards
-    const before = pending.beforeKey ? list.findIndex((card) => card.key === pending.beforeKey) : list.length
-    for (let index = (before < 0 ? list.length : before) - 1; index >= 0; index -= 1) {
-      if (cardMatches(list[index]!, pending.query)) {
-        pendingSearchRef.current = null
-        setCursorKey(list[index]!.key)
-        setFollowTail(false)
-        return
-      }
-    }
-    // Still short: the window grows a page per render until the match is in it.
-    if (list.length >= cardsRef.current.length) pendingSearchRef.current = null
-  }, [tailCards])
-
   // The handle is registered once per pane index; every method reads through a
   // ref so it never goes stale as cards stream in.
   useEffect(() => {
@@ -8249,11 +8220,8 @@ function SplitTranscriptPaneInner({
       sb.scrollTop = position
       setFollowTail(follow)
     }
-    const growWindow = () => {
-      setWindowSize((current) => (current >= cardCountRef.current ? current : current + SPLIT_PANE_CARD_WINDOW))
-    }
     const cursorIndexNow = (): number => {
-      const list = tailCardsRef.current
+      const list = cardsRef.current
       const current = cursorKeyRef.current
       if (!current) return list.length - 1
       const found = list.findIndex((card) => card.key === current)
@@ -8263,7 +8231,8 @@ function SplitTranscriptPaneInner({
       search: (rawQuery, direction) => {
         const query = rawQuery.trim().toLowerCase()
         if (!query) return 'none'
-        const list = tailCardsRef.current
+        // The whole transcript: a match outside the mounted window recenters it.
+        const list = cardsRef.current
         const from = cursorIndexNow()
         for (let index = from + direction; index >= 0 && index < list.length; index += direction) {
           if (cardMatches(list[index]!, query)) {
@@ -8271,16 +8240,6 @@ function SplitTranscriptPaneInner({
             setFollowTail(index === list.length - 1)
             return 'found'
           }
-        }
-        if (direction === 1) return 'none'
-        // Older than the window: find it in the whole transcript, then page in to it.
-        const all = cardsRef.current
-        const loaded = Math.min(all.length, windowSizeRef.current)
-        for (let index = all.length - loaded - 1; index >= 0; index -= 1) {
-          if (!cardMatches(all[index]!, query)) continue
-          pendingSearchRef.current = { query, beforeKey: list[Math.max(0, Math.min(from, list.length - 1))]?.key ?? null }
-          setWindowSize(all.length - index + 4)
-          return 'loading'
         }
         return 'none'
       },
@@ -8302,7 +8261,7 @@ function SplitTranscriptPaneInner({
         scrollTo(maxScroll(sb), true)
       },
       moveCursor: (delta) => {
-        const list = tailCardsRef.current
+        const list = cardsRef.current
         if (list.length === 0) return
         const next = clamp(cursorIndexNow() + delta, 0, list.length - 1)
         const nextCard = list[next]
@@ -8310,12 +8269,9 @@ function SplitTranscriptPaneInner({
         setCursorKey(nextCard.key)
         // Cursor at the last card means the reader is watching the tail again.
         setFollowTail(next === list.length - 1)
-        // Walking off the top loads the previous page; the cursor is a key, so
-        // it stays on the same card while older ones appear above it.
-        if (next === 0) growWindow()
       },
       cursorToEdge: (edge) => {
-        const list = tailCardsRef.current
+        const list = cardsRef.current
         if (list.length === 0) return
         const target = edge === 'first' ? list[0] : list[list.length - 1]
         if (!target) return
@@ -8323,10 +8279,9 @@ function SplitTranscriptPaneInner({
         setFollowTail(edge === 'last')
         const sb = scrollRef.current
         if (sb) scrollTo(edge === 'first' ? 0 : maxScroll(sb), edge === 'last')
-        if (edge === 'first') growWindow()
       },
       toggleExpandedAtCursor: () => {
-        const list = tailCardsRef.current
+        const list = cardsRef.current
         const card = list[cursorIndexNow()]
         if (!card) return
         setCursorKey(card.key)
@@ -8338,10 +8293,10 @@ function SplitTranscriptPaneInner({
         })
       },
       collapseAll: () => setExpandedKeys(EMPTY_EXPANDED_KEYS),
-      getCursorCard: () => tailCardsRef.current[cursorIndexNow()] ?? null,
+      getCursorCard: () => cardsRef.current[cursorIndexNow()] ?? null,
       getSession: () => sessionRef.current,
       toggleBookmarkAtCursor: async () => {
-        const card = tailCardsRef.current[cursorIndexNow()]
+        const card = cardsRef.current[cursorIndexNow()]
         if (!card) throw new Error('No message selected')
         if (card.key.startsWith('live-')) throw new Error('Cannot bookmark a streaming message')
         const target = sessionRef.current
@@ -8396,11 +8351,11 @@ function SplitTranscriptPaneInner({
     scrollRef.current?.scrollChildIntoView(`card:${cursorKey}`)
     timer = setTimeout(scroll, 50)
     return () => { paneRenderer.root.off(LayoutEvents.LAYOUT_CHANGED, afterLayout); if (timer) clearTimeout(timer) }
-  }, [cursorKey, tailCards, paneRenderer])
+  }, [cursorKey, allPaneCards, paneRenderer])
 
   const paneRestored = useRef(false)
   useEffect(() => {
-    if (paneRestored.current || !tailCards.length || initialScrollTop == null || followTail) return
+    if (paneRestored.current || !allPaneCards.length || initialScrollTop == null || followTail) return
     const saved = initialScrollTop
     const timer = setTimeout(() => {
       const sb = scrollRef.current
@@ -8411,7 +8366,7 @@ function SplitTranscriptPaneInner({
       paneRestored.current = true
     }, READER_FIXUP_RETRY_MS)
     return () => clearTimeout(timer)
-  }, [tailCards, followTail])
+  }, [allPaneCards, followTail])
 
   useLayoutEffect(() => {
     capturePanePositionRef.current = () => {
@@ -8428,7 +8383,7 @@ function SplitTranscriptPaneInner({
           expandedKeys: previous?.state.expandedKeys ?? expanded,
           collapsedKeys: previous?.state.collapsedKeys ?? allPaneCards.filter(card => !expandedKeys.has(card.key)).map(card => card.key),
         },
-        windowStart: Math.max(0, allPaneCards.findIndex(card => card.key === tailCards[0]?.key)),
+        windowStart: windowGaugeRef.current.start,
         presentationExpandedKeys: expanded,
         scrollbackExpanded: previous?.scrollbackExpanded ?? false,
         scrollbackToggledKeys: previous?.scrollbackToggledKeys ?? [],
@@ -8436,12 +8391,12 @@ function SplitTranscriptPaneInner({
     }
   })
 
-  const stickyKey = useStickyPromptKey(scrollRef, tailCards, stickyHeaders)
+  const stickyKey = useStickyPromptKey(scrollRef, allPaneCards, stickyHeaders)
   const turnFooter = useMemo(
-    () => (!running && (transcriptView === 'stream' || paneScrollbackLike) ? streamCompletedTurnHint(tailCards) : null),
-    [running, transcriptView, paneScrollbackLike, tailCards],
+    () => (!running && (transcriptView === 'stream' || paneScrollbackLike) ? streamCompletedTurnHint(allPaneCards) : null),
+    [running, transcriptView, paneScrollbackLike, allPaneCards],
   )
-  const stickyCard = stickyKey ? tailCards.find((card) => card.key === stickyKey) ?? null : null
+  const stickyCard = stickyKey ? allPaneCards.find((card) => card.key === stickyKey) ?? null : null
 
   // Focus changes intentionally do not touch cursorKey, followTail, or the
   // scrollbox. Each pane owns its viewport, so cycling reader → pane → pane
@@ -8454,7 +8409,7 @@ function SplitTranscriptPaneInner({
 
   const accent = transcriptAccent('assistant', session.provider ?? undefined)
   const innerWidth = Math.max(width - 4, 12)
-  const statusRowCount = (liveText || (running && tailCards.length > 0)) ? 1 : 0
+  const statusRowCount = (liveText || (running && allPaneCards.length > 0)) ? 1 : 0
   // Exact row budget, or the frame shrinks: border (2) + meta row (1) + the
   // body box's own paddingBottom (1) + the optional live row + one action row.
   // The action row is reserved in every pane so focus never changes viewport
@@ -8463,6 +8418,11 @@ function SplitTranscriptPaneInner({
   const windowGaugeRef = useRef<ReaderWindowGauge>({ start: 0, end: 0, total: 0, settled: true })
   const windowOutputRef = useRef<ReaderWindowOutput>({ start: 0, cardDisplayData: [], scrollbackExpandedKeys: null })
   const scrollFixupRef = useRef<ReaderScrollFixup | null>(null)
+  const cursorIndex = useMemo(() => cursorKey ? allPaneCards.findIndex(card => card.key === cursorKey) : allPaneCards.length - 1, [allPaneCards, cursorKey])
+  useReaderWindowSliding({
+    store: windowStore, scrollRef, gaugeRef: windowGaugeRef, fixupRef: scrollFixupRef,
+    cards: allPaneCards, cursorKey, cursorIndex, followTail, setFollowTail, active: true,
+  })
   const thinkingFullKeys = useMemo(() => thinkingMode
     ? new Set(allPaneCards.filter(card => card.lines.some(line => line.tone === 'thinking')).map(card => card.key))
     : EMPTY_EXPANDED_KEYS, [allPaneCards, thinkingMode])
@@ -8470,7 +8430,7 @@ function SplitTranscriptPaneInner({
   const openPaneDiffNote = useCallback((selection: SelectedLineRange, cardKey?: string) => diffControls.openDiffNote(key, selection, cardKey), [diffControls.openDiffNote, key])
   const sendPaneDiffNote = useCallback((...args: Parameters<TranscriptWindowInputs['sendDiffNoteToComposer']>) => diffControls.sendDiffNoteToComposer(key, ...args), [diffControls.sendDiffNoteToComposer, key])
   const windowInputs: TranscriptWindowInputs = {
-    visibleTranscriptCards: allPaneCards, windowBounds, followTail, isScrubbing: false,
+    visibleTranscriptCards: allPaneCards, windowStore, followTail, isScrubbing: false,
     isScrollbackView: paneScrollbackLike, scrollbackExpanded: false, scrollbackToggledKeys: EMPTY_EXPANDED_KEYS,
     resolvedExpandedKeys: expandedKeys, thinkingFullKeys, expandedCardKeys: toolExpandedKeys, collapsedCardKeys: toolCollapsedKeys,
     transcriptView, focused, isPreviewMode: false,
@@ -8480,7 +8440,7 @@ function SplitTranscriptPaneInner({
     provider: session.provider ?? 'claude', shouldEnableSyntaxHighlighting,
     searchMatches: EMPTY_SEARCH_MATCHES, searchMatchIndex: 0, bookmarkKeys: bookmarkedKeys,
     agentToolCursorByGroupKey, transcriptCursorKey: cursorKey,
-    cursorIndex: cursorKey ? allPaneCards.findIndex(card => card.key === cursorKey) : allPaneCards.length - 1,
+    cursorIndex,
     sessionKey: key, readerWindowGaugeRef: windowGaugeRef, readerWindowOutputRef: windowOutputRef,
     readerScrollFixupRef: scrollFixupRef, transcriptScrollRef: scrollRef,
     theme, densityState, syntaxStyle, rightPaneWidth: width, onSelectCard: selectPaneCard,
@@ -8544,9 +8504,9 @@ function SplitTranscriptPaneInner({
       <box flexGrow={1} paddingX={1} overflow="hidden">
         {status === 'error' ? (
           <text fg={theme.red} wrapMode="none">{fitText(error ?? 'Failed to load transcript', innerWidth)}</text>
-        ) : status === 'loading' && tailCards.length === 0 ? (
+        ) : status === 'loading' && allPaneCards.length === 0 ? (
           <Spinner label={fitText('Loading…', innerWidth)} fg={theme.dim} />
-        ) : tailCards.length === 0 ? (
+        ) : allPaneCards.length === 0 ? (
           <text fg={theme.dim} wrapMode="none">{fitText('No messages yet', innerWidth)}</text>
         ) : (
           <scrollbox
@@ -8577,7 +8537,7 @@ function SplitTranscriptPaneInner({
         <box paddingX={1} height={1}>
           <text fg={accent} wrapMode="none">{fitText(`● ${liveText.replace(/\s+/g, ' ')}`, innerWidth)}</text>
         </box>
-      ) : running && tailCards.length > 0 ? (
+      ) : running && allPaneCards.length > 0 ? (
         <box paddingX={1} height={1}>
           <Spinner label={fitText('working…', Math.max(innerWidth - 2, 8))} fg={theme.dim} />
         </box>
@@ -8642,7 +8602,8 @@ type TranscriptWindowInputs = Pick<TranscriptCardVariantInputs,
   | 'diffSelectionAnchorByCardKey' | 'setDiffRowCursor' | 'setDiffSelectionAnchor' | 'linkCwd'
 > & {
   /** A pane supplies its own viewport range; it never subscribes to another window's scroll position. */
-  windowBounds?: ReaderWindow
+  /** The window's own card-window store; the root reader's when omitted. */
+  windowStore?: ReaderWindowStore
   visibleTranscriptCards: TuiTranscriptCard[]
   followTail: boolean
   isScrubbing: boolean
@@ -8677,9 +8638,6 @@ type TranscriptWindowInputs = Pick<TranscriptCardVariantInputs,
   readerScrollFixupRef: React.RefObject<ReaderScrollFixup | null>
   transcriptScrollRef: React.RefObject<ScrollBoxRenderable | null>
 }
-
-const subscribeControlledTranscriptWindow = (_listener: () => void) => () => {}
-const getControlledTranscriptWindowStart = () => null
 
 type ReaderWindowSlidingOptions = {
   store: ReaderWindowStore
@@ -8914,13 +8872,9 @@ function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInputs }) {
   // there is bounded by density, not by how many are mounted. Scrub is already
   // covered without a cap: the transcript unmounts entirely while isScrubbing.
   const totalTranscriptCards = visibleTranscriptCards.length
-  const controlledWindow = inputs.windowBounds
-  const readerWindowStart = useSyncExternalStore(
-    controlledWindow ? subscribeControlledTranscriptWindow : subscribeReaderWindowStart,
-    controlledWindow ? getControlledTranscriptWindowStart : getReaderWindowStart,
-    controlledWindow ? getControlledTranscriptWindowStart : getReaderWindowStart,
-  )
-  const targetWindow = controlledWindow ?? deriveReaderWindow(totalTranscriptCards, READER_CARD_WINDOW, followTail, readerWindowStart)
+  const windowStore = inputs.windowStore ?? rootReaderWindowStore
+  const readerWindowStart = useSyncExternalStore(windowStore.subscribe, windowStore.get, windowStore.get)
+  const targetWindow = deriveReaderWindow(totalTranscriptCards, READER_CARD_WINDOW, followTail, readerWindowStart)
   // What the last commit mounted, and for which session. Read during render to
   // decide how far this commit may move: it only changes at a commit, so a
   // render repeated without one derives the same window.
@@ -8934,7 +8888,7 @@ function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInputs }) {
   // 60, so the first paint now waits on the cards it shows rather than on the
   // whole window; the rest arrives a step at a time, anchored like a slide.
   const sameSessionWindow = committedWindow && committedWindow.sessionKey === sessionKey ? committedWindow.window : null
-  const { start: transcriptRenderStart, end: transcriptRenderEnd } = controlledWindow ?? stepReaderWindow(
+  const { start: transcriptRenderStart, end: transcriptRenderEnd } = stepReaderWindow(
     sameSessionWindow ?? { start: windowFocus, end: windowFocus },
     targetWindow,
     windowFocus,
@@ -9440,7 +9394,6 @@ function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInputs }) {
   useLayoutEffect(() => {
     const prev = committedWindowRef.current
     committedWindowRef.current = { sessionKey, window: { start: transcriptRenderStart, end: transcriptRenderEnd } }
-    if (controlledWindow) return
     const fixup = readerScrollFixupRef.current
     if (fixup?.kind === 'cursor') {
       fixup.committed = true
@@ -9468,7 +9421,7 @@ function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInputs }) {
       if (row.y - contentY + row.height > scrollTop) break
     }
     if (anchor) readerScrollFixupRef.current = { kind: 'anchor', el: anchor, prevOffset: anchor.y - contentY }
-  }, [sessionKey, transcriptRenderStart, transcriptRenderEnd, controlledWindow])
+  }, [sessionKey, transcriptRenderStart, transcriptRenderEnd])
   // Leaving the preview anywhere but the bottom expands every card at once, and
   // the ones above the viewport grow under it. Anchor the first row reaching the
   // viewport, as a slide does; the root's layout pass applies it in the frame
@@ -9477,7 +9430,6 @@ function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInputs }) {
   useLayoutEffect(() => {
     const previous = expandedAnchorRef.current
     expandedAnchorRef.current = expandedKeysForRender
-    if (controlledWindow) return
     if (previous !== EMPTY_EXPANDED_KEYS || expandedKeysForRender === EMPTY_EXPANDED_KEYS || stagedExpansion) return
     const sb = transcriptScrollRef.current
     if (!sb || readerScrollFixupRef.current || sb.scrollTop >= sb.scrollHeight - sb.viewport.height - 1) return
@@ -9487,7 +9439,7 @@ function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInputs }) {
       readerScrollFixupRef.current = { kind: 'anchor', el: row, prevOffset: row.y - contentY }
       break
     }
-  }, [expandedKeysForRender, stagedExpansion, controlledWindow])
+  }, [expandedKeysForRender, stagedExpansion])
   if (isScrubbing) {
     return (
       <box paddingX={1}>
