@@ -252,7 +252,7 @@ import { normalizeCodexStreamThreadedMessage } from '../../lib/codexMapper'
 import { readTuiSessionMetadataAsync } from './metadataWorkerClient'
 import { shouldPrewarmTuiRuntime } from './sessionPrewarm'
 import { useTranscriptSessionLoader } from './useTranscriptSessionLoader'
-import { selectedWindowFooter, type WindowChrome } from './windowChrome'
+import { selectedWindowFooter, selectedWindowHeader, type WindowChrome } from './windowChrome'
 import { sessionTranscriptUpdatedAt } from './sessionRefreshPolicy'
 import { filterComposerMentionFilesAsync } from './composerMentionWorkerClient'
 import { TUI_FRAME_BUDGET_MS } from './performanceBudget'
@@ -8011,6 +8011,10 @@ type SplitTranscriptPaneProps = {
   selected: boolean
   /** The selected transcript's cursor is the reader's: jumps and search start from it. */
   onCursorChange?: (cardKey: string | null) => void
+  /** …and so is whether it follows the tail: the banner and idle ticker read it. */
+  onFollowChange?: (follow: boolean) => void
+  /** Draws the reader's chrome (header, banners, composer bar): the window showing the selected session, else the focused one. */
+  chromeHost: boolean
   /** The transcript search, highlighted in the window showing the selected session. */
   searchQuery: string
   activeSearchKey: string | null
@@ -8069,6 +8073,8 @@ function SplitTranscriptPaneInner({
   focused,
   selected,
   onCursorChange,
+  onFollowChange,
+  chromeHost,
   searchQuery,
   activeSearchKey,
   liveMessages,
@@ -8544,13 +8550,15 @@ function SplitTranscriptPaneInner({
   // The action row is reserved in every pane so focus never changes viewport
   // height or the meaning of its stored scrollTop.
   // The reader's trailing chrome (CHAT's composer bar), in the window showing the selected transcript.
-  const footer = useSyncExternalStore(selected ? selectedWindowFooter.subscribe : subscribeNothing, selected ? selectedWindowFooter.get : getNothing)
-  const bodyRows = Math.max(calculateSplitPaneBodyRows(height, statusRowCount) - (footer?.rows ?? 0), 1)
+  const header = useSyncExternalStore(chromeHost ? selectedWindowHeader.subscribe : subscribeNothing, chromeHost ? selectedWindowHeader.get : getNothing)
+  const footer = useSyncExternalStore(chromeHost ? selectedWindowFooter.subscribe : subscribeNothing, chromeHost ? selectedWindowFooter.get : getNothing)
+  const bodyRows = Math.max(calculateSplitPaneBodyRows(height, statusRowCount) - (header?.rows ?? 0) - (footer?.rows ?? 0), 1)
   const windowGaugeRef = useRef<ReaderWindowGauge>({ start: 0, end: 0, total: 0, settled: true })
   const windowOutputRef = useRef<ReaderWindowOutput>({ start: 0, cardDisplayData: [], scrollbackExpandedKeys: null })
   const scrollFixupRef = useRef<ReaderScrollFixup | null>(null)
   const cursorIndex = useMemo(() => cursorKey ? allPaneCards.findIndex(card => card.key === cursorKey) : allPaneCards.length - 1, [allPaneCards, cursorKey])
   useEffect(() => { onCursorChange?.(cursorKey) }, [onCursorChange, cursorKey])
+  useEffect(() => { onFollowChange?.(followTail) }, [onFollowChange, followTail])
   const searchMatchIndexes = useMemo(() => {
     if (!searchQuery) return EMPTY_SEARCH_MATCHES
     const matches: number[] = []
@@ -8678,6 +8686,7 @@ function SplitTranscriptPaneInner({
         <WindowButton id={selected ? 'reader-window-fullscreen' : `split-pane-promote:${paneIndex}`} label=" ⤢ " theme={theme} onPress={promoteThisPane} />
         <WindowButton id={selected ? 'reader-window-close' : `split-pane-close:${paneIndex}`} label=" × " theme={theme} tone="danger" onPress={closeThisPane} />
       </box>
+      {header ? <box flexDirection="column" flexShrink={0}>{header.render(width)}</box> : null}
       <box flexGrow={1} paddingX={1} overflow="hidden">
         {status === 'error' ? (
           <text fg={theme.red} wrapMode="none">{fitText(error ?? 'Failed to load transcript', innerWidth)}</text>
@@ -8719,7 +8728,7 @@ function SplitTranscriptPaneInner({
           <Spinner label={fitText('working…', Math.max(innerWidth - 2, 8))} fg={theme.dim} />
         </box>
       ) : null}
-      {footer ? footer.render(width) : null}
+      {footer ? <box flexDirection="column" flexShrink={0}>{footer.render(width)}</box> : null}
       {/* Key hints sit in the bottom border, as the composer's status does. */}
       <box position="absolute" bottom={-1} left={1} height={1} backgroundColor={theme.surface}>
         <text fg={theme.dim} wrapMode="none">
@@ -13623,6 +13632,9 @@ function OpenTuiWorkspace() {
   // the reader's own chrome (composer bar, status widths) is sized to it.
   const transcriptWindowIndex = readerWindowIndex >= 0 ? readerWindowIndex : shownReaderWindowIndex
   const transcriptWindowFloating = transcriptWindowIndex === FLOATING_PANE_INDEX
+  // Where the reader's chrome goes when panes draw the transcript: the window
+  // showing the selected session, else the focused (or last focused) one.
+  const chromeWindowIndex = readerWindowIndex >= 0 ? -1 : shownReaderWindowIndex !== -1 ? shownReaderWindowIndex : splitFocusIndex ?? lastFocusedSplitPaneRef.current
   const treeReaderRect = transcriptWindowFloating && floatingWindow && !fullscreenMode
     ? clampFloatingRect(floatingWindow.rect, { width: readerAreaWidth, height: windowAreaHeight })
     : treeGeometry
@@ -22468,9 +22480,11 @@ function OpenTuiWorkspace() {
   // by focus) so a send can never be misdirected by where the cursor happens to
   // be; it clears when the composer closes.
   const composeToSplitPaneSession = useEffectEvent((target: Session) => {
+    const retargeted = sessionKey(target) !== composerTargetSessionIdentity
     setComposerPaneTargetKey(sessionKey(target))
     setComposerActive(true)
-    showNotice('info', `Composer → ${formatSessionTitle(target)}`)
+    // Said only when it changes where the composer sends.
+    if (retargeted) showNotice('info', `Composer → ${formatSessionTitle(target)}`)
   })
 
   // Session-scoped overlays, opened for a pane. Git is cwd-scoped and
@@ -24972,7 +24986,10 @@ function OpenTuiWorkspace() {
       // The transcript search and the jumps (prompts, tools, bookmarks, the
       // unread boundary, the resume marker) are the reader's, run against the
       // selected transcript — the one this window shows — and land here.
-      if (paneSession && sessionKey(paneSession) === selectedSessionKey) {
+      // { } (Shift+[ ]) page the fleet strip while it has pages, as from the reader.
+      const fleetPageKey = fleetStripVisible && fleetPageCount > 1
+        && (sequence === '{' || sequence === '}' || isShifted('[') || isShifted(']'))
+      if (paneSession && sessionKey(paneSession) === selectedSessionKey && !fleetPageKey) {
         if (sequence === '/') { handled(() => setSearchMode(true)); return }
         if (searchMatches.length > 0 && (sequence === 'n' || sequence === 'N')) { handled(() => jumpToSearchMatch(sequence === 'n' ? 1 : -1)); return }
         if (sequence === '(' || sequence === ')') { handled(() => jumpToMatchingCard(sequence === '(' ? -1 : 1, (card) => card.category === 'conversation')); return }
@@ -25083,7 +25100,7 @@ function OpenTuiWorkspace() {
       // handlers for them act on the selected session's reader state, which
       // is not what this window draws. Everything else — view, theme, panels,
       // the composer — is the app's, and falls through to its handlers.
-      if (isTranscriptLocalKey(key, sequence)) { handled(() => {}); return }
+      if (isTranscriptLocalKey(key, sequence) && !fleetPageKey) { handled(() => {}); return }
     }
 
     if (isCtrl('v')) {
@@ -26632,8 +26649,190 @@ function OpenTuiWorkspace() {
         </box>
     ),
   } : null
+  // The reader's chrome above and below the transcript, as rows the window
+  // holding the transcript gives up (counted from the conditions that draw it).
+  const contextRowShown = !presentationFocusMode && !isStreamView && (Boolean(contextUsage)
+    || (selectedSession?.provider === 'claude' && (contextUsageStatus === 'loading' || contextUsageStatus === 'unavailable')))
+  const tailBannerShown = !followTail && (!isScrollbackView || pendingNewCount > 0)
+  const readerHeaderChrome: WindowChrome = {
+    rows: (!presentationFocusMode && isCopilotView ? 1 : 0) + (!presentationFocusMode && !isStreamView ? 2 : 0)
+      + (contextRowShown ? 1 : 0) + (fleetStripVisible ? 1 : 0) + (error ? 2 : 0) + (!showToolCalls ? 1 : 0)
+      + (tailBannerShown ? 2 : 0) + (normalizedSearchQuery ? 2 : 0),
+    render: (chromeWidth: number) => (
+      <>
+      {!presentationFocusMode && isCopilotView ? (
+        <box height={1} paddingX={1} flexDirection="row" alignItems="center">
+          {['Current', 'Sessions', 'Issues', 'Pull requests', 'Gists'].map((tab) => {
+            const active = tab === 'Current'
+            return (
+              <box key={tab} paddingX={1} backgroundColor={active ? theme.cyan : theme.bg}>
+                <text fg={active ? theme.bg : theme.muted} attributes={active ? TextAttributes.BOLD : undefined} wrapMode="none">{tab}</text>
+              </box>
+            )
+          })}
+        </box>
+      ) : null}
+
+      {!presentationFocusMode && !isStreamView ? (
+        <box paddingX={2} paddingTop={1} flexDirection="row" alignItems="center">
+          <text fg={providerAccent} wrapMode="none">{'● '}</text>
+          <box flexGrow={1} overflow="hidden">
+            <text fg={theme.muted} wrapMode="none">
+              {fitText(showTabs
+                ? `${TRANSCRIPT_VIEW_LABELS[transcriptView]} · ${followTail ? 'Following latest' : 'Reading history'}`
+                : `${TRANSCRIPT_VIEW_LABELS[transcriptView]} · ${readerTitle}`, Math.max(chromeWidth - readerContextMeta.length - 10, 12))}
+            </text>
+          </box>
+          <box width={readerContextMeta.length} overflow="hidden">
+            <text fg={theme.dim} wrapMode="none">{readerContextMeta}</text>
+          </box>
+        </box>
+      ) : null}
+
+      {!presentationFocusMode && !isStreamView && contextUsage ? (
+        <box paddingX={1}>
+          <text wrapMode="none">
+            {renderInlineTextSegments(
+              contextBarSegments(contextUsage.totalTokens, contextUsage.maxTokens, contextUsage.percentage, theme),
+              chromeWidth - 4,
+              theme.dim,
+            )}
+          </text>
+        </box>
+      ) : !presentationFocusMode && !isStreamView && selectedSession?.provider === 'claude' && contextUsageStatus === 'loading' ? (
+        <box paddingX={1}>
+          <text fg={theme.dim}>{fitText('Loading context usage…', chromeWidth - 4)}</text>
+        </box>
+      ) : !presentationFocusMode && !isStreamView && selectedSession?.provider === 'claude' && contextUsageStatus === 'unavailable' ? (
+        <box paddingX={1}>
+          <text fg={theme.dim}>{fitText('Context usage unavailable', chromeWidth - 4)}</text>
+        </box>
+      ) : null}
+
+      {fleetStripVisible ? (
+        <box paddingX={1} flexDirection="row" overflow="hidden">
+          <text wrapMode="none">
+            {renderInlineTextSegments(fleetStripSegments, chromeWidth - 4, theme.dim)}
+          </text>
+        </box>
+      ) : null}
+
+      {error ? (
+        <box paddingX={1} marginTop={1}>
+          <text fg={theme.red}>{fitText(error, chromeWidth - 4)}</text>
+        </box>
+      ) : null}
+
+      {!showToolCalls ? (
+        <box
+          id="show-tool-activity"
+          height={1}
+          paddingX={1}
+          onMouseDown={(event) => {
+            if (event.button !== 0) return
+            event.stopPropagation()
+            setShowToolCalls(true)
+            void writeTuiShowToolCalls(true).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store tool visibility'))
+          }}
+        >
+          <text fg={theme.amber} wrapMode="none">{fitText('TOOLS HIDDEN · Click or Shift+X to show file and tool activity', chromeWidth - 4)}</text>
+        </box>
+      ) : null}
+
+      {/* Reserved while reading history elsewhere; SCROLLBACK leaves the tail
+          on every scroll, and two rows appearing above the text would jolt
+          it, so there the banner exists only while it has something to say. */}
+      {!followTail && (!isScrollbackView || pendingNewCount > 0) ? (
+        <box paddingX={1} marginTop={1}>
+          <text fg={theme.amber}>
+            {pendingNewCount > 0
+              ? fitText(`+${pendingNewCount} new messages waiting. Press u for first unread or f for live tail.`, chromeWidth - 4)
+              : ' '}
+          </text>
+        </box>
+      ) : null}
+
+      {normalizedSearchQuery ? (
+        <box paddingX={1} marginTop={1}>
+          <text fg={theme.dim}>
+            {fitText(
+              `/${searchQuery}  ${searchMatches.length === 0 ? 'no matches' : `${searchMatchIndex + 1}/${searchMatches.length} matches`}`,
+              chromeWidth - 4,
+            )}
+          </text>
+        </box>
+      ) : null}
+
+      </>
+    ),
+  }
+  const idleTickerShown = followTail && visibleTranscriptCards.length > 0 && !turnRunningForComposer && !embeddedComposer && !isStreamView
+  const readerFooterChrome: WindowChrome = {
+    rows: chatTurnStatusRows + (idleTickerShown ? 2 : 0) + (embeddedComposerChrome?.rows ?? 0),
+    render: (chromeWidth: number) => (
+      <>
+      {chatTurnStatusRows > 0 ? (
+        <box
+          id="chat-turn-status"
+          height={1}
+          flexShrink={0}
+          paddingLeft={densityState.bodyIndent + 1}
+          flexDirection="row"
+        >
+          <text fg={theme.cyan} wrapMode="none">{'● '}</text>
+          <box flexGrow={1}>
+            {visibleComposerSending ? (
+              <ComposerWaitingStatus
+                startedAt={composerSendStartedAt}
+                seed={composerWaitingStatusSeed}
+                suffix={composerWaitingSuffix}
+                theme={theme}
+                width={Math.max(chromeWidth - densityState.bodyIndent - 6, 16)}
+                message={composerWaitingOnUser}
+              />
+            ) : (
+              <Spinner
+                label={fitText(
+                  visibleAwaitingPersistedTurn
+                    ? 'Syncing transcript…'
+                    : 'Turn running · reattached — output syncs as it persists · ⌃C interrupt',
+                  Math.max(chromeWidth - densityState.bodyIndent - 6, 16),
+                )}
+                fg={theme.cyan}
+                labelFg={theme.dim}
+              />
+            )}
+          </box>
+        </box>
+      ) : null}
+
+      {/* The idle ticker means "nothing is happening — still watching". A
+          running turn has its own pinned status row next to the composer
+          (elapsed, tokens, interrupt hint), so showing both put a spinner
+          reading "waiting patiently" directly above one reading "Shaping
+          the next move… 2s". Exactly one spinner is on screen at a time,
+          and which one tells you whether a turn is live.
+
+          Chat and Agents omit the idle ticker. Their single activity row
+          appears immediately above the composer only while a turn runs.
+          Stream and Scrollback omit it too: they are the bare transcript,
+          and two rows saying nothing is happening are two rows of it. */}
+      {followTail && visibleTranscriptCards.length > 0
+        && !turnRunningForComposer && !embeddedComposer && !isStreamView ? (
+        <box paddingX={2} paddingBottom={1}>
+          <IdleTicker seed={selectedSessionKey ?? ''} theme={theme} />
+        </box>
+      ) : null}
+
+      {embeddedComposerChrome?.render(chromeWidth)}
+      </>
+    ),
+  }
   // A window drawing the selected transcript as a pane takes it from here.
-  useLayoutEffect(() => { selectedWindowFooter.set(readerWindowIndex < 0 ? embeddedComposerChrome : null) })
+  useLayoutEffect(() => {
+    selectedWindowHeader.set(readerWindowIndex < 0 && readerHeaderChrome.rows > 0 ? readerHeaderChrome : null)
+    selectedWindowFooter.set(readerWindowIndex < 0 && readerFooterChrome.rows > 0 ? readerFooterChrome : null)
+  })
   const transcriptWindowNode = () => (
     <>
       <box
@@ -26734,109 +26933,7 @@ function OpenTuiWorkspace() {
         </box>
       ) : null}
 
-      {!presentationFocusMode && isCopilotView ? (
-        <box height={1} paddingX={1} flexDirection="row" alignItems="center">
-          {['Current', 'Sessions', 'Issues', 'Pull requests', 'Gists'].map((tab) => {
-            const active = tab === 'Current'
-            return (
-              <box key={tab} paddingX={1} backgroundColor={active ? theme.cyan : theme.bg}>
-                <text fg={active ? theme.bg : theme.muted} attributes={active ? TextAttributes.BOLD : undefined} wrapMode="none">{tab}</text>
-              </box>
-            )
-          })}
-        </box>
-      ) : null}
-
-      {!presentationFocusMode && !isStreamView ? (
-        <box paddingX={2} paddingTop={1} flexDirection="row" alignItems="center">
-          <text fg={providerAccent} wrapMode="none">{'● '}</text>
-          <box flexGrow={1} overflow="hidden">
-            <text fg={theme.muted} wrapMode="none">
-              {fitText(showTabs
-                ? `${TRANSCRIPT_VIEW_LABELS[transcriptView]} · ${followTail ? 'Following latest' : 'Reading history'}`
-                : `${TRANSCRIPT_VIEW_LABELS[transcriptView]} · ${readerTitle}`, Math.max(rightPaneWidth - readerContextMeta.length - 10, 12))}
-            </text>
-          </box>
-          <box width={readerContextMeta.length} overflow="hidden">
-            <text fg={theme.dim} wrapMode="none">{readerContextMeta}</text>
-          </box>
-        </box>
-      ) : null}
-
-      {!presentationFocusMode && !isStreamView && contextUsage ? (
-        <box paddingX={1}>
-          <text wrapMode="none">
-            {renderInlineTextSegments(
-              contextBarSegments(contextUsage.totalTokens, contextUsage.maxTokens, contextUsage.percentage, theme),
-              rightPaneWidth - 4,
-              theme.dim,
-            )}
-          </text>
-        </box>
-      ) : !presentationFocusMode && !isStreamView && selectedSession?.provider === 'claude' && contextUsageStatus === 'loading' ? (
-        <box paddingX={1}>
-          <text fg={theme.dim}>{fitText('Loading context usage…', rightPaneWidth - 4)}</text>
-        </box>
-      ) : !presentationFocusMode && !isStreamView && selectedSession?.provider === 'claude' && contextUsageStatus === 'unavailable' ? (
-        <box paddingX={1}>
-          <text fg={theme.dim}>{fitText('Context usage unavailable', rightPaneWidth - 4)}</text>
-        </box>
-      ) : null}
-
-      {fleetStripVisible ? (
-        <box paddingX={1} flexDirection="row" overflow="hidden">
-          <text wrapMode="none">
-            {renderInlineTextSegments(fleetStripSegments, rightPaneWidth - 4, theme.dim)}
-          </text>
-        </box>
-      ) : null}
-
-      {error ? (
-        <box paddingX={1} marginTop={1}>
-          <text fg={theme.red}>{fitText(error, rightPaneWidth - 4)}</text>
-        </box>
-      ) : null}
-
-      {!showToolCalls ? (
-        <box
-          id="show-tool-activity"
-          height={1}
-          paddingX={1}
-          onMouseDown={(event) => {
-            if (event.button !== 0) return
-            event.stopPropagation()
-            setShowToolCalls(true)
-            void writeTuiShowToolCalls(true).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store tool visibility'))
-          }}
-        >
-          <text fg={theme.amber} wrapMode="none">{fitText('TOOLS HIDDEN · Click or Shift+X to show file and tool activity', rightPaneWidth - 4)}</text>
-        </box>
-      ) : null}
-
-      {/* Reserved while reading history elsewhere; SCROLLBACK leaves the tail
-          on every scroll, and two rows appearing above the text would jolt
-          it, so there the banner exists only while it has something to say. */}
-      {!followTail && (!isScrollbackView || pendingNewCount > 0) ? (
-        <box paddingX={1} marginTop={1}>
-          <text fg={theme.amber}>
-            {pendingNewCount > 0
-              ? fitText(`+${pendingNewCount} new messages waiting. Press u for first unread or f for live tail.`, rightPaneWidth - 4)
-              : ' '}
-          </text>
-        </box>
-      ) : null}
-
-      {normalizedSearchQuery ? (
-        <box paddingX={1} marginTop={1}>
-          <text fg={theme.dim}>
-            {fitText(
-              `/${searchQuery}  ${searchMatches.length === 0 ? 'no matches' : `${searchMatchIndex + 1}/${searchMatches.length} matches`}`,
-              rightPaneWidth - 4,
-            )}
-          </text>
-        </box>
-      ) : null}
-
+      {readerHeaderChrome.render(rightPaneWidth)}
       <box ref={transcriptViewportBoxRef} flexGrow={1} paddingX={1} paddingBottom={1} marginTop={stickyHeaders ? 0 : 1} overflow="hidden">
         {(loadingDetail || formattingTranscriptCards) && visibleTranscriptCards.length === 0 ? (
           <Spinner
@@ -26962,60 +27059,7 @@ function OpenTuiWorkspace() {
         ) : null}
       </box>
 
-      {chatTurnStatusRows > 0 ? (
-        <box
-          id="chat-turn-status"
-          height={1}
-          flexShrink={0}
-          paddingLeft={densityState.bodyIndent + 1}
-          flexDirection="row"
-        >
-          <text fg={theme.cyan} wrapMode="none">{'● '}</text>
-          <box flexGrow={1}>
-            {visibleComposerSending ? (
-              <ComposerWaitingStatus
-                startedAt={composerSendStartedAt}
-                seed={composerWaitingStatusSeed}
-                suffix={composerWaitingSuffix}
-                theme={theme}
-                width={Math.max(rightPaneWidth - densityState.bodyIndent - 6, 16)}
-                message={composerWaitingOnUser}
-              />
-            ) : (
-              <Spinner
-                label={fitText(
-                  visibleAwaitingPersistedTurn
-                    ? 'Syncing transcript…'
-                    : 'Turn running · reattached — output syncs as it persists · ⌃C interrupt',
-                  Math.max(rightPaneWidth - densityState.bodyIndent - 6, 16),
-                )}
-                fg={theme.cyan}
-                labelFg={theme.dim}
-              />
-            )}
-          </box>
-        </box>
-      ) : null}
-
-      {/* The idle ticker means "nothing is happening — still watching". A
-          running turn has its own pinned status row next to the composer
-          (elapsed, tokens, interrupt hint), so showing both put a spinner
-          reading "waiting patiently" directly above one reading "Shaping
-          the next move… 2s". Exactly one spinner is on screen at a time,
-          and which one tells you whether a turn is live.
-
-          Chat and Agents omit the idle ticker. Their single activity row
-          appears immediately above the composer only while a turn runs.
-          Stream and Scrollback omit it too: they are the bare transcript,
-          and two rows saying nothing is happening are two rows of it. */}
-      {followTail && visibleTranscriptCards.length > 0
-        && !turnRunningForComposer && !embeddedComposer && !isStreamView ? (
-        <box paddingX={2} paddingBottom={1}>
-          <IdleTicker seed={selectedSessionKey ?? ''} theme={theme} />
-        </box>
-      ) : null}
-
-      {embeddedComposerChrome?.render(rightPaneWidth)}
+      {readerFooterChrome.render(rightPaneWidth)}
       </box>
 
     {openCodeContextWidth > 0 ? (
@@ -27211,6 +27255,8 @@ function OpenTuiWorkspace() {
         focused={effectiveFocus === 'messages' && splitFocusIndex === splitIndex && !composerActive}
         selected={sessionKey(splitSession) === selectedSessionKey}
         onCursorChange={sessionKey(splitSession) === selectedSessionKey ? reportSelectedWindowCursor : undefined}
+        onFollowChange={sessionKey(splitSession) === selectedSessionKey ? setFollowTail : undefined}
+        chromeHost={splitIndex === chromeWindowIndex}
         searchQuery={sessionKey(splitSession) === selectedSessionKey ? deferredSearchQuery : ''}
         activeSearchKey={searchMatches.length ? visibleTranscriptCards[searchMatches[searchMatchIndex] ?? -1]?.key ?? null : null}
         registerHandle={registerSplitPaneHandle}

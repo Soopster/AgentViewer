@@ -131,3 +131,6 @@ try {
     setup.renderer.destroy()
   })
 }
+// The renderer's destroy does not unmount the tree, so transcript windows'
+// poll timers would keep the process alive.
+process.exit(0)
