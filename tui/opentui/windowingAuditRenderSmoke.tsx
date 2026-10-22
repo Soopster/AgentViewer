@@ -177,8 +177,11 @@ await act(async () => {
   runtime.set('openTabSessions', SESSIONS)
   runtime.set('surfacePanelWidth', 112)
   runtime.set('windowSurfaces', ['browser', 'terminal'])
-  runtime.set('windowOrder', ['surface:browser', 'surface:terminal'])
-  runtime.set('windowSplitTree', arrangePaneTree(['surface:browser', 'surface:terminal'], true, 'columns'))
+  const windows = ['claude:win-alpha', 'surface:browser', 'surface:terminal']
+  runtime.set('splitPinnedKeys', ['claude:win-alpha'])
+  runtime.set('splitPaneCount', 1)
+  runtime.set('windowOrder', windows)
+  runtime.set('windowSplitTree', arrangePaneTree(windows, false, 'columns'))
 }); await settle(350)
 const field = (kind: string, id: string | undefined, panelId: string | undefined, key: string) => `${surfaceViewNamespace(kind, id, panelId)}:${key}`
 const draft = (id?: string, panelId?: string) => runtime.values.get(field('browser', id, panelId, 'browser:draft'))
@@ -251,19 +254,18 @@ check(runtime.values.get(field('terminal', 'terminal', undefined, 'process:selec
 const { saveWindowLayout } = await import('./windowLayoutStore')
 saveWindowLayout(CWD, { ...saved, primaryOpen: true, reader: 'claude:deleted-session', panes: ['claude:win-bravo'], surfaces: [], stacks: [], popoverTabs: [], activePopoverTab: null, floating: null, order: ['claude:win-bravo'], splitTree: arrangePaneTree(['claude:win-bravo'], true, 'columns')! }, 'Missing original session')
 await openMenu(); const missingRow = locate('Missing original session'); await click(missingRow.x + 2, missingRow.y)
-await waitFor('missing-session layout restored', () => runtime.values.get('primaryWindowOpen') === false)
-check(!frame('transcript-reader'), 'missing original session displayed an unrelated transcript')
+await waitFor('missing-session layout restored', () => (runtime.values.get('windowOrder') as string[] | undefined)?.join(',') === 'claude:win-bravo')
+check(!setup.captureCharFrame().includes(marker('win-alpha')), 'missing original session displayed an unrelated transcript')
 check(frame('split-pane:0'), 'missing original session removed the surviving pane')
 check(runtime.values.get('splitFocusIndex') === 0, 'missing-session recovery left the surviving pane unfocused')
 await act(async () => { runtime.set('workspaceHasSession', false); runtime.set('splitFocusIndex', 0) }); await settle(150)
 await chordKey('w')
 await waitFor('layout picker without original frame', () => !!frame('window-layout:save'))
 const originalRow = locate('With floating browser'); await click(originalRow.x + 2, originalRow.y)
-await waitFor('known original session restored', () => !!frame('transcript-reader'))
+await waitFor('known original session restored', () => setup.captureCharFrame().includes(marker('win-alpha')))
 check(runtime.values.get('workspaceHasSession') === true, 'restore left its known session inactive')
 // Ordinary surface panes retain a focus target when their focused neighbour closes.
 await act(async () => {
-  runtime.set('primaryWindowOpen', false)
   runtime.set('floatingWindow', null); runtime.set('windowStacks', []); runtime.set('windowZoom', null)
   runtime.set('splitPinnedKeys', []); runtime.set('splitPaneCount', 0)
   runtime.set('windowSurfaces', ['browser', 'browser#2', 'browser#3'])
@@ -293,9 +295,9 @@ check(runtime.values.get('windowZoom') === 0, 'growing the terminal cancelled to
 await chordKey('m')
 check(runtime.values.get('windowZoom') == null, 'restoring the layout did not finish zoom')
 for (const legacy of [false, true]) {
-  const keys = SESSIONS.slice(legacy ? 1 : 0, 3).map(session => `${session.provider}:${session.sessionId}`)
+  const keys = SESSIONS.slice(0, 3).map(session => `${session.provider}:${session.sessionId}`)
   await act(async () => {
-    runtime.set('primaryWindowOpen', legacy); runtime.set('workspaceHasSession', true)
+    runtime.set('workspaceHasSession', true)
     runtime.set('windowSurfaces', []); runtime.set('windowOrder', keys)
     runtime.set('splitPinnedKeys', keys); runtime.set('splitPaneCount', keys.length)
     runtime.set('splitArrangement', 'grid')
@@ -310,7 +312,7 @@ for (const legacy of [false, true]) {
   await chordKey('m')
 }
 await act(async () => {
-  runtime.set('primaryWindowOpen', false); runtime.set('splitPinnedKeys', []); runtime.set('splitPaneCount', 0)
+  runtime.set('splitPinnedKeys', []); runtime.set('splitPaneCount', 0)
   runtime.set('windowSurfaces', ['browser']); runtime.set('windowOrder', ['surface:browser'])
   runtime.set('windowStacks', [['surface:browser', 'surface:browser#2']])
   runtime.set('windowSplitTree', arrangePaneTree(['surface:browser'], false, 'columns'))
@@ -328,7 +330,7 @@ await chordKey('1'); await chordKey('!')
 check(runtime.values.get('floatingWindow') == null, 'detaching with enough room unnecessarily floated the tab')
 check((runtime.values.get('windowSurfaces') as string[]).length === 2 && !frame('window-overflow'), 'detaching a tab hid a surviving pane')
 await act(async () => {
-  runtime.set('primaryWindowOpen', false); runtime.set('popoverTabs', ['browser']); runtime.set('activePopoverTab', 'browser')
+  runtime.set('popoverTabs', ['browser']); runtime.set('activePopoverTab', 'browser')
   runtime.set('windowSurfaces', ['terminal']); runtime.set('windowOrder', ['surface:terminal']); runtime.set('windowStacks', [])
   runtime.set('windowSplitTree', arrangePaneTree(['surface:terminal'], true, 'columns'))
   runtime.set('splitFocusIndex', null)

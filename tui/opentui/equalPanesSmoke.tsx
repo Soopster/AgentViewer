@@ -96,7 +96,7 @@ const frame = (id: string): Frame | null => {
   return box ? { x: box.x, y: box.y, width: box.width, height: box.height } : null
 }
 // Visible panes only: a zoom hides the others but keeps them mounted.
-const panes = () => [0, 1, 2, 3, 4].map((index) => {
+const panes = () => Array.from({ length: 31 }, (_, index) => index).map((index) => {
   const box = setup.renderer.root.findDescendantById(`split-pane:${index}`) as unknown as (Frame & { visible?: boolean }) | null
   return box && box.visible !== false ? { x: box.x, y: box.y, width: box.width, height: box.height } : null
 }).filter((box): box is Frame => box !== null)
@@ -115,7 +115,8 @@ const click = async (x: number, y: number) => {
 const rail = () => frame('session-rail')!
 const railRow = (name: string) => locate(`Win ${name}`, rail())
 const readerShows = (name: string) => {
-  const reader = frame('transcript-reader')!
+  const reader = frame('transcript-reader')
+  if (!reader) return false
   return setup.captureCharFrame().split('\n').slice(reader.y, reader.y + reader.height)
     .some((line) => line.slice(reader.x, reader.x + reader.width).includes(marker(`win-${name}`)))
 }
@@ -176,14 +177,14 @@ await chordKey('X')
 await waitFor('first pane reopened', () => !!frame('transcript-reader'))
 // Floating the original session removes its old frame; docking makes an ordinary pane.
 await chordKey('1'); await chordKey('f')
-await waitFor('original pane floating', () => !!frame('floating-window') && !frame('transcript-reader'))
-check(runtime.values.get('primaryWindowOpen') === false, 'floating retained the special primary role')
+await waitFor('original pane floating', () => !!frame('floating-window') && panes().length === 0)
+check(!(runtime.values.get('splitPinnedKeys') as string[]).length, 'floating retained a reserved tiled slot')
 await chordKey('f')
 await waitFor('session docked without a reader', () => !frame('floating-window') && panes().length === 1)
-check(!frame('transcript-reader'), 'docking recreated the reader role')
+check((runtime.values.get('windowSplitTree') as { primary?: boolean } | null)?.primary !== true, 'operation recreated a reserved reader slot')
 await chordKey('1'); await chordKey('"')
 await waitFor('ordinary pane split', () => panes().length === 2)
-check(!frame('transcript-reader'), 'splitting required a reader frame')
+check((runtime.values.get('windowSplitTree') as { primary?: boolean } | null)?.primary !== true, 'operation recreated a reserved reader slot')
 const firstName = paneName(0)!, secondName = paneName(1)!
 // Focus updates the explicit composer target; surfaces leave that target intact.
 await chordKey('2')
@@ -220,36 +221,36 @@ const drag = async (from: Frame, to: Frame) => {
 }
 await drag(frame('split-pane:1')!, frame('split-pane:0')!)
 await waitFor('ordinary session tabs', () => panes().length === 2 && (runtime.values.get('windowStacks') as string[][]).length === 1)
-check(!frame('transcript-reader'), 'tabbing reinstated the reader')
+check((runtime.values.get('windowSplitTree') as { primary?: boolean } | null)?.primary !== true, 'operation recreated a reserved reader slot')
 // A fresh workspace's first session can become a tab, just like any other.
 await act(async () => { controller!.addWorkspace(controller!.activeSpace()!.id) }); await settle(250)
 const freshRuntime = controller!.runtime(controller!.activeWorkspace()!)
 await act(async () => {
   freshRuntime.set('workspaceLaunched', true); freshRuntime.set('workspaceHasSession', true)
-  freshRuntime.set('primaryWindowOpen', true); freshRuntime.set('selectedSessionKey', 'claude:win-alpha')
+  freshRuntime.set('selectedSessionKey', 'claude:win-alpha')
   freshRuntime.set('readerSession', SESSIONS[0]); freshRuntime.set('openTabSessions', SESSIONS)
 }); await settle(250)
 await chordKey('%')
-await waitFor('fresh split', () => panes().length === 1 && !!frame('transcript-reader'))
+await waitFor('fresh split', () => panes().length === 2 && paneName(0) === 'alpha')
 // The original session can exchange geometry with a tool window.
-await act(async () => { freshRuntime.set('splitPinnedKeys', []); freshRuntime.set('splitPaneCount', 0); freshRuntime.set('windowSurfaces', ['browser']); freshRuntime.set('windowOrder', ['surface:browser']) }); await settle(200)
-const originalX = frame('transcript-reader')!.x
+await act(async () => { freshRuntime.set('splitPinnedKeys', ['claude:win-alpha']); freshRuntime.set('splitPaneCount', 1); freshRuntime.set('windowSurfaces', ['browser']); freshRuntime.set('windowOrder', ['claude:win-alpha', 'surface:browser']) }); await settle(200)
+const originalX = frame('split-pane:0')!.x
 await chordKey('1')
 await act(async () => { setup.mockInput.pressKey('b', { ctrl: true }) }); await settle(50)
 await act(async () => { setup.mockInput.pressArrow('right', { shift: true }) }); await settle(200)
-check(frame('transcript-reader')!.x > originalX, 'the original session could not swap positions with a browser')
+check(frame('split-pane:0')!.x > originalX, 'the original session could not swap positions with a browser')
 await chordKey('u'); await settle(150)
-await act(async () => { freshRuntime.set('windowSurfaces', []); freshRuntime.set('windowOrder', ['claude:win-bravo']); freshRuntime.set('splitPinnedKeys', ['claude:win-bravo']); freshRuntime.set('splitPaneCount', 1) }); await settle(200)
+await act(async () => { freshRuntime.set('windowSurfaces', []); freshRuntime.set('windowOrder', ['claude:win-alpha', 'claude:win-bravo']); freshRuntime.set('splitPinnedKeys', ['claude:win-alpha', 'claude:win-bravo']); freshRuntime.set('splitPaneCount', 2) }); await settle(200)
 await chordKey('1'); await chordKey('t')
-await waitFor('first session tabbed', () => !frame('transcript-reader') && panes().length === 1 && (freshRuntime.values.get('windowStacks') as string[][]).length === 1)
-// Undo restores the original frame and redo returns to ordinary tabs.
-await chordKey('u'); await waitFor('first-session tab undo', () => !!frame('transcript-reader') && panes().length === 1)
-await chordKey('U'); await waitFor('first-session tab redo', () => !frame('transcript-reader') && panes().length === 1)
+await waitFor('first session tabbed', () => panes().length === 1 && (freshRuntime.values.get('windowStacks') as string[][]).length === 1)
+// Undo restores both windows and redo returns to a tab group.
+await chordKey('u'); await waitFor('first-session tab undo', () => panes().length === 2)
+await chordKey('U'); await waitFor('first-session tab redo', () => panes().length === 1)
 // Starting from an empty workspace creates an ordinary pane immediately.
 await act(async () => { controller!.addWorkspace(controller!.activeSpace()!.id) }); await settle(250)
 const emptyRow = railRow('delta'); await click(emptyRow.x + 1, emptyRow.y)
 await waitFor('new ordinary session', () => panes().length === 1 && paneName(0) === 'delta')
-check(!frame('transcript-reader'), 'a new workspace created a special reader')
+check((controller!.runtime(controller!.activeWorkspace()!).values.get('windowSplitTree') as { primary?: boolean } | null)?.primary !== true, 'a new workspace created a reserved reader slot')
 await chordKey('1'); await chordKey('x')
 await waitFor('last ordinary pane closed', () => panes().length === 0 && setup.captureCharFrame().includes('No panes open'))
 await chordKey('X'); await waitFor('ordinary pane recovered', () => panes().length === 1 && paneName(0) === 'delta')

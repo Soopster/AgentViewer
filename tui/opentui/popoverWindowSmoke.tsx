@@ -238,10 +238,12 @@ await waitFor('the reader on alpha', () => readerShows('alpha'))
 // ── Fill this tab, and a new tab of its own ─────────────────────────────────
 {
   const area = () => frame('window-area')!
-  // ⧉ window offers the three places a popover can go. From the reader: a
-  // focused window would take ⌃A as its own key.
-  const reader = frame('transcript-reader')!
-  await click(reader.x + Math.floor(reader.width / 2), reader.y + Math.floor(reader.height / 2))
+  // ⧉ window offers the three places a popover can go. From the session's
+  // window: a surface window would take ⌃A as its own key. Four windows do not
+  // all fit here, so the newest is peeked rather than laid out; ⌃B 1 focuses
+  // the session window by number, wherever it ended up.
+  await key('b', { ctrl: true })
+  await key('1')
   await key('a', { ctrl: true })
   await waitFor('analytics again', () => screen().includes('Session analytics'))
   const detach = frame('popover-detach')!
